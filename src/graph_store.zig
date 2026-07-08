@@ -20,7 +20,12 @@ fn tmpDirRealpathAlloc(allocator: std.mem.Allocator, tmp_sub_path: []const u8) !
 }
 
 const fle_integration = @import("fle_integration.zig");
+// GAP (write-path OOM, 2026-07-04): working-set budget hooks for the legacy
+// write executor. `chargeStoreBytes` is a no-op unless the query dispatcher
+// installed a thread-local budget scope (write-carrying MATCH shapes only).
+const write_budget = @import("write_budget.zig");
 const id_map_mod = @import("storage/id_map.zig");
+const hydration_snapshot = @import("storage/hydration_snapshot.zig");
 const uuid = @import("uuid");
 const sharded_store = @import("graph_storage").sharded_store;
 const node_cache_mod = @import("storage/node_cache.zig");
@@ -284,6 +289,51 @@ pub fn shouldIndexProperty(key: []const u8) bool {
         if (std.mem.eql(u8, g_lean_index_key_bufs[i][0..g_lean_index_key_lens[i]], key)) return true;
     }
     return false;
+}
+
+/// GAP-ENT-0023 P3: fingerprint of the merge-index CONFIGURATION — the lean
+/// flag, the registered lean key set (lean mode only), and the registered
+/// composite specs. The merge-prop-index snapshot stores this hash and is
+/// rejected on any mismatch: which entries the index CONTAINS depends on this
+/// configuration, so restoring a snapshot written under a different one could
+/// leave lookups authoritative-but-incomplete (`.not_found` -> a re-MERGE
+/// takes the create branch -> silent duplicates). Key/spec contributions are
+/// combined order-independently (registration order varies across runs; the
+/// sets are what matters — both are persisted to sidecars loaded at adapter
+/// init, BEFORE any hydration runs).
+fn mergeIndexConfigHash() u64 {
+    const io = std.Io.Threaded.global_single_threaded.io();
+    g_lean_index_mutex.lockUncancelable(io);
+    defer g_lean_index_mutex.unlock(io);
+    var h = std.hash.Wyhash.init(0x6d65_7267_6573_6e70); // "mergesnp"
+    const lean = leanIndexEnabledLocked();
+    h.update(&[_]u8{@intFromBool(lean)});
+    if (lean) {
+        var acc: u64 = 0;
+        var i: usize = 0;
+        while (i < g_lean_index_key_count) : (i += 1) {
+            acc ^= std.hash.Wyhash.hash(1, g_lean_index_key_bufs[i][0..g_lean_index_key_lens[i]]);
+        }
+        var b: [8]u8 = undefined;
+        std.mem.writeInt(u64, &b, acc, .little);
+        h.update(&b);
+    }
+    var acc2: u64 = 0;
+    var k: usize = 0;
+    while (k < g_composite_key_count) : (k += 1) {
+        var sh = std.hash.Wyhash.init(2);
+        const spec = &g_composite_keys[k];
+        var i: usize = 0;
+        while (i < spec.prop_count) : (i += 1) {
+            sh.update(spec.prop_bufs[i][0..spec.prop_lens[i]]);
+            sh.update("\x00");
+        }
+        acc2 ^= sh.final();
+    }
+    var b2: [8]u8 = undefined;
+    std.mem.writeInt(u64, &b2, acc2, .little);
+    h.update(&b2);
+    return h.final();
 }
 
 // ============================================================================
@@ -746,6 +796,27 @@ pub const DEFAULT_TENANT_ID = "default";
 /// graph-storage engine without exposing them as user-visible properties.
 pub const INTERNAL_NODE_ID_PROPERTY_KEY = "__geode_internal_node_id";
 pub const INTERNAL_EDGE_ID_PROPERTY_KEY = "__geode_internal_edge_id";
+
+/// GAP-ENT-0024 instrumentation: counts per-edge `__geode_internal_edge_id`
+/// PROPERTY-FALLBACK reads on the edge-id read paths (loop1 IdMap rebuild,
+/// adjacency hydrate, MERGE dedup probe fallback in the adapter). New (v2)
+/// edges carry the public id INLINE in the adjacency entry, so on a fresh
+/// store this counter must stay 0 — tests assert exactly that. Legacy v1
+/// blocks / old stores legitimately bump it (read-both is permanent).
+pub var edge_id_property_fallback_reads: std.atomic.Value(u64) = .init(0);
+
+/// GAP-ENT-0004 instrumentation: typed-edge enumeration route counters for
+/// `getEdgesByType` under a BOUNDED edge cache (the engine-derived path).
+/// `typed_edge_index_scan_total` counts servings from the engine's per-shard
+/// edge_index scan (O(total edges) sequential index-record scan, no node
+/// iteration, no adjacency hydration). `typed_edge_node_walk_total` counts
+/// servings from the legacy every-node adjacency walk (adapterless fallback
+/// ONLY), and `typed_edge_node_walk_nodes_total` counts the nodes that walk
+/// visited. With a storage adapter present the walk must NEVER run — path
+/// tests assert the walk counters stay flat while the scan counter moves.
+pub var typed_edge_index_scan_total: std.atomic.Value(u64) = .init(0);
+pub var typed_edge_node_walk_total: std.atomic.Value(u64) = .init(0);
+pub var typed_edge_node_walk_nodes_total: std.atomic.Value(u64) = .init(0);
 
 /// GAP-0891 (RC-2): reserved storage key used to round-trip a node/edge's
 /// `tenant_id` tag across restart. Before this, the adapter persisted only the
@@ -1545,6 +1616,23 @@ pub const MergePropertyIndex = struct {
         return @intCast(std.hash.Wyhash.hash(0, key) % merge_property_index_shard_count);
     }
 
+    /// T2b (hydration merge): best-effort pre-size for a bulk load of
+    /// ~`additional_total` inserts spread across the shards. Distinct-key
+    /// counts are unknowable before the inserts (duplicates collapse), so
+    /// this reserves the per-shard UPPER bound — at 43M keys the rehash-growth
+    /// churn it eliminates dominates the single-digit-% table over-provision.
+    /// OOM on a shard is swallowed: reservation is an optimization only.
+    fn reserveAdditional(self: *MergePropertyIndex, additional_total: u64) void {
+        const io = std.Io.Threaded.global_single_threaded.io();
+        const per_shard64 = additional_total / merge_property_index_shard_count + 1;
+        const per_shard: u32 = @intCast(@min(per_shard64, std.math.maxInt(u32)));
+        for (&self.shards) |*shard| {
+            shard.mutex.lockUncancelable(io);
+            defer shard.mutex.unlock(io);
+            shard.map.ensureUnusedCapacity(per_shard) catch {};
+        }
+    }
+
     fn putOrUpdate(self: *MergePropertyIndex, key: []const u8, node_id: u64) !void {
         const io = std.Io.Threaded.global_single_threaded.io();
         const shard = &self.shards[shardForKey(key)];
@@ -1594,6 +1682,16 @@ pub const MergePropertyIndex = struct {
 const HydrationEntry = struct {
     mutex: std.Io.Mutex = std.Io.Mutex.init,
     done: std.atomic.Value(bool) = std.atomic.Value(bool).init(false),
+    /// GAP-ENT-0023 P3 (review C1): set when the first-touch build FAILED and
+    /// the graph was quarantined (`done` stored true so it is not re-scanned
+    /// every access). A failed graph's resident loop2 products are PARTIAL —
+    /// `saveHydrationSnapshots` / `saveIdMapSnapshots` MUST treat it like a
+    /// deferred graph (skip write AND delete stale files) or the next full
+    /// checkpoint would persist the partial products counter-current,
+    /// permanently freezing wrong indexes (the 9b2d42eb hazard class through
+    /// the quarantine door). Never cleared for the process lifetime: the next
+    /// reopen re-registers the graph fresh and re-scans (self-heal).
+    failed: std.atomic.Value(bool) = std.atomic.Value(bool).init(false),
 };
 
 pub const GraphStore = struct {
@@ -1602,6 +1700,19 @@ pub const GraphStore = struct {
     // PHASE 1 (edge-engine-direct): BOUNDED, evict-freely edge-body cache over
     // the engine (hydrate-on-miss). See EdgeCache / freeEdgeValue above.
     edges: EdgeCache, // public edge_id -> Edge body (bounded)
+    // GAP-ENT-0023 P3 (review C2/I1): DETACHED scan-hydration boxes. Nodes
+    // rebuilt from the engine for MATCH-fallback row sourcing when they are
+    // not resident in the bounded cache (`getNodePtrForScan`). Each box is a
+    // heap `*Node` OUTSIDE the cache's shard maps, so handing out its pointer
+    // never inserts/rehashes/evicts the maps other retained `*Node` pointers
+    // live in. Boxes are freed at the SAME per-graph grace boundary as
+    // evicted cache nodes (`reclaimNodeCacheRetiredForGraph`, i.e. the
+    // per-graph EXCLUSIVE checkpoint window that drains readers) — so a
+    // returned pointer has the same lifetime guarantee as a resident one.
+    // Guarded by `scan_hydrated_mutex` (leaf lock: never held across another
+    // lock or an engine read).
+    scan_hydrated_nodes: std.ArrayList(*Node) = .empty,
+    scan_hydrated_mutex: std.Io.Mutex = std.Io.Mutex.init,
     next_node_id: u64,
     next_edge_id: u64,
     // DEPRECATED (GAP-0279): Process-wide tenant_id races under concurrent access.
@@ -1671,7 +1782,18 @@ pub const GraphStore = struct {
     // so the index never reports labels/types/properties no node still
     // carries. `filter_tenant == null` (admin path) aggregates across every
     // tenant via the outer map.
-    // Outer key: tenant_id (owned by store allocator)
+    //
+    // GAP-ENT-0023 P3 (loop2 snapshot persistence): the outer key is the
+    // COMPOSITE "graph\x00tenant" (see formatGraphTenantKey) instead of the
+    // bare tenant. Grouping by graph makes each graph's contribution to the
+    // introspection counters a DISJOINT set of outer entries, so the per-graph
+    // hydration snapshot can persist / restore them exactly (a bare-tenant key
+    // aggregates across graphs and cannot be decomposed at checkpoint time).
+    // The tenant-filtered readers match on the tenant COMPONENT
+    // (graphTenantKeyTenant) — the outer map is tiny (graphs x tenants), so
+    // the scan is O(outer_entries) and preserves the GAP-0509 tenant-isolation
+    // property exactly (component match, never substring).
+    // Outer key: "graph\x00tenant_id" (owned by store allocator)
     // Inner key: label / edge type / property — owned by store allocator
     node_labels_by_tenant: std.StringHashMap(std.StringHashMap(usize)),
     edge_types_by_tenant: std.StringHashMap(std.StringHashMap(usize)),
@@ -1920,6 +2042,9 @@ pub const GraphStore = struct {
         // Deinit the hashmaps
         self.nodes.deinit();
         self.edges.deinit();
+        // GAP-ENT-0023 P3 (review C2/I1): free any remaining detached scan
+        // boxes (clearNodes already purged; this releases the list storage).
+        self.freeAllScanHydrated();
 
         // Clean up graph registry
         var graph_iter = self.graphs.iterator();
@@ -2014,6 +2139,10 @@ pub const GraphStore = struct {
         // the manual per-edge free loop is gone (and a walk would MISS the
         // retired backlog and double-free the resident ones).
         self.edges.clearRetainingCapacity();
+
+        // GAP-ENT-0023 P3 (review C2/I1): the detached scan boxes mirror the
+        // resident node set — drop them whenever the node cache is reset.
+        self.freeAllScanHydrated();
 
         self.next_node_id = 1;
         self.next_edge_id = 1;
@@ -2250,14 +2379,14 @@ pub const GraphStore = struct {
         }
         try self.addNodeToGraphIndex(src_node.graph_name, src_node.id);
         for (src_node.labels) |label| {
-            try self.bumpLabelCount(src_node.tenant_id, label);
+            try self.bumpLabelCount(src_node.graph_name, src_node.tenant_id, label);
         }
         var prop_replay = src_node.properties.iterator();
         while (prop_replay.next()) |p| {
             const pkey = p.key_ptr.*;
             if (isInternalPersistedPropertyKey(pkey)) continue;
             for (src_node.labels) |label| {
-                try self.bumpLabelPropertyCount(src_node.tenant_id, label, pkey);
+                try self.bumpLabelPropertyCount(src_node.graph_name, src_node.tenant_id, label, pkey);
             }
         }
     }
@@ -2345,7 +2474,7 @@ pub const GraphStore = struct {
             // PERF-P0-001: Maintain edge-type index during clone
             try self.addToEdgeTypeIndex(src_edge.graph_name, src_edge.label, src_edge.id);
             // PERF-C (issue #814): tenant-keyed edge-type counter.
-            try self.bumpEdgeTypeCount(src_edge.tenant_id, src_edge.label);
+            try self.bumpEdgeTypeCount(src_edge.graph_name, src_edge.tenant_id, src_edge.label);
             // Per-(graph,type) exact counter (typed count(r:TYPE) fast path).
             self.bumpGraphEdgeTypeCount(src_edge.graph_name, src_edge.label);
         }
@@ -2457,6 +2586,12 @@ pub const GraphStore = struct {
         }
         var pit = props.iterator();
         while (pit.next()) |e| {
+            // C3 (review-0023): skip `.null` — the adapter's removeNodeProperty
+            // writes a `.null` TOMBSTONE (putPropertyTxn(key, .null)), it never
+            // physically deletes the key. Materializing the tombstone as a
+            // present PropertyValue.Null made a durably-REMOVEd property
+            // resurface after reopen (live remove = fetchRemove = truly absent).
+            if (e.value_ptr.* == .null) continue;
             const key = try allocator.dupe(u8, e.key_ptr.*);
             errdefer allocator.free(key);
             const value = try graph_storage_adapter.fromStorageProperty(allocator, e.value_ptr.*);
@@ -2508,14 +2643,214 @@ pub const GraphStore = struct {
         return std.mem.eql(u8, node.graph_name, graph_name.*);
     }
 
+    /// Cache-reclaim grace gate (14.27M SEGV fix, bomb #2 — the WAL/periodic
+    /// checkpoint variant of the catalog-reload UAF): the per-graph EXCLUSIVE
+    /// rwlock the checkpoint holds drains QUERY readers, but NOT an in-flight
+    /// lazy-hydration build — its FamilyPipeline batches hold SHALLOW Node
+    /// copies whose sub-heap is owned by resident/just-retired cache entries,
+    /// and its core thread concurrently APPENDS to the same retire lists the
+    /// reclaim compacts. Every build runs under `hydration_build_mutex`, so
+    /// the grace point must additionally hold that mutex to free retired
+    /// values. Non-blocking by design: the checkpoint thread must NEVER park
+    /// under a graph-exclusive rwlock waiting out a multi-hour build — on
+    /// tryLock failure the caller SKIPS reclaim this cycle and the retire
+    /// backlog simply persists until the next checkpoint tick.
+    ///
+    /// (Also inherently covers the hydration-completion persist, which runs
+    /// while the build mutex is still held by the SAME thread: its tryLock
+    /// fails and the just-finished build's retirees are reclaimed by the next
+    /// periodic tick instead.)
+    pub fn tryBeginCacheReclaimGrace(self: *GraphStore) bool {
+        return self.hydration_build_mutex.tryLock();
+    }
+
+    pub fn endCacheReclaimGrace(self: *GraphStore) void {
+        self.hydration_build_mutex.unlock(std.Io.Threaded.global_single_threaded.io());
+    }
+
     /// Reclaim (free) the node cache's retired entries that belong to
     /// `graph_name`. MUST be called by the storage adapter while it holds that
     /// graph's per-graph rwlock EXCLUSIVE (the checkpoint window), which drains
     /// all readers of that graph's nodes — so freeing them cannot race a live
-    /// pointer. This is the grace boundary in the bound-node-mirror design.
+    /// pointer — AND inside the `tryBeginCacheReclaimGrace` window, which
+    /// excludes an in-flight hydration build (whose batch copies and retire-
+    /// list appends the rwlock does not cover). This is the grace boundary in
+    /// the bound-node-mirror design.
     pub fn reclaimNodeCacheRetiredForGraph(self: *GraphStore, graph_name: []const u8) void {
         var gn = graph_name;
         self.nodes.reclaimRetiredWhere(@ptrCast(&gn), retiredNodeInGraph);
+        // GAP-ENT-0023 P3 (review C2/I1): the detached scan boxes share the
+        // node cache's grace discipline — free this graph's boxes inside the
+        // same per-graph exclusive window that drained its readers.
+        self.reclaimScanHydratedForGraph(graph_name);
+    }
+
+    // ────────────────────────────────────────────────────────────────────────
+    // GAP-ENT-0023 P3 (review C2/I1): DETACHED scan hydration.
+    //
+    // THE HAZARD THIS CLOSES: the bounded node cache stores `Node` values
+    // INLINE in per-shard AutoHashMaps. `getOrHydratePtr` on a miss INSERTS
+    // (and above cap EVICTS) — an insert that grows a shard REHASHES and MOVES
+    // every value slot; an eviction frees a slot for reuse. MATCH fallback
+    // consumers retain `*Node` across iterations (bindings / base_nodes /
+    // result rows hold `Value{ .Node = ptr }`), so a row-sourcing read that
+    // hydrates INTO the cache invalidates previously returned pointers —
+    // a deterministic single-threaded use-after-move on cold caches.
+    //
+    // THE FIX: row-sourcing reads that may run with retained pointers get
+    // their misses served DETACHED — the node is rebuilt from the engine into
+    // a private heap box that is never inserted into the cache, so no shard
+    // map is ever mutated on the read path. Every miss re-reads the engine
+    // (boxes are NOT served across calls), so a committed write can never be
+    // shadowed by a stale detached copy: the resident cache — which every
+    // write path updates — is always consulted first.
+    // ────────────────────────────────────────────────────────────────────────
+
+    /// Resident-first node fetch for MATCH-fallback row sourcing. Cache hit →
+    /// the resident pointer (stable for the caller's read span, exactly the
+    /// pre-bounded-cache contract). Miss → a DETACHED engine rebuild boxed on
+    /// the heap and adopted by `scan_hydrated_nodes` (freed at the per-graph
+    /// grace boundary). Null only when the id exists in neither the cache nor
+    /// the engine. NEVER mutates the bounded cache.
+    pub fn getNodePtrForScan(self: *const GraphStore, node_id: u64) ?*Node {
+        if (self.nodes.getPtr(node_id)) |p| return p;
+        const mut: *GraphStore = @constCast(self);
+        // Engine rebuild OUTSIDE the box-list lock (slow I/O; leaf discipline).
+        var built = (hydrateNodeCb(@ptrCast(mut), mut.allocator, node_id) catch return null) orelse return null;
+        const box = mut.allocator.create(Node) catch {
+            freeNodeValue(mut.allocator, &built);
+            return null;
+        };
+        box.* = built;
+        const io = std.Io.Threaded.global_single_threaded.io();
+        mut.scan_hydrated_mutex.lockUncancelable(io);
+        defer mut.scan_hydrated_mutex.unlock(io);
+        mut.scan_hydrated_nodes.append(mut.allocator, box) catch {
+            // Cannot adopt the box (OOM): free it and report a miss rather
+            // than leak. The caller degrades to the pre-fix "row dropped"
+            // behavior only under allocator exhaustion.
+            freeNodeValue(mut.allocator, box);
+            mut.allocator.destroy(box);
+            return null;
+        };
+        // GAP (write-path OOM, 2026-07-04): detached boxes live until the
+        // per-graph grace boundary — for a write-carrying O(label) scan on a
+        // cold store this is exactly the unbounded resident growth that OOM'd
+        // the box (82 -> 86.4 G). Charge the adoption against the active
+        // write-executor budget scope (thread-local; no-op for read queries /
+        // other threads). COARSE accounting by design: struct + name/label
+        // bytes + per-property entry overhead + string payloads.
+        write_budget.chargeStoreBytes(approxDetachedNodeBytes(box));
+        return box;
+    }
+
+    /// Coarse per-box working-set estimate for the write-executor budget
+    /// (page-granularity precision is acceptable — this feeds a tripwire, not
+    /// an accounting ledger).
+    fn approxDetachedNodeBytes(node: *const Node) u64 {
+        var total: u64 = @sizeOf(Node) + node.graph_name.len;
+        for (node.labels) |l| total += l.len + @sizeOf([]const u8);
+        var it = node.properties.iterator();
+        while (it.next()) |entry| {
+            total += 64; // entry + key/value boxing overhead (coarse)
+            total += entry.key_ptr.len;
+            total += switch (entry.value_ptr.*) {
+                .String => |s| s.len,
+                else => @as(u64, 16),
+            };
+        }
+        return total;
+    }
+
+    /// Free the detached scan boxes belonging to `graph_name`. MUST only be
+    /// called at that graph's grace boundary (per-graph EXCLUSIVE checkpoint
+    /// window, or store teardown) — see `reclaimNodeCacheRetiredForGraph`.
+    fn reclaimScanHydratedForGraph(self: *GraphStore, graph_name: []const u8) void {
+        const io = std.Io.Threaded.global_single_threaded.io();
+        self.scan_hydrated_mutex.lockUncancelable(io);
+        defer self.scan_hydrated_mutex.unlock(io);
+        var w: usize = 0;
+        for (self.scan_hydrated_nodes.items) |box| {
+            if (std.mem.eql(u8, box.graph_name, graph_name)) {
+                freeNodeValue(self.allocator, box);
+                self.allocator.destroy(box);
+            } else {
+                self.scan_hydrated_nodes.items[w] = box;
+                w += 1;
+            }
+        }
+        self.scan_hydrated_nodes.shrinkRetainingCapacity(w);
+    }
+
+    /// Free ALL detached scan boxes (deinit / clearNodes reset paths — global
+    /// exclusive contexts).
+    fn freeAllScanHydrated(self: *GraphStore) void {
+        const io = std.Io.Threaded.global_single_threaded.io();
+        self.scan_hydrated_mutex.lockUncancelable(io);
+        defer self.scan_hydrated_mutex.unlock(io);
+        for (self.scan_hydrated_nodes.items) |box| {
+            freeNodeValue(self.allocator, box);
+            self.allocator.destroy(box);
+        }
+        self.scan_hydrated_nodes.deinit(self.allocator);
+        self.scan_hydrated_nodes = .empty;
+    }
+
+    /// GAP-ENT-0023 P3 (review I1): existence + EXACT-tenant verification for
+    /// id-sourced index walks (label postings / intersections) on a bounded or
+    /// snapshot-warm COLD cache. Resident hit → in-memory compare. Miss →
+    /// IdMap membership (no engine read) and, only when a tenant filter is
+    /// active, a single engine read of the internal tenant tag. Never mutates
+    /// the cache, never returns pointers. Exact-match semantics on purpose —
+    /// this backs the STORAGE-level tenant filter (hierarchy-aware readers
+    /// pass null here and compensate per row, see storageTenantFilter).
+    fn nodeExistsPassingTenantExact(self: *const GraphStore, node_id: u64, tenant: ?[]const u8) bool {
+        if (self.nodes.get(node_id)) |node| {
+            const tid = tenant orelse return true;
+            return std.mem.eql(u8, node.tenant_id, tid);
+        }
+        const mut: *GraphStore = @constCast(self);
+        const gs_slot = mut.resolveNodeGraphSlot(node_id) orelse return false;
+        const tid = tenant orelse return true;
+        const adapter = global_adapter orelse return false;
+        const tprop = adapter.getNodeProperty(gs_slot.graph_name, gs_slot.slot_id, INTERNAL_TENANT_ID_PROPERTY_KEY, mut.allocator) catch return false;
+        if (tprop) |p| {
+            defer switch (p) {
+                .string => |s| mut.allocator.free(s),
+                else => {},
+            };
+            switch (p) {
+                .string => |s| return std.mem.eql(u8, s, tid),
+                else => {},
+            }
+        }
+        // Exists but carries no tenant tag → default tenant.
+        return std.mem.eql(u8, DEFAULT_TENANT_ID, tid);
+    }
+
+    /// GAP-ENT-0023 P3 (review I1): caller-owned copy of a node's tenant tag,
+    /// served resident-first with an engine fallback (never mutates the
+    /// cache). Null when the node exists nowhere (fail-closed for visibility
+    /// checks). Caller frees with the SAME allocator.
+    pub fn dupeNodeTenantForRead(self: *const GraphStore, allocator: std.mem.Allocator, node_id: u64) ?[]u8 {
+        if (self.nodes.get(node_id)) |node| {
+            return allocator.dupe(u8, node.tenant_id) catch null;
+        }
+        const mut: *GraphStore = @constCast(self);
+        const gs_slot = mut.resolveNodeGraphSlot(node_id) orelse return null;
+        const adapter = global_adapter orelse return null;
+        const tprop = adapter.getNodeProperty(gs_slot.graph_name, gs_slot.slot_id, INTERNAL_TENANT_ID_PROPERTY_KEY, allocator) catch return null;
+        if (tprop) |p| {
+            defer switch (p) {
+                .string => |s| allocator.free(s),
+                else => {},
+            };
+            switch (p) {
+                .string => |s| return allocator.dupe(u8, s) catch null,
+                else => {},
+            }
+        }
+        return allocator.dupe(u8, DEFAULT_TENANT_ID) catch null;
     }
 
     // ========================================================================
@@ -2572,14 +2907,23 @@ pub const GraphStore = struct {
         errdefer list.deinit(allocator);
 
         while (try iter.next()) |edge_entry| {
-            // Reverse-map engine edge_id -> PUBLIC id. The canonical edge prop
-            // lives on the edge's SOURCE node: for an OUTGOING edge that is this
-            // node (slot_id); for an INCOMING edge it is the other endpoint
-            // (entry.neighbor == the source, per the engine's in-adjacency).
+            // GAP-ENT-0024 inline-first: v2 adjacency entries carry the PUBLIC
+            // id inline — no per-edge property fetch (the whole point).
+            if (edge_entry.public_id != 0) {
+                try list.append(allocator, edge_entry.public_id);
+                continue;
+            }
+            // Legacy fallback (v1 blocks / pre-v0.2.24 stores): reverse-map
+            // engine edge_id -> PUBLIC id via the persisted property. The
+            // canonical edge prop lives on the edge's SOURCE node: for an
+            // OUTGOING edge that is this node (slot_id); for an INCOMING edge
+            // it is the other endpoint (entry.neighbor == the source, per the
+            // engine's in-adjacency).
             const source_slot = switch (dir) {
                 .outgoing => slot_id,
                 .incoming => edge_entry.neighbor,
             };
+            _ = edge_id_property_fallback_reads.fetchAdd(1, .monotonic);
             const stored = (adapter.getEdgeProperty(
                 graph_name,
                 source_slot,
@@ -2717,6 +3061,9 @@ pub const GraphStore = struct {
             }
             var sp_it = sp.iterator();
             while (sp_it.next()) |e| {
+                // C3 (review-0023): skip the `.null` REMOVE tombstone (same
+                // convention as node properties — see materializeNodeFromEngine).
+                if (e.value_ptr.* == .null) continue;
                 const key_copy = try allocator.dupe(u8, e.key_ptr.*);
                 const pv = try graph_storage_adapter.fromStorageProperty(allocator, e.value_ptr.*);
                 try edge.properties.put(key_copy, pv);
@@ -2818,26 +3165,13 @@ pub const GraphStore = struct {
         );
     }
 
-    fn persistEdgePublicId(
-        vt: AdapterVTable,
-        graph_name: []const u8,
-        from_slot: u64,
-        to_slot: u64,
-        edge_slot: u64,
-        public_id: u64,
-    ) !void {
-        const set_edge_property = vt.setEdgePropertyFn orelse return error.Unsupported;
-        var id_buf: [16]u8 = undefined;
-        try set_edge_property(
-            vt.ctx,
-            graph_name,
-            from_slot,
-            to_slot,
-            edge_slot,
-            INTERNAL_EDGE_ID_PROPERTY_KEY,
-            .{ .String = encodePersistedPublicId(&id_buf, public_id) },
-        );
-    }
+    // GAP-ENT-0024: `persistEdgePublicId` (the per-edge
+    // `__geode_internal_edge_id` property write — one ≥8 KB props page per
+    // edge) was DELETED. New edges carry the public id INLINE in the durable
+    // adjacency records (graph-storage v0.2.24 v2 blocks) via
+    // `createEdgeFn(..., public_id)`. Readers stay read-both forever:
+    // `public_id == 0` (legacy v1 blocks / old stores) falls back to the
+    // property fetch — see hydrateAdjFromEngine and the loop1 edge rebuild.
 
     /// GAP-0891 (RC-2): edge analog of `persistNodeTenantId`. No-op for
     /// `DEFAULT_TENANT_ID`; absent-on-read means default. When the adapter has
@@ -2969,9 +3303,14 @@ pub const GraphStore = struct {
         }
 
         if (filter_tenant) |tid| {
-            // Single-tenant fast path: scan only the inner map for `tid`.
-            if (self.edge_types_by_tenant.getPtr(tid)) |inner| {
-                var it = inner.keyIterator();
+            // Tenant-filtered path. GAP-ENT-0023 P3: the outer key is the
+            // composite "graph\x00tenant", so match on the tenant COMPONENT
+            // (exact component equality — preserves GAP-0509 isolation) and
+            // union across graphs. The outer map is tiny (graphs x tenants).
+            var outer_it = self.edge_types_by_tenant.iterator();
+            while (outer_it.next()) |outer_entry| {
+                if (!std.mem.eql(u8, graphTenantKeyTenant(outer_entry.key_ptr.*), tid)) continue;
+                var it = outer_entry.value_ptr.keyIterator();
                 while (it.next()) |kp| {
                     if (type_set.contains(kp.*)) continue;
                     const copy = try allocator.dupe(u8, kp.*);
@@ -3071,8 +3410,12 @@ pub const GraphStore = struct {
         }.run;
 
         if (filter_tenant) |tid| {
-            if (self.label_properties_by_tenant.getPtr(tid)) |inner| {
-                try collect(&prop_set, allocator, inner, label);
+            // GAP-ENT-0023 P3: composite "graph\x00tenant" outer key — match
+            // the tenant component, union across graphs (see listEdgeTypes).
+            var outer_it = self.label_properties_by_tenant.iterator();
+            while (outer_it.next()) |outer_entry| {
+                if (!std.mem.eql(u8, graphTenantKeyTenant(outer_entry.key_ptr.*), tid)) continue;
+                try collect(&prop_set, allocator, outer_entry.value_ptr, label);
             }
         } else {
             var outer_it = self.label_properties_by_tenant.iterator();
@@ -3141,8 +3484,12 @@ pub const GraphStore = struct {
         }
 
         if (filter_tenant) |tid| {
-            if (self.node_labels_by_tenant.getPtr(tid)) |inner| {
-                var it = inner.keyIterator();
+            // GAP-ENT-0023 P3: composite "graph\x00tenant" outer key — match
+            // the tenant component, union across graphs (see listEdgeTypes).
+            var outer_it = self.node_labels_by_tenant.iterator();
+            while (outer_it.next()) |outer_entry| {
+                if (!std.mem.eql(u8, graphTenantKeyTenant(outer_entry.key_ptr.*), tid)) continue;
+                var it = outer_entry.value_ptr.keyIterator();
                 while (it.next()) |kp| {
                     if (label_set.contains(kp.*)) continue;
                     const copy = try allocator.dupe(u8, kp.*);
@@ -3239,6 +3586,23 @@ pub const GraphStore = struct {
 
         // Initialize IdMap for the new graph
         _ = try self.getOrCreateIdMap(graph_name);
+
+        // R2 (review-0023 residual): an in-session DROP GRAPH followed by a
+        // re-CREATE of the SAME name used to inherit the dropped graph's stale
+        // HydrationEntry (entries are never removed before deinit). A stale
+        // `failed=true` would silently suppress the NEW graph's snapshot writes
+        // until the next reopen (perf-only, but avoidable). A freshly created
+        // graph has nothing to hydrate — neutralize the stale entry: done=true
+        // (hydration no-op, same as no entry) and failed=false (saves enabled).
+        {
+            const hio = std.Io.Threaded.global_single_threaded.io();
+            self.hydration_mutex.lockUncancelable(hio);
+            defer self.hydration_mutex.unlock(hio);
+            if (self.pending_hydration.get(graph_name)) |hentry| {
+                hentry.failed.store(false, .release);
+                hentry.done.store(true, .release);
+            }
+        }
 
         self.dirty.store(true, .release);
         incrementMutationEpoch();
@@ -3534,7 +3898,7 @@ pub const GraphStore = struct {
         // carry no user properties at create time, so only the label
         // dimension fires here.
         for (labels) |label| {
-            try self.bumpLabelCount(tenant, label);
+            try self.bumpLabelCount(graph_name, tenant, label);
         }
 
         self.dirty.store(true, .release);
@@ -3610,7 +3974,7 @@ pub const GraphStore = struct {
         try self.addNodeToGraphIndex(graph_name, id);
         // PERF-C (issue #814): tenant-keyed label counters.
         for (labels) |label| {
-            try self.bumpLabelCount(tenant, label);
+            try self.bumpLabelCount(graph_name, tenant, label);
         }
 
         // Mark store as dirty - persistence happens at query completion, not per-node
@@ -3790,7 +4154,7 @@ pub const GraphStore = struct {
             // negligible and the simpler call shape matches the other
             // create paths.
             for (labels) |label| {
-                try self.bumpLabelCount(tenant, label);
+                try self.bumpLabelCount(graph_name, tenant, label);
             }
 
             // WAL / mutation notification per node.
@@ -3898,6 +4262,42 @@ pub const GraphStore = struct {
             break :blk owned;
         } else std.fmt.allocPrint(self.allocator, "{s}:{s}", .{ graph_name, label }) catch return;
         self.label_counts_by_graph.put(owned_key, LabelCountValue.init(1)) catch {
+            self.allocator.free(owned_key);
+            return;
+        };
+    }
+
+    /// T2b (hydration merge, label family): bulk variant of
+    /// `bumpGraphLabelCount` — one refcount add for `n` freshly inserted
+    /// posting ids. Final counter value is identical to calling the
+    /// single-bump version `n` times (atomic adds commute).
+    fn bumpGraphLabelCountBy(self: *GraphStore, graph_name: []const u8, label: []const u8, n: usize) void {
+        if (n == 0) return;
+        var key_buf: [512]u8 = undefined;
+        var formatted = formatGraphLabelKey(&key_buf, self.allocator, graph_name, label) catch return;
+        defer if (formatted.owned) |owned| self.allocator.free(owned);
+
+        const io = std.Io.Threaded.global_single_threaded.io();
+        self.label_count_rwlock.lockSharedUncancelable(io);
+        if (self.label_counts_by_graph.getPtr(formatted.key)) |count| {
+            _ = count.fetchAdd(n, .monotonic);
+            self.label_count_rwlock.unlockShared(io);
+            return;
+        }
+        self.label_count_rwlock.unlockShared(io);
+
+        self.label_count_rwlock.lockUncancelable(io);
+        defer self.label_count_rwlock.unlock(io);
+        if (self.label_counts_by_graph.getPtr(formatted.key)) |count| {
+            _ = count.fetchAdd(n, .monotonic);
+            return;
+        }
+
+        const owned_key = if (formatted.owned) |owned| blk: {
+            formatted.owned = null;
+            break :blk owned;
+        } else std.fmt.allocPrint(self.allocator, "{s}:{s}", .{ graph_name, label }) catch return;
+        self.label_counts_by_graph.put(owned_key, LabelCountValue.init(n)) catch {
             self.allocator.free(owned_key);
             return;
         };
@@ -4131,7 +4531,7 @@ pub const GraphStore = struct {
         // PERF-C (issue #814): tenant-keyed label counters. GAP-0891 (RC-3):
         // bump the SAME tenant bucket the node is tagged with.
         for (labels) |label| {
-            try self.bumpLabelCount(tenant, label);
+            try self.bumpLabelCount(graph_name, tenant, label);
         }
 
         if (node_id >= self.next_node_id) {
@@ -4193,6 +4593,23 @@ pub const GraphStore = struct {
         try result.value_ptr.put(node_id, {});
     }
 
+    /// T2b (hydration merge): pre-size the per-graph node-id index for a bulk
+    /// load of `additional` ids (the count is exact post-scan). Same locking
+    /// and getOrPut shape as `addNodeToGraphIndex`.
+    fn reserveGraphNodeIndex(self: *GraphStore, graph_name: []const u8, additional: u32) !void {
+        const io = std.Io.Threaded.global_single_threaded.io();
+        self.nodes_by_graph_mutex.lockUncancelable(io);
+        defer self.nodes_by_graph_mutex.unlock(io);
+        const result = try self.nodes_by_graph.getOrPut(graph_name);
+        if (!result.found_existing) {
+            const key_copy = try self.allocator.dupe(u8, graph_name);
+            errdefer self.allocator.free(key_copy);
+            result.key_ptr.* = key_copy;
+            result.value_ptr.* = std.AutoHashMap(u64, void).init(self.allocator);
+        }
+        try result.value_ptr.ensureUnusedCapacity(additional);
+    }
+
     // PERF-B (issue #811): Remove a node-id from the per-graph node-id index.
     // The outer entry survives even when the inner set is empty — schema
     // introspection paths use `graphs` for graph-existence checks, not this
@@ -4215,15 +4632,27 @@ pub const GraphStore = struct {
     pub const NodesByGraphIterator = struct {
         // Empty iterator when the graph is absent.
         inner: ?std.AutoHashMap(u64, void).KeyIterator,
-        nodes: *const NodeCache,
+        store: *const GraphStore,
 
         pub fn next(it: *NodesByGraphIterator) ?*Node {
             const inner = &(it.inner orelse return null);
             while (inner.next()) |id_ptr| {
-                if (it.nodes.getPtr(id_ptr.*)) |node_ptr| return node_ptr;
-                // Stale id (deleted in the same tick as a concurrent reader?
-                // shouldn't happen under the caller-held graph rwlock, but be
-                // defensive — skip and continue).
+                // GAP-ENT-0023 P3: hydrate-on-miss, DETACHED (review C2).
+                // With a BOUNDED engine-backed cache the resident map is
+                // incomplete (evictions — and after a snapshot-served warm
+                // hydration the cache starts COLD), so a resident-only lookup
+                // would silently drop live rows from every consumer of this
+                // iterator (MATCH fallback scans, getEdgesByType). The id set
+                // (`nodes_by_graph`) is authoritative; a missing body is
+                // rebuilt from the engine via `getNodePtrForScan`, which
+                // NEVER inserts into the cache's shard maps — consumers
+                // retain `*Node` across iterations (bindings, base_nodes,
+                // result rows), and a cache insert here would rehash/evict
+                // the very slots those pointers alias (use-after-move). The
+                // detached box shares the resident pointers' grace-boundary
+                // lifetime. A per-node engine failure is skipped defensively,
+                // matching the old stale-id stance.
+                if (it.store.getNodePtrForScan(id_ptr.*)) |node_ptr| return node_ptr;
             }
             return null;
         }
@@ -4248,9 +4677,9 @@ pub const GraphStore = struct {
         @constCast(self).nodes_by_graph_mutex.lockUncancelable(io);
         defer @constCast(self).nodes_by_graph_mutex.unlock(io);
         if (self.nodes_by_graph.getPtr(graph_name)) |inner| {
-            return .{ .inner = inner.keyIterator(), .nodes = &self.nodes };
+            return .{ .inner = inner.keyIterator(), .store = self };
         }
-        return .{ .inner = null, .nodes = &self.nodes };
+        return .{ .inner = null, .store = self };
     }
 
     /// Test-only: returns the size of the per-graph node-id index for the
@@ -4337,20 +4766,75 @@ pub const GraphStore = struct {
         }
     }
 
-    fn bumpLabelCount(self: *GraphStore, tenant_id: []const u8, label: []const u8) !void {
-        try self.bumpRefcount(&self.node_labels_by_tenant, tenant_id, label);
+    /// GAP-ENT-0023 P3: compose the COMPOSITE outer key "graph\x00tenant" for
+    /// the tenant-introspection maps (`node_labels_by_tenant`,
+    /// `edge_types_by_tenant`, `label_properties_by_tenant`) into a stack
+    /// buffer when small enough, else heap-allocate. NUL is the separator —
+    /// graph names cannot contain NUL (the merge-index key convention already
+    /// relies on this), so the split is unambiguous.
+    fn formatGraphTenantKey(
+        scratch: []u8,
+        allocator: std.mem.Allocator,
+        graph_name: []const u8,
+        tenant_id: []const u8,
+    ) !struct { key: []const u8, owned: ?[]u8 } {
+        const total = std.math.add(usize, graph_name.len, 1) catch return error.GraphTenantKeyTooLarge;
+        const total2 = std.math.add(usize, total, tenant_id.len) catch return error.GraphTenantKeyTooLarge;
+        const max_graph_tenant_key_len: usize = 1 << 20; // corruption guard (mirrors formatLabelPropKey)
+        if (total2 > max_graph_tenant_key_len) return error.GraphTenantKeyTooLarge;
+        if (total2 <= scratch.len) {
+            @memcpy(scratch[0..graph_name.len], graph_name);
+            scratch[graph_name.len] = 0;
+            @memcpy(scratch[graph_name.len + 1 ..][0..tenant_id.len], tenant_id);
+            return .{ .key = scratch[0..total2], .owned = null };
+        }
+        const buf = try allocator.alloc(u8, total2);
+        @memcpy(buf[0..graph_name.len], graph_name);
+        buf[graph_name.len] = 0;
+        @memcpy(buf[graph_name.len + 1 ..][0..tenant_id.len], tenant_id);
+        return .{ .key = buf, .owned = buf };
     }
 
-    fn decLabelCount(self: *GraphStore, tenant_id: []const u8, label: []const u8) void {
-        self.decRefcount(&self.node_labels_by_tenant, tenant_id, label);
+    /// Graph component of a "graph\x00tenant" outer key. A key with no NUL
+    /// (never produced by formatGraphTenantKey) yields the whole key as graph
+    /// and an empty tenant — such an entry can never match a real tenant/graph.
+    fn graphTenantKeyGraph(outer_key: []const u8) []const u8 {
+        const idx = std.mem.indexOfScalar(u8, outer_key, 0) orelse return outer_key;
+        return outer_key[0..idx];
     }
 
-    fn bumpEdgeTypeCount(self: *GraphStore, tenant_id: []const u8, edge_type: []const u8) !void {
-        try self.bumpRefcount(&self.edge_types_by_tenant, tenant_id, edge_type);
+    /// Tenant component of a "graph\x00tenant" outer key (see above).
+    fn graphTenantKeyTenant(outer_key: []const u8) []const u8 {
+        const idx = std.mem.indexOfScalar(u8, outer_key, 0) orelse return "";
+        return outer_key[idx + 1 ..];
     }
 
-    fn decEdgeTypeCount(self: *GraphStore, tenant_id: []const u8, edge_type: []const u8) void {
-        self.decRefcount(&self.edge_types_by_tenant, tenant_id, edge_type);
+    fn bumpLabelCount(self: *GraphStore, graph_name: []const u8, tenant_id: []const u8, label: []const u8) !void {
+        var scratch: [512]u8 = undefined;
+        const k = try formatGraphTenantKey(&scratch, self.allocator, graph_name, tenant_id);
+        defer if (k.owned) |buf| self.allocator.free(buf);
+        try self.bumpRefcount(&self.node_labels_by_tenant, k.key, label);
+    }
+
+    fn decLabelCount(self: *GraphStore, graph_name: []const u8, tenant_id: []const u8, label: []const u8) void {
+        var scratch: [512]u8 = undefined;
+        const k = formatGraphTenantKey(&scratch, self.allocator, graph_name, tenant_id) catch return;
+        defer if (k.owned) |buf| self.allocator.free(buf);
+        self.decRefcount(&self.node_labels_by_tenant, k.key, label);
+    }
+
+    fn bumpEdgeTypeCount(self: *GraphStore, graph_name: []const u8, tenant_id: []const u8, edge_type: []const u8) !void {
+        var scratch: [512]u8 = undefined;
+        const k = try formatGraphTenantKey(&scratch, self.allocator, graph_name, tenant_id);
+        defer if (k.owned) |buf| self.allocator.free(buf);
+        try self.bumpRefcount(&self.edge_types_by_tenant, k.key, edge_type);
+    }
+
+    fn decEdgeTypeCount(self: *GraphStore, graph_name: []const u8, tenant_id: []const u8, edge_type: []const u8) void {
+        var scratch: [512]u8 = undefined;
+        const k = formatGraphTenantKey(&scratch, self.allocator, graph_name, tenant_id) catch return;
+        defer if (k.owned) |buf| self.allocator.free(buf);
+        self.decRefcount(&self.edge_types_by_tenant, k.key, edge_type);
     }
 
     /// Compose "label\x00prop_key" into a stack buffer when small enough;
@@ -4394,26 +4878,34 @@ pub const GraphStore = struct {
 
     fn bumpLabelPropertyCount(
         self: *GraphStore,
+        graph_name: []const u8,
         tenant_id: []const u8,
         label: []const u8,
         prop_key: []const u8,
     ) !void {
+        var oscratch: [512]u8 = undefined;
+        const ok = try formatGraphTenantKey(&oscratch, self.allocator, graph_name, tenant_id);
+        defer if (ok.owned) |buf| self.allocator.free(buf);
         var scratch: [512]u8 = undefined;
         const k = try formatLabelPropKey(&scratch, self.allocator, label, prop_key);
         defer if (k.owned) |buf| self.allocator.free(buf);
-        try self.bumpRefcount(&self.label_properties_by_tenant, tenant_id, k.key);
+        try self.bumpRefcount(&self.label_properties_by_tenant, ok.key, k.key);
     }
 
     fn decLabelPropertyCount(
         self: *GraphStore,
+        graph_name: []const u8,
         tenant_id: []const u8,
         label: []const u8,
         prop_key: []const u8,
     ) void {
+        var oscratch: [512]u8 = undefined;
+        const ok = formatGraphTenantKey(&oscratch, self.allocator, graph_name, tenant_id) catch return;
+        defer if (ok.owned) |buf| self.allocator.free(buf);
         var scratch: [512]u8 = undefined;
         const k = formatLabelPropKey(&scratch, self.allocator, label, prop_key) catch return;
         defer if (k.owned) |buf| self.allocator.free(buf);
-        self.decRefcount(&self.label_properties_by_tenant, tenant_id, k.key);
+        self.decRefcount(&self.label_properties_by_tenant, ok.key, k.key);
     }
 
     /// Per-node helper: bump (tenant, label) and (tenant, label\x00prop_key)
@@ -4421,14 +4913,14 @@ pub const GraphStore = struct {
     /// (excluding internal IDs). Used by the node-create paths.
     fn bumpIntrospectionForNode(self: *GraphStore, node: *const Node) !void {
         for (node.labels) |label| {
-            try self.bumpLabelCount(node.tenant_id, label);
+            try self.bumpLabelCount(node.graph_name, node.tenant_id, label);
         }
         var prop_it = node.properties.iterator();
         while (prop_it.next()) |prop| {
             const key = prop.key_ptr.*;
             if (isInternalPersistedPropertyKey(key)) continue;
             for (node.labels) |label| {
-                try self.bumpLabelPropertyCount(node.tenant_id, label, key);
+                try self.bumpLabelPropertyCount(node.graph_name, node.tenant_id, label, key);
             }
         }
     }
@@ -4440,11 +4932,11 @@ pub const GraphStore = struct {
             const key = prop.key_ptr.*;
             if (isInternalPersistedPropertyKey(key)) continue;
             for (node.labels) |label| {
-                self.decLabelPropertyCount(node.tenant_id, label, key);
+                self.decLabelPropertyCount(node.graph_name, node.tenant_id, label, key);
             }
         }
         for (node.labels) |label| {
-            self.decLabelCount(node.tenant_id, label);
+            self.decLabelCount(node.graph_name, node.tenant_id, label);
         }
     }
 
@@ -4514,6 +5006,98 @@ pub const GraphStore = struct {
         return posting.list.items.len > before_len;
     }
 
+    /// T2b (hydration merge, label family): batch-apply one hydration batch's
+    /// label postings. Semantically identical to calling `addToLabelIndex`
+    /// once per (node, label) — the posting is a SORTED, DEDUPED id set and
+    /// the per-(graph,label) refcount counts genuine inserts — but O(n log n)
+    /// instead of the per-insert `ArrayList.insert` memmove that degenerates
+    /// to O(n²) when uuid order interleaves across shards (the at-scale merge
+    /// pathology: shard-major row order inserts every later shard's uuids
+    /// into the MIDDLE of the posting).
+    fn applyLabelPostingsForBatch(self: *GraphStore, graph_name: []const u8, batch: []const Node) !void {
+        var groups = std.StringHashMap(std.ArrayList(u64)).init(self.allocator);
+        defer {
+            var vit = groups.valueIterator();
+            while (vit.next()) |list| list.deinit(self.allocator);
+            groups.deinit();
+        }
+        for (batch) |*node| {
+            for (node.labels) |label| {
+                const gop = try groups.getOrPut(label);
+                if (!gop.found_existing) gop.value_ptr.* = .empty;
+                try gop.value_ptr.append(self.allocator, node.id);
+            }
+        }
+        var it = groups.iterator();
+        while (it.next()) |entry| {
+            std.sort.pdq(u64, entry.value_ptr.items, {}, std.sort.asc(u64));
+            try self.mergeIntoLabelPosting(graph_name, entry.key_ptr.*, entry.value_ptr.items);
+        }
+    }
+
+    /// Sorted bulk merge of `sorted_ids` (ascending, may contain duplicates)
+    /// into one (graph,label) posting. Locking discipline identical to
+    /// `addToLabelIndex` (label_index_mutex -> posting.mutex; refcount bump
+    /// while both held). The replaced backing buffer is freed inline — legal
+    /// here for the same reason `sortedInsert`'s reallocating `insert` is on
+    /// this path: hydration's entry gate blocks every reader of this graph's
+    /// postings until the build completes.
+    fn mergeIntoLabelPosting(self: *GraphStore, graph_name: []const u8, label: []const u8, sorted_ids: []const u64) !void {
+        if (sorted_ids.len == 0) return;
+        const io = std.Io.Threaded.global_single_threaded.io();
+        self.label_index_mutex.lockUncancelable(io);
+        defer self.label_index_mutex.unlock(io);
+
+        const posting = try self.ensureLabelPostingListLocked(graph_name, label);
+        try self.ensureGraphLabelCount(graph_name, label);
+        posting.lock();
+        defer posting.unlock();
+
+        const old = posting.list.items;
+        // Pass 1: count genuine inserts (not already present, not a repeat).
+        var inserted: usize = 0;
+        {
+            var oi: usize = 0;
+            var ni: usize = 0;
+            var last_new: ?u64 = null;
+            while (ni < sorted_ids.len) : (ni += 1) {
+                const id = sorted_ids[ni];
+                if (last_new != null and last_new.? == id) continue;
+                last_new = id;
+                while (oi < old.len and old[oi] < id) oi += 1;
+                if (oi < old.len and old[oi] == id) continue;
+                inserted += 1;
+            }
+        }
+        if (inserted == 0) return;
+
+        // Pass 2: build the merged sorted set and swap it in.
+        var merged = try std.ArrayList(u64).initCapacity(self.allocator, old.len + inserted);
+        {
+            var oi: usize = 0;
+            var ni: usize = 0;
+            var last_new: ?u64 = null;
+            while (ni < sorted_ids.len) : (ni += 1) {
+                const id = sorted_ids[ni];
+                if (last_new != null and last_new.? == id) continue;
+                last_new = id;
+                while (oi < old.len and old[oi] < id) {
+                    merged.appendAssumeCapacity(old[oi]);
+                    oi += 1;
+                }
+                if (oi < old.len and old[oi] == id) continue;
+                merged.appendAssumeCapacity(id);
+            }
+            while (oi < old.len) {
+                merged.appendAssumeCapacity(old[oi]);
+                oi += 1;
+            }
+        }
+        posting.list.deinit(self.allocator);
+        posting.list = merged;
+        self.bumpGraphLabelCountBy(graph_name, label, inserted);
+    }
+
     fn removeFromLabelIndex(self: *GraphStore, graph_name: []const u8, label: []const u8, node_id: u64) void {
         const key = std.fmt.allocPrint(self.allocator, "{s}:{s}", .{ graph_name, label }) catch return;
         defer self.allocator.free(key);
@@ -4581,6 +5165,16 @@ pub const GraphStore = struct {
     /// Build a merge property index key into a stack buffer.
     /// Format: "graph\x00label\x00prop_key\x00prop_value_bytes"
     /// Returns the slice, or null if the key is too long or value is not indexable.
+    ///
+    /// GAP-ENT-0023 P3 (review M4) — FORMAT-EDITION OBLIGATION: the merge
+    /// hydration snapshot (`hydration_merge.snap`) persists these keys
+    /// verbatim, gated by `mergeIndexConfigHash` (lean flag + registered keys
+    /// + composite specs) — which does NOT cover the key LAYOUT itself. Any
+    /// change to this key format (separator, component order, value
+    /// normalization — here or in `buildCompositeMergeIndexKey` /
+    /// `normalizeMergeValue`) MUST bump `HYDRATION_SNAP_VERSION`, or an
+    /// upgraded binary would accept a counter-current snapshot written in the
+    /// OLD layout and silently miss every MERGE lookup (the gs-F1 lesson).
     fn buildMergeIndexKey(buf: []u8, graph_name: []const u8, label: []const u8, prop_key: []const u8, prop_value: PropertyValue) ?[]const u8 {
         // Calculate required length: graph + 1 + label + 1 + key + 1 + value
         const header_len = graph_name.len + 1 + label.len + 1 + prop_key.len + 1;
@@ -4731,6 +5325,9 @@ pub const GraphStore = struct {
     ///   "graph\0label\0prop0\0val0\0prop1\0val1\0..."
     /// Returns the slice, or null if any value is non-indexable / the key
     /// overflows `buf`. Mirrors `buildMergeIndexKey` for a single prop.
+    ///
+    /// GAP-ENT-0023 P3 (review M4): any key-format change here MUST bump
+    /// `HYDRATION_SNAP_VERSION` — see the obligation on `buildMergeIndexKey`.
     fn buildCompositeMergeIndexKey(
         buf: []u8,
         graph_name: []const u8,
@@ -5051,10 +5648,13 @@ pub const GraphStore = struct {
             try result.ensureTotalCapacity(allocator, nodes.len);
             for (nodes) |node_id| {
                 // Verify node exists (label index may contain stale entries)
-                const node = self.nodes.get(node_id) orelse continue;
-                if (tenant_id) |tid| {
-                    if (!std.mem.eql(u8, node.tenant_id, tid)) continue;
-                }
+                // and apply the exact tenant filter. GAP-ENT-0023 P3 (review
+                // I1): residency is NOT existence — on a bounded (or
+                // snapshot-warm, cold) cache a resident-only lookup dropped
+                // every non-resident row. The check verifies via IdMap
+                // membership + engine tenant tag instead, without mutating
+                // the cache (callers may hold retained `*Node` pointers).
+                if (!self.nodeExistsPassingTenantExact(node_id, tenant_id)) continue;
                 result.appendAssumeCapacity(node_id);
             }
             return result;
@@ -5133,14 +5733,12 @@ pub const GraphStore = struct {
         }
 
         // Verify nodes still exist (label index may have stale entries)
-        // and apply tenant filter (GAP-0509).
+        // and apply tenant filter (GAP-0509). GAP-ENT-0023 P3 (review I1):
+        // same residency-is-not-existence fix as the single-label path above.
         {
             var write: usize = 0;
             for (result.items) |node_id| {
-                const node = self.nodes.get(node_id) orelse continue;
-                if (tenant_id) |tid| {
-                    if (!std.mem.eql(u8, node.tenant_id, tid)) continue;
-                }
+                if (!self.nodeExistsPassingTenantExact(node_id, tenant_id)) continue;
                 result.items[write] = node_id;
                 write += 1;
             }
@@ -5223,14 +5821,14 @@ pub const GraphStore = struct {
             // and tenant-keyed introspection counters for this node.
             try self.addNodeToGraphIndex(node.graph_name, node.id);
             for (node.labels) |label| {
-                try self.bumpLabelCount(node.tenant_id, label);
+                try self.bumpLabelCount(node.graph_name, node.tenant_id, label);
             }
             var prop_iter_for_pc = node.properties.iterator();
             while (prop_iter_for_pc.next()) |prop_entry| {
                 const pkey = prop_entry.key_ptr.*;
                 if (isInternalPersistedPropertyKey(pkey)) continue;
                 for (node.labels) |label| {
-                    try self.bumpLabelPropertyCount(node.tenant_id, label, pkey);
+                    try self.bumpLabelPropertyCount(node.graph_name, node.tenant_id, label, pkey);
                 }
             }
             // Rebuild merge property index entries for this node
@@ -5252,7 +5850,7 @@ pub const GraphStore = struct {
             // PERF-P0-001: Rebuild edge-type index
             try self.addToEdgeTypeIndex(edge.graph_name, edge.label, edge.id);
             // PERF-C (issue #814): rebuild tenant-keyed edge-type counter.
-            try self.bumpEdgeTypeCount(edge.tenant_id, edge.label);
+            try self.bumpEdgeTypeCount(edge.graph_name, edge.tenant_id, edge.label);
             // Per-(graph,type) exact counter (typed count(r:TYPE) fast path).
             self.bumpGraphEdgeTypeCount(edge.graph_name, edge.label);
         }
@@ -5265,6 +5863,18 @@ pub const GraphStore = struct {
 
     pub fn setNodeProperty(self: *GraphStore, node_id: u64, key: []const u8, value: PropertyValue) !void {
         self.ensureNodeGraphHydrated(node_id); // PHASE 1b chokepoint (hydrate before write)
+        // C3 (review-0023): hydrate the node BODY on miss before the durable
+        // write below is gated on residency. P3 snapshot-served warm hydration
+        // leaves the node cache COLD for graphs of ANY size, and the detached
+        // scan boxes (C2) no longer warm it — so after every warm reopen a
+        // matched node is typically non-resident and the resident-only
+        // `nodes.get` gate would fail the SET with NodeNotFound and skip the
+        // adapter write. Same hydrate-on-miss the read paths (getNodeProperty
+        // et al.) already use; safe here because all node property writers run
+        // under the per-graph EXCLUSIVE lock, so the cache insert cannot race
+        // shard readers (the same guarantee the evict-retire machinery relies
+        // on). A truly-missing id still falls through to error.NodeNotFound.
+        _ = self.nodes.getOrHydratePtr(node_id) catch null;
         if (isInternalPersistedPropertyKey(key)) return error.ReservedPropertyKey;
         // FLE defense-in-depth: encrypt String values before adapter write and in-memory storage.
         // Some callers already encrypt; isLikelyFleEnvelope() prevents double-encryption.
@@ -5366,7 +5976,7 @@ pub const GraphStore = struct {
             // time too).
             if (was_new and !isInternalPersistedPropertyKey(key)) {
                 for (node.labels) |label| {
-                    self.bumpLabelPropertyCount(node.tenant_id, label, key) catch {};
+                    self.bumpLabelPropertyCount(node.graph_name, node.tenant_id, label, key) catch {};
                 }
             }
 
@@ -5644,6 +6254,11 @@ pub const GraphStore = struct {
 
     pub fn removeNodeProperty(self: *GraphStore, node_id: u64, key: []const u8) void {
         self.ensureNodeGraphHydrated(node_id); // PHASE 1b chokepoint (hydrate before write)
+        // C3 (review-0023): hydrate the node body on miss — without this the
+        // resident-only gates below turn a REMOVE on a cold (post-warm-reopen)
+        // node into a SILENT durable no-op. See setNodeProperty for the full
+        // rationale and the write-lock safety argument.
+        _ = self.nodes.getOrHydratePtr(node_id) catch null;
         if (isInternalPersistedPropertyKey(key)) return;
         if (global_vtable) |vt| {
             const node = self.nodes.get(node_id) orelse return;
@@ -5681,7 +6296,7 @@ pub const GraphStore = struct {
                 // are filtered out (they were never bumped on insert).
                 if (!isInternalPersistedPropertyKey(kv.key)) {
                     for (node.labels) |label| {
-                        self.decLabelPropertyCount(node.tenant_id, label, kv.key);
+                        self.decLabelPropertyCount(node.graph_name, node.tenant_id, label, kv.key);
                     }
                 }
                 self.allocator.free(kv.key);
@@ -5768,12 +6383,12 @@ pub const GraphStore = struct {
             // — because the new label "inherits" all the node's properties
             // for introspection purposes (`listPropertiesForLabel` reports
             // every property carried by any node holding `label`).
-            try self.bumpLabelCount(node.tenant_id, label);
+            try self.bumpLabelCount(node.graph_name, node.tenant_id, label);
             var prop_it_for_pc = node.properties.iterator();
             while (prop_it_for_pc.next()) |p| {
                 const pkey = p.key_ptr.*;
                 if (isInternalPersistedPropertyKey(pkey)) continue;
-                try self.bumpLabelPropertyCount(node.tenant_id, label, pkey);
+                try self.bumpLabelPropertyCount(node.graph_name, node.tenant_id, label, pkey);
             }
 
             // Mark as dirty - persistence happens at query completion
@@ -5839,9 +6454,9 @@ pub const GraphStore = struct {
                 while (prop_it_for_pc_rm.next()) |p| {
                     const pkey = p.key_ptr.*;
                     if (isInternalPersistedPropertyKey(pkey)) continue;
-                    self.decLabelPropertyCount(node.tenant_id, label, pkey);
+                    self.decLabelPropertyCount(node.graph_name, node.tenant_id, label, pkey);
                 }
-                self.decLabelCount(node.tenant_id, label);
+                self.decLabelCount(node.graph_name, node.tenant_id, label);
                 self.allocator.free(removed_label);
 
                 // Mark as dirty - persistence happens at query completion
@@ -5855,6 +6470,14 @@ pub const GraphStore = struct {
     }
 
     pub fn getAllNodes(self: *const GraphStore, allocator: std.mem.Allocator) ![]u64 {
+        // PHASE 1b chokepoint: enumerates ALL graphs' IdMaps (no single
+        // graph_name). After a no-snapshot cold-open a deferred graph's IdMap is
+        // EMPTY until first access, so an unguarded scan under-counts — the
+        // DROP TENANT cascade (tenant_dispatch) would then leave orphaned rows /
+        // report a false "empty tenant" success. Hydrate every deferred graph
+        // first, before any lock (no deadlock, no re-entrancy: hydration's
+        // loadOneGraphFromAdapterFull never calls these readers).
+        @constCast(self).ensureAllGraphsHydrated();
         // When the node cache is bounded (eviction active), the resident map is
         // an INCOMPLETE view — enumerate every public id from the per-graph
         // IdMaps instead, which stay fully resident (~24 B/entry) regardless of
@@ -5883,6 +6506,11 @@ pub const GraphStore = struct {
     // CANARY: REQ=REQ-MULTI-TENANT-004; FEATURE="PerTenantIsolation"; ASPECT=BulkNodeAccess; STATUS=TESTED; TEST=src/graph_store.zig; OWNER=enterprise; UPDATED=2026-04-01
     // GAP-0279: Return only nodes belonging to the specified tenant (or all if tenant is null)
     pub fn getAllNodesForTenant(self: *const GraphStore, allocator: std.mem.Allocator, tenant: ?[]const u8) ![]u64 {
+        // PHASE 1b chokepoint: enumerates ALL graphs' IdMaps (no single
+        // graph_name). Hydrate every deferred graph before the scan so a
+        // no-snapshot cold-open cannot under-count the tenant (DROP TENANT
+        // cascade correctness). Safe/no-deadlock/no-reentrancy as in getAllNodes.
+        @constCast(self).ensureAllGraphsHydrated();
         const tid = tenant orelse return self.getAllNodes(allocator);
 
         // Unbounded cache: resident map is the full set (fast path, unchanged).
@@ -5942,6 +6570,11 @@ pub const GraphStore = struct {
     // cascade to collect a tenant's edges for referential-consistency deletion
     // (edges deleted before their endpoint nodes).
     pub fn getAllEdgesForTenant(self: *const GraphStore, allocator: std.mem.Allocator, tenant: ?[]const u8) ![]u64 {
+        // PHASE 1b chokepoint: enumerates ALL graphs' IdMaps (no single
+        // graph_name). Hydrate every deferred graph before the scan so a
+        // no-snapshot cold-open cannot under-count the tenant's edges (DROP
+        // TENANT cascade would otherwise orphan edges). Safe as in getAllNodes.
+        @constCast(self).ensureAllGraphsHydrated();
         // Unbounded cache: the resident map is the full set (fast path).
         if (self.edges.effectiveCap() == 0) {
             var result: std.ArrayList(u64) = .empty;
@@ -5980,7 +6613,24 @@ pub const GraphStore = struct {
     }
 
     pub fn getNodeCount(self: *GraphStore) usize {
-        return self.nodes.count();
+        // PHASE 1b chokepoint (H3): store-wide node count, the node analog of
+        // getEdgeCount. Reads deferred state (the per-graph IdMaps, and the
+        // resident node cache populated by loop2), so after a no-snapshot open it
+        // would return a PARTIAL count for any not-yet-hydrated graph. No single
+        // graph_name -> hydrate every deferred graph first.
+        self.ensureAllGraphsHydrated();
+        // With a BOUNDED node cache the resident map is incomplete, so count from
+        // the per-graph IdMaps (fully resident) — mirrors getEdgeCount and
+        // countNodesForGraph. Unbounded cache: the resident count IS the total.
+        if (self.nodes.effectiveCap() == 0) {
+            return self.nodes.count();
+        }
+        var total: usize = 0;
+        var it = self.id_maps.iterator();
+        while (it.next()) |entry| {
+            total += entry.value_ptr.nodeCount();
+        }
+        return total;
     }
 
     // CANARY: REQ=REQ-PERF-COUNT-NODES-PUSHDOWN; FEATURE="UnlabeledMatchCountPushdown"; ASPECT=StoreCount; STATUS=TESTED; TEST=tests/test_count_nodes_pushdown_perf.zig; OWNER=execution; UPDATED=2026-04-16
@@ -5994,14 +6644,50 @@ pub const GraphStore = struct {
     // bindings — strictly cheaper than the old iteration path which built a
     // MatchBinding per node then discarded them.
     pub fn countNodesForGraph(self: *const GraphStore, graph_name: []const u8, tenant: ?[]const u8) usize {
-        // Bounded cache: the resident map is incomplete — count from the
-        // per-graph IdMap (fully resident). With no tenant filter, the graph's
-        // IdMap node count IS the answer (O(1)). With a tenant filter, resolve
-        // each node's tenant without populating the cache.
-        if (self.nodes.effectiveCap() != 0) {
+        // PHASE 1b chokepoint (H3): guard the deferred hydration so a count(n)
+        // before hydration completes can't observe a partial IdMap node count
+        // after a no-snapshot open (same bug class as countEdgesForGraph).
+        // No-op once hydrated / on snapshot-resident opens, so O(1) is preserved.
+        @constCast(self).ensureGraphHydrated(graph_name);
+        // GAP-ENT-0013: with no tenant filter, the graph's IdMap node count IS
+        // the answer — O(1) in BOTH cache modes (the IdMap is fully resident
+        // whenever an engine adapter backs the graph, bounded or unbounded
+        // node cache alike). Hoisted out of the bounded-cache branch so an
+        // unbounded cache no longer pays an O(N) `nodes.iterator()` walk.
+        //
+        // Review I-1: gate the O(1) return on `global_vtable != null`. The
+        // IdMap is only WRITE-maintained when an engine vtable backs node
+        // creation (`createNode*` inserts into the IdMap solely inside the
+        // `adapter_node != null` arm), but `createGraph` /
+        // `openOrCreateGraphWithUuid` unconditionally create an EMPTY IdMap
+        // even with no disk adapter (GAP-0839). Without the gate, an
+        // adapterless `CREATE GRAPH` + node creates + `count(n)` returned 0
+        // from that empty IdMap. Adapterless stores never bound the node
+        // cache (hydrate-on-miss is engine-backed), so falling through to
+        // the resident iteration below is exact there.
+        if (tenant == null) {
+            if (global_vtable != null) {
+                if (@constCast(self).getIdMap(graph_name)) |id_map| {
+                    // GAP-ENT-0013 path counter: O(1) IdMap total served the count.
+                    _ = g_count_nodes_idmap_fast.fetchAdd(1, .monotonic);
+                    return id_map.nodeCount();
+                }
+            }
+            // No IdMap for this graph (purely in-memory graph with no
+            // adapter). Bounded cache: the resident map is incomplete and
+            // there is no authoritative source — preserve the pre-existing
+            // bounded behavior (0). Unbounded cache: fall through to the
+            // resident iteration below, which IS exact (O(resident)).
+            if (self.nodes.effectiveCap() != 0) return 0;
+        } else if (self.nodes.effectiveCap() != 0) {
+            // Bounded cache + tenant filter: the resident map is incomplete —
+            // resolve each node's tenant from the IdMap without populating
+            // the cache.
             const id_map = (@constCast(self).getIdMap(graph_name)) orelse return 0;
-            if (tenant == null) return id_map.nodeCount();
             const tid = tenant.?;
+            // GAP-ENT-0013 path counter: tenant-filtered per-uuid iteration
+            // (O(N) `nodeMatchesTenant` property reads).
+            _ = g_count_nodes_iter_fallback.fetchAdd(1, .monotonic);
             var count: usize = 0;
             var nit = id_map.nodeUuidIterator();
             while (nit.next()) |nuuid| {
@@ -6010,6 +6696,9 @@ pub const GraphStore = struct {
             }
             return count;
         }
+        // GAP-ENT-0013 path counter: unbounded-cache resident node iteration
+        // (tenant-filtered count, or the no-IdMap in-memory fallback above).
+        _ = g_count_nodes_iter_fallback.fetchAdd(1, .monotonic);
         var count: usize = 0;
         var iter = self.nodes.iterator();
         while (iter.next()) |entry| {
@@ -6101,17 +6790,30 @@ pub const GraphStore = struct {
         posting.lock();
         defer posting.unlock();
 
-        const tid = tenant.?;
         var count: usize = 0;
         for (posting.list.items) |node_id| {
-            const node = self.nodes.get(node_id) orelse continue;
-            if (!std.mem.eql(u8, node.tenant_id, tid)) continue;
+            // GAP-ENT-0023 P3: engine-fallback tenant check — a bounded (or
+            // snapshot-warm, cold-cache) resident map would otherwise
+            // silently undercount evicted-but-live nodes for the
+            // tenant-filtered path. Review C2/M1 follow-up: the check is
+            // NON-MUTATING (no cache insert under the label locks — the
+            // previous getOrHydratePtr flooded/evicted the cache and could
+            // rehash shard maps while MATCH consumers hold `*Node` pointers).
+            if (!self.nodeExistsPassingTenantExact(node_id, tenant)) continue;
             count += 1;
         }
         return count;
     }
 
     pub fn getEdgeCount(self: *GraphStore) usize {
+        // PHASE 1b chokepoint (H3): store-wide edge count. Both arms read
+        // deferred state — the per-graph IdMaps (empty until loop1 hydration) or
+        // the resident edge map (populated by loop2). Without this guard, after a
+        // no-snapshot open this returns a PARTIAL count (0 → … → true total) for
+        // any not-yet-hydrated graph. No single graph_name here, so hydrate every
+        // deferred graph first (mirrors ensureAllGraphsHydrated in getAll*).
+        // Placed before any lock/iteration — matches the guarded-reader precedent.
+        self.ensureAllGraphsHydrated();
         // PHASE 1: with a BOUNDED edge cache the resident map is incomplete, so
         // count from the per-graph IdMaps (fully resident, ~24 B/edge — the same
         // authoritative source `getEdgeCount`'s node analog `countNodesForGraph`
@@ -6136,6 +6838,13 @@ pub const GraphStore = struct {
     // Tenantless only — the fast-path caller refuses any concrete tenant before
     // calling this method (see countEdgesFastPath in match_operations.zig).
     pub fn countEdgesForGraph(self: *const GraphStore, graph_name: []const u8) usize {
+        // PHASE 1b chokepoint (H3): the untyped edge-count fast path reads the
+        // IdMap edge count / resident edge map, which are populated by the
+        // deferred loop2 hydration. Without this guard a `count(r)` issued
+        // before hydration completes returns a PARTIAL count (0 → …→ true count)
+        // after a no-snapshot open. Mirror the typed `countGraphEdgeType` guard
+        // so the reader triggers + waits for full hydration first.
+        @constCast(self).ensureGraphHydrated(graph_name);
         if (self.edges.effectiveCap() != 0) {
             // Bounded: IdMap is always fully resident.
             const id_map = (@constCast(self).getIdMap(graph_name)) orelse return 0;
@@ -6170,6 +6879,16 @@ pub const GraphStore = struct {
     /// (residency stays bounded — the cache evicts as it hydrates). Mirrors
     /// `getAllNodes` for the node side.
     pub fn allEdgeIds(self: *const GraphStore, allocator: std.mem.Allocator) ![]u64 {
+        // PHASE 1b chokepoint (H3): the COMPLETE edge id set is enumerated from
+        // the per-graph IdMaps (bounded cache) or the resident edge map
+        // (unbounded) — both empty/partial for a graph whose loop1/loop2 build
+        // was deferred at a no-snapshot open. Without this guard, index builds,
+        // graph algorithms, and DELETE collection would silently MISS every edge
+        // of a not-yet-hydrated graph. No single graph_name, so hydrate all
+        // deferred graphs first (mirrors getAllNodes). Placed before any
+        // iteration — matches the guarded-reader precedent; the hydration body
+        // takes no store/graph lock, and no caller holds hydration_build_mutex.
+        @constCast(self).ensureAllGraphsHydrated();
         var result: std.ArrayList(u64) = .empty;
         errdefer result.deinit(allocator);
         if (self.edges.effectiveCap() == 0) {
@@ -6191,6 +6910,29 @@ pub const GraphStore = struct {
 
     pub fn getNodePtr(self: *const GraphStore, node_id: u64) ?*const Node {
         return self.nodes.getPtr(node_id);
+    }
+
+    /// Hydrate-on-miss variant of `getNodePtr` (node twin of
+    /// `getEdgePtrHydrated`): a node body evicted from the bounded resident
+    /// cache is rebuilt from the durable engine, so callers that must
+    /// distinguish "node truly absent from the store" from "node body
+    /// evicted from the resident cache" never confuse the two. Returns null
+    /// only when the id exists in neither the cache nor the engine.
+    ///
+    /// Gap 0034: the periodic HMAC verifier's chain-root read used the raw
+    /// `getNodePtr`; a bulk ingest evicting the bootstrap-era AuthChainRoot
+    /// body made every verify round report MissingChainRoot ("POSSIBLE
+    /// TAMPERING") on a perfectly healthy fresh store until restart.
+    ///
+    /// NOTE: on a miss this MUTATES the cache (insert + maybe evict) under
+    /// the shard's hydrate mutex + map lock, so the caller must hold a lock
+    /// that serializes cache writes — NOT merely a shared read lock (the
+    /// periodic verifier holds the GLOBAL EXCLUSIVE store lock; startup/CLI
+    /// callers are single-threaded). Same contract as `getNodeProperty`'s
+    /// hydrate-on-miss read.
+    pub fn getNodePtrHydrated(self: *const GraphStore, node_id: u64) ?*const Node {
+        const cache: *NodeCache = @constCast(&self.nodes);
+        return (cache.getOrHydratePtr(node_id) catch return null) orelse null;
     }
 
     pub fn getEdgePtr(self: *const GraphStore, edge_id: u64) ?*const Edge {
@@ -6758,6 +7500,11 @@ pub const GraphStore = struct {
         // before the adapter is wired).  Every other failure must propagate.
         // See `createEdgeWithIdInternal` (~50 lines below) for the reference
         // pattern.
+        // Generate UUIDv7-based time-sortable unique ID. Minted BEFORE the
+        // adapter create so it rides INLINE in the durable adjacency records
+        // (GAP-ENT-0024) — no `__geode_internal_edge_id` property page.
+        const id = generateTimeBasedId();
+
         const adapter_edge: ?struct {
             vt: AdapterVTable,
             from_slot: u64,
@@ -6768,7 +7515,7 @@ pub const GraphStore = struct {
             const im = try self.getOrCreateIdMap(graph_name);
             const from_slot = im.nodeSlot(@as(u128, from_id)) orelse return error.SourceNodeNotFound;
             const to_slot = im.nodeSlot(@as(u128, to_id)) orelse return error.TargetNodeNotFound;
-            const edge_slot = try vt.createEdgeFn(vt.ctx, graph_name, from_slot, to_slot, edge_type);
+            const edge_slot = try vt.createEdgeFn(vt.ctx, graph_name, from_slot, to_slot, edge_type, id);
             break :blk .{
                 .vt = vt,
                 .from_slot = from_slot,
@@ -6777,28 +7524,12 @@ pub const GraphStore = struct {
             };
         };
         try self.ensureGraph(graph_name);
-        // Generate UUIDv7-based time-sortable unique ID
-        const id = generateTimeBasedId();
 
         // Store UUID→slot mapping in IdMap for adapter translation
         if (adapter_edge) |persisted_edge| {
-            persistEdgePublicId(
-                persisted_edge.vt,
-                graph_name,
-                persisted_edge.from_slot,
-                persisted_edge.to_slot,
-                persisted_edge.edge_slot,
-                id,
-            ) catch |err| {
-                persisted_edge.vt.deleteEdgeFn(
-                    persisted_edge.vt.ctx,
-                    graph_name,
-                    persisted_edge.from_slot,
-                    persisted_edge.to_slot,
-                    persisted_edge.edge_slot,
-                ) catch {};
-                return err;
-            };
+            // GAP-ENT-0024: the public id is already durable INLINE in the
+            // adjacency records (written by createEdgeFn above) — the legacy
+            // per-edge `__geode_internal_edge_id` property write is gone.
             // GAP-0891 (RC-2): round-trip the edge tenant tag (no-op for default).
             persistEdgeTenantId(
                 persisted_edge.vt,
@@ -6843,7 +7574,7 @@ pub const GraphStore = struct {
         // PERF-P0-001: Maintain edge-type index for fast getEdgesByType
         try self.addToEdgeTypeIndex(graph_name, edge_type, id);
         // PERF-C (issue #814): tenant-keyed edge-type counter for LSP introspection.
-        try self.bumpEdgeTypeCount(tenant, edge_type);
+        try self.bumpEdgeTypeCount(graph_name, tenant, edge_type);
         // Per-(graph,type) exact counter (typed count(r:TYPE) fast path).
         self.bumpGraphEdgeTypeCount(graph_name, edge_type);
 
@@ -6898,7 +7629,9 @@ pub const GraphStore = struct {
                 .vt = vt,
                 .from_slot = from_slot,
                 .to_slot = to_slot,
-                .edge_slot = try vt.createEdgeFn(vt.ctx, graph_name, from_slot, to_slot, edge_type),
+                // GAP-ENT-0024: the replicated/minted public edge id rides
+                // INLINE in the durable adjacency records (v2 blocks).
+                .edge_slot = try vt.createEdgeFn(vt.ctx, graph_name, from_slot, to_slot, edge_type, edge_id),
             };
         } else null;
 
@@ -6908,23 +7641,9 @@ pub const GraphStore = struct {
         const tenant = fle_integration.tenantPreferringActiveContext();
 
         if (adapter_edge) |persisted_edge| {
-            persistEdgePublicId(
-                persisted_edge.vt,
-                graph_name,
-                persisted_edge.from_slot,
-                persisted_edge.to_slot,
-                persisted_edge.edge_slot,
-                edge_id,
-            ) catch |err| {
-                persisted_edge.vt.deleteEdgeFn(
-                    persisted_edge.vt.ctx,
-                    graph_name,
-                    persisted_edge.from_slot,
-                    persisted_edge.to_slot,
-                    persisted_edge.edge_slot,
-                ) catch {};
-                return err;
-            };
+            // GAP-ENT-0024: the public id is already durable INLINE in the
+            // adjacency records (written by createEdgeFn above) — no
+            // `__geode_internal_edge_id` property write on the create path.
             // GAP-0891 (RC-2): round-trip the edge tenant tag (no-op for default).
             persistEdgeTenantId(
                 persisted_edge.vt,
@@ -6967,7 +7686,7 @@ pub const GraphStore = struct {
         try self.addToEdgeTypeIndex(graph_name, edge_type, edge_id);
         // PERF-C (issue #814): tenant-keyed edge-type counter for LSP
         // introspection. GAP-0891 (RC-3): bump the SAME bucket as the tag.
-        try self.bumpEdgeTypeCount(tenant, edge_type);
+        try self.bumpEdgeTypeCount(graph_name, tenant, edge_type);
         // Per-(graph,type) exact counter (typed count(r:TYPE) fast path).
         self.bumpGraphEdgeTypeCount(graph_name, edge_type);
 
@@ -7318,6 +8037,7 @@ pub const GraphStore = struct {
     }
 
     pub fn setEdgeProperty(self: *GraphStore, edge_id: u64, key: []const u8, value: PropertyValue) !void {
+        self.ensureEdgeGraphHydrated(edge_id); // PHASE 1b chokepoint (hydrate before write)
         if (isInternalPersistedPropertyKey(key)) return error.ReservedPropertyKey;
         // FLE defense-in-depth: encrypt String values before adapter write and in-memory storage.
         // `owned_encrypted` tracks the freshly-allocated FLE envelope (if any) so
@@ -7435,6 +8155,7 @@ pub const GraphStore = struct {
     /// Intended for internal bulk-ingest callers; regular per-property
     /// callers keep using `setEdgeProperty`.
     pub fn setEdgePropertiesBatch(self: *GraphStore, edge_id: u64, entries: []const BatchPropertyEntry) !void {
+        self.ensureEdgeGraphHydrated(edge_id); // PHASE 1b chokepoint (hydrate before write)
         const edge = self.getEdgeHydrated(edge_id) orelse return error.EdgeNotFound;
 
         // --- Adapter path: single lock acquisition for all properties ---
@@ -7554,6 +8275,7 @@ pub const GraphStore = struct {
     }
 
     pub fn removeEdgeProperty(self: *GraphStore, edge_id: u64, key: []const u8) void {
+        self.ensureEdgeGraphHydrated(edge_id); // PHASE 1b chokepoint (hydrate before write)
         if (isInternalPersistedPropertyKey(key)) return;
         if (global_vtable) |vt| {
             if (vt.removeEdgePropertyFn) |f| {
@@ -7674,9 +8396,65 @@ pub const GraphStore = struct {
         edge_type: []const u8,
         tenant_id: ?[]const u8,
     ) !void {
-        var node_iter = self.iterateNodesInGraph(gn);
-        while (node_iter.next()) |node_ptr| {
-            const out_ids = self.getOutgoingEdgeIds(node_ptr.id) orelse continue;
+        // GAP-ENT-0023 P3 (review C2 follow-on): this walk needs only node
+        // IDS — iterate the authoritative `nodes_by_graph` id set directly
+        // instead of hydrating full node bodies through the pointer iterator
+        // (which would box every non-resident node until the next grace
+        // point for no benefit).
+        self.ensureGraphHydrated(gn); // PHASE 1b chokepoint
+
+        // GAP-ENT-0004: with a storage adapter present, serve the typed
+        // enumeration from the ENGINE's per-shard edge_index (mmap base ⊕
+        // overlay merged view) — ONE O(total edges) sequential index-record
+        // scan with NO node iteration, NO adjacency hydration and, for
+        // tenantless callers, NO edge-body reads (each index entry carries
+        // rel_type + the inline public id). The previous behaviour walked
+        // EVERY node of the graph and expanded its outgoing adjacency
+        // (hydrate-on-miss) just to derive type membership — O(nodes+edges)
+        // engine reads + cache thrash at enterprise scale.
+        //
+        // Tenant semantics IDENTICAL to the walk: when a concrete tenant
+        // filter is present, resolve each candidate edge's body
+        // (hydrate-on-miss, bounded residency) and compare its tenant tag —
+        // the same `edge.tenant_id` equality the walk applied.
+        if (global_adapter) |adapter| {
+            _ = typed_edge_index_scan_total.fetchAdd(1, .monotonic);
+            const start_len = id_list.items.len;
+            adapter.collectEdgePublicIdsByType(gn, edge_type, allocator, id_list) catch |err| switch (err) {
+                // Graph unknown to the adapter (e.g. created purely in-memory
+                // in a test): nothing durable to enumerate — same empty result
+                // the walk would produce from an absent nodes_by_graph entry.
+                error.GraphNotFound => return,
+                else => return err,
+            };
+            if (tenant_id) |tid| {
+                var w: usize = start_len;
+                for (id_list.items[start_len..]) |eid| {
+                    const edge = self.getEdgePtrHydrated(eid) orelse continue;
+                    if (!std.mem.eql(u8, edge.tenant_id, tid)) continue;
+                    id_list.items[w] = eid;
+                    w += 1;
+                }
+                id_list.shrinkRetainingCapacity(w);
+            }
+            return;
+        }
+
+        // Adapterless fallback (pure in-memory store configured with a bounded
+        // edge cache — test-only shape): the original every-node adjacency
+        // walk. Instrumented so path tests can prove it never runs when an
+        // adapter is present.
+        _ = typed_edge_node_walk_total.fetchAdd(1, .monotonic);
+        var ids_iter = blk: {
+            const io = std.Io.Threaded.global_single_threaded.io();
+            self.nodes_by_graph_mutex.lockUncancelable(io);
+            defer self.nodes_by_graph_mutex.unlock(io);
+            const inner = self.nodes_by_graph.getPtr(gn) orelse return;
+            break :blk inner.keyIterator();
+        };
+        while (ids_iter.next()) |id_ptr| {
+            _ = typed_edge_node_walk_nodes_total.fetchAdd(1, .monotonic);
+            const out_ids = self.getOutgoingEdgeIds(id_ptr.*) orelse continue;
             for (out_ids) |eid| {
                 const edge = self.getEdgePtrHydrated(eid) orelse continue;
                 if (!std.mem.eql(u8, edge.label, edge_type)) continue;
@@ -8560,6 +9338,13 @@ pub const GraphStore = struct {
                 // later open can bulk-load them (sub-second ready). The LIGHT
                 // runtime checkpoint must stay O(dirty), so it is skipped here.
                 self.saveIdMapSnapshots(adapter);
+                // GAP-ENT-0023 P3: persist the loop2 hydration products of
+                // every HYDRATED graph (counters / label postings / merge
+                // index) at the same post-checkpoint counter, so the next
+                // open's first-access hydration is O(snapshot) instead of the
+                // O(graph) engine scan. Same gate discipline as the IdMap
+                // snapshots (never persist a deferred graph's empty state).
+                self.saveHydrationSnapshots(adapter);
             }
         }
         self.cleanupLegacySidecars();
@@ -8572,21 +9357,643 @@ pub const GraphStore = struct {
     /// write happened since. Best-effort per graph: a failure to write one
     /// snapshot just means that graph falls back to the scan-rebuild next open.
     fn saveIdMapSnapshots(self: *GraphStore, adapter: *graph_storage_adapter.StorageAdapter) void {
-        const io = std.Io.Threaded.global_single_threaded.io();
         var it = self.id_maps.iterator();
         while (it.next()) |entry| {
-            const graph_name = entry.key_ptr.*;
-            const counter = adapter.graphManifestCounter(graph_name) orelse continue;
-            const dir_path = (self.resolveGraphRootDirPath(graph_name) catch continue) orelse continue;
-            defer self.allocator.free(dir_path);
-            var dir = std.Io.Dir.cwd().openDir(io, dir_path, .{}) catch continue;
-            defer dir.close(io);
-            entry.value_ptr.saveSnapshot(dir, counter) catch |err| {
-                log.warn("failed to write IdMap snapshot", &.{
-                    Attr.string("graph", graph_name),
-                    Attr.string("error", @errorName(err)),
-                });
-            };
+            self.saveIdMapSnapshotForGraph(adapter, entry.key_ptr.*, entry.value_ptr);
+        }
+    }
+
+    /// Per-graph core of `saveIdMapSnapshots` — shared by the full-checkpoint
+    /// loop above and the Task 3 hydration persist-on-complete path
+    /// (`persistHydrationProductsForGraph`). ALL gates live here so every
+    /// caller inherits them.
+    fn saveIdMapSnapshotForGraph(
+        self: *GraphStore,
+        adapter: *graph_storage_adapter.StorageAdapter,
+        graph_name: []const u8,
+        id_map: *id_map_mod.IdMap,
+    ) void {
+        const io = std.Io.Threaded.global_single_threaded.io();
+        const dir_path = (self.resolveGraphRootDirPath(graph_name) catch return) orelse return;
+        defer self.allocator.free(dir_path);
+        var dir = std.Io.Dir.cwd().openDir(io, dir_path, .{}) catch return;
+        defer dir.close(io);
+
+        // CRITICAL (silent-data-loss guard): a graph whose loop1 IdMap build
+        // was DEFERRED at open (no-snapshot fallback: markPendingHydration
+        // with NO snapshot adopted) and has NOT been hydrated yet has an
+        // EMPTY, `.resident` overlay — loop1 never ran. Persisting it here
+        // would write an EMPTY snapshot stamped with the CURRENT manifest
+        // counter; the next open's counter-gate would PASS and adopt the
+        // empty IdMap as base, so the graph would appear empty forever.
+        // Skip the write and INVALIDATE any stale on-disk snapshot so the
+        // next open re-defers + rebuilds from the durable engine pages.
+        // (Crash-safety is preserved: the durable pages are the source of
+        // truth; skipping the snapshot just means the next open rebuilds.)
+        //
+        // A `.mmap_backed` deferred graph is NOT dangerous: it adopted a
+        // valid snapshot as its immutable base at open (case A), so its
+        // merged view still reflects the on-disk mapping and re-serializing
+        // it is correct (and preserves the sub-second-open fast path). Only
+        // the empty `.resident` deferred case (case B) is skipped, so idle
+        // snapshot-backed graphs keep their snapshots across a checkpoint.
+        //
+        // NOTE: we do NOT call ensureGraphHydrated here — a routine
+        // checkpoint must not force full hydration of every idle graph, and
+        // skipping avoids taking hydration_build_mutex under the checkpoint
+        // path entirely (no lock inversion vs. loadOneGraphFromAdapterFull).
+        // GAP-ENT-0023 P3 (review C1): a FAILED (quarantined) hydration is
+        // gated exactly like a deferred one for the `.resident` case — the
+        // scan died mid-way, so a resident IdMap may hold a PARTIAL
+        // re-insert set. (`.mmap_backed` is safe either way: the base was
+        // adopted from a counter-valid snapshot before the scan started
+        // and the failed scan's overlay re-inserts are idempotent
+        // duplicates of base entries, so the merged view stays complete.)
+        if (id_map.mode == .resident and
+            (self.isGraphDeferred(graph_name) or self.isGraphHydrationFailed(graph_name)))
+        {
+            id_map_mod.IdMap.deleteSnapshot(dir);
+            return;
+        }
+
+        // GAP-0064 FIX B: stamp on the Path-B (checkpoint_epoch, covered_lsn)
+        // contract (mirrors prop_exact.idx / fa6495bb) instead of manifest.counter,
+        // which recovery.zig bumps on ANY committed WAL-tail replay — needlessly
+        // rejecting a still-valid IdMap snapshot on a deferred-WAL reopen and
+        // forcing a full loop1/loop2 re-scan.
+        const epoch = adapter.graphCheckpointEpoch(graph_name) orelse return;
+        const covered = adapter.graphDurableFrontierLsn(graph_name) orelse return;
+        id_map.saveSnapshot(dir, epoch, covered) catch |err| {
+            log.warn("failed to write IdMap snapshot", &.{
+                Attr.string("graph", graph_name),
+                Attr.string("error", @errorName(err)),
+            });
+        };
+    }
+
+    /// PHASE 1b: true iff `graph_name` has a deferred-hydration entry that has
+    /// NOT completed (its resident loop1/loop2 build is still pending). Reads the
+    /// authoritative hydration state (`pending_hydration` membership + the
+    /// entry's atomic `done` latch) under `hydration_mutex` — the same leaf lock
+    /// `markPendingHydration`/`ensureGraphHydrated` use. A graph absent from
+    /// `pending_hydration` (freshly CREATEd, default, snapshot/clone store, or
+    /// already hydrated) returns false.
+    fn isGraphDeferred(self: *GraphStore, graph_name: []const u8) bool {
+        const io = std.Io.Threaded.global_single_threaded.io();
+        self.hydration_mutex.lockUncancelable(io);
+        defer self.hydration_mutex.unlock(io);
+        const entry = self.pending_hydration.get(graph_name) orelse return false;
+        return !entry.done.load(.acquire);
+    }
+
+    /// GAP-ENT-0023 P3 (review C1): true iff `graph_name`'s first-touch
+    /// hydration FAILED and the graph is quarantined (done=true, failed=true).
+    /// Its resident loop2 products (label postings / introspection multisets /
+    /// merge index / typed-edge counters) — and, for a `.resident` IdMap, the
+    /// IdMap itself — are PARTIAL and must never be persisted counter-current.
+    fn isGraphHydrationFailed(self: *GraphStore, graph_name: []const u8) bool {
+        const io = std.Io.Threaded.global_single_threaded.io();
+        self.hydration_mutex.lockUncancelable(io);
+        defer self.hydration_mutex.unlock(io);
+        const entry = self.pending_hydration.get(graph_name) orelse return false;
+        return entry.failed.load(.acquire);
+    }
+
+    /// TEST-ONLY (GAP-0061): force `graph_name`'s deferred-hydration entry into
+    /// the QUARANTINED terminal state (done=true, failed=true) WITHOUT running
+    /// the resident-index scan. This reproduces the production condition where
+    /// the security graph's streaming hydration raises `error.DataCorruption`
+    /// and `ensureGraphHydrated` quarantines the graph, so `getNodesByLabel`
+    /// returns null even though the storage engine still holds intact,
+    /// individually-readable records. Returns false when the graph has no
+    /// pending-hydration entry (already hydrated / never deferred). Not used by
+    /// any production path — only the GAP-0061 crash-auth regression test.
+    pub fn forceHydrationQuarantineForTest(self: *GraphStore, graph_name: []const u8) bool {
+        const io = std.Io.Threaded.global_single_threaded.io();
+        self.hydration_mutex.lockUncancelable(io);
+        defer self.hydration_mutex.unlock(io);
+        const entry = self.pending_hydration.get(graph_name) orelse return false;
+        entry.done.store(true, .release);
+        entry.failed.store(true, .release);
+        return true;
+    }
+
+    /// C-1 (T2b adversarial review): true iff `graph_name` has a deferred-
+    /// hydration entry whose build has NOT completed (`done == false`) — a
+    /// first-touch hydration is pending or currently BUILDING. The checkpoint
+    /// grace window (`checkpointOneGraph`'s retired-cache reclaims in the
+    /// storage adapter) consults this to SKIP freeing this graph's retired
+    /// cache bodies: the hydration merge's family threads read shallow Node
+    /// copies whose sub-heaps (labels / property strings / graph_name /
+    /// tenant_id) are owned by the bounded node cache — and once the same
+    /// merge's cache puts EVICT those entries, the sub-heaps live on exactly
+    /// the per-graph retire lists the grace window frees. Hydration
+    /// deliberately never holds `mg.rwlock`, so the checkpoint's EXCLUSIVE
+    /// rwlock acquisition does NOT drain those readers; this predicate is
+    /// what does.
+    ///
+    /// Race-safety: `done` is stored (.release) only AFTER every scan/family
+    /// thread has been joined (both the clean path — `pipeline.finish()` —
+    /// and every error path join first), so an `.acquire` load of `false`
+    /// here is exactly the "a hydration thread may still hold retired
+    /// sub-heap pointers" condition, and a load of `true` happens-after all
+    /// those reads. Entries are only ever CREATED at open registration and
+    /// never removed for the process lifetime, so there is no
+    /// entry-appears-mid-check race. Skipping the reclaim on `true` is
+    /// always safe — the retire backlog just survives to the next grace
+    /// window (typically the persist-on-complete graph checkpoint fired
+    /// right after `done` flips).
+    pub fn hasUnfinishedHydration(self: *GraphStore, graph_name: []const u8) bool {
+        return self.isGraphDeferred(graph_name);
+    }
+
+    // ── GAP-ENT-0023 P3: per-graph loop2-product snapshots ─────────────────
+    //
+    // Persist geode's loop2 hydration products so a warm reopen's first-access
+    // hydration loads them O(snapshot) instead of rebuilding from the O(graph)
+    // engine scan in `loadOneGraphFromAdapterFull` (>10 h on the legacy
+    // 14.27M store). Three per-graph, counter-gated files live next to
+    // `idmap.snapshot` in the graph's engine root dir:
+    //
+    //   hydration_counters.snap  — node count, per-(graph,label) +
+    //                              per-(graph,edge-type) exact counts, and the
+    //                              per-(graph,tenant) introspection multisets
+    //                              (node labels / edge types / label-props).
+    //   hydration_labels.snap    — per-(graph,label) sorted node-id postings.
+    //   hydration_merge.snap     — the {graph,label,key,value}->node_id merge
+    //                              property index shards (incl. composites).
+    //
+    // Lifecycle: written ONLY at a FULL checkpoint for graphs that are NOT
+    // deferred (loop2 products resident + authoritative), stamped with the
+    // post-checkpoint engine manifest counter — exactly the saveIdMapSnapshots
+    // discipline. Node/edge/adjacency CACHES are deliberately NOT snapshotted
+    // (bounded, hydrate-on-miss, correctness never depends on residency).
+
+    // v2 = GAP-0064 FIX B: (checkpoint_epoch, covered_lsn) stamp replaced the
+    // manifest.counter stamp. The bump makes an old v1 counter-stamped file load
+    // as null on a new binary (rebuild) and vice-versa — never a mis-parse.
+    const HYDRATION_SNAP_VERSION: u32 = 2;
+    const HYDRATION_COUNTERS_MAGIC: [8]u8 = "GHYDCNT1".*;
+    const HYDRATION_COUNTERS_FILE = "hydration_counters.snap";
+    const HYDRATION_COUNTERS_TMP = "hydration_counters.snap.tmp";
+    const HYDRATION_LABELS_MAGIC: [8]u8 = "GHYDLBL1".*;
+    const HYDRATION_LABELS_FILE = "hydration_labels.snap";
+    const HYDRATION_LABELS_TMP = "hydration_labels.snap.tmp";
+    const HYDRATION_MERGE_MAGIC: [8]u8 = "GHYDMRG1".*;
+    const HYDRATION_MERGE_FILE = "hydration_merge.snap";
+    const HYDRATION_MERGE_TMP = "hydration_merge.snap.tmp";
+
+    /// Kill switch: GEODE_DISABLE_HYDRATION_SNAPSHOTS=1 disables both writing
+    /// and loading the loop2-product snapshots (hydration falls back to the
+    /// engine scan exactly as before this feature). Read per call — these are
+    /// cold paths (full checkpoint / first-touch hydration).
+    fn hydrationSnapshotsDisabled() bool {
+        const raw_z = std.c.getenv("GEODE_DISABLE_HYDRATION_SNAPSHOTS") orelse return false;
+        const raw = std.mem.span(raw_z);
+        return std.mem.eql(u8, raw, "1") or std.mem.eql(u8, raw, "true") or std.mem.eql(u8, raw, "yes");
+    }
+
+    /// Task 3 kill switch: GEODE_DISABLE_HYDRATION_COMPLETION_PERSIST=1
+    /// disables the immediate persist at the end of a successful first-touch
+    /// hydration (products then persist only at the next full checkpoint /
+    /// clean shutdown — the pre-Task-3 behaviour). Read per call — this is a
+    /// cold path (once per graph per process lifetime). Also used by the
+    /// stream-scan parity/throughput tests, which need repeated genuine
+    /// scan-rebuild reopens on the same store.
+    fn hydrationCompletionPersistDisabled() bool {
+        const raw_z = std.c.getenv("GEODE_DISABLE_HYDRATION_COMPLETION_PERSIST") orelse return false;
+        const raw = std.mem.span(raw_z);
+        return std.mem.eql(u8, raw, "1") or std.mem.eql(u8, raw, "true") or std.mem.eql(u8, raw, "yes");
+    }
+
+    fn deleteHydrationSnapshotFiles(dir: std.Io.Dir) void {
+        hydration_snapshot.deleteFiles(dir, HYDRATION_COUNTERS_FILE, HYDRATION_COUNTERS_TMP);
+        hydration_snapshot.deleteFiles(dir, HYDRATION_LABELS_FILE, HYDRATION_LABELS_TMP);
+        hydration_snapshot.deleteFiles(dir, HYDRATION_MERGE_FILE, HYDRATION_MERGE_TMP);
+    }
+
+    /// True when a merge-index key ("graph\x00label\x00...", see
+    /// buildMergeIndexKey / buildCompositeMergeIndexKey) belongs to
+    /// `graph_name`. The NUL separator makes this unambiguous (graph names
+    /// cannot contain NUL).
+    fn mergeKeyMatchesGraph(key: []const u8, graph_name: []const u8) bool {
+        return key.len > graph_name.len and
+            key[graph_name.len] == 0 and
+            std.mem.eql(u8, key[0..graph_name.len], graph_name);
+    }
+
+    /// True when `key` ("graph:label" / "graph:type", see formatGraphLabelKey)
+    /// belongs to `graph_name`. Prefix match on "graph:"; a graph name that
+    /// itself contains ':' carries the same (pre-existing, system-wide)
+    /// ambiguity the composite key format has — the snapshot neither adds nor
+    /// removes it (save and restore use the identical convention).
+    fn graphLabelKeyMatchesGraph(key: []const u8, graph_name: []const u8) bool {
+        return key.len > graph_name.len and
+            key[graph_name.len] == ':' and
+            std.mem.eql(u8, key[0..graph_name.len], graph_name);
+    }
+
+    /// GAP-ENT-0023 P3: write the loop2-product snapshots for every HYDRATED
+    /// graph after a FULL checkpoint. Best-effort per graph (a failed write
+    /// only costs the next open a scan-rebuild — never correctness).
+    ///
+    /// CRITICAL (silent-data-loss guard, the 9b2d42eb hazard class): a graph
+    /// that is still DEFERRED has EMPTY resident loop2 products — loop2 never
+    /// ran. Persisting them would write empty-but-counter-current snapshots
+    /// the next open would trust, freezing the graph's indexes empty forever.
+    /// Mirror the saveIdMapSnapshots gate:
+    ///   * case B (.resident IdMap, deferred): the on-disk snapshot generation
+    ///     is stale (that is why no snapshot was adopted) — DELETE the loop2
+    ///     files and skip.
+    ///   * case A (.mmap_backed IdMap, deferred): the graph adopted a valid
+    ///     snapshot at open and has seen no writes (any write would have
+    ///     hydrated it first), so the existing on-disk loop2 files are exactly
+    ///     as valid as they were — PRESERVE them (skip write, no delete).
+    ///     Unlike the IdMap (which re-serialises its mmap base at the new
+    ///     counter), we deliberately do NOT restamp them: restamping a file
+    ///     whose content cannot be re-verified against the engine risks
+    ///     falsely validating an older-generation leftover (e.g. after a
+    ///     best-effort write failure). If the engine counter advanced, the
+    ///     preserved files fail the counter gate on the next open and that
+    ///     graph pays one scan — safe direction.
+    fn saveHydrationSnapshots(self: *GraphStore, adapter: *graph_storage_adapter.StorageAdapter) void {
+        var it = self.id_maps.iterator();
+        while (it.next()) |entry| {
+            self.saveHydrationSnapshotsForOneGraph(adapter, entry.key_ptr.*, entry.value_ptr);
+        }
+    }
+
+    /// Per-graph core of `saveHydrationSnapshots` — shared by the
+    /// full-checkpoint loop above and the Task 3 hydration
+    /// persist-on-complete path (`persistHydrationProductsForGraph`). ALL
+    /// gates (failed-quarantine delete, deferred case-B delete / case-A
+    /// preserve, kill switch) live here so every caller inherits them.
+    fn saveHydrationSnapshotsForOneGraph(
+        self: *GraphStore,
+        adapter: *graph_storage_adapter.StorageAdapter,
+        graph_name: []const u8,
+        id_map: *id_map_mod.IdMap,
+    ) void {
+        // M2 hardening: when the kill switch is on we still run the DELETE
+        // gates below (deferred case B + failed-hydration), so files written
+        // before the switch was flipped cannot linger while disabled — only
+        // the WRITE side is disabled.
+        const disabled = hydrationSnapshotsDisabled();
+        const io = std.Io.Threaded.global_single_threaded.io();
+        const dir_path = (self.resolveGraphRootDirPath(graph_name) catch return) orelse return;
+        defer self.allocator.free(dir_path);
+        var dir = std.Io.Dir.cwd().openDir(io, dir_path, .{}) catch return;
+        defer dir.close(io);
+
+        // GAP-ENT-0023 P3 (review C1): a graph whose first-touch hydration
+        // FAILED is quarantined with done=true, so it reads as "hydrated"
+        // — but its resident loop2 products are PARTIAL (the scan died
+        // mid-way). Persisting them would stamp partial indexes with the
+        // CURRENT manifest counter: the next open would accept them and
+        // every later checkpoint would re-bless them — permanent silent
+        // wrong results (missing rows, duplicate MERGEs). Treat it like
+        // deferred case B regardless of IdMap mode: delete any files
+        // (theirs is a dead generation now) and write nothing, so the
+        // next reopen re-scans cleanly (the pre-P3 self-heal).
+        if (self.isGraphHydrationFailed(graph_name)) {
+            deleteHydrationSnapshotFiles(dir);
+            return;
+        }
+
+        if (self.isGraphDeferred(graph_name)) {
+            if (id_map.mode == .resident) deleteHydrationSnapshotFiles(dir);
+            return;
+        }
+
+        if (disabled) return;
+
+        // GAP-0064 FIX B: stamp the loop2 snapshots on the Path-B
+        // (checkpoint_epoch, covered_lsn) contract (same as the idmap.snapshot +
+        // prop_exact.idx), not manifest.counter — recovery.zig bumps the counter
+        // on any committed WAL-tail replay, which rejected still-valid loop2
+        // snapshots on a deferred-WAL reopen and forced a full loop2 re-scan.
+        const epoch = adapter.graphCheckpointEpoch(graph_name) orelse return;
+        const covered = adapter.graphDurableFrontierLsn(graph_name) orelse return;
+        self.saveHydrationCountersSnapshot(dir, graph_name, epoch, covered) catch |err| {
+            // Invalidate rather than leave a possibly half-generation
+            // file set behind (the old file would be generation-stale and
+            // rejected anyway; deleting removes any doubt).
+            hydration_snapshot.deleteFiles(dir, HYDRATION_COUNTERS_FILE, HYDRATION_COUNTERS_TMP);
+            log.warn("failed to write hydration counters snapshot", &.{
+                Attr.string("graph", graph_name),
+                Attr.string("error", @errorName(err)),
+            });
+        };
+        self.saveHydrationLabelsSnapshot(dir, graph_name, epoch, covered) catch |err| {
+            hydration_snapshot.deleteFiles(dir, HYDRATION_LABELS_FILE, HYDRATION_LABELS_TMP);
+            log.warn("failed to write hydration label-postings snapshot", &.{
+                Attr.string("graph", graph_name),
+                Attr.string("error", @errorName(err)),
+            });
+        };
+        self.saveHydrationMergeSnapshot(dir, graph_name, epoch, covered) catch |err| {
+            hydration_snapshot.deleteFiles(dir, HYDRATION_MERGE_FILE, HYDRATION_MERGE_TMP);
+            log.warn("failed to write hydration merge-index snapshot", &.{
+                Attr.string("graph", graph_name),
+                Attr.string("error", @errorName(err)),
+            });
+        };
+    }
+
+    /// Task 3 (hydration persist-on-complete): persist ONE graph's hydration
+    /// products IMMEDIATELY after a successful first-touch hydration, so a
+    /// crash right after (two production crashes each lost a 13 h hydration)
+    /// loses nothing. Runs, in the exact `saveToFileEx(false)` order:
+    ///
+    ///   1. `adapter.checkpointGraph` — graph-scoped FULL engine checkpoint:
+    ///      flush + WAL truncate + manifest-counter bump + gs-side derived /
+    ///      Lever-B snapshot disciplines + geode H4 exact-index persist (IF
+    ///      built; invalidated otherwise — the persist-empty gate). A no-op
+    ///      inside gs when nothing is dirty (clean warm reopen), so a
+    ///      read-only hydration cannot strand other counter-stamped
+    ///      snapshots.
+    ///   2. `saveIdMapSnapshotForGraph` + `saveHydrationSnapshotsForOneGraph`
+    ///      — the P3 loop2-product + IdMap snapshots stamped at the NEW
+    ///      post-checkpoint counter, with ALL their existing gates
+    ///      (deferred/failed skip-and-delete — the 9b2d42eb/C1 hazard class —
+    ///      and the GEODE_DISABLE_HYDRATION_SNAPSHOTS kill switch).
+    ///
+    /// BEST-EFFORT AND NON-FATAL: the hydration (and the query that triggered
+    /// it) already succeeded; any persist failure is logged LOUDLY and merely
+    /// costs the next reopen a re-scan (the pre-Task-3 behaviour).
+    ///
+    /// Caller contract: invoked from `ensureGraphHydrated` AFTER
+    /// `entry.done.store(true)` (so the deferred-gate reads the graph as
+    /// hydrated) and ONLY when the build succeeded (never on quarantine).
+    /// Runs under `entry.mutex` + `hydration_build_mutex`; the engine
+    /// checkpoint inside uses a BOUNDED exclusive-rwlock acquire so a
+    /// concurrent SHARED-lock holder blocked on a hydration chokepoint
+    /// degrades this persist instead of deadlocking it.
+    fn persistHydrationProductsForGraph(
+        self: *GraphStore,
+        adapter: *graph_storage_adapter.StorageAdapter,
+        graph_name: []const u8,
+    ) void {
+        if (hydrationCompletionPersistDisabled()) return;
+        // Defense in depth — the per-graph savers re-run these gates, but a
+        // deferred/quarantined graph must not even reach the engine
+        // checkpoint (persist-empty / persist-partial is the #1 hazard).
+        if (self.isGraphDeferred(graph_name) or self.isGraphHydrationFailed(graph_name)) return;
+
+        const failed_injected = if (comptime @import("builtin").is_test)
+            g_test_hydration_persist_fail.load(.acquire)
+        else
+            false;
+
+        if (failed_injected) {
+            _ = g_hydration_completion_persist_failures.fetchAdd(1, .monotonic);
+            log.err("hydration-completion persist FAILED; products stay memory-only until the next full checkpoint (a crash before then re-pays the scan)", &.{
+                Attr.string("graph", graph_name),
+                Attr.string("error", "TestInjectedPersistFailure"),
+            });
+            return;
+        }
+
+        adapter.checkpointGraph(graph_name) catch |err| {
+            _ = g_hydration_completion_persist_failures.fetchAdd(1, .monotonic);
+            log.err("hydration-completion persist FAILED; products stay memory-only until the next full checkpoint (a crash before then re-pays the scan)", &.{
+                Attr.string("graph", graph_name),
+                Attr.string("error", @errorName(err)),
+            });
+            return;
+        };
+
+        const id_map = self.getIdMap(graph_name) orelse return;
+        self.saveIdMapSnapshotForGraph(adapter, graph_name, id_map);
+        self.saveHydrationSnapshotsForOneGraph(adapter, graph_name, id_map);
+        _ = g_hydration_completion_persists.fetchAdd(1, .monotonic);
+        log.info("hydration products persisted on completion (crash-safe)", &.{
+            Attr.string("graph", graph_name),
+        });
+    }
+
+    /// Serialize one hydrated graph's merge-property-index entries (single-key
+    /// AND composite — both live in `merge_prop_index` under "graph\x00..."
+    /// keys). Payload layout, designed fixed-width-record + per-shard-sorted
+    /// so a future mmap adoption (per-shard binary search) is trivial while a
+    /// plain re-insert load stays valid today:
+    ///   config_hash u64  (mergeIndexConfigHash at save time — load gate)
+    ///   shard_count u32  (write-time shard grouping; load re-verifies hashes)
+    ///   shard_count x {
+    ///     entry_count u64, blob_len u64,
+    ///     entry_count x { key_off u64, key_len u32, node_id u64 }  (20 B,
+    ///                    sorted by key bytes within the shard),
+    ///     blob bytes (concatenated keys, WITH the graph prefix)
+    ///   }
+    fn saveHydrationMergeSnapshot(
+        self: *GraphStore,
+        dir: std.Io.Dir,
+        graph_name: []const u8,
+        checkpoint_epoch: u64,
+        covered_lsn: u64,
+    ) !void {
+        const io = std.Io.Threaded.global_single_threaded.io();
+        var w = try hydration_snapshot.AtomicWriter.init(
+            self.allocator,
+            dir,
+            HYDRATION_MERGE_TMP,
+            HYDRATION_MERGE_FILE,
+            HYDRATION_MERGE_MAGIC,
+        );
+        errdefer w.abort();
+
+        try w.writeInt(u64, mergeIndexConfigHash());
+        try w.writeInt(u32, @intCast(merge_property_index_shard_count));
+
+        const Entry = struct { key: []const u8, node_id: u64 };
+        var entries: std.ArrayList(Entry) = .empty;
+        defer entries.deinit(self.allocator);
+
+        for (&self.merge_prop_index.shards) |*shard| {
+            shard.mutex.lockUncancelable(io);
+            defer shard.mutex.unlock(io);
+            entries.clearRetainingCapacity();
+            var it = shard.map.iterator();
+            while (it.next()) |e| {
+                if (!mergeKeyMatchesGraph(e.key_ptr.*, graph_name)) continue;
+                try entries.append(self.allocator, .{ .key = e.key_ptr.*, .node_id = e.value_ptr.* });
+            }
+            std.sort.pdq(Entry, entries.items, {}, struct {
+                fn lt(_: void, a: Entry, b: Entry) bool {
+                    return std.mem.lessThan(u8, a.key, b.key);
+                }
+            }.lt);
+            try w.writeInt(u64, @intCast(entries.items.len));
+            var blob_len: u64 = 0;
+            for (entries.items) |en| blob_len += en.key.len;
+            try w.writeInt(u64, blob_len);
+            var off: u64 = 0;
+            for (entries.items) |en| {
+                try w.writeInt(u64, off);
+                try w.writeInt(u32, @intCast(en.key.len));
+                try w.writeInt(u64, en.node_id);
+                off += en.key.len;
+            }
+            for (entries.items) |en| try w.writeAll(en.key);
+        }
+
+        try w.finish(HYDRATION_SNAP_VERSION, checkpoint_epoch, covered_lsn);
+    }
+
+    /// Serialize one hydrated graph's label-index postings. Payload layout:
+    ///   n_entries u32, n x { label bytes (u32-len), id_count u64,
+    ///                        id_count x node_id u64 (strictly ascending) }
+    /// Labels are stored WITHOUT the graph prefix (per-graph file).
+    fn saveHydrationLabelsSnapshot(
+        self: *GraphStore,
+        dir: std.Io.Dir,
+        graph_name: []const u8,
+        checkpoint_epoch: u64,
+        covered_lsn: u64,
+    ) !void {
+        const io = std.Io.Threaded.global_single_threaded.io();
+        var w = try hydration_snapshot.AtomicWriter.init(
+            self.allocator,
+            dir,
+            HYDRATION_LABELS_TMP,
+            HYDRATION_LABELS_FILE,
+            HYDRATION_LABELS_MAGIC,
+        );
+        errdefer w.abort();
+
+        // Hold the outer mutex across both passes so the key set is stable;
+        // take each posting's leaf lock while copying its ids (same order as
+        // addToLabelIndex: label_index_mutex -> posting lock).
+        self.label_index_mutex.lockUncancelable(io);
+        defer self.label_index_mutex.unlock(io);
+
+        var n: u32 = 0;
+        var it = self.label_index.iterator();
+        while (it.next()) |e| {
+            if (graphLabelKeyMatchesGraph(e.key_ptr.*, graph_name)) n += 1;
+        }
+        try w.writeInt(u32, n);
+        it = self.label_index.iterator();
+        while (it.next()) |e| {
+            if (!graphLabelKeyMatchesGraph(e.key_ptr.*, graph_name)) continue;
+            try w.writeBytes(e.key_ptr.*[graph_name.len + 1 ..]);
+            const posting = e.value_ptr;
+            posting.lock();
+            defer posting.unlock();
+            try w.writeInt(u64, @intCast(posting.list.items.len));
+            for (posting.list.items) |id| try w.writeInt(u64, id);
+        }
+
+        try w.finish(HYDRATION_SNAP_VERSION, checkpoint_epoch, covered_lsn);
+    }
+
+    /// Serialize one hydrated graph's counter products. Payload layout
+    /// (little-endian; strings are u32-length-prefixed):
+    ///   node_count u64
+    ///   n_label_counts u32,     n x { label bytes, count u64 }
+    ///   n_edge_type_counts u32, n x { type bytes, count u64 }
+    ///   3 tenant sections (node labels / edge types / label\x00prop):
+    ///     n_tenants u32, n x { tenant bytes, n_inner u32,
+    ///                          n_inner x { key bytes, count u64 } }
+    /// Labels/types/tenants are stored WITHOUT the graph prefix (the file is
+    /// per-graph); restore re-applies the current composite-key conventions.
+    fn saveHydrationCountersSnapshot(
+        self: *GraphStore,
+        dir: std.Io.Dir,
+        graph_name: []const u8,
+        checkpoint_epoch: u64,
+        covered_lsn: u64,
+    ) !void {
+        const io = std.Io.Threaded.global_single_threaded.io();
+        var w = try hydration_snapshot.AtomicWriter.init(
+            self.allocator,
+            dir,
+            HYDRATION_COUNTERS_TMP,
+            HYDRATION_COUNTERS_FILE,
+            HYDRATION_COUNTERS_MAGIC,
+        );
+        errdefer w.abort();
+
+        // Per-graph node count (PERF-B set size; complete for a hydrated graph).
+        const node_count: u64 = blk: {
+            self.nodes_by_graph_mutex.lockUncancelable(io);
+            defer self.nodes_by_graph_mutex.unlock(io);
+            break :blk if (self.nodes_by_graph.getPtr(graph_name)) |inner| inner.count() else 0;
+        };
+        try w.writeInt(u64, node_count);
+
+        // Exact (graph,label) counts. Two passes under the exclusive lock:
+        // count, then emit (the map cannot change between passes).
+        {
+            self.label_count_rwlock.lockUncancelable(io);
+            defer self.label_count_rwlock.unlock(io);
+            var n: u32 = 0;
+            var cit = self.label_counts_by_graph.iterator();
+            while (cit.next()) |e| {
+                if (graphLabelKeyMatchesGraph(e.key_ptr.*, graph_name)) n += 1;
+            }
+            try w.writeInt(u32, n);
+            cit = self.label_counts_by_graph.iterator();
+            while (cit.next()) |e| {
+                if (!graphLabelKeyMatchesGraph(e.key_ptr.*, graph_name)) continue;
+                try w.writeBytes(e.key_ptr.*[graph_name.len + 1 ..]);
+                try w.writeInt(u64, @intCast(e.value_ptr.load(.monotonic)));
+            }
+        }
+
+        // Exact (graph,edge_type) counts.
+        {
+            self.edge_type_count_rwlock.lockUncancelable(io);
+            defer self.edge_type_count_rwlock.unlock(io);
+            var cit = self.edge_type_counts_by_graph.iterator();
+            var n: u32 = 0;
+            while (cit.next()) |e| {
+                if (graphLabelKeyMatchesGraph(e.key_ptr.*, graph_name)) n += 1;
+            }
+            try w.writeInt(u32, n);
+            cit = self.edge_type_counts_by_graph.iterator();
+            while (cit.next()) |e| {
+                if (!graphLabelKeyMatchesGraph(e.key_ptr.*, graph_name)) continue;
+                try w.writeBytes(e.key_ptr.*[graph_name.len + 1 ..]);
+                try w.writeInt(u64, @intCast(e.value_ptr.load(.monotonic)));
+            }
+        }
+
+        // Tenant-keyed introspection multisets. The "graph\x00tenant" outer
+        // key makes this graph's contribution a disjoint set of outer entries
+        // (the whole point of the composite key), so save/restore is exact.
+        try self.writeHydrationTenantSection(&w, &self.node_labels_by_tenant, graph_name);
+        try self.writeHydrationTenantSection(&w, &self.edge_types_by_tenant, graph_name);
+        try self.writeHydrationTenantSection(&w, &self.label_properties_by_tenant, graph_name);
+
+        try w.finish(HYDRATION_SNAP_VERSION, checkpoint_epoch, covered_lsn);
+    }
+
+    fn writeHydrationTenantSection(
+        self: *GraphStore,
+        w: *hydration_snapshot.AtomicWriter,
+        outer: *std.StringHashMap(std.StringHashMap(usize)),
+        graph_name: []const u8,
+    ) !void {
+        const io = std.Io.Threaded.global_single_threaded.io();
+        self.perf_c_refcount_mutex.lockUncancelable(io);
+        defer self.perf_c_refcount_mutex.unlock(io);
+        var n: u32 = 0;
+        var oit = outer.iterator();
+        while (oit.next()) |e| {
+            if (std.mem.eql(u8, graphTenantKeyGraph(e.key_ptr.*), graph_name)) n += 1;
+        }
+        try w.writeInt(u32, n);
+        oit = outer.iterator();
+        while (oit.next()) |e| {
+            if (!std.mem.eql(u8, graphTenantKeyGraph(e.key_ptr.*), graph_name)) continue;
+            try w.writeBytes(graphTenantKeyTenant(e.key_ptr.*));
+            try w.writeInt(u32, @intCast(e.value_ptr.count()));
+            var iit = e.value_ptr.iterator();
+            while (iit.next()) |ie| {
+                try w.writeBytes(ie.key_ptr.*);
+                try w.writeInt(u64, @intCast(ie.value_ptr.*));
+            }
         }
     }
 
@@ -8726,6 +10133,29 @@ pub const GraphStore = struct {
                     Attr.string("graph", graph_name),
                     Attr.string("error", @errorName(err)),
                 });
+                // R1 (review-0023 residual): a partially-loaded graph (the load
+                // can die AFTER getOrCreateIdMap, e.g. OOM) would otherwise sit
+                // in `id_maps` with NO pending_hydration entry — both
+                // isGraphDeferred and isGraphHydrationFailed report false — so
+                // the next FULL checkpoint would bless EMPTY IdMap + loop2
+                // snapshots as counter-current and freeze the graph empty at
+                // every later open. Best-effort: register the entry and mark it
+                // FAILED so the checkpoint writers skip (and delete) its
+                // snapshots; `done` stays false so the first in-session touch
+                // still attempts a full rebuild (self-heal).
+                if (self.markPendingHydration(graph_name)) |_| {
+                    const hio = std.Io.Threaded.global_single_threaded.io();
+                    self.hydration_mutex.lockUncancelable(hio);
+                    defer self.hydration_mutex.unlock(hio);
+                    if (self.pending_hydration.get(graph_name)) |hentry| {
+                        hentry.failed.store(true, .release);
+                    }
+                } else |mark_err| {
+                    log.warn("failed to quarantine partially-loaded graph; checkpoint may bless empty snapshots", &.{
+                        Attr.string("graph", graph_name),
+                        Attr.string("error", @errorName(mark_err)),
+                    });
+                }
                 continue;
             };
         }
@@ -8756,9 +10186,11 @@ pub const GraphStore = struct {
     /// nodes_by_graph / merge / tenant introspection / edges + adjacency /
     /// edge_type) are DEFERRED to first-touch (`ensureGraphHydrated`). When no
     /// valid snapshot exists (cold first open, or a stale/torn snapshot) it
-    /// falls back to the full eager scan-rebuild for that graph (unchanged
-    /// behaviour, the crash-safety net) and leaves it absent from the pending
-    /// set (= already hydrated).
+    /// ALSO defers — the full per-graph build (loop1 IdMap scan-rebuild + loop2
+    /// resident indexes) is registered as pending and runs lazily on first
+    /// access, so open stays O(open_core) and "server ready" is sub-second even
+    /// for a no-snapshot artifact. (Crash-safety is preserved: a crash before
+    /// hydration leaves the durable pages; the next open defers again.)
     fn loadOneGraphFromAdapter(
         self: *GraphStore,
         adapter: *graph_storage_adapter.StorageAdapter,
@@ -8777,10 +10209,26 @@ pub const GraphStore = struct {
             return;
         }
 
-        // Fallback: no valid snapshot. Full eager load (IdMap scan-rebuild +
-        // resident indexes) for this graph, left out of the pending set so it is
-        // treated as already hydrated.
-        try self.loadOneGraphFromAdapterFull(adapter, graph_name);
+        // Fallback: no valid snapshot. EARLY-READY: defer the full per-graph
+        // build (loop1 IdMap scan-rebuild + loop2 resident indexes) to lazy
+        // first-access via `ensureGraphHydrated`, exactly like the snapshot
+        // branch above. This keeps open O(open_core) — graph-size-independent —
+        // so "server ready" fires sub-second even for a stale / no-snapshot
+        // (legacy or crash-recovered) artifact; the first read/write of the
+        // graph pays the full build once under `hydration_build_mutex`.
+        //
+        // CRITICAL DIFFERENCE from the snapshot branch: no IdMap is resident
+        // here (loop1 has NOT run), so `self.id_maps` for this graph is EMPTY
+        // until first access. The by-id hydration chokepoints
+        // (`ensureNodeGraphHydrated` / `ensureEdgeGraphHydrated`) resolve the
+        // owning graph via the IdMaps; with an empty IdMap a by-id first-access
+        // cannot route to this graph, so those chokepoints fall back to
+        // `ensureAllGraphsHydrated` on a routing miss (see there). The global
+        // public-id high-water is NOT recovered here (recoverIdCountersFromIdMap
+        // needs a populated IdMap); this is safe because new public ids come
+        // from the wall-clock-backed `generateTimeBasedId` atomic, not
+        // `next_node_id` (which loop1 restores during the deferred build).
+        try self.markPendingHydration(graph_name);
     }
 
     /// Try to load `graph_name`'s IdMap from its counter-gated mmap snapshot.
@@ -8801,14 +10249,24 @@ pub const GraphStore = struct {
 
         var snap = (id_map_mod.IdMap.loadSnapshot(dir) catch return false) orelse return false;
 
-        // Crash-safety gate: the snapshot is valid only if it reflects exactly
-        // the engine's currently-committed state (no committed write since it was
-        // written). Any mismatch/absence => unmap and fall back to scan-rebuild.
-        const cur = adapter.graphManifestCounter(graph_name) orelse {
+        // Crash-safety gate (GAP-0064 FIX B): the snapshot is valid only if it
+        // reflects exactly the engine's currently-committed state — its stamped
+        // `(checkpoint_epoch, covered_lsn)` must equal the engine's CURRENT epoch
+        // AND durable frontier. Epoch match ⟺ no checkpoint since the snapshot;
+        // covered == frontier ⟺ no committed WAL tail advanced past it. This
+        // replaces the manifest.counter gate that recovery.zig bumped on any tail
+        // replay (rejecting a still-valid snapshot → full loop1/loop2 re-scan). A
+        // genuine tail (frontier > covered) still safely rejects → rebuild. Any
+        // mismatch/absence => unmap and fall back to scan-rebuild.
+        const cur_epoch = adapter.graphCheckpointEpoch(graph_name) orelse {
             snap.deinit();
             return false;
         };
-        if (snap.manifest_counter != cur) {
+        const cur_covered = adapter.graphDurableFrontierLsn(graph_name) orelse {
+            snap.deinit();
+            return false;
+        };
+        if (snap.checkpoint_epoch != cur_epoch or snap.covered_lsn != cur_covered) {
             snap.deinit();
             return false;
         }
@@ -8883,15 +10341,50 @@ pub const GraphStore = struct {
         // build on the store-wide maps it mutates (see `hydration_build_mutex`).
         self.hydration_build_mutex.lockUncancelable(io);
         defer self.hydration_build_mutex.unlock(io);
-        self.loadOneGraphFromAdapterFull(adapter, graph_name) catch |err| {
+        const outcome: ?HydrationBuildOutcome = self.loadOneGraphFromAdapterFull(adapter, graph_name) catch |err| blk: {
             log.err("lazy graph hydration failed; graph may be degraded", &.{
                 Attr.string("graph", graph_name),
                 Attr.string("error", @errorName(err)),
             });
             // Quarantine: mark done so a broken graph is not re-scanned on every
             // access. Matches the open-path catch+continue policy.
+            //
+            // GAP-ENT-0023 P3 (review C1): record the failure. The resident
+            // loop2 products are PARTIAL now; the checkpoint writers consult
+            // this flag to skip persisting them (and delete stale snapshot
+            // files) so the next reopen re-scans cleanly instead of loading a
+            // partial-but-counter-current snapshot forever.
+            entry.failed.store(true, .release);
+            break :blk null;
         };
         entry.done.store(true, .release);
+        // GAP-ENT-0048f: build + persist the adapter's exact node-property VALUE
+        // index (prop_exact.idx) in THIS hydration window — the race-free path.
+        // Hydration has just scanned every node lock-free and holds NO mg.rwlock,
+        // so building the exact index here (a lock-free per-shard engine scan) +
+        // persisting it directly avoids the shutdown-checkpoint rwlock race that
+        // starved the eager-build-at-checkpoint approach at 14.27M (the bounded
+        // shutdown checkpoint could not win mg.rwlock against the hydration scan).
+        // After this a WHERE-seek / GROUP BY is served from the built index with
+        // NO lazy rebuild wedge, and the next reopen reloads the snapshot.
+        // Both .rebuilt and .snapshot_served leave the engine fully open +
+        // scannable; only a FAILED hydration (outcome == null, quarantined) skips
+        // (partial state — never build/persist off a broken hydration).
+        if (outcome != null) {
+            adapter.buildAndPersistExactIndexForHydratedGraph(graph_name);
+        }
+        // Task 3 (hydration persist-on-complete): make the just-built products
+        // durable NOW — a crash before the next full checkpoint used to re-pay
+        // the whole first-access scan (13 h at 14.27M, twice in production).
+        // Ordering matters: `done` is stored FIRST so the savers' deferred-gate
+        // reads the graph as hydrated. Never on failure/quarantine (`outcome ==
+        // null` — partial products must not be blessed: the 9b2d42eb/C1 hazard
+        // class), and never when the hydration was served entirely from
+        // counter-current snapshots (nothing new to persist). Best-effort:
+        // persist errors are logged inside and never fail the triggering query.
+        if (outcome == .rebuilt) {
+            self.persistHydrationProductsForGraph(adapter, graph_name);
+        }
     }
 
     /// Hydrate EVERY graph that still has deferred resident indexes. Used by the
@@ -8925,7 +10418,21 @@ pub const GraphStore = struct {
     /// IdMaps (no engine read). For by-id mutation entry points that carry no
     /// graph_name. No-op when the id maps to no graph (pure in-memory store).
     fn ensureNodeGraphHydrated(self: *GraphStore, node_id: u64) void {
-        if (self.resolveNodeGraphSlot(node_id)) |gs| self.ensureGraphHydrated(gs.graph_name);
+        if (self.resolveNodeGraphSlot(node_id)) |gs| {
+            self.ensureGraphHydrated(gs.graph_name);
+            return;
+        }
+        // The id resolved to NO IdMap. With no-snapshot early-ready open, a
+        // graph defers its loop1 IdMap build to first access, so its IdMap is
+        // EMPTY until hydrated and a by-id first-access cannot be routed to it.
+        // Build every still-deferred graph so the id resolves and the graph's
+        // resident node/edge caches are populated before this by-id op reads
+        // them. Cheap once all deferred graphs are hydrated (each
+        // `pending_hydration` entry's `done` flag short-circuits the rebuild)
+        // and a no-op for a pure in-memory store (nothing pending). Called at
+        // the top of the entry point, before any store lock, so the store-wide
+        // `hydration_build_mutex` it takes cannot deadlock the caller.
+        self.ensureAllGraphsHydrated();
     }
 
     /// PHASE 1b: hydrate the graph that owns `edge_id`. The edge's graph is
@@ -8933,8 +10440,1355 @@ pub const GraphStore = struct {
     /// edge cache's `graph_name` field, because hydration mutates the edge cache
     /// and could evict/free that string mid-call.
     fn ensureEdgeGraphHydrated(self: *GraphStore, edge_id: u64) void {
-        const from_id = if (self.edges.get(edge_id)) |e| e.from_id else return;
-        self.ensureNodeGraphHydrated(from_id);
+        if (self.edges.get(edge_id)) |e| {
+            self.ensureNodeGraphHydrated(e.from_id);
+            return;
+        }
+        // Edge not resident. It may belong to a deferred no-snapshot graph whose
+        // edge cache + IdMap were not built at open (see ensureNodeGraphHydrated):
+        // the from-endpoint lookup that would route hydration is unavailable
+        // until the graph is built. Build every still-deferred graph so the edge
+        // (and its owning graph) become resident. No-op once all are hydrated.
+        self.ensureAllGraphsHydrated();
+    }
+
+    /// Task 3: what a per-graph hydration build actually did — drives the
+    /// persist-on-complete decision in `ensureGraphHydrated`. A hydration
+    /// served ENTIRELY from counter-current snapshots has nothing new to
+    /// persist (the on-disk snapshot set already IS what a persist would
+    /// write), and persisting anyway would pay a pointless graph checkpoint +
+    /// snapshot rewrite on every warm first-access.
+    const HydrationBuildOutcome = enum { rebuilt, snapshot_served };
+
+    /// GAP-ENT-0023 P3: which loop2 products were restored from counter-gated
+    /// snapshots for the graph being hydrated. The scan below skips exactly
+    /// the covered products; a partial set skips only what it covers.
+    const HydrationSnapshotProducts = struct {
+        counters: bool = false,
+        labels: bool = false,
+        merge: bool = false,
+        /// Node count recorded by the counters snapshot (full-skip validation).
+        node_count: u64 = 0,
+    };
+
+    /// Try to load + apply this graph's loop2-product snapshots. Every file is
+    /// independently gated: structural validity (magic/version/CRC — the
+    /// format module), manifest-counter currency (here), and a full dry-run
+    /// parse BEFORE any mutation (so a malformed-but-CRC-valid file can never
+    /// leave a half-applied product behind; after the dry run the only
+    /// possible apply failure is OOM). Apply failures are CAUGHT per product
+    /// and fall back to the engine scan for that product. Labels and merge
+    /// are idempotent against a partial apply (dedup insert / putOrUpdate);
+    /// counters is NOT (absolute-set + scan re-bump would double-count), so
+    /// its catch arm first deletes every contribution the partial apply made
+    /// (review I2 — see removeHydrationCounterContributionsForGraph).
+    fn loadHydrationSnapshotsForGraph(
+        self: *GraphStore,
+        adapter: *graph_storage_adapter.StorageAdapter,
+        graph_name: []const u8,
+    ) HydrationSnapshotProducts {
+        var out = HydrationSnapshotProducts{};
+        if (hydrationSnapshotsDisabled()) return out;
+        const io = std.Io.Threaded.global_single_threaded.io();
+        const dir_path = (self.resolveGraphRootDirPath(graph_name) catch return out) orelse return out;
+        defer self.allocator.free(dir_path);
+        var dir = std.Io.Dir.cwd().openDir(io, dir_path, .{}) catch return out;
+        defer dir.close(io);
+        // GAP-0064 FIX B: gate on the Path-B (checkpoint_epoch, covered_lsn)
+        // contract (same as idmap.snapshot + prop_exact.idx), not manifest.counter.
+        const cur_epoch = adapter.graphCheckpointEpoch(graph_name) orelse return out;
+        const cur_covered = adapter.graphDurableFrontierLsn(graph_name) orelse return out;
+
+        counters: {
+            var loaded = hydration_snapshot.load(
+                dir,
+                HYDRATION_COUNTERS_FILE,
+                HYDRATION_COUNTERS_MAGIC,
+                HYDRATION_SNAP_VERSION,
+            ) orelse break :counters;
+            defer loaded.deinit();
+            // Crash-safety gate: accept IFF no checkpoint AND no committed WAL
+            // tail since the snapshot was stamped (identical to the IdMap snapshot
+            // gate — GAP-0064 FIX B).
+            if (loaded.checkpoint_epoch != cur_epoch or loaded.covered_lsn != cur_covered) break :counters;
+            if (!validateHydrationCountersPayload(loaded.payload)) break :counters;
+            out.node_count = self.applyHydrationCountersSnapshot(graph_name, loaded.payload) catch |err| {
+                log.warn("hydration counters snapshot apply failed; falling back to scan", &.{
+                    Attr.string("graph", graph_name),
+                    Attr.string("error", @errorName(err)),
+                });
+                // GAP-ENT-0023 P3 (review I2): the apply may have already
+                // absolute-SET some of this graph's per-(graph,type) edge
+                // counters and per-(graph,tenant) introspection refcounts.
+                // The scan fallback re-bumps them from zero, so any leftover
+                // contribution would double-count (inflated count(r:TYPE) /
+                // listNodeLabels refcounts — served silently by the fast
+                // paths). The composite outer keys make this graph's
+                // contribution disjoint — delete it exactly, then fall back.
+                self.removeHydrationCounterContributionsForGraph(graph_name);
+                break :counters;
+            };
+            out.counters = true;
+            _ = g_hydration_snapshot_loads.fetchAdd(1, .monotonic);
+        }
+        if (!out.counters) _ = g_hydration_scan_fallbacks.fetchAdd(1, .monotonic);
+
+        labels: {
+            var loaded = hydration_snapshot.load(
+                dir,
+                HYDRATION_LABELS_FILE,
+                HYDRATION_LABELS_MAGIC,
+                HYDRATION_SNAP_VERSION,
+            ) orelse break :labels;
+            defer loaded.deinit();
+            if (loaded.checkpoint_epoch != cur_epoch or loaded.covered_lsn != cur_covered) break :labels;
+            if (!validateHydrationLabelsPayload(loaded.payload)) break :labels;
+            self.applyHydrationLabelsSnapshot(graph_name, loaded.payload) catch |err| {
+                log.warn("hydration label-postings snapshot apply failed; falling back to scan", &.{
+                    Attr.string("graph", graph_name),
+                    Attr.string("error", @errorName(err)),
+                });
+                break :labels;
+            };
+            out.labels = true;
+            _ = g_hydration_snapshot_loads.fetchAdd(1, .monotonic);
+        }
+        if (!out.labels) _ = g_hydration_scan_fallbacks.fetchAdd(1, .monotonic);
+
+        merge: {
+            var loaded = hydration_snapshot.load(
+                dir,
+                HYDRATION_MERGE_FILE,
+                HYDRATION_MERGE_MAGIC,
+                HYDRATION_SNAP_VERSION,
+            ) orelse break :merge;
+            defer loaded.deinit();
+            if (loaded.checkpoint_epoch != cur_epoch or loaded.covered_lsn != cur_covered) break :merge;
+            if (!validateHydrationMergePayload(loaded.payload)) break :merge;
+            // Config gate: which entries the index contains depends on the
+            // lean flag / registered keys / composite specs. A mismatch means
+            // the snapshot may be authoritative-but-INCOMPLETE for the current
+            // configuration (-> .not_found -> duplicate MERGE creates), so
+            // reject and rebuild from the scan.
+            {
+                var cfg = hydration_snapshot.Cursor{ .buf = loaded.payload };
+                const stored_hash = cfg.readInt(u64) catch break :merge;
+                if (stored_hash != mergeIndexConfigHash()) break :merge;
+            }
+            self.applyHydrationMergeSnapshot(loaded.payload) catch |err| {
+                // Partial application is SAFE here: entries came from a
+                // counter-current file (same generation), and the scan
+                // fallback's putOrUpdate re-adds/overwrites idempotently.
+                log.warn("hydration merge-index snapshot apply failed; falling back to scan", &.{
+                    Attr.string("graph", graph_name),
+                    Attr.string("error", @errorName(err)),
+                });
+                break :merge;
+            };
+            out.merge = true;
+            _ = g_hydration_snapshot_loads.fetchAdd(1, .monotonic);
+        }
+        if (!out.merge) _ = g_hydration_scan_fallbacks.fetchAdd(1, .monotonic);
+        return out;
+    }
+
+    /// Dry-run structural parse of the merge payload: every record's
+    /// key_off/key_len must land inside its shard's blob.
+    fn validateHydrationMergePayload(payload: []const u8) bool {
+        var cur = hydration_snapshot.Cursor{ .buf = payload };
+        _ = cur.readInt(u64) catch return false; // config hash (gated separately)
+        const shard_count = cur.readInt(u32) catch return false;
+        if (shard_count == 0 or shard_count > (1 << 16)) return false;
+        var s: u32 = 0;
+        while (s < shard_count) : (s += 1) {
+            const n = cur.readInt(u64) catch return false;
+            const blob_len = cur.readInt(u64) catch return false;
+            var i: u64 = 0;
+            while (i < n) : (i += 1) {
+                const off = cur.readInt(u64) catch return false;
+                const klen = cur.readInt(u32) catch return false;
+                _ = cur.readInt(u64) catch return false; // node_id
+                if (off > blob_len or blob_len - off < klen) return false;
+            }
+            const blen = std.math.cast(usize, blob_len) orelse return false;
+            _ = cur.readSlice(blen) catch return false;
+        }
+        return cur.remaining() == 0;
+    }
+
+    /// Re-insert the merge-index entries from a validated payload. Every key
+    /// re-verifies its shard hash: entries are inserted into the shard their
+    /// key HASHES to (never blindly into the stored grouping), so a
+    /// corrupt-but-CRC-valid grouping can never plant an entry where lookups
+    /// (which lock the hash-correct shard) would miss it.
+    fn applyHydrationMergeSnapshot(self: *GraphStore, payload: []const u8) !void {
+        var cur = hydration_snapshot.Cursor{ .buf = payload };
+        _ = try cur.readInt(u64); // config hash
+        const shard_count = try cur.readInt(u32);
+        var s: u32 = 0;
+        while (s < shard_count) : (s += 1) {
+            const n = try cur.readInt(u64);
+            const blob_len = try cur.readInt(u64);
+            const rec_bytes = std.math.mul(u64, n, 20) catch return error.SnapshotTruncated;
+            const rec_len = std.math.cast(usize, rec_bytes) orelse return error.SnapshotTruncated;
+            const records = try cur.readSlice(rec_len);
+            const blen = std.math.cast(usize, blob_len) orelse return error.SnapshotTruncated;
+            const blob = try cur.readSlice(blen);
+            var i: usize = 0;
+            while (i < rec_len) : (i += 20) {
+                const off = std.mem.readInt(u64, records[i..][0..8], .little);
+                const klen = std.mem.readInt(u32, records[i + 8 ..][0..4], .little);
+                const node_id = std.mem.readInt(u64, records[i + 12 ..][0..8], .little);
+                const key = blob[@intCast(off)..][0..klen];
+                try self.merge_prop_index.putOrUpdate(key, node_id);
+            }
+        }
+    }
+
+    /// Dry-run structural parse of the label-postings payload. Also verifies
+    /// each posting is STRICTLY ascending — the resident posting lists are
+    /// binary-searched, so accepting an unsorted (corrupt-but-CRC-valid) list
+    /// would corrupt lookups silently.
+    fn validateHydrationLabelsPayload(payload: []const u8) bool {
+        var cur = hydration_snapshot.Cursor{ .buf = payload };
+        const n = cur.readInt(u32) catch return false;
+        var i: u32 = 0;
+        while (i < n) : (i += 1) {
+            _ = cur.readBytes() catch return false; // label
+            const id_count = cur.readInt(u64) catch return false;
+            var j: u64 = 0;
+            var prev: u64 = 0;
+            while (j < id_count) : (j += 1) {
+                const id = cur.readInt(u64) catch return false;
+                if (j != 0 and id <= prev) return false;
+                prev = id;
+            }
+        }
+        return cur.remaining() == 0;
+    }
+
+    /// Populate `label_index` postings (and the exact per-(graph,label)
+    /// counts, which by invariant equal the posting lengths) from a validated
+    /// payload. Same lock order as addToLabelIndex.
+    fn applyHydrationLabelsSnapshot(
+        self: *GraphStore,
+        graph_name: []const u8,
+        payload: []const u8,
+    ) !void {
+        const io = std.Io.Threaded.global_single_threaded.io();
+        var cur = hydration_snapshot.Cursor{ .buf = payload };
+        const n = try cur.readInt(u32);
+        var i: u32 = 0;
+        while (i < n) : (i += 1) {
+            const label = try cur.readBytes();
+            const id_count = try cur.readInt(u64);
+            const count: usize = std.math.cast(usize, id_count) orelse return error.SnapshotTruncated;
+
+            self.label_index_mutex.lockUncancelable(io);
+            defer self.label_index_mutex.unlock(io);
+            const posting = try self.ensureLabelPostingListLocked(graph_name, label);
+            try self.ensureGraphLabelCount(graph_name, label);
+            posting.lock();
+            defer posting.unlock();
+            if (posting.list.items.len != 0) {
+                // Already populated (only reachable via the pre-existing
+                // "graph:label" composite-key ambiguity, where an identical
+                // entry restored under an aliased graph/label split) — skip
+                // rather than append duplicates into a sorted list.
+                var j: u64 = 0;
+                while (j < id_count) : (j += 1) _ = try cur.readInt(u64);
+                continue;
+            }
+            try posting.list.ensureUnusedCapacity(self.allocator, count);
+            var j: u64 = 0;
+            while (j < id_count) : (j += 1) {
+                posting.list.appendAssumeCapacity(try cur.readInt(u64));
+            }
+            self.setGraphLabelCountAbsolute(graph_name, label, count);
+        }
+    }
+
+    /// Set the exact (graph,label) count to `count` (snapshot restore only —
+    /// live paths use the bump/dec refcount discipline).
+    fn setGraphLabelCountAbsolute(self: *GraphStore, graph_name: []const u8, label: []const u8, count: usize) void {
+        var key_buf: [512]u8 = undefined;
+        var formatted = formatGraphLabelKey(&key_buf, self.allocator, graph_name, label) catch return;
+        defer if (formatted.owned) |owned| self.allocator.free(owned);
+
+        const io = std.Io.Threaded.global_single_threaded.io();
+        self.label_count_rwlock.lockUncancelable(io);
+        defer self.label_count_rwlock.unlock(io);
+        if (self.label_counts_by_graph.getPtr(formatted.key)) |existing| {
+            existing.store(count, .monotonic);
+            return;
+        }
+        const owned_key = if (formatted.owned) |owned| blk: {
+            formatted.owned = null;
+            break :blk owned;
+        } else std.fmt.allocPrint(self.allocator, "{s}:{s}", .{ graph_name, label }) catch return;
+        self.label_counts_by_graph.put(owned_key, LabelCountValue.init(count)) catch {
+            self.allocator.free(owned_key);
+        };
+    }
+
+    /// Dry-run structural parse of the counters payload (no allocation, no
+    /// mutation). Belt-and-braces on top of the CRC.
+    fn validateHydrationCountersPayload(payload: []const u8) bool {
+        var cur = hydration_snapshot.Cursor{ .buf = payload };
+        _ = cur.readInt(u64) catch return false; // node_count
+        // Two flat count sections, then three tenant sections.
+        var flat: usize = 0;
+        while (flat < 2) : (flat += 1) {
+            const n = cur.readInt(u32) catch return false;
+            var i: u32 = 0;
+            while (i < n) : (i += 1) {
+                _ = cur.readBytes() catch return false;
+                _ = cur.readInt(u64) catch return false;
+            }
+        }
+        var sect: usize = 0;
+        while (sect < 3) : (sect += 1) {
+            const n_tenants = cur.readInt(u32) catch return false;
+            var t: u32 = 0;
+            while (t < n_tenants) : (t += 1) {
+                _ = cur.readBytes() catch return false; // tenant
+                const n_inner = cur.readInt(u32) catch return false;
+                var i: u32 = 0;
+                while (i < n_inner) : (i += 1) {
+                    _ = cur.readBytes() catch return false;
+                    _ = cur.readInt(u64) catch return false;
+                }
+            }
+        }
+        return cur.remaining() == 0;
+    }
+
+    /// Populate the resident counter products from a validated payload.
+    /// Returns the recorded per-graph node count. The (graph,label) exact
+    /// counts are NOT applied here — they are owned by the label-postings
+    /// product (restored from posting lengths, or rebuilt by the scan's
+    /// addToLabelIndex bumps); applying them independently would double-count
+    /// when the scan re-inserts postings.
+    fn applyHydrationCountersSnapshot(
+        self: *GraphStore,
+        graph_name: []const u8,
+        payload: []const u8,
+    ) !u64 {
+        const io = std.Io.Threaded.global_single_threaded.io();
+        var cur = hydration_snapshot.Cursor{ .buf = payload };
+        const node_count = try cur.readInt(u64);
+
+        // (graph,label) exact counts: SKIP (see doc comment) — walk past.
+        {
+            const n = try cur.readInt(u32);
+            var i: u32 = 0;
+            while (i < n) : (i += 1) {
+                _ = try cur.readBytes();
+                _ = try cur.readInt(u64);
+            }
+        }
+
+        // (graph,edge_type) exact counts: restore (the scan's
+        // bumpGraphEdgeTypeCount is skipped when this product is loaded).
+        {
+            const n = try cur.readInt(u32);
+            self.edge_type_count_rwlock.lockUncancelable(io);
+            defer self.edge_type_count_rwlock.unlock(io);
+            var i: u32 = 0;
+            while (i < n) : (i += 1) {
+                const type_name = try cur.readBytes();
+                const count = try cur.readInt(u64);
+                const key = try std.fmt.allocPrint(self.allocator, "{s}:{s}", .{ graph_name, type_name });
+                const gop = try self.edge_type_counts_by_graph.getOrPut(key);
+                if (gop.found_existing) {
+                    self.allocator.free(key);
+                    gop.value_ptr.store(@intCast(count), .monotonic);
+                } else {
+                    gop.value_ptr.* = LabelCountValue.init(@intCast(count));
+                }
+            }
+        }
+
+        // Tenant-keyed introspection multisets (disjoint per graph thanks to
+        // the "graph\x00tenant" outer key; puts are idempotent).
+        try self.applyHydrationTenantSection(&cur, &self.node_labels_by_tenant, graph_name);
+        try self.applyHydrationTenantSection(&cur, &self.edge_types_by_tenant, graph_name);
+        try self.applyHydrationTenantSection(&cur, &self.label_properties_by_tenant, graph_name);
+
+        return node_count;
+    }
+
+    /// GAP-ENT-0023 P3 (review I2): delete EVERY contribution `graph_name`
+    /// made to the counters product — its "graph:type" keys in
+    /// `edge_type_counts_by_graph` and its "graph\x00tenant" outer entries in
+    /// the three tenant-introspection multisets. Called when
+    /// `applyHydrationCountersSnapshot` fails mid-apply (only OOM can get past
+    /// the dry-run parse) so the engine-scan fallback re-bumps from a clean
+    /// zero baseline instead of double-counting on top of the partial apply.
+    ///
+    /// Exact by construction: at first-touch hydration time nothing else has
+    /// written this graph's composite keys (writes hydrate first; other
+    /// graphs' keys have a different graph component), so removing the outer
+    /// entries removes precisely the partial apply's effect.
+    ///
+    /// Deliberately ALLOCATION-FREE (re-scan after each removal instead of
+    /// collecting victims) — the trigger condition IS allocator exhaustion,
+    /// so the cleanup itself must not be able to fail on OOM.
+    fn removeHydrationCounterContributionsForGraph(self: *GraphStore, graph_name: []const u8) void {
+        const io = std.Io.Threaded.global_single_threaded.io();
+        {
+            self.edge_type_count_rwlock.lockUncancelable(io);
+            defer self.edge_type_count_rwlock.unlock(io);
+            while (true) {
+                var victim: ?[]const u8 = null;
+                var it = self.edge_type_counts_by_graph.iterator();
+                while (it.next()) |e| {
+                    if (graphLabelKeyMatchesGraph(e.key_ptr.*, graph_name)) {
+                        victim = e.key_ptr.*;
+                        break;
+                    }
+                }
+                const key = victim orelse break;
+                if (self.edge_type_counts_by_graph.fetchRemove(key)) |kv| {
+                    self.allocator.free(kv.key);
+                }
+            }
+        }
+        self.perf_c_refcount_mutex.lockUncancelable(io);
+        defer self.perf_c_refcount_mutex.unlock(io);
+        const outers = [_]*std.StringHashMap(std.StringHashMap(usize)){
+            &self.node_labels_by_tenant,
+            &self.edge_types_by_tenant,
+            &self.label_properties_by_tenant,
+        };
+        for (outers) |outer| {
+            while (true) {
+                var victim: ?[]const u8 = null;
+                var it = outer.iterator();
+                while (it.next()) |e| {
+                    if (std.mem.eql(u8, graphTenantKeyGraph(e.key_ptr.*), graph_name)) {
+                        victim = e.key_ptr.*;
+                        break;
+                    }
+                }
+                const key = victim orelse break;
+                if (outer.fetchRemove(key)) |kv| {
+                    self.allocator.free(kv.key);
+                    var inner = kv.value;
+                    var iit = inner.iterator();
+                    while (iit.next()) |ie| self.allocator.free(ie.key_ptr.*);
+                    inner.deinit();
+                }
+            }
+        }
+    }
+
+    fn applyHydrationTenantSection(
+        self: *GraphStore,
+        cur: *hydration_snapshot.Cursor,
+        outer: *std.StringHashMap(std.StringHashMap(usize)),
+        graph_name: []const u8,
+    ) !void {
+        const io = std.Io.Threaded.global_single_threaded.io();
+        self.perf_c_refcount_mutex.lockUncancelable(io);
+        defer self.perf_c_refcount_mutex.unlock(io);
+        const n_tenants = try cur.readInt(u32);
+        var t: u32 = 0;
+        while (t < n_tenants) : (t += 1) {
+            const tenant = try cur.readBytes();
+            const n_inner = try cur.readInt(u32);
+
+            var oscratch: [512]u8 = undefined;
+            const ok = try formatGraphTenantKey(&oscratch, self.allocator, graph_name, tenant);
+            defer if (ok.owned) |buf| self.allocator.free(buf);
+            const outer_result = try outer.getOrPut(ok.key);
+            if (!outer_result.found_existing) {
+                const okey_copy = try self.allocator.dupe(u8, ok.key);
+                errdefer self.allocator.free(okey_copy);
+                outer_result.key_ptr.* = okey_copy;
+                outer_result.value_ptr.* = std.StringHashMap(usize).init(self.allocator);
+            }
+
+            var i: u32 = 0;
+            while (i < n_inner) : (i += 1) {
+                const inner_key = try cur.readBytes();
+                const count = try cur.readInt(u64);
+                const inner_result = try outer_result.value_ptr.getOrPut(inner_key);
+                if (!inner_result.found_existing) {
+                    const ikey_copy = try self.allocator.dupe(u8, inner_key);
+                    errdefer self.allocator.free(ikey_copy);
+                    inner_result.key_ptr.* = ikey_copy;
+                }
+                inner_result.value_ptr.* = @intCast(count);
+            }
+        }
+    }
+
+    /// Kill switch: GEODE_DISABLE_STREAMING_HYDRATION=1 forces the legacy
+    /// per-node engine-read hydration scan (the pre-fast-scan behavior).
+    /// Read per call — hydration is a cold path. Also the comparison lever
+    /// for the fast-scan parity tests (same store, both paths, equal
+    /// products).
+    fn streamingHydrationDisabled() bool {
+        const raw_z = std.c.getenv("GEODE_DISABLE_STREAMING_HYDRATION") orelse return false;
+        const raw = std.mem.span(raw_z);
+        return std.mem.eql(u8, raw, "1") or std.mem.eql(u8, raw, "true") or std.mem.eql(u8, raw, "yes");
+    }
+
+    /// Task 2 (hydration fast-scan): number of dedicated per-shard scan
+    /// worker threads. GEODE_HYDRATION_SCAN_WORKERS overrides; default is
+    /// min(shard_count, logical CPUs). 1 = a single scan thread walking the
+    /// shards in order (the Task 1 scan order; also the scaling tests'
+    /// baseline). T2c: EFFECTIVE concurrent scans are additionally capped by
+    /// the in-flight gate (`hydrationInflightShardLimit`) whenever the merge
+    /// lags — see the gate comment for why that is the point.
+    fn hydrationScanWorkerCount(shard_count: usize) usize {
+        if (std.c.getenv("GEODE_HYDRATION_SCAN_WORKERS")) |raw_z| {
+            const raw = std.mem.span(raw_z);
+            if (std.fmt.parseInt(usize, raw, 10)) |v| {
+                if (v >= 1) return @min(v, shard_count);
+            } else |_| {}
+        }
+        const cpus = std.Thread.getCpuCount() catch 1;
+        return @max(1, @min(shard_count, cpus));
+    }
+
+    /// T2b (hydration merge): merge-phase parallelism switch.
+    /// GEODE_HYDRATION_MERGE_WORKERS:
+    ///   unset/invalid -> default min(4, logical CPUs)
+    ///   1             -> fully single-threaded merge (the pre-T2b order;
+    ///                    kill switch and the family-parity baseline)
+    ///   >=2           -> the node-side product FAMILIES (label postings /
+    ///                    introspection counters / merge index) run on their
+    ///                    own threads, pipelined one shard behind the core
+    ///                    (id_map + node bodies + graph index) thread.
+    /// The value is a mode switch, not a thread-pool size: distinct product
+    /// families go to distinct global structures, so at most 3 family threads
+    /// (+ the core thread) ever exist.
+    fn hydrationMergeWorkerCount() usize {
+        if (std.c.getenv("GEODE_HYDRATION_MERGE_WORKERS")) |raw_z| {
+            const raw = std.mem.span(raw_z);
+            if (std.fmt.parseInt(usize, raw, 10)) |v| {
+                if (v >= 1) return v;
+            } else |_| {}
+        }
+        const cpus = std.Thread.getCpuCount() catch 1;
+        return @max(1, @min(4, cpus));
+    }
+
+    /// T2c: admission-window width for the scan->merge backpressure gate —
+    /// the max shard outputs in flight at once (being-scanned + completed-
+    /// but-unmerged). GEODE_HYDRATION_INFLIGHT_SHARDS overrides; default 3
+    /// (merge consuming one shard + up to two scanned ahead); min 1. Values
+    /// >= shard_count disable the backpressure (the T2b free-running scan).
+    /// NOTE this also caps EFFECTIVE scan parallelism at `limit` — deliberate:
+    /// when the merge is the bottleneck a faster scan only piles up unmerged
+    /// outputs, and when it is not, the window slides at merge speed anyway.
+    fn hydrationInflightShardLimit() usize {
+        if (std.c.getenv("GEODE_HYDRATION_INFLIGHT_SHARDS")) |raw_z| {
+            const raw = std.mem.span(raw_z);
+            if (std.fmt.parseInt(usize, raw, 10)) |v| {
+                if (v >= 1) return v;
+            } else |_| {}
+        }
+        return 3;
+    }
+
+    /// Find a decoded stream-scan property entry's STRING payload by key.
+    /// Returns null when the key is absent OR the value is not a string —
+    /// exactly the legacy switch-on-`.string`-else-fallthrough behavior of
+    /// the per-node internal-id / tenant reads.
+    fn findStreamPropString(
+        props: []const graph_storage_adapter.hydration_scan.PropEntry,
+        key: []const u8,
+    ) ?[]const u8 {
+        for (props) |pe| {
+            if (!std.mem.eql(u8, pe.key, key)) continue;
+            return switch (pe.value) {
+                .string => |text| text,
+                else => null,
+            };
+        }
+        return null;
+    }
+
+    /// T2b (hydration merge core): build ONE scan row's node-side CORE
+    /// products — loop1 IdMap insert (resident mode), the Node body, the
+    /// bounded-cache insert, next_node_id, and the per-graph node-id index.
+    /// Returns a SHALLOW COPY of the stored Node, or null when the row is
+    /// skipped (corrupt blob / missing public id / unmapped slot).
+    ///
+    /// WHY a copy: the family consumers (label postings / introspection
+    /// counters / merge index) must not re-read the bounded node cache — a
+    /// `*Node` into the cache's inline map storage is invalidated by any
+    /// later put's rehash/evict, and a getPtr on an already-EVICTED id would
+    /// hydrate-on-miss straight back into the per-node random engine reads
+    /// this scan exists to avoid. The copy's sub-heap (labels/props/strings)
+    /// is cache-owned and — including for evicted entries — freed only at the
+    /// per-graph grace window (retire discipline).
+    ///
+    /// SAFETY (C-1, corrected by the T2b adversarial review): the grace
+    /// window is gated on `mg.rwlock` EXCLUSIVE — a lock this hydration
+    /// deliberately NEVER holds (entry mutex + hydration_build_mutex only) —
+    /// so the window CAN open mid-merge: any checkpoint (write cadence on
+    /// any graph, explicit, WAL-growth hook, clean shutdown) acquires the
+    /// hydrating graph's free rwlock. What keeps these sub-heaps alive is
+    /// the reclaim gate in `checkpointOneGraph`: the retired-cache reclaims
+    /// are SKIPPED while this graph has an unfinished hydration
+    /// (`hasUnfinishedHydration`, i.e. the entry's `done` latch still
+    /// false). `done` flips only after the merge joins every family thread,
+    /// so no family can be reading a retired body once reclaims run again.
+    fn hydrateStreamNodeRowCore(
+        self: *GraphStore,
+        adapter: *graph_storage_adapter.StorageAdapter,
+        graph_name: []const u8,
+        id_map: *id_map_mod.IdMap,
+        resident: bool,
+        row: *const graph_storage_adapter.hydration_scan.NodeRow,
+        skipped_node_mappings: *u64,
+    ) !?Node {
+        // Instrumentation + injected-failure hook: identical placement to
+        // the legacy loop2 (per live scan row, before any skip).
+        _ = g_loop2_scan_nodes.fetchAdd(1, .monotonic);
+        if (comptime @import("builtin").is_test) {
+            const lim = g_test_hydration_fail_after.load(.monotonic);
+            if (lim != std.math.maxInt(u64) and
+                g_test_hydration_scan_seen.fetchAdd(1, .monotonic) >= lim)
+            {
+                return error.TestInjectedHydrationFailure;
+            }
+        }
+
+        if (resident) {
+            // loop1 equivalent: recover the persisted public id from the
+            // decoded blob (one engine read's worth of work per node in the
+            // legacy scan — counter kept for the tests' "no loop1 at ready /
+            // loop1 ran on fallback" contract).
+            _ = g_idmap_scan_getprop.fetchAdd(1, .monotonic);
+            if (row.corrupt_skip) {
+                log.warn("skipping node with corrupt property page during load", &.{
+                    Attr.string("graph", graph_name),
+                    Attr.int("slot_id", @intCast(row.slot)),
+                    Attr.string("error", @errorName(error.DataCorruption)),
+                });
+                skipped_node_mappings.* += 1;
+                return null;
+            }
+            const node_public_id: ?u64 = blk: {
+                const text = findStreamPropString(row.props, INTERNAL_NODE_ID_PROPERTY_KEY) orelse break :blk null;
+                break :blk parsePersistedPublicId(text);
+            };
+            if (node_public_id) |pid| {
+                try id_map.insertNodeWithSlot(@as(u128, pid), row.slot);
+            } else {
+                skipped_node_mappings.* += 1;
+                return null;
+            }
+        }
+
+        const node_uuid = @as(u64, @truncate(id_map.nodeUuid(row.slot) orelse return null));
+
+        // Labels: dictionary resolution with getNodeLabels' exact
+        // drop-unknown-ids rule; the Node owns the resulting slice.
+        var labels_list: std.ArrayList([]const u8) = .empty;
+        for (row.label_ids) |label_id| {
+            if (adapter.hydrationLabelString(graph_name, label_id)) |name| {
+                try labels_list.append(self.allocator, try self.allocator.dupe(u8, name));
+            }
+        }
+        const labels = try labels_list.toOwnedSlice(self.allocator);
+
+        const graph_name_copy = try self.allocator.dupe(u8, graph_name);
+        const tenant_id_copy = blk_tenant: {
+            if (findStreamPropString(row.props, INTERNAL_TENANT_ID_PROPERTY_KEY)) |text| {
+                break :blk_tenant try self.allocator.dupe(u8, text);
+            }
+            break :blk_tenant try self.allocator.dupe(u8, DEFAULT_TENANT_ID);
+        };
+
+        var node = Node{
+            .id = node_uuid,
+            .labels = labels,
+            .properties = CompactPropertyMap.init(self.allocator),
+            .graph_name = graph_name_copy,
+            .tenant_id = tenant_id_copy,
+        };
+
+        for (row.props) |pe| {
+            if (!graph_storage_adapter.shouldExposePropertyKey(pe.key)) continue;
+            // C3 (review-0023): `.null` is the adapter's REMOVE tombstone —
+            // never materialize it as a present property.
+            if (pe.value == .null) continue;
+            const key_copy = try self.allocator.dupe(u8, pe.key);
+            const pv = try graph_storage_adapter.fromStorageProperty(self.allocator, pe.value);
+            try node.properties.put(key_copy, pv);
+        }
+
+        try self.nodes.put(node_uuid, node);
+
+        if (node_uuid >= self.next_node_id) {
+            self.next_node_id = node_uuid + 1;
+        }
+
+        const stored_node_ptr = self.nodes.getPtr(node_uuid) orelse return error.NodeNotFound;
+        try self.addNodeToGraphIndex(graph_name, node_uuid);
+        return stored_node_ptr.*;
+    }
+
+    /// T2b (hydration merge): 2-stage per-shard pipeline that runs the
+    /// node-side product FAMILIES on their own threads while the core thread
+    /// processes the NEXT shard:
+    ///
+    ///   core(s):    id_map + Node bodies + bounded-cache put + graph index
+    ///   labels(s):  label postings + (graph,label) refcounts     [thread 0]
+    ///   counters(s): PERF-C tenant introspection refcounts       [thread 1]
+    ///   merge(s):   merge_prop_index (+ composite entries)       [thread 2]
+    ///
+    /// SAFETY: distinct families mutate DISJOINT global structures, so the
+    /// three threads share no write destination; each family processes the
+    /// shard batches strictly in shard-major order (submit() joins shard
+    /// s-1's threads before spawning shard s's), so every family's insert
+    /// order — including merge-index last-wins on duplicate keys — is
+    /// IDENTICAL to the single-threaded merge. The batches hold shallow Node
+    /// copies (see hydrateStreamNodeRowCore) so families never touch the
+    /// node cache; the copies' cache-owned sub-heaps are protected from the
+    /// checkpoint grace window by the C-1 reclaim gate (reclaims are skipped
+    /// while this graph's hydration is unfinished — see
+    /// hydrateStreamNodeRowCore's SAFETY note). Family errors surface at the
+    /// next submit()/finish() and fail the hydration exactly like an inline
+    /// error (C1 quarantine).
+    const FamilyPipeline = struct {
+        store: *GraphStore,
+        graph_name: []const u8,
+        do_labels: bool,
+        do_counters: bool,
+        do_merge: bool,
+        batch: std.ArrayList(Node) = .empty,
+        threads: [3]?std.Thread = .{ null, null, null },
+        errs: [3]?anyerror = .{ null, null, null },
+
+        fn joinRunning(p: *FamilyPipeline) void {
+            for (&p.threads) |*slot| {
+                if (slot.*) |t| {
+                    t.join();
+                    slot.* = null;
+                }
+            }
+        }
+
+        fn pendingError(p: *const FamilyPipeline) ?anyerror {
+            for (p.errs) |e| {
+                if (e) |err| return err;
+            }
+            return null;
+        }
+
+        /// Join the previous shard's family threads (preserving each
+        /// family's global shard-major order), then take ownership of
+        /// `new_batch` and spawn its families.
+        fn submit(p: *FamilyPipeline, new_batch: std.ArrayList(Node)) !void {
+            p.joinRunning();
+            p.batch.deinit(p.store.allocator);
+            p.batch = new_batch;
+            if (p.pendingError()) |err| return err;
+            if (p.batch.items.len == 0) return;
+            p.spawnFamily(0, runLabels, p.do_labels);
+            p.spawnFamily(1, runCounters, p.do_counters);
+            p.spawnFamily(2, runMerge, p.do_merge);
+        }
+
+        fn spawnFamily(p: *FamilyPipeline, idx: usize, comptime f: fn (*FamilyPipeline) void, enabled: bool) void {
+            if (!enabled) return;
+            const t = std.Thread.spawn(.{}, f, .{p}) catch {
+                // Spawn failure: run this family inline (degraded
+                // parallelism, never a correctness change) — same policy as
+                // the scan workers.
+                f(p);
+                return;
+            };
+            p.threads[idx] = t;
+        }
+
+        fn finish(p: *FamilyPipeline) !void {
+            p.joinRunning();
+            if (p.pendingError()) |err| return err;
+        }
+
+        /// Idempotent cleanup for EVERY exit path (including a core error
+        /// mid-shard): joins outstanding family threads BEFORE their batch
+        /// memory is freed.
+        fn abort(p: *FamilyPipeline) void {
+            p.joinRunning();
+            p.batch.deinit(p.store.allocator);
+            p.batch = .empty;
+        }
+
+        fn runLabels(p: *FamilyPipeline) void {
+            p.store.applyLabelPostingsForBatch(p.graph_name, p.batch.items) catch |err| {
+                p.errs[0] = err;
+            };
+        }
+
+        fn runCounters(p: *FamilyPipeline) void {
+            for (p.batch.items) |*node| {
+                p.store.bumpIntrospectionForNode(node) catch |err| {
+                    p.errs[1] = err;
+                    return;
+                };
+            }
+        }
+
+        fn runMerge(p: *FamilyPipeline) void {
+            for (p.batch.items) |*node| {
+                var it = node.properties.iterator();
+                while (it.next()) |prop_entry| {
+                    p.store.addToMergePropertyIndex(
+                        node.graph_name,
+                        node.labels,
+                        prop_entry.key_ptr.*,
+                        prop_entry.value_ptr.*,
+                        node.id,
+                    ) catch {};
+                }
+                p.store.addNodeCompositeMergeEntries(node);
+            }
+        }
+    };
+
+    /// T2c: per-shard merge pacing for the streaming hydration merge — the
+    /// gate handshake (wait-published before consuming shard s, retire after
+    /// its node side is released) plus incremental projected pre-sizing of
+    /// the node-side products (see the call site for the projection
+    /// rationale). Used by BOTH phase-A merge modes (single-threaded and
+    /// FamilyPipeline) so the gate discipline cannot diverge between them.
+    const StreamMergePacer = struct {
+        store: *GraphStore,
+        id_map: *id_map_mod.IdMap,
+        gate: *graph_storage_adapter.hydration_scan.InflightGate,
+        graph_name: []const u8,
+        resident: bool,
+        snap_merge: bool,
+        shard_count: usize,
+        shards_seen: usize = 0,
+        total_rows: u64 = 0,
+        total_edges: u64 = 0,
+        total_merge_keys: u64 = 0,
+        /// Node-row capacity already granted to the additive containers
+        /// (bounded node cache + per-graph node-id index).
+        granted_rows: u64 = 0,
+        /// Merge-index key capacity already granted.
+        granted_merge_keys: u64 = 0,
+
+        fn clampU32(v: u64) u32 {
+            return @intCast(@min(v, std.math.maxInt(u32)));
+        }
+
+        /// Block until shard `s` is published by its scan worker (errors
+        /// with HydrationGatePoisoned when a worker died), apply the test
+        /// merge-delay hook, tally the shard, and extend the node-side
+        /// reservations toward the projected final totals.
+        fn beforeShard(
+            p: *StreamMergePacer,
+            s: usize,
+            acc: *graph_storage_adapter.hydration_scan.ShardAccum,
+        ) !void {
+            try p.gate.waitPublished(s);
+            applyTestHydrationMergeDelay();
+
+            var shard_edges: u64 = 0;
+            var shard_keys: u64 = 0;
+            for (acc.rows) |*row| {
+                shard_edges += row.edges.len;
+                if (!p.snap_merge and row.label_ids.len != 0) {
+                    var indexable: u64 = 0;
+                    for (row.props) |pe| {
+                        if (pe.value == .null) continue;
+                        if (!graph_storage_adapter.shouldExposePropertyKey(pe.key)) continue;
+                        if (!shouldIndexProperty(pe.key)) continue;
+                        indexable += 1;
+                    }
+                    shard_keys += @as(u64, row.label_ids.len) * indexable;
+                }
+            }
+            p.shards_seen += 1;
+            p.total_rows += acc.rows.len;
+            p.total_edges += shard_edges;
+            p.total_merge_keys += shard_keys;
+
+            // Projection = running mean per shard x shard_count. TOTAL-
+            // capacity APIs (IdMap) take the projection directly; additive
+            // APIs get the delta beyond what was already granted (their
+            // internal ensureUnusedCapacity is a no-op once the projected
+            // capacity is in place). Bounded caches clamp the reservation
+            // to their resident cap internally, so a huge graph never
+            // pre-allocates an unbounded table.
+            const proj_rows = p.total_rows * p.shard_count / p.shards_seen;
+            if (p.resident) try p.id_map.reserveNodes(clampU32(proj_rows));
+            if (proj_rows > p.granted_rows) {
+                const delta = clampU32(proj_rows - p.granted_rows);
+                try p.store.nodes.ensureUnusedCapacity(delta);
+                try p.store.reserveGraphNodeIndex(p.graph_name, delta);
+                p.granted_rows = proj_rows;
+            }
+            if (!p.snap_merge) {
+                const proj_keys = p.total_merge_keys * p.shard_count / p.shards_seen;
+                if (proj_keys > p.granted_merge_keys) {
+                    p.store.merge_prop_index.reserveAdditional(proj_keys - p.granted_merge_keys);
+                    p.granted_merge_keys = proj_keys;
+                }
+            }
+        }
+
+        /// Release the consumed shard's node side and slide the admission
+        /// window — the retire that unblocks the next scan worker.
+        fn afterShard(
+            p: *StreamMergePacer,
+            acc: *graph_storage_adapter.hydration_scan.ShardAccum,
+        ) void {
+            acc.releaseNodeSide();
+            p.gate.retireNext();
+        }
+    };
+
+    /// GAP hydration fast-scan: build the loop1/loop2 products from the
+    /// per-shard SEQUENTIAL stream scan instead of the per-node engine-read
+    /// walk. Produces byte-identical products via the SAME insert calls in
+    /// the same shard-major, ascending-slot order:
+    ///   * the P3 snapshot skips (`snap.*`) and the 0021/0012 count
+    ///     disciplines are honored at exactly the legacy call sites;
+    ///   * phase A (nodes) then phase B (edges) — legal because loop1 fully
+    ///     preceded loop2's edge resolution in the legacy resident flow, and
+    ///     the mmap base serves lookups position-independently;
+    ///   * the C1 quarantine contract is unchanged: any error out of here
+    ///     makes `ensureGraphHydrated` mark the graph failed, exactly like a
+    ///     legacy scan error.
+    fn hydrateGraphFromStreamScan(
+        self: *GraphStore,
+        adapter: *graph_storage_adapter.StorageAdapter,
+        graph_name: []const u8,
+        id_map: *id_map_mod.IdMap,
+        snap: HydrationSnapshotProducts,
+        skip_edge_scan: bool,
+        skipped_node_mappings: *u64,
+        skipped_edge_mappings: *u64,
+        repaired_edge_slots: *u64,
+    ) !void {
+        const hydration_scan = graph_storage_adapter.hydration_scan;
+        const resident = id_map.mode == .resident;
+        const opts = hydration_scan.ScanOptions{
+            .include_edges = !skip_edge_scan,
+            .resident_mode = resident,
+            .internal_id_key = INTERNAL_NODE_ID_PROPERTY_KEY,
+        };
+
+        const scan_started_ns = monoNanosNow();
+        const shard_count = try adapter.hydrationStreamShardCount(graph_name);
+        const accums = try self.allocator.alloc(hydration_scan.ShardAccum, shard_count);
+        const acc_ready = try self.allocator.alloc(bool, shard_count);
+        @memset(acc_ready, false);
+        defer {
+            for (accums, acc_ready) |*acc, ready| {
+                if (ready) acc.deinit();
+            }
+            self.allocator.free(acc_ready);
+            self.allocator.free(accums);
+        }
+
+        // T2c: scan->merge backpressure gate. Bounds shard outputs in flight
+        // (being-scanned + completed-but-unmerged) to the admission window so
+        // a merge slower than the scan can never let completed outputs
+        // accumulate unbounded (the at-scale OOM: RSS +5.7 GB/min).
+        const published = try self.allocator.alloc(bool, shard_count);
+        @memset(published, false);
+        defer self.allocator.free(published);
+        var gate = hydration_scan.InflightGate{
+            .limit = hydrationInflightShardLimit(),
+            .published = published,
+        };
+
+        // Per-shard streaming scan — Task 2: dedicated worker threads (no
+        // thread-pool reentrancy), each sweeping its own shard's files
+        // linearly into a private ShardAccum. T2c: the workers run
+        // CONCURRENTLY with the merge below, admitted per shard by the gate,
+        // so the merge starts on shard 0 the moment it publishes and no more
+        // than `gate.limit` shard outputs ever exist at once. Shards are
+        // fully independent: each owns its files, pagers and buffer pool,
+        // and workers never touch shared geode state (label dict resolution
+        // happens in the merge).
+        const worker_count = hydrationScanWorkerCount(shard_count);
+        const Worker = struct {
+            store: *GraphStore,
+            adapter: *graph_storage_adapter.StorageAdapter,
+            graph_name: []const u8,
+            opts: hydration_scan.ScanOptions,
+            accums: []hydration_scan.ShardAccum,
+            acc_ready: []bool,
+            gate: *hydration_scan.InflightGate,
+            worker_idx: usize,
+            stride: usize,
+            /// False only for the spawn-failure inline fallback: it runs on
+            /// the merge thread BEFORE the merge loop, so blocking on the
+            /// gate would self-deadlock (nobody retiring). The in-flight
+            /// bound is best-effort in that degraded mode.
+            gated: bool = true,
+            fail: ?anyerror = null,
+
+            fn run(w: *@This()) void {
+                var shard_idx = w.worker_idx;
+                while (shard_idx < w.accums.len) : (shard_idx += w.stride) {
+                    if (w.gated) {
+                        // Poisoned: another side failed and carries the
+                        // error — exit the stripe without publishing.
+                        w.gate.beginShard(shard_idx) catch return;
+                    }
+                    w.accums[shard_idx] = w.adapter.hydrationStreamScanShard(
+                        w.graph_name,
+                        shard_idx,
+                        w.store.allocator,
+                        w.opts,
+                    ) catch |err| {
+                        w.fail = err;
+                        // C1: wake the merge (waiting on this shard) and
+                        // every gate-blocked sibling so the hydration fails
+                        // into quarantine instead of deadlocking.
+                        w.gate.poison();
+                        return;
+                    };
+                    w.acc_ready[shard_idx] = true;
+                    w.gate.publish(shard_idx, monoNanosNow());
+                }
+            }
+        };
+
+        const workers = try self.allocator.alloc(Worker, worker_count);
+        defer self.allocator.free(workers);
+        const threads = try self.allocator.alloc(?std.Thread, worker_count);
+        defer self.allocator.free(threads);
+        @memset(threads, null);
+
+        // Poison-and-join on EVERY exit path (merge error, family error,
+        // pacer/reserve OOM, success). Declared AFTER the accums/published
+        // defers so it runs BEFORE them: no worker can touch freed scan
+        // state. On success this is a no-op wake — every shard was retired,
+        // so all workers already exited their stripes.
+        defer {
+            gate.poison();
+            for (threads) |*slot| {
+                if (slot.*) |t| {
+                    t.join();
+                    slot.* = null;
+                }
+            }
+        }
+
+        for (workers, 0..) |*w, wi| {
+            w.* = .{
+                .store = self,
+                .adapter = adapter,
+                .graph_name = graph_name,
+                .opts = opts,
+                .accums = accums,
+                .acc_ready = acc_ready,
+                .gate = &gate,
+                .worker_idx = wi,
+                .stride = worker_count,
+            };
+        }
+        for (workers, 0..) |*w, wi| {
+            threads[wi] = std.Thread.spawn(.{}, Worker.run, .{w}) catch |err| {
+                // Spawn failure: run this worker's stripe inline so the
+                // scan still completes (degraded parallelism, gate bypassed
+                // to avoid self-deadlock — never a correctness change).
+                log.warn("hydration scan worker spawn failed; running stripe inline", &.{
+                    Attr.string("graph", graph_name),
+                    Attr.string("error", @errorName(err)),
+                });
+                w.gated = false;
+                Worker.run(w);
+                continue;
+            };
+        }
+
+        _ = g_hydration_streaming_scans.fetchAdd(1, .monotonic);
+
+        // T2c gate-poisoned recovery: a poisoned merge-side wait means a
+        // scan worker died (its shard may never publish). Join everyone
+        // (poison already woke them) and surface the WORKER's error — the
+        // same error the pre-gate join-then-check path returned — into the
+        // C1 quarantine path.
+        const GateRecover = struct {
+            fn resolve(
+                g: *hydration_scan.InflightGate,
+                thr: []?std.Thread,
+                wrk: []Worker,
+            ) anyerror {
+                g.poison();
+                for (thr) |*slot| {
+                    if (slot.*) |t| {
+                        t.join();
+                        slot.* = null;
+                    }
+                }
+                for (wrk) |*w| {
+                    if (w.fail) |werr| return werr;
+                }
+                return error.HydrationGatePoisoned;
+            }
+        };
+
+        // T2c pacer: per-shard gate handshake + INCREMENTAL projected
+        // pre-size. T2b reserved everything once post-scan (every count
+        // known); under the streaming gate later shards are not scanned yet
+        // when the merge starts, so node-side totals are PROJECTED from the
+        // shards seen so far (slots stripe round-robin across shards, so
+        // per-shard row counts are near-uniform: the first shard's
+        // projection typically lands within a few percent and the later
+        // reservation calls are no-ops). Edge-side reservations stay EXACT:
+        // they happen after phase A, when every shard has been scanned.
+        var pacer = StreamMergePacer{
+            .store = self,
+            .id_map = id_map,
+            .gate = &gate,
+            .graph_name = graph_name,
+            .resident = resident,
+            .snap_merge = snap.merge,
+            .shard_count = shard_count,
+        };
+
+        // ---- phase A: node products (loop1 + loop2 node side) -------------
+        // Each shard's node-side arena (decoded props + label ids) is freed
+        // the moment its rows are consumed, so the peak becomes
+        //   (global products built so far) + (remaining arenas) + (ONE shard
+        //   in flight)
+        // instead of (full global products) + (ALL shards' decoded copies).
+        const merge_workers = hydrationMergeWorkerCount();
+        if (merge_workers <= 1) {
+            // Single-threaded merge (kill switch / family-parity baseline):
+            // the pre-T2b per-row product order, family steps inline.
+            for (accums, 0..) |*acc, shard_idx| {
+                pacer.beforeShard(shard_idx, acc) catch |err| switch (err) {
+                    error.HydrationGatePoisoned => return GateRecover.resolve(&gate, threads, workers),
+                    else => return err,
+                };
+                for (acc.rows) |*row| {
+                    const copy = (try self.hydrateStreamNodeRowCore(
+                        adapter,
+                        graph_name,
+                        id_map,
+                        resident,
+                        row,
+                        skipped_node_mappings,
+                    )) orelse continue;
+
+                    // GAP-ENT-0023 P3: label postings restored from snapshot —
+                    // re-inserting would be pure wasted binary-search work.
+                    if (!snap.labels) {
+                        for (copy.labels) |label| {
+                            try self.addToLabelIndex(graph_name, label, copy.id);
+                        }
+                    }
+                    // GAP-ENT-0023 P3 / 0012 discipline: counters restored
+                    // from snapshot must not be re-bumped (double count).
+                    if (!snap.counters) try self.bumpIntrospectionForNode(&copy);
+                    if (!snap.merge) {
+                        var merge_prop_iter = copy.properties.iterator();
+                        while (merge_prop_iter.next()) |prop_entry| {
+                            self.addToMergePropertyIndex(
+                                copy.graph_name,
+                                copy.labels,
+                                prop_entry.key_ptr.*,
+                                prop_entry.value_ptr.*,
+                                copy.id,
+                            ) catch {};
+                        }
+                        self.addNodeCompositeMergeEntries(&copy);
+                    }
+                }
+                pacer.afterShard(acc);
+            }
+        } else {
+            // Pipelined family merge (see FamilyPipeline): core thread builds
+            // shard s while the family threads apply shard s-1's postings /
+            // counters / merge-index entries. Same per-family insert order as
+            // the single-threaded merge -> identical products.
+            var pipeline = FamilyPipeline{
+                .store = self,
+                .graph_name = graph_name,
+                .do_labels = !snap.labels,
+                .do_counters = !snap.counters,
+                .do_merge = !snap.merge,
+            };
+            defer pipeline.abort();
+
+            for (accums, 0..) |*acc, shard_idx| {
+                pacer.beforeShard(shard_idx, acc) catch |err| switch (err) {
+                    error.HydrationGatePoisoned => return GateRecover.resolve(&gate, threads, workers),
+                    else => return err,
+                };
+                var batch: std.ArrayList(Node) = .empty;
+                // Owned by this frame only until submit() takes it (submit
+                // adopts the list BEFORE any of its error returns, so freeing
+                // here too would double-free — pipeline.abort() covers it).
+                var batch_owned = true;
+                errdefer if (batch_owned) batch.deinit(self.allocator);
+                try batch.ensureTotalCapacity(self.allocator, acc.rows.len);
+                for (acc.rows) |*row| {
+                    const copy = (try self.hydrateStreamNodeRowCore(
+                        adapter,
+                        graph_name,
+                        id_map,
+                        resident,
+                        row,
+                        skipped_node_mappings,
+                    )) orelse continue;
+                    batch.appendAssumeCapacity(copy);
+                }
+                pacer.afterShard(acc);
+                batch_owned = false;
+                try pipeline.submit(batch);
+            }
+            try pipeline.finish();
+        }
+
+        // Phase A consumed every shard, so every publish has happened: the
+        // scan phase ended at the LAST publish stamp (the scan and merge
+        // overlap under the gate, so there is no join point to measure at).
+        const scan_done_ns = @max(gate.lastPublishNs(), scan_started_ns);
+        const total_rows = pacer.total_rows;
+        const total_edges = pacer.total_edges;
+
+        // ---- phase B pre-size: edge-side totals are EXACT post-phase-A ----
+        // (unchanged T2b discipline — only the node side needed projections).
+        if (!skip_edge_scan) {
+            const rows32: u32 = @intCast(@min(total_rows, std.math.maxInt(u32)));
+            const edges32: u32 = @intCast(@min(total_edges, std.math.maxInt(u32)));
+            if (resident) try id_map.reserveEdges(edges32);
+            try self.edges.ensureUnusedCapacity(edges32);
+            try self.outgoing_edges.ensureUnusedCapacity(rows32);
+            try self.incoming_edges.ensureUnusedCapacity(rows32);
+        }
+
+        // ---- phase B: edge products (loop2 edge side) ----------------------
+        if (!skip_edge_scan) {
+            const OrphanEdgeSlot = struct { from_slot: u64, to_slot: u64, edge_slot: u64 };
+            var orphan_edge_slots: std.ArrayList(OrphanEdgeSlot) = .empty;
+            defer orphan_edge_slots.deinit(self.allocator);
+
+            for (accums) |*acc| {
+                defer acc.deinit(); // T2b: edge-side arena freed per shard (idempotent vs the outer blanket defer)
+                for (acc.rows) |*row| {
+                    const node_uuid = @as(u64, @truncate(id_map.nodeUuid(row.slot) orelse continue));
+                    for (row.edges) |er| {
+                        const edge_entry = er.entry;
+                        const edge_uuid = blk: {
+                            // GAP-ENT-0024 inline-first: v2 entries carry the
+                            // public id inline — no property fallback.
+                            if (edge_entry.public_id != 0) break :blk edge_entry.public_id;
+
+                            _ = edge_id_property_fallback_reads.fetchAdd(1, .monotonic);
+                            if (findStreamPropString(er.props, INTERNAL_EDGE_ID_PROPERTY_KEY)) |text| {
+                                if (parsePersistedPublicId(text)) |parsed| break :blk parsed;
+                            }
+                            // No legacy sidecar on this path (the streaming
+                            // scan is gated on legacy_map == null).
+                            break :blk null;
+                        } orelse {
+                            // Orphan physical edge slot (pre-fix re-apply
+                            // leftovers): queue the durable self-heal delete.
+                            skipped_edge_mappings.* += 1;
+                            try orphan_edge_slots.append(self.allocator, .{
+                                .from_slot = row.slot,
+                                .to_slot = edge_entry.neighbor,
+                                .edge_slot = edge_entry.edge_id,
+                            });
+                            continue;
+                        };
+
+                        if (resident)
+                            try id_map.insertEdgeWithSlot(@as(u128, edge_uuid), edge_entry.edge_id);
+
+                        if (self.edges.contains(edge_uuid)) continue;
+
+                        const target_uuid = @as(u64, @truncate(id_map.nodeUuid(edge_entry.neighbor) orelse continue));
+
+                        const edge_label_str = adapter.hydrationLabelString(graph_name, edge_entry.rel_type) orelse "UNKNOWN";
+                        const edge_label_copy = try self.allocator.dupe(u8, edge_label_str);
+                        const edge_graph_name_copy = try self.allocator.dupe(u8, graph_name);
+                        const edge_tenant_id_copy = blk_edge_tenant: {
+                            if (findStreamPropString(er.props, INTERNAL_TENANT_ID_PROPERTY_KEY)) |text| {
+                                break :blk_edge_tenant try self.allocator.dupe(u8, text);
+                            }
+                            break :blk_edge_tenant try self.allocator.dupe(u8, DEFAULT_TENANT_ID);
+                        };
+
+                        var edge = Edge{
+                            .id = edge_uuid,
+                            .from_id = node_uuid,
+                            .to_id = target_uuid,
+                            .label = edge_label_copy,
+                            .properties = CompactPropertyMap.init(self.allocator),
+                            .graph_name = edge_graph_name_copy,
+                            .tenant_id = edge_tenant_id_copy,
+                        };
+
+                        if (edge_entry.prop_head != 0) {
+                            for (er.props) |pe| {
+                                if (!graph_storage_adapter.shouldExposePropertyKey(pe.key)) continue;
+                                // C3: skip the `.null` REMOVE tombstone.
+                                if (pe.value == .null) continue;
+                                const key_copy = try self.allocator.dupe(u8, pe.key);
+                                const pv = try graph_storage_adapter.fromStorageProperty(self.allocator, pe.value);
+                                try edge.properties.put(key_copy, pv);
+                            }
+                        }
+
+                        try self.edges.put(edge_uuid, edge);
+                        try self.addToAdjacencyIndex(node_uuid, target_uuid, edge_uuid);
+                        try self.addToEdgeTypeIndex(graph_name, edge.label, edge_uuid);
+                        // GAP-ENT-0023 P3 / 0012: restored counters are never
+                        // re-bumped.
+                        if (!snap.counters) self.bumpGraphEdgeTypeCount(graph_name, edge.label);
+
+                        if (edge_uuid >= self.next_edge_id) {
+                            self.next_edge_id = edge_uuid + 1;
+                        }
+                    }
+                }
+            }
+
+            // Self-heal: durably delete the orphan slots AFTER the streaming
+            // read completed (no live adjacency cursor to invalidate; the
+            // legacy walk deferred exactly the same way per node).
+            for (orphan_edge_slots.items) |orphan| {
+                adapter.deleteEdge(graph_name, orphan.from_slot, orphan.to_slot, orphan.edge_slot) catch |err| {
+                    log.warn("hydration orphan-edge-slot repair failed; slot remains orphaned (unqueryable)", &.{
+                        Attr.string("graph", graph_name),
+                        Attr.int("from_slot", @intCast(orphan.from_slot)),
+                        Attr.int("edge_slot", @intCast(orphan.edge_slot)),
+                        Attr.string("error", @errorName(err)),
+                    });
+                    continue;
+                };
+                repaired_edge_slots.* += 1;
+            }
+        }
+
+        const merge_done_ns = monoNanosNow();
+        _ = g_hydration_stream_scan_ns.fetchAdd(scan_done_ns - scan_started_ns, .monotonic);
+        // T2c: the merge is pipelined WITH the scan (it consumes shard 0 the
+        // moment it publishes), so its span is measured from hydration start
+        // — scan_ns and merge_ns overlap and no longer sum to wall time.
+        _ = g_hydration_stream_merge_ns.fetchAdd(merge_done_ns - scan_started_ns, .monotonic);
+        log.info("graph hydration served by per-shard stream scan", &.{
+            Attr.string("graph", graph_name),
+            Attr.int("nodes", @intCast(total_rows)),
+            Attr.int("edges", @intCast(total_edges)),
+            Attr.int("scan_workers", @intCast(worker_count)),
+            Attr.int("merge_workers", @intCast(merge_workers)),
+            Attr.int("inflight_limit", @intCast(gate.limit)),
+            Attr.int("scan_ms", @intCast(@divTrunc(scan_done_ns - scan_started_ns, std.time.ns_per_ms))),
+            Attr.int("merge_ms", @intCast(@divTrunc(merge_done_ns - scan_started_ns, std.time.ns_per_ms))),
+        });
     }
 
     /// Load a single graph from the storage adapter. Returns an error if
@@ -8955,7 +11809,7 @@ pub const GraphStore = struct {
         self: *GraphStore,
         adapter: *graph_storage_adapter.StorageAdapter,
         graph_name: []const u8,
-    ) !void {
+    ) !HydrationBuildOutcome {
         {
             // Register graph in the registry
             try self.ensureGraphNoDirty(graph_name);
@@ -8970,367 +11824,559 @@ pub const GraphStore = struct {
             // (the hydration self-heal for the pre-fix re-apply orphan bug).
             var repaired_edge_slots: u64 = 0;
 
-            const scan_entries = try adapter.scanAllNodes(graph_name, self.allocator);
-            defer self.allocator.free(scan_entries);
+            // GAP-ENT-0023 P3: restore loop2 products from counter-gated
+            // snapshots where present + current; the scan below skips exactly
+            // the covered products (a partial set skips only what it covers;
+            // a stale/missing set falls back to the scan unchanged).
+            const snap = self.loadHydrationSnapshotsForGraph(adapter, graph_name);
 
-            // PHASE 4: when the IdMap is mmap_backed (a valid snapshot was
-            // adopted as base at open), the node uuid->slot mappings already
-            // live in the immutable base. Re-inserting them here (loop1) would
-            // dump the entire base into the in-memory overlay — defeating the
-            // O(1)-open / bounded-RSS win and re-doing the per-node engine read.
-            // Skip loop1 entirely; loop2 below reads node uuids straight from
-            // base via id_map.nodeUuid(slot_id).
-            if (id_map.mode == .resident) {
-                for (scan_entries) |entry| {
-                    const slot_id = entry.slot_id;
-                    // PHASE 1b instrumentation: per-node engine read of the IdMap
-                    // scan-rebuild (loop1). Stays 0 at open when a valid snapshot
-                    // was bulk-loaded instead.
-                    _ = g_idmap_scan_getprop.fetchAdd(1, .monotonic);
-                    const node_uuid = blk: {
-                        // 2026-05-22: tolerate per-node property page corruption.
-                        // A torn/partially-flushed property page (e.g. WAL+TDE
-                        // hard-crash mid-write) used to bubble up through
-                        // `adapter.getNodeProperty` -> `PropStore.getProperty`
-                        // and either panic on unsigned underflow inside
-                        // `readDirEntry` or quarantine the entire graph. We now
-                        // catch DataCorruption / OutOfBounds / CircularChain at
-                        // the per-node level so the rest of the graph still
-                        // hydrates and the bad node is dropped to the
-                        // legacy-uuid fallback (or skipped) below.
-                        const maybe_stored = adapter.getNodeProperty(graph_name, slot_id, INTERNAL_NODE_ID_PROPERTY_KEY, self.allocator) catch |err| switch (err) {
-                            error.DataCorruption, error.CircularChainDetected => {
-                                log.warn("skipping node with corrupt property page during load", &.{
-                                    Attr.string("graph", graph_name),
-                                    Attr.int("slot_id", @intCast(slot_id)),
-                                    Attr.string("error", @errorName(err)),
-                                });
-                                break :blk null;
-                            },
-                            else => return err,
-                        };
-                        if (maybe_stored) |stored_prop| {
-                            defer graph_storage_adapter.freeOwnedStorageProperty(self.allocator, stored_prop);
-                            switch (stored_prop) {
-                                .string => |text| {
-                                    if (parsePersistedPublicId(text)) |parsed| break :blk parsed;
-                                },
-                                else => {},
-                            }
-                        }
+            // GAP-ENT-0023 P3: with the edge-side products restored (typed
+            // per-(graph,type) counters from the counters snapshot), the ONLY
+            // remaining outputs of the per-node OUTGOING-edge iteration are
+            // cache warm-up (edge bodies + adjacency: bounded,
+            // hydrate-on-miss — correctness never depends on residency), the
+            // edge IdMap re-insert (already served in place by the mmap
+            // base), the resident edge_type_index posting list (maintained
+            // only for an UNBOUNDED edge cache), and the orphan-slot
+            // self-heal (a legacy-corruption repair that still runs on every
+            // scan fallback). Skip the edge iteration entirely when none of
+            // those are needed — it is the dominant remaining hydration cost
+            // (per-edge property/tenant reads).
+            const skip_edge_scan = snap.counters and
+                id_map.mode == .mmap_backed and
+                legacy_map == null and
+                self.edges.effectiveCap() != 0 and
+                self.outgoing_edges.effectiveCap() != 0 and
+                self.incoming_edges.effectiveCap() != 0;
 
-                        if (legacy_map) |*map| {
-                            const legacy_uuid_128 = map.nodeUuid(slot_id) orelse break :blk null;
-                            const public_id = @as(u64, @truncate(legacy_uuid_128));
-                            var id_buf: [16]u8 = undefined;
-                            try adapter.setNodeProperty(
-                                graph_name,
-                                slot_id,
-                                INTERNAL_NODE_ID_PROPERTY_KEY,
-                                .{ .String = encodePersistedPublicId(&id_buf, public_id) },
-                            );
-                            backfilled_from_legacy = true;
-                            break :blk public_id;
-                        }
-
-                        break :blk null;
-                    } orelse {
-                        skipped_node_mappings += 1;
-                        continue;
-                    };
-                    try id_map.insertNodeWithSlot(@as(u128, node_uuid), slot_id);
+            // GAP-ENT-0023 P3 FULL scan skip: every node-side product came
+            // from a snapshot (counters + label postings + merge index), the
+            // edge side is covered (skip_edge_scan), loop1 is served in place
+            // by the mmap IdMap base, and the node cache is engine-backed
+            // (hydrate-on-miss — warm-up optional). The only resident
+            // structure left is `nodes_by_graph` (PERF-B), which is rebuilt
+            // from the IdMap directly — memory-speed, ZERO engine reads — so
+            // hydration is O(snapshot) instead of O(graph-scan).
+            //
+            // Cross-check: the IdMap-derived node count must equal the count
+            // the counters snapshot recorded. Both passed the same manifest-
+            // counter gate, so a mismatch means a save-side bug — log loudly
+            // and fall through to the scan (with the per-product skips still
+            // honored: postings/merge re-inserts are idempotent, so the light
+            // scan is safe; nodes_by_graph puts dedupe).
+            if (snap.counters and snap.labels and snap.merge and
+                id_map.mode == .mmap_backed and legacy_map == null and
+                self.nodes.effectiveCap() != 0 and skip_edge_scan)
+            {
+                var rebuilt: u64 = 0;
+                var nit = id_map.nodeUuidIterator();
+                while (nit.next()) |nuuid| {
+                    try self.addNodeToGraphIndex(graph_name, @as(u64, @truncate(nuuid)));
+                    rebuilt += 1;
                 }
+                if (rebuilt == snap.node_count) {
+                    _ = g_hydration_full_scan_skips.fetchAdd(1, .monotonic);
+                    log.info("graph hydration served from loop2 snapshots (engine scan skipped)", &.{
+                        Attr.string("graph", graph_name),
+                        Attr.int("nodes", @intCast(rebuilt)),
+                    });
+                    return .snapshot_served;
+                }
+                log.err("hydration snapshot node count disagrees with IdMap at the same manifest counter; falling back to scan", &.{
+                    Attr.string("graph", graph_name),
+                    Attr.int("idmap_nodes", @intCast(rebuilt)),
+                    Attr.int("snapshot_nodes", @intCast(snap.node_count)),
+                });
             }
 
-            for (scan_entries) |entry| {
-                const slot_id = entry.slot_id;
-                // PHASE 1b instrumentation: per-node iteration of the DEFERRED
-                // resident-index scan (loop2). MUST be 0 at the "server ready"
-                // point — proves the O(graph) scan was not run at open.
-                _ = g_loop2_scan_nodes.fetchAdd(1, .monotonic);
-                const node_uuid = @as(u64, @truncate(id_map.nodeUuid(slot_id) orelse continue));
-                const labels = try adapter.getNodeLabels(graph_name, slot_id, self.allocator);
+            // GAP hydration fast-scan: the default build path is the
+            // SEQUENTIAL per-shard store stream (linear file reads instead of
+            // ~O(nodes) random page-chain walks — 13h09m -> minutes at 14.27M).
+            // Products and count disciplines are byte-identical (same insert
+            // calls, same order; see hydrateGraphFromStreamScan). The legacy
+            // per-node walk remains for (a) the GEODE_DISABLE_STREAMING_HYDRATION
+            // kill switch / parity harness and (b) stores with a legacy IdMap
+            // sidecar, whose loop1 backfill WRITES through the engine mid-scan
+            // (the streaming reader is strictly read-only by design).
+            if (legacy_map == null and !streamingHydrationDisabled()) {
+                try self.hydrateGraphFromStreamScan(
+                    adapter,
+                    graph_name,
+                    id_map,
+                    snap,
+                    skip_edge_scan,
+                    &skipped_node_mappings,
+                    &skipped_edge_mappings,
+                    &repaired_edge_slots,
+                );
+            } else {
+                const scan_entries = try adapter.scanAllNodes(graph_name, self.allocator);
+                defer self.allocator.free(scan_entries);
 
-                const graph_name_copy = try self.allocator.dupe(u8, graph_name);
-                // GAP-0891 (RC-2): recover the persisted tenant tag. Absent
-                // (legacy / single-tenant data, or a default-tagged row we
-                // intentionally never persisted) -> DEFAULT_TENANT_ID. A corrupt
-                // tenant property is non-fatal: fall back to default rather than
-                // quarantine the node.
-                const tenant_id_copy = blk_tenant: {
-                    const maybe_t = adapter.getNodeProperty(graph_name, slot_id, INTERNAL_TENANT_ID_PROPERTY_KEY, self.allocator) catch null;
-                    if (maybe_t) |stored_prop| {
-                        defer graph_storage_adapter.freeOwnedStorageProperty(self.allocator, stored_prop);
-                        switch (stored_prop) {
-                            .string => |text| break :blk_tenant try self.allocator.dupe(u8, text),
-                            else => {},
+                // PHASE 4: when the IdMap is mmap_backed (a valid snapshot was
+                // adopted as base at open), the node uuid->slot mappings already
+                // live in the immutable base. Re-inserting them here (loop1) would
+                // dump the entire base into the in-memory overlay — defeating the
+                // O(1)-open / bounded-RSS win and re-doing the per-node engine read.
+                // Skip loop1 entirely; loop2 below reads node uuids straight from
+                // base via id_map.nodeUuid(slot_id).
+                if (id_map.mode == .resident) {
+                    // Cold-open loop1 I/O locality: sort scan_entries by
+                    // (shard, prop_head) so the per-node props-page fetch below
+                    // (getNodePropertyByHead) visits each shard's props pages in
+                    // ascending prop_head order instead of raw slot-scan order.
+                    // Reorder-only — both loop1 (id_map keyed by uuid) and loop2
+                    // (self.nodes keyed by uuid) are insertion-order-independent, so
+                    // this changes I/O locality only, not the resulting IdMap or
+                    // skipped-mapping count. The slice is function-local and freed
+                    // above; no other scanAllNodes caller observes this order.
+                    // Gated to the .resident rebuild path: this is loop1's only
+                    // consumer. On .mmap_backed (lazy-hydrate / fast-restart) loop1
+                    // is skipped entirely, so sorting scan_entries there would be
+                    // pure wasted O(n log n) work undercutting the sub-second
+                    // restart goal.
+                    const ScanEntry = graph_storage_adapter.StorageAdapter.ScanEntry;
+                    std.sort.pdq(ScanEntry, scan_entries, adapter, struct {
+                        fn less(a: *graph_storage_adapter.StorageAdapter, x: ScanEntry, y: ScanEntry) bool {
+                            const sx = a.shardOfSlot(x.slot_id);
+                            const sy = a.shardOfSlot(y.slot_id);
+                            if (sx != sy) return sx < sy;
+                            return x.rec.prop_head < y.rec.prop_head;
                         }
-                    }
-                    break :blk_tenant try self.allocator.dupe(u8, DEFAULT_TENANT_ID);
-                };
+                    }.less);
 
-                var node = Node{
-                    .id = node_uuid,
-                    .labels = labels,
-                    .properties = CompactPropertyMap.init(self.allocator),
-                    .graph_name = graph_name_copy,
-                    .tenant_id = tenant_id_copy,
-                };
-
-                var storage_props = try adapter.getAllNodeProperties(graph_name, slot_id, self.allocator);
-                defer {
-                    var sp_iter = storage_props.iterator();
-                    while (sp_iter.next()) |sp_entry| {
-                        self.allocator.free(sp_entry.key_ptr.*);
-                        // GAP-0862: getAllNodeProperties hands back decoded
-                        // StorageProperty VALUES whose String/Ext payloads are
-                        // freshly allocated; fromStorageProperty above made an
-                        // independent store-owned copy, so the source value must
-                        // be freed here or every loaded string/ext property leaks
-                        // on each restart/restore load.
-                        graph_storage_adapter.freeOwnedStorageProperty(self.allocator, sp_entry.value_ptr.*);
-                    }
-                    storage_props.deinit();
-                }
-
-                var sp_iter = storage_props.iterator();
-                while (sp_iter.next()) |sp_entry| {
-                    const key_copy = try self.allocator.dupe(u8, sp_entry.key_ptr.*);
-                    const pv = try graph_storage_adapter.fromStorageProperty(self.allocator, sp_entry.value_ptr.*);
-                    try node.properties.put(key_copy, pv);
-                }
-
-                try self.nodes.put(node_uuid, node);
-
-                // Update next_node_id
-                if (node_uuid >= self.next_node_id) {
-                    self.next_node_id = node_uuid + 1;
-                }
-
-                // Rebuild label index
-                for (labels) |label| {
-                    try self.addToLabelIndex(graph_name, label, node_uuid);
-                }
-
-                // GAP-825 (issue #825): the adapter hydration path used to
-                // rebuild `label_index` only, leaving `nodes_by_graph`
-                // (PERF-B) and `node_labels_by_tenant` /
-                // `label_properties_by_tenant` (PERF-C) empty after a
-                // restart.  That made `iterateNodesInGraph`,
-                // `nodesInGraphCount`, and `listNodeLabels` silently
-                // return zero rows even though `getNodesByLabel` worked.
-                // Mirror the introspection counters now so the in-memory
-                // store matches a freshly-created one.
-                const stored_node_ptr = self.nodes.getPtr(node_uuid) orelse return error.NodeNotFound;
-                try self.addNodeToGraphIndex(graph_name, node_uuid);
-                try self.bumpIntrospectionForNode(stored_node_ptr);
-
-                // GAP-0900 Layer-3 (Fix 3): rebuild the merge property index for
-                // this hydrated node. Without this, a re-MERGE of an existing
-                // key after shutdown+reopen finds an empty index, takes the
-                // create branch, and produces a DUPLICATE — breaking resumable /
-                // idempotent seeding. `addToMergePropertyIndex` honors lean mode:
-                // off (default) indexes every key; on
-                // (GEODE_INDEX_MERGE_KEYS_ONLY=1) indexes only keys registered
-                // SO FAR. Keys registered AFTER load (e.g. the first MERGE of a
-                // fresh server process) are backfilled at registration time by
-                // `registerMergeIndexKey` -> `backfillMergeIndexForKey`.
-                {
-                    var merge_prop_iter = stored_node_ptr.properties.iterator();
-                    while (merge_prop_iter.next()) |prop_entry| {
-                        self.addToMergePropertyIndex(
-                            stored_node_ptr.graph_name,
-                            stored_node_ptr.labels,
-                            prop_entry.key_ptr.*,
-                            prop_entry.value_ptr.*,
-                            stored_node_ptr.id,
-                        ) catch {};
-                    }
-                    // Caveat "B": rebuild the COMPOSITE merge entry for this
-                    // hydrated node so the from-dump EDGE phase (which runs as a
-                    // SEPARATE process after the NODE load) resolves endpoints by
-                    // {source, source_id} in ONE zero-read probe. No extra engine
-                    // read — uses the already-loaded property map. No-op unless a
-                    // composite key is registered (loaded from the sidecar in
-                    // adapter init, before this load runs).
-                    self.addNodeCompositeMergeEntries(stored_node_ptr);
-                }
-
-                var out_edges = try adapter.iterateOutgoingEdges(graph_name, slot_id, self.allocator);
-                defer out_edges.deinit();
-
-                // Hydration self-heal: physical outgoing edge slots with no
-                // __geode_internal_edge_id and no legacy mapping are ORPHANS
-                // left behind by the pre-fix createEdgeWithIdInternal ordering
-                // bug (one per idempotent Raft re-apply). They have no IdMap
-                // entry, so the read path can never reverse-map them
-                // (-> error.EdgeSlotMappingMissing). Collect them while the
-                // adjacency iterator is live and DELETE them after the iterator
-                // is exhausted (deleting mid-iteration would invalidate the
-                // adjacency cursor). The canonical slot for any public id always
-                // carries __geode_internal_edge_id, so it never lands here — and
-                // a legitimate distinct parallel edge carries its own id and is
-                // likewise never collected. See
-                // tests/test_edge_durability_churn_repro.zig.
-                const OrphanEdgeSlot = struct { to_slot: u64, edge_slot: u64 };
-                var orphan_edge_slots: std.ArrayList(OrphanEdgeSlot) = .empty;
-                defer orphan_edge_slots.deinit(self.allocator);
-
-                while (try out_edges.next()) |edge_entry| {
-                    // Skip edges/nodes whose slot_ids aren't mapped yet (concurrent inserts).
-                    const edge_uuid = blk: {
-                        if (try adapter.getEdgeProperty(
-                            graph_name,
-                            slot_id,
-                            edge_entry.edge_id,
-                            INTERNAL_EDGE_ID_PROPERTY_KEY,
-                            self.allocator,
-                        )) |stored_prop| {
-                            defer graph_storage_adapter.freeOwnedStorageProperty(self.allocator, stored_prop);
-                            switch (stored_prop) {
-                                .string => |text| {
-                                    if (parsePersistedPublicId(text)) |parsed| break :blk parsed;
+                    for (scan_entries) |entry| {
+                        const slot_id = entry.slot_id;
+                        // PHASE 1b instrumentation: per-node engine read of the IdMap
+                        // scan-rebuild (loop1). Stays 0 at open when a valid snapshot
+                        // was bulk-loaded instead.
+                        _ = g_idmap_scan_getprop.fetchAdd(1, .monotonic);
+                        const node_uuid = blk: {
+                            // 2026-05-22: tolerate per-node property page corruption.
+                            // A torn/partially-flushed property page (e.g. WAL+TDE
+                            // hard-crash mid-write) used to bubble up through
+                            // `adapter.getNodeProperty` -> `PropStore.getProperty`
+                            // and either panic on unsigned underflow inside
+                            // `readDirEntry` or quarantine the entire graph. We now
+                            // catch DataCorruption / OutOfBounds / CircularChain at
+                            // the per-node level so the rest of the graph still
+                            // hydrates and the bad node is dropped to the
+                            // legacy-uuid fallback (or skipped) below.
+                            const maybe_stored = adapter.getNodePropertyByHead(graph_name, slot_id, entry.rec.prop_head, INTERNAL_NODE_ID_PROPERTY_KEY, self.allocator) catch |err| switch (err) {
+                                error.DataCorruption, error.CircularChainDetected => {
+                                    log.warn("skipping node with corrupt property page during load", &.{
+                                        Attr.string("graph", graph_name),
+                                        Attr.int("slot_id", @intCast(slot_id)),
+                                        Attr.string("error", @errorName(err)),
+                                    });
+                                    break :blk null;
                                 },
-                                else => {},
+                                else => return err,
+                            };
+                            if (maybe_stored) |stored_prop| {
+                                defer graph_storage_adapter.freeOwnedStorageProperty(self.allocator, stored_prop);
+                                switch (stored_prop) {
+                                    .string => |text| {
+                                        if (parsePersistedPublicId(text)) |parsed| break :blk parsed;
+                                    },
+                                    else => {},
+                                }
                             }
+
+                            if (legacy_map) |*map| {
+                                const legacy_uuid_128 = map.nodeUuid(slot_id) orelse break :blk null;
+                                const public_id = @as(u64, @truncate(legacy_uuid_128));
+                                var id_buf: [16]u8 = undefined;
+                                try adapter.setNodeProperty(
+                                    graph_name,
+                                    slot_id,
+                                    INTERNAL_NODE_ID_PROPERTY_KEY,
+                                    .{ .String = encodePersistedPublicId(&id_buf, public_id) },
+                                );
+                                backfilled_from_legacy = true;
+                                break :blk public_id;
+                            }
+
+                            break :blk null;
+                        } orelse {
+                            skipped_node_mappings += 1;
+                            continue;
+                        };
+                        try id_map.insertNodeWithSlot(@as(u128, node_uuid), slot_id);
+                    }
+                }
+
+                for (scan_entries) |entry| {
+                    const slot_id = entry.slot_id;
+                    // PHASE 1b instrumentation: per-node iteration of the DEFERRED
+                    // resident-index scan (loop2). MUST be 0 at the "server ready"
+                    // point — proves the O(graph) scan was not run at open.
+                    _ = g_loop2_scan_nodes.fetchAdd(1, .monotonic);
+                    // GAP-ENT-0023 P3 (review C1) TDD hook — TEST BUILDS ONLY:
+                    // deterministically fail the loop2 scan after N nodes so the
+                    // quarantine-then-checkpoint hazard (partial products
+                    // persisted counter-current) is reproducible. Compiles out of
+                    // production binaries.
+                    if (comptime @import("builtin").is_test) {
+                        const lim = g_test_hydration_fail_after.load(.monotonic);
+                        if (lim != std.math.maxInt(u64) and
+                            g_test_hydration_scan_seen.fetchAdd(1, .monotonic) >= lim)
+                        {
+                            return error.TestInjectedHydrationFailure;
                         }
+                    }
+                    const node_uuid = @as(u64, @truncate(id_map.nodeUuid(slot_id) orelse continue));
+                    const labels = try adapter.getNodeLabels(graph_name, slot_id, self.allocator);
 
-                        if (legacy_map) |*map| {
-                            const legacy_uuid_128 = map.edgeUuid(edge_entry.edge_id) orelse break :blk null;
-                            const public_id = @as(u64, @truncate(legacy_uuid_128));
-                            var id_buf: [16]u8 = undefined;
-                            try adapter.setEdgeProperty(
-                                graph_name,
-                                slot_id,
-                                edge_entry.neighbor,
-                                edge_entry.edge_id,
-                                INTERNAL_EDGE_ID_PROPERTY_KEY,
-                                .{ .String = encodePersistedPublicId(&id_buf, public_id) },
-                            );
-                            backfilled_from_legacy = true;
-                            break :blk public_id;
-                        }
-
-                        break :blk null;
-                    } orelse {
-                        // Orphan physical edge slot: no persisted public id, no
-                        // legacy mapping. Queue it for durable deletion (the
-                        // self-heal) and account it as a repair rather than a
-                        // silent skip.
-                        skipped_edge_mappings += 1;
-                        try orphan_edge_slots.append(self.allocator, .{
-                            .to_slot = edge_entry.neighbor,
-                            .edge_slot = edge_entry.edge_id,
-                        });
-                        continue;
-                    };
-                    // PHASE 4: skip the edge IdMap re-insert when mmap_backed —
-                    // base already holds the edge uuid->slot mapping; loop2's
-                    // reads (below and id_map.nodeUuid) are served by base.
-                    if (id_map.mode == .resident)
-                        try id_map.insertEdgeWithSlot(@as(u128, edge_uuid), edge_entry.edge_id);
-
-                    if (self.edges.contains(edge_uuid)) continue;
-
-                    const target_uuid = @as(u64, @truncate(id_map.nodeUuid(edge_entry.neighbor) orelse continue));
-
-                    // Get edge label from label dict
-                    const mg = try adapter.getOrCreateGraph(graph_name);
-                    const edge_label_str = mg.label_dict.getString(edge_entry.rel_type) orelse "UNKNOWN";
-                    const edge_label_copy = try self.allocator.dupe(u8, edge_label_str);
-                    const edge_graph_name_copy = try self.allocator.dupe(u8, graph_name);
-                    // GAP-0891 (RC-2): recover the persisted edge tenant tag
-                    // (absent / corrupt -> DEFAULT_TENANT_ID). Mirrors the node
-                    // path and the edge-id read above (node slot + edge slot).
-                    const edge_tenant_id_copy = blk_edge_tenant: {
-                        const maybe_t = adapter.getEdgeProperty(graph_name, slot_id, edge_entry.edge_id, INTERNAL_TENANT_ID_PROPERTY_KEY, self.allocator) catch null;
+                    const graph_name_copy = try self.allocator.dupe(u8, graph_name);
+                    // GAP-0891 (RC-2): recover the persisted tenant tag. Absent
+                    // (legacy / single-tenant data, or a default-tagged row we
+                    // intentionally never persisted) -> DEFAULT_TENANT_ID. A corrupt
+                    // tenant property is non-fatal: fall back to default rather than
+                    // quarantine the node.
+                    const tenant_id_copy = blk_tenant: {
+                        // Cold-open H1: read the tenant tag WITHOUT triggering the
+                        // engine's full derived property-chain index build
+                        // (ensureDerivedHydrated). Like the node-id read above, use
+                        // the known prop_head; getNodePropertyByHead walks the chain
+                        // directly. Using plain getNodeProperty here forced a
+                        // one-time O(graph) refreshPropertyChainIndex build (~71% of
+                        // loop1 CPU) on the FIRST node — pure waste for loop1.
+                        const maybe_t = adapter.getNodePropertyByHead(graph_name, slot_id, entry.rec.prop_head, INTERNAL_TENANT_ID_PROPERTY_KEY, self.allocator) catch null;
                         if (maybe_t) |stored_prop| {
                             defer graph_storage_adapter.freeOwnedStorageProperty(self.allocator, stored_prop);
                             switch (stored_prop) {
-                                .string => |text| break :blk_edge_tenant try self.allocator.dupe(u8, text),
+                                .string => |text| break :blk_tenant try self.allocator.dupe(u8, text),
                                 else => {},
                             }
                         }
-                        break :blk_edge_tenant try self.allocator.dupe(u8, DEFAULT_TENANT_ID);
+                        break :blk_tenant try self.allocator.dupe(u8, DEFAULT_TENANT_ID);
                     };
 
-                    var edge = Edge{
-                        .id = edge_uuid,
-                        .from_id = node_uuid,
-                        .to_id = target_uuid,
-                        .label = edge_label_copy,
+                    var node = Node{
+                        .id = node_uuid,
+                        .labels = labels,
                         .properties = CompactPropertyMap.init(self.allocator),
-                        .graph_name = edge_graph_name_copy,
-                        .tenant_id = edge_tenant_id_copy,
+                        .graph_name = graph_name_copy,
+                        .tenant_id = tenant_id_copy,
                     };
 
-                    if (edge_entry.prop_head != 0) {
-                        // Pass the source-node SLOT id (shard-striped) so
-                        // adapter.getAllEdgeProperties routes via the
-                        // correct per-shard engine. node_uuid is the
-                        // public id (not stripe-aligned) and would
-                        // misroute through shardOfNode(uuid). See
-                        // graph_storage_adapter.getAllEdgeProperties for
-                        // why prop_head alone is the wrong key.
-                        var edge_storage_props = try adapter.getAllEdgeProperties(graph_name, slot_id, edge_entry.prop_head, self.allocator);
-                        defer {
+                    var storage_props = try adapter.getAllNodeProperties(graph_name, slot_id, self.allocator);
+                    defer {
+                        var sp_iter = storage_props.iterator();
+                        while (sp_iter.next()) |sp_entry| {
+                            self.allocator.free(sp_entry.key_ptr.*);
+                            // GAP-0862: getAllNodeProperties hands back decoded
+                            // StorageProperty VALUES whose String/Ext payloads are
+                            // freshly allocated; fromStorageProperty above made an
+                            // independent store-owned copy, so the source value must
+                            // be freed here or every loaded string/ext property leaks
+                            // on each restart/restore load.
+                            graph_storage_adapter.freeOwnedStorageProperty(self.allocator, sp_entry.value_ptr.*);
+                        }
+                        storage_props.deinit();
+                    }
+
+                    var sp_iter = storage_props.iterator();
+                    while (sp_iter.next()) |sp_entry| {
+                        // C3 (review-0023): `.null` is the adapter's REMOVE tombstone —
+                        // never materialize it as a present Null property (see
+                        // materializeNodeFromEngine).
+                        if (sp_entry.value_ptr.* == .null) continue;
+                        const key_copy = try self.allocator.dupe(u8, sp_entry.key_ptr.*);
+                        const pv = try graph_storage_adapter.fromStorageProperty(self.allocator, sp_entry.value_ptr.*);
+                        try node.properties.put(key_copy, pv);
+                    }
+
+                    try self.nodes.put(node_uuid, node);
+
+                    // Update next_node_id
+                    if (node_uuid >= self.next_node_id) {
+                        self.next_node_id = node_uuid + 1;
+                    }
+
+                    // Rebuild label index. GAP-ENT-0023 P3: skipped when the
+                    // postings came from the labels snapshot (the insert would be
+                    // a dedup no-op per id — pure wasted binary-search work).
+                    if (!snap.labels) {
+                        for (labels) |label| {
+                            try self.addToLabelIndex(graph_name, label, node_uuid);
+                        }
+                    }
+
+                    // GAP-825 (issue #825): the adapter hydration path used to
+                    // rebuild `label_index` only, leaving `nodes_by_graph`
+                    // (PERF-B) and `node_labels_by_tenant` /
+                    // `label_properties_by_tenant` (PERF-C) empty after a
+                    // restart.  That made `iterateNodesInGraph`,
+                    // `nodesInGraphCount`, and `listNodeLabels` silently
+                    // return zero rows even though `getNodesByLabel` worked.
+                    // Mirror the introspection counters now so the in-memory
+                    // store matches a freshly-created one.
+                    const stored_node_ptr = self.nodes.getPtr(node_uuid) orelse return error.NodeNotFound;
+                    try self.addNodeToGraphIndex(graph_name, node_uuid);
+                    // GAP-ENT-0023 P3: the tenant introspection multisets came
+                    // from the counters snapshot — re-bumping per node here would
+                    // double-count them.
+                    if (!snap.counters) try self.bumpIntrospectionForNode(stored_node_ptr);
+
+                    // GAP-0900 Layer-3 (Fix 3): rebuild the merge property index for
+                    // this hydrated node. Without this, a re-MERGE of an existing
+                    // key after shutdown+reopen finds an empty index, takes the
+                    // create branch, and produces a DUPLICATE — breaking resumable /
+                    // idempotent seeding. `addToMergePropertyIndex` honors lean mode:
+                    // off (default) indexes every key; on
+                    // (GEODE_INDEX_MERGE_KEYS_ONLY=1) indexes only keys registered
+                    // SO FAR. Keys registered AFTER load (e.g. the first MERGE of a
+                    // fresh server process) are backfilled at registration time by
+                    // `registerMergeIndexKey` -> `backfillMergeIndexForKey`.
+                    // GAP-ENT-0023 P3: the whole merge product (single-key AND
+                    // composite entries) came from the merge snapshot — skip the
+                    // per-node rebuild (putOrUpdate would be an idempotent
+                    // overwrite; pure wasted hashing).
+                    if (!snap.merge) {
+                        var merge_prop_iter = stored_node_ptr.properties.iterator();
+                        while (merge_prop_iter.next()) |prop_entry| {
+                            self.addToMergePropertyIndex(
+                                stored_node_ptr.graph_name,
+                                stored_node_ptr.labels,
+                                prop_entry.key_ptr.*,
+                                prop_entry.value_ptr.*,
+                                stored_node_ptr.id,
+                            ) catch {};
+                        }
+                        // Caveat "B": rebuild the COMPOSITE merge entry for this
+                        // hydrated node so the from-dump EDGE phase (which runs as a
+                        // SEPARATE process after the NODE load) resolves endpoints by
+                        // {source, source_id} in ONE zero-read probe. No extra engine
+                        // read — uses the already-loaded property map. No-op unless a
+                        // composite key is registered (loaded from the sidecar in
+                        // adapter init, before this load runs).
+                        self.addNodeCompositeMergeEntries(stored_node_ptr);
+                    }
+
+                    // GAP-ENT-0023 P3: edge-side products fully covered by
+                    // snapshots + mmap IdMap base + bounded caches — skip the
+                    // per-node edge iteration (see skip_edge_scan above).
+                    if (skip_edge_scan) continue;
+
+                    var out_edges = try adapter.iterateOutgoingEdges(graph_name, slot_id, self.allocator);
+                    defer out_edges.deinit();
+
+                    // Hydration self-heal: physical outgoing edge slots with no
+                    // INLINE public id (GAP-ENT-0024), no __geode_internal_edge_id
+                    // property and no legacy mapping are ORPHANS left behind by the
+                    // pre-fix createEdgeWithIdInternal ordering bug (one per
+                    // idempotent Raft re-apply). They have no IdMap entry, so the
+                    // read path can never reverse-map them
+                    // (-> error.EdgeSlotMappingMissing). Collect them while the
+                    // adjacency iterator is live and DELETE them after the iterator
+                    // is exhausted (deleting mid-iteration would invalidate the
+                    // adjacency cursor). The canonical slot for any public id always
+                    // carries its id (inline for v2 edges, property for legacy), so
+                    // it never lands here — and a legitimate distinct parallel edge
+                    // carries its own id and is likewise never collected. See
+                    // tests/test_edge_durability_churn_repro.zig.
+                    const OrphanEdgeSlot = struct { to_slot: u64, edge_slot: u64 };
+                    var orphan_edge_slots: std.ArrayList(OrphanEdgeSlot) = .empty;
+                    defer orphan_edge_slots.deinit(self.allocator);
+
+                    while (try out_edges.next()) |edge_entry| {
+                        // Skip edges/nodes whose slot_ids aren't mapped yet (concurrent inserts).
+                        const edge_uuid = blk: {
+                            // GAP-ENT-0024 inline-first: v2 adjacency entries carry
+                            // the PUBLIC id inline — no per-edge property fetch.
+                            // 0 = legacy v1 block / pre-v0.2.24 store → fall back.
+                            if (edge_entry.public_id != 0) break :blk edge_entry.public_id;
+
+                            _ = edge_id_property_fallback_reads.fetchAdd(1, .monotonic);
+                            if (try adapter.getEdgeProperty(
+                                graph_name,
+                                slot_id,
+                                edge_entry.edge_id,
+                                INTERNAL_EDGE_ID_PROPERTY_KEY,
+                                self.allocator,
+                            )) |stored_prop| {
+                                defer graph_storage_adapter.freeOwnedStorageProperty(self.allocator, stored_prop);
+                                switch (stored_prop) {
+                                    .string => |text| {
+                                        if (parsePersistedPublicId(text)) |parsed| break :blk parsed;
+                                    },
+                                    else => {},
+                                }
+                            }
+
+                            if (legacy_map) |*map| {
+                                const legacy_uuid_128 = map.edgeUuid(edge_entry.edge_id) orelse break :blk null;
+                                const public_id = @as(u64, @truncate(legacy_uuid_128));
+                                var id_buf: [16]u8 = undefined;
+                                try adapter.setEdgeProperty(
+                                    graph_name,
+                                    slot_id,
+                                    edge_entry.neighbor,
+                                    edge_entry.edge_id,
+                                    INTERNAL_EDGE_ID_PROPERTY_KEY,
+                                    .{ .String = encodePersistedPublicId(&id_buf, public_id) },
+                                );
+                                backfilled_from_legacy = true;
+                                break :blk public_id;
+                            }
+
+                            break :blk null;
+                        } orelse {
+                            // Orphan physical edge slot: no persisted public id, no
+                            // legacy mapping. Queue it for durable deletion (the
+                            // self-heal) and account it as a repair rather than a
+                            // silent skip.
+                            skipped_edge_mappings += 1;
+                            try orphan_edge_slots.append(self.allocator, .{
+                                .to_slot = edge_entry.neighbor,
+                                .edge_slot = edge_entry.edge_id,
+                            });
+                            continue;
+                        };
+                        // PHASE 4: skip the edge IdMap re-insert when mmap_backed —
+                        // base already holds the edge uuid->slot mapping; loop2's
+                        // reads (below and id_map.nodeUuid) are served by base.
+                        if (id_map.mode == .resident)
+                            try id_map.insertEdgeWithSlot(@as(u128, edge_uuid), edge_entry.edge_id);
+
+                        if (self.edges.contains(edge_uuid)) continue;
+
+                        const target_uuid = @as(u64, @truncate(id_map.nodeUuid(edge_entry.neighbor) orelse continue));
+
+                        // Get edge label from label dict
+                        const mg = try adapter.getOrCreateGraph(graph_name);
+                        const edge_label_str = mg.label_dict.getString(edge_entry.rel_type) orelse "UNKNOWN";
+                        const edge_label_copy = try self.allocator.dupe(u8, edge_label_str);
+                        const edge_graph_name_copy = try self.allocator.dupe(u8, graph_name);
+                        // GAP-0891 (RC-2): recover the persisted edge tenant tag
+                        // (absent / corrupt -> DEFAULT_TENANT_ID). Mirrors the node
+                        // path and the edge-id read above (node slot + edge slot).
+                        const edge_tenant_id_copy = blk_edge_tenant: {
+                            const maybe_t = adapter.getEdgeProperty(graph_name, slot_id, edge_entry.edge_id, INTERNAL_TENANT_ID_PROPERTY_KEY, self.allocator) catch null;
+                            if (maybe_t) |stored_prop| {
+                                defer graph_storage_adapter.freeOwnedStorageProperty(self.allocator, stored_prop);
+                                switch (stored_prop) {
+                                    .string => |text| break :blk_edge_tenant try self.allocator.dupe(u8, text),
+                                    else => {},
+                                }
+                            }
+                            break :blk_edge_tenant try self.allocator.dupe(u8, DEFAULT_TENANT_ID);
+                        };
+
+                        var edge = Edge{
+                            .id = edge_uuid,
+                            .from_id = node_uuid,
+                            .to_id = target_uuid,
+                            .label = edge_label_copy,
+                            .properties = CompactPropertyMap.init(self.allocator),
+                            .graph_name = edge_graph_name_copy,
+                            .tenant_id = edge_tenant_id_copy,
+                        };
+
+                        if (edge_entry.prop_head != 0) {
+                            // Pass the source-node SLOT id (shard-striped) so
+                            // adapter.getAllEdgeProperties routes via the
+                            // correct per-shard engine. node_uuid is the
+                            // public id (not stripe-aligned) and would
+                            // misroute through shardOfNode(uuid). See
+                            // graph_storage_adapter.getAllEdgeProperties for
+                            // why prop_head alone is the wrong key.
+                            var edge_storage_props = try adapter.getAllEdgeProperties(graph_name, slot_id, edge_entry.prop_head, self.allocator);
+                            defer {
+                                var edge_sp_iter = edge_storage_props.iterator();
+                                while (edge_sp_iter.next()) |sp_entry| {
+                                    self.allocator.free(sp_entry.key_ptr.*);
+                                    // GAP-0862: free decoded String/Ext value bytes
+                                    // (fromStorageProperty made an independent copy).
+                                    graph_storage_adapter.freeOwnedStorageProperty(self.allocator, sp_entry.value_ptr.*);
+                                }
+                                edge_storage_props.deinit();
+                            }
+
                             var edge_sp_iter = edge_storage_props.iterator();
                             while (edge_sp_iter.next()) |sp_entry| {
-                                self.allocator.free(sp_entry.key_ptr.*);
-                                // GAP-0862: free decoded String/Ext value bytes
-                                // (fromStorageProperty made an independent copy).
-                                graph_storage_adapter.freeOwnedStorageProperty(self.allocator, sp_entry.value_ptr.*);
+                                // C3 (review-0023): skip the `.null` REMOVE tombstone
+                                // (same convention as node properties).
+                                if (sp_entry.value_ptr.* == .null) continue;
+                                const key_copy = try self.allocator.dupe(u8, sp_entry.key_ptr.*);
+                                const pv = try graph_storage_adapter.fromStorageProperty(self.allocator, sp_entry.value_ptr.*);
+                                try edge.properties.put(key_copy, pv);
                             }
-                            edge_storage_props.deinit();
                         }
 
-                        var edge_sp_iter = edge_storage_props.iterator();
-                        while (edge_sp_iter.next()) |sp_entry| {
-                            const key_copy = try self.allocator.dupe(u8, sp_entry.key_ptr.*);
-                            const pv = try graph_storage_adapter.fromStorageProperty(self.allocator, sp_entry.value_ptr.*);
-                            try edge.properties.put(key_copy, pv);
+                        try self.edges.put(edge_uuid, edge);
+                        try self.addToAdjacencyIndex(node_uuid, target_uuid, edge_uuid);
+                        // PERF-P0-001: Maintain edge-type index during adapter load
+                        try self.addToEdgeTypeIndex(graph_name, edge.label, edge_uuid);
+                        // DURABILITY: rebuild the per-(graph,type) exact counter on the
+                        // restart edge-scan so typed count(r:TYPE) survives reopen
+                        // (replay-on-load, like the label refcount + untyped edge count).
+                        // GAP-ENT-0023 P3: restored from the counters snapshot when
+                        // present — re-bumping would double-count.
+                        if (!snap.counters) self.bumpGraphEdgeTypeCount(graph_name, edge.label);
+
+                        if (edge_uuid >= self.next_edge_id) {
+                            self.next_edge_id = edge_uuid + 1;
                         }
                     }
 
-                    try self.edges.put(edge_uuid, edge);
-                    try self.addToAdjacencyIndex(node_uuid, target_uuid, edge_uuid);
-                    // PERF-P0-001: Maintain edge-type index during adapter load
-                    try self.addToEdgeTypeIndex(graph_name, edge.label, edge_uuid);
-                    // DURABILITY: rebuild the per-(graph,type) exact counter on the
-                    // restart edge-scan so typed count(r:TYPE) survives reopen
-                    // (replay-on-load, like the label refcount + untyped edge count).
-                    self.bumpGraphEdgeTypeCount(graph_name, edge.label);
-
-                    if (edge_uuid >= self.next_edge_id) {
-                        self.next_edge_id = edge_uuid + 1;
+                    // Self-heal: now that this node's adjacency cursor is exhausted,
+                    // physically delete the orphan edge slots collected above so an
+                    // already-corrupted PVC converges to one durable slot per logical
+                    // edge on restart. Deletion is best-effort per slot (a failure
+                    // leaves the slot orphaned but unmapped — still no read-path
+                    // regression, since it was already unqueryable).
+                    for (orphan_edge_slots.items) |orphan| {
+                        adapter.deleteEdge(graph_name, slot_id, orphan.to_slot, orphan.edge_slot) catch |err| {
+                            log.warn("hydration orphan-edge-slot repair failed; slot remains orphaned (unqueryable)", &.{
+                                Attr.string("graph", graph_name),
+                                Attr.int("from_slot", @intCast(slot_id)),
+                                Attr.int("edge_slot", @intCast(orphan.edge_slot)),
+                                Attr.string("error", @errorName(err)),
+                            });
+                            continue;
+                        };
+                        repaired_edge_slots += 1;
                     }
                 }
-
-                // Self-heal: now that this node's adjacency cursor is exhausted,
-                // physically delete the orphan edge slots collected above so an
-                // already-corrupted PVC converges to one durable slot per logical
-                // edge on restart. Deletion is best-effort per slot (a failure
-                // leaves the slot orphaned but unmapped — still no read-path
-                // regression, since it was already unqueryable).
-                for (orphan_edge_slots.items) |orphan| {
-                    adapter.deleteEdge(graph_name, slot_id, orphan.to_slot, orphan.edge_slot) catch |err| {
-                        log.warn("hydration orphan-edge-slot repair failed; slot remains orphaned (unqueryable)", &.{
-                            Attr.string("graph", graph_name),
-                            Attr.int("from_slot", @intCast(slot_id)),
-                            Attr.int("edge_slot", @intCast(orphan.edge_slot)),
-                            Attr.string("error", @errorName(err)),
-                        });
-                        continue;
-                    };
-                    repaired_edge_slots += 1;
-                }
-            }
+            } // end legacy per-node scan (streaming fast-scan branch above)
 
             // Flush the legacy backfill AND any orphan-slot repairs so the
             // durable store reflects the self-heal on next open (idempotent
             // re-load then sees a clean adjacency).
+            //
+            // GAP-ENT-0042(a): this used to be `try adapter.checkpointAll()`
+            // — an ALL-graph FULL checkpoint whose per-graph EXCLUSIVE rwlock
+            // acquisition spins UNBOUNDEDLY (timeout null) — fired from
+            // inside the hydration chokepoint (entry.mutex +
+            // hydration_build_mutex held). Any busy rwlock on ANY graph
+            // (e.g. a SHARED holder itself parked on `ensureGraphHydrated`
+            // for a different graph → on the hydration_build_mutex WE hold)
+            // wedged the server permanently — the exact topology the Task-3
+            // bounded acquire was built to avoid. The backfill and the
+            // repairs only touched THIS graph, so scope the flush to THIS
+            // graph and reuse the Task-3 bounded-acquire path
+            // (`checkpointGraph`: 5 s deadline, tryLock re-probe, never
+            // parks). On timeout/failure: log LOUDLY and continue — the
+            // repairs are already applied to the engine (WAL-durable), so
+            // skipping the flush only defers page-flush/WAL-truncate to the
+            // next checkpoint, and a crash before then simply re-detects any
+            // surviving orphan slot on the next hydration scan and re-heals
+            // (idempotent, best-effort-per-slot by design). NOTE: with the
+            // C-1 reclaim gate, this mid-hydration graph checkpoint
+            // (`done == false`) deliberately skips the retired-cache
+            // reclaims — the merge family threads' batch memory stays
+            // untouched.
             if (backfilled_from_legacy or repaired_edge_slots > 0) {
-                try adapter.checkpointAll();
+                adapter.checkpointGraph(graph_name) catch |err| {
+                    _ = g_selfheal_checkpoint_skips.fetchAdd(1, .monotonic);
+                    log.err("hydration self-heal flush checkpoint skipped; repairs stay WAL-durable until the next checkpoint", &.{
+                        Attr.string("graph", graph_name),
+                        Attr.string("error", @errorName(err)),
+                    });
+                };
             }
             self.cleanupLegacySidecarsForGraph(graph_name);
 
@@ -9349,6 +12395,7 @@ pub const GraphStore = struct {
                 });
             }
         }
+        return .rebuilt;
     }
 
     /// DEPRECATED: Legacy buffer serialization stub — adapter handles persistence.
@@ -9364,6 +12411,18 @@ pub const GraphStore = struct {
     ///   {"type":"edge","id":N,"from":F,"to":T,"graph":"G","label":"L","properties":{}}
     /// Returns owned bytes that the caller must free with `allocator.free`.
     pub fn serializeSnapshot(self: *GraphStore, allocator: std.mem.Allocator) ![]u8 {
+        // PHASE 1b chokepoint: a snapshot enumerates every graph's IdMaps and the
+        // resident node/edge caches. After a no-snapshot early-ready open
+        // (`markPendingHydration` fallback) a deferred graph's IdMap is EMPTY
+        // until first access, so an unguarded serialize would emit a PARTIAL /
+        // empty snapshot — silent divergence for the automatic cluster
+        // replication callers (cluster.replicateShardToNode,
+        // raft_snapshot_manager.createSnapshotData) that never run a query first.
+        // Hydrate EVERY graph before reading. Called first, before any lock, so
+        // the store-wide `hydration_build_mutex` it takes cannot deadlock (mirrors
+        // the count/listEdgeTypes guards); `loadOneGraphFromAdapterFull` never
+        // re-enters this serializer, so no re-entrancy.
+        self.ensureAllGraphsHydrated();
         var buf: std.ArrayList(u8) = .empty;
         errdefer buf.deinit(allocator);
 
@@ -9564,18 +12623,114 @@ pub const GraphStore = struct {
         }
     }
 
-    // CANARY: REQ=REQ-STORAGE-ENGINE-PHASE2-005; FEATURE="EngineBackedPersistence"; ASPECT=LoadFromFile; STATUS=TESTED; TEST=test-graph-store; OWNER=storage; UPDATED=2026-06-11
+    // CANARY: REQ=REQ-STORAGE-ENGINE-PHASE2-005; FEATURE="EngineBackedPersistence"; ASPECT=LoadFromFile; STATUS=TESTED; TEST=test-graph-store; OWNER=storage; UPDATED=2026-07-04
     // Load from per-graph storage engine instead of legacy graph_store.dat.
     pub fn loadFromFile(self: *GraphStore) !void {
+        // T2c SEGV root-cause fix (14.27M hydration crash): `clearNodes` frees
+        // EVERY resident + retired Node/Edge value inline (freeNodeValue). A
+        // streaming-hydration merge in flight on another thread holds shallow
+        // Node copies (FamilyPipeline batches) whose sub-heap it shares with
+        // those resident cache entries — clearing mid-build is a use-after-free
+        // the moment a family thread touches its batch (at scale: SEGV/garbage
+        // ~100 s in, exactly when the catalog's lazy init reloaded the store
+        // during the first query's hydration). Destructive reloads must
+        // therefore serialize with the store-wide hydration build lock: every
+        // stream-scan/legacy lazy build runs under `hydration_build_mutex`
+        // (see ensureGraphHydrated), so holding it here means no build is in
+        // flight while we clear, and no build can start until the reload is
+        // done. Lock ordering (CLAUDE.md tier): hydration_build_mutex is
+        // acquired BEFORE any leaf lock taken inside clear/load below — the
+        // same order the lazy build itself uses; no caller of loadFromFile
+        // holds hydration_build_mutex (catalog/backup/boot/test are all
+        // top-level control paths).
+        const io = std.Io.Threaded.global_single_threaded.io();
+        self.hydration_build_mutex.lockUncancelable(io);
+        defer self.hydration_build_mutex.unlock(io);
+
         // Reload semantics replace the in-memory compatibility cache with the
         // latest engine-backed state. This keeps repeated loads idempotent and
         // avoids duplicate indexes / adjacency entries.
         self.clearNodes();
         errdefer self.clearNodes();
+        // Reload coherence: `clearNodes` wipes every resident product but NOT
+        // `pending_hydration`, so a graph hydrated before this reload would
+        // stay latched done=true over now-EMPTY products (reads would see an
+        // empty graph forever). RESET the latches (never destroy the entries —
+        // `ensureGraphHydrated` holds entry pointers outside `hydration_mutex`,
+        // so destroying here would be a fresh use-after-free) so the next
+        // first-touch re-hydrates from the engine. Lock nesting
+        // (hydration_build_mutex -> hydration_mutex) matches the established
+        // build-path order (loadOneGraphFromAdapterFull -> markPendingHydration).
+        {
+            self.hydration_mutex.lockUncancelable(io);
+            defer self.hydration_mutex.unlock(io);
+            var pit = self.pending_hydration.iterator();
+            while (pit.next()) |e| {
+                e.value_ptr.*.done.store(false, .release);
+                e.value_ptr.*.failed.store(false, .release);
+            }
+        }
         if (global_adapter) |adapter| {
             try self.loadFromAdapter(adapter);
         }
         // If no adapter (test mode), just start with empty store
+    }
+
+    /// Catalog-recovery registration (T2c SEGV fix, part 2): register ONLY the
+    /// given just-opened graphs for lazy hydration — the non-destructive
+    /// replacement for the catalog's previous blanket `loadFromFile()`, which
+    /// cleared the ENTIRE global node/edge cache (freeing every resident value)
+    /// and re-registered every graph. On a live server that wipe raced the
+    /// in-flight first-touch hydration (use-after-free of batch sub-heap) and
+    /// reset the lazy-hydration state of graphs that were already registered
+    /// or even fully hydrated.
+    ///
+    /// Each name gets the standard PHASE 1b open step
+    /// (`loadOneGraphFromAdapter`: IdMap snapshot load or deferred scan +
+    /// pending-hydration registration) with the same quarantine-and-continue
+    /// policy as the boot path. Graphs that already have a pending-hydration
+    /// entry (i.e. were registered at open, hydrated or not) are SKIPPED —
+    /// their state, resident products, and any in-flight build stay untouched.
+    pub fn registerAdapterGraphsForLazyHydration(
+        self: *GraphStore,
+        graph_names: []const []const u8,
+    ) !void {
+        const adapter = global_adapter orelse return;
+        const io = std.Io.Threaded.global_single_threaded.io();
+        // Serialize registration against in-flight lazy builds: the open step
+        // mutates store-wide maps (id_maps via getOrCreateIdMap) whose INLINE
+        // values a running build dereferences — a rehash under the build's
+        // feet is the same use-after-move hazard class the reload fix above
+        // closes. Same lock order as the build path (build -> hydration leaf).
+        self.hydration_build_mutex.lockUncancelable(io);
+        defer self.hydration_build_mutex.unlock(io);
+        for (graph_names) |graph_name| {
+            const already_registered = blk: {
+                self.hydration_mutex.lockUncancelable(io);
+                defer self.hydration_mutex.unlock(io);
+                break :blk self.pending_hydration.contains(graph_name);
+            };
+            if (already_registered) continue;
+            self.loadOneGraphFromAdapter(adapter, graph_name) catch |err| {
+                log.err("catalog graph registration failed; quarantining graph and continuing", &.{
+                    Attr.string("graph", graph_name),
+                    Attr.string("error", @errorName(err)),
+                });
+                if (self.markPendingHydration(graph_name)) |_| {
+                    self.hydration_mutex.lockUncancelable(io);
+                    defer self.hydration_mutex.unlock(io);
+                    if (self.pending_hydration.get(graph_name)) |hentry| {
+                        hentry.failed.store(true, .release);
+                    }
+                } else |mark_err| {
+                    log.warn("failed to quarantine catalog graph; checkpoint may bless empty snapshots", &.{
+                        Attr.string("graph", graph_name),
+                        Attr.string("error", @errorName(mark_err)),
+                    });
+                }
+                continue;
+            };
+        }
     }
 
     // CANARY: REQ=REQ-TXN-UNDO-002; FEATURE="TransactionUndoLog"; ASPECT=NoSaveOperations; STATUS=TESTED; TEST=geodetestlab/specs/transaction_state_basic.yml; OWNER=engine; UPDATED=2025-12-23
@@ -9693,7 +12848,7 @@ pub const GraphStore = struct {
             // PERF-C (issue #814): tenant-keyed edge-type counter. Decrement
             // before we free label/tenant_id strings (they're still alive in
             // the `edge` struct copy we own here).
-            self.decEdgeTypeCount(edge.tenant_id, edge.label);
+            self.decEdgeTypeCount(edge.graph_name, edge.tenant_id, edge.label);
             // Per-(graph,type) exact counter (typed count(r:TYPE) fast path).
             self.decGraphEdgeTypeCount(edge.graph_name, edge.label);
 
@@ -9849,7 +13004,7 @@ pub const GraphStore = struct {
             // sync with the in-memory state.
             if (was_new and !isInternalPersistedPropertyKey(key)) {
                 for (node.labels) |label| {
-                    self.bumpLabelPropertyCount(node.tenant_id, label, key) catch {};
+                    self.bumpLabelPropertyCount(node.graph_name, node.tenant_id, label, key) catch {};
                 }
             }
         }
@@ -9868,7 +13023,7 @@ pub const GraphStore = struct {
                 // PERF-C (issue #814): mirror the dec from removeNodeProperty.
                 if (!isInternalPersistedPropertyKey(kv.key)) {
                     for (node.labels) |label| {
-                        self.decLabelPropertyCount(node.tenant_id, label, kv.key);
+                        self.decLabelPropertyCount(node.graph_name, node.tenant_id, label, kv.key);
                     }
                 }
                 self.allocator.free(kv.key);
@@ -9879,6 +13034,7 @@ pub const GraphStore = struct {
 
     /// Set an edge property without saving (used during rollback)
     pub fn setEdgePropertyNoSave(self: *GraphStore, edge_id: u64, key: []const u8, value: PropertyValue) !void {
+        self.ensureEdgeGraphHydrated(edge_id); // PHASE 1b chokepoint (before any cache read)
         if (self.getEdgePtrHydrated(edge_id)) |edge| {
             const value_copy = try copyPropertyValue(self, value);
             errdefer freePropertyValue(self, value_copy);
@@ -9895,6 +13051,7 @@ pub const GraphStore = struct {
 
     /// Remove an edge property without saving (used during rollback)
     pub fn removeEdgePropertyNoSave(self: *GraphStore, edge_id: u64, key: []const u8) void {
+        self.ensureEdgeGraphHydrated(edge_id); // PHASE 1b chokepoint (before any cache read)
         if (self.getEdgePtrHydrated(edge_id)) |edge| {
             if (edge.properties.fetchRemove(key)) |kv| {
                 self.allocator.free(kv.key);
@@ -9934,7 +13091,7 @@ pub const GraphStore = struct {
         // separately), so only label-level counters fire here.
         try self.addNodeToGraphIndex(graph_name, node_id);
         for (labels) |label| {
-            try self.bumpLabelCount(DEFAULT_TENANT_ID, label);
+            try self.bumpLabelCount(graph_name, DEFAULT_TENANT_ID, label);
         }
     }
 
@@ -9961,7 +13118,7 @@ pub const GraphStore = struct {
         // PERF-P0-001: Maintain edge-type index during rollback restore
         try self.addToEdgeTypeIndex(graph_name, label, edge_id);
         // PERF-C (issue #814): tenant-keyed edge-type counter for rollback.
-        try self.bumpEdgeTypeCount(DEFAULT_TENANT_ID, label);
+        try self.bumpEdgeTypeCount(graph_name, DEFAULT_TENANT_ID, label);
         // Per-(graph,type) exact counter (typed count(r:TYPE) fast path).
         self.bumpGraphEdgeTypeCount(graph_name, label);
     }
@@ -9997,12 +13154,12 @@ pub const GraphStore = struct {
 
             try self.addToLabelIndex(node.graph_name, label, node_id);
             // PERF-C (issue #814): mirror addNodeLabel.
-            try self.bumpLabelCount(node.tenant_id, label);
+            try self.bumpLabelCount(node.graph_name, node.tenant_id, label);
             var prop_it_nosave_add = node.properties.iterator();
             while (prop_it_nosave_add.next()) |p| {
                 const pkey = p.key_ptr.*;
                 if (isInternalPersistedPropertyKey(pkey)) continue;
-                try self.bumpLabelPropertyCount(node.tenant_id, label, pkey);
+                try self.bumpLabelPropertyCount(node.graph_name, node.tenant_id, label, pkey);
             }
         }
     }
@@ -10052,9 +13209,9 @@ pub const GraphStore = struct {
                 while (prop_it_nosave_rm.next()) |p| {
                     const pkey = p.key_ptr.*;
                     if (isInternalPersistedPropertyKey(pkey)) continue;
-                    self.decLabelPropertyCount(node.tenant_id, label, pkey);
+                    self.decLabelPropertyCount(node.graph_name, node.tenant_id, label, pkey);
                 }
-                self.decLabelCount(node.tenant_id, label);
+                self.decLabelCount(node.graph_name, node.tenant_id, label);
             }
         }
     }
@@ -10072,7 +13229,11 @@ const AdapterVTable = struct {
     getOrCreateGraphFn: *const fn (*anyopaque, []const u8) anyerror!*anyopaque,
     dropGraphFn: *const fn (*anyopaque, []const u8) void,
     createNodeFn: *const fn (*anyopaque, []const u8, []const []const u8) anyerror!u64,
-    createEdgeFn: *const fn (*anyopaque, []const u8, u64, u64, []const u8) anyerror!u64,
+    // GAP-ENT-0024: the trailing u64 is the geode-minted PUBLIC edge id,
+    // stored INLINE in the durable adjacency records (v2 blocks) so a
+    // propertyless edge allocates NO props page. MUST be nonzero (0 is the
+    // engine's reserved "no inline id" legacy sentinel).
+    createEdgeFn: *const fn (*anyopaque, []const u8, u64, u64, []const u8, u64) anyerror!u64,
     deleteNodeFn: *const fn (*anyopaque, []const u8, u64) anyerror!void,
     deleteEdgeFn: *const fn (*anyopaque, []const u8, u64, u64, u64) anyerror!void,
     setNodePropertyFn: *const fn (*anyopaque, []const u8, u64, []const u8, PropertyValue) anyerror!void,
@@ -10280,6 +13441,20 @@ pub fn acquireGraphWriteLockCancelable(graph_name: []const u8, deadline_mono_ns:
 ///
 /// CANARY: REQ=REQ-PERF-HANDLER-LOCK-HOLD-001; FEATURE="HandlerLockHoldScope"; ASPECT=SnapshotCapture; STATUS=TESTED; TEST=tests/test_handler_lock_hold_scope.zig; OWNER=transport; UPDATED=2026-04-18
 pub fn snapshotUnderReadLock(allocator: std.mem.Allocator, graph_name: []const u8) !QueryReadSession {
+    // PHASE 1b chokepoint (deferred-hydration hazard). `initIfAvailable`
+    // DEEP-CLONES the primary store's id_maps + node cache into an arena
+    // snapshot and the query reads THAT clone. After a no-snapshot early-ready
+    // open the target graph's IdMap/nodes are EMPTY until first access
+    // (`markPendingHydration` fallback), so cloning before hydration would
+    // snapshot an EMPTY graph and the query would return WRONG (empty) results
+    // — even though the live store still holds the graph on durable pages.
+    // Hydrate the target graph (the only graph this graph_name-locked session
+    // reads) BEFORE acquiring the read lock, matching the guard-before-lock
+    // precedent. Deadlock-free: `ensureGraphHydrated`'s build path
+    // (loadOneGraphFromAdapterFull) takes only leaf mutexes + the store-wide
+    // hydration_build_mutex, never the per-graph adapter rwlock acquired below.
+    getPrimaryGlobalStore(allocator).ensureGraphHydrated(graph_name);
+
     const handle = acquireGraphReadLockTagged(graph_name, .snapshot);
     defer releaseGraphLock(handle);
 
@@ -10369,11 +13544,23 @@ pub fn initGlobalAdapter(allocator: std.mem.Allocator, data_dir: []const u8) !*g
     // above 65536 to exceed that cap for very large working sets in RAM-rich
     // environments. Bad/missing values fall back to the 1024 default.
     const buffer_pool_pages: u32 = @intCast(envU64("GEODE_BUFFER_POOL_PAGES", 1024));
+    // GEODE_BUFFER_POOL_AUTO_SIZE=0 disables the manifest-driven auto-sizing
+    // (grow-to-fit up to 512 MB per shard) so GEODE_BUFFER_POOL_PAGES becomes
+    // an EXACT per-shard pool size. Operator control for RAM-bounded
+    // deployments (auto-size costs up to 8 GB resident on a 16-shard large
+    // store) and the lever the hydration throughput-floor test uses to
+    // reproduce the production pool:store ratio on a CI-sized store.
+    const pool_auto_size = blk: {
+        const raw_z = std.c.getenv("GEODE_BUFFER_POOL_AUTO_SIZE") orelse break :blk true;
+        const raw = std.mem.span(raw_z);
+        break :blk !(std.mem.eql(u8, raw, "0") or std.mem.eql(u8, raw, "false") or std.mem.eql(u8, raw, "no"));
+    };
     const adapter = try graph_storage_adapter.StorageAdapter.init(allocator, data_dir, gs.GraphConfig{
         .data_dir = data_dir,
         .encryption_key = tde_key,
         .sync_mode = sync_mode,
         .buffer_pool_pages = buffer_pool_pages,
+        .buffer_pool_auto_size = pool_auto_size,
     });
     global_adapter = adapter;
 
@@ -10392,6 +13579,11 @@ pub fn initGlobalAdapter(allocator: std.mem.Allocator, data_dir: []const u8) !*g
         const default_max_pending = ckpt_ops *| DEFAULT_CHECKPOINT_MAX_PENDING_MULT;
         adapter.setCheckpointMaxPending(envU64("GEODE_CHECKPOINT_MAX_PENDING", default_max_pending));
     }
+    // GAP-ENT-0038: expose checkpoints_total / pending_bulk_ops on /metrics.
+    // Best-effort: no-op if the runtime-metrics registry is not up yet — the
+    // first coordinator registration (group_commit.registerWithRuntimeMetrics)
+    // retries after server bring-up.
+    adapter.registerCheckpointMetrics();
 
     // Build vtable with type-erased function pointers
     const Dispatch = struct {
@@ -10411,8 +13603,9 @@ pub fn initGlobalAdapter(allocator: std.mem.Allocator, data_dir: []const u8) !*g
         fn createNode(ctx: *anyopaque, graph_name: []const u8, labels: []const []const u8) anyerror!u64 {
             return castAdapter(ctx).createNode(graph_name, labels);
         }
-        fn createEdge(ctx: *anyopaque, graph_name: []const u8, from_id: u64, to_id: u64, label: []const u8) anyerror!u64 {
-            return castAdapter(ctx).createEdge(graph_name, from_id, to_id, label);
+        fn createEdge(ctx: *anyopaque, graph_name: []const u8, from_id: u64, to_id: u64, label: []const u8, public_id: u64) anyerror!u64 {
+            // GAP-ENT-0024: inline public id — the adapter guards public_id != 0.
+            return castAdapter(ctx).createEdgeWithPublicId(graph_name, from_id, to_id, label, public_id);
         }
         fn deleteNode(ctx: *anyopaque, graph_name: []const u8, node_id: u64) anyerror!void {
             return castAdapter(ctx).deleteNode(graph_name, node_id);
@@ -10518,6 +13711,20 @@ var global_store: ?GraphStore = null;
 // left the backing allocator outside the thread-safe path used elsewhere.
 // Zig 0.16: ThreadSafeAllocator removed; allocators are inherently thread-safe.
 var global_store_allocator: ?std.mem.Allocator = null;
+
+// T2b TEST HOOK: allocator override applied at the NEXT global-store (re)init.
+// The production store always uses `global_allocator()`; the hydration merge
+// peak-memory test wraps it in a thread-safe counting allocator to measure
+// live/peak bytes of the hydration build deterministically (VmHWM is polluted
+// by the in-process store build that precedes the measured reopen). The
+// caller must keep the allocator valid until the store is deinitialized and
+// clear the hook afterwards. null = production default.
+var g_test_store_allocator: ?std.mem.Allocator = null;
+
+/// T2b test hook — see `g_test_store_allocator`.
+pub fn setTestGlobalStoreAllocator(a: ?std.mem.Allocator) void {
+    g_test_store_allocator = a;
+}
 threadlocal var g_active_query_read_store: ?*GraphStore = null;
 var g_query_read_session_init_count: std.atomic.Value(u64) = std.atomic.Value(u64).init(0);
 // GAP-0900 (scan-no-clone): per-node counter incremented once for every node
@@ -10528,6 +13735,17 @@ var g_query_read_session_init_count: std.atomic.Value(u64) = std.atomic.Value(u6
 // path serves the query) instead of relying on wall-clock timing.
 var g_clone_nodes_total: std.atomic.Value(u64) = std.atomic.Value(u64).init(0);
 var g_get_nodes_by_labels_count: std.atomic.Value(u64) = std.atomic.Value(u64).init(0);
+// GAP-ENT-0013 (unlabeled count(n) IdMap pushdown) instrumentation.
+// `g_count_nodes_idmap_fast` counts every `countNodesForGraph` call that
+// returned via the O(1) `IdMap.nodeCount()` path. `g_count_nodes_iter_fallback`
+// counts every call that fell back to a per-node iteration — either the
+// unbounded-cache full `nodes.iterator()` walk or the tenant-filtered IdMap
+// uuid walk (`nodeMatchesTenant` per node). A bare unlabeled
+// `MATCH (n) RETURN count(n)` with no tenant filter MUST take the O(1) path:
+// the regression test in tests/test_count_nodes_pushdown_perf.zig asserts the
+// fast counter moves and the fallback counter does not.
+var g_count_nodes_idmap_fast: std.atomic.Value(u64) = std.atomic.Value(u64).init(0);
+var g_count_nodes_iter_fallback: std.atomic.Value(u64) = std.atomic.Value(u64).init(0);
 // PHASE 1b (lazy hydration) instrumentation. `g_loop2_scan_nodes` counts every
 // node iterated by the DEFERRED resident-index scan (`hydrateGraphLoop2`); it
 // MUST be 0 at the "server ready" point (open registers + loads the IdMap but
@@ -10538,6 +13756,104 @@ var g_get_nodes_by_labels_count: std.atomic.Value(u64) = std.atomic.Value(u64).i
 var g_loop2_scan_nodes: std.atomic.Value(u64) = std.atomic.Value(u64).init(0);
 var g_idmap_scan_getprop: std.atomic.Value(u64) = std.atomic.Value(u64).init(0);
 var g_idmap_from_snapshot: std.atomic.Value(u64) = std.atomic.Value(u64).init(0);
+// GAP-ENT-0023 P3 instrumentation: per-PRODUCT counts of loop2 hydration
+// products restored from a counter-gated snapshot (`g_hydration_snapshot_loads`)
+// vs rebuilt by the engine scan because the snapshot was absent / stale /
+// invalid (`g_hydration_scan_fallbacks`). `g_hydration_full_scan_skips` counts
+// graphs whose hydration skipped the O(graph) engine scan ENTIRELY (every
+// node-side product from snapshots, edge side covered, nodes_by_graph rebuilt
+// from the IdMap).
+var g_hydration_snapshot_loads: std.atomic.Value(u64) = std.atomic.Value(u64).init(0);
+var g_hydration_scan_fallbacks: std.atomic.Value(u64) = std.atomic.Value(u64).init(0);
+var g_hydration_full_scan_skips: std.atomic.Value(u64) = std.atomic.Value(u64).init(0);
+// Task 3 (hydration persist-on-complete) instrumentation: completion persists
+// that fully succeeded vs ones that failed LOUDLY (the persist is best-effort;
+// a failure never fails the hydrating query — it only costs the next reopen a
+// re-scan).
+var g_hydration_completion_persists: std.atomic.Value(u64) = std.atomic.Value(u64).init(0);
+var g_hydration_completion_persist_failures: std.atomic.Value(u64) = std.atomic.Value(u64).init(0);
+// GAP hydration fast-scan instrumentation: graphs hydrated via the SEQUENTIAL
+// per-shard stream scan (vs the legacy per-node engine-read walk). The parity
+// tests assert on this to prove which path served a hydration.
+var g_hydration_streaming_scans: std.atomic.Value(u64) = std.atomic.Value(u64).init(0);
+// Task 2: cumulative wall nanos of the stream-scan SCAN phase (parallel
+// per-shard file sweeps) and the single-threaded MERGE phase since the last
+// counter reset. The scaling test asserts the scan phase parallelizes; the
+// merge is single-threaded by design (per-worker accumulation, no lock soup).
+var g_hydration_stream_scan_ns: std.atomic.Value(u64) = std.atomic.Value(u64).init(0);
+var g_hydration_stream_merge_ns: std.atomic.Value(u64) = std.atomic.Value(u64).init(0);
+// GAP-ENT-0023 P3 (review C1) TDD hook — test builds only (the check site is
+// gated on `builtin.is_test`). maxInt = disabled; otherwise the loop2 scan
+// fails with error.TestInjectedHydrationFailure once `seen >= limit`.
+var g_test_hydration_fail_after: std.atomic.Value(u64) = std.atomic.Value(u64).init(std.math.maxInt(u64));
+var g_test_hydration_scan_seen: std.atomic.Value(u64) = std.atomic.Value(u64).init(0);
+
+/// GAP-ENT-0023 P3 (review C1) TDD hook: make the NEXT loop2 hydration scan
+/// fail after `limit` nodes (null = disable). Test builds only — production
+/// builds compile the check out entirely.
+pub fn setTestHydrationFailAfterNodes(limit: ?u64) void {
+    g_test_hydration_scan_seen.store(0, .release);
+    g_test_hydration_fail_after.store(limit orelse std.math.maxInt(u64), .release);
+}
+
+// T2c TDD hook — test builds only (check site gated on `builtin.is_test`):
+// per-shard merge delay in ns applied by the stream-scan merge before it
+// consumes each shard, simulating the at-scale condition (merge far slower
+// than the 16-way scan) that the 128k CI store cannot reproduce naturally.
+// 0 = disabled.
+var g_test_hydration_merge_delay_ns: std.atomic.Value(u64) = std.atomic.Value(u64).init(0);
+
+/// T2c TDD hook: delay the stream-scan merge by `ms` per shard (null =
+/// disable). Test builds only — production builds compile the check out.
+pub fn setTestHydrationMergeDelayMs(ms: ?u64) void {
+    g_test_hydration_merge_delay_ns.store((ms orelse 0) * std.time.ns_per_ms, .release);
+}
+
+/// T2c test-hook check site: per-shard merge delay (no-op in production
+/// builds — the whole body is compiled out).
+inline fn applyTestHydrationMergeDelay() void {
+    if (comptime @import("builtin").is_test) {
+        const delay_ns = g_test_hydration_merge_delay_ns.load(.monotonic);
+        if (delay_ns == 0) return;
+        if (comptime @import("builtin").os.tag == .linux) {
+            const req = std.os.linux.timespec{
+                .sec = @intCast(delay_ns / std.time.ns_per_s),
+                .nsec = @intCast(delay_ns % std.time.ns_per_s),
+            };
+            var rem: std.os.linux.timespec = undefined;
+            _ = std.os.linux.nanosleep(&req, &rem);
+        } else {
+            const req = std.c.timespec{
+                .sec = @intCast(delay_ns / std.time.ns_per_s),
+                .nsec = @intCast(delay_ns % std.time.ns_per_s),
+            };
+            var rem: std.c.timespec = undefined;
+            _ = std.c.nanosleep(&req, &rem);
+        }
+    }
+}
+
+/// T2c: high-water of completed-but-unmerged shard outputs across stream-scan
+/// hydrations since the last `resetLazyHydrateCounters`. The bounded-inflight
+/// tests assert this never exceeds GEODE_HYDRATION_INFLIGHT_SHARDS.
+pub fn hydrationInflightShardHighWater() u64 {
+    return graph_storage_adapter.hydration_scan.hydrationInflightShardHighWater();
+}
+
+// GAP-ENT-0042(a): self-heal flush checkpoints skipped on bounded-acquire
+// timeout / engine failure (see hydrationSelfHealCheckpointSkips).
+var g_selfheal_checkpoint_skips: std.atomic.Value(u64) = std.atomic.Value(u64).init(0);
+
+// Task 3 TDD hook — test builds only (check site gated on `builtin.is_test`):
+// force the hydration-completion persist to fail (simulates a graph-scoped
+// engine-checkpoint / snapshot-write error at the persist call site).
+var g_test_hydration_persist_fail: std.atomic.Value(bool) = std.atomic.Value(bool).init(false);
+
+/// Task 3 TDD hook: make the hydration-completion persist fail while `fail`
+/// is true. Test builds only — production builds compile the check out.
+pub fn setTestHydrationPersistFail(fail: bool) void {
+    g_test_hydration_persist_fail.store(fail, .release);
+}
 // Atomic flag: readers use .acquire to see all writes that happened before
 // the store was published; the writer uses .release after full initialization.
 var initialized: std.atomic.Value(bool) = std.atomic.Value(bool).init(false);
@@ -10571,12 +13887,94 @@ pub fn getNodesByLabelsCallCount() u64 {
     return g_get_nodes_by_labels_count.load(.acquire);
 }
 
+/// GAP-ENT-0013: number of `countNodesForGraph` calls served O(1) from
+/// `IdMap.nodeCount()`. Mirrors the `g_full_scan_count` diagnostic pattern
+/// in src/execution/match_operations.zig.
+pub fn getCountNodesIdMapFastTotal() u64 {
+    return g_count_nodes_idmap_fast.load(.acquire);
+}
+
+/// GAP-ENT-0013: number of `countNodesForGraph` calls that ran a per-node
+/// iteration (the unbounded-cache full `nodes.iterator()` walk OR the
+/// tenant-filtered IdMap uuid walk).
+pub fn getCountNodesIterFallbackTotal() u64 {
+    return g_count_nodes_iter_fallback.load(.acquire);
+}
+
 // PHASE 1b lazy-hydration instrumentation accessors (used by
 // tests/test_startup_lazy_hydrate.zig).
 pub fn resetLazyHydrateCounters() void {
     g_loop2_scan_nodes.store(0, .release);
     g_idmap_scan_getprop.store(0, .release);
     g_idmap_from_snapshot.store(0, .release);
+    g_hydration_snapshot_loads.store(0, .release);
+    g_hydration_scan_fallbacks.store(0, .release);
+    g_hydration_full_scan_skips.store(0, .release);
+    g_hydration_completion_persists.store(0, .release);
+    g_hydration_completion_persist_failures.store(0, .release);
+    g_hydration_streaming_scans.store(0, .release);
+    g_hydration_stream_scan_ns.store(0, .release);
+    g_hydration_stream_merge_ns.store(0, .release);
+    graph_storage_adapter.hydration_scan.resetHydrationInflightShardHighWater();
+}
+
+/// GAP hydration fast-scan: graphs hydrated via the sequential per-shard
+/// stream scan since the last counter reset.
+pub fn hydrationStreamingScanCount() u64 {
+    return g_hydration_streaming_scans.load(.acquire);
+}
+
+/// Task 2: cumulative SCAN-phase wall nanos (parallel per-shard sweeps) of
+/// stream-scan hydrations since the last counter reset.
+pub fn hydrationStreamScanNanos() u64 {
+    return g_hydration_stream_scan_ns.load(.acquire);
+}
+
+/// Task 2: cumulative MERGE-phase wall nanos (single-threaded product
+/// inserts) of stream-scan hydrations since the last counter reset.
+pub fn hydrationStreamMergeNanos() u64 {
+    return g_hydration_stream_merge_ns.load(.acquire);
+}
+
+/// GAP-ENT-0023 P3: number of loop2 hydration PRODUCTS restored from
+/// counter-gated snapshots (counters / label postings / merge index — up to 3
+/// per hydrated graph).
+pub fn hydrationSnapshotLoadCount() u64 {
+    return g_hydration_snapshot_loads.load(.acquire);
+}
+
+/// GAP-ENT-0023 P3: number of loop2 hydration products rebuilt by the engine
+/// scan because their snapshot was absent, counter-stale, or invalid.
+pub fn hydrationScanFallbackCount() u64 {
+    return g_hydration_scan_fallbacks.load(.acquire);
+}
+
+/// GAP-ENT-0023 P3: number of graph hydrations that skipped the O(graph)
+/// engine scan entirely (all products from snapshots).
+pub fn hydrationFullScanSkipCount() u64 {
+    return g_hydration_full_scan_skips.load(.acquire);
+}
+
+/// Task 3: number of hydration-completion persists that fully succeeded
+/// (graph-scoped engine checkpoint + IdMap snapshot + loop2 product snapshots
+/// written immediately after a successful first-touch hydration).
+pub fn hydrationCompletionPersistCount() u64 {
+    return g_hydration_completion_persists.load(.acquire);
+}
+
+/// Task 3: number of hydration-completion persists that FAILED (logged
+/// loudly, hydration itself unaffected; the next reopen re-scans).
+pub fn hydrationCompletionPersistFailureCount() u64 {
+    return g_hydration_completion_persist_failures.load(.acquire);
+}
+
+/// GAP-ENT-0042(a): number of hydration self-heal flush checkpoints that were
+/// SKIPPED (bounded-acquire timeout or engine failure) instead of wedging the
+/// hydration chokepoint. The repairs themselves are already applied to the
+/// engine when this fires; only the page-flush/WAL-truncate is deferred to
+/// the next checkpoint. Test observability for the bounded self-heal flush.
+pub fn hydrationSelfHealCheckpointSkips() u64 {
+    return g_selfheal_checkpoint_skips.load(.acquire);
 }
 
 /// Number of nodes walked by the DEFERRED resident-index scan so far. 0 at the
@@ -10966,11 +14364,24 @@ fn persistenceLoop() void {
                     // GAP-0900 Layer-2: LIGHT — a runtime checkpoint must stay
                     // O(dirty); a full O(graph) checkpoint here stalls a large
                     // ingest for minutes under the exclusive store lock.
-                    adapter.checkpointAllLight() catch |err| {
+                    if (adapter.checkpointAllLight()) |_| {
+                        // GAP-ENT-0038: this legacy CDC-WAL-triggered branch was
+                        // completely SILENT on success while resetting the
+                        // deferred cadence state (pending ops zeroed, clock
+                        // restarted), so during the 14.27M edge phase (edge
+                        // creates feed notifyMutation/dirty) it did ALL the
+                        // checkpointing at a ~33 s cadence with zero log lines —
+                        // which was misread as "auto-checkpoint never re-armed".
+                        // Log it like the deferred trigger so the checkpoint
+                        // sawtooth is visible whichever driver wins.
+                        log.info("periodic WAL-triggered light checkpoint fired", &.{
+                            Attr.uint("checkpoints_total", adapter.checkpointsTotal()),
+                        });
+                    } else |err| {
                         log.err("per-graph storage checkpoint failed", &.{
                             Attr.string("error", @errorName(err)),
                         });
-                    };
+                    }
                 } else {
                     // Fallback: global shared lock
                     g_store_rwlock.lockSharedUncancelable(std.Io.Threaded.global_single_threaded.io());
@@ -11011,6 +14422,12 @@ fn persistSplitPhase(store_ptr: *GraphStore) void {
             });
             return;
         };
+        // GAP-ENT-0038: like the WAL-triggered branch above, this dirty-flush
+        // backstop silently resets the deferred cadence state — make it
+        // visible so operators can account for every checkpoint driver.
+        log.info("periodic dirty-flush light checkpoint fired", &.{
+            Attr.uint("checkpoints_total", adapter.checkpointsTotal()),
+        });
 
         // Remove any stale sidecar files after the checkpoint lands.
         // Use per-graph read locks so only one graph is locked at a time.
@@ -11305,8 +14722,12 @@ fn getPrimaryGlobalStore(allocator: std.mem.Allocator) *GraphStore {
 
     syncGlobalAdapterForDataDir(last_data_dir);
 
-    global_store_allocator = global_allocator();
+    global_store_allocator = g_test_store_allocator orelse global_allocator();
     global_store = GraphStore.init(global_store_allocator.?) catch @panic("OOM: failed to initialize global graph store");
+    // GAP-0065 FIX D: a fresh store instance has not yet run its clean-shutdown
+    // flush — reset the per-instance latch so `deinitGlobalStoreEx` performs the
+    // durability checkpoint if `flushForCleanShutdown` was never called for it.
+    g_clean_shutdown_flushed.store(false, .release);
     // Set data_dir for per-graph storage
     if (last_data_dir) |dir| {
         global_store.?.data_dir = dir;
@@ -11416,6 +14837,82 @@ pub fn deinitGlobalStoreForTestCrash() void {
     deinitGlobalStoreEx(false);
 }
 
+/// TEST-ONLY: simulate a HARD process kill (SIGKILL / power loss) for
+/// WAL-durability crash tests (gap 0026). Drops every global reference
+/// WITHOUT closing, checkpointing, or freeing the store/adapter — exactly
+/// the on-disk state a hard kill leaves behind. The abandoned objects LEAK
+/// (memory + fds), so the crashed phase MUST have been initialised with a
+/// non-leak-checking allocator (e.g. the std.heap page-backed allocator),
+/// never `std.testing.allocator`.
+///
+/// `deinitGlobalStoreForTestCrash` is NOT sufficient for WAL-durability
+/// tests: it still runs `adapter.checkpointAll()` inside
+/// `deinitGlobalAdapter`, which flushes dirty pages and makes even
+/// deferred-WAL commits durable — masking exactly the loss window under
+/// test. Group-commit coordinator threads are stopped first so no
+/// background apply touches the abandoned adapter (or its WAL files, which
+/// the caller may be about to truncate to simulate an unsynced tail).
+pub fn abandonGlobalStoreForCrashSim() void {
+    const group_commit = @import("storage/group_commit.zig");
+    group_commit.shutdownAllCoordinators();
+    global_store = null;
+    global_store_allocator = null;
+    initialized.store(false, .release);
+    global_adapter = null;
+    global_vtable = null;
+}
+
+// CANARY: REQ=REQ-STARTUP-COLDOPEN-NOTAIL-001; FEATURE="NoTailCleanShutdown"; ASPECT=DurabilityFlushBeforeWatchdog; STATUS=TESTED; TEST=tests/test_startup_lazy_hydrate.zig; OWNER=storage; UPDATED=2026-07-07
+/// GAP-0065 FIX D: latched once the durability-critical clean-shutdown FULL
+/// checkpoint (per-shard flush + WAL truncate-to-frontier + the FIX-B idmap /
+/// loop2 snapshot writes) has completed for the CURRENT store instance via
+/// `flushForCleanShutdown`. When set, `deinitGlobalStoreEx(true)` SKIPS its own
+/// `saveToFileEx(false)` so the bounded teardown cannot re-open a
+/// (checkpoint_epoch, covered_lsn) window that would invalidate the just-written
+/// snapshots (a second checkpoint bumps the engine epoch; if the teardown
+/// watchdog then cut it short before re-writing the snapshots, the next reopen
+/// would REJECT them and re-scan). Reset when a new global store is initialised
+/// (`getPrimaryGlobalStore`) so it is strictly per-instance.
+var g_clean_shutdown_flushed: std.atomic.Value(bool) = std.atomic.Value(bool).init(false);
+
+/// GAP-0065 FIX D: run the durability-critical portion of a clean shutdown —
+/// the FULL engine checkpoint (`adapter.checkpointAll()` → per-shard
+/// `engine.checkpoint()` flushes dirty pages + truncates the engine WAL to the
+/// durable frontier, leaving NO committed tail when writers are quiesced) AND
+/// the FIX-B idmap + loop2 hydration snapshot writes, all stamped at the
+/// post-checkpoint (checkpoint_epoch, covered_lsn).
+///
+/// The server must call this in the UNBOUNDED shutdown region — after the
+/// connection drain (no writers left to race the checkpoint) and BEFORE the
+/// gap-0039 teardown watchdog is armed — so however long the O(graph) checkpoint
+/// takes at 14.27M, the watchdog cannot force-exit mid-checkpoint. With no tail
+/// and snapshots stamped at the truncated-WAL manifest, the next reopen's
+/// epoch/covered gate RELOADS them (O(1) idmap + O(snapshot) loop2) instead of
+/// rejecting a WAL tail and paying the whole-graph re-scan every restart.
+///
+/// On success sets `g_clean_shutdown_flushed` so the subsequent
+/// `deinitGlobalStore` SKIPS its redundant `saveToFileEx(false)` (which would
+/// bump the epoch again and, if the bounded teardown cut it short before
+/// re-stamping the snapshots, leave them stale → reopen REJECT). Idempotent +
+/// best-effort with the same guards as deinit (real adapter + non-empty data
+/// dir). Crash-safety is UNCHANGED: an UNCLEAN shutdown (kill -9) never runs
+/// this, leaving the committed WAL tail for recovery to replay → the reopen gate
+/// correctly REJECTS the (now-uncovered) snapshots and safely re-scans, with no
+/// data loss (G1/G3 — never serve a snapshot across a committed tail).
+pub fn flushForCleanShutdown() void {
+    if (!(initialized.load(.acquire) and global_store != null)) return;
+    if (getGlobalAdapter() == null or global_store.?.data_dir.len == 0) return;
+    global_store.?.saveToFileEx(false) catch |err| {
+        // Do NOT set the latch: leave the (retryable) checkpoint for the deinit
+        // path so a flush failure never downgrades durability.
+        log.err("GAP-0065 clean-shutdown flush failed; teardown will retry the checkpoint", &.{
+            Attr.string("error", @errorName(err)),
+        });
+        return;
+    };
+    g_clean_shutdown_flushed.store(true, .release);
+}
+
 fn deinitGlobalStoreEx(clean: bool) void {
     if (initialized.load(.acquire) and global_store != null) {
         // CLEAN shutdown: persist the IdMap snapshot (final checkpoint + snapshot
@@ -11429,11 +14926,25 @@ fn deinitGlobalStoreEx(clean: bool) void {
         // pre-snapshot-write behavior (deinit did not save for such stores) while
         // preserving the real-data-dir win: a populated store still writes the snapshot.
         if (clean and getGlobalAdapter() != null and global_store.?.data_dir.len > 0) {
-            global_store.?.saveToFileEx(false) catch |err| {
-                log.err("clean-shutdown IdMap snapshot persist failed", &.{
-                    Attr.string("error", @errorName(err)),
-                });
-            };
+            if (g_clean_shutdown_flushed.load(.acquire)) {
+                // GAP-0065 FIX D: the durability-critical FULL checkpoint +
+                // FIX-B snapshot write already completed UNBOUNDED
+                // (`flushForCleanShutdown`, before the teardown watchdog armed).
+                // Do NOT re-run saveToFileEx here: it is now under the bounded
+                // watchdog and re-serialising every graph's loop2 snapshots is
+                // O(graph) (minutes at 14.27M) — it would burn the whole teardown
+                // budget, and any checkpoint work it triggers could re-advance the
+                // engine epoch. The store is already durable + reload-ready; the
+                // no-op `adapter.checkpointAll()` inside `deinitGlobalAdapter`
+                // stays as a belt-and-suspenders for any (server-drained-away) late
+                // dirty. Just free memory below.
+            } else {
+                global_store.?.saveToFileEx(false) catch |err| {
+                    log.err("clean-shutdown IdMap snapshot persist failed", &.{
+                        Attr.string("error", @errorName(err)),
+                    });
+                };
+            }
         }
         global_store.?.deinit();
         global_store = null;
@@ -11823,10 +15334,26 @@ test "createNodeWithId and createEdgeWithId survive adapter-backed reload" {
     var node_id_buf: [16]u8 = undefined;
     try testing.expectEqualStrings(encodePersistedPublicId(&node_id_buf, 1001), persisted_node_id.string);
 
-    const persisted_edge_id = try adapter.getEdgeProperty("default", node_slot, edge_slot, INTERNAL_EDGE_ID_PROPERTY_KEY, testing.allocator) orelse return error.PropertyNotFound;
-    defer graph_storage_adapter.freeOwnedStorageProperty(testing.allocator, persisted_edge_id);
-    var edge_id_buf: [16]u8 = undefined;
-    try testing.expectEqualStrings(encodePersistedPublicId(&edge_id_buf, 9001), persisted_edge_id.string);
+    // GAP-ENT-0024: NEW edges carry the public id INLINE in the durable
+    // adjacency entry (v2 blocks) and write NO `__geode_internal_edge_id`
+    // property (that was one ≥8 KB props page per edge).
+    const persisted_edge_id = try adapter.getEdgeProperty("default", node_slot, edge_slot, INTERNAL_EDGE_ID_PROPERTY_KEY, testing.allocator);
+    if (persisted_edge_id) |leaked_prop| {
+        graph_storage_adapter.freeOwnedStorageProperty(testing.allocator, leaked_prop);
+        return error.LegacyEdgeIdPropertyStillWritten;
+    }
+    {
+        var adj_iter = try adapter.iterateOutgoingEdges("default", node_slot, testing.allocator);
+        defer adj_iter.deinit();
+        var found_inline = false;
+        while (try adj_iter.next()) |entry| {
+            if (entry.edge_id == edge_slot) {
+                try testing.expectEqual(@as(u64, 9001), entry.public_id);
+                found_inline = true;
+            }
+        }
+        try testing.expect(found_inline);
+    }
 
     const graph_uuid = GraphStore.getGraphUuid("default") orelse return error.GraphUuidUnavailable;
     // Per-graph artifact directory layout was consolidated to
@@ -11846,6 +15373,16 @@ test "createNodeWithId and createEdgeWithId survive adapter-backed reload" {
 
     try store.loadFromFile();
 
+    // EARLY-READY (H3): loadFromFile now DEFERS the full per-graph build (loop1
+    // IdMap + loop2 resident caches) to lazy first-access even when no IdMap
+    // snapshot exists, so the resident node/edge caches are empty at this point
+    // and the raw (non-hydrating) getNodePtr/getEdgePtr accessors would miss.
+    // Trigger the graph's hydration before the resident by-id reads — mirroring
+    // the snapshot-deferred contract (see tests/test_startup_lazy_hydrate.zig,
+    // which likewise reads by id only after a graph-scoped access hydrates).
+    // The survival guarantee is that the data is fully recoverable after reload.
+    store.ensureGraphHydrated("default");
+
     const node = store.getNodePtr(1001) orelse return error.NodeNotFound;
     const node_name = node.properties.get("name") orelse return error.PropertyNotFound;
     try testing.expectEqualStrings("replicated", node_name.String);
@@ -11855,6 +15392,165 @@ test "createNodeWithId and createEdgeWithId survive adapter-backed reload" {
     try testing.expectEqual(@as(u64, 1002), edge.to_id);
     const edge_weight = edge.properties.get("weight") orelse return error.PropertyNotFound;
     try testing.expectEqual(@as(i64, 3), edge_weight.Int);
+}
+
+test "loadOneGraphFromAdapterFull: sorted-by-prop_head loop1 matches legacy per-node IdMap reconstruction" {
+    const gs = @import("graph_storage");
+    const allocator = testing.allocator;
+
+    var tmp = testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const path = try tmpDirRealpathAlloc(allocator, &tmp.sub_path);
+    defer allocator.free(path);
+
+    // Small page_size forces node_b's internal-id property past the head
+    // page, exercising the multi-page prop chain through the by-head fetch.
+    const adapter = try graph_storage_adapter.StorageAdapter.init(allocator, path, gs.GraphConfig{
+        .page_size = 256,
+        .buffer_pool_pages = 512,
+    });
+    defer adapter.deinit();
+
+    const graph = "coldopen_loop1_test";
+    const key = INTERNAL_NODE_ID_PROPERTY_KEY;
+
+    // Persisted public ids must round-trip through parsePersistedPublicId
+    // (hex-encoded, matching encodePersistedPublicId), not arbitrary text.
+    var id_buf_a: [16]u8 = undefined;
+    var id_buf_b: [16]u8 = undefined;
+    var id_buf_d: [16]u8 = undefined;
+
+    // node_a: normal node with the internal-id property set.
+    const node_a = try adapter.createNode(graph, &[_][]const u8{"L"});
+    try adapter.setNodeProperty(graph, node_a, key, .{ .String = encodePersistedPublicId(&id_buf_a, 1001) });
+
+    // node_b: multi-page prop chain (many props before the internal id).
+    const node_b = try adapter.createNode(graph, &[_][]const u8{"L"});
+    var pi: usize = 0;
+    while (pi < 12) : (pi += 1) {
+        const pk = try std.fmt.allocPrint(allocator, "extra_prop_{d:0>2}", .{pi});
+        defer allocator.free(pk);
+        try adapter.setNodeProperty(graph, node_b, pk, .{ .String = "val_0123456789abcdefghij" });
+    }
+    try adapter.setNodeProperty(graph, node_b, key, .{ .String = encodePersistedPublicId(&id_buf_b, 1002) });
+
+    // node_c: NO internal-id property at all -> must be skipped (no legacy
+    // map present in this standalone GraphStore, since data_dir is "").
+    const node_c = try adapter.createNode(graph, &[_][]const u8{"L"});
+
+    // node_d: another normal node, on a different shard than node_c.
+    const node_d = try adapter.createNode(graph, &[_][]const u8{"L"});
+    try adapter.setNodeProperty(graph, node_d, key, .{ .String = encodePersistedPublicId(&id_buf_d, 1004) });
+
+    // Confirm the artifact actually spans >=2 shards.
+    try testing.expect(gs.shard_count.shardOfNode(node_a) != gs.shard_count.shardOfNode(node_b));
+
+    // ---- GOLDEN: legacy per-node getNodeProperty reconstruction (no sort,
+    // raw slot-scan order) — the pre-change behavior this change must match. ----
+    const golden_entries = try adapter.scanAllNodes(graph, allocator);
+    defer allocator.free(golden_entries);
+
+    var golden = std.AutoHashMap(u128, u64).init(allocator); // uuid -> slot_id
+    defer golden.deinit();
+    var golden_skipped: u64 = 0;
+    for (golden_entries) |entry| {
+        const maybe_stored = try adapter.getNodeProperty(graph, entry.slot_id, key, allocator);
+        var matched_uuid: ?u64 = null;
+        if (maybe_stored) |stored_prop| {
+            defer graph_storage_adapter.freeOwnedStorageProperty(allocator, stored_prop);
+            switch (stored_prop) {
+                .string => |text| {
+                    if (parsePersistedPublicId(text)) |parsed| matched_uuid = parsed;
+                },
+                else => {},
+            }
+        }
+        if (matched_uuid) |u| {
+            try golden.put(@as(u128, u), entry.slot_id);
+        } else {
+            golden_skipped += 1;
+        }
+    }
+    try testing.expectEqual(@as(usize, 1), golden_skipped); // only node_c
+    try testing.expectEqual(@as(usize, 3), golden.count()); // a, b, d
+
+    // ---- ACTUAL: run the function under test (sorted loop1 + by-head fetch). ----
+    var store = try GraphStore.init(allocator);
+    defer store.deinit();
+    _ = try store.loadOneGraphFromAdapterFull(adapter, graph);
+
+    const id_map = store.getIdMap(graph) orelse return error.IdMapNotLoaded;
+
+    var golden_it = golden.iterator();
+    var matched: u64 = 0;
+    while (golden_it.next()) |e| {
+        const slot = id_map.nodeSlot(e.key_ptr.*) orelse return error.NodeSlotMappingMissing;
+        try testing.expectEqual(e.value_ptr.*, slot);
+        matched += 1;
+    }
+    try testing.expectEqual(golden.count(), matched);
+
+    // node_c must be absent from the rebuilt IdMap (the skip path).
+    try testing.expect(id_map.nodeUuid(node_c) == null);
+
+    // The IdMap must not contain any extra mappings beyond the golden set.
+    var idmap_uuid_it = id_map.nodeUuidIterator();
+    var idmap_count: u64 = 0;
+    while (idmap_uuid_it.next()) |_| idmap_count += 1;
+    try testing.expectEqual(golden.count(), idmap_count);
+}
+
+test "loadOneGraphFromAdapterFull: countGraphLabel (label-count fast path) is exact after rebuild" {
+    const gs = @import("graph_storage");
+    const allocator = testing.allocator;
+
+    var tmp = testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const path = try tmpDirRealpathAlloc(allocator, &tmp.sub_path);
+    defer allocator.free(path);
+
+    const adapter = try graph_storage_adapter.StorageAdapter.init(allocator, path, gs.GraphConfig{
+        .page_size = 4096,
+        .buffer_pool_pages = 512,
+    });
+    defer adapter.deinit();
+
+    const graph = "labelcount_rebuild_test";
+    const key = INTERNAL_NODE_ID_PROPERTY_KEY;
+
+    // N nodes carry label "L"; the first M of them ALSO carry label "M".
+    const N: u64 = 7;
+    const M: u64 = 3;
+    var i: u64 = 0;
+    while (i < N) : (i += 1) {
+        const public_id: u64 = 2001 + i;
+        const labels: []const []const u8 = if (i < M)
+            &[_][]const u8{ "L", "M" }
+        else
+            &[_][]const u8{"L"};
+        const slot = try adapter.createNode(graph, labels);
+        var id_buf: [16]u8 = undefined;
+        try adapter.setNodeProperty(graph, slot, key, .{ .String = encodePersistedPublicId(&id_buf, public_id) });
+    }
+
+    // Rebuild into a fresh resident store — this is exactly the loop2 path
+    // taken by cold-open / lazy hydration (ensureGraphHydrated ->
+    // loadOneGraphFromAdapterFull). label_index and label_counts_by_graph
+    // both start empty here, mirroring a first-touch hydration.
+    var store = try GraphStore.init(allocator);
+    defer store.deinit();
+    _ = try store.loadOneGraphFromAdapterFull(adapter, graph);
+
+    // Cross-check: the actual MATCH (n:L) scan (label posting list) sees N.
+    const l_posting = store.getNodesByLabel(graph, "L") orelse return error.LPostingMissing;
+    try testing.expectEqual(@as(usize, N), l_posting.len);
+    const m_posting = store.getNodesByLabel(graph, "M") orelse return error.MPostingMissing;
+    try testing.expectEqual(@as(usize, M), m_posting.len);
+
+    // The label-count fast path (count(:Label)) MUST equal the scan count,
+    // and must NOT double-count (== N, not 2N).
+    try testing.expectEqual(@as(usize, N), store.countGraphLabel(graph, "L"));
+    try testing.expectEqual(@as(usize, M), store.countGraphLabel(graph, "M"));
 }
 
 test "rollback removes adapter-backed state before reload" {

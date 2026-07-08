@@ -218,6 +218,20 @@ pub const activeRlsPoliciesConfigured = match_operations.activeRlsPoliciesConfig
 // H3-P3: planner ordered-scan fast-path hit counter (test path signal).
 pub const getOrderedScanFastPathHits = match_operations.getOrderedScanFastPathHits;
 pub const resetOrderedScanFastPathHits = match_operations.resetOrderedScanFastPathHits;
+// GAP (write-path OOM, 2026-07-04): engine-direct point-write vs legacy
+// write-scan path counters (routing-table test signals).
+pub const getPointWriteFastPathTotal = match_operations.getPointWriteFastPathTotal;
+pub const resetPointWriteFastPathTotal = match_operations.resetPointWriteFastPathTotal;
+pub const getLegacyWriteScanTotal = match_operations.getLegacyWriteScanTotal;
+pub const resetLegacyWriteScanTotal = match_operations.resetLegacyWriteScanTotal;
+// GAP-ENT-0043 T1: index-served GROUP BY/DISTINCT/count-by-value fast path
+// (routing-table test signals: index-served == 1 AND rows-materialized == 0).
+pub const indexServedGroupByFastPath = match_operations.indexServedGroupByFastPath;
+pub const getIndexServedAggregateTotal = match_operations.getIndexServedAggregateTotal;
+pub const resetIndexServedAggregateTotal = match_operations.resetIndexServedAggregateTotal;
+// GAP-ENT-0055: O(1) filtered-count-by-posting-length routing counter.
+pub const getFilteredCountIndexServedTotal = match_operations.getFilteredCountIndexServedTotal;
+pub const resetFilteredCountIndexServedTotal = match_operations.resetFilteredCountIndexServedTotal;
 
 // Re-export statement handler functions for backward compatibility (M1 Phase 7 extraction)
 pub const executeShow = statement_handlers.executeShow;
@@ -3011,6 +3025,39 @@ pub fn executeWithClauseWithGroupBy(allocator: std.mem.Allocator, input_result: 
     return executeWithClauseWithGroupByAndParams(allocator, input_result, with_clause, group_by, having, &.{}, &.{});
 }
 
+// GAP-ENT-0055: resolve a GROUP BY key that references a projection ALIAS.
+//
+// The grouping loop below evaluates each `GROUP BY` key against the INPUT
+// (pre-projection) columns. `MATCH (n:T) RETURN n.source AS s ... GROUP BY s`
+// leaves `GROUP BY s` a bare Ident; `s` is not an input column (the input binds
+// `n`), so it evaluated to Null and collapsed every row into ONE null group — a
+// silent wrong result on the fallback (planned_read / legacy) path for any
+// alias-grouped shape the aggregate fast paths decline (ORDER BY, HAVING, …).
+//
+// Fix: when the key is a bare Ident that is NOT already a real input column but
+// DOES name a projection alias, substitute that item's expression (`n.source`).
+// The input-column precedence check keeps a chained-query input column named the
+// same as an alias resolving exactly as before — this only changes the
+// previously-broken "alias with no matching input column" case.
+fn resolveGroupByKeyThroughAlias(
+    key_expr: ast.Expr,
+    with_items: []const ast.ReturnItem,
+    input_columns: []const []const u8,
+) ast.Expr {
+    const ident = switch (key_expr) {
+        .Ident => |id| id.orig,
+        else => return key_expr,
+    };
+    for (input_columns) |c| {
+        if (std.mem.eql(u8, c, ident)) return key_expr; // real input column → eval resolves it
+    }
+    for (with_items) |item| {
+        const a = item.alias orelse continue;
+        if (std.mem.eql(u8, a, ident)) return item.expr;
+    }
+    return key_expr;
+}
+
 /// Execute WITH clause with optional GROUP BY aggregation and query parameter bindings
 pub fn executeWithClauseWithGroupByAndParams(allocator: std.mem.Allocator, input_result: ExecutionResult, with_clause: ast.WithClause, group_by: ?ast.GroupBy, having: ?ast.Expr, param_names: []const []const u8, param_values: []const eval.Value) !ExecutionResult {
     // CANARY(memory-safety): Validate input_result structure
@@ -3077,8 +3124,11 @@ pub fn executeWithClauseWithGroupByAndParams(allocator: std.mem.Allocator, input
             var key_aw: std.Io.Writer.Allocating = try std.Io.Writer.Allocating.initCapacity(allocator, 128);
             errdefer key_aw.deinit();
             const key_writer = &key_aw.writer;
-            for (gb.keys, 0..) |key_expr, k| {
+            for (gb.keys, 0..) |raw_key_expr, k| {
                 if (k > 0) try key_writer.writeAll("|");
+                // GAP-ENT-0055: follow a projection alias (`GROUP BY s`) to its
+                // underlying expression before evaluating against the input row.
+                const key_expr = resolveGroupByKeyThroughAlias(raw_key_expr, with_items, input_result.columns);
                 const key_val = eval.evalExpr(allocator, key_expr, env) catch Value{ .Null = {} };
                 // Serialize key value to string
                 switch (key_val) {

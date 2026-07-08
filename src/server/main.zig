@@ -759,6 +759,125 @@ fn handleShutdownSignal(_: posix.SIG) callconv(.c) void {
     g_shutdown_requested.store(true, .release);
 }
 
+/// GAP-0065 FIX D liveness: set true once the durability flush
+/// (`graph_store.flushForCleanShutdown`) has returned, so the first-stage flush
+/// watchdog disarms instead of force-exiting a completed shutdown.
+var g_shutdown_flush_done = std.atomic.Value(bool).init(false);
+
+fn compat_sleepMs(ms: u64) void {
+    if (comptime @import("builtin").os.tag == .linux) {
+        var req = std.os.linux.timespec{
+            .sec = @intCast(ms / 1000),
+            .nsec = @intCast((ms % 1000) * std.time.ns_per_ms),
+        };
+        var rem: std.os.linux.timespec = undefined;
+        _ = std.os.linux.nanosleep(&req, &rem);
+    } else {
+        var req = std.c.timespec{
+            .sec = @intCast(ms / 1000),
+            .nsec = @intCast((ms % 1000) * std.time.ns_per_ms),
+        };
+        var rem: std.c.timespec = undefined;
+        _ = std.c.nanosleep(&req, &rem);
+    }
+}
+
+/// Gap 0039: post-flush teardown watchdog. SIGTERM shutdown used to wedge
+/// FOREVER when a connection handler for an abandoned peer (client vanished
+/// without CONNECTION_CLOSE) never unwound: the external thread-pool's
+/// `deinit` gives up draining after `deinit_timeout_ns` but then calls
+/// `joinAllWorkers()` — an unbounded join — and the per-connection
+/// `waitForAllStreamsDrained` is likewise unbounded, so ONE stuck stream
+/// handler wedged the whole LIFO defer unwind (observed live: >= 10 min at
+/// ~1.75 cores, listener still answering handshakes, until SIGKILL).
+///
+/// This tight watchdog is armed AFTER the durability flush / WAL checkpoint has
+/// completed, so by the time it can fire, everything durable is already on disk
+/// and WAL replay makes the next open clean. It then gives the remaining
+/// teardown (pool joins, store free, transport deinit) a bounded budget and
+/// force-exits rc=0 if the budget lapses — a stalled QUIC handler must never
+/// turn a graceful shutdown into a SIGKILL-only hang. (GAP-0065 FIX D moved the
+/// FULL checkpoint before this arm point to guarantee the reload snapshots are
+/// written; its own — much more generous — first-stage watchdog,
+/// `shutdownFlushWatchdogMain`, bounds that checkpoint against a lock wedge so
+/// the shutdown can never hang forever.)
+fn shutdownTeardownWatchdogMain(budget_ms: u64) void {
+    var remaining = budget_ms;
+    while (remaining > 0) {
+        const slice = @min(remaining, 1000);
+        compat_sleepMs(slice);
+        remaining -= slice;
+    }
+    std.debug.print(
+        "[shutdown] teardown watchdog: forcing process exit rc=0 after {d}ms — a connection handler or pool join is wedged (gap 0039); the data flush completed before the watchdog was armed\n",
+        .{budget_ms},
+    );
+    std.process.exit(0);
+}
+
+/// Spawn the detached gap-0039 teardown watchdog. Best-effort: if the thread
+/// cannot be spawned we proceed with the (possibly unbounded) teardown rather
+/// than failing the shutdown path.
+fn armShutdownTeardownWatchdog(budget_ms: u64) void {
+    const t = std.Thread.spawn(.{}, shutdownTeardownWatchdogMain, .{budget_ms}) catch |err| {
+        log.warn("Failed to arm shutdown teardown watchdog; teardown is unbounded this run", &.{
+            Attr.string("error", @errorName(err)),
+        });
+        return;
+    };
+    t.detach();
+}
+
+/// GAP-0065 FIX D liveness: FIRST-STAGE shutdown watchdog, armed BEFORE the
+/// durability flush (`graph_store.flushForCleanShutdown`). The flush runs the
+/// FULL checkpoint (`checkpointAll` → `checkpointOneGraph`) whose `tryLock`
+/// retry on `mg.rwlock` has NO deadline — it spins unbounded if a genuinely
+/// wedged connection handler still holds the lock (`forceCloseConnections` only
+/// flips a flag; quic.zig relies on this watchdog for that case). Because FIX D
+/// runs that flush before the gap-0039 teardown watchdog is armed, a wedge would
+/// otherwise HANG THE PROCESS FOREVER (only external SIGKILL ends it). This
+/// watchdog force-exits rc=0 if the flush has not completed within a GENEROUS
+/// budget (default 30 min, `GEODE_CLEAN_SHUTDOWN_FLUSH_TIMEOUT_MS`) — comfortably
+/// longer than a legitimate full 14.27M checkpoint + snapshot write, so a normal
+/// clean shutdown is NEVER prematurely killed; a genuine deadlock still
+/// terminates → the next reopen replays the WAL tail and rebuilds (no data
+/// loss, the pre-FIX-D safety net restored). It disarms the instant the flush
+/// completes (`g_shutdown_flush_done`) and emits a periodic heartbeat so a
+/// long-but-legitimate flush is visible instead of a silent hang.
+fn shutdownFlushWatchdogMain(budget_ms: u64) void {
+    const tick_ms: u64 = 30_000;
+    var elapsed: u64 = 0;
+    while (elapsed < budget_ms) {
+        const slice = @min(tick_ms, budget_ms - elapsed);
+        compat_sleepMs(slice);
+        elapsed += slice;
+        if (g_shutdown_flush_done.load(.acquire)) return; // flush completed → disarm
+        std.debug.print(
+            "[shutdown] durability flush still in progress ({d}s / {d}s budget, GEODE_CLEAN_SHUTDOWN_FLUSH_TIMEOUT_MS) — large-graph checkpoint or a wedged lock holder\n",
+            .{ elapsed / 1000, budget_ms / 1000 },
+        );
+    }
+    if (g_shutdown_flush_done.load(.acquire)) return;
+    std.debug.print(
+        "[shutdown] durability flush exceeded {d}ms budget (GEODE_CLEAN_SHUTDOWN_FLUSH_TIMEOUT_MS) — a graph-lock holder is wedged; force-exiting rc=0. The next reopen replays the WAL tail and rebuilds (no data loss).\n",
+        .{budget_ms},
+    );
+    std.process.exit(0);
+}
+
+/// Spawn the detached GAP-0065 first-stage flush watchdog. Best-effort: if the
+/// thread cannot be spawned we proceed with the (unbounded) flush rather than
+/// failing shutdown — matching `armShutdownTeardownWatchdog`.
+fn armShutdownFlushWatchdog(budget_ms: u64) void {
+    const t = std.Thread.spawn(.{}, shutdownFlushWatchdogMain, .{budget_ms}) catch |err| {
+        log.warn("Failed to arm shutdown flush watchdog; the durability flush is unbounded this run", &.{
+            Attr.string("error", @errorName(err)),
+        });
+        return;
+    };
+    t.detach();
+}
+
 // Removed: ServerState struct now in server_state module (M3.2 Phase 3 ServerState extraction)
 // Original: ServerState struct definition (~107 lines, lines 145-252)
 // Extracted to server_state.zig to enable better modularization and shared access
@@ -1372,10 +1491,33 @@ pub fn main() !void {
         server_init.wireGpsPolicyHooks(gpa, agm, &global_policy_catalog);
     } else {
         user_mgmt.setPersistentUserResolver(null);
-        user_mgmt.ensureDefaultUser(gpa) catch |err| {
-            log.err("Failed to create default users", &.{Attr.string("error", @errorName(err))});
-            return err;
-        };
+        // Review-0016 Important-3 (2026-07-01 incident residual): this branch
+        // runs when NO AuthGraphManager is active (AGM.init threw, HMAC key
+        // unavailable, or the store fell back to in-memory). Historically it
+        // unconditionally seeded an IN-MEMORY admin from GEODE_ADMIN_PASSWORD —
+        // so on a data dir that still holds a persisted admin credential, the
+        // env password became the working admin credential for the session
+        // (the operator-visible "password tracks the env var" symptom). Run
+        // the same engine-level persisted-admin check the bootstrap guard
+        // uses and REFUSE env seeding (fail closed) when persisted records
+        // exist or the engine check itself fails. The persisted credential on
+        // disk stays authoritative; admin login may be unavailable this
+        // session until the operator repairs the store — strictly better than
+        // silently activating the env credential.
+        const agm_mod = @import("auth_graph_manager");
+        const persisted_on_disk: ?u64 = agm_mod.persistedSecurityUserCountOnDisk() catch null; // null => engine error => fail closed
+        if (persisted_on_disk == null or persisted_on_disk.? > 0) {
+            log.err("ADMIN ENV SEEDING SKIPPED (fail-closed): no auth graph manager is active this session, but the storage engine reports persisted admin records in __geode_security (or errored while checking); refusing to seed an in-memory admin from GEODE_ADMIN_PASSWORD — the persisted credential remains authoritative. Repair the auth graph / HMAC key setup and restart.", &.{
+                Attr.uint("persisted_user_records", persisted_on_disk orelse 0),
+                Attr.string("engine_check", if (persisted_on_disk == null) "error (fail-closed)" else "ok"),
+            });
+            std.debug.print("[startup] admin env seeding SKIPPED: persisted admin records exist on disk (or the engine check failed) but the auth graph manager is unavailable; GEODE_ADMIN_PASSWORD ignored (fail-closed)\n", .{});
+        } else {
+            user_mgmt.ensureDefaultUser(gpa) catch |err| {
+                log.err("Failed to create default users", &.{Attr.string("error", @errorName(err))});
+                return err;
+            };
+        }
     }
     std.debug.print("[startup] auth cache configured ({d}ms)\n", .{compat_milliTimestamp() - phase_start});
 
@@ -2115,11 +2257,18 @@ pub fn main() !void {
 
         // GAP-0260: Start background persistence thread for write coalescing
         graph_store.startPersistenceThread(config.persist_interval_ms);
+        // Gap 0039: the graceful-shutdown tail now flushes EAGERLY (before the
+        // LIFO pool-deinit defers get a chance to wedge on a stuck connection
+        // handler) and then arms the teardown watchdog. This flag makes the
+        // defer skip the second stopPersistenceThread call — re-running the
+        // final WAL sync + checkpoint on an already-clean store is safe but
+        // wastes shutdown budget.
+        var persistence_flushed_eagerly = false;
         defer {
             // Stop persistence thread first (final flush), then free the global store.
             // Without deinitGlobalStore(), all in-memory graph data (nodes, edges, indexes,
             // properties) leaks and the GPA reports errors on SIGTERM exit.
-            graph_store.stopPersistenceThread(gpa);
+            if (!persistence_flushed_eagerly) graph_store.stopPersistenceThread(gpa);
             graph_store.deinitGlobalStore();
         }
 
@@ -2760,9 +2909,24 @@ pub fn main() !void {
                             0;
                         const fresh_stall = last_stall_log_idle_ns < stall_threshold_ns;
                         if (fresh_stall or since_last_log >= stall_relog_interval_ns) {
+                            // GAP-ENT-0045: ABORT the wedged executors, don't
+                            // just log. Every registered reader's counters are
+                            // frozen with handlers pending — each in-flight
+                            // executor gets its cancel flag set; the read
+                            // budget/cancel polls abort it at the next
+                            // row/batch boundary with SQLSTATE 57014 and the
+                            // handler thread returns to its read loop. The
+                            // 2026-07-05 OOM proof: two abandoned GROUP BYs
+                            // ran ~50 min unbounded because this watchdog only
+                            // logged. Cancellation is read-only w.r.t. data
+                            // (aborts BETWEEN rows); a wedged WRITE handler is
+                            // untouched (write paths don't install the read
+                            // scope), preserving the old mid-transaction
+                            // safety stance for mutations.
+                            const cancel_requested_n = quic_connection_handler.getProtoReaderRegistry().cancelAll();
                             std.log.err(
-                                "proto_reader stall detected: idle_ms={d} pending_handlers={d} (handlers wedged downstream of BufferedProtoReader.nextMessage; restart pod to recover)",
-                                .{ idle_ns / std.time.ns_per_ms, pending },
+                                "proto_reader stall detected: idle_ms={d} pending_handlers={d} (handlers wedged downstream of BufferedProtoReader.nextMessage; requested executor cancellation for {d} in-flight readers — SQLSTATE 57014 at the next row boundary; restart pod if the stall persists)",
+                                .{ idle_ns / std.time.ns_per_ms, pending, cancel_requested_n },
                             );
                             last_stall_log_idle_ns = idle_ns;
                         }
@@ -2785,9 +2949,14 @@ pub fn main() !void {
                     const nsec: u64 = if (ts.nsec < 0) 0 else @intCast(ts.nsec);
                     const now_ns: u64 = sec * std.time.ns_per_s + nsec;
                     if (reg.connectionLevelStall(now_ns, stall_threshold_ns)) |snap| {
+                        // GAP-ENT-0045: the whole connection is wedged (every
+                        // stream idle past threshold — client likely gone).
+                        // Abort ITS in-flight read executors only; healthy
+                        // connections are untouched.
+                        const conn_cancelled_n = reg.cancelConnection(snap.peer_addr);
                         std.log.warn(
-                            "per-connection proto_reader stall: stream_id={d} peer={s} idle_ms={d} (every stream on this connection idle past threshold; client likely gone — connection will be reaped on its own timeout)",
-                            .{ snap.stream_id, snap.peer_addr, snap.idle_ns / std.time.ns_per_ms },
+                            "per-connection proto_reader stall: stream_id={d} peer={s} idle_ms={d} (every stream on this connection idle past threshold; client likely gone — requested executor cancellation for {d} readers; connection will be reaped on its own timeout)",
+                            .{ snap.stream_id, snap.peer_addr, snap.idle_ns / std.time.ns_per_ms, conn_cancelled_n },
                         );
                     }
 
@@ -3029,6 +3198,10 @@ pub fn main() !void {
                 }
             }
         }
+        // Gap 0039: flips the transport's `shutting_down` flag FIRST, so
+        // accept()/tryAccept() refuse new connections from this instant, then
+        // signals every tracked connection (per-connection shutdown flag +
+        // best-effort CONNECTION_CLOSE).
         transport.requestShutdown();
         if (detached_connection_admission and !g_connection_admission_gate.waitForZero(10 * std.time.ns_per_s)) {
             log.warn("Connection admission threads still active during shutdown", &.{
@@ -3036,6 +3209,105 @@ pub fn main() !void {
             });
         }
         std.debug.print("[shutdown] signal received, flushing data and stopping...\n", .{});
+
+        // ── Gap 0039: bounded graceful connection drain ─────────────────
+        // Abandoned peers (client vanished without CONNECTION_CLOSE) used to
+        // wedge this shutdown forever: handlers waiting on them never
+        // unwound, the ext thread-pool deinit's post-timeout joinAllWorkers
+        // never returned, and the process spun until SIGKILL. Give handlers
+        // a bounded window to unwind gracefully, then force-close whatever
+        // is left and move on. The window also covers connections admitted
+        // a heartbeat before the signal.
+        const drain_timeout_ms = envUsize(gpa, "GEODE_SHUTDOWN_DRAIN_TIMEOUT_MS", 30_000, 0, 86_400_000);
+        {
+            const drain_t0 = compat_milliTimestamp();
+            std.debug.print(
+                "[shutdown] draining {d} connections (timeout {d}ms, GEODE_SHUTDOWN_DRAIN_TIMEOUT_MS)\n",
+                .{ transport.getConnectionCount(), drain_timeout_ms },
+            );
+            while (transport.getConnectionCount() > 0 and
+                compat_milliTimestamp() - drain_t0 < @as(i64, @intCast(drain_timeout_ms)))
+            {
+                // This is the accept-loop thread — the required caller of
+                // drainPendingDestroy. Handlers queue their closed inner
+                // connections here; keep servicing the queue so graceful
+                // closes complete during the drain window.
+                transport.drainPendingDestroy();
+                compat_sleepMs(25);
+            }
+            transport.drainPendingDestroy();
+            const stalled = transport.getConnectionCount();
+            if (stalled > 0) {
+                std.debug.print(
+                    "[shutdown] force-closing {d} stalled connections after drain timeout ({d}ms)\n",
+                    .{ stalled, drain_timeout_ms },
+                );
+                log.warn("force-closing stalled connections after drain timeout", &.{
+                    Attr.int("stalled_connections", @intCast(stalled)),
+                    Attr.int("drain_timeout_ms", @intCast(drain_timeout_ms)),
+                });
+                _ = transport.forceCloseConnections();
+                transport.drainPendingDestroy();
+            } else {
+                std.debug.print(
+                    "[shutdown] connection drain complete ({d}ms)\n",
+                    .{compat_milliTimestamp() - drain_t0},
+                );
+            }
+        }
+
+        // ── Data safety: final flush + WAL checkpoint, UNBOUNDED ────────
+        // Runs on this thread BEFORE any pool-deinit defer can wedge on a
+        // stuck handler, and before the teardown watchdog is armed. However
+        // long the checkpoint takes, the watchdog cannot cut it short.
+        graph_store.stopPersistenceThread(gpa);
+        // GAP-0065 FIX D: `stopPersistenceThread` only runs the LIGHT engine
+        // checkpoint (flush + engine-WAL truncate); it does NOT write the FIX-B
+        // idmap/loop2 reload snapshots. Those were written by the FULL
+        // `saveToFileEx(false)` inside the `deinitGlobalStore` defer below — which
+        // runs AFTER the teardown watchdog is armed, so at 14.27M the ~minutes
+        // FULL checkpoint got force-exited mid-write, leaving no reloadable
+        // snapshots (and/or a committed WAL tail) → the next reopen re-scanned the
+        // whole graph EVERY restart (~14–24 min). Do the FULL clean-shutdown
+        // checkpoint (WAL truncate-to-frontier, no committed tail) + snapshot
+        // write HERE, before the tight teardown watchdog is armed. Connections are
+        // already drained/force-closed above, so no writer can race it; the deinit
+        // defer then only frees memory under the teardown watchdog. On the next
+        // reopen the (checkpoint_epoch, covered_lsn) gate RELOADS the snapshots
+        // (sub-second) instead of rejecting a tail and re-scanning.
+        //
+        // GAP-0065 FIX D liveness: the FULL checkpoint's `tryLock(mg.rwlock)` retry
+        // has NO deadline and spins forever if a genuinely-wedged handler holds the
+        // lock. Since this flush now runs before the teardown watchdog, arm a
+        // GENEROUS first-stage watchdog around it so a wedge still force-exits
+        // (→ rebuild-on-restart, no data loss) instead of hanging the process
+        // forever. The budget must comfortably exceed a legitimate full 14.27M
+        // checkpoint+snapshot write, so a normal clean shutdown is never killed.
+        const flush_budget_ms = envUsize(gpa, "GEODE_CLEAN_SHUTDOWN_FLUSH_TIMEOUT_MS", 1_800_000, 5_000, 86_400_000);
+        g_shutdown_flush_done.store(false, .release);
+        armShutdownFlushWatchdog(flush_budget_ms);
+        // TEST/chaos hook (off by default; production never sets it): stall the
+        // durability-flush region to deterministically exercise the first-stage
+        // watchdog's force-exit path (simulates a wedged mg.rwlock holder).
+        const flush_stall_ms = envUsize(gpa, "GEODE_TEST_SHUTDOWN_FLUSH_STALL_MS", 0, 0, 86_400_000);
+        if (flush_stall_ms > 0) {
+            std.debug.print("[shutdown] TEST: stalling durability flush {d}ms (GEODE_TEST_SHUTDOWN_FLUSH_STALL_MS) to exercise the liveness watchdog\n", .{flush_stall_ms});
+            compat_sleepMs(flush_stall_ms);
+        }
+        graph_store.flushForCleanShutdown();
+        g_shutdown_flush_done.store(true, .release); // disarm the first-stage watchdog
+        persistence_flushed_eagerly = true;
+        std.debug.print("[shutdown] data flush complete\n", .{});
+
+        // ── Gap 0039: bounded teardown ──────────────────────────────────
+        // Everything durable is on disk. If the remaining LIFO teardown
+        // (pool joins, store free, transport deinit) wedges on a stalled
+        // handler, the watchdog force-exits rc=0 instead of hanging forever.
+        // 5 s floor: a HEALTHY idle teardown already spends ~2 s in pool
+        // deinit drain budgets, so the floor must clear that comfortably —
+        // the watchdog exists for the wedged-forever case, not to shave
+        // seconds off a legitimate teardown.
+        armShutdownTeardownWatchdog(@max(drain_timeout_ms, 5000));
         return;
     }
 

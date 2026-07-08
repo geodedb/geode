@@ -48,7 +48,7 @@ const Attr = logging.Attr;
 // security-graph name cannot drift across the FLE guard, auth manager, and
 // user storage.
 const SECURITY_GRAPH_NAME = graph_store.SECURITY_GRAPH_NAME;
-const USER_LABEL = "User";
+pub const USER_LABEL = "User";
 const ROLE_LABEL = "Role";
 const PERMISSION_LABEL = "Permission";
 const POLICY_LABEL = "Policy";
@@ -322,7 +322,16 @@ pub const UserStorageBackend = struct {
     }
 
     fn loadUserRecordFromNode(store: *graph_store.GraphStore, node_id: u64) ?UserRecord {
-        const node = store.getNodePtr(node_id) orelse return null;
+        // Gap 0034 discipline, extended (merge interaction with the loop2
+        // warm-hydration path): a snapshot-served reopen restores the label
+        // postings WITHOUT materializing resident node bodies (engine scan
+        // skipped — see loadOneGraphFromAdapterFull), so the raw `getNodePtr`
+        // conflated "not yet resident" with "missing" and every persisted
+        // security record became invisible after a clean-shutdown reopen
+        // (admin login failed, bootstrap refused fail-closed). Read the body
+        // HYDRATE-ON-MISS like loadChainRoot: null now really means the node
+        // is absent from cache AND engine.
+        const node = store.getNodePtrHydrated(node_id) orelse return null;
         if (!std.mem.eql(u8, node.graph_name, SECURITY_GRAPH_NAME)) return null;
 
         const id_val = getIntProp(store, node_id, "id", -1);
@@ -352,38 +361,189 @@ pub const UserStorageBackend = struct {
         return record;
     }
 
-    pub fn hasUserRecordsInGraph(store: *graph_store.GraphStore) bool {
-        const nodes_opt = store.getNodesByLabel(SECURITY_GRAPH_NAME, USER_LABEL);
-        return nodes_opt != null and nodes_opt.?.len > 0;
+    // -----------------------------------------------------------------------
+    // GAP-0061: engine-direct (slot-space) security-graph :User reads.
+    //
+    // The in-memory GraphStore hydration of `__geode_security` can QUARANTINE
+    // the whole graph on a single unreadable node/edge blob: the streaming
+    // slab reader raises `error.DataCorruption`, `loadOneGraphFromAdapterFull`
+    // catches it and marks the graph done+failed. After that,
+    // `store.getNodesByLabel(__geode_security, ...)` returns null even though
+    // the storage ENGINE still holds intact, individually-readable :User
+    // records. This locked admins out of a crash-reopened database: the server
+    // login resolver (`findUserByUsernameInGraph`) returned null → every query
+    // failed with "Authentication failed", while the admin-bootstrap guard
+    // CORRECTLY refused to re-seed (the engine confirmed the persisted
+    // credential still exists) — so the persisted credential could never load.
+    //
+    // These helpers read the label slots + node properties straight from the
+    // storage engine (the EXACT reads the bootstrap guard's
+    // `countCredentialBearingPersistedUsers` already proves succeed
+    // post-crash), entirely independent of the GraphStore in-memory hydration
+    // and IdMap. The static `*InGraph` lookups below fall back to them whenever
+    // the in-memory path yields no match, so the persisted admin credential
+    // always LOADS — even when hydration is degraded. This does NOT weaken the
+    // persisted-credential-wins policy; it makes that credential reliably
+    // loadable after a crash. `adapter` is passed as `anytype` (the same
+    // pattern `auth_graph_manager.countCredentialBearingPersistedUsers` uses)
+    // to avoid a circular `graph_storage` import in this module.
+    // -----------------------------------------------------------------------
+
+    fn edGetInt(allocator: Allocator, adapter: anytype, slot: u64, key: []const u8, default: i64) i64 {
+        const maybe = adapter.getNodeProperty(SECURITY_GRAPH_NAME, slot, key, allocator) catch return default;
+        const v = maybe orelse return default;
+        switch (v) {
+            .int => |i| return i,
+            .string => |s| {
+                allocator.free(s);
+                return default;
+            },
+            .ext => |e| {
+                allocator.free(e.data);
+                return default;
+            },
+            else => return default,
+        }
     }
 
-    pub fn findUserByUsernameInGraph(store: *graph_store.GraphStore, username: []const u8) ?UserRecord {
-        const nodes_opt = store.getNodesByLabel(SECURITY_GRAPH_NAME, USER_LABEL);
-        if (nodes_opt == null) return null;
+    fn edGetBool(allocator: Allocator, adapter: anytype, slot: u64, key: []const u8, default: bool) bool {
+        const maybe = adapter.getNodeProperty(SECURITY_GRAPH_NAME, slot, key, allocator) catch return default;
+        const v = maybe orelse return default;
+        switch (v) {
+            .bool => |b| return b,
+            .string => |s| {
+                allocator.free(s);
+                return default;
+            },
+            .ext => |e| {
+                allocator.free(e.data);
+                return default;
+            },
+            else => return default,
+        }
+    }
 
-        for (nodes_opt.?) |node_id| {
-            const record = loadUserRecordFromNode(store, node_id) orelse continue;
-            if (std.mem.eql(u8, record.getUsername(), username)) {
-                return record;
-            }
+    /// Copy an engine string property into the fixed `dest` field, freeing the
+    /// transient engine-owned string. Returns bytes written (0 when absent or
+    /// not a string), leaving `dest` zeroed via `copyIntoField(dest, "")`.
+    fn edCopyStr(allocator: Allocator, adapter: anytype, slot: u64, key: []const u8, dest: []u8) u16 {
+        const maybe = adapter.getNodeProperty(SECURITY_GRAPH_NAME, slot, key, allocator) catch return copyIntoField(dest, "");
+        const v = maybe orelse return copyIntoField(dest, "");
+        switch (v) {
+            .string => |s| {
+                defer allocator.free(s);
+                return copyIntoField(dest, s);
+            },
+            .ext => |e| {
+                allocator.free(e.data);
+                return copyIntoField(dest, "");
+            },
+            else => return copyIntoField(dest, ""),
+        }
+    }
+
+    /// Rebuild one :User record from the engine by slot id (mirrors
+    /// `loadUserRecordFromNode`, but reads engine-direct via the adapter rather
+    /// than the in-memory GraphStore). Returns null when the slot carries no
+    /// valid `id` property.
+    fn loadUserRecordEngineDirect(allocator: Allocator, adapter: anytype, slot: u64) ?UserRecord {
+        const id_val = edGetInt(allocator, adapter, slot, "id", -1);
+        if (id_val < 0) return null;
+        const user_id: u64 = @intCast(id_val);
+
+        var record = blankUserRecord(user_id);
+        record.username_len = edCopyStr(allocator, adapter, slot, "username", &record.username);
+        record.email_len = edCopyStr(allocator, adapter, slot, "email", &record.email);
+        record.password_hash_len = edCopyStr(allocator, adapter, slot, "password_hash", &record.password_hash);
+        _ = edCopyStr(allocator, adapter, slot, "salt", &record.salt);
+        record.is_active = edGetBool(allocator, adapter, slot, "is_active", true);
+        record.is_superuser = edGetBool(allocator, adapter, slot, "is_superuser", false);
+        record.mfa_enabled = edGetBool(allocator, adapter, slot, "mfa_enabled", false);
+        record.mfa_secret_len = edCopyStr(allocator, adapter, slot, "mfa_secret", &record.mfa_secret);
+        record.failed_login_attempts = @intCast(@max(0, edGetInt(allocator, adapter, slot, "failed_login_attempts", 0)));
+        record.lockout_until = edGetInt(allocator, adapter, slot, "lockout_until", 0);
+        record.last_login = edGetInt(allocator, adapter, slot, "last_login", 0);
+        record.created_at = edGetInt(allocator, adapter, slot, "created_at", compat_milliTimestamp());
+        record.updated_at = edGetInt(allocator, adapter, slot, "updated_at", record.created_at);
+        record.hash_algorithm_len = edCopyStr(allocator, adapter, slot, "hash_algorithm", &record.hash_algorithm);
+        record.is_default_user = edGetBool(allocator, adapter, slot, "is_default_user", false);
+        record.password_reset_required = edGetBool(allocator, adapter, slot, "password_reset_required", false);
+        record.auth_version = @intCast(@max(1, edGetInt(allocator, adapter, slot, "auth_version", 1)));
+        record.attributes_json_len = edCopyStr(allocator, adapter, slot, "attributes_json", &record.attributes_json);
+        record.password_changed_at = edGetInt(allocator, adapter, slot, "password_changed_at", 0);
+        return record;
+    }
+
+    /// GAP-0061 fallback: engine-direct scan for a user by username, used when
+    /// the in-memory security-graph hydration is quarantined/empty.
+    fn findUserByUsernameEngineDirect(allocator: Allocator, username: []const u8) ?UserRecord {
+        const adapter = graph_store.getGlobalAdapter() orelse return null;
+        const slots = adapter.getNodesByLabel(SECURITY_GRAPH_NAME, USER_LABEL, allocator) catch return null;
+        defer allocator.free(slots);
+        for (slots) |slot| {
+            const record = loadUserRecordEngineDirect(allocator, adapter, slot) orelse continue;
+            if (std.mem.eql(u8, record.getUsername(), username)) return record;
         }
         return null;
     }
 
-    pub fn listUsersFromGraph(allocator: Allocator, store: *graph_store.GraphStore) ![]UserRecord {
-        const nodes_opt = store.getNodesByLabel(SECURITY_GRAPH_NAME, USER_LABEL);
-        if (nodes_opt == null or nodes_opt.?.len == 0) {
-            return allocator.alloc(UserRecord, 0);
-        }
-
+    /// GAP-0061 fallback: engine-direct list of every persisted :User record.
+    fn listUsersEngineDirect(allocator: Allocator) ![]UserRecord {
+        const adapter = graph_store.getGlobalAdapter() orelse return allocator.alloc(UserRecord, 0);
+        const slots = adapter.getNodesByLabel(SECURITY_GRAPH_NAME, USER_LABEL, allocator) catch return allocator.alloc(UserRecord, 0);
+        defer allocator.free(slots);
         var records = std.ArrayList(UserRecord).empty;
         defer records.deinit(allocator);
-
-        for (nodes_opt.?) |node_id| {
-            const record = loadUserRecordFromNode(store, node_id) orelse continue;
+        for (slots) |slot| {
+            const record = loadUserRecordEngineDirect(allocator, adapter, slot) orelse continue;
             try records.append(allocator, record);
         }
         return records.toOwnedSlice(allocator);
+    }
+
+    pub fn hasUserRecordsInGraph(store: *graph_store.GraphStore) bool {
+        if (store.getNodesByLabel(SECURITY_GRAPH_NAME, USER_LABEL)) |nodes| {
+            if (nodes.len > 0) return true;
+        }
+        // GAP-0061: the in-memory hydration may be quarantined (getNodesByLabel
+        // returns null even though the engine holds records). Ask the engine.
+        if (graph_store.getGlobalAdapter()) |adapter| {
+            const n = adapter.countNodesByLabel(SECURITY_GRAPH_NAME, USER_LABEL) catch return false;
+            return n > 0;
+        }
+        return false;
+    }
+
+    pub fn findUserByUsernameInGraph(store: *graph_store.GraphStore, username: []const u8) ?UserRecord {
+        if (store.getNodesByLabel(SECURITY_GRAPH_NAME, USER_LABEL)) |nodes| {
+            for (nodes) |node_id| {
+                const record = loadUserRecordFromNode(store, node_id) orelse continue;
+                if (std.mem.eql(u8, record.getUsername(), username)) {
+                    return record;
+                }
+            }
+        }
+        // GAP-0061: engine-direct fallback when the in-memory path had no match
+        // (quarantined hydration, or an unreadable resident node body). Without
+        // this the persisted admin credential is unloadable after a crash and
+        // every query returns "Authentication failed".
+        return findUserByUsernameEngineDirect(store.allocator, username);
+    }
+
+    pub fn listUsersFromGraph(allocator: Allocator, store: *graph_store.GraphStore) ![]UserRecord {
+        if (store.getNodesByLabel(SECURITY_GRAPH_NAME, USER_LABEL)) |nodes| {
+            if (nodes.len > 0) {
+                var records = std.ArrayList(UserRecord).empty;
+                defer records.deinit(allocator);
+                for (nodes) |node_id| {
+                    const record = loadUserRecordFromNode(store, node_id) orelse continue;
+                    try records.append(allocator, record);
+                }
+                return records.toOwnedSlice(allocator);
+            }
+        }
+        // GAP-0061: engine-direct fallback (quarantined/empty in-memory path).
+        return listUsersEngineDirect(allocator);
     }
 
     pub fn findUserAuthVersionByUsernameInGraph(store: *graph_store.GraphStore, username: []const u8) ?u64 {
@@ -396,7 +556,9 @@ pub const UserStorageBackend = struct {
         if (nodes_opt == null) return;
 
         for (nodes_opt.?) |node_id| {
-            const node = self.store.getNodePtr(node_id) orelse continue;
+            // Gap 0034 discipline (see loadUserRecordFromNode): hydrate-on-miss
+            // so a snapshot-served/evicted body still resolves from the engine.
+            const node = self.store.getNodePtrHydrated(node_id) orelse continue;
             if (!std.mem.eql(u8, node.graph_name, SECURITY_GRAPH_NAME)) continue;
 
             const id_val = getIntProp(self.store, node_id, "id", -1);
@@ -422,7 +584,9 @@ pub const UserStorageBackend = struct {
         if (nodes_opt == null) return;
 
         for (nodes_opt.?) |node_id| {
-            const node = self.store.getNodePtr(node_id) orelse continue;
+            // Gap 0034 discipline (see loadUserRecordFromNode): hydrate-on-miss
+            // so a snapshot-served/evicted body still resolves from the engine.
+            const node = self.store.getNodePtrHydrated(node_id) orelse continue;
             if (!std.mem.eql(u8, node.graph_name, SECURITY_GRAPH_NAME)) continue;
 
             const id_val = getIntProp(self.store, node_id, "id", -1);
@@ -446,7 +610,9 @@ pub const UserStorageBackend = struct {
         if (nodes_opt == null) return;
 
         for (nodes_opt.?) |node_id| {
-            const node = self.store.getNodePtr(node_id) orelse continue;
+            // Gap 0034 discipline (see loadUserRecordFromNode): hydrate-on-miss
+            // so a snapshot-served/evicted body still resolves from the engine.
+            const node = self.store.getNodePtrHydrated(node_id) orelse continue;
             if (!std.mem.eql(u8, node.graph_name, SECURITY_GRAPH_NAME)) continue;
 
             const id_val = getIntProp(self.store, node_id, "id", -1);
@@ -478,7 +644,9 @@ pub const UserStorageBackend = struct {
         if (nodes_opt == null) return;
 
         for (nodes_opt.?) |node_id| {
-            const node = self.store.getNodePtr(node_id) orelse continue;
+            // Gap 0034 discipline (see loadUserRecordFromNode): hydrate-on-miss
+            // so a snapshot-served/evicted body still resolves from the engine.
+            const node = self.store.getNodePtrHydrated(node_id) orelse continue;
             if (!std.mem.eql(u8, node.graph_name, SECURITY_GRAPH_NAME)) continue;
 
             const id_val = getIntProp(self.store, node_id, "id", -1);
@@ -511,7 +679,9 @@ pub const UserStorageBackend = struct {
         if (nodes_opt == null) return false;
 
         for (nodes_opt.?) |node_id| {
-            const node = self.store.getNodePtr(node_id) orelse continue;
+            // Gap 0034 discipline (see loadUserRecordFromNode): hydrate-on-miss
+            // so a snapshot-served/evicted body still resolves from the engine.
+            const node = self.store.getNodePtrHydrated(node_id) orelse continue;
             if (!std.mem.eql(u8, node.graph_name, SECURITY_GRAPH_NAME)) continue;
 
             const id_val = getIntProp(self.store, node_id, "id", -1);
@@ -547,7 +717,9 @@ pub const UserStorageBackend = struct {
         defer records.deinit(allocator);
 
         for (nodes_opt.?) |node_id| {
-            const node = self.store.getNodePtr(node_id) orelse continue;
+            // Gap 0034 discipline (see loadUserRecordFromNode): hydrate-on-miss
+            // so a snapshot-served/evicted body still resolves from the engine.
+            const node = self.store.getNodePtrHydrated(node_id) orelse continue;
             if (!std.mem.eql(u8, node.graph_name, SECURITY_GRAPH_NAME)) continue;
 
             const id_val = getIntProp(self.store, node_id, "id", -1);
@@ -862,7 +1034,17 @@ pub const UserStorageBackend = struct {
         if (nodes.len == 0) return null;
 
         const node_id = nodes[0];
-        const node = self.store.getNodePtr(node_id) orelse return null;
+        // Gap 0034: read the root's node body HYDRATE-ON-MISS. The raw
+        // `getNodePtr` conflated "evicted from the bounded resident node
+        // cache" with "missing from the store": a bulk ingest evicts the
+        // bootstrap-era AuthChainRoot body (FIFO-oldest), the raw lookup
+        // returns null, and every periodic HMAC verify round then reports
+        // MissingChainRoot — a false "POSSIBLE TAMPERING" alarm on a
+        // perfectly healthy fresh store, every 5 minutes until restart.
+        // Hydration rebuilds the body from the durable engine, so null here
+        // now really means "no chain root exists" — the genuine tamper
+        // signal (root deleted/corrupted on disk) stays loud.
+        const node = self.store.getNodePtrHydrated(node_id) orelse return null;
         if (!std.mem.eql(u8, node.graph_name, SECURITY_GRAPH_NAME)) return null;
 
         self.chain_root_node = node_id;

@@ -2203,6 +2203,24 @@ pub fn build(b: *std.Build) void {
     );
     lean_merge_key_seek_reopen_step.dependOn(&run_lean_merge_key_seek_reopen_tests.step);
 
+    // GAP-0046: reopen re-MERGE dedup under DEFERRED (lazy) hydration — the
+    // first op on a crash-reopened graph is `MERGE ... SET` and must dedup
+    // (merge match hydrates the merge index before probing). Opt-in via
+    // `zig build test-reopen-merge-hydration-dup`.
+    const reopen_merge_hydration_tests = b.addTest(.{ .root_module = b.createModule(.{
+        .root_source_file = b.path("tests/test_reopen_merge_hydration_dup.zig"),
+        .target = target,
+        .optimize = optimize,
+        .link_libc = true,
+    }) });
+    reopen_merge_hydration_tests.root_module.addImport("geode", root_mod);
+    const run_reopen_merge_hydration_tests = b.addRunArtifact(reopen_merge_hydration_tests);
+    const reopen_merge_hydration_step = b.step(
+        "test-reopen-merge-hydration-dup",
+        "GAP-0046: first-op re-MERGE after a crash reopen dedups under deferred hydration",
+    );
+    reopen_merge_hydration_step.dependOn(&run_reopen_merge_hydration_tests.step);
+
     // GAP-0810 Task 1.3: cross-subsystem cache wiring — materialized-view
     // refresh + distributed coordinator now share the server's shared AST
     // cache via optional `ast_cache` fields + `setAstCache()` methods.
@@ -2261,6 +2279,10 @@ pub fn build(b: *std.Build) void {
     }) });
     gap0811_aggregation_fastpath_tests.root_module.addImport("geode", root_mod);
     const run_gap0811_aggregation_fastpath_tests = b.addRunArtifact(gap0811_aggregation_fastpath_tests);
+    // Named step so the count-fastpath suite can run standalone (it previously
+    // was only reachable through the sharded aggregate `test` step).
+    const gap0811_aggregation_fastpath_step = b.step("test-gap0811-aggregation-fastpath", "Run GAP-0811 label-scoped count fast-path regression (countNodesByLabel O(1) posting-list cardinality)");
+    gap0811_aggregation_fastpath_step.dependOn(&run_gap0811_aggregation_fastpath_tests.step);
 
     // FTS latency gate: CALL geode.fts.search must return matching :Doc rows
     // within a (CI-skipped) latency budget. CI-aware perf gate mirroring the
@@ -3220,6 +3242,24 @@ pub fn build(b: *std.Build) void {
     if (b.args) |args| run_bench_executor_mutation.addArgs(args);
     const bench_executor_mutation_step = b.step("bench-query-executor-mutation", "In-process mutation-path timings across 6 scenarios (CREATE/SET/DELETE/MERGE/edge)");
     bench_executor_mutation_step.dependOn(&run_bench_executor_mutation.step);
+
+    // task0049: edge bulk-load throughput repro — measures the LIVE bulk
+    // fast-path per-edge cost (lookupNodeByMergeKey x2 + bulkInsertEdgeWithIds),
+    // swept across N to detect O(n), per-edge-txn vs batched to isolate WAL fsync.
+    const bench_edge_bulk_exe = b.addExecutable(.{
+        .name = "bench-edge-bulk-throughput",
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("benchmarks/bench_edge_bulk_throughput.zig"),
+            .target = target,
+            .optimize = optimize,
+            .link_libc = true, // std.c.getenv for env-var lookup
+        }),
+    });
+    bench_edge_bulk_exe.root_module.addImport("geode", root_mod);
+    const run_bench_edge_bulk = b.addRunArtifact(bench_edge_bulk_exe);
+    if (b.args) |args| run_bench_edge_bulk.addArgs(args);
+    const bench_edge_bulk_step = b.step("bench-edge-bulk-throughput", "edge bulk-load per-edge cost repro");
+    bench_edge_bulk_step.dependOn(&run_bench_edge_bulk.step);
 
     // Task 3.2: bench_executor_mutation unit/smoke test (opt-in via GEODE_RUN_SLOW_TESTS=1).
     const bench_executor_mutation_test = b.addTest(.{
@@ -4290,6 +4330,34 @@ pub fn build(b: *std.Build) void {
     const quic_high_concurrency_e2e_step = b.step("test-quic-high-concurrency-e2e", "Run QUIC high-concurrency read/write integration test");
     quic_high_concurrency_e2e_step.dependOn(&run_quic_high_concurrency_e2e_tests.step);
     test_e2e_step.dependOn(&run_quic_high_concurrency_e2e_tests.step);
+
+    // Gap 0039 (data-ingest enterprise review): `geode serve` SIGTERM shutdown
+    // busy-spun forever draining abandoned QUIC connections (client vanished
+    // without CONNECTION_CLOSE): flush completed, then >= 10 min at ~1.75
+    // cores with the listener still accepting; only SIGKILL ended it. The
+    // subprocess test SIGTERMs a real server that has abandoned client
+    // connections held open and asserts: bounded drain engages
+    // (GEODE_SHUTDOWN_DRAIN_TIMEOUT_MS), stalled connections are force-closed
+    // at the deadline, the process exits rc=0 within deadline + margin, and
+    // the store reopens clean. Executable (not `test`) for the same
+    // builtin.is_test reason as e2e_quic_high_concurrency above.
+    const shutdown_drain_e2e = b.addExecutable(.{ .name = "e2e_shutdown_drain_timeout", .root_module = b.createModule(.{ .root_source_file = b.path("tests/e2e_shutdown_drain_timeout.zig"), .target = target, .optimize = optimize }) });
+    shutdown_drain_e2e.root_module.addImport("geode", root_mod);
+    shutdown_drain_e2e.root_module.addImport("protobuf", protobuf_mod);
+    shutdown_drain_e2e.root_module.addImport("schema", schema_mod);
+    shutdown_drain_e2e.root_module.addImport("transport/quic", transport_quic_mod);
+    shutdown_drain_e2e.root_module.link_libc = true;
+    if (enable_openssl) {
+        shutdown_drain_e2e.root_module.linkSystemLibrary("ssl", .{});
+        shutdown_drain_e2e.root_module.linkSystemLibrary("crypto", .{});
+    }
+    if (target.result.os.tag == .linux and (is_native or enable_openssl)) {
+        shutdown_drain_e2e.root_module.linkSystemLibrary("dl", .{});
+    }
+    const run_shutdown_drain_e2e = b.addRunArtifact(shutdown_drain_e2e);
+    run_shutdown_drain_e2e.step.dependOn(&install_geode_exe.step);
+    const shutdown_drain_step = b.step("test-shutdown-drain-timeout", "Gap 0039: SIGTERM shutdown must stop accepting, bound the connection drain (GEODE_SHUTDOWN_DRAIN_TIMEOUT_MS), force-close stalled connections, and exit rc=0");
+    shutdown_drain_step.dependOn(&run_shutdown_drain_e2e.step);
 
     // CANARY: REQ=REQ-QUIC-HC-180; FEATURE="Sequential Single-Connection Upsert Liveness"; ASPECT=FirstStreamSchedulerLostWakeBuild; STATUS=TESTED; OWNER=transport; UPDATED=2026-06-19
     // BUG_STREAM_DESYNC regression: 250+ sequential find+create on ONE connection.
@@ -6779,6 +6847,75 @@ pub fn build(b: *std.Build) void {
     const admin_bootstrap_step = b.step("test-admin-bootstrap", "Reproduction tests for admin-bootstrap env-var + offline-reset bugs (must fail pre-fix)");
     admin_bootstrap_step.dependOn(&run_admin_bootstrap_tests.step);
 
+    // Gap 0026 (data-ingest security review): security-graph mutations must
+    // stay crash-durable under GEODE_WAL_SYNC=deferred. The bulk-load knob
+    // (GAP-0900) relaxed per-commit WAL fsync globally; an admin credential
+    // rotation acknowledged without fsync is silently lost on a hard crash
+    // (old credential resurrects). Tests pin the per-graph
+    // `.sync_each_commit` carve-out for `__geode_security` (create + reopen
+    // paths), the fsync-before-ack observable, a bulk-write still-defers
+    // regression, and the end-to-end rotate → crash → reopen sequence.
+    const sec_wal_durability_mod = b.createModule(.{ .root_source_file = b.path("tests/test_security_wal_durability.zig"), .target = target, .optimize = optimize });
+    sec_wal_durability_mod.addImport("geode", root_mod);
+    sec_wal_durability_mod.addImport("geode_auth", auth_mod);
+    sec_wal_durability_mod.addImport("user_storage", user_storage_mod);
+    sec_wal_durability_mod.addImport("auth_graph_manager", auth_graph_manager_mod);
+    sec_wal_durability_mod.addImport("cli_auth_helpers", cli_auth_helpers_mod);
+    const sec_wal_durability_tests = b.addTest(.{ .root_module = sec_wal_durability_mod });
+    const run_sec_wal_durability_tests = b.addRunArtifact(sec_wal_durability_tests);
+    shardDep(test_step, &run_sec_wal_durability_tests.step, 1, test_shard_loads, test_shard_index);
+    const sec_wal_durability_step = b.step("test-security-wal-durability", "Gap 0026: security-graph mutations crash-durable under GEODE_WAL_SYNC=deferred (per-graph sync_each_commit carve-out)");
+    sec_wal_durability_step.dependOn(&run_sec_wal_durability_tests.step);
+
+    // GAP-0061 (fresh 14.27M close-out): CRITICAL crash-recovery auth lockout.
+    // A kill -9 + reopen quarantined the __geode_security in-memory hydration
+    // (streaming slab reader DataCorruption), so the login resolver's
+    // getNodesByLabel returned null and the persisted admin credential could
+    // never load — every query returned "Authentication failed". The engine
+    // still held the record (the bootstrap guard read it), so the fix falls
+    // back to an engine-direct read in findUserByUsernameInGraph /
+    // hasUserRecordsInGraph / listUsersFromGraph.
+    const gap0061_crash_auth_mod = b.createModule(.{ .root_source_file = b.path("tests/test_gap0061_crash_auth.zig"), .target = target, .optimize = optimize });
+    gap0061_crash_auth_mod.addImport("geode", root_mod);
+    gap0061_crash_auth_mod.addImport("user_storage", user_storage_mod);
+    const gap0061_crash_auth_tests = b.addTest(.{ .root_module = gap0061_crash_auth_mod });
+    const run_gap0061_crash_auth_tests = b.addRunArtifact(gap0061_crash_auth_tests);
+    shardDep(test_step, &run_gap0061_crash_auth_tests.step, 1, test_shard_loads, test_shard_index);
+    const gap0061_crash_auth_step = b.step("test-gap0061-crash-auth", "GAP-0061: persisted admin credential loads after kill-9 crash-reopen even when the security-graph hydration is quarantined");
+    gap0061_crash_auth_step.dependOn(&run_gap0061_crash_auth_tests.step);
+
+    // GAP-0062: ROOT CAUSE of the GAP-0061 lockout — the streaming hydration of
+    // __geode_security must NOT quarantine on the slab-packed HAS_ROLE
+    // adjacency (gs v0.2.34 adjacency slab packing). Full security hydration
+    // (users + roles + policies + HAS_ROLE assignments) after clean + kill-9
+    // reopens; roles/policies load, not just the superuser admin.
+    const gap0062_sec_hydration_mod = b.createModule(.{ .root_source_file = b.path("tests/test_gap0062_security_hydration.zig"), .target = target, .optimize = optimize });
+    gap0062_sec_hydration_mod.addImport("geode", root_mod);
+    gap0062_sec_hydration_mod.addImport("user_storage", user_storage_mod);
+    const gap0062_sec_hydration_tests = b.addTest(.{ .root_module = gap0062_sec_hydration_mod });
+    const run_gap0062_sec_hydration_tests = b.addRunArtifact(gap0062_sec_hydration_tests);
+    shardDep(test_step, &run_gap0062_sec_hydration_tests.step, 1, test_shard_loads, test_shard_index);
+    const gap0062_sec_hydration_step = b.step("test-gap0062-security-hydration", "GAP-0062: __geode_security hydrates fully (users/roles/policies/HAS_ROLE) without quarantine on clean + kill-9 reopen (slab-packed adjacency)");
+    gap0062_sec_hydration_step.dependOn(&run_gap0062_sec_hydration_tests.step);
+
+    // Gap 0034 (data-ingest enterprise review): fresh-store FALSE "POSSIBLE
+    // TAMPERING" alarms. The periodic HMAC verifier read the AuthChainRoot
+    // node body via the non-hydrating getNodePtr; once a bulk ingest evicted
+    // it from the bounded resident node cache, every verify round reported
+    // MissingChainRoot until restart. Tests pin: bootstrap seals the root
+    // synchronously; eviction must NOT raise the tamper alarm (the verifier
+    // hydrates the durable truth from the engine); a root genuinely deleted
+    // or corrupted in the engine still fails loudly (the real tamper signal
+    // is preserved).
+    const hmac_root_eviction_mod = b.createModule(.{ .root_source_file = b.path("tests/test_hmac_chain_root_eviction.zig"), .target = target, .optimize = optimize });
+    hmac_root_eviction_mod.addImport("geode", root_mod);
+    hmac_root_eviction_mod.addImport("auth_graph_manager", auth_graph_manager_mod);
+    const hmac_root_eviction_tests = b.addTest(.{ .root_module = hmac_root_eviction_mod });
+    const run_hmac_root_eviction_tests = b.addRunArtifact(hmac_root_eviction_tests);
+    shardDep(test_step, &run_hmac_root_eviction_tests.step, 1, test_shard_loads, test_shard_index);
+    const hmac_root_eviction_step = b.step("test-hmac-chain-root-eviction", "Gap 0034: periodic HMAC verify must not raise false POSSIBLE TAMPERING when the chain-root node body is evicted from the bounded node cache");
+    hmac_root_eviction_step.dependOn(&run_hmac_root_eviction_tests.step);
+
     // Issue #819: admin-bootstrap data-dir permission hardening (CWE-538 /
     // CWE-732).  Exercises the pure permission-check helper in
     // src/server/data_dir_permissions.zig via std.testing.tmpDir fixtures.
@@ -7325,6 +7462,20 @@ pub fn build(b: *std.Build) void {
     const edge_engine_direct_step = b.step("test-edge-engine-direct", "Run Phase-1 bounded engine-direct edge-body mirror regression (bounded edge residency + hydrate-on-miss correctness + engine-served edge-type queries)");
     edge_engine_direct_step.dependOn(&run_edge_engine_direct_tests.step);
 
+    // GAP-ENT-0004: typed-edge enumeration must be served from the engine's
+    // per-shard edge_index (O(edges) sequential index scan, no every-node walk
+    // / adjacency hydration). Correctness vs oracle (2 types, bounded cache,
+    // reopen base+overlay merged view), path proof via the typed_edge_*
+    // counters, concrete-tenant executor routing, and a 50k scale shape with
+    // zero node-body reads.
+    const typed_edge_scan_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_typed_edge_index_scan.zig"), .target = target, .optimize = optimize, .link_libc = true });
+    typed_edge_scan_test_mod.addImport("geode", root_mod);
+    const typed_edge_scan_tests = b.addTest(.{ .root_module = typed_edge_scan_test_mod });
+    const run_typed_edge_scan_tests = b.addRunArtifact(typed_edge_scan_tests);
+    shardDep(test_step, &run_typed_edge_scan_tests.step, 1, test_shard_loads, test_shard_index);
+    const typed_edge_scan_step = b.step("test-typed-edge-index-scan", "GAP typed-edge enumeration: engine edge_index scan (no every-node walk) — correctness vs oracle, path counters, tenant routing, reopen base+overlay, 50k scale shape");
+    typed_edge_scan_step.dependOn(&run_typed_edge_scan_tests.step);
+
     // PHASE 1 bounded-RSS plateau PROBE (standalone exe): ingest K edges with a
     // tiny edge+adj cap and print resident counts + MaxRSS. Run at two K values
     // to prove residency + RSS do not scale with K.
@@ -7407,6 +7558,60 @@ pub fn build(b: *std.Build) void {
     shardDep(test_step, &run_groupby_streaming_tests.step, 2, test_shard_loads, test_shard_index);
     const groupby_streaming_step = b.step("test-groupby-streaming", "Run streaming GROUP BY/DISTINCT regression (no row materialization, O(groups) not O(nodes))");
     groupby_streaming_step.dependOn(&run_groupby_streaming_tests.step);
+
+    // GAP-ENT-0043 T1: index-served GROUP BY / DISTINCT / count-by-value.
+    // Pre-fix: served by the O(nodes) streaming scan (index-served counter 0).
+    // Post-fix: O(distinct) from the exact-property index postings —
+    // index-served == 1 AND getPathRowsMaterialized() == 0, results exact.
+    const index_served_agg_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_gap0043_index_served_aggregate.zig"), .target = target, .optimize = optimize });
+    index_served_agg_test_mod.addImport("geode", root_mod);
+    const index_served_agg_tests = b.addTest(.{ .root_module = index_served_agg_test_mod });
+    const run_index_served_agg_tests = b.addRunArtifact(index_served_agg_tests);
+    shardDep(test_step, &run_index_served_agg_tests.step, 1, test_shard_loads, test_shard_index);
+    const index_served_agg_step = b.step("test-gap0043-index-served-aggregate", "Run GAP-ENT-0043 T1 index-served GROUP BY/DISTINCT/count-by-value regression (O(distinct) from exact-index postings, zero materialization)");
+    index_served_agg_step.dependOn(&run_index_served_agg_tests.step);
+
+    // GAP-ENT-0055: alias-grouped GROUP BY + O(1) filtered count route to the
+    // exact node-property index (mirror the DISTINCT index-served path).
+    // Pre-fix: `GROUP BY <alias>` and `WHERE k=v RETURN count(n)` scanned (88s
+    // @7M). Post-fix: alias GROUP BY is index-served (getIndexServedAggregateTotal
+    // == 1) and the filtered count is O(1) posting length
+    // (getFilteredCountIndexServedTotal == 1), results exact.
+    const alias_grouped_count_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_gap0055_alias_grouped_and_filtered_count.zig"), .target = target, .optimize = optimize });
+    alias_grouped_count_test_mod.addImport("geode", root_mod);
+    const alias_grouped_count_tests = b.addTest(.{ .root_module = alias_grouped_count_test_mod });
+    const run_alias_grouped_count_tests = b.addRunArtifact(alias_grouped_count_tests);
+    shardDep(test_step, &run_alias_grouped_count_tests.step, 1, test_shard_loads, test_shard_index);
+    const alias_grouped_count_step = b.step("test-gap0055-alias-grouped-filtered-count", "Run GAP-ENT-0055 alias-grouped GROUP BY + O(1) filtered-count index-served regression");
+    alias_grouped_count_step.dependOn(&run_alias_grouped_count_tests.step);
+
+    // GAP-ENT-0043 T2: projection-pushdown streaming for residual scans.
+    // Pre-fix: unlabeled GROUP BY/DISTINCT/aggregate declines every fast path
+    // (all require exactly one label) → planned_read_runtime materializes one
+    // FULL node row per node. Post-fix: labels.len == 0 streams (resident
+    // iteration unbounded / engine page-scan + single-property reads bounded),
+    // getPathRowsMaterialized() == 0, results exact.
+    const projection_pushdown_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_gap0043_projection_pushdown.zig"), .target = target, .optimize = optimize });
+    projection_pushdown_test_mod.addImport("geode", root_mod);
+    const projection_pushdown_tests = b.addTest(.{ .root_module = projection_pushdown_test_mod });
+    const run_projection_pushdown_tests = b.addRunArtifact(projection_pushdown_tests);
+    shardDep(test_step, &run_projection_pushdown_tests.step, 1, test_shard_loads, test_shard_index);
+    const projection_pushdown_step = b.step("test-gap0043-projection-pushdown", "Run GAP-ENT-0043 T2 projection-pushdown regression (unlabeled GROUP BY/DISTINCT/aggregate streams single-property reads, zero materialization)");
+    projection_pushdown_step.dependOn(&run_projection_pushdown_tests.step);
+
+    // GAP-ENT-0044/0045 (T5): read-executor working-set budget + cancel.
+    // Pre-fix: a runaway full-row read materializes unboundedly (the OOM
+    // killer is the arbiter) and a disconnected client's query runs to
+    // completion. Post-fix: clean SQLSTATE 53200 abort at
+    // GEODE_READ_EXECUTOR_BUDGET_MB and SQLSTATE 57014 cancel within one
+    // row/batch boundary of the flag being set.
+    const read_budget_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_gap0044_read_budget_cancel.zig"), .target = target, .optimize = optimize });
+    read_budget_test_mod.addImport("geode", root_mod);
+    const read_budget_tests = b.addTest(.{ .root_module = read_budget_test_mod });
+    const run_read_budget_tests = b.addRunArtifact(read_budget_tests);
+    shardDep(test_step, &run_read_budget_tests.step, 1, test_shard_loads, test_shard_index);
+    const read_budget_step = b.step("test-gap0044-read-budget-cancel", "Run GAP-ENT-0044/0045 read-executor budget + cancel-on-disconnect regression (53200 budget abort, 57014 cancel within one batch)");
+    read_budget_step.dependOn(&run_read_budget_tests.step);
 
     // Traversal-seed perf micro-benchmark (P1 close-out): proves O(degree) seed
     // over a large filler graph — 8000 unrelated Taxon nodes + 1 parent with 64
@@ -7715,6 +7920,40 @@ pub fn build(b: *std.Build) void {
     const startup_lazy_step = b.step("test-startup-lazy-hydrate", "PHASE 1b: deferred resident-load -> lazy per-graph hydration (sub-second open)");
     startup_lazy_step.dependOn(&run_startup_lazy_tests.step);
 
+    // GAP hydration fast-scan: sequential per-shard store streaming for the
+    // loop2 first-access hydration. Parity (resident + mmap scan fallbacks,
+    // legacy vs streaming on the same store) + the >=20x throughput floor.
+    const hydration_stream_test_mod = b.createModule(.{
+        .root_source_file = b.path("tests/test_hydration_stream_scan.zig"),
+        .target = target,
+        .optimize = optimize,
+        .link_libc = true,
+    });
+    hydration_stream_test_mod.addImport("geode", root_mod);
+    hydration_stream_test_mod.addImport("graph_storage", graph_storage_mod);
+    const hydration_stream_tests = b.addTest(.{ .root_module = hydration_stream_test_mod });
+    const run_hydration_stream_tests = b.addRunArtifact(hydration_stream_tests);
+    shardDep(test_step, &run_hydration_stream_tests.step, 1, test_shard_loads, test_shard_index);
+    const hydration_stream_step = b.step("test-hydration-stream-scan", "GAP hydration fast-scan: streaming loop2 parity + >=20x throughput floor");
+    hydration_stream_step.dependOn(&run_hydration_stream_tests.step);
+
+    // GAP (write-path OOM, 2026-07-04): engine-direct point writes (exact-index
+    // seek -> durable store property write) + legacy write-executor working-set
+    // budget (GEODE_WRITE_EXECUTOR_BUDGET_MB). Routing-table + budget-abort +
+    // durability coverage.
+    const point_write_test_mod = b.createModule(.{
+        .root_source_file = b.path("tests/test_point_write_fastpath.zig"),
+        .target = target,
+        .optimize = optimize,
+        .link_libc = true,
+    });
+    point_write_test_mod.addImport("geode", root_mod);
+    const point_write_tests = b.addTest(.{ .root_module = point_write_test_mod });
+    const run_point_write_tests = b.addRunArtifact(point_write_tests);
+    shardDep(test_step, &run_point_write_tests.step, 1, test_shard_loads, test_shard_index);
+    const point_write_step = b.step("test-point-write-fastpath", "Engine-direct point writes + legacy write-executor budget (routing table, budget abort, durability)");
+    point_write_step.dependOn(&run_point_write_tests.step);
+
     // TSan companion: same lazy-hydrate test file compiled with -fsanitize-thread
     // so the "hydrate A || read B" cross-graph hydration race (CWE-362 on the
     // shared `nodes_by_graph` / `label_index` outer maps) runs under the thread
@@ -7737,6 +7976,23 @@ pub fn build(b: *std.Build) void {
         "TSan companion: lazy-hydrate cross-graph concurrency under -fsanitize-thread (race detection)",
     );
     startup_lazy_tsan_step.dependOn(&run_startup_lazy_tsan_tests.step);
+
+    // GAP-ENT-0020 P7a: prop-store slab packing validated through the full
+    // geode stack (facade -> adapter -> gs shards). Asserts bytes/node << 8192
+    // for node props, legacy page-granular edge-prop chains, read parity, and
+    // clean-shutdown -> reopen parity. See tests/test_slab_packing_geode.zig.
+    const slab_packing_test_mod = b.createModule(.{
+        .root_source_file = b.path("tests/test_slab_packing_geode.zig"),
+        .target = target,
+        .optimize = optimize,
+        .link_libc = true,
+    });
+    slab_packing_test_mod.addImport("geode", root_mod);
+    slab_packing_test_mod.addImport("graph_storage", graph_storage_mod);
+    const slab_packing_tests = b.addTest(.{ .root_module = slab_packing_test_mod });
+    const run_slab_packing_tests = b.addRunArtifact(slab_packing_tests);
+    const slab_packing_step = b.step("test-slab-packing-geode", "GAP-ENT-0020 P7a: slab-packed node props + legacy edge props through the geode adapter");
+    slab_packing_step.dependOn(&run_slab_packing_tests.step);
 
     // H3-P2: value-ordered scan (16-shard k-way merge) + ordered-index
     // registration on CREATE INDEX. See tests/test_ordered_scan.zig.
@@ -7811,6 +8067,46 @@ pub fn build(b: *std.Build) void {
     const h3_fastpath_repro_step = b.step("test-h3-fastpath-repro", "Run H3-P3 bench repro (CREATE INDEX before nodes)");
     h3_fastpath_repro_step.dependOn(&run_h3_fastpath_repro_tests.step);
 
+    // GAP-0064 FIX C: ORDER BY on a FRESH store (no CREATE INDEX) auto-builds the
+    // value-ordered index in the background, serves it (hits==1) once built, and
+    // persists+reloads it across a reopen. See tests/test_ordered_index_autobuild.zig.
+    const ordered_autobuild_test_mod = b.createModule(.{
+        .root_source_file = b.path("tests/test_ordered_index_autobuild.zig"),
+        .target = target,
+        .optimize = optimize,
+        .link_libc = true,
+    });
+    ordered_autobuild_test_mod.addImport("geode", root_mod);
+    ordered_autobuild_test_mod.addImport("graph_storage", graph_storage_mod);
+    const ordered_autobuild_tests = b.addTest(.{ .root_module = ordered_autobuild_test_mod });
+    const run_ordered_autobuild_tests = b.addRunArtifact(ordered_autobuild_tests);
+    shardDep(test_step, &run_ordered_autobuild_tests.step, 1, test_shard_loads, test_shard_index);
+    const ordered_autobuild_step = b.step("test-ordered-index-autobuild", "GAP-0064 FIX C: ORDER BY fresh-store auto-build + serve + persist/reload");
+    ordered_autobuild_step.dependOn(&run_ordered_autobuild_tests.step);
+
+    // GAP-0064 INTEGRATION TSan companion: the same test file compiled with
+    // -fsanitize-thread so the "concurrent ordered-index build || FULL checkpoint"
+    // case exercises the build-vs-checkpoint ordered-rebuild serialization under
+    // the thread sanitizer (flags the double-build race pre-fix; clean post-fix).
+    // Opt-in (not in the default test_step) because TSan adds ~5-8x overhead and
+    // requires libtsan at runtime. Run via: zig build test-ordered-index-autobuild-tsan
+    const ordered_autobuild_tsan_mod = b.createModule(.{
+        .root_source_file = b.path("tests/test_ordered_index_autobuild.zig"),
+        .target = target,
+        .optimize = .Debug,
+        .link_libc = true,
+        .sanitize_thread = true,
+    });
+    ordered_autobuild_tsan_mod.addImport("geode", root_mod);
+    ordered_autobuild_tsan_mod.addImport("graph_storage", graph_storage_mod);
+    const ordered_autobuild_tsan_tests = b.addTest(.{ .root_module = ordered_autobuild_tsan_mod });
+    const run_ordered_autobuild_tsan_tests = b.addRunArtifact(ordered_autobuild_tsan_tests);
+    const ordered_autobuild_tsan_step = b.step(
+        "test-ordered-index-autobuild-tsan",
+        "TSan companion: concurrent ordered-index build || FULL checkpoint under -fsanitize-thread (race detection)",
+    );
+    ordered_autobuild_tsan_step.dependOn(&run_ordered_autobuild_tsan_tests.step);
+
     // GAP-ENT-0008 Fix B: correctness + coverage guard for the restart-time
     // exact node-property index rebuild that the parallel rebuild must preserve.
     const parallel_index_rebuild_test_mod = b.createModule(.{
@@ -7826,6 +8122,44 @@ pub fn build(b: *std.Build) void {
     shardDep(test_step, &run_parallel_index_rebuild_tests.step, 1, test_shard_loads, test_shard_index);
     const parallel_index_rebuild_step = b.step("test-parallel-index-rebuild", "Correctness + coverage guard for the restart property-index rebuild (serial baseline -> parallel)");
     parallel_index_rebuild_step.dependOn(&run_parallel_index_rebuild_tests.step);
+
+    // H4 (cold-open phase 1): defer the exact node-property index rebuild to
+    // lazy first-access. Asserts open does NOT rebuild, the first index access
+    // rebuilds exactly once and returns correct postings, and a second access
+    // does not rebuild again (correctness == an eager rebuild).
+    const exact_index_deferred_test_mod = b.createModule(.{
+        .root_source_file = b.path("tests/test_exact_index_deferred_build.zig"),
+        .target = target,
+        .optimize = optimize,
+        .link_libc = true,
+    });
+    exact_index_deferred_test_mod.addImport("geode", root_mod);
+    exact_index_deferred_test_mod.addImport("graph_storage", graph_storage_mod);
+    const exact_index_deferred_tests = b.addTest(.{ .root_module = exact_index_deferred_test_mod });
+    const run_exact_index_deferred_tests = b.addRunArtifact(exact_index_deferred_tests);
+    shardDep(test_step, &run_exact_index_deferred_tests.step, 1, test_shard_loads, test_shard_index);
+    const exact_index_deferred_step = b.step("test-exact-index-deferred-build", "H4: defer exact node-property index rebuild to lazy first-access (cold-open phase 1)");
+    exact_index_deferred_step.dependOn(&run_exact_index_deferred_tests.step);
+
+    // GAP-ENT-0048 crash-reconcile (Phase E): on a crash-reopen with a committed
+    // WAL tail, geode RECONCILES prop_exact.idx (O(tail)) instead of REBUILDING.
+    // Asserts reconcile == full-rebuild key-for-key AND count-for-count for an
+    // insert + in-place value change + delete; clean reopen reloads; multi-crash
+    // and reverse-map-absent fall back to a safe rebuild; reverse-map round-trip
+    // + bounded size.
+    const exact_index_crash_reconcile_mod = b.createModule(.{
+        .root_source_file = b.path("tests/test_exact_index_crash_reconcile.zig"),
+        .target = target,
+        .optimize = optimize,
+        .link_libc = true,
+    });
+    exact_index_crash_reconcile_mod.addImport("geode", root_mod);
+    exact_index_crash_reconcile_mod.addImport("graph_storage", graph_storage_mod);
+    const exact_index_crash_reconcile_tests = b.addTest(.{ .root_module = exact_index_crash_reconcile_mod });
+    const run_exact_index_crash_reconcile_tests = b.addRunArtifact(exact_index_crash_reconcile_tests);
+    shardDep(test_step, &run_exact_index_crash_reconcile_tests.step, 1, test_shard_loads, test_shard_index);
+    const exact_index_crash_reconcile_step = b.step("test-exact-index-crash-reconcile", "Phase E: crash-reopen prop_exact.idx reconcile == full rebuild (keys+counts)");
+    exact_index_crash_reconcile_step.dependOn(&run_exact_index_crash_reconcile_tests.step);
 
     // TSan companion: same test file compiled with -fsanitize-thread so the
     // adversarial repeated-rebuild case runs under the thread sanitizer.
@@ -7869,6 +8203,25 @@ pub fn build(b: *std.Build) void {
     shardDep(test_step, &run_edge_durability_churn_repro_tests.step, 1, test_shard_loads, test_shard_index);
     const edge_durability_churn_repro_step = b.step("test-edge-durability-churn-repro", "Regression: GNC2 edge re-apply orphans a durable edge slot -> EdgeSlotMappingMissing after restart (edge durability under churn)");
     edge_durability_churn_repro_step.dependOn(&run_edge_durability_churn_repro_tests.step);
+
+    // GAP-ENT-0024 (inline edge public id, graph-storage v0.2.24): new edges
+    // carry the 64-bit public id INLINE in the durable adjacency records and
+    // write NO `__geode_internal_edge_id` property page (~8 KB/edge saved);
+    // loop1 / hydrate resolve v2 edges without the per-edge property fetch;
+    // legacy property-tagged edges keep resolving forever (read-both).
+    const edge_inline_public_id_test_mod = b.createModule(.{
+        .root_source_file = b.path("tests/test_edge_inline_public_id.zig"),
+        .target = target,
+        .optimize = optimize,
+        .link_libc = true,
+    });
+    edge_inline_public_id_test_mod.addImport("geode", root_mod);
+    edge_inline_public_id_test_mod.addImport("graph_storage", graph_storage_mod);
+    const edge_inline_public_id_tests = b.addTest(.{ .root_module = edge_inline_public_id_test_mod });
+    const run_edge_inline_public_id_tests = b.addRunArtifact(edge_inline_public_id_tests);
+    shardDep(test_step, &run_edge_inline_public_id_tests.step, 1, test_shard_loads, test_shard_index);
+    const edge_inline_public_id_step = b.step("test-edge-inline-public-id", "GAP-ENT-0024: inline edge public id — no per-edge __geode_internal_edge_id props page; loop1 inline-first + legacy property fallback");
+    edge_inline_public_id_step.dependOn(&run_edge_inline_public_id_tests.step);
 
     // Task #34: bulk-edge ingest slowness on edges_app_role_assignment.jsonl.
     // Level 1 regression — contract tests for the future

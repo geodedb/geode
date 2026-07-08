@@ -415,6 +415,14 @@ pub const QuicTransport = struct {
     /// `connections_mutex` on the hot path. A momentarily stale value is
     /// harmless — worst case the poll cadence adjusts one cycle late.
     active_connection_count: std.atomic.Value(usize) = std.atomic.Value(usize).init(0),
+    /// Gap 0039: set by `requestShutdown()`. Once true, `accept()` /
+    /// `tryAccept()` refuse to admit new connections — a peer whose
+    /// handshake completes after the shutdown signal is never wrapped or
+    /// handed to a handler, so it cannot join the drain set. (The vendored
+    /// endpoint may still complete in-flight handshakes; the resulting inner
+    /// connections stay in the endpoint accepted queue and are torn down
+    /// with the endpoint.)
+    shutting_down: std.atomic.Value(bool) = std.atomic.Value(bool).init(false),
     /// PERF-D / #816 follow-up: generation counter that is incremented every
     /// time a connection slot is freed (via `destroyConnection`'s swapRemove
     /// or via `drainPendingDestroy` completing a batch). The server's accept
@@ -924,6 +932,8 @@ pub const QuicTransport = struct {
     }
 
     pub fn accept(self: *QuicTransport) !*QuicConnection {
+        // Gap 0039: refuse new connections the moment shutdown is signalled.
+        if (self.shutting_down.load(.acquire)) return QuicError.Closed;
         if (self.endpoint) |ep| {
             // GAP-0203: Drain deferred connection cleanups.
             self.drainPendingDestroy();
@@ -966,8 +976,13 @@ pub const QuicTransport = struct {
     /// still own. Handlers observe the per-connection shutdown flag on their
     /// next stream read/write and then call destroyConnection() normally.
     ///
+    /// Gap 0039: also flips `shutting_down`, so `accept()` / `tryAccept()`
+    /// refuse to admit connections from that point on ("stop accepting new
+    /// connections immediately on the shutdown signal").
+    ///
     /// CANARY: REQ=REQ-QUIC-HC-004; FEATURE="QUIC High-Concurrency Shutdown"; ASPECT=ConnectionDrainSignal; STATUS=TESTED; TEST=test_quic_condition_timedwait_cadence; OWNER=transport; UPDATED=2026-06-10
     pub fn requestShutdown(self: *QuicTransport) void {
+        self.shutting_down.store(true, .release);
         self.connections_mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
         defer self.connections_mutex.unlock(std.Io.Threaded.global_single_threaded.io());
 
@@ -975,6 +990,28 @@ pub const QuicTransport = struct {
             conn.requestShutdown();
         }
         self.poll_sync.notifyPoll();
+    }
+
+    /// Gap 0039: deadline force-close for the bounded shutdown drain. Re-signals
+    /// every connection wrapper still tracked (per-connection shutdown flag +
+    /// best-effort QUIC CONNECTION_CLOSE via `QuicConnection.requestShutdown`,
+    /// both idempotent) and broadcasts a poll wake so parked handler waits
+    /// re-check their flags. Returns the number of connections that were still
+    /// tracked — the "N stalled connections" the caller logs. Does NOT free
+    /// anything: wrapper ownership stays with the handler threads (freeing here
+    /// would be a use-after-free against a handler mid-read); the process-exit
+    /// watchdog in the serve path guarantees termination if a handler never
+    /// unwinds anyway.
+    pub fn forceCloseConnections(self: *QuicTransport) usize {
+        self.shutting_down.store(true, .release);
+        self.connections_mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
+        const stalled = self.connections.items.len;
+        for (self.connections.items) |conn| {
+            conn.requestShutdown();
+        }
+        self.connections_mutex.unlock(std.Io.Threaded.global_single_threaded.io());
+        self.poll_sync.notifyPoll();
+        return stalled;
     }
 
     /// #864 §6.6: snapshot the max-observed `poll(0)` cycle latency
@@ -1053,6 +1090,8 @@ pub const QuicTransport = struct {
     }
 
     pub fn tryAccept(self: *QuicTransport) ?*QuicConnection {
+        // Gap 0039: refuse new connections the moment shutdown is signalled.
+        if (self.shutting_down.load(.acquire)) return null;
         if (self.endpoint) |ep| {
             // QUIC library v0.1.10: poll() is internally thread-safe
             ep.poll(0) catch {

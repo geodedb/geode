@@ -465,8 +465,18 @@ pub fn BoundedNodeCache(comptime K: type, comptime V: type) type {
         /// only nodes whose readers that lock drained are freed; nodes of other
         /// graphs stay retired until their own grace window. Safe: a non-matching
         /// entry is neither freed nor moved out of the retire list.
+        ///
+        /// LOCKING (14.27M SEGV fix, bomb #2b): each shard's `map_lock` is held
+        /// across that shard's compaction. The retire lists are GLOBAL across
+        /// graphs, so a writer of a DIFFERENT graph (put/evict/remove under its
+        /// shard's map_lock) can append retirees concurrently with a checkpoint
+        /// reclaiming graph A — an unlocked iterate-and-compact raced those
+        /// appends (ArrayList realloc => dangling element reads). The caller's
+        /// per-graph rwlock only quiesces ONE graph's readers, never the list.
         pub fn reclaimRetiredWhere(self: *Self, ctx: *anyopaque, pred: RetirePredicate) void {
             for (&self.shards) |*sh| {
+                sh.map_lock.lockUncancelable(io());
+                defer sh.map_lock.unlock(io());
                 if (sh.retired.items.len == 0) continue;
                 var w: usize = 0;
                 for (sh.retired.items) |*v| {

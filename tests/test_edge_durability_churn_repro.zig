@@ -140,6 +140,9 @@ test "REGRESSION: N idempotent edge re-applies + restart leave exactly one durab
         defer graph_store.deinitGlobalStore();
 
         try store.loadFromFile();
+        // EARLY-READY (H3): loadFromFile defers the per-graph loop1/loop2
+        // build; force it like the read-path chokepoints do on first access.
+        store.ensureGraphHydrated("default");
         std.debug.print("[test1 boot2] post-load: mem_nodes={d} mem_edges={d}\n", .{ store.nodes.count(), store.edges.count() });
 
         try std.testing.expectEqual(@as(usize, 2), store.nodes.count());
@@ -277,6 +280,8 @@ test "REGRESSION: hydration self-heals an already-corrupted store — orphan edg
         const adapter = graph_store.getGlobalAdapter().?;
 
         try store.loadFromFile();
+        // EARLY-READY (H3): force the deferred loop1/loop2 build (see test 1).
+        store.ensureGraphHydrated("default");
         std.debug.print("[test2 boot2] post-load: mem_nodes={d} mem_edges={d}\n", .{ store.nodes.count(), store.edges.count() });
 
         try std.testing.expectEqual(@as(usize, 2), store.nodes.count());
@@ -370,6 +375,8 @@ test "GUARD: two distinct committed edges survive restart as two durable edges (
         defer graph_store.deinitGlobalStore();
 
         try store.loadFromFile();
+        // EARLY-READY (H3): force the deferred loop1/loop2 build (see test 1).
+        store.ensureGraphHydrated("default");
         std.debug.print("[test3 boot2] mem_edges={d}\n", .{store.edges.count()});
 
         // Both distinct edges survive as two logical edges.

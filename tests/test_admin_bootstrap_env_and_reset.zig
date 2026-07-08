@@ -383,3 +383,434 @@ test "offline reset-password leaves a verifiable HMAC chain on reload (atomicity
         try mgr.verifyChain(&hmac_key);
     }
 }
+
+// ===========================================================================
+// -- Admin-password persistence across restart (2026-07-01 live incident) --
+//
+// Observed live: a geode server whose persisted admin password was A (set at
+// first boot, later used successfully) was cleanly SIGTERM-shut-down while
+// the serve script's environment carried GEODE_ADMIN_PASSWORD=B. After
+// reopen only B authenticated — the persisted admin credential had been
+// silently rotated to the env value.
+//
+// Mechanism: the first-boot bootstrap decision is gated ONLY on the
+// IN-MEMORY view (`AuthGraphManager.hasAuthRecords()`, i.e. the user_cache
+// populated by `loadUsersFromGraph`). Any boot where that load comes up
+// empty while persisted records still exist on disk (hydration failure,
+// storage-layout drift, partial crash recovery) is indistinguishable from a
+// genuine first boot, so server-init re-runs `bootstrapDefaultAdmin` and
+// re-seeds the admin from whatever GEODE_ADMIN_PASSWORD holds at restart
+// time — destroying the persisted credential without any warning.
+//
+// Contract pinned here (persisted-credential precedence):
+//   1. env password seeds the admin ONLY when no persisted admin exists;
+//   2. an existing persisted credential survives restarts regardless of env;
+//   3. when the in-memory load is empty but the ENGINE (on-disk label index,
+//      load-independent) still reports persisted :User records,
+//      `bootstrapDefaultAdmin` must REFUSE (error.PersistedAdminExists)
+//      instead of silently rotating the credential.
+// ===========================================================================
+
+// Model of the degraded reload the live server hit: the on-disk state is
+// intact but the in-memory caches loaded nothing. Wiping the caches after a
+// healthy AGM.init reproduces exactly the state `hasAuthRecords()` sees when
+// `loadUsersFromGraph` returns empty (getNodesByLabel -> null) while the
+// engine still holds the records.
+fn wipeInMemoryAuthCaches(mgr: *auth_graph_manager.AuthGraphManager) void {
+    mgr.storage.user_cache.clearRetainingCapacity();
+    mgr.storage.user_nodes.clearRetainingCapacity();
+    mgr.storage.role_cache.clearRetainingCapacity();
+    mgr.storage.role_nodes.clearRetainingCapacity();
+    mgr.storage.permission_cache.clearRetainingCapacity();
+    mgr.storage.permission_nodes.clearRetainingCapacity();
+    mgr.storage.policy_cache.clearRetainingCapacity();
+    mgr.storage.policy_nodes.clearRetainingCapacity();
+    mgr.storage.graph_grant_nodes.clearRetainingCapacity();
+}
+
+// -- Persistence Test 1 (RED pre-fix) ---------------------------------------
+//
+// Degraded reload + changed env must NOT re-seed the admin from env.
+test "bootstrapDefaultAdmin refuses env re-seed when persisted admin records exist on disk (restart rotation regression)" {
+    const allocator = testing.allocator;
+
+    var tmp = testing.tmpDir(.{});
+    defer tmp.cleanup();
+
+    const data_dir = try std.fmt.allocPrint(allocator, ".zig-cache/tmp/{s}", .{&tmp.sub_path});
+    defer allocator.free(data_dir);
+
+    clearAdminPasswordEnv();
+    defer clearAdminPasswordEnv();
+
+    const hmac_key = [_]u8{0x11} ** 32;
+
+    // ---- Boot 1: genuine first boot with env password A ----
+    try setEnv(ADMIN_PASSWORD_ENV, "restartpassA1");
+    {
+        const store = try graph_store.initGlobalStore(allocator, data_dir);
+        var mgr = try auth_graph_manager.AuthGraphManager.init(allocator, store);
+        try testing.expect(!mgr.hasAuthRecords());
+        const bootstrap = try mgr.bootstrapDefaultAdmin(&hmac_key);
+        allocator.free(bootstrap.username);
+        allocator.free(bootstrap.password);
+        mgr.deinit();
+        graph_store.getGlobalStore(allocator).saveIfDirty();
+        graph_store.deinitGlobalStore(); // clean shutdown
+    }
+
+    // ---- Boot 2: restart with env password B; in-memory load degraded ----
+    try setEnv(ADMIN_PASSWORD_ENV, "restartpassB2");
+    {
+        const store = try graph_store.initGlobalStore(allocator, data_dir);
+        var mgr = try auth_graph_manager.AuthGraphManager.init(allocator, store);
+        defer {
+            mgr.deinit();
+            graph_store.deinitGlobalStore();
+        }
+
+        // Sanity: a HEALTHY reload sees the persisted records.
+        try testing.expect(mgr.hasAuthRecords());
+
+        // Degrade the in-memory view (see wipeInMemoryAuthCaches doc).
+        wipeInMemoryAuthCaches(&mgr);
+        try testing.expect(!mgr.hasAuthRecords());
+
+        // PRE-FIX: this call succeeded and silently rotated the persisted
+        // admin credential to "restartpassB2". POST-FIX: the engine-level
+        // guard sees persisted :User records on disk and refuses.
+        try testing.expectError(error.PersistedAdminExists, mgr.bootstrapDefaultAdmin(&hmac_key));
+    }
+
+    // ---- Boot 3: healthy reload — persisted credential must still be A ----
+    {
+        const store = try graph_store.initGlobalStore(allocator, data_dir);
+        defer graph_store.deinitGlobalStore();
+
+        const reloaded = user_storage.UserStorageBackend.findUserByUsernameInGraph(store, "geode") orelse return error.UserMissingOnReload;
+        const hash = reloaded.password_hash[0..reloaded.password_hash_len];
+
+        try testing.expect(try geode_auth.verifyPasswordArgon2id(allocator, "restartpassA1", hash));
+        try testing.expect(!(try geode_auth.verifyPasswordArgon2id(allocator, "restartpassB2", hash)));
+    }
+}
+
+// -- Persistence Test 2 ------------------------------------------------------
+//
+// Healthy restart with a CHANGED env password: records load, env is ignored,
+// the persisted credential keeps authenticating (and the env value does not).
+// This is the exact operator-visible contract from the incident report.
+test "healthy restart with changed GEODE_ADMIN_PASSWORD keeps the persisted admin credential" {
+    const allocator = testing.allocator;
+
+    var tmp = testing.tmpDir(.{});
+    defer tmp.cleanup();
+
+    const data_dir = try std.fmt.allocPrint(allocator, ".zig-cache/tmp/{s}", .{&tmp.sub_path});
+    defer allocator.free(data_dir);
+
+    clearAdminPasswordEnv();
+    defer clearAdminPasswordEnv();
+
+    const hmac_key = [_]u8{0x22} ** 32;
+
+    // Boot 1: first boot, env A.
+    try setEnv(ADMIN_PASSWORD_ENV, "keeppassA1");
+    {
+        const store = try graph_store.initGlobalStore(allocator, data_dir);
+        var mgr = try auth_graph_manager.AuthGraphManager.init(allocator, store);
+        const bootstrap = try mgr.bootstrapDefaultAdmin(&hmac_key);
+        allocator.free(bootstrap.username);
+        allocator.free(bootstrap.password);
+        mgr.deinit();
+        graph_store.getGlobalStore(allocator).saveIfDirty();
+        graph_store.deinitGlobalStore();
+    }
+
+    // Boot 2: env changed to B. Mirror the server-init decision: records
+    // exist -> env ignored -> NO bootstrap call. Persisted hash must still
+    // verify A and reject B.
+    try setEnv(ADMIN_PASSWORD_ENV, "keeppassB2");
+    {
+        const store = try graph_store.initGlobalStore(allocator, data_dir);
+        defer graph_store.deinitGlobalStore();
+        var mgr = try auth_graph_manager.AuthGraphManager.init(allocator, store);
+        defer mgr.deinit();
+
+        try testing.expect(mgr.hasAuthRecords()); // server-init takes the verify path, not bootstrap
+
+        const reloaded = user_storage.UserStorageBackend.findUserByUsernameInGraph(store, "geode") orelse return error.UserMissingOnReload;
+        const hash = reloaded.password_hash[0..reloaded.password_hash_len];
+        try testing.expect(try geode_auth.verifyPasswordArgon2id(allocator, "keeppassA1", hash));
+        try testing.expect(!(try geode_auth.verifyPasswordArgon2id(allocator, "keeppassB2", hash)));
+    }
+}
+
+// -- Persistence Test 3 ------------------------------------------------------
+//
+// The refusal guard must NOT false-positive on a genuine first boot with an
+// ENGINE-BACKED store (fresh data dir): env password seeds the admin, no
+// forced reset.
+test "engine-backed first boot with env password still bootstraps (guard does not false-positive)" {
+    const allocator = testing.allocator;
+
+    var tmp = testing.tmpDir(.{});
+    defer tmp.cleanup();
+
+    const data_dir = try std.fmt.allocPrint(allocator, ".zig-cache/tmp/{s}", .{&tmp.sub_path});
+    defer allocator.free(data_dir);
+
+    clearAdminPasswordEnv();
+    defer clearAdminPasswordEnv();
+    try setEnv(ADMIN_PASSWORD_ENV, "firstbootpass1");
+
+    const hmac_key = [_]u8{0x33} ** 32;
+
+    const store = try graph_store.initGlobalStore(allocator, data_dir);
+    defer graph_store.deinitGlobalStore();
+    var mgr = try auth_graph_manager.AuthGraphManager.init(allocator, store);
+    defer mgr.deinit();
+
+    const bootstrap = try mgr.bootstrapDefaultAdmin(&hmac_key);
+    defer allocator.free(bootstrap.username);
+    defer allocator.free(bootstrap.password);
+
+    try testing.expectEqualStrings("firstbootpass1", bootstrap.password);
+
+    const user = mgr.storage.getUser(bootstrap.user_id) orelse return error.UserNotFound;
+    // Env-seeded password: operator already knows it — no forced reset.
+    try testing.expect(!user.password_reset_required);
+    const hash = user.password_hash[0..user.password_hash_len];
+    try testing.expect(try geode_auth.verifyPasswordArgon2id(allocator, "firstbootpass1", hash));
+}
+
+// -- Persistence Test 4 ------------------------------------------------------
+//
+// First boot with NO env password: a random 32-hex password is generated and
+// the record demands a reset on first login. (The secret-free operator
+// breadcrumb for this path is covered end-to-end by
+// tests/test_first_boot_admin_password_breadcrumb.zig.)
+test "first boot without env password autogenerates a 32-hex password with forced reset" {
+    const allocator = testing.allocator;
+
+    clearAdminPasswordEnv();
+    defer clearAdminPasswordEnv();
+
+    var store = try graph_store.GraphStore.init(allocator);
+    defer store.deinit();
+    var mgr = try auth_graph_manager.AuthGraphManager.init(allocator, &store);
+    defer mgr.deinit();
+
+    const hmac_key = [_]u8{0x44} ** 32;
+    const bootstrap = try mgr.bootstrapDefaultAdmin(&hmac_key);
+    defer allocator.free(bootstrap.username);
+    defer allocator.free(bootstrap.password);
+
+    try testing.expectEqual(@as(usize, 32), bootstrap.password.len);
+    for (bootstrap.password) |c| {
+        try testing.expect(std.ascii.isHex(c));
+    }
+
+    const user = mgr.storage.getUser(bootstrap.user_id) orelse return error.UserNotFound;
+    try testing.expect(user.password_reset_required);
+}
+
+// ===========================================================================
+// -- Review-0016 hardening: the guard's own failure modes -------------------
+//
+// Important-1: `countNodesByLabel(...) catch 0` treated ANY engine error as
+// "first boot", so an open/IO failure on a REGISTERED security graph — the
+// exact degraded-storage class the guard defends against — bypassed the guard
+// and let the env re-seed the admin credential. Only error.GraphNotFound (the
+// graph was never registered) may map to 0; everything else must REFUSE.
+//
+// Important-2 (half): bootstrap is not atomic — the :User node commits in its
+// own engine txn before any credential property is written. A crash in that
+// window used to make every subsequent boot refuse FOREVER with no working
+// credential. Counting only credential-bearing records turns that artifact
+// back into a recoverable first boot.
+// ===========================================================================
+
+// -- Review-0016 Test 1 (RED pre-fix) ----------------------------------------
+//
+// Engine error on a REGISTERED security graph must fail CLOSED, not read as
+// first boot. Model: boot 1 persists an admin normally; then the security
+// graph's on-disk directory (`{data_dir}/{uuid_hex}/`) is replaced with a
+// plain FILE so every engine open fails with a real I/O-class error while the
+// graph remains registered in graph_registry.dat. PRE-FIX: `catch 0` swallowed
+// the error and bootstrap proceeded (env re-seed). POST-FIX: refusal.
+test "bootstrapDefaultAdmin fails CLOSED when the registered security graph cannot be opened (engine error != first boot)" {
+    const allocator = testing.allocator;
+
+    var tmp = testing.tmpDir(.{});
+    defer tmp.cleanup();
+
+    const data_dir = try std.fmt.allocPrint(allocator, ".zig-cache/tmp/{s}", .{&tmp.sub_path});
+    defer allocator.free(data_dir);
+
+    clearAdminPasswordEnv();
+    defer clearAdminPasswordEnv();
+
+    const hmac_key = [_]u8{0x55} ** 32;
+    const io = std.Io.Threaded.global_single_threaded.io();
+
+    // ---- Boot 1: genuine first boot with env password A ----
+    try setEnv(ADMIN_PASSWORD_ENV, "enginefailpassA1");
+    var security_uuid: [16]u8 = undefined;
+    {
+        const store = try graph_store.initGlobalStore(allocator, data_dir);
+        var mgr = try auth_graph_manager.AuthGraphManager.init(allocator, store);
+        const bootstrap = try mgr.bootstrapDefaultAdmin(&hmac_key);
+        allocator.free(bootstrap.username);
+        allocator.free(bootstrap.password);
+        security_uuid = graph_store.GraphStore.getGraphUuid(graph_store.SECURITY_GRAPH_NAME) orelse return error.SecurityGraphUuidMissing;
+        mgr.deinit();
+        graph_store.getGlobalStore(allocator).saveIfDirty();
+        graph_store.deinitGlobalStore(); // clean shutdown
+    }
+
+    // ---- Corrupt: replace the security graph's engine directory with a
+    // plain file. The registry still lists the graph, so the guard's count
+    // hits `openGraphLocked` → ShardedGraphEngine.open → NotDir-class error. ----
+    const hex = std.fmt.bytesToHex(security_uuid, .lower);
+    {
+        const engine_dir = try std.fmt.allocPrint(allocator, "{s}/{s}", .{ data_dir, &hex });
+        defer allocator.free(engine_dir);
+        try std.Io.Dir.cwd().deleteTree(io, engine_dir);
+        const f = try std.Io.Dir.cwd().createFile(io, engine_dir, .{});
+        f.close(io);
+    }
+
+    // ---- Boot 2: restart with env password B against the degraded store ----
+    try setEnv(ADMIN_PASSWORD_ENV, "enginefailpassB2");
+    {
+        const store = try graph_store.initGlobalStore(allocator, data_dir);
+        defer graph_store.deinitGlobalStore();
+
+        // Two production shapes, both must fail CLOSED:
+        //  (a) AGM.init survives with an empty in-memory view → the
+        //      bootstrapDefaultAdmin guard must map the engine error to a
+        //      refusal (PRE-FIX: `catch 0` bypassed it and env re-seeded).
+        //  (b) AGM.init itself fails on the degraded store → server main
+        //      takes the agm==null fallback, whose engine-level probe must
+        //      fail CLOSED so ensureDefaultUser never seeds the env password.
+        if (auth_graph_manager.AuthGraphManager.init(allocator, store)) |mgr_val| {
+            var mgr = mgr_val;
+            defer mgr.deinit();
+            try testing.expect(!mgr.hasAuthRecords());
+            try testing.expectError(error.PersistedAdminExists, mgr.bootstrapDefaultAdmin(&hmac_key));
+        } else |init_err| {
+            if (comptime @hasDecl(auth_graph_manager, "persistedSecurityUserCountOnDisk")) {
+                try testing.expectError(error.PersistedAdminExists, auth_graph_manager.persistedSecurityUserCountOnDisk());
+            } else {
+                // PRE-FIX: no fail-closed probe exists — server main falls
+                // through to ensureDefaultUser and activates the env
+                // credential. Fail RED.
+                std.debug.print("PRE-FIX fail-open: AGM.init failed ({s}) and no engine-level fail-closed probe exists for the agm==null fallback\n", .{@errorName(init_err)});
+                return error.FailOpenNoProbe;
+            }
+        }
+    }
+}
+
+// -- Review-0016 Test 2 (RED pre-fix) ----------------------------------------
+//
+// Half-bootstrap crash artifact: persisted :User record(s) that carry NO
+// usable credential (bootstrap is not atomic — the :User node commits before
+// `setNodePropertiesBatch` writes the credential; a crash in that window
+// leaves label-indexed :User state with no password_hash anywhere).
+//
+// Fixture note: a STRICTLY propertyless node turned out not to resurface in
+// the engine label index after a CLEAN-shutdown reopen (verified empirically
+// — the pre-remodel fixture read count==0 at boot 2), so this test models the
+// crash artifact as a persisted :User node whose password_hash is EMPTY while
+// it IS visible to the label count and the in-memory load is degraded — the
+// same credential-less class the WAL-replay path can produce after a real
+// crash.
+//
+// PRE-FIX: the guard counted raw :User records → 1 → refuse FOREVER, with no
+// credential that could ever log in and a reset-password escape hatch that
+// cannot find the user. POST-FIX: the guard sees zero CREDENTIAL-BEARING
+// records, treats the state as first boot, and re-seeds a working admin.
+test "half-bootstrap artifact (credential-less :User records) is recoverable: bootstrap re-seeds instead of refusing forever" {
+    const allocator = testing.allocator;
+
+    var tmp = testing.tmpDir(.{});
+    defer tmp.cleanup();
+
+    const data_dir = try std.fmt.allocPrint(allocator, ".zig-cache/tmp/{s}", .{&tmp.sub_path});
+    defer allocator.free(data_dir);
+
+    clearAdminPasswordEnv();
+    defer clearAdminPasswordEnv();
+
+    const hmac_key = [_]u8{0x66} ** 32;
+
+    const store = try graph_store.initGlobalStore(allocator, data_dir);
+    defer graph_store.deinitGlobalStore();
+
+    // Persist an admin normally so the :User node is fully label-indexed…
+    try setEnv(ADMIN_PASSWORD_ENV, "halfbootseedA1");
+    var mgr = try auth_graph_manager.AuthGraphManager.init(allocator, store);
+    defer mgr.deinit();
+    const seeded = try mgr.bootstrapDefaultAdmin(&hmac_key);
+    const seeded_user_id = seeded.user_id;
+    allocator.free(seeded.username);
+    allocator.free(seeded.password);
+
+    // …then destroy the credential on disk (empty password_hash) to model the
+    // crash artifact, and wipe the in-memory view (degraded load).
+    const user_node_id = mgr.storage.user_nodes.get(seeded_user_id) orelse return error.UserNodeMissing;
+    try store.setNodeProperty(user_node_id, "password_hash", .{ .String = "" });
+    wipeInMemoryAuthCaches(&mgr);
+    try testing.expect(!mgr.hasAuthRecords());
+
+    // Precondition: the ENGINE still reports the :User record (this is what
+    // made the pre-refinement guard refuse forever).
+    const adapter = graph_store.getGlobalAdapter() orelse return error.NoGlobalAdapter;
+    try testing.expectEqual(@as(u64, 1), try adapter.countNodesByLabel(graph_store.SECURITY_GRAPH_NAME, user_storage.USER_LABEL));
+
+    // PRE-FIX: error.PersistedAdminExists (refuse forever — no credential
+    // exists anywhere, so the operator is locked out with no escape).
+    // POST-FIX: zero credential-bearing records → treated as first boot; the
+    // env password seeds a REAL, working admin credential.
+    try setEnv(ADMIN_PASSWORD_ENV, "halfbootpassB2");
+    const bootstrap = try mgr.bootstrapDefaultAdmin(&hmac_key);
+    defer allocator.free(bootstrap.username);
+    defer allocator.free(bootstrap.password);
+    try testing.expectEqualStrings("halfbootpassB2", bootstrap.password);
+
+    const user = mgr.storage.getUser(bootstrap.user_id) orelse return error.UserNotFound;
+    const hash = user.password_hash[0..user.password_hash_len];
+    try testing.expect(try geode_auth.verifyPasswordArgon2id(allocator, "halfbootpassB2", hash));
+}
+
+// -- Review-0016 Test 3 --------------------------------------------------------
+//
+// Unit-level pin of the fail-closed error mapping itself: ONLY GraphNotFound
+// (never-registered security graph = genuine first boot) maps to zero; every
+// other error refuses; successful counts pass through untouched.
+test "failClosedPersistedUserCount: only GraphNotFound means first boot; all other errors refuse" {
+    // The comptime @hasDecl gate lets this test FILE compile against the
+    // PRE-FIX sources (where the helper does not exist) so the two behavioral
+    // RED tests above can run and fail as bug proof; post-fix the helper
+    // exists and the full body is analyzed and executed.
+    if (comptime !@hasDecl(auth_graph_manager, "failClosedPersistedUserCount")) {
+        return error.SkipZigTest;
+    } else {
+        // Genuine first boot: the registry has no __geode_security entry.
+        try testing.expectEqual(@as(u64, 0), try auth_graph_manager.failClosedPersistedUserCount(error.GraphNotFound));
+
+        // Successful counts pass through.
+        try testing.expectEqual(@as(u64, 3), try auth_graph_manager.failClosedPersistedUserCount(@as(anyerror!u64, 3)));
+        try testing.expectEqual(@as(u64, 0), try auth_graph_manager.failClosedPersistedUserCount(@as(anyerror!u64, 0)));
+
+        // Degraded-storage class: open/IO/resource failures on a REGISTERED
+        // graph must REFUSE (fail closed), never read as first boot.
+        try testing.expectError(error.PersistedAdminExists, auth_graph_manager.failClosedPersistedUserCount(error.InputOutput));
+        try testing.expectError(error.PersistedAdminExists, auth_graph_manager.failClosedPersistedUserCount(error.AccessDenied));
+        try testing.expectError(error.PersistedAdminExists, auth_graph_manager.failClosedPersistedUserCount(error.NotDir));
+        try testing.expectError(error.PersistedAdminExists, auth_graph_manager.failClosedPersistedUserCount(error.OutOfMemory));
+        try testing.expectError(error.PersistedAdminExists, auth_graph_manager.failClosedPersistedUserCount(error.SystemFdQuotaExceeded));
+    }
+}

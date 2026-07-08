@@ -322,3 +322,243 @@ test "PERF: unlabeled count MUST NOT be slower than labeled count" {
         return error.CountPushdownRatioRegression;
     }
 }
+
+/// GAP-ENT-0013 helper: seed the store with a mixed-label population —
+/// `n_widget` ":Widget" nodes, `n_gadget` ":Gadget" nodes, and `n_unlabeled`
+/// nodes with no label at all. The unlabeled slice matters: `MATCH (n)
+/// RETURN count(n)` cannot be served by any label posting list, so its only
+/// O(1) source is the per-graph IdMap node total.
+fn seedMixedStore(
+    allocator: std.mem.Allocator,
+    n_widget: usize,
+    n_gadget: usize,
+    n_unlabeled: usize,
+) !void {
+    const store = graph_store.getGlobalStore(allocator);
+    const empty_labels = [_][]const u8{};
+    const widget_labels = [_][]const u8{"Widget"};
+    const gadget_labels = [_][]const u8{"Gadget"};
+
+    var i: usize = 0;
+    while (i < n_widget) : (i += 1) {
+        _ = try store.createNode(&widget_labels);
+    }
+    i = 0;
+    while (i < n_gadget) : (i += 1) {
+        _ = try store.createNode(&gadget_labels);
+    }
+    i = 0;
+    while (i < n_unlabeled) : (i += 1) {
+        _ = try store.createNode(&empty_labels);
+    }
+}
+
+// GAP-ENT-0013 PATH REGRESSION: bare unlabeled `MATCH (n) RETURN count(n)`
+// with no tenant filter MUST be served by the O(1) `IdMap.nodeCount()` path
+// in `countNodesForGraph` — NOT by any per-node iteration. The wall-clock
+// gates above cannot see this at 10k nodes (an O(N) walk still clears 50 ms);
+// at 14.27M nodes the same walk measured 27.2 s warm vs 108 ms for the
+// labeled O(1) path. Two defects compose today:
+//   1. `countNodesForGraph` only consults `IdMap.nodeCount()` when the node
+//      cache is BOUNDED (`effectiveCap() != 0`); with the default unbounded
+//      cache it walks `nodes.iterator()` over every resident node.
+//   2. With a tenant filter present it iterates every IdMap uuid and does a
+//      per-node property read (`nodeMatchesTenant`), O(N) with disk I/O.
+// This test pins the path itself via the GAP-ENT-0013 counters in
+// graph_store.zig (`getCountNodesIdMapFastTotal` / `getCountNodesIterFallbackTotal`),
+// which discriminate three outcomes:
+//   - idmap_fast +1, iter_fallback +0  -> FIXED (test passes);
+//   - idmap_fast +0, iter_fallback +1  -> countNodesForGraph reached but the
+//     iteration branch ran (defect 1 or 2 — the expected RED today);
+//   - both +0                          -> the count fast path was rejected
+//     UPSTREAM (countNodesFastPath bailed before reaching the store counter).
+test "PATH: unlabeled count(n) is served by IdMap.nodeCount() O(1), not iteration (GAP-ENT-0013)" {
+    const allocator = std.testing.allocator;
+    var h = try Harness.init(allocator);
+    defer h.deinit();
+
+    // ~50k nodes: 2 labels + an unlabeled slice, per the GAP-ENT-0013 plan.
+    const n_widget: usize = 20_000;
+    const n_gadget: usize = 20_000;
+    const n_unlabeled: usize = 10_000;
+    const total: usize = n_widget + n_gadget + n_unlabeled;
+    try seedMixedStore(allocator, n_widget, n_gadget, n_unlabeled);
+
+    // Snapshot the path counters AFTER seeding, immediately before the query,
+    // so store-setup noise (hydration, catalog init) cannot mask the signal.
+    const idmap_fast_before = graph_store.getCountNodesIdMapFastTotal();
+    const iter_fallback_before = graph_store.getCountNodesIterFallbackTotal();
+
+    var res = try h.runQuery("MATCH (n) RETURN count(n) AS c");
+    defer res.deinit(h.arena.allocator());
+
+    const idmap_fast_after = graph_store.getCountNodesIdMapFastTotal();
+    const iter_fallback_after = graph_store.getCountNodesIterFallbackTotal();
+    const idmap_fast_delta = idmap_fast_after - idmap_fast_before;
+    const iter_fallback_delta = iter_fallback_after - iter_fallback_before;
+
+    // Correctness first: ALL nodes counted (both labels + unlabeled).
+    try std.testing.expectEqual(@as(usize, 1), res.rows.len);
+    try expectInt(res.rows[0][0], @intCast(total));
+
+    // Path assertions. Print the deltas before failing so the red run
+    // documents WHICH branch actually served the query.
+    if (iter_fallback_delta != 0 or idmap_fast_delta == 0) {
+        std.debug.print(
+            "GAP-ENT-0013 path regression: unlabeled MATCH (n) RETURN count(n) " ++
+                "against {d} nodes: idmap_fast delta={d}, iter_fallback delta={d}. " ++
+                "Expected idmap_fast>=1 and iter_fallback==0 (O(1) IdMap total). " ++
+                "iter_fallback>0 means countNodesForGraph iterated per node; " ++
+                "both zero means countNodesFastPath was rejected upstream.\n",
+            .{ total, idmap_fast_delta, iter_fallback_delta },
+        );
+    }
+    try std.testing.expectEqual(@as(u64, 0), iter_fallback_delta);
+    try std.testing.expect(idmap_fast_delta >= 1);
+
+    // Review I-2: DELETE coverage. The O(1) IdMap total is only correct if the
+    // delete path REMOVES ids from the IdMap (deleteNodeNoSave ->
+    // im.removeNode). Delete every :Gadget node through the full query
+    // executor, then re-count: the answer must drop by exactly n_gadget AND
+    // still be served by the O(1) IdMap path (idmap_fast fires again, the
+    // iteration counter stays static). A stale IdMap would return the old
+    // total here.
+    {
+        var del = try h.runQuery("MATCH (n:Gadget) DETACH DELETE n");
+        del.deinit(h.arena.allocator());
+    }
+
+    const idmap_fast_before2 = graph_store.getCountNodesIdMapFastTotal();
+    const iter_fallback_before2 = graph_store.getCountNodesIterFallbackTotal();
+
+    var res2 = try h.runQuery("MATCH (n) RETURN count(n) AS c");
+    defer res2.deinit(h.arena.allocator());
+
+    const idmap_fast_delta2 = graph_store.getCountNodesIdMapFastTotal() - idmap_fast_before2;
+    const iter_fallback_delta2 = graph_store.getCountNodesIterFallbackTotal() - iter_fallback_before2;
+
+    // Correctness: total minus the deleted :Gadget population.
+    try std.testing.expectEqual(@as(usize, 1), res2.rows.len);
+    try expectInt(res2.rows[0][0], @intCast(total - n_gadget));
+
+    if (iter_fallback_delta2 != 0 or idmap_fast_delta2 == 0) {
+        std.debug.print(
+            "GAP-ENT-0013 post-delete path regression: count(n) after DETACH " ++
+                "DELETE of {d} :Gadget nodes: idmap_fast delta={d}, " ++
+                "iter_fallback delta={d}. Expected idmap_fast>=1 and " ++
+                "iter_fallback==0 (delete must keep the IdMap authoritative).\n",
+            .{ n_gadget, idmap_fast_delta2, iter_fallback_delta2 },
+        );
+    }
+    try std.testing.expectEqual(@as(u64, 0), iter_fallback_delta2);
+    try std.testing.expect(idmap_fast_delta2 >= 1);
+}
+
+// Review I-1 REPRO: adapterless store (NO data dir -> no engine vtable).
+// `createGraph` unconditionally creates an EMPTY IdMap even with no disk
+// adapter (GAP-0839, graph_store.zig `createGraph`/`openOrCreateGraphWithUuid`),
+// but node creation only inserts into the IdMap when `global_vtable != null`.
+// Pre-fix, the hoisted tenant==null O(1) return served `count(n)` from that
+// permanently-empty IdMap and answered 0. The fix gates the O(1) return on
+// `global_vtable != null`, so adapterless stores fall through to the exact
+// resident iteration (everything is resident when no adapter can evict).
+//
+// Path pin: the ITERATION counter must fire and the idmap-fast counter must
+// NOT — adapterless correctness comes from the resident walk by design.
+test "I-1 REPRO: adapterless count(n) counts resident nodes, not the empty IdMap" {
+    const allocator = std.testing.allocator;
+
+    // Adapterless setup, in two steps so the test stays hermetic:
+    //  1. Create the CATALOG with a tmpDir data dir. Without an override,
+    //     ensureCatalogInstance falls back to a data dir of "/tmp" and
+    //     PERSISTS the created graph into /tmp/geode_catalog.dat — shared
+    //     cross-run state that makes the second run fail with
+    //     error.DuplicateGraph.
+    //  2. THEN clear the override and (re)create the global STORE:
+    //     getPrimaryGlobalStore resolves data_dir == null and
+    //     syncGlobalAdapterForDataDir tears the adapter down
+    //     (global_vtable == null) — the adapterless store under test.
+    // Requires GEODE_DATA_DIR to be unset in the test environment —
+    // asserted explicitly below via getGlobalAdapter().
+    execution.cleanupCatalogInstance();
+    graph_store.deinitGlobalStore();
+
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const catalog_dir = try tmpDirRealpathAlloc(allocator, &tmp.sub_path);
+    defer allocator.free(catalog_dir);
+
+    graph_store.setDataDirOverride(allocator, catalog_dir);
+    const catalog = try execution.ensureCatalogInstance(allocator);
+
+    graph_store.setDataDirOverride(allocator, null);
+    _ = graph_store.getGlobalStore(allocator);
+    defer {
+        execution.cleanupCatalogInstance();
+        graph_store.deinitGlobalStore();
+    }
+
+    // Precondition for the repro: the store must actually be adapterless.
+    try std.testing.expect(graph_store.getGlobalAdapter() == null);
+    var session = execution.SessionState.init(allocator);
+    defer session.deinit();
+    const ctx = execution.ExecutionContext{
+        .catalog = catalog,
+        .session_state = &session,
+    };
+
+    var arena = std.heap.ArenaAllocator.init(allocator);
+    defer arena.deinit();
+    const aa = arena.allocator();
+
+    const Runner = struct {
+        fn run(a: std.mem.Allocator, c: execution.ExecutionContext, query: []const u8) !execution.ExecutionResult {
+            var parsed = try geode.parseGql(query, a);
+            defer parsed.deinit();
+            return execution.executeStatementWithContext(a, parsed.program.statements[0], c);
+        }
+    };
+
+    // CREATE GRAPH allocates the empty IdMap (GAP-0839); node creates below
+    // never touch it because there is no engine vtable.
+    {
+        var res = try Runner.run(aa, ctx, "CREATE GRAPH inmem_count_repro");
+        res.deinit(aa);
+    }
+    {
+        var res = try Runner.run(aa, ctx, "USE GRAPH inmem_count_repro");
+        res.deinit(aa);
+    }
+
+    const n_nodes: usize = 50;
+    var i: usize = 0;
+    while (i < n_nodes) : (i += 1) {
+        var res = try Runner.run(aa, ctx, "CREATE (:Thing)");
+        res.deinit(aa);
+    }
+
+    const idmap_fast_before = graph_store.getCountNodesIdMapFastTotal();
+    const iter_fallback_before = graph_store.getCountNodesIterFallbackTotal();
+
+    var res = try Runner.run(aa, ctx, "MATCH (n) RETURN count(n) AS c");
+    defer res.deinit(aa);
+
+    const idmap_fast_delta = graph_store.getCountNodesIdMapFastTotal() - idmap_fast_before;
+    const iter_fallback_delta = graph_store.getCountNodesIterFallbackTotal() - iter_fallback_before;
+
+    // Correctness FIRST: pre-fix this returned 0 from the empty IdMap.
+    try std.testing.expectEqual(@as(usize, 1), res.rows.len);
+    try expectInt(res.rows[0][0], @intCast(n_nodes));
+
+    // Path pin: adapterless counts MUST come from the resident iteration.
+    if (idmap_fast_delta != 0 or iter_fallback_delta == 0) {
+        std.debug.print(
+            "I-1 path regression: adapterless count(n): idmap_fast delta={d}, " ++
+                "iter_fallback delta={d}. Expected iter_fallback>=1 and " ++
+                "idmap_fast==0 (no vtable -> IdMap is not write-maintained).\n",
+            .{ idmap_fast_delta, iter_fallback_delta },
+        );
+    }
+    try std.testing.expectEqual(@as(u64, 0), idmap_fast_delta);
+    try std.testing.expect(iter_fallback_delta >= 1);
+}

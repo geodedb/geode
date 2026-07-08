@@ -165,3 +165,105 @@ test "first boot prints a secret-free admin-password breadcrumb (never the secre
         return error.AdminPasswordLeakedToLogs;
     }
 }
+
+// ---------------------------------------------------------------------------
+// Review-0016 Important-2: `geode user reset-password` is the DOCUMENTED
+// escape hatch for the fail-closed admin-bootstrap refusal, but it used to
+// print "Password reset for user 'X'" and exit 0 even when the user could not
+// be loaded at all (the whole mutation sat inside an `if`, the success print
+// outside). In exactly the degraded/half-bootstrapped state where the
+// operator needs it, it silently no-op'd while reporting success.
+//
+// This subprocess test drives the REAL binary against a data dir with no
+// loadable users and asserts the honest-failure contract: nonzero exit and a
+// stderr message that says the password was NOT reset (and never the false
+// success line).
+test "reset-password reports failure honestly when the target user cannot be loaded" {
+    if (builtin.os.tag != .linux) return error.SkipZigTest;
+    if (posixGetenv("GEODE_SKIP_SUBPROC_CLUSTER") != null) return error.SkipZigTest;
+
+    const gpa = std.testing.allocator;
+    var arena = std.heap.ArenaAllocator.init(gpa);
+    defer arena.deinit();
+    const aa = arena.allocator();
+
+    var spawn_threaded = std.Io.Threaded.init(std.heap.smp_allocator, .{});
+    defer spawn_threaded.deinit();
+    const io = spawn_threaded.io();
+
+    // SKIP cleanly if the binary isn't built yet.
+    std.Io.Dir.cwd().access(io, BINARY_PATH, .{}) catch return error.SkipZigTest;
+
+    // Fresh, empty data dir => no users exist, so the target user can never
+    // be loaded (same observable state as a half-bootstrapped/degraded store
+    // whose records fail to load).
+    const data_dir = try std.fmt.allocPrint(aa, "/tmp/geode-resetpw-honest-{d}", .{nowMillis()});
+    std.Io.Dir.cwd().createDirPath(io, data_dir) catch {};
+    defer std.Io.Dir.cwd().deleteTree(io, data_dir) catch {};
+
+    const args = [_][]const u8{
+        BINARY_PATH,      "user",           "reset-password", "geode",
+        "--new-password", "resetpass12345", "--data-dir",     data_dir,
+    };
+    const env_ptr = try buildCleanChildEnv(aa);
+
+    var child = try std.process.spawn(io, .{
+        .argv = &args,
+        .environ_map = env_ptr,
+        .stdin = .ignore,
+        .stdout = .pipe,
+        .stderr = .pipe,
+    });
+    var reaped = false;
+    defer if (!reaped) {
+        child.kill(io);
+        reaped = true;
+    };
+
+    // Drain both pipes to EOF (output is tiny; the CLI exits on its own),
+    // then reap the exit code.
+    var captured: std.ArrayList(u8) = .empty;
+    defer captured.deinit(gpa);
+    var buf: [4096]u8 = undefined;
+    inline for ([_]?std.Io.File{ child.stdout, child.stderr }) |maybe_f| {
+        if (maybe_f) |f| {
+            while (true) {
+                const n = f.readStreaming(io, &.{&buf}) catch |err| switch (err) {
+                    error.EndOfStream => break,
+                    else => break,
+                };
+                if (n == 0) break;
+                try captured.appendSlice(gpa, buf[0..n]);
+            }
+        }
+    }
+    const term = child.wait(io) catch |err| {
+        std.debug.print("FAIL: could not reap reset-password child: {s}\n", .{@errorName(err)});
+        reaped = true;
+        return error.ChildWaitFailed;
+    };
+    reaped = true;
+
+    // (1) The false success line must be gone.
+    if (std.mem.indexOf(u8, captured.items, "Password reset for user") != null) {
+        std.debug.print("FAIL: reset-password printed SUCCESS for an unloadable user.\ncaptured:\n{s}\n", .{captured.items});
+        return error.FalseSuccessOnMissingUser;
+    }
+
+    // (2) An honest error naming the failure must be present.
+    if (std.mem.indexOf(u8, captured.items, "password NOT reset") == null) {
+        std.debug.print("FAIL: reset-password did not report an honest failure.\ncaptured:\n{s}\n", .{captured.items});
+        return error.NoHonestFailureMessage;
+    }
+
+    // (3) Nonzero exit code.
+    switch (term) {
+        .exited => |code| {
+            if (code == 0) {
+                std.debug.print("FAIL: reset-password exited 0 despite not resetting anything.\ncaptured:\n{s}\n", .{captured.items});
+                return error.ZeroExitOnFailure;
+            }
+        },
+        else => {}, // killed/signalled counts as nonzero failure
+    }
+}

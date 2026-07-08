@@ -40,7 +40,62 @@ pub fn resetOrderedScanFastPathHits() void {
     g_ordered_scan_fastpath_hits.store(0, .monotonic);
 }
 
+// GAP-ENT-0043 T1: diagnostic counter for GROUP BY / DISTINCT / count-by-value
+// aggregates SERVED from the in-memory exact-property index (O(distinct keys),
+// zero node materialization, zero per-node property reads). The routing tests
+// assert this alongside getPathRowsMaterialized()==0: index-served == 1 proves
+// the query never touched the O(nodes) streaming scan either.
+var g_index_served_aggregate_total: std.atomic.Value(u64) = std.atomic.Value(u64).init(0);
+pub fn getIndexServedAggregateTotal() u64 {
+    return g_index_served_aggregate_total.load(.monotonic);
+}
+pub fn resetIndexServedAggregateTotal() void {
+    g_index_served_aggregate_total.store(0, .monotonic);
+}
+
+// GAP-ENT-0055: routing counter for the O(1) filtered `count(n)` served straight
+// from the exact node-property index posting LENGTH (no candidate re-verify
+// walk). Fires only for the provably-exact `seekableAsciiStringEq` shape with no
+// tenant scope. Tests assert a delta of 1 to prove sub-linear routing.
+var g_filtered_count_index_served_total: std.atomic.Value(u64) = std.atomic.Value(u64).init(0);
+pub fn getFilteredCountIndexServedTotal() u64 {
+    return g_filtered_count_index_served_total.load(.monotonic);
+}
+pub fn resetFilteredCountIndexServedTotal() void {
+    g_filtered_count_index_served_total.store(0, .monotonic);
+}
+
+// GAP (write-path OOM, 2026-07-04): path counters for the ENGINE-DIRECT point
+// write vs the LEGACY materializing write scan. `pointWriteFastPath` bumps the
+// first when it SERVES a write (including the authoritative 0-match empty);
+// `executeMatchQueryImpl` bumps the second when a write-carrying (SET/REMOVE)
+// query proceeds into the legacy candidate scan after the fast path declined.
+// Tests assert the routing table on these (RED: legacy moves, engine-direct 0).
+var g_point_write_fastpath_total: std.atomic.Value(u64) = std.atomic.Value(u64).init(0);
+pub fn getPointWriteFastPathTotal() u64 {
+    return g_point_write_fastpath_total.load(.monotonic);
+}
+pub fn resetPointWriteFastPathTotal() void {
+    g_point_write_fastpath_total.store(0, .monotonic);
+}
+var g_legacy_write_scan_total: std.atomic.Value(u64) = std.atomic.Value(u64).init(0);
+pub fn getLegacyWriteScanTotal() u64 {
+    return g_legacy_write_scan_total.load(.monotonic);
+}
+pub fn resetLegacyWriteScanTotal() void {
+    g_legacy_write_scan_total.store(0, .monotonic);
+}
+
 const match_log = std.log.scoped(.match_ops);
+// GAP (write-path OOM, 2026-07-04): working-set budget for write-carrying
+// legacy scans. `write_budget.check()` is a no-op unless the dispatcher
+// installed a scope (write-carrying MATCH shapes only), so read queries pay a
+// threadlocal load + branch per candidate at most.
+const write_budget = @import("../write_budget.zig");
+// GAP-ENT-0044/0045 (T5): read-executor budget + cancel polls. `check()` is a
+// no-op unless the read dispatcher installed a scope, so write paths and
+// scope-free callers pay a threadlocal load + branch per row at most.
+const read_budget = @import("../read_budget.zig");
 const property_mutation = @import("property_mutation.zig");
 const value_types = @import("../value_types.zig");
 const property_value_codec = @import("../property_value_codec.zig");
@@ -194,9 +249,16 @@ inline fn edgeVisibleForTenantHierarchy(
     filter_tenant: ?[]const u8,
 ) bool {
     if (passesTenantFilterEdge(edge, filter_tenant)) return true;
-    const from = store.nodes.get(edge.from_id) orelse return false;
-    const to = store.nodes.get(edge.to_id) orelse return false;
-    return passesTenantFilter(from, filter_tenant) and passesTenantFilter(to, filter_tenant);
+    // GAP-ENT-0023 P3 (review I1): residency is NOT existence — on a bounded
+    // (or snapshot-warm, cold) cache a resident-only endpoint lookup denied
+    // every legacy-tagged edge whose endpoints were merely evicted. Read the
+    // endpoint tenant tags resident-first with an engine fallback; the helper
+    // never mutates the cache (callers hold retained `*Node` pointers).
+    const from_tenant = store.dupeNodeTenantForRead(store.allocator, edge.from_id) orelse return false;
+    defer store.allocator.free(from_tenant);
+    const to_tenant = store.dupeNodeTenantForRead(store.allocator, edge.to_id) orelse return false;
+    defer store.allocator.free(to_tenant);
+    return passesTenantFilterSlice(from_tenant, filter_tenant) and passesTenantFilterSlice(to_tenant, filter_tenant);
 }
 
 // GAP-0846: storage-level tenant filter for the LABEL-INDEXED read paths
@@ -970,6 +1032,71 @@ fn extractBoundVarProperty(expr: ast.Expr, match_var: []const u8) ?[]const u8 {
     return vp.property;
 }
 
+// GAP-ENT-0055: resolve a GROUP BY key expression to `<match_var>.<property>`,
+// transparently following a RETURN alias.
+//
+// GQL/Cypher lets `GROUP BY` reference a RETURN alias:
+//   MATCH (n:Taxon) RETURN n.source AS s, count(*) AS c GROUP BY s
+// The parser leaves `GROUP BY s` as a bare `Ident("s")` (no alias resolution),
+// so `extractBoundVarProperty(Ident("s"))` returns null and BOTH aggregate fast
+// paths declined — the query fell to the legacy full-materialization GROUP BY
+// (execution.zig computeGroupAggregation), which resolves the alias by evaluating
+// against O(nodes) MATERIALIZED rows (the 2026-07-05 live `GROUP BY source
+// count(*)` 88s scan). DISTINCT never hit this: `RETURN DISTINCT n.source AS s`
+// carries the property `n.source` DIRECTLY in the RETURN item expr (the alias is
+// a separate field), so its key always resolved and it stayed index-served.
+//
+// This follows the alias so the alias-grouped shape routes to the SAME
+// O(distinct) exact-index path DISTINCT already uses. When the key is (directly,
+// or via a single alias hop) a bound var property of `match_var`, returns the
+// property name; otherwise null (→ the fast path declines, legacy serves it).
+fn resolveGroupKeyProperty(
+    key_expr: ast.Expr,
+    match_var: []const u8,
+    ret_items: []const ast.ReturnItem,
+) ?[]const u8 {
+    // Direct `n.<prop>` shape (also the pre-0055 behavior — backward compatible).
+    if (extractBoundVarProperty(key_expr, match_var)) |p| return p;
+    // Otherwise: a bare identifier naming a RETURN alias → resolve through that
+    // item's expression (one hop only; an alias whose expr is itself an alias
+    // or an aggregate resolves to null → decline).
+    const ident = switch (key_expr) {
+        .Ident => |id| id.orig,
+        else => return null,
+    };
+    for (ret_items) |item| {
+        const alias = item.alias orelse continue;
+        if (std.mem.eql(u8, alias, ident)) {
+            return extractBoundVarProperty(item.expr, match_var);
+        }
+    }
+    return null;
+}
+
+// GAP-ENT-0055: resolve a GROUP BY key expression through a RETURN alias to the
+// underlying expression it names (`GROUP BY s` → the `n.source` expr when
+// `RETURN n.source AS s`). Returns the key UNCHANGED when it is not a bare
+// identifier naming a RETURN alias, so non-alias keys (`GROUP BY n.source`) are
+// byte-for-byte unaffected.
+//
+// The LEGACY grouping loops evaluate the key expression per node/binding; a bare
+// alias identifier evaluates to Null there (the raw match env binds `n`, not the
+// projected alias `s`), collapsing EVERY row into one null group — a silent
+// wrong result for `GROUP BY <alias>` on any shape that declines the aggregate
+// fast paths (ORDER BY, multi-hop, etc.). Resolving to the aliased expression
+// makes the legacy path agree with the fast paths and the projection.
+fn resolveGroupKeyExprAlias(key_expr: ast.Expr, ret_items: []const ast.ReturnItem) ast.Expr {
+    const ident = switch (key_expr) {
+        .Ident => |id| id.orig,
+        else => return key_expr,
+    };
+    for (ret_items) |item| {
+        const alias = item.alias orelse continue;
+        if (std.mem.eql(u8, alias, ident)) return item.expr;
+    }
+    return key_expr;
+}
+
 fn extractSimpleWhere(where: ast.Expr, match_var: []const u8) ?SimpleWhere {
     const bin = switch (where) {
         .Binary => |b| b,
@@ -988,6 +1115,55 @@ fn extractSimpleWhere(where: ast.Expr, match_var: []const u8) ?SimpleWhere {
         return .{ .key = key, .op = swapCmp(cmp), .lit = lit };
     }
     return null;
+}
+
+/// PERF (GAP-ENT-0019): decide whether a filtered `count(n)` WHERE predicate is
+/// safe to serve with an exact-index SEEK (O(matching)) instead of an O(label)
+/// scan, and if so return the seekable literal string.
+///
+/// This gate is CORRECTNESS-CRITICAL — a filtered count MUST be byte-identical
+/// to the full scan. WHERE `=` uses `eval.evalBinary` semantics, which are
+/// BROADER than the exact-hash node-property index in two ways the index cannot
+/// see, so a naive seek would UNDERCOUNT (miss real matches):
+///   1. String equality is NFC-normalized (a decomposed stored value eval-equals
+///      a composed literal), but the index hashes the RAW bytes.
+///   2. `=` cross-type stringify-coerces (int 5 eval-equals string "5"), but the
+///      index hashes each value under its own type.
+///
+/// The seek is EXACT — seek-set == eval-match-set — only when BOTH broadenings
+/// are provably impossible for the literal:
+///   * pure-ASCII literal: NFC is the identity on ASCII (`eval` isAscii fast
+///     path), and no non-ASCII string can NFC-normalize to an ASCII string, so
+///     eval string-eq reduces to exact-byte eq — every string match is in the
+///     seek's hash bucket (no NFC false-negative);
+///   * non-numeric, non-bool literal: ints/floats/bools/decimals stringify to
+///     numeric/bool text, so a literal that parses as none of them cannot be the
+///     coercion of ANY non-string scalar — no cross-type match exists outside
+///     the seek set (no cross-type false-negative).
+/// `shouldIndexProperty(key)` is the SAME per-key completeness gate
+/// `seekIndexedCandidates` uses (index is complete for the key). Any other shape
+/// (numeric/bool literal, ordering op, non-ASCII or numeric-looking string,
+/// non-`eq`) returns null and the caller keeps the exact full scan.
+fn seekableAsciiStringEq(where_pred: SimpleWhere) ?[]const u8 {
+    if (where_pred.op != .eq) return null;
+    // Reuse the exact-index completeness gate (do NOT invent a new rule).
+    if (!graph_store.shouldIndexProperty(where_pred.key)) return null;
+    const s = switch (where_pred.lit) {
+        .Str => |x| x,
+        else => return null,
+    };
+    // NFC identity requires pure ASCII: only then does eval string-eq == byte-eq.
+    for (s) |c| {
+        if (c >= 0x80) return null;
+    }
+    // Rule out cross-type stringify coercion: a literal that parses as a number
+    // or bool could eval-equal a non-string-typed node the seek would miss.
+    if (std.ascii.eqlIgnoreCase(s, "true") or std.ascii.eqlIgnoreCase(s, "false")) return null;
+    if (s.len > 0) {
+        if (std.fmt.parseInt(i64, s, 10)) |_| return null else |_| {}
+        if (std.fmt.parseFloat(f64, s)) |_| return null else |_| {}
+    }
+    return s;
 }
 
 /// Coerce a property value to f64 for ordering comparisons.
@@ -1228,6 +1404,7 @@ pub fn propertyAggregateFastPath(
         if (posting) |slots| {
             const prop_store: *graph_store.GraphStore = @constCast(read_store);
             for (slots) |node_id| {
+                try read_budget.check(); // T5: budget/cancel poll at the row boundary (no-op when uninstalled)
                 const node = read_store.nodes.get(node_id) orelse continue;
                 if (!passesTenantFilter(node, filter_tenant)) continue;
                 if (where_pred) |p| {
@@ -1244,6 +1421,7 @@ pub fn propertyAggregateFastPath(
         const slots = adapter.getNodesByLabelCapped(filter_graph, head.labels[0], null, allocator) catch return null;
         defer allocator.free(slots);
         for (slots) |slot_id| {
+            try read_budget.check(); // T5: budget/cancel poll at the row boundary (no-op when uninstalled)
             if (tenant_active) {
                 const tprop = adapter.getNodeProperty(filter_graph, slot_id, graph_store.INTERNAL_TENANT_ID_PROPERTY_KEY, allocator) catch null;
                 const node_tenant: []const u8 = if (tprop) |tp| switch (tp) {
@@ -1344,6 +1522,288 @@ pub fn propertyAggregateFastPath(
 //   - no active RLS policy for an authenticated user (per-row policy would need
 //     materialization) — falls through so `passesRLSFilter` runs per node.
 // Tenant filtering IS honoured per slot, identically to the aggregate path.
+// GAP (write-path OOM, 2026-07-04): ENGINE-DIRECT point writes.
+//
+// Incident: ONE `MATCH (n:Taxon) WHERE n.source_id='X' SET n.p='v'` on the
+// 14.27M store ran the legacy executor's O(label) candidate scan (getNodesByLabels
+// posting + per-candidate getNodePtrForScan materialization + WHERE eval),
+// 50+ min, RSS 82 -> 86.4 G, OOM killer took the server. The READ half of this
+// exact shape has been an exact-index SEEK for months (node_scan_stream
+// seekIndexedCandidates / countFilteredFastPath); the WRITE half had no seek.
+//
+// Covered shape (EVERYTHING else falls through to the legacy path UNCHANGED,
+// where the write-executor working-set budget now bounds it):
+//
+//   MATCH (n:L) WHERE n.<indexed> = '<seekable-ascii-string-lit>'
+//       SET n.k = <literal> [, n.k2 = <literal> ...] and/or REMOVE n.k [, ...]
+//       [RETURN <exprs over n>] [LIMIT k>=1]
+//
+// ROUTING TABLE (gates, in order — each miss = legacy):
+//   * single MATCH chain, head-only (no hops), non-optional, no path var
+//   * exactly ONE label, NO inline props, named variable
+//   * no UNWIND/CREATE/DELETE/MERGE/CALL/chained query/FOR/CTE/initial-CALL
+//   * no WITH / FILTER / GROUP BY / HAVING / ORDER BY / DISTINCT
+//   * no OFFSET, no LIMIT/OFFSET params, LIMIT absent or >= 1
+//   * RETURN absent, or present without aggregation
+//   * WHERE is exactly `n.<key> = <string literal>` (either operand order),
+//     where the key passes the exact-index completeness gate
+//     (graph_store.shouldIndexProperty — identical to the READ seek) and the
+//     literal passes the seek-exactness gate (seekableAsciiStringEq: pure
+//     ASCII, non-bool, non-numeric — the NFC / cross-type-coercion soundness
+//     argument, see that fn's doc)
+//   * every SET clause is `.Property` on the matched var with a LITERAL value
+//     (SET n:Label and SET n = {...} fall through; `+=` is not geode GQL)
+//   * every REMOVE clause is `.Property` on the matched var
+//   * RLS inactive for this session (countFastPathRlsAllowed — same gate as
+//     every read fast path); ANY tenant scope (incl. hierarchy) falls through
+//   * exact-index posting for (label,key,value) is <= 1 (a POINT write; a
+//     multi-match indexed equality keeps legacy row-order/semantics)
+//   * candidate slot resolves to a store node id via the IdMap (or the
+//     persisted public-id property) — an unresolvable mapping falls through
+//     BEFORE any write is applied
+//
+// Resolution mirrors the READ seek: posting probe
+// (countCandidateNodesByLabelAndProperty) -> candidate slots
+// (getCandidateNodesByLabelAndProperty) -> per-candidate eval-parity re-verify
+// (compareStoragePvLit — tolerates raw-hash collisions) -> slot -> node id via
+// the IdMap -> durable write via the SAME property_mutation helpers the legacy
+// loop uses (setNodePropertyFromValue / removeNodeProperty, which route through
+// the P3-C3 hydrate-on-miss store.setNodeProperty / store.removeNodeProperty:
+// adapter write + merge/exact index upkeep + FLE + FTS + WAL notify). Result
+// rows are built exactly like the legacy loop (bind node ptr, eval RETURN
+// items / single-column node row), so covered results are byte-parity.
+//
+// A 0-candidate seek is AUTHORITATIVE empty (index completeness per
+// shouldIndexProperty) — served engine-direct with zero writes.
+//
+// LOCKING: on the server path mutations hold the per-graph EXCLUSIVE lock
+// (acquired by the transport handler before executeProgramWithContext);
+// store.setNodeProperty/removeNodeProperty require exactly that — identical to
+// the legacy loop this replaces. CLUSTER: executeLegacyQueryWithResolvedParams
+// runs executeClusterMatchUpdateIfNeeded BEFORE dispatching to
+// executeMatchQueryImpl, so replicated/rejected cluster writes never reach
+// this fast path.
+pub fn pointWriteFastPath(
+    allocator: std.mem.Allocator,
+    q: ast.Query,
+    filter_graph: []const u8,
+    filter_tenant: ?[]const u8,
+    param_names: []const []const u8,
+    param_values: []const Value,
+) !?ExecutionResult {
+    // --- Shape gates on the MATCH ---
+    if (q.match.chains.len != 1) return null;
+    const chain = q.match.chains[0];
+    if (chain.hops.len != 0) return null;
+    if (chain.is_optional) return null;
+    if (chain.name != null) return null;
+    if (q.optional_match) return null;
+    if (q.path_variable != null) return null;
+    const head = chain.head orelse return null;
+    if (head.labels.len != 1) return null;
+    if (head.props != null) return null;
+    const match_var = head.name orelse return null;
+
+    // --- Shape gates on clauses ---
+    if (q.unwind_clause != null) return null;
+    if (q.create_pattern != null) return null;
+    if (q.delete_items.len != 0) return null;
+    if (q.merge_statement != null) return null;
+    if (q.call_clause != null) return null;
+    if (q.next_query != null) return null;
+    if (q.for_statement != null) return null;
+    if (q.initial_call_subquery != null) return null;
+    if (q.cte_list != null) return null;
+    if (q.with_clause != null) return null;
+    if (q.filter_clause != null) return null;
+    if (q.group_by != null) return null;
+    if (q.having != null) return null;
+    if (q.order_by != null) return null;
+    if (q.ret.distinct) return null;
+    if (q.offset != null) return null;
+    if (q.limit_param != null) return null;
+    if (q.offset_param != null) return null;
+    if (q.limit) |lim| {
+        if (lim == 0) return null;
+    }
+    const items = q.ret.items;
+    if (items.len > 0 and returnItemsHaveAggregation(items)) return null;
+
+    // --- Write clauses: literal .Property SETs / .Property REMOVEs on n ---
+    if (q.set_clauses.len == 0 and q.remove_clauses.len == 0) return null;
+    for (q.set_clauses) |sc| {
+        switch (sc) {
+            .Property => |prop| {
+                if (!std.mem.eql(u8, prop.target.object, match_var)) return null;
+                if (extractLiteral(prop.value) == null) return null;
+            },
+            else => return null, // SET n:Label / SET n = {...} -> legacy
+        }
+    }
+    for (q.remove_clauses) |rc| {
+        switch (rc) {
+            .Property => |pa| {
+                if (!std.mem.eql(u8, pa.object, match_var)) return null;
+            },
+            else => return null, // REMOVE n:Label -> legacy
+        }
+    }
+
+    // --- WHERE: exactly one seek-exact indexed string equality ---
+    const where = q.where_clause orelse return null;
+    const where_pred: SimpleWhere = extractSimpleWhere(where, match_var) orelse return null;
+    const seek_str = seekableAsciiStringEq(where_pred) orelse return null;
+
+    // --- Session gates: RLS / tenant scope fall through to the legacy path
+    // (which applies passesRLSFilter / passesTenantFilter per candidate) ---
+    if (!countFastPathRlsAllowed()) return null;
+    if (filter_tenant != null) return null;
+
+    // --- Exact-index seek (the READ path's machinery) ---
+    const adapter = graph_store.getGlobalAdapter() orelse return null;
+    if (!adapter.graphExists(filter_graph)) return null;
+    const seek_pv = graph_store.PropertyValue{ .String = seek_str };
+
+    // POINT gate: at most one posting entry. The count probe triggers the same
+    // ensureExactNodePropertyIndexBuilt hook the read seeks rely on, so an
+    // H4-deferred index is built before the first probe (never observed empty).
+    const posting_len = adapter.countCandidateNodesByLabelAndProperty(
+        filter_graph,
+        head.labels[0],
+        where_pred.key,
+        seek_pv,
+    ) catch return null;
+    if (posting_len > 1) return null; // multi-match: not a point write
+
+    const candidates = adapter.getCandidateNodesByLabelAndProperty(
+        filter_graph,
+        head.labels[0],
+        where_pred.key,
+        seek_pv,
+        allocator,
+    ) catch return null;
+    defer allocator.free(candidates);
+
+    // Re-verify each candidate with the SAME eval-parity comparison the read
+    // fast paths use (raw-hash collision tolerance). With the posting gate
+    // above this is 0 or 1 candidates; keep the loop defensive.
+    var matched_slot: ?u64 = null;
+    for (candidates) |slot_id| {
+        const w_val = (adapter.getNodeProperty(filter_graph, slot_id, where_pred.key, allocator) catch continue) orelse continue;
+        defer switch (w_val) {
+            .string => |s| allocator.free(s),
+            else => {},
+        };
+        if (!compareStoragePvLit(w_val, where_pred.op, where_pred.lit)) continue;
+        if (matched_slot != null) return null; // >1 verified match: legacy (nothing written yet)
+        matched_slot = slot_id;
+    }
+
+    const store = graph_store.getWritableGlobalStore(allocator);
+
+    if (matched_slot == null) {
+        // Authoritative empty (index complete for the key): zero rows, zero
+        // writes — mirror the legacy empty-result shape exactly.
+        const columns: [][]const u8 = if (items.len > 0)
+            try generateUniqueColumnNames(allocator, items)
+        else blk: {
+            const cols = try allocator.alloc([]const u8, 1);
+            cols[0] = try allocator.dupe(u8, match_var);
+            break :blk cols;
+        };
+        _ = g_point_write_fastpath_total.fetchAdd(1, .monotonic);
+        return ExecutionResult{
+            .columns = columns,
+            .rows = try allocator.alloc([]Value, 0),
+            .flags = std.ArrayList([]const u8).empty,
+        };
+    }
+
+    // --- Resolve slot -> store node id (IdMap first, persisted public-id
+    // fallback). Unresolvable -> legacy, BEFORE any write. ---
+    const slot = matched_slot.?;
+    const node_id: u64 = blk: {
+        if (store.getIdMap(filter_graph)) |im| {
+            if (im.nodeUuid(slot)) |uuid_128| break :blk @as(u64, @truncate(uuid_128));
+        }
+        const stored = adapter.getNodeProperty(filter_graph, slot, graph_store.INTERNAL_NODE_ID_PROPERTY_KEY, allocator) catch null;
+        if (stored) |sp| {
+            defer switch (sp) {
+                .string => |s| allocator.free(s),
+                else => {},
+            };
+            switch (sp) {
+                .string => |text| {
+                    if (graph_store.parsePersistedPublicId(text)) |pid| break :blk pid;
+                },
+                .int => |n| {
+                    if (n >= 0) break :blk @as(u64, @intCast(n));
+                },
+                else => {},
+            }
+        }
+        return null;
+    };
+
+    // Hydrate the node body (P3-C3 discipline; write path — the per-graph
+    // EXCLUSIVE lock is held on the server path, same as the store APIs
+    // require). Unresolvable -> legacy, still before any write.
+    const node_ptr = (store.nodes.getOrHydratePtr(node_id) catch null) orelse return null;
+
+    // --- Apply writes via the SAME helpers the legacy loop uses (durable
+    // adapter write + index/FLE/FTS/WAL side effects), in clause order. ---
+    for (q.set_clauses) |sc| {
+        const prop = sc.Property; // gated above
+        const value = litToValue(extractLiteral(prop.value).?);
+        try property_mutation.setNodePropertyFromValue(allocator, store, node_ptr.labels, node_id, prop.target.property, value);
+    }
+    for (q.remove_clauses) |rc| {
+        const pa = rc.Property; // gated above
+        property_mutation.removeNodeProperty(store, node_ptr, pa.property);
+    }
+
+    // --- Build the result exactly like the legacy loop ---
+    var rows = try allocator.alloc([]Value, 1);
+    errdefer allocator.free(rows);
+    var columns: [][]const u8 = undefined;
+    if (items.len == 0) {
+        // No RETURN: one row binding the matched variable (legacy shape).
+        columns = try allocator.alloc([]const u8, 1);
+        columns[0] = try allocator.dupe(u8, match_var);
+        const row = try allocator.alloc(Value, 1);
+        row[0] = Value{ .Node = node_ptr };
+        rows[0] = row;
+    } else {
+        columns = try generateUniqueColumnNames(allocator, items);
+        // Mirror the legacy env exactly (heap arrays, owned): eval.withBinding
+        // may take ownership during pattern-comprehension evaluation.
+        const env_names = try allocator.alloc([]const u8, 1);
+        const env_values = try allocator.alloc(Value, 1);
+        env_names[0] = match_var;
+        env_values[0] = Value{ .Node = node_ptr };
+        const env = Env{
+            .names = env_names,
+            .values = env_values,
+            .param_names = param_names,
+            .param_values = param_values,
+            .allocator = allocator,
+            .owned = true,
+        };
+        const row = try allocator.alloc(Value, items.len);
+        for (items, 0..) |item, i| {
+            row[i] = try eval.evalExpr(allocator, item.expr, env);
+        }
+        rows[0] = row;
+    }
+
+    _ = g_point_write_fastpath_total.fetchAdd(1, .monotonic);
+    return ExecutionResult{
+        .columns = columns,
+        .rows = rows,
+        .flags = std.ArrayList([]const u8).empty,
+    };
+}
+
 pub fn countFilteredFastPath(
     allocator: std.mem.Allocator,
     q: ast.Query,
@@ -1415,6 +1875,86 @@ pub fn countFilteredFastPath(
     const tenant_active = filter_tenant != null;
     const writable_store = graph_store.getGlobalStore(allocator);
 
+    // PERF (GAP-ENT-0019): selective indexed-equality filtered count served by an
+    // exact-index SEEK (O(matching)) instead of the O(label) scan below. Fires
+    // only for the provably-exact shape decided by `seekableAsciiStringEq` (see
+    // its doc-comment for the NFC / cross-type soundness argument). The seek
+    // narrows the candidate set via the exact node-property index; each candidate
+    // is RE-VERIFIED with the SAME `compareStoragePvLit` (eval) comparison + the
+    // SAME tenant filter the scan uses, so the tally is byte-identical to the
+    // full scan (re-verify tolerates hash collisions). `head.labels.len == 1` is
+    // guaranteed by the shape gate above. `getCandidateNodesByLabelAndProperty`
+    // triggers `ensureExactNodePropertyIndexBuilt`, so an H4-deferred index is
+    // built before the first seek (never observed empty).
+    if (seekableAsciiStringEq(where_pred)) |seek_str| {
+        // GAP-ENT-0055 (GAP-ENT-0019 O(1) upgrade): with NO tenant scope, the
+        // exact-index posting for `(label, key, value)` IS the answer — its
+        // LENGTH is exactly the match count. Serve it O(1) via the posting-length
+        // accessor instead of the O(matching) candidate re-verify walk below
+        // (which read one property per candidate — minutes for a high-cardinality
+        // value like `source='col'` covering millions of nodes). The
+        // `seekableAsciiStringEq` gate already proves the seek set == the eval
+        // match set (pure ASCII → NFC identity; non-numeric/non-bool → no
+        // cross-type coercion), so the only nodes in the bucket are exact
+        // matches — the SAME collision-free posting assumption the T1
+        // index-served GROUP BY/DISTINCT path (collectPropertyPostingSummaries)
+        // already relies on. `countCandidateNodesByLabelAndProperty` runs
+        // `ensureExactNodePropertyIndexBuilt` (H4 latch), and a missing posting
+        // returns 0 — authoritative empty (index complete per shouldIndexProperty).
+        if (!tenant_active) {
+            if (adapter.countCandidateNodesByLabelAndProperty(
+                filter_graph,
+                head.labels[0],
+                where_pred.key,
+                graph_store.PropertyValue{ .String = seek_str },
+            )) |posting_len| {
+                _ = g_filtered_count_index_served_total.fetchAdd(1, .monotonic);
+                const col: []const u8 = item.alias orelse "count(n)";
+                return try buildCountFastPathResult(allocator, col, posting_len);
+            } else |_| {
+                // Index unavailable (e.g. graph vanished mid-flight) — fall
+                // through to the exact full scan, which is always correct.
+            }
+        } else if (adapter.getCandidateNodesByLabelAndProperty(
+            filter_graph,
+            head.labels[0],
+            where_pred.key,
+            graph_store.PropertyValue{ .String = seek_str },
+            allocator,
+        )) |candidates| {
+            // Tenant scope active: postings are NOT tenant-scoped, so seek the
+            // candidate set and re-verify + tenant-filter each (O(matching)).
+            defer allocator.free(candidates);
+            var seek_matched: usize = 0;
+            for (candidates) |slot_id| {
+                if (tenant_active) {
+                    const tprop = adapter.getNodeProperty(filter_graph, slot_id, graph_store.INTERNAL_TENANT_ID_PROPERTY_KEY, allocator) catch null;
+                    const node_tenant: []const u8 = if (tprop) |tp| switch (tp) {
+                        .string => |s| s,
+                        else => graph_store.DEFAULT_TENANT_ID,
+                    } else graph_store.DEFAULT_TENANT_ID;
+                    defer if (tprop) |tp| switch (tp) {
+                        .string => |s| allocator.free(s),
+                        else => {},
+                    };
+                    if (!passesTenantFilterSlice(node_tenant, filter_tenant)) continue;
+                }
+                const w_val = (adapter.getNodeProperty(filter_graph, slot_id, where_pred.key, allocator) catch continue) orelse continue;
+                defer switch (w_val) {
+                    .string => |s| allocator.free(s),
+                    else => {},
+                };
+                if (!compareStoragePvLit(w_val, where_pred.op, where_pred.lit)) continue;
+                seek_matched += 1;
+            }
+            const seek_col_name: []const u8 = item.alias orelse "count(n)";
+            return try buildCountFastPathResult(allocator, seek_col_name, seek_matched);
+        } else |_| {
+            // Seek unavailable (e.g. graph vanished mid-flight) — fall through to
+            // the exact full scan, which is always correct.
+        }
+    }
+
     if (writable_store.nodes.effectiveCap() == 0) {
         // REQ-QUIC-HC-017: honor an already-installed active read store (held by
         // the QUIC handler under the graph read lock) instead of building a fresh
@@ -1437,6 +1977,7 @@ pub fn countFilteredFastPath(
         if (posting) |slots| {
             const prop_store: *graph_store.GraphStore = @constCast(read_store);
             for (slots) |node_id| {
+                try read_budget.check(); // T5: budget/cancel poll at the row boundary (no-op when uninstalled)
                 const node = read_store.nodes.get(node_id) orelse continue;
                 if (!passesTenantFilter(node, filter_tenant)) continue;
                 const w_val = prop_store.getNodeProperty(node_id, where_pred.key) orelse continue;
@@ -1448,6 +1989,7 @@ pub fn countFilteredFastPath(
         const slots = adapter.getNodesByLabelCapped(filter_graph, head.labels[0], null, allocator) catch return null;
         defer allocator.free(slots);
         for (slots) |slot_id| {
+            try read_budget.check(); // T5: budget/cancel poll at the row boundary (no-op when uninstalled)
             if (tenant_active) {
                 const tprop = adapter.getNodeProperty(filter_graph, slot_id, graph_store.INTERNAL_TENANT_ID_PROPERTY_KEY, allocator) catch null;
                 const node_tenant: []const u8 = if (tprop) |tp| switch (tp) {
@@ -1474,6 +2016,284 @@ pub fn countFilteredFastPath(
     return try buildCountFastPathResult(allocator, col_name, matched);
 }
 
+// CANARY: REQ=GAP-ENT-0043; FEATURE="IndexServedAggregate"; ASPECT=Implementation; STATUS=TESTED; TEST=tests/test_gap0043_index_served_aggregate.zig; OWNER=execution; UPDATED=2026-07-05
+/// GAP-ENT-0043 T1 — INDEX-SERVED GROUP BY / DISTINCT / count-by-value.
+///
+/// When the single grouping (or DISTINCT) key is one indexed property and every
+/// aggregate is count(*) / count(<var>) / count(<var>.<key>) (key == the group
+/// key), the exact node-property index already holds the whole answer: its
+/// postings for `(label, key)` are exactly the distinct values, and each
+/// posting LENGTH is exactly that group's row count. Serve the query as
+/// O(distinct values): one posting walk + ONE single-property engine read per
+/// distinct value (to recover the value bytes — the index keys by value hash).
+/// ZERO node materialization, ZERO per-node reads — sub-ms for low-cardinality
+/// keys at any graph size (the 2026-07-05 live `GROUP BY source count(*)`
+/// 60s-timeout/OOM headline shape).
+///
+/// The null group (nodes with the label that lack the key) is derived without
+/// a scan: `countNodesByLabel(label) - Σ posting lengths`. Emitted LAST, with
+/// count(*) == the difference and count(n.key) == 0 (GQL count(expr) skips
+/// nulls), matching the streaming/legacy null-group semantics.
+///
+/// MANDATORY soundness gates (the source-split lesson — decline → the caller
+/// falls through to the streaming scan (T2 / groupByAggregateFastPath), which
+/// is slower but always sound):
+///   * in-memory MAINTAINED structures only: `collectPropertyPostingSummaries`
+///     runs `ensureExactNodePropertyIndexBuilt` (H4 deferred-build latch)
+///     before walking, and `store.countNodesByLabel` is the
+///     ensureGraphHydrated-guarded maintained refcount — NEVER the deferred
+///     engine label index;
+///   * `graph_store.shouldIndexProperty(key)` — the SAME per-key completeness
+///     gate every exact-index seek uses (lean mode skips non-merge keys, so
+///     the index would be silently incomplete for them);
+///   * declines under active RLS (countFastPathRlsAllowed — identical to the
+///     0013 count fast path) and under ANY tenant scope (postings are not
+///     tenant-scoped);
+///   * declines when Σ posting lengths > label refcount (inconsistent window /
+///     stale posting — never serve a count we cannot reconcile);
+///   * declines when a representative value read fails or yields a
+///     decimal/ext-typed value (output Value mapping would diverge from the
+///     legacy path for those).
+///
+/// Row/column shape mirrors `groupByAggregateFastPath` exactly (same column
+/// naming, same Value tags), so covered results are byte-parity with the
+/// streaming path they shortcut. LIMIT is NOT applied here (the caller applies
+/// post-return LIMIT, matching the other aggregate fast paths).
+pub fn indexServedGroupByFastPath(
+    allocator: std.mem.Allocator,
+    q: ast.Query,
+    filter_graph: []const u8,
+    filter_tenant: ?[]const u8,
+) !?ExecutionResult {
+    // ---- Shape gates on MATCH (identical to groupByAggregateFastPath) ----
+    if (q.match.chains.len != 1) return null;
+    const chain = q.match.chains[0];
+    if (chain.hops.len != 0) return null;
+    if (chain.is_optional) return null;
+    if (chain.name != null) return null;
+    if (q.path_variable != null) return null;
+    const head = chain.head orelse return null;
+    if (head.labels.len != 1) return null;
+    if (head.props != null) return null;
+    const match_var = head.name orelse return null;
+    const label = head.labels[0];
+
+    // ---- Shape gates on clauses ----
+    if (q.where_clause != null) return null; // any WHERE → streaming scan path
+    if (q.filter_clause != null) return null;
+    if (q.with_clause != null) return null;
+    if (q.having != null) return null;
+    if (q.order_by != null) return null;
+    if (q.set_clauses.len != 0) return null;
+    if (q.limit) |lim| if (lim == 0) return null;
+
+    // ---- Classify RETURN items: single group key + count-only aggregates ----
+    const is_distinct_only = q.ret.distinct and q.group_by == null;
+    if (!is_distinct_only and q.group_by == null) return null;
+
+    const MAX_ITEMS = 32;
+    const n_items = q.ret.items.len;
+    if (n_items == 0 or n_items > MAX_ITEMS) return null;
+
+    const ItemKind = enum { group_key, count_star, count_key };
+    var item_kinds: [MAX_ITEMS]ItemKind = undefined;
+
+    var key_prop: []const u8 = undefined;
+    if (is_distinct_only) {
+        // Bare DISTINCT of the key: exactly one RETURN item, `<var>.<key>`.
+        if (n_items != 1) return null;
+        key_prop = extractBoundVarProperty(q.ret.items[0].expr, match_var) orelse return null;
+        item_kinds[0] = .group_key;
+    } else {
+        const gb = q.group_by.?;
+        if (gb.keys.len != 1) return null; // single-key only; multi-key → streaming
+        // GAP-ENT-0055: follow a RETURN alias (`GROUP BY s` where `s` aliases
+        // `n.source`) — the parser leaves it a bare Ident that the direct
+        // `extractBoundVarProperty` cannot resolve.
+        key_prop = resolveGroupKeyProperty(gb.keys[0], match_var, q.ret.items) orelse return null;
+
+        for (q.ret.items, 0..) |item, i| {
+            if (item.expr == .Call) {
+                const call = item.expr.Call;
+                if (call.callee.* != .Ident) return null;
+                if (!std.ascii.eqlIgnoreCase(call.callee.Ident.orig, "count")) return null;
+                if (call.args.len != 1) return null;
+                const is_star_or_var = switch (call.args[0].*) {
+                    .Ident => |id| std.mem.eql(u8, id.orig, "*") or std.mem.eql(u8, id.orig, match_var),
+                    else => false,
+                };
+                if (is_star_or_var) {
+                    item_kinds[i] = .count_star;
+                } else {
+                    // count(<var>.<prop>) is index-servable ONLY when <prop> is
+                    // the group key itself (non-null by group construction, 0
+                    // for the null group). Any other column → streaming scan.
+                    const prop = extractBoundVarProperty(call.args[0].*, match_var) orelse return null;
+                    if (!std.mem.eql(u8, prop, key_prop)) return null;
+                    item_kinds[i] = .count_key;
+                }
+            } else {
+                const prop = extractBoundVarProperty(item.expr, match_var) orelse return null;
+                if (!std.mem.eql(u8, prop, key_prop)) return null;
+                item_kinds[i] = .group_key;
+            }
+        }
+    }
+
+    // ---- Soundness gates ----
+    if (!countFastPathRlsAllowed()) return null;
+    if (filter_tenant != null) return null; // postings are not tenant-scoped
+    if (!graph_store.shouldIndexProperty(key_prop)) return null; // index completeness per key
+    const adapter = graph_store.getGlobalAdapter() orelse return null;
+    if (!adapter.graphExists(filter_graph)) return null;
+
+    // ---- Label total from the MAINTAINED refcount (hydration-guarded) ----
+    // Same store resolution as countNodesFastPath (0013): active read store if
+    // the transport installed one, else a ReadView over the global store.
+    var fallback_read_view: graph_store.ReadView = undefined;
+    var fallback_read_view_active = false;
+    defer if (fallback_read_view_active) fallback_read_view.deinit();
+    const store = if (graph_store.getActiveQueryReadStore()) |active_read_store| blk: {
+        break :blk active_read_store;
+    } else blk: {
+        const writable_store = graph_store.getGlobalStore(allocator);
+        fallback_read_view = graph_store.ReadView.init(allocator, writable_store);
+        fallback_read_view_active = true;
+        break :blk fallback_read_view.getReadStore();
+    };
+    const label_total: u64 = store.countNodesByLabel(filter_graph, label, null);
+
+    // ---- Posting walk: O(distinct values), maintained index only ----
+    var scratch_arena = std.heap.ArenaAllocator.init(allocator);
+    defer scratch_arena.deinit();
+    const sa = scratch_arena.allocator();
+
+    const summaries = adapter.collectPropertyPostingSummaries(filter_graph, label, key_prop, sa) catch return null;
+
+    var posting_sum: u64 = 0;
+    for (summaries) |s| posting_sum += s.count;
+    if (posting_sum > label_total) return null; // inconsistent window → sound scan path
+    const null_count: u64 = label_total - posting_sum;
+
+    // ---- Recover each distinct value: ONE single-property read per posting ----
+    // (arena-owned; a decline mid-way just drops the arena.)
+    //
+    // MERGE step (legacy parity): the legacy GROUP BY (execution.zig ~3095) and
+    // the streaming fast path both group on the SERIALIZED key — Int "{d}",
+    // Str raw bytes, Bool "true"/"false", any other type (incl. Double) "?" —
+    // so int 5 and string "5" land in ONE group, and all float-valued keys
+    // collapse into the "?" group (first-seen value wins). The index keeps
+    // those as SEPARATE postings (distinct encoded bytes), so we re-serialize
+    // each recovered value with the SAME rules and merge posting counts that
+    // collide, keeping the first-seen value — byte-parity by construction.
+    var merged_vals = try std.ArrayList(Value).initCapacity(sa, summaries.len);
+    var merged_counts = try std.ArrayList(u64).initCapacity(sa, summaries.len);
+    var merged_index = std.StringHashMap(usize).init(sa);
+    for (summaries) |s| {
+        try read_budget.check(); // T5: budget/cancel poll (O(distinct) loop, but distinct can be large)
+        const pv = (adapter.getNodeProperty(filter_graph, s.representative_slot, key_prop, sa) catch return null) orelse return null;
+        const val: Value = switch (pv) {
+            .int => |iv| Value{ .Int = iv },
+            .string => |sv| Value{ .Str = sv }, // arena-owned; duped into the result below
+            .bool => |bv| Value{ .Bool = bv },
+            .float => |fv| Value{ .Double = fv },
+            // .null cannot appear in a posting (a null-valued key is an absent
+            // property — never indexed); decimal/ext value mapping would
+            // diverge from the legacy result tags → decline, streaming path.
+            else => return null,
+        };
+        const ser: []const u8 = switch (val) {
+            .Int => |iv| try std.fmt.allocPrint(sa, "{d}", .{iv}),
+            .Str => |sv| sv,
+            .Bool => |bv| if (bv) "true" else "false",
+            else => "?", // Double (legacy `else` arm)
+        };
+        const gop = try merged_index.getOrPut(ser);
+        if (gop.found_existing) {
+            merged_counts.items[gop.value_ptr.*] += s.count;
+        } else {
+            gop.value_ptr.* = merged_vals.items.len;
+            try merged_vals.append(sa, val);
+            try merged_counts.append(sa, s.count);
+        }
+    }
+    const group_vals = merged_vals.items;
+    const group_counts = merged_counts.items;
+
+    // ---- Output phase (mirrors groupByAggregateFastPath's shape exactly) ----
+    const emit_null_group = null_count > 0;
+    const n_rows = group_vals.len + @intFromBool(emit_null_group);
+
+    const rows = try allocator.alloc([]Value, n_rows);
+    var n_rows_filled: usize = 0;
+    errdefer {
+        for (rows[0..n_rows_filled]) |row| {
+            for (row) |v| switch (v) {
+                .Str => |s| allocator.free(s),
+                else => {},
+            };
+            allocator.free(row);
+        }
+        allocator.free(rows);
+    }
+
+    const columns = try allocator.alloc([]const u8, n_items);
+    var n_cols_filled: usize = 0;
+    errdefer {
+        for (columns[0..n_cols_filled]) |col| allocator.free(col);
+        allocator.free(columns);
+    }
+    for (q.ret.items, 0..) |item, i| {
+        columns[i] = if (item.alias) |a|
+            try allocator.dupe(u8, a)
+        else switch (item_kinds[i]) {
+            .group_key => try allocator.dupe(u8, execution.getExpressionNameFromAst(item.expr)),
+            .count_star => try allocator.dupe(u8, "count(*)"),
+            .count_key => try std.fmt.allocPrint(allocator, "count({s}.{s})", .{ match_var, key_prop }),
+        };
+        n_cols_filled += 1;
+    }
+
+    var ri: usize = 0;
+    while (ri < n_rows) : (ri += 1) {
+        const is_null_group = ri == group_vals.len;
+        const row = try allocator.alloc(Value, n_items);
+        var n_vals_filled: usize = 0;
+        errdefer {
+            for (row[0..n_vals_filled]) |v| switch (v) {
+                .Str => |s| allocator.free(s),
+                else => {},
+            };
+            allocator.free(row);
+        }
+        for (0..n_items) |i| {
+            row[i] = switch (item_kinds[i]) {
+                .group_key => blk: {
+                    if (is_null_group) break :blk Value{ .Null = {} };
+                    break :blk switch (group_vals[ri]) {
+                        .Str => |s| Value{ .Str = try allocator.dupe(u8, s) },
+                        else => group_vals[ri],
+                    };
+                },
+                .count_star => Value{ .Int = @intCast(if (is_null_group) null_count else group_counts[ri]) },
+                // count(n.key): non-null for every member of a value group by
+                // construction; 0 for the null group (count(expr) skips nulls).
+                .count_key => Value{ .Int = @intCast(if (is_null_group) 0 else group_counts[ri]) },
+            };
+            n_vals_filled += 1;
+        }
+        rows[ri] = row;
+        n_rows_filled += 1;
+    }
+
+    _ = g_index_served_aggregate_total.fetchAdd(1, .monotonic);
+    return ExecutionResult{
+        .columns = columns,
+        .rows = rows,
+        .flags = std.ArrayList([]const u8).empty,
+    };
+}
+
 // CANARY: REQ=GAP-ENT-0002; FEATURE="GroupByStreamingFastPath"; ASPECT=Implementation; STATUS=TESTED; TEST=tests/test_gap_ent0002_groupby_streaming.zig; OWNER=execution; UPDATED=2026-06-26
 /// Streaming GROUP BY / DISTINCT fast path.
 /// Handles:
@@ -1484,6 +2304,30 @@ pub fn countFilteredFastPath(
 ///
 /// m2: LIMIT N is NOT applied here — the caller (executeMatchQueryImpl) applies
 /// post-return LIMIT on the ExecutionResult, matching propertyAggregateFastPath.
+/// GAP-ENT-0043 T2: single-property engine read for the bounded scan loops.
+/// When the scan came from the engine page-scan (`prop_head != null`, the
+/// unlabeled source) the read routes via `getNodePropertyByHead`, which walks
+/// the node's property chain for ONE key WITHOUT the per-node `getNode`
+/// random read — a pure single-property read, never a whole-node decode. A
+/// `prop_head` of 0 means the node has no properties: every key reads null.
+/// Label-posting sources (`prop_head == null`) keep the `getNodeProperty`
+/// read (getNode + single-key chain walk). Errors read as null (skip),
+/// matching the existing `catch null` / `catch continue` loop semantics.
+fn readScanNodeProp(
+    adapter: *graph_storage_adapter.StorageAdapter,
+    graph_name: []const u8,
+    slot_id: u64,
+    prop_head: ?u64,
+    key: []const u8,
+    alloc: std.mem.Allocator,
+) ?gs.PropertyValue {
+    if (prop_head) |ph| {
+        if (ph == 0) return null;
+        return adapter.getNodePropertyByHead(graph_name, slot_id, ph, key, alloc) catch null;
+    }
+    return adapter.getNodeProperty(graph_name, slot_id, key, alloc) catch null;
+}
+
 pub fn groupByAggregateFastPath(
     allocator: std.mem.Allocator,
     q: ast.Query,
@@ -1498,7 +2342,17 @@ pub fn groupByAggregateFastPath(
     if (chain.name != null) return null;
     if (q.path_variable != null) return null;
     const head = chain.head orelse return null;
-    if (head.labels.len != 1) return null;
+    // GAP-ENT-0043 T2: accept ZERO or one label. The unlabeled
+    // `MATCH (n) … GROUP BY n.k` / `RETURN DISTINCT n.k` previously declined
+    // here and fell through to planned_read_runtime, which materializes one
+    // FULL node row per node before aggregating (the 2026-07-05 live
+    // 60s+/OOM family). The unlabeled scan streams the graph id-set
+    // (unbounded cache: fully-resident reads) or the engine page-scan
+    // (bounded cache: per-key single-property reads via the node's
+    // prop_head — whole-node decode skipped). Multi-label still declines
+    // (posting intersection is the regular path's job).
+    if (head.labels.len > 1) return null;
+    const scan_label: ?[]const u8 = if (head.labels.len == 1) head.labels[0] else null;
     if (head.props != null) return null;
     const match_var = head.name orelse return null;
 
@@ -1555,7 +2409,10 @@ pub fn groupByAggregateFastPath(
         const gb = q.group_by.?;
         if (gb.keys.len == 0 or gb.keys.len > MAX_KEYS) return null;
         for (gb.keys, 0..) |key_expr, ki| {
-            gb_key_props[ki] = extractBoundVarProperty(key_expr, match_var) orelse return null;
+            // GAP-ENT-0055: follow a RETURN alias (`GROUP BY s`) — same
+            // resolution the index-served path uses, so both fast paths accept
+            // the alias-grouped shape rather than falling to legacy materialize.
+            gb_key_props[ki] = resolveGroupKeyProperty(key_expr, match_var, q.ret.items) orelse return null;
         }
         n_gb_keys = gb.keys.len;
 
@@ -1640,9 +2497,21 @@ pub fn groupByAggregateFastPath(
         defer read_view.deinit();
         const read_store = read_view.getReadStore();
         const prop_store: *graph_store.GraphStore = @constCast(read_store);
-        const posting = read_store.getNodesByLabel(filter_graph, head.labels[0]);
+        // T2 unlabeled: the authoritative graph id-set replaces the label
+        // posting (unbounded cache => every node resident; the iterator's
+        // hydrate-on-miss is a no-op). Collected into the group arena so the
+        // loop below is byte-identical for both sources.
+        const posting: ?[]const u64 = if (scan_label) |lbl|
+            read_store.getNodesByLabel(filter_graph, lbl)
+        else blk: {
+            var graph_ids = std.ArrayList(u64).empty;
+            var graph_iter = read_store.iterateNodesInGraph(filter_graph);
+            while (graph_iter.next()) |node_ptr| try graph_ids.append(ga, node_ptr.id);
+            break :blk try graph_ids.toOwnedSlice(ga);
+        };
         if (posting) |slots| {
             for (slots) |node_id| {
+                try read_budget.check(); // T5: budget/cancel poll at the row boundary (no-op when uninstalled)
                 const node = read_store.nodes.get(node_id) orelse continue;
                 if (!passesTenantFilter(node, filter_tenant)) continue;
 
@@ -1718,12 +2587,28 @@ pub fn groupByAggregateFastPath(
         }
     } else {
         // ---- Bounded: engine-direct slot scan ----
-        const slots = adapter.getNodesByLabelCapped(filter_graph, head.labels[0], null, allocator) catch return null;
-        defer allocator.free(slots);
+        // T2: labeled → label-posting slots (per-key getNodeProperty reads);
+        // unlabeled → engine page-scan entries carrying each node's prop_head,
+        // so every referenced-property read goes via getNodePropertyByHead
+        // (single-property chain walk, no per-node getNode random read).
+        var scan_slots: []u64 = &.{};
+        var scan_entries: []graph_storage_adapter.StorageAdapter.ScanEntry = &.{};
+        if (scan_label) |lbl| {
+            scan_slots = adapter.getNodesByLabelCapped(filter_graph, lbl, null, allocator) catch return null;
+        } else {
+            scan_entries = adapter.scanAllNodes(filter_graph, allocator) catch return null;
+        }
+        defer allocator.free(scan_slots);
+        defer allocator.free(scan_entries);
 
-        for (slots) |slot_id| {
+        const n_scan = if (scan_label != null) scan_slots.len else scan_entries.len;
+        var scan_i: usize = 0;
+        while (scan_i < n_scan) : (scan_i += 1) {
+            try read_budget.check(); // T5: budget/cancel poll at the row boundary (no-op when uninstalled)
+            const slot_id: u64 = if (scan_label != null) scan_slots[scan_i] else scan_entries[scan_i].slot_id;
+            const prop_head: ?u64 = if (scan_label != null) null else scan_entries[scan_i].rec.prop_head;
             if (tenant_active) {
-                const tprop = adapter.getNodeProperty(filter_graph, slot_id, graph_store.INTERNAL_TENANT_ID_PROPERTY_KEY, allocator) catch null;
+                const tprop = readScanNodeProp(adapter, filter_graph, slot_id, prop_head, graph_store.INTERNAL_TENANT_ID_PROPERTY_KEY, allocator);
                 const node_tenant: []const u8 = if (tprop) |tp| switch (tp) {
                     .string => |s| s,
                     else => graph_store.DEFAULT_TENANT_ID,
@@ -1736,7 +2621,7 @@ pub fn groupByAggregateFastPath(
             }
 
             if (where_pred) |p| {
-                const w_val = (adapter.getNodeProperty(filter_graph, slot_id, p.key, allocator) catch continue) orelse continue;
+                const w_val = readScanNodeProp(adapter, filter_graph, slot_id, prop_head, p.key, allocator) orelse continue;
                 defer switch (w_val) {
                     .string => |s| allocator.free(s),
                     else => {},
@@ -1753,7 +2638,7 @@ pub fn groupByAggregateFastPath(
             const key_w = &key_aw.writer;
             for (gb_key_props[0..n_gb_keys], 0..) |kprop, ki| {
                 if (ki > 0) try key_w.writeAll("|");
-                const pv = adapter.getNodeProperty(filter_graph, slot_id, kprop, allocator) catch null;
+                const pv = readScanNodeProp(adapter, filter_graph, slot_id, prop_head, kprop, allocator);
                 if (pv) |pval| {
                     // m1: defer frees the engine-owned string when this block exits
                     // (success or error), so a ga.dupe OOM below cannot leak it.
@@ -1802,7 +2687,7 @@ pub fn groupByAggregateFastPath(
                     .group_key => {},
                     .count_star => group.accs[item_acc_idx[i]].count += 1,
                     .count_prop => {
-                        const pv = adapter.getNodeProperty(filter_graph, slot_id, item_agg_prop[i].?, allocator) catch null;
+                        const pv = readScanNodeProp(adapter, filter_graph, slot_id, prop_head, item_agg_prop[i].?, allocator);
                         if (pv) |pval| {
                             switch (pval) {
                                 .string => |s| allocator.free(s),
@@ -1812,7 +2697,7 @@ pub fn groupByAggregateFastPath(
                         }
                     },
                     .sum, .avg, .min, .max => {
-                        const t_val = (adapter.getNodeProperty(filter_graph, slot_id, item_agg_prop[i].?, allocator) catch continue) orelse continue;
+                        const t_val = readScanNodeProp(adapter, filter_graph, slot_id, prop_head, item_agg_prop[i].?, allocator) orelse continue;
                         defer switch (t_val) {
                             .string => |s| allocator.free(s),
                             else => {},
@@ -2166,6 +3051,7 @@ pub fn topKOrderedFastPath(
         if (posting) |slots| {
             const prop_store: *graph_store.GraphStore = @constCast(read_store);
             for (slots) |node_id| {
+                try read_budget.check(); // T5: budget/cancel poll at the row boundary (no-op when uninstalled)
                 const node = read_store.nodes.get(node_id) orelse continue;
                 if (!passesTenantFilter(node, filter_tenant)) continue;
                 const pv = prop_store.getNodeProperty(node_id, ret_key) orelse continue;
@@ -2198,6 +3084,7 @@ pub fn topKOrderedFastPath(
         const slots = adapter.getNodesByLabelCapped(filter_graph, head.labels[0], null, allocator) catch return null;
         defer allocator.free(slots);
         for (slots) |slot_id| {
+            try read_budget.check(); // T5: budget/cancel poll at the row boundary (no-op when uninstalled)
             if (tenant_active) {
                 const tprop = adapter.getNodeProperty(filter_graph, slot_id, graph_store.INTERNAL_TENANT_ID_PROPERTY_KEY, allocator) catch null;
                 const node_tenant: []const u8 = if (tprop) |tp| switch (tp) {
@@ -2360,7 +3247,14 @@ pub fn orderedScanFastPath(
     if (order_by.keys.len != 1) return null;
     const ob_key_entry = order_by.keys[0];
     if (ob_key_entry.nulls != .default) return null; // explicit NULLS FIRST/LAST: bail
-    const ob_key = extractBoundVarProperty(ob_key_entry.expr, match_var) orelse return null;
+    // GAP-0064 FIX C: resolve the ORDER BY key through a RETURN alias (one hop),
+    // exactly as the GROUP BY fast path does (GAP-ENT-0055). The canonical shape
+    // `RETURN n.<k> AS a ORDER BY a LIMIT m` leaves `ORDER BY a` as a bare Ident,
+    // so `extractBoundVarProperty` returned null and BOTH the ordered fast path
+    // AND the auto-build trigger below were bypassed (silent full-sort fallback).
+    // `resolveGroupKeyProperty` follows the alias to `n.<k>` and is a no-op for
+    // the direct `ORDER BY n.<k>` form (byte-for-byte unaffected).
+    const ob_key = resolveGroupKeyProperty(ob_key_entry.expr, match_var, q.ret.items) orelse return null;
     if (!std.mem.eql(u8, ret_key, ob_key)) return null; // keys must match
     const dir: OrderDir = if (ob_key_entry.desc) .desc else .asc;
 
@@ -2377,7 +3271,16 @@ pub fn orderedScanFastPath(
     // --- ORDERED-INDEX gate: registered AND eligible on EVERY shard. On ANY
     //     doubt this is false → fall back to the heap (correct rows). ---
     const label = head.labels[0];
-    if (!adapter.isOrderedIndexRegistered(filter_graph, label, ret_key)) return null;
+    if (!adapter.isOrderedIndexRegistered(filter_graph, label, ret_key)) {
+        // GAP-0064 FIX C: a fresh (from-dump / never-CREATE-INDEXed) store has no
+        // value-ordered index for this key. Kick off a ONE-TIME, uncancellable,
+        // deduped BACKGROUND build (register + rebuild + persist) so subsequent
+        // ORDER BY on this key — and the next reopen (gs reloads the persisted
+        // snapshot) — are index-served. Fall back to the heap for THIS query
+        // (correct, slower). Deduped, so this is not a per-query cost.
+        adapter.spawnOrderedIndexBuildAsync(filter_graph, label, ret_key);
+        return null;
+    }
     if (!adapter.isOrderedIndexEligible(filter_graph, label, ret_key)) return null;
     // --- FRESHNESS gate (H3-P4): the value-ordered tree is rebuilt+refreshed
     //     only at the durability boundary (full checkpoint / close), so a
@@ -2669,7 +3572,7 @@ pub fn executeMatchCreateQuery(allocator: std.mem.Allocator, q: ast.Query, param
                 defer label_node_ids.deinit(allocator);
 
                 for (label_node_ids.items) |node_id| {
-                    const node = store.nodes.getPtr(node_id) orelse continue;
+                    const node = store.getNodePtrForScan(node_id) orelse continue;
                     // GAP-0846 follow-up: storageTenantFilter() relaxes to a full-tenant
                     // scan under an active hierarchy; the per-row hierarchy-aware check
                     // is the fail-closed compensator so siblings/ancestors cannot leak.
@@ -2731,7 +3634,7 @@ pub fn executeMatchCreateQuery(allocator: std.mem.Allocator, q: ast.Query, param
                         const node_pattern = chain.head.?;
                         env_names[ci] = node_pattern.name orelse "";
                         const node_id = chain_matches.items[ci].items[indices[ci]];
-                        const node_ptr = store.nodes.getPtr(node_id) orelse continue;
+                        const node_ptr = store.getNodePtrForScan(node_id) orelse continue;
                         env_values[ci] = Value{ .Node = node_ptr };
                     }
 
@@ -2872,9 +3775,13 @@ pub fn executeMatchCreateQuery(allocator: std.mem.Allocator, q: ast.Query, param
                             for (match_result.rows) |row| {
                                 if (ci < row.len and row[ci] == .Node) {
                                     const node_id = row[ci].Node.id;
-                                    if (store.nodes.getPtr(node_id)) |node| {
-                                        _ = node.properties.fetchRemove(prop.property);
-                                    }
+                                    // C3 (review-0023): id-based store call — durable
+                                    // (adapter + WAL + merge/label index maintenance)
+                                    // and hydrates a cold node instead of silently
+                                    // skipping it. The old resident-only fetchRemove
+                                    // was in-memory-only AND leaked the removed
+                                    // key/value allocations.
+                                    store.removeNodeProperty(node_id, prop.property);
                                 }
                             }
                             break;
@@ -2997,7 +3904,9 @@ pub fn executeMatchCallQuery(allocator: std.mem.Allocator, q: ast.Query, context
             defer candidates.deinit(allocator);
 
             for (candidates.items) |node_id| {
-                const node = read_store.nodes.get(node_id) orelse continue;
+                // GAP-ENT-0023 P3 (review I1): engine-fallback row sourcing —
+                // resident-only `.get` dropped evicted/cold rows silently.
+                const node = (read_store.getNodePtrForScan(node_id) orelse continue).*;
 
                 // GAP-0846 follow-up: storageTenantFilter() relaxes to a full-tenant
                 // scan under an active hierarchy; per-row hierarchy-aware check is the
@@ -3450,7 +4359,7 @@ pub fn executeMultiNodeMatch(allocator: std.mem.Allocator, q: ast.Query, param_n
             };
 
             for (candidate_ids) |node_id| {
-                const node = store.nodes.getPtr(node_id) orelse continue;
+                const node = store.getNodePtrForScan(node_id) orelse continue;
                 // GAP-0846 follow-up: storageTenantFilter() relaxes to a full-tenant
                 // scan under an active hierarchy; per-row hierarchy-aware check is the
                 // fail-closed compensator. WITHOUT this, `MATCH (a:P),(b:Q)` as a
@@ -4143,7 +5052,7 @@ fn executeMultiChainRelationshipMatch(allocator: std.mem.Allocator, q: ast.Query
             defer label_node_ids.deinit(allocator);
 
             for (label_node_ids.items) |node_id| {
-                const left_node = store.nodes.getPtr(node_id) orelse continue;
+                const left_node = store.getNodePtrForScan(node_id) orelse continue;
                 // GAP-0846 follow-up: per-row hierarchy-aware tenant compensator for
                 // the relaxed storageTenantFilter() label scan (anchor node).
                 if (!passesTenantFilter(left_node.*, filter_tenant)) continue;
@@ -4163,7 +5072,7 @@ fn executeMultiChainRelationshipMatch(allocator: std.mem.Allocator, q: ast.Query
                     // GAP-0891 (defense-in-depth): endpoint-derived edge visibility.
                     if (!edgeVisibleForTenantHierarchy(store, edge.*, filter_tenant)) continue;
                     if (!matchesEdgeProperties(allocator, edge.*, rel_props)) continue;
-                    if (store.nodes.getPtr(edge.to_id)) |right_node| {
+                    if (store.getNodePtrForScan(edge.to_id)) |right_node| {
                         if (!std.mem.eql(u8, right_node.graph_name, filter_graph)) continue;
                         if (!passesTenantFilter(right_node.*, filter_tenant)) continue;
                         if (!passesRLSFilter(&rls_row_local, right_node.*)) continue;
@@ -4185,7 +5094,7 @@ fn executeMultiChainRelationshipMatch(allocator: std.mem.Allocator, q: ast.Query
                     // GAP-0891 (defense-in-depth): endpoint-derived edge visibility.
                     if (!edgeVisibleForTenantHierarchy(store, edge.*, filter_tenant)) continue;
                     if (!matchesEdgeProperties(allocator, edge.*, rel_props)) continue;
-                    if (store.nodes.getPtr(edge.from_id)) |right_node| {
+                    if (store.getNodePtrForScan(edge.from_id)) |right_node| {
                         if (!std.mem.eql(u8, right_node.graph_name, filter_graph)) continue;
                         if (!passesTenantFilter(right_node.*, filter_tenant)) continue;
                         if (!passesRLSFilter(&rls_row_local, right_node.*)) continue;
@@ -4205,7 +5114,7 @@ fn executeMultiChainRelationshipMatch(allocator: std.mem.Allocator, q: ast.Query
             defer label_node_ids.deinit(allocator);
 
             for (label_node_ids.items) |node_id| {
-                const right_node = store.nodes.getPtr(node_id) orelse continue;
+                const right_node = store.getNodePtrForScan(node_id) orelse continue;
                 // GAP-0846 follow-up: per-row hierarchy-aware tenant compensator for
                 // the relaxed storageTenantFilter() label scan (anchor node).
                 if (!passesTenantFilter(right_node.*, filter_tenant)) continue;
@@ -4226,7 +5135,7 @@ fn executeMultiChainRelationshipMatch(allocator: std.mem.Allocator, q: ast.Query
                     // ~2813/2834). Fail-closed, cheap string compare.
                     if (!passesTenantFilterEdge(edge.*, filter_tenant)) continue;
                     if (!matchesEdgeProperties(allocator, edge.*, rel_props)) continue;
-                    if (store.nodes.getPtr(edge.from_id)) |left_node| {
+                    if (store.getNodePtrForScan(edge.from_id)) |left_node| {
                         if (!std.mem.eql(u8, left_node.graph_name, filter_graph)) continue;
                         if (!passesTenantFilter(left_node.*, filter_tenant)) continue;
                         if (!passesRLSFilter(&rls_row_local, left_node.*)) continue;
@@ -4248,7 +5157,7 @@ fn executeMultiChainRelationshipMatch(allocator: std.mem.Allocator, q: ast.Query
                     // (symmetry with the left-anchor branch). Fail-closed.
                     if (!passesTenantFilterEdge(edge.*, filter_tenant)) continue;
                     if (!matchesEdgeProperties(allocator, edge.*, rel_props)) continue;
-                    if (store.nodes.getPtr(edge.to_id)) |left_node| {
+                    if (store.getNodePtrForScan(edge.to_id)) |left_node| {
                         if (!std.mem.eql(u8, left_node.graph_name, filter_graph)) continue;
                         if (!passesTenantFilter(left_node.*, filter_tenant)) continue;
                         if (!passesRLSFilter(&rls_row_local, left_node.*)) continue;
@@ -4277,8 +5186,8 @@ fn executeMultiChainRelationshipMatch(allocator: std.mem.Allocator, q: ast.Query
             for (typed_edge_ids) |edge_id| {
                 const edge_ptr = store.getEdgePtrHydrated(edge_id) orelse continue;
                 if (!matchesEdgeProperties(allocator, edge_ptr.*, rel_props)) continue;
-                const from_node = store.nodes.getPtr(edge_ptr.from_id) orelse continue;
-                const to_node = store.nodes.getPtr(edge_ptr.to_id) orelse continue;
+                const from_node = store.getNodePtrForScan(edge_ptr.from_id) orelse continue;
+                const to_node = store.getNodePtrForScan(edge_ptr.to_id) orelse continue;
 
                 if (rel_dir == .right or rel_dir == .undirected) {
                     // rls_row_local aliasing: each passesRLSFilter call
@@ -4330,7 +5239,7 @@ fn executeMultiChainRelationshipMatch(allocator: std.mem.Allocator, q: ast.Query
                     const edge = store.getEdgePtrHydrated(edge_id) orelse continue;
                     if (!passesTenantFilterEdge(edge.*, filter_tenant)) continue;
                     if (!matchesEdgeProperties(allocator, edge.*, rel_props)) continue;
-                    if (store.nodes.getPtr(edge.to_id)) |right_node| {
+                    if (store.getNodePtrForScan(edge.to_id)) |right_node| {
                         if (!std.mem.eql(u8, right_node.graph_name, filter_graph)) continue;
                         if (!passesTenantFilter(right_node.*, filter_tenant)) continue;
                         if (!passesRLSFilter(&rls_row_local, right_node.*)) continue;
@@ -4347,7 +5256,7 @@ fn executeMultiChainRelationshipMatch(allocator: std.mem.Allocator, q: ast.Query
                     const edge = store.getEdgePtrHydrated(edge_id) orelse continue;
                     if (!passesTenantFilterEdge(edge.*, filter_tenant)) continue;
                     if (!matchesEdgeProperties(allocator, edge.*, rel_props)) continue;
-                    if (store.nodes.getPtr(edge.from_id)) |right_node| {
+                    if (store.getNodePtrForScan(edge.from_id)) |right_node| {
                         if (!std.mem.eql(u8, right_node.graph_name, filter_graph)) continue;
                         if (!passesTenantFilter(right_node.*, filter_tenant)) continue;
                         if (!passesRLSFilter(&rls_row_local, right_node.*)) continue;
@@ -4373,7 +5282,7 @@ fn executeMultiChainRelationshipMatch(allocator: std.mem.Allocator, q: ast.Query
             defer label_node_ids.deinit(allocator);
 
             for (label_node_ids.items) |node_id| {
-                const node = store.nodes.getPtr(node_id) orelse continue;
+                const node = store.getNodePtrForScan(node_id) orelse continue;
                 // GAP-0846 follow-up: per-row hierarchy-aware tenant compensator for
                 // the relaxed storageTenantFilter() label scan; also restores the
                 // RLS denied-labels check missing on this index fast path.
@@ -4434,7 +5343,7 @@ fn executeMultiChainRelationshipMatch(allocator: std.mem.Allocator, q: ast.Query
                         if (!passesTenantFilterEdge(edge.*, filter_tenant)) continue;
                         if (!matchesEdgeProperties(allocator, edge.*, extra_rel_props_m)) continue;
 
-                        if (store.nodes.getPtr(edge.to_id)) |right_node| {
+                        if (store.getNodePtrForScan(edge.to_id)) |right_node| {
                             if (!std.mem.eql(u8, right_node.graph_name, filter_graph)) continue;
                             if (!passesTenantFilter(right_node.*, filter_tenant)) continue;
                             if (!passesRLSFilter(&rls_row_local, right_node.*)) continue;
@@ -4483,7 +5392,7 @@ fn executeMultiChainRelationshipMatch(allocator: std.mem.Allocator, q: ast.Query
                         if (!passesTenantFilterEdge(edge.*, filter_tenant)) continue;
                         if (!matchesEdgeProperties(allocator, edge.*, extra_rel_props_m)) continue;
 
-                        if (store.nodes.getPtr(edge.from_id)) |right_node| {
+                        if (store.getNodePtrForScan(edge.from_id)) |right_node| {
                             if (!std.mem.eql(u8, right_node.graph_name, filter_graph)) continue;
                             if (!passesTenantFilter(right_node.*, filter_tenant)) continue;
                             if (!passesRLSFilter(&rls_row_local, right_node.*)) continue;
@@ -4545,7 +5454,7 @@ fn executeMultiChainRelationshipMatch(allocator: std.mem.Allocator, q: ast.Query
                     }
                     if (!passesTenantFilterEdge(edge.*, filter_tenant)) continue;
 
-                    if (store.nodes.getPtr(edge.to_id)) |right_node| {
+                    if (store.getNodePtrForScan(edge.to_id)) |right_node| {
                         if (!std.mem.eql(u8, right_node.graph_name, filter_graph)) continue;
                         if (!passesTenantFilter(right_node.*, filter_tenant)) continue;
                         if (!passesRLSFilter(&rls_row_local, right_node.*)) continue;
@@ -4567,7 +5476,7 @@ fn executeMultiChainRelationshipMatch(allocator: std.mem.Allocator, q: ast.Query
                     }
                     if (!passesTenantFilterEdge(edge.*, filter_tenant)) continue;
 
-                    if (store.nodes.getPtr(edge.from_id)) |right_node| {
+                    if (store.getNodePtrForScan(edge.from_id)) |right_node| {
                         if (!std.mem.eql(u8, right_node.graph_name, filter_graph)) continue;
                         if (!passesTenantFilter(right_node.*, filter_tenant)) continue;
                         if (!passesRLSFilter(&rls_row_local, right_node.*)) continue;
@@ -4609,7 +5518,7 @@ fn executeMultiChainRelationshipMatch(allocator: std.mem.Allocator, q: ast.Query
                         }
                         if (!passesTenantFilterEdge(edge.*, filter_tenant)) continue;
 
-                        if (store.nodes.getPtr(edge.to_id)) |right_node| {
+                        if (store.getNodePtrForScan(edge.to_id)) |right_node| {
                             if (!std.mem.eql(u8, right_node.graph_name, filter_graph)) continue;
                             if (!passesTenantFilter(right_node.*, filter_tenant)) continue;
                             if (!passesRLSFilter(&rls_row_local, right_node.*)) continue;
@@ -4641,7 +5550,7 @@ fn executeMultiChainRelationshipMatch(allocator: std.mem.Allocator, q: ast.Query
                         }
                         if (!passesTenantFilterEdge(edge.*, filter_tenant)) continue;
 
-                        if (store.nodes.getPtr(edge.from_id)) |right_node| {
+                        if (store.getNodePtrForScan(edge.from_id)) |right_node| {
                             if (!std.mem.eql(u8, right_node.graph_name, filter_graph)) continue;
                             if (!passesTenantFilter(right_node.*, filter_tenant)) continue;
                             if (!passesRLSFilter(&rls_row_local, right_node.*)) continue;
@@ -5077,7 +5986,7 @@ fn executeMatchWithOptionalPatterns(allocator: std.mem.Allocator, q: ast.Query, 
                 }
                 // GAP-0509: Filter edge by tenant
                 if (!passesTenantFilterEdge(edge.*, filter_tenant)) continue;
-                const right_node = store.nodes.getPtr(edge.to_id) orelse continue;
+                const right_node = store.getNodePtrForScan(edge.to_id) orelse continue;
 
                 // Filter right node by graph
                 if (!std.mem.eql(u8, right_node.graph_name, filter_graph)) continue;
@@ -5159,7 +6068,7 @@ fn executeMatchWithOptionalPatterns(allocator: std.mem.Allocator, q: ast.Query, 
                 }
                 // GAP-0509: Filter edge by tenant
                 if (!passesTenantFilterEdge(edge.*, filter_tenant)) continue;
-                const right_node = store.nodes.getPtr(edge.from_id) orelse continue;
+                const right_node = store.getNodePtrForScan(edge.from_id) orelse continue;
 
                 // Filter right node by graph
                 if (!std.mem.eql(u8, right_node.graph_name, filter_graph)) continue;
@@ -5457,7 +6366,7 @@ fn executeMatchWithOptionalPatterns(allocator: std.mem.Allocator, q: ast.Query, 
                         }
                         // GAP-0509: Filter edge by tenant
                         if (!passesTenantFilterEdge(edge.*, filter_tenant)) continue;
-                        const right_node = store.nodes.getPtr(edge.to_id) orelse continue;
+                        const right_node = store.getNodePtrForScan(edge.to_id) orelse continue;
 
                         // Filter by labels
                         if (right_labels.len > 0) {
@@ -5527,7 +6436,7 @@ fn executeMatchWithOptionalPatterns(allocator: std.mem.Allocator, q: ast.Query, 
                         }
                         // GAP-0509: Filter edge by tenant
                         if (!passesTenantFilterEdge(edge.*, filter_tenant)) continue;
-                        const right_node = store.nodes.getPtr(edge.from_id) orelse continue;
+                        const right_node = store.getNodePtrForScan(edge.from_id) orelse continue;
 
                         // Filter by labels
                         if (right_labels.len > 0) {
@@ -5722,7 +6631,7 @@ fn executeMatchWithOptionalPatterns(allocator: std.mem.Allocator, q: ast.Query, 
                                 if (!type_matches) return;
                             }
                             const target_id = if (is_incoming) edge.from_id else edge.to_id;
-                            const target_node = st.nodes.getPtr(target_id) orelse return;
+                            const target_node = st.getNodePtrForScan(target_id) orelse return;
                             if (tpat.labels.len > 0) {
                                 for (tpat.labels) |required_label| {
                                     var found = false;
@@ -6442,7 +7351,7 @@ fn executeVariableLengthPathTraversal(
 
         // Get the last node in the path as the right node
         const right_node_id = path.nodes.items[path.nodes.items.len - 1];
-        const right_node_ptr = store.nodes.getPtr(right_node_id) orelse continue;
+        const right_node_ptr = store.getNodePtrForScan(right_node_id) orelse continue;
 
         // CANARY: REQ=REQ-GQL-VARLEN-RIGHTNODE; FEATURE="VariableLengthPathRightNodeFilter"; ASPECT=LabelFiltering; STATUS=TESTED; TEST=geodetestlab/specs/gql_pattern_matching_comprehensive.yml; OWNER=engine; UPDATED=2025-12-18
         // Filter right node by labels if specified (e.g., :Product in MATCH (a)-[*]->(b:Product))
@@ -6538,7 +7447,7 @@ fn executeVariableLengthPathTraversal(
             var path_edges_list = try std.ArrayList(*const graph_store.Edge).initCapacity(allocator, path.edges.items.len);
 
             for (path.nodes.items) |node_id| {
-                if (store.nodes.getPtr(node_id)) |node_ptr| {
+                if (store.getNodePtrForScan(node_id)) |node_ptr| {
                     path_nodes_list.append(allocator, node_ptr) catch {};
                 }
             }
@@ -6691,7 +7600,7 @@ fn executeSingleHopEdgeTraversal(
 
             // Get the target node
             const right_node_id = if (edge_set.use_from) edge.from_id else edge.to_id;
-            const right_node_ptr = store.nodes.getPtr(right_node_id) orelse continue;
+            const right_node_ptr = store.getNodePtrForScan(right_node_id) orelse continue;
 
             // GAP-0846 hardening: tenant-filter the RIGHT (target) node too. The
             // left node was already tenant-checked by the caller and the edge by
@@ -7028,7 +7937,7 @@ fn executeMultiHopGroupBy(
         defer label_node_ids.deinit(allocator);
 
         for (label_node_ids.items) |node_id| {
-            const node = store.nodes.getPtr(node_id) orelse continue;
+            const node = store.getNodePtrForScan(node_id) orelse continue;
             // GAP-0846 follow-up: per-row hierarchy-aware tenant compensator for the
             // relaxed storageTenantFilter() label scan; also restores the RLS
             // denied-labels check missing on this multi-hop init fast path.
@@ -7108,7 +8017,7 @@ fn executeMultiHopGroupBy(
                 if (!passesTenantFilterEdge(edge.*, filter_tenant)) continue;
 
                 const right_node_id = if (hop_direction == 'l') edge.from_id else edge.to_id;
-                const right_node_ptr = store.nodes.getPtr(right_node_id) orelse continue;
+                const right_node_ptr = store.getNodePtrForScan(right_node_id) orelse continue;
 
                 // Filter right node by labels
                 if (hop.right.labels.len > 0) {
@@ -7285,6 +8194,27 @@ pub fn executeMatchQueryImpl(allocator: std.mem.Allocator, q: ast.Query, param_n
     // GAP-0279: Get tenant filter from session context
     const filter_tenant = try getSessionTenantFilter();
 
+    // GAP (write-path OOM, 2026-07-04): route the covered single-node indexed-
+    // equality point-write shapes ENGINE-DIRECT (exact-index seek + durable
+    // store property APIs) before the legacy candidate scan below materializes
+    // O(label). Uncovered shapes fall through UNCHANGED (and are metered by the
+    // write-executor working-set budget installed in executeQueryWithContext).
+    // Placed AFTER the cluster gate (executeLegacyQueryWithResolvedParams runs
+    // executeClusterMatchUpdateIfNeeded before dispatching here), so cluster
+    // writes are already replicated/rejected and never reach this fast path.
+    // Inline LET bindings extend the legacy env/columns — those queries are
+    // never attempted engine-direct.
+    if (q.set_clauses.len > 0 or q.remove_clauses.len > 0) {
+        if (inline_let_bindings.len == 0) {
+            if (try pointWriteFastPath(allocator, q, filter_graph, filter_tenant, param_names, param_values)) |fast_result| {
+                return fast_result;
+            }
+        }
+        // Fast path declined: this write-carrying query proceeds into the
+        // legacy materializing scan (routing-table test signal).
+        _ = g_legacy_write_scan_total.fetchAdd(1, .monotonic);
+    }
+
     // Extract pattern information from MATCH using helper function
     const pattern_info = extractPatternInfo(q);
     const match_variable = pattern_info.match_variable;
@@ -7338,6 +8268,12 @@ pub fn executeMatchQueryImpl(allocator: std.mem.Allocator, q: ast.Query, param_n
     // See `propertyAggregateFastPath` for preconditions — all unsupported
     // shapes fall through to the regular executor below.
     if (try propertyAggregateFastPath(allocator, q, filter_graph, filter_tenant)) |fast_result| {
+        return fast_result;
+    }
+    // GAP-ENT-0043 T1: index-served GROUP BY / DISTINCT / count-by-value —
+    // O(distinct) from the exact-property index postings; declines → the
+    // streaming scan below.
+    if (try indexServedGroupByFastPath(allocator, q, filter_graph, filter_tenant)) |fast_result| {
         return fast_result;
     }
     // GAP-ENT-0002 Phase 2c: streaming GROUP BY / DISTINCT fast path —
@@ -7414,11 +8350,16 @@ pub fn executeMatchQueryImpl(allocator: std.mem.Allocator, q: ast.Query, param_n
                 }
 
                 // Iterate over nodes and edges to collect bindings
-                var left_iter = store.nodes.iterator();
-                while (left_iter.next()) |left_entry| {
-                    const left_node = left_entry.value_ptr;
-
-                    // Filter by graph
+                // GAP-ENT-0023 P3 (review I1): graph-scoped engine-backed scan
+                // — `store.nodes.iterator()` visits only the RESIDENT subset
+                // (silently drops evicted/cold rows on a bounded cache).
+                var left_iter = store.iterateNodesInGraph(filter_graph);
+                while (left_iter.next()) |left_node| {
+                    // GAP (write-path OOM): abort a write-carrying scan cleanly
+                    // once the working-set budget is exceeded (no-op otherwise).
+                    try write_budget.check();
+                    try read_budget.check(); // T5: same poll cadence for the READ scope (no-op when uninstalled)
+                    // Defensive re-check (iterator is already graph-scoped).
                     if (!std.mem.eql(u8, left_node.graph_name, filter_graph)) continue;
                     if (!passesTenantFilter(left_node.*, filter_tenant)) continue;
                     if (!passesRLSFilter(&rls_row_local, left_node.*)) continue;
@@ -7488,7 +8429,7 @@ pub fn executeMatchQueryImpl(allocator: std.mem.Allocator, q: ast.Query, param_n
 
                         // Get the target node (to_id for outgoing edges)
                         const right_node_id = edge.to_id;
-                        const right_node_ptr = store.nodes.getPtr(right_node_id) orelse continue;
+                        const right_node_ptr = store.getNodePtrForScan(right_node_id) orelse continue;
 
                         // Filter right node by labels
                         if (right_labels.len > 0) {
@@ -7636,7 +8577,7 @@ pub fn executeMatchQueryImpl(allocator: std.mem.Allocator, q: ast.Query, param_n
 
                         // Get the target node (from_id for incoming edges)
                         const right_node_id = edge.from_id;
-                        const right_node_ptr = store.nodes.getPtr(right_node_id) orelse continue;
+                        const right_node_ptr = store.getNodePtrForScan(right_node_id) orelse continue;
 
                         // Filter right node by labels
                         if (right_labels.len > 0) {
@@ -7863,10 +8804,10 @@ pub fn executeMatchQueryImpl(allocator: std.mem.Allocator, q: ast.Query, param_n
             }
 
             // Group nodes by grouping key values (filter by labels first)
-            var node_iter = store.nodes.iterator();
-            while (node_iter.next()) |entry| {
-                const node = entry.value_ptr;
-
+            // GAP-ENT-0023 P3 (review I1): graph-scoped engine-backed scan —
+            // resident-only iteration dropped evicted/cold rows silently.
+            var node_iter = store.iterateNodesInGraph(filter_graph);
+            while (node_iter.next()) |node| {
                 // CANARY: REQ=REQ-MULTI-GRAPH-007; FEATURE="MultiGraphIsolation"; ASPECT=NodeFiltering; STATUS=TESTED; TEST=geodetestlab/specs/multi_graph.yml; OWNER=engine; UPDATED=2025-12-22
                 // Filter by graph - only include nodes from the current graph
                 if (!std.mem.eql(u8, node.graph_name, filter_graph)) continue;
@@ -7948,7 +8889,10 @@ pub fn executeMatchQueryImpl(allocator: std.mem.Allocator, q: ast.Query, param_n
                 // Evaluate grouping key for this node
                 // For now, assume single grouping key that's a property access
                 if (group_by.keys.len > 0) {
-                    const key_expr = group_by.keys[0];
+                    // GAP-ENT-0055: follow a RETURN alias (`GROUP BY s`) to its
+                    // underlying `n.source` expr — a bare alias evaluates to Null
+                    // per node and collapses everything into one null group.
+                    const key_expr = resolveGroupKeyExprAlias(group_by.keys[0], items);
                     const key_val = try evaluateNodeExpression(allocator, key_expr, node);
 
                     // Format the key as a string for grouping
@@ -8073,11 +9017,16 @@ pub fn executeMatchQueryImpl(allocator: std.mem.Allocator, q: ast.Query, param_n
                 }
 
                 // Iterate over nodes and edges to collect all matching relationship bindings
-                var left_iter = store.nodes.iterator();
-                while (left_iter.next()) |left_entry| {
-                    const left_node = left_entry.value_ptr;
-
-                    // Filter by graph
+                // GAP-ENT-0023 P3 (review I1): graph-scoped engine-backed scan
+                // — `store.nodes.iterator()` visits only the RESIDENT subset
+                // (silently drops evicted/cold rows on a bounded cache).
+                var left_iter = store.iterateNodesInGraph(filter_graph);
+                while (left_iter.next()) |left_node| {
+                    // GAP (write-path OOM): abort a write-carrying scan cleanly
+                    // once the working-set budget is exceeded (no-op otherwise).
+                    try write_budget.check();
+                    try read_budget.check(); // T5: same poll cadence for the READ scope (no-op when uninstalled)
+                    // Defensive re-check (iterator is already graph-scoped).
                     if (!std.mem.eql(u8, left_node.graph_name, filter_graph)) continue;
                     if (!passesTenantFilter(left_node.*, filter_tenant)) continue;
                     if (!passesRLSFilter(&rls_row_local, left_node.*)) continue;
@@ -8120,7 +9069,7 @@ pub fn executeMatchQueryImpl(allocator: std.mem.Allocator, q: ast.Query, param_n
 
                         // Get the target node (to_id for outgoing edges)
                         const right_node_id = edge.to_id;
-                        const right_node_ptr = store.nodes.getPtr(right_node_id) orelse continue;
+                        const right_node_ptr = store.getNodePtrForScan(right_node_id) orelse continue;
 
                         // Filter right node by labels
                         if (right_labels.len > 0) {
@@ -8210,7 +9159,7 @@ pub fn executeMatchQueryImpl(allocator: std.mem.Allocator, q: ast.Query, param_n
 
                         // Get the target node (from_id for incoming edges)
                         const right_node_id = edge.from_id;
-                        const right_node_ptr = store.nodes.getPtr(right_node_id) orelse continue;
+                        const right_node_ptr = store.getNodePtrForScan(right_node_id) orelse continue;
 
                         // Filter right node by labels
                         if (right_labels.len > 0) {
@@ -8330,10 +9279,10 @@ pub fn executeMatchQueryImpl(allocator: std.mem.Allocator, q: ast.Query, param_n
                 const max_len = var_len_max;
 
                 // Find all starting nodes matching the left pattern
-                var start_node_iter = store.nodes.iterator();
-                while (start_node_iter.next()) |entry| {
-                    const start_node = entry.value_ptr;
-
+                // GAP-ENT-0023 P3 (review I1): graph-scoped engine-backed scan
+                // — resident-only iteration dropped evicted/cold rows.
+                var start_node_iter = store.iterateNodesInGraph(filter_graph);
+                while (start_node_iter.next()) |start_node| {
                     // CANARY: REQ=REQ-MULTI-GRAPH-021; FEATURE="MultiGraphIsolation"; ASPECT=VarLengthPathFilter; STATUS=TESTED; TEST=geodetestlab/specs/multi_graph.yml; OWNER=engine; UPDATED=2025-12-22
                     // Filter by graph - only include nodes from the current graph
                     if (!std.mem.eql(u8, start_node.graph_name, filter_graph)) continue;
@@ -8402,7 +9351,7 @@ pub fn executeMatchQueryImpl(allocator: std.mem.Allocator, q: ast.Query, param_n
                         if (path.nodes.items.len == 0) continue; // Empty path is never valid
 
                         const target_node_id = path.nodes.items[path.nodes.items.len - 1];
-                        const target_node_ptr = store.nodes.getPtr(target_node_id) orelse continue;
+                        const target_node_ptr = store.getNodePtrForScan(target_node_id) orelse continue;
 
                         // Filter by right node labels (e.g., :Category in MATCH (a)-[*]->(b:Category {name: 'X'}))
                         if (right_labels.len > 0) {
@@ -8494,10 +9443,13 @@ pub fn executeMatchQueryImpl(allocator: std.mem.Allocator, q: ast.Query, param_n
             }
 
             // Collect all nodes that match the pattern and WHERE clause
-            var node_iter = store.nodes.iterator();
-            while (node_iter.next()) |entry| {
-                const node = entry.value_ptr;
-
+            // GAP-ENT-0023 P3 (review I1): graph-scoped engine-backed scan —
+            // resident-only iteration dropped evicted/cold rows silently.
+            var node_iter = store.iterateNodesInGraph(filter_graph);
+            while (node_iter.next()) |node| {
+                // GAP (write-path OOM): budget poll (no-op without a scope).
+                try write_budget.check();
+                try read_budget.check(); // T5: same poll cadence for the READ scope (no-op when uninstalled)
                 // Filter by graph - only include nodes from the current graph
                 if (!std.mem.eql(u8, node.graph_name, filter_graph)) continue;
                 if (!passesTenantFilter(node.*, filter_tenant)) continue;
@@ -8894,7 +9846,7 @@ pub fn executeMatchQueryImpl(allocator: std.mem.Allocator, q: ast.Query, param_n
                     defer label_node_ids.deinit(allocator);
 
                     for (label_node_ids.items) |node_id| {
-                        const node = store.nodes.getPtr(node_id) orelse continue;
+                        const node = store.getNodePtrForScan(node_id) orelse continue;
                         // GAP-0846 follow-up: per-row hierarchy-aware tenant compensator
                         // for the relaxed storageTenantFilter() label scan; also restores
                         // the RLS denied-labels check missing on this fast path.
@@ -8906,9 +9858,10 @@ pub fn executeMatchQueryImpl(allocator: std.mem.Allocator, q: ast.Query, param_n
                     // GAP-0522: Diagnostic warning for full-scan multi-hop initialization
                     _ = g_full_scan_count.fetchAdd(1, .monotonic);
                     match_log.warn("multi-hop MATCH full node scan: no labels on first-hop left node", .{});
-                    var init_iter = store.nodes.iterator();
-                    while (init_iter.next()) |entry| {
-                        const node = entry.value_ptr;
+                    // GAP-ENT-0023 P3 (review I1): graph-scoped engine-backed
+                    // scan — resident-only iteration dropped cold rows.
+                    var init_iter = store.iterateNodesInGraph(filter_graph);
+                    while (init_iter.next()) |node| {
                         if (!std.mem.eql(u8, node.graph_name, filter_graph)) continue;
                         if (!passesTenantFilter(node.*, filter_tenant)) continue;
                         if (!passesRLSFilter(&rls_row_local, node.*)) continue;
@@ -8997,7 +9950,7 @@ pub fn executeMatchQueryImpl(allocator: std.mem.Allocator, q: ast.Query, param_n
 
                             // Get the target node based on direction
                             const right_node_id = if (hop_direction == 'l') edge.from_id else edge.to_id;
-                            const right_node_ptr = store.nodes.getPtr(right_node_id) orelse continue;
+                            const right_node_ptr = store.getNodePtrForScan(right_node_id) orelse continue;
 
                             // Filter right node by labels
                             if (hop.right.labels.len > 0) {
@@ -9334,13 +10287,23 @@ pub fn executeMatchQueryImpl(allocator: std.mem.Allocator, q: ast.Query, param_n
                 try left_nodes_to_process.append(allocator, bln);
             } else {
                 // Iterate over all matching nodes
-                var left_iter = store.nodes.iterator();
-                while (left_iter.next()) |left_entry| {
-                    try left_nodes_to_process.append(allocator, left_entry.value_ptr);
+                // GAP-ENT-0023 P3 (review I1): graph-scoped engine-backed scan
+                // — resident-only iteration dropped evicted/cold rows.
+                var left_iter = store.iterateNodesInGraph(filter_graph);
+                while (left_iter.next()) |left_node_ptr| {
+                    // GAP (write-path OOM): the collection pass itself
+                    // materializes detached boxes per cold node — poll the
+                    // budget here too (no-op without a scope).
+                    try write_budget.check();
+                    try read_budget.check(); // T5: same poll cadence for the READ scope (no-op when uninstalled)
+                    try left_nodes_to_process.append(allocator, left_node_ptr);
                 }
             }
 
             for (left_nodes_to_process.items) |left_node| {
+                // GAP (write-path OOM): budget poll (no-op without a scope).
+                try write_budget.check();
+                try read_budget.check(); // T5: same poll cadence for the READ scope (no-op when uninstalled)
 
                 // CANARY: REQ=REQ-MULTI-GRAPH-022; FEATURE="MultiGraphIsolation"; ASPECT=RelPatternFilter; STATUS=TESTED; TEST=geodetestlab/specs/multi_graph.yml; OWNER=engine; UPDATED=2025-12-22
                 // Filter by graph - only include nodes from the current graph
@@ -9494,17 +10457,30 @@ pub fn executeMatchQueryImpl(allocator: std.mem.Allocator, q: ast.Query, param_n
                 use_label_candidates = true;
             }
 
-            var full_iter = store.nodes.iterator();
+            // GAP-ENT-0023 P3 (review I1): the unlabeled fallback used to walk
+            // `store.nodes.iterator()` — the RESIDENT subset only, which
+            // silently drops evicted/cold rows on a bounded cache. Walk the
+            // authoritative per-graph id set instead (engine-fallback bodies,
+            // detached — see getNodePtrForScan).
+            var full_iter = store.iterateNodesInGraph(filter_graph);
             var cand_idx: usize = 0;
             while (true) {
+                // GAP (write-path OOM, 2026-07-04): THE incident loop — a
+                // write-carrying single-node MATCH walks every label candidate
+                // here, materializing detached boxes + env/eval scratch per
+                // candidate. Poll the working-set budget BETWEEN candidates
+                // (before this candidate's mutation is applied): per-node
+                // atomicity at abort, and the OOM killer is never the arbiter.
+                // No-op when no budget scope is installed (read queries).
+                try write_budget.check();
+                try read_budget.check(); // T5: same poll cadence for the READ scope (no-op when uninstalled)
                 const node: *graph_store.Node = if (use_label_candidates) blk: {
                     if (cand_idx >= simple_node_candidates.items.len) break;
                     const nid = simple_node_candidates.items[cand_idx];
                     cand_idx += 1;
-                    break :blk store.nodes.getPtr(nid) orelse continue;
+                    break :blk store.getNodePtrForScan(nid) orelse continue;
                 } else blk: {
-                    const entry = full_iter.next() orelse break;
-                    break :blk entry.value_ptr;
+                    break :blk full_iter.next() orelse break;
                 };
 
                 // CANARY: REQ=REQ-MULTI-GRAPH-023; FEATURE="MultiGraphIsolation"; ASPECT=SimpleNodeFilter; STATUS=TESTED; TEST=geodetestlab/specs/multi_graph.yml; OWNER=engine; UPDATED=2025-12-22
@@ -9659,8 +10635,12 @@ pub fn executeMatchQueryImpl(allocator: std.mem.Allocator, q: ast.Query, param_n
                                 // Evaluate the properties expression (should be a map literal)
                                 const props_value = try eval.evalExpr(allocator, all_props.properties, env);
 
-                                // Clear all existing properties by getting node and manually clearing
-                                if (store.nodes.getPtr(node.id)) |node_ptr| {
+                                // Clear all existing properties by getting node and manually clearing.
+                                // C3 (review-0023): hydrate-on-miss — the row's node box
+                                // is detached (never resident), so a resident-only getPtr
+                                // silently dropped `SET n = {…}` after every warm reopen.
+                                // Safe: SET runs on the write path (per-graph EXCLUSIVE).
+                                if (store.nodes.getOrHydratePtr(node.id) catch null) |node_ptr| {
                                     try property_mutation.replaceNodeProperties(allocator, store, node_ptr, props_value);
                                 }
                             }
@@ -9673,7 +10653,11 @@ pub fn executeMatchQueryImpl(allocator: std.mem.Allocator, q: ast.Query, param_n
                     switch (remove_clause) {
                         .Property => |prop| {
                             if (std.mem.eql(u8, prop.object, match_variable orelse "")) {
-                                if (store.nodes.getPtr(node.id)) |node_ptr| {
+                                // C3 (review-0023): hydrate-on-miss — a resident-only
+                                // getPtr silently dropped `REMOVE n.prop` for cold
+                                // (post-warm-reopen) nodes. Safe: REMOVE runs on the
+                                // write path (per-graph EXCLUSIVE lock).
+                                if (store.nodes.getOrHydratePtr(node.id) catch null) |node_ptr| {
                                     property_mutation.removeNodeProperty(store, node_ptr, prop.property);
                                 }
                             }

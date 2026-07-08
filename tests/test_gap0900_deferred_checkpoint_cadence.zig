@@ -124,6 +124,201 @@ test "GAP-0900: deferred-mode periodic checkpoint fires after bulk inserts" {
     try std.testing.expectEqual(@as(u64, 0), adapter.pendingBulkOps());
 }
 
+/// Sum the byte sizes of every per-shard engine WAL segment (`graph.wal`)
+/// under `data_dir`. This is the file the deferred-mode checkpoint must
+/// truncate; if the cadence trigger fails to RE-ARM after the first fire the
+/// per-shard WALs grow without bound across rounds (GAP-ENT-0038).
+fn engineWalBytes(allocator: std.mem.Allocator, data_dir: []const u8) !u64 {
+    return engineWalBytesInner(allocator, data_dir, 0);
+}
+
+fn engineWalBytesInner(allocator: std.mem.Allocator, dir_path: []const u8, depth: usize) !u64 {
+    if (depth > 6) return 0; // engine layout is shallow; guard against cycles
+    const io = std.Io.Threaded.global_single_threaded.io();
+    var dir = std.Io.Dir.cwd().openDir(io, dir_path, .{ .iterate = true }) catch return 0;
+    defer dir.close(io);
+    var total: u64 = 0;
+    var it = dir.iterate();
+    while (it.next(io) catch null) |entry| {
+        const child = try std.fmt.allocPrint(allocator, "{s}/{s}", .{ dir_path, entry.name });
+        defer allocator.free(child);
+        switch (entry.kind) {
+            .directory => total += try engineWalBytesInner(allocator, child, depth + 1),
+            .file => if (std.mem.eql(u8, entry.name, "graph.wal")) {
+                const st = std.Io.Dir.cwd().statFile(io, child, .{}) catch continue;
+                total += st.size;
+            },
+            else => {},
+        }
+    }
+    return total;
+}
+
+test "GAP-ENT-0038: deferred auto-checkpoint RE-ARMS - 10 consecutive op-threshold fires with bounded WAL" {
+    const allocator = std.testing.allocator;
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const data_dir = try tmpDataDir(allocator, &tmp);
+    defer allocator.free(data_dir);
+
+    const adapter = try initDeferredAdapter(allocator, data_dir);
+    defer adapter.deinit();
+    _ = try adapter.getOrCreateGraph("g");
+    const store = graph_store.getGlobalStore(graph_store.global_allocator());
+
+    // Tiny threshold (100) crossed 10 times: the live GAP-ENT-0038 report was
+    // "exactly ONE auto-checkpoint fired, none since" — so the invariant this
+    // test pins is that the SECOND and every later crossing fires too (the
+    // cadence state must be reset by each checkpoint: pending drained AND the
+    // decision re-armed, not latched off by the first run).
+    const threshold: u64 = 100;
+    const rounds: usize = 10;
+    const ops_per_round: usize = 150;
+
+    const labels = [_][]const u8{"L"};
+    const empty_props = [_]PropKV{};
+
+    var now_ns: u64 = 0;
+    var wal_after_first_checkpoint: u64 = 0;
+    var round: usize = 0;
+    while (round < rounds) : (round += 1) {
+        var i: usize = 0;
+        while (i < ops_per_round) : (i += 1) {
+            const reserved = store.reserveNodeId();
+            _ = try adapter.bulkInsertNodeWithReservedId("g", reserved, &labels, &empty_props);
+        }
+
+        // The cadence signal must have accumulated this round's ops (re-arm
+        // half #1: the counter is live again after the previous reset).
+        try std.testing.expect(adapter.pendingBulkOps() >= threshold);
+
+        const wal_before = try engineWalBytes(allocator, data_dir);
+
+        // Injected "now" stays far below the real monotonic clock stored by
+        // checkpointAllEx, so elapsed_ms saturates to 0 and ONLY the op-count
+        // trigger can fire — deterministic, no timers.
+        now_ns += std.time.ns_per_ms;
+        const fired = try adapter.maybeCheckpoint(threshold, 60_000, now_ns);
+
+        // RE-ARM half #2: the trigger must fire on EVERY crossing, not just
+        // the first (GAP-ENT-0038: firing #2 was the one reported missing).
+        try std.testing.expect(fired);
+        try std.testing.expectEqual(@as(u64, @intCast(round + 1)), adapter.checkpointsTotal());
+        try std.testing.expectEqual(@as(u64, 0), adapter.pendingBulkOps());
+
+        // Observed at fix time: wal_before ~6.2 MB of per-shard engine WAL
+        // after each round's writes, wal_after == 0 after every checkpoint —
+        // i.e. each fire truncates the round's entire WAL growth.
+        const wal_after = try engineWalBytes(allocator, data_dir);
+        try std.testing.expect(wal_after < wal_before);
+        if (round == 0) wal_after_first_checkpoint = wal_after;
+    }
+
+    // WAL bound: after 10 checkpointed rounds the engine WAL must sit at the
+    // same post-checkpoint level as after round 1 — i.e. every checkpoint
+    // truncated its round's WAL growth. If any later fire were skipped the
+    // un-truncated round(s) would leave the final WAL strictly above the
+    // round-1 baseline.
+    const wal_final = try engineWalBytes(allocator, data_dir);
+    try std.testing.expect(wal_final <= wal_after_first_checkpoint);
+}
+
+test "GAP-ENT-0038: a checkpoint that finds nothing pending still re-arms the trigger" {
+    const allocator = std.testing.allocator;
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const data_dir = try tmpDataDir(allocator, &tmp);
+    defer allocator.free(data_dir);
+
+    const adapter = try initDeferredAdapter(allocator, data_dir);
+    defer adapter.deinit();
+    _ = try adapter.getOrCreateGraph("g");
+    const store = graph_store.getGlobalStore(graph_store.global_allocator());
+
+    const threshold: u64 = 100;
+    const labels = [_][]const u8{"L"};
+    const empty_props = [_]PropKV{};
+
+    // Round 1: cross the threshold and fire.
+    var i: usize = 0;
+    while (i < 150) : (i += 1) {
+        const reserved = store.reserveNodeId();
+        _ = try adapter.bulkInsertNodeWithReservedId("g", reserved, &labels, &empty_props);
+    }
+    try std.testing.expect(try adapter.maybeCheckpoint(threshold, 60_000, std.time.ns_per_ms));
+    try std.testing.expectEqual(@as(u64, 0), adapter.pendingBulkOps());
+
+    // Interleave checkpoints that legitimately SKIP work (nothing pending) —
+    // this is exactly what the persistence loop's SILENT legacy callers
+    // (persistSplitPhase / the CDC-WAL needs_checkpoint branch) do between
+    // deferred-trigger fires on the live server. They must not latch the
+    // trigger off (e.g. via a stuck in_progress/dirty flag).
+    try adapter.checkpointAllLight();
+    try adapter.checkpointAllLight();
+    try std.testing.expectEqual(@as(u64, 0), adapter.pendingBulkOps());
+
+    // With nothing pending, the decision must decline (no busy-fire)...
+    try std.testing.expect(!(try adapter.maybeCheckpoint(threshold, 60_000, 2 * std.time.ns_per_ms)));
+
+    // ...and after new bulk work crosses the threshold it must fire AGAIN.
+    i = 0;
+    while (i < 150) : (i += 1) {
+        const reserved = store.reserveNodeId();
+        _ = try adapter.bulkInsertNodeWithReservedId("g", reserved, &labels, &empty_props);
+    }
+    try std.testing.expect(adapter.pendingBulkOps() >= threshold);
+    try std.testing.expect(try adapter.maybeCheckpoint(threshold, 60_000, 3 * std.time.ns_per_ms));
+    try std.testing.expectEqual(@as(u64, 0), adapter.pendingBulkOps());
+}
+
+test "GAP-ENT-0038: checkpoint cadence counters are exported via runtime metrics" {
+    const allocator = std.testing.allocator;
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const data_dir = try tmpDataDir(allocator, &tmp);
+    defer allocator.free(data_dir);
+
+    const adapter = try initDeferredAdapter(allocator, data_dir);
+    defer adapter.deinit();
+    _ = try adapter.getOrCreateGraph("g");
+    const store = graph_store.getGlobalStore(graph_store.global_allocator());
+
+    const rm = geode.runtime_metrics;
+    const reg = try rm.Registry.init(allocator);
+    defer {
+        rm.setGlobalRegistry(null);
+        reg.deinit();
+    }
+    rm.setGlobalRegistry(reg);
+
+    // Registration is idempotent (once-only latch) and must survive a
+    // duplicate call without duplicating registry entries.
+    adapter.registerCheckpointMetrics();
+    adapter.registerCheckpointMetrics();
+
+    const labels = [_][]const u8{"L"};
+    const empty_props = [_]PropKV{};
+    var i: usize = 0;
+    while (i < 150) : (i += 1) {
+        const reserved = store.reserveNodeId();
+        _ = try adapter.bulkInsertNodeWithReservedId("g", reserved, &labels, &empty_props);
+    }
+    try std.testing.expect(try adapter.maybeCheckpoint(100, 60_000, std.time.ns_per_ms));
+
+    var out = std.ArrayList(u8).empty;
+    defer out.deinit(allocator);
+    try reg.snapshotInto(allocator, &out);
+
+    // Exactly one registration of each counter, with live post-checkpoint
+    // values: checkpoints_total advanced, pending drained.
+    try std.testing.expect(std.mem.indexOf(u8, out.items, "adapter_checkpoints_total=1") != null);
+    try std.testing.expect(std.mem.indexOf(u8, out.items, "adapter_pending_bulk_ops=0") != null);
+    try std.testing.expectEqual(
+        @as(usize, 1),
+        std.mem.count(u8, out.items, "adapter_checkpoints_total="),
+    );
+}
+
 test "GAP-0900: deferred-mode time-based checkpoint fires for un-checkpointed bulk merges" {
     const allocator = std.testing.allocator;
     var tmp = std.testing.tmpDir(.{});

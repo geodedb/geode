@@ -643,28 +643,84 @@ pub fn prepare(
         where_expr = cloneExpr(aa, w) catch return null;
     }
 
-    // count mode: O(1) cardinality from the label index when TRULY unfiltered.
+    // count mode: O(1) cardinality when TRULY unfiltered.
     //
-    // The O(1) label/graph count is correct ONLY when there is no per-node
-    // filter of any kind. A WHERE/FILTER predicate is one filter; inline
-    // `{prop: val}` patterns on the matched node are ANOTHER. `eligibleQuery`
-    // accepts inline-prop count (it is streamable), but those props must be
-    // applied per node — using `countNodesByLabel` here would count EVERY node
-    // of the label and silently ignore the `{prop: val}` filter (over-count).
-    // So gate the O(1) precompute on having NO inline props as well; inline-
-    // prop counts fall through to the streamed slot-tally path below.
+    // The O(1) count is correct ONLY when there is no per-node filter of any
+    // kind. A WHERE/FILTER predicate is one filter; inline `{prop: val}`
+    // patterns on the matched node are ANOTHER. `eligibleQuery` accepts
+    // inline-prop count (it is streamable), but those props must be applied
+    // per node — an O(1) count here would count EVERY node of the label and
+    // silently ignore the `{prop: val}` filter (over-count). So gate the O(1)
+    // precompute on having NO inline props as well; inline-prop counts fall
+    // through to the streamed slot-tally path below.
+    //
+    // SOURCE (2026-07-05 live regression at 14.27M): the single-label count
+    // MUST read the AUTHORITATIVE in-memory maintained refcount
+    // (`GraphStore.countNodesByLabel`, tenantless arm = `countGraphLabel`,
+    // guarded by the `ensureGraphHydrated` chokepoint) — NEVER
+    // `adapter.countNodesByLabel`, which sums the storage ENGINE's per-shard
+    // `label_index`. That engine index is a DEFERRED derived structure
+    // (graph-storage Phase A): empty/partial after a catalog-mediated reopen
+    // until an accessor materializes it, never filled by the in-memory
+    // streaming hydration, and it retains deleted slots (over-count). Live
+    // capture: this precompute returned 0 for a graph whose in-memory
+    // refcount held 14,270,791 — after the query had already blocked on the
+    // hydration latch. Tenant scope: this engine-direct path has never
+    // applied a tenant filter (the adapter count had no tenant parameter),
+    // so `tenant = null` preserves the path's semantics exactly; tenant- and
+    // RLS-scoped counts are handled by the in-memory fast paths / legacy
+    // executor before the handler falls through to this stream.
+    // Regression: tests/test_startup_lazy_hydrate.zig "engine-direct
+    // single-label count serves the in-memory refcount".
     const has_inline_props = eligibility.pattern.props != null;
     var count_precomputed: ?usize = null;
     if (eligibility.mode == .count and where_expr == null and !has_inline_props) {
         if (graph_store.getGlobalAdapter()) |adapter| {
             if (eligibility.pattern.labels.len == 1) {
-                count_precomputed = @intCast(adapter.countNodesByLabel(graph_name, eligibility.pattern.labels[0]) catch return null);
-            } else {
-                // Unlabeled count: fall back to scanning live nodes (no clone).
+                count_precomputed = graph_store.getGlobalStore(allocator).countNodesByLabel(graph_name, eligibility.pattern.labels[0], null);
+            } else if (eligibility.pattern.labels.len == 0) {
+                // Unlabeled count: scan the engine node store (no clone). The
+                // node store is a PRIMARY structure — complete irrespective of
+                // the deferred derived-index state — so it is safe to source.
                 const entries = adapter.scanAllNodes(graph_name, aa) catch return null;
                 count_precomputed = entries.len;
             }
+            // labels.len > 1: NO precompute — a multi-label conjunction must
+            // fall through to the slot-tally path, whose per-slot
+            // `nodeMatchesPattern` verifies the FULL label set. (The previous
+            // `scanAllNodes` arm counted EVERY node in the graph for
+            // multi-label patterns — silent over-count.)
         } else return null;
+    }
+
+    // GAP-ENT-0055: O(1) FILTERED count for `MATCH (n:L) WHERE n.<indexed> =
+    // '<ascii>' RETURN count(n)`. The exact node-property index posting LENGTH
+    // for (label, key, value) IS the answer, so serve it O(1) instead of
+    // collecting + materializing + re-evaluating every matching slot in
+    // `buildCountPage` (O(matching): 88 s at 7 M for `source='col'`). Gated on a
+    // SINGLE seekable equality, one label, no inline props, no FILTER clause —
+    // any other shape falls through to the streaming tally (still correct).
+    // Tenant/RLS-scoped counts never reach this engine-direct stream (handled by
+    // the in-memory fast paths / legacy executor upstream), so — like the
+    // unfiltered precompute above — the posting length (all-tenant) is exact here.
+    if (count_precomputed == null and eligibility.mode == .count and
+        !has_inline_props and eligibility.pattern.labels.len == 1 and
+        q.filter_clause == null)
+    {
+        if (q.where_clause) |wc| {
+            if (seekableEqCountWhere(wc, var_name)) |seek| {
+                if (graph_store.getGlobalAdapter()) |adapter| {
+                    if (adapter.countCandidateNodesByLabelAndProperty(
+                        graph_name,
+                        eligibility.pattern.labels[0],
+                        seek.key,
+                        graph_store.PropertyValue{ .String = seek.value },
+                    )) |posting_len| {
+                        count_precomputed = posting_len;
+                    } else |_| {}
+                }
+            }
+        }
     }
 
     // Clone RETURN items (projection mode) into the arena.
@@ -700,7 +756,7 @@ pub fn prepare(
         // must not pass `required` here. Inline-prop filters are applied during
         // collection; a WHERE predicate (if any) is re-evaluated per node in
         // `buildCountPage`'s tally. The tally counts matched slots (no clone).
-        slot_ids = try collectMatchingSlotIds(allocator, graph_name, eligibility.pattern, null, null, owned_param_names, owned_param_values, context);
+        slot_ids = try collectMatchingSlotIds(allocator, graph_name, eligibility.pattern, null, null, owned_param_names, owned_param_values, context, where_expr);
     } else if (where_expr != null) {
         // Predicate-filtered rows/projection: LIMIT/OFFSET apply to MATCHED rows.
         row_offset = offset;
@@ -717,17 +773,17 @@ pub fn prepare(
                 .var_name = var_name,
                 .match_cap = offset +| l,
             };
-            slot_ids = try collectMatchingSlotIds(allocator, graph_name, eligibility.pattern, null, pushdown, owned_param_names, owned_param_values, context);
+            slot_ids = try collectMatchingSlotIds(allocator, graph_name, eligibility.pattern, null, pushdown, owned_param_names, owned_param_values, context, where_expr);
         } else {
             // No LIMIT: the window is unbounded, so collect every pattern-matching
             // slot (today's behavior); paging evaluates the predicate per row.
-            slot_ids = try collectMatchingSlotIds(allocator, graph_name, eligibility.pattern, null, null, owned_param_names, owned_param_values, context);
+            slot_ids = try collectMatchingSlotIds(allocator, graph_name, eligibility.pattern, null, null, owned_param_names, owned_param_values, context, where_expr);
         }
     } else {
         // No predicate: matched == scanned, so bound slot collection by
         // OFFSET+LIMIT and start paging at OFFSET.
         const required = resolveRequiredRows(q, param_names, param_values);
-        slot_ids = try collectMatchingSlotIds(allocator, graph_name, eligibility.pattern, required, null, owned_param_names, owned_param_values, context);
+        slot_ids = try collectMatchingSlotIds(allocator, graph_name, eligibility.pattern, required, null, owned_param_names, owned_param_values, context, where_expr);
         start_index = @min(offset, slot_ids.len);
     }
     errdefer if (slot_ids.len > 0) allocator.free(slot_ids);
@@ -1102,6 +1158,141 @@ const WherePushdown = struct {
     match_cap: usize,
 };
 
+/// GAP-ENT-0019: the soundness gate deciding whether a WHERE `var.key = <lit>`
+/// may be served by the exact node-property SEEK. IDENTICAL to
+/// `match_operations.seekableAsciiStringEq` (kept in sync — see its doc-comment
+/// for the full argument). WHERE `=` evaluates with `eval` semantics that are
+/// BROADER than the raw-hash index in two ways the index cannot see: (1) string
+/// equality is NFC-normalized; (2) `=` cross-type stringify-coerces (int 5 ==
+/// "5"). A seek is exact — seek-set ⊇ eval-match-set, so it never MISSES a true
+/// match — ONLY when BOTH broadenings are provably impossible for the literal:
+///   * pure ASCII  → NFC is identity, so string-eq reduces to exact-byte eq;
+///   * non-bool, non-numeric → no non-string scalar can stringify-coerce to it.
+/// Any other literal returns false and the caller keeps the full label scan.
+fn isSeekableAsciiStringLiteral(s: []const u8) bool {
+    for (s) |c| {
+        if (c >= 0x80) return false;
+    }
+    if (std.ascii.eqlIgnoreCase(s, "true") or std.ascii.eqlIgnoreCase(s, "false")) return false;
+    if (s.len > 0) {
+        if (std.fmt.parseInt(i64, s, 10)) |_| return false else |_| {}
+        if (std.fmt.parseFloat(f64, s)) |_| return false else |_| {}
+    }
+    return true;
+}
+
+/// If `e` is `var.<prop>` (either `.PropertyAccess` or `.Member` shape) on
+/// `var_name`, return the property key; else null.
+fn varPropertyKey(e: ast.Expr, var_name: []const u8) ?[]const u8 {
+    return switch (e) {
+        .PropertyAccess => |pa| if (std.ascii.eqlIgnoreCase(pa.object, var_name)) pa.property else null,
+        .Member => |m| if (m.target.* == .Ident and
+            (std.ascii.eqlIgnoreCase(m.target.Ident.orig, var_name) or std.ascii.eqlIgnoreCase(m.target.Ident.cnf, var_name)))
+            m.field
+        else
+            null,
+        else => null,
+    };
+}
+
+/// Extract a string literal (`.String` / `.TextLit`) from `e`, else null.
+fn stringLiteralValue(e: ast.Expr) ?[]const u8 {
+    return switch (e) {
+        .String => |s| s,
+        .TextLit => |s| s,
+        else => null,
+    };
+}
+
+/// GAP-ENT-0019: walk `where_expr` for seekable `var.key = <string literal>`
+/// equalities and append each as a synthetic `ast.Property` (arena-owned) into
+/// `out`, for feeding the exact-index seek. Handles a top-level `=` AND every
+/// `=` conjunct of a top-level AND tree (so `a = x AND b > 2` still seeks on
+/// `a = x`). Each candidate must pass the SAME per-key completeness gate the
+/// inline seek uses (`graph_store.shouldIndexProperty`) AND the
+/// `isSeekableAsciiStringLiteral` soundness gate. OR / ordering ops / non-string
+/// / numeric-looking / non-ASCII literals are skipped (the caller's full scan +
+/// the downstream WHERE re-eval remain correct). The synthetic value Expr is a
+/// `.String`, so `seekIndexedCandidates`' `eval`+`valueToPropertyValue` yields
+/// the same `String` property value the inline `{prop: 'val'}` path produces.
+/// GAP-ENT-0055: recognize a WHERE that is EXACTLY a single seekable
+/// `var.key = <ascii string literal>` equality (no AND, no other predicate),
+/// so a filtered `count(n)` can be served O(1) from the exact-index posting
+/// LENGTH instead of streaming + materializing every matching slot
+/// (`buildCountPage`'s tally, O(matching) — 88 s on the 7M store's high-
+/// cardinality `source='col'` covering 5.4 M nodes).
+///
+/// This is the SAME provably-exact shape `countFilteredFastPath` (GAP-ENT-0019)
+/// serves O(1), but on the path the QUIC handler ACTUALLY routes filtered
+/// counts to (readServedEngineDirect → node_scan_stream), which
+/// `countFilteredFastPath` never sees. It must be a SINGLE top-level equality:
+/// an AND tree (`a=x AND b>2`) would need per-node re-eval, so it is declined
+/// (→ the streaming tally, still correct). Reuses the seek soundness gates
+/// (`shouldIndexProperty` completeness + `isSeekableAsciiStringLiteral` NFC /
+/// cross-type argument), so the posting bucket holds exactly the eval-matches
+/// (the same collision-free posting assumption the T1 index-served aggregate
+/// path relies on).
+const SeekEqCount = struct { key: []const u8, value: []const u8 };
+fn seekableEqCountWhere(where_expr: ast.Expr, var_name: []const u8) ?SeekEqCount {
+    const b = switch (where_expr) {
+        .Binary => |bin| bin,
+        else => return null,
+    };
+    if (b.op != .Eq) return null; // single equality only (AND / ordering → tally)
+    var key: ?[]const u8 = null;
+    var lit: ?[]const u8 = null;
+    if (varPropertyKey(b.left.*, var_name)) |k| {
+        key = k;
+        lit = stringLiteralValue(b.right.*);
+    } else if (varPropertyKey(b.right.*, var_name)) |k| {
+        key = k;
+        lit = stringLiteralValue(b.left.*);
+    }
+    const seek_key = key orelse return null;
+    const seek_lit = lit orelse return null;
+    if (!graph_store.shouldIndexProperty(seek_key)) return null;
+    if (!isSeekableAsciiStringLiteral(seek_lit)) return null;
+    return .{ .key = seek_key, .value = seek_lit };
+}
+
+fn appendSeekableWhereProps(
+    arena: std.mem.Allocator,
+    where_expr: ast.Expr,
+    var_name: []const u8,
+    out: *std.ArrayList(ast.Property),
+) !void {
+    const b = switch (where_expr) {
+        .Binary => |bin| bin,
+        else => return,
+    };
+    if (b.op == .And) {
+        try appendSeekableWhereProps(arena, b.left.*, var_name, out);
+        try appendSeekableWhereProps(arena, b.right.*, var_name, out);
+        return;
+    }
+    if (b.op != .Eq) return;
+
+    // Accept `var.key = <str>` and `<str> = var.key`.
+    var key: ?[]const u8 = null;
+    var lit: ?[]const u8 = null;
+    if (varPropertyKey(b.left.*, var_name)) |k| {
+        key = k;
+        lit = stringLiteralValue(b.right.*);
+    } else if (varPropertyKey(b.right.*, var_name)) |k| {
+        key = k;
+        lit = stringLiteralValue(b.left.*);
+    }
+    const seek_key = key orelse return;
+    const seek_lit = lit orelse return;
+
+    if (!graph_store.shouldIndexProperty(seek_key)) return;
+    if (!isSeekableAsciiStringLiteral(seek_lit)) return;
+
+    const val_expr = try arena.create(ast.Expr);
+    val_expr.* = ast.Expr{ .String = try arena.dupe(u8, seek_lit) };
+    try out.append(arena, ast.Property{ .key = try arena.dupe(u8, seek_key), .value = val_expr });
+}
+
 fn collectMatchingSlotIds(
     allocator: std.mem.Allocator,
     graph_name: []const u8,
@@ -1111,6 +1302,11 @@ fn collectMatchingSlotIds(
     param_names: []const []const u8,
     param_values: []const Value,
     context: ExecutionContext,
+    // GAP-ENT-0019: the (arena-cloned) WHERE/FILTER predicate for this scan, if
+    // any. Used ONLY to extract a seekable `var.key = <literal>` equality to feed
+    // the exact-index seek below (narrowing, never a substitute for the full
+    // WHERE re-eval done by the caller's tally/paging). null when absent.
+    where_expr: ?ast.Expr,
 ) ![]u64 {
     const adapter = graph_store.getGlobalAdapter() orelse return try allocator.alloc(u64, 0);
     if (!adapter.graphExists(graph_name)) {
@@ -1153,15 +1349,54 @@ fn collectMatchingSlotIds(
     // the call returns null and we fall through to the lock-safe full scan
     // below (correct, just not O(1)). The earlier blanket "lean ⇒ no seek" gate
     // is therefore no longer needed; completeness is now decided per-key.
-    if (pattern.labels.len > 0 and pattern.props != null) {
-        if (try seekIndexedCandidates(allocator, adapter, graph_name, pattern, param_names, param_values, context)) |candidates| {
-            defer allocator.free(candidates);
-            for (candidates) |slot_id| {
-                if (!try nodeMatchesPattern(allocator, adapter, graph_name, slot_id, pattern, param_names, param_values, context)) continue;
-                try result.append(allocator, slot_id);
-                if (result.items.len >= row_cap) break;
+    //
+    // GAP-ENT-0019 (WHERE-clause indexed equality): the seek predicate is drawn
+    // from TWO sources, merged into one seek pattern so `seekIndexedCandidates`
+    // picks the most-selective across both:
+    //   (a) INLINE `{prop: val}` on the node (the KNOWN BUG #1 fix above) —
+    //       sound by design (re-verified per candidate by `nodeMatchesPattern`).
+    //   (b) WHERE-clause `var.key = <string literal>` conjuncts (top-level `=`,
+    //       or any `=` conjunct inside an AND tree). Extracted by
+    //       `appendSeekableWhereProps` UNDER THE SAME soundness gate the
+    //       filtered-count seek uses (`isSeekableAsciiStringLiteral`, identical
+    //       to `match_operations.seekableAsciiStringEq`): eval `=` is broader
+    //       than the raw-hash index (NFC + cross-type coercion), so ONLY a
+    //       pure-ASCII, non-bool, non-numeric string literal on an indexed key is
+    //       seek-exact (seek-set ⊇ eval-match-set — never MISSES a match). A
+    //       numeric/non-ASCII/coercible literal is dropped and this scan falls
+    //       back to the full label scan below.
+    // CORRECTNESS: the seek only NARROWS candidates. `nodeMatchesPattern`
+    // re-verifies the FULL pattern (labels + inline props) per candidate, and the
+    // WHERE predicate itself is STILL re-applied downstream (buildCountPage tally
+    // / buildNextPage paging / the pushdown branch) — so narrowing on ONE WHERE
+    // conjunct is safe even when the WHERE has other, non-seekable conjuncts, and
+    // the result set is byte-for-byte identical to the full-scan path.
+    if (pattern.labels.len > 0) {
+        var seek_arena = std.heap.ArenaAllocator.init(allocator);
+        defer seek_arena.deinit();
+        const sa = seek_arena.allocator();
+        var seek_props: std.ArrayList(ast.Property) = .empty;
+        if (pattern.props) |inline_props| {
+            for (inline_props) |p| try seek_props.append(sa, p);
+        }
+        if (where_expr) |we| {
+            try appendSeekableWhereProps(sa, we, pattern.name orelse "", &seek_props);
+        }
+        if (seek_props.items.len > 0) {
+            var seek_pattern = pattern;
+            seek_pattern.props = seek_props.items;
+            if (try seekIndexedCandidates(allocator, adapter, graph_name, seek_pattern, param_names, param_values, context)) |candidates| {
+                defer allocator.free(candidates);
+                for (candidates) |slot_id| {
+                    // Re-verify against the REAL pattern (NOT seek_pattern): the
+                    // synthetic WHERE props are seek-only; the WHERE predicate is
+                    // re-applied by the caller's tally/paging.
+                    if (!try nodeMatchesPattern(allocator, adapter, graph_name, slot_id, pattern, param_names, param_values, context)) continue;
+                    try result.append(allocator, slot_id);
+                    if (result.items.len >= row_cap) break;
+                }
+                return try result.toOwnedSlice(allocator);
             }
-            return try result.toOwnedSlice(allocator);
         }
     }
 

@@ -427,8 +427,54 @@
             // (concurrent shard opens; recovery makes no thread-pool calls so it
             // cannot re-enter the v0.2.12 pin deadlock). Same FIPS transitive deps
             // → no diamond.
-            .url = "git+https://gitlab.com/devnw/zig/graph-storage.git?ref=v0.2.20#5481c69409f9cf9a29b97d8798dd6fa0be020e36",
-            .hash = "graph_storage-0.2.20-9UyJS8dZFQC2Sn3Ahc6uNYSr5WvrcWHLkUbyZMC1qDjE",
+            // v0.2.21 (2026-07-01): O(1)-amortized CLOCK eviction (buffer_pool)
+            // + getPropertyNoDerived (chain read without derived-index hydration)
+            // + open-time pool-recreate hardening — the engine half of the
+            // sub-second cold-open work (geode perf/coldopen-loop1-prop_head).
+            // Same transitive deps as v0.2.20 (no diamond).
+            // v0.2.23 (2026-07-01): prop-store SLAB PACKING — node property
+            // blobs packed into shared pages (~55-59x props-store reduction,
+            // measured 149.4 bytes/node through the geode stack vs 8192);
+            // read-both (legacy chains still read); WAL/crash-safe (whole-page
+            // images of decoded slab pages); edge properties stay legacy via
+            // putPropertyLegacyTxn (adapter sites switched). Whole-branch
+            // review: READY TO RELEASE (no blockers). Supersedes the v0.2.22
+            // tag (points pre-version-bump; do not pin it).
+            // v0.2.24 (2026-07-02): INLINE EDGE PUBLIC ID (GAP-ENT-0024) —
+            // adjacency EdgeEntry carries `public_id: u64` in v2 blocks (v1
+            // blocks surface 0; block-granular read-both, no store migration);
+            // addEdgeColocatedWithPublicId on GraphEngine + ShardedGraphEngine;
+            // EdgeIndexEntry / FanInEdgeIterator / edge-index snapshot carry the
+            // id. Manifest V3: pre-v0.2.24 binaries loudly reject v0.2.24
+            // stores; v2 stores auto-upgrade at open. Lets geode stop writing
+            // the `__geode_internal_edge_id` property page per edge (~8 KB/edge
+            // -> 0 for propertyless edges). Same transitive deps (no diamond).
+            // v0.2.29 (2026-07-06): WAL-aware derived-index durability (Path B) —
+            // Manifest V4 adds a durable `checkpoint_epoch` advanced ONLY by
+            // doCheckpoint (never by recovery), so a derived-index snapshot
+            // stamped (checkpoint_epoch, covered_lsn) survives a deferred-WAL
+            // tail on reopen: the engine's own label/property/edge/edge_exist
+            // indexes RELOAD when epoch matches and RECONCILE the bounded WAL
+            // tail (re-derive entries for tail-touched pages) at first access,
+            // instead of the O(graph) rebuild the counter gate forced. Geode
+            // rides the SAME contract for its own prop_exact.idx via the epoch
+            // getter the adapter's engine handle exposes. Manifest V4:
+            // pre-v0.2.29 binaries loudly reject v4 stores. Same transitive
+            // deps as v0.2.28 (no diamond).
+            // v0.2.35 (2026-07-07): GAP-0060 EDGE-PROP SLAB PACKING — edge
+            // prop_head widened u32->u64 across the edge index + durable
+            // adjacency (new v3/slab-v3 40B wire formats, edge-index magic
+            // GSEIDX5->GSEIDX6, block-granular read-both, LOUD no-truncate on a
+            // >u32 head into a legacy record). Edge properties now slab-pack via
+            // putPropertyTxn (adapter edge-write sites re-routed, gated on
+            // edge_prop_slab_packing, default ON) — ~8 KB/edge -> ~90 B/edge
+            // (~111 GB -> few GB at 13.6M edges). Bundles GAP-0050: value-ordered
+            // (H3) index on the (checkpoint_epoch,last_checkpoint_lsn) reload
+            // contract. No manifest bump (stays V4; the adjacency entry-format
+            // byte + read-both is the versioning). Same transitive deps as
+            // v0.2.34 (no diamond).
+            .url = "git+https://gitlab.com/devnw/zig/graph-storage.git?ref=v0.2.35#84c028423ef50860bf897ac404adc6a75ddafe7f",
+            .hash = "graph_storage-0.2.35-9UyJS_bEHQB00RZYU4PQrOMGpfnCmusQfEzS1G8d15-f",
         },
 
         // Raft - Full Raft consensus with pre-vote, joint consensus, snapshotting

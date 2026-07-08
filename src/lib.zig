@@ -798,6 +798,12 @@ pub fn parseGqlCached(
 // Re-export execution and graph_store for integration tests
 pub const execution = @import("execution.zig");
 pub const graph_store = @import("graph_store.zig");
+// GAP (write-path OOM, 2026-07-04): legacy write-executor working-set budget —
+// re-exported so tests can install tiny budgets via setBudgetBytesForTest.
+pub const write_budget = @import("write_budget.zig");
+// GAP-ENT-0044/0045 (T5): read-executor working-set budget + cancel-on-
+// disconnect — re-exported for the budget/cancel regression tests.
+pub const read_budget = @import("read_budget.zig");
 // CANARY: REQ=REQ-AUTH-GRAPH-PERSIST-030; FEATURE="AuthDDLPersistence"; ASPECT=LibExport; STATUS=IMPL; OWNER=security; UPDATED=2026-05-12
 // Re-export auth_dispatch so server_init can install callbacks without needing a
 // separate module import (auth_dispatch is part of root_mod, not a standalone module).

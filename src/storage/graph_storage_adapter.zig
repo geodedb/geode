@@ -19,12 +19,37 @@ const audit = @import("../security/audit.zig");
 const ts_mod = @import("../timeseries/timeseries.zig");
 const fulltext = @import("../index/fulltext.zig");
 const adapter_mod = @import("fts_storage_adapter.zig");
+// GAP-ENT-0048 DEFECT B: the deferred exact-index rebuild polls the read
+// executor's cancel flags so a client disconnect / stall-watchdog abort frees a
+// handler wedged inside the O(graph) first-access rebuild. `read_budget` is a
+// leaf module (imports only std), so there is no import cycle.
+const read_budget = @import("../read_budget.zig");
 
 const Allocator = std.mem.Allocator;
 const log = std.log.scoped(.graph_storage_adapter);
+// GAP-ENT-0038: checkpoint-cadence observability MUST use geode's structured
+// logger, not `std.log`. This repo defines no `std_options`, so in ReleaseFast
+// builds `std.log.default_level == .err` and every `log.info`/`log.warn` in
+// this file is compiled OUT of the production server. That made the inline
+// load-driven checkpoint (the PRIMARY deferred-mode cadence driver — it wins
+// the threshold race against the persistence loop on virtually every crossing)
+// completely invisible in the live server log, which read as "exactly one
+// auto-checkpoint in 11 hours" during the 14.27M ingest while on-disk evidence
+// (graph_registry.dat rewritten every ~33 s, 32 shard WALs totalling ~118 MB
+// after 22.4M ops) proved checkpoints were landing continuously. Scope
+// "storage" matches the persistence loop's visible cadence lines so operators
+// can grep one scope for the full checkpoint sawtooth.
+const structured_logging = @import("logging");
+const slog = structured_logging.scoped("storage");
+const SAttr = structured_logging.Attr;
 
 // Re-export edge type for callers that need EdgeEntry from scan results.
 pub const EdgeEntry = gs.edge.EdgeEntry;
+
+/// GAP hydration fast-scan: sequential per-shard store streaming for the
+/// loop2 first-access hydration. Re-exported so graph_store.zig can name the
+/// accumulation types without importing graph_storage directly.
+pub const hydration_scan = @import("hydration_scan.zig");
 
 const LabelScanContext = struct {
     mg: *ManagedGraph,
@@ -46,6 +71,173 @@ pub const LabelScanCursor = struct {
 };
 
 var g_exact_node_property_lookup_count: std.atomic.Value(u64) = std.atomic.Value(u64).init(0);
+// H4 (cold-open phase 1): number of times `rebuildExactNodePropertyIndex` has
+// run process-wide. Test instrumentation for the deferred-build latch: a graph
+// opened WITHOUT a persisted exact index must NOT rebuild at open (counter
+// unchanged) and must rebuild EXACTLY ONCE on first index access (read or
+// live-mutation). Incremented at the top of every rebuild.
+var g_exact_rebuild_runs: std.atomic.Value(u64) = std.atomic.Value(u64).init(0);
+// GAP-ENT-0048 DEFECT B: nodes VISITED by the exact-index rebuild scan
+// (`rebuildExactNodePropertyIndex`'s per-shard scanCallback) process-wide.
+// Wall-clock-independent instrumentation for the cancel contract: a read query
+// whose STREAM (connection-close) cancel flag is set must abort the deferred
+// rebuild at the next batch boundary, so the scan visits FAR fewer than the
+// graph's node count instead of running to completion (frees a genuinely-gone
+// client's handler). GAP-ENT-0048 SECONDARY narrows this to the STREAM source
+// only: a proto-reader stall (WATCHDOG) abort must NOT stop a progressing build
+// (see `g_exact_rebuild_heartbeats` and `CancelFlags.streamTripped`).
+var g_exact_rebuild_nodes_scanned: std.atomic.Value(u64) = std.atomic.Value(u64).init(0);
+// GAP-ENT-0048 SECONDARY: build-progress heartbeat. Incremented once per
+// cancel-poll BATCH (every `exact_rebuild_cancel_poll_batch` nodes) while the
+// deferred exact-index rebuild advances. A monotonically-rising value proves the
+// build is making forward progress (not wedged), which is exactly why the
+// rebuild is EXEMPT from the proto-reader stall (watchdog) cancel: a handler
+// that is heartbeating is building, not stuck. Reset per test.
+var g_exact_rebuild_heartbeats: std.atomic.Value(u64) = std.atomic.Value(u64).init(0);
+// GAP-ENT-0048 (task0048d): per-shard scan tasks the most recent rebuild
+// dispatched to the engine's shared thread pool (PARALLEL) vs ran INLINE on the
+// calling thread (serial). At 14.27M a value of pool>=1 proves the rebuild fanned
+// out across pool workers rather than degrading to a single-threaded scan (the
+// coordinator's ~1.2-core observation). Reset per test.
+var g_exact_rebuild_pool_tasks: std.atomic.Value(u64) = std.atomic.Value(u64).init(0);
+var g_exact_rebuild_inline_tasks: std.atomic.Value(u64) = std.atomic.Value(u64).init(0);
+// GAP-ENT-0048 (task0048d): registry graphs that a FULL checkpoint force-loaded
+// (opened their adapter engine) so their derived exact index could be built +
+// persisted even though no query had opened them this session (snapshot-served /
+// counter-served graphs never enter `self.engines` — the divelife skip).
+var g_full_checkpoint_forced_loads: std.atomic.Value(u64) = std.atomic.Value(u64).init(0);
+// GAP-ENT-0048f: graphs whose exact node-property index was built + persisted
+// DURING first-touch hydration (the race-free path — hydration already scans
+// every node lock-free and never holds mg.rwlock, so there is no checkpoint
+// rwlock race and no shutdown-checkpoint dependency). Test instrumentation.
+var g_exact_hydration_builds: std.atomic.Value(u64) = std.atomic.Value(u64).init(0);
+// GAP-0064 FIX A: number of reopens that ROUTED the deferred exact-index build
+// through the RACE-FREE background rebuild thread (`spawnExactIndexRebuildOnReopen`
+// succeeded), for BOTH an `.absent` and a `.stale` on-disk index. Test
+// instrumentation: after an `.absent` reopen this must be >= 1 (the un-fold —
+// the first-touch hydration no longer runs the O(graph) build inline on the
+// read path). Bumped only on a successful spawn (thread reserved + started).
+var g_exact_reopen_spawns: std.atomic.Value(u64) = std.atomic.Value(u64).init(0);
+// GAP-0064 FIX C: number of geode-driven value-ORDERED index builds
+// (`createOrderedIndex` via the auto-build path) run this process. A snapshot
+// RELOAD on reopen (gs GAP-0050) does NOT bump this — a nonzero count means the
+// ordered tree was (re)built from a live scan, not reloaded. Test instrumentation.
+var g_ordered_index_builds: std.atomic.Value(u64) = std.atomic.Value(u64).init(0);
+// GAP-0064 FIX C: number of BACKGROUND ordered-index build workers that ran to
+// completion (register+rebuild THEN best-effort persist). Lets a test wait
+// deterministically for the async auto-build (build + checkpoint) to finish
+// before asserting the fast path is served.
+var g_ordered_build_completions: std.atomic.Value(u64) = std.atomic.Value(u64).init(0);
+// GAP-0064 FIX A (TEST-ONLY): a gate the background reopen rebuild worker waits
+// on BEFORE it touches any lock or the exact index, so a test can hold the
+// build "in flight" and prove that first-touch reads (count / label scan) return
+// promptly (the fold no-op) instead of parking behind the build. 0 = open (the
+// production value — never blocks), non-zero = closed. Only ever consulted from
+// the worker path under `comptime is_test`, so production carries zero overhead.
+var g_test_exact_build_gate: std.atomic.Value(u32) = std.atomic.Value(u32).init(0);
+// GAP-0064 (adversarial review — TEST-ONLY): number of rebuild threads currently
+// parked at `g_test_exact_build_gate` while HOLDING `exact_index_build_mutex`. A
+// test polls this to know a build (worker or lazy) is mid-flight (mutex held)
+// before it runs the concurrent FULL checkpoint that must skip its eager build.
+var g_test_build_gate_waiters: std.atomic.Value(u32) = std.atomic.Value(u32).init(0);
+// C-1 (T2b adversarial review): number of times a per-graph checkpoint's
+// retired-cache reclaim (the grace window in `checkpointOneGraph`) was
+// SKIPPED because the graph had an unfinished (pending or in-flight)
+// first-touch hydration. The hydration merge's family threads read shallow
+// Node copies whose sub-heaps live on the bounded caches' per-graph retire
+// lists; freeing those mid-merge is a use-after-free whose garbage the
+// persist-on-complete path then blesses as durable products. Mechanism
+// instrumentation: tests assert the skip fires during an in-flight hydration
+// and does NOT fire once hydration completed.
+var g_hydration_reclaim_skips: std.atomic.Value(u64) = std.atomic.Value(u64).init(0);
+// H4 persist-on-build instrumentation (see the ForTesting getters below).
+var g_exact_persist_attempts: std.atomic.Value(u64) = std.atomic.Value(u64).init(0);
+
+/// H4 persist-on-build kill switch (mirrors the hydration-persist switch
+/// idiom in graph_store.zig).
+fn exactIndexPersistOnBuildDisabled() bool {
+    const raw_z = std.c.getenv("GEODE_DISABLE_EXACT_INDEX_PERSIST_ON_BUILD") orelse return false;
+    const raw = std.mem.span(raw_z);
+    return std.mem.eql(u8, raw, "1") or std.mem.eql(u8, raw, "true") or std.mem.eql(u8, raw, "yes");
+}
+
+/// GAP-ENT-0048 Path B (Task 5.3b) kill switch: when a reopen finds the
+/// persisted `prop_exact.idx` stale (epoch mismatch or a WAL tail past its
+/// covered_lsn — `loadFromFile` returned false), the deferred index is rebuilt
+/// PROACTIVELY on a background thread via the RACE-FREE hydration-scan build
+/// (`buildAndPersistExactIndexForHydratedGraph`), instead of leaving the whole
+/// O(graph) rebuild for the first client query to pay INLINE on its handler
+/// thread (the "85s lazy-on-first-query path" that, at 14.27M nodes, overran the
+/// proto-reader stall window and wedged the handler). Server-ready stays
+/// sub-second (open only spawns the thread); reads that need the index wait for
+/// the background build (which they would anyway, the snapshot being unusable),
+/// while other reads are unaffected. Set to disable (revert to pure lazy
+/// first-access) for the sub-second-cold-open A/B, where no proactive build is
+/// wanted.
+fn eagerExactRebuildOnReopenDisabled() bool {
+    // GAP-0064 FIX A: a programmatic test override (mirrors setLeanIndexingForTest)
+    // so a test can deterministically exercise the eager-CHECKPOINT-build FALLBACK
+    // (reopen background rebuild suppressed) WITHOUT relying on process-global env
+    // ordering. `null` = consult the env (production behavior).
+    if (comptime @import("builtin").is_test) {
+        if (g_test_disable_eager_reopen_rebuild) |v| return v;
+    }
+    const raw_z = std.c.getenv("GEODE_DISABLE_EAGER_EXACT_REBUILD_ON_REOPEN") orelse return false;
+    const raw = std.mem.span(raw_z);
+    return std.mem.eql(u8, raw, "1") or std.mem.eql(u8, raw, "true") or std.mem.eql(u8, raw, "yes");
+}
+
+/// GAP-0064 FIX A (TEST-ONLY): override `eagerExactRebuildOnReopenDisabled`.
+/// `true` suppresses the reopen background rebuild (so the eager-CHECKPOINT-build
+/// fallback is exercised); `null` restores env-driven production behavior.
+var g_test_disable_eager_reopen_rebuild: ?bool = null;
+pub fn setEagerExactRebuildOnReopenDisabledForTest(disabled: ?bool) void {
+    g_test_disable_eager_reopen_rebuild = disabled;
+}
+
+/// GAP-0064 FIX C: the ORDER-BY auto-build (`spawnOrderedIndexBuildAsync`) is
+/// ALWAYS ON in production. Under `is_test` it defaults to SUPPRESSED so the
+/// existing test corpus — which runs many `ORDER BY <non-indexed> LIMIT` queries
+/// and asserts the heap fallback on later identical queries — is unperturbed;
+/// the dedicated auto-build suite opts IN with `setOrderedAutobuildDisabledForTest(false)`.
+/// `null` restores the per-context default (production ON, tests suppressed).
+var g_test_ordered_autobuild_disabled: ?bool = null;
+pub fn setOrderedAutobuildDisabledForTest(disabled: ?bool) void {
+    g_test_ordered_autobuild_disabled = disabled;
+}
+fn orderedAutobuildDisabled() bool {
+    if (comptime @import("builtin").is_test) {
+        if (g_test_ordered_autobuild_disabled) |d| return d;
+        return true; // tests default to suppressed (production is always ON)
+    }
+    return false;
+}
+var g_exact_persist_completions: std.atomic.Value(u64) = std.atomic.Value(u64).init(0);
+var g_exact_persist_failures: std.atomic.Value(u64) = std.atomic.Value(u64).init(0);
+// GAP-ENT-0048 PRIMARY: number of graphs whose exact node-property index was
+// RELOADED from a persisted `prop_exact.idx` snapshot at open (the O(snapshot)
+// bulk-load path, NOT the O(graph) rebuild). Test instrumentation for the
+// reopen contract: after a clean FULL-checkpoint shutdown the reopen must LOAD
+// the snapshot (this counter increments, `g_exact_rebuild_runs` stays 0), so
+// the first index-served read engages with ZERO client-facing rebuild.
+var g_exact_index_reloaded: std.atomic.Value(u64) = std.atomic.Value(u64).init(0);
+// GAP-ENT-0048 PRIMARY: number of times a FULL checkpoint EAGERLY built a
+// deferred-but-unbuilt exact index from the durable pages (in parallel) so it
+// could persist a COMPLETE `prop_exact.idx` instead of invalidating the file.
+// This is the clean-shutdown chokepoint that guarantees a loadable snapshot for
+// a graph that ran this session with the index deferred (reopened-then-appended
+// stores, or any graph whose last durable checkpoint was LIGHT). Distinct from
+// the lazy first-access build so a test can prove the build happened at the
+// checkpoint, not on a client query.
+var g_exact_eager_checkpoint_builds: std.atomic.Value(u64) = std.atomic.Value(u64).init(0);
+// GAP-ENT-0048 crash-reconcile (Phase E2): number of reopens that RECONCILED a
+// committed WAL tail into the prop_exact.idx snapshot in O(tail) — evicting each
+// tail node's OLD postings via the persisted reverse map and re-deriving its
+// CURRENT postings from the engine — INSTEAD of a full O(graph) rebuild. The
+// release gate asserts this is 1 (and `g_exact_rebuild_runs` stays 0) on the
+// gated crash-tail path, and 0 (rebuild fires) on the ungated multi-crash /
+// reverse-map-absent path.
+var g_exact_index_reconciled: std.atomic.Value(u64) = std.atomic.Value(u64).init(0);
 var g_label_scan_lookup_count: std.atomic.Value(u64) = std.atomic.Value(u64).init(0);
 // Candidate nodes examined by the verify-loop in `lookupNodeIdByLabelAndAllProps`
 // (the bulk edge-endpoint resolver). A dangling composite-key endpoint whose
@@ -78,6 +270,13 @@ var g_label_slots_enumerated: std.atomic.Value(u64) = std.atomic.Value(u64).init
 
 // CANARY: REQ=REQ-QUIC-HC-122; FEATURE="HighConcurrencyMutations"; ASPECT=ExactPropertyIndexSharding; STATUS=TESTED; TEST=test_graph_storage_adapter_metrics; OWNER=storage; UPDATED=2026-05-28
 pub const exact_node_property_index_shard_count: usize = 64;
+
+/// GAP-ENT-0048 crash-reconcile (Phase E1): sibling of `prop_exact.idx` holding
+/// the node→[(label,key,value_hash)] reverse map used to evict a tail-changed
+/// node's OLD postings on a crash-reopen reconcile. Magic-bumped + stamped with
+/// the SAME (checkpoint_epoch, covered_lsn) as `prop_exact.idx`.
+const prop_rev_index_file_name = "prop_rev.idx";
+const prop_rev_index_magic = "GENRVIX1";
 
 const graph_store_file_names = [_][]const u8{
     "nodes.store",
@@ -123,6 +322,264 @@ pub fn getNodePropertyEngineReads() u64 {
 
 pub fn getExactNodePropertyLookupCount() u64 {
     return g_exact_node_property_lookup_count.load(.acquire);
+}
+
+/// H4 (cold-open phase 1): process-wide count of `rebuildExactNodePropertyIndex`
+/// runs. Test-only: assert 0 after a deferred open and exactly 1 after first
+/// index access.
+pub fn getExactRebuildRunsForTesting() u64 {
+    return g_exact_rebuild_runs.load(.acquire);
+}
+
+/// H4 (cold-open phase 1): reset the rebuild-runs counter (test-only).
+pub fn resetExactRebuildRunsForTesting() void {
+    g_exact_rebuild_runs.store(0, .release);
+}
+
+/// GAP-ENT-0048 DEFECT B: nodes visited by the exact-index rebuild scan since
+/// the last reset. Test-only: a cancelled deferred rebuild must abort early, so
+/// this stays far below the graph's node count (pre-fix it equalled the count).
+pub fn getExactRebuildNodesScannedForTesting() u64 {
+    return g_exact_rebuild_nodes_scanned.load(.acquire);
+}
+
+/// GAP-ENT-0048 DEFECT B: reset the rebuild-scan node counter (test-only).
+pub fn resetExactRebuildNodesScannedForTesting() void {
+    g_exact_rebuild_nodes_scanned.store(0, .release);
+}
+
+/// GAP-ENT-0048 SECONDARY: build-progress heartbeats emitted by the most recent
+/// rebuild since the last reset. > 0 proves the build advanced (was not wedged).
+pub fn getExactRebuildHeartbeatsForTesting() u64 {
+    return g_exact_rebuild_heartbeats.load(.acquire);
+}
+
+/// GAP-ENT-0048 SECONDARY: reset the build-progress heartbeat counter.
+pub fn resetExactRebuildHeartbeatsForTesting() void {
+    g_exact_rebuild_heartbeats.store(0, .release);
+}
+
+/// GAP-ENT-0048 (task0048d): shard scans dispatched to the pool (parallel) vs
+/// run inline (serial) by the most recent rebuild. pool>=1 proves parallelism.
+pub fn getExactRebuildPoolTasksForTesting() u64 {
+    return g_exact_rebuild_pool_tasks.load(.acquire);
+}
+pub fn getExactRebuildInlineTasksForTesting() u64 {
+    return g_exact_rebuild_inline_tasks.load(.acquire);
+}
+pub fn resetExactRebuildDispatchCountersForTesting() void {
+    g_exact_rebuild_pool_tasks.store(0, .release);
+    g_exact_rebuild_inline_tasks.store(0, .release);
+}
+
+/// GAP-ENT-0048 (task0048d): FULL checkpoints that force-loaded an on-disk
+/// (registry) graph so its exact index could be built + persisted (the
+/// snapshot-served graph that never entered `self.engines`).
+pub fn getFullCheckpointForcedLoadsForTesting() u64 {
+    return g_full_checkpoint_forced_loads.load(.acquire);
+}
+pub fn resetFullCheckpointForcedLoadsForTesting() void {
+    g_full_checkpoint_forced_loads.store(0, .release);
+}
+
+/// GAP-ENT-0048f: exact indexes built + persisted during first-touch hydration.
+pub fn getExactHydrationBuildsForTesting() u64 {
+    return g_exact_hydration_builds.load(.acquire);
+}
+pub fn resetExactHydrationBuildsForTesting() void {
+    g_exact_hydration_builds.store(0, .release);
+}
+
+/// GAP-0064 FIX A: reopens whose deferred exact-index build was routed through
+/// the race-free background rebuild thread (the un-fold). >= 1 after an `.absent`
+/// or `.stale` reopen; 0 before FIX A for the `.absent` case.
+pub fn getExactReopenSpawnsForTesting() u64 {
+    return g_exact_reopen_spawns.load(.acquire);
+}
+pub fn resetExactReopenSpawnsForTesting() void {
+    g_exact_reopen_spawns.store(0, .release);
+}
+
+/// GAP-0064 FIX C: geode-driven value-ordered index builds (auto-build path).
+/// 0 after a reopen that RELOADED the persisted ordered snapshot (no rebuild).
+pub fn getOrderedIndexBuildsForTesting() u64 {
+    return g_ordered_index_builds.load(.acquire);
+}
+pub fn resetOrderedIndexBuildsForTesting() void {
+    g_ordered_index_builds.store(0, .release);
+}
+/// GAP-0064 FIX C: background ordered-index build+persist workers completed.
+pub fn getOrderedBuildCompletionsForTesting() u64 {
+    return g_ordered_build_completions.load(.acquire);
+}
+pub fn resetOrderedBuildCompletionsForTesting() void {
+    g_ordered_build_completions.store(0, .release);
+}
+
+/// GAP-0064 FIX A (TEST-ONLY): hold the background reopen rebuild "in flight" so
+/// a test can prove first-touch reads return without waiting on the build. Only
+/// honored in test builds (the worker's wait is `comptime is_test`-guarded).
+pub fn closeExactBuildGateForTesting() void {
+    g_test_exact_build_gate.store(1, .release);
+}
+pub fn openExactBuildGateForTesting() void {
+    g_test_exact_build_gate.store(0, .release);
+}
+/// GAP-0064 (review — TEST-ONLY): rebuild threads currently parked at the gate
+/// while holding `exact_index_build_mutex`. A test polls `>= 1` to know a build
+/// is mid-flight before running the concurrent checkpoint.
+pub fn getBuildGateWaitersForTesting() u32 {
+    return g_test_build_gate_waiters.load(.acquire);
+}
+pub fn resetBuildGateWaitersForTesting() void {
+    g_test_build_gate_waiters.store(0, .release);
+}
+
+/// GAP-ENT-0048g: aggregate (sum over all shards) of the per-shard
+/// `manifest.counter` — bumps once per durable checkpoint of any shard. Used to
+/// stamp `prop_exact.idx` and gate its reload (load-if-current), the same
+/// discipline `idmap.snapshot` uses.
+fn mgManifestCounter(mg: *ManagedGraph) u64 {
+    var counter: u64 = 0;
+    for (mg.engine.shards) |shard| {
+        counter +%= shard.manifest.counter;
+    }
+    return counter;
+}
+
+/// GAP-ENT-0048 Path B: aggregate (wrapping sum over all shards) of the
+/// per-shard `manifest.checkpoint_epoch` — the durable derived-index generation
+/// token gs v0.2.29 advances ONLY at `doCheckpoint`, NEVER by a WAL-tail
+/// recovery (checkpoint.zig bumps it beside `counter`; recovery.zig leaves it
+/// untouched). This is why it replaces `manifest.counter` as the
+/// `prop_exact.idx` stamp: the counter is ALSO bumped by recovery, so a
+/// deferred-WAL-tail reopen bumped it and needlessly rebuilt a valid index (the
+/// GAP-ENT-0048 root cause). The epoch stays fixed across a tail replay, so an
+/// epoch match means "no checkpoint has run since the snapshot" — the snapshot
+/// is valid AS OF its covered_lsn (see `mgDurableFrontierLsn` for the tail
+/// gate). A wrapping sum is a combined fingerprint: if ANY shard checkpoints,
+/// the sum changes and the snapshot is treated as generation-mismatched.
+fn mgCheckpointEpoch(mg: *ManagedGraph) u64 {
+    var epoch: u64 = 0;
+    for (mg.engine.shards) |shard| {
+        epoch +%= shard.manifest.checkpoint_epoch;
+    }
+    return epoch;
+}
+
+/// GAP-ENT-0048 Path B: aggregate (wrapping sum over all shards) of the
+/// per-shard `manifest.last_checkpoint_lsn` — the DURABLE COMMITTED FRONTIER.
+/// It is set to the checkpoint LSN by `doCheckpoint`, and ADVANCED by a WAL-tail
+/// recovery (recovery.zig sets it to `wal.currentLsn()` after replaying a
+/// committed tail) — but LEFT UNCHANGED by a clean reopen that replays nothing
+/// (recovery.zig returns before touching it when no WAL records are seen). So at
+/// `prop_exact.idx` SAVE time (right after a FULL `engine.checkpoint()`) this is
+/// exactly the LSN the persisted index covers; at reopen it is the same value
+/// (clean, no tail → RELOAD) or larger (a committed tail was replayed → the
+/// loaded index would be stale → REBUILD). The reload gate is therefore:
+/// `stamped_epoch == mgCheckpointEpoch(mg) AND stamped_covered == this`.
+/// "covered == frontier" ⟺ "no WAL tail beyond the snapshot" — mirrors gs's own
+/// derived-index tail gate (engine_index.tryLoadDerivedIndexes), which compares
+/// each snapshot's covered_lsn against `manifest.last_checkpoint_lsn`.
+fn mgDurableFrontierLsn(mg: *ManagedGraph) u64 {
+    var frontier: u64 = 0;
+    for (mg.engine.shards) |shard| {
+        frontier +%= shard.manifest.last_checkpoint_lsn;
+    }
+    return frontier;
+}
+
+/// GAP-ENT-0048 crash-reconcile (Phase E2): aggregate (wrapping sum over all
+/// shards) of the per-shard `preRecoveryFrontierLsn()` (gs G2 getter =
+/// `tail_pre_recovery_lsn`) — the durable committed frontier as it stood BEFORE
+/// this session's recovery replayed. A SOUND single-recovery reconcile requires
+/// the on-disk snapshot's covered_lsn == this: exactly one recovery has advanced
+/// the frontier since the snapshot, so the WAL tail captured by Path B is
+/// complete and attributable. If covered_lsn < this (a PRIOR un-checkpointed
+/// recovery advanced the frontier past the snapshot — the multi-crash case), the
+/// reconcile MUST fall back to a full rebuild.
+///
+/// SUM SOUNDNESS: each shard's durable frontier is MONOTONIC (checkpoints and
+/// tail replays only advance `last_checkpoint_lsn`), so per shard
+/// `preRecoveryFrontierLsn() >= snapshot covered_lsn`. Therefore
+/// `sum(preRecovery) == sum(snapshot covered)` ⟺ per-shard equality for EVERY
+/// shard — the summed gate is as strong as a per-shard gate (the same wrapping
+/// -sum fingerprint discipline `mgCheckpointEpoch`/`mgDurableFrontierLsn` use).
+fn mgPreRecoveryFrontierLsn(mg: *ManagedGraph) u64 {
+    var frontier: u64 = 0;
+    for (mg.engine.shards) |shard| {
+        frontier +%= shard.preRecoveryFrontierLsn();
+    }
+    return frontier;
+}
+
+/// C-1: process-wide count of checkpoint grace windows that SKIPPED the
+/// retired-cache reclaims because the graph had an unfinished first-touch
+/// hydration (test instrumentation for the reclaim gate).
+pub fn getHydrationReclaimSkipsForTesting() u64 {
+    return g_hydration_reclaim_skips.load(.acquire);
+}
+
+/// C-1: reset the reclaim-skip counter (test-only).
+pub fn resetHydrationReclaimSkipsForTesting() void {
+    g_hydration_reclaim_skips.store(0, .release);
+}
+
+/// H4 persist-on-build: background graph-scoped persists of a JUST-REBUILT
+/// exact node-property index (crash durability for the ~32 min first-access
+/// build — see `ensureExactNodePropertyIndexBuilt`). attempts = persists
+/// triggered after a successful deferred rebuild; completions = the bounded
+/// graph checkpoint landed (index snapshot durable); failures = spawn
+/// failure OR checkpoint error (bounded-acquire timeout, engine failure,
+/// graph dropped mid-flight) — all non-fatal, the index stays correct in
+/// memory and the next FULL checkpoint persists it (pre-fix behaviour).
+pub fn getExactIndexPersistAttemptsForTesting() u64 {
+    return g_exact_persist_attempts.load(.acquire);
+}
+
+pub fn getExactIndexPersistCompletionsForTesting() u64 {
+    return g_exact_persist_completions.load(.acquire);
+}
+
+pub fn getExactIndexPersistFailuresForTesting() u64 {
+    return g_exact_persist_failures.load(.acquire);
+}
+
+/// H4 persist-on-build: reset the persist counters (test-only).
+pub fn resetExactIndexPersistCountersForTesting() void {
+    g_exact_persist_attempts.store(0, .release);
+    g_exact_persist_completions.store(0, .release);
+    g_exact_persist_failures.store(0, .release);
+}
+
+/// GAP-ENT-0048 PRIMARY: graphs whose exact index was RELOADED from the
+/// persisted `prop_exact.idx` snapshot at open since the last reset. Test-only:
+/// a clean-shutdown reopen must LOAD (this > 0) with ZERO rebuild runs.
+pub fn getExactIndexReloadedForTesting() u64 {
+    return g_exact_index_reloaded.load(.acquire);
+}
+
+/// GAP-ENT-0048 PRIMARY: FULL checkpoints that eagerly built a deferred index
+/// so a complete snapshot could be persisted (rather than invalidated).
+pub fn getExactEagerCheckpointBuildsForTesting() u64 {
+    return g_exact_eager_checkpoint_builds.load(.acquire);
+}
+
+/// GAP-ENT-0048 PRIMARY: reset the reload / eager-checkpoint-build counters.
+pub fn resetExactIndexReloadCountersForTesting() void {
+    g_exact_index_reloaded.store(0, .release);
+    g_exact_eager_checkpoint_builds.store(0, .release);
+}
+
+/// GAP-ENT-0048 crash-reconcile (Phase E2): reopens that RECONCILED a committed
+/// WAL tail into prop_exact.idx (O(tail)) instead of a full rebuild. The release
+/// gate asserts reconciled==1 / rebuilds==0 on the gated crash-tail path.
+pub fn getExactIndexReconciledForTesting() u64 {
+    return g_exact_index_reconciled.load(.acquire);
+}
+
+pub fn resetExactIndexReconcileCountersForTesting() void {
+    g_exact_index_reconciled.store(0, .release);
 }
 
 /// Candidates examined by `lookupNodeIdByLabelAndAllProps`'s verify-loop since
@@ -411,9 +868,21 @@ const NodePropertyExactIndex = struct {
         return buf[0..total_len];
     }
 
-    /// Persist the index to `prop_exact.idx` inside `graph_dir_path`.
-    /// Non-fatal: callers should catch and log warnings.
-    fn saveToFile(self: *NodePropertyExactIndex, graph_dir_path: []const u8) !void {
+    /// Persist the index to `prop_exact.idx` inside `graph_dir_path`, stamped
+    /// with the gs `checkpoint_epoch` + the `covered_lsn` it reflects at persist
+    /// time (GAP-ENT-0048 Path B). The stamp mirrors gs's own WAL-aware
+    /// derived-index snapshot header (index_snapshot.zig: epoch + covered_lsn):
+    /// on reopen the index loads ONLY if its stamped epoch equals the engine's
+    /// current `checkpoint_epoch` (no checkpoint since persist) AND its
+    /// covered_lsn equals the current durable frontier `last_checkpoint_lsn`
+    /// (no committed WAL tail beyond it). Unlike the old `manifest.counter`
+    /// stamp, the epoch is NOT bumped by recovery, so a deferred-WAL-tail reopen
+    /// no longer needlessly invalidates a valid snapshot on the epoch axis — the
+    /// tail is detected precisely on the covered_lsn axis instead (and a present
+    /// tail routes to a SAFE rebuild; a correct O(tail) reconcile of this
+    /// value→node index is not achievable with the v0.2.29 API — see the Phase 5
+    /// report). Non-fatal: callers should catch and log warnings.
+    fn saveToFile(self: *NodePropertyExactIndex, graph_dir_path: []const u8, checkpoint_epoch: u64, covered_lsn: u64) !void {
         self.lockAllShards();
         defer self.unlockAllShards();
 
@@ -430,8 +899,14 @@ const NodePropertyExactIndex = struct {
         var idx_fw = file.writerStreaming(idx_io, &idx_wbuf);
         const writer = &idx_fw.interface;
 
-        // 8-byte magic header
-        try writer.writeAll("GENPIDX1");
+        // 8-byte magic header (v3 = checkpoint-epoch + covered-lsn stamped, the
+        // WAL-aware Path B contract). GENPIDX2 (counter-stamped) and GENPIDX1
+        // (unstamped) are treated as stale on load → rebuild (never mis-served).
+        try writer.writeAll("GENPIDX3");
+        // WAL-aware staleness stamp: the gs checkpoint_epoch (derived-index
+        // generation) and the durable-frontier LSN this index covers.
+        try writer.writeInt(u64, checkpoint_epoch, .little);
+        try writer.writeInt(u64, covered_lsn, .little);
 
         // Entry count
         var count: u64 = 0;
@@ -456,34 +931,162 @@ const NodePropertyExactIndex = struct {
             }
         }
         try idx_fw.flush();
+
+        // GAP-ENT-0048 crash-reconcile (Phase E1): persist the node→postings
+        // REVERSE MAP alongside prop_exact.idx, stamped with the SAME (epoch,
+        // covered_lsn). It lets a crash-reopen with a committed WAL tail EVICT a
+        // tail-changed node's OLD postings in O(node's postings) WITHOUT
+        // re-reading its (tail-overwritten) old value — the exact prerequisite
+        // the Phase 5 report flagged as missing. Written in the SAME locked pass
+        // (all shard mutexes held) so it is an exact inversion of the postings
+        // just written. Independent stamp/magic → an inconsistent or torn
+        // reverse file is rejected on load (→ safe full rebuild), never mis-used.
+        try self.writeReverseMapLocked(graph_dir_path, checkpoint_epoch, covered_lsn);
     }
 
-    /// Load the index from `prop_exact.idx` inside `graph_dir_path`.
-    /// Returns true on success, false if file is missing, corrupt, or unreadable
-    /// (caller should fall back to full rebuild).
-    fn loadFromFile(self: *NodePropertyExactIndex, graph_dir_path: []const u8) bool {
+    /// Phase E1: write `prop_rev.idx` — the node→[(label,key,value_hash)] reverse
+    /// map — by STREAMING the inversion of the forward postings (no transient
+    /// in-memory map at save time). Caller must already hold every shard mutex
+    /// (invoked from `saveToFile`). Format:
+    ///   magic "GENRVIX1" | epoch u64 | covered_lsn u64 | pair_count u64
+    ///   then pair_count × { node_id u64, key_len u32, encoded_key bytes }
+    /// where `encoded_key` is the forward posting key
+    /// `[label_id u32][key_len u32][key][value_hash u64]`. The value is
+    /// represented by its 64-bit hash only, so the file size is bounded by the
+    /// number of (node,label,key) postings and the KEY length — independent of
+    /// the property VALUE length (the E1 "bounded size" contract).
+    fn writeReverseMapLocked(self: *NodePropertyExactIndex, graph_dir_path: []const u8, checkpoint_epoch: u64, covered_lsn: u64) !void {
+        const rev_path = try std.fmt.allocPrint(self.allocator, "{s}/{s}", .{ graph_dir_path, prop_rev_index_file_name });
+        defer self.allocator.free(rev_path);
+
+        const rev_io = std.Io.Threaded.global_single_threaded.io();
+        const file = try std.Io.Dir.cwd().createFile(rev_io, rev_path, .{ .truncate = true });
+        defer file.close(rev_io);
+
+        var rev_wbuf: [8192]u8 = undefined;
+        var rev_fw = file.writerStreaming(rev_io, &rev_wbuf);
+        const writer = &rev_fw.interface;
+
+        try writer.writeAll(prop_rev_index_magic);
+        try writer.writeInt(u64, checkpoint_epoch, .little);
+        try writer.writeInt(u64, covered_lsn, .little);
+
+        // pair_count = total (node, encoded_key) postings == sum of posting
+        // lengths across every shard.
+        var pair_count: u64 = 0;
+        for (&self.shards) |*shard| {
+            var it = shard.postings.iterator();
+            while (it.next()) |entry| pair_count += entry.value_ptr.items.len;
+        }
+        try writer.writeInt(u64, pair_count, .little);
+
+        for (&self.shards) |*shard| {
+            var it = shard.postings.iterator();
+            while (it.next()) |entry| {
+                const key = entry.key_ptr.*;
+                for (entry.value_ptr.items) |nid| {
+                    try writer.writeInt(u64, nid, .little);
+                    try writer.writeInt(u32, @intCast(key.len), .little);
+                    try writer.writeAll(key);
+                }
+            }
+        }
+        try rev_fw.flush();
+    }
+
+    /// Phase E2: remove `node_id` from the posting for `encoded_key` (the exact
+    /// forward posting key `[label_id][key_len][key][value_hash]`, as stored in
+    /// the reverse map). Drops the posting entirely when it becomes empty (so a
+    /// count/GROUP-BY walk never sees a zero-length bucket). Used by the
+    /// crash-reopen reconcile to EVICT a tail node's OLD postings via the reverse
+    /// map, WITHOUT decoding the value. No-op if the key/node is absent.
+    fn removeByEncodedKey(self: *NodePropertyExactIndex, encoded_key: []const u8, node_id: u64) void {
+        const shard_idx = exactNodePropertyIndexShardForEncodedKey(encoded_key);
+        const shard = &self.shards[shard_idx];
+        const io = std.Io.Threaded.global_single_threaded.io();
+        shard.mutex.lockUncancelable(io);
+        defer shard.mutex.unlock(io);
+
+        if (shard.postings.getPtr(encoded_key)) |list| {
+            var i: usize = 0;
+            while (i < list.items.len) : (i += 1) {
+                if (list.items[i] == node_id) {
+                    _ = list.orderedRemove(i);
+                    break;
+                }
+            }
+            if (list.items.len == 0) {
+                if (shard.postings.fetchRemove(encoded_key)) |kv| {
+                    self.allocator.free(kv.key);
+                    var list_copy = kv.value;
+                    list_copy.deinit(self.allocator);
+                }
+            }
+        }
+    }
+
+    /// Load the index from `prop_exact.idx` inside `graph_dir_path`, but ONLY if
+    /// it is CURRENT on the WAL-aware Path B contract (GAP-ENT-0048): its stamped
+    /// `checkpoint_epoch` equals `expected_epoch` (the engine's current epoch — no
+    /// checkpoint since persist) AND its stamped `covered_lsn` equals
+    /// `expected_covered_lsn`. The clean-reopen caller passes the current durable
+    /// frontier (`last_checkpoint_lsn` sum) so a match means "no committed WAL
+    /// tail beyond the snapshot" (RELOAD); the crash-reconcile base-load caller
+    /// (Phase E2) passes the snapshot's OWN stamped covered_lsn (== the
+    /// pre-recovery frontier, gated by the caller) to LOAD the covered_lsn base
+    /// even though a tail exists, so it can then reconcile the bounded tail.
+    /// Returns:
+    ///   `.loaded` — the snapshot was current and is now resident.
+    ///   `.stale`  — a snapshot FILE was present but rejected: legacy format
+    ///               (GENPIDX1/GENPIDX2), epoch-mismatched (a checkpoint ran since
+    ///               persist), TAIL-PRESENT (covered < frontier — a recovery
+    ///               replayed committed records the snapshot predates), or a torn
+    ///               read. The caller REBUILDS; because a valid base existed, the
+    ///               reopen proactively drives the race-free rebuild (Task 5.3b).
+    ///   `.absent` — no snapshot file (or the path could not even be formed). The
+    ///               caller defers to the ordinary lazy first-access rebuild — this
+    ///               graph never persisted an index (legacy / LIGHT-only), so there
+    ///               is nothing to "reload", and eagerly rebuilding at every open
+    ///               would fight sub-second cold-open.
+    /// Never blesses a stale copy: on ANY uncertainty it does NOT return `.loaded`
+    /// (the "never serve a stale prop_exact.idx" invariant — a wrong exact index =
+    /// silently wrong WHERE/GROUP BY/DISTINCT).
+    fn loadFromFile(self: *NodePropertyExactIndex, graph_dir_path: []const u8, expected_epoch: u64, expected_covered_lsn: u64) ExactIndexLoadOutcome {
         self.lockAllShards();
         defer self.unlockAllShards();
 
-        const idx_path = self.allocator.alloc(u8, graph_dir_path.len + "/prop_exact.idx".len) catch return false;
+        const idx_path = self.allocator.alloc(u8, graph_dir_path.len + "/prop_exact.idx".len) catch return .absent;
         defer self.allocator.free(idx_path);
         @memcpy(idx_path[0..graph_dir_path.len], graph_dir_path);
         @memcpy(idx_path[graph_dir_path.len..], "/prop_exact.idx");
 
         const gsa_io = std.Io.Threaded.global_single_threaded.io();
-        const file = std.Io.Dir.cwd().openFile(gsa_io, idx_path, .{}) catch return false;
+        // A file that cannot be opened is treated as ABSENT (the common
+        // never-persisted / dropped case); every FAILURE PAST a successful open is
+        // a present-but-unusable snapshot → `.stale` (drives the proactive rebuild).
+        const file = std.Io.Dir.cwd().openFile(gsa_io, idx_path, .{}) catch return .absent;
         defer file.close(gsa_io);
 
         var reader_buffer: [4096]u8 = undefined;
         var file_reader = file.reader(gsa_io, &reader_buffer);
         const reader = &file_reader.interface;
 
-        // Validate magic header
+        // Validate magic header — only the v3 (epoch + covered-lsn stamped) format
+        // loads; a legacy GENPIDX1 (unstamped) or GENPIDX2 (counter-stamped) file
+        // is a present-but-stale snapshot -> rebuild.
         var magic: [8]u8 = undefined;
-        reader.readSliceAll(&magic) catch return false;
-        if (!std.mem.eql(u8, &magic, "GENPIDX1")) return false;
+        reader.readSliceAll(&magic) catch return .stale;
+        if (!std.mem.eql(u8, &magic, "GENPIDX3")) return .stale;
 
-        const entry_count = reader.takeInt(u64, .little) catch return false;
+        // WAL-aware staleness gate (Path B): reject unless BOTH the derived-index
+        // generation matches (no checkpoint since persist) AND the covered LSN is
+        // still the durable frontier (no committed WAL tail beyond the snapshot).
+        const stored_epoch = reader.takeInt(u64, .little) catch return .stale;
+        if (stored_epoch != expected_epoch) return .stale;
+        const stored_covered_lsn = reader.takeInt(u64, .little) catch return .stale;
+        if (stored_covered_lsn != expected_covered_lsn) return .stale;
+
+        const entry_count = reader.takeInt(u64, .little) catch return .stale;
 
         // We already hold every shard mutex; using `clear()` would re-enter
         // the same non-reentrant `std.Io.Mutex` values and deadlock.
@@ -492,27 +1095,27 @@ const NodePropertyExactIndex = struct {
 
         var i: u64 = 0;
         while (i < entry_count) : (i += 1) {
-            const key_len = reader.takeInt(u32, .little) catch return false;
-            const key = self.allocator.alloc(u8, key_len) catch return false;
+            const key_len = reader.takeInt(u32, .little) catch return .stale;
+            const key = self.allocator.alloc(u8, key_len) catch return .stale;
             reader.readSliceAll(key) catch {
                 self.allocator.free(key);
-                return false;
+                return .stale;
             };
 
             const posting_count = reader.takeInt(u64, .little) catch {
                 self.allocator.free(key);
-                return false;
+                return .stale;
             };
             var posting = std.ArrayList(u64).initCapacity(self.allocator, @intCast(posting_count)) catch {
                 self.allocator.free(key);
-                return false;
+                return .stale;
             };
             var j: u64 = 0;
             while (j < posting_count) : (j += 1) {
                 const nid = reader.takeInt(u64, .little) catch {
                     posting.deinit(self.allocator);
                     self.allocator.free(key);
-                    return false;
+                    return .stale;
                 };
                 posting.appendAssumeCapacity(nid);
             }
@@ -521,11 +1124,134 @@ const NodePropertyExactIndex = struct {
             self.shards[shard_idx].postings.put(key, posting) catch {
                 posting.deinit(self.allocator);
                 self.allocator.free(key);
-                return false;
+                return .stale;
             };
         }
 
-        return true;
+        return .loaded;
+    }
+};
+
+/// GAP-ENT-0048 Path B: outcome of a `prop_exact.idx` reopen load attempt. The
+/// caller distinguishes a rejected-but-present snapshot (`.stale` → proactively
+/// drive the race-free rebuild, Task 5.3b) from a never-persisted one
+/// (`.absent` → defer to lazy first-access, preserving sub-second cold-open).
+const ExactIndexLoadOutcome = enum { loaded, stale, absent };
+
+/// Phase E2: the `(checkpoint_epoch, covered_lsn)` stamp of an on-disk
+/// `prop_exact.idx`, read from its header alone (no postings). `null` when the
+/// file is absent, torn, or not the GENPIDX3 (WAL-aware) format. Used by the
+/// crash-reopen reconcile gate to compare the snapshot's covered_lsn against the
+/// pre-recovery frontier BEFORE deciding to reconcile vs full-rebuild.
+const ExactIndexStamp = struct { epoch: u64, covered_lsn: u64 };
+
+fn readExactIndexStamp(allocator: Allocator, graph_dir_path: []const u8) ?ExactIndexStamp {
+    const idx_path = std.fmt.allocPrint(allocator, "{s}/prop_exact.idx", .{graph_dir_path}) catch return null;
+    defer allocator.free(idx_path);
+
+    const io = std.Io.Threaded.global_single_threaded.io();
+    const file = std.Io.Dir.cwd().openFile(io, idx_path, .{}) catch return null;
+    defer file.close(io);
+
+    var rbuf: [64]u8 = undefined;
+    var fr = file.reader(io, &rbuf);
+    const reader = &fr.interface;
+
+    var magic: [8]u8 = undefined;
+    reader.readSliceAll(&magic) catch return null;
+    if (!std.mem.eql(u8, &magic, "GENPIDX3")) return null;
+    const epoch = reader.takeInt(u64, .little) catch return null;
+    const covered = reader.takeInt(u64, .little) catch return null;
+    return .{ .epoch = epoch, .covered_lsn = covered };
+}
+
+/// Phase E1/E2: the node→[(label,key,value_hash)] REVERSE MAP, materialized ONLY
+/// transiently at crash-reopen reconcile time (loaded from `prop_rev.idx`, used
+/// to evict a tail node's OLD postings, then freed). It is NOT resident during
+/// normal operation — steady-state memory is unchanged. Each node maps to a list
+/// of OWNED encoded posting keys `[label_id][key_len][key][value_hash]` (the
+/// same bytes used as the forward posting map key), so eviction is a direct
+/// `NodePropertyExactIndex.removeByEncodedKey` per key with no value decode.
+const NodePropertyReverseMap = struct {
+    allocator: Allocator,
+    map: std.AutoHashMapUnmanaged(u64, std.ArrayListUnmanaged([]u8)) = .{},
+
+    fn init(allocator: Allocator) NodePropertyReverseMap {
+        return .{ .allocator = allocator };
+    }
+
+    fn deinit(self: *NodePropertyReverseMap) void {
+        var it = self.map.iterator();
+        while (it.next()) |entry| {
+            for (entry.value_ptr.items) |key| self.allocator.free(key);
+            entry.value_ptr.deinit(self.allocator);
+        }
+        self.map.deinit(self.allocator);
+    }
+
+    /// Append an OWNED copy of `encoded_key` to `node_id`'s key list.
+    fn addKey(self: *NodePropertyReverseMap, node_id: u64, encoded_key: []const u8) !void {
+        const key_copy = try self.allocator.dupe(u8, encoded_key);
+        errdefer self.allocator.free(key_copy);
+        const gop = try self.map.getOrPut(self.allocator, node_id);
+        if (!gop.found_existing) gop.value_ptr.* = .empty;
+        try gop.value_ptr.append(self.allocator, key_copy);
+    }
+
+    /// The encoded keys currently mapped for `node_id` (borrowed; valid until the
+    /// next mutation / deinit). `null` when the node has no reverse entry (e.g. a
+    /// node inserted in the tail that was absent from the covered_lsn snapshot).
+    fn keysFor(self: *NodePropertyReverseMap, node_id: u64) ?[]const []u8 {
+        if (self.map.getPtr(node_id)) |list| return list.items;
+        return null;
+    }
+
+    /// Phase E1: load `prop_rev.idx` from `graph_dir_path`, but ONLY if it is
+    /// stamped with `expected_epoch` AND `expected_covered_lsn` (the same gate as
+    /// the forward base-load, so a torn / inconsistent / foreign reverse file is
+    /// rejected → the caller falls back to a full rebuild, never an unsound
+    /// reconcile). Mirrors `NodePropertyExactIndex.loadFromFile`'s outcomes.
+    fn loadFromFile(self: *NodePropertyReverseMap, graph_dir_path: []const u8, expected_epoch: u64, expected_covered_lsn: u64) ExactIndexLoadOutcome {
+        const rev_path = std.fmt.allocPrint(self.allocator, "{s}/{s}", .{ graph_dir_path, prop_rev_index_file_name }) catch return .absent;
+        defer self.allocator.free(rev_path);
+
+        const io = std.Io.Threaded.global_single_threaded.io();
+        const file = std.Io.Dir.cwd().openFile(io, rev_path, .{}) catch return .absent;
+        defer file.close(io);
+
+        var rbuf: [4096]u8 = undefined;
+        var fr = file.reader(io, &rbuf);
+        const reader = &fr.interface;
+
+        var magic: [8]u8 = undefined;
+        reader.readSliceAll(&magic) catch return .stale;
+        if (!std.mem.eql(u8, &magic, prop_rev_index_magic)) return .stale;
+        const stored_epoch = reader.takeInt(u64, .little) catch return .stale;
+        if (stored_epoch != expected_epoch) return .stale;
+        const stored_covered = reader.takeInt(u64, .little) catch return .stale;
+        if (stored_covered != expected_covered_lsn) return .stale;
+
+        const pair_count = reader.takeInt(u64, .little) catch return .stale;
+        var i: u64 = 0;
+        while (i < pair_count) : (i += 1) {
+            const node_id = reader.takeInt(u64, .little) catch return .stale;
+            const key_len = reader.takeInt(u32, .little) catch return .stale;
+            const key = self.allocator.alloc(u8, key_len) catch return .stale;
+            reader.readSliceAll(key) catch {
+                self.allocator.free(key);
+                return .stale;
+            };
+            const gop = self.map.getOrPut(self.allocator, node_id) catch {
+                self.allocator.free(key);
+                return .stale;
+            };
+            if (!gop.found_existing) gop.value_ptr.* = .empty;
+            gop.value_ptr.append(self.allocator, key) catch {
+                self.allocator.free(key);
+                return .stale;
+            };
+        }
+        return .loaded;
     }
 };
 
@@ -716,7 +1442,12 @@ fn hashEncodedPropertyBytes(encoded_value: []const u8) u64 {
     return std.hash.Wyhash.hash(0, encoded_value);
 }
 
-fn shouldExposePropertyKey(key: []const u8) bool {
+/// Pub for the hydration fast-scan merge (graph_store.zig): the streaming
+/// scan accumulates ALL decoded property entries (internal keys included, the
+/// merge needs the internal id/tenant tags) and applies this exact filter
+/// when building the resident node/edge property maps — byte-identical to
+/// the legacy getAllNodeProperties/getAllEdgeProperties exposure rule.
+pub fn shouldExposePropertyKey(key: []const u8) bool {
     return !std.mem.eql(u8, key, graph_store.INTERNAL_NODE_ID_PROPERTY_KEY) and
         !std.mem.eql(u8, key, graph_store.INTERNAL_EDGE_ID_PROPERTY_KEY) and
         // GAP-0891 (RC-2): the persisted tenant tag must never surface as a
@@ -746,6 +1477,42 @@ pub const ManagedGraph = struct {
     /// shard) increments it concurrently. After a successful rebuild it equals
     /// the live-node count, letting tests assert every node was processed.
     exact_index_rebuild_iters: std.atomic.Value(u64) = std.atomic.Value(u64).init(0),
+    /// H4 (cold-open phase 1): lazy-build latch for `exact_node_property_index`.
+    /// `true`  → the index is fully built; reads/live-mutations may touch it.
+    /// `false` → the index was DEFERRED at open (no/stale persisted snapshot) and
+    /// must be rebuilt from the durable pages on first access, instead of paying
+    /// the full O(graph) property-chain scan EAGERLY at open (~1.5-2h at 14.27M
+    /// nodes — cold-open "phase 1"). Default `true` so a freshly CREATED graph
+    /// (which maintains the index incrementally) and the persisted-load path are
+    /// unaffected; the open path sets it `false` only when it defers. Mirrors the
+    /// engine's `ensureDerivedHydrated` lazy pattern.
+    exact_index_built: std.atomic.Value(bool) = std.atomic.Value(bool).init(true),
+    /// Serializes the one-shot deferred build so concurrent first-accessors build
+    /// the index EXACTLY ONCE (a double-checked latch). Uses `std.Io.Mutex` (the
+    /// file convention — the geode root module's std has no `std.Thread.Mutex`);
+    /// locked via the global single-threaded io handle, like the other per-graph
+    /// mutexes here. Only `ensureExactNodePropertyIndexBuilt` ever holds it, so it
+    /// participates in no lock-ordering relationship and cannot deadlock.
+    exact_index_build_mutex: std.Io.Mutex = std.Io.Mutex.init,
+    /// GAP-0064 FIX A: `true` while a RACE-FREE background reopen rebuild
+    /// (`spawnExactIndexRebuildOnReopen` → `exactIndexRebuildOnReopenWorker`)
+    /// owns this graph's exact-index build. Set at a successful reopen spawn
+    /// (for an `.absent` OR `.stale` on-disk index), cleared by the worker when
+    /// the build finishes/aborts. Two readers consult it, both non-blocking:
+    ///   * the first-touch hydration FOLD (`buildAndPersistExactIndexForHydratedGraph`
+    ///     called from `GraphStore.ensureGraphHydrated`) NO-OPs when it is set —
+    ///     so hydration returns after resident loop1/loop2 instead of parking
+    ///     every reader (even O(1) count) behind the ~14-min index build; and
+    ///   * `checkpointOneGraph`'s FULL-path exact-index decision SKIPs the eager
+    ///     build + the stale-file invalidation when it is set — so the
+    ///     hydration-completion checkpoint cannot run a SECOND concurrent
+    ///     `rebuildExactNodePropertyIndex` against the background worker's (two
+    ///     concurrent rebuilds double-insert into the mutex-sharded index).
+    /// The worker stores `exact_index_built = true` (.release) BEFORE clearing
+    /// this flag (.release), so an observer that reads `inflight == false` is
+    /// guaranteed to also read `built == true` — the checkpoint ladder relies on
+    /// this to read `inflight` FIRST and treat a cleared flag as "build done".
+    exact_rebuild_inflight: std.atomic.Value(bool) = std.atomic.Value(bool).init(false),
     /// Per-graph audit logger writing to `{graph_dir}/audit.jsonl`.
     /// May be null if audit init failed (soft failure — graph still usable).
     audit_logger: ?*audit.AuditLogger = null,
@@ -1154,11 +1921,17 @@ pub const ManagedGraph = struct {
         return out.toOwnedSlice(allocator);
     }
 
-    fn deinit(self: *ManagedGraph, allocator: Allocator) void {
+    fn deinit(self: *ManagedGraph, allocator: Allocator, crash: bool) void {
         // Teardown order matters: facade → adapter (flushes + closes each engine
         // and its child dir) → base_dir (the adapter never closes base_dir) →
         // free the owned path. Durability is owned by the engine WAL/segments;
         // `adapter.deinit` best-effort flushes each engine before closing it.
+        //
+        // `crash` (test-only): when true, tear the engine down via `deinit()`
+        // (memory-only, NO final checkpoint) instead of `close()` (which
+        // checkpoints when dirty). Committed txns are already durable in the WAL
+        // (per-commit fsync), so this leaves a genuine committed WAL TAIL for the
+        // next open's recovery to replay — a faithful kill-9 crash simulation.
         if (self.fts_index) |fts| {
             fts.deinit();
             allocator.destroy(fts);
@@ -1214,7 +1987,11 @@ pub const ManagedGraph = struct {
         }
         // error-policy: A — best-effort close during teardown; WAL recovery
         // handles anything a failed close left behind.
-        self.engine.close() catch {};
+        if (crash) {
+            self.engine.deinit(); // no checkpoint → committed WAL tail survives
+        } else {
+            self.engine.close() catch {};
+        }
         self.exact_node_property_index.deinit();
         allocator.free(self.merge_tuple_locks);
         self.label_dict.deinit();
@@ -1232,7 +2009,133 @@ fn resolvePersistedLabelId(mg: *ManagedGraph, label: []const u8) !gs.LabelId {
     // so checkpoint/reopen can recover nodes with label IDs whose names were
     // never persisted. Use the engine API for first sight of a label: it
     // broadcasts the mapping to every shard and dirties the dictionaries.
-    return mg.engine.getOrAssignLabel(label);
+    const id = try mg.engine.getOrAssignLabel(label);
+
+    // Security-graph durability (gap 0026, twin of the sync-mode carve-out
+    // in createGraphLocked): the label dictionary is NOT WAL-logged — it is
+    // persisted only at checkpoint (labels.dict). Per-commit WAL fsync alone
+    // is therefore insufficient on a FRESH (never-checkpointed) security
+    // graph: after a crash, recovery replays the user/role/policy node
+    // records from the fsynced WAL but has lost the "User"/"Role"/... name→id
+    // mappings, leaving every security record unreachable by label — the
+    // same silent auth-state loss this gap is about. Persist the (tiny,
+    // bounded — a handful of labels ever) per-shard dictionaries
+    // synchronously on FIRST sight of a security-graph label, and fail the
+    // mutation if the persist fails: durability before ack, fail closed.
+    // saveToFile is atomic (tmp + fsync + rename), matching the checkpoint
+    // writer, so a crash mid-save leaves the previous dictionary intact.
+    if (std.mem.eql(u8, mg.name, "__geode_security")) {
+        var path_buf: [std.fs.max_path_bytes]u8 = undefined;
+        for (mg.engine.shards) |shard| {
+            const labels_path = try std.fmt.bufPrint(&path_buf, "{s}/labels.dict", .{shard.graph_dir.path});
+            try shard.label_dict.saveToFile(labels_path);
+        }
+    }
+    return id;
+}
+
+/// Security-graph durability (gap 0026), workaround for an upstream
+/// graph-storage WAL mis-log: `GraphEngine.addLabelTxn` logs the label block
+/// with `logPage(txn, .var_store, result.head)`, but a var_store head is a
+/// REFERENCE `(page_id << 16 | offset)`, not a page id — so the page image
+/// that actually holds the node's label list is never WAL-logged (a bogus
+/// sparse page id is logged instead). Crash recovery then replays the node
+/// record (whose `label_head` points at the ref) but the referenced
+/// var_store page is missing/zeroed: the node survives, its LABEL LINKAGE is
+/// silently lost, and every label-indexed lookup (`getNodesByLabel(:User)`,
+/// the persisted-admin probe, user reload) stops seeing the record — auth
+/// state loss. Until the upstream fix ships (log `head >> 16`), re-log the
+/// CORRECT var_store page inside the same txn so the corrected image commits
+/// (and, on the security graph's `sync_each_commit` engines, fsyncs) with
+/// the mutation. Scoped to `__geode_security`: on bulk graphs this would add
+/// an extra ~8 KB WAL image per label-add (prohibitive at ingest scale), and
+/// their deferred-mode durability barrier is the checkpoint, which flushes
+/// the real pages directly and is unaffected by the mis-logged WAL image.
+/// No-op for non-security graphs and label-less nodes.
+fn relogSecurityLabelPageTxn(mg: *ManagedGraph, node_shard: anytype, node_id: u64, txn: gs.TxnId) !void {
+    if (!std.mem.eql(u8, mg.name, "__geode_security")) return;
+    const rec = (try node_shard.getNode(node_id)) orelse return;
+    if (rec.label_head == 0) return;
+    try node_shard.logPagePublic(txn, .var_store, rec.label_head >> 16);
+}
+
+/// Auto-commit variant of `relogSecurityLabelPageTxn` for the
+/// `mg.engine.addLabel` (self-committing) call sites: the label add has
+/// already committed, so the corrected page image is logged in its own tiny
+/// follow-up txn. Security-graph only; the second commit is one extra WAL
+/// fsync on an admin-rare path.
+fn relogSecurityLabelPageAutoCommit(mg: *ManagedGraph, node_shard: anytype, node_id: u64) !void {
+    if (!std.mem.eql(u8, mg.name, "__geode_security")) return;
+    const txn = try node_shard.beginTxn();
+    errdefer node_shard.abortTxn(txn) catch {};
+    try relogSecurityLabelPageTxn(mg, node_shard, node_id, txn);
+    try node_shard.commitTxn(txn);
+}
+
+/// Security-graph durability (gap 0026): crash-recovery self-heal for the
+/// per-shard manifest counters. graph-storage's WAL replay restores PAGE
+/// contents but does NOT advance `manifest.next_node_id` / `node_count` /
+/// `next_txn_id` — those are persisted only at checkpoint. After a crash
+/// that followed WAL-fsynced security commits, any node created since the
+/// last checkpoint exists in the replayed pages, but:
+///   * every scan path bounds itself by `manifest.next_node_id`
+///     (`engine.scanNodes`, the derived label-index rebuild, `scanAllNodes`
+///     hydration) — so the recovered user/role/policy record is INVISIBLE to
+///     the persisted-admin probe, user reload, and label lookups, and
+///   * `allocNode` hands out ids from the stale `next_node_id` — RE-ISSUING
+///     the recovered records' slots and silently overwriting them on the
+///     next insert.
+/// Heal by scanning the actually-allocated node pages (bounded by on-disk
+/// page counts — the security graph is tiny) and advancing the counters past
+/// the highest live slot. `next_txn_id` is bumped past the WAL's replayed
+/// LSN so a reused txn id can never let a later crash-recovery misclassify
+/// (and discard) an older committed txn's records. Idempotent: no-ops when
+/// the manifest is already current (clean restart). Scoped to
+/// `__geode_security` at open; bulk graphs keep the upstream behavior —
+/// their deferred-mode durability contract is checkpoint-based, and the
+/// checkpoint persists the manifest.
+fn healSecurityEngineCounters(mg: *ManagedGraph) void {
+    if (!std.mem.eql(u8, mg.name, "__geode_security")) return;
+    const stride: u64 = gs.sharded_engine.SHARD_COUNT;
+    for (mg.engine.shards) |shard| {
+        const pager = shard.file_manager.getPager(.nodes) orelse continue;
+        const page_count = pager.pageCount() catch continue;
+        if (page_count == 0) continue;
+        const npp: u64 = shard.node_store.nodes_per_page;
+
+        const Ctx = struct {
+            max_id: u64 = 0,
+            live: u64 = 0,
+            fn cb(ctx: *@This(), id: u64, rec: gs.node.NodeRec) void {
+                _ = rec;
+                ctx.live += 1;
+                if (id > ctx.max_id) ctx.max_id = id;
+            }
+        };
+        var ctx = Ctx{};
+        // error-policy: A — a failed heal scan leaves the stale (upstream)
+        // counters in place; strictly no worse than before this fix.
+        shard.node_store.scanNodes(page_count * npp, &ctx, Ctx.cb) catch continue;
+
+        // Reused txn ids are a corruption hazard regardless of whether any
+        // node survived; heal unconditionally for this shard.
+        const healed_txn = shard.wal.current_lsn + 1;
+        if (healed_txn > shard.manifest.next_txn_id) {
+            shard.manifest.next_txn_id = healed_txn;
+        }
+        if (healed_txn > shard.txn_manager.next_txn_id) {
+            shard.txn_manager.next_txn_id = healed_txn;
+        }
+
+        if (ctx.live == 0) continue;
+        const healed_next = ctx.max_id + stride;
+        if (healed_next > shard.manifest.next_node_id) {
+            shard.manifest.next_node_id = healed_next;
+        }
+        if (ctx.live > shard.manifest.node_count) {
+            shard.manifest.node_count = ctx.live;
+        }
+    }
 }
 
 fn initMergeTupleLocks(allocator: Allocator) ![]std.Io.Mutex {
@@ -1397,17 +2300,36 @@ fn removeNodePropertiesForLabels(mg: *ManagedGraph, node_id: u64, label_ids: []c
 // Hence the parallel rebuild produces a posting-for-posting identical index to
 // the serial one. If only one shard exists (or any other degenerate case) we
 // fall back to a straight serial loop.
-fn rebuildExactNodePropertyIndex(mg: *ManagedGraph) !void {
+/// GAP-ENT-0048 DEFECT B: nodes visited between two cancel-flag polls in the
+/// exact-index rebuild scan. Bounds how long a cancelled read stays wedged in
+/// the per-node property-chain walk (the dominant `BufferPool.pin` cost of the
+/// rebuild) before it aborts — the same batch discipline the executor's
+/// scan/aggregate loops use.
+const exact_rebuild_cancel_poll_batch: usize = 256;
+
+fn rebuildExactNodePropertyIndex(mg: *ManagedGraph, cancel: read_budget.CancelFlags) !void {
+    // H4 (cold-open phase 1): instrument every rebuild so tests can prove the
+    // deferred-build latch rebuilds 0 times at open and exactly once on first
+    // access. Counts the eager-open, test-helper, AND lazy-first-access paths.
+    _ = g_exact_rebuild_runs.fetchAdd(1, .monotonic);
     mg.exact_node_property_index.clear();
     mg.exact_index_rebuild_iters.store(0, .monotonic);
+    // task0048d: per-build dispatch accounting (pool vs inline shard scans).
+    g_exact_rebuild_pool_tasks.store(0, .monotonic);
+    g_exact_rebuild_inline_tasks.store(0, .monotonic);
 
     const shards = mg.engine.shards;
 
     // Per-shard scan context: shares only `mg` (whose exact-property index is
     // mutex-sharded) and writes its OWN `err` slot — no shared mutable scratch.
+    // GAP-ENT-0048 DEFECT B: each context carries the caller's read-executor
+    // cancel flags (captured on the handler thread) so the pool workers — which
+    // do NOT inherit the handler's threadlocal read scope — can poll them.
     const ShardCtx = struct {
         mg: *ManagedGraph,
         shard: *gs.GraphEngine,
+        cancel: read_budget.CancelFlags,
+        since_poll: usize = 0,
         err: ?anyerror = null,
 
         fn scanCallback(self: *@This(), node_id: gs.NodeId, rec: gs.node.NodeRec) void {
@@ -1415,6 +2337,34 @@ fn rebuildExactNodePropertyIndex(mg: *ManagedGraph) !void {
             // Coverage counter: count every live node the scan presents (atomic
             // so the parallel per-shard workers compose correctly).
             _ = self.mg.exact_index_rebuild_iters.fetchAdd(1, .monotonic);
+            _ = g_exact_rebuild_nodes_scanned.fetchAdd(1, .monotonic);
+            // GAP-ENT-0048 DEFECT B: poll the read-executor cancel flags at a
+            // batch boundary. On a client disconnect / stall-watchdog abort this
+            // stops the expensive per-node property-chain walk immediately (the
+            // remaining `if (self.err != null) return` fast-outs make the rest of
+            // the scan a cheap no-op), so the wedged handler frees instead of
+            // paying the whole O(graph) rebuild. Empty flags (write paths / no
+            // read scope) never trip.
+            self.since_poll += 1;
+            if (self.since_poll >= exact_rebuild_cancel_poll_batch) {
+                self.since_poll = 0;
+                // GAP-ENT-0048 SECONDARY: emit a build-progress heartbeat, then
+                // poll ONLY the STREAM (connection-close) cancel — a genuinely
+                // gone client frees the handler (DEFECT B). The proto-reader
+                // stall (WATCHDOG) cancel is deliberately NOT honoured here: the
+                // stall fires precisely because this build makes the handler look
+                // idle to the transport, yet the build IS advancing (this
+                // heartbeat proves it). Aborting on the stall would leave the
+                // index un-latched so the NEXT query restarts the whole O(graph)
+                // rebuild — the ~60 s-stall forever-wedge. Let a progressing build
+                // run to completion, latch, and persist; every later query is then
+                // served from the built/persisted index.
+                _ = g_exact_rebuild_heartbeats.fetchAdd(1, .monotonic);
+                if (self.cancel.streamTripped()) {
+                    self.err = error.ReadQueryCancelled;
+                    return;
+                }
+            }
             if (rec.label_head == 0 or rec.prop_head == 0) return;
 
             const node_shard = self.mg.shardEngineForNode(node_id);
@@ -1430,6 +2380,16 @@ fn rebuildExactNodePropertyIndex(mg: *ManagedGraph) !void {
         }
 
         fn run(self: *@This()) void {
+            // GAP-ENT-0048 DEFECT B: a STREAM cancel already pending before the
+            // first node bails the whole shard WITHOUT touching the node store
+            // (the common "client already gone" case — zero page pins). Uses the
+            // stream-only source (see SECONDARY): a pre-set stall WATCHDOG flag
+            // must NOT prevent the build — the build is what the stalled handler
+            // is doing, and it will complete and serve every future reader.
+            if (self.cancel.streamTripped()) {
+                self.err = error.ReadQueryCancelled;
+                return;
+            }
             // Each shard owns nodes with ids satisfying shardOfNode(id) == idx.
             self.shard.node_store.scanNodes(self.shard.manifest.next_node_id, self, scanCallback) catch |err| {
                 if (self.err == null) self.err = err;
@@ -1439,7 +2399,7 @@ fn rebuildExactNodePropertyIndex(mg: *ManagedGraph) !void {
 
     var ctxs: [gs.sharded_engine.SHARD_COUNT]ShardCtx = undefined;
     for (shards, 0..) |shard, idx| {
-        ctxs[idx] = .{ .mg = mg, .shard = shard };
+        ctxs[idx] = .{ .mg = mg, .shard = shard, .cancel = cancel };
     }
 
     // Serial fallback: a single shard gains nothing from the pool, and keeps a
@@ -1467,16 +2427,28 @@ fn rebuildExactNodePropertyIndex(mg: *ManagedGraph) !void {
     };
 
     var wg = pool.waitGroup();
-    var submitted: usize = 0;
+    // GAP-ENT-0048 (task0048d): a submit failure runs ONLY that shard inline and
+    // KEEPS submitting the rest — the previous `catch break` serialized every
+    // remaining shard onto the calling thread on the first backpressure reject,
+    // which at 14.27M could collapse the whole rebuild to a single-threaded scan
+    // (the coordinator's ~1.2-core symptom). Instrumented so a test / the 14.27M
+    // run can prove the fan-out actually engaged (pool_tasks >= 1).
+    var inline_ctxs_buf: [gs.sharded_engine.SHARD_COUNT]*ShardCtx = undefined;
+    var inline_n: usize = 0;
     for (ctxs[0..shards.len]) |*c| {
         // Default backpressure (.return_error) is deadlock-safe; the wait_group
         // auto-adds on submit and auto-dones on completion.
-        _ = pool.submit(Task.run, c, .{ .wait_group = &wg }) catch break;
-        submitted += 1;
+        if (pool.submit(Task.run, c, .{ .wait_group = &wg })) |_| {
+            _ = g_exact_rebuild_pool_tasks.fetchAdd(1, .monotonic);
+        } else |_| {
+            inline_ctxs_buf[inline_n] = c;
+            inline_n += 1;
+        }
     }
-    // Any task that failed to submit runs inline on this (non-worker) thread
-    // BEFORE wg.wait(), so it still completes and is not double-counted by wg.
-    for (ctxs[submitted..shards.len]) |*c| {
+    // Shards that failed to submit run inline on this (non-worker) thread BEFORE
+    // wg.wait(), so they still complete and are not double-counted by wg.
+    for (inline_ctxs_buf[0..inline_n]) |c| {
+        _ = g_exact_rebuild_inline_tasks.fetchAdd(1, .monotonic);
         c.run();
     }
     wg.wait();
@@ -1485,6 +2457,71 @@ fn rebuildExactNodePropertyIndex(mg: *ManagedGraph) !void {
     for (ctxs[0..shards.len]) |*c| {
         if (c.err) |err| return err;
     }
+}
+
+/// H4 (cold-open phase 1): build the exact node-property index on first access
+/// if it was DEFERRED at open. Lock-free fast path when already built; otherwise
+/// the build mutex serializes a single rebuild from the durable pages (a
+/// double-checked latch — concurrent first-accessors build EXACTLY once).
+///
+/// MUST be called at the top of EVERY public path that READS or live-MUTATES
+/// `mg.exact_node_property_index`, BEFORE the index is touched — a missed
+/// accessor returns wrong/empty results (read) or corrupts the index (a live
+/// write onto an unbuilt index) on a deferred graph. The build itself rebuilds
+/// from the durable pages, so it is crash-safe and idempotent (counter-gated by
+/// `loadFromFile` on the next open).
+///
+/// MUST NOT be called from inside `rebuildExactNodePropertyIndex` (its internal
+/// `addEx` calls would re-enter here and recurse); the rebuild uses the raw
+/// helpers directly.
+///
+/// H4 persist-on-build: a successful REBUILD (this branch only — never the
+/// snapshot-load path, which latches `built` at open without coming through
+/// here) triggers a background graph-scoped persist of the just-built index
+/// (`spawnExactIndexPersistAfterBuild`), so a crash before the next FULL
+/// checkpoint does not re-pay the O(graph) build on reopen. Triggered
+/// strictly AFTER the `exact_index_built` latch store so the persist's
+/// checkpoint observes `built == true` (the 88a05773 never-persist-unbuilt
+/// discipline re-checks the latch under the EXCLUSIVE rwlock).
+fn ensureExactNodePropertyIndexBuilt(adapter: *StorageAdapter, mg: *ManagedGraph) !void {
+    if (mg.exact_index_built.load(.acquire)) return;
+    const io = std.Io.Threaded.global_single_threaded.io();
+    mg.exact_index_build_mutex.lockUncancelable(io);
+    defer mg.exact_index_build_mutex.unlock(io);
+    // Double-check under the mutex: a peer first-accessor may have built it
+    // while we waited for the lock.
+    if (mg.exact_index_built.load(.acquire)) return;
+    // GAP-0064 (adversarial review — TEST-ONLY): hold the LAZY build "in flight"
+    // (mutex held, mid-build) so a test can prove a concurrent FULL checkpoint's
+    // eager build does NOT run a second concurrent rebuild (the lazy-vs-checkpoint
+    // double-insert race). Reuses the same gate the worker path uses; never blocks
+    // in production (gate == 0).
+    if (comptime @import("builtin").is_test) {
+        if (g_test_exact_build_gate.load(.acquire) != 0) {
+            _ = g_test_build_gate_waiters.fetchAdd(1, .acq_rel);
+            const gate_req = std.os.linux.timespec{ .sec = 0, .nsec = std.time.ns_per_ms };
+            var gate_rem: std.os.linux.timespec = undefined;
+            while (g_test_exact_build_gate.load(.acquire) != 0) {
+                _ = std.os.linux.nanosleep(&gate_req, &gate_rem);
+            }
+            _ = g_test_build_gate_waiters.fetchSub(1, .acq_rel);
+        }
+    }
+    // GAP-ENT-0048 DEFECT B: capture THIS (handler) thread's read-executor
+    // cancel flags and hand them to the parallel rebuild, whose per-shard pool
+    // workers run on threads that do not inherit the threadlocal read scope. If
+    // the driving client genuinely DISCONNECTS (STREAM cancel) mid-rebuild, the
+    // scan aborts with error.ReadQueryCancelled and the latch stays UNbuilt — the
+    // next accessor retries the rebuild cleanly (idempotent: rebuild clears
+    // first). GAP-ENT-0048 SECONDARY: a proto-reader STALL (watchdog) abort does
+    // NOT stop the build — a progressing build is not a wedged handler, so it
+    // runs to completion and latches, and every later query is served from the
+    // built (and persist-on-build durable) index instead of restarting the
+    // O(graph) rebuild forever. Write paths install no read scope, so
+    // `activeCancelFlags` is empty for them and their rebuild is never cancelled.
+    try rebuildExactNodePropertyIndex(mg, read_budget.activeCancelFlags());
+    mg.exact_index_built.store(true, .release);
+    adapter.spawnExactIndexPersistAfterBuild(mg.name);
 }
 
 // ============================================================================
@@ -1744,6 +2781,41 @@ pub const StorageAdapter = struct {
     // spike). 0 disables backpressure. Set from env at init (default = a multiple
     // of `checkpoint_ops_threshold`).
     checkpoint_max_pending: std.atomic.Value(u64) = std.atomic.Value(u64).init(0),
+    // GAP-ENT-0038: once-only guard for registerCheckpointMetrics (0 = not yet
+    // registered). Registration is retried until the global runtime-metrics
+    // registry exists, then latches.
+    checkpoint_metrics_registered: std.atomic.Value(u32) = std.atomic.Value(u32).init(0),
+    // H4 persist-on-build: background persist threads spawned after a
+    // successful deferred exact-index REBUILD (one bounded graph-scoped
+    // checkpoint each — see `spawnExactIndexPersistAfterBuild`). Guarded by
+    // `exact_persist_mutex`; `exact_persist_shutdown` refuses new spawns once
+    // deinit begins; deinit() joins the list BEFORE any teardown.
+    exact_persist_threads: std.ArrayList(std.Thread) = .empty,
+    exact_persist_mutex: std.Io.Mutex = std.Io.Mutex.init,
+    exact_persist_shutdown: bool = false,
+    // GAP-0064 FIX C: dedup set for in-flight BACKGROUND value-ordered index
+    // builds, keyed by "graph\x00label\x00key" (owned). Guards against spawning a
+    // second build for the same (graph,label,key) while one is already running
+    // (the planner re-triggers on every ORDER BY until the index is registered).
+    // Guarded by `exact_persist_mutex` (the same lock that gates spawn lifecycle);
+    // the worker removes+frees its key on completion, deinit frees any remainder.
+    ordered_build_inflight: std.StringHashMapUnmanaged(void) = .{},
+    /// GAP-0064 (adversarial review — shutdown-stall fix): cancel source for any
+    /// in-flight BACKGROUND index build. `deinit` sets it BEFORE joining
+    /// `exact_persist_threads`, so a graceful shutdown shortly after a large
+    /// `.absent` reopen aborts the ~14-min uncancellable O(graph) build at its
+    /// next 256-node poll (`rebuildExactNodePropertyIndex` polls
+    /// `CancelFlags.streamTripped`) instead of blocking teardown for the whole
+    /// build. Wired to the worker's rebuild as the STREAM cancel flag. A cancelled
+    /// build leaves the index deferred (built stays false) → the next reopen
+    /// rebuilds cleanly; nothing partial is ever served (accessors gate on built).
+    ///
+    /// GAP-0064 INTEGRATION: the ORDER-BY ordered-index auto-build worker REUSES
+    /// `exact_persist_threads`, so it too honors this flag — `createOrderedIndex`
+    /// polls it between shards (see there) and aborts the multi-minute 16-shard
+    /// ordered rebuild at a shard boundary, keeping the `deinit` join bounded
+    /// instead of re-introducing the uncancellable shutdown stall for ORDER BY.
+    exact_build_shutdown_cancel: std.atomic.Value(bool) = std.atomic.Value(bool).init(false),
 
     /// Create a new `StorageAdapter`.
     ///
@@ -1821,11 +2893,85 @@ pub const StorageAdapter = struct {
 
     /// Shut down all engines, release every allocation.
     pub fn deinit(self: *StorageAdapter) void {
+        // H4 persist-on-build + GAP-0064 reopen rebuild: join in-flight background
+        // workers BEFORE any teardown — they take `self.mutex` and read the engines
+        // map, so joining after the lock below would deadlock and joining after
+        // teardown would be a use-after-free. New spawns are refused from here on
+        // (`exact_persist_shutdown`).
+        //
+        // GAP-0064 (adversarial review — shutdown-stall fix): FIX A now spawns the
+        // UNCANCELLABLE O(graph) reopen rebuild for every `.absent` graph, so a
+        // graceful shutdown shortly after a large reopen would otherwise block this
+        // join for the full ~14-min build. Set `exact_build_shutdown_cancel` FIRST
+        // so the in-flight rebuild aborts at its next 256-node poll → the join is
+        // bounded (the persist-after-build workers remain bounded graph checkpoints).
+        {
+            const io_h4 = std.Io.Threaded.global_single_threaded.io();
+            self.exact_build_shutdown_cancel.store(true, .release);
+            self.exact_persist_mutex.lockUncancelable(io_h4);
+            self.exact_persist_shutdown = true;
+            var persist_threads = self.exact_persist_threads;
+            self.exact_persist_threads = .empty;
+            self.exact_persist_mutex.unlock(io_h4);
+            for (persist_threads.items) |t| t.join();
+            persist_threads.deinit(self.allocator);
+        }
+        // GAP-0064 FIX C: workers are joined; free any leftover in-flight keys.
+        self.freeOrderedBuildInflight();
         self.mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
 
         var it = self.engines.iterator();
         while (it.next()) |entry| {
-            entry.value_ptr.*.deinit(self.allocator);
+            entry.value_ptr.*.deinit(self.allocator, false);
+        }
+        self.engines.deinit();
+        self.default_engine = null;
+
+        self.registry.deinit();
+        self.allocator.free(self.registry_path);
+        self.allocator.free(self.data_dir);
+        self.mutex.unlock(std.Io.Threaded.global_single_threaded.io());
+        self.allocator.destroy(self);
+    }
+
+    /// GAP-0064 FIX C: free every key still in `ordered_build_inflight` and empty
+    /// the map. Called from teardown AFTER all build workers are joined (so no
+    /// worker can concurrently touch the map).
+    fn freeOrderedBuildInflight(self: *StorageAdapter) void {
+        var oit = self.ordered_build_inflight.keyIterator();
+        while (oit.next()) |k| self.allocator.free(k.*);
+        self.ordered_build_inflight.deinit(self.allocator);
+        self.ordered_build_inflight = .{};
+    }
+
+    /// TEST-ONLY: tear the adapter down as if the process was kill-9'd — each
+    /// engine is `deinit()`'d (memory-only, NO final checkpoint) instead of
+    /// `close()`'d, so committed-but-uncheckpointed writes stay in the durable
+    /// WAL as a committed TAIL for the next open's recovery to replay. Frees all
+    /// adapter memory exactly like `deinit` (so `testing.allocator` sees no leak)
+    /// while deliberately NOT absorbing the tail. Reopening the same data dir
+    /// then exercises the crash-reopen `prop_exact.idx` reconcile path.
+    pub fn simulateCrashForTesting(self: *StorageAdapter) void {
+        {
+            const io_h4 = std.Io.Threaded.global_single_threaded.io();
+            // GAP-0064 INTEGRATION: mirror `deinit` — cancel any in-flight
+            // exact-index / ordered-index build FIRST so the join below is bounded
+            // even when a crash-sim test tears down mid-build.
+            self.exact_build_shutdown_cancel.store(true, .release);
+            self.exact_persist_mutex.lockUncancelable(io_h4);
+            self.exact_persist_shutdown = true;
+            var persist_threads = self.exact_persist_threads;
+            self.exact_persist_threads = .empty;
+            self.exact_persist_mutex.unlock(io_h4);
+            for (persist_threads.items) |t| t.join();
+            persist_threads.deinit(self.allocator);
+        }
+        self.freeOrderedBuildInflight();
+        self.mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
+
+        var it = self.engines.iterator();
+        while (it.next()) |entry| {
+            entry.value_ptr.*.deinit(self.allocator, true); // crash teardown
         }
         self.engines.deinit();
         self.default_engine = null;
@@ -1970,7 +3116,7 @@ pub const StorageAdapter = struct {
             }
 
             dropped_uuid = mg.uuid;
-            mg.deinit(self.allocator);
+            mg.deinit(self.allocator, false);
         } else if (self.findRegistryEntryLocked(name)) |entry| {
             dropped_uuid = entry.uuid;
         }
@@ -2153,6 +3299,9 @@ pub const StorageAdapter = struct {
             const label_id = try resolvePersistedLabelId(mg, lbl);
             try node_shard.addLabelTxn(node_id, label_id, local_txn);
         }
+        // gap 0026: WAL-log the node's REAL label page (see
+        // relogSecurityLabelPageTxn) — no-op outside __geode_security.
+        try relogSecurityLabelPageTxn(mg, node_shard, node_id, local_txn);
 
         if (own_txn) try node_shard.commitTxn(local_txn);
         _ok_12 = true;
@@ -2336,6 +3485,11 @@ pub const StorageAdapter = struct {
         request_tenant: []const u8,
     ) !u64 {
         const mg = try self.getOrCreateGraph(graph_name);
+        // H4: a live write must never mutate an unbuilt (deferred) exact index.
+        // Build it FIRST (before any node/index write below) so this insert's
+        // posting lands on top of the fully-rebuilt index. No-op (one atomic
+        // load) on a freshly-created or already-built graph — the ingest case.
+        try ensureExactNodePropertyIndexBuilt(self, mg);
         const store = graph_store.getGlobalStore(graph_store.global_allocator());
         const io = std.Io.Threaded.global_single_threaded.io();
 
@@ -2427,6 +3581,9 @@ pub const StorageAdapter = struct {
         for (label_ids) |label_id| {
             try node_shard.addLabelTxn(slot_id, label_id, local_txn);
         }
+        // gap 0026: WAL-log the node's REAL label page (see
+        // relogSecurityLabelPageTxn) — no-op outside __geode_security.
+        try relogSecurityLabelPageTxn(mg, node_shard, slot_id, local_txn);
 
         rec = (try node_shard.getNode(slot_id)) orelse return error.NodeNotFound;
         var id_buf: [16]u8 = undefined;
@@ -2784,20 +3941,28 @@ pub const StorageAdapter = struct {
             const candidate_slots = try src_engine.probeEdge(from_slot, rel_label_id, to_slot, &probe_buf);
             for (candidate_slots) |edge_slot| {
                 // Engine slot -> geode PUBLIC edge id (the id space the dedup
-                // match/return + prop-upsert operate in). Read directly off the
-                // source-shard engine, addressing the edge by its SOURCE slot (no
-                // self.mutex). A slot with no public-id tag is an orphan /
-                // not-yet-mapped edge → skip.
-                const stored = (src_engine.getEdgeProperty(
-                    from_slot,
-                    edge_slot,
-                    graph_store.INTERNAL_EDGE_ID_PROPERTY_KEY,
-                    self.allocator,
-                ) catch null) orelse continue;
-                defer freeOwnedStorageProperty(self.allocator, stored);
-                const public_id = switch (stored) {
-                    .string => |text| graph_store.parsePersistedPublicId(text) orelse continue,
-                    else => continue,
+                // match/return + prop-upsert operate in). GAP-ENT-0024
+                // inline-first: the edge_index entry carries the public id for
+                // v2 edges (O(1), no props-page read); legacy edges
+                // (public_id == 0) fall back to the persisted property, read
+                // directly off the source-shard engine (no self.mutex). A slot
+                // with neither is an orphan / not-yet-mapped edge → skip.
+                const public_id = blk_pub: {
+                    if ((src_engine.getEdge(edge_slot) catch null)) |rec| {
+                        if (rec.public_id != 0) break :blk_pub rec.public_id;
+                    }
+                    _ = graph_store.edge_id_property_fallback_reads.fetchAdd(1, .monotonic);
+                    const stored = (src_engine.getEdgeProperty(
+                        from_slot,
+                        edge_slot,
+                        graph_store.INTERNAL_EDGE_ID_PROPERTY_KEY,
+                        self.allocator,
+                    ) catch null) orelse continue;
+                    defer freeOwnedStorageProperty(self.allocator, stored);
+                    switch (stored) {
+                        .string => |text| break :blk_pub graph_store.parsePersistedPublicId(text) orelse continue,
+                        else => continue,
+                    }
                 };
                 // Apply the IDENTICAL scope/type/tenant predicates on the tested
                 // public-id path (hydrate-on-miss for an evicted body). probeEdge
@@ -3212,7 +4377,7 @@ pub const StorageAdapter = struct {
                 }
             }
 
-            const found = try findNodeMatchingMergeProps(self.allocator, mg, store, graph_name, label, merge_props);
+            const found = try findNodeMatchingMergeProps(self, self.allocator, mg, store, graph_name, label, merge_props);
             // GAP-0900 coalesce-upsert: apply the SET props to the existing
             // node on the match branch, mirroring the single-key path
             // (~:2381). Done under the same shared-rwlock + per-tuple-lock
@@ -3574,6 +4739,16 @@ pub const StorageAdapter = struct {
     ) !u64 {
         _ = txn_id_opt; // reserved for future extensions; thread-local is source of truth.
 
+        // GAP-0046 / GAP-0900 Layer-3 (Fix 2): in lean-index mode the merge key
+        // MUST stay indexed so dedup + edge-endpoint resolution find this node
+        // by its key across a reopen (the sidecar re-registers it before the
+        // exact-index rebuild). The group-commit variant
+        // (`bulkMergeNodeWithReservedIdForTenant`) already registers here; this
+        // group-commit-OFF direct path missed it, so a lean-mode reopen left the
+        // key UNindexed and the first re-MERGE created a duplicate. No-op when
+        // lean mode is off. Idempotent.
+        graph_store.registerMergeIndexKey(merge_key);
+
         const store = graph_store.getGlobalStore(graph_store.global_allocator());
 
         // Phase 1 (inline): merge-prop index probe.  `.not_indexable`
@@ -3748,6 +4923,9 @@ pub const StorageAdapter = struct {
             for (label_ids) |label_id| {
                 try node_shard.addLabelTxn(node_id, label_id, local_txn);
             }
+            // gap 0026: WAL-log the node's REAL label page (see
+            // relogSecurityLabelPageTxn) — no-op outside __geode_security.
+            try relogSecurityLabelPageTxn(mg, node_shard, node_id, local_txn);
             out[i] = node_id;
         }
 
@@ -3765,6 +4943,8 @@ pub const StorageAdapter = struct {
             defer self.mutex.unlock(std.Io.Threaded.global_single_threaded.io());
             break :blk try self.requireExistingGraphLocked(graph_name);
         };
+        // H4: a live write must never mutate an unbuilt (deferred) exact index.
+        try ensureExactNodePropertyIndexBuilt(self, mg);
 
         const rec = try mg.engine.getNode(node_id) orelse return error.NodeNotFound;
         const shard = mg.shardEngineForNode(node_id);
@@ -3822,7 +5002,35 @@ pub const StorageAdapter = struct {
     // ------------------------------------------------------------------
 
     /// Create an edge between two nodes. Returns the edge ID.
+    ///
+    /// LEGACY surface (public_id = 0): the engine writes no inline public id,
+    /// so the edge belongs to the property-fallback class. Kept for
+    /// engine-level tests and the orphan-injection fixtures
+    /// (tests/test_edge_durability_churn_repro.zig); geode's create paths go
+    /// through `createEdgeWithPublicId` (GAP-ENT-0024).
     pub fn createEdge(self: *StorageAdapter, graph_name: []const u8, from_id: u64, to_id: u64, label: []const u8) !u64 {
+        return self.createEdgeInternal(graph_name, from_id, to_id, label, 0);
+    }
+
+    /// GAP-ENT-0024: create an edge carrying the geode-minted 64-bit PUBLIC id
+    /// INLINE in the durable adjacency records (graph-storage v0.2.24 v2
+    /// blocks) — the edge needs NO `__geode_internal_edge_id` property page.
+    ///
+    /// `public_id == 0` is REJECTED loudly (release-review checklist:
+    /// adapter-side id==0 guard). 0 is the engine's reserved "no inline id"
+    /// sentinel: silently passing it would degrade the edge to the legacy
+    /// fallback class WITHOUT the property being written — the edge would have
+    /// no durable public id anywhere (silent data loss on restart). Geode
+    /// mints nonzero time-based ids, so a 0 here is always a caller bug.
+    pub fn createEdgeWithPublicId(self: *StorageAdapter, graph_name: []const u8, from_id: u64, to_id: u64, label: []const u8, public_id: u64) !u64 {
+        if (public_id == 0) {
+            log.err("createEdgeWithPublicId called with reserved public_id=0 on graph '{s}' — refusing (edge would lose its durable public id)", .{graph_name});
+            return error.InvalidEdgePublicId;
+        }
+        return self.createEdgeInternal(graph_name, from_id, to_id, label, public_id);
+    }
+
+    fn createEdgeInternal(self: *StorageAdapter, graph_name: []const u8, from_id: u64, to_id: u64, label: []const u8, public_id: u64) !u64 {
         // OTel Task 12: record write_edge op duration + outcome.
         const _om12e = @import("otel_metrics");
         const _t0_12e = @import("otel").internal.clock.unixNanoNow();
@@ -3862,7 +5070,15 @@ pub const StorageAdapter = struct {
             const stmt_txn = currentStatementTxnForGraph(graph_name);
             if (stmt_txn) |s| {
                 if (shardLocalTxnForNode(s.txn_id, from_id)) |local| {
-                    const _edge_id = try mg.shardEngineForNode(from_id).addEdgeTxn(from_id, to_id, rel_type, local);
+                    // GAP-ENT-0024: the public-id-carrying path uses the
+                    // CO-LOCATED txn add (the id rides both durable adjacency
+                    // records; strictly fewer pages than addEdgeTxn's two-node
+                    // write and no `to`-record read). The legacy public_id==0
+                    // surface keeps the historical addEdgeTxn byte-for-byte.
+                    const _edge_id = if (public_id != 0)
+                        try mg.shardEngineForNode(from_id).addEdgeColocatedTxnWithPublicId(from_id, to_id, rel_type, local, public_id)
+                    else
+                        try mg.shardEngineForNode(from_id).addEdgeTxn(from_id, to_id, rel_type, local);
                     _ok_12e = true;
                     // OTel Task 13: graph data model mutation counter (fast path).
                     _om12e.recordEdgeMutation(.create, graph_name, .success);
@@ -3870,7 +5086,13 @@ pub const StorageAdapter = struct {
                 }
             }
         }
-        const _edge_id2 = try mg.engine.addEdge(from_id, to_id, rel_type);
+        // GAP-ENT-0024: auto-commit — ShardedGraphEngine.addEdge already
+        // routes to the co-located add on shard(from); the WithPublicId
+        // variant is the same single-shard WAL txn carrying the inline id.
+        const _edge_id2 = if (public_id != 0)
+            try mg.engine.addEdgeColocatedWithPublicId(from_id, to_id, rel_type, public_id)
+        else
+            try mg.engine.addEdge(from_id, to_id, rel_type);
         _ok_12e = true;
         // OTel Task 13: graph data model mutation counter.
         _om12e.recordEdgeMutation(.create, graph_name, .success);
@@ -3995,6 +5217,8 @@ pub const StorageAdapter = struct {
             defer self.mutex.unlock(std.Io.Threaded.global_single_threaded.io());
             break :blk try self.requireExistingGraphLocked(graph_name);
         };
+        // H4: a live write must never mutate an unbuilt (deferred) exact index.
+        try ensureExactNodePropertyIndexBuilt(self, mg);
         var rec = try mg.engine.getNode(node_id) orelse return error.NodeNotFound;
         const node_shard = mg.shardEngineForNode(node_id);
         const label_ids = try node_shard.label_store.getLabels(rec.label_head, self.allocator);
@@ -4061,6 +5285,8 @@ pub const StorageAdapter = struct {
             defer self.mutex.unlock(std.Io.Threaded.global_single_threaded.io());
             break :blk try self.requireExistingGraphLocked(graph_name);
         };
+        // H4: a live write must never mutate an unbuilt (deferred) exact index.
+        try ensureExactNodePropertyIndexBuilt(self, mg);
         var rec = try mg.engine.getNode(node_id) orelse return error.NodeNotFound;
         const node_shard = mg.shardEngineForNode(node_id);
         const label_ids = try node_shard.label_store.getLabels(rec.label_head, self.allocator);
@@ -4124,6 +5350,8 @@ pub const StorageAdapter = struct {
             defer self.mutex.unlock(std.Io.Threaded.global_single_threaded.io());
             break :blk try self.requireExistingGraphLocked(graph_name);
         };
+        // H4: a live write must never mutate an unbuilt (deferred) exact index.
+        try ensureExactNodePropertyIndexBuilt(self, mg);
         var rec = try mg.engine.getNode(node_id) orelse return error.NodeNotFound;
         const node_shard = mg.shardEngineForNode(node_id);
         const label_ids = try node_shard.label_store.getLabels(rec.label_head, self.allocator);
@@ -4195,6 +5423,32 @@ pub const StorageAdapter = struct {
         return _prop;
     }
 
+    /// Get a node property directly from its prop_head (already known from a
+    /// prior scanAllNodes), skipping the per-node getNode random read.
+    /// slot_id routes to the owning shard (same as getNodeProperty); prop_head
+    /// skips the getNode fetch, saving one random read per node.
+    pub fn getNodePropertyByHead(self: *StorageAdapter, graph_name: []const u8, slot_id: u64, prop_head: u64, key: []const u8, allocator: Allocator) !?gs.PropertyValue {
+        const mg = blk: {
+            self.mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
+            defer self.mutex.unlock(std.Io.Threaded.global_single_threaded.io());
+            break :blk try self.requireExistingGraphLocked(graph_name);
+        };
+        if (prop_head == 0) return null;
+        // Cold-open H1: read the chain WITHOUT triggering the engine's full
+        // derived property-chain index build (ensureDerivedHydrated). loop1 only
+        // ever looks up the internal-id key which is always present, so the
+        // derived index gives no benefit; getPropertyNoDerived walks the chain
+        // directly and is byte-identical to getProperty for present keys.
+        return try mg.shardEngineForNode(slot_id).getPropertyNoDerived(prop_head, key, allocator);
+    }
+
+    /// Return the shard index for a node slot. Mirrors shardOfNode(slot_id)
+    /// used internally so callers can sort by (shard, prop_head) without
+    /// importing graph_storage directly.
+    pub fn shardOfSlot(_: *StorageAdapter, slot: u64) usize {
+        return gs.shard_count.shardOfNode(slot);
+    }
+
     /// Find all node IDs with the given label in a graph.
     /// Filters out deleted nodes whose slot IDs are still present in the
     /// label index (the engine's deleteNode sets NODE_FLAG_DELETED but does
@@ -4209,7 +5463,27 @@ pub const StorageAdapter = struct {
         return try ctx.mg.storage().scanLabelIter(ctx.label_id, allocator);
     }
 
-    // CANARY: REQ=REQ-QUIC-HC-137; FEATURE="High-Concurrency Label Scans"; ASPECT=ShardLockedLabelCount; STATUS=TESTED; TEST=tests/test_gap0814_union_parallelism.zig; OWNER=storage; UPDATED=2026-05-28
+    // CANARY: REQ=REQ-QUIC-HC-137; FEATURE="High-Concurrency Label Scans"; ASPECT=ShardLockedLabelCount; STATUS=TESTED; TEST=tests/test_gap0814_union_parallelism.zig; OWNER=storage; UPDATED=2026-07-05
+    //
+    // ENGINE-INTERNAL / ESTIMATE USE ONLY — NEVER a user-facing count.
+    //
+    // This sums the storage engine's per-shard `label_index` postings. Two
+    // properties make that unfit to serve a user count (2026-07-05 live
+    // regression at 14.27M — silent `count(n:L) = 0` after a reopen):
+    //   1. Postings retain DELETED slots (engine deleteNode sets
+    //      NODE_FLAG_DELETED without removing the posting) — over-count.
+    //   2. The index is a DEFERRED derived structure (graph-storage Phase A):
+    //      empty until materialized, and the in-memory streaming hydration
+    //      never fills it — under-count/zero after a catalog-mediated open.
+    // User-facing counts must read the authoritative in-memory maintained
+    // refcount: `GraphStore.countNodesByLabel` (ensureGraphHydrated-guarded).
+    //
+    // The `ensureDerivedHydrated` guard below upholds the graph-storage
+    // Phase A contract ("MUST be called ... before the index is read") so any
+    // remaining engine-internal caller at least reads a MATERIALIZED index
+    // (counter-gated snapshot load on clean restart, rebuild on crash) instead
+    // of the deferred-empty one. Guard runs BEFORE the shard lock, the same
+    // order `appendLiveNodesForLabelShard` establishes via `scanLabelIter`.
     pub fn countNodesByLabel(self: *StorageAdapter, graph_name: []const u8, label: []const u8) !u64 {
         const ctx = try self.resolveLabelScanContext(graph_name, label) orelse return 0;
         const mg = ctx.mg;
@@ -4217,6 +5491,7 @@ pub const StorageAdapter = struct {
 
         var total: u64 = 0;
         for (mg.engine.shards, 0..) |shard, shard_idx| {
+            try shard.ensureDerivedHydrated();
             mg.shard_locks[shard_idx].lockSharedUncancelable(io);
             total += shard.label_index.count(ctx.label_id);
             mg.shard_locks[shard_idx].unlockShared(io);
@@ -4441,6 +5716,8 @@ pub const StorageAdapter = struct {
             defer self.mutex.unlock(std.Io.Threaded.global_single_threaded.io());
             break :blk try self.requireExistingGraphLocked(graph_name);
         };
+        // H4: build the exact index on first access if it was deferred at open.
+        try ensureExactNodePropertyIndexBuilt(self, mg);
         const label_id = mg.label_dict.getId(label) orelse return try allocator.alloc(u64, 0);
 
         const storage_value = try toStorageProperty(allocator, value);
@@ -4481,12 +5758,43 @@ pub const StorageAdapter = struct {
         const mg = try self.getOrCreateGraph(graph_name);
         const label_id = mg.label_dict.getId(label) orelse try mg.label_dict.getOrCreate(label);
 
-        // Per-shard registration + build-from-live-scan. The engine call
-        // MUTATES the shard (registers the pair, rebuilds the tree, marks it
-        // dirty for the next checkpoint), so take that shard's adapter EXCLUSIVE
-        // lock — the same writer discipline every other per-shard adapter write
-        // uses (e.g. createNode/mergeNode).
+        // Per-shard registration + build-from-live-scan. The engine call MUTATES
+        // the shard (registers the pair, rebuilds the tree via a live scan, marks
+        // it dirty for the next checkpoint).
+        //
+        // GAP-0064 INTEGRATION (ordered double-build race — the analog of the
+        // exact-index CRITICAL): the FULL checkpoint's OWN ordered rebuild lives
+        // INSIDE gs (`engine_persist.checkpointEx` → `rebuildOrderedIndex`, gated
+        // only on `ordered_property_index.count() > 0`) and runs under `mg.rwlock`
+        // EXCLUSIVE with NO shard lock. This background build (and the explicit
+        // `CREATE INDEX` path) previously took ONLY `shard_locks[i]`, so the two
+        // `clearTrees()+rescan` paths mutated the SAME per-shard ordered tree under
+        // DISJOINT locks → double-build / torn B-tree (identical hazard to the
+        // exact-index checkpoint-vs-worker race). Fix: take `mg.rwlock` SHARED (the
+        // same discipline `createNode`/`mergeNode` use) so the checkpoint's
+        // EXCLUSIVE hold mutually excludes this rebuild; the per-shard
+        // `shard_locks[i]` still serializes it against the online write-path
+        // ordered-maintenance and any second concurrent builder. Held+released PER
+        // SHARD (not across the whole 16-shard scan) so a waiting checkpoint /
+        // LIGHT-checkpoint slips in at a shard boundary — bounded hold, no whole-
+        // graph read stall, and the rebuild is idempotent so an interleaved
+        // checkpoint refresh is harmless.
+        //
+        // SHUTDOWN-CANCEL (integration with the CRITICAL shutdown-stall fix): the
+        // ORDER-BY worker REUSES `exact_persist_threads`, and this O(graph)
+        // 16-shard rebuild is otherwise uncancellable — a SIGTERM mid-build would
+        // block `deinit`'s join for the full (multi-minute at 14.27M) build,
+        // re-introducing exactly the stall the CRITICAL closed for the exact index.
+        // Poll `exact_build_shutdown_cancel` at each shard boundary and abort
+        // promptly: the partial registration leaves `isOrderedIndexRegistered`
+        // false (needs ALL shards), so the next reopen's first ORDER BY simply
+        // re-triggers a clean build. Nothing partial is ever served.
         for (mg.engine.shards, 0..) |shard, i| {
+            if (self.exact_build_shutdown_cancel.load(.acquire))
+                return error.OrderedBuildCancelledByShutdown;
+            exclusiveWaitingBackoff(mg); // yield to a pending exclusive (checkpoint / CREATE INDEX).
+            mg.rwlock.lockSharedUncancelable(io);
+            defer mg.rwlock.unlockShared(io);
             mg.shard_locks[i].lockUncancelable(io);
             defer mg.shard_locks[i].unlock(io);
             try shard.createOrderedIndex(label_id, key);
@@ -4663,6 +5971,170 @@ pub const StorageAdapter = struct {
         return true;
     }
 
+    // ========================================================================
+    // GAP-0064 FIX C: AUTO-BUILD the value-ordered index on a FRESH store.
+    //
+    // The value-ordered index (`createOrderedIndex` / `orderedScan`, GAP-0050)
+    // is only ever registered by an explicit `CREATE INDEX`, so a from-dump /
+    // freshly-ingested store has NONE and `ORDER BY <prop> LIMIT k` falls back
+    // to the full-label top-K heap (the ~6.7 s-at-1M / times-out-at-14.27M path)
+    // even though the planner `orderedScanFastPath` is fully wired.
+    //
+    // FIX C makes it materialize WITHOUT a manual CREATE INDEX: the planner, on
+    // a shape-eligible ORDER-BY-<prop>-LIMIT query whose ordered index is not yet
+    // registered, calls `spawnOrderedIndexBuildAsync`, which builds it exactly
+    // once per (graph,label,key) on a BACKGROUND, uncancellable, deduped worker
+    // (register + rebuild via the same `createOrderedIndex` CREATE INDEX uses,
+    // then a best-effort full checkpoint to persist it). The triggering query is
+    // served from the heap (correct, slower); every later ORDER BY on that prop —
+    // and the NEXT reopen (gs reloads the persisted snapshot on the Path-B
+    // contract) — is index-served. NOT a per-query cost: a re-trigger while a
+    // build is in flight, or after the index is registered, is a no-op.
+    //
+    // SCOPE NOTE: the build is triggered lazily by the FIRST ORDER BY of each
+    // distinct (label,key), so only properties that are actually ordered-by pay
+    // the (one-time) build — never every property. This is the bounded variant
+    // (a graph with N distinct ORDER-BY keys builds N ordered trees, one-time);
+    // auto-building an ordered tree for EVERY indexed property at open would be
+    // N_keys * O(nodes) B-tree inserts, prohibitive at 14.27M.
+    // ========================================================================
+
+    /// GAP-0064 FIX C core: register + build the value-ordered index for
+    /// `(graph,label,key)` SYNCHRONOUSLY and uncancellably (idempotent). No-op
+    /// when the index is already registered. Reuses `createOrderedIndex` (the
+    /// exact path `CREATE INDEX` drives), so registration is global (all shards),
+    /// the trees are rebuilt from a live scan, and gs marks them dirty for the
+    /// next full-checkpoint persist. Bumps the FIX-C build counter on a real build.
+    pub fn ensureOrderedIndexForKey(
+        self: *StorageAdapter,
+        graph_name: []const u8,
+        label: []const u8,
+        key: []const u8,
+    ) !void {
+        if (self.isOrderedIndexRegistered(graph_name, label, key)) return;
+        try self.createOrderedIndex(graph_name, label, key);
+        _ = g_ordered_index_builds.fetchAdd(1, .monotonic);
+    }
+
+    /// TEST-ONLY alias for `ensureOrderedIndexForKey` — deterministic (no thread)
+    /// synchronous auto-build, exercising the SAME register+rebuild core the
+    /// background worker runs, so a reopen test can assert persist+reload.
+    pub fn buildOrderedIndexSyncForTesting(
+        self: *StorageAdapter,
+        graph_name: []const u8,
+        label: []const u8,
+        key: []const u8,
+    ) !void {
+        try self.ensureOrderedIndexForKey(graph_name, label, key);
+    }
+
+    /// GAP-0064 FIX C: kick off a ONE-TIME, uncancellable, deduped BACKGROUND
+    /// build of the value-ordered index for `(graph,label,key)`. Best-effort and
+    /// non-blocking: the caller (the planner) returns its heap result immediately.
+    ///
+    /// Dedup: no-op when the index is already registered, or when a build for the
+    /// SAME (graph,label,key) is already in flight (the planner re-triggers on
+    /// every matching ORDER BY until the index shows up). The in-flight set +
+    /// thread lifecycle reuse the H4 persist-thread machinery (joined by deinit;
+    /// `exact_persist_shutdown` refuses new spawns once teardown begins).
+    pub fn spawnOrderedIndexBuildAsync(
+        self: *StorageAdapter,
+        graph_name: []const u8,
+        label: []const u8,
+        key: []const u8,
+    ) void {
+        // GAP-0064 FIX C (TEST-ONLY): allow suppression so heap-fallback tests
+        // for non-indexed props stay deterministic.
+        if (orderedAutobuildDisabled()) return;
+        // Fast pre-check OUTSIDE the lock: already registered -> nothing to do.
+        if (self.isOrderedIndexRegistered(graph_name, label, key)) return;
+
+        const io = std.Io.Threaded.global_single_threaded.io();
+        self.exact_persist_mutex.lockUncancelable(io);
+        defer self.exact_persist_mutex.unlock(io);
+        if (self.exact_persist_shutdown) return;
+
+        // Dedup key "graph\x00label\x00key" (NUL-joined; graph/label/key never
+        // contain NUL, so this is an unambiguous composite key).
+        const dedup_key = std.fmt.allocPrint(self.allocator, "{s}\x00{s}\x00{s}", .{ graph_name, label, key }) catch return;
+        var free_dedup_key = true;
+        defer if (free_dedup_key) self.allocator.free(dedup_key);
+        if (self.ordered_build_inflight.contains(dedup_key)) return; // already building
+
+        // Owned copies for the worker thread (freed by the worker).
+        const graph_copy = self.allocator.dupe(u8, graph_name) catch return;
+        var free_graph = true;
+        defer if (free_graph) self.allocator.free(graph_copy);
+        const label_copy = self.allocator.dupe(u8, label) catch return;
+        var free_label = true;
+        defer if (free_label) self.allocator.free(label_copy);
+        const key_copy = self.allocator.dupe(u8, key) catch return;
+        var free_key = true;
+        defer if (free_key) self.allocator.free(key_copy);
+
+        // Reserve thread + dedup slots BEFORE spawning so a post-spawn OOM can
+        // never leave an unjoinable thread or a stuck dedup entry.
+        self.exact_persist_threads.ensureUnusedCapacity(self.allocator, 1) catch return;
+        self.ordered_build_inflight.put(self.allocator, dedup_key, {}) catch return;
+        var remove_dedup = true;
+        defer if (remove_dedup) {
+            if (self.ordered_build_inflight.fetchRemove(dedup_key)) |kv| self.allocator.free(kv.key);
+        };
+
+        const t = std.Thread.spawn(.{}, orderedIndexBuildWorker, .{ self, graph_copy, label_copy, key_copy }) catch return;
+        self.exact_persist_threads.appendAssumeCapacity(t);
+        // Success: the worker now owns the three copies AND the dedup entry.
+        free_dedup_key = false;
+        free_graph = false;
+        free_label = false;
+        free_key = false;
+        remove_dedup = false;
+    }
+
+    /// GAP-0064 FIX C worker: build the ordered index (uncancellable) then persist
+    /// it with a best-effort full checkpoint, and clear the in-flight dedup entry.
+    /// Owns + frees `graph`, `label`, `key`. Best-effort throughout: any failure
+    /// leaves the index correct-in-memory (or simply un-built, to be re-triggered
+    /// by the next ORDER BY).
+    fn orderedIndexBuildWorker(self: *StorageAdapter, graph: []u8, label: []u8, key: []u8) void {
+        defer {
+            // Clear the dedup entry (free its owned key) under the persist mutex.
+            const io = std.Io.Threaded.global_single_threaded.io();
+            self.exact_persist_mutex.lockUncancelable(io);
+            const dedup_key = std.fmt.allocPrint(self.allocator, "{s}\x00{s}\x00{s}", .{ graph, label, key }) catch null;
+            if (dedup_key) |dk| {
+                if (self.ordered_build_inflight.fetchRemove(dk)) |kv| self.allocator.free(kv.key);
+                self.allocator.free(dk);
+            }
+            self.exact_persist_mutex.unlock(io);
+            self.allocator.free(graph);
+            self.allocator.free(label);
+            self.allocator.free(key);
+            _ = g_ordered_build_completions.fetchAdd(1, .monotonic);
+        }
+
+        self.ensureOrderedIndexForKey(graph, label, key) catch |err| {
+            slog.warn("ordered-index auto-build failed; ORDER BY stays heap-served for this key", &.{
+                SAttr.string("graph", graph),
+                SAttr.string("label", label),
+                SAttr.string("key", key),
+                SAttr.string("error", @errorName(err)),
+            });
+            return;
+        };
+        // Persist the freshly-registered ordered index so a reopen RELOADS it
+        // (gs saves the ordered snapshot on the FULL-checkpoint path only; the
+        // periodic LIGHT checkpoint does not). Best-effort: a clean shutdown's
+        // close() persists it regardless, and a crash before then simply
+        // re-triggers the build on the next ORDER BY.
+        self.checkpointGraph(graph) catch |err| {
+            slog.warn("ordered-index auto-build: persist checkpoint failed (index stays memory-only until the next full checkpoint / close)", &.{
+                SAttr.string("graph", graph),
+                SAttr.string("error", @errorName(err)),
+            });
+        };
+    }
+
     /// Test-only: force a full rebuild of the exact node-property index for
     /// `graph_name`, exactly as restart recovery does (clear + rescan every
     /// engine shard). Exposed so `test-parallel-index-rebuild` can drive the
@@ -4677,7 +6149,11 @@ pub const StorageAdapter = struct {
         };
         acquireWholeGraphExclusive(mg);
         defer releaseWholeGraphExclusive(mg);
-        try rebuildExactNodePropertyIndex(mg);
+        // Test-only forced rebuild: never cancellable (no read scope semantics).
+        try rebuildExactNodePropertyIndex(mg, .{});
+        // H4: mark the index built so a deferred graph doesn't redundantly rebuild
+        // on the next ensure (mirrors ensureExactNodePropertyIndexBuilt's latch).
+        mg.exact_index_built.store(true, .release);
     }
 
     /// Test-only: read the coverage counter from the most recent
@@ -5018,17 +6494,247 @@ pub const StorageAdapter = struct {
         property_key: []const u8,
         value: graph_store.PropertyValue,
     ) !usize {
+        // This probes the exact node-property index by value hash exactly like
+        // getCandidateNodesByLabelAndProperty — count it as an exact-index lookup
+        // so probe-counting callers/tests (GAP-ENT-0019) see the seek fire.
+        _ = g_exact_node_property_lookup_count.fetchAdd(1, .monotonic);
         const mg = blk: {
             self.mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
             defer self.mutex.unlock(std.Io.Threaded.global_single_threaded.io());
             break :blk try self.requireExistingGraphLocked(graph_name);
         };
+        // H4: build the exact index on first access if it was deferred at open.
+        try ensureExactNodePropertyIndexBuilt(self, mg);
         const label_id = mg.label_dict.getId(label) orelse return 0;
 
         const storage_value = try toStorageProperty(self.allocator, value);
         defer freeTemporaryStorageProperty(self.allocator, storage_value);
         const value_hash = try hashStorageProperty(self.allocator, storage_value);
         return (try mg.exact_node_property_index.postingLenIfPresent(label_id, property_key, value_hash)) orelse 0;
+    }
+
+    /// GAP-ENT-0043 T1: one distinct-value posting of the exact node-property
+    /// index for a given `(label, property_key)` pair. `count` is the posting
+    /// length (== the number of live nodes carrying that value — the index is
+    /// maintained on every set/update/delete); `representative_slot` is one
+    /// member of the posting, used by the index-served aggregate fast path to
+    /// recover the actual property VALUE with a single engine-direct
+    /// single-property read (the index keys by value HASH, not value bytes).
+    pub const PropertyPostingSummary = struct {
+        value_hash: u64,
+        representative_slot: u64,
+        count: u64,
+    };
+
+    /// GAP-ENT-0043 T1: collect the distinct-value posting summaries for
+    /// `(label, property_key)` from the IN-MEMORY MAINTAINED exact
+    /// node-property index — O(distinct values) output, ZERO node
+    /// materialization, no engine reads.
+    ///
+    /// Soundness gates (the source-split lesson — never read a deferred-empty
+    /// structure):
+    ///   * `ensureExactNodePropertyIndexBuilt` runs FIRST, so an H4-deferred
+    ///     index is built from the durable pages before the walk (same latch
+    ///     every exact-index seek uses);
+    ///   * an unknown label (never interned) returns an empty slice — there
+    ///     are no nodes with that label, so there are no postings;
+    ///   * callers MUST additionally gate on `graph_store.shouldIndexProperty`
+    ///     (index completeness per key in lean mode) — this walk reports what
+    ///     the index CONTAINS and cannot know whether the key was skipped.
+    ///
+    /// The walk takes each of the 64 shard mutexes once (stable order), so it
+    /// observes a per-shard-consistent snapshot; concurrent writers block only
+    /// for the duration of one shard's iteration.
+    pub fn collectPropertyPostingSummaries(
+        self: *StorageAdapter,
+        graph_name: []const u8,
+        label: []const u8,
+        property_key: []const u8,
+        allocator: Allocator,
+    ) ![]PropertyPostingSummary {
+        const mg = blk: {
+            self.mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
+            defer self.mutex.unlock(std.Io.Threaded.global_single_threaded.io());
+            break :blk try self.requireExistingGraphLocked(graph_name);
+        };
+        // H4: build the exact index on first access if it was deferred at open.
+        try ensureExactNodePropertyIndexBuilt(self, mg);
+        const label_id = mg.label_dict.getId(label) orelse
+            return try allocator.alloc(PropertyPostingSummary, 0);
+
+        var out = std.ArrayList(PropertyPostingSummary).empty;
+        errdefer out.deinit(allocator);
+
+        const io = std.Io.Threaded.global_single_threaded.io();
+        const expected_key_len = 4 + 4 + property_key.len + 8;
+        for (&mg.exact_node_property_index.shards) |*shard| {
+            shard.mutex.lockUncancelable(io);
+            defer shard.mutex.unlock(io);
+            var it = shard.postings.iterator();
+            while (it.next()) |entry| {
+                // Encoded key layout (encodeKeyInto):
+                // [label_id: u32][key_len: u32][key bytes][value_hash: u64]
+                const key = entry.key_ptr.*;
+                if (key.len != expected_key_len) continue;
+                if (std.mem.readInt(u32, key[0..4], .little) != label_id) continue;
+                if (std.mem.readInt(u32, key[4..8], .little) != property_key.len) continue;
+                if (!std.mem.eql(u8, key[8 .. 8 + property_key.len], property_key)) continue;
+                const value_hash = std.mem.readInt(u64, key[8 + property_key.len ..][0..8], .little);
+                const posting = entry.value_ptr.items;
+                if (posting.len == 0) continue; // empty postings are removed; defensive
+                try out.append(allocator, .{
+                    .value_hash = value_hash,
+                    .representative_slot = posting[0],
+                    .count = posting.len,
+                });
+            }
+        }
+        return out.toOwnedSlice(allocator);
+    }
+
+    /// TEST-ONLY (Phase E2 gate): one exact-index posting — its encoded key
+    /// `[label_id][key_len][key][value_hash]` and the SORTED node ids it holds.
+    pub const ExactIndexPostingDump = struct {
+        key: []u8,
+        nodes: []u64,
+    };
+
+    /// TEST-ONLY (Phase E2 gate): dump EVERY posting of the in-memory exact index
+    /// (all shards), each with its sorted node list, sorted by encoded key. Two
+    /// dumps are EQUAL iff the indexes are key-for-key AND count-for-count (the
+    /// sorted node lists, whose lengths are the posting counts) identical — the
+    /// exact "reconcile == full rebuild" release-gate comparison. Does NOT build a
+    /// deferred index (reads whatever is resident) so a reconciled vs. a
+    /// force-rebuilt index can be compared without a rebuild side effect. Caller
+    /// frees each entry's `key` + `nodes` and the outer slice.
+    pub fn dumpExactIndexPostingsForTesting(self: *StorageAdapter, graph_name: []const u8, allocator: Allocator) ![]ExactIndexPostingDump {
+        const mg = blk: {
+            self.mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
+            defer self.mutex.unlock(std.Io.Threaded.global_single_threaded.io());
+            break :blk try self.requireExistingGraphLocked(graph_name);
+        };
+
+        var out = std.ArrayList(ExactIndexPostingDump).empty;
+        errdefer {
+            for (out.items) |e| {
+                allocator.free(e.key);
+                allocator.free(e.nodes);
+            }
+            out.deinit(allocator);
+        }
+
+        const io = std.Io.Threaded.global_single_threaded.io();
+        for (&mg.exact_node_property_index.shards) |*shard| {
+            shard.mutex.lockUncancelable(io);
+            defer shard.mutex.unlock(io);
+            var it = shard.postings.iterator();
+            while (it.next()) |entry| {
+                const posting = entry.value_ptr.items;
+                if (posting.len == 0) continue;
+                const key_copy = try allocator.dupe(u8, entry.key_ptr.*);
+                errdefer allocator.free(key_copy);
+                const nodes_copy = try allocator.dupe(u64, posting);
+                std.mem.sort(u64, nodes_copy, {}, std.sort.asc(u64));
+                try out.append(allocator, .{ .key = key_copy, .nodes = nodes_copy });
+            }
+        }
+
+        const items = try out.toOwnedSlice(allocator);
+        std.mem.sort(ExactIndexPostingDump, items, {}, struct {
+            fn lt(_: void, a: ExactIndexPostingDump, b: ExactIndexPostingDump) bool {
+                return std.mem.lessThan(u8, a.key, b.key);
+            }
+        }.lt);
+        return items;
+    }
+
+    /// TEST-ONLY (Phase E1): byte size of the persisted `prop_rev.idx`, or null
+    /// if absent. Used to prove the reverse map is BOUNDED — it stores the 8-byte
+    /// value_hash, not the full value, so its size is independent of value length.
+    pub fn reverseMapFileSizeForTesting(self: *StorageAdapter, graph_name: []const u8) ?u64 {
+        const mg = blk: {
+            self.mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
+            defer self.mutex.unlock(std.Io.Threaded.global_single_threaded.io());
+            break :blk self.requireExistingGraphLocked(graph_name) catch return null;
+        };
+        const dir_path = graphDirPath(self.allocator, self.data_dir, mg.uuid) catch return null;
+        defer self.allocator.free(dir_path);
+        const rev_path = std.fmt.allocPrint(self.allocator, "{s}/{s}", .{ dir_path, prop_rev_index_file_name }) catch return null;
+        defer self.allocator.free(rev_path);
+        const stat = std.Io.Dir.cwd().statFile(std.Io.Threaded.global_single_threaded.io(), rev_path, .{}) catch return null;
+        return stat.size;
+    }
+
+    /// TEST-ONLY (Phase E1): load the persisted `prop_rev.idx` reverse map and
+    /// return it as a flat, key-sorted list of (node_id, encoded_key) pairs, so a
+    /// round-trip test can assert it equals the inversion of the forward index.
+    /// `expected_epoch`/`expected_covered` must be the stamp the file was written
+    /// with (a mismatch → null, proving the load gate). Caller frees each `key`
+    /// and the slice.
+    pub const ReverseMapPairDump = struct { node_id: u64, key: []u8 };
+
+    pub fn dumpReverseMapForTesting(
+        self: *StorageAdapter,
+        graph_name: []const u8,
+        expected_epoch: u64,
+        expected_covered: u64,
+        allocator: Allocator,
+    ) !?[]ReverseMapPairDump {
+        const mg = blk: {
+            self.mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
+            defer self.mutex.unlock(std.Io.Threaded.global_single_threaded.io());
+            break :blk try self.requireExistingGraphLocked(graph_name);
+        };
+        const dir_path = try graphDirPath(self.allocator, self.data_dir, mg.uuid);
+        defer self.allocator.free(dir_path);
+
+        var rev = NodePropertyReverseMap.init(allocator);
+        defer rev.deinit();
+        if (rev.loadFromFile(dir_path, expected_epoch, expected_covered) != .loaded) return null;
+
+        var out = std.ArrayList(ReverseMapPairDump).empty;
+        errdefer {
+            for (out.items) |e| allocator.free(e.key);
+            out.deinit(allocator);
+        }
+        var it = rev.map.iterator();
+        while (it.next()) |entry| {
+            for (entry.value_ptr.items) |key| {
+                try out.append(allocator, .{ .node_id = entry.key_ptr.*, .key = try allocator.dupe(u8, key) });
+            }
+        }
+        const items = try out.toOwnedSlice(allocator);
+        std.mem.sort(ReverseMapPairDump, items, {}, struct {
+            fn lt(_: void, a: ReverseMapPairDump, b: ReverseMapPairDump) bool {
+                if (a.node_id != b.node_id) return a.node_id < b.node_id;
+                return std.mem.lessThan(u8, a.key, b.key);
+            }
+        }.lt);
+        return items;
+    }
+
+    /// TEST-ONLY (Phase E2): the aggregate (epoch, covered_lsn, pre_recovery
+    /// frontier) the reconcile gate compares. Lets a test assert the crash-tail
+    /// state it constructed actually satisfies (or fails) the single-recovery
+    /// gate before relying on the reconcile/rebuild outcome.
+    pub const ReconcileGateState = struct { epoch: u64, covered_lsn: u64, frontier: u64, pre_recovery: u64 };
+
+    pub fn reconcileGateStateForTesting(self: *StorageAdapter, graph_name: []const u8) ?ReconcileGateState {
+        const mg = blk: {
+            self.mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
+            defer self.mutex.unlock(std.Io.Threaded.global_single_threaded.io());
+            break :blk self.requireExistingGraphLocked(graph_name) catch return null;
+        };
+        const dir_path = graphDirPath(self.allocator, self.data_dir, mg.uuid) catch return null;
+        defer self.allocator.free(dir_path);
+        const stamp = readExactIndexStamp(self.allocator, dir_path) orelse
+            return .{ .epoch = mgCheckpointEpoch(mg), .covered_lsn = 0, .frontier = mgDurableFrontierLsn(mg), .pre_recovery = mgPreRecoveryFrontierLsn(mg) };
+        return .{
+            .epoch = stamp.epoch,
+            .covered_lsn = stamp.covered_lsn,
+            .frontier = mgDurableFrontierLsn(mg),
+            .pre_recovery = mgPreRecoveryFrontierLsn(mg),
+        };
     }
 
     // ------------------------------------------------------------------
@@ -5068,7 +6774,7 @@ pub const StorageAdapter = struct {
         if (currentStatementTxnForGraph(graph_name)) |s| {
             // R12: manual setEdgeProperty using Txn variants, routed to the
             // from_id's shard. Mirrors engine_edge_props.setEdgeProperty 1:1.
-            const edge_entry = from_shard.edge_index.get(edge_id) orelse return error.EdgeNotFound;
+            const edge_entry = (try from_shard.edge_index.get(edge_id)) orelse return error.EdgeNotFound;
             if (edge_entry.from != from_id or edge_entry.neighbor != to_id) return error.EdgeNotFound;
 
             const from_rec = (try from_shard.node_store.getNode(from_id)) orelse return error.NodeNotFound;
@@ -5080,8 +6786,17 @@ pub const StorageAdapter = struct {
             // error-policy: A — best-effort rollback on an already-failing path.
             errdefer if (own_txn) from_shard.abortTxn(local_txn) catch {};
 
-            const new_head_u64 = try from_shard.putPropertyTxn(@as(u64, found_prop_head), key, storage_val, local_txn);
-            const new_head: u32 = std.math.cast(u32, new_head_u64) orelse return error.Overflow;
+            // GAP-0060: edge prop_heads are now a full u64 in both the
+            // adjacency entry (WIDE v3/slab-v3 record) and the edge index, so
+            // edge property chains slab-pack exactly like node props. Gated on
+            // the SAME shard config flag as gs `engine_edge_props.setEdgeProperty`
+            // (edge_prop_slab_packing, default ON) — a slab head is only ever
+            // produced for a store whose adjacency can hold it. When off, keep
+            // the legacy one-page-per-edge writer (still a u64 head, hi=0).
+            const new_head: u64 = if (from_shard.config.edge_prop_slab_packing)
+                try from_shard.putPropertyTxn(found_prop_head, key, storage_val, local_txn)
+            else
+                try from_shard.putPropertyLegacyTxn(found_prop_head, key, storage_val, local_txn);
 
             if (new_head != found_prop_head) {
                 _ = try from_shard.adj_out.updateEdgePropHead(from_rec.out_head, edge_id, new_head);
@@ -5091,15 +6806,19 @@ pub const StorageAdapter = struct {
                 const to_rec = (try to_shard.node_store.getNode(to_id)) orelse return error.NodeNotFound;
                 _ = try to_shard.adj_in.updateEdgePropHead(to_rec.in_head, edge_id, new_head);
 
-                if (from_shard.edge_index.getPtr(edge_id)) |idx_entry| {
-                    idx_entry.prop_head = new_head;
-                }
+                // v0.2.26: copy-on-write API (getPtr removed — mmap base is
+                // immutable). Also set edge_index_dirty (the F1 blessed-stale
+                // lesson): this manual mirror mutates the index outside
+                // engine_edge_props.setEdgeProperty, so the restamp gate must
+                // see it dirty or a checkpoint would re-bless a stale snapshot.
+                try from_shard.edge_index.updatePropHead(edge_id, new_head);
+                from_shard.edge_index_dirty = true;
             }
 
             if (found_prop_head != 0 and found_prop_head != new_head) {
                 from_shard.property_index.removeChain(found_prop_head);
             }
-            try from_shard.refreshPropertyChainIndex(new_head_u64);
+            try from_shard.refreshPropertyChainIndex(new_head);
             if (own_txn) try from_shard.commitTxn(local_txn);
             return;
         }
@@ -5114,7 +6833,7 @@ pub const StorageAdapter = struct {
         // does not exist on from_shard, so the call raises NodeNotFound and
         // every inline `CREATE (a)-[:R]->(b) RETURN ...` (where the
         // persistEdgePublicId post-hook is the only setter) crashes.
-        const fb_edge_entry = from_shard.edge_index.get(edge_id) orelse return error.EdgeNotFound;
+        const fb_edge_entry = (try from_shard.edge_index.get(edge_id)) orelse return error.EdgeNotFound;
         if (fb_edge_entry.from != from_id or fb_edge_entry.neighbor != to_id) return error.EdgeNotFound;
 
         const fb_from_rec = (try from_shard.node_store.getNode(from_id)) orelse return error.NodeNotFound;
@@ -5124,8 +6843,12 @@ pub const StorageAdapter = struct {
         // error-policy: A — best-effort rollback on an already-failing path.
         errdefer from_shard.abortTxn(fb_local_txn) catch {};
 
-        const fb_new_head_u64 = try from_shard.putPropertyTxn(@as(u64, fb_found_prop_head), key, storage_val, fb_local_txn);
-        const fb_new_head: u32 = std.math.cast(u32, fb_new_head_u64) orelse return error.Overflow;
+        // GAP-0060: edge prop chains slab-pack (u64 head), gated on the shard
+        // config — see the txn branch above.
+        const fb_new_head: u64 = if (from_shard.config.edge_prop_slab_packing)
+            try from_shard.putPropertyTxn(fb_found_prop_head, key, storage_val, fb_local_txn)
+        else
+            try from_shard.putPropertyLegacyTxn(fb_found_prop_head, key, storage_val, fb_local_txn);
 
         if (fb_new_head != fb_found_prop_head) {
             _ = try from_shard.adj_out.updateEdgePropHead(fb_from_rec.out_head, edge_id, fb_new_head);
@@ -5133,15 +6856,15 @@ pub const StorageAdapter = struct {
             const fb_to_rec = (try fb_to_shard.node_store.getNode(to_id)) orelse return error.NodeNotFound;
             _ = try fb_to_shard.adj_in.updateEdgePropHead(fb_to_rec.in_head, edge_id, fb_new_head);
 
-            if (from_shard.edge_index.getPtr(edge_id)) |idx_entry| {
-                idx_entry.prop_head = fb_new_head;
-            }
+            // v0.2.26 copy-on-write + dirty flag (see the txn-path comment).
+            try from_shard.edge_index.updatePropHead(edge_id, fb_new_head);
+            from_shard.edge_index_dirty = true;
         }
 
         if (fb_found_prop_head != 0 and fb_found_prop_head != fb_new_head) {
             from_shard.property_index.removeChain(fb_found_prop_head);
         }
-        try from_shard.refreshPropertyChainIndex(fb_new_head_u64);
+        try from_shard.refreshPropertyChainIndex(fb_new_head);
         try from_shard.commitTxn(fb_local_txn);
     }
 
@@ -5184,11 +6907,11 @@ pub const StorageAdapter = struct {
         // Edges live on the source-node's shard (edge_id is shard-striped
         // by allocNode on the source shard).
         const from_shard = mg.shardEngineForNode(edge_id);
-        const edge_entry = from_shard.edge_index.get(edge_id) orelse return error.EdgeNotFound;
+        const edge_entry = (try from_shard.edge_index.get(edge_id)) orelse return error.EdgeNotFound;
         const from_id = edge_entry.from;
         const to_id = edge_entry.neighbor;
         const from_rec = (try from_shard.node_store.getNode(from_id)) orelse return error.NodeNotFound;
-        const orig_prop_head: u32 = edge_entry.prop_head;
+        const orig_prop_head: u64 = edge_entry.prop_head;
 
         // R8/R12 parity: one txn on from_shard for all N property writes.
         const stmt_txn = currentStatementTxnForGraph(graph_name);
@@ -5202,8 +6925,8 @@ pub const StorageAdapter = struct {
             from_shard.abortTxn(local_txn) catch {};
         };
 
-        var running_prop_head: u32 = orig_prop_head;
-        var last_new_head_u64: u64 = @as(u64, orig_prop_head);
+        var running_prop_head: u64 = orig_prop_head;
+        var last_new_head_u64: u64 = orig_prop_head;
         for (entries) |entry| {
             const storage_val: gs.PropertyValue = if (entry.value) |val|
                 try toStorageProperty(self.allocator, val)
@@ -5211,8 +6934,13 @@ pub const StorageAdapter = struct {
                 .null;
             defer if (entry.value != null) freeTemporaryStorageProperty(self.allocator, storage_val);
 
-            const new_head_u64 = try from_shard.putPropertyTxn(@as(u64, running_prop_head), entry.key, storage_val, local_txn);
-            running_prop_head = std.math.cast(u32, new_head_u64) orelse return error.Overflow;
+            // GAP-0060: edge prop chains slab-pack (u64 head), gated on the shard
+            // config — see setEdgeProperty.
+            const new_head_u64 = if (from_shard.config.edge_prop_slab_packing)
+                try from_shard.putPropertyTxn(running_prop_head, entry.key, storage_val, local_txn)
+            else
+                try from_shard.putPropertyLegacyTxn(running_prop_head, entry.key, storage_val, local_txn);
+            running_prop_head = new_head_u64;
             last_new_head_u64 = new_head_u64;
         }
 
@@ -5222,9 +6950,9 @@ pub const StorageAdapter = struct {
             const to_rec = (try to_shard.node_store.getNode(to_id)) orelse return error.NodeNotFound;
             _ = try to_shard.adj_in.updateEdgePropHead(to_rec.in_head, edge_id, running_prop_head);
 
-            if (from_shard.edge_index.getPtr(edge_id)) |idx_entry| {
-                idx_entry.prop_head = running_prop_head;
-            }
+            // v0.2.26 copy-on-write + dirty flag (see the txn-path comment).
+            try from_shard.edge_index.updatePropHead(edge_id, running_prop_head);
+            from_shard.edge_index_dirty = true;
         }
 
         if (orig_prop_head != 0 and orig_prop_head != running_prop_head) {
@@ -5265,7 +6993,8 @@ pub const StorageAdapter = struct {
         from_slot: u64,
         to_slot: u64,
         rel_type: u32,
-        prop_head: u32,
+        // GAP-0060: edge prop_head is a full u64 (may be a slab head, bit 63).
+        prop_head: u64,
         label: []u8,
     };
 
@@ -5285,7 +7014,7 @@ pub const StorageAdapter = struct {
         // shard (same addressing setEdgePropertiesBatch / getAllEdgeProperties
         // rely on).
         const from_shard = mg.shardEngineForNode(edge_slot);
-        const idx_entry = from_shard.edge_index.get(edge_slot) orelse return null;
+        const idx_entry = (try from_shard.edge_index.get(edge_slot)) orelse return null;
         const label_str = mg.label_dict.getString(idx_entry.rel_type) orelse "UNKNOWN";
         const label_copy = try allocator.dupe(u8, label_str);
         return EdgeRecord{
@@ -5295,6 +7024,83 @@ pub const StorageAdapter = struct {
             .prop_head = idx_entry.prop_head,
             .label = label_copy,
         };
+    }
+
+    /// GAP typed-edge enumeration (`getEdgesByType` under a bounded edge
+    /// cache): append the PUBLIC id of every live edge of `rel_type` in
+    /// `graph_name` to `out` by scanning each shard's edge_index — the
+    /// merged mmap-BASE ⊕ OVERLAY ⊖ tombstones view via
+    /// `EdgeIndexMap.forEachLive`. ONE O(total edges) sequential index-record
+    /// scan: NO node iteration, NO adjacency hydration, and NO edge-body /
+    /// property pages for v2 edges (each 40-byte index record already carries
+    /// `rel_type` and the inline `public_id`). Legacy entries
+    /// (`public_id == 0`, pre-v0.2.24 stores) fall back to the persisted
+    /// `__geode_internal_edge_id` property read off the source shard —
+    /// counted via `graph_store.edge_id_property_fallback_reads`, exactly
+    /// like every other inline-first reader (loop1, adjacency hydrate, MERGE
+    /// dedup probe).
+    ///
+    /// Graph scoping is structural: each geode graph owns its own
+    /// ShardedGraphEngine, so scanning `graph_name`'s shards can never see
+    /// another graph's edges. Tenant filtering stays with the CALLER
+    /// (graph_store), which compares the hydrated edge body's tenant tag —
+    /// the engine index carries no tenant information.
+    ///
+    /// An unseen `rel_type` (absent from the graph's label dictionary) has no
+    /// edges of that type — returns without touching any shard.
+    pub fn collectEdgePublicIdsByType(
+        self: *StorageAdapter,
+        graph_name: []const u8,
+        rel_type: []const u8,
+        allocator: Allocator,
+        out: *std.ArrayList(u64),
+    ) !void {
+        const mg = blk: {
+            self.mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
+            defer self.mutex.unlock(std.Io.Threaded.global_single_threaded.io());
+            break :blk try self.requireExistingGraphLocked(graph_name);
+        };
+        const rel_label_id = mg.label_dict.getId(rel_type) orelse return;
+
+        const Ctx = struct {
+            out: *std.ArrayList(u64),
+            alloc: Allocator,
+            rel: u32,
+            shard: *gs.GraphEngine,
+        };
+        for (mg.engine.shards) |shard| {
+            // Phase A (deferred derived indexes): materialize this shard's
+            // edge_index before iterating it, mirroring every other
+            // edge_index reader in the engine (getEdge / edgeIndexCount).
+            try shard.ensureDerivedHydrated();
+            var ctx = Ctx{ .out = out, .alloc = allocator, .rel = rel_label_id, .shard = shard };
+            try shard.edge_index.forEachLive(&ctx, struct {
+                fn visit(c: *Ctx, edge_slot: u64, entry: gs.engine.EdgeIndexEntry) anyerror!void {
+                    if (entry.rel_type != c.rel) return;
+                    if (entry.public_id != 0) {
+                        try c.out.append(c.alloc, entry.public_id);
+                        return;
+                    }
+                    // Legacy (v1 / pre-inline) edge: resolve the public id
+                    // from the persisted property on the source shard.
+                    _ = graph_store.edge_id_property_fallback_reads.fetchAdd(1, .monotonic);
+                    const stored = (c.shard.getEdgeProperty(
+                        entry.from,
+                        edge_slot,
+                        graph_store.INTERNAL_EDGE_ID_PROPERTY_KEY,
+                        c.alloc,
+                    ) catch null) orelse return; // orphan / not-yet-mapped: skip
+                    defer freeOwnedStorageProperty(c.alloc, stored);
+                    switch (stored) {
+                        .string => |text| {
+                            const pid = graph_store.parsePersistedPublicId(text) orelse return;
+                            try c.out.append(c.alloc, pid);
+                        },
+                        else => {},
+                    }
+                }
+            }.visit);
+        }
     }
 
     // ------------------------------------------------------------------
@@ -5341,6 +7147,55 @@ pub const StorageAdapter = struct {
         if (ctx.had_error) return error.OutOfMemory;
 
         return ctx.entries.toOwnedSlice(allocator);
+    }
+
+    // ------------------------------------------------------------------
+    // Hydration fast-scan surface (GAP hydration streaming)
+    // ------------------------------------------------------------------
+
+    /// Number of per-shard engines behind the named graph (the unit of
+    /// hydration stream-scan parallelism). Errors if the graph is unknown.
+    pub fn hydrationStreamShardCount(self: *StorageAdapter, graph_name: []const u8) !usize {
+        const mg = blk: {
+            self.mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
+            defer self.mutex.unlock(std.Io.Threaded.global_single_threaded.io());
+            break :blk try self.requireExistingGraphLocked(graph_name);
+        };
+        return mg.engine.shards.len;
+    }
+
+    /// Stream-scan ONE shard's store files sequentially and return the
+    /// decoded per-shard accumulation (see hydration_scan.zig for the pass
+    /// structure and the direct-pager-read justification). Read-only against
+    /// the engine; safe to run for different shards on dedicated threads
+    /// (each shard owns its files and buffer pool).
+    pub fn hydrationStreamScanShard(
+        self: *StorageAdapter,
+        graph_name: []const u8,
+        shard_idx: usize,
+        allocator: Allocator,
+        opts: hydration_scan.ScanOptions,
+    ) !hydration_scan.ShardAccum {
+        const mg = blk: {
+            self.mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
+            defer self.mutex.unlock(std.Io.Threaded.global_single_threaded.io());
+            break :blk try self.requireExistingGraphLocked(graph_name);
+        };
+        return hydration_scan.scanShard(allocator, mg.engine.shards[shard_idx], opts);
+    }
+
+    /// Resolve a raw label/rel-type id to its dictionary string, or null when
+    /// the id is unknown (the hydration merge mirrors getNodeLabels' drop-
+    /// unknown-ids rule for node labels and the legacy "UNKNOWN" fallback for
+    /// edge rel types). The returned slice is owned by the dictionary and
+    /// stable for the adapter's lifetime — callers dupe what they keep.
+    pub fn hydrationLabelString(self: *StorageAdapter, graph_name: []const u8, label_id: u32) ?[]const u8 {
+        const mg = blk: {
+            self.mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
+            defer self.mutex.unlock(std.Io.Threaded.global_single_threaded.io());
+            break :blk self.requireExistingGraphLocked(graph_name) catch return null;
+        };
+        return mg.label_dict.getString(label_id);
     }
 
     // ------------------------------------------------------------------
@@ -5399,11 +7254,38 @@ pub const StorageAdapter = struct {
             defer self.mutex.unlock(std.Io.Threaded.global_single_threaded.io());
             break :blk self.requireExistingGraphLocked(graph_name) catch return null;
         };
-        var counter: u64 = 0;
-        for (mg.engine.shards) |shard| {
-            counter +%= shard.manifest.counter;
-        }
-        return counter;
+        return mgManifestCounter(mg);
+    }
+
+    /// GAP-0064 FIX B: the graph's durable derived-index generation token
+    /// (aggregate `manifest.checkpoint_epoch`), bumped ONLY at checkpoint, never
+    /// by a WAL-tail recovery. Used to stamp + reload-gate the idmap.snapshot and
+    /// the hydration loop2 snapshots on the SAME (epoch, covered_lsn) contract as
+    /// prop_exact.idx (fa6495bb), replacing the manifest.counter that recovery.zig
+    /// bumps on any tail (which needlessly rejected a valid snapshot). See
+    /// `mgCheckpointEpoch`.
+    pub fn graphCheckpointEpoch(self: *StorageAdapter, graph_name: []const u8) ?u64 {
+        const mg = blk: {
+            self.mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
+            defer self.mutex.unlock(std.Io.Threaded.global_single_threaded.io());
+            break :blk self.requireExistingGraphLocked(graph_name) catch return null;
+        };
+        return mgCheckpointEpoch(mg);
+    }
+
+    /// GAP-0064 FIX B: the graph's DURABLE COMMITTED FRONTIER (aggregate
+    /// `manifest.last_checkpoint_lsn`) — set at checkpoint AND advanced by a
+    /// committed WAL-tail recovery, but left unchanged by a clean reopen that
+    /// replays nothing. Reload gate: `stamped_epoch == graphCheckpointEpoch AND
+    /// stamped_covered == this` ⟺ "no checkpoint AND no tail since the snapshot".
+    /// See `mgDurableFrontierLsn`.
+    pub fn graphDurableFrontierLsn(self: *StorageAdapter, graph_name: []const u8) ?u64 {
+        const mg = blk: {
+            self.mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
+            defer self.mutex.unlock(std.Io.Threaded.global_single_threaded.io());
+            break :blk self.requireExistingGraphLocked(graph_name) catch return null;
+        };
+        return mgDurableFrontierLsn(mg);
     }
 
     // ------------------------------------------------------------------
@@ -5467,7 +7349,8 @@ pub const StorageAdapter = struct {
         self: *StorageAdapter,
         graph_name: []const u8,
         from_id: u64,
-        prop_head: u32,
+        // GAP-0060: edge prop_head is a full u64 (may be a slab head, bit 63).
+        prop_head: u64,
         allocator: Allocator,
     ) !std.StringHashMap(gs.PropertyValue) {
         const mg = blk: {
@@ -5481,7 +7364,7 @@ pub const StorageAdapter = struct {
 
         if (prop_head == 0) return result;
 
-        const prop_head_u64: u64 = @intCast(prop_head);
+        const prop_head_u64: u64 = prop_head;
 
         // Route via the source node's shard — same per-shard engine
         // that wrote the property pages.
@@ -5554,6 +7437,64 @@ pub const StorageAdapter = struct {
         return self.checkpointAllEx(true, true);
     }
 
+    /// GAP-ENT-0048 (task0048d) test-only: is `name`'s adapter engine currently
+    /// resident in `self.engines`? A graph served entirely from loop2/counter
+    /// snapshots is NOT loaded (false) even though it exists on disk — the exact
+    /// condition that made a FULL checkpoint skip its exact-index persist.
+    pub fn isGraphEngineLoadedForTesting(self: *StorageAdapter, name: []const u8) bool {
+        self.mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
+        defer self.mutex.unlock(std.Io.Threaded.global_single_threaded.io());
+        return self.engines.contains(name);
+    }
+
+    /// GAP-ENT-0048g test-only: remove the on-disk `prop_exact.idx` for a loaded
+    /// graph to force the DEFERRED condition. Since GAP-ENT-0048g a LIGHT
+    /// checkpoint KEEPS a current-stamped index (the counter gate handles
+    /// staleness), so tests can no longer use `checkpointAllLight` to drop it.
+    pub fn invalidateExactIndexFileForTesting(self: *StorageAdapter, graph_name: []const u8) void {
+        const mg = blk: {
+            self.mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
+            defer self.mutex.unlock(std.Io.Threaded.global_single_threaded.io());
+            break :blk self.requireExistingGraphLocked(graph_name) catch return;
+        };
+        if (graphDirPath(self.allocator, self.data_dir, mg.uuid)) |dir_path| {
+            defer self.allocator.free(dir_path);
+            invalidateExactPropertyIndexFile(self.allocator, dir_path);
+        } else |_| {}
+    }
+
+    /// GAP-ENT-0048 (task0048d): open the adapter engine of every registry graph
+    /// that is not yet loaded, so a FULL checkpoint covers on-disk graphs that
+    /// were served this whole session from loop2/counter snapshots (which never
+    /// open the adapter engine — the `divelife` skip). MUST be called with
+    /// `self.mutex` held (mutates `self.engines` via `requireExistingGraphLocked`).
+    ///
+    /// Registry names are snapshotted into a local buffer FIRST: opening a graph
+    /// calls `upsertRegistryEntryLocked`, which updates the matching entry
+    /// in place (never frees the name, never appends — the name already exists),
+    /// so the captured `[]const u8` name slices stay valid and no reallocation of
+    /// `registry.entries.items` occurs mid-iteration.
+    fn forceLoadRegistryGraphsForFullCheckpointLocked(self: *StorageAdapter) void {
+        var names_buf: [64][]const u8 = undefined;
+        var n: usize = 0;
+        for (self.registry.entries.items) |entry| {
+            if (n >= names_buf.len) break;
+            if (self.engines.contains(entry.name)) continue;
+            names_buf[n] = entry.name;
+            n += 1;
+        }
+        for (names_buf[0..n]) |nm| {
+            _ = self.requireExistingGraphLocked(nm) catch |err| {
+                log.warn("full checkpoint: could not load graph '{s}' to persist its exact index: {s}", .{ nm, @errorName(err) });
+                continue;
+            };
+            _ = g_full_checkpoint_forced_loads.fetchAdd(1, .monotonic);
+            slog.info("full checkpoint force-loaded snapshot-served graph for exact-index persist", &.{
+                SAttr.string("graph", nm),
+            });
+        }
+    }
+
     /// Core checkpoint implementation.
     ///
     /// * `light` — when true each graph runs the bounded `engine.checkpointLight()`
@@ -5576,6 +7517,16 @@ pub const StorageAdapter = struct {
         {
             self.mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
             defer self.mutex.unlock(std.Io.Threaded.global_single_threaded.io());
+            // GAP-ENT-0048 (task0048d): a FULL checkpoint (clean shutdown /
+            // explicit save) must build+persist the exact index for EVERY on-disk
+            // graph — including one served this whole session from loop2/counter
+            // snapshots, which NEVER opens its adapter engine and is therefore
+            // absent from `self.engines`. The loop below iterates only loaded
+            // engines, so such a graph (the 14.27M `divelife` case) was silently
+            // skipped and never got a `prop_exact.idx`. Force-load every registry
+            // graph not yet resident so it is checkpointed and, if its exact index
+            // is deferred, eager-built from its durable store pages.
+            if (!light) self.forceLoadRegistryGraphsForFullCheckpointLocked();
             var it = self.engines.valueIterator();
             while (it.next()) |mg| {
                 if (graph_count < graphs_buf.len) {
@@ -5619,143 +7570,18 @@ pub const StorageAdapter = struct {
         // happen, but this keeps the memory bound sound even if it ever does.
         var any_skipped = false;
         for (graphs_buf[0..graph_count]) |mg| {
-            const _t_start = monoNanosNow();
-            // GAP-0900 bug #1: announce that this checkpoint wants the EXCLUSIVE
-            // lock so the SHARED apply/read paths back off and drain the reader
-            // set (see `exclusiveWaitingBackoff` + `mg.exclusive_waiting`).
-            // `fetchAdd`/`fetchSub` (counter) so this composes with the
-            // edge-phase exclusive acquirers that announce on the same counter.
-            // Cleared at iteration end (defer) regardless of whether we acquire
-            // the lock or hit the LIGHT-path deadline and `continue` — a `defer`
-            // in a `for` body runs at every iteration exit, so a slow/skipped
-            // checkpoint never leaves readers backing off forever (safety valve).
-            if (set_writer_pref) {
-                _ = mg.exclusive_waiting.fetchAdd(1, .release);
+            // Bounded rwlock deadline for the periodic LIGHT checkpoint;
+            // unbounded (null) for the durability-critical FULL checkpoint.
+            const timeout_ns: ?u64 = if (light) 5 * std.time.ns_per_s else null;
+            switch (self.checkpointOneGraph(mg, light, set_writer_pref, timeout_ns)) {
+                .ok, .engine_failed => {},
+                // GAP-0900 bug #2: an rwlock-deadline skip leaves the graph's
+                // dirty pages un-flushed — any_skipped keeps the backpressure
+                // counter high (see below). An engine checkpoint FAILURE is
+                // handled exactly as before the extraction: logged inside,
+                // loop continues, pending_bulk_ops still reset.
+                .skipped_busy => any_skipped = true,
             }
-            defer if (set_writer_pref) {
-                _ = mg.exclusive_waiting.fetchSub(1, .release);
-            };
-            // HANG FIX (2026-06-21, sustained-ingest single-conn wedge): the
-            // periodic GAP-0900 checkpoint reached this site via
-            // walCheckpointHook → checkpointAllEx and parked unboundedly on the
-            // raw `mg.rwlock.lockUncancelable(io)`. That call's protocol
-            // (std/Io/RwLock.zig `lockUncancelable`) registers the writer, sets
-            // `is_writing`, then — if it observed ANY reader at that instant —
-            // parks FOREVER on the RwLock's internal counting semaphore waiting
-            // for the last reader's `unlockShared` to `post()`. A single missed
-            // `post()` (the same lost-wakeup already fixed for
-            // `acquireGraphWriteLockCancelable` @~5496 and
-            // `acquireWholeGraphExclusive` @~6310) wedges the writer
-            // permanently; it keeps the RwLock's internal mutex, so every
-            // subsequent shard-apply reader (`bulkMergeNodeWithReservedId*` →
-            // `rwlock.lockSharedUncancelable`) blocks behind it. The bulk MERGE
-            // apply never completes → its ApplyResult.done never fires → the
-            // submitter parks in `awaitOp` → the connection response is never
-            // written → the client wedges in ReceiveProto. Reproduced
-            // deterministically (single QUIC conn, ~26.6K MERGE ops) and
-            // captured live via gdb: checkpoint thread in
-            // `Io.Semaphore.waitUncancelable`, RwLock state reader=1/is_writing
-            // with ZERO reader threads on any stack.
-            //
-            // The fix mirrors the two existing exclusive acquirers: never park
-            // on the semaphore — re-probe via `tryLock`, which reads `rl.state`
-            // directly (no semaphore) and is immune to the lost wakeup. The
-            // periodic LIGHT path skips this graph after a bounded deadline (it
-            // retries next checkpoint cycle — the GAP-0900 load-driven trigger
-            // re-fires); the FULL path (clean shutdown / explicit checkpoint)
-            // spins unboundedly via `tryLock` so durability is never sacrificed.
-            const io_cp = std.Io.Threaded.global_single_threaded.io();
-            if (!mg.rwlock.tryLock(io_cp)) {
-                var sleep_ns: u64 = 100 * std.time.ns_per_us;
-                const max_sleep_ns: u64 = 2 * std.time.ns_per_ms;
-                // Bounded deadline for the periodic LIGHT checkpoint; unbounded
-                // (null) for the durability-critical FULL checkpoint.
-                const cp_deadline_ns: ?u64 = if (light)
-                    _t_start + 5 * std.time.ns_per_s
-                else
-                    null;
-                var acquired = false;
-                while (true) {
-                    if (cp_deadline_ns) |dl| {
-                        if (monoNanosNow() >= dl) break;
-                    }
-                    const req = std.os.linux.timespec{
-                        .sec = @intCast(sleep_ns / std.time.ns_per_s),
-                        .nsec = @intCast(sleep_ns % std.time.ns_per_s),
-                    };
-                    var rem: std.os.linux.timespec = undefined;
-                    _ = std.os.linux.nanosleep(&req, &rem);
-                    if (mg.rwlock.tryLock(io_cp)) {
-                        acquired = true;
-                        break;
-                    }
-                    sleep_ns = @min(sleep_ns * 2, max_sleep_ns);
-                }
-                if (!acquired) {
-                    // LIGHT checkpoint deadline exhausted under sustained write
-                    // contention — skip THIS graph this cycle (no hang, no lock
-                    // held). The next GAP-0900 load-driven trigger retries.
-                    _ = mg.rwlock_exclusive_wait_ns_total.fetchAdd(monoNanosNow() -| _t_start, .monotonic);
-                    any_skipped = true;
-                    const busy_state = @atomicLoad(usize, &mg.rwlock.state, .seq_cst);
-                    log.warn("light checkpoint skipped for graph '{s}': rwlock busy past deadline (will retry next cycle) rwlock_state=0x{x}", .{ mg.name, busy_state });
-                    continue;
-                }
-            }
-            _ = mg.rwlock_exclusive_wait_ns_total.fetchAdd(monoNanosNow() -| _t_start, .monotonic);
-            // GAP-0900 L2: the periodic load-driven trigger runs the LIGHT engine
-            // checkpoint (O(dirty)); the shutdown / explicit path runs the FULL
-            // checkpoint so a restart loads the derived indexes without a rebuild.
-            if (light) {
-                mg.engine.checkpointLight() catch |err| {
-                    log.warn("light checkpoint failed for graph '{s}': {}", .{ mg.name, err });
-                };
-            } else {
-                mg.engine.checkpoint() catch |err| {
-                    log.warn("checkpoint failed for graph '{s}': {}", .{ mg.name, err });
-                };
-            }
-            // Persist the exact property index alongside the engine checkpoint.
-            // This is a FULL O(graph) re-serialize, so the light (periodic) path
-            // skips it to stay O(dirty). The on-disk prop_exact.idx is removed
-            // instead so a reopen (the file has no staleness counter) falls back
-            // to rebuildExactNodePropertyIndex from the durable pages rather than
-            // loading a stale snapshot. The clean-shutdown FULL checkpoint always
-            // rewrites it fresh, so a clean restart still loads it without a rebuild.
-            if (graphDirPath(self.allocator, self.data_dir, mg.uuid)) |dir_path| {
-                if (light) {
-                    invalidateExactPropertyIndexFile(self.allocator, dir_path);
-                } else {
-                    mg.exact_node_property_index.saveToFile(dir_path) catch |err| {
-                        log.warn("failed to persist property index for graph '{s}': {}", .{ mg.name, err });
-                    };
-                }
-                self.allocator.free(dir_path);
-            } else |err| {
-                log.warn("failed to build graph dir path for property index persist '{s}': {}", .{ mg.name, err });
-            }
-            // bound-node-mirror grace point: we hold mg.rwlock EXCLUSIVE here,
-            // which has drained all readers of this graph's nodes. Free the node
-            // cache's retired (evicted/overwritten) entries for THIS graph now —
-            // no reader can hold a pointer to them. This bounds resident RSS to
-            // ~cache cap + retire backlog since the last checkpoint.
-            if (graph_store.getCurrentGlobalStore()) |store| {
-                store.reclaimNodeCacheRetiredForGraph(mg.name);
-                // PHASE 0: same grace boundary for the bounded adjacency caches.
-                // We hold mg.rwlock EXCLUSIVE, draining all SHARED readers of this
-                // graph, so any `[]const u64` adjacency slice handed to an
-                // in-flight reader of THIS graph is no longer live — free this
-                // graph's retired (evicted/removed) adjacency lists now.
-                store.reclaimAdjCacheRetiredForGraph(mg.name);
-                // PHASE 1: same grace boundary for the bounded edge-body cache.
-                // Under the same EXCLUSIVE mg.rwlock (all SHARED readers of THIS
-                // graph drained), any `*Edge` handed to an in-flight reader of
-                // this graph is no longer live — free this graph's retired
-                // (evicted/removed) edge bodies now. One consistent grace window
-                // covers nodes + adjacency + edges.
-                store.reclaimEdgeCacheRetiredForGraph(mg.name);
-            }
-            mg.rwlock.unlock(std.Io.Threaded.global_single_threaded.io());
         }
 
         // Collect manifest counts LOCKLESSLY (no per-graph rwlock, no mutex),
@@ -5835,6 +7661,859 @@ pub const StorageAdapter = struct {
         self.last_checkpoint_mono_ns.store(monoNanosNow(), .release);
     }
 
+    /// Outcome of a single-graph checkpoint pass (`checkpointOneGraph`).
+    const OneGraphCheckpointOutcome = enum {
+        /// Engine checkpoint (and exact-index persist/invalidate + retired-
+        /// cache reclaim) completed under the EXCLUSIVE per-graph rwlock.
+        ok,
+        /// The bounded rwlock-acquisition deadline expired — NOTHING was done
+        /// for this graph (no lock held, no state touched). The caller decides
+        /// whether to retry (periodic LIGHT cycle) or degrade (hydration
+        /// persist-on-complete).
+        skipped_busy,
+        /// The lock was acquired but the ENGINE checkpoint itself failed
+        /// (already logged). The exact-index persist and cache reclaim still
+        /// ran, mirroring the historical checkpointAllEx behaviour.
+        engine_failed,
+    };
+
+    /// Checkpoint ONE managed graph — the per-graph body of `checkpointAllEx`,
+    /// extracted so the Task 3 hydration persist-on-complete path
+    /// (`checkpointGraph`) can run a FULL checkpoint for a single graph
+    /// without touching every other graph's rwlock.
+    ///
+    /// * `light` — bounded `engine.checkpointLight()` vs full `engine.checkpoint()`.
+    /// * `set_writer_pref` — announce the EXCLUSIVE intent on
+    ///   `mg.exclusive_waiting` so SHARED apply/read paths back off (GAP-0900
+    ///   bug #1). Always cleared on exit (defer).
+    /// * `acquire_timeout_ns` — bounded rwlock-acquisition deadline (relative);
+    ///   null spins unboundedly (the durability-critical clean-shutdown FULL
+    ///   path). The acquisition NEVER parks on the RwLock semaphore — see the
+    ///   HANG FIX below.
+    fn checkpointOneGraph(
+        self: *StorageAdapter,
+        mg: *ManagedGraph,
+        light: bool,
+        set_writer_pref: bool,
+        acquire_timeout_ns: ?u64,
+    ) OneGraphCheckpointOutcome {
+        const _t_start = monoNanosNow();
+        // GAP-0900 bug #1: announce that this checkpoint wants the EXCLUSIVE
+        // lock so the SHARED apply/read paths back off and drain the reader
+        // set (see `exclusiveWaitingBackoff` + `mg.exclusive_waiting`).
+        // `fetchAdd`/`fetchSub` (counter) so this composes with the
+        // edge-phase exclusive acquirers that announce on the same counter.
+        // Cleared on every exit path (defer), so a slow/skipped checkpoint
+        // never leaves readers backing off forever (safety valve).
+        if (set_writer_pref) {
+            _ = mg.exclusive_waiting.fetchAdd(1, .release);
+        }
+        defer if (set_writer_pref) {
+            _ = mg.exclusive_waiting.fetchSub(1, .release);
+        };
+        // HANG FIX (2026-06-21, sustained-ingest single-conn wedge): the
+        // periodic GAP-0900 checkpoint reached this site via
+        // walCheckpointHook → checkpointAllEx and parked unboundedly on the
+        // raw `mg.rwlock.lockUncancelable(io)`. That call's protocol
+        // (std/Io/RwLock.zig `lockUncancelable`) registers the writer, sets
+        // `is_writing`, then — if it observed ANY reader at that instant —
+        // parks FOREVER on the RwLock's internal counting semaphore waiting
+        // for the last reader's `unlockShared` to `post()`. A single missed
+        // `post()` (the same lost-wakeup already fixed for
+        // `acquireGraphWriteLockCancelable` @~5496 and
+        // `acquireWholeGraphExclusive` @~6310) wedges the writer
+        // permanently; it keeps the RwLock's internal mutex, so every
+        // subsequent shard-apply reader (`bulkMergeNodeWithReservedId*` →
+        // `rwlock.lockSharedUncancelable`) blocks behind it. The bulk MERGE
+        // apply never completes → its ApplyResult.done never fires → the
+        // submitter parks in `awaitOp` → the connection response is never
+        // written → the client wedges in ReceiveProto. Reproduced
+        // deterministically (single QUIC conn, ~26.6K MERGE ops) and
+        // captured live via gdb: checkpoint thread in
+        // `Io.Semaphore.waitUncancelable`, RwLock state reader=1/is_writing
+        // with ZERO reader threads on any stack.
+        //
+        // The fix mirrors the two existing exclusive acquirers: never park
+        // on the semaphore — re-probe via `tryLock`, which reads `rl.state`
+        // directly (no semaphore) and is immune to the lost wakeup. A bounded
+        // caller (periodic LIGHT cycle / hydration persist-on-complete) skips
+        // this graph after the deadline; an unbounded caller (clean shutdown /
+        // explicit FULL checkpoint) spins via `tryLock` so durability is never
+        // sacrificed.
+        const io_cp = std.Io.Threaded.global_single_threaded.io();
+        if (!mg.rwlock.tryLock(io_cp)) {
+            var sleep_ns: u64 = 100 * std.time.ns_per_us;
+            const max_sleep_ns: u64 = 2 * std.time.ns_per_ms;
+            const cp_deadline_ns: ?u64 = if (acquire_timeout_ns) |t| _t_start + t else null;
+            var acquired = false;
+            while (true) {
+                if (cp_deadline_ns) |dl| {
+                    if (monoNanosNow() >= dl) break;
+                }
+                const req = std.os.linux.timespec{
+                    .sec = @intCast(sleep_ns / std.time.ns_per_s),
+                    .nsec = @intCast(sleep_ns % std.time.ns_per_s),
+                };
+                var rem: std.os.linux.timespec = undefined;
+                _ = std.os.linux.nanosleep(&req, &rem);
+                if (mg.rwlock.tryLock(io_cp)) {
+                    acquired = true;
+                    break;
+                }
+                sleep_ns = @min(sleep_ns * 2, max_sleep_ns);
+            }
+            if (!acquired) {
+                // Bounded deadline exhausted under sustained contention — skip
+                // THIS graph this cycle (no hang, no lock held). The periodic
+                // LIGHT trigger retries next cycle; the hydration persist path
+                // degrades to the next full checkpoint.
+                _ = mg.rwlock_exclusive_wait_ns_total.fetchAdd(monoNanosNow() -| _t_start, .monotonic);
+                const busy_state = @atomicLoad(usize, &mg.rwlock.state, .seq_cst);
+                // GAP-ENT-0038: structured logger — this skip warning was a
+                // `std.log.warn`, compiled out of ReleaseFast, so a graph
+                // whose LIGHT checkpoints were being starved would look
+                // exactly like a healthy silent cadence in the server log.
+                slog.warn("bounded checkpoint skipped: rwlock busy past deadline (will retry)", &.{
+                    SAttr.string("graph", mg.name),
+                    SAttr.uint("rwlock_state", @intCast(busy_state)),
+                });
+                return .skipped_busy;
+            }
+        }
+        _ = mg.rwlock_exclusive_wait_ns_total.fetchAdd(monoNanosNow() -| _t_start, .monotonic);
+        // GAP-0900 L2: the periodic load-driven trigger runs the LIGHT engine
+        // checkpoint (O(dirty)); the shutdown / explicit path runs the FULL
+        // checkpoint so a restart loads the derived indexes without a rebuild.
+        // NOTE (Task 3): the FULL `engine.checkpoint()` is itself a no-op when
+        // neither pages nor derived-index dirty flags are set (gs
+        // checkpointEx early-return), so a read-only hydration of a clean
+        // store does NOT bump the manifest counter or strand counter-stamped
+        // snapshots.
+        var engine_ok = true;
+        if (light) {
+            mg.engine.checkpointLight() catch |err| {
+                log.warn("light checkpoint failed for graph '{s}': {}", .{ mg.name, err });
+                engine_ok = false;
+            };
+        } else {
+            mg.engine.checkpoint() catch |err| {
+                log.warn("checkpoint failed for graph '{s}': {}", .{ mg.name, err });
+                engine_ok = false;
+            };
+        }
+        // Persist the exact property index alongside the engine checkpoint.
+        // This is a FULL O(graph) re-serialize, so the light (periodic) path
+        // skips it to stay O(dirty). The on-disk prop_exact.idx is removed
+        // instead so a reopen (the file has no staleness counter) falls back
+        // to rebuildExactNodePropertyIndex from the durable pages rather than
+        // loading a stale snapshot. The clean-shutdown FULL checkpoint always
+        // rewrites it fresh, so a clean restart still loads it without a rebuild.
+        if (graphDirPath(self.allocator, self.data_dir, mg.uuid)) |dir_path| {
+            if (!light) {
+                // GAP-ENT-0048 (task0048d) diagnostic: one line per graph at every
+                // FULL checkpoint so the 14.27M run can see WHY a graph is or is
+                // not exact-index-persisted (name, durable manifest node count,
+                // already-built vs deferred). The eager-build helper logs the
+                // grace-probe / build-ran outcome for the deferred case.
+                var mnc: u64 = 0;
+                for (mg.engine.shards) |shard| mnc += @atomicLoad(u64, &shard.manifest.node_count, .monotonic);
+                slog.info("full checkpoint: exact-index persist decision", &.{
+                    SAttr.string("graph", mg.name),
+                    SAttr.uint("manifest_node_count", mnc),
+                    SAttr.string("state", if (mg.exact_index_built.load(.acquire)) "built" else "deferred"),
+                });
+            }
+            if (light) {
+                // GAP-ENT-0048g: KEEP a stamped `prop_exact.idx` across LIGHT
+                // checkpoints instead of DELETING it. The (epoch, covered_lsn)
+                // stamp (saveToFile/loadFromFile) makes a stale copy un-loadable
+                // on reopen, so a delete is no longer needed for correctness — and
+                // the delete is exactly what dropped the hydration-built index at
+                // 14.27M (P1). We also do NOT re-save here: that is O(graph) and
+                // would defeat the O(dirty) LIGHT contract. A LIGHT checkpoint that
+                // dirtied pages advances the epoch + frontier, which naturally
+                // invalidates the now-stale on-disk stamp for the next reopen; a
+                // no-op (clean) LIGHT leaves a current-stamped index reloadable.
+            } else if (!engine_ok) {
+                // GAP-ENT-0048 Task 5.3a: the engine FULL checkpoint FAILED — an
+                // interrupted big-deferred-WAL shutdown leaves a WAL tail, so the
+                // durable frontier/pages did not cleanly advance to the in-memory
+                // state. Persisting `prop_exact.idx` NOW would stamp it with a
+                // frontier that a subsequent reopen might match (covered ==
+                // frontier) while the index does NOT reflect the true durable
+                // committed state → a PRESENT-BUT-STALE snapshot that reloads
+                // wrong WHERE/GROUP BY/DISTINCT answers. So do NOT write a fresh
+                // stamp. The PRIOR on-disk file (from the last SUCCESSFUL
+                // checkpoint) is left untouched: on reopen, recovery replays the
+                // tail and advances the frontier past that file's covered_lsn, so
+                // the covered<frontier tail gate rejects it and rebuilds (and if
+                // the failure left no tail, that older file is still valid and
+                // reloads). Either way, never a stale serve.
+                slog.warn("skipping exact-index persist: engine checkpoint failed (tail may remain; not writing a possibly-stale stamp)", &.{
+                    SAttr.string("graph", mg.name),
+                });
+            } else {
+                // GAP-0064 (adversarial review — CRITICAL double-insert fix):
+                // build/persist the exact index UNDER the shared
+                // `exact_index_build_mutex` (non-blocking tryLock). This serializes
+                // the checkpoint's eager build with BOTH the background-reopen
+                // worker AND the lazy-first-access build (`ensureExactNodePropertyIndexBuilt`),
+                // closing BOTH double-insert races (two concurrent
+                // `rebuildExactNodePropertyIndex` → `addEx(assume_new=true)` skips
+                // dedup → duplicated postings / inflated GROUP BY/DISTINCT/count).
+                // The prior `exact_rebuild_inflight`-only skip covered only the
+                // worker, not the lazy build. tryLock never blocks, so the
+                // checkpoint (holding mg.rwlock EXCLUSIVE) never waits ~14 min.
+                self.checkpointPersistExactIndexLocked(mg, dir_path);
+            }
+            self.allocator.free(dir_path);
+        } else |err| {
+            log.warn("failed to build graph dir path for property index persist '{s}': {}", .{ mg.name, err });
+        }
+        // bound-node-mirror grace point: we hold mg.rwlock EXCLUSIVE here,
+        // which has drained all rwlock-holding readers of this graph's nodes.
+        // Free the node cache's retired (evicted/overwritten) entries for
+        // THIS graph now — no such reader can hold a pointer to them. This
+        // bounds resident RSS to ~cache cap + retire backlog since the last
+        // checkpoint.
+        //
+        // TWO independent gates protect an in-flight first-touch hydration
+        // (it runs under entry.mutex + hydration_build_mutex and never takes
+        // mg.rwlock, yet its merge family threads read shallow Node copies
+        // whose sub-heaps live on exactly these retire lists — reclaiming
+        // mid-merge is the 14.27M SEGV bomb #2 / C-1 review UAF):
+        //  1. hasUnfinishedHydration: graph-scoped `done`-latch predicate —
+        //     catches THIS graph's build even between mutex-held phases.
+        //  2. tryBeginCacheReclaimGrace: NON-BLOCKING tryLock of the store's
+        //     hydration_build_mutex — catches any concurrent build touching
+        //     the shared retire machinery (parking here under the graph-
+        //     exclusive rwlock would starve readers for a multi-hour build).
+        // Skipping is always safe: the backlog survives to the next grace
+        // window (typically the persist-on-complete graph checkpoint fired
+        // right after hydration finishes, which reclaims with done == true).
+        if (graph_store.getCurrentGlobalStore()) |store| {
+            if (store.hasUnfinishedHydration(mg.name)) {
+                _ = g_hydration_reclaim_skips.fetchAdd(1, .monotonic);
+                slog.info("checkpoint grace window: retired-cache reclaim skipped (hydration in flight)", &.{
+                    SAttr.string("graph", mg.name),
+                });
+            } else if (store.tryBeginCacheReclaimGrace()) {
+                defer store.endCacheReclaimGrace();
+                store.reclaimNodeCacheRetiredForGraph(mg.name);
+                // PHASE 0: same grace boundary for the bounded adjacency caches.
+                // We hold mg.rwlock EXCLUSIVE, draining all SHARED readers of this
+                // graph, so any `[]const u64` adjacency slice handed to an
+                // in-flight reader of THIS graph is no longer live — free this
+                // graph's retired (evicted/removed) adjacency lists now.
+                store.reclaimAdjCacheRetiredForGraph(mg.name);
+                // PHASE 1: same grace boundary for the bounded edge-body cache.
+                // Under the same EXCLUSIVE mg.rwlock (all SHARED readers of THIS
+                // graph drained), any `*Edge` handed to an in-flight reader of
+                // this graph is no longer live — free this graph's retired
+                // (evicted/removed) edge bodies now. One consistent grace window
+                // covers nodes + adjacency + edges.
+                store.reclaimEdgeCacheRetiredForGraph(mg.name);
+            } else {
+                // GAP-ENT-0038 discipline: a silently skipped grace point must
+                // be visible — a build that overlaps every cycle would
+                // otherwise look like a healthy cadence while the retire
+                // backlog grows.
+                _ = g_hydration_reclaim_skips.fetchAdd(1, .monotonic);
+                slog.info("cache reclaim skipped: hydration build in flight (retire backlog deferred to next checkpoint)", &.{
+                    SAttr.string("graph", mg.name),
+                });
+            }
+        }
+        mg.rwlock.unlock(std.Io.Threaded.global_single_threaded.io());
+        return if (engine_ok) .ok else .engine_failed;
+    }
+
+    /// GAP-ENT-0048 PRIMARY: at a FULL checkpoint, EAGERLY materialise a
+    /// deferred-but-unbuilt exact node-property index from the durable pages so
+    /// the caller can persist a COMPLETE `prop_exact.idx` (making the next reopen
+    /// an O(snapshot) reload instead of a client-facing O(graph) rebuild).
+    ///
+    /// Returns `true` when it built and latched the index (caller persists),
+    /// `false` when the build was skipped or failed (caller invalidates the
+    /// stale file and the graph stays deferred — correct, just not yet fast).
+    ///
+    /// MUST be called only from `checkpointOneGraph`'s FULL (non-light) path,
+    /// which holds `mg.rwlock` EXCLUSIVE — draining all SHARED readers so the
+    /// per-shard node-store scan is race-free (the same no-concurrent-mutation
+    /// invariant `rebuildExactPropertyIndexForTesting` relies on). The rebuild is
+    /// PARALLEL (one scan task per engine shard on the shared thread pool) and
+    /// uncancellable (empty CancelFlags — a checkpoint build has no read scope).
+    ///
+    /// The rebuild scans the DURABLE store pages (`node_store.scanNodes` →
+    /// buffer pool → disk), so it does NOT require the graph to be resident /
+    /// hydrated — it covers a graph that is POPULATED ON DISK but not fully in
+    /// memory (the 14.27M lazily-hydrated main graph). The buffer pool is
+    /// bounded, so the scan does not spike RSS to the fully-resident set.
+    ///
+    /// Skips (returns false) only when the graph has NO durable nodes (manifest
+    /// count 0) — nothing to build; persisting an empty snapshot is pointless.
+    ///
+    /// GAP-ENT-0048e — NO hydration grace gate. Earlier iterations gated this on
+    /// the store-wide `hydration_build_mutex` (via `tryBeginCacheReclaimGrace`),
+    /// which was the WRONG gate and permanently skipped the build at clean
+    /// shutdown: a hydration task still holds that mutex during the shutdown
+    /// checkpoint window, so the tryLock failed and — there being no "next
+    /// checkpoint" at shutdown — the index was never built. The grace gate was
+    /// inherited from the checkpoint's cache-RECLAIM path, which FREES the bounded
+    /// caches' per-graph retire lists that an in-flight hydration merge's shallow
+    /// Node copies point into (the C-1 UAF). This store-scan build is a DIFFERENT
+    /// operation and is safe to run concurrently with a hydration:
+    ///   * It touches NONE of the C-1 UAF surface — no bounded node/adj/edge cache,
+    ///     no retire lists, no shallow-Node copies. It reads the DURABLE engine
+    ///     stores (`node_store.scanNodes` → buffer pool → disk pages;
+    ///     `label_store.getLabels`; `getAllProperties`) and writes only the
+    ///     adapter's own mutex-sharded exact index. It never frees retire memory.
+    ///   * A concurrent first-touch reopen hydration is READ-ONLY on the engine
+    ///     node/label/property stores (it builds the graph_store RESIDENT indexes
+    ///     from a scan; it does not mutate the engine). The one exception — the
+    ///     legacy-IdMap node-property backfill (`adapter.setNodeProperty` in
+    ///     `loadOneGraphFromAdapterFull`, guarded by `legacy_map != null`) — runs
+    ///     only for LEGACY-format stores (never the current slab format) and, even
+    ///     then, goes through the engine's own concurrency-safe write path (the
+    ///     same buffer-pool/page-latch path that serves concurrent query reads +
+    ///     bulk-ingest writes in normal operation). The engine already supports
+    ///     the 16 concurrent per-shard reads this very build issues.
+    ///   * It must NOT block on `hydration_build_mutex` (the discarded Option B):
+    ///     the hydration persist-on-complete path takes `hydration_build_mutex` →
+    ///     `mg.rwlock` (T3 `checkpointGraph`), so blocking on that mutex while we
+    ///     hold `mg.rwlock` EXCLUSIVE would be an ABBA deadlock. Decoupling from
+    ///     the mutex entirely avoids it.
+    /// So the build fires unconditionally (given durable nodes), concurrent with
+    /// any in-flight hydration, and the clean-shutdown checkpoint persists it.
+    /// GAP-0064 (adversarial review — CRITICAL): the FULL-checkpoint exact-index
+    /// build/persist decision, run UNDER the shared `exact_index_build_mutex` so it
+    /// can never run a `rebuildExactNodePropertyIndex` concurrently with the
+    /// background-reopen worker OR the lazy-first-access build (both take the same
+    /// mutex) — the two-concurrent-rebuild double-insert corruption.
+    ///
+    /// Acquires the mutex NON-BLOCKING (`tryLock`): the checkpoint holds mg.rwlock
+    /// EXCLUSIVE, so a blocking acquire against an in-flight ~14-min build would
+    /// stall every operation on the graph for the whole build. On tryLock failure a
+    /// build already owns the index and will persist on completion — skip WITHOUT
+    /// invalidating (dropping its soon-to-be-persisted file would only cost a
+    /// needless reopen rebuild). Caller MUST hold mg.rwlock EXCLUSIVE (the FULL,
+    /// non-light checkpoint path).
+    fn checkpointPersistExactIndexLocked(self: *StorageAdapter, mg: *ManagedGraph, dir_path: []const u8) void {
+        const io = std.Io.Threaded.global_single_threaded.io();
+        if (!mg.exact_index_build_mutex.tryLock()) {
+            // A background-reopen worker or a lazy-first-access build holds the
+            // mutex (it is mid-scan). It latches `built` + persists on completion;
+            // do NOT run a second rebuild here and do NOT invalidate its file.
+            slog.info("skipping exact-index persist: a rebuild holds the build mutex (background worker or lazy first-access) — it persists on completion", &.{
+                SAttr.string("graph", mg.name),
+            });
+            return;
+        }
+        defer mg.exact_index_build_mutex.unlock(io);
+
+        if (mg.exact_index_built.load(.acquire)) {
+            // Built (reloaded at open, or built by a prior touch/this checkpoint).
+            // Persist the current index — under the build mutex, so no concurrent
+            // rebuild mutates it during the save.
+            mg.exact_node_property_index.saveToFile(dir_path, mgCheckpointEpoch(mg), mgDurableFrontierLsn(mg)) catch |err| {
+                log.warn("failed to persist property index for graph '{s}': {}", .{ mg.name, err });
+            };
+            return;
+        }
+
+        // Deferred AND no build in flight (we hold the mutex): materialise it now
+        // from the durable pages — race-free (mg.rwlock EXCLUSIVE drains readers;
+        // the build mutex excludes the worker/lazy builds) — then persist. An empty
+        // (0-node) deferred graph has nothing to build → invalidate any stale file.
+        if (self.eagerBuildDeferredIndexForFullCheckpoint(mg)) {
+            mg.exact_node_property_index.saveToFile(dir_path, mgCheckpointEpoch(mg), mgDurableFrontierLsn(mg)) catch |err| {
+                log.warn("failed to persist eagerly-built property index for graph '{s}': {}", .{ mg.name, err });
+            };
+        } else {
+            invalidateExactPropertyIndexFile(self.allocator, dir_path);
+        }
+    }
+
+    fn eagerBuildDeferredIndexForFullCheckpoint(self: *StorageAdapter, mg: *ManagedGraph) bool {
+        _ = self;
+        // GAP-0064 (adversarial review): now ALWAYS called from
+        // `checkpointPersistExactIndexLocked` while it holds BOTH mg.rwlock
+        // EXCLUSIVE and `exact_index_build_mutex` — so the per-shard scan is
+        // race-free against the background-reopen worker + lazy builds too, not just
+        // live mutations. (Previously called directly from the checkpoint ladder
+        // under mg.rwlock only, which left the lazy-build-vs-eager-build race open.)
+        // Nothing to materialise for a graph with no durable nodes.
+        var node_count: u64 = 0;
+        for (mg.engine.shards) |shard| {
+            node_count += @atomicLoad(u64, &shard.manifest.node_count, .monotonic);
+        }
+        if (node_count == 0) return false;
+
+        // Parallel rebuild from durable pages. `.{}` cancel flags never trip: a
+        // checkpoint-time build must run to completion (it is NOT tied to any
+        // client connection, unlike the lazy first-access rebuild).
+        // GAP-ENT-0048 (task0048d) diagnostic: starting the
+        // parallel store-scan build. Time it so the 14.27M run sees the one-time
+        // cost, and the dispatch counters (pool vs inline) prove it fanned out.
+        const build_start_ns = monoNanosNow();
+        rebuildExactNodePropertyIndex(mg, .{}) catch |err| {
+            log.warn("eager exact-index build at full checkpoint failed for graph '{s}': {} — staying deferred", .{ mg.name, err });
+            return false;
+        };
+        mg.exact_index_built.store(true, .release);
+        _ = g_exact_eager_checkpoint_builds.fetchAdd(1, .monotonic);
+        slog.info("deferred exact-index eagerly built at full checkpoint from durable store (reopen will reload the snapshot)", &.{
+            SAttr.string("graph", mg.name),
+            SAttr.uint("nodes", node_count),
+            SAttr.uint("build_ms", (monoNanosNow() -| build_start_ns) / std.time.ns_per_ms),
+            SAttr.uint("pool_tasks", g_exact_rebuild_pool_tasks.load(.acquire)),
+            SAttr.uint("inline_tasks", g_exact_rebuild_inline_tasks.load(.acquire)),
+        });
+        return true;
+    }
+
+    /// GAP-ENT-0048f: build + persist the exact node-property index DURING
+    /// first-touch hydration — the RACE-FREE path that supersedes the
+    /// eager-build-at-FULL-checkpoint approach. Called from
+    /// `GraphStore.ensureGraphHydrated` right after hydration completes
+    /// (done=true, not failed), while it holds the store-wide
+    /// `hydration_build_mutex`.
+    ///
+    /// Runs LOCK-FREE w.r.t. `mg.rwlock` (respecting the deliberate "hydration
+    /// never holds mg.rwlock" invariant): it scans the DURABLE engine node
+    /// stores exactly as the hydration scan just did, populates the adapter's
+    /// mutex-sharded exact index, latches `built`, and persists `prop_exact.idx`
+    /// DIRECTLY (shard mutexes only — NOT the exclusive-rwlock checkpoint). This
+    /// removes the shutdown-checkpoint dependency and the rwlock race that the
+    /// checkpoint approach hit at 14.27M (the bounded shutdown checkpoint could
+    /// not acquire mg.rwlock against the in-flight hydration scan, so on a clean
+    /// shutdown — no retry — the build never ran). After this returns a
+    /// seek/GROUP BY is served from the built index with NO lazy rebuild, and
+    /// the next reopen reloads the persisted snapshot.
+    ///
+    /// No-op when the index is already built (loaded from disk at open, or built
+    /// by a prior touch). The one-shot `exact_index_build_mutex` latch (shared
+    /// with the lazy path) makes concurrent first-touch + hydration build exactly
+    /// once. Best-effort persist: a save error leaves the index correct in memory.
+    pub fn buildAndPersistExactIndexForHydratedGraph(self: *StorageAdapter, graph_name: []const u8) void {
+        // FOLD caller (`GraphStore.ensureGraphHydrated` first-touch). NO-OP when a
+        // race-free background reopen rebuild owns this graph's build (GAP-0064
+        // FIX A) — so hydration returns after resident loop1/loop2 instead of
+        // parking every reader behind the O(graph) index build.
+        self.buildAndPersistExactIndexForHydratedGraphEx(graph_name, false);
+    }
+
+    /// Core of `buildAndPersistExactIndexForHydratedGraph`.
+    ///
+    /// `is_background_worker`:
+    ///   * `false` (the hydration FOLD): NO-OP when `exact_rebuild_inflight` is
+    ///     set — a spawned reopen rebuild already owns this build, and the fold
+    ///     waiting on it would re-couple readers to the ~14-min build. It only
+    ///     runs the build itself when NO background rebuild is in flight (spawn
+    ///     failed / disabled) — the pre-FIX-A fallback.
+    ///   * `true` (the spawned `exactIndexRebuildOnReopenWorker`): bypasses the
+    ///     inflight NO-OP gate (it IS the owner) and CLEARS `exact_rebuild_inflight`
+    ///     when finished/aborted, so `checkpointOneGraph`'s inflight-gated
+    ///     exact-index branch re-opens once the build is done.
+    fn buildAndPersistExactIndexForHydratedGraphEx(self: *StorageAdapter, graph_name: []const u8, is_background_worker: bool) void {
+        const mg = blk: {
+            self.mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
+            defer self.mutex.unlock(std.Io.Threaded.global_single_threaded.io());
+            break :blk self.requireExistingGraphLocked(graph_name) catch return;
+        };
+        // GAP-0064 FIX A: the fold defers to an in-flight background rebuild; the
+        // worker proceeds and clears the flag on every return path below.
+        if (!is_background_worker and mg.exact_rebuild_inflight.load(.acquire)) return;
+        defer if (is_background_worker) mg.exact_rebuild_inflight.store(false, .release);
+        if (mg.exact_index_built.load(.acquire)) return;
+
+        // Double-checked one-shot latch (the SAME mutex the lazy first-access
+        // build uses), so a concurrent lazy build + this hydration build produce
+        // the index EXACTLY once. `exact_index_build_mutex` is a leaf (no path
+        // takes it then reaches for mg.rwlock / hydration_build_mutex), so this
+        // cannot deadlock against the hydration_build_mutex the caller holds.
+        const io = std.Io.Threaded.global_single_threaded.io();
+        mg.exact_index_build_mutex.lockUncancelable(io);
+        defer mg.exact_index_build_mutex.unlock(io);
+        if (mg.exact_index_built.load(.acquire)) return;
+
+        // GAP-0064 FIX A (TEST-ONLY): hold the background build "in flight" so a
+        // test can prove first-touch reads return (via the fold no-op) while the
+        // exact index is still building. Never blocks in production (gate == 0).
+        if (comptime @import("builtin").is_test) {
+            if (is_background_worker and g_test_exact_build_gate.load(.acquire) != 0) {
+                _ = g_test_build_gate_waiters.fetchAdd(1, .acq_rel);
+                const gate_req = std.os.linux.timespec{ .sec = 0, .nsec = std.time.ns_per_ms };
+                var gate_rem: std.os.linux.timespec = undefined;
+                while (g_test_exact_build_gate.load(.acquire) != 0) {
+                    _ = std.os.linux.nanosleep(&gate_req, &gate_rem);
+                }
+                _ = g_test_build_gate_waiters.fetchSub(1, .acq_rel);
+            }
+        }
+
+        // Lock-free parallel scan of the durable engine stores -> mutex-sharded
+        // exact index. GAP-0064 (review — shutdown-stall fix): the BACKGROUND
+        // worker's build is cancellable ONLY by process shutdown
+        // (`exact_build_shutdown_cancel`, wired as the STREAM cancel flag that the
+        // rebuild polls every 256 nodes), so a graceful SIGTERM aborts it promptly
+        // instead of stalling teardown ~14 min. The FOLD path stays uncancellable
+        // (`.{}`) — it runs inline on the hydration thread. A shutdown-aborted build
+        // returns here without latching `built`, so the index stays deferred and
+        // the next reopen rebuilds cleanly (accessors gate on `built`).
+        const build_cancel: read_budget.CancelFlags = if (is_background_worker)
+            .{ .cancel = &self.exact_build_shutdown_cancel }
+        else
+            .{};
+        const build_start_ns = monoNanosNow();
+        rebuildExactNodePropertyIndex(mg, build_cancel) catch |err| {
+            log.warn("hydration-time exact-index build failed/cancelled for graph '{s}': {} — staying deferred", .{ graph_name, err });
+            return;
+        };
+        mg.exact_index_built.store(true, .release);
+        _ = g_exact_hydration_builds.fetchAdd(1, .monotonic);
+
+        // Persist prop_exact.idx DIRECTLY (shard mutexes only — no mg.rwlock, no
+        // checkpoint). This is what removes the shutdown-checkpoint dependency.
+        // Stamped on the Path B (epoch, covered_lsn) contract. NOTE: this direct
+        // persist does NOT run a checkpoint, so `covered_lsn` = the CURRENT
+        // durable frontier `last_checkpoint_lsn` (which may lag the just-scanned
+        // pages if committed writes since the last checkpoint sit in the WAL). If
+        // such a tail exists, the NEXT reopen's covered<frontier gate REBUILDS
+        // (safe, never a stale serve); a subsequent FULL checkpoint re-stamps it
+        // reloadably (covered == frontier). The in-memory index is complete and
+        // correct either way; this persist buys crash-safety, not a reload
+        // guarantee under a still-open WAL tail.
+        if (graphDirPath(self.allocator, self.data_dir, mg.uuid)) |dir_path| {
+            defer self.allocator.free(dir_path);
+            mg.exact_node_property_index.saveToFile(dir_path, mgCheckpointEpoch(mg), mgDurableFrontierLsn(mg)) catch |err| {
+                log.warn("hydration-time exact-index persist failed for graph '{s}': {} — index stays memory-only until the next checkpoint", .{ graph_name, err });
+            };
+        } else |err| {
+            log.warn("hydration-time exact-index persist: dir path failed for graph '{s}': {}", .{ graph_name, err });
+        }
+
+        var node_count: u64 = 0;
+        for (mg.engine.shards) |shard| node_count += @atomicLoad(u64, &shard.manifest.node_count, .monotonic);
+        slog.info("exact-index built + persisted during hydration (race-free; reopen will reload)", &.{
+            SAttr.string("graph", graph_name),
+            SAttr.uint("nodes", node_count),
+            SAttr.uint("build_ms", (monoNanosNow() -| build_start_ns) / std.time.ns_per_ms),
+            SAttr.uint("pool_tasks", g_exact_rebuild_pool_tasks.load(.acquire)),
+        });
+    }
+
+    /// Task 3 (hydration persist-on-complete): FULL checkpoint of a SINGLE
+    /// graph's engine — flush pages, truncate the WAL, bump the manifest
+    /// counter, and persist the gs-side derived-index snapshots (Lever-B
+    /// disciplines: dirty indexes saved, clean+trusted restamped, clean+
+    /// untrusted left alone — all inside `engine.checkpoint()`) plus the
+    /// geode-side H4 exact property index IF built (invalidated otherwise —
+    /// the persist-empty gate).
+    ///
+    /// Called by `GraphStore.persistHydrationProductsForGraph` right after a
+    /// successful first-touch hydration so the graph-scoped IdMap/loop2
+    /// snapshots can be stamped at a durable post-checkpoint counter.
+    ///
+    /// The rwlock acquisition is BOUNDED (never the FULL path's unbounded
+    /// spin): the caller holds the store-wide `hydration_build_mutex`, and an
+    /// unbounded exclusive spin here could live-lock against a SHARED-lock
+    /// holder that is itself blocked on a hydration chokepoint (e.g. a bulk
+    /// apply worker in `createNodeWithReservedIdAndSlotGraphAndTenant` →
+    /// `ensureGraphHydrated`). Busy past the deadline => error; the caller
+    /// logs loudly and degrades (products stay memory-only until the next
+    /// full checkpoint — pre-Task-3 behaviour).
+    pub fn checkpointGraph(self: *StorageAdapter, graph_name: []const u8) !void {
+        const mg = blk: {
+            self.mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
+            defer self.mutex.unlock(std.Io.Threaded.global_single_threaded.io());
+            break :blk try self.requireExistingGraphLocked(graph_name);
+        };
+        switch (self.checkpointOneGraph(mg, false, true, 5 * std.time.ns_per_s)) {
+            .ok => {},
+            .skipped_busy => return error.CheckpointLockBusy,
+            .engine_failed => return error.CheckpointFailed,
+        }
+
+        // Registry sync for THIS graph — same lockless manifest-count read as
+        // checkpointAllEx (see the EDGE-PHASE 40001 FIX #1 rationale there:
+        // NEVER take the per-graph rwlock SHARED for this metadata read).
+        var nc: u64 = 0;
+        var ec: u64 = 0;
+        for (mg.engine.shards) |shard| {
+            nc += @atomicLoad(u64, &shard.manifest.node_count, .monotonic);
+            ec += @atomicLoad(u64, &shard.manifest.edge_count, .monotonic);
+        }
+        {
+            self.mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
+            defer self.mutex.unlock(std.Io.Threaded.global_single_threaded.io());
+            self.upsertRegistryEntryLocked(mg.name, mg.uuid, nc, ec);
+            self.saveRegistryLocked() catch |err| {
+                log.warn("failed to persist graph registry: {}", .{err});
+            };
+        }
+        // Deliberately does NOT touch `checkpoints_total` /
+        // `pending_bulk_ops` / `last_checkpoint_mono_ns`: those drive the
+        // GAP-0900 all-graph cadence + backpressure accounting, and a
+        // graph-scoped hydration persist must not masquerade as a full
+        // checkpoint cycle to that machinery.
+        slog.info("graph-scoped full checkpoint complete (hydration persist-on-complete)", &.{
+            SAttr.string("graph", mg.name),
+        });
+    }
+
+    /// H4 persist-on-build: make a JUST-REBUILT exact node-property index
+    /// durable NOW instead of at the next FULL checkpoint (typically clean
+    /// shutdown) — a crash in that window used to re-pay the whole O(graph)
+    /// first-access rebuild (~32 min at 14.27M) on reopen.
+    ///
+    /// Triggered by `ensureExactNodePropertyIndexBuilt` strictly AFTER a
+    /// successful REBUILD latched `exact_index_built = true` — never after a
+    /// snapshot LOAD (the load path latches at open without entering the
+    /// rebuild branch; re-persisting it would be a pointless full rewrite).
+    ///
+    /// Runs on a BACKGROUND thread (tracked in `exact_persist_threads`,
+    /// joined by `deinit`) because the triggering call sites include paths
+    /// that HOLD the per-graph rwlock SHARED (the multi-prop MERGE probe:
+    /// bulkMergeNodeWithReservedId* → findNodeMatchingMergeProps →
+    /// copySmallestMergePropCandidates), where an inline `checkpointGraph`
+    /// would spin its bounded EXCLUSIVE acquire against our own SHARED hold
+    /// for the full 5 s deadline and always fail — stalling a MERGE that
+    /// holds the tuple lock. A fresh thread holds no locks, so the bounded
+    /// acquire wins as soon as concurrent readers drain.
+    ///
+    /// Best-effort, non-fatal (counted + logged): the index stays correct in
+    /// memory either way, and the 88a05773 never-persist-unbuilt discipline
+    /// is enforced by `checkpointOneGraph`, which re-checks the built latch
+    /// under the EXCLUSIVE rwlock and INVALIDATES instead of persisting if
+    /// the index was torn down in between. Kill switch:
+    /// GEODE_DISABLE_EXACT_INDEX_PERSIST_ON_BUILD=1.
+    fn spawnExactIndexPersistAfterBuild(self: *StorageAdapter, graph_name: []const u8) void {
+        if (exactIndexPersistOnBuildDisabled()) return;
+        _ = g_exact_persist_attempts.fetchAdd(1, .monotonic);
+        const name_copy = self.allocator.dupe(u8, graph_name) catch {
+            _ = g_exact_persist_failures.fetchAdd(1, .monotonic);
+            log.warn("exact-index persist-on-build skipped: OOM duping graph name '{s}'", .{graph_name});
+            return;
+        };
+        const io = std.Io.Threaded.global_single_threaded.io();
+        self.exact_persist_mutex.lockUncancelable(io);
+        defer self.exact_persist_mutex.unlock(io);
+        if (self.exact_persist_shutdown) {
+            self.allocator.free(name_copy);
+            _ = g_exact_persist_failures.fetchAdd(1, .monotonic);
+            return;
+        }
+        // Reserve BEFORE spawning so a post-spawn OOM can never leave an
+        // unjoinable (leaked) thread behind.
+        self.exact_persist_threads.ensureUnusedCapacity(self.allocator, 1) catch {
+            self.allocator.free(name_copy);
+            _ = g_exact_persist_failures.fetchAdd(1, .monotonic);
+            log.warn("exact-index persist-on-build skipped: OOM reserving thread slot for '{s}'", .{graph_name});
+            return;
+        };
+        const t = std.Thread.spawn(.{}, exactIndexPersistWorker, .{ self, name_copy }) catch |err| {
+            self.allocator.free(name_copy);
+            _ = g_exact_persist_failures.fetchAdd(1, .monotonic);
+            log.warn("exact-index persist-on-build skipped: thread spawn failed for '{s}': {}", .{ graph_name, err });
+            return;
+        };
+        self.exact_persist_threads.appendAssumeCapacity(t);
+    }
+
+    /// H4 persist-on-build worker: one bounded graph-scoped FULL checkpoint
+    /// (`checkpointGraph` — the T3 path: 5 s tryLock re-probe acquire, engine
+    /// checkpoint, exact-index persist-if-built, registry sync). Owns and
+    /// frees `graph_name`. A graph DROPped between spawn and run fails the
+    /// name lookup inside and is counted as a failure (correct: nothing left
+    /// to persist).
+    fn exactIndexPersistWorker(self: *StorageAdapter, graph_name: []u8) void {
+        defer self.allocator.free(graph_name);
+        self.checkpointGraph(graph_name) catch |err| {
+            _ = g_exact_persist_failures.fetchAdd(1, .monotonic);
+            slog.warn("exact-index persist-on-build failed; index stays memory-only until the next full checkpoint (a crash before then re-pays the rebuild)", &.{
+                SAttr.string("graph", graph_name),
+                SAttr.string("error", @errorName(err)),
+            });
+            return;
+        };
+        _ = g_exact_persist_completions.fetchAdd(1, .monotonic);
+        slog.info("exact-index persist-on-build complete (crash-safe)", &.{
+            SAttr.string("graph", graph_name),
+        });
+    }
+
+    /// GAP-ENT-0048 crash-reconcile (Phase E2): on a `.stale` reopen (a present
+    /// prop_exact.idx snapshot rejected because a committed WAL tail advanced the
+    /// durable frontier past its covered_lsn), attempt an O(tail) RECONCILE of
+    /// the snapshot instead of the O(graph) full rebuild — but ONLY when it is
+    /// provably SOUND. Returns `true` iff the reconcile completed and the
+    /// in-memory index is now correct-as-of the recovered tail (caller latches
+    /// `exact_index_built`); `false` on ANY doubt (caller falls back to the safe
+    /// full rebuild). A WRONG reconcile = silently-wrong WHERE/GROUP-BY/DISTINCT,
+    /// so every uncertain branch returns `false`.
+    ///
+    /// Called INLINE from `openGraphLocked` before the graph is published to
+    /// `self.engines` (so no other thread can touch the index) — the most
+    /// race-free routing, and O(tail)-bounded (unlike the O(graph) rebuild that
+    /// must be deferred to a background thread).
+    ///
+    /// Gate (identical to gs's own Path B derived-index gate, mirrored on geode's
+    /// aggregate stamp): stamped_epoch == current epoch (no checkpoint since the
+    /// snapshot) AND current durable frontier > stamped covered_lsn (a tail
+    /// exists) AND stamped covered_lsn == pre-recovery frontier (EXACTLY one
+    /// recovery since the snapshot — never reconcile across >1 recovery). On any
+    /// gate miss, or a null/absent tail node set (overflow / unattributable
+    /// props), or a missing/torn reverse map, or a per-node re-derive error →
+    /// `false` (full rebuild).
+    fn tryReconcileExactIndexOnReopen(self: *StorageAdapter, mg: *ManagedGraph, graph_dir_path: []const u8) bool {
+        // 1) Read the snapshot's (epoch, covered_lsn) stamp from its header.
+        const stamp = readExactIndexStamp(self.allocator, graph_dir_path) orelse return false;
+
+        // 2) Gate on the WAL-aware single-recovery contract.
+        const cur_epoch = mgCheckpointEpoch(mg);
+        const cur_frontier = mgDurableFrontierLsn(mg);
+        const pre_recovery = mgPreRecoveryFrontierLsn(mg);
+        if (stamp.epoch != cur_epoch) return false; // a checkpoint ran since the snapshot → rebuild
+        if (cur_frontier <= stamp.covered_lsn) return false; // no committed tail → the caller's .stale path shouldn't reach here, but be safe
+        if (stamp.covered_lsn != pre_recovery) return false; // multi-crash / >1 recovery since the snapshot → rebuild
+
+        // 3) Resolve the tail-affected node ids FIRST — before any base load or
+        //    per-node re-derive — because gs frees `tail_affected_pages` on its
+        //    first derived-hydration access (the G1 lifecycle contract). Three-way
+        //    signal: null → full rebuild required; empty → nothing to reconcile;
+        //    non-empty → the (super)set of tail-affected node ids.
+        const maybe_ids = mg.engine.tailAffectedNodeIds(self.allocator) catch return false;
+        const ids = maybe_ids orelse return false; // null → rebuild
+        defer self.allocator.free(ids);
+
+        // 4) Load the covered_lsn BASE postings (the snapshot as it stood at the
+        //    last checkpoint). `expected_covered_lsn == stamp.covered_lsn` (==
+        //    pre_recovery, gated) so the file loads despite the tail.
+        const base_outcome = mg.exact_node_property_index.loadFromFile(graph_dir_path, cur_epoch, stamp.covered_lsn);
+        if (base_outcome != .loaded) return false;
+        // From here a `false` return MUST leave the index EMPTY (a partial index
+        // is worse than a rebuild): every failure branch below calls `clear()`
+        // before `return false` (this fn returns `bool`, so `errdefer` cannot).
+
+        if (ids.len == 0) {
+            // A committed tail advanced the frontier but touched NO node-owning
+            // pages (e.g. edge-only) → the node-property base is already correct.
+            _ = g_exact_index_reconciled.fetchAdd(1, .monotonic);
+            return true;
+        }
+
+        // 5) Load the reverse map (node → old encoded posting keys), stamped
+        //    IDENTICALLY to the base. Missing/torn/mismatched → clear + rebuild.
+        var rev = NodePropertyReverseMap.init(self.allocator);
+        defer rev.deinit();
+        if (rev.loadFromFile(graph_dir_path, cur_epoch, stamp.covered_lsn) != .loaded) {
+            mg.exact_node_property_index.clear();
+            return false;
+        }
+
+        // 6) Reconcile each tail-affected node: EVICT its OLD postings (reverse
+        //    map) then RE-DERIVE its CURRENT postings from the engine (identical
+        //    to how the full rebuild derives them, so the result is key-for-key
+        //    AND count-for-count equal to a rebuild). Handles all shapes:
+        //      * INSERT (no old entry → nothing to evict; add current),
+        //      * in-place VALUE change (evict old value posting; add new value —
+        //        the count moves from old value to new),
+        //      * DELETE (evict old; getNode == null → add nothing),
+        //      * unchanged page-mate (evict then re-add the SAME → net no-op).
+        //    A superset from `tailAffectedNodeIds` is harmless (idempotent).
+        for (ids) |node_id| {
+            // (a) EVICT old postings via the reverse map (no value decode).
+            if (rev.keysFor(node_id)) |old_keys| {
+                for (old_keys) |encoded_key| {
+                    mg.exact_node_property_index.removeByEncodedKey(encoded_key, node_id);
+                }
+            }
+
+            // (b) RE-DERIVE current postings from the engine's CURRENT state.
+            const node_shard = mg.shardEngineForNode(node_id);
+            const maybe_rec = node_shard.getNode(node_id) catch {
+                mg.exact_node_property_index.clear();
+                return false;
+            };
+            const rec = maybe_rec orelse continue; // deleted/tombstoned → evict-only
+            // Mirror rebuildExactNodePropertyIndex's per-node derivation EXACTLY.
+            if (rec.label_head == 0 or rec.prop_head == 0) continue;
+            const label_ids = node_shard.label_store.getLabels(rec.label_head, mg.engine.allocator) catch {
+                mg.exact_node_property_index.clear();
+                return false;
+            };
+            defer mg.engine.allocator.free(label_ids);
+            addNodePropertiesForLabels(mg, node_id, label_ids, rec.prop_head) catch {
+                mg.exact_node_property_index.clear();
+                return false;
+            };
+        }
+
+        _ = g_exact_index_reconciled.fetchAdd(1, .monotonic);
+        return true;
+    }
+
+    /// GAP-ENT-0048 Task 5.3b: spawn a BACKGROUND thread that rebuilds a
+    /// reopen-deferred (stale-snapshot) exact index via the RACE-FREE
+    /// hydration-scan build (`buildAndPersistExactIndexForHydratedGraph`:
+    /// parallel `rebuildExactNodePropertyIndex` under the build mutex + a direct
+    /// shard-mutex-only persist — no `mg.rwlock`, no checkpoint rwlock race),
+    /// instead of leaving the whole O(graph) rebuild for the first client query
+    /// to pay INLINE. Tracked in `exact_persist_threads` (joined by `deinit`,
+    /// which sets `exact_persist_shutdown` first so a late reopen refuses to
+    /// spawn). Reuses the H4 persist-on-build lifecycle + `graph_name` ownership
+    /// (dupe here, worker frees). Best-effort and non-fatal: on ANY spawn failure
+    /// the index simply stays deferred and the first access rebuilds it (the
+    /// pre-5.3b behaviour). Idempotent against a racing first-access build — both
+    /// gate on the `exact_index_built` latch under the build mutex.
+    fn spawnExactIndexRebuildOnReopen(self: *StorageAdapter, mg: *ManagedGraph, graph_name: []const u8) void {
+        const name_copy = self.allocator.dupe(u8, graph_name) catch {
+            log.warn("reopen eager exact-index rebuild skipped: OOM duping graph name '{s}'", .{graph_name});
+            return;
+        };
+        const io = std.Io.Threaded.global_single_threaded.io();
+        self.exact_persist_mutex.lockUncancelable(io);
+        defer self.exact_persist_mutex.unlock(io);
+        if (self.exact_persist_shutdown) {
+            self.allocator.free(name_copy);
+            return;
+        }
+        // Reserve BEFORE spawning so a post-spawn OOM never leaks an unjoinable
+        // thread.
+        self.exact_persist_threads.ensureUnusedCapacity(self.allocator, 1) catch {
+            self.allocator.free(name_copy);
+            log.warn("reopen eager exact-index rebuild skipped: OOM reserving thread slot for '{s}'", .{graph_name});
+            return;
+        };
+        // GAP-0064 FIX A: publish "a background rebuild owns this build" BEFORE
+        // the worker exists, so the worker (which CLEARS this flag when done) can
+        // never race ahead of this store and leave it stuck true. Cleared again
+        // if the spawn itself fails (below). While set: the hydration fold no-ops
+        // and `checkpointOneGraph` skips the (double-inserting) eager build.
+        mg.exact_rebuild_inflight.store(true, .release);
+        const t = std.Thread.spawn(.{}, exactIndexRebuildOnReopenWorker, .{ self, name_copy }) catch |err| {
+            mg.exact_rebuild_inflight.store(false, .release);
+            self.allocator.free(name_copy);
+            log.warn("reopen eager exact-index rebuild skipped: thread spawn failed for '{s}': {}", .{ graph_name, err });
+            return;
+        };
+        self.exact_persist_threads.appendAssumeCapacity(t);
+        _ = g_exact_reopen_spawns.fetchAdd(1, .monotonic);
+    }
+
+    /// Worker for `spawnExactIndexRebuildOnReopen`: run the race-free build (which
+    /// no-ops if a first-access build already latched `built`) and free the owned
+    /// name. `buildAndPersistExactIndexForHydratedGraph` is itself best-effort and
+    /// logs its own outcome; a graph DROPped between spawn and run fails the name
+    /// lookup inside and leaves nothing to build (correct).
+    fn exactIndexRebuildOnReopenWorker(self: *StorageAdapter, graph_name: []u8) void {
+        defer self.allocator.free(graph_name);
+        // GAP-0064 FIX A: `true` = the owning background worker — bypass the fold
+        // no-op gate, run the build, and clear `exact_rebuild_inflight` on exit.
+        self.buildAndPersistExactIndexForHydratedGraphEx(graph_name, true);
+    }
+
     /// Number of completed `checkpointAll` runs since process start.
     ///
     /// GAP-0900 observability: lets operators (and the deferred-mode bulk
@@ -5842,6 +8521,25 @@ pub const StorageAdapter = struct {
     /// fires during a sustained bulk load.
     pub fn checkpointsTotal(self: *const StorageAdapter) u64 {
         return self.checkpoints_total.load(.monotonic);
+    }
+
+    /// GAP-ENT-0038: export the checkpoint-cadence counters on the /metrics
+    /// endpoint so operators can verify the deferred-mode checkpoint cadence
+    /// directly (`adapter_checkpoints_total` should climb steadily during a
+    /// bulk ingest; `adapter_pending_bulk_ops` should sawtooth below the
+    /// GEODE_CHECKPOINT_OPS threshold) instead of inferring it from log lines
+    /// — the inference that misread the 14.27M ingest as "checkpointing
+    /// stopped" when three of the four checkpoint drivers simply never logged.
+    /// Best-effort and idempotent: no-op until the global registry exists,
+    /// latched after the first successful registration. Called from
+    /// coordinator metric registration (first mutation after bring-up) and
+    /// safe to call from anywhere else.
+    pub fn registerCheckpointMetrics(self: *StorageAdapter) void {
+        const runtime_metrics = @import("runtime_metrics");
+        const reg = runtime_metrics.globalRegistry() orelse return;
+        if (self.checkpoint_metrics_registered.cmpxchgStrong(0, 1, .acq_rel, .acquire) != null) return;
+        reg.register("adapter_checkpoints_total", &self.checkpoints_total) catch {};
+        reg.register("adapter_pending_bulk_ops", &self.pending_bulk_ops) catch {};
     }
 
     /// Bulk write ops applied since the last checkpoint.
@@ -5950,10 +8648,19 @@ pub const StorageAdapter = struct {
         // GAP-0900 L2: the load-driven trigger uses the bounded (light)
         // checkpoint so it stays O(dirty) and keeps pace during bulk ingest.
         self.checkpointAllLight() catch |err| {
-            log.warn("GAP-0900 load-driven checkpoint failed: {s}", .{@errorName(err)});
+            // GAP-ENT-0038: structured logger — `std.log.warn` is compiled out
+            // of ReleaseFast (no std_options override), which would hide a
+            // repeatedly-failing cadence checkpoint from the live server log.
+            slog.warn("GAP-0900 load-driven checkpoint failed", &.{
+                SAttr.string("error", @errorName(err)),
+            });
             return;
         };
-        log.info("GAP-0900 load-driven checkpoint fired total={d}", .{self.checkpoints_total.load(.monotonic)});
+        // GAP-ENT-0038: structured logger so the PRIMARY deferred-mode cadence
+        // driver is visible in production logs (see header comment at `slog`).
+        slog.info("load-driven auto-checkpoint fired", &.{
+            SAttr.uint("checkpoints_total", self.checkpoints_total.load(.monotonic)),
+        });
     }
 
     // ------------------------------------------------------------------
@@ -6243,6 +8950,25 @@ pub const StorageAdapter = struct {
         var cfg = self.config;
         cfg.data_dir = self.data_dir;
 
+        // Security-graph WAL durability carve-out (2026-07-01, data-ingest
+        // security review, gap 0026): `GEODE_WAL_SYNC=deferred` (GAP-0900)
+        // relaxes the per-commit WAL fsync GLOBALLY for replayable bulk
+        // loads. That contract can never hold for `__geode_security`: an
+        // admin credential rotation, user/role/policy/grant mutation, or
+        // HMAC chain reseal is NOT replayable — losing it on an unclean
+        // shutdown silently resurrects the OLD credential (observed live:
+        // persisted admin hash == env seed with an empty security-graph WAL
+        // after a crash). Force the security graph's engines to
+        // `.sync_each_commit` regardless of the operator knob so every
+        // security mutation is durable BEFORE its commit is acknowledged.
+        // Cost: one WAL fsync per security-graph commit — admin ops are
+        // rare; bulk ingest on other graphs keeps the adapter-wide mode
+        // untouched (this `cfg` is a per-graph copy of `self.config`).
+        // Mirrored in `openGraphLocked`. Test:
+        // tests/test_security_wal_durability.zig.
+        const is_security_graph = std.mem.eql(u8, name, "__geode_security");
+        if (is_security_graph) cfg.sync_mode = .sync_each_commit;
+
         const engine = gs.ShardedGraphEngine.create(
             self.allocator,
             self.data_dir,
@@ -6267,7 +8993,7 @@ pub const StorageAdapter = struct {
         // GAP-0512: Only create per-graph audit for the security graph.
         // Other graphs use the global audit logger. Per-graph audit on every
         // graph caused recursive mutex deadlocks and unnecessary I/O.
-        const is_security_graph = std.mem.eql(u8, name, "__geode_security");
+        // (`is_security_graph` hoisted above for the WAL-sync carve-out.)
         mg.* = .{
             .engine = engine,
             // ShardedGraphEngine synchronises the label dictionary across all
@@ -6340,6 +9066,13 @@ pub const StorageAdapter = struct {
         var cfg = self.config;
         cfg.data_dir = self.data_dir;
 
+        // Security-graph WAL durability carve-out — see the twin comment in
+        // `createGraphLocked` (gap 0026): the security graph always runs
+        // per-commit WAL fsync, even when the adapter-wide mode is
+        // `.deferred` (GEODE_WAL_SYNC=deferred bulk-load knob).
+        const is_security_graph = std.mem.eql(u8, name, "__geode_security");
+        if (is_security_graph) cfg.sync_mode = .sync_each_commit;
+
         const engine = gs.ShardedGraphEngine.open(
             self.allocator,
             self.data_dir,
@@ -6361,7 +9094,6 @@ pub const StorageAdapter = struct {
         const merge_tuple_locks = try initMergeTupleLocks(self.allocator);
         errdefer self.allocator.free(merge_tuple_locks);
 
-        const is_security_graph = std.mem.eql(u8, name, "__geode_security");
         mg.* = .{
             .engine = engine,
             .label_dict = LabelStringDict.initView(&engine.shards[0].label_dict),
@@ -6373,6 +9105,12 @@ pub const StorageAdapter = struct {
             .ts_store = try initTimeseriesForGraph(self.allocator, self.data_dir, graph_uuid),
         };
 
+        // gap 0026: after a crash restart, advance the security graph's
+        // manifest counters past the WAL-replayed state (see
+        // healSecurityEngineCounters) — otherwise recovered security records
+        // are scan-invisible and their slots get re-issued.
+        if (is_security_graph) healSecurityEngineCounters(mg);
+
         // Load per-graph FTS from disk (existing graphs may have persisted data).
         if (initFtsForGraph(self.allocator, self.data_dir, graph_uuid, true)) |fts_result| {
             mg.fts_index = fts_result.index;
@@ -6381,14 +9119,93 @@ pub const StorageAdapter = struct {
             mg.fts_dir = fts_result.dir;
         }
 
-        // Try loading the persisted property index; fall back to full rebuild.
-        const loaded_from_disk = blk: {
-            const dir_path = graphDirPath(self.allocator, self.data_dir, graph_uuid) catch break :blk false;
+        // Try loading the persisted property index if it is CURRENT on the
+        // WAL-aware Path B contract (GAP-ENT-0048): its `checkpoint_epoch` stamp
+        // matches the engine's current epoch AND no committed WAL tail advanced
+        // the durable frontier past its covered_lsn. Otherwise fall back to a
+        // race-free hydration/lazy rebuild (never a stale serve).
+        const load_outcome: ExactIndexLoadOutcome = blk: {
+            const dir_path = graphDirPath(self.allocator, self.data_dir, graph_uuid) catch break :blk .absent;
             defer self.allocator.free(dir_path);
-            break :blk mg.exact_node_property_index.loadFromFile(dir_path);
+            break :blk mg.exact_node_property_index.loadFromFile(dir_path, mgCheckpointEpoch(mg), mgDurableFrontierLsn(mg));
         };
-        if (!loaded_from_disk) {
-            try rebuildExactNodePropertyIndex(mg);
+        const loaded_from_disk = load_outcome == .loaded;
+        if (loaded_from_disk) {
+            // Persisted snapshot loaded: the index is complete and ready.
+            mg.exact_index_built.store(true, .release);
+            // GAP-ENT-0048 PRIMARY: record the O(snapshot) reload so a test can
+            // prove the reopen engaged the index WITHOUT an O(graph) rebuild.
+            _ = g_exact_index_reloaded.fetchAdd(1, .monotonic);
+        } else {
+            // H4 (cold-open phase 1): the persisted snapshot was stale (epoch
+            // mismatch or a WAL tail past its covered_lsn — GAP-ENT-0048 Path B),
+            // so the index must be REBUILT from the durable pages. DEFER it out of
+            // the open path (a synchronous O(graph) rebuild would blow the
+            // sub-second cold-open budget — ~1.5-2h at 14.27M). Every index
+            // accessor guards on `exact_index_built`; the eventual rebuild goes
+            // through the race-free parallel scan (`rebuildExactNodePropertyIndex`)
+            // and re-persists on the epoch contract (checkpointOneGraph →
+            // saveToFile), so the NEXT reopen reloads it. Crash-safe (rebuild
+            // reads durable pages; epoch/covered-gated by loadFromFile on reopen).
+            mg.exact_index_built.store(false, .release);
+
+            // GAP-0064 FIX A: PROACTIVELY drive the deferred rebuild through the
+            // RACE-FREE hydration-scan build on a background thread NOW for BOTH a
+            // `.stale` (snapshot present but epoch-mismatched / WAL-tail-past-covered)
+            // AND an `.absent` (never persisted — from-dump bulk ingest, legacy,
+            // LIGHT-only) reopen, rather than leaving the O(graph) build to be
+            // FOLDED synchronously onto the first-touch hydration read path (the
+            // 14.27M "reopen blocks ALL reads ~30 min" enterprise blocker) or paid
+            // INLINE on the first client query (the "85s lazy-on-first-query"
+            // wedge). Open itself only SPAWNS the thread — server-ready is
+            // unchanged, and the fold (`buildAndPersistExactIndexForHydratedGraph`)
+            // no-ops while `exact_rebuild_inflight` is set, so `count(:Taxon)` /
+            // label scans return after resident loop1/loop2 (not after the build).
+            //
+            // CAVEAT (adversarial review — residual): index-served reads (WHERE-seek
+            // / GROUP BY / DISTINCT) issued DURING the background build do NOT
+            // scan-fallback today — `ensureExactNodePropertyIndexBuilt` acquires the
+            // shared `exact_index_build_mutex` (uncancellable), so such a query
+            // BLOCKS behind the in-flight build until it publishes (up to ~14 min at
+            // 14.27M on the FIRST reopen of a from-dump store). count/label scans are
+            // unaffected. The 2nd reopen reloads the persisted index, so this window
+            // only exists on the one-time first-reopen build. A future refinement
+            // (decline the exact-index fast-path → scan while a build is in flight)
+            // would keep those queries responsive during the build.
+            //
+            // Was (pre-FIX-A): only `.stale` spawned; `.absent` stayed on the lazy
+            // path and its build was folded into hydration (blocking every reader).
+            if (!eagerExactRebuildOnReopenDisabled()) {
+                var reconciled = false;
+                if (load_outcome == .stale) {
+                    // GAP-ENT-0048 crash-reconcile (Phase E2): for a present-but-
+                    // stale snapshot, first attempt an O(tail) RECONCILE of the
+                    // committed WAL tail into it (evict each tail node's OLD
+                    // postings via the reverse map + re-derive its CURRENT postings
+                    // from the engine). Sound ONLY on the single-recovery gate; on
+                    // ANY doubt it returns false and we fall back to the background
+                    // rebuild. Inline + pre-publish → race-free, O(tail)-bounded.
+                    // (`.absent` has no persisted base to reconcile into — skip
+                    // straight to the background rebuild.)
+                    reconciled = blk: {
+                        const dir_path = graphDirPath(self.allocator, self.data_dir, graph_uuid) catch break :blk false;
+                        defer self.allocator.free(dir_path);
+                        break :blk self.tryReconcileExactIndexOnReopen(mg, dir_path);
+                    };
+                }
+                if (reconciled) {
+                    mg.exact_index_built.store(true, .release);
+                    log.info("exact property index RECONCILED from WAL tail for graph '{s}' (O(tail), no rebuild)", .{name});
+                } else {
+                    self.spawnExactIndexRebuildOnReopen(mg, owned_name);
+                    log.info("exact property index deferred for graph '{s}' ({s} → race-free background rebuild)", .{
+                        name,
+                        if (load_outcome == .stale) "stale snapshot" else "absent snapshot",
+                    });
+                }
+            } else {
+                log.info("exact property index deferred for graph '{s}' (lazy first-access rebuild; eager reopen rebuild disabled)", .{name});
+            }
         }
 
         try self.engines.put(owned_name, mg);
@@ -6626,6 +9443,9 @@ pub const StorageAdapter = struct {
             defer self.mutex.unlock(std.Io.Threaded.global_single_threaded.io());
             break :blk try self.requireExistingGraphLocked(graph_name);
         };
+        // H4: a live write must never mutate an unbuilt (deferred) exact index
+        // (adding a label re-indexes the node's properties under the new label).
+        try ensureExactNodePropertyIndexBuilt(self, mg);
         const rec = try mg.engine.getNode(node_id) orelse return error.NodeNotFound;
         const label_id = try resolvePersistedLabelId(mg, label);
         const node_shard = mg.shardEngineForNode(node_id);
@@ -6633,11 +9453,16 @@ pub const StorageAdapter = struct {
         if (currentStatementTxnForGraph(graph_name)) |s| {
             if (shardLocalTxnForNode(s.txn_id, node_id)) |local| {
                 try node_shard.addLabelTxn(node_id, label_id, local);
+                // gap 0026: WAL-log the node's REAL label page (see
+                // relogSecurityLabelPageTxn) — no-op outside __geode_security.
+                try relogSecurityLabelPageTxn(mg, node_shard, node_id, local);
             } else {
                 try mg.engine.addLabel(node_id, label_id);
+                try relogSecurityLabelPageAutoCommit(mg, node_shard, node_id);
             }
         } else {
             try mg.engine.addLabel(node_id, label_id);
+            try relogSecurityLabelPageAutoCommit(mg, node_shard, node_id);
         }
         try addNodePropertiesForLabels(mg, node_id, &[_]gs.LabelId{label_id}, rec.prop_head);
     }
@@ -6650,6 +9475,9 @@ pub const StorageAdapter = struct {
             defer self.mutex.unlock(std.Io.Threaded.global_single_threaded.io());
             break :blk try self.requireExistingGraphLocked(graph_name);
         };
+        // H4: a live write must never mutate an unbuilt (deferred) exact index
+        // (removing a label drops the node's postings under that label).
+        try ensureExactNodePropertyIndexBuilt(self, mg);
         const rec = try mg.engine.getNode(node_id) orelse return error.NodeNotFound;
         const label_id = mg.label_dict.getId(label) orelse return; // nothing to remove
         removeNodePropertiesForLabels(mg, node_id, &[_]gs.LabelId{label_id}, rec.prop_head);
@@ -7279,11 +10107,15 @@ fn unlockCandidateShardReads(mg: *ManagedGraph, mask: candidate_shard_mask_int) 
 }
 
 fn copySmallestMergePropCandidates(
+    adapter: *StorageAdapter,
     allocator: Allocator,
     mg: *ManagedGraph,
     label: []const u8,
     props: []const StorageAdapter.PropKV,
 ) ![]u64 {
+    // H4: build the exact index on first access if it was deferred at open
+    // (this MERGE-preselect path reads postings for both probes below).
+    try ensureExactNodePropertyIndexBuilt(adapter, mg);
     const io = std.Io.Threaded.global_single_threaded.io();
     const label_id = blk: {
         mg.string_indexes_mutex.lockUncancelable(io);
@@ -7347,6 +10179,7 @@ fn nodeMatchesMergeProps(node: *const graph_store.Node, graph_name: []const u8, 
 }
 
 fn findNodeMatchingMergeProps(
+    adapter: *StorageAdapter,
     allocator: Allocator,
     mg: *ManagedGraph,
     store: *graph_store.GraphStore,
@@ -7356,11 +10189,48 @@ fn findNodeMatchingMergeProps(
 ) !?u64 {
     // CANARY: REQ=REQ-QUIC-HC-111; FEATURE="High-Concurrency Mutations"; ASPECT=MultiPropertyMergeIndexedProbe; STATUS=TESTED; TEST=test_quic_condition_timedwait_cadence; OWNER=storage; UPDATED=2026-05-27
     //
+    // GAP-0046: the multi-property MERGE match MUST run behind the SAME
+    // hydration chokepoint as the single-key `store.lookupMergeCandidate` and
+    // the edge-endpoint `store.lookupPublicNodeIdByLabelAndAllProps`. Without
+    // it, a DEFERRED (lazy-hydration) graph — the state a crash/OOM restart
+    // reopens into — has an EMPTY resident IdMap (loop1) and node cache
+    // (loop2): the exact-index candidate slots below resolve to a null public
+    // id or a non-resident `store.nodes.getPtr` miss, so the probe reports NO
+    // match and the MERGE wrongly CREATEs a duplicate. (Observed at scale as
+    // ~3.2M dup :Taxon after an OOM restart re-ran the source mid-ingest — the
+    // same read-path "source split" family as the deferred count fix.)
+    //
+    // Composite fast path (mirrors `lookupPublicNodeIdByLabelAndAllProps`): when
+    // the merge props EXACTLY match a registered composite key (the from-dump
+    // `{source, source_id}` node key), resolve the WHOLE key in ONE MAINTAINED,
+    // eviction-INDEPENDENT merge-index probe — O(1), no node-page read, and
+    // authoritative (the composite index is complete and rebuilt on hydration,
+    // and survives node-cache eviction). `lookupCompositeMergeCandidate` runs
+    // ensureGraphHydrated itself, so the hot path is guarded with NO redundant
+    // acquire. This is the enterprise hot path and is collision-correct
+    // (source_id is not globally unique).
+    if (graph_store.compositeKeyIndexForFilters(props)) |composite_idx| {
+        var cid: u64 = 0;
+        switch (store.lookupCompositeMergeCandidate(graph_name, label, composite_idx, props, &cid)) {
+            .found => return cid,
+            .not_found => return null,
+            // Value type can't be encoded into the composite key — fall through
+            // to the exact-index candidate seek (guarded + eviction-safe below).
+            .not_indexable => {},
+        }
+    }
+
+    // Fallback (no registered composite, or an unencodable value type): the
+    // exact-index candidate seek reads store IdMap (loop1) + node cache (loop2),
+    // so it needs the same hydration chokepoint before it can trust them.
+    // ensureGraphHydrated is a lock-free atomic fast-path once built.
+    store.ensureGraphHydrated(graph_name);
+
     // Multi-property MERGE used to scan every node carrying `label` on each
     // miss. Under fan-out this made unique tuple inserts O(label cardinality).
     // Start from the smallest exact-property posting instead, then verify the
     // full tuple under shard read locks to tolerate hash collisions.
-    const candidates = try copySmallestMergePropCandidates(allocator, mg, label, props);
+    const candidates = try copySmallestMergePropCandidates(adapter, allocator, mg, label, props);
     defer allocator.free(candidates);
     if (candidates.len == 0) return null;
 
@@ -7383,7 +10253,10 @@ fn findNodeMatchingMergeProps(
 
     for (candidates) |slot_id| {
         const public_id = @as(u64, @truncate(id_map.nodeUuid(slot_id) orelse continue));
-        const node = store.nodes.getPtr(public_id) orelse continue;
+        // GAP-0046: hydrate-on-miss. Under a bounded node cache (or right after a
+        // deferred reopen) the matching node need not be resident; a plain
+        // `getPtr` would miss it and the MERGE would wrongly create a duplicate.
+        const node = (store.nodes.getOrHydratePtr(public_id) catch null) orelse continue;
         if (nodeMatchesMergeProps(node, graph_name, label, props)) return public_id;
     }
     return null;
@@ -8367,6 +11240,81 @@ test "StorageAdapter: dropGraph removes graph directory and subsystem data" {
     try std.testing.expect(adapter.getTimeseriesStore("__geode_security") == null);
     try std.testing.expect(adapter.getFulltextIndex("__geode_security") == null);
     try std.testing.expect(!adapter.graphExists("__geode_security"));
+}
+
+test "StorageAdapter: getNodePropertyByHead parity with getNodeProperty" {
+    const allocator = std.testing.allocator;
+
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+
+    const path = try std.fmt.allocPrint(allocator, ".zig-cache/tmp/{s}", .{&tmp.sub_path});
+    defer allocator.free(path);
+
+    // Small page_size forces a multi-page property chain on node_b.
+    const cfg = gs.GraphConfig{
+        .page_size = 256,
+        .buffer_pool_pages = 512,
+    };
+    const adapter = try StorageAdapter.init(allocator, path, cfg);
+    defer adapter.deinit();
+
+    const graph = "parity_test";
+    const key = graph_store.INTERNAL_NODE_ID_PROPERTY_KEY;
+
+    // (a) Normal node in shard 0.
+    const node_a = try adapter.createNode(graph, &[_][]const u8{"Label"});
+    try adapter.setNodeProperty(graph, node_a, key, .{ .String = "uuid-aaaa-0000" });
+
+    // (b) Multi-page prop chain: set many props BEFORE the internal id so
+    // the internal id lands past the head page. Nodes are round-robin allocated
+    // so node_b lands in shard 1 (shardOfNode(1) == 1).
+    const node_b = try adapter.createNode(graph, &[_][]const u8{"Label"});
+    var pi: usize = 0;
+    while (pi < 12) : (pi += 1) {
+        const pk = try std.fmt.allocPrint(allocator, "extra_prop_{d:0>2}", .{pi});
+        defer allocator.free(pk);
+        try adapter.setNodeProperty(graph, node_b, pk, .{ .String = "val_0123456789abcdefghij" });
+    }
+    try adapter.setNodeProperty(graph, node_b, key, .{ .String = "uuid-bbbb-1111" });
+
+    // (c) Node with no properties — prop_head stays 0 after creation.
+    const node_c = try adapter.createNode(graph, &[_][]const u8{"Label"});
+    _ = node_c;
+
+    // (d) Another node with internal-id, in shard 3.
+    const node_d = try adapter.createNode(graph, &[_][]const u8{"Label"});
+    try adapter.setNodeProperty(graph, node_d, key, .{ .String = "uuid-dddd-3333" });
+
+    // Verify distribution across ≥2 shards.
+    try std.testing.expect(gs.shard_count.shardOfNode(node_a) != gs.shard_count.shardOfNode(node_b));
+
+    // Scan all nodes to get ScanEntry records (carries rec.prop_head).
+    const entries = try adapter.scanAllNodes(graph, allocator);
+    defer allocator.free(entries);
+    try std.testing.expect(entries.len >= 4);
+
+    for (entries) |entry| {
+        const by_slot = try adapter.getNodeProperty(graph, entry.slot_id, key, allocator);
+        defer if (by_slot) |v| freeOwnedStorageProperty(allocator, v);
+
+        const by_head = try adapter.getNodePropertyByHead(graph, entry.slot_id, entry.rec.prop_head, key, allocator);
+        defer if (by_head) |v| freeOwnedStorageProperty(allocator, v);
+
+        if (by_slot == null) {
+            try std.testing.expectEqual(@as(?gs.PropertyValue, null), by_head);
+        } else {
+            try std.testing.expect(by_head != null);
+            switch (by_slot.?) {
+                .string => |s| try std.testing.expectEqualStrings(s, by_head.?.string),
+                .int => |i| try std.testing.expectEqual(i, by_head.?.int),
+                .float => |f| try std.testing.expectEqual(f, by_head.?.float),
+                .bool => |b| try std.testing.expectEqual(b, by_head.?.bool),
+                .null => try std.testing.expectEqual(gs.PropertyValue.null, by_head.?),
+                else => try std.testing.expect(false),
+            }
+        }
+    }
 }
 
 test "GAP-0900 throughput: addEx(assume_new) builds a complete low-selectivity posting (O(n^2) scan fix)" {

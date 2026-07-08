@@ -252,7 +252,9 @@ test "H3-P3: parity — ordered-index path == heap path (indexed vs non-indexed 
 
     // Two labels with IDENTICAL string-key data: T is indexed (ordered path),
     // Tn is NOT indexed (heap path). Their ORDER BY ... LIMIT results must match
-    // row-for-row in both directions.
+    // row-for-row in both directions. (GAP-0064 FIX C's ORDER-BY auto-build is
+    // suppressed by default under test, so :Tn stays heap-served across both
+    // queries here.)
     const aa = h.arena.allocator();
     const n: usize = 300;
     var i: usize = 0;

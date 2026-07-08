@@ -17,6 +17,10 @@ const pattern_helpers = @import("pattern_helpers.zig");
 // through the tenant-aware path. The common single-tenant case (null/"default"
 // scope) keeps the fast path with zero overhead.
 const tenancy = @import("tenancy.zig");
+// GAP-ENT-0044/0045 (T5): read-executor budget + cancel. Polled at every
+// row-materialization boundary (right before g_path_rows_materialized ticks),
+// so a runaway/abandoned planned read aborts within one row of the trip.
+const read_budget = @import("../read_budget.zig");
 
 // Task 1.5 / GAP-0806: interior-dupe scratch allocator resolver. Mirrors
 // `match_operations.scratchAllocatorOr` — when a per-query arena is installed
@@ -191,7 +195,8 @@ const PathEdge = struct {
     actual_to_slot: u64,
     next_slot: u64,
     rel_type: gs.LabelId,
-    prop_head: u32,
+    // GAP-0060: edge prop_head is a full u64 (may be a slab head, bit 63).
+    prop_head: u64,
 };
 
 pub fn buildPlanIfSupported(allocator: std.mem.Allocator, q: *const ast.Query, context: ExecutionContext) !?Plan {
@@ -938,6 +943,7 @@ fn materializeNodeOnlyRow(
     };
 
     const row = try buildBindingRow(allocator, q, env, binding_values);
+    try read_budget.check(); // T5: budget/cancel poll at the row-materialization boundary
     _ = g_path_rows_materialized.fetchAdd(1, .monotonic);
     try rows.append(allocator, row);
     for (local_nodes.items) |tracked_node| {
@@ -1253,6 +1259,7 @@ fn emitOptionalLeftOuterRow(
             .exec_context = @constCast(&context),
         };
         const row = try buildBindingRow(allocator, q, env, binding_values);
+        try read_budget.check(); // T5: budget/cancel poll at the row-materialization boundary
         _ = g_path_rows_materialized.fetchAdd(1, .monotonic);
         try rows.append(allocator, row);
         emitted += 1;
@@ -1272,6 +1279,7 @@ fn emitOptionalLeftOuterRow(
             .exec_context = @constCast(&context),
         };
         const row = try buildBindingRow(allocator, q, env, binding_values);
+        try read_budget.check(); // T5: budget/cancel poll at the row-materialization boundary
         _ = g_path_rows_materialized.fetchAdd(1, .monotonic);
         try rows.append(allocator, row);
     }
@@ -1349,6 +1357,7 @@ const VarLenExec = struct {
             .exec_context = @constCast(&self.context),
         };
         const row = try buildBindingRow(self.allocator, self.q, env, binding_values);
+        try read_budget.check(); // T5: budget/cancel poll at the row-materialization boundary
         _ = g_path_rows_materialized.fetchAdd(1, .monotonic);
         try self.rows.append(self.allocator, row);
     }
@@ -1658,6 +1667,7 @@ fn materializeMultiChainRow(
     };
 
     const row = try buildBindingRow(allocator, q, env, binding_values);
+    try read_budget.check(); // T5: budget/cancel poll at the row-materialization boundary
     _ = g_path_rows_materialized.fetchAdd(1, .monotonic);
     try rows.append(allocator, row);
     for (local_nodes.items) |n| {
@@ -2355,6 +2365,7 @@ fn materializePathRow(
     };
 
     const row = try buildBindingRow(allocator, q, env, binding_values);
+    try read_budget.check(); // T5: budget/cancel poll at the row-materialization boundary
     _ = g_path_rows_materialized.fetchAdd(1, .monotonic);
     try rows.append(allocator, row);
     for (local_nodes.items) |node| {
@@ -3353,8 +3364,18 @@ fn estimateScanRows(allocator: std.mem.Allocator, graph_name: []const u8, patter
     if (!adapter.graphExists(graph_name)) return 0;
 
     if (pattern.labels.len > 0) {
-        _ = allocator;
-        return try adapter.countNodesByLabel(graph_name, pattern.labels[0]);
+        // 2026-07-05 (read-path source split): source the label cardinality
+        // from the AUTHORITATIVE in-memory maintained refcount
+        // (`GraphStore.countNodesByLabel`, hydration-guarded via
+        // `ensureGraphHydrated`), NOT `adapter.countNodesByLabel` — the
+        // engine's per-shard `label_index` is a DEFERRED derived structure
+        // that reads empty/partial after a catalog-mediated reopen and
+        // retains deleted slots. These estimates are user-visible (EXPLAIN
+        // `est_rows`) and steer plan selection, so they get the same
+        // hydration-guaranteed source as user counts. Tenantless refcount
+        // read: O(1), matches this function's historical (tenant-unaware)
+        // semantics.
+        return @intCast(graph_store.getGlobalStore(allocator).countNodesByLabel(graph_name, pattern.labels[0], null));
     }
 
     return adapter.nodeCount(graph_name) catch 0;

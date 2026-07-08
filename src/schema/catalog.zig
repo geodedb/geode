@@ -353,17 +353,30 @@ pub const Catalog = struct {
         // Ensure catalog graphs exist in GraphStore registry using the stored
         // UUIDs so the correct graph-storage directories are reopened.
         const store = graph_store.getGlobalStore(self.allocator);
+        var newly_opened: std.ArrayList([]const u8) = .empty;
+        defer newly_opened.deinit(self.allocator);
         var graph_iter = self.graphs.iterator();
         while (graph_iter.next()) |entry| {
             const graph_name = entry.key_ptr.*;
             const uuid = entry.value_ptr.*;
             if (!store.graphExists(graph_name)) {
                 try store.openOrCreateGraphWithUuid(graph_name, uuid);
+                // Key lifetime: `graph_name` is owned by self.graphs (freed at
+                // catalog deinit), and the registration below runs within this
+                // call — no dupe needed.
+                try newly_opened.append(self.allocator, graph_name);
             }
         }
 
-        // Reload the in-memory compatibility cache from the now-opened engines.
-        try store.loadFromFile();
+        // Register ONLY the graphs this catalog load just opened for lazy
+        // hydration. The previous blanket `store.loadFromFile()` here cleared
+        // the WHOLE global node/edge cache (freeing every resident value) and
+        // re-registered every graph — on a live server the catalog's lazy init
+        // (first catalog-touching query) raced the in-flight first-touch
+        // hydration and freed the sub-heap its merge batches still referenced
+        // (the 14.27M ~100 s SEGV). Already-registered graphs keep their
+        // hydration state and resident products untouched.
+        try store.registerAdapterGraphsForLazyHydration(newly_opened.items);
 
         // Read indexes
         i = 0;

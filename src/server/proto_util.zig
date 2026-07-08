@@ -188,6 +188,22 @@ pub fn mapError(err: anyerror) ErrorInfo {
         error.Timeout => .{ .code = "08006", .message = "Timeout: cluster write outcome unknown — the entry may have committed but local apply could not be confirmed in time; retry ONLY with an idempotency key" },
         error.ClusterNotLeader => .{ .code = "40001", .message = "ClusterNotLeader: cluster write not applied here — this node is not the leader; retry against the current leader" },
         error.ClusterWriteNotReplicable => .{ .code = "40001", .message = "ClusterWriteNotReplicable: cluster write not applied here — the leader could not replicate this write shape; retry against the current leader" },
+        // GAP (write-path OOM, 2026-07-04): the legacy write-carrying MATCH
+        // executor aborted because its materialization working set crossed the
+        // configured budget — a loud, clean refusal instead of the OOM killer.
+        // 53200 = SQLSTATE out_of_memory (class 53, insufficient resources).
+        error.WriteQueryBudgetExceeded => .{ .code = "53200", .message = "WriteQueryBudgetExceeded: this write query's working set exceeded GEODE_WRITE_EXECUTOR_BUDGET_MB (default 8192; 0 disables) and was aborted before exhausting server memory. Aborted BETWEEN row mutations: rows already written remain applied (no statement-level rollback in autocommit). Narrow the MATCH (single-node indexed-equality point writes run engine-direct) or raise the budget" },
+        // GAP-ENT-0044 (T5, 2026-07-05 live OOM): the read executor's
+        // materialization working set crossed the configured budget — a loud,
+        // clean refusal instead of the OOM killer taking the server.
+        // 53200 = SQLSTATE out_of_memory (class 53, insufficient resources).
+        error.ReadQueryBudgetExceeded => .{ .code = "53200", .message = "ReadQueryBudgetExceeded: this read query's working set exceeded GEODE_READ_EXECUTOR_BUDGET_MB (default 8192; 0 disables) and was aborted before exhausting server memory. No data was modified. Narrow the query (indexed GROUP BY/DISTINCT/count shapes are served O(distinct) from the index), add a LIMIT, or raise the budget" },
+        // GAP-ENT-0045 (T5): the client's connection closed / timed out (or the
+        // stall watchdog aborted a wedged handler) while the read was running;
+        // the executor stopped at the next row/batch boundary instead of
+        // burning CPU+RSS for an abandoned result.
+        // 57014 = SQLSTATE query_canceled (class 57, operator intervention).
+        error.ReadQueryCancelled => .{ .code = "57014", .message = "ReadQueryCancelled: the client disconnected or the server canceled this read (stall watchdog); execution aborted at a row/batch boundary. No data was modified" },
         else => .{ .code = "58000", .message = @errorName(err) },
     };
 }

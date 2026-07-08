@@ -3,6 +3,12 @@ const ast = @import("../gql/ast.zig");
 const eval = @import("../eval.zig");
 const graph_store = @import("../graph_store.zig");
 const value_types = @import("../value_types.zig");
+// GAP (write-path OOM, 2026-07-04): working-set budget for the legacy
+// write-carrying MATCH executor (env GEODE_WRITE_EXECUTOR_BUDGET_MB).
+const write_budget = @import("../write_budget.zig");
+// GAP-ENT-0044/0045 (T5): read-executor working-set budget + cancel-on-
+// disconnect (env GEODE_READ_EXECUTOR_BUDGET_MB).
+const read_budget = @import("../read_budget.zig");
 
 const logging = @import("logging");
 const qe_log = logging.scoped("execution");
@@ -1632,6 +1638,23 @@ pub fn executeQueryWithContext(allocator: std.mem.Allocator, q: ast.Query, conte
     // `resolveTenantFilter` and `try`-propagates `error.TenantScopeRequired` in
     // strict mode. The normal (non-fast-path) MATCH read remains guarded by
     // `getSessionTenantFilter` -> `resolveTenantFilter` downstream.
+    // GAP-ENT-0044/0045 (T5): install the READ-executor budget + cancel scope
+    // around the whole read dispatch — the fast-path scan loops below poll
+    // read_budget.check() (prompt clean aborts), and the heavy materializers
+    // (planned_read_runtime / legacy) additionally run on a METERED allocator
+    // so their working set is charged net-live and hard-capped. Write-carrying
+    // shapes keep the GAP-ENT-0040 write budget installed further down
+    // (mutation atomicity semantics differ); the two scopes never coexist.
+    const t5_write_carrying = q.match.chains.len > 0 and
+        (q.set_clauses.len > 0 or q.remove_clauses.len > 0 or q.delete_items.len > 0 or
+            q.create_pattern != null or q.merge_statement != null);
+    var read_scope = read_budget.Scope.init();
+    const read_scope_active = q.match.chains.len > 0 and !t5_write_carrying and
+        (read_scope.budget_bytes != read_budget.unlimited or
+            read_scope.cancel != null or read_scope.watchdog_cancel != null);
+    if (read_scope_active) read_budget.beginScope(&read_scope);
+    defer if (read_scope_active) read_budget.endScope(&read_scope);
+
     if (q.match.chains.len > 0) {
         const count_pushdown_tenant = try tenancy.resolveTenantFilter(context.tenant_id);
         if (try match_operations.countNodesFastPath(allocator, q, count_pushdown_graph, count_pushdown_tenant)) |fast_result| {
@@ -1658,6 +1681,14 @@ pub fn executeQueryWithContext(allocator: std.mem.Allocator, q: ast.Query, conte
         // (`sum/avg/min/max(p.<key>)`) — skips materializeNode and reads only
         // the aggregated property (plus optional WHERE property).
         if (try match_operations.propertyAggregateFastPath(allocator, q, count_pushdown_graph, count_pushdown_tenant)) |fast_result| {
+            return fast_result;
+        }
+        // GAP-ENT-0043 T1: INDEX-SERVED GROUP BY / DISTINCT / count-by-value —
+        // when the single group key is an indexed property and the aggregates
+        // are count-only, serve O(distinct) from the exact-property index
+        // postings (zero node materialization, zero per-node reads). Declines
+        // (null) → the streaming scan below serves the same shape soundly.
+        if (try match_operations.indexServedGroupByFastPath(allocator, q, count_pushdown_graph, count_pushdown_tenant)) |fast_result| {
             return fast_result;
         }
         // GAP-ENT-0002 Phase 2c: streaming GROUP BY / DISTINCT fast path —
@@ -1690,12 +1721,114 @@ pub fn executeQueryWithContext(allocator: std.mem.Allocator, q: ast.Query, conte
     // (which calls passesRLSFilter for every candidate node). This mirrors the
     // GAP-0805 RLS-aware reclassification at quic_connection_handler.zig:3565.
     if (!match_operations.wouldEvaluateRLS()) {
-        if (try planned_read_runtime.executeIfSupported(allocator, &q, context, param_names.items, param_values.items)) |planned_result| {
+        if (read_scope_active) {
+            // T5: the planned-read materializer runs on the metered allocator.
+            // Its per-row loops also poll read_budget.check(); the allocator is
+            // the hard backstop for any un-instrumented allocation path.
+            var read_metered = read_budget.MeteredAllocator{ .inner = allocator };
+            const planned_opt = planned_read_runtime.executeIfSupported(read_metered.allocator(), &q, context, param_names.items, param_values.items) catch |err| {
+                if (read_scope.exceeded and err == error.OutOfMemory) return error.ReadQueryBudgetExceeded;
+                return err;
+            };
+            if (planned_opt) |planned_result| {
+                var owned_result = planned_result;
+                // The metered wrapper dies with THIS frame: re-point any
+                // allocator-capturing result fields at the original allocator
+                // (pass-through memory — freeing via the inner is legal).
+                repointResultAllocators(&owned_result, allocator);
+                if (read_scope.exceeded) {
+                    // A catch-and-continue site may have swallowed the
+                    // backstop's refusal: a tripped scope NEVER returns success.
+                    owned_result.deinit(allocator);
+                    return error.ReadQueryBudgetExceeded;
+                }
+                return owned_result;
+            }
+        } else if (try planned_read_runtime.executeIfSupported(allocator, &q, context, param_names.items, param_values.items)) |planned_result| {
             return planned_result;
         }
     }
 
+    // GAP (write-path OOM, 2026-07-04): install the write-executor working-set
+    // budget around the LEGACY dispatch of any write-carrying MATCH shape
+    // (SET / REMOVE / DELETE / MATCH..CREATE / MATCH..MERGE — the family whose
+    // candidate materialization is O(label)). While the scope is active:
+    //   * the dispatch runs on a pass-through METERED allocator (net-live
+    //     query-side accounting: candidate lists, env arrays, eval scratch,
+    //     rows) — memory is still owned by `allocator`, so the caller frees
+    //     the returned ExecutionResult exactly as before;
+    //   * graph_store charges detached scan-box adoptions (the O(graph)
+    //     resident-growth family from the incident) via the same scope;
+    //   * the executor's candidate loops poll write_budget.check() and abort
+    //     with error.WriteQueryBudgetExceeded once live > budget — polled
+    //     BETWEEN candidates, before a candidate's mutation, so per-node
+    //     atomicity holds at the abort (no statement-level rollback exists on
+    //     the legacy autocommit path — pre-existing semantics);
+    //   * as a hard backstop the metered allocator refuses NEW memory once
+    //     tripped, so an un-instrumented path degrades to OutOfMemory which is
+    //     translated here — the OOM killer is never the arbiter.
+    // Covered point-write shapes were already served engine-direct inside
+    // executeMatchQueryImpl (pointWriteFastPath) and stay far below any budget.
+    const budget_write_carrying = q.match.chains.len > 0 and
+        (q.set_clauses.len > 0 or q.remove_clauses.len > 0 or q.delete_items.len > 0 or
+            q.create_pattern != null or q.merge_statement != null);
+    if (budget_write_carrying) {
+        var budget_scope = write_budget.Scope.init();
+        if (budget_scope.budget_bytes != write_budget.unlimited) {
+            write_budget.beginScope(&budget_scope);
+            defer write_budget.endScope(&budget_scope);
+            var metered = write_budget.MeteredAllocator{ .inner = allocator };
+            var result = executeLegacyQueryWithResolvedParams(metered.allocator(), q, context, param_names.items, param_values.items) catch |err| {
+                if (budget_scope.exceeded and err == error.OutOfMemory) return error.WriteQueryBudgetExceeded;
+                return err;
+            };
+            // T5 follow-up hardening: same allocator-escape repoint as the
+            // read scope (a MATCH..CREATE RETURN result can carry
+            // variable_bindings whose managed map captured the metered
+            // wrapper — dangling once this frame returns).
+            repointResultAllocators(&result, allocator);
+            if (budget_scope.exceeded) {
+                // A catch-and-continue site may have swallowed the backstop's
+                // refusal: a tripped scope NEVER returns success.
+                result.deinit(allocator);
+                return error.WriteQueryBudgetExceeded;
+            }
+            return result;
+        }
+    }
+
+    // T5: legacy READ dispatch runs metered under the read scope (its
+    // candidate loops poll read_budget.check() next to the write polls).
+    if (read_scope_active) {
+        var legacy_metered = read_budget.MeteredAllocator{ .inner = allocator };
+        var legacy_result = executeLegacyQueryWithResolvedParams(legacy_metered.allocator(), q, context, param_names.items, param_values.items) catch |err| {
+            if (read_scope.exceeded and err == error.OutOfMemory) return error.ReadQueryBudgetExceeded;
+            return err;
+        };
+        repointResultAllocators(&legacy_result, allocator);
+        if (read_scope.exceeded) {
+            legacy_result.deinit(allocator);
+            return error.ReadQueryBudgetExceeded;
+        }
+        return legacy_result;
+    }
+
     return executeLegacyQueryWithResolvedParams(allocator, q, context, param_names.items, param_values.items);
+}
+
+/// T5 (GAP-ENT-0044): re-point allocator-CAPTURING result fields at the
+/// original allocator after a metered dispatch. The metered wrapper is a
+/// stack local of the dispatching frame; its PASS-THROUGH property makes all
+/// returned memory the inner allocator's memory (freeing via the inner is
+/// legal), but an `std.mem.Allocator` STRUCT stored inside the result
+/// (OwnedGraphEntities.allocator, variable_bindings' managed-map allocator)
+/// would dangle once the frame returns — result.deinit would then call
+/// through a dead vtable pointer (the 2 crashes the gap0044 regression
+/// caught). Audited capture sites: ExecutionResult.owned_graph_entities and
+/// ExecutionResult.variable_bindings; every other field is unmanaged.
+fn repointResultAllocators(result: *ExecutionResult, allocator: std.mem.Allocator) void {
+    if (result.owned_graph_entities) |entities| entities.allocator = allocator;
+    if (result.variable_bindings) |bindings| bindings.allocator = allocator;
 }
 
 pub fn executeLegacyQueryWithResolvedParams(

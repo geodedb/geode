@@ -261,6 +261,30 @@ pub const IdMap = struct {
         }
     }
 
+    /// T2b (hydration merge): pre-size the RESIDENT node maps for a bulk load
+    /// of `count` mappings so the per-insert path never pays rehash-growth
+    /// churn (the dominant single-threaded merge cost at 14.27M rows).
+    /// No-op in mmap_backed mode — loop1 inserts are skipped there (the base
+    /// serves the mappings in place) and pre-sizing the overlay would defeat
+    /// its bounded-RSS purpose.
+    pub fn reserveNodes(self: *IdMap, count: u32) !void {
+        self.lockMu();
+        defer self.unlockMu();
+        if (self.mode != .resident) return;
+        try self.node_uuid_to_slot.ensureTotalCapacity(count);
+        try self.node_slot_to_uuid.ensureTotalCapacity(count);
+    }
+
+    /// T2b: edge-side companion of `reserveNodes` (same resident-only rule —
+    /// the hydration merge inserts edge mappings only in resident mode).
+    pub fn reserveEdges(self: *IdMap, count: u32) !void {
+        self.lockMu();
+        defer self.unlockMu();
+        if (self.mode != .resident) return;
+        try self.edge_uuid_to_slot.ensureTotalCapacity(count);
+        try self.edge_slot_to_uuid.ensureTotalCapacity(count);
+    }
+
     /// Insert a node mapping with a specific slot ID (used during load).
     pub fn insertNodeWithSlot(self: *IdMap, uuid: u128, slot: u64) !void {
         self.lockMu();
@@ -763,34 +787,48 @@ pub const IdMap = struct {
     // field is read/written with std.mem.readInt/writeInt so the mmap'd bytes
     // need no special alignment):
     //   magic "GEOIDMAP" (8)
-    //   format_ver        u32
-    //   manifest_counter  u64   (caller's crash-safety gate; gate logic = 1b)
+    //   format_ver        u32   (bumped to 2 for the GAP-0064 FIX B epoch stamp)
+    //   checkpoint_epoch  u64   (GAP-0064 FIX B reload gate part 1 — see below)
     //   next_node_slot    u64
     //   next_edge_slot    u64
     //   node_fwd_count    u64
     //   edge_fwd_count    u64
+    //   covered_lsn       u64   (GAP-0064 FIX B reload gate part 2)
     //   NODE reverse  u128[next_node_slot]
     //   NODE forward  (u128 uuid, u64 slot)[node_fwd_count]   (sorted by uuid)
     //   EDGE reverse  u128[next_edge_slot]
     //   EDGE forward  (u128 uuid, u64 slot)[edge_fwd_count]   (sorted by uuid)
     //   CRC32 u32  (over EVERYTHING before this trailer)
+    //
+    // GAP-0064 FIX B: the crash-safety stamp migrated from `manifest.counter` (v1)
+    // to the Path-B (checkpoint_epoch, covered_lsn) contract (fa6495bb), because
+    // recovery.zig bumps `counter` on ANY committed WAL-tail replay — so a
+    // deferred-WAL reopen invalidated a still-valid snapshot and re-scanned the
+    // whole graph (loop1/loop2). The epoch is bumped ONLY at checkpoint (never by
+    // recovery); covered_lsn is the durable committed frontier. Reload iff
+    // `stamped_epoch == current epoch AND stamped_covered == current frontier`
+    // ("no checkpoint AND no tail since the snapshot"). VERSION bump 1->2 is the
+    // downgrade/upgrade gate: an old v1 (counter-stamped) file loads as null on a
+    // new binary -> rebuild (safe); a new v2 file loads as null on an old binary
+    // -> rebuild (safe). Never a mis-parse across versions.
     // ------------------------------------------------------------------
 
     /// Magic for the mmap-able snapshot (distinct from the legacy FILE_MAGIC).
     const SNAP_MAGIC: [8]u8 = "GEOIDMAP".*;
-    /// Snapshot format version.
-    const SNAP_VERSION: u32 = 1;
+    /// Snapshot format version. v2 = GAP-0064 FIX B (epoch,covered_lsn) stamp.
+    const SNAP_VERSION: u32 = 2;
     const SNAP_FILE = "idmap.snapshot";
     const SNAP_TMP = "idmap.snapshot.tmp";
 
     // Fixed header field offsets.
     const HDR_VER_OFF = 8;
-    const HDR_MANIFEST_OFF = 12;
+    const HDR_EPOCH_OFF = 12; // checkpoint_epoch (was manifest_counter in v1)
     const HDR_NEXT_NODE_OFF = 20;
     const HDR_NEXT_EDGE_OFF = 28;
     const HDR_NODE_FWD_OFF = 36;
     const HDR_EDGE_FWD_OFF = 44;
-    const SNAP_HEADER_SIZE = 52;
+    const HDR_COVERED_OFF = 52; // covered_lsn (GAP-0064 FIX B; appended in v2)
+    const SNAP_HEADER_SIZE = 60;
     const REV_ENTRY = 16; // u128
     const FWD_ENTRY = 24; // u128 uuid + u64 slot
     const CRC_SIZE = 4;
@@ -803,7 +841,7 @@ pub const IdMap = struct {
     /// Build the serialized snapshot payload (header + regions + CRC trailer)
     /// into a freshly-allocated buffer owned by the caller. Locks the IdMap so
     /// the captured state is internally consistent.
-    fn serializeSnapshot(self: *IdMap, manifest_counter: u64) ![]u8 {
+    fn serializeSnapshot(self: *IdMap, checkpoint_epoch: u64, covered_lsn: u64) ![]u8 {
         const a = self.allocator;
         self.lockMu();
         defer self.unlockMu();
@@ -839,11 +877,12 @@ pub const IdMap = struct {
         // Header.
         @memcpy(buf[0..8], &SNAP_MAGIC);
         std.mem.writeInt(u32, buf[HDR_VER_OFF..][0..4], SNAP_VERSION, .little);
-        std.mem.writeInt(u64, buf[HDR_MANIFEST_OFF..][0..8], manifest_counter, .little);
+        std.mem.writeInt(u64, buf[HDR_EPOCH_OFF..][0..8], checkpoint_epoch, .little);
         std.mem.writeInt(u64, buf[HDR_NEXT_NODE_OFF..][0..8], nn, .little);
         std.mem.writeInt(u64, buf[HDR_NEXT_EDGE_OFF..][0..8], ne, .little);
         std.mem.writeInt(u64, buf[HDR_NODE_FWD_OFF..][0..8], node_fwd_count, .little);
         std.mem.writeInt(u64, buf[HDR_EDGE_FWD_OFF..][0..8], edge_fwd_count, .little);
+        std.mem.writeInt(u64, buf[HDR_COVERED_OFF..][0..8], covered_lsn, .little);
 
         // NODE reverse (direct-indexed by slot) via the merged view.
         {
@@ -912,12 +951,13 @@ pub const IdMap = struct {
         }
     }
 
-    /// Serialize this IdMap to an mmap-able snapshot in `dir`, stamped with
-    /// `manifest_counter` (the caller's crash-safety gate). Atomic: writes a
-    /// temp file, fsyncs it, then renames over the final name (mirrors the
-    /// legacy `save` atomic discipline).
-    pub fn saveSnapshot(self: *IdMap, dir: std.Io.Dir, manifest_counter: u64) !void {
-        const buf = try self.serializeSnapshot(manifest_counter);
+    /// Serialize this IdMap to an mmap-able snapshot in `dir`, stamped with the
+    /// GAP-0064 FIX B Path-B contract `(checkpoint_epoch, covered_lsn)` — the
+    /// caller's crash-safety reload gate (replaces the recovery-bumped
+    /// manifest.counter). Atomic: writes a temp file, fsyncs it, then renames over
+    /// the final name (mirrors the legacy `save` atomic discipline).
+    pub fn saveSnapshot(self: *IdMap, dir: std.Io.Dir, checkpoint_epoch: u64, covered_lsn: u64) !void {
+        const buf = try self.serializeSnapshot(checkpoint_epoch, covered_lsn);
         defer self.allocator.free(buf);
 
         const io = std.Io.Threaded.global_single_threaded.io();
@@ -929,6 +969,25 @@ pub const IdMap = struct {
         }
         file.close(io);
         try dir.rename(SNAP_TMP, dir, SNAP_FILE, io);
+    }
+
+    /// PHASE 1b: remove any on-disk IdMap snapshot (and a leftover temp) in
+    /// `dir`. Best-effort: a missing file is success. Used by the checkpoint
+    /// path to INVALIDATE a stale snapshot for a graph whose resident IdMap is
+    /// deferred/empty, so persisting it would stamp an empty snapshot the next
+    /// open would adopt as base (silent data loss). After invalidation the next
+    /// open re-defers + rebuilds from the durable engine pages. Mirrors
+    /// graph_storage_adapter.invalidateExactPropertyIndexFile for the H4 index.
+    pub fn deleteSnapshot(dir: std.Io.Dir) void {
+        const io = std.Io.Threaded.global_single_threaded.io();
+        dir.deleteFile(io, SNAP_FILE) catch |err| switch (err) {
+            error.FileNotFound => {},
+            else => {},
+        };
+        dir.deleteFile(io, SNAP_TMP) catch |err| switch (err) {
+            error.FileNotFound => {},
+            else => {},
+        };
     }
 
     /// Load the mmap-able snapshot from `dir`. Returns `null` (caller falls
@@ -981,11 +1040,12 @@ pub const IdMap = struct {
             return null;
         }
 
-        const manifest = std.mem.readInt(u64, mapping[HDR_MANIFEST_OFF..][0..8], .little);
+        const epoch = std.mem.readInt(u64, mapping[HDR_EPOCH_OFF..][0..8], .little);
         const nn = std.mem.readInt(u64, mapping[HDR_NEXT_NODE_OFF..][0..8], .little);
         const ne = std.mem.readInt(u64, mapping[HDR_NEXT_EDGE_OFF..][0..8], .little);
         const node_fwd_count = std.mem.readInt(u64, mapping[HDR_NODE_FWD_OFF..][0..8], .little);
         const edge_fwd_count = std.mem.readInt(u64, mapping[HDR_EDGE_FWD_OFF..][0..8], .little);
+        const covered = std.mem.readInt(u64, mapping[HDR_COVERED_OFF..][0..8], .little);
 
         // Recompute the expected layout with overflow-checked math; any overflow
         // (corrupt counts) or size mismatch (truncation) => treat as invalid.
@@ -1008,7 +1068,8 @@ pub const IdMap = struct {
 
         return LoadedIdMapSnapshot{
             .mapping = mapping,
-            .manifest_counter = manifest,
+            .checkpoint_epoch = epoch,
+            .covered_lsn = covered,
             .next_node_slot = nn,
             .next_edge_slot = ne,
             .node_fwd_count = node_fwd_count,
@@ -1148,7 +1209,11 @@ pub const IdMap = struct {
 /// Phase 1b to bulk-hydrate an in-memory IdMap. Call `deinit` to unmap.
 pub const LoadedIdMapSnapshot = struct {
     mapping: []align(std.heap.page_size_min) const u8,
-    manifest_counter: u64,
+    /// GAP-0064 FIX B Path-B reload gate: the durable checkpoint epoch and covered
+    /// LSN this snapshot was stamped at (see the format doc). Caller reloads iff
+    /// both match the engine's CURRENT epoch + frontier.
+    checkpoint_epoch: u64,
+    covered_lsn: u64,
     next_node_slot: u64,
     next_edge_slot: u64,
     node_fwd_count: u64,

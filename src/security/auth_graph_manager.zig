@@ -123,6 +123,72 @@ pub const BootstrapResult = struct {
     user_id: u64,
 };
 
+/// Review-0016 Important-1: shared fail-closed mapping for the engine-level
+/// persisted-admin check. ONLY `error.GraphNotFound` (the security graph has
+/// never been registered — a genuine first boot) maps to "zero persisted
+/// records". Every OTHER engine error (corrupt shard manifest, EACCES, fd
+/// exhaustion, torn registry, I/O failure while opening a REGISTERED graph)
+/// is exactly the degraded-security-storage class the bootstrap guard exists
+/// to defend against, so it REFUSES bootstrap (fail closed) with a loud log
+/// naming the error, instead of reading as "first boot" and letting
+/// GEODE_ADMIN_PASSWORD re-seed the persisted credential.
+pub fn failClosedPersistedUserCount(count_result: anyerror!u64) error{PersistedAdminExists}!u64 {
+    return count_result catch |err| switch (err) {
+        error.GraphNotFound => 0,
+        else => {
+            log.err("ADMIN BOOTSTRAP REFUSED (fail-closed): storage engine error while checking __geode_security for persisted admin records — cannot distinguish first boot from degraded security storage, so GEODE_ADMIN_PASSWORD/GEODE_DEFAULT_PASSWORD seeding is BLOCKED. Repair the security graph storage and restart.", &.{
+                Attr.string("error", @errorName(err)),
+            });
+            return error.PersistedAdminExists;
+        },
+    };
+}
+
+/// Engine-direct persisted-admin probe shared by `bootstrapDefaultAdmin` and
+/// the server's no-AGM fallback (main.zig, review-0016 Important-3): the
+/// number of :User records the storage ENGINE reports for __geode_security,
+/// independent of any in-memory load. Returns 0 when no global adapter is
+/// installed (pure in-memory stores / unit tests) or the security graph was
+/// never registered; fails CLOSED (`error.PersistedAdminExists`) on any other
+/// engine error via `failClosedPersistedUserCount`.
+pub fn persistedSecurityUserCountOnDisk() error{PersistedAdminExists}!u64 {
+    const adapter = graph_store.getGlobalAdapter() orelse return 0;
+    return failClosedPersistedUserCount(
+        adapter.countNodesByLabel(SECURITY_GRAPH_NAME, user_storage.USER_LABEL),
+    );
+}
+
+/// Count persisted :User nodes that actually carry a credential (non-empty
+/// `password_hash`), reading engine-direct (slot ids from the per-shard label
+/// index, properties straight from the property chains — no dependency on the
+/// GraphStore in-memory load). Used by the bootstrap guard to distinguish a
+/// real persisted admin (refuse re-seed) from the half-bootstrap crash
+/// artifact (a :User node committed without any properties — treat as first
+/// boot). Errors propagate so the caller can fail CLOSED.
+fn countCredentialBearingPersistedUsers(allocator: Allocator, adapter: anytype) !u64 {
+    const slots = try adapter.getNodesByLabel(SECURITY_GRAPH_NAME, user_storage.USER_LABEL, allocator);
+    defer allocator.free(slots);
+
+    var credentialed: u64 = 0;
+    for (slots) |slot| {
+        const maybe_val = adapter.getNodeProperty(SECURITY_GRAPH_NAME, slot, "password_hash", allocator) catch |err| switch (err) {
+            // Slot disappeared between the label scan and the property read —
+            // not a credential-bearing record; keep scanning.
+            error.NodeNotFound => continue,
+            else => return err,
+        };
+        const val = maybe_val orelse continue;
+        switch (val) {
+            .string => |s| {
+                defer allocator.free(s);
+                if (s.len > 0) credentialed += 1;
+            },
+            else => {},
+        }
+    }
+    return credentialed;
+}
+
 pub const AuthGraphManager = struct {
     allocator: Allocator,
     storage: UserStorageBackend,
@@ -700,6 +766,82 @@ pub const AuthGraphManager = struct {
     /// 5. Seal chain
     /// 6. Return BootstrapResult (caller prints password to stderr)
     pub fn bootstrapDefaultAdmin(self: *Self, hmac_key: *const [32]u8) !BootstrapResult {
+        // 0. Persisted-credential precedence guard (2026-07-01 live incident:
+        //    restart with a changed GEODE_ADMIN_PASSWORD silently rotated the
+        //    persisted admin credential to the env value).
+        //
+        //    Callers gate bootstrap on `hasAuthRecords()`, which reflects only
+        //    the IN-MEMORY user_cache populated by `loadUsersFromGraph`. Any
+        //    boot where that load comes up empty while persisted records still
+        //    exist on disk (lazy-hydration failure, storage-layout drift,
+        //    partial crash recovery) looks exactly like a first boot, so the
+        //    caller re-runs bootstrap and re-seeds the admin from the env —
+        //    destroying the persisted credential with no warning.
+        //
+        //    Ask the storage ENGINE directly (per-shard label index, on-disk
+        //    truth, independent of the GraphStore in-memory load) whether any
+        //    :User records are persisted for __geode_security. If yes, REFUSE:
+        //    the persisted credential wins; env seeding is first-boot only.
+        //    Only `error.GraphNotFound` (the security graph was never
+        //    registered — a genuine first boot) and the no-adapter case (pure
+        //    in-memory store, unit tests) count as zero; every OTHER engine
+        //    error fails CLOSED (review-0016 Important-1: an open/IO failure
+        //    on a REGISTERED security graph is precisely the degraded-storage
+        //    class this guard defends against, so it must never read as
+        //    "first boot").
+        //
+        //    Engine-index dependency (review-0016 Minor-1): the zero-count
+        //    signal is only sound because the pinned graph-storage release
+        //    (v0.2.23) populates the per-shard derived label index
+        //    SYNCHRONOUSLY at engine open (engine.zig tryLoadDerivedIndexes /
+        //    rebuildDerivedIndexes) — a registered graph with persisted :User
+        //    nodes can never read 0 here. If a future gs pin defers the
+        //    derived-index build past open (the cold-open work does exactly
+        //    that on a dev branch), a lazily-built index could read 0 and
+        //    SILENTLY bypass this guard. Before bumping the gs pin to such a
+        //    release, add a second signal for the count==0-on-registered-graph
+        //    case (e.g. the registry entry's node_count).
+        if (graph_store.getGlobalAdapter()) |adapter| {
+            const persisted_users = try failClosedPersistedUserCount(
+                adapter.countNodesByLabel(SECURITY_GRAPH_NAME, user_storage.USER_LABEL),
+            );
+            if (persisted_users > 0) {
+                // Review-0016 Important-2: distinguish REAL credential-bearing
+                // records (refuse — the persisted credential wins) from the
+                // half-bootstrap crash artifact. Bootstrap is not atomic:
+                // `createEntityNode(USER_LABEL)` commits the :User node in its
+                // own engine txn BEFORE `setNodePropertiesBatch` writes any
+                // credential property, so a crash in that window leaves a
+                // :User node with NO properties and NO recoverable credential.
+                // Refusing forever on that artifact would brick the store with
+                // no working credential and no escape route. Counting only
+                // credential-bearing nodes (non-empty password_hash, read
+                // engine-direct) turns the artifact back into a first boot —
+                // recoverable via a normal restart — while any error during
+                // the property inspection still fails CLOSED.
+                const credentialed = countCredentialBearingPersistedUsers(self.allocator, adapter) catch |err| {
+                    log.err("ADMIN BOOTSTRAP REFUSED (fail-closed): storage engine error while inspecting persisted :User records for credentials; refusing to re-seed the admin credential (GEODE_ADMIN_PASSWORD/GEODE_DEFAULT_PASSWORD are IGNORED). Repair __geode_security storage and restart.", &.{
+                        Attr.string("error", @errorName(err)),
+                        Attr.uint("persisted_user_records", persisted_users),
+                    });
+                    return error.PersistedAdminExists;
+                };
+                if (credentialed > 0) {
+                    // Attr key deliberately avoids "credential"/"password"
+                    // substrings — the logging layer redacts values for such
+                    // keys and the operator needs to SEE this count.
+                    log.err("ADMIN BOOTSTRAP REFUSED: persisted admin user records exist on disk but none were loaded into memory; refusing to re-seed the admin credential (GEODE_ADMIN_PASSWORD/GEODE_DEFAULT_PASSWORD are IGNORED — a persisted credential always wins). Investigate __geode_security storage health.", &.{
+                        Attr.uint("persisted_user_records", persisted_users),
+                        Attr.uint("usable_admin_records", credentialed),
+                    });
+                    return error.PersistedAdminExists;
+                }
+                log.warn("half-bootstrapped security graph detected: :User node(s) exist on disk but NONE carries a credential (crash between node create and property write); treating as first boot and seeding the admin credential normally", &.{
+                    Attr.uint("persisted_user_records", persisted_users),
+                });
+            }
+        }
+
         // 1. Resolve admin username
         const username = if (getEnvVarOwned(self.allocator, "GEODE_ADMIN_USERNAME")) |name| name else |_| try self.allocator.dupe(u8, "geode");
 
@@ -1250,7 +1392,10 @@ pub const AuthGraphManager = struct {
         var it = self.storage.graph_grant_nodes.iterator();
         while (it.next()) |entry| {
             const node_id = entry.value_ptr.*;
-            const node = self.storage.store.getNodePtr(node_id) orelse continue;
+            // Gap 0034 discipline: hydrate-on-miss so an evicted/not-yet-resident
+            // grant body still resolves from the engine (the getNodeProperty
+            // reads below already hydrate; the body read must match).
+            const node = self.storage.store.getNodePtrHydrated(node_id) orelse continue;
             // SECURITY_GRAPH_NAME is duplicated as a file-local const in this
             // module (and in user_storage.zig). Use the local copy so we don't
             // rely on a cross-module reference.
