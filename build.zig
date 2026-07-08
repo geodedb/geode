@@ -2043,6 +2043,25 @@ pub fn build(b: *std.Build) void {
     // group_commit.zig uses @import("shard_worker_tls") — must be registered
     // on every module that transitively includes group_commit.zig.
     graph_store_mod.addImport("shard_worker_tls", shard_worker_tls_mod);
+    // graph_store.zig transitively imports src/timeseries/timeseries.zig, which
+    // needs the external timeseries + timeseries-storage libraries. Wire them on
+    // the named `graph_store` module so downstream test targets (graph_algo_tests,
+    // point_read_view_*_tests) that @import("graph_store") compile.
+    graph_store_mod.addImport("timeseries_lib", timeseries_ext_mod);
+    graph_store_mod.addImport("timeseries_storage_lib", timeseries_storage_ext_mod);
+    // graph_store.zig's transitive imports also require these named modules
+    // (mirrors the graph_store_unit_tests target rooted at the same file, so
+    // downstream @import("graph_store") test targets compile).
+    graph_store_mod.addImport("advanced_types_lib", advanced_types_ext_mod);
+    graph_store_mod.addImport("distributed_schema", distributed_schema_mod);
+    graph_store_mod.addImport("fts_storage_lib", fts_storage_ext_mod);
+    graph_store_mod.addImport("json", json_mod);
+    graph_store_mod.addImport("parallel/thread_pool_parallel", parallel_wrapper_mod);
+    graph_store_mod.addImport("protobuf", protobuf_mod);
+    graph_store_mod.addImport("raft", raft_ext_mod);
+    graph_store_mod.addImport("raft_schema", raft_schema_mod);
+    graph_store_mod.addImport("schema", schema_mod);
+    graph_store_mod.addImport("wal", wal_ext_mod);
 
     // 2026-05-01: graph_store.zig:1195 added `@import("otel_metrics")` for
     // the create_node span (`createNodeWithGraphAndTenant`). Wire the

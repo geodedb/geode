@@ -180,9 +180,22 @@ fn runWhereScanOnce(allocator: std.mem.Allocator, ctx: execution.ExecutionContex
     defer arena.deinit();
     const aa = arena.allocator();
 
+    // NON-INDEXED-SCAN PREDICATE (must stay a non-seekable shape): the whole
+    // point of this regression is a LONG O(scanned) materialize+evaluate scan
+    // that holds the per-graph SHARED read lock. The enterprise exact
+    // node-property VALUE index (GAP-ENT-0048 / the GAP-ENT-0019 filtered fast
+    // path) now serves a `n.someprop = 'target'` EQUALITY via an O(matched)
+    // index SEEK (see node_scan_stream `seekIndexedCandidates`) — the scan then
+    // finishes in ~1 ms and the contention never materializes (single_scan_ms
+    // fell below the 50 ms precondition). Use `<> 'other'`, which the exact-index
+    // seek deliberately does NOT cover (it only extracts a seekable
+    // `key = <literal>` equality), so the scan falls back to the full
+    // materialize+evaluate loop. The result set is identical: only the 3
+    // pre-seeded 'target' nodes satisfy `<> 'other'` (the writer only ever adds
+    // 'other'), so every scan still returns exactly TARGET_COUNT rows.
     const q = try parseQuery(
         &arena,
-        "MATCH (n:Probe) WHERE n.someprop = 'target' RETURN n.someprop LIMIT 3",
+        "MATCH (n:Probe) WHERE n.someprop <> 'other' RETURN n.someprop LIMIT 3",
     );
     const prepared = (try node_scan_stream.prepare(aa, q, ctx, &.{}, &.{}, &.{})) orelse
         return error.NotStreamable;

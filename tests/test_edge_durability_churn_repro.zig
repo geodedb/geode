@@ -109,9 +109,23 @@ test "REGRESSION: N idempotent edge re-applies + restart leave exactly one durab
     // ---- Boot 1: REAL engine-backed adapter + store. Apply once, then RE-APPLY
     // the SAME committed entry N times (one churn round = N restarts each
     // replaying the committed log on top of the persisted store). ----
+    //
+    // COLD-OPEN NOTE: this suite models a k8s CHURN kill (pod killed after the
+    // committed writes were checkpointed durably). We therefore end boot1 with
+    // `checkpointAll()` (durable engine pages) + `deinitGlobalStoreForTestCrash`
+    // (NO clean-shutdown fast-restart snapshot). That is deliberate: a clean
+    // `deinitGlobalStore` would write the loop2 / IdMap snapshots, and boot2
+    // would then take the O(1) `snapshot_served` fast path in
+    // `loadOneGraphFromAdapterFull` — which restores the IdMap + counters but
+    // (by design, hydrate-on-miss) leaves `store.nodes`/`store.edges` EMPTY and
+    // SKIPS the engine scan. This suite asserts on resident state AND (test 2)
+    // on the scan-driven orphan self-heal, so it must reopen via the full engine
+    // rebuild path. A checkpoint-then-crash is the exact posture that forces it
+    // (no snapshot => scan-rebuild), and is the faithful model of the churn
+    // restart under test.
     {
         const store = try graph_store.initGlobalStore(a, data_dir);
-        defer graph_store.deinitGlobalStore();
+        defer graph_store.deinitGlobalStoreForTestCrash();
         const adapter = graph_store.getGlobalAdapter().?;
 
         _ = try cluster_replication.applyMultiCreatePayload(a, store, payload, raft_index);
@@ -228,7 +242,9 @@ test "REGRESSION: hydration self-heals an already-corrupted store — orphan edg
     // to reproduce the exact on-disk damage of an old buggy binary. ----
     {
         const store = try graph_store.initGlobalStore(a, data_dir);
-        defer graph_store.deinitGlobalStore();
+        // Checkpoint-then-crash (see the COLD-OPEN NOTE on test 1): forces boot2
+        // to reopen via the full engine scan so the orphan self-heal runs.
+        defer graph_store.deinitGlobalStoreForTestCrash();
         const adapter = graph_store.getGlobalAdapter().?;
 
         // Canonical create: goes through the fixed path, so it carries a real
@@ -355,7 +371,9 @@ test "GUARD: two distinct committed edges survive restart as two durable edges (
 
     {
         const store = try graph_store.initGlobalStore(a, data_dir);
-        defer graph_store.deinitGlobalStore();
+        // Checkpoint-then-crash (see the COLD-OPEN NOTE on test 1): reopen via the
+        // full engine scan so resident state + IdMap rebuild from durable pages.
+        defer graph_store.deinitGlobalStoreForTestCrash();
         const adapter = graph_store.getGlobalAdapter().?;
 
         // Each distinct committed entry applied EXACTLY ONCE — no churn re-apply,

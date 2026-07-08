@@ -2034,29 +2034,43 @@ fn resolvePersistedLabelId(mg: *ManagedGraph, label: []const u8) !gs.LabelId {
     return id;
 }
 
-/// Security-graph durability (gap 0026), workaround for an upstream
-/// graph-storage WAL mis-log: `GraphEngine.addLabelTxn` logs the label block
-/// with `logPage(txn, .var_store, result.head)`, but a var_store head is a
-/// REFERENCE `(page_id << 16 | offset)`, not a page id — so the page image
-/// that actually holds the node's label list is never WAL-logged (a bogus
-/// sparse page id is logged instead). Crash recovery then replays the node
-/// record (whose `label_head` points at the ref) but the referenced
-/// var_store page is missing/zeroed: the node survives, its LABEL LINKAGE is
-/// silently lost, and every label-indexed lookup (`getNodesByLabel(:User)`,
-/// the persisted-admin probe, user reload) stops seeing the record — auth
-/// state loss. Until the upstream fix ships (log `head >> 16`), re-log the
-/// CORRECT var_store page inside the same txn so the corrected image commits
-/// (and, on the security graph's `sync_each_commit` engines, fsyncs) with
-/// the mutation. Scoped to `__geode_security`: on bulk graphs this would add
-/// an extra ~8 KB WAL image per label-add (prohibitive at ingest scale), and
-/// their deferred-mode durability barrier is the checkpoint, which flushes
-/// the real pages directly and is unaffected by the mis-logged WAL image.
-/// No-op for non-security graphs and label-less nodes.
+/// Security-graph durability (gap 0026), belt-and-suspenders re-log of the
+/// node's label var_store page inside the mutating txn so it commits (and, on
+/// the security graph's `sync_each_commit` engines, fsyncs) with the mutation.
+///
+/// HISTORY: this began as a workaround for an upstream graph-storage WAL
+/// mis-log — `GraphEngine.addLabelTxn` used to log the label block with
+/// `logPage(txn, .var_store, result.head)`, imaging a bogus page id instead of
+/// the real label-block page, so labels written since the last checkpoint
+/// vanished on crash recovery. That upstream defect is FIXED as of gs v0.3.2:
+/// `addLabelTxn` now images the var page via `logVarChain`, which correctly
+/// decodes both encodings (see below). This re-log is therefore redundant with
+/// the engine's own WAL image, but is retained as defensive durability.
+///
+/// SLAB-HEAD DECODE (the crash this function itself caused before the fix):
+/// a var head is EITHER a legacy page-chain ref `first_page << 16` (page id =
+/// `head >> 16`) OR a slab-packed head with bit 63 set (`TAG | page<<24 | slot`,
+/// page id = `slabHeadPageId(head)`). The previous `head >> 16` decode was
+/// correct ONLY for the legacy form; for a slab head it produced a ~2^47 page
+/// id (e.g. 0x800000000100). Recovery replayed that bogus page image into a
+/// dirty buffer-pool frame, and `flushAll` then issued a `pwrite` at an ~1.15 EB
+/// offset → `EFBIG` → `error.FileTooBig`, so the ENTIRE `__geode_security`
+/// engine failed to reopen after a crash of a never-checkpointed security graph
+/// (a real durability loss: the acknowledged security mutation became
+/// unrecoverable). Decode slab-aware — exactly as `gs`'s own `logVarChain` does.
+///
+/// Scoped to `__geode_security`; no-op for non-security graphs and label-less
+/// nodes.
 fn relogSecurityLabelPageTxn(mg: *ManagedGraph, node_shard: anytype, node_id: u64, txn: gs.TxnId) !void {
     if (!std.mem.eql(u8, mg.name, "__geode_security")) return;
     const rec = (try node_shard.getNode(node_id)) orelse return;
-    if (rec.label_head == 0) return;
-    try node_shard.logPagePublic(txn, .var_store, rec.label_head >> 16);
+    const head = rec.label_head;
+    if (head == 0) return;
+    const page_id = if (gs.var_store.isSlabHead(head))
+        gs.var_store.slabHeadPageId(head)
+    else
+        head >> 16;
+    try node_shard.logPagePublic(txn, .var_store, page_id);
 }
 
 /// Auto-commit variant of `relogSecurityLabelPageTxn` for the
