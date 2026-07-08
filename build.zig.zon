@@ -367,8 +367,8 @@
             // 2026-06-17: v0.2.17 — quic v0.1.31 lockstep (GAP-0900 poll-loop
             // memset fix). Both pins now resolve the same quic v0.1.31 module,
             // so the build graph stays diamond-free.
-            .url = "git+https://gitlab.com/devnw/codepros/geode/geode-client-zig.git#v0.3.5",
-            .hash = "geode_client_zig-0.3.5-8ysbVwB0CwD63KbX1vAgTE4qGdps6BY7zG58n-mNwXki",
+            .url = "git+https://gitlab.com/devnw/codepros/geode/geode-client-zig.git?ref=v0.3.6#e4fe811aefbfdc3ed0cb24ab1be403e3d44ba592",
+            .hash = "geode_client_zig-0.3.6-8ysbVy10CwAORvBymZO5MFfSnAKHCy-X_UJIs2UTGU51",
         },
 
         // =======================================================================
@@ -473,8 +473,8 @@
             // contract. No manifest bump (stays V4; the adjacency entry-format
             // byte + read-both is the versioning). Same transitive deps as
             // v0.2.34 (no diamond).
-            .url = "git+https://gitlab.com/devnw/zig/graph-storage.git?ref=v0.2.35#84c028423ef50860bf897ac404adc6a75ddafe7f",
-            .hash = "graph_storage-0.2.35-9UyJS_bEHQB00RZYU4PQrOMGpfnCmusQfEzS1G8d15-f",
+            .url = "git+https://gitlab.com/devnw/zig/graph-storage.git?ref=v0.3.2#3a8b39aaf170ce905ea6c13f6f26f5b15c26c6cd",
+            .hash = "graph_storage-0.3.2-9UyJS_XEHQAe32MfAU-xFducZq3jMxNxmb5Zm7AUNXcA",
         },
 
         // Raft - Full Raft consensus with pre-vote, joint consensus, snapshotting
@@ -527,14 +527,14 @@
 
         // GQL - ISO/IEC 39075:2024 Graph Query Language front-end (lexer, parser, AST)
         .gql = .{
-            .url = "git+https://gitlab.com/devnw/zig/gql.git#v0.1.11",
-            .hash = "gql-0.1.11-T1ANDcVyCQBoVN-BYSlsqZOE9xR3-VJbK74bXJszIYYv",
+            .url = "git+https://gitlab.com/devnw/zig/gql.git?ref=v0.1.12#e57989b26bd2f703a44003fb422ad6b5dfa732cd",
+            .hash = "gql-0.1.12-T1ANDXCPCQCyUvqtQQYzIjOG7HZwXO1bAlCTSQoK8YKI",
         },
 
         // Timeseries - Pattern matching, DTW, matrix profile, PELT change-point detection
         .timeseries = .{
-            .url = "git+https://gitlab.com/devnw/zig/timeseries.git#v0.1.10",
-            .hash = "timeseries-0.1.10-iAEwOlnMBADjgAu0mBCe_HMkM044z17fcOHV-9N6jkRR",
+            .url = "git+https://gitlab.com/devnw/zig/timeseries.git?ref=v0.1.11#8de46b9e35031712d51cca470aada1b2569a6138",
+            .hash = "timeseries-0.1.11-iAEwOkw4BgDOlmPVE4rn9LqNhTDnbcrPoxYVfQ9sfw2X",
         },
 
         .timeseries_storage = .{

@@ -740,7 +740,7 @@ pub fn executeCrossCorrelate(
     a: []const f64,
     b: []const f64,
 ) Value {
-    const result = distances_mod.crossCorrelate(a, b) catch return .Null;
+    const result = distances_mod.crossCorrelate(allocator, a, b) catch return .Null;
     var obj_map = std.StringHashMap(Value).init(allocator);
     obj_map.put("lag", Value{ .Int = result.lag }) catch return .Null;
     obj_map.put("correlation", Value{ .Double = result.correlation }) catch return .Null;
@@ -749,10 +749,11 @@ pub fn executeCrossCorrelate(
 
 /// Shape-based distance between two f64 arrays.
 pub fn executeSBD(
+    allocator: std.mem.Allocator,
     a: []const f64,
     b: []const f64,
 ) Value {
-    const result = distances_mod.sbd(a, b) catch return .Null;
+    const result = distances_mod.sbd(allocator, a, b) catch return .Null;
     return Value{ .Double = result };
 }
 
@@ -1560,7 +1561,7 @@ test "ts_functions: sbd" {
     const a = &[_]f64{ 1.0, 2.0, 3.0, 4.0, 5.0 };
     const b = &[_]f64{ 1.0, 2.0, 3.0, 4.0, 5.0 };
 
-    const result = executeSBD(a, b);
+    const result = executeSBD(std.testing.allocator, a, b);
     try std.testing.expect(result == .Double);
     // SBD of identical series = 1 - max_correlation = 1 - 1 = 0
     try std.testing.expect(result.Double < 0.01);

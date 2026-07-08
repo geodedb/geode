@@ -455,7 +455,7 @@ fn evalArrayBasedTsFunction(
         defer allocator.free(a_arr);
         const b_arr = try extractF64List(allocator, b_val) orelse return EvalError.TypeMismatch;
         defer allocator.free(b_arr);
-        const ts_result = ts_gql.executeSBD(a_arr, b_arr);
+        const ts_result = ts_gql.executeSBD(allocator, a_arr, b_arr);
         return try tsValueToCanonical(ts_result, allocator);
     }
 
