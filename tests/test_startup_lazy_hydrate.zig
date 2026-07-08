@@ -1851,6 +1851,272 @@ test "GAP-0065 FIX D: kill-9 with a committed WAL tail → reopen REJECTS snapsh
     }
 }
 
+// ============================================================================
+// GAP-0065 FIX C — a from-dump / bulk-ingest store's FIRST reopen must RELOAD
+// every reloadable derived structure (no ~14-min loop2 re-scan, no O(graph)
+// exact-index rebuild), because the bulk-ingest COMPLETION (the FIX-D clean
+// shutdown) persisted them all at a current (checkpoint_epoch, covered_lsn).
+//
+// A "from-dump" ingest is the server's normal live write path (the Go driver
+// issues MERGE/CREATE). Empirically established (see report) — the server
+// maintains BOTH families of derived state INCREMENTALLY as the batch lands:
+//   * loop2   : label postings / merge index / counters / typed-edge counts
+//     (createNodesBatch → appendToLabelIndex / merge_prop_index.put / bumpLabelCount)
+//   * the exact node-property index (setNodeProperty → addIndexedNodeProperty;
+//     `exact_index_built` stays TRUE — a fresh graph is never `.deferred`).
+// So a from-dump ingest that runs NO WHERE-seek / GROUP BY / DISTINCT still has
+// a fully-built exact index at shutdown. FIX-D's clean shutdown persists loop2
+// + idmap snapshots AND (via the checkpoint's already-built branch) prop_exact.idx,
+// all at the truncated-WAL (epoch, covered). The FIRST reopen therefore RELOADS
+// everything: loop2 (no engine re-scan), idmap (mmap-in-place), and the exact
+// index (`.loaded`, no O(graph) rebuild). This test locks that invariant in.
+//
+// Memory note (Task 6 validates at 14.27M): the exact index is resident during
+// ingest (built incrementally); its ~O(index) working set on top of the graph
+// is the ~100 G concern at 14.27M. That is an INGEST-TIME cost, not a shutdown
+// or reopen build — this reload path adds NO build at shutdown or first reopen.
+// The one-time ~100 G build the plan flags is the LEGACY-store rebuild (a stale
+// or `.absent` prop_exact.idx), which Task 5's streaming build addresses; a
+// fresh from-dump store never pays it because the index reloads. The
+// discriminating RED (stripped/stale snapshots → re-scan + rebuild) is covered
+// by "P3: crash before checkpoint …" and "GAP-0064 FIX A: absent-index reopen …".
+// ============================================================================
+test "GAP-0065 FIX C: from-dump ingest (no index query) + clean shutdown → FIRST reopen RELOADS loop2 + idmap + exact index (no re-scan, no rebuild)" {
+    const allocator = testing.allocator;
+    graph_store.deinitGlobalStore();
+
+    var tmp = testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const data_dir = try tmpDataDir(allocator, &tmp.sub_path);
+    defer allocator.free(data_dir);
+
+    const G = "divelife";
+    const LBL = "Taxon";
+    const sources = [_][]const u8{ "gbif", "col", "itis", "worms" };
+    const N: usize = 1200;
+    const E: usize = 400;
+    var seed_ids: [1200]u64 = undefined;
+
+    // --- Session 1: from-dump-style bulk ingest, then the FIX-D clean shutdown.
+    // NO WHERE-seek / GROUP BY / DISTINCT is issued — modelling the from-dump
+    // loader, which only writes. loop2 AND the exact index are still built
+    // incrementally by the write path.
+    {
+        graph_store.setDataDirOverride(allocator, data_dir);
+        const store = graph_store.getGlobalStore(allocator);
+        var i: usize = 0;
+        while (i < N) : (i += 1) {
+            const id = try store.createNodeWithGraph(&[_][]const u8{LBL}, G);
+            seed_ids[i] = id;
+            try store.setNodeProperty(id, "source", .{ .String = sources[i % sources.len] });
+            var nb: [32]u8 = undefined;
+            try store.setNodeProperty(id, "name", .{ .String = nameFor(&nb, i) });
+        }
+        var e: usize = 0;
+        while (e < E) : (e += 1) {
+            _ = try store.createEdgeWithGraph(seed_ids[e], seed_ids[e + 1], "PARENT_OF", G);
+        }
+        // The server shutdown sequence (FIX D): LIGHT checkpoint (persistence
+        // thread stop), then the FULL clean-shutdown flush BEFORE the watchdog.
+        try store.saveToFileEx(true);
+        graph_store.flushForCleanShutdown();
+        graph_store.deinitGlobalStore();
+        graph_store.setDataDirOverride(allocator, null);
+    }
+
+    // All reloadable derived snapshots persisted at bulk-ingest completion:
+    // loop2 (3 files) + idmap + the exact index.
+    try testing.expect(fileExistsUnder(allocator, data_dir, "hydration_counters.snap"));
+    try testing.expect(fileExistsUnder(allocator, data_dir, "hydration_labels.snap"));
+    try testing.expect(fileExistsUnder(allocator, data_dir, "hydration_merge.snap"));
+    try testing.expect(snapshotExists(allocator, data_dir));
+    try testing.expect(countPropExactIdx(allocator, data_dir) >= 1);
+
+    // --- Session 2: the FIRST reopen. Everything RELOADS: loop2 (no engine
+    // re-scan), idmap (mmap-in-place), the exact index (`.loaded`, no rebuild).
+    graph_store.resetLazyHydrateCounters();
+    adapter_mod.resetExactRebuildRunsForTesting();
+    adapter_mod.resetExactHydrationBuildsForTesting();
+    adapter_mod.resetExactReopenSpawnsForTesting();
+    adapter_mod.resetExactIndexReloadCountersForTesting();
+    {
+        graph_store.setDataDirOverride(allocator, data_dir);
+        defer graph_store.setDataDirOverride(allocator, null);
+        const store = graph_store.getGlobalStore(allocator); // "server ready"
+        installBoundedCaches(store);
+        const adapter = graph_store.getGlobalAdapter().?;
+
+        // Open reloaded the idmap (mmap-in-place) and the exact index (`.loaded`)
+        // WITHOUT any O(graph) rebuild — and did NOT run the loop2 scan.
+        try testing.expectEqual(@as(u64, 0), graph_store.loop2ScanNodeCount());
+        try testing.expect(graph_store.idMapFromSnapshotCount() >= 1);
+        try testing.expectEqual(@as(u64, 1), adapter_mod.getExactIndexReloadedForTesting());
+        try testing.expectEqual(@as(u64, 0), adapter_mod.getExactRebuildRunsForTesting());
+        try testing.expectEqual(@as(u64, 0), adapter_mod.getExactReopenSpawnsForTesting());
+
+        // First query hydrates FROM the loop2 snapshots: the O(graph) re-scan and
+        // the per-node loop1 engine read must BOTH stay at zero.
+        const got = store.getNodesByLabel(G, LBL) orelse return error.NoLabelIndex;
+        try testing.expectEqual(N, got.len);
+        try testing.expectEqual(@as(u64, 0), graph_store.loop2ScanNodeCount());
+        try testing.expectEqual(@as(u64, 0), graph_store.idMapScanGetPropCount());
+        try testing.expect(graph_store.hydrationSnapshotLoadCount() >= 3);
+        try testing.expect(graph_store.hydrationFullScanSkipCount() >= 1);
+
+        // Counts / labels / typed-edge counts served from the reloaded loop2 —
+        // fast on the FIRST reopen (the count/GROUP-BY/DISTINCT-via-loop2 shapes).
+        try testing.expectEqual(N, store.countNodesByLabel(G, LBL, null));
+        try testing.expectEqual(N, store.countNodesForGraph(G, null));
+        try testing.expectEqual(E, store.countEdgesForGraph(G));
+        try testing.expectEqual(E, store.countEdgesByTypeForGraph(G, "PARENT_OF"));
+
+        // A WHERE-seek is served DIRECTLY from the reloaded exact index on the
+        // FIRST reopen — NO rebuild, NO hydration build, NO background spawn.
+        const seek = try adapter.getCandidateNodesByLabelAndProperty(G, LBL, "source", .{ .String = sources[2] }, allocator);
+        defer allocator.free(seek);
+        try testing.expectEqual(@as(usize, N / sources.len), seek.len);
+        try testing.expectEqual(@as(u64, 0), adapter_mod.getExactRebuildRunsForTesting());
+        try testing.expectEqual(@as(u64, 0), adapter_mod.getExactHydrationBuildsForTesting());
+
+        // MERGE authoritative found + miss from the reloaded merge index.
+        var out: u64 = 0;
+        var nb: [32]u8 = undefined;
+        try testing.expectEqual(GraphStore.MergeLookupResult.found, store.lookupMergeCandidate(G, LBL, "name", .{ .String = nameFor(&nb, 9) }, &out));
+        try testing.expectEqual(seed_ids[9], out);
+        try testing.expectEqual(GraphStore.MergeLookupResult.not_found, store.lookupMergeCandidate(G, LBL, "name", .{ .String = "no-such-name" }, &out));
+
+        // Still no loop2 scan after the whole read mix.
+        try testing.expectEqual(@as(u64, 0), graph_store.loop2ScanNodeCount());
+
+        graph_store.deinitGlobalStore();
+    }
+}
+
+// GAP-0065 FIX C crash-safety (G1/G3): a from-dump bulk-ingest store whose
+// indexed derived state (loop2 + exact node-property index) was snapshotted at
+// a clean flush, then had a COMMITTED tail appended and was HARD-KILLED before
+// re-flushing, must on reopen REJECT the now-stale snapshots (never serve
+// stale), REBUILD every derived structure from the durable pages, and answer a
+// WHERE-seek correctly over the FULL (snapshot + tail) key set — no committed
+// row lost, no duplicate created. This is the exact-index analogue of the FIX-D
+// kill-9 test, for the heavily-indexed from-dump shape.
+test "GAP-0065 FIX C: kill-9 with committed tail (from-dump indexed store) → reopen REJECTS stale snapshots, REBUILDS, full-key parity + correct WHERE-seek (no data loss)" {
+    const allocator = testing.allocator;
+    graph_store.deinitGlobalStore();
+
+    var tmp = testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const data_dir = try tmpDataDir(allocator, &tmp.sub_path);
+    defer allocator.free(data_dir);
+
+    const G = "divelife";
+    const LBL = "Taxon";
+    const sources = [_][]const u8{ "gbif", "col", "itis", "worms" };
+    const K: usize = 600; // ingested + cleanly flushed in session 1
+    const P: usize = 200; // committed tail in session 2, never re-flushed
+    const TOTAL = K + P;
+    const E: usize = 250;
+    var seed_ids: [800]u64 = undefined;
+
+    // --- Session 1: from-dump ingest of K, clean FIX-D flush (loop2 + idmap +
+    // prop_exact.idx snapshots @ E1), clean deinit.
+    {
+        graph_store.setDataDirOverride(allocator, data_dir);
+        const store = graph_store.getGlobalStore(allocator);
+        var i: usize = 0;
+        while (i < K) : (i += 1) {
+            const id = try store.createNodeWithGraph(&[_][]const u8{LBL}, G);
+            seed_ids[i] = id;
+            try store.setNodeProperty(id, "source", .{ .String = sources[i % sources.len] });
+            var nb: [32]u8 = undefined;
+            try store.setNodeProperty(id, "name", .{ .String = nameFor(&nb, i) });
+        }
+        graph_store.flushForCleanShutdown();
+        graph_store.deinitGlobalStore();
+        graph_store.setDataDirOverride(allocator, null);
+    }
+
+    // --- Session 2: reopen (RELOADS @ E1), append P nodes + E edges (committed
+    // tail), LIGHT checkpoint (advance the engine past E1, do NOT refresh the
+    // snapshots), then HARD KILL — no clean flush.
+    {
+        graph_store.setDataDirOverride(allocator, data_dir);
+        graph_store.resetLazyHydrateCounters();
+        const store = graph_store.getGlobalStore(allocator);
+        installBoundedCaches(store);
+        try testing.expectEqual(K, store.countNodesForGraph(G, null)); // reload proof
+        try testing.expect(graph_store.idMapFromSnapshotCount() >= 1);
+
+        var i: usize = K;
+        while (i < TOTAL) : (i += 1) {
+            const id = try store.createNodeWithGraph(&[_][]const u8{LBL}, G);
+            seed_ids[i] = id;
+            try store.setNodeProperty(id, "source", .{ .String = sources[i % sources.len] });
+            var nb: [32]u8 = undefined;
+            try store.setNodeProperty(id, "name", .{ .String = nameFor(&nb, i) });
+        }
+        var e: usize = 0;
+        while (e < E) : (e += 1) {
+            _ = try store.createEdgeWithGraph(seed_ids[e], seed_ids[e + 1], "PARENT_OF", G);
+        }
+        try store.saveToFileEx(true); // LIGHT: advance epoch, leave snapshots @ E1
+        graph_store.deinitGlobalStoreForTestCrash(); // kill-9 (no clean flush)
+        graph_store.setDataDirOverride(allocator, null);
+    }
+
+    // --- Session 3: reopen. Stale snapshots REJECTED → rebuild from durable
+    // pages → complete + correct over the FULL (snapshot + tail) key set.
+    graph_store.resetLazyHydrateCounters();
+    adapter_mod.resetExactRebuildRunsForTesting();
+    adapter_mod.resetExactHydrationBuildsForTesting();
+    adapter_mod.resetExactIndexReloadCountersForTesting();
+    adapter_mod.openExactBuildGateForTesting();
+    {
+        graph_store.setDataDirOverride(allocator, data_dir);
+        defer graph_store.setDataDirOverride(allocator, null);
+        const store = graph_store.getGlobalStore(allocator);
+        installBoundedCaches(store);
+        const adapter = graph_store.getGlobalAdapter().?;
+
+        const got = store.getNodesByLabel(G, LBL) orelse return error.NoLabelIndex;
+        try testing.expectEqual(TOTAL, got.len);
+        // Stale loop2 snapshots REJECTED → the scan rebuilt from durable pages
+        // (no stale-partial serve of the K-only snapshot across the committed tail).
+        try testing.expect(graph_store.loop2ScanNodeCount() >= TOTAL);
+        try testing.expectEqual(@as(u64, 0), graph_store.hydrationSnapshotLoadCount());
+        try testing.expect(graph_store.hydrationScanFallbackCount() >= 3);
+        try testing.expectEqual(@as(u64, 0), graph_store.hydrationFullScanSkipCount());
+
+        // FULL-KEY PARITY over the snapshot + tail: names, counts, edges, MERGE.
+        try testing.expectEqual(TOTAL, store.countNodesForGraph(G, null));
+        try testing.expectEqual(TOTAL, store.countNodesByLabel(G, LBL, null));
+        try testing.expectEqual(E, store.countEdgesForGraph(G));
+        try testing.expectEqual(E, store.countEdgesByTypeForGraph(G, "PARENT_OF"));
+        var i: usize = 0;
+        while (i < TOTAL) : (i += 1) {
+            var nb: [32]u8 = undefined;
+            try c3ExpectProp(store, seed_ids[i], "name", nameFor(&nb, i));
+            var out: u64 = 0;
+            var nb2: [32]u8 = undefined;
+            try testing.expectEqual(GraphStore.MergeLookupResult.found, store.lookupMergeCandidate(G, LBL, "name", .{ .String = nameFor(&nb2, i) }, &out));
+            try testing.expectEqual(seed_ids[i], out);
+        }
+
+        // WHERE-seek reflects the FULL key set (snapshot + committed tail) — the
+        // exact index was reconciled/rebuilt/re-stamped to include the tail, never
+        // served stale-at-K across it (the seek self-ensures the index is built).
+        const seek = try adapter.getCandidateNodesByLabelAndProperty(G, LBL, "source", .{ .String = sources[3] }, allocator);
+        defer allocator.free(seek);
+        try testing.expectEqual(@as(usize, TOTAL / sources.len), seek.len);
+        // Never a stale reload-as-current across the committed tail: the index was
+        // rebuilt, reconciled O(tail), or re-stamped to include the tail — every
+        // sound path serves the full key set. (A stale K-only serve would fail the
+        // seek count above.)
+
+        graph_store.deinitGlobalStore();
+    }
+}
+
 test "P3 CRITICAL: full checkpoint on a deferred graph DELETES stale loop2 snapshots (never persists empty state)" {
     const allocator = testing.allocator;
     graph_store.deinitGlobalStore();
