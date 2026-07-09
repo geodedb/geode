@@ -1954,54 +1954,30 @@ dev-image:
       SHA8=$(echo "${CI_COMMIT_SHA}" | cut -c1-8)
       DEV_TAGS="dev main main-${SHA8}"   # NEVER 'latest' — releases own that.
 
-      echo "Logging into GitLab registry ${CI_REGISTRY}..."
-      # CI_JOB_TOKEN (CI_REGISTRY_PASSWORD) has PULL-ONLY scope on branch
-      # pipelines for this project — the multi-arch push failed with
-      # "insufficient_scope: authorization failed". Use the dedicated
-      # write_registry deploy token (protected+masked CI vars
-      # DEV_IMAGE_REGISTRY_USER / DEV_IMAGE_REGISTRY_PASSWORD); fall back to the
-      # job token when absent (forks / non-protected refs).
+      # ---------------------------------------------------------------------
+      # Registry push strategy — why skopeo, NOT `docker push` / buildx --push.
+      #
+      # On this self-hosted runner the docker:dind daemon authenticates every
+      # registry PUSH with the pull-only CI_JOB_TOKEN the runner injects and
+      # IGNORES the write_registry deploy-token credential we supply. Proven in
+      # CI with a minimal push probe: a plain `docker push` of a well-formed
+      # DOCKER_CONFIG (correct deploy-token auth, no shadowing default config)
+      # still returned "denied: requested access to the resource is denied".
+      # Both `docker push` and `docker buildx build --push` route through this
+      # daemon/buildkit, so neither can use the deploy token.
+      #
+      # skopeo talks to the registry DIRECTLY (not via the dind daemon) using
+      # EXPLICIT --dest-creds, so it DOES honour the deploy token. We therefore
+      # build a multi-arch OCI archive locally (no registry push, so buildkit
+      # needs no push auth — the base-image pull is anonymous) and skopeo-copy
+      # the archive to each tag. Deploy-token vars fall back to the job token
+      # for forks / non-protected refs (those can only push to their own ns).
       REG_USER="${DEV_IMAGE_REGISTRY_USER:-$CI_REGISTRY_USER}"
       REG_PASS="${DEV_IMAGE_REGISTRY_PASSWORD:-$CI_REGISTRY_PASSWORD}"
-      # The buildx docker-container driver ignored a plain `docker login` AND an
-      # explicit single-registry config.json — the multi-arch push still hit
-      # insufficient_scope (buildkit fell back to an anonymous / pull-only token)
-      # even though the write_registry deploy token pushes fine via a plain
-      # `docker push`. Write ALL registry auths ourselves as plaintext base64
-      # into a clean, exported DOCKER_CONFIG with NO credsStore/credHelpers key
-      # (a `docker login` can inject a cred helper that makes buildkit query an
-      # empty store and fall back to anonymous). Recreate the builder from
-      # scratch so it can't reuse a stale session.
-      export DOCKER_CONFIG="${CI_PROJECT_DIR}/.docker-dev-image"
-      mkdir -p "$DOCKER_CONFIG"
-      GL_AUTH=$(printf '%s:%s' "$REG_USER" "$REG_PASS" | base64 | tr -d '\n')
+      apk add --no-cache skopeo >/dev/null 2>&1 || \
+        apk add --no-cache -X https://dl-cdn.alpinelinux.org/alpine/edge/community skopeo
       PUSH_DOCKERHUB="false"
-      if [ -n "${DOCKERHUB_USERNAME:-}" ] && [ -n "${DOCKERHUB_TOKEN:-}" ]; then
-        DH_AUTH=$(printf '%s:%s' "$DOCKERHUB_USERNAME" "$DOCKERHUB_TOKEN" | base64 | tr -d '\n')
-        printf '{"auths":{"%s":{"auth":"%s"},"https://index.docker.io/v1/":{"auth":"%s"}}}\n' \
-          "$CI_REGISTRY" "$GL_AUTH" "$DH_AUTH" > "$DOCKER_CONFIG/config.json"
-        PUSH_DOCKERHUB="true"
-        echo "wrote explicit auth for ${CI_REGISTRY} (user=${REG_USER}) + docker.io"
-      else
-        printf '{"auths":{"%s":{"auth":"%s"}}}\n' "$CI_REGISTRY" "$GL_AUTH" > "$DOCKER_CONFIG/config.json"
-        echo "wrote explicit auth for ${CI_REGISTRY} (user=${REG_USER}); no docker.io creds"
-      fi
-      # Safe diagnostic (never prints the base64 auth): confirm no cred helper.
-      if grep -qE '"credsStore"|"credHelpers"' "$DOCKER_CONFIG/config.json"; then
-        echo "WARNING: config.json unexpectedly has a cred helper"; else echo "config.json is plaintext-auths only (good)"; fi
-      # AUTH DIAGNOSTIC: even a plain `docker push` was denied (pull-only) in the
-      # CI dind though it works locally with this exact deploy token — dump what
-      # docker actually sees (auth values redacted) and probe a minimal push so
-      # we fail fast with data instead of after the multi-arch build.
-      echo "DIAG DOCKER_CONFIG=${DOCKER_CONFIG}"
-      echo "DIAG our config.json:"; sed 's/"auth"[[:space:]]*:[[:space:]]*"[^"]*"/"auth":"<redacted>"/g' "$DOCKER_CONFIG/config.json" || true
-      echo "DIAG default \$HOME/.docker/config.json:"; sed 's/"auth"[[:space:]]*:[[:space:]]*"[^"]*"/"auth":"<redacted>"/g' "${HOME}/.docker/config.json" 2>/dev/null || echo "  (absent)"
-      printf 'FROM scratch\nCOPY authprobe /authprobe\n' > /tmp/authprobe.Dockerfile; echo probe > /tmp/authprobe
-      docker build -q -t "${CI_REGISTRY_IMAGE}:__authprobe" -f /tmp/authprobe.Dockerfile /tmp >/dev/null 2>&1 || true
-      echo "DIAG minimal push probe:"
-      docker push "${CI_REGISTRY_IMAGE}:__authprobe" 2>&1 | tail -3 && echo "DIAG-RESULT authprobe-push=OK" || echo "DIAG-RESULT authprobe-push=DENIED"
-      docker buildx rm devimage-builder >/dev/null 2>&1 || true
-
+      if [ -n "${DOCKERHUB_USERNAME:-}" ] && [ -n "${DOCKERHUB_TOKEN:-}" ]; then PUSH_DOCKERHUB="true"; fi
       echo "Publishing dev tags: ${DEV_TAGS} (no latest); dockerhub=${PUSH_DOCKERHUB}"
 
       # Multi-arch amd64+arm64. Register QEMU so the arm64 base-image apt steps
@@ -2012,39 +1988,32 @@ dev-image:
       docker buildx create --name devimage-builder --driver docker-container --use
       docker buildx inspect --bootstrap
 
-      # IMPORTANT: `docker buildx build --push` is intentionally NOT used. On this
-      # runner the buildx docker-container builder authenticates the registry
-      # PUSH with a pull-only credential (the CI_JOB_TOKEN the runner injects)
-      # regardless of the DOCKER_CONFIG / deploy token we provide, so every push
-      # hit "insufficient_scope: authorization failed". Instead we `--load` each
-      # single-arch image into the local dind daemon and publish with PLAIN
-      # `docker push` + `docker manifest`, which DO honour the write_registry
-      # deploy token in DOCKER_CONFIG (verified: a plain push with that token
-      # succeeds where the buildkit push does not).
-      LABELS="--label org.opencontainers.image.revision=${CI_COMMIT_SHA} --label org.opencontainers.image.source=${CI_PROJECT_URL} --label org.opencontainers.image.version=main-${SHA8}"
-      for arch in amd64 arm64; do
-        echo "=== building linux/${arch} ==="
-        # shellcheck disable=SC2086
-        docker buildx build --platform "linux/${arch}" --file Dockerfile.devimage \
-          ${LABELS} --load --tag "geode-devimage-stage:${arch}" .
-      done
-      export DOCKER_CLI_EXPERIMENTAL=enabled
-      # Publish per-arch tags then assemble a multi-arch manifest list per tag.
+      # Build BOTH arches into a local OCI archive (a real manifest list). No
+      # `--push`/`--load` → buildkit performs no registry push, so the broken
+      # daemon auth is never exercised. --provenance=false keeps the manifest
+      # list to exactly {amd64,arm64} (no unknown/unknown attestation entries
+      # that some registries reject on copy).
+      docker buildx build --platform linux/amd64,linux/arm64 --file Dockerfile.devimage \
+        --provenance=false \
+        --label org.opencontainers.image.revision="${CI_COMMIT_SHA}" \
+        --label org.opencontainers.image.source="${CI_PROJECT_URL}" \
+        --label org.opencontainers.image.version="main-${SHA8}" \
+        --output "type=oci,dest=/tmp/geode-devimage-oci.tar" .
+
+      # skopeo copy the OCI archive (multi-arch manifest list) straight to the
+      # registry with explicit creds — bypasses the dind daemon entirely.
       publish_devimage() {
-        repo="$1"
+        repo="$1"; creds="$2"
         for t in $DEV_TAGS; do
-          for arch in amd64 arm64; do
-            docker tag "geode-devimage-stage:${arch}" "${repo}:${t}-${arch}"
-            docker push "${repo}:${t}-${arch}"
-          done
-          docker manifest rm "${repo}:${t}" >/dev/null 2>&1 || true
-          docker manifest create "${repo}:${t}" "${repo}:${t}-amd64" "${repo}:${t}-arm64"
-          docker manifest push "${repo}:${t}"
+          skopeo copy --multi-arch all --dest-creds "$creds" \
+            "oci-archive:/tmp/geode-devimage-oci.tar" "docker://${repo}:${t}"
           echo "✓ pushed ${repo}:${t} (multi-arch amd64+arm64)"
         done
       }
-      publish_devimage "${CI_REGISTRY_IMAGE}"
-      if [ "$PUSH_DOCKERHUB" = "true" ]; then publish_devimage "docker.io/geodedb/geode"; fi
+      publish_devimage "${CI_REGISTRY_IMAGE}" "${REG_USER}:${REG_PASS}"
+      if [ "$PUSH_DOCKERHUB" = "true" ]; then
+        publish_devimage "docker.io/geodedb/geode" "${DOCKERHUB_USERNAME}:${DOCKERHUB_TOKEN}"
+      fi
       echo "✓ pushed geode dev image tags [${DEV_TAGS}] (no latest)"
 
 # =============================================================================
@@ -2156,35 +2125,22 @@ dev-image-fips:
       SHA8=$(echo "${CI_COMMIT_SHA}" | cut -c1-8)
       FIPS_TAGS="dev-fips main-fips main-${SHA8}-fips"
 
-      echo "Logging into GitLab registry ${CI_REGISTRY}..."
-      # See dev-image: CI_JOB_TOKEN is pull-only for branch-pipeline pushes and
-      # the buildx docker-container driver ignores a plain `docker login`, so
-      # write the write_registry deploy-token auth EXPLICITLY into a clean
-      # job-local DOCKER_CONFIG and export it for the builder. Fall back to the
-      # job token when the deploy-token vars are absent.
+      # See dev-image for the full rationale: this runner's dind daemon ignores
+      # our deploy-token credential and pushes with the pull-only CI_JOB_TOKEN,
+      # so `docker push` is denied. We build the (amd64-only) FIPS image into the
+      # local daemon and publish it with skopeo + EXPLICIT --dest-creds, which
+      # talks to the registry directly and honours the write_registry token.
+      # Fall back to the job token when the deploy-token vars are absent.
       REG_USER="${DEV_IMAGE_REGISTRY_USER:-$CI_REGISTRY_USER}"
       REG_PASS="${DEV_IMAGE_REGISTRY_PASSWORD:-$CI_REGISTRY_PASSWORD}"
-      export DOCKER_CONFIG="${CI_PROJECT_DIR}/.docker-dev-image-fips"
-      mkdir -p "$DOCKER_CONFIG"
-      GL_AUTH=$(printf '%s:%s' "$REG_USER" "$REG_PASS" | base64 | tr -d '\n')
+      apk add --no-cache skopeo >/dev/null 2>&1 || \
+        apk add --no-cache -X https://dl-cdn.alpinelinux.org/alpine/edge/community skopeo
       PUSH_DOCKERHUB="false"
-      if [ -n "${DOCKERHUB_USERNAME:-}" ] && [ -n "${DOCKERHUB_TOKEN:-}" ]; then
-        DH_AUTH=$(printf '%s:%s' "$DOCKERHUB_USERNAME" "$DOCKERHUB_TOKEN" | base64 | tr -d '\n')
-        printf '{"auths":{"%s":{"auth":"%s"},"https://index.docker.io/v1/":{"auth":"%s"}}}\n' \
-          "$CI_REGISTRY" "$GL_AUTH" "$DH_AUTH" > "$DOCKER_CONFIG/config.json"
-        PUSH_DOCKERHUB="true"
-        echo "wrote explicit auth for ${CI_REGISTRY} (user=${REG_USER}) + docker.io"
-      else
-        printf '{"auths":{"%s":{"auth":"%s"}}}\n' "$CI_REGISTRY" "$GL_AUTH" > "$DOCKER_CONFIG/config.json"
-        echo "wrote explicit auth for ${CI_REGISTRY} (user=${REG_USER}); no docker.io creds"
-      fi
+      if [ -n "${DOCKERHUB_USERNAME:-}" ] && [ -n "${DOCKERHUB_TOKEN:-}" ]; then PUSH_DOCKERHUB="true"; fi
       echo "Publishing FIPS dev tags: ${FIPS_TAGS} (no latest); dockerhub=${PUSH_DOCKERHUB}"
 
-      # amd64-only (the FIPS provider is x86_64 Linux only), so no buildx /
-      # manifest needed — a plain `docker build` + `docker push` is enough and,
-      # unlike the buildx docker-container `--push`, honours the write_registry
-      # deploy token in DOCKER_CONFIG (see dev-image for the insufficient_scope
-      # rationale).
+      # amd64-only (the FIPS provider is x86_64 Linux only) → plain `docker build`
+      # into the local dind daemon, then skopeo-copy from the daemon to each tag.
       docker build \
         --file Dockerfile.devimage.fips \
         --label org.opencontainers.image.revision="${CI_COMMIT_SHA}" \
@@ -2192,15 +2148,18 @@ dev-image-fips:
         --label org.opencontainers.image.version="main-${SHA8}-fips" \
         --tag geode-fips-devimage-stage:amd64 \
         .
-      for t in $FIPS_TAGS; do
-        docker tag geode-fips-devimage-stage:amd64 "${CI_REGISTRY_IMAGE}:${t}"
-        docker push "${CI_REGISTRY_IMAGE}:${t}"
-        if [ "$PUSH_DOCKERHUB" = "true" ]; then
-          docker tag geode-fips-devimage-stage:amd64 "docker.io/geodedb/geode:${t}"
-          docker push "docker.io/geodedb/geode:${t}"
-        fi
-        echo "✓ pushed FIPS dev tag ${t}"
-      done
+      publish_fips() {
+        repo="$1"; creds="$2"
+        for t in $FIPS_TAGS; do
+          skopeo copy --dest-creds "$creds" \
+            "docker-daemon:geode-fips-devimage-stage:amd64" "docker://${repo}:${t}"
+          echo "✓ pushed ${repo}:${t}"
+        done
+      }
+      publish_fips "${CI_REGISTRY_IMAGE}" "${REG_USER}:${REG_PASS}"
+      if [ "$PUSH_DOCKERHUB" = "true" ]; then
+        publish_fips "docker.io/geodedb/geode" "${DOCKERHUB_USERNAME}:${DOCKERHUB_TOKEN}"
+      fi
       echo "✓ pushed geode FIPS dev image tags [${FIPS_TAGS}] (no latest)"
 
 # Build release artifacts for tags (alpha, beta, stable)
