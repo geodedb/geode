@@ -200,6 +200,7 @@ pub const DecisionRequest = struct {
 // REQ-GPS-INVARIANT-001 ASPECT=FailOpenInterim STATUS=COMPLETE for site #2.
 const user_mgmt = @import("user_management.zig");
 const execution = @import("../execution.zig");
+const tenancy = @import("../execution/tenancy.zig");
 
 /// Map a GPS Action to the user_management.Permission it requires.
 /// Returns null for actions that have no legacy permission analogue (admin-only
@@ -401,6 +402,31 @@ pub fn decide(allocator: std.mem.Allocator, req: *const DecisionRequest) !Policy
                             .reason_code = "bind_graph_grant",
                         });
                     }
+                }
+            }
+        }
+        // CANARY: REQ=REQ-GPS-BIND-001; FEATURE="GPS BindGraph Action"; ASPECT=ReadWritePermissiveSingleTenant; STATUS=TESTED; TEST=geodetestlab/specs/rls_cross_tenant_query_shapes.yml; OWNER=security; UPDATED=2026-07-08
+        // Additive/permissive per-graph binding in the default single-tenant config.
+        // The per-graph grant is ADDITIVE, not mandatory, for a ReadWrite principal
+        // in a non-strict deployment: ReadWrite already holds a baseline write
+        // capability over the single tenant's graphs (the QUIC HELLO path lets it
+        // auto-create and bind brand-new graphs with no grant), so denying it an
+        // *existing* ungranted graph is inconsistent and breaks the documented
+        // permissive-single-tenant model — RLS/ABAC/FLE govern row/field access,
+        // NOT graph-bind (see CLAUDE.md "Auth DDL persistence"). ReadOnly holds NO
+        // baseline graph capability, so it still requires an explicit grant: this
+        // preserves the NEW-1 (#861) cross-graph BOLA fix, whose regression test
+        // (tests/test_new1_cross_graph_bola.zig) denies a *ReadOnly* user an
+        // ungranted graph. When strict tenancy is in effect (auto-enabled for any
+        // multi-tenant deployment — GAP-0848), the grant is mandatory for every
+        // non-admin role, so this permissive path is gated on !isStrictTenancy().
+        if (!tenancy.isStrictTenancy()) {
+            for (req.principal.roles) |role_name| {
+                if (std.mem.eql(u8, role_name, "ReadWrite")) {
+                    return cacheAndReturn(cache_key, PolicyDecision{
+                        .kind = .allow,
+                        .reason_code = "bind_graph_readwrite_permissive_single_tenant",
+                    });
                 }
             }
         }

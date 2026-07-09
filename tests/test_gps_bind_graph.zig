@@ -3,6 +3,7 @@ const geode = @import("geode");
 const gps = geode.security.gps;
 const principal_mod = geode.security.principal;
 const graph_store = geode.graph_store;
+const tenancy = geode.tenancy;
 
 // CANARY: REQ=REQ-GPS-BIND-001; FEATURE="GPS BindGraph Action"; ASPECT=AdminAllowed; STATUS=TESTED; OWNER=security; UPDATED=2026-05-20
 test "decide(.bind_graph) allows Admin to bind any graph" {
@@ -164,6 +165,104 @@ test "decide(.bind_graph) denies non-admin when no graph_grant_check_fn is set" 
     };
     const d = try gps.decide(std.testing.allocator, &req);
     try std.testing.expectEqual(gps.PolicyDecisionKind.unauthorized, d.kind);
+}
+
+// CANARY: REQ=REQ-GPS-BIND-001; FEATURE="GPS BindGraph Action"; ASPECT=ReadWritePermissiveSingleTenant; STATUS=TESTED; OWNER=security; UPDATED=2026-07-08
+// Regression for the RLS/ABAC harness cluster (rls_cross_tenant_query_shapes.yml
+// et al.): in the DEFAULT single-tenant (non-strict) config a ReadWrite principal
+// may bind an existing ungranted graph — the per-graph grant is additive, not
+// mandatory, for ReadWrite (it can already auto-create+bind new graphs). RLS/ABAC
+// then govern row access. The NEW-1 (#861) BOLA fix over-blocked this, denying
+// every non-admin role and breaking the permissive-single-tenant contract.
+test "decide(.bind_graph) allows ReadWrite on ungranted graph in single-tenant (non-strict) mode" {
+    const execution = geode.execution;
+    const Stub = struct {
+        fn check(_: []const u8, _: []const u8, _: u8) bool {
+            return false; // no explicit grant registered for this user
+        }
+    };
+    const prev = execution.graph_grant_check_fn;
+    execution.graph_grant_check_fn = &Stub.check;
+    defer execution.graph_grant_check_fn = prev;
+
+    const prev_strict = tenancy.isStrictTenancy();
+    tenancy.setStrictTenancy(false); // default single-tenant deployment
+    defer tenancy.setStrictTenancy(prev_strict);
+
+    const role_names = [_][]const u8{"ReadWrite"};
+    const p = principal_mod.Principal{
+        .user_id = 42,
+        .username = "rw_bob",
+        .session_id = null,
+        .tenant_id = null,
+        .active_graph = null,
+        .roles = &role_names,
+        .custom_roles = &.{},
+        .auth_method = .password,
+        .auth_version = 1,
+        .mfa_state = .none,
+        .elevation_until = null,
+        .api_key_id = null,
+        .certificate_subject = null,
+        .risk_context = principal_mod.RiskContext.unknown,
+        .attributes = principal_mod.AttributeMap.emptySentinel(),
+        .source = .test_harness,
+    };
+    const req = gps.DecisionRequest{
+        .principal = &p,
+        .action = .bind_graph,
+        .resource = .{ .graph = "rls_xt" },
+    };
+    const d = try gps.decide(std.testing.allocator, &req);
+    try std.testing.expectEqual(gps.PolicyDecisionKind.allow, d.kind);
+}
+
+// CANARY: REQ=REQ-GPS-BIND-001; FEATURE="GPS BindGraph Action"; ASPECT=ReadWriteStrictTenancyRequiresGrant; STATUS=TESTED; OWNER=security; UPDATED=2026-07-08
+// The permissive ReadWrite path is gated on !isStrictTenancy(): in a strict /
+// multi-tenant deployment (strict auto-enabled by GAP-0848) the per-graph grant
+// is MANDATORY for ReadWrite too — otherwise a ReadWrite tenant could bind
+// another tenant's graph. Same principal, strict ON -> unauthorized.
+test "decide(.bind_graph) denies ReadWrite on ungranted graph under strict tenancy" {
+    const execution = geode.execution;
+    const Stub = struct {
+        fn check(_: []const u8, _: []const u8, _: u8) bool {
+            return false;
+        }
+    };
+    const prev = execution.graph_grant_check_fn;
+    execution.graph_grant_check_fn = &Stub.check;
+    defer execution.graph_grant_check_fn = prev;
+
+    const prev_strict = tenancy.isStrictTenancy();
+    tenancy.setStrictTenancy(true); // multi-tenant / strict deployment
+    defer tenancy.setStrictTenancy(prev_strict);
+
+    const role_names = [_][]const u8{"ReadWrite"};
+    const p = principal_mod.Principal{
+        .user_id = 43,
+        .username = "rw_mallory",
+        .session_id = null,
+        .tenant_id = null,
+        .active_graph = null,
+        .roles = &role_names,
+        .custom_roles = &.{},
+        .auth_method = .password,
+        .auth_version = 1,
+        .mfa_state = .none,
+        .elevation_until = null,
+        .api_key_id = null,
+        .certificate_subject = null,
+        .risk_context = principal_mod.RiskContext.unknown,
+        .attributes = principal_mod.AttributeMap.emptySentinel(),
+        .source = .test_harness,
+    };
+    const req = gps.DecisionRequest{
+        .principal = &p,
+        .action = .bind_graph,
+        .resource = .{ .graph = "other_tenant_graph" },
+    };
+    const d = try gps.decide(std.testing.allocator, &req);
+    try std.testing.expect(d.kind != .allow);
 }
 
 // REQ-MULTI-GRAPH-RBAC-WIRE-003 / #861 transport-parity invariant:
