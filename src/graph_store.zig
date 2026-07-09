@@ -9547,7 +9547,21 @@ pub const GraphStore = struct {
     /// and loading the loop2-product snapshots (hydration falls back to the
     /// engine scan exactly as before this feature). Read per call — these are
     /// cold paths (full checkpoint / first-touch hydration).
+    ///
+    /// TDE PLAINTEXT-LEAK GUARD (harness: tde_backup_envelope_wrong_kek /
+    /// tde_bitflip_detection): the loop2-product snapshots (hydration_merge.snap
+    /// in particular) persist the {graph,label,key,VALUE}->node_id MERGE index —
+    /// i.e. raw property VALUES — via the hydration_snapshot writer, which emits
+    /// magic+CRC-framed but UNENCRYPTED bytes. Under TDE (GEODE_TDE_KEY set) the
+    /// engine page store is AES-GCM encrypted at rest, but these side-car
+    /// snapshots are NOT, so they would leak plaintext (a sentinel string, a PII
+    /// value) to disk — defeating TDE. Since the snapshots are a pure hydration
+    /// OPTIMIZATION (absence just falls back to the encrypted engine scan, no
+    /// correctness impact), suppress BOTH write and load whenever TDE is active.
+    /// A dedicated encrypted-snapshot format is the follow-up; until then,
+    /// fail-safe by not writing plaintext.
     fn hydrationSnapshotsDisabled() bool {
+        if (std.c.getenv("GEODE_TDE_KEY") != null) return true;
         const raw_z = std.c.getenv("GEODE_DISABLE_HYDRATION_SNAPSHOTS") orelse return false;
         const raw = std.mem.span(raw_z);
         return std.mem.eql(u8, raw, "1") or std.mem.eql(u8, raw, "true") or std.mem.eql(u8, raw, "yes");
