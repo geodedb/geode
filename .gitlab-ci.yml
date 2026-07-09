@@ -1948,7 +1948,16 @@ dev-image:
       DEV_TAGS="dev main main-${SHA8}"   # NEVER 'latest' — releases own that.
 
       echo "Logging into GitLab registry ${CI_REGISTRY}..."
-      docker login -u "$CI_REGISTRY_USER" -p "$CI_REGISTRY_PASSWORD" "$CI_REGISTRY"
+      # CI_JOB_TOKEN (CI_REGISTRY_PASSWORD) has PULL-ONLY scope on branch
+      # pipelines for this project — the multi-arch push failed with
+      # "insufficient_scope: authorization failed". Prefer the dedicated
+      # write_registry deploy token published as the protected+masked CI vars
+      # DEV_IMAGE_REGISTRY_USER / DEV_IMAGE_REGISTRY_PASSWORD; fall back to the
+      # job token when they are absent (forks / non-protected refs, where this
+      # best-effort job may still run).
+      REG_USER="${DEV_IMAGE_REGISTRY_USER:-$CI_REGISTRY_USER}"
+      REG_PASS="${DEV_IMAGE_REGISTRY_PASSWORD:-$CI_REGISTRY_PASSWORD}"
+      echo "$REG_PASS" | docker login -u "$REG_USER" --password-stdin "$CI_REGISTRY"
 
       # Docker Hub is optional — only if creds are provided (same gate the
       # release jobs use). When absent we still publish to the GitLab registry.
@@ -2104,7 +2113,11 @@ dev-image-fips:
       FIPS_TAGS="dev-fips main-fips main-${SHA8}-fips"
 
       echo "Logging into GitLab registry ${CI_REGISTRY}..."
-      docker login -u "$CI_REGISTRY_USER" -p "$CI_REGISTRY_PASSWORD" "$CI_REGISTRY"
+      # See dev-image: CI_JOB_TOKEN is pull-only for branch-pipeline pushes here;
+      # prefer the write_registry deploy token, fall back to the job token.
+      REG_USER="${DEV_IMAGE_REGISTRY_USER:-$CI_REGISTRY_USER}"
+      REG_PASS="${DEV_IMAGE_REGISTRY_PASSWORD:-$CI_REGISTRY_PASSWORD}"
+      echo "$REG_PASS" | docker login -u "$REG_USER" --password-stdin "$CI_REGISTRY"
 
       PUSH_DOCKERHUB="false"
       if [ -n "${DOCKERHUB_USERNAME:-}" ] && [ -n "${DOCKERHUB_TOKEN:-}" ]; then
