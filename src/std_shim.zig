@@ -12,22 +12,38 @@
 //! (ML-DSA/SLH-DSA, ML-KEM + hybrids) are fips-only and return
 //! error.Unsupported here.
 const std = @import("std");
+const builtin = @import("builtin");
 pub const policy = @import("policy.zig");
 
 fn randomBytes(out: []u8) error{OpensslFailure}!void {
-    // Non-fips shim CSPRNG: OS entropy via the getrandom syscall shim
-    // (std.posix.system), which compiles for Linux/macOS/Windows. The FIPS
-    // backend uses the validated DRBG instead (src/csprng.zig); macOS/Windows
-    // runtime coverage remains the deferred item noted in FIPS_SPECIFICATION.md.
-    var off: usize = 0;
-    while (off < out.len) {
-        const rc = std.posix.system.getrandom(out.ptr + off, out.len - off, 0);
-        switch (std.posix.errno(rc)) {
-            .SUCCESS => off += @intCast(rc), // rc is isize bytes-filled on success; non-negative here
-            .INTR => continue, // interrupted by a signal; retry
-            else => return error.OpensslFailure, // fatal: fail closed, never loop or fall back
+    // Non-fips shim CSPRNG: OS entropy, fail-closed. The entropy source is
+    // selected at COMPTIME per target (mirroring Zig std's Io randomSecure) so
+    // this file compiles on every platform — `std.posix.system.getrandom` is
+    // Linux-only and resolves to `void` elsewhere (which used to break the
+    // native-macOS build with "type 'void' not a function"):
+    //   * Linux: getrandom(2) directly (loop over partial fills / EINTR).
+    //   * macOS/BSD (libc): arc4random_buf — the OS CSPRNG; cannot fail.
+    //   * targets with neither (e.g. Windows non-fips): fail closed — runtime
+    //     coverage there is the deferred item in FIPS_SPECIFICATION.md.
+    // The FIPS backend uses the validated DRBG instead (src/csprng.zig).
+    if (out.len == 0) return;
+    if (@TypeOf(std.posix.system.getrandom) != void) {
+        var off: usize = 0;
+        while (off < out.len) {
+            const rc = std.posix.system.getrandom(out.ptr + off, out.len - off, 0);
+            switch (std.posix.errno(rc)) {
+                .SUCCESS => off += @intCast(rc), // rc is isize bytes-filled on success; non-negative here
+                .INTR => continue, // interrupted by a signal; retry
+                else => return error.OpensslFailure, // fatal: fail closed, never loop or fall back
+            }
         }
+        return;
     }
+    if (builtin.link_libc and @TypeOf(std.posix.system.arc4random_buf) != void) {
+        std.posix.system.arc4random_buf(out.ptr, out.len);
+        return;
+    }
+    return error.OpensslFailure;
 }
 
 pub const Hash = struct {
