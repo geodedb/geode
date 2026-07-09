@@ -1991,34 +1991,49 @@ dev-image:
         echo "WARNING: config.json unexpectedly has a cred helper"; else echo "config.json is plaintext-auths only (good)"; fi
       docker buildx rm devimage-builder >/dev/null 2>&1 || true
 
-      # Build the --tag flags for both registries (no 'latest').
-      TAG_ARGS=""
-      for t in $DEV_TAGS; do
-        TAG_ARGS="$TAG_ARGS --tag ${CI_REGISTRY_IMAGE}:${t}"
-        if [ "$PUSH_DOCKERHUB" = "true" ]; then
-          TAG_ARGS="$TAG_ARGS --tag docker.io/geodedb/geode:${t}"
-        fi
-      done
       echo "Publishing dev tags: ${DEV_TAGS} (no latest); dockerhub=${PUSH_DOCKERHUB}"
 
       # Multi-arch amd64+arm64. Register QEMU so the arm64 base-image apt steps
       # run under emulation (the geode binary itself is pre-cross-compiled, not
       # emulated, so the build stays fast).
       docker run --privileged --rm tonistiigi/binfmt --install arm64,amd64 || true
-      docker buildx create --name devimage-builder --driver docker-container --use 2>/dev/null \
-        || docker buildx use devimage-builder
+      docker buildx rm devimage-builder >/dev/null 2>&1 || true
+      docker buildx create --name devimage-builder --driver docker-container --use
       docker buildx inspect --bootstrap
 
-      # shellcheck disable=SC2086  # TAG_ARGS is an intentional list of flags
-      docker buildx build \
-        --platform linux/amd64,linux/arm64 \
-        --file Dockerfile.devimage \
-        --label org.opencontainers.image.revision="${CI_COMMIT_SHA}" \
-        --label org.opencontainers.image.source="${CI_PROJECT_URL}" \
-        --label org.opencontainers.image.version="main-${SHA8}" \
-        ${TAG_ARGS} \
-        --push \
-        .
+      # IMPORTANT: `docker buildx build --push` is intentionally NOT used. On this
+      # runner the buildx docker-container builder authenticates the registry
+      # PUSH with a pull-only credential (the CI_JOB_TOKEN the runner injects)
+      # regardless of the DOCKER_CONFIG / deploy token we provide, so every push
+      # hit "insufficient_scope: authorization failed". Instead we `--load` each
+      # single-arch image into the local dind daemon and publish with PLAIN
+      # `docker push` + `docker manifest`, which DO honour the write_registry
+      # deploy token in DOCKER_CONFIG (verified: a plain push with that token
+      # succeeds where the buildkit push does not).
+      LABELS="--label org.opencontainers.image.revision=${CI_COMMIT_SHA} --label org.opencontainers.image.source=${CI_PROJECT_URL} --label org.opencontainers.image.version=main-${SHA8}"
+      for arch in amd64 arm64; do
+        echo "=== building linux/${arch} ==="
+        # shellcheck disable=SC2086
+        docker buildx build --platform "linux/${arch}" --file Dockerfile.devimage \
+          ${LABELS} --load --tag "geode-devimage-stage:${arch}" .
+      done
+      export DOCKER_CLI_EXPERIMENTAL=enabled
+      # Publish per-arch tags then assemble a multi-arch manifest list per tag.
+      publish_devimage() {
+        repo="$1"
+        for t in $DEV_TAGS; do
+          for arch in amd64 arm64; do
+            docker tag "geode-devimage-stage:${arch}" "${repo}:${t}-${arch}"
+            docker push "${repo}:${t}-${arch}"
+          done
+          docker manifest rm "${repo}:${t}" >/dev/null 2>&1 || true
+          docker manifest create "${repo}:${t}" "${repo}:${t}-amd64" "${repo}:${t}-arm64"
+          docker manifest push "${repo}:${t}"
+          echo "✓ pushed ${repo}:${t} (multi-arch amd64+arm64)"
+        done
+      }
+      publish_devimage "${CI_REGISTRY_IMAGE}"
+      if [ "$PUSH_DOCKERHUB" = "true" ]; then publish_devimage "docker.io/geodedb/geode"; fi
       echo "✓ pushed geode dev image tags [${DEV_TAGS}] (no latest)"
 
 # =============================================================================
@@ -2152,34 +2167,29 @@ dev-image-fips:
         printf '{"auths":{"%s":{"auth":"%s"}}}\n' "$CI_REGISTRY" "$GL_AUTH" > "$DOCKER_CONFIG/config.json"
         echo "wrote explicit auth for ${CI_REGISTRY} (user=${REG_USER}); no docker.io creds"
       fi
-      docker buildx rm fipsdevimage-builder >/dev/null 2>&1 || true
-
-      TAG_ARGS=""
-      for t in $FIPS_TAGS; do
-        TAG_ARGS="$TAG_ARGS --tag ${CI_REGISTRY_IMAGE}:${t}"
-        if [ "$PUSH_DOCKERHUB" = "true" ]; then
-          TAG_ARGS="$TAG_ARGS --tag docker.io/geodedb/geode:${t}"
-        fi
-      done
       echo "Publishing FIPS dev tags: ${FIPS_TAGS} (no latest); dockerhub=${PUSH_DOCKERHUB}"
 
-      # amd64-only: no multi-arch for FIPS (provider is x86_64 Linux only).
-      docker buildx create --name fipsdevimage-builder --driver docker-container --use 2>/dev/null \
-        || docker buildx use fipsdevimage-builder
-      docker buildx inspect --bootstrap
-
-      # Use a dedicated FIPS dev Dockerfile that stages the provider from zig-fips
-      # and copies the pre-built binary from dist/linux-fips-amd64/geode.
-      # shellcheck disable=SC2086  # TAG_ARGS is an intentional list of flags
-      docker buildx build \
-        --platform linux/amd64 \
+      # amd64-only (the FIPS provider is x86_64 Linux only), so no buildx /
+      # manifest needed — a plain `docker build` + `docker push` is enough and,
+      # unlike the buildx docker-container `--push`, honours the write_registry
+      # deploy token in DOCKER_CONFIG (see dev-image for the insufficient_scope
+      # rationale).
+      docker build \
         --file Dockerfile.devimage.fips \
         --label org.opencontainers.image.revision="${CI_COMMIT_SHA}" \
         --label org.opencontainers.image.source="${CI_PROJECT_URL}" \
         --label org.opencontainers.image.version="main-${SHA8}-fips" \
-        ${TAG_ARGS} \
-        --push \
+        --tag geode-fips-devimage-stage:amd64 \
         .
+      for t in $FIPS_TAGS; do
+        docker tag geode-fips-devimage-stage:amd64 "${CI_REGISTRY_IMAGE}:${t}"
+        docker push "${CI_REGISTRY_IMAGE}:${t}"
+        if [ "$PUSH_DOCKERHUB" = "true" ]; then
+          docker tag geode-fips-devimage-stage:amd64 "docker.io/geodedb/geode:${t}"
+          docker push "docker.io/geodedb/geode:${t}"
+        fi
+        echo "✓ pushed FIPS dev tag ${t}"
+      done
       echo "✓ pushed geode FIPS dev image tags [${FIPS_TAGS}] (no latest)"
 
 # Build release artifacts for tags (alpha, beta, stable)
