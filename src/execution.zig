@@ -1537,36 +1537,35 @@ pub fn executeStatementWithContext(allocator: std.mem.Allocator, stmt: ast.State
                 return err;
             };
 
-            // H3-P2: a plain btree/hash property index is also made
-            // value-ORDER-seekable. The exact (hash) index is always-on, so
-            // CREATE INDEX has no exact-registration chokepoint; we register a
-            // value-ordered secondary index here for the SAME (label,key) so
-            // ORDER BY ... LIMIT on the column can later be served by
-            // `orderedScan` (a 16-shard k-way merge) instead of a full sort.
-            // Best-effort and additive: the catalog row above is the SHOW source
-            // of truth, and the exact index already answers equality — a failure
-            // to build the ordered tree must not fail the DDL.
-            if (ci.index_type == .btree or ci.index_type == .hash) {
-                if (graph_store.getGlobalAdapter()) |adapter| {
-                    // Register the value-ordered index on the SESSION's active
-                    // graph (same as the catalog row + the nodes), not a hardcoded
-                    // default — otherwise ORDER BY on a non-default graph can never
-                    // use it (the index lands on the wrong, usually empty, graph).
-                    const target_graph = if (context.session_state) |ss|
-                        (ss.graph orelse graph_store.DEFAULT_GRAPH_NAME)
-                    else
-                        graph_store.DEFAULT_GRAPH_NAME;
-                    for (ci.properties) |prop| {
-                        adapter.createOrderedIndex(target_graph, ci.label, prop) catch |err| {
-                            log.warn("CREATE INDEX: ordered index build failed", &.{
-                                Attr.string("label", ci.label),
-                                Attr.string("property", prop),
-                                Attr.string("error", @errorName(err)),
-                            });
-                        };
-                    }
-                }
-            }
+            // H3-P2 / GAP-0064: a plain btree/hash property index is ALSO made
+            // value-ORDER-seekable so ORDER BY ... LIMIT on the column can be
+            // served by `orderedScan` (a 16-shard k-way merge) instead of a full
+            // sort. This value-ordered tree is NOT built eagerly here.
+            //
+            // DEADLOCK FIX (self-deadlock, harness: geode_advanced_features /
+            // geode_migrations / gap_0211_0221 / gap_security_regression_jan2026 /
+            // geode_current_capabilities / geode_performance_stress /
+            // auto_index_lifecycle / multi_graph): the QUIC/gRPC write-query
+            // handler runs CREATE INDEX under the per-graph EXCLUSIVE write lock
+            // (`acquireGraphWriteLockCancelable` → `mg.rwlock` write-held for the
+            // whole statement). The former eager `adapter.createOrderedIndex(...)`
+            // call re-acquired `mg.rwlock` SHARED on the SAME thread — a classic
+            // exclusive-then-shared self-deadlock (std.Io.RwLock parks the shared
+            // acquire on the internal mutex the writer already holds). With ≥1 node
+            // of the label to scan the ordered build was reached and wedged the
+            // connection for 30s (client "query timed out") and left the graph's
+            // rwlock write-held, cascading "Server died" to every following test.
+            //
+            // The eager build is fully REDUNDANT: `orderedScanFastPath`
+            // (match_operations.zig) already kicks off a one-time, deduped,
+            // BACKGROUND `spawnOrderedIndexBuildAsync` on the first ORDER BY that
+            // finds no registered ordered tree (falling back to a correct heap sort
+            // for that query), and the built tree persists across reopen. The async
+            // builder runs OFF the query thread, so it takes `mg.rwlock` SHARED
+            // cleanly with no exclusive-holder on its own stack. CREATE INDEX
+            // therefore only records the catalog row (the SHOW source of truth) +
+            // the always-on exact index here; ORDER-BY acceleration is unchanged,
+            // just built lazily on first use instead of under the write lock.
 
             // A4a: fulltext index → create the NAMED fts-storage engine and
             // backfill existing matching nodes. Routes through the current graph
