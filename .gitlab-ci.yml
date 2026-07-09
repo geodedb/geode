@@ -825,9 +825,16 @@ test-macos-unit:
     # and hit the same "HttpConnectionClosing" flakes on GitHub releases from
     # SaaS M1 runners (pipelines #883/#885/#886/#888/#910/#911).
     - |
+      # macOS SaaS runners' per-session $TMPDIR (/var/folders/.../T) can be
+      # rotated/cleaned mid-job, so `zig fetch` failed CONSISTENTLY with
+      # "failed to create temporary zip file: FileNotFound" (distinct from the
+      # transient HttpConnectionClosing network flakes). Pin TMPDIR + zig's
+      # cache tmp to job-local dirs we create here; exported so the later
+      # `zig build` / `zig build test` steps reuse the same valid temp roots.
+      export TMPDIR="${CI_PROJECT_DIR}/.zig-tmp"
+      mkdir -p "$TMPDIR" "${ZIG_GLOBAL_CACHE_DIR}/p" "${ZIG_GLOBAL_CACHE_DIR}/tmp"
       PROTOC_URL="https://github.com/protocolbuffers/protobuf/releases/download/v32.1/protoc-32.1-osx-aarch_64.zip"
-      mkdir -p "${ZIG_GLOBAL_CACHE_DIR}/p"
-      echo "Pre-fetching protoc-osx-aarch_64 via zig fetch with retries..."
+      echo "Pre-fetching protoc-osx-aarch_64 via zig fetch with retries (TMPDIR=$TMPDIR)..."
       fetched=""
       for i in 1 2 3 4 5; do
         if zig fetch "$PROTOC_URL" >/tmp/zig-fetch-protoc.log 2>&1; then
