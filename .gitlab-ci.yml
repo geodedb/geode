@@ -1957,14 +1957,25 @@ dev-image:
       echo "Logging into GitLab registry ${CI_REGISTRY}..."
       # CI_JOB_TOKEN (CI_REGISTRY_PASSWORD) has PULL-ONLY scope on branch
       # pipelines for this project — the multi-arch push failed with
-      # "insufficient_scope: authorization failed". Prefer the dedicated
-      # write_registry deploy token published as the protected+masked CI vars
-      # DEV_IMAGE_REGISTRY_USER / DEV_IMAGE_REGISTRY_PASSWORD; fall back to the
-      # job token when they are absent (forks / non-protected refs, where this
-      # best-effort job may still run).
+      # "insufficient_scope: authorization failed". Use the dedicated
+      # write_registry deploy token (protected+masked CI vars
+      # DEV_IMAGE_REGISTRY_USER / DEV_IMAGE_REGISTRY_PASSWORD); fall back to the
+      # job token when absent (forks / non-protected refs).
       REG_USER="${DEV_IMAGE_REGISTRY_USER:-$CI_REGISTRY_USER}"
       REG_PASS="${DEV_IMAGE_REGISTRY_PASSWORD:-$CI_REGISTRY_PASSWORD}"
-      echo "$REG_PASS" | docker login -u "$REG_USER" --password-stdin "$CI_REGISTRY"
+      # A plain `docker login` was NOT honoured by the buildx docker-container
+      # driver — buildkit resolved the GitLab-registry credential from the
+      # runner-injected DOCKER_AUTH_CONFIG / cred-helper (the pull-only
+      # CI_JOB_TOKEN) instead, so the push still hit insufficient_scope even
+      # though the deploy token pushes fine via a plain `docker push`. Write the
+      # auth EXPLICITLY into a clean, job-local DOCKER_CONFIG (plaintext base64,
+      # no cred-helper) and export it so BOTH the CLI and the docker-container
+      # builder read exactly this credential.
+      export DOCKER_CONFIG="${CI_PROJECT_DIR}/.docker-dev-image"
+      mkdir -p "$DOCKER_CONFIG"
+      GL_AUTH=$(printf '%s:%s' "$REG_USER" "$REG_PASS" | base64 | tr -d '\n')
+      printf '{"auths":{"%s":{"auth":"%s"}}}\n' "$CI_REGISTRY" "$GL_AUTH" > "$DOCKER_CONFIG/config.json"
+      echo "wrote explicit ${CI_REGISTRY} auth to $DOCKER_CONFIG/config.json (user=${REG_USER})"
 
       # Docker Hub is optional — only if creds are provided (same gate the
       # release jobs use). When absent we still publish to the GitLab registry.
@@ -2120,11 +2131,18 @@ dev-image-fips:
       FIPS_TAGS="dev-fips main-fips main-${SHA8}-fips"
 
       echo "Logging into GitLab registry ${CI_REGISTRY}..."
-      # See dev-image: CI_JOB_TOKEN is pull-only for branch-pipeline pushes here;
-      # prefer the write_registry deploy token, fall back to the job token.
+      # See dev-image: CI_JOB_TOKEN is pull-only for branch-pipeline pushes and
+      # the buildx docker-container driver ignores a plain `docker login`, so
+      # write the write_registry deploy-token auth EXPLICITLY into a clean
+      # job-local DOCKER_CONFIG and export it for the builder. Fall back to the
+      # job token when the deploy-token vars are absent.
       REG_USER="${DEV_IMAGE_REGISTRY_USER:-$CI_REGISTRY_USER}"
       REG_PASS="${DEV_IMAGE_REGISTRY_PASSWORD:-$CI_REGISTRY_PASSWORD}"
-      echo "$REG_PASS" | docker login -u "$REG_USER" --password-stdin "$CI_REGISTRY"
+      export DOCKER_CONFIG="${CI_PROJECT_DIR}/.docker-dev-image-fips"
+      mkdir -p "$DOCKER_CONFIG"
+      GL_AUTH=$(printf '%s:%s' "$REG_USER" "$REG_PASS" | base64 | tr -d '\n')
+      printf '{"auths":{"%s":{"auth":"%s"}}}\n' "$CI_REGISTRY" "$GL_AUTH" > "$DOCKER_CONFIG/config.json"
+      echo "wrote explicit ${CI_REGISTRY} auth to $DOCKER_CONFIG/config.json (user=${REG_USER})"
 
       PUSH_DOCKERHUB="false"
       if [ -n "${DOCKERHUB_USERNAME:-}" ] && [ -n "${DOCKERHUB_TOKEN:-}" ]; then
