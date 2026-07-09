@@ -1963,33 +1963,33 @@ dev-image:
       # job token when absent (forks / non-protected refs).
       REG_USER="${DEV_IMAGE_REGISTRY_USER:-$CI_REGISTRY_USER}"
       REG_PASS="${DEV_IMAGE_REGISTRY_PASSWORD:-$CI_REGISTRY_PASSWORD}"
-      # A plain `docker login` was NOT honoured by the buildx docker-container
-      # driver — buildkit resolved the GitLab-registry credential from the
-      # runner-injected DOCKER_AUTH_CONFIG / cred-helper (the pull-only
-      # CI_JOB_TOKEN) instead, so the push still hit insufficient_scope even
-      # though the deploy token pushes fine via a plain `docker push`. Write the
-      # auth EXPLICITLY into a clean, job-local DOCKER_CONFIG (plaintext base64,
-      # no cred-helper) and export it so BOTH the CLI and the docker-container
-      # builder read exactly this credential.
+      # The buildx docker-container driver ignored a plain `docker login` AND an
+      # explicit single-registry config.json — the multi-arch push still hit
+      # insufficient_scope (buildkit fell back to an anonymous / pull-only token)
+      # even though the write_registry deploy token pushes fine via a plain
+      # `docker push`. Write ALL registry auths ourselves as plaintext base64
+      # into a clean, exported DOCKER_CONFIG with NO credsStore/credHelpers key
+      # (a `docker login` can inject a cred helper that makes buildkit query an
+      # empty store and fall back to anonymous). Recreate the builder from
+      # scratch so it can't reuse a stale session.
       export DOCKER_CONFIG="${CI_PROJECT_DIR}/.docker-dev-image"
       mkdir -p "$DOCKER_CONFIG"
       GL_AUTH=$(printf '%s:%s' "$REG_USER" "$REG_PASS" | base64 | tr -d '\n')
-      printf '{"auths":{"%s":{"auth":"%s"}}}\n' "$CI_REGISTRY" "$GL_AUTH" > "$DOCKER_CONFIG/config.json"
-      echo "wrote explicit ${CI_REGISTRY} auth to $DOCKER_CONFIG/config.json (user=${REG_USER})"
-
-      # Docker Hub is optional — only if creds are provided (same gate the
-      # release jobs use). When absent we still publish to the GitLab registry.
       PUSH_DOCKERHUB="false"
       if [ -n "${DOCKERHUB_USERNAME:-}" ] && [ -n "${DOCKERHUB_TOKEN:-}" ]; then
-        if echo "$DOCKERHUB_TOKEN" | docker login docker.io -u "$DOCKERHUB_USERNAME" --password-stdin; then
-          PUSH_DOCKERHUB="true"
-          echo "Docker Hub login OK — also pushing docker.io/geodedb/geode dev tags"
-        else
-          echo "WARNING: Docker Hub login failed — pushing GitLab registry only"
-        fi
+        DH_AUTH=$(printf '%s:%s' "$DOCKERHUB_USERNAME" "$DOCKERHUB_TOKEN" | base64 | tr -d '\n')
+        printf '{"auths":{"%s":{"auth":"%s"},"https://index.docker.io/v1/":{"auth":"%s"}}}\n' \
+          "$CI_REGISTRY" "$GL_AUTH" "$DH_AUTH" > "$DOCKER_CONFIG/config.json"
+        PUSH_DOCKERHUB="true"
+        echo "wrote explicit auth for ${CI_REGISTRY} (user=${REG_USER}) + docker.io"
       else
-        echo "DOCKERHUB_USERNAME/TOKEN not set — pushing GitLab registry only"
+        printf '{"auths":{"%s":{"auth":"%s"}}}\n' "$CI_REGISTRY" "$GL_AUTH" > "$DOCKER_CONFIG/config.json"
+        echo "wrote explicit auth for ${CI_REGISTRY} (user=${REG_USER}); no docker.io creds"
       fi
+      # Safe diagnostic (never prints the base64 auth): confirm no cred helper.
+      if grep -qE '"credsStore"|"credHelpers"' "$DOCKER_CONFIG/config.json"; then
+        echo "WARNING: config.json unexpectedly has a cred helper"; else echo "config.json is plaintext-auths only (good)"; fi
+      docker buildx rm devimage-builder >/dev/null 2>&1 || true
 
       # Build the --tag flags for both registries (no 'latest').
       TAG_ARGS=""
@@ -2141,20 +2141,18 @@ dev-image-fips:
       export DOCKER_CONFIG="${CI_PROJECT_DIR}/.docker-dev-image-fips"
       mkdir -p "$DOCKER_CONFIG"
       GL_AUTH=$(printf '%s:%s' "$REG_USER" "$REG_PASS" | base64 | tr -d '\n')
-      printf '{"auths":{"%s":{"auth":"%s"}}}\n' "$CI_REGISTRY" "$GL_AUTH" > "$DOCKER_CONFIG/config.json"
-      echo "wrote explicit ${CI_REGISTRY} auth to $DOCKER_CONFIG/config.json (user=${REG_USER})"
-
       PUSH_DOCKERHUB="false"
       if [ -n "${DOCKERHUB_USERNAME:-}" ] && [ -n "${DOCKERHUB_TOKEN:-}" ]; then
-        if echo "$DOCKERHUB_TOKEN" | docker login docker.io -u "$DOCKERHUB_USERNAME" --password-stdin; then
-          PUSH_DOCKERHUB="true"
-          echo "Docker Hub login OK — also pushing docker.io/geodedb/geode FIPS dev tags"
-        else
-          echo "WARNING: Docker Hub login failed — pushing GitLab registry only"
-        fi
+        DH_AUTH=$(printf '%s:%s' "$DOCKERHUB_USERNAME" "$DOCKERHUB_TOKEN" | base64 | tr -d '\n')
+        printf '{"auths":{"%s":{"auth":"%s"},"https://index.docker.io/v1/":{"auth":"%s"}}}\n' \
+          "$CI_REGISTRY" "$GL_AUTH" "$DH_AUTH" > "$DOCKER_CONFIG/config.json"
+        PUSH_DOCKERHUB="true"
+        echo "wrote explicit auth for ${CI_REGISTRY} (user=${REG_USER}) + docker.io"
       else
-        echo "DOCKERHUB_USERNAME/TOKEN not set — pushing GitLab registry only"
+        printf '{"auths":{"%s":{"auth":"%s"}}}\n' "$CI_REGISTRY" "$GL_AUTH" > "$DOCKER_CONFIG/config.json"
+        echo "wrote explicit auth for ${CI_REGISTRY} (user=${REG_USER}); no docker.io creds"
       fi
+      docker buildx rm fipsdevimage-builder >/dev/null 2>&1 || true
 
       TAG_ARGS=""
       for t in $FIPS_TAGS; do
