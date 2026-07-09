@@ -789,8 +789,32 @@ pub fn uuid_v4() Value {
     return Value{ .UUID = uuid.newV4() catch unreachable };
 }
 
+/// Milliseconds since the Unix epoch, portable across Linux and Darwin
+/// (native + cross-compiled). See graph_store.realtimeMillis for the linux
+/// (std.os.linux) vs. c-namespaced split rationale. Used to feed an explicit
+/// timestamp to uuid.newV7AtTime so the uuid dependency's Linux-only default
+/// clock (raw clock_gettime → SIGSYS on macOS) is never invoked.
+fn nowMillisI64() i64 {
+    if (comptime @import("builtin").os.tag == .linux) {
+        var ts: std.posix.timespec = .{ .sec = 0, .nsec = 0 };
+        if (std.os.linux.clock_gettime(.REALTIME, &ts) != 0) return 0;
+        const sec: i64 = if (ts.sec < 0) 0 else @intCast(ts.sec);
+        const nsec: i64 = if (ts.nsec < 0) 0 else @intCast(ts.nsec);
+        return sec * 1000 + @divTrunc(nsec, std.time.ns_per_ms);
+    } else {
+        var ts: std.c.timespec = .{ .sec = 0, .nsec = 0 };
+        if (std.c.clock_gettime(std.c.CLOCK.REALTIME, &ts) != 0) return 0;
+        const sec: i64 = if (ts.sec < 0) 0 else @intCast(ts.sec);
+        const nsec: i64 = if (ts.nsec < 0) 0 else @intCast(ts.nsec);
+        return sec * 1000 + @divTrunc(nsec, std.time.ns_per_ms);
+    }
+}
+
 pub fn uuid_v7() Value {
-    return Value{ .UUID = uuid.newV7() catch unreachable };
+    // Explicit portable timestamp: uuid.newV7()'s default clock uses a raw
+    // Linux-only clock_gettime syscall that faults (SIGSYS) on macOS. See
+    // graph_store.generatePersistentUuid for the full rationale.
+    return Value{ .UUID = uuid.newV7AtTime(nowMillisI64()) catch unreachable };
 }
 
 pub fn uuid_equal(a: Value, b: Value) EvaluatorError!Value {

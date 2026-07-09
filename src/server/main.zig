@@ -1545,8 +1545,11 @@ pub fn main() !void {
         const uuid_lib = @import("uuid");
         // Try v7 first if exposed; fall back to v4. Both produce a
         // 36-char canonical string.
-        const id = if (@hasDecl(uuid_lib, "newV7"))
-            uuid_lib.newV7() catch uuid_lib.newV4() catch unreachable
+        // newV7AtTime with an explicit portable timestamp: newV7()'s default
+        // clock uses a raw Linux-only clock_gettime syscall that faults
+        // (SIGSYS) on non-Linux hosts. Fall back to v4 (no clock) if needed.
+        const id = if (@hasDecl(uuid_lib, "newV7AtTime"))
+            uuid_lib.newV7AtTime(compat_milliTimestamp()) catch uuid_lib.newV4() catch unreachable
         else
             uuid_lib.newV4() catch unreachable;
         _ = id.toString(&instance_id_buf);

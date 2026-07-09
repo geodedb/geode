@@ -10318,9 +10318,11 @@ fn monoNanosNow() u64 {
 // ============================================================================
 
 fn generateUuid() [16]u8 {
-    // error-policy: D — newV7's only error is InvalidTimestamp (system clock
-    // before 1970 or beyond i64 milliseconds); impossible on a sane clock.
-    return (uuid.newV7() catch unreachable).bytes;
+    // Pass an explicit cross-platform timestamp: uuid.newV7()'s default clock
+    // issues a raw Linux-only clock_gettime syscall that faults (SIGSYS,
+    // uncatchable) on non-Linux hosts (macOS CI). std.time.milliTimestamp()
+    // is portable; newV7AtTime never touches that clock for a one-shot call.
+    return (uuid.newV7AtTime(@as(i64, @intCast(graph_store.realtimeMillis()))) catch unreachable).bytes;
 }
 
 // ============================================================================

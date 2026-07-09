@@ -665,7 +665,7 @@ fn encodeTimeBasedNodeId(ms: u64, seq: u16) u64 {
         (@as(u64, seq) & node_id_sequence_mask);
 }
 
-fn realtimeMillis() u64 {
+pub fn realtimeMillis() u64 {
     if (comptime @import("builtin").os.tag == .linux) {
         var ts: std.posix.timespec = .{ .sec = 0, .nsec = 0 };
         const rc = std.os.linux.clock_gettime(.REALTIME, &ts);
@@ -699,9 +699,13 @@ fn realtimeMillis() u64 {
 /// is indistinguishable in shape from a disk-backed one and passes the
 /// catalog's non-zero-UUID invariant (`catalog.isZeroUuid`).
 fn generatePersistentUuid() [16]u8 {
-    // error-policy: D — newV7's only error is InvalidTimestamp (system clock
-    // before 1970 or beyond i64 milliseconds); impossible on a sane clock.
-    return (uuid.newV7() catch unreachable).bytes;
+    // Pass an explicit cross-platform timestamp. uuid.newV7()'s default clock
+    // issues a raw Linux-only clock_gettime syscall (uuid/generator.zig
+    // defaultClock) that faults with SIGSYS on non-Linux hosts (macOS CI) —
+    // uncatchable, so `catch` cannot rescue it. std.time.milliTimestamp() is
+    // portable and newV7AtTime never touches defaultClock for a one-shot,
+    // non-saturated call, so it cannot fail for a valid post-1970 ms.
+    return (uuid.newV7AtTime(@as(i64, @intCast(realtimeMillis()))) catch unreachable).bytes;
 }
 
 fn generateTimeBasedId() u64 {
