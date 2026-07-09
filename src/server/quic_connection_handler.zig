@@ -7270,30 +7270,51 @@ fn handleClientMessage(
                                         // for the whole O(scanned) WHERE scan (where-scan-writer-
                                         // progress). No outer lock here — an outer hold would defeat
                                         // the chunking.
-                                        var page_result = active_stream.buildNextPage(gpa, inline_max) catch |err| {
-                                            // Inline page failed (e.g. concurrent ingest modified
-                                            // nodes).  Reset the stream cursor so PULL starts from
-                                            // the beginning and fall through to store the stream
-                                            // for PULL instead of destroying it.
-                                            log.warn("Inline page build failed, deferring to PULL", &.{
-                                                Attr.string("error", @errorName(err)),
-                                            });
-                                            active_stream.next_index = 0;
-                                            break :inline_blk;
-                                        };
-                                        defer page_result.result.deinit(gpa);
+                                        //
+                                        // GAP-0257 completeness fix (harness: gap0257-multipage-
+                                        // baseline-no-orderby): emit EVERY inline page in a loop, not
+                                        // just the first, mirroring the buffered/materialized response
+                                        // path below (the "Send any remaining pages inline" while-loop).
+                                        // The client (quic_query_runner) reads server-PUSHED EXECUTE
+                                        // page responses until `final` and does NOT round-trip a PULL
+                                        // for this path, so a single first page capped at
+                                        // `inline_results_max_rows` (default 1000) silently truncated
+                                        // any label scan larger than that (e.g. 1500 nodes → 1000 rows).
+                                        // Peak memory stays O(one page): each page's rows are freed
+                                        // (defer) before the next is built, so this streams inline
+                                        // rather than materializing the whole result.
+                                        var pages_sent: usize = 0;
+                                        while (true) {
+                                            var page_result = active_stream.buildNextPage(gpa, inline_max) catch |err| {
+                                                // Inline page failed (e.g. concurrent ingest modified
+                                                // nodes). If nothing was sent yet, reset the cursor so
+                                                // PULL starts clean and fall through to store the stream
+                                                // for PULL. If pages were already pushed, we cannot
+                                                // cleanly restart mid-stream — leave the cursor where it
+                                                // is and defer the REMAINDER to PULL (page_final stays
+                                                // false, so the stream is stored below).
+                                                log.warn("Inline page build failed, deferring to PULL", &.{
+                                                    Attr.string("error", @errorName(err)),
+                                                });
+                                                if (pages_sent == 0) active_stream.next_index = 0;
+                                                break :inline_blk;
+                                            };
+                                            defer page_result.result.deinit(gpa);
 
-                                        var page_arena = std.heap.ArenaAllocator.init(gpa);
-                                        defer page_arena.deinit();
-                                        const pa = page_arena.allocator();
-                                        const page = try proto_util.buildDataPageFromRows(pa, page_result.result.rows, page_result.final, false, &.{});
-                                        page_final = page_result.final;
-                                        const page_status = try proto_util.buildStatus(pa, "00000", active_stream.flags);
-                                        const page_resp = schema.ExecutionResponse{
-                                            .status = page_status,
-                                            .payload = .{ .page = page },
-                                        };
-                                        try sendQuicMessage(pa, stream, .{ .execute = page_resp });
+                                            var page_arena = std.heap.ArenaAllocator.init(gpa);
+                                            defer page_arena.deinit();
+                                            const pa = page_arena.allocator();
+                                            const page = try proto_util.buildDataPageFromRows(pa, page_result.result.rows, page_result.final, false, &.{});
+                                            page_final = page_result.final;
+                                            const page_status = try proto_util.buildStatus(pa, "00000", active_stream.flags);
+                                            const page_resp = schema.ExecutionResponse{
+                                                .status = page_status,
+                                                .payload = .{ .page = page },
+                                            };
+                                            try sendQuicMessage(pa, stream, .{ .execute = page_resp });
+                                            pages_sent += 1;
+                                            if (page_result.final) break;
+                                        }
                                     }
 
                                     if (!state.inline_results_enabled or !page_final) {
