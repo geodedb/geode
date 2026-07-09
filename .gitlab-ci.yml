@@ -2074,8 +2074,20 @@ dev-image-build-fips:
   script:
     - |
       set -e
-      echo "=== cross-compiling FIPS geode for x86_64-linux-gnu (amd64) ==="
-      zig build -Doptimize=ReleaseSafe -Dtarget=x86_64-linux-gnu \
+      echo "=== building FIPS geode natively (amd64) ==="
+      # NOTE: build NATIVELY (no -Dtarget). The zig-fips:0.16.0 image is amd64,
+      # so the target arch is identical either way — but passing
+      # `-Dtarget=x86_64-linux-gnu` makes zig link against its BUNDLED glibc
+      # stubs pinned to an older default version (< 2.34), which cannot satisfy
+      # the `GLIBC_2.33/2.34`-versioned symbols (pthread_*, stat, dlopen) that
+      # the OpenSSL FIPS provider .so at /usr/local/ssl/lib64 references →
+      # `ld.lld: undefined reference … disallowed by --no-allow-shlib-undefined`
+      # on EVERY exe (geode, gql, geode-auth, key_rotate). A native build uses
+      # the host's real glibc (>= 2.34, proven by the passing zig-fips-test job
+      # which also links the provider with no -Dtarget), so the FIPS .so links.
+      # The resulting binary needs glibc >= 2.34, satisfied by the
+      # debian:bookworm-slim base in Dockerfile.devimage.fips.
+      zig build -Doptimize=ReleaseSafe \
         -Dfips=true -Dopenssl_path=/usr/local/ssl --summary all
       mkdir -p dist/linux-fips-amd64
       cp zig-out/bin/geode dist/linux-fips-amd64/geode
