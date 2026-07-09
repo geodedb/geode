@@ -1989,6 +1989,17 @@ dev-image:
       # Safe diagnostic (never prints the base64 auth): confirm no cred helper.
       if grep -qE '"credsStore"|"credHelpers"' "$DOCKER_CONFIG/config.json"; then
         echo "WARNING: config.json unexpectedly has a cred helper"; else echo "config.json is plaintext-auths only (good)"; fi
+      # AUTH DIAGNOSTIC: even a plain `docker push` was denied (pull-only) in the
+      # CI dind though it works locally with this exact deploy token — dump what
+      # docker actually sees (auth values redacted) and probe a minimal push so
+      # we fail fast with data instead of after the multi-arch build.
+      echo "DIAG DOCKER_CONFIG=${DOCKER_CONFIG}"
+      echo "DIAG our config.json:"; sed 's/"auth"[[:space:]]*:[[:space:]]*"[^"]*"/"auth":"<redacted>"/g' "$DOCKER_CONFIG/config.json" || true
+      echo "DIAG default \$HOME/.docker/config.json:"; sed 's/"auth"[[:space:]]*:[[:space:]]*"[^"]*"/"auth":"<redacted>"/g' "${HOME}/.docker/config.json" 2>/dev/null || echo "  (absent)"
+      printf 'FROM scratch\nCOPY authprobe /authprobe\n' > /tmp/authprobe.Dockerfile; echo probe > /tmp/authprobe
+      docker build -q -t "${CI_REGISTRY_IMAGE}:__authprobe" -f /tmp/authprobe.Dockerfile /tmp >/dev/null 2>&1 || true
+      echo "DIAG minimal push probe:"
+      docker push "${CI_REGISTRY_IMAGE}:__authprobe" 2>&1 | tail -3 && echo "DIAG-RESULT authprobe-push=OK" || echo "DIAG-RESULT authprobe-push=DENIED"
       docker buildx rm devimage-builder >/dev/null 2>&1 || true
 
       echo "Publishing dev tags: ${DEV_TAGS} (no latest); dockerhub=${PUSH_DOCKERHUB}"
