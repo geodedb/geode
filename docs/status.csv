@@ -1318,6 +1318,9 @@ REQ-GPS-BIND-001,GPS BindGraph Action,AdminAllowed,TESTED,,,security,2026-05-20,
 REQ-GPS-BIND-001,GPS BindGraph Action,GrantWidening,TESTED,,,security,2026-05-20,src/security/gps.zig
 REQ-GPS-BIND-001,GPS BindGraph Action,GrantWidening,TESTED,,,security,2026-05-20,tests/test_gps_bind_graph.zig
 REQ-GPS-BIND-001,GPS BindGraph Action,NoGrantDeny,TESTED,,,security,2026-05-20,tests/test_gps_bind_graph.zig
+REQ-GPS-BIND-001,GPS BindGraph Action,ReadWritePermissiveSingleTenant,TESTED,,,security,2026-07-08,src/security/gps.zig
+REQ-GPS-BIND-001,GPS BindGraph Action,ReadWritePermissiveSingleTenant,TESTED,,,security,2026-07-08,tests/test_gps_bind_graph.zig
+REQ-GPS-BIND-001,GPS BindGraph Action,ReadWriteStrictTenancyRequiresGrant,TESTED,,,security,2026-07-08,tests/test_gps_bind_graph.zig
 REQ-GPS-BIND-002,GPS BindGraph Action,UseGraphAuthorization,TESTED,,,security,2026-05-20,src/execution.zig
 REQ-GPS-BIND-002,GPS BindGraph Action,UseGraphAuthorization,TESTED,,,security,2026-05-20,tests/test_gps_bind_graph.zig
 REQ-GPS-CACHE-001,GPS Decision Cache,AuthVersionZeroBypass,TESTED,,,security,2026-05-20,tests/test_gps_decision_cache.zig
