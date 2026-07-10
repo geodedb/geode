@@ -76,10 +76,22 @@ pub const IndexManager = struct {
     advanced_jsonb_indexes: std.StringHashMap(*jsonb_inverted.JsonbInvertedIndex),
     advanced_domain_indexes: std.StringHashMap(*domain_trie.DomainTrie),
     advanced_property_indexes: std.StringHashMap(AdvancedPropertyIndex),
+    // GAP-0918: lightweight dimension-validation registry for vector-indexed
+    // (label, property) pairs, keyed by index name. Deliberately separate
+    // from the wrapper machinery (no rebuild churn); dim 0 = not yet
+    // established, adopted from the first vector written.
+    vector_dim_registry: std.StringHashMap(VectorDimEntry),
     statistics: IndexStatistics,
     /// GAP-0511: Mutex protecting rebuild operations so they can safely run
     /// outside the graph write lock without racing with concurrent rebuilds.
     rebuild_mutex: std.Io.Mutex = std.Io.Mutex.init,
+
+    // GAP-0918: entry in the vector dimension-validation registry.
+    pub const VectorDimEntry = struct {
+        label: []const u8,
+        property: []const u8,
+        dim: u16,
+    };
 
     pub const IndexType = enum {
         btree,
@@ -216,6 +228,7 @@ pub const IndexManager = struct {
             .advanced_jsonb_indexes = std.StringHashMap(*jsonb_inverted.JsonbInvertedIndex).init(allocator),
             .advanced_domain_indexes = std.StringHashMap(*domain_trie.DomainTrie).init(allocator),
             .advanced_property_indexes = std.StringHashMap(AdvancedPropertyIndex).init(allocator),
+            .vector_dim_registry = std.StringHashMap(VectorDimEntry).init(allocator),
             .statistics = .{
                 .total_indexes = 0,
                 .total_entries = 0,
@@ -352,6 +365,14 @@ pub const IndexManager = struct {
             self.allocator.free(entry.value_ptr.property);
         }
         self.advanced_property_indexes.deinit();
+
+        var vdim_it = self.vector_dim_registry.iterator();
+        while (vdim_it.next()) |entry| {
+            self.allocator.free(entry.key_ptr.*);
+            self.allocator.free(entry.value_ptr.label);
+            self.allocator.free(entry.value_ptr.property);
+        }
+        self.vector_dim_registry.deinit();
     }
 
     // Create a property index
@@ -1239,6 +1260,61 @@ pub const IndexManager = struct {
             .property = try self.allocator.dupe(u8, property),
             .index_type = index_type,
         });
+    }
+
+    // CANARY: REQ=REQ-GAP-0918-VECTOR-INDEX-VALIDATION; FEATURE="VectorIndex"; ASPECT=DimensionWriteCheck; STATUS=TESTED; TEST=tests/test_gap0918_vector_validation.zig; OWNER=index; UPDATED=2026-07-10
+    /// GAP-0918: register a vector-indexed (label, property) pair in the
+    /// lightweight dimension-validation registry. The first vector written
+    /// establishes the dimension; later mismatches are rejected.
+    pub fn registerVectorDimValidation(
+        self: *IndexManager,
+        index_name: []const u8,
+        label: []const u8,
+        property: []const u8,
+    ) !void {
+        if (self.vector_dim_registry.contains(index_name)) return;
+        const owned_key = try self.allocator.dupe(u8, index_name);
+        errdefer self.allocator.free(owned_key);
+        const owned_label = try self.allocator.dupe(u8, label);
+        errdefer self.allocator.free(owned_label);
+        const owned_prop = try self.allocator.dupe(u8, property);
+        errdefer self.allocator.free(owned_prop);
+        try self.vector_dim_registry.put(owned_key, .{
+            .label = owned_label,
+            .property = owned_prop,
+            .dim = 0,
+        });
+    }
+
+    /// GAP-0918: validate (and on first sight adopt) the dimension of a
+    /// vector being written under an HNSW-indexed (label, property). Before
+    /// this check a dim-3 vector was silently accepted into a dim-4 index —
+    /// a data-integrity defect (mixed-dimension vectors under one index with
+    /// no signal to the caller).
+    pub fn checkVectorDimensionForWrite(
+        self: *IndexManager,
+        labels: []const []const u8,
+        property: []const u8,
+        dim: u16,
+    ) !void {
+        var iter = self.vector_dim_registry.iterator();
+        while (iter.next()) |entry| {
+            const meta = entry.value_ptr;
+            if (!std.mem.eql(u8, meta.property, property)) continue;
+            var label_match = false;
+            for (labels) |lb| {
+                if (std.mem.eql(u8, meta.label, lb)) {
+                    label_match = true;
+                    break;
+                }
+            }
+            if (!label_match) continue;
+            if (meta.dim == 0) {
+                meta.dim = dim;
+                continue;
+            }
+            if (meta.dim != dim) return error.VectorDimensionMismatch;
+        }
     }
 
     pub fn findAdvancedVectorIndexForProperty(self: *IndexManager, property: []const u8) ?[]const u8 {

@@ -422,16 +422,36 @@ pub fn execute(
             // Only reached when auth is enabled (a genuine decision is made).
             const om = @import("otel_metrics");
             const otel_lib = @import("otel");
+            const audit_mod = @import("../security/audit.zig");
             const t0 = otel_lib.internal.clock.unixNanoNow();
             if (context.role == null) {
                 const d = @as(f64, @floatFromInt(otel_lib.internal.clock.unixNanoNow() - t0)) / 1_000_000_000.0;
                 om.recordAuthzCheck(.deny, .rbac, d);
+                // CANARY: REQ=REQ-GAP-0919-DENIED-DDL-AUDIT; FEATURE="AuditDenials"; ASPECT=UnauthenticatedAuthDDL; STATUS=TESTED; TEST=tests/test_gap0919_denied_ddl_audit.zig; OWNER=security; UPDATED=2026-07-10
+                // GAP-0919: denied escalation attempts were an audit blind
+                // spot — the gate returned before any audit path ran.
+                audit_mod.logSecurityGraphEvent(allocator, .{
+                    .event_type = .access_denied,
+                    .action = proc_name,
+                    .username = context.user orelse "",
+                    .details = "auth procedure denied: unauthenticated",
+                    .result_failure = true,
+                });
                 return error.Unauthenticated;
             }
             const is_read_only = read_only_set.has(proc_name);
             if (!is_read_only and context.role.? != .Admin) {
                 const d = @as(f64, @floatFromInt(otel_lib.internal.clock.unixNanoNow() - t0)) / 1_000_000_000.0;
                 om.recordAuthzCheck(.deny, .rbac, d);
+                // GAP-0919: audit the denial (see above).
+                audit_mod.logSecurityGraphEvent(allocator, .{
+                    .event_type = .access_denied,
+                    .action = proc_name,
+                    .user_id = if (context.principal) |p| (p.user_id orelse 0) else 0,
+                    .username = context.user orelse "",
+                    .details = "auth procedure denied: admin role required",
+                    .result_failure = true,
+                });
                 return error.Unauthorized;
             }
             const d = @as(f64, @floatFromInt(otel_lib.internal.clock.unixNanoNow() - t0)) / 1_000_000_000.0;

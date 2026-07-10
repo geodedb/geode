@@ -480,6 +480,10 @@ pub const TransactionState = enum {
     Active,
     Committed,
     RolledBack,
+    // GAP-0917: a statement inside the transaction failed; every subsequent
+    // statement except ROLLBACK is rejected (ISO/IEC 39075 post-error
+    // semantics) and COMMIT performs an implicit rollback + abort error.
+    Failed,
 };
 
 pub const ExecutionContext = struct {
@@ -989,20 +993,38 @@ pub fn checkPermission(context: ExecutionContext, permission: @import("security/
 /// Before this gate the policy dispatch arms called the policy catalog with
 /// no authorization at all, letting a zero-grant readonly user inject or
 /// alter policies (a privilege-escalation vector).
-fn requirePolicyDdlAdmin(context: ExecutionContext) !void {
+fn requirePolicyDdlAdmin(allocator: std.mem.Allocator, action: []const u8, context: ExecutionContext) !void {
     const user_mgmt = @import("security/user_management.zig");
     if (!user_mgmt.isAuthEnabled()) return;
     const om = @import("otel_metrics");
     const otel_lib = @import("otel");
+    const audit_mod = @import("security/audit.zig");
     const t0 = otel_lib.internal.clock.unixNanoNow();
     if (context.role == null) {
         const d = @as(f64, @floatFromInt(otel_lib.internal.clock.unixNanoNow() - t0)) / 1_000_000_000.0;
         om.recordAuthzCheck(.deny, .rbac, d);
+        // GAP-0919: denied escalation attempts are audited (they were a
+        // blind spot — denials returned before any audit path ran).
+        audit_mod.logSecurityGraphEvent(allocator, .{
+            .event_type = .access_denied,
+            .action = action,
+            .username = context.user orelse "",
+            .details = "policy DDL denied: unauthenticated",
+            .result_failure = true,
+        });
         return error.Unauthenticated;
     }
     if (context.role.? != .Admin) {
         const d = @as(f64, @floatFromInt(otel_lib.internal.clock.unixNanoNow() - t0)) / 1_000_000_000.0;
         om.recordAuthzCheck(.deny, .rbac, d);
+        audit_mod.logSecurityGraphEvent(allocator, .{
+            .event_type = .access_denied,
+            .action = action,
+            .user_id = if (context.principal) |p| (p.user_id orelse 0) else 0,
+            .username = context.user orelse "",
+            .details = "policy DDL denied: admin role required",
+            .result_failure = true,
+        });
         return error.Unauthorized;
     }
     const d = @as(f64, @floatFromInt(otel_lib.internal.clock.unixNanoNow() - t0)) / 1_000_000_000.0;
@@ -1035,6 +1057,11 @@ pub fn executeProgramWithContext(allocator: std.mem.Allocator, program: *const a
     // Only track data results separately if we have multiple statements
     const track_data_results = program.statements.len > 1;
 
+    // CANARY: REQ=REQ-GAP-0917-TXN-POST-ERROR-REJECT; FEATURE="TransactionManagement"; ASPECT=FailedTransactionSemantics; STATUS=TESTED; TEST=tests/test_gap0917_txn_post_error.zig; OWNER=engine; UPDATED=2026-07-10
+    // GAP-0917: remember the error that failed the transaction so COMMIT (or
+    // the end of the batch) can report the abort instead of committing.
+    var txn_failure: ?anyerror = null;
+
     for (program.statements, 0..) |stmt, stmt_idx| {
         // Determine if this statement is transaction control
         const is_transaction_control = switch (stmt) {
@@ -1042,16 +1069,36 @@ pub fn executeProgramWithContext(allocator: std.mem.Allocator, program: *const a
             else => false,
         };
 
+        // GAP-0917: in a FAILED transaction every statement except ROLLBACK
+        // is rejected until the transaction is closed (ISO/IEC 39075
+        // post-error semantics). COMMIT must NOT commit: it performs an
+        // implicit rollback and the batch reports the abort.
+        if (current_context.transaction_state == .Failed) {
+            switch (stmt) {
+                .Rollback => {}, // allowed through: closes the failed transaction
+                .Commit => {
+                    if (last_result) |*result| result.deinit(allocator);
+                    if (last_data_result) |*result| result.deinit(allocator);
+                    var rb = executeStatementWithContext(allocator, .Rollback, current_context) catch null;
+                    if (rb) |*r| r.deinit(allocator);
+                    return txn_failure orelse error.TransactionAborted;
+                },
+                else => continue, // rejected: never executed
+            }
+        }
+
         // Free previous result if any
         if (last_result) |*result| {
             result.deinit(allocator);
         }
 
         last_result = executeStatementWithContext(allocator, stmt, current_context) catch |err| {
-            // If inside an active transaction, don't abort immediately — allow
-            // subsequent ROLLBACK/COMMIT/RETURN statements to execute so the
-            // transaction can be properly closed and results returned.
+            // GAP-0917: a failure inside an active transaction marks it
+            // FAILED — subsequent statements are rejected (see above) instead
+            // of silently executing and committing.
             if (current_context.transaction_state == .Active) {
+                current_context.transaction_state = .Failed;
+                txn_failure = err;
                 last_result = null;
                 continue;
             }
@@ -1106,6 +1153,16 @@ pub fn executeProgramWithContext(allocator: std.mem.Allocator, program: *const a
             },
             else => {},
         }
+    }
+
+    // GAP-0917: the batch ended with the transaction still FAILED (no
+    // ROLLBACK closed it) — report the abort instead of returning results.
+    if (current_context.transaction_state == .Failed) {
+        if (last_result) |*result| result.deinit(allocator);
+        if (last_data_result) |*result| result.deinit(allocator);
+        var rb = executeStatementWithContext(allocator, .Rollback, current_context) catch null;
+        if (rb) |*r| r.deinit(allocator);
+        return txn_failure orelse error.TransactionAborted;
     }
 
     // If we tracked data results and have one, return that instead of transaction control
@@ -1511,6 +1568,24 @@ pub fn executeStatementWithContext(allocator: std.mem.Allocator, stmt: ast.State
                         .rows = try allocator.alloc([]Value, 0),
                         .flags = std.ArrayList([]const u8).empty,
                     };
+                }
+            }
+
+            // CANARY: REQ=REQ-GAP-0918-VECTOR-INDEX-VALIDATION; FEATURE="VectorIndex"; ASPECT=MetricValidation; STATUS=TESTED; TEST=tests/test_gap0918_vector_validation.zig; OWNER=index; UPDATED=2026-07-10
+            // GAP-0918: an unknown distance metric (e.g. 'banana') used to be
+            // silently discarded at parse time and accepted. Validate against
+            // the supported set for vector/HNSW indexes.
+            if (ci.index_type == .vector or ci.index_type == .vector_f32) {
+                if (ci.metric) |m| {
+                    const known = [_][]const u8{ "l2", "euclidean", "cosine", "dot", "dot_product", "inner_product" };
+                    var ok = false;
+                    for (known) |k| {
+                        if (std.ascii.eqlIgnoreCase(m, k)) {
+                            ok = true;
+                            break;
+                        }
+                    }
+                    if (!ok) return error.InvalidIndexMetric;
                 }
             }
 
@@ -2179,7 +2254,7 @@ pub fn executeStatementWithContext(allocator: std.mem.Allocator, stmt: ast.State
         .CreatePolicy => |cp_stmt| {
             // GAP-0911: admin-only — fires before every other gate so an
             // unauthorized caller learns nothing about cluster/catalog state.
-            try requirePolicyDdlAdmin(context);
+            try requirePolicyDdlAdmin(allocator, "GPS_CREATE_POLICY", context);
             // Cluster fail-closed: policy DDL writes the per-node policy catalog
             // (+ __geode_security write-through) with no Raft slice — an ungated
             // CREATE POLICY enforces on ONE node only (security-relevant divergence).
@@ -2266,7 +2341,7 @@ pub fn executeStatementWithContext(allocator: std.mem.Allocator, stmt: ast.State
         // CANARY: REQ=REQ-GPS-DDL-002; FEATURE="GPS Policy DDL"; ASPECT=DropPolicyExecution; STATUS=TESTED; TEST=tests/test_gps_policy_ddl_integration.zig; OWNER=security; UPDATED=2026-05-20
         .DropPolicy => |dp_stmt| {
             // GAP-0911: admin-only (see .CreatePolicy).
-            try requirePolicyDdlAdmin(context);
+            try requirePolicyDdlAdmin(allocator, "GPS_DROP_POLICY", context);
             // Cluster fail-closed: see .CreatePolicy (GatePolicyDDL).
             try cluster_mod.gateUnreplicatedWrite();
             const policy_catalog_mod = @import("security/policy_catalog.zig");
@@ -2335,7 +2410,7 @@ pub fn executeStatementWithContext(allocator: std.mem.Allocator, stmt: ast.State
         // CANARY: REQ=REQ-GPS-DDL-003; FEATURE="GPS ALTER POLICY DDL"; ASPECT=AlterPolicyExecution; STATUS=TESTED; TEST=tests/test_gps_alter_policy.zig; OWNER=security; UPDATED=2026-05-21
         .AlterPolicy => |ap_stmt| {
             // GAP-0911: admin-only (see .CreatePolicy).
-            try requirePolicyDdlAdmin(context);
+            try requirePolicyDdlAdmin(allocator, "GPS_ALTER_POLICY", context);
             // Cluster fail-closed: see .CreatePolicy (GatePolicyDDL).
             try cluster_mod.gateUnreplicatedWrite();
             const policy_catalog_mod = @import("security/policy_catalog.zig");

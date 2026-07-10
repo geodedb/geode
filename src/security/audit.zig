@@ -108,6 +108,9 @@ pub const SecurityGraphEvent = struct {
     user_id: u64 = 0,
     username: []const u8 = "",
     details: ?[]const u8 = null,
+    // GAP-0919: denials are audited too — a failure result raises severity to
+    // warning and records result=failure instead of the success default.
+    result_failure: bool = false,
 };
 
 pub var global_audit_logger: ?*AuditLogger = null;
@@ -172,7 +175,7 @@ pub fn logSecurityGraphEvent(allocator: Allocator, event: SecurityGraphEvent) vo
     var audit_event = AuditEvent{
         .timestamp = compat_milliTimestamp(),
         .event_type = event.event_type,
-        .severity = .info,
+        .severity = if (event.result_failure) .warning else .info,
         .tenant_id = getCurrentAuditTenantId(),
         .user_id = event.user_id,
         .session_id = "",
@@ -184,7 +187,7 @@ pub fn logSecurityGraphEvent(allocator: Allocator, event: SecurityGraphEvent) vo
             .table = null,
         },
         .action = event.action,
-        .result = .success,
+        .result = if (event.result_failure) .failure else .success,
         .details = detail_map,
     };
     logger.?.appendAuditEvent(&audit_event) catch |err| {
@@ -225,6 +228,36 @@ pub const AuditLogger = struct {
     tamper_protected: bool,
     encrypted: bool,
     log_access_events: bool,
+
+    // GAP-0920: mid-run audit-write-failure health. `write_degraded` latches
+    // true on the first failed record write and clears on the next success;
+    // `write_failure_count` monotonically counts drops. Both are queryable so
+    // operators/health checks can observe a silent audit gap.
+    write_degraded: std.atomic.Value(bool) = std.atomic.Value(bool).init(false),
+    write_failure_count: std.atomic.Value(u64) = std.atomic.Value(u64).init(0),
+
+    /// GAP-0920: true iff the most recent record write failed (audit integrity
+    /// is degraded until the next successful write).
+    pub fn isWriteDegraded(self: *const AuditLogger) bool {
+        return self.write_degraded.load(.acquire);
+    }
+
+    /// GAP-0920: total number of audit records dropped by write failures.
+    pub fn writeFailureCount(self: *const AuditLogger) u64 {
+        return self.write_failure_count.load(.acquire);
+    }
+
+    /// GAP-0920: serialize + positionally append one event's canonical JSON
+    /// line. Extracted so the write funnel can catch its failure in one place.
+    fn writeChain(f: std.Io.File, allocator: Allocator, ev: *AuditEvent) !void {
+        var aw: std.Io.Writer.Allocating = .init(allocator);
+        defer aw.deinit();
+        try AuditEvent.writeCanonicalJson(&aw.writer, "geode", ev);
+        try aw.writer.writeAll("\n");
+        const io_aw = std.Io.Threaded.global_single_threaded.io();
+        const st = try f.stat(io_aw);
+        try f.writePositionalAll(io_aw, aw.written(), st.size);
+    }
 
     pub const Config = struct {
         enabled: bool = false, // Disabled by default; enable with GEODE_AUDIT_ENABLED=1 or via config
@@ -517,6 +550,13 @@ pub const AuditLogger = struct {
             ev.tenant_id = getCurrentAuditTenantId();
         }
 
+        // GAP-0920: snapshot the chain state so a write failure can roll the
+        // seq/hash advance back (see the write funnel below) — otherwise a
+        // failed record still bumps the counter and hash, silently corrupting
+        // the chain for the NEXT event.
+        const prev_seq_snapshot = self.last_seq;
+        const prev_hash_snapshot = self.last_hash;
+
         self.last_seq += 1;
         ev.seq_no = self.last_seq;
 
@@ -545,13 +585,28 @@ pub const AuditLogger = struct {
         }
 
         if (self.file) |f| {
-            var aw: std.Io.Writer.Allocating = .init(self.allocator);
-            defer aw.deinit();
-            try AuditEvent.writeCanonicalJson(&aw.writer, "geode", ev);
-            try aw.writer.writeAll("\n");
-            const io_aw = std.Io.Threaded.global_single_threaded.io();
-            const st = try f.stat(io_aw);
-            try f.writePositionalAll(io_aw, aw.written(), st.size);
+            // CANARY: REQ=REQ-GAP-0920-AUDIT-WRITE-FAILURE-DIAGNOSTIC; FEATURE="AuditDurability"; ASPECT=MidRunWriteFailure; STATUS=TESTED; TEST=tests/test_gap0920_audit_write_failure.zig; OWNER=security; UPDATED=2026-07-10
+            // GAP-0920: a genuine mid-run write failure (e.g. under
+            // `prlimit --fsize` → EFBIG, or a full disk → ENOSPC) used to
+            // produce zero diagnostic anywhere — a silent, invisible audit
+            // gap. Emit a LOUD diagnostic at the single write funnel (so no
+            // swallowing caller can hide it), flag the logger degraded, roll
+            // the chain state back to keep it consistent, and re-raise.
+            writeChain(f, self.allocator, ev) catch |err| {
+                self.last_seq = prev_seq_snapshot;
+                self.last_hash = prev_hash_snapshot;
+                self.write_degraded.store(true, .release);
+                _ = self.write_failure_count.fetchAdd(1, .monotonic);
+                log.err("AUDIT WRITE FAILED — event dropped, chain not advanced; audit integrity is DEGRADED", &.{
+                    Attr.string("action", ev.action),
+                    Attr.string("event_type", @tagName(ev.event_type)),
+                    Attr.string("error", @errorName(err)),
+                    Attr.string("sink", self.config.file_path),
+                });
+                otel_metrics.recordAuditDropped("write_error");
+                return err;
+            };
+            self.write_degraded.store(false, .release);
         }
 
         // Trigger digest after N events (but not for DIGEST events themselves)

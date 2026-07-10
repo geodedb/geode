@@ -293,7 +293,14 @@ type error.
 # High
 
 ## GAP-0917 — statement after a mid-transaction error is not rejected
-**Severity:** High · **Status:** OPEN · **Area:** Transactions · **Found:** 2026-07-10
+**Severity:** High · **Status:** FIXED (2026-07-10) · **Area:** Transactions · **Found:** 2026-07-10
+**Fix:** a failing statement inside an active transaction marks it `Failed`;
+every subsequent statement except ROLLBACK is rejected (never executed),
+COMMIT performs an implicit rollback and the batch reports the original
+error (`error.TransactionAborted` → SQLSTATE 25P02 when no original error),
+and a batch ending with the failed transaction still open also aborts.
+ROLLBACK closes it and later statements run normally. Regression:
+`zig build test-gap0917` (`tests/test_gap0917_txn_post_error.zig`).
 **Symptom:** in `BEGIN; CREATE …; <runtime-type-error>; CREATE …; COMMIT`, the
 engine does NOT reject statements after the error — both CREATEs commit. ISO/IEC
 39075 requires post-error statements be rejected until ROLLBACK. No corruption,
@@ -302,7 +309,19 @@ but a conformance/isolation gap.
 **Test:** `transaction_conflict_abort.yml` (asserts both rows landed).
 
 ## GAP-0918 — wrong-dimension vector silently accepted into an HNSW index
-**Severity:** High · **Status:** OPEN · **Area:** Vector index · **Found:** 2026-07-10
+**Severity:** High · **Status:** FIXED (2026-07-10) · **Area:** Vector index · **Found:** 2026-07-10
+**Fix:** three parts. (1) A lightweight dimension-validation registry
+(index_manager `vector_dim_registry`, populated at vector/HNSW CREATE INDEX)
+is consulted at the single property-write chokepoint
+(`setNodePropertyFromValue`): the first vector establishes the dimension,
+mismatches raise `error.VectorDimensionMismatch` (22000). (2) The CREATE
+INDEX `WITH (...)` options are no longer discarded — `metric` is captured
+and validated (`error.InvalidIndexMetric`, 42704; supported: l2/euclidean/
+cosine/dot_product/inner_product). (3) A malformed vector literal now raises
+`EvalError.TypeMismatch` instead of silently resolving to NULL (the
+registry-constructor `InvalidFormat` was missing from the eval error map).
+Regression: `zig build test-gap0918`
+(`tests/test_gap0918_vector_validation.zig`).
 **Symptom:** inserting a dim-3 vector into a dim-4 HNSW-indexed property is
 silently accepted (data-integrity risk). Also: an invalid distance metric
 (`'banana'`) is accepted at `CREATE INDEX`, and a malformed vector literal
@@ -312,7 +331,14 @@ silently accepted (data-integrity risk). Also: an invalid distance metric
 **Test:** `vector_index_errors.yml` (three limitation-pins).
 
 ## GAP-0919 — denied DDL-escalation attempts emit no audit record
-**Severity:** High · **Status:** OPEN · **Area:** Security / audit · **Found:** 2026-07-10
+**Severity:** High · **Status:** FIXED (2026-07-10) · **Area:** Security / audit · **Found:** 2026-07-10
+**Fix:** both admin gates that returned before the audit path now emit an
+`access_denied` audit event (result=failure, severity=warning) before
+raising: the mutating `geode.auth.*` gate in `auth_dispatch.execute` and the
+policy-DDL gate `requirePolicyDdlAdmin` (which threads the attempted action
+name). Uses the same `logSecurityGraphEvent` funnel the success events use.
+Regression: `zig build test-gap0919`
+(`tests/test_gap0919_denied_ddl_audit.zig`).
 **Symptom:** non-admin GRANT / CREATE USER / REVOKE denials (SQLSTATE 42501) are
 not audited — the admin-only gate returns `error.Unauthorized` before the
 `logSecurityGraphMutation` / `access_denied` audit path. Successful GRANTs ARE
@@ -322,7 +348,15 @@ no audit entry is written.
 **Test:** `rbac_privilege_escalation_denied.yml` (audit case dropped + documented).
 
 ## GAP-0920 — mid-run audit write failure produces no diagnostic
-**Severity:** High · **Status:** OPEN · **Area:** Audit · **Found:** 2026-07-10
+**Severity:** High · **Status:** FIXED (2026-07-10) · **Area:** Audit · **Found:** 2026-07-10
+**Fix:** the single write funnel (`appendEventLocked`) now catches a write
+failure, emits a loud `log.err` + `recordAuditDropped("write_error")` metric,
+latches a queryable degraded flag (`isWriteDegraded`) and failure counter
+(`writeFailureCount`), and rolls the seq/hash chain state back so the failed
+record does not silently advance (and corrupt) the chain — then re-raises.
+The next successful write clears the flag and resumes the chain contiguously.
+Regression: `zig build test-gap0920`
+(`tests/test_gap0920_audit_write_failure.zig`, driven against /dev/full).
 **Symptom:** a genuine mid-run audit-write failure (e.g. under `prlimit --fsize`)
 produces zero diagnostic anywhere — a silent audit gap (worse than the
 GAP-0908 startup crash, because it is invisible). Note: on Linux, a mid-run

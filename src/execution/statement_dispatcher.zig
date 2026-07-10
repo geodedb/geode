@@ -40,6 +40,16 @@ pub fn ensureAdvancedRuntimeIndex(
     properties: [][]const u8,
     index_type: ast.IndexType,
 ) !void {
+    // CANARY: REQ=REQ-GAP-0918-VECTOR-INDEX-VALIDATION; FEATURE="VectorIndex"; ASPECT=DimValidationRegistration; STATUS=TESTED; TEST=tests/test_gap0918_vector_validation.zig; OWNER=index; UPDATED=2026-07-10
+    // GAP-0918: register vector-indexed (label, property) pairs for the
+    // dimension write-check. This is a lightweight validation registry —
+    // deliberately NOT the advanced wrapper machinery, whose per-write
+    // drop/recreate churns the hnsw thread pool.
+    if ((index_type == .vector or index_type == .vector_f32) and properties.len == 1) {
+        const manager = try index_manager.ensureGlobalIndexManager(allocator);
+        try manager.registerVectorDimValidation(index_name, label, properties[0]);
+    }
+
     const runtime_type = toRuntimeAdvancedIndexType(index_type) orelse return;
     if (properties.len != 1) return error.Unsupported;
 

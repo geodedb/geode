@@ -5101,20 +5101,40 @@ pub const Parser = struct {
             }
         }
 
-        // Optional WITH clause for index parameters (parse but ignore for now)
+        // Optional WITH clause for index parameters. Most parameters are
+        // accepted and ignored, but `metric` is captured so the executor can
+        // validate it for vector/HNSW indexes (GAP-0918 — an invalid metric
+        // like 'banana' used to be silently discarded here).
+        var index_metric: ?[]const u8 = null;
         if (self.cur.kind == .WITH) {
             self.advance();
             if (self.cur.kind == .l_paren) {
                 self.advance();
-                // Skip parameters until closing paren
                 var paren_depth: u32 = 1;
                 while (paren_depth > 0 and self.cur.kind != .eof) {
                     if (self.cur.kind == .l_paren) {
                         paren_depth += 1;
-                    } else if (self.cur.kind == .r_paren) {
-                        paren_depth -= 1;
+                        self.advance();
+                        continue;
                     }
-                    if (paren_depth > 0) self.advance();
+                    if (self.cur.kind == .r_paren) {
+                        paren_depth -= 1;
+                        if (paren_depth == 0) break;
+                        self.advance();
+                        continue;
+                    }
+                    if (paren_depth == 1 and self.cur.kind == .identifier and std.ascii.eqlIgnoreCase(self.cur.lexeme, "metric")) {
+                        self.advance();
+                        if (self.cur.kind == .eq) {
+                            self.advance();
+                            if (self.cur.kind == .string_lit or self.cur.kind == .identifier) {
+                                index_metric = self.cur.lexeme;
+                                self.advance();
+                            }
+                        }
+                        continue;
+                    }
+                    self.advance();
                 }
                 if (self.cur.kind == .r_paren) {
                     self.advance();
@@ -5150,6 +5170,7 @@ pub const Parser = struct {
             .label = label,
             .properties = try properties.toOwnedSlice(self.arena.allocator()),
             .if_not_exists = if_not_exists,
+            .metric = index_metric,
         } };
     }
 

@@ -296,6 +296,20 @@ pub fn setNodePropertyFromValue(
     // graph must never receive an FLE envelope (its records feed the auth HMAC
     // chain, which is computed over plaintext).
     const node_graph: ?[]const u8 = if (store.getNodePtr(node_id)) |n| n.graph_name else null;
+
+    // CANARY: REQ=REQ-GAP-0918-VECTOR-INDEX-VALIDATION; FEATURE="VectorIndex"; ASPECT=WriteChokepoint; STATUS=TESTED; TEST=tests/test_gap0918_vector_validation.zig; OWNER=index; UPDATED=2026-07-10
+    // GAP-0918: reject dimension-mismatched vectors before they reach an
+    // HNSW-indexed property (this is the single chokepoint for all node
+    // property writes: CREATE, MATCH...SET, MERGE ON CREATE/MATCH).
+    if (index_manager.getGlobalIndexManager()) |mgr| {
+        switch (value) {
+            .ExtValue => |ev| {
+                if (ev == .VectorF32) try mgr.checkVectorDimensionForWrite(labels, key, ev.VectorF32.dim);
+            },
+            else => {},
+        }
+    }
+
     const prop_value = switch (value) {
         .Str => |s| blk: {
             const encrypted_or_plain = try fle_hooks.encryptPropertyIfNeeded(

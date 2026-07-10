@@ -527,6 +527,10 @@ pub const CreateIndexStatement = struct {
     label: []const u8,
     properties: [][]const u8,
     if_not_exists: bool = false,
+    // GAP-0918: `metric` captured from the WITH (...) parameter list so the
+    // executor can validate it for vector/HNSW indexes (other parameters are
+    // still accepted and ignored).
+    metric: ?[]const u8 = null,
 };
 
 pub const CreateConstraintStatement = struct {

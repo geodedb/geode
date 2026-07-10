@@ -123,6 +123,9 @@ pub fn mapError(err: anyerror) ErrorInfo {
         error.UnknownGroupKey => .{ .code = "42703", .message = "GROUP BY key does not resolve to any RETURN alias, variable, or binding" },
         error.UnorderedPagination => .{ .code = "US001", .message = "OFFSET requires ORDER BY clause" },
         error.TransactionAlreadyActive => .{ .code = "25001", .message = "Transaction already active" },
+        // GAP-0917: statement failed mid-transaction; everything until
+        // ROLLBACK is rejected and COMMIT aborts. 25P02 = in_failed_sql_transaction.
+        error.TransactionAborted => .{ .code = "25P02", .message = "Current transaction is aborted; statements are rejected until ROLLBACK" },
         error.NoActiveTransaction => .{ .code = "25000", .message = "No active transaction" },
         error.UnionColumnCountMismatch => .{ .code = "42601", .message = "UNION column count mismatch" },
         error.DuplicateGraph => .{ .code = "42P07", .message = "Duplicate graph name" },
@@ -139,6 +142,9 @@ pub fn mapError(err: anyerror) ErrorInfo {
         error.SchemaNotFound => .{ .code = "3F000", .message = "Schema does not exist" },
         error.DuplicateIndex => .{ .code = "42P07", .message = "Duplicate index name" },
         error.IncompatibleIndexDataType => .{ .code = "42804", .message = "Incompatible index data type" },
+        // GAP-0918: vector index validation.
+        error.InvalidIndexMetric => .{ .code = "42704", .message = "Unknown vector distance metric (supported: l2, euclidean, cosine, dot_product, inner_product)" },
+        error.VectorDimensionMismatch => .{ .code = "22000", .message = "Vector dimension does not match the indexed property's established dimension" },
         error.InvalidTypeConversion => .{ .code = "22003", .message = "Invalid type conversion" },
         // GAP-0905/GAP-0907: checked numeric narrowing (CAST, MakeInterval, ...)
         // surfaces as SQLSTATE 22003 numeric_value_out_of_range.

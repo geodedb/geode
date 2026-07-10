@@ -8995,6 +8995,47 @@ pub fn build(b: *std.Build) void {
     const gap0848_step = b.step("test-gap0848", "Run GAP-0848 strict-tenancy auto-default in multi-tenant mode regression");
     gap0848_step.dependOn(&run_gap0848_tests.step);
 
+    // GAP-0920: a mid-run audit-write failure must be diagnosable (degraded
+    // flag + failure count + loud log) and keep the hash chain consistent.
+    const gap0920_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_gap0920_audit_write_failure.zig"), .target = target, .optimize = optimize });
+    gap0920_test_mod.addImport("geode", root_mod);
+    gap0920_test_mod.link_libc = true;
+    const gap0920_tests = b.addTest(.{ .root_module = gap0920_test_mod });
+    const run_gap0920_tests = b.addRunArtifact(gap0920_tests);
+    shardDep(test_step, &run_gap0920_tests.step, 0, test_shard_loads, test_shard_index);
+    const gap0920_step = b.step("test-gap0920", "Run GAP-0920 mid-run audit write-failure diagnostic regression");
+    gap0920_step.dependOn(&run_gap0920_tests.step);
+
+    // GAP-0919: denied DDL-escalation attempts emit access_denied audit
+    // records (they were an authz-attack blind spot).
+    const gap0919_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_gap0919_denied_ddl_audit.zig"), .target = target, .optimize = optimize });
+    gap0919_test_mod.addImport("geode", root_mod);
+    const gap0919_tests = b.addTest(.{ .root_module = gap0919_test_mod });
+    const run_gap0919_tests = b.addRunArtifact(gap0919_tests);
+    shardDep(test_step, &run_gap0919_tests.step, 0, test_shard_loads, test_shard_index);
+    const gap0919_step = b.step("test-gap0919", "Run GAP-0919 denied-DDL audit regression");
+    gap0919_step.dependOn(&run_gap0919_tests.step);
+
+    // GAP-0918: vector index validation — dimension-mismatch write rejection,
+    // DDL metric validation, malformed vector literal type error.
+    const gap0918_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_gap0918_vector_validation.zig"), .target = target, .optimize = optimize });
+    gap0918_test_mod.addImport("geode", root_mod);
+    const gap0918_tests = b.addTest(.{ .root_module = gap0918_test_mod });
+    const run_gap0918_tests = b.addRunArtifact(gap0918_tests);
+    shardDep(test_step, &run_gap0918_tests.step, 0, test_shard_loads, test_shard_index);
+    const gap0918_step = b.step("test-gap0918", "Run GAP-0918 vector index validation regressions");
+    gap0918_step.dependOn(&run_gap0918_tests.step);
+
+    // GAP-0917: ISO post-error transaction semantics — statements after a
+    // mid-transaction error are rejected until ROLLBACK; COMMIT aborts.
+    const gap0917_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_gap0917_txn_post_error.zig"), .target = target, .optimize = optimize });
+    gap0917_test_mod.addImport("geode", root_mod);
+    const gap0917_tests = b.addTest(.{ .root_module = gap0917_test_mod });
+    const run_gap0917_tests = b.addRunArtifact(gap0917_tests);
+    shardDep(test_step, &run_gap0917_tests.step, 0, test_shard_loads, test_shard_index);
+    const gap0917_step = b.step("test-gap0917", "Run GAP-0917 failed-transaction post-error rejection regression");
+    gap0917_step.dependOn(&run_gap0917_tests.step);
+
     // GAP-0910/GAP-0915: unclean-crash recovery — labeled MATCH sees the
     // committed set after reopen; labels()/properties() projections own
     // their memory instead of borrowing node storage pointers.

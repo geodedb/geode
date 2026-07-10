@@ -1017,6 +1017,12 @@ pub fn evalExpr(allocator: std.mem.Allocator, e: ast.Expr, env: Env) EvalError!V
                         return EvalError.DivisionByZero;
                     } else if (std.mem.eql(u8, err_name, "DecimalOverflow")) {
                         return EvalError.DecimalOverflow;
+                    } else if (std.mem.eql(u8, err_name, "InvalidFormat")) {
+                        // GAP-0918: a malformed constructor literal (e.g.
+                        // vectorf32("[1.0,'x',2.0]")) used to silently resolve
+                        // to NULL; surface it as a type error like the
+                        // basic-function mapper below already does.
+                        return EvalError.TypeMismatch;
                     }
                     // For other errors, fall back to null
                     break :blk_call .{ .Null = {} };
