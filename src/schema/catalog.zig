@@ -777,7 +777,10 @@ pub const Catalog = struct {
         errdefer self.allocator.free(scoped_key);
 
         if (self.indexes.contains(scoped_key)) {
-            self.allocator.free(scoped_key);
+            // GAP-0903: no explicit free here — the errdefer above runs on this
+            // error return and frees scoped_key. The former explicit free made
+            // every duplicate CREATE INDEX double-free the key, corrupting the
+            // allocator and eventually segfaulting the server.
             return error.DuplicateIndex;
         }
 
@@ -789,9 +792,14 @@ pub const Catalog = struct {
         errdefer self.allocator.free(owned_table);
 
         const owned_cols = try self.allocator.alloc([]const u8, info.columns.len);
-        errdefer self.allocator.free(owned_cols);
+        var cols_filled: usize = 0;
+        errdefer {
+            for (owned_cols[0..cols_filled]) |c| self.allocator.free(c);
+            self.allocator.free(owned_cols);
+        }
         for (info.columns, 0..) |col, idx| {
             owned_cols[idx] = try self.allocator.dupe(u8, col);
+            cols_filled = idx + 1;
         }
 
         const owned_info = IndexInfo{
@@ -802,7 +810,14 @@ pub const Catalog = struct {
         };
 
         try self.indexes.put(scoped_key, owned_info);
-        try self.save();
+        self.save() catch |err| {
+            // GAP-0903 sibling hazard: the entry (and its memory) now belongs to
+            // the map. Remove it before re-raising so the errdefers above free
+            // exactly the memory we still own instead of leaving the map holding
+            // dangling pointers.
+            _ = self.indexes.remove(scoped_key);
+            return err;
+        };
     }
 
     /// Get index metadata by label and name (scoped key)

@@ -60,7 +60,12 @@ step, which precedes the hang).
 documented-only + a safe dead-port `migrate run` pin).
 
 ## GAP-0903 — repeated failing `CREATE INDEX` double-frees (segfault)
-**Severity:** Critical · **Status:** OPEN · **Area:** Storage / catalog · **Found:** 2026-07-10
+**Severity:** Critical · **Status:** FIXED (2026-07-10) · **Area:** Storage / catalog · **Found:** 2026-07-10
+**Fix:** the duplicate branch in `Catalog.addIndex` freed `scoped_key`
+explicitly while the function's `errdefer` also freed it on the error return
+— removed the explicit free; also fixed the sibling hazard where a failed
+`save()` after the map `put` let errdefers free map-owned memory. Regression:
+`zig build test-gap0903` (`tests/test_gap0903_dup_index_double_free.zig`).
 **Symptom:** issuing the same duplicate `CREATE INDEX <name> ON <L>(<p>)` 4–5×
 in a row segfaults the server via a double-free.
 **Root cause:** `src/…/catalog.zig:777 addIndex` (the duplicate-name error path
