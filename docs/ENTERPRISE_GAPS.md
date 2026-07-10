@@ -435,7 +435,13 @@ validation. (Wrong-arity `ST_Point` and inverted bboxes are handled correctly.)
 **Test:** `spatial_geometry_errors.yml`.
 
 ## GAP-0925 — `decimal_add` has no precision ceiling (unlike `decimal_mul`)
-**Severity:** Medium · **Status:** OPEN · **Area:** Types / decimal · **Found:** 2026-07-10
+**Severity:** Medium · **Status:** FIXED (2026-07-10) · **Area:** Types / decimal · **Found:** 2026-07-10
+**Fix:** a single 38-digit SQL DECIMAL precision ceiling (`|coeff| < 10^38`,
+`Decimal128.checkPrecision`) is now enforced on `add`/`sub`/`mul` results
+alike, so `decimal_add` no longer silently produces a 39-digit value past the
+ceiling — it raises `Error.Overflow` → `DecimalOverflow` (SQLSTATE 58000), the
+same as `decimal_mul`. Regression: `zig build test-gap0925`
+(`tests/test_gap0925_decimal_precision.zig`).
 **Symptom:** `decimal_add` silently produces a 39-digit result past the 38-digit
 ceiling, whereas `decimal_mul` correctly rejects overflow with 58000
 DecimalOverflow — inconsistent enforcement.

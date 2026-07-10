@@ -10,6 +10,18 @@ pub const Decimal128 = struct {
         ParseError,
     };
 
+    // CANARY: REQ=REQ-GAP-0925-DECIMAL-PRECISION-CEILING; FEATURE="Decimal"; ASPECT=PrecisionCeiling; STATUS=TESTED; TEST=tests/test_gap0925_decimal_precision.zig; OWNER=types; UPDATED=2026-07-10
+    // GAP-0925: SQL DECIMAL max precision is 38 significant digits. i128 holds
+    // ~39 digits, so add/sub could silently produce a 39-digit result past the
+    // ceiling while mul rejected a comparable overflow — inconsistent. Enforce
+    // a single 38-digit ceiling (|coeff| < 10^38) on every arithmetic result.
+    pub const MAX_COEFF: i128 = 100000000000000000000000000000000000000; // 10^38
+
+    fn checkPrecision(coeff: i128) Error!void {
+        const magnitude = if (coeff < 0) -coeff else coeff;
+        if (magnitude >= MAX_COEFF) return Error.Overflow;
+    }
+
     pub fn fromStr(str: []const u8) Error!Decimal128 {
         if (str.len == 0) return Error.ParseError;
 
@@ -53,6 +65,7 @@ pub const Decimal128 = struct {
         const other_scaled = try other.rescale(max_scale);
 
         const result_coeff = std.math.add(i128, self_scaled.coeff, other_scaled.coeff) catch return Error.Overflow;
+        try checkPrecision(result_coeff); // GAP-0925
         return Decimal128{ .coeff = result_coeff, .scale = max_scale };
     }
 
@@ -62,6 +75,7 @@ pub const Decimal128 = struct {
         const other_scaled = try other.rescale(max_scale);
 
         const result_coeff = std.math.sub(i128, self_scaled.coeff, other_scaled.coeff) catch return Error.Overflow;
+        try checkPrecision(result_coeff); // GAP-0925
         return Decimal128{ .coeff = result_coeff, .scale = max_scale };
     }
 
@@ -69,6 +83,7 @@ pub const Decimal128 = struct {
         const result_coeff = std.math.mul(i128, self.coeff, other.coeff) catch return Error.Overflow;
         const result_scale = self.scale + other.scale;
         if (result_scale > std.math.maxInt(i16)) return Error.Overflow;
+        try checkPrecision(result_coeff); // GAP-0925
         return Decimal128{ .coeff = result_coeff, .scale = result_scale };
     }
 
