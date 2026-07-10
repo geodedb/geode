@@ -66,7 +66,10 @@ const Harness = struct {
             .allocator = allocator,
             .tmp = tmp,
             .data_dir = data_dir,
-            .ctx = execution.ExecutionContext{ .catalog = exec_catalog },
+            // GAP-0911: policy DDL is admin-only. These tests exercise ALTER
+            // POLICY execution mechanics, not authorization — authenticate as
+            // an admin to pass the gate.
+            .ctx = execution.ExecutionContext{ .catalog = exec_catalog, .role = .Admin, .user = "admin" },
             .catalog = cat,
         };
     }

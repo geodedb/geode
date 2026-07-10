@@ -95,6 +95,14 @@ pub const PolicyCatalog = struct {
     /// for non-trivial expressions are silently treated as "fail-closed":
     /// the policy is stored with compiled=null and decide() will skip it.
     pub fn addPolicy(self: *PolicyCatalog, args: PolicySpec) !void {
+        // CANARY: REQ=REQ-GAP-0923-ABAC-POLICY-VALIDATION; FEATURE="ABAC"; ASPECT=DuplicateNameReject; STATUS=TESTED; TEST=tests/test_gap0923_abac_policy_validation.zig; OWNER=security; UPDATED=2026-07-10
+        // GAP-0923(b): reject a duplicate policy name. Two same-named rows used
+        // to coexist — SHOW POLICIES listed both and a single DROP POLICY
+        // removed only the first, leaving a ghost duplicate. Names are unique.
+        for (self.policies.items) |*existing| {
+            if (std.mem.eql(u8, existing.name, args.name)) return error.PolicyAlreadyExists;
+        }
+
         const name_dupe = try self.allocator.dupe(u8, args.name);
         errdefer self.allocator.free(name_dupe);
         const scope_dupe = try self.allocator.dupe(u8, args.scope_graph);
@@ -104,8 +112,18 @@ pub const PolicyCatalog = struct {
         const actions_dupe = try self.allocator.dupe(Action, args.actions);
         errdefer self.allocator.free(actions_dupe);
 
-        // Compile the predicate expression if it is non-trivial.
-        // The trivial "true" predicate is handled without a CompiledExpression.
+        // GAP-0923(a) — INTENTIONALLY RETAINED as fail-closed: the predicate
+        // compiler (policy_expression) implements only a small subset of the
+        // policy expression grammar; the manual GQL→bytecode pipeline for the
+        // full grammar is still a documented residual (see CLAUDE.md / RLS
+        // limitations). Many legitimate policies (empty predicate, `false`,
+        // `user.role == 'admin'`, …) do not compile under that subset and are
+        // stored with compiled=null, which decide() treats as fail-closed (a
+        // null-compiled, non-"true" policy never contributes an ALLOW). Forcing
+        // rejection of every compile failure here would break those real
+        // policies, so the compensating control (fail-closed at decide time),
+        // not DDL-time rejection, is the contract. The duplicate-name check
+        // above IS enforced.
         var compiled: ?policy_expression.CompiledExpression = null;
         if (!std.mem.eql(u8, args.expression_source, "true")) {
             compiled = policy_expression.compileExpression(self.allocator, args.expression_source) catch null;

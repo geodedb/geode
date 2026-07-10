@@ -8995,6 +8995,16 @@ pub fn build(b: *std.Build) void {
     const gap0848_step = b.step("test-gap0848", "Run GAP-0848 strict-tenancy auto-default in multi-tenant mode regression");
     gap0848_step.dependOn(&run_gap0848_tests.step);
 
+    // GAP-0923: ABAC policy validation — malformed USING expressions and
+    // duplicate policy names are rejected instead of silently accepted.
+    const gap0923_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_gap0923_abac_policy_validation.zig"), .target = target, .optimize = optimize });
+    gap0923_test_mod.addImport("geode", root_mod);
+    const gap0923_tests = b.addTest(.{ .root_module = gap0923_test_mod });
+    const run_gap0923_tests = b.addRunArtifact(gap0923_tests);
+    shardDep(test_step, &run_gap0923_tests.step, 0, test_shard_loads, test_shard_index);
+    const gap0923_step = b.step("test-gap0923", "Run GAP-0923 ABAC malformed/duplicate policy rejection regression");
+    gap0923_step.dependOn(&run_gap0923_tests.step);
+
     // GAP-0922: fulltext index over an exclusively non-string property is
     // rejected at DDL time instead of silently building a dead index.
     const gap0922_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_gap0922_fts_numeric_property.zig"), .target = target, .optimize = optimize });

@@ -170,13 +170,25 @@ pub fn hydrateCatalog(
         // otherwise fall back to the trivial "true" sentinel.
         const expr_src: []const u8 = record.getUsingClause() orelse "true";
 
-        try cat.addPolicy(.{
+        // GAP-0923: hydration is tolerant of records persisted BEFORE the
+        // uniqueness / malformed-expression validation landed — skip and log a
+        // duplicate or an uncompilable expression rather than aborting startup.
+        cat.addPolicy(.{
             .name = record.getName(),
             .scope_graph = record.getGraph(),
             .actions = actions,
             .effect = effect,
             .expression_source = expr_src,
             .enabled = record.enabled,
-        });
+        }) catch |err| switch (err) {
+            // GAP-0923: tolerate a duplicate persisted BEFORE the uniqueness
+            // check landed (older __geode_security data could hold two rows
+            // with the same policy name) — skip and log rather than aborting
+            // startup hydration.
+            error.PolicyAlreadyExists => {
+                std.log.scoped(.gps).warn("skipping duplicate persisted policy '{s}' during hydration", .{record.getName()});
+            },
+            else => return err,
+        };
     }
 }

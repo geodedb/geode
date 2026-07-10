@@ -141,6 +141,8 @@ pub fn mapError(err: anyerror) ErrorInfo {
         error.DuplicateSchema => .{ .code = "42P07", .message = "Duplicate schema name" },
         error.SchemaNotFound => .{ .code = "3F000", .message = "Schema does not exist" },
         error.DuplicateIndex => .{ .code = "42P07", .message = "Duplicate index name" },
+        // GAP-0923: ABAC policy DDL validation (duplicate name rejected).
+        error.PolicyAlreadyExists => .{ .code = "42710", .message = "Duplicate policy name" },
         error.IncompatibleIndexDataType => .{ .code = "42804", .message = "Incompatible index data type" },
         // GAP-0922: fulltext index requires a text (string) property.
         error.FulltextRequiresTextProperty => .{ .code = "42804", .message = "Fulltext index requires a text (string) property; the indexed property holds only non-string values" },

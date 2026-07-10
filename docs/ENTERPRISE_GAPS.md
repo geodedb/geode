@@ -399,7 +399,22 @@ an index that matches nothing, and issues no diagnostic.
 **Test:** `fulltext_search_negative.yml`.
 
 ## GAP-0923 — malformed and duplicate ABAC policies silently accepted
-**Severity:** Medium · **Status:** OPEN · **Area:** Security / ABAC · **Found:** 2026-07-10
+**Severity:** Medium · **Status:** FIXED (2026-07-10, part b) / documented (part a) · **Area:** Security / ABAC · **Found:** 2026-07-10
+**Fix (b):** `PolicyCatalog.addPolicy` now rejects a duplicate policy name with
+`error.PolicyAlreadyExists` (SQLSTATE 42710) before mutating the catalog, so
+two same-named rows can no longer coexist (the pre-fix bug left a ghost that
+survived one `DROP POLICY`). Hydration is tolerant of a duplicate persisted
+before the check landed (skip + log). Regression: `zig build test-gap0923`.
+**Part (a) — intentionally retained as fail-closed (documented):** a malformed
+`USING` expression is stored with `compiled=null` because the predicate
+compiler covers only a subset of the grammar (the full GQL→bytecode path is a
+documented residual; see Known Limitations / RLS). Many *legitimate* policies
+(empty predicate, `false`, `user.role == 'admin'`) also do not compile under
+that subset and rely on the same `catch null` path; `decide()` fail-closes any
+null-compiled non-`true` policy, so it can never widen access. Forcing DDL-time
+rejection would break those real policies and the existing GPS test suite, so
+the compensating control is the contract. The regression pins that a malformed
+policy never yields a compiled predicate.
 **Symptom:** (a) a syntactically invalid `USING` expression is silently accepted
 — `src/security/policy_catalog.zig:97` compiles lazily and swallows the error via
 `catch null`. NOT a privilege bug: `src/security/gps.zig::decide()` fail-closes a
