@@ -8995,6 +8995,16 @@ pub fn build(b: *std.Build) void {
     const gap0848_step = b.step("test-gap0848", "Run GAP-0848 strict-tenancy auto-default in multi-tenant mode regression");
     gap0848_step.dependOn(&run_gap0848_tests.step);
 
+    // GAP-0912/GAP-0913: variable-length pattern semantics — same-variable
+    // endpoints unify (start == end); aggregates honor WHERE/FILTER.
+    const gap0912_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_gap0912_0913_varlen_semantics.zig"), .target = target, .optimize = optimize });
+    gap0912_test_mod.addImport("geode", root_mod);
+    const gap0912_tests = b.addTest(.{ .root_module = gap0912_test_mod });
+    const run_gap0912_tests = b.addRunArtifact(gap0912_tests);
+    shardDep(test_step, &run_gap0912_tests.step, 0, test_shard_loads, test_shard_index);
+    const gap0912_step = b.step("test-gap0912", "Run GAP-0912/GAP-0913 variable-length pattern semantics regressions");
+    gap0912_step.dependOn(&run_gap0912_tests.step);
+
     // GAP-0914/GAP-0916: aggregation semantics — GROUP BY on an unresolvable
     // identifier must error (not collapse to one null group); sum()/avg()
     // over a non-numeric column must raise TypeMismatch (not 0 / NULL).

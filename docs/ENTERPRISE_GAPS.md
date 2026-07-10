@@ -191,7 +191,13 @@ correctly denied with exit 3.)
 self-activating).
 
 ## GAP-0912 — same-variable path endpoints not unified at match time
-**Severity:** Critical · **Status:** OPEN · **Area:** Query / pattern match · **Found:** 2026-07-10
+**Severity:** Critical · **Status:** FIXED (2026-07-10) · **Area:** Query / pattern match · **Found:** 2026-07-10
+**Fix:** both variable-length execution paths (the row-building traversal and
+the aggregation branch in `match_operations.zig`) now constrain start == end
+when one variable names both endpoints. Note: the engine's default path mode
+is ACYCLIC, so finding a real directed cycle requires explicit `SIMPLE`
+(covered by the regression). Regression: `zig build test-gap0912`
+(`tests/test_gap0912_0913_varlen_semantics.zig`).
 **Symptom:** reusing one variable at both ends of a variable-length pattern
 (`(n)-[*]->(n)`) does NOT constrain start == end. A non-aggregated
 `MATCH p = (n {id:'F'})-[:R*]->(n) RETURN nodes(p)` over an acyclic DAG returns
@@ -205,7 +211,12 @@ rows whose endpoints differ. Consequently the standard cycle-detection idiom
 asserting the wrong endpoint rows).
 
 ## GAP-0913 — aggregate over a variable-length pattern silently drops WHERE
-**Severity:** Critical · **Status:** OPEN · **Area:** Query / aggregation · **Found:** 2026-07-10
+**Severity:** Critical · **Status:** FIXED (2026-07-10) · **Area:** Query / aggregation · **Found:** 2026-07-10
+**Fix:** the aggregation-over-var-length branch in `match_operations.zig` now
+builds the same env as the non-aggregated path (left/right vars, rel edge
+list, path variable) and evaluates WHERE/FILTER per path before counting.
+Regression: `zig build test-gap0912`
+(`tests/test_gap0912_0913_varlen_semantics.zig`).
 **Symptom:** `count(...)` (and other aggregates) over a variable-length
 relationship pattern silently ignore an attached `WHERE` clause, returning wrong
 counts. The non-aggregated `RETURN p` form respects the filter correctly.

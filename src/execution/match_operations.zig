@@ -7375,6 +7375,14 @@ fn executeVariableLengthPathTraversal(
         const right_node_id = path.nodes.items[path.nodes.items.len - 1];
         const right_node_ptr = store.getNodePtrForScan(right_node_id) orelse continue;
 
+        // CANARY: REQ=REQ-GAP-0912-VARLEN-ENDPOINT-UNIFY; FEATURE="VariableLengthPaths"; ASPECT=EndpointUnification; STATUS=TESTED; TEST=tests/test_gap0912_0913_varlen_semantics.zig; OWNER=execution; UPDATED=2026-07-10
+        // GAP-0912: reusing one variable at both pattern endpoints constrains
+        // start == end. Without this, (n)-[*]->(n) returned paths whose
+        // endpoints differ, breaking the cycle-detection idiom.
+        if (left_node_var != null and right_node_var != null and
+            std.mem.eql(u8, left_node_var.?, right_node_var.?) and
+            right_node_id != left_node.id) continue;
+
         // CANARY: REQ=REQ-GQL-VARLEN-RIGHTNODE; FEATURE="VariableLengthPathRightNodeFilter"; ASPECT=LabelFiltering; STATUS=TESTED; TEST=geodetestlab/specs/gql_pattern_matching_comprehensive.yml; OWNER=engine; UPDATED=2025-12-18
         // Filter right node by labels if specified (e.g., :Product in MATCH (a)-[*]->(b:Product))
         if (right_labels.len > 0) {
@@ -9420,6 +9428,93 @@ pub fn executeMatchQueryImpl(allocator: std.mem.Allocator, q: ast.Query, param_n
                                 }
                             }
                             if (!passes_right_props) continue;
+                        }
+
+                        // CANARY: REQ=REQ-GAP-0912-VARLEN-ENDPOINT-UNIFY; FEATURE="VariableLengthPaths"; ASPECT=AggEndpointUnification; STATUS=TESTED; TEST=tests/test_gap0912_0913_varlen_semantics.zig; OWNER=execution; UPDATED=2026-07-10
+                        // GAP-0912: same-variable endpoints constrain start == end
+                        // in the aggregation path too.
+                        if (left_node_var != null and right_node_var != null and
+                            std.mem.eql(u8, left_node_var.?, right_node_var.?) and
+                            target_node_id != start_node.id) continue;
+
+                        // CANARY: REQ=REQ-GAP-0913-VARLEN-AGG-WHERE; FEATURE="VariableLengthPathAggregation"; ASPECT=WhereFilterHonored; STATUS=TESTED; TEST=tests/test_gap0912_0913_varlen_semantics.zig; OWNER=execution; UPDATED=2026-07-10
+                        // GAP-0913: aggregates over a variable-length pattern must
+                        // honor WHERE/FILTER exactly like the non-aggregated path
+                        // (they were silently dropped, producing wrong counts).
+                        if (q.where_clause != null or q.filter_clause != null) {
+                            var f_names: [4][]const u8 = undefined;
+                            var f_values: [4]Value = undefined;
+                            var f_n: usize = 0;
+                            if (left_node_var) |vn| {
+                                f_names[f_n] = vn;
+                                f_values[f_n] = Value{ .Node = start_node };
+                                f_n += 1;
+                            }
+                            if (right_node_var) |vn| {
+                                f_names[f_n] = vn;
+                                f_values[f_n] = Value{ .Node = target_node_ptr };
+                                f_n += 1;
+                            }
+                            var edge_vals: ?[]Value = null;
+                            defer if (edge_vals) |ev| allocator.free(ev);
+                            if (rel_var) |vn| {
+                                const evs = try allocator.alloc(Value, path.edges.items.len);
+                                for (path.edges.items, 0..) |eid, ei| {
+                                    evs[ei] = if (store.getEdgePtrHydrated(eid)) |ep| Value{ .Edge = ep } else Value{ .Null = {} };
+                                }
+                                edge_vals = evs;
+                                f_names[f_n] = vn;
+                                f_values[f_n] = Value{ .List = evs };
+                                f_n += 1;
+                            }
+                            var path_nodes_slice: ?[]*const graph_store.Node = null;
+                            var path_edges_slice: ?[]*const graph_store.Edge = null;
+                            defer if (path_nodes_slice) |sl| allocator.free(sl);
+                            defer if (path_edges_slice) |sl| allocator.free(sl);
+                            if (q.path_variable) |vn| {
+                                var pn = try std.ArrayList(*const graph_store.Node).initCapacity(allocator, path.nodes.items.len);
+                                for (path.nodes.items) |nid| {
+                                    if (store.getNodePtrForScan(nid)) |np| pn.append(allocator, np) catch {};
+                                }
+                                var pe = try std.ArrayList(*const graph_store.Edge).initCapacity(allocator, path.edges.items.len);
+                                for (path.edges.items) |eid2| {
+                                    if (store.getEdgePtrHydrated(eid2)) |ep2| pe.append(allocator, ep2) catch {};
+                                }
+                                path_nodes_slice = try pn.toOwnedSlice(allocator);
+                                path_edges_slice = try pe.toOwnedSlice(allocator);
+                                f_names[f_n] = vn;
+                                f_values[f_n] = Value{ .Path = .{
+                                    .nodes = path_nodes_slice.?,
+                                    .edges = path_edges_slice.?,
+                                } };
+                                f_n += 1;
+                            }
+                            const f_env = eval.Env{
+                                .names = f_names[0..f_n],
+                                .values = f_values[0..f_n],
+                                .param_names = param_names,
+                                .param_values = param_values,
+                                .allocator = allocator,
+                                .owned = false,
+                            };
+                            if (q.where_clause) |wexpr| {
+                                const wres = try eval.evalExpr(allocator, wexpr, f_env);
+                                const passes = switch (wres) {
+                                    .Bool => |b| b,
+                                    .Int => |iv| iv != 0,
+                                    else => false,
+                                };
+                                if (!passes) continue;
+                            }
+                            if (q.filter_clause) |fexpr| {
+                                const fres = try eval.evalExpr(allocator, fexpr, f_env);
+                                const passes = switch (fres) {
+                                    .Bool => |b| b,
+                                    .Int => |iv| iv != 0,
+                                    else => false,
+                                };
+                                if (!passes) continue;
+                            }
                         }
 
                         // Add each matching path's end node (no dedup - count(*) counts paths, not unique nodes)
