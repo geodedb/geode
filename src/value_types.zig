@@ -57,6 +57,8 @@ pub const EvalError = error{
     // character for the target) vs an unsupported target type.
     InvalidCast,
     UnsupportedCastTarget,
+    // GAP-0926: an out-of-range positional parameter ($2 with one param).
+    MissingParameter,
     IdnaError,
     InvalidIpAddress,
     InvalidSubnet,

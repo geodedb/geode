@@ -2940,6 +2940,41 @@ pub fn validateGroupByResolvable(q: ast.Query) !void {
     }
 }
 
+// CANARY: REQ=REQ-GAP-0926-NESTED-AGGREGATE; FEATURE="Aggregation"; ASPECT=NestedAggregateReject; STATUS=TESTED; TEST=tests/test_gap0926_silent_accept.zig; OWNER=execution; UPDATED=2026-07-10
+/// GAP-0926: a nested aggregate (an aggregate whose argument itself contains
+/// an aggregate, e.g. `sum(avg(x))`) is always invalid in GQL/SQL — it used to
+/// silently evaluate to NULL. Reject it with error.NestedAggregate. This is
+/// unambiguously safe: no legitimate query nests aggregates.
+pub fn validateNoNestedAggregate(ret: ast.ReturnClause) !void {
+    for (ret.items) |item| {
+        if (try exprHasNestedAggregate(item.expr, false)) return error.NestedAggregate;
+    }
+}
+
+fn isAggregateCall(expr: ast.Expr) bool {
+    return return_and_sorting.isAggregationExpr(expr) and expr == .Call;
+}
+
+fn exprHasNestedAggregate(expr: ast.Expr, inside_aggregate: bool) error{NestedAggregate}!bool {
+    switch (expr) {
+        .Call => |call| {
+            const is_agg = isAggregateCall(expr);
+            if (is_agg and inside_aggregate) return true; // aggregate within an aggregate
+            const now_inside = inside_aggregate or is_agg;
+            for (call.args) |arg| {
+                if (try exprHasNestedAggregate(arg.*, now_inside)) return true;
+            }
+            return false;
+        },
+        .Binary => |bin| {
+            return (try exprHasNestedAggregate(bin.left.*, inside_aggregate)) or
+                (try exprHasNestedAggregate(bin.right.*, inside_aggregate));
+        },
+        .Unary => |un| return exprHasNestedAggregate(un.expr.*, inside_aggregate),
+        else => return false,
+    }
+}
+
 fn groupKeyNameResolves(q: ast.Query, name: []const u8) bool {
     for (q.ret.items) |item| {
         if (item.alias) |a| {

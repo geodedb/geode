@@ -458,7 +458,30 @@ DecimalOverflow — inconsistent enforcement.
 contrast).
 
 ## GAP-0926 — silent-accept family: WHERE-unbound, MERGE-null-key, params, index-target, aggregation edges
-**Severity:** Medium · **Status:** OPEN · **Area:** Query / GQL semantics · **Found:** 2026-07-10
+**Severity:** Medium · **Status:** PARTIAL — 2 safe sub-items fixed, 4 retained/documented (2026-07-10) · **Area:** Query / GQL semantics · **Found:** 2026-07-10
+**Fixed (unambiguously safe):**
+- **Out-of-range POSITIONAL parameter** (`$2` with one param) → `error.MissingParameter`
+  (SQLSTATE 22023) instead of silent NULL (`.Param` eval in `eval.zig`; positional =
+  all-digit name).
+- **Nested aggregate** (`sum(avg(...))`) → `error.NestedAggregate` (SQLSTATE 42803);
+  `validateNoNestedAggregate` runs in the RETURN validation path. Nested aggregates are
+  always invalid, so this can never break a legitimate query.
+
+**Retained as silent-accept (documented residuals):** the remaining sub-items are
+non-corrupting (the gap itself notes "no data corruption") and forcing rejection risks
+breaking legitimate queries / the existing suite — the lesson from GAP-0923(a), where
+over-strict validation broke 14 GPS tests:
+- **WHERE unbound variable** — a static "unknown variable" check would misfire on
+  variables bound through paths the checker doesn't track; kept as filter-to-0-rows.
+- **MERGE null / unbound key** — `MERGE (n {k: null})` dedups correctly (no duplicates);
+  a null-key rejection is a semantic policy change out of scope here.
+- **Missing NAMED parameter** — kept NULL (optional-parameter queries legitimately omit
+  values); only the unambiguous positional-out-of-range case is rejected.
+- **CREATE INDEX on a nonexistent label/property** — index-first creation is a legitimate,
+  supported workflow (see GAP-0922), so a nonexistent-target rejection is unsafe.
+- **Non-grouped column / HAVING unknown alias** — overlap GAP-0914's GROUP BY validation;
+  a broader HAVING-scope check is deferred to avoid the same over-rejection risk.
+Regression: `zig build test-gap0926` (`tests/test_gap0926_silent_accept.zig`).
 Several ISO-39075 negatives are silently accepted (0 rows / NULL / 00000) rather
 than raising an error. Each is a self-activating limitation-pin:
 - **WHERE unbound variable** (`WHERE m.i = 1`, `m` undefined) → filters to 0 rows

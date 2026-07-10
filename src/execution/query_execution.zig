@@ -1611,6 +1611,9 @@ pub fn executeQueryWithContext(allocator: std.mem.Allocator, q: ast.Query, conte
         // GAP-0914: reject GROUP BY keys that resolve to nothing instead of
         // silently collapsing every row into one null group.
         try execution.validateGroupByResolvable(q);
+        // GAP-0926: reject nested aggregates (sum(avg(...))) — always invalid,
+        // previously silently NULL.
+        try execution.validateNoNestedAggregate(q.ret);
     }
 
     // COUNT_PUSHDOWN: short-circuit unlabeled `MATCH (n) RETURN count(n)` /

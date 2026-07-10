@@ -156,6 +156,10 @@ pub fn mapError(err: anyerror) ErrorInfo {
         // GAP-0921: CAST semantic validation.
         error.InvalidCast => .{ .code = "22018", .message = "Invalid character value for cast" },
         error.UnsupportedCastTarget => .{ .code = "0A000", .message = "Unsupported CAST target type" },
+        // GAP-0926: out-of-range positional parameter.
+        error.MissingParameter => .{ .code = "22023", .message = "Positional parameter out of range (referenced a parameter that was not supplied)" },
+        // GAP-0926: nested aggregate (sum(avg(...))) is invalid.
+        error.NestedAggregate => .{ .code = "42803", .message = "Aggregate functions cannot be nested" },
         error.StringDataRightTruncation => .{ .code = "22001", .message = "String data right truncation" },
         error.InvalidKeyProvider => .{ .code = "42704", .message = "Invalid TDE key provider" },
         error.InvalidGuardrailConfiguration => .{ .code = "42704", .message = "Invalid CDC guardrail configuration" },

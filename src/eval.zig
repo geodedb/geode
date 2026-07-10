@@ -756,7 +756,20 @@ pub fn evalExpr(allocator: std.mem.Allocator, e: ast.Expr, env: Env) EvalError!V
             break :blk_localdatetime Value{ .Timestamp = .{ .micros_since_epoch = total_micros } };
         },
         .Ident => |id| env.get(id.orig) orelse Value{ .Null = {} },
-        .Param => |pname| env.getParam(pname) orelse Value{ .Null = {} },
+        // CANARY: REQ=REQ-GAP-0926-POSITIONAL-PARAM-OOR; FEATURE="ParameterBinding"; ASPECT=OutOfRangePositional; STATUS=TESTED; TEST=tests/test_gap0926_silent_accept.zig; OWNER=eval; UPDATED=2026-07-10
+        // GAP-0926: an out-of-range POSITIONAL parameter (e.g. $2 when only one
+        // param was supplied) used to resolve to NULL — referencing a
+        // positional slot that was never provided is unambiguously an error.
+        // Missing NAMED params keep the historical NULL (documented residual):
+        // rejecting those risks breaking legitimate optional-param queries.
+        .Param => |pname| blk_param: {
+            if (env.getParam(pname)) |v| break :blk_param v;
+            const is_positional = pname.len > 0 and for (pname) |c| {
+                if (!std.ascii.isDigit(c)) break false;
+            } else true;
+            if (is_positional) return EvalError.MissingParameter;
+            break :blk_param Value{ .Null = {} };
+        },
         .Unary => |u| blk: {
             const v = try evalExpr(allocator, u.expr.*, env);
             switch (u.op) {
