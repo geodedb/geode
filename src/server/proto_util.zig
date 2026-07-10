@@ -142,6 +142,8 @@ pub fn mapError(err: anyerror) ErrorInfo {
         error.SchemaNotFound => .{ .code = "3F000", .message = "Schema does not exist" },
         error.DuplicateIndex => .{ .code = "42P07", .message = "Duplicate index name" },
         error.IncompatibleIndexDataType => .{ .code = "42804", .message = "Incompatible index data type" },
+        // GAP-0922: fulltext index requires a text (string) property.
+        error.FulltextRequiresTextProperty => .{ .code = "42804", .message = "Fulltext index requires a text (string) property; the indexed property holds only non-string values" },
         // GAP-0918: vector index validation.
         error.InvalidIndexMetric => .{ .code = "42704", .message = "Unknown vector distance metric (supported: l2, euclidean, cosine, dot_product, inner_product)" },
         error.VectorDimensionMismatch => .{ .code = "22000", .message = "Vector dimension does not match the indexed property's established dimension" },

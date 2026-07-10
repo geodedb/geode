@@ -386,7 +386,14 @@ int/decimal/boolean/timestamp/list/map targets.
 **Test:** `cast_invalid.yml`.
 
 ## GAP-0922 — fulltext index on a numeric property silently accepted
-**Severity:** Medium · **Status:** OPEN · **Area:** FTS · **Found:** 2026-07-10
+**Severity:** Medium · **Status:** FIXED (2026-07-10) · **Area:** FTS · **Found:** 2026-07-10
+**Fix:** `validateTextProperty` scans existing nodes at CREATE INDEX time
+(before the catalog row is written) and rejects a fulltext index whose
+indexed property is exclusively non-string across all existing nodes with
+`error.FulltextRequiresTextProperty` (SQLSTATE 42804). A text property still
+works, and an index-first CREATE (no rows yet, type unknowable) is allowed.
+Regression: `zig build test-gap0922`
+(`tests/test_gap0922_fts_numeric_property.zig`).
 **Symptom:** `CREATE INDEX … ON L(int_prop) USING fulltext` is accepted, builds
 an index that matches nothing, and issues no diagnostic.
 **Test:** `fulltext_search_negative.yml`.

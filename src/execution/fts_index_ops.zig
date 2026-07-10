@@ -32,6 +32,11 @@ pub const Error = error{
     FulltextIndexExists,
     /// FTS is unavailable on the resolved graph (adapter not initialised).
     FulltextUnavailable,
+    /// GAP-0922: every existing value of the indexed property is non-string
+    /// (e.g. an INTEGER column). A fulltext index over it would be permanently
+    /// dead — matching nothing — so DDL is rejected instead of silently
+    /// building a useless index.
+    FulltextRequiresTextProperty,
 };
 
 /// Create a NAMED fulltext index on `graph_name` for label `label` over the
@@ -65,6 +70,13 @@ pub fn createFulltextIndex(
     const mg = adapter.getOrCreateGraph(graph_name) catch return Error.FulltextUnavailable;
     const fa = mg.fts_adapter orelse return Error.FulltextUnavailable;
 
+    // CANARY: REQ=REQ-GAP-0922-FTS-NUMERIC-PROPERTY-REJECT; FEATURE="FullText"; ASPECT=TextPropertyValidation; STATUS=TESTED; TEST=tests/test_gap0922_fts_numeric_property.zig; OWNER=fts; UPDATED=2026-07-10
+    // GAP-0922: reject a fulltext index whose indexed property is exclusively
+    // non-string across existing nodes (e.g. an INTEGER column). Such an index
+    // was silently built and matched nothing forever, with no diagnostic. If
+    // the label has no nodes yet (index-first), we cannot judge — allow it.
+    try validateTextProperty(graph_name, label, properties);
+
     // Create the engine. Treat "already exists" per IF NOT EXISTS.
     fa.createIndex(index_name) catch |err| switch (err) {
         adapter_mod.Error.IndexExists => {
@@ -94,6 +106,34 @@ pub fn createFulltextIndex(
     fa.flush(index_name) catch |err| {
         log.warn("fulltext backfill flush failed for '{s}': {}", .{ index_name, err });
     };
+}
+
+/// GAP-0922: scan existing nodes of `label` and reject the fulltext index if
+/// every present value of every indexed property is non-string. Returns
+/// cleanly (allowing the index) when the label has no nodes, or when at least
+/// one indexed property holds at least one string value on some node.
+pub fn validateTextProperty(
+    graph_name: []const u8,
+    label: []const u8,
+    properties: []const []const u8,
+) Error!void {
+    const store = graph_store.getGlobalStore(graph_store.global_allocator());
+    const node_ids = store.getNodesByLabel(graph_name, label) orelse return; // no nodes → allow
+    if (node_ids.len == 0) return;
+
+    var saw_any_value = false;
+    for (node_ids) |node_id| {
+        for (properties) |prop| {
+            const pv = store.getNodeProperty(node_id, prop) orelse continue;
+            switch (pv) {
+                .String => return, // at least one string value → text index is meaningful
+                .Null => {},
+                else => saw_any_value = true, // a present non-string value
+            }
+        }
+    }
+    // Every present value across all indexed properties was non-string.
+    if (saw_any_value) return Error.FulltextRequiresTextProperty;
 }
 
 /// Backfill loop, factored out so the create path stays readable.

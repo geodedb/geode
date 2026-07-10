@@ -8995,6 +8995,17 @@ pub fn build(b: *std.Build) void {
     const gap0848_step = b.step("test-gap0848", "Run GAP-0848 strict-tenancy auto-default in multi-tenant mode regression");
     gap0848_step.dependOn(&run_gap0848_tests.step);
 
+    // GAP-0922: fulltext index over an exclusively non-string property is
+    // rejected at DDL time instead of silently building a dead index.
+    const gap0922_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_gap0922_fts_numeric_property.zig"), .target = target, .optimize = optimize });
+    gap0922_test_mod.addImport("geode", root_mod);
+    gap0922_test_mod.link_libc = true;
+    const gap0922_tests = b.addTest(.{ .root_module = gap0922_test_mod });
+    const run_gap0922_tests = b.addRunArtifact(gap0922_tests);
+    shardDep(test_step, &run_gap0922_tests.step, 0, test_shard_loads, test_shard_index);
+    const gap0922_step = b.step("test-gap0922", "Run GAP-0922 fulltext numeric-property rejection regression");
+    gap0922_step.dependOn(&run_gap0922_tests.step);
+
     // GAP-0921: CAST semantic value validation — invalid value / unsupported
     // target / overflow raise typed errors instead of silent NULL.
     const gap0921_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_gap0921_cast_validation.zig"), .target = target, .optimize = optimize });

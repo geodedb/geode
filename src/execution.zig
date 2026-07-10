@@ -1607,6 +1607,16 @@ pub fn executeStatementWithContext(allocator: std.mem.Allocator, stmt: ast.State
                 }
             }
 
+            // GAP-0922: reject a fulltext index over an exclusively non-string
+            // property BEFORE writing the catalog row, so a rejected index
+            // never appears in SHOW INDEXES.
+            if (ci.index_type == .fulltext) {
+                fts_index_ops.validateTextProperty(graph_store.DEFAULT_GRAPH_NAME, ci.label, ci.properties) catch |err| switch (err) {
+                    fts_index_ops.Error.FulltextRequiresTextProperty => return error.FulltextRequiresTextProperty,
+                    else => return err,
+                };
+            }
+
             const index_info = IndexInfo{
                 .name = index_name,
                 .index_type = switch (ci.index_type) {
