@@ -2074,20 +2074,21 @@ dev-image-build-fips:
   script:
     - |
       set -e
-      echo "=== cross-compiling FIPS geode for x86_64-linux-gnu.2.34 (amd64) ==="
+      echo "=== cross-compiling FIPS geode for x86_64-linux-gnu.2.38 (amd64) ==="
       # Keep -Dtarget (dropping it broke the openssl C-import: `-Dtarget` is what
       # wires the -Dopenssl_path include dir into the cimport sysroot, so a bare
-      # native build fails with "'openssl/ssl.h' not found"). But PIN the glibc
-      # version to 2.34: the default `x86_64-linux-gnu` selects zig's bundled
-      # glibc stubs at an older version (< 2.34) whose libc.so does not export
-      # the `GLIBC_2.33/2.34`-versioned symbols (pthread_*, stat, dlopen) that
-      # the OpenSSL FIPS provider .so at /usr/local/ssl/lib64 references → every
-      # exe failed with `ld.lld: undefined reference … disallowed by
-      # --no-allow-shlib-undefined`. Targeting `.2.34` makes zig's synthetic
-      # libc export those version nodes so the provider .so links. The binary
-      # then needs glibc >= 2.34, satisfied by debian:bookworm-slim (glibc 2.36)
-      # in Dockerfile.devimage.fips.
-      zig build -Doptimize=ReleaseSafe -Dtarget=x86_64-linux-gnu.2.34 \
+      # native build fails with "'openssl/ssl.h' not found"). PIN the glibc
+      # version to the version the validated OpenSSL FIPS provider .so at
+      # /usr/local/ssl/lib64 was built against: it references versioned symbols
+      # up to `__isoc23_strtol@GLIBC_2.38` (the C23 strtol, new in glibc 2.38),
+      # plus pthread_*/stat/dlopen at 2.33/2.34. The default `x86_64-linux-gnu`
+      # (and .2.34) selects an older synthetic libc that doesn't export the 2.38
+      # node → `ld.lld: undefined reference … disallowed by
+      # --no-allow-shlib-undefined`. `.2.38` exports all those version nodes so
+      # the provider .so links. The binary then needs glibc >= 2.38 at runtime,
+      # which is why Dockerfile.devimage.fips bases on debian:trixie-slim (2.40),
+      # NOT bookworm-slim (2.36, which can't even load the provider .so).
+      zig build -Doptimize=ReleaseSafe -Dtarget=x86_64-linux-gnu.2.38 \
         -Dfips=true -Dopenssl_path=/usr/local/ssl --summary all
       mkdir -p dist/linux-fips-amd64
       cp zig-out/bin/geode dist/linux-fips-amd64/geode

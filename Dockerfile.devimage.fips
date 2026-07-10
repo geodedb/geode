@@ -6,7 +6,7 @@
 # `dev` — those belong to the standard (non-FIPS) dev image and releases.
 #
 # Like Dockerfile.devimage this copies a pre-cross-compiled FIPS binary
-# (zig -Dtarget=x86_64-linux-gnu -Dfips=true -Dopenssl_path=/usr/local/ssl,
+# (zig -Dtarget=x86_64-linux-gnu.2.38 -Dfips=true -Dopenssl_path=/usr/local/ssl,
 # ReleaseSafe) placed at dist/linux-fips-amd64/geode by dev-image-build-fips.
 #
 # Design constraint: the FIPS binary dynamically loads the validated OpenSSL
@@ -19,16 +19,23 @@
 # Stage 1: source the validated OpenSSL FIPS provider.
 FROM registry.gitlab.com/devnw/ci-catalog/zig-fips:0.16.0 AS fipsprov
 
-# Stage 2: runtime image
-FROM debian:bookworm-slim
+# Stage 2: runtime image.
+# MUST be glibc >= 2.38: the validated OpenSSL FIPS provider .so copied from the
+# zig-fips image references `__isoc23_strtol@GLIBC_2.38`, so it cannot even load
+# on bookworm-slim (glibc 2.36). debian:trixie-slim ships glibc 2.40. (This is
+# also why dev-image-build-fips targets x86_64-linux-gnu.2.38.)
+FROM debian:trixie-slim
 SHELL ["/bin/bash", "-o", "pipefail", "-c"]
 
 # Docker sets TARGETARCH; for FIPS this is always amd64.
 ARG TARGETARCH=amd64
 
+# NOTE: trixie renamed libssl3 -> libssl3t64 (the 64-bit time_t transition).
+# The app uses the validated provider under /usr/local/ssl, not this system
+# package, but keep it for any transitive openssl consumers.
 RUN apt-get update && apt-get install -y --no-install-recommends \
     ca-certificates \
-    libssl3 \
+    libssl3t64 \
     iproute2 \
     && rm -rf /var/lib/apt/lists/* \
     && useradd -m -u 10000 geode \
