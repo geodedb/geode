@@ -89,3 +89,16 @@ test "GAP-0924: bare GeometryFromText('bad') errors instead of returning NULL" {
         else => {},
     }
 }
+
+test "GAP-0924: a nested/composed bad-geometry error propagates (not swallowed to NULL)" {
+    var h = try Harness.init(testing.allocator);
+    defer h.deinit();
+
+    // The bare-call error must ALSO surface when GeometryFromText is nested as
+    // a function argument — the registry arg-eval used to swallow it to NULL,
+    // so ST_AsText(bad)/ST_Contains(bad, …) short-circuited the whole call to
+    // NULL instead of raising the error the bare call raises.
+    try testing.expectError(error.TypeMismatch, h.run("RETURN ST_AsText(GeometryFromText('POINT(banana)')) AS wkt"));
+    try testing.expectError(error.TypeMismatch, h.run("RETURN ST_AsText(GeometryFromText('POLYGON((0 0, 10 10, 10 0, 0 10, 0 0))')) AS g"));
+    try testing.expectError(error.TypeMismatch, h.run("RETURN ST_Contains(GeometryFromText('POLYGON((0 0, 10 10))'), ST_Point(5,5)) AS c"));
+}

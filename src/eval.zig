@@ -22,6 +22,33 @@ const value_types = @import("value_types.zig");
 // Phase 5 M5.2: Re-export EvalError from value_types module for backward compatibility
 pub const EvalError = value_types.EvalError;
 
+// CANARY: REQ=REQ-GAP-0924-ARG-ERROR-PROPAGATION; FEATURE="Eval"; ASPECT=NestedArgErrorPropagation; STATUS=TESTED; TEST=tests/test_gap0924_spatial_validation.zig; OWNER=eval; UPDATED=2026-07-10
+/// True for EvalErrors that represent a GENUINE invalid function argument and
+/// must propagate out of a nested call rather than collapse the whole call to
+/// NULL (the extended-registry arg-eval path). Mirrors the "genuine invalid
+/// input" set the func-result handler already re-raises. Benign errors are not
+/// listed, so NULL-propagation for those is preserved.
+fn isPropagatableEvalError(err: EvalError) bool {
+    return switch (err) {
+        EvalError.TypeMismatch,
+        EvalError.InvalidCast,
+        EvalError.UnsupportedCastTarget,
+        EvalError.IntegerOverflow,
+        EvalError.DivisionByZero,
+        EvalError.DecimalDivZero,
+        EvalError.DecimalOverflow,
+        EvalError.InvalidIpAddress,
+        EvalError.InvalidSubnet,
+        EvalError.InvalidMac,
+        EvalError.InvalidArgs,
+        EvalError.MissingParameter,
+        EvalError.TimeParse,
+        EvalError.OutOfMemory,
+        => true,
+        else => false,
+    };
+}
+
 // CANARY: REQ=REQ-M5.2-EVAL-REFACTOR-003; FEATURE="Circular Dependency Resolution"; ASPECT=ValueTypeReexport; STATUS=EXEMPT; OWNER=eval; UPDATED=2025-11-13
 // Phase 5 M5.2: Re-export Value from value_types module for backward compatibility
 pub const Value = value_types.Value;
@@ -998,7 +1025,18 @@ pub fn evalExpr(allocator: std.mem.Allocator, e: ast.Expr, env: Env) EvalError!V
                 }
 
                 for (call.args, 0..) |arg, i| {
-                    const arg_value = evalExpr(allocator, arg.*, env) catch {
+                    // GAP-0924 follow-up: a genuine validation error while
+                    // evaluating a function ARGUMENT must propagate, not be
+                    // swallowed to NULL. Otherwise a nested invalid value —
+                    // e.g. ST_AsText(GeometryFromText('POINT(banana)')) or
+                    // ST_Contains(GeometryFromText(<bowtie>), …) — silently
+                    // short-circuits the whole call to NULL instead of raising
+                    // the error the bare call now raises. Only the same
+                    // "genuine invalid input" error set the func-result handler
+                    // below propagates is re-raised; anything else (benign)
+                    // still collapses to NULL to preserve NULL-propagation.
+                    const arg_value = evalExpr(allocator, arg.*, env) catch |err| {
+                        if (isPropagatableEvalError(err)) return err;
                         break :blk_call .{ .Null = {} };
                     };
                     args[i] = valueToExtValue(allocator, arg_value) catch {
