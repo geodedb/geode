@@ -210,7 +210,7 @@ pub fn printHelp() void {
     std.debug.print("Usage: geode serve [OPTIONS]\n\n", .{});
     std.debug.print("Options:\n", .{});
     std.debug.print("  -c, --config <path>          Path to config file (YAML, TOML, or JSON)\n", .{});
-    std.debug.print("  --listen <addr:port>         Listen on QUIC/TLS (e.g., 0.0.0.0:3141)\n", .{});
+    std.debug.print("  --listen <addr:port>         Listen on QUIC/TLS (e.g., 0.0.0.0:3141). Also GEODE_PORT=<port> (binds 0.0.0.0:<port>)\n", .{});
     std.debug.print("  --listen-grpc <addr:port>    Listen on gRPC (e.g., 0.0.0.0:3142)\n", .{});
     std.debug.print("  --cert <path>                Path to TLS certificate (default: auto-generate)\n", .{});
     std.debug.print("  --key <path>                 Path to TLS private key (default: auto-generate)\n", .{});
@@ -410,6 +410,26 @@ pub fn parseArgsFromSlice(allocator: std.mem.Allocator, args: []const []const u8
         } else if (std.mem.eql(u8, arg, "--config") or std.mem.eql(u8, arg, "-c")) {
             // Already processed in first pass, skip value
             if (ai + 1 < args.len) ai += 1;
+        }
+    }
+
+    // CANARY: REQ=REQ-GAP-0929-GEODE-PORT-ENV; FEATURE="Config"; ASPECT=PortEnvVar; STATUS=TESTED; TEST=tests/test_gap0929_geode_port.zig; OWNER=config; UPDATED=2026-07-10
+    // GAP-0929: GEODE_PORT used to have zero effect — only --listen set the
+    // bind address. Honor it now (precedence: --listen flag > GEODE_PORT env >
+    // default 3141). An out-of-range / non-numeric value is rejected loudly
+    // rather than silently ignored.
+    if (config.listen_quic == null and config.listen_grpc == null) {
+        if (posixGetenv("GEODE_PORT")) |port_str| {
+            const port = std.fmt.parseInt(u16, port_str, 10) catch {
+                std.debug.print("[config] GEODE_PORT='{s}' is not a valid TCP port (1-65535); refusing to start\n", .{port_str});
+                return error.InvalidGeodePort;
+            };
+            if (port == 0) {
+                std.debug.print("[config] GEODE_PORT=0 is not a valid TCP port; refusing to start\n", .{});
+                return error.InvalidGeodePort;
+            }
+            config.listen_quic = try std.fmt.allocPrint(allocator, "0.0.0.0:{d}", .{port});
+            config._allocated_listen_quic = true;
         }
     }
 

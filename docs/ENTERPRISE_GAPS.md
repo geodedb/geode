@@ -471,7 +471,12 @@ than raising an error. Each is a self-activating limitation-pin:
 # Low (operability / config / UX)
 
 ## GAP-0927 — `--idle-timeout` decoupled from the per-connection idle reap
-**Severity:** Low · **Status:** OPEN · **Area:** Transport / connection pool · **Found:** 2026-07-10
+**Severity:** Low · **Status:** FIXED (2026-07-10) · **Area:** Transport / connection pool · **Found:** 2026-07-10
+**Fix:** `config.idle_timeout_ms` is now applied to the per-connection reap
+deadline at startup via `BufferedProtoReader.setIdleReapDeadlineMs` (was a
+hardcoded 300000ms const), so an abrupt client SIGKILL reclaims its slot on
+the flag's schedule. Regression: `zig build test-gap0927`
+(inline `gap0927_idle_reap_deadline_wired_to_config`).
 **Symptom:** the `--idle-timeout` flag only feeds the QUIC transport's
 `max_idle_timeout_ms`; the per-connection idle-reap deadline is a hardcoded
 300000 ms (`src/…/quic_connection_handler.zig:1720`), so an abrupt client SIGKILL
@@ -479,7 +484,15 @@ does not reclaim its connection slot on the flag's schedule.
 **Test:** `connection_pool_rejection.yml`.
 
 ## GAP-0928 — over-cap connections have no explicit `POOL_EXHAUSTED` signal
-**Severity:** Low · **Status:** OPEN · **Area:** Transport / connection pool · **Found:** 2026-07-10
+**Severity:** Low · **Status:** FIXED (2026-07-10) · **Area:** Transport / connection pool · **Found:** 2026-07-10
+**Fix:** the accept loop now emits a rate-limited `POOL_EXHAUSTED` server-side
+diagnostic (log + connection/max counts) while parked at `--max-connections`
+capacity, so pool exhaustion is observable instead of invisible (the operator
+previously only saw the client's own `--timeout` fire). The client connection
+still isn't accepted while at capacity (the cap is preserved — a GQL error
+frame would require consuming a slot), but the condition is now diagnosable.
+`shouldLogPoolExhausted` gates the log to once per 5s window. Regression:
+`zig build test-gap0927` (inline `gap0928_pool_exhausted_diagnostic_rate_limit`).
 **Symptom:** with `--max-connections N`, the N+1-th connection is not rejected
 with a server-side admission error; the QUIC accept loop futex-parks on
 backpressure (`src/server/main.zig:3090`) and the operator only observes the
@@ -488,7 +501,13 @@ be more diagnosable.
 **Test:** `connection_pool_rejection.yml`.
 
 ## GAP-0929 — `GEODE_PORT` environment variable is inert
-**Severity:** Low · **Status:** OPEN · **Area:** Config · **Found:** 2026-07-10
+**Severity:** Low · **Status:** FIXED (2026-07-10) · **Area:** Config · **Found:** 2026-07-10
+**Fix:** `GEODE_PORT` now sets the bind address (`0.0.0.0:<port>`) when
+`--listen` is absent (precedence: `--listen` flag > `GEODE_PORT` env > default
+3141), and an out-of-range / non-numeric value is refused loudly
+(`error.InvalidGeodePort`) rather than silently ignored. Documented in
+`--help`. Regression: `zig build test-gap0929`
+(`tests/test_gap0929_geode_port.zig`).
 **Symptom:** `GEODE_PORT` has zero references in `src/` — only `--listen` sets the
 bind address. Setting `GEODE_PORT` silently has no effect; it should either bind
 or be rejected/documented.

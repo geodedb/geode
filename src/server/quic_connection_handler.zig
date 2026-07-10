@@ -1516,7 +1516,7 @@ fn writeServerPacket(allocator: std.mem.Allocator, stream: *quic_transport.QuicS
 
 // CANARY: REQ=REQ-PERF-QUIC-READLINE-001; FEATURE="BufferedProtoReader"; ASPECT=TransportHotPath; STATUS=TESTED; TEST=tests/test_gap0514_repl_dispatch.zig; OWNER=wire; UPDATED=2026-06-11
 /// Buffered Protobuf reader that handles Length-Prefixed messages.
-const BufferedProtoReader = struct {
+pub const BufferedProtoReader = struct {
     allocator: std.mem.Allocator,
     transport: *quic_transport.QuicTransport,
     stream: *quic_transport.QuicStream,
@@ -1717,14 +1717,36 @@ const BufferedProtoReader = struct {
     // CONTINUOUS idleness regardless of how long each park lasts, instead of
     // mis-scaling with the park duration. 300s matches the QUIC idle-timeout
     // intent for reaping lingering client connections.
-    pub const proto_reader_idle_reap_deadline_ms: i64 = 300_000; // ~300s wall-clock idle reap deadline
+    pub const proto_reader_idle_reap_deadline_ms: i64 = 300_000; // ~300s default wall-clock idle reap deadline
 
-    /// Pure reap predicate: given how long a connection has been idle (no
-    /// readable bytes, only WouldBlock), decide whether to reap it. Takes the
-    /// elapsed time as a parameter so it is deterministic and unit-testable —
-    /// it must NOT read the clock itself.
+    // CANARY: REQ=REQ-GAP-0927-IDLE-TIMEOUT-REAP-WIRING; FEATURE="ConnectionPool"; ASPECT=IdleReapDeadline; STATUS=TESTED; TEST=tests/test_gap0927_idle_reap.zig; OWNER=transport; UPDATED=2026-07-10
+    // GAP-0927: the per-connection idle-reap deadline used to be the hardcoded
+    // 300000ms const, DECOUPLED from --idle-timeout (which only fed the QUIC
+    // transport's max_idle_timeout_ms). It is now a runtime value set from
+    // config.idle_timeout_ms at startup (see setIdleReapDeadlineMs), so an
+    // abrupt client SIGKILL reclaims its slot on the operator's schedule.
+    var g_idle_reap_deadline_ms: std.atomic.Value(i64) = std.atomic.Value(i64).init(proto_reader_idle_reap_deadline_ms);
+
+    /// GAP-0927: set the per-connection idle-reap deadline (ms). A value <= 0
+    /// keeps the default. Called once at server startup from config.
+    pub fn setIdleReapDeadlineMs(ms: i64) void {
+        if (ms > 0) g_idle_reap_deadline_ms.store(ms, .release);
+    }
+
+    pub fn getIdleReapDeadlineMs() i64 {
+        return g_idle_reap_deadline_ms.load(.acquire);
+    }
+
+    /// Pure reap predicate against an EXPLICIT deadline — deterministic and
+    /// unit-testable (reads neither the clock nor global state).
+    pub fn shouldReapIdleConnectionWith(elapsed_idle_ms: i64, deadline_ms: i64) bool {
+        return elapsed_idle_ms >= deadline_ms;
+    }
+
+    /// Reap predicate against the configured runtime deadline. Takes the
+    /// elapsed idle time as a parameter so it never reads the clock itself.
     pub fn shouldReapIdleConnection(elapsed_idle_ms: i64) bool {
-        return elapsed_idle_ms >= proto_reader_idle_reap_deadline_ms;
+        return shouldReapIdleConnectionWith(elapsed_idle_ms, getIdleReapDeadlineMs());
     }
 
     // Reads the next length-prefixed message.
@@ -8998,4 +9020,28 @@ test "proto_reader_idle_connection_reap_deadline_regression" {
     // deadline constant MUST be well under 30 minutes (1,800,000ms).
     try std.testing.expect(BufferedProtoReader.shouldReapIdleConnection(600 * second_ms));
     try std.testing.expect(BufferedProtoReader.proto_reader_idle_reap_deadline_ms < 1_800_000);
+}
+
+// GAP-0927: the per-connection reap deadline is now wired to --idle-timeout
+// (config.idle_timeout_ms) instead of the hardcoded 300000ms const.
+test "gap0927_idle_reap_deadline_wired_to_config" {
+    const R = BufferedProtoReader;
+    // Default is the 300s const until a config value is applied.
+    try std.testing.expectEqual(R.proto_reader_idle_reap_deadline_ms, R.getIdleReapDeadlineMs());
+
+    // Applying a shorter --idle-timeout tightens the reap deadline: a 20s-idle
+    // connection is now reaped under a 10s deadline (would NOT be under 300s).
+    R.setIdleReapDeadlineMs(10_000);
+    defer R.setIdleReapDeadlineMs(R.proto_reader_idle_reap_deadline_ms); // restore
+    try std.testing.expectEqual(@as(i64, 10_000), R.getIdleReapDeadlineMs());
+    try std.testing.expect(R.shouldReapIdleConnection(20_000));
+    try std.testing.expect(!R.shouldReapIdleConnection(5_000));
+
+    // A non-positive value is ignored (keeps the previous deadline).
+    R.setIdleReapDeadlineMs(0);
+    try std.testing.expectEqual(@as(i64, 10_000), R.getIdleReapDeadlineMs());
+
+    // The pure explicit-deadline predicate is independent of global state.
+    try std.testing.expect(R.shouldReapIdleConnectionWith(100, 50));
+    try std.testing.expect(!R.shouldReapIdleConnectionWith(40, 50));
 }

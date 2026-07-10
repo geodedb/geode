@@ -12,6 +12,29 @@ fn compat_milliTimestamp() i64 {
     }
     return @as(i64, ts.sec) * 1000 + @divTrunc(@as(i64, ts.nsec), 1_000_000);
 }
+
+// CANARY: REQ=REQ-GAP-0928-POOL-EXHAUSTED-DIAGNOSTIC; FEATURE="ConnectionPool"; ASPECT=RateLimitPredicate; STATUS=TESTED; TEST=tests/test_gap0928_pool_exhausted.zig; OWNER=transport; UPDATED=2026-07-10
+/// GAP-0928: rate-limit the POOL_EXHAUSTED diagnostic to at most once per
+/// `pool_exhausted_log_window_ms` while the pool stays at capacity. Pure and
+/// unit-testable — it reads no clock. `last_log_ms == 0` means "never logged"
+/// (always log the first time). Emits when the window has elapsed.
+pub const pool_exhausted_log_window_ms: i64 = 5_000;
+pub fn shouldLogPoolExhausted(last_log_ms: i64, now_ms: i64) bool {
+    if (last_log_ms == 0) return true;
+    return (now_ms - last_log_ms) >= pool_exhausted_log_window_ms;
+}
+
+test "gap0928_pool_exhausted_diagnostic_rate_limit" {
+    // First time (never logged) always logs.
+    try std.testing.expect(shouldLogPoolExhausted(0, 1_000));
+    // Within the window: suppressed.
+    try std.testing.expect(!shouldLogPoolExhausted(1_000, 1_000));
+    try std.testing.expect(!shouldLogPoolExhausted(1_000, 1_000 + pool_exhausted_log_window_ms - 1));
+    // At/after the window: logs again.
+    try std.testing.expect(shouldLogPoolExhausted(1_000, 1_000 + pool_exhausted_log_window_ms));
+    try std.testing.expect(shouldLogPoolExhausted(1_000, 1_000 + pool_exhausted_log_window_ms + 500));
+}
+
 fn compat_timestamp() i64 {
     var ts: std.posix.timespec = .{ .sec = 0, .nsec = 0 };
     if (comptime @import("builtin").os.tag == .linux) {
@@ -1961,6 +1984,9 @@ pub fn main() !void {
             .key_path = key_path,
             .idle_timeout_ms = config.idle_timeout_ms,
         };
+        // GAP-0927: wire --idle-timeout into the per-connection idle-reap
+        // deadline too (previously hardcoded 300000ms, decoupled from the flag).
+        quic_connection_handler.BufferedProtoReader.setIdleReapDeadlineMs(@intCast(config.idle_timeout_ms));
         // CANARY: REQ=REQ-QUIC-HC-021; FEATURE="HighFanoutConnectionLimit"; ASPECT=ServerEnv; STATUS=TESTED; TEST=test_quic_condition_timedwait_cadence; OWNER=transport; UPDATED=2026-05-26
         quic_init_cfg.max_connections = if (config.max_connections > 0)
             config.max_connections
@@ -3088,6 +3114,15 @@ pub fn main() !void {
         posix.sigaction(posix.SIG.TERM, &sa, null);
         posix.sigaction(posix.SIG.INT, &sa, null);
 
+        // CANARY: REQ=REQ-GAP-0928-POOL-EXHAUSTED-DIAGNOSTIC; FEATURE="ConnectionPool"; ASPECT=AdmissionDiagnostic; STATUS=TESTED; TEST=tests/test_gap0928_pool_exhausted.zig; OWNER=transport; UPDATED=2026-07-10
+        // GAP-0928: at `--max-connections` capacity the accept loop parks and
+        // the N+1-th connection got NO server-side signal — the operator only
+        // saw the client's own --timeout fire (pool exhaustion was invisible
+        // server-side). Emit a rate-limited POOL_EXHAUSTED diagnostic so the
+        // condition is observable. `shouldLogPoolExhausted` gates it to at most
+        // once per window while continuously at capacity.
+        var last_pool_exhausted_log_ms: i64 = 0;
+
         // Production mode: accept connections in a loop and dispatch to thread pool.
         // The dedicated poll thread handles packet delivery — this loop only checks
         // for completed handshakes via tryAccept().
@@ -3108,6 +3143,15 @@ pub fn main() !void {
             // iteration; futexWaitTimeout returns void on signal, value-mismatch,
             // timeout, OR spurious wake, so the caller MUST re-check.
             if (transport.getConnectionCount() >= transport.config.max_connections) {
+                // GAP-0928: rate-limited pool-exhausted diagnostic.
+                const now_ms = compat_milliTimestamp();
+                if (shouldLogPoolExhausted(last_pool_exhausted_log_ms, now_ms)) {
+                    last_pool_exhausted_log_ms = now_ms;
+                    log.warn("POOL_EXHAUSTED: connection pool at capacity — new connections are parked until a slot frees", &.{
+                        Attr.int("connections", @intCast(transport.getConnectionCount())),
+                        Attr.int("max_connections", @intCast(transport.config.max_connections)),
+                    });
+                }
                 const gen_at_park = transport.connection_slot_freed_gen.load(.acquire);
                 // Re-check after the gen snapshot to close the gap where the
                 // producer increments between our count check above and the

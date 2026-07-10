@@ -8995,6 +8995,49 @@ pub fn build(b: *std.Build) void {
     const gap0848_step = b.step("test-gap0848", "Run GAP-0848 strict-tenancy auto-default in multi-tenant mode regression");
     gap0848_step.dependOn(&run_gap0848_tests.step);
 
+    // GAP-0927/GAP-0928: connection-pool operability — idle-reap deadline
+    // wired to --idle-timeout; rate-limited POOL_EXHAUSTED diagnostic. The
+    // pure predicates are inline tests in server/main.zig +
+    // quic_connection_handler.zig, run via a src/-rooted module (same pattern
+    // as the proto-reap step) that copies geode_exe's fully-wired imports.
+    const conn_pool_diag_mod = b.createModule(.{
+        .root_source_file = b.path("src/conn_pool_diag_test_root.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+    {
+        var it = geode_exe.root_module.import_table.iterator();
+        while (it.next()) |entry| {
+            conn_pool_diag_mod.addImport(entry.key_ptr.*, entry.value_ptr.*);
+        }
+    }
+    conn_pool_diag_mod.link_libc = true;
+    if (enable_openssl) {
+        conn_pool_diag_mod.linkSystemLibrary("ssl", .{});
+        conn_pool_diag_mod.linkSystemLibrary("crypto", .{});
+    }
+    if (target.result.os.tag == .linux and (is_native or enable_openssl)) {
+        conn_pool_diag_mod.linkSystemLibrary("dl", .{});
+    }
+    conn_pool_diag_mod.addOptions("openssl_config", openssl_options);
+    const conn_pool_diag_tests = b.addTest(.{
+        .root_module = conn_pool_diag_mod,
+        .filters = &.{ "gap0927_idle_reap_deadline_wired_to_config", "gap0928_pool_exhausted_diagnostic_rate_limit" },
+    });
+    const run_conn_pool_diag_tests = b.addRunArtifact(conn_pool_diag_tests);
+    const gap0927_step = b.step("test-gap0927", "Run GAP-0927/GAP-0928 connection-pool operability regressions (idle-reap wiring + pool-exhausted diagnostic)");
+    gap0927_step.dependOn(&run_conn_pool_diag_tests.step);
+
+    // GAP-0929: GEODE_PORT env var now sets the bind address (was inert).
+    const gap0929_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_gap0929_geode_port.zig"), .target = target, .optimize = optimize });
+    gap0929_test_mod.addImport("cli_args", cli_args_mod);
+    gap0929_test_mod.link_libc = true;
+    const gap0929_tests = b.addTest(.{ .root_module = gap0929_test_mod });
+    const run_gap0929_tests = b.addRunArtifact(gap0929_tests);
+    shardDep(test_step, &run_gap0929_tests.step, 0, test_shard_loads, test_shard_index);
+    const gap0929_step = b.step("test-gap0929", "Run GAP-0929 GEODE_PORT env var binding regression");
+    gap0929_step.dependOn(&run_gap0929_tests.step);
+
     // GAP-0925: decimal add/sub/mul enforce a consistent 38-digit SQL DECIMAL
     // precision ceiling (decimal_add previously allowed a 39-digit result).
     const gap0925_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_gap0925_decimal_precision.zig"), .target = target, .optimize = optimize });
