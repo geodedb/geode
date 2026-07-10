@@ -8995,6 +8995,17 @@ pub fn build(b: *std.Build) void {
     const gap0848_step = b.step("test-gap0848", "Run GAP-0848 strict-tenancy auto-default in multi-tenant mode regression");
     gap0848_step.dependOn(&run_gap0848_tests.step);
 
+    // GAP-0914/GAP-0916: aggregation semantics — GROUP BY on an unresolvable
+    // identifier must error (not collapse to one null group); sum()/avg()
+    // over a non-numeric column must raise TypeMismatch (not 0 / NULL).
+    const gap0914_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_gap0914_0916_aggregation_semantics.zig"), .target = target, .optimize = optimize });
+    gap0914_test_mod.addImport("geode", root_mod);
+    const gap0914_tests = b.addTest(.{ .root_module = gap0914_test_mod });
+    const run_gap0914_tests = b.addRunArtifact(gap0914_tests);
+    shardDep(test_step, &run_gap0914_tests.step, 0, test_shard_loads, test_shard_index);
+    const gap0914_step = b.step("test-gap0914", "Run GAP-0914/GAP-0916 aggregation semantics regressions (unknown GROUP BY key, sum/avg type errors)");
+    gap0914_step.dependOn(&run_gap0914_tests.step);
+
     // GAP-0911: GPS policy DDL (CREATE/DROP/ALTER POLICY) authorization —
     // admin-only under the same RBAC bar as mutating geode.auth.* procedures.
     const gap0911_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_gap0911_policy_ddl_authz.zig"), .target = target, .optimize = optimize });

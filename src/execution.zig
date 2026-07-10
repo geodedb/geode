@@ -2831,6 +2831,82 @@ pub fn validateGroupBy(ret: ast.ReturnClause, group_by: ?ast.GroupBy) !void {
     }
 }
 
+// CANARY: REQ=REQ-GAP-0914-GROUPBY-UNKNOWN-KEY; FEATURE="Aggregation"; ASPECT=GroupKeyResolution; STATUS=TESTED; TEST=tests/test_gap0914_0916_aggregation_semantics.zig; OWNER=execution; UPDATED=2026-07-10
+/// GAP-0914: a GROUP BY key that resolves to nothing used to silently
+/// evaluate to NULL for every row, collapsing the result into a single null
+/// group — a silent wrong result. Validate that each identifier-shaped key
+/// resolves to a RETURN alias, a pattern/path variable, a WITH/LET/UNWIND
+/// binding, or a parameter; reject unresolvable keys with
+/// error.UnknownGroupKey (SQLSTATE 42703).
+pub fn validateGroupByResolvable(q: ast.Query) !void {
+    const gb = q.group_by orelse return;
+    for (gb.keys) |key_expr| {
+        switch (key_expr) {
+            .Ident => |id| if (!groupKeyNameResolves(q, id.orig)) return error.UnknownGroupKey,
+            .Member => |m| {
+                if (m.target.* == .Ident) {
+                    if (!groupKeyNameResolves(q, m.target.Ident.orig)) return error.UnknownGroupKey;
+                }
+            },
+            // Complex expressions are left to evaluation (they may reference
+            // computed context this static pass cannot see).
+            else => {},
+        }
+    }
+}
+
+fn groupKeyNameResolves(q: ast.Query, name: []const u8) bool {
+    for (q.ret.items) |item| {
+        if (item.alias) |a| {
+            if (std.ascii.eqlIgnoreCase(a, name)) return true;
+        }
+        // A bare `RETURN x ... GROUP BY x` (no alias) is also resolvable.
+        if (item.expr == .Ident and std.ascii.eqlIgnoreCase(item.expr.Ident.orig, name)) return true;
+    }
+    if (q.path_variable) |pv| {
+        if (std.ascii.eqlIgnoreCase(pv, name)) return true;
+    }
+    for (q.match.chains) |chain| {
+        if (chain.name) |cn| {
+            if (std.ascii.eqlIgnoreCase(cn, name)) return true;
+        }
+        if (chain.head) |h| {
+            if (h.name) |hn| {
+                if (std.ascii.eqlIgnoreCase(hn, name)) return true;
+            }
+        }
+        for (chain.hops) |hop| {
+            if (hop.left.name) |n2| {
+                if (std.ascii.eqlIgnoreCase(n2, name)) return true;
+            }
+            if (hop.rel.name) |n2| {
+                if (std.ascii.eqlIgnoreCase(n2, name)) return true;
+            }
+            if (hop.right.name) |n2| {
+                if (std.ascii.eqlIgnoreCase(n2, name)) return true;
+            }
+        }
+    }
+    if (q.unwind_clause) |uc| {
+        if (std.ascii.eqlIgnoreCase(uc.variable, name)) return true;
+    }
+    for (q.let_bindings) |lb| {
+        if (std.ascii.eqlIgnoreCase(lb.variable, name)) return true;
+    }
+    for (q.inline_let_bindings) |lb| {
+        if (std.ascii.eqlIgnoreCase(lb.variable, name)) return true;
+    }
+    if (q.with_clause) |wc| {
+        for (wc.items) |item| {
+            if (item.alias) |a| {
+                if (std.ascii.eqlIgnoreCase(a, name)) return true;
+            }
+            if (item.expr == .Ident and std.ascii.eqlIgnoreCase(item.expr.Ident.orig, name)) return true;
+        }
+    }
+    return false;
+}
+
 // Execute a chain of queries linked by WITH clauses
 // The first query's results become bindings for the next query
 pub fn allocateColumnStrings(allocator: std.mem.Allocator, strings: []const []const u8) !struct { columns: [][]const u8, buffer: []u8 } {
@@ -2926,6 +3002,9 @@ pub fn computeGroupAggregation(allocator: std.mem.Allocator, expr: ast.Expr, gro
                     has_float = true;
                     has_value = true;
                 },
+                // GAP-0916: non-numeric input to sum() is a type error, not a
+                // silent skip.
+                .Str, .Bool => return error.TypeMismatch,
                 else => {},
             }
         }
@@ -2969,6 +3048,9 @@ pub fn computeGroupAggregation(allocator: std.mem.Allocator, expr: ast.Expr, gro
                     has_float = true;
                     count += 1;
                 },
+                // GAP-0916: non-numeric input to avg() is a type error, not a
+                // silent NULL.
+                .Str, .Bool => return error.TypeMismatch,
                 else => {},
             }
         }

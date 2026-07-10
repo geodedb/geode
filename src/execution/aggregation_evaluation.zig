@@ -273,6 +273,10 @@ pub fn evaluateGroupAggregation(allocator: std.mem.Allocator, expr: ast.Expr, no
                                         has_float = true;
                                         const decimal_float = @as(f64, @floatFromInt(val.Decimal.coeff)) / std.math.pow(f64, 10, @as(f64, @floatFromInt(val.Decimal.scale)));
                                         sum_float += decimal_float;
+                                    } else if (val == .String or val == .Bool) {
+                                        // GAP-0916: non-numeric input to sum() is a type
+                                        // error, not a silent skip (which returned 0).
+                                        return error.TypeMismatch;
                                     }
                                 }
                             }
@@ -349,6 +353,10 @@ pub fn evaluateGroupAggregation(allocator: std.mem.Allocator, expr: ast.Expr, no
                                     if (getPropertyAsFloat(val)) |f| {
                                         sum += f;
                                         count += 1;
+                                    } else if (val == .String or val == .Bool) {
+                                        // GAP-0916: non-numeric input to avg() is a type
+                                        // error, not a silent NULL.
+                                        return error.TypeMismatch;
                                     }
                                 }
                             }
@@ -757,6 +765,8 @@ pub fn computeBindingGroupAggregation(allocator: std.mem.Allocator, expr: ast.Ex
                                         sum_float += @floatFromInt(ext.Int);
                                     }
                                 },
+                                // GAP-0916: non-numeric input to sum() is a type error.
+                                .Str, .Bool => return error.TypeMismatch,
                                 else => {},
                             }
                         }
@@ -788,6 +798,8 @@ pub fn computeBindingGroupAggregation(allocator: std.mem.Allocator, expr: ast.Ex
                                     sum += decimal_float;
                                     count += 1;
                                 },
+                                // GAP-0916: non-numeric input to avg() is a type error.
+                                .Str, .Bool => return error.TypeMismatch,
                                 else => {},
                             }
                         }

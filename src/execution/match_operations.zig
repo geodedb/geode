@@ -1172,6 +1172,13 @@ fn propToF64(pv: graph_store.PropertyValue) ?f64 {
         .Int => |i| @as(f64, @floatFromInt(i)),
         .Float => |f| f,
         .Decimal => |d| @as(f64, @floatFromInt(d.coeff)) / std.math.pow(f64, 10, @as(f64, @floatFromInt(d.scale))),
+        // GAP-0916: numeric ExtValues participate in aggregation like the
+        // grouped slow path (aggregation_evaluation) already does.
+        .ExtValue => |ev| switch (ev) {
+            .Int => |i| @as(f64, @floatFromInt(i)),
+            .Decimal => |d| @as(f64, @floatFromInt(d.coeff)) / std.math.pow(f64, 10, @as(f64, @floatFromInt(d.scale))),
+            else => null,
+        },
         else => null,
     };
 }
@@ -1180,6 +1187,10 @@ fn propToF64(pv: graph_store.PropertyValue) ?f64 {
 fn propToI64(pv: graph_store.PropertyValue) ?i64 {
     return switch (pv) {
         .Int => |i| i,
+        .ExtValue => |ev| switch (ev) {
+            .Int => |i| i,
+            else => null,
+        },
         else => null,
     };
 }
@@ -1412,7 +1423,14 @@ pub fn propertyAggregateFastPath(
                     if (!comparePvLit(w_val, p.op, p.lit)) continue;
                 }
                 const t_val = prop_store.getNodeProperty(node_id, target_key) orelse continue;
-                const maybe_f = propToF64(t_val) orelse continue; // skip non-numeric
+                const maybe_f = propToF64(t_val) orelse {
+                    // GAP-0916: a present non-numeric value is a type error for
+                    // sum/avg (the silent skip made sum return 0 and avg NULL).
+                    // Nulls are skipped per standard semantics; min/max keep
+                    // the historical skip (different comparison semantics).
+                    if ((kind == .sum or kind == .avg) and t_val != .Null) return error.TypeMismatch;
+                    continue;
+                };
                 acc.update(propToI64(t_val), maybe_f);
             }
         }
@@ -1447,7 +1465,11 @@ pub fn propertyAggregateFastPath(
                 .string => |s| allocator.free(s),
                 else => {},
             };
-            const maybe_f = storagePropToF64(t_val) orelse continue; // skip non-numeric
+            const maybe_f = storagePropToF64(t_val) orelse {
+                // GAP-0916: see the resident branch above.
+                if ((kind == .sum or kind == .avg) and t_val != .null) return error.TypeMismatch;
+                continue;
+            };
             acc.update(storagePropToI64(t_val), maybe_f);
         }
     }

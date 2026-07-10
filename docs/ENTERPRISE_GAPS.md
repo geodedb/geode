@@ -214,7 +214,12 @@ counts. The non-aggregated `RETURN p` form respects the filter correctly.
 **Test:** `graph_algorithm_edge_cases.yml` (before/after/control triad).
 
 ## GAP-0914 — GROUP BY on an unresolvable identifier collapses to one null group
-**Severity:** Critical · **Status:** OPEN · **Area:** Query / aggregation · **Found:** 2026-07-10
+**Severity:** Critical · **Status:** FIXED (2026-07-10) · **Area:** Query / aggregation · **Found:** 2026-07-10
+**Fix:** `validateGroupByResolvable` (execution.zig, called next to
+`validateGroupBy`) rejects identifier-shaped GROUP BY keys that resolve to no
+RETURN alias, pattern/path variable, or WITH/LET/UNWIND binding with
+`error.UnknownGroupKey` (SQLSTATE 42703). Regression:
+`zig build test-gap0914` (`tests/test_gap0914_0916_aggregation_semantics.zig`).
 **Symptom:** `RETURN n.cat AS s, count(*) AS c GROUP BY nosuch` (unresolvable
 group key) silently collapses every row into a single null group instead of
 erroring — a silent wrong result.
@@ -237,7 +242,17 @@ Distinct from the graceful-path fix in commit `9a255a83`.
 via a label-less oracle).
 
 ## GAP-0916 — `sum()` of a string column silently returns 0
-**Severity:** Critical · **Status:** OPEN · **Area:** Query / aggregation · **Found:** 2026-07-10
+**Severity:** Critical · **Status:** FIXED (2026-07-10) · **Area:** Query / aggregation · **Found:** 2026-07-10
+**Fix:** every sum()/avg() path (single-aggregate fast path in
+match_operations — both resident and engine-direct branches — the grouped
+node/binding paths in aggregation_evaluation, and the WITH-path
+computeGroupAggregation in execution.zig) now raises
+`EvalError.TypeMismatch` for present non-numeric inputs instead of silently
+skipping them (sum returned 0, avg NULL). NULL/missing values are still
+skipped per standard semantics; min/max keep their defined string ordering.
+Numeric ExtValues now aggregate in the fast path (previously skipped).
+Regression: `zig build test-gap0914`
+(`tests/test_gap0914_0916_aggregation_semantics.zig`).
 **Symptom:** `sum(<string column>)` silently returns `0` (wrong numeric data),
 while `avg(<same column>)` returns `NULL` — inconsistent, and neither raises a
 type error.

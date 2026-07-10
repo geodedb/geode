@@ -118,6 +118,9 @@ fn freeParamValue(allocator: std.mem.Allocator, value: value_types.Value) void {
 pub fn mapError(err: anyerror) ErrorInfo {
     return switch (err) {
         error.GroupingError => .{ .code = "42000", .message = "grouping error: non-aggregated expression not in GROUP BY" },
+        // GAP-0914: a GROUP BY key that resolves to no alias, variable, or
+        // binding is rejected instead of collapsing rows into one null group.
+        error.UnknownGroupKey => .{ .code = "42703", .message = "GROUP BY key does not resolve to any RETURN alias, variable, or binding" },
         error.UnorderedPagination => .{ .code = "US001", .message = "OFFSET requires ORDER BY clause" },
         error.TransactionAlreadyActive => .{ .code = "25001", .message = "Transaction already active" },
         error.NoActiveTransaction => .{ .code = "25000", .message = "No active transaction" },

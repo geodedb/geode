@@ -1608,6 +1608,9 @@ pub fn executeQueryWithContext(allocator: std.mem.Allocator, q: ast.Query, conte
     const is_chaining_return = if (q.with_clause) |wc| q.ret.items.ptr == wc.items.ptr and q.ret.items.len == wc.items.len else false;
     if (!is_chaining_return) {
         try validateGroupBy(q.ret, q.group_by);
+        // GAP-0914: reject GROUP BY keys that resolve to nothing instead of
+        // silently collapsing every row into one null group.
+        try execution.validateGroupByResolvable(q);
     }
 
     // COUNT_PUSHDOWN: short-circuit unlabeled `MATCH (n) RETURN count(n)` /
