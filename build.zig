@@ -8995,6 +8995,16 @@ pub fn build(b: *std.Build) void {
     const gap0848_step = b.step("test-gap0848", "Run GAP-0848 strict-tenancy auto-default in multi-tenant mode regression");
     gap0848_step.dependOn(&run_gap0848_tests.step);
 
+    // GAP-0911: GPS policy DDL (CREATE/DROP/ALTER POLICY) authorization —
+    // admin-only under the same RBAC bar as mutating geode.auth.* procedures.
+    const gap0911_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_gap0911_policy_ddl_authz.zig"), .target = target, .optimize = optimize });
+    gap0911_test_mod.addImport("geode", root_mod);
+    const gap0911_tests = b.addTest(.{ .root_module = gap0911_test_mod });
+    const run_gap0911_tests = b.addRunArtifact(gap0911_tests);
+    shardDep(test_step, &run_gap0911_tests.step, 0, test_shard_loads, test_shard_index);
+    const gap0911_step = b.step("test-gap0911", "Run GAP-0911 policy DDL admin-only authorization regression");
+    gap0911_step.dependOn(&run_gap0911_tests.step);
+
     // GAP-0908/GAP-0909: startup fail-closed — unwritable audit sink must be
     // a clean typed refusal with no leaked allocation; a missing --data-dir
     // is created (mkdir -p) instead of crashing.

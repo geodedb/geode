@@ -166,7 +166,15 @@ reopen segfaults the server (map double-free / dangling pointer in result deinit
 avoids this query).
 
 ## GAP-0911 — non-admin can `CREATE POLICY` (authorization bypass)
-**Severity:** Critical · **Status:** OPEN · **Area:** Security / GPS · **Found:** 2026-07-10
+**Severity:** Critical · **Status:** FIXED (2026-07-10) · **Area:** Security / GPS · **Found:** 2026-07-10
+**Fix:** `requirePolicyDdlAdmin` gates all three policy-DDL dispatch arms
+(CREATE/DROP/ALTER POLICY) admin-only, the same RBAC bar as the mutating
+`geode.auth.*` procedures — non-admin → 42501 Unauthorized, no role →
+28000 Unauthenticated; emits the same authz-check otel metric; the
+auth-disabled single-tenant default is unchanged. Regression:
+`zig build test-gap0911` (`tests/test_gap0911_policy_ddl_authz.zig`).
+(The pre-existing CREATE GRAPH / CREATE INDEX dispatch-authz gaps noted in
+`gps_phase2_decide_comprehensive.yml` are tracked separately, not here.)
 **Symptom:** a readonly, unprivileged user with zero grants can `CREATE POLICY`
 and it persists (visible in `SHOW POLICIES`). A policy-injection /
 privilege-escalation vector.

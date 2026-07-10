@@ -983,6 +983,32 @@ pub fn checkPermission(context: ExecutionContext, permission: @import("security/
     }
 }
 
+// CANARY: REQ=REQ-GAP-0911-POLICY-DDL-AUTHZ; FEATURE="GPS Policy DDL"; ASPECT=Authorization; STATUS=TESTED; TEST=tests/test_gap0911_policy_ddl_authz.zig; OWNER=security; UPDATED=2026-07-10
+/// GAP-0911: GPS policy DDL (CREATE/DROP/ALTER POLICY) is admin-only — the
+/// same RBAC bar as the mutating geode.auth.* procedures (auth_dispatch).
+/// Before this gate the policy dispatch arms called the policy catalog with
+/// no authorization at all, letting a zero-grant readonly user inject or
+/// alter policies (a privilege-escalation vector).
+fn requirePolicyDdlAdmin(context: ExecutionContext) !void {
+    const user_mgmt = @import("security/user_management.zig");
+    if (!user_mgmt.isAuthEnabled()) return;
+    const om = @import("otel_metrics");
+    const otel_lib = @import("otel");
+    const t0 = otel_lib.internal.clock.unixNanoNow();
+    if (context.role == null) {
+        const d = @as(f64, @floatFromInt(otel_lib.internal.clock.unixNanoNow() - t0)) / 1_000_000_000.0;
+        om.recordAuthzCheck(.deny, .rbac, d);
+        return error.Unauthenticated;
+    }
+    if (context.role.? != .Admin) {
+        const d = @as(f64, @floatFromInt(otel_lib.internal.clock.unixNanoNow() - t0)) / 1_000_000_000.0;
+        om.recordAuthzCheck(.deny, .rbac, d);
+        return error.Unauthorized;
+    }
+    const d = @as(f64, @floatFromInt(otel_lib.internal.clock.unixNanoNow() - t0)) / 1_000_000_000.0;
+    om.recordAuthzCheck(.allow, .rbac, d);
+}
+
 pub fn executeProgramWithContext(allocator: std.mem.Allocator, program: *const ast.Program, context: ExecutionContext) !ExecutionResult {
     const prev_ctx = pushActiveContext(&context);
     defer popActiveContext(prev_ctx);
@@ -2151,6 +2177,9 @@ pub fn executeStatementWithContext(allocator: std.mem.Allocator, stmt: ast.State
         // Persistence to __geode_security is Task 4-5.
         // CANARY: REQ=REQ-GPS-DDL-001; FEATURE="GPS Policy DDL"; ASPECT=CreatePolicyExecution; STATUS=TESTED; TEST=tests/test_gps_policy_ddl_integration.zig; OWNER=security; UPDATED=2026-05-20
         .CreatePolicy => |cp_stmt| {
+            // GAP-0911: admin-only — fires before every other gate so an
+            // unauthorized caller learns nothing about cluster/catalog state.
+            try requirePolicyDdlAdmin(context);
             // Cluster fail-closed: policy DDL writes the per-node policy catalog
             // (+ __geode_security write-through) with no Raft slice — an ungated
             // CREATE POLICY enforces on ONE node only (security-relevant divergence).
@@ -2236,6 +2265,8 @@ pub fn executeStatementWithContext(allocator: std.mem.Allocator, stmt: ast.State
         },
         // CANARY: REQ=REQ-GPS-DDL-002; FEATURE="GPS Policy DDL"; ASPECT=DropPolicyExecution; STATUS=TESTED; TEST=tests/test_gps_policy_ddl_integration.zig; OWNER=security; UPDATED=2026-05-20
         .DropPolicy => |dp_stmt| {
+            // GAP-0911: admin-only (see .CreatePolicy).
+            try requirePolicyDdlAdmin(context);
             // Cluster fail-closed: see .CreatePolicy (GatePolicyDDL).
             try cluster_mod.gateUnreplicatedWrite();
             const policy_catalog_mod = @import("security/policy_catalog.zig");
@@ -2303,6 +2334,8 @@ pub fn executeStatementWithContext(allocator: std.mem.Allocator, stmt: ast.State
         },
         // CANARY: REQ=REQ-GPS-DDL-003; FEATURE="GPS ALTER POLICY DDL"; ASPECT=AlterPolicyExecution; STATUS=TESTED; TEST=tests/test_gps_alter_policy.zig; OWNER=security; UPDATED=2026-05-21
         .AlterPolicy => |ap_stmt| {
+            // GAP-0911: admin-only (see .CreatePolicy).
+            try requirePolicyDdlAdmin(context);
             // Cluster fail-closed: see .CreatePolicy (GatePolicyDDL).
             try cluster_mod.gateUnreplicatedWrite();
             const policy_catalog_mod = @import("security/policy_catalog.zig");
