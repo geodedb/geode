@@ -200,6 +200,10 @@ pub fn sortRowsEx(allocator: std.mem.Allocator, result: *ExecutionResult, order:
 
         fn getValueForKey(ctx: @This(), key: ast.OrderBy.OrderKey, row: []Value) Value {
             if (key.expr == .Int) {
+                // GAP-0904: a non-positive ordinal (ORDER BY 0) underflowed the
+                // usize cast and panicked. Treat it like the pre-existing
+                // out-of-range-high policy: sort as a NULL key.
+                if (key.expr.Int < 1) return .{ .Null = {} };
                 const col_idx = @as(usize, @intCast(key.expr.Int - 1));
                 if (col_idx < row.len) return row[col_idx];
                 return .{ .Null = {} };

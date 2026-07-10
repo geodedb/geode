@@ -278,18 +278,26 @@ pub const Interval = struct {
             const num = std.fmt.parseInt(i32, str[i..num_end], 10) catch return Date.Error.ParseError;
             const unit = str[num_end];
 
+            // GAP-0906: components accumulate with checked arithmetic — the
+            // unchecked forms panicked on overflow (e.g. P999999999Y, whose
+            // year count fits i32 but whose month total does not, or repeated
+            // units that overflow an accumulator). Overflow is reported as
+            // ParseError, the same class the 10-digit forms already produce.
             switch (unit) {
-                'Y' => months += num * 12,
+                'Y' => {
+                    const yr_months = std.math.mul(i32, num, 12) catch return Date.Error.ParseError;
+                    months = std.math.add(i32, months, yr_months) catch return Date.Error.ParseError;
+                },
                 'M' => {
                     if (in_time) {
-                        micros += @as(i64, num) * 60 * 1_000_000;
+                        micros = std.math.add(i64, micros, @as(i64, num) * 60 * 1_000_000) catch return Date.Error.ParseError;
                     } else {
-                        months += num;
+                        months = std.math.add(i32, months, num) catch return Date.Error.ParseError;
                     }
                 },
-                'D' => days += num,
-                'H' => micros += @as(i64, num) * 3600 * 1_000_000,
-                'S' => micros += @as(i64, num) * 1_000_000,
+                'D' => days = std.math.add(i32, days, num) catch return Date.Error.ParseError,
+                'H' => micros = std.math.add(i64, micros, @as(i64, num) * 3600 * 1_000_000) catch return Date.Error.ParseError,
+                'S' => micros = std.math.add(i64, micros, @as(i64, num) * 1_000_000) catch return Date.Error.ParseError,
                 else => return Date.Error.ParseError,
             }
 

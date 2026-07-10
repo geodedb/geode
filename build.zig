@@ -8995,6 +8995,43 @@ pub fn build(b: *std.Build) void {
     const gap0848_step = b.step("test-gap0848", "Run GAP-0848 strict-tenancy auto-default in multi-tenant mode regression");
     gap0848_step.dependOn(&run_gap0848_tests.step);
 
+    // GAP-0904: ORDER BY 0 (non-positive ordinal) integer underflow panic.
+    const gap0904_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_gap0904_order_by_ordinal.zig"), .target = target, .optimize = optimize });
+    gap0904_test_mod.addImport("geode", root_mod);
+    const gap0904_tests = b.addTest(.{ .root_module = gap0904_test_mod });
+    const run_gap0904_tests = b.addRunArtifact(gap0904_tests);
+    shardDep(test_step, &run_gap0904_tests.step, 0, test_shard_loads, test_shard_index);
+    const gap0904_step = b.step("test-gap0904", "Run GAP-0904 ORDER BY non-positive ordinal panic regression");
+    gap0904_step.dependOn(&run_gap0904_tests.step);
+
+    // GAP-0905: CAST(<huge-float> AS INTEGER) panic (parser float-literal i128
+    // conversion + Decimal->INTEGER unchecked @intCast).
+    const gap0905_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_gap0905_cast_float_overflow.zig"), .target = target, .optimize = optimize });
+    gap0905_test_mod.addImport("geode", root_mod);
+    const gap0905_tests = b.addTest(.{ .root_module = gap0905_test_mod });
+    const run_gap0905_tests = b.addRunArtifact(gap0905_tests);
+    shardDep(test_step, &run_gap0905_tests.step, 0, test_shard_loads, test_shard_index);
+    const gap0905_step = b.step("test-gap0905", "Run GAP-0905 huge float literal / CAST overflow panic regression");
+    gap0905_step.dependOn(&run_gap0905_tests.step);
+
+    // GAP-0906: Interval('P999999999Y') i32 multiply/accumulate overflow panic.
+    const gap0906_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_gap0906_interval_overflow.zig"), .target = target, .optimize = optimize });
+    gap0906_test_mod.addImport("geode", root_mod);
+    const gap0906_tests = b.addTest(.{ .root_module = gap0906_test_mod });
+    const run_gap0906_tests = b.addRunArtifact(gap0906_tests);
+    shardDep(test_step, &run_gap0906_tests.step, 0, test_shard_loads, test_shard_index);
+    const gap0906_step = b.step("test-gap0906", "Run GAP-0906 Interval component overflow panic regression");
+    gap0906_step.dependOn(&run_gap0906_tests.step);
+
+    // GAP-0907: MakeInterval(>i32, ...) unchecked @intCast panic.
+    const gap0907_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_gap0907_makeinterval_overflow.zig"), .target = target, .optimize = optimize });
+    gap0907_test_mod.addImport("geode", root_mod);
+    const gap0907_tests = b.addTest(.{ .root_module = gap0907_test_mod });
+    const run_gap0907_tests = b.addRunArtifact(gap0907_tests);
+    shardDep(test_step, &run_gap0907_tests.step, 0, test_shard_loads, test_shard_index);
+    const gap0907_step = b.step("test-gap0907", "Run GAP-0907 MakeInterval out-of-range argument panic regression");
+    gap0907_step.dependOn(&run_gap0907_tests.step);
+
     // GPS Phase 4 (Task 4-6): policy-catalog evaluation in decide().
     const gps_policy_evaluation_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_gps_policy_evaluation.zig"), .target = target, .optimize = optimize });
     gps_policy_evaluation_test_mod.addImport("geode", root_mod);

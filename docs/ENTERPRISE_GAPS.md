@@ -71,7 +71,10 @@ identical statement 4–5 times.
 repeat-crash is documented, not exercised).
 
 ## GAP-0904 — `ORDER BY 0` (non-positive ordinal) panics via integer underflow
-**Severity:** Critical · **Status:** OPEN · **Area:** Query / sorting · **Found:** 2026-07-10
+**Severity:** Critical · **Status:** FIXED (2026-07-10) · **Area:** Query / sorting · **Found:** 2026-07-10
+**Fix:** non-positive ordinals now sort as a NULL key (same policy as the
+pre-existing out-of-range-high ordinal). Regression: `zig build test-gap0904`
+(`tests/test_gap0904_order_by_ordinal.zig`).
 **Symptom:** `… ORDER BY 0` (or any non-positive positional ordinal) panics and
 kills the process.
 **Root cause:** integer underflow in `getValueForKey`,
@@ -81,7 +84,13 @@ kills the process.
 is documented, not exercised).
 
 ## GAP-0905 — `CAST(<huge-float> AS INTEGER)` panics (out-of-bounds)
-**Severity:** Critical · **Status:** OPEN · **Area:** Query / CAST · **Found:** 2026-07-10
+**Severity:** Critical · **Status:** FIXED (2026-07-10) · **Area:** Query / CAST · **Found:** 2026-07-10
+**Fix:** two panic sites guarded — the parser's scientific-notation
+float-literal → scale-15 Decimal conversion (huge literals now fall back to a
+scale-0 decimal when representable, else a clean `error.Overflow` parse
+error), and the Decimal → INTEGER cast's i128→i64 narrowing (now
+`EvalError.IntegerOverflow`, SQLSTATE 22003). Regression:
+`zig build test-gap0905` (`tests/test_gap0905_cast_float_overflow.zig`).
 **Symptom:** `RETURN CAST(1.0e308 AS INTEGER)` panics with "integer part of
 floating point value out of bounds" and kills the server.
 **Reproduction:** `RETURN CAST(1.0e308 AS INTEGER)`.
@@ -89,7 +98,11 @@ floating point value out of bounds" and kills the server.
 cleanly; the float-overflow crash is documented, not exercised).
 
 ## GAP-0906 — `Interval('P999999999Y')` panics (i32 multiply overflow)
-**Severity:** Critical · **Status:** OPEN · **Area:** Types / interval · **Found:** 2026-07-10
+**Severity:** Critical · **Status:** FIXED (2026-07-10) · **Area:** Types / interval · **Found:** 2026-07-10
+**Fix:** `Interval.fromStr` accumulates every component with checked
+arithmetic; overflow reports `ParseError` (mapped to `EvalError.TimeParse` at
+the query layer), matching the 10-digit forms. Regression:
+`zig build test-gap0906` (`tests/test_gap0906_interval_overflow.zig`).
 **Symptom:** constructing a large year-interval panics via signed multiply
 overflow.
 **Root cause:** `src/…/datetime.zig:282` (i32 multiply, no overflow guard).
@@ -98,7 +111,10 @@ overflow.
 `P9999999999Y`; the 9-digit crash form is documented, not exercised).
 
 ## GAP-0907 — `MakeInterval(2147483648, …)` panics (unchecked `@intCast`)
-**Severity:** Critical · **Status:** OPEN · **Area:** Types / interval · **Found:** 2026-07-10
+**Severity:** Critical · **Status:** FIXED (2026-07-10) · **Area:** Types / interval · **Found:** 2026-07-10
+**Fix:** months/days narrowing is checked; out-of-range arguments raise
+`EvalError.IntegerOverflow` (SQLSTATE 22003). Regression:
+`zig build test-gap0907` (`tests/test_gap0907_makeinterval_overflow.zig`).
 **Symptom:** `MakeInterval` with an argument exceeding i32 range panics on an
 unchecked narrowing cast.
 **Root cause:** `src/…/call_handlers.zig:1755` (`@intCast` without a range check).

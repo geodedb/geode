@@ -137,6 +137,9 @@ pub fn mapError(err: anyerror) ErrorInfo {
         error.DuplicateIndex => .{ .code = "42P07", .message = "Duplicate index name" },
         error.IncompatibleIndexDataType => .{ .code = "42804", .message = "Incompatible index data type" },
         error.InvalidTypeConversion => .{ .code = "22003", .message = "Invalid type conversion" },
+        // GAP-0905/GAP-0907: checked numeric narrowing (CAST, MakeInterval, ...)
+        // surfaces as SQLSTATE 22003 numeric_value_out_of_range.
+        error.IntegerOverflow => .{ .code = "22003", .message = "Integer value out of range" },
         error.StringDataRightTruncation => .{ .code = "22001", .message = "String data right truncation" },
         error.InvalidKeyProvider => .{ .code = "42704", .message = "Invalid TDE key provider" },
         error.InvalidGuardrailConfiguration => .{ .code = "42704", .message = "Invalid CDC guardrail configuration" },

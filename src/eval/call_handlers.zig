@@ -946,7 +946,10 @@ pub fn evalTypeCastFunction(
                     while (sc > 0) : (sc -= 1) {
                         coeff = @divTrunc(coeff, 10);
                     }
-                    return Value{ .Int = @intCast(coeff) };
+                    // GAP-0905: the i128 -> i64 narrowing was an unchecked @intCast
+                    // and panicked for values beyond i64 (e.g. CAST(9.9e30 AS INTEGER)).
+                    const as_i64 = std.math.cast(i64, coeff) orelse return EvalError.IntegerOverflow;
+                    return Value{ .Int = as_i64 };
                 },
                 .Str => |s| {
                     if (std.mem.indexOf(u8, s, ".")) |dot_idx| {
@@ -1751,9 +1754,13 @@ pub fn evalAdvancedTypeFunction(
         const months = intLike(months_arg) orelse return Value{ .Null = {} };
         const days = intLike(days_arg) orelse return Value{ .Null = {} };
         const micros = intLike(micros_arg) orelse return Value{ .Null = {} };
+        // GAP-0907: the i64 -> i32 narrowing was an unchecked @intCast and
+        // panicked for arguments beyond i32 (e.g. MakeInterval(2147483648, 1, 1)).
+        const months_i32 = std.math.cast(i32, months) orelse return EvalError.IntegerOverflow;
+        const days_i32 = std.math.cast(i32, days) orelse return EvalError.IntegerOverflow;
         return Value{ .Interval = .{
-            .months = @intCast(months),
-            .days = @intCast(days),
+            .months = months_i32,
+            .days = days_i32,
             .micros = micros,
         } };
     }

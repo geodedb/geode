@@ -3813,9 +3813,25 @@ pub const Parser = struct {
                 if (has_exp) {
                     // Parse scientific notation: parse as f64 and convert to decimal
                     const value = try std.fmt.parseFloat(f64, lex);
-                    // Use 15 decimal places to preserve precision for small values (e.g. 1.23e-7)
-                    const coeff = @as(i128, @intFromFloat(value * 1_000_000_000_000_000));
-                    break :blk_f .{ .Decimal = .{ .coeff = coeff, .scale = 15 } };
+                    // Use 15 decimal places to preserve precision for small values (e.g. 1.23e-7).
+                    // GAP-0905: guard the i128 conversion — an unchecked @intFromFloat
+                    // panicked (and killed the server) for literals like 1.0e308.
+                    // 0x1p127 is 2^127 as f64; i128 holds (-2^127, 2^127). NaN fails
+                    // both comparisons and falls through to the error.
+                    const i128_limit: f64 = 0x1p127;
+                    const scaled = value * 1_000_000_000_000_000;
+                    if (scaled >= -i128_limit and scaled < i128_limit) {
+                        const coeff = @as(i128, @intFromFloat(scaled));
+                        break :blk_f .{ .Decimal = .{ .coeff = coeff, .scale = 15 } };
+                    }
+                    if (value >= -i128_limit and value < i128_limit) {
+                        // Too large for the scale-15 fixed-point form; fall back to an
+                        // integer-valued decimal so huge-but-representable literals work.
+                        break :blk_f .{ .Decimal = .{ .coeff = @as(i128, @intFromFloat(value)), .scale = 0 } };
+                    }
+                    // Unrepresentable in a 38-digit decimal: clean parse error, matching
+                    // the pre-existing oversized-integer-literal policy (error.Overflow).
+                    return error.Overflow;
                 } else {
                     // Standard decimal notation
                     var dot_idx: usize = 0;
