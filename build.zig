@@ -8995,6 +8995,17 @@ pub fn build(b: *std.Build) void {
     const gap0848_step = b.step("test-gap0848", "Run GAP-0848 strict-tenancy auto-default in multi-tenant mode regression");
     gap0848_step.dependOn(&run_gap0848_tests.step);
 
+    // GAP-0908/GAP-0909: startup fail-closed — unwritable audit sink must be
+    // a clean typed refusal with no leaked allocation; a missing --data-dir
+    // is created (mkdir -p) instead of crashing.
+    const gap0908_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_gap0908_0909_startup_failclosed.zig"), .target = target, .optimize = optimize });
+    gap0908_test_mod.addImport("geode", root_mod);
+    const gap0908_tests = b.addTest(.{ .root_module = gap0908_test_mod });
+    const run_gap0908_tests = b.addRunArtifact(gap0908_tests);
+    shardDep(test_step, &run_gap0908_tests.step, 0, test_shard_loads, test_shard_index);
+    const gap0908_step = b.step("test-gap0908", "Run GAP-0908/GAP-0909 startup fail-closed regressions (audit sink + data dir)");
+    gap0908_step.dependOn(&run_gap0908_tests.step);
+
     // GAP-0903: repeated duplicate CREATE INDEX double-free (errdefer +
     // explicit free of the scoped key on the DuplicateIndex path).
     const gap0903_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_gap0903_dup_index_double_free.zig"), .target = target, .optimize = optimize });

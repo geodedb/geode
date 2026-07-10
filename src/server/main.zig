@@ -1155,6 +1155,18 @@ pub fn main() !void {
     const data_dir = config.data_dir;
     const log_level_arg = config.log_level_arg;
 
+    // GAP-0909: a --data-dir that does not exist used to crash the server at
+    // startup. Create it (mkdir -p); refuse cleanly only if creation fails.
+    if (data_dir) |dir| {
+        graph_store.ensureDataDir(dir) catch |err| {
+            log.err("data dir unavailable; refusing to start", &.{
+                Attr.string("path", dir),
+                Attr.string("error", @errorName(err)),
+            });
+            return error.DataDirUnavailable;
+        };
+    }
+
     // Apply log level and MATCH overrides
     if (log_level_arg) |lla| {
         logger.setLevel(logger.parseLevel(lla));
@@ -1442,9 +1454,17 @@ pub fn main() !void {
         audit_config.file_path = default_audit_path.?;
     }
 
-    // Create heap-allocated audit logger to ensure stability
-    var audit_logger = try gpa.create(audit.AuditLogger);
-    audit_logger.* = try audit.AuditLogger.init(gpa, audit_config);
+    // Create heap-allocated audit logger to ensure stability.
+    // GAP-0908: an unopenable audit sink (e.g. EACCES on the file or its
+    // directory) is a graceful fail-closed refusal to start — not an
+    // unhandled-error crash that also leaked the logger allocation.
+    var audit_logger = audit.AuditLogger.createHeap(gpa, audit_config) catch |err| {
+        log.err("cannot open audit log sink; refusing to start (fail-closed)", &.{
+            Attr.string("path", audit_config.file_path),
+            Attr.string("error", @errorName(err)),
+        });
+        return error.AuditSinkUnavailable;
+    };
     defer {
         audit.setGlobalAuditLogger(null);
         audit_logger.deinit();

@@ -282,6 +282,19 @@ pub const AuditLogger = struct {
         return logger;
     }
 
+    // CANARY: REQ=REQ-GAP-0908-AUDIT-SINK-FAILCLOSED; FEATURE="AuditStartup"; ASPECT=LeakSafeCreate; STATUS=TESTED; TEST=tests/test_gap0908_0909_startup_failclosed.zig; OWNER=security; UPDATED=2026-07-10
+    /// GAP-0908: heap-create the process-global audit logger with a leak-safe
+    /// error path. An unopenable sink (e.g. EACCES) propagates as a typed
+    /// error with the allocation released, so the caller can refuse startup
+    /// cleanly (fail-closed) instead of crashing with an unhandled error and
+    /// leaking the logger allocation.
+    pub fn createHeap(allocator: Allocator, config: Config) !*AuditLogger {
+        const logger = try allocator.create(AuditLogger);
+        errdefer allocator.destroy(logger);
+        logger.* = try AuditLogger.init(allocator, config);
+        return logger;
+    }
+
     /// Create an audit logger that writes to `{graph_dir}/audit.jsonl`.
     /// The caller-supplied `graph_dir` path is duped and owned by the
     /// returned logger (freed on `deinit`).

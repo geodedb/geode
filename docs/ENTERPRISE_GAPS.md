@@ -127,7 +127,12 @@ unchecked narrowing cast.
 **Test:** `advanced_types_boundary.yml` (documented, not exercised).
 
 ## GAP-0908 — unwritable audit sink at startup crashes the server
-**Severity:** Critical · **Status:** OPEN · **Area:** Audit / startup · **Found:** 2026-07-10
+**Severity:** Critical · **Status:** FIXED (2026-07-10) · **Area:** Audit / startup · **Found:** 2026-07-10
+**Fix:** `AuditLogger.createHeap` (leak-safe create+init) + main.zig turns an
+unopenable sink into a logged fail-closed refusal
+(`error.AuditSinkUnavailable`) instead of an unhandled-error crash that
+leaked the allocation. Regression: `zig build test-gap0908`
+(`tests/test_gap0908_0909_startup_failclosed.zig`).
 **Symptom:** starting the server with an audit sink whose file/dir is unwritable
 (EACCES) crashes it with an unhandled error, plus a leak-on-error-path artifact.
 Expected: a graceful "cannot open audit log" refusal (fail-closed, clean exit).
@@ -140,7 +145,11 @@ Expected: a graceful "cannot open audit log" refusal (fail-closed, clean exit).
 the audit chain stays clean after recovery).
 
 ## GAP-0909 — missing `--data-dir` crashes the server at startup
-**Severity:** Critical · **Status:** OPEN · **Area:** Startup · **Found:** 2026-07-10
+**Severity:** Critical · **Status:** FIXED (2026-07-10) · **Area:** Startup · **Found:** 2026-07-10
+**Fix:** `graph_store.ensureDataDir` (mkdir -p) runs before any consumer;
+an uncreatable path is a clean logged refusal (`error.DataDirUnavailable`).
+Regression: `zig build test-gap0908`
+(`tests/test_gap0908_0909_startup_failclosed.zig`).
 **Symptom:** starting the server with a `--data-dir` path that does not exist
 crashes instead of creating it or erroring cleanly.
 **Reproduction:** `geode serve --data-dir /path/that/does/not/exist`.

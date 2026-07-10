@@ -766,6 +766,18 @@ pub fn setDataDirOverride(allocator: std.mem.Allocator, dir: ?[]const u8) void {
     }
 }
 
+// CANARY: REQ=REQ-GAP-0909-DATA-DIR-STARTUP; FEATURE="ServerStartup"; ASPECT=DataDirCreation; STATUS=TESTED; TEST=tests/test_gap0908_0909_startup_failclosed.zig; OWNER=storage; UPDATED=2026-07-10
+/// GAP-0909: ensure the configured data directory exists (mkdir -p
+/// semantics). A missing `--data-dir` path used to crash the server at
+/// startup; now it is created, and only an uncreatable path (e.g. an
+/// unwritable parent) is an error the caller turns into a clean refusal.
+pub fn ensureDataDir(path: []const u8) !void {
+    std.Io.Dir.cwd().createDirPath(std.Io.Threaded.global_single_threaded.io(), path) catch |err| switch (err) {
+        error.PathAlreadyExists => {},
+        else => return err,
+    };
+}
+
 /// Get the current data directory override (or null if using env var)
 pub fn getDataDirOverride() ?[]const u8 {
     g_data_dir_mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
