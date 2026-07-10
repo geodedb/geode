@@ -8995,6 +8995,16 @@ pub fn build(b: *std.Build) void {
     const gap0848_step = b.step("test-gap0848", "Run GAP-0848 strict-tenancy auto-default in multi-tenant mode regression");
     gap0848_step.dependOn(&run_gap0848_tests.step);
 
+    // GAP-0921: CAST semantic value validation — invalid value / unsupported
+    // target / overflow raise typed errors instead of silent NULL.
+    const gap0921_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_gap0921_cast_validation.zig"), .target = target, .optimize = optimize });
+    gap0921_test_mod.addImport("geode", root_mod);
+    const gap0921_tests = b.addTest(.{ .root_module = gap0921_test_mod });
+    const run_gap0921_tests = b.addRunArtifact(gap0921_tests);
+    shardDep(test_step, &run_gap0921_tests.step, 0, test_shard_loads, test_shard_index);
+    const gap0921_step = b.step("test-gap0921", "Run GAP-0921 CAST semantic validation regression");
+    gap0921_step.dependOn(&run_gap0921_tests.step);
+
     // GAP-0920: a mid-run audit-write failure must be diagnosable (degraded
     // flag + failure count + loud log) and keep the hash chain consistent.
     const gap0920_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_gap0920_audit_write_failure.zig"), .target = target, .optimize = optimize });

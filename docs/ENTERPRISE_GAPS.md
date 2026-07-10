@@ -369,7 +369,16 @@ failure policy is only reachable at restart.
 # Medium (missing input validation — silent-accept, no data corruption)
 
 ## GAP-0921 — CAST performs no semantic value validation
-**Severity:** Medium · **Status:** OPEN · **Area:** Query / CAST · **Found:** 2026-07-10
+**Severity:** Medium · **Status:** FIXED (2026-07-10) · **Area:** Query / CAST · **Found:** 2026-07-10
+**Fix:** the `cast` eval branch now returns typed errors instead of silent
+NULL: an unconvertible value → `error.InvalidCast` (22018), an unsupported
+target type → `error.UnsupportedCastTarget` (0A000), numeric overflow →
+`error.IntegerOverflow` (22003). Applied across INTEGER/DECIMAL/FLOAT/
+BOOLEAN/DATE/TIME/TIMESTAMP targets and non-convertible sources. `CAST(null
+AS X)` stays NULL and valid conversions are unchanged; the Cypher-style
+`toInteger`/`toBoolean` helpers keep their documented NULL-returning
+behavior. Regression: `zig build test-gap0921`
+(`tests/test_gap0921_cast_validation.zig`).
 **Symptom:** `CAST('abc' AS INTEGER)`, casts to unsupported target types, and
 numeric overflow all silently return NULL / 00000 rather than 22018 / 0A000.
 CAST rejects only at parse time (missing type name → 42000). Confirmed across

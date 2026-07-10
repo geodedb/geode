@@ -827,6 +827,17 @@ pub fn evalStringFunction(
 // Type Cast Functions
 // ============================================================================
 
+// CANARY: REQ=REQ-GAP-0921-CAST-SEMANTIC-VALIDATION; FEATURE="TypeCasting"; ASPECT=SemanticValidation; STATUS=TESTED; TEST=tests/test_gap0921_cast_validation.zig; OWNER=eval; UPDATED=2026-07-10
+/// GAP-0921: map a numeric parse failure inside CAST to a typed error —
+/// out-of-range → IntegerOverflow (SQLSTATE 22003), any other invalid
+/// character → InvalidCast (22018). Both replace the former silent NULL.
+fn castParseError(e: anyerror) EvalError {
+    return switch (e) {
+        error.Overflow => EvalError.IntegerOverflow,
+        else => EvalError.InvalidCast,
+    };
+}
+
 // CANARY: REQ=REQ-EVAL-REFACTOR-004; FEATURE="EvalExpr Refactoring"; ASPECT=TypeCastFunctions; STATUS=TESTED; OWNER=eval; UPDATED=2026-01-30
 // CANARY: REQ=REQ-GQL-CAST-001; FEATURE="TypeCasting"; ASPECT=Evaluation; STATUS=TESTED; TEST=geodetestlab/specs/geode_functions_comprehensive.yml; OWNER=eval; UPDATED=2026-01-25
 /// Evaluate type cast functions: cast, toString, toInteger, toFloat, toBoolean
@@ -904,8 +915,9 @@ pub fn evalTypeCastFunction(
                     if (std.mem.indexOf(u8, s, ".")) |dot_idx| {
                         const int_part = s[0..dot_idx];
                         const frac_part = s[dot_idx + 1 ..];
-                        const int_val = std.fmt.parseInt(i128, int_part, 10) catch return Value{ .Null = {} };
-                        const frac_val = std.fmt.parseInt(i128, frac_part, 10) catch return Value{ .Null = {} };
+                        // GAP-0921: invalid character / overflow are errors, not silent NULL.
+                        const int_val = std.fmt.parseInt(i128, int_part, 10) catch |e| return castParseError(e);
+                        const frac_val = std.fmt.parseInt(i128, frac_part, 10) catch |e| return castParseError(e);
                         var coeff = int_val;
                         const frac_len = frac_part.len;
                         var mult: i128 = 1;
@@ -923,7 +935,7 @@ pub fn evalTypeCastFunction(
                         }
                         return Value{ .Decimal = .{ .coeff = coeff, .scale = target_scale } };
                     } else {
-                        const int_val = std.fmt.parseInt(i128, s, 10) catch return Value{ .Null = {} };
+                        const int_val = std.fmt.parseInt(i128, s, 10) catch |e| return castParseError(e);
                         var coeff = int_val;
                         var sc: u8 = 0;
                         while (sc < target_scale) : (sc += 1) {
@@ -932,7 +944,8 @@ pub fn evalTypeCastFunction(
                         return Value{ .Decimal = .{ .coeff = coeff, .scale = target_scale } };
                     }
                 },
-                else => return Value{ .Null = {} },
+                // GAP-0921: an unconvertible source value is a cast error.
+                else => return EvalError.InvalidCast,
             }
         }
 
@@ -954,15 +967,16 @@ pub fn evalTypeCastFunction(
                 .Str => |s| {
                     if (std.mem.indexOf(u8, s, ".")) |dot_idx| {
                         const int_part = s[0..dot_idx];
-                        const val = std.fmt.parseInt(i64, int_part, 10) catch return Value{ .Null = {} };
+                        const val = std.fmt.parseInt(i64, int_part, 10) catch |e| return castParseError(e);
                         return Value{ .Int = val };
                     } else {
-                        const val = std.fmt.parseInt(i64, s, 10) catch return Value{ .Null = {} };
+                        const val = std.fmt.parseInt(i64, s, 10) catch |e| return castParseError(e);
                         return Value{ .Int = val };
                     }
                 },
                 .Bool => |b| return Value{ .Int = if (b) 1 else 0 },
-                else => return Value{ .Null = {} },
+                // GAP-0921: an unconvertible source value is a cast error.
+                else => return EvalError.InvalidCast,
             }
         }
 
@@ -1020,11 +1034,12 @@ pub fn evalTypeCastFunction(
                 },
                 .Decimal => |d| return Value{ .Decimal = d },
                 .Str => |s| {
-                    const f = std.fmt.parseFloat(f64, s) catch return Value{ .Null = {} };
+                    // GAP-0921: non-numeric string is a cast error, not NULL.
+                    const f = std.fmt.parseFloat(f64, s) catch return EvalError.InvalidCast;
                     const coeff = @as(i128, @intFromFloat(f * 1000000));
                     return Value{ .Decimal = .{ .coeff = coeff, .scale = 6 } };
                 },
-                else => return Value{ .Null = {} },
+                else => return EvalError.InvalidCast,
             }
         }
 
@@ -1039,10 +1054,11 @@ pub fn evalTypeCastFunction(
                     } else if (std.ascii.eqlIgnoreCase(s, "false") or std.mem.eql(u8, s, "0")) {
                         return Value{ .Bool = false };
                     } else {
-                        return Value{ .Null = {} };
+                        // GAP-0921: an unrecognized boolean string is a cast error.
+                        return EvalError.InvalidCast;
                     }
                 },
-                else => return Value{ .Null = {} },
+                else => return EvalError.InvalidCast,
             }
         }
 
@@ -1051,7 +1067,8 @@ pub fn evalTypeCastFunction(
             switch (value_arg) {
                 .Str => |s| {
                     const datetime_module = @import("../types/datetime.zig");
-                    const date = datetime_module.Date.fromStr(s) catch return Value{ .Null = {} };
+                    // GAP-0921: a non-date string is a cast error, not NULL.
+                    const date = datetime_module.Date.fromStr(s) catch return EvalError.InvalidCast;
                     return Value{ .Date = date };
                 },
                 .Date => return value_arg,
@@ -1060,7 +1077,7 @@ pub fn evalTypeCastFunction(
                     const days: i32 = @intCast(@divFloor(ts.micros_since_epoch, 24 * 3600 * 1_000_000));
                     return Value{ .Date = datetime_module.Date{ .days_since_epoch = days } };
                 },
-                else => return Value{ .Null = {} },
+                else => return EvalError.InvalidCast,
             }
         }
 
@@ -1069,7 +1086,8 @@ pub fn evalTypeCastFunction(
             switch (value_arg) {
                 .Str => |s| {
                     const datetime_module = @import("../types/datetime.zig");
-                    const time = datetime_module.Time.fromStr(s) catch return Value{ .Null = {} };
+                    // GAP-0921: a non-time string is a cast error, not NULL.
+                    const time = datetime_module.Time.fromStr(s) catch return EvalError.InvalidCast;
                     return Value{ .Time = time };
                 },
                 .Time => return value_arg,
@@ -1078,7 +1096,7 @@ pub fn evalTypeCastFunction(
                     const micros = @rem(ts.micros_since_epoch, 24 * 3600 * @as(i64, 1_000_000));
                     return Value{ .Time = datetime_module.Time{ .micros_since_midnight = if (micros < 0) micros + 24 * 3600 * 1_000_000 else micros } };
                 },
-                else => return Value{ .Null = {} },
+                else => return EvalError.InvalidCast,
             }
         }
 
@@ -1087,19 +1105,22 @@ pub fn evalTypeCastFunction(
             switch (value_arg) {
                 .Str => |s| {
                     const datetime_module = @import("../types/datetime.zig");
-                    const ts = datetime_module.Timestamp.fromStr(s) catch return Value{ .Null = {} };
+                    // GAP-0921: a non-timestamp string is a cast error.
+                    const ts = datetime_module.Timestamp.fromStr(s) catch return EvalError.InvalidCast;
                     return Value{ .Timestamp = ts };
                 },
                 .Timestamp => return value_arg,
                 .Date => |d| {
                     return Value{ .Timestamp = .{ .micros_since_epoch = @as(i64, d.days_since_epoch) * 24 * 3600 * 1_000_000 } };
                 },
-                else => return Value{ .Null = {} },
+                else => return EvalError.InvalidCast,
             }
         }
 
-        // Unknown type
-        return Value{ .Null = {} };
+        // GAP-0921: an unknown/unsupported target type is not a silent NULL —
+        // it is a "feature not supported" error (SQLSTATE 0A000). (A missing
+        // type name entirely is already a parse-time 42000.)
+        return EvalError.UnsupportedCastTarget;
     }
 
     // CANARY: REQ=REQ-GQL-086; FEATURE="TypeConversionFunctions"; ASPECT=Evaluation; STATUS=TESTED; OWNER=eval; UPDATED=2025-10-14

@@ -53,6 +53,10 @@ pub const EvalError = error{
     TimeParse,
     DecimalOverflow,
     DecimalDivZero,
+    // GAP-0921: CAST semantic validation — an unconvertible value (invalid
+    // character for the target) vs an unsupported target type.
+    InvalidCast,
+    UnsupportedCastTarget,
     IdnaError,
     InvalidIpAddress,
     InvalidSubnet,

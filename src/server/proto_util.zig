@@ -149,6 +149,9 @@ pub fn mapError(err: anyerror) ErrorInfo {
         // GAP-0905/GAP-0907: checked numeric narrowing (CAST, MakeInterval, ...)
         // surfaces as SQLSTATE 22003 numeric_value_out_of_range.
         error.IntegerOverflow => .{ .code = "22003", .message = "Integer value out of range" },
+        // GAP-0921: CAST semantic validation.
+        error.InvalidCast => .{ .code = "22018", .message = "Invalid character value for cast" },
+        error.UnsupportedCastTarget => .{ .code = "0A000", .message = "Unsupported CAST target type" },
         error.StringDataRightTruncation => .{ .code = "22001", .message = "String data right truncation" },
         error.InvalidKeyProvider => .{ .code = "42704", .message = "Invalid TDE key provider" },
         error.InvalidGuardrailConfiguration => .{ .code = "42704", .message = "Invalid CDC guardrail configuration" },
