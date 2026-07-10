@@ -1053,7 +1053,16 @@ fn execMigrationScript(ctx_ptr: ?*anyopaque, script: []const u8) !void {
     // handles exactly one stream per connection handler call and destroys the connection
     // afterward, so we must reconnect for each migration rather than reusing a single connection.
     const quic_client = connectMigrationClient(ctx.allocator, ctx.server_addr, ctx.tls_config) catch |err| return err;
+    // CANARY: REQ=REQ-GAP-0902-MIGRATE-STREAM-HYGIENE; FEATURE="Migrations"; ASPECT=StreamCloseBeforeTeardown; STATUS=IMPL; TEST=tests/test_gap0902_migrate_connect.zig; OWNER=cli; UPDATED=2026-07-10
+    // GAP-0902: mirror the `geode query` path's stream discipline
+    // (src/cli/main.zig closeStream() bracket). The migration flow used to
+    // deinit the client WITHOUT first closing the QUIC stream, so the server
+    // saw an abrupt stream reset while its single-stream handler was still
+    // live — a plausible trigger for the "Server died" crash the harness
+    // documented. Send a clean STREAM close (FIN) before teardown so the
+    // server-side handler completes its own teardown in order.
     defer {
+        quic_client.closeStream();
         quic_client.deinit();
         ctx.allocator.destroy(quic_client);
     }

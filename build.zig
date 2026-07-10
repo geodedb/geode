@@ -3009,6 +3009,10 @@ pub fn build(b: *std.Build) void {
     // mod.zig (not via the main lib module), so the module must be wired here explicitly.
     migration_unit_tests.root_module.addImport("crypto_backend", crypto_backend_mod);
     const run_migration_unit_tests = b.addRunArtifact(migration_unit_tests);
+    // GAP-0902: named step for the migration apply/ledger unit tests (incl. the
+    // "failed migration not recorded as applied" ledger-consistency regression).
+    const gap0902_step = b.step("test-gap0902", "Run migration apply/ledger unit tests (GAP-0902 failed-not-applied ledger consistency)");
+    gap0902_step.dependOn(&run_migration_unit_tests.step);
 
     // GAP-0489: Security test — Blake2b accounts auto-migrate to Argon2id on successful login
     const blake2b_migration_tests = b.addTest(.{

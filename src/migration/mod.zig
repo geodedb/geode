@@ -965,6 +965,63 @@ test "applyUpMigrations records failure metric on executor error" {
     try std.testing.expectError(error.ApplyFailed, result);
 }
 
+// CANARY: REQ=REQ-GAP-0902-MIGRATE-FAILED-NOT-APPLIED; FEATURE="Migrations"; ASPECT=LedgerConsistencyOnFailure; STATUS=TESTED; TEST=self; OWNER=cli; UPDATED=2026-07-10
+// GAP-0902: a failed migration must NOT be recorded as applied (the ledger's
+// "Applied" count stays 0). This pins the orchestration contract the harness
+// documented — the executor failure returns error.ApplyFailed WITHOUT
+// half-applying, so a subsequent status report shows the migration as still
+// pending (or absent), never applied. (The live QUIC-transport crash the gap
+// also describes needs the managed-server harness to reproduce; this pins the
+// apply-path half of the defect that IS unit-testable.)
+test "gap0902: a failed migration is not recorded as applied (ledger Applied stays 0)" {
+    const alloc = std.testing.allocator;
+    migration_mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
+    global_lock = null;
+    lock_steal_count = 0;
+    migration_mutex.unlock(std.Io.Threaded.global_single_threaded.io());
+
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const tmp_path = try std.fmt.allocPrint(alloc, ".zig-cache/tmp/{s}", .{&tmp.sub_path});
+    defer alloc.free(tmp_path);
+
+    try tmp.dir.writeFile(std.Io.Threaded.global_single_threaded.io(), .{ .sub_path = "001_init.gql", .data = "SOME MIGRATION" });
+
+    const cfg = MigrationConfig{ .migrations_dir = tmp_path, .allow_unsigned = true };
+
+    // A failing executor: the apply must return error.ApplyFailed.
+    try std.testing.expectError(
+        error.ApplyFailed,
+        applyUpMigrations(alloc, cfg, &[_][]const u8{"001_init.gql"}, makeFailingExecutor()),
+    );
+
+    // The ledger must show the migration NOT applied (Applied stays 0).
+    const rows = try statusReport(alloc, cfg);
+    defer freeStatusRows(alloc, rows);
+    var applied_count: usize = 0;
+    for (rows) |r| {
+        if (r.applied) applied_count += 1;
+    }
+    try std.testing.expectEqual(@as(usize, 0), applied_count);
+
+    // A SUCCEEDING executor then applies it exactly once (proves the failure
+    // above didn't leave the ledger in a state that blocks a later retry).
+    const ok_executor = QueryExecutor{
+        .context = null,
+        .execFn = struct {
+            fn exec(_: ?*anyopaque, _: []const u8) anyerror!void {}
+        }.exec,
+    };
+    try applyUpMigrations(alloc, cfg, &[_][]const u8{"001_init.gql"}, ok_executor);
+    const rows2 = try statusReport(alloc, cfg);
+    defer freeStatusRows(alloc, rows2);
+    var applied2: usize = 0;
+    for (rows2) |r| {
+        if (r.applied) applied2 += 1;
+    }
+    try std.testing.expectEqual(@as(usize, 1), applied2);
+}
+
 test "applyDownMigration rolls back the latest applied migration" {
     const alloc = std.testing.allocator;
     migration_mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());

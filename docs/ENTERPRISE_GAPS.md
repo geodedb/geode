@@ -43,7 +43,24 @@ managed-server tests time out.
 gRPC-liveness gate), `security_grpc_cdc_admin_gate_849.yml`.
 
 ## GAP-0902 — `geode migrate run --server` hangs and crashes the server
-**Severity:** Critical · **Status:** OPEN · **Area:** Migrations · **Found:** 2026-07-10
+**Severity:** Critical · **Status:** PARTIAL — stream-hygiene hardening applied + apply-path pinned; live-crash verification owed · **Area:** Migrations · **Found:** 2026-07-10
+**Fix (hardening):** `execMigrationScript` now closes the QUIC stream (FIN)
+before tearing down the client (`quic_client.closeStream()` in the `defer`),
+mirroring the working `geode query` path's stream discipline
+(`src/cli/main.zig` `closeStream()` bracket). The migration flow previously
+deinit'd the client without closing the stream, so the server saw an abrupt
+reset while its single-stream handler was still live — a plausible trigger
+for the documented "Server died" crash.
+**Apply-path pinned:** the migration orchestration is verified correct — a
+failed executor returns `error.ApplyFailed` and the migration is NOT recorded
+as applied (ledger "Applied" stays 0), and a later retry applies it exactly
+once. Regression: `zig build test-gap0902` (`gap0902: a failed migration is
+not recorded as applied`, +75 migration unit tests).
+**Residual (owed):** the live server-crash + client-hang reproduction needs
+the geodetestlab managed-server harness (the harness authors documented it
+rather than exercising it for the same reason — reproducing it crashes the
+shared server). The stream-hygiene change is the code-read-identified
+candidate fix; end-to-end confirmation against a live `migrate run` is owed.
 **Symptom:** `migrate run` against a live server hangs indefinitely (client
 killed by timeout) AND crashes the managed server ("Server died") for BOTH valid
 and invalid migrations; when it returns it exits without applying (ledger
