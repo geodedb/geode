@@ -2074,20 +2074,20 @@ dev-image-build-fips:
   script:
     - |
       set -e
-      echo "=== building FIPS geode natively (amd64) ==="
-      # NOTE: build NATIVELY (no -Dtarget). The zig-fips:0.16.0 image is amd64,
-      # so the target arch is identical either way — but passing
-      # `-Dtarget=x86_64-linux-gnu` makes zig link against its BUNDLED glibc
-      # stubs pinned to an older default version (< 2.34), which cannot satisfy
+      echo "=== cross-compiling FIPS geode for x86_64-linux-gnu.2.34 (amd64) ==="
+      # Keep -Dtarget (dropping it broke the openssl C-import: `-Dtarget` is what
+      # wires the -Dopenssl_path include dir into the cimport sysroot, so a bare
+      # native build fails with "'openssl/ssl.h' not found"). But PIN the glibc
+      # version to 2.34: the default `x86_64-linux-gnu` selects zig's bundled
+      # glibc stubs at an older version (< 2.34) whose libc.so does not export
       # the `GLIBC_2.33/2.34`-versioned symbols (pthread_*, stat, dlopen) that
-      # the OpenSSL FIPS provider .so at /usr/local/ssl/lib64 references →
-      # `ld.lld: undefined reference … disallowed by --no-allow-shlib-undefined`
-      # on EVERY exe (geode, gql, geode-auth, key_rotate). A native build uses
-      # the host's real glibc (>= 2.34, proven by the passing zig-fips-test job
-      # which also links the provider with no -Dtarget), so the FIPS .so links.
-      # The resulting binary needs glibc >= 2.34, satisfied by the
-      # debian:bookworm-slim base in Dockerfile.devimage.fips.
-      zig build -Doptimize=ReleaseSafe \
+      # the OpenSSL FIPS provider .so at /usr/local/ssl/lib64 references → every
+      # exe failed with `ld.lld: undefined reference … disallowed by
+      # --no-allow-shlib-undefined`. Targeting `.2.34` makes zig's synthetic
+      # libc export those version nodes so the provider .so links. The binary
+      # then needs glibc >= 2.34, satisfied by debian:bookworm-slim (glibc 2.36)
+      # in Dockerfile.devimage.fips.
+      zig build -Doptimize=ReleaseSafe -Dtarget=x86_64-linux-gnu.2.34 \
         -Dfips=true -Dopenssl_path=/usr/local/ssl --summary all
       mkdir -p dist/linux-fips-amd64
       cp zig-out/bin/geode dist/linux-fips-amd64/geode
