@@ -426,7 +426,16 @@ duplicate.
 fail-closed verification with teeth).
 
 ## GAP-0924 — spatial functions swallow bad geometry to NULL; no bowtie check
-**Severity:** Medium · **Status:** OPEN · **Area:** Spatial · **Found:** 2026-07-10
+**Severity:** Medium · **Status:** FIXED (2026-07-10) · **Area:** Spatial · **Found:** 2026-07-10
+**Fix:** two parts. (1) The WKT parser now detects a self-intersecting
+("bowtie") polygon ring (`ringSelfIntersects`, a non-adjacent-edge proper-
+crossing test) and rejects it with `error.SelfIntersectingPolygon`; a
+non-numeric coordinate is now `error.InvalidWkt` (was `InvalidCharacter`). (2)
+The eval dispatch surfaces `InvalidWkt`/`UnsupportedGeometry`/
+`SelfIntersectingPolygon` as `TypeMismatch` instead of silently resolving to
+NULL at the bare-call level. Regression: `zig build test-gap0924`. Out of
+scope (documented): a *nonexistent constructor* name still resolves to NULL —
+that is general optional-function-probing behavior, not spatial-specific.
 **Symptom:** malformed WKT, a nonexistent constructor, or a degenerate polygon
 ring silently resolve to NULL at the bare-call level (a real TypeMismatch/58000
 is only raised when composed with a geometry consumer like `ST_AsText`).

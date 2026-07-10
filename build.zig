@@ -8995,6 +8995,16 @@ pub fn build(b: *std.Build) void {
     const gap0848_step = b.step("test-gap0848", "Run GAP-0848 strict-tenancy auto-default in multi-tenant mode regression");
     gap0848_step.dependOn(&run_gap0848_tests.step);
 
+    // GAP-0924: spatial geometry validation — malformed WKT / degenerate ring
+    // surface an error (not NULL); self-intersecting bowtie polygons rejected.
+    const gap0924_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_gap0924_spatial_validation.zig"), .target = target, .optimize = optimize });
+    gap0924_test_mod.addImport("geode", root_mod);
+    const gap0924_tests = b.addTest(.{ .root_module = gap0924_test_mod });
+    const run_gap0924_tests = b.addRunArtifact(gap0924_tests);
+    shardDep(test_step, &run_gap0924_tests.step, 0, test_shard_loads, test_shard_index);
+    const gap0924_step = b.step("test-gap0924", "Run GAP-0924 spatial geometry validation + bowtie rejection regression");
+    gap0924_step.dependOn(&run_gap0924_tests.step);
+
     // GAP-0927/GAP-0928: connection-pool operability — idle-reap deadline
     // wired to --idle-timeout; rate-limited POOL_EXHAUSTED diagnostic. The
     // pure predicates are inline tests in server/main.zig +

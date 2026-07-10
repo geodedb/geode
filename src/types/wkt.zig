@@ -17,6 +17,62 @@
 
 const std = @import("std");
 
+// CANARY: REQ=REQ-GAP-0924-SPATIAL-SIMPLE-POLYGON; FEATURE="Spatial"; ASPECT=SelfIntersectionCheck; STATUS=TESTED; TEST=tests/test_gap0924_spatial_validation.zig; OWNER=spatial; UPDATED=2026-07-10
+// GAP-0924: detect whether a closed polygon ring self-intersects. `coords` is
+// a flat [x0,y0,x1,y1,...] view of the ring vertices (including the repeated
+// closing vertex). Returns true iff any two NON-adjacent edges properly cross —
+// the classic "bowtie" that makes a polygon non-simple.
+fn ccw(ax: f64, ay: f64, bx: f64, by: f64, cx: f64, cy: f64) f64 {
+    return (bx - ax) * (cy - ay) - (by - ay) * (cx - ax);
+}
+
+fn segmentsProperlyIntersect(
+    p1x: f64,
+    p1y: f64,
+    p2x: f64,
+    p2y: f64,
+    p3x: f64,
+    p3y: f64,
+    p4x: f64,
+    p4y: f64,
+) bool {
+    const d1 = ccw(p3x, p3y, p4x, p4y, p1x, p1y);
+    const d2 = ccw(p3x, p3y, p4x, p4y, p2x, p2y);
+    const d3 = ccw(p1x, p1y, p2x, p2y, p3x, p3y);
+    const d4 = ccw(p1x, p1y, p2x, p2y, p4x, p4y);
+    // Proper crossing: each segment straddles the other's supporting line.
+    return ((d1 > 0 and d2 < 0) or (d1 < 0 and d2 > 0)) and
+        ((d3 > 0 and d4 < 0) or (d3 < 0 and d4 > 0));
+}
+
+fn ringSelfIntersects(coords: []const f64) bool {
+    const n = coords.len / 2;
+    if (n < 4) return false;
+    // Edge i connects vertex i -> i+1. The last vertex repeats the first, so
+    // there are (n-1) edges. Compare every pair of non-adjacent edges.
+    const edges = n - 1;
+    var i: usize = 0;
+    while (i < edges) : (i += 1) {
+        const a1x = coords[i * 2];
+        const a1y = coords[i * 2 + 1];
+        const a2x = coords[(i + 1) * 2];
+        const a2y = coords[(i + 1) * 2 + 1];
+        var j: usize = i + 1;
+        while (j < edges) : (j += 1) {
+            // Skip adjacent edges (they legitimately share a vertex), including
+            // the wrap-around adjacency between the first and last edge.
+            if (j == i + 1) continue;
+            if (i == 0 and j == edges - 1) continue;
+            const b1x = coords[j * 2];
+            const b1y = coords[j * 2 + 1];
+            const b2x = coords[(j + 1) * 2];
+            const b2y = coords[(j + 1) * 2 + 1];
+            if (segmentsProperlyIntersect(a1x, a1y, a2x, a2y, b1x, b1y, b2x, b2y)) return true;
+        }
+    }
+    return false;
+}
+
 pub fn parseWktToWkb(allocator: std.mem.Allocator, wkt: []const u8) ![]const u8 {
     // Simplified WKT parser for POINT
     if (std.mem.startsWith(u8, wkt, "POINT(") and std.mem.endsWith(u8, wkt, ")")) {
@@ -56,13 +112,29 @@ pub fn parseWktToWkb(allocator: std.mem.Allocator, wkt: []const u8) ![]const u8 
             const x_str = coords.next() orelse return error.InvalidWkt;
             const y_str = coords.next() orelse return error.InvalidWkt;
 
-            const x = try std.fmt.parseFloat(f64, x_str);
-            const y = try std.fmt.parseFloat(f64, y_str);
+            // GAP-0924: a non-numeric coordinate is a WKT error (was
+            // error.InvalidCharacter, which the eval dispatch swallowed to NULL).
+            const x = std.fmt.parseFloat(f64, x_str) catch return error.InvalidWkt;
+            const y = std.fmt.parseFloat(f64, y_str) catch return error.InvalidWkt;
 
             try points.append(allocator, .{ .x = x, .y = y });
         }
 
         if (points.items.len < 4) return error.InvalidWkt; // Need at least 4 points (triangle + closing point)
+
+        // CANARY: REQ=REQ-GAP-0924-SPATIAL-SIMPLE-POLYGON; FEATURE="Spatial"; ASPECT=BowtieRejection; STATUS=TESTED; TEST=tests/test_gap0924_spatial_validation.zig; OWNER=spatial; UPDATED=2026-07-10
+        // GAP-0924: reject a self-intersecting ("bowtie") ring — a non-simple
+        // polygon was previously accepted with no validation. Two coordinates
+        // (x,y) per Point, so build a coordinate view for the shared checker.
+        {
+            var coords = try allocator.alloc(f64, points.items.len * 2);
+            defer allocator.free(coords);
+            for (points.items, 0..) |p, i| {
+                coords[i * 2] = p.x;
+                coords[i * 2 + 1] = p.y;
+            }
+            if (ringSelfIntersects(coords)) return error.SelfIntersectingPolygon;
+        }
 
         // Calculate WKB size: 1 (endian) + 4 (type) + 4 (num_rings) + 4 (num_points) + (num_points * 16)
         const num_points: u32 = @intCast(points.items.len);

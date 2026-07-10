@@ -1023,6 +1023,15 @@ pub fn evalExpr(allocator: std.mem.Allocator, e: ast.Expr, env: Env) EvalError!V
                         // to NULL; surface it as a type error like the
                         // basic-function mapper below already does.
                         return EvalError.TypeMismatch;
+                    } else if (std.mem.eql(u8, err_name, "InvalidWkt") or
+                        std.mem.eql(u8, err_name, "UnsupportedGeometry") or
+                        std.mem.eql(u8, err_name, "SelfIntersectingPolygon"))
+                    {
+                        // GAP-0924: malformed WKT, an unsupported geometry, or a
+                        // self-intersecting ("bowtie") polygon used to silently
+                        // resolve to NULL at the bare-call level; surface it as a
+                        // type error so the caller gets a diagnostic.
+                        return EvalError.TypeMismatch;
                     }
                     // For other errors, fall back to null
                     break :blk_call .{ .Null = {} };
