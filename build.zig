@@ -9009,6 +9009,16 @@ pub fn build(b: *std.Build) void {
     const gap0926_step = b.step("test-gap0926", "Run GAP-0926 positional-param + nested-aggregate rejection regression");
     gap0926_step.dependOn(&run_gap0926_tests.step);
 
+    // GAP-0901: gRPC transport-agnostic globals (RLS dispatch wiring) — pins
+    // the wiring contract the main.zig hoist depends on (transport-independent).
+    const gap0901_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_gap0901_grpc_globals.zig"), .target = target, .optimize = optimize });
+    gap0901_test_mod.addImport("geode", root_mod);
+    const gap0901_tests = b.addTest(.{ .root_module = gap0901_test_mod });
+    const run_gap0901_tests = b.addRunArtifact(gap0901_tests);
+    shardDep(test_step, &run_gap0901_tests.step, 0, test_shard_loads, test_shard_index);
+    const gap0901_step = b.step("test-gap0901", "Run GAP-0901 RLS-dispatch wiring contract regression (gRPC global init)");
+    gap0901_step.dependOn(&run_gap0901_tests.step);
+
     // GAP-0924: spatial geometry validation — malformed WKT / degenerate ring
     // surface an error (not NULL); self-intersecting bowtie polygons rejected.
     const gap0924_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_gap0924_spatial_validation.zig"), .target = target, .optimize = optimize });

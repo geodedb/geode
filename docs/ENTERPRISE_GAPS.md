@@ -31,7 +31,24 @@ no-op config keys, unparsed DDL forms) are tracked in the harness repo at
 # Critical
 
 ## GAP-0901 — gRPC transport is wholesale non-functional
-**Severity:** Critical · **Status:** OPEN · **Area:** Transport / gRPC · **Found:** 2026-07-10
+**Severity:** Critical · **Status:** PARTIAL — repo-side global-init fixed; end-to-end blocked by vendor (GAP-0893) · **Area:** Transport / gRPC · **Found:** 2026-07-10
+**Fix (repo-side):** the transport-agnostic globals a gRPC handler consults —
+the per-IP auth rate limiter, both RLS filter engines, the RLS deny-policy DDL
+callbacks, and the mutation-timing / bulk-ingest gates — were initialized ONLY
+inside the `if (listen_quic)` block of `src/server/main.zig`, so the gRPC-only
+serve path (`grpc_server.start(); return;`) ran with a null rate limiter and
+null/empty RLS engines (RLS DDL returned "engine not initialized"). They are
+now hoisted to before the gRPC serve path, exactly as the GAP-0848
+tenant-state block was — the `defer`s stay in `main()` scope so both serve
+loops see them and teardown is unchanged. Regression: `zig build test-gap0901`
+(transport-independent: unwired → "not initialized", wired → DDL succeeds).
+The full QUIC path is unaffected (test-rls-filter 17/17, test-auth-rate-limiter
+8/8, test-rls-expr-engine-wiring 8/8, test-gap0839-tenant-lifecycle 9/9 green).
+**Residual (blocked):** end-to-end gRPC verification remains blocked by the
+vendor `grpc_zig` 0.1.7 listener crash tracked as **GAP-0893** (`--transport
+grpc` crashes inside `allocStreamWindows` ← `initServerTls`); gRPC is
+non-verifiable end-to-end until a vendor fix / pin bump. This repo-side fix
+ensures the handlers are correctly wired the moment that block lifts.
 **Symptom:** every gRPC invocation times out; `make test-grpc` cannot pass any
 managed-server spec. Even the proven `--server <addr> --grpc` form hangs.
 **Root cause (probe):** the gRPC handler globals are only initialized inside the
