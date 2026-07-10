@@ -2011,20 +2011,21 @@ fn resolvePersistedLabelId(mg: *ManagedGraph, label: []const u8) !gs.LabelId {
     // broadcasts the mapping to every shard and dirties the dictionaries.
     const id = try mg.engine.getOrAssignLabel(label);
 
-    // Security-graph durability (gap 0026, twin of the sync-mode carve-out
-    // in createGraphLocked): the label dictionary is NOT WAL-logged — it is
-    // persisted only at checkpoint (labels.dict). Per-commit WAL fsync alone
-    // is therefore insufficient on a FRESH (never-checkpointed) security
-    // graph: after a crash, recovery replays the user/role/policy node
-    // records from the fsynced WAL but has lost the "User"/"Role"/... name→id
-    // mappings, leaving every security record unreachable by label — the
-    // same silent auth-state loss this gap is about. Persist the (tiny,
-    // bounded — a handful of labels ever) per-shard dictionaries
-    // synchronously on FIRST sight of a security-graph label, and fail the
-    // mutation if the persist fails: durability before ack, fail closed.
-    // saveToFile is atomic (tmp + fsync + rename), matching the checkpoint
-    // writer, so a crash mid-save leaves the previous dictionary intact.
-    if (std.mem.eql(u8, mg.name, "__geode_security")) {
+    // Label-dictionary durability (gap 0026 for the security graph;
+    // GAP-0915 extended it to EVERY graph): the label dictionary is NOT
+    // WAL-logged — it is persisted only at checkpoint (labels.dict).
+    // Per-commit WAL fsync alone is therefore insufficient on a FRESH
+    // (never-checkpointed) graph: after an unclean crash, recovery replays
+    // the node records from the fsynced WAL but has lost the name→id
+    // mappings, leaving every record unreachable BY LABEL — labeled MATCH
+    // returned 0 while `MATCH (n)` saw the full committed set. Persist the
+    // (tiny, bounded — a handful of labels ever) per-shard dictionaries
+    // synchronously on FIRST sight of a label, and fail the mutation if the
+    // persist fails: durability before ack, fail closed. saveToFile is
+    // atomic (tmp + fsync + rename), matching the checkpoint writer, so a
+    // crash mid-save leaves the previous dictionary intact.
+    // CANARY: REQ=REQ-GAP-0915-LABEL-INDEX-CRASH-REBUILD; FEATURE="CrashRecovery"; ASPECT=LabelDictFirstSightPersist; STATUS=TESTED; TEST=tests/test_gap0910_0915_crash_recovery.zig; OWNER=storage; UPDATED=2026-07-10
+    {
         var path_buf: [std.fs.max_path_bytes]u8 = undefined;
         for (mg.engine.shards) |shard| {
             const labels_path = try std.fmt.bufPrint(&path_buf, "{s}/labels.dict", .{shard.graph_dir.path});
@@ -5606,6 +5607,15 @@ pub const StorageAdapter = struct {
         const io = std.Io.Threaded.global_single_threaded.io();
 
         const shard = mg.engine.shards[shard_idx];
+
+        // CANARY: REQ=REQ-GAP-0915-LABEL-INDEX-CRASH-REBUILD; FEATURE="CrashRecovery"; ASPECT=LabelScanHydrationGuard; STATUS=TESTED; TEST=tests/test_gap0910_0915_crash_recovery.zig; OWNER=storage; UPDATED=2026-07-10
+        // GAP-0915: the label posting list is deferred-derived — EMPTY after a
+        // reopen (and rebuilt from durable pages only on demand). Every reader
+        // must run the Phase A guard before consuming it; without this, the
+        // first label scan after an UNCLEAN crash returned 0 rows while the
+        // row data itself had fully survived. Guard runs BEFORE the shard
+        // lock, the same order countNodesByLabel (9a255a83) establishes.
+        try shard.ensureDerivedHydrated();
 
         // `scanLabelIter` snapshots the label's posting list into a private,
         // IMMUTABLE owned slice up front (under the LabelIndex rwlock SHARED,

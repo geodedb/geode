@@ -2191,22 +2191,36 @@ fn tryBasicFunction(allocator: std.mem.Allocator, function_name: []const u8, arg
         const arg = try evalExpr(allocator, args[0].*, env);
         switch (arg) {
             .Node => |node| {
-                // Convert node properties to a Map
+                // Convert node properties to a Map.
+                // GAP-0910: keys are DUPLICATED — the map used to borrow the
+                // node's own key slices, so a deep free of the result
+                // (value_utilities.freeValue frees map keys unconditionally)
+                // released node/hydration-scratch memory and segfaulted after
+                // an unclean crash + reopen.
                 var prop_map = std.StringHashMap(Value).init(allocator);
                 var prop_iter = node.properties.iterator();
                 while (prop_iter.next()) |entry| {
                     const prop_val = property_codec.propertyValueToProjectedValue(allocator, entry.value_ptr.*) catch continue;
-                    prop_map.put(entry.key_ptr.*, prop_val) catch continue;
+                    const key_copy = allocator.dupe(u8, entry.key_ptr.*) catch continue;
+                    prop_map.put(key_copy, prop_val) catch {
+                        allocator.free(key_copy);
+                        continue;
+                    };
                 }
                 return Value{ .Map = prop_map };
             },
             .Edge => |edge| {
-                // Convert edge properties to a Map
+                // Convert edge properties to a Map (GAP-0910: keys duplicated,
+                // see the Node branch).
                 var prop_map = std.StringHashMap(Value).init(allocator);
                 var prop_iter = edge.properties.iterator();
                 while (prop_iter.next()) |entry| {
                     const prop_val = property_codec.propertyValueToProjectedValue(allocator, entry.value_ptr.*) catch continue;
-                    prop_map.put(entry.key_ptr.*, prop_val) catch continue;
+                    const key_copy = allocator.dupe(u8, entry.key_ptr.*) catch continue;
+                    prop_map.put(key_copy, prop_val) catch {
+                        allocator.free(key_copy);
+                        continue;
+                    };
                 }
                 return Value{ .Map = prop_map };
             },
@@ -2221,12 +2235,14 @@ fn tryBasicFunction(allocator: std.mem.Allocator, function_name: []const u8, arg
         if (args.len != 1) return null;
         const arg = try evalExpr(allocator, args[0].*, env);
         switch (arg) {
+            // GAP-0910 (same class as labels()/properties()): key strings are
+            // duplicated so the projected list owns its memory.
             .Map => |map| {
                 var keys = try allocator.alloc(Value, map.count());
                 var iter = map.iterator();
                 var i: usize = 0;
                 while (iter.next()) |entry| : (i += 1) {
-                    keys[i] = Value{ .Str = entry.key_ptr.* };
+                    keys[i] = Value{ .Str = try allocator.dupe(u8, entry.key_ptr.*) };
                 }
                 return Value{ .List = keys };
             },
@@ -2236,7 +2252,7 @@ fn tryBasicFunction(allocator: std.mem.Allocator, function_name: []const u8, arg
                 var iter = node.properties.iterator();
                 var i: usize = 0;
                 while (iter.next()) |entry| : (i += 1) {
-                    keys[i] = Value{ .Str = entry.key_ptr.* };
+                    keys[i] = Value{ .Str = try allocator.dupe(u8, entry.key_ptr.*) };
                 }
                 return Value{ .List = keys };
             },
@@ -2246,7 +2262,7 @@ fn tryBasicFunction(allocator: std.mem.Allocator, function_name: []const u8, arg
                 var iter = edge.properties.iterator();
                 var i: usize = 0;
                 while (iter.next()) |entry| : (i += 1) {
-                    keys[i] = Value{ .Str = entry.key_ptr.* };
+                    keys[i] = Value{ .Str = try allocator.dupe(u8, entry.key_ptr.*) };
                 }
                 return Value{ .List = keys };
             },
@@ -2450,7 +2466,10 @@ fn tryBasicFunction(allocator: std.mem.Allocator, function_name: []const u8, arg
             .Node => |n| {
                 var labels = try allocator.alloc(Value, n.labels.len);
                 for (n.labels, 0..) |label, i| {
-                    labels[i] = Value{ .Str = label };
+                    // GAP-0910: duplicate — the list used to borrow the node's
+                    // own label slices, so deep-freeing the result released
+                    // node-owned memory.
+                    labels[i] = Value{ .Str = try allocator.dupe(u8, label) };
                 }
                 return Value{ .List = labels };
             },

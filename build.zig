@@ -8995,6 +8995,17 @@ pub fn build(b: *std.Build) void {
     const gap0848_step = b.step("test-gap0848", "Run GAP-0848 strict-tenancy auto-default in multi-tenant mode regression");
     gap0848_step.dependOn(&run_gap0848_tests.step);
 
+    // GAP-0910/GAP-0915: unclean-crash recovery — labeled MATCH sees the
+    // committed set after reopen; labels()/properties() projections own
+    // their memory instead of borrowing node storage pointers.
+    const gap0910_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_gap0910_0915_crash_recovery.zig"), .target = target, .optimize = optimize });
+    gap0910_test_mod.addImport("geode", root_mod);
+    const gap0910_tests = b.addTest(.{ .root_module = gap0910_test_mod });
+    const run_gap0910_tests = b.addRunArtifact(gap0910_tests);
+    shardDep(test_step, &run_gap0910_tests.step, 0, test_shard_loads, test_shard_index);
+    const gap0910_step = b.step("test-gap0910", "Run GAP-0910/GAP-0915 unclean-crash recovery regressions");
+    gap0910_step.dependOn(&run_gap0910_tests.step);
+
     // GAP-0912/GAP-0913: variable-length pattern semantics — same-variable
     // endpoints unify (start == end); aggregates honor WHERE/FILTER.
     const gap0912_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_gap0912_0913_varlen_semantics.zig"), .target = target, .optimize = optimize });

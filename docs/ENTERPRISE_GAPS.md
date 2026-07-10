@@ -156,7 +156,14 @@ crashes instead of creating it or erroring cleanly.
 **Test:** `audit_sink_failclosed_policy.yml` (documented alongside GAP-0908).
 
 ## GAP-0910 — `labels(n), properties(n)` after crash+restart segfaults
-**Severity:** Critical · **Status:** OPEN · **Area:** Query / value lifetime · **Found:** 2026-07-10
+**Severity:** Critical · **Status:** FIXED (2026-07-10) · **Area:** Query / value lifetime · **Found:** 2026-07-10
+**Fix:** the `labels()` / `properties()` / `keys()` projections borrowed the
+node's own label/key slices, so any deep free of the result
+(`value_utilities.freeValue` frees list items and map keys unconditionally)
+released node- or hydration-scratch-owned memory. All three now duplicate
+into caller-owned memory. Regression: `zig build test-gap0910`
+(`tests/test_gap0910_0915_crash_recovery.zig`, incl. a post-unclean-reopen
+labels()/properties() drive and within-row pointer-ownership probes).
 **Symptom:** `MATCH (n) RETURN labels(n), properties(n)` after an unclean crash +
 reopen segfaults the server (map double-free / dangling pointer in result deinit).
 **Root cause:** `src/execution/value_utilities.zig:235 freeValue`.
@@ -240,7 +247,17 @@ erroring — a silent wrong result.
 `groupby-unknown-alias-limitation-pin`).
 
 ## GAP-0915 — label index not rebuilt after an unclean crash
-**Severity:** Critical · **Status:** OPEN · **Area:** Storage / recovery · **Found:** 2026-07-10
+**Severity:** Critical · **Status:** FIXED (2026-07-10) · **Area:** Storage / recovery · **Found:** 2026-07-10
+**Fix:** two coupled causes. (1) The label DICTIONARY is checkpoint-only
+persisted; gap-0026 added a synchronous first-sight `labels.dict` persist for
+the security graph only — now extended to every graph (fail-closed before
+ack), so an unclean crash no longer loses the name→id mappings. (2) The
+label-scan path (`appendLiveNodesForLabelShard`, feeding
+`getNodesByLabelCapped` and the chunked cursor) now runs the engine's
+`ensureDerivedHydrated` Phase A guard before reading the deferred-derived
+posting list, same as `countNodesByLabel` (9a255a83). Regression:
+`zig build test-gap0910` (unclean-crash sim: engine label slots, labeled and
+label-less counts, labels()/properties() drive after reopen).
 **Symptom:** after a SIGKILL crash + reopen, `MATCH (n:Label) RETURN count(n)`
 returns 0 while `MATCH (n) RETURN count(n)` and property lookups return the full
 committed set — the row data survives but the label index is not reconstructed on
