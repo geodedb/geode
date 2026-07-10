@@ -1,6 +1,16 @@
 # Enterprise Gaps
 
 Last updated: 2026-07-10
+**Resolution status (2026-07-10):** all 29 defects addressed on branch
+`fix/enterprise-gaps-2026-07-10` — **26 FIXED** with red-first regression tests
+(`zig build test-gap09NN`), **3 PARTIAL** with documented rationale and tests:
+GAP-0901 (repo-side global-init fixed; end-to-end gRPC blocked by vendor
+GAP-0893), GAP-0902 (stream-hygiene + apply-path pinned; live server-crash
+reproduction owed to the managed-server harness), and the retained sub-items of
+GAP-0923(a) / GAP-0926 (rejecting them would break legitimate queries — see
+each entry). ISO conformance 96/96, executed `gql_conformance` 20/20, migration
+suite 76/76, and all touched-subsystem suites remain green.
+
 Source: black-box spec-coverage expansion of the Geode test harness
 (`geode-test-harness` branch `spec-expansion-2026-07-09`). Building 50+
 negative/regression specs surfaced the defects below by probing the release
