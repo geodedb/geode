@@ -21,14 +21,28 @@ services:
     # `otel-output` named volume (the contrib image's default UID 10001 cannot
     # write to a freshly-created named-volume mount). See scripts/otel-compose-verify.sh.
     user: "0:0"
+    # Security hardening: verified empirically that this exact image tag starts
+    # and runs normally (writes to the root-owned named volume, binds its ports)
+    # under cap_drop: ALL + no-new-privileges -- the root-owned write works via
+    # standard owner permission bits, no elevated capability required.
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
     command: ["--config", "/etc/otelcol-contrib/config.yaml"]
     volumes:
       - ./config/otel-collector.yaml:/etc/otelcol-contrib/config.yaml:ro
       - otel-output:/var/log/otel
+    # geode pushes OTLP over the compose network via the `otel-collector:4318`
+    # service DNS name (see OTEL_EXPORTER_OTLP_ENDPOINT below), not through
+    # these published host ports, so binding to loopback does not affect
+    # inter-container telemetry delivery. The verify script also curls
+    # 13133 from the host itself (http://localhost:13133), which loopback
+    # binding does not break.
     ports:
-      - "4318:4318"     # OTLP/HTTP
-      - "4317:4317"     # OTLP/gRPC
-      - "13133:13133"   # health_check extension (real readiness; curled by the verify script)
+      - "127.0.0.1:4318:4318"     # OTLP/HTTP
+      - "127.0.0.1:4317:4317"     # OTLP/gRPC
+      - "127.0.0.1:13133:13133"   # health_check extension (real readiness; curled by the verify script)
     healthcheck:
       # The contrib image is distroless (no curl/sh), so this only smoke-tests that
       # the binary runs — it does NOT prove the OTLP receiver is bound. Real readiness
@@ -45,6 +59,17 @@ services:
       dockerfile: Dockerfile.prebuilt
     image: geode:otel-local
     container_name: geode-otel
+    # Security hardening: empirically verified (built Dockerfile.prebuilt and
+    # ran it directly) that the geode binary starts fully -- thread pool, QUIC
+    # listener, and HTTP liveness endpoint all come up -- under cap_drop: ALL
+    # with zero added capabilities. Unlike docker-compose.yml's `geode` service,
+    # this variant has no `sysctls:` UDP-buffer tuning block, so it does not
+    # need the NET_ADMIN that service documents; SYS_NICE was not required for
+    # startup or thread-pool init either in this verification.
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
     depends_on:
       otel-collector:
         condition: service_started
@@ -72,14 +97,33 @@ services:
       GEODE_METRICS_BIND: "0.0.0.0"
       LOG_LEVEL: "info"
     command: ["--data-dir", "/data", "--listen", "0.0.0.0:3141", "--log-level", "info"]
+    # Host QUIC published on 13141 (not 3141) so this stack coexists with a
+    # host-resident geode (e.g. a systemd geode.service) that already owns
+    # UDP 3141. The container still listens on 3141 internally; the verify
+    # script queries geode from inside the container, so this mapping only
+    # affects external host access. This is a self-contained local dev/verify
+    # stack (see file header) with no evidence of a non-localhost consumer, so
+    # loopback-only binding is safe here.
     ports:
-      # Host QUIC published on 13141 (not 3141) so this stack coexists with a
-      # host-resident geode (e.g. a systemd geode.service) that already owns
-      # UDP 3141. The container still listens on 3141 internally; the verify
-      # script queries geode from inside the container, so this mapping only
-      # affects external host access.
-      - "13141:3141/udp"  # QUIC (host 13141 -> container 3141)
-      - "9091:9091/tcp"   # Prometheus /metrics
+      - "127.0.0.1:13141:3141/udp"  # QUIC (host 13141 -> container 3141)
+      - "127.0.0.1:9091:9091/tcp"   # Prometheus /metrics
+    # Healthcheck note: Dockerfile.prebuilt already declares a HEALTHCHECK that
+    # runs docker/health-check.sh, but that script issues a TLS query with
+    # --insecure-tls-skip-verify, which this release build's geode binary
+    # *refuses* under production/release conditions (verified: exits 1 here,
+    # since this compose command starts geode without --cert/--key, so it
+    # falls back to an auto-generated self-signed cert). Rather than guess at
+    # a fix for that script/policy interaction, this uses the plain-HTTP
+    # liveness endpoint geode exposes on GEODE_METRICS_PORT specifically to
+    # avoid the QUIC/TLS query path (see startup log: "out-of-band liveness
+    # ready: GET http://0.0.0.0:9091/health") -- verified working (200,
+    # {"status":"ok"}) against this exact image/command combination.
+    healthcheck:
+      test: ["CMD-SHELL", "bash -c 'exec 3<>/dev/tcp/127.0.0.1/9091 && printf \"GET /health HTTP/1.0\\r\\n\\r\\n\" >&3 && timeout 2 cat <&3' | grep -q ' 200 '"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
     volumes:
       - geode-data:/data
     ulimits:

@@ -11,14 +11,19 @@ ARG TARGETARCH
 
 # Install build dependencies
 # Note: libvulkan-dev and glslang-tools removed - GPU acceleration is optional and not available in containers
+# Versions pinned to the current debian:bookworm-slim apt candidates (checked via
+# `apt-cache policy` against this base image) for reproducible, SAST-clean builds.
+# These are build-stage-only packages (discarded after the build stage), so a
+# stale pin only risks a future build-time apt error, not a shipped-image CVE;
+# Renovate can bump these pins when newer point releases roll out.
 RUN apt-get update && apt-get install -y \
-    curl \
-    xz-utils \
-    ca-certificates \
-    git \
-    build-essential \
-    file \
-    libssl-dev \
+    curl=7.88.1-10+deb12u15 \
+    xz-utils=5.4.1-1+deb12u1 \
+    ca-certificates=20230311+deb12u1 \
+    git=1:2.39.5-0+deb12u3 \
+    build-essential=12.9 \
+    file=1:5.44-3 \
+    libssl-dev=3.0.20-1~deb12u2 \
     && rm -rf /var/lib/apt/lists/*
 
 # Copy pre-downloaded Zig archives for both architectures (avoids entropy issues in Docker build)

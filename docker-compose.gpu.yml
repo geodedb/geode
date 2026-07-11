@@ -15,6 +15,23 @@ services:
     image: geode:gpu
     container_name: geode-db-gpu
     restart: unless-stopped
+    # Security hardening: GPU access is via deploy.resources.reservations.devices
+    # below, not via Linux capabilities, so dropping all capabilities does not
+    # affect GPU availability. Empirically verified the geode binary starts and
+    # serves fully (thread pool, QUIC listener, HTTP liveness) with zero added
+    # capabilities.
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    # NOTE (SAST: Container Traffic Not Bound To Host Interface): intentionally
+    # NOT bound to 127.0.0.1. This is the production GPU database variant of the
+    # `geode` service in docker-compose.yml, which publishes the identical
+    # 3141/udp+9091/tcp pair unrestricted (see docker-compose.yml:190-192) so
+    # external QUIC clients can reach the database. Restricting this one variant
+    # to loopback would silently break remote client access while leaving the
+    # base service's identical exposure untouched -- needs an infra-owner
+    # decision (e.g. firewall/security-group perimeter instead of loopback bind).
     ports:
       - "3142:3141/udp"  # QUIC protocol (different port to avoid conflict)
       - "9092:9091/tcp"  # Metrics endpoint
@@ -80,11 +97,31 @@ services:
     image: nvidia/dcgm-exporter:3.3.0-3.2.0-ubuntu22.04
     container_name: geode-nvidia-exporter
     restart: unless-stopped
+    # Security hardening: GPU access is via deploy.resources.reservations.devices
+    # below, not via Linux capabilities. Only DCGM *profiling* metrics require
+    # --cap-add SYS_ADMIN (not requested here -- no DCGM_EXPORTER_COLLECTORS
+    # profiling fields are configured); base utilization metrics run fine
+    # without added capabilities (verified against this exact image tag).
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    # Only scraped by Prometheus over the internal geode-network (container DNS,
+    # not this published port), so binding to loopback only affects host-local
+    # access and does not break in-network scraping.
     ports:
-      - "9400:9400"
+      - "127.0.0.1:9400:9400"
     environment:
       - DCGM_EXPORTER_LISTEN=:9400
       - DCGM_EXPORTER_KUBERNETES=false
+    healthcheck:
+      # Image is Ubuntu-based with bash but no curl/wget/nc; verified this
+      # /dev/tcp connect check works against this exact image tag.
+      test: ["CMD-SHELL", "bash -c '(exec 3<>/dev/tcp/127.0.0.1/9400) 2>/dev/null'"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 20s
     deploy:
       resources:
         reservations:
