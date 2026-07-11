@@ -1325,6 +1325,27 @@ pub fn executeCreateQuery(
     for (create_pattern.chains) |chain| {
         // Handle single node creation
         if (chain.head) |node_pattern| {
+            // GAP-0930: evaluate ALL property-value expressions BEFORE creating
+            // the node, so a mid-property eval error (e.g. malformed geometry
+            // WKT -> TypeMismatch) aborts the whole CREATE atomically instead of
+            // committing an orphan node with the failed property defaulted to
+            // NULL. Pre-evaluation is self-contained (no undo-log dependency):
+            // if any expression errors, we return before the first store write.
+            const evaluated_values: []Value = if (node_pattern.props) |props| blk_eval: {
+                const env = Env{
+                    .names = &.{},
+                    .values = &.{},
+                    .param_names = param_names,
+                    .param_values = param_values,
+                    .allocator = allocator,
+                };
+                const buf = try allocator.alloc(Value, props.len);
+                for (props, 0..) |prop, i| {
+                    buf[i] = try eval.evalExpr(allocator, prop.value.*, env);
+                }
+                break :blk_eval buf;
+            } else &.{};
+
             // Check if this node already exists in matched bindings
             const node_id = if (node_pattern.name) |var_name| blk: {
                 if (created_nodes.get(var_name)) |existing_id| {
@@ -1343,21 +1364,13 @@ pub fn executeCreateQuery(
                 break :blk try store.createNodeWithGraph(node_pattern.labels, target_graph);
             };
 
-            // Set properties if present
+            // Apply the pre-evaluated property values.
             if (node_pattern.props) |props| {
-                const env = Env{
-                    .names = &.{},
-                    .values = &.{},
-                    .param_names = param_names,
-                    .param_values = param_values,
-                    .allocator = allocator,
-                };
-
-                for (props) |prop| {
-                    const value = try eval.evalExpr(allocator, prop.value.*, env);
+                for (props, evaluated_values) |prop, value| {
                     try property_mutation.setNodePropertyFromValue(allocator, store, node_pattern.labels, node_id, prop.key, value);
                 }
             }
+            if (evaluated_values.len > 0) allocator.free(evaluated_values);
 
             // Auto-create indexes for node labels
             ensureAutoIndexes(allocator, node_pattern.labels);
@@ -1365,6 +1378,37 @@ pub fn executeCreateQuery(
 
         // Handle relationship creation
         for (chain.hops) |hop| {
+            // GAP-0930: evaluate ALL property-value expressions (left endpoint,
+            // right endpoint, and the relationship) BEFORE creating any node or
+            // edge, so a mid-property eval error aborts the whole relationship
+            // CREATE atomically instead of committing partially-populated
+            // endpoints with the failed property defaulted to NULL.
+            const hop_env = Env{
+                .names = &.{},
+                .values = &.{},
+                .param_names = param_names,
+                .param_values = param_values,
+                .allocator = allocator,
+            };
+            const left_values: []Value = if (hop.left.props) |props| blk_lv: {
+                const buf = try allocator.alloc(Value, props.len);
+                for (props, 0..) |prop, i| buf[i] = try eval.evalExpr(allocator, prop.value.*, hop_env);
+                break :blk_lv buf;
+            } else &.{};
+            const right_values: []Value = if (hop.right.props) |props| blk_rv: {
+                const buf = try allocator.alloc(Value, props.len);
+                for (props, 0..) |prop, i| buf[i] = try eval.evalExpr(allocator, prop.value.*, hop_env);
+                break :blk_rv buf;
+            } else &.{};
+            const rel_values: []Value = if (hop.rel.props) |props| blk_rev: {
+                const buf = try allocator.alloc(Value, props.len);
+                for (props, 0..) |prop, i| buf[i] = try eval.evalExpr(allocator, prop.value.*, hop_env);
+                break :blk_rev buf;
+            } else &.{};
+            defer if (left_values.len > 0) allocator.free(left_values);
+            defer if (right_values.len > 0) allocator.free(right_values);
+            defer if (rel_values.len > 0) allocator.free(rel_values);
+
             // Check if left node exists in bindings (from MATCH), otherwise create new
             const left_id = blk: {
                 if (hop.left.name) |var_name| {
@@ -1399,34 +1443,16 @@ pub fn executeCreateQuery(
                 break :blk new_id;
             };
 
-            // Set properties for left node (only if newly created or has props to set)
+            // Set properties for left node (pre-evaluated above for atomicity)
             if (hop.left.props) |props| {
-                const env = Env{
-                    .names = &.{},
-                    .values = &.{},
-                    .param_names = param_names,
-                    .param_values = param_values,
-                    .allocator = allocator,
-                };
-
-                for (props) |prop| {
-                    const value = try eval.evalExpr(allocator, prop.value.*, env);
+                for (props, left_values) |prop, value| {
                     try property_mutation.setNodePropertyFromValue(allocator, store, hop.left.labels, left_id, prop.key, value);
                 }
             }
 
-            // Set properties for right node (only if newly created or has props to set)
+            // Set properties for right node (pre-evaluated above for atomicity)
             if (hop.right.props) |props| {
-                const env = Env{
-                    .names = &.{},
-                    .values = &.{},
-                    .param_names = param_names,
-                    .param_values = param_values,
-                    .allocator = allocator,
-                };
-
-                for (props) |prop| {
-                    const value = try eval.evalExpr(allocator, prop.value.*, env);
+                for (props, right_values) |prop, value| {
                     try property_mutation.setNodePropertyFromValue(allocator, store, hop.right.labels, right_id, prop.key, value);
                 }
             }
@@ -1444,18 +1470,9 @@ pub fn executeCreateQuery(
             // Auto-create index for edge type
             ensureAutoIndexes(allocator, &.{rel_type});
 
-            // Set relationship properties
+            // Set relationship properties (pre-evaluated above for atomicity)
             if (hop.rel.props) |props| {
-                const env = Env{
-                    .names = &.{},
-                    .values = &.{},
-                    .param_names = param_names,
-                    .param_values = param_values,
-                    .allocator = allocator,
-                };
-
-                for (props) |prop| {
-                    const value = try eval.evalExpr(allocator, prop.value.*, env);
+                for (props, rel_values) |prop, value| {
                     try property_mutation.setEdgePropertyFromValue(allocator, store, rel_type, edge_id, prop.key, value);
                 }
             }
@@ -2315,6 +2332,22 @@ pub fn executeCreate(allocator: std.mem.Allocator, c: ast.CreateStatement, curre
     for (c.pattern.chains) |chain| {
         // Handle single node creation
         if (chain.head) |node_pattern| {
+            // GAP-0930: evaluate ALL property-value expressions BEFORE creating
+            // the node, so a mid-property eval error (e.g. malformed geometry
+            // WKT -> TypeMismatch) aborts the whole CREATE atomically instead of
+            // committing an orphan node with the failed property defaulted to
+            // NULL. Pre-evaluation is self-contained and does NOT rely on the
+            // stmt_txn / undo-log rollback: when this statement lazily creates
+            // its target graph, beginStatementTxn returns GraphNotFound and
+            // stmt_txn_open stays false, so no engine txn would roll the node
+            // back on error.
+            const evaluated_values: []Value = if (node_pattern.props) |props| blk_ev: {
+                const env = envFromContext(allocator, context);
+                const buf = try allocator.alloc(Value, props.len);
+                for (props, 0..) |prop, i| buf[i] = try eval.evalExpr(allocator, prop.value.*, env);
+                break :blk_ev buf;
+            } else &.{};
+
             const node_id = try store.createNodeWithGraph(node_pattern.labels, target_graph);
 
             // CANARY: REQ=REQ-TXN-UNDO-018; FEATURE="TransactionUndoLog"; ASPECT=ExecuteCreateUndoLog; STATUS=TESTED; TEST=geodetestlab/specs/transaction_state_basic.yml; OWNER=engine; UPDATED=2025-12-23
@@ -2324,15 +2357,13 @@ pub fn executeCreate(allocator: std.mem.Allocator, c: ast.CreateStatement, curre
                 log.err("undo log failed", &.{Attr.string("error", @errorName(err))});
             };
 
-            // Set properties if present
+            // Apply the pre-evaluated property values.
             if (node_pattern.props) |props| {
-                const env = envFromContext(allocator, context);
-
-                for (props) |prop| {
-                    const value = try eval.evalExpr(allocator, prop.value.*, env);
+                for (props, evaluated_values) |prop, value| {
                     try property_mutation.setNodePropertyFromValue(allocator, store, node_pattern.labels, node_id, prop.key, value);
                 }
             }
+            if (evaluated_values.len > 0) allocator.free(evaluated_values);
 
             // Store node ID if it has a variable name
             if (node_pattern.name) |name| {
@@ -2345,6 +2376,31 @@ pub fn executeCreate(allocator: std.mem.Allocator, c: ast.CreateStatement, curre
 
         // Handle chains with relationships
         for (chain.hops) |hop| {
+            // GAP-0930: evaluate ALL property-value expressions (left endpoint,
+            // right endpoint, and the relationship) BEFORE creating any node or
+            // edge, so a mid-property eval error aborts the whole relationship
+            // CREATE atomically rather than committing partially-populated
+            // endpoints. Self-contained (no reliance on stmt_txn/undo-log).
+            const hop_env = envFromContext(allocator, context);
+            const left_values: []Value = if (hop.left.props) |props| blk_lv: {
+                const buf = try allocator.alloc(Value, props.len);
+                for (props, 0..) |prop, i| buf[i] = try eval.evalExpr(allocator, prop.value.*, hop_env);
+                break :blk_lv buf;
+            } else &.{};
+            const right_values: []Value = if (hop.right.props) |props| blk_rv: {
+                const buf = try allocator.alloc(Value, props.len);
+                for (props, 0..) |prop, i| buf[i] = try eval.evalExpr(allocator, prop.value.*, hop_env);
+                break :blk_rv buf;
+            } else &.{};
+            const rel_values: []Value = if (hop.rel.props) |props| blk_rev: {
+                const buf = try allocator.alloc(Value, props.len);
+                for (props, 0..) |prop, i| buf[i] = try eval.evalExpr(allocator, prop.value.*, hop_env);
+                break :blk_rev buf;
+            } else &.{};
+            defer if (left_values.len > 0) allocator.free(left_values);
+            defer if (right_values.len > 0) allocator.free(right_values);
+            defer if (rel_values.len > 0) allocator.free(rel_values);
+
             // Create left node if not already created (in target graph)
             var left_node_id: u64 = undefined;
             if (hop.left.name) |left_name| {
@@ -2370,12 +2426,9 @@ pub fn executeCreate(allocator: std.mem.Allocator, c: ast.CreateStatement, curre
                 ensureAutoIndexes(allocator, hop.left.labels);
             }
 
-            // Set properties on left node if present and not already set
+            // Set properties on left node (pre-evaluated above for atomicity)
             if (hop.left.props) |props| {
-                const env = envFromContext(allocator, context);
-
-                for (props) |prop| {
-                    const value = try eval.evalExpr(allocator, prop.value.*, env);
+                for (props, left_values) |prop, value| {
                     try property_mutation.setNodePropertyFromValue(allocator, store, hop.left.labels, left_node_id, prop.key, value);
                 }
             }
@@ -2405,12 +2458,9 @@ pub fn executeCreate(allocator: std.mem.Allocator, c: ast.CreateStatement, curre
                 ensureAutoIndexes(allocator, hop.right.labels);
             }
 
-            // Set properties on right node if present and not already set
+            // Set properties on right node (pre-evaluated above for atomicity)
             if (hop.right.props) |props| {
-                const env = envFromContext(allocator, context);
-
-                for (props) |prop| {
-                    const value = try eval.evalExpr(allocator, prop.value.*, env);
+                for (props, right_values) |prop, value| {
                     try property_mutation.setNodePropertyFromValue(allocator, store, hop.right.labels, right_node_id, prop.key, value);
                 }
             }
@@ -2431,12 +2481,9 @@ pub fn executeCreate(allocator: std.mem.Allocator, c: ast.CreateStatement, curre
             // Auto-create index for edge type
             ensureAutoIndexes(allocator, &.{edge_type});
 
-            // Set edge properties if present
+            // Set edge properties (pre-evaluated above for atomicity)
             if (hop.rel.props) |props| {
-                const env = envFromContext(allocator, context);
-
-                for (props) |prop| {
-                    const value = try eval.evalExpr(allocator, prop.value.*, env);
+                for (props, rel_values) |prop, value| {
                     try property_mutation.setEdgePropertyFromValue(allocator, store, edge_type, edge_id, prop.key, value);
                 }
             }
@@ -2551,17 +2598,25 @@ pub fn executeInsert(allocator: std.mem.Allocator, ins: ast.InsertStatement, cur
     for (ins.pattern.chains) |chain| {
         // Handle single node creation
         if (chain.head) |node_pattern| {
+            // GAP-0930: evaluate property-value expressions BEFORE creating the
+            // node so an eval error aborts the INSERT atomically (no orphan node
+            // with the failed property defaulted to NULL).
+            const evaluated_values: []Value = if (node_pattern.props) |props| blk_ev: {
+                const env = Env{ .allocator = allocator, .names = &.{}, .values = &.{} };
+                const buf = try allocator.alloc(Value, props.len);
+                for (props, 0..) |prop, i| buf[i] = try eval.evalExpr(allocator, prop.value.*, env);
+                break :blk_ev buf;
+            } else &.{};
+
             const node_id = try store.createNodeWithGraph(node_pattern.labels, target_graph);
 
-            // Set properties if present
+            // Apply the pre-evaluated property values.
             if (node_pattern.props) |props| {
-                const env = Env{ .allocator = allocator, .names = &.{}, .values = &.{} };
-
-                for (props) |prop| {
-                    const value = try eval.evalExpr(allocator, prop.value.*, env);
+                for (props, evaluated_values) |prop, value| {
                     try property_mutation.setNodePropertyFromValue(allocator, store, node_pattern.labels, node_id, prop.key, value);
                 }
             }
+            if (evaluated_values.len > 0) allocator.free(evaluated_values);
 
             // Store node ID if it has a variable name
             if (node_pattern.name) |name| {
@@ -2574,6 +2629,29 @@ pub fn executeInsert(allocator: std.mem.Allocator, ins: ast.InsertStatement, cur
 
         // Handle chains with relationships
         for (chain.hops) |hop| {
+            // GAP-0930: pre-evaluate all endpoint + relationship property
+            // expressions before creating any node/edge so an eval error aborts
+            // the INSERT atomically instead of committing partial endpoints.
+            const hop_env = Env{ .allocator = allocator, .names = &.{}, .values = &.{} };
+            const left_values: []Value = if (hop.left.props) |props| blk_lv: {
+                const buf = try allocator.alloc(Value, props.len);
+                for (props, 0..) |prop, i| buf[i] = try eval.evalExpr(allocator, prop.value.*, hop_env);
+                break :blk_lv buf;
+            } else &.{};
+            const right_values: []Value = if (hop.right.props) |props| blk_rv: {
+                const buf = try allocator.alloc(Value, props.len);
+                for (props, 0..) |prop, i| buf[i] = try eval.evalExpr(allocator, prop.value.*, hop_env);
+                break :blk_rv buf;
+            } else &.{};
+            const rel_values: []Value = if (hop.rel.props) |props| blk_rev: {
+                const buf = try allocator.alloc(Value, props.len);
+                for (props, 0..) |prop, i| buf[i] = try eval.evalExpr(allocator, prop.value.*, hop_env);
+                break :blk_rev buf;
+            } else &.{};
+            defer if (left_values.len > 0) allocator.free(left_values);
+            defer if (right_values.len > 0) allocator.free(right_values);
+            defer if (rel_values.len > 0) allocator.free(rel_values);
+
             // Create left node if not already created (in target graph)
             var left_node_id: u64 = undefined;
             if (hop.left.name) |left_name| {
@@ -2599,16 +2677,9 @@ pub fn executeInsert(allocator: std.mem.Allocator, ins: ast.InsertStatement, cur
                 ensureAutoIndexes(allocator, hop.left.labels);
             }
 
-            // Set properties on left node if present and not already set
+            // Set properties on left node (pre-evaluated above for atomicity)
             if (hop.left.props) |props| {
-                const env = Env{
-                    .allocator = allocator,
-                    .names = &.{},
-                    .values = &.{},
-                };
-
-                for (props) |prop| {
-                    const value = try eval.evalExpr(allocator, prop.value.*, env);
+                for (props, left_values) |prop, value| {
                     try property_mutation.setNodePropertyFromValue(allocator, store, hop.left.labels, left_node_id, prop.key, value);
                 }
             }
@@ -2638,16 +2709,9 @@ pub fn executeInsert(allocator: std.mem.Allocator, ins: ast.InsertStatement, cur
                 ensureAutoIndexes(allocator, hop.right.labels);
             }
 
-            // Set properties on right node if present and not already set
+            // Set properties on right node (pre-evaluated above for atomicity)
             if (hop.right.props) |props| {
-                const env = Env{
-                    .allocator = allocator,
-                    .names = &.{},
-                    .values = &.{},
-                };
-
-                for (props) |prop| {
-                    const value = try eval.evalExpr(allocator, prop.value.*, env);
+                for (props, right_values) |prop, value| {
                     try property_mutation.setNodePropertyFromValue(allocator, store, hop.right.labels, right_node_id, prop.key, value);
                 }
             }
@@ -2668,16 +2732,9 @@ pub fn executeInsert(allocator: std.mem.Allocator, ins: ast.InsertStatement, cur
             // Auto-create index for edge type
             ensureAutoIndexes(allocator, &.{edge_type});
 
-            // Set edge properties if present
+            // Set edge properties (pre-evaluated above for atomicity)
             if (hop.rel.props) |props| {
-                const env = Env{
-                    .allocator = allocator,
-                    .names = &.{},
-                    .values = &.{},
-                };
-
-                for (props) |prop| {
-                    const value = try eval.evalExpr(allocator, prop.value.*, env);
+                for (props, rel_values) |prop, value| {
                     try property_mutation.setEdgePropertyFromValue(allocator, store, edge_type, edge_id, prop.key, value);
                 }
             }

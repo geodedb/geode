@@ -9029,6 +9029,14 @@ pub fn build(b: *std.Build) void {
     const gap0924_step = b.step("test-gap0924", "Run GAP-0924 spatial geometry validation + bowtie rejection regression");
     gap0924_step.dependOn(&run_gap0924_tests.step);
 
+    const gap0930_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_gap0930_create_atomicity.zig"), .target = target, .optimize = optimize });
+    gap0930_test_mod.addImport("geode", root_mod);
+    const gap0930_tests = b.addTest(.{ .root_module = gap0930_test_mod });
+    const run_gap0930_tests = b.addRunArtifact(gap0930_tests);
+    shardDep(test_step, &run_gap0930_tests.step, 0, test_shard_loads, test_shard_index);
+    const gap0930_step = b.step("test-gap0930", "Run GAP-0930 CREATE/INSERT property-eval atomicity regression");
+    gap0930_step.dependOn(&run_gap0930_tests.step);
+
     // GAP-0927/GAP-0928: connection-pool operability — idle-reap deadline
     // wired to --idle-timeout; rate-limited POOL_EXHAUSTED diagnostic. The
     // pure predicates are inline tests in server/main.zig +
