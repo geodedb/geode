@@ -525,6 +525,19 @@ test "GAP-ENT-0048 DEFECT B: deferred exact-index rebuild honors read-executor c
     const path = try std.fmt.allocPrint(allocator, ".zig-cache/tmp/{s}", .{&tmp.sub_path});
     defer allocator.free(path);
 
+    // GAP-ENT-0048f REDESIGN: a reopen now PROACTIVELY builds+persists the exact
+    // index on a RACE-FREE background thread (spawnExactIndexRebuildOnReopen ->
+    // buildAndPersistExactIndexForHydratedGraph). That eager hydration build both
+    // (a) undermines this test's premise — the index would already be BUILT at
+    // hydration, leaving nothing for the first cancelled read to rebuild/cancel —
+    // and (b) races the rebuild-run counter assertions below (it increments the
+    // same g_exact_rebuild_runs counter on a background thread), making the test
+    // flaky (passes solo, fails under shard load). Suppress the reopen background
+    // rebuild so the index stays TRULY deferred and the FIRST index-served read is
+    // what triggers the cancellable rebuild this DEFECT-B contract exercises.
+    adapter_mod.setEagerExactRebuildOnReopenDisabledForTest(true);
+    defer adapter_mod.setEagerExactRebuildOnReopenDisabledForTest(null);
+
     const graph = "cancel_rebuild_graph";
     const label = "Taxon";
     const N: usize = 8192;
