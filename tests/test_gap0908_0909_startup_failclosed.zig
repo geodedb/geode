@@ -40,6 +40,12 @@ fn chmodSub(dir: std.Io.Dir, sub_path: []const u8, mode: std.posix.mode_t) !void
 
 test "GAP-0908: unwritable audit sink is a typed error with no leak" {
     if (builtin.os.tag == .windows) return error.SkipZigTest;
+    // Root bypasses filesystem permissions, so chmod 000 does NOT make the sink
+    // unwritable for uid 0: the server would start successfully, `expectError`
+    // below would fail, and the un-torn-down server's resources would leak. CI
+    // runners commonly run as root; skip there — this asserts permission-failure
+    // behavior, which is unobservable without permission enforcement.
+    if (builtin.os.tag == .linux and std.os.linux.geteuid() == 0) return error.SkipZigTest;
 
     var tmp = testing.tmpDir(.{});
     defer tmp.cleanup();
@@ -109,6 +115,10 @@ test "GAP-0909: ensureDataDir creates a missing nested path (mkdir -p)" {
 
 test "GAP-0909: ensureDataDir under an unwritable parent errors cleanly" {
     if (builtin.os.tag == .windows) return error.SkipZigTest;
+    // Root bypasses filesystem permissions (see GAP-0908 above): a 0o500 parent
+    // is still writable for uid 0, so ensureDataDir would succeed instead of
+    // erroring. Skip under root — the permission-failure path is unobservable.
+    if (builtin.os.tag == .linux and std.os.linux.geteuid() == 0) return error.SkipZigTest;
 
     var tmp = testing.tmpDir(.{});
     defer tmp.cleanup();
