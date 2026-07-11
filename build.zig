@@ -7956,7 +7956,21 @@ pub fn build(b: *std.Build) void {
     hydration_stream_test_mod.addImport("graph_storage", graph_storage_mod);
     const hydration_stream_tests = b.addTest(.{ .root_module = hydration_stream_test_mod });
     const run_hydration_stream_tests = b.addRunArtifact(hydration_stream_tests);
-    shardDep(test_step, &run_hydration_stream_tests.step, 1, test_shard_loads, test_shard_index);
+    // EXPLICIT PIN, not the greedy `shardDep` (pipeline #2669562802): this is the
+    // single HEAVIEST test binary in the suite — its T2b merge-memory + 16-worker
+    // parallel-parity stress cases run ~14 min at 16 cores / ~760 MB RSS (~3 h
+    // under a CPU-throttled CI runner). The load weights are miscalibrated (an
+    // even weight split still produced CI shard times from ~9 min to 6 h), so a
+    // weight bump can't move it — the greedy balancer kept landing it on shard 0,
+    // which ALSO runs the standalone REQ-0008 ReleaseSafe build, blowing shard 0's
+    // 6 h job timeout. Pin it to shard 6 (empirically the lightest CI shard,
+    // ~12 min) and reserve a large load there so the balancer keeps that shard
+    // thin. Shard 0 (build + rest) then finishes well under 6 h.
+    const hydration_pin: usize = if (test_shard_total > 6) 6 else 0;
+    if (test_shard_total > 1) test_shard_loads[hydration_pin] += 60;
+    if (test_shard_total <= 1 or test_shard_index == hydration_pin) {
+        test_step.dependOn(&run_hydration_stream_tests.step);
+    }
     const hydration_stream_step = b.step("test-hydration-stream-scan", "GAP hydration fast-scan: streaming loop2 parity (throughput floor is opt-in via GEODE_HYDRATION_PERF_FLOOR=1)");
     hydration_stream_step.dependOn(&run_hydration_stream_tests.step);
 
