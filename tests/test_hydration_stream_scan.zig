@@ -322,6 +322,14 @@ test "parity (resident scan fallback): streaming products equal legacy per-node 
     _ = unsetenv(KILL_SWITCH);
     _ = setenv(PERSIST_KILL_SWITCH, "1", 1);
     defer _ = unsetenv(PERSIST_KILL_SWITCH);
+    // GAP-0064 FIX A: each `.absent` reopen below spawns a race-free background
+    // exact-index rebuild. `deinitGlobalStoreForTestCrash` SIMULATES a crash and
+    // does NOT join it, so an orphaned rebuild thread can outlive the store it
+    // scanned and race the NEXT reopen's global hydration counters (ReleaseSafe
+    // surfaced this as a cross-block flake; Debug usually won the race). The
+    // exact-index build is orthogonal to the hydration-product parity under test.
+    geode.graph_storage_adapter.setEagerExactRebuildOnReopenDisabledForTest(true);
+    defer geode.graph_storage_adapter.setEagerExactRebuildOnReopenDisabledForTest(null);
 
     var tmp = testing.tmpDir(.{});
     defer tmp.cleanup();
@@ -394,6 +402,14 @@ test "parity (mmap scan fallback): missing loop2 snapshots rebuild via streaming
     _ = unsetenv(KILL_SWITCH);
     _ = setenv(PERSIST_KILL_SWITCH, "1", 1);
     defer _ = unsetenv(PERSIST_KILL_SWITCH);
+    // GAP-0064 FIX A: each `.absent` reopen below spawns a race-free background
+    // exact-index rebuild. `deinitGlobalStoreForTestCrash` SIMULATES a crash and
+    // does NOT join it, so an orphaned rebuild thread can outlive the store it
+    // scanned and race the NEXT reopen's global hydration counters (ReleaseSafe
+    // surfaced this as a cross-block flake; Debug usually won the race). The
+    // exact-index build is orthogonal to the hydration-product parity under test.
+    geode.graph_storage_adapter.setEagerExactRebuildOnReopenDisabledForTest(true);
+    defer geode.graph_storage_adapter.setEagerExactRebuildOnReopenDisabledForTest(null);
 
     var tmp = testing.tmpDir(.{});
     defer tmp.cleanup();
@@ -438,7 +454,15 @@ test "parity (mmap scan fallback): missing loop2 snapshots rebuild via streaming
         try testing.expectEqual(@as(u64, 0), graph_store.hydrationFullScanSkipCount()); // scan DID run
         try testing.expect(graph_store.loop2ScanNodeCount() >= built.live_nodes);
         try testing.expectEqual(@as(u64, 0), graph_store.idMapScanGetPropCount()); // loop1 stays mmap-served
-        graph_store.deinitGlobalStoreForTestCrash();
+        // CLEAN teardown (not ForTestCrash): a crash teardown's belt-and-suspenders
+        // adapter checkpointAll bumps the per-shard checkpoint_epoch but SKIPS the
+        // IdMap-snapshot re-stamp, leaving the on-disk snapshot at a stale epoch. The
+        // next reopen (block B) then rejects the still-data-valid snapshot on the
+        // epoch gate and pays a resident loop1 rebuild. A clean teardown re-stamps
+        // the snapshot at the current epoch (checkpointAll + saveIdMapSnapshots), so
+        // block B reliably exercises the mmap-adopt fast path it is meant to test.
+        // (ReleaseSafe surfaced the stale-epoch reject; Debug's timing hid it.)
+        graph_store.deinitGlobalStore();
     }
     defer allocator.free(legacy_fp);
 
@@ -468,6 +492,14 @@ test "parallel parity: 16 scan workers produce identical products to 1 worker" {
     _ = unsetenv(KILL_SWITCH);
     _ = setenv(PERSIST_KILL_SWITCH, "1", 1);
     defer _ = unsetenv(PERSIST_KILL_SWITCH);
+    // GAP-0064 FIX A: each `.absent` reopen below spawns a race-free background
+    // exact-index rebuild. `deinitGlobalStoreForTestCrash` SIMULATES a crash and
+    // does NOT join it, so an orphaned rebuild thread can outlive the store it
+    // scanned and race the NEXT reopen's global hydration counters (ReleaseSafe
+    // surfaced this as a cross-block flake; Debug usually won the race). The
+    // exact-index build is orthogonal to the hydration-product parity under test.
+    geode.graph_storage_adapter.setEagerExactRebuildOnReopenDisabledForTest(true);
+    defer geode.graph_storage_adapter.setEagerExactRebuildOnReopenDisabledForTest(null);
 
     var tmp = testing.tmpDir(.{});
     defer tmp.cleanup();

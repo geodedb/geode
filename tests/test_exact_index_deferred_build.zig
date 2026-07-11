@@ -60,6 +60,12 @@ fn querySorted(
 
 test "exact node-property index: deferred at open, built once on first access" {
     const allocator = testing.allocator;
+    // GAP-0064 FIX A: suppress the reopen background rebuild (the proactive
+    // hydration build) so the deferred index stays deferred — otherwise it races
+    // the exact-rebuild-runs counter assertions in this deferred-path test (flaky:
+    // ReleaseSafe surfaced the race that Debug usually won).
+    adapter_mod.setEagerExactRebuildOnReopenDisabledForTest(true);
+    defer adapter_mod.setEagerExactRebuildOnReopenDisabledForTest(null);
 
     var tmp = testing.tmpDir(.{});
     defer tmp.cleanup();
@@ -317,6 +323,10 @@ fn sleepMsDeferred(ms: u64) void {
 
 test "exact node-property index: lazy build persists immediately (crash before any checkpoint does not re-pay the rebuild)" {
     const allocator = testing.allocator;
+    // GAP-0064 FIX A: suppress the reopen background rebuild so the deferred
+    // index stays deferred and does not race the rebuild-runs counter (flaky).
+    adapter_mod.setEagerExactRebuildOnReopenDisabledForTest(true);
+    defer adapter_mod.setEagerExactRebuildOnReopenDisabledForTest(null);
 
     var tmp = testing.tmpDir(.{});
     defer tmp.cleanup();
@@ -445,6 +455,10 @@ test "exact node-property index: lazy build persists immediately (crash before a
 // defect — only DEFECT B (cancel) needs a fix.
 test "GAP-ENT-0048 DEFECT A: clean FULL-checkpoint reopen reloads the exact index (T1 posting walk, zero rebuild)" {
     const allocator = testing.allocator;
+    // GAP-0064 FIX A: suppress the reopen background rebuild so the deferred
+    // index stays deferred and does not race the rebuild-runs counter (flaky).
+    adapter_mod.setEagerExactRebuildOnReopenDisabledForTest(true);
+    defer adapter_mod.setEagerExactRebuildOnReopenDisabledForTest(null);
     var tmp = testing.tmpDir(.{});
     defer tmp.cleanup();
     const path = try std.fmt.allocPrint(allocator, ".zig-cache/tmp/{s}", .{&tmp.sub_path});
@@ -626,6 +640,12 @@ test "GAP-ENT-0048 DEFECT B: deferred exact-index rebuild honors read-executor c
 // scans every live node (scanned == N), and emits heartbeats (> 0).
 test "GAP-ENT-0048 SECONDARY: deferred rebuild is exempt from the proto-reader stall (watchdog) cancel while progressing" {
     const allocator = testing.allocator;
+    // GAP-0064 FIX A: suppress the reopen background rebuild so the deferred
+    // index stays deferred and its rebuild is what the stall-watchdog test
+    // exercises — otherwise the proactive hydration build races the
+    // rebuild-runs==0 assertion below (flaky; ReleaseSafe surfaced it).
+    adapter_mod.setEagerExactRebuildOnReopenDisabledForTest(true);
+    defer adapter_mod.setEagerExactRebuildOnReopenDisabledForTest(null);
     var tmp = testing.tmpDir(.{});
     defer tmp.cleanup();
     const path = try std.fmt.allocPrint(allocator, ".zig-cache/tmp/{s}", .{&tmp.sub_path});
