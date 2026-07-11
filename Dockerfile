@@ -68,8 +68,12 @@ RUN echo "Building with Zig $(zig version)..." && \
 # Stage 2: Runtime stage (minimal)
 FROM debian:bookworm-slim AS runtime
 
-# Install runtime dependencies
-RUN apt-get update && apt-get install -y \
+# Install runtime dependencies. `apt-get upgrade` patches pre-installed base
+# packages (perl-base, zlib1g, util-linux, ncurses, etc.) regardless of how
+# stale the debian:bookworm-slim layer in the local build cache is -- those
+# packages aren't in our own install list but still ship in the image and
+# accumulate CVEs between base-image refreshes otherwise.
+RUN apt-get update && apt-get upgrade -y && apt-get install -y \
     ca-certificates \
     libssl3 \
     iproute2 \
