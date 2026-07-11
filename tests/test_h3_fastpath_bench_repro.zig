@@ -94,6 +94,14 @@ fn seedIndexBeforeNodes(h: *Harness, aa: std.mem.Allocator) !void {
         var r = try h.runQuery("CREATE INDEX ON :T(k)");
         r.deinit(aa);
     }
+    // CREATE INDEX no longer builds the value-ordered tree eagerly (self-deadlock
+    // fix, execution.zig ~1654). Register it explicitly here — on the current
+    // (0-node) set — so it is registered+eligible but EMPTY. The N nodes created
+    // below go through online write paths that do NOT maintain the value-ordered
+    // tree (it is checkpoint-refreshed only), so the tree stays EMPTY/STALE until
+    // the full checkpoint in the FRESH case rebuilds it. This reproduces the exact
+    // "registered+eligible but stale" state the freshness gate must catch.
+    try graph_store.getGlobalAdapter().?.createOrderedIndex(graph_store.DEFAULT_GRAPH_NAME, "T", "k");
     var i: usize = 0;
     while (i < N) : (i += 1) {
         const v: usize = (i * 97) % N;
@@ -230,8 +238,13 @@ test "H3-P4 ROUTING: CREATE INDEX registers ordered index on the session graph, 
         var r = try h.runQuery("CREATE INDEX ON :T(k)");
         r.deinit(aa);
     }
-
+    // CREATE INDEX records the catalog row but no longer registers the ordered
+    // tree eagerly (self-deadlock fix). The value-ordered registration now flows
+    // through `createOrderedIndex` (the same call the lazy async builder uses),
+    // which must route to the SESSION graph, not a hardcoded default. Drive it
+    // explicitly on the session graph and assert it lands on "g_reg" only.
     const adapter = graph_store.getGlobalAdapter().?;
+    try adapter.createOrderedIndex(SESSION_GRAPH, "T", "k");
     const on_session = adapter.isOrderedIndexRegistered(SESSION_GRAPH, "T", "k");
     const on_default = adapter.isOrderedIndexRegistered(graph_store.DEFAULT_GRAPH_NAME, "T", "k");
     std.debug.print("[H3-P4 ROUTING] registered on '{s}'={} leaked on '{s}'={}\n", .{ SESSION_GRAPH, on_session, graph_store.DEFAULT_GRAPH_NAME, on_default });

@@ -105,10 +105,22 @@ test "H3-P3: ORDER BY indexed STRING key ASC LIMIT served from ordered index (sl
     const n: usize = 300;
     try seedT(&h, n);
 
-    // P2 wiring: CREATE INDEX registers the value-ordered index on all 16 shards.
+    // CREATE INDEX records the catalog row. Per the CREATE INDEX self-deadlock
+    // fix (execution.zig ~1654), the value-ordered tree is NO LONGER built
+    // eagerly under the per-graph write lock — it is materialized lazily (a
+    // background `spawnOrderedIndexBuildAsync` on the first ORDER BY, or on
+    // demand). This test targets the ordered fast-path SERVING, so build the
+    // tree synchronously off the write-lock path here (no deadlock: no lock is
+    // held at this point), then force a FULL checkpoint so the H3-P4 freshness
+    // gate (f85a87c3) is satisfied — registered + eligible + fresh on every shard.
     {
         var r = try h.runQuery("CREATE INDEX ON :T(k)");
         r.deinit(h.arena.allocator());
+    }
+    {
+        const adapter = graph_store.getGlobalAdapter().?;
+        try adapter.createOrderedIndex(graph_store.DEFAULT_GRAPH_NAME, "T", "k");
+        try adapter.checkpointAll();
     }
 
     // Reset both signals immediately before the measured query.
@@ -143,6 +155,13 @@ test "H3-P3: ORDER BY indexed STRING key DESC LIMIT served from ordered index (s
     {
         var r = try h.runQuery("CREATE INDEX ON :T(k)");
         r.deinit(h.arena.allocator());
+    }
+    {
+        // Build the value-ordered tree synchronously + checkpoint to freshen it
+        // (CREATE INDEX no longer builds it eagerly; see the ASC test above).
+        const adapter = graph_store.getGlobalAdapter().?;
+        try adapter.createOrderedIndex(graph_store.DEFAULT_GRAPH_NAME, "T", "k");
+        try adapter.checkpointAll();
     }
 
     execution.resetOrderedScanFastPathHits();
@@ -227,6 +246,14 @@ test "H3-P3: ORDER BY on an INELIGIBLE column (mixed int+float) falls back to th
         var r = try h.runQuery("CREATE INDEX ON :T3(k3)");
         r.deinit(aa);
     }
+    {
+        // Build the value-ordered tree synchronously + checkpoint so it is
+        // populated with the mixed int+float rows — required for the eligibility
+        // check below to observe the mixed types and report it INELIGIBLE.
+        const adapter = graph_store.getGlobalAdapter().?;
+        try adapter.createOrderedIndex(graph_store.DEFAULT_GRAPH_NAME, "T3", "k3");
+        try adapter.checkpointAll();
+    }
 
     // Sanity: the index IS registered on all shards but NOT eligible (mixed).
     const adapter = graph_store.getGlobalAdapter().?;
@@ -270,6 +297,13 @@ test "H3-P3: parity — ordered-index path == heap path (indexed vs non-indexed 
     {
         var r = try h.runQuery("CREATE INDEX ON :T(k)"); // index T only
         r.deinit(aa);
+    }
+    {
+        // Build T's value-ordered tree synchronously + checkpoint (see ASC test).
+        // :Tn stays unindexed → heap-served, as this parity test intends.
+        const adapter = graph_store.getGlobalAdapter().?;
+        try adapter.createOrderedIndex(graph_store.DEFAULT_GRAPH_NAME, "T", "k");
+        try adapter.checkpointAll();
     }
 
     inline for (.{ "ASC", "DESC" }) |dir| {
@@ -315,6 +349,12 @@ test "H3-P3: LIMIT > N returns ALL rows in order via the ordered path" {
     {
         var r = try h.runQuery("CREATE INDEX ON :T(k)");
         r.deinit(aa);
+    }
+    {
+        // Build the value-ordered tree synchronously + checkpoint (see ASC test).
+        const adapter = graph_store.getGlobalAdapter().?;
+        try adapter.createOrderedIndex(graph_store.DEFAULT_GRAPH_NAME, "T", "k");
+        try adapter.checkpointAll();
     }
 
     // LIMIT (5000) > N (120) but within the fast-path's 10_000 literal cap.
