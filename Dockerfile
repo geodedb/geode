@@ -16,7 +16,7 @@ ARG TARGETARCH
 # These are build-stage-only packages (discarded after the build stage), so a
 # stale pin only risks a future build-time apt error, not a shipped-image CVE;
 # Renovate can bump these pins when newer point releases roll out.
-RUN apt-get update && apt-get install -y \
+RUN apt-get update && apt-get install -y --no-install-recommends \
     curl=7.88.1-10+deb12u15 \
     xz-utils=5.4.1-1+deb12u1 \
     ca-certificates=20230311+deb12u1 \
@@ -78,7 +78,7 @@ FROM debian:bookworm-slim AS runtime
 # stale the debian:bookworm-slim layer in the local build cache is -- those
 # packages aren't in our own install list but still ship in the image and
 # accumulate CVEs between base-image refreshes otherwise.
-RUN apt-get update && apt-get upgrade -y && apt-get install -y \
+RUN apt-get update && apt-get upgrade -y && apt-get install -y --no-install-recommends \
     ca-certificates \
     libssl3 \
     iproute2 \
