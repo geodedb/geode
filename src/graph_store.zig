@@ -14944,6 +14944,13 @@ pub fn flushForCleanShutdown() void {
 }
 
 fn deinitGlobalStoreEx(clean: bool) void {
+    // Tear down the process-global undo log FIRST (while the store is still
+    // valid), because its entries + per-thread txn state reference store
+    // nodes/graphs this teardown is about to free. Leaving it live would let the
+    // NEXT store's transaction rollback read freed memory (a cross-test
+    // use-after-free -> ReleaseSafe GPE; see txn_undo_log.deinitGlobalUndoLog,
+    // GAP-0917). The undo log is coupled to the store's lifetime.
+    @import("txn_undo_log.zig").deinitGlobalUndoLog();
     if (initialized.load(.acquire) and global_store != null) {
         // CLEAN shutdown: persist the IdMap snapshot (final checkpoint + snapshot
         // at the matching counter) BEFORE the store and adapter are destroyed.

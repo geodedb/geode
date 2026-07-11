@@ -903,6 +903,24 @@ pub fn getGlobalUndoLog(allocator: std.mem.Allocator) *UndoLog {
     return &global_undo_log.?;
 }
 
+/// Tear down the process-global undo log. MUST be called when the global store
+/// is deinitialized, because the undo log's accumulated entries — and the
+/// per-thread txn state — reference store nodes/graphs that the teardown frees.
+/// Left dangling, the NEXT store's transaction rollback (or teardown) reads that
+/// freed memory: a cross-test use-after-free that surfaces as a ReleaseSafe
+/// general-protection fault (the crash behind GAP-0917's ReleaseSafe failures,
+/// where the harness deinits the global store between tests but the global undo
+/// log — lazily created once and never reset — kept the prior test's entries).
+/// Idempotent (no-op if never initialized). The undo log is logically coupled to
+/// the store's lifetime.
+pub fn deinitGlobalUndoLog() void {
+    if (global_undo_log) |*log| {
+        log.deinit();
+        global_undo_log = null;
+    }
+    t_txn_state = .{};
+}
+
 /// File-based persistence for undo log (to survive across CLI invocations)
 fn getUndoLogFilePath(allocator: std.mem.Allocator) ![]const u8 {
     var env_map = try std.process.getEnvMap(allocator);

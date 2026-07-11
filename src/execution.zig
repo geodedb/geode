@@ -1411,8 +1411,14 @@ pub fn executeStatementWithContext(allocator: std.mem.Allocator, stmt: ast.State
         },
         .Rollback => {
             // CANARY: REQ=REQ-GQL-082; FEATURE="TransactionManagement"; ASPECT=Rollback; STATUS=TESTED; OWNER=engine; UPDATED=2025-10-12
-            // Per SQL/GQL standards, ROLLBACK without active transaction is a no-op (not an error)
-            const status_message = if (context.transaction_state == .Active) blk: {
+            // Per SQL/GQL standards, ROLLBACK without active transaction is a no-op (not an error).
+            // GAP-0917: a FAILED transaction (a statement errored mid-batch) must ALSO replay the
+            // undo log on rollback — the implicit rollback that COMMIT-after-error drives arrives
+            // here with state .Failed, and skipping the replay leaked the pre-error CREATEs (the
+            // "aborted transaction still commits its prefix", cnt:1-not-0 defect). Safe now that the
+            // process-global undo log is reset per store-teardown (deinitGlobalUndoLog) — the earlier
+            // segfault here was that stale cross-test undo-log corruption, not the replay itself.
+            const status_message = if (context.transaction_state == .Active or context.transaction_state == .Failed) blk: {
                 // Mark transaction as rolled back
                 var mut_context = context;
                 mut_context.transaction_state = .RolledBack;
