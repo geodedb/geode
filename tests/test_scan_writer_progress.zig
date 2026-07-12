@@ -191,12 +191,20 @@ test "writers make progress during a long label scan (per-shard scan starvation)
     // loaded shared CI runners even though the writer was never starved). The
     // main thread busy-waits (as it does while scanning), so the only
     // difference between the two windows is the scan's shard-lock contention.
-    const window_ns: u64 = 1_000 * std.time.ns_per_ms;
+    // OP-COUNT-based baseline (was a fixed 1 s window): run until the writer
+    // applies TARGET_BASELINE ops OR a generous timeout, then use the ACTUAL
+    // elapsed time as the window for Phase B. This keeps the `baseline_ops >= 10`
+    // non-trivial-baseline guard below satisfied even on a heavily CPU-throttled
+    // shared CI runner, where the fixed 1 s window measured only ~7 ops and
+    // tripped the guard (pipeline #2670778283). The ratio stays fair because
+    // Phase B reuses this same wall-clock duration.
+    const TARGET_BASELINE: u64 = 20;
+    const base_timeout_ns: u64 = 15 * std.time.ns_per_s;
     const base_before = sh.ops_applied.load(.monotonic);
-    {
-        const base_deadline = nowNs() + window_ns;
-        while (nowNs() < base_deadline) std.atomic.spinLoopHint();
-    }
+    const base_start = nowNs();
+    while (sh.ops_applied.load(.monotonic) - base_before < TARGET_BASELINE and
+        nowNs() - base_start < base_timeout_ns) std.atomic.spinLoopHint();
+    const window_ns: u64 = @max(nowNs() - base_start, std.time.ns_per_ms);
     const baseline_ops = sh.ops_applied.load(.monotonic) - base_before;
     try testing.expect(!sh.writer_err.load(.acquire));
 

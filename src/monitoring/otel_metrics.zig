@@ -476,6 +476,9 @@ fn getenv(name: [*:0]const u8) ?[:0]const u8 {
     return std.mem.sliceTo(ptr, 0);
 }
 
+// std.c.unsetenv is not exposed in Zig 0.16; bind the POSIX symbol directly.
+extern "c" fn unsetenv(name: [*:0]const u8) c_int;
+
 /// Detect `OTEL_METRICS_EXPORTER=otlp` in the environment and, when set,
 /// construct an OTLP/HTTP metric exporter + PeriodicMetricReader and
 /// start the background push loop.
@@ -670,6 +673,19 @@ fn tryWireOtlpTracer(allocator: std.mem.Allocator, resource: *Resource) !void {
 ///
 /// Caller owns `recorder` and must keep it alive across `shutdown()`.
 pub fn initForTracingTest(allocator: std.mem.Allocator, recorder: *InMemoryRecorder) !void {
+    // GitLab CI runners export ambient OTEL_TRACES_EXPORTER=otlp / OTEL_EXPORTER_
+    // OTLP_* env for THEIR OWN tracing. init() below honours those and auto-wires
+    // an OTLP TracerProvider — after which the `g_tracer_provider != null`
+    // early-return skips wiring OUR in-memory recorder, so the recorder stays
+    // EMPTY and every span-count assertion sees 0. That is a DETERMINISTIC CI-ONLY
+    // failure (these tests pass locally, where the env is unset). Clear the
+    // ambient OTLP env BEFORE init() so the caller's recorder is the sole span
+    // exporter for the test. (Tearing an already-installed OTLP provider down via
+    // shutdown() instead crashes on the dead-endpoint flush, so prevent it here.)
+    _ = unsetenv("OTEL_TRACES_EXPORTER");
+    _ = unsetenv("OTEL_EXPORTER_OTLP_ENDPOINT");
+    _ = unsetenv("OTEL_EXPORTER_OTLP_PROTOCOL");
+
     // Bootstrap the MeterProvider first (its own init takes the lock).
     if (g_provider == null) try initForTesting(allocator);
 
