@@ -933,6 +933,10 @@ const CountingAllocator = struct {
 };
 
 test "T2b merge memory + time: hydration peak <= 1.6x final resident products; merge bounded vs scan" {
+    // Heavy stress case (N=128k / ~760 MB) — ~hours under a CPU-throttled CI
+    // runner, blew the 6 h sharded-test job timeout (#2670033275). Opt in with
+    // GEODE_HYDRATION_PERF_FLOOR=1 (the dedicated test-hydration-stream-scan step).
+    if (!throughputFloorEnabled()) return error.SkipZigTest;
     const allocator = testing.allocator;
     graph_store.deinitGlobalStore();
     _ = unsetenv(KILL_SWITCH);
@@ -1101,6 +1105,9 @@ fn buildGateStore(allocator: std.mem.Allocator, data_dir: []const u8, n: usize, 
 }
 
 test "T2c inflight gate: slow merge bounds completed-unmerged shard outputs to N" {
+    // Heavy stress case (N=4k, gated worker pool) — too slow for the CPU-throttled
+    // sharded CI gate. Opt in with GEODE_HYDRATION_PERF_FLOOR=1.
+    if (!throughputFloorEnabled()) return error.SkipZigTest;
     const allocator = testing.allocator;
     graph_store.deinitGlobalStore();
     _ = unsetenv(KILL_SWITCH);
@@ -1153,6 +1160,9 @@ test "T2c inflight gate: slow merge bounds completed-unmerged shard outputs to N
 }
 
 test "T2c poisoned gate: merge failure with gate-blocked workers joins all threads and quarantines (C1)" {
+    // Heavy stress case (N=4k, gated worker pool) — too slow for the CPU-throttled
+    // sharded CI gate. Opt in with GEODE_HYDRATION_PERF_FLOOR=1.
+    if (!throughputFloorEnabled()) return error.SkipZigTest;
     const allocator = testing.allocator;
     graph_store.deinitGlobalStore();
     _ = unsetenv(KILL_SWITCH);
@@ -1245,6 +1255,9 @@ test "T2c poisoned gate: merge failure with gate-blocked workers joins all threa
 // it may run before or after a first-touch hydration build, never inside it.
 
 test "loadFromFile during an in-flight pipelined stream-scan merge serializes (no use-after-free)" {
+    // Heavy stress case (N=4k, in-flight merge race) — too slow for the
+    // CPU-throttled sharded CI gate. Opt in with GEODE_HYDRATION_PERF_FLOOR=1.
+    if (!throughputFloorEnabled()) return error.SkipZigTest;
     const allocator = testing.allocator;
     graph_store.deinitGlobalStore();
     _ = unsetenv(KILL_SWITCH);
@@ -1348,6 +1361,9 @@ test "loadFromFile during an in-flight pipelined stream-scan merge serializes (n
 // the whole hydration) — under the small cache cap below it frees node
 // bodies the family threads are actively reading.
 test "C-1 reclaim gate: mid-merge checkpoint skips the hydrating graph's retired-cache reclaim; post-hydration checkpoint reclaims again" {
+    // Heavy stress case (N=4k, mid-merge checkpoint race) — too slow for the
+    // CPU-throttled sharded CI gate. Opt in with GEODE_HYDRATION_PERF_FLOOR=1.
+    if (!throughputFloorEnabled()) return error.SkipZigTest;
     const allocator = testing.allocator;
     const adapter_mod = geode.graph_storage_adapter;
     graph_store.deinitGlobalStore();
@@ -1487,6 +1503,9 @@ test "registerAdapterGraphsForLazyHydration skips registered graphs (catalog ini
 }
 
 test "light checkpoint during an in-flight merge skips cache reclaim (no use-after-free of retired batch heap)" {
+    // Heavy stress case (N=4k, WAL/periodic-checkpoint race) — too slow for the
+    // CPU-throttled sharded CI gate. Opt in with GEODE_HYDRATION_PERF_FLOOR=1.
+    if (!throughputFloorEnabled()) return error.SkipZigTest;
     // Bomb #2 of the 14.27M SEGV (WAL/periodic-checkpoint variant): the
     // persistence loop's walCheckpointHook -> saveToFileEx(light) ->
     // checkpointOneGraph grace point reclaimed (freed) retired node-cache
