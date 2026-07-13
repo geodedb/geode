@@ -194,8 +194,11 @@
             // Validated: compiler_rt.memset 44%→17.7% of CPU, +14.8% poll-bound
             // RETURN 1 throughput, correctness verified, quic `zig build test` green.
             // .version now tracks the tag (0.1.31).
-            .url = "git+https://gitlab.com/devnw/zig/quic.git#v0.1.37",
-            .hash = "quic-0.1.37-gBIqUQ_0PgAmS4T01KwzlYOootXCh2GFzywkF0Ptxdq0",
+            // 2026-07-13: v0.1.38 — pin-only release aligning quic's
+            // thread_pool to v0.2.7 (popMany stalled-producer livelock fix)
+            // in lockstep with geode + timeseries-storage.
+            .url = "git+https://gitlab.com/devnw/zig/quic.git?ref=v0.1.38#3681f2ddc5dcecfdc2990d075d9dddd21a6c872e",
+            .hash = "quic-0.1.38-gBIqUZX1PgAf-kyv-ygYRtkRGGDdG6tXuKuM4GRgqoBB",
         },
 
         // =======================================================================
@@ -264,14 +267,13 @@
             // spin unbounded on a mid-push (preempted) producer. That spin
             // livelocks CPU-throttled CI runners and is the prime suspect for
             // the silent 6h test-shard hangs (unit/release-safe shard [6]/[7]
-            // job_execution_timeout, e.g. pipeline #2670033275). Adopting it
-            // here requires the LOCKSTEP bump: quic and timeseries-storage
-            // type-share *ThreadPool with geode (src/timeseries/timeseries.zig
-            // passes the pool into timeseries-storage), so their thread_pool
-            // pins must move to the same v0.2.7 hash in the same round or the
-            // build fails with "expected '*pool.ThreadPool', found
-            // '*pool.ThreadPool'". Until that round lands, stay on the shared
-            // 0.2.5-content hash.
+            // job_execution_timeout, e.g. pipeline #2670033275). LOCKSTEP:
+            // quic and timeseries-storage type-share *ThreadPool with geode
+            // (src/timeseries/timeseries.zig passes the pool into
+            // timeseries-storage), so this round bumps all three together:
+            // thread_pool v0.2.7 + quic v0.1.38 + timeseries-storage v0.2.10
+            // (each pin-aligned to the same thread_pool hash). A partial bump
+            // fails with "expected '*pool.ThreadPool', found '*pool.ThreadPool'".
             .url = "git+https://gitlab.com/devnw/zig/thread-pool.git?ref=v0.2.7#54a2ddda1a356c32ba2e4df70691459570fb6339",
             .hash = "thread_pool-0.2.7-11B1BvRneQBnMkDnRbKd76THvZn4ZhDhmlWQw-aziWQm",
         },
@@ -390,8 +392,8 @@
 
         // UUID - RFC 9562 compliant (V1-V8), k-sortable V7, injectable generator
         .uuid = .{
-            .url = "git+https://gitlab.com/devnw/zig/uuid.git?ref=v0.1.5#d8250b1cd4356a1cc2d5d68147cc6bae0e911364",
-            .hash = "uuid-0.1.5-tL1irnnjHABpORObyXtwuDU9fISZc8WOe-HYVxCBFtc1",
+            .url = "git+https://gitlab.com/devnw/zig/uuid.git?ref=v0.1.3#7a7c717e13500762f0d87d44bc402ba47d1d6099",
+            .hash = "uuid-0.1.2-tL1irllLHABdG7QaL5h6WTNX5DrxSIzyxPozjsZMum9s",
         },
 
         // WAL - Generic, payload-agnostic Write-Ahead Log with AES-256-GCM encryption
@@ -551,8 +553,10 @@
         },
 
         .timeseries_storage = .{
-            .url = "git+https://gitlab.com/devnw/zig/timeseries-storage.git?ref=v0.2.9#a2165755bcd326ec9701b8b3cdb2d61703d26ebd",
-            .hash = "timeseries_storage-0.2.9-5wzBJE_kEwCXAUFcYDhAJa5X_2slob-J99l1I1PxCx8h",
+            // 2026-07-13: v0.2.10 — carries the thread_pool v0.2.7 lockstep pin
+            // (popMany stalled-producer livelock fix) plus accumulated main.
+            .url = "git+https://gitlab.com/devnw/zig/timeseries-storage.git?ref=v0.2.10#ad19c0e4846bfcc8d7506f3be076f11bfdf0e42d",
+            .hash = "timeseries_storage-0.2.10-5wzBJN_lEwDMkTav7Tk9NTTKbSoAc37j6Ehlr_DERpyX",
         },
         // Full-text-search storage engine (inverted index + BM25, LSM, zero deps)
         .fts_storage = .{
