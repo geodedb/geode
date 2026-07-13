@@ -237,7 +237,10 @@ variables:
     # cause for weeks — never again).
     zig_protoc_dl() {
       if command -v curl >/dev/null 2>&1; then
-        dl_code=$(curl -sSL --retry 3 --retry-delay 3 --retry-connrefused --connect-timeout 20 --header "JOB-TOKEN: ${CI_JOB_TOKEN:-}" -o "$2" -w "%{http_code}" "$1" 2>/dev/null); dl_rc=$?
+        # --retry-all-errors: plain --retry skips SSL-handshake failures
+        # (curl rc=35), which is exactly what the runner pods throw
+        # transiently (pipeline #2673598759 job 15322783646).
+        dl_code=$(curl -sSL --retry 3 --retry-delay 3 --retry-connrefused --retry-all-errors --connect-timeout 20 --header "JOB-TOKEN: ${CI_JOB_TOKEN:-}" -o "$2" -w "%{http_code}" "$1" 2>/dev/null); dl_rc=$?
         if [ "$dl_rc" = "0" ] && [ "$dl_code" = "200" ]; then return 0; fi
         echo "  (mirror leg: http_code=${dl_code:-none} curl_rc=${dl_rc})"
         # A rejected JOB-TOKEN header 401s even where anonymous access would
