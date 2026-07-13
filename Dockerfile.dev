@@ -2,7 +2,7 @@
 # Complete Docker-based development environment replicating Nix flake setup
 # Avoids Nix/Docker compatibility issues while maintaining identical tooling
 
-FROM ubuntu:24.04 AS base
+FROM ubuntu:26.04 AS base
 # Issue #442: Use bash with pipefail to catch errors in piped commands
 SHELL ["/bin/bash", "-o", "pipefail", "-c"]
 

@@ -15,7 +15,7 @@
 # up` export your own, e.g.  GEODE_OTEL_PASSWORD=$(openssl rand -hex 12) docker compose ... up
 services:
   otel-collector:
-    image: otel/opentelemetry-collector-contrib:0.96.0
+    image: otel/opentelemetry-collector-contrib:0.156.0
     container_name: geode-otel-collector
     # Run as root so the file exporters can create *.jsonl under the root-owned
     # `otel-output` named volume (the contrib image's default UID 10001 cannot

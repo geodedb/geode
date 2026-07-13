@@ -4,7 +4,7 @@
 services:
   # HashiCorp Vault - Secrets Management
   vault:
-    image: hashicorp/vault:1.15
+    image: hashicorp/vault:2.0
     container_name: geode-vault
     restart: unless-stopped
     ports:
@@ -51,7 +51,7 @@ services:
 
   # Redis - Caching Layer
   redis:
-    image: redis:7-alpine
+    image: redis:8-alpine
     container_name: geode-redis
     restart: unless-stopped
     ports:
