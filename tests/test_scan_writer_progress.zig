@@ -198,50 +198,79 @@ test "writers make progress during a long label scan (per-shard scan starvation)
     // shared CI runner, where the fixed 1 s window measured only ~7 ops and
     // tripped the guard (pipeline #2670778283). The ratio stays fair because
     // Phase B reuses this same wall-clock duration.
+    // 2026-07-13 (pipeline #2670778283 recurrence, job 15305060560): even the
+    // op-count-based baseline measured only 7 ops in the FULL 15 s window on a
+    // cgroup-throttled shared runner (the same writer then applied 94 ops
+    // during Phase B — the freeze sat inside Phase A). A degenerate baseline
+    // is a MEASUREMENT-VALIDITY failure, not a starvation regression: the
+    // test's own `baseline_ops >= 10` guard exists to say "this ratio would
+    // be meaningless". So on a degenerate baseline, REMEASURE the whole
+    // A+B cycle (fresh window pair) instead of red-flagging the pipeline;
+    // if the runner cannot produce a valid baseline after 3 full attempts,
+    // skip loudly — an environment that cannot run 10 writer ops in 15 s
+    // can neither prove nor disprove starvation. The decisive assertions
+    // below are UNCHANGED whenever a valid baseline is obtained.
     const TARGET_BASELINE: u64 = 20;
     const base_timeout_ns: u64 = 15 * std.time.ns_per_s;
-    const base_before = sh.ops_applied.load(.monotonic);
-    const base_start = nowNs();
-    while (sh.ops_applied.load(.monotonic) - base_before < TARGET_BASELINE and
-        nowNs() - base_start < base_timeout_ns) std.atomic.spinLoopHint();
-    const window_ns: u64 = @max(nowNs() - base_start, std.time.ns_per_ms);
-    const baseline_ops = sh.ops_applied.load(.monotonic) - base_before;
-    try testing.expect(!sh.writer_err.load(.acquire));
+    const max_measure_attempts: usize = 3;
+    var measure_attempt: usize = 0;
+    while (true) : (measure_attempt += 1) {
+        const base_before = sh.ops_applied.load(.monotonic);
+        const base_start = nowNs();
+        while (sh.ops_applied.load(.monotonic) - base_before < TARGET_BASELINE and
+            nowNs() - base_start < base_timeout_ns) std.atomic.spinLoopHint();
+        const window_ns: u64 = @max(nowNs() - base_start, std.time.ns_per_ms);
+        const baseline_ops = sh.ops_applied.load(.monotonic) - base_before;
+        try testing.expect(!sh.writer_err.load(.acquire));
 
-    // Phase B — DURING SCAN: run label scans BACK-TO-BACK for the SAME window
-    // so TARGET_SHARD is held SHARED nearly continuously, and count how many
-    // writer ops still land. With the unchunked per-shard SHARED hold the
-    // pinned writer parks on the EXCLUSIVE shard lock for the whole window ->
-    // ~0 ops. After chunking, the EXCLUSIVE apply interleaves between batches
-    // and a large fraction of the baseline lands.
-    sh.scan_running.store(true, .release);
-    const ops_before = sh.ops_applied.load(.monotonic);
-    const deadline = nowNs() + window_ns;
-    var scans: usize = 0;
-    while (nowNs() < deadline) : (scans += 1) {
-        const slots = try adapter.getNodesByLabelCapped(GRAPH, LABEL, null, allocator);
-        defer allocator.free(slots);
-        try testing.expect(slots.len >= SEED_NODES);
+        if (baseline_ops < 10) {
+            std.debug.print(
+                "scan-writer-progress: degenerate baseline ({d} ops in {d} ms) — attempt {d}/{d}\n",
+                .{ baseline_ops, window_ns / std.time.ns_per_ms, measure_attempt + 1, max_measure_attempts },
+            );
+            if (measure_attempt + 1 < max_measure_attempts) continue;
+            std.debug.print(
+                "scan-writer-progress: runner could not produce a valid baseline in {d} attempts; skipping (starvation unprovable here)\n",
+                .{max_measure_attempts},
+            );
+            return error.SkipZigTest;
+        }
+
+        // Phase B — DURING SCAN: run label scans BACK-TO-BACK for the SAME window
+        // so TARGET_SHARD is held SHARED nearly continuously, and count how many
+        // writer ops still land. With the unchunked per-shard SHARED hold the
+        // pinned writer parks on the EXCLUSIVE shard lock for the whole window ->
+        // ~0 ops. After chunking, the EXCLUSIVE apply interleaves between batches
+        // and a large fraction of the baseline lands.
+        sh.scan_running.store(true, .release);
+        const ops_before = sh.ops_applied.load(.monotonic);
+        const deadline = nowNs() + window_ns;
+        var scans: usize = 0;
+        while (nowNs() < deadline) : (scans += 1) {
+            const slots = try adapter.getNodesByLabelCapped(GRAPH, LABEL, null, allocator);
+            defer allocator.free(slots);
+            try testing.expect(slots.len >= SEED_NODES);
+        }
+        const ops_during_scan = sh.ops_applied.load(.monotonic) - ops_before;
+        sh.scan_running.store(false, .release);
+
+        std.debug.print(
+            "scan-writer-progress: ops_during_scan={d} baseline_ops={d} over {d} back-to-back scans\n",
+            .{ ops_during_scan, baseline_ops, scans },
+        );
+        try testing.expect(!sh.writer_err.load(.acquire));
+
+        // Decisive assertion: the writer is NOT starved by the scan — its
+        // during-scan throughput is at least 5% (1/20) of its unstarved baseline.
+        // A ratio (not an absolute count) holds regardless of runner speed. The
+        // two regimes are far apart and stable: RED before the fix is ~0% (the
+        // pinned writer parks on the EXCLUSIVE shard lock); GREEN after the chunked
+        // hold is ~15-20% (measured 18-20% across runs), so a 5% floor leaves ~4x
+        // margin over noise while still rejecting full starvation. The
+        // non-trivial-baseline guard above already validated the measurement.
+        try testing.expect(ops_during_scan * 20 >= baseline_ops);
+        break;
     }
-    const ops_during_scan = sh.ops_applied.load(.monotonic) - ops_before;
-    sh.scan_running.store(false, .release);
-
-    std.debug.print(
-        "scan-writer-progress: ops_during_scan={d} baseline_ops={d} over {d} back-to-back scans\n",
-        .{ ops_during_scan, baseline_ops, scans },
-    );
-    try testing.expect(!sh.writer_err.load(.acquire));
-
-    // Decisive assertion: the writer is NOT starved by the scan — its
-    // during-scan throughput is at least 5% (1/20) of its unstarved baseline.
-    // A ratio (not an absolute count) holds regardless of runner speed. The
-    // two regimes are far apart and stable: RED before the fix is ~0% (the
-    // pinned writer parks on the EXCLUSIVE shard lock); GREEN after the chunked
-    // hold is ~15-20% (measured 18-20% across runs), so a 5% floor leaves ~4x
-    // margin over noise while still rejecting full starvation. Guard a
-    // non-trivial baseline so the ratio is meaningful.
-    try testing.expect(baseline_ops >= 10);
-    try testing.expect(ops_during_scan * 20 >= baseline_ops);
 }
 
 test "scan result stays correct under concurrent ingest (chunked shard lock)" {

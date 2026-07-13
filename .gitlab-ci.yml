@@ -137,11 +137,16 @@ cache:
       - zig-cache/
     policy: pull-push
   - &zig-protoc-cache
-    key: "zig-protoc-v32.1" # gitleaks:allow -- public cache key name, not a credential
+    key: "zig-protoc-v32.1-blob" # gitleaks:allow -- public cache key name, not a credential
     paths:
       # protoc-linux-x86_64 (host protoc for every linux runner), addressed by
       # the protobuf dep's pinned hash N-V-__8AAGKbngAmNuaBMSXq_WgmQi6N8WVWVKp0moFSTvoJ.
-      - zig-cache/p/N-V-__8AAGKbngAmNuaBMSXq_WgmQi6N8WVWVKp0moFSTvoJ/
+      # 2026-07-13: zig 0.16 stores fetched packages as `p/<hash>.tar.gz`
+      # BLOBS and IGNORES pre-seeded extracted `p/<hash>/` directories
+      # (verified empirically: dir-seeded cache still fetched from GitHub,
+      # blob-seeded cache resolved offline). The old dir path cached a
+      # layout zig never read.
+      - zig-cache/p/N-V-__8AAGKbngAmNuaBMSXq_WgmQi6N8WVWVKp0moFSTvoJ.tar.gz
     policy: pull-push
 
 variables:
@@ -188,62 +193,89 @@ variables:
     else
       echo "⚠ no vendored packages present — zig build will fetch from network"
     fi
-    # Resilient protoc pre-fetch (2026-06-05). protobuf's protoc binary is a
-    # LAZY network dependency. The in-repo zig-pkg/ vendoring is .gitignored
-    # (empty on CI), so when the shared GitLab cache fails to extract, every
-    # dep-building job re-downloads protoc from GitHub and intermittently flakes
-    # ("invalid HTTP response: HttpConnectionClosing"); because the
-    # cache-PRODUCER jobs fail before they can repopulate the cache, the whole
-    # pipeline wedges. Download + extract protoc straight into zig's package
-    # cache — the extracted layout is byte-for-byte the package zig expects
-    # (verified) — with retries. Fully non-fatal: on exhausted retries / missing
-    # tools we fall through to zig build's own fetch, exactly as before.
+    # Resilient protoc pre-fetch (2026-06-05, root-caused + reworked 2026-07-13).
+    # protobuf's protoc binary is a LAZY network dependency (unconditional
+    # `b.lazyDependency("protoc-<host>")`). The in-repo zig-pkg/ vendoring is
+    # .gitignored (empty on CI) and the shared k8s runners have NO distributed
+    # cache backend ("No URL provided" in every restore_cache), so without this
+    # step every dep-building job re-fetches protoc from GitHub and
+    # intermittently flakes ("invalid HTTP response: HttpConnectionClosing").
+    #
+    # 2026-07-13 — TWO root causes of the old pre-fetch failing 6/6 (jobs
+    # 15304380576 / 15317873774):
+    #   (a) the zig CI image ships curl but NO unzip and NO python3, so the
+    #       downloaded zip could never be extracted (the single "attempt
+    #       failed" message hid which leg broke); and
+    #   (b) zig 0.16 stores fetched packages as `p/<hash>.tar.gz` BLOBS and
+    #       IGNORES pre-seeded extracted `p/<hash>/` directories entirely
+    #       (verified: with github blackholed, a dir-seeded cache still tried
+    #       to fetch; a blob-seeded cache resolved offline). So even a
+    #       successful extraction populated a layout zig never read.
+    # Fix: download the blob from the project's generic-package mirror and
+    # place it DIRECTLY as `p/<hash>.tar.gz` — no extraction step at all.
+    # Fallback: `zig fetch <github zip>` (zig natively fetches zips and writes
+    # the blob form itself; requires build.zig in cwd + cache p/ + tmp/ dirs).
+    #
+    # One-time mirror upload (repeat when bumping protoc, with key + hash):
+    #   tar -czf protoc-32.1-linux-x86_64.pkg.tar.gz \
+    #     -C zig-pkg/N-V-__8AAGKbngAmNuaBMSXq_WgmQi6N8WVWVKp0moFSTvoJ bin include readme.txt
+    #   glab api --method PUT "projects/devnw%2Fcodepros%2Fgeode%2Fgeode/packages/generic/protoc/32.1/protoc-32.1-linux-x86_64.pkg.tar.gz" --input <file>
+    # (Uploaded 2026-07-13; zig accepts the blob — it hashes the unpacked
+    # CONTENT, and this tarball's tree is identical to the GitHub zip's.)
+    # Fully non-fatal: on exhausted retries we fall through to zig build's own
+    # fetch, exactly as before.
     ZIG_PROTOC_HASH="N-V-__8AAGKbngAmNuaBMSXq_WgmQi6N8WVWVKp0moFSTvoJ"
     ZIG_PROTOC_URL="https://github.com/protocolbuffers/protobuf/releases/download/v32.1/protoc-32.1-linux-x86_64.zip"
-    # Same-network GitLab generic-package mirror (uploaded once to this project);
-    # tried FIRST so a GitHub-releases outage can't red the pipeline. The
-    # CI_JOB_TOKEN grants read access to the project's own package registry.
-    ZIG_PROTOC_MIRROR="${CI_API_V4_URL:-}/projects/${CI_PROJECT_ID:-}/packages/generic/protoc/32.1/protoc-32.1-linux-x86_64.zip"
-    ZIG_PROTOC_DIR="${ZIG_GLOBAL_CACHE_DIR}/p/${ZIG_PROTOC_HASH}"
-    if [ ! -e "${ZIG_PROTOC_DIR}/bin/protoc" ]; then
-      for attempt in 1 2 3 4 5 6; do
-        dl=0
-        # Try the GitLab package-registry mirror FIRST (reliable, same network),
-        # then the GitHub upstream. Each download is guarded in its own `if` so a
-        # failure can never abort the before_script (set-e-safe).
-        if command -v curl >/dev/null 2>&1; then
-          if [ "$dl" != "1" ] && [ -n "${CI_API_V4_URL:-}" ] && [ -n "${CI_JOB_TOKEN:-}" ]; then
-            if curl -fsSL --retry 3 --retry-delay 3 --connect-timeout 20 --header "JOB-TOKEN: ${CI_JOB_TOKEN}" -o /tmp/zig-protoc.zip "${ZIG_PROTOC_MIRROR}" 2>/dev/null; then dl=1; fi
-          fi
-          if [ "$dl" != "1" ]; then
-            if curl -fsSL --retry 3 --retry-delay 4 --connect-timeout 20 -o /tmp/zig-protoc.zip "${ZIG_PROTOC_URL}" 2>/dev/null; then dl=1; fi
-          fi
-        elif command -v wget >/dev/null 2>&1; then
-          if [ "$dl" != "1" ] && [ -n "${CI_API_V4_URL:-}" ] && [ -n "${CI_JOB_TOKEN:-}" ]; then
-            if wget -q --header "JOB-TOKEN: ${CI_JOB_TOKEN}" -O /tmp/zig-protoc.zip "${ZIG_PROTOC_MIRROR}" 2>/dev/null; then dl=1; fi
-          fi
-          if [ "$dl" != "1" ]; then
-            if wget -q -O /tmp/zig-protoc.zip "${ZIG_PROTOC_URL}" 2>/dev/null; then dl=1; fi
-          fi
-        fi
-        if [ "$dl" = "1" ]; then
-          mkdir -p "${ZIG_PROTOC_DIR}"
-          ex=0
-          if command -v unzip >/dev/null 2>&1; then
-            unzip -oq /tmp/zig-protoc.zip -d "${ZIG_PROTOC_DIR}" 2>/dev/null && ex=1
-          elif command -v python3 >/dev/null 2>&1; then
-            python3 -c "import zipfile,sys; zipfile.ZipFile('/tmp/zig-protoc.zip').extractall(sys.argv[1])" "${ZIG_PROTOC_DIR}" 2>/dev/null && ex=1
-          fi
-          if [ "$ex" = "1" ] && [ -e "${ZIG_PROTOC_DIR}/bin/protoc" ]; then
-            echo "✓ pre-fetched protoc into cache (attempt ${attempt})"
-            rm -f /tmp/zig-protoc.zip
-            break
+    # Same-network GitLab generic-package mirror (uploaded once to this
+    # project); tried FIRST so a GitHub-releases outage can't red the pipeline.
+    # The CI_JOB_TOKEN grants read access to the project's own package registry.
+    ZIG_PROTOC_MIRROR_TGZ="${CI_API_V4_URL:-}/projects/${CI_PROJECT_ID:-}/packages/generic/protoc/32.1/protoc-32.1-linux-x86_64.pkg.tar.gz"
+    ZIG_PROTOC_BLOB="${ZIG_GLOBAL_CACHE_DIR}/p/${ZIG_PROTOC_HASH}.tar.gz"
+    # $1=url $2=outfile. Guarded by callers' `if` (set-e-safe).
+    zig_protoc_dl() {
+      if command -v curl >/dev/null 2>&1; then
+        curl -fsSL --retry 3 --retry-delay 3 --connect-timeout 20 --header "JOB-TOKEN: ${CI_JOB_TOKEN:-}" -o "$2" "$1" 2>/dev/null
+      elif command -v wget >/dev/null 2>&1; then
+        wget -q --header "JOB-TOKEN: ${CI_JOB_TOKEN:-}" -O "$2" "$1" 2>/dev/null
+      else
+        return 127
+      fi
+    }
+    if [ ! -e "${ZIG_PROTOC_BLOB}" ]; then
+      mkdir -p "${ZIG_GLOBAL_CACHE_DIR}/tmp"
+      protoc_ok=0
+      for attempt in 1 2 3; do
+        # Leg 1: same-network mirror -> place the blob directly. gzip -t
+        # sanity-rejects truncated bodies / HTML error pages before the mv.
+        if [ -n "${CI_API_V4_URL:-}" ] && [ -n "${CI_JOB_TOKEN:-}" ]; then
+          if zig_protoc_dl "${ZIG_PROTOC_MIRROR_TGZ}" /tmp/zig-protoc.pkg.tar.gz; then
+            if gzip -t /tmp/zig-protoc.pkg.tar.gz 2>/dev/null; then
+              mv /tmp/zig-protoc.pkg.tar.gz "${ZIG_PROTOC_BLOB}"
+              echo "✓ pre-fetched protoc blob from package-registry mirror (attempt ${attempt})"
+              protoc_ok=1
+            else
+              echo "⚠ protoc mirror body failed gzip sanity check (attempt ${attempt})"
+              rm -f /tmp/zig-protoc.pkg.tar.gz
+            fi
+          else
+            echo "⚠ protoc mirror DOWNLOAD failed (attempt ${attempt})"
           fi
         fi
-        echo "⚠ protoc pre-fetch attempt ${attempt} failed; retrying in 8s..."
-        rm -rf "${ZIG_PROTOC_DIR}" 2>/dev/null || true
+        # Leg 2: zig fetch from GitHub — zig writes the blob itself.
+        if [ "${protoc_ok}" != "1" ] && command -v zig >/dev/null 2>&1 && [ -f build.zig ]; then
+          if zig fetch "${ZIG_PROTOC_URL}" >/tmp/zig-fetch-protoc.log 2>&1; then
+            echo "✓ pre-fetched protoc via zig fetch (attempt ${attempt}, hash=$(cat /tmp/zig-fetch-protoc.log))"
+            protoc_ok=1
+          else
+            echo "⚠ zig fetch of protoc failed (attempt ${attempt}): $(tail -1 /tmp/zig-fetch-protoc.log)"
+          fi
+        fi
+        if [ "${protoc_ok}" = "1" ]; then break; fi
         sleep 8
       done
+      if [ "${protoc_ok}" != "1" ]; then
+        echo "⚠ protoc pre-fetch exhausted all legs; zig build will fetch from GitHub on its own"
+      fi
     fi
 
 # =============================================================================

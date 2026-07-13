@@ -256,6 +256,17 @@ pub fn shutdown() void {
         e.deinit();
         g_tracer_owned_exporter = null;
     }
+    // Test-path pieces (initForTracingTest). Freed AFTER the provider —
+    // provider.deinit() shut the processors down via their vtables, which
+    // dereference these structs.
+    if (g_test_simple_processor) |sp| {
+        if (g_allocator) |a| a.destroy(sp);
+        g_test_simple_processor = null;
+    }
+    if (g_test_locked_exporter) |le| {
+        if (g_allocator) |a| a.destroy(le);
+        g_test_locked_exporter = null;
+    }
 
     if (g_provider) |p| {
         p.deinit();
@@ -665,11 +676,66 @@ fn tryWireOtlpTracer(allocator: std.mem.Allocator, resource: *Resource) !void {
     g_tracer_flush_thread = std.Thread.spawn(.{}, tracerFlushLoop, .{}) catch null;
 }
 
+/// Test-only: mutex-guarded pass-through `SpanExporter`. The in-memory
+/// recorder's ArrayList appends are NOT thread-safe, and with the
+/// synchronous `SimpleSpanProcessor` below every `span.end()` exports
+/// inline on the *calling* thread — the span-concurrency test ends spans
+/// from 8 threads at once. The BSP used to serialize via its queue mutex;
+/// this wrapper restores that guarantee on the Simple path.
+///
+/// Export errors are logged (warn) before propagating: the 2026-07-13 CI
+/// flake was silent span loss, and a named failure beats a mystery zero.
+const LockedRecorderExporter = struct {
+    mu: std.Io.Mutex = std.Io.Mutex.init,
+    inner: otel.sdk.exporter.SpanExporter,
+
+    fn exporter(self: *LockedRecorderExporter) otel.sdk.exporter.SpanExporter {
+        return .{ .ctx = self, .exportFn = expSpans, .shutdownFn = shut, .forceFlushFn = flush };
+    }
+
+    fn expSpans(ctx: ?*anyopaque, items: []const otel.sdk.exporter.SpanData) anyerror!otel.sdk.exporter.SpanExportResult {
+        const self: *LockedRecorderExporter = @ptrCast(@alignCast(ctx.?));
+        const io = initIo();
+        self.mu.lockUncancelable(io);
+        defer self.mu.unlock(io);
+        return self.inner.exportSpans(items) catch |err| {
+            std.log.warn("otel_metrics: test recorder span export failed ({s}) — spans lost", .{@errorName(err)});
+            return err;
+        };
+    }
+
+    fn flush(ctx: ?*anyopaque, timeout_ms: u64) anyerror!void {
+        const self: *LockedRecorderExporter = @ptrCast(@alignCast(ctx.?));
+        const io = initIo();
+        self.mu.lockUncancelable(io);
+        defer self.mu.unlock(io);
+        return self.inner.forceFlush(timeout_ms);
+    }
+
+    fn shut(ctx: ?*anyopaque) void {
+        const self: *LockedRecorderExporter = @ptrCast(@alignCast(ctx.?));
+        self.inner.shutdown();
+    }
+};
+
+var g_test_simple_processor: ?*otel.sdk.exporter.SimpleSpanProcessor = null;
+var g_test_locked_exporter: ?*LockedRecorderExporter = null;
+
 /// Test-only: wire a `TracerProvider` against a caller-supplied in-memory
 /// recorder so unit tests can assert on emitted spans without spinning up
 /// an OTLP collector. Uses `SimpleSpanProcessor` for synchronous export so
 /// `forceFlushTraces` is unnecessary, but the public flush API is still
 /// honoured for symmetry with production.
+///
+/// 2026-07-13: this comment used to LIE — the implementation passed
+/// `default_exporter`, which ADR-0003 wires to a BatchSpanProcessor. The
+/// BSP queues spans and silently DROPS them on allocation failure
+/// (`exportBatch`'s alloc-failure path recycles the whole batch), so on
+/// memory-squeezed CI runner pods the delivery-asserting otel tests
+/// intermittently saw `expected N, found 0` (reproduced locally under
+/// `ulimit -v 16000`). Now it really does wire a SimpleSpanProcessor via
+/// `processors` — synchronous inline export on `end()`, no queue layer to
+/// drop from — behind the locked exporter wrapper above.
 ///
 /// Caller owns `recorder` and must keep it alive across `shutdown()`.
 pub fn initForTracingTest(allocator: std.mem.Allocator, recorder: *InMemoryRecorder) !void {
@@ -695,15 +761,25 @@ pub fn initForTracingTest(allocator: std.mem.Allocator, recorder: *InMemoryRecor
 
     const resource = g_resource orelse return error.MeterProviderNotInitialised;
 
+    const locked = try allocator.create(LockedRecorderExporter);
+    errdefer allocator.destroy(locked);
+    locked.* = .{ .inner = recorder.spanExporter() };
+
+    const ssp = try allocator.create(otel.sdk.exporter.SimpleSpanProcessor);
+    errdefer allocator.destroy(ssp);
+    ssp.* = otel.sdk.exporter.SimpleSpanProcessor.init(allocator, locked.exporter(), resource);
+
     const provider = try allocator.create(TracerProvider);
     errdefer allocator.destroy(provider);
     provider.* = try TracerProvider.init(allocator, .{
         .resource = resource,
-        .default_exporter = recorder.spanExporter(),
+        .processors = &.{ssp.processor()},
         .disabled = false,
     });
     g_tracer_provider = provider;
     g_tracer_owned_exporter = null;
+    g_test_simple_processor = ssp;
+    g_test_locked_exporter = locked;
 }
 
 // Hot-path reads — no lock. Callers MUST be in the init..shutdown window;
