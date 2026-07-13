@@ -95,6 +95,23 @@ default:
     - k8s
     - linux
   interruptible: true  # Allow auto-cancel of redundant pipelines on push
+  # GLOBAL transient-infra retry: the shared kubernetes runners intermittently
+  # fail jobs at POD SETUP with `system failure: etcdserver: leader changed`
+  # (and pod-scheduling / API flakes), which killed whole pipelines at random
+  # (e.g. governance-conformance-sync / -release-manifests, security-secrets in
+  # #2671104674 / #2670033275). Only ~13 of 41 jobs previously set their own
+  # retry, so the rest died permanently on a brief control-plane hiccup. This
+  # default retries EVERY job on transient/system failure classes ONLY (never
+  # script_failure -- a real test failure must not be masked). Jobs that declare
+  # their own `retry:` override this and keep their `script_failure` coverage.
+  retry:
+    max: 2
+    when:
+      - runner_system_failure
+      - stuck_or_timeout_failure
+      - api_failure
+      - scheduler_failure
+      - unknown_failure
 
 # Issue #465: Global Zig build cache for CI pipeline efficiency
 #
