@@ -231,10 +231,27 @@ variables:
     # The CI_JOB_TOKEN grants read access to the project's own package registry.
     ZIG_PROTOC_MIRROR_TGZ="${CI_API_V4_URL:-}/projects/${CI_PROJECT_ID:-}/packages/generic/protoc/32.1/protoc-32.1-linux-x86_64.pkg.tar.gz"
     ZIG_PROTOC_BLOB="${ZIG_GLOBAL_CACHE_DIR}/p/${ZIG_PROTOC_HASH}.tar.gz"
-    # $1=url $2=outfile. Guarded by callers' `if` (set-e-safe).
+    # $1=url $2=outfile. Guarded by callers' `if` (set-e-safe). On curl
+    # failure, logs the HTTP status + curl exit code so a broken mirror names
+    # itself (2026-07-13: an opaque one-line failure hid the protoc root
+    # cause for weeks — never again).
     zig_protoc_dl() {
       if command -v curl >/dev/null 2>&1; then
-        curl -fsSL --retry 3 --retry-delay 3 --connect-timeout 20 --header "JOB-TOKEN: ${CI_JOB_TOKEN:-}" -o "$2" "$1" 2>/dev/null
+        dl_code=$(curl -sSL --retry 3 --retry-delay 3 --retry-connrefused --connect-timeout 20 --header "JOB-TOKEN: ${CI_JOB_TOKEN:-}" -o "$2" -w "%{http_code}" "$1" 2>/dev/null); dl_rc=$?
+        if [ "$dl_rc" = "0" ] && [ "$dl_code" = "200" ]; then return 0; fi
+        echo "  (mirror leg: http_code=${dl_code:-none} curl_rc=${dl_rc})"
+        # A rejected JOB-TOKEN header 401s even where anonymous access would
+        # succeed (public project registry) — retry once WITHOUT the header.
+        if [ "$dl_code" = "401" ] || [ "$dl_code" = "403" ]; then
+          dl_code=$(curl -sSL --retry 2 --retry-delay 3 --retry-connrefused --connect-timeout 20 -o "$2" -w "%{http_code}" "$1" 2>/dev/null); dl_rc=$?
+          if [ "$dl_rc" = "0" ] && [ "$dl_code" = "200" ]; then
+            echo "  (mirror leg: anonymous retry OK)"
+            return 0
+          fi
+          echo "  (mirror leg anonymous retry: http_code=${dl_code:-none} curl_rc=${dl_rc})"
+        fi
+        rm -f "$2"
+        return 1
       elif command -v wget >/dev/null 2>&1; then
         wget -q --header "JOB-TOKEN: ${CI_JOB_TOKEN:-}" -O "$2" "$1" 2>/dev/null
       else
