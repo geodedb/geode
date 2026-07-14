@@ -40,7 +40,7 @@
         "Smaller image size using Alpine Linux.",
         "The binary is copied from the GoReleaser build context (musl-linked)."
       ],
-      "base_image": "alpine:3.20",
+      "base_image": "alpine:3.24",
       "package_manager": "apk",
       "runtime_packages": [
         "ca-certificates",
@@ -68,7 +68,7 @@
         "The binary is copied from the GoReleaser build context.",
         "Requires NVIDIA Container Toolkit on the host system."
       ],
-      "base_image": "nvidia/cuda:12.3.2-runtime-ubuntu22.04",
+      "base_image": "nvidia/cuda:13.3.0-runtime-ubuntu22.04",
       "package_manager": "apt",
       "runtime_packages": [
         "ca-certificates",

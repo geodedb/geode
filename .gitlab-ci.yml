@@ -13,7 +13,7 @@ include:
   # align with apt-publish@v1.24.2 and pick up upstream changes since
   # v1.2.1 (Go 1.26 images, ansible-playbook fixes, runner updates).
   # Spec is unchanged — same inputs accepted.
-  - component: gitlab.com/devnw/ci-catalog/zig-format@v1.24.2
+  - component: gitlab.com/devnw/ci-catalog/zig-format@v1.45.0
     inputs:
       zig_version: "0.16.0"
       paths: "src/"
@@ -31,7 +31,7 @@ include:
   # `sort` no longer fails the apt-repo job under `set -o pipefail` once
   # the repo has grown past 50 files). Caught in v0.5.17 release pipeline
   # #2531568850 (apt-repo job 14407557997 + retry 14409676608).
-  - component: gitlab.com/devnw/ci-catalog/apt-publish@v1.25.2
+  - component: gitlab.com/devnw/ci-catalog/apt-publish@v1.45.0
     inputs:
       apt_domain: apt.geodedb.com
       job_suffix: apt-geodedb-com
@@ -42,7 +42,7 @@ include:
       gpg_key_name: geode.gpg
       sign_needs: build-release
       allow_failure: false
-  - component: gitlab.com/devnw/ci-catalog/zig-version-tag-check@v1.27.0
+  - component: gitlab.com/devnw/ci-catalog/zig-version-tag-check@v1.45.0
   # NOTE: the FIPS dual-mode parity gate is defined INLINE below as
   # `zig-fips-test-0.16.0` (see the "FIPS dual-mode test" section). The
   # ci-catalog `zig-fips-test@v1.29.0` component was removed because its
@@ -57,7 +57,7 @@ include:
 # Tagged release pipelines are never cancelled — they must run to completion.
   # Security findings -> auto-triaged Jira SEC issues (.post; reads gl-*-report
   # artifacts from the scans above). component_id 12496 = SEC > Vuln Mgmt.
-  - component: gitlab.com/devnw/ci-catalog/jira-event-intake@v1.31.0
+  - component: gitlab.com/devnw/ci-catalog/jira-event-intake@v1.45.0
     inputs:
       project_key: SEC
       component_id: "12496"
@@ -322,7 +322,7 @@ variables:
 # Python governance jobs (image: python:3.12-slim)
 .governance-python:
   extends: .governance-base
-  image: python:3.12-slim
+  image: python:3.14-slim
 
 # Python governance jobs that need pyyaml installed
 .governance-python-pyyaml:
@@ -400,7 +400,7 @@ governance-match-ops-campaign:
 
 governance-no-page-allocator:
   extends: .governance-base
-  image: alpine:3.21
+  image: alpine:3.24
   before_script:
     - apk add --no-cache ripgrep
   script:
@@ -490,7 +490,7 @@ governance-canary-lint:
 
 governance-canaryscan-verify:
   extends: .governance-base
-  image: golang:1.23-alpine
+  image: golang:1.26-alpine
   variables:
     # 2026-07-13: alpine go images pin GOTOOLCHAIN=local, so any renovate bump
     # of tools/canaryscan/go.mod's `go` directive past the image's toolchain
@@ -1088,7 +1088,7 @@ test-performance-benchmarks:
 
 loadtest-regression:
   stage: test
-  image: python:3.12-slim
+  image: python:3.14-slim
   before_script:
     # Bump UDP rmem so the quic-go client doesn't drop at high concurrency
     # (see docs/performance/host-tuning.md). Best-effort: sudo may not be
@@ -1439,7 +1439,7 @@ security-secrets:
   # command sh for gitleaks". Override the entrypoint to an empty string
   # so the runner's shell wrapper works.
   image:
-    name: zricethezav/gitleaks:v8.24.2
+    name: zricethezav/gitleaks:v8.30.1
     entrypoint: [""]
   script:
     - gitleaks detect --source . --config .gitleaks.toml --redact --no-git --exit-code 1
@@ -1456,7 +1456,7 @@ security-trivy:
   # image's ENTRYPOINT is the `trivy` binary so the runner's `sh -c ...`
   # wrap becomes `trivy sh -c "..."`. Override to empty string.
   image:
-    name: aquasec/trivy:0.58.1
+    name: aquasec/trivy:0.72.0
     entrypoint: [""]
   retry:
     max: 2

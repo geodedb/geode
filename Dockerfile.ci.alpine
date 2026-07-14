@@ -1,6 +1,6 @@
 # Lightweight Alpine CI Dockerfile - uses pre-built musl binaries from pipeline
 # Smaller image size, uses musl-based binaries
-FROM alpine:3.19
+FROM alpine:3.24
 
 # Install runtime dependencies only
 RUN apk add --no-cache \

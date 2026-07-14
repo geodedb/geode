@@ -1,7 +1,7 @@
 # Go Client Container for Integration Testing
 # Tests connection pooling, concurrent queries, and transaction handling
 
-FROM golang:1.24-bookworm AS builder
+FROM golang:1.26-bookworm AS builder
 
 WORKDIR /app
 
@@ -16,7 +16,7 @@ RUN go mod tidy && \
     go test -c -o /app/geode_test .
 
 # Runtime stage
-FROM golang:1.24-bookworm AS runtime
+FROM golang:1.26-bookworm AS runtime
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
     bc \
