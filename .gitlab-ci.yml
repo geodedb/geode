@@ -368,6 +368,21 @@ governance-no-feature-flags:
       python3 tools/no_feature_flags_check.py --repo .
       echo "✓ No prohibited feature flags found"
 
+# CI-YAML self-lint: the same checks the pre-commit hooks run locally,
+# enforced server-side so renovate/bot commits (which never run local
+# hooks) can't land CI-script regressions. Guards the two classes that
+# actually burned pipelines: docker jobs scheduled onto non-linux
+# runners (#1009) and invalid docker container names (#1508 snapshot,
+# `--name _fipsprov`).
+governance-ci-yaml-lint:
+  extends: .governance-python
+  script:
+    - |
+      echo "=== Linting .gitlab-ci.yml (runner tags + docker names) ==="
+      python3 scripts/lint_ci_yaml_runner_tags.py
+      python3 scripts/lint_ci_yaml_docker_names.py
+      echo "✓ CI YAML lints passed"
+
 governance-zig-package-cache:
   extends: .governance-python
   script:
@@ -714,10 +729,21 @@ test-zig-unit:
 test-cross-build:
   stage: test
   image: $ZIG_IMAGE
-  # Give the multi-target ReleaseSafe build room before the cache step runs.
-  # Without this the job inherits the 1h project default and the build itself
-  # eats most of it, so cache archival overruns ("execution took longer than
-  # 1h0m0s") even though every target built — see pipeline #1218.
+  # One shard per release target: the sequential all-targets loop outgrew the
+  # 2h job timeout as the dep tree grew (pipeline #1508 timed out mid
+  # riscv64-linux-gnu after 4 targets). Shards run in parallel, each finishes
+  # well inside the timeout, and a slow/failed target names itself in the job
+  # name. macOS targets stay excluded here (wal/quic need the 0.16 macOS fix;
+  # covered by test-macos-unit) — keep this matrix and CROSS_MATRIX_TARGETS in
+  # sync with release/target_manifest.json; every shard fails on drift.
+  parallel:
+    matrix:
+      - ZIG_TARGET:
+          - x86_64-linux-gnu
+          - x86_64-linux-musl
+          - aarch64-linux-gnu
+          - aarch64-linux-musl
+          - riscv64-linux-gnu
   timeout: 2h
   # Retry on transient network failures (DNS, GitHub 502, HttpConnectionClosing)
   # during dependency fetch for cross-compilation targets whose packages aren't
@@ -747,6 +773,9 @@ test-cross-build:
     policy: pull
   variables:
     GIT_SUBMODULE_STRATEGY: recursive
+    # Mirror of the parallel:matrix ZIG_TARGET list above, used by the drift
+    # check below (a shard cannot see its sibling matrix entries).
+    CROSS_MATRIX_TARGETS: "x86_64-linux-gnu x86_64-linux-musl aarch64-linux-gnu aarch64-linux-musl riscv64-linux-gnu"
   before_script:
     - *zig-vendor-cache
     - |
@@ -762,23 +791,26 @@ test-cross-build:
       fi
   script:
     - |
-      echo "=== Building release targets from manifest ==="
+      echo "=== Verifying matrix covers the release target manifest ==="
       python3 tools/release_target_manifest.py list-zig-targets --manifest release/target_manifest.json > /tmp/release-targets.txt
+      DRIFT=0
       while IFS= read -r TARGET; do
         [ -z "$TARGET" ] && continue
         # macOS targets skipped here until wal/quic upstream 0.16 fixes land.
         # Native macOS builds are covered by test-macos-unit on SaaS M1 runners.
-        # Tracked via the Zig 0.16 migration follow-up in handoff notes.
         case "$TARGET" in
-          *-macos|aarch64-macos|x86_64-macos)
-            echo "--- skipping target=$TARGET (wal/quic deps need 0.16 macOS fix) ---"
-            continue
-            ;;
+          *-macos) continue ;;
         esac
-        echo "--- zig build target=$TARGET ---"
-        zig build -Doptimize=ReleaseSafe -Dtarget="$TARGET" --summary all
+        case " ${CROSS_MATRIX_TARGETS} " in
+          *" ${TARGET} "*) ;;
+          *) echo "ERROR: manifest target ${TARGET} missing from test-cross-build parallel:matrix — add it"; DRIFT=1 ;;
+        esac
       done < /tmp/release-targets.txt
-      echo "✓ all manifest-defined release targets built (macOS skipped — see test-macos-unit)"
+      grep -qx "${ZIG_TARGET}" /tmp/release-targets.txt || { echo "ERROR: matrix target ${ZIG_TARGET} no longer in release/target_manifest.json — remove it"; DRIFT=1; }
+      [ "$DRIFT" -eq 0 ] || exit 1
+      echo "--- zig build target=${ZIG_TARGET} ---"
+      zig build -Doptimize=ReleaseSafe -Dtarget="${ZIG_TARGET}" --summary all
+      echo "✓ release target ${ZIG_TARGET} built (macOS covered by test-macos-unit)"
   rules:
     - if: '$CI_MERGE_REQUEST_ID'
     - if: '$CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH'
@@ -855,9 +887,10 @@ test-macos-unit:
       if docker info >/dev/null 2>&1; then
         echo "=== provisioning OpenSSL FIPS provider from ci-catalog zig-fips:${ZIG_VERSION} ==="
         echo "${CI_JOB_TOKEN}" | docker login -u gitlab-ci-token --password-stdin registry.gitlab.com || true
-        docker create --name _fipsprov "registry.gitlab.com/devnw/ci-catalog/zig-fips:${ZIG_VERSION}"
-        docker cp _fipsprov:/usr/local/ssl /usr/local/ssl
-        docker rm _fipsprov
+        docker rm -f "fipsprov-${CI_JOB_ID:-local}" 2>/dev/null || true
+        docker create --name "fipsprov-${CI_JOB_ID:-local}" "registry.gitlab.com/devnw/ci-catalog/zig-fips:${ZIG_VERSION}"
+        docker cp "fipsprov-${CI_JOB_ID:-local}":/usr/local/ssl /usr/local/ssl
+        docker rm "fipsprov-${CI_JOB_ID:-local}"
         [ -x /usr/local/ssl/bin/openssl ] && echo "FIPS provider ready at /usr/local/ssl" || { echo "ERROR: FIPS provider extraction failed"; exit 1; }
       else
         echo "no docker daemon — skipping FIPS provider provisioning (non-GoReleaser job)"
@@ -887,9 +920,10 @@ test-macos-unit:
       if docker info >/dev/null 2>&1; then
         echo "=== provisioning OpenSSL FIPS provider from ci-catalog zig-fips:${ZIG_VERSION} ==="
         echo "${CI_JOB_TOKEN}" | docker login -u gitlab-ci-token --password-stdin registry.gitlab.com || true
-        docker create --name _fipsprov "registry.gitlab.com/devnw/ci-catalog/zig-fips:${ZIG_VERSION}"
-        docker cp _fipsprov:/usr/local/ssl /usr/local/ssl
-        docker rm _fipsprov
+        docker rm -f "fipsprov-${CI_JOB_ID:-local}" 2>/dev/null || true
+        docker create --name "fipsprov-${CI_JOB_ID:-local}" "registry.gitlab.com/devnw/ci-catalog/zig-fips:${ZIG_VERSION}"
+        docker cp "fipsprov-${CI_JOB_ID:-local}":/usr/local/ssl /usr/local/ssl
+        docker rm "fipsprov-${CI_JOB_ID:-local}"
         [ -x /usr/local/ssl/bin/openssl ] && echo "FIPS provider ready at /usr/local/ssl" || { echo "ERROR: FIPS provider extraction failed"; exit 1; }
       else
         echo "no docker daemon — skipping FIPS provider provisioning (non-GoReleaser job)"
@@ -1544,9 +1578,10 @@ snapshot:
       if docker info >/dev/null 2>&1; then
         echo "=== provisioning OpenSSL FIPS provider from ci-catalog zig-fips:${ZIG_VERSION} ==="
         echo "${CI_JOB_TOKEN}" | docker login -u gitlab-ci-token --password-stdin registry.gitlab.com || true
-        docker create --name _fipsprov "registry.gitlab.com/devnw/ci-catalog/zig-fips:${ZIG_VERSION}"
-        docker cp _fipsprov:/usr/local/ssl /usr/local/ssl
-        docker rm _fipsprov
+        docker rm -f "fipsprov-${CI_JOB_ID:-local}" 2>/dev/null || true
+        docker create --name "fipsprov-${CI_JOB_ID:-local}" "registry.gitlab.com/devnw/ci-catalog/zig-fips:${ZIG_VERSION}"
+        docker cp "fipsprov-${CI_JOB_ID:-local}":/usr/local/ssl /usr/local/ssl
+        docker rm "fipsprov-${CI_JOB_ID:-local}"
         [ -x /usr/local/ssl/bin/openssl ] && echo "FIPS provider ready at /usr/local/ssl" || { echo "ERROR: FIPS provider extraction failed"; exit 1; }
       else
         echo "no docker daemon — skipping FIPS provider provisioning (non-GoReleaser job)"
@@ -2054,9 +2089,10 @@ build-release:
       if docker info >/dev/null 2>&1; then
         echo "=== provisioning OpenSSL FIPS provider from ci-catalog zig-fips:${ZIG_VERSION} ==="
         echo "${CI_JOB_TOKEN}" | docker login -u gitlab-ci-token --password-stdin registry.gitlab.com || true
-        docker create --name _fipsprov "registry.gitlab.com/devnw/ci-catalog/zig-fips:${ZIG_VERSION}"
-        docker cp _fipsprov:/usr/local/ssl /usr/local/ssl
-        docker rm _fipsprov
+        docker rm -f "fipsprov-${CI_JOB_ID:-local}" 2>/dev/null || true
+        docker create --name "fipsprov-${CI_JOB_ID:-local}" "registry.gitlab.com/devnw/ci-catalog/zig-fips:${ZIG_VERSION}"
+        docker cp "fipsprov-${CI_JOB_ID:-local}":/usr/local/ssl /usr/local/ssl
+        docker rm "fipsprov-${CI_JOB_ID:-local}"
         [ -x /usr/local/ssl/bin/openssl ] && echo "FIPS provider ready at /usr/local/ssl" || { echo "ERROR: FIPS provider extraction failed"; exit 1; }
       else
         echo "no docker daemon — skipping FIPS provider provisioning (non-GoReleaser job)"

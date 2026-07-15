@@ -1,0 +1,11 @@
+# Known-latent build-options content collisions that do not currently
+# co-occur in any single compilation. Each pair should still be fixed
+# upstream (add a package_name option — the timeseries-storage
+# convention) and removed from this list when the bumped pin lands.
+# Format: two package names per line, '#' comments allowed.
+#
+# uri 0.1.6 and yaml 0.1.6 both emit exactly
+#   pub const version: []const u8 = "0.1.6";
+# Their options modules are not co-reachable in geode's compilations
+# today, but this explodes the moment they are (same class as MR !28).
+uri yaml
