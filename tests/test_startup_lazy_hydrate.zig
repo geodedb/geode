@@ -3729,9 +3729,13 @@ test "GAP-0064 FIX A: reopen + concurrent readers + checkpoint — reads return 
         try testing.expectEqual(@as(u64, 0), adapter_mod.getExactHydrationBuildsForTesting());
 
         // Release the gate → the background build completes + publishes the index.
+        // 120s cap: on a contended shared CI runner the released build thread can
+        // be starved well past 30s (pipeline #2681131361 tripped the old 30s cap
+        // twice with zero regression — the same commit content passed on retry).
+        // A real bug (build never completes) still fails, just at the longer cap.
         adapter_mod.openExactBuildGateForTesting();
         var waited: usize = 0;
-        while (adapter_mod.getExactHydrationBuildsForTesting() == 0 and waited < 30_000) : (waited += 1) {
+        while (adapter_mod.getExactHydrationBuildsForTesting() == 0 and waited < 120_000) : (waited += 1) {
             sleepMs(1);
         }
         try testing.expect(adapter_mod.getExactHydrationBuildsForTesting() >= 1);
