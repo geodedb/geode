@@ -2,6 +2,11 @@ version: 2
 
 project_name: geode
 
+# Both GITHUB_TOKEN and GITLAB_TOKEN exist in the CI environment; GoReleaser
+# refuses to guess ("multiple tokens found, but only one is allowed" —
+# pipeline #1518 snapshot). This project releases to GitLab.
+force_token: gitlab
+
 # Note: GoReleaser Pro features may be enabled via CI/CD with GORELEASER_KEY
 # This configuration works with both free and Pro versions
 
