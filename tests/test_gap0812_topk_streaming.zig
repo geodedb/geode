@@ -117,9 +117,14 @@ test "GAP-0812: ORDER BY DESC LIMIT 10 returns top-10 without full materialize" 
     try testing.expectEqual(@as(i64, 990), res.rows[9][0].Int);
 
     // Bounded-heap fast path must beat the O(N log N) materialize+sort.
-    // Slow path at 1000 nodes was measured ~200ms.  Fast path target: <15ms.
+    // Slow path at 1000 nodes was measured ~200ms.  Fast path target: <15ms
+    // locally; 100ms on shared CI runners, where scheduling noise blows 15ms
+    // of wall clock with nothing regressed (pipeline #2683067668) while 100ms
+    // still cleanly discriminates against the ~200ms materialize+sort path.
     std.debug.print("[GAP-0812 desc10] elapsed_ns={d}\n", .{elapsed_ns});
-    try testing.expect(elapsed_ns < 15_000_000);
+    const in_ci = std.c.getenv("CI") != null or std.c.getenv("GITLAB_CI") != null;
+    const bound_ns: @TypeOf(elapsed_ns) = if (in_ci) 100_000_000 else 15_000_000;
+    try testing.expect(elapsed_ns < bound_ns);
 }
 
 test "GAP-0812: ORDER BY ASC LIMIT 5" {
