@@ -216,7 +216,7 @@ fn getGitVersion(b: *std.Build) []const u8 {
 }
 
 pub fn build(b: *std.Build) void {
-    const target = b.standardTargetOptions(.{});
+    var target = b.standardTargetOptions(.{});
     const optimize = b.standardOptimizeOption(.{});
 
     // OTel package options. Declared early so dependent libraries that
@@ -265,6 +265,25 @@ pub fn build(b: *std.Build) void {
     // routes through the OpenSSL FIPS provider when -Dfips=true.
     const fips = b.option(bool, "fips", "Route security crypto through the OpenSSL FIPS provider") orelse false;
     const openssl_path = b.option([]const u8, "openssl_path", "OpenSSL FIPS prefix (e.g. /usr/local/ssl)");
+
+    // FIPS glibc floor: the ci-catalog zig-fips provider .so links versioned
+    // glibc symbols up to GLIBC_2.38 (__isoc23_strtol), so an unversioned
+    // linux-gnu target fails the -Dfips=true link with 25 undefined-reference
+    // errors (pipeline #1521 snapshot). GoReleaser's zig builder rejects a
+    // versioned triple in `targets:` ("invalid target: x86_64-linux-gnu.2.38",
+    // pipeline #1523), so the floor lives here: -Dfips=true + linux-gnu + no
+    // explicit glibc version ⇒ glibc 2.38, matching dev-image-build-fips's
+    // explicit -Dtarget=x86_64-linux-gnu.2.38. An explicit versioned -Dtarget
+    // is respected as-is.
+    if (fips and
+        target.result.os.tag == .linux and
+        target.result.abi == .gnu and
+        target.query.glibc_version == null)
+    {
+        var fips_query = target.query;
+        fips_query.glibc_version = .{ .major = 2, .minor = 38, .patch = 0 };
+        target = b.resolveTargetQuery(fips_query);
+    }
 
     // Get version from git tags
     const version = getGitVersion(b);

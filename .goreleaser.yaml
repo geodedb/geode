@@ -61,12 +61,11 @@ builds:
   - -Dfips=true
   - -Dopenssl_path=/usr/local/ssl
   targets:
-  # Versioned glibc floor: the ci-catalog zig-fips provider .so links
-  # versioned symbols up to GLIBC_2.38 (__isoc23_strtol), so the plain
-  # x86_64-linux-gnu baseline fails with 25 undefined-reference errors
-  # (pipeline #1521 snapshot). Matches dev-image-build-fips, which
-  # cross-compiles with -Dtarget=x86_64-linux-gnu.2.38 for the same reason.
-  - x86_64-linux-gnu.2.38
+  # Plain triple only — GoReleaser's zig builder rejects a glibc-versioned
+  # triple ("invalid target: x86_64-linux-gnu.2.38", pipeline #1523). The
+  # GLIBC_2.38 floor the zig-fips provider .so requires is applied inside
+  # build.zig whenever -Dfips=true resolves an unversioned linux-gnu target.
+  - x86_64-linux-gnu
 
 # =============================================================================
 # Archives - Binary Distribution
