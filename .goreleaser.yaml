@@ -61,7 +61,12 @@ builds:
   - -Dfips=true
   - -Dopenssl_path=/usr/local/ssl
   targets:
-  - x86_64-linux-gnu
+  # Versioned glibc floor: the ci-catalog zig-fips provider .so links
+  # versioned symbols up to GLIBC_2.38 (__isoc23_strtol), so the plain
+  # x86_64-linux-gnu baseline fails with 25 undefined-reference errors
+  # (pipeline #1521 snapshot). Matches dev-image-build-fips, which
+  # cross-compiles with -Dtarget=x86_64-linux-gnu.2.38 for the same reason.
+  - x86_64-linux-gnu.2.38
 
 # =============================================================================
 # Archives - Binary Distribution
