@@ -2243,6 +2243,46 @@ build-release:
       echo "=== Release build complete ==="
       ls -la dist/
 
+      # -----------------------------------------------------------------------
+      # Mirror release container images to the GitLab Container Registry.
+      # GoReleaser pushes release images to Docker Hub (docker.io/geodedb/geode)
+      # but now SKIPS the GitLab Registry (skip_push in .goreleaser.yaml): its
+      # internal `docker push` / `docker manifest push` are denied on this
+      # `company,lab,linux` dind runner, whose daemon ignores our login token and
+      # falls back to a pull-only CI_JOB_TOKEN (the same limitation the dev-image
+      # jobs work around with skopeo --dest-creds; see the 2026-07-09 skopeo
+      # migration). We therefore mirror the just-pushed multi-arch tags from
+      # Docker Hub into the GitLab Registry with `skopeo copy --all`, which talks
+      # to the registries directly with EXPLICIT --dest-creds and honours the
+      # write token. Best-effort: this NEVER fails the release — the apt/deb/rpm
+      # publish path does not depend on container images.
+      # -----------------------------------------------------------------------
+      if [ "${SKIP_DOCKERHUB}" = "false" ]; then
+        echo "=== Mirroring release images Docker Hub -> GitLab Registry (skopeo) ==="
+        apk add --no-cache skopeo >/dev/null 2>&1 || \
+          apk add --no-cache -X https://dl-cdn.alpinelinux.org/alpine/edge/community skopeo >/dev/null 2>&1 || \
+          echo "WARN: skopeo install failed; skipping GitLab Registry mirror"
+        if command -v skopeo >/dev/null 2>&1; then
+          MVERSION="${CI_COMMIT_TAG#v}"
+          MMAJOR="${MVERSION%%.*}"
+          MMINOR_REST="${MVERSION#*.}"; MMINOR="${MMINOR_REST%%.*}"
+          MIRROR_TAGS="${MVERSION} latest v${MMAJOR}.${MMINOR} v${MMAJOR} ${MVERSION}-alpine alpine ${MVERSION}-gpu gpu ${MVERSION}-fips latest-fips"
+          for t in ${MIRROR_TAGS}; do
+            if skopeo copy --all \
+                 --src-creds "${DOCKERHUB_USERNAME}:${DOCKERHUB_TOKEN}" \
+                 --dest-creds "${CI_REGISTRY_USER}:${CI_REGISTRY_PASSWORD}" \
+                 "docker://docker.io/geodedb/geode:${t}" \
+                 "docker://${CI_REGISTRY_IMAGE}:${t}"; then
+              echo "  ✓ mirrored ${CI_REGISTRY_IMAGE}:${t}"
+            else
+              echo "  ⚠ skipped ${t} (tag may not exist for this release)"
+            fi
+          done
+        fi
+      else
+        echo "SKIP_DOCKERHUB=true — no Docker Hub source; skipping GitLab Registry mirror"
+      fi
+
       # Upload darwin universal archive to Package Registry immediately so the
       # Homebrew formula URL is valid as soon as the formula is pushed to GitHub.
       # The full publish-packages job will upload everything else later.

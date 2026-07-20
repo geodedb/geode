@@ -179,6 +179,12 @@ dockers:
   extra_files:
   - docker
   use: buildx
+  # GitLab Container Registry push is done AFTER goreleaser via skopeo (see the
+  # build-release job). GoReleaser's internal `docker push` is denied on the
+  # `company,lab,linux` dind runner, which ignores the login token and falls
+  # back to a pull-only CI_JOB_TOKEN (same dind limitation the dev-image jobs
+  # work around with skopeo --dest-creds). Build here, mirror there.
+  skip_push: 'true'
   build_flag_templates:
   - --pull
   - --platform=linux/amd64
@@ -201,6 +207,8 @@ dockers:
   extra_files:
   - docker
   use: buildx
+  # GitLab push via skopeo post-goreleaser (see build-release job). skip_push here.
+  skip_push: 'true'
   build_flag_templates:
   - --pull
   - --platform=linux/arm64
@@ -221,6 +229,8 @@ dockers:
   extra_files:
   - docker
   use: buildx
+  # GitLab push via skopeo post-goreleaser (see build-release job). skip_push here.
+  skip_push: 'true'
   build_flag_templates:
   - --pull
   - --platform=linux/amd64
@@ -240,6 +250,8 @@ dockers:
   extra_files:
   - docker
   use: buildx
+  # GitLab push via skopeo post-goreleaser (see build-release job). skip_push here.
+  skip_push: 'true'
   build_flag_templates:
   - --pull
   - --platform=linux/arm64
@@ -347,6 +359,8 @@ dockers:
   extra_files:
   - docker
   use: buildx
+  # GitLab push via skopeo post-goreleaser (see build-release job). skip_push here.
+  skip_push: 'true'
   build_flag_templates:
   - --pull
   - --platform=linux/amd64
@@ -395,6 +409,8 @@ dockers:
   extra_files:
   - docker
   use: buildx
+  # GitLab push via skopeo post-goreleaser (see build-release job). skip_push here.
+  skip_push: 'true'
   build_flag_templates:
   - --pull
   - --platform=linux/amd64
@@ -438,38 +454,49 @@ dockers:
 # Reference: https://goreleaser.com/customization/docker/#keeping-docker-images-updated-for-current-major
 
 docker_manifests:
-  # GitLab Registry manifests
+  # GitLab Registry manifests.
+  # skip_push: GoReleaser's `docker manifest push` is denied on the
+  # `company,lab,linux` dind runner (same pull-only-token limitation that makes
+  # the per-arch GitLab image pushes fail). The GitLab Registry mirror of the
+  # release images + multi-arch manifests is created AFTER goreleaser via
+  # `skopeo copy --all` in the build-release job.
 - name_template: '{{ .Env.CI_REGISTRY_IMAGE }}:{{ .Version }}'
   image_templates:
   - '{{ .Env.CI_REGISTRY_IMAGE }}:{{ .Version }}-amd64'
   - '{{ .Env.CI_REGISTRY_IMAGE }}:{{ .Version }}-arm64'
+  skip_push: 'true'
 
 - name_template: '{{ .Env.CI_REGISTRY_IMAGE }}:latest'
   image_templates:
   - '{{ .Env.CI_REGISTRY_IMAGE }}:{{ .Version }}-amd64'
   - '{{ .Env.CI_REGISTRY_IMAGE }}:{{ .Version }}-arm64'
+  skip_push: 'true'
 
   # Major.Minor tag (e.g., v0.18 for v0.18.1)
 - name_template: '{{ .Env.CI_REGISTRY_IMAGE }}:v{{ .Major }}.{{ .Minor }}'
   image_templates:
   - '{{ .Env.CI_REGISTRY_IMAGE }}:{{ .Version }}-amd64'
   - '{{ .Env.CI_REGISTRY_IMAGE }}:{{ .Version }}-arm64'
+  skip_push: 'true'
 
   # Major tag (e.g., v0 for v0.18.1)
 - name_template: '{{ .Env.CI_REGISTRY_IMAGE }}:v{{ .Major }}'
   image_templates:
   - '{{ .Env.CI_REGISTRY_IMAGE }}:{{ .Version }}-amd64'
   - '{{ .Env.CI_REGISTRY_IMAGE }}:{{ .Version }}-arm64'
+  skip_push: 'true'
 
 - name_template: '{{ .Env.CI_REGISTRY_IMAGE }}:alpine'
   image_templates:
   - '{{ .Env.CI_REGISTRY_IMAGE }}:{{ .Version }}-alpine-amd64'
   - '{{ .Env.CI_REGISTRY_IMAGE }}:{{ .Version }}-alpine-arm64'
+  skip_push: 'true'
 
 - name_template: '{{ .Env.CI_REGISTRY_IMAGE }}:{{ .Version }}-alpine'
   image_templates:
   - '{{ .Env.CI_REGISTRY_IMAGE }}:{{ .Version }}-alpine-amd64'
   - '{{ .Env.CI_REGISTRY_IMAGE }}:{{ .Version }}-alpine-arm64'
+  skip_push: 'true'
 
   # Docker Hub manifests - pushed on tag releases only
 - name_template: docker.io/geodedb/geode:{{ .Version }}
@@ -515,6 +542,7 @@ docker_manifests:
 - name_template: '{{ .Env.CI_REGISTRY_IMAGE }}:gpu'
   image_templates:
   - '{{ .Env.CI_REGISTRY_IMAGE }}:{{ .Version }}-gpu'
+  skip_push: 'true'
 
 - name_template: docker.io/geodedb/geode:gpu
   image_templates:
@@ -529,16 +557,19 @@ docker_manifests:
 - name_template: '{{ .Env.CI_REGISTRY_IMAGE }}:v{{ .Major }}.{{ .Minor }}-gpu'
   image_templates:
   - '{{ .Env.CI_REGISTRY_IMAGE }}:{{ .Version }}-gpu'
+  skip_push: 'true'
 
   # FIPS manifests (amd64 single-arch — no multi-arch, amd64-only validated provider)
   # GitLab Registry FIPS manifests
 - name_template: '{{ .Env.CI_REGISTRY_IMAGE }}:{{ .Version }}-fips'
   image_templates:
   - '{{ .Env.CI_REGISTRY_IMAGE }}:{{ .Version }}-fips-amd64'
+  skip_push: 'true'
 
 - name_template: '{{ .Env.CI_REGISTRY_IMAGE }}:latest-fips'
   image_templates:
   - '{{ .Env.CI_REGISTRY_IMAGE }}:{{ .Version }}-fips-amd64'
+  skip_push: 'true'
 
   # Docker Hub FIPS manifests
 - name_template: docker.io/geodedb/geode:{{ .Version }}-fips
