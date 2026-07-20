@@ -1,0 +1,692 @@
+# =============================================================================
+# APT Repository Publishing Component
+# Signs Debian packages and publishes to S3-compatible APT repository
+# =============================================================================
+#
+# Usage:
+#   include:
+#     - component: gitlab.com/devnw/ci-catalog/apt-publish@v1
+#       inputs:
+#         apt_domain: apt.geodedb.com
+#         vault_secret_path: geode/apt
+#
+# Prerequisites (stored in Vault at {vault_secret_path}):
+#   private_key    - Armored GPG private key
+#   key_id         - GPG key ID
+#   s3_access_key  - S3/R2 access key
+#   s3_secret_key  - S3/R2 secret key
+#   s3_bucket      - S3/R2 bucket name
+#   s3_endpoint    - S3/R2 endpoint URL (e.g., https://<account>.r2.cloudflarestorage.com)
+#
+# Or use CI variables:
+#   - GPG_PRIVATE_KEY: Base64-encoded GPG private key (CI variable, masked)
+#   - GPG_KEY_ID: GPG key ID for signing (CI variable)
+#   - APT_S3_ACCESS_KEY: S3 access key (CI variable, masked)
+#   - APT_S3_SECRET_KEY: S3 secret key (CI variable, masked)
+# =============================================================================
+
+spec:
+  inputs:
+    # Pipeline configuration
+    stage:
+      default: publish
+      description: 'Pipeline stage for APT publishing jobs'
+    needs:
+      default: ''
+      description: 'Jobs that must complete before publishing (comma-separated)'
+    allow_failure:
+      type: boolean
+      default: false
+      description: 'Allow the publish job to fail without failing the pipeline'
+
+    # Package configuration
+    package_path:
+      default: 'dist/*.deb'
+      description: 'Glob pattern for .deb packages to publish'
+    distribution:
+      default: 'stable'
+      description: 'APT distribution name (stable, testing, unstable)'
+    component:
+      default: 'main'
+      description: 'APT component name'
+    architectures:
+      default: 'amd64 arm64 armhf riscv64'
+      description: 'Space-separated list of architectures to support'
+
+    # Repository configuration
+    apt_domain:
+      description: 'APT repository domain (e.g., apt.geodedb.com)'
+    s3_endpoint:
+      default: 'nyc3.digitaloceanspaces.com'
+      description: 'S3-compatible endpoint for package storage'
+    s3_bucket:
+      default: ''
+      description: 'S3 bucket name (defaults to {domain-prefix}-apt-packages)'
+
+    # Signing configuration
+    gpg_key_name:
+      default: 'geode.gpg'
+      description: 'Filename for the public GPG key'
+
+    # Vault integration
+    vault_addr:
+      default: 'https://pki.devnw.com'
+      description: 'HashiCorp Vault server address'
+    vault_auth_role:
+      default: ''
+      description: 'Vault JWT auth role (e.g., codepros-ci)'
+    vault_mount:
+      default: 'devnw'
+      description: 'Vault KV mount path (e.g., devnw, secret)'
+    vault_secret_path:
+      default: ''
+      description: 'Vault secret path for APT credentials (e.g., geode/apt)'
+
+    # S3 ACL configuration
+    s3_acl:
+      default: 'public-read'
+      description: 'S3 ACL for uploaded objects (public-read or private)'
+
+    # Execution options
+    dry_run:
+      type: boolean
+      default: false
+      description: 'Generate repository locally without uploading'
+
+    # Dependencies
+    sign_needs:
+      default: 'build-release'
+      description: 'Job that must complete before signing (e.g., build-release)'
+
+    # Job naming
+    job_suffix:
+      default: ''
+      description: 'Suffix for job names (e.g., apt-geodedb-com). If empty, uses apt_domain with dots replaced by dashes.'
+
+---
+
+# =============================================================================
+# Job: Sign Debian packages
+# =============================================================================
+"apt-sign-$[[ inputs.job_suffix ]]":
+  stage: $[[ inputs.stage ]]
+  image: debian:bookworm-slim
+  tags:
+    - company
+    - k8s
+    - linux
+  needs:
+    - job: "$[[ inputs.sign_needs ]]"
+      artifacts: true
+  id_tokens:
+    VAULT_ID_TOKEN:
+      aud: $[[ inputs.vault_addr ]]
+  variables:
+    APT_DOMAIN: $[[ inputs.apt_domain ]]
+    PACKAGE_PATH: $[[ inputs.package_path ]]
+    GPG_KEY_NAME: $[[ inputs.gpg_key_name ]]
+    VAULT_ADDR: $[[ inputs.vault_addr ]]
+    VAULT_AUTH_ROLE: $[[ inputs.vault_auth_role ]]
+    VAULT_MOUNT: $[[ inputs.vault_mount ]]
+    VAULT_SECRET_PATH: $[[ inputs.vault_secret_path ]]
+  before_script:
+    - apt-get update -qq && apt-get install -qq -y gnupg dpkg-dev curl jq ca-certificates > /dev/null
+  script:
+    - |
+      set -euo pipefail
+      echo "=== APT Package Signing ==="
+
+      # Setup isolated GPG home
+      export GNUPGHOME=$(mktemp -d)
+      trap "rm -rf $GNUPGHOME" EXIT
+
+      # Helper function for Vault secret retrieval
+      get_vault_secret() {
+        local path=$1
+        local field=${2:-value}
+        curl -sS --header "X-Vault-Token: $VAULT_TOKEN" \
+          "$VAULT_ADDR/v1/${VAULT_MOUNT}/data/$path" | jq -r ".data.data.$field // empty"
+      }
+
+      # Authenticate to Vault if configured
+      if [ -n "$VAULT_AUTH_ROLE" ] && [ -n "$VAULT_SECRET_PATH" ]; then
+        echo "Authenticating to Vault at $VAULT_ADDR with role $VAULT_AUTH_ROLE"
+        AUTH_RESPONSE=$(curl -sS --request POST \
+          --data "{\"role\": \"$VAULT_AUTH_ROLE\", \"jwt\": \"$VAULT_ID_TOKEN\"}" \
+          "$VAULT_ADDR/v1/auth/gitlab-jwt/login")
+        export VAULT_TOKEN=$(echo "$AUTH_RESPONSE" | jq -r '.auth.client_token')
+
+        if [ -z "$VAULT_TOKEN" ] || [ "$VAULT_TOKEN" = "null" ]; then
+          echo "ERROR: Failed to authenticate to Vault"
+          echo "Response: $AUTH_RESPONSE"
+          exit 1
+        fi
+        echo "Vault authentication successful"
+
+        # Retrieve GPG credentials from Vault (flat secret structure from Terraform)
+        echo "Retrieving GPG credentials from Vault..."
+        GPG_PRIVATE_KEY=$(get_vault_secret "$VAULT_SECRET_PATH" "private_key")
+        GPG_KEY_ID=$(get_vault_secret "$VAULT_SECRET_PATH" "key_id")
+
+        if [ -n "$GPG_PRIVATE_KEY" ] && [ "$GPG_PRIVATE_KEY" != "null" ]; then
+          echo "$GPG_PRIVATE_KEY" | gpg --batch --import
+        else
+          echo "ERROR: GPG private key not found in Vault at $VAULT_SECRET_PATH (field: private_key)"
+          exit 1
+        fi
+      elif [ -n "${GPG_PRIVATE_KEY:-}" ]; then
+        echo "Importing GPG key from CI variable..."
+        echo "$GPG_PRIVATE_KEY" | base64 -d | gpg --batch --import
+      else
+        echo "ERROR: No GPG key available"
+        echo "Either configure Vault (vault_auth_role + vault_secret_path) or set GPG_PRIVATE_KEY CI variable"
+        exit 1
+      fi
+
+      if [ -z "${GPG_KEY_ID:-}" ]; then
+        echo "ERROR: GPG_KEY_ID not set"
+        exit 1
+      fi
+
+      # Configure GPG for non-interactive signing
+      cat > "$GNUPGHOME/gpg.conf" <<EOF
+      batch
+      yes
+      pinentry-mode loopback
+      EOF
+
+      # Trust the key
+      echo "${GPG_KEY_ID}:6:" | gpg --import-ownertrust
+
+      # Find and sign packages
+      mkdir -p signed-packages
+
+      echo "Looking for packages matching: $PACKAGE_PATH"
+      for deb in $PACKAGE_PATH; do
+        [ -f "$deb" ] || continue
+        echo "Signing: $(basename "$deb")"
+        cp "$deb" signed-packages/
+
+        # Create detached signature
+        gpg --armor --detach-sign --default-key "$GPG_KEY_ID" "signed-packages/$(basename "$deb")"
+      done
+
+      # Export public key (project-specific)
+      gpg --armor --export "$GPG_KEY_ID" > "signed-packages/$GPG_KEY_NAME"
+      gpg --export "$GPG_KEY_ID" > "signed-packages/${GPG_KEY_NAME%.gpg}-keyring.gpg"
+
+      # Export domain-based keyring (e.g., codepros-keyring.gpg for apt.codepros.org)
+      # This allows a single keyring to be used for all projects on the same repo
+      DOMAIN_PREFIX=$(echo "$APT_DOMAIN" | sed 's/^apt\.//' | cut -d. -f1)
+      gpg --armor --export "$GPG_KEY_ID" > "signed-packages/${DOMAIN_PREFIX}.gpg"
+      gpg --export "$GPG_KEY_ID" > "signed-packages/${DOMAIN_PREFIX}-keyring.gpg"
+
+      # Store key ID and domain prefix for subsequent jobs
+      echo "$GPG_KEY_ID" > signed-packages/.gpg_key_id
+      echo "$DOMAIN_PREFIX" > signed-packages/.domain_prefix
+
+      echo "=== Signed packages ==="
+      ls -la signed-packages/
+
+      echo "=== Signing complete ==="
+  artifacts:
+    paths:
+      - signed-packages/
+    expire_in: 1 week
+  rules:
+    - if: $CI_COMMIT_TAG =~ /^v?\d+\.\d+\.\d+(-.*)?$/
+      when: on_success
+    - when: never
+  allow_failure: $[[ inputs.allow_failure ]]
+
+# =============================================================================
+# Job: Generate APT repository metadata
+# =============================================================================
+"apt-repo-$[[ inputs.job_suffix ]]":
+  stage: $[[ inputs.stage ]]
+  image: debian:bookworm-slim
+  tags:
+    - company
+    - k8s
+    - linux
+  id_tokens:
+    VAULT_ID_TOKEN:
+      aud: $[[ inputs.vault_addr ]]
+  needs:
+    - job: "apt-sign-$[[ inputs.job_suffix ]]"
+      artifacts: true
+  variables:
+    APT_DOMAIN: $[[ inputs.apt_domain ]]
+    S3_ENDPOINT: $[[ inputs.s3_endpoint ]]
+    S3_BUCKET: $[[ inputs.s3_bucket ]]
+    DISTRIBUTION: $[[ inputs.distribution ]]
+    COMPONENT: $[[ inputs.component ]]
+    ARCHITECTURES: $[[ inputs.architectures ]]
+    GPG_KEY_NAME: $[[ inputs.gpg_key_name ]]
+    VAULT_ADDR: $[[ inputs.vault_addr ]]
+    VAULT_AUTH_ROLE: $[[ inputs.vault_auth_role ]]
+    VAULT_MOUNT: $[[ inputs.vault_mount ]]
+    VAULT_SECRET_PATH: $[[ inputs.vault_secret_path ]]
+  before_script:
+    - apt-get update -qq && apt-get install -qq -y gnupg dpkg-dev xz-utils gzip coreutils curl jq ca-certificates awscli > /dev/null
+  script:
+    - |
+      set -euo pipefail
+      echo "=== Generating APT Repository ==="
+
+      # Setup GPG for signing Release file
+      export GNUPGHOME=$(mktemp -d)
+      trap "rm -rf $GNUPGHOME" EXIT
+
+      # Determine bucket name
+      if [ -z "$S3_BUCKET" ]; then
+        S3_BUCKET="${APT_DOMAIN%%.*}-apt-packages"
+      fi
+
+      # Helper function
+      get_vault_secret() {
+        local path=$1
+        local field=${2:-value}
+        curl -sS --header "X-Vault-Token: $VAULT_TOKEN" \
+          "$VAULT_ADDR/v1/${VAULT_MOUNT}/data/$path" | jq -r ".data.data.$field // empty"
+      }
+
+      # Authenticate to Vault if configured
+      if [ -n "$VAULT_AUTH_ROLE" ] && [ -n "$VAULT_SECRET_PATH" ]; then
+        AUTH_RESPONSE=$(curl -sS --request POST \
+          --data "{\"role\": \"$VAULT_AUTH_ROLE\", \"jwt\": \"$VAULT_ID_TOKEN\"}" \
+          "$VAULT_ADDR/v1/auth/gitlab-jwt/login")
+        export VAULT_TOKEN=$(echo "$AUTH_RESPONSE" | jq -r '.auth.client_token')
+
+        GPG_PRIVATE_KEY=$(get_vault_secret "$VAULT_SECRET_PATH" "private_key")
+        GPG_KEY_ID=$(get_vault_secret "$VAULT_SECRET_PATH" "key_id")
+
+        if [ -n "$GPG_PRIVATE_KEY" ] && [ "$GPG_PRIVATE_KEY" != "null" ]; then
+          echo "$GPG_PRIVATE_KEY" | gpg --batch --import
+        fi
+
+        # Get S3 credentials for downloading existing packages
+        export AWS_ACCESS_KEY_ID=$(get_vault_secret "$VAULT_SECRET_PATH" "s3_access_key")
+        export AWS_SECRET_ACCESS_KEY=$(get_vault_secret "$VAULT_SECRET_PATH" "s3_secret_key")
+
+        # Override bucket/endpoint from Vault if available
+        VAULT_BUCKET=$(get_vault_secret "$VAULT_SECRET_PATH" "s3_bucket")
+        VAULT_ENDPOINT=$(get_vault_secret "$VAULT_SECRET_PATH" "s3_endpoint")
+        [ -n "$VAULT_BUCKET" ] && [ "$VAULT_BUCKET" != "null" ] && S3_BUCKET="$VAULT_BUCKET"
+        # Strip protocol if present
+        VAULT_ENDPOINT="${VAULT_ENDPOINT#https://}"
+        VAULT_ENDPOINT="${VAULT_ENDPOINT#http://}"
+        [ -n "$VAULT_ENDPOINT" ] && [ "$VAULT_ENDPOINT" != "null" ] && S3_ENDPOINT="$VAULT_ENDPOINT"
+      elif [ -n "${GPG_PRIVATE_KEY:-}" ]; then
+        echo "$GPG_PRIVATE_KEY" | gpg --batch --import
+      fi
+
+      # Fallback to stored key ID from signing job
+      if [ -z "${GPG_KEY_ID:-}" ] && [ -f signed-packages/.gpg_key_id ]; then
+        GPG_KEY_ID=$(cat signed-packages/.gpg_key_id)
+      fi
+
+      cat > "$GNUPGHOME/gpg.conf" <<EOF
+      batch
+      yes
+      pinentry-mode loopback
+      EOF
+
+      if [ -n "${GPG_KEY_ID:-}" ]; then
+        echo "${GPG_KEY_ID}:6:" | gpg --import-ownertrust
+      fi
+
+      # Create repository structure
+      REPO_DIR="apt-repo"
+      mkdir -p "$REPO_DIR/dists/$DISTRIBUTION/$COMPONENT"
+      mkdir -p "$REPO_DIR/pool/$COMPONENT"
+
+      # Create architecture directories
+      for arch in $ARCHITECTURES; do
+        mkdir -p "$REPO_DIR/dists/$DISTRIBUTION/$COMPONENT/binary-$arch"
+      done
+
+      # Download existing packages from S3 to preserve other projects' packages
+      # This is critical for shared repositories (e.g., void + zlint on apt.codepros.org)
+      if [ -n "${AWS_ACCESS_KEY_ID:-}" ] && [ -n "${AWS_SECRET_ACCESS_KEY:-}" ]; then
+        echo "Downloading existing packages from s3://$S3_BUCKET/pool/..."
+        aws s3 sync "s3://$S3_BUCKET/pool/" "$REPO_DIR/pool/" \
+          --endpoint-url "https://$S3_ENDPOINT" \
+          --quiet 2>/dev/null || echo "No existing pool found (first publish)"
+        echo "Existing packages:"
+        find "$REPO_DIR/pool" -name "*.deb" 2>/dev/null | head -20 || true
+      fi
+
+      # Copy new packages into the pool (needed locally to regenerate complete
+      # metadata) AND into a separate new-packages staging dir. Only the staging
+      # dir is artifacted/uploaded downstream — the full downloaded pool is NOT
+      # artifacted: it already lives in S3, and shipping it through a CI artifact
+      # grows without bound and eventually fails with 413 Payload Too Large.
+      NEW_POOL_DIR="apt-pool-new"
+      for deb in signed-packages/*.deb; do
+        [ -f "$deb" ] || continue
+        pkg_name=$(dpkg-deb -f "$deb" Package 2>/dev/null | head -c1 || echo "g")
+        rel="pool/$COMPONENT/$pkg_name"
+        mkdir -p "$REPO_DIR/$rel" "$NEW_POOL_DIR/$rel"
+        cp "$deb" "$REPO_DIR/$rel/"
+        cp "$deb" "$NEW_POOL_DIR/$rel/"
+        cp "${deb}.asc" "$REPO_DIR/$rel/" 2>/dev/null || true
+        cp "${deb}.asc" "$NEW_POOL_DIR/$rel/" 2>/dev/null || true
+      done
+
+      # Map architecture from filename
+      map_arch() {
+        case "$1" in
+          *x86_64*|*amd64*) echo "amd64" ;;
+          *arm64*|*aarch64*) echo "arm64" ;;
+          *armhf*|*arm-linux*) echo "armhf" ;;
+          *riscv64*) echo "riscv64" ;;
+          *) echo "" ;;
+        esac
+      }
+
+      # Generate Packages files
+      echo "Generating Packages files..."
+      for arch in $ARCHITECTURES; do
+        PACKAGES_FILE="$REPO_DIR/dists/$DISTRIBUTION/$COMPONENT/binary-$arch/Packages"
+        > "$PACKAGES_FILE"
+
+        for deb in "$REPO_DIR"/pool/$COMPONENT/*/*.deb; do
+          [ -f "$deb" ] || continue
+          filename=$(basename "$deb")
+          pkg_arch=$(map_arch "$filename")
+
+          if [ "$pkg_arch" = "$arch" ]; then
+            dpkg-deb -I "$deb" control 2>/dev/null >> "$PACKAGES_FILE" || continue
+
+            SIZE=$(stat -c%s "$deb")
+            MD5=$(md5sum "$deb" | awk '{print $1}')
+            SHA1=$(sha1sum "$deb" | awk '{print $1}')
+            SHA256=$(sha256sum "$deb" | awk '{print $1}')
+            RELPATH=${deb#$REPO_DIR/}
+
+            echo "Filename: $RELPATH" >> "$PACKAGES_FILE"
+            echo "Size: $SIZE" >> "$PACKAGES_FILE"
+            echo "MD5sum: $MD5" >> "$PACKAGES_FILE"
+            echo "SHA1: $SHA1" >> "$PACKAGES_FILE"
+            echo "SHA256: $SHA256" >> "$PACKAGES_FILE"
+            echo "" >> "$PACKAGES_FILE"
+          fi
+        done
+
+        gzip -k -f "$PACKAGES_FILE"
+        xz -k -f "$PACKAGES_FILE" 2>/dev/null || true
+      done
+
+      # Generate Release file
+      echo "Generating Release file..."
+      RELEASE_FILE="$REPO_DIR/dists/$DISTRIBUTION/Release"
+      cat > "$RELEASE_FILE" <<EOF
+      Origin: ${APT_DOMAIN%%.*}
+      Label: ${APT_DOMAIN%%.*}
+      Suite: $DISTRIBUTION
+      Codename: $DISTRIBUTION
+      Architectures: $ARCHITECTURES
+      Components: $COMPONENT
+      Description: APT Repository for $APT_DOMAIN
+      Date: $(date -Ru)
+      EOF
+
+      # Add checksums
+      cd "$REPO_DIR/dists/$DISTRIBUTION"
+
+      echo "MD5Sum:" >> Release
+      find . -type f \( -name "Packages*" \) | while read f; do
+        SIZE=$(stat -c%s "$f")
+        MD5=$(md5sum "$f" | awk '{print $1}')
+        printf " %s %16d %s\n" "$MD5" "$SIZE" "${f#./}" >> Release
+      done
+
+      echo "SHA1:" >> Release
+      find . -type f \( -name "Packages*" \) | while read f; do
+        SIZE=$(stat -c%s "$f")
+        SHA1=$(sha1sum "$f" | awk '{print $1}')
+        printf " %s %16d %s\n" "$SHA1" "$SIZE" "${f#./}" >> Release
+      done
+
+      echo "SHA256:" >> Release
+      find . -type f \( -name "Packages*" \) | while read f; do
+        SIZE=$(stat -c%s "$f")
+        SHA256=$(sha256sum "$f" | awk '{print $1}')
+        printf " %s %16d %s\n" "$SHA256" "$SIZE" "${f#./}" >> Release
+      done
+
+      cd -
+
+      # Sign Release file
+      if [ -n "${GPG_KEY_ID:-}" ]; then
+        echo "Signing Release file..."
+        gpg --armor --detach-sign --default-key "$GPG_KEY_ID" -o "$REPO_DIR/dists/$DISTRIBUTION/Release.gpg" "$RELEASE_FILE"
+        gpg --clearsign --default-key "$GPG_KEY_ID" -o "$REPO_DIR/dists/$DISTRIBUTION/InRelease" "$RELEASE_FILE"
+      fi
+
+      # Copy public keys to repository root
+      # Project-specific keys (e.g., void.gpg, void-keyring.gpg)
+      cp "signed-packages/$GPG_KEY_NAME" "$REPO_DIR/" 2>/dev/null || true
+      cp "signed-packages/${GPG_KEY_NAME%.gpg}-keyring.gpg" "$REPO_DIR/" 2>/dev/null || true
+
+      # Domain-based keys (e.g., codepros.gpg, codepros-keyring.gpg)
+      # These can be shared by all projects on the same repository
+      if [ -f "signed-packages/.domain_prefix" ]; then
+        DOMAIN_PREFIX=$(cat signed-packages/.domain_prefix)
+      else
+        # Fallback: extract from APT_DOMAIN (apt.codepros.org -> codepros)
+        DOMAIN_PREFIX=$(echo "$APT_DOMAIN" | sed 's/^apt\.//' | cut -d. -f1)
+      fi
+      cp "signed-packages/${DOMAIN_PREFIX}.gpg" "$REPO_DIR/" 2>/dev/null || true
+      cp "signed-packages/${DOMAIN_PREFIX}-keyring.gpg" "$REPO_DIR/" 2>/dev/null || true
+
+      # Create index.html
+      VERSION="${CI_COMMIT_TAG#v}"
+      cat > "$REPO_DIR/index.html" <<EOF
+      <!DOCTYPE html>
+      <html>
+      <head>
+        <title>APT Repository - $APT_DOMAIN</title>
+        <style>
+          body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; max-width: 800px; margin: 50px auto; padding: 20px; }
+          pre { background: #f4f4f4; padding: 15px; border-radius: 5px; overflow-x: auto; }
+        </style>
+      </head>
+      <body>
+        <h1>APT Repository</h1>
+        <p><strong>Domain:</strong> $APT_DOMAIN</p>
+        <p><strong>Version:</strong> ${VERSION:-latest}</p>
+
+        <h2>Quick Install</h2>
+        <pre>
+      # Add GPG key (use domain keyring for all packages)
+      curl -fsSL https://$APT_DOMAIN/${DOMAIN_PREFIX}-keyring.gpg | sudo tee /usr/share/keyrings/${DOMAIN_PREFIX}-archive-keyring.gpg > /dev/null
+
+      # Add repository
+      echo "deb [signed-by=/usr/share/keyrings/${DOMAIN_PREFIX}-archive-keyring.gpg] https://$APT_DOMAIN $DISTRIBUTION $COMPONENT" | sudo tee /etc/apt/sources.list.d/${DOMAIN_PREFIX}.list
+
+      # Install
+      sudo apt update
+        </pre>
+        <p><small>Generated: $(date -Ru)</small></p>
+      </body>
+      </html>
+      EOF
+
+      echo "=== Repository structure ==="
+      # `find | sort | head -50` triggers SIGPIPE in `sort` when `head -50`
+      # closes its stdin after 50 lines, and `set -o pipefail` propagates the
+      # non-zero exit, failing the job once the repo grows past 50 files.
+      # Use `awk` to do the truncation in-process so no upstream stage in the
+      # pipeline gets a SIGPIPE. Caught in geode v0.5.17 release pipeline
+      # #2531568850 (apt-repo job 14407557997/14409676608).
+      find "$REPO_DIR" -type f | LC_ALL=C sort | awk 'NR<=50'
+  artifacts:
+    when: always
+    paths:
+      - apt-repo/
+      - apt-pool-new/
+    exclude:
+      # The downloaded pool already lives in S3; artifacting it would exceed the
+      # CI artifact size limit (413 Payload Too Large). Pass only dists/ metadata,
+      # the repo keys/index, and this release's new packages (apt-pool-new/).
+      - "apt-repo/pool/**/*"
+    expire_in: 1 week
+  rules:
+    - if: $CI_COMMIT_TAG =~ /^v?\d+\.\d+\.\d+(-.*)?$/
+      when: on_success
+    - when: never
+  allow_failure: $[[ inputs.allow_failure ]]
+
+# =============================================================================
+# Job: Upload to S3-compatible storage
+# =============================================================================
+"apt-publish-$[[ inputs.job_suffix ]]":
+  stage: $[[ inputs.stage ]]
+  image:
+    name: amazon/aws-cli:latest
+    # amazon/aws-cli's ENTRYPOINT is ["aws"], which converts the runner's
+    # default `sh -c "..."` script wrapper into `aws sh -c ...` and fails
+    # with "argument command: Found invalid choice 'sh'". Empty entrypoint
+    # restores the runner's normal shell wrapper.
+    entrypoint: [""]
+  tags:
+    - company
+    - k8s
+    - linux
+  id_tokens:
+    VAULT_ID_TOKEN:
+      aud: $[[ inputs.vault_addr ]]
+  needs:
+    - job: "apt-repo-$[[ inputs.job_suffix ]]"
+      artifacts: true
+  variables:
+    APT_DOMAIN: $[[ inputs.apt_domain ]]
+    S3_ENDPOINT: $[[ inputs.s3_endpoint ]]
+    S3_BUCKET: $[[ inputs.s3_bucket ]]
+    DRY_RUN: $[[ inputs.dry_run ]]
+    S3_ACL: $[[ inputs.s3_acl ]]
+    VAULT_ADDR: $[[ inputs.vault_addr ]]
+    VAULT_AUTH_ROLE: $[[ inputs.vault_auth_role ]]
+    VAULT_MOUNT: $[[ inputs.vault_mount ]]
+    VAULT_SECRET_PATH: $[[ inputs.vault_secret_path ]]
+  before_script:
+    - yum install -y jq > /dev/null 2>&1 || true
+  script:
+    - |
+      set -euo pipefail
+      echo "=== APT Repository Upload ==="
+
+      # Determine bucket name
+      if [ -z "$S3_BUCKET" ]; then
+        S3_BUCKET="${APT_DOMAIN%%.*}-apt-packages"
+      fi
+
+      # Helper function
+      get_vault_secret() {
+        local path=$1
+        local field=${2:-value}
+        curl -sS --header "X-Vault-Token: $VAULT_TOKEN" \
+          "$VAULT_ADDR/v1/${VAULT_MOUNT}/data/$path" | jq -r ".data.data.$field // empty"
+      }
+
+      # Get S3 credentials from Vault or CI variables
+      if [ -n "$VAULT_AUTH_ROLE" ] && [ -n "$VAULT_SECRET_PATH" ]; then
+        echo "Retrieving S3 credentials from Vault..."
+        AUTH_RESPONSE=$(curl -sS --request POST \
+          --data "{\"role\": \"$VAULT_AUTH_ROLE\", \"jwt\": \"$VAULT_ID_TOKEN\"}" \
+          "$VAULT_ADDR/v1/auth/gitlab-jwt/login")
+        export VAULT_TOKEN=$(echo "$AUTH_RESPONSE" | jq -r '.auth.client_token')
+
+        if [ -z "$VAULT_TOKEN" ] || [ "$VAULT_TOKEN" = "null" ]; then
+          echo "ERROR: Failed to authenticate to Vault"
+          exit 1
+        fi
+
+        # Read credentials from Vault secret (flat structure from Terraform)
+        export AWS_ACCESS_KEY_ID=$(get_vault_secret "$VAULT_SECRET_PATH" "s3_access_key")
+        export AWS_SECRET_ACCESS_KEY=$(get_vault_secret "$VAULT_SECRET_PATH" "s3_secret_key")
+
+        # Override bucket/endpoint from Vault if available
+        VAULT_BUCKET=$(get_vault_secret "$VAULT_SECRET_PATH" "s3_bucket")
+        VAULT_ENDPOINT=$(get_vault_secret "$VAULT_SECRET_PATH" "s3_endpoint")
+        [ -n "$VAULT_BUCKET" ] && [ "$VAULT_BUCKET" != "null" ] && S3_BUCKET="$VAULT_BUCKET"
+        # Strip protocol if present (Terraform stores full URL, component adds https://)
+        VAULT_ENDPOINT="${VAULT_ENDPOINT#https://}"
+        VAULT_ENDPOINT="${VAULT_ENDPOINT#http://}"
+        [ -n "$VAULT_ENDPOINT" ] && [ "$VAULT_ENDPOINT" != "null" ] && S3_ENDPOINT="$VAULT_ENDPOINT"
+      elif [ -n "${APT_S3_ACCESS_KEY:-}" ]; then
+        export AWS_ACCESS_KEY_ID="$APT_S3_ACCESS_KEY"
+        export AWS_SECRET_ACCESS_KEY="$APT_S3_SECRET_KEY"
+      else
+        echo "ERROR: No S3 credentials available"
+        echo "Configure Vault or set APT_S3_ACCESS_KEY/APT_S3_SECRET_KEY"
+        exit 1
+      fi
+
+      echo "Uploading to: s3://$S3_BUCKET via $S3_ENDPOINT"
+      echo "Domain: https://$APT_DOMAIN"
+
+      if [ "$DRY_RUN" = "true" ]; then
+        echo "DRY RUN - would upload dists/ metadata + new packages:"
+        find apt-repo/dists apt-pool-new -type f 2>/dev/null | LC_ALL=C sort | awk 'NR<=50'
+        exit 0
+      fi
+
+      # Upload to S3/R2 with NO --delete (never prune — see below). The full
+      # downloaded pool is no longer carried in the artifact (it would 413), so
+      # we upload in two parts:
+      #
+      #   1. dists/ — the metadata index, regenerated from the FULL pool every
+      #      run, so it is complete and authoritative.
+      #   2. apt-pool-new/ — only THIS release's new .deb packages, added to the
+      #      shared pool. Older packages already live in S3 and are untouched.
+      #
+      # We never `sync --delete`: against R2's eventually-consistent listings the
+      # per-object PUT/DELETE that sync issues concurrently can delete a .deb
+      # uploaded moments earlier and leave the Packages index pointing at a
+      # missing object (apt then 404s). Orphaned pool files are harmless — the
+      # index only lists what apt-repo regenerated. (zcap 0.1.3 amd64 .deb was
+      # lost that way; pipeline 2609229193, job apt-publish-apt-spyder-org.)
+      if [ -d apt-repo/dists ]; then
+        aws s3 sync apt-repo/dists/ "s3://$S3_BUCKET/dists/" \
+          --endpoint-url "https://$S3_ENDPOINT" \
+          --acl "$S3_ACL"
+      fi
+      if [ -d apt-pool-new/pool ]; then
+        aws s3 sync apt-pool-new/pool/ "s3://$S3_BUCKET/pool/" \
+          --endpoint-url "https://$S3_ENDPOINT" \
+          --acl "$S3_ACL"
+      fi
+
+      # Upload HTML with correct content type
+      aws s3 cp apt-repo/index.html "s3://$S3_BUCKET/index.html" \
+        --endpoint-url "https://$S3_ENDPOINT" \
+        --acl "$S3_ACL" \
+        --content-type "text/html"
+
+      # Upload GPG keys
+      for gpg_file in apt-repo/*.gpg; do
+        [ -f "$gpg_file" ] || continue
+        aws s3 cp "$gpg_file" "s3://$S3_BUCKET/$(basename "$gpg_file")" \
+          --endpoint-url "https://$S3_ENDPOINT" \
+          --acl "$S3_ACL" \
+          --content-type "application/pgp-keys"
+      done
+
+      # Extract domain prefix for installation instructions
+      DOMAIN_PREFIX=$(echo "$APT_DOMAIN" | sed 's/^apt\.//' | cut -d. -f1)
+
+      echo ""
+      echo "=== Upload complete ==="
+      echo "APT repository published to: https://$APT_DOMAIN"
+      echo ""
+      echo "Installation:"
+      echo "  curl -fsSL https://$APT_DOMAIN/${DOMAIN_PREFIX}-keyring.gpg | sudo tee /usr/share/keyrings/${DOMAIN_PREFIX}-archive-keyring.gpg > /dev/null"
+      echo "  echo \"deb [signed-by=/usr/share/keyrings/${DOMAIN_PREFIX}-archive-keyring.gpg] https://$APT_DOMAIN stable main\" | sudo tee /etc/apt/sources.list.d/${DOMAIN_PREFIX}.list"
+  rules:
+    - if: $CI_COMMIT_TAG =~ /^v?\d+\.\d+\.\d+(-.*)?$/
+      when: on_success
+    - when: never
+  allow_failure: $[[ inputs.allow_failure ]]

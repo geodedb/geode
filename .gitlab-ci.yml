@@ -31,7 +31,23 @@ include:
   # `sort` no longer fails the apt-repo job under `set -o pipefail` once
   # the repo has grown past 50 files). Caught in v0.5.17 release pipeline
   # #2531568850 (apt-repo job 14407557997 + retry 14409676608).
-  - component: gitlab.com/devnw/ci-catalog/apt-publish@v1.45.4
+  # 2026-07-20: VENDORED from ci-catalog apt-publish (commit 51856a9e / git tag
+  # v1.45.4) into .gitlab/ci/apt-publish.yml, included locally instead of via the
+  # catalog. Why: the v0.8.3 release pipeline WIPED the entire apt pool. The
+  # PUBLISHED CI Catalog snapshot for v1.45.4 is STALE — it runs the old
+  # `aws s3 sync apt-repo/ --delete` while its apt-repo job now EXCLUDES
+  # apt-repo/pool/** from the artifact, so the publish job deleted every .deb in
+  # R2 and uploaded none (job 15433862309: 0 deb uploads, 56 deb deletes). The
+  # ci-catalog *repo* already carries the fix (two-phase sync: apt-repo/dists/ +
+  # apt-pool-new/pool/, NEVER --delete), but the catalog was never re-published
+  # to it — create-release is allow_failure because CI_JOB_TOKEN can't mutate the
+  # Releases API — and GitLab resolves the component (even by commit SHA) through
+  # that stale published snapshot. Vendoring the fixed template + `include: local`
+  # is the only resolution that bypasses the catalog entirely. $RUNNER_TAG/
+  # $RUNNER_TAG_2 placeholders were replaced with geode's proven [company, k8s,
+  # linux] tags. Revert to `component: …/apt-publish@<semver>` once ci-catalog
+  # republishes a correct catalog version.
+  - local: '.gitlab/ci/apt-publish.yml'
     inputs:
       apt_domain: apt.geodedb.com
       job_suffix: apt-geodedb-com
