@@ -33,10 +33,10 @@
 // PIPE — the in-process cluster tests always ran on writable cwd with file
 // stdio and so missed this):
 //
-//   C. e2e (subprocess, stdout=PIPE): `geode serve --cert <MISSING>` must
+//   C. e2e (subprocess, stdout=PIPE): `geode serve --cert=<MISSING>` must
 //      REFUSE to start (non-zero exit) and must NOT print "Generated
 //      self-signed certificates" and must NOT create /tmp/geode-server.crt.
-//   D. e2e (subprocess, stdout=PIPE): `geode serve --cert <EXISTING provided>`
+//   D. e2e (subprocess, stdout=PIPE): `geode serve --cert=<EXISTING provided>`
 //      must LOAD the provided cert (prints the "operator-provided TLS
 //      certificate" marker), must NOT self-sign, must NOT create /tmp cert,
 //      and must leave the provided cert byte-for-byte unchanged.
@@ -202,10 +202,16 @@ test "explicit --cert pointing at a missing file refuses to start (no silent sel
     const missing_crt = try std.fmt.allocPrint(aa, "{s}/does-not-exist.crt", .{data_dir});
     const missing_key = try std.fmt.allocPrint(aa, "{s}/does-not-exist.key", .{data_dir});
 
+    const data_arg = try std.fmt.allocPrint(aa, "--data-dir={s}", .{data_dir});
+    const cert_arg = try std.fmt.allocPrint(aa, "--cert={s}", .{missing_crt});
+    const key_arg = try std.fmt.allocPrint(aa, "--key={s}", .{missing_key});
     const args = [_][]const u8{
-        BINARY_PATH,  "serve",     "--listen", "127.0.0.1:31581",
-        "--data-dir", data_dir,    "--cert",   missing_crt,
-        "--key",      missing_key,
+        BINARY_PATH,
+        "serve",
+        "--listen=127.0.0.1:31581",
+        data_arg,
+        cert_arg,
+        key_arg,
     };
     const env_ptr = try buildChildEnv(aa);
 
@@ -359,10 +365,16 @@ test "explicit --cert pointing at a real cert is loaded as-is (not discarded)" {
     std.Io.Dir.cwd().createDirPath(io, data_dir) catch {};
     defer std.Io.Dir.cwd().deleteTree(io, data_dir) catch {};
 
+    const data_arg = try std.fmt.allocPrint(aa, "--data-dir={s}", .{data_dir});
+    const cert_arg = try std.fmt.allocPrint(aa, "--cert={s}", .{provided.crt});
+    const key_arg = try std.fmt.allocPrint(aa, "--key={s}", .{provided.key});
     const args = [_][]const u8{
-        BINARY_PATH,  "serve",      "--listen", "127.0.0.1:31582",
-        "--data-dir", data_dir,     "--cert",   provided.crt,
-        "--key",      provided.key,
+        BINARY_PATH,
+        "serve",
+        "--listen=127.0.0.1:31582",
+        data_arg,
+        cert_arg,
+        key_arg,
     };
     const env_ptr = try buildChildEnv(aa);
 

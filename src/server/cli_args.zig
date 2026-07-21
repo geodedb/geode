@@ -13,6 +13,16 @@ fn posixGetenv(name: [*:0]const u8) ?[:0]const u8 {
     return if (std.c.getenv(name)) |p| std.mem.span(p) else null;
 }
 
+/// Return the inline value from `--name=value`, or null when `arg` is not the
+/// requested option.  An empty value is returned as an empty slice so callers
+/// still mark security-sensitive options such as `--cert=` as explicit; server
+/// startup will then fail closed instead of silently generating a certificate.
+fn inlineLongOptionValue(arg: []const u8, option: []const u8) ?[]const u8 {
+    if (!std.mem.startsWith(u8, arg, option)) return null;
+    if (arg.len <= option.len or arg[option.len] != '=') return null;
+    return arg[option.len + 1 ..];
+}
+
 // CANARY: REQ=REQ-LIB-MIGRATION-CONFIG-001; FEATURE="External Library Migration"; ASPECT=ConfigManagement; STATUS=EXEMPT; OWNER=core; UPDATED=2026-01-24
 // External configuration library - XDG compliant, multi-format support (YAML, TOML, JSON)
 // Provides config file support with precedence: flags > env > project > user > system > defaults
@@ -373,6 +383,28 @@ pub fn parseArgsFromSlice(allocator: std.mem.Allocator, args: []const []const u8
             ai += 1;
             if (std.mem.startsWith(u8, args[ai], "-")) return error.InvalidCapabilityProfilePath;
             try setCapabilityProfile(allocator, &config, args[ai]);
+        } else if (inlineLongOptionValue(arg, "--listen-quic") orelse inlineLongOptionValue(arg, "--listen")) |value| {
+            config.listen_quic = try allocator.dupe(u8, value);
+            config._allocated_listen_quic = true;
+        } else if (inlineLongOptionValue(arg, "--listen-grpc")) |value| {
+            config.listen_grpc = try allocator.dupe(u8, value);
+            config._allocated_listen_grpc = true;
+        } else if (inlineLongOptionValue(arg, "--cert")) |value| {
+            // CANARY: REQ=REQ-CLI-TLS-EQUALS-001; FEATURE="TLS certificate CLI"; ASPECT=InlineCert; STATUS=TESTED; TEST=tests/test_cli_args_tls_equals.zig; OWNER=cli; UPDATED=2026-07-20
+            config.cert_path = try allocator.dupe(u8, value);
+            config._allocated_cert_path = true;
+            config.cert_explicit = true;
+        } else if (inlineLongOptionValue(arg, "--key")) |value| {
+            // CANARY: REQ=REQ-CLI-TLS-EQUALS-001; FEATURE="TLS certificate CLI"; ASPECT=InlineKey; STATUS=TESTED; TEST=tests/test_cli_args_tls_equals.zig; OWNER=cli; UPDATED=2026-07-20
+            config.key_path = try allocator.dupe(u8, value);
+            config._allocated_key_path = true;
+            config.key_explicit = true;
+        } else if (inlineLongOptionValue(arg, "--data_dir") orelse inlineLongOptionValue(arg, "--data-dir")) |value| {
+            config.data_dir = try allocator.dupe(u8, value);
+            config._allocated_data_dir = true;
+        } else if (inlineLongOptionValue(arg, "--log-level")) |value| {
+            config.log_level_arg = try allocator.dupe(u8, value);
+            config._allocated_log_level_arg = true;
         } else if ((std.mem.eql(u8, arg, "--listen-quic") or std.mem.eql(u8, arg, "--listen")) and ai + 1 < args.len) {
             config.listen_quic = try allocator.dupe(u8, args[ai + 1]);
             config._allocated_listen_quic = true;
