@@ -13,7 +13,7 @@ include:
   # align with apt-publish@v1.24.2 and pick up upstream changes since
   # v1.2.1 (Go 1.26 images, ansible-playbook fixes, runner updates).
   # Spec is unchanged — same inputs accepted.
-  - component: gitlab.com/devnw/ci-catalog/zig-format@v1.45.4
+  - component: gitlab.com/devnw/ci-catalog/zig-format@v1.47.0
     inputs:
       zig_version: "0.16.0"
       paths: "src/"
@@ -42,7 +42,7 @@ include:
   # and reported "0 missing" (v0.8.3, apt-publish job 15433862309: 0 uploads / 56
   # deletes → apt-get install 404). The catalog's append-only sync is itself the
   # race mitigation the override was reaching for.
-  - component: gitlab.com/devnw/ci-catalog/apt-publish@v1.45.4
+  - component: gitlab.com/devnw/ci-catalog/apt-publish@v1.47.0
     inputs:
       apt_domain: apt.geodedb.com
       job_suffix: apt-geodedb-com
@@ -53,7 +53,7 @@ include:
       gpg_key_name: geode.gpg
       sign_needs: build-release
       allow_failure: false
-  - component: gitlab.com/devnw/ci-catalog/zig-version-tag-check@v1.45.4
+  - component: gitlab.com/devnw/ci-catalog/zig-version-tag-check@v1.47.0
   # NOTE: the FIPS dual-mode parity gate is defined INLINE below as
   # `zig-fips-test-0.16.0` (see the "FIPS dual-mode test" section). The
   # ci-catalog `zig-fips-test@v1.29.0` component was removed because its
@@ -68,7 +68,7 @@ include:
 # Tagged release pipelines are never cancelled — they must run to completion.
   # Security findings -> auto-triaged Jira SEC issues (.post; reads gl-*-report
   # artifacts from the scans above). component_id 12496 = SEC > Vuln Mgmt.
-  - component: gitlab.com/devnw/ci-catalog/jira-event-intake@v1.45.4
+  - component: gitlab.com/devnw/ci-catalog/jira-event-intake@v1.47.0
     inputs:
       project_key: SEC
       component_id: "12496"
