@@ -290,8 +290,8 @@
 
         // Protocol Buffers - Zig 0.15.2 compatible
         .protobuf = .{
-            .url = "git+https://gitlab.com/devnw/zig/protobuf.git?ref=v0.1.4#96824e0437a01382260120eedc67464886030947",
-            .hash = "protobuf-0.1.4-0e82aqOEKgCEvqL9LJPtDWc4nzQ3LKAHmUzdiEWqo1-K",
+            .url = "git+https://gitlab.com/devnw/zig/protobuf.git?ref=v0.1.5#60bed6ab55584873a394ccde030a6403722223dc",
+            .hash = "protobuf-0.1.5-0e82anKZKgAO887_KITvRKwfqmX8gHwqtWnwuuwYkPmL",
         },
 
         // gRPC for Zig
