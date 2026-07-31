@@ -3520,10 +3520,11 @@ fn promptPassword(allocator: std.mem.Allocator, prompt_text: []const u8) ![]cons
     return password;
 }
 
-const AuthResult = struct {
-    session_token: []const u8,
-    requires_password_reset: bool = false,
-};
+// Bug 731 (#2): the HELLO decode + AuthResult construction lives in
+// src/client/hello_decode.zig so its ownership contract is reachable from a
+// test binary (this file is only compiled inside the `geode` executable).
+const hello_decode = geode.hello_decode;
+const AuthResult = hello_decode.AuthResult;
 
 /// GAP-0150: Real QUIC authentication to server
 /// CANARY: REQ=REQ-AUTH-CLI-001; FEATURE="CLI QUIC Authentication"; ASPECT=ServerConnection; STATUS=TESTED; TEST=tests/test_user_management_comprehensive.zig; OWNER=security; UPDATED=2026-01-15
@@ -3572,21 +3573,16 @@ fn connectToServer(allocator: std.mem.Allocator, server: []const u8, username: [
 
     try writeProtoMessageViaZigClient(allocator, client, .{ .hello = hello_req });
 
-    // Read HELLO response
-    const resp = try readProtoMessageViaZigClient(allocator, client, 30);
-    switch (resp) {
-        .hello => |h| {
-            if (!h.success) {
-                std.debug.print("Authentication failed: {s}\n", .{h.error_message});
-                return error.InvalidCredentials;
-            }
-            return AuthResult{
-                .session_token = try allocator.dupe(u8, h.session_id),
-                .requires_password_reset = false,
-            };
-        },
-        else => return error.ProtocolError,
-    }
+    // Read HELLO response. Frame read + error mapping mirror
+    // readProtoMessageViaZigClient; the decode itself lives in the shared
+    // hello_decode seam (bug 731 #2).
+    const body = client.receiveRawFrame(allocator, 30 * std.time.ms_per_s) catch |err| switch (err) {
+        error.ReceiveTimeout => return error.Timeout,
+        else => return err,
+    };
+    defer allocator.free(body);
+
+    return hello_decode.decodeHelloAuthResult(allocator, body);
 }
 
 fn cmdAuthLogin(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !void {

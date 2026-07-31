@@ -9239,6 +9239,19 @@ pub fn build(b: *std.Build) void {
     const gap0908_step = b.step("test-gap0908", "Run GAP-0908/GAP-0909 startup fail-closed regressions (audit sink + data dir)");
     gap0908_step.dependOn(&run_gap0908_tests.step);
 
+    // Bug 731 (#2): `geode auth login` leaks the decoded HELLO ServerPacket
+    // wrapper (session_id, capabilities list + elements, graph); the CLI also
+    // discards the server's password_reset_required flag.
+    const bug731_cli_leak_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_bug731_cli_hello_leak.zig"), .target = target, .optimize = optimize });
+    bug731_cli_leak_test_mod.addImport("geode", root_mod);
+    bug731_cli_leak_test_mod.addImport("schema", schema_mod);
+    bug731_cli_leak_test_mod.addImport("protobuf", protobuf_mod);
+    const bug731_cli_leak_tests = b.addTest(.{ .root_module = bug731_cli_leak_test_mod });
+    const run_bug731_cli_leak_tests = b.addRunArtifact(bug731_cli_leak_tests);
+    shardDep(test_step, &run_bug731_cli_leak_tests.step, 0, test_shard_loads, test_shard_index);
+    const bug731_cli_leak_step = b.step("test-bug731-cli-leak", "Run bug-731 CLI HELLO-response ownership regressions (leak + password_reset_required)");
+    bug731_cli_leak_step.dependOn(&run_bug731_cli_leak_tests.step);
+
     // GAP-0903: repeated duplicate CREATE INDEX double-free (errdefer +
     // explicit free of the scoped key on the DuplicateIndex path).
     const gap0903_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_gap0903_dup_index_double_free.zig"), .target = target, .optimize = optimize });

@@ -30,7 +30,7 @@ endif
 .PHONY: all build release install install-tuning test integration-test regression-test property-ordering-test pagination-test aggregation-test graph-test db-test test-all-integration dataset-integration-test load-dataset fuzz bench tools doccheck clean cert-gen fmt ci help check-openssl test-mermaid-integration
 .PHONY: goreleaser goreleaser-test goreleaser-snapshot goreleaser-check
 .PHONY: cross-compile cross-windows cross-linux-x86_64 cross-linux-arm cross-linux-arm64 cross-linux-riscv64 cross-macos-x86_64 cross-macos-arm64 cross-windows-arm64 cross-test
-.PHONY: canary canary-verify go-test-fips governance-check update-status-hash governance-delta governance-dry-run governance-freshness-prewarn governance-aggregate match-ops-parity match-ops-bench cli-transport-parity stdio-abstraction-check release-target-manifest-check docker-release-sync docker-release-check docker-release-signoff
+.PHONY: canary canary-verify go-test-fips governance-check update-status-hash governance-delta governance-dry-run governance-freshness-prewarn governance-aggregate match-ops-parity match-ops-bench cli-transport-parity stdio-abstraction-check release-target-manifest-check docker-release-sync docker-release-check docker-release-signoff docker-healthcheck-test
 .PHONY: test-shim test-fips test-dual test-fips-seam
 .PHONY: telemetry-smoke quic-smoke quic-smoke-strict quic-test client-test-zig
 .PHONY: transport-parity-smokes status-generate status-generate-test no-feature-flags zig-package-cache-check cluster-test
@@ -82,6 +82,7 @@ help:
 	@echo "  make goreleaser-check   - Validate GoReleaser config"
 	@echo "  make release-target-manifest-check - Ensure CI/GoReleaser target manifest is in sync"
 	@echo "  make docker-release-check - Ensure release Dockerfiles match generated manifest"
+	@echo "  make docker-healthcheck-test - Verify the shipped Docker HEALTHCHECK probe contract"
 	@echo ""
 	@echo "Test targets:"
 	@echo "  make test        - Run all tests (Zig + QUIC)"
@@ -460,6 +461,12 @@ docker-release-signoff:
 	@python3 tools/release_dockerfile_manifest.py signoff --manifest release/dockerfile_manifest.json --repo-root . --output /tmp/release-dockerfile-signoff.txt
 	@cat /tmp/release-dockerfile-signoff.txt
 
+## docker-healthcheck-test: verify the shipped HEALTHCHECK probe contract (bug 731 #1)
+# Hermetic: runs docker/health-check.sh against an argv-recording stub CLI —
+# no docker daemon, no network, no live server.
+docker-healthcheck-test:
+	@python3 tests/test_dockerfile_health_check.py
+
 # Run Zig unit tests (fast, used by pre-push hooks)
 test:
 	@echo "Running Zig unit tests..."
@@ -659,6 +666,7 @@ governance-check:
 	@$(MAKE) stdio-abstraction-check
 	@$(MAKE) release-target-manifest-check
 	@$(MAKE) docker-release-check
+	@$(MAKE) docker-healthcheck-test
 	@python3 tools/zig_package_cache_guard.py --strict-stale
 	@echo "Governance check completed"
 
