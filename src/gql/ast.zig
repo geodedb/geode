@@ -305,7 +305,12 @@ pub const Expr = union(enum) {
     Index: struct { target: *Expr, index: *Expr },
     // CANARY: REQ=REQ-GQL-SLICE-001; FEATURE="ListSlicing"; ASPECT=ASTNode; STATUS=TESTED; TEST=geodetestlab/specs/gql_expressions_comprehensive.yml; OWNER=parser; UPDATED=2025-12-24
     Slice: struct { target: *Expr, start: ?*Expr, end: ?*Expr },
-    Call: struct { callee: *Expr, args: []*Expr },
+    // CANARY: REQ=REQ-GQL-SET-QUANTIFIER-002; FEATURE="AggregateSetQuantifier"; ASPECT=ASTNode; STATUS=TESTED; TEST=tests/test_bug731_aggregates_vectors.zig; OWNER=parser; UPDATED=2026-07-31
+    // ISO/IEC 39075:2024 <general set function> ::= <computational operation>
+    // <left paren> [ <set quantifier> ] <value expression> <right paren>, so
+    // DISTINCT is legal on EVERY aggregate — carried here as a flag rather than
+    // by synthesizing more `xxxDistinct` callee names.
+    Call: struct { callee: *Expr, args: []*Expr, distinct: bool = false },
     Unary: struct { op: UnaryOp, expr: *Expr },
     Binary: struct { op: BinOp, left: *Expr, right: *Expr },
     In: struct { value: *Expr, set: []*Expr },

@@ -1015,10 +1015,11 @@ pub const functions = [_]FunctionInfo{
         .params = &[_]FunctionParam{
             .{ .name = "v1", .type_name = "VECTOR" },
             .{ .name = "v2", .type_name = "VECTOR" },
+            .{ .name = "metric", .type_name = "STRING", .optional = true, .default = "'l2'" },
         },
         .compliance = .geode_extension,
-        .doc = "Default distance metric (L2)",
-        .example = "RETURN distance(n.embedding, $query)",
+        .doc = "Distance between two vectors. metric is one of 'l2'/'euclidean' (default), 'cosine', 'dot'",
+        .example = "RETURN distance(n.embedding, $query, 'euclidean')",
     },
     .{
         .name = "similarity",
@@ -1027,9 +1028,10 @@ pub const functions = [_]FunctionInfo{
         .params = &[_]FunctionParam{
             .{ .name = "v1", .type_name = "VECTOR" },
             .{ .name = "v2", .type_name = "VECTOR" },
+            .{ .name = "metric", .type_name = "STRING", .optional = true, .default = "'cosine'" },
         },
         .compliance = .geode_extension,
-        .doc = "Cosine similarity between vectors",
+        .doc = "Similarity between two vectors. metric is one of 'cosine' (default) or 'dot'; use distance() for 'l2'",
         .example = "RETURN similarity(n.embedding, $query)",
     },
     .{
@@ -1067,6 +1069,38 @@ pub const functions = [_]FunctionInfo{
         .compliance = .geode_extension,
         .doc = "Manhattan (L1) distance between vectors",
         .example = "RETURN manhattan(n.embedding, $query)",
+    },
+    // docs/@BUGS_731.md bug 8f: `vector_knn` (and its `knn` alias) is a real,
+    // dispatched function (src/eval.zig evalVectorKnn) that this catalog did
+    // not advertise, while the catalog DID advertise several names the engine
+    // never implemented. Both directions are now reconciled.
+    .{
+        .name = "vector_knn",
+        .category = .vector,
+        .return_type = "LIST",
+        .params = &[_]FunctionParam{
+            .{ .name = "property", .type_name = "STRING" },
+            .{ .name = "query_vector", .type_name = "VECTOR" },
+            .{ .name = "k", .type_name = "INTEGER" },
+            .{ .name = "metric", .type_name = "STRING" },
+        },
+        .compliance = .geode_extension,
+        .doc = "K nearest node/edge ids by vector property. metric is 'l2'/'euclidean', 'cosine' or 'dot'",
+        .example = "RETURN vector_knn('embedding', $query, 10, 'cosine')",
+    },
+    .{
+        .name = "knn",
+        .category = .vector,
+        .return_type = "LIST",
+        .params = &[_]FunctionParam{
+            .{ .name = "property", .type_name = "STRING" },
+            .{ .name = "query_vector", .type_name = "VECTOR" },
+            .{ .name = "k", .type_name = "INTEGER" },
+            .{ .name = "metric", .type_name = "STRING" },
+        },
+        .compliance = .geode_extension,
+        .doc = "Alias of vector_knn",
+        .example = "RETURN knn('embedding', $query, 10, 'l2')",
     },
     // Predicate functions
     .{

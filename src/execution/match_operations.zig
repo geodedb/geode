@@ -98,6 +98,7 @@ const write_budget = @import("../write_budget.zig");
 const read_budget = @import("../read_budget.zig");
 const property_mutation = @import("property_mutation.zig");
 const value_types = @import("../value_types.zig");
+const distinct_set = @import("distinct_set.zig");
 const property_value_codec = @import("../property_value_codec.zig");
 const graph_storage_adapter = @import("../storage/graph_storage_adapter.zig");
 // Engine-storage PropertyValue (lower-case variants: .int/.float/.string/…),
@@ -1365,6 +1366,10 @@ pub fn propertyAggregateFastPath(
         else => return null,
     };
     if (call.callee.* != .Ident) return null;
+    // ISO <set quantifier>: this fast path accumulates every value it reads and
+    // cannot de-duplicate, so DISTINCT declines to the general aggregate path
+    // (docs/@BUGS_731.md bug 6c).
+    if (call.distinct) return null;
     const fname = call.callee.Ident.orig;
     const kind: AggKind = if (std.ascii.eqlIgnoreCase(fname, "sum"))
         .sum
@@ -4878,33 +4883,19 @@ fn computeMultiNodeAggregation(allocator: std.mem.Allocator, expr: ast.Expr, gro
                     }
                     return Value{ .Int = count };
                 } else if (std.ascii.eqlIgnoreCase(func_name, "countDistinct")) {
-                    // E26 Fix: COUNT(DISTINCT expr) - count distinct non-null values
-                    // CANARY: REQ=REQ-GQL-MULTINODE-COUNTDISTINCT-001; FEATURE="MultiNodeCountDistinct"; ASPECT=Aggregation; STATUS=TESTED; TEST=geodetestlab/specs/gql_query_comprehensive.yml; OWNER=engine; UPDATED=2025-12-26
-                    var unique_node_ids = std.AutoHashMap(u64, void).init(allocator);
-                    defer unique_node_ids.deinit();
-                    var unique_int_values = std.AutoHashMap(i64, void).init(allocator);
-                    defer unique_int_values.deinit();
-                    var unique_str_values = std.StringHashMap(void).init(allocator);
-                    defer unique_str_values.deinit();
+                    // CANARY: REQ=REQ-GQL-MULTINODE-COUNTDISTINCT-001; FEATURE="MultiNodeCountDistinct"; ASPECT=Aggregation; STATUS=TESTED; TEST=tests/test_bug731_aggregates_vectors.zig; OWNER=engine; UPDATED=2026-07-31
+                    // COUNT(DISTINCT expr) - count distinct non-null values.
+                    // docs/@BUGS_731.md bug 6b: converged onto the shared
+                    // DistinctSet; this site had no boolean, edge or decimal
+                    // handling of its own.
+                    var distinct = distinct_set.DistinctSet.init(allocator);
+                    defer distinct.deinit();
 
                     for (group_envs) |env| {
                         const val = eval.evalExpr(allocator, call.args[0].*, env) catch continue;
-                        switch (val) {
-                            .Node => |n| {
-                                try unique_node_ids.put(n.id, {});
-                            },
-                            .Int => |i| {
-                                try unique_int_values.put(i, {});
-                            },
-                            .Str => |s| {
-                                try unique_str_values.put(s, {});
-                            },
-                            .Null => {},
-                            else => {},
-                        }
+                        _ = try distinct.add(val);
                     }
-                    const total: i64 = @intCast(unique_node_ids.count() + unique_int_values.count() + unique_str_values.count());
-                    return Value{ .Int = total };
+                    return Value{ .Int = @intCast(distinct.count()) };
                 } else if (std.ascii.eqlIgnoreCase(func_name, "sum")) {
                     var sum: i64 = 0;
                     for (group_envs) |env| {

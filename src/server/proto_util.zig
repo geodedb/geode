@@ -165,6 +165,16 @@ pub fn mapError(err: anyerror) ErrorInfo {
         error.InvalidGuardrailConfiguration => .{ .code = "42704", .message = "Invalid CDC guardrail configuration" },
         error.PasswordPolicyViolation => .{ .code = "22000", .message = "password does not meet policy requirements (min 8 chars, letters and numbers)" },
         error.UnknownProcedure => .{ .code = "42883", .message = "Unknown procedure" },
+        // docs/@BUGS_731.md bug 8b: an unresolved scalar function used to
+        // silently evaluate to NULL; surface it with the same
+        // undefined_function SQLSTATE the procedure path uses.
+        error.UnknownFunction => .{ .code = "42883", .message = "Unknown function" },
+        // docs/@BUGS_731.md bug 8d: a wrong-arity / wrong-value function call
+        // (e.g. the docs' `knn(d.embedding, $q, 10)`, which is missing the
+        // metric and passes a vector where a property NAME belongs) reached the
+        // generic 58000 "internal error" fallback. It is a caller error:
+        // 22023 = invalid_parameter_value.
+        error.InvalidArgs => .{ .code = "22023", .message = "Invalid arguments for function (wrong number of arguments, or an argument value the function does not accept)" },
         error.Unauthenticated => .{ .code = "28000", .message = "Authentication required" },
         error.Unauthorized => .{ .code = "42501", .message = "Permission denied" },
         // GAP-0840: strict-tenancy rejected a tenant-scoped operation with no

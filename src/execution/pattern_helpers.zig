@@ -8,6 +8,7 @@ const execution = @import("../execution.zig");
 const graph_store = @import("../graph_store.zig");
 const property_codec = @import("../property_value_codec.zig");
 const value_types = @import("../value_types.zig");
+const distinct_set = @import("distinct_set.zig");
 const valuesEqual = execution.valuesEqual;
 
 // Local type aliases
@@ -379,16 +380,15 @@ pub fn computeAggregationForGroup(allocator: std.mem.Allocator, expr: ast.Expr, 
         return Value{ .Int = count };
     }
 
-    // CANARY: REQ=REQ-COUNT-DISTINCT-GROUP-001; FEATURE="CountDistinctGroupAggregation"; ASPECT=GroupAggregation; STATUS=TESTED; TEST=geodetestlab/specs/geode_functions_comprehensive.yml; OWNER=engine; UPDATED=2025-12-28
-    // C05 Fix: Handle countDistinct(expr) - COUNT(DISTINCT expr) for groups
+    // CANARY: REQ=REQ-COUNT-DISTINCT-GROUP-001; FEATURE="CountDistinctGroupAggregation"; ASPECT=GroupAggregation; STATUS=TESTED; TEST=tests/test_bug731_aggregates_vectors.zig; OWNER=engine; UPDATED=2026-07-31
+    // Handle countDistinct(expr) - COUNT(DISTINCT expr) for groups.
+    // docs/@BUGS_731.md bug 6b: converged onto the shared DistinctSet, which
+    // adds node/edge identity (by id) and full numeric coverage this site was
+    // missing. Empty group -> 0 (never NULL).
     if (std.ascii.eqlIgnoreCase(func_name, "countDistinct")) {
         if (arg_ptr == null) return Value{ .Int = 0 };
-        var unique_int_values = std.AutoHashMap(i64, void).init(allocator);
-        defer unique_int_values.deinit();
-        var unique_str_values = std.StringHashMap(void).init(allocator);
-        defer unique_str_values.deinit();
-        var has_true = false;
-        var has_false = false;
+        var distinct = distinct_set.DistinctSet.init(allocator);
+        defer distinct.deinit();
 
         for (group_rows) |row| {
             const env = Env{
@@ -399,21 +399,9 @@ pub fn computeAggregationForGroup(allocator: std.mem.Allocator, expr: ast.Expr, 
                 .allocator = allocator,
             };
             const val = eval.evalExpr(allocator, arg_ptr.?.*, env) catch continue;
-            switch (val) {
-                .Int => |i| {
-                    unique_int_values.put(i, {}) catch {};
-                },
-                .Str => |s| {
-                    unique_str_values.put(s, {}) catch {};
-                },
-                .Bool => |b| {
-                    if (b) has_true = true else has_false = true;
-                },
-                else => {}, // Skip nulls and other types
-            }
+            _ = try distinct.add(val);
         }
-        const bool_count: usize = (if (has_true) @as(usize, 1) else 0) + (if (has_false) @as(usize, 1) else 0);
-        return Value{ .Int = @intCast(unique_int_values.count() + unique_str_values.count() + bool_count) };
+        return Value{ .Int = @intCast(distinct.count()) };
     }
 
     // Handle sum(expr)

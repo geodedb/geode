@@ -25,9 +25,9 @@ affect example code the posts show as working.
 | 3 | `--insecure-tls-skip-verify` / `--insecure` is refused unless `GEODE_ALLOW_INSECURE_TLS=1` is also set | Informational / footgun (may be intentional defense-in-depth) | CLI TLS handling | Confirmed behavior; exact error text not captured in evidence |
 | 4 | `ALTER USER ... SET PASSWORD` — the server's own documented recovery path — changes the password but never clears `password_reset_required`, permanently locking the account | Critical | Server auth / password-reset flow | Confirmed, twice-reproduced from a clean container each time |
 | 5 | Chained `MATCH` clauses silently lose scope, matching globally instead of restricting to the anchor's actual relationships | Critical | GQL query engine (`MATCH` clause chaining) | Confirmed, minimized repro with concrete row counts |
-| 6 | `count(DISTINCT ...)` always returns `null`; plain `count(...)` works | High | GQL query engine (aggregates) | Confirmed, minimized repro; `collect(DISTINCT ...)` doesn't even parse |
+| 6 | `count(DISTINCT ...)` always returns `null`; plain `count(...)` works | High | GQL query engine (aggregates) | **Fixed 2026-07-31** (`zig build test-bug731-aggvec`) |
 | 7 | `length(path)` via a `WITH`-bound path variable always returns `0` | High | GQL query engine (`WITH` projection of path-derived expressions) | Confirmed, minimized repro; bare `RETURN length(path)` is correct |
-| 8 | `distance()`/`similarity()`/`euclidean()`/`knn()` always return `null`; `cosine()` works correctly with the same call shape | High | GQL query engine (vector-similarity functions) | Confirmed, literal-input repro rules out data/index causes |
+| 8 | `distance()`/`similarity()`/`euclidean()`/`knn()` always return `null`; `cosine()` works correctly with the same call shape | High | GQL query engine (vector-similarity functions) | **Fixed 2026-07-31** (`zig build test-bug731-aggvec`) |
 
 ---
 
@@ -637,6 +637,38 @@ feature is simply non-functional."
 `blog-posts/building-social-network/FINDINGS.md` (section 8, sole and
 primary source).
 
+**Fixed 2026-07-31.** Three layers:
+
+- **6a (the live-path defect).** `computeGroupAggregation`
+  (`src/execution.zig`) — the function EVERY `RETURN` projection funnels
+  through, because `planned_read_runtime` wraps `RETURN` in a synthetic
+  `WithClause` — dispatched only on count/sum/avg/min/max/collect and fell
+  through to `return Value{ .Null = {} }`. It now normalises the parser's
+  synthetic `countDistinct` callee and honours the DISTINCT quantifier for
+  every aggregate.
+- **6b (divergence).** Five sibling aggregate implementations each rolled
+  their own `countDistinct` and disagreed about node handling, boolean
+  handling and the empty-group result. All five
+  (`aggregation_evaluation.zig` x2, `pattern_helpers.zig`,
+  `match_operations.zig`, `query_execution.zig`) now share ONE accumulator,
+  `src/execution/distinct_set.zig`: node/edge identity by id, integral
+  numerics unified (`10` == `10.0`), strings by bytes, booleans, NULLs
+  skipped per ISO, empty group -> 0 (never NULL).
+- **6c (ISO conformance).** ISO/IEC 39075:2024 `<general set function>`
+  permits a `<set quantifier>` (DISTINCT | ALL) on EVERY
+  `<computational operation>`, but the parser accepted it only for `count`
+  — which is why `collect(DISTINCT x)` raised
+  `expected token 'r_paren', got 'identifier'`. The quantifier is now a
+  flag on the AST `Call` node (`ast.Expr.Call.distinct`) accepted for
+  count/sum/avg/min/max/collect/collect_list/stddev_*/percentile_*. The
+  `count` -> `countDistinct` callee rewrite is retained for backwards
+  compatibility with the executor paths and `tests/test_count_distinct_parser.zig`.
+
+Regressions: `zig build test-bug731-aggvec` (20/20),
+`test-count-edges-fastpath` (9/9, its `count(DISTINCT r)` case now asserts
+a real value), `test-iso-conformance` (96/96, the COUNT DISTINCT case now
+also covers `collect`/`sum`/`avg`/`min`/`max` with DISTINCT and ALL).
+
 ---
 
 ## 7. `length(path)` via a `WITH`-bound path variable always returns 0
@@ -803,6 +835,51 @@ deliberately keeps the broken query verbatim rather than substituting
 **Surfaced by:**
 `blog-posts/query-optimization-tips/FINDINGS.md` (section 9, sole and
 primary source).
+
+**Fixed 2026-07-31.** The math core was always correct; naming, argument
+coercion and error reporting were not:
+
+- **8b (the mechanism behind every null).** `src/eval.zig` ended its
+  function dispatch with `// Function not found, return null`, so ANY
+  unresolved name silently evaluated to NULL (`RETURN totally_bogus_fn(1,2)`
+  -> `null`). It now raises `EvalError.UnknownFunction`, mapped to
+  SQLSTATE `42883` "Unknown function" by `src/server/proto_util.zig` —
+  the same undefined_function class the `UnknownProcedure` path already
+  used.
+- **8a (missing registrations).** `distance`, `similarity`, `euclidean`
+  and `manhattan` were registered NOWHERE (`cosine` worked only via a
+  one-off alias). They are now real scalar functions sharing the vector
+  metric core with `vector_knn`. Results are `DECIMAL(scale 6)`, matching
+  `cosine`.
+- **8c (list-literal coercion).** The registered `vector_*` functions
+  gated on the `VectorF32` tag and returned NULL for anything else, while
+  a GQL list literal evaluates to a `List`. Both `src/eval.zig` and
+  `src/eval_extended.zig` now coerce numeric lists (and `VectorI32`) to
+  `VectorF32`, so `vector_l2([0,0],[3,4])` computes 5 exactly as
+  `vector_l2(vectorf32([0,0]), vectorf32([3,4]))` always did.
+- **8d (knn).** `knn` is now a plain alias of the implemented
+  `vector_knn(property_name, query_vector, k, metric)`. The documented
+  3-argument form `knn(d.embedding, $q, 10)` cannot resolve (arg 0 is a
+  vector value, not a property NAME, and there is no metric) and now
+  raises `InvalidArgs` instead of silently returning NULL. The dead MVP
+  stub in `eval_extended.zig` that always returned an empty list is
+  deleted.
+- **8e (metric vocabulary).** `parseVectorMetric` rejected `"euclidean"`
+  even though `CREATE INDEX ... USING vector` accepts it; it is now a
+  synonym of `l2` everywhere.
+- **8f (catalog reconciliation).** Four catalogs disagreed.
+  `src/gql/language_metadata.zig` advertised distance/similarity/cosine/
+  euclidean/manhattan — all now real — plus the optional metric parameter,
+  and gained the previously-unadvertised `vector_knn`/`knn`.
+  `src/execution/statement_handlers.zig` listed `distance(point1, point2)`
+  as a GEOSPATIAL function (a fourth, incompatible scheme); that row is now
+  the vector signature and the rest of the vector surface was added.
+  `docs/API_REFERENCE.md` documents the real `knn` arity, and
+  `docs/TYPES_AND_FUNCTIONS.md` no longer advertises the never-implemented
+  `cosineSimilarity`/`dotProduct`/`manhattanDistance`/`hammingDistance`/
+  `norm`/`normalize`/`add`/`scale` scheme.
+
+Regression: `zig build test-bug731-aggvec` (20/20).
 
 ---
 

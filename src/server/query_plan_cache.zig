@@ -1069,7 +1069,13 @@ fn isAggregationExpr(expr: gql_ast.Expr) bool {
             // Callee is typically an Ident for aggregation functions
             if (call.callee.* == .Ident) {
                 const name = call.callee.Ident.orig;
+                // docs/@BUGS_731.md bug 6c: `countDistinct` (the parser's
+                // synthetic callee for COUNT(DISTINCT …)) was missing here, so
+                // the planner cost/plan shape disagreed with the executor's
+                // aggregate detectors in return_and_sorting.zig and
+                // node_scan_stream.zig.
                 if (std.ascii.eqlIgnoreCase(name, "count") or
+                    std.ascii.eqlIgnoreCase(name, "countDistinct") or
                     std.ascii.eqlIgnoreCase(name, "sum") or
                     std.ascii.eqlIgnoreCase(name, "avg") or
                     std.ascii.eqlIgnoreCase(name, "min") or

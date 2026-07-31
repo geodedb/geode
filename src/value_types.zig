@@ -64,6 +64,9 @@ pub const EvalError = error{
     InvalidSubnet,
     InvalidMac,
     InvalidArgs,
+    // docs/@BUGS_731.md bug 8b: an unresolved function name is a diagnostic
+    // (SQLSTATE 42883 undefined_function), not a silent NULL.
+    UnknownFunction,
     OutOfMemory,
 };
 

@@ -3,6 +3,7 @@ const ast = @import("../gql/ast.zig");
 const eval = @import("../eval.zig");
 const graph_store = @import("../graph_store.zig");
 const value_types = @import("../value_types.zig");
+const distinct_set = @import("distinct_set.zig");
 // GAP (write-path OOM, 2026-07-04): working-set budget for the legacy
 // write-carrying MATCH executor (env GEODE_WRITE_EXECUTOR_BUDGET_MB).
 const write_budget = @import("../write_budget.zig");
@@ -1086,20 +1087,17 @@ fn computeChainAggregation(allocator: std.mem.Allocator, expr: ast.Expr, envs: [
                     }
                     return Value{ .Int = count };
                 } else if (std.ascii.eqlIgnoreCase(func_name, "countDistinct")) {
-                    var unique_int = std.AutoHashMap(i64, void).init(allocator);
-                    defer unique_int.deinit();
-                    var unique_str = std.StringHashMap(void).init(allocator);
-                    defer unique_str.deinit();
+                    // docs/@BUGS_731.md bug 6b: converged onto the shared
+                    // DistinctSet; this site handled only Int and Str, so
+                    // booleans and node/edge identities counted as 0.
+                    var distinct = distinct_set.DistinctSet.init(allocator);
+                    defer distinct.deinit();
 
                     for (envs) |env| {
                         const val = eval.evalExpr(allocator, call.args[0].*, env) catch continue;
-                        switch (val) {
-                            .Int => |i| try unique_int.put(i, {}),
-                            .Str => |s| try unique_str.put(s, {}),
-                            else => {},
-                        }
+                        _ = try distinct.add(val);
                     }
-                    return Value{ .Int = @intCast(unique_int.count() + unique_str.count()) };
+                    return Value{ .Int = @intCast(distinct.count()) };
                 } else if (std.ascii.eqlIgnoreCase(func_name, "sum")) {
                     var sum: i64 = 0;
                     for (envs) |env| {

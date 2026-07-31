@@ -375,14 +375,13 @@
 - **String Formats**:
   - `"[1.0, 2.0, 3.0]"` (bracketed)
   - `"1.0,2.0,3.0"` (comma-separated)
-- **Functions**:
-  - `distance(a, b)` - Euclidean (L2) distance
-  - `cosineSimilarity(a, b)` - Cosine similarity [-1,1]
-  - `dotProduct(a, b)` - Dot product
-  - `norm(v)` - L2 norm (magnitude)
-  - `normalize(v)` - Unit vector normalization
-  - `add(a, b)` - Element-wise addition
-  - `scale(v, scalar)` - Scalar multiplication
+- **Functions** (the implemented set — see [API_REFERENCE.md](API_REFERENCE.md#vector-operations)):
+  - `distance(a, b [, metric])` - Distance, default L2; metric ∈ `l2`/`euclidean`, `cosine`, `dot`
+  - `euclidean(a, b)` / `vector_l2(a, b)` - Euclidean (L2) distance
+  - `manhattan(a, b)` - L1 (Manhattan) distance
+  - `similarity(a, b [, metric])` / `cosine(a, b)` / `vector_cosine(a, b)` - Cosine similarity [-1,1]
+  - `vector_dot(a, b)` - Dot product
+  - `vector_knn(property_name, query_vector, k, metric)` / `knn(...)` - K nearest ids
 - **Index Support**: HNSW (Hierarchical Navigable Small World) for approximate nearest neighbor search
 - **SIMD**: Optimized operations where available
 
@@ -396,12 +395,8 @@
 - **String Formats**:
   - `"[1, 2, 3]"` (bracketed integers)
   - `"1,2,3"` (comma-separated)
-- **Functions**:
-  - `manhattanDistance(a, b)` - L1 (Manhattan) distance
-  - `hammingDistance(a, b)` - Count of differing elements
-  - `dotProduct(a, b)` - Integer dot product
-  - `add(a, b)` - Element-wise addition
-  - `scale(v, scalar)` - Scalar multiplication
+- **Functions**: the same set as `VectorF32` above — a `VectorI32` argument is
+  converted to f32 before the distance/similarity is computed.
 - **Index Support**: HNSW with automatic f32 conversion for indexing
 - **Use Cases**: Discrete features, categorical embeddings, sparse vectors
 

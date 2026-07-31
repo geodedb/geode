@@ -201,11 +201,12 @@ test "count(DISTINCT r) does NOT use the fast path (falls to legacy path)" {
     try h.seedParentChildren("col", "R", 4);
 
     planned_read_runtime.resetPathRowsMaterialized();
-    // Run the query but don't try to extract the scalar — DISTINCT count on
-    // edges may return a different Value tag depending on the aggregator path.
-    // We only need to confirm the fast path is NOT taken.
-    var r = try h.runQuery("MATCH ()-[r]->() RETURN count(DISTINCT r)");
-    r.deinit(h.arena.allocator());
+    // docs/@BUGS_731.md bug 6b: the aggregate paths have been converged onto one
+    // shared DISTINCT accumulator (src/execution/distinct_set.zig) with edge
+    // identity by id, so this test no longer has to refuse to assert a value.
+    // The 4 PARENT_OF edges seeded above are 4 distinct edges.
+    const n = try h.runQueryScalarUsize("MATCH ()-[r]->() RETURN count(DISTINCT r)");
+    try testing.expectEqual(@as(usize, 4), n);
     // Must NOT be zero — legacy path materializes rows.
     const materialized = planned_read_runtime.getPathRowsMaterialized();
     try testing.expect(materialized > 0);

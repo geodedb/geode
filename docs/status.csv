@@ -714,10 +714,10 @@ REQ-CONSTRAINT-ENFORCE-002,ConstraintEnforcement,Validation,TESTED,,,engine,2026
 REQ-CONSTRAINT-EXEC-001,ConstraintExecution,CREATE,EXEMPT,,,engine,2026-01-09,src/execution.zig
 REQ-CORRECTNESS-EDGE-EVICTED-ENDPOINT,EdgeEvictedEndpointCreate,Regression,TESTED,,,storage,2026-06-24,tests/test_edge_evicted_endpoint_silent_loss.zig
 REQ-COUNT-DISTINCT-BINDING-001,CountDistinct,Binding,TESTED,,,engine,2026-01-15,tests/test_shell_requirements_verification.zig
-REQ-COUNT-DISTINCT-BINDING-001,CountDistinctBindings,BindingAggregation,TESTED,,,aggregation,2025-12-28,src/execution/aggregation_evaluation.zig
-REQ-COUNT-DISTINCT-FIX-001,CountDistinctStrings,StringSupport,TESTED,,,engine,2025-12-26,src/execution/aggregation_evaluation.zig
+REQ-COUNT-DISTINCT-BINDING-001,CountDistinctBindings,BindingAggregation,TESTED,,,aggregation,2026-07-31,src/execution/aggregation_evaluation.zig
+REQ-COUNT-DISTINCT-FIX-001,CountDistinctStrings,StringSupport,TESTED,,,engine,2026-07-31,src/execution/aggregation_evaluation.zig
 REQ-COUNT-DISTINCT-GROUP-001,CountDistinct,GroupBy,TESTED,,,engine,2026-01-15,tests/test_shell_requirements_verification.zig
-REQ-COUNT-DISTINCT-GROUP-001,CountDistinctGroupAggregation,GroupAggregation,TESTED,,,engine,2025-12-28,src/execution/pattern_helpers.zig
+REQ-COUNT-DISTINCT-GROUP-001,CountDistinctGroupAggregation,GroupAggregation,TESTED,,,engine,2026-07-31,src/execution/pattern_helpers.zig
 REQ-CRYPTO-RANDOM-001,CryptographicKeyGeneration,SECURITY,TESTED,,,security,2026-01-11,src/types/cryptographic.zig
 REQ-DATE-INTERVAL-001,DateIntervalArithmetic,Addition,TESTED,,,eval,2026-01-09,src/eval.zig
 REQ-DATE-INTERVAL-001,DateIntervalArithmetic,Addition,TESTED,,,eval,2026-01-15,tests/test_gap_0193_impl_verification.zig
@@ -2813,7 +2813,7 @@ REQ-GQL-MULTIHOP-GROUPBY-001,MultiHopGroupBy,Execution,TESTED,,,engine,2025-12-2
 REQ-GQL-MULTIHOP-REGRESSION-001,MultiHopRegression,SegfaultPrevention,TESTED,,,engine,2026-04-02,tests/test_multihop_regression.zig
 REQ-GQL-MULTINODE-AGG-001,MultiNodeAggregation,Computation,TESTED,,,engine,2025-12-26,src/execution/match_operations.zig
 REQ-GQL-MULTINODE-COUNTDISTINCT-001,GQLAggregation,MultiNodeCountDistinct,TESTED,,,engine,2026-01-15,tests/test_shell_requirements_verification.zig
-REQ-GQL-MULTINODE-COUNTDISTINCT-001,MultiNodeCountDistinct,Aggregation,TESTED,,,engine,2025-12-26,src/execution/match_operations.zig
+REQ-GQL-MULTINODE-COUNTDISTINCT-001,MultiNodeCountDistinct,Aggregation,TESTED,,,engine,2026-07-31,src/execution/match_operations.zig
 REQ-GQL-MULTINODE-GROUPBY-001,MultiNode,GroupBy,TESTED,,,engine,2026-01-16,tests/test_gap_0193_batch2_engine.zig
 REQ-GQL-MULTINODE-GROUPBY-001,MultiNodeGroupBy,Execution,TESTED,,,engine,2025-12-26,src/execution/match_operations.zig
 REQ-GQL-MULTINODE-PROPVARREF-001,PropertyPatternVariableReference,MultiMatch,EXEMPT,,,engine,2025-12-26,src/execution/match_operations.zig
@@ -2971,6 +2971,11 @@ REQ-GQL-SEC-UNWRAP-001,PrivilegedUnwrapPath,TEST,TESTED,,,security,2025-09-26,te
 REQ-GQL-SEC-ZEROIZE-001,SecretsZeroization,SECURITY,TESTED,,,security,2025-09-26,docs/SECURITY_PROGRESS.md
 REQ-GQL-SEC-ZEROIZE-001,SecretsZeroization,SECURITY,TESTED,,,security,2025-09-26,src/security/secure_mem.zig
 REQ-GQL-SET-OPERATIONS,SetOperations,Core,TESTED,,,team,2025-10-02,tests/integration/test_union_operations.zig
+REQ-GQL-SET-QUANTIFIER-001,AggregateSetQuantifier,DistinctAccumulator,TESTED,,,execution,2026-07-31,src/execution/distinct_set.zig
+REQ-GQL-SET-QUANTIFIER-002,AggregateSetQuantifier,ASTNode,TESTED,,,parser,2026-07-31,src/gql/ast.zig
+REQ-GQL-SET-QUANTIFIER-003,AggregateSetQuantifier,ParserSupport,TESTED,,,parser,2026-07-31,src/gql/parser.zig
+REQ-GQL-SET-QUANTIFIER-004,AggregateSetQuantifier,ComputationalOperation,TESTED,,,parser,2026-07-31,src/gql/parser.zig
+REQ-GQL-SET-QUANTIFIER-005,AggregateSetQuantifier,GroupAggregation,TESTED,,,execution,2026-07-31,src/execution.zig
 REQ-GQL-SHORT-CIRCUIT-001,GQLExpressions,ShortCircuit,TESTED,,,engine,2026-01-15,tests/test_shell_requirements_verification.zig
 REQ-GQL-SHORT-CIRCUIT-001,Short-circuit evaluation,AND_OR,EXEMPT,,,eval,2025-12-27,src/eval.zig
 REQ-GQL-SHORTESTPATH,ShortestPath,BFS,IMPL,,,engine,2025-10-12,src/execution/graph_algorithms.zig
@@ -5247,6 +5252,7 @@ REQ-UNITTEST-PLANNER-001,UnitTests,PlannerTests,TESTED,,,test,2026-01-16,tests/t
 REQ-UNITTEST-STORAGE-001,UnitTests,StorageTests,TESTED,,,test,2026-01-16,tests/test_gap_0193_batch5_comprehensive.zig
 REQ-UNITTEST-STORE-001,UnitTests,StorageTests,TESTED,,,testing,2026-01-16,tests/test_gap_0193_batch3_comprehensive.zig
 REQ-UNITTESTING-001,UnitTesting,TestHarness,TESTED,,,test,2026-01-15,tests/test_gap_0193_final_batch.zig
+REQ-UNKNOWN-FUNCTION-DIAGNOSTIC-001,UnknownFunctionDiagnostic,EvalDispatch,TESTED,,,eval,2026-07-31,src/eval.zig
 REQ-USER-CREATE-PASSWORD-001,CLI Password Security,Security,TESTED,,,cli,2026-02-24,src/cli/user_mgmt_cli.zig
 REQ-USER-METADATA-001,User Metadata Handling,DataIntegrity,EXEMPT,,,security,2026-01-13,src/security/user_manager.zig
 REQ-VALID-001,Validation,InputValidation,TESTED,,,core,2026-01-16,tests/test_gap_0193_batch3_comprehensive.zig
@@ -5267,6 +5273,10 @@ REQ-VECTOR-INDEX-POPULATION-001,Vector Index Population,VectorIndexPopulation,TE
 REQ-VECTOR-INDEX-POPULATION-002,Vector Index Population,PropertyValueIntegration,TESTED,,,index,2025-10-05,tests/test_vector_index_population.zig
 REQ-VECTOR-INDEX-POPULATION-003,Vector Index Population,JSONSerialization,TESTED,,,index,2025-10-05,tests/test_vector_index_population.zig
 REQ-VECTOR-INDEX-POPULATION-INTEGRATION-001,Vector Index Population Integration,IntegrationTesting,TESTED,,,claude,2025-01-05,tests/test_vector_index_population_integration.zig
+REQ-VECTOR-LIST-COERCION-001,VectorSimilarityFunctions,ListLiteralCoercion,TESTED,,,eval,2026-07-31,src/eval.zig
+REQ-VECTOR-LIST-COERCION-002,VectorSimilarityFunctions,ListLiteralCoercion,TESTED,,,eval,2026-07-31,src/eval_extended.zig
+REQ-VECTOR-METRIC-SYNONYM-001,VectorSimilarityFunctions,MetricVocabulary,TESTED,,,eval,2026-07-31,src/eval.zig
+REQ-VECTOR-SCALAR-FN-001,VectorSimilarityFunctions,DocumentedNames,TESTED,,,eval,2026-07-31,src/eval.zig
 REQ-VERIFY-001,Verification,QueryVerification,TESTED,,,core,2026-01-16,tests/test_gap_0193_batch3_comprehensive.zig
 REQ-VERIFY-QUERY-001,Verification,QueryVerification,TESTED,,,core,2026-01-16,tests/test_gap_0193_batch4_comprehensive.zig
 REQ-WAL-HOOKS-001,WAL Persistence Hooks,ServerInit,TESTED,,,storage,2026-06-11,src/server/main.zig

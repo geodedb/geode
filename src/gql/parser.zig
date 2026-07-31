@@ -3531,10 +3531,17 @@ pub const Parser = struct {
                 var args = std.ArrayList(*ast.Expr).empty;
                 var saw_distinct = false;
                 if (self.cur.kind != .r_paren) {
-                    // Special handling: COUNT(DISTINCT expr)
-                    if (base == .Ident and std.ascii.eqlIgnoreCase(base.Ident.orig, "count") and self.cur.kind == .DISTINCT) {
-                        saw_distinct = true;
-                        self.advance();
+                    // CANARY: REQ=REQ-GQL-SET-QUANTIFIER-003; FEATURE="AggregateSetQuantifier"; ASPECT=ParserSupport; STATUS=TESTED; TEST=tests/test_bug731_aggregates_vectors.zig; OWNER=parser; UPDATED=2026-07-31
+                    // ISO/IEC 39075:2024 <general set function> allows the
+                    // <set quantifier> DISTINCT | ALL on EVERY aggregate, not
+                    // just COUNT. ALL is the default and parses to no flag.
+                    if (base == .Ident and acceptsSetQuantifier(base.Ident.orig)) {
+                        if (self.cur.kind == .DISTINCT) {
+                            saw_distinct = true;
+                            self.advance();
+                        } else if (self.cur.kind == .ALL) {
+                            self.advance();
+                        }
                     }
                     // Special handling: COUNT(*)
                     if (base == .Ident and std.ascii.eqlIgnoreCase(base.Ident.orig, "count") and self.cur.kind == .star) {
@@ -3611,7 +3618,7 @@ pub const Parser = struct {
                     for (args_slice) |p| try flat.append(self.arena.allocator(), p.*);
                     if (!validateBuiltinCall(name.orig, try flat.toOwnedSlice(self.arena.allocator()), self.ts_extensions) and !std.ascii.eqlIgnoreCase(name.orig, "countDistinct")) return self.unexpected("invalid builtin function call");
                 }
-                base = .{ .Call = .{ .callee = cp, .args = args_slice } };
+                base = .{ .Call = .{ .callee = cp, .args = args_slice, .distinct = saw_distinct } };
                 continue;
             }
             if (self.cur.kind == .l_bracket) {
@@ -4168,6 +4175,22 @@ pub const Parser = struct {
             .Call => true, // allow nested function calls
             else => false,
         };
+    }
+
+    // CANARY: REQ=REQ-GQL-SET-QUANTIFIER-004; FEATURE="AggregateSetQuantifier"; ASPECT=ComputationalOperation; STATUS=TESTED; TEST=tests/test_bug731_aggregates_vectors.zig; OWNER=parser; UPDATED=2026-07-31
+    /// ISO/IEC 39075:2024 <computational operation> — the aggregate names whose
+    /// argument may be prefixed with a <set quantifier> (DISTINCT | ALL).
+    fn acceptsSetQuantifier(name: []const u8) bool {
+        const computational_operations = [_][]const u8{
+            "count",           "sum",             "avg",
+            "min",             "max",             "collect",
+            "collect_list",    "stddev_samp",     "stddev_pop",
+            "percentile_cont", "percentile_disc",
+        };
+        for (computational_operations) |op| {
+            if (std.ascii.eqlIgnoreCase(name, op)) return true;
+        }
+        return false;
     }
 
     fn validateBuiltinCall(name: []const u8, args: []ast.Expr, ts_enabled: bool) bool {

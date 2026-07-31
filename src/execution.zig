@@ -52,6 +52,7 @@ const execution_helpers = @import("execution/execution_helpers.zig");
 const match_operations = @import("execution/match_operations.zig");
 const statement_handlers = @import("execution/statement_handlers.zig");
 const aggregation_evaluation = @import("execution/aggregation_evaluation.zig");
+pub const distinct_set = @import("execution/distinct_set.zig");
 const return_and_sorting = @import("execution/return_and_sorting.zig");
 const statement_dispatcher = @import("execution/statement_dispatcher.zig");
 // A4a: fulltext CREATE/DROP INDEX glue (named adapter index + backfill).
@@ -3071,7 +3072,21 @@ pub fn computeGroupAggregation(allocator: std.mem.Allocator, expr: ast.Expr, gro
     const call = expr.Call;
     if (call.callee.* != .Ident) return Value{ .Null = {} };
 
-    const func_name = call.callee.Ident.orig;
+    // CANARY: REQ=REQ-GQL-SET-QUANTIFIER-005; FEATURE="AggregateSetQuantifier"; ASPECT=GroupAggregation; STATUS=TESTED; TEST=tests/test_bug731_aggregates_vectors.zig; OWNER=execution; UPDATED=2026-07-31
+    // docs/@BUGS_731.md bug 6a: this is the function every RETURN projection
+    // funnels through (planned_read_runtime wraps RETURN in a synthetic
+    // WithClause). It had no `countDistinct` branch at all, so every
+    // `count(DISTINCT …)` fell through to NULL. DISTINCT is now honoured for
+    // EVERY aggregate via the one shared accumulator.
+    var func_name = call.callee.Ident.orig;
+    var want_distinct = call.distinct;
+    if (std.ascii.eqlIgnoreCase(func_name, "countDistinct")) {
+        func_name = "count";
+        want_distinct = true;
+    }
+    var distinct: ?distinct_set.DistinctSet = if (want_distinct) distinct_set.DistinctSet.init(allocator) else null;
+    defer if (distinct) |*d| d.deinit();
+
     const arg_ptr: ?*ast.Expr = if (call.args.len > 0) call.args[0] else null;
 
     // Handle count(*)
@@ -3088,6 +3103,11 @@ pub fn computeGroupAggregation(allocator: std.mem.Allocator, expr: ast.Expr, gro
                 .allocator = allocator,
             };
             const val = eval.evalExpr(allocator, arg_ptr.?.*, env) catch continue;
+            if (distinct) |*d| {
+                if (!try d.add(val)) continue;
+                count += 1;
+                continue;
+            }
             if (val != .Null) count += 1;
         }
         return Value{ .Int = count };
@@ -3107,6 +3127,9 @@ pub fn computeGroupAggregation(allocator: std.mem.Allocator, expr: ast.Expr, gro
                 .allocator = allocator,
             };
             const val = eval.evalExpr(allocator, arg_ptr.?.*, env) catch continue;
+            if (distinct) |*d| {
+                if (!try d.add(val)) continue;
+            }
             switch (val) {
                 .Int => |n| {
                     int_sum += n;
@@ -3153,6 +3176,9 @@ pub fn computeGroupAggregation(allocator: std.mem.Allocator, expr: ast.Expr, gro
                 .allocator = allocator,
             };
             const val = eval.evalExpr(allocator, arg_ptr.?.*, env) catch continue;
+            if (distinct) |*d| {
+                if (!try d.add(val)) continue;
+            }
             switch (val) {
                 .Int => |n| {
                     int_sum += n;
@@ -3197,6 +3223,9 @@ pub fn computeGroupAggregation(allocator: std.mem.Allocator, expr: ast.Expr, gro
             };
             const val = eval.evalExpr(allocator, arg_ptr.?.*, env) catch continue;
             if (val == .Null) continue;
+            if (distinct) |*d| {
+                if (!try d.add(val)) continue;
+            }
             if (min_val == null) {
                 min_val = val;
             } else if (val == .Int and min_val.? == .Int and val.Int < min_val.?.Int) {
@@ -3222,6 +3251,9 @@ pub fn computeGroupAggregation(allocator: std.mem.Allocator, expr: ast.Expr, gro
             };
             const val = eval.evalExpr(allocator, arg_ptr.?.*, env) catch continue;
             if (val == .Null) continue;
+            if (distinct) |*d| {
+                if (!try d.add(val)) continue;
+            }
             if (max_val == null) {
                 max_val = val;
             } else if (val == .Int and max_val.? == .Int and val.Int > max_val.?.Int) {
@@ -3247,6 +3279,9 @@ pub fn computeGroupAggregation(allocator: std.mem.Allocator, expr: ast.Expr, gro
                 .allocator = allocator,
             };
             const val = eval.evalExpr(allocator, arg_ptr.?.*, env) catch continue;
+            if (distinct) |*d| {
+                if (!try d.add(val)) continue;
+            }
             list.append(allocator, val) catch {};
         }
         return Value{ .List = list.toOwnedSlice(allocator) catch &.{} };

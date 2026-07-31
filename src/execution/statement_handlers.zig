@@ -401,7 +401,21 @@ pub fn executeShow(allocator: std.mem.Allocator, s: ast.ShowStatement, context: 
                 .{ .name = "duration", .signature = "(map|string)", .return_type = "DURATION" },
                 // Spatial functions
                 .{ .name = "point", .signature = "(map)", .return_type = "POINT" },
-                .{ .name = "distance", .signature = "(point1, point2)", .return_type = "FLOAT" },
+                // Vector functions. docs/@BUGS_731.md bug 8f: `distance` was
+                // advertised here as a GEOSPATIAL point-to-point function — a
+                // fourth, incompatible scheme. It is a VECTOR distance (the
+                // geospatial distance is ST_Distance), so this row is now
+                // aligned with src/gql/language_metadata.zig and the engine.
+                .{ .name = "distance", .signature = "(v1, v2[, metric])", .return_type = "FLOAT" },
+                .{ .name = "similarity", .signature = "(v1, v2[, metric])", .return_type = "FLOAT" },
+                .{ .name = "cosine", .signature = "(v1, v2)", .return_type = "FLOAT" },
+                .{ .name = "euclidean", .signature = "(v1, v2)", .return_type = "FLOAT" },
+                .{ .name = "manhattan", .signature = "(v1, v2)", .return_type = "FLOAT" },
+                .{ .name = "vector_l2", .signature = "(v1, v2)", .return_type = "FLOAT" },
+                .{ .name = "vector_cosine", .signature = "(v1, v2)", .return_type = "FLOAT" },
+                .{ .name = "vector_dot", .signature = "(v1, v2)", .return_type = "FLOAT" },
+                .{ .name = "vector_knn", .signature = "(property, query_vector, k, metric)", .return_type = "LIST" },
+                .{ .name = "knn", .signature = "(property, query_vector, k, metric)", .return_type = "LIST" },
                 // Coalesce/null handling
                 .{ .name = "coalesce", .signature = "(expr...)", .return_type = "ANY" },
                 .{ .name = "nullIf", .signature = "(value1, value2)", .return_type = "ANY" },

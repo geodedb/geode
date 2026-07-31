@@ -198,7 +198,11 @@ pub fn initFunctionRegistry(allocator: std.mem.Allocator) !FunctionRegistry {
     try registry.put("vector_dot", &vectorDot);
     try registry.put("vector_l2", &vectorL2);
     try registry.put("vector_cosine", &vectorCosine);
-    try registry.put("vector_knn", &vectorKnn);
+    // NOTE: `vector_knn` (and its `knn` alias) is NOT registered here. It needs
+    // the graph store and the vector index manager, so it is dispatched by
+    // eval.zig's `evalVectorKnn` before this registry is consulted. The former
+    // registry entry was a dead MVP stub that always returned an empty list
+    // (docs/@BUGS_731.md bug 8d).
 
     // Decimal arithmetic functions
     try registry.put("decimal_add", &decimalAdd);
@@ -1941,18 +1945,80 @@ fn stBuffer(allocator: std.mem.Allocator, args: []const ExtValue) !ExtValue {
 }
 
 // Vector functions
-fn vectorDot(allocator: std.mem.Allocator, args: []const ExtValue) !ExtValue {
-    _ = allocator;
+
+// CANARY: REQ=REQ-VECTOR-LIST-COERCION-002; FEATURE="VectorSimilarityFunctions"; ASPECT=ListLiteralCoercion; STATUS=TESTED; TEST=tests/test_bug731_aggregates_vectors.zig; OWNER=eval; UPDATED=2026-07-31
+// docs/@BUGS_731.md bug 8c: the registered vector functions gated on the
+// VectorF32 tag and returned NULL for anything else, so `vector_l2([0,0],[3,4])`
+// silently produced null while `vector_l2(vectorf32([0,0]), vectorf32([3,4]))`
+// computed 5. A GQL list literal converts to ExtValue.List, so coerce numeric
+// lists (and VectorI32) to VectorF32 for every vector function.
+const CoercedVector = struct {
+    vector: heap.VectorF32,
+    owned: ?[]f32 = null,
+};
+
+fn extValueAsF64(value: ExtValue) ?f64 {
+    return switch (value) {
+        .Int => |v| @floatFromInt(v),
+        .SmallInt => |v| @floatFromInt(v),
+        .BigInt => |v| @floatFromInt(v),
+        .Real => |v| @floatCast(v),
+        .Double => |v| v,
+        .Decimal => |d| @as(f64, @floatFromInt(d.coeff)) / std.math.pow(f64, 10.0, @floatFromInt(d.scale)),
+        else => null,
+    };
+}
+
+fn coerceVectorF32(allocator: std.mem.Allocator, value: ExtValue) !CoercedVector {
+    return switch (value) {
+        .VectorF32 => |v| .{ .vector = v },
+        .VectorI32 => |v| blk: {
+            const data = try allocator.alloc(f32, v.dim);
+            errdefer allocator.free(data);
+            for (v.data, 0..) |item, i| data[i] = @floatFromInt(item);
+            break :blk .{ .vector = .{ .dim = v.dim, .data = data }, .owned = data };
+        },
+        .List => |items| blk: {
+            if (items.len == 0 or items.len > std.math.maxInt(u16)) return error.InvalidArgs;
+            const data = try allocator.alloc(f32, items.len);
+            errdefer allocator.free(data);
+            for (items, 0..) |item, i| {
+                const numeric = extValueAsF64(item) orelse return error.TypeMismatch;
+                data[i] = @floatCast(numeric);
+            }
+            break :blk .{ .vector = .{ .dim = @intCast(items.len), .data = data }, .owned = data };
+        },
+        else => error.TypeMismatch,
+    };
+}
+
+/// Coerce the two leading arguments of a binary vector function.
+fn coerceVectorPair(allocator: std.mem.Allocator, args: []const ExtValue) !?struct { a: CoercedVector, b: CoercedVector } {
     if (args.len != 2) return error.InvalidArgs;
-    if (args[0] != .VectorF32 or args[1] != .VectorF32) return .{ .Null = {} };
+    // NULL in, NULL out (standard null propagation).
+    if (args[0] == .Null or args[1] == .Null) return null;
 
-    const a = args[0].VectorF32;
-    const b = args[1].VectorF32;
+    const a = try coerceVectorF32(allocator, args[0]);
+    errdefer if (a.owned) |data| allocator.free(data);
+    const b = try coerceVectorF32(allocator, args[1]);
+    if (a.vector.dim != b.vector.dim) {
+        if (b.owned) |data| allocator.free(data);
+        return error.DimensionMismatch;
+    }
+    return .{ .a = a, .b = b };
+}
 
-    if (a.dim != b.dim) return error.DimensionMismatch;
+fn freeVectorPair(allocator: std.mem.Allocator, pair: anytype) void {
+    if (pair.a.owned) |data| allocator.free(data);
+    if (pair.b.owned) |data| allocator.free(data);
+}
+
+fn vectorDot(allocator: std.mem.Allocator, args: []const ExtValue) !ExtValue {
+    const pair = (try coerceVectorPair(allocator, args)) orelse return .{ .Null = {} };
+    defer freeVectorPair(allocator, pair);
 
     var sum: f64 = 0;
-    for (a.data, b.data) |av, bv| {
+    for (pair.a.vector.data, pair.b.vector.data) |av, bv| {
         sum += av * bv;
     }
 
@@ -1960,17 +2026,11 @@ fn vectorDot(allocator: std.mem.Allocator, args: []const ExtValue) !ExtValue {
 }
 
 fn vectorL2(allocator: std.mem.Allocator, args: []const ExtValue) !ExtValue {
-    _ = allocator;
-    if (args.len != 2) return error.InvalidArgs;
-    if (args[0] != .VectorF32 or args[1] != .VectorF32) return .{ .Null = {} };
-
-    const a = args[0].VectorF32;
-    const b = args[1].VectorF32;
-
-    if (a.dim != b.dim) return error.DimensionMismatch;
+    const pair = (try coerceVectorPair(allocator, args)) orelse return .{ .Null = {} };
+    defer freeVectorPair(allocator, pair);
 
     var sum: f64 = 0;
-    for (a.data, b.data) |av, bv| {
+    for (pair.a.vector.data, pair.b.vector.data) |av, bv| {
         const diff = av - bv;
         sum += diff * diff;
     }
@@ -1980,20 +2040,14 @@ fn vectorL2(allocator: std.mem.Allocator, args: []const ExtValue) !ExtValue {
 }
 
 fn vectorCosine(allocator: std.mem.Allocator, args: []const ExtValue) !ExtValue {
-    _ = allocator;
-    if (args.len != 2) return error.InvalidArgs;
-    if (args[0] != .VectorF32 or args[1] != .VectorF32) return .{ .Null = {} };
-
-    const a = args[0].VectorF32;
-    const b = args[1].VectorF32;
-
-    if (a.dim != b.dim) return error.DimensionMismatch;
+    const pair = (try coerceVectorPair(allocator, args)) orelse return .{ .Null = {} };
+    defer freeVectorPair(allocator, pair);
 
     var dot_product: f64 = 0;
     var norm_a: f64 = 0;
     var norm_b: f64 = 0;
 
-    for (a.data, b.data) |av, bv| {
+    for (pair.a.vector.data, pair.b.vector.data) |av, bv| {
         dot_product += av * bv;
         norm_a += av * av;
         norm_b += bv * bv;
@@ -2003,14 +2057,6 @@ fn vectorCosine(allocator: std.mem.Allocator, args: []const ExtValue) !ExtValue 
 
     const similarity = dot_product / (@sqrt(norm_a) * @sqrt(norm_b));
     return .{ .Decimal = .{ .coeff = @intFromFloat(similarity * 1000000), .scale = 6 } };
-}
-
-fn vectorKnn(allocator: std.mem.Allocator, args: []const ExtValue) !ExtValue {
-    _ = allocator;
-    if (args.len != 4) return error.InvalidArgs;
-
-    // For MVP, return empty list
-    return .{ .List = &[_]ExtValue{} };
 }
 
 // Decimal constructor

@@ -4,6 +4,7 @@ const eval = @import("../eval.zig");
 const graph_store = @import("../graph_store.zig");
 const property_codec = @import("../property_value_codec.zig");
 const value_types = @import("../value_types.zig");
+const distinct_set = @import("distinct_set.zig");
 
 // Import from parent execution module
 const execution = @import("../execution.zig");
@@ -161,64 +162,38 @@ pub fn evaluateGroupAggregation(allocator: std.mem.Allocator, expr: ast.Expr, no
                     }
                     return Value{ .Int = @intCast(nodes.len) };
                 } else if (std.ascii.eqlIgnoreCase(func_name, "countDistinct")) {
-                    // CANARY: REQ=REQ-COUNT-DISTINCT-FIX-001; FEATURE="CountDistinctStrings"; ASPECT=StringSupport; STATUS=TESTED; TEST=geodetestlab/specs/geode_functions_comprehensive.yml; OWNER=engine; UPDATED=2025-12-26
-                    // COUNT(DISTINCT expr) - count distinct non-null values
+                    // CANARY: REQ=REQ-COUNT-DISTINCT-FIX-001; FEATURE="CountDistinctStrings"; ASPECT=StringSupport; STATUS=TESTED; TEST=tests/test_bug731_aggregates_vectors.zig; OWNER=engine; UPDATED=2026-07-31
+                    // COUNT(DISTINCT expr) - count distinct non-null values.
+                    // docs/@BUGS_731.md bug 6b: converged onto the shared
+                    // DistinctSet (was: bespoke int/str maps plus a two-bool
+                    // hack, which dropped every non-Int/Str/Bool property type).
                     if (call.args.len == 1) {
-                        var unique_int_values = std.AutoHashMap(i64, void).init(allocator);
-                        defer unique_int_values.deinit();
-                        var unique_str_values = std.StringHashMap(void).init(allocator);
-                        defer unique_str_values.deinit();
-                        // E22 Fix: Track boolean values separately
-                        var has_true = false;
-                        var has_false = false;
+                        var distinct = distinct_set.DistinctSet.init(allocator);
+                        defer distinct.deinit();
 
                         // Handle property access for COUNT(DISTINCT n.prop)
                         if (call.args[0].* == .PropertyAccess) {
                             const prop_access = call.args[0].PropertyAccess;
                             for (nodes) |node| {
                                 if (node.properties.get(prop_access.property)) |prop_val| {
-                                    if (prop_val == .Int) {
-                                        try unique_int_values.put(prop_val.Int, {});
-                                    } else if (prop_val == .String) {
-                                        try unique_str_values.put(prop_val.String, {});
-                                    } else if (prop_val == .Bool) {
-                                        // E22 Fix: Handle boolean values for COUNT DISTINCT
-                                        if (prop_val.Bool) {
-                                            has_true = true;
-                                        } else {
-                                            has_false = true;
-                                        }
-                                    }
+                                    _ = try distinct_set.addProperty(&distinct, prop_val);
                                 }
                             }
                         } else if (call.args[0].* == .Member) {
                             const member = call.args[0].Member;
                             for (nodes) |node| {
                                 if (node.properties.get(member.field)) |prop_val| {
-                                    if (prop_val == .Int) {
-                                        try unique_int_values.put(prop_val.Int, {});
-                                    } else if (prop_val == .String) {
-                                        try unique_str_values.put(prop_val.String, {});
-                                    } else if (prop_val == .Bool) {
-                                        // E22 Fix: Handle boolean values for COUNT DISTINCT
-                                        if (prop_val.Bool) {
-                                            has_true = true;
-                                        } else {
-                                            has_false = true;
-                                        }
-                                    }
+                                    _ = try distinct_set.addProperty(&distinct, prop_val);
                                 }
                             }
                         } else if (call.args[0].* == .Ident) {
                             // COUNT(DISTINCT n) - count distinct nodes by their ID
                             for (nodes) |node| {
-                                try unique_int_values.put(@intCast(node.id), {});
+                                _ = try distinct.add(Value{ .Node = node });
                             }
                         }
 
-                        // E22 Fix: Add boolean count to total
-                        const bool_count: usize = (if (has_true) @as(usize, 1) else 0) + (if (has_false) @as(usize, 1) else 0);
-                        return Value{ .Int = @intCast(unique_int_values.count() + unique_str_values.count() + bool_count) };
+                        return Value{ .Int = @intCast(distinct.count()) };
                     }
                     return Value{ .Int = 0 };
                 } else if (std.ascii.eqlIgnoreCase(func_name, "sum")) {
@@ -682,15 +657,14 @@ pub fn computeBindingGroupAggregation(allocator: std.mem.Allocator, expr: ast.Ex
                     }
                     return Value{ .Int = @intCast(bindings.len) };
                 } else if (std.ascii.eqlIgnoreCase(func_name, "countDistinct")) {
-                    // CANARY: REQ=REQ-COUNT-DISTINCT-BINDING-001; FEATURE="CountDistinctBindings"; ASPECT=BindingAggregation; STATUS=TESTED; TEST=geodetestlab/specs/geode_functions_comprehensive.yml; OWNER=aggregation; UPDATED=2025-12-28
-                    // C05 Fix: COUNT(DISTINCT expr) - count unique non-null values across bindings
+                    // CANARY: REQ=REQ-COUNT-DISTINCT-BINDING-001; FEATURE="CountDistinctBindings"; ASPECT=BindingAggregation; STATUS=TESTED; TEST=tests/test_bug731_aggregates_vectors.zig; OWNER=aggregation; UPDATED=2026-07-31
+                    // COUNT(DISTINCT expr) - count unique non-null values across
+                    // bindings. docs/@BUGS_731.md bug 6b: converged onto the
+                    // shared DistinctSet; this site previously SKIPPED node and
+                    // edge values entirely, so `count(DISTINCT n)` returned 0.
                     if (call.args.len == 1) {
-                        var unique_int_values = std.AutoHashMap(i64, void).init(allocator);
-                        defer unique_int_values.deinit();
-                        var unique_str_values = std.StringHashMap(void).init(allocator);
-                        defer unique_str_values.deinit();
-                        var has_true = false;
-                        var has_false = false;
+                        var distinct = distinct_set.DistinctSet.init(allocator);
+                        defer distinct.deinit();
 
                         for (bindings) |binding| {
                             const env = Env{
@@ -699,21 +673,9 @@ pub fn computeBindingGroupAggregation(allocator: std.mem.Allocator, expr: ast.Ex
                                 .allocator = allocator,
                             };
                             const val = eval.evalExpr(allocator, call.args[0].*, env) catch Value{ .Null = {} };
-                            switch (val) {
-                                .Int => |i| {
-                                    unique_int_values.put(i, {}) catch {};
-                                },
-                                .Str => |s| {
-                                    unique_str_values.put(s, {}) catch {};
-                                },
-                                .Bool => |b| {
-                                    if (b) has_true = true else has_false = true;
-                                },
-                                else => {}, // Skip nulls and other types
-                            }
+                            _ = try distinct.add(val);
                         }
-                        const bool_count: usize = (if (has_true) @as(usize, 1) else 0) + (if (has_false) @as(usize, 1) else 0);
-                        return Value{ .Int = @intCast(unique_int_values.count() + unique_str_values.count() + bool_count) };
+                        return Value{ .Int = @intCast(distinct.count()) };
                     }
                     return Value{ .Int = 0 };
                 } else if (std.ascii.eqlIgnoreCase(func_name, "sum")) {

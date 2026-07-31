@@ -218,6 +218,19 @@ test "ISO Sec 12.10: COALESCE function" {
 
 test "ISO Sec 12.11: COUNT DISTINCT" {
     try expectParseOk("MATCH (n:Person) RETURN count(DISTINCT n.city) AS cities");
+    // ISO/IEC 39075:2024 <general set function> ::= <computational operation>
+    // <left paren> [ <set quantifier> ] <value expression> <right paren>, so the
+    // quantifier is legal on EVERY aggregate, not just COUNT. Before
+    // docs/@BUGS_731.md bug 6c these all failed to parse ("expected token
+    // 'r_paren', got 'identifier'"). Executed-result coverage for the same forms
+    // lives in tests/test_bug731_aggregates_vectors.zig — this suite stays
+    // parse-only by design.
+    try expectParseOk("MATCH (n:Person) RETURN count(ALL n.city) AS cities");
+    try expectParseOk("MATCH (n:Person) RETURN collect(DISTINCT n.city) AS cities");
+    try expectParseOk("MATCH (n:Person) RETURN sum(DISTINCT n.age) AS total");
+    try expectParseOk("MATCH (n:Person) RETURN avg(DISTINCT n.age) AS mean");
+    try expectParseOk("MATCH (n:Person) RETURN min(DISTINCT n.age) AS lo");
+    try expectParseOk("MATCH (n:Person) RETURN max(ALL n.age) AS hi");
 }
 
 test "ISO Sec 12.12: COLLECT aggregate" {

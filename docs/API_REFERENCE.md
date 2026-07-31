@@ -285,9 +285,15 @@ RETURN path;
 
 ### Vector Search Functions
 
-#### similarity(vector1, vector2)
+Both arguments of every function below accept a `VECTORF32`/`VECTORI32` value
+(e.g. `vectorf32([1.0, 0.0])` or a stored vector property) **or** a plain
+numeric GQL list literal such as `[0.1, 0.2, 0.3]`.
 
-Calculates similarity between two vectors (0 to 1, higher is more similar).
+#### similarity(vector1, vector2 [, metric])
+
+Calculates similarity between two vectors (higher is more similar). `metric`
+defaults to `'cosine'`; `'dot'`/`'dot_product'` is also accepted. `'l2'` is a
+distance, not a similarity, and is rejected — use `distance()` for it.
 
 ```gql
 MATCH (d:Document)
@@ -295,9 +301,9 @@ WHERE similarity(d.embedding, [0.1, 0.2, 0.3]) > 0.8
 RETURN d;
 ```
 
-#### distance(vector1, vector2, metric)
+#### distance(vector1, vector2 [, metric])
 
-Calculates distance between vectors using specified metric.
+Calculates distance between vectors using the specified metric (default `'l2'`).
 
 ```gql
 MATCH (d:Document)
@@ -307,18 +313,27 @@ RETURN d;
 
 Supported metrics:
 
-- `'l2'`: Euclidean distance
+- `'l2'` (alias `'euclidean'`): Euclidean distance
 - `'cosine'`: Cosine distance (1 - cosine similarity)
-- `'dot'`: Negative dot product
+- `'dot'` (alias `'dot_product'`): Negative dot product
 
-#### knn(property, query_vector, k)
+#### euclidean(vector1, vector2) / manhattan(vector1, vector2) / cosine(vector1, vector2)
 
-Returns k nearest neighbors.
+Fixed-metric shorthands: L2 distance, L1 distance, and cosine similarity.
+
+#### knn(property_name, query_vector, k, metric)
+
+Returns the ids of the `k` nearest nodes/edges by a vector-valued property.
+`knn` is an alias of `vector_knn`.
+
+Note the FIRST argument is the property NAME as a string — not a vector
+expression — because the function scans the graph (or the registered vector
+index) for that property. `metric` is required and takes the same values as
+`distance()`.
 
 ```gql
 MATCH (d:Document)
-WITH d, knn(d.embedding, [0.1, 0.2, 0.3], 10) AS neighbors
-RETURN neighbors;
+RETURN knn('embedding', [0.1, 0.2, 0.3], 10, 'cosine') AS neighbor_ids;
 ```
 
 ## Spatial Operations

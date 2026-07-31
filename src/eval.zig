@@ -997,8 +997,17 @@ pub fn evalExpr(allocator: std.mem.Allocator, e: ast.Expr, env: Env) EvalError!V
                 lowercase_name[i] = std.ascii.toLower(c);
             }
 
-            if (std.mem.eql(u8, lowercase_name, "vector_knn")) {
+            // docs/@BUGS_731.md bug 8d: `knn` is a plain ALIAS of the implemented
+            // `vector_knn(property_name, query_vector, k, metric)`. Any other
+            // arity (e.g. the doc's `knn(d.embedding, $q, 10)`) raises
+            // InvalidArgs rather than silently resolving to NULL.
+            if (std.mem.eql(u8, lowercase_name, "vector_knn") or std.mem.eql(u8, lowercase_name, "knn")) {
                 break :blk_call try evalVectorKnn(allocator, call.args, env);
+            }
+
+            // docs/@BUGS_731.md bug 8a: the documented scalar vector functions.
+            if (vectorScalarKind(lowercase_name)) |vector_kind| {
+                break :blk_call try evalVectorScalarFunction(allocator, vector_kind, call.args, env);
             }
 
             // Look up function in extended registry
@@ -1105,8 +1114,12 @@ pub fn evalExpr(allocator: std.mem.Allocator, e: ast.Expr, env: Env) EvalError!V
                 break :blk_call val;
             }
 
-            // Function not found, return null
-            break :blk_call .{ .Null = {} };
+            // CANARY: REQ=REQ-UNKNOWN-FUNCTION-DIAGNOSTIC-001; FEATURE="UnknownFunctionDiagnostic"; ASPECT=EvalDispatch; STATUS=TESTED; TEST=tests/test_bug731_aggregates_vectors.zig; OWNER=eval; UPDATED=2026-07-31
+            // docs/@BUGS_731.md bug 8b: an unresolved function name used to
+            // silently yield NULL, which is what made every missing vector
+            // function (distance/similarity/euclidean/knn) look "implemented but
+            // returning null". Raise the undefined_function diagnostic instead.
+            return EvalError.UnknownFunction;
         },
         .In => |iv| {
             const v = try evalExpr(allocator, iv.value.*, env);
@@ -2016,6 +2029,20 @@ const VectorCandidate = struct {
     score: f64,
 };
 
+/// Numeric coercion for vector elements: every integral/fractional Value the
+/// GQL literal path can produce, or null for anything non-numeric.
+pub fn numericValueAsF64(value: Value) ?f64 {
+    return switch (value) {
+        .Int => |v| @floatFromInt(v),
+        .SmallInt => |v| @floatFromInt(v),
+        .BigInt => |v| @floatFromInt(v),
+        .Real => |v| @floatCast(v),
+        .Double => |v| v,
+        .Decimal => |d| @as(f64, @floatFromInt(d.coeff)) / std.math.pow(f64, 10.0, @floatFromInt(d.scale)),
+        else => null,
+    };
+}
+
 fn valueToVectorF32(allocator: std.mem.Allocator, value: Value) EvalError!OwnedVector {
     return switch (value) {
         .ExtValue => |ext| switch (ext) {
@@ -2030,6 +2057,23 @@ fn valueToVectorF32(allocator: std.mem.Allocator, value: Value) EvalError!OwnedV
             },
             else => error.TypeMismatch,
         },
+        // CANARY: REQ=REQ-VECTOR-LIST-COERCION-001; FEATURE="VectorSimilarityFunctions"; ASPECT=ListLiteralCoercion; STATUS=TESTED; TEST=tests/test_bug731_aggregates_vectors.zig; OWNER=eval; UPDATED=2026-07-31
+        // docs/@BUGS_731.md bug 8c: a GQL list literal ([1.0, 0.0]) evaluates to
+        // Value.List, never ExtValue.VectorF32, so every vector function used to
+        // reject the documented literal form. Coerce numeric lists here.
+        .List => |items| blk: {
+            if (items.len == 0 or items.len > std.math.maxInt(u16)) return error.InvalidArgs;
+            const data = try allocator.alloc(f32, items.len);
+            errdefer allocator.free(data);
+            for (items, 0..) |item, i| {
+                const numeric = numericValueAsF64(item) orelse return error.TypeMismatch;
+                data[i] = @floatCast(numeric);
+            }
+            break :blk .{
+                .vector = .{ .dim = @intCast(items.len), .data = data },
+                .owned = data,
+            };
+        },
         else => error.TypeMismatch,
     };
 }
@@ -2041,7 +2085,11 @@ fn parseVectorMetric(value: Value) EvalError!VectorMetric {
         else => return error.TypeMismatch,
     };
 
-    if (std.ascii.eqlIgnoreCase(metric_text, "l2")) return .l2;
+    // CANARY: REQ=REQ-VECTOR-METRIC-SYNONYM-001; FEATURE="VectorSimilarityFunctions"; ASPECT=MetricVocabulary; STATUS=TESTED; TEST=tests/test_bug731_aggregates_vectors.zig; OWNER=eval; UPDATED=2026-07-31
+    // docs/@BUGS_731.md bug 8e: `CREATE INDEX … USING vector` accepts
+    // "euclidean" (src/execution.zig), so the query-side metric vocabulary must
+    // accept the same synonym instead of raising InvalidArgs.
+    if (std.ascii.eqlIgnoreCase(metric_text, "l2") or std.ascii.eqlIgnoreCase(metric_text, "euclidean")) return .l2;
     if (std.ascii.eqlIgnoreCase(metric_text, "cosine")) return .cosine;
     if (std.ascii.eqlIgnoreCase(metric_text, "dot") or std.ascii.eqlIgnoreCase(metric_text, "dot_product")) return .dot_product;
     return error.InvalidArgs;
@@ -2157,6 +2205,76 @@ fn scanVectorKnn(
 
     std.sort.pdq(VectorCandidate, candidates.items, {}, compareVectorCandidates);
     return vectorCandidatesToList(allocator, candidates.items, k);
+}
+
+// CANARY: REQ=REQ-VECTOR-SCALAR-FN-001; FEATURE="VectorSimilarityFunctions"; ASPECT=DocumentedNames; STATUS=TESTED; TEST=tests/test_bug731_aggregates_vectors.zig; OWNER=eval; UPDATED=2026-07-31
+// docs/@BUGS_731.md bug 8a: distance / euclidean / manhattan / similarity are
+// advertised by src/gql/language_metadata.zig and the API docs but were
+// registered NOWHERE, so every call silently resolved to NULL. They are real
+// scalar functions over two vectors (VECTORF32/VECTORI32 values or plain
+// numeric list literals) and share the vector metric core with vector_knn.
+const VectorScalarKind = enum { distance, euclidean, manhattan, similarity };
+
+fn vectorScalarKind(function_name: []const u8) ?VectorScalarKind {
+    if (std.ascii.eqlIgnoreCase(function_name, "distance")) return .distance;
+    if (std.ascii.eqlIgnoreCase(function_name, "euclidean")) return .euclidean;
+    if (std.ascii.eqlIgnoreCase(function_name, "manhattan")) return .manhattan;
+    if (std.ascii.eqlIgnoreCase(function_name, "similarity")) return .similarity;
+    return null;
+}
+
+fn evalVectorScalarFunction(
+    allocator: std.mem.Allocator,
+    kind: VectorScalarKind,
+    args: []*ast.Expr,
+    env: Env,
+) EvalError!Value {
+    // distance/similarity take an OPTIONAL trailing metric name; euclidean and
+    // manhattan name their metric already.
+    const max_args: usize = switch (kind) {
+        .distance, .similarity => 3,
+        .euclidean, .manhattan => 2,
+    };
+    if (args.len < 2 or args.len > max_args) return error.InvalidArgs;
+
+    const lhs_value = try evalExpr(allocator, args[0].*, env);
+    const rhs_value = try evalExpr(allocator, args[1].*, env);
+    if (lhs_value == .Null or rhs_value == .Null) return .{ .Null = {} };
+
+    const lhs = try valueToVectorF32(allocator, lhs_value);
+    defer if (lhs.owned) |data| allocator.free(data);
+    const rhs = try valueToVectorF32(allocator, rhs_value);
+    defer if (rhs.owned) |data| allocator.free(data);
+    if (lhs.vector.dim != rhs.vector.dim) return error.TypeMismatch;
+
+    const metric: VectorMetric = if (args.len == 3)
+        try parseVectorMetric(try evalExpr(allocator, args[2].*, env))
+    else switch (kind) {
+        .similarity => .cosine,
+        else => .l2,
+    };
+
+    const result: f64 = switch (kind) {
+        .distance => try metricDistance(metric, lhs.vector, rhs.vector),
+        .euclidean => try metricDistance(.l2, lhs.vector, rhs.vector),
+        .manhattan => blk: {
+            var sum: f64 = 0;
+            for (lhs.vector.data, rhs.vector.data) |l, r| sum += @abs(@as(f64, l) - @as(f64, r));
+            break :blk sum;
+        },
+        .similarity => switch (metric) {
+            // metricDistance(.cosine) is the cosine DISTANCE (1 - cos); the
+            // similarity surface reports the cosine itself. Likewise the
+            // dot_product metric is negated for ordering, so undo that.
+            .cosine => 1.0 - try metricDistance(.cosine, lhs.vector, rhs.vector),
+            .dot_product => -(try metricDistance(.dot_product, lhs.vector, rhs.vector)),
+            // L2 is a distance, not a similarity: refuse rather than invent an
+            // unspecified distance-to-similarity conversion. Use distance().
+            .l2 => return error.InvalidArgs,
+        },
+    };
+
+    return .{ .Decimal = .{ .coeff = @intFromFloat(result * float_to_decimal_scale_f64), .scale = 6 } };
 }
 
 fn evalVectorKnn(allocator: std.mem.Allocator, args: []*ast.Expr, env: Env) EvalError!Value {
