@@ -367,6 +367,83 @@ pub const PasswordPolicy = struct {
             .history_count = 5,
         };
     }
+
+    // CANARY: REQ=REQ-AUTH-POLICY-005; FEATURE="Unified Password Policy Validation"; ASPECT=Security; STATUS=TESTED; TEST=tests/test_bug731_password_policy.zig; OWNER=security; UPDATED=2026-07-31
+    /// Validate a candidate password against this policy.
+    ///
+    /// Returns `null` when the password is acceptable, or a human-readable
+    /// reason when it is not.
+    ///
+    /// This is the SINGLE source of truth for password strength. It used to
+    /// be duplicated: the QUIC handler enforced this policy while the offline
+    /// `geode user` CLI enforced a different, *mutually incompatible* one
+    /// (>=8 chars, must contain a digit). The documented recovery passphrase
+    /// `Correct horse battery staple` was rejected by the CLI for having no
+    /// digit, while a CLI-valid `abc12345` was rejected by the server for
+    /// being too short and not a passphrase. Every entry point now calls
+    /// this. See docs/@BUGS_731.md bug 4.
+    ///
+    /// The message wording is deliberately stable — it is quoted verbatim in
+    /// docs and in operator-facing error output.
+    pub fn validate(self: PasswordPolicy, password: []const u8) ?[]const u8 {
+        if (password.len < self.min_length) return "Password too short (minimum 20 characters)";
+        if (password.len > self.max_length) return "Password too long (maximum 256 characters)";
+
+        if (self.require_uppercase) {
+            var found = false;
+            for (password) |c| {
+                if (std.ascii.isUpper(c)) {
+                    found = true;
+                    break;
+                }
+            }
+            if (!found) return "Password must contain at least one uppercase letter";
+        }
+
+        if (self.require_lowercase) {
+            var found = false;
+            for (password) |c| {
+                if (std.ascii.isLower(c)) {
+                    found = true;
+                    break;
+                }
+            }
+            if (!found) return "Password must contain at least one lowercase letter";
+        }
+
+        if (self.require_digit) {
+            var found = false;
+            for (password) |c| {
+                if (std.ascii.isDigit(c)) {
+                    found = true;
+                    break;
+                }
+            }
+            if (!found) return "Password must contain at least one digit";
+        }
+
+        if (!self.allow_spaces) {
+            for (password) |c| {
+                if (c == ' ') return "Password must not contain spaces";
+            }
+        }
+
+        if (self.require_passphrase) {
+            var word_count: usize = 0;
+            var in_word = false;
+            for (password) |c| {
+                if (c == ' ') {
+                    in_word = false;
+                } else {
+                    if (!in_word) word_count += 1;
+                    in_word = true;
+                }
+            }
+            if (word_count < self.min_words) return "Password must be a passphrase with at least 3 words";
+        }
+
+        return null;
+    }
 };
 
 // ---- Audit ----

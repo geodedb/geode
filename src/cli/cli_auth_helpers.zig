@@ -9,6 +9,7 @@
 
 const std = @import("std");
 const cb = @import("crypto_backend");
+const geode_auth = @import("geode_auth");
 
 // Zig 0.16 compat: std.crypto.random removed. Use getrandom syscall.
 fn compat_fillRandom(buf: []u8) void {
@@ -95,17 +96,27 @@ pub fn resolveStatePath(allocator: std.mem.Allocator, filename: []const u8) ![]u
 
 // -- Password Strength Validation --
 
-/// Check whether a password meets minimum policy requirements.
-/// Requires at least 8 characters, at least one letter, and at least one digit.
+/// Check whether a password meets the server's configured policy.
+///
+/// This used to enforce its own rules (>=8 chars, one letter, one digit),
+/// which were *mutually incompatible* with the policy the server enforces on
+/// `ALTER USER ... SET PASSWORD`: the documented recovery passphrase
+/// `Correct horse battery staple` was rejected here for containing no digit,
+/// while an `abc12345` accepted here was rejected by the server for being too
+/// short and not a passphrase. An operator therefore could not set one
+/// password that both entry points would take.
+///
+/// It now defers to the same `PasswordPolicy.geodeSecure()` the server uses,
+/// so the offline CLI and the wire agree. See docs/@BUGS_731.md bug 4.
 pub fn isPasswordStrong(password: []const u8) bool {
-    if (password.len < 8) return false;
-    var has_digit = false;
-    var has_alpha = false;
-    for (password) |c| {
-        if (std.ascii.isDigit(c)) has_digit = true;
-        if (std.ascii.isAlphabetic(c)) has_alpha = true;
-    }
-    return has_digit and has_alpha;
+    return passwordPolicyError(password) == null;
+}
+
+/// Like `isPasswordStrong`, but returns the operator-facing reason the
+/// password was rejected (or `null` when it is acceptable), so callers can
+/// tell the user *why* instead of just failing.
+pub fn passwordPolicyError(password: []const u8) ?[]const u8 {
+    return geode_auth.PasswordPolicy.geodeSecure().validate(password);
 }
 
 // -- Secure Password Generation --
@@ -163,23 +174,42 @@ pub fn deinitAndSaveCliAuth(allocator: std.mem.Allocator, mgr: *AuthGraphManager
 
 // -- Tests --
 
+// These tests previously encoded the CLI's own policy (>=8 chars, one letter,
+// one digit). That policy was mutually incompatible with the one the server
+// enforces, so `abc12345` passed here and was then rejected over the wire.
+// The CLI now defers to PasswordPolicy.geodeSecure(); these cases were
+// updated to the unified policy rather than kept pinned to the old one.
+// See docs/@BUGS_731.md bug 4.
+
 test "isPasswordStrong rejects short passwords" {
     try std.testing.expect(!isPasswordStrong("abc123"));
     try std.testing.expect(!isPasswordStrong("abcdefg"));
+    // Previously accepted by the CLI, rejected by the server: too short and
+    // not a passphrase.
+    try std.testing.expect(!isPasswordStrong("abc12345"));
+    try std.testing.expect(!isPasswordStrong("SecureP4ss!"));
 }
 
-test "isPasswordStrong rejects missing digits" {
-    try std.testing.expect(!isPasswordStrong("abcdefgh"));
+test "isPasswordStrong requires a passphrase, not just length" {
+    // Long enough (>=20) and mixed case, but a single word.
+    try std.testing.expect(!isPasswordStrong("Supercalifragilistic"));
 }
 
-test "isPasswordStrong rejects missing letters" {
-    try std.testing.expect(!isPasswordStrong("12345678"));
+test "isPasswordStrong requires mixed case" {
+    try std.testing.expect(!isPasswordStrong("correct horse battery staple"));
+    try std.testing.expect(!isPasswordStrong("CORRECT HORSE BATTERY STAPLE"));
 }
 
-test "isPasswordStrong accepts valid passwords" {
-    try std.testing.expect(isPasswordStrong("password1"));
-    try std.testing.expect(isPasswordStrong("abc12345"));
-    try std.testing.expect(isPasswordStrong("SecureP4ss!"));
+test "isPasswordStrong accepts the documented recovery passphrase" {
+    // The exact form the server's own error message tells operators to use.
+    // The old CLI policy rejected this for containing no digit.
+    try std.testing.expect(isPasswordStrong("Correct horse battery staple"));
+}
+
+test "passwordPolicyError explains the rejection" {
+    try std.testing.expect(passwordPolicyError("Correct horse battery staple") == null);
+    const reason = passwordPolicyError("short") orelse return error.TestUnexpectedResult;
+    try std.testing.expect(std.mem.indexOf(u8, reason, "too short") != null);
 }
 
 test "generateSecurePassword returns 32 chars" {

@@ -9292,6 +9292,23 @@ pub fn build(b: *std.Build) void {
     const bug731_cli_leak_step = b.step("test-bug731-cli-leak", "Run bug-731 CLI HELLO-response ownership regressions (leak + password_reset_required)");
     bug731_cli_leak_step.dependOn(&run_bug731_cli_leak_tests.step);
 
+    // bug-731 bug 4 follow-up: the offline CLI, the wire ALTER USER path and
+    // the GEODE_ADMIN_PASSWORD seed must all agree on one password policy.
+    // cli_auth_helpers is imported as its own module (not via the `geode`
+    // lib) because it also belongs to the exe's root module, and a file may
+    // not be reachable from two modules at once.
+    const bug731_cli_auth_mod = b.createModule(.{ .root_source_file = b.path("src/cli/cli_auth_helpers.zig"), .target = target, .optimize = optimize });
+    bug731_cli_auth_mod.addImport("crypto_backend", crypto_backend_mod);
+    bug731_cli_auth_mod.addImport("geode_auth", auth_mod);
+    const bug731_pwpolicy_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_bug731_password_policy.zig"), .target = target, .optimize = optimize });
+    bug731_pwpolicy_test_mod.addImport("geode_auth", auth_mod);
+    bug731_pwpolicy_test_mod.addImport("cli_auth_helpers", bug731_cli_auth_mod);
+    const bug731_pwpolicy_tests = b.addTest(.{ .root_module = bug731_pwpolicy_test_mod });
+    const run_bug731_pwpolicy_tests = b.addRunArtifact(bug731_pwpolicy_tests);
+    shardDep(test_step, &run_bug731_pwpolicy_tests.step, 0, test_shard_loads, test_shard_index);
+    const bug731_pwpolicy_step = b.step("test-bug731-pwpolicy", "Run bug-731 unified password policy regressions (CLI/wire/seed agree)");
+    bug731_pwpolicy_step.dependOn(&run_bug731_pwpolicy_tests.step);
+
     // GAP-0903: repeated duplicate CREATE INDEX double-free (errdefer +
     // explicit free of the scoped key on the DuplicateIndex path).
     const gap0903_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_gap0903_dup_index_double_free.zig"), .target = target, .optimize = optimize });

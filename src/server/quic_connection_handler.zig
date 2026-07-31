@@ -5277,66 +5277,13 @@ fn parseAlterUserSetPassword(query: []const u8) ?struct { username: []const u8, 
 /// a SecurityManager instance.  Returns an error message string if the password
 /// fails validation, or null if it passes.
 /// SECURITY (S4): Fallback policy enforcement when SecurityManager is null.
+/// Validate a password against the server's configured policy.
+///
+/// Delegates to `PasswordPolicy.validate` — the single shared implementation
+/// that the offline `geode user` CLI and the GEODE_ADMIN_PASSWORD seed path
+/// also use, so all three entry points agree. See docs/@BUGS_731.md bug 4.
 fn validatePasswordFallback(password: []const u8) ?[]const u8 {
-    const policy = geode_auth.PasswordPolicy.geodeSecure();
-
-    if (password.len < policy.min_length) return "Password too short (minimum 20 characters)";
-    if (password.len > policy.max_length) return "Password too long (maximum 256 characters)";
-
-    if (policy.require_uppercase) {
-        var found = false;
-        for (password) |c| {
-            if (std.ascii.isUpper(c)) {
-                found = true;
-                break;
-            }
-        }
-        if (!found) return "Password must contain at least one uppercase letter";
-    }
-
-    if (policy.require_lowercase) {
-        var found = false;
-        for (password) |c| {
-            if (std.ascii.isLower(c)) {
-                found = true;
-                break;
-            }
-        }
-        if (!found) return "Password must contain at least one lowercase letter";
-    }
-
-    if (policy.require_digit) {
-        var found = false;
-        for (password) |c| {
-            if (std.ascii.isDigit(c)) {
-                found = true;
-                break;
-            }
-        }
-        if (!found) return "Password must contain at least one digit";
-    }
-
-    if (!policy.allow_spaces) {
-        for (password) |c| {
-            if (c == ' ') return "Password must not contain spaces";
-        }
-    }
-
-    if (policy.require_passphrase) {
-        var word_count: usize = 0;
-        var in_word = false;
-        for (password) |c| {
-            if (c == ' ') {
-                in_word = false;
-            } else {
-                if (!in_word) word_count += 1;
-                in_word = true;
-            }
-        }
-        if (word_count < policy.min_words) return "Password must be a passphrase with at least 3 words";
-    }
-
-    return null;
+    return geode_auth.PasswordPolicy.geodeSecure().validate(password);
 }
 
 /// Handle ALTER USER SET PASSWORD when password reset is required.

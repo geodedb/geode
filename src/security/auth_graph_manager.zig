@@ -901,6 +901,26 @@ pub const AuthGraphManager = struct {
             break :blk pw;
         };
 
+        // CANARY: REQ=REQ-AUTH-POLICY-005; FEATURE="Unified Password Policy Validation"; ASPECT=Security; STATUS=TESTED; TEST=tests/test_bug731_password_policy.zig; OWNER=security; UPDATED=2026-07-31
+        // The env seed path historically enforced NO password policy at all,
+        // while `ALTER USER ... SET PASSWORD` over the wire enforced a 20-char
+        // 3-word passphrase — so a one-word 5-character admin password could be
+        // installed at first boot and then never be changeable to anything
+        // weaker-or-equal. Validate it here so the drift is visible.
+        //
+        // Deliberately WARN-ONLY, not fail-closed: refusing to boot would brick
+        // existing deployments whose seed predates this check, on upgrade. The
+        // operator is told exactly what is wrong and how it differs from what
+        // the server will demand at the next password change.
+        // See docs/@BUGS_731.md bug 4.
+        if (password_from_env) {
+            if (geode_auth.PasswordPolicy.geodeSecure().validate(password)) |reason| {
+                log.warn("GEODE_ADMIN_PASSWORD/GEODE_DEFAULT_PASSWORD does not meet the server's password policy. The seed is being ACCEPTED for backward compatibility, but the same password would be REJECTED by 'ALTER USER ... SET PASSWORD'. Seed a policy-compliant passphrase (>=20 chars, upper and lower case, >=3 space-separated words) to remove this warning.", &.{
+                    Attr.string("reason", reason),
+                });
+            }
+        }
+
         // 3. Hash password with Argon2id (canonical implementation)
         const password_hash = try geode_auth.hashPasswordArgon2id(self.allocator, password);
         defer self.allocator.free(password_hash);
