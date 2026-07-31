@@ -9230,6 +9230,18 @@ pub fn build(b: *std.Build) void {
     const gap0914_step = b.step("test-gap0914", "Run GAP-0914/GAP-0916 aggregation semantics regressions (unknown GROUP BY key, sum/avg type errors)");
     gap0914_step.dependOn(&run_gap0914_tests.step);
 
+    // Bug 731 (#6, #8): count(DISTINCT …) must not return NULL and must honor
+    // the ISO <set quantifier> on every aggregate; the vector similarity
+    // functions (distance/similarity/euclidean/knn) must compute instead of
+    // silently resolving to NULL, and an unresolved function must be rejected.
+    const bug731_aggvec_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_bug731_aggregates_vectors.zig"), .target = target, .optimize = optimize });
+    bug731_aggvec_test_mod.addImport("geode", root_mod);
+    const bug731_aggvec_tests = b.addTest(.{ .root_module = bug731_aggvec_test_mod });
+    const run_bug731_aggvec_tests = b.addRunArtifact(bug731_aggvec_tests);
+    shardDep(test_step, &run_bug731_aggvec_tests.step, 0, test_shard_loads, test_shard_index);
+    const bug731_aggvec_step = b.step("test-bug731-aggvec", "Run bug-731 count(DISTINCT) and vector similarity function regressions");
+    bug731_aggvec_step.dependOn(&run_bug731_aggvec_tests.step);
+
     // GAP-0911: GPS policy DDL (CREATE/DROP/ALTER POLICY) authorization —
     // admin-only under the same RBAC bar as mutating geode.auth.* procedures.
     const gap0911_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_gap0911_policy_ddl_authz.zig"), .target = target, .optimize = optimize });
