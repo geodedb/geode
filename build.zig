@@ -9207,6 +9207,18 @@ pub fn build(b: *std.Build) void {
     const gap0912_step = b.step("test-gap0912", "Run GAP-0912/GAP-0913 variable-length pattern semantics regressions");
     gap0912_step.dependOn(&run_gap0912_tests.step);
 
+    // Bug 731 (#5, #7): chained-MATCH clauses must keep the first clause's
+    // inline property scoping; var-length quantifiers inside a multi-hop chain
+    // must be honored; node-identity =/<> must compare ids not pointers; a
+    // path variable carried through WITH must keep its value (length(path)).
+    const bug731_match_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_bug731_match_scoping.zig"), .target = target, .optimize = optimize });
+    bug731_match_test_mod.addImport("geode", root_mod);
+    const bug731_match_tests = b.addTest(.{ .root_module = bug731_match_test_mod });
+    const run_bug731_match_tests = b.addRunArtifact(bug731_match_tests);
+    shardDep(test_step, &run_bug731_match_tests.step, 0, test_shard_loads, test_shard_index);
+    const bug731_match_step = b.step("test-bug731-match", "Run bug-731 chained-MATCH scoping and WITH path-length regressions");
+    bug731_match_step.dependOn(&run_bug731_match_tests.step);
+
     // GAP-0914/GAP-0916: aggregation semantics — GROUP BY on an unresolvable
     // identifier must error (not collapse to one null group); sum()/avg()
     // over a non-numeric column must raise TypeMismatch (not 0 / NULL).
