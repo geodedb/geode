@@ -294,8 +294,13 @@ pub fn eqVals(a: Value, b: Value) bool {
         .Bool => |ab| b == .Bool and ab == b.Bool,
         .Str => |as| b == .Str and std.mem.eql(u8, as, b.Str),
         .Decimal => |ad| b == .Decimal and ad.coeff == b.Decimal.coeff and ad.scale == b.Decimal.scale,
-        .Node => |an| b == .Node and an == b.Node, // Compare node pointers
-        .Edge => |ae| b == .Edge and ae == b.Edge, // Compare edge pointers
+        // CANARY: REQ=REQ-BUG731-MATCH-SCOPING; FEATURE="NodeComparison"; ASPECT=IdentityById; STATUS=TESTED; TEST=tests/test_bug731_match_scoping.zig:406; OWNER=value_types; UPDATED=2026-07-31
+        // Graph elements compare by IDENTITY (id), never by pointer. Node/Edge
+        // pointers are not stable: getNodePtrForScan mints a fresh *Node per
+        // call and the executor heap-allocates per-row copies, so pointer
+        // equality was never true even for the same node.
+        .Node => |an| b == .Node and an.id == b.Node.id,
+        .Edge => |ae| b == .Edge and ae.id == b.Edge.id,
         .List => |al| blk: {
             if (b != .List) break :blk false;
             const bl = b.List;
@@ -330,10 +335,10 @@ pub fn eqVals(a: Value, b: Value) bool {
             const bp = b.Path;
             if (ap.nodes.len != bp.nodes.len or ap.edges.len != bp.edges.len) break :blk false;
             for (ap.nodes, bp.nodes) |an, bn| {
-                if (an != bn) break :blk false;
+                if (an.id != bn.id) break :blk false;
             }
             for (ap.edges, bp.edges) |ae, be| {
-                if (ae != be) break :blk false;
+                if (ae.id != be.id) break :blk false;
             }
             break :blk true;
         },

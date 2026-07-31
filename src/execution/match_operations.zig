@@ -4972,6 +4972,89 @@ fn computeMultiNodeAggregation(allocator: std.mem.Allocator, expr: ast.Expr, gro
     return Value{ .Null = {} };
 }
 
+/// One endpoint reachable through a variable-length hop, together with the
+/// relationship list that got there (the ISO GQL binding for a quantified
+/// relationship variable).
+const VarLenTarget = struct {
+    node: *graph_store.Node,
+    edges: []Value,
+};
+
+// CANARY: REQ=REQ-BUG731-MATCH-SCOPING; FEATURE="MultiChainRelationshipMatch"; ASPECT=VarLengthHop; STATUS=TESTED; TEST=tests/test_bug731_match_scoping.zig:327; OWNER=execution; UPDATED=2026-07-31
+/// Expand a variable-length relationship hop out of `start_node`, returning
+/// every endpoint whose path length satisfies the `*min..max` quantifier.
+/// Applies the relationship type/direction and properties, graph scoping,
+/// tenant filtering, RLS, and the pattern's right-node labels/properties.
+///
+/// Before this existed, `executeMultiChainRelationshipMatch` silently ignored
+/// `rel.min_len`/`rel.max_len` and degraded every quantified hop to a single
+/// fixed hop — so `-[:R*0..1]-(x)-[:S]->(y)` returned the *1..1 answer.
+fn expandVarLengthHop(
+    allocator: std.mem.Allocator,
+    store: *graph_store.GraphStore,
+    rls_row: *std.StringHashMap(rls.Value),
+    start_node: *graph_store.Node,
+    hop: ast.Hop,
+    filter_graph: []const u8,
+    filter_tenant: ?[]const u8,
+    prop_env: Env,
+    path_mode: ast.PathMode,
+    out: *std.ArrayList(VarLenTarget),
+) !void {
+    const min_len = hop.rel.min_len orelse 0;
+    const max_len = hop.rel.max_len;
+    const rel_type: ?[]const u8 = if (hop.rel.types.len > 0) hop.rel.types[0] else null;
+    const rel_direction: u8 = switch (hop.rel.dir) {
+        .right => 'r',
+        .left => 'l',
+        .undirected => 'u',
+    };
+
+    var path_iter = try execution.PathIterator.init(allocator, store, start_node.id, min_len, max_len, rel_type, rel_direction, path_mode);
+    defer path_iter.deinit();
+
+    while (try path_iter.next()) |raw_path| {
+        var path = raw_path;
+        defer path.deinit(allocator);
+        if (path.nodes.items.len == 0) continue;
+
+        const end_id = path.nodes.items[path.nodes.items.len - 1];
+        const end_node = store.getNodePtrForScan(end_id) orelse continue;
+        // Graph scoping + tenant + RLS on the endpoint, same as every other
+        // seeding site in this executor.
+        if (!std.mem.eql(u8, end_node.graph_name, filter_graph)) continue;
+        if (!passesTenantFilter(end_node.*, filter_tenant)) continue;
+        if (!passesRLSFilter(rls_row, end_node.*)) continue;
+        if (!matchesLabels(end_node, hop.right.labels)) continue;
+        if (!nodeMatchesProps(allocator, end_node, hop.right.props, prop_env)) continue;
+
+        var edge_values = try allocator.alloc(Value, path.edges.items.len);
+        var edges_ok = true;
+        for (path.edges.items, 0..) |eid, i| {
+            const ep = store.getEdgePtrHydrated(eid) orelse {
+                edges_ok = false;
+                break;
+            };
+            // GAP-0846: edge-object tenant check on every relationship traversed.
+            if (!passesTenantFilterEdge(ep.*, filter_tenant)) {
+                edges_ok = false;
+                break;
+            }
+            if (!matchesEdgeProperties(allocator, ep.*, hop.rel.props)) {
+                edges_ok = false;
+                break;
+            }
+            edge_values[i] = Value{ .Edge = ep };
+        }
+        if (!edges_ok) {
+            allocator.free(edge_values);
+            continue;
+        }
+
+        try out.append(allocator, .{ .node = end_node, .edges = edge_values });
+    }
+}
+
 // CANARY: REQ=REQ-GQL-MULTI-CHAIN-REL-001; FEATURE="MultiChainRelationshipMatch"; ASPECT=Execution; STATUS=TESTED; TEST=geodetestlab/specs/gql_pattern_matching_comprehensive.yml; OWNER=engine; UPDATED=2025-12-23
 // Handle multiple chains with relationships that share variables
 // e.g., MATCH (p:Person)-[:WORKS_FOR]->(c:Company), (p)-[:PURCHASED]->(pr:Product)
@@ -4988,16 +5071,33 @@ fn executeMultiChainRelationshipMatch(allocator: std.mem.Allocator, q: ast.Query
     // GAP-0279: Get tenant filter from session context
     const filter_tenant = try getSessionTenantFilter();
 
+    // CANARY: REQ=REQ-BUG731-MATCH-SCOPING; FEATURE="MultiChainRelationshipMatch"; ASPECT=InlineNodeProps; STATUS=TESTED; TEST=tests/test_bug731_match_scoping.zig:201; OWNER=execution; UPDATED=2026-07-31
+    // Env used to evaluate inline node-property predicates (`{k: <expr>}`).
+    // Only parameters are in scope; property expressions that reference a
+    // pattern variable are skipped by nodeMatchesProps and re-checked later
+    // by the WHERE evaluation once the full binding env exists.
+    const prop_env = Env{
+        .names = &.{},
+        .values = &.{},
+        .param_names = param_names,
+        .param_values = param_values,
+        .allocator = allocator,
+    };
+
     // MatchBinding type for tracking variable->node mappings (named differently to avoid shadowing)
     const MatchBinding = struct {
         vars: std.StringHashMap(*graph_store.Node),
         edge_vars: std.StringHashMap(*graph_store.Edge),
+        // Quantified (`*min..max`) relationship variables bind to the LIST of
+        // relationships traversed, not a single edge.
+        rel_list_vars: std.StringHashMap([]Value),
         alloc: std.mem.Allocator,
 
         fn init(alloc: std.mem.Allocator) @This() {
             return .{
                 .vars = std.StringHashMap(*graph_store.Node).init(alloc),
                 .edge_vars = std.StringHashMap(*graph_store.Edge).init(alloc),
+                .rel_list_vars = std.StringHashMap([]Value).init(alloc),
                 .alloc = alloc,
             };
         }
@@ -5005,6 +5105,7 @@ fn executeMultiChainRelationshipMatch(allocator: std.mem.Allocator, q: ast.Query
         fn deinit(self: *@This()) void {
             self.vars.deinit();
             self.edge_vars.deinit();
+            self.rel_list_vars.deinit();
         }
 
         fn clone(self: *const @This()) !@This() {
@@ -5019,6 +5120,13 @@ fn executeMultiChainRelationshipMatch(allocator: std.mem.Allocator, q: ast.Query
             var edge_iter = self.edge_vars.iterator();
             while (edge_iter.next()) |entry| {
                 try new_binding.edge_vars.put(entry.key_ptr.*, entry.value_ptr.*);
+            }
+            if (self.rel_list_vars.count() > 0) {
+                try new_binding.rel_list_vars.ensureTotalCapacity(@intCast(self.rel_list_vars.count() + 1));
+                var list_iter = self.rel_list_vars.iterator();
+                while (list_iter.next()) |entry| {
+                    try new_binding.rel_list_vars.put(entry.key_ptr.*, entry.value_ptr.*);
+                }
             }
             return new_binding;
         }
@@ -5060,16 +5168,63 @@ fn executeMultiChainRelationshipMatch(allocator: std.mem.Allocator, q: ast.Query
         // First chain has relationships
         const hop = first_chain.hops[0];
         const left_labels = hop.left.labels;
+        const left_props = hop.left.props;
         const rel_type: ?[]const u8 = if (hop.rel.types.len > 0) hop.rel.types[0] else null;
         const rel_props = hop.rel.props;
         const right_labels = hop.right.labels;
+        const right_props = hop.right.props;
         // CANARY: REQ=REQ-GQL-UNDIRECTED-PATTERN-001; FEATURE="UndirectedPatternMatch"; ASPECT=DirectionHandling; STATUS=TESTED; TEST=geodetestlab/specs/undirected_pattern_matching.yml; OWNER=engine; UPDATED=2026-01-29
         // Get relationship direction for proper edge traversal
         const rel_dir = hop.rel.dir;
 
+        // CANARY: REQ=REQ-BUG731-MATCH-SCOPING; FEATURE="MultiChainRelationshipMatch"; ASPECT=VarLengthFirstHop; STATUS=TESTED; TEST=tests/test_bug731_match_scoping.zig:327; OWNER=execution; UPDATED=2026-07-31
+        // A quantified first hop (`-[:R*min..max]-`) must expand paths, not a
+        // single edge. Seed the left candidates exactly like the fixed-hop
+        // branches below (label index when available, graph-scoped scan
+        // otherwise, always tenant + RLS + inline-property filtered), then
+        // expand each one through expandVarLengthHop.
+        if (hop.rel.min_len != null or hop.rel.max_len != null) {
+            var left_candidates: std.ArrayList(*graph_store.Node) = .empty;
+            defer left_candidates.deinit(allocator);
+
+            if (left_labels.len > 0) {
+                var label_node_ids = try store.getNodesByLabels(allocator, filter_graph, left_labels, storageTenantFilter(filter_tenant));
+                defer label_node_ids.deinit(allocator);
+                for (label_node_ids.items) |node_id| {
+                    const left_node = store.getNodePtrForScan(node_id) orelse continue;
+                    if (!passesTenantFilter(left_node.*, filter_tenant)) continue;
+                    if (!passesRLSFilter(&rls_row_local, left_node.*)) continue;
+                    if (!nodeMatchesProps(allocator, left_node, left_props, prop_env)) continue;
+                    try left_candidates.append(allocator, left_node);
+                }
+            } else {
+                var node_iter = store.iterateNodesInGraph(filter_graph);
+                while (node_iter.next()) |left_node| {
+                    if (!passesTenantFilter(left_node.*, filter_tenant)) continue;
+                    if (!passesRLSFilter(&rls_row_local, left_node.*)) continue;
+                    if (!nodeMatchesProps(allocator, left_node, left_props, prop_env)) continue;
+                    try left_candidates.append(allocator, left_node);
+                }
+            }
+
+            var targets: std.ArrayList(VarLenTarget) = .empty;
+            defer targets.deinit(allocator);
+            for (left_candidates.items) |left_node| {
+                targets.clearRetainingCapacity();
+                try expandVarLengthHop(allocator, store, &rls_row_local, left_node, hop, filter_graph, filter_tenant, prop_env, effectivePathMode(q), &targets);
+                for (targets.items) |target| {
+                    var binding = MatchBinding.init(allocator);
+                    if (hop.left.name) |v| try binding.vars.put(v, left_node);
+                    if (hop.right.name) |v| try binding.vars.put(v, target.node);
+                    if (hop.rel.name) |rn| try binding.rel_list_vars.put(rn, target.edges);
+                    if (needs_hop_tracking) try binding.vars.put(chain_last_right_key, target.node);
+                    try bindings.append(allocator, binding);
+                }
+            }
+        }
         // CANARY: REQ=REQ-AUTO-INDEX-SCAN-002; FEATURE="AutoIdIndex"; ASPECT=RelationshipLabelIndexScan; STATUS=TESTED; TEST=geodetestlab/specs/geode_graph_algorithms.yml; OWNER=engine; UPDATED=2026-06-11
         // Find all matching relationships using label_index when labels are present
-        if (left_labels.len > 0) {
+        else if (left_labels.len > 0) {
             var label_node_ids = try store.getNodesByLabels(allocator, filter_graph, left_labels, storageTenantFilter(filter_tenant));
             defer label_node_ids.deinit(allocator);
 
@@ -5080,6 +5235,8 @@ fn executeMultiChainRelationshipMatch(allocator: std.mem.Allocator, q: ast.Query
                 if (!passesTenantFilter(left_node.*, filter_tenant)) continue;
                 // GAP-0510: Filter by RLS denied labels
                 if (!passesRLSFilter(&rls_row_local, left_node.*)) continue;
+                // BUG-731: honor the anchor's inline property predicate.
+                if (!nodeMatchesProps(allocator, left_node, left_props, prop_env)) continue;
 
                 // Zero-copy edge iteration: use getOutgoingEdgeIds/getIncomingEdgeIds
                 // to avoid allocating a temporary Edge slice per node.
@@ -5099,6 +5256,8 @@ fn executeMultiChainRelationshipMatch(allocator: std.mem.Allocator, q: ast.Query
                         if (!passesTenantFilter(right_node.*, filter_tenant)) continue;
                         if (!passesRLSFilter(&rls_row_local, right_node.*)) continue;
                         if (!matchesLabels(right_node, right_labels)) continue;
+                        // BUG-731: honor the right pattern's inline property predicate.
+                        if (!nodeMatchesProps(allocator, right_node, right_props, prop_env)) continue;
                         var binding = MatchBinding.init(allocator);
                         if (hop.left.name) |v| try binding.vars.put(v, left_node);
                         if (hop.right.name) |v| try binding.vars.put(v, right_node);
@@ -5121,6 +5280,8 @@ fn executeMultiChainRelationshipMatch(allocator: std.mem.Allocator, q: ast.Query
                         if (!passesTenantFilter(right_node.*, filter_tenant)) continue;
                         if (!passesRLSFilter(&rls_row_local, right_node.*)) continue;
                         if (!matchesLabels(right_node, right_labels)) continue;
+                        // BUG-731: honor the right pattern's inline property predicate.
+                        if (!nodeMatchesProps(allocator, right_node, right_props, prop_env)) continue;
                         var binding = MatchBinding.init(allocator);
                         if (hop.left.name) |v| try binding.vars.put(v, left_node);
                         if (hop.right.name) |v| try binding.vars.put(v, right_node);
@@ -5141,6 +5302,8 @@ fn executeMultiChainRelationshipMatch(allocator: std.mem.Allocator, q: ast.Query
                 // the relaxed storageTenantFilter() label scan (anchor node).
                 if (!passesTenantFilter(right_node.*, filter_tenant)) continue;
                 if (!passesRLSFilter(&rls_row_local, right_node.*)) continue;
+                // BUG-731: honor the right pattern's inline property predicate.
+                if (!nodeMatchesProps(allocator, right_node, right_props, prop_env)) continue;
 
                 // Zero-copy edge iteration: use getIncomingEdgeIds/getOutgoingEdgeIds
                 // to avoid allocating a temporary Edge slice per node.
@@ -5161,6 +5324,8 @@ fn executeMultiChainRelationshipMatch(allocator: std.mem.Allocator, q: ast.Query
                         if (!std.mem.eql(u8, left_node.graph_name, filter_graph)) continue;
                         if (!passesTenantFilter(left_node.*, filter_tenant)) continue;
                         if (!passesRLSFilter(&rls_row_local, left_node.*)) continue;
+                        // BUG-731: honor the anchor's inline property predicate.
+                        if (!nodeMatchesProps(allocator, left_node, left_props, prop_env)) continue;
                         var binding = MatchBinding.init(allocator);
                         if (hop.left.name) |v| try binding.vars.put(v, left_node);
                         if (hop.right.name) |v| try binding.vars.put(v, right_node);
@@ -5183,6 +5348,8 @@ fn executeMultiChainRelationshipMatch(allocator: std.mem.Allocator, q: ast.Query
                         if (!std.mem.eql(u8, left_node.graph_name, filter_graph)) continue;
                         if (!passesTenantFilter(left_node.*, filter_tenant)) continue;
                         if (!passesRLSFilter(&rls_row_local, left_node.*)) continue;
+                        // BUG-731: honor the anchor's inline property predicate.
+                        if (!nodeMatchesProps(allocator, left_node, left_props, prop_env)) continue;
                         var binding = MatchBinding.init(allocator);
                         if (hop.left.name) |v| try binding.vars.put(v, left_node);
                         if (hop.right.name) |v| try binding.vars.put(v, right_node);
@@ -5219,7 +5386,12 @@ fn executeMultiChainRelationshipMatch(allocator: std.mem.Allocator, q: ast.Query
                     // GAP-0846 hardening: also tenant-check the edge OBJECT
                     // (symmetry with the left/right-anchor label branches);
                     // fail-closed cheap string compare, short-circuited first.
-                    if (passesTenantFilterEdge(edge_ptr.*, filter_tenant) and std.mem.eql(u8, from_node.graph_name, filter_graph) and std.mem.eql(u8, to_node.graph_name, filter_graph) and passesTenantFilter(from_node.*, filter_tenant) and passesTenantFilter(to_node.*, filter_tenant) and passesRLSFilter(&rls_row_local, from_node.*) and passesRLSFilter(&rls_row_local, to_node.*)) {
+                    // BUG-731: the endpoints' inline property predicates are folded
+                    // into the guard (NOT an early `continue`) because an
+                    // undirected pattern evaluates this edge again below with the
+                    // endpoints swapped — skipping the iteration would drop the
+                    // reversed orientation that may well satisfy the predicate.
+                    if (passesTenantFilterEdge(edge_ptr.*, filter_tenant) and std.mem.eql(u8, from_node.graph_name, filter_graph) and std.mem.eql(u8, to_node.graph_name, filter_graph) and passesTenantFilter(from_node.*, filter_tenant) and passesTenantFilter(to_node.*, filter_tenant) and passesRLSFilter(&rls_row_local, from_node.*) and passesRLSFilter(&rls_row_local, to_node.*) and nodeMatchesProps(allocator, from_node, left_props, prop_env) and nodeMatchesProps(allocator, to_node, right_props, prop_env)) {
                         var binding = MatchBinding.init(allocator);
                         if (hop.left.name) |v| try binding.vars.put(v, from_node);
                         if (hop.right.name) |v| try binding.vars.put(v, to_node);
@@ -5232,7 +5404,9 @@ fn executeMultiChainRelationshipMatch(allocator: std.mem.Allocator, q: ast.Query
                     // rls_row_local aliasing: see note on the parallel
                     // .right/.undirected branch above.
                     // GAP-0846 hardening: edge-object tenant check (symmetry).
-                    if (passesTenantFilterEdge(edge_ptr.*, filter_tenant) and std.mem.eql(u8, from_node.graph_name, filter_graph) and std.mem.eql(u8, to_node.graph_name, filter_graph) and passesTenantFilter(from_node.*, filter_tenant) and passesTenantFilter(to_node.*, filter_tenant) and passesRLSFilter(&rls_row_local, from_node.*) and passesRLSFilter(&rls_row_local, to_node.*)) {
+                    // BUG-731: endpoints' inline property predicates folded into the
+                    // guard — see the note on the .right/.undirected branch above.
+                    if (passesTenantFilterEdge(edge_ptr.*, filter_tenant) and std.mem.eql(u8, from_node.graph_name, filter_graph) and std.mem.eql(u8, to_node.graph_name, filter_graph) and passesTenantFilter(from_node.*, filter_tenant) and passesTenantFilter(to_node.*, filter_tenant) and passesRLSFilter(&rls_row_local, from_node.*) and passesRLSFilter(&rls_row_local, to_node.*) and nodeMatchesProps(allocator, to_node, left_props, prop_env) and nodeMatchesProps(allocator, from_node, right_props, prop_env)) {
                         var binding = MatchBinding.init(allocator);
                         if (hop.left.name) |v| try binding.vars.put(v, to_node);
                         if (hop.right.name) |v| try binding.vars.put(v, from_node);
@@ -5253,6 +5427,8 @@ fn executeMultiChainRelationshipMatch(allocator: std.mem.Allocator, q: ast.Query
             while (node_iter.next()) |left_node| {
                 if (!passesTenantFilter(left_node.*, filter_tenant)) continue;
                 if (!passesRLSFilter(&rls_row_local, left_node.*)) continue;
+                // BUG-731: honor the anchor's inline property predicate.
+                if (!nodeMatchesProps(allocator, left_node, left_props, prop_env)) continue;
 
                 const outgoing_edge_ids = if (rel_dir == .right or rel_dir == .undirected) (store.getOutgoingEdgeIds(left_node.id) orelse &[_]u64{}) else &[_]u64{};
                 const incoming_edge_ids = if (rel_dir == .left or rel_dir == .undirected) (store.getIncomingEdgeIds(left_node.id) orelse &[_]u64{}) else &[_]u64{};
@@ -5265,6 +5441,8 @@ fn executeMultiChainRelationshipMatch(allocator: std.mem.Allocator, q: ast.Query
                         if (!std.mem.eql(u8, right_node.graph_name, filter_graph)) continue;
                         if (!passesTenantFilter(right_node.*, filter_tenant)) continue;
                         if (!passesRLSFilter(&rls_row_local, right_node.*)) continue;
+                        // BUG-731: honor the right pattern's inline property predicate.
+                        if (!nodeMatchesProps(allocator, right_node, right_props, prop_env)) continue;
                         var binding = MatchBinding.init(allocator);
                         if (hop.left.name) |v| try binding.vars.put(v, left_node);
                         if (hop.right.name) |v| try binding.vars.put(v, right_node);
@@ -5282,6 +5460,8 @@ fn executeMultiChainRelationshipMatch(allocator: std.mem.Allocator, q: ast.Query
                         if (!std.mem.eql(u8, right_node.graph_name, filter_graph)) continue;
                         if (!passesTenantFilter(right_node.*, filter_tenant)) continue;
                         if (!passesRLSFilter(&rls_row_local, right_node.*)) continue;
+                        // BUG-731: honor the right pattern's inline property predicate.
+                        if (!nodeMatchesProps(allocator, right_node, right_props, prop_env)) continue;
                         var binding = MatchBinding.init(allocator);
                         if (hop.left.name) |v| try binding.vars.put(v, left_node);
                         if (hop.right.name) |v| try binding.vars.put(v, right_node);
@@ -5310,6 +5490,7 @@ fn executeMultiChainRelationshipMatch(allocator: std.mem.Allocator, q: ast.Query
                 // RLS denied-labels check missing on this index fast path.
                 if (!passesTenantFilter(node.*, filter_tenant)) continue;
                 if (!passesRLSFilter(&rls_row_local, node.*)) continue;
+                if (!nodeMatchesProps(allocator, node, node_pattern.props, prop_env)) continue;
                 var binding = MatchBinding.init(allocator);
                 if (node_pattern.name) |v| try binding.vars.put(v, node);
                 try bindings.append(allocator, binding);
@@ -5323,6 +5504,7 @@ fn executeMultiChainRelationshipMatch(allocator: std.mem.Allocator, q: ast.Query
             while (node_iter.next()) |node| {
                 if (!passesTenantFilter(node.*, filter_tenant)) continue;
                 if (!passesRLSFilter(&rls_row_local, node.*)) continue;
+                if (!nodeMatchesProps(allocator, node, node_pattern.props, prop_env)) continue;
                 var binding = MatchBinding.init(allocator);
                 if (node_pattern.name) |v| try binding.vars.put(v, node);
                 try bindings.append(allocator, binding);
@@ -5354,6 +5536,33 @@ fn executeMultiChainRelationshipMatch(allocator: std.mem.Allocator, q: ast.Query
                 const left_node = if (extra_left_var) |lv| existing.vars.get(lv) else existing.vars.get(chain_last_right_key);
 
                 if (left_node) |ln| {
+                    // BUG-731: honor this hop's left inline property predicate
+                    // (normally already enforced as the previous hop's right
+                    // pattern, but a chain may re-state it).
+                    if (!nodeMatchesProps(allocator, ln, extra_hop.left.props, prop_env)) continue;
+
+                    // CANARY: REQ=REQ-BUG731-MATCH-SCOPING; FEATURE="MultiChainRelationshipMatch"; ASPECT=VarLengthExtraHop; STATUS=TESTED; TEST=tests/test_bug731_match_scoping.zig:327; OWNER=execution; UPDATED=2026-07-31
+                    // A quantified hop expands paths, not a single edge.
+                    if (extra_hop.rel.min_len != null or extra_hop.rel.max_len != null) {
+                        var targets: std.ArrayList(VarLenTarget) = .empty;
+                        defer targets.deinit(allocator);
+                        try expandVarLengthHop(allocator, store, &rls_row_local, ln, extra_hop, filter_graph, filter_tenant, prop_env, effectivePathMode(q), &targets);
+                        for (targets.items) |target| {
+                            // Cyclic constraint: if right_var is already bound, the target must match.
+                            if (extra_right_var) |rv| {
+                                if (existing.vars.get(rv)) |already_bound| {
+                                    if (already_bound.id != target.node.id) continue;
+                                }
+                            }
+                            var new_binding = try existing.clone();
+                            if (extra_right_var) |rv| try new_binding.vars.put(rv, target.node);
+                            if (extra_rel_var) |rn| try new_binding.rel_list_vars.put(rn, target.edges);
+                            try new_binding.vars.put(chain_last_right_key, target.node);
+                            try new_bindings.append(allocator, new_binding);
+                        }
+                        continue;
+                    }
+
                     const outgoing_edge_ids = if (extra_rel_dir == .right or extra_rel_dir == .undirected) (store.getOutgoingEdgeIds(ln.id) orelse &[_]u64{}) else &[_]u64{};
                     const incoming_edge_ids = if (extra_rel_dir == .left or extra_rel_dir == .undirected) (store.getIncomingEdgeIds(ln.id) orelse &[_]u64{}) else &[_]u64{};
 
@@ -5447,8 +5656,10 @@ fn executeMultiChainRelationshipMatch(allocator: std.mem.Allocator, q: ast.Query
 
         const hop = chain.hops[0];
         const left_var = hop.left.name;
+        const left_props = hop.left.props;
         const rel_type: ?[]const u8 = if (hop.rel.types.len > 0) hop.rel.types[0] else null;
         const right_labels = hop.right.labels;
+        const right_props = hop.right.props;
         const right_var = hop.right.name;
         const chain_rel_var = hop.rel.name;
         // CANARY: REQ=REQ-GQL-UNDIRECTED-PATTERN-001; FEATURE="UndirectedPatternMatch"; ASPECT=SubsequentChains; STATUS=TESTED; TEST=geodetestlab/specs/undirected_pattern_matching.yml; OWNER=engine; UPDATED=2026-01-29
@@ -5464,6 +5675,29 @@ fn executeMultiChainRelationshipMatch(allocator: std.mem.Allocator, q: ast.Query
             const left_node = if (left_var) |lv| existing.vars.get(lv) else null;
 
             if (left_node) |ln| {
+                // BUG-731: honor this chain's left inline property predicate.
+                if (!nodeMatchesProps(allocator, ln, left_props, prop_env)) continue;
+
+                // CANARY: REQ=REQ-BUG731-MATCH-SCOPING; FEATURE="MultiChainRelationshipMatch"; ASPECT=VarLengthSubsequentChain; STATUS=TESTED; TEST=tests/test_bug731_match_scoping.zig:327; OWNER=execution; UPDATED=2026-07-31
+                // A quantified hop expands paths, not a single edge.
+                if (hop.rel.min_len != null or hop.rel.max_len != null) {
+                    var targets: std.ArrayList(VarLenTarget) = .empty;
+                    defer targets.deinit(allocator);
+                    try expandVarLengthHop(allocator, store, &rls_row_local, ln, hop, filter_graph, filter_tenant, prop_env, effectivePathMode(q), &targets);
+                    for (targets.items) |target| {
+                        if (right_var) |rv| {
+                            if (existing.vars.get(rv)) |already_bound| {
+                                if (already_bound.id != target.node.id) continue;
+                            }
+                        }
+                        var new_binding = try existing.clone();
+                        if (right_var) |rv| try new_binding.vars.put(rv, target.node);
+                        if (chain_rel_var) |rn| try new_binding.rel_list_vars.put(rn, target.edges);
+                        try new_bindings.append(allocator, new_binding);
+                    }
+                    continue;
+                }
+
                 // Find edges from this node matching the relationship type and direction
                 const outgoing_edge_ids = if (rel_dir == .right or rel_dir == .undirected) (store.getOutgoingEdgeIds(ln.id) orelse &[_]u64{}) else &[_]u64{};
                 const incoming_edge_ids = if (rel_dir == .left or rel_dir == .undirected) (store.getIncomingEdgeIds(ln.id) orelse &[_]u64{}) else &[_]u64{};
@@ -5481,6 +5715,8 @@ fn executeMultiChainRelationshipMatch(allocator: std.mem.Allocator, q: ast.Query
                         if (!passesTenantFilter(right_node.*, filter_tenant)) continue;
                         if (!passesRLSFilter(&rls_row_local, right_node.*)) continue;
                         if (!matchesLabels(right_node, right_labels)) continue;
+                        // BUG-731: honor the right pattern's inline property predicate.
+                        if (!nodeMatchesProps(allocator, right_node, right_props, prop_env)) continue;
 
                         // #557: clone() now pre-sizes HashMap to avoid rehash
                         var new_binding = try existing.clone();
@@ -5503,6 +5739,8 @@ fn executeMultiChainRelationshipMatch(allocator: std.mem.Allocator, q: ast.Query
                         if (!passesTenantFilter(right_node.*, filter_tenant)) continue;
                         if (!passesRLSFilter(&rls_row_local, right_node.*)) continue;
                         if (!matchesLabels(right_node, right_labels)) continue;
+                        // BUG-731: honor the right pattern's inline property predicate.
+                        if (!nodeMatchesProps(allocator, right_node, right_props, prop_env)) continue;
 
                         // #557: clone() now pre-sizes HashMap to avoid rehash
                         var new_binding = try existing.clone();
@@ -5527,6 +5765,8 @@ fn executeMultiChainRelationshipMatch(allocator: std.mem.Allocator, q: ast.Query
                     if (!passesTenantFilter(new_left_node.*, filter_tenant)) continue;
                     if (!passesRLSFilter(&rls_row_local, new_left_node.*)) continue;
                     if (!matchesLabels(new_left_node, left_labels)) continue;
+                    // BUG-731: honor the left pattern's inline property predicate.
+                    if (!nodeMatchesProps(allocator, new_left_node, left_props, prop_env)) continue;
 
                     // Find matching edges from this node based on direction
                     const outgoing_edge_ids = if (rel_dir == .right or rel_dir == .undirected) (store.getOutgoingEdgeIds(new_left_node.id) orelse &[_]u64{}) else &[_]u64{};
@@ -5545,6 +5785,8 @@ fn executeMultiChainRelationshipMatch(allocator: std.mem.Allocator, q: ast.Query
                             if (!passesTenantFilter(right_node.*, filter_tenant)) continue;
                             if (!passesRLSFilter(&rls_row_local, right_node.*)) continue;
                             if (!matchesLabels(right_node, right_labels)) continue;
+                            // BUG-731: honor the right pattern's inline property predicate.
+                            if (!nodeMatchesProps(allocator, right_node, right_props, prop_env)) continue;
 
                             // Clone existing binding and add both new variables
                             var new_binding = try existing.clone();
@@ -5577,6 +5819,8 @@ fn executeMultiChainRelationshipMatch(allocator: std.mem.Allocator, q: ast.Query
                             if (!passesTenantFilter(right_node.*, filter_tenant)) continue;
                             if (!passesRLSFilter(&rls_row_local, right_node.*)) continue;
                             if (!matchesLabels(right_node, right_labels)) continue;
+                            // BUG-731: honor the right pattern's inline property predicate.
+                            if (!nodeMatchesProps(allocator, right_node, right_props, prop_env)) continue;
 
                             // Clone existing binding and add both new variables
                             var new_binding = try existing.clone();
@@ -5637,6 +5881,13 @@ fn executeMultiChainRelationshipMatch(allocator: std.mem.Allocator, q: ast.Query
             try env_values.append(allocator, Value{ .Edge = entry.value_ptr.* });
         }
 
+        // Quantified relationship variables bind to the relationship LIST.
+        var rel_list_iter = binding.rel_list_vars.iterator();
+        while (rel_list_iter.next()) |entry| {
+            try env_names.append(allocator, entry.key_ptr.*);
+            try env_values.append(allocator, Value{ .List = entry.value_ptr.* });
+        }
+
         const env = Env{
             .names = env_names.items,
             .values = env_values.items,
@@ -5653,6 +5904,41 @@ fn executeMultiChainRelationshipMatch(allocator: std.mem.Allocator, q: ast.Query
                 else => false,
             };
             if (!passes) continue;
+        }
+
+        // CANARY: REQ=REQ-BUG731-MATCH-SCOPING; FEATURE="MultiChainRelationshipMatch"; ASPECT=SetClauses; STATUS=TESTED; TEST=tests/test_bug731_match_scoping.zig:248; OWNER=execution; UPDATED=2026-07-31
+        // Apply SET clauses. This executor previously DROPPED every SET, so a
+        // write-carrying chained MATCH reported a match count and mutated
+        // nothing. Mutations are scoped to the variables actually bound by the
+        // (now correctly filtered) pattern.
+        for (q.set_clauses) |set_clause| {
+            switch (set_clause) {
+                .Property => |prop| {
+                    if (binding.vars.get(prop.target.object)) |target_node| {
+                        const value = try eval.evalExpr(allocator, prop.value, env);
+                        try property_mutation.setNodePropertyFromValue(allocator, store, target_node.labels, target_node.id, prop.target.property, value);
+                    } else if (binding.edge_vars.get(prop.target.object)) |target_edge| {
+                        const value = try eval.evalExpr(allocator, prop.value, env);
+                        try property_mutation.setEdgePropertyFromValue(allocator, store, target_edge.label, target_edge.id, prop.target.property, value);
+                    }
+                },
+                .Labels => |label_set| {
+                    if (binding.vars.get(label_set.node)) |target_node| {
+                        for (label_set.labels) |label| {
+                            try store.addNodeLabel(target_node.id, label);
+                        }
+                    }
+                },
+                .AllProperties => |all_props| {
+                    if (binding.vars.get(all_props.node)) |target_node| {
+                        const props_value = try eval.evalExpr(allocator, all_props.properties, env);
+                        try property_mutation.replaceNodeProperties(allocator, store, target_node, props_value);
+                    } else if (binding.edge_vars.get(all_props.node)) |target_edge| {
+                        const props_value = try eval.evalExpr(allocator, all_props.properties, env);
+                        try property_mutation.replaceEdgeProperties(allocator, store, target_edge, props_value);
+                    }
+                },
+            }
         }
 
         // Evaluate items (WITH items if present, RETURN items otherwise)
@@ -7322,6 +7608,54 @@ fn effectivePathMode(q: ast.Query) ast.PathMode {
     return chain.path_mode;
 }
 
+// CANARY: REQ=REQ-BUG731-MATCH-SCOPING; FEATURE="WithClauseRelationshipVars"; ASPECT=EnvLayout; STATUS=TESTED; TEST=tests/test_bug731_match_scoping.zig:604; OWNER=execution; UPDATED=2026-07-31
+/// Single source of truth for the variable layout of a relationship-pattern
+/// row. `executeSingleHopEdgeTraversal` and `executeVariableLengthPathTraversal`
+/// copy their env values into the `has_with` row in this exact order, and the
+/// WITH column-name builder in `executeMatchQueryImpl` names the columns from
+/// the same struct. Previously the two were reconstructed independently, which
+/// produced BOTH a missing `chain_path_var` column (so `length(path)` through a
+/// WITH resolved to Null → 0) and a rel/right-node transposition in the
+/// variable-length row builder.
+const RelEnvLayout = struct {
+    names: [4][]const u8 = undefined,
+    len: usize = 0,
+    left_idx: ?usize = null,
+    rel_idx: ?usize = null,
+    right_idx: ?usize = null,
+    path_idx: ?usize = null,
+
+    fn init(
+        left_node_var: ?[]const u8,
+        rel_var: ?[]const u8,
+        right_node_var: ?[]const u8,
+        chain_path_var: ?[]const u8,
+    ) RelEnvLayout {
+        var self = RelEnvLayout{};
+        if (left_node_var) |v| {
+            self.names[self.len] = v;
+            self.left_idx = self.len;
+            self.len += 1;
+        }
+        if (rel_var) |v| {
+            self.names[self.len] = v;
+            self.rel_idx = self.len;
+            self.len += 1;
+        }
+        if (right_node_var) |v| {
+            self.names[self.len] = v;
+            self.right_idx = self.len;
+            self.len += 1;
+        }
+        if (chain_path_var) |v| {
+            self.names[self.len] = v;
+            self.path_idx = self.len;
+            self.len += 1;
+        }
+        return self;
+    }
+};
+
 /// Execute variable-length path traversal for a given left node.
 /// Expands BFS paths from the left node and applies right-node filters,
 /// WHERE/FILTER clauses, and row building for each valid path.
@@ -7438,22 +7772,19 @@ fn executeVariableLengthPathTraversal(
         // B07 Fix: For 0-length paths (single node, no edges), edge list is empty but path is still valid
 
         // Create environment with all matched elements (including path variable if present)
-        // Stack-based: env size is always <=4 (left_node_var, right_node_var, rel_var, chain_path_var)
-        var stack_env_names: [4][]const u8 = undefined;
+        // Stack-based: env size is always <=4. The slot order is defined ONCE by
+        // RelEnvLayout, which the WITH column-name builder also uses.
+        const layout = RelEnvLayout.init(left_node_var, rel_var, right_node_var, chain_path_var);
+        var stack_env_names: [4][]const u8 = layout.names;
         var stack_env_values: [4]Value = undefined;
-        var env_idx: usize = 0;
-        if (left_node_var) |var_name| {
-            stack_env_names[env_idx] = var_name;
-            stack_env_values[env_idx] = Value{ .Node = left_node };
-            env_idx += 1;
+        const env_idx: usize = layout.len;
+        if (layout.left_idx) |slot| {
+            stack_env_values[slot] = Value{ .Node = left_node };
         }
-        if (right_node_var) |var_name| {
-            stack_env_names[env_idx] = var_name;
-            stack_env_values[env_idx] = Value{ .Node = right_node_ptr };
-            env_idx += 1;
+        if (layout.right_idx) |slot| {
+            stack_env_values[slot] = Value{ .Node = right_node_ptr };
         }
-        if (rel_var) |var_name| {
-            stack_env_names[env_idx] = var_name;
+        if (layout.rel_idx) |slot| {
             // CANARY: REQ=REQ-GQL-VARLEN-RELVAR-LIST; FEATURE="VariableLengthPathRelList"; ASPECT=EdgeListBinding; STATUS=TESTED; TEST=geodetestlab/specs/gql_pattern_matching_comprehensive.yml; OWNER=engine; UPDATED=2026-01-15
             // For variable-length paths, bind rel_var to the list of all edges
             // This enables all(rel IN r WHERE ...) to iterate over all relationships in the path
@@ -7465,10 +7796,9 @@ fn executeVariableLengthPathTraversal(
                     edge_values[i] = Value{ .Null = {} };
                 }
             }
-            stack_env_values[env_idx] = Value{ .List = edge_values };
-            env_idx += 1;
+            stack_env_values[slot] = Value{ .List = edge_values };
         }
-        if (chain_path_var) |var_name| {
+        if (layout.path_idx) |slot| {
             // Build the path value from the PathInfo
             // Use dynamic arrays to handle missing nodes/edges gracefully
             // GAP-0220 FIX: Use try for proper error propagation
@@ -7487,12 +7817,10 @@ fn executeVariableLengthPathTraversal(
                 }
             }
 
-            stack_env_names[env_idx] = var_name;
-            stack_env_values[env_idx] = Value{ .Path = .{
+            stack_env_values[slot] = Value{ .Path = .{
                 .nodes = path_nodes_list.toOwnedSlice(allocator) catch &.{},
                 .edges = path_edges_list.toOwnedSlice(allocator) catch &.{},
             } };
-            env_idx += 1;
         }
 
         const env = Env{
@@ -7692,10 +8020,11 @@ fn executeSingleHopEdgeTraversal(
             }
 
             // Create environment with all matched elements using stack buffers
-            // CANARY: REQ=REQ-GQL-WITH-REL-VARS-002; FEATURE="WithClauseRelationshipVars"; ASPECT=ValueOrder; STATUS=TESTED; OWNER=execution; UPDATED=2026-01-29
-            // Order must match column order: left, rel, right, [path]
-            // Stack-based: env size is always <=4 (left_node_var, rel_var, right_node_var, chain_path_var)
-            var stack_env_names: [4][]const u8 = undefined;
+            // CANARY: REQ=REQ-GQL-WITH-REL-VARS-002; FEATURE="WithClauseRelationshipVars"; ASPECT=ValueOrder; STATUS=TESTED; OWNER=execution; UPDATED=2026-07-31
+            // The slot order is defined ONCE by RelEnvLayout, which the WITH
+            // column-name builder also uses: left, rel, right, [path].
+            const layout = RelEnvLayout.init(left_node_var, rel_var, right_node_var, chain_path_var);
+            var stack_env_names: [4][]const u8 = layout.names;
             var stack_env_values: [4]Value = undefined;
             // GAP-0334-PATH-002: heap-allocated path arrays for fixed-length single-hop
             // path-variable binding. Kept alive for the row; freed below if WHERE/FILTER
@@ -7703,38 +8032,30 @@ fn executeSingleHopEdgeTraversal(
             var path_alive: bool = false;
             var path_nodes_buf: []*const graph_store.Node = &.{};
             var path_edges_buf: []*const graph_store.Edge = &.{};
-            var env_idx: usize = 0;
-            if (left_node_var) |var_name| {
-                stack_env_names[env_idx] = var_name;
-                stack_env_values[env_idx] = Value{ .Node = left_node };
-                env_idx += 1;
+            const env_idx: usize = layout.len;
+            if (layout.left_idx) |slot| {
+                stack_env_values[slot] = Value{ .Node = left_node };
             }
-            if (rel_var) |var_name| {
-                stack_env_names[env_idx] = var_name;
-                stack_env_values[env_idx] = Value{ .Edge = edge };
-                env_idx += 1;
+            if (layout.rel_idx) |slot| {
+                stack_env_values[slot] = Value{ .Edge = edge };
             }
-            if (right_node_var) |var_name| {
-                stack_env_names[env_idx] = var_name;
-                stack_env_values[env_idx] = Value{ .Node = right_node_ptr };
-                env_idx += 1;
+            if (layout.right_idx) |slot| {
+                stack_env_values[slot] = Value{ .Node = right_node_ptr };
             }
             // GAP-0334-PATH-002: bind path variable for fixed-length single-hop patterns.
             // `MATCH p = (a)-[:T]->(b) RETURN length(p)` requires p to be a Path value
             // with 2 nodes and 1 edge so length(p) returns 1, not 0.
-            if (chain_path_var) |var_name| {
+            if (layout.path_idx) |slot| {
                 path_nodes_buf = try allocator.alloc(*const graph_store.Node, 2);
                 path_edges_buf = try allocator.alloc(*const graph_store.Edge, 1);
                 path_nodes_buf[0] = left_node;
                 path_nodes_buf[1] = right_node_ptr;
                 path_edges_buf[0] = edge;
                 path_alive = true;
-                stack_env_names[env_idx] = var_name;
-                stack_env_values[env_idx] = Value{ .Path = .{
+                stack_env_values[slot] = Value{ .Path = .{
                     .nodes = path_nodes_buf,
                     .edges = path_edges_buf,
                 } };
-                env_idx += 1;
             }
 
             const env = Env{
@@ -10479,6 +10800,15 @@ pub fn executeMatchQueryImpl(allocator: std.mem.Allocator, q: ast.Query, param_n
                     if (!passes_props) continue;
                 }
 
+                // CANARY: REQ=REQ-GQL-WITH-WHERE-PRE-003; FEATURE="WithWherePreFilter"; ASPECT=RelationshipDeferToPostWith; STATUS=TESTED; TEST=tests/test_bug731_match_scoping.zig:573; OWNER=execution; UPDATED=2026-07-31
+                // The parser AND-s a post-WITH WHERE into the same q.where_clause
+                // as a pre-WITH one, so a match-level evaluation cannot resolve
+                // WITH-introduced aliases (`WITH ... length(path) AS L WHERE L > 2`
+                // dropped every row). Defer to the post-WITH filter, which is
+                // applied unconditionally below — the same rule the simple-node
+                // branch already follows.
+                const traversal_where = if (has_with) null else q.where_clause;
+
                 // CANARY: REQ=REQ-GQL-080; FEATURE="VariableLengthPaths"; ASPECT=Execution; STATUS=TESTED; OWNER=engine; UPDATED=2025-10-09
                 // Check if we have a variable-length path pattern
                 if (var_len_min != null or var_len_max != null) {
@@ -10488,10 +10818,10 @@ pub fn executeMatchQueryImpl(allocator: std.mem.Allocator, q: ast.Query, param_n
                         resolveLimitParam(q.limit, q.limit_param, param_names, param_values)
                     else
                         null;
-                    try executeVariableLengthPathTraversal(allocator, store, left_node, &rows, var_len_min, var_len_max, rel_type, rel_direction, right_labels, right_props, left_node_var, right_node_var, rel_var, chain_path_var, param_names, param_values, q.where_clause, q.filter_clause, has_with, items, limit_hint, effectivePathMode(q));
+                    try executeVariableLengthPathTraversal(allocator, store, left_node, &rows, var_len_min, var_len_max, rel_type, rel_direction, right_labels, right_props, left_node_var, right_node_var, rel_var, chain_path_var, param_names, param_values, traversal_where, q.filter_clause, has_with, items, limit_hint, effectivePathMode(q));
                 } else {
                     // Standard single-hop edge traversal — delegated to helper
-                    try executeSingleHopEdgeTraversal(allocator, store, left_node, &rows, rel_direction, rel_type, rel_props_filter, right_labels, right_props, left_node_var, rel_var, right_node_var, chain_path_var, param_names, param_values, filter_tenant, q.where_clause, q.filter_clause, q.set_clauses, has_with, items);
+                    try executeSingleHopEdgeTraversal(allocator, store, left_node, &rows, rel_direction, rel_type, rel_props_filter, right_labels, right_props, left_node_var, rel_var, right_node_var, chain_path_var, param_names, param_values, filter_tenant, traversal_where, q.filter_clause, q.set_clauses, has_with, items);
                 }
             }
         } else {
@@ -10908,9 +11238,14 @@ pub fn executeMatchQueryImpl(allocator: std.mem.Allocator, q: ast.Query, param_n
             defer col_list.deinit(allocator);
 
             if (has_relationship) {
-                if (left_node_var) |v| try col_list.append(allocator, try allocator.dupe(u8, v));
-                if (rel_var) |v| try col_list.append(allocator, try allocator.dupe(u8, v));
-                if (right_node_var) |v| try col_list.append(allocator, try allocator.dupe(u8, v));
+                // CANARY: REQ=REQ-BUG731-MATCH-SCOPING; FEATURE="WithClauseRelationshipVars"; ASPECT=ColumnOrder; STATUS=TESTED; TEST=tests/test_bug731_match_scoping.zig:553; OWNER=execution; UPDATED=2026-07-31
+                // Names come from the SAME layout the traversal helpers used to
+                // fill the row, so a named path variable gets its column (fixing
+                // `length(path)` through a WITH) and rel/right cannot transpose.
+                const layout = RelEnvLayout.init(left_node_var, rel_var, right_node_var, chain_path_var);
+                for (layout.names[0..layout.len]) |v| {
+                    try col_list.append(allocator, try allocator.dupe(u8, v));
+                }
             } else {
                 if (match_variable) |v| try col_list.append(allocator, try allocator.dupe(u8, v));
             }

@@ -665,19 +665,10 @@ pub fn evalBinary(alloc: std.mem.Allocator, op: ast.BinOp, l: Value, r: Value) E
                 const eq = l.Bool == r.Bool;
                 return .{ .Bool = if (op == .Eq) eq else !eq };
             }
-            // CANARY: REQ=REQ-GQL-NODE-COMPARE-001; FEATURE="NodeComparison"; ASPECT=EqualityInequality; STATUS=TESTED; TEST=geodetestlab/specs/gql_expressions_comprehensive.yml; OWNER=engine; UPDATED=2025-12-23
-            // Node comparisons: compare by node ID (two nodes are equal if they have the same ID)
-            if (l == .Node and r == .Node) {
-                if (op != .Eq and op != .Ne) return EvalError.TypeMismatch;
-                const eq = l.Node.id == r.Node.id;
-                return .{ .Bool = if (op == .Eq) eq else !eq };
-            }
-            // Edge comparisons: compare by edge ID
-            if (l == .Edge and r == .Edge) {
-                if (op != .Eq and op != .Ne) return EvalError.TypeMismatch;
-                const eq = l.Edge.id == r.Edge.id;
-                return .{ .Bool = if (op == .Eq) eq else !eq };
-            }
+            // CANARY: REQ=REQ-GQL-NODE-COMPARE-001; FEATURE="NodeComparison"; ASPECT=EqualityInequality; STATUS=TESTED; TEST=tests/test_bug731_match_scoping.zig:406; OWNER=engine; UPDATED=2026-07-31
+            // Node/Edge Eq/Ne are handled by the same-tag `eqVals` branch above,
+            // which now compares by ID (value_types.eqVals). Ordering operators
+            // on graph elements are not defined, so they land here.
             return EvalError.TypeMismatch;
         },
         .Concat => blk6: {
@@ -2597,6 +2588,11 @@ fn tryBasicFunction(allocator: std.mem.Allocator, function_name: []const u8, arg
             .Str => |s| return Value{ .Int = @intCast(s.len) },
             .List => |l| return Value{ .Int = @intCast(l.len) },
             .Path => |p| return Value{ .Int = @intCast(p.edges.len) }, // Path length is number of relationships
+            // CANARY: REQ=REQ-BUG731-MATCH-SCOPING; FEATURE="PathLength"; ASPECT=NullPropagation; STATUS=TESTED; TEST=tests/test_bug731_match_scoping.zig:553; OWNER=eval; UPDATED=2026-07-31
+            // GQL 3VL: length(NULL) is NULL, not 0. Returning 0 made an
+            // unresolved binding (e.g. a path variable dropped by a WITH
+            // projection) silently look like a real zero-length path.
+            .Null => return Value{ .Null = {} },
             else => return Value{ .Int = 0 },
         }
     }
