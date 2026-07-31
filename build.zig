@@ -9228,6 +9228,22 @@ pub fn build(b: *std.Build) void {
     const gap0911_step = b.step("test-gap0911", "Run GAP-0911 policy DDL admin-only authorization regression");
     gap0911_step.dependOn(&run_gap0911_tests.step);
 
+    // Bug 731-4: ALTER USER <u> SET PASSWORD changes the password but never
+    // clears the durable password_reset_required flag, so the account is
+    // permanently locked out of running any query (docs/@BUGS_731.md §4).
+    const bug731_pwreset_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_bug731_password_reset.zig"), .target = target, .optimize = optimize });
+    bug731_pwreset_test_mod.addImport("geode", root_mod);
+    bug731_pwreset_test_mod.addImport("schema", schema_mod);
+    bug731_pwreset_test_mod.addImport("auth_graph_manager", auth_graph_manager_mod);
+    bug731_pwreset_test_mod.addImport("geode_auth", auth_mod);
+    bug731_pwreset_test_mod.addImport("user_storage", user_storage_mod);
+    bug731_pwreset_test_mod.link_libc = true;
+    const bug731_pwreset_tests = b.addTest(.{ .root_module = bug731_pwreset_test_mod });
+    const run_bug731_pwreset_tests = b.addRunArtifact(bug731_pwreset_tests);
+    shardDep(test_step, &run_bug731_pwreset_tests.step, 0, test_shard_loads, test_shard_index);
+    const bug731_pwreset_step = b.step("test-bug731-pwreset", "Run bug-731 ALTER USER password_reset_required lockout regressions");
+    bug731_pwreset_step.dependOn(&run_bug731_pwreset_tests.step);
+
     // GAP-0908/GAP-0909: startup fail-closed — unwritable audit sink must be
     // a clean typed refusal with no leaked allocation; a missing --data-dir
     // is created (mkdir -p) instead of crashing.
