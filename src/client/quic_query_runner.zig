@@ -204,11 +204,26 @@ pub fn consumeQueryWithTransport(
         var arena = std.heap.ArenaAllocator.init(allocator);
         defer arena.deinit();
         const event = try transport.nextEvent(arena.allocator(), opts.timeout_secs) orelse break;
+        // Bug 731-4b: a status-only ExecutionResponse (status set, no payload)
+        // is the server's TERMINAL acknowledgement for a statement that
+        // produces no result set — `ALTER USER ... SET PASSWORD` answers this
+        // way on purpose, because a page payload would make the REPL issue a
+        // PULL that fails with "no active result set". It carries no schema, so
+        // `schema_received` never flips and this loop used to re-block on the
+        // un-tolerant `try nextEvent` above until the receive deadline elapsed,
+        // surfacing a committed write as "Error: query execution failed".
+        // Errors are NOT status-only (buildErrorResponse always attaches an
+        // `.error` payload), so this only terminates on genuine acks.
+        const status_only_ack = switch (event) {
+            .execute => |exec_resp| exec_resp.payload == null,
+            else => false,
+        };
         const summary = try consumer.handleEvent(allocator, event, 0);
         schema_received = schema_received or summary.schema_received;
         saw_inline_page = saw_inline_page or summary.saw_page;
         inline_final = inline_final or summary.page_final;
         if (summary.stop) return;
+        if (status_only_ack) return;
     }
 
     // Read ALL remaining inline pages.  The server sends all result pages

@@ -5400,8 +5400,14 @@ fn handleAlterUserSetPassword(
     };
 
     // Persist the password change to the auth graph store so it survives restarts.
-    // The in-memory user_mgmt store is ephemeral; the SecurityManager's callback
-    // writes the new hash to the persistent GraphStore via AuthGraphManager.
+    // The in-memory user_mgmt store is ephemeral; the persistent writer installed
+    // on user_mgmt above already wrote the new hash to the GraphStore via
+    // AuthGraphManager.updateUserPassword — which is also where the DURABLE
+    // password_reset_required flag is cleared (bug 731-4a). This call keeps the
+    // SecurityManager's own in-memory user record in step; its graph-persist
+    // callback is suppressed while the user_mgmt writer owns durability, so one
+    // ALTER USER advances the persisted auth_version exactly once (bug 731-4c).
+    // The gRPC twin (transport/grpc_server.zig) runs the identical sequence.
     if (state.security_manager) |sm| {
         if (sm.getUserIdByUsername(username)) |user_id| {
             sm.updatePassword(user_id, new_password) catch |err| {

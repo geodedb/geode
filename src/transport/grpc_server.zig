@@ -1879,7 +1879,14 @@ fn handleExecute(request_bytes: []const u8, allocator: std.mem.Allocator) ![]u8 
                 return encodeMessage(allocator, resp);
             };
 
-            // Persist the password change to the auth graph store so it survives restarts.
+            // Persist the password change to the auth graph store so it survives
+            // restarts. Twin of handleAlterUserSetPassword in
+            // server/quic_connection_handler.zig — same seams, so the bug 731
+            // fixes apply here too: the durable password_reset_required clear
+            // lives in AuthGraphManager.updateUserPassword (4a), reached through
+            // the user_mgmt persistent writer above, and this SecurityManager
+            // call mirrors the change in memory without a second durable write
+            // while that writer owns durability (4c).
             if (state.security_manager) |sm| {
                 if (sm.getUserIdByUsername(parsed.username)) |user_id| {
                     sm.updatePassword(user_id, parsed.new_password) catch |err| {

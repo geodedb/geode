@@ -460,6 +460,33 @@ pub const AuditLog = struct {
 // ---- Security Context ----
 pub const SecurityContext = struct { user: *User, roles: []const Role, session_attributes: std.StringHashMap([]const u8), request_attributes: std.StringHashMap([]const u8), environment: EnvironmentInfo };
 
+// CANARY: REQ=REQ-AUTH-GRAPH-PERSIST-005; FEATURE="Runtime Auth Graph Persistence"; ASPECT=SingleDurableWriter; STATUS=TESTED; TEST=tests/test_bug731_password_reset.zig; OWNER=security; UPDATED=2026-07-31
+/// Bug 731-4c: `ALTER USER ... SET PASSWORD` persists through TWO seams for one
+/// logical change — `user_management.updateUserPassword` (write-through via its
+/// persistent writer) and `SecurityManager.updatePassword` (graph_persist_password
+/// callback) — and both land on `AuthGraphManager.updateUserPassword`, which bumps
+/// `auth_version` per call. Two bumps for one change leave the persisted version
+/// ahead of the user_management cache, so every later request sees a stale cache,
+/// invalidates it and re-hydrates the user straight back out of the graph.
+///
+/// `user_management` publishes ownership here when a persistent user writer with an
+/// `update_password_fn` is installed (the server always installs one). While owned,
+/// SecurityManager mirrors the password change in memory but skips its own durable
+/// write, so one logical change advances the persisted `auth_version` exactly once.
+/// When no external writer is installed (offline CLI, unit tests wiring only the
+/// SecurityManager), SecurityManager remains the durable writer as before.
+var external_password_persistence_owner = std.atomic.Value(bool).init(false);
+
+/// Declare (or withdraw) an external owner of durable password persistence.
+/// Called by `user_management.setPersistentUserWriter` / `deinitUserStore`.
+pub fn setExternalPasswordPersistenceOwner(owned: bool) void {
+    external_password_persistence_owner.store(owned, .release);
+}
+
+pub fn externalPasswordPersistenceOwned() bool {
+    return external_password_persistence_owner.load(.acquire);
+}
+
 // ---- SecurityManager ----
 pub const SecurityManager = struct {
     const Self = @This();
@@ -641,7 +668,11 @@ pub const SecurityManager = struct {
     }
 
     /// Persist a password change to the auth graph store.
+    /// Bug 731-4c: skipped while an external durable owner (the user_management
+    /// persistent writer) is installed, so one logical password change performs
+    /// exactly one durable write and one auth_version bump.
     fn persistPasswordToGraph(self: *Self, user_id: u64, new_password_hash: []const u8) ?u64 {
+        if (externalPasswordPersistenceOwned()) return null;
         const agm_ptr = self.auth_graph_mgr orelse return null;
         const hk = &(self.hmac_key orelse return null);
         const cb = self.graph_persist_password orelse return null;

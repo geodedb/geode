@@ -816,14 +816,22 @@ fn handleUserChangePassword(allocator: std.mem.Allocator, _: []const u8, call_st
         if (args.len >= 2 and args[1].* == .String) old_pw = args[1].String;
         if (args.len >= 3 and args[2].* == .String) new_pw = args[2].String;
     }
-    // Verify old password before changing (old_pw used for authentication)
+    // Verify old password before changing (old_pw used for authentication).
+    // Bug 731 (same family) / MULTI_TENANCY_AUDIT_REPORT S6: a FAILED
+    // verification used to be logged and then ignored, so the change went
+    // through anyway and the caller was told "Password changed". Propagate.
     if (old_pw.len > 0) {
         _ = user_mgmt.authenticate(username, old_pw) catch |err| {
             log.warn("geode.auth.user_change_password: old password verification failed", &.{Attr.string("error", @errorName(err))});
+            return err;
         };
     }
+    // Bug 731 (same family): a failed password update used to be swallowed and
+    // still reported "Password changed for <user>" — a silent success on a
+    // failed change. Propagate so the caller sees the failure.
     user_mgmt.updateUserPassword(allocator, username, new_pw) catch |err| {
         log.warn("geode.auth.user_change_password failed", &.{Attr.string("error", @errorName(err))});
+        return err;
     };
     const columns = try allocator.alloc([]const u8, 1);
     columns[0] = try allocator.dupe(u8, "status");
@@ -843,8 +851,16 @@ fn handleUserResetPassword(allocator: std.mem.Allocator, _: []const u8, call_stm
         if (args.len >= 1 and args[0].* == .String) username = args[0].String;
         if (args.len >= 2 and args[1].* == .String) new_pw = args[1].String;
     }
+    // Bug 731 (same family): a failed reset used to be swallowed and still
+    // reported "Password reset for <user>". This is also the GQL-parser route
+    // for `ALTER USER <u> SET PASSWORD` (admin_ddl.executeAlterUser), which the
+    // wire intercept shadows — both must agree, and both must fail honestly.
+    // The durable `password_reset_required` clear happens in
+    // AuthGraphManager.updateUserPassword, which this path reaches through the
+    // user_management persistent writer.
     user_mgmt.updateUserPassword(allocator, username, new_pw) catch |err| {
         log.warn("geode.auth.user_reset_password failed", &.{Attr.string("error", @errorName(err))});
+        return err;
     };
     const columns = try allocator.alloc([]const u8, 1);
     columns[0] = try allocator.dupe(u8, "status");

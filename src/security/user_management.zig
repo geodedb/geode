@@ -392,7 +392,18 @@ pub fn setPersistentUserWriter(w: ?PersistentUserWriter) void {
     user_store_mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
     defer user_store_mutex.unlock(std.Io.Threaded.global_single_threaded.io());
     persistent_writer = w;
+    // Bug 731-4c: this writer owns the single durable password write for a
+    // logical password change; tell SecurityManager to stop duplicating it.
+    publishPasswordPersistenceOwnership();
     bumpAuthInvalidationEpoch();
+}
+
+/// Mirror `persistent_writer`'s password-write ownership into geode_auth so a
+/// SecurityManager password change does not perform a SECOND durable write for
+/// the same logical change. Caller must hold `user_store_mutex`.
+fn publishPasswordPersistenceOwnership() void {
+    const owned = if (persistent_writer) |w| w.update_password_fn != null else false;
+    geode_auth.setExternalPasswordPersistenceOwner(owned);
 }
 
 pub fn setCacheCapacityForTesting(max_entries: usize) !void {
@@ -425,6 +436,7 @@ pub fn deinitUserStore() void {
     }
     persistent_resolver = null;
     persistent_writer = null;
+    publishPasswordPersistenceOwnership();
     auth_invalidation_epoch.store(1, .release);
     auth_flight_lane.store(0, .release);
 

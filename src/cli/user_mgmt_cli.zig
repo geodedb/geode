@@ -1,6 +1,5 @@
 const std = @import("std");
 const build_options = @import("build_options");
-const cb = @import("crypto_backend");
 
 // Zig 0.16 compat: std.time.milliTimestamp/timestamp/microTimestamp removed.
 fn compat_milliTimestamp() i64 {
@@ -93,6 +92,8 @@ fn printUserUsage() void {
     printOut("  reset-password <username> --new-password <new>\n", .{});
     printOut("  reset-password <username> --generate-password\n", .{});
     printOut("\nNote: --password is required in production builds. Use --generate-password for random passwords.\n", .{});
+    printOut("Note: mutating subcommands refuse to run while another process holds the data dir open\n", .{});
+    printOut("      (a live server). Use ALTER USER ... SET PASSWORD over the wire, or pass --force.\n", .{});
 }
 
 fn printMfaSetupHelp() void {
@@ -182,6 +183,138 @@ fn extractDataDir(argv: [][:0]u8) ?[]const u8 {
     return null;
 }
 
+/// Resolve the data dir the offline auth store will be opened from, mirroring
+/// `initCliAuthManager`'s fallback chain (explicit --data-dir, then
+/// GEODE_DATA_DIR, then the packaged default).
+fn resolveDataDir(data_dir: ?[]const u8) []const u8 {
+    if (data_dir) |d| return d;
+    if (std.c.getenv("GEODE_DATA_DIR")) |p| return std.mem.span(p);
+    return "/var/lib/geode";
+}
+
+fn hasFlag(argv: [][:0]u8, flag: []const u8) bool {
+    for (argv) |arg| {
+        if (std.mem.eql(u8, arg, flag)) return true;
+    }
+    return false;
+}
+
+/// True when `subcommand` writes to the offline auth store.
+fn subcommandMutatesAuthStore(subcommand: []const u8) bool {
+    const mutating = [_][]const u8{
+        "create",          "delete",         "update", "assign-role",
+        "disable",         "enable",         "mfa",    "mfa-setup",
+        "change-password", "reset-password",
+    };
+    for (mutating) |m| {
+        if (std.mem.eql(u8, subcommand, m)) return true;
+    }
+    return false;
+}
+
+// CANARY: REQ=REQ-CLI-OFFLINE-AUTH-LOCK-001; FEATURE="OfflineAuthStoreSafety"; ASPECT=LiveServerDetection; STATUS=IMPL; OWNER=cli; UPDATED=2026-07-31
+/// Detect whether another live process currently holds the data dir open.
+///
+/// Bug 731 (adjacent finding): `geode user reset-password --data-dir /data` run
+/// against a LIVE server opens a SECOND AuthGraphManager over the same store and
+/// re-seals the HMAC chain out-of-process. The running server never sees the
+/// write (so the "reset" password is rejected over the network), and the two
+/// writers can clobber each other — a corrupted chain fails `verifyChain` at
+/// startup and bricks authentication for EVERY user.
+///
+/// There is no data-dir lock in the tree to reuse (the only file lock is the
+/// cluster-mode raft dir), and making the server take one is a startup-behaviour
+/// change well outside this fix. Instead this probes `/proc` for another process
+/// holding a file open under the data dir — which is exactly the `docker exec`
+/// -into-a-live-container case the report describes. Returns the holder's pid,
+/// or null when nothing holds it. The probe is best-effort: it returns null
+/// (i.e. "no holder detected") on non-Linux, and skips any process whose
+/// `/proc/<pid>/fd` is unreadable, so it can miss a holder owned by another
+/// user — it never reports a false positive.
+fn findDataDirHolderPid(allocator: std.mem.Allocator, data_dir: []const u8) ?std.c.pid_t {
+    if (comptime builtin.os.tag != .linux) return null;
+
+    const io = std.Io.Threaded.global_single_threaded.io();
+
+    const abs_dir: []const u8 = blk: {
+        if (std.fs.path.isAbsolute(data_dir)) break :blk allocator.dupe(u8, data_dir) catch return null;
+        const cwd = std.process.currentPathAlloc(io, allocator) catch return null;
+        defer allocator.free(cwd);
+        break :blk std.fs.path.join(allocator, &.{ cwd, data_dir }) catch return null;
+    };
+    defer allocator.free(abs_dir);
+    var prefix_len = abs_dir.len;
+    while (prefix_len > 0 and abs_dir[prefix_len - 1] == '/') prefix_len -= 1;
+    const prefix = abs_dir[0..prefix_len];
+    if (prefix.len == 0) return null;
+
+    const self_pid = std.c.getpid();
+
+    var proc_dir = std.Io.Dir.openDirAbsolute(io, "/proc", .{ .iterate = true }) catch return null;
+    defer proc_dir.close(io);
+
+    var link_buf: [std.Io.Dir.max_path_bytes]u8 = undefined;
+    var path_buf: [64]u8 = undefined;
+
+    var it = proc_dir.iterate();
+    while (true) {
+        const maybe_entry = it.next(io) catch break;
+        const entry = maybe_entry orelse break;
+        const pid = std.fmt.parseInt(std.c.pid_t, entry.name, 10) catch continue;
+        if (pid == self_pid) continue;
+
+        const fd_path = std.fmt.bufPrint(&path_buf, "/proc/{d}/fd", .{pid}) catch continue;
+        var fd_dir = std.Io.Dir.openDirAbsolute(io, fd_path, .{ .iterate = true }) catch continue;
+        defer fd_dir.close(io);
+
+        var fd_it = fd_dir.iterate();
+        while (true) {
+            const maybe_fd = fd_it.next(io) catch break;
+            const fd_entry = maybe_fd orelse break;
+            const n = fd_dir.readLink(io, fd_entry.name, &link_buf) catch continue;
+            const target = link_buf[0..n];
+            if (target.len > prefix.len and
+                std.mem.startsWith(u8, target, prefix) and
+                target[prefix.len] == '/')
+            {
+                return pid;
+            }
+        }
+    }
+    return null;
+}
+
+/// Refuse (or, with --force, loudly warn about) an offline auth-store mutation
+/// while another process holds the data dir open. See `findDataDirHolderPid`.
+fn guardOfflineAuthStoreWrite(
+    allocator: std.mem.Allocator,
+    data_dir: ?[]const u8,
+    subcommand: []const u8,
+    force: bool,
+) void {
+    const resolved = resolveDataDir(data_dir);
+    const holder = findDataDirHolderPid(allocator, resolved) orelse return;
+
+    std.debug.print(
+        "Error: data dir '{s}' is already open by another process (pid {d}) — refusing to run 'user {s}' offline.\n",
+        .{ resolved, holder, subcommand },
+    );
+    std.debug.print(
+        "  An offline auth write against a LIVE server is unsafe: the running server never sees it (the new password is rejected over the network),\n" ++
+            "  and the two writers can clobber each other's HMAC chain seal — a corrupted chain fails verification at startup and locks EVERY user out.\n",
+        .{},
+    );
+    std.debug.print(
+        "  Use the wire path instead: connect as the user and run  ALTER USER <username> SET PASSWORD '<new password>'  (or stop the server first).\n",
+        .{},
+    );
+    if (!force) {
+        std.debug.print("  Pass --force to override (accepting the corruption risk above).\n", .{});
+        std.process.exit(@intFromEnum(ExitCode.general_error));
+    }
+    std.debug.print("  --force given: proceeding anyway.\n", .{});
+}
+
 /// User management command handler
 /// Handles: user create, user list, user delete, user update, user show and additional auth helpers
 pub fn cmdUser(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !void {
@@ -217,6 +350,11 @@ pub fn cmdUser(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !
 
     // Open graph store for offline auth operations (after help check)
     const data_dir = extractDataDir(argv);
+    // Bug 731 (adjacent finding): refuse to mutate the auth store out-of-process
+    // while a live server holds the same data dir open.
+    if (subcommandMutatesAuthStore(subcommand)) {
+        guardOfflineAuthStoreWrite(allocator, data_dir, subcommand, hasFlag(argv, "--force"));
+    }
     var mgr = cli_auth.initCliAuthManager(allocator, data_dir) catch |err| {
         std.debug.print("Error: Failed to initialize auth store: {}\n", .{err});
         std.process.exit(@intFromEnum(ExitCode.general_error));
@@ -889,19 +1027,15 @@ pub fn cmdUser(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !
             std.debug.print("Error: password does not meet policy requirements (min 8 chars, letters and numbers)\n", .{});
             std.process.exit(@intFromEnum(ExitCode.general_error));
         }
-        // Verify old password if provided (constant-time comparison via hashing)
+        // Verify old password if provided. Bug 731 (adjacent finding): this
+        // used to compare Blake2(stored_field) against Blake2(plaintext), which
+        // only ever matched when the stored field WAS the plaintext — see the
+        // write below. Verify against the real Argon2id hash instead.
         if (old_pw) |old| {
             if (mgr.storage.getUserByUsername(username)) |existing| {
                 const stored = existing.getPasswordHash();
-                // Simple constant-time comparison via Blake2
-                // fips-guard: Blake2 is not FIPS-approved; fail closed in FIPS mode
-                if (comptime build_options.fips) return error.FipsUnsupported;
-                const Blake2 = std.crypto.hash.blake2.Blake2b256;
-                var stored_hash: [Blake2.digest_length]u8 = undefined;
-                var input_hash: [Blake2.digest_length]u8 = undefined;
-                Blake2.hash(stored, &stored_hash, .{});
-                Blake2.hash(old, &input_hash, .{});
-                if (!cb.timingSafeEql(&stored_hash, &input_hash)) {
+                const ok = geode_auth.verifyPasswordArgon2id(allocator, old, stored) catch false;
+                if (!ok) {
                     std.debug.print("Error: old password is incorrect\n", .{});
                     std.process.exit(@intFromEnum(ExitCode.general_error));
                 }
@@ -915,7 +1049,22 @@ pub fn cmdUser(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !
             std.debug.print("Error: user '{s}' not found in the auth store — password NOT changed\n", .{username});
             std.process.exit(@intFromEnum(ExitCode.general_error));
         };
-        try mgr.storage.updateUser(existing.id, null, final_new, null, null, null);
+        // Bug 731 (adjacent finding): this used to pass the PLAINTEXT password
+        // straight into the `password_hash` field of `updateUser` — storing the
+        // credential in the clear AND leaving the per-record HMAC and chain seal
+        // stale, so the next server start failed `verifyChain` with
+        // error.AuthChainTampered. Go through the same resealing seam
+        // reset-password uses (which also clears password_reset_required).
+        var kr = auth_graph_manager_mod.AuthGraphManager.resolveHmacKey(allocator, resolveDataDir(data_dir)) catch {
+            std.debug.print("Error: could not resolve HMAC key (set GEODE_AUTH_HMAC_KEY/GEODE_TDE_KEY or place .geode_hmac_key in the data dir)\n", .{});
+            std.process.exit(@intFromEnum(ExitCode.general_error));
+        };
+        const password_hash = try geode_auth.hashPasswordArgon2id(allocator, final_new);
+        defer allocator.free(password_hash);
+        _ = mgr.updateUserPassword(&kr.key, existing.id, password_hash) catch |err| {
+            std.debug.print("Error: failed to persist the new password for user '{s}': {s} — password NOT changed\n", .{ username, @errorName(err) });
+            std.process.exit(@intFromEnum(ExitCode.general_error));
+        };
         printOut("Password changed for user '{s}'\n", .{username});
         return;
     }
@@ -981,16 +1130,10 @@ pub fn cmdUser(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !
         // mutates the user record but the per-record HMAC + chain seal
         // never get re-signed, and the next server start fails with
         // error.AuthChainTampered (verifyChain at server_init.zig:314).
-        // Mirror initCliAuthManager's data_dir fallback so .geode_hmac_key
-        // is found at the default /var/lib/geode location when --data-dir
-        // is omitted. std.posix.getenv was removed in Zig 0.16; use
-        // std.c.getenv directly via a NUL-terminated key.
-        const resolved_data_dir: ?[]const u8 = blk: {
-            if (data_dir) |d| break :blk d;
-            const ptr = std.c.getenv("GEODE_DATA_DIR");
-            if (ptr) |p| break :blk std.mem.span(p);
-            break :blk "/var/lib/geode";
-        };
+        // `resolveDataDir` mirrors initCliAuthManager's data_dir fallback so
+        // .geode_hmac_key is found at the default /var/lib/geode location when
+        // --data-dir is omitted.
+        const resolved_data_dir: ?[]const u8 = resolveDataDir(data_dir);
         var kr = auth_graph_manager_mod.AuthGraphManager.resolveHmacKey(allocator, resolved_data_dir) catch {
             std.debug.print("Error: could not resolve HMAC key (set GEODE_AUTH_HMAC_KEY/GEODE_TDE_KEY or place .geode_hmac_key in the data dir)\n", .{});
             std.process.exit(@intFromEnum(ExitCode.general_error));
@@ -1001,19 +1144,20 @@ pub fn cmdUser(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !
             std.debug.print("Error: failed to persist the new password for user '{s}': {s} — password NOT reset\n", .{ username, @errorName(err) });
             std.process.exit(@intFromEnum(ExitCode.general_error));
         };
-        // Clear the password_reset_required flag — the operator just reset
-        // the password, so the next login should NOT bounce the user back
-        // through another reset flow.
-        var record = mgr.storage.user_cache.get(existing.id) orelse {
+        // The password_reset_required clear used to be open-coded here, followed
+        // by a SECOND updateUserPassword to re-seal — which advanced the durable
+        // auth_version twice for one reset (bug 731-4c, in miniature). The clear
+        // now lives in AuthGraphManager.updateUserPassword itself (bug 731-4a),
+        // so every password-change path — wire, procedure and offline CLI —
+        // agrees and one reset performs exactly one durable write.
+        if (mgr.storage.getUser(existing.id)) |record| {
+            if (record.password_reset_required) {
+                std.debug.print("Error: the forced-reset flag survived the password reset for user '{s}' — verify with 'geode user show {s}'\n", .{ username, username });
+                std.process.exit(@intFromEnum(ExitCode.general_error));
+            }
+        } else {
             std.debug.print("Error: user '{s}' vanished from the auth cache mid-reset — verify the reset with 'geode user show {s}'\n", .{ username, username });
             std.process.exit(@intFromEnum(ExitCode.general_error));
-        };
-        if (record.password_reset_required) {
-            record.password_reset_required = false;
-            record.updated_at = compat_milliTimestamp();
-            try mgr.storage.user_cache.put(existing.id, record);
-            try mgr.storage.upsertUserNode(record);
-            _ = try mgr.updateUserPassword(&kr.key, existing.id, password_hash);
         }
         printOut("Password reset for user '{s}'\n", .{username});
         return;

@@ -1086,12 +1086,26 @@ pub const AuthGraphManager = struct {
         try self.sealChain(hmac_key);
     }
 
-    // CANARY: REQ=REQ-AUTH-GRAPH-PERSIST-007; FEATURE="Runtime Auth Graph Persistence"; ASPECT=PasswordChange; STATUS=TESTED; TEST=geodetestlab/specs/geode_auth_ddl.yml; OWNER=security; UPDATED=2026-06-11
+    // CANARY: REQ=REQ-AUTH-GRAPH-PERSIST-007; FEATURE="Runtime Auth Graph Persistence"; ASPECT=PasswordChange; STATUS=TESTED; TEST=tests/test_bug731_password_reset.zig; OWNER=security; UPDATED=2026-07-31
     /// Update a user record's password hash in the graph store.
     /// Recomputes the record HMAC and reseals the chain.
+    ///
+    /// Bug 731-4a: changing the password satisfies a pending forced reset, so
+    /// the DURABLE `password_reset_required` flag is cleared here — for this
+    /// user only. Every password-change path (the wire `ALTER USER ... SET
+    /// PASSWORD` intercept via the user_management persistent writer, the
+    /// SecurityManager graph-persist callback, `geode.auth.user_*_password`,
+    /// and the offline `geode user reset-password` CLI) funnels through this
+    /// one seam, so clearing it here is what makes them agree. Leaving it set
+    /// used to bounce the account back through the reset gate on the very next
+    /// query with the NEW password — with no self-service escape.
+    /// The flag is part of the record HMAC input (`recomputeAndStoreUserHmac`),
+    /// so the reseal below is mandatory: a bare property write would fail
+    /// `verifyChain` and brick the next startup.
     pub fn updateUserPassword(self: *Self, hmac_key: *const [32]u8, user_id: u64, new_password_hash: []const u8) !u64 {
         var record = self.storage.user_cache.get(user_id) orelse return error.UserNotFound;
         record.password_hash_len = UserStorageBackend.copyIntoField(&record.password_hash, new_password_hash);
+        record.password_reset_required = false;
         record.password_changed_at = compat_milliTimestamp();
         record.updated_at = compat_milliTimestamp();
         record.auth_version += 1;
