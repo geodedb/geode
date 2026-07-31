@@ -74,6 +74,13 @@ ENV GEODE_LOG_LEVEL=info \
     GEODE_DATA_DIR=/data \
     GEODE_LISTEN=0.0.0.0:3141
 
+# Enable the out-of-band liveness endpoint the HEALTHCHECK probes:
+# GET http://127.0.0.1:$GEODE_METRICS_PORT/health (bound to loopback unless
+# GEODE_METRICS_BIND says otherwise). The server only starts that listener when
+# GEODE_METRICS_PORT is set, and docker/health-check.sh needs it so the probe
+# stays off the authenticated QUIC query path.
+ENV GEODE_METRICS_PORT=9090
+
 # Expose ports (QUIC + metrics)
 EXPOSE 3141/udp 9090/tcp
 

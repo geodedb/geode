@@ -41,6 +41,13 @@ WORKDIR /home/geode
 # Set default log level (can be overridden with -e LOG_LEVEL=debug)
 ENV LOG_LEVEL=error
 
+# Enable the out-of-band liveness endpoint the HEALTHCHECK probes:
+# GET http://127.0.0.1:$GEODE_METRICS_PORT/health (bound to loopback unless
+# GEODE_METRICS_BIND says otherwise). The server only starts that listener when
+# GEODE_METRICS_PORT is set, and docker/health-check.sh needs it so the probe
+# stays off the authenticated QUIC query path.
+ENV GEODE_METRICS_PORT=9090
+
 # Expose standard Geode ports (QUIC + gRPC + metrics)
 EXPOSE 3141/udp 50051/tcp 9090/tcp
 

@@ -54,7 +54,10 @@ services:
     - GEODE_DATA_DIR=/data
     - GEODE_LISTEN=0.0.0.0:3141
     healthcheck:
-      test: [CMD, /usr/local/bin/geode, query, --server, 127.0.0.1:3141, --insecure, RETURN 1 AS health]
+      # Shared probe: unauthenticated GET /health on GEODE_METRICS_PORT, off
+      # the QUIC query path. This image is built ReleaseSafe, so the CLI
+      # refuses --insecure (SEC-CLI-01) and the old probe never ran.
+      test: [CMD, /usr/local/bin/health-check.sh]
       interval: 10s
       timeout: 5s
       retries: 5

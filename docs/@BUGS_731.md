@@ -154,6 +154,35 @@ evidence), corroborated by `blog-posts/_shared/docker-compose.yml`'s
 inline comments (mechanism of the unquoted `$AUTH_ARGS` failure) and
 `blog-posts/_shared/bootstrap.sh`.
 
+**Corrections (verified 2026-07-31):**
+
+- The auth rate limiter is **per source IP**, not global
+  (`src/transport/quic.zig`: 10 attempts, 60s lockout), and it **does**
+  decay — `zig build test-auth-rate-limiter` and the
+  `authn_rate_limiter_expiry.yml` harness spec both prove expiry. The
+  observed "shared" lockout is real but comes from
+  `docker run --network container:<name>`, which shares the network
+  namespace and therefore the same `127.0.0.1` limiter key. The limiter is
+  correct; the probe was the defect. A probe that can never authenticate
+  simply refills 0→10 in ~50s and re-locks forever.
+- A third, previously unrecorded defect made the recommended replacement
+  probe unreliable: the `/health` liveness endpoint parsed METHOD/PATH out
+  of a buffer slice that the header-drain loop had already invalidated, so
+  a request whose bytes arrived in more than one TCP segment (what a
+  dependency-free `bash` `/dev/tcp` probe produces) got a bogus 404/400.
+
+**Fixed 2026-07-31.** `docker/health-check.sh` now probes the
+unauthenticated out-of-band liveness endpoint
+(`GET http://127.0.0.1:$GEODE_METRICS_PORT/health`) and only falls back to
+an authenticated query when BOTH `GEODE_USERNAME` and `GEODE_PASSWORD` are
+set — passed as real positional parameters, so a multi-word passphrase
+survives intact; the `# shellcheck disable=SC2086` suppression is gone.
+The 16 server Dockerfiles bake in `ENV GEODE_METRICS_PORT` so the listener
+actually starts, and `src/monitoring/metrics_server.zig` no longer
+misparses a segment-split request. Regressions:
+`make docker-healthcheck-test` (9/9) and `zig build test-metrics-server`
+(5/5).
+
 ---
 
 ## 2. CLI leaks memory on every authenticated request
@@ -213,6 +242,21 @@ description and stack trace), corroborated by
 noise). Described as reproduced "across multiple independent tasks" in
 the source material, though only one concrete stack trace instance is
 quoted in the evidence read for this document.
+
+**Correction (verified 2026-07-31, live server):** the title's "every
+authenticated request" is WRONG. Only `geode auth login` leaked (5
+reports); `geode query`, `CREATE`, `MATCH` and `SHOW USERS` leaked
+nothing. The leak fired once per `connectToServer`, whose only caller is
+`cmdAuthLogin`.
+
+**Fixed 2026-07-31.** The decoded `schema.ServerPacket` is now released on
+every path (success, `success=false`, and the `orelse error.InvalidMessage`
+path) in `src/client/hello_decode.zig`. Regression:
+`zig build test-bug731-cli-leak` (6/6, 0 leaks; 5/6 with 30 leaks before).
+The same change also stopped discarding
+`HelloResponse.password_reset_required`, which had hardcoded
+`.requires_password_reset = false` and made the CLI's post-login "password
+reset required" warning dead code — directly relevant to bug 4.
 
 ---
 
@@ -275,6 +319,26 @@ directly), and corroborated indirectly by
 `blog-posts/building-social-network/validate.sh` and
 `blog-posts/query-optimization-tips/validate.sh`, which both also pass
 `-e GEODE_ALLOW_INSECURE_TLS=1`.
+
+**Resolution (2026-07-31): NOT A DEFECT — documentation only.** This is
+deliberate defense-in-depth (SEC-CLI-01, GAP-0885d,
+`src/cli/insecure_tls_gate.zig`, unit-tested via
+`tests/test_s3_sigv4.zig`). The gate predicate is
+`insecure_requested AND NOT GEODE_ALLOW_INSECURE_TLS AND (is_release OR
+GEODE_ENV=production)`, where `is_release` is `builtin.mode != .Debug`.
+The refusal string the evidence never captured is, verbatim:
+
+```text
+SECURITY: refusing --insecure-tls-skip-verify — TLS certificate verification cannot be disabled under production conditions (release build or GEODE_ENV=production). Connections without verification are exposed to man-in-the-middle attacks. Use --ca-cert <path> to trust a private CA, or set GEODE_ALLOW_INSECURE_TLS=1 to explicitly acknowledge the risk.
+```
+
+The supported answer is `--ca-cert <path>`, not the acknowledgement
+variable. This is now documented in
+[DOCKER_OVERVIEW.md](DOCKER_OVERVIEW.md) ("Health Checks" →
+"`--insecure-tls-skip-verify` is refused in release builds"), together
+with the note that `.gitlab-ci.yml` deliberately builds Debug for the GQL
+compliance job for exactly this reason — which is why the release-image
+healthcheck path was never exercised in CI.
 
 ---
 

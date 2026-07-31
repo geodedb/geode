@@ -34,7 +34,13 @@ pub const AuthResult = struct {
 /// other than the returned `session_token` MUST be released before returning.
 pub fn decodeHelloAuthResult(allocator: std.mem.Allocator, frame_body: []const u8) !AuthResult {
     var reader: std.Io.Reader = .fixed(frame_body);
-    const packet = try protobuf.decode(schema.ServerPacket, &reader, allocator);
+    var packet = try protobuf.decode(schema.ServerPacket, &reader, allocator);
+    // The decoded wrapper owns `session_id`, the `capabilities` backing store
+    // plus one allocation per element, and `graph` when present. Release it on
+    // EVERY path (success and error) — the returned `session_token` is a
+    // separate dupe that outlives it.
+    defer packet.deinit(allocator);
+
     const resp = packet.quic orelse return error.InvalidMessage;
     switch (resp) {
         .hello => |h| {
@@ -44,7 +50,7 @@ pub fn decodeHelloAuthResult(allocator: std.mem.Allocator, frame_body: []const u
             }
             return AuthResult{
                 .session_token = try allocator.dupe(u8, h.session_id),
-                .requires_password_reset = false,
+                .requires_password_reset = h.password_reset_required,
             };
         },
         else => return error.ProtocolError,

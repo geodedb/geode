@@ -164,11 +164,33 @@ pub const MetricsServer = struct {
         var reader = stream.reader(io, &read_buf);
 
         // Request line: `METHOD SP PATH SP HTTP/VERSION\r\n`.
-        const req_line = reader.interface.takeDelimiterInclusive('\n') catch {
-            try self.serveBadRequest(stream);
-            return;
+        //
+        // CANARY: REQ=REQ-PROMETHEUS-WIRE-004; FEATURE="Prometheus Metrics Endpoint"; ASPECT=RequestLineLifetime; STATUS=TESTED; TEST=tests/test_metrics_server_lifecycle.zig; OWNER=monitoring; UPDATED=2026-07-31
+        //
+        // `takeDelimiterInclusive` returns a slice into the reader's OWN
+        // buffer, valid only until the next read. The header drain below
+        // refills that buffer, so the request line must be copied out before
+        // draining — parsing it afterwards read whatever the drain left
+        // behind. Observed symptom: a well-formed `GET /health` answered with
+        // a bogus 404/400 whenever the remaining request bytes did not
+        // already sit in the buffer (a minimal `GET /health HTTP/1.0\r\n\r\n`
+        // reproduced it every time; curl's multi-header request masked it).
+        // That made the out-of-band liveness endpoint — the endpoint the
+        // Docker HEALTHCHECK probes — unreliable for ordinary HTTP clients.
+        var line_buf: [4096]u8 = undefined;
+        const line = blk: {
+            const req_line = reader.interface.takeDelimiterInclusive('\n') catch {
+                try self.serveBadRequest(stream);
+                return;
+            };
+            const trimmed = std.mem.trimEnd(u8, req_line, "\r\n");
+            if (trimmed.len > line_buf.len) {
+                try self.serveBadRequest(stream);
+                return;
+            }
+            @memcpy(line_buf[0..trimmed.len], trimmed);
+            break :blk line_buf[0..trimmed.len];
         };
-        const line = std.mem.trimEnd(u8, req_line, "\r\n");
 
         // Drain headers until empty line (\r\n\r\n). Cap at 64 header lines.
         var header_count: usize = 0;

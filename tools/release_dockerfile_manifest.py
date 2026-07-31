@@ -107,6 +107,16 @@ def render_dockerfile(spec: dict[str, Any]) -> str:
             "USER geode",
             "WORKDIR /home/geode",
             "",
+        ]
+    )
+    if spec.get("env"):
+        for note in spec.get("env_notes", []):
+            lines.append(f"# {note}")
+        for name, value in spec["env"].items():
+            lines.append(f"ENV {name}={value}")
+        lines.append("")
+    lines.extend(
+        [
             "# Expose runtime ports",
             f"EXPOSE {' '.join(spec['expose_ports'])}",
             "",

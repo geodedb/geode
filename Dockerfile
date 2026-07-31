@@ -114,6 +114,13 @@ ENV LOG_LEVEL=error
 #   sysctl -w net.core.rmem_max=7340032
 #   sysctl -w net.core.wmem_max=7340032
 
+# Enable the out-of-band liveness endpoint the HEALTHCHECK probes:
+# GET http://127.0.0.1:$GEODE_METRICS_PORT/health (bound to loopback unless
+# GEODE_METRICS_BIND says otherwise). The server only starts that listener when
+# GEODE_METRICS_PORT is set, and docker/health-check.sh needs it so the probe
+# stays off the authenticated QUIC query path.
+ENV GEODE_METRICS_PORT=9091
+
 # Expose ports (QUIC + gRPC + metrics)
 EXPOSE 3141/udp 50051/tcp 9091/tcp
 

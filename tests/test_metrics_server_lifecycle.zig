@@ -128,6 +128,15 @@ fn tryConnect(port: u16, timeout_ms: i32) !void {
     }
 }
 
+fn sleepMs(ms: u64) void {
+    const req = std.posix.timespec{
+        .sec = @intCast(ms / 1000),
+        .nsec = @intCast((ms % 1000) * std.time.ns_per_ms),
+    };
+    var rem: std.posix.timespec = undefined;
+    _ = std.os.linux.nanosleep(@ptrCast(&req), @ptrCast(&rem));
+}
+
 fn linuxWriteAll(fd: i32, bytes: []const u8) !void {
     const linux = std.os.linux;
     var offset: usize = 0;
@@ -154,7 +163,42 @@ fn httpResponseComplete(data: []const u8) bool {
     return data.len >= header_end + 4 + content_len;
 }
 
+/// Send a HEADERLESS `GET <path> HTTP/1.0` whose terminating empty line
+/// arrives in a SEPARATE TCP segment — exactly what `bash`'s `/dev/tcp`
+/// probe puts on the wire (verified against a live server), and what any
+/// proxy, slow link or k8s HTTP probe may produce. TCP gives no message
+/// framing, so this is legal HTTP a server must handle.
+///
+/// This is the shape that exposed the request-line lifetime bug: the second
+/// segment is not yet buffered when the header drain runs, so the drain
+/// refills the reader's buffer and invalidates the request-line slice that
+/// METHOD/PATH were about to be parsed from. `GET /health` then answered
+/// with a bogus 404/400 on every attempt.
+fn httpGetSplit(allocator: std.mem.Allocator, port: u16, path: []const u8) ![]u8 {
+    const request_line = try std.fmt.allocPrint(allocator, "GET {s} HTTP/1.0\r\n", .{path});
+    defer allocator.free(request_line);
+    return httpSendRawSplit(allocator, port, request_line, "\r\n");
+}
+
 fn httpGet(allocator: std.mem.Allocator, port: u16, path: []const u8) ![]u8 {
+    const request = try std.fmt.allocPrint(
+        allocator,
+        "GET {s} HTTP/1.1\r\nHost: 127.0.0.1:{d}\r\nConnection: close\r\n\r\n",
+        .{ path, port },
+    );
+    defer allocator.free(request);
+    return httpSendRaw(allocator, port, request);
+}
+
+/// Connect to 127.0.0.1:port, write `request` verbatim, and read the response
+/// until it is complete or the peer closes.
+fn httpSendRaw(allocator: std.mem.Allocator, port: u16, request: []const u8) ![]u8 {
+    return httpSendRawSplit(allocator, port, request, "");
+}
+
+/// Same as `httpSendRaw`, but writes `head` and `tail` as two separate
+/// segments with a short gap so the server observes a partial request first.
+fn httpSendRawSplit(allocator: std.mem.Allocator, port: u16, head: []const u8, tail: []const u8) ![]u8 {
     const linux = std.os.linux;
 
     const fd_raw = linux.socket(linux.AF.INET, linux.SOCK.STREAM | linux.SOCK.CLOEXEC, linux.IPPROTO.TCP);
@@ -173,13 +217,11 @@ fn httpGet(allocator: std.mem.Allocator, port: u16, path: []const u8) ![]u8 {
     const conn_signed: isize = @bitCast(conn_raw);
     if (conn_signed < 0) return error.ConnectFailed;
 
-    const request = try std.fmt.allocPrint(
-        allocator,
-        "GET {s} HTTP/1.1\r\nHost: 127.0.0.1:{d}\r\nConnection: close\r\n\r\n",
-        .{ path, port },
-    );
-    defer allocator.free(request);
-    try linuxWriteAll(fd, request);
+    try linuxWriteAll(fd, head);
+    if (tail.len > 0) {
+        sleepMs(10);
+        try linuxWriteAll(fd, tail);
+    }
 
     var response: std.ArrayList(u8) = .empty;
     errdefer response.deinit(allocator);
@@ -355,4 +397,57 @@ test "MetricsServer /metrics appends runtime high-concurrency counters" {
 
     try testing.expect(std.mem.indexOf(u8, response, "quic_stream_write_elapsed_ns_total 42") != null);
     try testing.expect(std.mem.indexOf(u8, response, "mg_merge_tuple_lock_wait_ns_total 99") != null);
+}
+
+// Bug 731 (#1): the Docker HEALTHCHECK now probes the unauthenticated
+// out-of-band liveness endpoint instead of the authenticated QUIC query path.
+// That only works if `/health` answers every legal HTTP client, not just the
+// ones whose request happens to arrive with headers already buffered.
+//
+// Pre-fix: `handleConnection` parsed METHOD/PATH out of the slice returned by
+// `takeDelimiterInclusive` AFTER the header-drain loop had refilled the very
+// buffer that slice pointed into. A headerless request (what `bash`'s
+// `/dev/tcp` sends, verified against a live server) whose trailing empty line
+// lands in a second TCP segment reproduced a bogus `404 Not Found` /
+// `400 Bad Request` for `GET /health` every time, while a single-segment
+// request from curl or python masked it.
+//
+// CANARY: REQ=REQ-PROMETHEUS-WIRE-004; FEATURE="Prometheus Metrics Endpoint"; ASPECT=RequestLineLifetime; STATUS=TESTED; TEST=tests/test_metrics_server_lifecycle.zig; OWNER=monitoring; UPDATED=2026-07-31
+test "MetricsServer /health answers a segment-split request (bug 731 #1)" {
+    const allocator = std.heap.page_allocator;
+
+    var collector = try prometheus.MetricsCollector.init(allocator);
+    defer collector.deinit();
+
+    const port = pickTestPort() + 4;
+
+    var server = metrics_server.MetricsServer.init(allocator, &collector, port);
+    defer server.deinit();
+
+    try server.start();
+    try tryConnect(port, 1000);
+
+    // Repeat: the pre-fix corruption depended on buffer state, so a single
+    // sample could pass by luck.
+    var attempt: usize = 0;
+    while (attempt < 5) : (attempt += 1) {
+        const response = try httpGetSplit(allocator, port, "/health");
+        defer allocator.free(response);
+
+        try testing.expect(std.mem.startsWith(u8, response, "HTTP/1.1 200 OK"));
+        try testing.expect(std.mem.indexOf(u8, response, "{\"status\":\"ok\"}") != null);
+    }
+
+    // The same request shape must still route /metrics correctly.
+    const metrics_response = try httpGetSplit(allocator, port, "/metrics");
+    defer allocator.free(metrics_response);
+    try testing.expect(std.mem.startsWith(u8, metrics_response, "HTTP/1.1 200 OK"));
+
+    // ...and an unknown path must still 404 (the fix must not make every
+    // request look like /health).
+    const missing = try httpGetSplit(allocator, port, "/nope");
+    defer allocator.free(missing);
+    try testing.expect(std.mem.startsWith(u8, missing, "HTTP/1.1 404 Not Found"));
+
+    server.stop();
 }

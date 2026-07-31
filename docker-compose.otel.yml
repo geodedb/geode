@@ -107,19 +107,15 @@ services:
     ports:
       - "127.0.0.1:13141:3141/udp"  # QUIC (host 13141 -> container 3141)
       - "127.0.0.1:9091:9091/tcp"   # Prometheus /metrics
-    # Healthcheck note: Dockerfile.prebuilt already declares a HEALTHCHECK that
-    # runs docker/health-check.sh, but that script issues a TLS query with
+    # Healthcheck note: docker/health-check.sh (baked into Dockerfile.prebuilt)
+    # now probes exactly this plain-HTTP liveness endpoint itself -- GET
+    # http://127.0.0.1:$GEODE_METRICS_PORT/health, off the QUIC/TLS query path
+    # (see startup log: "out-of-band liveness ready"). It no longer passes
     # --insecure-tls-skip-verify, which this release build's geode binary
-    # *refuses* under production/release conditions (verified: exits 1 here,
-    # since this compose command starts geode without --cert/--key, so it
-    # falls back to an auto-generated self-signed cert). Rather than guess at
-    # a fix for that script/policy interaction, this uses the plain-HTTP
-    # liveness endpoint geode exposes on GEODE_METRICS_PORT specifically to
-    # avoid the QUIC/TLS query path (see startup log: "out-of-band liveness
-    # ready: GET http://0.0.0.0:9091/health") -- verified working (200,
-    # {"status":"ok"}) against this exact image/command combination.
+    # refuses under production/release conditions (SEC-CLI-01). GEODE_METRICS_PORT
+    # is set to 9091 above, so the shared script targets the right port.
     healthcheck:
-      test: ["CMD-SHELL", "bash -c 'exec 3<>/dev/tcp/127.0.0.1/9091 && printf \"GET /health HTTP/1.0\\r\\n\\r\\n\" >&3 && timeout 2 cat <&3' | grep -q ' 200 '"]
+      test: ["CMD", "/usr/local/bin/health-check.sh"]
       interval: 15s
       timeout: 5s
       retries: 5

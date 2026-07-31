@@ -95,7 +95,7 @@ the container for future use (GAP-0878).
 |------|----------|---------|
 | 3141/udp | QUIC | Primary database connection (default) |
 | 8443/udp | QUIC | Alternative database connection |
-| 9091/tcp | HTTP | Prometheus metrics endpoint |
+| 9090/tcp | HTTP | Prometheus `/metrics` + `/health` liveness (released images; `9091` in `Dockerfile`/`Dockerfile.prebuilt`) |
 
 **Note**: Geode uses QUIC (UDP) exclusively for database connections. There is no TCP fallback.
 
@@ -182,7 +182,8 @@ the container for future use (GAP-0878).
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `GEODE_METRICS_PORT` | `9091` | Prometheus metrics port |
+| `GEODE_METRICS_PORT` | `9090` (image default; unset = listener off) | Prometheus `/metrics` and `/health` liveness port |
+| `GEODE_METRICS_BIND` | `127.0.0.1` | Bind address for the metrics/liveness listener |
 | `GEODE_AUDIT_LOG_PATH` | - | Audit log file path |
 | `GEODE_TELEMETRY_PAGING` | - | Enable telemetry paging |
 | `GEODE_CDC_ENABLE` | - | Enable Change Data Capture |
@@ -491,12 +492,88 @@ networks:
 
 ## Health Checks
 
-The container includes a built-in health check:
+Every server image ships the shared probe at `/usr/local/bin/health-check.sh`
+(source: `docker/health-check.sh`):
 
 ```dockerfile
-HEALTHCHECK --interval=30s --timeout=3s --start-period=5s --retries=3 \
-    CMD ["geode", "query", "RETURN 1 AS health", "--server", "127.0.0.1:3141", "--insecure"]
+ENV GEODE_METRICS_PORT=9090
+HEALTHCHECK --interval=30s --timeout=10s --start-period=10s --retries=3 \
+    CMD /usr/local/bin/health-check.sh
 ```
+
+The probe runs, in order:
+
+1. `GET http://127.0.0.1:$GEODE_METRICS_PORT/health` — the server's
+   **out-of-band liveness endpoint** (`src/monitoring/metrics_server.zig`).
+   It is unauthenticated plain HTTP on its own thread, entirely off the QUIC
+   query path, so a probe tick can neither fail TLS verification nor be
+   recorded as a failed authentication attempt. Returns
+   `200 {"status":"ok"}`. The server only starts that listener when
+   `GEODE_METRICS_PORT` is set, which is why the images bake in a default;
+   `GEODE_METRICS_BIND` (default `127.0.0.1`) controls the bind address, so
+   the endpoint stays loopback-only unless you opt in.
+2. An authenticated `geode query "RETURN 1 AS health"` — **only** when both
+   `GEODE_USERNAME` and `GEODE_PASSWORD` are set, as a fallback for images or
+   configurations where the liveness endpoint is disabled.
+
+| Variable | Default | Purpose |
+|----------|---------|---------|
+| `GEODE_METRICS_PORT` | `9090` (`9091` in `Dockerfile`/`Dockerfile.prebuilt`) | Port of the liveness endpoint the probe uses |
+| `GEODE_HEALTH_TIMEOUT` | `2` | Seconds allowed for the liveness probe |
+| `GEODE_HEALTH_PORT` | `3141` | QUIC port used by the authenticated fallback |
+| `GEODE_USERNAME` / `GEODE_PASSWORD` | - | Enable the authenticated fallback |
+| `GEODE_HEALTH_CA_CERT` | - | CA bundle used to verify the server certificate in the fallback (`--ca-cert`) |
+
+Notes:
+
+- The password is passed as a single `argv` element, so multi-word
+  passphrases work. The server's password policy effectively requires three
+  or more words, and an earlier version of the script word-split them.
+- Do **not** configure a credential-less authenticated probe. The server
+  counts every credential-less HELLO against its per-source-IP auth rate
+  limiter (10 attempts, 60s lockout), and a probe that can never authenticate
+  never resets the counter, so the limiter re-trips on every tick forever.
+  Note that containers sharing a network namespace
+  (`docker run --network container:<name>`) share the same `127.0.0.1` key.
+- The probe never asks the CLI to skip TLS verification — see the next
+  section for why that would fail outright in a release image.
+
+### `--insecure-tls-skip-verify` is refused in release builds (SEC-CLI-01)
+
+This is deliberate, designed defense-in-depth (`src/cli/insecure_tls_gate.zig`),
+not a defect. The flag (and its deprecated `--insecure` alias) is refused at
+argv-parse time, with exit status 1, before any socket is opened, whenever:
+
+```text
+insecure_requested AND NOT GEODE_ALLOW_INSECURE_TLS AND (is_release OR GEODE_ENV=production)
+```
+
+where `is_release` is `builtin.mode != .Debug`. Published images are built
+ReleaseSafe (`.goreleaser.yaml` → `Dockerfile.release` → `geodedb/geode:latest`),
+so they always satisfy `is_release`. The verbatim refusal message is:
+
+```text
+SECURITY: refusing --insecure-tls-skip-verify — TLS certificate verification cannot be disabled under production conditions (release build or GEODE_ENV=production). Connections without verification are exposed to man-in-the-middle attacks. Use --ca-cert <path> to trust a private CA, or set GEODE_ALLOW_INSECURE_TLS=1 to explicitly acknowledge the risk.
+```
+
+Preferred resolution, in order:
+
+1. **Use `--ca-cert <path>`** to trust the CA that signed the server
+   certificate. This keeps verification on and is the supported production
+   answer for private CAs and self-signed deployments.
+2. **Do not put the CLI on the health path at all** — the liveness endpoint
+   above is plain HTTP on loopback and needs no TLS decision.
+3. `GEODE_ALLOW_INSECURE_TLS=1` (accepted values: `1`, `true`, `yes`, `on`)
+   as an explicit, audited acknowledgement of MITM exposure. Even when
+   accepted, the CLI prints a loud `WARNING: TLS certificate verification
+   DISABLED` banner. Never do this in production.
+
+A Debug build (the default of `zig build`) is not gated unless
+`GEODE_ENV=production` is set. This is why `.gitlab-ci.yml` deliberately
+builds Debug for the GQL compliance job — its test runner connects to
+per-spec self-signed servers with `--insecure-tls-skip-verify` — and, in
+turn, why the release-image health-check path was never exercised by that
+job.
 
 ## QUIC Performance Tuning
 
@@ -544,7 +621,10 @@ services:
       - net.core.rmem_max=7340032
       - net.core.wmem_max=7340032
     healthcheck:
-      test: ["CMD", "geode", "query", "RETURN 1 AS health", "--server", "127.0.0.1:3141", "--insecure"]
+      # The image's baked-in HEALTHCHECK already does this; override only if
+      # you need different timings. It probes the unauthenticated liveness
+      # endpoint, never the TLS/auth query path (see "Health Checks").
+      test: ["CMD", "/usr/local/bin/health-check.sh"]
       interval: 30s
       timeout: 10s
       retries: 3
@@ -720,8 +800,13 @@ ss -ulpn | grep 3141
 Ensure QUIC (UDP) traffic is allowed:
 
 ```bash
-# Test connectivity
-docker exec geode geode query "RETURN 1" --server 127.0.0.1:3141 --insecure
+# Liveness (no TLS, no auth) — see "Health Checks"
+docker exec geode /usr/local/bin/health-check.sh
+
+# Test an actual query. Released images are release builds, so
+# --insecure-tls-skip-verify is REFUSED (SEC-CLI-01); trust the CA instead.
+docker exec geode geode query "RETURN 1" --server 127.0.0.1:3141 \
+  --ca-cert /certs/ca.crt -U "$GEODE_USERNAME" -P "$GEODE_PASSWORD"
 ```
 
 ### GPU not detected
