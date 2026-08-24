@@ -9176,6 +9176,17 @@ pub fn build(b: *std.Build) void {
     const gap0918_step = b.step("test-gap0918", "Run GAP-0918 vector index validation regressions");
     gap0918_step.dependOn(&run_gap0918_tests.step);
 
+    // ENG-3904 / ENG-3905: list literal with a leading negative element is a
+    // parse error, and vectorf32($param) is rejected by the parse-time builtin
+    // argument gate. See tests/test_eng3904_3905_vector_literals.zig.
+    const eng3904_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_eng3904_3905_vector_literals.zig"), .target = target, .optimize = optimize });
+    eng3904_test_mod.addImport("geode", root_mod);
+    const eng3904_tests = b.addTest(.{ .root_module = eng3904_test_mod });
+    const run_eng3904_tests = b.addRunArtifact(eng3904_tests);
+    shardDep(test_step, &run_eng3904_tests.step, 0, test_shard_loads, test_shard_index);
+    const eng3904_step = b.step("test-eng3904-3905", "Run ENG-3904 leading-negative list literal and ENG-3905 vectorf32($param) regressions");
+    eng3904_step.dependOn(&run_eng3904_tests.step);
+
     // GAP-0917: ISO post-error transaction semantics — statements after a
     // mid-transaction error are rejected until ROLLBACK; COMMIT aborts.
     const gap0917_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_gap0917_txn_post_error.zig"), .target = target, .optimize = optimize });

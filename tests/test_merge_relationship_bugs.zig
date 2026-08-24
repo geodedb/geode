@@ -91,7 +91,56 @@ const Harness = struct {
             self.ctx,
         );
     }
+
+    /// Execute the WHOLE parsed program, exactly as the server does for a
+    /// submitted query string (src/execution.zig:executeProgramWithContext).
+    /// Chained clauses (`MERGE ... MERGE ... MERGE ...`) currently parse into
+    /// several statements, so a statements[0]-only runner would silently skip
+    /// most of the query; this runner keeps the test honest regardless of
+    /// whether the fix lands in the parser (one statement) or the executor.
+    pub fn execProgram(self: *Harness, query: []const u8) !execution.ExecutionResult {
+        var parsed = try geode.parseGql(query, self.allocator);
+        defer parsed.deinit();
+        return execution.executeProgramWithContext(
+            self.allocator,
+            &parsed.program,
+            self.ctx,
+        );
+    }
+
+    /// Assert a query is REJECTED (error) rather than silently reporting
+    /// success. Used for the fail-loud MERGE endpoint assertion — the whole
+    /// point of ENG-3903 is that "00000 + nothing written" is unacceptable.
+    pub fn expectRejected(self: *Harness, query: []const u8) !void {
+        if (self.execProgram(query)) |res| {
+            var r = res;
+            r.deinit(self.allocator);
+            std.debug.print(
+                "\nFAIL: expected `{s}` to be rejected, but it reported success\n",
+                .{query},
+            );
+            return error.ExpectedQueryRejection;
+        } else |_| {}
+    }
 };
+
+fn nodeHasLabel(node: *const graph_store.Node, label: []const u8) bool {
+    for (node.labels) |l| {
+        if (std.mem.eql(u8, l, label)) return true;
+    }
+    return false;
+}
+
+/// Count nodes carrying the given label across the global store.
+fn countLabeledNodes(label: []const u8) usize {
+    const store = graph_store.getCurrentGlobalStore() orelse return 0;
+    var count: usize = 0;
+    var iter = store.nodes.iterator();
+    while (iter.next()) |entry| {
+        if (nodeHasLabel(entry.value_ptr, label)) count += 1;
+    }
+    return count;
+}
 
 /// Count edges with the given relationship label across the global store on
 /// the default graph.  Used in lieu of evaluating `MATCH ... RETURN count(r)`
@@ -315,4 +364,156 @@ test "merge: MATCH-bound endpoints create edge with inline property" {
 
     try testing.expectEqual(@as(usize, 1), countRelEdges("REL"));
     try expectMethodEquals("REL", "x");
+}
+
+// ---------------------------------------------------------------------------
+// ENG-3903 — silent data loss on CHAINED / COMMA-SEPARATED MERGE
+//
+// Reported reproduction (returns SQLSTATE 00000, creates 2 nodes and ZERO
+// relationships — a silent write loss):
+//
+//     MERGE (a:MT {name:'a'})
+//     MERGE (b:MT {name:'b'})
+//     MERGE (a)-[:REL {type:'x'}]->(b)
+//
+// Two layers:
+//   (a) parseMergeStatement (src/gql/parser.zig:4676-4741) parses exactly ONE
+//       MERGE clause, so the 2nd and 3rd MERGE become separate statements and
+//       the variables a/b are not in scope for the third one;
+//   (b) the executeMerge edge branch (src/execution/crud_operations.zig:
+//       3201-3333) resolves endpoints only from `context.bindings` or from
+//       inline labels/props. Bare `(a)` / `(b)` resolve to null, the guard at
+//       :3285 skips edge creation, and :3334-3341 still commits and returns an
+//       empty SUCCESS result.
+//   (c) executeMerge only ever looks at `chains[0]`, so the comma form
+//       `MERGE (a:MX {name:'a'}), (b:MX {name:'b'})` creates only node 'a'.
+//
+// Working control (already green today, must stay green):
+//     MATCH (a:MT {name:'a'}), (b:MT {name:'b'}) MERGE (a)-[:REL {type:'x'}]->(b)
+// ---------------------------------------------------------------------------
+
+// CANARY: REQ=REQ-MERGE-RELPROPS-001; FEATURE="MergeRelationship"; ASPECT=ChainedMergeEndpoints; STATUS=TESTED; TEST=tests/test_merge_relationship_bugs.zig; OWNER=execution; UPDATED=2026-08-24
+test "merge: chained MERGE node/node/relationship creates the relationship (ENG-3903)" {
+    // FAILS on v0.8.5: 2 nodes are created, the relationship count is 0 and
+    // the query still reports SQLSTATE 00000 (silent data loss).
+    test_mutex.lock(std.Io.Threaded.global_single_threaded.io()) catch unreachable;
+    defer test_mutex.unlock(std.Io.Threaded.global_single_threaded.io());
+
+    var arena = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena.deinit();
+    const allocator = arena.allocator();
+
+    var h = try Harness.init(allocator);
+    defer h.deinit();
+
+    const q =
+        "MERGE (a:MT3903 {name:'a'}) MERGE (b:MT3903 {name:'b'}) MERGE (a)-[:REL3903 {type:'x'}]->(b)";
+
+    {
+        var r = try h.execProgram(q);
+        r.deinit(allocator);
+    }
+
+    try testing.expectEqual(@as(usize, 2), countLabeledNodes("MT3903"));
+    try testing.expectEqual(@as(usize, 1), countRelEdges("REL3903"));
+
+    // MERGE is idempotent: re-running the identical query must not duplicate
+    // the nodes or the relationship.
+    {
+        var r = try h.execProgram(q);
+        r.deinit(allocator);
+    }
+
+    try testing.expectEqual(@as(usize, 2), countLabeledNodes("MT3903"));
+    try testing.expectEqual(@as(usize, 1), countRelEdges("REL3903"));
+}
+
+// CANARY: REQ=REQ-MERGE-RELPROPS-001; FEATURE="MergeRelationship"; ASPECT=ChainedMergeControl; STATUS=TESTED; TEST=tests/test_merge_relationship_bugs.zig; OWNER=execution; UPDATED=2026-08-24
+test "merge: MATCH-bound control for the ENG-3903 shape stays idempotent" {
+    // Control (green today): the same end state expressed with MATCH + MERGE.
+    // Guards against a fix that "repairs" the chained form by breaking this.
+    test_mutex.lock(std.Io.Threaded.global_single_threaded.io()) catch unreachable;
+    defer test_mutex.unlock(std.Io.Threaded.global_single_threaded.io());
+
+    var arena = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena.deinit();
+    const allocator = arena.allocator();
+
+    var h = try Harness.init(allocator);
+    defer h.deinit();
+
+    {
+        var r = try h.exec("CREATE (:MC3903 {name: 'a'})");
+        r.deinit(allocator);
+    }
+    {
+        var r = try h.exec("CREATE (:MC3903 {name: 'b'})");
+        r.deinit(allocator);
+    }
+
+    const q = "MATCH (a:MC3903 {name:'a'}), (b:MC3903 {name:'b'}) MERGE (a)-[:RELC3903 {type:'x'}]->(b)";
+    {
+        var r = try h.execProgram(q);
+        r.deinit(allocator);
+    }
+    try testing.expectEqual(@as(usize, 1), countRelEdges("RELC3903"));
+
+    {
+        var r = try h.execProgram(q);
+        r.deinit(allocator);
+    }
+    try testing.expectEqual(@as(usize, 1), countRelEdges("RELC3903"));
+}
+
+// CANARY: REQ=REQ-MERGE-RELPROPS-001; FEATURE="MergeRelationship"; ASPECT=CommaSeparatedMergeChains; STATUS=TESTED; TEST=tests/test_merge_relationship_bugs.zig; OWNER=execution; UPDATED=2026-08-24
+test "merge: comma-separated MERGE pattern creates every chain (ENG-3903c)" {
+    // FAILS on v0.8.5: only node 'a' is created — executeMerge reads chains[0]
+    // and drops the remaining chains while still reporting success.
+    test_mutex.lock(std.Io.Threaded.global_single_threaded.io()) catch unreachable;
+    defer test_mutex.unlock(std.Io.Threaded.global_single_threaded.io());
+
+    var arena = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena.deinit();
+    const allocator = arena.allocator();
+
+    var h = try Harness.init(allocator);
+    defer h.deinit();
+
+    {
+        var r = try h.execProgram("MERGE (a:MX3903 {name:'a'}), (b:MX3903 {name:'b'})");
+        r.deinit(allocator);
+    }
+
+    try testing.expectEqual(@as(usize, 2), countLabeledNodes("MX3903"));
+
+    // Idempotent: re-running must not create duplicates.
+    {
+        var r = try h.execProgram("MERGE (a:MX3903 {name:'a'}), (b:MX3903 {name:'b'})");
+        r.deinit(allocator);
+    }
+    try testing.expectEqual(@as(usize, 2), countLabeledNodes("MX3903"));
+}
+
+// CANARY: REQ=REQ-MERGE-RELPROPS-001; FEATURE="MergeRelationship"; ASPECT=UnresolvableEndpointFailsLoud; STATUS=TESTED; TEST=tests/test_merge_relationship_bugs.zig; OWNER=execution; UPDATED=2026-08-24
+test "merge: unresolvable relationship endpoint is rejected, not silently skipped (ENG-3903)" {
+    // Post-fix semantics: if an endpoint variable of a MERGE relationship
+    // pattern cannot be resolved (not bound by a preceding clause, no label /
+    // property to match or create on), the statement must FAIL LOUDLY.
+    // On v0.8.5 the guard at crud_operations.zig:3285 skips edge creation and
+    // the statement still returns SQLSTATE 00000 with no edge written — the
+    // exact silent-data-loss shape ENG-3903 reports.
+    test_mutex.lock(std.Io.Threaded.global_single_threaded.io()) catch unreachable;
+    defer test_mutex.unlock(std.Io.Threaded.global_single_threaded.io());
+
+    var arena = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena.deinit();
+    const allocator = arena.allocator();
+
+    var h = try Harness.init(allocator);
+    defer h.deinit();
+
+    try h.expectRejected("MERGE (zz3903)-[:RELZ3903 {type:'x'}]->(yy3903)");
+
+    // And nothing must have been written by the rejected statement.
+    try testing.expectEqual(@as(usize, 0), countRelEdges("RELZ3903"));
 }
