@@ -1,6 +1,6 @@
 const std = @import("std");
 const ext = @import("extended.zig");
-// ENG-3913: date_part must use the SAME calendar conversion that member access
+// DATE-PART-EXACT: date_part must use the SAME calendar conversion that member access
 // (`date(...).month`) uses, so it shares datetime.Date rather than
 // re-approximating one.
 const datetime = @import("datetime.zig");
@@ -117,10 +117,10 @@ fn fn_vector_cosine(allocator: std.mem.Allocator, args: []const BuiltinValue) !B
     return .{ .Decimal = .{ .coeff = @intFromFloat(sim * 1_000_000), .scale = 6 } };
 }
 
-// CANARY: REQ=REQ-ENG-3913-DATE-PART-EXACT-CALENDAR; FEATURE="ExtendedBuiltins"; ASPECT=FUNCTION_DATE_PART; STATUS=TESTED; TEST=tests/test_eng3913_date_part_calendar.zig; OWNER=engine; UPDATED=2026-08-25
+// CANARY: REQ=REQ-DATE-PART-EXACT-CALENDAR; FEATURE="ExtendedBuiltins"; ASPECT=FUNCTION_DATE_PART; STATUS=TESTED; TEST=tests/test_date_part_exact.zig; OWNER=engine; UPDATED=2026-08-25
 // date_part(part: Str, Date|Timestamp) -> Int
 //
-// ENG-3913: this used to derive the components from `1970 + days/365` with
+// DATE-PART-EXACT: this used to derive the components from `1970 + days/365` with
 // 30-day months, so date_part('month', DATE '2024-12-31') answered 13 and
 // date_part('day', …) answered 6 while `date('2024-12-31').month` (member
 // access, which already went through the calendar-exact
@@ -337,7 +337,7 @@ test "json_get simple" {
 }
 // CANARY: REQ=REQ-GQL-082; FEATURE="ExtendedBuiltins"; ASPECT=FUNCTION_JSON_GET; STATUS=TESTED; TEST=extended_functions.json_get simple; OWNER=engine; UPDATED=2025-09-26
 
-// ENG-3913: renamed from "date_part coarse" — the conversion is no longer
+// DATE-PART-EXACT: renamed from "date_part coarse" — the conversion is no longer
 // coarse, and the assertions now pin a leap-year boundary that the old
 // 365-day-year / 30-day-month arithmetic got wrong.
 test "date_part uses the exact proleptic Gregorian calendar" {

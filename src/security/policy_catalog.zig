@@ -87,11 +87,11 @@ pub const PolicyCatalog = struct {
         self.policies.deinit(self.allocator);
     }
 
-    // CANARY: REQ=REQ-ENG-3915-POLICY-COMPILE-ERROR-AT-DDL; FEATURE="GPS Policy DDL"; ASPECT=CompileFailureMode; STATUS=TESTED; TEST=tests/test_eng3915_policy_expression_ddl.zig; OWNER=security; UPDATED=2026-08-25
+    // CANARY: REQ=REQ-RLS-POLICY-COMPILE-ERROR-AT-DDL; FEATURE="GPS Policy DDL"; ASPECT=CompileFailureMode; STATUS=TESTED; TEST=tests/test_rls_policy_ddl.zig; OWNER=security; UPDATED=2026-08-25
     /// How `addPolicyWithMode` reacts when the policy predicate compiler cannot
     /// compile a non-trivial USING expression.
     ///
-    /// ENG-3915: the two call sites need OPPOSITE answers, which is why this is
+    /// RLS-POLICY-DDL: the two call sites need OPPOSITE answers, which is why this is
     /// a parameter and not a global policy.
     pub const CompileFailureMode = enum {
         /// DDL (`CREATE`/`ALTER POLICY`): REFUSE the statement with
@@ -121,7 +121,7 @@ pub const PolicyCatalog = struct {
         return self.addPolicyWithMode(args, .retain_fail_closed);
     }
 
-    // CANARY: REQ=REQ-ENG-3915-POLICY-COMPILE-ERROR-AT-DDL; FEATURE="GPS Policy DDL"; ASPECT=PolicyCatalogAddStrict; STATUS=TESTED; TEST=tests/test_eng3915_policy_expression_ddl.zig; OWNER=security; UPDATED=2026-08-25
+    // CANARY: REQ=REQ-RLS-POLICY-COMPILE-ERROR-AT-DDL; FEATURE="GPS Policy DDL"; ASPECT=PolicyCatalogAddStrict; STATUS=TESTED; TEST=tests/test_rls_policy_ddl.zig; OWNER=security; UPDATED=2026-08-25
     /// `addPolicy` for the DDL path: an uncompilable USING expression is
     /// refused with error.UnsupportedPolicyExpression instead of being stored
     /// compiled=null (which decide() then silently fail-closes).
@@ -138,7 +138,7 @@ pub const PolicyCatalog = struct {
             if (std.mem.eql(u8, existing.name, args.name)) return error.PolicyAlreadyExists;
         }
 
-        // ENG-3915: compile BEFORE any allocation so a refused DDL statement
+        // RLS-POLICY-DDL: compile BEFORE any allocation so a refused DDL statement
         // leaves the catalog byte-for-byte untouched.
         var compiled: ?policy_expression.CompiledExpression = null;
         if (!std.mem.eql(u8, args.expression_source, "true")) {
@@ -152,7 +152,7 @@ pub const PolicyCatalog = struct {
                         return error.UnsupportedPolicyExpression;
                     },
                     .retain_fail_closed => {
-                        // GAP-0923(a) / ENG-3915: a persisted record whose
+                        // GAP-0923(a) / RLS-POLICY-DDL: a persisted record whose
                         // expression no longer compiles is kept fail-closed and
                         // logged, never dropped and never promoted to ALLOW.
                         std.log.scoped(.gps).warn(

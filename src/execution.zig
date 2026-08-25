@@ -2338,8 +2338,8 @@ fn executeStatementWithContextInner(allocator: std.mem.Allocator, stmt: ast.Stat
                 .enabled = true,
             };
 
-            // CANARY: REQ=REQ-ENG-3915-POLICY-COMPILE-ERROR-AT-DDL; FEATURE="GPS Policy DDL"; ASPECT=CreatePolicyStrictCompile; STATUS=TESTED; TEST=tests/test_eng3915_policy_expression_ddl.zig; OWNER=security; UPDATED=2026-08-25
-            // ENG-3915: DDL is the strict path. A USING expression the policy
+            // CANARY: REQ=REQ-RLS-POLICY-COMPILE-ERROR-AT-DDL; FEATURE="GPS Policy DDL"; ASPECT=CreatePolicyStrictCompile; STATUS=TESTED; TEST=tests/test_rls_policy_ddl.zig; OWNER=security; UPDATED=2026-08-25
+            // RLS-POLICY-DDL: DDL is the strict path. A USING expression the policy
             // predicate compiler cannot compile used to be accepted and stored
             // compiled=null, which decide() then fail-closes — the author was
             // told "Policy created" and got a policy that denies everything.

@@ -352,8 +352,8 @@ pub fn executeShow(allocator: std.mem.Allocator, s: ast.ShowStatement, context: 
                 .{ .name = "tail", .signature = "(list)", .return_type = "LIST" },
                 .{ .name = "last", .signature = "(list)", .return_type = "ANY" },
                 .{ .name = "range", .signature = "(start, end, [step])", .return_type = "LIST" },
-                // CANARY: REQ=REQ-ENG-3912-ADVERTISE-DISPATCH-PARITY; FEATURE="SHOW FUNCTIONS"; ASPECT=ReduceUnadvertised; STATUS=TESTED; TEST=tests/test_eng3912_advertise_dispatch_parity.zig; OWNER=execution; UPDATED=2026-08-25
-                // ENG-3912: `reduce(acc = seed, x IN list | expr)` is NOT
+                // CANARY: REQ=REQ-FN-DISPATCH-PARITY; FEATURE="SHOW FUNCTIONS"; ASPECT=ReduceUnadvertised; STATUS=TESTED; TEST=tests/test_fn_dispatch_parity.zig; OWNER=execution; UPDATED=2026-08-25
+                // FN-DISPATCH-PARITY: `reduce(acc = seed, x IN list | expr)` is NOT
                 // implemented — the higher-order form is not even accepted by
                 // the parser (`RETURN reduce(acc = 0, x IN [1,2,3] | acc + x)`
                 // is a syntax error), let alone dispatched. Advertising it here
@@ -381,8 +381,8 @@ pub fn executeShow(allocator: std.mem.Allocator, s: ast.ShowStatement, context: 
                 .{ .name = "min", .signature = "(expr)", .return_type = "ANY" },
                 .{ .name = "max", .signature = "(expr)", .return_type = "ANY" },
                 .{ .name = "collect", .signature = "(expr)", .return_type = "LIST" },
-                // CANARY: REQ=REQ-ENG-3914-UNSUPPORTED-AGGREGATE-REJECTION; FEATURE="SHOW FUNCTIONS"; ASPECT=UnimplementedAggregatesUnadvertised; STATUS=TESTED; TEST=tests/test_eng3914_unsupported_aggregates.zig; OWNER=execution; UPDATED=2026-08-25
-                // ENG-3914: stdev / percentileCont / percentileDisc were listed
+                // CANARY: REQ=REQ-UNSUPPORTED-AGGREGATE-REJECTION; FEATURE="SHOW FUNCTIONS"; ASPECT=UnimplementedAggregatesUnadvertised; STATUS=TESTED; TEST=tests/test_unsupported_aggregates.zig; OWNER=execution; UPDATED=2026-08-25
+                // UNSUPPORTED-AGGREGATES: stdev / percentileCont / percentileDisc were listed
                 // here but are the same unimplemented aggregates the parser now
                 // refuses by their snake_case spellings. They are removed rather
                 // than left advertised — src/execution/aggregation_evaluation.zig

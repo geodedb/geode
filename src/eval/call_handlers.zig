@@ -755,10 +755,10 @@ pub fn evalStringFunction(
         return Value{ .Str = str[start..] };
     }
 
-    // CANARY: REQ=REQ-ENG-3912-ADVERTISE-DISPATCH-PARITY; FEATURE="StringFunctions"; ASPECT=Split; STATUS=TESTED; TEST=tests/test_eng3912_advertise_dispatch_parity.zig; OWNER=eval; UPDATED=2026-08-25
+    // CANARY: REQ=REQ-FN-DISPATCH-PARITY; FEATURE="StringFunctions"; ASPECT=Split; STATUS=TESTED; TEST=tests/test_fn_dispatch_parity.zig; OWNER=eval; UPDATED=2026-08-25
     // split(str, delimiter) -> LIST of STRING
     //
-    // ENG-3912: `split` was advertised by BOTH SHOW FUNCTIONS
+    // FN-DISPATCH-PARITY: `split` was advertised by BOTH SHOW FUNCTIONS
     // (src/execution/statement_handlers.zig) and the language metadata
     // (src/gql/language_metadata.zig) but never dispatched — every call raised
     // UnknownFunction. Implemented here rather than un-advertised because the
@@ -1331,8 +1331,8 @@ pub fn evalCollectionFunction(
             .Str => |s| return Value{ .Int = @intCast(s.len) },
             .Map => |m| return Value{ .Int = @intCast(m.count()) },
             .Path => |p| return Value{ .Int = @intCast(p.edges.len) },
-            // CANARY: REQ=REQ-ENG-3912-SIZE-OF-VECTOR; FEATURE="SizeFunction"; ASPECT=VectorDimension; STATUS=TESTED; TEST=tests/test_eng3912_advertise_dispatch_parity.zig; OWNER=eval; UPDATED=2026-08-25
-            // ENG-3912: a VECTOR is a sized collection, so size()/length() must
+            // CANARY: REQ=REQ-FN-SIZE-OF-VECTOR; FEATURE="SizeFunction"; ASPECT=VectorDimension; STATUS=TESTED; TEST=tests/test_fn_dispatch_parity.zig; OWNER=eval; UPDATED=2026-08-25
+            // FN-DISPATCH-PARITY: a VECTOR is a sized collection, so size()/length() must
             // report its dimension. The old `else => Int 0` arm answered 0 for
             // every stored embedding — a silent lie that read as "empty".
             // `data.len` (not the u16 `dim` field) is authoritative so an

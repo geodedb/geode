@@ -1,4 +1,4 @@
-// ENG-3913 — date_part() used a different calendar from member access, and in
+// DATE-PART-EXACT — date_part() used a different calendar from member access, and in
 // practice could not be called at all.
 //
 // VERIFIED READ-ONLY AGAINST v0.8.5 / 13836738 BEFORE THE FIX — TWO defects, one
@@ -37,7 +37,7 @@
 //   the test compares the TWO ENGINE ANSWERS rather than hard-coded constants,
 //   so the two can never drift apart again.
 //
-// CANARY: REQ=REQ-ENG-3913-DATE-PART-EXACT-CALENDAR; FEATURE="ExtendedBuiltins"; ASPECT=FUNCTION_DATE_PART; STATUS=TESTED; TEST=tests/test_eng3913_date_part_calendar.zig; OWNER=engine; UPDATED=2026-08-25
+// CANARY: REQ=REQ-DATE-PART-EXACT-CALENDAR; FEATURE="ExtendedBuiltins"; ASPECT=FUNCTION_DATE_PART; STATUS=TESTED; TEST=tests/test_date_part_exact.zig; OWNER=engine; UPDATED=2026-08-25
 
 const std = @import("std");
 const testing = std.testing;
@@ -113,7 +113,7 @@ const Harness = struct {
         return switch (res.rows[0][0]) {
             .Int => |i| i,
             else => |v| {
-                std.debug.print("\n[ENG-3913] {s} returned {s}, expected Int\n", .{ query, @tagName(v) });
+                std.debug.print("\n[DATE-PART-EXACT] {s} returned {s}, expected Int\n", .{ query, @tagName(v) });
                 return error.NotAnInt;
             },
         };
@@ -137,7 +137,7 @@ const boundary_dates = [_][]const u8{
     "2100-03-01", // 2100 is NOT a leap year (century rule)
 };
 
-test "ENG-3913: date_part agrees with member access on boundary dates" {
+test "DATE-PART-EXACT: date_part agrees with member access on boundary dates" {
     var h = try Harness.init(testing.allocator);
     defer h.deinit();
 
@@ -193,13 +193,13 @@ test "ENG-3913: date_part agrees with member access on boundary dates" {
     }
 
     if (failures.items.len != 0) {
-        std.debug.print("\n[ENG-3913] {d} date_part calendar violation(s):\n", .{failures.items.len});
+        std.debug.print("\n[DATE-PART-EXACT] {d} date_part calendar violation(s):\n", .{failures.items.len});
         for (failures.items) |f| std.debug.print("  - {s}\n", .{f});
         return error.DatePartCalendarMismatch;
     }
 }
 
-test "ENG-3913: date_part returns the exact calendar components (absolute values)" {
+test "DATE-PART-EXACT: date_part returns the exact calendar components (absolute values)" {
     var h = try Harness.init(testing.allocator);
     defer h.deinit();
 
@@ -238,7 +238,7 @@ test "ENG-3913: date_part returns the exact calendar components (absolute values
     try testing.expectEqual(@as(i64, 1), try h.scalarInt("RETURN date_part('day', date('2100-03-01'))"));
 }
 
-test "ENG-3913: time_part is reachable from GQL and reports exact clock components" {
+test "DATE-PART-EXACT: time_part is reachable from GQL and reports exact clock components" {
     var h = try Harness.init(testing.allocator);
     defer h.deinit();
 

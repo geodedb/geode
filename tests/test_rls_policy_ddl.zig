@@ -1,4 +1,4 @@
-// ENG-3915 — an RLS/GPS policy whose USING expression does not compile was
+// RLS-POLICY-DDL — an RLS/GPS policy whose USING expression does not compile was
 // ACCEPTED at DDL time and then denied everything, silently.
 //
 // VERIFIED READ-ONLY AGAINST v0.8.5 / 13836738 BEFORE THE FIX:
@@ -62,7 +62,7 @@
 //   4. Hydration tolerance: the tolerant path retains the record fail-closed
 //      rather than erroring.
 //
-// CANARY: REQ=REQ-ENG-3915-POLICY-COMPILE-ERROR-AT-DDL; FEATURE="GPS Policy DDL"; ASPECT=CompileErrorSurfaced; STATUS=TESTED; TEST=tests/test_eng3915_policy_expression_ddl.zig; OWNER=security; UPDATED=2026-08-25
+// CANARY: REQ=REQ-RLS-POLICY-COMPILE-ERROR-AT-DDL; FEATURE="GPS Policy DDL"; ASPECT=CompileErrorSurfaced; STATUS=TESTED; TEST=tests/test_rls_policy_ddl.zig; OWNER=security; UPDATED=2026-08-25
 
 const std = @import("std");
 const testing = std.testing;
@@ -113,7 +113,7 @@ const compilable = [_][]const u8{
     "true", // the literal-true fast path (stored uncompiled BY DESIGN)
 };
 
-test "ENG-3915: addPolicyStrict refuses an uncompilable USING expression and leaves the catalog untouched" {
+test "RLS-POLICY-DDL: addPolicyStrict refuses an uncompilable USING expression and leaves the catalog untouched" {
     var arena = std.heap.ArenaAllocator.init(testing.allocator);
     defer arena.deinit();
     const gpa = arena.allocator();
@@ -159,13 +159,13 @@ test "ENG-3915: addPolicyStrict refuses an uncompilable USING expression and lea
     }
 
     if (failures.items.len != 0) {
-        std.debug.print("\n[ENG-3915] {d} policy-DDL contract violation(s):\n", .{failures.items.len});
+        std.debug.print("\n[RLS-POLICY-DDL] {d} policy-DDL contract violation(s):\n", .{failures.items.len});
         for (failures.items) |f| std.debug.print("  - {s}\n", .{f});
         return error.UncompilablePolicyAccepted;
     }
 }
 
-test "ENG-3915: the documented literal-comparison subset still compiles and is accepted" {
+test "RLS-POLICY-DDL: the documented literal-comparison subset still compiles and is accepted" {
     var arena = std.heap.ArenaAllocator.init(testing.allocator);
     defer arena.deinit();
     const gpa = arena.allocator();
@@ -209,13 +209,13 @@ test "ENG-3915: the documented literal-comparison subset still compiles and is a
     }
 
     if (failures.items.len != 0) {
-        std.debug.print("\n[ENG-3915] {d} supported-predicate regression(s):\n", .{failures.items.len});
+        std.debug.print("\n[RLS-POLICY-DDL] {d} supported-predicate regression(s):\n", .{failures.items.len});
         for (failures.items) |f| std.debug.print("  - {s}\n", .{f});
         return error.SupportedPolicyRefused;
     }
 }
 
-test "ENG-3915: hydration stays tolerant — a persisted uncompilable policy is retained fail-closed, not fatal" {
+test "RLS-POLICY-DDL: hydration stays tolerant — a persisted uncompilable policy is retained fail-closed, not fatal" {
     var cat = policy_catalog.PolicyCatalog.init(testing.allocator);
     defer cat.deinit();
 
@@ -303,7 +303,7 @@ const DdlHarness = struct {
     }
 };
 
-test "ENG-3915: CREATE POLICY … USING <uncompilable> fails end-to-end; a supported one still works" {
+test "RLS-POLICY-DDL: CREATE POLICY … USING <uncompilable> fails end-to-end; a supported one still works" {
     test_mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
     defer test_mutex.unlock(std.Io.Threaded.global_single_threaded.io());
 

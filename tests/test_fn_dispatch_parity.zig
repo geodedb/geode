@@ -1,4 +1,4 @@
-// ENG-3912 — "never advertise what isn't dispatched".
+// FN-DISPATCH-PARITY — "never advertise what isn't dispatched".
 //
 // Three defects found by the 2026-08 docs audit, all the same shape: a name the
 // engine PUBLISHES (SHOW FUNCTIONS / SHOW PROCEDURES / src/gql/language_metadata.zig)
@@ -50,8 +50,8 @@
 //      vector read back from a stored property (which is the path that also
 //      covers graph-storage overflow storage for large vectors).
 //
-// CANARY: REQ=REQ-ENG-3912-ADVERTISE-DISPATCH-PARITY; FEATURE="AdvertiseDispatchParity"; ASPECT=FunctionsAndProcedures; STATUS=TESTED; TEST=tests/test_eng3912_advertise_dispatch_parity.zig; OWNER=execution; UPDATED=2026-08-25
-// CANARY: REQ=REQ-ENG-3912-SIZE-OF-VECTOR; FEATURE="SizeFunction"; ASPECT=VectorDimension; STATUS=TESTED; TEST=tests/test_eng3912_advertise_dispatch_parity.zig; OWNER=eval; UPDATED=2026-08-25
+// CANARY: REQ=REQ-FN-DISPATCH-PARITY; FEATURE="AdvertiseDispatchParity"; ASPECT=FunctionsAndProcedures; STATUS=TESTED; TEST=tests/test_fn_dispatch_parity.zig; OWNER=execution; UPDATED=2026-08-25
+// CANARY: REQ=REQ-FN-SIZE-OF-VECTOR; FEATURE="SizeFunction"; ASPECT=VectorDimension; STATUS=TESTED; TEST=tests/test_fn_dispatch_parity.zig; OWNER=eval; UPDATED=2026-08-25
 
 const std = @import("std");
 const testing = std.testing;
@@ -138,7 +138,7 @@ const Harness = struct {
         return switch (v) {
             .Int => |i| i,
             else => {
-                std.debug.print("\n[ENG-3912] {s} returned {s}, expected Int\n", .{ query, @tagName(v) });
+                std.debug.print("\n[FN-DISPATCH-PARITY] {s} returned {s}, expected Int\n", .{ query, @tagName(v) });
                 return error.NotAnInt;
             },
         };
@@ -149,7 +149,7 @@ const Harness = struct {
 // (A) split() — advertised, now dispatched.
 // ---------------------------------------------------------------------------
 
-test "ENG-3912: split(str, delim) returns a real LIST of the substrings" {
+test "FN-DISPATCH-PARITY: split(str, delim) returns a real LIST of the substrings" {
     var h = try Harness.init(testing.allocator);
     defer h.deinit();
 
@@ -223,7 +223,7 @@ test "ENG-3912: split(str, delim) returns a real LIST of the substrings" {
 // (A) reduce() — advertised, NOT implemented, therefore no longer advertised.
 // ---------------------------------------------------------------------------
 
-test "ENG-3912: SHOW FUNCTIONS does not advertise reduce (no grammar, no dispatch)" {
+test "FN-DISPATCH-PARITY: SHOW FUNCTIONS does not advertise reduce (no grammar, no dispatch)" {
     var h = try Harness.init(testing.allocator);
     defer h.deinit();
 
@@ -248,7 +248,7 @@ test "ENG-3912: SHOW FUNCTIONS does not advertise reduce (no grammar, no dispatc
         };
         if (std.ascii.eqlIgnoreCase(name, "reduce")) {
             std.debug.print(
-                "\n[ENG-3912] SHOW FUNCTIONS still advertises 'reduce', which the parser rejects\n",
+                "\n[FN-DISPATCH-PARITY] SHOW FUNCTIONS still advertises 'reduce', which the parser rejects\n",
                 .{},
             );
             return error.UnimplementedFunctionAdvertised;
@@ -276,7 +276,7 @@ test "ENG-3912: SHOW FUNCTIONS does not advertise reduce (no grammar, no dispatc
 // (B) THE SWEEP: every advertised algo.* procedure must dispatch.
 // ---------------------------------------------------------------------------
 
-test "ENG-3912: every procedure name and alias in language_metadata CALLs successfully" {
+test "FN-DISPATCH-PARITY: every procedure name and alias in language_metadata CALLs successfully" {
     var h = try Harness.init(testing.allocator);
     defer h.deinit();
 
@@ -325,7 +325,7 @@ test "ENG-3912: every procedure name and alias in language_metadata CALLs succes
 
     if (failures.items.len != 0) {
         std.debug.print(
-            "\n[ENG-3912] {d} advertised algo.* name(s) with no dispatch entry:\n",
+            "\n[FN-DISPATCH-PARITY] {d} advertised algo.* name(s) with no dispatch entry:\n",
             .{failures.items.len},
         );
         for (failures.items) |f| std.debug.print("  - {s}\n", .{f});
@@ -340,7 +340,7 @@ test "ENG-3912: every procedure name and alias in language_metadata CALLs succes
 // (C) size()/length() of a VECTOR is its dimension, not 0.
 // ---------------------------------------------------------------------------
 
-test "ENG-3912: size()/length() of a VECTOR reports its dimension" {
+test "FN-DISPATCH-PARITY: size()/length() of a VECTOR reports its dimension" {
     var h = try Harness.init(testing.allocator);
     defer h.deinit();
 

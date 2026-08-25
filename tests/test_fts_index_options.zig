@@ -1,4 +1,4 @@
-// ENG-3916 — `CREATE INDEX … OPTIONS { … }` parsed the braces and threw every
+// FTS-INDEX-OPTIONS — `CREATE INDEX … OPTIONS { … }` parsed the braces and threw every
 // key away.
 //
 // VERIFIED READ-ONLY AGAINST v0.8.5 / 13836738 BEFORE THE FIX:
@@ -36,7 +36,7 @@
 // The SQLSTATE (42704, the same undefined_object family ENG-3906 uses) is
 // pinned in src/server/proto_util.zig; these tests pin THAT it is rejected.
 //
-// CANARY: REQ=REQ-ENG-3916-INDEX-OPTIONS-VALIDATION; FEATURE="FulltextIndex"; ASPECT=OptionsKeyValidation; STATUS=TESTED; TEST=tests/test_eng3916_fts_index_options.zig; OWNER=index; UPDATED=2026-08-25
+// CANARY: REQ=REQ-FTS-INDEX-OPTIONS-VALIDATION; FEATURE="FulltextIndex"; ASPECT=OptionsKeyValidation; STATUS=TESTED; TEST=tests/test_fts_index_options.zig; OWNER=index; UPDATED=2026-08-25
 
 const std = @import("std");
 const testing = std.testing;
@@ -146,7 +146,7 @@ const Harness = struct {
     }
 };
 
-test "ENG-3916: CREATE INDEX OPTIONS keys are rejected, never silently discarded" {
+test "FTS-INDEX-OPTIONS: CREATE INDEX OPTIONS keys are rejected, never silently discarded" {
     // ONE harness for all phases, for the same reason
     // tests/test_eng3906_index_with_params.zig uses one: the index-manager
     // registry is process-global and per-test re-init is an artefact of the
@@ -192,7 +192,7 @@ test "ENG-3916: CREATE INDEX OPTIONS keys are rejected, never silently discarded
     try h.checkAccepted(&failures, gpa, "CREATE INDEX e3916_ok_with ON E3916M (emb) USING vector WITH (metric = 'cosine')");
 
     if (failures.items.len != 0) {
-        std.debug.print("\n[ENG-3916] {d} index-OPTIONS contract violation(s):\n", .{failures.items.len});
+        std.debug.print("\n[FTS-INDEX-OPTIONS] {d} index-OPTIONS contract violation(s):\n", .{failures.items.len});
         for (failures.items) |f| std.debug.print("  - {s}\n", .{f});
         return error.IndexOptionsContractViolated;
     }

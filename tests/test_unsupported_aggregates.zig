@@ -1,4 +1,4 @@
-// ENG-3914 — parse-only aggregate traps: a statistic that silently evaluates to
+// UNSUPPORTED-AGGREGATES — parse-only aggregate traps: a statistic that silently evaluates to
 // NULL instead of not existing.
 //
 // VERIFIED READ-ONLY AGAINST v0.8.5 / 13836738 BEFORE THE FIX:
@@ -38,10 +38,10 @@
 // GROUP BY (`RETURN n.k, banana(n.v) GROUP BY n.k`) still evaluates to NULL,
 // because `evaluateGroupAggregation` returns NULL for every unrecognised Call.
 // That is a separate, wider defect in the grouped-evaluation path and is
-// deliberately NOT asserted here so this file stays inside the ENG-3914 blast
+// deliberately NOT asserted here so this file stays inside the UNSUPPORTED-AGGREGATES blast
 // radius.
 //
-// CANARY: REQ=REQ-ENG-3914-UNSUPPORTED-AGGREGATE-REJECTION; FEATURE="AggregateSetQuantifier"; ASPECT=UnsupportedAggregateReject; STATUS=TESTED; TEST=tests/test_eng3914_unsupported_aggregates.zig; OWNER=parser; UPDATED=2026-08-25
+// CANARY: REQ=REQ-UNSUPPORTED-AGGREGATE-REJECTION; FEATURE="AggregateSetQuantifier"; ASPECT=UnsupportedAggregateReject; STATUS=TESTED; TEST=tests/test_unsupported_aggregates.zig; OWNER=parser; UPDATED=2026-08-25
 
 const std = @import("std");
 const testing = std.testing;
@@ -174,7 +174,7 @@ const trap_names = [_][]const u8{
     "stdev",
 };
 
-test "ENG-3914: unimplemented aggregates are refused, not silently NULL" {
+test "UNSUPPORTED-AGGREGATES: unimplemented aggregates are refused, not silently NULL" {
     var h = try Harness.init(testing.allocator);
     defer h.deinit();
 
@@ -249,13 +249,13 @@ test "ENG-3914: unimplemented aggregates are refused, not silently NULL" {
     }
 
     if (failures.items.len != 0) {
-        std.debug.print("\n[ENG-3914] {d} unimplemented-aggregate contract violation(s):\n", .{failures.items.len});
+        std.debug.print("\n[UNSUPPORTED-AGGREGATES] {d} unimplemented-aggregate contract violation(s):\n", .{failures.items.len});
         for (failures.items) |f| std.debug.print("  - {s}\n", .{f});
         return error.UnimplementedAggregateNotRefused;
     }
 }
 
-test "ENG-3914: the six implemented aggregates keep working, quantifiers included" {
+test "UNSUPPORTED-AGGREGATES: the six implemented aggregates keep working, quantifiers included" {
     var h = try Harness.init(testing.allocator);
     defer h.deinit();
 
@@ -281,7 +281,7 @@ test "ENG-3914: the six implemented aggregates keep working, quantifiers include
     try h.checkAccepted(&failures, gpa, "MATCH (n:AggOk) RETURN count(*)");
 
     if (failures.items.len != 0) {
-        std.debug.print("\n[ENG-3914] {d} implemented aggregate(s) broken by the refusal:\n", .{failures.items.len});
+        std.debug.print("\n[UNSUPPORTED-AGGREGATES] {d} implemented aggregate(s) broken by the refusal:\n", .{failures.items.len});
         for (failures.items) |f| std.debug.print("  - {s}\n", .{f});
         return error.ImplementedAggregateRegressed;
     }
@@ -296,7 +296,7 @@ test "ENG-3914: the six implemented aggregates keep working, quantifiers include
     try testing.expectEqual(@as(i64, 2), distinct.rows[0][0].Int);
 }
 
-test "ENG-3914: SHOW FUNCTIONS no longer advertises the unimplemented aggregates" {
+test "UNSUPPORTED-AGGREGATES: SHOW FUNCTIONS no longer advertises the unimplemented aggregates" {
     var h = try Harness.init(testing.allocator);
     defer h.deinit();
 
@@ -317,7 +317,7 @@ test "ENG-3914: SHOW FUNCTIONS no longer advertises the unimplemented aggregates
         };
         for (trap_names) |trap| {
             if (std.ascii.eqlIgnoreCase(name, trap)) {
-                std.debug.print("\n[ENG-3914] SHOW FUNCTIONS still advertises unimplemented aggregate '{s}'\n", .{name});
+                std.debug.print("\n[UNSUPPORTED-AGGREGATES] SHOW FUNCTIONS still advertises unimplemented aggregate '{s}'\n", .{name});
                 advertised_traps += 1;
             }
         }

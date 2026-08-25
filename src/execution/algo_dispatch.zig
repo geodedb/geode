@@ -74,8 +74,8 @@ const dispatch_table = std.StaticStringMap(AlgoHandler).initComptime(.{
     .{ "biconnectedcomponents", handleBiconnected },
     // ==================== Graph Statistics ====================
     // CANARY: REQ=REQ-GQL-GRAPH-STATS-001; FEATURE="GraphStatistics"; ASPECT=CallProcedure; STATUS=TESTED; TEST="GAP-0514 P3: graph statistics procedures return real values through CALL"; OWNER=execution; UPDATED=2026-06-11
-    // CANARY: REQ=REQ-ENG-3912-ADVERTISE-DISPATCH-PARITY; FEATURE="GraphStatistics"; ASPECT=StreamAliasParity; STATUS=TESTED; TEST=tests/test_eng3912_advertise_dispatch_parity.zig; OWNER=execution; UPDATED=2026-08-25
-    // ENG-3912: src/gql/language_metadata.zig advertises the `.stream` spelling
+    // CANARY: REQ=REQ-FN-DISPATCH-PARITY; FEATURE="GraphStatistics"; ASPECT=StreamAliasParity; STATUS=TESTED; TEST=tests/test_fn_dispatch_parity.zig; OWNER=execution; UPDATED=2026-08-25
+    // FN-DISPATCH-PARITY: src/gql/language_metadata.zig advertises the `.stream` spelling
     // (and a bare alias) for every one of these, but only the bare `algo.<name>`
     // key was registered — so the exact names SHOW PROCEDURES prints, and the
     // exact `example` strings in the metadata, all raised UnknownProcedure.

@@ -25,8 +25,8 @@ const wkt_mod = @import("types/wkt.zig");
 // We lazily initialize a global registry once in a thread-safe manner (single-threaded init assumption for now).
 var global_adapter_registry: ?extf.Registry = null;
 var global_adapter_registry_init = std.atomic.Value(bool).init(false);
-// CANARY: REQ=REQ-ENG-3913-DATE-PART-EXACT-CALENDAR; FEATURE="ExtendedBuiltins"; ASPECT=AdapterRegistryLifetime; STATUS=TESTED; TEST=tests/test_eng3913_date_part_calendar.zig; OWNER=engine; UPDATED=2026-08-25
-// ENG-3913: this cache is PROCESS-GLOBAL and never freed, but it used to be
+// CANARY: REQ=REQ-DATE-PART-EXACT-CALENDAR; FEATURE="ExtendedBuiltins"; ASPECT=AdapterRegistryLifetime; STATUS=TESTED; TEST=tests/test_date_part_exact.zig; OWNER=engine; UPDATED=2026-08-25
+// DATE-PART-EXACT: this cache is PROCESS-GLOBAL and never freed, but it used to be
 // built from whichever allocator happened to make the first bridged call. Its
 // backing table then outlived that allocator — a use-after-free the moment the
 // first caller's arena was released (a segfault inside HashMap.capacity on the
@@ -51,8 +51,8 @@ fn getAdapterRegistry(allocator: std.mem.Allocator) !*extf.Registry {
 // Bridge for new experimental extended functions (uuid_v4, geobox_contains, polygon_area, vector_cosine etc.)
 // We expose them under their existing names; adapter converts between ExtValue and extf.BuiltinValue.
 
-// CANARY: REQ=REQ-ENG-3913-DATE-PART-EXACT-CALENDAR; FEATURE="ExtendedBuiltins"; ASPECT=TemporalArgumentBridge; STATUS=TESTED; TEST=tests/test_eng3913_date_part_calendar.zig; OWNER=eval; UPDATED=2026-08-25
-// ENG-3913: the temporal arms used to fall into the `else => Null` catch-all,
+// CANARY: REQ=REQ-DATE-PART-EXACT-CALENDAR; FEATURE="ExtendedBuiltins"; ASPECT=TemporalArgumentBridge; STATUS=TESTED; TEST=tests/test_date_part_exact.zig; OWNER=eval; UPDATED=2026-08-25
+// DATE-PART-EXACT: the temporal arms used to fall into the `else => Null` catch-all,
 // so `date_part('year', date('2024-12-31'))` handed fn_date_part a NULL second
 // argument and came back as error.TypeMismatch — date_part / time_part were
 // unreachable from GQL for their entire documented input domain. The units

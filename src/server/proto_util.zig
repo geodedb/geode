@@ -159,23 +159,23 @@ pub fn mapError(err: anyerror) ErrorInfo {
         // this arm covers in-process callers that map the error directly.)
         // CANARY: REQ=REQ-ENG-3906-INDEX-WITH-PARAM-VALIDATION; FEATURE="VectorIndex"; ASPECT=WithParameterValidation; STATUS=TESTED; TEST=tests/test_eng3906_index_with_params.zig; OWNER=index; UPDATED=2026-08-24
         error.UnknownIndexParameter => .{ .code = "42704", .message = "Unknown index parameter in the WITH clause: a vector index accepts only 'metric'; the HNSW tuning knobs m / ef_construction / ef_search are not implemented" },
-        // ENG-3914: an aggregate this engine recognises but does not implement
+        // UNSUPPORTED-AGGREGATES: an aggregate this engine recognises but does not implement
         // (percentile_cont, percentile_disc, stddev_samp, stddev_pop,
         // collect_list, stdev) used to parse and then evaluate to a silent NULL
         // inside GROUP BY. 42000 = syntax_error_or_access_rule_violation, the
         // syntax-class the front ends already use for parse-stage refusals.
-        // CANARY: REQ=REQ-ENG-3914-UNSUPPORTED-AGGREGATE-REJECTION; FEATURE="AggregateSetQuantifier"; ASPECT=SqlstateMapping; STATUS=TESTED; TEST=tests/test_eng3914_unsupported_aggregates.zig; OWNER=parser; UPDATED=2026-08-25
+        // CANARY: REQ=REQ-UNSUPPORTED-AGGREGATE-REJECTION; FEATURE="AggregateSetQuantifier"; ASPECT=SqlstateMapping; STATUS=TESTED; TEST=tests/test_unsupported_aggregates.zig; OWNER=parser; UPDATED=2026-08-25
         error.UnsupportedAggregateFunction => .{ .code = "42000", .message = "Unsupported aggregate function: this engine implements count, sum, avg, min, max and collect" },
-        // ENG-3915: a CREATE/ALTER POLICY whose USING expression the policy
+        // RLS-POLICY-DDL: a CREATE/ALTER POLICY whose USING expression the policy
         // predicate compiler cannot compile used to be ACCEPTED and stored with
         // compiled=null, which decide() then treats as fail-closed — the policy
         // silently denied everything it was written to allow.
-        // CANARY: REQ=REQ-ENG-3915-POLICY-COMPILE-ERROR-AT-DDL; FEATURE="GPS Policy DDL"; ASPECT=SqlstateMapping; STATUS=TESTED; TEST=tests/test_eng3915_policy_expression_ddl.zig; OWNER=security; UPDATED=2026-08-25
+        // CANARY: REQ=REQ-RLS-POLICY-COMPILE-ERROR-AT-DDL; FEATURE="GPS Policy DDL"; ASPECT=SqlstateMapping; STATUS=TESTED; TEST=tests/test_rls_policy_ddl.zig; OWNER=security; UPDATED=2026-08-25
         error.UnsupportedPolicyExpression => .{ .code = "42000", .message = "Unsupported policy USING expression: the policy predicate compiler accepts only true, current_user()/current_tenant()/current_graph()/resource.label/principal.attributes.<key> compared with = to a quoted literal, combined with AND / OR / parentheses" },
-        // ENG-3916: an OPTIONS { … } key on CREATE INDEX used to be parsed and
+        // FTS-INDEX-OPTIONS: an OPTIONS { … } key on CREATE INDEX used to be parsed and
         // thrown away, so a user who tuned a fulltext index believed a setting
         // took effect that never existed. Same 42704 family as ENG-3906.
-        // CANARY: REQ=REQ-ENG-3916-INDEX-OPTIONS-VALIDATION; FEATURE="FulltextIndex"; ASPECT=SqlstateMapping; STATUS=TESTED; TEST=tests/test_eng3916_fts_index_options.zig; OWNER=index; UPDATED=2026-08-25
+        // CANARY: REQ=REQ-FTS-INDEX-OPTIONS-VALIDATION; FEATURE="FulltextIndex"; ASPECT=SqlstateMapping; STATUS=TESTED; TEST=tests/test_fts_index_options.zig; OWNER=index; UPDATED=2026-08-25
         error.UnknownIndexOption => .{ .code = "42704", .message = "Unknown index OPTIONS key: CREATE INDEX implements no OPTIONS keys; the BM25 knobs k1 / b and the analyzer are fixed by the fts-storage engine and are not tunable per index" },
         error.VectorDimensionMismatch => .{ .code = "22000", .message = "Vector dimension does not match the indexed property's established dimension" },
         // ENG-3910: the right-hand side of IN / NOT IN was neither a LIST nor

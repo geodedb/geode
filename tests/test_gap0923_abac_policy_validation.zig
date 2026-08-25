@@ -8,13 +8,13 @@
 //       first, leaving a ghost duplicate. addPolicy now rejects a duplicate
 //       name with error.PolicyAlreadyExists.
 //
-//   (a) SUPERSEDED BY ENG-3915 (2026-08-25) — this used to read "INTENTIONALLY
+//   (a) SUPERSEDED BY RLS-POLICY-DDL (2026-08-25) — this used to read "INTENTIONALLY
 //       RETAINED (fail-closed)". It is no longer the DDL contract: a
 //       CREATE/ALTER POLICY whose USING expression does not compile is now
 //       REFUSED at DDL time (PolicyCatalog.addPolicyStrict ->
 //       error.UnsupportedPolicyExpression), because accepting it installed a
 //       policy that silently denied everything it was written to allow. See
-//       tests/test_eng3915_policy_expression_ddl.zig.
+//       tests/test_rls_policy_ddl.zig.
 //
 //       The TOLERANT entry point exercised below (`addPolicy`) survives for
 //       exactly one caller: startup hydration from __geode_security, where a
@@ -69,7 +69,7 @@ test "GAP-0923(a): a malformed USING policy stores fail-closed (compiled=null), 
     var cat = policy_catalog.PolicyCatalog.init(testing.allocator);
     defer cat.deinit();
 
-    // ENG-3915: `addPolicy` is now the TOLERANT (hydration) entry point; the DDL
+    // RLS-POLICY-DDL: `addPolicy` is now the TOLERANT (hydration) entry point; the DDL
     // path uses `addPolicyStrict` and refuses this input outright. What is
     // asserted here is the hydration contract — retained, never compiled, never
     // able to grant.

@@ -319,7 +319,7 @@ pub const Parser = struct {
         return error.UnexpectedToken;
     }
 
-    // CANARY: REQ=REQ-ENG-3914-UNSUPPORTED-AGGREGATE-REJECTION; FEATURE="AggregateSetQuantifier"; ASPECT=UnsupportedAggregateReject; STATUS=TESTED; TEST=tests/test_eng3914_unsupported_aggregates.zig; OWNER=parser; UPDATED=2026-08-25
+    // CANARY: REQ=REQ-UNSUPPORTED-AGGREGATE-REJECTION; FEATURE="AggregateSetQuantifier"; ASPECT=UnsupportedAggregateReject; STATUS=TESTED; TEST=tests/test_unsupported_aggregates.zig; OWNER=parser; UPDATED=2026-08-25
     /// Refuse a recognised-but-unimplemented aggregate, quoting the name the
     /// user wrote so the diagnostic is actionable.
     fn unsupportedAggregate(self: *Parser, name: []const u8) ParserError {
@@ -3543,8 +3543,8 @@ pub const Parser = struct {
                     }
                 }
 
-                // CANARY: REQ=REQ-ENG-3914-UNSUPPORTED-AGGREGATE-REJECTION; FEATURE="AggregateSetQuantifier"; ASPECT=UnsupportedAggregateReject; STATUS=TESTED; TEST=tests/test_eng3914_unsupported_aggregates.zig; OWNER=parser; UPDATED=2026-08-25
-                // ENG-3914: refuse the recognised-but-unimplemented aggregates
+                // CANARY: REQ=REQ-UNSUPPORTED-AGGREGATE-REJECTION; FEATURE="AggregateSetQuantifier"; ASPECT=UnsupportedAggregateReject; STATUS=TESTED; TEST=tests/test_unsupported_aggregates.zig; OWNER=parser; UPDATED=2026-08-25
+                // UNSUPPORTED-AGGREGATES: refuse the recognised-but-unimplemented aggregates
                 // BEFORE the argument list is parsed, so that
                 // `collect_list(DISTINCT x)` reports the unsupported function by
                 // name instead of tripping over the now-unexpected DISTINCT and
@@ -4213,11 +4213,11 @@ pub const Parser = struct {
     }
 
     // CANARY: REQ=REQ-GQL-SET-QUANTIFIER-004; FEATURE="AggregateSetQuantifier"; ASPECT=ComputationalOperation; STATUS=TESTED; TEST=tests/test_bug731_aggregates_vectors.zig; OWNER=parser; UPDATED=2026-07-31
-    // CANARY: REQ=REQ-ENG-3914-UNSUPPORTED-AGGREGATE-REJECTION; FEATURE="AggregateSetQuantifier"; ASPECT=ComputationalOperation; STATUS=TESTED; TEST=tests/test_eng3914_unsupported_aggregates.zig; OWNER=parser; UPDATED=2026-08-25
+    // CANARY: REQ=REQ-UNSUPPORTED-AGGREGATE-REJECTION; FEATURE="AggregateSetQuantifier"; ASPECT=ComputationalOperation; STATUS=TESTED; TEST=tests/test_unsupported_aggregates.zig; OWNER=parser; UPDATED=2026-08-25
     /// ISO/IEC 39075:2024 <computational operation> — the aggregate names whose
     /// argument may be prefixed with a <set quantifier> (DISTINCT | ALL).
     ///
-    /// ENG-3914: this list used to also carry collect_list / stddev_samp /
+    /// UNSUPPORTED-AGGREGATES: this list used to also carry collect_list / stddev_samp /
     /// stddev_pop / percentile_cont / percentile_disc, none of which
     /// src/execution/aggregation_evaluation.zig implements. It is now exactly
     /// the implemented set; the phantom names are refused by
@@ -4233,12 +4233,12 @@ pub const Parser = struct {
         return false;
     }
 
-    // CANARY: REQ=REQ-ENG-3914-UNSUPPORTED-AGGREGATE-REJECTION; FEATURE="AggregateSetQuantifier"; ASPECT=UnsupportedAggregateReject; STATUS=TESTED; TEST=tests/test_eng3914_unsupported_aggregates.zig; OWNER=parser; UPDATED=2026-08-25
+    // CANARY: REQ=REQ-UNSUPPORTED-AGGREGATE-REJECTION; FEATURE="AggregateSetQuantifier"; ASPECT=UnsupportedAggregateReject; STATUS=TESTED; TEST=tests/test_unsupported_aggregates.zig; OWNER=parser; UPDATED=2026-08-25
     /// Aggregate names this engine recognises as aggregates but does NOT
     /// implement. `src/execution/aggregation_evaluation.zig` implements exactly
     /// count / countDistinct / sum / avg / min / max / collect.
     ///
-    /// ENG-3914 — WHY THIS IS A HARD PARSE-TIME REFUSAL AND NOT A RUNTIME NULL:
+    /// UNSUPPORTED-AGGREGATES — WHY THIS IS A HARD PARSE-TIME REFUSAL AND NOT A RUNTIME NULL:
     /// the grouped-aggregation path (`evaluateGroupAggregation`) answers NULL
     /// for any Call it does not recognise, so
     ///
@@ -5306,9 +5306,9 @@ pub const Parser = struct {
         }
 
         // Optional OPTIONS clause (alternative to USING/WITH)
-        // CANARY: REQ=REQ-ENG-3916-INDEX-OPTIONS-VALIDATION; FEATURE="FulltextIndex"; ASPECT=OptionsKeyValidation; STATUS=TESTED; TEST=tests/test_eng3916_fts_index_options.zig; OWNER=index; UPDATED=2026-08-25
+        // CANARY: REQ=REQ-FTS-INDEX-OPTIONS-VALIDATION; FEATURE="FulltextIndex"; ASPECT=OptionsKeyValidation; STATUS=TESTED; TEST=tests/test_fts_index_options.zig; OWNER=index; UPDATED=2026-08-25
         //
-        // ENG-3916 (same class as ENG-3906): this block used to skip to the
+        // FTS-INDEX-OPTIONS (same class as ENG-3906): this block used to skip to the
         // matching brace and throw every key away, so
         //
         //   CREATE INDEX i ON L (p) USING fulltext OPTIONS {k1: 1.5, b: 0.3}
@@ -6896,8 +6896,8 @@ pub const Parser = struct {
                     // it points past *that* token's start, so back off to the
                     // beginning of the new cur token for the actual end.
                     //
-                    // CANARY: REQ=REQ-ENG-3915-POLICY-COMPILE-ERROR-AT-DDL; FEATURE="GPS Policy Expression"; ASPECT=UsingCaptureExcludesTerminator; STATUS=TESTED; TEST=tests/test_eng3915_policy_expression_ddl.zig; OWNER=security; UPDATED=2026-08-25
-                    // ENG-3915: the semicolon arm used to take self.lx.idx too,
+                    // CANARY: REQ=REQ-RLS-POLICY-COMPILE-ERROR-AT-DDL; FEATURE="GPS Policy Expression"; ASPECT=UsingCaptureExcludesTerminator; STATUS=TESTED; TEST=tests/test_rls_policy_ddl.zig; OWNER=security; UPDATED=2026-08-25
+                    // RLS-POLICY-DDL: the semicolon arm used to take self.lx.idx too,
                     // which points PAST the `;` — so the captured source was
                     // "current_user() = 'alice';" and compileExpression rejected
                     // it as trailing junk. Every semicolon-terminated

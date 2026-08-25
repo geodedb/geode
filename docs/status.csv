@@ -726,6 +726,10 @@ REQ-DATE-INTERVAL-001,DateIntervalArithmetic,Addition,TESTED,,,eval,2026-01-15,t
 REQ-DATE-INTERVAL-002,DateIntervalArithmetic,Subtraction,TESTED,,,eval,2026-01-09,src/eval.zig
 REQ-DATE-INTERVAL-003,DateIntervalArithmetic,Helper,TESTED,,,datetime,2026-01-09,src/types/datetime.zig
 REQ-DATE-INTERVAL-004,DateIntervalArithmetic,Helper,TESTED,,,datetime,2026-01-09,src/types/datetime.zig
+REQ-DATE-PART-EXACT-CALENDAR,ExtendedBuiltins,AdapterRegistryLifetime,TESTED,,,engine,2026-08-25,src/eval_extended.zig
+REQ-DATE-PART-EXACT-CALENDAR,ExtendedBuiltins,FUNCTION_DATE_PART,TESTED,,,engine,2026-08-25,src/types/extended_functions.zig
+REQ-DATE-PART-EXACT-CALENDAR,ExtendedBuiltins,FUNCTION_DATE_PART,TESTED,,,engine,2026-08-25,tests/test_date_part_exact.zig
+REQ-DATE-PART-EXACT-CALENDAR,ExtendedBuiltins,TemporalArgumentBridge,TESTED,,,eval,2026-08-25,src/eval_extended.zig
 REQ-DATETIME-001,DateTimeFunctions,Timestamp,TESTED,,,eval,2026-01-15,tests/test_gap_0193_impl_verification.zig
 REQ-DATETIME-001,DateTimeFunctions,datetime,TESTED,,,datetime,2025-12-22,src/eval.zig
 REQ-DATETIME-001,DateTimeFunctions,duration,TESTED,,,datetime,2026-01-09,src/eval.zig
@@ -1011,34 +1015,6 @@ REQ-ENG-3910-IN-PREDICATE-TYPE-SAFETY,NotInOperator,NonListRightHandSide,TESTED,
 REQ-ENG-3911-PROPERTY-VALUE-SIZE-ERROR,PropertyStorage,OversizedValueErrorMapping,TESTED,,,transport,2026-08-25,src/server/proto_util.zig
 REQ-ENG-3911-PROPERTY-VALUE-SIZE-ERROR,PropertyStorage,OversizedValueErrorMapping,TESTED,,,transport,2026-08-25,src/storage/graph_storage_adapter.zig
 REQ-ENG-3911-PROPERTY-VALUE-SIZE-ERROR,PropertyStorage,OversizedValueErrorMapping,TESTED,,,transport,2026-08-25,tests/test_eng3911_property_value_size_error.zig
-REQ-ENG-3912-ADVERTISE-DISPATCH-PARITY,AdvertiseDispatchParity,FunctionsAndProcedures,TESTED,,,execution,2026-08-25,tests/test_eng3912_advertise_dispatch_parity.zig
-REQ-ENG-3912-ADVERTISE-DISPATCH-PARITY,GraphStatistics,StreamAliasParity,TESTED,,,execution,2026-08-25,src/execution/algo_dispatch.zig
-REQ-ENG-3912-ADVERTISE-DISPATCH-PARITY,SHOW FUNCTIONS,ReduceUnadvertised,TESTED,,,execution,2026-08-25,src/execution/statement_handlers.zig
-REQ-ENG-3912-ADVERTISE-DISPATCH-PARITY,StringFunctions,Split,TESTED,,,eval,2026-08-25,src/eval/call_handlers.zig
-REQ-ENG-3912-SIZE-OF-VECTOR,SizeFunction,VectorDimension,TESTED,,,eval,2026-08-25,src/eval.zig
-REQ-ENG-3912-SIZE-OF-VECTOR,SizeFunction,VectorDimension,TESTED,,,eval,2026-08-25,src/eval/call_handlers.zig
-REQ-ENG-3912-SIZE-OF-VECTOR,SizeFunction,VectorDimension,TESTED,,,eval,2026-08-25,tests/test_eng3912_advertise_dispatch_parity.zig
-REQ-ENG-3913-DATE-PART-EXACT-CALENDAR,ExtendedBuiltins,AdapterRegistryLifetime,TESTED,,,engine,2026-08-25,src/eval_extended.zig
-REQ-ENG-3913-DATE-PART-EXACT-CALENDAR,ExtendedBuiltins,FUNCTION_DATE_PART,TESTED,,,engine,2026-08-25,src/types/extended_functions.zig
-REQ-ENG-3913-DATE-PART-EXACT-CALENDAR,ExtendedBuiltins,FUNCTION_DATE_PART,TESTED,,,engine,2026-08-25,tests/test_eng3913_date_part_calendar.zig
-REQ-ENG-3913-DATE-PART-EXACT-CALENDAR,ExtendedBuiltins,TemporalArgumentBridge,TESTED,,,eval,2026-08-25,src/eval_extended.zig
-REQ-ENG-3914-UNSUPPORTED-AGGREGATE-REJECTION,AggregateSetQuantifier,ComputationalOperation,TESTED,,,parser,2026-08-25,src/gql/parser.zig
-REQ-ENG-3914-UNSUPPORTED-AGGREGATE-REJECTION,AggregateSetQuantifier,SqlstateMapping,TESTED,,,parser,2026-08-25,src/server/proto_util.zig
-REQ-ENG-3914-UNSUPPORTED-AGGREGATE-REJECTION,AggregateSetQuantifier,UnsupportedAggregateReject,TESTED,,,parser,2026-08-25,src/gql/parser.zig
-REQ-ENG-3914-UNSUPPORTED-AGGREGATE-REJECTION,AggregateSetQuantifier,UnsupportedAggregateReject,TESTED,,,parser,2026-08-25,src/gql/parser.zig
-REQ-ENG-3914-UNSUPPORTED-AGGREGATE-REJECTION,AggregateSetQuantifier,UnsupportedAggregateReject,TESTED,,,parser,2026-08-25,src/gql/parser.zig
-REQ-ENG-3914-UNSUPPORTED-AGGREGATE-REJECTION,AggregateSetQuantifier,UnsupportedAggregateReject,TESTED,,,parser,2026-08-25,tests/test_eng3914_unsupported_aggregates.zig
-REQ-ENG-3914-UNSUPPORTED-AGGREGATE-REJECTION,SHOW FUNCTIONS,UnimplementedAggregatesUnadvertised,TESTED,,,execution,2026-08-25,src/execution/statement_handlers.zig
-REQ-ENG-3915-POLICY-COMPILE-ERROR-AT-DDL,GPS Policy DDL,CompileErrorSurfaced,TESTED,,,security,2026-08-25,tests/test_eng3915_policy_expression_ddl.zig
-REQ-ENG-3915-POLICY-COMPILE-ERROR-AT-DDL,GPS Policy DDL,CompileFailureMode,TESTED,,,security,2026-08-25,src/security/policy_catalog.zig
-REQ-ENG-3915-POLICY-COMPILE-ERROR-AT-DDL,GPS Policy DDL,CreatePolicyStrictCompile,TESTED,,,security,2026-08-25,src/execution.zig
-REQ-ENG-3915-POLICY-COMPILE-ERROR-AT-DDL,GPS Policy DDL,PolicyCatalogAddStrict,TESTED,,,security,2026-08-25,src/security/policy_catalog.zig
-REQ-ENG-3915-POLICY-COMPILE-ERROR-AT-DDL,GPS Policy DDL,SqlstateMapping,TESTED,,,security,2026-08-25,src/server/proto_util.zig
-REQ-ENG-3915-POLICY-COMPILE-ERROR-AT-DDL,GPS Policy Expression,UsingCaptureExcludesTerminator,TESTED,,,security,2026-08-25,src/gql/parser.zig
-REQ-ENG-3915-POLICY-COMPILE-ERROR-AT-DDL,GPS Policy Persistence,HydrationTolerance,TESTED,,,security,2026-08-25,src/security/policy_persistence.zig
-REQ-ENG-3916-INDEX-OPTIONS-VALIDATION,FulltextIndex,OptionsKeyValidation,TESTED,,,index,2026-08-25,src/gql/parser.zig
-REQ-ENG-3916-INDEX-OPTIONS-VALIDATION,FulltextIndex,OptionsKeyValidation,TESTED,,,index,2026-08-25,tests/test_eng3916_fts_index_options.zig
-REQ-ENG-3916-INDEX-OPTIONS-VALIDATION,FulltextIndex,SqlstateMapping,TESTED,,,index,2026-08-25,src/server/proto_util.zig
 REQ-ENGINE-001,Engine,QueryExecution,TESTED,,,engine,2026-01-15,tests/test_gap_0193_final_batch.zig
 REQ-ENGINE-002,Engine,PlanGeneration,TESTED,,,engine,2026-01-15,tests/test_gap_0193_final_batch.zig
 REQ-ENGINE-003,Engine,ResultStreaming,TESTED,,,engine,2026-01-15,tests/test_gap_0193_final_batch.zig
@@ -1255,7 +1231,17 @@ REQ-FLE-TEST-004,FLE,Migration,TESTED,,,security,2026-01-16,tests/test_gap_0193_
 REQ-FLE-TEST-004,FieldLevelEncryption,MigrationTesting,TESTED,,,security,2026-01-15,tests/test_gap_0193_high_priority.zig
 REQ-FLE-TEST-005,FLE,RBAC,TESTED,,,security,2026-01-16,tests/test_gap_0193_batch2_testing.zig
 REQ-FLE-TEST-005,FieldLevelEncryption,RBACTesting,TESTED,,,security,2026-01-15,tests/test_gap_0193_high_priority.zig
+REQ-FN-DISPATCH-PARITY,AdvertiseDispatchParity,FunctionsAndProcedures,TESTED,,,execution,2026-08-25,tests/test_fn_dispatch_parity.zig
+REQ-FN-DISPATCH-PARITY,GraphStatistics,StreamAliasParity,TESTED,,,execution,2026-08-25,src/execution/algo_dispatch.zig
+REQ-FN-DISPATCH-PARITY,SHOW FUNCTIONS,ReduceUnadvertised,TESTED,,,execution,2026-08-25,src/execution/statement_handlers.zig
+REQ-FN-DISPATCH-PARITY,StringFunctions,Split,TESTED,,,eval,2026-08-25,src/eval/call_handlers.zig
+REQ-FN-SIZE-OF-VECTOR,SizeFunction,VectorDimension,TESTED,,,eval,2026-08-25,src/eval.zig
+REQ-FN-SIZE-OF-VECTOR,SizeFunction,VectorDimension,TESTED,,,eval,2026-08-25,src/eval/call_handlers.zig
+REQ-FN-SIZE-OF-VECTOR,SizeFunction,VectorDimension,TESTED,,,eval,2026-08-25,tests/test_fn_dispatch_parity.zig
 REQ-FTS-001,FTS,FullTextSearch,TESTED,,,search,2026-01-16,tests/test_gap_0193_batch3_comprehensive.zig
+REQ-FTS-INDEX-OPTIONS-VALIDATION,FulltextIndex,OptionsKeyValidation,TESTED,,,index,2026-08-25,src/gql/parser.zig
+REQ-FTS-INDEX-OPTIONS-VALIDATION,FulltextIndex,OptionsKeyValidation,TESTED,,,index,2026-08-25,tests/test_fts_index_options.zig
+REQ-FTS-INDEX-OPTIONS-VALIDATION,FulltextIndex,SqlstateMapping,TESTED,,,index,2026-08-25,src/server/proto_util.zig
 REQ-FTS-SEARCH-001,FTS,FullTextSearch,TESTED,,,fts,2026-01-16,tests/test_gap_0193_batch4_comprehensive.zig
 REQ-FUZZ-DICT-001,FuzzDictionaries,MetadataDerived,EXEMPT,,,tooling,2026-01-03,scripts/generate_fuzz_dict.zig
 REQ-FUZZ-DICT-002,FuzzDictionaries,BuildTarget,EXEMPT,,,tooling,2026-01-03,build.zig
@@ -4662,6 +4648,13 @@ REQ-RLS-EXPR-005,RLSExpressionCompilation,AttributeEvaluation,EXEMPT,,,security,
 REQ-RLS-EXPR-VM-BOUNDS,RLSBytecodeVM,MemorySafety,TESTED,,,security,2026-04-16,src/security/rls_core.zig
 REQ-RLS-FAILCLOSED-001,RLSFailClosed,ExpressionEvaluation,IMPL,,,security,2026-04-05,src/security/rls_enhanced.zig
 REQ-RLS-PERM-001,RLSPermissionCheck,Security,TESTED,,,security,2026-01-30,src/security/rls_core.zig
+REQ-RLS-POLICY-COMPILE-ERROR-AT-DDL,GPS Policy DDL,CompileErrorSurfaced,TESTED,,,security,2026-08-25,tests/test_rls_policy_ddl.zig
+REQ-RLS-POLICY-COMPILE-ERROR-AT-DDL,GPS Policy DDL,CompileFailureMode,TESTED,,,security,2026-08-25,src/security/policy_catalog.zig
+REQ-RLS-POLICY-COMPILE-ERROR-AT-DDL,GPS Policy DDL,CreatePolicyStrictCompile,TESTED,,,security,2026-08-25,src/execution.zig
+REQ-RLS-POLICY-COMPILE-ERROR-AT-DDL,GPS Policy DDL,PolicyCatalogAddStrict,TESTED,,,security,2026-08-25,src/security/policy_catalog.zig
+REQ-RLS-POLICY-COMPILE-ERROR-AT-DDL,GPS Policy DDL,SqlstateMapping,TESTED,,,security,2026-08-25,src/server/proto_util.zig
+REQ-RLS-POLICY-COMPILE-ERROR-AT-DDL,GPS Policy Expression,UsingCaptureExcludesTerminator,TESTED,,,security,2026-08-25,src/gql/parser.zig
+REQ-RLS-POLICY-COMPILE-ERROR-AT-DDL,GPS Policy Persistence,HydrationTolerance,TESTED,,,security,2026-08-25,src/security/policy_persistence.zig
 REQ-RLS-SECURITY-001,RLS,PolicyEnforcement,TESTED,,,security,2026-01-16,tests/test_gap_0193_batch2_security.zig
 REQ-RLS-SECURITY-002,RLS,RowFiltering,TESTED,,,security,2026-01-16,tests/test_gap_0193_batch2_security.zig
 REQ-RLS-SECURITY-003,RLS,PolicyCompilation,TESTED,,,security,2026-01-16,tests/test_gap_0193_batch2_security.zig
@@ -5340,6 +5333,13 @@ REQ-UNITTEST-STORAGE-001,UnitTests,StorageTests,TESTED,,,test,2026-01-16,tests/t
 REQ-UNITTEST-STORE-001,UnitTests,StorageTests,TESTED,,,testing,2026-01-16,tests/test_gap_0193_batch3_comprehensive.zig
 REQ-UNITTESTING-001,UnitTesting,TestHarness,TESTED,,,test,2026-01-15,tests/test_gap_0193_final_batch.zig
 REQ-UNKNOWN-FUNCTION-DIAGNOSTIC-001,UnknownFunctionDiagnostic,EvalDispatch,TESTED,,,eval,2026-07-31,src/eval.zig
+REQ-UNSUPPORTED-AGGREGATE-REJECTION,AggregateSetQuantifier,ComputationalOperation,TESTED,,,parser,2026-08-25,src/gql/parser.zig
+REQ-UNSUPPORTED-AGGREGATE-REJECTION,AggregateSetQuantifier,SqlstateMapping,TESTED,,,parser,2026-08-25,src/server/proto_util.zig
+REQ-UNSUPPORTED-AGGREGATE-REJECTION,AggregateSetQuantifier,UnsupportedAggregateReject,TESTED,,,parser,2026-08-25,src/gql/parser.zig
+REQ-UNSUPPORTED-AGGREGATE-REJECTION,AggregateSetQuantifier,UnsupportedAggregateReject,TESTED,,,parser,2026-08-25,src/gql/parser.zig
+REQ-UNSUPPORTED-AGGREGATE-REJECTION,AggregateSetQuantifier,UnsupportedAggregateReject,TESTED,,,parser,2026-08-25,src/gql/parser.zig
+REQ-UNSUPPORTED-AGGREGATE-REJECTION,AggregateSetQuantifier,UnsupportedAggregateReject,TESTED,,,parser,2026-08-25,tests/test_unsupported_aggregates.zig
+REQ-UNSUPPORTED-AGGREGATE-REJECTION,SHOW FUNCTIONS,UnimplementedAggregatesUnadvertised,TESTED,,,execution,2026-08-25,src/execution/statement_handlers.zig
 REQ-USER-CREATE-PASSWORD-001,CLI Password Security,Security,TESTED,,,cli,2026-02-24,src/cli/user_mgmt_cli.zig
 REQ-USER-METADATA-001,User Metadata Handling,DataIntegrity,EXEMPT,,,security,2026-01-13,src/security/user_manager.zig
 REQ-VALID-001,Validation,InputValidation,TESTED,,,core,2026-01-16,tests/test_gap_0193_batch3_comprehensive.zig
