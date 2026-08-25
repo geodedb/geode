@@ -137,5 +137,54 @@ pub fn ensureAdvancedRuntimeIndex(
         else => return,
     }
     try manager.registerAdvancedPropertyIndex(index_name, label, properties[0], runtime_type);
+    try queueOrRunAdvancedIndexBackfill(allocator, manager, index_name);
+}
+
+// CANARY: REQ=REQ-ENG-CREATE-INDEX-BACKFILL-OUTSIDE-WRITE-LOCK; FEATURE="AdvancedIndex"; ASPECT=DeferredBackfill; STATUS=TESTED; TEST=tests/test_create_index_backfill_deferral.zig; OWNER=index; UPDATED=2026-08-25
+/// CREATE INDEX used to run its whole backfill INSIDE the per-graph EXCLUSIVE
+/// write lock the transport handler holds for the duration of a mutating
+/// statement, so every unrelated write in the database — any label, any
+/// session — queued behind a full scan of the indexed label (verified >150s of
+/// dead air on a large graph).
+///
+/// The deferral machinery already exists for the incremental rebuilds
+/// (`ExecutionContext.pending_index_rebuilds`, GAP-0511): both the QUIC and
+/// gRPC handlers RELEASE the exclusive lock and only then call
+/// `rebuildPendingIndexes`, which re-takes a SHARED lock. Enqueuing here puts
+/// the CREATE INDEX backfill on that same path, so unrelated writers proceed
+/// while it runs.
+///
+/// Falls back to running the backfill inline when there is no queue to put it
+/// on (CLI, embedded and test callers, which hold no transport lock and so
+/// block nobody).
+///
+/// REMAINING LIMITATION, stated plainly: the backfill still runs before the
+/// statement's response is written, so the CREATING SESSION still waits for
+/// it, and it still takes a shared graph lock for the scan, so a concurrent
+/// writer on the SAME graph can still be delayed by lock hand-off. Making the
+/// backfill genuinely asynchronous (and keeping the index consistent with
+/// writes that land while it runs) needs the incremental-maintenance design
+/// this cycle deliberately does not attempt.
+fn queueOrRunAdvancedIndexBackfill(
+    allocator: std.mem.Allocator,
+    manager: *index_manager.IndexManager,
+    index_name: []const u8,
+) !void {
+    const execution = @import("../execution.zig");
+    if (execution.getActiveContext()) |ctx| {
+        if (ctx.pending_index_rebuilds) |rebuilds| {
+            // The keys are freed by the handler that owns the map, so they must
+            // be duped with ITS allocator.
+            const alloc = ctx.pending_index_rebuilds_allocator orelse allocator;
+            const name_copy = try alloc.dupe(u8, index_name);
+            const gop = rebuilds.getOrPut(name_copy) catch |err| {
+                alloc.free(name_copy);
+                return err;
+            };
+            if (gop.found_existing) alloc.free(name_copy);
+            return;
+        }
+    }
+
     try manager.rebuildAdvancedIndex(graph_store.getGlobalStore(allocator), index_name);
 }

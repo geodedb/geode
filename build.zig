@@ -9365,6 +9365,17 @@ pub fn build(b: *std.Build) void {
     const gap0918_tests = b.addTest(.{ .root_module = gap0918_test_mod });
     const run_gap0918_tests = b.addRunArtifact(gap0918_tests);
     shardDep(test_step, &run_gap0918_tests.step, 0, test_shard_loads, test_shard_index);
+    // CREATE INDEX ran its whole backfill inside the per-graph EXCLUSIVE write
+    // lock, so every unrelated write in the database queued behind a full scan
+    // of the indexed label (verified >150s of dead air).
+    const backfill_defer_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_create_index_backfill_deferral.zig"), .target = target, .optimize = optimize });
+    backfill_defer_test_mod.addImport("geode", root_mod);
+    const backfill_defer_tests = b.addTest(.{ .root_module = backfill_defer_test_mod });
+    const run_backfill_defer_tests = b.addRunArtifact(backfill_defer_tests);
+    shardDep(test_step, &run_backfill_defer_tests.step, 0, test_shard_loads, test_shard_index);
+    const backfill_defer_step = b.step("test-create-index-backfill", "Run CREATE INDEX backfill deferral (write-lock liveness) regressions");
+    backfill_defer_step.dependOn(&run_backfill_defer_tests.step);
+
     // `CREATE INDEX … USING vector` / `USING HNSW` silently built no runtime
     // index at all (only `USING vector_f32` did), and the validated metric was
     // discarded in favour of a hardcoded .l2.
