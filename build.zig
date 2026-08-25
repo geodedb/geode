@@ -9187,6 +9187,39 @@ pub fn build(b: *std.Build) void {
     const eng3904_step = b.step("test-eng3904-3905", "Run ENG-3904 leading-negative list literal and ENG-3905 vectorf32($param) regressions");
     eng3904_step.dependOn(&run_eng3904_tests.step);
 
+    // ENG-3906: CREATE INDEX WITH-parameter validation — the `metric: 'x'` map
+    // spelling bypasses the metric validator that `metric = 'x'` reaches, and
+    // unknown/unsupported WITH keys are silently discarded on vector indexes.
+    const eng3906_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_eng3906_index_with_params.zig"), .target = target, .optimize = optimize });
+    eng3906_test_mod.addImport("geode", root_mod);
+    const eng3906_tests = b.addTest(.{ .root_module = eng3906_test_mod });
+    const run_eng3906_tests = b.addRunArtifact(eng3906_tests);
+    shardDep(test_step, &run_eng3906_tests.step, 0, test_shard_loads, test_shard_index);
+    const eng3906_step = b.step("test-eng3906", "Run ENG-3906 CREATE INDEX WITH-parameter validation regressions");
+    eng3906_step.dependOn(&run_eng3906_tests.step);
+
+    // ENG-3910: IN / NOT IN fail open on a non-LIST right-hand side
+    // (src/eval.zig:1142 returns false, :1155 returns true). Direct unit test
+    // on the public eval.evalExpr with hand-built AST nodes.
+    const eng3910_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_eng3910_in_type_safety.zig"), .target = target, .optimize = optimize });
+    eng3910_test_mod.addImport("geode", root_mod);
+    const eng3910_tests = b.addTest(.{ .root_module = eng3910_test_mod });
+    const run_eng3910_tests = b.addRunArtifact(eng3910_tests);
+    shardDep(test_step, &run_eng3910_tests.step, 0, test_shard_loads, test_shard_index);
+    const eng3910_step = b.step("test-eng3910", "Run ENG-3910 IN/NOT IN non-LIST right-hand-side type-safety regressions");
+    eng3910_step.dependOn(&run_eng3910_tests.step);
+
+    // ENG-3911: an oversized property VALUE is reported as `PropertyKeyTooLong`
+    // / SQLSTATE 58000. Direct unit test on the public proto_util.mapError.
+    const eng3911_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_eng3911_property_value_size_error.zig"), .target = target, .optimize = optimize });
+    eng3911_test_mod.addImport("geode", root_mod);
+    eng3911_test_mod.link_libc = true;
+    const eng3911_tests = b.addTest(.{ .root_module = eng3911_test_mod });
+    const run_eng3911_tests = b.addRunArtifact(eng3911_tests);
+    shardDep(test_step, &run_eng3911_tests.step, 0, test_shard_loads, test_shard_index);
+    const eng3911_step = b.step("test-eng3911", "Run ENG-3911 oversized-property-value error mapping regressions");
+    eng3911_step.dependOn(&run_eng3911_tests.step);
+
     // GAP-0917: ISO post-error transaction semantics — statements after a
     // mid-transaction error are rejected until ROLLBACK; COMMIT aborts.
     const gap0917_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_gap0917_txn_post_error.zig"), .target = target, .optimize = optimize });

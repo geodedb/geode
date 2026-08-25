@@ -93,7 +93,14 @@ test "GAP-0918: vector validation (dimension write-check, DDL metric, malformed 
     // ---- (a) dimension-mismatched insert is rejected ----
     _ = try h.exec("CREATE GRAPH gap0918");
     _ = try h.exec("USE GRAPH gap0918");
-    _ = try h.exec("CREATE INDEX p18_vec_idx ON P18Vec (emb) USING HNSW WITH (metric = 'cosine', ef_construction = 200, M = 16)");
+    // NOTE (ENG-3906, 2026-08-24): the trailing `ef_construction = 200, M = 16`
+    // were dropped from this statement and from the p18_bad_metric one below.
+    // Those keys are not implemented by this engine and were being silently
+    // discarded; ENG-3906 makes unknown WITH keys on a vector index a hard
+    // error, so leaving them here would turn this GAP-0918 regression red for a
+    // reason that has nothing to do with GAP-0918. The metric — the thing this
+    // test is actually about — is unchanged.
+    _ = try h.exec("CREATE INDEX p18_vec_idx ON P18Vec (emb) USING HNSW WITH (metric = 'cosine')");
 
     // Valid dim-4 inserts establish the index dimension.
     _ = try h.exec("CREATE (:P18Vec {id: 1, emb: vectorf32('[1.0, 0.0, 0.0, 0.0]')})");
@@ -111,7 +118,7 @@ test "GAP-0918: vector validation (dimension write-check, DDL metric, malformed 
     // ---- (b) invalid distance metric rejected at CREATE INDEX ----
     try testing.expectError(
         error.InvalidIndexMetric,
-        h.exec("CREATE INDEX p18_bad_metric ON P18Bad (emb) USING HNSW WITH (metric = 'banana', ef_construction = 200, M = 16)"),
+        h.exec("CREATE INDEX p18_bad_metric ON P18Bad (emb) USING HNSW WITH (metric = 'banana')"),
     );
 
     // All supported spellings are accepted.
