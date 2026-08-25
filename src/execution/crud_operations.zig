@@ -233,12 +233,41 @@ fn findFirstMatchingNodeId(
     if (labels.len > 0) {
         if (props) |evaluated_props| {
             if (evaluated_props.len > 0) {
-                // Try each label × first property combination in the index
-                if (valueToPropertyValueForIndex(evaluated_props[0].value)) |pv| {
-                    var index_authoritative = true;
+                // CANARY: REQ=REQ-ENG-3914-MERGE-GENERAL-PATH-IDEMPOTENCY; FEATURE="MergeIdempotency"; ASPECT=IndexProbeAuthority; STATUS=TESTED; TEST=tests/test_eng3914_merge_idempotency.zig; OWNER=crud_operations; UPDATED=2026-08-25
+                // ENG-3914 — DETERMINISTIC (not concurrent) MERGE duplication.
+                //
+                // `merge_prop_index` holds exactly ONE node id per
+                // (graph, label, key, value): `putOrUpdate` OVERWRITES. So for
+                // a multi-property MERGE key whose FIRST property value is
+                // SHARED across rows, the bucket's occupant is whichever row
+                // was written last.
+                //
+                // The old code probed `evaluated_props[0]` only, and when the
+                // returned candidate failed full verification it fell through
+                // leaving `index_authoritative` TRUE — which the code below
+                // reads as "the index proved this node does not exist" and
+                // uses to SKIP the label-scan fallback. MERGE then took the
+                // CREATE branch and duplicated an existing row, every single
+                // run (verified: 3 passes -> 3x rows).
+                //
+                // Two changes, both required:
+                //   1. a candidate that fails verification clears
+                //      `index_authoritative` — a shared-value bucket can only
+                //      ever prove PRESENCE, never absence;
+                //   2. every evaluated property is probed, not just the first,
+                //      so a discriminating property still resolves the row in
+                //      O(1) instead of dropping to the label scan.
+                var index_authoritative = true;
+                for (evaluated_props) |probe_prop| {
+                    const pv = valueToPropertyValueForIndex(probe_prop.value) orelse {
+                        // Non-scalar (list/map/…) values are not in the index,
+                        // so it cannot answer for this property.
+                        index_authoritative = false;
+                        continue;
+                    };
                     for (labels) |label| {
                         var out_id: u64 = undefined;
-                        switch (read_store.lookupMergeCandidate(graph_name, label, evaluated_props[0].key, pv, &out_id)) {
+                        switch (read_store.lookupMergeCandidate(graph_name, label, probe_prop.key, pv, &out_id)) {
                             .found => {
                                 // Verify the candidate matches ALL labels, ALL properties, and tenant
                                 if ((read_store.nodes.getOrHydratePtr(out_id) catch null)) |node| {
@@ -246,6 +275,10 @@ fn findFirstMatchingNodeId(
                                         return out_id;
                                     }
                                 }
+                                // The bucket is occupied by a DIFFERENT node,
+                                // which says nothing about whether the node we
+                                // want exists. Force the fallback scan.
+                                index_authoritative = false;
                             },
                             .not_found => {},
                             .not_indexable => {
@@ -253,11 +286,11 @@ fn findFirstMatchingNodeId(
                             },
                         }
                     }
-                    // If the index was authoritative for ALL labels and none
-                    // matched, the node definitively does not exist — skip the
-                    // expensive O(n) label scan.
-                    if (index_authoritative) return null;
                 }
+                // Only when every probe came back as an authoritative MISS can
+                // the node be declared absent and the expensive O(n) label
+                // scan skipped.
+                if (index_authoritative) return null;
             }
         }
 
