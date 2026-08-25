@@ -2954,6 +2954,297 @@ fn clusterReplicateMerge(
     return empty_result;
 }
 
+/// ENG-3903: one MERGE statement can carry SEVERAL chains — comma-separated
+/// chains (`MERGE (a:T {..}), (b:T {..})`) and consecutive MERGE clauses
+/// (`MERGE (a:T {..}) MERGE (b:T {..}) MERGE (a)-[:REL]->(b)`) both parse into a
+/// single GraphPattern. Every node chain records the variable it bound here so a
+/// later relationship chain can resolve its endpoints to the nodes the earlier
+/// clauses merged.
+const MergedNodeBinding = struct {
+    pattern: ast.NodePattern,
+    node_id: u64,
+    created: bool,
+};
+
+/// Merge ONE single-node chain (`MERGE (a:Label {props})`): match-or-create the
+/// node, then apply the statement's ON MATCH / ON CREATE SET clauses that target
+/// this chain's variable.
+// CANARY: REQ=REQ-MERGE-RELPROPS-001; FEATURE="MergeRelationship"; ASPECT=ChainedMergeEndpoints; STATUS=TESTED; TEST=tests/test_merge_relationship_bugs.zig; OWNER=execution; UPDATED=2026-08-24
+fn mergeNodeChain(
+    allocator: std.mem.Allocator,
+    store: *graph_store.GraphStore,
+    read_store: *graph_store.GraphStore,
+    target_graph: []const u8,
+    filter_tenant: ?[]const u8,
+    node_pattern: ast.NodePattern,
+    m: ast.MergeStatement,
+    context: ExecutionContext,
+) !MergedNodeBinding {
+    // GAP-0900 Layer-3 (Fix 2): in lean-index mode the MERGE pattern keys
+    // MUST stay indexed in the merge_prop_index, otherwise dedup breaks (a
+    // second MERGE on the same key would not find the first node and would
+    // create a duplicate). The bulk fast path registers its merge_key; the
+    // regular executor MERGE registers here so both paths dedup correctly.
+    // No-op when lean mode is off.
+    if (node_pattern.props) |pp| {
+        for (pp) |prop| graph_store.registerMergeIndexKey(prop.key);
+    }
+
+    // Look for existing node matching the pattern (filtered by graph)
+    var found_node: ?*graph_store.Node = null;
+    const evaluated_props = try evaluatePatternProps(allocator, node_pattern.props, context);
+    defer freeEvaluatedPatternProps(allocator, evaluated_props);
+
+    if (try findFirstMatchingNodeId(
+        allocator,
+        read_store,
+        target_graph,
+        filter_tenant,
+        node_pattern.labels,
+        evaluated_props,
+    )) |found_id| {
+        found_node = (read_store.nodes.getOrHydratePtr(found_id) catch null);
+    }
+
+    var node_id: u64 = undefined;
+    var created = false;
+
+    if (found_node) |node| {
+        // Node exists - apply ON MATCH clauses
+        node_id = node.id;
+        for (m.on_match) |set_clause| {
+            switch (set_clause) {
+                .Property => |prop| {
+                    if (node_pattern.name) |var_name| {
+                        if (std.mem.eql(u8, prop.target.object, var_name)) {
+                            // Evaluate the property expression
+                            const value = try eval.evalExpr(allocator, prop.value, envFromContext(allocator, context));
+                            const node_ptr = (store.nodes.getOrHydratePtr(node_id) catch null) orelse return error.NodeNotFound;
+                            try property_mutation.setNodePropertyFromValue(allocator, store, node_ptr.labels, node_id, prop.target.property, value);
+                        }
+                    }
+                },
+                .Labels => |label_set| {
+                    if (node_pattern.name) |var_name| {
+                        if (std.mem.eql(u8, label_set.node, var_name)) {
+                            for (label_set.labels) |label| {
+                                try store.addNodeLabel(node_id, label);
+                            }
+                        }
+                    }
+                },
+                .AllProperties => |all_props| {
+                    if (node_pattern.name) |var_name| {
+                        if (std.mem.eql(u8, all_props.node, var_name)) {
+                            // Evaluate the properties expression (should be a map literal)
+                            const props_value = try eval.evalExpr(allocator, all_props.properties, envFromContext(allocator, context));
+
+                            // Clear all existing properties by getting node and manually clearing
+                            if ((store.nodes.getOrHydratePtr(node_id) catch null)) |node_ptr| {
+                                try property_mutation.replaceNodeProperties(allocator, store, node_ptr, props_value);
+                            }
+                        }
+                    }
+                },
+            }
+        }
+    } else {
+        // Node doesn't exist - create it in target graph and apply ON CREATE clauses
+        created = true;
+        node_id = try store.createNodeWithGraph(node_pattern.labels, target_graph);
+
+        // Auto-create indexes for node labels
+        ensureAutoIndexes(allocator, node_pattern.labels);
+
+        // Set properties from pattern
+        if (node_pattern.props) |props| {
+            for (props) |prop| {
+                const value = try eval.evalExpr(allocator, prop.value.*, envFromContext(allocator, context));
+                try property_mutation.setNodePropertyFromValue(allocator, store, node_pattern.labels, node_id, prop.key, value);
+            }
+        }
+
+        // Apply ON CREATE clauses
+        for (m.on_create) |set_clause| {
+            switch (set_clause) {
+                .Property => |prop| {
+                    if (node_pattern.name) |var_name| {
+                        if (std.mem.eql(u8, prop.target.object, var_name)) {
+                            // Evaluate the property expression
+                            const value = try eval.evalExpr(allocator, prop.value, envFromContext(allocator, context));
+                            const node_ptr = (store.nodes.getOrHydratePtr(node_id) catch null) orelse return error.NodeNotFound;
+                            try property_mutation.setNodePropertyFromValue(allocator, store, node_ptr.labels, node_id, prop.target.property, value);
+                        }
+                    }
+                },
+                .Labels => |label_set| {
+                    if (node_pattern.name) |var_name| {
+                        if (std.mem.eql(u8, label_set.node, var_name)) {
+                            for (label_set.labels) |label| {
+                                try store.addNodeLabel(node_id, label);
+                            }
+                        }
+                    }
+                },
+                .AllProperties => |all_props| {
+                    if (node_pattern.name) |var_name| {
+                        if (std.mem.eql(u8, all_props.node, var_name)) {
+                            // Evaluate the properties expression (should be a map literal)
+                            const props_value = try eval.evalExpr(allocator, all_props.properties, envFromContext(allocator, context));
+
+                            // Clear all existing properties by getting node and manually clearing
+                            if ((store.nodes.getOrHydratePtr(node_id) catch null)) |node_ptr| {
+                                try property_mutation.replaceNodeProperties(allocator, store, node_ptr, props_value);
+                            }
+                        }
+                    }
+                },
+            }
+        }
+    }
+
+    return .{ .pattern = node_pattern, .node_id = node_id, .created = created };
+}
+
+/// Resolve ONE endpoint of a MERGE relationship pattern to a concrete node id.
+///
+/// Resolution order: variables bound by an earlier chain of THIS statement,
+/// then `context.bindings`, then the MATCH-row parameters the dispatcher
+/// propagates (query_execution.zig:1911-1920), then an inline label/property
+/// match. An endpoint that still does not resolve but DOES carry a label or
+/// properties is CREATED — that is the match-or-create contract MERGE promises
+/// for the whole pattern. A bare, unbound variable (`(zz)`) carries nothing to
+/// match or create on, so the statement is REJECTED instead of silently
+/// committing an empty success (ENG-3903 silent write loss).
+// CANARY: REQ=REQ-MERGE-RELPROPS-001; FEATURE="MergeRelationship"; ASPECT=UnresolvableEndpointFailsLoud; STATUS=TESTED; TEST=tests/test_merge_relationship_bugs.zig; OWNER=execution; UPDATED=2026-08-24
+fn resolveMergeEndpoint(
+    allocator: std.mem.Allocator,
+    store: *graph_store.GraphStore,
+    read_store: *graph_store.GraphStore,
+    target_graph: []const u8,
+    filter_tenant: ?[]const u8,
+    node_pattern: ast.NodePattern,
+    context: ExecutionContext,
+    merged_vars: *std.StringHashMap(u64),
+) !u64 {
+    if (node_pattern.name) |name| {
+        if (merged_vars.get(name)) |bound_id| return bound_id;
+        if (context.bindings) |bindings| {
+            if (bindings.get(name)) |binding| {
+                switch (binding) {
+                    .node_id => |nid| return nid,
+                    .edge_id => {},
+                }
+            }
+        }
+        if (lookupNodeIdInQueryParams(context, name)) |nid| return nid;
+    }
+
+    // Nothing to match on and nothing bound: the variable is undefined.
+    if (node_pattern.labels.len == 0 and node_pattern.props == null) {
+        return error.UnboundVariable;
+    }
+
+    if (node_pattern.props) |pp| {
+        for (pp) |prop| graph_store.registerMergeIndexKey(prop.key);
+    }
+
+    const evaluated_props = try evaluatePatternProps(allocator, node_pattern.props, context);
+    defer freeEvaluatedPatternProps(allocator, evaluated_props);
+
+    if (try findFirstMatchingNodeId(
+        allocator,
+        read_store,
+        target_graph,
+        filter_tenant,
+        node_pattern.labels,
+        evaluated_props,
+    )) |matched_id| {
+        if (node_pattern.name) |name| try merged_vars.put(name, matched_id);
+        return matched_id;
+    }
+
+    // No match — create the endpoint (MERGE creates what it cannot match).
+    const node_id = try store.createNodeWithGraph(node_pattern.labels, target_graph);
+    ensureAutoIndexes(allocator, node_pattern.labels);
+    if (node_pattern.props) |props| {
+        const env = envFromContext(allocator, context);
+        for (props) |prop| {
+            const value = try eval.evalExpr(allocator, prop.value.*, env);
+            try property_mutation.setNodePropertyFromValue(allocator, store, node_pattern.labels, node_id, prop.key, value);
+        }
+    }
+    if (node_pattern.name) |name| try merged_vars.put(name, node_id);
+    return node_id;
+}
+
+/// Merge ONE relationship hop of a MERGE pattern: resolve both endpoints, then
+/// match-or-create the edge and persist inline rel props / the SET clauses that
+/// target the relationship variable.
+// CANARY: REQ=REQ-MERGE-RELPROPS-001; FEATURE="MergeRelationship"; ASPECT=MatchBoundEndpoints; STATUS=TESTED; TEST=tests/test_merge_relationship_bugs.zig; OWNER=execution; UPDATED=2026-08-24
+fn mergeRelationshipHop(
+    allocator: std.mem.Allocator,
+    store: *graph_store.GraphStore,
+    read_store: *graph_store.GraphStore,
+    target_graph: []const u8,
+    filter_tenant: ?[]const u8,
+    hop: ast.Hop,
+    m: ast.MergeStatement,
+    context: ExecutionContext,
+    merged_vars: *std.StringHashMap(u64),
+) !void {
+    const rel_types = hop.rel.types;
+
+    const source_id = try resolveMergeEndpoint(allocator, store, read_store, target_graph, filter_tenant, hop.left, context, merged_vars);
+    const target_id = try resolveMergeEndpoint(allocator, store, read_store, target_graph, filter_tenant, hop.right, context, merged_vars);
+
+    const edge_type = if (rel_types.len > 0) rel_types[0] else "";
+    const existing_edge = findExistingEdgeId(
+        read_store,
+        target_graph,
+        filter_tenant,
+        source_id,
+        target_id,
+        rel_types,
+    );
+
+    // Pick the edge_id we will operate on: existing one (ON MATCH path)
+    // or a freshly created one (ON CREATE path). Either way we then
+    // apply inline rel props (create-only) plus the appropriate
+    // on_create/on_match SET clauses targeting the relationship
+    // variable.
+    const created_new = existing_edge == null;
+    const edge_id: u64 = if (existing_edge) |eid|
+        eid
+    else
+        try store.createEdgeWithGraph(source_id, target_id, edge_type, target_graph);
+
+    // REQ=REQ-MERGE-RELPROPS-001 ASPECT=InlineRelProps (Bug B1):
+    // Inline `[:REL {key: val}]` literals are applied only on the
+    // create path. This mirrors how the executeCreate / executeInsert
+    // paths set rel props after `createEdgeWithGraph` (lines 697-708,
+    // 861-873, 1249-1257, 1830-1838, 2058-2070).
+    if (created_new) {
+        if (hop.rel.props) |props| {
+            const env = envFromContext(allocator, context);
+            for (props) |prop| {
+                const value = try eval.evalExpr(allocator, prop.value.*, env);
+                try property_mutation.setEdgePropertyFromValue(allocator, store, edge_type, edge_id, prop.key, value);
+            }
+        }
+    }
+
+    // REQ=REQ-MERGE-RELPROPS-001 ASPECT=OnCreateSet/BareSetOnRelationship
+    // (Bugs B2, B3): apply SET items targeting the relationship
+    // variable. Bare SET (parser flag `set_is_bare`) duplicates the
+    // clauses into both on_create and on_match by construction
+    // (parser.zig:4575-4586), so picking the right list per branch
+    // and routing only items whose target binding name matches the
+    // rel variable name is correct for all three SET forms.
+    const rel_set_items: []ast.SetClause = if (created_new) m.on_create else m.on_match;
+    try applySetClausesToEdge(allocator, store, hop.rel.name, edge_type, edge_id, rel_set_items, context);
+}
+
 // CANARY: REQ=REQ-MULTI-GRAPH-020; FEATURE="MultiGraphIsolation"; ASPECT=ExecuteMerge; STATUS=TESTED; TEST=geodetestlab/specs/multi_graph.yml; OWNER=engine; UPDATED=2025-12-22
 // CANARY: REQ=REQ-PERF-LABEL-INDEX-004; FEATURE="LabelBasedIndex"; ASPECT=MergeOptimization; STATUS=IMPL; OWNER=perf; UPDATED=2026-01-28
 // Issue #391: Optimized MERGE using label index instead of O(n) full table scan
@@ -3013,176 +3304,100 @@ pub fn executeMerge(allocator: std.mem.Allocator, m: ast.MergeStatement, current
     }
     errdefer if (stmt_txn_open) stmt_txn.abort();
 
-    // MERGE is like a CREATE but checks if the pattern already exists
-    // For now, implement simplified version for single nodes
-    if (m.pattern.chains.len > 0 and m.pattern.chains[0].head != null) {
-        const node_pattern = m.pattern.chains[0].head.?;
+    // MERGE is like a CREATE but checks if the pattern already exists.
+    // ENG-3903: EVERY chain of the pattern runs, in clause order, and the node
+    // variables an earlier chain bound are visible to the later ones — that is
+    // what makes `MERGE (a:T {..}) MERGE (b:T {..}) MERGE (a)-[:REL]->(b)` and
+    // the comma-separated form write the whole pattern instead of chains[0]
+    // only.
+    var merged_vars = std.StringHashMap(u64).init(allocator);
+    defer merged_vars.deinit();
 
-        // GAP-0900 Layer-3 (Fix 2): in lean-index mode the MERGE pattern keys
-        // MUST stay indexed in the merge_prop_index, otherwise dedup breaks (a
-        // second MERGE on the same key would not find the first node and would
-        // create a duplicate). The bulk fast path registers its merge_key; the
-        // regular executor MERGE registers here so both paths dedup correctly.
-        // No-op when lean mode is off.
-        if (node_pattern.props) |pp| {
-            for (pp) |prop| graph_store.registerMergeIndexKey(prop.key);
-        }
+    var merged_nodes = std.ArrayList(MergedNodeBinding).empty;
+    defer merged_nodes.deinit(allocator);
 
-        // Look for existing node matching the pattern (filtered by graph)
-        var found_node: ?*graph_store.Node = null;
-        const evaluated_props = try evaluatePatternProps(allocator, node_pattern.props, context);
-        defer freeEvaluatedPatternProps(allocator, evaluated_props);
-
-        if (try findFirstMatchingNodeId(
-            allocator,
-            read_store,
-            target_graph,
-            filter_tenant,
-            node_pattern.labels,
-            evaluated_props,
-        )) |node_id| {
-            found_node = (read_store.nodes.getOrHydratePtr(node_id) catch null);
-        }
-
-        var node_id: u64 = undefined;
-        var created = false;
-
-        if (found_node) |node| {
-            // Node exists - apply ON MATCH clauses
-            node_id = node.id;
-            for (m.on_match) |set_clause| {
-                switch (set_clause) {
-                    .Property => |prop| {
-                        if (node_pattern.name) |var_name| {
-                            if (std.mem.eql(u8, prop.target.object, var_name)) {
-                                // Evaluate the property expression
-                                const value = try eval.evalExpr(allocator, prop.value, envFromContext(allocator, context));
-                                const node_ptr = (store.nodes.getOrHydratePtr(node_id) catch null) orelse return error.NodeNotFound;
-                                try property_mutation.setNodePropertyFromValue(allocator, store, node_ptr.labels, node_id, prop.target.property, value);
-                            }
-                        }
-                    },
-                    .Labels => |label_set| {
-                        if (node_pattern.name) |var_name| {
-                            if (std.mem.eql(u8, label_set.node, var_name)) {
-                                for (label_set.labels) |label| {
-                                    try store.addNodeLabel(node_id, label);
-                                }
-                            }
-                        }
-                    },
-                    .AllProperties => |all_props| {
-                        if (node_pattern.name) |var_name| {
-                            if (std.mem.eql(u8, all_props.node, var_name)) {
-                                // Evaluate the properties expression (should be a map literal)
-                                const props_value = try eval.evalExpr(allocator, all_props.properties, envFromContext(allocator, context));
-
-                                // Clear all existing properties by getting node and manually clearing
-                                if ((store.nodes.getOrHydratePtr(node_id) catch null)) |node_ptr| {
-                                    try property_mutation.replaceNodeProperties(allocator, store, node_ptr, props_value);
-                                }
-                            }
-                        }
-                    },
-                }
-            }
+    for (m.pattern.chains) |chain| {
+        if (chain.head) |node_pattern| {
+            const binding = try mergeNodeChain(
+                allocator,
+                store,
+                read_store,
+                target_graph,
+                filter_tenant,
+                node_pattern,
+                m,
+                context,
+            );
+            if (node_pattern.name) |var_name| try merged_vars.put(var_name, binding.node_id);
+            try merged_nodes.append(allocator, binding);
         } else {
-            // Node doesn't exist - create it in target graph and apply ON CREATE clauses
-            created = true;
-            node_id = try store.createNodeWithGraph(node_pattern.labels, target_graph);
-
-            // Auto-create indexes for node labels
-            ensureAutoIndexes(allocator, node_pattern.labels);
-
-            // Set properties from pattern
-            if (node_pattern.props) |props| {
-                for (props) |prop| {
-                    const value = try eval.evalExpr(allocator, prop.value.*, envFromContext(allocator, context));
-                    try property_mutation.setNodePropertyFromValue(allocator, store, node_pattern.labels, node_id, prop.key, value);
-                }
-            }
-
-            // Apply ON CREATE clauses
-            for (m.on_create) |set_clause| {
-                switch (set_clause) {
-                    .Property => |prop| {
-                        if (node_pattern.name) |var_name| {
-                            if (std.mem.eql(u8, prop.target.object, var_name)) {
-                                // Evaluate the property expression
-                                const value = try eval.evalExpr(allocator, prop.value, envFromContext(allocator, context));
-                                const node_ptr = (store.nodes.getOrHydratePtr(node_id) catch null) orelse return error.NodeNotFound;
-                                try property_mutation.setNodePropertyFromValue(allocator, store, node_ptr.labels, node_id, prop.target.property, value);
-                            }
-                        }
-                    },
-                    .Labels => |label_set| {
-                        if (node_pattern.name) |var_name| {
-                            if (std.mem.eql(u8, label_set.node, var_name)) {
-                                for (label_set.labels) |label| {
-                                    try store.addNodeLabel(node_id, label);
-                                }
-                            }
-                        }
-                    },
-                    .AllProperties => |all_props| {
-                        if (node_pattern.name) |var_name| {
-                            if (std.mem.eql(u8, all_props.node, var_name)) {
-                                // Evaluate the properties expression (should be a map literal)
-                                const props_value = try eval.evalExpr(allocator, all_props.properties, envFromContext(allocator, context));
-
-                                // Clear all existing properties by getting node and manually clearing
-                                if ((store.nodes.getOrHydratePtr(node_id) catch null)) |node_ptr| {
-                                    try property_mutation.replaceNodeProperties(allocator, store, node_ptr, props_value);
-                                }
-                            }
-                        }
-                    },
-                }
+            // GAP #58: edge MERGE patterns (e.g. MATCH (a), (b) MERGE (a)-[:REL]->(b))
+            // REQ=REQ-MERGE-RELPROPS-001 — endpoint resolution for MATCH-bound
+            // vars, and persistence of inline rel props / on_create / on_match /
+            // bare SET on the merged relationship variable.
+            for (chain.hops) |hop| {
+                try mergeRelationshipHop(
+                    allocator,
+                    store,
+                    read_store,
+                    target_graph,
+                    filter_tenant,
+                    hop,
+                    m,
+                    context,
+                    &merged_vars,
+                );
             }
         }
+    }
 
-        // Return the node if there's a RETURN clause
-        if (m.return_clause) |ret| {
+    // Return the merged node(s) if there's a RETURN clause
+    if (m.return_clause) |ret| {
+        if (merged_nodes.items.len > 0) {
             const columns = try generateUniqueColumnNames(allocator, ret.items);
 
             var rows = try allocator.alloc([]Value, 1);
             var row = try allocator.alloc(Value, ret.items.len);
 
-            // Create environment with the merged node and 'created' flag
-            const node = ((store.nodes.getOrHydratePtr(node_id) catch null).?);
-            var env_names: [][]const u8 = &.{};
-            var env_values: []Value = &.{};
+            // Create environment with the merged node(s) and the 'created' flag.
+            // `created` reflects the LAST merged node chain (with the single-chain
+            // form — the only shape that reached here before ENG-3903 — this is
+            // exactly the previous behaviour).
+            var env_names = std.ArrayList([]const u8).empty;
+            defer env_names.deinit(allocator);
+            var env_values = std.ArrayList(Value).empty;
+            defer env_values.deinit(allocator);
 
-            // Always include the 'created' variable
-            const base_vars: usize = 1; // for 'created' variable
-            const total_vars: usize = if (node_pattern.name != null) base_vars + 1 else base_vars;
+            try env_names.append(allocator, "created");
+            try env_values.append(allocator, Value{ .Bool = merged_nodes.items[merged_nodes.items.len - 1].created });
 
-            env_names = try allocator.alloc([]const u8, total_vars);
-            env_values = try allocator.alloc(Value, total_vars);
-
-            // Add 'created' variable
-            env_names[0] = "created";
-            env_values[0] = Value{ .Bool = created };
-
-            // Add node variable if named
-            if (node_pattern.name) |var_name| {
-                env_names[1] = var_name;
-                env_values[1] = Value{ .Node = node };
+            for (merged_nodes.items, 0..) |binding, bi| {
+                const var_name = binding.pattern.name orelse continue;
+                // A variable merged more than once keeps its LAST binding.
+                var rebound = false;
+                for (merged_nodes.items[bi + 1 ..]) |later| {
+                    if (later.pattern.name) |later_name| {
+                        if (std.mem.eql(u8, later_name, var_name)) {
+                            rebound = true;
+                            break;
+                        }
+                    }
+                }
+                if (rebound) continue;
+                const node = (store.nodes.getOrHydratePtr(binding.node_id) catch null) orelse return error.NodeNotFound;
+                try env_names.append(allocator, var_name);
+                try env_values.append(allocator, Value{ .Node = node });
             }
 
             const env = Env{
                 .allocator = allocator,
-                .names = env_names,
-                .values = env_values,
+                .names = env_names.items,
+                .values = env_values.items,
             };
 
             for (ret.items, 0..) |item, i| {
                 row[i] = try eval.evalExpr(allocator, item.expr, env);
             }
-
-            // Always free the allocated environment (we always allocate now)
-            allocator.free(env_names);
-            allocator.free(env_values);
 
             rows[0] = row;
 
@@ -3195,139 +3410,6 @@ pub fn executeMerge(allocator: std.mem.Allocator, m: ast.MergeStatement, current
                     break :blk list;
                 },
             };
-        }
-    }
-
-    // GAP #58: Handle edge MERGE patterns (e.g., MATCH (a), (b) MERGE (a)-[:REL]->(b))
-    // REQ=REQ-MERGE-RELPROPS-001 — endpoint resolution for MATCH-bound vars,
-    // and persistence of inline rel props / on_create / on_match / bare SET on
-    // the merged relationship variable.
-    if (m.pattern.chains.len > 0 and m.pattern.chains[0].hops.len > 0) {
-        const chain = m.pattern.chains[0];
-        const hop = chain.hops[0];
-        const rel_types = hop.rel.types;
-
-        var source_id: ?u64 = null;
-        var target_id: ?u64 = null;
-
-        // Try to resolve source/target from context bindings first
-        if (context.bindings) |bindings| {
-            if (hop.left.name) |name| {
-                if (bindings.get(name)) |binding| {
-                    switch (binding) {
-                        .node_id => |nid| source_id = nid,
-                        .edge_id => {},
-                    }
-                }
-            }
-            if (hop.right.name) |name| {
-                if (bindings.get(name)) |binding| {
-                    switch (binding) {
-                        .node_id => |nid| target_id = nid,
-                        .edge_id => {},
-                    }
-                }
-            }
-        }
-
-        // REQ=REQ-MERGE-RELPROPS-001 ASPECT=MatchBoundEndpoints (Bug A):
-        // When the dispatcher (query_execution.zig:1700-1703) executes
-        // `MATCH ... MERGE ...` it propagates the MATCH row into
-        // `query_param_names`/`query_param_values` rather than
-        // `context.bindings`. Consult those parallel arrays so bound
-        // endpoints from MATCH resolve correctly here.
-        if (source_id == null) {
-            if (hop.left.name) |name| {
-                source_id = lookupNodeIdInQueryParams(context, name);
-            }
-        }
-        if (target_id == null) {
-            if (hop.right.name) |name| {
-                target_id = lookupNodeIdInQueryParams(context, name);
-            }
-        }
-
-        // Fallback: resolve endpoints from inline label/property patterns.
-        var left_props_failed = false;
-        const evaluated_left_props = evaluatePatternProps(allocator, hop.left.props, context) catch blk: {
-            left_props_failed = true;
-            break :blk null;
-        };
-        defer freeEvaluatedPatternProps(allocator, evaluated_left_props);
-        var right_props_failed = false;
-        const evaluated_right_props = evaluatePatternProps(allocator, hop.right.props, context) catch blk: {
-            right_props_failed = true;
-            break :blk null;
-        };
-        defer freeEvaluatedPatternProps(allocator, evaluated_right_props);
-
-        if (source_id == null and !left_props_failed and (hop.left.labels.len > 0 or evaluated_left_props != null)) {
-            source_id = try findFirstMatchingNodeId(
-                allocator,
-                read_store,
-                target_graph,
-                filter_tenant,
-                hop.left.labels,
-                evaluated_left_props,
-            );
-        }
-        if (target_id == null and !right_props_failed and (hop.right.labels.len > 0 or evaluated_right_props != null)) {
-            target_id = try findFirstMatchingNodeId(
-                allocator,
-                read_store,
-                target_graph,
-                filter_tenant,
-                hop.right.labels,
-                evaluated_right_props,
-            );
-        }
-
-        if (source_id != null and target_id != null) {
-            const edge_type = if (rel_types.len > 0) rel_types[0] else "";
-            const existing_edge = findExistingEdgeId(
-                read_store,
-                target_graph,
-                filter_tenant,
-                source_id.?,
-                target_id.?,
-                rel_types,
-            );
-
-            // Pick the edge_id we will operate on: existing one (ON MATCH path)
-            // or a freshly created one (ON CREATE path). Either way we then
-            // apply inline rel props (create-only) plus the appropriate
-            // on_create/on_match SET clauses targeting the relationship
-            // variable.
-            const created_new = existing_edge == null;
-            const edge_id: u64 = if (existing_edge) |eid|
-                eid
-            else
-                try store.createEdgeWithGraph(source_id.?, target_id.?, edge_type, target_graph);
-
-            // REQ=REQ-MERGE-RELPROPS-001 ASPECT=InlineRelProps (Bug B1):
-            // Inline `[:REL {key: val}]` literals are applied only on the
-            // create path. This mirrors how the executeCreate / executeInsert
-            // paths set rel props after `createEdgeWithGraph` (lines 697-708,
-            // 861-873, 1249-1257, 1830-1838, 2058-2070).
-            if (created_new) {
-                if (hop.rel.props) |props| {
-                    const env = envFromContext(allocator, context);
-                    for (props) |prop| {
-                        const value = try eval.evalExpr(allocator, prop.value.*, env);
-                        try property_mutation.setEdgePropertyFromValue(allocator, store, edge_type, edge_id, prop.key, value);
-                    }
-                }
-            }
-
-            // REQ=REQ-MERGE-RELPROPS-001 ASPECT=OnCreateSet/BareSetOnRelationship
-            // (Bugs B2, B3): apply SET items targeting the relationship
-            // variable. Bare SET (parser flag `set_is_bare`) duplicates the
-            // clauses into both on_create and on_match by construction
-            // (parser.zig:4575-4586), so picking the right list per branch
-            // and routing only items whose target binding name matches the
-            // rel variable name is correct for all three SET forms.
-            const rel_set_items: []ast.SetClause = if (created_new) m.on_create else m.on_match;
-            try applySetClausesToEdge(allocator, store, hop.rel.name, edge_type, edge_id, rel_set_items, context);
         }
     }
 

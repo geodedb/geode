@@ -633,6 +633,10 @@ fn constructVectorF32(allocator: std.mem.Allocator, args: []const ExtValue) !Ext
         for (list, 0..) |item, i| {
             data[i] = switch (item) {
                 .Int => |iv| @floatFromInt(iv),
+                // ENG-3905: a JSON float array bound as `--param vec '[1.0,2.0]'`
+                // arrives as a List of Double/Real, not Decimal.
+                .Double => |dv| @floatCast(dv),
+                .Real => |rv| rv,
                 .Decimal => |d| blk: {
                     const coeff_f64 = @as(f64, @floatFromInt(d.coeff));
                     const scale_f64 = @as(f64, @floatFromInt(d.scale));

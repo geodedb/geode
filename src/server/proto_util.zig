@@ -130,6 +130,10 @@ pub fn mapError(err: anyerror) ErrorInfo {
         error.UnionColumnCountMismatch => .{ .code = "42601", .message = "UNION column count mismatch" },
         error.DuplicateGraph => .{ .code = "42P07", .message = "Duplicate graph name" },
         error.GraphNotFound => .{ .code = "3F000", .message = "Graph does not exist" },
+        // ENG-3903: a MERGE relationship endpoint that is neither bound by a
+        // preceding clause nor describable by a label/property pattern is
+        // rejected instead of committing an empty success (silent write loss).
+        error.UnboundVariable => .{ .code = "42000", .message = "Unbound variable: the variable is not bound by a preceding clause and carries no label or property to match or create on" },
         // Task 12 (enterprise-ingest-throughput): bulk-ingest MATCH+CREATE
         // edge fast-path errors.  Map to GQL spec "graph node not found"
         // class (09000) so clients get a meaningful status rather than

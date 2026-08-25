@@ -3945,10 +3945,14 @@ pub const Parser = struct {
             },
             .l_bracket => blk_pc: {
                 // Try to parse pattern comprehension: [ pattern (WHERE expr)? | expr ]
-                // Heuristic: next meaningful token starts a node/connector or alias (identifier '=')
+                // Heuristic: next meaningful token starts a node pattern or alias (identifier '=')
+                // ENG-3904: `.minus`/`.arrow_l` must NOT be treated as the start of a
+                // pattern — parseGraphPattern always requires a leading node pattern, so
+                // those arms could never parse, and they stole `[-0.0483, 1.0]` (a list
+                // literal whose first element is negative) from the expression parser.
                 self.advance();
                 var starts_pattern = false;
-                if (self.cur.kind == .l_paren or self.cur.kind == .arrow_l or self.cur.kind == .minus or ((self.cur.kind == .identifier or self.cur.kind == .PATH) and self.peekKind() == .eq)) {
+                if (self.cur.kind == .l_paren or ((self.cur.kind == .identifier or self.cur.kind == .PATH) and self.peekKind() == .eq)) {
                     starts_pattern = true;
                 }
                 if (!starts_pattern) {
@@ -4163,6 +4167,8 @@ pub const Parser = struct {
             .Member => true,
             .Call => true, // allow nested function calls
             .Null => true, // NULL is valid for functions like abs(NULL)
+            // ENG-3905: a $param is only known at bind time; the runtime validates it.
+            .Param => true,
             else => false,
         };
     }
@@ -4173,6 +4179,8 @@ pub const Parser = struct {
             .Ident => true,
             .Member => true,
             .Call => true, // allow nested function calls
+            // ENG-3905: a $param is only known at bind time; the runtime validates it.
+            .Param => true,
             else => false,
         };
     }
@@ -4676,8 +4684,32 @@ pub const Parser = struct {
     fn parseMergeStatement(self: *Parser) ParserError!ast.Statement {
         _ = try self.expect(.MERGE);
 
-        // Parse the pattern to merge
-        const pattern = try self.parseGraphPattern();
+        // Parse the pattern to merge — supporting consecutive MERGE clauses,
+        // e.g. `MERGE (a:T {..}) MERGE (b:T {..}) MERGE (a)-[:REL]->(b)`.
+        // ENG-3903: parsing only ONE clause split the rest into separate
+        // statements, so the third clause never saw the `a`/`b` bindings and
+        // the relationship was silently never written. Clause order is
+        // preserved (MERGE is sequential: a later clause sees the bindings an
+        // earlier one established). Mirrors the multi-CREATE loop above.
+        // A clause carrying ON CREATE / ON MATCH / SET / RETURN ends the run,
+        // because those clauses bind to the MERGE that introduced them.
+        // CANARY: REQ=REQ-MERGE-RELPROPS-001; FEATURE="MergeRelationship"; ASPECT=ChainedMergeClauses; STATUS=TESTED; TEST=tests/test_merge_relationship_bugs.zig; OWNER=parser; UPDATED=2026-08-24
+        var pattern: ast.GraphPattern = undefined;
+        {
+            var merge_chains = std.ArrayList(ast.Chain).empty;
+            const first_pattern = try self.parseGraphPattern();
+            for (first_pattern.chains) |chain| {
+                try merge_chains.append(self.arena.allocator(), chain);
+            }
+            while (self.cur.kind == .MERGE) {
+                self.advance();
+                const next_pattern = try self.parseGraphPattern();
+                for (next_pattern.chains) |chain| {
+                    try merge_chains.append(self.arena.allocator(), chain);
+                }
+            }
+            pattern = .{ .chains = try merge_chains.toOwnedSlice(self.arena.allocator()) };
+        }
 
         // Parse ON CREATE/MATCH clauses
         // GAP-0220 FIX: Use try for proper error propagation
