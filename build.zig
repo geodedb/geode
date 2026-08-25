@@ -9390,6 +9390,59 @@ pub fn build(b: *std.Build) void {
     const eng3906_step = b.step("test-eng3906", "Run ENG-3906 CREATE INDEX WITH-parameter validation regressions");
     eng3906_step.dependOn(&run_eng3906_tests.step);
 
+    // ENG-3912: advertise/dispatch parity — `split` and `reduce` were listed by
+    // SHOW FUNCTIONS with no evaluator dispatch, the advertised `algo.*.stream`
+    // names and bare aliases were missing from algo_dispatch, and size()/length()
+    // of a VECTOR answered 0.
+    const eng3912_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_eng3912_advertise_dispatch_parity.zig"), .target = target, .optimize = optimize });
+    eng3912_test_mod.addImport("geode", root_mod);
+    const eng3912_tests = b.addTest(.{ .root_module = eng3912_test_mod });
+    const run_eng3912_tests = b.addRunArtifact(eng3912_tests);
+    shardDep(test_step, &run_eng3912_tests.step, 0, test_shard_loads, test_shard_index);
+    const eng3912_step = b.step("test-eng3912", "Run ENG-3912 advertise/dispatch parity regressions (split, algo.* aliases, size(vector))");
+    eng3912_step.dependOn(&run_eng3912_tests.step);
+
+    // ENG-3913: date_part()/time_part() were unreachable from GQL (the temporal
+    // ExtValue bridge nulled their argument) and date_part's arithmetic used a
+    // 365-day year with 30-day months, disagreeing with member access.
+    const eng3913_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_eng3913_date_part_calendar.zig"), .target = target, .optimize = optimize });
+    eng3913_test_mod.addImport("geode", root_mod);
+    const eng3913_tests = b.addTest(.{ .root_module = eng3913_test_mod });
+    const run_eng3913_tests = b.addRunArtifact(eng3913_tests);
+    shardDep(test_step, &run_eng3913_tests.step, 0, test_shard_loads, test_shard_index);
+    const eng3913_step = b.step("test-eng3913", "Run ENG-3913 date_part/time_part exact-calendar regressions");
+    eng3913_step.dependOn(&run_eng3913_tests.step);
+
+    // ENG-3914: aggregates the parser admitted but the engine never implemented
+    // evaluated to a silent NULL inside GROUP BY.
+    const eng3914_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_eng3914_unsupported_aggregates.zig"), .target = target, .optimize = optimize });
+    eng3914_test_mod.addImport("geode", root_mod);
+    const eng3914_tests = b.addTest(.{ .root_module = eng3914_test_mod });
+    const run_eng3914_tests = b.addRunArtifact(eng3914_tests);
+    shardDep(test_step, &run_eng3914_tests.step, 0, test_shard_loads, test_shard_index);
+    const eng3914_step = b.step("test-eng3914", "Run ENG-3914 unsupported-aggregate rejection regressions");
+    eng3914_step.dependOn(&run_eng3914_tests.step);
+
+    // ENG-3915: a CREATE POLICY whose USING expression does not compile was
+    // accepted at DDL time and then fail-closed denied everything, silently.
+    const eng3915_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_eng3915_policy_expression_ddl.zig"), .target = target, .optimize = optimize });
+    eng3915_test_mod.addImport("geode", root_mod);
+    const eng3915_tests = b.addTest(.{ .root_module = eng3915_test_mod });
+    const run_eng3915_tests = b.addRunArtifact(eng3915_tests);
+    shardDep(test_step, &run_eng3915_tests.step, 0, test_shard_loads, test_shard_index);
+    const eng3915_step = b.step("test-eng3915", "Run ENG-3915 RLS policy compile-error-at-DDL regressions");
+    eng3915_step.dependOn(&run_eng3915_tests.step);
+
+    // ENG-3916: CREATE INDEX ... OPTIONS { ... } parsed the braces and discarded
+    // every key (same class as ENG-3906).
+    const eng3916_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_eng3916_fts_index_options.zig"), .target = target, .optimize = optimize });
+    eng3916_test_mod.addImport("geode", root_mod);
+    const eng3916_tests = b.addTest(.{ .root_module = eng3916_test_mod });
+    const run_eng3916_tests = b.addRunArtifact(eng3916_tests);
+    shardDep(test_step, &run_eng3916_tests.step, 0, test_shard_loads, test_shard_index);
+    const eng3916_step = b.step("test-eng3916", "Run ENG-3916 CREATE INDEX OPTIONS validation regressions");
+    eng3916_step.dependOn(&run_eng3916_tests.step);
+
     // ENG-3910: IN / NOT IN fail open on a non-LIST right-hand side
     // (src/eval.zig:1142 returns false, :1155 returns true). Direct unit test
     // on the public eval.evalExpr with hand-built AST nodes.
