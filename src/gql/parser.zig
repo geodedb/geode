@@ -288,7 +288,7 @@ pub const Parser = struct {
     // ENG-3906: `UnknownIndexParameter` — a WITH parameter a vector index does
     // not implement. Distinct from `UnexpectedToken` so the diagnostic can say
     // "this knob does not exist" rather than "syntax error".
-    const ParserError = error{ UnexpectedToken, OutOfMemory, Overflow, InvalidCharacter, InvalidIndexType, UnknownIndexParameter };
+    const ParserError = error{ UnexpectedToken, OutOfMemory, Overflow, InvalidCharacter, InvalidIndexType, UnknownIndexParameter, UnknownIndexOption, UnsupportedAggregateFunction };
 
     /// Read an object name: an identifier or a quoted identifier.
     fn parseName(self: *Parser) ParserError![]const u8 {
@@ -317,6 +317,18 @@ pub const Parser = struct {
         // For now, we just return UnexpectedToken; callers like CLI can add context using 'what'.
         self.last_error = what;
         return error.UnexpectedToken;
+    }
+
+    // CANARY: REQ=REQ-ENG-3914-UNSUPPORTED-AGGREGATE-REJECTION; FEATURE="AggregateSetQuantifier"; ASPECT=UnsupportedAggregateReject; STATUS=TESTED; TEST=tests/test_eng3914_unsupported_aggregates.zig; OWNER=parser; UPDATED=2026-08-25
+    /// Refuse a recognised-but-unimplemented aggregate, quoting the name the
+    /// user wrote so the diagnostic is actionable.
+    fn unsupportedAggregate(self: *Parser, name: []const u8) ParserError {
+        self.last_error = std.fmt.allocPrint(
+            self.arena.allocator(),
+            "aggregate function '{s}' is not supported: this engine implements count, sum, avg, min, max and collect",
+            .{name},
+        ) catch "aggregate function is not supported: this engine implements count, sum, avg, min, max and collect";
+        return error.UnsupportedAggregateFunction;
     }
 
     /// Parse a LIMIT or OFFSET value: accepts either an integer literal or a $param reference.
@@ -3531,6 +3543,18 @@ pub const Parser = struct {
                     }
                 }
 
+                // CANARY: REQ=REQ-ENG-3914-UNSUPPORTED-AGGREGATE-REJECTION; FEATURE="AggregateSetQuantifier"; ASPECT=UnsupportedAggregateReject; STATUS=TESTED; TEST=tests/test_eng3914_unsupported_aggregates.zig; OWNER=parser; UPDATED=2026-08-25
+                // ENG-3914: refuse the recognised-but-unimplemented aggregates
+                // BEFORE the argument list is parsed, so that
+                // `collect_list(DISTINCT x)` reports the unsupported function by
+                // name instead of tripping over the now-unexpected DISTINCT and
+                // reporting a bare syntax error.
+                if (base == .Ident) {
+                    if (unsupportedAggregateName(base.Ident.orig)) |unsupported| {
+                        return self.unsupportedAggregate(unsupported);
+                    }
+                }
+
                 var args = std.ArrayList(*ast.Expr).empty;
                 var saw_distinct = false;
                 if (self.cur.kind != .r_paren) {
@@ -4189,19 +4213,52 @@ pub const Parser = struct {
     }
 
     // CANARY: REQ=REQ-GQL-SET-QUANTIFIER-004; FEATURE="AggregateSetQuantifier"; ASPECT=ComputationalOperation; STATUS=TESTED; TEST=tests/test_bug731_aggregates_vectors.zig; OWNER=parser; UPDATED=2026-07-31
+    // CANARY: REQ=REQ-ENG-3914-UNSUPPORTED-AGGREGATE-REJECTION; FEATURE="AggregateSetQuantifier"; ASPECT=ComputationalOperation; STATUS=TESTED; TEST=tests/test_eng3914_unsupported_aggregates.zig; OWNER=parser; UPDATED=2026-08-25
     /// ISO/IEC 39075:2024 <computational operation> — the aggregate names whose
     /// argument may be prefixed with a <set quantifier> (DISTINCT | ALL).
+    ///
+    /// ENG-3914: this list used to also carry collect_list / stddev_samp /
+    /// stddev_pop / percentile_cont / percentile_disc, none of which
+    /// src/execution/aggregation_evaluation.zig implements. It is now exactly
+    /// the implemented set; the phantom names are refused by
+    /// `unsupportedAggregateName` below instead of being half-admitted.
     fn acceptsSetQuantifier(name: []const u8) bool {
         const computational_operations = [_][]const u8{
-            "count",           "sum",             "avg",
-            "min",             "max",             "collect",
-            "collect_list",    "stddev_samp",     "stddev_pop",
-            "percentile_cont", "percentile_disc",
+            "count", "sum", "avg",
+            "min",   "max", "collect",
         };
         for (computational_operations) |op| {
             if (std.ascii.eqlIgnoreCase(name, op)) return true;
         }
         return false;
+    }
+
+    // CANARY: REQ=REQ-ENG-3914-UNSUPPORTED-AGGREGATE-REJECTION; FEATURE="AggregateSetQuantifier"; ASPECT=UnsupportedAggregateReject; STATUS=TESTED; TEST=tests/test_eng3914_unsupported_aggregates.zig; OWNER=parser; UPDATED=2026-08-25
+    /// Aggregate names this engine recognises as aggregates but does NOT
+    /// implement. `src/execution/aggregation_evaluation.zig` implements exactly
+    /// count / countDistinct / sum / avg / min / max / collect.
+    ///
+    /// ENG-3914 — WHY THIS IS A HARD PARSE-TIME REFUSAL AND NOT A RUNTIME NULL:
+    /// the grouped-aggregation path (`evaluateGroupAggregation`) answers NULL
+    /// for any Call it does not recognise, so
+    ///
+    ///   MATCH (n:G) RETURN n.k, percentile_cont(n.v, 0.5) GROUP BY n.k
+    ///
+    /// returned a full result set with a NULL statistic in it — indistinguishable
+    /// from "the median of this group really is null". A statistic that silently
+    /// evaluates to NULL is worse than one that does not exist. Refusing the
+    /// statement names the function the user asked for.
+    ///
+    /// Returns the canonical spelling to quote back to the user, or null.
+    fn unsupportedAggregateName(name: []const u8) ?[]const u8 {
+        const unimplemented = [_][]const u8{
+            "percentile_cont", "percentile_disc", "percentilecont", "percentiledisc",
+            "stddev_samp",     "stddev_pop",      "collect_list",   "stdev",
+        };
+        for (unimplemented) |op| {
+            if (std.ascii.eqlIgnoreCase(name, op)) return op;
+        }
+        return null;
     }
 
     fn validateBuiltinCall(name: []const u8, args: []ast.Expr, ts_enabled: bool) bool {
@@ -5249,19 +5306,34 @@ pub const Parser = struct {
         }
 
         // Optional OPTIONS clause (alternative to USING/WITH)
+        // CANARY: REQ=REQ-ENG-3916-INDEX-OPTIONS-VALIDATION; FEATURE="FulltextIndex"; ASPECT=OptionsKeyValidation; STATUS=TESTED; TEST=tests/test_eng3916_fts_index_options.zig; OWNER=index; UPDATED=2026-08-25
+        //
+        // ENG-3916 (same class as ENG-3906): this block used to skip to the
+        // matching brace and throw every key away, so
+        //
+        //   CREATE INDEX i ON L (p) USING fulltext OPTIONS {k1: 1.5, b: 0.3}
+        //
+        // reported success while nothing at all was configured — the user
+        // believes they tuned BM25 and did not.
+        //
+        // NOT WIREABLE, SO REFUSED: the fts-storage engine fixes BM25 k1 and b
+        // as compile-time constants (`BM25_K1` / `BM25_B` in its src/search.zig)
+        // and exposes no per-index override; the analyzer is likewise fixed by
+        // src/index/fts_tokenizer.zig. No index type implements any OPTIONS key
+        // today, so every key is refused by name. An empty `OPTIONS {}` asks for
+        // nothing and stays accepted.
         if (self.cur.kind == .identifier and std.ascii.eqlIgnoreCase(self.cur.lexeme, "OPTIONS")) {
             self.advance();
             if (self.cur.kind == .l_brace) {
                 self.advance();
-                // Skip options until closing brace
-                var brace_depth: u32 = 1;
-                while (brace_depth > 0 and self.cur.kind != .eof) {
-                    if (self.cur.kind == .l_brace) {
-                        brace_depth += 1;
-                    } else if (self.cur.kind == .r_brace) {
-                        brace_depth -= 1;
-                    }
-                    if (brace_depth > 0) self.advance();
+                if (self.cur.kind != .r_brace and self.cur.kind != .eof) {
+                    const option_key = self.cur.lexeme;
+                    self.last_error = std.fmt.allocPrint(
+                        self.arena.allocator(),
+                        "unknown index option '{s}' in the OPTIONS clause: CREATE INDEX implements no OPTIONS keys (the BM25 knobs k1 / b and the analyzer are fixed by the fulltext engine and are not tunable per index)",
+                        .{option_key},
+                    ) catch "unknown index option in the OPTIONS clause: CREATE INDEX implements no OPTIONS keys";
+                    return error.UnknownIndexOption;
                 }
                 if (self.cur.kind == .r_brace) {
                     self.advance();
