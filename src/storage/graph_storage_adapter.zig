@@ -1408,26 +1408,29 @@ pub fn fromStorageProperty(allocator: Allocator, val: gs.PropertyValue) !graph_s
     };
 }
 
-/// ENG-3911: the storage layer raises `error.PropertyKeyTooLong` for TWO
-/// structurally different refusals (graph_storage `src/prop_store.zig`):
+/// ENG-3911: property-entry write errors, on their way to the client.
 ///
-///   * `:1211` — the key itself exceeds `maxInt(u16)` bytes. A genuine KEY
-///     overflow.
-///   * `:1236` — the whole entry (`2 + key.len + encoded value`) does not fit
-///     one property page, i.e. it crossed the 8142-byte per-entry budget. The
-///     dependency's own comment admits it reuses the key error here, but with a
-///     short key it is the VALUE that overflowed.
+/// HISTORY: the storage layer used to raise `error.PropertyKeyTooLong` for TWO
+/// structurally different refusals, and this function re-mapped the
+/// mis-attributed one (short key, oversized VALUE) to a truthful
+/// `error.PropertyValueTooLarge`.
 ///
-/// Re-map the second case — while the key is still in hand — to a truthful
-/// `error.PropertyValueTooLarge`, which `server/proto_util.mapError` surfaces as
-/// SQLSTATE 54000 (program_limit_exceeded) instead of the 58000 system-error
-/// class with the wrong noun. A genuinely oversized key keeps its own identity.
+/// Since graph-storage v0.4.0 the dependency makes that split itself
+/// (`src/prop_store.zig`): a value too large for the inline per-entry budget
+/// spills to a VarStore overflow chain, `error.PropertyValueTooLarge` names a
+/// value above `GraphConfig.max_property_value_bytes` (default 1 MiB), and
+/// `error.PropertyKeyTooLong` is reserved for a genuinely oversized KEY. So
+/// there is nothing left to re-attribute — this is a pass-through.
 ///
-/// CANARY: REQ=REQ-ENG-3911-PROPERTY-VALUE-SIZE-ERROR; FEATURE="PropertyStorage"; ASPECT=OversizedValueErrorMapping; STATUS=TESTED; TEST=tests/test_eng3911_property_value_size_error.zig; OWNER=transport; UPDATED=2026-08-24
+/// It is kept (rather than deleted at its ~9 call sites) as the single named
+/// seam where a property-entry error is normalized for the wire:
+/// `server/proto_util.mapError` surfaces both as SQLSTATE 54000
+/// (program_limit_exceeded), each with its own truthful message.
+///
+/// CANARY: REQ=REQ-ENG-3911-PROPERTY-VALUE-SIZE-ERROR; FEATURE="PropertyStorage"; ASPECT=OversizedValueErrorMapping; STATUS=TESTED; TEST=tests/test_eng3911_property_value_size_error.zig; OWNER=transport; UPDATED=2026-08-25
 pub fn mapPropertyEntryError(err: anyerror, key: []const u8) anyerror {
-    if (err != error.PropertyKeyTooLong) return err;
-    if (key.len > std.math.maxInt(u16)) return err;
-    return error.PropertyValueTooLarge;
+    _ = key;
+    return err;
 }
 
 fn freeTemporaryStorageProperty(allocator: Allocator, val: gs.PropertyValue) void {

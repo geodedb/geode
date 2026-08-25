@@ -257,14 +257,16 @@ pub fn mapError(err: anyerror) ErrorInfo {
         // ENG-3911: an oversized property VALUE used to reach the client as
         // `PropertyKeyTooLong` under the generic 58000 system-error class — the
         // wrong noun AND a "the server broke" class for a documented resource
-        // limit the caller simply crossed. `storage.graph_storage_adapter
-        // .mapPropertyEntryError` now separates the two refusals the storage
-        // layer conflates, and each gets its own truthful arm here.
+        // limit the caller simply crossed. Each refusal now gets its own
+        // truthful arm here.
         // 54000 = SQLSTATE program_limit_exceeded (class 54, limit exceeded).
-        // NOTE: raising the 8142-byte per-entry cap is out of scope — this makes
-        // the refusal honest, it does not make the payload fit.
-        // CANARY: REQ=REQ-ENG-3911-PROPERTY-VALUE-SIZE-ERROR; FEATURE="PropertyStorage"; ASPECT=OversizedValueErrorMapping; STATUS=TESTED; TEST=tests/test_eng3911_property_value_size_error.zig; OWNER=transport; UPDATED=2026-08-24
-        error.PropertyValueTooLarge => .{ .code = "54000", .message = "PropertyValueTooLarge: the property value does not fit the 8142-byte per-entry storage budget (one 8192-byte page minus its header; an entry costs 2 + key length + encoded value). Shorten the value — e.g. a VECTOR<f32> fits at most 2030 dimensions and a string at most ~8132 bytes for a short key" },
+        // NOTE: since graph-storage v0.4.0 a value that overflows the ~8142-byte
+        // inline per-entry budget SPILLS to a VarStore overflow chain instead of
+        // failing, so this arm now fires only above the storage sanity cap
+        // `GraphConfig.max_property_value_bytes` (default 1 MiB) — and the
+        // storage layer raises `PropertyValueTooLarge` itself.
+        // CANARY: REQ=REQ-ENG-3911-PROPERTY-VALUE-SIZE-ERROR; FEATURE="PropertyStorage"; ASPECT=OversizedValueErrorMapping; STATUS=TESTED; TEST=tests/test_eng3911_property_value_size_error.zig; OWNER=transport; UPDATED=2026-08-25
+        error.PropertyValueTooLarge => .{ .code = "54000", .message = "PropertyValueTooLarge: the encoded property value exceeds the storage sanity cap on a single value (GraphConfig.max_property_value_bytes, default 1048576 bytes / 1 MiB). Values below the cap are stored in full — larger-than-page values spill to an overflow chain — so a VECTOR<f32> fits up to 262144 dimensions and a string up to ~1 MiB. Shorten the value or raise the cap deliberately" },
         error.PropertyKeyTooLong => .{ .code = "54000", .message = "PropertyKeyTooLong: the property key exceeds the 65535-byte maximum key length" },
         else => .{ .code = "58000", .message = @errorName(err) },
     };

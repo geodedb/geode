@@ -488,6 +488,24 @@
             // contract. No manifest bump (stays V4; the adjacency entry-format
             // byte + read-both is the versioning). Same transitive deps as
             // v0.2.34 (no diamond).
+            // v0.4.0 (2026-08-25): PROPERTY-VALUE OVERFLOW — a property value
+            // whose entry (2 + key.len + encoded value) exceeds the ~8142-byte
+            // inline per-page budget no longer fails: the encoded value spills
+            // into a VarStore overflow chain and a fixed 13-byte tag-7 stub
+            // takes its place in the entry, so the insert path downstream is
+            // unchanged. New `GraphConfig.max_property_value_bytes` (default
+            // 1 MiB) is the sanity cap that bounds WAL record volume and per-op
+            // memory for a spill (SEC/DoS); a value above it is refused BEFORE
+            // any page or WAL byte is owed. TRUTHFUL ERROR SPLIT:
+            // `error.PropertyValueTooLarge` now means the VALUE exceeded the
+            // cap, and `error.PropertyKeyTooLong` is reserved for a genuinely
+            // oversized KEY (one whose key bytes + the 13-byte stub cannot fit
+            // an entry) — geode's adapter re-map for the mis-attributed case is
+            // therefore obsolete. A VECTOR<f32> now stores up to ~262,144 dims
+            // (4096-dim embeddings are 16 KB) instead of 2030. Stores that hold
+            // no overflowed values stay byte-compatible (no manifest bump; the
+            // stub tag is the versioning). Same transitive deps as v0.3.2 (no
+            // diamond).
             .url = "git+https://gitlab.com/devnw/zig/graph-storage.git?ref=v0.4.0#facea555e09df3e5d56b0794754cb1878efc58c7",
             .hash = "graph_storage-0.4.0-9UyJS0o3HgBxLk93r6Rs2roDkZCXRaWwySrmfRzBZrOO",
         },
