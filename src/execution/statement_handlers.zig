@@ -352,7 +352,14 @@ pub fn executeShow(allocator: std.mem.Allocator, s: ast.ShowStatement, context: 
                 .{ .name = "tail", .signature = "(list)", .return_type = "LIST" },
                 .{ .name = "last", .signature = "(list)", .return_type = "ANY" },
                 .{ .name = "range", .signature = "(start, end, [step])", .return_type = "LIST" },
-                .{ .name = "reduce", .signature = "(acc, list, expr)", .return_type = "ANY" },
+                // CANARY: REQ=REQ-ENG-3912-ADVERTISE-DISPATCH-PARITY; FEATURE="SHOW FUNCTIONS"; ASPECT=ReduceUnadvertised; STATUS=TESTED; TEST=tests/test_eng3912_advertise_dispatch_parity.zig; OWNER=execution; UPDATED=2026-08-25
+                // ENG-3912: `reduce(acc = seed, x IN list | expr)` is NOT
+                // implemented — the higher-order form is not even accepted by
+                // the parser (`RETURN reduce(acc = 0, x IN [1,2,3] | acc + x)`
+                // is a syntax error), let alone dispatched. Advertising it here
+                // told users a construct exists that cannot be written at all,
+                // so the row is removed rather than faked. Re-add it in the
+                // same commit that lands the grammar + evaluator.
                 // Numeric functions
                 .{ .name = "abs", .signature = "(number)", .return_type = "NUMBER" },
                 .{ .name = "ceil", .signature = "(number)", .return_type = "INTEGER" },
@@ -374,9 +381,13 @@ pub fn executeShow(allocator: std.mem.Allocator, s: ast.ShowStatement, context: 
                 .{ .name = "min", .signature = "(expr)", .return_type = "ANY" },
                 .{ .name = "max", .signature = "(expr)", .return_type = "ANY" },
                 .{ .name = "collect", .signature = "(expr)", .return_type = "LIST" },
-                .{ .name = "stdev", .signature = "(expr)", .return_type = "FLOAT" },
-                .{ .name = "percentileCont", .signature = "(expr, percentile)", .return_type = "NUMBER" },
-                .{ .name = "percentileDisc", .signature = "(expr, percentile)", .return_type = "ANY" },
+                // CANARY: REQ=REQ-ENG-3914-UNSUPPORTED-AGGREGATE-REJECTION; FEATURE="SHOW FUNCTIONS"; ASPECT=UnimplementedAggregatesUnadvertised; STATUS=TESTED; TEST=tests/test_eng3914_unsupported_aggregates.zig; OWNER=execution; UPDATED=2026-08-25
+                // ENG-3914: stdev / percentileCont / percentileDisc were listed
+                // here but are the same unimplemented aggregates the parser now
+                // refuses by their snake_case spellings. They are removed rather
+                // than left advertised — src/execution/aggregation_evaluation.zig
+                // implements exactly count/sum/avg/min/max/collect. Re-add them
+                // in the same commit that lands the implementations.
                 // Predicate functions
                 .{ .name = "all", .signature = "(var IN list WHERE predicate)", .return_type = "BOOLEAN" },
                 .{ .name = "any", .signature = "(var IN list WHERE predicate)", .return_type = "BOOLEAN" },

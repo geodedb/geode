@@ -3537,8 +3537,13 @@ fn tryBasicFunction(allocator: std.mem.Allocator, function_name: []const u8, arg
             .Str => |s| return Value{ .Int = @intCast(s.len) },
             .Map => |m| return Value{ .Int = @intCast(m.count()) },
             // Handle ExtValue.List for list properties stored on nodes
+            // CANARY: REQ=REQ-ENG-3912-SIZE-OF-VECTOR; FEATURE="SizeFunction"; ASPECT=VectorDimension; STATUS=TESTED; TEST=tests/test_eng3912_advertise_dispatch_parity.zig; OWNER=eval; UPDATED=2026-08-25
+            // ENG-3912: see src/eval/call_handlers.zig — a VECTOR reports its
+            // dimension, not 0.
             .ExtValue => |ext| switch (ext) {
                 .List => |l| return Value{ .Int = @intCast(l.len) },
+                .VectorF32 => |v| return Value{ .Int = @intCast(v.data.len) },
+                .VectorI32 => |v| return Value{ .Int = @intCast(v.data.len) },
                 else => return Value{ .Int = 0 },
             },
             else => return Value{ .Int = 0 },

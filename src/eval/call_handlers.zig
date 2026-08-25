@@ -755,6 +755,54 @@ pub fn evalStringFunction(
         return Value{ .Str = str[start..] };
     }
 
+    // CANARY: REQ=REQ-ENG-3912-ADVERTISE-DISPATCH-PARITY; FEATURE="StringFunctions"; ASPECT=Split; STATUS=TESTED; TEST=tests/test_eng3912_advertise_dispatch_parity.zig; OWNER=eval; UPDATED=2026-08-25
+    // split(str, delimiter) -> LIST of STRING
+    //
+    // ENG-3912: `split` was advertised by BOTH SHOW FUNCTIONS
+    // (src/execution/statement_handlers.zig) and the language metadata
+    // (src/gql/language_metadata.zig) but never dispatched — every call raised
+    // UnknownFunction. Implemented here rather than un-advertised because the
+    // List plumbing is the same one keys()/values()/range() already use.
+    //
+    // Element slices alias `str`, exactly as left()/right()/substring() do; the
+    // caller's allocator owns only the Value array.
+    if (std.mem.eql(u8, function_name, "split")) {
+        if (args.len != 2) return Value{ .Null = {} };
+        const str_arg = try eval.evalExpr(allocator, args[0].*, env);
+        const delim_arg = try eval.evalExpr(allocator, args[1].*, env);
+
+        const str = switch (str_arg) {
+            .Str => |s| s,
+            else => return Value{ .Null = {} },
+        };
+        const delim = switch (delim_arg) {
+            .Str => |s| s,
+            else => return Value{ .Null = {} },
+        };
+
+        // An empty delimiter has no well-defined split point; return the whole
+        // string as a single element rather than looping forever or exploding
+        // into one element per byte (which would break UTF-8 anyway).
+        if (delim.len == 0) {
+            const single = try allocator.alloc(Value, 1);
+            single[0] = Value{ .Str = str };
+            return Value{ .List = single };
+        }
+
+        var count: usize = 1;
+        var counter = std.mem.splitSequence(u8, str, delim);
+        _ = counter.first();
+        while (counter.next() != null) count += 1;
+
+        const parts = try allocator.alloc(Value, count);
+        var it = std.mem.splitSequence(u8, str, delim);
+        var i: usize = 0;
+        while (it.next()) |part| : (i += 1) {
+            parts[i] = Value{ .Str = part };
+        }
+        return Value{ .List = parts };
+    }
+
     // upper(str) / toupper(str)
     if (std.mem.eql(u8, function_name, "upper") or std.mem.eql(u8, function_name, "toupper")) {
         if (args.len != 1) return Value{ .Null = {} };
@@ -1283,8 +1331,16 @@ pub fn evalCollectionFunction(
             .Str => |s| return Value{ .Int = @intCast(s.len) },
             .Map => |m| return Value{ .Int = @intCast(m.count()) },
             .Path => |p| return Value{ .Int = @intCast(p.edges.len) },
+            // CANARY: REQ=REQ-ENG-3912-SIZE-OF-VECTOR; FEATURE="SizeFunction"; ASPECT=VectorDimension; STATUS=TESTED; TEST=tests/test_eng3912_advertise_dispatch_parity.zig; OWNER=eval; UPDATED=2026-08-25
+            // ENG-3912: a VECTOR is a sized collection, so size()/length() must
+            // report its dimension. The old `else => Int 0` arm answered 0 for
+            // every stored embedding — a silent lie that read as "empty".
+            // `data.len` (not the u16 `dim` field) is authoritative so an
+            // overflow-stored vector reports its real element count.
             .ExtValue => |ext| switch (ext) {
                 .List => |l| return Value{ .Int = @intCast(l.len) },
+                .VectorF32 => |v| return Value{ .Int = @intCast(v.data.len) },
+                .VectorI32 => |v| return Value{ .Int = @intCast(v.data.len) },
                 else => return Value{ .Int = 0 },
             },
             else => return Value{ .Int = 0 },

@@ -71,24 +71,48 @@ const dispatch_table = std.StaticStringMap(AlgoHandler).initComptime(.{
     .{ "bridges", handleBridges },
     .{ "algo.biconnectedcomponents.stream", handleBiconnected },
     .{ "biconnected", handleBiconnected },
+    .{ "biconnectedcomponents", handleBiconnected },
     // ==================== Graph Statistics ====================
     // CANARY: REQ=REQ-GQL-GRAPH-STATS-001; FEATURE="GraphStatistics"; ASPECT=CallProcedure; STATUS=TESTED; TEST="GAP-0514 P3: graph statistics procedures return real values through CALL"; OWNER=execution; UPDATED=2026-06-11
+    // CANARY: REQ=REQ-ENG-3912-ADVERTISE-DISPATCH-PARITY; FEATURE="GraphStatistics"; ASPECT=StreamAliasParity; STATUS=TESTED; TEST=tests/test_eng3912_advertise_dispatch_parity.zig; OWNER=execution; UPDATED=2026-08-25
+    // ENG-3912: src/gql/language_metadata.zig advertises the `.stream` spelling
+    // (and a bare alias) for every one of these, but only the bare `algo.<name>`
+    // key was registered — so the exact names SHOW PROCEDURES prints, and the
+    // exact `example` strings in the metadata, all raised UnknownProcedure.
+    // Aliasing is the cheap half of the fix; the sweep test walks
+    // language_metadata.procedures and CALLs every advertised name + alias.
     .{ "algo.graphdensity", handleGraphDensity },
+    .{ "algo.graphdensity.stream", handleGraphDensity },
+    .{ "graphdensity", handleGraphDensity },
     .{ "algo.density", handleGraphDensity },
     .{ "algo.graphdiameter", handleGraphDiameter },
+    .{ "algo.graphdiameter.stream", handleGraphDiameter },
+    .{ "graphdiameter", handleGraphDiameter },
     .{ "algo.diameter", handleGraphDiameter },
     .{ "algo.meandistance", handleMeanDistance },
+    .{ "algo.meandistance.stream", handleMeanDistance },
+    .{ "meandistance", handleMeanDistance },
     .{ "algo.globalclustering", handleGlobalClustering },
+    .{ "algo.globalclustering.stream", handleGlobalClustering },
+    .{ "globalclustering", handleGlobalClustering },
     .{ "algo.globalclusteringcoefficient", handleGlobalClustering },
     .{ "algo.katz.stream", handleKatz },
+    .{ "katz", handleKatz },
     .{ "algo.katzcentrality.stream", handleKatz },
     .{ "algo.hits.stream", handleHITS },
+    .{ "hits", handleHITS },
     .{ "algo.trianglecount", handleTriangleCount },
     .{ "algo.trianglecounting", handleTriangleCount },
+    .{ "algo.trianglecounting.stream", handleTriangleCount },
+    .{ "trianglecounting", handleTriangleCount },
     .{ "algo.localclustering", handleLocalClustering },
+    .{ "algo.localclustering.stream", handleLocalClustering },
+    .{ "localclustering", handleLocalClustering },
     .{ "algo.localclusteringcoefficient", handleLocalClustering },
     .{ "algo.kcore.stream", handleKCore },
+    .{ "kcore", handleKCore },
     .{ "algo.kshell.stream", handleKShell },
+    .{ "kshell", handleKShell },
     // ==================== Traversal Algorithms ====================
     .{ "algo.bfs.stream", handleBFS },
     .{ "bfs", handleBFS },
