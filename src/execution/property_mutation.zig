@@ -339,6 +339,22 @@ pub fn setNodePropertyFromValue(
     }
 
     try store.setNodeProperty(node_id, key, prop_value);
+
+    // CANARY: REQ=REQ-ENG-3912-VECTOR-DIM-LIFECYCLE; FEATURE="VectorIndex"; ASPECT=DimAdoptAfterCommit; STATUS=TESTED; TEST=tests/test_eng3912_dim_pinning.zig; OWNER=index; UPDATED=2026-08-25
+    // ENG-3912(a): establish the vector-dimension pin only AFTER the write has
+    // committed. The validation pre-pass used to adopt the dimension as a side
+    // effect of merely CHECKING it, so a statement that was subsequently
+    // refused still pinned the property forever (verified: a refused mixed-dim
+    // CREATE bricked an EMPTY property).
+    if (index_manager.getGlobalIndexManager()) |mgr| {
+        switch (value) {
+            .ExtValue => |ev| {
+                if (ev == .VectorF32) mgr.adoptVectorDimension(labels, key, ev.VectorF32.dim);
+            },
+            else => {},
+        }
+    }
+
     if (labels.len > 0) rebuildAdvancedIndexesForProperty(store, labels[0], key);
 
     // A4b: keep fulltext indexes current. This is the single property-write

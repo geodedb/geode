@@ -338,6 +338,17 @@ pub fn ensureCatalogInstance(allocator: std.mem.Allocator) !*catalog_mod.Catalog
 
     // Create the catalog instance with provided allocator
     const instance = try catalog_mod.Catalog.init(allocator, data_dir);
+
+    // CANARY: REQ=REQ-ENG-3912-VECTOR-DIM-LIFECYCLE; FEATURE="VectorIndex"; ASPECT=DimValidationRehydrate; STATUS=TESTED; TEST=tests/test_eng3912_dim_pinning.zig; OWNER=index; UPDATED=2026-08-25
+    // ENG-3912(d): the catalog has just replayed every persisted index; the
+    // vector dimension guard was previously only ever armed by DDL execution
+    // and therefore VANISHED across a restart (verified: mixed dimensions
+    // accepted afterwards). Re-arm it here, where the reloaded catalog rows
+    // are the source of truth. Registration only records (label, property) —
+    // no store access — so this stays cheap on the startup path.
+    statement_dispatcher.rehydrateVectorDimValidation(allocator, instance) catch |err| {
+        log.warn("vector dimension guard rehydration failed", &.{Attr.string("error", @errorName(err))});
+    };
     // GAP-0203: Atomic store ensures other threads see the fully-initialized instance
     @atomicStore(?*catalog_mod.Catalog, &global_catalog_instance, instance, .release);
     return instance;
@@ -1855,6 +1866,18 @@ fn executeStatementWithContextInner(allocator: std.mem.Allocator, stmt: ast.Stat
                         if (index_manager.getGlobalIndexManager()) |manager| {
                             _ = manager.dropAdvancedIndex(removed.value.name, kind) catch false;
                         }
+                    }
+                    // CANARY: REQ=REQ-ENG-3912-VECTOR-DIM-LIFECYCLE; FEATURE="VectorIndex"; ASPECT=DropClearsDimPin; STATUS=TESTED; TEST=tests/test_eng3912_dim_pinning.zig; OWNER=index; UPDATED=2026-08-25
+                    // ENG-3912(b): the vector dimension pin is a SEPARATE
+                    // registry from the advanced-index wrappers, and DROP
+                    // INDEX never cleared it — the property stayed locked to a
+                    // dimension with no index present and no way to unlock it.
+                    // Unconditional: the registry is keyed by index name and
+                    // the call is a no-op for a name it does not hold, which
+                    // also covers `USING vector` (a spelling
+                    // runtimeAdvancedIndexTypeFromCatalog does not map).
+                    if (index_manager.getGlobalIndexManager()) |manager| {
+                        manager.unregisterVectorDimValidation(removed.value.name);
                     }
                     cat.allocator.free(removed.key);
                     cat.allocator.free(removed.value.name);

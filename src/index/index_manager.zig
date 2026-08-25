@@ -90,7 +90,16 @@ pub const IndexManager = struct {
     pub const VectorDimEntry = struct {
         label: []const u8,
         property: []const u8,
+        /// The established dimension, or 0 when no vector has been COMMITTED
+        /// under this (label, property) yet.
         dim: u16,
+        /// ENG-3912(d): whether the one-shot "derive the pin from already
+        /// committed data" pass has run for this entry. The pin is not
+        /// persisted anywhere, so after a restart the entry comes back with
+        /// `dim = 0`; without this the FIRST write after a restart would
+        /// establish whatever dimension it happened to carry and the guard
+        /// would silently invert (mixed dimensions accepted).
+        seed_attempted: bool = false,
     };
 
     pub const IndexType = enum {
@@ -1283,14 +1292,44 @@ pub const IndexManager = struct {
             .label = owned_label,
             .property = owned_prop,
             .dim = 0,
+            .seed_attempted = false,
         });
     }
 
-    /// GAP-0918: validate (and on first sight adopt) the dimension of a
-    /// vector being written under an HNSW-indexed (label, property). Before
-    /// this check a dim-3 vector was silently accepted into a dim-4 index —
-    /// a data-integrity defect (mixed-dimension vectors under one index with
-    /// no signal to the caller).
+    // CANARY: REQ=REQ-ENG-3912-VECTOR-DIM-LIFECYCLE; FEATURE="VectorIndex"; ASPECT=DimValidationUnregister; STATUS=TESTED; TEST=tests/test_eng3912_dim_pinning.zig; OWNER=index; UPDATED=2026-08-25
+    /// ENG-3912(b): drop an index's dimension pin. Without this, `DROP INDEX`
+    /// left the pin in force with NO index present — the property stayed
+    /// locked to a dimension that nothing was indexing any more, and there was
+    /// no statement that could clear it. Frees the duped strings symmetrically
+    /// with `registerVectorDimValidation`. A no-op for an unknown name, so the
+    /// DROP path can call it unconditionally.
+    pub fn unregisterVectorDimValidation(self: *IndexManager, index_name: []const u8) void {
+        if (self.vector_dim_registry.fetchRemove(index_name)) |kv| {
+            self.allocator.free(kv.key);
+            self.allocator.free(kv.value.label);
+            self.allocator.free(kv.value.property);
+        }
+    }
+
+    // CANARY: REQ=REQ-ENG-3912-VECTOR-DIM-LIFECYCLE; FEATURE="VectorIndex"; ASPECT=DimValidatePure; STATUS=TESTED; TEST=tests/test_eng3912_dim_pinning.zig; OWNER=index; UPDATED=2026-08-25
+    /// GAP-0918: validate the dimension of a vector being written under an
+    /// HNSW-indexed (label, property). Before that check a dim-3 vector was
+    /// silently accepted into a dim-4 index — mixed-dimension vectors under
+    /// one index with no signal to the caller.
+    ///
+    /// ENG-3912(a) — THIS FUNCTION IS PURE WITH RESPECT TO THE CANDIDATE
+    /// WRITE. It used to ADOPT the candidate's dimension as a side effect
+    /// (`if (meta.dim == 0) meta.dim = dim`). Because it is called from the
+    /// statement-level atomicity PRE-PASS (execution/write_precheck.zig),
+    /// which runs BEFORE the write is allowed, a statement that was then
+    /// REFUSED still left its first vector's dimension pinned forever — a
+    /// refused `CREATE (…dim3…), (…dim4…)` bricked the property at dim 3 with
+    /// ZERO rows stored and no statement able to clear it. Adoption now lives
+    /// in `adoptVectorDimension`, called only AFTER a write commits.
+    ///
+    /// Deriving the pin from data that is ALREADY COMMITTED (`seedVectorDim`)
+    /// is a different thing and is still done here: it cannot pin a dimension
+    /// that no stored vector has.
     pub fn checkVectorDimensionForWrite(
         self: *IndexManager,
         labels: []const []const u8,
@@ -1300,20 +1339,62 @@ pub const IndexManager = struct {
         var iter = self.vector_dim_registry.iterator();
         while (iter.next()) |entry| {
             const meta = entry.value_ptr;
-            if (!std.mem.eql(u8, meta.property, property)) continue;
-            var label_match = false;
-            for (labels) |lb| {
-                if (std.mem.eql(u8, meta.label, lb)) {
-                    label_match = true;
-                    break;
-                }
-            }
-            if (!label_match) continue;
+            if (!matchesLabelProperty(meta, labels, property)) continue;
+            if (meta.dim == 0 and !meta.seed_attempted) self.seedVectorDim(meta);
+            if (meta.dim == 0) continue;
+            if (meta.dim != dim) return error.VectorDimensionMismatch;
+        }
+    }
+
+    // CANARY: REQ=REQ-ENG-3912-VECTOR-DIM-LIFECYCLE; FEATURE="VectorIndex"; ASPECT=DimAdoptAfterCommit; STATUS=TESTED; TEST=tests/test_eng3912_dim_pinning.zig; OWNER=index; UPDATED=2026-08-25
+    /// ENG-3912(a): establish the dimension pin from a vector that has just
+    /// been COMMITTED. Called from the single node-property write chokepoint
+    /// (`property_mutation.setNodePropertyFromValue`) after the store write
+    /// returns, so a refused statement can never pin anything.
+    pub fn adoptVectorDimension(
+        self: *IndexManager,
+        labels: []const []const u8,
+        property: []const u8,
+        dim: u16,
+    ) void {
+        if (dim == 0) return;
+        var iter = self.vector_dim_registry.iterator();
+        while (iter.next()) |entry| {
+            const meta = entry.value_ptr;
+            if (!matchesLabelProperty(meta, labels, property)) continue;
             if (meta.dim == 0) {
                 meta.dim = dim;
-                continue;
+                meta.seed_attempted = true;
             }
-            if (meta.dim != dim) return error.VectorDimensionMismatch;
+        }
+    }
+
+    // CANARY: REQ=REQ-ENG-3912-VECTOR-DIM-LIFECYCLE; FEATURE="VectorIndex"; ASPECT=DimSeedFromCommittedData; STATUS=TESTED; TEST=tests/test_eng3912_dim_pinning.zig; OWNER=index; UPDATED=2026-08-25
+    /// ENG-3912(d): re-establish an unestablished pin from data that is already
+    /// stored. The pin is process state, not catalog state, so after a restart
+    /// the re-registered entry starts at `dim = 0`; without this the first
+    /// post-restart write would set the pin to ITS OWN dimension and the guard
+    /// would happily accept a dimension that disagrees with every stored
+    /// vector. One shot per entry per process: a miss (no vectors stored yet)
+    /// marks the entry seeded so this is not re-run on every write.
+    fn seedVectorDim(self: *IndexManager, meta: *VectorDimEntry) void {
+        meta.seed_attempted = true;
+        const store = graph_store.getGlobalStore(self.allocator);
+        const graph_names = store.listGraphNames(self.allocator) catch return;
+        defer {
+            for (graph_names) |name| self.allocator.free(name);
+            self.allocator.free(graph_names);
+        }
+        for (graph_names) |graph_name| {
+            const ids = store.getNodesByLabel(graph_name, meta.label) orelse continue;
+            for (ids) |node_id| {
+                const node = (store.nodes.getOrHydratePtr(node_id) catch null) orelse continue;
+                const prop = node.properties.get(meta.property) orelse continue;
+                if (vectorDimOfPropertyValue(prop)) |stored_dim| {
+                    meta.dim = stored_dim;
+                    return;
+                }
+            }
         }
     }
 
@@ -1682,6 +1763,32 @@ fn vectorFromPropertyValue(allocator: std.mem.Allocator, prop: graph_store.Prope
         },
         else => null,
     };
+}
+
+/// ENG-3912: the dimension of a stored vector property, or null when the
+/// property does not hold a vector.
+fn vectorDimOfPropertyValue(prop: graph_store.PropertyValue) ?u16 {
+    const ext = switch (prop) {
+        .ExtValue => |value| value,
+        else => return null,
+    };
+    return switch (ext) {
+        .VectorF32 => |vec| vec.dim,
+        .VectorI32 => |vec| vec.dim,
+        else => null,
+    };
+}
+
+fn matchesLabelProperty(
+    meta: *const IndexManager.VectorDimEntry,
+    labels: []const []const u8,
+    property: []const u8,
+) bool {
+    if (!std.mem.eql(u8, meta.property, property)) return false;
+    for (labels) |lb| {
+        if (std.mem.eql(u8, meta.label, lb)) return true;
+    }
+    return false;
 }
 
 fn latLonFromPropertyValue(prop: graph_store.PropertyValue) ?geographic.LatLon {

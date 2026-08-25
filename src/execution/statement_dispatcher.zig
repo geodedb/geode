@@ -2,6 +2,7 @@ const std = @import("std");
 const ast = @import("../gql/ast.zig");
 const graph_store = @import("../graph_store.zig");
 const index_manager = @import("../index/index_manager.zig");
+const catalog_mod = @import("../schema/catalog.zig");
 
 // GAP-0717 / issue #717 (2026-04-16): deleted a 1,114-LOC stale clone of
 // executeStatementWithContext plus its private resolveLimitParam helper and
@@ -31,6 +32,47 @@ pub fn runtimeAdvancedIndexTypeFromCatalog(type_name: []const u8) ?index_manager
     if (std.mem.eql(u8, type_name, "jsonb_inverted") or std.mem.eql(u8, type_name, "JsonbInverted")) return .jsonb_inverted;
     if (std.mem.eql(u8, type_name, "domain_trie") or std.mem.eql(u8, type_name, "DomainTrie")) return .domain_trie;
     return null;
+}
+
+// CANARY: REQ=REQ-ENG-3912-VECTOR-DIM-LIFECYCLE; FEATURE="VectorIndex"; ASPECT=DimValidationRehydrate; STATUS=TESTED; TEST=tests/test_eng3912_dim_pinning.zig; OWNER=index; UPDATED=2026-08-25
+/// ENG-3912(d): re-register the vector dimension-validation entries for every
+/// vector index the catalog just reloaded from disk.
+///
+/// `registerVectorDimValidation` was only ever called from DDL execution, so
+/// the guard existed for exactly as long as the process that ran the
+/// `CREATE INDEX` did. After a restart the catalog still listed the index,
+/// `SHOW INDEXES` still reported it, and a mixed-dimension write was accepted
+/// without a murmur. The dimension itself is NOT persisted anywhere; the entry
+/// comes back unestablished and the index manager derives it from the first
+/// vector already stored under the (label, property) — see
+/// `IndexManager.seedVectorDim`. Deriving from committed data (rather than
+/// persisting a new catalog field) keeps the on-disk catalog format unchanged
+/// and cannot pin a dimension no stored vector has.
+pub fn rehydrateVectorDimValidation(
+    allocator: std.mem.Allocator,
+    catalog: *const catalog_mod.Catalog,
+) !void {
+    var any = false;
+    var iter = catalog.indexes.iterator();
+    while (iter.next()) |entry| {
+        const info = entry.value_ptr.*;
+        if (info.columns.len != 1) continue;
+        if (!std.mem.eql(u8, info.index_type, "vector") and
+            !std.mem.eql(u8, info.index_type, "vector_f32")) continue;
+        any = true;
+        break;
+    }
+    if (!any) return;
+
+    const manager = try index_manager.ensureGlobalIndexManager(allocator);
+    var iter2 = catalog.indexes.iterator();
+    while (iter2.next()) |entry| {
+        const info = entry.value_ptr.*;
+        if (info.columns.len != 1) continue;
+        if (!std.mem.eql(u8, info.index_type, "vector") and
+            !std.mem.eql(u8, info.index_type, "vector_f32")) continue;
+        try manager.registerVectorDimValidation(info.name, info.table_name, info.columns[0]);
+    }
 }
 
 pub fn ensureAdvancedRuntimeIndex(

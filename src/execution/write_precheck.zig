@@ -49,6 +49,56 @@ const value_types = @import("../value_types.zig");
 const Value = value_types.Value;
 const Env = value_types.Env;
 
+// CANARY: REQ=REQ-ENG-3912-VECTOR-DIM-LIFECYCLE; FEATURE="VectorIndex"; ASPECT=StatementScopedDimScratch; STATUS=TESTED; TEST=tests/test_eng3912_dim_pinning.zig; OWNER=index; UPDATED=2026-08-25
+/// ENG-3912: the vector dimensions a SINGLE statement is about to write,
+/// recorded for the duration of that statement's pre-pass and then thrown away.
+///
+/// The dimension guard used to be armed by the pre-pass itself (checking a
+/// vector ADOPTED its dimension into the process-wide registry), which is what
+/// let a REFUSED statement pin a dimension forever. Adoption now happens only
+/// after a write commits — but that alone would lose the pre-pass's ability to
+/// refuse a statement that is internally inconsistent (`CREATE (…dim3…),
+/// (…dim4…)` against a property with no established dimension), and such a
+/// statement would then commit its first node and refuse the second: exactly
+/// the partial write this module exists to prevent.
+///
+/// This scratch restores that refusal WITHOUT touching global state: it is
+/// stack-scoped, dies with the pre-pass, and can never outlive a refusal.
+pub const VectorDimScratch = struct {
+    allocator: std.mem.Allocator,
+    entries: std.ArrayList(Entry) = .empty,
+
+    const Entry = struct { label: []const u8, property: []const u8, dim: u16 };
+
+    pub fn init(allocator: std.mem.Allocator) VectorDimScratch {
+        return .{ .allocator = allocator };
+    }
+
+    pub fn deinit(self: *VectorDimScratch) void {
+        self.entries.deinit(self.allocator);
+    }
+
+    /// Refuse a second dimension for a (label, property) this same statement
+    /// already writes; otherwise remember this one.
+    fn noteAndCheck(
+        self: *VectorDimScratch,
+        labels: []const []const u8,
+        property: []const u8,
+        dim: u16,
+    ) !void {
+        for (labels) |label| {
+            for (self.entries.items) |entry| {
+                if (!std.mem.eql(u8, entry.property, property)) continue;
+                if (!std.mem.eql(u8, entry.label, label)) continue;
+                if (entry.dim != dim) return error.VectorDimensionMismatch;
+            }
+        }
+        for (labels) |label| {
+            try self.entries.append(self.allocator, .{ .label = label, .property = property, .dim = dim });
+        }
+    }
+};
+
 /// One property entry, already evaluated.
 ///
 /// `labels` are the labels the entry will be written under, when the statement
@@ -65,19 +115,41 @@ pub fn checkPropertyWritable(
     key: []const u8,
     value: Value,
 ) !void {
+    return checkPropertyWritableScoped(allocator, labels, key, value, null);
+}
+
+/// `checkPropertyWritable` with the statement-scoped vector-dimension scratch
+/// threaded in. `scratch` is null for the callers that inspect a single entry
+/// in isolation (there is no other entry in the same statement to disagree
+/// with).
+pub fn checkPropertyWritableScoped(
+    allocator: std.mem.Allocator,
+    labels: []const []const u8,
+    key: []const u8,
+    value: Value,
+    scratch: ?*VectorDimScratch,
+) !void {
     // GAP-0918 vector-dimension refusal, hoisted ahead of the first write. The
     // apply-time check in `property_mutation.setNodePropertyFromValue` stays as
     // the chokepoint; this only moves the SAME decision earlier, and can never
     // refuse more than it would (an index whose dimension is not established
     // yet refuses nothing, then or now).
+    //
+    // ENG-3912(a): this is a PURE check now — it no longer adopts the
+    // dimension it is inspecting, so a statement refused after this point
+    // leaves no pin behind. Intra-statement consistency is carried by
+    // `scratch`, which dies with the pre-pass.
     if (labels.len > 0) {
-        if (index_manager.getGlobalIndexManager()) |mgr| {
-            switch (value) {
-                .ExtValue => |ev| {
-                    if (ev == .VectorF32) try mgr.checkVectorDimensionForWrite(labels, key, ev.VectorF32.dim);
-                },
-                else => {},
-            }
+        switch (value) {
+            .ExtValue => |ev| {
+                if (ev == .VectorF32) {
+                    if (index_manager.getGlobalIndexManager()) |mgr| {
+                        try mgr.checkVectorDimensionForWrite(labels, key, ev.VectorF32.dim);
+                    }
+                    if (scratch) |sc| try sc.noteAndCheck(labels, key, ev.VectorF32.dim);
+                }
+            },
+            else => {},
         }
     }
 
@@ -97,10 +169,20 @@ pub fn checkPatternPropsWritable(
     props: ?[]ast.Property,
     env: Env,
 ) !void {
+    return checkPatternPropsWritableScoped(allocator, labels, props, env, null);
+}
+
+pub fn checkPatternPropsWritableScoped(
+    allocator: std.mem.Allocator,
+    labels: []const []const u8,
+    props: ?[]ast.Property,
+    env: Env,
+    scratch: ?*VectorDimScratch,
+) !void {
     const entries = props orelse return;
     for (entries) |prop| {
         const value = eval.evalExpr(allocator, prop.value.*, env) catch continue;
-        try checkPropertyWritable(allocator, labels, prop.key, value);
+        try checkPropertyWritableScoped(allocator, labels, prop.key, value, scratch);
     }
 }
 
@@ -112,14 +194,20 @@ pub fn checkPatternWritable(
     pattern: ast.GraphPattern,
     env: Env,
 ) !void {
+    // ENG-3912: one scratch for the WHOLE pattern, so two nodes of the same
+    // label in one CREATE cannot disagree about a vector's dimension and
+    // commit the first before refusing the second.
+    var scratch = VectorDimScratch.init(allocator);
+    defer scratch.deinit();
+
     for (pattern.chains) |chain| {
-        if (chain.head) |head| try checkPatternPropsWritable(allocator, head.labels, head.props, env);
+        if (chain.head) |head| try checkPatternPropsWritableScoped(allocator, head.labels, head.props, env, &scratch);
         for (chain.hops) |hop| {
-            try checkPatternPropsWritable(allocator, hop.left.labels, hop.left.props, env);
-            try checkPatternPropsWritable(allocator, hop.right.labels, hop.right.props, env);
+            try checkPatternPropsWritableScoped(allocator, hop.left.labels, hop.left.props, env, &scratch);
+            try checkPatternPropsWritableScoped(allocator, hop.right.labels, hop.right.props, env, &scratch);
             // Relationship properties carry no node labels — the vector-index
             // dimension rule is node-label scoped.
-            try checkPatternPropsWritable(allocator, &.{}, hop.rel.props, env);
+            try checkPatternPropsWritableScoped(allocator, &.{}, hop.rel.props, env, &scratch);
         }
     }
 }
@@ -142,6 +230,9 @@ pub fn checkSetClausesWritable(
     target_var: ?[]const u8,
     labels: []const []const u8,
 ) !void {
+    var scratch = VectorDimScratch.init(allocator);
+    defer scratch.deinit();
+
     for (set_clauses) |set_clause| {
         switch (set_clause) {
             .Property => |prop| {
@@ -149,7 +240,7 @@ pub fn checkSetClausesWritable(
                     if (!std.mem.eql(u8, prop.target.object, v)) continue;
                 }
                 const value = eval.evalExpr(allocator, prop.value, env) catch continue;
-                try checkPropertyWritable(allocator, labels, prop.target.property, value);
+                try checkPropertyWritableScoped(allocator, labels, prop.target.property, value, &scratch);
             },
             .AllProperties => |all_props| {
                 if (target_var) |v| {
@@ -161,7 +252,7 @@ pub fn checkSetClausesWritable(
                 if (props_value != .Map) continue;
                 var iter = props_value.Map.iterator();
                 while (iter.next()) |entry| {
-                    try checkPropertyWritable(allocator, labels, entry.key_ptr.*, entry.value_ptr.*);
+                    try checkPropertyWritableScoped(allocator, labels, entry.key_ptr.*, entry.value_ptr.*, &scratch);
                 }
             },
             // SET label carries no property value.

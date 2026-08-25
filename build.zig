@@ -9365,6 +9365,17 @@ pub fn build(b: *std.Build) void {
     const gap0918_tests = b.addTest(.{ .root_module = gap0918_test_mod });
     const run_gap0918_tests = b.addRunArtifact(gap0918_tests);
     shardDep(test_step, &run_gap0918_tests.step, 0, test_shard_loads, test_shard_index);
+    // ENG-3912: the GAP-0918 vector-dimension guard had a broken lifecycle —
+    // a REFUSED statement pinned a dimension permanently, DROP INDEX left the
+    // pin in force with no index, and the guard vanished across a restart.
+    const eng3912_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_eng3912_dim_pinning.zig"), .target = target, .optimize = optimize });
+    eng3912_test_mod.addImport("geode", root_mod);
+    const eng3912_tests = b.addTest(.{ .root_module = eng3912_test_mod });
+    const run_eng3912_tests = b.addRunArtifact(eng3912_tests);
+    shardDep(test_step, &run_eng3912_tests.step, 0, test_shard_loads, test_shard_index);
+    const eng3912_step = b.step("test-eng3912", "Run ENG-3912 vector dimension-pin lifecycle regressions");
+    eng3912_step.dependOn(&run_eng3912_tests.step);
+
     // ENG-3913: `MATCH … [WHERE …] DELETE …` lost data in both directions — a
     // $param / cross-variable predicate silently deleted nothing, while a
     // pattern-restricted delete over-deleted (hops were never traversed) and a
