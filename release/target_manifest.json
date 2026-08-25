@@ -8,6 +8,44 @@
     "x86_64-macos",
     "aarch64-macos"
   ],
+  "_target_capabilities_note": "Per-target transport availability. QUIC (--listen) is available on every target. The gRPC transport (--listen-grpc) requires OpenSSL 3.x to be linked at build time AND present at runtime (libssl.so.3); where it is absent the binary is QUIC-only and `serve --listen-grpc` fails closed with error.TlsRequired. Keep this in sync with `openssl_unsupported_target` in build.zig and the before-hooks in .goreleaser.yaml.",
+  "target_capabilities": {
+    "x86_64-linux-gnu": {
+      "quic": true,
+      "grpc": true,
+      "runtime_requires": "libssl.so.3 (OpenSSL 3.x), glibc >= 2.38"
+    },
+    "x86_64-linux-musl": {
+      "quic": true,
+      "grpc": true,
+      "runtime_requires": "libssl.so.3 (OpenSSL 3.x)"
+    },
+    "aarch64-linux-gnu": {
+      "quic": true,
+      "grpc": true,
+      "runtime_requires": "libssl.so.3 (OpenSSL 3.x), glibc >= 2.38"
+    },
+    "aarch64-linux-musl": {
+      "quic": true,
+      "grpc": true,
+      "runtime_requires": "libssl.so.3 (OpenSSL 3.x)"
+    },
+    "riscv64-linux-gnu": {
+      "quic": true,
+      "grpc": false,
+      "reason": "QUIC only; gRPC transport unavailable (Zig toolchain limitation). Zig 0.16 cannot @cImport libc headers for riscv64-linux ('unsupported FLEN'), so the OpenSSL binding in src/transport/grpc_tls.zig cannot be compiled for this target at all. Not a packaging gap — it needs an upstream Zig fix."
+    },
+    "x86_64-macos": {
+      "quic": true,
+      "grpc": false,
+      "reason": "QUIC only; gRPC transport unavailable in the published tarball. These binaries are cross-built on Linux and OpenSSL provisioning for a cross-compiled macOS target (Homebrew bottles) is untested, so it is left off rather than guessed at. Tracked as follow-up; a native macOS build with OpenSSL present does link it."
+    },
+    "aarch64-macos": {
+      "quic": true,
+      "grpc": false,
+      "reason": "QUIC only; gRPC transport unavailable in the published tarball. These binaries are cross-built on Linux and OpenSSL provisioning for a cross-compiled macOS target (Homebrew bottles) is untested, so it is left off rather than guessed at. Tracked as follow-up; a native macOS build with OpenSSL present does link it."
+    }
+  },
   "release_assets": [
     {
       "name": "macOS Universal (Intel + Apple Silicon)",

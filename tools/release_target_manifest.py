@@ -21,6 +21,27 @@ def load_manifest(path: pathlib.Path) -> dict[str, Any]:
         raise ValueError("manifest missing zig_targets list")
     if not isinstance(data.get("release_assets"), list):
         raise ValueError("manifest missing release_assets list")
+
+    # target_capabilities records which transports each shipped binary actually
+    # supports (notably: gRPC needs OpenSSL, which riscv64 and the cross-built
+    # macOS targets do not get). It must stay exhaustive, or the release notes
+    # and target manifest start lying about a target.
+    caps = data.get("target_capabilities")
+    if caps is not None:
+        if not isinstance(caps, dict):
+            raise ValueError("manifest target_capabilities must be an object")
+        missing = [t for t in data["zig_targets"] if t not in caps]
+        if missing:
+            raise ValueError(f"target_capabilities missing entries for: {', '.join(missing)}")
+        extra = [t for t in caps if t not in data["zig_targets"]]
+        if extra:
+            raise ValueError(f"target_capabilities has entries for unknown targets: {', '.join(extra)}")
+        for target, entry in caps.items():
+            for field in ("quic", "grpc"):
+                if not isinstance(entry.get(field), bool):
+                    raise ValueError(f"target_capabilities[{target}] missing boolean '{field}'")
+            if entry["grpc"] is False and not entry.get("reason"):
+                raise ValueError(f"target_capabilities[{target}] disables grpc without a 'reason'")
     return data
 
 

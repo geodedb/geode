@@ -997,6 +997,8 @@ REQ-ENG-3906-INDEX-WITH-PARAM-VALIDATION,VectorIndex,WithParameterValidation,TES
 REQ-ENG-3907-GRPC-TRANSPORT,GrpcTransport,CliPlaintextDiagnostic,TESTED,,,transport,2026-08-24,src/cli/main.zig
 REQ-ENG-3907-GRPC-TRANSPORT,GrpcTransport,ClientFrameReadTimeout,TESTED,,,transport,2026-08-24,src/client/grpc_query_transport.zig
 REQ-ENG-3907-GRPC-TRANSPORT,GrpcTransport,DualListenerLifetime,TESTED,,,transport,2026-08-24,src/server/main.zig
+REQ-ENG-3907-GRPC-TRANSPORT,GrpcTransport,RawIoUnitWiring,TESTED,,,transport,2026-08-25,build.zig
+REQ-ENG-3907-GRPC-TRANSPORT,GrpcTransport,RawReadCoalescedFrames,TESTED,,,transport,2026-08-25,src/transport/grpc_tls.zig
 REQ-ENG-3907-GRPC-TRANSPORT,GrpcTransport,ServeHelpSingleSource,TESTED,,,transport,2026-08-24,src/cli/main.zig
 REQ-ENG-3907-GRPC-TRANSPORT,GrpcTransport,TransportParitySmokeWiring,TESTED,,,transport,2026-08-24,build.zig
 REQ-ENG-3910-IN-PREDICATE-TYPE-SAFETY,InOperator,NonListRightHandSide,TESTED,,,eval,2026-08-24,src/eval.zig
@@ -1911,7 +1913,7 @@ REQ-GQL-017,PropertyAccess,Basic,TESTED,,,engine,2026-01-16,tests/test_gap_0193_
 REQ-GQL-017,QueryPlanCaching,CacheOperations,TESTED,,,engine,2025-10-03,tests/query_plan_cache_test.zig
 REQ-GQL-017,Transport Parity CASE 3VL,ProtocolE2E,TESTED,,,engine,2025-09-24,tests/e2e_protocol_transport_parity_case.zig
 REQ-GQL-017,Transport Parity Diagnostics IllegalOrderKey,ProtocolE2E,TESTED,,,engine,2025-09-24,tests/e2e_protocol_transport_parity_illegal_order_key.zig
-REQ-GQL-017,Transport Parity Diagnostics US001,ProtocolE2E,TESTED,,,engine,2025-09-24,tests/e2e_protocol_transport_parity_us001.zig
+REQ-GQL-017,Transport Parity Diagnostics US001,ProtocolE2E,TESTED,,,engine,2026-08-25,tests/e2e_protocol_transport_parity_us001.zig
 REQ-GQL-017,Transport Parity Full Rows,ProtocolE2E,TESTED,,,engine,2025-09-24,tests/e2e_protocol_transport_parity_fullrows.zig
 REQ-GQL-017,Transport Parity MATCH VarLen Rows,Docs,TESTED,,,engine,2025-09-24,docs/gql/GQL_CONFORMANCE_PROFILE.md
 REQ-GQL-017,Transport Parity MATCH VarLen Rows,ProtocolE2E,TESTED,,,engine,2025-09-24,tests/e2e_protocol_transport_parity_match_varlen_rows.zig

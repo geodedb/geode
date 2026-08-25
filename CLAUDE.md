@@ -104,7 +104,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 - **Storage Engine** (`src/storage/`): MVCC, WAL, TDE with <1% overhead
 - **Index System** (`src/index/`): 6 index types including HNSW and R-tree. Full-text search is backed by the external **`fts-storage`** LSM library (see Full-Text Search below) via `src/storage/fts_storage_adapter.zig`; the `FullTextIndex` facade (`src/index/fulltext.zig`) delegates to it.
 - **Security** (`src/security/`): Enterprise authentication, audit, encryption, enhanced RLS
-- **Transport** (`src/transport/`): QUIC+TLS only with protocol compliance
+- **Transport** (`src/transport/`): QUIC+TLS (`--listen`, always available) plus gRPC over HTTP/2 (`--listen-grpc`, requires OpenSSL 3.x at build and run time; fails closed with `error.TlsRequired` where it is absent). Per-target availability and the `libssl.so.3` runtime requirement are documented in [docs/GRPC_TRANSPORT.md](docs/GRPC_TRANSPORT.md) and enforced from `release/target_manifest.json`.
 
 ### 🔎 Full-Text Search (fts-storage-backed)
 

@@ -285,6 +285,47 @@ pub fn build(b: *std.Build) void {
         target = b.resolveTargetQuery(fips_query);
     }
 
+    // Cross-compiled gRPC TLS: point at a root holding one OpenSSL prefix per
+    // Zig target triple (`<root>/x86_64-linux-gnu`, `<root>/aarch64-linux-musl`,
+    // …), as produced by `scripts/ci/fetch-openssl-prefix.sh`. The matching
+    // `<root>/<triple>` is added as a search prefix and `-Denable-openssl`
+    // defaults to true, so release builds ship with TLS compiled in instead of
+    // falling back to grpc_tls.zig's stub (which makes `serve --listen-grpc`
+    // refuse to start with error.TlsRequired).
+    //
+    // This exists as a build option rather than per-target `--search-prefix`
+    // flags in `.goreleaser.yaml` for the same reason the FIPS glibc floor
+    // above does: GoReleaser's zig builder takes ONE flag list for the whole
+    // build id, and its `targets:` list rejects the glibc-versioned triple
+    // ("invalid target: x86_64-linux-gnu.2.38", pipeline #1523). Deriving the
+    // prefix from the resolved target keeps `.goreleaser.yaml` a single `geode`
+    // build id and keeps it in sync with `release/target_manifest.json`.
+    const openssl_sysroot = b.option(
+        []const u8,
+        "openssl-sysroot",
+        "Root holding one OpenSSL prefix per Zig target triple (<root>/<triple>); implies -Denable-openssl=true",
+    );
+
+    // glibc floor for OpenSSL cross builds. An unversioned linux-gnu target
+    // links against the host's glibc stubs and fails with
+    // "undefined version: pthread_*@GLIBC_2.34" against the Debian trixie
+    // libssl.so (verified locally on both x86_64 and aarch64). 2.38 matches
+    // the floor the FIPS path already uses, so both release lanes agree.
+    // musl needs no pin. An explicit versioned -Dtarget is respected as-is.
+    // riscv64 is excluded: it never links OpenSSL (Zig 0.16 cannot @cImport
+    // libc headers for it — see `openssl_unsupported_target` below), so there
+    // is no reason to move its glibc floor.
+    if (openssl_sysroot != null and
+        target.result.os.tag == .linux and
+        target.result.abi == .gnu and
+        target.result.cpu.arch != .riscv64 and
+        target.query.glibc_version == null)
+    {
+        var ssl_query = target.query;
+        ssl_query.glibc_version = .{ .major = 2, .minor = 38, .patch = 0 };
+        target = b.resolveTargetQuery(ssl_query);
+    }
+
     // Get version from git tags
     const version = getGitVersion(b);
 
@@ -929,8 +970,59 @@ pub fn build(b: *std.Build) void {
     // builds that cross-compile to the host arch (e.g. -Dtarget=x86_64-linux-gnu).
     geode_exe.root_module.link_libc = true;
     const is_native = target.query.isNative();
+
+    // Targets where OpenSSL is knowingly unavailable, so `-Dopenssl-sysroot`
+    // is a no-op instead of a hard error. These ship QUIC-only and are called
+    // out as such in `release/target_manifest.json` and the release notes:
+    //
+    //   * riscv64: a HARD toolchain blocker, not a packaging gap. Any
+    //     `@cImport` of libc headers for riscv64-linux fails under Zig 0.16
+    //     ("unsupported FLEN"), so `grpc_tls.zig`'s `@cInclude("openssl/ssl.h")`
+    //     cannot compile no matter what prefix is supplied.
+    //   * macOS: these are cross-built on Linux and Homebrew-bottle
+    //     provisioning for a cross target is untested. Left off deliberately
+    //     rather than guessed at; tracked as follow-up.
+    const openssl_unsupported_target = target.result.cpu.arch == .riscv64 or
+        target.result.os.tag.isDarwin() or
+        target.result.os.tag == .windows;
+
     const enable_openssl = b.option(bool, "enable-openssl", "Link OpenSSL for gRPC TLS (default: auto-detect)") orelse
-        (is_native and target.result.os.tag != .windows);
+        ((openssl_sysroot != null and !openssl_unsupported_target) or
+            (is_native and target.result.os.tag != .windows));
+
+    // Resolve `<root>/<triple>` and register it. The directory name uses the
+    // UNVERSIONED triple (`x86_64-linux-gnu`, not `…-gnu.2.38`) so it matches
+    // both `scripts/ci/fetch-openssl-prefix.sh`'s argument and the entries in
+    // `.goreleaser.yaml`/`release/target_manifest.json`, regardless of the
+    // glibc floor applied above.
+    if (openssl_sysroot) |root| {
+        const triple = b.fmt("{s}-{s}-{s}", .{
+            @tagName(target.result.cpu.arch),
+            @tagName(target.result.os.tag),
+            @tagName(target.result.abi),
+        });
+        if (openssl_unsupported_target) {
+            std.debug.print(
+                "note: ignoring -Dopenssl-sysroot for '{s}' — OpenSSL is not available on this target.\n" ++
+                    "      This binary is QUIC-only; the gRPC transport is unavailable.\n",
+                .{triple},
+            );
+        } else {
+            const prefix = b.pathJoin(&.{ root, triple });
+            // Fail loudly here rather than emitting a confusing
+            // "searched paths: none" link error several minutes later.
+            std.Io.Dir.cwd().access(b.graph.io, b.pathJoin(&.{ prefix, "include", "openssl", "ssl.h" }), .{}) catch {
+                std.debug.panic(
+                    "-Dopenssl-sysroot={s} has no usable prefix for target '{s}'.\n" ++
+                        "Expected {s}/include/openssl/ssl.h.\n" ++
+                        "Create it with: scripts/ci/fetch-openssl-prefix.sh {s} {s}\n",
+                    .{ root, triple, prefix, triple, prefix },
+                );
+            };
+            b.addSearchPrefix(prefix);
+        }
+    }
+
     if (enable_openssl) {
         geode_exe.root_module.linkSystemLibrary("ssl", .{});
         geode_exe.root_module.linkSystemLibrary("crypto", .{});

@@ -847,8 +847,32 @@ test-cross-build:
       done < /tmp/release-targets.txt
       grep -qx "${ZIG_TARGET}" /tmp/release-targets.txt || { echo "ERROR: matrix target ${ZIG_TARGET} no longer in release/target_manifest.json — remove it"; DRIFT=1; }
       [ "$DRIFT" -eq 0 ] || exit 1
+      # Mirror the release build: provision the same per-target OpenSSL prefix
+      # `.goreleaser.yaml` uses, so this gate actually exercises the linked-TLS
+      # configuration that ships. riscv64 has no prefix (Zig 0.16 cannot
+      # @cImport libc headers for it) and -Dopenssl-sysroot no-ops there, so the
+      # flag is safe to pass unconditionally.
+      case "${ZIG_TARGET}" in
+        riscv64-*|*-macos) echo "--- ${ZIG_TARGET}: QUIC-only, skipping OpenSSL prefix ---" ;;
+        *) scripts/ci/fetch-openssl-prefix.sh "${ZIG_TARGET}" "dist/openssl/${ZIG_TARGET}" ;;
+      esac
       echo "--- zig build target=${ZIG_TARGET} ---"
-      zig build -Doptimize=ReleaseSafe -Dtarget="${ZIG_TARGET}" --summary all
+      zig build -Doptimize=ReleaseSafe -Dtarget="${ZIG_TARGET}" -Dopenssl-sysroot=dist/openssl --summary all
+      # Prove the shipped configuration: gRPC-TLS targets MUST link libssl.
+      case "${ZIG_TARGET}" in
+        riscv64-*|*-macos) ;;
+        *)
+          if command -v readelf >/dev/null 2>&1; then
+            readelf -d zig-out/bin/geode | grep -q 'NEEDED.*libssl\.so\.3' || {
+              echo "ERROR: ${ZIG_TARGET} binary does not link libssl.so.3 — gRPC TLS would be compiled out"
+              exit 1
+            }
+            echo "✓ ${ZIG_TARGET} links libssl.so.3 (gRPC TLS available)"
+          else
+            echo "note: readelf unavailable; skipped NEEDED check"
+          fi
+          ;;
+      esac
       echo "✓ release target ${ZIG_TARGET} built (macOS covered by test-macos-unit)"
   rules:
     - if: '$CI_MERGE_REQUEST_ID'
@@ -1771,10 +1795,14 @@ dev-image-build:
   script:
     - |
       set -e
+      # Match the release build: link gRPC TLS via a per-target OpenSSL prefix.
+      # The runtime image (Dockerfile.release) already installs libssl3, which
+      # is what these binaries now need at run time.
       build_one() {
         zig_target="$1"; arch="$2"
         echo "=== cross-compiling geode for ${zig_target} (${arch}) ==="
-        zig build -Doptimize=ReleaseSafe -Dtarget="${zig_target}" --summary all
+        scripts/ci/fetch-openssl-prefix.sh "${zig_target}" "dist/openssl/${zig_target}"
+        zig build -Doptimize=ReleaseSafe -Dtarget="${zig_target}" -Dopenssl-sysroot=dist/openssl --summary all
         mkdir -p "dist/linux-${arch}"
         cp zig-out/bin/geode "dist/linux-${arch}/geode"
         file "dist/linux-${arch}/geode" || true
