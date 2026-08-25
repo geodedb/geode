@@ -1,5 +1,9 @@
 const std = @import("std");
 const ext = @import("extended.zig");
+// ENG-3913: date_part must use the SAME calendar conversion that member access
+// (`date(...).month`) uses, so it shares datetime.Date rather than
+// re-approximating one.
+const datetime = @import("datetime.zig");
 
 // CANARY: REQ=REQ-GQL-082; FEATURE="ExtendedBuiltins"; ASPECT=ENGINE; STATUS=TESTED; TEST=tests/types/extended_functions.zig; OWNER=engine; UPDATED=2025-09-26
 
@@ -113,7 +117,15 @@ fn fn_vector_cosine(allocator: std.mem.Allocator, args: []const BuiltinValue) !B
     return .{ .Decimal = .{ .coeff = @intFromFloat(sim * 1_000_000), .scale = 6 } };
 }
 
+// CANARY: REQ=REQ-ENG-3913-DATE-PART-EXACT-CALENDAR; FEATURE="ExtendedBuiltins"; ASPECT=FUNCTION_DATE_PART; STATUS=TESTED; TEST=tests/test_eng3913_date_part_calendar.zig; OWNER=engine; UPDATED=2026-08-25
 // date_part(part: Str, Date|Timestamp) -> Int
+//
+// ENG-3913: this used to derive the components from `1970 + days/365` with
+// 30-day months, so date_part('month', DATE '2024-12-31') answered 13 and
+// date_part('day', …) answered 6 while `date('2024-12-31').month` (member
+// access, which already went through the calendar-exact
+// datetime.Date.dateFromDays) answered 12 / 31. Two different calendars for the
+// same value. The exact conversion is now the only one.
 fn fn_date_part(allocator: std.mem.Allocator, args: []const BuiltinValue) !BuiltinValue {
     _ = allocator;
     try expectArgs(2, args);
@@ -121,19 +133,21 @@ fn fn_date_part(allocator: std.mem.Allocator, args: []const BuiltinValue) !Built
     const part = args[0].Str;
     const days: i64 = switch (args[1]) {
         .Date => |d| d.days,
-        .Timestamp => |t| @as(i64, @intCast(@divTrunc(t.nanos, (24 * 60 * 60 * 1_000_000_000)))),
+        // @divFloor (not @divTrunc): a pre-epoch timestamp truncating toward
+        // zero would land on the wrong calendar day.
+        .Timestamp => |t| @as(i64, @intCast(@divFloor(t.nanos, (24 * 60 * 60 * 1_000_000_000)))),
         else => return error.TypeMismatch,
     };
-    // Derive components using proleptic Gregorian conversion (simplified, epoch 1970-01-01)
-    const unix_days: i64 = days;
-    const year = 1970 + @divTrunc(unix_days, 365); // coarse (simplified; acceptable for test scaffolding)
-    const day_of_year = @mod(unix_days, 365);
-    const month = @as(i64, (@intCast(@divTrunc(day_of_year, 30)))) + 1; // coarse 30-day month
-    const day = (@mod(day_of_year, 30)) + 1;
-    if (std.mem.eql(u8, part, "year")) return .{ .Int = year };
-    if (std.mem.eql(u8, part, "month")) return .{ .Int = month };
-    if (std.mem.eql(u8, part, "day")) return .{ .Int = day };
-    if (std.mem.eql(u8, part, "doy")) return .{ .Int = day_of_year + 1 };
+    if (days > std.math.maxInt(i32) or days < std.math.minInt(i32)) return error.TypeMismatch;
+    const epoch_days: i32 = @intCast(days);
+    const ymd = datetime.Date.dateFromDays(epoch_days);
+    if (std.mem.eql(u8, part, "year")) return .{ .Int = ymd.year };
+    if (std.mem.eql(u8, part, "month")) return .{ .Int = ymd.month };
+    if (std.mem.eql(u8, part, "day")) return .{ .Int = ymd.day };
+    if (std.mem.eql(u8, part, "doy")) {
+        const jan1 = datetime.Date.daysSinceEpoch(ymd.year, 1, 1) catch return error.TypeMismatch;
+        return .{ .Int = @as(i64, epoch_days - jan1) + 1 };
+    }
     return error.UnknownDatePart;
 }
 
@@ -323,13 +337,42 @@ test "json_get simple" {
 }
 // CANARY: REQ=REQ-GQL-082; FEATURE="ExtendedBuiltins"; ASPECT=FUNCTION_JSON_GET; STATUS=TESTED; TEST=extended_functions.json_get simple; OWNER=engine; UPDATED=2025-09-26
 
-test "date_part coarse" {
+// ENG-3913: renamed from "date_part coarse" — the conversion is no longer
+// coarse, and the assertions now pin a leap-year boundary that the old
+// 365-day-year / 30-day-month arithmetic got wrong.
+test "date_part uses the exact proleptic Gregorian calendar" {
     var reg = try initRegistry(std.testing.allocator);
     defer reg.deinit();
     const fnp = reg.get("date_part") orelse return error.NotFound;
-    const d = makeDate(365); // ~1971-01-01 under coarse rules
-    const year = try fnp(std.testing.allocator, &[_]BuiltinValue{ .{ .Str = "year" }, d });
-    defer freeValue(std.testing.allocator, year);
-    try std.testing.expect(year == .Int and year.Int == 1971);
+
+    const Case = struct { days: i32, year: i64, month: i64, day: i64, doy: i64 };
+    const cases = [_]Case{
+        .{ .days = 0, .year = 1970, .month = 1, .day = 1, .doy = 1 }, // epoch
+        .{ .days = 365, .year = 1971, .month = 1, .day = 1, .doy = 1 },
+        .{ .days = 19_722, .year = 2023, .month = 12, .day = 31, .doy = 365 },
+        .{ .days = 19_723, .year = 2024, .month = 1, .day = 1, .doy = 1 },
+        .{ .days = 19_782, .year = 2024, .month = 2, .day = 29, .doy = 60 }, // leap day
+        .{ .days = 20_088, .year = 2024, .month = 12, .day = 31, .doy = 366 }, // leap year has 366 days
+        .{ .days = 20_089, .year = 2025, .month = 1, .day = 1, .doy = 1 },
+        .{ .days = -1, .year = 1969, .month = 12, .day = 31, .doy = 365 }, // pre-epoch
+    };
+
+    for (cases) |c| {
+        const d = makeDate(c.days);
+        inline for (.{ "year", "month", "day", "doy" }) |part| {
+            const got = try fnp(std.testing.allocator, &[_]BuiltinValue{ .{ .Str = part }, d });
+            defer freeValue(std.testing.allocator, got);
+            const want = if (comptime std.mem.eql(u8, part, "year"))
+                c.year
+            else if (comptime std.mem.eql(u8, part, "month"))
+                c.month
+            else if (comptime std.mem.eql(u8, part, "day"))
+                c.day
+            else
+                c.doy;
+            try std.testing.expect(got == .Int);
+            try std.testing.expectEqual(want, got.Int);
+        }
+    }
 }
-// CANARY: REQ=REQ-GQL-082; FEATURE="ExtendedBuiltins"; ASPECT=FUNCTION_DATE_PART; STATUS=TESTED; TEST=extended_functions.date_part coarse; OWNER=engine; UPDATED=2025-09-26
+// CANARY: REQ=REQ-GQL-082; FEATURE="ExtendedBuiltins"; ASPECT=FUNCTION_DATE_PART; STATUS=TESTED; TEST=extended_functions.date_part uses the exact proleptic Gregorian calendar; OWNER=engine; UPDATED=2026-08-25

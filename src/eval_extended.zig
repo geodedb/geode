@@ -25,11 +25,24 @@ const wkt_mod = @import("types/wkt.zig");
 // We lazily initialize a global registry once in a thread-safe manner (single-threaded init assumption for now).
 var global_adapter_registry: ?extf.Registry = null;
 var global_adapter_registry_init = std.atomic.Value(bool).init(false);
+// CANARY: REQ=REQ-ENG-3913-DATE-PART-EXACT-CALENDAR; FEATURE="ExtendedBuiltins"; ASPECT=AdapterRegistryLifetime; STATUS=TESTED; TEST=tests/test_eng3913_date_part_calendar.zig; OWNER=engine; UPDATED=2026-08-25
+// ENG-3913: this cache is PROCESS-GLOBAL and never freed, but it used to be
+// built from whichever allocator happened to make the first bridged call. Its
+// backing table then outlived that allocator — a use-after-free the moment the
+// first caller's arena was released (a segfault inside HashMap.capacity on the
+// next call). It has always been unreachable in a server, where the first
+// caller is the process-lifetime allocator, but it is real and it fires as soon
+// as two independently-arena'd callers exist. A process-lifetime allocator is
+// the correct one for a value with process lifetime; the caller's allocator is
+// now ignored for the cache. `smp_allocator` is the governance-approved choice
+// (page_allocator is forbidden in src/ — see the no-page-allocator pre-commit
+// hook and the precedent at src/monitoring/metrics_server.zig:96-98).
 fn getAdapterRegistry(allocator: std.mem.Allocator) !*extf.Registry {
+    _ = allocator;
     if (global_adapter_registry_init.load(.acquire)) {
         return &global_adapter_registry.?;
     }
-    const reg = try extf.initRegistry(allocator);
+    const reg = try extf.initRegistry(std.heap.smp_allocator);
     global_adapter_registry = reg;
     global_adapter_registry_init.store(true, .release);
     return &global_adapter_registry.?;
@@ -38,6 +51,15 @@ fn getAdapterRegistry(allocator: std.mem.Allocator) !*extf.Registry {
 // Bridge for new experimental extended functions (uuid_v4, geobox_contains, polygon_area, vector_cosine etc.)
 // We expose them under their existing names; adapter converts between ExtValue and extf.BuiltinValue.
 
+// CANARY: REQ=REQ-ENG-3913-DATE-PART-EXACT-CALENDAR; FEATURE="ExtendedBuiltins"; ASPECT=TemporalArgumentBridge; STATUS=TESTED; TEST=tests/test_eng3913_date_part_calendar.zig; OWNER=eval; UPDATED=2026-08-25
+// ENG-3913: the temporal arms used to fall into the `else => Null` catch-all,
+// so `date_part('year', date('2024-12-31'))` handed fn_date_part a NULL second
+// argument and came back as error.TypeMismatch — date_part / time_part were
+// unreachable from GQL for their entire documented input domain. The units
+// differ on each side of the bridge (datetime.zig stores micros, the builtin
+// value union stores nanos), so the conversion is explicit.
+const NANOS_PER_MICRO: i128 = 1_000;
+
 fn toBuiltin(v: ExtValue) extf.BuiltinValue {
     return switch (v) {
         .Null => .{ .Null = {} },
@@ -45,6 +67,14 @@ fn toBuiltin(v: ExtValue) extf.BuiltinValue {
         .Bool => |b| .{ .Bool = b },
         .Str => |s| .{ .Str = s },
         .Decimal => |d| .{ .Decimal = .{ .coeff = d.coeff, .scale = d.scale } },
+        .Date => |d| .{ .Date = .{ .days = d.days_since_epoch } },
+        // Time is midnight-relative and never negative, so the u64 cast is safe
+        // for any value datetime.Time can hold.
+        .Time => |t| if (t.micros_since_midnight < 0)
+            .{ .Null = {} }
+        else
+            .{ .Time = .{ .nanos = @intCast(@as(i128, t.micros_since_midnight) * NANOS_PER_MICRO) } },
+        .Timestamp => |ts| .{ .Timestamp = .{ .nanos = @as(i128, ts.micros_since_epoch) * NANOS_PER_MICRO } },
         else => .{ .Null = {} }, // unsupported pass-through (could extend)
     };
 }
@@ -56,6 +86,9 @@ fn fromBuiltin(v: extf.BuiltinValue) ExtValue {
         .Bool => |b| .{ .Bool = b },
         .Str => |s| .{ .Str = s },
         .Decimal => |d| .{ .Decimal = .{ .coeff = d.coeff, .scale = d.scale } },
+        .Date => |d| .{ .Date = .{ .days_since_epoch = d.days } },
+        .Time => |t| .{ .Time = .{ .micros_since_midnight = @intCast(@divFloor(@as(i128, t.nanos), NANOS_PER_MICRO)) } },
+        .Timestamp => |ts| .{ .Timestamp = .{ .micros_since_epoch = @intCast(@divFloor(ts.nanos, NANOS_PER_MICRO)) } },
         else => .{ .Null = {} },
     };
 }
