@@ -488,8 +488,8 @@
             // contract. No manifest bump (stays V4; the adjacency entry-format
             // byte + read-both is the versioning). Same transitive deps as
             // v0.2.34 (no diamond).
-            .url = "git+https://gitlab.com/devnw/zig/graph-storage.git?ref=v0.3.2#3a8b39aaf170ce905ea6c13f6f26f5b15c26c6cd",
-            .hash = "graph_storage-0.3.2-9UyJS_XEHQAe32MfAU-xFducZq3jMxNxmb5Zm7AUNXcA",
+            .url = "git+https://gitlab.com/devnw/zig/graph-storage.git?ref=v0.4.0#facea555e09df3e5d56b0794754cb1878efc58c7",
+            .hash = "graph_storage-0.4.0-9UyJS0o3HgBxLk93r6Rs2roDkZCXRaWwySrmfRzBZrOO",
         },
 
         // Raft - Full Raft consensus with pre-vote, joint consensus, snapshotting
