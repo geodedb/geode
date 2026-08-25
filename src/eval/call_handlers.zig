@@ -1244,7 +1244,12 @@ pub fn evalTypeCastFunction(
             },
             .Str => |s| return Value{ .Str = s },
             .Bool => |b| return Value{ .Str = if (b) "true" else "false" },
-            .Null => return Value{ .Str = "null" },
+            // CANARY: REQ=REQ-ENG-3916-TOSTRING-NULL-PROPAGATION; FEATURE="StringFunctions"; ASPECT=ToStringNullPropagation; STATUS=TESTED; TEST=tests/test_eng3916_edge_id_projection.zig; OWNER=eval; UPDATED=2026-08-25
+            // ENG-3916(b): NULL propagates. This used to answer the STRING
+            // "null", which made a missing value indistinguishable from the
+            // literal text and broke `toString(x) IS NULL`. Mirrors
+            // types/evaluator_functions.toString_val.
+            .Null => return Value{ .Null = {} },
             else => return Value{ .Str = "" },
         }
     }

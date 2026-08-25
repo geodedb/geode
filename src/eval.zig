@@ -2652,13 +2652,25 @@ fn tryBasicFunction(allocator: std.mem.Allocator, function_name: []const u8, arg
         return arg;
     }
 
-    // Handle id() function - returns node ID or input if already an integer
+    // CANARY: REQ=REQ-ENG-3916-EDGE-ID; FEATURE="GraphElementId"; ASPECT=EdgeArm; STATUS=TESTED; TEST=tests/test_eng3916_edge_id_projection.zig; OWNER=eval; UPDATED=2026-08-25
+    // Handle id() function - returns the graph element id, or the input if it
+    // is already an integer.
+    //
+    // ENG-3916(b): the `.Edge` arm was MISSING, so `id(r)` on a relationship
+    // fell through to Null — while `RETURN r` projected an object carrying that
+    // very id, and `id(n)` on a node worked. There was no way to name a
+    // relationship's identity in an expression.
+    //
+    // `.Path` deliberately stays Null: ISO/IEC 39075 gives no identity to a
+    // path value (a path is a sequence, not a graph element), so there is no id
+    // to return. `id(nodes(p)[0])` names the element identities inside it.
     if (std.ascii.eqlIgnoreCase(function_name, "id")) {
         if (args.len != 1) return null;
         const arg = try evalExpr(allocator, args[0].*, env);
         switch (arg) {
             .Int => |i| return Value{ .Int = i }, // Already an integer ID
             .Node => |n| return Value{ .Int = @intCast(n.id) }, // Get node ID
+            .Edge => |e| return Value{ .Int = @intCast(e.id) }, // Get edge ID
             else => return Value{ .Null = {} }, // Can't get ID from other types
         }
     }

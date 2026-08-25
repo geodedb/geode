@@ -1298,9 +1298,17 @@ pub fn type_val(val: Value) EvaluatorError!Value {
     return Value{ .Text = type_name };
 }
 
+// CANARY: REQ=REQ-ENG-3916-TOSTRING-NULL-PROPAGATION; FEATURE="StringFunctions"; ASPECT=ToStringNullPropagation; STATUS=TESTED; TEST=tests/test_eng3916_edge_id_projection.zig; OWNER=types; UPDATED=2026-08-25
+/// ENG-3916(b): `toString(NULL)` returns NULL, not the four-character STRING
+/// "null". ISO/IEC 39075 propagates the null value through a scalar function
+/// whose argument is null; producing a non-null string made a missing value
+/// indistinguishable from a value that literally spells "null", silently broke
+/// `toString(x) IS NULL`, and made a NULL survive a comparison against the
+/// string 'null' as TRUE.
 pub fn toString_val(allocator: std.mem.Allocator, val: Value) EvaluatorError!Value {
+    if (val == .Null) return Value{ .Null = {} };
     const str = switch (val) {
-        .Null => "null",
+        .Null => unreachable,
         .Bool => |b| if (b) "true" else "false",
         .Int => |i| blk: {
             const result = std.fmt.allocPrint(allocator, "{d}", .{i}) catch return EvaluatorError.OutOfMemory;
