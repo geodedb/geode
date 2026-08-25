@@ -15,7 +15,7 @@ Each response frame includes:
 
 - `status_class` (ISO/IEC 39075 codes, e.g. 00000 success, 02000 warning) — subclass future.
 - Optional `additional_statuses` (UA002 precedence policy) when multiple diagnostics apply.
-- Optional `flagger_findings` listing implementation-defined (I:_) and dependent (U:_) behaviors (e.g. `I:IllegalOrderKeyPolicy=ident-only`, `U:US001/enforced`).
+- Optional `flagger_findings` listing implementation-defined (I:_) and dependent (U:_) behaviors (e.g. `I:PropertyOrderingEnabled`, `U:NullsFirstPolicy`, `U:OrderTiebreak=LexJSON`).
 
 ## Result Frames
 
@@ -221,9 +221,9 @@ CANARY: REQ=REQ-GQL-052; FEATURE="FederationOrderedMultiKeyDirMerge"; ASPECT=Fed
 
 ## Diagnostics Examples
 
-- Unordered pagination (`LIMIT/OFFSET` without `ORDER BY`) ⇒ primary `US001` (anchor 16.18–16.19) with flag `U:US001/enforced`.
-- Illegal ORDER key (function call) ⇒ `IllegalOrderKey` (anchor 14.10) + flag `I:IllegalOrderKeyPolicy=ident-only`.
-- Multiple diagnostics (e.g. illegal ORDER key plus unordered pagination) => primary chosen per precedence; secondary appear in `additional_statuses` (UA002 policy).
+- Unordered pagination (`LIMIT/OFFSET` without `ORDER BY`) is **NOT** a diagnostic: it succeeds with `status_class` 00000. ISO/IEC 39075:2024 leaves the ordering of an unordered result set implementation-defined, and Geode declares `UnorderedPaginationAllowed` in its implementation-defined flagger report (`src/server/flagger_impl_defined.zig`). The `US001` code is retained in `src/diagnostics.zig` for classification only and is never emitted; an opt-in strict mode (`ExecutionContext.strict_offset_validation`) exists as a seam but is not wired.
+- Illegal ORDER key (function call) ⇒ status class `42000`, message `function calls in ORDER BY are disabled` (classified `IllegalOrderKey`, anchor 14.10) + flag `I:IllegalOrderKeyPolicy=ident-only`. This fires **only** under the opt-in ident-only policy (`GEODE_ORDER_KEYS_EXPR=0`); the default is the standards-correct expression form, which flags `I:PropertyOrderingEnabled` and accepts the query. Note the code name is an internal classification and is not part of the wire payload.
+- Multiple diagnostics => primary chosen per precedence; secondary appear in `additional_statuses` (UA002 policy).
 
 Note: Optional server-side paging telemetry logs to `stderr` and does not affect wire frames; see `docs/TELEMETRY.md`.
 

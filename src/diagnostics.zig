@@ -1,10 +1,15 @@
 const std = @import("std");
 // CANARY: REQ=REQ-GQL-010; FEATURE="Diagnostics Precedence & Folding"; ASPECT=Engine; STATUS=TESTED; TEST=TestCANARY_REQ_GQL_010_DiagnosticsFold,TestCANARY_REQ_GQL_010_DiagnosticsFoldExtended; OWNER=engine; UPDATED=2025-09-27
 
-pub var strict_mode: bool = false; // When true, emit US001 errors for unordered pagination - disabled by default
+// The `strict_mode` global that once gated US001 emission was deleted: it had
+// zero readers repo-wide and US001 is not enforced (ISO/IEC 39075:2024 leaves
+// the ordering of an unordered result set implementation-defined; geode
+// declares `UnorderedPaginationAllowed`). The opt-in
+// `ExecutionContext.strict_offset_validation` remains the seam for a future
+// strict mode.
 
 pub const Code = enum(u16) {
-    US001 = 1, // Pagination unordered (gated behind strict mode)
+    US001 = 1, // Pagination unordered (not enforced; retained for classification)
     GroupByIllegal = 2,
     IllegalOrderKey = 3,
     TypeMismatch = 4,

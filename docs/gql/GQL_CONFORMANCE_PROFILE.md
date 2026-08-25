@@ -94,8 +94,8 @@ This document captures Geode's conformance to the ISO/IEC 39075:2024 Graph Query
 **Implementation-defined behaviors:**
 
 - ORDER BY deterministic comparator with JSON lexicographic tie-break
-- LIMIT/OFFSET without ORDER BY is rejected (US001 diagnostic)
-- ORDER BY keys restricted to identifiers by default (IllegalOrderKey policy)
+- LIMIT/OFFSET without ORDER BY is ACCEPTED (US001 is not enforced; ISO leaves unordered-result ordering implementation-defined and Geode declares `UnorderedPaginationAllowed`)
+- ORDER BY keys accept expressions by default (`I:PropertyOrderingEnabled`); the ident-only IllegalOrderKey policy is opt-in via `GEODE_ORDER_KEYS_EXPR=0`
 - Null ordering: default nulls-last; nulls-first via env override
 
 ## 8. Transaction Management (ISO 16.1–16.3)
@@ -170,8 +170,8 @@ Verified across QUIC and gRPC transports:
 
 | Policy | Status | Description |
 |--------|--------|-------------|
-| US001 | Enforced | LIMIT/OFFSET without ORDER rejected |
-| IllegalOrderKey | Enforced | ORDER BY restricted to identifiers |
+| US001 | Not enforced | LIMIT/OFFSET without ORDER is accepted; implementation-defined ordering declared as `UnorderedPaginationAllowed` |
+| IllegalOrderKey | Opt-in | ORDER BY accepts expressions by default; restricted to identifiers only under `GEODE_ORDER_KEYS_EXPR=0` |
 | OrderTiebreak | LexJSON | JSON lexicographic tie-break |
 | PathTieBreak | UA005/UA006 | Bounded path determinism |
 | NullOrdering | Nulls-last | Implementation-defined default |

@@ -67,15 +67,21 @@ RETURN a.name AS a, b.name AS b
 ORDER BY a, b
 ```
 
-## Pagination Policy (US001)
+## Pagination Policy (US001 — not enforced)
 
-LIMIT/OFFSET require a stable ORDER. The following is rejected with diagnostic `US001` (anchor 16.18–16.19):
+`LIMIT`/`OFFSET` without `ORDER BY` is **accepted**. ISO/IEC 39075:2024 leaves the
+ordering of an unordered result set implementation-defined, so Geode does not
+raise a diagnostic; instead it declares `UnorderedPaginationAllowed` in its
+implementation-defined flagger report. This succeeds with `status_class` 00000:
 
 ```gql
 RETURN 1 LIMIT 10 OFFSET 5
 ```
 
-Enable alternate policies via configuration/flagger only; default is enforced.
+Because the row order is implementation-defined, results are **not** guaranteed
+to be stable across executions — add `ORDER BY` whenever you need a repeatable
+page. An opt-in strict mode (`ExecutionContext.strict_offset_validation`) exists
+as a seam for a future configurable policy but is not wired.
 
 ## Transports and Parity
 
@@ -92,6 +98,6 @@ zig test tests/e2e_protocol_transport_parity_match_varlen_rows.zig
 
 - MATCH semantics are partial; advanced features (chained OPTIONAL over varlen, complex property predicates on varlen) are in progress.
 - Default collation is binary; nulls sort last by default (flagger surfaces policy).
-- Always include `ORDER BY` before `LIMIT/OFFSET` to avoid `US001`.
+- Always include `ORDER BY` before `LIMIT/OFFSET` if you need a stable page: unordered pagination is legal (US001 is not enforced) but its row order is implementation-defined.
 - Safety guards: max_results=100k, max_frontier=100k, max_hops_limit=64 (diagnostic `ExecutionGuardTrip` if tripped; partial results possible).
 - Deterministic ordering comparator: variable names asc → structural ids (node/edge) → path length + path nodes (lex order).

@@ -1016,16 +1016,27 @@ quic-smoke-strict: build
 # assertions.  They are now registered build steps (`zig build
 # test-transport-parity`, see build.zig) and the exit code is NOT masked.
 #
-# KNOWN FAILING (2 of 12, both pre-existing and out of the ENG-3907 blast radius;
-# left genuinely red rather than re-silenced):
-#   * e2e_protocol_transport_parity_us001 — the ISO/IEC 39075 §16.18
-#     unordered-pagination diagnostic (US001) no longer fires:
-#     `RETURN 1 LIMIT 10 OFFSET 5` returns 00000 with 0 rows where the smoke
-#     expects exit 2 + a US001/16.18 diagnostic on stderr.
-#   * e2e_protocol_transport_parity_illegal_order_key — needs a TLS-capable gRPC
-#     test client (the harness client is plaintext, the listener is TLS-required);
-#     the Debug plaintext opt-in gets past the handshake but the vendor listener
-#     never answers SETTINGS (GAP-0893, vendor grpc_zig 0.1.7).
+# All 12 lanes are green as of 2026-08-25 (previously 10/12 + 2 silent skips).
+# The two red lanes and the two silent gRPC skips were fixed together:
+#   * The gRPC plaintext hang was a GEODE-SIDE bug in `rawRead`
+#     (`src/transport/grpc_tls.zig`), NOT the vendor: it built a fresh stack
+#     buffer + `Stream.Reader` per call, and `Reader.readVec` gives readv(2)
+#     both the caller's buffer and that internal one, so every byte past
+#     `buf.len` of a coalesced HTTP/2 write was discarded. `rawRead` is now an
+#     unbuffered single-iovec `netRead`, mirroring grpc-zig's own `ioRead`.
+#     A second geode-side defect surfaced behind it: handlers were registered
+#     under the name "Packet" while grpc-zig dispatches on an exact `:path`
+#     match, so every method got UNIMPLEMENTED. Regression cover:
+#     `zig build test-grpc-raw-io`.
+#   * e2e_protocol_transport_parity_us001 asserted an enforcement that the
+#     project deliberately removed — US001 is NOT enforced (ISO/IEC 39075
+#     leaves unordered-result ordering implementation-defined; geode declares
+#     `UnorderedPaginationAllowed`). It now pins the real contract on BOTH
+#     transports.
+#   * e2e_protocol_transport_parity_illegal_order_key needs the Debug plaintext
+#     opt-in AND `GEODE_ORDER_KEYS_EXPR=0`: the ORDER-key policy defaults to
+#     the standards-correct expression form, under which `ORDER BY f(a)` is
+#     legal and the IllegalOrderKey diagnostic never fires.
 transport-parity-smokes: build
 	@echo "Running transport parity smokes (stdio vs QUIC, 12 lanes)..."
 	GEODE_CI_QUIC_SMOKE=1 GEODE_QUIC_PASSIVE_TEARDOWN=1 $(ZIG) build test-transport-parity

@@ -30,7 +30,7 @@ Planned but not implemented:
 
 Implemented:
 
-- **US001**: OFFSET/LIMIT on unordered tables rejected with diagnostic (ISO 16.16–16.19)
+- **US001**: NOT enforced — OFFSET/LIMIT on unordered tables is accepted. ISO/IEC 39075 leaves the ordering of an unordered result set implementation-defined; Geode declares `UnorderedPaginationAllowed` in its implementation-defined flagger report rather than raising a diagnostic.
 - **UA002**: Multiple diagnostic conditions use precedence rules (ISO 23.2)
 - **UA005/UA006**: Deterministic path tie‑break (Length then stable internal id) for variable length expansions
 - **I:ORDER**: ORDER BY keys restricted to identifiers by default (configurable via --order-keys expr)
