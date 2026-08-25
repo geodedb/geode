@@ -4446,6 +4446,33 @@ pub fn build(b: *std.Build) void {
         transport_parity_step.dependOn(&run_parity_test.step);
     }
 
+    // CANARY: REQ=REQ-ENG-3907-GRPC-TRANSPORT; FEATURE="GrpcTransport"; ASPECT=RawIoUnitWiring; STATUS=TESTED; TEST=test-grpc-raw-io; OWNER=transport; UPDATED=2026-08-25
+    //
+    // `src/transport/grpc_tls.zig` had inline tests that NO step ever built —
+    // the file is only reached through a runtime `@import` from
+    // grpc_server.zig, and Zig 0.16 only discovers tests in the test ROOT plus
+    // its test reference graph. One of them ("rawAccept: creates valid TlsIo")
+    // had rotted into a compile error against the 0.16 `std.Io.net.Stream`
+    // shape without anyone noticing. Rooting the file directly makes the
+    // socketpair regressions for the coalesced-read frame-loss bug real.
+    const grpc_raw_io_test_mod = b.createModule(.{
+        .root_source_file = b.path("src/transport/grpc_tls.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+    grpc_raw_io_test_mod.addImport("grpc_server", grpc_server_mod);
+    grpc_raw_io_test_mod.addImport("logging", logging_mod);
+    grpc_raw_io_test_mod.addOptions("openssl_config", test_openssl_options);
+    grpc_raw_io_test_mod.link_libc = true;
+    if (enable_openssl) {
+        grpc_raw_io_test_mod.linkSystemLibrary("ssl", .{});
+        grpc_raw_io_test_mod.linkSystemLibrary("crypto", .{});
+    }
+    const grpc_raw_io_tests = b.addTest(.{ .root_module = grpc_raw_io_test_mod });
+    const run_grpc_raw_io_tests = b.addRunArtifact(grpc_raw_io_tests);
+    const grpc_raw_io_step = b.step("test-grpc-raw-io", "Run gRPC plaintext raw socket I/O unit tests (coalesced-read frame-loss regression)");
+    grpc_raw_io_step.dependOn(&run_grpc_raw_io_tests.step);
+
     // Gap 0039 (data-ingest enterprise review): `geode serve` SIGTERM shutdown
     // busy-spun forever draining abandoned QUIC connections (client vanished
     // without CONNECTION_CLOSE): flush completed, then >= 10 min at ~1.75

@@ -17,7 +17,11 @@ test "protocol: transport parity order metadata (ordered + order_keys)" {
         util.emptyParams(),
         util.emptyParams(),
         100,
-        &.{"GEODE_QUIC_PASSIVE_TEARDOWN=1"},
+        // `util.GrpcProtoClient` speaks plaintext HTTP/2 while the gRPC
+        // listener is TLS-required and fail-closed; without the Debug-only
+        // plaintext opt-in the gRPC arm never connects and this smoke silently
+        // downgrades to a skip.
+        util.TestEnv.grpcPlaintext(),
     ) catch |err| {
         util.progress("Parity run failed: {}", .{err});
         util.testSkip();

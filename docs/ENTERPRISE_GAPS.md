@@ -4,8 +4,8 @@ Last updated: 2026-07-10
 **Resolution status (2026-07-10):** all 29 defects addressed on branch
 `fix/enterprise-gaps-2026-07-10` — **26 FIXED** with red-first regression tests
 (`zig build test-gap09NN`), **3 PARTIAL** with documented rationale and tests:
-GAP-0901 (repo-side global-init fixed; end-to-end gRPC blocked by vendor
-GAP-0893), GAP-0902 (stream-hygiene + apply-path pinned; live server-crash
+GAP-0901 (repo-side global-init fixed; the gRPC end-to-end blocker GAP-0893
+was re-diagnosed as geode-side and FIXED 2026-08-25), GAP-0902 (stream-hygiene + apply-path pinned; live server-crash
 reproduction owed to the managed-server harness), and the retained sub-items of
 GAP-0923(a) / GAP-0926 (rejecting them would break legitimate queries — see
 each entry). ISO conformance 96/96, executed `gql_conformance` 20/20, migration
@@ -41,7 +41,7 @@ no-op config keys, unparsed DDL forms) are tracked in the harness repo at
 # Critical
 
 ## GAP-0901 — gRPC transport is wholesale non-functional
-**Severity:** Critical · **Status:** PARTIAL — repo-side global-init fixed; end-to-end blocked by vendor (GAP-0893) · **Area:** Transport / gRPC · **Found:** 2026-07-10
+**Severity:** Critical · **Status:** FIXED — repo-side global-init fixed 2026-07-10; the remaining end-to-end blocker (GAP-0893) was re-diagnosed as geode-side and fixed 2026-08-25 · **Area:** Transport / gRPC · **Found:** 2026-07-10
 **Fix (repo-side):** the transport-agnostic globals a gRPC handler consults —
 the per-IP auth rate limiter, both RLS filter engines, the RLS deny-policy DDL
 callbacks, and the mutation-timing / bulk-ingest gates — were initialized ONLY
@@ -54,11 +54,16 @@ loops see them and teardown is unchanged. Regression: `zig build test-gap0901`
 (transport-independent: unwired → "not initialized", wired → DDL succeeds).
 The full QUIC path is unaffected (test-rls-filter 17/17, test-auth-rate-limiter
 8/8, test-rls-expr-engine-wiring 8/8, test-gap0839-tenant-lifecycle 9/9 green).
-**Residual (blocked):** end-to-end gRPC verification remains blocked by the
-vendor `grpc_zig` 0.1.7 listener crash tracked as **GAP-0893** (`--transport
-grpc` crashes inside `allocStreamWindows` ← `initServerTls`); gRPC is
-non-verifiable end-to-end until a vendor fix / pin bump. This repo-side fix
-ensures the handlers are correctly wired the moment that block lifts.
+**Residual — CLEARED 2026-08-25.** The "vendor `grpc_zig` 0.1.7 listener
+crash" attributed to **GAP-0893** was a stale diagnosis: that crash was fixed
+upstream in v0.1.8 and geode has pinned v0.1.9 since. The real blocker was two
+geode-side defects — `grpc_tls.rawRead` discarding the tail of every coalesced
+HTTP/2 write into a per-call stack buffer (so `readFrame` blocked forever), and
+`registerHandlers` registering the name `"Packet"` where grpc-zig dispatches on
+an exact `:path` match (so every method got UNIMPLEMENTED). Both are fixed;
+`zig build test-grpc-raw-io` is the socketpair regression gate and
+`zig build test-transport-parity` is 12/12 with real QUIC-vs-gRPC comparison
+lanes. See the GAP-0893 row in `docs/GAP_ANALYSIS.md` for full detail.
 **Symptom:** every gRPC invocation times out; `make test-grpc` cannot pass any
 managed-server spec. Even the proven `--server <addr> --grpc` form hangs.
 **Root cause (probe):** the gRPC handler globals are only initialized inside the

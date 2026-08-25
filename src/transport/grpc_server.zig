@@ -708,12 +708,37 @@ pub const GeodeGrpcServer = struct {
         try self.server.start();
     }
 
+    /// Fully-qualified gRPC method paths served by `handlePacket`.
+    ///
+    /// grpc-zig dispatches by exact `Handler.name` == `:path` match, so every
+    /// method the packet wrapper understands must be registered under its
+    /// full `/geode.GeodeService/<Method>` path. Anything absent gets a
+    /// `grpc-status: 12` (UNIMPLEMENTED) trailer from the vendor listener
+    /// before `handlePacket` is ever reached. Keep this list in sync with the
+    /// suffix dispatch in `handlePacket` and with `src/proto/geode.proto`.
+    const method_paths = [_][]const u8{
+        "/geode.GeodeService/Handshake",
+        "/geode.GeodeService/Execute",
+        "/geode.GeodeService/Ping",
+        "/geode.GeodeService/Begin",
+        "/geode.GeodeService/Commit",
+        "/geode.GeodeService/Rollback",
+        "/geode.GeodeService/Savepoint",
+        "/geode.GeodeService/RollbackTo",
+        "/geode.GeodeService/CdcDiag",
+        "/geode.GeodeService/CdcCtrl",
+        "/geode.GeodeService/Backup",
+        "/geode.GeodeService/Restore",
+        "/geode.GeodeService/UploadBackup",
+    };
+
     fn registerHandlers(self: *GeodeGrpcServer) !void {
-        // grpc_zig routes only the first handler; use a packet wrapper to dispatch
-        try self.server.handlers.append(self.allocator, .{
-            .name = "Packet",
-            .handler_fn = handlePacket,
-        });
+        for (method_paths) |path| {
+            try self.server.handlers.append(self.allocator, .{
+                .name = path,
+                .handler_fn = handlePacket,
+            });
+        }
     }
 };
 

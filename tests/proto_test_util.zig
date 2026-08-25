@@ -95,6 +95,18 @@ pub const TestEnv = struct {
     pub fn standard() []const []const u8 {
         return &.{};
     }
+
+    /// Environment for smokes that drive the gRPC listener with the
+    /// plaintext HTTP/2 `GrpcProtoClient`. The listener is TLS-required and
+    /// fail-closed by default, so without this opt-in it refuses the
+    /// connection outright (Debug builds only — see
+    /// `grpc_server.shouldAllowGrpcPlaintextFallback`).
+    pub fn grpcPlaintext() []const []const u8 {
+        return &.{
+            "GEODE_GRPC_ALLOW_PLAINTEXT_FALLBACK=1",
+            "GEODE_QUIC_PASSIVE_TEARDOWN=1",
+        };
+    }
 };
 
 // ============================================================================

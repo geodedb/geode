@@ -42,23 +42,46 @@ const RawConn = struct {
     stream: std.Io.net.Stream,
 };
 
+/// Unbuffered read honouring the read(2)-shaped `TlsIo.read_fn` contract:
+/// consume at most `buf.len` bytes from the socket and return how many were
+/// actually stored, or 0 on peer FIN (grpc-zig's `readExact` maps that to
+/// `ConnectionClosed`).
+///
+/// This must NOT go through a buffered `std.Io.Reader`: `Reader.readVec`
+/// hands readv(2) both the caller's buffer *and* its own internal buffer, so
+/// any bytes past `buf.len` land in the internal buffer. A per-call reader
+/// puts that buffer on the stack, silently discarding those bytes on return.
+/// HTTP/2 peers routinely coalesce writes (preface+SETTINGS, HEADERS+DATA),
+/// so the discarded tail desynchronises framing and `readFrame` blocks
+/// forever. Mirror grpc-zig's own non-TLS `Transport.ioRead`: a single-iovec
+/// `netRead` straight through the Io vtable.
 fn rawRead(ctx_ptr: *anyopaque, buf: []u8) anyerror!usize {
     const conn: *RawConn = @ptrCast(@alignCast(ctx_ptr));
     const io_r = std.Io.Threaded.global_single_threaded.io();
-    var rbuf: [4096]u8 = undefined;
-    var sr = conn.stream.reader(io_r, &rbuf);
-    return try sr.interface.readSliceShort(buf);
+    var bufs = [_][]u8{buf};
+    return try io_r.vtable.netRead(io_r.userdata, conn.stream.socket.handle, &bufs);
 }
 
 /// Write all bytes to the stream, looping on partial writes.
+///
+/// Like `rawRead` this bypasses the buffered `std.Io.Writer` so no state has
+/// to survive between calls; the loop provides the write-all semantics that
+/// grpc-zig's `writeFrame` depends on (issue #479).
 fn rawWriteAll(ctx_ptr: *anyopaque, data: []const u8) anyerror!usize {
     const conn: *RawConn = @ptrCast(@alignCast(ctx_ptr));
     const io_w = std.Io.Threaded.global_single_threaded.io();
-    var wbuf: [8192]u8 = undefined;
-    var sw = conn.stream.writer(io_w, &wbuf);
-    try sw.interface.writeAll(data);
-    try sw.interface.flush();
-    return data.len;
+    var total: usize = 0;
+    while (total < data.len) {
+        // `std.Io.Threaded.netWritePosix` indexes `data[data.len - 1]`
+        // unconditionally, so the trailing-buffers slice must be non-empty.
+        // Pass the remaining chunk as the sole trailing buffer with splat=1
+        // and an empty header: it is written exactly once.
+        const trailing = [_][]const u8{data[total..]};
+        const n = try io_w.vtable.netWrite(io_w.userdata, conn.stream.socket.handle, "", &trailing, 1);
+        if (n == 0) return error.ConnectionResetByPeer;
+        total += n;
+    }
+    return total;
 }
 
 fn rawClose(ctx_ptr: *anyopaque) void {
@@ -257,7 +280,7 @@ const MockPartialStream = struct {
     fn init(allocator: std.mem.Allocator, chunk_size: usize) MockPartialStream {
         return .{
             .allocator = allocator,
-            .written = .{},
+            .written = .empty,
             .chunk_size = chunk_size,
         };
     }
@@ -265,7 +288,7 @@ const MockPartialStream = struct {
     fn initFailAfter(allocator: std.mem.Allocator, chunk_size: usize, fail_after: usize) MockPartialStream {
         return .{
             .allocator = allocator,
-            .written = .{},
+            .written = .empty,
             .chunk_size = chunk_size,
             .fail_after = fail_after,
         };
@@ -387,15 +410,143 @@ test "writeAll: simulated rapid sequential writes" {
     try std.testing.expectEqual(total_written, mock.written.items.len);
 }
 
+/// Connected AF_UNIX stream pair for the raw-I/O regressions below. Zig 0.16's
+/// `std.posix` no longer re-exports `socketpair`, so go through libc directly
+/// (`link_libc` is already required by this module for OpenSSL).
+fn testSocketPair() ![2]std.posix.socket_t {
+    var fds: [2]std.posix.fd_t = undefined;
+    const rc = std.c.socketpair(std.posix.AF.UNIX, std.posix.SOCK.STREAM, 0, &fds);
+    switch (std.posix.errno(rc)) {
+        .SUCCESS => {},
+        else => |err| return std.posix.unexpectedErrno(err),
+    }
+    // A regression in `rawRead` shows up as a read that never completes: the
+    // swallowed tail is simply gone and the socket has nothing left to give.
+    // Bound the receive side so the suite fails fast instead of wedging CI.
+    const timeout = std.posix.timeval{ .sec = 5, .usec = 0 };
+    try std.posix.setsockopt(fds[0], std.posix.SOL.SOCKET, std.posix.SO.RCVTIMEO, std.mem.asBytes(&timeout));
+    return fds;
+}
+
+/// Zig 0.16's `std.posix` dropped `write`/`close` too; keep the test-only libc
+/// shims next to `testSocketPair` rather than sprinkling `std.c` calls around.
+fn testClose(fd: std.posix.fd_t) void {
+    _ = std.c.close(fd);
+}
+
+fn testWrite(fd: std.posix.fd_t, data: []const u8) !usize {
+    const rc = std.c.write(fd, data.ptr, data.len);
+    switch (std.posix.errno(rc)) {
+        .SUCCESS => return @intCast(rc),
+        else => |err| return std.posix.unexpectedErrno(err),
+    }
+}
+
+/// Build a `Stream` around an existing fd. Only `socket.handle` is read by the
+/// `netRead`/`netWrite` vtable entries these tests exercise; the address is
+/// never inspected, so a zeroed loopback placeholder is sufficient (a
+/// `socketpair` has no IP address to report).
+fn testStreamFromFd(fd: std.posix.socket_t) std.Io.net.Stream {
+    return .{ .socket = .{
+        .handle = fd,
+        .address = .{ .ip4 = .{ .bytes = .{ 0, 0, 0, 0 }, .port = 0 } },
+    } };
+}
+
 test "rawAccept: creates valid TlsIo" {
     // We can't test with a real stream in unit tests, but we can verify the
     // function constructs a valid TlsIo with non-null function pointers.
     // Use a dummy fd that won't be used (we'll destroy immediately).
-    const dummy_stream = std.Io.net.Stream{ .handle = -1 };
+    const dummy_stream = testStreamFromFd(-1);
     const tls_io = try rawAccept(dummy_stream);
     try std.testing.expect(tls_io.read_fn == rawRead);
     try std.testing.expect(tls_io.write_fn == rawWriteAll);
     try std.testing.expect(tls_io.close_fn == rawClose);
     // Clean up the allocated RawConn
     tls_io.close_fn(tls_io.ctx);
+}
+
+// CANARY: REQ=REQ-ENG-3907-GRPC-TRANSPORT; FEATURE="GrpcTransport"; ASPECT=RawReadCoalescedFrames; STATUS=TESTED; TEST=test-grpc-raw-io; OWNER=transport; UPDATED=2026-08-25
+//
+// Regression for the gRPC plaintext frame-loss hang. `rawRead` used to build a
+// fresh `[4096]u8` stack buffer + fresh `Stream.Reader` on every call;
+// `Reader.readVec` hands readv(2) BOTH the caller's buffer and that internal
+// buffer, so everything past `buf.len` landed in the stack-local and died with
+// the frame. HTTP/2 peers coalesce writes (preface+SETTINGS, HEADERS+DATA), so
+// the server silently dropped the tail of every coalesced write and `readFrame`
+// blocked forever.
+//
+// A `socketpair` reproduces the shape exactly and deterministically: one write
+// far larger than the first read buffer, then drain in small reads. Every byte
+// must survive.
+test "rawRead: coalesced peer write survives small reads (no buffered-reader tail loss)" {
+    const fds = try testSocketPair();
+    defer testClose(fds[1]);
+
+    const tls_io = try rawAccept(testStreamFromFd(fds[0]));
+    defer {
+        tls_io.close_fn(tls_io.ctx);
+        testClose(fds[0]);
+    }
+
+    // One coalesced write, far larger than the first read buffer below.
+    var payload: [512]u8 = undefined;
+    for (&payload, 0..) |*b, i| b.* = @truncate(i);
+    try std.testing.expectEqual(payload.len, try testWrite(fds[1], &payload));
+
+    // First read takes only a 9-byte HTTP/2 frame header's worth. The old
+    // implementation swallowed the other 503 bytes into a stack buffer here.
+    var head: [9]u8 = undefined;
+    try std.testing.expectEqual(@as(usize, head.len), try tls_io.read_fn(tls_io.ctx, &head));
+    try std.testing.expectEqualSlices(u8, payload[0..9], &head);
+
+    // The remainder must still be readable from the socket.
+    var rest: [payload.len - 9]u8 = undefined;
+    var total: usize = 0;
+    while (total < rest.len) {
+        const n = try tls_io.read_fn(tls_io.ctx, rest[total..]);
+        try std.testing.expect(n != 0); // 0 would mean the tail was lost to FIN
+        total += n;
+    }
+    try std.testing.expectEqualSlices(u8, payload[9..], &rest);
+}
+
+test "rawRead: peer FIN reports 0 so readExact maps to ConnectionClosed" {
+    const fds = try testSocketPair();
+
+    const tls_io = try rawAccept(testStreamFromFd(fds[0]));
+    defer {
+        tls_io.close_fn(tls_io.ctx);
+        testClose(fds[0]);
+    }
+
+    testClose(fds[1]);
+
+    var buf: [16]u8 = undefined;
+    try std.testing.expectEqual(@as(usize, 0), try tls_io.read_fn(tls_io.ctx, &buf));
+}
+
+test "rawWriteAll: round-trips a full buffer through the socket" {
+    const fds = try testSocketPair();
+    defer testClose(fds[1]);
+
+    const tls_io = try rawAccept(testStreamFromFd(fds[0]));
+    defer {
+        tls_io.close_fn(tls_io.ctx);
+        testClose(fds[0]);
+    }
+
+    var payload: [1024]u8 = undefined;
+    for (&payload, 0..) |*b, i| b.* = @truncate(i *% 7);
+
+    try std.testing.expectEqual(payload.len, try tls_io.write_fn(tls_io.ctx, &payload));
+
+    var got: [payload.len]u8 = undefined;
+    var total: usize = 0;
+    while (total < got.len) {
+        const n = try std.posix.read(fds[1], got[total..]);
+        try std.testing.expect(n != 0);
+        total += n;
+    }
+    try std.testing.expectEqualSlices(u8, &payload, &got);
 }

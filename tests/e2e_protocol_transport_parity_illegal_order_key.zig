@@ -40,14 +40,21 @@ test "protocol: transport parity diagnostics (IllegalOrderKey) QUIC vs gRPC (gat
 
     util.progress("Starting server (QUIC: {d}, gRPC: {d})...", .{ quic_port, grpc_port });
 
-    // ENG-3907 (B4), KNOWN FAILING: this smoke needs a gRPC client that speaks
-    // TLS. `util.GrpcProtoClient` is plaintext HTTP/2, and the server's gRPC
-    // listener is TLS-required, so the parity comparison never reaches a query.
-    // `GEODE_GRPC_ALLOW_PLAINTEXT_FALLBACK=1` (Debug-only, grpc_server.zig:151)
-    // gets the client past the handshake but the vendor listener then never
-    // answers the HTTP/2 SETTINGS exchange — GAP-0893, vendor `grpc_zig` 0.1.7.
-    // Left genuinely failing rather than re-silenced with `|| true`.
-    var server = util.spawnServer(allocator, &.{ "./zig-out/bin/geode", "serve", "--listen", addr, "--listen-grpc", grpc_addr }, util.TestEnv.standard()) catch |err| {
+    // Two env requirements:
+    //   * `util.GrpcProtoClient` speaks plaintext HTTP/2 while the gRPC
+    //     listener is TLS-required and fail-closed, so this smoke must opt
+    //     into the Debug-only plaintext fallback (grpc_server.zig:151) or the
+    //     connection is refused before a single frame is exchanged.
+    //   * The ORDER-key policy defaults to the standards-correct
+    //     expression form (`server_flags.g_order_keys_expr = true`), under
+    //     which `ORDER BY f(a)` is legal and returns rows. The IllegalOrderKey
+    //     diagnostic only exists under the opt-in ident-only policy, so pin it
+    //     with `GEODE_ORDER_KEYS_EXPR=0` (server_init.zig:233).
+    var server = util.spawnServer(allocator, &.{ "./zig-out/bin/geode", "serve", "--listen", addr, "--listen-grpc", grpc_addr }, &.{
+        "GEODE_GRPC_ALLOW_PLAINTEXT_FALLBACK=1",
+        "GEODE_QUIC_PASSIVE_TEARDOWN=1",
+        "GEODE_ORDER_KEYS_EXPR=0",
+    }) catch |err| {
         util.progress("Server spawn failed: {}", .{err});
         util.testSkip();
         return;
@@ -82,10 +89,21 @@ test "protocol: transport parity diagnostics (IllegalOrderKey) QUIC vs gRPC (gat
     var gres = try execGrpc(&grpc, allocator, q);
     defer gres.deinit(allocator);
 
+    // Both transports must reject, with the SAME status class and the SAME
+    // message — that identity is what "transport parity" means here. The
+    // `IllegalOrderKey` code name (diagnostics.zig:22) is an internal
+    // classification and is deliberately NOT part of the wire payload; the
+    // wire contract is the GQL status class plus the parser message that
+    // `diagnostics.mapParserMessage` classifies as IllegalOrderKey.
+    const expected_message = "function calls in ORDER BY are disabled";
+
     try testing.expect(qres.error_code != null);
     try testing.expect(gres.error_code != null);
-    try testing.expect(std.mem.indexOf(u8, qres.error_message orelse "", "IllegalOrderKey") != null);
-    try testing.expect(std.mem.indexOf(u8, gres.error_message orelse "", "IllegalOrderKey") != null);
+    try testing.expectEqualStrings("42000", qres.error_code.?);
+    try testing.expectEqualStrings("42000", gres.error_code.?);
+    try testing.expectEqualStrings(expected_message, qres.error_message orelse "");
+    try testing.expectEqualStrings(expected_message, gres.error_message orelse "");
+    try testing.expectEqualStrings(qres.status_class, gres.status_class);
 
     util.testPass();
 }
