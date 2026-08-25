@@ -9412,6 +9412,25 @@ pub fn build(b: *std.Build) void {
     const eng3911_step = b.step("test-eng3911", "Run ENG-3911 oversized-property-value error mapping regressions");
     eng3911_step.dependOn(&run_eng3911_tests.step);
 
+    // PROPERTY-WRITE ATOMICITY: a write statement that fails part-way through
+    // must not leave the part that already landed (CREATE / relationship
+    // CREATE / MERGE ON CREATE SET / multi-assignment SET / bulk fast path),
+    // and a failed property put must not drop the old value's exact-index
+    // posting (RC-4). Engine-backed store + real restart.
+    const prop_atomicity_test_mod = b.createModule(.{
+        .root_source_file = b.path("tests/test_property_write_atomicity.zig"),
+        .target = target,
+        .optimize = optimize,
+        .link_libc = true,
+    });
+    prop_atomicity_test_mod.addImport("geode", root_mod);
+    prop_atomicity_test_mod.addImport("graph_storage", graph_storage_mod);
+    const prop_atomicity_tests = b.addTest(.{ .root_module = prop_atomicity_test_mod });
+    const run_prop_atomicity_tests = b.addRunArtifact(prop_atomicity_tests);
+    shardDep(test_step, &run_prop_atomicity_tests.step, 1, test_shard_loads, test_shard_index);
+    const prop_atomicity_step = b.step("test-property-write-atomicity", "Property writes are atomic per statement; failed puts keep the exact index consistent");
+    prop_atomicity_step.dependOn(&run_prop_atomicity_tests.step);
+
     // GAP-0917: ISO post-error transaction semantics — statements after a
     // mid-transaction error are rejected until ROLLBACK; COMMIT aborts.
     const gap0917_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_gap0917_txn_post_error.zig"), .target = target, .optimize = optimize });
