@@ -1408,6 +1408,28 @@ pub fn fromStorageProperty(allocator: Allocator, val: gs.PropertyValue) !graph_s
     };
 }
 
+/// ENG-3911: the storage layer raises `error.PropertyKeyTooLong` for TWO
+/// structurally different refusals (graph_storage `src/prop_store.zig`):
+///
+///   * `:1211` — the key itself exceeds `maxInt(u16)` bytes. A genuine KEY
+///     overflow.
+///   * `:1236` — the whole entry (`2 + key.len + encoded value`) does not fit
+///     one property page, i.e. it crossed the 8142-byte per-entry budget. The
+///     dependency's own comment admits it reuses the key error here, but with a
+///     short key it is the VALUE that overflowed.
+///
+/// Re-map the second case — while the key is still in hand — to a truthful
+/// `error.PropertyValueTooLarge`, which `server/proto_util.mapError` surfaces as
+/// SQLSTATE 54000 (program_limit_exceeded) instead of the 58000 system-error
+/// class with the wrong noun. A genuinely oversized key keeps its own identity.
+///
+/// CANARY: REQ=REQ-ENG-3911-PROPERTY-VALUE-SIZE-ERROR; FEATURE="PropertyStorage"; ASPECT=OversizedValueErrorMapping; STATUS=TESTED; TEST=tests/test_eng3911_property_value_size_error.zig; OWNER=transport; UPDATED=2026-08-24
+pub fn mapPropertyEntryError(err: anyerror, key: []const u8) anyerror {
+    if (err != error.PropertyKeyTooLong) return err;
+    if (key.len > std.math.maxInt(u16)) return err;
+    return error.PropertyValueTooLarge;
+}
+
 fn freeTemporaryStorageProperty(allocator: Allocator, val: gs.PropertyValue) void {
     switch (val) {
         .ext => |ext| allocator.free(ext.data),
@@ -3642,7 +3664,8 @@ pub const StorageAdapter = struct {
             for (props) |kv| {
                 const storage_val = try toStorageProperty(self.allocator, kv.value);
                 defer freeTemporaryStorageProperty(self.allocator, storage_val);
-                const new_prop_head = try node_shard.putPropertyTxn(rec.prop_head, kv.key, storage_val, local_txn);
+                const new_prop_head = node_shard.putPropertyTxn(rec.prop_head, kv.key, storage_val, local_txn) catch |err|
+                    return mapPropertyEntryError(err, kv.key);
                 rec.prop_head = new_prop_head;
                 for (label_ids) |label_id| {
                     // GAP-0900 throughput: bulk insert reserves a FRESH slot_id
@@ -5270,7 +5293,8 @@ pub const StorageAdapter = struct {
             node_shard.abortTxn(local_txn) catch {};
         };
 
-        const new_prop_head = try node_shard.putPropertyTxn(rec.prop_head, key, storage_val, local_txn);
+        const new_prop_head = node_shard.putPropertyTxn(rec.prop_head, key, storage_val, local_txn) catch |err|
+            return mapPropertyEntryError(err, key);
 
         // Update the node record with the (possibly changed) prop_head.
         rec.prop_head = new_prop_head;
@@ -5334,7 +5358,8 @@ pub const StorageAdapter = struct {
                         removeIndexedNodeProperty(mg, label_id, node_id, entry.key, existing);
                     }
                 }
-                const new_prop_head = try node_shard.putPropertyTxn(rec.prop_head, entry.key, storage_val, local_txn);
+                const new_prop_head = node_shard.putPropertyTxn(rec.prop_head, entry.key, storage_val, local_txn) catch |err|
+                    return mapPropertyEntryError(err, entry.key);
                 rec.prop_head = new_prop_head;
                 for (label_ids) |label_id| {
                     try addIndexedNodeProperty(mg, label_id, node_id, entry.key, storage_val);
@@ -6818,9 +6843,11 @@ pub const StorageAdapter = struct {
             // produced for a store whose adjacency can hold it. When off, keep
             // the legacy one-page-per-edge writer (still a u64 head, hi=0).
             const new_head: u64 = if (from_shard.config.edge_prop_slab_packing)
-                try from_shard.putPropertyTxn(found_prop_head, key, storage_val, local_txn)
+                from_shard.putPropertyTxn(found_prop_head, key, storage_val, local_txn) catch |err|
+                    return mapPropertyEntryError(err, key)
             else
-                try from_shard.putPropertyLegacyTxn(found_prop_head, key, storage_val, local_txn);
+                from_shard.putPropertyLegacyTxn(found_prop_head, key, storage_val, local_txn) catch |err|
+                    return mapPropertyEntryError(err, key);
 
             if (new_head != found_prop_head) {
                 _ = try from_shard.adj_out.updateEdgePropHead(from_rec.out_head, edge_id, new_head);
@@ -6870,9 +6897,11 @@ pub const StorageAdapter = struct {
         // GAP-0060: edge prop chains slab-pack (u64 head), gated on the shard
         // config — see the txn branch above.
         const fb_new_head: u64 = if (from_shard.config.edge_prop_slab_packing)
-            try from_shard.putPropertyTxn(fb_found_prop_head, key, storage_val, fb_local_txn)
+            from_shard.putPropertyTxn(fb_found_prop_head, key, storage_val, fb_local_txn) catch |err|
+                return mapPropertyEntryError(err, key)
         else
-            try from_shard.putPropertyLegacyTxn(fb_found_prop_head, key, storage_val, fb_local_txn);
+            from_shard.putPropertyLegacyTxn(fb_found_prop_head, key, storage_val, fb_local_txn) catch |err|
+                return mapPropertyEntryError(err, key);
 
         if (fb_new_head != fb_found_prop_head) {
             _ = try from_shard.adj_out.updateEdgePropHead(fb_from_rec.out_head, edge_id, fb_new_head);
@@ -6961,9 +6990,11 @@ pub const StorageAdapter = struct {
             // GAP-0060: edge prop chains slab-pack (u64 head), gated on the shard
             // config — see setEdgeProperty.
             const new_head_u64 = if (from_shard.config.edge_prop_slab_packing)
-                try from_shard.putPropertyTxn(running_prop_head, entry.key, storage_val, local_txn)
+                from_shard.putPropertyTxn(running_prop_head, entry.key, storage_val, local_txn) catch |err|
+                    return mapPropertyEntryError(err, entry.key)
             else
-                try from_shard.putPropertyLegacyTxn(running_prop_head, entry.key, storage_val, local_txn);
+                from_shard.putPropertyLegacyTxn(running_prop_head, entry.key, storage_val, local_txn) catch |err|
+                    return mapPropertyEntryError(err, entry.key);
             running_prop_head = new_head_u64;
             last_new_head_u64 = new_head_u64;
         }

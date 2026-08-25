@@ -126,36 +126,50 @@ pub fn writeFrame(
     }
 }
 
+// CANARY: REQ=REQ-ENG-3907-GRPC-TRANSPORT; FEATURE="GrpcTransport"; ASPECT=ClientFrameReadTimeout; STATUS=TESTED; TEST=test-transport-parity; OWNER=transport; UPDATED=2026-08-24
+//
+// ENG-3907: read EXACTLY `dest.len` bytes straight off the socket.
+//
+// `readFrame` used to build a fresh `std.Io.Reader` over an 8 KiB stack buffer
+// on every call, which carried two defects:
+//
+//   * `setSocketTimeouts` puts SO_RCVTIMEO on this socket, so a read that
+//     outlives `--timeout` returns EAGAIN — and Zig 0.16's
+//     `Io.Threaded.netReadPosix` classifies EAGAIN on a blocking fd as a
+//     programmer bug and PANICS ("programmer bug caused syscall error: AGAIN")
+//     instead of surfacing an error. Reproduced by the QUIC-vs-gRPC
+//     transport-parity smoke the moment it got past the TLS handshake.
+//   * the buffered reader was free to read AHEAD of the requested bytes into a
+//     stack buffer that died with the call, silently dropping the head of the
+//     next HTTP/2 frame.
+//
+// Reading the fd directly fixes both: no read-ahead is possible, and the
+// timeout becomes an ordinary `error.ReadTimeout` the caller can report.
+fn readExact(stream: std.Io.net.Stream, dest: []u8, hooks: ProgressHooks) !void {
+    var total: usize = 0;
+    while (total < dest.len) {
+        const n = std.posix.read(stream.socket.handle, dest[total..]) catch |err| switch (err) {
+            error.WouldBlock => return error.ReadTimeout,
+            else => |e| return e,
+        };
+        if (n == 0) return error.ConnectionClosed;
+        notifyProgress(hooks);
+        total += n;
+    }
+}
+
 pub fn readFrame(
     allocator: std.mem.Allocator,
     stream: std.Io.net.Stream,
     hooks: ProgressHooks,
 ) !H2Frame {
-    const io = std.Io.Threaded.global_single_threaded.io();
-    var rbuf: [8192]u8 = undefined;
-    var sr = stream.reader(io, &rbuf);
-    const reader = &sr.interface;
-
     var header: [9]u8 = undefined;
-    var total: usize = 0;
-    while (total < header.len) {
-        const n = try reader.readSliceShort(header[total..]);
-        if (n == 0) return error.ConnectionClosed;
-        notifyProgress(hooks);
-        total += n;
-    }
+    try readExact(stream, &header, hooks);
 
     const length: u24 = (@as(u24, header[0]) << 16) | (@as(u24, header[1]) << 8) | @as(u24, header[2]);
     const payload = try allocator.alloc(u8, length);
     errdefer allocator.free(payload);
-
-    var payload_total: usize = 0;
-    while (payload_total < payload.len) {
-        const n = try reader.readSliceShort(payload[payload_total..]);
-        if (n == 0) return error.ConnectionClosed;
-        notifyProgress(hooks);
-        payload_total += n;
-    }
+    try readExact(stream, payload, hooks);
 
     return .{
         .frame_type = header[3],

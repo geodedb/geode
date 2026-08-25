@@ -4,12 +4,12 @@ const util = @import("proto_test_util.zig");
 const schema = @import("schema");
 
 fn execQuic(client: *util.QuicProtoClient, allocator: std.mem.Allocator, query: []const u8) !util.ExecResult {
-    var params = std.ArrayList(schema.Param).init(allocator);
+    const params: std.ArrayList(schema.Param) = .empty;
     return client.executeAndCollect(allocator, query, params, 100);
 }
 
 fn execGrpc(client: *util.GrpcProtoClient, allocator: std.mem.Allocator, query: []const u8) !util.ExecResult {
-    var params = std.ArrayList(schema.Param).init(allocator);
+    const params: std.ArrayList(schema.Param) = .empty;
     return client.executeAndCollect(allocator, query, params, 100);
 }
 
@@ -40,6 +40,13 @@ test "protocol: transport parity diagnostics (IllegalOrderKey) QUIC vs gRPC (gat
 
     util.progress("Starting server (QUIC: {d}, gRPC: {d})...", .{ quic_port, grpc_port });
 
+    // ENG-3907 (B4), KNOWN FAILING: this smoke needs a gRPC client that speaks
+    // TLS. `util.GrpcProtoClient` is plaintext HTTP/2, and the server's gRPC
+    // listener is TLS-required, so the parity comparison never reaches a query.
+    // `GEODE_GRPC_ALLOW_PLAINTEXT_FALLBACK=1` (Debug-only, grpc_server.zig:151)
+    // gets the client past the handshake but the vendor listener then never
+    // answers the HTTP/2 SETTINGS exchange — GAP-0893, vendor `grpc_zig` 0.1.7.
+    // Left genuinely failing rather than re-silenced with `|| true`.
     var server = util.spawnServer(allocator, &.{ "./zig-out/bin/geode", "serve", "--listen", addr, "--listen-grpc", grpc_addr }, util.TestEnv.standard()) catch |err| {
         util.progress("Server spawn failed: {}", .{err});
         util.testSkip();

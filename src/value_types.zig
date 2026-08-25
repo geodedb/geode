@@ -67,6 +67,14 @@ pub const EvalError = error{
     // docs/@BUGS_731.md bug 8b: an unresolved function name is a diagnostic
     // (SQLSTATE 42883 undefined_function), not a silent NULL.
     UnknownFunction,
+    // ENG-3910: the right-hand side of IN / NOT IN evaluated to something that
+    // is neither a LIST nor NULL. Previously the evaluator invented a definite
+    // boolean (false for IN, TRUE for NOT IN — a fail-OPEN that turns a
+    // deny-list predicate into an allow-all). It is a data exception, and it
+    // needs its own identity because the generic `TypeMismatch` still maps to
+    // the 58000 system-error class.
+    // CANARY: REQ=REQ-ENG-3910-IN-PREDICATE-TYPE-SAFETY; FEATURE="InOperator"; ASPECT=NonListRightHandSide; STATUS=TESTED; TEST=tests/test_eng3910_in_type_safety.zig; OWNER=eval; UPDATED=2026-08-24
+    InListRequiresList,
     OutOfMemory,
 };
 

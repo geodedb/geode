@@ -88,7 +88,7 @@ pub fn runParity(
     page_size: u32,
     env: ?[]const []const u8,
 ) !struct { server: util.ServerHandle, result: ParityResult } {
-    var server = try util.spawnServer(
+    const server = try util.spawnServer(
         allocator,
         &.{ "./zig-out/bin/geode", "serve", "--listen", quic_addr, "--listen-grpc", grpc_addr },
         env,

@@ -60,7 +60,12 @@ pub fn runAgainstServer(
     addr: []const u8,
     args: []const []const u8,
 ) !CliResult {
-    var argv = std.ArrayList([]const u8).init(allocator);
+    // Zig 0.16: ArrayList is unmanaged — `.init(allocator)` is gone and the
+    // allocator travels with each call (as every other line in this function
+    // already does). ENG-3907 (B4): this bit-rot was invisible because the only
+    // callers that reach it are the transport-parity smokes, which never
+    // compiled (missing module graph) and whose failure the Makefile swallowed.
+    var argv: std.ArrayList([]const u8) = .empty;
     defer argv.deinit(allocator);
 
     try argv.append(allocator, args[0]);
@@ -71,18 +76,22 @@ pub fn runAgainstServer(
 
     try addDefaultClientArgs(allocator, &argv, args, addr);
 
-    var child = std.process.Child.init(argv.items, allocator);
-    child.stdin_behavior = .Ignore;
-    child.stdout_behavior = .Pipe;
-    child.stderr_behavior = .Pipe;
-    try child.spawn();
+    // Zig 0.16 retired `std.process.Child.init` + `Child.spawn`/`wait` in favor
+    // of `std.process.run(gpa, io, RunOptions)`, which spawns, pumps both pipes
+    // and reaps in one call. Same behavior as the old spawn/readToEnd/wait
+    // sequence, and it cannot deadlock on a full pipe. Matches the 0.16
+    // migration `proto_test_util.spawnServer` already carries.
+    var threaded = std.Io.Threaded.init(allocator, .{});
+    defer threaded.deinit();
 
-    const out = try child.stdout.?.readToEndAlloc(allocator, 1 << 20);
-    const err = try child.stderr.?.readToEndAlloc(allocator, 1 << 20);
-    const term = try child.wait();
-    const code: i32 = switch (term) {
-        .Exited => |st| st,
+    const res = try std.process.run(allocator, threaded.io(), .{
+        .argv = argv.items,
+        .stdout_limit = .limited(1 << 20),
+        .stderr_limit = .limited(1 << 20),
+    });
+    const code: i32 = switch (res.term) {
+        .exited => |st| st,
         else => 2,
     };
-    return .{ .code = code, .out = out, .err = err };
+    return .{ .code = code, .out = res.stdout, .err = res.stderr };
 }

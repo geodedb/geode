@@ -22,8 +22,10 @@ fn extract_rows_array(allocator: std.mem.Allocator, out: []const u8) ![]u8 {
 // Normalize rows array by splitting row objects and lex-sorting them, to ignore order.
 fn normalize_rows(allocator: std.mem.Allocator, rows_json: []const u8) ![]u8 {
     // rows_json is like: [ {"r":"n"},{"r":"t"},{"r":"f"} ]
-    var rows = std.ArrayList([]const u8).init(allocator);
-    defer rows.deinit();
+    // Zig 0.16: ArrayList is unmanaged — `.init(allocator)` is gone and the
+    // allocator travels with each call.
+    var rows: std.ArrayList([]const u8) = .empty;
+    defer rows.deinit(allocator);
     var i: usize = 0;
     if (rows_json.len < 2 or rows_json[0] != '[' or rows_json[rows_json.len - 1] != ']') return error.Malformed;
     i += 1; // skip '['
@@ -47,10 +49,10 @@ fn normalize_rows(allocator: std.mem.Allocator, rows_json: []const u8) ![]u8 {
         }
         if (depth != 0) return error.Malformed;
         const obj = rows_json[obj_start..i];
-        try rows.append(obj);
+        try rows.append(allocator, obj);
     }
     // sort lexicographically
-    const slice = try rows.toOwnedSlice();
+    const slice = try rows.toOwnedSlice(allocator);
     defer allocator.free(slice);
     std.sort.block([]const u8, slice, {}, struct {
         fn lessThan(_: void, a: []const u8, b: []const u8) bool {
@@ -58,15 +60,15 @@ fn normalize_rows(allocator: std.mem.Allocator, rows_json: []const u8) ![]u8 {
         }
     }.lessThan);
     // join with commas inside brackets
-    var out = std.ArrayList(u8).init(allocator);
-    defer out.deinit();
-    try out.append('[');
+    var out: std.ArrayList(u8) = .empty;
+    defer out.deinit(allocator);
+    try out.append(allocator, '[');
     for (slice, 0..) |obj, idx| {
-        if (idx > 0) try out.appendSlice(",");
-        try out.appendSlice(obj);
+        if (idx > 0) try out.appendSlice(allocator, ",");
+        try out.appendSlice(allocator, obj);
     }
-    try out.append(']');
-    return out.toOwnedSlice();
+    try out.append(allocator, ']');
+    return out.toOwnedSlice(allocator);
 }
 
 // CANARY: REQ=REQ-GQL-017; FEATURE="Transport Parity CASE 3VL"; ASPECT=ProtocolE2E; STATUS=TESTED; TEST=TestCANARY_REQ_GQL_017_TransportParity_Case3VL; OWNER=engine; UPDATED=2025-09-24

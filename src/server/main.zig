@@ -2030,6 +2030,32 @@ pub fn main() !void {
     defer rls_dispatch_mod.resetCallbacks();
 
     // gRPC server (optional)
+    //
+    // CANARY: REQ=REQ-ENG-3907-GRPC-TRANSPORT; FEATURE="GrpcTransport"; ASPECT=DualListenerLifetime; STATUS=TESTED; TEST=geodetestlab/specs/grpc_dual_transport.yml; OWNER=transport; UPDATED=2026-08-24
+    //
+    // ENG-3907 (B1): both owners live at FUNCTION scope so their teardown runs
+    // at process shutdown. They used to be block-scoped inside the
+    // `if (listen_grpc)` below, which meant `grpc_pool.deinit()` — which JOINS
+    // the worker running the gRPC serve loop — fired at the END OF THAT BLOCK,
+    // before the QUIC listener was ever bound. `serve --listen X --listen-grpc Y`
+    // therefore deadlocked with the gRPC TCP port open, the QUIC UDP port never
+    // bound, and the server answering nothing at all.
+    //
+    // Hoisting also closes a latent use-after-free on the grpc-only path's twin:
+    // `grpc_server.deinit()` frees the SessionStore and session key that the
+    // still-running accept thread reads from. Teardown order below is
+    // pool-then-server so the worker is stopped (or timed out, loudly) before
+    // the state it touches is released.
+    var grpc_server_owner: ?*grpc_transport.GeodeGrpcServer = null;
+    var grpc_pool_owner: ?*thread_pool.ThreadPool = null;
+    defer {
+        if (grpc_pool_owner) |p| p.deinit();
+        if (grpc_server_owner) |s| {
+            s.deinit();
+            gpa.destroy(s);
+        }
+    }
+
     if (listen_grpc) |grpc_addr| {
         const colon = std.mem.lastIndexOfScalar(u8, grpc_addr, ':');
         var grpc_port: u16 = 3142;
@@ -2056,11 +2082,9 @@ pub fn main() !void {
         };
 
         const grpc_server = try gpa.create(grpc_transport.GeodeGrpcServer);
+        errdefer gpa.destroy(grpc_server);
         grpc_server.* = try grpc_transport.GeodeGrpcServer.init(gpa, grpc_port, cert_path, key_path, grpc_config);
-        defer {
-            grpc_server.deinit();
-            gpa.destroy(grpc_server);
-        }
+        grpc_server_owner = grpc_server;
 
         if (listen_quic == null) {
             log.info("gRPC server started", &.{
@@ -2080,7 +2104,7 @@ pub fn main() !void {
                 });
                 return err;
             };
-            defer grpc_pool.deinit();
+            grpc_pool_owner = grpc_pool;
             try grpc_pool.submitBlocking(.{
                 .context = @ptrCast(grpc_server),
                 .callback = runGrpcServerTask,

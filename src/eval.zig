@@ -49,6 +49,49 @@ fn isPropagatableEvalError(err: EvalError) bool {
     };
 }
 
+// CANARY: REQ=REQ-ENG-3910-IN-PREDICATE-TYPE-SAFETY; FEATURE="InOperator"; ASPECT=SwallowedTypeErrorRelay; STATUS=TESTED; TEST=geodetestlab/specs/in_predicate_type_safety.yml; OWNER=eval; UPDATED=2026-08-24
+//
+// ENG-3910: `EvalError.InListRequiresList` has to REACH the client, but roughly
+// thirty WHERE-filter call sites across the executor swallow eval errors and
+// simply exclude the row. That already makes the refusal fail-CLOSED — the
+// pre-fix `WHERE NOT x IN $scalar` allow-all is gone the moment `evalExpr`
+// stops inventing a boolean — but it leaves it INVISIBLE: the caller sees
+// SQLSTATE 00000 and an empty result set, which is precisely the "looks like
+// your data has no matches" confusion the ticket is about.
+//
+// A sticky thread-local flag survives those catches, so the statement
+// chokepoint (`execution.executeStatementWithContext`) can turn the swallowed
+// error back into a data exception. Thread-local because one statement runs per
+// worker thread; the depth counter stops a NESTED statement (a subquery) from
+// clearing the enclosing statement's flag.
+threadlocal var in_predicate_type_error: bool = false;
+threadlocal var in_predicate_scope_depth: u32 = 0;
+
+/// Open a statement scope. Returns true when this call OWNS the scope (it is the
+/// outermost statement on this thread) and is therefore the one that must
+/// observe the flag.
+pub fn enterInPredicateScope() bool {
+    if (in_predicate_scope_depth == 0) in_predicate_type_error = false;
+    in_predicate_scope_depth += 1;
+    return in_predicate_scope_depth == 1;
+}
+
+/// Close a statement scope. Reports whether an IN / NOT IN type error was
+/// swallowed anywhere inside it; only the owning scope may observe (and clear)
+/// the flag.
+pub fn exitInPredicateScope(owns: bool) bool {
+    if (in_predicate_scope_depth > 0) in_predicate_scope_depth -= 1;
+    if (!owns) return false;
+    const pending = in_predicate_type_error;
+    in_predicate_type_error = false;
+    return pending;
+}
+
+fn raiseInListTypeError() EvalError {
+    in_predicate_type_error = true;
+    return EvalError.InListRequiresList;
+}
+
 // CANARY: REQ=REQ-M5.2-EVAL-REFACTOR-003; FEATURE="Circular Dependency Resolution"; ASPECT=ValueTypeReexport; STATUS=EXEMPT; OWNER=eval; UPDATED=2025-11-13
 // Phase 5 M5.2: Re-export Value from value_types module for backward compatibility
 pub const Value = value_types.Value;
@@ -1135,11 +1178,20 @@ pub fn evalExpr(allocator: std.mem.Allocator, e: ast.Expr, env: Env) EvalError!V
         },
         // CANARY: REQ=REQ-GQL-IN-EXPR-003; FEATURE="InOperator"; ASPECT=EvalSupport; STATUS=TESTED; TEST=geodetestlab/specs/gql_expressions_comprehensive.yml; OWNER=eval; UPDATED=2025-12-27
         // value IN list_expr where list_expr evaluates to a list (e.g., 'Person' IN labels(n))
+        // ENG-3910: a non-LIST right-hand side used to return a definite `false`
+        // here (and a definite `true` in NotInListExpr below), so a scalar bound
+        // where a list belongs produced a SILENT wrong answer — and the two
+        // spellings failed in opposite directions, turning `WHERE NOT x IN
+        // $deny` into an allow-all. Three-valued logic now applies:
+        //   * LIST  -> membership, exactly as before (including the empty list)
+        //   * NULL  -> NULL (UNKNOWN), per ISO/IEC 39075 — WHERE filters it out
+        //   * other -> a data exception, never an invented boolean
+        // CANARY: REQ=REQ-ENG-3910-IN-PREDICATE-TYPE-SAFETY; FEATURE="InOperator"; ASPECT=NonListRightHandSide; STATUS=TESTED; TEST=tests/test_eng3910_in_type_safety.zig; OWNER=eval; UPDATED=2026-08-24
         .InListExpr => |ile| {
             const v = try evalExpr(allocator, ile.value.*, env);
             const list_val = try evalExpr(allocator, ile.list_expr.*, env);
-            // The list expression must evaluate to a List
-            if (list_val != .List) return Value{ .Bool = false };
+            if (list_val == .Null) return Value{ .Null = {} };
+            if (list_val != .List) return raiseInListTypeError();
             // Check if v is in the list
             for (list_val.List) |item| {
                 if (eqVals(v, item)) return Value{ .Bool = true };
@@ -1148,11 +1200,13 @@ pub fn evalExpr(allocator: std.mem.Allocator, e: ast.Expr, env: Env) EvalError!V
         },
         // CANARY: REQ=REQ-GQL-IN-EXPR-004; FEATURE="NotInOperator"; ASPECT=EvalSupport; STATUS=TESTED; TEST=geodetestlab/specs/gql_expressions_comprehensive.yml; OWNER=eval; UPDATED=2025-12-27
         // value NOT IN list_expr
+        // ENG-3910: see the InListExpr arm above — same three-valued contract.
+        // CANARY: REQ=REQ-ENG-3910-IN-PREDICATE-TYPE-SAFETY; FEATURE="NotInOperator"; ASPECT=NonListRightHandSide; STATUS=TESTED; TEST=tests/test_eng3910_in_type_safety.zig; OWNER=eval; UPDATED=2026-08-24
         .NotInListExpr => |nile| {
             const v = try evalExpr(allocator, nile.value.*, env);
             const list_val = try evalExpr(allocator, nile.list_expr.*, env);
-            // The list expression must evaluate to a List
-            if (list_val != .List) return Value{ .Bool = true };
+            if (list_val == .Null) return Value{ .Null = {} };
+            if (list_val != .List) return raiseInListTypeError();
             // Check if v is NOT in the list
             for (list_val.List) |item| {
                 if (eqVals(v, item)) return Value{ .Bool = false };

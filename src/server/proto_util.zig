@@ -152,7 +152,20 @@ pub fn mapError(err: anyerror) ErrorInfo {
         error.FulltextRequiresTextProperty => .{ .code = "42804", .message = "Fulltext index requires a text (string) property; the indexed property holds only non-string values" },
         // GAP-0918: vector index validation.
         error.InvalidIndexMetric => .{ .code = "42704", .message = "Unknown vector distance metric (supported: l2, euclidean, cosine, dot_product, inner_product)" },
+        // ENG-3906: a WITH parameter a vector index does not implement used to be
+        // silently discarded — a correctness lie about the index that was built.
+        // 42704 = undefined_object, the same family the unknown-metric refusal
+        // uses. (The QUIC/gRPC front ends surface parse-stage failures as 42000;
+        // this arm covers in-process callers that map the error directly.)
+        // CANARY: REQ=REQ-ENG-3906-INDEX-WITH-PARAM-VALIDATION; FEATURE="VectorIndex"; ASPECT=WithParameterValidation; STATUS=TESTED; TEST=tests/test_eng3906_index_with_params.zig; OWNER=index; UPDATED=2026-08-24
+        error.UnknownIndexParameter => .{ .code = "42704", .message = "Unknown index parameter in the WITH clause: a vector index accepts only 'metric'; the HNSW tuning knobs m / ef_construction / ef_search are not implemented" },
         error.VectorDimensionMismatch => .{ .code = "22000", .message = "Vector dimension does not match the indexed property's established dimension" },
+        // ENG-3910: the right-hand side of IN / NOT IN was neither a LIST nor
+        // NULL. It used to fail OPEN (`NOT x IN $scalar` matched every row);
+        // it is now refused as a data exception (class 22) so a mis-bound
+        // parameter can never silently widen a predicate.
+        // CANARY: REQ=REQ-ENG-3910-IN-PREDICATE-TYPE-SAFETY; FEATURE="InOperator"; ASPECT=NonListRightHandSide; STATUS=TESTED; TEST=tests/test_eng3910_in_type_safety.zig; OWNER=eval; UPDATED=2026-08-24
+        error.InListRequiresList => .{ .code = "22000", .message = "The right-hand side of IN / NOT IN must be a list (or NULL); a scalar value is not a list. Bind a list parameter, e.g. --param p '[1,2,3]'" },
         error.InvalidTypeConversion => .{ .code = "22003", .message = "Invalid type conversion" },
         // GAP-0905/GAP-0907: checked numeric narrowing (CAST, MakeInterval, ...)
         // surfaces as SQLSTATE 22003 numeric_value_out_of_range.
@@ -241,6 +254,18 @@ pub fn mapError(err: anyerror) ErrorInfo {
         // burning CPU+RSS for an abandoned result.
         // 57014 = SQLSTATE query_canceled (class 57, operator intervention).
         error.ReadQueryCancelled => .{ .code = "57014", .message = "ReadQueryCancelled: the client disconnected or the server canceled this read (stall watchdog); execution aborted at a row/batch boundary. No data was modified" },
+        // ENG-3911: an oversized property VALUE used to reach the client as
+        // `PropertyKeyTooLong` under the generic 58000 system-error class — the
+        // wrong noun AND a "the server broke" class for a documented resource
+        // limit the caller simply crossed. `storage.graph_storage_adapter
+        // .mapPropertyEntryError` now separates the two refusals the storage
+        // layer conflates, and each gets its own truthful arm here.
+        // 54000 = SQLSTATE program_limit_exceeded (class 54, limit exceeded).
+        // NOTE: raising the 8142-byte per-entry cap is out of scope — this makes
+        // the refusal honest, it does not make the payload fit.
+        // CANARY: REQ=REQ-ENG-3911-PROPERTY-VALUE-SIZE-ERROR; FEATURE="PropertyStorage"; ASPECT=OversizedValueErrorMapping; STATUS=TESTED; TEST=tests/test_eng3911_property_value_size_error.zig; OWNER=transport; UPDATED=2026-08-24
+        error.PropertyValueTooLarge => .{ .code = "54000", .message = "PropertyValueTooLarge: the property value does not fit the 8142-byte per-entry storage budget (one 8192-byte page minus its header; an entry costs 2 + key length + encoded value). Shorten the value — e.g. a VECTOR<f32> fits at most 2030 dimensions and a string at most ~8132 bytes for a short key" },
+        error.PropertyKeyTooLong => .{ .code = "54000", .message = "PropertyKeyTooLong: the property key exceeds the 65535-byte maximum key length" },
         else => .{ .code = "58000", .message = @errorName(err) },
     };
 }

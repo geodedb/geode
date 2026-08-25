@@ -285,7 +285,10 @@ pub const Parser = struct {
 
     // Parser operations can fail due to syntax or allocation issues.
     // We’ll thread a tiny error wrapper with a message alongside generic errors when needed.
-    const ParserError = error{ UnexpectedToken, OutOfMemory, Overflow, InvalidCharacter, InvalidIndexType };
+    // ENG-3906: `UnknownIndexParameter` — a WITH parameter a vector index does
+    // not implement. Distinct from `UnexpectedToken` so the diagnostic can say
+    // "this knob does not exist" rather than "syntax error".
+    const ParserError = error{ UnexpectedToken, OutOfMemory, Overflow, InvalidCharacter, InvalidIndexType, UnknownIndexParameter };
 
     /// Read an object name: an identifier or a quoted identifier.
     fn parseName(self: *Parser) ParserError![]const u8 {
@@ -5156,38 +5159,86 @@ pub const Parser = struct {
             }
         }
 
-        // Optional WITH clause for index parameters. Most parameters are
-        // accepted and ignored, but `metric` is captured so the executor can
-        // validate it for vector/HNSW indexes (GAP-0918 — an invalid metric
-        // like 'banana' used to be silently discarded here).
+        // Optional WITH clause for index parameters, parsed as real
+        // `key = value` / `key: value` pairs. `metric` is captured so the
+        // executor can validate it for vector/HNSW indexes (GAP-0918 — an
+        // invalid metric like 'banana' used to be silently discarded here).
+        //
+        // ENG-3906: this used to be a token walk that skipped everything it did
+        // not recognise, which hid TWO defects behind one loop:
+        //   (A1) it only honoured `metric` after an `.eq`, so the ISO map
+        //        spelling `metric: 'banana'` never reached the validator and the
+        //        index was built with no metric at all;
+        //   (A2) every other key — a typo, or an HNSW tuning knob this engine
+        //        does not implement (m / ef_construction / ef_search) — was
+        //        accepted and thrown away, so the operator believed they had
+        //        tuned an index that was in fact built with defaults.
+        // Both spellings are now equivalent, and on a VECTOR-typed index any key
+        // other than `metric` is refused rather than discarded. Non-vector index
+        // types keep the previous permissive behaviour (their WITH parameters are
+        // outside this fix's blast radius).
+        // CANARY: REQ=REQ-ENG-3906-INDEX-WITH-PARAM-VALIDATION; FEATURE="VectorIndex"; ASPECT=WithParameterValidation; STATUS=TESTED; TEST=tests/test_eng3906_index_with_params.zig; OWNER=index; UPDATED=2026-08-24
         var index_metric: ?[]const u8 = null;
         if (self.cur.kind == .WITH) {
             self.advance();
             if (self.cur.kind == .l_paren) {
                 self.advance();
+                const vector_typed_index = index_type == .vector or index_type == .vector_f32;
+                // Pair loop. Any shape this cannot read (a nested list/map value,
+                // a parameter reference, ...) breaks out to the tolerant
+                // skip-to-matching-paren recovery below, exactly as before.
+                pairs: while (self.cur.kind != .r_paren and self.cur.kind != .eof) {
+                    if (self.cur.kind != .identifier and self.cur.kind != .quoted_identifier and !self.isKeyword(self.cur.kind)) break :pairs;
+                    const param_key = self.cur.lexeme;
+                    self.advance();
+
+                    // `=` (Neo4j / pgvector spelling) and `:` (ISO map spelling)
+                    // are the SAME parameter. Only `=` was honoured before.
+                    if (self.cur.kind != .eq and self.cur.kind != .colon) break :pairs;
+                    self.advance();
+
+                    const value_kind = self.cur.kind;
+                    const value_lexeme = self.cur.lexeme;
+                    switch (value_kind) {
+                        .string_lit,
+                        .identifier,
+                        .quoted_identifier,
+                        .integer_lit,
+                        .float_lit,
+                        .TRUE,
+                        .FALSE,
+                        => self.advance(),
+                        else => break :pairs,
+                    }
+
+                    if (std.ascii.eqlIgnoreCase(param_key, "metric")) {
+                        if (value_kind == .string_lit or value_kind == .identifier or value_kind == .quoted_identifier) {
+                            index_metric = value_lexeme;
+                        }
+                    } else if (vector_typed_index) {
+                        self.last_error = std.fmt.allocPrint(
+                            self.arena.allocator(),
+                            "unknown index parameter '{s}' in the WITH clause: a vector index accepts only 'metric' (l2, euclidean, cosine, dot, dot_product, inner_product); the HNSW tuning knobs m / ef_construction / ef_search are not implemented",
+                            .{param_key},
+                        ) catch "unknown index parameter in the WITH clause: a vector index accepts only 'metric'";
+                        return error.UnknownIndexParameter;
+                    }
+
+                    if (self.cur.kind == .comma) {
+                        self.advance();
+                        continue :pairs;
+                    }
+                    break :pairs;
+                }
+                // Tolerant recovery: consume whatever the pair loop did not read
+                // and balance the WITH parentheses.
                 var paren_depth: u32 = 1;
                 while (paren_depth > 0 and self.cur.kind != .eof) {
                     if (self.cur.kind == .l_paren) {
                         paren_depth += 1;
-                        self.advance();
-                        continue;
-                    }
-                    if (self.cur.kind == .r_paren) {
+                    } else if (self.cur.kind == .r_paren) {
                         paren_depth -= 1;
                         if (paren_depth == 0) break;
-                        self.advance();
-                        continue;
-                    }
-                    if (paren_depth == 1 and self.cur.kind == .identifier and std.ascii.eqlIgnoreCase(self.cur.lexeme, "metric")) {
-                        self.advance();
-                        if (self.cur.kind == .eq) {
-                            self.advance();
-                            if (self.cur.kind == .string_lit or self.cur.kind == .identifier) {
-                                index_metric = self.cur.lexeme;
-                                self.advance();
-                            }
-                        }
-                        continue;
                     }
                     self.advance();
                 }

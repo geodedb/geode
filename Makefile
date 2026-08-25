@@ -42,24 +42,24 @@ endif
 # Default target - build everything including cross-compilation checks (non-blocking)
 # Note: Integration tests (geodetestlab) moved to ../geode-test-harness
 #
-# `quic-smoke-strict` and `transport-parity-smokes` are dispatched
-# through best-effort wrappers because the underlying smoke tests run
-# `zig test <file>` directly (without module wiring) on test files that
-# depend on `proto_test_util.zig`'s `transport/quic` named import.  In
-# Zig 0.16 the direct `zig test` invocation can't resolve that import,
-# so the strict targets fail-fast on the build chain even though the
-# Geode binary itself is healthy.  The same tests still run cleanly
-# through `zig build test` (the sharded x4 suite under `test:`), which
-# IS in `all` here.  Run `make quic-smoke-strict` directly to surface
-# the proto_test_util wiring gap when that's intended.
-all: sub build test fuzz bench cross-compile cross-test no-feature-flags status-generate quic-smoke-strict-best-effort transport-parity-smokes-best-effort
+# `quic-smoke-strict` is dispatched through a best-effort wrapper because it
+# still runs `zig test <file>` directly (without module wiring) on test files
+# that depend on `proto_test_util.zig`'s `transport/quic` named import.  In
+# Zig 0.16 the direct `zig test` invocation can't resolve that import, so the
+# strict target fail-fasts on the build chain even though the Geode binary
+# itself is healthy.  Run `make quic-smoke-strict` directly to surface the
+# proto_test_util wiring gap when that's intended.
+#
+# ENG-3907 (B4): `transport-parity-smokes` NO LONGER goes through a wrapper.
+# Its twelve lanes are real `zig build test-transport-parity` steps now, ten of
+# which pass; the two that do not are named with their root cause in the target
+# itself, and `make all` fails if any of them regresses.  A target that cannot
+# fail is a target that cannot protect anything.
+all: sub build test fuzz bench cross-compile cross-test no-feature-flags status-generate quic-smoke-strict-best-effort transport-parity-smokes
 
-.PHONY: quic-smoke-strict-best-effort transport-parity-smokes-best-effort
+.PHONY: quic-smoke-strict-best-effort
 quic-smoke-strict-best-effort:
 	@$(MAKE) quic-smoke-strict || echo "⚠ quic-smoke-strict failed (non-fatal in make all; run 'make quic-smoke-strict' to surface)"
-
-transport-parity-smokes-best-effort:
-	@$(MAKE) transport-parity-smokes || echo "⚠ transport-parity-smokes failed (non-fatal in make all; run 'make transport-parity-smokes' to surface)"
 
 # Help target - show all available targets
 help:
@@ -1006,31 +1006,30 @@ quic-smoke-strict: build
 	@echo "Running telemetry smoke (STRICT) with passive teardown..."
 	GEODE_CI_TELEMETRY_SMOKE=1 GEODE_CI_TELEMETRY_STRICT=1 GEODE_TELEMETRY_PAGING=1 GEODE_CAPTURE_SERVER_STDERR=.tmp_server_stderr_smoke.log GEODE_QUIC_PASSIVE_TEARDOWN=1 $(ZIG) test test_telemetry_smoke.zig
 
-# Run transport parity smokes (env-gated, non-fatal): compares stdio vs QUIC for multiple deterministic queries
+# Run the stdio-vs-QUIC transport parity smokes.
+#
+# ENG-3907 (B4): this target used to shell out to a raw `zig test tests/<file>.zig`
+# for each smoke and append `|| true`.  Neither half worked: a raw `zig test` has
+# no module graph, so every one of the twelve died at
+# `proto_test_util.zig:5: no module named 'transport/quic'` — and `|| true`
+# swallowed it, so the target printed twelve green banners while running zero
+# assertions.  They are now registered build steps (`zig build
+# test-transport-parity`, see build.zig) and the exit code is NOT masked.
+#
+# KNOWN FAILING (2 of 12, both pre-existing and out of the ENG-3907 blast radius;
+# left genuinely red rather than re-silenced):
+#   * e2e_protocol_transport_parity_us001 — the ISO/IEC 39075 §16.18
+#     unordered-pagination diagnostic (US001) no longer fires:
+#     `RETURN 1 LIMIT 10 OFFSET 5` returns 00000 with 0 rows where the smoke
+#     expects exit 2 + a US001/16.18 diagnostic on stderr.
+#   * e2e_protocol_transport_parity_illegal_order_key — needs a TLS-capable gRPC
+#     test client (the harness client is plaintext, the listener is TLS-required);
+#     the Debug plaintext opt-in gets past the handshake but the vendor listener
+#     never answers SETTINGS (GAP-0893, vendor grpc_zig 0.1.7).
 transport-parity-smokes: build
-	@echo "Running transport parity (RETURN ordered rows)..."
-	GEODE_CI_QUIC_SMOKE=1 GEODE_QUIC_PASSIVE_TEARDOWN=1 $(ZIG) test tests/e2e_protocol_transport_parity_return_ordered.zig || true
-	@echo "Running transport parity (setop DISTINCT rows)..."
-	GEODE_CI_QUIC_SMOKE=1 GEODE_QUIC_PASSIVE_TEARDOWN=1 $(ZIG) test tests/e2e_protocol_transport_parity_setop_distinct.zig || true
-	@echo "Running transport parity (order metadata)..."
-	GEODE_CI_QUIC_SMOKE=1 GEODE_QUIC_PASSIVE_TEARDOWN=1 $(ZIG) test tests/e2e_protocol_transport_parity_order_metadata.zig || true
-	@echo "Running transport parity (US001 diagnostics)..."
-	GEODE_CI_QUIC_SMOKE=1 GEODE_QUIC_PASSIVE_TEARDOWN=1 $(ZIG) test tests/e2e_protocol_transport_parity_us001.zig || true
-	@echo "Running transport parity (IllegalOrderKey diagnostics)..."
-	GEODE_CI_QUIC_SMOKE=1 GEODE_QUIC_PASSIVE_TEARDOWN=1 $(ZIG) test tests/e2e_protocol_transport_parity_illegal_order_key.zig || true
-	@echo "Running transport parity (nulls-last ordering)..."
-	GEODE_CI_QUIC_SMOKE=1 GEODE_QUIC_PASSIVE_TEARDOWN=1 $(ZIG) test tests/e2e_protocol_transport_parity_nulls_order.zig || true
-	@echo "Running transport parity (full rows varlen sample)..."
-	GEODE_CI_QUIC_SMOKE=1 GEODE_QUIC_PASSIVE_TEARDOWN=1 $(ZIG) test tests/e2e_protocol_transport_parity_fullrows.zig || true
-	@echo "Running transport parity (projection rows)..."
-	GEODE_CI_QUIC_SMOKE=1 GEODE_QUIC_PASSIVE_TEARDOWN=1 $(ZIG) test tests/e2e_protocol_transport_parity_projection_rows.zig || true
-	@echo "Running transport parity (ORDER+LIMIT+OFFSET rows)..."
-	GEODE_CI_QUIC_SMOKE=1 GEODE_QUIC_PASSIVE_TEARDOWN=1 $(ZIG) test tests/e2e_protocol_transport_parity_order_pagination_rows.zig || true
-	@echo "Running transport parity (CASE 3VL rows, order-insensitive)..."
-	GEODE_CI_QUIC_SMOKE=1 GEODE_QUIC_PASSIVE_TEARDOWN=1 $(ZIG) test tests/e2e_protocol_transport_parity_case.zig || true
-	@echo "Running transport parity (varlen curated dataset full rows)..."
-	GEODE_CI_QUIC_SMOKE=1 GEODE_QUIC_PASSIVE_TEARDOWN=1 $(ZIG) test tests/e2e_protocol_transport_parity_varlen_dataset_rows.zig || true
-	@echo "✓ Transport parity smokes completed (non-fatal mode)"
+	@echo "Running transport parity smokes (stdio vs QUIC, 12 lanes)..."
+	GEODE_CI_QUIC_SMOKE=1 GEODE_QUIC_PASSIVE_TEARDOWN=1 $(ZIG) build test-transport-parity
+	@echo "✓ Transport parity smokes passed"
 
 # Cross-compilation targets (required 64-bit targets only)
 cross-compile: cross-compile-required cross-compile-optional cross-zig-clients-best-effort

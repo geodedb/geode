@@ -1202,7 +1202,35 @@ fn executeStatement(allocator: std.mem.Allocator, stmt: ast.Statement) !Executio
     return executeStatementWithContext(allocator, stmt, .{});
 }
 
+// CANARY: REQ=REQ-ENG-3910-IN-PREDICATE-TYPE-SAFETY; FEATURE="InOperator"; ASPECT=SwallowedTypeErrorRelay; STATUS=TESTED; TEST=geodetestlab/specs/in_predicate_type_safety.yml; OWNER=eval; UPDATED=2026-08-24
+//
+// ENG-3910: statement chokepoint for the IN / NOT IN type error.
+//
+// `evalExpr` refuses a non-LIST, non-NULL right-hand side, but the executor's
+// ~30 WHERE-filter call sites all swallow eval errors and exclude the row. The
+// row exclusion is the right SAFE outcome (the pre-fix `NOT x IN $scalar`
+// allow-all is gone either way) — it is just not diagnosable, because the client
+// sees 00000 with an empty result set. `eval` keeps a sticky per-thread flag
+// across those catches; this wrapper is where it becomes a data exception again.
+//
+// The wrapper is deliberately OUTSIDE the statement switch so every shape is
+// covered (MATCH…RETURN, MATCH…DELETE, MERGE, …) with one hook, and nested
+// statements (subqueries) open their own inner scope that cannot clear the
+// enclosing statement's flag.
 pub fn executeStatementWithContext(allocator: std.mem.Allocator, stmt: ast.Statement, context: ExecutionContext) !ExecutionResult {
+    const owns_in_predicate_scope = eval.enterInPredicateScope();
+    var result = executeStatementWithContextInner(allocator, stmt, context) catch |err| {
+        _ = eval.exitInPredicateScope(owns_in_predicate_scope);
+        return err;
+    };
+    if (eval.exitInPredicateScope(owns_in_predicate_scope)) {
+        result.deinit(allocator);
+        return error.InListRequiresList;
+    }
+    return result;
+}
+
+fn executeStatementWithContextInner(allocator: std.mem.Allocator, stmt: ast.Statement, context: ExecutionContext) !ExecutionResult {
     const om = @import("otel_metrics");
     const otel_lib = @import("otel");
     const qt: om.QueryType = .read; // simplified — Task 10 follow-up: classify from stmt

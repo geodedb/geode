@@ -93,6 +93,9 @@ const log = logging.scoped("cli");
 const Attr = logging.Attr;
 // Import server main from unified entry point (both cli and server share same module tree)
 const server_main = @import("../server/main.zig");
+// ENG-3907 (B2): `serve --help` prints the SERVER's own help, so the flag list
+// can never drift from the parser that consumes it.
+const server_cli_args = @import("../server/cli_args.zig");
 
 // CANARY: REQ=REQ-LIB-MIGRATION-JSON-026; FEATURE="JSON Library Migration"; ASPECT=CLI; STATUS=TESTED; OWNER=cli; UPDATED=2026-01-24
 const protobuf = @import("protobuf");
@@ -222,24 +225,23 @@ fn getStderrHandle() StdioError!std.Io.File.Handle {
     return file.handle;
 }
 
+// CANARY: REQ=REQ-ENG-3907-GRPC-TRANSPORT; FEATURE="GrpcTransport"; ASPECT=ServeHelpSingleSource; STATUS=TESTED; TEST=geodetestlab/specs/grpc_dual_transport.yml; OWNER=transport; UPDATED=2026-08-24
+//
+// ENG-3907 (B2): this used to be a hand-maintained SECOND copy of the serve
+// help that listed seven of the sixteen real flags. `--listen-grpc`,
+// `--config`, `--max-connections`, `--cluster-port`, `--peers`, `--no-auth`,
+// `--insecure-allow-all` and `--strict-tenancy` were all undiscoverable from
+// the CLI, because the COMPLETE help — `server/cli_args.printHelp`, which the
+// server's own argument parser owns and keeps in step with the flags it
+// actually accepts — was dead code that `cmdServe` intercepted before it could
+// ever run. Delegating removes the duplicate rather than re-synchronising it,
+// so the help cannot drift from the parser again.
 fn printServeUsage() void {
-    std.debug.print("geode serve - Start the database server\n" ++
-        "\n" ++
-        "Usage: geode serve [options]\n" ++
-        "\n" ++
-        "Options:\n" ++
-        "  --data-dir <path>      Data directory (default: ./data)\n" ++
-        "  --listen <addr:port>   Listen address (default: 0.0.0.0:3141)\n" ++
-        "  --cert <path>          TLS certificate path (auto-generated if missing)\n" ++
-        "  --key <path>           TLS private key path (auto-generated if missing)\n" ++
-        "  --log-level <level>    Log level: debug|info|warn|error (default: info)\n" ++
-        "  --idle-timeout <ms>    QUIC idle timeout in milliseconds (default: 300000)\n" ++
-        "  --persist-interval <ms> Background persistence interval in ms (default: 100)\n" ++
-        "  -h, --help             Show this help\n" ++
-        "\n" ++
-        "Examples:\n" ++
+    server_cli_args.printHelp();
+    std.debug.print("\nExamples:\n" ++
         "  geode serve\n" ++
         "  geode serve --data-dir /var/lib/geode --listen 0.0.0.0:3141\n" ++
+        "  geode serve --listen 0.0.0.0:3141 --listen-grpc 0.0.0.0:3142\n" ++
         "  geode serve --log-level info  # Auth enabled by default\n" ++
         "\n", .{});
 }
@@ -1926,9 +1928,47 @@ fn executeGrpcQuery(allocator: std.mem.Allocator, opts: GrpcQueryOptions) !void 
         };
     }
 
+    // CANARY: REQ=REQ-ENG-3907-GRPC-TRANSPORT; FEATURE="GrpcTransport"; ASPECT=CliPlaintextDiagnostic; STATUS=TESTED; TEST=geodetestlab/specs/grpc_dual_transport.yml; OWNER=transport; UPDATED=2026-08-24
+    //
+    // ENG-3907 (B3): this used to print the bare error NAME and nothing else —
+    // against the server's TLS-required gRPC listener that is nine characters,
+    // `ReadFailed`, with no mention of gRPC, of TLS, or of what to do next. The
+    // underlying cause is structural: `grpc_query_transport.connectPlaintext`
+    // writes the HTTP/2 preface in the clear, the listener is expecting a TLS
+    // ClientHello, and the connection is dropped mid-handshake. Keep the raw
+    // error name (it is what a bug report needs) and add the diagnosis.
     if (last_error) |le| {
-        stderr.writeStreamingAll(std.Io.Threaded.global_single_threaded.io(), le) catch {};
-        stderr.writeStreamingAll(std.Io.Threaded.global_single_threaded.io(), "\n") catch {};
+        const io = std.Io.Threaded.global_single_threaded.io();
+        // A failure to even establish the TCP connection is a different
+        // problem and must not be misdiagnosed as a TLS mismatch.
+        const connect_level = std.mem.eql(u8, le, "ConnectionRefused") or
+            std.mem.eql(u8, le, "ConnectionTimedOut") or
+            std.mem.eql(u8, le, "NetworkUnreachable") or
+            std.mem.eql(u8, le, "AddressNotAvailable") or
+            std.mem.eql(u8, le, "HostLacksNetworkAddresses");
+        var buf: [1024]u8 = undefined;
+        const msg: []const u8 = if (connect_level)
+            std.fmt.bufPrint(
+                &buf,
+                "Error: gRPC connect to {s} failed ({s}).\n" ++
+                    "  Nothing is accepting connections there. Start the server with\n" ++
+                    "  `geode serve --listen-grpc {s}`, or drop --grpc to use the QUIC transport.\n",
+                .{ server_addr, le, server_addr },
+            ) catch le
+        else
+            std.fmt.bufPrint(
+                &buf,
+                "Error: gRPC request to {s} failed ({s}).\n" ++
+                    "  Geode's gRPC listener REQUIRES TLS, and this CLI's gRPC client speaks\n" ++
+                    "  plaintext HTTP/2 only, so the TLS handshake never happens and the server\n" ++
+                    "  closes the connection mid-preface.\n" ++
+                    "  Use the QUIC transport instead (drop --grpc and point --server at the\n" ++
+                    "  --listen address), or reach the gRPC endpoint with a TLS-capable gRPC\n" ++
+                    "  client (grpcurl, grpc-go, grpc-python, ...).\n",
+                .{ server_addr, le },
+            ) catch le;
+        stderr.writeStreamingAll(io, msg) catch {};
+        if (msg.ptr == le.ptr) stderr.writeStreamingAll(io, "\n") catch {};
     }
 
     std.process.exit(@intFromEnum(ExitCode.general_error));

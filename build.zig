@@ -938,6 +938,28 @@ pub fn build(b: *std.Build) void {
     if (target.result.os.tag == .linux and (is_native or enable_openssl)) {
         geode_exe.root_module.linkSystemLibrary("dl", .{});
     }
+    // ENG-3907 (B4): make "this binary ships without gRPC TLS" LOUD at build
+    // time. Every cross-compiled release target takes the `else` branch here,
+    // so `grpc_tls.zig` falls back to its stub `initTlsContext` and
+    // `GeodeGrpcServer.init` refuses to start with `error.TlsRequired` unless
+    // the operator sets GEODE_GRPC_ALLOW_PLAINTEXT_FALLBACK. That was silent
+    // until now: the gRPC listener simply never came up on a shipped binary and
+    // nothing in the build said why.
+    //
+    // Turning it on for a cross target is NOT just a matter of passing
+    // -Denable-openssl=true: Zig does not search host system library paths for a
+    // non-native target, so `ssl`/`crypto` resolve to "searched paths: none" and
+    // the link fails. It needs a cross-built OpenSSL plus a `--search-prefix`
+    // (the pattern the -Dfips=true / -Dopenssl_path builds already use).
+    if (!enable_openssl) {
+        std.debug.print(
+            "warning: building WITHOUT OpenSSL — the gRPC transport's TLS support is compiled out.\n" ++
+                "         `serve --listen-grpc` will refuse to start (error.TlsRequired) in this binary.\n" ++
+                "         QUIC (--listen) is unaffected. To include it, link a cross-built OpenSSL:\n" ++
+                "         -Denable-openssl=true --search-prefix <openssl-prefix-for-{s}>\n",
+            .{@tagName(target.result.cpu.arch)},
+        );
+    }
 
     // Pass OpenSSL availability to grpc_tls.zig via build options
     const openssl_options = b.addOptions();
@@ -4372,6 +4394,57 @@ pub fn build(b: *std.Build) void {
     const quic_high_concurrency_e2e_step = b.step("test-quic-high-concurrency-e2e", "Run QUIC high-concurrency read/write integration test");
     quic_high_concurrency_e2e_step.dependOn(&run_quic_high_concurrency_e2e_tests.step);
     test_e2e_step.dependOn(&run_quic_high_concurrency_e2e_tests.step);
+
+    // CANARY: REQ=REQ-ENG-3907-GRPC-TRANSPORT; FEATURE="GrpcTransport"; ASPECT=TransportParitySmokeWiring; STATUS=TESTED; TEST=test-transport-parity; OWNER=transport; UPDATED=2026-08-24
+    //
+    // ENG-3907 (B4): the twelve stdio-vs-QUIC transport-parity smokes were only
+    // reachable from `make transport-parity-smokes`, which shelled out to a raw
+    // `zig test tests/<file>.zig`. That has no module graph, so every one of
+    // them died at `proto_test_util.zig:5: no module named 'transport/quic'` —
+    // and the Makefile swallowed the failure with `|| true`, so the target
+    // printed twelve green-looking banners while running zero assertions.
+    // Registering them as real build steps gives them their imports; the
+    // Makefile now invokes THIS step and no longer masks the exit code.
+    const transport_parity_step = b.step("test-transport-parity", "Run stdio-vs-QUIC transport parity smokes");
+    const transport_parity_sources = [_][]const u8{
+        "tests/e2e_protocol_transport_parity_return_ordered.zig",
+        "tests/e2e_protocol_transport_parity_setop_distinct.zig",
+        "tests/e2e_protocol_transport_parity_order_metadata.zig",
+        "tests/e2e_protocol_transport_parity_us001.zig",
+        "tests/e2e_protocol_transport_parity_illegal_order_key.zig",
+        "tests/e2e_protocol_transport_parity_nulls_order.zig",
+        "tests/e2e_protocol_transport_parity_fullrows.zig",
+        "tests/e2e_protocol_transport_parity_projection_rows.zig",
+        "tests/e2e_protocol_transport_parity_order_pagination_rows.zig",
+        "tests/e2e_protocol_transport_parity_case.zig",
+        "tests/e2e_protocol_transport_parity_varlen_dataset_rows.zig",
+        "tests/e2e_protocol_transport_parity_match_varlen_rows.zig",
+    };
+    for (transport_parity_sources) |src| {
+        const parity_test = b.addTest(.{
+            .root_module = b.createModule(.{
+                .root_source_file = b.path(src),
+                .target = target,
+                .optimize = optimize,
+            }),
+        });
+        parity_test.root_module.addImport("geode", root_mod);
+        parity_test.root_module.addImport("protobuf", protobuf_mod);
+        parity_test.root_module.addImport("schema", schema_mod);
+        parity_test.root_module.addImport("transport/quic", transport_quic_mod);
+        parity_test.root_module.link_libc = true;
+        if (enable_openssl) {
+            parity_test.root_module.linkSystemLibrary("ssl", .{});
+            parity_test.root_module.linkSystemLibrary("crypto", .{});
+        }
+        if (target.result.os.tag == .linux and (is_native or enable_openssl)) {
+            parity_test.root_module.linkSystemLibrary("dl", .{});
+        }
+        const run_parity_test = b.addRunArtifact(parity_test);
+        // Every one of these drives the real `./zig-out/bin/geode` binary.
+        run_parity_test.step.dependOn(&install_geode_exe.step);
+        transport_parity_step.dependOn(&run_parity_test.step);
+    }
 
     // Gap 0039 (data-ingest enterprise review): `geode serve` SIGTERM shutdown
     // busy-spun forever draining abandoned QUIC connections (client vanished
