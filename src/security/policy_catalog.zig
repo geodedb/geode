@@ -87,14 +87,49 @@ pub const PolicyCatalog = struct {
         self.policies.deinit(self.allocator);
     }
 
+    // CANARY: REQ=REQ-ENG-3915-POLICY-COMPILE-ERROR-AT-DDL; FEATURE="GPS Policy DDL"; ASPECT=CompileFailureMode; STATUS=TESTED; TEST=tests/test_eng3915_policy_expression_ddl.zig; OWNER=security; UPDATED=2026-08-25
+    /// How `addPolicyWithMode` reacts when the policy predicate compiler cannot
+    /// compile a non-trivial USING expression.
+    ///
+    /// ENG-3915: the two call sites need OPPOSITE answers, which is why this is
+    /// a parameter and not a global policy.
+    pub const CompileFailureMode = enum {
+        /// DDL (`CREATE`/`ALTER POLICY`): REFUSE the statement with
+        /// error.UnsupportedPolicyExpression. An expression outside the
+        /// compiler's subset is stored with compiled=null, and decide() treats a
+        /// null-compiled non-"true" policy as fail-closed — so accepting it
+        /// silently installs a policy that denies everything it was written to
+        /// allow. The author is the only one who can fix that, and only at DDL
+        /// time, so the refusal belongs here.
+        reject,
+        /// Hydration / migration: RETAIN the record fail-closed (compiled=null)
+        /// and log loudly. A record persisted in __geode_security before a
+        /// grammar change must never brick startup; the operator sees the warn
+        /// line and rewrites the policy, and until then it denies rather than
+        /// allows.
+        retain_fail_closed,
+    };
+
     // CANARY: REQ=REQ-GPS-DDL-001; FEATURE="GPS Policy DDL"; ASPECT=PolicyCatalogAdd; STATUS=TESTED; TEST=tests/test_gps_policy_catalog.zig; OWNER=security; UPDATED=2026-05-20
     // CANARY: REQ=REQ-GPS-EXPR-001; FEATURE="GPS Expression Compilation"; ASPECT=PolicyCatalogAddCompile; STATUS=TESTED; TEST=tests/test_gps_policy_expression.zig; OWNER=security; UPDATED=2026-05-20
     /// Duplicate all string and slice fields and append a new Policy entry.
-    /// If expression_source is not "true", attempt to compile it into a
-    /// CompiledExpression for fast evaluation in decide().  Compilation errors
-    /// for non-trivial expressions are silently treated as "fail-closed":
-    /// the policy is stored with compiled=null and decide() will skip it.
+    ///
+    /// Retains the tolerant (`retain_fail_closed`) behaviour so existing
+    /// hydration / migration callers are unchanged. DDL call sites must use
+    /// `addPolicyStrict`.
     pub fn addPolicy(self: *PolicyCatalog, args: PolicySpec) !void {
+        return self.addPolicyWithMode(args, .retain_fail_closed);
+    }
+
+    // CANARY: REQ=REQ-ENG-3915-POLICY-COMPILE-ERROR-AT-DDL; FEATURE="GPS Policy DDL"; ASPECT=PolicyCatalogAddStrict; STATUS=TESTED; TEST=tests/test_eng3915_policy_expression_ddl.zig; OWNER=security; UPDATED=2026-08-25
+    /// `addPolicy` for the DDL path: an uncompilable USING expression is
+    /// refused with error.UnsupportedPolicyExpression instead of being stored
+    /// compiled=null (which decide() then silently fail-closes).
+    pub fn addPolicyStrict(self: *PolicyCatalog, args: PolicySpec) !void {
+        return self.addPolicyWithMode(args, .reject);
+    }
+
+    pub fn addPolicyWithMode(self: *PolicyCatalog, args: PolicySpec, on_compile_failure: CompileFailureMode) !void {
         // CANARY: REQ=REQ-GAP-0923-ABAC-POLICY-VALIDATION; FEATURE="ABAC"; ASPECT=DuplicateNameReject; STATUS=TESTED; TEST=tests/test_gap0923_abac_policy_validation.zig; OWNER=security; UPDATED=2026-07-10
         // GAP-0923(b): reject a duplicate policy name. Two same-named rows used
         // to coexist — SHOW POLICIES listed both and a single DROP POLICY
@@ -102,6 +137,34 @@ pub const PolicyCatalog = struct {
         for (self.policies.items) |*existing| {
             if (std.mem.eql(u8, existing.name, args.name)) return error.PolicyAlreadyExists;
         }
+
+        // ENG-3915: compile BEFORE any allocation so a refused DDL statement
+        // leaves the catalog byte-for-byte untouched.
+        var compiled: ?policy_expression.CompiledExpression = null;
+        if (!std.mem.eql(u8, args.expression_source, "true")) {
+            compiled = policy_expression.compileExpression(self.allocator, args.expression_source) catch |err| blk: {
+                switch (on_compile_failure) {
+                    .reject => {
+                        std.log.scoped(.gps).warn(
+                            "refusing policy '{s}': USING expression does not compile ({s}): {s}",
+                            .{ args.name, @errorName(err), args.expression_source },
+                        );
+                        return error.UnsupportedPolicyExpression;
+                    },
+                    .retain_fail_closed => {
+                        // GAP-0923(a) / ENG-3915: a persisted record whose
+                        // expression no longer compiles is kept fail-closed and
+                        // logged, never dropped and never promoted to ALLOW.
+                        std.log.scoped(.gps).warn(
+                            "policy '{s}' retained FAIL-CLOSED: USING expression does not compile ({s}) and the policy will never grant access until it is rewritten: {s}",
+                            .{ args.name, @errorName(err), args.expression_source },
+                        );
+                        break :blk null;
+                    },
+                }
+            };
+        }
+        errdefer if (compiled) |*c| c.deinit();
 
         const name_dupe = try self.allocator.dupe(u8, args.name);
         errdefer self.allocator.free(name_dupe);
@@ -111,24 +174,6 @@ pub const PolicyCatalog = struct {
         errdefer self.allocator.free(src_dupe);
         const actions_dupe = try self.allocator.dupe(Action, args.actions);
         errdefer self.allocator.free(actions_dupe);
-
-        // GAP-0923(a) — INTENTIONALLY RETAINED as fail-closed: the predicate
-        // compiler (policy_expression) implements only a small subset of the
-        // policy expression grammar; the manual GQL→bytecode pipeline for the
-        // full grammar is still a documented residual (see CLAUDE.md / RLS
-        // limitations). Many legitimate policies (empty predicate, `false`,
-        // `user.role == 'admin'`, …) do not compile under that subset and are
-        // stored with compiled=null, which decide() treats as fail-closed (a
-        // null-compiled, non-"true" policy never contributes an ALLOW). Forcing
-        // rejection of every compile failure here would break those real
-        // policies, so the compensating control (fail-closed at decide time),
-        // not DDL-time rejection, is the contract. The duplicate-name check
-        // above IS enforced.
-        var compiled: ?policy_expression.CompiledExpression = null;
-        if (!std.mem.eql(u8, args.expression_source, "true")) {
-            compiled = policy_expression.compileExpression(self.allocator, args.expression_source) catch null;
-        }
-        errdefer if (compiled) |*c| c.deinit();
 
         try self.policies.append(self.allocator, .{
             .name = name_dupe,

@@ -6823,7 +6823,21 @@ pub const Parser = struct {
                     // closing quote for string literals).  For the new cur token
                     // it points past *that* token's start, so back off to the
                     // beginning of the new cur token for the actual end.
-                    if (self.cur.kind == .semicolon or self.cur.kind == .eof) {
+                    //
+                    // CANARY: REQ=REQ-ENG-3915-POLICY-COMPILE-ERROR-AT-DDL; FEATURE="GPS Policy Expression"; ASPECT=UsingCaptureExcludesTerminator; STATUS=TESTED; TEST=tests/test_eng3915_policy_expression_ddl.zig; OWNER=security; UPDATED=2026-08-25
+                    // ENG-3915: the semicolon arm used to take self.lx.idx too,
+                    // which points PAST the `;` — so the captured source was
+                    // "current_user() = 'alice';" and compileExpression rejected
+                    // it as trailing junk. Every semicolon-terminated
+                    // `CREATE POLICY … USING …` therefore stored compiled=null
+                    // and silently denied everything, including perfectly valid
+                    // predicates. The `catch null` at the call site hid it.
+                    // The terminator is not part of the expression, so a
+                    // semicolon now ends the capture at its own start, exactly
+                    // like any other following token. Only EOF — which has no
+                    // terminator to exclude and no lexeme to point at — takes
+                    // the read cursor.
+                    if (self.cur.kind == .eof) {
                         end_offset = self.lx.idx;
                     } else {
                         end_offset = @intFromPtr(self.cur.lexeme.ptr) - @intFromPtr(src.ptr);

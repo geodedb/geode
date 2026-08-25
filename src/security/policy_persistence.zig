@@ -173,6 +173,12 @@ pub fn hydrateCatalog(
         // GAP-0923: hydration is tolerant of records persisted BEFORE the
         // uniqueness / malformed-expression validation landed — skip and log a
         // duplicate or an uncompilable expression rather than aborting startup.
+        // CANARY: REQ=REQ-ENG-3915-POLICY-COMPILE-ERROR-AT-DDL; FEATURE="GPS Policy Persistence"; ASPECT=HydrationTolerance; STATUS=TESTED; TEST=tests/test_eng3915_policy_expression_ddl.zig; OWNER=security; UPDATED=2026-08-25
+        // ENG-3915: DDL now REFUSES an uncompilable USING expression
+        // (addPolicyStrict), but hydration deliberately keeps the tolerant
+        // `addPolicy` — a record written before a grammar change must not brick
+        // startup. PolicyCatalog logs the retained-fail-closed warning; the
+        // policy is kept with compiled=null and can never grant access.
         cat.addPolicy(.{
             .name = record.getName(),
             .scope_graph = record.getGraph(),

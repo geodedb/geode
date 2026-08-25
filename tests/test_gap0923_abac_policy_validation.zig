@@ -8,13 +8,20 @@
 //       first, leaving a ghost duplicate. addPolicy now rejects a duplicate
 //       name with error.PolicyAlreadyExists.
 //
-//   (a) INTENTIONALLY RETAINED (fail-closed) — a malformed USING expression
-//       is stored with compiled=null because the predicate compiler covers
-//       only a subset of the grammar (the full GQL→bytecode path is a
-//       documented residual). decide() treats a null-compiled, non-"true"
-//       policy as fail-closed (it never contributes an ALLOW), which is the
-//       compensating control. This test PINS that a malformed policy never
-//       yields a compiled predicate — so it can never widen access.
+//   (a) SUPERSEDED BY ENG-3915 (2026-08-25) — this used to read "INTENTIONALLY
+//       RETAINED (fail-closed)". It is no longer the DDL contract: a
+//       CREATE/ALTER POLICY whose USING expression does not compile is now
+//       REFUSED at DDL time (PolicyCatalog.addPolicyStrict ->
+//       error.UnsupportedPolicyExpression), because accepting it installed a
+//       policy that silently denied everything it was written to allow. See
+//       tests/test_eng3915_policy_expression_ddl.zig.
+//
+//       The TOLERANT entry point exercised below (`addPolicy`) survives for
+//       exactly one caller: startup hydration from __geode_security, where a
+//       record persisted before a grammar change must not brick startup. The
+//       assertion this test makes is unchanged and still load-bearing: on that
+//       path a malformed policy never yields a compiled predicate, so it can
+//       never widen access.
 
 const std = @import("std");
 const testing = std.testing;
@@ -62,8 +69,13 @@ test "GAP-0923(a): a malformed USING policy stores fail-closed (compiled=null), 
     var cat = policy_catalog.PolicyCatalog.init(testing.allocator);
     defer cat.deinit();
 
+    // ENG-3915: `addPolicy` is now the TOLERANT (hydration) entry point; the DDL
+    // path uses `addPolicyStrict` and refuses this input outright. What is
+    // asserted here is the hydration contract — retained, never compiled, never
+    // able to grant.
+    //
     // Dangling open paren — the compiler cannot produce a predicate. The
-    // policy is accepted but stored with compiled=null (fail-closed).
+    // policy is retained but stored with compiled=null (fail-closed).
     try cat.addPolicy(spec("p_malformed", "current_user() = 'x' AND ("));
     const policies = cat.listPolicies();
     try testing.expectEqual(@as(usize, 1), policies.len);

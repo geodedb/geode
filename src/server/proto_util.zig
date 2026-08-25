@@ -159,6 +159,12 @@ pub fn mapError(err: anyerror) ErrorInfo {
         // this arm covers in-process callers that map the error directly.)
         // CANARY: REQ=REQ-ENG-3906-INDEX-WITH-PARAM-VALIDATION; FEATURE="VectorIndex"; ASPECT=WithParameterValidation; STATUS=TESTED; TEST=tests/test_eng3906_index_with_params.zig; OWNER=index; UPDATED=2026-08-24
         error.UnknownIndexParameter => .{ .code = "42704", .message = "Unknown index parameter in the WITH clause: a vector index accepts only 'metric'; the HNSW tuning knobs m / ef_construction / ef_search are not implemented" },
+        // ENG-3915: a CREATE/ALTER POLICY whose USING expression the policy
+        // predicate compiler cannot compile used to be ACCEPTED and stored with
+        // compiled=null, which decide() then treats as fail-closed — the policy
+        // silently denied everything it was written to allow.
+        // CANARY: REQ=REQ-ENG-3915-POLICY-COMPILE-ERROR-AT-DDL; FEATURE="GPS Policy DDL"; ASPECT=SqlstateMapping; STATUS=TESTED; TEST=tests/test_eng3915_policy_expression_ddl.zig; OWNER=security; UPDATED=2026-08-25
+        error.UnsupportedPolicyExpression => .{ .code = "42000", .message = "Unsupported policy USING expression: the policy predicate compiler accepts only true, current_user()/current_tenant()/current_graph()/resource.label/principal.attributes.<key> compared with = to a quoted literal, combined with AND / OR / parentheses" },
         error.VectorDimensionMismatch => .{ .code = "22000", .message = "Vector dimension does not match the indexed property's established dimension" },
         // ENG-3910: the right-hand side of IN / NOT IN was neither a LIST nor
         // NULL. It used to fail OPEN (`NOT x IN $scalar` matched every row);
