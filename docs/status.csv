@@ -1032,6 +1032,9 @@ REQ-ENG-3916-EDGE-ID,GraphElementId,EdgeArm,TESTED,,,eval,2026-08-25,src/eval.zi
 REQ-ENG-3916-EDGE-ID,GraphElementId,Regression,TESTED,,,eval,2026-08-25,tests/test_eng3916_edge_id_projection.zig
 REQ-ENG-3916-TOSTRING-NULL-PROPAGATION,StringFunctions,ToStringNullPropagation,TESTED,,,eval,2026-08-25,src/eval/call_handlers.zig
 REQ-ENG-3916-TOSTRING-NULL-PROPAGATION,StringFunctions,ToStringNullPropagation,TESTED,,,types,2026-08-25,src/types/evaluator_functions.zig
+REQ-ENG-USING-VECTOR-BUILDS-INDEX,VectorIndex,MetricThreading,TESTED,,,index,2026-08-25,src/execution/statement_dispatcher.zig
+REQ-ENG-USING-VECTOR-BUILDS-INDEX,VectorIndex,Regression,TESTED,,,index,2026-08-25,tests/test_using_vector_index.zig
+REQ-ENG-USING-VECTOR-BUILDS-INDEX,VectorIndex,RuntimeTypeMapping,TESTED,,,index,2026-08-25,src/execution/statement_dispatcher.zig
 REQ-ENGINE-001,Engine,QueryExecution,TESTED,,,engine,2026-01-15,tests/test_gap_0193_final_batch.zig
 REQ-ENGINE-002,Engine,PlanGeneration,TESTED,,,engine,2026-01-15,tests/test_gap_0193_final_batch.zig
 REQ-ENGINE-003,Engine,ResultStreaming,TESTED,,,engine,2026-01-15,tests/test_gap_0193_final_batch.zig

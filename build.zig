@@ -9365,6 +9365,17 @@ pub fn build(b: *std.Build) void {
     const gap0918_tests = b.addTest(.{ .root_module = gap0918_test_mod });
     const run_gap0918_tests = b.addRunArtifact(gap0918_tests);
     shardDep(test_step, &run_gap0918_tests.step, 0, test_shard_loads, test_shard_index);
+    // `CREATE INDEX … USING vector` / `USING HNSW` silently built no runtime
+    // index at all (only `USING vector_f32` did), and the validated metric was
+    // discarded in favour of a hardcoded .l2.
+    const using_vector_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_using_vector_index.zig"), .target = target, .optimize = optimize });
+    using_vector_test_mod.addImport("geode", root_mod);
+    const using_vector_tests = b.addTest(.{ .root_module = using_vector_test_mod });
+    const run_using_vector_tests = b.addRunArtifact(using_vector_tests);
+    shardDep(test_step, &run_using_vector_tests.step, 0, test_shard_loads, test_shard_index);
+    const using_vector_step = b.step("test-using-vector-index", "Run USING vector / USING HNSW runtime-index build regressions");
+    using_vector_step.dependOn(&run_using_vector_tests.step);
+
     // ENG-3914: MERGE duplicated rows DETERMINISTICALLY — the general path
     // probed only the first property of a multi-property merge key against a
     // single-valued index and treated a failed verification as proof of

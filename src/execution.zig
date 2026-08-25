@@ -1752,7 +1752,7 @@ fn executeStatementWithContextInner(allocator: std.mem.Allocator, stmt: ast.Stat
                 };
             }
 
-            try statement_dispatcher.ensureAdvancedRuntimeIndex(allocator, index_name, ci.label, ci.properties, ci.index_type);
+            try statement_dispatcher.ensureAdvancedRuntimeIndex(allocator, index_name, ci.label, ci.properties, ci.index_type, ci.metric);
 
             return ExecutionResult{
                 .columns = try allocator.alloc([]const u8, 0),

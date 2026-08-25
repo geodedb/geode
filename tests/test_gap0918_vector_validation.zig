@@ -20,6 +20,7 @@ const geode = @import("geode");
 
 const execution = geode.execution;
 const graph_store = geode.graph_store;
+const index_manager = geode.index_manager;
 
 fn tmpDirRealpathAlloc(allocator: std.mem.Allocator, tmp_sub_path: []const u8) ![]u8 {
     var cwd_buf: [std.fs.max_path_bytes]u8 = undefined;
@@ -40,6 +41,12 @@ const Harness = struct {
 
     pub fn init(allocator: std.mem.Allocator) !Harness {
         execution.cleanupCatalogInstance();
+        // The hnsw worker pool is owned by the index manager. Tear it down
+        // BEFORE the store/allocator it was built with goes away, or a parked
+        // pool thread wakes on a freed Condition (verified: SIGSEGV in
+        // pool.Core.idle). A real server never destroys the graph store under
+        // a live index manager; this test does, so it must order the teardown.
+        index_manager.cleanupGlobalIndexManager();
         graph_store.deinitGlobalStore();
 
         var tmp = std.testing.tmpDir(.{});
@@ -66,6 +73,7 @@ const Harness = struct {
     pub fn deinit(self: *Harness) void {
         self.session.deinit();
         execution.cleanupCatalogInstance();
+        index_manager.cleanupGlobalIndexManager();
         graph_store.deinitGlobalStore();
         graph_store.setDataDirOverride(self.allocator, null);
         self.allocator.free(self.data_dir);
