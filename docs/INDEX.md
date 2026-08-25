@@ -28,6 +28,7 @@ Quick reference to all Geode documentation.
 - [GRAPH_ALGORITHMS_USAGE_GUIDE.md](GRAPH_ALGORITHMS_USAGE_GUIDE.md) - Algorithms
 - [FULLTEXT_SEARCH.md](FULLTEXT_SEARCH.md) - Full-text search (fts-storage-backed)
 - [TIMESERIES.md](TIMESERIES.md) - Time-series (timeseries-storage-backed)
+- [INDEX_MAINTENANCE_AND_BULK_INGEST.md](INDEX_MAINTENANCE_AND_BULK_INGEST.md) - Advanced-index (HNSW/vector) maintenance, CREATE INDEX blocking envelope, bulk-ingest guidance
 
 ## Security
 
