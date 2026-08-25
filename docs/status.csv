@@ -741,8 +741,9 @@ REQ-DATETIME-003,DateTimeFunctions,DateTime,TESTED,,,eval,2026-01-15,tests/test_
 REQ-DECIMAL-OVERFLOW-001,Decimal Overflow Guard,DataIntegrity,TESTED,,,core,2026-01-25,src/exec.zig
 REQ-DECIMAL-OVERFLOW-002,Decimal Avg Overflow Guard,DataIntegrity,TESTED,,,core,2026-01-25,src/exec.zig
 REQ-DEFAULT-PASSWORD-001,Secure Default Password,Security,TESTED,,,security,2026-01-13,src/security/geode_auth_lib.zig
-REQ-DELETE-PROPS-001,DeletePropertyFilter,PropertyMatching,TESTED,,,crud_operations,2026-02-02,src/execution/crud_operations.zig
-REQ-DELETE-WHERE-001,DeleteWhereEvaluation,WhereClause,TESTED,,,crud_operations,2026-01-09,src/execution/crud_operations.zig
+REQ-DELETE-MATCH-SET-RESOLUTION,DeleteWhereEvaluation,MatchSetResolution,TESTED,,,crud_operations,2026-08-25,src/execution/crud_operations.zig
+REQ-DELETE-MATCH-SET-RESOLUTION,DeleteWhereEvaluation,Regression,TESTED,,,crud_operations,2026-08-25,tests/test_eng3913_where_delete.zig
+REQ-DELETE-WHERE-001,DeleteWhereEvaluation,WhereClause,TESTED,,,crud_operations,2026-08-25,src/execution/crud_operations.zig
 REQ-DIST-2PC-001,Two-Phase Commit Messaging,Prepare,IMPL,,,distributed,2026-04-10,src/distributed/twophase.zig
 REQ-DIST-2PC-002,Two-Phase Commit Messaging,Commit,IMPL,,,distributed,2026-04-10,src/distributed/twophase.zig
 REQ-DIST-2PC-003,Two-Phase Commit Messaging,Abort,IMPL,,,distributed,2026-04-10,src/distributed/twophase.zig

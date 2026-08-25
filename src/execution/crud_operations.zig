@@ -437,6 +437,164 @@ fn collectMatchingEdgeIds(
     return try matches.toOwnedSlice(allocator);
 }
 
+/// ENG-3913: the deduplicated entity sets a `MATCH … DELETE …` statement targets.
+const DeleteTargets = struct {
+    node_ids: []u64,
+    edge_ids: []u64,
+
+    fn deinit(self: DeleteTargets, allocator: std.mem.Allocator) void {
+        allocator.free(self.node_ids);
+        allocator.free(self.edge_ids);
+    }
+};
+
+fn appendUniqueId(allocator: std.mem.Allocator, list: *std.ArrayList(u64), id: u64) !void {
+    for (list.items) |existing| if (existing == id) return;
+    try list.append(allocator, id);
+}
+
+// CANARY: REQ=REQ-DELETE-MATCH-SET-RESOLUTION; FEATURE="DeleteWhereEvaluation"; ASPECT=MatchSetResolution; STATUS=TESTED; TEST=tests/test_eng3913_where_delete.zig; OWNER=crud_operations; UPDATED=2026-08-25
+/// ENG-3913 — resolve the entities a `MATCH … [WHERE …] DELETE …` statement
+/// targets by running the SAME matching path a `RETURN` of those variables
+/// runs, then reading the bound entities straight out of the projected rows.
+///
+/// WHY THIS IS NOT A HAND-ROLLED PATTERN WALK ANY MORE. The reconstruction
+/// this replaces was independently wrong in four ways, every one of which
+/// either lost data or refused to delete data:
+///
+///   (A) the WHERE `Env` was built with NO parameter bindings, so a `$param`
+///       predicate evaluated to NULL and the whole DELETE silently no-opped;
+///   (B) the `Env` bound ONLY `chains[0].head.name`, so a cross-variable
+///       predicate (`… WHERE b.tag = 'x' DELETE a`) resolved NULL (no-op),
+///       and when the delete target was a HOP node the head's NAME was bound
+///       to the TARGET's value (wrong rows evaluated);
+///   (C) the candidate set came from `chains[0].head`'s labels + inline
+///       properties ONLY — relationship hops were never traversed — so a
+///       pattern-restricted delete OVER-DELETED, removing nodes the pattern
+///       excludes (verified: an isolated, edge-less node was destroyed by
+///       `MATCH (a:A)-[:R]->(b:B) DETACH DELETE a`);
+///   (D) the relationship branch had NO `where_clause` handling at all, so
+///       `MATCH ()-[r:R]->() WHERE r.w = 1 DELETE r` deleted 100% of the `R`
+///       edges instead of the one.
+///
+/// Routing through the match engine subsumes all four AND makes a predicate
+/// that fails to evaluate propagate its error (it used to be swallowed into
+/// `should_delete = false`, i.e. a silent partial delete). It also makes
+/// DELETE observe the same tenant / RLS row filters the read path applies, so
+/// a session can no longer destroy rows it is not allowed to read.
+fn resolveDeleteTargets(
+    allocator: std.mem.Allocator,
+    d: ast.DeleteStatement,
+    match_pattern: ast.GraphPattern,
+    context: ExecutionContext,
+) !DeleteTargets {
+    // Ordered, deduplicated list of the variables named by the DELETE items.
+    var target_vars = std.ArrayList([]const u8).empty;
+    defer target_vars.deinit(allocator);
+
+    if (d.items.len > 0) {
+        for (d.items) |item| {
+            const var_name = switch (item) {
+                .Variable => |n| n,
+                .Node => |n| n,
+                .Relationship => |n| n,
+            };
+            var seen = false;
+            for (target_vars.items) |existing| {
+                if (std.mem.eql(u8, existing, var_name)) {
+                    seen = true;
+                    break;
+                }
+            }
+            if (!seen) try target_vars.append(allocator, var_name);
+        }
+    } else {
+        // Defensive: the parser always requires at least one DELETE item after a
+        // MATCH clause, so this branch is unreachable today. Target every named
+        // node in the pattern rather than guessing at the head.
+        for (match_pattern.chains) |chain| {
+            if (chain.head) |head| {
+                if (head.name) |name| try appendUniqueVar(allocator, &target_vars, name);
+            }
+            for (chain.hops) |hop| {
+                if (hop.left.name) |name| try appendUniqueVar(allocator, &target_vars, name);
+                if (hop.right.name) |name| try appendUniqueVar(allocator, &target_vars, name);
+            }
+        }
+    }
+
+    var node_ids = std.ArrayList(u64).empty;
+    errdefer node_ids.deinit(allocator);
+    var edge_ids = std.ArrayList(u64).empty;
+    errdefer edge_ids.deinit(allocator);
+
+    if (target_vars.items.len == 0) {
+        return .{
+            .node_ids = try node_ids.toOwnedSlice(allocator),
+            .edge_ids = try edge_ids.toOwnedSlice(allocator),
+        };
+    }
+
+    // Project exactly the delete variables. `caseFoldToUpper` mirrors what the
+    // parser stores in `IdentRepr.cnf` for a bare identifier.
+    const unicode = @import("../unicode/unicode_tables.zig");
+    const items = try allocator.alloc(ast.ReturnItem, target_vars.items.len);
+    defer {
+        for (items) |item| {
+            const cnf = item.expr.Ident.cnf;
+            if (cnf.ptr != item.expr.Ident.orig.ptr) allocator.free(cnf);
+        }
+        allocator.free(items);
+    }
+    for (items, target_vars.items) |*item, name| {
+        const cnf = unicode.caseFoldToUpper(allocator, name) catch name;
+        item.* = .{ .expr = .{ .Ident = .{ .orig = name, .cnf = cnf } }, .alias = null };
+    }
+
+    const q = ast.Query{
+        .optional_match = false,
+        .match = match_pattern,
+        .where_clause = d.where_clause,
+        .with_clause = null,
+        .ret = .{ .items = items, .distinct = false },
+        .order_by = null,
+        .limit = null,
+        .offset = null,
+    };
+
+    // `executeQueryWithContext` is the SAME entry point the statement dispatcher
+    // uses for a plain `MATCH … RETURN …`, so the resolved set is by
+    // construction the set a RETURN of these variables would project (it also
+    // pushes the active ExecutionContext, which is what carries the tenant
+    // scope into the scan). The statement dispatcher's row-window / match-guard
+    // truncation is deliberately NOT applied: a guard-trimmed DELETE would be a
+    // silent partial delete.
+    var result = try execution.executeQueryWithContext(allocator, q, context);
+    defer result.deinit(allocator);
+
+    for (result.rows) |row| {
+        for (row) |value| {
+            switch (value) {
+                .Node => |node| try appendUniqueId(allocator, &node_ids, node.id),
+                .Edge => |edge| try appendUniqueId(allocator, &edge_ids, edge.id),
+                // An unbound / non-entity projection (e.g. a DELETE item naming a
+                // variable the pattern never binds) targets nothing.
+                else => {},
+            }
+        }
+    }
+
+    return .{
+        .node_ids = try node_ids.toOwnedSlice(allocator),
+        .edge_ids = try edge_ids.toOwnedSlice(allocator),
+    };
+}
+
+fn appendUniqueVar(allocator: std.mem.Allocator, list: *std.ArrayList([]const u8), name: []const u8) !void {
+    for (list.items) |existing| if (std.mem.eql(u8, existing, name)) return;
+    try list.append(allocator, name);
+}
+
 // CANARY: REQ=REQ-AUTO-INDEX-003; FEATURE="AutoIdIndex"; ASPECT=CrudAutoIndex; STATUS=TESTED; OWNER=crud_operations; UPDATED=2026-04-30
 /// Ensure auto-indexes exist for the given labels.
 /// Called after node/edge creation to auto-create btree indexes on the `id` property.
@@ -3575,46 +3733,19 @@ fn clusterReplicateDelete(
 
     const read_store = graph_store.getWritableGlobalStore(allocator);
     const filter_graph = current_graph orelse "default";
-    const filter_tenant = try tenantFilterFromContext(context);
+    // GAP-0840: strict mode rejects an unscoped/"default" tenant scope here. The
+    // resolved value is no longer read directly (the match path applies the same
+    // tenant scope for us) — the call is kept for its fail-closed rejection.
+    _ = try tenantFilterFromContext(context);
 
-    // Classify delete items as node-vars vs edge-vars (mirror the local path).
-    var delete_node_vars = std.StringHashMap(void).init(allocator);
-    defer delete_node_vars.deinit();
-    var delete_edge_vars = std.StringHashMap(void).init(allocator);
-    defer delete_edge_vars.deinit();
-
-    if (d.items.len > 0 and match_pattern.chains.len > 0) {
-        var node_var_set = std.StringHashMap(void).init(allocator);
-        defer node_var_set.deinit();
-        var edge_var_set = std.StringHashMap(void).init(allocator);
-        defer edge_var_set.deinit();
-
-        for (match_pattern.chains) |chain| {
-            if (chain.head) |head| {
-                if (head.name) |name| try node_var_set.put(name, {});
-            }
-            for (chain.hops) |hop| {
-                if (hop.left.name) |name| try node_var_set.put(name, {});
-                if (hop.right.name) |name| try node_var_set.put(name, {});
-                if (hop.rel.name) |name| try edge_var_set.put(name, {});
-            }
-        }
-
-        for (d.items) |item| {
-            const var_name = switch (item) {
-                .Variable => |n| n,
-                .Node => |n| n,
-                .Relationship => |n| n,
-            };
-            if (edge_var_set.contains(var_name)) {
-                try delete_edge_vars.put(var_name, {});
-            } else {
-                try delete_node_vars.put(var_name, {});
-            }
-        }
-    }
-
-    const should_delete_nodes = d.items.len == 0 or delete_node_vars.count() > 0;
+    // ENG-3913: resolve the target set through the SAME matching path the
+    // standalone executor uses, so the ids replicated to followers are the ids
+    // a `RETURN` of the delete variables would have projected (parameters,
+    // cross-variable predicates, relationship hops and a relationship WHERE all
+    // honoured). Previously this mirrored the hand-rolled reconstruction and so
+    // replicated an OVER-BROAD delete set to every node in the cluster.
+    const targets = try resolveDeleteTargets(allocator, d, match_pattern, context);
+    defer targets.deinit(allocator);
 
     // Resolved, deduplicated id sets to encode into the GDEL payload.
     var node_ids = std.ArrayList(u64).empty;
@@ -3622,133 +3753,24 @@ fn clusterReplicateDelete(
     var edge_ids = std.ArrayList(u64).empty;
     defer edge_ids.deinit(allocator);
 
-    const appendUniqueEdge = struct {
-        fn run(a: std.mem.Allocator, list: *std.ArrayList(u64), eid: u64) !void {
-            for (list.items) |existing| if (existing == eid) return;
-            try list.append(a, eid);
-        }
-    }.run;
+    try node_ids.appendSlice(allocator, targets.node_ids);
+    for (targets.edge_ids) |eid| try appendUniqueId(allocator, &edge_ids, eid);
 
-    // --- Node deletion resolution (mirror the local node path) ---
-    if (should_delete_nodes) {
-        var match_labels: [][]const u8 = &.{};
-        var match_props: ?[]ast.Property = null;
-
-        if (match_pattern.chains.len > 0) {
-            if (match_pattern.chains[0].head) |node_pattern| {
-                match_labels = node_pattern.labels;
-                match_props = node_pattern.props;
+    // GQL plain-DELETE validation: a node that still has incident edges errors
+    // (mirror the local path) BEFORE proposing anything. DETACH collects the
+    // incident edges instead.
+    for (node_ids.items) |node_id| {
+        if (d.detach) {
+            if (read_store.getOutgoingEdgeIds(node_id)) |out_ids| {
+                for (out_ids) |eid| try appendUniqueId(allocator, &edge_ids, eid);
             }
-            if (match_pattern.chains[0].hops.len > 0) {
-                for (match_pattern.chains[0].hops) |hop| {
-                    if (hop.left.name) |name| {
-                        if (delete_node_vars.contains(name)) {
-                            match_labels = hop.left.labels;
-                            match_props = hop.left.props;
-                            break;
-                        }
-                    }
-                    if (hop.right.name) |name| {
-                        if (delete_node_vars.contains(name)) {
-                            match_labels = hop.right.labels;
-                            match_props = hop.right.props;
-                            break;
-                        }
-                    }
-                }
+            if (read_store.getIncomingEdgeIds(node_id)) |in_ids| {
+                for (in_ids) |eid| try appendUniqueId(allocator, &edge_ids, eid);
             }
-        }
-
-        const evaluated_match_props = evaluatePatternProps(allocator, match_props, context) catch
-            return error.ClusterWriteNotReplicable;
-        defer freeEvaluatedPatternProps(allocator, evaluated_match_props);
-
-        const candidate_ids = try collectCandidateNodeIds(
-            allocator,
-            read_store,
-            filter_graph,
-            filter_tenant,
-            match_labels,
-            evaluated_match_props,
-        );
-        defer allocator.free(candidate_ids);
-
-        for (candidate_ids) |node_id| {
-            const node = (read_store.nodes.getOrHydratePtr(node_id) catch null) orelse continue;
-            if (!nodeMatchesPattern(node, filter_graph, filter_tenant, match_labels, evaluated_match_props)) continue;
-
-            if (d.where_clause) |where_expr| {
-                var var_name: []const u8 = "n";
-                if (match_pattern.chains.len > 0) {
-                    if (match_pattern.chains[0].head) |node_pattern| {
-                        if (node_pattern.name) |name| var_name = name;
-                    }
-                }
-                const names = try allocator.alloc([]const u8, 1);
-                defer allocator.free(names);
-                names[0] = var_name;
-                const values = try allocator.alloc(Value, 1);
-                defer allocator.free(values);
-                values[0] = Value{ .Node = node };
-                const env = Env{ .allocator = allocator, .names = names, .values = values };
-                const result = eval.evalExpr(allocator, where_expr, env) catch continue;
-                const keep = switch (result) {
-                    .Bool => |b| b,
-                    else => false,
-                };
-                if (!keep) continue;
-            }
-
-            try node_ids.append(allocator, node_id);
-        }
-
-        // GQL plain-DELETE validation: a node that still has incident edges
-        // errors (mirror the local path) BEFORE proposing anything. DETACH
-        // collects the incident edges instead.
-        for (node_ids.items) |node_id| {
-            if (d.detach) {
-                if (read_store.getOutgoingEdgeIds(node_id)) |out_ids| {
-                    for (out_ids) |eid| try appendUniqueEdge(allocator, &edge_ids, eid);
-                }
-                if (read_store.getIncomingEdgeIds(node_id)) |in_ids| {
-                    for (in_ids) |eid| try appendUniqueEdge(allocator, &edge_ids, eid);
-                }
-            } else {
-                const has_outgoing = if (read_store.getOutgoingEdgeIds(node_id)) |ids| ids.len > 0 else false;
-                const has_incoming = if (read_store.getIncomingEdgeIds(node_id)) |ids| ids.len > 0 else false;
-                if (has_outgoing or has_incoming) return error.NodeHasEdges;
-            }
-        }
-    }
-
-    // --- Edge deletion resolution (relationship-targeted DELETE, mirror local) ---
-    if (delete_edge_vars.count() > 0) {
-        for (match_pattern.chains) |chain| {
-            for (chain.hops) |hop| {
-                const rel_name = hop.rel.name orelse continue;
-                if (!delete_edge_vars.contains(rel_name)) continue;
-
-                const evaluated_left_props = evaluatePatternProps(allocator, hop.left.props, context) catch
-                    return error.ClusterWriteNotReplicable;
-                defer freeEvaluatedPatternProps(allocator, evaluated_left_props);
-                const evaluated_right_props = evaluatePatternProps(allocator, hop.right.props, context) catch
-                    return error.ClusterWriteNotReplicable;
-                defer freeEvaluatedPatternProps(allocator, evaluated_right_props);
-
-                const matched_edges = try collectMatchingEdgeIds(
-                    allocator,
-                    read_store,
-                    filter_graph,
-                    filter_tenant,
-                    hop.left.labels,
-                    evaluated_left_props,
-                    hop.rel.types,
-                    hop.right.labels,
-                    evaluated_right_props,
-                );
-                defer allocator.free(matched_edges);
-                for (matched_edges) |eid| try appendUniqueEdge(allocator, &edge_ids, eid);
-            }
+        } else {
+            const has_outgoing = if (read_store.getOutgoingEdgeIds(node_id)) |ids| ids.len > 0 else false;
+            const has_incoming = if (read_store.getIncomingEdgeIds(node_id)) |ids| ids.len > 0 else false;
+            if (has_outgoing or has_incoming) return error.NodeHasEdges;
         }
     }
 
@@ -4320,276 +4342,101 @@ pub fn executeDelete(allocator: std.mem.Allocator, d: ast.DeleteStatement, curre
     // adds O(total graph size) overhead without improving correctness under the
     // graph write lock.
     const read_store: *graph_store.GraphStore = store;
-    // Filter by graph - use "default" if no graph specified
-    const filter_graph = current_graph orelse "default";
-    // GAP-0840: strict mode rejects an unscoped/"default" tenant scope here.
-    const filter_tenant = try tenantFilterFromContext(context);
+    // GAP-0840: strict mode rejects an unscoped/"default" tenant scope here. The
+    // resolved graph/tenant values are no longer read directly — ENG-3913 routes
+    // the match-set resolution through the match path, which applies both — but
+    // the call is kept for its fail-closed rejection.
+    _ = try tenantFilterFromContext(context);
 
     // Track deleted node count
     var deleted_count: usize = 0;
 
     // If there's a MATCH clause, delete matching nodes/edges
     if (d.match_clause) |match_pattern| {
-        // GAP #56: Build a set of item variable names to determine what to delete.
-        // If items specify relationship variables, only delete edges (not nodes).
-        var delete_node_vars = std.StringHashMap(void).init(allocator);
-        defer delete_node_vars.deinit();
-        var delete_edge_vars = std.StringHashMap(void).init(allocator);
-        defer delete_edge_vars.deinit();
+        // ENG-3913: resolve the target set through the same matching path a
+        // RETURN of these variables would take. See `resolveDeleteTargets` for
+        // the four data-loss defects the previous hand-rolled reconstruction
+        // carried (no parameter bindings, single-variable Env, hop-blind
+        // candidate set, and a relationship branch that ignored WHERE).
+        // CANARY: REQ=REQ-DELETE-WHERE-001; FEATURE="DeleteWhereEvaluation"; ASPECT=WhereClause; STATUS=TESTED; TEST=tests/test_eng3913_where_delete.zig; OWNER=crud_operations; UPDATED=2026-08-25
+        const targets = try resolveDeleteTargets(allocator, d, match_pattern, context);
+        defer targets.deinit(allocator);
 
-        // Classify each delete item as node or edge by examining the MATCH pattern
-        if (d.items.len > 0 and match_pattern.chains.len > 0) {
-            // Build maps of variable names to their roles in the pattern
-            var node_var_set = std.StringHashMap(void).init(allocator);
-            defer node_var_set.deinit();
-            var edge_var_set = std.StringHashMap(void).init(allocator);
-            defer edge_var_set.deinit();
-
-            for (match_pattern.chains) |chain| {
-                if (chain.head) |head| {
-                    if (head.name) |name| try node_var_set.put(name, {});
-                }
-                for (chain.hops) |hop| {
-                    if (hop.left.name) |name| try node_var_set.put(name, {});
-                    if (hop.right.name) |name| try node_var_set.put(name, {});
-                    if (hop.rel.name) |name| try edge_var_set.put(name, {});
-                }
-            }
-
-            for (d.items) |item| {
-                const var_name = switch (item) {
-                    .Variable => |n| n,
-                    .Node => |n| n,
-                    .Relationship => |n| n,
-                };
-                if (edge_var_set.contains(var_name)) {
-                    try delete_edge_vars.put(var_name, {});
-                } else {
-                    try delete_node_vars.put(var_name, {});
+        if (!d.detach) {
+            for (targets.node_ids) |node_id| {
+                const has_outgoing = if (read_store.getOutgoingEdgeIds(node_id)) |ids| ids.len > 0 else false;
+                const has_incoming = if (read_store.getIncomingEdgeIds(node_id)) |ids| ids.len > 0 else false;
+                if (has_outgoing or has_incoming) {
+                    return error.NodeHasEdges;
                 }
             }
         }
 
-        // Determine if we should delete nodes (either no items, or items include node vars)
-        const should_delete_nodes = d.items.len == 0 or delete_node_vars.count() > 0;
+        // Delete the resolved nodes
+        for (targets.node_ids) |node_id| {
+            // A4b: drop the node's fulltext postings BEFORE the store delete,
+            // while its labels are still readable (covering-index lookup is
+            // keyed by label). Runs on the executor/connection thread
+            // (executeDelete is never invoked from bulkMergeNode / worker
+            // threads — verified). Cheap-exits when no FTS index covers the
+            // labels. Graph passed explicitly from current_graph.
+            if ((read_store.nodes.getOrHydratePtr(node_id) catch null)) |node_ptr| {
+                fts_index_ops.maintainFulltextOnWrite(allocator, current_graph, node_id, node_ptr.labels, .delete) catch |err| {
+                    log.warn("fts maintain (DELETE) failed", &.{
+                        Attr.uint("node_id", node_id),
+                        Attr.string("error", @errorName(err)),
+                    });
+                };
+            }
 
-        // --- Node deletion path (existing logic) ---
-        if (should_delete_nodes) {
-            // Extract pattern information from MATCH
-            var match_labels: [][]const u8 = &.{};
-            // CANARY: REQ=REQ-DELETE-PROPS-001; FEATURE="DeletePropertyFilter"; ASPECT=PropertyMatching; STATUS=TESTED; TEST=geodetestlab/specs/merge_performance_january_2026.yml; OWNER=crud_operations; UPDATED=2026-02-02
-            var match_props: ?[]ast.Property = null;
-
-            if (match_pattern.chains.len > 0) {
-                if (match_pattern.chains[0].head) |node_pattern| {
-                    match_labels = node_pattern.labels;
-                    match_props = node_pattern.props;
+            if (d.detach) {
+                // P8: Use adjacency indexes instead of full edge scan.
+                // Collect edge IDs first since deleteEdgeNoSave mutates the
+                // adjacency lists whose slices we are reading.
+                var edges_to_delete = std.ArrayList(u64).empty;
+                defer edges_to_delete.deinit(allocator);
+                if (read_store.getOutgoingEdgeIds(node_id)) |out_ids| {
+                    for (out_ids) |eid| {
+                        try edges_to_delete.append(allocator, eid);
+                    }
                 }
-                // Also check hop nodes for label extraction
-                if (match_pattern.chains[0].hops.len > 0) {
-                    // For node deletion, find the hop node whose variable is in delete_node_vars
-                    for (match_pattern.chains[0].hops) |hop| {
-                        if (hop.left.name) |name| {
-                            if (delete_node_vars.contains(name)) {
-                                match_labels = hop.left.labels;
-                                match_props = hop.left.props;
+                if (read_store.getIncomingEdgeIds(node_id)) |in_ids| {
+                    for (in_ids) |eid| {
+                        // Avoid duplicating self-loop edges already collected above
+                        var already = false;
+                        for (edges_to_delete.items) |existing| {
+                            if (existing == eid) {
+                                already = true;
                                 break;
                             }
                         }
-                        if (hop.right.name) |name| {
-                            if (delete_node_vars.contains(name)) {
-                                match_labels = hop.right.labels;
-                                match_props = hop.right.props;
-                                break;
-                            }
-                        }
-                    }
-                }
-            }
-
-            var evaluated_match_props_failed = false;
-            const evaluated_match_props = evaluatePatternProps(allocator, match_props, context) catch blk: {
-                evaluated_match_props_failed = true;
-                break :blk null;
-            };
-            defer freeEvaluatedPatternProps(allocator, evaluated_match_props);
-
-            // Collect nodes to delete (need to collect first to avoid iterator invalidation)
-            var nodes_to_delete = std.ArrayList(u64).empty;
-            defer nodes_to_delete.deinit(allocator);
-
-            const candidate_ids = if (evaluated_match_props_failed)
-                try allocator.alloc(u64, 0)
-            else
-                try collectCandidateNodeIds(
-                    allocator,
-                    read_store,
-                    filter_graph,
-                    filter_tenant,
-                    match_labels,
-                    evaluated_match_props,
-                );
-            defer allocator.free(candidate_ids);
-
-            for (candidate_ids) |node_id| {
-                const node = (read_store.nodes.getOrHydratePtr(node_id) catch null) orelse continue;
-                if (!nodeMatchesPattern(node, filter_graph, filter_tenant, match_labels, evaluated_match_props)) continue;
-
-                var should_delete = true;
-
-                // CANARY: REQ=REQ-DELETE-WHERE-001; FEATURE="DeleteWhereEvaluation"; ASPECT=WhereClause; STATUS=TESTED; TEST=geodetestlab/specs/gql_data_modification_comprehensive.yml; OWNER=crud_operations; UPDATED=2026-01-09
-                if (d.where_clause) |where_expr| {
-                    if (should_delete) {
-                        var var_name: []const u8 = "n";
-                        if (match_pattern.chains.len > 0) {
-                            if (match_pattern.chains[0].head) |node_pattern| {
-                                if (node_pattern.name) |name| {
-                                    var_name = name;
-                                }
-                            }
-                        }
-                        const names = try allocator.alloc([]const u8, 1);
-                        defer allocator.free(names);
-                        names[0] = var_name;
-                        const values = try allocator.alloc(Value, 1);
-                        defer allocator.free(values);
-                        values[0] = Value{ .Node = node };
-                        const env = Env{
-                            .allocator = allocator,
-                            .names = names,
-                            .values = values,
-                        };
-                        const result = eval.evalExpr(allocator, where_expr, env) catch {
-                            should_delete = false;
-                            continue;
-                        };
-                        should_delete = switch (result) {
-                            .Bool => |b| b,
-                            .Null => false,
-                            else => false,
-                        };
-                    }
-                }
-
-                if (should_delete) {
-                    try nodes_to_delete.append(allocator, node_id);
-                }
-            }
-
-            if (!d.detach) {
-                for (nodes_to_delete.items) |node_id| {
-                    const has_outgoing = if (read_store.getOutgoingEdgeIds(node_id)) |ids| ids.len > 0 else false;
-                    const has_incoming = if (read_store.getIncomingEdgeIds(node_id)) |ids| ids.len > 0 else false;
-                    if (has_outgoing or has_incoming) {
-                        return error.NodeHasEdges;
-                    }
-                }
-            }
-
-            // Delete the collected nodes
-            for (nodes_to_delete.items) |node_id| {
-                // A4b: drop the node's fulltext postings BEFORE the store delete,
-                // while its labels are still readable (covering-index lookup is
-                // keyed by label). Runs on the executor/connection thread
-                // (executeDelete is never invoked from bulkMergeNode / worker
-                // threads — verified). Cheap-exits when no FTS index covers the
-                // labels. Graph passed explicitly from current_graph.
-                if ((read_store.nodes.getOrHydratePtr(node_id) catch null)) |node_ptr| {
-                    fts_index_ops.maintainFulltextOnWrite(allocator, current_graph, node_id, node_ptr.labels, .delete) catch |err| {
-                        log.warn("fts maintain (DELETE) failed", &.{
-                            Attr.uint("node_id", node_id),
-                            Attr.string("error", @errorName(err)),
-                        });
-                    };
-                }
-
-                if (d.detach) {
-                    // P8: Use adjacency indexes instead of full edge scan.
-                    // Collect edge IDs first since deleteEdgeNoSave mutates the
-                    // adjacency lists whose slices we are reading.
-                    var edges_to_delete = std.ArrayList(u64).empty;
-                    defer edges_to_delete.deinit(allocator);
-                    if (read_store.getOutgoingEdgeIds(node_id)) |out_ids| {
-                        for (out_ids) |eid| {
+                        if (!already) {
                             try edges_to_delete.append(allocator, eid);
                         }
                     }
-                    if (read_store.getIncomingEdgeIds(node_id)) |in_ids| {
-                        for (in_ids) |eid| {
-                            // Avoid duplicating self-loop edges already collected above
-                            var already = false;
-                            for (edges_to_delete.items) |existing| {
-                                if (existing == eid) {
-                                    already = true;
-                                    break;
-                                }
-                            }
-                            if (!already) {
-                                try edges_to_delete.append(allocator, eid);
-                            }
-                        }
-                    }
-                    for (edges_to_delete.items) |edge_id| {
-                        if (store.getEdgePtr(edge_id) != null) {
-                            store.deleteEdge(edge_id);
-                        }
+                }
+                for (edges_to_delete.items) |edge_id| {
+                    if (store.getEdgePtr(edge_id) != null) {
+                        store.deleteEdge(edge_id);
                     }
                 }
-                store.deleteNode(node_id);
-                if (store.getNodePtr(node_id) == null) {
-                    deleted_count += 1;
-                }
+            }
+            store.deleteNode(node_id);
+            if (store.getNodePtr(node_id) == null) {
+                deleted_count += 1;
             }
         }
 
-        // --- Edge deletion path (GAP #56: relationship-targeted DELETE) ---
-        if (delete_edge_vars.count() > 0) {
-            // Extract relationship type constraints from MATCH pattern hops
-            for (match_pattern.chains) |chain| {
-                for (chain.hops) |hop| {
-                    const rel_name = hop.rel.name orelse continue;
-                    if (!delete_edge_vars.contains(rel_name)) continue;
-
-                    var left_props_failed = false;
-                    const evaluated_left_props = evaluatePatternProps(allocator, hop.left.props, context) catch blk: {
-                        left_props_failed = true;
-                        break :blk null;
-                    };
-                    defer freeEvaluatedPatternProps(allocator, evaluated_left_props);
-
-                    var right_props_failed = false;
-                    const evaluated_right_props = evaluatePatternProps(allocator, hop.right.props, context) catch blk: {
-                        right_props_failed = true;
-                        break :blk null;
-                    };
-                    defer freeEvaluatedPatternProps(allocator, evaluated_right_props);
-
-                    if (left_props_failed or right_props_failed) continue;
-
-                    // Find edges matching this relationship pattern
-                    const edges_to_delete = try collectMatchingEdgeIds(
-                        allocator,
-                        read_store,
-                        filter_graph,
-                        filter_tenant,
-                        hop.left.labels,
-                        evaluated_left_props,
-                        hop.rel.types,
-                        hop.right.labels,
-                        evaluated_right_props,
-                    );
-                    defer allocator.free(edges_to_delete);
-
-                    // Delete the collected edges (with adjacency index cleanup)
-                    for (edges_to_delete) |edge_id| {
-                        if (store.getEdgePtr(edge_id) != null) {
-                            store.deleteEdge(edge_id);
-                        }
-                        if (store.getEdgePtr(edge_id) == null) {
-                            deleted_count += 1;
-                        }
-                    }
-                }
+        // GAP #56: relationship-targeted DELETE. The ids come from the same
+        // resolved match set, so a WHERE over the relationship variable is
+        // honoured here exactly as it is for nodes.
+        for (targets.edge_ids) |edge_id| {
+            // Already gone (e.g. removed as an incident edge of a DETACH'd
+            // node above) — do not double-count it.
+            if (store.getEdgePtr(edge_id) == null) continue;
+            store.deleteEdge(edge_id);
+            if (store.getEdgePtr(edge_id) == null) {
+                deleted_count += 1;
             }
         }
 

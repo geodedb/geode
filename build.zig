@@ -9365,6 +9365,18 @@ pub fn build(b: *std.Build) void {
     const gap0918_tests = b.addTest(.{ .root_module = gap0918_test_mod });
     const run_gap0918_tests = b.addRunArtifact(gap0918_tests);
     shardDep(test_step, &run_gap0918_tests.step, 0, test_shard_loads, test_shard_index);
+    // ENG-3913: `MATCH … [WHERE …] DELETE …` lost data in both directions — a
+    // $param / cross-variable predicate silently deleted nothing, while a
+    // pattern-restricted delete over-deleted (hops were never traversed) and a
+    // relationship WHERE was ignored outright.
+    const eng3913_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_eng3913_where_delete.zig"), .target = target, .optimize = optimize });
+    eng3913_test_mod.addImport("geode", root_mod);
+    const eng3913_tests = b.addTest(.{ .root_module = eng3913_test_mod });
+    const run_eng3913_tests = b.addRunArtifact(eng3913_tests);
+    shardDep(test_step, &run_eng3913_tests.step, 0, test_shard_loads, test_shard_index);
+    const eng3913_step = b.step("test-eng3913", "Run ENG-3913 MATCH…WHERE…DELETE match-set regressions");
+    eng3913_step.dependOn(&run_eng3913_tests.step);
+
     const gap0918_step = b.step("test-gap0918", "Run GAP-0918 vector index validation regressions");
     gap0918_step.dependOn(&run_gap0918_tests.step);
 
