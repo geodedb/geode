@@ -4,6 +4,7 @@ const eval = @import("../eval.zig");
 const graph_store = @import("../graph_store.zig");
 const property_codec = @import("../property_value_codec.zig");
 const property_mutation = @import("property_mutation.zig");
+const write_precheck = @import("write_precheck.zig");
 // A4b: fulltext write-maintenance hook (delete postings on node DELETE).
 const fts_index_ops = @import("fts_index_ops.zig");
 const value_types = @import("../value_types.zig");
@@ -114,6 +115,10 @@ fn applySetClausesToEdge(
 ) !void {
     const var_name = rel_var_name orelse return;
     if (set_items.len == 0) return;
+
+    // Statement-atomicity pre-pass — this clause list is all-or-nothing.
+    // CANARY: REQ=REQ-PROPERTY-WRITE-ATOMICITY; FEATURE="PropertyStorage"; ASPECT=SetPrePass; STATUS=TESTED; TEST=tests/test_property_write_atomicity.zig; OWNER=engine; UPDATED=2026-08-25
+    try write_precheck.checkSetClausesWritable(allocator, set_items, envFromContext(allocator, context), var_name, &.{});
 
     for (set_items) |set_clause| {
         switch (set_clause) {
@@ -667,6 +672,15 @@ pub fn executeCreateForBatch(allocator: std.mem.Allocator, create_pattern: ast.G
         try created_nodes.put(key_copy, entry.value_ptr.*);
     }
 
+    // Statement-atomicity pre-pass — see `executeCreate`. Same empty env the
+    // apply loops below use.
+    // CANARY: REQ=REQ-PROPERTY-WRITE-ATOMICITY; FEATURE="PropertyStorage"; ASPECT=CreatePrePass; STATUS=TESTED; TEST=tests/test_property_write_atomicity.zig; OWNER=engine; UPDATED=2026-08-25
+    try write_precheck.checkPatternWritable(
+        allocator,
+        create_pattern,
+        Env{ .allocator = allocator, .names = &.{}, .values = &.{} },
+    );
+
     // Process CREATE pattern
     for (create_pattern.chains) |chain| {
         // Handle single node creation
@@ -904,6 +918,14 @@ pub fn executeCreateForBatchWithTracking(allocator: std.mem.Allocator, create_pa
     while (iter.next()) |entry| {
         try created_nodes.put(entry.key_ptr.*, entry.value_ptr.*);
     }
+
+    // Statement-atomicity pre-pass — see `executeCreate`.
+    // CANARY: REQ=REQ-PROPERTY-WRITE-ATOMICITY; FEATURE="PropertyStorage"; ASPECT=CreatePrePass; STATUS=TESTED; TEST=tests/test_property_write_atomicity.zig; OWNER=engine; UPDATED=2026-08-25
+    try write_precheck.checkPatternWritable(
+        allocator,
+        create_pattern,
+        Env{ .allocator = allocator, .names = &.{}, .values = &.{} },
+    );
 
     // Process CREATE pattern
     for (create_pattern.chains) |chain| {
@@ -1157,6 +1179,12 @@ fn executeBatchCreateHomogeneous(
         .allocator = allocator,
     };
 
+    // Statement-atomicity pre-pass — see `executeCreate`. This path allocates
+    // ALL N node slots up front, so an unstorable property in clause k would
+    // otherwise leave k-1 populated nodes plus N-k+1 empty ones behind.
+    // CANARY: REQ=REQ-PROPERTY-WRITE-ATOMICITY; FEATURE="PropertyStorage"; ASPECT=CreatePrePass; STATUS=TESTED; TEST=tests/test_property_write_atomicity.zig; OWNER=engine; UPDATED=2026-08-25
+    try write_precheck.checkPatternWritable(allocator, create_pattern, env);
+
     // Reusable batch buffer of adapter-consumable property entries.
     // Allocated once, overwritten per clause; ba-backed so it's released
     // in one `batch_arena.deinit()` at the end.
@@ -1320,6 +1348,16 @@ pub fn executeCreateQuery(
 
     // Track total created entities for count(*) aggregation
     var total_created_count: i64 = 0;
+
+    // Statement-atomicity pre-pass — see `executeCreate`.
+    // CANARY: REQ=REQ-PROPERTY-WRITE-ATOMICITY; FEATURE="PropertyStorage"; ASPECT=CreatePrePass; STATUS=TESTED; TEST=tests/test_property_write_atomicity.zig; OWNER=engine; UPDATED=2026-08-25
+    try write_precheck.checkPatternWritable(allocator, create_pattern, Env{
+        .names = &.{},
+        .values = &.{},
+        .param_names = param_names,
+        .param_values = param_values,
+        .allocator = allocator,
+    });
 
     // Create nodes from pattern
     for (create_pattern.chains) |chain| {
@@ -1560,6 +1598,49 @@ pub fn executeCreateQuery(
             .rows = try allocator.alloc([]Value, 0),
             .flags = std.ArrayList([]const u8).empty,
         };
+    }
+
+    // Statement-atomicity pre-pass: a SET clause list is all-or-nothing, so no
+    // assignment is applied unless every assignment can be. Builds the SAME
+    // environment the apply loop below builds per clause.
+    //
+    // SCOPE: clause-list atomicity only. It cannot run before the CREATE above,
+    // because the environment these values are evaluated in IS the set of nodes
+    // the CREATE just made. So `CREATE (n:L {..}) ... SET n.x = <unstorable>`
+    // still leaves the created node behind; only a statement-scoped undo log
+    // closes that, and the pattern props themselves are already covered by the
+    // pre-pass at the top of this function.
+    // CANARY: REQ=REQ-PROPERTY-WRITE-ATOMICITY; FEATURE="PropertyStorage"; ASPECT=SetPrePass; STATUS=TESTED; TEST=tests/test_property_write_atomicity.zig; OWNER=engine; UPDATED=2026-08-25
+    if (q.set_clauses.len > 0) {
+        var pc_names = std.ArrayList([]const u8).empty;
+        defer pc_names.deinit(allocator);
+        var pc_values = std.ArrayList(Value).empty;
+        defer pc_values.deinit(allocator);
+
+        if (q.with_clause != null) {
+            if (result.rows.len > 0) {
+                for (result.columns, 0..) |col_name, idx| {
+                    try pc_names.append(allocator, col_name);
+                    try pc_values.append(allocator, result.rows[0][idx]);
+                }
+            }
+        } else {
+            var pc_iter = created_nodes.iterator();
+            while (pc_iter.next()) |entry| {
+                if ((store.nodes.getOrHydratePtr(entry.value_ptr.*) catch null)) |n| {
+                    try pc_names.append(allocator, entry.key_ptr.*);
+                    try pc_values.append(allocator, Value{ .Node = n });
+                }
+            }
+        }
+
+        try write_precheck.checkSetClausesWritable(allocator, q.set_clauses, Env{
+            .names = pc_names.items,
+            .values = pc_values.items,
+            .param_names = param_names,
+            .param_values = param_values,
+            .allocator = allocator,
+        }, null, &.{});
     }
 
     // Apply SET clauses if present
@@ -2320,6 +2401,15 @@ pub fn executeCreate(allocator: std.mem.Allocator, c: ast.CreateStatement, curre
     }
     errdefer if (stmt_txn_open) stmt_txn.abort();
 
+    // Statement-atomicity pre-pass: refuse an unstorable property entry
+    // ANYWHERE in the pattern before the first node/edge is created. GAP-0930
+    // already pre-evaluates each chain's property expressions for the same
+    // reason (a mid-property eval error must not commit an orphan); this
+    // extends that guarantee across the WHOLE statement and to values that
+    // evaluate fine but the storage layer will refuse.
+    // CANARY: REQ=REQ-PROPERTY-WRITE-ATOMICITY; FEATURE="PropertyStorage"; ASPECT=CreatePrePass; STATUS=TESTED; TEST=tests/test_property_write_atomicity.zig; OWNER=engine; UPDATED=2026-08-25
+    try write_precheck.checkPatternWritable(allocator, c.pattern, envFromContext(allocator, context));
+
     // Track created nodes by variable name
     var created_nodes = std.StringHashMap(u64).init(allocator);
     defer created_nodes.deinit();
@@ -2594,6 +2684,14 @@ pub fn executeInsert(allocator: std.mem.Allocator, ins: ast.InsertStatement, cur
     var created_nodes = std.StringHashMap(u64).init(allocator);
     defer created_nodes.deinit();
 
+    // Statement-atomicity pre-pass — see `executeCreate`.
+    // CANARY: REQ=REQ-PROPERTY-WRITE-ATOMICITY; FEATURE="PropertyStorage"; ASPECT=InsertPrePass; STATUS=TESTED; TEST=tests/test_property_write_atomicity.zig; OWNER=engine; UPDATED=2026-08-25
+    try write_precheck.checkPatternWritable(
+        allocator,
+        ins.pattern,
+        Env{ .allocator = allocator, .names = &.{}, .values = &.{} },
+    );
+
     // Create nodes from pattern
     for (ins.pattern.chains) |chain| {
         // Handle single node creation
@@ -2802,6 +2900,11 @@ fn resolveMergeSetProps(
                     return error.ClusterWriteNotReplicable;
                 const value = eval.evalExpr(allocator, prop.value, envFromContext(allocator, context)) catch
                     return error.ClusterWriteNotReplicable;
+                // Statement-atomicity pre-pass: refuse an unstorable entry
+                // before the leader PROPOSES it, rather than letting every
+                // follower fail half-way through applying it.
+                // CANARY: REQ=REQ-PROPERTY-WRITE-ATOMICITY; FEATURE="PropertyStorage"; ASPECT=ClusterMergePrePass; STATUS=IMPL; OWNER=engine; UPDATED=2026-08-25
+                try write_precheck.checkPropertyWritable(allocator, &.{}, prop.target.property, value);
                 const pv = clusterPropValue(value) orelse return error.ClusterWriteNotReplicable;
                 try out.append(allocator, .{ .key = prop.target.property, .value = pv });
             },
@@ -3303,6 +3406,20 @@ pub fn executeMerge(allocator: std.mem.Allocator, m: ast.MergeStatement, current
         }
     }
     errdefer if (stmt_txn_open) stmt_txn.abort();
+
+    // Statement-atomicity pre-pass — see `executeCreate`. MERGE is the shape
+    // that hurt most: `MERGE (n:L {k}) ON CREATE SET n.big = ...` minted the
+    // node, then failed the SET, leaving a node the caller never asked for and
+    // which the next MERGE of the same key silently adopts. Cover the pattern
+    // props of every chain plus BOTH clause lists (the parser duplicates a bare
+    // SET into both, so validating both is exact for all three SET forms).
+    // CANARY: REQ=REQ-PROPERTY-WRITE-ATOMICITY; FEATURE="PropertyStorage"; ASPECT=MergePrePass; STATUS=TESTED; TEST=tests/test_property_write_atomicity.zig; OWNER=engine; UPDATED=2026-08-25
+    {
+        const precheck_env = envFromContext(allocator, context);
+        try write_precheck.checkPatternWritable(allocator, m.pattern, precheck_env);
+        try write_precheck.checkSetClausesWritable(allocator, m.on_create, precheck_env, null, &.{});
+        try write_precheck.checkSetClausesWritable(allocator, m.on_match, precheck_env, null, &.{});
+    }
 
     // MERGE is like a CREATE but checks if the pattern already exists.
     // ENG-3903: EVERY chain of the pattern runs, in clause order, and the node
@@ -3834,6 +3951,9 @@ fn clusterReplicateMatchSet(
                 .Property => |prop| {
                     const val = eval.evalExpr(allocator, prop.value, env) catch
                         return error.ClusterWriteNotReplicable;
+                    // Statement-atomicity pre-pass: refuse before PROPOSING.
+                    // CANARY: REQ=REQ-PROPERTY-WRITE-ATOMICITY; FEATURE="PropertyStorage"; ASPECT=ClusterSetPrePass; STATUS=IMPL; OWNER=engine; UPDATED=2026-08-25
+                    try write_precheck.checkPropertyWritable(allocator, &.{}, prop.target.property, val);
                     const pv = clusterPropValue(val) orelse return error.ClusterWriteNotReplicable;
                     try set_props.append(allocator, .{ .key = prop.target.property, .value = pv });
                 },

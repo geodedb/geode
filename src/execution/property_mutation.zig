@@ -327,6 +327,17 @@ pub fn setNodePropertyFromValue(
     };
     defer property_codec.freePropertyValue(allocator, prop_value);
 
+    // Property-write atomicity, defence in depth: the statement-level pre-pass
+    // (execution/write_precheck.zig) is what actually makes a statement
+    // all-or-nothing, but this is the single chokepoint every node property
+    // write passes through, so refusing an unstorable entry here too keeps a
+    // future write path that forgets its pre-pass from writing a partial
+    // statement. Post-FLE, so the encrypted size is what gets measured.
+    // CANARY: REQ=REQ-PROPERTY-WRITE-ATOMICITY; FEATURE="PropertyStorage"; ASPECT=WriteChokepoint; STATUS=TESTED; TEST=tests/test_property_write_atomicity.zig; OWNER=engine; UPDATED=2026-08-25
+    if (graph_store.getGlobalAdapter()) |adapter| {
+        try adapter.checkPropertyEntryWritable(key, prop_value);
+    }
+
     try store.setNodeProperty(node_id, key, prop_value);
     if (labels.len > 0) rebuildAdvancedIndexesForProperty(store, labels[0], key);
 
@@ -385,6 +396,12 @@ pub fn setEdgePropertyFromValue(
         else => try coercePropertyValue(allocator, value),
     };
     defer property_codec.freePropertyValue(allocator, prop_value);
+
+    // Property-write atomicity, defence in depth — see setNodePropertyFromValue.
+    // CANARY: REQ=REQ-PROPERTY-WRITE-ATOMICITY; FEATURE="PropertyStorage"; ASPECT=WriteChokepoint; STATUS=TESTED; TEST=tests/test_property_write_atomicity.zig; OWNER=engine; UPDATED=2026-08-25
+    if (graph_store.getGlobalAdapter()) |adapter| {
+        try adapter.checkPropertyEntryWritable(key, prop_value);
+    }
 
     try store.setEdgeProperty(edge_id, key, prop_value);
     rebuildAdvancedIndexesForProperty(store, edge_type, key);

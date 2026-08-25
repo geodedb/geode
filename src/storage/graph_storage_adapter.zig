@@ -1433,6 +1433,41 @@ pub fn mapPropertyEntryError(err: anyerror, key: []const u8) anyerror {
     return err;
 }
 
+/// Largest property KEY the storage layer accepts: `prop_store.putPropertyImpl`
+/// refuses `key.len > maxInt(u16)` outright (`error.PropertyKeyTooLong`).
+pub const MAX_PROPERTY_KEY_BYTES: usize = std.math.maxInt(u16);
+
+/// Statement-atomicity pre-pass predicate: would the storage layer accept this
+/// (key, value) entry?
+///
+/// A write statement has NO rollback under autocommit — the per-statement engine
+/// txn is an fsync-batching device pinned to one shard, and the in-memory
+/// `GraphStore` mirror is mutated unconditionally — so a property refused
+/// half-way through a CREATE / MERGE / SET leaves the half that already landed.
+/// The remedy is to refuse the whole statement BEFORE its first store mutation,
+/// which requires knowing the storage layer's acceptance rule up front. This is
+/// that rule, mirrored from `graph-storage/src/prop_store.zig:putPropertyImpl`:
+///
+///   * a key above `maxInt(u16)` is refused as `error.PropertyKeyTooLong`;
+///   * an encoded value above `GraphConfig.max_property_value_bytes` (the
+///     caller passes the graph's live cap — never a hardcoded constant) is
+///     refused as `error.PropertyValueTooLarge`.
+///
+/// It is deliberately CONSERVATIVE: it must never refuse an entry the storage
+/// layer would have accepted. Since graph-storage v0.4.0 an entry too large for
+/// an inline property page SPILLS to a VarStore overflow chain instead of being
+/// refused, so the per-page budget is no longer a ceiling and is not checked
+/// here. The one residual it does not model is the dependency's secondary
+/// key check (`2 + key.len + OVERFLOW_STUB_SIZE > entry_budget`, i.e. a key of
+/// roughly page_size bytes), whose inputs are private to the dependency; such a
+/// key still fails at the store, mid-statement.
+///
+/// CANARY: REQ=REQ-PROPERTY-WRITE-ATOMICITY; FEATURE="PropertyStorage"; ASPECT=EntryFitsPredicate; STATUS=TESTED; TEST=tests/test_property_write_atomicity.zig; OWNER=engine; UPDATED=2026-08-25
+pub fn checkPropertyEntryFits(key: []const u8, value: gs.PropertyValue, max_value_bytes: u32) !void {
+    if (key.len > MAX_PROPERTY_KEY_BYTES) return error.PropertyKeyTooLong;
+    if (gs.property.encodedSize(value) > max_value_bytes) return error.PropertyValueTooLarge;
+}
+
 fn freeTemporaryStorageProperty(allocator: Allocator, val: gs.PropertyValue) void {
     switch (val) {
         .ext => |ext| allocator.free(ext.data),
@@ -3395,6 +3430,14 @@ pub const StorageAdapter = struct {
     ) !u64 {
         _ = txn_id_opt; // reserved for future extensions; thread-local is source of truth.
 
+        // Statement-atomicity pre-pass. This path SKIPS the undo log by design
+        // and creates the in-memory node before `setNodePropertiesBatch` can
+        // fail, so a refused property left a PHANTOM row — present in memory,
+        // gone after restart. Refuse the whole insert before anything is
+        // created.
+        // CANARY: REQ=REQ-PROPERTY-WRITE-ATOMICITY; FEATURE="PropertyStorage"; ASPECT=BulkInsertPrePass; STATUS=TESTED; TEST=tests/test_property_write_atomicity.zig; OWNER=engine; UPDATED=2026-08-25
+        for (props) |kv| try self.checkPropertyEntryWritable(kv.key, kv.value);
+
         // Match the executor's R8/R9 fsync batching: if a session or
         // per-statement engine txn is already active on this thread for
         // `graph_name`, the adapter's `createNode` / `setNodeProperty`
@@ -3524,6 +3567,10 @@ pub const StorageAdapter = struct {
         props: []const PropKV,
         request_tenant: []const u8,
     ) !u64 {
+        // Statement-atomicity pre-pass — see `bulkInsertNode`.
+        // CANARY: REQ=REQ-PROPERTY-WRITE-ATOMICITY; FEATURE="PropertyStorage"; ASPECT=BulkInsertPrePass; STATUS=TESTED; TEST=tests/test_property_write_atomicity.zig; OWNER=engine; UPDATED=2026-08-25
+        for (props) |kv| try self.checkPropertyEntryWritable(kv.key, kv.value);
+
         const mg = try self.getOrCreateGraph(graph_name);
         // H4: a live write must never mutate an unbuilt (deferred) exact index.
         // Build it FIRST (before any node/index write below) so this insert's
@@ -4214,6 +4261,11 @@ pub const StorageAdapter = struct {
         apply_on_match: bool,
         request_tenant: []const u8,
     ) !u64 {
+        // Statement-atomicity pre-pass — see `bulkInsertNode`.
+        // CANARY: REQ=REQ-PROPERTY-WRITE-ATOMICITY; FEATURE="PropertyStorage"; ASPECT=BulkMergePrePass; STATUS=TESTED; TEST=tests/test_property_write_atomicity.zig; OWNER=engine; UPDATED=2026-08-25
+        try self.checkPropertyEntryWritable(merge_key, merge_value);
+        for (on_create_props) |kv| try self.checkPropertyEntryWritable(kv.key, kv.value);
+
         // GAP-0900 Layer-3 (Fix 2): in lean-index mode the merge key must stay
         // indexed so dedup + edge-endpoint resolution still find this node by
         // its key. Registering is a no-op when lean mode is off. Idempotent.
@@ -4362,6 +4414,11 @@ pub const StorageAdapter = struct {
         request_tenant: []const u8,
     ) !u64 {
         if (merge_props.len == 0) return error.InvalidMergePattern;
+
+        // Statement-atomicity pre-pass — see `bulkInsertNode`.
+        // CANARY: REQ=REQ-PROPERTY-WRITE-ATOMICITY; FEATURE="PropertyStorage"; ASPECT=BulkMergePrePass; STATUS=TESTED; TEST=tests/test_property_write_atomicity.zig; OWNER=engine; UPDATED=2026-08-25
+        for (merge_props) |kv| try self.checkPropertyEntryWritable(kv.key, kv.value);
+        for (on_create_props) |kv| try self.checkPropertyEntryWritable(kv.key, kv.value);
 
         // GAP-0900 Layer-3 (Fix 2): keep all multi-prop MERGE keys indexed in
         // lean mode (no-op when off). Idempotent.
@@ -5247,6 +5304,32 @@ pub const StorageAdapter = struct {
     // Property operations
     // ------------------------------------------------------------------
 
+    /// The per-value sanity cap that applies to every graph this adapter
+    /// serves. `openGraphLocked` / `createGraphLocked` hand `self.config`
+    /// straight to the engine (only `data_dir` / `sync_mode` are adjusted), and
+    /// `engine_persist` installs `cfg.max_property_value_bytes` on the shard's
+    /// prop-store, so this is the live cap without needing a graph lookup or
+    /// the adapter mutex on a write-path pre-pass.
+    pub fn maxPropertyValueBytes(self: *StorageAdapter) u32 {
+        return self.config.max_property_value_bytes;
+    }
+
+    /// Statement-atomicity pre-pass over ONE geode-level property entry: refuse
+    /// an entry the storage layer would refuse, BEFORE the statement's first
+    /// store mutation. See `checkPropertyEntryFits`.
+    ///
+    /// CANARY: REQ=REQ-PROPERTY-WRITE-ATOMICITY; FEATURE="PropertyStorage"; ASPECT=EntryFitsPredicate; STATUS=TESTED; TEST=tests/test_property_write_atomicity.zig; OWNER=engine; UPDATED=2026-08-25
+    pub fn checkPropertyEntryWritable(
+        self: *StorageAdapter,
+        key: []const u8,
+        value: graph_store.PropertyValue,
+    ) !void {
+        if (key.len > MAX_PROPERTY_KEY_BYTES) return error.PropertyKeyTooLong;
+        const storage_val = try toStorageProperty(self.allocator, value);
+        defer freeTemporaryStorageProperty(self.allocator, storage_val);
+        try checkPropertyEntryFits(key, storage_val, self.maxPropertyValueBytes());
+    }
+
     /// Set a property on a node. The value is converted from a geode
     /// `PropertyValue` to the storage engine's representation.
     ///
@@ -5276,12 +5359,6 @@ pub const StorageAdapter = struct {
         const storage_val = try toStorageProperty(self.allocator, value);
         defer freeTemporaryStorageProperty(self.allocator, storage_val);
 
-        if (old_value) |existing| {
-            for (label_ids) |label_id| {
-                removeIndexedNodeProperty(mg, label_id, node_id, key, existing);
-            }
-        }
-
         // R7/R8 (2026-04-22): batch putProperty + putNode into one txn on the
         // node's shard. Join the statement txn's local txn if it is on the
         // same shard; otherwise open a fresh shard-local txn.
@@ -5305,6 +5382,18 @@ pub const StorageAdapter = struct {
 
         if (own_txn) try node_shard.commitTxn(local_txn);
 
+        // RC-4: the OLD value's exact-index posting is dropped only once the
+        // durable write has SUCCEEDED. Dropping it up-front (as this used to,
+        // before `putPropertyTxn`) left DURABLE index/value divergence on ANY
+        // failure — the node kept its old value but became invisible to
+        // `MATCH (n:L {k: <old>})`, and the divergence survived restart. Every
+        // fallible step now precedes both index mutations, so the index can
+        // only ever move from "old value" to "new value", never to neither.
+        if (old_value) |existing| {
+            for (label_ids) |label_id| {
+                removeIndexedNodeProperty(mg, label_id, node_id, key, existing);
+            }
+        }
         for (label_ids) |label_id| {
             try addIndexedNodeProperty(mg, label_id, node_id, key, storage_val);
         }
@@ -5314,6 +5403,16 @@ pub const StorageAdapter = struct {
     pub const BatchPropertyEntry = struct {
         key: []const u8,
         value: ?graph_store.PropertyValue, // null means remove (tombstone)
+    };
+
+    /// RC-4 bookkeeping for `setNodePropertiesBatch`: one deferred exact-index
+    /// transition (drop `old_value`'s posting, add `new_value`'s) held back
+    /// until the whole batch has committed. Both values are owned by the
+    /// pending list and freed with it.
+    const PendingIndexUpdate = struct {
+        key: []const u8,
+        old_value: ?gs.PropertyValue,
+        new_value: gs.PropertyValue,
     };
 
     /// Set or remove multiple properties on a node under a single mutex
@@ -5346,44 +5445,58 @@ pub const StorageAdapter = struct {
             node_shard.abortTxn(local_txn) catch {};
         };
 
+        // RC-4: every exact-index mutation of the batch is DEFERRED until the
+        // last fallible step has succeeded. The old shape mutated the index
+        // per-entry, up-front, so an entry that failed part-way through a batch
+        // left the index describing a value the aborted txn never wrote — the
+        // node stayed findable only by a value it does not hold, durably and
+        // across restart. Nothing here mutates the index until `commitTxn`.
+        var pending = std.ArrayList(PendingIndexUpdate).empty;
+        defer {
+            for (pending.items) |p| {
+                if (p.old_value) |val| freeOwnedStorageProperty(self.allocator, val);
+                freeTemporaryStorageProperty(self.allocator, p.new_value);
+            }
+            pending.deinit(self.allocator);
+        }
+
         for (entries) |entry| {
             // Read via the node's shard — see addNodePropertiesForLabels.
             const old_value = if (rec.prop_head != 0) try node_shard.getProperty(rec.prop_head, entry.key, self.allocator) else null;
-            defer {
-                if (old_value) |val| freeOwnedStorageProperty(self.allocator, val);
-            }
+            errdefer if (old_value) |val| freeOwnedStorageProperty(self.allocator, val);
 
-            if (entry.value) |val| {
-                const storage_val = try toStorageProperty(self.allocator, val);
-                defer freeTemporaryStorageProperty(self.allocator, storage_val);
-                if (old_value) |existing| {
-                    for (label_ids) |label_id| {
-                        removeIndexedNodeProperty(mg, label_id, node_id, entry.key, existing);
-                    }
-                }
-                const new_prop_head = node_shard.putPropertyTxn(rec.prop_head, entry.key, storage_val, local_txn) catch |err|
-                    return mapPropertyEntryError(err, entry.key);
-                rec.prop_head = new_prop_head;
-                for (label_ids) |label_id| {
-                    try addIndexedNodeProperty(mg, label_id, node_id, entry.key, storage_val);
-                }
-            } else {
-                if (old_value) |existing| {
-                    for (label_ids) |label_id| {
-                        removeIndexedNodeProperty(mg, label_id, node_id, entry.key, existing);
-                    }
-                }
-                const new_prop_head = try node_shard.putPropertyTxn(rec.prop_head, entry.key, .null, local_txn);
-                rec.prop_head = new_prop_head;
-                for (label_ids) |label_id| {
-                    try addIndexedNodeProperty(mg, label_id, node_id, entry.key, .null);
-                }
-            }
+            // A null entry is a tombstone: same write, `.null` as the value.
+            const storage_val: gs.PropertyValue = if (entry.value) |val|
+                try toStorageProperty(self.allocator, val)
+            else
+                .null;
+            errdefer freeTemporaryStorageProperty(self.allocator, storage_val);
+
+            const new_prop_head = node_shard.putPropertyTxn(rec.prop_head, entry.key, storage_val, local_txn) catch |err|
+                return mapPropertyEntryError(err, entry.key);
+            rec.prop_head = new_prop_head;
+
+            try pending.append(self.allocator, .{
+                .key = entry.key,
+                .old_value = old_value,
+                .new_value = storage_val,
+            });
         }
 
         // Write the node record once after all property mutations.
         try node_shard.putNodeTxn(node_id, rec, local_txn);
         if (own_txn) try node_shard.commitTxn(local_txn);
+
+        for (pending.items) |p| {
+            if (p.old_value) |existing| {
+                for (label_ids) |label_id| {
+                    removeIndexedNodeProperty(mg, label_id, node_id, p.key, existing);
+                }
+            }
+            for (label_ids) |label_id| {
+                try addIndexedNodeProperty(mg, label_id, node_id, p.key, p.new_value);
+            }
+        }
     }
 
     /// Remove a property from a node by writing a null tombstone.
@@ -5405,12 +5518,6 @@ pub const StorageAdapter = struct {
             if (old_value) |val| freeOwnedStorageProperty(self.allocator, val);
         }
 
-        if (old_value) |existing| {
-            for (label_ids) |label_id| {
-                removeIndexedNodeProperty(mg, label_id, node_id, key, existing);
-            }
-        }
-
         // R7: batch putProperty + putNode into one txn on the node's shard.
         const txn = try node_shard.beginTxn();
         // error-policy: A — best-effort rollback on an already-failing path.
@@ -5430,6 +5537,14 @@ pub const StorageAdapter = struct {
         // through node_shard / from_shard directly.
         try node_shard.commitTxn(txn);
 
+        // RC-4: drop the old posting only once the tombstone is durable —
+        // a failure before this point must leave the index describing the
+        // value the node still holds.
+        if (old_value) |existing| {
+            for (label_ids) |label_id| {
+                removeIndexedNodeProperty(mg, label_id, node_id, key, existing);
+            }
+        }
         for (label_ids) |label_id| {
             try addIndexedNodeProperty(mg, label_id, node_id, key, .null);
         }

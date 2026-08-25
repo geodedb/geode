@@ -97,6 +97,7 @@ const write_budget = @import("../write_budget.zig");
 // scope-free callers pay a threadlocal load + branch per row at most.
 const read_budget = @import("../read_budget.zig");
 const property_mutation = @import("property_mutation.zig");
+const write_precheck = @import("write_precheck.zig");
 const value_types = @import("../value_types.zig");
 const distinct_set = @import("distinct_set.zig");
 const property_value_codec = @import("../property_value_codec.zig");
@@ -1776,6 +1777,15 @@ pub fn pointWriteFastPath(
     // EXCLUSIVE lock is held on the server path, same as the store APIs
     // require). Unresolvable -> legacy, still before any write.
     const node_ptr = (store.nodes.getOrHydratePtr(node_id) catch null) orelse return null;
+
+    // Statement-atomicity pre-pass: the clause list is all-or-nothing, so no
+    // assignment lands unless every assignment can. Values here are literals
+    // (gated above), so this is the same value the apply loop writes.
+    // CANARY: REQ=REQ-PROPERTY-WRITE-ATOMICITY; FEATURE="PropertyStorage"; ASPECT=SetPrePass; STATUS=TESTED; TEST=tests/test_property_write_atomicity.zig; OWNER=engine; UPDATED=2026-08-25
+    for (q.set_clauses) |sc| {
+        const prop = sc.Property; // gated above
+        try write_precheck.checkPropertyWritable(allocator, node_ptr.labels, prop.target.property, litToValue(extractLiteral(prop.value).?));
+    }
 
     // --- Apply writes via the SAME helpers the legacy loop uses (durable
     // adapter write + index/FLE/FTS/WAL side effects), in clause order. ---
@@ -5902,6 +5912,11 @@ fn executeMultiChainRelationshipMatch(allocator: std.mem.Allocator, q: ast.Query
         // write-carrying chained MATCH reported a match count and mutated
         // nothing. Mutations are scoped to the variables actually bound by the
         // (now correctly filtered) pattern.
+        // Statement-atomicity pre-pass — see `executeCreate`. Same env, so the
+        // values inspected here are the values the loop below writes.
+        // CANARY: REQ=REQ-PROPERTY-WRITE-ATOMICITY; FEATURE="PropertyStorage"; ASPECT=SetPrePass; STATUS=TESTED; TEST=tests/test_property_write_atomicity.zig; OWNER=engine; UPDATED=2026-08-25
+        try write_precheck.checkSetClausesWritable(allocator, q.set_clauses, env, null, &.{});
+
         for (q.set_clauses) |set_clause| {
             switch (set_clause) {
                 .Property => |prop| {
@@ -8096,6 +8111,10 @@ fn executeSingleHopEdgeTraversal(
                 }
             }
 
+            // Statement-atomicity pre-pass — see `executeCreate`.
+            // CANARY: REQ=REQ-PROPERTY-WRITE-ATOMICITY; FEATURE="PropertyStorage"; ASPECT=SetPrePass; STATUS=TESTED; TEST=tests/test_property_write_atomicity.zig; OWNER=engine; UPDATED=2026-08-25
+            try write_precheck.checkSetClausesWritable(allocator, set_clauses, env, null, &.{});
+
             // Apply SET clauses if present
             for (set_clauses) |set_clause| {
                 switch (set_clause) {
@@ -9987,6 +10006,10 @@ pub fn executeMatchQueryImpl(allocator: std.mem.Allocator, q: ast.Query, param_n
                     }
                 }
 
+                // Statement-atomicity pre-pass — see `executeCreate`.
+                // CANARY: REQ=REQ-PROPERTY-WRITE-ATOMICITY; FEATURE="PropertyStorage"; ASPECT=SetPrePass; STATUS=TESTED; TEST=tests/test_property_write_atomicity.zig; OWNER=engine; UPDATED=2026-08-25
+                try write_precheck.checkSetClausesWritable(allocator, q.set_clauses, env, match_variable, node.labels);
+
                 // Apply SET clauses if present
                 for (q.set_clauses) |set_clause| {
                     switch (set_clause) {
@@ -11051,6 +11074,10 @@ pub fn executeMatchQueryImpl(allocator: std.mem.Allocator, q: ast.Query, param_n
                         continue;
                     }
                 }
+
+                // Statement-atomicity pre-pass — see `executeCreate`.
+                // CANARY: REQ=REQ-PROPERTY-WRITE-ATOMICITY; FEATURE="PropertyStorage"; ASPECT=SetPrePass; STATUS=TESTED; TEST=tests/test_property_write_atomicity.zig; OWNER=engine; UPDATED=2026-08-25
+                try write_precheck.checkSetClausesWritable(allocator, q.set_clauses, env, match_variable, node.labels);
 
                 // Apply SET clauses if present
                 for (q.set_clauses) |set_clause| {

@@ -51,6 +51,7 @@ const gs = @import("graph_storage");
 const execution = geode.execution;
 const graph_store = geode.graph_store;
 const adapter_mod = geode.graph_storage_adapter;
+const index_manager = geode.index_manager;
 const StorageAdapter = adapter_mod.StorageAdapter;
 const Value = geode.value_types.Value;
 
@@ -99,6 +100,10 @@ const Harness = struct {
     fn init(allocator: std.mem.Allocator) !Harness {
         execution.cleanupCatalogInstance();
         graph_store.deinitGlobalStore();
+        // The index manager is a PROCESS global that `deinitGlobalStore` does
+        // not touch, so an index created by an earlier test would outlive its
+        // store and be walked against freed memory here.
+        index_manager.cleanupGlobalIndexManager();
 
         var tmp = std.testing.tmpDir(.{});
         errdefer tmp.cleanup();
@@ -124,6 +129,7 @@ const Harness = struct {
         self.session.deinit();
         execution.cleanupCatalogInstance();
         graph_store.deinitGlobalStore();
+        index_manager.cleanupGlobalIndexManager();
         graph_store.setDataDirOverride(self.allocator, null);
         self.allocator.free(self.data_dir);
         self.arena.deinit();
@@ -196,10 +202,11 @@ const Harness = struct {
         };
     }
 
-    /// Single scalar of a single-row/single-column query.
+    /// Single scalar of a single-row/single-column query. The result is NOT
+    /// deinit'd: the returned `Value` may point into it (a `.Str` does), and
+    /// everything here is arena-backed, so the harness teardown reclaims it.
     fn scalar(self: *Harness, query: []const u8) !Value {
-        var r = try self.exec(query);
-        defer r.deinit(self.arena.allocator());
+        const r = try self.exec(query);
         if (r.rows.len != 1) return error.ExpectedOneRow;
         if (r.rows[0].len != 1) return error.ExpectedOneColumn;
         return r.rows[0][0];
@@ -510,6 +517,67 @@ test "atomicity (f) control: large-but-under-cap values still store and survive 
         const len = try h.scalar("MATCH (n:AtomF) RETURN size(n.blob) AS s");
         try testing.expectEqual(@as(i64, @intCast(UNDER_CAP_LEN)), len.Int);
     }
+}
+
+// ---------------------------------------------------------------------------
+// (i) The same atomicity contract for a NON-SIZE mid-statement refusal: a
+//     vector whose dimension disagrees with the HNSW index covering the
+//     property (GAP-0918). That check used to fire at the write chokepoint —
+//     i.e. after the node and its earlier properties already existed — so a
+//     refused CREATE left an orphan carrying its `tag`. This is also the only
+//     shape of this defect class reachable through the CLI, so it is what the
+//     harness spec property_write_atomicity.yml drives end to end.
+// ---------------------------------------------------------------------------
+test "atomicity (i): a CREATE refused for vector dimension leaves no partial node" {
+    var h = try Harness.init(testing.allocator);
+    defer h.deinit();
+
+    try h.run("CREATE INDEX atom_vec_idx ON AtomI (emb) USING HNSW WITH (metric = 'l2')");
+    // Establishes the index dimension at 4.
+    try h.run("CREATE (:AtomI {id: 1, emb: vectorf32('[1.0, 0.0, 0.0, 0.0]')})");
+
+    // `tag` is written BEFORE `emb`, so a chokepoint-only refusal commits it.
+    try testing.expectError(
+        error.VectorDimensionMismatch,
+        h.exec("CREATE (:AtomI {id: 2, tag: 'partial', emb: vectorf32('[1.0, 2.0, 3.0]')})"),
+    );
+
+    try testing.expectEqual(@as(i64, 1), try h.countLabel("AtomI"));
+    {
+        const c = try h.scalar("MATCH (n:AtomI {id: 2}) RETURN count(n) AS c");
+        if (c.Int != 0) {
+            std.debug.print(
+                "\n[atomicity] a CREATE refused for VectorDimensionMismatch left {d} partial :AtomI node(s)\n" ++
+                    "            carrying the properties written before the refused one.\n",
+                .{c.Int},
+            );
+            return error.PartialWritePersisted;
+        }
+    }
+
+    try h.restart();
+    try testing.expectEqual(@as(i64, 1), try h.countLabel("AtomI"));
+}
+
+// ---------------------------------------------------------------------------
+// (j) The multi-assignment SET counterpart of (i): a single-variable
+//     `MATCH … SET a = .., b = ..` where the LAST assignment is refused for
+//     vector dimension must leave the earlier one unapplied.
+// ---------------------------------------------------------------------------
+test "atomicity (j): a multi-assignment SET refused for vector dimension applies nothing" {
+    var h = try Harness.init(testing.allocator);
+    defer h.deinit();
+
+    try h.run("CREATE INDEX atom_vec_idx_j ON AtomJ (emb) USING HNSW WITH (metric = 'l2')");
+    try h.run("CREATE (:AtomJ {id: 1, tag: 'keep', emb: vectorf32('[1.0, 0.0, 0.0, 0.0]')})");
+
+    try testing.expectError(
+        error.VectorDimensionMismatch,
+        h.exec("MATCH (n:AtomJ {id: 1}) SET n.tag = 'changed', n.emb = vectorf32('[9.0, 9.0]')"),
+    );
+
+    const tag = try h.scalar("MATCH (n:AtomJ) RETURN n.tag AS t");
+    try testing.expectEqualStrings("keep", tag.Str);
 }
 
 // ---------------------------------------------------------------------------

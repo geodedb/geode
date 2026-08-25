@@ -507,6 +507,21 @@ fn executeBulkSimpleCreate(
         kvs[i] = .{ .key = prop.key, .value = pv };
     }
 
+    // Statement-atomicity pre-pass. `bulkInsertNode` runs the same check at the
+    // chokepoint, but doing it here as well means an unstorable value never
+    // reaches the group-commit coordinator's queue — the caller gets a clean
+    // per-request error instead of a batch-scoped one.
+    // CANARY: REQ=REQ-PROPERTY-WRITE-ATOMICITY; FEATURE="PropertyStorage"; ASPECT=BulkInsertPrePass; STATUS=TESTED; TEST=tests/test_property_write_atomicity.zig; OWNER=transport; UPDATED=2026-08-25
+    if (graph_store.getGlobalAdapter()) |precheck_adapter| {
+        for (kvs) |kv| {
+            precheck_adapter.checkPropertyEntryWritable(kv.key, kv.value) catch |err| {
+                const info = proto_util.mapError(err);
+                try sendExecuteError(gpa, stream, info.code, info.message, &.{}, &.{});
+                return;
+            };
+        }
+    }
+
     var mut_sample = mutation_timing.begin();
 
     // Task 19 (2026-04-23): group-commit coordinator path.
