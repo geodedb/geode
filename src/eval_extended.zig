@@ -60,6 +60,21 @@ fn getAdapterRegistry(allocator: std.mem.Allocator) !*extf.Registry {
 // value union stores nanos), so the conversion is explicit.
 const NANOS_PER_MICRO: i128 = 1_000;
 
+// CANARY: REQ=REQ-EXTVALUE-BRIDGE-INTERVAL-JSON; FEATURE="ExtendedBuiltins"; ASPECT=IntervalAndJsonArgumentBridge; STATUS=TESTED; TEST=tests/test_date_part_exact.zig; OWNER=eval; UPDATED=2026-08-25
+// EXTVALUE-BRIDGE: the temporal fix above reached Date/Time/Timestamp only.
+// Interval and Json stayed in the `else => Null` catch-all, so the registry's
+// three remaining Interval/Json-taking functions were unreachable from GQL for
+// their entire documented input domain:
+//
+//     RETURN duration_add(duration('PT1H'), duration('PT2H'))  -> TypeMismatch
+//     RETURN duration_sub(duration('PT3H'), duration('PT1H'))  -> TypeMismatch
+//     RETURN json_get(json('{"a": 1}'), 'a')                   -> TypeMismatch
+//
+// Microseconds per calendar day, matching src/eval/temporal_arithmetic.zig's
+// `micros_per_day`: a day in this engine's Interval is exactly 24h, so the
+// day component converts to a nanosecond length losslessly.
+const MICROS_PER_DAY: i64 = 24 * 3600 * 1_000_000;
+
 fn toBuiltin(v: ExtValue) extf.BuiltinValue {
     return switch (v) {
         .Null => .{ .Null = {} },
@@ -75,6 +90,23 @@ fn toBuiltin(v: ExtValue) extf.BuiltinValue {
         else
             .{ .Time = .{ .nanos = @intCast(@as(i128, t.micros_since_midnight) * NANOS_PER_MICRO) } },
         .Timestamp => |ts| .{ .Timestamp = .{ .nanos = @as(i128, ts.micros_since_epoch) * NANOS_PER_MICRO } },
+        // An Interval is (months, days, micros); the target `Duration` is a
+        // flat nanosecond count. Days and micros convert exactly. MONTHS DO
+        // NOT — a month is a calendar-relative length (28..31 days), which is
+        // precisely why timestampAddInterval keeps them separate — so a
+        // month-bearing interval is REFUSED here (the receiving function
+        // raises TypeMismatch on the resulting Null) rather than folded onto
+        // an invented 30-day month. That fabricated calendar is the exact
+        // defect DATE-PART-EXACT removed from date_part; it is not
+        // reintroduced here to make one more function reachable.
+        .Interval => |iv| if (iv.months != 0)
+            .{ .Null = {} }
+        else
+            .{ .Duration = .{ .nanos = (@as(i128, iv.days) * MICROS_PER_DAY + iv.micros) * NANOS_PER_MICRO } },
+        // Json is UTF-8 text on both sides — a borrowed slice, exactly like the
+        // `.Str` arm above. The receiving function owns any allocation it makes
+        // from the caller's allocator.
+        .Json => |j| .{ .Json = .{ .text = j } },
         else => .{ .Null = {} }, // unsupported pass-through (could extend)
     };
 }
@@ -89,6 +121,26 @@ fn fromBuiltin(v: extf.BuiltinValue) ExtValue {
         .Date => |d| .{ .Date = .{ .days_since_epoch = d.days } },
         .Time => |t| .{ .Time = .{ .micros_since_midnight = @intCast(@divFloor(@as(i128, t.nanos), NANOS_PER_MICRO)) } },
         .Timestamp => |ts| .{ .Timestamp = .{ .micros_since_epoch = @intCast(@divFloor(ts.nanos, NANOS_PER_MICRO)) } },
+        // A Duration comes back as a month-free Interval, re-split into whole
+        // days plus the sub-day remainder so `P1D + P1D` round-trips as `P2D`
+        // rather than degrading to `PT48H`. @divFloor keeps a negative
+        // duration on a consistent (days, micros) pair whose sum is the
+        // original length.
+        .Duration => |d| blk: {
+            // A length that does not fit datetime.Interval's i64 micros (or
+            // whose whole-day part does not fit its i32 days) has no faithful
+            // Interval; answer Null rather than a wrapped-around number.
+            const total_micros = std.math.cast(i64, @divFloor(d.nanos, NANOS_PER_MICRO)) orelse
+                break :blk .{ .Null = {} };
+            const days = std.math.cast(i32, @divFloor(total_micros, MICROS_PER_DAY)) orelse
+                break :blk .{ .Null = {} };
+            break :blk .{ .Interval = .{
+                .months = 0,
+                .days = days,
+                .micros = total_micros - @as(i64, days) * MICROS_PER_DAY,
+            } };
+        },
+        .Json => |j| .{ .Json = j.text },
         else => .{ .Null = {} },
     };
 }

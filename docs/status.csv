@@ -1127,6 +1127,8 @@ REQ-EXISTS-SUBQUERY-002,ExistsSubquery,Negated,TESTED,,,parser,2026-01-15,tests/
 REQ-EXPR-TYPE-001,ExprTypeCoverage,Types,TESTED,,,exec,2026-01-25,src/execution/graph_algorithms.zig
 REQ-EXPR-TYPE-002,ExprTypeCoverage,Types,TESTED,,,exec,2026-01-25,src/exec.zig
 REQ-EXPR-TYPE-003,ExprTypeCoverage,Types,TESTED,,,exec,2026-01-25,src/server/graph/exec.zig
+REQ-EXTVALUE-BRIDGE-INTERVAL-JSON,ExtendedBuiltins,IntervalAndJsonArgumentBridge,TESTED,,,eval,2026-08-25,src/eval_extended.zig
+REQ-EXTVALUE-BRIDGE-INTERVAL-JSON,ExtendedBuiltins,IntervalAndJsonArgumentBridge,TESTED,,,eval,2026-08-25,tests/test_date_part_exact.zig
 REQ-FED-001,Federation,QueryFederation,TESTED,,,distributed,2026-01-16,tests/test_gap_0193_batch3_comprehensive.zig
 REQ-FED-QUIC-001,FederationQUICConnection,Connection,IMPL,,,federation,2026-04-05,src/distributed/federation.zig
 REQ-FED-TLS-001,Federation TLS,Security,IMPL,,,distributed,2026-04-05,src/distributed/federation.zig

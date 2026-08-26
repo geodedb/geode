@@ -107,6 +107,12 @@ const Harness = struct {
         return execution.executeStatementWithContext(aa, parsed.program.statements[0], self.ctx);
     }
 
+    pub fn scalar(self: *Harness, query: []const u8) !Value {
+        const res = try self.exec(query);
+        if (res.rows.len == 0 or res.rows[0].len == 0) return error.NoRows;
+        return res.rows[0][0];
+    }
+
     pub fn scalarInt(self: *Harness, query: []const u8) !i64 {
         const res = try self.exec(query);
         if (res.rows.len == 0 or res.rows[0].len == 0) return error.NoRows;
@@ -257,4 +263,163 @@ test "DATE-PART-EXACT: time_part is reachable from GQL and reports exact clock c
     try testing.expectEqual(@as(i64, 23), try h.scalarInt("RETURN time_part('hour', time('23:59:59'))"));
     try testing.expectEqual(@as(i64, 59), try h.scalarInt("RETURN time_part('minute', time('23:59:59'))"));
     try testing.expectEqual(@as(i64, 59), try h.scalarInt("RETURN time_part('second', time('23:59:59'))"));
+}
+
+// ---------------------------------------------------------------------------
+// EXTVALUE-BRIDGE: the same `else => Null` catch-all, for the arms the temporal
+// fix did not reach.
+//
+// The DATE-PART-EXACT fix above taught src/eval_extended.zig's `toBuiltin` /
+// `fromBuiltin` about Date, Time and Timestamp. Interval and Json were left in
+// the catch-all, so every remaining registry function that takes one of them
+// received a NULL argument and refused it.
+//
+// VERIFIED READ-ONLY AGAINST 1459b456 BEFORE THE FIX:
+//
+//   RETURN duration_add(duration('PT1H'), duration('PT2H'))  -> error.TypeMismatch
+//   RETURN duration_sub(duration('PT3H'), duration('PT1H'))  -> error.TypeMismatch
+//   RETURN json_get(json('{"a": 1}'), 'a')                   -> error.TypeMismatch
+//
+// Those are all three of the registry's Interval/Json-taking functions
+// (src/types/extended_functions.zig `initRegistry`: uuid_v4, geobox_contains,
+// polygon_area, vector_cosine, date_part, time_part, duration_add,
+// duration_sub, json_get) — i.e. the whole remaining unreachable surface.
+//
+// CANARY: REQ=REQ-EXTVALUE-BRIDGE-INTERVAL-JSON; FEATURE="ExtendedBuiltins"; ASPECT=IntervalAndJsonArgumentBridge; STATUS=TESTED; TEST=tests/test_date_part_exact.zig; OWNER=eval; UPDATED=2026-08-25
+// ---------------------------------------------------------------------------
+
+const micros_per_day: i64 = 24 * 3600 * 1_000_000;
+
+fn intervalOf(v: Value) !struct { months: i32, days: i32, micros: i64 } {
+    const iv = switch (v) {
+        .Interval => |i| i,
+        .ExtValue => |ext| switch (ext) {
+            .Interval => |i| i,
+            else => return error.NotAnInterval,
+        },
+        else => return error.NotAnInterval,
+    };
+    return .{ .months = iv.months, .days = iv.days, .micros = iv.micros };
+}
+
+/// Total sub-month length of an interval, in microseconds. Months are NOT
+/// foldable into this (they are calendar-relative), so they are asserted
+/// separately wherever they are non-zero.
+fn intervalMicros(v: Value) !i64 {
+    const iv = try intervalOf(v);
+    return @as(i64, iv.days) * micros_per_day + iv.micros;
+}
+
+test "EXTVALUE-BRIDGE: duration_add / duration_sub are reachable and exact" {
+    var h = try Harness.init(testing.allocator);
+    defer h.deinit();
+
+    _ = try h.exec("CREATE GRAPH bridge_duration");
+    _ = try h.exec("USE GRAPH bridge_duration");
+
+    // KEY ASSERTIONS (RED before the fix: error.TypeMismatch for every one —
+    // the Interval argument crossed the bridge as NULL).
+    const one_hour: i64 = 3600 * 1_000_000;
+
+    const sum = try h.scalar("RETURN duration_add(duration('PT1H'), duration('PT2H'))");
+    try testing.expectEqual(@as(i64, 3) * one_hour, try intervalMicros(sum));
+
+    const diff = try h.scalar("RETURN duration_sub(duration('PT3H'), duration('PT1H'))");
+    try testing.expectEqual(@as(i64, 2) * one_hour, try intervalMicros(diff));
+
+    // The micros <-> nanos conversion happens on BOTH sides of the bridge, so a
+    // factor-of-1000 slip in either direction has to show up as a wrong
+    // magnitude here. (The ISO parser this engine ships accepts whole seconds
+    // only — `PT0.5S` is a ParseError — so seconds are the finest granularity a
+    // GQL-level test can construct.)
+    const seconds = try h.scalar("RETURN duration_add(duration('PT1S'), duration('PT2S'))");
+    try testing.expectEqual(@as(i64, 3_000_000), try intervalMicros(seconds));
+
+    const minutes = try h.scalar("RETURN duration_sub(duration('PT5M'), duration('PT2M'))");
+    try testing.expectEqual(@as(i64, 3) * 60 * 1_000_000, try intervalMicros(minutes));
+
+    // A negative result is a real answer, not a clamp to zero.
+    const negative = try h.scalar("RETURN duration_sub(duration('PT1H'), duration('PT3H'))");
+    try testing.expectEqual(@as(i64, -2) * one_hour, try intervalMicros(negative));
+
+    // Days are exactly 24h in this engine's Interval (see
+    // src/eval/temporal_arithmetic.zig micros_per_day), so a day-bearing
+    // interval crosses the bridge losslessly and comes back with the same
+    // total length.
+    const days = try h.scalar("RETURN duration_add(duration('P1D'), duration('P2D'))");
+    try testing.expectEqual(@as(i64, 3) * micros_per_day, try intervalMicros(days));
+
+    const mixed = try h.scalar("RETURN duration_add(duration('P1DT2H'), duration('PT3H'))");
+    try testing.expectEqual(micros_per_day + 5 * one_hour, try intervalMicros(mixed));
+
+    // The result is a first-class INTERVAL, so it composes with the temporal
+    // arithmetic the engine already had: 2024-01-01 + (P1D + P2D) is 2024-01-04.
+    try testing.expectEqual(
+        @as(i64, 4),
+        try h.scalarInt("RETURN date_part('day', date('2024-01-01') + duration_add(duration('P1D'), duration('P2D')))"),
+    );
+
+    // A MONTH is not a fixed number of nanoseconds, and this bridge's target
+    // type (extended.zig `Duration`) is a nanosecond count. Rather than
+    // fabricate a 30-day month — the exact arithmetic sin DATE-PART-EXACT
+    // removed from date_part — a month-bearing interval is REFUSED. Pin the
+    // refusal so it stays a refusal and never silently becomes a wrong number.
+    try testing.expectError(
+        error.TypeMismatch,
+        h.exec("RETURN duration_add(duration('P1M'), duration('P1M'))"),
+    );
+
+    // Guard against "make it reachable by accepting anything": a non-interval
+    // argument is still a type error.
+    try testing.expectError(
+        error.TypeMismatch,
+        h.exec("RETURN duration_add(duration('PT1H'), 'PT2H')"),
+    );
+}
+
+test "EXTVALUE-BRIDGE: json_get is reachable and reads the requested key" {
+    var h = try Harness.init(testing.allocator);
+    defer h.deinit();
+
+    _ = try h.exec("CREATE GRAPH bridge_json");
+    _ = try h.exec("USE GRAPH bridge_json");
+
+    const textOf = struct {
+        fn get(v: Value) ![]const u8 {
+            return switch (v) {
+                .Json => |j| j,
+                .Str => |s| s,
+                .ExtValue => |ext| switch (ext) {
+                    .Json => |j| j,
+                    .Str => |s| s,
+                    else => error.NotJson,
+                },
+                else => error.NotJson,
+            };
+        }
+    }.get;
+
+    // KEY ASSERTION (RED before the fix: error.TypeMismatch — the Json
+    // argument crossed the bridge as NULL).
+    const a = try h.scalar("RETURN json_get(json('{\"a\": 1, \"b\": 2}'), 'a')");
+    try testing.expectEqualStrings("1", try textOf(a));
+
+    // The SECOND key, so a fix that always returns the first field fails.
+    const b = try h.scalar("RETURN json_get(json('{\"a\": 1, \"b\": 2}'), 'b')");
+    try testing.expectEqualStrings("2", try textOf(b));
+
+    // A string value keeps its quotes (the function returns the raw JSON text
+    // of the member, which is what its own unit test pins).
+    const s = try h.scalar("RETURN json_get(json('{\"name\": \"geode\"}'), 'name')");
+    try testing.expectEqualStrings("\"geode\"", try textOf(s));
+
+    // An absent key is NULL, not an error and not a wrong neighbour's value.
+    try testing.expect((try h.scalar("RETURN json_get(json('{\"a\": 1}'), 'zzz')")) == .Null);
+
+    // Guard against "make it reachable by accepting anything": a non-string key
+    // is still a type error.
+    try testing.expectError(
+        error.TypeMismatch,
+        h.exec("RETURN json_get(json('{\"a\": 1}'), 1)"),
+    );
 }
