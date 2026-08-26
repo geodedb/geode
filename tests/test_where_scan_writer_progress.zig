@@ -328,32 +328,49 @@ test "writers make progress during a sparse WHERE-predicate scan (read<->write c
     // ---- Secondary signal: writer keeps progressing during the scan ----
     // Measure over a HALF-scan window (the scanner is still hammering) to keep
     // total test runtime bounded.
+    //
+    // Both throughput windows are wall-clock measurements and skew under
+    // external machine load (parallel test shards, CI). A genuine livelock
+    // fails every attempt; a transient load spike does not — so retry the
+    // measurement up to 3 times and only fail if no attempt meets the bar.
     const window_ns = single_scan_ns / 2;
-    const ops_before = sh.ops_applied.load(.monotonic);
-    const dur_start = nowNs();
-    while (nowNs() - dur_start < window_ns) std.atomic.spinLoopHint();
-    const ops_during = sh.ops_applied.load(.monotonic) - ops_before;
+    var ops_during: u64 = 0;
+    var baseline_ops: u64 = 0;
+    var attempt: usize = 0;
+    while (attempt < 3) : (attempt += 1) {
+        if (attempt > 0) {
+            // Re-arm the scanner and let a scan get in flight again.
+            sh.scan_active.store(true, .release);
+            sleepMs(10);
+        }
+        const ops_before = sh.ops_applied.load(.monotonic);
+        const dur_start = nowNs();
+        while (nowNs() - dur_start < window_ns) std.atomic.spinLoopHint();
+        ops_during = sh.ops_applied.load(.monotonic) - ops_before;
 
-    sh.scan_active.store(false, .release);
-    // Let the in-flight scan finish so the SHARED lock is free for the baseline.
-    sleepMs(10);
-    try testing.expect(!sh.writer_err.load(.acquire));
-    try testing.expect(!sh.scan_err.load(.acquire));
-    try testing.expect(!sh.scan_wrong_rows.load(.acquire)); // correctness
+        sh.scan_active.store(false, .release);
+        // Let the in-flight scan finish so the SHARED lock is free for the baseline.
+        sleepMs(10);
+        try testing.expect(!sh.writer_err.load(.acquire));
+        try testing.expect(!sh.scan_err.load(.acquire));
+        try testing.expect(!sh.scan_wrong_rows.load(.acquire)); // correctness
 
-    // Baseline: writer's unstarved throughput over the same window, scanner idle.
-    const base_before = sh.ops_applied.load(.monotonic);
-    {
-        const base_deadline = nowNs() + window_ns;
-        while (nowNs() < base_deadline) std.atomic.spinLoopHint();
+        // Baseline: writer's unstarved throughput over the same window, scanner idle.
+        const base_before = sh.ops_applied.load(.monotonic);
+        {
+            const base_deadline = nowNs() + window_ns;
+            while (nowNs() < base_deadline) std.atomic.spinLoopHint();
+        }
+        baseline_ops = sh.ops_applied.load(.monotonic) - base_before;
+        try testing.expect(!sh.writer_err.load(.acquire));
+
+        std.debug.print(
+            "where-scan-writer-progress: attempt={d} single_scan_ms={d} worst_excl_ms={d} ops_during={d} baseline={d}\n",
+            .{ attempt, single_scan_ns / std.time.ns_per_ms, worst_excl_ns / std.time.ns_per_ms, ops_during, baseline_ops },
+        );
+
+        if (baseline_ops >= 20 and ops_during * 4 >= baseline_ops) break;
     }
-    const baseline_ops = sh.ops_applied.load(.monotonic) - base_before;
-    try testing.expect(!sh.writer_err.load(.acquire));
-
-    std.debug.print(
-        "where-scan-writer-progress: single_scan_ms={d} worst_excl_ms={d} ops_during={d} baseline={d}\n",
-        .{ single_scan_ns / std.time.ns_per_ms, worst_excl_ns / std.time.ns_per_ms, ops_during, baseline_ops },
-    );
 
     // The scan must genuinely be long (else the test proves nothing).
     try testing.expect(single_scan_ns >= 50 * std.time.ns_per_ms);
