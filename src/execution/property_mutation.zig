@@ -301,6 +301,17 @@ pub fn setNodePropertyFromValue(
     // GAP-0918: reject dimension-mismatched vectors before they reach an
     // HNSW-indexed property (this is the single chokepoint for all node
     // property writes: CREATE, MATCH...SET, MERGE ON CREATE/MATCH).
+    switch (value) {
+        .ExtValue => |ev| {
+            if (ev == .VectorF32) {
+                // ENG-3912(d): arm the guard from the catalog if this process
+                // has not seen the CREATE INDEX (e.g. after a restart).
+                const statement_dispatcher = @import("statement_dispatcher.zig");
+                try statement_dispatcher.armVectorDimGuard(allocator, labels, key);
+            }
+        },
+        else => {},
+    }
     if (index_manager.getGlobalIndexManager()) |mgr| {
         switch (value) {
             .ExtValue => |ev| {

@@ -1296,6 +1296,21 @@ pub const IndexManager = struct {
         });
     }
 
+    // CANARY: REQ=REQ-ENG-3912-VECTOR-DIM-LIFECYCLE; FEATURE="VectorIndex"; ASPECT=DimRegistryFollowsCatalog; STATUS=TESTED; TEST=tests/test_eng3912_dim_pinning.zig; OWNER=index; UPDATED=2026-08-25
+    /// ENG-3912(d): drop every dimension pin. The registry is DERIVED from the
+    /// catalog (it is re-registered from the reloaded index rows), so it is
+    /// released with the catalog — otherwise the entries a catalog load
+    /// created would outlive it with nothing able to free them.
+    pub fn clearVectorDimRegistry(self: *IndexManager) void {
+        var it = self.vector_dim_registry.iterator();
+        while (it.next()) |entry| {
+            self.allocator.free(entry.key_ptr.*);
+            self.allocator.free(entry.value_ptr.label);
+            self.allocator.free(entry.value_ptr.property);
+        }
+        self.vector_dim_registry.clearAndFree();
+    }
+
     // CANARY: REQ=REQ-ENG-3912-VECTOR-DIM-LIFECYCLE; FEATURE="VectorIndex"; ASPECT=DimValidationUnregister; STATUS=TESTED; TEST=tests/test_eng3912_dim_pinning.zig; OWNER=index; UPDATED=2026-08-25
     /// ENG-3912(b): drop an index's dimension pin. Without this, `DROP INDEX`
     /// left the pin in force with NO index present — the property stayed

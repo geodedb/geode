@@ -48,42 +48,56 @@ pub fn runtimeAdvancedIndexTypeFromCatalog(type_name: []const u8) ?index_manager
 }
 
 // CANARY: REQ=REQ-ENG-3912-VECTOR-DIM-LIFECYCLE; FEATURE="VectorIndex"; ASPECT=DimValidationRehydrate; STATUS=TESTED; TEST=tests/test_eng3912_dim_pinning.zig; OWNER=index; UPDATED=2026-08-25
-/// ENG-3912(d): re-register the vector dimension-validation entries for every
-/// vector index the catalog just reloaded from disk.
+/// ENG-3912(d): make sure the vector dimension guard is armed for the
+/// (label, property) a vector is about to be written to.
 ///
-/// `registerVectorDimValidation` was only ever called from DDL execution, so
+/// `registerVectorDimValidation` used to be called ONLY from DDL execution, so
 /// the guard existed for exactly as long as the process that ran the
 /// `CREATE INDEX` did. After a restart the catalog still listed the index,
 /// `SHOW INDEXES` still reported it, and a mixed-dimension write was accepted
-/// without a murmur. The dimension itself is NOT persisted anywhere; the entry
-/// comes back unestablished and the index manager derives it from the first
-/// vector already stored under the (label, property) — see
-/// `IndexManager.seedVectorDim`. Deriving from committed data (rather than
-/// persisting a new catalog field) keeps the on-disk catalog format unchanged
-/// and cannot pin a dimension no stored vector has.
-pub fn rehydrateVectorDimValidation(
+/// without a murmur.
+///
+/// The re-arming is LAZY — driven from the write chokepoint rather than from
+/// catalog load — for two reasons:
+///   * it allocates only for properties that are actually vector-indexed AND
+///     actually written to, instead of adding process-global state to every
+///     caller that merely opens a catalog;
+///   * the catalog is the source of truth for which (label, property) pairs
+///     are indexed, and it is already loaded by the time any write runs.
+///
+/// The DIMENSION is not persisted anywhere; `IndexManager.seedVectorDim`
+/// derives it from the first vector already committed under the pair, which
+/// keeps the on-disk catalog format unchanged and cannot pin a dimension no
+/// stored vector has.
+///
+/// Idempotent and cheap after the first call: `registerVectorDimValidation`
+/// returns immediately for a name it already holds.
+pub fn armVectorDimGuard(
     allocator: std.mem.Allocator,
-    catalog: *const catalog_mod.Catalog,
+    labels: []const []const u8,
+    property: []const u8,
 ) !void {
-    var any = false;
+    if (labels.len == 0) return;
+    const execution = @import("../execution.zig");
+    const catalog = execution.getCatalogInstanceIfPresent() orelse return;
+
     var iter = catalog.indexes.iterator();
     while (iter.next()) |entry| {
         const info = entry.value_ptr.*;
         if (info.columns.len != 1) continue;
+        if (!std.mem.eql(u8, info.columns[0], property)) continue;
         if (!std.mem.eql(u8, info.index_type, "vector") and
             !std.mem.eql(u8, info.index_type, "vector_f32")) continue;
-        any = true;
-        break;
-    }
-    if (!any) return;
+        var covers = false;
+        for (labels) |label| {
+            if (std.mem.eql(u8, info.table_name, label)) {
+                covers = true;
+                break;
+            }
+        }
+        if (!covers) continue;
 
-    const manager = try index_manager.ensureGlobalIndexManager(allocator);
-    var iter2 = catalog.indexes.iterator();
-    while (iter2.next()) |entry| {
-        const info = entry.value_ptr.*;
-        if (info.columns.len != 1) continue;
-        if (!std.mem.eql(u8, info.index_type, "vector") and
-            !std.mem.eql(u8, info.index_type, "vector_f32")) continue;
+        const manager = try index_manager.ensureGlobalIndexManager(allocator);
         try manager.registerVectorDimValidation(info.name, info.table_name, info.columns[0]);
     }
 }

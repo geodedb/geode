@@ -42,6 +42,7 @@ const ast = @import("../gql/ast.zig");
 const eval = @import("../eval.zig");
 const graph_store = @import("../graph_store.zig");
 const index_manager = @import("../index/index_manager.zig");
+const statement_dispatcher = @import("statement_dispatcher.zig");
 const property_codec = @import("../property_value_codec.zig");
 const property_mutation = @import("property_mutation.zig");
 const value_types = @import("../value_types.zig");
@@ -143,6 +144,10 @@ pub fn checkPropertyWritableScoped(
         switch (value) {
             .ExtValue => |ev| {
                 if (ev == .VectorF32) {
+                    // ENG-3912(d): arm the guard from the catalog if this
+                    // process has not seen the CREATE INDEX (e.g. after a
+                    // restart). No-op when the pair is not vector-indexed.
+                    try statement_dispatcher.armVectorDimGuard(allocator, labels, key);
                     if (index_manager.getGlobalIndexManager()) |mgr| {
                         try mgr.checkVectorDimensionForWrite(labels, key, ev.VectorF32.dim);
                     }
