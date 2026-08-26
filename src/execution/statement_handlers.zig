@@ -398,7 +398,16 @@ pub fn executeShow(allocator: std.mem.Allocator, s: ast.ShowStatement, context: 
                 .{ .name = "type", .signature = "(relationship)", .return_type = "STRING" },
                 .{ .name = "labels", .signature = "(node)", .return_type = "LIST" },
                 .{ .name = "id", .signature = "(node|relationship)", .return_type = "INTEGER" },
-                .{ .name = "elementId", .signature = "(node|relationship)", .return_type = "STRING" },
+                // CANARY: REQ=REQ-FN-DISPATCH-PARITY; FEATURE="SHOW FUNCTIONS"; ASPECT=ElementIdUnadvertised; STATUS=TESTED; TEST=tests/test_fn_dispatch_parity.zig; OWNER=execution; UPDATED=2026-08-25
+                // FN-DISPATCH-PARITY: `elementId(node|relationship)` is NOT
+                // implemented — `MATCH (n) RETURN elementId(n)` was
+                // error.UnknownFunction. It is the ISO/Neo4j *element id*
+                // scheme (an opaque, database-scoped string identity), and
+                // this engine has made no decision about what that string
+                // would be; `id()` immediately above is the implemented
+                // identity surface. Advertising a second, absent identity
+                // function invited clients to key on it. Re-add this row in
+                // the same commit that lands an element-id scheme.
                 .{ .name = "properties", .signature = "(node|relationship|map)", .return_type = "MAP" },
                 // Path functions
                 .{ .name = "nodes", .signature = "(path)", .return_type = "LIST" },
@@ -410,8 +419,16 @@ pub fn executeShow(allocator: std.mem.Allocator, s: ast.ShowStatement, context: 
                 .{ .name = "localtime", .signature = "([map|string])", .return_type = "LOCAL_TIME" },
                 .{ .name = "localdatetime", .signature = "([map|string])", .return_type = "LOCAL_DATETIME" },
                 .{ .name = "duration", .signature = "(map|string)", .return_type = "DURATION" },
-                // Spatial functions
-                .{ .name = "point", .signature = "(map)", .return_type = "POINT" },
+                // CANARY: REQ=REQ-FN-DISPATCH-PARITY; FEATURE="SHOW FUNCTIONS"; ASPECT=PointUnadvertised; STATUS=TESTED; TEST=tests/test_fn_dispatch_parity.zig; OWNER=execution; UPDATED=2026-08-25
+                // FN-DISPATCH-PARITY: `point(map)` is NOT implemented —
+                // `RETURN point({x: 1.0, y: 2.0})` was error.UnknownFunction.
+                // It is the Cypher spatial constructor, whose map form carries
+                // a CRS decision (cartesian vs wgs-84, 2D vs 3D) this engine
+                // has not made. The implemented geometry constructors are the
+                // `st_*` family (`st_point(x, y)`, `geometryfromtext(wkt)`)
+                // plus `latlon`/`latlonalt`; a fourth, incompatible spelling
+                // was advertised and answered nowhere. Re-add this row in the
+                // same commit that lands a CRS-carrying point constructor.
                 // Vector functions. docs/@BUGS_731.md bug 8f: `distance` was
                 // advertised here as a GEOSPATIAL point-to-point function — a
                 // fourth, incompatible scheme. It is a VECTOR distance (the

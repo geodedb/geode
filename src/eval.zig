@@ -2331,6 +2331,34 @@ fn evalVectorScalarFunction(
     return .{ .Decimal = .{ .coeff = @intFromFloat(result * float_to_decimal_scale_f64), .scale = 6 } };
 }
 
+// CANARY: REQ=REQ-FN-DISPATCH-PARITY; FEATURE="VectorFunctions"; ASPECT=CosineOnVectors; STATUS=TESTED; TEST=tests/test_fn_dispatch_parity.zig; OWNER=eval; UPDATED=2026-08-25
+/// True for the two ExtValue arms that carry a real VECTOR value.
+fn isVectorValue(value: Value) bool {
+    return switch (value) {
+        .ExtValue => |ext| ext == .VectorF32 or ext == .VectorI32,
+        else => false,
+    };
+}
+
+/// Cosine SIMILARITY of two vectors, in the shape `vector_cosine` returns
+/// (Decimal, scale 6). This is `evalVectorScalarFunction(.similarity)` with the
+/// cosine metric, lifted to take already-evaluated values so the `cosine()`
+/// handler does not have to evaluate its arguments twice.
+fn vectorCosineSimilarity(allocator: std.mem.Allocator, lhs_value: Value, rhs_value: Value) EvalError!Value {
+    if (lhs_value == .Null or rhs_value == .Null) return .{ .Null = {} };
+
+    const lhs = try valueToVectorF32(allocator, lhs_value);
+    defer if (lhs.owned) |data| allocator.free(data);
+    const rhs = try valueToVectorF32(allocator, rhs_value);
+    defer if (rhs.owned) |data| allocator.free(data);
+    if (lhs.vector.dim != rhs.vector.dim) return error.TypeMismatch;
+
+    // metricDistance(.cosine) is the cosine DISTANCE (1 - cos); the similarity
+    // surface reports the cosine itself.
+    const similarity = 1.0 - try metricDistance(.cosine, lhs.vector, rhs.vector);
+    return .{ .Decimal = .{ .coeff = @intFromFloat(similarity * float_to_decimal_scale_f64), .scale = 6 } };
+}
+
 fn evalVectorKnn(allocator: std.mem.Allocator, args: []*ast.Expr, env: Env) EvalError!Value {
     if (args.len != 4) return error.InvalidArgs;
 
@@ -2411,6 +2439,31 @@ fn tryBasicFunction(allocator: std.mem.Allocator, function_name: []const u8, arg
             }
         }
         return Value{ .Null = {} };
+    }
+
+    // CANARY: REQ=REQ-FN-DISPATCH-PARITY; FEATURE="NullHandling"; ASPECT=NullIf; STATUS=TESTED; TEST=tests/test_fn_dispatch_parity.zig; OWNER=eval; UPDATED=2026-08-25
+    // FN-DISPATCH-PARITY: `nullIf(value, null_value)` is advertised by BOTH
+    // SHOW FUNCTIONS and src/gql/language_metadata.zig, next to the coalesce()
+    // above, and was dispatched nowhere — error.UnknownFunction. The semantic
+    // is exact and unambiguous (ISO/IEC 9075 `NULLIF`: NULL when the two
+    // compare equal, the first argument otherwise), so it is implemented.
+    //
+    // The equality is delegated to the `=` operator by evaluating a synthetic
+    // Binary(.Eq) over the SAME argument expressions, so nullIf can never
+    // disagree with `a = b` written by hand (Decimal rescaling, NFC string
+    // comparison, temporal and advanced-type ordering all come for free).
+    // A comparison that is not a definite TRUE — NULL (unknown) or a type
+    // error between incomparable operands — leaves the value unchanged, which
+    // is the standard's "not equal" outcome.
+    if (std.ascii.eqlIgnoreCase(function_name, "nullif")) {
+        if (args.len != 2) return null;
+        const eq_expr = ast.Expr{ .Binary = .{ .op = .Eq, .left = args[0], .right = args[1] } };
+        const eq = evalExpr(allocator, eq_expr, env) catch |err| switch (err) {
+            EvalError.OutOfMemory => return err,
+            else => Value{ .Bool = false },
+        };
+        if (eq == .Bool and eq.Bool) return Value{ .Null = {} };
+        return try evalExpr(allocator, args[0].*, env);
     }
 
     // CANARY: REQ=REQ-GQL-PROPERTIES-001; FEATURE="PropertiesFunction"; ASPECT=NodeProperties; STATUS=TESTED; TEST=geodetestlab/specs/geode_functions_comprehensive.yml; OWNER=eval; UPDATED=2025-12-28
@@ -2844,6 +2897,45 @@ fn tryBasicFunction(allocator: std.mem.Allocator, function_name: []const u8, arg
         }
     }
 
+    // CANARY: REQ=REQ-FN-DISPATCH-PARITY; FEATURE="StringPredicates"; ASPECT=StartsEndsContains; STATUS=TESTED; TEST=tests/test_fn_dispatch_parity.zig; OWNER=eval; UPDATED=2026-08-25
+    // FN-DISPATCH-PARITY: startsWith / endsWith / contains are advertised as
+    // functions by src/gql/language_metadata.zig (with worked examples) and
+    // were dispatched nowhere — error.UnknownFunction — while `icontains`,
+    // the case-INSENSITIVE variant sitting in the same metadata block and
+    // implemented immediately below, dispatched fine. Only the operator
+    // spellings (`x STARTS WITH y`, `x CONTAINS y`) existed. These are the
+    // case-sensitive function forms of exactly those operators; a non-string
+    // argument answers NULL, matching every other string function here.
+    {
+        const is_starts = std.ascii.eqlIgnoreCase(function_name, "startswith");
+        const is_ends = std.ascii.eqlIgnoreCase(function_name, "endswith");
+        const is_contains = std.ascii.eqlIgnoreCase(function_name, "contains");
+        if (is_starts or is_ends or is_contains) {
+            if (args.len != 2) return null;
+            const str_arg = try evalExpr(allocator, args[0].*, env);
+            const needle_arg = try evalExpr(allocator, args[1].*, env);
+
+            const haystack = switch (str_arg) {
+                .Str => |s| s,
+                else => return Value{ .Null = {} },
+            };
+            const needle = switch (needle_arg) {
+                .Str => |s| s,
+                else => return Value{ .Null = {} },
+            };
+
+            // An empty needle is a prefix, a suffix and a substring of every
+            // string (including the empty one); a needle longer than the
+            // haystack can be none of the three.
+            if (needle.len == 0) return Value{ .Bool = true };
+            if (needle.len > haystack.len) return Value{ .Bool = false };
+
+            if (is_starts) return Value{ .Bool = std.mem.startsWith(u8, haystack, needle) };
+            if (is_ends) return Value{ .Bool = std.mem.endsWith(u8, haystack, needle) };
+            return Value{ .Bool = std.mem.indexOf(u8, haystack, needle) != null };
+        }
+    }
+
     // icontains(str, substr) - case-insensitive containment check
     if (std.ascii.eqlIgnoreCase(function_name, "icontains")) {
         if (args.len != 2) return null;
@@ -3105,8 +3197,17 @@ fn tryBasicFunction(allocator: std.mem.Allocator, function_name: []const u8, arg
         }
     }
 
-    // Handle random() function which takes no arguments
-    if (std.ascii.eqlIgnoreCase(function_name, "random")) {
+    // CANARY: REQ=REQ-FN-DISPATCH-PARITY; FEATURE="RandomFunction"; ASPECT=RandAlias; STATUS=TESTED; TEST=tests/test_fn_dispatch_parity.zig; OWNER=eval; UPDATED=2026-08-25
+    // Handle random() function which takes no arguments.
+    // FN-DISPATCH-PARITY: `rand()` is advertised by BOTH SHOW FUNCTIONS and
+    // src/gql/language_metadata.zig ("Random float between 0 and 1") and was
+    // dispatched nowhere — error.UnknownFunction. It is a plain alias of the
+    // already-implemented, already-tested `random()`, which returns a Double
+    // in [0,1) from the same seeded CSPRNG, so it is implemented here rather
+    // than un-advertised.
+    if (std.ascii.eqlIgnoreCase(function_name, "random") or
+        std.ascii.eqlIgnoreCase(function_name, "rand"))
+    {
         if (args.len != 0) return null;
         const result = evaluator_functions.random_val(allocator) catch return null;
         return heapValueToEvalValue(result);
@@ -3225,8 +3326,20 @@ fn tryBasicFunction(allocator: std.mem.Allocator, function_name: []const u8, arg
         }
     }
 
-    // Handle time(string) function that parses ISO time strings
-    if (std.ascii.eqlIgnoreCase(function_name, "time")) {
+    // CANARY: REQ=REQ-FN-DISPATCH-PARITY; FEATURE="DateTimeFunctions"; ASPECT=LocalTime; STATUS=TESTED; TEST=tests/test_fn_dispatch_parity.zig; OWNER=datetime; UPDATED=2026-08-25
+    // Handle time(string) function that parses ISO time strings.
+    // FN-DISPATCH-PARITY: `localtime` was advertised by SHOW FUNCTIONS next to
+    // `localdatetime` and dispatched nowhere (error.UnknownFunction) even
+    // though `localdatetime` — its exact analogue one row above in the same
+    // table — has been dispatched since the datetime work. It mirrors the
+    // family: no argument reads the current clock, one string argument parses
+    // an ISO time. `time` in this engine is ALREADY the local (zoneless)
+    // reading — `datetime.Time` carries no offset, `TimeTZ` is the zoned type —
+    // so `localtime` is the same value function, exactly as `localdatetime`
+    // is the same value function as `datetime` today.
+    if (std.ascii.eqlIgnoreCase(function_name, "time") or
+        std.ascii.eqlIgnoreCase(function_name, "localtime"))
+    {
         if (args.len == 0) {
             // time() with no args returns current time
             const result = evaluator_functions.current_time();
@@ -3370,6 +3483,19 @@ fn tryBasicFunction(allocator: std.mem.Allocator, function_name: []const u8, arg
         if (args.len != 2) return null;
         const arg1 = try evalExpr(allocator, args[0].*, env);
         const arg2 = try evalExpr(allocator, args[1].*, env);
+
+        // CANARY: REQ=REQ-FN-DISPATCH-PARITY; FEATURE="VectorFunctions"; ASPECT=CosineOnVectors; STATUS=TESTED; TEST=tests/test_fn_dispatch_parity.zig; OWNER=eval; UPDATED=2026-08-25
+        // FN-DISPATCH-PARITY: this handler only ever understood a LIST of
+        // numbers, so `cosine(vectorf32([…]), vectorf32([…]))` fell into the
+        // `else` arm below and answered NULL — while its own metadata row
+        // documents it over VECTORF32/VECTORI32 and `vector_cosine` answers
+        // the same query correctly. A VECTOR argument now routes to the same
+        // vector core `vector_cosine` uses (cosine SIMILARITY, Decimal
+        // scale 6) instead of being silently nulled. LIST arguments keep the
+        // pre-existing path below untouched.
+        if (isVectorValue(arg1) or isVectorValue(arg2)) {
+            return try vectorCosineSimilarity(allocator, arg1, arg2);
+        }
 
         const vec1 = switch (arg1) {
             .List => |l| l,

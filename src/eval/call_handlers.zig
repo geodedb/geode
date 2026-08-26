@@ -318,6 +318,25 @@ pub fn evalMathFunction(
         return Value{ .Decimal = .{ .coeff = @intFromFloat(result * 1000000), .scale = 6, .orig_scale = 6, .orig_repr = null } };
     }
 
+    // CANARY: REQ=REQ-FN-DISPATCH-PARITY; FEATURE="MathConstants"; ASPECT=PiAndE; STATUS=TESTED; TEST=tests/test_fn_dispatch_parity.zig; OWNER=math; UPDATED=2026-08-25
+    // FN-DISPATCH-PARITY: pi() and e() are advertised by
+    // src/gql/language_metadata.zig (and `degrees(pi())` is the documented
+    // example of degrees() right below), but neither was dispatched anywhere —
+    // both were error.UnknownFunction. They are exact, unambiguous constants,
+    // so they are implemented rather than un-advertised. The Decimal scale-6
+    // shape is the same one every other fractional result in this module uses
+    // (an f64 Double would not compose with degrees()/radians(), which accept
+    // Int and Decimal only).
+    if (std.mem.eql(u8, function_name, "pi")) {
+        if (args.len != 0) return Value{ .Null = {} };
+        return Value{ .Decimal = .{ .coeff = @intFromFloat(@round(std.math.pi * 1000000)), .scale = 6, .orig_scale = 6, .orig_repr = null } };
+    }
+
+    if (std.mem.eql(u8, function_name, "e")) {
+        if (args.len != 0) return Value{ .Null = {} };
+        return Value{ .Decimal = .{ .coeff = @intFromFloat(@round(std.math.e * 1000000)), .scale = 6, .orig_scale = 6, .orig_repr = null } };
+    }
+
     // CANARY: REQ=REQ-MATH-CONVERT-001; FEATURE="AngleConversion"; ASPECT=DEGREES; STATUS=TESTED; TEST=geodetestlab/specs/geode_advanced_math_algorithms.yml; OWNER=math; UPDATED=2025-12-27
     // degrees(radians)
     if (std.mem.eql(u8, function_name, "degrees")) {

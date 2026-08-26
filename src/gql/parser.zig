@@ -3491,8 +3491,23 @@ pub const Parser = struct {
                 self.advance();
 
                 // CANARY: REQ=REQ-GQL-089; FEATURE="ListComprehension"; ASPECT=Parser; STATUS=TESTED; TEST=geodetestlab/specs/gql_expressions_comprehensive.ymlEMENTED; OWNER=parser; UPDATED=2025-10-14
-                // Special handling: all(x IN list WHERE condition) or any(x IN list WHERE condition)
-                if (base == .Ident and (std.ascii.eqlIgnoreCase(base.Ident.orig, "all") or std.ascii.eqlIgnoreCase(base.Ident.orig, "any")) and self.cur.kind == .identifier) {
+                // CANARY: REQ=REQ-FN-DISPATCH-PARITY; FEATURE="ListComprehension"; ASPECT=NoneAndSingleQuantifiers; STATUS=TESTED; TEST=tests/test_fn_dispatch_parity.zig; OWNER=parser; UPDATED=2026-08-25
+                // Special handling: all/any/none/single(x IN list WHERE condition)
+                // FN-DISPATCH-PARITY: `none` and `single` are advertised as
+                // predicate functions by BOTH SHOW FUNCTIONS and
+                // src/gql/language_metadata.zig (with the worked examples
+                // `none(x IN [1,2,3] WHERE x > 5)` / `single(x IN [1,2,3]
+                // WHERE x > 2)`), but this production admitted only `all` and
+                // `any`, so the documented spelling was error.UnexpectedToken —
+                // the construct could not be written at all. They take the
+                // identical `variable IN list [WHERE predicate]` shape and the
+                // quantifier semantics are exact, so they are admitted here
+                // and evaluated by the same handler.
+                if (base == .Ident and (std.ascii.eqlIgnoreCase(base.Ident.orig, "all") or
+                    std.ascii.eqlIgnoreCase(base.Ident.orig, "any") or
+                    std.ascii.eqlIgnoreCase(base.Ident.orig, "none") or
+                    std.ascii.eqlIgnoreCase(base.Ident.orig, "single")) and self.cur.kind == .identifier)
+                {
                     // Check if this is a list comprehension: identifier IN ...
                     const saved_idx = self.lx.idx;
                     const saved_line = self.lx.line;

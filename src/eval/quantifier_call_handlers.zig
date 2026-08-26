@@ -26,21 +26,52 @@ pub const Env = value_types.Env;
 const eval = @import("../eval.zig");
 const evalExpr = eval.evalExpr;
 
-// CANARY: REQ=REQ-GQL-089; FEATURE="ListComprehension"; ASPECT=Evaluation; STATUS=TESTED; TEST=geodetestlab/specs/gql_expressions_comprehensive.yml; OWNER=eval; UPDATED=2026-06-11
-/// Handle all(x IN list WHERE condition) / any(x IN list WHERE condition).
-/// all(): returns true only if every element matches the condition;
-/// any(): returns true if at least one element matches.
-/// Fallback forms all(list) / any(list) test element truthiness.
-/// Returns null when the function name is neither all nor any.
+// CANARY: REQ=REQ-FN-DISPATCH-PARITY; FEATURE="ListComprehension"; ASPECT=NoneAndSingleQuantifiers; STATUS=TESTED; TEST=tests/test_fn_dispatch_parity.zig; OWNER=eval; UPDATED=2026-08-25
+/// The four advertised list quantifiers. `none` and `single` are advertised by
+/// SHOW FUNCTIONS and src/gql/language_metadata.zig alongside `all`/`any`;
+/// before FN-DISPATCH-PARITY neither the grammar (src/gql/parser.zig) nor this
+/// handler knew them, so the documented spelling was a syntax error.
+const Quantifier = enum {
+    all,
+    any,
+    none,
+    single,
+
+    fn fromName(function_name: []const u8) ?Quantifier {
+        if (std.ascii.eqlIgnoreCase(function_name, "all")) return .all;
+        if (std.ascii.eqlIgnoreCase(function_name, "any")) return .any;
+        if (std.ascii.eqlIgnoreCase(function_name, "none")) return .none;
+        if (std.ascii.eqlIgnoreCase(function_name, "single")) return .single;
+        return null;
+    }
+
+    /// The answer when NO element matched the predicate (or the list was empty
+    /// / not a list): `all` and `none` are vacuously true, `any` and `single`
+    /// need at least one match.
+    fn vacuous(self: Quantifier) bool {
+        return switch (self) {
+            .all, .none => true,
+            .any, .single => false,
+        };
+    }
+};
+
+// CANARY: REQ=REQ-GQL-089; FEATURE="ListComprehension"; ASPECT=Evaluation; STATUS=TESTED; TEST=geodetestlab/specs/gql_expressions_comprehensive.yml; OWNER=eval; UPDATED=2026-08-25
+/// Handle all/any/none/single(x IN list WHERE condition).
+/// all():    true only if every element matches the condition;
+/// any():    true if at least one element matches;
+/// none():   true if no element matches;
+/// single(): true if exactly one element matches.
+/// Fallback forms all(list) / any(list) / none(list) / single(list) test
+/// element truthiness.
+/// Returns null when the function name is not one of the four.
 pub fn evalQuantifierFunction(
     allocator: std.mem.Allocator,
     function_name: []const u8,
     args: []*ast.Expr,
     env: Env,
 ) EvalError!?Value {
-    const is_all = std.ascii.eqlIgnoreCase(function_name, "all");
-    const is_any = std.ascii.eqlIgnoreCase(function_name, "any");
-    if (!is_all and !is_any) return null;
+    const quantifier = Quantifier.fromName(function_name) orelse return null;
 
     if (args.len != 1) return @as(?Value, .{ .Null = {} });
     const arg = args[0].*;
@@ -51,50 +82,79 @@ pub fn evalQuantifierFunction(
 
         const list = switch (source_val) {
             .List => |l| l,
-            // Empty or non-list: all() is vacuously true, any() is false
-            else => return @as(?Value, .{ .Bool = is_all }),
+            // Empty or non-list: nothing matched.
+            else => return @as(?Value, .{ .Bool = quantifier.vacuous() }),
         };
 
-        // Iterate through each element
+        // `x IN list` with no WHERE keeps its pre-existing answer: there is no
+        // predicate to satisfy, so nothing matched.
+        const filter = comp.filter orelse
+            return @as(?Value, .{ .Bool = quantifier.vacuous() });
+
+        // `single` cannot short-circuit on its first match — it has to see a
+        // possible second one — so the loop counts matches for every
+        // quantifier and the early exits are per-quantifier.
+        var matches: usize = 0;
         for (list) |item| {
             // Create new environment with variable binding
             const new_env = try env.withBinding(allocator, comp.variable, item);
 
-            // Evaluate filter condition if present
-            if (comp.filter) |filter| {
-                const filter_result = try evalExpr(allocator, filter.*, new_env);
-                const matches = switch (filter_result) {
-                    .Bool => |b| b,
-                    .Null => false,
-                    else => false,
-                };
+            const filter_result = try evalExpr(allocator, filter.*, new_env);
+            const item_matches = switch (filter_result) {
+                .Bool => |b| b,
+                .Null => false,
+                else => false,
+            };
+            if (!item_matches) {
+                // `all` fails on the first element that does not match.
+                if (quantifier == .all) return @as(?Value, .{ .Bool = false });
+                continue;
+            }
+            matches += 1;
 
-                if (is_all and !matches) return @as(?Value, .{ .Bool = false });
-                if (is_any and matches) return @as(?Value, .{ .Bool = true });
+            switch (quantifier) {
+                .any => return @as(?Value, .{ .Bool = true }),
+                .none => return @as(?Value, .{ .Bool = false }),
+                .single => if (matches > 1) return @as(?Value, .{ .Bool = false }),
+                .all => {},
             }
         }
 
-        // all(): no element failed -> true; any(): no element matched -> false
-        return @as(?Value, .{ .Bool = is_all });
+        return @as(?Value, .{
+            .Bool = switch (quantifier) {
+                // Every element matched (a failing element returned false above).
+                .all => true,
+                // No element matched.
+                .any => false,
+                .none => true,
+                .single => matches == 1,
+            },
+        });
     }
 
-    // Fallback: all(list) / any(list) - element truthiness
+    // Fallback: all(list) / any(list) / none(list) / single(list) - element
+    // truthiness.
     const list_val = try evalExpr(allocator, args[0].*, env);
     const list = switch (list_val) {
         .List => |l| l,
         else => return @as(?Value, .{ .Bool = false }),
     };
 
+    var truthy: usize = 0;
     for (list) |item| {
         const is_truthy = switch (item) {
             .Bool => |b| b,
             .Null => false,
             else => true,
         };
-        if (is_all and !is_truthy) return @as(?Value, .{ .Bool = false });
-        if (is_any and is_truthy) return @as(?Value, .{ .Bool = true });
+        if (is_truthy) truthy += 1;
     }
-    return @as(?Value, .{ .Bool = is_all });
+    return @as(?Value, .{ .Bool = switch (quantifier) {
+        .all => truthy == list.len,
+        .any => truthy > 0,
+        .none => truthy == 0,
+        .single => truthy == 1,
+    } });
 }
 
 /// Handle char(str, N) - converts string to fixed-length char with length

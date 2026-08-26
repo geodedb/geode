@@ -143,6 +143,52 @@ const Harness = struct {
             },
         };
     }
+
+    /// The numeric surface of this engine answers fractional results as a
+    /// fixed-point Decimal (see src/eval/call_handlers.zig), so a float
+    /// assertion has to go through the same representation the engine uses.
+    pub fn scalarF64(self: *Harness, query: []const u8) !f64 {
+        const v = try self.scalar(query);
+        return switch (v) {
+            .Int => |i| @floatFromInt(i),
+            .Decimal => |d| @as(f64, @floatFromInt(d.coeff)) /
+                std.math.pow(f64, 10.0, @floatFromInt(d.scale)),
+            .Double => |f| f,
+            .Real => |f| @floatCast(f),
+            else => {
+                std.debug.print("\n[FN-DISPATCH-PARITY] {s} returned {s}, expected a number\n", .{ query, @tagName(v) });
+                return error.NotANumber;
+            },
+        };
+    }
+
+    pub fn scalarBool(self: *Harness, query: []const u8) !bool {
+        const v = try self.scalar(query);
+        return switch (v) {
+            .Bool => |b| b,
+            else => {
+                std.debug.print("\n[FN-DISPATCH-PARITY] {s} returned {s}, expected Bool\n", .{ query, @tagName(v) });
+                return error.NotABool;
+            },
+        };
+    }
+
+    /// Every name SHOW FUNCTIONS advertises, lowercased, caller-owned.
+    pub fn showFunctionNames(self: *Harness, gpa: std.mem.Allocator) ![][]const u8 {
+        const res = try self.exec("SHOW FUNCTIONS");
+        var names: std.ArrayListUnmanaged([]const u8) = .empty;
+        for (res.rows) |row| {
+            if (row.len == 0) continue;
+            const name = switch (row[0]) {
+                .Str => |s| s,
+                else => continue,
+            };
+            const lowered = try gpa.alloc(u8, name.len);
+            for (name, 0..) |c, i| lowered[i] = std.ascii.toLower(c);
+            try names.append(gpa, lowered);
+        }
+        return names.toOwnedSlice(gpa);
+    }
 };
 
 // ---------------------------------------------------------------------------
@@ -382,4 +428,496 @@ test "FN-DISPATCH-PARITY: size()/length() of a VECTOR reports its dimension" {
     try testing.expectEqual(@as(i64, 3), try h.scalarInt("RETURN size([1,2,3])"));
     try testing.expectEqual(@as(i64, 5), try h.scalarInt("RETURN size('hello')"));
     try testing.expectEqual(@as(i64, 1), try h.scalarInt("RETURN size({a: 1})"));
+}
+
+// ---------------------------------------------------------------------------
+// (D) THE FUNCTION SWEEP — the loophole the (B) sweep left open.
+//
+// The (B) sweep above walks `language_metadata.procedures` and CALLs every one.
+// There was NO equivalent walk for FUNCTIONS, so the whole advertise -> dispatch
+// seam on the function side was unguarded and twelve advertised names rotted in
+// place. VERIFIED READ-ONLY AGAINST 1459b456 BEFORE THE FIX:
+//
+//   RETURN rand()                       -> error.UnknownFunction
+//   RETURN pi()                         -> error.UnknownFunction
+//   RETURN e()                          -> error.UnknownFunction
+//   RETURN startsWith('abc','a')        -> error.UnknownFunction
+//   RETURN endsWith('abc','c')          -> error.UnknownFunction
+//   RETURN contains('abc','b')          -> error.UnknownFunction
+//   RETURN nullIf(1, 1)                 -> error.UnknownFunction
+//   RETURN localtime()                  -> error.UnknownFunction
+//   MATCH (n:P) RETURN elementId(n)     -> error.UnknownFunction
+//   RETURN point({x: 1.0, y: 2.0})      -> error.UnknownFunction
+//   RETURN none(x IN [1,2] WHERE x > 5) -> error.UnexpectedToken   (no grammar)
+//   RETURN single(x IN [1,2] WHERE x>1) -> error.UnexpectedToken   (no grammar)
+//
+// The sweep is a PROBE TABLE rather than a generated call because the advertised
+// functions do not share one call shape (quantifiers take `x IN list WHERE …`,
+// path functions need a bound path, degree functions need a bound node). The
+// table is kept honest by the completeness half of the test: EVERY name in
+// `SHOW FUNCTIONS` and EVERY name in `language_metadata.functions` must have a
+// probe, so adding a metadata row without a dispatch entry fails here — in
+// either direction, exactly like the procedure sweep.
+// ---------------------------------------------------------------------------
+
+const FunctionProbe = struct {
+    /// Advertised name, lowercased.
+    name: []const u8,
+    /// A statement that reaches the function's dispatch entry. It must not be
+    /// a parse error and must not raise UnknownFunction; the per-function
+    /// behavioural assertions live in the dedicated tests below.
+    query: []const u8,
+};
+
+const function_probes = [_]FunctionProbe{
+    // Aggregates
+    .{ .name = "count", .query = "RETURN count(1)" },
+    .{ .name = "sum", .query = "RETURN sum(1)" },
+    .{ .name = "avg", .query = "RETURN avg(1)" },
+    .{ .name = "min", .query = "RETURN min(1)" },
+    .{ .name = "max", .query = "RETURN max(1)" },
+    .{ .name = "collect", .query = "RETURN collect(1)" },
+    // Numeric
+    .{ .name = "abs", .query = "RETURN abs(-1)" },
+    .{ .name = "ceil", .query = "RETURN ceil(1.2)" },
+    .{ .name = "floor", .query = "RETURN floor(1.2)" },
+    .{ .name = "round", .query = "RETURN round(1.2)" },
+    .{ .name = "sqrt", .query = "RETURN sqrt(4.0)" },
+    .{ .name = "rand", .query = "RETURN rand()" },
+    .{ .name = "sign", .query = "RETURN sign(-3)" },
+    .{ .name = "exp", .query = "RETURN exp(1.0)" },
+    .{ .name = "log", .query = "RETURN log(1.0)" },
+    .{ .name = "log10", .query = "RETURN log10(10.0)" },
+    .{ .name = "sin", .query = "RETURN sin(0.0)" },
+    .{ .name = "cos", .query = "RETURN cos(0.0)" },
+    .{ .name = "tan", .query = "RETURN tan(0.0)" },
+    .{ .name = "asin", .query = "RETURN asin(0.0)" },
+    .{ .name = "acos", .query = "RETURN acos(1.0)" },
+    .{ .name = "atan", .query = "RETURN atan(0.0)" },
+    .{ .name = "atan2", .query = "RETURN atan2(1.0, 1.0)" },
+    .{ .name = "pi", .query = "RETURN pi()" },
+    .{ .name = "e", .query = "RETURN e()" },
+    .{ .name = "degrees", .query = "RETURN degrees(1.0)" },
+    .{ .name = "radians", .query = "RETURN radians(90.0)" },
+    // Collections / strings
+    .{ .name = "size", .query = "RETURN size([1,2])" },
+    .{ .name = "length", .query = "RETURN length([1,2])" },
+    .{ .name = "substring", .query = "RETURN substring('abcd', 1, 2)" },
+    .{ .name = "replace", .query = "RETURN replace('abc','b','x')" },
+    .{ .name = "tolower", .query = "RETURN toLower('AB')" },
+    .{ .name = "toupper", .query = "RETURN toUpper('ab')" },
+    .{ .name = "lower", .query = "RETURN lower('AB')" },
+    .{ .name = "upper", .query = "RETURN upper('ab')" },
+    .{ .name = "trim", .query = "RETURN trim('  a  ')" },
+    .{ .name = "ltrim", .query = "RETURN lTrim('  a')" },
+    .{ .name = "rtrim", .query = "RETURN rTrim('a  ')" },
+    .{ .name = "left", .query = "RETURN left('abc', 2)" },
+    .{ .name = "right", .query = "RETURN right('abc', 2)" },
+    .{ .name = "split", .query = "RETURN split('a,b', ',')" },
+    .{ .name = "startswith", .query = "RETURN startsWith('abc','a')" },
+    .{ .name = "endswith", .query = "RETURN endsWith('abc','c')" },
+    .{ .name = "contains", .query = "RETURN contains('abc','b')" },
+    .{ .name = "icontains", .query = "RETURN icontains('AbC','b')" },
+    .{ .name = "reverse", .query = "RETURN reverse('abc')" },
+    .{ .name = "head", .query = "RETURN head([1,2])" },
+    .{ .name = "last", .query = "RETURN last([1,2])" },
+    .{ .name = "tail", .query = "RETURN tail([1,2])" },
+    .{ .name = "range", .query = "RETURN range(1, 3)" },
+    .{ .name = "keys", .query = "RETURN keys({a: 1})" },
+    .{ .name = "values", .query = "RETURN values({a: 1})" },
+    // Conversions
+    .{ .name = "tointeger", .query = "RETURN toInteger('1')" },
+    .{ .name = "tofloat", .query = "RETURN toFloat('1.5')" },
+    .{ .name = "tostring", .query = "RETURN toString(1)" },
+    .{ .name = "toboolean", .query = "RETURN toBoolean('true')" },
+    // Temporal
+    .{ .name = "timestamp", .query = "RETURN timestamp()" },
+    .{ .name = "date", .query = "RETURN date('2024-01-01')" },
+    .{ .name = "time", .query = "RETURN time('10:11:12')" },
+    .{ .name = "datetime", .query = "RETURN datetime('2024-01-01T00:00:00Z')" },
+    .{ .name = "localtime", .query = "RETURN localtime()" },
+    .{ .name = "localdatetime", .query = "RETURN localdatetime()" },
+    .{ .name = "duration", .query = "RETURN duration('PT1H')" },
+    // Graph / path
+    .{ .name = "id", .query = "MATCH (n:PSweepFn) RETURN id(n)" },
+    .{ .name = "type", .query = "MATCH ()-[r:LINKFN]->() RETURN type(r)" },
+    .{ .name = "labels", .query = "MATCH (n:PSweepFn) RETURN labels(n)" },
+    .{ .name = "properties", .query = "MATCH (n:PSweepFn) RETURN properties(n)" },
+    .{ .name = "exists", .query = "MATCH (n:PSweepFn) RETURN exists(n.n)" },
+    .{ .name = "indegree", .query = "MATCH (n:PSweepFn) RETURN indegree(n)" },
+    .{ .name = "outdegree", .query = "MATCH (n:PSweepFn) RETURN outdegree(n)" },
+    .{ .name = "nodes", .query = "MATCH p = (a:PSweepFn)-[:LINKFN]->(b:PSweepFn) RETURN nodes(p)" },
+    .{ .name = "relationships", .query = "MATCH p = (a:PSweepFn)-[:LINKFN]->(b:PSweepFn) RETURN relationships(p)" },
+    .{ .name = "shortestpath", .query = "MATCH p = shortestPath((a:PSweepFn)-[:LINKFN*]->(b:PSweepFn)) RETURN p" },
+    .{ .name = "allshortestpaths", .query = "MATCH p = allShortestPaths((a:PSweepFn)-[:LINKFN*]->(b:PSweepFn)) RETURN p" },
+    // Vectors
+    .{ .name = "vectorf32", .query = "RETURN vectorf32([1.0,2.0])" },
+    .{ .name = "vectori32", .query = "RETURN vectori32([1,2])" },
+    .{ .name = "vector_l2", .query = "RETURN vector_l2(vectorf32([1.0]), vectorf32([2.0]))" },
+    .{ .name = "vector_cosine", .query = "RETURN vector_cosine(vectorf32([1.0]), vectorf32([2.0]))" },
+    .{ .name = "vector_dot", .query = "RETURN vector_dot(vectorf32([1.0]), vectorf32([2.0]))" },
+    .{ .name = "distance", .query = "RETURN distance(vectorf32([1.0]), vectorf32([2.0]))" },
+    .{ .name = "similarity", .query = "RETURN similarity(vectorf32([1.0]), vectorf32([2.0]))" },
+    .{ .name = "cosine", .query = "RETURN cosine(vectorf32([1.0]), vectorf32([2.0]))" },
+    .{ .name = "euclidean", .query = "RETURN euclidean(vectorf32([1.0]), vectorf32([2.0]))" },
+    .{ .name = "manhattan", .query = "RETURN manhattan(vectorf32([1.0]), vectorf32([2.0]))" },
+    .{ .name = "vector_knn", .query = "RETURN vector_knn('emb', vectorf32([1.0]), 1, 'l2')" },
+    .{ .name = "knn", .query = "RETURN knn('emb', vectorf32([1.0]), 1, 'l2')" },
+    // Predicates
+    .{ .name = "all", .query = "RETURN all(x IN [1,2] WHERE x > 0)" },
+    .{ .name = "any", .query = "RETURN any(x IN [1,2] WHERE x > 1)" },
+    .{ .name = "none", .query = "RETURN none(x IN [1,2] WHERE x > 5)" },
+    .{ .name = "single", .query = "RETURN single(x IN [1,2] WHERE x > 1)" },
+    // Null handling
+    .{ .name = "coalesce", .query = "RETURN coalesce(NULL, 1)" },
+    .{ .name = "nullif", .query = "RETURN nullIf(1, 1)" },
+};
+
+fn probeFor(name: []const u8) ?FunctionProbe {
+    for (function_probes) |p| {
+        if (std.ascii.eqlIgnoreCase(p.name, name)) return p;
+    }
+    return null;
+}
+
+fn sweepGraph(h: *Harness, name: []const u8) !void {
+    var buf: [128]u8 = undefined;
+    _ = try h.exec(try std.fmt.bufPrint(&buf, "CREATE GRAPH {s}", .{name}));
+    _ = try h.exec(try std.fmt.bufPrint(&buf, "USE GRAPH {s}", .{name}));
+    _ = try h.exec("CREATE (a:PSweepFn {n: 'a'})-[:LINKFN]->(b:PSweepFn {n: 'b'})");
+}
+
+test "FN-DISPATCH-PARITY: every function name advertised by SHOW FUNCTIONS and language_metadata dispatches" {
+    var h = try Harness.init(testing.allocator);
+    defer h.deinit();
+
+    var arena = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena.deinit();
+    const gpa = arena.allocator();
+
+    try sweepGraph(&h, "fnsweep_dispatch");
+
+    var advertised: std.ArrayListUnmanaged([]const u8) = .empty;
+    for (try h.showFunctionNames(gpa)) |n| try advertised.append(gpa, n);
+    for (language_metadata.functions) |f| {
+        const lowered = try gpa.alloc(u8, f.name.len);
+        for (f.name, 0..) |c, i| lowered[i] = std.ascii.toLower(c);
+        try advertised.append(gpa, lowered);
+    }
+
+    var failures: std.ArrayListUnmanaged([]const u8) = .empty;
+    var probed: std.ArrayListUnmanaged([]const u8) = .empty;
+
+    for (advertised.items) |name| {
+        var already = false;
+        for (probed.items) |seen| {
+            if (std.mem.eql(u8, seen, name)) already = true;
+        }
+        if (already) continue;
+        try probed.append(gpa, name);
+
+        // COMPLETENESS HALF: an advertised name with no probe is the exact hole
+        // that let rand/pi/e/nullIf/localtime/point/elementId rot.
+        const probe = probeFor(name) orelse {
+            try failures.append(gpa, try std.fmt.allocPrint(
+                gpa,
+                "advertised function has no dispatch probe in this sweep: {s}",
+                .{name},
+            ));
+            continue;
+        };
+
+        // DISPATCH HALF.
+        if (h.exec(probe.query)) |_| {} else |err| {
+            try failures.append(gpa, try std.fmt.allocPrint(
+                gpa,
+                "advertised function does not dispatch: {s} ({s}) -> {s}",
+                .{ probe.query, name, @errorName(err) },
+            ));
+        }
+    }
+
+    if (failures.items.len != 0) {
+        std.debug.print(
+            "\n[FN-DISPATCH-PARITY] {d} advertised function name(s) with no dispatch:\n",
+            .{failures.items.len},
+        );
+        for (failures.items) |f| std.debug.print("  - {s}\n", .{f});
+        return error.AdvertisedFunctionNotDispatched;
+    }
+
+    // Guard against a vacuous pass if either advertised table is emptied.
+    try testing.expect(probed.items.len >= 85);
+    try testing.expect(language_metadata.functions.len >= 80);
+}
+
+// ---------------------------------------------------------------------------
+// (E) The names that were implemented rather than un-advertised.
+// ---------------------------------------------------------------------------
+
+test "FN-DISPATCH-PARITY: rand() is a float in [0,1)" {
+    var h = try Harness.init(testing.allocator);
+    defer h.deinit();
+    try sweepGraph(&h, "fnsweep_rand");
+
+    // KEY ASSERTION (RED before the fix: error.UnknownFunction).
+    var i: usize = 0;
+    var saw_distinct = false;
+    var first: f64 = -1;
+    while (i < 16) : (i += 1) {
+        const v = try h.scalarF64("RETURN rand()");
+        try testing.expect(v >= 0.0);
+        try testing.expect(v < 1.0);
+        if (first < 0) first = v else if (v != first) saw_distinct = true;
+    }
+    // Not a constant dressed up as a PRNG.
+    try testing.expect(saw_distinct);
+}
+
+test "FN-DISPATCH-PARITY: pi() and e() are the mathematical constants" {
+    var h = try Harness.init(testing.allocator);
+    defer h.deinit();
+    try sweepGraph(&h, "fnsweep_consts");
+
+    // KEY ASSERTIONS (RED before the fix: error.UnknownFunction for both).
+    try testing.expectApproxEqAbs(
+        @as(f64, std.math.pi),
+        try h.scalarF64("RETURN pi()"),
+        1e-6,
+    );
+    try testing.expectApproxEqAbs(
+        @as(f64, std.math.e),
+        try h.scalarF64("RETURN e()"),
+        1e-6,
+    );
+    // The documented example in src/gql/language_metadata.zig composes the two
+    // math surfaces; it must produce a straight 180 degrees.
+    try testing.expectApproxEqAbs(
+        @as(f64, 180.0),
+        try h.scalarF64("RETURN degrees(pi())"),
+        1e-4,
+    );
+}
+
+test "FN-DISPATCH-PARITY: startsWith / endsWith / contains dispatch like their icontains sibling" {
+    var h = try Harness.init(testing.allocator);
+    defer h.deinit();
+    try sweepGraph(&h, "fnsweep_strpred");
+
+    // KEY ASSERTIONS (RED before the fix: error.UnknownFunction for all three,
+    // while the case-insensitive icontains() next to them dispatched fine).
+    try testing.expect(try h.scalarBool("RETURN startsWith('hello', 'he')"));
+    try testing.expect(!(try h.scalarBool("RETURN startsWith('hello', 'lo')")));
+    try testing.expect(try h.scalarBool("RETURN endsWith('hello', 'lo')"));
+    try testing.expect(!(try h.scalarBool("RETURN endsWith('hello', 'he')")));
+    try testing.expect(try h.scalarBool("RETURN contains('hello', 'ell')"));
+    try testing.expect(!(try h.scalarBool("RETURN contains('hello', 'xyz')")));
+
+    // Case SENSITIVITY is the whole difference from icontains: keep them apart.
+    try testing.expect(!(try h.scalarBool("RETURN contains('Hello', 'hello')")));
+    try testing.expect(try h.scalarBool("RETURN icontains('Hello', 'hello')"));
+
+    // Empty needle is a prefix/suffix/substring of everything.
+    try testing.expect(try h.scalarBool("RETURN startsWith('hello', '')"));
+    try testing.expect(try h.scalarBool("RETURN endsWith('hello', '')"));
+    try testing.expect(try h.scalarBool("RETURN contains('hello', '')"));
+
+    // A needle longer than the haystack is not a match (an unguarded slice
+    // would panic here rather than answer false).
+    try testing.expect(!(try h.scalarBool("RETURN startsWith('ab', 'abc')")));
+    try testing.expect(!(try h.scalarBool("RETURN endsWith('ab', 'abc')")));
+
+    // The operator spellings keep their existing meaning.
+    try testing.expect(try h.scalarBool("RETURN 'hello' STARTS WITH 'he'"));
+    try testing.expect(try h.scalarBool("RETURN 'hello' CONTAINS 'ell'"));
+}
+
+test "FN-DISPATCH-PARITY: nullIf(a, b) is NULL when equal and a otherwise" {
+    var h = try Harness.init(testing.allocator);
+    defer h.deinit();
+    try sweepGraph(&h, "fnsweep_nullif");
+
+    // KEY ASSERTIONS (RED before the fix: error.UnknownFunction).
+    try testing.expect((try h.scalar("RETURN nullIf(1, 1)")) == .Null);
+    try testing.expectEqual(@as(i64, 1), try h.scalarInt("RETURN nullIf(1, 2)"));
+
+    try testing.expect((try h.scalar("RETURN nullIf('a', 'a')")) == .Null);
+    const str_val = try h.scalar("RETURN nullIf('a', 'b')");
+    try testing.expect(str_val == .Str);
+    try testing.expectEqualStrings("a", str_val.Str);
+
+    // The documented example shape: a property that does NOT equal the sentinel
+    // comes back unchanged, one that does collapses to NULL.
+    _ = try h.exec("CREATE (:NIf {status: 'active'}), (:NIf {status: 'inactive'})");
+    const res = try h.exec("MATCH (n:NIf) RETURN nullIf(n.status, 'inactive')");
+    try testing.expectEqual(@as(usize, 2), res.rows.len);
+    var nulls: usize = 0;
+    var actives: usize = 0;
+    for (res.rows) |row| {
+        switch (row[0]) {
+            .Null => nulls += 1,
+            .Str => |s| if (std.mem.eql(u8, s, "active")) {
+                actives += 1;
+            },
+            else => {},
+        }
+    }
+    try testing.expectEqual(@as(usize, 1), nulls);
+    try testing.expectEqual(@as(usize, 1), actives);
+
+    // NULL never "equals" anything, so nullIf(NULL, x) is NULL by way of the
+    // first argument, not by way of the equality.
+    try testing.expect((try h.scalar("RETURN nullIf(NULL, 1)")) == .Null);
+    // A non-equal, non-comparable pair returns the first argument.
+    try testing.expectEqual(@as(i64, 1), try h.scalarInt("RETURN nullIf(1, 'a')"));
+}
+
+test "FN-DISPATCH-PARITY: localtime() mirrors the time()/localdatetime() family" {
+    var h = try Harness.init(testing.allocator);
+    defer h.deinit();
+    try sweepGraph(&h, "fnsweep_localtime");
+
+    // KEY ASSERTIONS (RED before the fix: error.UnknownFunction for both arities).
+    const now = try h.scalar("RETURN localtime()");
+    try testing.expect(now == .ExtValue or now == .Time);
+
+    // localtime(string) parses the same ISO time literal time(string) does, and
+    // must agree with it to the microsecond — they are the same clock reading.
+    const parsed = try h.scalar("RETURN localtime('10:11:12')");
+    const via_time = try h.scalar("RETURN time('10:11:12')");
+    const micros_of = struct {
+        fn get(v: Value) !i64 {
+            return switch (v) {
+                .Time => |t| t.micros_since_midnight,
+                .ExtValue => |ext| switch (ext) {
+                    .Time => |t| t.micros_since_midnight,
+                    else => error.NotATime,
+                },
+                else => error.NotATime,
+            };
+        }
+    }.get;
+    try testing.expectEqual(try micros_of(via_time), try micros_of(parsed));
+    // 10:11:12 is 36672 seconds past midnight — pin the value, not just equality
+    // with a sibling that could be wrong in the same way.
+    try testing.expectEqual(@as(i64, 36672) * 1_000_000, try micros_of(parsed));
+}
+
+test "FN-DISPATCH-PARITY: none() and single() are parseable and correct quantifiers" {
+    var h = try Harness.init(testing.allocator);
+    defer h.deinit();
+    try sweepGraph(&h, "fnsweep_quant");
+
+    // KEY ASSERTIONS (RED before the fix: error.UnexpectedToken — the grammar
+    // special-cased only all()/any(), so these two advertised predicates could
+    // not even be written).
+    try testing.expect(try h.scalarBool("RETURN none(x IN [1,2,3] WHERE x > 5)"));
+    try testing.expect(!(try h.scalarBool("RETURN none(x IN [1,2,3] WHERE x > 2)")));
+    try testing.expect(try h.scalarBool("RETURN single(x IN [1,2,3] WHERE x > 2)"));
+    try testing.expect(!(try h.scalarBool("RETURN single(x IN [1,2,3] WHERE x > 1)")));
+    try testing.expect(!(try h.scalarBool("RETURN single(x IN [1,2,3] WHERE x > 5)")));
+
+    // Vacuous cases: nothing fails a none() over an empty list; single() needs
+    // exactly one and so is false on an empty list.
+    try testing.expect(try h.scalarBool("RETURN none(x IN [] WHERE x > 0)"));
+    try testing.expect(!(try h.scalarBool("RETURN single(x IN [] WHERE x > 0)")));
+
+    // The pre-existing siblings must be untouched by the shared implementation.
+    try testing.expect(try h.scalarBool("RETURN all(x IN [1,2,3] WHERE x > 0)"));
+    try testing.expect(!(try h.scalarBool("RETURN all(x IN [1,2,3] WHERE x > 2)")));
+    try testing.expect(try h.scalarBool("RETURN any(x IN [1,2,3] WHERE x > 2)"));
+    try testing.expect(!(try h.scalarBool("RETURN any(x IN [1,2,3] WHERE x > 5)")));
+
+    // Case-insensitive, like every other function name.
+    try testing.expect(try h.scalarBool("RETURN NONE(x IN [1,2,3] WHERE x > 5)"));
+    try testing.expect(try h.scalarBool("RETURN SINGLE(x IN [1,2,3] WHERE x > 2)"));
+}
+
+test "FN-DISPATCH-PARITY: cosine() answers for VECTOR arguments, not just LIST" {
+    var h = try Harness.init(testing.allocator);
+    defer h.deinit();
+    try sweepGraph(&h, "fnsweep_cosine");
+
+    // KEY ASSERTION (RED before the fix: Value.Null — cosine() worked for a
+    // LIST literal and silently answered NULL for the VECTORF32/VECTORI32
+    // values its own metadata says it takes).
+    const identical = try h.scalarF64("RETURN cosine(vectorf32([1.0,2.0,3.0]), vectorf32([1.0,2.0,3.0]))");
+    try testing.expectApproxEqAbs(@as(f64, 1.0), identical, 1e-5);
+
+    // It must agree with vector_cosine, which is the same similarity.
+    const via_alias = try h.scalarF64("RETURN cosine(vectorf32([1.0,2.0]), vectorf32([3.0,4.0]))");
+    const via_vector = try h.scalarF64("RETURN vector_cosine(vectorf32([1.0,2.0]), vectorf32([3.0,4.0]))");
+    try testing.expectApproxEqAbs(via_vector, via_alias, 1e-5);
+
+    // Orthogonal vectors -> 0, opposite vectors -> -1.
+    try testing.expectApproxEqAbs(
+        @as(f64, 0.0),
+        try h.scalarF64("RETURN cosine(vectorf32([1.0,0.0]), vectorf32([0.0,1.0]))"),
+        1e-5,
+    );
+    try testing.expectApproxEqAbs(
+        @as(f64, -1.0),
+        try h.scalarF64("RETURN cosine(vectorf32([1.0,0.0]), vectorf32([-1.0,0.0]))"),
+        1e-5,
+    );
+
+    // Integer vectors cross the same path.
+    try testing.expectApproxEqAbs(
+        @as(f64, 1.0),
+        try h.scalarF64("RETURN cosine(vectori32([1,2,3]), vectori32([2,4,6]))"),
+        1e-5,
+    );
+
+    // A vector read back from a stored property (the real query shape).
+    _ = try h.exec("CREATE (:CosV {emb: vectorf32([1.0,2.0,3.0])})");
+    try testing.expectApproxEqAbs(
+        @as(f64, 1.0),
+        try h.scalarF64("MATCH (n:CosV) RETURN cosine(n.emb, vectorf32([1.0,2.0,3.0]))"),
+        1e-5,
+    );
+
+    // Guard against "fix it by rerouting everything": the LIST form keeps its
+    // pre-existing answer.
+    try testing.expectApproxEqAbs(
+        @as(f64, 1.0),
+        try h.scalarF64("RETURN cosine([1.0,2.0], [1.0,2.0])"),
+        1e-5,
+    );
+}
+
+// ---------------------------------------------------------------------------
+// (F) The names that were un-advertised rather than implemented.
+// ---------------------------------------------------------------------------
+
+test "FN-DISPATCH-PARITY: SHOW FUNCTIONS does not advertise elementId or point" {
+    var h = try Harness.init(testing.allocator);
+    defer h.deinit();
+    try sweepGraph(&h, "fnsweep_removed");
+
+    // Both were listed by SHOW FUNCTIONS and dispatched nowhere. `elementId` is
+    // an ISO/Neo4j element-id scheme this engine has not decided on (`id()` is
+    // the implemented identity), and `point(map)` is a fourth, incompatible
+    // spelling of a geometry constructor next to the implemented `st_point`
+    // family. Both are removed rather than faked.
+    try testing.expectError(error.UnknownFunction, h.exec("MATCH (n:PSweepFn) RETURN elementId(n)"));
+    try testing.expectError(error.UnknownFunction, h.exec("RETURN point({x: 1.0, y: 2.0})"));
+
+    var arena = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena.deinit();
+    for (try h.showFunctionNames(arena.allocator())) |name| {
+        if (std.mem.eql(u8, name, "elementid") or std.mem.eql(u8, name, "point")) {
+            std.debug.print(
+                "\n[FN-DISPATCH-PARITY] SHOW FUNCTIONS still advertises '{s}', which does not dispatch\n",
+                .{name},
+            );
+            return error.UnimplementedFunctionAdvertised;
+        }
+    }
+
+    // The real constructors this engine DOES implement stay reachable, so the
+    // removal is not a capability loss.
+    const pt = try h.scalar("RETURN st_point(1.0, 2.0)");
+    try testing.expect(pt != .Null);
+    // id() is the implemented identity surface elementId() was shadowing.
+    _ = try h.scalarInt("MATCH (n:PSweepFn) RETURN id(n)");
 }
