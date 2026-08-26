@@ -9470,6 +9470,18 @@ pub fn build(b: *std.Build) void {
     const fn_dispatch_parity_step = b.step("test-fn-dispatch-parity", "Run advertise/dispatch parity regressions (split, algo.* aliases, size(vector))");
     fn_dispatch_parity_step.dependOn(&run_fn_dispatch_parity_tests.step);
 
+    // ADVANCED-INDEX-RESTART: nothing rebuilt advanced (HNSW) indexes on catalog
+    // reload, so after a restart SHOW INDEXES still listed the index while knn()
+    // silently brute-force scanned; and the DDL metric was persisted nowhere, so
+    // any rebuild could only have guessed it.
+    const advanced_index_restart_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_advanced_index_restart.zig"), .target = target, .optimize = optimize });
+    advanced_index_restart_test_mod.addImport("geode", root_mod);
+    const advanced_index_restart_tests = b.addTest(.{ .root_module = advanced_index_restart_test_mod });
+    const run_advanced_index_restart_tests = b.addRunArtifact(advanced_index_restart_tests);
+    shardDep(test_step, &run_advanced_index_restart_tests.step, 0, test_shard_loads, test_shard_index);
+    const advanced_index_restart_step = b.step("test-advanced-index-restart", "Run advanced (HNSW) index rebuild-after-restart regressions");
+    advanced_index_restart_step.dependOn(&run_advanced_index_restart_tests.step);
+
     // DATE-PART-EXACT: date_part()/time_part() were unreachable from GQL (the temporal
     // ExtValue bridge nulled their argument) and date_part's arithmetic used a
     // 365-day year with 30-day months, disagreeing with member access.

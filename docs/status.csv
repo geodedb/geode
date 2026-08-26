@@ -154,6 +154,13 @@ REQ-ADMIN-BOOTSTRAP-HARDEN-001,AdminBootstrapHardening,DataDirPermissions,TESTED
 REQ-ADMIN-BOOTSTRAP-HARDEN-002,AdminBootstrapHardening,DataDirPermissionsHelper,TESTED,,,security,2026-05-15,src/server/data_dir_permissions.zig
 REQ-ADMIN-BOOTSTRAP-HARDEN-003,AdminBootstrapHardening,Tests,TESTED,,,security,2026-05-15,tests/test_admin_bootstrap_hardening.zig
 REQ-ADV-TYPE-MIGRATION-001,AdvancedPropertyMigration,ExecutionMutation,IMPL,,,engine,2026-04-01,src/execution/property_mutation.zig
+REQ-ADVANCED-INDEX-RESTART-REBUILD,SchemaCatalog,VectorMetricPersistence,TESTED,,,catalog,2026-08-25,src/schema/catalog.zig
+REQ-ADVANCED-INDEX-RESTART-REBUILD,SchemaCatalog,VectorMetricPersistence,TESTED,,,catalog,2026-08-25,src/schema/catalog.zig
+REQ-ADVANCED-INDEX-RESTART-REBUILD,SchemaCatalog,VectorMetricPersistence,TESTED,,,catalog,2026-08-25,tests/test_advanced_index_restart.zig
+REQ-ADVANCED-INDEX-RESTART-REBUILD,VectorIndex,LazyRebuildAfterRestart,TESTED,,,index,2026-08-25,src/eval.zig
+REQ-ADVANCED-INDEX-RESTART-REBUILD,VectorIndex,LazyRebuildAfterRestart,TESTED,,,index,2026-08-25,src/execution/statement_dispatcher.zig
+REQ-ADVANCED-INDEX-RESTART-REBUILD,VectorIndex,LazyRebuildAfterRestart,TESTED,,,index,2026-08-25,tests/test_advanced_index_restart.zig
+REQ-ADVANCED-INDEX-RESTART-REBUILD,VectorIndex,MetricRecordedInCatalog,TESTED,,,index,2026-08-25,src/execution.zig
 REQ-AGG-001,Aggregation,AggFunctions,TESTED,,,engine,2026-01-16,tests/test_gap_0193_batch3_comprehensive.zig
 REQ-AGG-001,WithGroupByAggregation,CountAgg,TESTED,,,engine,2026-01-15,tests/test_gap_0193_priority_categories.zig
 REQ-AGG-002,WithGroupByAggregation,SumAgg,TESTED,,,engine,2026-01-15,tests/test_gap_0193_priority_categories.zig

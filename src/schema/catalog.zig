@@ -32,7 +32,30 @@ pub const IndexInfo = struct {
     index_type: []const u8, // btree, hash, fulltext, etc.
     table_name: []const u8, // Label/table name
     columns: [][]const u8, // Property names
+    // CANARY: REQ=REQ-ADVANCED-INDEX-RESTART-REBUILD; FEATURE="SchemaCatalog"; ASPECT=VectorMetricPersistence; STATUS=TESTED; TEST=tests/test_advanced_index_restart.zig; OWNER=catalog; UPDATED=2026-08-25
+    // ADVANCED-INDEX-RESTART: the distance metric of a vector/HNSW index
+    // (`WITH (metric = 'cosine')`) used to live ONLY in the runtime wrapper the
+    // DDL built. It was validated, threaded into the index, and then persisted
+    // nowhere — so an index rebuilt from the catalog after a restart could only
+    // have guessed `l2`, which for a cosine index is a WORSE answer than the
+    // brute-force scan it replaces. `null` means "not recorded" and keeps the
+    // documented `l2` default. Non-vector index types leave it null.
+    metric: ?[]const u8 = null,
 };
+
+// CANARY: REQ=REQ-ADVANCED-INDEX-RESTART-REBUILD; FEATURE="SchemaCatalog"; ASPECT=VectorMetricPersistence; STATUS=TESTED; TEST=tests/test_advanced_index_restart.zig; OWNER=catalog; UPDATED=2026-08-25
+/// On-disk separator between an index's type and its optional metric.
+///
+/// The catalog file (`geode_catalog.dat`) has no format version in its header,
+/// so a NEW trailing field per index record cannot be added without making
+/// every existing file unreadable. The metric therefore rides inside the
+/// existing length-prefixed `index_type` slot as `"<type>|<metric>"`. The
+/// on-disk GRAMMAR is unchanged, a file written before this change (no `|`)
+/// loads exactly as before, and the split is confined to save()/load() — the
+/// in-memory `index_type` never contains a metric. A `|` cannot appear in an
+/// index type (they are a fixed enum) or in a metric (validated against a
+/// fixed allow-list at DDL time, src/execution.zig).
+const INDEX_TYPE_METRIC_SEP: u8 = '|';
 
 // CANARY: REQ=REQ-CONSTRAINT-001; FEATURE="ConstraintManagement"; ASPECT=Catalog; STATUS=TESTED; TEST=geodetestlab/specs/gql_catalog_operations_comprehensive.yml; OWNER=schema; UPDATED=2026-01-09
 // ConstraintInfo stores metadata about a schema constraint
@@ -136,6 +159,7 @@ pub const Catalog = struct {
                 self.allocator.free(info.name);
                 self.allocator.free(info.index_type);
                 self.allocator.free(info.table_name);
+                if (info.metric) |m| self.allocator.free(m);
                 for (info.columns) |col| {
                     self.allocator.free(col);
                 }
@@ -219,11 +243,19 @@ pub const Catalog = struct {
             try buffer.appendSlice(self.allocator, &name_len_buf);
             try buffer.appendSlice(self.allocator, index_info.name);
 
-            // Write index type
+            // Write index type, with the optional metric appended after
+            // INDEX_TYPE_METRIC_SEP (see that constant for why it rides in this
+            // slot rather than in a new field).
+            const encoded_type: []const u8 = if (index_info.metric) |m|
+                try std.fmt.allocPrint(self.allocator, "{s}{c}{s}", .{ index_info.index_type, INDEX_TYPE_METRIC_SEP, m })
+            else
+                index_info.index_type;
+            defer if (index_info.metric != null) self.allocator.free(encoded_type);
+
             var type_len_buf: [4]u8 = undefined;
-            std.mem.writeInt(u32, &type_len_buf, @intCast(index_info.index_type.len), .little);
+            std.mem.writeInt(u32, &type_len_buf, @intCast(encoded_type.len), .little);
             try buffer.appendSlice(self.allocator, &type_len_buf);
-            try buffer.appendSlice(self.allocator, index_info.index_type);
+            try buffer.appendSlice(self.allocator, encoded_type);
 
             // Write table name
             var table_len_buf: [4]u8 = undefined;
@@ -389,13 +421,24 @@ pub const Catalog = struct {
             errdefer self.allocator.free(name);
             if ((try reader.readSliceShort(name)) < name_len) return error.InvalidCatalogFile;
 
-            // Read index type
+            // Read index type. A file written after ADVANCED-INDEX-RESTART may
+            // carry "<type>|<metric>" in this slot; one written before it never
+            // contains the separator and loads exactly as it always did.
             var type_len_buf: [4]u8 = undefined;
             if ((try reader.readSliceShort(&type_len_buf)) < 4) return error.InvalidCatalogFile;
             const type_len = std.mem.readInt(u32, &type_len_buf, .little);
-            const index_type = try self.allocator.alloc(u8, type_len);
+            const encoded_type = try self.allocator.alloc(u8, type_len);
+            defer self.allocator.free(encoded_type);
+            if ((try reader.readSliceShort(encoded_type)) < type_len) return error.InvalidCatalogFile;
+
+            const sep = std.mem.indexOfScalar(u8, encoded_type, INDEX_TYPE_METRIC_SEP);
+            const index_type = try self.allocator.dupe(u8, if (sep) |at| encoded_type[0..at] else encoded_type);
             errdefer self.allocator.free(index_type);
-            if ((try reader.readSliceShort(index_type)) < type_len) return error.InvalidCatalogFile;
+            const metric: ?[]const u8 = if (sep) |at|
+                try self.allocator.dupe(u8, encoded_type[at + 1 ..])
+            else
+                null;
+            errdefer if (metric) |m| self.allocator.free(m);
 
             // Read table name
             var table_len_buf: [4]u8 = undefined;
@@ -429,6 +472,7 @@ pub const Catalog = struct {
                 .index_type = index_type,
                 .table_name = table_name,
                 .columns = columns,
+                .metric = metric,
             };
 
             // Reconstruct scoped key: "label:index_name"
@@ -791,6 +835,9 @@ pub const Catalog = struct {
         const owned_table = try self.allocator.dupe(u8, info.table_name);
         errdefer self.allocator.free(owned_table);
 
+        const owned_metric: ?[]const u8 = if (info.metric) |m| try self.allocator.dupe(u8, m) else null;
+        errdefer if (owned_metric) |m| self.allocator.free(m);
+
         const owned_cols = try self.allocator.alloc([]const u8, info.columns.len);
         var cols_filled: usize = 0;
         errdefer {
@@ -807,6 +854,7 @@ pub const Catalog = struct {
             .index_type = owned_type,
             .table_name = owned_table,
             .columns = owned_cols,
+            .metric = owned_metric,
         };
 
         try self.indexes.put(scoped_key, owned_info);

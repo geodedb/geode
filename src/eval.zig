@@ -2385,6 +2385,17 @@ fn evalVectorKnn(allocator: std.mem.Allocator, args: []*ast.Expr, env: Env) Eval
 
     const metric = try parseVectorMetric(try evalExpr(allocator, args[3].*, env));
 
+    // CANARY: REQ=REQ-ADVANCED-INDEX-RESTART-REBUILD; FEATURE="VectorIndex"; ASPECT=LazyRebuildAfterRestart; STATUS=TESTED; TEST=tests/test_advanced_index_restart.zig; OWNER=index; UPDATED=2026-08-25
+    // ADVANCED-INDEX-RESTART: nothing rebuilds advanced indexes on catalog
+    // reload, so after a restart the lookup below found nothing and this
+    // function silently brute-force scanned an index the catalog still
+    // advertises. Rebuild it, once, on the first query that needs it. A failure
+    // here is NOT fatal: the scan below is a correct (if O(n)) answer, which is
+    // exactly the behaviour that shipped before, so a rebuild that cannot
+    // allocate must not turn a working query into an error.
+    @import("execution/statement_dispatcher.zig")
+        .ensureAdvancedVectorIndexForProperty(allocator, property_name) catch {};
+
     if (index_manager.getGlobalIndexManager()) |manager| {
         if (manager.findAdvancedVectorIndexForProperty(property_name)) |index_name| {
             const results = manager.queryAdvancedVectorIndexWithMetric(index_name, query_vec.vector, @intCast(k), metric) catch |err| switch (err) {

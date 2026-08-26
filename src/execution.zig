@@ -1686,6 +1686,12 @@ fn executeStatementWithContextInner(allocator: std.mem.Allocator, stmt: ast.Stat
                 },
                 .table_name = ci.label,
                 .columns = @as([][]const u8, @constCast(ci.properties)),
+                // CANARY: REQ=REQ-ADVANCED-INDEX-RESTART-REBUILD; FEATURE="VectorIndex"; ASPECT=MetricRecordedInCatalog; STATUS=TESTED; TEST=tests/test_advanced_index_restart.zig; OWNER=index; UPDATED=2026-08-25
+                // ADVANCED-INDEX-RESTART: the validated metric now reaches the
+                // catalog, so the lazy rebuild after a restart can build the
+                // index the DDL actually asked for instead of guessing `l2`.
+                // Only vector indexes have one; everything else stays null.
+                .metric = if (ci.index_type == .vector or ci.index_type == .vector_f32) ci.metric else null,
             };
 
             cat.addIndex(index_info) catch |err| {
@@ -1888,6 +1894,9 @@ fn executeStatementWithContextInner(allocator: std.mem.Allocator, stmt: ast.Stat
                     cat.allocator.free(removed.value.name);
                     cat.allocator.free(removed.value.index_type);
                     cat.allocator.free(removed.value.table_name);
+                    // ADVANCED-INDEX-RESTART: the persisted vector metric is
+                    // catalog-owned like every other field of the row.
+                    if (removed.value.metric) |m| cat.allocator.free(m);
                     for (removed.value.columns) |col| {
                         cat.allocator.free(col);
                     }

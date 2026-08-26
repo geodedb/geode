@@ -102,6 +102,90 @@ pub fn armVectorDimGuard(
     }
 }
 
+// CANARY: REQ=REQ-ADVANCED-INDEX-RESTART-REBUILD; FEATURE="VectorIndex"; ASPECT=LazyRebuildAfterRestart; STATUS=TESTED; TEST=tests/test_advanced_index_restart.zig; OWNER=index; UPDATED=2026-08-25
+/// Rebuild the advanced (HNSW) vector index for `property` from the catalog, if
+/// one is recorded there and the runtime has none.
+///
+/// ADVANCED-INDEX-RESTART: `ensureAdvancedRuntimeIndex` below is the ONLY site
+/// that builds an advanced index, and it runs from CREATE INDEX execution only.
+/// Nothing rebuilt on catalog reload, so after a restart the catalog (and
+/// SHOW INDEXES) still described a vector index that no longer existed, and
+/// `evalVectorKnn` quietly fell back to the brute-force `scanVectorKnn` — right
+/// answers, O(n) per query, no diagnostic. The database advertised an index it
+/// was not using.
+///
+/// The rebuild is LAZY — driven from the knn read path, the same shape as
+/// `armVectorDimGuard` above — rather than eager at startup:
+///   * it pays the scan only for a property that is actually queried, instead
+///     of adding an unbounded startup cost proportional to every vector index
+///     in the catalog (a cost every restart would pay even for indexes nothing
+///     touches);
+///   * the catalog is the source of truth and is already loaded by the time any
+///     query runs, so there is no ordering constraint to satisfy;
+///   * it is bounded: exactly one rebuild per index per process, because the
+///     first call registers the index and every later call returns at the
+///     `findAdvancedVectorIndexForProperty` check below.
+///
+/// The rebuilt index gets the metric the DDL recorded (persisted with the
+/// catalog row — see `IndexInfo.metric`), not a guessed `l2`, and it arms the
+/// ENG-3912 dimension guard exactly as the DDL path does.
+///
+/// The catalog map is read WITHOUT taking `catalog.rwlock`, matching
+/// `armVectorDimGuard` above. Taking it here would risk the exclusive-then-
+/// shared self-deadlock this codebase has already been bitten by (see the
+/// CREATE INDEX note in src/execution.zig), because this runs deep inside
+/// expression evaluation with no knowledge of what the statement above holds.
+/// The residual is a narrow race with a concurrent DROP INDEX; every string the
+/// build below keeps is duplicated by the index manager, so the exposure is
+/// limited to this call's own reads.
+pub fn ensureAdvancedVectorIndexForProperty(allocator: std.mem.Allocator, property: []const u8) !void {
+    // Already registered in this process — the overwhelmingly common case, and
+    // what keeps a per-query call cheap.
+    if (index_manager.getGlobalIndexManager()) |existing| {
+        if (existing.findAdvancedVectorIndexForProperty(property) != null) return;
+    }
+
+    const execution = @import("../execution.zig");
+    const catalog = execution.getCatalogInstanceIfPresent() orelse return;
+
+    // Find the catalog row BEFORE touching the index manager, so a property
+    // with no recorded vector index never causes one to be created.
+    var iter = catalog.indexes.iterator();
+    const info = while (iter.next()) |entry| {
+        const candidate = entry.value_ptr.*;
+        if (candidate.columns.len != 1) continue;
+        if (!std.mem.eql(u8, candidate.columns[0], property)) continue;
+        if (!std.mem.eql(u8, candidate.index_type, "vector") and
+            !std.mem.eql(u8, candidate.index_type, "vector_f32")) continue;
+        break candidate;
+    } else return;
+
+    // The index manager and every HNSW graph inside it are PROCESS-lifetime, so
+    // they must not be built from the caller's allocator here: this runs inside
+    // a read query, whose allocator is the per-request arena. A manager created
+    // from that arena keeps a dangling vtable pointer the moment the request
+    // ends, and the next search faults inside the hnsw library (verified: a GP
+    // fault in `searchLayer`). `smp_allocator` is the governance-approved
+    // process-lifetime choice — page_allocator is forbidden in src/ — and is
+    // the same precedent the adapter-registry lifetime fix set in
+    // src/eval_extended.zig. If a manager already exists this argument is
+    // ignored, so no other call site's ownership changes.
+    const manager = try index_manager.ensureGlobalIndexManager(std.heap.smp_allocator);
+    if (manager.findAdvancedVectorIndexForProperty(property) != null) return;
+
+    // Same order as ensureAdvancedRuntimeIndex: arm the dimension guard, create
+    // the (empty, dimension-0) wrapper with the RECORDED metric, register the
+    // property mapping, then populate from the store.
+    try manager.registerVectorDimValidation(info.name, info.table_name, info.columns[0]);
+    try manager.createAdvancedVectorIndex(info.name, 0, toRuntimeVectorMetric(info.metric));
+    try manager.registerAdvancedPropertyIndex(info.name, info.table_name, info.columns[0], .vector_f32);
+    // Run inline rather than through `queueOrRunAdvancedIndexBackfill`: the
+    // deferral queue exists to get a backfill out of the CREATE INDEX EXCLUSIVE
+    // write lock, and this path runs under a read query, which holds no
+    // exclusive lock and needs the index for the query in hand.
+    try manager.rebuildAdvancedIndex(graph_store.getGlobalStore(allocator), info.name);
+}
+
 // CANARY: REQ=REQ-ENG-USING-VECTOR-BUILDS-INDEX; FEATURE="VectorIndex"; ASPECT=MetricThreading; STATUS=TESTED; TEST=tests/test_using_vector_index.zig; OWNER=index; UPDATED=2026-08-25
 /// Map the metric string the DDL validated (execution.zig, GAP-0918) onto the
 /// runtime wrapper's metric. The build site used to hardcode `.l2`, so a
