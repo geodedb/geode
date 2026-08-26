@@ -3396,6 +3396,31 @@ fn resolveGroupByKeyThroughAlias(
     return key_expr;
 }
 
+// CANARY: REQ=REQ-GROUPED-UNKNOWN-FUNCTION; FEATURE="GroupedProjection"; ASPECT=UnknownFunctionEscapes; STATUS=TESTED; TEST=tests/test_unsupported_aggregates.zig; OWNER=execution; UPDATED=2026-08-25
+/// Evaluate one expression of a grouped query (projection item, GROUP BY key or
+/// HAVING predicate) with the path's long-standing tolerance for per-group
+/// evaluation failures — EXCEPT for an unknown function, which escapes.
+///
+/// GROUPED-UNKNOWN-FUNCTION: every one of these sites used a blanket
+/// `catch -> NULL` so a cell that cannot be computed for THIS group still gets
+/// a value. That also swallowed `error.UnknownFunction`, so
+///
+///     MATCH (n:G) RETURN n.k, banana(n.v) GROUP BY n.k
+///
+/// came back as a full, successful result set with a NULL column, while the
+/// identical ungrouped `RETURN banana(n.v)` raised undefined_function
+/// (SQLSTATE 42883, src/server/proto_util.zig). An unknown function is a static
+/// defect in the query text, not a per-group evaluation failure: it cannot
+/// depend on which rows landed in the group, and it must be reported the same
+/// way in both shapes. Every other error keeps collapsing to the caller's
+/// fallback, so the six aggregates and ordinary scalar functions are untouched.
+fn evalGroupedExpr(allocator: std.mem.Allocator, expr: ast.Expr, env: Env, fallback: Value) !Value {
+    return eval.evalExpr(allocator, expr, env) catch |err| switch (err) {
+        error.UnknownFunction => err,
+        else => fallback,
+    };
+}
+
 /// Execute WITH clause with optional GROUP BY aggregation and query parameter bindings
 pub fn executeWithClauseWithGroupByAndParams(allocator: std.mem.Allocator, input_result: ExecutionResult, with_clause: ast.WithClause, group_by: ?ast.GroupBy, having: ?ast.Expr, param_names: []const []const u8, param_values: []const eval.Value) !ExecutionResult {
     // CANARY(memory-safety): Validate input_result structure
@@ -3467,7 +3492,7 @@ pub fn executeWithClauseWithGroupByAndParams(allocator: std.mem.Allocator, input
                 // GAP-ENT-0055: follow a projection alias (`GROUP BY s`) to its
                 // underlying expression before evaluating against the input row.
                 const key_expr = resolveGroupByKeyThroughAlias(raw_key_expr, with_items, input_result.columns);
-                const key_val = eval.evalExpr(allocator, key_expr, env) catch Value{ .Null = {} };
+                const key_val = try evalGroupedExpr(allocator, key_expr, env, Value{ .Null = {} });
                 // Serialize key value to string
                 switch (key_val) {
                     .Int => |i| try key_writer.print("{d}", .{i}),
@@ -3521,7 +3546,7 @@ pub fn executeWithClauseWithGroupByAndParams(allocator: std.mem.Allocator, input
                     new_row[i] = try computeGroupAggregation(allocator, item.expr, group_rows, input_result.columns);
                 } else {
                     // Non-aggregation expression: evaluate with first row
-                    new_row[i] = eval.evalExpr(allocator, item.expr, base_env) catch Value{ .Null = {} };
+                    new_row[i] = try evalGroupedExpr(allocator, item.expr, base_env, Value{ .Null = {} });
                 }
             }
 
@@ -3535,7 +3560,7 @@ pub fn executeWithClauseWithGroupByAndParams(allocator: std.mem.Allocator, input
                     .param_values = param_values,
                     .allocator = allocator,
                 };
-                const having_result = eval.evalExpr(allocator, having_expr, having_env) catch Value{ .Bool = false };
+                const having_result = try evalGroupedExpr(allocator, having_expr, having_env, Value{ .Bool = false });
                 const passes_having = switch (having_result) {
                     .Bool => |b| b,
                     .Int => |i| i != 0,
@@ -3612,7 +3637,7 @@ pub fn executeWithClauseWithGroupByAndParams(allocator: std.mem.Allocator, input
                         if (!return_and_sorting.isAggregationExpr(item.expr) and return_and_sorting.isNonConstantExpr(item.expr)) {
                             if (!first_key) try key_writer.writeAll("|");
                             first_key = false;
-                            const key_val = eval.evalExpr(allocator, item.expr, env) catch Value{ .Null = {} };
+                            const key_val = try evalGroupedExpr(allocator, item.expr, env, Value{ .Null = {} });
                             switch (key_val) {
                                 .Int => |iv| try key_writer.print("{d}", .{iv}),
                                 .Str => |s| try key_writer.writeAll(s),
@@ -3659,7 +3684,7 @@ pub fn executeWithClauseWithGroupByAndParams(allocator: std.mem.Allocator, input
                         if (return_and_sorting.isAggregationExpr(item.expr)) {
                             new_row[i] = try computeGroupAggregation(allocator, item.expr, group_rows, input_result.columns);
                         } else {
-                            new_row[i] = eval.evalExpr(allocator, item.expr, base_env) catch Value{ .Null = {} };
+                            new_row[i] = try evalGroupedExpr(allocator, item.expr, base_env, Value{ .Null = {} });
                         }
                     }
                     try new_rows.append(allocator, new_row);
@@ -3693,7 +3718,7 @@ pub fn executeWithClauseWithGroupByAndParams(allocator: std.mem.Allocator, input
                         // Return NULL for non-aggregation expressions in this case
                         new_row[i] = Value{ .Null = {} };
                     } else {
-                        new_row[i] = eval.evalExpr(allocator, item.expr, base_env) catch Value{ .Null = {} };
+                        new_row[i] = try evalGroupedExpr(allocator, item.expr, base_env, Value{ .Null = {} });
                     }
                 }
 

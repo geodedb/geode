@@ -33,13 +33,11 @@
 //      (the guard against "fix it by rejecting everything").
 //   3. SHOW FUNCTIONS no longer advertises the unimplemented spellings.
 //
-// SCOPE / HONEST RESIDUAL: this fix refuses the aggregate names the engine
-// RECOGNISES but does not implement. A completely unknown function inside
-// GROUP BY (`RETURN n.k, banana(n.v) GROUP BY n.k`) still evaluates to NULL,
-// because `evaluateGroupAggregation` returns NULL for every unrecognised Call.
-// That is a separate, wider defect in the grouped-evaluation path and is
-// deliberately NOT asserted here so this file stays inside the UNSUPPORTED-AGGREGATES blast
-// radius.
+// SCOPE: this half of the file refuses the aggregate names the engine
+// RECOGNISES but does not implement. The wider defect it used to record as an
+// honest residual — a COMPLETELY unknown function inside GROUP BY
+// (`RETURN n.k, banana(n.v) GROUP BY n.k`) evaluating to NULL — is closed by
+// the GROUPED-UNKNOWN-FUNCTION tests at the bottom of this file.
 //
 // CANARY: REQ=REQ-UNSUPPORTED-AGGREGATE-REJECTION; FEATURE="AggregateSetQuantifier"; ASPECT=UnsupportedAggregateReject; STATUS=TESTED; TEST=tests/test_unsupported_aggregates.zig; OWNER=parser; UPDATED=2026-08-25
 
@@ -329,4 +327,144 @@ test "UNSUPPORTED-AGGREGATES: SHOW FUNCTIONS no longer advertises the unimplemen
     // Guard against "fix it by emptying the aggregate section".
     try testing.expect(saw_sum);
     try testing.expect(saw_collect);
+}
+
+// ---------------------------------------------------------------------------
+// GROUPED-UNKNOWN-FUNCTION — the wider defect the SCOPE note at the top of this
+// file recorded as an honest residual, now closed.
+//
+// VERIFIED READ-ONLY AGAINST 1459b456 BEFORE THE FIX:
+//
+//   MATCH (n:G) RETURN n.k, banana(n.v) GROUP BY n.k
+//      -> SUCCESS, 2 rows, second column NULL in both
+//   MATCH (n:G) RETURN banana(n.v)          (the SAME call, ungrouped)
+//      -> error.UnknownFunction  (SQLSTATE 42883, src/server/proto_util.zig:206)
+//
+// The grouped projection path (src/execution.zig
+// `executeWithClauseWithGroupByAndParams`) evaluates each non-aggregate item
+// with a blanket `catch -> NULL` so a value that cannot be computed for THIS
+// group still fills its cell. That tolerance also swallowed
+// error.UnknownFunction, which is not a per-group evaluation failure at all —
+// it is a static defect in the query text, and it must be reported the same way
+// in both shapes. A typo'd function name came back as a full, successful result
+// set with a NULL column in it.
+//
+// WHAT THESE TESTS PIN (contract, not implementation):
+//
+//   1. An unknown function raises UnknownFunction in the grouped projection,
+//      the grouped GROUP BY key, and the HAVING clause — the same error the
+//      ungrouped shape already raised.
+//   2. The six real aggregates and ordinary scalar functions inside a grouped
+//      projection keep working (the guard against "fix it by erroring on
+//      everything").
+//
+// CANARY: REQ=REQ-GROUPED-UNKNOWN-FUNCTION; FEATURE="GroupedProjection"; ASPECT=UnknownFunctionEscapes; STATUS=TESTED; TEST=tests/test_unsupported_aggregates.zig; OWNER=execution; UPDATED=2026-08-25
+// ---------------------------------------------------------------------------
+
+fn groupedHarness(h: *Harness, graph: []const u8) !void {
+    var buf: [128]u8 = undefined;
+    _ = try h.exec(try std.fmt.bufPrint(&buf, "CREATE GRAPH {s}", .{graph}));
+    _ = try h.exec(try std.fmt.bufPrint(&buf, "USE GRAPH {s}", .{graph}));
+    _ = try h.exec("CREATE (:GU {k: 'a', v: 1})");
+    _ = try h.exec("CREATE (:GU {k: 'a', v: 3})");
+    _ = try h.exec("CREATE (:GU {k: 'b', v: 5})");
+}
+
+test "GROUPED-UNKNOWN-FUNCTION: an unknown function in a grouped query raises, it does not answer NULL" {
+    var h = try Harness.init(testing.allocator);
+    defer h.deinit();
+    try groupedHarness(&h, "grouped_unknown_fn");
+
+    // The reference behaviour: ungrouped, this has always been loud.
+    try testing.expectError(
+        error.UnknownFunction,
+        h.exec("MATCH (n:GU) RETURN banana(n.v)"),
+    );
+
+    // KEY ASSERTION (RED before the fix: SUCCESS with a NULL second column).
+    try testing.expectError(
+        error.UnknownFunction,
+        h.exec("MATCH (n:GU) RETURN n.k, banana(n.v) GROUP BY n.k"),
+    );
+
+    // The same swallow sat on the other two expression positions of the grouped
+    // path: the GROUP BY key itself and HAVING.
+    try testing.expectError(
+        error.UnknownFunction,
+        h.exec("MATCH (n:GU) RETURN banana(n.k), count(*) GROUP BY banana(n.k)"),
+    );
+    try testing.expectError(
+        error.UnknownFunction,
+        h.exec("MATCH (n:GU) RETURN n.k, count(*) GROUP BY n.k HAVING banana(n.k) = 1"),
+    );
+
+    // Nested inside a larger expression, where the swallow was just as silent.
+    try testing.expectError(
+        error.UnknownFunction,
+        h.exec("MATCH (n:GU) RETURN n.k, 1 + banana(n.v) GROUP BY n.k"),
+    );
+    try testing.expectError(
+        error.UnknownFunction,
+        h.exec("MATCH (n:GU) RETURN n.k, upper(banana(n.k)) GROUP BY n.k"),
+    );
+
+    // And through a WITH stage, which is the other entry point into the same
+    // grouped projection code.
+    try testing.expectError(
+        error.UnknownFunction,
+        h.exec("MATCH (n:GU) WITH n.k AS k, banana(n.k) AS b GROUP BY n.k RETURN k, b"),
+    );
+}
+
+test "GROUPED-UNKNOWN-FUNCTION: real aggregates and scalar functions in a grouped projection still work" {
+    var h = try Harness.init(testing.allocator);
+    defer h.deinit();
+    try groupedHarness(&h, "grouped_known_fn");
+
+    var arena = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena.deinit();
+    const gpa = arena.allocator();
+
+    var failures: std.ArrayListUnmanaged([]const u8) = .empty;
+
+    // The six implemented aggregates, grouped.
+    try h.checkAccepted(&failures, gpa, "MATCH (n:GU) RETURN n.k, count(*) GROUP BY n.k");
+    try h.checkAccepted(&failures, gpa, "MATCH (n:GU) RETURN n.k, count(n.v) GROUP BY n.k");
+    try h.checkAccepted(&failures, gpa, "MATCH (n:GU) RETURN n.k, sum(n.v) GROUP BY n.k");
+    try h.checkAccepted(&failures, gpa, "MATCH (n:GU) RETURN n.k, avg(n.v) GROUP BY n.k");
+    try h.checkAccepted(&failures, gpa, "MATCH (n:GU) RETURN n.k, min(n.v) GROUP BY n.k");
+    try h.checkAccepted(&failures, gpa, "MATCH (n:GU) RETURN n.k, max(n.v) GROUP BY n.k");
+    try h.checkAccepted(&failures, gpa, "MATCH (n:GU) RETURN n.k, collect(n.v) GROUP BY n.k");
+    // Ordinary scalar functions in the same projection.
+    try h.checkAccepted(&failures, gpa, "MATCH (n:GU) RETURN n.k, upper(n.k) GROUP BY n.k");
+    try h.checkAccepted(&failures, gpa, "MATCH (n:GU) RETURN n.k, size(n.k) GROUP BY n.k");
+    try h.checkAccepted(&failures, gpa, "MATCH (n:GU) RETURN upper(n.k), count(*) GROUP BY upper(n.k)");
+    try h.checkAccepted(&failures, gpa, "MATCH (n:GU) RETURN n.k, count(*) GROUP BY n.k HAVING count(*) >= 1");
+    try h.checkAccepted(&failures, gpa, "MATCH (n:GU) WITH n.k AS k, count(*) AS c GROUP BY n.k RETURN k, c");
+
+    if (failures.items.len != 0) {
+        std.debug.print("\n[GROUPED-UNKNOWN-FUNCTION] {d} regression(s):\n", .{failures.items.len});
+        for (failures.items) |f| std.debug.print("  - {s}\n", .{f});
+        return error.GroupedProjectionRegression;
+    }
+
+    // The values must still be right, not merely non-erroring.
+    const res = try h.exec("MATCH (n:GU) RETURN n.k, sum(n.v) GROUP BY n.k");
+    try testing.expectEqual(@as(usize, 2), res.rows.len);
+    for (res.rows) |row| {
+        const key = switch (row[0]) {
+            .Str => |s| s,
+            else => return error.UnexpectedKeyType,
+        };
+        const total: i64 = switch (row[1]) {
+            .Int => |i| i,
+            .Double => |d| @intFromFloat(d),
+            else => return error.UnexpectedSumType,
+        };
+        if (std.mem.eql(u8, key, "a")) {
+            try testing.expectEqual(@as(i64, 4), total);
+        } else {
+            try testing.expectEqual(@as(i64, 5), total);
+        }
+    }
 }

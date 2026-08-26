@@ -3281,6 +3281,8 @@ REQ-GRAPHSAGE-INDUCTIVE-001,GraphSAGE Inductive Learning,GraphStore,TESTED,,,ml,
 REQ-GRAPHSAGE-INDUCTIVE-002,GraphSAGE Inductive Learning,Prediction,TESTED,,,ml,2026-01-10,src/ml/graph_embeddings.zig
 REQ-GRAPHSTORE-QUEUE-001,SnapshotFlushQueueDepth,Metrics,IMPL,,,storage,2026-02-04,src/storage/queue_depth.zig
 REQ-GRAPHSTORE-SNAP-PIPE-001,SnapshotPipeline,Maintenance,IMPL,,,storage,2026-02-04,src/storage/snapshot_pipeline.zig
+REQ-GROUPED-UNKNOWN-FUNCTION,GroupedProjection,UnknownFunctionEscapes,TESTED,,,execution,2026-08-25,src/execution.zig
+REQ-GROUPED-UNKNOWN-FUNCTION,GroupedProjection,UnknownFunctionEscapes,TESTED,,,execution,2026-08-25,tests/test_unsupported_aggregates.zig
 REQ-GRPC-ATOMIC-SESSION-001,GrpcSessionSafety,AtomicPointer,IMPL,,,transport,2026-02-13,src/transport/grpc_server.zig
 REQ-GRPC-FULL-ROUTING-001,GrpcFullMessageRouting,HandlerParity,IMPL,,,transport,2026-02-13,src/transport/grpc_server.zig
 REQ-HELPER-001,Helper,Utilities,TESTED,,,core,2026-01-16,tests/test_gap_0193_batch3_comprehensive.zig
