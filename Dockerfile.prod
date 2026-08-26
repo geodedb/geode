@@ -1,4 +1,4 @@
-# syntax=docker/dockerfile:1.25
+# syntax=docker/dockerfile:1.26
 # Optimized production Dockerfile with GPU support and BuildKit cache mounts
 FROM ubuntu:26.04 AS builder
 # Issue #442: Use bash with pipefail to catch errors in piped commands
@@ -54,7 +54,7 @@ RUN --mount=type=cache,target=/root/.cache/zig \
     zig build -Doptimize=ReleaseFast -Denable-openssl=true
 
 # Runtime stage - NVIDIA CUDA base for GPU support
-FROM nvidia/cuda:13.3.0-base-ubuntu24.04 AS runtime
+FROM nvidia/cuda:13.3.1-base-ubuntu24.04 AS runtime
 
 # Install only runtime dependencies (no build tools)
 RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \

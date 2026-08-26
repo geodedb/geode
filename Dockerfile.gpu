@@ -7,7 +7,7 @@
 # ==============================================================================
 # Stage 1: Geode Builder with GPU support
 # ==============================================================================
-FROM nvidia/cuda:13.3.0-devel-ubuntu22.04 AS builder
+FROM nvidia/cuda:13.3.1-devel-ubuntu22.04 AS builder
 
 ARG TARGETARCH
 ARG ZIG_VERSION=0.15.1
@@ -55,7 +55,7 @@ RUN echo "Building Geode with GPU support..." && \
 # ==============================================================================
 # Stage 2: Minimal runtime with GPU support
 # ==============================================================================
-FROM nvidia/cuda:13.3.0-devel-ubuntu22.04 AS runtime
+FROM nvidia/cuda:13.3.1-devel-ubuntu22.04 AS runtime
 
 # Install minimal runtime dependencies
 RUN apt-get update && apt-get install -y \

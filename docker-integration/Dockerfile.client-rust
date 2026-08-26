@@ -1,7 +1,7 @@
 # Rust Client Container for Integration Testing
 # Tests high-performance async connections via tokio and quinn
 
-FROM rust:1.97-bookworm AS builder
+FROM rust:1.98-bookworm AS builder
 
 WORKDIR /app
 
@@ -14,7 +14,7 @@ RUN cargo build --release && \
     cargo test --release --no-run 2>/dev/null || true
 
 # Runtime stage - use rust image to have cargo available for testing
-FROM rust:1.97-bookworm AS runtime
+FROM rust:1.98-bookworm AS runtime
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
     ca-certificates \
