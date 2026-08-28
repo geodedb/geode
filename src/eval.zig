@@ -2145,7 +2145,7 @@ fn parseVectorMetric(value: Value) EvalError!VectorMetric {
     // accept the same synonym instead of raising InvalidArgs.
     if (std.ascii.eqlIgnoreCase(metric_text, "l2") or std.ascii.eqlIgnoreCase(metric_text, "euclidean")) return .l2;
     if (std.ascii.eqlIgnoreCase(metric_text, "cosine")) return .cosine;
-    if (std.ascii.eqlIgnoreCase(metric_text, "dot") or std.ascii.eqlIgnoreCase(metric_text, "dot_product")) return .dot_product;
+    if (std.ascii.eqlIgnoreCase(metric_text, "dot") or std.ascii.eqlIgnoreCase(metric_text, "dot_product") or std.ascii.eqlIgnoreCase(metric_text, "inner_product")) return .dot_product;
     return error.InvalidArgs;
 }
 
@@ -2461,6 +2461,11 @@ fn evalVectorKnn(allocator: std.mem.Allocator, args: []*ast.Expr, env: Env) Eval
                 error.OutOfMemory => return error.OutOfMemory,
                 error.IndexNotFound => return scanVectorKnn(allocator, property_name, query_vec.vector, k, metric),
                 error.DimensionMismatch, error.InvalidDimension, error.InvalidConfig => return error.InvalidArgs,
+                // Spec geode-vectorization-and-reranking: the query metric does
+                // not match the metric the HNSW index was built with. Let this
+                // propagate distinctly instead of folding it into InvalidArgs —
+                // it gets its own GQLSTATE (42704) in proto_util.mapError.
+                error.VectorMetricMismatch => return error.VectorMetricMismatch,
             };
             defer manager.allocator.free(results);
 

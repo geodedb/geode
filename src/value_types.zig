@@ -75,6 +75,11 @@ pub const EvalError = error{
     // the 58000 system-error class.
     // CANARY: REQ=REQ-ENG-3910-IN-PREDICATE-TYPE-SAFETY; FEATURE="InOperator"; ASPECT=NonListRightHandSide; STATUS=TESTED; TEST=tests/test_eng3910_in_type_safety.zig; OWNER=eval; UPDATED=2026-08-24
     InListRequiresList,
+    // Spec geode-vectorization-and-reranking: knn()'s query metric does not
+    // match the metric the target HNSW index was built with. Distinct from
+    // InvalidArgs so it can carry its own GQLSTATE (42704) in proto_util.
+    // CANARY: REQ=REQ-VECTOR-KNN-METRIC-VALIDATE-001; FEATURE="VectorIndex"; ASPECT=QueryMetricMatchesIndex; STATUS=TESTED; TEST=tests/test_knn_metric_mismatch.zig; OWNER=index; UPDATED=2026-08-28
+    VectorMetricMismatch,
     OutOfMemory,
 };
 

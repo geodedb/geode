@@ -9427,6 +9427,20 @@ pub fn build(b: *std.Build) void {
     const using_vector_step = b.step("test-using-vector-index", "Run USING vector / USING HNSW runtime-index build regressions");
     using_vector_step.dependOn(&run_using_vector_tests.step);
 
+    // Spec geode-vectorization-and-reranking: `searchWithMetric` ignored the
+    // caller's metric for neighbour selection — knn('emb', $q, 10, 'cosine')
+    // against an l2 index silently returned l2-index neighbours relabeled
+    // with cosine scores. Also validates `inner_product` as a query-side
+    // metric synonym for dot_product (accepted by DDL, previously rejected
+    // query-side).
+    const knn_metric_mismatch_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_knn_metric_mismatch.zig"), .target = target, .optimize = optimize });
+    knn_metric_mismatch_test_mod.addImport("geode", root_mod);
+    const knn_metric_mismatch_tests = b.addTest(.{ .root_module = knn_metric_mismatch_test_mod });
+    const run_knn_metric_mismatch_tests = b.addRunArtifact(knn_metric_mismatch_tests);
+    shardDep(test_step, &run_knn_metric_mismatch_tests.step, 0, test_shard_loads, test_shard_index);
+    const knn_metric_mismatch_step = b.step("test-knn-metric-mismatch", "Run knn metric-mismatch validation + inner_product query-side parity regressions");
+    knn_metric_mismatch_step.dependOn(&run_knn_metric_mismatch_tests.step);
+
     // ENG-3914: MERGE duplicated rows DETERMINISTICALLY — the general path
     // probed only the first property of a multi-property merge key against a
     // single-valued index and treated a failed verification as proof of

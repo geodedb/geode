@@ -529,6 +529,12 @@ pub const VectorIndexWrapper = struct {
         }
         if (self.dimension != query.dim) return error.DimensionMismatch;
 
+        // Spec geode-vectorization-and-reranking: the HNSW graph is built with
+        // self.metric; a different query metric would silently return the
+        // index-metric neighbour set relabeled with the caller's scores.
+        // CANARY: REQ=REQ-VECTOR-KNN-METRIC-VALIDATE-001; FEATURE="VectorIndex"; ASPECT=QueryMetricMatchesIndex; STATUS=TESTED; TEST=tests/test_knn_metric_mismatch.zig; OWNER=index; UPDATED=2026-08-28
+        if (metric != self.metric) return error.VectorMetricMismatch;
+
         const results = try self.hnsw_index.?.knnSearch(query.data, k);
         defer allocator.free(results);
 

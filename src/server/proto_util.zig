@@ -152,6 +152,12 @@ pub fn mapError(err: anyerror) ErrorInfo {
         error.FulltextRequiresTextProperty => .{ .code = "42804", .message = "Fulltext index requires a text (string) property; the indexed property holds only non-string values" },
         // GAP-0918: vector index validation.
         error.InvalidIndexMetric => .{ .code = "42704", .message = "Unknown vector distance metric (supported: l2, euclidean, cosine, dot_product, inner_product)" },
+        // Spec geode-vectorization-and-reranking: knn()'s query metric did not
+        // match the metric the target HNSW index was built with. 42704 =
+        // undefined_object, the same class the unknown-metric refusal above
+        // uses.
+        // CANARY: REQ=REQ-VECTOR-KNN-METRIC-VALIDATE-001; FEATURE="VectorIndex"; ASPECT=QueryMetricMatchesIndex; STATUS=TESTED; TEST=tests/test_knn_metric_mismatch.zig; OWNER=index; UPDATED=2026-08-28
+        error.VectorMetricMismatch => .{ .code = "42704", .message = "knn metric does not match the vector index metric; query with the index's metric or recreate the index" },
         // ENG-3906: a WITH parameter a vector index does not implement used to be
         // silently discarded — a correctness lie about the index that was built.
         // 42704 = undefined_object, the same family the unknown-metric refusal
