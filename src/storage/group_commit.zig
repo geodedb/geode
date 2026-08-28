@@ -366,6 +366,14 @@ test "edgeTupleShardKey distinct tuples spread across shards" {
 pub const ApplyResult = struct {
     node_or_edge_id: u64 = 0,
     err: ?anyerror = null,
+    /// Task 4 (geode-vectorization-and-reranking A4b §6, review Finding 1):
+    /// true when the op actually changed data (fresh insert, or an on-match
+    /// `SET` apply) — mirrors `graph_storage_adapter.StorageAdapter.MergeResult.wrote`
+    /// for `bulk_merge_node` / `bulk_merge_node_props`. Callers gate live FTS
+    /// maintenance on this so an idempotent re-MERGE hit does not re-append
+    /// postings into the append-only fts-storage engine. Unused (stays
+    /// `false`) for op kinds that never drive FTS maintenance.
+    wrote: bool = false,
     /// CLOCK_MONOTONIC timestamp set immediately before queue insertion.
     enqueued_ns: u64 = 0,
     /// 0 = pending, 1 = done.  Waited on by submitter via `futexWait`.
@@ -909,8 +917,9 @@ pub const ShardedCoordinator = struct {
                         p.on_create_props,
                         p.apply_on_match,
                         p.tenant,
-                    )) |id| {
-                        res.node_or_edge_id = id;
+                    )) |merge_result| {
+                        res.node_or_edge_id = merge_result.id;
+                        res.wrote = merge_result.wrote;
                     } else |e| {
                         res.err = e;
                     }
@@ -924,8 +933,9 @@ pub const ShardedCoordinator = struct {
                         p.on_create_props,
                         p.apply_on_match,
                         p.tenant,
-                    )) |id| {
-                        res.node_or_edge_id = id;
+                    )) |merge_result| {
+                        res.node_or_edge_id = merge_result.id;
+                        res.wrote = merge_result.wrote;
                     } else |e| {
                         res.err = e;
                     }

@@ -72,7 +72,7 @@ fn mergeWorker(ctx_ptr: *anyopaque) void {
             ctx.done.store(1, .release);
             return;
         };
-        slot.* = id;
+        slot.* = id.id;
     }
     ctx.done.store(1, .release);
 }
@@ -165,7 +165,7 @@ test "GAP-0894: single-property MERGE apply_on_match upserts without duplicating
         .{ .key = "rank", .value = .{ .String = "genus" } },
     };
 
-    const id1 = try adapter.bulkMergeNodeWithReservedId(
+    const id1 = (try adapter.bulkMergeNodeWithReservedId(
         "g",
         store.reserveNodeId(),
         "Taxon",
@@ -173,8 +173,8 @@ test "GAP-0894: single-property MERGE apply_on_match upserts without duplicating
         .{ .Int = 42 },
         &set1,
         true,
-    );
-    const id2 = try adapter.bulkMergeNodeWithReservedId(
+    )).id;
+    const id2 = (try adapter.bulkMergeNodeWithReservedId(
         "g",
         store.reserveNodeId(),
         "Taxon",
@@ -182,7 +182,7 @@ test "GAP-0894: single-property MERGE apply_on_match upserts without duplicating
         .{ .Int = 42 },
         &set2,
         true,
-    );
+    )).id;
     try std.testing.expectEqual(id1, id2);
 
     // The second MERGE's bare-SET (apply_on_match) must have overwritten the

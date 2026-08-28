@@ -1218,7 +1218,12 @@ fn executeBulkSimpleMerge(
             };
             mut_sample.markExecuteDone();
             mut_sample.markLockReleased();
-            fts_should_maintain = true;
+            // Task 4 review Finding 1: gate on the primitive's `wrote` signal
+            // (threaded through `ApplyResult.wrote` by the coordinator's
+            // apply loop) instead of assuming every submit wrote data — an
+            // idempotent re-MERGE hit reports wrote=false and must not
+            // re-append into the append-only FTS index.
+            fts_should_maintain = op.resultPtr().wrote;
         } else if (merge_kvs.len > 1) {
             mut_sample.markLockAcquired();
             const store = graph_store.getGlobalStore(graph_store.global_allocator());
@@ -1231,14 +1236,20 @@ fn executeBulkSimpleMerge(
                 kvs,
                 spec.apply_on_match,
             );
-            merged_node_id = node_id_res catch |err| {
+            const merge_result = node_id_res catch |err| {
                 const info = proto_util.mapError(err);
                 try sendExecuteError(gpa, stream, info.code, info.message, &.{}, &.{});
                 return;
             };
+            merged_node_id = merge_result.id;
             mut_sample.markExecuteDone();
             mut_sample.markLockReleased();
-            fts_should_maintain = true;
+            // Task 4 review Finding 1: this shape (merge_kvs.len > 1) never
+            // ran the Phase-1 read probe, so `fts_should_maintain` was
+            // previously ALWAYS true here — including on a no-write hit —
+            // duplicating FTS postings on every idempotent re-MERGE. Gate on
+            // the primitive's `wrote` signal instead.
+            fts_should_maintain = merge_result.wrote;
         } else {
             const write_lock_timeout_ns = mutationWriteLockTimeoutNs(state);
             const deadline = monoNanosNow() + write_lock_timeout_ns;
@@ -1264,17 +1275,25 @@ fn executeBulkSimpleMerge(
                 null,
                 spec.apply_on_match,
             );
-            merged_node_id = node_id_res catch |err| {
+            const merge_result = node_id_res catch |err| {
                 graph_store.releaseGraphLock(lock_handle);
                 const info = proto_util.mapError(err);
                 try sendExecuteError(gpa, stream, info.code, info.message, &.{}, &.{});
                 return;
             };
+            merged_node_id = merge_result.id;
 
             mut_sample.markExecuteDone();
             graph_store.releaseGraphLock(lock_handle);
             mut_sample.markLockReleased();
-            fts_should_maintain = true;
+            // Task 4 review Finding 1: this branch is reached either for
+            // `apply_on_match` MERGE (Phase 1 was skipped above — SET clauses
+            // always apply, so `bulkMergeNode` sets wrote=true on both its
+            // found and not-found branches here) or for the rare race where
+            // the outer Phase-1 probe missed but a concurrent writer won
+            // before this call's internal re-probe (wrote=false, no
+            // double-append). Gate on the primitive's signal either way.
+            fts_should_maintain = merge_result.wrote;
         }
     } else {
         // Phase 1 hit on the ON-CREATE-SET-only path: the merge id is
@@ -1476,7 +1495,14 @@ fn executeBatchSimpleMerge(
     // live FTS maintenance can run once, in one pass, AFTER every lock is
     // released (below) — the batch twin of `executeBulkSimpleMerge`'s
     // join-point call site.
-    const OpOutcome = struct { id: u64 = 0, ok: bool = false };
+    // Task 4 review Finding 1: `wrote` mirrors `ApplyResult.wrote` (threaded
+    // through from `MergeResult.wrote` by the coordinator's apply loop) — the
+    // batch path had NO Phase-1 read probe at all, so every successful op was
+    // maintained unconditionally, duplicating FTS postings on every
+    // idempotent re-MERGE in a batch. `bulkMergeNode*(ForTenant)` re-probe
+    // the merge index inside the write critical section regardless, so
+    // `wrote` is accurate even for a same-batch duplicate key.
+    const OpOutcome = struct { id: u64 = 0, ok: bool = false, wrote: bool = false };
     const outcomes = try ba.alloc(OpOutcome, submitted);
     for (outcomes) |*o| o.* = .{};
 
@@ -1488,20 +1514,21 @@ fn executeBatchSimpleMerge(
             if (first_op_err == null) first_op_err = err;
             continue;
         };
-        outcomes[k] = .{ .id = id, .ok = true };
+        outcomes[k] = .{ .id = id, .ok = true, .wrote = ops[k].resultPtr().wrote };
         succeeded += 1;
     }
 
     mut_sample.markExecuteDone();
     mut_sample.markLockReleased();
 
-    // Live FTS maintenance for every successfully-applied op. Cheap-exits
-    // (per call) when no fulltext index covers the label. `.create` mirrors
-    // the SET chokepoint (property_mutation.zig:394) — see the single-merge
-    // fast path's twin call site for the full rationale.
+    // Live FTS maintenance for every successfully-applied op that actually
+    // wrote data. Cheap-exits (per call) when no fulltext index covers the
+    // label. `.create` mirrors the SET chokepoint (property_mutation.zig:394)
+    // — see the single-merge fast path's twin call site for the full
+    // rationale.
     // CANARY: REQ=REQ-FTS-BULK-MERGE-LIVE-001; FEATURE="FullText"; ASPECT=BulkMergeConnectionThreadMaintenance; STATUS=TESTED; TEST=geode-test-harness/geodetestlab-cli/specs/fts_bulk_merge_visibility.yml; OWNER=fts; UPDATED=2026-08-28
     for (outcomes, 0..) |o, i| {
-        if (!o.ok) continue;
+        if (!o.ok or !o.wrote) continue;
         execution.fts_index_ops.maintainFulltextOnWrite(
             ba,
             query_graph_name,

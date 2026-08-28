@@ -159,7 +159,7 @@ test "bulkMergeNode returns existing id + does not duplicate posting" {
     const adapter = graph_store.getGlobalAdapter() orelse return error.AdapterNotInitialized;
 
     // First call: fresh insert.
-    const first_id = try adapter.bulkMergeNode(
+    const first_id = (try adapter.bulkMergeNode(
         "default",
         "Widget",
         "node_id",
@@ -169,14 +169,14 @@ test "bulkMergeNode returns existing id + does not duplicate posting" {
         },
         null,
         false,
-    );
+    )).id;
 
     const store = graph_store.getGlobalStore(testing.allocator);
     try testing.expectEqual(@as(usize, 1), labelPostingLen(store, "default", "Widget"));
 
     // Second call with the same merge key: MUST return the same id and
     // must NOT grow the label-posting list.
-    const second_id = try adapter.bulkMergeNode(
+    const second_id = (try adapter.bulkMergeNode(
         "default",
         "Widget",
         "node_id",
@@ -187,7 +187,7 @@ test "bulkMergeNode returns existing id + does not duplicate posting" {
         },
         null,
         false,
-    );
+    )).id;
     try testing.expectEqual(first_id, second_id);
     try testing.expectEqual(@as(usize, 1), labelPostingLen(store, "default", "Widget"));
 
@@ -206,7 +206,7 @@ test "bulkMergeNode inserts label + merge key + all ON CREATE props" {
     defer h.deinit();
 
     const adapter = graph_store.getGlobalAdapter() orelse return error.AdapterNotInitialized;
-    const node_id = try adapter.bulkMergeNode(
+    const node_id = (try adapter.bulkMergeNode(
         "default",
         "Widget",
         "node_id",
@@ -218,7 +218,7 @@ test "bulkMergeNode inserts label + merge key + all ON CREATE props" {
         },
         null,
         false,
-    );
+    )).id;
 
     const store = graph_store.getGlobalStore(testing.allocator);
     const node = store.nodes.getPtr(node_id) orelse return error.NodeMissing;
@@ -345,7 +345,7 @@ fn concurrentMergeWorker(ctx: *RaceWorkerCtx) void {
     };
     defer graph_store.releaseGraphLock(handle);
 
-    const id = ctx.adapter.bulkMergeNode(
+    const result = ctx.adapter.bulkMergeNode(
         "default",
         "U",
         "id",
@@ -357,7 +357,7 @@ fn concurrentMergeWorker(ctx: *RaceWorkerCtx) void {
         _ = ctx.errored.fetchAdd(1, .monotonic);
         return;
     };
-    ctx.ids[ctx.tid] = id;
+    ctx.ids[ctx.tid] = result.id;
 }
 
 fn monoNanosNow() u64 {
@@ -446,7 +446,7 @@ test "bulkMergeNode apply_on_match creates missing node with props" {
 
     const adapter = graph_store.getGlobalAdapter() orelse return error.AdapterNotInitialized;
 
-    const node_id = try adapter.bulkMergeNode(
+    const node_id = (try adapter.bulkMergeNode(
         "default",
         "User",
         "node_id",
@@ -457,7 +457,7 @@ test "bulkMergeNode apply_on_match creates missing node with props" {
         },
         null,
         true, // apply_on_match
-    );
+    )).id;
 
     const store = graph_store.getGlobalStore(testing.allocator);
     const node = store.nodes.getPtr(node_id) orelse return error.NodeMissing;
@@ -483,7 +483,7 @@ test "bulkMergeNode apply_on_match updates existing node (true upsert)" {
     const store = graph_store.getGlobalStore(testing.allocator);
 
     // First call: create the node with name=alice.
-    const first_id = try adapter.bulkMergeNode(
+    const first_id = (try adapter.bulkMergeNode(
         "default",
         "User",
         "node_id",
@@ -493,12 +493,12 @@ test "bulkMergeNode apply_on_match updates existing node (true upsert)" {
         },
         null,
         true,
-    );
+    )).id;
 
     // Second call with the same merge key but different name — apply_on_match
     // must overwrite the existing prop instead of returning early like the
     // ON-CREATE-SET-only path does.
-    const second_id = try adapter.bulkMergeNode(
+    const second_id = (try adapter.bulkMergeNode(
         "default",
         "User",
         "node_id",
@@ -509,7 +509,7 @@ test "bulkMergeNode apply_on_match updates existing node (true upsert)" {
         },
         null,
         true,
-    );
+    )).id;
 
     try testing.expectEqual(first_id, second_id);
     try testing.expectEqual(@as(usize, 1), labelPostingLen(store, "default", "User"));
@@ -536,7 +536,7 @@ test "bulkMergeNode apply_on_match=false preserves ON CREATE SET no-op semantics
     const adapter = graph_store.getGlobalAdapter() orelse return error.AdapterNotInitialized;
     const store = graph_store.getGlobalStore(testing.allocator);
 
-    const first_id = try adapter.bulkMergeNode(
+    const first_id = (try adapter.bulkMergeNode(
         "default",
         "User",
         "node_id",
@@ -546,9 +546,9 @@ test "bulkMergeNode apply_on_match=false preserves ON CREATE SET no-op semantics
         },
         null,
         false, // ON CREATE SET-only semantics
-    );
+    )).id;
 
-    const second_id = try adapter.bulkMergeNode(
+    const second_id = (try adapter.bulkMergeNode(
         "default",
         "User",
         "node_id",
@@ -559,7 +559,7 @@ test "bulkMergeNode apply_on_match=false preserves ON CREATE SET no-op semantics
         },
         null,
         false,
-    );
+    )).id;
 
     try testing.expectEqual(first_id, second_id);
     const node = store.nodes.getPtr(first_id) orelse return error.NodeMissing;

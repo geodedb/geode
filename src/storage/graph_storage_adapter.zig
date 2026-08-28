@@ -4216,6 +4216,22 @@ pub const StorageAdapter = struct {
         try store.setEdgePropertiesBatch(edge_id, entries);
     }
 
+    /// Task 4 (geode-vectorization-and-reranking A4b §6, review Finding 1):
+    /// result of a `bulkMergeNode*` call.  `wrote` distinguishes a genuine
+    /// data-changing write (fresh insert, or an on-match `SET` apply) from a
+    /// pure hit-with-no-write (an idempotent MERGE re-run against an
+    /// already-indexed node with no `ON MATCH SET`/bare-`SET` clause).
+    /// Callers that drive live FTS maintenance off this result MUST gate on
+    /// `wrote` — the fts-storage engine is append-only, so re-maintaining a
+    /// no-write hit double-appends postings for the same doc_id. See
+    /// `src/execution/fts_index_ops.zig` (`maintainFulltextOnWrite` doc
+    /// comment) and the bulk-MERGE fast path call sites in
+    /// `src/server/quic_connection_handler.zig`.
+    pub const MergeResult = struct {
+        id: u64,
+        wrote: bool,
+    };
+
     /// Phase 2 shard-locked MERGE variant.  Serialize only same-tuple
     /// writers on the striped `merge_tuple_locks` table (GAP-0894),
     /// probe under `rwlock` SHARED, and on miss delegate the insert to
@@ -4233,9 +4249,9 @@ pub const StorageAdapter = struct {
         merge_value: graph_store.PropertyValue,
         on_create_props: []const PropKV,
         apply_on_match: bool,
-    ) !u64 {
+    ) !MergeResult {
         // GAP-0891 (RC-1): see bulkInsertNodeWithReservedId.
-        const id = try self.bulkMergeNodeWithReservedIdForTenant(
+        const result = try self.bulkMergeNodeWithReservedIdForTenant(
             graph_name,
             reserved_id,
             label,
@@ -4246,7 +4262,7 @@ pub const StorageAdapter = struct {
             fle_integration.tenantPreferringActiveContext(),
         );
         self.maybeCheckpointInline(); // GAP-0900: locks released; safe to checkpoint.
-        return id;
+        return result;
     }
 
     // GAP-0891 (RC-1): tenant-threaded variant of bulkMergeNodeWithReservedId.
@@ -4260,7 +4276,7 @@ pub const StorageAdapter = struct {
         on_create_props: []const PropKV,
         apply_on_match: bool,
         request_tenant: []const u8,
-    ) !u64 {
+    ) !MergeResult {
         // Statement-atomicity pre-pass — see `bulkInsertNode`.
         // CANARY: REQ=REQ-PROPERTY-WRITE-ATOMICITY; FEATURE="PropertyStorage"; ASPECT=BulkMergePrePass; STATUS=TESTED; TEST=tests/test_property_write_atomicity.zig; OWNER=engine; UPDATED=2026-08-25
         try self.checkPropertyEntryWritable(merge_key, merge_value);
@@ -4334,7 +4350,11 @@ pub const StorageAdapter = struct {
                         // create branch is counted by the delegated bulkInsert.)
                         _ = self.pending_bulk_ops.fetchAdd(1, .monotonic);
                     }
-                    return probe_id;
+                    // Task 4 review Finding 1: `wrote` is true only when the
+                    // on-match SET clauses actually ran above. A plain hit with
+                    // no `apply_on_match` changed nothing — callers must not
+                    // re-append it into an append-only FTS index.
+                    return .{ .id = probe_id, .wrote = apply_on_match };
                 },
                 .not_indexable => return error.MergeValueNotIndexable,
                 .not_found => {},
@@ -4357,13 +4377,14 @@ pub const StorageAdapter = struct {
         }
 
         const labels_slice = [_][]const u8{label};
-        return try self.bulkInsertNodeWithReservedIdForTenant(
+        const new_id = try self.bulkInsertNodeWithReservedIdForTenant(
             graph_name,
             reserved_id,
             &labels_slice,
             combined_props,
             request_tenant,
         );
+        return .{ .id = new_id, .wrote = true };
     }
 
     /// Multi-property MERGE fast path for no-RETURN node patterns such as:
@@ -4384,9 +4405,9 @@ pub const StorageAdapter = struct {
         merge_props: []const PropKV,
         on_create_props: []const PropKV,
         apply_on_match: bool,
-    ) !u64 {
+    ) !MergeResult {
         // GAP-0891 (RC-1): see bulkInsertNodeWithReservedId.
-        const id = try self.bulkMergeNodeWithReservedIdMultiPropForTenant(
+        const result = try self.bulkMergeNodeWithReservedIdMultiPropForTenant(
             graph_name,
             reserved_id,
             label,
@@ -4396,7 +4417,7 @@ pub const StorageAdapter = struct {
             fle_integration.tenantPreferringActiveContext(),
         );
         self.maybeCheckpointInline(); // GAP-0900: locks released; safe to checkpoint.
-        return id;
+        return result;
     }
 
     // GAP-0891 (RC-1): tenant-threaded variant of bulkMergeNodeWithReservedIdMultiProp.
@@ -4412,7 +4433,7 @@ pub const StorageAdapter = struct {
         on_create_props: []const PropKV,
         apply_on_match: bool,
         request_tenant: []const u8,
-    ) !u64 {
+    ) !MergeResult {
         if (merge_props.len == 0) return error.InvalidMergePattern;
 
         // Statement-atomicity pre-pass — see `bulkInsertNode`.
@@ -4508,7 +4529,14 @@ pub const StorageAdapter = struct {
             break :existing_blk found;
         };
         if (existing_id) |existing| {
-            return existing;
+            // Task 4 review Finding 1: this is the multi-property MERGE hit
+            // branch that previously had NO wrote signal at all — the handler
+            // set `fts_should_maintain = true` unconditionally for every
+            // `merge_kvs.len > 1` call, double-appending FTS postings on every
+            // idempotent re-MERGE. `wrote` is true only when the on-match SET
+            // clauses actually ran above (`apply_on_match`); a plain
+            // `ON CREATE SET`-only hit changed nothing.
+            return .{ .id = existing, .wrote = apply_on_match };
         }
 
         var combined_buf: [64]PropKV = undefined;
@@ -4525,13 +4553,14 @@ pub const StorageAdapter = struct {
         }
 
         const labels_slice = [_][]const u8{label};
-        return try self.bulkInsertNodeWithReservedIdForTenant(
+        const new_id = try self.bulkInsertNodeWithReservedIdForTenant(
             graph_name,
             reserved_id,
             &labels_slice,
             combined_props,
             request_tenant,
         );
+        return .{ .id = new_id, .wrote = true };
     }
 
     /// Key + value pair accepted by `bulkInsertNode`.  The caller owns both
@@ -4834,7 +4863,7 @@ pub const StorageAdapter = struct {
         on_create_props: []const PropKV,
         txn_id_opt: ?u64,
         apply_on_match: bool,
-    ) !u64 {
+    ) !MergeResult {
         _ = txn_id_opt; // reserved for future extensions; thread-local is source of truth.
 
         // GAP-0046 / GAP-0900 Layer-3 (Fix 2): in lean-index mode the merge key
@@ -4863,7 +4892,9 @@ pub const StorageAdapter = struct {
         var existing_id: u64 = undefined;
         if (!apply_on_match) {
             switch (store.lookupMergeCandidate(graph_name, label, merge_key, merge_value, &existing_id)) {
-                .found => return existing_id,
+                // Task 4 review Finding 1: this early return only runs when
+                // `!apply_on_match`, so it is always a pure hit with no write.
+                .found => return .{ .id = existing_id, .wrote = false },
                 .not_found => {},
                 .not_indexable => return error.MergeValueNotIndexable,
             }
@@ -4908,10 +4939,13 @@ pub const StorageAdapter = struct {
                         try store.setNodeProperty(existing_id, kv.key, kv.value);
                     }
                     if (stmt_txn_open) try stmt_txn.commit();
-                    return existing_id;
+                    return .{ .id = existing_id, .wrote = true };
                 }
                 if (stmt_txn_open) stmt_txn.abort();
-                return existing_id;
+                // Task 4 review Finding 1: a concurrent writer won the race
+                // between our Phase-1 miss and this re-probe — still a pure
+                // hit with no write from THIS call's perspective.
+                return .{ .id = existing_id, .wrote = false };
             },
             .not_found, .not_indexable => {},
         }
@@ -4938,7 +4972,7 @@ pub const StorageAdapter = struct {
         }
 
         if (stmt_txn_open) try stmt_txn.commit();
-        return node_id;
+        return .{ .id = node_id, .wrote = true };
     }
 
     // CANARY: REQ=REQ-PERF-QPS-0815; FEATURE="BatchCreate"; ASPECT=AdapterBulkSlots; STATUS=TESTED; TEST=tests/test_gap0815_deep_bulk_create.zig; OWNER=performance; UPDATED=2026-04-20

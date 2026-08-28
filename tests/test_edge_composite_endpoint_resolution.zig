@@ -112,7 +112,7 @@ fn mergeTaxon(env: *Env, source: []const u8, source_id: []const u8) !u64 {
         .{ .key = "source_id", .value = .{ .String = source_id } },
     };
     const reserved = env.store.reserveNodeId();
-    return env.adapter.bulkMergeNodeWithReservedIdMultiProp(
+    const result = try env.adapter.bulkMergeNodeWithReservedIdMultiProp(
         GRAPH,
         reserved,
         LABEL,
@@ -120,6 +120,7 @@ fn mergeTaxon(env: *Env, source: []const u8, source_id: []const u8) !u64 {
         &.{}, // no ON CREATE props needed for the resolution test
         false, // apply_on_match
     );
+    return result.id;
 }
 
 // Resolve an endpoint exactly like the from-dump EDGE phase does:
