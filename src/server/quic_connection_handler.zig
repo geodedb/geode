@@ -5737,9 +5737,11 @@ fn handleClientMessage(
                     log.info("Federation mTLS provider configured; certificate validation deferred to TLS layer", &.{});
                 }
             } else if (user_mgmt.isAuthEnabled()) {
-                if (hello_req.username.len == 0 or hello_req.password.len == 0) {
-                    // S6: Record failure for empty credentials (still counts as a failed attempt).
-                    if (g_auth_rate_limiter) |limiter| limiter.recordFailure(peer_ip);
+                if (!auth_rate_limiter.credentialsPresent(hello_req.username, hello_req.password)) {
+                    // ENG-3954/#874: a truncated / half-open HELLO deserializes
+                    // to proto3 defaults. That is a MALFORMED handshake, not a
+                    // failed credential check — no credential was ever checked,
+                    // so it must not arm the brute-force lockout.
                     const resp = schema.QuicServerMessage{ .hello = .{
                         .success = false,
                         .session_id = try gpa.dupe(u8, ""),
@@ -5750,13 +5752,21 @@ fn handleClientMessage(
                     return;
                 }
 
-                const auth_result = user_mgmt.authenticate(hello_req.username, hello_req.password) catch {
-                    // S6: Record failure for bad credentials.
-                    if (g_auth_rate_limiter) |limiter| limiter.recordFailure(peer_ip);
+                const auth_result = user_mgmt.authenticate(hello_req.username, hello_req.password) catch |auth_err| {
+                    // S6 / ENG-3954: only a checked-and-rejected credential
+                    // counts against the per-IP lockout; a store that could not
+                    // answer (error.AuthUnavailable) is a server-side fault.
+                    const checked = auth_rate_limiter.shouldCountFailedAttempt(auth_err);
+                    if (checked) {
+                        if (g_auth_rate_limiter) |limiter| limiter.recordFailure(peer_ip);
+                    }
                     const resp = schema.QuicServerMessage{ .hello = .{
                         .success = false,
                         .session_id = try gpa.dupe(u8, ""),
-                        .error_message = try gpa.dupe(u8, "Authentication failed"),
+                        .error_message = try gpa.dupe(u8, if (checked)
+                            "Authentication failed"
+                        else
+                            "Authentication temporarily unavailable"),
                         .capabilities = caps,
                     } };
                     try sendQuicMessage(gpa, stream, resp);

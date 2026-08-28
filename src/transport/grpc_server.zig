@@ -1455,11 +1455,10 @@ fn handleHandshake(request_bytes: []const u8, trans: *GrpcTransport, allocator: 
     }
 
     if (user_mgmt.isAuthEnabled()) {
-        if (req.username.len == 0 or req.password.len == 0) {
-            // S6: Record failure for empty credentials.
-            if (auth_rate_limiter_mod.getGlobalRateLimiter()) |limiter| {
-                limiter.recordFailure(peer_ip);
-            }
+        if (!auth_rate_limiter_mod.credentialsPresent(req.username, req.password)) {
+            // ENG-3954/#874 (QUIC parity): a truncated / half-open HELLO
+            // deserializes to proto3 defaults. Malformed handshake, not a failed
+            // credential check — it must not arm the brute-force lockout.
             const resp = schema.HelloResponse{
                 .success = false,
                 .session_id = "",
@@ -1468,15 +1467,19 @@ fn handleHandshake(request_bytes: []const u8, trans: *GrpcTransport, allocator: 
             };
             return encodeMessage(allocator, resp);
         }
-        const auth_result = user_mgmt.authenticate(req.username, req.password) catch {
-            // S6: Record failure for bad credentials.
-            if (auth_rate_limiter_mod.getGlobalRateLimiter()) |limiter| {
-                limiter.recordFailure(peer_ip);
+        const auth_result = user_mgmt.authenticate(req.username, req.password) catch |auth_err| {
+            // S6 / ENG-3954 (QUIC parity): only a checked-and-rejected
+            // credential counts against the per-IP lockout.
+            const checked = auth_rate_limiter_mod.shouldCountFailedAttempt(auth_err);
+            if (checked) {
+                if (auth_rate_limiter_mod.getGlobalRateLimiter()) |limiter| {
+                    limiter.recordFailure(peer_ip);
+                }
             }
             const resp = schema.HelloResponse{
                 .success = false,
                 .session_id = "",
-                .error_message = "Authentication failed",
+                .error_message = if (checked) "Authentication failed" else "Authentication temporarily unavailable",
                 .capabilities = caps,
             };
             return encodeMessage(allocator, resp);

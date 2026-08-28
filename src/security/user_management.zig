@@ -734,7 +734,32 @@ pub fn createUserWithHash(allocator: std.mem.Allocator, username: []const u8, pa
 /// Authenticate user with username and password.
 /// The Argon2id verification (10-50ms) runs OUTSIDE the mutex to avoid
 /// serializing all auth operations behind a single lock.
+///
+/// ENG-3954 / #874: the ONLY credential verdicts this returns are `AuthResult`
+/// (checked and accepted) and `error.Unauthenticated` (checked and rejected).
+/// Every other failure — the persistent security store could not be consulted,
+/// the store lock was unavailable, an allocation failed — is normalised to
+/// `error.AuthUnavailable` so the transports can tell "wrong password" apart
+/// from "we could not check" and stop counting server-side faults toward the
+/// per-IP brute-force lockout (see auth_rate_limiter.shouldCountFailedAttempt).
+/// The normalisation is uniform across principals, so it does not reintroduce
+/// the #829 username-enumeration oracle: an unreachable store answers
+/// identically for existing and non-existing usernames.
+/// CANARY: REQ=REQ-SEC-AUTH-UNAVAILABLE-001; FEATURE="AuthOutcomeClassification"; ASPECT=Authenticate; STATUS=TESTED; TEST=tests/test_auth_unavailable_classification.zig; OWNER=security; UPDATED=2026-08-28
 pub fn authenticate(username: []const u8, password: []const u8) !AuthResult {
+    return authenticateChecked(username, password) catch |err| {
+        if (err == error.Unauthenticated) return err;
+        log.warn("authentication could not be completed", &.{
+            Attr.string("error", @errorName(err)),
+        });
+        return error.AuthUnavailable;
+    };
+}
+
+/// Credential-checking core of `authenticate`. Any error other than
+/// `error.Unauthenticated` escaping here means the credentials were never
+/// actually checked; `authenticate` maps those to `error.AuthUnavailable`.
+fn authenticateChecked(username: []const u8, password: []const u8) !AuthResult {
     const maybe_user_data = try getAuthSnapshot(username);
     if (maybe_user_data == null) {
         // #829: defeat username-enumeration timing oracle by performing

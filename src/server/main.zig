@@ -316,16 +316,25 @@ fn lookupPersistentAuthUser(_: ?*anyopaque, allocator: std.mem.Allocator, userna
     for (geode.user_management.RESERVED_USERNAMES) |reserved| {
         if (std.mem.eql(u8, username, reserved)) return null;
     }
-    // The store lock may already be held by the calling thread (e.g., QUIC
-    // handler executing a CALL query or MFA setup for a non-existent user).
-    // Use tryAcquire to avoid deadlock; if the lock can't be acquired, return
-    // null (caller treats the user as "not found" and falls back to in-memory
-    // state).
-    const locked = geode.graph_store.tryAcquireStoreLock();
-    defer if (locked) geode.graph_store.releaseStoreLock();
+    // The store lock may already be held exclusively by another thread (e.g. a
+    // checkpoint or an auth-DDL write). Use tryAcquire to avoid blocking the
+    // auth path behind it.
+    //
+    // ENG-3954 / #874: when the lock cannot be acquired we must NOT read the
+    // store unsynchronized, and we must NOT report "no such user" either — we
+    // simply could not look. Reporting absence here made `authenticate` return
+    // error.Unauthenticated for a perfectly valid principal, which the per-IP
+    // rate limiter counted as a brute-force attempt and, since the contention
+    // persisted, re-armed the lockout on every retry. Report unavailability so
+    // authenticate() can normalise it to error.AuthUnavailable.
+    // CANARY: REQ=REQ-SEC-AUTH-UNAVAILABLE-003; FEATURE="AuthOutcomeClassification"; ASPECT=PersistentResolver; STATUS=TESTED; TEST=tests/test_auth_unavailable_classification.zig; OWNER=security; UPDATED=2026-08-28
+    if (!geode.graph_store.tryAcquireStoreLock()) {
+        return user_storage.UserStorageBackend.SecurityStoreUnavailable;
+    }
+    defer geode.graph_store.releaseStoreLock();
 
     const store = geode.graph_store.getGlobalStore(allocator);
-    const record = user_storage.UserStorageBackend.findUserByUsernameInGraph(store, username) orelse return null;
+    const record = try user_storage.UserStorageBackend.findUserByUsernameInGraphChecked(store, username) orelse return null;
     return try duplicatePersistentUser(allocator, store, record);
 }
 

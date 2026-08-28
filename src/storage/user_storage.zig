@@ -476,9 +476,13 @@ pub const UserStorageBackend = struct {
 
     /// GAP-0061 fallback: engine-direct scan for a user by username, used when
     /// the in-memory security-graph hydration is quarantined/empty.
-    fn findUserByUsernameEngineDirect(allocator: Allocator, username: []const u8) ?UserRecord {
-        const adapter = graph_store.getGlobalAdapter() orelse return null;
-        const slots = adapter.getNodesByLabel(SECURITY_GRAPH_NAME, USER_LABEL, allocator) catch return null;
+    ///
+    /// ENG-3954: reports `error.SecurityStoreUnavailable` when the engine could
+    /// not be scanned at all (no adapter, or the scan failed) so the auth path
+    /// can tell that apart from a complete scan that found no match.
+    fn findUserByUsernameEngineDirect(allocator: Allocator, username: []const u8) !?UserRecord {
+        const adapter = graph_store.getGlobalAdapter() orelse return SecurityStoreUnavailable;
+        const slots = adapter.getNodesByLabel(SECURITY_GRAPH_NAME, USER_LABEL, allocator) catch return SecurityStoreUnavailable;
         defer allocator.free(slots);
         for (slots) |slot| {
             const record = loadUserRecordEngineDirect(allocator, adapter, slot) orelse continue;
@@ -514,8 +518,25 @@ pub const UserStorageBackend = struct {
         return false;
     }
 
-    pub fn findUserByUsernameInGraph(store: *graph_store.GraphStore, username: []const u8) ?UserRecord {
+    /// ENG-3954 / #874: the security store could not be consulted at all, so
+    /// "no such user" is not a supportable answer. Callers on the auth path
+    /// must surface this as "unavailable" rather than laundering it into a
+    /// credential rejection that arms the per-IP brute-force lockout.
+    pub const SecurityStoreUnavailable = error.SecurityStoreUnavailable;
+
+    /// Locate a persisted `:User` record, distinguishing "definitively absent"
+    /// (null) from "the store could not answer" (`error.SecurityStoreUnavailable`).
+    ///
+    /// Absent means at least one of the two enumeration paths (in-memory label
+    /// postings, engine-direct scan) produced a complete candidate list and the
+    /// username was not in it. Unavailable means neither path could produce one:
+    /// the `__geode_security` hydration is quarantined/missing AND the engine
+    /// adapter is absent or failed the scan.
+    /// CANARY: REQ=REQ-SEC-AUTH-UNAVAILABLE-002; FEATURE="AuthOutcomeClassification"; ASPECT=StorageLookup; STATUS=TESTED; TEST=tests/test_auth_unavailable_classification.zig; OWNER=security; UPDATED=2026-08-28
+    pub fn findUserByUsernameInGraphChecked(store: *graph_store.GraphStore, username: []const u8) !?UserRecord {
+        var enumerated = false;
         if (store.getNodesByLabel(SECURITY_GRAPH_NAME, USER_LABEL)) |nodes| {
+            enumerated = true;
             for (nodes) |node_id| {
                 const record = loadUserRecordFromNode(store, node_id) orelse continue;
                 if (std.mem.eql(u8, record.getUsername(), username)) {
@@ -527,7 +548,21 @@ pub const UserStorageBackend = struct {
         // (quarantined hydration, or an unreadable resident node body). Without
         // this the persisted admin credential is unloadable after a crash and
         // every query returns "Authentication failed".
-        return findUserByUsernameEngineDirect(store.allocator, username);
+        const engine_result = findUserByUsernameEngineDirect(store.allocator, username) catch |err| {
+            // The engine could not be scanned. Only the in-memory postings can
+            // still make "absent" a supportable answer.
+            if (enumerated) return null;
+            return err;
+        };
+        return engine_result;
+    }
+
+    /// Legacy option-returning lookup, kept for the non-auth callers (bootstrap,
+    /// password-reset tooling, durability tests) that only care about presence.
+    /// Auth-path callers must use `findUserByUsernameInGraphChecked` instead:
+    /// this one still collapses "could not answer" into "no such user".
+    pub fn findUserByUsernameInGraph(store: *graph_store.GraphStore, username: []const u8) ?UserRecord {
+        return findUserByUsernameInGraphChecked(store, username) catch null;
     }
 
     pub fn listUsersFromGraph(allocator: Allocator, store: *graph_store.GraphStore) ![]UserRecord {

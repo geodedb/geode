@@ -232,6 +232,40 @@ pub fn getGlobalRateLimiter() ?*AuthRateLimiter {
     return g_global_rate_limiter;
 }
 
+// ── Auth-outcome classification (ENG-3954 / #874) ──────────────────────
+// Both transports (QUIC HELLO, gRPC HELLO) previously fed the limiter from a
+// bare `authenticate(...) catch { recordFailure(peer_ip); }`, so a server-side
+// fault — an unhydrated/quarantined `__geode_security` graph, a store lock we
+// could not take, an allocation failure — armed the same lockout as a real
+// brute-force burst and, because the fault persisted, re-armed it on every
+// retry. The policy lives here because this is the one module both transports
+// already share, so it cannot drift between them.
+//
+// CANARY: REQ=REQ-SEC-RATE-LIMIT-007; FEATURE="AuthRateLimiting"; ASPECT=OutcomeClassification; STATUS=TESTED; TEST=auth_rate_limiter_tests; OWNER=security; UPDATED=2026-08-28
+
+/// Whether a failed `authenticate()` outcome may count against the per-IP
+/// brute-force lockout.
+///
+/// Only `error.Unauthenticated` — credentials that were actually checked and
+/// rejected — counts. Every other error means "we could not check", including
+/// `error.AuthUnavailable` (see `user_management.authenticate`) and
+/// `error.OutOfMemory`. Unrecognised errors default to NOT counting: counting a
+/// server-side fault is precisely what locks honest clients out, while failing
+/// to count one only forgoes a single increment of an attacker's budget.
+pub fn shouldCountFailedAttempt(err: anyerror) bool {
+    return err == error.Unauthenticated;
+}
+
+/// Whether a HELLO carries both credential halves and is therefore eligible for
+/// a credential check at all.
+///
+/// A truncated or half-open HELLO deserialises to proto3 defaults (`""` / `""`).
+/// That is a malformed handshake, not a failed credential check, so it must
+/// never reach the limiter.
+pub fn credentialsPresent(username: []const u8, password: []const u8) bool {
+    return username.len > 0 and password.len > 0;
+}
+
 // ── Tests ──────────────────────────────────────────────────────────────
 
 test "auth_rate_limiter: new IP is not locked" {
