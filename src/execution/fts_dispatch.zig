@@ -297,7 +297,9 @@ fn resolveFacade(index_name: []const u8) !*fulltext.FullTextIndex {
 ///   - `error.TypeMismatch`  — the argument was not a string literal.
 ///   - `error.IndexNotFound` — the index is unknown to both the schema
 ///                             catalog and the in-memory label registry.
-///   - `error.Unsupported`   — FTS is unavailable on the graph (no adapter).
+///   - `error.FulltextUnavailable` — FTS is unavailable on the graph (no
+///                             adapter/graph/fts_adapter); see
+///                             `fts_index_ops.rebuildFulltextIndex`.
 // CANARY: REQ=REQ-FTS-REBUILD-001; FEATURE="CALL geode.fts.rebuild"; ASPECT=RebuildProc; STATUS=TESTED; TEST=tests/test_fts_rebuild.zig; OWNER=index; UPDATED=2026-08-28
 fn handleFtsRebuild(
     allocator: std.mem.Allocator,

@@ -830,7 +830,7 @@ test "cluster: MATCH…CREATE edge sent to a follower fails closed" {
 //   standalone → unchanged.
 // This test accumulates ALL accepting surfaces before failing, so the red run
 // shows the full hole inventory in one pass.
-// CANARY: REQ=REQ-DIST-CLUSTER-FAILCLOSED-UNREPLICATED; FEATURE="DistributedCluster"; ASPECT=E2EFailClosed; STATUS=TESTED; TEST=tests/test_cluster_replicable_mutations.zig; OWNER=distributed; UPDATED=2026-06-10
+// CANARY: REQ=REQ-DIST-CLUSTER-FAILCLOSED-UNREPLICATED; FEATURE="DistributedCluster"; ASPECT=E2EFailClosed; STATUS=TESTED; TEST=tests/test_cluster_replicable_mutations.zig; OWNER=distributed; UPDATED=2026-08-28
 test "cluster: unreplicated write surfaces fail closed (no silent divergence)" {
     if (skipPreflight()) return error.SkipZigTest;
     const gpa = std.testing.allocator;
@@ -854,6 +854,7 @@ test "cluster: unreplicated write surfaces fail closed (no silent divergence)" {
     //                           syntax per docs/GQL_AUTH_DDL.md: SET PASSWORD)
     //   * graph DDL            (src/execution.zig CreateGraph)
     //   * fulltext index DDL   (src/execution.zig CreateIndex USING fulltext)
+    //   * fulltext rebuild     (src/execution/fts_dispatch.zig handleFtsRebuild)
     //   * tenant ops           (src/execution/tenant_dispatch.zig
     //                           geode.tenant.create — admin role passes the
     //                           admin_tenant GPS gate)
@@ -865,6 +866,11 @@ test "cluster: unreplicated write surfaces fail closed (no silent divergence)" {
         .{ .name = "auth-ddl-create-user", .query = "CREATE USER fcuser SET PASSWORD 'Str0ng!Pass1'" },
         .{ .name = "graph-ddl-create-graph", .query = "CREATE GRAPH fcgraph" },
         .{ .name = "index-ddl-fulltext", .query = "CREATE INDEX fcidx FOR (n:FcDoc) ON (n.body) USING fulltext" },
+        // fulltext rebuild (src/execution/fts_dispatch.zig handleFtsRebuild):
+        // the gate fires before index resolution (cluster_mod.gateUnreplicatedWrite
+        // runs before fts_index_ops.rebuildFulltextIndex), so the fail-closed
+        // refusal happens regardless of whether 'fcidx' actually exists.
+        .{ .name = "fulltext-rebuild", .query = "CALL geode.fts.rebuild('fcidx')" },
         .{ .name = "tenant-create", .query = "CALL geode.tenant.create('fctenant')" },
         .{ .name = "policy-ddl-create-policy", .query = "CREATE POLICY fcpol ON GRAPH * FOR READ" },
     };
