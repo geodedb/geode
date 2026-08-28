@@ -1282,6 +1282,10 @@ fn cmdQuery(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !voi
     }
 
     if (source_file) |filepath| {
+        if (read_only) {
+            std.debug.print("Error: --read-only is not supported with --file\n", .{});
+            std.process.exit(@intFromEnum(ExitCode.usage_error));
+        }
         // Expand ~ to home directory if present
         var path_buf: [4096]u8 = undefined;
         const resolved_path = if (filepath.len > 0 and filepath[0] == '~') blk: {
