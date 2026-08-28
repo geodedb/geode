@@ -77,11 +77,23 @@ const VEC_PROP = "kembed";
 /// Seed population, and the id space the writers churn over.
 const seed_nodes: usize = 1200;
 /// Fresh nodes each writer mints (node-cache growth / eviction churn).
-const writer_creates: usize = 2500;
+const writer_creates: usize = 6000;
 /// knn scans per reader thread.
 const reads_per_reader: usize = 900;
 const reader_count = 6;
-const writer_count = 4;
+/// ONE writer lane (ENG-3954 fix review). The defect under test is
+/// READER-vs-WRITER: the scan walking a property map a writer is reallocating.
+/// Running several writer lanes ALSO exercised writer-vs-writer races on
+/// structures this test does not target — `GraphStore.getOrCreateIdMap`'s
+/// `id_maps` StringHashMap and the engine's `property_chain_index.chains` are
+/// both plain hash maps that the store expects its CALLER (the transports, via
+/// the per-graph EXCLUSIVE lock) to serialise, and the direct-executor harness
+/// used here holds no such lock. Those crashed ~1 run in 6 with the reader
+/// doing nothing at all, i.e. independent of scanVectorKnn. One lane keeps the
+/// targeted contention (raised `writer_creates` holds the churn rate and the
+/// population constant) while leaving the unrelated writer-vs-writer exposure —
+/// pre-existing, separately tracked — out of this regression's signal.
+const writer_count = 1;
 const k: usize = 10;
 
 const Shared = struct {

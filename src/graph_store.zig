@@ -5956,43 +5956,54 @@ pub const GraphStore = struct {
             const value_copy = try copyPropertyValue(self, effective_value);
             errdefer freePropertyValue(self, value_copy);
 
-            // Caveat "B": if `key` is a composite component and its value is
-            // CHANGING, the existing composite merge entry (built from the OLD
-            // value) is now stale — remove it BEFORE overwriting so we don't leak
-            // a dangling composite entry. Re-asserted from current values below.
-            // (The from-dump path never mutates composite components, so this is
-            // a robustness guard, not a hot path.)
-            const composite_component = isCompositeComponentKey(key);
-            if (composite_component) self.removeNodeCompositeMergeEntries(node);
+            // ENG-3954 / #874: the property-map mutation below reallocs-and-frees
+            // the node's `entries` slice, so it must exclude concurrent readers
+            // that are dereferencing this node. The per-graph rwlock does not
+            // (the callers that take it are the transports, not this store), so
+            // hold the node cache's per-shard leaf lock EXCLUSIVE across the
+            // whole in-place mutation. See `BoundedNodeCache.ShardGuard`.
+            {
+                self.nodes.lockShardExclusive(node_id);
+                defer self.nodes.unlockShardExclusive(node_id);
 
-            // Use getOrPut to avoid memory leak - only allocate key if it doesn't exist
-            const result = try node.properties.getOrPut(key);
-            const was_new = !result.found_existing;
-            if (was_new) {
-                // Key doesn't exist, allocate a copy
-                result.key_ptr.* = try self.allocator.dupe(u8, key);
-            } else {
-                // Key exists — remove old merge property index entry before overwriting
-                self.removeFromMergePropertyIndex(node.graph_name, node.labels, key, result.value_ptr.*);
-                freePropertyValue(self, result.value_ptr.*);
-            }
-            result.value_ptr.* = value_copy;
+                // Caveat "B": if `key` is a composite component and its value is
+                // CHANGING, the existing composite merge entry (built from the OLD
+                // value) is now stale — remove it BEFORE overwriting so we don't leak
+                // a dangling composite entry. Re-asserted from current values below.
+                // (The from-dump path never mutates composite components, so this is
+                // a robustness guard, not a hot path.)
+                const composite_component = isCompositeComponentKey(key);
+                if (composite_component) self.removeNodeCompositeMergeEntries(node);
 
-            // Update merge property index with new value
-            self.addToMergePropertyIndex(node.graph_name, node.labels, key, value_copy, node_id) catch {};
-            // Re-assert the composite merge entry from the node's CURRENT values
-            // (now including the new value for `key`). No-op if the node doesn't
-            // carry all composite props yet, or no composite is registered.
-            if (composite_component) self.addNodeCompositeMergeEntries(node);
+                // Use getOrPut to avoid memory leak - only allocate key if it doesn't exist
+                const result = try node.properties.getOrPut(key);
+                const was_new = !result.found_existing;
+                if (was_new) {
+                    // Key doesn't exist, allocate a copy
+                    result.key_ptr.* = try self.allocator.dupe(u8, key);
+                } else {
+                    // Key exists — remove old merge property index entry before overwriting
+                    self.removeFromMergePropertyIndex(node.graph_name, node.labels, key, result.value_ptr.*);
+                    freePropertyValue(self, result.value_ptr.*);
+                }
+                result.value_ptr.* = value_copy;
 
-            // PERF-C (issue #814): only bump the label-property counter on
-            // the new-key transition. Value updates do not change the set of
-            // property keys reported by `listPropertiesForLabel`. Internal
-            // persisted-id keys are skipped (they're filtered out at read
-            // time too).
-            if (was_new and !isInternalPersistedPropertyKey(key)) {
-                for (node.labels) |label| {
-                    self.bumpLabelPropertyCount(node.graph_name, node.tenant_id, label, key) catch {};
+                // Update merge property index with new value
+                self.addToMergePropertyIndex(node.graph_name, node.labels, key, value_copy, node_id) catch {};
+                // Re-assert the composite merge entry from the node's CURRENT values
+                // (now including the new value for `key`). No-op if the node doesn't
+                // carry all composite props yet, or no composite is registered.
+                if (composite_component) self.addNodeCompositeMergeEntries(node);
+
+                // PERF-C (issue #814): only bump the label-property counter on
+                // the new-key transition. Value updates do not change the set of
+                // property keys reported by `listPropertiesForLabel`. Internal
+                // persisted-id keys are skipped (they're filtered out at read
+                // time too).
+                if (was_new and !isInternalPersistedPropertyKey(key)) {
+                    for (node.labels) |label| {
+                        self.bumpLabelPropertyCount(node.graph_name, node.tenant_id, label, key) catch {};
+                    }
                 }
             }
 
@@ -6099,19 +6110,27 @@ pub const GraphStore = struct {
                     const value_copy = try copyPropertyValue(self, effective);
                     errdefer freePropertyValue(self, value_copy);
 
-                    const result = try node.properties.getOrPut(entry.key);
-                    if (!result.found_existing) {
-                        result.key_ptr.* = try self.allocator.dupe(u8, entry.key);
-                    } else {
-                        self.removeFromMergePropertyIndex(node.graph_name, node.labels, entry.key, result.value_ptr.*);
-                        freePropertyValue(self, result.value_ptr.*);
+                    {
+                        // ENG-3954 / #874: realloc-and-free of the entries slice
+                        // must exclude concurrent readers of this node.
+                        self.nodes.lockShardExclusive(node_id);
+                        defer self.nodes.unlockShardExclusive(node_id);
+                        const result = try node.properties.getOrPut(entry.key);
+                        if (!result.found_existing) {
+                            result.key_ptr.* = try self.allocator.dupe(u8, entry.key);
+                        } else {
+                            self.removeFromMergePropertyIndex(node.graph_name, node.labels, entry.key, result.value_ptr.*);
+                            freePropertyValue(self, result.value_ptr.*);
+                        }
+                        result.value_ptr.* = value_copy;
+                        self.addToMergePropertyIndex(node.graph_name, node.labels, entry.key, value_copy, node_id) catch {};
                     }
-                    result.value_ptr.* = value_copy;
-                    self.addToMergePropertyIndex(node.graph_name, node.labels, entry.key, value_copy, node_id) catch {};
 
                     notifyMutation(.set_node_property, node_id, 0, 0, null, entry.key, effective, null);
                 } else {
                     // Remove
+                    self.nodes.lockShardExclusive(node_id);
+                    defer self.nodes.unlockShardExclusive(node_id);
                     if (node.properties.fetchRemove(entry.key)) |kv| {
                         self.removeFromMergePropertyIndex(node.graph_name, node.labels, kv.key, kv.value);
                         self.allocator.free(kv.key);
@@ -6128,7 +6147,11 @@ pub const GraphStore = struct {
             // re-assert from the current property values, and changing a
             // composite component is not part of the from-dump path (the
             // component values ARE the merge key).
-            self.addNodeCompositeMergeEntries(node);
+            {
+                self.nodes.lockShardExclusive(node_id);
+                defer self.nodes.unlockShardExclusive(node_id);
+                self.addNodeCompositeMergeEntries(node);
+            }
             self.dirty.store(true, .release);
             incrementMutationEpoch();
         }
@@ -6303,20 +6326,26 @@ pub const GraphStore = struct {
             // node that no longer carries this value. Remove the composite entry
             // BEFORE the property is dropped (the entry is rebuilt from the node's
             // still-present values). No-op when no composite key is registered.
-            if (isCompositeComponentKey(key)) self.removeNodeCompositeMergeEntries(node);
-            if (node.properties.fetchRemove(key)) |kv| {
-                // Remove from merge property index before freeing
-                self.removeFromMergePropertyIndex(node.graph_name, node.labels, kv.key, kv.value);
-                // PERF-C (issue #814): decrement the label-property counter
-                // for every label still carried by the node. Internal keys
-                // are filtered out (they were never bumped on insert).
-                if (!isInternalPersistedPropertyKey(kv.key)) {
-                    for (node.labels) |label| {
-                        self.decLabelPropertyCount(node.graph_name, node.tenant_id, label, kv.key);
+            {
+                // ENG-3954 / #874: the shrink-and-free below must exclude
+                // concurrent readers of this node (see setNodeProperty).
+                self.nodes.lockShardExclusive(node_id);
+                defer self.nodes.unlockShardExclusive(node_id);
+                if (isCompositeComponentKey(key)) self.removeNodeCompositeMergeEntries(node);
+                if (node.properties.fetchRemove(key)) |kv| {
+                    // Remove from merge property index before freeing
+                    self.removeFromMergePropertyIndex(node.graph_name, node.labels, kv.key, kv.value);
+                    // PERF-C (issue #814): decrement the label-property counter
+                    // for every label still carried by the node. Internal keys
+                    // are filtered out (they were never bumped on insert).
+                    if (!isInternalPersistedPropertyKey(kv.key)) {
+                        for (node.labels) |label| {
+                            self.decLabelPropertyCount(node.graph_name, node.tenant_id, label, kv.key);
+                        }
                     }
+                    self.allocator.free(kv.key);
+                    freePropertyValue(self, kv.value);
                 }
-                self.allocator.free(kv.key);
-                freePropertyValue(self, kv.value);
             }
             // Mark as dirty - persistence happens at query completion
             self.dirty.store(true, .release);
@@ -8132,16 +8161,22 @@ pub const GraphStore = struct {
             const value_copy = try copyPropertyValue(self, effective_value);
             errdefer freePropertyValue(self, value_copy);
 
-            // Use getOrPut to avoid memory leak - only allocate key if it doesn't exist
-            const result = try edge.properties.getOrPut(key);
-            if (!result.found_existing) {
-                // Key doesn't exist, allocate a copy
-                result.key_ptr.* = try self.allocator.dupe(u8, key);
-            } else {
-                // Key exists, free old value
-                freePropertyValue(self, result.value_ptr.*);
+            {
+                // ENG-3954 / #874: edge parity with setNodeProperty — exclude
+                // concurrent readers across the realloc-and-free.
+                self.edges.lockShardExclusive(edge_id);
+                defer self.edges.unlockShardExclusive(edge_id);
+                // Use getOrPut to avoid memory leak - only allocate key if it doesn't exist
+                const result = try edge.properties.getOrPut(key);
+                if (!result.found_existing) {
+                    // Key doesn't exist, allocate a copy
+                    result.key_ptr.* = try self.allocator.dupe(u8, key);
+                } else {
+                    // Key exists, free old value
+                    freePropertyValue(self, result.value_ptr.*);
+                }
+                result.value_ptr.* = value_copy;
             }
-            result.value_ptr.* = value_copy;
 
             // Mark as dirty - persistence happens at query completion
             self.dirty.store(true, .release);
@@ -8223,20 +8258,33 @@ pub const GraphStore = struct {
                     const value_copy = try copyPropertyValue(self, effective);
                     errdefer freePropertyValue(self, value_copy);
 
-                    const result = try edge_ptr.properties.getOrPut(entry.key);
-                    if (!result.found_existing) {
-                        result.key_ptr.* = try self.allocator.dupe(u8, entry.key);
-                    } else {
-                        freePropertyValue(self, result.value_ptr.*);
+                    {
+                        // ENG-3954 / #874: see setNodePropertiesBatchInMemoryOnly.
+                        self.edges.lockShardExclusive(edge_id);
+                        defer self.edges.unlockShardExclusive(edge_id);
+                        const result = try edge_ptr.properties.getOrPut(entry.key);
+                        if (!result.found_existing) {
+                            result.key_ptr.* = try self.allocator.dupe(u8, entry.key);
+                        } else {
+                            freePropertyValue(self, result.value_ptr.*);
+                        }
+                        result.value_ptr.* = value_copy;
                     }
-                    result.value_ptr.* = value_copy;
 
                     notifyMutation(.set_edge_property, edge_id, 0, 0, null, entry.key, effective, null);
                 } else {
                     // Remove
-                    if (edge_ptr.properties.fetchRemove(entry.key)) |kv| {
-                        self.allocator.free(kv.key);
-                        freePropertyValue(self, kv.value);
+                    const removed = blk: {
+                        self.edges.lockShardExclusive(edge_id);
+                        defer self.edges.unlockShardExclusive(edge_id);
+                        if (edge_ptr.properties.fetchRemove(entry.key)) |kv| {
+                            self.allocator.free(kv.key);
+                            freePropertyValue(self, kv.value);
+                            break :blk true;
+                        }
+                        break :blk false;
+                    };
+                    if (removed) {
                         notifyMutation(.remove_edge_property, edge_id, 0, 0, null, entry.key, null, null);
                     }
                 }
@@ -8332,9 +8380,14 @@ pub const GraphStore = struct {
             }
         }
         if (self.getEdgePtrHydrated(edge_id)) |edge| {
-            if (edge.properties.fetchRemove(key)) |kv| {
-                self.allocator.free(kv.key);
-                freePropertyValue(self, kv.value);
+            {
+                // ENG-3954 / #874: edge parity with removeNodeProperty.
+                self.edges.lockShardExclusive(edge_id);
+                defer self.edges.unlockShardExclusive(edge_id);
+                if (edge.properties.fetchRemove(key)) |kv| {
+                    self.allocator.free(kv.key);
+                    freePropertyValue(self, kv.value);
+                }
             }
             self.dirty.store(true, .release);
             incrementMutationEpoch();
@@ -13012,6 +13065,11 @@ pub const GraphStore = struct {
             // wrongly report it absent. Mirror the saving setNodeProperty: when
             // `key` is a composite component, remove the OLD composite entry before
             // overwriting and re-assert it from the node's CURRENT values below.
+            // ENG-3954 / #874: same shard-exclusive discipline as the saving
+            // setNodeProperty — this path mutates PUBLISHED nodes too.
+            self.nodes.lockShardExclusive(node_id);
+            defer self.nodes.unlockShardExclusive(node_id);
+
             const composite_component = isCompositeComponentKey(key);
             if (composite_component) self.removeNodeCompositeMergeEntries(node);
 
@@ -13047,6 +13105,9 @@ pub const GraphStore = struct {
             // Caveat "B" COMPLETENESS (GAP-B): drop the (soon-stale) composite
             // merge entry before removing a composite component, symmetric with
             // the saving removeNodeProperty. No-op when no composite registered.
+            // ENG-3954 / #874: see setNodePropertyNoSave.
+            self.nodes.lockShardExclusive(node_id);
+            defer self.nodes.unlockShardExclusive(node_id);
             if (isCompositeComponentKey(key)) self.removeNodeCompositeMergeEntries(node);
             if (node.properties.fetchRemove(key)) |kv| {
                 self.removeFromMergePropertyIndex(node.graph_name, node.labels, kv.key, kv.value);
@@ -13069,6 +13130,9 @@ pub const GraphStore = struct {
             const value_copy = try copyPropertyValue(self, value);
             errdefer freePropertyValue(self, value_copy);
 
+            // ENG-3954 / #874: see setNodePropertyNoSave.
+            self.edges.lockShardExclusive(edge_id);
+            defer self.edges.unlockShardExclusive(edge_id);
             const result = try edge.properties.getOrPut(key);
             if (!result.found_existing) {
                 result.key_ptr.* = try self.allocator.dupe(u8, key);
@@ -13083,6 +13147,9 @@ pub const GraphStore = struct {
     pub fn removeEdgePropertyNoSave(self: *GraphStore, edge_id: u64, key: []const u8) void {
         self.ensureEdgeGraphHydrated(edge_id); // PHASE 1b chokepoint (before any cache read)
         if (self.getEdgePtrHydrated(edge_id)) |edge| {
+            // ENG-3954 / #874: see setNodePropertyNoSave.
+            self.edges.lockShardExclusive(edge_id);
+            defer self.edges.unlockShardExclusive(edge_id);
             if (edge.properties.fetchRemove(key)) |kv| {
                 self.allocator.free(kv.key);
                 freePropertyValue(self, kv.value);

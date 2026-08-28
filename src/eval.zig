@@ -2217,6 +2217,59 @@ fn vectorCandidatesToList(allocator: std.mem.Allocator, candidates: []const Vect
     return .{ .List = values };
 }
 
+/// Shared body of the node and edge brute-force knn scans (ENG-3954 / #874).
+///
+/// Both loops previously walked `cache.iterator()`, which takes NO lock, and
+/// dereferenced `entry.value_ptr.properties` straight out of the live cache. A
+/// concurrent MERGE/SET writer's `CompactPropertyMap.getOrPut` reallocs the
+/// sorted `entries` slice and FREES the old one inline (graph_store.zig), so the
+/// scan faulted inside `CompactPropertyMap.search` — a use-after-free that takes
+/// down the whole process, not just the query. Growing the cache concurrently is
+/// a second, independent invalidation of the same unlocked iterator.
+///
+/// The read is now bracketed by the SAME leaf lock the property writers take:
+///   * ids come from the shard-locked `snapshotKeys` (no iterator escapes), and
+///   * every dereference of an entry happens while that id's shard `map_lock` is
+///     held SHARED, which the mutation sites now hold EXCLUSIVE.
+/// The per-shard lock is the right level here: it is what makes the access
+/// atomic regardless of which higher-level lock either side happens to hold, and
+/// the store's mutators run with no per-graph rwlock of their own (the transports
+/// take it, and this scan can be reached without them).
+///
+/// Result-set semantics are unchanged: the scan still visits exactly the
+/// RESIDENT entries of the bounded caches (the deliberate, separately-tracked
+/// incompleteness noted at the edge loop), scoring them identically.
+/// CANARY: REQ=REQ-CONCURRENCY-KNN-SCAN-RACE; FEATURE="KnnScanRaceSafety"; ASPECT=ScanVectorKnn; STATUS=TESTED; TEST=tests/test_knn_scan_race.zig; OWNER=eval; UPDATED=2026-08-28
+fn scanVectorKnnBatched(
+    comptime Cache: type,
+    allocator: std.mem.Allocator,
+    cache: *Cache,
+    ids: []const u64,
+    property_name: []const u8,
+    query_vec: vector_types.VectorF32,
+    metric: VectorMetric,
+    candidates: *std.ArrayList(VectorCandidate),
+) EvalError!void {
+    for (ids) |id| {
+        // EVERYTHING that touches the entry's interior stays inside the guard:
+        // for a VECTORF32 property `propertyVectorCandidate` BORROWS the stored
+        // `data` slice rather than copying it, so the metric must be computed
+        // before the guard drops. An id removed since the snapshot resolves to
+        // null and is skipped, exactly as it would have been had the scan
+        // reached it a moment later.
+        cache.lockShardShared(id);
+        defer cache.unlockShardShared(id);
+        const entry = cache.getPtrUnlocked(id) orelse continue;
+        const prop = entry.properties.get(property_name) orelse continue;
+        const maybe_vec = try propertyVectorCandidate(allocator, prop);
+        if (maybe_vec) |candidate_vec| {
+            defer if (candidate_vec.owned) |data| allocator.free(data);
+            const score = metricDistance(metric, query_vec, candidate_vec.vector) catch continue;
+            try candidates.append(allocator, .{ .id = entry.id, .score = score });
+        }
+    }
+}
+
 fn scanVectorKnn(
     allocator: std.mem.Allocator,
     property_name: []const u8,
@@ -2228,16 +2281,20 @@ fn scanVectorKnn(
     var candidates = std.ArrayList(VectorCandidate).empty;
     defer candidates.deinit(allocator);
 
-    var node_iter = store.nodes.iterator();
-    while (node_iter.next()) |entry| {
-        const prop = entry.value_ptr.properties.get(property_name) orelse continue;
-        const maybe_vec = try propertyVectorCandidate(allocator, prop);
-        if (maybe_vec) |candidate_vec| {
-            defer if (candidate_vec.owned) |data| allocator.free(data);
-            const score = metricDistance(metric, query_vec, candidate_vec.vector) catch continue;
-            try candidates.append(allocator, .{ .id = entry.value_ptr.id, .score = score });
-        }
-    }
+    // ENG-3954 / #874: snapshot the resident ids under each shard's map_lock
+    // instead of walking the live, unlocked cache iterator.
+    const node_ids = store.nodes.snapshotKeys(allocator) catch return error.OutOfMemory;
+    defer allocator.free(node_ids);
+    try scanVectorKnnBatched(
+        graph_store.NodeCache,
+        allocator,
+        &store.nodes,
+        node_ids,
+        property_name,
+        query_vec,
+        metric,
+        &candidates,
+    );
 
     // PHASE 1 note (edge-engine-direct): this brute-force vector scan over edge
     // property vectors visits only RESIDENT edges under a bounded edge cache —
@@ -2246,16 +2303,18 @@ fn scanVectorKnn(
     // best-effort operation; making it scan the full edge set via the engine is
     // a future enhancement tracked alongside the node-side scan, not a Phase-1
     // regression (the node side already had this behavior).
-    var edge_iter = store.edges.iterator();
-    while (edge_iter.next()) |entry| {
-        const prop = entry.value_ptr.properties.get(property_name) orelse continue;
-        const maybe_vec = try propertyVectorCandidate(allocator, prop);
-        if (maybe_vec) |candidate_vec| {
-            defer if (candidate_vec.owned) |data| allocator.free(data);
-            const score = metricDistance(metric, query_vec, candidate_vec.vector) catch continue;
-            try candidates.append(allocator, .{ .id = entry.value_ptr.id, .score = score });
-        }
-    }
+    const edge_ids = store.edges.snapshotKeys(allocator) catch return error.OutOfMemory;
+    defer allocator.free(edge_ids);
+    try scanVectorKnnBatched(
+        graph_store.EdgeCache,
+        allocator,
+        &store.edges,
+        edge_ids,
+        property_name,
+        query_vec,
+        metric,
+        &candidates,
+    );
 
     std.sort.pdq(VectorCandidate, candidates.items, {}, compareVectorCandidates);
     return vectorCandidatesToList(allocator, candidates.items, k);

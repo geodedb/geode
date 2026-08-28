@@ -440,6 +440,36 @@ pub fn BoundedNodeCache(comptime K: type, comptime V: type) type {
             return self.store.keyIterator();
         }
 
+        /// Snapshot every resident KEY into a caller-owned slice, holding each
+        /// shard's `map_lock` SHARED for the duration of that shard's traversal.
+        ///
+        /// ENG-3954 / #874: `iterator()` / `keyIterator()` take NO lock, so a
+        /// scan that walks them races a concurrent insert-resize of the backing
+        /// AutoHashMap partition (UB: skipped keys, dangling probes) — the same
+        /// class of defect the per-shard `map_lock` was added to close for the
+        /// point-read API. Whole-store scans must snapshot ids here and then
+        /// re-read each entry through the locked by-value accessors (`get` /
+        /// `getOrHydrate`) instead of holding iterator-derived pointers.
+        ///
+        /// Only KEYS escape the lock: keys are plain integers, so nothing in the
+        /// result can dangle. An id removed between the snapshot and the re-read
+        /// simply resolves to null and is skipped by the caller.
+        /// CANARY: REQ=REQ-CONCURRENCY-KNN-SCAN-RACE; FEATURE="KnnScanRaceSafety"; ASPECT=LockedKeySnapshot; STATUS=TESTED; TEST=tests/test_knn_scan_race.zig; OWNER=storage; UPDATED=2026-08-28
+        pub fn snapshotKeys(self: *const Self, allocator: std.mem.Allocator) ![]K {
+            var out = std.ArrayList(K).empty;
+            errdefer out.deinit(allocator);
+            const store_ptr: *Store = @constCast(&self.store);
+            for (0..SHARD_COUNT) |idx| {
+                const sh: *Shard = @constCast(&self.shards[idx]);
+                sh.map_lock.lockSharedUncancelable(io());
+                defer sh.map_lock.unlockShared(io());
+                try out.ensureUnusedCapacity(allocator, store_ptr.shardLen(idx));
+                var it = store_ptr.shards[idx].keyIterator();
+                while (it.next()) |k| out.appendAssumeCapacity(k.*);
+            }
+            return out.toOwnedSlice(allocator);
+        }
+
         // ---- Grace-point reclamation ----------------------------------------
 
         /// Free every retired value across all shards. MUST be called only at a
@@ -524,6 +554,29 @@ pub fn BoundedNodeCache(comptime K: type, comptime V: type) type {
         pub fn unlockShardExclusive(self: *Self, key: K) void {
             const idx = sharded_store.shardIndex(@as(u64, key));
             self.shards[idx].map_lock.unlock(io());
+        }
+
+        /// SHARED counterpart of `lockShardExclusive` (ENG-3954 / #874).
+        ///
+        /// `get` / `getPtr` release the shard lock before they return, so they
+        /// make only the MAP LOOKUP atomic — they do NOT protect the value's
+        /// interior for the caller's read span. A resident node's
+        /// `CompactPropertyMap.getOrPut` reallocs-and-FREES its `entries` slice
+        /// inline on every new key, so a scan that dereferences the value after
+        /// the lookup faults inside `CompactPropertyMap.search`. Readers that
+        /// dereference a resident value (rather than just copying the struct)
+        /// must hold this across the whole access; the in-place mutators hold
+        /// `lockShardExclusive` across theirs. Same leaf-lock contract: no
+        /// re-entrant cache calls while held — use `getPtrUnlocked`.
+        /// CANARY: REQ=REQ-CONCURRENCY-KNN-SCAN-RACE; FEATURE="KnnScanRaceSafety"; ASPECT=ShardSharedRead; STATUS=TESTED; TEST=tests/test_knn_scan_race.zig; OWNER=storage; UPDATED=2026-08-28
+        pub fn lockShardShared(self: *Self, key: K) void {
+            const idx = sharded_store.shardIndex(@as(u64, key));
+            self.shards[idx].map_lock.lockSharedUncancelable(io());
+        }
+
+        pub fn unlockShardShared(self: *Self, key: K) void {
+            const idx = sharded_store.shardIndex(@as(u64, key));
+            self.shards[idx].map_lock.unlockShared(io());
         }
 
         /// Bare resident lookup WITHOUT taking the map lock — for callers that
