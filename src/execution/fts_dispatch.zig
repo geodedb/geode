@@ -33,6 +33,11 @@ const filterYieldColumns = execution_helpers.filterYieldColumns;
 const ExecutionResult = execution.ExecutionResult;
 const ExecutionContext = execution.ExecutionContext;
 
+// Spec geode-vectorization-and-reranking (FTS data boundary): row-visibility
+// authorization (tenant + RLS) for hits resolved OUTSIDE the MATCH loop.
+const rls = @import("rls");
+const match_operations = @import("match_operations.zig");
+
 const Value = value_types.Value;
 
 /// Default cap on returned hits when the optional `max` argument is omitted.
@@ -49,16 +54,15 @@ pub fn execute(
     call_stmt: ast.CallProcedure,
     context: ExecutionContext,
 ) !?ExecutionResult {
-    _ = context;
     if (std.mem.eql(u8, proc_name, "geode.fts.search")) {
-        return try handleFtsSearch(allocator, call_stmt);
+        return try handleFtsSearch(allocator, call_stmt, context);
     }
     // CANARY: REQ=REQ-GQL-FTS-ADV-001; FEATURE="Advanced FTS"; ASPECT=Dispatch; STATUS=TESTED; TEST=tests/test_gap0869_fts_advanced.zig; OWNER=index; UPDATED=2026-06-10
     if (std.mem.eql(u8, proc_name, "geode.fts.phrase")) {
-        return try handleFtsPhrase(allocator, call_stmt);
+        return try handleFtsPhrase(allocator, call_stmt, context);
     }
     if (std.mem.eql(u8, proc_name, "geode.fts.proximity")) {
-        return try handleFtsProximity(allocator, call_stmt);
+        return try handleFtsProximity(allocator, call_stmt, context);
     }
     return null;
 }
@@ -78,6 +82,7 @@ pub fn execute(
 fn handleFtsSearch(
     allocator: std.mem.Allocator,
     call_stmt: ast.CallProcedure,
+    context: ExecutionContext,
 ) !ExecutionResult {
     const args = switch (call_stmt.procedure) {
         .Call => |call| call.args,
@@ -115,6 +120,13 @@ fn handleFtsSearch(
     const hits = facade.search(query_text, max_results) catch return error.Unsupported;
     defer facade.allocator.free(hits);
 
+    // Spec geode-vectorization-and-reranking (FTS data boundary): over-fetch
+    // ids -> resolve under database-enforced authorization -> discard
+    // unauthorized rows BEFORE results leave the engine.
+    // CANARY: REQ=REQ-FTS-ROW-VISIBILITY-001; FEATURE="FullText"; ASPECT=SearchRowFilter; STATUS=TESTED; TEST=tests/test_fts_authorization.zig; OWNER=security; UPDATED=2026-08-28
+    var authorized = try filterAuthorizedHits(allocator, hits, context);
+    defer authorized.deinit(allocator);
+
     // Build the (node, score) binding table. Column names are dupe'd so they own
     // their lifetime alongside the result spine (matches algo_dispatch's
     // allocTwoColumns ownership; ExecutionResult.deinit frees columns + rows).
@@ -122,8 +134,8 @@ fn handleFtsSearch(
     columns[0] = try allocator.dupe(u8, "node");
     columns[1] = try allocator.dupe(u8, "score");
 
-    const rows = try allocator.alloc([]Value, hits.len);
-    for (hits, 0..) |hit, i| {
+    const rows = try allocator.alloc([]Value, authorized.items.len);
+    for (authorized.items, 0..) |hit, i| {
         const row = try allocator.alloc(Value, 2);
         // FullTextIndex.SearchResult fields are `doc_id: u64` (== node id) and
         // `score: f64` (already widened from the engine's f32 in the facade).
@@ -158,6 +170,7 @@ fn handleFtsSearch(
 fn handleFtsPhrase(
     allocator: std.mem.Allocator,
     call_stmt: ast.CallProcedure,
+    context: ExecutionContext,
 ) !ExecutionResult {
     const args = switch (call_stmt.procedure) {
         .Call => |call| call.args,
@@ -180,7 +193,14 @@ fn handleFtsPhrase(
     const hits = facade.phraseSearch(phrase_text, max_results) catch return error.Unsupported;
     defer facade.allocator.free(hits);
 
-    return try buildNodeScoreResult(allocator, call_stmt, hits);
+    // Spec geode-vectorization-and-reranking (FTS data boundary): over-fetch
+    // ids -> resolve under database-enforced authorization -> discard
+    // unauthorized rows BEFORE results leave the engine.
+    // CANARY: REQ=REQ-FTS-ROW-VISIBILITY-001; FEATURE="FullText"; ASPECT=PhraseRowFilter; STATUS=TESTED; TEST=tests/test_fts_authorization.zig; OWNER=security; UPDATED=2026-08-28
+    var authorized = try filterAuthorizedHits(allocator, hits, context);
+    defer authorized.deinit(allocator);
+
+    return try buildNodeScoreResult(allocator, call_stmt, authorized.items);
 }
 
 /// `geode.fts.proximity(index_name, query, distance [, max])` → rows of
@@ -195,6 +215,7 @@ fn handleFtsPhrase(
 fn handleFtsProximity(
     allocator: std.mem.Allocator,
     call_stmt: ast.CallProcedure,
+    context: ExecutionContext,
 ) !ExecutionResult {
     const args = switch (call_stmt.procedure) {
         .Call => |call| call.args,
@@ -225,7 +246,14 @@ fn handleFtsProximity(
     };
     defer facade.allocator.free(hits);
 
-    return try buildNodeScoreResult(allocator, call_stmt, hits);
+    // Spec geode-vectorization-and-reranking (FTS data boundary): over-fetch
+    // ids -> resolve under database-enforced authorization -> discard
+    // unauthorized rows BEFORE results leave the engine.
+    // CANARY: REQ=REQ-FTS-ROW-VISIBILITY-001; FEATURE="FullText"; ASPECT=ProximityRowFilter; STATUS=TESTED; TEST=tests/test_fts_authorization.zig; OWNER=security; UPDATED=2026-08-28
+    var authorized = try filterAuthorizedHits(allocator, hits, context);
+    defer authorized.deinit(allocator);
+
+    return try buildNodeScoreResult(allocator, call_stmt, authorized.items);
 }
 
 /// Resolve the named fulltext facade on the DEFAULT graph (same resolver and
@@ -234,6 +262,43 @@ fn resolveFacade(index_name: []const u8) !*fulltext.FullTextIndex {
     const adapter = graph_store.getGlobalAdapter() orelse return error.Unsupported;
     return adapter.getFulltextIndexNamed(graph_store.DEFAULT_GRAPH_NAME, index_name) orelse
         error.Unsupported;
+}
+
+/// Filter fts-storage hits down to the rows the caller is authorized to see.
+///
+/// Spec geode-vectorization-and-reranking (FTS data boundary): "ACL/RLS/
+/// classification enforcement before evidence reaches reranker/LLM" and
+/// "over-fetch IDs, resolve under database-enforced authorization, discard
+/// unauthorized rows". `hits` are resolved OUTSIDE the MATCH loop straight
+/// from the fts-storage engine's persisted positional postings, so — unlike
+/// ordinary MATCH rows — they never pass through
+/// `match_operations.passesRowVisibilityFilters` unless this runs first.
+///
+/// The node is read under its shard's SHARED map_lock so the property map
+/// cannot be realloc-freed mid-read by a concurrent writer (same locking
+/// contract as scanVectorKnn after ENG-3954, `git show 448ac850`). A hit
+/// whose node was deleted since indexing (no longer resident) is dropped.
+fn filterAuthorizedHits(
+    allocator: std.mem.Allocator,
+    hits: []const fulltext.FullTextIndex.SearchResult,
+    context: ExecutionContext,
+) !std.ArrayList(fulltext.FullTextIndex.SearchResult) {
+    const store = graph_store.getGlobalStore(graph_store.global_allocator());
+    var reusable_row = std.StringHashMap(rls.Value).init(allocator);
+    defer reusable_row.deinit();
+
+    var authorized = try std.ArrayList(fulltext.FullTextIndex.SearchResult).initCapacity(allocator, hits.len);
+    errdefer authorized.deinit(allocator);
+    for (hits) |hit| {
+        const visible = blk: {
+            store.nodes.lockShardShared(hit.doc_id);
+            defer store.nodes.unlockShardShared(hit.doc_id);
+            const np = store.nodes.getPtrUnlocked(hit.doc_id) orelse break :blk false; // deleted since indexing
+            break :blk match_operations.passesRowVisibilityFilters(&reusable_row, np.*, context.tenant_id);
+        };
+        if (visible) authorized.appendAssumeCapacity(hit);
+    }
+    return authorized;
 }
 
 /// Build the `(node, score)` binding table from facade SearchResults, applying

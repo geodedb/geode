@@ -7904,6 +7904,19 @@ pub fn build(b: *std.Build) void {
     const scan_race_step = b.step("test-scan-ingest-race", "Run concurrent scan+ingest crash regression (LabelIndex.scan race under streaming read path)");
     scan_race_step.dependOn(&run_scan_race_tests.step);
 
+    // Spec geode-vectorization-and-reranking (FTS data boundary): geode.fts.*
+    // procedures resolve candidate ids OUTSIDE the MATCH loop, so they must
+    // still apply the same tenant + RLS row-visibility filtering MATCH rows
+    // get before results leave the engine.
+    const fts_authorization_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_fts_authorization.zig"), .target = target, .optimize = optimize });
+    fts_authorization_test_mod.addImport("geode", root_mod);
+    fts_authorization_test_mod.addImport("rls_types", rls_types_mod);
+    const fts_authorization_tests = b.addTest(.{ .root_module = fts_authorization_test_mod });
+    const run_fts_authorization_tests = b.addRunArtifact(fts_authorization_tests);
+    shardDep(test_step, &run_fts_authorization_tests.step, 1, test_shard_loads, test_shard_index);
+    const fts_authorization_step = b.step("test-fts-authorization", "Run FTS result row-visibility authorization regression (tenant + RLS filtering on geode.fts.* results)");
+    fts_authorization_step.dependOn(&run_fts_authorization_tests.step);
+
     // ENG-3954 / #874: concurrent knn-scan + MERGE-writer crash regression.
     // `scanVectorKnn` (src/eval.zig:2220-2260) — the brute-force fallback for a
     // vector property with NO advanced index — walks the live bounded node/edge

@@ -1289,6 +1289,14 @@ REQ-FTS-001,FTS,FullTextSearch,TESTED,,,search,2026-01-16,tests/test_gap_0193_ba
 REQ-FTS-INDEX-OPTIONS-VALIDATION,FulltextIndex,OptionsKeyValidation,TESTED,,,index,2026-08-25,src/gql/parser.zig
 REQ-FTS-INDEX-OPTIONS-VALIDATION,FulltextIndex,OptionsKeyValidation,TESTED,,,index,2026-08-25,tests/test_fts_index_options.zig
 REQ-FTS-INDEX-OPTIONS-VALIDATION,FulltextIndex,SqlstateMapping,TESTED,,,index,2026-08-25,src/server/proto_util.zig
+REQ-FTS-ROW-VISIBILITY-001,FullText,PhraseRowFilter,TESTED,,,security,2026-08-28,src/execution/fts_dispatch.zig
+REQ-FTS-ROW-VISIBILITY-001,FullText,ProximityRowFilter,TESTED,,,security,2026-08-28,src/execution/fts_dispatch.zig
+REQ-FTS-ROW-VISIBILITY-001,FullText,RowVisibilityCombinator,TESTED,,,security,2026-08-28,.superpowers/sdd/task-1-brief.md
+REQ-FTS-ROW-VISIBILITY-001,FullText,RowVisibilityCombinator,TESTED,,,security,2026-08-28,src/execution/match_operations.zig
+REQ-FTS-ROW-VISIBILITY-001,FullText,SearchRowFilter,TESTED,,,security,2026-08-28,src/execution/fts_dispatch.zig
+REQ-FTS-ROW-VISIBILITY-001,FullText,TenantFilteredResults,TESTED,,,security,2026-08-28,.superpowers/sdd/task-1-brief.md
+REQ-FTS-ROW-VISIBILITY-001,FullText,TenantFilteredResults,TESTED,,,security,2026-08-28,tests/test_fts_authorization.zig
+REQ-FTS-ROW-VISIBILITY-001,FullText,TenantFilteredResults,TESTED,,,security,2026-08-28,tests/test_fts_authorization.zig
 REQ-FTS-SEARCH-001,FTS,FullTextSearch,TESTED,,,fts,2026-01-16,tests/test_gap_0193_batch4_comprehensive.zig
 REQ-FUZZ-DICT-001,FuzzDictionaries,MetadataDerived,EXEMPT,,,tooling,2026-01-03,scripts/generate_fuzz_dict.zig
 REQ-FUZZ-DICT-002,FuzzDictionaries,BuildTarget,EXEMPT,,,tooling,2026-01-03,build.zig

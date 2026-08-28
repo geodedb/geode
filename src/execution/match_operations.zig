@@ -287,6 +287,19 @@ inline fn storageTenantFilter(filter_tenant: ?[]const u8) ?[]const u8 {
     return tid;
 }
 
+// Spec geode-vectorization-and-reranking (FTS data boundary): engine-direct
+// read paths that resolve candidate ids OUTSIDE the MATCH loop (e.g. fulltext
+// search hits) must apply the same hierarchy-aware tenant filter and two-layer
+// RLS filter as MATCH rows before results leave the engine.
+// CANARY: REQ=REQ-FTS-ROW-VISIBILITY-001; FEATURE="FullText"; ASPECT=RowVisibilityCombinator; STATUS=TESTED; TEST=tests/test_fts_authorization.zig; OWNER=security; UPDATED=2026-08-28
+pub fn passesRowVisibilityFilters(
+    reusable_row: *std.StringHashMap(rls.Value),
+    node: graph_store.Node,
+    filter_tenant: ?[]const u8,
+) bool {
+    return passesTenantFilter(node, filter_tenant) and passesRLSFilter(reusable_row, node);
+}
+
 // GAP-0510 Task 4a: Check if a node passes the RLS denied-labels filter AND
 // expression-based property policies for the current session.
 // Returns true (allow) when no RLS engine is active, no user is authenticated,
