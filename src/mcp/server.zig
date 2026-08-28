@@ -34,6 +34,14 @@ pub const GeodeMcpServer = struct {
     allocator: std.mem.Allocator,
     server: mcp.Server,
     geode_endpoint: ?[]const u8,
+    // CANARY: REQ=REQ-MCP-READ-ONLY-001; FEATURE="MCPReadOnly"; ASPECT=OptionStorage; STATUS=TESTED; TEST=tests/test_mcp_read_only.zig; OWNER=mcp; UPDATED=2026-08-28
+    // Task 6 (hybrid-RAG audit spec): MCP-layer defense-in-depth gate above
+    // the Task 5 engine-side ExecuteRequest.read_only hard floor. When true,
+    // the `query` tool refuses mutating (or unparseable) programs before
+    // any round-trip to the geode backend. Threaded the same way as
+    // `geode_endpoint`: captured from Options at init, read by
+    // callToolHandler, forwarded into tools.callTool.
+    read_only: bool,
     // CANARY: REQ=REQ-GPS-MCP-001; FEATURE="GPS MCP Principal"; ASPECT=PrincipalStorage; STATUS=TESTED; TEST=tests/test_gps_mcp_principal.zig; OWNER=security; UPDATED=2026-05-20
     // Per-server Principal derived from the bearer token (or anonymous when
     // auth_mode = .none). Stored by value; lifetime tied to this server.
@@ -116,6 +124,7 @@ pub const GeodeMcpServer = struct {
                 null,
             .mcp_principal = mcp_principal,
             .mcp_username_storage = username_storage,
+            .read_only = options.read_only,
         };
 
         const handler = mcp.Handler{
@@ -200,6 +209,13 @@ pub const GeodeMcpServer = struct {
         // GPS Phase 5: the username mapped from the bearer token.  Default "mcp".
         // Multi-user MCP (per-token user lookup) is deferred to Phase 6+.
         mcp_username: []const u8 = "mcp",
+        // CANARY: REQ=REQ-MCP-READ-ONLY-001; FEATURE="MCPReadOnly"; ASPECT=OptionDefinition; STATUS=TESTED; TEST=tests/test_mcp_read_only.zig; OWNER=mcp; UPDATED=2026-08-28
+        // Task 6 (hybrid-RAG audit spec): defense-in-depth read-only mode.
+        // When true, the `query` tool classifies each statement in-process
+        // (real parser + query_traits.isMutatingProgram) and refuses
+        // mutating or unparseable programs before they reach the wire.
+        // Defaults to false to preserve existing behavior.
+        read_only: bool = false,
     };
 };
 
@@ -224,7 +240,7 @@ fn callToolHandler(ctx: ?*anyopaque, name: []const u8, args_json: []const u8, ca
     // Pass the per-server Principal to tool dispatch so each tool can forward it
     // to any downstream execution context.  Phase 5: single MCP user per server;
     // multi-user per-connection threading is Phase 6+.
-    return tools.callTool(self.allocator, self.geode_endpoint, &self.mcp_principal, name, args_json, cancel);
+    return tools.callTool(self.allocator, self.geode_endpoint, self.read_only, &self.mcp_principal, name, args_json, cancel);
 }
 
 fn listResourcesHandler(ctx: ?*anyopaque, cursor: ?[]const u8) anyerror![]const u8 {

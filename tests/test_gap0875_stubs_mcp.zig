@@ -49,7 +49,7 @@ test "GAP-0875c: pre-cancelled token short-circuits callTool with error.Cancelle
     const p = testPrincipal();
     // "query" would normally attempt a QUIC connection; a cancelled token
     // must return before any client work begins.
-    const result = tools.callTool(allocator, null, &p, "query", "{\"query\":\"RETURN 1\"}", &token);
+    const result = tools.callTool(allocator, null, false, &p, "query", "{\"query\":\"RETURN 1\"}", &token);
     try std.testing.expectError(error.Cancelled, result);
 }
 
@@ -60,6 +60,6 @@ test "GAP-0875c: non-cancelled token still dispatches (unknown tool control)" {
 
     var token = mcp.CancelToken{};
     const p = testPrincipal();
-    const result = tools.callTool(allocator, null, &p, "no-such-tool", "{}", &token);
+    const result = tools.callTool(allocator, null, false, &p, "no-such-tool", "{}", &token);
     try std.testing.expectError(error.UnknownTool, result);
 }

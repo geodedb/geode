@@ -40,6 +40,15 @@ const lsp = @import("lsp.zig");
 const geode_security = @import("geode").security;
 pub const Principal = geode_security.principal.Principal;
 
+// CANARY: REQ=REQ-MCP-READ-ONLY-001; FEATURE="MCPReadOnly"; ASPECT=ClassifierImport; STATUS=TESTED; TEST=tests/test_mcp_read_only.zig; OWNER=mcp; UPDATED=2026-08-28
+// Task 6 (hybrid-RAG audit spec): the same real parser + mutation
+// classifier the QUIC/gRPC transports use to decide read-vs-write locking
+// (query_traits.isMutatingProgram), reused here as an MCP-layer
+// defense-in-depth gate. Sibling import to the `validate` tool's parser
+// entry point (lsp.zig -> gql_parser/gql_lexer).
+const geode_gql = @import("geode").gql;
+const geode_query_traits = @import("geode").query_traits;
+
 // MCP Tool Response Types for JSON Library encoding
 // CANARY: REQ=REQ-LIB-MIGRATION-JSON-039; FEATURE="JSON Library Migration"; ASPECT=MCPResponseTypes; STATUS=TESTED; OWNER=mcp; UPDATED=2026-01-24
 const McpToolContent = struct {
@@ -78,6 +87,7 @@ pub fn listTools(cursor: ?[]const u8) []const u8 {
 pub fn callTool(
     allocator: std.mem.Allocator,
     geode_endpoint: ?[]const u8,
+    read_only: bool,
     caller: *const Principal,
     name: []const u8,
     args_json: []const u8,
@@ -99,7 +109,7 @@ pub fn callTool(
     _ = caller;
 
     if (std.mem.eql(u8, name, "query")) {
-        return executeQuery(allocator, geode_endpoint, args_json);
+        return executeQuery(allocator, geode_endpoint, read_only, args_json);
     } else if (std.mem.eql(u8, name, "schema")) {
         return getSchema(allocator, geode_endpoint);
     } else if (std.mem.eql(u8, name, "explain")) {
@@ -122,7 +132,7 @@ pub fn callTool(
 }
 
 /// Execute a GQL query against Geode
-fn executeQuery(allocator: std.mem.Allocator, endpoint: ?[]const u8, args_json: []const u8) ![]const u8 {
+fn executeQuery(allocator: std.mem.Allocator, endpoint: ?[]const u8, read_only: bool, args_json: []const u8) ![]const u8 {
     // GAP-0345: argument-validation failures MUST be returned as MCP
     // tool results with `isError: true` so MCP clients see a structured
     // error rather than a raw JSON blob that the framework cannot
@@ -136,6 +146,21 @@ fn executeQuery(allocator: std.mem.Allocator, endpoint: ?[]const u8, args_json: 
     defer parsed.deinit();
 
     const query = parsed.value.query;
+
+    // Spec geode-vectorization-and-reranking: instruction boundary — retrieved
+    // text must not be able to mutate through the single query tool. Fail
+    // closed: unparseable input is unclassifiable and is rejected in
+    // read-only mode. Engine-side ExecuteRequest.read_only (field 6) is the
+    // hard floor once geode-client-zig emits it; this gate is the MCP-layer
+    // belt over those suspenders.
+    // CANARY: REQ=REQ-MCP-READ-ONLY-001; FEATURE="MCPReadOnly"; ASPECT=QueryToolGate; STATUS=TESTED; TEST=tests/test_mcp_read_only.zig; OWNER=mcp; UPDATED=2026-08-28
+    if (read_only) {
+        const verdict = classifyForReadOnly(allocator, query);
+        if (verdict != .read_ok) {
+            return try formatErrorResponse(allocator, "read-only MCP server: data modification rejected");
+        }
+    }
+
     const endpoint_str = endpoint orelse "localhost:3141";
 
     // Create client and execute query
@@ -374,6 +399,57 @@ fn formatErrorResponse(allocator: std.mem.Allocator, error_msg: []const u8) ![]c
         .content = &content_items,
     };
     return try json_lib.encode(allocator, result, .{});
+}
+
+/// Verdict of the in-process read-only pre-flight classifier.
+const ReadOnlyVerdict = enum { read_ok, refused };
+
+/// CANARY: REQ=REQ-MCP-READ-ONLY-001; FEATURE="MCPReadOnly"; ASPECT=Classifier; STATUS=TESTED; TEST=tests/test_mcp_read_only.zig; OWNER=mcp; UPDATED=2026-08-28
+/// Classify a GQL statement for the read-only gate using the same parser
+/// entry the `validate` tool uses (see lsp.zig validateQuery) plus the
+/// real query_traits.isMutatingProgram classifier — the identical
+/// classifier the QUIC/gRPC transports consult to pick the read vs.
+/// write lock path.
+///
+/// Fail-closed contract: a statement is `.read_ok` only when it (a)
+/// passes the GAP-0819 input chokepoint, (b) parses successfully, AND
+/// (c) does not classify as mutating. Anything else — chokepoint
+/// rejection, parse failure, or a positive mutation classification — is
+/// `.refused`. Unparseable input is unclassifiable and is therefore
+/// refused, not passed through.
+///
+/// Documented fail-open caveat inherited from the shared classifier:
+/// SHOW/admin-style statements classify as read-only here (they are not
+/// graph-store mutations). That is acceptable at this layer because the
+/// engine's own admin/authorization gates still apply server-side on
+/// every request regardless of what this MCP-layer gate decides — this
+/// gate is defense-in-depth above the Task 5 ExecuteRequest.read_only
+/// hard floor, not a substitute for it.
+fn classifyForReadOnly(allocator: std.mem.Allocator, query: []const u8) ReadOnlyVerdict {
+    _ = lsp.validateAndSanitizeGqlInput(query) catch return .refused;
+
+    var arena = std.heap.ArenaAllocator.init(allocator);
+    defer arena.deinit();
+
+    var lexer = geode_gql.lexer.Lexer{
+        .src = query,
+        .idx = 0,
+        .line = 1,
+        .col = 1,
+        .has_double_solidus_comment = false,
+    };
+
+    var parser = geode_gql.parser.Parser{
+        .lx = &lexer,
+        .arena = &arena,
+        .cur = lexer.next(),
+        .has_ordinal_sort_key = false,
+    };
+
+    const program = parser.parseProgram() catch return .refused;
+
+    if (geode_query_traits.isMutatingProgram(&program)) return .refused;
+    return .read_ok;
 }
 
 const QueryArgs = struct {

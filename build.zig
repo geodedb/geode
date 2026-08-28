@@ -6606,6 +6606,32 @@ pub fn build(b: *std.Build) void {
     const gap0516_step = b.step("test-gap0516", "GAP-0516: MCP resource-subscription contract + truthful capability reporting");
     gap0516_step.dependOn(&run_gap0516_tests.step);
 
+    // Task 6 (hybrid-RAG audit spec): MCP server read-only mode. Roots the
+    // regression file through src/mcp/server.zig exposed as `mcp_server`,
+    // mirroring the gap0516 import set (same server.zig deps: tools,
+    // resources, prompts, lsp, query_traits via the geode module). The test
+    // drives the real mcp.Server.processMessage dispatch with Options
+    // .read_only = true against a dead endpoint ("127.0.0.1:1") to prove
+    // refusal happens client-side, before any wire attempt.
+    const mcp_read_only_server_mod = b.createModule(.{ .root_source_file = b.path("src/mcp/server.zig"), .target = target, .optimize = optimize });
+    mcp_read_only_server_mod.addImport("mcp", mcp_mod);
+    mcp_read_only_server_mod.addImport("geode", root_mod);
+    mcp_read_only_server_mod.addImport("json", json_mod);
+    mcp_read_only_server_mod.addImport("schema", schema_mod);
+    mcp_read_only_server_mod.addImport("protobuf", protobuf_mod);
+    mcp_read_only_server_mod.addImport("transport/quic", transport_quic_mod);
+    mcp_read_only_server_mod.addImport("parallel/thread_pool_parallel", parallel_wrapper_mod);
+    mcp_read_only_server_mod.addImport("build_options", build_options_mod);
+    mcp_read_only_server_mod.link_libc = true;
+    const mcp_read_only_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_mcp_read_only.zig"), .target = target, .optimize = optimize });
+    mcp_read_only_test_mod.addImport("mcp_server", mcp_read_only_server_mod);
+    mcp_read_only_test_mod.link_libc = true;
+    const mcp_read_only_tests = b.addTest(.{ .root_module = mcp_read_only_test_mod });
+    const run_mcp_read_only_tests = b.addRunArtifact(mcp_read_only_tests);
+    shardDep(test_step, &run_mcp_read_only_tests.step, 1, test_shard_loads, test_shard_index);
+    const mcp_read_only_step = b.step("test-mcp-read-only", "Task 6: MCP server read-only mode gates the query tool pre-wire (mutating/unparseable refused, reads allowed)");
+    mcp_read_only_step.dependOn(&run_mcp_read_only_tests.step);
+
     // GAP-0875: residual local stubs batch. Two test modules under one step:
     //  - tests/test_gap0875_stubs.zig (via the `geode` module; lib.zig exports
     //    constraint_manager + memory_mapped_io for it): unique-constraint
