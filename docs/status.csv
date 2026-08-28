@@ -1098,8 +1098,17 @@ REQ-EXEC-DELETE-001,Execution,DeleteExecution,TESTED,,,exec,2026-01-16,tests/tes
 REQ-EXEC-MATCH-001,Execution,MatchExecution,TESTED,,,execution,2026-01-16,tests/test_gap_0193_batch3_comprehensive.zig
 REQ-EXEC-MATCH-001,Execution,MatchExecution,TESTED,,,exec,2026-01-16,tests/test_gap_0193_batch4_comprehensive.zig
 REQ-EXEC-MERGE-001,Execution,MergeExecution,TESTED,,,exec,2026-01-16,tests/test_gap_0193_batch5_comprehensive.zig
+REQ-EXEC-READ-ONLY-REQUEST-001,ReadOnlyExecute,BuildStep,TESTED,,,engine,2026-08-28,build.zig
+REQ-EXEC-READ-ONLY-REQUEST-001,ReadOnlyExecute,CliFlag,TESTED,,,engine,2026-08-28,src/cli/main.zig
+REQ-EXEC-READ-ONLY-REQUEST-001,ReadOnlyExecute,CliOption,TESTED,,,engine,2026-08-28,src/cli/main.zig
+REQ-EXEC-READ-ONLY-REQUEST-001,ReadOnlyExecute,CliOption,TESTED,,,engine,2026-08-28,src/cli/main.zig
+REQ-EXEC-READ-ONLY-REQUEST-001,ReadOnlyExecute,CliOption,TESTED,,,engine,2026-08-28,src/client/quic_query_runner.zig
+REQ-EXEC-READ-ONLY-REQUEST-001,ReadOnlyExecute,GrpcGate,TESTED,,,engine,2026-08-28,src/transport/grpc_server.zig
 REQ-EXEC-READ-ONLY-REQUEST-001,ReadOnlyExecute,QuicGate,TESTED,,,engine,2026-08-28,.superpowers/sdd/task-5-brief.md
+REQ-EXEC-READ-ONLY-REQUEST-001,ReadOnlyExecute,QuicGate,TESTED,,,engine,2026-08-28,src/server/quic_connection_handler.zig
+REQ-EXEC-READ-ONLY-REQUEST-001,ReadOnlyExecute,Test,TESTED,,,engine,2026-08-28,tests/test_read_only_execute.zig
 REQ-EXEC-READ-ONLY-REQUEST-001,ReadOnlyExecute,WireField,TESTED,,,engine,2026-08-28,.superpowers/sdd/task-5-brief.md
+REQ-EXEC-READ-ONLY-REQUEST-001,ReadOnlyExecute,WireField,TESTED,,,engine,2026-08-28,src/proto/schema.zig
 REQ-EXEC-REFACTOR-001,ExecutionRefactoring,GRAPH_ALGORITHMS,EXEMPT,,,refactor,2025-10-17,src/execution/graph_algorithms.zig
 REQ-EXEC-REFACTOR-001,ExecutionRefactoring,ModuleStructure,TESTED,,,execution,2026-01-15,tests/test_gap_0193_impl_batch_promotion.zig
 REQ-EXEC-REFACTOR-002,ExecutionRefactoring,MatchExecution,TESTED,,,execution,2026-01-15,tests/test_gap_0193_impl_batch_promotion.zig

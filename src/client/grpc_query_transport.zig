@@ -357,6 +357,7 @@ pub const StreamingQueryAdapter = struct {
             .session_id = opts.session_id,
             .query = opts.query_text,
             .params = opts.params,
+            .read_only = opts.read_only,
         };
         const exec_bytes = try encodeMessage(allocator, exec_req);
         defer allocator.free(exec_bytes);

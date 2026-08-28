@@ -111,6 +111,10 @@ pub const ExecuteRequest = struct {
     // dedup an EXTERNAL client retry — that needs client adoption of this field).
     // Existing wire frames without field 5 decode unchanged.
     idempotency_key: ?[]const u8 = null,
+    // Spec geode-vectorization-and-reranking: per-request hard read-only floor,
+    // independent of the principal's role ("authorization below the LLM").
+    // CANARY: REQ=REQ-EXEC-READ-ONLY-REQUEST-001; FEATURE="ReadOnlyExecute"; ASPECT=WireField; STATUS=TESTED; TEST=tests/test_read_only_execute.zig; OWNER=engine; UPDATED=2026-08-28
+    read_only: bool = false,
 
     pub const _desc_table = .{
         .session_id = fd(1, .{ .scalar = .string }),
@@ -118,6 +122,7 @@ pub const ExecuteRequest = struct {
         .params = fd(3, .{ .repeated = .{ .submessage = {} } }),
         .principal_envelope_bytes = fd(4, .{ .scalar = .bytes }),
         .idempotency_key = fd(5, .{ .scalar = .string }),
+        .read_only = fd(6, .{ .scalar = .bool }),
     };
 
     pub fn deinit(self: *ExecuteRequest, allocator: std.mem.Allocator) void {

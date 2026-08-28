@@ -6339,6 +6339,18 @@ fn handleClientMessage(
             const heur_index = traits.has_where_eq or traits.has_filter_eq;
             const program_is_mutating = isMutatingProgram(&parse_result.program);
 
+            // Spec geode-vectorization-and-reranking: per-request hard read-only
+            // floor, independent of the principal's role ("authorization must be
+            // enforced below the LLM"). Fires BEFORE the role-based mutation gate
+            // below and regardless of whether auth is enabled — a gateway/
+            // orchestrator sets ExecuteRequest.read_only=true to guarantee no
+            // mutation reaches the store no matter what role the connection holds.
+            // CANARY: REQ=REQ-EXEC-READ-ONLY-REQUEST-001; FEATURE="ReadOnlyExecute"; ASPECT=QuicGate; STATUS=TESTED; TEST=tests/test_read_only_execute.zig; OWNER=engine; UPDATED=2026-08-28
+            if (exec_req.read_only and program_is_mutating) {
+                try sendExecuteError(gpa, stream, "42501", "Read-only request: data modification rejected", &.{}, &.{});
+                return;
+            }
+
             const role = if (state.authenticated_role) |role_u8|
                 @as(user_mgmt.Role, @enumFromInt(role_u8))
             else

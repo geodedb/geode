@@ -2695,6 +2695,16 @@ pub fn build(b: *std.Build) void {
     const merge_mutating_step = b.step("test-merge-query-is-mutating", "Regression: MATCH...MERGE classifies as mutating (write-lock path, no deep-clone snapshot)");
     merge_mutating_step.dependOn(&run_merge_mutating_tests.step);
 
+    // ----- Per-request read_only hard floor (ExecuteRequest field 6) -----
+    // CANARY: REQ=REQ-EXEC-READ-ONLY-REQUEST-001; FEATURE="ReadOnlyExecute"; ASPECT=BuildStep; STATUS=TESTED; TEST=tests/test_read_only_execute.zig; OWNER=engine; UPDATED=2026-08-28
+    const read_only_execute_tests = b.addTest(.{ .root_module = b.createModule(.{ .root_source_file = b.path("tests/test_read_only_execute.zig"), .target = target, .optimize = optimize }) });
+    read_only_execute_tests.root_module.addImport("geode", root_mod);
+    read_only_execute_tests.root_module.addImport("protobuf", protobuf_mod);
+    read_only_execute_tests.root_module.addImport("schema", schema_mod);
+    const run_read_only_execute_tests = b.addRunArtifact(read_only_execute_tests);
+    const read_only_execute_step = b.step("test-read-only-execute", "Per-request read_only hard floor: ExecuteRequest field 6 round-trip + isMutatingProgram classifier pin");
+    read_only_execute_step.dependOn(&run_read_only_execute_tests.step);
+
     // ----- EVAL CALL-HANDLER UNIT TESTS (GAP-0888 review follow-up) -----
     // The inline unit tests in src/eval/ts_call_handlers.zig and
     // src/eval/quantifier_call_handlers.zig are not discovered by any other

@@ -82,6 +82,11 @@ pub const QueryOptions = struct {
     // caller's Principal for that request rather than using the connection-level
     // identity.  Null (the default) preserves existing behaviour.
     principal_envelope_bytes: ?[]const u8 = null,
+    // Spec geode-vectorization-and-reranking: per-request hard read-only floor
+    // (ExecuteRequest field 6). When true, a mutating program is rejected by
+    // the server with GQLSTATE 42501 regardless of the connection's role.
+    // CANARY: REQ=REQ-EXEC-READ-ONLY-REQUEST-001; FEATURE="ReadOnlyExecute"; ASPECT=CliOption; STATUS=TESTED; TEST=tests/test_read_only_execute.zig; OWNER=engine; UPDATED=2026-08-28
+    read_only: bool = false,
 };
 
 const ProtocolTransportAdapter = struct {
@@ -107,6 +112,7 @@ const ProtocolTransportAdapter = struct {
             .query = transport_opts.query_text,
             .params = transport_opts.params,
             .principal_envelope_bytes = transport_opts.principal_envelope_bytes,
+            .read_only = transport_opts.read_only,
         };
         try self.protocol_client.sendClientMessage(allocator_, .{ .execute = execute_req });
     }
@@ -193,6 +199,7 @@ pub fn consumeQueryWithTransport(
         // through to beginQuery so it reaches ExecuteRequest field 4.
         // Without this it was silently dropped here.
         .principal_envelope_bytes = opts.principal_envelope_bytes,
+        .read_only = opts.read_only,
     };
     try transport.beginQuery(allocator, owned_opts);
 

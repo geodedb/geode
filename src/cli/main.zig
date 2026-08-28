@@ -267,6 +267,8 @@ fn printQueryUsage() void {
         "  --page-size <n>        Page size for results (default: 128)\n" ++
         "  --timeout <secs>       Connection timeout in seconds (default: 30)\n" ++
         "  --retry <count>        Number of retry attempts on failure (default: 0)\n" ++
+        "  --read-only            Reject mutating statements with GQLSTATE 42501,\n" ++
+        "                         independent of the authenticated user's role\n" ++
         "  --begin                Start transaction\n" ++
         "  --commit               Commit transaction\n" ++
         "  --rollback             Rollback transaction\n" ++
@@ -1018,6 +1020,13 @@ fn cmdQuery(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !voi
     // PERF-P1-002: Batch mode — read semicolon-delimited queries from stdin,
     // execute all over a single QUIC connection to amortize handshake cost.
     var batch_mode = false;
+    // Spec geode-vectorization-and-reranking: per-REQUEST hard read-only floor
+    // ("authorization must be enforced below the LLM") — independent of the
+    // authenticated principal's role. Sets ExecuteRequest.read_only (field 6);
+    // the server rejects any mutating program with GQLSTATE 42501 regardless
+    // of role or whether auth is enabled.
+    // CANARY: REQ=REQ-EXEC-READ-ONLY-REQUEST-001; FEATURE="ReadOnlyExecute"; ASPECT=CliFlag; STATUS=TESTED; TEST=tests/test_read_only_execute.zig; OWNER=engine; UPDATED=2026-08-28
+    var read_only = false;
     var params = std.ArrayList(schema.Param).empty;
     var params_owned = true;
     defer if (params_owned) {
@@ -1101,6 +1110,11 @@ fn cmdQuery(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !voi
             batch_mode = true;
         } else if (std.mem.eql(u8, arg, "--grpc")) {
             use_grpc = true;
+        } else if (std.mem.eql(u8, arg, "--read-only")) {
+            // Spec geode-vectorization-and-reranking: per-request hard read-only
+            // floor. Sets ExecuteRequest.read_only=true; server rejects any
+            // mutating program with GQLSTATE 42501 regardless of role.
+            read_only = true;
         } else if (std.mem.eql(u8, arg, "--ca-cert")) {
             // GAP-0113: CA certificate path for server verification
             if (i + 1 >= argv.len) {
@@ -1598,7 +1612,7 @@ fn cmdQuery(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !voi
             std.process.exit(@intFromEnum(ExitCode.usage_error));
         }
 
-        try executeBatchQueries(allocator, server_addr, stdin_content, format, insecure, timeout_secs, user, password, ca_cert_path, client_cert_path, client_key_path, graph_for_prepend, graph, page_size, role);
+        try executeBatchQueries(allocator, server_addr, stdin_content, format, insecure, timeout_secs, user, password, ca_cert_path, client_cert_path, client_key_path, graph_for_prepend, graph, page_size, role, read_only);
         return;
     }
 
@@ -1675,6 +1689,7 @@ fn cmdQuery(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !voi
             .graph_for_hello = graph,
             .page_size = page_size,
             .params = params,
+            .read_only = read_only,
         });
     } else {
         // GAP-0113: Execute query via QUIC connection with optional certificate verification
@@ -1697,6 +1712,7 @@ fn cmdQuery(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !voi
             .params = params,
             .role = role,
             .principal_envelope_bytes = forward_envelope_bytes,
+            .read_only = read_only,
         }) catch |err| {
             if (err == error.AuthenticationFailed)
                 std.process.exit(@intFromEnum(ExitCode.auth_error));
@@ -1830,6 +1846,9 @@ const QuicQueryOptions = struct {
     // --forward-principal. When non-null the CLI emits ExecuteRequest field 4
     // and the server reconstructs the forwarded Principal for GPS/RLS.
     principal_envelope_bytes: ?[]const u8 = null,
+    // Spec geode-vectorization-and-reranking: per-request hard read-only floor.
+    // CANARY: REQ=REQ-EXEC-READ-ONLY-REQUEST-001; FEATURE="ReadOnlyExecute"; ASPECT=CliOption; STATUS=TESTED; TEST=tests/test_read_only_execute.zig; OWNER=engine; UPDATED=2026-08-28
+    read_only: bool = false,
 };
 
 const GrpcQueryOptions = struct {
@@ -1844,6 +1863,9 @@ const GrpcQueryOptions = struct {
     graph_for_hello: ?[]const u8 = null, // For HELLO handshake
     page_size: u32 = default_stream_page_size,
     params: std.ArrayList(schema.Param),
+    // Spec geode-vectorization-and-reranking: per-request hard read-only floor.
+    // CANARY: REQ=REQ-EXEC-READ-ONLY-REQUEST-001; FEATURE="ReadOnlyExecute"; ASPECT=CliOption; STATUS=TESTED; TEST=tests/test_read_only_execute.zig; OWNER=engine; UPDATED=2026-08-28
+    read_only: bool = false,
 };
 
 /// Issue #424: Set SO_RCVTIMEO and SO_SNDTIMEO on a TCP socket so that
@@ -1918,7 +1940,7 @@ fn executeGrpcQuery(allocator: std.mem.Allocator, opts: GrpcQueryOptions) !void 
 
         // Execute query on the gRPC connection
         params_transferred = true;
-        return executeQueryOnGrpc(allocator, tcp_stream, query_text, format, username, password, graph, graph_for_hello, params, page_size, timeout_secs) catch |err| {
+        return executeQueryOnGrpc(allocator, tcp_stream, query_text, format, username, password, graph, graph_for_hello, params, page_size, timeout_secs, opts.read_only) catch |err| {
             last_error = @errorName(err);
             params_transferred = false;
             if (attempts + 1 < max_attempts) {
@@ -1987,6 +2009,7 @@ fn executeQueryOnGrpc(
     params: std.ArrayList(schema.Param),
     page_size: u32,
     timeout_secs: u32,
+    read_only: bool,
 ) !void {
     // Issue #424: timeout_secs is now enforced at two levels:
     // 1. TCP socket SO_RCVTIMEO/SO_SNDTIMEO set by the caller (executeGrpcQuery)
@@ -2063,6 +2086,7 @@ fn executeQueryOnGrpc(
         .timeout_secs = timeout_secs,
         .page_size = page_size,
         .params = owned_params,
+        .read_only = read_only,
     });
     defer result.deinit();
 
@@ -2088,6 +2112,7 @@ fn executeBatchQueries(
     graph_for_hello: ?[]const u8,
     page_size: u32,
     fle_role: ?[]const u8,
+    read_only: bool,
 ) !void {
     const stderr = std.Io.File{ .handle = getStderrHandle() catch return error.StdioUnavailable, .flags = .{ .nonblocking = false } };
 
@@ -2163,7 +2188,7 @@ fn executeBatchQueries(
     const empty_params = std.ArrayList(schema.Param).empty;
 
     for (queries.items) |query_line| {
-        executeQueryOnConnection(allocator, &raw_client, query_line, format, username, password, graph, graph_for_hello, empty_params, page_size, timeout_secs, fle_role, null) catch |err| {
+        executeQueryOnConnection(allocator, &raw_client, query_line, format, username, password, graph, graph_for_hello, empty_params, page_size, timeout_secs, fle_role, null, read_only) catch |err| {
             std.debug.print("Error executing query: {}\n", .{err});
             error_count += 1;
         };
@@ -2464,6 +2489,7 @@ fn executeQuicQuery(allocator: std.mem.Allocator, opts: QuicQueryOptions) !void 
     const page_size = opts.page_size;
     const fle_role = opts.role;
     const principal_envelope_bytes = opts.principal_envelope_bytes;
+    const read_only = opts.read_only;
     var params = opts.params;
     var params_transferred = false;
     defer if (!params_transferred) {
@@ -2527,7 +2553,7 @@ fn executeQuicQuery(allocator: std.mem.Allocator, opts: QuicQueryOptions) !void 
         };
 
         params_transferred = true;
-        executeQueryOnConnection(allocator, &raw_client, query_text, format, username, password, graph, graph_for_hello, params, page_size, timeout_secs, fle_role, principal_envelope_bytes) catch |err| {
+        executeQueryOnConnection(allocator, &raw_client, query_text, format, username, password, graph, graph_for_hello, params, page_size, timeout_secs, fle_role, principal_envelope_bytes, read_only) catch |err| {
             // GAP-0260/GAP-0263: Auto-retry on connection failure. QUIC
             // transport can drop messages under rapid sequential
             // connections; retries resolve most transient failures
@@ -2635,6 +2661,7 @@ fn executeQueryOnConnection(
     timeout_secs: u32,
     fle_role: ?[]const u8,
     principal_envelope_bytes: ?[]const u8,
+    read_only: bool,
 ) !void {
     // Get stdout and stderr handles for output
     const stdout = std.Io.File{ .handle = getStdoutHandle() catch return error.StdioUnavailable, .flags = .{ .nonblocking = false } };
@@ -2757,6 +2784,7 @@ fn executeQueryOnConnection(
         // --forward-principal) so the server's GPS engine evaluates RLS under
         // the forwarded identity instead of this connection's principal.
         .principal_envelope_bytes = principal_envelope_bytes,
+        .read_only = read_only,
     });
     defer result.deinit();
     defer finishActiveQueryDeadlineWatchdog();

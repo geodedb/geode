@@ -2163,7 +2163,21 @@ fn handleExecute(request_bytes: []const u8, allocator: std.mem.Allocator) ![]u8 
             // concurrent mutations to corrupt shared HashMaps and ArrayLists.
             // P1: Per-graph locking — queries against different graphs no longer serialize.
             const needs_store_lock = analysis.kind != .explain;
-            const is_mutation = needs_store_lock and query_traits.isMutatingProgram(&parse_result.program);
+            const program_is_mutating = query_traits.isMutatingProgram(&parse_result.program);
+            const is_mutation = needs_store_lock and program_is_mutating;
+
+            // Spec geode-vectorization-and-reranking: per-request hard read-only
+            // floor, independent of the principal's role ("authorization must be
+            // enforced below the LLM"). Fires BEFORE the role-based mutation gate
+            // below and regardless of whether auth is enabled — a gateway/
+            // orchestrator sets ExecuteRequest.read_only=true to guarantee no
+            // mutation reaches the store no matter what role the connection holds.
+            // CANARY: REQ=REQ-EXEC-READ-ONLY-REQUEST-001; FEATURE="ReadOnlyExecute"; ASPECT=GrpcGate; STATUS=TESTED; TEST=tests/test_read_only_execute.zig; OWNER=engine; UPDATED=2026-08-28
+            if (req.read_only and program_is_mutating) {
+                var resp = try buildErrorResponse(allocator, "42501", "Read-only request: data modification rejected", &.{}, &.{});
+                defer resp.deinit(allocator);
+                return encodeMessage(allocator, resp);
+            }
 
             // GAP-0526: Enforce write-permission check before mutation execution.
             // ReadOnly and User roles lack Write permission and must be denied.
