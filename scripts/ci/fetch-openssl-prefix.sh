@@ -119,7 +119,11 @@ fetch() {
     local expected="${CHECKSUMS[${TARGET}:${name}]:-}"
 
     echo "  fetching $name"
+    # --retry-all-errors: plain --retry only covers transient HTTP errors;
+    # runners intermittently die with TLS-layer failures like
+    # "curl: (35) Insufficient randomness" that need a retry too.
     curl --fail --silent --show-error --location --retry 3 --retry-delay 2 \
+        --retry-all-errors \
         --output "$WORK/$name" "$url"
 
     local actual
