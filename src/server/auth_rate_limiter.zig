@@ -319,3 +319,170 @@ test "auth_rate_limiter: count tracks entries" {
     limiter.recordSuccess("a");
     try std.testing.expectEqual(@as(usize, 1), limiter.count());
 }
+
+// ── ENG-3954 / #874: auth-lockout misclassification regression ─────────
+//
+// TRIAGE (current main): the per-IP limiter is fed by TWO handler sites that
+// cannot tell a checked-and-rejected credential from a "we could not check"
+// outcome, so an unreachable / not-yet-hydrated security store locks legitimate
+// clients out of their own server:
+//
+//   src/server/quic_connection_handler.zig:5753  authenticate(...) catch {
+//                                                    limiter.recordFailure(ip); }
+//   src/transport/grpc_server.zig:1469           (exact parity)
+//     A bare catch-all: error.OutOfMemory, a store-lock miss, a quarantined
+//     `__geode_security` graph — every one of them increments the counter.
+//
+//   src/server/quic_connection_handler.zig:5740  empty username OR password
+//   src/transport/grpc_server.zig:1455           (exact parity)
+//     A truncated / half-open HELLO deserializes to proto3 defaults ("" / "")
+//     and calls recordFailure with NO credential check at all.
+//
+//   src/security/user_management.zig:739-750 authenticate() returns
+//   error.Unauthenticated for BOTH "wrong password" and "the persistent
+//   resolver could not answer" (null flows :1117 ensureUserCached -> :1223
+//   getAuthSnapshot -> Unauthenticated), because
+//   src/storage/user_storage.zig:517 findUserByUsernameInGraph returns
+//   ?UserRecord and collapses every failure mode to null.
+//
+// Ten of those non-credential events (default_max_attempts = 10, keyed on
+// peer_ip alone) lock the IP for 60 s, and because the infrastructure fault
+// persists the lock is re-armed on every retry.
+//
+// THE CONTRACT THESE TESTS PIN (the fix must supply the two pure predicates
+// below in THIS module — it is the one place both transports already share, so
+// the policy is not duplicated into two handlers that can drift):
+//
+//   pub fn shouldCountFailedAttempt(err: anyerror) bool
+//       true ONLY when the credentials were actually checked and rejected
+//       (error.Unauthenticated). false for every "could not check" outcome:
+//       error.AuthUnavailable (the new distinguishable error authenticate()
+//       must return when the security store cannot answer), error.OutOfMemory,
+//       and any other infrastructure error — default-deny on COUNTING, because
+//       counting a server-side fault is what locks out honest users.
+//
+//   pub fn credentialsPresent(username: []const u8, password: []const u8) bool
+//       false when either side is empty. An empty-credential HELLO is
+//       MALFORMED, not a failed credential check, and must never reach the
+//       limiter.
+//
+// RED at HEAD: neither declaration exists, so these tests fail with
+// error.MissingAuthOutcomeClassifier / error.MissingCredentialPresencePredicate.
+
+test "auth_rate_limiter: only a checked-and-rejected credential counts as a failed attempt (ENG-3954)" {
+    const M = @This();
+    if (comptime !@hasDecl(M, "shouldCountFailedAttempt")) {
+        return error.MissingAuthOutcomeClassifier;
+    } else {
+        // Checked and rejected -> counts.
+        try std.testing.expect(M.shouldCountFailedAttempt(error.Unauthenticated));
+
+        // "Could not check" -> must NOT count.
+        try std.testing.expect(!M.shouldCountFailedAttempt(error.AuthUnavailable));
+        try std.testing.expect(!M.shouldCountFailedAttempt(error.OutOfMemory));
+
+        // Any other infrastructure error is also "could not check": the
+        // classifier must default to NOT counting rather than counting
+        // everything it does not recognise (the bare-catch bug).
+        try std.testing.expect(!M.shouldCountFailedAttempt(error.Unexpected));
+        try std.testing.expect(!M.shouldCountFailedAttempt(error.BrokenPipe));
+        try std.testing.expect(!M.shouldCountFailedAttempt(error.AccessDenied));
+    }
+}
+
+test "auth_rate_limiter: empty HELLO credentials are malformed, not a failed attempt (ENG-3954)" {
+    const M = @This();
+    if (comptime !@hasDecl(M, "credentialsPresent")) {
+        return error.MissingCredentialPresencePredicate;
+    } else {
+        // proto3 defaults from a truncated / half-open HELLO.
+        try std.testing.expect(!M.credentialsPresent("", ""));
+        try std.testing.expect(!M.credentialsPresent("alice", ""));
+        try std.testing.expect(!M.credentialsPresent("", "hunter2"));
+
+        // A well-formed HELLO carries both sides and IS eligible for a check.
+        try std.testing.expect(M.credentialsPresent("alice", "hunter2"));
+    }
+}
+
+test "auth_rate_limiter: non-credential outcomes never lock an IP, real rejections still do (ENG-3954)" {
+    const M = @This();
+    if (comptime !@hasDecl(M, "shouldCountFailedAttempt") or !@hasDecl(M, "credentialsPresent")) {
+        return error.MissingAuthOutcomeClassifier;
+    } else {
+        var limiter = AuthRateLimiter.initWithConfig(std.testing.allocator, 3, 60 * std.time.ns_per_s);
+        defer limiter.deinit();
+        const ip = "203.0.113.7";
+
+        // 1) The security store is down / not hydrated. authenticate() returns
+        //    error.AuthUnavailable. Far more than max_attempts of these must
+        //    leave the IP untouched — this is the exact loop that bricks a
+        //    client today.
+        var i: usize = 0;
+        while (i < 30) : (i += 1) {
+            if (M.shouldCountFailedAttempt(error.AuthUnavailable)) limiter.recordFailure(ip);
+        }
+        try std.testing.expect(!limiter.isLocked(ip));
+        try std.testing.expectEqual(@as(usize, 0), limiter.count());
+
+        // 2) Truncated HELLOs (proto3 defaults) — never even reach authenticate.
+        i = 0;
+        while (i < 30) : (i += 1) {
+            if (M.credentialsPresent("", "")) {
+                if (M.shouldCountFailedAttempt(error.Unauthenticated)) limiter.recordFailure(ip);
+            }
+        }
+        try std.testing.expect(!limiter.isLocked(ip));
+        try std.testing.expectEqual(@as(usize, 0), limiter.count());
+
+        // 3) Allocation failure inside the auth path is a server problem.
+        i = 0;
+        while (i < 30) : (i += 1) {
+            if (M.shouldCountFailedAttempt(error.OutOfMemory)) limiter.recordFailure(ip);
+        }
+        try std.testing.expect(!limiter.isLocked(ip));
+
+        // 4) Brute force is STILL stopped: real checked-and-rejected
+        //    credentials reach the threshold and lock the IP.
+        i = 0;
+        while (i < 3) : (i += 1) {
+            if (M.credentialsPresent("alice", "wrong")) {
+                if (M.shouldCountFailedAttempt(error.Unauthenticated)) limiter.recordFailure(ip);
+            }
+        }
+        try std.testing.expect(limiter.isLocked(ip));
+    }
+}
+
+test "auth_rate_limiter: a persistent store outage does not re-arm the lockout forever (ENG-3954)" {
+    const M = @This();
+    if (comptime !@hasDecl(M, "shouldCountFailedAttempt")) {
+        return error.MissingAuthOutcomeClassifier;
+    } else {
+        // 1 ns lockout so the window expires immediately; the point is that a
+        // sustained outage must never RE-arm it, which is what turns a 60 s
+        // lockout into a permanent one for a client whose credentials are fine.
+        var limiter = AuthRateLimiter.initWithConfig(std.testing.allocator, 2, 1);
+        defer limiter.deinit();
+        const ip = "198.51.100.9";
+
+        // A real brute-force burst locks the IP...
+        limiter.recordFailure(ip);
+        limiter.recordFailure(ip);
+        testSleepNs(1000);
+        try std.testing.expect(!limiter.isLocked(ip)); // ...and expires.
+
+        // ...but a stream of store-unavailable outcomes must not re-lock it,
+        // so the client is free to retry the moment the store recovers.
+        var i: usize = 0;
+        while (i < 50) : (i += 1) {
+            if (M.shouldCountFailedAttempt(error.AuthUnavailable)) limiter.recordFailure(ip);
+        }
+        try std.testing.expect(!limiter.isLocked(ip));
+
+        // And a successful authentication always clears the counter outright.
+        limiter.recordSuccess(ip);
+        try std.testing.expect(!limiter.isLocked(ip));
+        try std.testing.expectEqual(@as(usize, 0), limiter.count());
+    }
+}

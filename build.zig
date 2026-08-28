@@ -7904,6 +7904,33 @@ pub fn build(b: *std.Build) void {
     const scan_race_step = b.step("test-scan-ingest-race", "Run concurrent scan+ingest crash regression (LabelIndex.scan race under streaming read path)");
     scan_race_step.dependOn(&run_scan_race_tests.step);
 
+    // ENG-3954 / #874: concurrent knn-scan + MERGE-writer crash regression.
+    // `scanVectorKnn` (src/eval.zig:2220-2260) — the brute-force fallback for a
+    // vector property with NO advanced index — walks the live bounded node/edge
+    // caches with NO per-graph lock, while a concurrent MERGE/SET writer
+    // realloc-and-frees CompactPropertyMap.entries (src/graph_store.zig:1207)
+    // out from under it: use-after-free -> SIGSEGV -> whole-server crash.
+    const knn_race_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_knn_scan_race.zig"), .target = target, .optimize = optimize });
+    knn_race_test_mod.addImport("geode", root_mod);
+    const knn_race_tests = b.addTest(.{ .root_module = knn_race_test_mod });
+    const run_knn_race_tests = b.addRunArtifact(knn_race_tests);
+    shardDep(test_step, &run_knn_race_tests.step, 1, test_shard_loads, test_shard_index);
+    const knn_race_step = b.step("test-knn-scan-race", "Run concurrent knn-scan + MERGE-writer crash regression (scanVectorKnn unlocked-iterator use-after-free)");
+    knn_race_step.dependOn(&run_knn_race_tests.step);
+
+    // ENG-3954 / #874: auth-lockout misclassification at the authenticate
+    // layer — a security store that cannot answer must surface a
+    // distinguishable error.AuthUnavailable instead of error.Unauthenticated,
+    // so the per-IP rate limiter stops counting server-side faults as
+    // brute-force attempts (companion seam tests: test-auth-rate-limiter).
+    const auth_unavailable_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_auth_unavailable_classification.zig"), .target = target, .optimize = optimize });
+    auth_unavailable_test_mod.addImport("geode", root_mod);
+    const auth_unavailable_tests = b.addTest(.{ .root_module = auth_unavailable_test_mod });
+    const run_auth_unavailable_tests = b.addRunArtifact(auth_unavailable_tests);
+    shardDep(test_step, &run_auth_unavailable_tests.step, 1, test_shard_loads, test_shard_index);
+    const auth_unavailable_step = b.step("test-auth-unavailable-classification", "Run auth 'could not check' vs 'checked and rejected' classification regression (ENG-3954)");
+    auth_unavailable_step.dependOn(&run_auth_unavailable_tests.step);
+
     // Scan-writer-progress concurrency regression: a long label scan's
     // per-shard SHARED hold must NOT starve the per-shard EXCLUSIVE apply.
     // The slot-collection scan chunks `mg.shard_locks[idx]` per page-batch so
