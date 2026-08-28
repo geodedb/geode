@@ -132,9 +132,18 @@ const stepup_read_operations = [_][]const u8{
 };
 
 /// Data-write procedure names (mutating but not privilege-changing).
+///
+/// Task 3 (geode-vectorization-and-reranking): `geode.fts.rebuild` drops and
+/// rebuilds a fulltext engine — a write — and belongs HERE, not in
+/// `stepup_read_operations` alongside `geode.fts.search`. Listing it
+/// explicitly (rather than relying on the `classifyOperation` fail-closed
+/// `.write` default for unknown identifiers) keeps the step-up posture
+/// self-documenting, matching `geode.ts.insert` below.
+// CANARY: REQ=REQ-FTS-REBUILD-001; FEATURE="CALL geode.fts.rebuild"; ASPECT=StepUpClassification; STATUS=TESTED; TEST=tests/test_fts_rebuild.zig; OWNER=index; UPDATED=2026-08-28
 const stepup_write_operations = [_][]const u8{
     "geode.ts.insert",
     "geode.ts.insert_many",
+    "geode.fts.rebuild",
 };
 
 /// Security-administration namespaces: auth DDL handlers, FLE catalog

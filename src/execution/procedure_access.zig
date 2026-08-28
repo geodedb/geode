@@ -85,6 +85,9 @@ const read_only_procedure_names = [_][]const u8{
     "geode.ts.last",
     "geode.ts.bucket_avg",
     "geode.ts.sample_by",
+    // CANARY: REQ=REQ-FTS-REBUILD-001; FEATURE="CALL geode.fts.rebuild"; ASPECT=MutatingClassification; STATUS=TESTED; TEST=tests/test_fts_rebuild.zig; OWNER=index; UPDATED=2026-08-28
+    // geode.fts.rebuild is deliberately NOT listed: it drops and rebuilds a
+    // fulltext engine (a write) and must classify .mutating (fail-closed).
     "cdc.status",
     "cdc.export_diagnostics",
     "cdc.get_events",

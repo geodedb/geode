@@ -38,6 +38,12 @@ const ExecutionContext = execution.ExecutionContext;
 const rls = @import("rls");
 const match_operations = @import("match_operations.zig");
 
+// Task 3 (geode-vectorization-and-reranking ingestion invariant): CALL
+// geode.fts.rebuild backfill procedure + cluster fail-closed gate (mirrors
+// ts_dispatch.zig's import of the same gate for geode.ts.insert).
+const fts_index_ops = @import("fts_index_ops.zig");
+const cluster_mod = @import("../distributed/cluster.zig");
+
 const Value = value_types.Value;
 
 /// Default cap on returned hits when the optional `max` argument is omitted.
@@ -63,6 +69,10 @@ pub fn execute(
     }
     if (std.mem.eql(u8, proc_name, "geode.fts.proximity")) {
         return try handleFtsProximity(allocator, call_stmt, context);
+    }
+    // CANARY: REQ=REQ-FTS-REBUILD-001; FEATURE="CALL geode.fts.rebuild"; ASPECT=Dispatch; STATUS=TESTED; TEST=tests/test_fts_rebuild.zig; OWNER=index; UPDATED=2026-08-28
+    if (std.mem.eql(u8, proc_name, "geode.fts.rebuild")) {
+        return try handleFtsRebuild(allocator, call_stmt, context);
     }
     return null;
 }
@@ -262,6 +272,76 @@ fn resolveFacade(index_name: []const u8) !*fulltext.FullTextIndex {
     const adapter = graph_store.getGlobalAdapter() orelse return error.Unsupported;
     return adapter.getFulltextIndexNamed(graph_store.DEFAULT_GRAPH_NAME, index_name) orelse
         error.Unsupported;
+}
+
+/// `geode.fts.rebuild(index_name)` → one row of `(index, nodes_indexed)`.
+///
+/// Spec geode-vectorization-and-reranking ingestion invariant: "On deployed
+/// versions where bulk-MERGE bypasses FTS maintenance, rebuild/backfill the
+/// affected index before marking ingestion ready." Drops and recreates the
+/// named fulltext engine, re-backfills from current store contents, and
+/// re-arms the label registry — the first-class alternative to DROP INDEX +
+/// CREATE INDEX. Unlike search/phrase/proximity, this returns a COUNT, not
+/// node rows, so there is no row-visibility filtering to apply here.
+///
+///   - arg[0] index_name : string literal (the named fulltext index)
+///
+/// Classified `.mutating` by omission from `procedure_access.read_only_procedure_names`
+/// (fail-closed default) and cluster-gated: the rebuild's drop+recreate+
+/// backfill writes have no Raft replication slice, so an ungated rebuild on a
+/// follower would land the rebuilt engine on ONE node and silently diverge
+/// the cluster — same rationale as `geode.ts.insert` (ts_dispatch.zig).
+///
+/// Errors:
+///   - `error.InvalidArgs`   — wrong arity.
+///   - `error.TypeMismatch`  — the argument was not a string literal.
+///   - `error.IndexNotFound` — the index is unknown to both the schema
+///                             catalog and the in-memory label registry.
+///   - `error.Unsupported`   — FTS is unavailable on the graph (no adapter).
+// CANARY: REQ=REQ-FTS-REBUILD-001; FEATURE="CALL geode.fts.rebuild"; ASPECT=RebuildProc; STATUS=TESTED; TEST=tests/test_fts_rebuild.zig; OWNER=index; UPDATED=2026-08-28
+fn handleFtsRebuild(
+    allocator: std.mem.Allocator,
+    call_stmt: ast.CallProcedure,
+    context: ExecutionContext,
+) !ExecutionResult {
+    const args = switch (call_stmt.procedure) {
+        .Call => |call| call.args,
+        else => return error.InvalidArgs,
+    };
+    if (args.len != 1) return error.InvalidArgs;
+
+    const index_name = try literalString(args[0]);
+
+    // CANARY: REQ=REQ-DIST-CLUSTER-FAILCLOSED-UNREPLICATED; FEATURE="DistributedCluster"; ASPECT=GateFtsRebuild; STATUS=TESTED; TEST=tests/test_cluster_replicable_mutations.zig; OWNER=distributed; UPDATED=2026-08-28
+    try cluster_mod.gateUnreplicatedWrite();
+
+    const nodes_indexed = try fts_index_ops.rebuildFulltextIndex(
+        allocator,
+        context.catalog,
+        graph_store.DEFAULT_GRAPH_NAME,
+        index_name,
+    );
+
+    const columns = try allocator.alloc([]const u8, 2);
+    columns[0] = try allocator.dupe(u8, "index");
+    columns[1] = try allocator.dupe(u8, "nodes_indexed");
+
+    const rows = try allocator.alloc([]Value, 1);
+    const row = try allocator.alloc(Value, 2);
+    row[0] = Value{ .Str = try allocator.dupe(u8, index_name) };
+    row[1] = Value{ .Int = @intCast(nodes_indexed) };
+    rows[0] = row;
+
+    var result = ExecutionResult{
+        .columns = columns,
+        .rows = rows,
+        .flags = std.ArrayList([]const u8).empty,
+    };
+
+    if (call_stmt.yield_items) |yield_items| {
+        result = try filterYieldColumns(allocator, result, yield_items);
+    }
+    return result;
 }
 
 /// Filter fts-storage hits down to the rows the caller is authorized to see.

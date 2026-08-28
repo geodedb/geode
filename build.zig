@@ -7917,6 +7917,18 @@ pub fn build(b: *std.Build) void {
     const fts_authorization_step = b.step("test-fts-authorization", "Run FTS result row-visibility authorization regression (tenant + RLS filtering on geode.fts.* results)");
     fts_authorization_step.dependOn(&run_fts_authorization_tests.step);
 
+    // Task 3 (geode-vectorization-and-reranking ingestion invariant): CALL
+    // geode.fts.rebuild(index_name) drops+recreates+re-backfills a fulltext
+    // engine from current store contents — the first-class rebuild path for
+    // the bulk-MERGE FTS blind spot (previously only DROP+CREATE INDEX).
+    const fts_rebuild_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_fts_rebuild.zig"), .target = target, .optimize = optimize });
+    fts_rebuild_test_mod.addImport("geode", root_mod);
+    const fts_rebuild_tests = b.addTest(.{ .root_module = fts_rebuild_test_mod });
+    const run_fts_rebuild_tests = b.addRunArtifact(fts_rebuild_tests);
+    shardDep(test_step, &run_fts_rebuild_tests.step, 1, test_shard_loads, test_shard_index);
+    const fts_rebuild_step = b.step("test-fts-rebuild", "Run CALL geode.fts.rebuild(index) backfill procedure regression");
+    fts_rebuild_step.dependOn(&run_fts_rebuild_tests.step);
+
     // ENG-3954 / #874: concurrent knn-scan + MERGE-writer crash regression.
     // `scanVectorKnn` (src/eval.zig:2220-2260) — the brute-force fallback for a
     // vector property with NO advanced index — walks the live bounded node/edge

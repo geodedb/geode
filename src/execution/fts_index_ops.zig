@@ -22,6 +22,7 @@ const std = @import("std");
 const graph_store = @import("../graph_store.zig");
 const tokenizer = @import("../index/fts_tokenizer.zig");
 const adapter_mod = @import("../storage/fts_storage_adapter.zig");
+const catalog_mod = @import("../schema/catalog.zig");
 const cluster_replication = @import("../distributed/cluster_replication.zig");
 const raft_snapshot_manager = @import("../distributed/raft_snapshot_manager.zig");
 
@@ -37,6 +38,10 @@ pub const Error = error{
     /// dead — matching nothing — so DDL is rejected instead of silently
     /// building a useless index.
     FulltextRequiresTextProperty,
+    /// Task 3 (geode-vectorization-and-reranking): `CALL geode.fts.rebuild`
+    /// named an index unknown to both the schema catalog and the in-memory
+    /// label registry.
+    IndexNotFound,
 };
 
 /// Create a NAMED fulltext index on `graph_name` for label `label` over the
@@ -106,6 +111,99 @@ pub fn createFulltextIndex(
     fa.flush(index_name) catch |err| {
         log.warn("fulltext backfill flush failed for '{s}': {}", .{ index_name, err });
     };
+}
+
+/// Spec geode-vectorization-and-reranking: post-bulk-ingest invariant — rebuild
+/// the fulltext engine for `index_name` from current store contents. Resolves
+/// the (label, properties) spec from the schema catalog when available (works
+/// after restart), falling back to the in-memory label registry. Drops the
+/// engine (clearing append-only tombstones), recreates it, re-backfills, and
+/// re-arms the label registry so live maintenance resumes.
+/// CANARY: REQ=REQ-FTS-REBUILD-001; FEATURE="CALL geode.fts.rebuild"; ASPECT=RebuildBackfill; STATUS=TESTED; TEST=tests/test_fts_rebuild.zig; OWNER=index; UPDATED=2026-08-28
+pub fn rebuildFulltextIndex(
+    allocator: std.mem.Allocator,
+    catalog: *catalog_mod.Catalog,
+    graph_name: []const u8,
+    index_name: []const u8,
+) !u64 {
+    const adapter = graph_store.getGlobalAdapter() orelse return Error.FulltextUnavailable;
+    const mg = adapter.getOrCreateGraph(graph_name) catch return Error.FulltextUnavailable;
+    const fa = mg.fts_adapter orelse return Error.FulltextUnavailable;
+
+    // Resolve label + properties: catalog first (survives restart — the DDL
+    // path always writes this row, see execution.zig:1671), registry fallback
+    // for a defensive edge case (mid-transition state with no catalog row).
+    // `properties`/`label` from the catalog branch borrow catalog-owned memory
+    // (alive for the process lifetime); the registry branch dupes with
+    // `allocator` and is freed by `owns_fallback_strings` below.
+    var label: []const u8 = undefined;
+    var properties: []const []const u8 = undefined;
+    var owns_fallback_strings = false;
+    defer if (owns_fallback_strings) {
+        allocator.free(label);
+        for (properties) |p| allocator.free(p);
+        allocator.free(properties);
+    };
+
+    resolve: {
+        // Catalog first: use the SAME accessor shape statement_dispatcher.zig's
+        // ensureAdvancedVectorIndexForProperty uses to iterate indexes — scan
+        // for the row whose `.name` matches and whose `.index_type` is a
+        // fulltext index (`table_name` = label, `columns` = properties).
+        const all_indexes = try catalog.listAllIndexes(allocator);
+        defer allocator.free(all_indexes);
+        for (all_indexes) |info| {
+            if (!std.mem.eql(u8, info.name, index_name)) continue;
+            if (!std.mem.startsWith(u8, info.index_type, "fulltext")) continue;
+            label = info.table_name;
+            properties = info.columns;
+            break :resolve;
+        }
+
+        // Registry fallback: scan every (label -> []FtsIndexSpec) list for a
+        // spec named `index_name` (the registry is keyed by label, not name).
+        var arena = std.heap.ArenaAllocator.init(allocator);
+        defer arena.deinit();
+        const entries = try mg.snapshotFtsLabelIndex(arena.allocator());
+        for (entries) |entry| {
+            if (!std.mem.eql(u8, entry.name, index_name)) continue;
+            const owned_label = try allocator.dupe(u8, entry.label);
+            errdefer allocator.free(owned_label);
+            const owned_props = try allocator.alloc([]const u8, entry.properties.len);
+            var filled: usize = 0;
+            errdefer {
+                for (owned_props[0..filled]) |p| allocator.free(p);
+                allocator.free(owned_props);
+            }
+            for (entry.properties, 0..) |p, i| {
+                owned_props[i] = try allocator.dupe(u8, p);
+                filled = i + 1;
+            }
+            label = owned_label;
+            properties = owned_props;
+            owns_fallback_strings = true;
+            break :resolve;
+        }
+
+        // Neither the catalog nor the registry knows this index.
+        return Error.IndexNotFound;
+    }
+
+    fa.dropIndex(index_name) catch |err| switch (err) {
+        adapter_mod.Error.IndexNotFound => {}, // engine absent (e.g. post-restart) — fine
+        else => return err,
+    };
+    try fa.createIndex(index_name);
+    errdefer fa.dropIndex(index_name) catch {};
+    try backfillExistingNodes(allocator, graph_name, index_name, label, properties, fa);
+    try mg.addFtsLabelIndex(adapter.allocator, label, index_name, properties); // idempotent re-arm
+    fa.flush(index_name) catch |err| {
+        log.warn("fulltext rebuild flush failed for '{s}': {}", .{ index_name, err });
+    };
+
+    const store = graph_store.getGlobalStore(graph_store.global_allocator());
+    const ids = store.getNodesByLabel(graph_name, label) orelse return 0;
+    return @intCast(ids.len);
 }
 
 /// GAP-0922: scan existing nodes of `label` and reject the fulltext index if
