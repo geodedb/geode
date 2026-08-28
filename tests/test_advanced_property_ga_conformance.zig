@@ -372,7 +372,14 @@ test "ga advanced runtime indexes populate and vector_knn uses scan and index pa
     }
 
     {
-        var idx = try h.exec("CREATE INDEX vec_idx FOR (n:VecThing) ON (n.embedding) USING vector_f32");
+        // Spec geode-vectorization-and-reranking / REQ-VECTOR-KNN-METRIC-VALIDATE-001:
+        // this test's queries below (both the pre-index brute-force scan above
+        // and the post-index vector_knn / queryAdvancedVectorIndexWithMetric
+        // calls) all use the 'cosine' metric. Build the index with the SAME
+        // metric explicitly instead of relying on the historical default
+        // (l2) — a mismatched query metric is now a hard error
+        // (error.VectorMetricMismatch), not a silent relabeling.
+        var idx = try h.exec("CREATE INDEX vec_idx FOR (n:VecThing) ON (n.embedding) USING vector_f32 WITH (metric = 'cosine')");
         defer idx.deinit(allocator);
     }
     {
