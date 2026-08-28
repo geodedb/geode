@@ -46,7 +46,8 @@ responsibility (WAL + segments + manifest).
 | Phrase search | ✅ | `CALL geode.fts.phrase(…)` — positional adjacency over the persisted postings (GAP-0869) |
 | Proximity search | ✅ | `CALL geode.fts.proximity(…)` — NEAR window over persisted token positions (GAP-0869) |
 | Highlighting | ✅ (API) | `FullTextIndex.highlight` — byte-accurate offsets against caller-supplied authorized content; no GQL surface yet (see below) |
-| Bulk-MERGE auto-index | ⚠️ | Bulk-MERGE fast path does NOT auto-index — see [Known Limitation](#known-limitation-bulk-merge-fast-path) |
+| Bulk-MERGE auto-index | ✅ | Bulk-MERGE fast path (single-statement and `/*+BATCH*/`) is live-maintained on the connection thread (Task 4, 2026-08-28) — see [Live Maintenance](#live-maintenance) |
+| Rebuild / recovery | ✅ | `CALL geode.fts.rebuild(index)` — see [Recovery](#recovery-call-geodeftsrebuild) |
 
 ---
 
@@ -187,14 +188,29 @@ After an index exists, ordinary write paths keep it current automatically:
 - **Node create** — newly created nodes matching the index label/property are tokenized and indexed (including nodes inserted *after* the index was created).
 - **`SET`** — updating an indexed property re-indexes the node.
 - **Delete** — deleting a node removes it from the index.
+- **Bulk-MERGE fast path** — `MERGE` statements shaped for the connection-thread
+  fast path (`executeBulkSimpleMerge` in `quic_connection_handler.zig`, and its
+  concurrent `/*+BATCH*/` sibling `executeBatchSimpleMerge`) are also
+  live-maintained (Task 4, 2026-08-28). The maintenance call runs right after
+  the apply completes and every graph lock is released, on the connection
+  thread — never a group-commit worker thread — satisfying the fts engine's
+  single-writer-thread contract. Bulk-MERGE'd nodes are searchable
+  **immediately**, no rebuild required.
 
-### Known Limitation: bulk-MERGE fast path
+### Recovery: `CALL geode.fts.rebuild`
 
-The **bulk-MERGE fast path** (`adapter.bulkMergeNode`, executed on the
-worker-thread pool) does **NOT** auto-index its nodes into FTS. Nodes created
-via the bulk-MERGE path become searchable only after re-running
-`CREATE INDEX <name> … USING fulltext`, which backfills all existing matching
-nodes. All other write paths are covered by live maintenance.
+`CALL geode.fts.rebuild('<index>')` drops, recreates, and re-backfills a
+fulltext index from current store contents, YIELDing `index` / `nodes_indexed`.
+It is a first-class recovery/backfill path — reach for it after restoring a
+graph from a backup that predates an index, or to reconcile an index written
+by an older binary before the Task 4 bulk-MERGE fix landed. It is **not**
+required for ordinary bulk-MERGE ingestion on a current binary: live
+maintenance already covers that path.
+
+**Ingestion invariant:** after any bulk-ingestion run, verify FTS visibility
+with a canary query (`CALL geode.fts.search(index, term)` for a term known to
+be present) before marking ingestion ready — cheap insurance, and the primary
+signal that recovery via `CALL geode.fts.rebuild` is needed.
 
 ### Cluster Mode (2026-06-10)
 

@@ -1145,6 +1145,13 @@ fn executeBulkSimpleMerge(
     // the create branch.  Going straight to Phase 2 keeps the apply
     // atomic with the merge_prop_index update.
     var found_in_phase1 = false;
+    // Task 4 (geode-vectorization-and-reranking A4b §6): the id of the node
+    // this call actually wrote to (fresh insert, or the on-match SET target)
+    // and whether that write is FTS-relevant. Populated by every write-path
+    // branch below; `maintainFulltextOnWrite` runs once, after the whole
+    // if/else settles and every lock is released.
+    var merged_node_id: u64 = 0;
+    var fts_should_maintain = false;
     if (!spec.apply_on_match and merge_kvs.len == 1) {
         const read_handle = graph_store.acquireGraphReadLockTagged(query_graph_name, .bulk_merge);
         defer graph_store.releaseGraphLock(read_handle);
@@ -1204,13 +1211,14 @@ fn executeBulkSimpleMerge(
                     .result = .{},
                     .apply_on_match = spec.apply_on_match,
                 } };
-            _ = coord.submit(&op) catch |err| {
+            merged_node_id = coord.submit(&op) catch |err| {
                 const info = proto_util.mapError(err);
                 try sendExecuteError(gpa, stream, info.code, info.message, &.{}, &.{});
                 return;
             };
             mut_sample.markExecuteDone();
             mut_sample.markLockReleased();
+            fts_should_maintain = true;
         } else if (merge_kvs.len > 1) {
             mut_sample.markLockAcquired();
             const store = graph_store.getGlobalStore(graph_store.global_allocator());
@@ -1223,13 +1231,14 @@ fn executeBulkSimpleMerge(
                 kvs,
                 spec.apply_on_match,
             );
-            _ = node_id_res catch |err| {
+            merged_node_id = node_id_res catch |err| {
                 const info = proto_util.mapError(err);
                 try sendExecuteError(gpa, stream, info.code, info.message, &.{}, &.{});
                 return;
             };
             mut_sample.markExecuteDone();
             mut_sample.markLockReleased();
+            fts_should_maintain = true;
         } else {
             const write_lock_timeout_ns = mutationWriteLockTimeoutNs(state);
             const deadline = monoNanosNow() + write_lock_timeout_ns;
@@ -1255,7 +1264,7 @@ fn executeBulkSimpleMerge(
                 null,
                 spec.apply_on_match,
             );
-            _ = node_id_res catch |err| {
+            merged_node_id = node_id_res catch |err| {
                 graph_store.releaseGraphLock(lock_handle);
                 const info = proto_util.mapError(err);
                 try sendExecuteError(gpa, stream, info.code, info.message, &.{}, &.{});
@@ -1265,6 +1274,7 @@ fn executeBulkSimpleMerge(
             mut_sample.markExecuteDone();
             graph_store.releaseGraphLock(lock_handle);
             mut_sample.markLockReleased();
+            fts_should_maintain = true;
         }
     } else {
         // Phase 1 hit on the ON-CREATE-SET-only path: the merge id is
@@ -1272,6 +1282,30 @@ fn executeBulkSimpleMerge(
         // (The bare-SET / apply_on_match case never enters this branch —
         // it skipped Phase 1 above and always took the write path.)
         mut_sample.markExecuteDone();
+    }
+
+    // Spec geode-vectorization-and-reranking + A4b §6: the bulk fast path
+    // runs on the connection thread, so live FTS maintenance is safe here
+    // and keeps bulk-MERGE'd nodes searchable without a rebuild.
+    // Cheap-exits when no fulltext index covers the label. `.create` (not
+    // `.update`) mirrors the SET chokepoint (property_mutation.zig:394):
+    // engine tombstones are permanent per doc_id, so delete-then-reindex
+    // would hide the node. Skipped for a phase-1 hit with no apply_on_match
+    // (no data changed).
+    // CANARY: REQ=REQ-FTS-BULK-MERGE-LIVE-001; FEATURE="FullText"; ASPECT=BulkMergeConnectionThreadMaintenance; STATUS=TESTED; TEST=geode-test-harness/geodetestlab-cli/specs/fts_bulk_merge_visibility.yml; OWNER=fts; UPDATED=2026-08-28
+    if (fts_should_maintain) {
+        execution.fts_index_ops.maintainFulltextOnWrite(
+            eval_allocator,
+            query_graph_name,
+            merged_node_id,
+            &[_][]const u8{spec.label},
+            .create,
+        ) catch |err| {
+            log.warn("bulk-merge FTS maintenance failed", &.{
+                Attr.string("label", spec.label),
+                Attr.string("err", @errorName(err)),
+            });
+        };
     }
 
     quic_response_metrics.recordFirstStreamMutationQueryExecute(mut_sample.execute_done_ns -| mut_sample.lock_acquire_start_ns);
@@ -1436,19 +1470,51 @@ fn executeBatchSimpleMerge(
     // Phase B: await everything we managed to submit. Even on a submit error
     // we must drain the ops already enqueued so their borrowed arena slices
     // are not freed out from under an in-flight worker.
+    //
+    // Task 4 (geode-vectorization-and-reranking A4b §6): capture each op's
+    // assigned node id + success alongside the existing error bookkeeping so
+    // live FTS maintenance can run once, in one pass, AFTER every lock is
+    // released (below) — the batch twin of `executeBulkSimpleMerge`'s
+    // join-point call site.
+    const OpOutcome = struct { id: u64 = 0, ok: bool = false };
+    const outcomes = try ba.alloc(OpOutcome, submitted);
+    for (outcomes) |*o| o.* = .{};
+
     var first_op_err: ?anyerror = null;
     var succeeded: usize = 0;
     var k: usize = 0;
     while (k < submitted) : (k += 1) {
-        _ = coord.awaitOp(&ops[k]) catch |err| {
+        const id = coord.awaitOp(&ops[k]) catch |err| {
             if (first_op_err == null) first_op_err = err;
             continue;
         };
+        outcomes[k] = .{ .id = id, .ok = true };
         succeeded += 1;
     }
 
     mut_sample.markExecuteDone();
     mut_sample.markLockReleased();
+
+    // Live FTS maintenance for every successfully-applied op. Cheap-exits
+    // (per call) when no fulltext index covers the label. `.create` mirrors
+    // the SET chokepoint (property_mutation.zig:394) — see the single-merge
+    // fast path's twin call site for the full rationale.
+    // CANARY: REQ=REQ-FTS-BULK-MERGE-LIVE-001; FEATURE="FullText"; ASPECT=BulkMergeConnectionThreadMaintenance; STATUS=TESTED; TEST=geode-test-harness/geodetestlab-cli/specs/fts_bulk_merge_visibility.yml; OWNER=fts; UPDATED=2026-08-28
+    for (outcomes, 0..) |o, i| {
+        if (!o.ok) continue;
+        execution.fts_index_ops.maintainFulltextOnWrite(
+            ba,
+            query_graph_name,
+            o.id,
+            &[_][]const u8{labels[i]},
+            .create,
+        ) catch |err| {
+            log.warn("batch-merge FTS maintenance failed", &.{
+                Attr.string("label", labels[i]),
+                Attr.string("err", @errorName(err)),
+            });
+        };
+    }
 
     // Auto-index every distinct merge label (idempotent), mirroring the
     // single-merge path's `ensureAutoIndexes` hook.
