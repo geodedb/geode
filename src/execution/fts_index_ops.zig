@@ -436,6 +436,43 @@ pub fn maintainFulltextOnWrite(
 /// `tokenize` are MOVED into the accumulator, the tokenize slice header is freed,
 /// and each accumulated element's `term`/`positions` are freed in the defer — we
 /// MUST NOT call `freeTermPostings` on the accumulator (double-free vs deinit).
+///
+/// CANARY: REQ=REQ-ENG-3954-FTS-MAINTAIN-UAF; FEATURE="FTS live-maintenance property read"; ASPECT=ShardLockedCopy; STATUS=TESTED; TEST=tests/test_fts_bulk_merge_maintenance.zig|tests/test_scan_ingest_race.zig|tests/test_bulk_shard_concurrency.zig|tests/test_fts_e2e.zig; OWNER=index; UPDATED=2026-08-28
+/// Whole-branch review Finding 2 (UAF class, ENG-3954 family): every
+/// property's raw text is copied out from under the shard's SHARED lock
+/// BEFORE tokenizing, instead of reading through `store.getNodeProperty`
+/// unlocked. `store.getNodeProperty`'s returned `String` BORROWS the node's
+/// live property storage and is only valid while a lock excludes a
+/// concurrent SET/DELETE for the read's duration (see its doc comment in
+/// graph_store.zig). The bulk-MERGE fast path's live-maintenance call sites
+/// (quic_connection_handler.zig `executeBulkSimpleMerge` /
+/// `executeBulkMergeBatch`) run on the correct fts-engine-owning thread but
+/// call `maintainFulltextOnWrite` AFTER releasing the graph lock, so a
+/// concurrent SET/DELETE from ANOTHER connection racing the same node could
+/// realloc/free the property mid-read.
+///
+/// Uses the SAME `lockShardShared` + `getPtrUnlocked` pattern as
+/// `fts_dispatch.filterAuthorizedHits` / `eval.scanVectorKnn` (ENG-3954 /
+/// #874) — deliberately NOT `store.getNodeProperty`, which internally
+/// re-acquires the same shard's map_lock and would nest a second shared
+/// acquisition on top of the one already held here (`node_cache.zig`'s
+/// `lockShardShared` doc: "no re-entrant cache calls while held"). No other
+/// existing `maintainFulltextOnWrite` caller (CREATE batch fast path, the SET
+/// chokepoint, DELETE, raft-apply/snapshot-install) holds this shard lock at
+/// its call site either, so adding it here is safe for all of them — no
+/// double-lock, no ordering change against the tier-1 table in CLAUDE.md.
+///
+/// Residual: this bypasses FLE decryption (`store.getNodeProperty` decrypts
+/// FLE-encrypted fields; the raw shard-locked copy here does not — RBAC/FLE
+/// role state is request-scoped and unsafe to read this late in a
+/// write-committed maintenance hook, and FLE+FTS indexing has no existing
+/// test coverage). When no FLE fields are configured
+/// (`fle_integration.hasEncryptedFields() == false`, the default/tested
+/// posture) behavior is byte-for-byte identical to before this fix. When FLE
+/// IS configured, an indexed FLE field now stores its ciphertext envelope
+/// rather than decrypted plaintext — narrower exposure than before, not
+/// wider, and a pre-existing FLE+FTS interaction gap this fix does not
+/// newly introduce.
 fn indexNodeDocument(
     allocator: std.mem.Allocator,
     store: *graph_store.GraphStore,
@@ -454,16 +491,37 @@ fn indexNodeDocument(
         doc_terms.deinit(allocator);
     }
 
-    for (properties) |prop| {
-        const pv = store.getNodeProperty(node_id, prop) orelse continue;
-        const text = switch (pv) {
-            .String => |s| s,
-            else => continue, // only string is indexable for FTS
-        };
-        if (text.len == 0) continue;
+    const RawProp = struct { key: []const u8, text: []u8 };
+    var raw_props: std.ArrayListUnmanaged(RawProp) = .empty;
+    defer {
+        for (raw_props.items) |rp| allocator.free(rp.text);
+        raw_props.deinit(allocator);
+    }
+    {
+        // Everything that touches the node's interior stays inside this
+        // guard: the copy (allocator.dupe) must complete before the shard
+        // lock drops, or the source bytes it reads from could already be
+        // gone.
+        store.nodes.lockShardShared(node_id);
+        defer store.nodes.unlockShardShared(node_id);
+        const np = store.nodes.getPtrUnlocked(node_id) orelse return; // node gone since the write committed
+        for (properties) |prop| {
+            const pv = np.properties.get(prop) orelse continue;
+            const text = switch (pv) {
+                .String => |s| s,
+                else => continue, // only string is indexable for FTS
+            };
+            if (text.len == 0) continue;
+            try raw_props.append(allocator, .{ .key = prop, .text = try allocator.dupe(u8, text) });
+        }
+    }
 
-        const postings = tokenizer.tokenize(allocator, text, prop) catch |err| {
-            log.warn("fulltext maintain tokenize failed (node {d}, prop '{s}'): {}", .{ node_id, prop, err });
+    // Tokenizing, appending to doc_terms, and calling into the fts engine
+    // all happen here, OUTSIDE the shard lock and on our own owned copies —
+    // exactly the "release before fa.indexNode" contract.
+    for (raw_props.items) |rp| {
+        const postings = tokenizer.tokenize(allocator, rp.text, rp.key) catch |err| {
+            log.warn("fulltext maintain tokenize failed (node {d}, prop '{s}'): {}", .{ node_id, rp.key, err });
             continue;
         };
         if (postings.len == 0) continue;
