@@ -9,7 +9,7 @@ The Geode MCP (Model Context Protocol) server (`src/mcp/server.zig`)
 exposes graph-database operations and the GQL language bridge to
 AI/LLM clients over the MCP JSON-RPC protocol (stdio and HTTP
 transports). It is built on the pinned `mcp` library (`build.zig.zon`
-`.mcp` = v0.1.7).
+`.mcp` = v0.1.12).
 
 This document records exactly which MCP methods Geode implements,
 which it intentionally does not, and the one upstream-library caveat
@@ -55,9 +55,27 @@ via `resources/read` on an interval. There is no server-push path.
 two handlers to a real implementation and update this section, the
 CANARY markers, and `tests/test_gap0516_mcp_capabilities.zig`.
 
+### Fixed: `tools/call` result leak (upstream v0.1.11 → v0.1.12)
+
+The pinned `mcp` library's `tools/call` dispatch (`mcp.zig` `handleMethod`)
+hardcoded `.owned = false` on every `callTool` result through v0.1.11, while
+the JSON-RPC response free site only frees results marked `owned`. Every
+dynamically-allocated tool response Geode's `query`/`schema`/`explain`/etc.
+handlers return therefore leaked for the lifetime of a long-running
+`geode mcp` server. Fixed upstream in v0.1.12 (commit `956b07d`): the
+`tools/call` dispatch site now returns `.owned = true`, and
+`Handler.callTool`'s doc comment states the ownership contract ("callTool
+implementations must return bytes allocated with the allocator the server
+frees with"). `tools/list`/`resources/*`/`prompts/*` results are
+unaffected — audited and intentionally left `owned = false` because the
+library's own demo/example handlers may return static strings there.
+Regression proof: `tests/test_mcp_read_only.zig` drives real `tools/call`
+round trips under the strict `std.testing.allocator` (previously worked
+around with `std.heap.page_allocator` to dodge the upstream leak).
+
 ### Known upstream advertisement caveat
 
-The pinned `mcp` library (v0.1.7) **hardcodes**
+The pinned `mcp` library (v0.1.12) **hardcodes**
 `"resources":{"subscribe":true,"listChanged":true}` in the
 `initialize` response (`mcp.zig` `buildInitialize`, ~line 3127) and
 exposes **no `ServerOptions` field to override it**. Geode therefore

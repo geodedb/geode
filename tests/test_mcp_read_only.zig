@@ -16,7 +16,7 @@
 // direct handler call, so the JSON-RPC tools/call envelope, argument
 // parsing, and response shaping are all exercised end-to-end. NO MOCKS.
 //
-// CANARY: REQ=REQ-MCP-READ-ONLY-001; FEATURE="MCPReadOnly"; ASPECT=Test; STATUS=TESTED; TEST=tests/test_mcp_read_only.zig; OWNER=mcp; UPDATED=2026-08-28
+// CANARY: REQ=REQ-MCP-READ-ONLY-001; FEATURE="MCPReadOnly"; ASPECT=Test; STATUS=TESTED; TEST=tests/test_mcp_read_only.zig; OWNER=mcp; UPDATED=2026-08-29
 
 const std = @import("std");
 const mcp_server = @import("mcp_server");
@@ -74,24 +74,19 @@ fn callQueryTool(server: *GeodeMcpServer, allocator: std.mem.Allocator, query: [
     return (try dispatch(server, allocator, req)) orelse return error.UnexpectedNullResponse;
 }
 
-// NOTE on allocator choice below: the vendored `mcp` library's tools/call
-// dispatch (mcp.zig handleMethod) marks handler results `.owned = false`
-// ("handlers may return static strings") and therefore never frees the
-// dynamically-allocated JSON our callTool handler returns for the `query`
-// tool (formatErrorResponse / formatToolResult both heap-allocate via
-// json_lib.encode). That is a pre-existing ownership gap in the pinned
-// mcp v0.1.11 dependency, unrelated to the read-only gate under test here
-// and out of scope for this task (vendored, not geode-owned code). Driving
-// a real tools/call "query" round trip — which this test must do to prove
-// client-side refusal — surfaces it as a one-allocation-per-call leak that
-// a leak-checking allocator (std.testing.allocator, or a DebugAllocator
-// whose deinit() result is merely discarded — DebugAllocator still LOGS
-// each leak as it happens, independent of the discarded return value) would
-// fail on. Use std.heap.page_allocator here, which performs no leak
-// accounting at all, so the assertions below are exercised against the
-// known, out-of-scope vendored-library gap without tripping on it.
+// Task 6 (2026-08-29): these tests previously ran under
+// std.heap.page_allocator (no leak accounting) to dodge a pre-existing
+// ownership gap in the pinned `mcp` v0.1.11 dependency: its tools/call
+// dispatch (mcp.zig handleMethod) hardcoded handler results `.owned =
+// false`, so the dynamically-allocated JSON our callTool handler returns
+// for the `query` tool (formatErrorResponse / formatToolResult, both
+// heap-allocate via json_lib.encode) was never freed by the server. Fixed
+// upstream in mcp v0.1.12 (commit 956b07d): tools/call results are now
+// `.owned = true` and the server frees them. Back on the strict
+// std.testing.allocator below — a regression of the leak now fails these
+// tests, which is the whole point.
 test "read-only MCP refuses mutating query tool calls before the wire" {
-    const allocator = std.heap.page_allocator;
+    const allocator = std.testing.allocator;
     const server = try initTestServer(allocator, true);
     defer server.deinit();
 
@@ -107,7 +102,7 @@ test "read-only MCP refuses mutating query tool calls before the wire" {
 }
 
 test "read-only MCP still allows reads to attempt the wire" {
-    const allocator = std.heap.page_allocator;
+    const allocator = std.testing.allocator;
     const server = try initTestServer(allocator, true);
     defer server.deinit();
 
@@ -123,7 +118,7 @@ test "read-only MCP still allows reads to attempt the wire" {
 }
 
 test "read-only MCP refuses unparseable statements (fail-closed)" {
-    const allocator = std.heap.page_allocator;
+    const allocator = std.testing.allocator;
     const server = try initTestServer(allocator, true);
     defer server.deinit();
 
@@ -144,7 +139,7 @@ test "read-only MCP refuses unparseable statements (fail-closed)" {
 // classifier as tests/test_read_only_execute.zig, consumed transitively
 // via query_traits.isMutatingProgram).
 test "read-only MCP refuses MATCH...CALL geode.fts.rebuild before the wire" {
-    const allocator = std.heap.page_allocator;
+    const allocator = std.testing.allocator;
     const server = try initTestServer(allocator, true);
     defer server.deinit();
 
@@ -158,7 +153,7 @@ test "read-only MCP refuses MATCH...CALL geode.fts.rebuild before the wire" {
 }
 
 test "non-read-only MCP does not gate mutating query tool calls" {
-    const allocator = std.heap.page_allocator;
+    const allocator = std.testing.allocator;
     const server = try initTestServer(allocator, false);
     defer server.deinit();
 

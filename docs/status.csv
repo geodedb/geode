@@ -3785,7 +3785,7 @@ REQ-MCP-READ-ONLY-001,MCPReadOnly,CliFlag,TESTED,,,mcp,2026-08-28,src/cli/cli_di
 REQ-MCP-READ-ONLY-001,MCPReadOnly,OptionDefinition,TESTED,,,mcp,2026-08-28,src/mcp/server.zig
 REQ-MCP-READ-ONLY-001,MCPReadOnly,OptionStorage,TESTED,,,mcp,2026-08-28,src/mcp/server.zig
 REQ-MCP-READ-ONLY-001,MCPReadOnly,QueryToolGate,TESTED,,,mcp,2026-08-28,src/mcp/tools.zig
-REQ-MCP-READ-ONLY-001,MCPReadOnly,Test,TESTED,,,mcp,2026-08-28,tests/test_mcp_read_only.zig
+REQ-MCP-READ-ONLY-001,MCPReadOnly,Test,TESTED,,,mcp,2026-08-29,tests/test_mcp_read_only.zig
 REQ-MCP-RESOURCE-SUBSCRIBE-001,MCPResourceSubscribe,UnsupportedSignal,TESTED,,,mcp,2026-06-10,src/mcp/server.zig
 REQ-MCP-RESOURCE-SUBSCRIBE-002,MCPResourceUnsubscribe,UnsupportedSignal,TESTED,,,mcp,2026-06-10,src/mcp/server.zig
 REQ-MCP-SEC-007,QueryLengthCap,DoSGuard,TESTED,,,mcp,2026-05-06,src/cli/lsp/mcp_input_guards_test.zig

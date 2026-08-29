@@ -283,9 +283,14 @@
         // =======================================================================
 
         // Model Context Protocol (MCP) - AI/LLM integration
+        // Updated 2026-08-29 (Task 6): v0.1.11 hardcoded owned=false for tools/call
+        // results while the dispatch free-site only frees owned results, leaking
+        // every dynamically-allocated tool response for the life of `geode mcp`.
+        // v0.1.12 marks tools/call owned=true (server frees it); see
+        // docs/MCP_SERVER.md. Upstream fix: gitlab.com/devnw/zig/mcp@956b07d.
         .mcp = .{
-            .url = "git+https://gitlab.com/devnw/zig/mcp.git#v0.1.11",
-            .hash = "mcp-0.1.11-exAeBJ-KBgAvwG2nOqA6YV5mAByuYZCsPqMMa7eRm9xL",
+            .url = "git+https://gitlab.com/devnw/zig/mcp.git?ref=v0.1.12#956b07d7688411fbaf23b38b8486e122562cdaae",
+            .hash = "mcp-0.1.12-exAeBGeTBgBYIJ_UxITKWQkqe-_acWrQyXBy_6S7VZaV",
         },
 
         // Protocol Buffers - Zig 0.15.2 compatible
