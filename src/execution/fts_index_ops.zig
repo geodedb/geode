@@ -452,8 +452,15 @@ pub const FtsWriteOp = enum { create, update, delete };
 ///     the store (`.String` only), tokenize with the property name as the field
 ///     tag, concatenate into ONE document, and `indexNode(name, node_id, doc)`.
 ///
-/// Errors: a missing index (`IndexNotFound`) on the delete leg is tolerated
-/// (logged at debug). Other engine errors are SURFACED so a failing index on a
+/// Errors: a missing index (`IndexNotFound`) on EITHER leg — delete or
+/// create/update — is tolerated (logged at debug). The create/update leg's
+/// tolerance closes review Finding 1 (2026-08-29 rebuild-race hardening
+/// round): `noteWriteDuringRebuild`'s pre-check has a documented TOCTOU
+/// window against `beginRebuild`+`dropIndex` (see fts_storage_adapter.zig's
+/// `rebuilds` field doc), so a write can pass the pre-check and still find
+/// the engine gone by the time `indexNode` runs — an expected under-rebuild
+/// condition the feature absorbs via the rebuild's post-backfill drain, not a
+/// real failure. Other engine errors are SURFACED so a failing index on a
 /// committed user write is visible rather than silently dropped.
 pub fn maintainFulltextOnWrite(
     scratch: std.mem.Allocator,
@@ -510,16 +517,32 @@ pub fn maintainFulltextOnWrite(
             if (fa.noteWriteDuringRebuild(spec.name, node_id)) continue;
 
             // Drop stale postings for update/delete. Tolerate a missing engine
-            // (IndexNotFound) — e.g. a first-ever SET on a never-indexed node.
+            // (IndexNotFound) — e.g. a first-ever SET on a never-indexed node,
+            // or the same rebuild TOCTOU window documented on the create/update
+            // leg below.
             if (op == .delete or op == .update) {
                 fa.deleteNode(spec.name, node_id) catch |err| switch (err) {
-                    adapter_mod.Error.IndexNotFound => {},
+                    adapter_mod.Error.IndexNotFound => log.debug("fulltext maintain delete: index '{s}' not found for node {d} (rebuild race or never-indexed) — skipping", .{ spec.name, node_id }),
                     else => return err,
                 };
             }
 
             if (op == .create or op == .update) {
-                try indexNodeDocument(scratch, store, fa, spec.name, node_id, spec.properties);
+                // Tolerate a missing engine (IndexNotFound) here too: the
+                // `noteWriteDuringRebuild` pre-check above has a documented
+                // TOCTOU window against `beginRebuild`+`dropIndex` (see
+                // fts_storage_adapter.zig's `rebuilds` field doc) — this
+                // write can pass the pre-check and then find the engine gone
+                // by the time `indexNode` runs. That is the expected
+                // under-rebuild condition the feature absorbs (the node was
+                // already queued or will be picked up by the rebuild's
+                // post-backfill drain), not a real failure. Mirror the
+                // delete leg above; only IndexNotFound is swallowed, every
+                // other error still propagates.
+                indexNodeDocument(scratch, store, fa, spec.name, node_id, spec.properties) catch |err| switch (err) {
+                    adapter_mod.Error.IndexNotFound => log.debug("fulltext maintain create/update: index '{s}' not found for node {d} (rebuild race) — skipping, drain will reindex", .{ spec.name, node_id }),
+                    else => return err,
+                };
             }
         }
     }

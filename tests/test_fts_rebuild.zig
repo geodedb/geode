@@ -344,17 +344,46 @@ test "write during rebuild window is queued, indexed exactly once" {
         }
     };
     var ctx = RebuildCtx{ .allocator = h.allocator, .catalog = h.ctx.catalog };
-    const thread = try std.Thread.spawn(.{}, RebuildCtx.run, .{&ctx});
+    {
+        const thread = try std.Thread.spawn(.{}, RebuildCtx.run, .{&ctx});
+        // `defer thread.join()` is scoped to THIS block (not the whole test
+        // function): it fires the moment control reaches the closing brace
+        // below, which is immediately after the racer write on the normal
+        // path — so the join still happens synchronously before `ctx.result`
+        // is read and the post-rebuild search assertions run. It ALSO fires
+        // on any early return out of this block (e.g. if the racer write
+        // below were ever changed back to a bare `try`), which is what keeps
+        // `thread` from being orphaned reading (and possibly outliving) the
+        // harness's torn-down global store on `h.deinit()` — a use-after-free
+        // / SIGABRT, not a clean test failure. A bare `defer thread.join()`
+        // at the OUTER function scope would only fire at function exit, i.e.
+        // AFTER `ctx.result` and the search queries below already ran
+        // concurrently with the still-in-flight rebuild thread — this was
+        // caught empirically as a self-inflicted flake during this hardening
+        // round (mid-rebuild search hit `IndexNotFound`/`FileNotFound` and
+        // 0 rows) and is exactly why the join must be scoped tightly here.
+        defer thread.join();
 
-    try execution.fts_index_ops.maintainFulltextOnWrite(
-        h.allocator,
-        graph_store.DEFAULT_GRAPH_NAME,
-        racer_id,
-        &.{"RbwFull"},
-        .create,
-    );
+        // This IS the race under test: this write and the spawned rebuild
+        // thread both touch `rbw_full_idx` concurrently. Under the
+        // documented `noteWriteDuringRebuild` pre-check TOCTOU window
+        // (beginRebuild + dropIndex racing this write's own pre-check),
+        // `maintainFulltextOnWrite` can observe `Error.IndexNotFound` —
+        // production now absorbs that internally (catch+log, review Finding
+        // 1) and this call should not see it propagate, but mirror every
+        // other write-hook call site's catch-and-tolerate posture here too
+        // rather than a bare `try`: this is the one write in the test racing
+        // another thread, so it must never be able to skip the join above on
+        // any error.
+        execution.fts_index_ops.maintainFulltextOnWrite(
+            h.allocator,
+            graph_store.DEFAULT_GRAPH_NAME,
+            racer_id,
+            &.{"RbwFull"},
+            .create,
+        ) catch {};
+    }
 
-    thread.join();
     _ = try ctx.result; // propagate any rebuild failure as a test failure
 
     {

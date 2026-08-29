@@ -157,10 +157,15 @@ pub const FtsStorageAdapter = struct {
     /// critical sections, not one atomic operation — a write whose
     /// pre-check observed "not rebuilding" can still lose a race against
     /// `beginRebuild` immediately followed by `dropIndex`'s registry
-    /// removal, landing `Error.IndexNotFound` (silently caught+logged by
-    /// every write-hook caller — the SAME fallback behavior every missing-
-    /// index write already had before this fix). This window is bounded by
-    /// the CPU-only gap between `beginRebuild` and `dropIndex`'s
+    /// removal, landing `Error.IndexNotFound`. As of the 2026-08-29
+    /// rebuild-race hardening round (review Finding 1), this IS
+    /// caught+logged-at-debug by EVERY write-hook caller in
+    /// `fts_index_ops.maintainFulltextOnWrite` — delete AND create/update
+    /// legs alike (`fts_index_ops.zig`); previously the create/update leg
+    /// had a bare `try` and would propagate the error instead of absorbing
+    /// it, which is what made this residual observable as flaky/crashing
+    /// racer-thread failures in `tests/test_fts_rebuild.zig`. This window is
+    /// bounded by the CPU-only gap between `beginRebuild` and `dropIndex`'s
     /// `fetchRemove` (a couple of statements, no I/O) — NOT by `dropIndex`'s
     /// teardown I/O or the backfill duration, which is what this queue
     /// closes (the dominant, I/O-bound share of the window). Closing the
@@ -535,14 +540,22 @@ pub const FtsStorageAdapter = struct {
     /// locked-body helper so both call sites stay in sync.
     fn queueIfRebuildingLocked(self: *FtsStorageAdapter, index_name: []const u8, node_id: u64) bool {
         const pending = self.rebuilds.getPtr(index_name) orelse return false;
-        // error-policy: A — best-effort queue insert. An OOM here during an
-        // active rebuild is already a broader failure mode; still returning
-        // `true` (skip the live write) is strictly safer than the
-        // alternative of writing to a possibly-absent engine mid
-        // drop→create — a lost queue entry degrades to the SAME
-        // caught+logged `IndexNotFound` outcome writes already tolerated
-        // before this fix, rather than a new failure mode.
-        pending.put(self.allocator, node_id, {}) catch {};
+        // Zero-loss reasoning (review Finding 2, 2026-08-29): on a
+        // SUCCESSFUL queue insert, return `true` so the caller skips the
+        // live write entirely — the id is safely captured in `pending` and
+        // will be reindexed by `endRebuild`'s post-backfill drain. On an OOM
+        // queue-insert FAILURE, we must NOT also return `true`: the id would
+        // then be neither queued (put failed) NOR written live (caller
+        // skipped it on `true`) — a genuine silent loss. Instead return
+        // `false` so the caller falls through and attempts the live write:
+        // best-effort, since the engine may still exist (this write raced
+        // ahead of `dropIndex`), in which case the write lands normally and
+        // is later safely overwritten again by the drain (idempotent
+        // re-index); if the engine is already gone, the write hits
+        // `Error.IndexNotFound`, which every write-hook caller now
+        // catches+logs (see `fts_index_ops.maintainFulltextOnWrite`) — a
+        // documented, non-silent no-op, not data loss.
+        pending.put(self.allocator, node_id, {}) catch return false;
         return true;
     }
 
