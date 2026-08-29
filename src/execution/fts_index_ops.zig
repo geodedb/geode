@@ -257,6 +257,37 @@ pub fn rebuildFulltextIndex(
     try snapshot_set.ensureTotalCapacity(allocator, @intCast(snapshot.len));
     for (snapshot) |nid| snapshot_set.putAssumeCapacity(nid, {});
 
+    // Two accepted drain-phase residuals (final-review fix wave, 2026-08-29;
+    // same accepted-residual class as the front-edge TOCTOU documented on
+    // `maintainFulltextOnWrite` above and on `fts_storage_adapter.zig`'s
+    // `rebuilds` field):
+    //
+    //   (a) BACK EDGE — `endRebuild` below clears the per-index rebuilding
+    //       flag and returns `pending` in one call, but THIS loop keeps
+    //       reindexing from that snapshot afterward. A write on a still-
+    //       pending id that lands AFTER `endRebuild` returns but BEFORE this
+    //       loop reaches that id no longer sees the flag set, so
+    //       `maintainFulltextOnWrite` takes its normal (non-queued) path and
+    //       indexes it immediately (SET -> delete leg no-ops on the
+    //       not-yet-drained doc, create leg appends a fresh posting). This
+    //       loop then ALSO reindexes the same id from `pending` (it is not
+    //       in `snapshot_set`), appending a SECOND posting — a double-append
+    //       that persists until the next `CALL geode.fts.rebuild`.
+    //   (b) IN-SNAPSHOT DELETE — a node backfill already indexed (its id IS
+    //       in `snapshot_set`) that is deleted mid-window is queued into
+    //       `pending` by `noteWriteDuringRebuild` like any other write, but
+    //       the `snapshot_set.contains(nid)` skip below discards it
+    //       unconditionally — no tombstone is ever written for it. The
+    //       index keeps a stale posting for a now-gone node until the next
+    //       rebuild.
+    //
+    // Neither residual corrupts query results: search-hit resolution
+    // (`filterAuthorizedHits` in `fts_dispatch.zig`) resolves every hit's
+    // node id against the live store and drops a hit whose node cannot be
+    // found (or hydrated), so a stale/duplicate posting for a gone node
+    // never reaches a caller — it only wastes index space until the next
+    // rebuild reconciles it. Accepted per the same "verify with a canary
+    // query after ingestion" posture as the front-edge TOCTOU window.
     const pending = try fa.endRebuild(index_name, allocator);
     drained = true;
     defer allocator.free(pending);

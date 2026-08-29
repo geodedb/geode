@@ -221,14 +221,25 @@ past the backfill snapshot: `fts_storage_adapter.zig` tracks a per-index
 rebuilding flag plus a pending node-id set (`beginRebuild`/
 `noteWriteDuringRebuild`/`endRebuild`), and `rebuildFulltextIndex` drains the
 queue after backfill, re-indexing every pending id the snapshot did not
-already cover. Deletes are queued the same way as creates/updates — a node
-deleted mid-window whose id ends up pending is handled correctly with no
-special casing, since the drain re-reads current store state and naturally
-skips a node that no longer exists. The drain never deletes-then-reindexes
-(fts-storage tombstones are permanent per doc_id). A second `CALL
-geode.fts.rebuild` on the SAME index while one is already in flight is
-refused (`RebuildInProgress`) rather than racing two drop→create sequences.
-Regression: `tests/test_fts_rebuild.zig` (`zig build test-fts-rebuild`).
+already cover. Deletes are queued the same way as creates/updates and a node
+deleted mid-window whose id was NOT already backfilled is handled correctly
+by the drain — it re-reads current store state and naturally skips a node
+that no longer exists. The drain never deletes-then-reindexes (fts-storage
+tombstones are permanent per doc_id). Two accepted residuals remain, same
+class as the front-edge TOCTOU window documented above (see
+`rebuildFulltextIndex` in `fts_index_ops.zig` for the full comment): (1) a
+node deleted mid-window whose id WAS already covered by the backfill
+snapshot is queued but the drain skips it (the snapshot already "owns" that
+id), so no tombstone is written and the index keeps a stale posting for the
+gone node until the next rebuild; (2) a write landing after `endRebuild`
+clears the rebuilding flag but before the drain loop reaches that id can
+double-append a posting, also cleared by the next rebuild. Neither residual
+is visible to callers — search-hit resolution drops any hit whose node
+cannot be resolved against the live store — so correctness at query time is
+preserved. A second `CALL geode.fts.rebuild` on the SAME index while one is
+already in flight is refused (`RebuildInProgress`) rather than racing two
+drop→create sequences. Regression: `tests/test_fts_rebuild.zig` (`zig build
+test-fts-rebuild`).
 
 **Ingestion invariant:** after any bulk-ingestion run, verify FTS visibility
 with a canary query (`CALL geode.fts.search(index, term)` for a term known to
