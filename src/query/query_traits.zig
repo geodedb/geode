@@ -428,7 +428,7 @@ fn isStoreFreeScalarExpr(expr: *const ast.Expr) bool {
 
 /// Check if a Query struct contains mutation clauses.
 ///
-/// CANARY: REQ=REQ-ENG-3960-CALL-MUTATION-CLASSIFICATION; FEATURE="MATCH...CALL / CALL{} mutation classification"; ASPECT=ReadOnlyFloor; STATUS=TESTED; TEST=tests/test_read_only_execute.zig|tests/test_mcp_read_only.zig; OWNER=engine; UPDATED=2026-08-28
+/// CANARY: REQ=REQ-ENG-3960-CALL-MUTATION-CLASSIFICATION; FEATURE="MATCH...CALL / CALL{} / chained-WITH mutation classification"; ASPECT=ReadOnlyFloor; STATUS=TESTED; TEST=tests/test_read_only_execute.zig|tests/test_mcp_read_only.zig; OWNER=engine; UPDATED=2026-08-28
 /// GAP: `MATCH (n) CALL <procedure>` (`q.call_clause`) and `CALL { ... }
 /// WITH ... RETURN ...` inline subqueries (`q.initial_call_subquery`) were
 /// NOT checked here, so a mutating procedure (e.g. geode.fts.rebuild,
@@ -440,6 +440,15 @@ fn isStoreFreeScalarExpr(expr: *const ast.Expr) bool {
 /// also used by isMutatingCallStatement above) and recursive
 /// isQueryMutating, fail-closed: an unresolved/unlisted procedure name
 /// defaults to `.mutating`.
+/// GAP (2026-08-28 follow-up): the same recursion did not reach
+/// `q.next_query` (ast.zig:114), the pointer the parser populates for
+/// chained-WITH shapes (`MATCH ... WITH ... MATCH ... SET/CALL/CREATE ...`,
+/// src/gql/parser.zig ~:1772-1792/2289/2338/4558). A tail query carrying a
+/// mutating clause left the WHOLE statement classified non-mutating — the
+/// same bypass class as MATCH...CALL, one chaining level deeper. Fixed by
+/// recursing into `q.next_query` here, mirroring `isStoreFreeQuery` (:387)
+/// and `isPointReadQuery` (:501), which already treat any non-null
+/// `next_query` as disqualifying/mutating-unsafe.
 pub fn isQueryMutating(q: *const ast.Query) bool {
     if (q.create_pattern != null or
         q.merge_statement != null or
@@ -460,6 +469,10 @@ pub fn isQueryMutating(q: *const ast.Query) bool {
 
     if (q.initial_call_subquery) |subq| {
         if (isQueryMutating(subq)) return true;
+    }
+
+    if (q.next_query) |next| {
+        if (isQueryMutating(next)) return true;
     }
 
     return false;

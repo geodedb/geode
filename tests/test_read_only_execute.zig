@@ -136,3 +136,43 @@ test "read-only classification still allows a read-only wrapped CALL procedure" 
     defer reading[1].deinit();
     try testing.expect(!query_traits.isMutatingProgram(&reading[0]));
 }
+
+// Follow-up to Finding 1 above: isQueryMutating checks q.call_clause and
+// q.initial_call_subquery but NOT q.next_query (ast.zig:114), the pointer
+// the parser populates for chained-WITH shapes such as
+// "MATCH ... WITH ... MATCH ... SET ..." (src/gql/parser.zig ~:2277-2338).
+// A mutating clause attached to the TAIL query therefore left the whole
+// statement classified non-mutating — the same read-only-floor bypass
+// class as MATCH...CALL, just one level of chaining deeper.
+//
+// Structural precondition: prove the mutating SET clause actually lands on
+// next_query (not on the head query's own set_clauses) before trusting the
+// mutation assertion below.
+test "structural precondition: chained-WITH SET lands on next_query, not head set_clauses" {
+    var mutating = try parseProgram("MATCH (n:X) WITH n MATCH (m:Y) SET m.k = 1");
+    defer mutating[1].deinit();
+
+    const stmt = &mutating[0].statements[0];
+    const head_query = switch (stmt.*) {
+        .Query => |*q| q,
+        else => return error.UnexpectedStatementKind,
+    };
+
+    // The head (pre-WITH) query carries no SET clause of its own.
+    try testing.expectEqual(@as(usize, 0), head_query.set_clauses.len);
+    // The mutating SET is on the tail query reachable only via next_query.
+    try testing.expect(head_query.next_query != null);
+    try testing.expect(head_query.next_query.?.set_clauses.len > 0);
+}
+
+test "read-only classification refuses chained-WITH tail SET (next_query mutation)" {
+    var mutating = try parseProgram("MATCH (n:X) WITH n MATCH (m:Y) SET m.k = 1");
+    defer mutating[1].deinit();
+    try testing.expect(query_traits.isMutatingProgram(&mutating[0]));
+}
+
+test "read-only classification allows a chained-WITH read-only program" {
+    var reading = try parseProgram("MATCH (n:X) WITH n MATCH (m:Y) RETURN m");
+    defer reading[1].deinit();
+    try testing.expect(!query_traits.isMutatingProgram(&reading[0]));
+}
