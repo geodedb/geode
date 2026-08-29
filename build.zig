@@ -7971,6 +7971,19 @@ pub fn build(b: *std.Build) void {
     const fts_authorization_step = b.step("test-fts-authorization", "Run FTS result row-visibility authorization regression (tenant + RLS filtering on geode.fts.* results)");
     fts_authorization_step.dependOn(&run_fts_authorization_tests.step);
 
+    // Task 1 (2026-08-29 final review follow-ups): PROFILE of Query shapes
+    // funnels through planned_read_runtime.executeProfiledIfSupported without
+    // ever pushing the thread-local active ExecutionContext, so RLS filters
+    // and tenant scoping both fail open under PROFILE.
+    const profile_rls_tenant_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_profile_rls_tenant.zig"), .target = target, .optimize = optimize });
+    profile_rls_tenant_test_mod.addImport("geode", root_mod);
+    profile_rls_tenant_test_mod.addImport("rls_types", rls_types_mod);
+    const profile_rls_tenant_tests = b.addTest(.{ .root_module = profile_rls_tenant_test_mod });
+    const run_profile_rls_tenant_tests = b.addRunArtifact(profile_rls_tenant_tests);
+    shardDep(test_step, &run_profile_rls_tenant_tests.step, 1, test_shard_loads, test_shard_index);
+    const profile_rls_tenant_step = b.step("test-profile-rls-tenant", "Run PROFILE-path RLS + tenant fail-open regression (active context push in executeProfiledIfSupported)");
+    profile_rls_tenant_step.dependOn(&run_profile_rls_tenant_tests.step);
+
     // Task 3 (geode-vectorization-and-reranking ingestion invariant): CALL
     // geode.fts.rebuild(index_name) drops+recreates+re-backfills a fulltext
     // engine from current store contents — the first-class rebuild path for

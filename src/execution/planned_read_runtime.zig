@@ -231,11 +231,23 @@ pub fn buildPlanIfSupported(allocator: std.mem.Allocator, q: *const ast.Query, c
             const resolved = tenancy.resolveTenantFilter(context.tenant_id) catch break :blk true;
             break :blk resolved != null;
         };
-        if (concrete) {
-            // Bail to the legacy (tenant-aware) executor. Free the only two
-            // allocations made so far (`graph_name` dupe + any binding names);
-            // the rest are `defer`-freed. A `null` return is NOT an error, so
-            // the errdefers above do not run.
+        // REQ-PROFILE-RLS-TENANT-001: the storage-native runtime also has NO
+        // RLS enforcement of its own — passesRLSFilter/passesRLSExprFilter
+        // live in match_operations (the legacy executor). Normal
+        // (non-PROFILE) execution never reaches this fast path when RLS would
+        // apply: query_execution.zig gates its call to
+        // planned_read_runtime.executeIfSupported behind
+        // `!match_operations.wouldEvaluateRLS()`. PROFILE calls
+        // executeProfiledIfSupported directly, bypassing that outer gate
+        // entirely, so the same decision is reproduced here: demote to the
+        // legacy (RLS-aware) executor whenever the active session (pushed by
+        // executeProfiledIfSupported above) would evaluate RLS policies.
+        // CANARY: REQ=REQ-PROFILE-RLS-TENANT-001; FEATURE="PROFILE"; ASPECT=RLSBlindFastPathDemotion; STATUS=TESTED; TEST=tests/test_profile_rls_tenant.zig; OWNER=security; UPDATED=2026-08-29
+        if (concrete or execution.wouldEvaluateRLS()) {
+            // Bail to the legacy (tenant/RLS-aware) executor. Free the only
+            // two allocations made so far (`graph_name` dupe + any binding
+            // names); the rest are `defer`-freed. A `null` return is NOT an
+            // error, so the errdefers above do not run.
             for (binding_names.items) |name| allocator.free(name);
             binding_names.deinit(allocator);
             allocator.free(graph_name);
@@ -439,6 +451,16 @@ pub fn executeProfiledIfSupported(
     param_values: []const Value,
     apply_window: bool,
 ) !?ProfiledExecution {
+    // The profiled execution paths (storage-native fast path AND
+    // executeLegacyProfiled) bypass executeQueryWithContext, which is the
+    // choke point that normally installs the thread-local active context read
+    // by passesRLSFilter/passesRLSExprFilter and getSessionTenantFilter.
+    // Without this push, PROFILE fails open for both RLS and tenant scoping.
+    // Nested push (normal path already pushed) is safe: save-prev/restore-prev.
+    // CANARY: REQ=REQ-PROFILE-RLS-TENANT-001; FEATURE="PROFILE"; ASPECT=ActiveContextPush; STATUS=TESTED; TEST=tests/test_profile_rls_tenant.zig; OWNER=security; UPDATED=2026-08-29
+    const prev_ctx = execution.pushActiveContext(&context);
+    defer execution.popActiveContext(prev_ctx);
+
     var plan = (try buildPlanIfSupported(allocator, q, context)) orelse return null;
     errdefer plan.deinit(allocator);
 
