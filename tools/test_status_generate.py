@@ -87,6 +87,7 @@ class TestStrictStatusFilter(unittest.TestCase):
                 "owner": "o",
                 "updated": "2026-04-16",
                 "file": "docs/foo.md",
+                "line": "1",
             },
             {
                 "req": "REQ-B",
@@ -96,6 +97,7 @@ class TestStrictStatusFilter(unittest.TestCase):
                 "owner": "o",
                 "updated": "2026-04-16",
                 "file": "src/foo.zig",
+                "line": "1",
             },
         ]
         # Capture stderr to confirm the warning is emitted.
@@ -121,6 +123,7 @@ class TestStrictStatusFilter(unittest.TestCase):
                 "owner": "o",
                 "updated": "2026-04-16",
                 "file": "docs/foo.md",
+                "line": "1",
             }
         ]
         rows = self._write_csv(markers, strict=False)
@@ -182,6 +185,15 @@ class TestGoldenFixtureEndToEnd(unittest.TestCase):
         + _marker(
             "REQ-GOLD-REJECT", 'FEATURE="GoldenComplete"; ASPECT=X; STATUS=COMPLETE; OWNER=gov; UPDATED=2026-06-11'
         )
+        # 12/13. Task 7: the SAME marker text appears twice in one file, at
+        # two different (known) line numbers. Before the Line column, these
+        # two markers would collide into byte-identical rows; the Line
+        # column must make them distinguishable. The lines below are blank
+        # padding so the two DUP markers land at known line numbers.
+        + "\n" * 3
+        + _marker("REQ-GOLD-DUP", 'FEATURE="GoldenDup"; ASPECT=Dup; STATUS=TESTED; OWNER=gov; UPDATED=2026-06-11')
+        + "\n" * 3
+        + _marker("REQ-GOLD-DUP", 'FEATURE="GoldenDup"; ASPECT=Dup; STATUS=TESTED; OWNER=gov; UPDATED=2026-06-11')
     )
 
     # 10. marker in a Markdown file (scanned extension)
@@ -194,17 +206,25 @@ class TestGoldenFixtureEndToEnd(unittest.TestCase):
         "REQ-GOLD-011", 'FEATURE="GoldenTxt"; ASPECT=Skip; STATUS=TESTED; OWNER=gov; UPDATED=2026-06-11'
     )
 
-    # Golden expectation: (REQ, Feature, Aspect, Status, File), in the
-    # generator's deterministic sort order (req, feature, aspect, file).
+    # Golden expectation: (REQ, Feature, Aspect, Status, File, Line), in the
+    # generator's deterministic sort order (req, feature, aspect, file, line).
+    # Line numbers are the 1-based line of the marker match within its
+    # fixture file (recomputed from the fixture content itself in
+    # test_line_numbers_match_fixture below, so a fixture edit can't drift
+    # silently out of sync with these hardcoded values).
     EXPECTED_ROWS = [
-        ("REQ-GOLD-001", "GoldenBasic", "Parse", "TESTED", "src/sample.zig"),
-        ("REQ-GOLD-002", "GoldenWithTest", "Unit", "IMPL", "src/sample.zig"),
-        ("REQ-GOLD-003", "GoldenBench", "Perf", "BENCHED", "src/sample.zig"),
-        ("REQ-GOLD-004", "GoldenEscaped", "Cli", "EXEMPT", "src/sample.zig"),
-        ("REQ-GOLD-005", "GoldenStub", "Todo", "STUB", "src/sample.zig"),
-        ("REQ-GOLD-006", "GoldenPending", "Todo", "PENDING", "src/sample.zig"),
-        ("REQ-GOLD-007", "GoldenStraddle", "Regression", "TESTED", "src/sample.zig"),
-        ("REQ-GOLD-010", "GoldenDoc", "Docs", "EXEMPT", "docs/notes.md"),
+        ("REQ-GOLD-001", "GoldenBasic", "Parse", "TESTED", "src/sample.zig", "1"),
+        ("REQ-GOLD-002", "GoldenWithTest", "Unit", "IMPL", "src/sample.zig", "2"),
+        ("REQ-GOLD-003", "GoldenBench", "Perf", "BENCHED", "src/sample.zig", "3"),
+        ("REQ-GOLD-004", "GoldenEscaped", "Cli", "EXEMPT", "src/sample.zig", "4"),
+        ("REQ-GOLD-005", "GoldenStub", "Todo", "STUB", "src/sample.zig", "5"),
+        ("REQ-GOLD-006", "GoldenPending", "Todo", "PENDING", "src/sample.zig", "6"),
+        ("REQ-GOLD-007", "GoldenStraddle", "Regression", "TESTED", "src/sample.zig", "8"),
+        ("REQ-GOLD-010", "GoldenDoc", "Docs", "EXEMPT", "docs/notes.md", "1"),
+        # Task 7: same marker text (REQ-GOLD-DUP) twice in one file — the
+        # Line column is the ONLY thing distinguishing these two rows.
+        ("REQ-GOLD-DUP", "GoldenDup", "Dup", "TESTED", "src/sample.zig", "15"),
+        ("REQ-GOLD-DUP", "GoldenDup", "Dup", "TESTED", "src/sample.zig", "19"),
     ]
 
     def _run_pipeline(self, tmp: str) -> tuple[list[dict[str, str]], str]:
@@ -231,8 +251,8 @@ class TestGoldenFixtureEndToEnd(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             rows, _ = self._run_pipeline(tmp)
 
-        got = [(r["REQ"], r["Feature"], r["Aspect"], r["Status"], r["File"]) for r in rows]
-        expected = sorted(self.EXPECTED_ROWS, key=lambda t: (t[0], t[1], t[2], t[4]))
+        got = [(r["REQ"], r["Feature"], r["Aspect"], r["Status"], r["File"], r["Line"]) for r in rows]
+        expected = sorted(self.EXPECTED_ROWS, key=lambda t: (t[0], t[1], t[2], t[4], int(t[5])))
         self.assertEqual(got, expected)
 
         # Straddle case: exactly one REQ-GOLD-007 row, no blank STATUS anywhere.
@@ -244,6 +264,27 @@ class TestGoldenFixtureEndToEnd(unittest.TestCase):
         self.assertNotIn("REQ-GOLD-BAD", {r["REQ"] for r in rows})
         self.assertNotIn("REQ-GOLD-011", {r["REQ"] for r in rows})
 
+    def test_duplicate_marker_disambiguated_by_line(self) -> None:
+        """Task 7: two textually-identical markers in one file must produce
+        two distinct rows, distinguished only by the Line column."""
+        with tempfile.TemporaryDirectory() as tmp:
+            rows, _ = self._run_pipeline(tmp)
+
+        dup_rows = [r for r in rows if r["REQ"] == "REQ-GOLD-DUP"]
+        self.assertEqual(len(dup_rows), 2, dup_rows)
+
+        # Every column except Line is byte-identical between the two rows.
+        for r in dup_rows:
+            self.assertEqual(r["Feature"], "GoldenDup")
+            self.assertEqual(r["Aspect"], "Dup")
+            self.assertEqual(r["Status"], "TESTED")
+            self.assertEqual(r["File"], "src/sample.zig")
+
+        lines = sorted(int(r["Line"]) for r in dup_rows)
+        self.assertEqual(lines, [15, 19])
+        # Rows are unique by construction once Line is included.
+        self.assertEqual(len({(r["REQ"], r["Feature"], r["Aspect"], r["File"], r["Line"]) for r in dup_rows}), 2)
+
     def test_golden_complete_rejected_with_warning(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             rows, stderr_text = self._run_pipeline(tmp)
@@ -252,7 +293,7 @@ class TestGoldenFixtureEndToEnd(unittest.TestCase):
         self.assertIn("STATUS_GEN_WARN", stderr_text)
         self.assertIn("bad_status='COMPLETE'", stderr_text)
         self.assertIn("req=REQ-GOLD-REJECT", stderr_text)
-        self.assertIn("STATUS_GEN_SUMMARY accepted=8 rejected=1", stderr_text)
+        self.assertIn("STATUS_GEN_SUMMARY accepted=10 rejected=1", stderr_text)
 
 
 class TestValidStatusSet(unittest.TestCase):

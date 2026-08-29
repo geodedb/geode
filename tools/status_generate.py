@@ -82,6 +82,11 @@ def find_canary_markers(repo_path: Path) -> list[dict[str, str]]:
                 for match in CANARY_PATTERN.finditer(content):
                     marker = match.groupdict()
                     marker["file"] = str(file_path.relative_to(repo_path))
+                    # Task 7: 1-based line number of the marker match, so
+                    # two textually-identical markers in one file (58 such
+                    # duplicate keys existed pre-Task-7) produce
+                    # distinguishable rows instead of byte-identical ones.
+                    marker["line"] = str(content.count("\n", 0, match.start()) + 1)
                     markers.append(marker)
 
             except (UnicodeDecodeError, PermissionError):
@@ -123,13 +128,18 @@ def generate_status_csv(markers: list[dict[str, str]], output_path: Path, strict
             file=sys.stderr,
         )
 
-    # Sort by REQ ID, then by feature, then by aspect, then by file for deterministic output
-    # Including file in sort key ensures consistent ordering across different environments
-    clean.sort(key=lambda m: (m["req"], m["feature"], m["aspect"], m["file"]))
+    # Sort by REQ ID, then by feature, then by aspect, then by file, then by
+    # line for deterministic output. Including file+line in the sort key
+    # ensures consistent ordering across different environments AND makes
+    # rows for two textually-identical markers in one file unique by
+    # construction (Task 7).
+    clean.sort(key=lambda m: (m["req"], m["feature"], m["aspect"], m["file"], int(m["line"])))
 
-    # Write CSV
+    # Write CSV. `Line` is trailing so substring-matching consumers
+    # (e.g. `indexOf(",TESTED,")` in scripts/generate_badges.zig and
+    # scripts/variance_envelope_guard.zig) stay unaffected by the new column.
     with open(output_path, "w", newline="") as csvfile:
-        fieldnames = ["REQ", "Feature", "Aspect", "Status", "Test", "Bench", "Owner", "Updated", "File"]
+        fieldnames = ["REQ", "Feature", "Aspect", "Status", "Test", "Bench", "Owner", "Updated", "File", "Line"]
         writer = csv.DictWriter(csvfile, fieldnames=fieldnames)
 
         writer.writeheader()
@@ -145,6 +155,7 @@ def generate_status_csv(markers: list[dict[str, str]], output_path: Path, strict
                     "Owner": marker["owner"],
                     "Updated": marker["updated"],
                     "File": marker["file"],
+                    "Line": marker["line"],
                 }
             )
 
