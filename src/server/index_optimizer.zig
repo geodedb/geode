@@ -1602,6 +1602,12 @@ pub const VectorKNNOptimizer = struct {
         labels: []const []const u8,
         var_name: ?[]const u8,
     ) ![]Binding {
+        // CANARY: REQ=REQ-ENG-3922-VECTOR-DIM-GUARD; FEATURE="VectorIndex"; ASPECT=QueryVectorDimensionCap; STATUS=TESTED; TEST=tests/test_eng3922_dim_guard.zig; OWNER=index; UPDATED=2026-08-29
+        // ENG-3922(c) P0: `VectorF32.dim` is a u16, so the `@intCast` below is an
+        // integer-overflow panic for a query vector above the cap. No index can
+        // hold such a vector either, so this is a refusal, not a fallback.
+        if (knn_info.query_vector.len > std.math.maxInt(u16)) return error.VectorTooLarge;
+
         var results = try std.ArrayList(Binding).initCapacity(self.allocator, 0);
         defer results.deinit(self.allocator);
 

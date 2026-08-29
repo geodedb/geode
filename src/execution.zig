@@ -1234,6 +1234,26 @@ fn executeStatement(allocator: std.mem.Allocator, stmt: ast.Statement) !Executio
 // statements (subqueries) open their own inner scope that cannot clear the
 // enclosing statement's flag.
 pub fn executeStatementWithContext(allocator: std.mem.Allocator, stmt: ast.Statement, context: ExecutionContext) !ExecutionResult {
+    // CANARY: REQ=REQ-ENG-3922-VECTOR-DIM-GUARD; FEATURE="VectorIndex"; ASPECT=PrePassGraphScope; STATUS=TESTED; TEST=tests/test_eng3922_dim_guard.zig; OWNER=execution; UPDATED=2026-08-29
+    // ENG-3922(a): the write pre-pass needs to know which GRAPH the statement
+    // writes to (the unindexed vector-dimension pin is per-graph), and the only
+    // carrier of that is the session on the execution context. The transport
+    // handlers already push it, but `executeStatementWithContext` is also a
+    // public entry point in its own right (embedded/CLI/test callers), so push
+    // here too rather than leaving the guard's scope dependent on the caller.
+    //
+    // Only a context that actually CARRIES a session is pushed: the legacy
+    // `executeStatement` entry point passes `.{}`, and letting that shadow a
+    // richer enclosing context would silently drop, e.g., the deferred
+    // index-rebuild queue.
+    var pushed_ctx = false;
+    var prev_active_ctx: ?*const ExecutionContext = null;
+    if (context.session_state != null) {
+        prev_active_ctx = pushActiveContext(&context);
+        pushed_ctx = true;
+    }
+    defer if (pushed_ctx) popActiveContext(prev_active_ctx);
+
     const owns_in_predicate_scope = eval.enterInPredicateScope();
     var result = executeStatementWithContextInner(allocator, stmt, context) catch |err| {
         _ = eval.exitInPredicateScope(owns_in_predicate_scope);
@@ -2079,6 +2099,15 @@ fn executeStatementWithContextInner(allocator: std.mem.Allocator, stmt: ast.Stat
                     Attr.string("error", @errorName(err)),
                 });
             };
+
+            // CANARY: REQ=REQ-ENG-3922-VECTOR-DIM-GUARD; FEATURE="VectorIndex"; ASPECT=UnindexedDimGraphDrop; STATUS=TESTED; TEST=tests/test_eng3922_dim_guard.zig; OWNER=index; UPDATED=2026-08-29
+            // ENG-3922(a): the per-graph vector-dimension pins describe THIS
+            // graph's committed data. The data is gone, so the pins must go with
+            // it — otherwise a graph re-created under the same name would have a
+            // dimension enforced against rows that no longer exist.
+            if (index_manager.getGlobalIndexManager()) |manager| {
+                manager.dropUnindexedVectorDimsForGraph(graph_name);
+            }
 
             // Task 9: a graph leaving the visible-graphs set affects every
             // SchemaProvider whose ctx pointed at it — invalidate.

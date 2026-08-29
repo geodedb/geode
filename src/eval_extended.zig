@@ -694,6 +694,13 @@ fn constructVector(allocator: std.mem.Allocator, args: []const ExtValue) !ExtVal
     if (args[0] != .List) return error.TypeMismatch;
 
     const list = args[0].List;
+    // CANARY: REQ=REQ-ENG-3922-VECTOR-DIM-GUARD; FEATURE="VectorF32"; ASPECT=ArrayLiteralDimensionCap; STATUS=TESTED; TEST=tests/test_eng3922_dim_guard.zig; OWNER=eval; UPDATED=2026-08-29
+    // ENG-3922(c) P0: `dim` is a u16, so an unchecked `@intCast(list.len)` below
+    // is an integer-overflow PANIC for a 65536-element list literal — reachable
+    // from a read-only `RETURN vector([ … ])` with no privilege and no stored
+    // data, i.e. any authenticated client could halt the server. Same bound the
+    // list→vector coercion in `coerceVectorF32` has always enforced.
+    if (list.len > std.math.maxInt(u16)) return error.VectorTooLarge;
     var data = try allocator.alloc(f32, list.len);
 
     for (list, 0..) |item, i| {
@@ -713,6 +720,9 @@ fn constructVectorF32(allocator: std.mem.Allocator, args: []const ExtValue) !Ext
     // Handle array literal: VectorF32([0.1, 0.2, 0.3])
     if (args[0] == .List) {
         const list = args[0].List;
+        // ENG-3922(c) P0: see constructVector above — the unchecked u16 cast of
+        // `list.len` panicked the process for a 65536-element literal.
+        if (list.len > std.math.maxInt(u16)) return error.VectorTooLarge;
         var data = try allocator.alloc(f32, list.len);
 
         for (list, 0..) |item, i| {
@@ -742,7 +752,13 @@ fn constructVectorF32(allocator: std.mem.Allocator, args: []const ExtValue) !Ext
 
     // Use the evaluator_functions implementation
     const eval_funcs = @import("types/evaluator_functions.zig");
-    const result = eval_funcs.VectorF32(allocator, text) catch return error.InvalidFormat;
+    // ENG-3922(b): keep the over-cap identity. Collapsing every parse failure to
+    // `InvalidFormat` told a caller who simply exceeded the 65535-dimension cap
+    // that their literal was garbage — and then 58000 on the wire.
+    const result = eval_funcs.VectorF32(allocator, text) catch |err| switch (err) {
+        error.VectorTooLarge => return error.VectorTooLarge,
+        else => return error.InvalidFormat,
+    };
 
     return .{ .VectorF32 = result.VectorF32 };
 }
@@ -754,6 +770,9 @@ fn constructVectorI32(allocator: std.mem.Allocator, args: []const ExtValue) !Ext
     // Handle array literal: VectorI32([1, 2, 3])
     if (args[0] == .List) {
         const list = args[0].List;
+        // ENG-3922(c) P0: see constructVector above — the unchecked u16 cast of
+        // `list.len` panicked the process for a 65536-element literal.
+        if (list.len > std.math.maxInt(u16)) return error.VectorTooLarge;
         var data = try allocator.alloc(i32, list.len);
 
         for (list, 0..) |item, i| {
@@ -792,7 +811,10 @@ fn constructVectorI32(allocator: std.mem.Allocator, args: []const ExtValue) !Ext
     }
 
     if (elements.items.len == 0) return error.InvalidFormat;
-    if (elements.items.len > 65535) return error.InvalidFormat;
+    // ENG-3922(b): a documented dimension limit the caller crossed is not a
+    // malformed literal — `InvalidFormat` here reached the client as SQLSTATE
+    // 58000 "internal system error". Mirrors vector.VectorI32.fromString:354.
+    if (elements.items.len > std.math.maxInt(u16)) return error.VectorTooLarge;
 
     const data = try allocator.dupe(i32, elements.items);
     return .{ .VectorI32 = .{ .dim = @intCast(data.len), .data = data } };

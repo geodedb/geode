@@ -312,13 +312,20 @@ pub fn setNodePropertyFromValue(
         },
         else => {},
     }
-    if (index_manager.getGlobalIndexManager()) |mgr| {
-        switch (value) {
-            .ExtValue => |ev| {
-                if (ev == .VectorF32) try mgr.checkVectorDimensionForWrite(labels, key, ev.VectorF32.dim);
-            },
-            else => {},
-        }
+    // CANARY: REQ=REQ-ENG-3922-VECTOR-DIM-GUARD; FEATURE="VectorIndex"; ASPECT=UnindexedDimWriteCheck; STATUS=TESTED; TEST=tests/test_eng3922_dim_guard.zig; OWNER=index; UPDATED=2026-08-29
+    // ENG-3922(a): the same check now also covers an (label, property) with NO
+    // vector index, scoped to the node's own graph (`node_graph`, already
+    // resolved above — the most precise answer available at this point, since
+    // the node exists).
+    switch (value) {
+        .ExtValue => |ev| {
+            if (ev == .VectorF32) {
+                if (index_manager.ensureGlobalIndexManagerForDimGuard()) |mgr| {
+                    try mgr.checkVectorDimensionForWriteInGraph(node_graph, labels, key, ev.VectorF32.dim);
+                }
+            }
+        },
+        else => {},
     }
 
     const prop_value = switch (value) {
@@ -360,7 +367,7 @@ pub fn setNodePropertyFromValue(
     if (index_manager.getGlobalIndexManager()) |mgr| {
         switch (value) {
             .ExtValue => |ev| {
-                if (ev == .VectorF32) mgr.adoptVectorDimension(labels, key, ev.VectorF32.dim);
+                if (ev == .VectorF32) mgr.adoptVectorDimensionInGraph(node_graph, labels, key, ev.VectorF32.dim);
             },
             else => {},
         }

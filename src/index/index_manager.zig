@@ -81,6 +81,40 @@ pub const IndexManager = struct {
     // from the wrapper machinery (no rebuild churn); dim 0 = not yet
     // established, adopted from the first vector written.
     vector_dim_registry: std.StringHashMap(VectorDimEntry),
+    // CANARY: REQ=REQ-ENG-3922-VECTOR-DIM-GUARD; FEATURE="VectorIndex"; ASPECT=UnindexedDimRegistry; STATUS=TESTED; TEST=tests/test_eng3922_dim_guard.zig; OWNER=index; UPDATED=2026-08-29
+    // ENG-3922(a): the same dimension pin for an (label, property) pair that has
+    // NO vector index. `vector_dim_registry` above is keyed by INDEX NAME, so it
+    // holds zero entries for an unindexed pair and the guard covered nothing —
+    // yet mixed dimensions under one property are a data-integrity defect with
+    // or without an index (`vector_cosine` over a dim-4/dim-3 pair yields NULL,
+    // a knn scan silently drops the non-conforming rows).
+    //
+    // Keyed by "graph\x00label\x00property". Scope is PER GRAPH, deliberately
+    // unlike the indexed registry: an HNSW index is a process-global object
+    // keyed by index name whose backfill selects by label+property with no graph
+    // filter, so its pin has to be process-wide (pinned by
+    // tests/test_eng3912_dim_pinning.zig). An unindexed property has no such
+    // shared object behind it, so the same label+property in another graph is a
+    // separate property with its own dimension.
+    //
+    // Entries are created LAZILY on the first vector write to the pair and
+    // seeded from COMMITTED data (`scanCommittedVectorDim`), so nothing a
+    // refused statement carries can pin anything, and a restart re-derives the
+    // pin from what is stored rather than from whichever write happens to
+    // arrive first.
+    vector_dim_unindexed: std.StringHashMap(VectorDimEntry),
+    /// Guards `vector_dim_unindexed` — BOTH its structure and its entries.
+    ///
+    /// Unlike the indexed registry, which is only ever populated from DDL
+    /// (under the statement's exclusive graph lock), this map is INSERTED INTO
+    /// from the write path, and two writes to different graphs run under
+    /// different graph locks — i.e. genuinely concurrently.
+    ///
+    /// LOCK ORDERING: leaf. It is acquired while the caller already holds its
+    /// per-graph write lock, and it is NEVER held while calling into
+    /// `graph_store` (the one-shot seed scan, which takes the store's own
+    /// locks, runs with this mutex released — see `unindexedVectorDim`).
+    vector_dim_mutex: std.Io.Mutex = std.Io.Mutex.init,
     statistics: IndexStatistics,
     /// GAP-0511: Mutex protecting rebuild operations so they can safely run
     /// outside the graph write lock without racing with concurrent rebuilds.
@@ -90,6 +124,12 @@ pub const IndexManager = struct {
     pub const VectorDimEntry = struct {
         label: []const u8,
         property: []const u8,
+        /// ENG-3922(a): the graph this pin is scoped to, for an entry in
+        /// `vector_dim_unindexed`. Null for an INDEXED pin, which is
+        /// process-wide because the HNSW index it guards is (see the field
+        /// comment on `vector_dim_unindexed`). Owned; read by
+        /// `dropUnindexedVectorDimsForGraph`.
+        graph: ?[]const u8 = null,
         /// The established dimension, or 0 when no vector has been COMMITTED
         /// under this (label, property) yet.
         dim: u16,
@@ -238,6 +278,7 @@ pub const IndexManager = struct {
             .advanced_domain_indexes = std.StringHashMap(*domain_trie.DomainTrie).init(allocator),
             .advanced_property_indexes = std.StringHashMap(AdvancedPropertyIndex).init(allocator),
             .vector_dim_registry = std.StringHashMap(VectorDimEntry).init(allocator),
+            .vector_dim_unindexed = std.StringHashMap(VectorDimEntry).init(allocator),
             .statistics = .{
                 .total_indexes = 0,
                 .total_entries = 0,
@@ -382,6 +423,15 @@ pub const IndexManager = struct {
             self.allocator.free(entry.value_ptr.property);
         }
         self.vector_dim_registry.deinit();
+
+        var vdim_free_it = self.vector_dim_unindexed.iterator();
+        while (vdim_free_it.next()) |entry| {
+            self.allocator.free(entry.key_ptr.*);
+            self.allocator.free(entry.value_ptr.label);
+            self.allocator.free(entry.value_ptr.property);
+            if (entry.value_ptr.graph) |g| self.allocator.free(g);
+        }
+        self.vector_dim_unindexed.deinit();
     }
 
     // Create a property index
@@ -1351,13 +1401,204 @@ pub const IndexManager = struct {
         property: []const u8,
         dim: u16,
     ) !void {
+        return self.checkVectorDimensionForWriteInGraph(null, labels, property, dim);
+    }
+
+    // CANARY: REQ=REQ-ENG-3922-VECTOR-DIM-GUARD; FEATURE="VectorIndex"; ASPECT=UnindexedDimWriteCheck; STATUS=TESTED; TEST=tests/test_eng3922_dim_guard.zig; OWNER=index; UPDATED=2026-08-29
+    /// `checkVectorDimensionForWrite` extended to the UNINDEXED case (ENG-3922).
+    ///
+    /// The indexed pins are consulted first and, when one covers the pair, they
+    /// are the whole answer — their process-wide scope is deliberate (see
+    /// `vector_dim_unindexed`). Only when NO index guards the pair does the
+    /// per-graph pin apply, created lazily here and seeded from committed data.
+    ///
+    /// Still PURE with respect to the candidate write: nothing the caller is
+    /// about to write is adopted, so a statement refused after this point leaves
+    /// no pin behind (ENG-3912(a)). Seeding reads only data that is already
+    /// stored, so it cannot pin a dimension no stored vector has.
+    ///
+    /// `graph` null (no session context to resolve it from) skips the unindexed
+    /// half rather than guessing a graph — a mis-scoped pin would refuse a write
+    /// that is perfectly valid in its own graph.
+    pub fn checkVectorDimensionForWriteInGraph(
+        self: *IndexManager,
+        graph: ?[]const u8,
+        labels: []const []const u8,
+        property: []const u8,
+        dim: u16,
+    ) !void {
+        var indexed = false;
         var iter = self.vector_dim_registry.iterator();
         while (iter.next()) |entry| {
             const meta = entry.value_ptr;
             if (!matchesLabelProperty(meta, labels, property)) continue;
+            indexed = true;
             if (meta.dim == 0 and !meta.seed_attempted) self.seedVectorDim(meta);
             if (meta.dim == 0) continue;
             if (meta.dim != dim) return error.VectorDimensionMismatch;
+        }
+        if (indexed) return;
+
+        const graph_name = graph orelse return;
+        for (labels) |label| {
+            const pinned = self.unindexedVectorDim(graph_name, label, property) catch continue;
+            if (pinned == 0) continue;
+            if (pinned != dim) return error.VectorDimensionMismatch;
+        }
+    }
+
+    // CANARY: REQ=REQ-ENG-3922-VECTOR-DIM-GUARD; FEATURE="VectorIndex"; ASPECT=UnindexedDimLazySeed; STATUS=TESTED; TEST=tests/test_eng3922_dim_guard.zig; OWNER=index; UPDATED=2026-08-29
+    /// The pinned dimension for an unindexed (graph, label, property), or 0 when
+    /// no committed vector has established one. The entry is created on first
+    /// use and seeded exactly once from committed data.
+    ///
+    /// The seed scan runs with `vector_dim_mutex` RELEASED — it reads the graph
+    /// store, which takes the store's own locks, and this mutex is a leaf that
+    /// must never enclose them. The window that opens (two threads scanning the
+    /// same pair concurrently) is benign: both read the same committed data and
+    /// the first writer wins, so they compute the same dimension.
+    ///
+    /// KNOWN RESIDUAL (documented, not covered by a test): the pin is cached
+    /// process state, so deleting every row that establishes a dimension does
+    /// not release it until the process restarts (or the graph is dropped, which
+    /// `dropUnindexedVectorDimsForGraph` does handle). Re-deriving it from data
+    /// on every write would cost a label scan per vector write.
+    fn unindexedVectorDim(
+        self: *IndexManager,
+        graph: []const u8,
+        label: []const u8,
+        property: []const u8,
+    ) !u16 {
+        const io = std.Io.Threaded.global_single_threaded.io();
+        const key = try std.fmt.allocPrint(self.allocator, "{s}\x00{s}\x00{s}", .{ graph, label, property });
+        defer self.allocator.free(key);
+
+        self.vector_dim_mutex.lockUncancelable(io);
+        if (self.vector_dim_unindexed.get(key)) |existing| {
+            if (existing.seed_attempted) {
+                self.vector_dim_mutex.unlock(io);
+                return existing.dim;
+            }
+        }
+        self.vector_dim_mutex.unlock(io);
+
+        const seeded_dim = self.scanCommittedVectorDim(graph, label, property);
+
+        self.vector_dim_mutex.lockUncancelable(io);
+        defer self.vector_dim_mutex.unlock(io);
+
+        if (self.vector_dim_unindexed.getPtr(key)) |existing| {
+            if (!existing.seed_attempted) {
+                existing.seed_attempted = true;
+                if (existing.dim == 0) existing.dim = seeded_dim;
+            }
+            return existing.dim;
+        }
+
+        try self.putUnindexedVectorDim(key, graph, label, property, seeded_dim);
+        return seeded_dim;
+    }
+
+    /// Insert a new unindexed pin. Caller holds `vector_dim_mutex` and has
+    /// already established that `key` is absent.
+    fn putUnindexedVectorDim(
+        self: *IndexManager,
+        key: []const u8,
+        graph: []const u8,
+        label: []const u8,
+        property: []const u8,
+        dim: u16,
+    ) !void {
+        const owned_key = try self.allocator.dupe(u8, key);
+        errdefer self.allocator.free(owned_key);
+        const owned_graph = try self.allocator.dupe(u8, graph);
+        errdefer self.allocator.free(owned_graph);
+        const owned_label = try self.allocator.dupe(u8, label);
+        errdefer self.allocator.free(owned_label);
+        const owned_prop = try self.allocator.dupe(u8, property);
+        errdefer self.allocator.free(owned_prop);
+
+        try self.vector_dim_unindexed.put(owned_key, .{
+            .label = owned_label,
+            .property = owned_prop,
+            .graph = owned_graph,
+            .dim = dim,
+            .seed_attempted = true,
+        });
+    }
+
+    /// The dimension of the first committed vector under (graph, label,
+    /// property), or 0 when the property holds no vector yet. Takes no
+    /// index-manager lock (see `unindexedVectorDim`).
+    fn scanCommittedVectorDim(
+        self: *IndexManager,
+        graph: []const u8,
+        label: []const u8,
+        property: []const u8,
+    ) u16 {
+        const store = graph_store.getGlobalStore(self.allocator);
+        const ids = store.getNodesByLabel(graph, label) orelse return 0;
+        for (ids) |node_id| {
+            const node = (store.nodes.getOrHydratePtr(node_id) catch null) orelse continue;
+            const prop = node.properties.get(property) orelse continue;
+            if (vectorDimOfPropertyValue(prop)) |stored_dim| return stored_dim;
+        }
+        return 0;
+    }
+
+    /// Establish an unindexed pin from a vector that has just COMMITTED. Only
+    /// ever fills in a pin that is not established yet.
+    fn adoptUnindexedVectorDim(
+        self: *IndexManager,
+        graph: []const u8,
+        label: []const u8,
+        property: []const u8,
+        dim: u16,
+    ) void {
+        const io = std.Io.Threaded.global_single_threaded.io();
+        const key = std.fmt.allocPrint(self.allocator, "{s}\x00{s}\x00{s}", .{ graph, label, property }) catch return;
+        defer self.allocator.free(key);
+
+        self.vector_dim_mutex.lockUncancelable(io);
+        defer self.vector_dim_mutex.unlock(io);
+
+        if (self.vector_dim_unindexed.getPtr(key)) |existing| {
+            if (existing.dim == 0) {
+                existing.dim = dim;
+                existing.seed_attempted = true;
+            }
+            return;
+        }
+        self.putUnindexedVectorDim(key, graph, label, property, dim) catch return;
+    }
+
+    // CANARY: REQ=REQ-ENG-3922-VECTOR-DIM-GUARD; FEATURE="VectorIndex"; ASPECT=UnindexedDimGraphDrop; STATUS=TESTED; TEST=tests/test_eng3922_dim_guard.zig; OWNER=index; UPDATED=2026-08-29
+    /// Release every unindexed pin belonging to `graph`. The pin describes the
+    /// graph's committed data, so when the graph is dropped the data — and the
+    /// pin's justification — is gone; keeping it would refuse a perfectly valid
+    /// write to a freshly re-created graph of the same name.
+    pub fn dropUnindexedVectorDimsForGraph(self: *IndexManager, graph: []const u8) void {
+        const io = std.Io.Threaded.global_single_threaded.io();
+        self.vector_dim_mutex.lockUncancelable(io);
+        defer self.vector_dim_mutex.unlock(io);
+
+        var doomed: std.ArrayList([]const u8) = .empty;
+        defer doomed.deinit(self.allocator);
+
+        var iter = self.vector_dim_unindexed.iterator();
+        while (iter.next()) |entry| {
+            const entry_graph = entry.value_ptr.graph orelse continue;
+            if (!std.mem.eql(u8, entry_graph, graph)) continue;
+            doomed.append(self.allocator, entry.key_ptr.*) catch return;
+        }
+
+        for (doomed.items) |key| {
+            if (self.vector_dim_unindexed.fetchRemove(key)) |kv| {
+                self.allocator.free(kv.key);
+                self.allocator.free(kv.value.label);
+                self.allocator.free(kv.value.property);
+                if (kv.value.graph) |g| self.allocator.free(g);
+            }
         }
     }
 
@@ -1372,15 +1613,37 @@ pub const IndexManager = struct {
         property: []const u8,
         dim: u16,
     ) void {
+        self.adoptVectorDimensionInGraph(null, labels, property, dim);
+    }
+
+    // CANARY: REQ=REQ-ENG-3922-VECTOR-DIM-GUARD; FEATURE="VectorIndex"; ASPECT=UnindexedDimAdoptAfterCommit; STATUS=TESTED; TEST=tests/test_eng3922_dim_guard.zig; OWNER=index; UPDATED=2026-08-29
+    /// `adoptVectorDimension` extended to the per-graph unindexed pins.
+    /// Same contract: called only AFTER the store write commits, and it only
+    /// ever fills in a pin that is not established yet.
+    pub fn adoptVectorDimensionInGraph(
+        self: *IndexManager,
+        graph: ?[]const u8,
+        labels: []const []const u8,
+        property: []const u8,
+        dim: u16,
+    ) void {
         if (dim == 0) return;
+        var indexed = false;
         var iter = self.vector_dim_registry.iterator();
         while (iter.next()) |entry| {
             const meta = entry.value_ptr;
             if (!matchesLabelProperty(meta, labels, property)) continue;
+            indexed = true;
             if (meta.dim == 0) {
                 meta.dim = dim;
                 meta.seed_attempted = true;
             }
+        }
+        if (indexed) return;
+
+        const graph_name = graph orelse return;
+        for (labels) |label| {
+            self.adoptUnindexedVectorDim(graph_name, label, property, dim);
         }
     }
 
@@ -1400,6 +1663,10 @@ pub const IndexManager = struct {
             for (graph_names) |name| self.allocator.free(name);
             self.allocator.free(graph_names);
         }
+        // An INDEXED pin guards an index whose backfill selects by
+        // label+property with NO graph filter, so it is seeded from every
+        // graph. The per-graph (unindexed) pins seed through
+        // `scanCommittedVectorDim` instead, against their own graph only.
         for (graph_names) |graph_name| {
             const ids = store.getNodesByLabel(graph_name, meta.label) orelse continue;
             for (ids) |node_id| {
@@ -1734,6 +2001,25 @@ pub fn ensureGlobalIndexManager(allocator: std.mem.Allocator) !*IndexManager {
 
 pub fn getGlobalIndexManager() ?*IndexManager {
     return global_index_manager;
+}
+
+// CANARY: REQ=REQ-ENG-3922-VECTOR-DIM-GUARD; FEATURE="VectorIndex"; ASPECT=UnindexedDimRegistry; STATUS=TESTED; TEST=tests/test_eng3922_dim_guard.zig; OWNER=index; UPDATED=2026-08-29
+/// The index manager for the vector dimension guard, created on demand.
+///
+/// ENG-3922(a): the guard's write sites used to read `getGlobalIndexManager()`
+/// and do nothing when it returned null. That was sound while every pin came
+/// from `CREATE INDEX` DDL (which creates the manager), but the unindexed pin
+/// has no DDL behind it — in a database where no index was ever created the
+/// guard would simply not exist.
+///
+/// `smp_allocator` deliberately, NEVER the caller's allocator: this runs on the
+/// write path whose allocator is a per-request arena, and the manager is
+/// process-lifetime. Same reasoning, and the same governance-approved choice, as
+/// `statement_dispatcher.ensureAdvancedVectorIndexForProperty`. Returns null
+/// rather than failing a write if the manager cannot be created.
+pub fn ensureGlobalIndexManagerForDimGuard() ?*IndexManager {
+    if (global_index_manager) |manager| return manager;
+    return ensureGlobalIndexManager(std.heap.smp_allocator) catch null;
 }
 
 pub fn cleanupGlobalIndexManager() void {

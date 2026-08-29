@@ -1,4 +1,4 @@
-// CANARY: REQ=REQ-ENG-3922-VECTOR-DIM-GUARD; FEATURE="VectorIndex"; ASPECT=Regression; STATUS=IMPL; TEST=tests/test_eng3922_dim_guard.zig:1; OWNER=index; UPDATED=2026-08-29
+// CANARY: REQ=REQ-ENG-3922-VECTOR-DIM-GUARD; FEATURE="VectorIndex"; ASPECT=Regression; STATUS=TESTED; TEST=tests/test_eng3922_dim_guard.zig:1; OWNER=index; UPDATED=2026-08-29
 //
 // ENG-3922 — the vector dimension guard has a hole, and the dimension CAP has
 // a crash. Three defects, all reproduced here BEFORE the fix (TDD): every

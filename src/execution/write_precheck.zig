@@ -100,6 +100,22 @@ pub const VectorDimScratch = struct {
     }
 };
 
+// CANARY: REQ=REQ-ENG-3922-VECTOR-DIM-GUARD; FEATURE="VectorIndex"; ASPECT=PrePassGraphScope; STATUS=TESTED; TEST=tests/test_eng3922_dim_guard.zig; OWNER=index; UPDATED=2026-08-29
+/// The graph this statement's writes will land in, as the executor resolves it
+/// (`current_graph orelse "default"` — see crud_operations). The pre-pass runs
+/// before any node exists, so there is no node to read the graph off; the
+/// thread-local active execution context is the same source the apply path uses.
+///
+/// Null when there is no active context at all: the ENG-3922 unindexed pin is
+/// PER GRAPH, and guessing the wrong graph would refuse a write that is
+/// perfectly valid in its own. The indexed half of the check is unaffected.
+fn currentGraphName() ?[]const u8 {
+    const execution = @import("../execution.zig");
+    const ctx = execution.getActiveContext() orelse return null;
+    const session = ctx.session_state orelse return null;
+    return session.graph orelse "default";
+}
+
 /// One property entry, already evaluated.
 ///
 /// `labels` are the labels the entry will be written under, when the statement
@@ -148,8 +164,15 @@ pub fn checkPropertyWritableScoped(
                     // process has not seen the CREATE INDEX (e.g. after a
                     // restart). No-op when the pair is not vector-indexed.
                     try statement_dispatcher.armVectorDimGuard(allocator, labels, key);
-                    if (index_manager.getGlobalIndexManager()) |mgr| {
-                        try mgr.checkVectorDimensionForWrite(labels, key, ev.VectorF32.dim);
+                    if (index_manager.ensureGlobalIndexManagerForDimGuard()) |mgr| {
+                        // CANARY: REQ=REQ-ENG-3922-VECTOR-DIM-GUARD; FEATURE="VectorIndex"; ASPECT=UnindexedDimStatementPrePass; STATUS=TESTED; TEST=tests/test_eng3922_dim_guard.zig; OWNER=index; UPDATED=2026-08-29
+                        // ENG-3922(a): the unindexed pin has to be decided HERE
+                        // too, not only at the write chokepoint. `CREATE (:L
+                        // {emb: <wrong dim>})` creates the node before it writes
+                        // the property, so a refusal that first happens at the
+                        // chokepoint leaves an orphan node behind — exactly the
+                        // partial write this pre-pass exists to prevent.
+                        try mgr.checkVectorDimensionForWriteInGraph(currentGraphName(), labels, key, ev.VectorF32.dim);
                     }
                     if (scratch) |sc| try sc.noteAndCheck(labels, key, ev.VectorF32.dim);
                 }
