@@ -95,7 +95,11 @@ pub fn createFulltextIndex(
     // already-failing path; the backfill error below is what propagates.
     errdefer fa.dropIndex(index_name) catch {};
 
-    try backfillExistingNodes(allocator, graph_name, index_name, label, properties, fa, null);
+    // Task 4 (geode-vectorization-and-reranking): backfill now reports how
+    // many nodes it actually indexed. `createFulltextIndex` still returns
+    // `!void` and has no result surface for the count, so discard it —
+    // behavior here is unchanged from before Task 4.
+    _ = try backfillExistingNodes(allocator, graph_name, index_name, label, properties, fa, null);
 
     // A4b: record (label → this index) so the node write-maintenance hook can
     // find covering indexes on CREATE/SET/DELETE. Done AFTER backfill so the
@@ -119,7 +123,8 @@ pub fn createFulltextIndex(
 /// after restart), falling back to the in-memory label registry. Drops the
 /// engine (clearing append-only tombstones), recreates it, re-backfills, and
 /// re-arms the label registry so live maintenance resumes.
-/// CANARY: REQ=REQ-FTS-REBUILD-001; FEATURE="CALL geode.fts.rebuild"; ASPECT=RebuildBackfill; STATUS=TESTED; TEST=tests/test_fts_rebuild.zig; OWNER=index; UPDATED=2026-08-28
+/// CANARY: REQ=REQ-FTS-REBUILD-001; FEATURE="CALL geode.fts.rebuild"; ASPECT=RebuildBackfill; STATUS=TESTED; TEST=tests/test_fts_rebuild.zig; OWNER=index; UPDATED=2026-08-29
+/// CANARY: REQ=REQ-FTS-REBUILD-COUNT-001; FEATURE="CALL geode.fts.rebuild"; ASPECT=NodesIndexedAccuracy; STATUS=TESTED; TEST=tests/test_fts_rebuild.zig; OWNER=index; UPDATED=2026-08-29
 pub fn rebuildFulltextIndex(
     allocator: std.mem.Allocator,
     catalog: *catalog_mod.Catalog,
@@ -227,7 +232,7 @@ pub fn rebuildFulltextIndex(
     const snapshot = try allocator.dupe(u64, raw_snapshot);
     defer allocator.free(snapshot);
 
-    try backfillExistingNodes(allocator, graph_name, index_name, label, properties, fa, snapshot);
+    const backfill_count = try backfillExistingNodes(allocator, graph_name, index_name, label, properties, fa, snapshot);
 
     // Drain: reindex every write queued during the window whose id is NOT
     // already covered by the snapshot backfill above just processed.
@@ -255,11 +260,18 @@ pub fn rebuildFulltextIndex(
     const pending = try fa.endRebuild(index_name, allocator);
     drained = true;
     defer allocator.free(pending);
+    // Task 4 (geode-vectorization-and-reranking): count only drained ids that
+    // were ACTUALLY indexed — `indexNodeDocument` returns `false` (not an
+    // error) for a node whose id vanished by drain time or that carried no
+    // indexable text, mirroring exactly what `backfillExistingNodes` counts.
+    var drain_count: usize = 0;
     for (pending) |nid| {
         if (snapshot_set.contains(nid)) continue; // backfill already indexed current state
-        indexNodeDocument(allocator, store, fa, index_name, nid, properties) catch |err| {
+        const indexed = indexNodeDocument(allocator, store, fa, index_name, nid, properties) catch |err| blk: {
             log.warn("rebuild drain reindex failed for node {}: {}", .{ nid, err });
+            break :blk false;
         };
+        if (indexed) drain_count += 1;
     }
 
     try mg.addFtsLabelIndex(adapter.allocator, label, index_name, properties); // idempotent re-arm
@@ -267,8 +279,7 @@ pub fn rebuildFulltextIndex(
         log.warn("fulltext rebuild flush failed for '{s}': {}", .{ index_name, err });
     };
 
-    const ids = store.getNodesByLabel(graph_name, label) orelse return 0;
-    return @intCast(ids.len);
+    return @intCast(backfill_count + drain_count);
 }
 
 /// GAP-0922: scan existing nodes of `label` and reject the fulltext index if
@@ -311,6 +322,15 @@ pub fn validateTextProperty(
 /// between the two reads, corrupting the drain's "already covered by
 /// backfill" check. `createFulltextIndex` and `rebuildAllFulltextIndexes`
 /// pass `null` (unchanged behavior — no drain phase follows their backfill).
+///
+/// Returns the count of nodes actually submitted to `fa.indexNode`
+/// SUCCESSFULLY — nodes carrying `label` are NOT all counted; a node with no
+/// indexed property present, an empty string, or every indexed property
+/// non-string produces an empty `doc_terms` and is skipped (not counted), and
+/// a node whose `fa.indexNode` call itself errors is logged and not counted
+/// either (Task 4, geode-vectorization-and-reranking: previously callers
+/// reported `store.getNodesByLabel(...).len`, which over-counted by including
+/// exactly these skipped nodes).
 fn backfillExistingNodes(
     allocator: std.mem.Allocator,
     graph_name: []const u8,
@@ -319,11 +339,11 @@ fn backfillExistingNodes(
     properties: []const []const u8,
     fa: *adapter_mod.FtsStorageAdapter,
     node_ids_override: ?[]const u64,
-) !void {
+) !usize {
     const store = graph_store.getGlobalStore(graph_store.global_allocator());
 
     // Borrowed posting list of node ids for this (graph, label); null = no nodes.
-    const raw_node_ids = node_ids_override orelse (store.getNodesByLabel(graph_name, label) orelse return);
+    const raw_node_ids = node_ids_override orelse (store.getNodesByLabel(graph_name, label) orelse return 0);
 
     // Sort ids ASCENDING before indexing (on an owned copy — the store slice is
     // borrowed). The adapter's segment-order guard force-flushes the memtable
@@ -335,6 +355,7 @@ fn backfillExistingNodes(
     defer allocator.free(node_ids);
     std.mem.sort(u64, node_ids, {}, std.sort.asc(u64));
 
+    var indexed_count: usize = 0;
     for (node_ids) |node_id| {
         // Build ONE document per node from the field-tagged postings of every
         // indexed property. Accumulate into a single buffer so we issue a single
@@ -385,10 +406,14 @@ fn backfillExistingNodes(
 
         if (doc_terms.items.len == 0) continue; // nothing indexable on this node
 
-        fa.indexNode(index_name, node_id, doc_terms.items) catch |err| {
+        if (fa.indexNode(index_name, node_id, doc_terms.items)) |_| {
+            indexed_count += 1;
+        } else |err| {
             log.warn("fulltext backfill indexNode failed (node {d}): {}", .{ node_id, err });
-        };
+        }
     }
+
+    return indexed_count;
 }
 
 /// Drop the NAMED fulltext index `index_name` on `graph_name`: tear down the
@@ -538,9 +563,14 @@ pub fn maintainFulltextOnWrite(
                 // already queued or will be picked up by the rebuild's
                 // post-backfill drain), not a real failure. Mirror the
                 // delete leg above; only IndexNotFound is swallowed, every
-                // other error still propagates.
-                indexNodeDocument(scratch, store, fa, spec.name, node_id, spec.properties) catch |err| switch (err) {
-                    adapter_mod.Error.IndexNotFound => log.debug("fulltext maintain create/update: index '{s}' not found for node {d} (rebuild race) — skipping, drain will reindex", .{ spec.name, node_id }),
+                // other error still propagates. The returned bool (whether it
+                // actually indexed) is not needed here — this is a per-write
+                // maintenance hook, not a bulk count — so discard it.
+                _ = indexNodeDocument(scratch, store, fa, spec.name, node_id, spec.properties) catch |err| switch (err) {
+                    adapter_mod.Error.IndexNotFound => blk: {
+                        log.debug("fulltext maintain create/update: index '{s}' not found for node {d} (rebuild race) — skipping, drain will reindex", .{ spec.name, node_id });
+                        break :blk false;
+                    },
                     else => return err,
                 };
             }
@@ -591,6 +621,14 @@ pub fn maintainFulltextOnWrite(
 /// rather than decrypted plaintext — narrower exposure than before, not
 /// wider, and a pre-existing FLE+FTS interaction gap this fix does not
 /// newly introduce.
+///
+/// Returns `true` when `node_id` was ACTUALLY submitted to `fa.indexNode`
+/// (mirrors `backfillExistingNodes`' counting rule — Task 4,
+/// geode-vectorization-and-reranking); `false` when the node had already
+/// vanished by the time this ran or carried no indexable text, in either case
+/// without touching the engine. Callers that need a drain/backfill-style
+/// count (`rebuildFulltextIndex`) use this; `maintainFulltextOnWrite` (a
+/// per-write hook, not a bulk count) discards it.
 fn indexNodeDocument(
     allocator: std.mem.Allocator,
     store: *graph_store.GraphStore,
@@ -598,7 +636,7 @@ fn indexNodeDocument(
     index_name: []const u8,
     node_id: u64,
     properties: []const []const u8,
-) !void {
+) !bool {
     var doc_terms: std.ArrayListUnmanaged(tokenizer.TermPosting) = .empty;
     defer {
         for (doc_terms.items) |p| {
@@ -622,7 +660,7 @@ fn indexNodeDocument(
         // gone.
         store.nodes.lockShardShared(node_id);
         defer store.nodes.unlockShardShared(node_id);
-        const np = store.nodes.getPtrUnlocked(node_id) orelse return; // node gone since the write committed
+        const np = store.nodes.getPtrUnlocked(node_id) orelse return false; // node gone since the write committed
         for (properties) |prop| {
             const pv = np.properties.get(prop) orelse continue;
             const text = switch (pv) {
@@ -650,9 +688,10 @@ fn indexNodeDocument(
         allocator.free(postings); // header only — elements now owned by doc_terms
     }
 
-    if (doc_terms.items.len == 0) return; // nothing indexable on this node
+    if (doc_terms.items.len == 0) return false; // nothing indexable on this node
 
     try fa.indexNode(index_name, node_id, doc_terms.items);
+    return true;
 }
 
 // ===========================================================================
@@ -788,7 +827,7 @@ pub fn rebuildAllFulltextIndexes(scratch: std.mem.Allocator) !void {
                 continue;
             };
 
-            backfillExistingNodes(scratch, gname, entry.name, entry.label, entry.properties, fa, null) catch |err| {
+            _ = backfillExistingNodes(scratch, gname, entry.name, entry.label, entry.properties, fa, null) catch |err| {
                 log.warn("fts snapshot rebuild: backfill '{s}' on '{s}' failed: {}", .{ entry.name, gname, err });
                 continue;
             };

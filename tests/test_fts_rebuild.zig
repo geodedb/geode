@@ -150,6 +150,93 @@ test "geode.fts.rebuild reindexes nodes missed by out-of-band writes" {
     }
 }
 
+// CANARY: REQ=REQ-FTS-REBUILD-COUNT-001; FEATURE="CALL geode.fts.rebuild"; ASPECT=NodesIndexedAccuracy; STATUS=TESTED; TEST=tests/test_fts_rebuild.zig; OWNER=index; UPDATED=2026-08-29
+//
+// Task 4 (geode-vectorization-and-reranking): `nodes_indexed` must report what
+// was ACTUALLY indexed, not `store.getNodesByLabel(...).len` (which counts
+// every node carrying the label regardless of whether it had indexable text).
+// 5 :CntDoc nodes total: 3 with real string body text, 1 with no `body`
+// property at all, 1 whose `body` is an INTEGER (not indexable — only
+// `.String` properties are tokenized). Only the 3 string-bodied nodes should
+// be counted.
+test "nodes_indexed counts only actually-indexed nodes" {
+    var h = try Harness.init(testing.allocator);
+    defer h.deinit();
+    const aa = h.arena.allocator();
+
+    // Bootstrap the fulltext index on an empty label (no nodes exist yet).
+    try execution.fts_index_ops.createFulltextIndex(
+        h.allocator,
+        graph_store.DEFAULT_GRAPH_NAME,
+        "cnt_doc_idx",
+        "CntDoc",
+        &.{"body"},
+    );
+
+    const adapter = graph_store.getGlobalAdapter() orelse return error.TestUnexpectedResult;
+    const store = graph_store.getGlobalStore(h.allocator);
+
+    // 3 nodes with real string body text — SHOULD be counted.
+    const bodies = [_][]const u8{
+        "alpha widget text",
+        "beta widget text",
+        "gamma widget text",
+    };
+    for (bodies, 0..) |body, i| {
+        const reserved = store.reserveNodeId();
+        const props = [_]adapter_mod.StorageAdapter.PropKV{
+            .{ .key = "body", .value = .{ .String = body } },
+        };
+        _ = try adapter.bulkMergeNodeWithReservedId(
+            graph_store.DEFAULT_GRAPH_NAME,
+            reserved,
+            "CntDoc",
+            "doc_key",
+            .{ .Int = @intCast(i) },
+            &props,
+            false,
+        );
+    }
+
+    // 1 node with NO body property at all — must NOT be counted.
+    {
+        const reserved = store.reserveNodeId();
+        _ = try adapter.bulkMergeNodeWithReservedId(
+            graph_store.DEFAULT_GRAPH_NAME,
+            reserved,
+            "CntDoc",
+            "doc_key",
+            .{ .Int = 100 },
+            &.{},
+            false,
+        );
+    }
+
+    // 1 node whose "body" is an INTEGER, not a string — must NOT be counted
+    // (only `.String` properties are indexable for FTS).
+    {
+        const reserved = store.reserveNodeId();
+        const props = [_]adapter_mod.StorageAdapter.PropKV{
+            .{ .key = "body", .value = .{ .Int = 42 } },
+        };
+        _ = try adapter.bulkMergeNodeWithReservedId(
+            graph_store.DEFAULT_GRAPH_NAME,
+            reserved,
+            "CntDoc",
+            "doc_key",
+            .{ .Int = 101 },
+            &props,
+            false,
+        );
+    }
+
+    var res = try h.runQuery("CALL geode.fts.rebuild('cnt_doc_idx')");
+    defer res.deinit(aa);
+    try testing.expectEqual(@as(usize, 1), res.rows.len);
+    try testing.expect(res.rows[0][1] == .Int);
+    try testing.expectEqual(@as(i64, 3), res.rows[0][1].Int);
+}
+
 test "geode.fts.rebuild on unknown index errors" {
     var h = try Harness.init(testing.allocator);
     defer h.deinit();
