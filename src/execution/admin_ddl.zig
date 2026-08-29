@@ -164,20 +164,46 @@ pub fn executeShowVersion(allocator: std.mem.Allocator) !ExecutionResult {
     return oneRowResult(allocator, "version", build_options.version);
 }
 
+// CANARY: REQ=REQ-CAPABILITY-DISCOVERY-001; FEATURE="SHOW CAPABILITIES"; ASPECT=DiscoveryRows; STATUS=TESTED; TEST=tests/test_show_capabilities.zig; OWNER=execution; UPDATED=2026-08-28
 pub fn executeShowCapabilities(allocator: std.mem.Allocator) !ExecutionResult {
-    // Two columns: feature, supported. Static snapshot for the current release.
-    // The geode-ui consumes this for admin_writable feature detection.
+    // Two columns: feature, supported. Static truthful snapshot for the
+    // current release — this surface's documented design is a fixed list
+    // reflecting what has actually landed, not a live introspection query.
+    // The geode-ui consumes this for admin_writable feature detection; every
+    // legacy row name below MUST keep its name and only become more truthful.
     const Feature = struct { name: []const u8, supported: bool };
     const features = [_]Feature{
+        // --- legacy rows (Geode Auth DDL, GAP-0858 admin surface) ---
         .{ .name = "auth_ddl", .supported = true },
         .{ .name = "admin_writable", .supported = true },
         .{ .name = "role_ddl", .supported = true },
         .{ .name = "grant_ddl", .supported = true },
         .{ .name = "show_permissions", .supported = true },
         .{ .name = "show_version", .supported = true },
-        .{ .name = "policy_ddl", .supported = false },
+        // GAP-0858 (2026-06-xx): durable GPS policy DDL persistence landed —
+        // CREATE/ALTER/DROP POLICY (incl. RENAME TO) write through to
+        // __geode_security and survive restart. The residual is the manual
+        // GQL->bytecode expression-compilation path (see CLAUDE.md Known
+        // Limitations), not policy DDL persistence itself, so this flips true.
+        .{ .name = "policy_ddl", .supported = true },
         .{ .name = "fle_ddl", .supported = false },
         .{ .name = "tenant_ddl", .supported = false },
+        // --- discovery rows added for hybrid-RAG capability discovery
+        // (Task 7): every feature below landed in Tasks 1-6 of that plan. ---
+        .{ .name = "vector_knn", .supported = true },
+        .{ .name = "vector_index_metrics", .supported = true },
+        .{ .name = "knn_metric_validation", .supported = true },
+        .{ .name = "fts_search", .supported = true },
+        .{ .name = "fts_phrase_proximity", .supported = true },
+        .{ .name = "fts_rebuild", .supported = true },
+        .{ .name = "fts_bulk_merge_live_maintenance", .supported = true },
+        .{ .name = "fts_row_visibility", .supported = true },
+        .{ .name = "ts_procedures", .supported = true },
+        .{ .name = "read_only_execute", .supported = true },
+        .{ .name = "mcp_read_only", .supported = true },
+        .{ .name = "explain", .supported = true },
+        .{ .name = "profile", .supported = true },
+        .{ .name = "explain_policy", .supported = true },
     };
     const columns = try allocator.alloc([]const u8, 2);
     columns[0] = try allocator.dupe(u8, "feature");
@@ -193,6 +219,13 @@ pub fn executeShowCapabilities(allocator: std.mem.Allocator) !ExecutionResult {
         .columns = columns,
         .rows = rows,
         .flags = std.ArrayList([]const u8).empty,
+        // Row values are heap-duped strings (allocator.dupe above) — without
+        // this flag ExecutionResult.deinit skips freeValue on each row and
+        // every feature/supported string leaks. Pre-existing bug, surfaced
+        // now because this row set grew from 9 to 23 (Task 7) and
+        // tests/test_show_capabilities.zig drives the real dispatch under
+        // std.testing.allocator's strict leak checking.
+        .owns_value_memory = true,
     };
 }
 

@@ -2078,6 +2078,24 @@ pub fn build(b: *std.Build) void {
     const show_cluster_status_step = b.step("test-show-cluster-status", "Run SHOW CLUSTER STATUS smoke tests (A7)");
     show_cluster_status_step.dependOn(&run_show_cluster_status_tests.step);
 
+    // SHOW CAPABILITIES truthful discovery-grade rows (Task 7 of the
+    // hybrid-RAG audit spec, REQ-CAPABILITY-DISCOVERY-001). Drives
+    // admin_ddl.executeShowCapabilities directly (same function
+    // statement_handlers.executeShow calls for `.capabilities`) and asserts:
+    // all 9 legacy row names survive unrenamed, `policy_ddl` is now `true`
+    // (GAP-0858 durable policy DDL persistence), every new discovery row is
+    // present and `true`, and the row count matches exactly.
+    const show_capabilities_tests = b.addTest(.{ .root_module = b.createModule(.{
+        .root_source_file = b.path("tests/test_show_capabilities.zig"),
+        .target = target,
+        .optimize = optimize,
+    }) });
+    show_capabilities_tests.root_module.addImport("geode", root_mod);
+    show_capabilities_tests.root_module.link_libc = true;
+    const run_show_capabilities_tests = b.addRunArtifact(show_capabilities_tests);
+    const show_capabilities_step = b.step("test-show-capabilities", "Run SHOW CAPABILITIES truthful discovery-grade row tests (Task 7)");
+    show_capabilities_step.dependOn(&run_show_capabilities_tests.step);
+
     // drainReady-and-bridge dispatch test (Task A5b of the 2026-05-25
     // distributed cluster testing plan).  Confirms that
     // RaftNode.setTransport installs the bridge into the inner raft library
