@@ -488,6 +488,161 @@ test "auth_rate_limiter: non-credential outcomes never lock an IP, real rejectio
     }
 }
 
+// ── ENG-3954 / #874 residual R1: the lockout thresholds are not configurable ──
+//
+// TRIAGE (current HEAD): the two knobs that decide when a client is locked out
+// exist ONLY as process env vars, read in `initFromEnv` (auth_rate_limiter.zig
+// :66-93) and consumed once at startup (src/server/main.zig:1927):
+//
+//     GEODE_AUTH_RATE_MAX_ATTEMPTS   failures before lockout   (default 10)
+//     GEODE_AUTH_RATE_LOCKOUT_SECS   lockout window, seconds   (default 60)
+//
+// There is no `--auth-lockout-attempts` / `--auth-lockout-secs` CLI flag and no
+// operator documentation, so ENG-3954 expectation C ("the threshold and window
+// must be operator-configurable") is unmet: an operator running geode under a
+// supervisor that does not forward env (systemd without `Environment=`, a
+// k8s command-only override, `geode serve` from a shell script) has NO way to
+// widen a 10-attempt / 60-second lockout that is misfiring on their network.
+//
+// CONTRACT THESE TESTS PIN (the fix must supply it in THIS module — the same
+// argument as `shouldCountFailedAttempt`: this is the one file both transports
+// and the server bootstrap already share, so precedence cannot drift):
+//
+//   pub fn resolveConfig(cli_max_attempts: ?u32, cli_lockout_secs: ?u64) <cfg>
+//       Returns a value with `.max_attempts: u32` and `.lockout_duration_ns: u64`,
+//       resolving each knob INDEPENDENTLY with the documented geode precedence
+//       flags > env > default (the same order `--strict-tenancy` /
+//       GEODE_STRICT_TENANCY uses in src/server/cli_args.zig:402-450).
+//       Out-of-range values (0 attempts, a 0 or >86400 s window) are REJECTED
+//       and fall through to the next source — a typo must never disable
+//       brute-force protection outright.
+//
+// The companion CLI-surface test lives in tests/test_cli_args_cluster.zig
+// (`--auth-lockout-attempts` / `--auth-lockout-secs` -> ServerConfig).
+//
+// RED at HEAD: `resolveConfig` does not exist, so these fail with
+// error.MissingLockoutConfigResolver.
+
+// Zig 0.16 removed std.process.setEnvVar; use libc directly (same pattern as
+// tests/test_gap0061_crash_auth.zig). `readEnvU64` above already reads through
+// std.c.getenv, so this test artifact links libc.
+extern "c" fn setenv(name: [*:0]const u8, value: [*:0]const u8, overwrite: c_int) c_int;
+extern "c" fn unsetenv(name: [*:0]const u8) c_int;
+
+const MAX_ATTEMPTS_ENV = "GEODE_AUTH_RATE_MAX_ATTEMPTS";
+const LOCKOUT_SECS_ENV = "GEODE_AUTH_RATE_LOCKOUT_SECS";
+
+fn clearLockoutEnv() void {
+    _ = unsetenv(MAX_ATTEMPTS_ENV);
+    _ = unsetenv(LOCKOUT_SECS_ENV);
+}
+
+fn setLockoutEnv(attempts: [:0]const u8, secs: [:0]const u8) !void {
+    if (setenv(MAX_ATTEMPTS_ENV, attempts.ptr, 1) != 0) return error.SetEnvFailed;
+    if (setenv(LOCKOUT_SECS_ENV, secs.ptr, 1) != 0) return error.SetEnvFailed;
+}
+
+test "auth_rate_limiter: lockout config resolves flags > env > defaults (ENG-3954 R1)" {
+    const M = @This();
+    if (comptime !@hasDecl(M, "resolveConfig")) {
+        return error.MissingLockoutConfigResolver;
+    } else {
+        clearLockoutEnv();
+        defer clearLockoutEnv();
+
+        // 1) Nothing supplied anywhere -> the documented defaults.
+        {
+            const cfg = M.resolveConfig(null, null);
+            try std.testing.expectEqual(AuthRateLimiter.default_max_attempts, cfg.max_attempts);
+            try std.testing.expectEqual(AuthRateLimiter.default_lockout_duration_ns, cfg.lockout_duration_ns);
+        }
+
+        // 2) Env only -> env beats the defaults (today's only knob; must keep working).
+        try setLockoutEnv("7", "11");
+        {
+            const cfg = M.resolveConfig(null, null);
+            try std.testing.expectEqual(@as(u32, 7), cfg.max_attempts);
+            try std.testing.expectEqual(@as(u64, 11 * std.time.ns_per_s), cfg.lockout_duration_ns);
+        }
+
+        // 3) CLI supplied -> the flag beats the env (flags > env, geode-wide).
+        {
+            const cfg = M.resolveConfig(5, 3);
+            try std.testing.expectEqual(@as(u32, 5), cfg.max_attempts);
+            try std.testing.expectEqual(@as(u64, 3 * std.time.ns_per_s), cfg.lockout_duration_ns);
+        }
+
+        // 4) Each knob resolves independently: a flag for one does not silently
+        //    reset the other to its default.
+        {
+            const cfg = M.resolveConfig(5, null);
+            try std.testing.expectEqual(@as(u32, 5), cfg.max_attempts);
+            try std.testing.expectEqual(@as(u64, 11 * std.time.ns_per_s), cfg.lockout_duration_ns);
+        }
+        {
+            const cfg = M.resolveConfig(null, 3);
+            try std.testing.expectEqual(@as(u32, 7), cfg.max_attempts);
+            try std.testing.expectEqual(@as(u64, 3 * std.time.ns_per_s), cfg.lockout_duration_ns);
+        }
+    }
+}
+
+test "auth_rate_limiter: out-of-range lockout config never disables brute-force protection (ENG-3954 R1)" {
+    const M = @This();
+    if (comptime !@hasDecl(M, "resolveConfig")) {
+        return error.MissingLockoutConfigResolver;
+    } else {
+        clearLockoutEnv();
+        defer clearLockoutEnv();
+
+        // `--auth-lockout-attempts 0` would mean "lock out on the zeroth
+        // failure" / "never lock out" depending on the comparison — either way
+        // it is an operator typo, not a policy. Same for a zero-length or
+        // absurd (>1 day) window. All fall through to the next source, exactly
+        // like the existing initFromEnv validation at :70-75.
+        {
+            const cfg = M.resolveConfig(0, 0);
+            try std.testing.expectEqual(AuthRateLimiter.default_max_attempts, cfg.max_attempts);
+            try std.testing.expectEqual(AuthRateLimiter.default_lockout_duration_ns, cfg.lockout_duration_ns);
+        }
+        {
+            const cfg = M.resolveConfig(null, 86_401);
+            try std.testing.expectEqual(AuthRateLimiter.default_lockout_duration_ns, cfg.lockout_duration_ns);
+        }
+
+        // A junk env value is ignored too (unchanged initFromEnv behaviour).
+        try setLockoutEnv("not-a-number", "");
+        {
+            const cfg = M.resolveConfig(null, null);
+            try std.testing.expectEqual(AuthRateLimiter.default_max_attempts, cfg.max_attempts);
+            try std.testing.expectEqual(AuthRateLimiter.default_lockout_duration_ns, cfg.lockout_duration_ns);
+        }
+    }
+}
+
+test "auth_rate_limiter: the resolved config is what the limiter actually enforces (ENG-3954 R1)" {
+    const M = @This();
+    if (comptime !@hasDecl(M, "resolveConfig")) {
+        return error.MissingLockoutConfigResolver;
+    } else {
+        clearLockoutEnv();
+        defer clearLockoutEnv();
+
+        // An operator who raises the threshold to 4 must survive 3 rejections.
+        const cfg = M.resolveConfig(4, 60);
+        var limiter = AuthRateLimiter.initWithConfig(std.testing.allocator, cfg.max_attempts, cfg.lockout_duration_ns);
+        defer limiter.deinit();
+        const ip = "203.0.113.42";
+
+        var i: usize = 0;
+        while (i < 3) : (i += 1) limiter.recordFailure(ip);
+        try std.testing.expect(!limiter.isLocked(ip));
+
+        limiter.recordFailure(ip); // the 4th reaches the configured threshold
+        try std.testing.expect(limiter.isLocked(ip));
+    }
+}
+
 test "auth_rate_limiter: a persistent store outage does not re-arm the lockout forever (ENG-3954)" {
     const M = @This();
     if (comptime !@hasDecl(M, "shouldCountFailedAttempt")) {

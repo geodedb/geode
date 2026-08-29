@@ -6,7 +6,11 @@ const std = @import("std");
 const testing = std.testing;
 const build_options = @import("build_options");
 
-// Import from the local security module
+// Import from the local security module. NOTE: this pulls user_management.zig's
+// OWN inline tests into this artifact as well (auth cache, role assignment, and
+// the ENG-3954 R-C auth single-flight regressions). They are also runnable on
+// their own via `zig build test-user-management`, which roots directly at
+// user_management.zig.
 const user_management = @import("user_management.zig");
 const geode_auth = @import("geode_auth");
 const Role = user_management.Role;

@@ -1628,6 +1628,11 @@ pub fn build(b: *std.Build) void {
     // also needs the named module to satisfy the comptime import resolution.
     custom_tests.root_module.addImport("cli_args", cli_args_mod);
     const run_cli_args_cluster_tests = b.addRunArtifact(cli_args_cluster_tests);
+    // Named step so the cli_args parse tests (cluster flags + the ENG-3954
+    // --auth-lockout-attempts / --auth-lockout-secs flags) are runnable in
+    // isolation instead of only through the (blocked) monolithic `zig build test`.
+    const cli_args_step = b.step("test-cli-args", "Run cli_args parse tests (--cluster-port/--peers, ENG-3954 auth-lockout flags)");
+    cli_args_step.dependOn(&run_cli_args_cluster_tests.step);
 
     // Portable process-argv holder tests (REQ-CLI-PORTABLE-ARGV-001). Replaces
     // the Linux-only /proc/self/cmdline read so `geode serve` starts on macOS.
@@ -5138,6 +5143,9 @@ pub fn build(b: *std.Build) void {
             .root_source_file = b.path("src/server/auth_rate_limiter.zig"),
             .target = target,
             .optimize = optimize,
+            // initFromEnv/readEnvU64 read through std.c.getenv, and the ENG-3954
+            // R1 config-precedence tests drive them via libc setenv/unsetenv.
+            .link_libc = true,
         }),
     });
     const run_auth_rate_limiter_tests = b.addRunArtifact(auth_rate_limiter_tests);
@@ -5752,6 +5760,25 @@ pub fn build(b: *std.Build) void {
     const auth_enforcement_step = b.step("test-auth-enforcement", "Run auth enforcement + FIPS fail-close password hashing tests");
     auth_enforcement_step.dependOn(&run_auth_enforcement_tests.step);
     shardDep(test_step, &auth_enforcement_tests.step, 1, test_shard_loads, test_shard_index);
+
+    // user_management.zig's OWN inline tests, rooted at that file so they can be
+    // run (and cache-invalidated) directly instead of only riding along inside
+    // the test_auth_enforcement artifact. Covers the auth single-flight
+    // invariants, incl. the ENG-3954 R-C abandoned-owner regression.
+    const user_management_test_mod = b.createModule(.{
+        .root_source_file = b.path("src/security/user_management.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+    user_management_test_mod.addImport("logging", logging_mod);
+    user_management_test_mod.addImport("geode_auth", auth_mod);
+    user_management_test_mod.addImport("build_options", build_options_mod);
+    user_management_test_mod.addImport("crypto_backend", crypto_backend_mod);
+    const user_management_tests = b.addTest(.{ .root_module = user_management_test_mod });
+    user_management_tests.root_module.link_libc = true;
+    const run_user_management_tests = b.addRunArtifact(user_management_tests);
+    const user_management_step = b.step("test-user-management", "Run user_management.zig inline tests (auth cache, roles, single-flight; ENG-3954 R-C)");
+    user_management_step.dependOn(&run_user_management_tests.step);
 
     // CANARY: REQ=REQ-TDE-ENFORCE-015; FEATURE="TDEEnforcement"; ASPECT=BuildIntegration; STATUS=TESTED; OWNER=security; UPDATED=2026-01-28
     // CRITICAL SECURITY: TDE enforcement tests - verify all disk writes are encrypted when TDE is enabled
@@ -8028,6 +8055,10 @@ pub fn build(b: *std.Build) void {
     // brute-force attempts (companion seam tests: test-auth-rate-limiter).
     const auth_unavailable_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_auth_unavailable_classification.zig"), .target = target, .optimize = optimize });
     auth_unavailable_test_mod.addImport("geode", root_mod);
+    // Residual R-A: the misclassification also lives one layer DOWN, in
+    // user_storage.findUserByUsernameInGraphChecked, so the suite drives that
+    // production function directly against a real GraphStore.
+    auth_unavailable_test_mod.addImport("user_storage", user_storage_mod);
     const auth_unavailable_tests = b.addTest(.{ .root_module = auth_unavailable_test_mod });
     const run_auth_unavailable_tests = b.addRunArtifact(auth_unavailable_tests);
     shardDep(test_step, &run_auth_unavailable_tests.step, 1, test_shard_loads, test_shard_index);

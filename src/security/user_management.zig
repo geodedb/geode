@@ -1742,3 +1742,148 @@ test "assignRole_missing_user_returns_unauthenticated" {
 
     try testing.expectError(error.Unauthenticated, assignRole(testing.allocator, "nonexistent_user_xyz", .Admin));
 }
+
+// ── ENG-3954 / #874 residual R-C: single-flight leak -> permanent auth hang ──
+//
+// TRIAGE (current HEAD): `authenticateChecked`'s `.owner` branch owns an
+// `AuthFlight` and is responsible for calling `finishAuthFlight` on EVERY exit.
+// Two of its three exits do (:789 inactive, :793 wrong password, :802 success),
+// but the credential check itself is reached through `try`:
+//
+//     if (!(try verifyPassword(password, user_data.password_hash))) {   // :792
+//
+// An infrastructure error there (today: `error.FipsUnsupported`, the one error
+// `verifyPassword` at :489-497 deliberately re-raises instead of collapsing to
+// `false`; tomorrow: anything else added to that error set) propagates straight
+// out of the function. `finishAuthFlight` is never called, so the flight stays
+// registered in `auth_flights` with `done = false` and `refs = 1` FOREVER.
+//
+// Every later `authenticate()` that hashes to the same flight key — same
+// username, password, stored hash and auth_version, i.e. the legitimate user
+// retrying — takes the waiter path and blocks on
+//
+//     while (!flight.done) flight.cv.waitUncancelable(io, &auth_flight_mutex);  // :536-537
+//
+// There is no timeout and no cancellation, so those QUIC/gRPC worker threads
+// are gone for the life of the process: a single transient fault escalates from
+// "one failed login" to "this principal can never authenticate again, and the
+// worker pool bleeds a thread per attempt". That is strictly worse than the
+// lockout this ticket is about — the lockout at least expires.
+//
+// CONTRACT PINNED HERE: an owner that leaves without publishing a result must
+// NOT strand later authentications. Two ways to satisfy it, and a complete fix
+// wants both:
+//   1. `errdefer finishAuthFlight(...)` (or equivalent) around the owner branch
+//      so the escape publishes a failure result, and
+//   2. a BOUNDED wait in `beginAuthFlight`, so no future escape (or a killed
+//      owner thread) can ever hang the auth path indefinitely.
+//
+// WHY THE TEST DRIVES THE FLIGHT PRIMITIVES DIRECTLY: the escape at :792 cannot
+// be provoked from `authenticate()` in this build. `verifyPassword`'s only
+// non-`false` outcome is `error.FipsUnsupported`, which
+// `geode_auth.verifyPasswordArgon2id` raises behind `if (build_options.fips)` —
+// a COMPTIME-dead branch here, and under `-Dfips` the whole Argon2 path (and
+// therefore any fixture that needs a stored hash) is unavailable. There is no
+// verifier-injection seam in production code, and adding one purely for a test
+// would be production surface a test file must not invent. So the test
+// reproduces the abandoned-owner state through the REAL `beginAuthFlight` /
+// `finishAuthFlight` primitives — the same state line 792 leaves behind — and
+// asserts the observable that actually matters: a subsequent authentication for
+// that key RETURNS (any outcome) instead of blocking forever.
+//
+// The watchdog makes RED a clean FAILURE, never a hung test runner: the waiter
+// runs on a spawned thread, the main thread polls a bounded budget, and it then
+// ALWAYS rescues the abandoned flight so the waiter wakes, the thread joins, and
+// the flight is destroyed with correct refcounts.
+//
+// CANARY: REQ=REQ-SEC-AUTH-UNAVAILABLE-004; FEATURE="AuthOutcomeClassification"; ASPECT=SingleFlightLeak; STATUS=TESTED; TEST=auth_flight_abandoned_owner_does_not_strand_waiters; OWNER=security; UPDATED=2026-08-29
+
+/// Number of flights currently registered (test-only observability).
+fn authFlightCountForTest() usize {
+    const io = std.Io.Threaded.global_single_threaded.io();
+    auth_flight_mutex.lockUncancelable(io);
+    defer auth_flight_mutex.unlock(io);
+    if (auth_flights) |flights| return flights.count();
+    return 0;
+}
+
+test "auth_flight_abandoned_owner_does_not_strand_waiters" {
+    // Key built exactly as authenticateChecked:780 builds it.
+    const key = try authFlightKey("alice", "Password1!", "$argon2id$v=19$stub", 1, authFlightLane());
+
+    const owner_flight = switch (try beginAuthFlight(key)) {
+        .owner => |f| f,
+        .waited => return error.UnexpectedWaiterOnFreshFlightKey,
+    };
+
+    // ...and now the owner ABANDONS it, exactly as the `try verifyPassword`
+    // escape at :792 does: no finishAuthFlight, done stays false.
+
+    const Waiter = struct {
+        key: AuthFlightKey,
+        returned: *std.atomic.Value(bool),
+
+        fn run(ctx: *@This()) void {
+            // The legitimate user retrying. Any outcome is acceptable — an
+            // error is fine, blocking forever is not.
+            if (beginAuthFlight(ctx.key)) |_| {} else |_| {}
+            ctx.returned.store(true, .release);
+        }
+    };
+
+    var returned = std.atomic.Value(bool).init(false);
+    var ctx = Waiter{ .key = key, .returned = &returned };
+    var thread = try std.Thread.spawn(.{}, Waiter.run, .{&ctx});
+
+    const budget_ns: u64 = 3 * std.time.ns_per_s;
+    const step_ns: u64 = 25 * std.time.ns_per_ms;
+    var waited_ns: u64 = 0;
+    while (!returned.load(.acquire) and waited_ns < budget_ns) : (waited_ns += step_ns) {
+        testSleepNs(step_ns);
+    }
+    const returned_within_budget = returned.load(.acquire);
+
+    // Rescue unconditionally so the RED run terminates cleanly: this releases a
+    // still-blocked waiter and drops the owner's reference either way, leaving
+    // `auth_flights` empty for the next test.
+    finishAuthFlight(key, owner_flight, .{ .ok = false });
+    thread.join();
+
+    if (!returned_within_budget) return error.AbandonedAuthFlightStrandedNextAuthentication;
+    try testing.expectEqual(@as(usize, 0), authFlightCountForTest());
+}
+
+// Guard (green before AND after): the normal credential paths must never leave a
+// flight registered. This is the invariant the `.owner` branch's escape breaks;
+// pinning it here keeps a future errdefer from double-finishing or leaking on
+// the paths that work today.
+test "auth_flight_normal_paths_leave_no_registered_flight" {
+    if (build_options.fips) return error.SkipZigTest; // requires Argon2id hashing for test setup
+    deinitUserStore();
+    defer deinitUserStore();
+
+    try initUserStore(testing.allocator);
+    try setCacheCapacityForTesting(2);
+
+    var state = TestResolverState{
+        .users = &[_]TestUserDef{
+            .{ .username = "alice", .password = "Password1!", .email = "alice@example.com", .role = .Admin },
+        },
+    };
+    setPersistentUserResolver(.{
+        .ctx = &state,
+        .lookup_fn = TestResolverState.lookup,
+        .has_users_fn = TestResolverState.hasUsers,
+        .list_fn = TestResolverState.listUsers,
+        .auth_version_fn = TestResolverState.authVersion,
+    });
+
+    _ = try authenticate("alice", "Password1!");
+    try testing.expectEqual(@as(usize, 0), authFlightCountForTest());
+
+    try testing.expectError(error.Unauthenticated, authenticate("alice", "WrongPassword!"));
+    try testing.expectEqual(@as(usize, 0), authFlightCountForTest());
+
+    try testing.expectError(error.Unauthenticated, authenticate("nobody", "Password1!"));
+    try testing.expectEqual(@as(usize, 0), authFlightCountForTest());
+}
