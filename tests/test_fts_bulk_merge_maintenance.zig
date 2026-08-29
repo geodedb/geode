@@ -315,3 +315,130 @@ test "idempotent multi-prop MERGE re-merge reports wrote=false and does not dupl
     // fail — that failure IS the duplicate-append reproduction.
     try testing.expectEqual(score_b.?, score_a.?);
 }
+
+// CANARY: REQ=REQ-FTS-MAINT-HYDRATE-001; FEATURE="FullText"; ASPECT=NonResidentFallback; STATUS=TESTED; TEST=tests/test_fts_bulk_merge_maintenance.zig; OWNER=fts; UPDATED=2026-08-29
+//
+// Task 5 (geode-vectorization-and-reranking, 2026-08-29 series):
+// `indexNodeDocument` (src/execution/fts_index_ops.zig) previously read a
+// node's properties ONLY through `store.nodes.lockShardShared` +
+// `getPtrUnlocked` — a RESIDENT-cache-only lookup — and silently skipped
+// (returning `false`, 0 rows indexed) any node the bounded cache had already
+// evicted by the time the maintenance hook ran, even though the node was
+// still fully durable in the storage engine. A bulk-written node evicted
+// before its live-maintenance hook fired would therefore NEVER become
+// searchable without a manual `CREATE INDEX` rebuild.
+//
+// This test pins the fix's fallback seam directly, without the machinery of
+// forcing a real LRU-cap eviction: it evicts ONE node from the bounded cache
+// via the cache's own `remove` primitive (the exact op real eviction uses
+// internally) right after a durable bulk-MERGE write, confirms the node is
+// non-resident, then drives `maintainFulltextOnWrite` — the same call the
+// bulk-MERGE handler hook makes — and asserts the node becomes searchable.
+// Pre-fix (RED): 0 rows, because `getPtrUnlocked` misses on the cold node and
+// `indexNodeDocument` returns early without ever calling
+// `store.getNodePropertyValue`'s hydrate-on-miss path.
+test "maintainFulltextOnWrite hydrates a node evicted from the bounded cache before the hook runs" {
+    var h = try Harness.init(testing.allocator);
+    defer h.deinit();
+    const aa = h.arena.allocator();
+
+    try execution.fts_index_ops.createFulltextIndex(
+        h.allocator,
+        graph_store.DEFAULT_GRAPH_NAME,
+        "cold_doc_idx",
+        "ColdDoc",
+        &.{"body"},
+    );
+
+    const adapter = graph_store.getGlobalAdapter() orelse return error.TestUnexpectedResult;
+    const store = graph_store.getGlobalStore(h.allocator);
+
+    // Activate hydrate-on-miss for the bounded node cache — production wires
+    // this at startup (`graph_store.initGlobalStore` -> `installNodeCacheHydrate`),
+    // but the Harness above uses the lower-level `getGlobalStore` directly (no
+    // hydrate hook), so without this an evicted node is unrecoverable and this
+    // test could never distinguish "no fallback" from "fallback wired but the
+    // cache itself can't rehydrate" — install it explicitly to isolate the
+    // seam Task 5 actually fixes.
+    store.installNodeCacheHydrate();
+
+    // Durable bulk-MERGE write via the fast-path primitive — this bypasses
+    // live FTS maintenance entirely (by design; see the contract test above)
+    // but DOES leave the node durable in the storage engine and, in the
+    // real handler flow, resident in the bounded node cache right after.
+    const reserved = store.reserveNodeId();
+    const props = [_]adapter_mod.StorageAdapter.PropKV{
+        .{ .key = "body", .value = .{ .String = "cold cache hydration widget text" } },
+    };
+    const id = (try adapter.bulkMergeNodeWithReservedId(
+        graph_store.DEFAULT_GRAPH_NAME,
+        reserved,
+        "ColdDoc",
+        "doc_key",
+        .{ .Int = 1 },
+        &props,
+        false, // apply_on_match — fresh insert
+    )).id;
+
+    // Sanity: the node IS resident right after the write (mirrors production
+    // — the write path inserts into the bounded cache).
+    try testing.expect(store.nodes.getPtrUnlocked(id) != null);
+
+    // Simulate the bounded cache evicting this node before the handler's
+    // post-write maintenance hook runs — the exact race Task 5 closes. The
+    // node stays fully durable in the storage engine; only its cache
+    // residency is dropped.
+    store.nodes.remove(id);
+    try testing.expect(store.nodes.getPtrUnlocked(id) == null);
+
+    // The call the bulk-MERGE handler hook makes right after the write.
+    // Pre-fix: silently indexes nothing (0 rows below). Post-fix: hydrates
+    // via `store.getNodePropertyValue` and indexes it.
+    try execution.fts_index_ops.maintainFulltextOnWrite(
+        h.allocator,
+        graph_store.DEFAULT_GRAPH_NAME,
+        id,
+        &.{"ColdDoc"},
+        .create,
+    );
+
+    var res = try h.runQuery("CALL geode.fts.search('cold_doc_idx', 'hydration')");
+    defer res.deinit(aa);
+    try testing.expectEqual(@as(usize, 1), res.rows.len);
+    try testing.expect(res.rows[0][0] == .Int);
+    try testing.expectEqual(@as(i64, @intCast(id)), res.rows[0][0].Int);
+}
+
+// CANARY: REQ=REQ-FTS-MAINT-HYDRATE-001; FEATURE="FullText"; ASPECT=NonResidentFallbackNoOp; STATUS=TESTED; TEST=tests/test_fts_bulk_merge_maintenance.zig; OWNER=fts; UPDATED=2026-08-29
+//
+// Negative control for the same fallback: a node id that was NEVER created
+// (no cache entry, nothing durable in the engine either) must stay a clean
+// no-op — the fallback's `error.NodeNotFound` mapping must still return
+// `false` without touching the fts engine, exactly like the pre-existing
+// resident-miss contract.
+test "maintainFulltextOnWrite for a nonexistent node id stays a clean no-op" {
+    var h = try Harness.init(testing.allocator);
+    defer h.deinit();
+    const aa = h.arena.allocator();
+
+    try execution.fts_index_ops.createFulltextIndex(
+        h.allocator,
+        graph_store.DEFAULT_GRAPH_NAME,
+        "ghost_doc_idx",
+        "GhostDoc",
+        &.{"body"},
+    );
+
+    const ghost_id: u64 = 999_999_999;
+    try execution.fts_index_ops.maintainFulltextOnWrite(
+        h.allocator,
+        graph_store.DEFAULT_GRAPH_NAME,
+        ghost_id,
+        &.{"GhostDoc"},
+        .create,
+    );
+
+    var res = try h.runQuery("CALL geode.fts.search('ghost_doc_idx', 'anything')");
+    defer res.deinit(aa);
+    try testing.expectEqual(@as(usize, 0), res.rows.len);
+}

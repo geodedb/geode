@@ -610,6 +610,16 @@ pub fn maintainFulltextOnWrite(
 /// its call site either, so adding it here is safe for all of them — no
 /// double-lock, no ordering change against the tier-1 table in CLAUDE.md.
 ///
+/// Task 5 (geode-vectorization-and-reranking, 2026-08-29): when the shard
+/// lock's `getPtrUnlocked` misses (the node was evicted from the bounded
+/// cache before this hook ran, though still durable), fall back — OUTSIDE
+/// the shard lock — to `store.getNodePropertyValue`'s hydrate-on-miss path.
+/// That accessor is self-locking (`getOrHydratePtr`) and, like the resident
+/// fast path above, does NOT decrypt FLE — the same ciphertext-indexing
+/// posture is preserved on both paths. `error.NodeNotFound` there maps to
+/// the same "vanished, no fallback possible" `false` return as the old
+/// resident-only miss.
+///
 /// Residual: this bypasses FLE decryption (`store.getNodeProperty` decrypts
 /// FLE-encrypted fields; the raw shard-locked copy here does not — RBAC/FLE
 /// role state is request-scoped and unsafe to read this late in a
@@ -653,6 +663,7 @@ fn indexNodeDocument(
         for (raw_props.items) |rp| allocator.free(rp.text);
         raw_props.deinit(allocator);
     }
+    var resident = false;
     {
         // Everything that touches the node's interior stays inside this
         // guard: the copy (allocator.dupe) must complete before the shard
@@ -660,9 +671,37 @@ fn indexNodeDocument(
         // gone.
         store.nodes.lockShardShared(node_id);
         defer store.nodes.unlockShardShared(node_id);
-        const np = store.nodes.getPtrUnlocked(node_id) orelse return false; // node gone since the write committed
+        if (store.nodes.getPtrUnlocked(node_id)) |np| {
+            resident = true;
+            for (properties) |prop| {
+                const pv = np.properties.get(prop) orelse continue;
+                const text = switch (pv) {
+                    .String => |s| s,
+                    else => continue, // only string is indexable for FTS
+                };
+                if (text.len == 0) continue;
+                try raw_props.append(allocator, .{ .key = prop, .text = try allocator.dupe(u8, text) });
+            }
+        }
+    }
+
+    // Fast path: resident node — copy property text under the shard's
+    // SHARED lock (realloc-safe). Fallback: hydrate-on-miss via
+    // getNodePropertyValue (self-locking, NO FLE decrypt — ciphertext
+    // indexing posture preserved), for nodes evicted from the bounded
+    // cache between write-commit and this hook.
+    // CANARY: REQ=REQ-FTS-MAINT-HYDRATE-001; FEATURE="FullText"; ASPECT=NonResidentFallback; STATUS=TESTED; TEST=tests/test_fts_bulk_merge_maintenance.zig; OWNER=fts; UPDATED=2026-08-29
+    if (!resident) {
+        // Never call the hydrating accessor while the shard lock is held —
+        // it is self-locking (getOrHydratePtr) and re-entrant cache calls
+        // are forbidden (node_cache.zig's lockShardShared contract). We are
+        // outside that lock here.
         for (properties) |prop| {
-            const pv = np.properties.get(prop) orelse continue;
+            const pv = store.getNodePropertyValue(node_id, prop) catch |err| switch (err) {
+                error.NodeNotFound => return false, // genuinely gone — no fallback possible
+                error.PropertyNotFound => continue,
+                else => return err,
+            };
             const text = switch (pv) {
                 .String => |s| s,
                 else => continue, // only string is indexable for FTS
