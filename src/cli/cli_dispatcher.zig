@@ -995,6 +995,7 @@ fn handleMcpCommand(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usi
     var use_stdio: bool = false;
     var bearer_token: ?[]const u8 = null;
     var no_auth: bool = false;
+    var read_only: bool = false;
     var ai: usize = start_idx + 1;
 
     while (ai < argv.len) : (ai += 1) {
@@ -1020,6 +1021,9 @@ fn handleMcpCommand(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usi
             no_auth = true;
         } else if (std.mem.eql(u8, argv[ai], "--stdio")) {
             use_stdio = true;
+        } else if (std.mem.eql(u8, argv[ai], "--read-only")) {
+            // CANARY: REQ=REQ-MCP-READ-ONLY-001; FEATURE="MCPReadOnly"; ASPECT=CliFlag; STATUS=TESTED; TEST=tests/test_mcp_read_only.zig; OWNER=mcp; UPDATED=2026-08-28
+            read_only = true;
         } else if (std.mem.eql(u8, argv[ai], "-h") or std.mem.eql(u8, argv[ai], "--help")) {
             printMcpHelp();
             return;
@@ -1055,10 +1059,12 @@ fn handleMcpCommand(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usi
         .http_port = http_port,
         .auth_mode = .none,
         .bearer_token = bearer_token,
+        .read_only = read_only,
     } else .{
         .geode_endpoint = endpoint,
         .http_port = http_port,
         .bearer_token = bearer_token,
+        .read_only = read_only,
     });
     defer server.deinit();
 
@@ -1088,6 +1094,8 @@ fn printMcpHelp() void {
     std.debug.print("  --port <port>       Use HTTP transport on given port (default: 8080)\n\n", .{});
     std.debug.print("Options:\n", .{});
     std.debug.print("  -e, --endpoint      Geode server endpoint (default: localhost:3141)\n", .{});
+    std.debug.print("  --read-only         Refuse mutating/unparseable query tool calls\n", .{});
+    std.debug.print("                      pre-wire (fail-closed; no data modification)\n", .{});
     std.debug.print("  -h, --help          Show this help message\n\n", .{});
     std.debug.print("Description:\n", .{});
     std.debug.print("  Starts a Model Context Protocol server that exposes Geode as an\n", .{});
