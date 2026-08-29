@@ -9543,6 +9543,23 @@ pub fn build(b: *std.Build) void {
     const eng3914_step = b.step("test-eng3914", "Run ENG-3914 general-path MERGE idempotency regressions");
     eng3914_step.dependOn(&run_eng3914_tests.step);
 
+    // ENG-3914 RC-2: cross-session MERGE duplication. The bulk MERGE path
+    // serializes same-key writers on the striped `mg.merge_tuple_locks` table
+    // but RELEASES `mg.rwlock` SHARED between its probe and its insert; the
+    // general path (`executeMerge`) never takes that tuple lock and relies
+    // only on the whole-graph EXCLUSIVE the connection handler wraps around
+    // the statement. bulk-vs-general therefore share no mutual exclusion and
+    // both mint a node for one merge key.
+    //
+    // NOT wired into the aggregate `test` step while the defect is open —
+    // add the `shardDep(test_step, ...)` line alongside the fix.
+    const eng3914_xpath_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_eng3914_cross_path_merge_race.zig"), .target = target, .optimize = optimize });
+    eng3914_xpath_test_mod.addImport("geode", root_mod);
+    const eng3914_xpath_tests = b.addTest(.{ .root_module = eng3914_xpath_test_mod });
+    const run_eng3914_xpath_tests = b.addRunArtifact(eng3914_xpath_tests);
+    const eng3914_xpath_step = b.step("test-eng3914-cross-path", "Run ENG-3914 RC-2 cross-path (bulk vs general) MERGE race regressions");
+    eng3914_xpath_step.dependOn(&run_eng3914_xpath_tests.step);
+
     // ENG-3916(b): `id()` had no .Edge arm (a relationship's identity could not
     // be named in any expression) and `toString(NULL)` returned the STRING
     // "null" in both implementations, breaking GQL null propagation.
