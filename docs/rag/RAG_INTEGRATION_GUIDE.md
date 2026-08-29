@@ -383,6 +383,12 @@ engine's documented residuals.
   (`src/gql/parser.zig` `parseExplainStatement`), useful for verifying the
   row-visibility assumptions in §1 hold for a specific query shape before
   it goes to production.
+- **`CALL geode.fts.*` is scoped to the default graph.** A node bulk-MERGE'd
+  into a non-default graph is maintained into that graph's own fulltext
+  index, which `geode.fts.search`/`phrase`/`proximity`/`rebuild` cannot
+  currently query — target the default graph, or verify which graph a
+  fulltext index actually covers, before relying on these procedures for
+  cross-graph recall.
 
 ## Related
 

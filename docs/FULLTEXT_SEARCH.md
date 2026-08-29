@@ -197,6 +197,11 @@ After an index exists, ordinary write paths keep it current automatically:
   single-writer-thread contract. Bulk-MERGE'd nodes are searchable
   **immediately**, no rebuild required.
 
+> **Graph scope:** `CALL geode.fts.*` operates on the default graph — a node
+> bulk-MERGE'd into a non-default graph is maintained into *that* graph's own
+> fulltext index, which `geode.fts.search`/`phrase`/`proximity`/`rebuild`
+> cannot currently query.
+
 ### Recovery: `CALL geode.fts.rebuild`
 
 `CALL geode.fts.rebuild('<index>')` drops, recreates, and re-backfills a

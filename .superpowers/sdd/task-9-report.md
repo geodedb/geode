@@ -1,197 +1,382 @@
-# Task 9 Report: Route Security CSPRNG to the FIPS DRBG
+# Task 9 Report: Full validation sweep
 
-## Status: COMPLETE
+## Status: DONE — no genuine regressions found from Tasks 1-8; no fixes needed; no commits made
 
----
+Scope: validate tasks 1-8 (FTS row-visibility authorization, knn metric-mismatch
+validation, `geode.fts.rebuild`, bulk-MERGE FTS maintenance, per-request
+read-only floor, MCP read-only mode, SHOW CAPABILITIES discovery, and the RAG
+orchestrator prompt/guide) did not break anything, then run the full local +
+harness gate honestly.
 
-## Security Sites Routed to `cb.Csprng.bytes` (46 call sites, 21 source files)
-
-### Already done by earlier tasks (Tasks 2/4/5)
-
-- `types/cryptographic.zig` — `KeyPair.generate()` fully routes through `cb.Sig.generate()` (FIPS keygen inside EVP_PKEY_keygen). The `compat_fillRandom` definition remains but is never called for security paths.
-
-### Newly routed (Task 9)
-
-| File | Sites | Material |
-|------|-------|----------|
-| `security/tde_nonce_gen.zig` | 2 | AES-GCM nonce (Random mode + `generateSecureNonce`) |
-| `storage/tde_file_encryption.zig` | 1 | File-encryption nonce |
-| `storage/backup.zig` | 1 | Backup-encryption nonce |
-| `keys/manager.zig` | 2 | TRK and master-key rotation material |
-| `security/key_provider.zig` | 4 | Data-key, backup-key, test regression buffers |
-| `security/kms.zig` | 1 | AES-GCM nonce in `wrapLocalDev` |
-| `security/kms_remote.zig` | 5 | KEK, attestation seed, nonce, plaintext (test), local fallback key |
-| `cli/user_storage_secure.zig` | 3 | Encryption key, password salt, nonce |
-| `execution/auth_dispatch.zig` | 1 | Generated-password random bytes |
-| `execution/storage_dispatch.zig` | 1 | TDE master-key rotation |
-| `security/authn.zig` | 2 | Session token (generate + rotate) |
-| `security/user_manager.zig` | 1 | TOTP/MFA secret |
-| `security/key_rotation.zig` | 4 | Key material (×2), nonce (×2) |
-| `security/geode_auth_lib.zig` | 2 | Generated-password buf, password salt |
-| `security/tde_key_manager.zig` | 8 | Master key (×3), key+nonce, IKM (×2), tenant nonce |
-| `security/external_kms_client.zig` | 2 | KEK, AES-GCM nonce |
-| `security/tde.zig` | 1 | Shamir secret-sharing polynomial coefficients |
-| `cli/user_storage_simple.zig` | 1 | Password salt |
-| `cli/cli_auth_helpers.zig` | 1 | Secure-password generation |
-| `cli/session_cli.zig` | 1 | Session token rotation |
-| `cli/geode_audit_verify.zig` | 1 | Ed25519 key-pair seed for test |
-
-**Total: 46 security call sites routed to cb.Csprng.bytes**
-
-### build.zig wiring additions
-
-- `auth_mod` (geode_auth_lib.zig): added `crypto_backend` dependency
-- `graph_store_mod`: added `crypto_backend` dependency (transitive via tde_file_encryption.zig)
-
-### Caller updates from return-type propagation
-
-- `tde_nonce_gen.generateSecureNonce`: `void` → `!void`; callers in tde.zig updated with `try`
-- `tde_nonce_gen.NonceGenerator.generate`: `void` → `!void` (Random branch only)
-- `cli/cli_auth_helpers.generateSecurePassword`: `![32]u8`; callers in `user_mgmt_cli.zig` updated
-- `security/authn.rotate`: `void` → `!void`
-- `security/kms_remote.Server.init`: `Server` → `!Server`; `RemoteKmsServer.init`: `RemoteKmsServer` → `!RemoteKmsServer`; 12 test callers in `tests/canary_remote_kms.zig`, `canary_remote_kms_hardening.zig`, `test_remote_kms_auth_negative.zig`, `test_remote_kms_attestation.zig`, `test_remote_kms_unwrap_attest.zig`, `test_external_kms_remote.zig` updated with `try`
+Repo state at start: `main` @ `d2b19c52` (14 commits ahead of `origin/main`,
+tasks 1-8 already committed and reviewed per `.superpowers/sdd/progress.md`).
+Environment: `GEODE_MASTER_KEY` set to the documented 32-byte test value where
+required; Zig 0.16.0.
 
 ---
 
-## Non-Security Sites Annotated `// fips-exempt: non-security`
+## Step 1 — `make fmt`
 
-| File | Sites | Reason |
-|------|-------|--------|
-| `storage/id_map.zig` | 1 | UUID v7 random bits |
-| `distributed/sharding.zig` | 4 | Shard-id generation |
-| `distributed/raft_consensus.zig` | 1 | Election-timeout jitter |
-| `distributed/nonce_tracker.zig` | 1 | Frame-coordination nonce (not key material) |
-| `index/selectivity.zig` | 2 | Reservoir sampling |
-| `types/evaluator_functions.zig` | 1 | GQL `random()` PRNG seed |
-| `index/blind_index.zig` | 3 | Test-only BIK (test-harness only) |
-| `execution/storage_dispatch.zig` | 1 | Mock auth token for test harness |
-| `security/tde.zig` | 4 | Test-plaintext fills (lines 258, 317, 729, 924) |
+| Command | Result |
+|---|---|
+| `make fmt` | ran `zig fmt src/`, `zig fmt tests/`, `zig fmt build.zig` — no reformatting needed |
+| `git status --short` after | only pre-existing untracked `.glab-ci-autoheal/` scratch dir — **no residual diff** |
 
-**Total: 18 non-security sites annotated**
+**PASS.**
 
 ---
 
-## Ambiguous Sites and Classification
+## Step 2 — Targeted steps (run serially, `GEODE_MASTER_KEY` set)
 
-- **`nonce_tracker.generateNonce`**: Used for distributed-coordination frame nonces (anti-replay), NOT encryption key material. Classified non-security (fips-exempt). The docstring says "cryptographically secure random nonce" but this is a coordination identifier, not a secret — the nonce tracker deduplicates frames, not encrypts. Fail-safe classification would route it through cb.Csprng; however since it's a local ordering nonce with no key-derivation role, fips-exempt is appropriate.
-
-- **`blind_index.zig` BIK generation in tests**: In tests only; production BIK derivation goes through the fle_lib (external). Annotated fips-exempt for test-only.
-
-- **`tde.zig` `compat_fillRandom(data)` lines 729, 797, 828, 891, 924**: Context reads show these are filling test/simulation data buffers (plaintext for TDE benchmark/test encrypt-decrypt rounds), NOT key material or nonces. Annotated fips-exempt.
-
-- **`geode_audit_verify.zig` seed**: Used for Ed25519 keypair generation in a test verification step. This IS security material (private key seed). Routed through cb.Csprng.
-
----
-
-## Both-Modes Test Results
-
-### `-Dfips=false` (targeted tests)
-
-```
-zig build test-auth-enforcement test-gap0881 test-gap0843-tenant-tde test-fips-chacha-failclose test-sec-sess-log test-gps-fle-enforcement test-gps-metadata-filtering test-gps-policy-persistence -Dfips=false
-```
-
-Exit: 0 — all pass
-
-### `-Dfips=true` (targeted tests)
-
-```
-OPENSSL_CONF=/usr/local/ssl/ssl/openssl.cnf zig build test-auth-enforcement test-gap0881 test-gap0843-tenant-tde test-fips-chacha-failclose test-gps-fle-enforcement test-sec-sess-log -Dfips=true -Dopenssl_path=/usr/local/ssl
-```
-
-Exit: 0 — all pass
-
-Full `zig build test` run in progress at commit time; pre-existing failures (cluster TLS, storage-path misses) are unrelated to this task.
-
----
-
-## Concerns
-
-1. **`compat_fillRandom` definitions left in place**: The function definitions remain in each file (still needed for non-security annotated sites or for legacy reference). Future cleanup task could remove them file-by-file as each is confirmed fully replaced.
-
-2. **Return-type propagation**: The largest blast radius was `RemoteKmsServer.init` / `Server.init` in `kms_remote.zig` — 12 test callers had to be updated. All found and fixed.
-
-3. **`tde.zig` Shamir polynomial coefficients**: Classified security (secret-sharing polynomial shares must be secret). Routed to cb.Csprng.
-
-4. **`nonce_tracker` classification**: Could argue either way. The nonce tracker docstring says "cryptographically secure" but the use is coordination (replay-detection), not key-derivation. Left as fips-exempt; if auditors disagree, routing to cb.Csprng (no other change needed) would be the reversal.
-
----
-
-## Task 9 Fix — Gap Review Closure (2026-06-24)
-
-Review of the Task 9 CSPRNG routing found 3 missed security RNG sites and 7 missing `fips-exempt` annotations. This section documents the fix.
-
-### 3 Missed Security Sites Routed to `cb.Csprng.bytes`
-
-| File | Line | Function | Material | Caller Change |
-|------|------|----------|----------|---------------|
-| `src/security/user_management.zig` | 907 | `generateSecurePassword` | 24-byte generated user password | Already `![]const u8`; `try` added |
-| `src/security/auth_graph_manager.zig` | 736 | `bootstrapDefaultAdmin` (admin pw block) | 16-byte random → 32-char hex admin password | Already `!void`; `try` added |
-| `src/security/auth_graph_manager.zig` | 1303 | `autoGenerateHmacKeyFile` | 256-bit HMAC key | Already `!HmacKeyResult`; `try` added |
-
-Additional security routing discovered in sweep:
-
-| File | Line | Function | Material |
-|------|------|----------|----------|
-| `src/transport/grpc_server.zig` | 626 | `GeodeGrpcServer.init` | 32-byte gRPC session key (GAP-0518) |
-| `src/tools/key_rotate.zig` | 93 | `generateKey` | TDE `KEY_BYTES`-length key |
-
-**Total new security routings: 5 sites.**
-
-### 7 Missing `fips-exempt` Annotations in `src/security/tde.zig`
-
-| Original Line | New Line (approx) | Context | Annotation |
+| # | Step | rc | Result |
 |---|---|---|---|
-| ~961 | ~962 | `measureOverhead` 1024-byte test buffer | `// fips-exempt: non-security test-plaintext fill` |
-| ~1006 | ~1008 | `simulateOLTPWorkload` 256-byte test buffer | `// fips-exempt: non-security test-plaintext fill` |
-| ~1053 | ~1056 | `testKeyZeroization` fill 5 keys before zeroization | `// fips-exempt: non-security test-key fill for zeroization-verification (test-only)` |
-| ~1155 | ~1159 | `testKmsWrapUnwrap` test_key (plaintext input to encrypt()) | `// fips-exempt: non-security test PLAINTEXT (the value is the data being encrypted by encrypt(), NOT the AES key/nonce; encrypt() derives its own key+nonce)` |
-| ~1203 | ~1208 | `testKmsAttestation` attestation nonce | `// fips-exempt: non-security attestation replay-nonce (signed, not an AEAD IV or key)` |
-| ~1375 | ~1381 | `testKeyRecovery` 128-byte test buffer | `// fips-exempt: non-security test-plaintext fill` |
-| ~1450 | ~1457 | `testCorruptedKeyHandling` 128-byte test buffer | `// fips-exempt: non-security test-plaintext fill` |
+| 1 | `test-fts-authorization` | 0 | PASS |
+| 2 | `test-knn-metric-mismatch` | 0 | PASS |
+| 3 | `test-fts-rebuild` | 0 | PASS |
+| 4 | `test-fts-bulk-merge-maintenance` | 0 | PASS |
+| 5 | `test-read-only-execute` | 0 | PASS |
+| 6 | `test-mcp-read-only` | 0 | PASS |
+| 7 | `test-show-capabilities` | 0 | PASS |
+| 8 | `test-fts-e2e` | 0 | PASS |
+| 9 | `test-using-vector-index` | 0 | PASS |
+| 10 | `test-knn-scan-race` | 0 | PASS |
+| 11 | `test-transport-parity` | 0 | PASS |
+| 12 | `test-grpc-raw-io` | 0 | PASS |
+| 13 | `test-gap0516` | 0 | PASS |
+| 14 | `test-auth-rate-limiter` | 0 | PASS |
+| 15 | `test-scan-ingest-race` | 0 | PASS |
+| 16 | `test-cluster-replicable-mutations` | 0 | PASS (300s timeout raised to 320s per the "long steps, be patient" rule; completed cleanly with **no output**, which is normal silent-pass `zig build test` behavior) |
 
-### Geode-Wide Sweep Results
+All 16 step names were verified verbatim against `build.zig` (`grep -n "\"<name>\"" build.zig`) before running — no renames needed.
 
-All additional unclassified sites found and resolved:
+**Note on `test-cluster-replicable-mutations`:** `docs/KNOWN_TEST_ISSUES.md` (dated
+2026-06-10) documents this step as an *intentionally-red* TDD reproduction
+that times out at 300s by design (cluster write-replication gaps: edge
+CREATE, DELETE/DETACH DELETE, MERGE, ungated MATCH…SET didn't replicate).
+In this run it **passed** within 320s. This is not a regression — it is
+either host-speed variance or replication work that landed on `main` between
+the 2026-06-10 baseline and the current commit (`d2b19c52`, 14 commits ahead
+of `origin/main`). Out of scope for Task 9 to investigate further (not part
+of tasks 1-8's change surface); flagged here for whoever refreshes
+`KNOWN_TEST_ISSUES.md` next.
 
-| File | Line | Classification | Reason |
-|------|------|----------------|--------|
-| `src/benchmarks/tde_bench.zig` | 68 | fips-exempt | benchmark test-plaintext fill |
-| `src/benchmarks/tde_bench.zig` | 110 | fips-exempt | benchmark test-plaintext fill |
-| `src/crypto/hkdf.zig` | 78 | fips-exempt | unit-test fixture master key (test-only, not production) |
-| `src/ml/integration_enhanced.zig` | 615 | fips-exempt | ML random-walk PRNG seed (node2vec, not cryptographic) |
-| `src/ml/integration_enhanced.zig` | 723 | fips-exempt | ML embedding weight initialization (not cryptographic) |
-| `src/storage/s3_backup.zig` | 287 | fips-exempt | retry backoff jitter (timing only) |
-| `src/transport/grpc_server.zig` | 160 | fips-exempt | session identifier (non-secret, not key material) |
-| `src/transport/grpc_server.zig` | 167 | fips-exempt | throttle delay jitter (timing only) |
-| `src/transport/grpc_server.zig` | 626 | ROUTED → cb.Csprng | gRPC session key (32-byte crypto key) |
-| `src/tools/key_rotate.zig` | 93 | ROUTED → cb.Csprng | TDE key generation |
-| `src/transactions/two_phase_commit.zig` | 57 | fips-exempt | transaction XID (coordination ID, not secret) |
-| `src/execution/crud_operations.zig` | 1890 | fips-exempt | idempotency key (coordination token, not secret) |
-| `src/migration/ledger.zig` | 94 | fips-exempt | temp-file suffix (collision avoidance, not secret) |
-| `src/server/quic_connection_handler.zig` | 5118 | fips-exempt | session identifier (non-secret) |
-| `src/eval/call_handlers.zig` | 538 | fips-exempt | GQL `random()` function (query evaluation) |
+**Step 2: ALL 16/16 PASS.**
 
-### build.zig Additions
+---
 
-- `auth_graph_manager_mod.addImport("crypto_backend", crypto_backend_mod)` — auth_graph_manager module
-- `auth_graph_manager_tests.root_module.addImport("crypto_backend", crypto_backend_mod)` — test artifact
-- `auth_enforcement_test_mod.addImport("crypto_backend", crypto_backend_mod)` — transitive (imports user_management.zig)
-- `key_rotate_exe.root_module.addImport("crypto_backend", crypto_backend_mod)` — key_rotate tool
+## Step 3 — Full suite, sharded (`CI=1 GEODE_SKIP_SUBPROC_CLUSTER=1 zig build test -Dtest-shard-total=4 -Dtest-shard-index=N`)
 
-### Zero Unclassified RNG Sites Confirmation
+| Shard | rc | "failed command" tree-node count | Notes |
+|---|---|---|---|
+| 0 | 0 | 15 | self-skipping subprocess-cluster / protobuf-union-gated tests (documented pattern) |
+| 1 | 0 | 22 | same pattern |
+| 2 | 0 | 24 | same pattern |
+| 3 | 0 | 11 | same pattern |
 
-After this fix, every `compat_fillRandom(` and bare OS getrandom call site in `src/` is either:
+Each shard's outer `zig build` process exited 0 (captured explicitly via
+`echo "shardN rc=$?"` appended to each log, not inferred from the Bash-tool
+wrapper's own exit code). The "failed command: .../test --listen=-" lines in
+each log are the zig-internal IPC tree-renderer noting sub-binary exits — this
+is the exact same pattern `docs/KNOWN_TEST_ISSUES.md` describes for the
+sharded gate (opted-out subprocess-cluster tests + protobuf-union-gated 2PC
+self-skips), and none of them dragged down the aggregate `test` step's exit
+code. No `error:` lines, no assertion failures, no "Build Summary: N/M failed"
+in any shard log.
 
-- Routed to `cb.Csprng.bytes` (security material), OR
-- Annotated `// fips-exempt: non-security <reason>` (non-security material)
+Given the monolithic `zig build test` protobuf union-submessage limitation
+noted in CLAUDE.md, the **sharded** invocation was used exactly as directed
+by the task brief (not the un-sharded aggregate) — this is the documented
+canonical pre-push gate, distinct from the blocked monolithic path.
 
-No unclassified sites remain.
+Known flakes named in the brief (`test_edge_popular_parent_throughput`,
+`test_match_set_label_scan_regression`, `test_where_scan_writer_progress`)
+did not surface as failures in any shard, so no serial re-verification was
+required. `test-gap0866` and `test-quic-condition-cadence` are pre-broken
+per the brief; the sharded run does not isolate individual named `test-*`
+steps so their pre-broken status could not directly regress this gate (they
+are absent from the shard tree entirely under the sharded runner, consistent
+with the documented "opted-out" pattern).
 
-### Both-Modes Test Results (Task 9 Fix)
+**Step 3: ALL 4/4 SHARDS PASS (rc=0).**
 
-**`-Dfips=false` targeted** (`test-auth-graph-manager-src`, `test-auth-enforcement`, `test-crypto-backend-smoke`, `test-first-boot-admin-breadcrumb`): Exit 0 — all pass.
+---
 
-**`-Dfips=true` targeted** (`test-crypto-backend-smoke`, `test-auth-enforcement`, `test-fips-chacha-failclose`): Exit 0 — all pass. The `test-auth-graph-manager-src` failures under `-Dfips=true` are pre-existing (Argon2id returns `error.FipsUnsupported` by design; unrelated to CSPRNG routing).
+## Step 4 — Harness specs
 
-Full `zig build test -Dfips=false` run in progress at commit time; no new failures introduced.
+Built the production binary first: `zig build` → rc=0,
+`zig-out/bin/geode` (273 MB) produced cleanly.
+
+`SPEC=` must be the bare filename (`geodetestlab-cli/specs/` is prepended by
+the Makefile's `test-spec` target) — corrected after an initial invocation
+error.
+
+| Spec | rc | Server started? | Result |
+|---|---|---|---|
+| `knn_metric_mismatch.yml` | 0 | yes ("Server ready on port 56198") | PASS 8/8 |
+| `fts_bulk_merge_visibility.yml` | 0 | yes (port 13000) | PASS 21/21 |
+| `read_only_execute.yml` | 0 | yes (port 59588) | PASS 7/7 |
+| `show_capabilities_discovery.yml` | 0 | yes (port 28221) | PASS 4/4 |
+| `fts_storage_basic.yml` | 0 | yes (port 11249) | PASS 13/13 |
+| `fulltext_search_basic.yml` | 0 | yes (port 49209) | PASS 4/4 |
+| `vector_index_errors.yml` | 0 | yes (port 47118) | PASS 18/18 |
+| `vector_hnsw_comprehensive.yml` | 0 | yes (port 45845) | PASS 24/24 |
+| `authn_rate_limiter.yml` | 0 | yes (port 57122) | PASS 16/16 |
+
+Every log was checked for the literal `Server ready on port ...` line to
+confirm the managed server actually started (not a false-green from the
+runner) — present in all 9 runs, each on a distinct port.
+
+**Step 4: ALL 9/9 SPECS PASS (135/135 individual spec assertions).**
+
+---
+
+## Step 5 — `make pre-commit`
+
+Result: `rc=2` (as expected — some hooks are known-red).
+
+| Hook | Result | Expected red? |
+|---|---|---|
+| `markdownlint` | **Failed** — pre-existing `MD025` (multiple H1s) in `docs/ENTERPRISE_GAPS.md`, `MD029` (ordered-list prefix) in `docs/bugs/2026-06-10-...md` | Yes (brief's 4th known-red) |
+| `hadolint-docker` (Lint Dockerfiles) | **Failed** — pre-existing `DL3066`/`DL3025` info/warning across all repo Dockerfiles | Yes |
+| `goreleaser check` | **Failed** — pre-existing deprecated-property warnings in `.goreleaser.yaml` (`dockers`→`dockers_v2`, `brews` deprecated) | Yes |
+| `detect-diamond-deps` | **Failed** — pre-existing diamond deps in `build.zig.zon` (`fips`, `protobuf`, `quic`, `thread_pool`, `uuid` each have 2-3 version hashes among transitive deps) | Yes |
+| Everything else (`zig fmt` check, governance checks, `.gitlab-ci.yml` lints, CANARY marker lint, `status.csv` sync, CANARY golden tests, Pretty format YAML, etc.) | **Passed** | — |
+
+Exactly the 4 documented known-red hooks were red; nothing else.
+
+**Side effect noted and reverted:** the `markdownlint` hook auto-fixed
+`docs/ENTERPRISE_GAPS.md` in place (inserted blank lines after `##` headings)
+before failing on the un-fixable `MD025` issues. This is pre-existing doc
+formatting unrelated to tasks 1-8 and outside this task's fix authority, so
+it was reverted (`git checkout -- docs/ENTERPRISE_GAPS.md`) to keep the tree
+clean rather than left as a stray uncommitted diff.
+
+**Step 5: PASS (matches the documented 4-known-red baseline exactly).**
+
+---
+
+## Step 6 — `git status` in both repos
+
+### geode (this repo)
+
+```
+On branch main
+Your branch is ahead of 'origin/main' by 14 commits.
+Untracked files:
+ .glab-ci-autoheal/
+```
+
+No tracked-file diff. `.glab-ci-autoheal/` is a pre-existing untracked
+scratch dir (present before this task started) — acceptable per the brief.
+
+### ../geode-test-harness
+
+```
+On branch main
+Your branch is ahead of 'origin/main' by 5 commits.
+Untracked files:
+ reports_baseline/
+ reports_clean/
+ reports_m31/
+ reports_p2/
+ reports_v038/
+ runners/rust_runner/Cargo.lock
+```
+
+No tracked-file diff. `reports_*/` are per-run harness report scratch dirs
+(some pre-existing, some generated by this task's `make test-spec` runs);
+`runners/rust_runner/Cargo.lock` is a pre-existing untracked lockfile. All
+acceptable scratch per the brief.
+
+**Step 6: CLEAN in both repos** (no push performed — orchestrator's job).
+
+---
+
+## Fixes / commits made
+
+**None.** No genuine regression from tasks 1-8 was found anywhere in the
+gate. The only in-flight repo mutation (`markdownlint`'s auto-fix of
+`docs/ENTERPRISE_GAPS.md` in Step 5) was reverted rather than committed,
+since it was pre-existing formatting debt outside this task's authorized
+fix scope (trivial test-expectation fixes caused by tasks 1-8's new
+behavior), not something tasks 1-8 touched.
+
+---
+
+## Summary
+
+| Gate | Result |
+|---|---|
+| 1. `make fmt` | PASS — no residual diff |
+| 2. 16 targeted steps | 16/16 PASS |
+| 3. 4 sharded `zig build test` shards | 4/4 PASS (rc=0 each) |
+| 4. 9 harness specs | 9/9 PASS (135/135 assertions), server confirmed started each run |
+| 5. `make pre-commit` | Only the 4 documented known-red hooks red; everything else green |
+| 6. `git status` both repos | Clean (only acceptable untracked scratch) |
+
+**Overall: DONE.** Tasks 1-8's changes (FTS authorization, knn metric-mismatch
+guard, `geode.fts.rebuild`, bulk-MERGE FTS live maintenance, per-request
+read-only floor, MCP read-only mode, SHOW CAPABILITIES discovery, RAG
+orchestrator docs) introduce no regressions against the full local gate or
+the harness integration specs. No code changes were required or made.
+
+## Final-review fix wave
+
+A separate whole-branch review of the same 9-task series (Tasks 1-8) surfaced
+four findings after this report's original validation sweep. Fixed here,
+one commit per finding, TDD where behavior changed.
+
+### Finding 1 (CRITICAL): read-only floor bypass via MATCH…CALL and CALL{} subquery
+
+**What changed.** `src/query/query_traits.zig`'s `isQueryMutating` checked
+`create_pattern`/`merge_statement`/`set_clauses`/`remove_clauses`/
+`delete_items` but never `q.call_clause` (`MATCH (n) CALL <procedure>`) or
+`q.initial_call_subquery` (`CALL { ... } WITH ... RETURN ...`). A mutating
+procedure invoked through either shape — e.g. `MATCH (n) CALL
+geode.fts.rebuild('idx')` or `CALL { MATCH (n) SET n.k=1 RETURN n } WITH n
+RETURN n` — classified as non-mutating, bypassing the
+`ExecuteRequest.read_only` 42501 floor (`quic_connection_handler.zig`,
+`grpc_server.zig`), the MCP read-only gate (both consume
+`isMutatingProgram` transitively), the GPS role gate, and write-lock
+selection (same classifier, pre-existing hole this fix also closes).
+
+**Design choice / import structure.** `q.call_clause` is now classified via
+`procedure_access.classifyCallProcedure` — the SAME single source of truth
+already used by `isMutatingCallStatement` for standalone `CALL` statements.
+No import-cycle workaround or classifier duplication was needed:
+`query_traits.zig` already imports `procedure_access`, and `CallClause`
+(the `MATCH...CALL` AST node) and `CallProcedure` (the standalone-`CALL`
+AST node) share the exact `procedure`/`yield_items` shape the classifier
+inspects — a zero-cost adapter struct literal bridges the two. An
+unresolved/unlisted procedure name defaults to `.mutating` inside
+`classifyCallProcedure` itself (fail closed), so no extra fail-closed
+handling was needed at the call site. `q.initial_call_subquery` recurses
+into `isQueryMutating` on the inner `*Query`, reusing the existing
+per-clause classification (the parser stores the `CALL { ... }` body as a
+full `ast.Query`, so recursion is exact, not approximate).
+
+**RED (before fix, `zig build test-read-only-execute`):**
+
+```
+error: 'test.read-only classification refuses MATCH...CALL with a mutating procedure' failed
+error: 'test.read-only classification refuses MATCH...CALL geode.fts.rebuild' failed
+error: 'test.read-only classification refuses CALL{}...SET inline subquery' failed
+Build Summary: 4/7 tests passed (3 failed)
+```
+
+`zig build test-mcp-read-only` RED: `test.read-only MCP refuses
+MATCH...CALL geode.fts.rebuild before the wire` failed (4/5 passed).
+
+**GREEN (after fix):** `zig build test-read-only-execute test-mcp-read-only`
+— all pass, including the new read-only-wrapped-CALL-procedure-still-allowed
+canary (`MATCH (n:Doc) CALL geode.fts.search(...)`) confirming no
+over-blocking.
+
+**Commands + results:**
+
+- `zig build test-read-only-execute test-mcp-read-only test-transport-parity
+  test-merge-query-is-mutating test-fts-rebuild test-gap0516` — all green.
+- Harness canaries: `fts_storage_basic.yml` 13/13 PASS,
+  `read_only_execute.yml` 7/7 PASS.
+
+**Commit:** `3cbeeac7` — `fix(security): classify MATCH...CALL and CALL{}
+subqueries in read-only floor`
+
+### Finding 2 (IMPORTANT): unlocked property borrow in bulk-MERGE FTS maintenance
+
+**What changed.** `quic_connection_handler.zig:1316`/`:1532`
+(`executeBulkSimpleMerge` / `executeBulkMergeBatch`) call
+`maintainFulltextOnWrite` AFTER releasing the graph lock. Inside it,
+`indexNodeDocument` (`fts_index_ops.zig`) read node property text via
+`store.getNodeProperty`, whose returned `String` borrows the node's live
+property storage and is valid only while a lock excludes a concurrent
+SET/DELETE for the read's duration (documented contract in
+`graph_store.zig`). With no lock held at these two call sites, a concurrent
+SET/DELETE from another connection racing the same node could
+realloc/free the property mid-read — a UAF (ENG-3954 class).
+
+**Design choice.** Fixed at `indexNodeDocument`, the single call site all 5
+`maintainFulltextOnWrite` callers funnel through (CREATE batch fast path,
+the SET chokepoint, DELETE, raft-apply/snapshot-install, and the two
+bulk-MERGE sites) — benefits every caller with one change instead of
+patching two call sites. It now takes `store.nodes.lockShardShared(node_id)`,
+reads via `getPtrUnlocked`, and COPIES each indexable property's raw text
+(`allocator.dupe`) before releasing the lock; tokenizing and calling into
+the fts engine happen afterward on the owned copies — same
+`lockShardShared` + `getPtrUnlocked` pattern already used by
+`fts_dispatch.filterAuthorizedHits` and `eval.scanVectorKnn` (ENG-3954/#874).
+Deliberately does **NOT** call `store.getNodeProperty` while holding the
+shard lock: that function internally re-acquires the same shard's
+`map_lock` via `getOrHydratePtr`, and `node_cache.zig`'s `lockShardShared`
+doc explicitly forbids nesting ("no re-entrant cache calls while held").
+Verified no other `maintainFulltextOnWrite` caller holds this shard lock at
+its own call site, so adding it inside `indexNodeDocument` cannot
+double-lock or deadlock any existing caller — no ordering change against
+CLAUDE.md's tier-1 lock table.
+
+**Documented residual.** The fix bypasses FLE decryption (the raw
+shard-locked copy is not run through `store.getNodeProperty`'s decrypt
+path — replicating that safely would require carrying RBAC/role context
+this late in a write-committed maintenance hook, and FLE+FTS indexing has
+no existing test coverage). Behavior is byte-for-byte identical to before
+whenever no FLE fields are configured (`fle_integration.hasEncryptedFields()
+== false`, the default/tested posture). When FLE IS configured, an indexed
+field now stores its ciphertext envelope instead of decrypted plaintext —
+narrower exposure than before, not wider.
+
+**Testing.** A true UAF race is timing-dependent and not feasible to pin
+deterministically without invasive fault-injection hooks this module
+doesn't have — per the review's own guidance, relied on the lock-discipline
+reasoning above plus the existing race suites, all green after the fix:
+`zig build test-scan-ingest-race test-bulk-shard-concurrency
+test-fts-bulk-merge-maintenance test-fts-e2e` (exit 0, no failures).
+
+**Commit:** `813d2592` — `fix(fts): copy property text under shard lock in
+bulk-MERGE FTS maintenance`
+
+### Finding 3 (IMPORTANT): status.csv cites gitignored .superpowers briefs + stale header comment
+
+**What changed.** `tools/status_generate.py`'s `os.walk` skip list excluded
+`.git`/`vendor`/`zig-cache`/worktrees/`zig-out`/`docs/superpowers/plans` but
+not `.superpowers/` itself — an entirely gitignored, per-session scratch
+directory whose task briefs (`.superpowers/sdd/task-*-brief.md`) sometimes
+carry CANARY markers copy-pasted from source for planning purposes. Those
+aren't real requirement evidence and don't ship, so `docs/status.csv` was
+not reproducible from tracked source: a machine with an active
+`.superpowers/` session produced 8 extra rows a clean clone or CI checkout
+would never see. Added `"/.superpowers" in root` to the skip list,
+mirroring the existing `/docs/superpowers/plans` exclusion, and regenerated
+`docs/status.csv` — the diff removes exactly the 8 brief-sourced rows
+(`REQ-FTS-ROW-VISIBILITY-001` ×2, `REQ-VECTOR-KNN-METRIC-VALIDATE-001`,
+`REQ-FTS-REBUILD-001`, `REQ-FTS-BULK-MERGE-LIVE-001`,
+`REQ-EXEC-READ-ONLY-REQUEST-001` ×2, `REQ-MCP-READ-ONLY-001`); every
+legitimate source-file row is preserved.
+
+Same commit: fixed the stale header comment in
+`tests/test_cluster_replicable_mutations.zig:824-836` ("At HEAD each of
+these surfaces is completely ungated ... red run") — this has been the
+green fail-closed pin since the 2026-06-10 fix landed
+(`docs/bugs/2026-06-04-cluster-raft-no-stable-quorum-writes-time-out.md`).
+Rewrote it to describe current reality and point at CLAUDE.md's
+"Cluster-mode fail-closed surfaces" section for the up-to-date gated-surface
+list.
+
+**Verification.** `make status-generate-test` (28/28 golden tests) and
+`zig build test-cluster-replicable-mutations` (7/7, including "unreplicated
+write surfaces fail closed") both green.
+
+**Commit:** `2bddce30` — `chore(status): exclude .superpowers/ from CANARY
+status generation`
+
+### Finding 4 (MINOR): graph-scope caveat for `CALL geode.fts.*`
+
+Added a one-sentence caveat to both `docs/rag/RAG_INTEGRATION_GUIDE.md` §8
+(FTS operational notes) and `docs/FULLTEXT_SEARCH.md` (Live Maintenance
+section): `CALL geode.fts.*` operates on the default graph — a node
+bulk-MERGE'd into a non-default graph is maintained into that graph's own
+index, which the procedures cannot currently query. Verified against
+`src/execution/fts_dispatch.zig`, which resolves every `geode.fts.*`
+procedure via `graph_store.DEFAULT_GRAPH_NAME` unconditionally.
+
+**Commit:** (this report append, folded into the same commit as the docs
+change — see repo log)
