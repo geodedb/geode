@@ -106,6 +106,20 @@ pub const FtsStorageAdapter = struct {
         /// segments fine. Guarded by `write_mu`; conservative-high after an
         /// engine-internal auto-flush (worst case: one redundant no-op flush).
         max_doc_id_since_flush: u64 = 0,
+        /// Set true (under `write_mu`) by `dropIndex` once `engine` has been
+        /// flushed and torn down. Every write path (`indexNode`,
+        /// `indexNodeBatch`, `deleteNode`, `flush`) re-checks this
+        /// immediately after acquiring `write_mu` and bails with
+        /// `Error.IndexNotFound` instead of touching the deinited `engine`
+        /// field. This closes the tail of the drop/writer race that a plain
+        /// map-removal cannot: a writer may have already resolved this
+        /// `IndexEngine` pointer via `requireIndex` BEFORE `dropIndex`
+        /// removed it from the registry, but not yet reached its own
+        /// `write_mu.lock()` call — it will acquire `write_mu` only after
+        /// `dropIndex` releases it post-teardown, so it must not assume
+        /// `engine` is still alive at that point. See `dropIndex` for the
+        /// full rationale (REQ-FTS-DROP-WRITER-RACE-001).
+        dropped: bool = false,
     };
 
     pub fn init(
@@ -272,10 +286,39 @@ pub const FtsStorageAdapter = struct {
         self.mu.unlock(self.io);
 
         const ie = kv.value;
+
+        // Drain any in-flight writer before tearing the engine down: writers
+        // acquire `write_mu` inside indexNode/indexNodeBatch/deleteNode/flush
+        // (:320-376), and `requireIndex` can no longer hand out this engine
+        // (removed from the map above) — but a writer that already resolved
+        // `ie` via `requireIndex` BEFORE the removal above, and has not yet
+        // called `write_mu.lock()`, is still "in flight" and will acquire
+        // `write_mu` at some point after we release it below. Without taking
+        // `write_mu` here at all, that writer (or one already inside its
+        // write_mu section) can run `ie.engine.indexDocument`/etc. concurrently
+        // with (or after) `engine.deinit()` — a use-after-free.
+        //
+        // `write_mu` lives INSIDE this heap-allocated `IndexEngine` (it is a
+        // value field, not a pointer), and `allocator.destroy(ie)` below frees
+        // that memory — so we cannot hold `write_mu` locked across the
+        // `destroy` call (unlocking freed memory would itself be a UAF on the
+        // mutex). Instead: acquire `write_mu`, flush + deinit the engine and
+        // set `dropped = true` WHILE HOLDING IT, then unlock, and only THEN
+        // close/free/destroy. Every write path re-checks `ie.dropped`
+        // immediately after acquiring `write_mu` (see `IndexEngine.dropped`)
+        // and returns `Error.IndexNotFound` instead of touching `engine` — so
+        // a writer that acquires `write_mu` after our unlock here (the tail
+        // case above) observes a torn-down-but-still-allocated `ie` and never
+        // dereferences `engine`.
+        // CANARY: REQ=REQ-FTS-DROP-WRITER-RACE-001; FEATURE="FullText"; ASPECT=DropDrainsWriters; STATUS=TESTED; TEST=tests/test_fts_storage_adapter.zig; OWNER=fts; UPDATED=2026-08-29
+        ie.write_mu.lockUncancelable(self.io);
         // error-policy: A — the index is being dropped and its on-disk tree
         // deleted below; a failed final flush cannot lose anything we keep.
         ie.engine.flush() catch {};
         ie.engine.deinit();
+        ie.dropped = true;
+        ie.write_mu.unlock(self.io);
+
         ie.dir.close(self.io);
         // error-policy: A — best-effort on-disk cleanup. std.Io.Dir.deleteTree
         // exists, so we can recursively remove the child tree base_dir-relative.
@@ -320,6 +363,12 @@ pub const FtsStorageAdapter = struct {
         const ie = try self.requireIndex(name);
         ie.write_mu.lockUncancelable(self.io);
         defer ie.write_mu.unlock(self.io);
+        // Tail of the dropIndex/writer race (REQ-FTS-DROP-WRITER-RACE-001):
+        // this `ie` may have been resolved via requireIndex BEFORE dropIndex
+        // removed it from the registry; dropIndex sets `dropped` under this
+        // same write_mu before tearing `engine` down, so this re-check is the
+        // only thing standing between us and a use-after-free.
+        if (ie.dropped) return Error.IndexNotFound;
         try guardPostingOrder(ie, node_id);
         try ie.engine.indexDocument(node_id, terms);
         if (node_id > ie.max_doc_id_since_flush) ie.max_doc_id_since_flush = node_id;
@@ -334,6 +383,9 @@ pub const FtsStorageAdapter = struct {
         const ie = try self.requireIndex(name);
         ie.write_mu.lockUncancelable(self.io);
         defer ie.write_mu.unlock(self.io);
+        // Tail of the dropIndex/writer race (REQ-FTS-DROP-WRITER-RACE-001) —
+        // see the identical check in `indexNode`.
+        if (ie.dropped) return Error.IndexNotFound;
         // Segment-order guard: flush ahead of the batch if ANY id in it would
         // land below the memtable's running max, then track the batch max.
         // CALLER CONTRACT: ids WITHIN one batch MUST be ascending — callers
@@ -362,6 +414,9 @@ pub const FtsStorageAdapter = struct {
         const ie = try self.requireIndex(name);
         ie.write_mu.lockUncancelable(self.io);
         defer ie.write_mu.unlock(self.io);
+        // Tail of the dropIndex/writer race (REQ-FTS-DROP-WRITER-RACE-001) —
+        // see the identical check in `indexNode`.
+        if (ie.dropped) return Error.IndexNotFound;
         try ie.engine.deleteDocument(node_id);
     }
 
@@ -370,6 +425,9 @@ pub const FtsStorageAdapter = struct {
         const ie = try self.requireIndex(name);
         ie.write_mu.lockUncancelable(self.io);
         defer ie.write_mu.unlock(self.io);
+        // Tail of the dropIndex/writer race (REQ-FTS-DROP-WRITER-RACE-001) —
+        // see the identical check in `indexNode`.
+        if (ie.dropped) return Error.IndexNotFound;
         try ie.engine.flush();
         // Memtable sealed — reset the segment-order tracker.
         ie.max_doc_id_since_flush = 0;

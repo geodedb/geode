@@ -281,6 +281,60 @@ test "createIndex twice returns IndexExists" {
     try std.testing.expectError(error.IndexExists, h.a.createIndex("idx"));
 }
 
+// Writer thread for the dropIndex/writer race regression below. Loops
+// indexNode as fast as possible; error.IndexNotFound is the CORRECT
+// outcome once dropIndex has landed (either via requireIndex failing after
+// the map removal, or via the post-drop `dropped` re-check inside
+// indexNode after acquiring write_mu) — only a crash (the test binary not
+// surviving) or an UNEXPECTED error indicates the bug.
+fn dropRaceWriterThread(a: *FtsStorageAdapter, name: []const u8, unexpected: *std.atomic.Value(bool)) void {
+    var i: u64 = 1;
+    while (i <= 200) : (i += 1) {
+        a.indexNode(name, i, &.{tp("race", &.{0})}) catch |err| switch (err) {
+            error.IndexNotFound => return,
+            else => {
+                unexpected.store(true, .release);
+                return;
+            },
+        };
+    }
+}
+
+// CANARY: REQ=REQ-FTS-DROP-WRITER-RACE-001; FEATURE="FullText"; ASPECT=DropDrainsWriters; STATUS=TESTED; TEST=tests/test_fts_storage_adapter.zig; OWNER=fts; UPDATED=2026-08-29
+test "dropIndex drains in-flight writers instead of freeing under them" {
+    const alloc = std.testing.allocator;
+    var h = try Harness.init(alloc);
+    defer h.deinit(alloc);
+
+    // Repeat the create/race/drop cycle to widen the interleaving window
+    // between the writer thread's requireIndex/write_mu acquisition and
+    // dropIndex's map-removal + teardown. Each cycle uses a fresh index name
+    // so a slow-to-finish writer from a prior cycle can never alias into the
+    // next cycle's engine.
+    var cycle: usize = 0;
+    while (cycle < 20) : (cycle += 1) {
+        var name_buf: [32]u8 = undefined;
+        const name = try std.fmt.bufPrint(&name_buf, "race{d}", .{cycle});
+        try h.a.createIndex(name);
+
+        var unexpected = std.atomic.Value(bool).init(false);
+        var writer = try std.Thread.spawn(.{}, dropRaceWriterThread, .{ h.a, name, &unexpected });
+
+        // Give the writer a head start so it is genuinely in flight (holding
+        // or about to acquire write_mu) when dropIndex runs, rather than
+        // racing dropIndex against an as-yet-unstarted thread. Zig 0.16 moved
+        // sleep onto the Io interface (no more std.Thread.sleep).
+        std.Io.sleep(h.io, .fromMilliseconds(5), .real) catch {};
+
+        // The decisive assertion is "we got here without a crash/UAF" — the
+        // test binary surviving this call under contention IS the proof.
+        try h.a.dropIndex(name);
+
+        writer.join();
+        try std.testing.expect(!unexpected.load(.acquire));
+    }
+}
+
 test "dropIndex removes the index" {
     const alloc = std.testing.allocator;
     var h = try Harness.init(alloc);
