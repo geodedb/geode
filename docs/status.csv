@@ -1331,7 +1331,11 @@ REQ-FTS-ROW-VISIBILITY-001,FullText,ProximityRowFilter,TESTED,,,security,2026-08
 REQ-FTS-ROW-VISIBILITY-001,FullText,RowVisibilityCombinator,TESTED,,,security,2026-08-28,src/execution/match_operations.zig,294
 REQ-FTS-ROW-VISIBILITY-001,FullText,SearchRowFilter,TESTED,,,security,2026-08-28,src/execution/fts_dispatch.zig,136
 REQ-FTS-ROW-VISIBILITY-001,FullText,TenantFilteredResults,TESTED,,,security,2026-08-28,tests/test_fts_authorization.zig,1
-REQ-FTS-ROW-VISIBILITY-001,FullText,TenantFilteredResults,TESTED,,,security,2026-08-28,tests/test_fts_authorization.zig,79
+REQ-FTS-ROW-VISIBILITY-001,FullText,TenantFilteredResults,TESTED,,,security,2026-08-28,tests/test_fts_authorization.zig,101
+REQ-FTS-ROW-VISIBILITY-HYDRATE-001,FullText,SearchHitHydrate,TESTED,,,security,2026-08-29,src/execution/fts_dispatch.zig,395
+REQ-FTS-ROW-VISIBILITY-HYDRATE-001,FullText,SearchHitHydrate,TESTED,,,security,2026-08-29,tests/test_fts_authorization.zig,267
+REQ-FTS-ROW-VISIBILITY-HYDRATE-001,FullText,SearchHitHydrateNegativeControl,TESTED,,,security,2026-08-29,tests/test_fts_authorization.zig,347
+REQ-FTS-ROW-VISIBILITY-HYDRATE-001,FullText,SearchHitHydrateTenantScoped,TESTED,,,security,2026-08-29,tests/test_fts_authorization.zig,403
 REQ-FTS-SEARCH-001,FTS,FullTextSearch,TESTED,,,fts,2026-01-16,tests/test_gap_0193_batch4_comprehensive.zig,603
 REQ-FUZZ-DICT-001,FuzzDictionaries,MetadataDerived,EXEMPT,,,tooling,2026-01-03,scripts/generate_fuzz_dict.zig,1
 REQ-FUZZ-DICT-002,FuzzDictionaries,BuildTarget,EXEMPT,,,tooling,2026-01-03,build.zig,5361

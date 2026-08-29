@@ -359,7 +359,20 @@ fn handleFtsRebuild(
 /// The node is read under its shard's SHARED map_lock so the property map
 /// cannot be realloc-freed mid-read by a concurrent writer (same locking
 /// contract as scanVectorKnn after ENG-3954, `git show 448ac850`). A hit
-/// whose node was deleted since indexing (no longer resident) is dropped.
+/// whose node is not resident falls back — OUTSIDE the shard lock — to
+/// `store.nodes.getOrHydrate`, the by-value, concurrency-safe hydrate-on-miss
+/// accessor (node_cache.zig ~:295-325): a durable node the bounded cache has
+/// evicted is NOT "deleted since indexing" and must not be silently dropped
+/// from results, so it is rehydrated from the engine and run through the same
+/// visibility check as a resident hit (same fix shape as Task 5's write-side
+/// hydrate-on-miss fallback in `fts_index_ops.indexNodeDocument`, commit
+/// `34c3988b`). Only a hydrate miss (the node is genuinely gone from the
+/// engine too) drops the hit, matching the prior resident-only contract.
+///
+/// Scope boundary: this hydrates for SEARCH HIT RESOLUTION only. The
+/// unrelated `eval.zig` `scanVectorKnn` bounded-cache scan remains
+/// resident-only by separate, documented design (its own ticket) — it is not
+/// touched here.
 fn filterAuthorizedHits(
     allocator: std.mem.Allocator,
     hits: []const fulltext.FullTextIndex.SearchResult,
@@ -372,13 +385,24 @@ fn filterAuthorizedHits(
     var authorized = try std.ArrayList(fulltext.FullTextIndex.SearchResult).initCapacity(allocator, hits.len);
     errdefer authorized.deinit(allocator);
     for (hits) |hit| {
-        const visible = blk: {
+        var resident_node: ?graph_store.Node = null;
+        {
             store.nodes.lockShardShared(hit.doc_id);
             defer store.nodes.unlockShardShared(hit.doc_id);
-            const np = store.nodes.getPtrUnlocked(hit.doc_id) orelse break :blk false; // deleted since indexing
-            break :blk match_operations.passesRowVisibilityFilters(&reusable_row, np.*, context.tenant_id);
-        };
-        if (visible) authorized.appendAssumeCapacity(hit);
+            if (store.nodes.getPtrUnlocked(hit.doc_id)) |np| resident_node = np.*;
+        }
+
+        // CANARY: REQ=REQ-FTS-ROW-VISIBILITY-HYDRATE-001; FEATURE="FullText"; ASPECT=SearchHitHydrate; STATUS=TESTED; TEST=tests/test_fts_authorization.zig; OWNER=security; UPDATED=2026-08-29
+        const node = resident_node orelse
+            // Never call the hydrating accessor while the shard lock is held
+            // — it is self-locking (getOrHydrate re-takes the same map_lock)
+            // and re-entrant cache calls are forbidden. We are outside that
+            // lock here (the block above already released it).
+            (store.nodes.getOrHydrate(hit.doc_id) catch null) orelse continue; // genuinely gone — no fallback possible
+
+        if (match_operations.passesRowVisibilityFilters(&reusable_row, node, context.tenant_id)) {
+            authorized.appendAssumeCapacity(hit);
+        }
     }
     return authorized;
 }

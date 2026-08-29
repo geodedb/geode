@@ -74,6 +74,28 @@ const Harness = struct {
         defer parsed.deinit();
         return execution.executeStatementWithContext(aa, parsed.program.statements[0], self.ctx);
     }
+
+    /// Run `query` (a single CALL statement) inside an explicit `START
+    /// TRANSACTION { ... }` body. `execution.executeStatementWithContext`'s
+    /// `.StartTransaction` handling (execution.zig ~:1383-1388) dispatches a
+    /// `.Call` body statement straight to `call_operations.executeCallProcedure`
+    /// — NOT through `executeCallStatement`'s `QueryReadSession` wrapper
+    /// (execution/call_operations.zig:74-89), which deep-clones/re-materializes
+    /// EVERY node from the durable engine on every bare top-level CALL and so
+    /// masks bounded-node-cache eviction entirely (confirmed empirically: a bare
+    /// `CALL geode.fts.search` still finds an evicted node "resident" because
+    /// the snapshot construction rebuilds it). Wrapping in a transaction body is
+    /// the one documented, unprivileged way to reach the SAME resident-cache
+    /// code path `filterAuthorizedHits` runs against in this harness's
+    /// direct-CALL entry point — required for these tests to actually exercise
+    /// (not merely appear to exercise) the fallback under test.
+    pub fn runQueryUnsnapshotted(self: *Harness, call_query: []const u8) !execution.ExecutionResult {
+        const aa = self.arena.allocator();
+        const wrapped = try std.fmt.allocPrint(aa, "START TRANSACTION {{ {s} }}", .{call_query});
+        var parsed = try geode.parseGql(wrapped, aa);
+        defer parsed.deinit();
+        return execution.executeStatementWithContext(aa, parsed.program.statements[0], self.ctx);
+    }
 };
 
 // CANARY: REQ=REQ-FTS-ROW-VISIBILITY-001; FEATURE="FullText"; ASPECT=TenantFilteredResults; STATUS=TESTED; TEST=tests/test_fts_authorization.zig; OWNER=security; UPDATED=2026-08-28
@@ -239,5 +261,201 @@ test "fts search drops RLS-label-denied rows" {
         var res = try h.runQuery("CALL geode.fts.search('ftsauth_rls_idx', 'fox')");
         defer res.deinit(aa);
         try testing.expectEqual(@as(usize, 1), res.rows.len);
+    }
+}
+
+// CANARY: REQ=REQ-FTS-ROW-VISIBILITY-HYDRATE-001; FEATURE="FullText"; ASPECT=SearchHitHydrate; STATUS=TESTED; TEST=tests/test_fts_authorization.zig; OWNER=security; UPDATED=2026-08-29
+//
+// Spec geode-vectorization-and-reranking, final-review fix wave (2026-08-29):
+// `filterAuthorizedHits` (src/execution/fts_dispatch.zig) previously resolved
+// each search hit ONLY via `store.nodes.lockShardShared` + `getPtrUnlocked`
+// — a resident-cache-only lookup — and treated a miss as "deleted since
+// indexing", silently dropping the hit. A durable node the bounded node
+// cache had merely EVICTED is not deleted; dropping it is a correctness bug
+// (identical in shape to Task 5's write-side fix, commit `34c3988b`, applied
+// here to the read side). This test pins the fallback: index a node, confirm
+// it is searchable, evict it from the bounded cache via the cache's own
+// `remove` primitive (durable storage untouched), and confirm the hit
+// SURVIVES because `filterAuthorizedHits` now hydrates via
+// `store.nodes.getOrHydrate` outside the shard lock.
+//
+// The eviction-sensitive assertions run the CALL through
+// `Harness.runQueryUnsnapshotted` (see its doc comment) — a bare top-level
+// `CALL geode.fts.search` goes through `executeCallStatement`'s
+// `QueryReadSession`, which deep-clones/re-materializes every node from the
+// durable engine on EVERY call and would mask the very miss this test needs
+// to observe.
+//
+// Pre-fix (RED): 0 rows — `getPtrUnlocked` misses on the evicted node and the
+// hit is dropped without ever attempting to hydrate.
+// Post-fix (GREEN): 1 row — the hydrated node passes the (permissive, no
+// tenant/RLS scoping in this test) visibility check.
+test "fts search hydrates a node evicted from the bounded cache before search resolves the hit" {
+    var h = try Harness.init(testing.allocator);
+    defer h.deinit();
+    const aa = h.arena.allocator();
+
+    const store = graph_store.getGlobalStore(h.allocator);
+    // Harness.init uses getGlobalStore directly (no hydrate hook wired) — the
+    // Task 5 test explains why this must be installed explicitly to isolate
+    // the seam under test: without it an evicted node is unrecoverable and
+    // this test could not distinguish "no fallback" from "fallback wired but
+    // the cache itself cannot rehydrate".
+    store.installNodeCacheHydrate();
+
+    var node_id: i64 = undefined;
+    {
+        var r = try h.runQuery("CREATE (:FtsAuthDoc {body: 'cold cache hydration widget'})");
+        r.deinit(aa);
+
+        var res = try h.runQuery("MATCH (n:FtsAuthDoc) RETURN id(n)");
+        defer res.deinit(aa);
+        try testing.expectEqual(@as(usize, 1), res.rows.len);
+        node_id = res.rows[0][0].Int;
+    }
+
+    {
+        var r = try h.runQuery("CREATE INDEX ftsauth_hydrate_idx FOR (d:FtsAuthDoc) ON (d.body) USING fulltext");
+        r.deinit(aa);
+    }
+
+    // Baseline: resident, searchable.
+    {
+        var res = try h.runQueryUnsnapshotted("CALL geode.fts.search('ftsauth_hydrate_idx', 'hydration')");
+        defer res.deinit(aa);
+        try testing.expectEqual(@as(usize, 1), res.rows.len);
+        try testing.expectEqual(node_id, res.rows[0][0].Int);
+    }
+
+    // Evict from the bounded cache — durable storage is untouched. Mirrors
+    // tests/test_fts_bulk_merge_maintenance.zig's Task-5 test and
+    // tests/test_edge_evicted_endpoint_silent_loss.zig's established
+    // real-hydrate wiring pattern (`store.nodes.remove` is the exact
+    // primitive real LRU eviction uses internally).
+    store.nodes.remove(@intCast(node_id));
+    try testing.expect(store.nodes.getPtrUnlocked(@intCast(node_id)) == null);
+
+    // The hit must still resolve: the node is evicted, not deleted.
+    {
+        var res = try h.runQueryUnsnapshotted("CALL geode.fts.search('ftsauth_hydrate_idx', 'hydration')");
+        defer res.deinit(aa);
+        try testing.expectEqual(@as(usize, 1), res.rows.len);
+        try testing.expectEqual(node_id, res.rows[0][0].Int);
+    }
+}
+
+// CANARY: REQ=REQ-FTS-ROW-VISIBILITY-HYDRATE-001; FEATURE="FullText"; ASPECT=SearchHitHydrateNegativeControl; STATUS=TESTED; TEST=tests/test_fts_authorization.zig; OWNER=security; UPDATED=2026-08-29
+//
+// Negative control for the same fallback: a node that is GENUINELY gone —
+// durably deleted from the storage engine, not merely cache-evicted — must
+// stay dropped. `store.deleteNode` (the low-level GraphStore primitive, as
+// opposed to the GQL `DELETE` statement) removes the node from both the
+// engine and the bounded cache WITHOUT running FTS live-maintenance, so the
+// fulltext engine's posting for it goes stale on purpose here — exactly the
+// scenario `filterAuthorizedHits` must still handle by dropping the hit
+// (hydrate now returns null instead of a stale/wrong node). Runs through
+// `runQueryUnsnapshotted` for the same reason as the positive-fallback test
+// above — a bare CALL's `QueryReadSession` snapshot would independently
+// re-derive "gone" from the engine and mask whether THIS function's own
+// fallback handles the miss correctly.
+test "fts search still drops a hit for a node genuinely deleted since indexing" {
+    var h = try Harness.init(testing.allocator);
+    defer h.deinit();
+    const aa = h.arena.allocator();
+
+    const store = graph_store.getGlobalStore(h.allocator);
+    store.installNodeCacheHydrate();
+
+    var node_id: i64 = undefined;
+    {
+        var r = try h.runQuery("CREATE (:FtsAuthDoc {body: 'soon to be deleted document'})");
+        r.deinit(aa);
+
+        var res = try h.runQuery("MATCH (n:FtsAuthDoc) RETURN id(n)");
+        defer res.deinit(aa);
+        try testing.expectEqual(@as(usize, 1), res.rows.len);
+        node_id = res.rows[0][0].Int;
+    }
+
+    {
+        var r = try h.runQuery("CREATE INDEX ftsauth_deleted_idx FOR (d:FtsAuthDoc) ON (d.body) USING fulltext");
+        r.deinit(aa);
+    }
+
+    {
+        var res = try h.runQueryUnsnapshotted("CALL geode.fts.search('ftsauth_deleted_idx', 'deleted')");
+        defer res.deinit(aa);
+        try testing.expectEqual(@as(usize, 1), res.rows.len);
+    }
+
+    // Durable delete that intentionally bypasses FTS maintenance, leaving the
+    // fts-storage engine's posting stale.
+    store.deleteNode(@intCast(node_id));
+    try testing.expect(store.nodes.getPtrUnlocked(@intCast(node_id)) == null);
+
+    {
+        var res = try h.runQueryUnsnapshotted("CALL geode.fts.search('ftsauth_deleted_idx', 'deleted')");
+        defer res.deinit(aa);
+        try testing.expectEqual(@as(usize, 0), res.rows.len);
+    }
+}
+
+// CANARY: REQ=REQ-FTS-ROW-VISIBILITY-HYDRATE-001; FEATURE="FullText"; ASPECT=SearchHitHydrateTenantScoped; STATUS=TESTED; TEST=tests/test_fts_authorization.zig; OWNER=security; UPDATED=2026-08-29
+//
+// The hydrate fallback must not bypass row visibility: a node belonging to
+// the WRONG tenant, once evicted and rehydrated, must still be filtered out
+// by `passesRowVisibilityFilters`. This closes the obvious failure mode of a
+// naive fix — hydrating the node but forgetting to re-run the tenant/RLS
+// check against the hydrated copy. Runs through `runQueryUnsnapshotted` so
+// the search actually resolves the hit off the (evicted) primary store
+// rather than a freshly-materialized `QueryReadSession` snapshot.
+test "fts search applies tenant filter to a hydrated (evicted) node" {
+    var h = try Harness.init(testing.allocator);
+    defer h.deinit();
+    const aa = h.arena.allocator();
+
+    const store = graph_store.getGlobalStore(h.allocator);
+    store.installNodeCacheHydrate();
+
+    var tenant_a_id: i64 = undefined;
+    {
+        h.ctx.tenant_id = "tenant_a";
+        const prev = execution.pushActiveContext(&h.ctx);
+        defer execution.popActiveContext(prev);
+
+        var r = try h.runQuery("CREATE (:FtsAuthDoc {body: 'quick brown fox'})");
+        r.deinit(aa);
+
+        var res = try h.runQuery("MATCH (n:FtsAuthDoc) RETURN id(n)");
+        defer res.deinit(aa);
+        try testing.expectEqual(@as(usize, 1), res.rows.len);
+        tenant_a_id = res.rows[0][0].Int;
+    }
+
+    h.ctx.tenant_id = null;
+    {
+        var r = try h.runQuery("CREATE INDEX ftsauth_hydrate_tenant_idx FOR (d:FtsAuthDoc) ON (d.body) USING fulltext");
+        r.deinit(aa);
+    }
+
+    // Evict the tenant_a node from the bounded cache before searching as a
+    // DIFFERENT tenant — the hydrated node must still be tenant-filtered out.
+    store.nodes.remove(@intCast(tenant_a_id));
+    try testing.expect(store.nodes.getPtrUnlocked(@intCast(tenant_a_id)) == null);
+
+    h.ctx.tenant_id = "tenant_b";
+    {
+        var res = try h.runQueryUnsnapshotted("CALL geode.fts.search('ftsauth_hydrate_tenant_idx', 'fox')");
+        defer res.deinit(aa);
+        try testing.expectEqual(@as(usize, 0), res.rows.len);
+    }
+
+    // Sanity: the correct tenant still sees the hydrated node.
+    h.ctx.tenant_id = "tenant_a";
+    {
+        var res = try h.runQueryUnsnapshotted("CALL geode.fts.search('ftsauth_hydrate_tenant_idx', 'fox')");
+        defer res.deinit(aa);
+        try testing.expectEqual(@as(usize, 1), res.rows.len);
+        try testing.expectEqual(tenant_a_id, res.rows[0][0].Int);
     }
 }
