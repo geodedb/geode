@@ -9565,6 +9565,20 @@ pub fn build(b: *std.Build) void {
     const eng3912_step = b.step("test-eng3912", "Run ENG-3912 vector dimension-pin lifecycle regressions");
     eng3912_step.dependOn(&run_eng3912_tests.step);
 
+    // ENG-3922: the vector dimension guard only covers INDEXED (label,
+    // property) pairs, so an unindexed property silently accepts mixed
+    // dimensions; and an over-cap vector literal either panics the server
+    // (array form, unchecked u16 @intCast) or is laundered into a bare
+    // TypeMismatch / SQLSTATE 58000 (string form).
+    const eng3922_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_eng3922_dim_guard.zig"), .target = target, .optimize = optimize });
+    eng3922_test_mod.addImport("geode", root_mod);
+    eng3922_test_mod.link_libc = true;
+    const eng3922_tests = b.addTest(.{ .root_module = eng3922_test_mod });
+    const run_eng3922_tests = b.addRunArtifact(eng3922_tests);
+    shardDep(test_step, &run_eng3922_tests.step, 0, test_shard_loads, test_shard_index);
+    const eng3922_step = b.step("test-eng3922", "Run ENG-3922 vector dimension-guard + over-cap regressions");
+    eng3922_step.dependOn(&run_eng3922_tests.step);
+
     // ENG-3913: `MATCH … [WHERE …] DELETE …` lost data in both directions — a
     // $param / cross-variable predicate silently deleted nothing, while a
     // pattern-restricted delete over-deleted (hops were never traversed) and a

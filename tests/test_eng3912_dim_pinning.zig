@@ -14,6 +14,11 @@
 //       path never touched, so the dimension stayed enforced with no index
 //       present at all.
 //
+//       SUPERSEDED BY ENG-3922 (2026-08-29) — see the inverted assertion in
+//       the (b) section below. (b)'s premise (the pin belongs to the index)
+//       was wrong; the pin belongs to the (graph, label, property) and is
+//       seeded from committed data, so DROP INDEX no longer releases it.
+//
 //   (d) THE GUARD VANISHED ACROSS A RESTART. Registration happened only in DDL
 //       execution, never on catalog reload, so after a restart `SHOW INDEXES`
 //       still listed the index while mixed dimensions were accepted silently.
@@ -150,7 +155,7 @@ test "ENG-3912: vector dimension pin lifecycle (refusal, DROP, restart, cross-gr
     _ = try h.exec("CREATE (:P12A {id: 5, emb: vectorf32('[4.0, 3.0, 2.0, 1.0]')})");
     try testing.expectEqual(@as(usize, 2), try h.countRows("MATCH (n:P12A) RETURN n"));
 
-    // ---- (b) DROP INDEX releases the pin ----
+    // ---- (b) DROP INDEX and the pin ----
     _ = try h.exec("CREATE INDEX e12_drop ON P12B (emb) USING HNSW WITH (metric = 'l2')");
     _ = try h.exec("CREATE (:P12B {id: 1, emb: vectorf32('[1.0, 2.0, 3.0, 4.0]')})");
     try testing.expectError(
@@ -159,9 +164,37 @@ test "ENG-3912: vector dimension pin lifecycle (refusal, DROP, restart, cross-gr
     );
 
     _ = try h.exec("DROP INDEX e12_drop");
-    // With no index there is nothing to keep homogeneous. Before the fix the
-    // pin outlived its index and this stayed rejected with no way to clear it.
-    _ = try h.exec("CREATE (:P12B {id: 3, emb: vectorf32('[1.0, 2.0, 3.0]')})");
+
+    // POLICY CHANGE — ENG-3922, 2026-08-29. THIS ASSERTION IS INVERTED.
+    //
+    // ENG-3912(b) originally read the pin as an artifact OF THE INDEX: no
+    // index, nothing to keep homogeneous, so DROP INDEX released it and the
+    // dim-3 write below was expected to SUCCEED. That premise is wrong, and
+    // ENG-3922 is the bug report that shows why: the guard was never really
+    // about the index. Mixed dimensions under one (label, property) are a
+    // DATA-INTEGRITY defect in their own right — `vector_cosine` over a
+    // dim-4/dim-3 pair silently yields NULL and a knn scan silently drops the
+    // non-conforming rows, index or no index. ENG-3922(a) is precisely the
+    // report that an UNINDEXED property accepts mixed dimensions; releasing
+    // the pin on DROP INDEX is the same hole, reached by a different route.
+    //
+    // Under the ENG-3922 model the registry is re-keyed to
+    // (graph, label, property) and seeded lazily from COMMITTED data, so DROP
+    // INDEX no longer releases the pin: P12B.emb holds a committed dim-4
+    // vector (id: 1), therefore dim-4 is what the property is, and a dim-3
+    // write stays refused. To change a property's dimension you delete the
+    // rows that establish it — not the index.
+    //
+    // RED UNTIL THE FIX LANDS. This is intended: `zig build test-eng3912` is
+    // expected to fail on this line on the pre-fix tree, exactly like the new
+    // tests/test_eng3922_dim_guard.zig. Pre-fix behaviour is that the dim-3
+    // write SUCCEEDS (the pin is unregistered by the DROP path).
+    try testing.expectError(
+        error.VectorDimensionMismatch,
+        h.exec("CREATE (:P12B {id: 3, emb: vectorf32('[1.0, 2.0, 3.0]')})"),
+    );
+    // The committed dimension still writes, with no index present.
+    _ = try h.exec("CREATE (:P12B {id: 4, emb: vectorf32('[4.0, 3.0, 2.0, 1.0]')})");
     try testing.expectEqual(@as(usize, 2), try h.countRows("MATCH (n:P12B) RETURN n"));
 
     // ---- (c) cross-graph: the pin is INTENTIONALLY process-wide ----
