@@ -427,12 +427,42 @@ fn isStoreFreeScalarExpr(expr: *const ast.Expr) bool {
 }
 
 /// Check if a Query struct contains mutation clauses.
+///
+/// CANARY: REQ=REQ-ENG-3960-CALL-MUTATION-CLASSIFICATION; FEATURE="MATCH...CALL / CALL{} mutation classification"; ASPECT=ReadOnlyFloor; STATUS=TESTED; TEST=tests/test_read_only_execute.zig|tests/test_mcp_read_only.zig; OWNER=engine; UPDATED=2026-08-28
+/// GAP: `MATCH (n) CALL <procedure>` (`q.call_clause`) and `CALL { ... }
+/// WITH ... RETURN ...` inline subqueries (`q.initial_call_subquery`) were
+/// NOT checked here, so a mutating procedure (e.g. geode.fts.rebuild,
+/// geode.ts.insert) or a SET/DELETE inside a CALL subquery classified as
+/// non-mutating — bypassing the ExecuteRequest.read_only hard floor, the
+/// MCP read-only gate (both consume isMutatingProgram transitively), the
+/// GPS role gate, and write-lock selection. Both are now classified via
+/// procedure_access.classifyCallProcedure (the single source of truth
+/// also used by isMutatingCallStatement above) and recursive
+/// isQueryMutating, fail-closed: an unresolved/unlisted procedure name
+/// defaults to `.mutating`.
 pub fn isQueryMutating(q: *const ast.Query) bool {
-    return q.create_pattern != null or
+    if (q.create_pattern != null or
         q.merge_statement != null or
         q.set_clauses.len > 0 or
         q.remove_clauses.len > 0 or
-        q.delete_items.len > 0;
+        q.delete_items.len > 0) return true;
+
+    if (q.call_clause) |cc| {
+        // CallClause and CallProcedure share the same `procedure`/
+        // `yield_items` shape; classifyCallProcedure only inspects
+        // `.procedure`, so this adapter is exact, not approximate.
+        const as_call_procedure = ast.CallProcedure{
+            .procedure = cc.procedure,
+            .yield_items = cc.yield_items,
+        };
+        if (procedure_access.classifyCallProcedure(as_call_procedure) == .mutating) return true;
+    }
+
+    if (q.initial_call_subquery) |subq| {
+        if (isQueryMutating(subq)) return true;
+    }
+
+    return false;
 }
 
 /// GAP-0805 / M1.3: Detect whether a Query is a simple point read that can

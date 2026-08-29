@@ -105,3 +105,34 @@ test "read-only classification refuses mutating programs" {
     defer reading[1].deinit();
     try testing.expect(!query_traits.isMutatingProgram(&reading[0]));
 }
+
+// Finding 1 (whole-branch review, CRITICAL): `MATCH ... CALL <procedure>`
+// and `CALL { ... } WITH ... RETURN ...` were not consulted by
+// isQueryMutating, so a mutating procedure invoked through either shape
+// bypassed the read-only floor. geode.ts.insert / geode.fts.rebuild are
+// both classified .mutating by procedure_access.classifyCallProcedure
+// (insert is a write-verb not on the read-only allowlist; rebuild drops
+// and rebuilds the fulltext engine).
+test "read-only classification refuses MATCH...CALL with a mutating procedure" {
+    var mutating = try parseProgram("MATCH (n:Device) CALL geode.ts.insert(1, 'temp', 100, 42) YIELD inserted RETURN inserted");
+    defer mutating[1].deinit();
+    try testing.expect(query_traits.isMutatingProgram(&mutating[0]));
+}
+
+test "read-only classification refuses MATCH...CALL geode.fts.rebuild" {
+    var mutating = try parseProgram("MATCH (n:Doc) CALL geode.fts.rebuild('idx') YIELD indexed RETURN indexed");
+    defer mutating[1].deinit();
+    try testing.expect(query_traits.isMutatingProgram(&mutating[0]));
+}
+
+test "read-only classification refuses CALL{}...SET inline subquery" {
+    var mutating = try parseProgram("CALL { MATCH (n:X) SET n.k = 1 RETURN n } WITH n RETURN n");
+    defer mutating[1].deinit();
+    try testing.expect(query_traits.isMutatingProgram(&mutating[0]));
+}
+
+test "read-only classification still allows a read-only wrapped CALL procedure" {
+    var reading = try parseProgram("MATCH (n:Doc) CALL geode.fts.search('idx', 'query') YIELD node, score RETURN node, score");
+    defer reading[1].deinit();
+    try testing.expect(!query_traits.isMutatingProgram(&reading[0]));
+}

@@ -138,6 +138,25 @@ test "read-only MCP refuses unparseable statements (fail-closed)" {
     try std.testing.expect(std.mem.indexOf(u8, resp, "read-only MCP server: data modification rejected") != null);
 }
 
+// Finding 1 (whole-branch review, CRITICAL): MATCH...CALL was not checked
+// by isQueryMutating, so a mutating procedure invoked through the
+// MATCH...CALL shape bypassed the MCP read-only gate pre-wire (same
+// classifier as tests/test_read_only_execute.zig, consumed transitively
+// via query_traits.isMutatingProgram).
+test "read-only MCP refuses MATCH...CALL geode.fts.rebuild before the wire" {
+    const allocator = std.heap.page_allocator;
+    const server = try initTestServer(allocator, true);
+    defer server.deinit();
+
+    try handshake(server, allocator);
+
+    const resp = try callQueryTool(server, allocator, "MATCH (n:Doc) CALL geode.fts.rebuild('idx') YIELD indexed RETURN indexed");
+    defer allocator.free(resp);
+
+    try std.testing.expect(std.mem.indexOf(u8, resp, "\"isError\":true") != null);
+    try std.testing.expect(std.mem.indexOf(u8, resp, "read-only MCP server: data modification rejected") != null);
+}
+
 test "non-read-only MCP does not gate mutating query tool calls" {
     const allocator = std.heap.page_allocator;
     const server = try initTestServer(allocator, false);
