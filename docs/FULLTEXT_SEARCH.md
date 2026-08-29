@@ -272,3 +272,5 @@ FTS is held to graph-storage parity:
 - [API_REFERENCE.md](API_REFERENCE.md) — API reference
 - [optimizing-fts-storage.md](optimizing-fts-storage.md) — design/tuning notes for `fts-storage` against Geode's access patterns
 - [BM25_INDEX_OPTIMIZER_INTEGRATION.md](BM25_INDEX_OPTIMIZER_INTEGRATION.md) — index optimizer integration
+- [rag/RAG_INTEGRATION_GUIDE.md](rag/RAG_INTEGRATION_GUIDE.md) — operational notes for using `geode.fts.*` as a RAG orchestrator's full-text channel (row visibility, bulk-MERGE live maintenance, `geode.fts.rebuild` recovery, canary-query habit)
+- [rag/GEODE_RAG_ORCHESTRATOR_PROMPT.md](rag/GEODE_RAG_ORCHESTRATOR_PROMPT.md) — production RAG orchestrator system prompt
