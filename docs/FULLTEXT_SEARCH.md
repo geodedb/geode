@@ -212,6 +212,24 @@ by an older binary before the Task 4 bulk-MERGE fix landed. It is **not**
 required for ordinary bulk-MERGE ingestion on a current binary: live
 maintenance already covers that path.
 
+**Concurrent writes during rebuild (2026-08-29):** the fulltext engine is
+briefly absent between the internal drop and re-create, and the backfill that
+follows reads a point-in-time snapshot of the label's nodes. A live write
+(CREATE/SET/DELETE, or a raft-follower apply) landing in that window is
+**queued** rather than erroring on the missing engine or double-appending
+past the backfill snapshot: `fts_storage_adapter.zig` tracks a per-index
+rebuilding flag plus a pending node-id set (`beginRebuild`/
+`noteWriteDuringRebuild`/`endRebuild`), and `rebuildFulltextIndex` drains the
+queue after backfill, re-indexing every pending id the snapshot did not
+already cover. Deletes are queued the same way as creates/updates — a node
+deleted mid-window whose id ends up pending is handled correctly with no
+special casing, since the drain re-reads current store state and naturally
+skips a node that no longer exists. The drain never deletes-then-reindexes
+(fts-storage tombstones are permanent per doc_id). A second `CALL
+geode.fts.rebuild` on the SAME index while one is already in flight is
+refused (`RebuildInProgress`) rather than racing two drop→create sequences.
+Regression: `tests/test_fts_rebuild.zig` (`zig build test-fts-rebuild`).
+
 **Ingestion invariant:** after any bulk-ingestion run, verify FTS visibility
 with a canary query (`CALL geode.fts.search(index, term)` for a term known to
 be present) before marking ingestion ready — cheap insurance, and the primary

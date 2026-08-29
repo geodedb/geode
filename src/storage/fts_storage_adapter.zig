@@ -45,6 +45,26 @@
 //!   released (defer order in the write paths); `dropIndex` never waits for
 //!   quiescence while holding `mu` (the condition wait releases it) or
 //!   `write_mu` (never taken there at all).
+//! - Same-name `createIndex` racing a DRAINING `dropIndex`'s `deleteTree`
+//!   (i.e. one thread recreating `name` while another is still inside the
+//!   post-quiescence teardown/delete for the SAME name) is only safe because
+//!   ALL production callers that invoke `dropIndex` then `createIndex` for
+//!   the same name back-to-back — `DROP INDEX` followed by a later
+//!   `CREATE INDEX` DDL statement, and `CALL geode.fts.rebuild`'s internal
+//!   drop→create — are themselves serialized by the per-graph exclusive
+//!   write lock (each is a "mutating" GQL statement; see
+//!   `src/execution/procedure_access.zig` classification and
+//!   `docs/GQL_AUTH_DDL.md`). That serialization is what guarantees no two
+//!   drop→create sequences for the SAME index name ever interleave today. A
+//!   future caller that invokes `dropIndex`/`createIndex` directly — outside
+//!   statement execution, bypassing that per-graph lock — would reintroduce
+//!   the race.
+//! - `rebuilds` (Task 3, geode-vectorization-and-reranking): a SEPARATE small
+//!   registry, also guarded by `mu`, that lets `CALL geode.fts.rebuild`
+//!   queue concurrent writers across its drop→create→backfill window instead
+//!   of either erroring on a momentarily-absent engine or double-indexing
+//!   past the backfill snapshot. See the `rebuilds` field doc comment for
+//!   the full model, including a documented narrow-race residual.
 
 const std = @import("std");
 const fts = @import("fts_storage_lib");
@@ -76,6 +96,10 @@ pub fn freePositionalHits(allocator: std.mem.Allocator, hits: []PositionalHit) v
 pub const Error = error{
     IndexExists,
     IndexNotFound,
+    /// Task 3 (geode-vectorization-and-reranking): `beginRebuild` was called
+    /// for an index name that is already mid-rebuild (a prior `beginRebuild`
+    /// has not yet been paired with `endRebuild`).
+    RebuildInProgress,
 };
 
 pub const FtsStorageAdapter = struct {
@@ -100,6 +124,56 @@ pub const FtsStorageAdapter = struct {
     /// otherwise land on a dropper waiting for a DIFFERENT engine and be
     /// swallowed by its predicate re-check.
     drained: std.Io.Condition = .init,
+
+    /// Task 3 (geode-vectorization-and-reranking): rebuild-state registry,
+    /// keyed by index name. An entry is present while `CALL geode.fts.rebuild`
+    /// is mid-flight for that name (between `beginRebuild` and `endRebuild`),
+    /// absent otherwise. Guarded by `mu`, same as `indexes` — the two maps
+    /// are keyed identically (index name) but are otherwise independent:
+    /// `rebuilds` survives the ENGINE's absence (it exists precisely across
+    /// the drop→create gap where `indexes` has no entry for the name).
+    ///
+    /// The value is the deduped set of node ids a concurrent writer observed
+    /// via `noteWriteDuringRebuild` during the window, instead of writing
+    /// them into the (possibly absent, mid drop→create) engine.
+    /// `noteWriteDuringRebuild` is called from
+    /// `fts_index_ops.maintainFulltextOnWrite`'s per-node write hook BEFORE
+    /// it would otherwise call `indexNode`/`deleteNode` — the caller MUST
+    /// skip that write on a `true` return. The rebuild's backfill phase does
+    /// NOT consult this map (it re-reads current store state directly);
+    /// only the POST-backfill drain in `fts_index_ops.rebuildFulltextIndex`
+    /// does, via `endRebuild`, reindexing every pending id NOT already
+    /// covered by the backfill snapshot with a plain `.create`-style write —
+    /// NEVER delete-then-reindex (fts-storage tombstones are permanent per
+    /// doc_id, so a stray delete on a doc_id backfill just wrote would
+    /// permanently hide it). A node deleted mid-rebuild whose id ends up
+    /// pending is still handled correctly with no special casing: the
+    /// drain's write reads the store fresh and naturally no-ops for a node
+    /// that no longer exists.
+    ///
+    /// KNOWN RESIDUAL (narrow TOCTOU, accepted): `noteWriteDuringRebuild`'s
+    /// check and the write's own `indexNode`/`deleteNode` call (which
+    /// separately pins the engine via `requireIndex`) are two SEPARATE `mu`
+    /// critical sections, not one atomic operation — a write whose
+    /// pre-check observed "not rebuilding" can still lose a race against
+    /// `beginRebuild` immediately followed by `dropIndex`'s registry
+    /// removal, landing `Error.IndexNotFound` (silently caught+logged by
+    /// every write-hook caller — the SAME fallback behavior every missing-
+    /// index write already had before this fix). This window is bounded by
+    /// the CPU-only gap between `beginRebuild` and `dropIndex`'s
+    /// `fetchRemove` (a couple of statements, no I/O) — NOT by `dropIndex`'s
+    /// teardown I/O or the backfill duration, which is what this queue
+    /// closes (the dominant, I/O-bound share of the window). Closing the
+    /// residual fully would require folding "check rebuilding" and "pin the
+    /// engine" into one `mu` critical section shared by every write caller —
+    /// but `indexNode`/`deleteNode` are ALSO called directly by the
+    /// backfill loop itself (the rebuild's own authoritative writer, which
+    /// must NEVER be queued); gating at that shared low level with no
+    /// caller-identity signal would silently break backfill instead of
+    /// closing the residual. Accepted for now, same posture as the other
+    /// documented residuals in this codebase (see CLAUDE.md Known
+    /// Limitations).
+    rebuilds: std.StringHashMapUnmanaged(std.AutoHashMapUnmanaged(u64, void)) = .{},
 
     pub const IndexEngine = struct {
         engine: *fts.Engine,
@@ -194,6 +268,18 @@ pub const FtsStorageAdapter = struct {
             self.allocator.destroy(ie);
         }
         self.indexes.deinit(self.allocator);
+
+        // Defensive: a rebuild should always have paired begin/end by the
+        // time shutdown runs (no in-flight adapter operations may exist per
+        // this function's contract), but free any leftover entries rather
+        // than leak.
+        var rit = self.rebuilds.iterator();
+        while (rit.next()) |entry| {
+            entry.value_ptr.deinit(self.allocator);
+            self.allocator.free(entry.key_ptr.*);
+        }
+        self.rebuilds.deinit(self.allocator);
+
         self.allocator.free(self.base_path);
         self.allocator.destroy(self);
     }
@@ -407,7 +493,96 @@ pub const FtsStorageAdapter = struct {
         // (whose predicate re-check would swallow it). Waking outside the
         // critical section is safe — the waiter registered itself before
         // releasing `mu` inside `waitUncancelable`, so no wakeup is lost.
+        // Mechanically (lib/std/Io.zig `Condition.waitInner`): a waiter
+        // increments `state.waiters` and captures the current `epoch` BEFORE
+        // calling `mutex.unlock(io)` to park — so by the time we can even
+        // acquire `mu` above (`dropIndex` must have already unlocked it to
+        // reach `waitInner`'s futex wait), it is already counted. `broadcast`
+        // claims that count via a CAS loop and bumps `epoch` before
+        // futex-waking; the waiter's futex wait compares against the epoch
+        // it captured, so the wake is observed whether it lands just before
+        // the futex call (the CAS/epoch bump already happened) or while
+        // parked (the futex wake fires) — no lost-wakeup window either way.
+        // This deliberately DIFFERS from `group_commit.zig`'s
+        // `signal(io)`-while-`queue_mutex`-held idiom: holding the lock
+        // across signal is also correct there, just sometimes wasteful (a
+        // woken waiter can immediately re-block on the still-held lock).
+        // Here `dropIndex`'s `waitUncancelable` reacquires `mu` on every wake
+        // specifically to re-check `refs`, so broadcasting AFTER releasing
+        // `mu` avoids handing the woken waiter a lock we are still holding.
         if (wake) self.drained.broadcast(self.io);
+    }
+
+    /// Task 3 (geode-vectorization-and-reranking): register `index_name` as
+    /// currently rebuilding — see the `rebuilds` field doc comment for the
+    /// full model. Errors `Error.RebuildInProgress` if `index_name` is
+    /// already rebuilding (a concurrent `CALL geode.fts.rebuild` on the SAME
+    /// index is refused rather than two drop→create sequences racing each
+    /// other for the same on-disk tree).
+    // CANARY: REQ=REQ-FTS-REBUILD-WINDOW-001; FEATURE="CALL geode.fts.rebuild"; ASPECT=RebuildStateRegistry; STATUS=TESTED; TEST=tests/test_fts_rebuild.zig; OWNER=fts; UPDATED=2026-08-29
+    pub fn beginRebuild(self: *FtsStorageAdapter, index_name: []const u8) !void {
+        self.mu.lockUncancelable(self.io);
+        defer self.mu.unlock(self.io);
+        if (self.rebuilds.contains(index_name)) return Error.RebuildInProgress;
+        const name_copy = try self.allocator.dupe(u8, index_name);
+        errdefer self.allocator.free(name_copy);
+        try self.rebuilds.put(self.allocator, name_copy, .{});
+    }
+
+    /// MUST be called with `mu` already held. Shared by `noteWriteDuringRebuild`
+    /// (the public pre-check called from `maintainFulltextOnWrite`, before it
+    /// would otherwise reach `indexNode`/`deleteNode`) — kept as a tiny
+    /// locked-body helper so both call sites stay in sync.
+    fn queueIfRebuildingLocked(self: *FtsStorageAdapter, index_name: []const u8, node_id: u64) bool {
+        const pending = self.rebuilds.getPtr(index_name) orelse return false;
+        // error-policy: A — best-effort queue insert. An OOM here during an
+        // active rebuild is already a broader failure mode; still returning
+        // `true` (skip the live write) is strictly safer than the
+        // alternative of writing to a possibly-absent engine mid
+        // drop→create — a lost queue entry degrades to the SAME
+        // caught+logged `IndexNotFound` outcome writes already tolerated
+        // before this fix, rather than a new failure mode.
+        pending.put(self.allocator, node_id, {}) catch {};
+        return true;
+    }
+
+    /// Task 3: if `index_name` is currently rebuilding, queue `node_id` into
+    /// its pending set (deduped — re-queuing the same id is a no-op) and
+    /// return `true`. The caller (`fts_index_ops.maintainFulltextOnWrite`)
+    /// MUST skip the live engine write for this id on a `true` return — the
+    /// rebuild's post-backfill drain (`endRebuild`) will reindex it from
+    /// current store state. Returns `false` when `index_name` is not
+    /// rebuilding (the normal path — nothing queued, caller proceeds as
+    /// usual). See the `rebuilds` field doc comment for the documented
+    /// narrow-race residual this pre-check does not fully close on its own.
+    // CANARY: REQ=REQ-FTS-REBUILD-WINDOW-001; FEATURE="CALL geode.fts.rebuild"; ASPECT=ConcurrentWriteQueued; STATUS=TESTED; TEST=tests/test_fts_rebuild.zig; OWNER=fts; UPDATED=2026-08-29
+    pub fn noteWriteDuringRebuild(self: *FtsStorageAdapter, index_name: []const u8, node_id: u64) bool {
+        self.mu.lockUncancelable(self.io);
+        defer self.mu.unlock(self.io);
+        return self.queueIfRebuildingLocked(index_name, node_id);
+    }
+
+    /// Task 3: atomically clear the rebuilding flag for `index_name` and
+    /// return its drained pending node ids as an `allocator`-owned slice
+    /// (caller frees it). After this returns, `noteWriteDuringRebuild`
+    /// returns `false` again for `index_name`. A name that was never
+    /// rebuilding (or already drained) returns an empty slice — defensive;
+    /// every real call site pairs this with a prior successful
+    /// `beginRebuild`.
+    // CANARY: REQ=REQ-FTS-REBUILD-WINDOW-001; FEATURE="CALL geode.fts.rebuild"; ASPECT=RebuildStateRegistry; STATUS=TESTED; TEST=tests/test_fts_rebuild.zig; OWNER=fts; UPDATED=2026-08-29
+    pub fn endRebuild(self: *FtsStorageAdapter, index_name: []const u8, allocator: std.mem.Allocator) ![]u64 {
+        self.mu.lockUncancelable(self.io);
+        defer self.mu.unlock(self.io);
+        const kv = self.rebuilds.fetchRemove(index_name) orelse return &[_]u64{};
+        var pending = kv.value;
+        defer pending.deinit(self.allocator);
+        self.allocator.free(kv.key);
+
+        const out = try allocator.alloc(u64, pending.count());
+        var it = pending.keyIterator();
+        var i: usize = 0;
+        while (it.next()) |k| : (i += 1) out[i] = k.*;
+        return out;
     }
 
     /// Segment-order guard helper (see `IndexEngine.max_doc_id_since_flush`):

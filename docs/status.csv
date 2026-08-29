@@ -1316,6 +1316,11 @@ REQ-FTS-REBUILD-001,CALL geode.fts.rebuild,RebuildBackfill,TESTED,,,index,2026-0
 REQ-FTS-REBUILD-001,CALL geode.fts.rebuild,RebuildBackfill,TESTED,,,index,2026-08-28,tests/test_fts_rebuild.zig
 REQ-FTS-REBUILD-001,CALL geode.fts.rebuild,RebuildProc,TESTED,,,index,2026-08-28,src/execution/fts_dispatch.zig
 REQ-FTS-REBUILD-001,CALL geode.fts.rebuild,StepUpClassification,TESTED,,,index,2026-08-28,src/security/geode_auth_lib.zig
+REQ-FTS-REBUILD-WINDOW-001,CALL geode.fts.rebuild,ConcurrentWriteQueued,TESTED,,,fts,2026-08-29,src/storage/fts_storage_adapter.zig
+REQ-FTS-REBUILD-WINDOW-001,CALL geode.fts.rebuild,ConcurrentWriteQueued,TESTED,,,fts,2026-08-29,tests/test_fts_rebuild.zig
+REQ-FTS-REBUILD-WINDOW-001,CALL geode.fts.rebuild,RebuildGuard,TESTED,,,fts,2026-08-29,tests/test_fts_rebuild.zig
+REQ-FTS-REBUILD-WINDOW-001,CALL geode.fts.rebuild,RebuildStateRegistry,TESTED,,,fts,2026-08-29,src/storage/fts_storage_adapter.zig
+REQ-FTS-REBUILD-WINDOW-001,CALL geode.fts.rebuild,RebuildStateRegistry,TESTED,,,fts,2026-08-29,src/storage/fts_storage_adapter.zig
 REQ-FTS-ROW-VISIBILITY-001,FullText,PhraseRowFilter,TESTED,,,security,2026-08-28,src/execution/fts_dispatch.zig
 REQ-FTS-ROW-VISIBILITY-001,FullText,ProximityRowFilter,TESTED,,,security,2026-08-28,src/execution/fts_dispatch.zig
 REQ-FTS-ROW-VISIBILITY-001,FullText,RowVisibilityCombinator,TESTED,,,security,2026-08-28,src/execution/match_operations.zig

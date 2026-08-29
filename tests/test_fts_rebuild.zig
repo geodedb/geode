@@ -157,3 +157,260 @@ test "geode.fts.rebuild on unknown index errors" {
     const result = h.runQuery("CALL geode.fts.rebuild('nonexistent_idx')");
     try testing.expectError(error.IndexNotFound, result);
 }
+
+// CANARY: REQ=REQ-FTS-REBUILD-WINDOW-001; FEATURE="CALL geode.fts.rebuild"; ASPECT=ConcurrentWriteQueued; STATUS=TESTED; TEST=tests/test_fts_rebuild.zig; OWNER=fts; UPDATED=2026-08-29
+test "write during rebuild window is queued, indexed exactly once" {
+    var h = try Harness.init(testing.allocator);
+    defer h.deinit();
+    const aa = h.arena.allocator();
+
+    // 1. Bootstrap :RbwDoc(body) with 2 existing nodes; verify both searchable.
+    {
+        var res = try h.runQuery("CREATE (:RbwDoc {body: 'alpha term document'})");
+        defer res.deinit(aa);
+    }
+    {
+        var res = try h.runQuery("CREATE (:RbwDoc {body: 'beta term document'})");
+        defer res.deinit(aa);
+    }
+    try execution.fts_index_ops.createFulltextIndex(
+        h.allocator,
+        graph_store.DEFAULT_GRAPH_NAME,
+        "rbw_idx",
+        "RbwDoc",
+        &.{"body"},
+    );
+    {
+        var res = try h.runQuery("CALL geode.fts.search('rbw_idx', 'term')");
+        defer res.deinit(aa);
+        try testing.expectEqual(@as(usize, 2), res.rows.len);
+    }
+
+    const adapter = graph_store.getGlobalAdapter() orelse return error.TestUnexpectedResult;
+    const mg = try adapter.getOrCreateGraph(graph_store.DEFAULT_GRAPH_NAME);
+    const fa = mg.fts_adapter orelse return error.TestUnexpectedResult;
+    const store = graph_store.getGlobalStore(h.allocator);
+
+    // 2. Simulate the window directly: begin, then run the SAME write hook a
+    //    real CREATE would run for a NEW node id while the flag is armed.
+    try fa.beginRebuild("rbw_idx");
+
+    const new_id = store.reserveNodeId();
+    {
+        const props = [_]adapter_mod.StorageAdapter.PropKV{
+            .{ .key = "body", .value = .{ .String = "gamma zzzqueued unique term" } },
+        };
+        _ = try adapter.bulkMergeNodeWithReservedId(
+            graph_store.DEFAULT_GRAPH_NAME,
+            new_id,
+            "RbwDoc",
+            "doc_key",
+            .{ .Int = 999 },
+            &props,
+            false,
+        );
+    }
+    // Must NOT error even though the engine is still alive in this
+    // simulation (we never dropped it) — the queue short-circuits BEFORE
+    // the engine write is attempted.
+    try execution.fts_index_ops.maintainFulltextOnWrite(
+        h.allocator,
+        graph_store.DEFAULT_GRAPH_NAME,
+        new_id,
+        &.{"RbwDoc"},
+        .create,
+    );
+
+    // The engine did NOT receive it yet — its unique term finds 0 rows.
+    // (The engine still exists pre-drop in this simulation; the honest
+    // end-to-end proof across a REAL drop→create is part 4 below.)
+    {
+        var res = try h.runQuery("CALL geode.fts.search('rbw_idx', 'zzzqueued')");
+        defer res.deinit(aa);
+        try testing.expectEqual(@as(usize, 0), res.rows.len);
+    }
+
+    // 3. A concurrent geode.fts.rebuild on the SAME index must be refused —
+    //    proves beginRebuild's concurrent-rebuild guard is wired end-to-end
+    //    through the real rebuildFulltextIndex entry point.
+    const rebuild_result = execution.fts_index_ops.rebuildFulltextIndex(
+        h.allocator,
+        h.ctx.catalog,
+        graph_store.DEFAULT_GRAPH_NAME,
+        "rbw_idx",
+    );
+    try testing.expectError(error.RebuildInProgress, rebuild_result);
+
+    // Drain: the queued id comes back exactly, and the flag clears.
+    const drained = try fa.endRebuild("rbw_idx", h.allocator);
+    defer h.allocator.free(drained);
+    try testing.expectEqual(@as(usize, 1), drained.len);
+    try testing.expectEqual(new_id, drained[0]);
+
+    // 4. Full-path test: a FRESH index, a real concurrent
+    //    CALL geode.fts.rebuild racing a live write for a just-created node.
+    //    Whichever of the three windows the racer's write lands in (before
+    //    the rebuild starts, queued mid-rebuild, or after it completes),
+    //    the node must end up indexed EXACTLY once — proven via BM25 score
+    //    parity against a reference node with byte-identical text indexed
+    //    exactly once (the double-append tell — see
+    //    tests/test_fts_bulk_merge_maintenance.zig for the same pattern).
+    try execution.fts_index_ops.createFulltextIndex(
+        h.allocator,
+        graph_store.DEFAULT_GRAPH_NAME,
+        "rbw_full_idx",
+        "RbwFull",
+        &.{"body"},
+    );
+
+    // Filler nodes give the rebuild's backfill real (I/O-bound) work, widening
+    // the window the racer's write has a chance to land inside — the
+    // assertions below hold regardless of whether it actually does.
+    var i: usize = 0;
+    while (i < 60) : (i += 1) {
+        const rid = store.reserveNodeId();
+        const body = try std.fmt.allocPrint(aa, "filler node number {d} padding text", .{i});
+        const props = [_]adapter_mod.StorageAdapter.PropKV{
+            .{ .key = "body", .value = .{ .String = body } },
+        };
+        _ = try adapter.bulkMergeNodeWithReservedId(
+            graph_store.DEFAULT_GRAPH_NAME,
+            rid,
+            "RbwFull",
+            "doc_key",
+            .{ .Int = @intCast(i) },
+            &props,
+            false,
+        );
+    }
+
+    const canary_text = "canaryparity fixed reference text body";
+
+    // Reference node: created and live-indexed BEFORE the race starts.
+    const ref_id = store.reserveNodeId();
+    {
+        const props = [_]adapter_mod.StorageAdapter.PropKV{
+            .{ .key = "body", .value = .{ .String = canary_text } },
+        };
+        _ = try adapter.bulkMergeNodeWithReservedId(
+            graph_store.DEFAULT_GRAPH_NAME,
+            ref_id,
+            "RbwFull",
+            "doc_key",
+            .{ .Int = 9001 },
+            &props,
+            false,
+        );
+    }
+    try execution.fts_index_ops.maintainFulltextOnWrite(
+        h.allocator,
+        graph_store.DEFAULT_GRAPH_NAME,
+        ref_id,
+        &.{"RbwFull"},
+        .create,
+    );
+
+    // Racer node: created in the store now, but its write-hook call (below)
+    // races the rebuild thread.
+    const racer_id = store.reserveNodeId();
+    {
+        const props = [_]adapter_mod.StorageAdapter.PropKV{
+            .{ .key = "body", .value = .{ .String = canary_text } },
+        };
+        _ = try adapter.bulkMergeNodeWithReservedId(
+            graph_store.DEFAULT_GRAPH_NAME,
+            racer_id,
+            "RbwFull",
+            "doc_key",
+            .{ .Int = 9002 },
+            &props,
+            false,
+        );
+    }
+
+    const CatalogPtr = @TypeOf(h.ctx.catalog);
+    const RebuildCtx = struct {
+        allocator: std.mem.Allocator,
+        catalog: CatalogPtr,
+        result: anyerror!u64 = 0,
+
+        fn run(self: *@This()) void {
+            self.result = execution.fts_index_ops.rebuildFulltextIndex(
+                self.allocator,
+                self.catalog,
+                graph_store.DEFAULT_GRAPH_NAME,
+                "rbw_full_idx",
+            );
+        }
+    };
+    var ctx = RebuildCtx{ .allocator = h.allocator, .catalog = h.ctx.catalog };
+    const thread = try std.Thread.spawn(.{}, RebuildCtx.run, .{&ctx});
+
+    try execution.fts_index_ops.maintainFulltextOnWrite(
+        h.allocator,
+        graph_store.DEFAULT_GRAPH_NAME,
+        racer_id,
+        &.{"RbwFull"},
+        .create,
+    );
+
+    thread.join();
+    _ = try ctx.result; // propagate any rebuild failure as a test failure
+
+    {
+        var res = try h.runQuery("CALL geode.fts.search('rbw_full_idx', 'canaryparity', 10)");
+        defer res.deinit(aa);
+        try testing.expectEqual(@as(usize, 2), res.rows.len);
+
+        var score_ref: ?f64 = null;
+        var score_racer: ?f64 = null;
+        for (res.rows) |row| {
+            try testing.expect(row[0] == .Int);
+            try testing.expect(row[1] == .Double);
+            const nid = row[0].Int;
+            const score = row[1].Double;
+            if (nid == @as(i64, @intCast(ref_id))) score_ref = score;
+            if (nid == @as(i64, @intCast(racer_id))) score_racer = score;
+        }
+        try testing.expect(score_ref != null);
+        try testing.expect(score_racer != null);
+        // The load-bearing assertion: identical text indexed exactly once
+        // each MUST carry the identical BM25 score. A double-append (either
+        // a missed queue, or a drain re-indexing an already-backfilled id)
+        // would skew the racer's term frequency relative to the reference
+        // and fail this equality.
+        try testing.expectEqual(score_ref.?, score_racer.?);
+    }
+}
+
+// CANARY: REQ=REQ-FTS-REBUILD-WINDOW-001; FEATURE="CALL geode.fts.rebuild"; ASPECT=RebuildGuard; STATUS=TESTED; TEST=tests/test_fts_rebuild.zig; OWNER=fts; UPDATED=2026-08-29
+test "rebuild of index already being rebuilt errors" {
+    var h = try Harness.init(testing.allocator);
+    defer h.deinit();
+
+    try execution.fts_index_ops.createFulltextIndex(
+        h.allocator,
+        graph_store.DEFAULT_GRAPH_NAME,
+        "rbw_guard_idx",
+        "RbwGuardDoc",
+        &.{"body"},
+    );
+
+    const adapter = graph_store.getGlobalAdapter() orelse return error.TestUnexpectedResult;
+    const mg = try adapter.getOrCreateGraph(graph_store.DEFAULT_GRAPH_NAME);
+    const fa = mg.fts_adapter orelse return error.TestUnexpectedResult;
+
+    try fa.beginRebuild("rbw_guard_idx");
+    defer {
+        const leftover = fa.endRebuild("rbw_guard_idx", h.allocator) catch &[_]u64{};
+        h.allocator.free(leftover);
+    }
+
+    const result = execution.fts_index_ops.rebuildFulltextIndex(
+        h.allocator,
+        h.ctx.catalog,
+        graph_store.DEFAULT_GRAPH_NAME,
+        "rbw_guard_idx",
+    );
+    try testing.expectError(error.RebuildInProgress, result);
+}

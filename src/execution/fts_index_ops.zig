@@ -95,7 +95,7 @@ pub fn createFulltextIndex(
     // already-failing path; the backfill error below is what propagates.
     errdefer fa.dropIndex(index_name) catch {};
 
-    try backfillExistingNodes(allocator, graph_name, index_name, label, properties, fa);
+    try backfillExistingNodes(allocator, graph_name, index_name, label, properties, fa, null);
 
     // A4b: record (label → this index) so the node write-maintenance hook can
     // find covering indexes on CREATE/SET/DELETE. Done AFTER backfill so the
@@ -189,19 +189,84 @@ pub fn rebuildFulltextIndex(
         return Error.IndexNotFound;
     }
 
+    // Task 3 (geode-vectorization-and-reranking): arm the rebuild-state
+    // registry BEFORE dropIndex so concurrent writers
+    // (`maintainFulltextOnWrite`, reached from executor writes AND the raft
+    // apply-hook's second writer thread) observe the flag and queue their
+    // node ids instead of racing the drop→create gap. Errors
+    // `Error.RebuildInProgress` if this index is already mid-rebuild —
+    // refused rather than letting two drop→create sequences race the same
+    // on-disk tree.
+    try fa.beginRebuild(index_name);
+    var drained = false;
+    // Error-path cleanup: if anything below fails before we reach the
+    // successful `endRebuild` call, clear the flag so writers resume normal
+    // indexing instead of queuing forever. Whatever got queued in the
+    // meantime is simply dropped here — the index itself is in a
+    // known-bad/partial state on this path already (the propagating error
+    // is what the caller sees), and a subsequent `CALL geode.fts.rebuild`
+    // (now unblocked) re-backfills from current store state regardless.
+    defer if (!drained) {
+        const leftover = fa.endRebuild(index_name, allocator) catch &[_]u64{};
+        allocator.free(leftover);
+    };
+
     fa.dropIndex(index_name) catch |err| switch (err) {
         adapter_mod.Error.IndexNotFound => {}, // engine absent (e.g. post-restart) — fine
         else => return err,
     };
     try fa.createIndex(index_name);
     errdefer fa.dropIndex(index_name) catch {};
-    try backfillExistingNodes(allocator, graph_name, index_name, label, properties, fa);
+
+    // Snapshot the label's node ids EXACTLY ONCE: this is both backfill's
+    // input and the drain's exclusion set below (see `backfillExistingNodes`'
+    // `node_ids_override` doc comment for why a second independent read
+    // would corrupt that exclusion set).
+    const store = graph_store.getGlobalStore(graph_store.global_allocator());
+    const raw_snapshot = store.getNodesByLabel(graph_name, label) orelse &[_]u64{};
+    const snapshot = try allocator.dupe(u64, raw_snapshot);
+    defer allocator.free(snapshot);
+
+    try backfillExistingNodes(allocator, graph_name, index_name, label, properties, fa, snapshot);
+
+    // Drain: reindex every write queued during the window whose id is NOT
+    // already covered by the snapshot backfill above just processed.
+    //
+    // NEVER delete-then-reindex here — fts-storage tombstones are permanent
+    // per doc_id (the engine is append-only + tombstone-based), so a stray
+    // `deleteNode` call on a doc_id that was never actually written into
+    // THIS fresh post-drop engine would be a meaningless no-op at best, and
+    // on a doc_id backfill DID write would PERMANENTLY hide it — same
+    // rationale as the SET-chokepoint comment on `maintainFulltextOnWrite`.
+    // Plain `.create`-style `indexNodeDocument` is safe here specifically
+    // BECAUSE this loop only ever fires for ids EXCLUDED from the snapshot —
+    // ids backfill never wrote a first posting for in this fresh engine.
+    //
+    // A node IN the snapshot whose properties changed mid-backfill keeps
+    // backfill's (possibly stale) read of them — that residual staleness is
+    // the SAME documented invariant as elsewhere in this file: verify FTS
+    // visibility with a canary query after a bulk/ingestion operation rather
+    // than assuming instantaneous consistency mid-write.
+    var snapshot_set: std.AutoHashMapUnmanaged(u64, void) = .{};
+    defer snapshot_set.deinit(allocator);
+    try snapshot_set.ensureTotalCapacity(allocator, @intCast(snapshot.len));
+    for (snapshot) |nid| snapshot_set.putAssumeCapacity(nid, {});
+
+    const pending = try fa.endRebuild(index_name, allocator);
+    drained = true;
+    defer allocator.free(pending);
+    for (pending) |nid| {
+        if (snapshot_set.contains(nid)) continue; // backfill already indexed current state
+        indexNodeDocument(allocator, store, fa, index_name, nid, properties) catch |err| {
+            log.warn("rebuild drain reindex failed for node {}: {}", .{ nid, err });
+        };
+    }
+
     try mg.addFtsLabelIndex(adapter.allocator, label, index_name, properties); // idempotent re-arm
     fa.flush(index_name) catch |err| {
         log.warn("fulltext rebuild flush failed for '{s}': {}", .{ index_name, err });
     };
 
-    const store = graph_store.getGlobalStore(graph_store.global_allocator());
     const ids = store.getNodesByLabel(graph_name, label) orelse return 0;
     return @intCast(ids.len);
 }
@@ -235,6 +300,17 @@ pub fn validateTextProperty(
 }
 
 /// Backfill loop, factored out so the create path stays readable.
+///
+/// `node_ids_override`: when non-null, backfill THESE ids instead of doing
+/// its own `store.getNodesByLabel` read. Task 3 (geode-vectorization-and-
+/// reranking) uses this from `rebuildFulltextIndex`, which must snapshot the
+/// label's node ids EXACTLY ONCE — that single read is both backfill's input
+/// AND the post-backfill drain's exclusion set. A second independent read
+/// here (this function doing its own `getNodesByLabel` call) could observe a
+/// DIFFERENT (longer) id list than the caller's snapshot if a write raced in
+/// between the two reads, corrupting the drain's "already covered by
+/// backfill" check. `createFulltextIndex` and `rebuildAllFulltextIndexes`
+/// pass `null` (unchanged behavior — no drain phase follows their backfill).
 fn backfillExistingNodes(
     allocator: std.mem.Allocator,
     graph_name: []const u8,
@@ -242,11 +318,12 @@ fn backfillExistingNodes(
     label: []const u8,
     properties: []const []const u8,
     fa: *adapter_mod.FtsStorageAdapter,
+    node_ids_override: ?[]const u64,
 ) !void {
     const store = graph_store.getGlobalStore(graph_store.global_allocator());
 
     // Borrowed posting list of node ids for this (graph, label); null = no nodes.
-    const raw_node_ids = store.getNodesByLabel(graph_name, label) orelse return;
+    const raw_node_ids = node_ids_override orelse (store.getNodesByLabel(graph_name, label) orelse return);
 
     // Sort ids ASCENDING before indexing (on an owned copy — the store slice is
     // borrowed). The adapter's segment-order guard force-flushes the memtable
@@ -414,6 +491,24 @@ pub fn maintainFulltextOnWrite(
             const gop = try seen.getOrPut(scratch, spec.name);
             if (gop.found_existing) continue;
 
+            // Task 3 (geode-vectorization-and-reranking): `CALL
+            // geode.fts.rebuild`'s drop→create→backfill window. If
+            // `spec.name` is currently rebuilding, queue this node id
+            // instead of touching the engine at all — for BOTH legs below.
+            // There may be NO engine right now (mid drop→create), and even
+            // once a fresh one exists, a write landing here ahead of
+            // backfill's snapshot read would get double-indexed once
+            // backfill (also) picks the node up. The rebuild's post-backfill
+            // drain reindexes every queued id NOT already covered by its
+            // backfill snapshot, reading current store state — so a delete
+            // arriving here for an id that ends up pending is handled
+            // correctly too, with no special casing needed: the drain's
+            // write naturally no-ops for a node that no longer exists (see
+            // fts_storage_adapter.zig's `rebuilds` field doc for the full
+            // model, including a documented narrow-race residual this
+            // pre-check alone does not fully close).
+            if (fa.noteWriteDuringRebuild(spec.name, node_id)) continue;
+
             // Drop stale postings for update/delete. Tolerate a missing engine
             // (IndexNotFound) — e.g. a first-ever SET on a never-indexed node.
             if (op == .delete or op == .update) {
@@ -479,7 +574,7 @@ fn indexNodeDocument(
     fa: *adapter_mod.FtsStorageAdapter,
     index_name: []const u8,
     node_id: u64,
-    properties: []const []u8,
+    properties: []const []const u8,
 ) !void {
     var doc_terms: std.ArrayListUnmanaged(tokenizer.TermPosting) = .empty;
     defer {
@@ -670,7 +765,7 @@ pub fn rebuildAllFulltextIndexes(scratch: std.mem.Allocator) !void {
                 continue;
             };
 
-            backfillExistingNodes(scratch, gname, entry.name, entry.label, entry.properties, fa) catch |err| {
+            backfillExistingNodes(scratch, gname, entry.name, entry.label, entry.properties, fa, null) catch |err| {
                 log.warn("fts snapshot rebuild: backfill '{s}' on '{s}' failed: {}", .{ entry.name, gname, err });
                 continue;
             };
