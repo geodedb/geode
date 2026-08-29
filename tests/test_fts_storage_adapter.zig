@@ -300,17 +300,42 @@ fn dropRaceWriterThread(a: *FtsStorageAdapter, name: []const u8, unexpected: *st
     }
 }
 
+// Searcher thread for the dropIndex race regression below. Loops search()
+// as fast as possible; error.IndexNotFound is the CORRECT outcome once
+// dropIndex has removed the index from the registry. A search that pinned
+// the engine before the drop completes normally against the still-alive
+// engine (dropIndex waits for the in-flight reference to drain before
+// deiniting) — only a crash or an UNEXPECTED error indicates the bug
+// (Engine.deinit takes no internal lock, so an unpinned concurrent search
+// would race teardown).
+fn dropRaceSearcherThread(a: *FtsStorageAdapter, name: []const u8, unexpected: *std.atomic.Value(bool)) void {
+    const alloc = std.testing.allocator;
+    var i: u64 = 0;
+    while (i < 200) : (i += 1) {
+        const hits = a.search(name, alloc, "race", 10) catch |err| switch (err) {
+            error.IndexNotFound => return,
+            else => {
+                unexpected.store(true, .release);
+                return;
+            },
+        };
+        alloc.free(hits);
+    }
+}
+
 // CANARY: REQ=REQ-FTS-DROP-WRITER-RACE-001; FEATURE="FullText"; ASPECT=DropDrainsWriters; STATUS=TESTED; TEST=tests/test_fts_storage_adapter.zig; OWNER=fts; UPDATED=2026-08-29
-test "dropIndex drains in-flight writers instead of freeing under them" {
+test "dropIndex drains in-flight writers and searchers instead of freeing under them" {
     const alloc = std.testing.allocator;
     var h = try Harness.init(alloc);
     defer h.deinit(alloc);
 
     // Repeat the create/race/drop cycle to widen the interleaving window
-    // between the writer thread's requireIndex/write_mu acquisition and
-    // dropIndex's map-removal + teardown. Each cycle uses a fresh index name
-    // so a slow-to-finish writer from a prior cycle can never alias into the
-    // next cycle's engine.
+    // between the worker threads' requireIndex pin and dropIndex's
+    // map-removal + refcount-drain + teardown. Each cycle uses a fresh index
+    // name so a slow-to-finish worker from a prior cycle can never alias into
+    // the next cycle's engine. The searcher exercises the reader side of the
+    // race: searches never take write_mu, so only the in-flight reference
+    // stands between a concurrent search and Engine.deinit.
     var cycle: usize = 0;
     while (cycle < 20) : (cycle += 1) {
         var name_buf: [32]u8 = undefined;
@@ -319,11 +344,13 @@ test "dropIndex drains in-flight writers instead of freeing under them" {
 
         var unexpected = std.atomic.Value(bool).init(false);
         var writer = try std.Thread.spawn(.{}, dropRaceWriterThread, .{ h.a, name, &unexpected });
+        var searcher = try std.Thread.spawn(.{}, dropRaceSearcherThread, .{ h.a, name, &unexpected });
 
-        // Give the writer a head start so it is genuinely in flight (holding
-        // or about to acquire write_mu) when dropIndex runs, rather than
-        // racing dropIndex against an as-yet-unstarted thread. Zig 0.16 moved
-        // sleep onto the Io interface (no more std.Thread.sleep).
+        // Give the workers a head start so they are genuinely in flight
+        // (pinned via requireIndex, holding or about to acquire write_mu /
+        // a TermIterator) when dropIndex runs, rather than racing dropIndex
+        // against as-yet-unstarted threads. Zig 0.16 moved sleep onto the Io
+        // interface (no more std.Thread.sleep).
         std.Io.sleep(h.io, .fromMilliseconds(5), .real) catch {};
 
         // The decisive assertion is "we got here without a crash/UAF" — the
@@ -331,8 +358,85 @@ test "dropIndex drains in-flight writers instead of freeing under them" {
         try h.a.dropIndex(name);
 
         writer.join();
+        searcher.join();
         try std.testing.expect(!unexpected.load(.acquire));
     }
+}
+
+// Slow writer for the deterministic quiescence test below: one large batch
+// write, then flag how the operation resolved. Exactly one of the two flags
+// is set before the thread returns, and both are set only AFTER the adapter
+// call fully returned — i.e. after the in-flight reference was released.
+fn quiescenceWriterThread(
+    a: *FtsStorageAdapter,
+    name: []const u8,
+    docs: []const fts.DocBatch,
+    resolved: *std.atomic.Value(bool),
+    unexpected: *std.atomic.Value(bool),
+) void {
+    a.indexNodeBatch(name, docs) catch |err| switch (err) {
+        error.IndexNotFound => {
+            resolved.store(true, .release);
+            return;
+        },
+        else => {
+            unexpected.store(true, .release);
+            return;
+        },
+    };
+    resolved.store(true, .release);
+}
+
+// CANARY: REQ=REQ-FTS-DROP-WRITER-RACE-001; FEATURE="FullText"; ASPECT=DropQuiescence; STATUS=TESTED; TEST=tests/test_fts_storage_adapter.zig; OWNER=fts; UPDATED=2026-08-29
+test "dropIndex returns only after an in-flight write has fully resolved" {
+    const alloc = std.testing.allocator;
+    var h = try Harness.init(alloc);
+    defer h.deinit(alloc);
+
+    try h.a.createIndex("q");
+    // Pin the wrapper pointer up front (safe: the engine stays alive until
+    // our own dropIndex below) so the main thread can observe `refs` under
+    // the adapter's registry mutex.
+    const ie = h.a.getIndex("q").?;
+
+    // A deliberately fat batch so the write dwells inside the engine.
+    var docs: [64]fts.DocBatch = undefined;
+    const terms = [_]fts.TermPosting{ tp("alpha", &.{ 0, 5, 9 }), tp("beta", &.{ 1, 3 }), tp("gamma", &.{2}) };
+    for (&docs, 0..) |*d, i| d.* = .{ .doc_id = @as(u64, i) + 1, .terms = &terms };
+
+    var resolved = std.atomic.Value(bool).init(false);
+    var unexpected = std.atomic.Value(bool).init(false);
+    var writer = try std.Thread.spawn(.{}, quiescenceWriterThread, .{ h.a, @as([]const u8, "q"), @as([]const fts.DocBatch, &docs), &resolved, &unexpected });
+
+    // Deterministic ordering: wait until the writer PROVABLY holds an
+    // in-flight reference (refs > 0, read under the registry mutex the count
+    // is guarded by) — or has already fully resolved (fast-writer case).
+    while (true) {
+        if (resolved.load(.acquire)) break;
+        h.a.mu.lockUncancelable(h.io);
+        const r = ie.refs;
+        h.a.mu.unlock(h.io);
+        if (r > 0) break;
+        std.Io.sleep(h.io, .fromMilliseconds(1), .real) catch {};
+    }
+
+    // If the writer held a reference when we got here (the usual case with a
+    // batch this size), dropIndex MUST block until that reference drains —
+    // and the adapter releases it only AFTER indexNodeBatch's engine work
+    // fully completed (defer order: write_mu unlock, then releaseIndex). So
+    // dropIndex returning proves the write resolved (completed or was refused
+    // with IndexNotFound), never left mid-flight over freed memory; a
+    // dropIndex that returned early would tear the engine down under the live
+    // batch write, and the UAF crash is the decisive assertion. NOTE: the
+    // writer's `resolved` STORE runs a few instructions after its release, so
+    // the flag itself can lag dropIndex's return by a scheduler quantum —
+    // join() bounds that lag before we assert on the flags. NOTE: `ie` is
+    // freed by dropIndex; it must not be touched past this point.
+    try h.a.dropIndex("q");
+
+    writer.join();
+    try std.testing.expect(!unexpected.load(.acquire));
+    try std.testing.expect(resolved.load(.acquire));
 }
 
 test "dropIndex removes the index" {

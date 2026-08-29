@@ -23,17 +23,28 @@
 //!
 //! ## Locking (GAP-0278 tiers)
 //!
-//! - `mu` is a brief registry-lookup mutex. It guards the `indexes` map only:
-//!   acquire, look up / insert / remove a pointer, release. It is NEVER held
-//!   across index or search I/O.
+//! - `mu` is a brief registry mutex. It guards the `indexes` map AND every
+//!   `IndexEngine.refs` in-flight reference count: acquire, look up / insert /
+//!   remove / count, release. It is NEVER held across index or search I/O
+//!   (the quiescence wait in `dropIndex` uses `drained.waitUncancelable`,
+//!   which releases `mu` while blocked).
 //! - Each `IndexEngine.write_mu` is a leaf-level mutex that serializes WRITES
 //!   to that one engine, honoring the fts-storage single-writer contract.
-//! - Searches do NOT take `write_mu`. They rely on the library's own internal
-//!   shared rw-lock (held for the lifetime of a `TermIterator`), so multiple
-//!   concurrent searches against the same engine are allowed; a search blocks
-//!   writers only for the duration the iterator is alive. The adapter fully
-//!   drains and deinits each iterator before returning, so writers are never
-//!   starved by a leaked reader.
+//! - Searches do NOT take `write_mu`; multiple concurrent searches against
+//!   the same engine are allowed, and the library's internal shared rw-lock
+//!   covers reader/writer overlap while the engine is ALIVE. Engine LIFETIME
+//!   is NOT covered by that rw-lock — `fts.Engine.deinit` does not take it
+//!   and explicitly delegates its quiescence contract to the caller — so
+//!   every reader AND writer path pins the engine with an in-flight
+//!   reference (`requireIndex` / paired `releaseIndex`), and `dropIndex`
+//!   tears an engine down only after its refcount drains to zero. Each
+//!   `TermIterator` is fully drained and deinited before returning, so
+//!   writers are never starved by a leaked reader.
+//! - Lock/wait ordering: `write_mu` is acquired only while holding no other
+//!   adapter lock; `releaseIndex` acquires `mu` only after `write_mu` was
+//!   released (defer order in the write paths); `dropIndex` never waits for
+//!   quiescence while holding `mu` (the condition wait releases it) or
+//!   `write_mu` (never taken there at all).
 
 const std = @import("std");
 const fts = @import("fts_storage_lib");
@@ -82,6 +93,13 @@ pub const FtsStorageAdapter = struct {
     /// `io`) rather than `std.Thread.Mutex`; we use it so the scheduler can see
     /// contention. Stored `self.io` is passed to every lock/unlock.
     mu: std.Io.Mutex = .init,
+    /// Paired with `mu`: `dropIndex` waits on this until the target engine's
+    /// `refs` drains to zero; `releaseIndex` broadcasts when the last
+    /// reference on a dropped engine goes away. Shared adapter-wide (drops
+    /// are rare), hence broadcast rather than signal — a single wake could
+    /// otherwise land on a dropper waiting for a DIFFERENT engine and be
+    /// swallowed by its predicate re-check.
+    drained: std.Io.Condition = .init,
 
     pub const IndexEngine = struct {
         engine: *fts.Engine,
@@ -106,20 +124,30 @@ pub const FtsStorageAdapter = struct {
         /// segments fine. Guarded by `write_mu`; conservative-high after an
         /// engine-internal auto-flush (worst case: one redundant no-op flush).
         max_doc_id_since_flush: u64 = 0,
-        /// Set true (under `write_mu`) by `dropIndex` once `engine` has been
-        /// flushed and torn down. Every write path (`indexNode`,
-        /// `indexNodeBatch`, `deleteNode`, `flush`) re-checks this
-        /// immediately after acquiring `write_mu` and bails with
-        /// `Error.IndexNotFound` instead of touching the deinited `engine`
-        /// field. This closes the tail of the drop/writer race that a plain
-        /// map-removal cannot: a writer may have already resolved this
-        /// `IndexEngine` pointer via `requireIndex` BEFORE `dropIndex`
-        /// removed it from the registry, but not yet reached its own
-        /// `write_mu.lock()` call — it will acquire `write_mu` only after
-        /// `dropIndex` releases it post-teardown, so it must not assume
-        /// `engine` is still alive at that point. See `dropIndex` for the
-        /// full rationale (REQ-FTS-DROP-WRITER-RACE-001).
-        dropped: bool = false,
+        /// In-flight reference count, guarded by the ADAPTER's `mu` (never by
+        /// `write_mu`). `requireIndex` increments it under `mu` before handing
+        /// this pointer out; `releaseIndex` decrements it under `mu` after the
+        /// operation fully completes (deferred AFTER the `write_mu` unlock in
+        /// write paths, and after iterator teardown in search paths).
+        /// `dropIndex` tears the engine down only once this drains to zero, so
+        /// a pinned `IndexEngine` — including `engine`, `dir`, `name`, and the
+        /// memory `write_mu` itself lives in — is guaranteed alive for the
+        /// whole operation (REQ-FTS-DROP-WRITER-RACE-001).
+        refs: u32 = 0,
+        /// Set true by `dropIndex` (atomic store, inside its `mu` critical
+        /// section) the moment the index is removed from the registry — i.e.
+        /// BEFORE teardown, while the engine is still alive. Write paths
+        /// (`indexNode`, `indexNodeBatch`, `deleteNode`, `flush`) load it
+        /// immediately after acquiring `write_mu` and bail with
+        /// `Error.IndexNotFound`. That check is a SEMANTIC refusal (don't
+        /// apply a write to an index whose on-disk tree is about to be
+        /// deleted), NOT the memory-safety mechanism — lifetime is guaranteed
+        /// by `refs` above. Atomic because it is written under `mu` but read
+        /// under `write_mu`; no single lock covers both sides. Searches
+        /// deliberately skip the check: a search that pinned the engine before
+        /// the drop simply completes against the still-alive engine (benign:
+        /// results for a just-dropped index).
+        dropped: std.atomic.Value(bool) = .init(false),
     };
 
     pub fn init(
@@ -141,13 +169,16 @@ pub const FtsStorageAdapter = struct {
             .base_path = path_copy,
             .indexes = .{},
             .mu = .init,
+            .drained = .init,
         };
         return self;
     }
 
     /// Flush + tear down every engine, close each index dir, free names and the
     /// registry map and base_path, then destroy self. Does NOT close base_dir
-    /// (caller owns it and must close it after this returns).
+    /// (caller owns it and must close it after this returns). Shutdown-time
+    /// quiescence is the CALLER's contract (no in-flight adapter operations may
+    /// exist when this runs) — `refs` is not consulted here.
     pub fn deinit(self: *FtsStorageAdapter) void {
         var it = self.indexes.iterator();
         while (it.next()) |entry| {
@@ -274,51 +305,56 @@ pub const FtsStorageAdapter = struct {
         try self.indexes.put(self.allocator, name_copy, ie);
     }
 
-    /// Flush + tear down the engine, close its dir, best-effort delete its
-    /// on-disk tree, then drop the registry entry and free the name. Errors
-    /// `IndexNotFound` if no such index.
+    /// Remove the registry entry, wait for every in-flight reference to
+    /// drain, then flush + tear down the engine, close its dir, best-effort
+    /// delete its on-disk tree, and free the wrapper. Errors `IndexNotFound`
+    /// if no such index.
+    ///
+    /// Refcounted quiescence (REQ-FTS-DROP-WRITER-RACE-001): every operation
+    /// that touches `ie.engine` — writers (`indexNode`, `indexNodeBatch`,
+    /// `deleteNode`, `flush`) AND searches (`search`, `searchPositions`) —
+    /// pins the wrapper via `requireIndex` (refs++ under `mu`) and releases it
+    /// only after the operation fully completes. After the map removal below,
+    /// `requireIndex` can hand out no NEW references; waiting for `refs == 0`
+    /// therefore guarantees no thread holds (or will ever again obtain) this
+    /// pointer before we deinit the engine and free the allocation. This is
+    /// what makes teardown safe: the library's `Engine.deinit` takes no
+    /// internal lock and delegates its quiescence contract to the caller, and
+    /// a straggler locking/unlocking `write_mu` inside a freed `IndexEngine`
+    /// would be a use-after-free even if it never touched `engine`.
+    ///
+    /// The wait uses the adapter's `drained` condition paired with `mu`
+    /// (`waitUncancelable` releases `mu` while blocked, so registry lookups
+    /// for OTHER indexes are never stalled), and no lock is held during the
+    /// teardown I/O. Teardown stays SYNCHRONOUS by design: `geode.fts.rebuild`
+    /// does drop→create on the same name, so the on-disk tree must be gone
+    /// before this returns.
+    // CANARY: REQ=REQ-FTS-DROP-WRITER-RACE-001; FEATURE="FullText"; ASPECT=DropDrainsWriters; STATUS=TESTED; TEST=tests/test_fts_storage_adapter.zig; OWNER=fts; UPDATED=2026-08-29
     pub fn dropIndex(self: *FtsStorageAdapter, name: []const u8) !void {
         self.mu.lockUncancelable(self.io);
         const kv = self.indexes.fetchRemove(name) orelse {
             self.mu.unlock(self.io);
             return Error.IndexNotFound;
         };
+        const ie = kv.value;
+        // Semantic refusal marker for stragglers that pinned `ie` before the
+        // removal above but haven't reached their `write_mu` section yet: they
+        // observe `dropped` and return `Error.IndexNotFound` instead of
+        // applying a write to an index whose on-disk tree is about to be
+        // deleted. (Their memory safety comes from the refcount, not this.)
+        ie.dropped.store(true, .release);
+        // Quiescence: drain every in-flight reader/writer. The predicate is
+        // re-checked under `mu` on every wake, and `releaseIndex` broadcasts
+        // when the last reference on a dropped engine goes away.
+        while (ie.refs != 0) self.drained.waitUncancelable(self.io, &self.mu);
         self.mu.unlock(self.io);
 
-        const ie = kv.value;
-
-        // Drain any in-flight writer before tearing the engine down: writers
-        // acquire `write_mu` inside indexNode/indexNodeBatch/deleteNode/flush
-        // (:320-376), and `requireIndex` can no longer hand out this engine
-        // (removed from the map above) — but a writer that already resolved
-        // `ie` via `requireIndex` BEFORE the removal above, and has not yet
-        // called `write_mu.lock()`, is still "in flight" and will acquire
-        // `write_mu` at some point after we release it below. Without taking
-        // `write_mu` here at all, that writer (or one already inside its
-        // write_mu section) can run `ie.engine.indexDocument`/etc. concurrently
-        // with (or after) `engine.deinit()` — a use-after-free.
-        //
-        // `write_mu` lives INSIDE this heap-allocated `IndexEngine` (it is a
-        // value field, not a pointer), and `allocator.destroy(ie)` below frees
-        // that memory — so we cannot hold `write_mu` locked across the
-        // `destroy` call (unlocking freed memory would itself be a UAF on the
-        // mutex). Instead: acquire `write_mu`, flush + deinit the engine and
-        // set `dropped = true` WHILE HOLDING IT, then unlock, and only THEN
-        // close/free/destroy. Every write path re-checks `ie.dropped`
-        // immediately after acquiring `write_mu` (see `IndexEngine.dropped`)
-        // and returns `Error.IndexNotFound` instead of touching `engine` — so
-        // a writer that acquires `write_mu` after our unlock here (the tail
-        // case above) observes a torn-down-but-still-allocated `ie` and never
-        // dereferences `engine`.
-        // CANARY: REQ=REQ-FTS-DROP-WRITER-RACE-001; FEATURE="FullText"; ASPECT=DropDrainsWriters; STATUS=TESTED; TEST=tests/test_fts_storage_adapter.zig; OWNER=fts; UPDATED=2026-08-29
-        ie.write_mu.lockUncancelable(self.io);
+        // Sole owner from here: the map entry is gone and refs drained to
+        // zero, so no other thread holds this pointer. Lock-free teardown.
         // error-policy: A — the index is being dropped and its on-disk tree
         // deleted below; a failed final flush cannot lose anything we keep.
         ie.engine.flush() catch {};
         ie.engine.deinit();
-        ie.dropped = true;
-        ie.write_mu.unlock(self.io);
-
         ie.dir.close(self.io);
         // error-policy: A — best-effort on-disk cleanup. std.Io.Dir.deleteTree
         // exists, so we can recursively remove the child tree base_dir-relative.
@@ -330,14 +366,48 @@ pub const FtsStorageAdapter = struct {
     }
 
     /// Resolve the engine wrapper for `name`, or null. Brief registry lookup.
+    /// Takes NO in-flight reference — the returned pointer is NOT protected
+    /// against a concurrent `dropIndex`. External callers use this strictly
+    /// as an existence probe (`== null`); any operation that dereferences the
+    /// engine must go through the adapter's own methods, which pin via
+    /// `requireIndex`.
     pub fn getIndex(self: *FtsStorageAdapter, name: []const u8) ?*IndexEngine {
         self.mu.lockUncancelable(self.io);
         defer self.mu.unlock(self.io);
         return self.indexes.get(name);
     }
 
+    /// Resolve the engine wrapper for `name` and pin it with an in-flight
+    /// reference (refs++ under `mu`). EVERY caller must pair this with
+    /// `releaseIndex` via a `defer` placed on the line IMMEDIATELY after this
+    /// call, before any other early return can fire — the reference is what
+    /// keeps `dropIndex` from deiniting the engine and freeing the wrapper
+    /// out from under the operation. Never call twice for the same operation
+    /// without releasing in between.
     fn requireIndex(self: *FtsStorageAdapter, name: []const u8) !*IndexEngine {
-        return self.getIndex(name) orelse Error.IndexNotFound;
+        self.mu.lockUncancelable(self.io);
+        defer self.mu.unlock(self.io);
+        const ie = self.indexes.get(name) orelse return Error.IndexNotFound;
+        ie.refs += 1;
+        return ie;
+    }
+
+    /// Drop the in-flight reference taken by `requireIndex`. When the last
+    /// reference on a dropped engine drains, wakes `dropIndex`'s quiescence
+    /// wait. In write paths the pairing `defer` runs AFTER the `write_mu`
+    /// unlock (LIFO defer order), so `mu` is never acquired while `write_mu`
+    /// is held.
+    fn releaseIndex(self: *FtsStorageAdapter, ie: *IndexEngine) void {
+        self.mu.lockUncancelable(self.io);
+        ie.refs -= 1;
+        const wake = ie.refs == 0 and ie.dropped.load(.acquire);
+        self.mu.unlock(self.io);
+        // Broadcast, not signal: `drained` is shared adapter-wide, and a
+        // single wake could land on a dropper waiting for a different engine
+        // (whose predicate re-check would swallow it). Waking outside the
+        // critical section is safe — the waiter registered itself before
+        // releasing `mu` inside `waitUncancelable`, so no wakeup is lost.
+        if (wake) self.drained.broadcast(self.io);
     }
 
     /// Segment-order guard helper (see `IndexEngine.max_doc_id_since_flush`):
@@ -361,14 +431,15 @@ pub const FtsStorageAdapter = struct {
         terms: []const fts.TermPosting,
     ) !void {
         const ie = try self.requireIndex(name);
+        defer self.releaseIndex(ie);
         ie.write_mu.lockUncancelable(self.io);
         defer ie.write_mu.unlock(self.io);
         // Tail of the dropIndex/writer race (REQ-FTS-DROP-WRITER-RACE-001):
-        // this `ie` may have been resolved via requireIndex BEFORE dropIndex
-        // removed it from the registry; dropIndex sets `dropped` under this
-        // same write_mu before tearing `engine` down, so this re-check is the
-        // only thing standing between us and a use-after-free.
-        if (ie.dropped) return Error.IndexNotFound;
+        // this `ie` may have been pinned via requireIndex BEFORE dropIndex
+        // removed it from the registry. Our reference keeps the engine alive
+        // (dropIndex drains refs before teardown); this check is the semantic
+        // refusal — don't apply a write to an index being dropped.
+        if (ie.dropped.load(.acquire)) return Error.IndexNotFound;
         try guardPostingOrder(ie, node_id);
         try ie.engine.indexDocument(node_id, terms);
         if (node_id > ie.max_doc_id_since_flush) ie.max_doc_id_since_flush = node_id;
@@ -381,11 +452,12 @@ pub const FtsStorageAdapter = struct {
         docs: []const fts.DocBatch,
     ) !void {
         const ie = try self.requireIndex(name);
+        defer self.releaseIndex(ie);
         ie.write_mu.lockUncancelable(self.io);
         defer ie.write_mu.unlock(self.io);
         // Tail of the dropIndex/writer race (REQ-FTS-DROP-WRITER-RACE-001) —
         // see the identical check in `indexNode`.
-        if (ie.dropped) return Error.IndexNotFound;
+        if (ie.dropped.load(.acquire)) return Error.IndexNotFound;
         // Segment-order guard: flush ahead of the batch if ANY id in it would
         // land below the memtable's running max, then track the batch max.
         // CALLER CONTRACT: ids WITHIN one batch MUST be ascending — callers
@@ -412,22 +484,24 @@ pub const FtsStorageAdapter = struct {
     /// Tombstone `node_id` in `name`.
     pub fn deleteNode(self: *FtsStorageAdapter, name: []const u8, node_id: u64) !void {
         const ie = try self.requireIndex(name);
+        defer self.releaseIndex(ie);
         ie.write_mu.lockUncancelable(self.io);
         defer ie.write_mu.unlock(self.io);
         // Tail of the dropIndex/writer race (REQ-FTS-DROP-WRITER-RACE-001) —
         // see the identical check in `indexNode`.
-        if (ie.dropped) return Error.IndexNotFound;
+        if (ie.dropped.load(.acquire)) return Error.IndexNotFound;
         try ie.engine.deleteDocument(node_id);
     }
 
     /// Force a synchronous flush of `name`'s memtable to a segment.
     pub fn flush(self: *FtsStorageAdapter, name: []const u8) !void {
         const ie = try self.requireIndex(name);
+        defer self.releaseIndex(ie);
         ie.write_mu.lockUncancelable(self.io);
         defer ie.write_mu.unlock(self.io);
         // Tail of the dropIndex/writer race (REQ-FTS-DROP-WRITER-RACE-001) —
         // see the identical check in `indexNode`.
-        if (ie.dropped) return Error.IndexNotFound;
+        if (ie.dropped.load(.acquire)) return Error.IndexNotFound;
         try ie.engine.flush();
         // Memtable sealed — reset the segment-order tracker.
         ie.max_doc_id_since_flush = 0;
@@ -439,7 +513,14 @@ pub const FtsStorageAdapter = struct {
     ///
     /// The iterator is fully drained and deinited BEFORE returning so the
     /// library's shared rw-lock is released and writers are never blocked by a
-    /// leaked reader. No `write_mu` is taken — concurrent searches are allowed.
+    /// leaked reader. No `write_mu` is taken — concurrent searches are allowed
+    /// — but the engine IS pinned via the `requireIndex`/`releaseIndex`
+    /// in-flight reference for the whole search: the library's rw-lock only
+    /// covers reader/writer overlap on a live engine, not engine lifetime
+    /// (`Engine.deinit` takes no lock), so the reference is what keeps a
+    /// concurrent `dropIndex` from deiniting the engine mid-search. A search
+    /// that pinned the engine before a drop completes normally against the
+    /// still-alive engine (benign: results for a just-dropped index).
     pub fn search(
         self: *FtsStorageAdapter,
         name: []const u8,
@@ -448,6 +529,7 @@ pub const FtsStorageAdapter = struct {
         max_results: usize,
     ) ![]Hit {
         const ie = try self.requireIndex(name);
+        defer self.releaseIndex(ie);
 
         var hits: std.ArrayListUnmanaged(Hit) = .empty;
         defer hits.deinit(allocator);
@@ -487,7 +569,9 @@ pub const FtsStorageAdapter = struct {
     /// `freePositionalHits`.
     ///
     /// Same locking posture as `search`: iterator fully drained + deinited
-    /// before returning, no `write_mu` taken.
+    /// before returning, no `write_mu` taken, engine pinned against a
+    /// concurrent `dropIndex` via the `requireIndex`/`releaseIndex` in-flight
+    /// reference for the whole search.
     // CANARY: REQ=REQ-GQL-FTS-ADV-001; FEATURE="Advanced FTS"; ASPECT=PositionalSearch; STATUS=TESTED; TEST=tests/test_fts_storage_adapter.zig; OWNER=index; UPDATED=2026-06-10
     pub fn searchPositions(
         self: *FtsStorageAdapter,
@@ -496,6 +580,7 @@ pub const FtsStorageAdapter = struct {
         term: []const u8,
     ) ![]PositionalHit {
         const ie = try self.requireIndex(name);
+        defer self.releaseIndex(ie);
 
         var hits: std.ArrayListUnmanaged(PositionalHit) = .empty;
         errdefer {
