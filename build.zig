@@ -7221,6 +7221,46 @@ pub fn build(b: *std.Build) void {
     const admin_bootstrap_hardening_step = b.step("test-admin-bootstrap-hardening", "Issue #819: data-dir permission check before persisting bootstrap secret");
     admin_bootstrap_hardening_step.dependOn(&run_admin_bootstrap_hardening_tests.step);
 
+    // ENG-3921: cross-process data-directory lock.  Unit lane for the leaf
+    // module src/server/data_dir_lock.zig (same standalone shape as
+    // data_dir_permissions.zig above: no dependency on the heavy `geode`
+    // module, so the suite stays cheap to compile).  Links libc for
+    // getpid/nanosleep in the fixtures.
+    //
+    // RED-first: src/server/data_dir_lock.zig does not exist yet, so this
+    // step fails to compile until the fix lands.  That is the intended
+    // pre-fix evidence for this lane; the behavioural repro lives in
+    // `test-datadir-lock-subprocess` below.
+    const data_dir_lock_mod = b.createModule(.{ .root_source_file = b.path("src/server/data_dir_lock.zig"), .target = target, .optimize = optimize });
+    data_dir_lock_mod.link_libc = true;
+    const data_dir_lock_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_data_dir_lock.zig"), .target = target, .optimize = optimize });
+    data_dir_lock_test_mod.addImport("data_dir_lock", data_dir_lock_mod);
+    data_dir_lock_test_mod.link_libc = true;
+    const data_dir_lock_tests = b.addTest(.{ .root_module = data_dir_lock_test_mod });
+    const run_data_dir_lock_tests = b.addRunArtifact(data_dir_lock_tests);
+    shardDep(test_step, &run_data_dir_lock_tests.step, 1, test_shard_loads, test_shard_index);
+    const data_dir_lock_step = b.step("test-data-dir-lock", "ENG-3921: cross-process data-dir lock primitive (unit)");
+    data_dir_lock_step.dependOn(&run_data_dir_lock_tests.step);
+
+    // ENG-3921 end-to-end: spawns real `./zig-out/bin/geode serve`
+    // processes and asserts that a second server (and an offline
+    // `geode auth reseal`) on a LIVE data dir is refused, while a
+    // SIGKILLed holder leaves no stale lock.  Same subprocess shape as
+    // test-cluster-3node-subprocess: consumes only the child binary's
+    // stdio, so no geode import graph is pulled into the test artifact.
+    const datadir_lock_subproc_tests = b.addTest(.{ .root_module = b.createModule(.{
+        .root_source_file = b.path("tests/test_datadir_lock_subprocess.zig"),
+        .target = target,
+        .optimize = optimize,
+    }) });
+    datadir_lock_subproc_tests.root_module.link_libc = true;
+    const run_datadir_lock_subproc_tests = b.addRunArtifact(datadir_lock_subproc_tests);
+    // The test execs ./zig-out/bin/geode, so it needs the install step to
+    // have run (same wiring as test-cluster-3node-subprocess).
+    run_datadir_lock_subproc_tests.step.dependOn(b.getInstallStep());
+    const datadir_lock_subproc_step = b.step("test-datadir-lock-subprocess", "ENG-3921: two `geode serve` on one data dir must be refused (subprocess e2e)");
+    datadir_lock_subproc_step.dependOn(&run_datadir_lock_subproc_tests.step);
+
     // Parallel-ingest hang reproduction tests — see triage of the
     // "thread-pool deinit timed out after 30000ms with 1 active tasks"
     // shutdown warning under a 16-worker Go-client ingest workload.
