@@ -1755,7 +1755,7 @@ pub const Parser = struct {
                     .with_clause = initial_with_clause,
                     .set_clauses = &.{},
                     .remove_clauses = &.{},
-                    .ret = for_stmt.For.return_clause,
+                    .ret = for_stmt.For.return_clause orelse .{ .items = &.{}, .distinct = false },
                     .order_by = for_stmt.For.order_by,
                     .offset = for_stmt.For.offset,
                     .limit = for_stmt.For.limit,
@@ -2294,7 +2294,7 @@ pub const Parser = struct {
                         .with_clause = null,
                         .set_clauses = &.{},
                         .remove_clauses = &.{},
-                        .ret = for_stmt.For.return_clause,
+                        .ret = for_stmt.For.return_clause orelse .{ .items = &.{}, .distinct = false },
                         .order_by = for_stmt.For.order_by,
                         .offset = for_stmt.For.offset,
                         .limit = for_stmt.For.limit,
@@ -5808,6 +5808,51 @@ pub const Parser = struct {
             } else {
                 return self.unexpected("expected ORDINALITY or OFFSET after WITH");
             }
+        }
+
+        // CANARY: REQ=REQ-GQL-FOR-WRITE-BODY-876; FEATURE="ForStatement"; ASPECT=BodyParse; STATUS=TESTED; TEST=tests/test_for_write_body.zig; OWNER=parser; UPDATED=2026-08-29
+        // geode#876: FOR is a <primitive query statement> (ISO/IEC 39075:2024) —
+        // a <data-modifying statement> may follow the header and the result
+        // statement is OPTIONAL. Anything other than RETURN is parsed as the
+        // loop BODY (CREATE / MERGE / MATCH ... SET ..., with its own optional
+        // trailing RETURN). The RETURN form below is unchanged.
+        if (self.cur.kind != .RETURN) {
+            const body_ptr = try self.arena.allocator().create(ast.Query);
+            if (self.cur.kind == .MERGE) {
+                // parseQuery has no leading-MERGE arm; wrap the MERGE in a query
+                // exactly like the post-WITH chaining path does.
+                const merge_stmt = try self.parseMergeStatement();
+                const merge_ptr = try self.arena.allocator().create(ast.MergeStatement);
+                merge_ptr.* = merge_stmt.Merge;
+                body_ptr.* = ast.Query{
+                    .optional_match = false,
+                    .match = .{ .chains = &.{} },
+                    .create_pattern = null,
+                    .where_clause = null,
+                    .with_clause = null,
+                    .set_clauses = &.{},
+                    .remove_clauses = &.{},
+                    .ret = merge_stmt.Merge.return_clause orelse .{ .items = &.{}, .distinct = false },
+                    .order_by = null,
+                    .limit = null,
+                    .offset = null,
+                    .next_query = null,
+                    .group_by = null,
+                    .having = null,
+                    .merge_statement = merge_ptr,
+                };
+            } else {
+                body_ptr.* = try self.parseQuery();
+            }
+
+            return .{ .For = .{
+                .variable = variable,
+                .collection = collection,
+                .ordinality_var = ordinality_var,
+                .offset_var = offset_var,
+                .return_clause = null,
+                .body = body_ptr,
+            } };
         }
 
         // Expect RETURN clause

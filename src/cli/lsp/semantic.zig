@@ -386,9 +386,15 @@ pub const SemanticAnalyzer = struct {
                 try self.scope.define(f.variable, .variable);
                 if (f.ordinality_var) |ov| try self.scope.define(ov, .variable);
                 if (f.offset_var) |ov| try self.scope.define(ov, .variable);
-                for (f.return_clause.items) |item| {
-                    try self.analyzeExpr(item.expr);
+                if (f.return_clause) |rc| {
+                    for (rc.items) |item| {
+                        try self.analyzeExpr(item.expr);
+                    }
                 }
+                // geode#876: a FOR may compose with a data-modifying body
+                // instead of a RETURN; the loop bindings above are in scope
+                // for it.
+                if (f.body) |body| try self.analyzeQuery(body.*);
             },
             .Values => |v| {
                 for (v.rows) |row| {

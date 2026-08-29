@@ -349,7 +349,15 @@ pub fn isMutatingStatement(stmt: *const ast.Statement) bool {
             break :blk false;
         },
         .Intersect, .Except => |bs| isQueryMutating(&bs.left) or isQueryMutating(&bs.right),
-        // Everything else (For, Show, etc.) is read-only
+        // geode#876: `FOR x IN <list> <data-modifying statement>` writes once
+        // per element. Left in `else => false` it would slip past the
+        // read-only-user gate, take the SHARED read lock while mutating shared
+        // store state, and bypass the cluster unreplicated-write gate. A plain
+        // `FOR ... RETURN` (no body) stays read-only so read loops keep the
+        // shared lock.
+        // CANARY: REQ=REQ-GQL-FOR-WRITE-BODY-876-CLASSIFY; FEATURE="ForStatement"; ASPECT=MutationClassification; STATUS=TESTED; TEST=tests/test_for_write_body.zig; OWNER=query_traits; UPDATED=2026-08-29
+        .For => |f| if (f.body) |body| isQueryMutating(body) else false,
+        // Everything else (Show, etc.) is read-only
         else => false,
     };
 }
@@ -473,6 +481,14 @@ pub fn isQueryMutating(q: *const ast.Query) bool {
 
     if (q.next_query) |next| {
         if (isQueryMutating(next)) return true;
+    }
+
+    // geode#876: `WITH ... FOR x IN <list> <data-modifying statement>` hangs the
+    // loop off the query as `for_statement`; its body carries the mutation.
+    if (q.for_statement) |for_stmt| {
+        if (for_stmt.body) |body| {
+            if (isQueryMutating(body)) return true;
+        }
     }
 
     return false;
