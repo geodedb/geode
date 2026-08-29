@@ -380,3 +380,78 @@ procedure via `graph_store.DEFAULT_GRAPH_NAME` unconditionally.
 
 **Commit:** (this report append, folded into the same commit as the docs
 change — see repo log)
+
+## Fix: next_query recursion
+
+A follow-up review of Finding 1 (chained-WITH sibling) found that
+`isQueryMutating` still did not recurse into `q.next_query`
+(`src/query/query_traits.zig` ~:443-467, `ast.zig:114`), the pointer the
+parser populates for chained-WITH shapes
+(`src/gql/parser.zig` ~:1772-1792/2289/2338/4558, e.g.
+`MATCH ... WITH ... MATCH ... SET/CALL/CREATE ...`). A tail query carrying
+`set_clauses` or a mutating `call_clause` left the whole statement
+classified non-mutating — the same read-only-floor bypass class as
+Finding 1, one chaining level deeper. `isStoreFreeQuery` (:387) and
+`isPointReadQuery` (:501) already treated any non-null `next_query` as
+disqualifying, so the fix mirrors their existing pattern.
+
+**AST-structural precondition evidence.** Before trusting the mutation
+assertion, a dedicated test parses
+`"MATCH (n:X) WITH n MATCH (m:Y) SET m.k = 1"` with the real parser and
+asserts directly on the AST: the head query's own `set_clauses.len == 0`,
+`head_query.next_query != null`, and
+`head_query.next_query.?.set_clauses.len > 0` — proving the mutating `SET`
+genuinely lands on the tail query reachable only via `next_query`, not on
+the head. This precondition test passed on the first run (no code change
+needed to make the AST shape correct — only the classifier was missing the
+recursion).
+
+**RED (before fix, `zig build test-read-only-execute`):**
+
+```
++- run test 9 pass, 1 fail (10 total)
+error: 'test_read_only_execute.test.read-only classification refuses chained-WITH tail SET (next_query mutation)' failed:
+       .../testing.zig:615:14: 0x12601d9 in expect (std.zig)
+       tests/test_read_only_execute.zig:171:5: try testing.expect(query_traits.isMutatingProgram(&mutating[0]));
+Build Summary: 34/36 steps succeeded (1 failed); 9/10 tests passed (1 failed)
+```
+
+The structural-precondition test itself passed even in this RED run,
+confirming the AST shape was already correct and only the classifier logic
+was the bug.
+
+**Fix.** One `if (q.next_query) |next| { if (isQueryMutating(next)) return true; }`
+block added to `isQueryMutating`, mirroring the existing
+`initial_call_subquery` recursion immediately above it. Each recursion
+level re-checks `call_clause`/`initial_call_subquery`/`next_query`, so
+arbitrarily deep WITH chains are covered without additional code.
+
+**GREEN:**
+
+- `zig build test-read-only-execute` — 10/10 pass.
+- `zig build test-mcp-read-only` — pass.
+- `zig build test-transport-parity` — all 12 sub-tests `✓`, rc=0.
+- `zig build test-merge-query-is-mutating` — pass.
+- `zig build` (full binary build) — rc=0.
+
+**Over-block canary (harness, managed server confirmed started via
+"Server ready on port ..." in each log):**
+
+- `geode-test-harness make test-spec SPEC=read_only_execute.yml` —
+  7/7 PASS.
+- `geode-test-harness make test-spec SPEC=fts_storage_basic.yml` —
+  13/13 PASS.
+
+Both confirm the fix does not over-block legitimate read-only chained-WITH
+or FTS traffic.
+
+**CANARY.** Updated the marker above `isQueryMutating`
+(`src/query/query_traits.zig:431`) — FEATURE broadened to include
+"chained-WITH mutation classification", UPDATED=2026-08-28 — and appended a
+GAP note documenting the follow-up fix and its mirror relationship to
+`isStoreFreeQuery`/`isPointReadQuery`. `docs/status.csv` regenerated via
+`make status-generate` (1-line diff reflecting the updated FEATURE text for
+REQ-ENG-3960-CALL-MUTATION-CLASSIFICATION).
+
+**Commit:** `6159f95d` — `fix(security): recurse into next_query in the
+read-only mutation classifier`
