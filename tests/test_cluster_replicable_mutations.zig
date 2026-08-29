@@ -821,15 +821,19 @@ test "cluster: MATCH…CREATE edge sent to a follower fails closed" {
 // Test 7: every durable write surface WITHOUT a Raft replication slice must
 // fail closed in cluster mode (no silent divergence).
 // ---------------------------------------------------------------------------
-// At HEAD each of these surfaces is completely ungated: a leader applies the
-// write to its LOCAL store only (00000 success, never proposed through Raft)
-// and a follower does the same — both halves are silent divergence. The
-// fail-closed doctrine (gateUnreplicatedWrite, src/distributed/cluster.zig):
+// Fixed 2026-06-10 (docs/bugs/2026-06-04-cluster-raft-no-stable-quorum-writes-time-out.md):
+// write surfaces with no Raft replication slice now fail closed instead of
+// silently applying to the local store only. This has been the green pin
+// ever since — `gateUnreplicatedWrite` (src/distributed/cluster.zig) refuses
+// every gated surface listed in CLAUDE.md's "Cluster-mode fail-closed
+// surfaces" section (geode.ts.insert*, auth/policy DDL, tenant
+// create/drop/set_quota, CREATE/DROP INDEX/GRAPH, constraints, mutating
+// TDE/CDC/FLE procedures):
 //   leader   → error.ClusterWriteNotReplicable (no replication slice exists)
 //   follower → error.ClusterNotLeader          (standard Raft redirect)
 //   standalone → unchanged.
-// This test accumulates ALL accepting surfaces before failing, so the red run
-// shows the full hole inventory in one pass.
+// This test accumulates ALL accepting surfaces before failing, so a future
+// regression that reopens any hole shows the full inventory in one pass.
 // CANARY: REQ=REQ-DIST-CLUSTER-FAILCLOSED-UNREPLICATED; FEATURE="DistributedCluster"; ASPECT=E2EFailClosed; STATUS=TESTED; TEST=tests/test_cluster_replicable_mutations.zig; OWNER=distributed; UPDATED=2026-08-28
 test "cluster: unreplicated write surfaces fail closed (no silent divergence)" {
     if (skipPreflight()) return error.SkipZigTest;

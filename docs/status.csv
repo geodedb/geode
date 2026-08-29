@@ -1108,10 +1108,8 @@ REQ-EXEC-READ-ONLY-REQUEST-001,ReadOnlyExecute,CliOption,TESTED,,,engine,2026-08
 REQ-EXEC-READ-ONLY-REQUEST-001,ReadOnlyExecute,CliOption,TESTED,,,engine,2026-08-28,src/cli/main.zig
 REQ-EXEC-READ-ONLY-REQUEST-001,ReadOnlyExecute,CliOption,TESTED,,,engine,2026-08-28,src/client/quic_query_runner.zig
 REQ-EXEC-READ-ONLY-REQUEST-001,ReadOnlyExecute,GrpcGate,TESTED,,,engine,2026-08-28,src/transport/grpc_server.zig
-REQ-EXEC-READ-ONLY-REQUEST-001,ReadOnlyExecute,QuicGate,TESTED,,,engine,2026-08-28,.superpowers/sdd/task-5-brief.md
 REQ-EXEC-READ-ONLY-REQUEST-001,ReadOnlyExecute,QuicGate,TESTED,,,engine,2026-08-28,src/server/quic_connection_handler.zig
 REQ-EXEC-READ-ONLY-REQUEST-001,ReadOnlyExecute,Test,TESTED,,,engine,2026-08-28,tests/test_read_only_execute.zig
-REQ-EXEC-READ-ONLY-REQUEST-001,ReadOnlyExecute,WireField,TESTED,,,engine,2026-08-28,.superpowers/sdd/task-5-brief.md
 REQ-EXEC-READ-ONLY-REQUEST-001,ReadOnlyExecute,WireField,TESTED,,,engine,2026-08-28,src/proto/schema.zig
 REQ-EXEC-REFACTOR-001,ExecutionRefactoring,GRAPH_ALGORITHMS,EXEMPT,,,refactor,2025-10-17,src/execution/graph_algorithms.zig
 REQ-EXEC-REFACTOR-001,ExecutionRefactoring,ModuleStructure,TESTED,,,execution,2026-01-15,tests/test_gap_0193_impl_batch_promotion.zig
@@ -1302,7 +1300,6 @@ REQ-FN-SIZE-OF-VECTOR,SizeFunction,VectorDimension,TESTED,,,eval,2026-08-25,src/
 REQ-FN-SIZE-OF-VECTOR,SizeFunction,VectorDimension,TESTED,,,eval,2026-08-25,src/eval/call_handlers.zig
 REQ-FN-SIZE-OF-VECTOR,SizeFunction,VectorDimension,TESTED,,,eval,2026-08-25,tests/test_fn_dispatch_parity.zig
 REQ-FTS-001,FTS,FullTextSearch,TESTED,,,search,2026-01-16,tests/test_gap_0193_batch3_comprehensive.zig
-REQ-FTS-BULK-MERGE-LIVE-001,FullText,BulkMergeConnectionThreadMaintenance,TESTED,,,fts,2026-08-28,.superpowers/sdd/task-4-brief.md
 REQ-FTS-BULK-MERGE-LIVE-001,FullText,BulkMergeConnectionThreadMaintenance,TESTED,,,fts,2026-08-28,src/server/quic_connection_handler.zig
 REQ-FTS-BULK-MERGE-LIVE-001,FullText,BulkMergeConnectionThreadMaintenance,TESTED,,,fts,2026-08-28,src/server/quic_connection_handler.zig
 REQ-FTS-BULK-MERGE-LIVE-001,FullText,BulkMergeMaintenanceContract,TESTED,,,fts,2026-08-28,tests/test_fts_bulk_merge_maintenance.zig
@@ -1312,17 +1309,14 @@ REQ-FTS-INDEX-OPTIONS-VALIDATION,FulltextIndex,OptionsKeyValidation,TESTED,,,ind
 REQ-FTS-INDEX-OPTIONS-VALIDATION,FulltextIndex,SqlstateMapping,TESTED,,,index,2026-08-25,src/server/proto_util.zig
 REQ-FTS-REBUILD-001,CALL geode.fts.rebuild,Dispatch,TESTED,,,index,2026-08-28,src/execution/fts_dispatch.zig
 REQ-FTS-REBUILD-001,CALL geode.fts.rebuild,MutatingClassification,TESTED,,,index,2026-08-28,src/execution/procedure_access.zig
-REQ-FTS-REBUILD-001,CALL geode.fts.rebuild,RebuildBackfill,TESTED,,,index,2026-08-28,.superpowers/sdd/task-3-brief.md
 REQ-FTS-REBUILD-001,CALL geode.fts.rebuild,RebuildBackfill,TESTED,,,index,2026-08-28,src/execution/fts_index_ops.zig
 REQ-FTS-REBUILD-001,CALL geode.fts.rebuild,RebuildBackfill,TESTED,,,index,2026-08-28,tests/test_fts_rebuild.zig
 REQ-FTS-REBUILD-001,CALL geode.fts.rebuild,RebuildProc,TESTED,,,index,2026-08-28,src/execution/fts_dispatch.zig
 REQ-FTS-REBUILD-001,CALL geode.fts.rebuild,StepUpClassification,TESTED,,,index,2026-08-28,src/security/geode_auth_lib.zig
 REQ-FTS-ROW-VISIBILITY-001,FullText,PhraseRowFilter,TESTED,,,security,2026-08-28,src/execution/fts_dispatch.zig
 REQ-FTS-ROW-VISIBILITY-001,FullText,ProximityRowFilter,TESTED,,,security,2026-08-28,src/execution/fts_dispatch.zig
-REQ-FTS-ROW-VISIBILITY-001,FullText,RowVisibilityCombinator,TESTED,,,security,2026-08-28,.superpowers/sdd/task-1-brief.md
 REQ-FTS-ROW-VISIBILITY-001,FullText,RowVisibilityCombinator,TESTED,,,security,2026-08-28,src/execution/match_operations.zig
 REQ-FTS-ROW-VISIBILITY-001,FullText,SearchRowFilter,TESTED,,,security,2026-08-28,src/execution/fts_dispatch.zig
-REQ-FTS-ROW-VISIBILITY-001,FullText,TenantFilteredResults,TESTED,,,security,2026-08-28,.superpowers/sdd/task-1-brief.md
 REQ-FTS-ROW-VISIBILITY-001,FullText,TenantFilteredResults,TESTED,,,security,2026-08-28,tests/test_fts_authorization.zig
 REQ-FTS-ROW-VISIBILITY-001,FullText,TenantFilteredResults,TESTED,,,security,2026-08-28,tests/test_fts_authorization.zig
 REQ-FTS-SEARCH-001,FTS,FullTextSearch,TESTED,,,fts,2026-01-16,tests/test_gap_0193_batch4_comprehensive.zig
@@ -3777,7 +3771,6 @@ REQ-MCP-READ-ONLY-001,MCPReadOnly,ClassifierImport,TESTED,,,mcp,2026-08-28,src/m
 REQ-MCP-READ-ONLY-001,MCPReadOnly,CliFlag,TESTED,,,mcp,2026-08-28,src/cli/cli_dispatcher.zig
 REQ-MCP-READ-ONLY-001,MCPReadOnly,OptionDefinition,TESTED,,,mcp,2026-08-28,src/mcp/server.zig
 REQ-MCP-READ-ONLY-001,MCPReadOnly,OptionStorage,TESTED,,,mcp,2026-08-28,src/mcp/server.zig
-REQ-MCP-READ-ONLY-001,MCPReadOnly,QueryToolGate,TESTED,,,mcp,2026-08-28,.superpowers/sdd/task-6-brief.md
 REQ-MCP-READ-ONLY-001,MCPReadOnly,QueryToolGate,TESTED,,,mcp,2026-08-28,src/mcp/tools.zig
 REQ-MCP-READ-ONLY-001,MCPReadOnly,Test,TESTED,,,mcp,2026-08-28,tests/test_mcp_read_only.zig
 REQ-MCP-RESOURCE-SUBSCRIBE-001,MCPResourceSubscribe,UnsupportedSignal,TESTED,,,mcp,2026-06-10,src/mcp/server.zig
@@ -5458,7 +5451,6 @@ REQ-VECTOR-INDEX-POPULATION-001,Vector Index Population,VectorIndexPopulation,TE
 REQ-VECTOR-INDEX-POPULATION-002,Vector Index Population,PropertyValueIntegration,TESTED,,,index,2025-10-05,tests/test_vector_index_population.zig
 REQ-VECTOR-INDEX-POPULATION-003,Vector Index Population,JSONSerialization,TESTED,,,index,2025-10-05,tests/test_vector_index_population.zig
 REQ-VECTOR-INDEX-POPULATION-INTEGRATION-001,Vector Index Population Integration,IntegrationTesting,TESTED,,,claude,2025-01-05,tests/test_vector_index_population_integration.zig
-REQ-VECTOR-KNN-METRIC-VALIDATE-001,VectorIndex,QueryMetricMatchesIndex,TESTED,,,index,2026-08-28,.superpowers/sdd/task-2-brief.md
 REQ-VECTOR-KNN-METRIC-VALIDATE-001,VectorIndex,QueryMetricMatchesIndex,TESTED,,,index,2026-08-28,src/index/advanced_types_index.zig
 REQ-VECTOR-KNN-METRIC-VALIDATE-001,VectorIndex,QueryMetricMatchesIndex,TESTED,,,index,2026-08-28,src/server/proto_util.zig
 REQ-VECTOR-KNN-METRIC-VALIDATE-001,VectorIndex,QueryMetricMatchesIndex,TESTED,,,index,2026-08-28,src/value_types.zig

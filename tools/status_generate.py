@@ -55,6 +55,16 @@ def find_canary_markers(repo_path: Path) -> list[dict[str, str]]:
             or "/.claude/worktrees" in root
             or "/zig-out" in root
             or "/docs/superpowers/plans" in root
+            # Whole-branch review Finding 3: `.superpowers/` (gitignored —
+            # see .gitignore) holds per-session scratch state, including
+            # task briefs (`.superpowers/sdd/task-*-brief.md`) that
+            # sometimes carry CANARY markers copy-pasted from source for
+            # planning purposes. Those aren't real requirement evidence —
+            # the file isn't tracked, doesn't ship, and a fresh clone or
+            # CI run without that local session state produces a DIFFERENT
+            # status.csv than a machine with an active session, so
+            # status.csv stopped being reproducible from tracked source.
+            or "/.superpowers" in root
         ):
             continue
 
