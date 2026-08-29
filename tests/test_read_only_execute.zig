@@ -176,3 +176,45 @@ test "read-only classification allows a chained-WITH read-only program" {
     defer reading[1].deinit();
     try testing.expect(!query_traits.isMutatingProgram(&reading[0]));
 }
+
+// Final-review fix wave (2026-08-29 series, item 3): `isMutatingStatement`'s
+// `.Profile => |prof| isMutatingStatement(prof.query),` unwrap
+// (query_traits.zig:327) had no dedicated regression — the closest existing
+// coverage is the bare MATCH...CALL case above (no PROFILE wrapper) and
+// PROFILE's own parse/execute tests elsewhere, but nothing pins that a
+// mutating CALL wrapped in PROFILE still reaches isQueryMutating's
+// q.call_clause check through that unwrap. `PROFILE` never executes its
+// wrapped statement (see the `.Explain => false` sibling case just above the
+// `.Profile` arm — PROFILE, unlike EXPLAIN, DOES execute, hence recursing
+// into `prof.query` rather than always returning false), so this pins the
+// classification is still correct: a PROFILE-wrapped MATCH...CALL of a
+// mutating procedure (geode.ts.insert, same shape as the bare MATCH...CALL
+// test above) must classify mutating, and a PROFILE-wrapped read-only CALL
+// must not.
+test "read-only classification refuses PROFILE-wrapped MATCH...CALL with a mutating procedure" {
+    var mutating = try parseProgram("PROFILE MATCH (n:Device) CALL geode.ts.insert(1, 'temp', 100, 42) YIELD inserted RETURN inserted");
+    defer mutating[1].deinit();
+
+    // Structural precondition: PROFILE really does wrap a .Query statement
+    // whose call_clause carries the mutating CALL — otherwise the assertion
+    // below would pass for the wrong reason (e.g. a parse fallback that
+    // dropped PROFILE entirely).
+    const stmt = &mutating[0].statements[0];
+    const prof = switch (stmt.*) {
+        .Profile => |*p| p,
+        else => return error.UnexpectedStatementKind,
+    };
+    const wrapped_query = switch (prof.query.*) {
+        .Query => |*q| q,
+        else => return error.UnexpectedStatementKind,
+    };
+    try testing.expect(wrapped_query.call_clause != null);
+
+    try testing.expect(query_traits.isMutatingProgram(&mutating[0]));
+}
+
+test "read-only classification still allows a PROFILE-wrapped read-only CALL" {
+    var reading = try parseProgram("PROFILE MATCH (n:Doc) CALL geode.fts.search('idx', 'query') YIELD node, score RETURN node, score");
+    defer reading[1].deinit();
+    try testing.expect(!query_traits.isMutatingProgram(&reading[0]));
+}

@@ -209,9 +209,12 @@ class TestGoldenFixtureEndToEnd(unittest.TestCase):
     # Golden expectation: (REQ, Feature, Aspect, Status, File, Line), in the
     # generator's deterministic sort order (req, feature, aspect, file, line).
     # Line numbers are the 1-based line of the marker match within its
-    # fixture file (recomputed from the fixture content itself in
-    # test_line_numbers_match_fixture below, so a fixture edit can't drift
-    # silently out of sync with these hardcoded values).
+    # fixture file. These hardcoded values are pinned against the generator's
+    # actual output by test_golden_rows_exact (all rows, including the
+    # single-marker Line values) and test_duplicate_marker_disambiguated_by_line
+    # (the REQ-GOLD-DUP pair's [15, 19] Line values specifically) below — there
+    # is no separate test_line_numbers_match_fixture; a fixture edit that
+    # drifts these values out of sync fails one of those two tests instead.
     EXPECTED_ROWS = [
         ("REQ-GOLD-001", "GoldenBasic", "Parse", "TESTED", "src/sample.zig", "1"),
         ("REQ-GOLD-002", "GoldenWithTest", "Unit", "IMPL", "src/sample.zig", "2"),
