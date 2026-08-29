@@ -204,6 +204,10 @@ export GEODE_PASSWORD_MIN_WORDS=4                   # Default: 3, Min: 2
 # === Server Configuration ===
 export GEODE_SERVER_HOST="prod.geode.com"          # Default: "127.0.0.1"
 export GEODE_SERVER_PORT="3141"                    # Default: "3141"
+
+# === Brute-Force Lockout (see "Brute-Force Lockout" below) ===
+export GEODE_AUTH_RATE_MAX_ATTEMPTS=10             # Default: 10
+export GEODE_AUTH_RATE_LOCKOUT_SECS=60             # Default: 60, range 1-86400
 ```
 
 ## 6. Security Implementation
@@ -560,3 +564,49 @@ configure tenant-aware RLS policies that depend on `current_user()`
 for any database that is reachable through the MCP server.
 
 CANARY: REQ=REQ-DOC-MCP-LSP-BRIDGE; FEATURE="MCPLSPBridgeDoc"; ASPECT=Documentation; STATUS=EXEMPT; OWNER=mcp; UPDATED=2026-05-06
+
+---
+
+## Brute-Force Lockout (per-source-IP)
+
+Geode counts failed authentications per **source IP address** across both
+transports (QUIC HELLO and gRPC HELLO). Once an IP reaches the threshold it is
+refused for the duration of the lockout window, regardless of which username it
+tries — this is what stops a username-rotating password-spray.
+
+### Operator configuration
+
+| Knob | CLI flag | Environment variable | Default | Accepted range |
+|---|---|---|---|---|
+| Failures before lockout | `--auth-lockout-attempts <n>` | `GEODE_AUTH_RATE_MAX_ATTEMPTS` | `10` | 1 - 4294967295 |
+| Lockout window (seconds) | `--auth-lockout-secs <n>` | `GEODE_AUTH_RATE_LOCKOUT_SECS` | `60` | 1 - 86400 (1 day) |
+
+```bash
+# Widen the lockout for a NATed office that shares one egress IP
+geode serve --listen 0.0.0.0:3141 --auth-lockout-attempts 25 --auth-lockout-secs 300
+```
+
+**Precedence** is the geode-wide `flags > environment > defaults`, resolved
+**per knob**: supplying only `--auth-lockout-attempts` leaves the window on its
+environment value (or the default). A value outside the accepted range — `0`, a
+window over one day, or anything non-numeric — is REJECTED and falls through to
+the next source, so an operator typo can never disable brute-force protection.
+
+### Behaviour notes
+
+- **Keyed on the source IP only**, so every client behind a shared NAT egress
+  address shares one counter. Size `--auth-lockout-attempts` accordingly.
+- **In-memory and per-process**: the counters are not persisted and are not
+  shared across cluster nodes. A restart clears every lockout.
+- **A successful authentication resets that IP's counter**, and only a
+  credential that was actually checked and rejected increments it. Transport
+  faults, malformed HELLOs, and "the security store could not answer"
+  (`error.AuthUnavailable`) are NOT counted (ENG-3954 / #874), so a legitimate
+  client cannot lock itself out by hitting a degraded server.
+- **A correct credential does not clear an active lockout.** This is deliberate:
+  verifying the password first would let an attacker force an unbounded number
+  of Argon2id verifications from a locked IP (a CPU-amplification DoS). The
+  lockout check therefore runs BEFORE credential verification and simply expires
+  on its own.
+
+CANARY: REQ=REQ-DOC-AUTH-LOCKOUT-CONFIG; FEATURE="AuthRateLimiting"; ASPECT=Documentation; STATUS=EXEMPT; OWNER=security; UPDATED=2026-08-29

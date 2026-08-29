@@ -22,6 +22,19 @@ fn compat_milliTimestamp() i64 {
     }
     return @as(i64, ts.sec) * 1000 + @divTrunc(@as(i64, ts.nsec), 1_000_000);
 }
+/// Monotonic nanoseconds, for bounding a wait. Never walks backwards on an NTP
+/// step, unlike the REALTIME helpers above.
+fn compat_monotonicNs() u64 {
+    var ts: std.posix.timespec = .{ .sec = 0, .nsec = 0 };
+    if (comptime @import("builtin").os.tag == .linux) {
+        const rc = std.os.linux.clock_gettime(.MONOTONIC, &ts);
+        if (rc != 0) return 0;
+    } else {
+        const rc = std.c.clock_gettime(std.c.CLOCK.MONOTONIC, &ts);
+        if (rc != 0) return 0;
+    }
+    return @as(u64, @intCast(ts.sec)) * std.time.ns_per_s + @as(u64, @intCast(ts.nsec));
+}
 fn compat_timestamp() i64 {
     var ts: std.posix.timespec = .{ .sec = 0, .nsec = 0 };
     if (comptime @import("builtin").os.tag == .linux) {
@@ -310,7 +323,13 @@ const AuthFlightResult = struct {
 };
 
 const AuthFlight = struct {
-    cv: std.Io.Condition = std.Io.Condition.init,
+    /// Bumped (and futex-woken) by `finishAuthFlight`. ENG-3954 R-C: waiters
+    /// block on this word with a DEADLINE. `std.Io.Condition` has no timed wait
+    /// in Zig 0.16, and the untimed `waitUncancelable` it replaces is what let a
+    /// single owner that left without publishing strand every later
+    /// authentication for the same key — and the worker thread serving it —
+    /// for the life of the process.
+    wake: std.atomic.Value(u32) = std.atomic.Value(u32).init(0),
     refs: usize = 1,
     done: bool = false,
     result: AuthFlightResult = .{},
@@ -522,6 +541,23 @@ fn authFlightKey(username: []const u8, password: []const u8, stored_hash: []cons
     return out;
 }
 
+/// Upper bound on how long a single-flight WAITER blocks for the owner to
+/// publish its result. The owner's critical section is exactly one Argon2id
+/// verification (10-50 ms), so this is ~40x headroom; it exists only so that an
+/// owner which never publishes cannot hang the auth path forever (ENG-3954 R-C).
+const auth_flight_wait_timeout_ns: u64 = 2 * std.time.ns_per_s;
+
+/// Drop the registration for `key` only when it still points at `flight`.
+/// Caller holds `auth_flight_mutex`. Guarding on identity keeps a late owner
+/// from evicting a NEWER flight that has already taken over the same key.
+fn unregisterAuthFlight(key: AuthFlightKey, flight: *AuthFlight) void {
+    if (auth_flights) |*flights| {
+        if (flights.get(key)) |current| {
+            if (current == flight) _ = flights.remove(key);
+        }
+    }
+}
+
 fn beginAuthFlight(key: AuthFlightKey) !AuthFlightStart {
     const io = std.Io.Threaded.global_single_threaded.io();
     auth_flight_mutex.lockUncancelable(io);
@@ -533,13 +569,38 @@ fn beginAuthFlight(key: AuthFlightKey) !AuthFlightStart {
 
     if (auth_flights.?.get(key)) |flight| {
         flight.refs += 1;
+        const deadline_ns = compat_monotonicNs() +| auth_flight_wait_timeout_ns;
         while (!flight.done) {
-            flight.cv.waitUncancelable(io, &auth_flight_mutex);
+            const now_ns = compat_monotonicNs();
+            if (now_ns >= deadline_ns) {
+                // ENG-3954 R-C: the owner never published. Fail this attempt
+                // cleanly (an infrastructure error, NOT a credential verdict, so
+                // auth_rate_limiter.shouldCountFailedAttempt leaves the per-IP
+                // lockout alone) and drop the stale registration so the next
+                // authentication starts a fresh flight instead of joining a dead
+                // one. The abandoned owner still holds its own reference, so the
+                // flight itself stays alive for it to finish into.
+                flight.refs -= 1;
+                unregisterAuthFlight(key, flight);
+                if (flight.refs == 0) std.heap.c_allocator.destroy(flight);
+                return error.AuthFlightTimeout;
+            }
+            // Sampled under the mutex, which `finishAuthFlight` also holds while
+            // bumping it: a publish that lands after this read but before the
+            // futex wait makes the wait return immediately.
+            const observed = flight.wake.load(.acquire);
+            const remaining_ns = deadline_ns - now_ns;
+            auth_flight_mutex.unlock(io);
+            io.futexWaitTimeout(u32, &flight.wake.raw, observed, .{ .duration = .{
+                .raw = std.Io.Duration.fromNanoseconds(@intCast(remaining_ns)),
+                .clock = .awake,
+            } }) catch {};
+            auth_flight_mutex.lockUncancelable(io);
         }
         const result = flight.result;
         flight.refs -= 1;
         if (flight.refs == 0) {
-            _ = auth_flights.?.remove(key);
+            unregisterAuthFlight(key, flight);
             std.heap.c_allocator.destroy(flight);
         }
         if (!result.ok) return error.Unauthenticated;
@@ -561,9 +622,14 @@ fn finishAuthFlight(key: AuthFlightKey, flight: *AuthFlight, result: AuthFlightR
     flight.refs -= 1;
     const destroy_now = flight.refs == 0;
     if (destroy_now) {
-        _ = auth_flights.?.remove(key);
+        unregisterAuthFlight(key, flight);
     }
-    flight.cv.broadcast(io);
+    // Bump + wake while STILL holding the mutex (as the previous
+    // `cv.broadcast` did): once it is released, a waiter can take the result,
+    // drop the last reference and destroy `flight` — touching `flight.wake`
+    // after that would be a use-after-free.
+    _ = flight.wake.fetchAdd(1, .release);
+    io.futexWake(u32, &flight.wake.raw, std.math.maxInt(u32));
     auth_flight_mutex.unlock(io);
 
     if (destroy_now) {
@@ -781,16 +847,28 @@ fn authenticateChecked(username: []const u8, password: []const u8) !AuthResult {
     switch (try beginAuthFlight(flight_key)) {
         .waited => |result| return result,
         .owner => |flight| {
+            // ENG-3954 R-C: the owner MUST publish a result on every exit, or
+            // every later authentication for this key blocks on the flight. The
+            // `try verifyPassword` below is such an exit (an infrastructure
+            // error, e.g. error.FipsUnsupported, propagates straight out), and
+            // any fallible call added here later would be another. This guard
+            // publishes a failure for whichever exit did not publish one itself;
+            // `published` keeps it from double-finishing the explicit paths.
+            var published = false;
+            defer if (!published) finishAuthFlight(flight_key, flight, .{ .ok = false });
+
             // Phase 2: Verify password OUTSIDE the lock (Argon2id, 10-50ms).
             if (!user_data.active) {
                 // Same timing-defense rationale: an inactive user should look the
                 // same as an active user with the wrong password.
                 _ = verifyPassword(password, user_data.password_hash) catch false;
                 finishAuthFlight(flight_key, flight, .{ .ok = false });
+                published = true;
                 return error.Unauthenticated;
             }
             if (!(try verifyPassword(password, user_data.password_hash))) {
                 finishAuthFlight(flight_key, flight, .{ .ok = false });
+                published = true;
                 return error.Unauthenticated;
             }
 
@@ -800,6 +878,7 @@ fn authenticateChecked(username: []const u8, password: []const u8) !AuthResult {
                 .auth_version = user_data.auth_version,
             };
             finishAuthFlight(flight_key, flight, .{ .ok = true, .result = result });
+            published = true;
             return result;
         },
     }

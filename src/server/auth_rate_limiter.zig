@@ -64,16 +64,11 @@ pub const AuthRateLimiter = struct {
     /// 1-second window instead of waiting the production 60 s.
     /// CANARY: REQ=REQ-AUTH-RATE-ENV-001; FEATURE="AuthRateLimiterEnvConfig"; ASPECT=LockoutOverride; STATUS=TESTED; TEST=geode-test-harness/geodetestlab-cli/specs/authn_rate_limiter.yml; OWNER=security; UPDATED=2026-05-22
     pub fn initFromEnv(allocator: std.mem.Allocator) Self {
-        var max_attempts = default_max_attempts;
-        var lockout_ns = default_lockout_duration_ns;
-
-        if (readEnvU64("GEODE_AUTH_RATE_MAX_ATTEMPTS")) |v| {
-            if (v > 0 and v <= std.math.maxInt(u32)) max_attempts = @intCast(v);
-        }
-        if (readEnvU64("GEODE_AUTH_RATE_LOCKOUT_SECS")) |secs| {
-            if (secs > 0 and secs <= 86_400) lockout_ns = secs * std.time.ns_per_s;
-        }
-        return initWithConfig(allocator, max_attempts, lockout_ns);
+        // Same resolution the operator-facing flags use, with no CLI values
+        // supplied — env > default. Keeping one resolver means the precedence
+        // cannot drift between the bootstrap path and the flags.
+        const cfg = resolveConfig(null, null);
+        return initWithConfig(allocator, cfg.max_attempts, cfg.lockout_duration_ns);
     }
 
     /// Parse a positive integer from a process env var. Returns null when the
@@ -264,6 +259,61 @@ pub fn shouldCountFailedAttempt(err: anyerror) bool {
 /// never reach the limiter.
 pub fn credentialsPresent(username: []const u8, password: []const u8) bool {
     return username.len > 0 and password.len > 0;
+}
+
+// ── Lockout configuration resolution (ENG-3954 / #874) ─────────────────
+// The threshold and window used to be reachable ONLY through process env
+// vars, so an operator whose supervisor does not forward env (systemd without
+// `Environment=`, a k8s command-only override, a wrapper shell script) had no
+// way to widen a lockout that misfired on their network. Resolution lives in
+// this module because it is the one file both transports and the server
+// bootstrap already share, so precedence cannot drift.
+//
+// CANARY: REQ=REQ-SEC-RATE-LIMIT-008; FEATURE="AuthRateLimiting"; ASPECT=OperatorConfig; STATUS=TESTED; TEST=auth_rate_limiter_tests; OWNER=security; UPDATED=2026-08-29
+
+/// Env var names for the two lockout knobs (also settable as CLI flags).
+pub const max_attempts_env = "GEODE_AUTH_RATE_MAX_ATTEMPTS";
+pub const lockout_secs_env = "GEODE_AUTH_RATE_LOCKOUT_SECS";
+
+/// Upper bound on an accepted lockout window (1 day). Anything larger is an
+/// operator typo, not a policy.
+pub const max_lockout_secs: u64 = 86_400;
+
+/// A fully resolved lockout configuration, ready for `initWithConfig`.
+pub const LockoutConfig = struct {
+    max_attempts: u32,
+    lockout_duration_ns: u64,
+};
+
+fn validAttempts(v: u64) ?u32 {
+    if (v == 0 or v > std.math.maxInt(u32)) return null;
+    return @intCast(v);
+}
+
+fn validLockoutNs(secs: u64) ?u64 {
+    if (secs == 0 or secs > max_lockout_secs) return null;
+    return secs * std.time.ns_per_s;
+}
+
+/// Resolve the per-IP lockout thresholds with the geode-wide precedence
+/// flags > env > default, each knob INDEPENDENTLY (supplying one flag never
+/// resets the other to its default).
+///
+/// `cli_max_attempts` / `cli_lockout_secs` are the `--auth-lockout-attempts` /
+/// `--auth-lockout-secs` values (null = operator said nothing). An
+/// out-of-range value at any level is rejected and falls through to the next
+/// source: a typo must never disable brute-force protection outright.
+pub fn resolveConfig(cli_max_attempts: ?u32, cli_lockout_secs: ?u64) LockoutConfig {
+    const cli_attempts: ?u32 = if (cli_max_attempts) |v| validAttempts(v) else null;
+    const env_attempts: ?u32 = if (AuthRateLimiter.readEnvU64(max_attempts_env)) |v| validAttempts(v) else null;
+
+    const cli_ns: ?u64 = if (cli_lockout_secs) |secs| validLockoutNs(secs) else null;
+    const env_ns: ?u64 = if (AuthRateLimiter.readEnvU64(lockout_secs_env)) |secs| validLockoutNs(secs) else null;
+
+    return .{
+        .max_attempts = cli_attempts orelse env_attempts orelse AuthRateLimiter.default_max_attempts,
+        .lockout_duration_ns = cli_ns orelse env_ns orelse AuthRateLimiter.default_lockout_duration_ns,
+    };
 }
 
 // ── Tests ──────────────────────────────────────────────────────────────

@@ -527,16 +527,23 @@ pub const UserStorageBackend = struct {
     /// Locate a persisted `:User` record, distinguishing "definitively absent"
     /// (null) from "the store could not answer" (`error.SecurityStoreUnavailable`).
     ///
-    /// Absent means at least one of the two enumeration paths (in-memory label
-    /// postings, engine-direct scan) produced a complete candidate list and the
-    /// username was not in it. Unavailable means neither path could produce one:
-    /// the `__geode_security` hydration is quarantined/missing AND the engine
-    /// adapter is absent or failed the scan.
-    /// CANARY: REQ=REQ-SEC-AUTH-UNAVAILABLE-002; FEATURE="AuthOutcomeClassification"; ASPECT=StorageLookup; STATUS=TESTED; TEST=tests/test_auth_unavailable_classification.zig; OWNER=security; UPDATED=2026-08-28
+    /// Absent means the engine-direct scan RAN to completion and the username was
+    /// not in it. Unavailable means it could not run at all: the engine adapter is
+    /// absent or the slot scan failed.
+    ///
+    /// ENG-3954: an in-memory HIT still resolves without the engine (GAP-0061's
+    /// healthy path), but a MISS on the in-memory postings is NOT evidence of
+    /// absence. The posting is set by mere presence of a `__geode_security:User`
+    /// label entry — true for an empty posting, for one whose node bodies are
+    /// unreadable (`loadUserRecordFromNode ... orelse continue`), and for a
+    /// partially-hydrated posting that is simply missing this principal. Those are
+    /// exactly the degraded states the engine-direct fallback was added for, so
+    /// letting the posting vouch for "no such user" is circular: it trusts the
+    /// path we already decided not to trust, and the resulting `null` becomes
+    /// `error.Unauthenticated` upstream, which the per-IP limiter COUNTS.
+    /// CANARY: REQ=REQ-SEC-AUTH-UNAVAILABLE-002; FEATURE="AuthOutcomeClassification"; ASPECT=StorageLookup; STATUS=TESTED; TEST=tests/test_auth_unavailable_classification.zig; OWNER=security; UPDATED=2026-08-29
     pub fn findUserByUsernameInGraphChecked(store: *graph_store.GraphStore, username: []const u8) !?UserRecord {
-        var enumerated = false;
         if (store.getNodesByLabel(SECURITY_GRAPH_NAME, USER_LABEL)) |nodes| {
-            enumerated = true;
             for (nodes) |node_id| {
                 const record = loadUserRecordFromNode(store, node_id) orelse continue;
                 if (std.mem.eql(u8, record.getUsername(), username)) {
@@ -547,14 +554,12 @@ pub const UserStorageBackend = struct {
         // GAP-0061: engine-direct fallback when the in-memory path had no match
         // (quarantined hydration, or an unreadable resident node body). Without
         // this the persisted admin credential is unloadable after a crash and
-        // every query returns "Authentication failed".
-        const engine_result = findUserByUsernameEngineDirect(store.allocator, username) catch |err| {
-            // The engine could not be scanned. Only the in-memory postings can
-            // still make "absent" a supportable answer.
-            if (enumerated) return null;
-            return err;
-        };
-        return engine_result;
+        // every query returns "Authentication failed". Its
+        // `error.SecurityStoreUnavailable` propagates: with no trustworthy
+        // enumeration, "no such user" is not a supportable answer. The verdict is
+        // identical for every unresolvable principal, so this adds no
+        // username-enumeration oracle (#829).
+        return try findUserByUsernameEngineDirect(store.allocator, username);
     }
 
     /// Legacy option-returning lookup, kept for the non-auth callers (bootstrap,
