@@ -36,6 +36,15 @@
 #   version and re-verifying the resulting prefix builds.
 set -euo pipefail
 
+# This script runs as a GoReleaser before-hook, and the CI build-release job
+# scopes OPENSSL_CONF=/usr/local/ssl/ssl/openssl.cnf (the validated FIPS
+# provider config) onto the goreleaser invocation — which GoReleaser forwards
+# to its hooks. Alpine's curl/openssl cannot load that provider and every TLS
+# handshake then fails DETERMINISTICALLY with "curl: (35) Insufficient
+# randomness" (v0.8.6 job 16156266534, v0.8.7 job 16172633085; retries cannot
+# help). The FIPS config is only meant for the zig build lane, so drop it here.
+unset OPENSSL_CONF OPENSSL_MODULES
+
 TARGET="${1:-}"
 OUTDIR="${2:-}"
 

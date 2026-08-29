@@ -1621,6 +1621,11 @@ snapshot:
     # and fail with `curl: (35) Insufficient randomness` (pipeline #1517
     # snapshot, first failure past the container-name fix). It is scoped to
     # the goreleaser invocation in the script instead.
+    # 2026-08-29: GoReleaser forwards that scoped env to its before-hooks,
+    # which is exactly the same failure one layer down — the
+    # fetch-openssl-prefix.sh hooks died with curl (35) on every tag since
+    # the hooks landed (v0.8.6/v0.8.7). The script now unsets OPENSSL_CONF
+    # itself; keep the scoping here as-is for the zig build lane.
   before_script:
     - apk add --no-cache curl git bash tar xz coreutils jq python3
     # Defensive cleanup: remove any stale artifacts or generated files
@@ -2140,6 +2145,11 @@ build-release:
     # and fail with `curl: (35) Insufficient randomness` (pipeline #1517
     # snapshot, first failure past the container-name fix). It is scoped to
     # the goreleaser invocation in the script instead.
+    # 2026-08-29: GoReleaser forwards that scoped env to its before-hooks,
+    # which is exactly the same failure one layer down — the
+    # fetch-openssl-prefix.sh hooks died with curl (35) on every tag since
+    # the hooks landed (v0.8.6/v0.8.7). The script now unsets OPENSSL_CONF
+    # itself; keep the scoping here as-is for the zig build lane.
   before_script:
     - apk add --no-cache curl git bash tar xz coreutils jq python3
     # Defensive cleanup: remove any stale artifacts or generated files
