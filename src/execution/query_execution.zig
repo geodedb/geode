@@ -1116,7 +1116,8 @@ fn computeChainAggregation(allocator: std.mem.Allocator, expr: ast.Expr, envs: [
                         }
                     }
                     if (count == 0) return Value{ .Null = {} };
-                    return Value{ .Int = @divTrunc(sum, count) };
+                    // avg() is a mean — never integer-divide (gql_conformance T16).
+                    return Value{ .Double = @as(f64, @floatFromInt(sum)) / @as(f64, @floatFromInt(count)) };
                 } else if (std.ascii.eqlIgnoreCase(func_name, "min")) {
                     var min: ?i64 = null;
                     for (envs) |env| {

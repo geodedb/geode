@@ -2832,11 +2832,12 @@ pub fn groupByAggregateFastPath(
                 .avg => blk: {
                     const a = group.accs[item_acc_idx[i]];
                     if (a.count == 0) break :blk Value{ .Null = {} };
-                    // I1: match legacy GROUP BY parity — pure-integer inputs emit
-                    // Int (integer divide, same as execution.zig computeGroupAggregation
-                    // ~line 2896); any float input in the group promotes to Double.
-                    if (!a.has_float) break :blk Value{ .Int = @divTrunc(a.sum_int, @as(i64, @intCast(a.count))) };
-                    break :blk Value{ .Double = a.sum_float / @as(f64, @floatFromInt(a.count)) };
+                    // avg() is a mean: pure-integer inputs must NOT integer-divide
+                    // (avg(1,2) is 1.5). The former "legacy GROUP BY parity" Int
+                    // branch was the outlier — every other avg path emits Double;
+                    // pinned by gql_conformance T16.
+                    const total: f64 = if (a.has_float) a.sum_float else @as(f64, @floatFromInt(a.sum_int));
+                    break :blk Value{ .Double = total / @as(f64, @floatFromInt(a.count)) };
                 },
                 .min => blk: {
                     const a = group.accs[item_acc_idx[i]];
@@ -4937,7 +4938,8 @@ fn computeMultiNodeAggregation(allocator: std.mem.Allocator, expr: ast.Expr, gro
                         }
                     }
                     if (count == 0) return Value{ .Null = {} };
-                    return Value{ .Int = @divTrunc(sum, count) };
+                    // avg() is a mean — never integer-divide (gql_conformance T16).
+                    return Value{ .Double = @as(f64, @floatFromInt(sum)) / @as(f64, @floatFromInt(count)) };
                 } else if (std.ascii.eqlIgnoreCase(func_name, "min")) {
                     var min: ?i64 = null;
                     for (group_envs) |env| {

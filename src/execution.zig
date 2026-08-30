@@ -3308,8 +3308,11 @@ pub fn computeGroupAggregation(allocator: std.mem.Allocator, expr: ast.Expr, gro
             }
         }
         if (count == 0) return Value{ .Null = {} };
-        if (has_float) return Value{ .Double = (float_sum + @as(f64, @floatFromInt(int_sum))) / @as(f64, @floatFromInt(count)) };
-        return Value{ .Int = @divTrunc(int_sum, count) };
+        // avg() is a mean: pure-integer inputs must NOT integer-divide (avg(1,2)
+        // is 1.5, not 1). Matches the Double convention of every other avg path
+        // (aggregation_evaluation.zig, match_operations streaming path); pinned
+        // by gql_conformance T16.
+        return Value{ .Double = (float_sum + @as(f64, @floatFromInt(int_sum))) / @as(f64, @floatFromInt(count)) };
     }
 
     // Handle min(expr)

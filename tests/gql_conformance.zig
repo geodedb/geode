@@ -29,9 +29,24 @@ fn deinitExpectedValue(allocator: std.mem.Allocator, val: ExpectedValue) void {
     }
 }
 
+// ENG-3921 follow-up: each test spawns its own server, and the G1/G2 session
+// seed helpers (`createTestGraphG1`) clear only RESIDENT nodes — a fresh server
+// lazily hydrates the previous test's persisted seed afterwards, so a shared
+// per-process data dir accumulates G1 rows across tests (count 3 → 6 → 9 …).
+// Give every spawn its own data dir; these tests are single-server and need no
+// cross-spawn durability.
+var run_query_serial = std.atomic.Value(u32).init(0);
+
 fn runQuery(allocator: std.mem.Allocator, query: []const u8) !util.ExecResult {
     const addr = "127.0.0.1:3181";
-    var server = try util.spawnServer(allocator, &.{ "./zig-out/bin/geode", "serve", "--listen", addr }, null);
+    const serial = run_query_serial.fetchAdd(1, .monotonic);
+    const pid = if (comptime @import("builtin").os.tag == .linux)
+        @as(i64, std.os.linux.getpid())
+    else
+        @as(i64, std.c.getpid());
+    var dir_buf: [96]u8 = undefined;
+    const data_dir = try std.fmt.bufPrint(&dir_buf, "/tmp/geode-gqlconf-{d}-{d}", .{ pid, serial });
+    var server = try util.spawnServer(allocator, &.{ "./zig-out/bin/geode", "serve", "--listen", addr, "--data-dir", data_dir }, null);
     defer server.deinit();
 
     // Wait for server to be ready with retries
