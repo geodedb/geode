@@ -7038,6 +7038,11 @@ pub const StorageAdapter = struct {
 
         // Edges live on the source node's shard.
         const from_shard = mg.shardEngineForNode(from_id);
+        // ENG-3983: both branches below reach into the DEFERRED `edge_index`
+        // directly; on a cold reopen it is empty until materialized, so an
+        // unhydrated lookup would report `error.EdgeNotFound` for a live edge.
+        // Mirrors `GraphEngine.getEdge`'s own hydrate-then-read contract.
+        try from_shard.ensureDerivedHydrated();
         if (currentStatementTxnForGraph(graph_name)) |s| {
             // R12: manual setEdgeProperty using Txn variants, routed to the
             // from_id's shard. Mirrors engine_edge_props.setEdgeProperty 1:1.
@@ -7178,6 +7183,9 @@ pub const StorageAdapter = struct {
         // Edges live on the source-node's shard (edge_id is shard-striped
         // by allocNode on the source shard).
         const from_shard = mg.shardEngineForNode(edge_id);
+        // ENG-3983: `edge_index` is deferred — hydrate before the direct read so a
+        // cold-reopen batch does not report `error.EdgeNotFound` for a live edge.
+        try from_shard.ensureDerivedHydrated();
         const edge_entry = (try from_shard.edge_index.get(edge_id)) orelse return error.EdgeNotFound;
         const from_id = edge_entry.from;
         const to_id = edge_entry.neighbor;
@@ -7287,6 +7295,17 @@ pub const StorageAdapter = struct {
         // shard (same addressing setEdgePropertiesBatch / getAllEdgeProperties
         // rely on).
         const from_shard = mg.shardEngineForNode(edge_slot);
+        // ENG-3983: `edge_index` is a DEFERRED derived index — on a cold reopen it
+        // is empty until `ensureDerivedHydrated` materializes it (the engine's own
+        // `GraphEngine.getEdge` hydrates before every `edge_index.get`). Reaching
+        // into it unhydrated returned null for EVERY live edge, which surfaced as
+        // geode's bounded-edge-cache hydrate-on-miss failing after restart: a
+        // cold `MATCH ()-[r:T]->() DELETE r` resolved the edge through the
+        // typed-edge scan (which DOES hydrate, see collectEdgePublicIdsByType)
+        // and then silently deleted nothing, and a cold `DETACH DELETE` orphaned
+        // every incident edge. Hydration is idempotent and atomically gated, so
+        // this is a one-time cost per shard per open.
+        try from_shard.ensureDerivedHydrated();
         const idx_entry = (try from_shard.edge_index.get(edge_slot)) orelse return null;
         const label_str = mg.label_dict.getString(idx_entry.rel_type) orelse "UNKNOWN";
         const label_copy = try allocator.dupe(u8, label_str);

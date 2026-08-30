@@ -8127,6 +8127,13 @@ pub fn build(b: *std.Build) void {
     // user_storage.findUserByUsernameInGraphChecked, so the suite drives that
     // production function directly against a real GraphStore.
     auth_unavailable_test_mod.addImport("user_storage", user_storage_mod);
+    // ENG-3979: the suite also drives the REAL persistent-resolver callbacks
+    // (extracted out of src/server/main.zig) to pin store-lock reentrancy —
+    // a self-held exclusive hold is already-synchronized, not "unavailable".
+    const persistent_auth_resolver_mod = b.createModule(.{ .root_source_file = b.path("src/server/persistent_auth_resolver.zig"), .target = target, .optimize = optimize });
+    persistent_auth_resolver_mod.addImport("geode", root_mod);
+    persistent_auth_resolver_mod.addImport("user_storage", user_storage_mod);
+    auth_unavailable_test_mod.addImport("persistent_auth_resolver", persistent_auth_resolver_mod);
     const auth_unavailable_tests = b.addTest(.{ .root_module = auth_unavailable_test_mod });
     const run_auth_unavailable_tests = b.addRunArtifact(auth_unavailable_tests);
     shardDep(test_step, &run_auth_unavailable_tests.step, 1, test_shard_loads, test_shard_index);
@@ -9680,6 +9687,18 @@ pub fn build(b: *std.Build) void {
     shardDep(test_step, &run_eng3912_tests.step, 0, test_shard_loads, test_shard_index);
     const eng3912_step = b.step("test-eng3912", "Run ENG-3912 vector dimension-pin lifecycle regressions");
     eng3912_step.dependOn(&run_eng3912_tests.step);
+
+    // ENG-3983: on a COLD (just-reopened) store the adapter read the DEFERRED
+    // per-shard `edge_index` without hydrating it, so the bounded edge-body
+    // cache could never rehydrate an edge — a relationship DELETE silently
+    // deleted nothing and DETACH DELETE orphaned every incident edge.
+    const eng3983_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_eng3983_cold_delete_edges.zig"), .target = target, .optimize = optimize, .link_libc = true });
+    eng3983_test_mod.addImport("geode", root_mod);
+    const eng3983_tests = b.addTest(.{ .root_module = eng3983_test_mod });
+    const run_eng3983_tests = b.addRunArtifact(eng3983_tests);
+    shardDep(test_step, &run_eng3983_tests.step, 0, test_shard_loads, test_shard_index);
+    const eng3983_step = b.step("test-eng3983", "Run ENG-3983 cold-store relationship DELETE / DETACH DELETE regressions");
+    eng3983_step.dependOn(&run_eng3983_tests.step);
 
     // ENG-3922: the vector dimension guard only covers INDEXED (label,
     // property) pairs, so an unindexed property silently accepts mixed

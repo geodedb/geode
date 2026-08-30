@@ -3792,17 +3792,17 @@ fn clusterReplicateDelete(
     // GQL plain-DELETE validation: a node that still has incident edges errors
     // (mirror the local path) BEFORE proposing anything. DETACH collects the
     // incident edges instead.
+    // ENG-3983: the CHECKED adjacency readers. An unreadable adjacency laundered
+    // into "no incident edges" would replicate a GDEL payload that drops the
+    // node but keeps its edges — the same dangling-edge corruption as the
+    // standalone path, propagated to EVERY node in the cluster. Fail closed.
     for (node_ids.items) |node_id| {
         if (d.detach) {
-            if (read_store.getOutgoingEdgeIds(node_id)) |out_ids| {
-                for (out_ids) |eid| try appendUniqueId(allocator, &edge_ids, eid);
-            }
-            if (read_store.getIncomingEdgeIds(node_id)) |in_ids| {
-                for (in_ids) |eid| try appendUniqueId(allocator, &edge_ids, eid);
-            }
+            for (try read_store.getOutgoingEdgeIdsChecked(node_id)) |eid| try appendUniqueId(allocator, &edge_ids, eid);
+            for (try read_store.getIncomingEdgeIdsChecked(node_id)) |eid| try appendUniqueId(allocator, &edge_ids, eid);
         } else {
-            const has_outgoing = if (read_store.getOutgoingEdgeIds(node_id)) |ids| ids.len > 0 else false;
-            const has_incoming = if (read_store.getIncomingEdgeIds(node_id)) |ids| ids.len > 0 else false;
+            const has_outgoing = (try read_store.getOutgoingEdgeIdsChecked(node_id)).len > 0;
+            const has_incoming = (try read_store.getIncomingEdgeIdsChecked(node_id)).len > 0;
             if (has_outgoing or has_incoming) return error.NodeHasEdges;
         }
     }
@@ -4397,13 +4397,23 @@ pub fn executeDelete(allocator: std.mem.Allocator, d: ast.DeleteStatement, curre
 
         if (!d.detach) {
             for (targets.node_ids) |node_id| {
-                const has_outgoing = if (read_store.getOutgoingEdgeIds(node_id)) |ids| ids.len > 0 else false;
-                const has_incoming = if (read_store.getIncomingEdgeIds(node_id)) |ids| ids.len > 0 else false;
+                // ENG-3983: the CHECKED readers — an unreadable adjacency must
+                // NOT be mistaken for "this node has no edges" and let a plain
+                // DELETE through the GQL edge guard.
+                const has_outgoing = (try read_store.getOutgoingEdgeIdsChecked(node_id)).len > 0;
+                const has_incoming = (try read_store.getIncomingEdgeIdsChecked(node_id)).len > 0;
                 if (has_outgoing or has_incoming) {
                     return error.NodeHasEdges;
                 }
             }
         }
+
+        // ENG-3983: edge ids removed as incident edges of a DETACH'd node in THIS
+        // statement. The relationship loop below needs them to tell "already
+        // deleted here" (fine) apart from "resolved by the MATCH but its body
+        // cannot be read back" (a silent no-op — fail closed instead).
+        var detached_edge_ids = std.ArrayList(u64).empty;
+        defer detached_edge_ids.deinit(allocator);
 
         // Delete the resolved nodes
         for (targets.node_ids) |node_id| {
@@ -4428,30 +4438,33 @@ pub fn executeDelete(allocator: std.mem.Allocator, d: ast.DeleteStatement, curre
                 // adjacency lists whose slices we are reading.
                 var edges_to_delete = std.ArrayList(u64).empty;
                 defer edges_to_delete.deinit(allocator);
-                if (read_store.getOutgoingEdgeIds(node_id)) |out_ids| {
-                    for (out_ids) |eid| {
+                // ENG-3983: CHECKED reads — an adjacency the engine cannot serve
+                // must abort the DETACH, never be read as "no incident edges"
+                // (which deletes the node and orphans every one of them).
+                for (try read_store.getOutgoingEdgeIdsChecked(node_id)) |eid| {
+                    try edges_to_delete.append(allocator, eid);
+                }
+                for (try read_store.getIncomingEdgeIdsChecked(node_id)) |eid| {
+                    // Avoid duplicating self-loop edges already collected above
+                    var already = false;
+                    for (edges_to_delete.items) |existing| {
+                        if (existing == eid) {
+                            already = true;
+                            break;
+                        }
+                    }
+                    if (!already) {
                         try edges_to_delete.append(allocator, eid);
                     }
                 }
-                if (read_store.getIncomingEdgeIds(node_id)) |in_ids| {
-                    for (in_ids) |eid| {
-                        // Avoid duplicating self-loop edges already collected above
-                        var already = false;
-                        for (edges_to_delete.items) |existing| {
-                            if (existing == eid) {
-                                already = true;
-                                break;
-                            }
-                        }
-                        if (!already) {
-                            try edges_to_delete.append(allocator, eid);
-                        }
-                    }
-                }
                 for (edges_to_delete.items) |edge_id| {
-                    if (store.getEdgePtr(edge_id) != null) {
-                        store.deleteEdge(edge_id);
-                    }
+                    // ENG-3983: an incident edge whose body cannot be resolved
+                    // cannot be durably deleted (`deleteEdge` needs its endpoint
+                    // + edge slots), so proceeding would leave it DANGLING once
+                    // the node goes. Refuse the whole DETACH instead.
+                    if (store.getEdgePtr(edge_id) == null) return error.IncidentEdgeUnresolvable;
+                    store.deleteEdge(edge_id);
+                    try detached_edge_ids.append(allocator, edge_id);
                 }
             }
             store.deleteNode(node_id);
@@ -4464,9 +4477,25 @@ pub fn executeDelete(allocator: std.mem.Allocator, d: ast.DeleteStatement, curre
         // resolved match set, so a WHERE over the relationship variable is
         // honoured here exactly as it is for nodes.
         for (targets.edge_ids) |edge_id| {
-            // Already gone (e.g. removed as an incident edge of a DETACH'd
-            // node above) — do not double-count it.
-            if (store.getEdgePtr(edge_id) == null) continue;
+            if (store.getEdgePtr(edge_id) == null) {
+                // Already gone (removed as an incident edge of a DETACH'd node
+                // above) — do not double-count it.
+                var already_detached = false;
+                for (detached_edge_ids.items) |done| {
+                    if (done == edge_id) {
+                        already_detached = true;
+                        break;
+                    }
+                }
+                if (already_detached) continue;
+                // ENG-3983: the MATCH resolved this edge id, so the row is NOT
+                // an honestly-empty match — the body simply cannot be read back,
+                // and `deleteEdge` would be a silent no-op. Fail closed rather
+                // than report success for a delete that did not happen. (An
+                // empty match resolves zero edge ids and never reaches here, so
+                // `MATCH … DELETE r` over no rows stays a successful 00000.)
+                return error.EdgeBodyUnresolvable;
+            }
             store.deleteEdge(edge_id);
             if (store.getEdgePtr(edge_id) == null) {
                 deleted_count += 1;
@@ -4491,8 +4520,9 @@ pub fn executeDelete(allocator: std.mem.Allocator, d: ast.DeleteStatement, curre
                     if (bindings.get(var_name)) |binding| {
                         switch (binding) {
                             .node_id => |nid| {
-                                const has_outgoing = if (read_store.getOutgoingEdgeIds(nid)) |ids| ids.len > 0 else false;
-                                const has_incoming = if (read_store.getIncomingEdgeIds(nid)) |ids| ids.len > 0 else false;
+                                // ENG-3983: CHECKED reads (see the match-clause path above).
+                                const has_outgoing = (try read_store.getOutgoingEdgeIdsChecked(nid)).len > 0;
+                                const has_incoming = (try read_store.getIncomingEdgeIdsChecked(nid)).len > 0;
                                 if (has_outgoing or has_incoming) {
                                     return error.NodeHasEdges;
                                 }
@@ -4517,29 +4547,27 @@ pub fn executeDelete(allocator: std.mem.Allocator, d: ast.DeleteStatement, curre
                                 // adjacency lists whose slices we are reading.
                                 var edges_to_remove = std.ArrayList(u64).empty;
                                 defer edges_to_remove.deinit(allocator);
-                                if (read_store.getOutgoingEdgeIds(nid)) |out_ids| {
-                                    for (out_ids) |eid| {
+                                // ENG-3983: CHECKED reads — see the match-clause
+                                // DETACH path above for why a swallowed hydrate
+                                // failure here orphans every incident edge.
+                                for (try read_store.getOutgoingEdgeIdsChecked(nid)) |eid| {
+                                    try edges_to_remove.append(allocator, eid);
+                                }
+                                for (try read_store.getIncomingEdgeIdsChecked(nid)) |eid| {
+                                    var already = false;
+                                    for (edges_to_remove.items) |existing| {
+                                        if (existing == eid) {
+                                            already = true;
+                                            break;
+                                        }
+                                    }
+                                    if (!already) {
                                         try edges_to_remove.append(allocator, eid);
                                     }
                                 }
-                                if (read_store.getIncomingEdgeIds(nid)) |in_ids| {
-                                    for (in_ids) |eid| {
-                                        var already = false;
-                                        for (edges_to_remove.items) |existing| {
-                                            if (existing == eid) {
-                                                already = true;
-                                                break;
-                                            }
-                                        }
-                                        if (!already) {
-                                            try edges_to_remove.append(allocator, eid);
-                                        }
-                                    }
-                                }
                                 for (edges_to_remove.items) |eid| {
-                                    if (store.getEdgePtr(eid) != null) {
-                                        store.deleteEdge(eid);
-                                    }
+                                    if (store.getEdgePtr(eid) == null) return error.IncidentEdgeUnresolvable;
+                                    store.deleteEdge(eid);
                                 }
                             }
                             store.deleteNode(nid);
