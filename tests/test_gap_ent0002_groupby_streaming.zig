@@ -421,15 +421,17 @@ test "GROUP BY declines when RLS user+policy context active, legacy returns corr
 
 // ── I5: avg / min / max type-tag correctness and multi-key GROUP BY ──────────
 
-test "GROUP BY avg integer group emits Int (parity with legacy)" {
-    // I5: pure-integer avg inputs must emit Value{ .Int } (integer divide),
-    // matching the legacy computeGroupAggregation in execution.zig.
+test "GROUP BY avg integer group emits the real mean as Double (parity with legacy)" {
+    // I5, updated by a3d4726d: avg() is a mean — pure-integer inputs must NOT
+    // integer-divide (avg(1,2) is 1.5). Every avg path emits Double now,
+    // pinned by gql_conformance T16; this test used to pin the old truncating
+    // Int branch, contradicting the deliberate change.
     var h = try Harness.init(testing.allocator);
     defer h.deinit();
-    // Seed: rank="a", values 10 and 20 → avg = 15 (integer divide).
+    // Seed: rank="a", values 10 and 20 → avg = 15.0.
     try h.seedWithIntValue("avg_a0", "a", 10);
     try h.seedWithIntValue("avg_a1", "a", 20);
-    // rank="b", values 10 and 21 → avg = @divTrunc(31, 2) = 15.
+    // rank="b", values 10 and 21 → avg = 15.5 (the truncation-visible case).
     try h.seedWithIntValue("avg_b0", "b", 10);
     try h.seedWithIntValue("avg_b1", "b", 21);
 
@@ -440,16 +442,15 @@ test "GROUP BY avg integer group emits Int (parity with legacy)" {
     try testing.expectEqual(@as(usize, 2), r.rows.len);
 
     for (r.rows) |row| {
-        // avg column is index 1; must be .Int (not .Double) for pure-integer inputs.
         const rank_str = switch (row[0]) {
             .Str => |s| s,
             else => return error.ExpectedStr,
         };
         const avg_val = row[1];
-        const expected_int: i64 = if (std.mem.eql(u8, rank_str, "a")) 15 else 15; // both 15
+        const expected: f64 = if (std.mem.eql(u8, rank_str, "a")) 15.0 else 15.5;
         switch (avg_val) {
-            .Int => |v| try testing.expectEqual(expected_int, v),
-            else => return error.ExpectedIntTagForAvg,
+            .Double => |v| try testing.expectApproxEqAbs(expected, v, 1e-9),
+            else => return error.ExpectedDoubleTagForAvg,
         }
     }
 }
