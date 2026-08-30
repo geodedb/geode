@@ -56,6 +56,15 @@ pub const ServerConfig = struct {
     // treated as all-tenants. Default false (unchanged single-tenant behaviour).
     strict_tenancy: bool = false,
 
+    // CANARY: REQ=REQ-SEC-RATE-LIMIT-008; FEATURE="AuthRateLimiting"; ASPECT=CLIConfig; STATUS=TESTED; TEST=tests/test_cli_args_cluster.zig; OWNER=security; UPDATED=2026-08-29
+    // ENG-3954: operator-configurable per-source-IP brute-force lockout.
+    // null = "operator said nothing", so auth_rate_limiter.resolveConfig falls
+    // through to GEODE_AUTH_RATE_MAX_ATTEMPTS / GEODE_AUTH_RATE_LOCKOUT_SECS and
+    // then the built-in defaults (10 attempts / 60 s). A malformed value parses
+    // to null rather than aborting startup, matching --cluster-port.
+    auth_lockout_attempts: ?u32 = null,
+    auth_lockout_secs: ?u64 = null,
+
     // GAP-0259: Configurable QUIC idle timeout (default 300s / 5 minutes)
     idle_timeout_ms: u64 = 300000,
 
@@ -226,6 +235,8 @@ pub fn printHelp() void {
     std.debug.print("  --no-auth                    Disable authentication (NOT recommended for production)\n", .{});
     std.debug.print("  --insecure-allow-all         Bypass ALL authorization checks (NOT FOR PRODUCTION)\n", .{});
     std.debug.print("  --strict-tenancy             Reject tenant-scoped ops with no tenant scope (also GEODE_STRICT_TENANCY=1)\n", .{});
+    std.debug.print("  --auth-lockout-attempts <n>  Failed logins per source IP before lockout (default 10; also GEODE_AUTH_RATE_MAX_ATTEMPTS)\n", .{});
+    std.debug.print("  --auth-lockout-secs <n>      Lockout window in seconds, 1-86400 (default 60; also GEODE_AUTH_RATE_LOCKOUT_SECS)\n", .{});
     std.debug.print("  --help                       Show this help message\n", .{});
     std.debug.print("\nConfig File Locations (searched in order):\n", .{});
     std.debug.print("  1. .geode/config.{{yaml|toml|json}}    (project config)\n", .{});
@@ -402,6 +413,14 @@ pub fn parseArgsFromSlice(allocator: std.mem.Allocator, args: []const []const u8
         } else if (std.mem.eql(u8, arg, "--strict-tenancy")) {
             // CANARY: REQ=REQ-MULTI-TENANT-STRICT-001; FEATURE="StrictTenancyMode"; ASPECT=CLIFlag; STATUS=TESTED; TEST=tests/test_gap0840_strict_tenancy.zig; OWNER=security; UPDATED=2026-06-08
             config.strict_tenancy = true;
+        } else if (std.mem.eql(u8, arg, "--auth-lockout-attempts") and ai + 1 < args.len) {
+            // CANARY: REQ=REQ-SEC-RATE-LIMIT-008; FEATURE="AuthRateLimiting"; ASPECT=CLIFlag; STATUS=TESTED; TEST=tests/test_cli_args_cluster.zig; OWNER=security; UPDATED=2026-08-29
+            config.auth_lockout_attempts = std.fmt.parseUnsigned(u32, args[ai + 1], 10) catch null;
+            ai += 1;
+        } else if (std.mem.eql(u8, arg, "--auth-lockout-secs") and ai + 1 < args.len) {
+            // CANARY: REQ=REQ-SEC-RATE-LIMIT-008; FEATURE="AuthRateLimiting"; ASPECT=CLIFlag; STATUS=TESTED; TEST=tests/test_cli_args_cluster.zig; OWNER=security; UPDATED=2026-08-29
+            config.auth_lockout_secs = std.fmt.parseUnsigned(u64, args[ai + 1], 10) catch null;
+            ai += 1;
         } else if (std.mem.eql(u8, arg, "--enable-fle") or std.mem.eql(u8, arg, "--enable-tde")) {
             // FLE/TDE are always available; flags accepted for compatibility
         } else if (std.mem.eql(u8, arg, "--tde-provider") and ai + 1 < args.len) {

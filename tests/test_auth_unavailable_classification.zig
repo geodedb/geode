@@ -214,3 +214,251 @@ test "authenticate still succeeds with correct credentials (ENG-3954 guard)" {
     const result = try um.authenticate("alice", "Password1!");
     try testing.expectEqual(um.Role.Admin, result.role);
 }
+
+// ── Residual R-A: the collapse also lives in the STORAGE lookup ─────────────
+//
+// The 2026-08-28 fix normalised authenticate()'s non-verdicts to
+// error.AuthUnavailable and taught user_storage to report
+// `error.SecurityStoreUnavailable` when the engine-direct scan cannot run
+// (src/storage/user_storage.zig:483-492). But `findUserByUsernameInGraphChecked`
+// (:536-558) still LAUNDERS that error into `null` whenever the in-memory label
+// posting merely *existed*:
+//
+//     const engine_result = findUserByUsernameEngineDirect(...) catch |err| {
+//         if (enumerated) return null;   // <-- :554  "no such user"
+//         return err;
+//     };
+//
+// `enumerated` is set by the mere PRESENCE of a `__geode_security:User` posting
+// (:538) — it is true for an EMPTY posting, for a posting whose node bodies are
+// unreadable (`loadUserRecordFromNode ... orelse continue`, :541), and for a
+// partially-hydrated posting that is simply missing this principal. Those are
+// exactly the degraded states the GAP-0061 engine-direct fallback was ADDED for,
+// so treating them as a complete candidate list is circular: we trust the path
+// we already decided not to trust, and answer "no such user".
+//
+// That `null` walks straight up main.zig:337 -> resolver null -> ensureUserCached
+// false -> getAuthSnapshot null -> authenticate error.Unauthenticated ->
+// auth_rate_limiter.shouldCountFailedAttempt == TRUE -> the per-IP brute-force
+// counter increments for a principal whose credentials were never checked. Ten
+// of those lock the IP for 60 s, and because the degradation persists, every
+// retry re-arms it.
+//
+// CONTRACT PINNED HERE: when the engine-direct fallback could not RUN (adapter
+// absent, or the scan itself failed) and the in-memory path produced no HIT, the
+// answer is `error.SecurityStoreUnavailable` — never `null`. An in-memory hit
+// still resolves (GAP-0061 healthy path), and a fallback that RAN and found
+// nothing still answers `null` (a genuine unknown user must keep counting).
+//
+// The #829 uniformity invariant is preserved and asserted: an unavailable store
+// answers IDENTICALLY for every principal it cannot resolve, so this introduces
+// no username-enumeration oracle.
+//
+// CANARY: REQ=REQ-SEC-AUTH-UNAVAILABLE-002; FEATURE="AuthOutcomeClassification"; ASPECT=StorageLookupResidual; STATUS=TESTED; TEST=tests/test_auth_unavailable_classification.zig; OWNER=security; UPDATED=2026-08-29
+
+const graph_store = geode.graph_store;
+const user_storage = @import("user_storage");
+const UserStorageBackend = user_storage.UserStorageBackend;
+
+/// A syntactically valid stored hash; these tests never verify a password, they
+/// only exercise the record LOOKUP classification.
+const stub_hash = "$argon2id$v=19$m=19456,t=2,p=1$" ++ ("0" ** 32) ++ "$" ++ ("0" ** 64);
+
+/// The engine-direct fallback needs `graph_store.getGlobalAdapter()`. This test
+/// binary never calls `initGlobalStore`, so the fallback CANNOT run — the exact
+/// degraded condition (`SecurityStoreUnavailable` out of
+/// `findUserByUsernameEngineDirect`, user_storage.zig:484-485) that a real
+/// server hits when the adapter is gone or the slot scan fails.
+fn requireNoGlobalAdapter() !void {
+    if (graph_store.getGlobalAdapter() != null) return error.SkipZigTest;
+}
+
+fn seedUser(backend: *UserStorageBackend, user_id: u64, username: []const u8) !void {
+    _ = try backend.upsertManagedUser(.{
+        .user_id = user_id,
+        .username = username,
+        .email = "user@localhost",
+        .password_hash = stub_hash,
+        .is_active = true,
+    });
+}
+
+test "user_storage: a :User posting with no READABLE record plus a failed engine scan is unavailable (ENG-3954 R-A)" {
+    try requireNoGlobalAdapter();
+
+    var store = try graph_store.GraphStore.init(testing.allocator);
+    defer store.deinit();
+    var backend = try UserStorageBackend.init(testing.allocator, &store);
+    defer backend.deinit();
+    _ = &backend; // the backend owns/creates the security graph for this store
+
+    // A `:User` node whose body carries no `id` property, so
+    // `loadUserRecordFromNode` returns null and the in-memory loop `continue`s
+    // past it (user_storage.zig:337-338 / :541) — the "unreadable resident node
+    // body" case the fallback's own doc comment (:547-550) names. The posting
+    // EXISTS (`enumerated` = true) yet yields ZERO usable candidates, so it is
+    // not evidence that any principal is absent.
+    _ = try store.createNodeWithGraph(&[_][]const u8{user_storage.USER_LABEL}, graph_store.SECURITY_GRAPH_NAME);
+
+    const posting = store.getNodesByLabel(graph_store.SECURITY_GRAPH_NAME, user_storage.USER_LABEL);
+    try testing.expect(posting != null); // `enumerated` becomes true ...
+    try testing.expect(posting.?.len > 0); // ... on a candidate that cannot be read
+
+    // RED at HEAD: returns null -> Unauthenticated -> COUNTED toward lockout.
+    try testing.expectError(
+        error.SecurityStoreUnavailable,
+        UserStorageBackend.findUserByUsernameInGraphChecked(&store, "alice"),
+    );
+}
+
+test "user_storage: NO :User posting at all still reports unavailable (ENG-3954 R-A guard)" {
+    try requireNoGlobalAdapter();
+
+    var store = try graph_store.GraphStore.init(testing.allocator);
+    defer store.deinit();
+
+    // Nothing was ever hydrated, so `enumerated` stays false and the engine
+    // error already propagates today. Guard: the fix must not regress this half
+    // while collapsing the `enumerated` special case.
+    try testing.expect(store.getNodesByLabel(graph_store.SECURITY_GRAPH_NAME, user_storage.USER_LABEL) == null);
+    try testing.expectError(
+        error.SecurityStoreUnavailable,
+        UserStorageBackend.findUserByUsernameInGraphChecked(&store, "alice"),
+    );
+}
+
+test "user_storage: a partial :User posting plus a failed engine scan is unavailable (ENG-3954 R-A)" {
+    try requireNoGlobalAdapter();
+
+    var store = try graph_store.GraphStore.init(testing.allocator);
+    defer store.deinit();
+    var backend = try UserStorageBackend.init(testing.allocator, &store);
+    defer backend.deinit();
+
+    // "bob" hydrated; "alice" is durable in the ENGINE only — which is precisely
+    // what the engine-direct fallback exists to read, and precisely what we
+    // cannot read right now.
+    try seedUser(&backend, 1, "bob");
+
+    const posting = store.getNodesByLabel(graph_store.SECURITY_GRAPH_NAME, user_storage.USER_LABEL);
+    try testing.expect(posting != null);
+    try testing.expect(posting.?.len > 0); // non-empty, yet still incomplete
+
+    try testing.expectError(
+        error.SecurityStoreUnavailable,
+        UserStorageBackend.findUserByUsernameInGraphChecked(&store, "alice"),
+    );
+
+    // #829 uniformity: while the store cannot answer, EVERY unresolvable
+    // principal must get the identical answer — no enumeration oracle.
+    try testing.expectError(
+        error.SecurityStoreUnavailable,
+        UserStorageBackend.findUserByUsernameInGraphChecked(&store, "mallory"),
+    );
+}
+
+test "user_storage: an in-memory hit still resolves without the engine (ENG-3954 R-A guard)" {
+    try requireNoGlobalAdapter();
+
+    var store = try graph_store.GraphStore.init(testing.allocator);
+    defer store.deinit();
+    var backend = try UserStorageBackend.init(testing.allocator, &store);
+    defer backend.deinit();
+
+    try seedUser(&backend, 1, "bob");
+
+    // GAP-0061's healthy path must not regress into "unavailable".
+    const record = (try UserStorageBackend.findUserByUsernameInGraphChecked(&store, "bob")) orelse
+        return error.InMemoryHitLost;
+    try testing.expectEqualStrings("bob", record.getUsername());
+}
+
+test "user_storage: the legacy option-returning lookup still yields null for non-auth callers (ENG-3954 R-A guard)" {
+    try requireNoGlobalAdapter();
+
+    var store = try graph_store.GraphStore.init(testing.allocator);
+    defer store.deinit();
+    var backend = try UserStorageBackend.init(testing.allocator, &store);
+    defer backend.deinit();
+
+    try seedUser(&backend, 1, "bob");
+
+    // Bootstrap / password-reset tooling only cares about presence and must keep
+    // compiling against the `?UserRecord` shape (user_storage.zig:564).
+    try testing.expect(UserStorageBackend.findUserByUsernameInGraph(&store, "alice") == null);
+    try testing.expect(UserStorageBackend.findUserByUsernameInGraph(&store, "bob") != null);
+}
+
+// ── End-to-end composition: the storage verdict must reach authenticate() ──
+//
+// The glue below is the EXACT body of the production resolver
+// (src/server/main.zig:331-338): call findUserByUsernameInGraphChecked and
+// propagate its error instead of laundering it. It is not a stand-in for the
+// logic under test — the classification decision is made inside the real
+// user_storage function this resolver calls.
+
+const StoreBackedResolver = struct {
+    store: *graph_store.GraphStore,
+
+    fn lookup(ctx: ?*anyopaque, allocator: std.mem.Allocator, username: []const u8) anyerror!?um.User {
+        const self: *StoreBackedResolver = @ptrCast(@alignCast(ctx orelse return null));
+        const record = try UserStorageBackend.findUserByUsernameInGraphChecked(self.store, username) orelse return null;
+        return .{
+            .username = try allocator.dupe(u8, record.getUsername()),
+            .password_hash = try allocator.dupe(u8, record.getPasswordHash()),
+            .email = try allocator.dupe(u8, ""),
+            .role = .ReadWrite,
+            .created_at = 0,
+            .last_login = null,
+            .active = record.is_active,
+            .password_reset_required = false,
+            .auth_version = @max(@as(u64, 1), record.auth_version),
+        };
+    }
+
+    fn hasUsers(ctx: ?*anyopaque) anyerror!bool {
+        const self: *StoreBackedResolver = @ptrCast(@alignCast(ctx orelse return false));
+        return UserStorageBackend.hasUserRecordsInGraph(self.store);
+    }
+
+    fn authVersion(ctx: ?*anyopaque, username: []const u8) anyerror!?u64 {
+        const self: *StoreBackedResolver = @ptrCast(@alignCast(ctx orelse return null));
+        const record = try UserStorageBackend.findUserByUsernameInGraphChecked(self.store, username) orelse return null;
+        return @max(@as(u64, 1), record.auth_version);
+    }
+};
+
+test "authenticate reports AuthUnavailable when the storage lookup could not answer (ENG-3954 R-A)" {
+    try requireArgon2(testing.allocator);
+    try requireNoGlobalAdapter();
+
+    var store = try graph_store.GraphStore.init(testing.allocator);
+    defer store.deinit();
+    var backend = try UserStorageBackend.init(testing.allocator, &store);
+    defer backend.deinit();
+
+    // Degraded security graph: the in-memory posting holds only "bob", the
+    // principals we are asked about live in the ENGINE, and the engine cannot
+    // be scanned.
+    try seedUser(&backend, 1, "bob");
+
+    um.deinitUserStore();
+    defer um.deinitUserStore();
+    try um.initUserStore(testing.allocator);
+
+    var resolver = StoreBackedResolver{ .store = &store };
+    um.setPersistentUserResolver(.{
+        .ctx = &resolver,
+        .lookup_fn = StoreBackedResolver.lookup,
+        .has_users_fn = StoreBackedResolver.hasUsers,
+        .auth_version_fn = StoreBackedResolver.authVersion,
+    });
+
+    // RED at HEAD: the storage layer answers `null`, authenticate() calls that a
+    // checked-and-rejected credential (error.Unauthenticated), and
+    // auth_rate_limiter.shouldCountFailedAttempt counts it toward the lockout.
+    try testing.expectError(error.AuthUnavailable, um.authenticate("alice", "Password1!"));
+
+    // #829 uniformity across principals under unavailability.
+    try testing.expectError(error.AuthUnavailable, um.authenticate("mallory", "whatever"));
+}
