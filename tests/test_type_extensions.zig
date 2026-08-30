@@ -212,8 +212,12 @@ test "vector dot product" {
         .{ .VectorF32 = v2 },
     };
 
+    // geode#873-A: vector_dot answers with the scale-6 Decimal its siblings
+    // (vector_l2 / vector_cosine) use and the contract advertises, not a
+    // truncated Int — 1*4 + 2*5 + 3*6 = 32.000000.
     const result = try eval_extended.vectorDot(allocator, &args);
-    try std.testing.expectEqual(@as(i64, 32), result.Int);
+    try std.testing.expectEqual(@as(i128, 32_000_000), result.Decimal.coeff);
+    try std.testing.expectEqual(@as(u8, 6), result.Decimal.scale);
 }
 
 test "MAC address bit flags" {

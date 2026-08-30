@@ -3447,6 +3447,71 @@ pub const GraphStore = struct {
         return out.toOwnedSlice(allocator);
     }
 
+    // CANARY: REQ=REQ-GEODE-877-KNN-INDEX-SHADOW; FEATURE="VectorKnn"; ASPECT=UnrelatedIndexMustNotShadowScan; STATUS=TESTED; TEST=tests/test_vector_knn_silent_failures.zig; OWNER=engine; UPDATED=2026-08-29
+    /// True when `label` is the ONLY label carrying `property`, and it does so
+    /// ONLY inside (`graph_name`, `filter_tenant`).
+    ///
+    /// geode#877 (b): `knn('<property>', …)` is property-scoped, not
+    /// label-scoped, while an advanced vector index is built over exactly ONE
+    /// (label, property) pair. Committing to such an index therefore answers a
+    /// broader question with a narrower index — creating a vector index on a
+    /// COMPLETELY UNRELATED label that merely reuses the property name silently
+    /// emptied a working knn result. This is the authority predicate the knn
+    /// read path consults: the index may serve the query only when its label
+    /// provably covers every row the brute-force scan would have visited, in
+    /// this graph and this tenant scope. Anything else falls back to the scan
+    /// (a correct, if O(n), answer) rather than returning a wrong one.
+    ///
+    /// Reads the PERF-C `label_properties_by_tenant` refcount index — whose
+    /// outer key is the composite "graph\x00tenant" and whose inner key is
+    /// "label\x00property" — so it costs O(distinct label/property pairs),
+    /// allocates nothing, and never hydrates. Fail-CLOSED: an unrecognised key
+    /// shape, a carrier in another graph, a carrier under another tenant, or a
+    /// second carrying label all return false.
+    ///
+    /// Lock: takes `perf_c_refcount_mutex` (tier 1 leaf, CLAUDE.md ordering
+    /// table) for the walk, exactly as `listPropertiesForLabel` does, so a
+    /// concurrent bump/dec cannot rehash the map underneath it.
+    pub fn labelSolelyCarriesProperty(
+        self: *GraphStore,
+        graph_name: []const u8,
+        filter_tenant: ?[]const u8,
+        label: []const u8,
+        property: []const u8,
+    ) bool {
+        const io = std.Io.Threaded.global_single_threaded.io();
+        self.perf_c_refcount_mutex.lockUncancelable(io);
+        defer self.perf_c_refcount_mutex.unlock(io);
+
+        var saw_carrier = false;
+        var outer_it = self.label_properties_by_tenant.iterator();
+        while (outer_it.next()) |outer_entry| {
+            const outer_key = outer_entry.key_ptr.*;
+            const entry_graph = graphTenantKeyGraph(outer_key);
+            const entry_tenant = graphTenantKeyTenant(outer_key);
+
+            var inner_it = outer_entry.value_ptr.iterator();
+            while (inner_it.next()) |inner_entry| {
+                const inner_key = inner_entry.key_ptr.*;
+                const sep = std.mem.indexOfScalar(u8, inner_key, 0) orelse return false;
+                if (!std.mem.eql(u8, inner_key[sep + 1 ..], property)) continue;
+
+                // A carrier of this property outside the session's graph (or,
+                // when the session is tenant-scoped, outside its tenant) means
+                // the index can hold rows this query must not see.
+                if (!std.mem.eql(u8, entry_graph, graph_name)) return false;
+                if (filter_tenant) |tid| {
+                    if (!std.mem.eql(u8, entry_tenant, tid)) return false;
+                }
+                // A second carrying label means the index covers only part of
+                // the property's rows.
+                if (!std.mem.eql(u8, inner_key[0..sep], label)) return false;
+                saw_carrier = true;
+            }
+        }
+        return saw_carrier;
+    }
+
     /// Returns a de-duplicated, allocator-owned slice of node label names
     /// observed in the in-memory node store.
     ///

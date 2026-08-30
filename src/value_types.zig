@@ -80,6 +80,23 @@ pub const EvalError = error{
     // InvalidArgs so it can carry its own GQLSTATE (42704) in proto_util.
     // CANARY: REQ=REQ-VECTOR-KNN-METRIC-VALIDATE-001; FEATURE="VectorIndex"; ASPECT=QueryMetricMatchesIndex; STATUS=TESTED; TEST=tests/test_knn_metric_mismatch.zig; OWNER=index; UPDATED=2026-08-28
     VectorMetricMismatch,
+    // geode#877 (c): `knn('embeddings', …)` on a MISSPELLED property returned an
+    // empty list, so a typo was indistinguishable from "your data has no
+    // neighbours". Same diagnostic class as `UnknownFunction` above — it needs
+    // its own identity to carry GQLSTATE 42703 (undefined_column) instead of
+    // being folded into a silent empty result.
+    // CANARY: REQ=REQ-GEODE-877-KNN-UNKNOWN-PROPERTY; FEATURE="VectorKnn"; ASPECT=UnknownPropertyDiagnostic; STATUS=TESTED; TEST=tests/test_vector_knn_silent_failures.zig; OWNER=eval; UPDATED=2026-08-29
+    UnknownProperty,
+    // GAP-0840: strict-tenancy refusal raised from an evaluator read path (the
+    // brute-force knn scan resolves the session tenant scope the same way the
+    // MATCH loop does). Already mapped to GQLSTATE 42501 in proto_util.
+    TenantScopeRequired,
+    // GAP-ENT-0044/0045 (geode#875 (i)): the read-executor budget / cancel poll
+    // (`read_budget.check()`) now has sites inside the brute-force knn scan, so
+    // its two abort identities must be expressible by the evaluator. Already
+    // mapped to GQLSTATE 53200 / 57014 in proto_util.
+    ReadQueryBudgetExceeded,
+    ReadQueryCancelled,
     OutOfMemory,
 };
 

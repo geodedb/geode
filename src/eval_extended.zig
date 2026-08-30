@@ -2102,16 +2102,35 @@ fn freeVectorPair(allocator: std.mem.Allocator, pair: anytype) void {
     if (pair.b.owned) |data| allocator.free(data);
 }
 
+// CANARY: REQ=REQ-GEODE-873-VECTOR-DECIMAL-OVERFLOW; FEATURE="VectorSimilarityFunctions"; ASPECT=CheckedFloatToDecimal; STATUS=TESTED; TEST=tests/test_vector_knn_silent_failures.zig; OWNER=eval; UPDATED=2026-08-29
+/// geode#873-B: the single CHECKED float -> scale-6 DECIMAL conversion for this
+/// file's vector scalar functions. The bare `@intFromFloat(x * 1e6)` it replaces
+/// was illegal behaviour for a NaN / infinite / out-of-i128-range operand and
+/// aborted the whole server process. Mirrors `eval.decimalFromF64`.
+fn decimalFromF64(value: f64) !ExtValue {
+    const decimal128 = @import("types/decimal128.zig");
+    const coeff = try decimal128.checkedScaledCoeff(value, 1_000_000.0);
+    return .{ .Decimal = .{ .coeff = coeff, .scale = 6 } };
+}
+
+// CANARY: REQ=REQ-GEODE-873-VECTOR-DOT-FLOAT; FEATURE="VectorSimilarityFunctions"; ASPECT=DotProductIsFloat; STATUS=TESTED; TEST=tests/test_vector_knn_silent_failures.zig; OWNER=eval; UPDATED=2026-08-29
+// geode#873-A: this returned `.{ .Int = @intFromFloat(sum) }` while its two
+// siblings below return a scale-6 Decimal and the contract advertises FLOAT
+// (src/gql/language_metadata.zig, src/execution/statement_handlers.zig). Every
+// unit-vector dot product — the dominant RAG/reranking use — therefore floored
+// to 0, making 0.96 indistinguishable from "orthogonal".
 fn vectorDot(allocator: std.mem.Allocator, args: []const ExtValue) !ExtValue {
     const pair = (try coerceVectorPair(allocator, args)) orelse return .{ .Null = {} };
     defer freeVectorPair(allocator, pair);
 
+    // f64-widened products: an f32 multiply saturates to +inf well before the
+    // f64 accumulator would, turning a representable score into a refusal.
     var sum: f64 = 0;
     for (pair.a.vector.data, pair.b.vector.data) |av, bv| {
-        sum += av * bv;
+        sum += @as(f64, av) * @as(f64, bv);
     }
 
-    return .{ .Int = @intFromFloat(sum) };
+    return decimalFromF64(sum);
 }
 
 fn vectorL2(allocator: std.mem.Allocator, args: []const ExtValue) !ExtValue {
@@ -2120,12 +2139,12 @@ fn vectorL2(allocator: std.mem.Allocator, args: []const ExtValue) !ExtValue {
 
     var sum: f64 = 0;
     for (pair.a.vector.data, pair.b.vector.data) |av, bv| {
-        const diff = av - bv;
+        const diff = @as(f64, av) - @as(f64, bv);
         sum += diff * diff;
     }
 
     const dist = @sqrt(sum);
-    return .{ .Decimal = .{ .coeff = @intFromFloat(dist * 1000000), .scale = 6 } };
+    return decimalFromF64(dist);
 }
 
 fn vectorCosine(allocator: std.mem.Allocator, args: []const ExtValue) !ExtValue {
@@ -2136,16 +2155,24 @@ fn vectorCosine(allocator: std.mem.Allocator, args: []const ExtValue) !ExtValue 
     var norm_a: f64 = 0;
     var norm_b: f64 = 0;
 
+    // geode#873-B (silent-garbage face): the accumulators were f64 but the
+    // PRODUCTS were f32 (`av * bv` on two f32 operands), so 1e20*1e20 saturated
+    // to +inf, the ratio became inf/inf = NaN, and the conversion yielded i128
+    // MIN — a "cosine similarity" of -1.7e32 returned with SQLSTATE 00000.
+    // Widen to f64 first, exactly as `eval.metricDistance(.cosine)` does, so a
+    // mathematically well-defined ratio stays a ratio at every magnitude.
     for (pair.a.vector.data, pair.b.vector.data) |av, bv| {
-        dot_product += av * bv;
-        norm_a += av * av;
-        norm_b += bv * bv;
+        const a: f64 = av;
+        const b: f64 = bv;
+        dot_product += a * b;
+        norm_a += a * a;
+        norm_b += b * b;
     }
 
     if (norm_a == 0 or norm_b == 0) return .{ .Null = {} };
 
     const similarity = dot_product / (@sqrt(norm_a) * @sqrt(norm_b));
-    return .{ .Decimal = .{ .coeff = @intFromFloat(similarity * 1000000), .scale = 6 } };
+    return decimalFromF64(similarity);
 }
 
 // Decimal constructor
