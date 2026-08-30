@@ -7086,6 +7086,27 @@ pub const GraphStore = struct {
         return self.inAdjItems(node_id);
     }
 
+    /// ENG-3983: FAIL-CLOSED adjacency reads. `getOutgoingEdgeIds` /
+    /// `getIncomingEdgeIds` launder a hydrate FAILURE ("the engine could not be
+    /// read") into the same `null` a node with NO edges produces — indistinguishable
+    /// at the call site. A DETACH DELETE that believes an unreadable node has no
+    /// incident edges deletes the node and leaves every one of them DANGLING,
+    /// which is durable corruption (a later whole-pattern MATCH then fails with
+    /// NodeNotFound). These variants propagate the error and return an EMPTY
+    /// slice only for the genuine "this node has no adjacency" case, so a
+    /// mutation path can refuse the write instead of silently corrupting.
+    pub fn getOutgoingEdgeIdsChecked(self: *const GraphStore, node_id: u64) ![]const u64 {
+        const cache: *AdjCache = @constCast(&self.outgoing_edges);
+        const p = (try cache.getOrHydratePtr(node_id)) orelse return &[_]u64{};
+        return p.list.items;
+    }
+
+    pub fn getIncomingEdgeIdsChecked(self: *const GraphStore, node_id: u64) ![]const u64 {
+        const cache: *AdjCache = @constCast(&self.incoming_edges);
+        const p = (try cache.getOrHydratePtr(node_id)) orelse return &[_]u64{};
+        return p.list.items;
+    }
+
     pub fn getOutgoingEdges(self: *const GraphStore, allocator: std.mem.Allocator, node_id: u64) ![]Edge {
         var result: std.ArrayList(Edge) = .empty;
         if (self.outAdjItems(node_id)) |outgoing| {
@@ -14272,26 +14293,87 @@ pub fn setWalPersistenceHooks(
     g_wal_checkpoint_fn = checkpoint_fn;
 }
 
+/// ENG-3979: number of global-store-lock holds owned by THIS thread, in either
+/// mode.  `std.Io.RwLock` is not reentrant and exposes no ownership query, so
+/// callers that need to know "did I already synchronize the store on this
+/// thread?" cannot ask the lock itself — a `tryLockShared` against a lock the
+/// SAME thread already holds EXCLUSIVE simply fails, which is
+/// indistinguishable from genuine contention with another thread.
+///
+/// Every acquire/release of `g_store_rwlock` in this file goes through the
+/// helpers below so this counter cannot drift.  Do NOT touch
+/// `g_store_rwlock` directly.
+threadlocal var t_store_lock_depth: u32 = 0;
+
+/// ENG-3979: true when the CALLING thread already holds the global store lock
+/// (shared or exclusive).  A read performed while this is true is already
+/// synchronized against every other thread and MUST NOT try to re-acquire —
+/// re-acquiring self-deadlocks (blocking form) or spuriously fails
+/// (`tryAcquireStoreLock`).
+pub fn storeLockHeldByCurrentThread() bool {
+    return t_store_lock_depth > 0;
+}
+
+/// Outcome of `beginStoreRead` — how the caller obtained store-read access.
+pub const StoreReadAccess = enum {
+    /// This thread already holds the store lock; the read is already
+    /// synchronized and no lock was taken (nothing to release).
+    already_held,
+    /// A fresh SHARED hold was taken and must be released via `endStoreRead`.
+    acquired,
+    /// Another thread holds the lock exclusively; the caller could not read.
+    unavailable,
+};
+
+/// ENG-3979: non-blocking, self-reentrant store-read gate for callbacks that
+/// may be invoked either from an unlocked thread OR from deep inside a
+/// critical section that already holds the store lock (the persistent auth
+/// resolver is the motivating case: a mutating `CALL geode.auth.*` runs under
+/// the global EXCLUSIVE lock and then calls back into the resolver).
+///
+/// Never blocks: genuine foreign contention reports `.unavailable` so the
+/// caller can fail closed instead of stalling the auth path behind a
+/// checkpoint.  Pair every non-`.unavailable` result with `endStoreRead`.
+pub fn beginStoreRead() StoreReadAccess {
+    if (storeLockHeldByCurrentThread()) return .already_held;
+    if (tryAcquireStoreLock()) return .acquired;
+    return .unavailable;
+}
+
+/// Release whatever `beginStoreRead` took.  No-op for `.already_held` (the
+/// outer hold belongs to the caller further up this thread's stack) and for
+/// `.unavailable`.
+pub fn endStoreRead(access: StoreReadAccess) void {
+    if (access == .acquired) releaseStoreLock();
+}
+
 /// Acquire the global store lock (shared — for read-only query handlers).
 /// GAP-0001: Mutation operations must use acquireStoreWriteLock() instead
 /// to prevent concurrent HashMap rehash races (CWE-362, CWE-416).
 pub fn acquireStoreLock() void {
     g_store_rwlock.lockSharedUncancelable(std.Io.Threaded.global_single_threaded.io());
+    t_store_lock_depth += 1;
 }
 
 /// Try to acquire shared lock without blocking.  Returns true if locked.
 pub fn tryAcquireStoreLock() bool {
-    return if (g_store_rwlock.tryLockShared(std.Io.Threaded.global_single_threaded.io())) true else false;
+    if (g_store_rwlock.tryLockShared(std.Io.Threaded.global_single_threaded.io())) {
+        t_store_lock_depth += 1;
+        return true;
+    }
+    return false;
 }
 
 /// Release the global store lock (shared)
 pub fn releaseStoreLock() void {
     g_store_rwlock.unlockShared(std.Io.Threaded.global_single_threaded.io());
+    if (t_store_lock_depth > 0) t_store_lock_depth -= 1;
 }
 
 /// Acquire exclusive write lock (for mutations and persistence thread)
 pub fn acquireStoreWriteLock() void {
     g_store_rwlock.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
+    t_store_lock_depth += 1;
 }
 
 /// R2 (2026-04-22): deadline-aware variant of `acquireStoreWriteLock`.
@@ -14299,7 +14381,10 @@ pub fn acquireStoreWriteLock() void {
 /// acquired before `deadline_mono_ns` (absolute CLOCK_MONOTONIC ns).
 pub fn acquireStoreWriteLockCancelable(deadline_mono_ns: u64) !void {
     const io = std.Io.Threaded.global_single_threaded.io();
-    if (g_store_rwlock.tryLock(io)) return;
+    if (g_store_rwlock.tryLock(io)) {
+        t_store_lock_depth += 1;
+        return;
+    }
 
     var sleep_ns: u64 = 100 * std.time.ns_per_us;
     const max_sleep_ns: u64 = 2 * std.time.ns_per_ms;
@@ -14316,7 +14401,10 @@ pub fn acquireStoreWriteLockCancelable(deadline_mono_ns: u64) !void {
             var rem: std.os.linux.timespec = undefined;
             _ = std.os.linux.nanosleep(&req, &rem);
         }
-        if (g_store_rwlock.tryLock(io)) return;
+        if (g_store_rwlock.tryLock(io)) {
+            t_store_lock_depth += 1;
+            return;
+        }
         sleep_ns = @min(sleep_ns * 2, max_sleep_ns);
     }
 }
@@ -14342,6 +14430,7 @@ pub fn monoNanosNowPub() u64 {
 /// Release exclusive write lock
 pub fn releaseStoreWriteLock() void {
     g_store_rwlock.unlock(std.Io.Threaded.global_single_threaded.io());
+    if (t_store_lock_depth > 0) t_store_lock_depth -= 1;
 }
 
 /// GAP-0754: Global allocator for persistent graph store data.
@@ -14545,9 +14634,10 @@ fn persistenceLoop() void {
                         });
                     }
                 } else {
-                    // Fallback: global shared lock
-                    g_store_rwlock.lockSharedUncancelable(std.Io.Threaded.global_single_threaded.io());
-                    defer g_store_rwlock.unlockShared(std.Io.Threaded.global_single_threaded.io());
+                    // Fallback: global shared lock (via the helpers so the
+                    // ENG-3979 per-thread hold counter stays exact).
+                    acquireStoreLock();
+                    defer releaseStoreLock();
                     if (g_wal_checkpoint_fn) |checkpoint_fn| {
                         checkpoint_fn(store_ptr);
                     }
@@ -14602,9 +14692,10 @@ fn persistSplitPhase(store_ptr: *GraphStore) void {
         }
     } else {
         // Fallback: use global shared lock for legacy (no-adapter) path.
-        g_store_rwlock.lockSharedUncancelable(std.Io.Threaded.global_single_threaded.io());
+        // Via the helpers so the ENG-3979 per-thread hold counter stays exact.
+        acquireStoreLock();
         store_ptr.cleanupLegacySidecars();
-        g_store_rwlock.unlockShared(std.Io.Threaded.global_single_threaded.io());
+        releaseStoreLock();
     }
 
     // Clear dirty flag

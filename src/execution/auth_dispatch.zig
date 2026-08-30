@@ -3,6 +3,7 @@
 /// Handles routing for all `geode.auth.*` procedure calls.
 /// Extracted from procedure_registry.zig as part of the procedure dispatch refactoring.
 const std = @import("std");
+const build_options = @import("build_options");
 const crypto_backend = @import("crypto_backend");
 
 // Zig 0.16 compat: std.crypto.random removed. Use getrandom syscall.
@@ -366,6 +367,10 @@ const AuthHandler = *const fn (std.mem.Allocator, []const u8, ast.CallProcedure,
 
 const dispatch_table = std.StaticStringMap(AuthHandler).initComptime(.{
     .{ "geode.auth.user_create", handleUserCreate },
+    // ENG-3979: pre-computed-hash migration import (offline `geode user
+    // import`'s wire counterpart — the offline path is refused by the
+    // ENG-3921 data-dir lock while a server owns the directory).
+    .{ "geode.auth.user_import", handleUserImport },
     .{ "geode.auth.user_list", handleUserList },
     .{ "geode.auth.user_delete", handleUserDelete },
     .{ "geode.auth.user_show", handleUserShow },
@@ -540,6 +545,94 @@ fn handleUserCreate(allocator: std.mem.Allocator, _: []const u8, call_stmt: ast.
     row[0] = Value{ .Str = try std.fmt.allocPrint(allocator, "created {s}", .{username}) };
     row[1] = Value{ .Str = username };
     if (is_generated) row[2] = Value{ .Str = try allocator.dupe(u8, actual_password) };
+    const rows = try allocator.alloc([]Value, 1);
+    rows[0] = row;
+    return .{ .columns = columns, .rows = rows, .flags = std.ArrayList([]const u8).empty };
+}
+
+// CANARY: REQ=REQ-AUTH-USER-IMPORT-002; FEATURE="AdminUserImport"; ASPECT=WireProcedure; STATUS=TESTED; TEST=geode-test-harness/geodetestlab-cli/specs/authn_blake2b_migration.yml; OWNER=security; UPDATED=2026-08-30
+/// `geode.auth.user_import(username, hash[, algorithm][, email][, role])`
+///
+/// Server-side counterpart of the offline `geode user import` subcommand
+/// (`src/cli/user_mgmt_cli.zig`). Seeds a principal with a PRE-COMPUTED
+/// password hash — the migration path for importing users out of a legacy
+/// store — instead of hashing a plaintext password.
+///
+/// Why it exists (ENG-3979): the offline path opens the data dir read-write,
+/// so ENG-3921's data-dir lock correctly refuses it while a server is running.
+/// An operator migrating users into a LIVE server had no route at all. This
+/// procedure is that route, and it carries the same posture as every other
+/// mutating `geode.auth.*` entry point: admin-only (not in `read_only_set`),
+/// cluster fail-closed via `gateUnreplicatedWrite`, and persisted through the
+/// AuthGraphManager write-through into the HMAC-chained `__geode_security`
+/// graph (`createUserWithHash` -> `persistent_writer.create_fn`).
+///
+/// The hash is stored VERBATIM — no re-hashing, and no format validation
+/// beyond non-emptiness, exactly like the offline path. A stored hash that no
+/// verifier recognises simply never authenticates (`verifyPasswordArgon2id`
+/// returns false for any non-`$argon2id$` string), so an unusable import is
+/// fail-closed, never fail-open.
+fn handleUserImport(allocator: std.mem.Allocator, _: []const u8, call_stmt: ast.CallProcedure, _: ExecutionContext) anyerror!ExecutionResult {
+    var username: []const u8 = "";
+    var hash: []const u8 = "";
+    var algorithm: []const u8 = "argon2id";
+    var email: []const u8 = "";
+    var role_str: []const u8 = "user";
+    if (call_stmt.procedure == .Call) {
+        const args = call_stmt.procedure.Call.args;
+        if (args.len >= 1 and args[0].* == .String) username = args[0].String;
+        if (args.len >= 2 and args[1].* == .String) hash = args[1].String;
+        if (args.len >= 3 and args[2].* == .String and args[2].String.len > 0) algorithm = args[2].String;
+        if (args.len >= 4 and args[3].* == .String) email = args[3].String;
+        if (args.len >= 5 and args[4].* == .String and args[4].String.len > 0) role_str = args[4].String;
+    }
+
+    const failure = struct {
+        fn render(a: std.mem.Allocator, user: []const u8, alg: []const u8, message: []const u8) !ExecutionResult {
+            const columns = try a.alloc([]const u8, 3);
+            columns[0] = try a.dupe(u8, "status");
+            columns[1] = try a.dupe(u8, "username");
+            columns[2] = try a.dupe(u8, "algorithm");
+            const row = try a.alloc(Value, 3);
+            row[0] = Value{ .Str = try std.fmt.allocPrint(a, "error: {s}", .{message}) };
+            row[1] = Value{ .Str = try a.dupe(u8, user) };
+            row[2] = Value{ .Str = try a.dupe(u8, alg) };
+            const rows = try a.alloc([]Value, 1);
+            rows[0] = row;
+            return .{ .columns = columns, .rows = rows, .flags = std.ArrayList([]const u8).empty };
+        }
+    };
+
+    if (username.len == 0) return failure.render(allocator, username, algorithm, "user import requires a username");
+    if (hash.len == 0) return failure.render(allocator, username, algorithm, "user import requires a non-empty hash");
+    // Same accepted set as the offline import (user_mgmt_cli.zig).
+    if (!std.mem.eql(u8, algorithm, "argon2id") and !std.mem.eql(u8, algorithm, "blake2b")) {
+        return failure.render(allocator, username, algorithm, "algorithm must be 'argon2id' or 'blake2b'");
+    }
+    // FIPS parity with the offline path: neither primitive is FIPS-approved.
+    if (build_options.fips) {
+        return failure.render(allocator, username, algorithm, "user import is unavailable under FIPS mode (argon2id and blake2b are not FIPS-approved primitives)");
+    }
+    // Import refuses to overwrite — a silent credential replacement on an
+    // existing principal is an account-takeover primitive.
+    if (user_mgmt.getUser(username) != null) {
+        return failure.render(allocator, username, algorithm, "user already exists; import refuses to overwrite");
+    }
+
+    const role = user_mgmt.Role.fromString(role_str) orelse .User;
+    user_mgmt.createUserWithHash(allocator, username, hash, email, role, false) catch |err| {
+        log.warn("geode.auth.user_import failed", &.{Attr.string("error", @errorName(err))});
+        return failure.render(allocator, username, algorithm, @errorName(err));
+    };
+
+    const columns = try allocator.alloc([]const u8, 3);
+    columns[0] = try allocator.dupe(u8, "status");
+    columns[1] = try allocator.dupe(u8, "username");
+    columns[2] = try allocator.dupe(u8, "algorithm");
+    const row = try allocator.alloc(Value, 3);
+    row[0] = Value{ .Str = try allocator.dupe(u8, "imported successfully") };
+    row[1] = Value{ .Str = try allocator.dupe(u8, username) };
+    row[2] = Value{ .Str = try allocator.dupe(u8, algorithm) };
     const rows = try allocator.alloc([]Value, 1);
     rows[0] = row;
     return .{ .columns = columns, .rows = rows, .flags = std.ArrayList([]const u8).empty };

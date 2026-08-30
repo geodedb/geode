@@ -79,6 +79,7 @@ fn printUserUsage() void {
     printOut("Commands:\n", .{});
     printOut("  create <username> <email> --password <password> [--role <role>]\n", .{});
     printOut("  create <username> <email> --generate-password [--role <role>]\n", .{});
+    printOut("  import <username> --hash <hash> [--algorithm argon2id|blake2b] [--email <e>] [--role <r>]\n", .{});
     printOut("  list                              List all users\n", .{});
     printOut("  show|info <username>\n", .{});
     printOut("  delete <username> [--yes]\n", .{});
@@ -202,9 +203,9 @@ fn hasFlag(argv: [][:0]u8, flag: []const u8) bool {
 /// True when `subcommand` writes to the offline auth store.
 fn subcommandMutatesAuthStore(subcommand: []const u8) bool {
     const mutating = [_][]const u8{
-        "create",          "delete",         "update", "assign-role",
-        "disable",         "enable",         "mfa",    "mfa-setup",
-        "change-password", "reset-password",
+        "create",      "import",          "delete",         "update",
+        "assign-role", "disable",         "enable",         "mfa",
+        "mfa-setup",   "change-password", "reset-password",
     };
     for (mutating) |m| {
         if (std.mem.eql(u8, subcommand, m)) return true;

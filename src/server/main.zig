@@ -280,130 +280,15 @@ const quic_connection_admission_stack_size = 1024 * 1024;
 // lifetime of the server process — we never tear it down because the
 // listener and accepted sessions hold borrowed pointers into it.
 var g_lsp_auth_provider: ?*authn_mod.AuthProvider = null;
-// GPS Phase 4 (Task 4-1): role resolution extracted to dedicated module.
-// Use the geode lib re-export rather than a raw file path so that the
-// "user_storage" named import inside role_resolver.zig is resolved correctly.
-const role_resolver = geode.security.role_resolver;
-
-// CANARY: REQ=REQ-GPS-PDP-008; FEATURE="GPS Decision Engine"; ASPECT=AuthRoleGraphLookup; STATUS=TESTED; OWNER=security; UPDATED=2026-05-20
-/// Thin shims that delegate to role_resolver — kept for call-site compatibility.
-fn authRoleFromRecord(record: user_storage.UserStorageBackend.UserRecord) geode.user_management.Role {
-    return role_resolver.authRoleFromRecord(record);
-}
-
-fn resolveRoleFromGraph(store: *geode.graph_store.GraphStore, record: user_storage.UserStorageBackend.UserRecord) geode.user_management.Role {
-    return role_resolver.resolveRoleFromGraph(store, record);
-}
-
-fn duplicatePersistentUser(allocator: std.mem.Allocator, store: *geode.graph_store.GraphStore, record: user_storage.UserStorageBackend.UserRecord) !geode.user_management.User {
-    return .{
-        .username = try allocator.dupe(u8, record.getUsername()),
-        .password_hash = try allocator.dupe(u8, record.getPasswordHash()),
-        .email = try allocator.dupe(u8, record.getEmail()),
-        .role = resolveRoleFromGraph(store, record),
-        .created_at = record.created_at,
-        .last_login = if (record.last_login != 0) record.last_login else null,
-        .active = record.is_active,
-        .password_reset_required = record.password_reset_required,
-        .auth_version = record.auth_version,
-    };
-}
-
-fn lookupPersistentAuthUser(_: ?*anyopaque, allocator: std.mem.Allocator, username: []const u8) anyerror!?geode.user_management.User {
-    // NEW-8 residual (#860): block reserved usernames at the resolver boundary.
-    // Returning null here means ensureUserCached / authenticate treat the
-    // principal as "not found", preventing geode-cluster from being seeded into
-    // user_store via the persistent-lookup path regardless of what is stored in
-    // the auth graph.  Uses RESERVED_USERNAMES as the single source of truth.
-    for (geode.user_management.RESERVED_USERNAMES) |reserved| {
-        if (std.mem.eql(u8, username, reserved)) return null;
-    }
-    // The store lock may already be held exclusively by another thread (e.g. a
-    // checkpoint or an auth-DDL write). Use tryAcquire to avoid blocking the
-    // auth path behind it.
-    //
-    // ENG-3954 / #874: when the lock cannot be acquired we must NOT read the
-    // store unsynchronized, and we must NOT report "no such user" either — we
-    // simply could not look. Reporting absence here made `authenticate` return
-    // error.Unauthenticated for a perfectly valid principal, which the per-IP
-    // rate limiter counted as a brute-force attempt and, since the contention
-    // persisted, re-armed the lockout on every retry. Report unavailability so
-    // authenticate() can normalise it to error.AuthUnavailable.
-    // CANARY: REQ=REQ-SEC-AUTH-UNAVAILABLE-003; FEATURE="AuthOutcomeClassification"; ASPECT=PersistentResolver; STATUS=TESTED; TEST=tests/test_auth_unavailable_classification.zig; OWNER=security; UPDATED=2026-08-28
-    if (!geode.graph_store.tryAcquireStoreLock()) {
-        return user_storage.UserStorageBackend.SecurityStoreUnavailable;
-    }
-    defer geode.graph_store.releaseStoreLock();
-
-    const store = geode.graph_store.getGlobalStore(allocator);
-    const record = try user_storage.UserStorageBackend.findUserByUsernameInGraphChecked(store, username) orelse return null;
-    return try duplicatePersistentUser(allocator, store, record);
-}
-
-fn persistentAuthUsersExist(_: ?*anyopaque) anyerror!bool {
-    // Same tryAcquire pattern as lookupPersistentAuthUser to prevent deadlock
-    // when called from a thread already holding the store lock.
-    const locked = geode.graph_store.tryAcquireStoreLock();
-    defer if (locked) geode.graph_store.releaseStoreLock();
-
-    const store = geode.graph_store.getGlobalStore(std.heap.c_allocator);
-    return user_storage.UserStorageBackend.hasUserRecordsInGraph(store);
-}
-
-fn lookupPersistentAuthVersion(_: ?*anyopaque, username: []const u8) anyerror!?u64 {
-    // The store lock may already be held by the calling thread (e.g., QUIC
-    // handler executing a CALL query).  Use tryAcquire to avoid deadlock;
-    // if the lock can't be acquired, return null (caller treats the user as
-    // "not cached" and falls back to in-memory state).
-    const locked = geode.graph_store.tryAcquireStoreLock();
-    defer if (locked) geode.graph_store.releaseStoreLock();
-
-    const store = geode.graph_store.getGlobalStore(std.heap.c_allocator);
-    return user_storage.UserStorageBackend.findUserAuthVersionByUsernameInGraph(store, username);
-}
-
-fn listPersistentAuthUsers(_: ?*anyopaque, allocator: std.mem.Allocator) anyerror![]geode.user_management.User {
-    // Same tryAcquire pattern as lookupPersistentAuthUser to prevent deadlock
-    // when called from a thread already holding the store lock.
-    const locked = geode.graph_store.tryAcquireStoreLock();
-    defer if (locked) geode.graph_store.releaseStoreLock();
-
-    const store = geode.graph_store.getGlobalStore(allocator);
-    const records = try user_storage.UserStorageBackend.listUsersFromGraph(allocator, store);
-    defer allocator.free(records);
-
-    const users = try allocator.alloc(geode.user_management.User, records.len);
-    var initialized: usize = 0;
-    errdefer {
-        for (users[0..initialized]) |*user| {
-            user.deinit(allocator);
-        }
-        allocator.free(users);
-    }
-
-    for (records) |record| {
-        // NEW-8 residual (#860): skip reserved usernames at the bulk-list boundary
-        // so geode-cluster cannot be injected into user_store via the list path.
-        // Uses RESERVED_USERNAMES as the single source of truth.
-        const is_reserved = blk: {
-            for (geode.user_management.RESERVED_USERNAMES) |reserved| {
-                if (std.mem.eql(u8, record.getUsername(), reserved)) break :blk true;
-            }
-            break :blk false;
-        };
-        if (is_reserved) continue;
-        users[initialized] = try duplicatePersistentUser(allocator, store, record);
-        initialized += 1;
-    }
-
-    if (initialized == records.len) return users;
-    // Some reserved records were skipped — trim the allocation to the actual count.
-    // On trim-alloc failure, the errdefer above cleans up users[0..initialized].
-    const trimmed = try allocator.alloc(geode.user_management.User, initialized);
-    @memcpy(trimmed, users[0..initialized]);
-    allocator.free(users); // free the over-allocated array frame; strings are in trimmed
-    return trimmed;
-}
+// ENG-3979: the `__geode_security`-backed PersistentUserResolver callbacks
+// (and their role/duplication helpers) live in a dedicated module so the
+// regression suite can drive the REAL callbacks — the seam where a mutating
+// `CALL geode.auth.*` re-enters a store lock this thread already holds.
+const persistent_auth_resolver = @import("persistent_auth_resolver.zig");
+const lookupPersistentAuthUser = persistent_auth_resolver.lookupPersistentAuthUser;
+const persistentAuthUsersExist = persistent_auth_resolver.persistentAuthUsersExist;
+const lookupPersistentAuthVersion = persistent_auth_resolver.lookupPersistentAuthVersion;
+const listPersistentAuthUsers = persistent_auth_resolver.listPersistentAuthUsers;
 
 // CANARY: REQ=REQ-PERF-ASYNC-CONN-001; FEATURE="AsyncConnectionHandling"; ASPECT=ThreadPool; STATUS=TESTED; TEST=tests/e2e_quic_high_concurrency.zig; OWNER=server; UPDATED=2026-06-11
 // GAP-0202: Async connection handling context for thread pool execution

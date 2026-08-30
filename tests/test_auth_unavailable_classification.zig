@@ -462,3 +462,169 @@ test "authenticate reports AuthUnavailable when the storage lookup could not ans
     // #829 uniformity across principals under unavailability.
     try testing.expectError(error.AuthUnavailable, um.authenticate("mallory", "whatever"));
 }
+
+// ── ENG-3979: SELF-held store lock is not "unavailable" ─────────────────────
+//
+// The 2026-08-28 ENG-3954 fix made the persistent resolver fail CLOSED when
+// `tryAcquireStoreLock()` returns false. Correct for foreign contention — but
+// `tryLockShared` also fails when THIS thread already holds the very same lock
+// EXCLUSIVE, and that is the normal state of every mutating auth procedure:
+//
+//   quic_connection_handler -> graph_store.acquireGraphWriteLockCancelable("default", …)
+//     -> adapter reports GraphNotFound for a graph that was never created
+//     -> legacy fallback escalates to the GLOBAL EXCLUSIVE store lock
+//        (graph_store.zig acquireGraphWriteLockCancelable, "Legacy fallback")
+//     -> lock held across the whole executor run
+//        -> CALL geode.auth.mfa_setup / mfa_enable / mfa_disable /
+//           user_disable / user_enable
+//           -> user_management.getUserInternal -> persistent resolver
+//              -> tryAcquireStoreLock() == false  (our OWN exclusive hold)
+//              -> SecurityStoreUnavailable
+//
+// which surfaces to clients as `"error: SecurityStoreUnavailable"` or, via
+// `getUser() = getUserInternal(...) catch null`, as the outright lie
+// `"User 'x' does not exist"`. 31 harness tests across geode_auth,
+// authn_mfa_totp_edges, distributed_mfa_totp, mfa_comprehensive_security and
+// gap_155_156_regression died on exactly this.
+//
+// CONTRACT PINNED HERE: a read issued while the CALLING thread already holds
+// the store lock is ALREADY synchronized and must proceed WITHOUT re-acquiring;
+// only a lock held by ANOTHER thread is `SecurityStoreUnavailable`. Both halves
+// are asserted below against the real production callback.
+//
+// CANARY: REQ=REQ-SEC-AUTH-UNAVAILABLE-005; FEATURE="AuthOutcomeClassification"; ASPECT=StoreLockReentrancy; STATUS=TESTED; TEST=tests/test_auth_unavailable_classification.zig; OWNER=security; UPDATED=2026-08-30
+
+const persistent_auth_resolver = @import("persistent_auth_resolver");
+
+/// Seed a principal into the PROCESS-GLOBAL store the production resolver
+/// reads (`graph_store.getGlobalStore`), so the callback has something real to
+/// resolve. The global store owns its own allocator, so nothing here is
+/// attributed to `testing.allocator`.
+fn seedGlobalSecurityUser(username: []const u8) !void {
+    const store = graph_store.getGlobalStore(std.heap.c_allocator);
+    var backend = try UserStorageBackend.init(std.heap.c_allocator, store);
+    defer backend.deinit();
+    _ = try backend.upsertManagedUser(.{
+        .user_id = 4242,
+        .username = username,
+        .email = "user@localhost",
+        .password_hash = stub_hash,
+        .is_active = true,
+    });
+}
+
+test "persistent resolver resolves while THIS thread holds the store lock exclusively (ENG-3979)" {
+    try requireNoGlobalAdapter();
+    try seedGlobalSecurityUser("selfheld");
+
+    // Baseline: unlocked thread resolves the principal.
+    {
+        const user = (try persistent_auth_resolver.lookupPersistentAuthUser(null, testing.allocator, "selfheld")) orelse
+            return error.SeededPrincipalNotResolvable;
+        var owned = user;
+        defer owned.deinit(testing.allocator);
+        try testing.expectEqualStrings("selfheld", owned.username);
+    }
+
+    // The production shape: a mutating auth statement runs under the GLOBAL
+    // EXCLUSIVE store lock, taken by the SAME thread that now calls back into
+    // the resolver. Drive the real acquire path — with no adapter installed,
+    // `acquireGraphWriteLockCancelable` takes the legacy global-exclusive
+    // branch, exactly as it does in production for a graph the adapter does
+    // not know ("default" before any DDL created it).
+    const handle = try graph_store.acquireGraphWriteLockCancelable(
+        "default",
+        graph_store.monoNanosNowPub() + std.time.ns_per_s,
+    );
+    defer graph_store.releaseGraphLock(handle);
+    try testing.expect(handle.global_lock_is_exclusive); // the escalation really happened
+    try testing.expect(graph_store.storeLockHeldByCurrentThread());
+
+    // RED at HEAD: tryAcquireStoreLock() fails against our OWN exclusive hold
+    // and the callback reports SecurityStoreUnavailable -> "User does not exist".
+    const user = (try persistent_auth_resolver.lookupPersistentAuthUser(null, testing.allocator, "selfheld")) orelse
+        return error.PrincipalLostUnderSelfHeldLock;
+    var owned = user;
+    defer owned.deinit(testing.allocator);
+    try testing.expectEqualStrings("selfheld", owned.username);
+
+    // The auth-version probe and the existence probe run on the same thread in
+    // the same critical section and must agree.
+    const version = try persistent_auth_resolver.lookupPersistentAuthVersion(null, "selfheld");
+    try testing.expect(version != null);
+    try testing.expect(try persistent_auth_resolver.persistentAuthUsersExist(null));
+}
+
+/// Zig 0.16 compat: `std.Thread.sleep` was removed.
+fn compat_sleep(ns: u64) void {
+    var req: std.posix.timespec = .{ .sec = 0, .nsec = @intCast(ns) };
+    var rem: std.posix.timespec = .{ .sec = 0, .nsec = 0 };
+    if (comptime @import("builtin").os.tag == .linux) {
+        _ = std.os.linux.nanosleep(@ptrCast(&req), @ptrCast(&rem));
+    } else {
+        _ = std.c.nanosleep(&req, &rem);
+    }
+}
+
+/// Holds the global store lock EXCLUSIVE on a FOREIGN thread until told to stop.
+const ForeignExclusiveHolder = struct {
+    acquired: std.atomic.Value(bool) = std.atomic.Value(bool).init(false),
+    release: std.atomic.Value(bool) = std.atomic.Value(bool).init(false),
+
+    fn run(self: *ForeignExclusiveHolder) void {
+        graph_store.acquireStoreWriteLock();
+        self.acquired.store(true, .release);
+        while (!self.release.load(.acquire)) compat_sleep(200 * std.time.ns_per_us);
+        graph_store.releaseStoreWriteLock();
+    }
+};
+
+test "persistent resolver still fails closed while ANOTHER thread holds the store lock (ENG-3979 guard)" {
+    try requireNoGlobalAdapter();
+    try seedGlobalSecurityUser("foreignheld");
+
+    var holder = ForeignExclusiveHolder{};
+    const thread = try std.Thread.spawn(.{}, ForeignExclusiveHolder.run, .{&holder});
+    defer thread.join();
+    while (!holder.acquired.load(.acquire)) compat_sleep(200 * std.time.ns_per_us);
+
+    // This thread holds nothing: the ENG-3954 fail-closed contract stands —
+    // never read the store unsynchronized, never answer "no such user".
+    try testing.expect(!graph_store.storeLockHeldByCurrentThread());
+    try testing.expectError(
+        error.SecurityStoreUnavailable,
+        persistent_auth_resolver.lookupPersistentAuthUser(null, testing.allocator, "foreignheld"),
+    );
+    try testing.expectError(
+        error.SecurityStoreUnavailable,
+        persistent_auth_resolver.lookupPersistentAuthVersion(null, "foreignheld"),
+    );
+    try testing.expectError(
+        error.SecurityStoreUnavailable,
+        persistent_auth_resolver.persistentAuthUsersExist(null),
+    );
+
+    holder.release.store(true, .release);
+}
+
+test "store-lock hold accounting balances across both modes (ENG-3979)" {
+    try testing.expect(!graph_store.storeLockHeldByCurrentThread());
+
+    graph_store.acquireStoreLock();
+    try testing.expect(graph_store.storeLockHeldByCurrentThread());
+    try testing.expectEqual(graph_store.StoreReadAccess.already_held, graph_store.beginStoreRead());
+    graph_store.releaseStoreLock();
+    try testing.expect(!graph_store.storeLockHeldByCurrentThread());
+
+    graph_store.acquireStoreWriteLock();
+    try testing.expect(graph_store.storeLockHeldByCurrentThread());
+    graph_store.releaseStoreWriteLock();
+    try testing.expect(!graph_store.storeLockHeldByCurrentThread());
+
+    // Unheld: beginStoreRead takes a real SHARED hold and endStoreRead drops it.
+    const access = graph_store.beginStoreRead();
+    try testing.expectEqual(graph_store.StoreReadAccess.acquired, access);
+    try testing.expect(graph_store.storeLockHeldByCurrentThread());
+    graph_store.endStoreRead(access);
+    try testing.expect(!graph_store.storeLockHeldByCurrentThread());
+}
