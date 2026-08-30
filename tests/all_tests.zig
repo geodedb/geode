@@ -242,6 +242,15 @@ const _test_drainready_dispatch = @import("test_drainready_dispatch.zig");
 // the binary hasn't been built yet.
 const _test_cluster_3node_subprocess = @import("test_cluster_3node_subprocess.zig");
 
+// ENG-3921 data-dir lock subprocess e2e.  Same skip semantics as the
+// 3-node test above (SKIPs unless ./zig-out/bin/geode exists), so it is
+// safe to reference from the aggregate build.  The ENG-3921 UNIT lane
+// (tests/test_data_dir_lock.zig) is deliberately NOT referenced here: it
+// imports the named module "data_dir_lock", which only the dedicated
+// `test-data-dir-lock` build step wires up (mirrors
+// tests/test_admin_bootstrap_hardening.zig).
+const _test_datadir_lock_subprocess = @import("test_datadir_lock_subprocess.zig");
+
 test "aggregate: geode module loads" {
     // Basic sanity check: parse trivial query
     std.testing.refAllDecls(_advanced_types_operators);
@@ -253,6 +262,7 @@ test "aggregate: geode module loads" {
     std.testing.refAllDecls(_test_cluster_forward_to_shard);
     std.testing.refAllDecls(_test_drainready_dispatch);
     std.testing.refAllDecls(_test_cluster_3node_subprocess);
+    std.testing.refAllDecls(_test_datadir_lock_subprocess);
     var res = try geode.parseGql("RETURN 1", std.testing.allocator);
     defer res.deinit();
     try std.testing.expect(res.program.statements.len == 1);

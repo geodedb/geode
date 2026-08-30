@@ -895,6 +895,15 @@ pub fn build(b: *std.Build) void {
     root_mod.addImport("auth_lib", auth_ext_mod);
     root_mod.addImport("geode_client_zig", zig_client_real_mod);
 
+    // ENG-3921: the cross-process data-directory lock is a leaf (std-only)
+    // module. It is consumed BOTH from src/server/main.zig (serve startup)
+    // and from src/cli/cli_auth_helpers.zig (offline CLI writers). The latter
+    // is also wired as its own standalone test module rooted at src/cli/, so
+    // a relative `../server/...` import is out of module path there — hence a
+    // NAMED module, owned here and shared by every consumer.
+    const data_dir_lock_mod = b.createModule(.{ .root_source_file = b.path("src/server/data_dir_lock.zig"), .target = target, .optimize = optimize });
+    data_dir_lock_mod.link_libc = true;
+
     // Main unified CLI binary with server and client capabilities
     // CANARY: REQ=REQ-CLI-SUBPROCESS-ELIMINATION-001; FEATURE="CLI Subprocess Elimination"; ASPECT=UnifiedEntry; STATUS=TESTED; TEST=test-quic-high-concurrency-e2e; OWNER=build; UPDATED=2026-06-11
     // Uses unified_entry.zig as root to allow both cli/main.zig and server/main.zig imports
@@ -909,6 +918,9 @@ pub fn build(b: *std.Build) void {
     // GAP-0810: named-module form to keep a single owning module for
     // server/query_ast_cache.zig across lib.zig and server files.
     geode_exe.root_module.addImport("query_ast_cache", query_ast_cache_mod);
+    // ENG-3921: data-dir lock, shared by the serve startup path and the
+    // offline CLI writers.
+    geode_exe.root_module.addImport("data_dir_lock", data_dir_lock_mod);
 
     // Phase 1 External Library Imports for CLI
     geode_exe.root_module.addImport("yaml", yaml_mod);
@@ -7119,6 +7131,7 @@ pub fn build(b: *std.Build) void {
     const cli_auth_helpers_mod = b.createModule(.{ .root_source_file = b.path("src/cli/cli_auth_helpers.zig"), .target = target, .optimize = optimize });
     cli_auth_helpers_mod.addImport("geode", root_mod);
     cli_auth_helpers_mod.addImport("auth_graph_manager", auth_graph_manager_mod);
+    cli_auth_helpers_mod.addImport("data_dir_lock", data_dir_lock_mod);
 
     const admin_bootstrap_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_admin_bootstrap_env_and_reset.zig"), .target = target, .optimize = optimize });
     admin_bootstrap_test_mod.addImport("geode", root_mod);
@@ -7220,6 +7233,46 @@ pub fn build(b: *std.Build) void {
     shardDep(test_step, &run_admin_bootstrap_hardening_tests.step, 1, test_shard_loads, test_shard_index);
     const admin_bootstrap_hardening_step = b.step("test-admin-bootstrap-hardening", "Issue #819: data-dir permission check before persisting bootstrap secret");
     admin_bootstrap_hardening_step.dependOn(&run_admin_bootstrap_hardening_tests.step);
+
+    // ENG-3921: cross-process data-directory lock.  Unit lane for the leaf
+    // module src/server/data_dir_lock.zig (same standalone shape as
+    // data_dir_permissions.zig above: no dependency on the heavy `geode`
+    // module, so the suite stays cheap to compile).  Links libc for
+    // getpid/nanosleep in the fixtures.
+    //
+    // RED-first: src/server/data_dir_lock.zig did not exist, so this step
+    // failed to compile until the fix landed.  That was the intended pre-fix
+    // evidence for this lane; the behavioural repro lives in
+    // `test-datadir-lock-subprocess` below.  The module itself is owned up by
+    // the geode exe wiring (a file may belong to only one module), so reuse
+    // that instance here rather than creating a second one.
+    const data_dir_lock_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_data_dir_lock.zig"), .target = target, .optimize = optimize });
+    data_dir_lock_test_mod.addImport("data_dir_lock", data_dir_lock_mod);
+    data_dir_lock_test_mod.link_libc = true;
+    const data_dir_lock_tests = b.addTest(.{ .root_module = data_dir_lock_test_mod });
+    const run_data_dir_lock_tests = b.addRunArtifact(data_dir_lock_tests);
+    shardDep(test_step, &run_data_dir_lock_tests.step, 1, test_shard_loads, test_shard_index);
+    const data_dir_lock_step = b.step("test-data-dir-lock", "ENG-3921: cross-process data-dir lock primitive (unit)");
+    data_dir_lock_step.dependOn(&run_data_dir_lock_tests.step);
+
+    // ENG-3921 end-to-end: spawns real `./zig-out/bin/geode serve`
+    // processes and asserts that a second server (and an offline
+    // `geode auth reseal`) on a LIVE data dir is refused, while a
+    // SIGKILLed holder leaves no stale lock.  Same subprocess shape as
+    // test-cluster-3node-subprocess: consumes only the child binary's
+    // stdio, so no geode import graph is pulled into the test artifact.
+    const datadir_lock_subproc_tests = b.addTest(.{ .root_module = b.createModule(.{
+        .root_source_file = b.path("tests/test_datadir_lock_subprocess.zig"),
+        .target = target,
+        .optimize = optimize,
+    }) });
+    datadir_lock_subproc_tests.root_module.link_libc = true;
+    const run_datadir_lock_subproc_tests = b.addRunArtifact(datadir_lock_subproc_tests);
+    // The test execs ./zig-out/bin/geode, so it needs the install step to
+    // have run (same wiring as test-cluster-3node-subprocess).
+    run_datadir_lock_subproc_tests.step.dependOn(b.getInstallStep());
+    const datadir_lock_subproc_step = b.step("test-datadir-lock-subprocess", "ENG-3921: two `geode serve` on one data dir must be refused (subprocess e2e)");
+    datadir_lock_subproc_step.dependOn(&run_datadir_lock_subproc_tests.step);
 
     // Parallel-ingest hang reproduction tests — see triage of the
     // "thread-pool deinit timed out after 30000ms with 1 active tasks"
@@ -9845,6 +9898,7 @@ pub fn build(b: *std.Build) void {
     const bug731_cli_auth_mod = b.createModule(.{ .root_source_file = b.path("src/cli/cli_auth_helpers.zig"), .target = target, .optimize = optimize });
     bug731_cli_auth_mod.addImport("crypto_backend", crypto_backend_mod);
     bug731_cli_auth_mod.addImport("geode_auth", auth_mod);
+    bug731_cli_auth_mod.addImport("data_dir_lock", data_dir_lock_mod);
     const bug731_pwpolicy_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_bug731_password_policy.zig"), .target = target, .optimize = optimize });
     bug731_pwpolicy_test_mod.addImport("geode_auth", auth_mod);
     bug731_pwpolicy_test_mod.addImport("cli_auth_helpers", bug731_cli_auth_mod);

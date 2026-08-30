@@ -32,6 +32,7 @@ const builtin = @import("builtin");
 const geode = @import("geode");
 const graph_store = geode.graph_store;
 const auth_graph_manager = @import("auth_graph_manager");
+const data_dir_lock = @import("data_dir_lock");
 pub const AuthGraphManager = auth_graph_manager.AuthGraphManager;
 
 // -- State Path Resolution (for non-auth flat files) --
@@ -129,6 +130,42 @@ pub fn generateSecurePassword() ![32]u8 {
     return std.fmt.bytesToHex(random_bytes, .lower);
 }
 
+// -- Offline Data Directory Lock (ENG-3921) --
+
+/// The CLI is a short-lived single-shot process, so one process-wide guard is
+/// enough: `initCliAuthManager` takes it and `deinitAndSaveCliAuth` drops it.
+var g_cli_data_dir_lock: ?data_dir_lock.DataDirLock = null;
+
+fn acquireCliDataDirLock(allocator: std.mem.Allocator, resolved_dir: []const u8) !void {
+    if (g_cli_data_dir_lock != null) return; // already held by this process
+    const budget_ms = data_dir_lock.timeoutFromEnv();
+    g_cli_data_dir_lock = data_dir_lock.DataDirLock.acquireWithTimeout(
+        allocator,
+        resolved_dir,
+        budget_ms,
+    ) catch |err| switch (err) {
+        error.DataDirLocked => {
+            const holder = data_dir_lock.readHolderPid(allocator, resolved_dir) orelse -1;
+            // Wording is load-bearing: operators and the e2e test both key
+            // off "data directory is locked by pid".
+            std.debug.print(
+                "Error: data directory is locked by pid {d} ({s}); refusing to modify it while it is in use.\n" ++
+                    "Stop the running server (or point --data-dir elsewhere) and retry.\n",
+                .{ holder, resolved_dir },
+            );
+            return error.DataDirLocked;
+        },
+        else => return err,
+    };
+}
+
+fn releaseCliDataDirLock() void {
+    if (g_cli_data_dir_lock) |*lock| {
+        lock.release();
+        g_cli_data_dir_lock = null;
+    }
+}
+
 // -- Offline Auth Manager Initialization --
 
 /// Initialise an AuthGraphManager for CLI offline operations.
@@ -145,6 +182,16 @@ pub fn initCliAuthManager(allocator: std.mem.Allocator, data_dir: ?[]const u8) !
         env_dir
     else |_|
         "/var/lib/geode";
+
+    // CANARY: REQ=REQ-ENG-3921-DATA-DIR-LOCK-002; FEATURE="DataDirLock"; ASPECT=OfflineCliWriter; STATUS=TESTED; TEST=tests/test_datadir_lock_subprocess.zig; OWNER=storage; UPDATED=2026-08-29
+    // ENG-3921: these offline CLI entry points open the data directory
+    // read-write and mutate the `__geode_security` graph. Run against a LIVE
+    // server's data dir they used to succeed, rewriting the HMAC chain out
+    // from under the running process. Take the SAME `.geode.lock` the server
+    // holds, so exactly one writer owns the directory at a time. Every
+    // offline auth/apikey/tenant command routes through here.
+    try acquireCliDataDirLock(allocator, resolved_dir);
+    errdefer releaseCliDataDirLock();
 
     // Use initGlobalStore which initializes the storage adapter so that
     // saveIfDirty actually persists node/edge data to disk.  Without the
@@ -170,6 +217,9 @@ pub fn deinitAndSaveCliAuth(allocator: std.mem.Allocator, mgr: *AuthGraphManager
     // Flush any in-memory changes to disk before tearing down.
     graph_store.getGlobalStore(allocator).saveIfDirty();
     mgr.deinit();
+    // ENG-3921: drop the data-dir lock only after the flush has landed, so a
+    // server starting up behind us never reads a half-written store.
+    releaseCliDataDirLock();
 }
 
 // -- Tests --

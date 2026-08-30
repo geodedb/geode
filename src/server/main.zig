@@ -171,6 +171,8 @@ const cli_args = @import("cli_args.zig");
 const process_args = @import("process_args.zig");
 // Import server initialization (M3.2 Phase 3 initialization extraction)
 const server_init = @import("server_init.zig");
+// ENG-3921: cross-process exclusion on the data directory (flock leaf module).
+const data_dir_lock_mod = @import("data_dir_lock");
 const fd_limit = @import("geode").fd_limit;
 // Import QUIC connection handlers (M3.3 Phase 3 QUIC handlers extraction)
 const quic_connection_handler = @import("quic_connection_handler.zig");
@@ -1198,6 +1200,59 @@ pub fn main() !void {
             return error.DataDirUnavailable;
         };
     }
+
+    // CANARY: REQ=REQ-ENG-3921-DATA-DIR-LOCK-001; FEATURE="DataDirLock"; ASPECT=ServerStartup; STATUS=TESTED; TEST=tests/test_datadir_lock_subprocess.zig; OWNER=storage; UPDATED=2026-08-29
+    // ENG-3921: take single-writer ownership of the data directory before any
+    // component opens it. Two `geode serve` processes on one --data-dir used
+    // to both come up (split-brain over one on-disk store, last snapshot
+    // wins = silent data loss). This must run BEFORE server_init.initialize,
+    // which is the first thing to open the store.
+    //
+    // The lock covers the RESOLVED directory, not the raw flag: an omitted
+    // --data-dir still resolves (GEODE_DATA_DIR, else /tmp) to a real
+    // directory that a second process would share, so resolve it exactly the
+    // way graph_store does before locking. `--data-dir` is not yet installed
+    // as the store override at this point (server_init.initialize does that),
+    // so apply the flag first and fall back to graph_store's own chain.
+    const resolved_data_dir: []const u8 = if (data_dir) |dir|
+        try gpa.dupe(u8, dir)
+    else
+        try graph_store.getPersistenceFilePath(gpa);
+    defer gpa.free(resolved_data_dir);
+    const lock_budget_ms = data_dir_lock_mod.timeoutFromEnv();
+    var data_dir_guard = data_dir_lock_mod.DataDirLock.acquireWithTimeout(
+        gpa,
+        resolved_data_dir,
+        lock_budget_ms,
+    ) catch |err| switch (err) {
+        error.DataDirLocked => {
+            const holder = data_dir_lock_mod.readHolderPid(gpa, resolved_data_dir) orelse -1;
+            // Message wording is load-bearing: operators and the e2e test
+            // both key off "data directory is locked by pid".
+            std.debug.print(
+                "[startup] data directory is locked by pid {d} ({s}); refusing to start\n",
+                .{ holder, resolved_data_dir },
+            );
+            log.err("data directory is locked by pid; refusing to start", &.{
+                Attr.string("path", resolved_data_dir),
+                Attr.int("holder_pid", holder),
+                Attr.int("waited_ms", @intCast(lock_budget_ms)),
+            });
+            return error.DataDirLocked;
+        },
+        else => {
+            log.err("cannot lock data directory; refusing to start (fail-closed)", &.{
+                Attr.string("path", resolved_data_dir),
+                Attr.string("error", @errorName(err)),
+            });
+            return error.DataDirLockUnavailable;
+        },
+    };
+    // Released last, after the shutdown durability flush, so a restarting
+    // successor never opens the store while the outgoing process is still
+    // writing. Watchdog force-exits bypass this defer, which is harmless:
+    // flock dies with the process.
+    defer data_dir_guard.release();
 
     // Apply log level and MATCH overrides
     if (log_level_arg) |lla| {
