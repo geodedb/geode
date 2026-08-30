@@ -262,13 +262,20 @@ test "REGRESSION: MATCH+SET scales sub-linearly in noise population" {
     // Guard against division by zero on extremely fast runs.
     const baseline_ms = @max(small_ms, 1.0);
     const ratio = large_ms / baseline_ms;
-    if (ratio > 5.0) {
-        std.debug.print(
-            "MATCH+SET scale-invariance regression: 500 nodes={d:.1}ms 5000 nodes={d:.1}ms ratio={d:.2} " ++
-                "(expected <=5x; linear full-scan fallback suspected)\n",
-            .{ small_ms, large_ms, ratio },
-        );
-        return error.MatchSetScalingRegression;
+    // Timing-ratio assertion: skip on contended runners (CI, and the local
+    // pre-push gate's 4-shard oversubscription, which exports CI=1 exactly so
+    // perf-ratio tests opt out) — same idiom as
+    // test_edge_popular_parent_throughput.zig. The 5000ms absolute guard rail
+    // in the previous test still catches a real full-scan fallback there.
+    if (std.c.getenv("CI") == null and std.c.getenv("GITLAB_CI") == null) {
+        if (ratio > 5.0) {
+            std.debug.print(
+                "MATCH+SET scale-invariance regression: 500 nodes={d:.1}ms 5000 nodes={d:.1}ms ratio={d:.2} " ++
+                    "(expected <=5x; linear full-scan fallback suspected)\n",
+                .{ small_ms, large_ms, ratio },
+            );
+            return error.MatchSetScalingRegression;
+        }
     }
 }
 
