@@ -281,6 +281,16 @@ fn isTruthyEnvValue(value: []const u8) bool {
     return true;
 }
 
+/// True when `args` already carries `flag`, in either the `--flag value` or
+/// `--flag=value` spelling.
+fn hasFlag(args: []const []const u8, flag: []const u8) bool {
+    for (args) |a| {
+        if (std.mem.eql(u8, a, flag)) return true;
+        if (a.len > flag.len and std.mem.startsWith(u8, a, flag) and a[flag.len] == '=') return true;
+    }
+    return false;
+}
+
 fn envPairsContainTruthy(pairs: ?[]const []const u8, name: []const u8) bool {
     if (pairs) |items| {
         for (items) |kv| {
@@ -357,6 +367,32 @@ pub fn spawnServer(
                 map.put(kv[0..eq], kv[eq + 1 ..]) catch {};
             }
         }
+    }
+
+    // CANARY: REQ=REQ-ENG-3921-DATA-DIR-LOCK-004; FEATURE="DataDirLock"; ASPECT=HermeticTestDataDir; STATUS=TESTED; TEST=test-transport-parity; OWNER=storage; UPDATED=2026-08-29
+    //
+    // ENG-3921: a `geode serve` with neither `--data-dir` nor GEODE_DATA_DIR
+    // resolves to `/tmp` (graph_store.getPersistenceFilePath). Every smoke
+    // spawned from here therefore used to share ONE on-disk store, and the
+    // build runs sibling smokes in parallel — i.e. the harness was relying on
+    // exactly the split-brain the data-dir lock now forbids, and a second
+    // concurrent smoke is refused with "data directory is locked by pid".
+    //
+    // Give each TEST PROCESS its own data dir. Per-process (not per-spawn) is
+    // deliberate: tests that stop a server and start another one to assert
+    // durability still see the same store, while sibling test binaries no
+    // longer collide. An explicit `--data-dir` argument or a caller/parent
+    // GEODE_DATA_DIR always wins.
+    if (map.get("GEODE_DATA_DIR") == null and !hasFlag(args, "--data-dir")) {
+        var dir_buf: [64]u8 = undefined;
+        const pid = if (comptime builtin.os.tag == .linux)
+            @as(i64, std.os.linux.getpid())
+        else
+            @as(i64, std.c.getpid());
+        if (std.fmt.bufPrint(&dir_buf, "/tmp/geode-test-{d}", .{pid})) |test_data_dir| {
+            std.Io.Dir.cwd().createDirPath(io, test_data_dir) catch {};
+            map.put("GEODE_DATA_DIR", test_data_dir) catch {};
+        } else |_| {}
     }
 
     // CANARY: REQ=REQ-QUIC-HC-024; FEATURE="QUIC High-Concurrency Diagnostics"; ASPECT=ServerStderrPassThrough; STATUS=TESTED; TEST=test-quic-high-concurrency-e2e; OWNER=transport; UPDATED=2026-05-26
