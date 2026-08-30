@@ -50,7 +50,7 @@ const admin_password = "GeodeTestPassword123!";
 /// 64 hex chars: a VALID GEODE_AUTH_HMAC_KEY, so `auth reseal` would
 /// otherwise succeed.  Without this the CLI case could pass for the wrong
 /// reason (non-zero exit from an unresolvable HMAC key).
-const hmac_key_hex = "a1b2c3d4e5f60718293a4b5c6d7e8f90a1b2c3d4e5f60718293a4b5c6d7e8f90";
+const hmac_key_hex = "a1b2c3d4e5f60718293a4b5c6d7e8f90a1b2c3d4e5f60718293a4b5c6d7e8f90"; // gitleaks:allow — synthetic test HMAC key, not a real secret
 
 const ready_deadline_ms: i64 = 120_000;
 /// A refusal is a startup-path decision: it must land long before a real
