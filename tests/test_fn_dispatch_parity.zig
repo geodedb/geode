@@ -535,6 +535,7 @@ const function_probes = [_]FunctionProbe{
     .{ .name = "date", .query = "RETURN date('2024-01-01')" },
     .{ .name = "time", .query = "RETURN time('10:11:12')" },
     .{ .name = "datetime", .query = "RETURN datetime('2024-01-01T00:00:00Z')" },
+    .{ .name = "valuetype", .query = "RETURN valueType(123)" },
     .{ .name = "localtime", .query = "RETURN localtime()" },
     .{ .name = "localdatetime", .query = "RETURN localdatetime()" },
     .{ .name = "duration", .query = "RETURN duration('PT1H')" },
@@ -810,6 +811,36 @@ test "FN-DISPATCH-PARITY: localtime() mirrors the time()/localdatetime() family"
     // 10:11:12 is 36672 seconds past midnight — pin the value, not just equality
     // with a sibling that could be wrong in the same way.
     try testing.expectEqual(@as(i64, 36672) * 1_000_000, try micros_of(parsed));
+}
+
+test "FN-DISPATCH-PARITY: datetime accepts a date-only literal and reports parse failures as data exceptions" {
+    var h = try Harness.init(testing.allocator);
+    defer h.deinit();
+    try sweepGraph(&h, "fnsweep_dtonly");
+
+    // KEY ASSERTIONS (RED before the fix): Timestamp.fromStr requires a time
+    // part and the caller swallowed the parse failure with `catch return null`,
+    // which fell through to error.UnknownFunction (42883) — a data exception
+    // misreported as "no such function".
+    try testing.expectEqual(@as(i64, 2024), try h.scalarInt("RETURN datetime('2024-06-15').year AS year"));
+
+    // A malformed literal on a RESOLVED function is TimeParse, never 42883.
+    try testing.expectError(error.TimeParse, h.exec("RETURN datetime('garbage') AS x"));
+    try testing.expectError(error.TimeParse, h.exec("RETURN duration('garbage') AS x"));
+    // Non-string / wrong-arity are data exceptions on the resolved name too.
+    try testing.expectError(error.TypeMismatch, h.exec("RETURN datetime(123) AS x"));
+    try testing.expectError(error.InvalidArgs, h.exec("RETURN datetime('a', 'b') AS x"));
+}
+
+test "FN-DISPATCH-PARITY: valueType() names the value's type without type()'s edge special-case" {
+    var h = try Harness.init(testing.allocator);
+    defer h.deinit();
+    try sweepGraph(&h, "fnsweep_valuetype");
+
+    const int_t = try h.scalar("RETURN valueType(123) AS t");
+    try testing.expectEqualStrings("INTEGER", int_t.Str);
+    const str_t = try h.scalar("RETURN valueType('hello') AS t");
+    try testing.expectEqualStrings("STRING", str_t.Str);
 }
 
 test "FN-DISPATCH-PARITY: none() and single() are parseable and correct quantifiers" {

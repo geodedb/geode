@@ -55,6 +55,12 @@ fn isPropagatableEvalError(err: EvalError) bool {
         // call would collapse the diagnostic back to the silent NULL/[] the
         // ticket is about.
         EvalError.UnknownProperty,
+        // geode#873 bug 8b residual: an unresolved function name is a static
+        // defect in the query text (SQLSTATE 42883), not a per-argument
+        // evaluation failure — a NESTED unknown call must not collapse the
+        // whole extended-registry call to a silent NULL. Same contract as the
+        // grouped projection path (execution.zig evalGroupedExpr).
+        EvalError.UnknownFunction,
         // GAP-0840: a strict-tenancy refusal must never degrade to NULL.
         EvalError.TenantScopeRequired,
         // GAP-ENT-0044/0045: a read-budget / cancel abort must reach the client,
@@ -617,6 +623,29 @@ pub fn evalBinary(alloc: std.mem.Allocator, op: ast.BinOp, l: Value, r: Value) E
                 const rc = scaleTo(r.Decimal.coeff, r.Decimal.scale, maxs) catch return EvalError.Unsupported;
                 const ord = cmpI128(lc, rc);
                 break :blk5 .{ .Bool = cmpToBool(op, ord) };
+            }
+            // Float-promoted numeric comparison. The arm set above covers the
+            // EXACT integer/decimal pairings; there was no float branch at all,
+            // so any comparison touching a Real/Double fell through to
+            // TypeMismatch — and after a3d4726d made avg() always produce
+            // Double, `WITH avg(x) AS a WHERE a > k` silently emptied (the
+            // post-WITH filter swallows eval errors into row exclusion).
+            // Promote to f64 only when a float is actually involved, so the
+            // exact arms keep integer/decimal comparisons precise.
+            if (l == .Real or l == .Double or r == .Real or r == .Double) {
+                if (numericValueAsF64(l)) |lf| {
+                    if (numericValueAsF64(r)) |rf| {
+                        break :blk5 .{ .Bool = switch (op) {
+                            .Eq => lf == rf,
+                            .Ne => lf != rf,
+                            .Lt => lf < rf,
+                            .Le => lf <= rf,
+                            .Gt => lf > rf,
+                            .Ge => lf >= rf,
+                            else => false,
+                        } };
+                    }
+                }
             }
             if (l == .Str and r == .Str) {
                 // Unicode-aware comparison: normalize both operands to NFC then compare byte-wise.
@@ -1192,6 +1221,15 @@ pub fn evalExpr(allocator: std.mem.Allocator, e: ast.Expr, env: Env) EvalError!V
                     return EvalError.DecimalDivZero;
                 } else if (std.mem.eql(u8, err_name, "DecimalOverflow")) {
                     return EvalError.DecimalOverflow;
+                } else if (std.mem.eql(u8, err_name, "TimeParse")) {
+                    // A malformed temporal literal on a RESOLVED function
+                    // (datetime('garbage'), duration('garbage')) is a data
+                    // exception, not a silent NULL.
+                    return EvalError.TimeParse;
+                } else if (std.mem.eql(u8, err_name, "InvalidArgs")) {
+                    // Wrong arity on a resolved basic function is a caller
+                    // error (22023), not a silent NULL.
+                    return EvalError.InvalidArgs;
                 }
                 // For other errors, fall back to null
                 break :blk_call .{ .Null = {} };
@@ -3043,6 +3081,17 @@ fn tryBasicFunction(allocator: std.mem.Allocator, function_name: []const u8, arg
         }
     }
 
+    // valueType() — Cypher/GQL-alignment alias over the same type-name
+    // machinery. Unlike type(), it does NOT special-case edges: valueType(r)
+    // is the value's type name ("RELATIONSHIP", via getTypeName), not the
+    // relationship label. Not ISO 39075 (the standard's surface is the
+    // IS TYPED predicate); registered as a compatibility spelling.
+    if (std.ascii.eqlIgnoreCase(function_name, "valuetype")) {
+        if (args.len != 1) return null;
+        const arg = try evalExpr(allocator, args[0].*, env);
+        return Value{ .Str = getTypeName(arg) };
+    }
+
     // Handle labels() function - returns node labels as a list
     if (std.ascii.eqlIgnoreCase(function_name, "labels")) {
         if (args.len != 1) return null;
@@ -3535,17 +3584,31 @@ fn tryBasicFunction(allocator: std.mem.Allocator, function_name: []const u8, arg
             const arg = try evalExpr(allocator, args[0].*, env);
             const str = switch (arg) {
                 .Str => |s| s,
-                else => return null,
+                // A non-string argument is a data exception on a resolved
+                // function, not "no such function" — `return null` here would
+                // fall through to EvalError.UnknownFunction (42883).
+                else => return EvalError.TypeMismatch,
             };
 
-            // Parse the datetime string using the Timestamp parser
-            const ts = datetime_module.Timestamp.fromStr(str) catch return null;
+            // Parse the datetime string using the Timestamp parser; accept a
+            // date-only literal ('2024-06-15') as midnight UTC, matching the
+            // date()/time() siblings. A string neither form parses is a
+            // TimeParse data exception, never a swallowed 42883.
+            const micros: i64 = blk: {
+                if (datetime_module.Timestamp.fromStr(str)) |ts| {
+                    break :blk ts.micros_since_epoch;
+                } else |_| {
+                    const d = datetime_module.Date.fromStr(str) catch return EvalError.TimeParse;
+                    break :blk @as(i64, d.days_since_epoch) * 24 * 3600 * 1_000_000;
+                }
+            };
 
             // Convert to TimestampTZ ExtValue
-            const tz_ts = eval_ext.ExtValue{ .TimestampTZ = .{ .micros_since_epoch_utc = ts.micros_since_epoch } };
+            const tz_ts = eval_ext.ExtValue{ .TimestampTZ = .{ .micros_since_epoch_utc = micros } };
             return Value{ .ExtValue = tz_ts };
         } else {
-            return null;
+            // datetime() takes zero or one argument.
+            return EvalError.InvalidArgs;
         }
     }
 
@@ -3670,7 +3733,10 @@ fn tryBasicFunction(allocator: std.mem.Allocator, function_name: []const u8, arg
         // GQL queries can construct an interval value with the same name the
         // GQL specs use in comparisons / overlap predicates.
         const datetime_module = @import("types/datetime.zig");
-        const interval = datetime_module.Interval.fromStr(str) catch return null;
+        // A malformed duration literal on a resolved function is a TimeParse
+        // data exception — `return null` here used to fall through to 42883
+        // ("Unknown function"), disagreeing with the interval() error path.
+        const interval = datetime_module.Interval.fromStr(str) catch return EvalError.TimeParse;
         return Value{ .Interval = interval };
     }
 

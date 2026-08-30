@@ -890,6 +890,15 @@ pub const functions = [_]FunctionInfo{
         .example = "RETURN type(r)",
     },
     .{
+        .name = "valueType",
+        .category = .conversion,
+        .return_type = "STRING",
+        .params = &[_]FunctionParam{.{ .name = "value", .type_name = "ANY" }},
+        .compliance = .cypher_compat,
+        .doc = "Get the type name of any value (Cypher-alignment alias; edges report RELATIONSHIP, not the label)",
+        .example = "RETURN valueType(123)",
+    },
+    .{
         .name = "labels",
         .category = .graph,
         .return_type = "LIST",

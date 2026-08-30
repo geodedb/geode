@@ -396,6 +396,10 @@ pub fn executeShow(allocator: std.mem.Allocator, s: ast.ShowStatement, context: 
                 .{ .name = "exists", .signature = "(pattern)", .return_type = "BOOLEAN" },
                 // Type functions
                 .{ .name = "type", .signature = "(relationship)", .return_type = "STRING" },
+                // valueType(value): the value's type name (Cypher/GQL-alignment
+                // spelling over getTypeName; edges report "RELATIONSHIP", not
+                // the relationship label — that is type()'s job).
+                .{ .name = "valueType", .signature = "(value)", .return_type = "STRING" },
                 .{ .name = "labels", .signature = "(node)", .return_type = "LIST" },
                 .{ .name = "id", .signature = "(node|relationship)", .return_type = "INTEGER" },
                 // CANARY: REQ=REQ-FN-DISPATCH-PARITY; FEATURE="SHOW FUNCTIONS"; ASPECT=ElementIdUnadvertised; STATUS=TESTED; TEST=tests/test_fn_dispatch_parity.zig; OWNER=execution; UPDATED=2026-08-25
@@ -415,7 +419,11 @@ pub fn executeShow(allocator: std.mem.Allocator, s: ast.ShowStatement, context: 
                 // Temporal functions
                 .{ .name = "date", .signature = "([map|string])", .return_type = "DATE" },
                 .{ .name = "time", .signature = "([map|string])", .return_type = "TIME" },
-                .{ .name = "datetime", .signature = "([map|string])", .return_type = "DATETIME" },
+                // datetime: the map constructor form is NOT implemented (only
+                // the string/no-arg forms dispatch); advertising "[map|string]"
+                // was a FN-DISPATCH-PARITY lie of the elementId/point kind.
+                // Re-widen the signature in the commit that lands the map form.
+                .{ .name = "datetime", .signature = "([string])", .return_type = "DATETIME" },
                 .{ .name = "localtime", .signature = "([map|string])", .return_type = "LOCAL_TIME" },
                 .{ .name = "localdatetime", .signature = "([map|string])", .return_type = "LOCAL_DATETIME" },
                 .{ .name = "duration", .signature = "(map|string)", .return_type = "DURATION" },

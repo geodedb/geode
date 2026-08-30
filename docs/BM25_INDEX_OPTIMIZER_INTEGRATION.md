@@ -144,14 +144,14 @@ WHERE article.content CONTAINS 'machine learning algorithms'
 RETURN article.title, article.author
 ORDER BY article.relevance_score DESC
 
--- Complex multi-term search with BM25 scoring
-MATCH (doc:Document)
-WHERE doc.abstract CONTAINS 'artificial intelligence'
-  AND doc.keywords CONTAINS 'neural networks'
-RETURN doc.title,
-       bm25_score(doc.abstract, 'artificial intelligence neural networks') AS relevance
-ORDER BY relevance DESC
-LIMIT 10
+-- Complex multi-term search with BM25 scoring.
+-- NOTE: there is NO scalar bm25_score() function — a per-row scalar cannot
+-- compute BM25 (corpus IDF and average document length live in the index,
+-- not the row). The BM25 ranking surface is the fts procedure:
+CALL geode.fts.search('doc_abstract_idx', 'artificial intelligence neural networks', 10)
+YIELD node, score
+RETURN node, score
+ORDER BY score DESC
 ```
 
 ### Corpus-Aware Optimization
