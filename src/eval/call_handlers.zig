@@ -57,6 +57,9 @@ fn mapEvaluatorError(err: evaluator_functions.EvaluatorError) EvalError {
         evaluator_functions.EvaluatorError.DecimalOverflow => EvalError.DecimalOverflow,
         evaluator_functions.EvaluatorError.DecimalDivZero => EvalError.DecimalDivZero,
         evaluator_functions.EvaluatorError.IdnaError => EvalError.IdnaError,
+        // ENG-3922(b): the over-cap vector keeps its identity through this
+        // mapper too, rather than joining the InvalidFormat -> TypeMismatch arm.
+        evaluator_functions.EvaluatorError.VectorTooLarge => EvalError.VectorTooLarge,
     };
 }
 

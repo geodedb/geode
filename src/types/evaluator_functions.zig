@@ -82,6 +82,11 @@ pub const EvaluatorError = error{
     DecimalOverflow,
     DecimalDivZero,
     IdnaError,
+    // CANARY: REQ=REQ-ENG-3922-VECTOR-DIM-GUARD; FEATURE="VectorF32"; ASPECT=OverCapErrorIdentity; STATUS=TESTED; TEST=tests/test_eng3922_dim_guard.zig; OWNER=eval; UPDATED=2026-08-29
+    // ENG-3922(b): more than 65535 elements — the u16 `dim` cap. A documented
+    // resource limit, NOT a malformed literal, and it needs its own identity all
+    // the way to the wire (SQLSTATE 54000 program_limit_exceeded).
+    VectorTooLarge,
 };
 
 // First-class type constructors
@@ -296,6 +301,9 @@ pub fn Pressure(value: f64, unit: []const u8) EvaluatorError!Value {
 }
 
 pub fn Vector(allocator: std.mem.Allocator, values: []const f32) EvaluatorError!Value {
+    // ENG-3922(c) P0: `dim` is a u16 — an unchecked `@intCast(values.len)` is an
+    // integer-overflow panic above 65535, not an error.
+    if (values.len > std.math.maxInt(u16)) return EvaluatorError.VectorTooLarge;
     for (values) |v| {
         if (std.math.isNan(v) or std.math.isInf(v)) return EvaluatorError.FloatNaN;
     }
@@ -304,13 +312,24 @@ pub fn Vector(allocator: std.mem.Allocator, values: []const f32) EvaluatorError!
 }
 
 // Advanced Type Constructors
+// CANARY: REQ=REQ-ENG-3922-VECTOR-DIM-GUARD; FEATURE="VectorF32"; ASPECT=OverCapErrorIdentity; STATUS=TESTED; TEST=tests/test_eng3922_dim_guard.zig; OWNER=eval; UPDATED=2026-08-29
+// ENG-3922(b): `vector.VectorF32.fromString` raises a perfectly good
+// `error.VectorTooLarge` (src/types/vector.zig:53, :354). Collapsing it into
+// `InvalidFormat` here was the first of two launderings that ended with the
+// client being told 58000 "internal system error" for a limit they crossed.
 pub fn VectorF32(allocator: std.mem.Allocator, text: []const u8) EvaluatorError!Value {
-    const vec = vector.VectorF32.fromString(text, allocator) catch return EvaluatorError.InvalidFormat;
+    const vec = vector.VectorF32.fromString(text, allocator) catch |err| switch (err) {
+        error.VectorTooLarge => return EvaluatorError.VectorTooLarge,
+        else => return EvaluatorError.InvalidFormat,
+    };
     return Value{ .VectorF32 = .{ .dim = vec.dim, .data = vec.data } };
 }
 
 pub fn VectorI32(allocator: std.mem.Allocator, text: []const u8) EvaluatorError!Value {
-    const vec = vector.VectorI32.fromString(text, allocator) catch return EvaluatorError.InvalidFormat;
+    const vec = vector.VectorI32.fromString(text, allocator) catch |err| switch (err) {
+        error.VectorTooLarge => return EvaluatorError.VectorTooLarge,
+        else => return EvaluatorError.InvalidFormat,
+    };
     return Value{ .VectorI32 = .{ .dim = vec.dim, .data = vec.data } };
 }
 

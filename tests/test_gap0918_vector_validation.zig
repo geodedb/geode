@@ -120,7 +120,18 @@ test "GAP-0918: vector validation (dimension write-check, DDL metric, malformed 
         h.exec("CREATE (:P18Vec {id: 4, emb: vectorf32('[1.0, 2.0, 3.0]')})"),
     );
 
-    // Unindexed labels are unaffected.
+    // An UNINDEXED label is not governed by THIS index's pin — a dim-3 vector
+    // under a different (label, property) is accepted even though P18Vec.emb is
+    // pinned at dim 4.
+    //
+    // POLICY NOTE (ENG-3922, 2026-08-29): this line used to read "unindexed
+    // labels are unaffected", which is no longer true in general. An unindexed
+    // (graph, label, property) now carries its own per-graph dimension pin,
+    // seeded from committed data — mixed dimensions under one property are a
+    // data-integrity defect whether or not an index exists. This single FIRST
+    // write to P18Free.emb is what establishes that property's dimension, so it
+    // is accepted; a later dim-4 write to the same property would not be. See
+    // tests/test_eng3922_dim_guard.zig.
     _ = try h.exec("CREATE (:P18Free {id: 9, emb: vectorf32('[1.0, 2.0, 3.0]')})");
 
     // ---- (b) invalid distance metric rejected at CREATE INDEX ----

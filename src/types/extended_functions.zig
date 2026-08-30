@@ -233,7 +233,11 @@ pub fn makeGeoBox(min_x: f64, min_y: f64, max_x: f64, max_y: f64) BuiltinValue {
 pub fn makeGeoPolygon(points: []const ext.Point) BuiltinValue {
     return .{ .GeoPolygon = .{ .points = points } };
 }
-pub fn makeVector(data: []const f64) BuiltinValue {
+// ENG-3922(c): `dim` is a u16, so the cast below overflows above 65535. This
+// helper is test-only, but the bound is the type's, not the caller's, and an
+// unchecked narrowing cast is a panic wherever it lives.
+pub fn makeVector(data: []const f64) error{VectorTooLarge}!BuiltinValue {
+    if (data.len > std.math.maxInt(u16)) return error.VectorTooLarge;
     return .{ .VectorF64 = .{ .dim = @intCast(data.len), .data = data } };
 }
 pub fn makeJson(text: []const u8) BuiltinValue {
@@ -266,8 +270,8 @@ test "vector cosine identical" {
     defer reg.deinit();
     const fnp = reg.get("vector_cosine") orelse return error.NotFound;
     const arr = [_]f64{ 1.0, 2.0, 3.0 };
-    const a = makeVector(&arr);
-    const b = makeVector(&arr);
+    const a = try makeVector(&arr);
+    const b = try makeVector(&arr);
     const v = try fnp(std.testing.allocator, &[_]BuiltinValue{ a, b });
     defer freeValue(std.testing.allocator, v);
     try std.testing.expect(v == .Decimal);

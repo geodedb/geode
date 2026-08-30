@@ -80,6 +80,12 @@ pub const EvalError = error{
     // InvalidArgs so it can carry its own GQLSTATE (42704) in proto_util.
     // CANARY: REQ=REQ-VECTOR-KNN-METRIC-VALIDATE-001; FEATURE="VectorIndex"; ASPECT=QueryMetricMatchesIndex; STATUS=TESTED; TEST=tests/test_knn_metric_mismatch.zig; OWNER=index; UPDATED=2026-08-28
     VectorMetricMismatch,
+    // ENG-3922(b): a vector literal with more than 65535 elements — the u16
+    // `dim` cap. It needs its own identity because the generic `TypeMismatch` it
+    // used to be laundered into maps to the 58000 system-error class, telling
+    // the caller the SERVER broke when they crossed a documented limit.
+    // CANARY: REQ=REQ-ENG-3922-VECTOR-DIM-GUARD; FEATURE="VectorF32"; ASPECT=OverCapErrorIdentity; STATUS=TESTED; TEST=tests/test_eng3922_dim_guard.zig; OWNER=eval; UPDATED=2026-08-29
+    VectorTooLarge,
     OutOfMemory,
 };
 

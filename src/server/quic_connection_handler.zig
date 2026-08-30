@@ -1043,6 +1043,64 @@ fn executeBulkMatchMergeEdge(
     updateTxnStateFromProgram(state, program);
 }
 
+// CANARY: REQ=REQ-ENG-3922-VECTOR-DIM-GUARD; FEATURE="VectorIndex"; ASPECT=BulkMergeDimensionGuard; STATUS=TESTED; TEST=tests/test_eng3922_dim_guard.zig; OWNER=index; UPDATED=2026-08-29
+/// The vector dimension of a bulk-path property value, or null when it is not
+/// a VectorF32. Parity with the write chokepoint, which also guards VectorF32
+/// only.
+fn bulkPropVectorDim(value: graph_store.PropertyValue) ?u16 {
+    return switch (value) {
+        .ExtValue => |ext| switch (ext) {
+            .VectorF32 => |vec| vec.dim,
+            else => null,
+        },
+        else => null,
+    };
+}
+
+// CANARY: REQ=REQ-ENG-3922-VECTOR-DIM-GUARD; FEATURE="VectorIndex"; ASPECT=BulkMergeDimensionGuard; STATUS=TESTED; TEST=tests/test_eng3922_dim_guard.zig; OWNER=index; UPDATED=2026-08-29
+/// ENG-3922(a): apply the vector dimension guard on the bulk/batch MERGE fast
+/// paths, which bypass `property_mutation.setNodePropertyFromValue` — the
+/// chokepoint every other write path routes through — and hand their evaluated
+/// props straight to `bulkMergeNode*`.
+///
+/// A VectorF32 REACHES these paths. `bulk_ingest.isScalarPropExpr` admits a
+/// bare `.Param`, and a wire parameter carrying an `ext_val` decodes to
+/// `Value.ExtValue{ .VectorF32 }` (proto_util.protoValueToValue ->
+/// property_value_codec.protoExtendedToExtValue -> storage/heap.decodeValue,
+/// which has a VectorF32 tag). A `vectorf32(...)` CALL is correctly rejected by
+/// the detector — it is a function call, not a scalar — but the parameter form
+/// is not, so without this the fast path was a hole straight past the guard.
+///
+/// Runs BEFORE any op is submitted, so a refusal costs no partial write.
+fn checkBulkVectorDims(
+    graph: []const u8,
+    label: []const u8,
+    kvs: []const geode.graph_storage_adapter.StorageAdapter.PropKV,
+) !void {
+    const mgr = geode.index_manager.ensureGlobalIndexManagerForDimGuard() orelse return;
+    const labels = [_][]const u8{label};
+    for (kvs) |kv| {
+        const dim = bulkPropVectorDim(kv.value) orelse continue;
+        try mgr.checkVectorDimensionForWriteInGraph(graph, &labels, kv.key, dim);
+    }
+}
+
+/// The post-commit twin of `checkBulkVectorDims` — establishes the pin from a
+/// vector this fast path has just written, exactly as the write chokepoint's
+/// `adoptVectorDimensionInGraph` call does.
+fn adoptBulkVectorDims(
+    graph: []const u8,
+    label: []const u8,
+    kvs: []const geode.graph_storage_adapter.StorageAdapter.PropKV,
+) void {
+    const mgr = geode.index_manager.getGlobalIndexManager() orelse return;
+    const labels = [_][]const u8{label};
+    for (kvs) |kv| {
+        const dim = bulkPropVectorDim(kv.value) orelse continue;
+        mgr.adoptVectorDimensionInGraph(graph, &labels, kv.key, dim);
+    }
+}
+
 /// Fast-path dispatcher for the simple-MERGE pattern detected by
 /// `bulk_ingest.matchSimpleNodeMergeSpec`:
 ///
@@ -1122,6 +1180,19 @@ fn executeBulkSimpleMerge(
         kvs_len += 1;
     }
     kvs = kvs[0..kvs_len];
+
+    // ENG-3922(a): the dimension guard, before any store mutation. See
+    // `checkBulkVectorDims` for why a VectorF32 can get here at all.
+    checkBulkVectorDims(query_graph_name, spec.label, merge_kvs) catch |err| {
+        const info = proto_util.mapError(err);
+        try sendExecuteError(gpa, stream, info.code, info.message, &.{}, &.{});
+        return;
+    };
+    checkBulkVectorDims(query_graph_name, spec.label, kvs) catch |err| {
+        const info = proto_util.mapError(err);
+        try sendExecuteError(gpa, stream, info.code, info.message, &.{}, &.{});
+        return;
+    };
 
     var mut_sample = mutation_timing.begin();
 
@@ -1303,6 +1374,13 @@ fn executeBulkSimpleMerge(
         mut_sample.markExecuteDone();
     }
 
+    // ENG-3922(a): establish the pin from what actually committed. Only when
+    // this call wrote — a phase-1 hit changed nothing.
+    if (fts_should_maintain) {
+        adoptBulkVectorDims(query_graph_name, spec.label, merge_kvs);
+        adoptBulkVectorDims(query_graph_name, spec.label, kvs);
+    }
+
     // Spec geode-vectorization-and-reranking + A4b §6: the bulk fast path
     // runs on the connection thread, so live FTS maintenance is safe here
     // and keeps bulk-MERGE'd nodes searchable without a rebuild.
@@ -1401,6 +1479,11 @@ fn executeBatchSimpleMerge(
     // statement is not a simple node merge, abandon the whole batch (free the
     // arena, no submits issued) and let the caller run the general executor.
     var labels = try ba.alloc([]const u8, n);
+    // ENG-3922(a): the evaluated prop slices are kept per statement so the
+    // dimension pin can be adopted from whatever actually committed, after the
+    // awaits — the batch twin of `executeBulkSimpleMerge`'s adopt call site.
+    var all_merge_kvs = try ba.alloc([]PropKV, n);
+    var all_set_kvs = try ba.alloc([]PropKV, n);
     for (program.statements, 0..) |*stmt, i| {
         const spec = geode.bulk_ingest.matchSimpleNodeMergeSpecStmt(stmt) orelse {
             // Not a simple merge -> no partial batching. Nothing submitted yet.
@@ -1433,7 +1516,22 @@ fn executeBatchSimpleMerge(
         }
         const kvs = kvs_full[0..kvs_len];
 
+        // ENG-3922(a): guard every statement BEFORE a single op is submitted,
+        // so a refusal leaves the whole batch unapplied.
+        checkBulkVectorDims(query_graph_name, spec.label, merge_kvs) catch |err| {
+            const info = proto_util.mapError(err);
+            try sendExecuteError(gpa, stream, info.code, info.message, &.{}, &.{});
+            return true;
+        };
+        checkBulkVectorDims(query_graph_name, spec.label, kvs) catch |err| {
+            const info = proto_util.mapError(err);
+            try sendExecuteError(gpa, stream, info.code, info.message, &.{}, &.{});
+            return true;
+        };
+
         labels[i] = spec.label;
+        all_merge_kvs[i] = merge_kvs;
+        all_set_kvs[i] = kvs;
         ops[i] = if (merge_kvs.len == 1)
             group_commit.ApplyOp{ .bulk_merge_node = .{
                 .label = spec.label,
@@ -1529,6 +1627,9 @@ fn executeBatchSimpleMerge(
     // CANARY: REQ=REQ-FTS-BULK-MERGE-LIVE-001; FEATURE="FullText"; ASPECT=BulkMergeConnectionThreadMaintenance; STATUS=TESTED; TEST=geode-test-harness/geodetestlab-cli/specs/fts_bulk_merge_visibility.yml; OWNER=fts; UPDATED=2026-08-28
     for (outcomes, 0..) |o, i| {
         if (!o.ok or !o.wrote) continue;
+        // ENG-3922(a): establish the pin from what committed, same condition.
+        adoptBulkVectorDims(query_graph_name, labels[i], all_merge_kvs[i]);
+        adoptBulkVectorDims(query_graph_name, labels[i], all_set_kvs[i]);
         execution.fts_index_ops.maintainFulltextOnWrite(
             ba,
             query_graph_name,

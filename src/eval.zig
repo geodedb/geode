@@ -43,6 +43,9 @@ fn isPropagatableEvalError(err: EvalError) bool {
         EvalError.InvalidArgs,
         EvalError.MissingParameter,
         EvalError.TimeParse,
+        // ENG-3922(b): an over-cap vector literal is a genuine invalid argument
+        // — `size(vectorf32([ …65536… ]))` must report the limit, not NULL.
+        EvalError.VectorTooLarge,
         EvalError.OutOfMemory,
         => true,
         else => false,
@@ -1111,6 +1114,14 @@ pub fn evalExpr(allocator: std.mem.Allocator, e: ast.Expr, env: Env) EvalError!V
                         return EvalError.DivisionByZero;
                     } else if (std.mem.eql(u8, err_name, "DecimalOverflow")) {
                         return EvalError.DecimalOverflow;
+                    } else if (std.mem.eql(u8, err_name, "VectorTooLarge")) {
+                        // CANARY: REQ=REQ-ENG-3922-VECTOR-DIM-GUARD; FEATURE="VectorF32"; ASPECT=OverCapErrorIdentity; STATUS=TESTED; TEST=tests/test_eng3922_dim_guard.zig; OWNER=eval; UPDATED=2026-08-29
+                        // ENG-3922(b): keep the over-cap identity instead of
+                        // folding it into the `InvalidFormat` -> TypeMismatch
+                        // arm below. "You exceeded the 65535-dimension cap" and
+                        // "your literal is garbage" are different answers, and
+                        // only the first one is actionable.
+                        return EvalError.VectorTooLarge;
                     } else if (std.mem.eql(u8, err_name, "InvalidFormat")) {
                         // GAP-0918: a malformed constructor literal (e.g.
                         // vectorf32("[1.0,'x',2.0]")) used to silently resolve
@@ -1138,6 +1149,11 @@ pub fn evalExpr(allocator: std.mem.Allocator, e: ast.Expr, env: Env) EvalError!V
                 const err_name = @errorName(err);
                 if (std.mem.eql(u8, err_name, "TypeMismatch")) {
                     return EvalError.TypeMismatch;
+                } else if (std.mem.eql(u8, err_name, "VectorTooLarge")) {
+                    // ENG-3922(b): reached here when the over-cap constructor is
+                    // an ARGUMENT to a basic builtin, e.g.
+                    // `size(vectorf32([ …65536… ]))` — the exact P0 reproducer.
+                    return EvalError.VectorTooLarge;
                 } else if (std.mem.eql(u8, err_name, "InvalidFormat")) {
                     return EvalError.TypeMismatch;
                 } else if (std.mem.eql(u8, err_name, "Unsupported")) {

@@ -40,23 +40,49 @@ expect the load to be dramatically slower and plan accordingly.
 ### Vector dimensions and bulk loads
 
 The vector dimension guard establishes the dimension from the first vector
-**committed** under an HNSW-indexed `(label, property)` and refuses any later
-vector of a different dimension (SQLSTATE 22000, `VectorDimensionMismatch`).
+**committed** under a `(label, property)` and refuses any later vector of a
+different dimension (SQLSTATE 22000, `VectorDimensionMismatch`).
 
+* **An index is not required (ENG-3922, 2026-08-29).** Mixed dimensions under
+  one `(label, property)` are a data-integrity defect in their own right —
+  `vector_cosine` over a dim-4/dim-3 pair yields NULL and a knn scan silently
+  drops the non-conforming rows, index or no index — so the guard covers an
+  **unindexed** property too.
 * A **refused** statement does not establish anything — a rejected mixed-
   dimension `CREATE` leaves the property unpinned (ENG-3912).
-* `DROP INDEX` **releases** the pin. That is the supported way to change the
-  dimension of a property: drop the index, rewrite the data, re-create the
-  index.
+* `DROP INDEX` **does not release** the pin (policy change, ENG-3922; it used
+  to). The pin belongs to the `(graph, label, property)`, not to the index, and
+  it is derived from committed data. To change a property's dimension, delete
+  the rows that establish it — dropping the index is not enough, and never was
+  the guarantee it looked like.
 * After a restart the pin is re-derived from the first vector already stored
   under that `(label, property)`; it is not persisted in the catalog.
-* The pin is **process-wide, not per graph**. A dimension established in graph
-  A is enforced for the same `(label, property)` in graph B. That is correct as
-  the engine stands, because the HNSW index itself is a process-global object:
-  index population selects nodes by label + property with **no graph filter**,
-  so graph B's vectors land in graph A's index. Making vector indexes
-  graph-scoped (the way fulltext indexes already are, one engine per graph
-  directory) is design work; the pin should be scoped in the same change.
+* **Scope depends on whether an index exists.**
+  * An **indexed** pin is **process-wide, not per graph**: a dimension
+    established in graph A is enforced for the same `(label, property)` in
+    graph B. That is correct as the engine stands, because the HNSW index
+    itself is a process-global object — index population selects nodes by
+    label + property with **no graph filter**, so graph B's vectors land in
+    graph A's index. Making vector indexes graph-scoped (the way fulltext
+    indexes already are, one engine per graph directory) is design work; the
+    pin should be scoped in the same change.
+  * An **unindexed** pin is **per graph**: with no shared index object behind
+    it, the same label + property in another graph is a separate property with
+    its own dimension. `DROP GRAPH` releases that graph's pins.
+* The pin is cached process state. Deleting every row that establishes a
+  dimension does **not** release the pin until the process restarts (or the
+  graph is dropped) — re-deriving it from data on every write would cost a
+  label scan per vector write. Known residual, not a defect.
+* The **bulk/batch MERGE fast paths** enforce the same guard. They bypass the
+  regular property-write chokepoint, and a vector *can* reach them as a bound
+  wire parameter, so the check runs there too — before any op is submitted, so
+  a refusal leaves the whole batch unapplied.
+
+A vector literal above **65535 dimensions** is a separate refusal: SQLSTATE
+54000 (`program_limit_exceeded`, `VectorTooLarge`), because the stored `dim` is
+a `u16`. Both the string form (`vectorf32('[…]')`) and the array-literal form
+(`vectorf32([…])`) enforce it; before ENG-3922 the array form had no check at
+all and panicked the server.
 
 ---
 

@@ -183,7 +183,10 @@ pub fn mapError(err: anyerror) ErrorInfo {
         // took effect that never existed. Same 42704 family as ENG-3906.
         // CANARY: REQ=REQ-FTS-INDEX-OPTIONS-VALIDATION; FEATURE="FulltextIndex"; ASPECT=SqlstateMapping; STATUS=TESTED; TEST=tests/test_fts_index_options.zig; OWNER=index; UPDATED=2026-08-25
         error.UnknownIndexOption => .{ .code = "42704", .message = "Unknown index OPTIONS key: CREATE INDEX implements no OPTIONS keys; the BM25 knobs k1 / b and the analyzer are fixed by the fts-storage engine and are not tunable per index" },
-        error.VectorDimensionMismatch => .{ .code = "22000", .message = "Vector dimension does not match the indexed property's established dimension" },
+        // ENG-3922(a): the pin belongs to the (graph, label, property), not to
+        // an index — an unindexed property enforces homogeneity too — so the
+        // message no longer says "indexed".
+        error.VectorDimensionMismatch => .{ .code = "22000", .message = "Vector dimension does not match the property's established dimension" },
         // ENG-3910: the right-hand side of IN / NOT IN was neither a LIST nor
         // NULL. It used to fail OPEN (`NOT x IN $scalar` matched every row);
         // it is now refused as a data exception (class 22) so a mis-bound
@@ -292,6 +295,14 @@ pub fn mapError(err: anyerror) ErrorInfo {
         // CANARY: REQ=REQ-ENG-3911-PROPERTY-VALUE-SIZE-ERROR; FEATURE="PropertyStorage"; ASPECT=OversizedValueErrorMapping; STATUS=TESTED; TEST=tests/test_eng3911_property_value_size_error.zig; OWNER=transport; UPDATED=2026-08-25
         error.PropertyValueTooLarge => .{ .code = "54000", .message = "PropertyValueTooLarge: the encoded property value exceeds the storage sanity cap on a single value (GraphConfig.max_property_value_bytes, default 1048576 bytes / 1 MiB). Values below the cap are stored in full — larger-than-page values spill to an overflow chain — so a VECTOR<f32> fits up to 262144 dimensions and a string up to ~1 MiB. Shorten the value or raise the cap deliberately" },
         error.PropertyKeyTooLong => .{ .code = "54000", .message = "PropertyKeyTooLong: the property key exceeds the 65535-byte maximum key length" },
+        // ENG-3922(b): an over-cap vector literal used to be laundered
+        // (VectorTooLarge -> InvalidFormat -> TypeMismatch) and land in the
+        // `else` arm below as 58000 "internal system error" — a server fault
+        // class for a documented resource limit the caller simply crossed. Same
+        // wrong-class bug, and the same fix shape, as the ENG-3911 arms above.
+        // 54000 = SQLSTATE program_limit_exceeded (class 54, limit exceeded).
+        // CANARY: REQ=REQ-ENG-3922-VECTOR-DIM-GUARD; FEATURE="VectorF32"; ASPECT=OverCapErrorMapping; STATUS=TESTED; TEST=tests/test_eng3922_dim_guard.zig; OWNER=transport; UPDATED=2026-08-29
+        error.VectorTooLarge => .{ .code = "54000", .message = "VectorTooLarge: the vector dimension exceeds the maximum of 65535 elements (VectorF32.dim / VectorI32.dim are u16). Reduce the embedding dimension" },
         else => .{ .code = "58000", .message = @errorName(err) },
     };
 }
