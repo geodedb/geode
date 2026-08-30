@@ -10021,9 +10021,12 @@ pub fn executeMatchQueryImpl(allocator: std.mem.Allocator, q: ast.Query, param_n
                     }
                 }
 
-                // Statement-atomicity pre-pass — see `executeCreate`.
+                // Statement-atomicity pre-pass — see `executeCreate`. The
+                // matched node is the row a SET overwrites, so its id is
+                // excluded from the vector-dimension check (a re-embedding
+                // write must not be judged against its own predecessor).
                 // CANARY: REQ=REQ-PROPERTY-WRITE-ATOMICITY; FEATURE="PropertyStorage"; ASPECT=SetPrePass; STATUS=TESTED; TEST=tests/test_property_write_atomicity.zig; OWNER=engine; UPDATED=2026-08-25
-                try write_precheck.checkSetClausesWritable(allocator, q.set_clauses, env, match_variable, node.labels);
+                try write_precheck.checkSetClausesWritableExcluding(allocator, q.set_clauses, env, match_variable, node.labels, node.id);
 
                 // Apply SET clauses if present
                 for (q.set_clauses) |set_clause| {
@@ -11090,9 +11093,12 @@ pub fn executeMatchQueryImpl(allocator: std.mem.Allocator, q: ast.Query, param_n
                     }
                 }
 
-                // Statement-atomicity pre-pass — see `executeCreate`.
+                // Statement-atomicity pre-pass — see `executeCreate`. The
+                // matched node is the row a SET overwrites, so its id is
+                // excluded from the vector-dimension check (a re-embedding
+                // write must not be judged against its own predecessor).
                 // CANARY: REQ=REQ-PROPERTY-WRITE-ATOMICITY; FEATURE="PropertyStorage"; ASPECT=SetPrePass; STATUS=TESTED; TEST=tests/test_property_write_atomicity.zig; OWNER=engine; UPDATED=2026-08-25
-                try write_precheck.checkSetClausesWritable(allocator, q.set_clauses, env, match_variable, node.labels);
+                try write_precheck.checkSetClausesWritableExcluding(allocator, q.set_clauses, env, match_variable, node.labels, node.id);
 
                 // Apply SET clauses if present
                 for (q.set_clauses) |set_clause| {

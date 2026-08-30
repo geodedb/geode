@@ -2080,7 +2080,12 @@ fn extValueAsF64(value: ExtValue) ?f64 {
     };
 }
 
-fn coerceVectorF32(allocator: std.mem.Allocator, value: ExtValue) !CoercedVector {
+/// null means "not a vector-shaped value at all" — the pre-3871d678 contract
+/// for the binary vector functions was NULL-in / NULL-out for such arguments
+/// (issue #476), and the shared-coercion refactor silently replaced that with
+/// a hard TypeMismatch. A malformed ELEMENT inside a list literal, or an
+/// empty/over-cap list, stays a loud error: the caller clearly meant a vector.
+fn coerceVectorF32(allocator: std.mem.Allocator, value: ExtValue) !?CoercedVector {
     return switch (value) {
         .VectorF32 => |v| .{ .vector = v },
         .VectorI32 => |v| blk: {
@@ -2099,19 +2104,23 @@ fn coerceVectorF32(allocator: std.mem.Allocator, value: ExtValue) !CoercedVector
             }
             break :blk .{ .vector = .{ .dim = @intCast(items.len), .data = data }, .owned = data };
         },
-        else => error.TypeMismatch,
+        else => null,
     };
 }
 
 /// Coerce the two leading arguments of a binary vector function.
 fn coerceVectorPair(allocator: std.mem.Allocator, args: []const ExtValue) !?struct { a: CoercedVector, b: CoercedVector } {
     if (args.len != 2) return error.InvalidArgs;
-    // NULL in, NULL out (standard null propagation).
+    // NULL in, NULL out (standard null propagation). A non-vector scalar
+    // argument propagates the same way (issue #476 contract).
     if (args[0] == .Null or args[1] == .Null) return null;
 
-    const a = try coerceVectorF32(allocator, args[0]);
+    const a = (try coerceVectorF32(allocator, args[0])) orelse return null;
     errdefer if (a.owned) |data| allocator.free(data);
-    const b = try coerceVectorF32(allocator, args[1]);
+    const b = (try coerceVectorF32(allocator, args[1])) orelse {
+        if (a.owned) |data| allocator.free(data);
+        return null;
+    };
     if (a.vector.dim != b.vector.dim) {
         if (b.owned) |data| allocator.free(data);
         return error.DimensionMismatch;

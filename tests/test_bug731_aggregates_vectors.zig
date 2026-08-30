@@ -404,6 +404,64 @@ test "bug8b regression: an unresolved function is rejected instead of yielding N
     try testing.expectError(error.UnknownFunction, h.exec("RETURN totally_bogus_fn(1, 2) AS x"));
 }
 
+test "gap-0005 regression: a Double-valued aggregate compares in WHERE instead of TypeMismatch/silent-empty" {
+    var h = try Harness.init(testing.allocator);
+    defer h.deinit();
+    _ = try h.exec("CREATE GRAPH b731avgcmp");
+    _ = try h.exec("USE GRAPH b731avgcmp");
+    _ = try h.exec("CREATE (:B731Score {value: 70})");
+    _ = try h.exec("CREATE (:B731Score {value: 80})");
+    _ = try h.exec("CREATE (:B731Score {value: 90})");
+
+    // RED pre-fix: a3d4726d made avg() always Double, and the comparison arm
+    // had no float branch — `a > 75` was TypeMismatch, which the post-WITH
+    // filter swallowed into an empty result.
+    try expectApprox(80.0, try h.scalarNumber("MATCH (s:B731Score) WITH avg(s.value) AS average WHERE average > 75 RETURN average AS a"));
+    // Direct comparison surfaces as a Bool, not TypeMismatch.
+    const r = try h.scalar("MATCH (s:B731Score) WITH avg(s.value) AS a RETURN a > 1 AS r");
+    try testing.expect(r == .Bool and r.Bool);
+    // Mixed float/int both directions.
+    const r2 = try h.scalar("RETURN 1.5 > 1 AS r");
+    try testing.expect(r2 == .Bool and r2.Bool);
+    const r3 = try h.scalar("RETURN 1 >= 1.5 AS r");
+    try testing.expect(r3 == .Bool and !r3.Bool);
+}
+
+test "issue #476: a non-vector scalar argument to the binary vector functions is NULL-propagated, not TypeMismatch" {
+    var h = try Harness.init(testing.allocator);
+    defer h.deinit();
+    try vecHarness(&h);
+
+    // RED pre-fix: the 3871d678 shared-coercion refactor turned the original
+    // NULL-in/NULL-out contract for non-vector arguments into a hard
+    // TypeMismatch. Real NULLs kept propagating; typed non-vectors errored.
+    const c = try h.scalar("RETURN vector_cosine(42, 99) AS r");
+    try testing.expect(c == .Null);
+    const d = try h.scalar("RETURN vector_dot('not_a_vector', 42) AS r");
+    try testing.expect(d == .Null);
+    const l = try h.scalar("RETURN vector_l2('not_a_vector', 42) AS r");
+    try testing.expect(l == .Null);
+
+    // Controls that must not move: real NULL still propagates...
+    const n = try h.scalar("RETURN vector_cosine(NULL, NULL) AS r");
+    try testing.expect(n == .Null);
+    // ...and a malformed ELEMENT inside a list literal stays a loud error —
+    // the caller clearly meant a vector.
+    try testing.expectError(error.TypeMismatch, h.exec("RETURN vector_l2([1.0, 'bad'], [1.0, 2.0]) AS r"));
+}
+
+test "bug8b residual: an unresolved function NESTED in an extended-registry call is rejected instead of collapsing to NULL" {
+    var h = try Harness.init(testing.allocator);
+    defer h.deinit();
+    try vecHarness(&h);
+
+    // The extended-registry arg-eval path swallowed non-propagatable errors to
+    // NULL; UnknownFunction must propagate (SQLSTATE 42883), same as the bare
+    // call above and the grouped projection path.
+    try testing.expectError(error.UnknownFunction, h.exec("RETURN st_astext(totally_bogus_fn(1)) AS g"));
+    try testing.expectError(error.UnknownFunction, h.exec("RETURN vector_dot(totally_bogus_fn(1), vectorf32([1.0,2.0])) AS d"));
+}
+
 test "bug8d: knn() with the implemented vector_knn signature returns a list" {
     var h = try Harness.init(testing.allocator);
     defer h.deinit();

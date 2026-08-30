@@ -321,7 +321,10 @@ pub fn setNodePropertyFromValue(
         .ExtValue => |ev| {
             if (ev == .VectorF32) {
                 if (index_manager.ensureGlobalIndexManagerForDimGuard()) |mgr| {
-                    try mgr.checkVectorDimensionForWriteInGraph(node_graph, labels, key, ev.VectorF32.dim);
+                    // The row this write REPLACES must not testify against its
+                    // own replacement — a re-embedding SET on the sole holder
+                    // was permanently refused before the exclusion.
+                    try mgr.checkVectorDimensionForWriteInGraphExcluding(node_graph, labels, key, ev.VectorF32.dim, node_id);
                 }
             }
         },
@@ -367,7 +370,13 @@ pub fn setNodePropertyFromValue(
     if (index_manager.getGlobalIndexManager()) |mgr| {
         switch (value) {
             .ExtValue => |ev| {
-                if (ev == .VectorF32) mgr.adoptVectorDimensionInGraph(node_graph, labels, key, ev.VectorF32.dim);
+                if (ev == .VectorF32) {
+                    mgr.adoptVectorDimensionInGraph(node_graph, labels, key, ev.VectorF32.dim);
+                    // A committed overwrite that legitimately re-dimensioned
+                    // the sole holder moves the established unindexed pin with
+                    // it (adopt only fills unestablished pins).
+                    mgr.repinUnindexedVectorDimsInGraph(node_graph, labels, key, ev.VectorF32.dim);
+                }
             },
             else => {},
         }

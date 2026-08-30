@@ -1428,6 +1428,25 @@ pub const IndexManager = struct {
         property: []const u8,
         dim: u16,
     ) !void {
+        return self.checkVectorDimensionForWriteInGraphExcluding(graph, labels, property, dim, null);
+    }
+
+    /// `checkVectorDimensionForWriteInGraph` with the identity of the node the
+    /// write REPLACES. The unindexed pin is derived from committed data; on an
+    /// overwrite, the row being replaced must not testify against its own
+    /// replacement (a re-embedding SET on the sole holder was permanently
+    /// refused). The cached pin is therefore only a fast ACCEPT: on a mismatch
+    /// the dimension is re-derived from live committed data (excluding
+    /// `exclude_node_id`), which also releases a pin whose establishing rows
+    /// have all been deleted — the former KNOWN RESIDUAL of ENG-3922.
+    pub fn checkVectorDimensionForWriteInGraphExcluding(
+        self: *IndexManager,
+        graph: ?[]const u8,
+        labels: []const []const u8,
+        property: []const u8,
+        dim: u16,
+        exclude_node_id: ?u64,
+    ) !void {
         var indexed = false;
         var iter = self.vector_dim_registry.iterator();
         while (iter.next()) |entry| {
@@ -1444,7 +1463,17 @@ pub const IndexManager = struct {
         for (labels) |label| {
             const pinned = self.unindexedVectorDim(graph_name, label, property) catch continue;
             if (pinned == 0) continue;
-            if (pinned != dim) return error.VectorDimensionMismatch;
+            if (pinned == dim) continue;
+            // Cached pin disagrees — it may be stale (rows deleted, or the sole
+            // holder is the row this write replaces). Re-derive from committed
+            // data. Still PURE w.r.t. the candidate write: `live` reflects only
+            // stored data, never the candidate, and a live pin of 0 is NOT
+            // written back (a refused statement downstream must leave the
+            // conservative cached value in place — ENG-3912(a)).
+            const live = self.scanCommittedVectorDimExcluding(graph_name, label, property, exclude_node_id);
+            if (live != 0) self.repinUnindexedVectorDim(graph_name, label, property, live);
+            if (live == 0) continue;
+            if (live != dim) return error.VectorDimensionMismatch;
         }
     }
 
@@ -1459,11 +1488,12 @@ pub const IndexManager = struct {
     /// same pair concurrently) is benign: both read the same committed data and
     /// the first writer wins, so they compute the same dimension.
     ///
-    /// KNOWN RESIDUAL (documented, not covered by a test): the pin is cached
-    /// process state, so deleting every row that establishes a dimension does
-    /// not release it until the process restarts (or the graph is dropped, which
-    /// `dropUnindexedVectorDimsForGraph` does handle). Re-deriving it from data
-    /// on every write would cost a label scan per vector write.
+    /// The pin is cached process state, trusted as a fast ACCEPT only: when a
+    /// candidate write disagrees with it, the checker re-derives the dimension
+    /// from live committed data (`checkVectorDimensionForWriteInGraphExcluding`),
+    /// so deleting every establishing row — or overwriting the sole holder —
+    /// releases the pin without a restart. The re-derive scan runs only on
+    /// mismatch, so the common same-dimension write stays O(1).
     fn unindexedVectorDim(
         self: *IndexManager,
         graph: []const u8,
@@ -1537,9 +1567,25 @@ pub const IndexManager = struct {
         label: []const u8,
         property: []const u8,
     ) u16 {
+        return self.scanCommittedVectorDimExcluding(graph, label, property, null);
+    }
+
+    /// `scanCommittedVectorDim`, skipping `exclude_node_id` — the row a
+    /// pending overwrite replaces must not establish the dimension the
+    /// overwrite is judged against.
+    fn scanCommittedVectorDimExcluding(
+        self: *IndexManager,
+        graph: []const u8,
+        label: []const u8,
+        property: []const u8,
+        exclude_node_id: ?u64,
+    ) u16 {
         const store = graph_store.getGlobalStore(self.allocator);
         const ids = store.getNodesByLabel(graph, label) orelse return 0;
         for (ids) |node_id| {
+            if (exclude_node_id) |ex| {
+                if (node_id == ex) continue;
+            }
             const node = (store.nodes.getOrHydratePtr(node_id) catch null) orelse continue;
             const prop = node.properties.get(property) orelse continue;
             if (vectorDimOfPropertyValue(prop)) |stored_dim| return stored_dim;
@@ -1571,6 +1617,57 @@ pub const IndexManager = struct {
             return;
         }
         self.putUnindexedVectorDim(key, graph, label, property, dim) catch return;
+    }
+
+    /// Move an ESTABLISHED unindexed pin to `dim` (adopt only fills dim == 0).
+    /// Callers pass a dimension that reflects committed data: either a fresh
+    /// re-derivation (`scanCommittedVectorDimExcluding`), or a write that has
+    /// already passed the dimension check and committed — so overwriting the
+    /// cached value can never contradict stored vectors.
+    fn repinUnindexedVectorDim(
+        self: *IndexManager,
+        graph: []const u8,
+        label: []const u8,
+        property: []const u8,
+        dim: u16,
+    ) void {
+        if (dim == 0) return;
+        const io = std.Io.Threaded.global_single_threaded.io();
+        const key = std.fmt.allocPrint(self.allocator, "{s}\x00{s}\x00{s}", .{ graph, label, property }) catch return;
+        defer self.allocator.free(key);
+
+        self.vector_dim_mutex.lockUncancelable(io);
+        defer self.vector_dim_mutex.unlock(io);
+
+        if (self.vector_dim_unindexed.getPtr(key)) |existing| {
+            existing.dim = dim;
+            existing.seed_attempted = true;
+            return;
+        }
+        self.putUnindexedVectorDim(key, graph, label, property, dim) catch return;
+    }
+
+    /// Post-commit sibling of `adoptVectorDimensionInGraph` for the UNINDEXED
+    /// half only: a committed overwrite that legitimately changed the sole
+    /// holder's dimension must move the established pin with it. Indexed pins
+    /// are deliberately process-wide sticky and are not touched. Called only
+    /// AFTER the store write commits, with the dimension the check accepted.
+    pub fn repinUnindexedVectorDimsInGraph(
+        self: *IndexManager,
+        graph: ?[]const u8,
+        labels: []const []const u8,
+        property: []const u8,
+        dim: u16,
+    ) void {
+        if (dim == 0) return;
+        var iter = self.vector_dim_registry.iterator();
+        while (iter.next()) |entry| {
+            if (matchesLabelProperty(entry.value_ptr, labels, property)) return;
+        }
+        const graph_name = graph orelse return;
+        for (labels) |label| {
+            self.repinUnindexedVectorDim(graph_name, label, property, dim);
+        }
     }
 
     // CANARY: REQ=REQ-ENG-3922-VECTOR-DIM-GUARD; FEATURE="VectorIndex"; ASPECT=UnindexedDimGraphDrop; STATUS=TESTED; TEST=tests/test_eng3922_dim_guard.zig; OWNER=index; UPDATED=2026-08-29

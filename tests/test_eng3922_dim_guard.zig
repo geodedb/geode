@@ -462,3 +462,53 @@ test "ENG-3922 (c) REGRESSION: an over-cap array-literal vector errors instead o
     _ = try h.exec("CREATE (:P22Alive {id: 1, emb: vectorf32('[1.0, 2.0]')})");
     try testing.expectEqual(@as(usize, 1), try h.countRows("MATCH (n:P22Alive) RETURN n"));
 }
+
+// CANARY: REQ=REQ-ENG-3922-VECTOR-DIM-GUARD; FEATURE="VectorIndex"; ASPECT=UnindexedDimLifecycleRelease; STATUS=TESTED; TEST=tests/test_eng3922_dim_guard.zig; OWNER=index; UPDATED=2026-08-30
+test "ENG-3922 lifecycle: sole-holder overwrite re-pins, delete releases, live siblings still enforce" {
+    var h = try Harness.init(testing.allocator);
+    defer h.deinit();
+
+    _ = try h.exec("CREATE GRAPH eng3922_cycle");
+    _ = try h.exec("USE GRAPH eng3922_cycle");
+
+    // Establish a dim-4 pin with a single row.
+    _ = try h.exec("CREATE (:P22Cycle {id: 1, emb: vectorf32('[1.0, 2.0, 3.0, 4.0]')})");
+
+    // RED pre-fix: the sole holder could not be re-dimensioned by overwrite —
+    // the pin was derived from committed data INCLUDING the row being
+    // replaced, so a re-embedding SET was judged against its own predecessor
+    // and permanently refused (only DROP GRAPH or a restart cleared it).
+    _ = try h.exec("MATCH (n:P22Cycle) SET n.emb = vectorf32('[9.0, 8.0, 7.0]')");
+
+    // The committed overwrite moved the pin: dim-3 keeps writing, dim-4 is
+    // now the mismatched dimension.
+    _ = try h.exec("CREATE (:P22Cycle {id: 2, emb: vectorf32('[6.0, 6.0, 6.0]')})");
+    try testing.expectError(
+        error.VectorDimensionMismatch,
+        h.exec("CREATE (:P22Cycle {id: 3, emb: vectorf32('[1.0, 2.0, 3.0, 4.0]')})"),
+    );
+
+    // With a LIVE dim-3 sibling, overwriting one row to a new dimension is
+    // still refused — the exclusion covers only the row being replaced, never
+    // the rest of the committed data.
+    try testing.expectError(
+        error.VectorDimensionMismatch,
+        h.exec("MATCH (n:P22Cycle {id: 1}) SET n.emb = vectorf32('[1.0, 2.0, 3.0, 4.0]')"),
+    );
+    try testing.expectEqual(@as(usize, 2), try h.countRows("MATCH (n:P22Cycle) RETURN n"));
+
+    // RED pre-fix (the documented ENG-3922 residual): deleting every
+    // establishing row must release the pin — the policy's own escape hatch
+    // ("to change a property's dimension you delete the rows that establish
+    // it") has to actually work in-process.
+    _ = try h.exec("MATCH (n:P22Cycle) DETACH DELETE n");
+    try testing.expectEqual(@as(usize, 0), try h.countRows("MATCH (n:P22Cycle) RETURN n"));
+    _ = try h.exec("CREATE (:P22Cycle {id: 10, emb: vectorf32('[1.0, 1.0, 1.0, 1.0, 1.0]')})");
+    try testing.expectEqual(@as(usize, 1), try h.countRows("MATCH (n:P22Cycle) RETURN n"));
+
+    // ...and the freshly established dim-5 pin has teeth.
+    try testing.expectError(
+        error.VectorDimensionMismatch,
+        h.exec("CREATE (:P22Cycle {id: 11, emb: vectorf32('[1.0, 2.0]')})"),
+    );
+}

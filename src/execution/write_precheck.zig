@@ -132,19 +132,23 @@ pub fn checkPropertyWritable(
     key: []const u8,
     value: Value,
 ) !void {
-    return checkPropertyWritableScoped(allocator, labels, key, value, null);
+    return checkPropertyWritableScoped(allocator, labels, key, value, null, null);
 }
 
 /// `checkPropertyWritable` with the statement-scoped vector-dimension scratch
 /// threaded in. `scratch` is null for the callers that inspect a single entry
 /// in isolation (there is no other entry in the same statement to disagree
-/// with).
+/// with). `exclude_node_id` is the node an overwrite REPLACES, when the caller
+/// knows it (a single-target MATCH … SET does) — the replaced row must not
+/// testify against its own replacement in the vector-dimension check; null for
+/// CREATE-shaped writes that mint the node.
 pub fn checkPropertyWritableScoped(
     allocator: std.mem.Allocator,
     labels: []const []const u8,
     key: []const u8,
     value: Value,
     scratch: ?*VectorDimScratch,
+    exclude_node_id: ?u64,
 ) !void {
     // GAP-0918 vector-dimension refusal, hoisted ahead of the first write. The
     // apply-time check in `property_mutation.setNodePropertyFromValue` stays as
@@ -172,7 +176,7 @@ pub fn checkPropertyWritableScoped(
                         // the property, so a refusal that first happens at the
                         // chokepoint leaves an orphan node behind — exactly the
                         // partial write this pre-pass exists to prevent.
-                        try mgr.checkVectorDimensionForWriteInGraph(currentGraphName(), labels, key, ev.VectorF32.dim);
+                        try mgr.checkVectorDimensionForWriteInGraphExcluding(currentGraphName(), labels, key, ev.VectorF32.dim, exclude_node_id);
                     }
                     if (scratch) |sc| try sc.noteAndCheck(labels, key, ev.VectorF32.dim);
                 }
@@ -210,7 +214,7 @@ pub fn checkPatternPropsWritableScoped(
     const entries = props orelse return;
     for (entries) |prop| {
         const value = eval.evalExpr(allocator, prop.value.*, env) catch continue;
-        try checkPropertyWritableScoped(allocator, labels, prop.key, value, scratch);
+        try checkPropertyWritableScoped(allocator, labels, prop.key, value, scratch, null);
     }
 }
 
@@ -258,6 +262,19 @@ pub fn checkSetClausesWritable(
     target_var: ?[]const u8,
     labels: []const []const u8,
 ) !void {
+    return checkSetClausesWritableExcluding(allocator, set_clauses, env, target_var, labels, null);
+}
+
+/// `checkSetClausesWritable` with the id of the node the SET overwrites, when
+/// the caller has a single known target — see `checkPropertyWritableScoped`.
+pub fn checkSetClausesWritableExcluding(
+    allocator: std.mem.Allocator,
+    set_clauses: []const ast.SetClause,
+    env: Env,
+    target_var: ?[]const u8,
+    labels: []const []const u8,
+    exclude_node_id: ?u64,
+) !void {
     var scratch = VectorDimScratch.init(allocator);
     defer scratch.deinit();
 
@@ -268,7 +285,7 @@ pub fn checkSetClausesWritable(
                     if (!std.mem.eql(u8, prop.target.object, v)) continue;
                 }
                 const value = eval.evalExpr(allocator, prop.value, env) catch continue;
-                try checkPropertyWritableScoped(allocator, labels, prop.target.property, value, &scratch);
+                try checkPropertyWritableScoped(allocator, labels, prop.target.property, value, &scratch, exclude_node_id);
             },
             .AllProperties => |all_props| {
                 if (target_var) |v| {
@@ -280,7 +297,7 @@ pub fn checkSetClausesWritable(
                 if (props_value != .Map) continue;
                 var iter = props_value.Map.iterator();
                 while (iter.next()) |entry| {
-                    try checkPropertyWritableScoped(allocator, labels, entry.key_ptr.*, entry.value_ptr.*, &scratch);
+                    try checkPropertyWritableScoped(allocator, labels, entry.key_ptr.*, entry.value_ptr.*, &scratch, exclude_node_id);
                 }
             },
             // SET label carries no property value.
