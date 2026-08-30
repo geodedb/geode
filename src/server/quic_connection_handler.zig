@@ -551,8 +551,19 @@ fn executeBulkSimpleCreate(
             return;
         };
 
-        // Submit + wait.  The coordinator thread owns the write lock for
-        // the batch, so we do NOT take `mg.rwlock` here.
+        // Submit + wait.  We do NOT take `mg.rwlock` here — but note the
+        // coordinator does not take a whole-graph write lock for the batch
+        // either.  `ShardedCoordinator.applyShardBatch`
+        // (src/storage/group_commit.zig) acquires NO graph lock at all; it
+        // opens a shard-pinned statement txn and hands each op to a
+        // self-locking `adapter.bulk*` helper, and each of those takes
+        // `mg.rwlock` SHARED plus its own `shard_locks[..]` EXCLUSIVE for the
+        // duration of that single op.  The mutual exclusion for this path is
+        // therefore per-op (SHARED + shard), not per-batch (EXCLUSIVE).
+        // ENG-3914 (RC-2) depended on getting this right: the bulk MERGE
+        // helpers must hold their SHARED across probe+insert, because a
+        // general-path `executeMerge` running under the whole-graph EXCLUSIVE
+        // is otherwise free to interleave between the two.
         mut_sample.markLockAcquired();
         var op = group_commit.ApplyOp{ .bulk_insert_node = .{
             .labels = node_pattern.labels,

@@ -3577,7 +3577,6 @@ pub const StorageAdapter = struct {
         // posting lands on top of the fully-rebuilt index. No-op (one atomic
         // load) on a freshly-created or already-built graph — the ingest case.
         try ensureExactNodePropertyIndexBuilt(self, mg);
-        const store = graph_store.getGlobalStore(graph_store.global_allocator());
         const io = std.Io.Threaded.global_single_threaded.io();
 
         // Hold-time instrumentation pattern. Three shapes appear in this file:
@@ -3607,6 +3606,40 @@ pub const StorageAdapter = struct {
                 mg.rwlock_shared_max_hold_ns_observed.store(_hold_ns, .monotonic);
             }
         }
+
+        return self.bulkInsertNodeWithReservedIdGraphLocked(
+            mg,
+            graph_name,
+            reserved_id,
+            labels,
+            props,
+            request_tenant,
+        );
+    }
+
+    /// ENG-3914 (RC-2): the shard-locked body of
+    /// `bulkInsertNodeWithReservedIdForTenant`, factored out so the bulk MERGE
+    /// paths can run their probe AND this insert inside ONE continuous
+    /// `mg.rwlock` SHARED hold (same wrapper/inner shape as
+    /// `bulkInsertEdgeWithIdsShardLockedForTenant` /
+    /// `bulkInsertEdgeInnerShardLocked`).
+    ///
+    /// CONTRACT — the caller MUST already hold `mg.rwlock` SHARED and MUST
+    /// have run `ensureExactNodePropertyIndexBuilt` beforehand. `std.Io.RwLock`
+    /// is not reentrant and `exclusiveWaitingBackoff` would park this thread
+    /// behind a pending exclusive that can never win while the caller's own
+    /// SHARED hold is outstanding, so neither may be re-done here.
+    fn bulkInsertNodeWithReservedIdGraphLocked(
+        self: *StorageAdapter,
+        mg: *ManagedGraph,
+        graph_name: []const u8,
+        reserved_id: u64,
+        labels: []const []const u8,
+        props: []const PropKV,
+        request_tenant: []const u8,
+    ) !u64 {
+        const store = graph_store.getGlobalStore(graph_store.global_allocator());
+        const io = std.Io.Threaded.global_single_threaded.io();
 
         const idx = sharded_store.shardIndex(reserved_id);
         mg.shard_locks[idx].lockUncancelable(io);
@@ -4288,6 +4321,11 @@ pub const StorageAdapter = struct {
         graph_store.registerMergeIndexKey(merge_key);
 
         const mg = try self.getOrCreateGraph(graph_name);
+        // ENG-3914 (RC-2): the delegated insert below runs under THIS
+        // function's SHARED hold, so its deferred exact-index build has to
+        // happen out here — before that hold is taken. Idempotent; a no-op
+        // atomic load once built.
+        try ensureExactNodePropertyIndexBuilt(self, mg);
         const store = graph_store.getGlobalStore(graph_store.global_allocator());
         const io = std.Io.Threaded.global_single_threaded.io();
 
@@ -4314,55 +4352,74 @@ pub const StorageAdapter = struct {
             mg.merge_tuple_locks[tuple_lock_idx].unlock(io);
         }
 
-        // Probe phase under `rwlock` SHARED. `lookupMergeCandidate` reads the
-        // merge_prop_index under its own leaf mutex; combined with the
-        // per-tuple lock (which serializes same-key writers) this is
-        // sufficient — no graph-global exclusive needed.
-        {
-            exclusiveWaitingBackoff(mg); // GAP-0900 / edge-40001: yield to a pending exclusive (checkpoint or edge schema/MERGE).
-            const _t_start = monoNanosNow();
-            mg.rwlock.lockSharedUncancelable(io);
-            _ = mg.rwlock_shared_wait_ns_total.fetchAdd(monoNanosNow() -| _t_start, .monotonic);
-            _ = mg.rwlock_shared_acquired_total.fetchAdd(1, .monotonic);
-            defer mg.rwlock.unlockShared(io);
-            const _hold_start = monoNanosNow();
-            defer {
-                const _hold_ns = monoNanosNow() -| _hold_start;
-                _ = mg.rwlock_shared_hold_ns_total.fetchAdd(_hold_ns, .monotonic);
-                _ = mg.rwlock_shared_hold_bulk_merge_ns_total.fetchAdd(_hold_ns, .monotonic);
-                const _cur_max = mg.rwlock_shared_max_hold_ns_observed.load(.monotonic);
-                if (_hold_ns > _cur_max) {
-                    mg.rwlock_shared_max_hold_ns_observed.store(_hold_ns, .monotonic);
-                }
-            }
-
-            var probe_id: u64 = 0;
-            switch (store.lookupMergeCandidate(graph_name, label, merge_key, merge_value, &probe_id)) {
-                .found => {
-                    if (apply_on_match) {
-                        try store.setNodeProperty(probe_id, merge_key, merge_value);
-                        for (on_create_props) |kv| {
-                            if (std.mem.eql(u8, kv.key, merge_key)) continue;
-                            try store.setNodeProperty(probe_id, kv.key, kv.value);
-                        }
-                        // GAP-0900: the on-match upsert writes to the engine WAL
-                        // too — count it toward the checkpoint cadence. (The
-                        // create branch is counted by the delegated bulkInsert.)
-                        _ = self.pending_bulk_ops.fetchAdd(1, .monotonic);
-                    }
-                    // Task 4 review Finding 1: `wrote` is true only when the
-                    // on-match SET clauses actually ran above. A plain hit with
-                    // no `apply_on_match` changed nothing — callers must not
-                    // re-append it into an append-only FTS index.
-                    return .{ .id = probe_id, .wrote = apply_on_match };
-                },
-                .not_indexable => return error.MergeValueNotIndexable,
-                .not_found => {},
+        // ENG-3914 (RC-2): ONE continuous `rwlock` SHARED hold spanning BOTH
+        // the probe and the insert.
+        //
+        // This span used to be two disjoint SHARED holds (probe here, insert
+        // inside the delegated `bulkInsertNodeWithReservedIdForTenant`). The
+        // gap between them was a zero-reader instant, which is exactly what
+        // the general MERGE path's whole-graph EXCLUSIVE acquire
+        // (`acquireGraphWriteLockCancelable`, taken by the connection handler
+        // around `executeMerge`) waits for. A general-path writer could
+        // therefore land its whole probe→CREATE inside a bulk writer's
+        // probe→insert gap and both would mint a node for one merge key: the
+        // two implementations shared NO mutual exclusion, because the general
+        // path never touches `merge_tuple_locks`.
+        //
+        // Holding SHARED across the whole span closes it without introducing a
+        // new lock-order edge: the acquisition order stays tuple→rwlock, the
+        // general path takes only the rwlock, and SHARED still admits every
+        // other concurrent bulk writer (distinct keys stay fully parallel;
+        // same-key bulk writers remain serialized by the tuple lock above).
+        //
+        // `lookupMergeCandidate` reads the merge_prop_index under its own leaf
+        // mutex; combined with the per-tuple lock this is sufficient — no
+        // graph-global exclusive needed.
+        exclusiveWaitingBackoff(mg); // GAP-0900 / edge-40001: yield to a pending exclusive (checkpoint or edge schema/MERGE).
+        const _t_start = monoNanosNow();
+        mg.rwlock.lockSharedUncancelable(io);
+        _ = mg.rwlock_shared_wait_ns_total.fetchAdd(monoNanosNow() -| _t_start, .monotonic);
+        _ = mg.rwlock_shared_acquired_total.fetchAdd(1, .monotonic);
+        defer mg.rwlock.unlockShared(io);
+        const _hold_start = monoNanosNow();
+        defer {
+            const _hold_ns = monoNanosNow() -| _hold_start;
+            _ = mg.rwlock_shared_hold_ns_total.fetchAdd(_hold_ns, .monotonic);
+            _ = mg.rwlock_shared_hold_bulk_merge_ns_total.fetchAdd(_hold_ns, .monotonic);
+            const _cur_max = mg.rwlock_shared_max_hold_ns_observed.load(.monotonic);
+            if (_hold_ns > _cur_max) {
+                mg.rwlock_shared_max_hold_ns_observed.store(_hold_ns, .monotonic);
             }
         }
 
+        var probe_id: u64 = 0;
+        switch (store.lookupMergeCandidate(graph_name, label, merge_key, merge_value, &probe_id)) {
+            .found => {
+                if (apply_on_match) {
+                    try store.setNodeProperty(probe_id, merge_key, merge_value);
+                    for (on_create_props) |kv| {
+                        if (std.mem.eql(u8, kv.key, merge_key)) continue;
+                        try store.setNodeProperty(probe_id, kv.key, kv.value);
+                    }
+                    // GAP-0900: the on-match upsert writes to the engine WAL
+                    // too — count it toward the checkpoint cadence. (The
+                    // create branch is counted by the delegated bulkInsert.)
+                    _ = self.pending_bulk_ops.fetchAdd(1, .monotonic);
+                }
+                // Task 4 review Finding 1: `wrote` is true only when the
+                // on-match SET clauses actually ran above. A plain hit with
+                // no `apply_on_match` changed nothing — callers must not
+                // re-append it into an append-only FTS index.
+                return .{ .id = probe_id, .wrote = apply_on_match };
+            },
+            .not_indexable => return error.MergeValueNotIndexable,
+            .not_found => {},
+        }
+
         // Insert phase: delegate to the shard-aligned bulk insert helper —
-        // the same create path the multi-property MERGE uses (:2511).
+        // the same create path the multi-property MERGE uses (:2511). The
+        // graph-locked variant is required: our SHARED hold is still
+        // outstanding and `std.Io.RwLock` is not reentrant.
         var combined_buf: [64]PropKV = undefined;
         const combined_len = 1 + on_create_props.len;
         const combined_props: []PropKV = if (combined_len <= combined_buf.len)
@@ -4377,7 +4434,8 @@ pub const StorageAdapter = struct {
         }
 
         const labels_slice = [_][]const u8{label};
-        const new_id = try self.bulkInsertNodeWithReservedIdForTenant(
+        const new_id = try self.bulkInsertNodeWithReservedIdGraphLocked(
+            mg,
             graph_name,
             reserved_id,
             &labels_slice,
@@ -4460,6 +4518,10 @@ pub const StorageAdapter = struct {
         }
 
         const mg = try self.getOrCreateGraph(graph_name);
+        // ENG-3914 (RC-2): see the single-property path — the delegated insert
+        // now runs inside this function's SHARED hold, so the deferred
+        // exact-index build must happen before that hold is taken.
+        try ensureExactNodePropertyIndexBuilt(self, mg);
         const store = graph_store.getGlobalStore(graph_store.global_allocator());
         const io = std.Io.Threaded.global_single_threaded.io();
 
@@ -4478,25 +4540,31 @@ pub const StorageAdapter = struct {
             mg.merge_tuple_locks[tuple_lock_idx].unlock(io);
         }
 
-        const existing_id = existing_blk: {
-            exclusiveWaitingBackoff(mg); // GAP-0900 / edge-40001: yield to a pending exclusive (checkpoint or edge schema/MERGE).
-            const _t_start = monoNanosNow();
-            mg.rwlock.lockSharedUncancelable(io);
-            _ = mg.rwlock_shared_wait_ns_total.fetchAdd(monoNanosNow() -| _t_start, .monotonic);
-            _ = mg.rwlock_shared_acquired_total.fetchAdd(1, .monotonic);
-            defer mg.rwlock.unlockShared(io);
-            const _hold_start = monoNanosNow();
-            defer {
-                const _hold_ns = monoNanosNow() -| _hold_start;
-                _ = mg.rwlock_shared_hold_ns_total.fetchAdd(_hold_ns, .monotonic);
-                _ = mg.rwlock_shared_hold_bulk_merge_ns_total.fetchAdd(_hold_ns, .monotonic);
-                const _cur_max = mg.rwlock_shared_max_hold_ns_observed.load(.monotonic);
-                if (_hold_ns > _cur_max) {
-                    mg.rwlock_shared_max_hold_ns_observed.store(_hold_ns, .monotonic);
-                }
+        // ENG-3914 (RC-2): ONE continuous `rwlock` SHARED hold spanning BOTH
+        // the probe and the insert — see the single-property path for the full
+        // interleave this closes. The probe→insert gap used to be a zero-reader
+        // instant in which the general MERGE path (`executeMerge` under the
+        // connection handler's whole-graph EXCLUSIVE) could complete an entire
+        // probe→CREATE for the SAME merge key, duplicating the node.
+        exclusiveWaitingBackoff(mg); // GAP-0900 / edge-40001: yield to a pending exclusive (checkpoint or edge schema/MERGE).
+        const _t_start = monoNanosNow();
+        mg.rwlock.lockSharedUncancelable(io);
+        _ = mg.rwlock_shared_wait_ns_total.fetchAdd(monoNanosNow() -| _t_start, .monotonic);
+        _ = mg.rwlock_shared_acquired_total.fetchAdd(1, .monotonic);
+        defer mg.rwlock.unlockShared(io);
+        const _hold_start = monoNanosNow();
+        defer {
+            const _hold_ns = monoNanosNow() -| _hold_start;
+            _ = mg.rwlock_shared_hold_ns_total.fetchAdd(_hold_ns, .monotonic);
+            _ = mg.rwlock_shared_hold_bulk_merge_ns_total.fetchAdd(_hold_ns, .monotonic);
+            const _cur_max = mg.rwlock_shared_max_hold_ns_observed.load(.monotonic);
+            if (_hold_ns > _cur_max) {
+                mg.rwlock_shared_max_hold_ns_observed.store(_hold_ns, .monotonic);
             }
+        }
 
-            const found = try findNodeMatchingMergeProps(self, self.allocator, mg, store, graph_name, label, merge_props);
+        const existing_id = try findNodeMatchingMergeProps(self, self.allocator, mg, store, graph_name, label, merge_props);
+        if (existing_id) |existing| {
             // GAP-0900 coalesce-upsert: apply the SET props to the existing
             // node on the match branch, mirroring the single-key path
             // (~:2381). Done under the same shared-rwlock + per-tuple-lock
@@ -4505,30 +4573,25 @@ pub const StorageAdapter = struct {
             // already hold the matched values); on_create_props that name a
             // merge key are skipped to avoid clobbering the index tuple.
             if (apply_on_match) {
-                if (found) |existing| {
-                    for (merge_props) |kv| {
-                        try store.setNodeProperty(existing, kv.key, kv.value);
-                    }
-                    for (on_create_props) |kv| {
-                        var is_merge_key = false;
-                        for (merge_props) |mp| {
-                            if (std.mem.eql(u8, kv.key, mp.key)) {
-                                is_merge_key = true;
-                                break;
-                            }
-                        }
-                        if (is_merge_key) continue;
-                        try store.setNodeProperty(existing, kv.key, kv.value);
-                    }
-                    // GAP-0900: on-match upsert writes hit the engine WAL; count
-                    // them toward the checkpoint cadence (create branch is
-                    // counted by the delegated bulkInsert).
-                    _ = self.pending_bulk_ops.fetchAdd(1, .monotonic);
+                for (merge_props) |kv| {
+                    try store.setNodeProperty(existing, kv.key, kv.value);
                 }
+                for (on_create_props) |kv| {
+                    var is_merge_key = false;
+                    for (merge_props) |mp| {
+                        if (std.mem.eql(u8, kv.key, mp.key)) {
+                            is_merge_key = true;
+                            break;
+                        }
+                    }
+                    if (is_merge_key) continue;
+                    try store.setNodeProperty(existing, kv.key, kv.value);
+                }
+                // GAP-0900: on-match upsert writes hit the engine WAL; count
+                // them toward the checkpoint cadence (create branch is
+                // counted by the delegated bulkInsert).
+                _ = self.pending_bulk_ops.fetchAdd(1, .monotonic);
             }
-            break :existing_blk found;
-        };
-        if (existing_id) |existing| {
             // Task 4 review Finding 1: this is the multi-property MERGE hit
             // branch that previously had NO wrote signal at all — the handler
             // set `fts_should_maintain = true` unconditionally for every
@@ -4552,8 +4615,11 @@ pub const StorageAdapter = struct {
             @memcpy(combined_props[merge_props.len..][0..on_create_props.len], on_create_props);
         }
 
+        // Graph-locked variant: our SHARED hold is still outstanding and
+        // `std.Io.RwLock` is not reentrant.
         const labels_slice = [_][]const u8{label};
-        const new_id = try self.bulkInsertNodeWithReservedIdForTenant(
+        const new_id = try self.bulkInsertNodeWithReservedIdGraphLocked(
+            mg,
             graph_name,
             reserved_id,
             &labels_slice,
