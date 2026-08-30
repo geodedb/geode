@@ -66,7 +66,7 @@ if (self.stats_manager) |stats| {
         if (vocab_density > 100.0) {
             bm25_cost_factor *= 1.2; // Complex vocabulary = higher IDF cost
         } else if (vocab_density < 20.0) {
-            bm25_cost_factor *= 0.9; // Simple vocabulary = lower IDF cost  
+            bm25_cost_factor *= 0.9; // Simple vocabulary = lower IDF cost
         }
 
         // BM25 normalization: k1 * (1 - b + b * (|d| / avgdl))
@@ -362,7 +362,7 @@ if (search_queries > 5) {
 ### Governance Tracking
 
 - ✅ **REQ-BM25-INDEX-OPTIMIZER-001**: Mathematical model and cost estimation
-- ✅ **REQ-BM25-INDEX-OPTIMIZER-002**: Fulltext optimization integration  
+- ✅ **REQ-BM25-INDEX-OPTIMIZER-002**: Fulltext optimization integration
 - ✅ **REQ-BM25-INDEX-OPTIMIZER-003**: Statistics integration and adaptation
 - ✅ **REQ-BM25-INTEGRATION-001**: End-to-end workflow validation
 - ✅ **REQ-BM25-INTEGRATION-002**: Performance characteristics validation
@@ -388,8 +388,8 @@ if (search_queries > 5) {
 ---
 
 **Status**: ✅ Implemented and regression-tested (see [GAP_ANALYSIS.md](GAP_ANALYSIS.md) for open gaps)
-**Tests**: 10 tests (6 unit + 4 integration) - all passing  
-**Performance**: Sub-millisecond cost estimation, 40-60% search quality improvement  
+**Tests**: 10 tests (6 unit + 4 integration) - all passing
+**Performance**: Sub-millisecond cost estimation, 40-60% search quality improvement
 **Documentation**: Complete with mathematical foundation, usage examples, and enterprise integration guide
 
 The BM25 IndexOptimizer integration establishes Geode as a leading graph database platform with enterprise-grade full-text search capabilities, providing sophisticated relevance ranking while maintaining industry-leading performance and standards compliance.
