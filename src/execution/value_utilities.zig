@@ -215,6 +215,37 @@ pub fn adoptProjectionRowValues(
     result.owns_value_memory = true;
 }
 
+/// Re-point the allocator captured INSIDE a result value at `allocator`.
+///
+/// A `Value.Map` is a managed `std.StringHashMap` that stores the allocator it
+/// was created with. When a read/write budget scope is active, result rows are
+/// built on a stack-local `MeteredAllocator` wrapper (a pass-through over the
+/// real allocator); that wrapper dies with the dispatching frame. The map's
+/// backing memory is fine to free via the inner allocator, but `map.deinit()`
+/// calls through the map's *stored* allocator — the dangling stack wrapper —
+/// segfaulting during ExecutionResult.deinit (the map-free crash exposed by the
+/// gql_compliance suite's `RETURN {..}` once geode#875(i) widened read-scope
+/// activation to MATCH-free reads; also latent for `MATCH .. RETURN {..}`).
+/// Repointing to the inner allocator is safe because the wrapper is pass-through.
+/// Recurses into nested maps and lists; other Value types are either unmanaged
+/// (slices freed via the passed-in allocator) or not deinit'd through a captured
+/// allocator, so they need no repoint.
+pub fn repointValueAllocators(val: *Value, allocator: std.mem.Allocator) void {
+    switch (val.*) {
+        .Map => {
+            val.Map.allocator = allocator;
+            var it = val.Map.iterator();
+            while (it.next()) |entry| {
+                repointValueAllocators(entry.value_ptr, allocator);
+            }
+        },
+        .List => |list| {
+            for (list) |*item| repointValueAllocators(item, allocator);
+        },
+        else => {},
+    }
+}
+
 /// Helper function to free a Value's allocated memory
 pub fn freeValue(allocator: std.mem.Allocator, value: Value) void {
     switch (value) {

@@ -16,6 +16,7 @@ const qe_log = logging.scoped("execution");
 const Attr = logging.Attr;
 
 const execution = @import("../execution.zig");
+const value_utilities = @import("value_utilities.zig");
 const ExecutionResult = execution.ExecutionResult;
 const ExecutionContext = execution.ExecutionContext;
 const Binding = execution.Binding;
@@ -1843,6 +1844,13 @@ pub fn executeQueryWithContext(allocator: std.mem.Allocator, q: ast.Query, conte
 fn repointResultAllocators(result: *ExecutionResult, allocator: std.mem.Allocator) void {
     if (result.owned_graph_entities) |entities| entities.allocator = allocator;
     if (result.variable_bindings) |bindings| bindings.allocator = allocator;
+    // A `Value.Map` in a result row is a managed std.StringHashMap that stored
+    // the (stack-local, pass-through) metered allocator; its deinit would call
+    // through that dangling wrapper. Repoint every row value's captured
+    // allocator at the inner allocator (recurses into nested maps/lists).
+    for (result.rows) |row| {
+        for (row) |*val| value_utilities.repointValueAllocators(val, allocator);
+    }
 }
 
 pub fn executeLegacyQueryWithResolvedParams(
