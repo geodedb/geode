@@ -830,13 +830,22 @@ pub const ProfileStatement = struct {
 };
 
 // FOR loop iteration statement
-// Syntax: FOR item IN list_expr [WITH ORDINALITY var | WITH OFFSET var] RETURN ...
+// Syntax: FOR item IN list_expr [WITH ORDINALITY var | WITH OFFSET var]
+//         ( RETURN ... | <body statement> )
+//
+// Per ISO/IEC 39075:2024 FOR is a <primitive query statement>: a
+// <data-modifying statement> may follow the header and the result statement
+// (RETURN) is OPTIONAL. `return_clause` carries the inline projection form;
+// `body` carries the composed continuation (CREATE / MERGE / MATCH ... SET).
+// Exactly one of the two is non-null. (geode#876)
+// CANARY: REQ=REQ-GQL-FOR-WRITE-BODY-876; FEATURE="ForStatement"; ASPECT=AST; STATUS=TESTED; TEST=tests/test_for_write_body.zig; OWNER=parser; UPDATED=2026-08-29
 pub const ForStatement = struct {
     variable: []const u8, // The iteration variable name
     collection: Expr, // The collection to iterate over
     ordinality_var: ?[]const u8 = null, // WITH ORDINALITY variable name (1-based)
     offset_var: ?[]const u8 = null, // WITH OFFSET variable name (0-based)
-    return_clause: ReturnClause, // RETURN clause for each iteration
+    return_clause: ?ReturnClause = null, // RETURN clause for each iteration (null when `body` is set)
+    body: ?*Query = null, // Composed continuation executed once per element
     order_by: ?OrderBy = null,
     limit: ?usize = null,
     offset: ?usize = null,

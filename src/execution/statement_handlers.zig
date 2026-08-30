@@ -470,9 +470,209 @@ pub fn executeShow(allocator: std.mem.Allocator, s: ast.ShowStatement, context: 
     };
 }
 
-pub fn executeForWithBindings(allocator: std.mem.Allocator, for_stmt: ast.ForStatement, with_result: ExecutionResult, context: ExecutionContext) !ExecutionResult {
-    _ = context;
+// CANARY: REQ=REQ-GQL-FOR-WRITE-BODY-876; FEATURE="ForStatement"; ASPECT=BodyResultAggregation; STATUS=TESTED; TEST=tests/test_for_write_body.zig; OWNER=engine; UPDATED=2026-08-29
+/// Accumulator that folds the per-iteration results of a FOR body into a single
+/// ExecutionResult without leaking or double-freeing any of the ownership-
+/// carrying fields (values, column buffer, flags, graph entities, bindings).
+const ForBodyAccumulator = struct {
+    rows: std.ArrayList([]Value) = .empty,
+    columns: ?[][]const u8 = null,
+    column_buffer: ?[]u8 = null,
+    flags: ?std.ArrayList([]const u8) = null,
+    owns_value_memory: bool = false,
+    seen_result: bool = false,
+    entities: ?*execution.OwnedGraphEntities = null,
+    bindings: ?*std.StringHashMap(u64) = null,
 
+    /// Take everything the iteration result owns; `result` owns nothing after
+    /// this returns (so it must NOT be deinit'd by the caller).
+    fn absorb(self: *ForBodyAccumulator, allocator: std.mem.Allocator, result: *ExecutionResult) !void {
+        // Value-memory ownership folds with AND. Every iteration runs the SAME
+        // body shape, so the flag is uniform in practice; a hypothetical mixed
+        // batch degrades to "borrowed", which can only leak — never free memory
+        // the result did not own.
+        if (!self.seen_result) {
+            self.owns_value_memory = result.owns_value_memory;
+            self.seen_result = true;
+        } else if (!result.owns_value_memory) {
+            self.owns_value_memory = false;
+        }
+
+        // Reserve first: every transfer below must be infallible so a failure
+        // can never leave a row owned by BOTH the accumulator and `result`.
+        try self.rows.ensureUnusedCapacity(allocator, result.rows.len);
+        for (result.rows) |row| self.rows.appendAssumeCapacity(row);
+        allocator.free(result.rows);
+        result.rows = &.{};
+
+        if (self.columns == null and result.columns.len > 0) {
+            self.columns = result.columns;
+            self.column_buffer = result.column_buffer;
+        } else {
+            if (result.column_buffer) |buffer| {
+                allocator.free(buffer);
+            } else {
+                for (result.columns) |col| allocator.free(col);
+            }
+            allocator.free(result.columns);
+        }
+        result.columns = &.{};
+        result.column_buffer = null;
+
+        if (self.flags == null) {
+            self.flags = result.flags;
+        } else {
+            if (result.owns_value_memory) {
+                for (result.flags.items) |flag| allocator.free(flag);
+            }
+            result.flags.deinit(allocator);
+        }
+        result.flags = .empty;
+
+        if (result.owned_graph_entities) |entities| {
+            if (self.entities) |acc_entities| {
+                try acc_entities.nodes.ensureUnusedCapacity(acc_entities.allocator, entities.nodes.items.len);
+                try acc_entities.edges.ensureUnusedCapacity(acc_entities.allocator, entities.edges.items.len);
+                acc_entities.nodes.appendSliceAssumeCapacity(entities.nodes.items);
+                acc_entities.edges.appendSliceAssumeCapacity(entities.edges.items);
+                // Ownership of the pointers moved to the accumulator.
+                entities.nodes.clearRetainingCapacity();
+                entities.edges.clearRetainingCapacity();
+                entities.deinit();
+                entities.allocator.destroy(entities);
+            } else {
+                self.entities = entities;
+            }
+            result.owned_graph_entities = null;
+        }
+
+        if (result.variable_bindings) |vb| {
+            if (self.bindings == null) {
+                self.bindings = vb;
+            } else {
+                vb.deinit();
+                allocator.destroy(vb);
+            }
+            result.variable_bindings = null;
+        }
+    }
+
+    fn finish(self: *ForBodyAccumulator, allocator: std.mem.Allocator) !ExecutionResult {
+        return ExecutionResult{
+            .columns = self.columns orelse try allocator.alloc([]const u8, 0),
+            .rows = try self.rows.toOwnedSlice(allocator),
+            .flags = self.flags orelse std.ArrayList([]const u8).empty,
+            .owns_value_memory = self.owns_value_memory,
+            .column_buffer = self.column_buffer,
+            .owned_graph_entities = self.entities,
+            .variable_bindings = self.bindings,
+        };
+    }
+
+    fn deinit(self: *ForBodyAccumulator, allocator: std.mem.Allocator) void {
+        for (self.rows.items) |row| {
+            if (self.owns_value_memory) {
+                for (row) |value| execution.freeValue(allocator, value);
+            }
+            allocator.free(row);
+        }
+        self.rows.deinit(allocator);
+        if (self.columns) |cols| {
+            if (self.column_buffer) |buffer| {
+                allocator.free(buffer);
+            } else {
+                for (cols) |col| allocator.free(col);
+            }
+            allocator.free(cols);
+        }
+        if (self.flags) |*flags| flags.deinit(allocator);
+        if (self.entities) |entities| {
+            entities.deinit();
+            entities.allocator.destroy(entities);
+        }
+        if (self.bindings) |bindings| {
+            bindings.deinit();
+            allocator.destroy(bindings);
+        }
+    }
+};
+
+// CANARY: REQ=REQ-GQL-FOR-WRITE-BODY-876; FEATURE="ForStatement"; ASPECT=BodyExecution; STATUS=TESTED; TEST=tests/test_for_write_body.zig; OWNER=engine; UPDATED=2026-08-29
+/// geode#876: execute the FOR body once per collection element. The loop
+/// variable (plus WITH ORDINALITY / WITH OFFSET counters and any enclosing WITH
+/// bindings) rides as query parameters, which is how the body's CREATE / MERGE /
+/// MATCH...SET clauses already resolve bare identifiers (Env.get falls back to
+/// param bindings, value_types.zig:186). Dispatch goes through the ordinary
+/// executeQueryWithContext path, so cluster write gating, budgets, RLS/tenancy
+/// and the FTS live-maintenance hooks all fire exactly as they do for a
+/// standalone statement.
+fn executeForBody(
+    allocator: std.mem.Allocator,
+    for_stmt: ast.ForStatement,
+    body: *const ast.Query,
+    items: []const Value,
+    base_names: []const []const u8,
+    base_values: []const Value,
+    context: ExecutionContext,
+) !ExecutionResult {
+    std.debug.assert(base_names.len == base_values.len);
+    std.debug.assert(context.query_param_names.len == context.query_param_values.len);
+
+    const loop_binding_count = 1 +
+        (if (for_stmt.ordinality_var != null) @as(usize, 1) else 0) +
+        (if (for_stmt.offset_var != null) @as(usize, 1) else 0);
+    const binding_capacity = loop_binding_count + base_names.len + context.query_param_names.len;
+
+    var param_names = try std.ArrayList([]const u8).initCapacity(allocator, binding_capacity);
+    defer param_names.deinit(allocator);
+    var param_values = try std.ArrayList(Value).initCapacity(allocator, binding_capacity);
+    defer param_values.deinit(allocator);
+
+    var acc = ForBodyAccumulator{};
+    errdefer acc.deinit(allocator);
+
+    for (items, 0..) |item, idx| {
+        param_names.clearRetainingCapacity();
+        param_values.clearRetainingCapacity();
+
+        // Loop bindings come FIRST so the iteration variable shadows an outer
+        // binding or parameter of the same name (lookups take the first match).
+        try param_names.append(allocator, for_stmt.variable);
+        try param_values.append(allocator, item);
+
+        if (for_stmt.ordinality_var) |ord_var| {
+            try param_names.append(allocator, ord_var);
+            try param_values.append(allocator, Value{ .Int = @intCast(idx + 1) });
+        }
+
+        if (for_stmt.offset_var) |off_var| {
+            try param_names.append(allocator, off_var);
+            try param_values.append(allocator, Value{ .Int = @intCast(idx) });
+        }
+
+        for (base_names, base_values) |name, value| {
+            try param_names.append(allocator, name);
+            try param_values.append(allocator, value);
+        }
+
+        for (context.query_param_names, context.query_param_values) |name, value| {
+            try param_names.append(allocator, name);
+            try param_values.append(allocator, value);
+        }
+
+        var iter_ctx = context;
+        iter_ctx.query_param_names = param_names.items;
+        iter_ctx.query_param_values = param_values.items;
+
+        var iter_result = try execution.executeQueryWithContext(allocator, body.*, iter_ctx);
+        errdefer iter_result.deinit(allocator);
+        try acc.absorb(allocator, &iter_result);
+    }
+
+    return acc.finish(allocator);
+}
+
+pub fn executeForWithBindings(allocator: std.mem.Allocator, for_stmt: ast.ForStatement, with_result: ExecutionResult, context: ExecutionContext) !ExecutionResult {
     // We expect only one row from WITH clause, use it as the environment
     if (with_result.rows.len == 0) {
         return ExecutionResult{
@@ -505,6 +705,14 @@ pub fn executeForWithBindings(allocator: std.mem.Allocator, for_stmt: ast.ForSta
             try items.append(allocator, collection_value);
         },
     }
+
+    // geode#876: a composed body (CREATE / MERGE / MATCH ... SET) runs once per
+    // element with the WITH bindings still in scope.
+    if (for_stmt.body) |body| {
+        return executeForBody(allocator, for_stmt, body, items.items, with_result.columns, with_result.rows[0], context);
+    }
+
+    const return_clause = for_stmt.return_clause orelse return error.InvalidForStatement;
 
     // Build result rows by iterating over collection
     var result_rows = std.ArrayList([]Value).empty;
@@ -550,7 +758,7 @@ pub fn executeForWithBindings(allocator: std.mem.Allocator, for_stmt: ast.ForSta
         // Evaluate RETURN items for this iteration
         var row = std.ArrayList(Value).empty;
 
-        for (for_stmt.return_clause.items) |ret_item| {
+        for (return_clause.items) |ret_item| {
             const value = try eval.evalExpr(allocator, ret_item.expr, iteration_env);
             try row.append(allocator, value);
         }
@@ -561,7 +769,7 @@ pub fn executeForWithBindings(allocator: std.mem.Allocator, for_stmt: ast.ForSta
     // Build column names from RETURN clause
     var columns = std.ArrayList([]const u8).empty;
 
-    for (for_stmt.return_clause.items) |ret_item| {
+    for (return_clause.items) |ret_item| {
         const col_name = if (ret_item.alias) |alias|
             try allocator.dupe(u8, alias)
         else
@@ -612,8 +820,6 @@ fn allocateColumnStrings(allocator: std.mem.Allocator, strings: []const []const 
 }
 
 pub fn executeFor(allocator: std.mem.Allocator, for_stmt: ast.ForStatement, context: ExecutionContext) !ExecutionResult {
-    _ = context;
-
     // Evaluate the collection expression with an empty environment
     const empty_env = Env{
         .allocator = allocator,
@@ -637,6 +843,15 @@ pub fn executeFor(allocator: std.mem.Allocator, for_stmt: ast.ForStatement, cont
             try items.append(allocator, collection_value);
         },
     }
+
+    // geode#876: `FOR x IN <list> <data-modifying statement>` — run the body
+    // once per element instead of projecting a RETURN. An empty collection
+    // therefore writes nothing (zero iterations).
+    if (for_stmt.body) |body| {
+        return executeForBody(allocator, for_stmt, body, items.items, &.{}, &.{}, context);
+    }
+
+    const return_clause = for_stmt.return_clause orelse return error.InvalidForStatement;
 
     // Build result rows by iterating over collection (pre-sized to collection length)
     var result_rows = try std.ArrayList([]Value).initCapacity(allocator, items.items.len);
@@ -676,9 +891,9 @@ pub fn executeFor(allocator: std.mem.Allocator, for_stmt: ast.ForStatement, cont
         };
 
         // Evaluate RETURN items for this iteration (pre-sized to return clause length)
-        var row = try std.ArrayList(Value).initCapacity(allocator, for_stmt.return_clause.items.len);
+        var row = try std.ArrayList(Value).initCapacity(allocator, return_clause.items.len);
 
-        for (for_stmt.return_clause.items) |ret_item| {
+        for (return_clause.items) |ret_item| {
             const value = try eval.evalExpr(allocator, ret_item.expr, iteration_env);
             try row.append(allocator, value);
         }
@@ -688,10 +903,10 @@ pub fn executeFor(allocator: std.mem.Allocator, for_stmt: ast.ForStatement, cont
 
     // Build column names from RETURN clause (Phase 5.1.1 optimization: batch allocation)
     // First, collect column name strings (no allocation yet)
-    var col_name_strings = try std.ArrayList([]const u8).initCapacity(allocator, for_stmt.return_clause.items.len);
+    var col_name_strings = try std.ArrayList([]const u8).initCapacity(allocator, return_clause.items.len);
     defer col_name_strings.deinit(allocator);
 
-    for (for_stmt.return_clause.items) |ret_item| {
+    for (return_clause.items) |ret_item| {
         const col_name = if (ret_item.alias) |alias|
             alias
         else
@@ -1310,9 +1525,22 @@ fn classifyAction(stmt: ast.Statement) @import("../security/gps.zig").Action {
         .CreateIndex, .DropIndex, .CreateConstraint, .DropConstraint, .CreateSchema, .DropSchema, .CreateGraph, .DropGraph, .CreateGraphType, .DropGraphType, .CreatePolicy, .DropPolicy, .AlterPolicy => .schema,
         // Auth admin
         .CreateUser, .AlterUser, .DropUser, .CreateRole, .DropRole, .Grant, .Revoke => .admin_user,
+        // geode#876: a FOR carrying a data-modifying body is a WRITE, and GPS
+        // must see it as one. A read-only `FOR ... RETURN` keeps .show_metadata.
+        // CANARY: REQ=REQ-GQL-FOR-WRITE-BODY-876-CLASSIFY; FEATURE="ForStatement"; ASPECT=GpsActionClassification; STATUS=TESTED; TEST=tests/test_for_write_body.zig; OWNER=query_traits; UPDATED=2026-08-29
+        .For => |f| if (f.body) |body| classifyQueryAction(body) else .show_metadata,
         // Metadata / introspection
-        .Show, .For, .Values, .Explain, .ExplainPolicy, .Profile, .Call, .Backup, .Restore, .SessionSet, .SessionReset, .SessionClose, .UseGraph, .StartTransaction, .Commit, .Rollback => .show_metadata,
+        .Show, .Values, .Explain, .ExplainPolicy, .Profile, .Call, .Backup, .Restore, .SessionSet, .SessionReset, .SessionClose, .UseGraph, .StartTransaction, .Commit, .Rollback => .show_metadata,
     };
+}
+
+/// Map a Query body to the GPS Action its clauses require. Mirrors the
+/// statement-level mapping above: DELETE > CREATE/MERGE > SET/REMOVE > read.
+fn classifyQueryAction(q: *const ast.Query) @import("../security/gps.zig").Action {
+    if (q.delete_items.len > 0) return .delete;
+    if (q.create_pattern != null or q.merge_statement != null) return .create;
+    if (q.set_clauses.len > 0 or q.remove_clauses.len > 0) return .update;
+    return .match_;
 }
 
 fn buildPlannedExplainResult(allocator: std.mem.Allocator, plan: planned_read_runtime.Plan) !ExecutionResult {

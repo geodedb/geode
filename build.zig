@@ -9591,6 +9591,19 @@ pub fn build(b: *std.Build) void {
     const eng3904_step = b.step("test-eng3904-3905", "Run ENG-3904 leading-negative list literal and ENG-3905 vectorf32($param) regressions");
     eng3904_step.dependOn(&run_eng3904_tests.step);
 
+    // geode#876: ISO GQL `FOR … IN` cannot compose with a write body — the
+    // parser hard-requires RETURN after the FOR header (parser.zig:5814),
+    // ast.ForStatement has no continuation field, executeFor discards the
+    // ExecutionContext, and query_traits classifies every `.For` as read-only.
+    // See tests/test_for_write_body.zig.
+    const for_write_body_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_for_write_body.zig"), .target = target, .optimize = optimize });
+    for_write_body_test_mod.addImport("geode", root_mod);
+    const for_write_body_tests = b.addTest(.{ .root_module = for_write_body_test_mod });
+    const run_for_write_body_tests = b.addRunArtifact(for_write_body_tests);
+    shardDep(test_step, &run_for_write_body_tests.step, 0, test_shard_loads, test_shard_index);
+    const for_write_body_step = b.step("test-for-write-body", "Run geode#876 FOR … IN write-body composition regressions");
+    for_write_body_step.dependOn(&run_for_write_body_tests.step);
+
     // ENG-3906: CREATE INDEX WITH-parameter validation — the `metric: 'x'` map
     // spelling bypasses the metric validator that `metric = 'x'` reaches, and
     // unknown/unsupported WITH keys are silently discarded on vector indexes.
