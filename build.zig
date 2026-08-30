@@ -7301,6 +7301,21 @@ pub fn build(b: *std.Build) void {
     const datadir_lock_subproc_step = b.step("test-datadir-lock-subprocess", "ENG-3921: two `geode serve` on one data dir must be refused (subprocess e2e)");
     datadir_lock_subproc_step.dependOn(&run_datadir_lock_subproc_tests.step);
 
+    // `geode query --batch` end-to-end: spawns a real server and drives the
+    // real CLI batch path (one HELLO, one stream, one ExecuteRequest per
+    // line).  Same dependency-free subprocess shape as the data-dir lock e2e
+    // above — it consumes only the child binary's stdio.
+    const cli_batch_mode_tests = b.addTest(.{ .root_module = b.createModule(.{
+        .root_source_file = b.path("tests/test_cli_batch_mode.zig"),
+        .target = target,
+        .optimize = optimize,
+    }) });
+    cli_batch_mode_tests.root_module.link_libc = true;
+    const run_cli_batch_mode_tests = b.addRunArtifact(cli_batch_mode_tests);
+    run_cli_batch_mode_tests.step.dependOn(b.getInstallStep());
+    const cli_batch_mode_step = b.step("test-cli-batch-mode", "ENG-3914: `geode query --batch` executes every statement on one connection (subprocess e2e)");
+    cli_batch_mode_step.dependOn(&run_cli_batch_mode_tests.step);
+
     // Parallel-ingest hang reproduction tests — see triage of the
     // "thread-pool deinit timed out after 30000ms with 1 active tasks"
     // shutdown warning under a 16-worker Go-client ingest workload.

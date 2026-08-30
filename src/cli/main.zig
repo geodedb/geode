@@ -257,6 +257,13 @@ fn printQueryUsage() void {
         "  --grpc                 Use gRPC transport instead of QUIC\n" ++
         "  -g, --graph <name>     Graph to query against (auto-prepends USE GRAPH)\n" ++
         "  -f, --file <path>      Execute GQL statements from a file (supports ~)\n" ++
+        "  --batch                Read statements from stdin, ONE PER LINE, and execute\n" ++
+        "                         them over a single connection (one HELLO, one stream).\n" ++
+        "                         Blank lines are skipped; each statement renders its own\n" ++
+        "                         result in --format order. A statement error does not\n" ++
+        "                         stop the batch, but the process exits non-zero if any\n" ++
+        "                         statement failed. Takes no query argument (the explicit\n" ++
+        "                         '-' stdin marker is accepted).\n" ++
         "  --insecure-tls-skip-verify  Skip TLS certificate verification\n" ++
         "  --insecure             (deprecated) Alias for --insecure-tls-skip-verify\n" ++
         "  --ca-cert <path>       CA certificate path for server verification\n" ++
@@ -337,8 +344,9 @@ fn printQueryUsage() void {
         "  geode query --file ~/my_queries.gql\n" ++
         "  geode query -f ./schema.gql --insecure-tls-skip-verify\n" ++
         "\n" ++
-        "  # Batch mode — one QUIC connection for all queries (one query per line)\n" ++
+        "  # Batch mode — one connection/stream/HELLO for all statements (one per line)\n" ++
         "  cat queries.txt | geode query --batch\n" ++
+        "  cat queries.txt | geode query --batch -   # explicit stdin marker\n" ++
         "  echo -e 'RETURN 1\\nRETURN 2' | geode query --batch --server localhost:3141\n" ++
         "\n", .{});
 }
@@ -1412,19 +1420,43 @@ fn cmdQuery(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !voi
 
     // CANARY: REQ=REQ-CLI-CHUNKED-EXEC-007; FEATURE="ChunkedExecution"; ASPECT=NullCheck; STATUS=TESTED; TEST=geodetestlab/specs/transaction_chunked_execution.yml; OWNER=cli; UPDATED=2026-06-11
     // Allow null query_text when using chunked execution (file_statements is set)
-    if (query_text == null and file_statements == null) {
+    // CANARY: REQ=REQ-CLI-BATCH-MODE-002; FEATURE="QueryBatchMode"; ASPECT=ArgReachability; STATUS=TESTED; TEST=tests/test_cli_batch_mode.zig; OWNER=cli; UPDATED=2026-08-29
+    // ENG-3914: --batch sources its statements from stdin, so a missing
+    // positional is the NORMAL spelling. Without the `!batch_mode` term this
+    // refused every `cat q.gql | geode query --batch` before the batch branch
+    // below could run — the feature was dead code from the day it landed.
+    if (query_text == null and file_statements == null and !batch_mode) {
         std.debug.print("Error: query text required\n", .{});
         std.debug.print("Example: geode query \"MATCH (n) RETURN n LIMIT 10\"\n", .{});
         std.debug.print("         geode query --file ~/queries.gql\n", .{});
+        std.debug.print("         cat queries.gql | geode query --batch\n", .{});
         printQueryUsage();
         std.process.exit(@intFromEnum(ExitCode.usage_error));
+    }
+
+    // ENG-3914: --batch owns stdin. `geode query --batch -` is the explicit
+    // spelling of the same thing, so the `-` positional must NOT be consumed
+    // here (that turned the whole file into ONE multi-statement program and
+    // starved the batch branch of its input). Any other positional alongside
+    // --batch is a contradiction and is refused with a truthful message.
+    if (batch_mode) {
+        if (query_text) |qt| {
+            if (!std.mem.eql(u8, qt, "-")) {
+                std.debug.print("Error: --batch reads statements from stdin (one per line); " ++
+                    "pass no query argument, or the explicit '-' stdin marker\n", .{});
+                std.debug.print("Example: cat queries.gql | geode query --batch\n", .{});
+                std.debug.print("         cat queries.gql | geode query --batch -\n", .{});
+                std.process.exit(@intFromEnum(ExitCode.usage_error));
+            }
+            query_text = null;
+        }
     }
 
     // Handle stdin input if query_text is "-" (only when not using chunked execution)
     var stdin_allocated: ?[]u8 = null;
     defer if (stdin_allocated) |allocated| allocator.free(allocated);
 
-    if (query_text != null and std.mem.eql(u8, query_text.?, "-")) {
+    if (!batch_mode and query_text != null and std.mem.eql(u8, query_text.?, "-")) {
         const stdin = std.Io.File{ .handle = getStdinHandle() catch return error.StdioUnavailable, .flags = .{ .nonblocking = false } }; // stdin handle
         const stdin_content = try readStreamToEnd(stdin, allocator, 1024 * 1024); // Max 1MB
         defer allocator.free(stdin_content);
@@ -1606,17 +1638,29 @@ fn cmdQuery(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !voi
             std.process.exit(@intFromEnum(ExitCode.usage_error));
         }, .flags = .{ .nonblocking = false } };
         const stdin_content = readStreamToEnd(stdin_file, allocator, 16 * 1024 * 1024) catch |err| {
-            std.debug.print("Error: Failed to read stdin: {}\n", .{err});
+            // An immediately-closed stdin surfaces as EndOfStream; that is
+            // "no statements", not a read fault — say so plainly.
+            if (err == error.EndOfStream) {
+                std.debug.print("Error: empty input from stdin (--batch expects one statement per line)\n", .{});
+            } else {
+                std.debug.print("Error: Failed to read stdin: {}\n", .{err});
+            }
             std.process.exit(@intFromEnum(ExitCode.usage_error));
         };
         defer allocator.free(stdin_content);
 
         if (stdin_content.len == 0) {
-            std.debug.print("Error: empty input from stdin\n", .{});
+            std.debug.print("Error: empty input from stdin (--batch expects one statement per line)\n", .{});
             std.process.exit(@intFromEnum(ExitCode.usage_error));
         }
 
-        try executeBatchQueries(allocator, server_addr, stdin_content, format, insecure, timeout_secs, user, password, ca_cert_path, client_cert_path, client_key_path, graph_for_prepend, graph, page_size, role, read_only);
+        // CANARY: REQ=REQ-CLI-BATCH-MODE-004; FEATURE="QueryBatchMode"; ASPECT=ExitCode; STATUS=TESTED; TEST=tests/test_cli_batch_mode.zig; OWNER=cli; UPDATED=2026-08-29
+        // ENG-3914 batch contract: a statement error does NOT abort the run
+        // (the remaining lines still execute), but the process exits non-zero
+        // so a failed statement can never be swallowed by a zero exit code.
+        // Transport failures are fatal and propagate out of the call.
+        const failed = try executeBatchQueries(allocator, server_addr, stdin_content, format, insecure, timeout_secs, user, password, ca_cert_path, client_cert_path, client_key_path, graph_for_prepend, graph, page_size, role, read_only);
+        if (failed > 0) std.process.exit(@intFromEnum(ExitCode.general_error));
         return;
     }
 
@@ -2097,9 +2141,21 @@ fn executeQueryOnGrpc(
     _ = try result.render(stdout, stderr_handle);
 }
 
-/// PERF-P1-002: Execute multiple queries from stdin over a single QUIC connection.
-/// Each non-empty line is treated as a separate query. The QUIC+TLS handshake
-/// happens once; each query opens a new multiplexed stream (negligible cost).
+// CANARY: REQ=REQ-CLI-BATCH-MODE-003; FEATURE="QueryBatchMode"; ASPECT=SingleStreamLoop; STATUS=TESTED; TEST=tests/test_cli_batch_mode.zig; OWNER=cli; UPDATED=2026-08-29
+/// PERF-P1-002 / ENG-3914: Execute multiple statements from stdin over ONE
+/// QUIC connection, ONE stream, and ONE HELLO. Each non-empty line is a
+/// separate statement sent as its own ExecuteRequest on that stream — the
+/// server's post-HELLO query loop reads them back to back, which is the same
+/// shape the REPL transport uses (src/client/repl/quic_transport.zig).
+///
+/// The original implementation looped `executeQueryOnConnection`, which does
+/// `closeStream()` + a fresh HELLO per statement. `handleQuicConnection`
+/// serves exactly ONE stream per connection handler call, so statement #1
+/// succeeded and every later statement blocked until the HELLO receive
+/// deadline elapsed.
+///
+/// Returns the number of statements the server answered with a failure
+/// status. Statement errors do NOT abort the batch; transport failures do.
 fn executeBatchQueries(
     allocator: std.mem.Allocator,
     server_addr: []const u8,
@@ -2117,7 +2173,7 @@ fn executeBatchQueries(
     page_size: u32,
     fle_role: ?[]const u8,
     read_only: bool,
-) !void {
+) !usize {
     const stderr = std.Io.File{ .handle = getStderrHandle() catch return error.StdioUnavailable, .flags = .{ .nonblocking = false } };
 
     // Split stdin into individual queries (one per line, skip empty/whitespace-only lines)
@@ -2186,24 +2242,67 @@ fn executeBatchQueries(
     };
     defer raw_client.deinit();
 
-    // Connected — execute all queries over this single connection
+    // ENG-3914: ONE stream, ONE HELLO for the whole batch. The server serves
+    // exactly one stream per connection handler call, so the handshake must
+    // NOT be repeated per statement.
+    raw_client.closeStream();
+    defer raw_client.closeStream();
+
+    const session_id = helloOnConnection(
+        allocator,
+        &raw_client,
+        username,
+        password,
+        graph_for_hello,
+        fle_role,
+        timeout_secs,
+    ) catch |err| {
+        // helloOnConnection already rendered a diagnostic.
+        return err;
+    };
+    defer allocator.free(session_id);
+
+    // Connected and authenticated — every statement now rides this stream.
     var executed: usize = 0;
     var error_count: usize = 0;
-    const empty_params = std.ArrayList(schema.Param).empty;
 
     for (queries.items) |query_line| {
-        executeQueryOnConnection(allocator, &raw_client, query_line, format, username, password, graph, graph_for_hello, empty_params, page_size, timeout_secs, fle_role, null, read_only) catch |err| {
-            std.debug.print("Error executing query: {}\n", .{err});
-            error_count += 1;
+        // A fresh empty param list per statement: collectQuery takes
+        // ownership of the list it is handed.
+        const empty_params = std.ArrayList(schema.Param).empty;
+        const failed = runQueryOnHelloedStream(
+            allocator,
+            &raw_client,
+            session_id,
+            query_line,
+            format,
+            graph,
+            empty_params,
+            page_size,
+            timeout_secs,
+            null,
+            read_only,
+        ) catch |err| {
+            // A transport failure kills the shared stream, so continuing
+            // would only produce a cascade of misleading timeouts. Report
+            // where the batch stopped and fail the run.
+            std.debug.print(
+                "Error: batch aborted at statement {d} of {d}: {t}\n",
+                .{ executed + 1, queries.items.len, err },
+            );
+            return err;
         };
+        if (failed) error_count += 1;
         executed += 1;
     }
 
     std.debug.print("\nBatch execution complete: {d} queries executed", .{executed});
     if (error_count > 0) {
-        std.debug.print(", {d} errors", .{error_count});
+        std.debug.print(", {d} failed", .{error_count});
     }
     std.debug.print("\n", .{});
+
+    return error_count;
 }
 
 // CANARY: REQ=REQ-CLI-CHUNKED-EXEC-005; FEATURE="ChunkedExecution"; ASPECT=OptionsStruct; STATUS=TESTED; TEST=geodetestlab/specs/transaction_chunked_execution.yml; OWNER=cli; UPDATED=2026-06-10
@@ -2650,31 +2749,25 @@ fn resolveQueryGraphBinding(
     };
 }
 
-// CANARY: REQ=REQ-CLI-GRAPH-FLAG-005; FEATURE="GraphFlag"; ASPECT=ExecuteOnConnection; STATUS=TESTED; TEST=geodetestlab/specs/query_file_flag_comprehensive.yml; OWNER=cli; UPDATED=2026-06-10
-fn executeQueryOnConnection(
+// CANARY: REQ=REQ-CLI-BATCH-MODE-005; FEATURE="QueryBatchMode"; ASPECT=HelloOnce; STATUS=TESTED; TEST=tests/test_cli_batch_mode.zig; OWNER=cli; UPDATED=2026-08-29
+/// ENG-3914: perform the HELLO handshake on the CURRENT stream of `raw_client`.
+/// Extracted from `executeQueryOnConnection` so `--batch` can HELLO exactly
+/// ONCE and then reuse the same stream for every statement — the server's
+/// `handleQuicConnection` serves one stream per connection handler call, so a
+/// second HELLO on a fresh stream is never answered.
+///
+/// Returns the owned session id ("" when the server sends none); the caller
+/// frees it.
+fn helloOnConnection(
     allocator: std.mem.Allocator,
     raw_client: *zig_client.GeodeClient,
-    query_text: []const u8,
-    format: []const u8,
     username: ?[]const u8,
     password: ?[]const u8,
-    graph: ?[]const u8,
     graph_for_hello: ?[]const u8,
-    params: std.ArrayList(schema.Param),
-    page_size: u32,
-    timeout_secs: u32,
     fle_role: ?[]const u8,
-    principal_envelope_bytes: ?[]const u8,
-    read_only: bool,
-) !void {
-    // Get stdout and stderr handles for output
-    const stdout = std.Io.File{ .handle = getStdoutHandle() catch return error.StdioUnavailable, .flags = .{ .nonblocking = false } };
+    timeout_secs: u32,
+) ![]u8 {
     const stderr_handle = std.Io.File{ .handle = getStderrHandle() catch return error.StdioUnavailable, .flags = .{ .nonblocking = false } };
-    const binding = resolveQueryGraphBinding(query_text, graph, graph_for_hello);
-
-    // Start each standalone query on a fresh QUIC stream.
-    raw_client.closeStream();
-    defer raw_client.closeStream();
 
     // Send HELLO message with authentication credentials
     // CANARY: REQ=REQ-LIB-MIGRATION-PROTO-001; FEATURE="ProtoMigration"; ASPECT=HelloMessage; STATUS=TESTED; OWNER=cli; UPDATED=2026-02-02
@@ -2682,7 +2775,7 @@ fn executeQueryOnConnection(
         .username = username orelse "",
         .password = password orelse "",
         .tenant_id = null,
-        .graph = binding.graph_for_hello,
+        .graph = graph_for_hello,
         .role = fle_role,
     };
 
@@ -2703,9 +2796,6 @@ fn executeQueryOnConnection(
         return error.ConnectionFailed;
     };
 
-    var session_id: []const u8 = "";
-    var session_id_owned: ?[]u8 = null;
-
     switch (hello_resp_msg) {
         .hello => |h| {
             log.debug("Client received HELLO response", &.{Attr.boolean("success", h.success)});
@@ -2714,26 +2804,97 @@ fn executeQueryOnConnection(
                 stderr_handle.writeStreamingAll(std.Io.Threaded.global_single_threaded.io(), err_msg) catch {};
                 return error.AuthenticationFailed;
             }
-            if (h.session_id.len > 0) {
-                session_id_owned = try allocator.dupe(u8, h.session_id);
-                session_id = session_id_owned.?;
-            }
+            return allocator.dupe(u8, h.session_id);
         },
         else => {
             stderr_handle.writeStreamingAll(std.Io.Threaded.global_single_threaded.io(), "Error: Unexpected response type during handshake\n") catch {};
             return error.AuthenticationFailed;
         },
     }
-    defer if (session_id_owned) |sid| allocator.free(sid);
+}
+
+// CANARY: REQ=REQ-CLI-GRAPH-FLAG-005; FEATURE="GraphFlag"; ASPECT=ExecuteOnConnection; STATUS=TESTED; TEST=geodetestlab/specs/query_file_flag_comprehensive.yml; OWNER=cli; UPDATED=2026-06-10
+fn executeQueryOnConnection(
+    allocator: std.mem.Allocator,
+    raw_client: *zig_client.GeodeClient,
+    query_text: []const u8,
+    format: []const u8,
+    username: ?[]const u8,
+    password: ?[]const u8,
+    graph: ?[]const u8,
+    graph_for_hello: ?[]const u8,
+    params: std.ArrayList(schema.Param),
+    page_size: u32,
+    timeout_secs: u32,
+    fle_role: ?[]const u8,
+    principal_envelope_bytes: ?[]const u8,
+    read_only: bool,
+) !void {
+    const binding = resolveQueryGraphBinding(query_text, graph, graph_for_hello);
+
+    // Start each standalone query on a fresh QUIC stream.
+    raw_client.closeStream();
+    defer raw_client.closeStream();
+
+    const session_id = try helloOnConnection(
+        allocator,
+        raw_client,
+        username,
+        password,
+        binding.graph_for_hello,
+        fle_role,
+        timeout_secs,
+    );
+    defer allocator.free(session_id);
+
+    _ = try runQueryOnHelloedStream(
+        allocator,
+        raw_client,
+        session_id,
+        binding.query_text,
+        format,
+        graph,
+        params,
+        page_size,
+        timeout_secs,
+        principal_envelope_bytes,
+        read_only,
+    );
+}
+
+// CANARY: REQ=REQ-CLI-BATCH-MODE-006; FEATURE="QueryBatchMode"; ASPECT=StatementOnStream; STATUS=TESTED; TEST=tests/test_cli_batch_mode.zig; OWNER=cli; UPDATED=2026-08-29
+/// ENG-3914: execute ONE statement as its own ExecuteRequest on a stream that
+/// has ALREADY completed the HELLO handshake, render the result, and report
+/// whether the server answered with a failure status.
+///
+/// This is the unit `--batch` repeats: the server's post-HELLO query loop
+/// (src/server/quic_connection_handler.zig) reads request after request off
+/// the same stream, which is exactly the REPL transport's shape.
+fn runQueryOnHelloedStream(
+    allocator: std.mem.Allocator,
+    raw_client: *zig_client.GeodeClient,
+    session_id: []const u8,
+    query_text: []const u8,
+    format: []const u8,
+    graph: ?[]const u8,
+    params: std.ArrayList(schema.Param),
+    page_size: u32,
+    timeout_secs: u32,
+    principal_envelope_bytes: ?[]const u8,
+    read_only: bool,
+) !bool {
+    // Get stdout and stderr handles for output
+    const stdout = std.Io.File{ .handle = getStdoutHandle() catch return error.StdioUnavailable, .flags = .{ .nonblocking = false } };
+    const stderr_handle = std.Io.File{ .handle = getStderrHandle() catch return error.StdioUnavailable, .flags = .{ .nonblocking = false } };
 
     // CANARY: REQ=REQ-CLI-GRAPH-FLAG-006; FEATURE="GraphFlag"; ASPECT=PrependUseGraph; STATUS=TESTED; TEST=geodetestlab/specs/query_file_flag_comprehensive.yml; OWNER=cli; UPDATED=2026-06-10
     // If a graph is specified via --graph flag, prepend "USE GRAPH graphname;" to the query
     // When graph came from DSN, caller passes null (server handles via HELLO)
-    var final_query: []const u8 = binding.query_text;
+    var final_query: []const u8 = query_text;
     var allocated_query: ?[]u8 = null;
     defer if (allocated_query) |q| allocator.free(q);
 
-    allocated_query = try query_scope.prependGraphContextIfNeeded(allocator, binding.query_text, graph);
+    allocated_query = try query_scope.prependGraphContextIfNeeded(allocator, query_text, graph);
     if (allocated_query) |scoped| final_query = scoped;
 
     // #747: wire `on_progress = touchActiveQueryDeadlineWatchdog` into the
@@ -2793,12 +2954,14 @@ fn executeQueryOnConnection(
     defer result.deinit();
     defer finishActiveQueryDeadlineWatchdog();
 
-    _ = try result.render(stdout, stderr_handle);
-
     // GAP-0272: Server-side errors (parse errors, execution errors) are
-    // rendered to stdout with the error status. The CLI exits 0 because
-    // the transport layer worked correctly — only connection/transport
-    // failures should cause non-zero exit codes.
+    // rendered to stdout with the error status. The SINGLE-query CLI path
+    // exits 0 because the transport layer worked correctly — only
+    // connection/transport failures cause non-zero exit codes. `--batch`
+    // reads the returned flag instead so a failed statement inside a long
+    // batch is still visible in the process exit code (see
+    // REQ-CLI-BATCH-MODE-004).
+    return try result.render(stdout, stderr_handle);
 }
 
 /// Convert a JSON value to a string ID (handles both string and integer IDs)
