@@ -47,6 +47,7 @@ const domain_trie = @import("domain_trie.zig");
 const vector_index = @import("vector_index.zig");
 const spatial_index = @import("spatial_index.zig");
 const graph_store = @import("../graph_store.zig");
+const eval_extended = @import("../eval_extended.zig");
 const property_codec = @import("../property_value_codec.zig");
 const vector_types = @import("../types/vector.zig");
 const geographic = @import("../types/geographic.zig");
@@ -2046,6 +2047,36 @@ const OwnedVector = struct {
     owned: ?[]f32 = null,
 };
 
+// CANARY: REQ=REQ-GEODE-877-KNN-LIST-PROPERTY; FEATURE="VectorKnn"; ASPECT=NumericListCoercion; STATUS=TESTED; TEST=tests/test_vector_knn_silent_failures.zig; OWNER=index; UPDATED=2026-08-29
+/// geode#877 (a): a numeric element of a stored LIST property as an f64, or
+/// null for anything non-numeric. Mirrors `eval.numericValueAsF64` over the
+/// stored (ExtValue) representation — a node written `{embedding: [1.0, 0.0]}`
+/// (the natural shape for a JSON / client-side embedding) stores
+/// `ExtValue.List`, never `ExtValue.VectorF32`.
+fn numericExtValueAsF64(item: eval_extended.ExtValue) ?f64 {
+    return switch (item) {
+        .Int => |v| @floatFromInt(v),
+        .SmallInt => |v| @floatFromInt(v),
+        .BigInt => |v| @floatFromInt(v),
+        .Real => |v| @floatCast(v),
+        .Double => |v| v,
+        .Decimal => |d| @as(f64, @floatFromInt(d.coeff)) / std.math.pow(f64, 10.0, @floatFromInt(d.scale)),
+        else => null,
+    };
+}
+
+/// The dimension of a numeric ExtValue list, or null when the list is empty,
+/// wider than a vector dimension, or carries a non-numeric element. Skipping
+/// (rather than erroring) keeps a `{embedding: ['a','b']}` row a non-candidate
+/// exactly as a String-typed property already is.
+fn numericExtListDim(items: []const eval_extended.ExtValue) ?u16 {
+    if (items.len == 0 or items.len > std.math.maxInt(u16)) return null;
+    for (items) |item| {
+        if (numericExtValueAsF64(item) == null) return null;
+    }
+    return @intCast(items.len);
+}
+
 fn vectorFromPropertyValue(allocator: std.mem.Allocator, prop: graph_store.PropertyValue) ?OwnedVector {
     const ext = switch (prop) {
         .ExtValue => |value| value,
@@ -2059,6 +2090,20 @@ fn vectorFromPropertyValue(allocator: std.mem.Allocator, prop: graph_store.Prope
             for (vec.data, 0..) |item, i| converted[i] = @floatFromInt(item);
             break :blk .{
                 .value = .{ .dim = vec.dim, .data = converted },
+                .owned = converted,
+            };
+        },
+        // geode#877 (a): a LIST-typed embedding property was skipped here, so
+        // the index was built over NOTHING and then shadowed the brute-force
+        // scan (geode#877 (b)) — the compounded silent empty result.
+        .List => |items| blk: {
+            const dim = numericExtListDim(items) orelse break :blk null;
+            const converted = allocator.alloc(f32, dim) catch break :blk null;
+            for (items, 0..) |item, i| {
+                converted[i] = @floatCast(numericExtValueAsF64(item).?);
+            }
+            break :blk .{
+                .value = .{ .dim = dim, .data = converted },
                 .owned = converted,
             };
         },
@@ -2076,6 +2121,10 @@ fn vectorDimOfPropertyValue(prop: graph_store.PropertyValue) ?u16 {
     return switch (ext) {
         .VectorF32 => |vec| vec.dim,
         .VectorI32 => |vec| vec.dim,
+        // geode#877 (a): keep the dimension inference in lock-step with
+        // `vectorFromPropertyValue` above, or an index over a list-typed
+        // property would infer dimension 0 for rows it then indexes at dim N.
+        .List => |items| numericExtListDim(items),
         else => null,
     };
 }

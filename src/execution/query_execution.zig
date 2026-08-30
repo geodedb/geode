@@ -1649,11 +1649,20 @@ pub fn executeQueryWithContext(allocator: std.mem.Allocator, q: ast.Query, conte
     // so their working set is charged net-live and hard-capped. Write-carrying
     // shapes keep the GAP-ENT-0040 write budget installed further down
     // (mutation atomicity semantics differ); the two scopes never coexist.
-    const t5_write_carrying = q.match.chains.len > 0 and
-        (q.set_clauses.len > 0 or q.remove_clauses.len > 0 or q.delete_items.len > 0 or
-            q.create_pattern != null or q.merge_statement != null);
+    //
+    // CANARY: REQ=REQ-GEODE-875-KNN-SCAN-CANCELLABLE; FEATURE="VectorKnn"; ASPECT=ReadBudgetPoll; STATUS=TESTED; TEST=tests/test_vector_knn_silent_failures.zig; OWNER=execution; UPDATED=2026-08-29
+    // geode#875 (i): the scope used to require `q.match.chains.len > 0`, so a
+    // MATCH-FREE read whose work happens inside an expression — the production
+    // shape `RETURN knn('embedding', $q, 10, 'l2')`, an O(resident-nodes)
+    // brute-force scan — installed NO scope and was therefore uncancellable no
+    // matter how many poll sites the evaluator grew. The gate is now
+    // "non-write", not "has a MATCH": every write-carrying shape (with or
+    // without a MATCH) still keeps the GAP-ENT-0040 write budget below, so the
+    // two scopes still never coexist.
+    const write_carrying = q.set_clauses.len > 0 or q.remove_clauses.len > 0 or
+        q.delete_items.len > 0 or q.create_pattern != null or q.merge_statement != null;
     var read_scope = read_budget.Scope.init();
-    const read_scope_active = q.match.chains.len > 0 and !t5_write_carrying and
+    const read_scope_active = !write_carrying and
         (read_scope.budget_bytes != read_budget.unlimited or
             read_scope.cancel != null or read_scope.watchdog_cancel != null);
     if (read_scope_active) read_budget.beginScope(&read_scope);

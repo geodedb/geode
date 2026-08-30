@@ -585,6 +585,15 @@ fn sweepGraph(h: *Harness, name: []const u8) !void {
     _ = try h.exec(try std.fmt.bufPrint(&buf, "CREATE GRAPH {s}", .{name}));
     _ = try h.exec(try std.fmt.bufPrint(&buf, "USE GRAPH {s}", .{name}));
     _ = try h.exec("CREATE (a:PSweepFn {n: 'a'})-[:LINKFN]->(b:PSweepFn {n: 'b'})");
+    // geode#877 (c): the `vector_knn` / `knn` dispatch probes below name the
+    // property 'emb'. Under the new contract a knn() over a property NO row
+    // supplies is a diagnostic (error.UnknownProperty) rather than a silent
+    // empty list — see tests/test_vector_knn_silent_failures.zig. This seeds a
+    // row that actually carries 'emb', so those two probes keep testing what
+    // this sweep is for (advertise -> DISPATCH parity) instead of accidentally
+    // asserting the old silent-empty behaviour. Distinct label so the
+    // labels()/properties()/id() probes above are unaffected.
+    _ = try h.exec("CREATE (:PSweepVec {emb: vectorf32([1.0])})");
 }
 
 test "FN-DISPATCH-PARITY: every function name advertised by SHOW FUNCTIONS and language_metadata dispatches" {

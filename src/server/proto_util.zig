@@ -197,6 +197,14 @@ pub fn mapError(err: anyerror) ErrorInfo {
         // GAP-0905/GAP-0907: checked numeric narrowing (CAST, MakeInterval, ...)
         // surfaces as SQLSTATE 22003 numeric_value_out_of_range.
         error.IntegerOverflow => .{ .code = "22003", .message = "Integer value out of range" },
+        // geode#873-B: the checked float -> DECIMAL coefficient conversion in the
+        // vector scalar functions (vector_dot / vector_l2 / distance / euclidean /
+        // manhattan / similarity). It used to be a bare `@intFromFloat` that
+        // PANICKED the server on an out-of-range magnitude; it is now a refusal,
+        // and a refusal in the same numeric_value_out_of_range class as the
+        // integer narrowing above.
+        // CANARY: REQ=REQ-GEODE-873-VECTOR-DECIMAL-OVERFLOW; FEATURE="VectorSimilarityFunctions"; ASPECT=CheckedFloatToDecimal; STATUS=TESTED; TEST=tests/test_vector_knn_silent_failures.zig; OWNER=eval; UPDATED=2026-08-29
+        error.DecimalOverflow => .{ .code = "22003", .message = "Numeric value out of range for DECIMAL" },
         // GAP-0921: CAST semantic validation.
         error.InvalidCast => .{ .code = "22018", .message = "Invalid character value for cast" },
         error.UnsupportedCastTarget => .{ .code = "0A000", .message = "Unsupported CAST target type" },
@@ -213,6 +221,11 @@ pub fn mapError(err: anyerror) ErrorInfo {
         // silently evaluate to NULL; surface it with the same
         // undefined_function SQLSTATE the procedure path uses.
         error.UnknownFunction => .{ .code = "42883", .message = "Unknown function" },
+        // geode#877 (c): knn()/vector_knn() named a property no row supplies.
+        // Previously an empty list with SQLSTATE 00000 — indistinguishable from
+        // "no neighbours". Same diagnostic posture as UnknownFunction above.
+        // CANARY: REQ=REQ-GEODE-877-KNN-UNKNOWN-PROPERTY; FEATURE="VectorKnn"; ASPECT=UnknownPropertyDiagnostic; STATUS=TESTED; TEST=tests/test_vector_knn_silent_failures.zig; OWNER=eval; UPDATED=2026-08-29
+        error.UnknownProperty => .{ .code = "42703", .message = "Unknown property: no row in scope supplies this property" },
         // docs/@BUGS_731.md bug 8d: a wrong-arity / wrong-value function call
         // (e.g. the docs' `knn(d.embedding, $q, 10)`, which is missing the
         // metric and passes a vector where a property NAME belongs) reached the

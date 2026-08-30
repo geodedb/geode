@@ -1,0 +1,5 @@
+remote=origin
+host=gitlab.com
+url=git@gitlab.com:devnw/codepros/geode/geode.git
+ref=main
+pushed_at=2026-08-29T19:32:32Z

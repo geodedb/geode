@@ -9702,6 +9702,19 @@ pub fn build(b: *std.Build) void {
     const for_write_body_step = b.step("test-for-write-body", "Run geode#876 FOR … IN write-body composition regressions");
     for_write_body_step.dependOn(&run_for_write_body_tests.step);
 
+    // geode#873 / #877 / ENG-3905 residual: vector_dot truncates to an integer,
+    // the vector scalar functions panic on out-of-range magnitudes, and
+    // vector_knn silently returns [] for an unrelated-label index, a LIST-typed
+    // embedding property, or a misspelled property name (plus a cross-graph
+    // leak). See tests/test_vector_knn_silent_failures.zig.
+    const vector_knn_failures_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_vector_knn_silent_failures.zig"), .target = target, .optimize = optimize });
+    vector_knn_failures_test_mod.addImport("geode", root_mod);
+    const vector_knn_failures_tests = b.addTest(.{ .root_module = vector_knn_failures_test_mod });
+    const run_vector_knn_failures_tests = b.addRunArtifact(vector_knn_failures_tests);
+    shardDep(test_step, &run_vector_knn_failures_tests.step, 0, test_shard_loads, test_shard_index);
+    const vector_knn_failures_step = b.step("test-vector-knn-failures", "Run geode#873/#877 vector_dot truncation, overflow-panic, and knn silent-failure regressions");
+    vector_knn_failures_step.dependOn(&run_vector_knn_failures_tests.step);
+
     // ENG-3906: CREATE INDEX WITH-parameter validation — the `metric: 'x'` map
     // spelling bypasses the metric validator that `metric = 'x'` reaches, and
     // unknown/unsupported WITH keys are silently discarded on vector indexes.

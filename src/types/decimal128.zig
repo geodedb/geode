@@ -150,6 +150,43 @@ pub const Decimal128 = struct {
     }
 };
 
+// CANARY: REQ=REQ-GEODE-873-VECTOR-DECIMAL-OVERFLOW; FEATURE="VectorSimilarityFunctions"; ASPECT=CheckedFloatToDecimal; STATUS=TESTED; TEST=tests/test_vector_knn_silent_failures.zig; OWNER=types; UPDATED=2026-08-29
+//
+// geode#873-B: the vector scalar functions converted an f64 score to a Decimal
+// coefficient with a BARE `@intFromFloat(score * 1e6)`. `@intFromFloat` of a
+// NaN / infinite / out-of-i128-range float is illegal behaviour, so a single
+// large-magnitude query (`vector_dot(vectorf32([1e20,1e20]), …)`) PANICKED the
+// whole server process — an unauthenticated denial of service — or, where the
+// accumulation NaN'd first, produced i128 MIN dressed up as a similarity score.
+//
+// Every float -> scaled-coefficient conversion on that family now goes through
+// here: non-finite input and anything that does not fit the 38-digit DECIMAL
+// precision ceiling are refused with `error.DecimalOverflow` (GQLSTATE 22003).
+// Truncation (not rounding) is preserved so in-range results are bit-identical
+// to the pre-fix values.
+pub const ScaleError = error{DecimalOverflow};
+
+pub fn checkedScaledCoeff(value: f64, scale_factor: f64) ScaleError!i128 {
+    if (!std.math.isFinite(value)) return error.DecimalOverflow;
+    const scaled = value * scale_factor;
+    if (!std.math.isFinite(scaled)) return error.DecimalOverflow;
+    const ceiling: f64 = @floatFromInt(Decimal128.MAX_COEFF);
+    if (@abs(scaled) >= ceiling) return error.DecimalOverflow;
+    return @intFromFloat(scaled);
+}
+
+test "checkedScaledCoeff truncates in range and refuses non-finite / out-of-range" {
+    try std.testing.expectEqual(@as(i128, 960000), try checkedScaledCoeff(0.96, 1_000_000.0));
+    try std.testing.expectEqual(@as(i128, -500000), try checkedScaledCoeff(-0.5, 1_000_000.0));
+    try std.testing.expectEqual(@as(i128, 32_000_000), try checkedScaledCoeff(32.0, 1_000_000.0));
+
+    try std.testing.expectError(error.DecimalOverflow, checkedScaledCoeff(std.math.inf(f64), 1_000_000.0));
+    try std.testing.expectError(error.DecimalOverflow, checkedScaledCoeff(-std.math.inf(f64), 1_000_000.0));
+    try std.testing.expectError(error.DecimalOverflow, checkedScaledCoeff(std.math.nan(f64), 1_000_000.0));
+    // 2e35 scaled by 1e6 is 2e41 — far past the i128 / 38-digit ceiling.
+    try std.testing.expectError(error.DecimalOverflow, checkedScaledCoeff(2e35, 1_000_000.0));
+}
+
 test "decimal128 basics" {
     const d1 = try Decimal128.fromStr("123.45");
     const d2 = try Decimal128.fromStr("0.550");

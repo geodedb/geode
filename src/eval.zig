@@ -9,6 +9,10 @@ const advanced_types_index = @import("index/advanced_types_index.zig");
 const index_manager = @import("index/index_manager.zig");
 const property_codec = @import("property_value_codec.zig");
 const vector_types = @import("types/vector.zig");
+// CANARY: REQ=REQ-GEODE-875-KNN-SCAN-CANCELLABLE; FEATURE="VectorKnn"; ASPECT=ReadBudgetPoll; STATUS=TESTED; TEST=tests/test_vector_knn_silent_failures.zig; OWNER=eval; UPDATED=2026-08-29
+// geode#875 (i): src/eval.zig had ZERO read_budget poll sites, so a brute-force
+// knn scan could not be cancelled mid-scan. Leaf module, no geode locks.
+const read_budget = @import("read_budget.zig");
 
 // CANARY: REQ=REQ-M5.3-EVAL-REFACTOR-001; FEATURE="Circular Dependency Resolution"; ASPECT=AdapterImport; STATUS=EXEMPT; OWNER=eval; UPDATED=2025-11-13
 // Phase 5 M5.3: Import evaluator_adapter instead of execution.zig to break circular dependency
@@ -46,6 +50,17 @@ fn isPropagatableEvalError(err: EvalError) bool {
         // ENG-3922(b): an over-cap vector literal is a genuine invalid argument
         // — `size(vectorf32([ …65536… ]))` must report the limit, not NULL.
         EvalError.VectorTooLarge,
+        // geode#877 (c): a knn()/vector_knn() call naming a property no row
+        // supplies is a genuine invalid argument. Without this arm a NESTED
+        // call would collapse the diagnostic back to the silent NULL/[] the
+        // ticket is about.
+        EvalError.UnknownProperty,
+        // GAP-0840: a strict-tenancy refusal must never degrade to NULL.
+        EvalError.TenantScopeRequired,
+        // GAP-ENT-0044/0045: a read-budget / cancel abort must reach the client,
+        // never be swallowed into a NULL that looks like a successful answer.
+        EvalError.ReadQueryBudgetExceeded,
+        EvalError.ReadQueryCancelled,
         EvalError.OutOfMemory,
         => true,
         else => false,
@@ -110,6 +125,19 @@ const float_to_decimal_scale: i128 = 1_000_000;
 const float_to_decimal_scale_f64: f64 = 1_000_000.0;
 // Microseconds per second for interval-to-microseconds conversion.
 const micros_per_second: i128 = 1_000_000;
+
+// CANARY: REQ=REQ-GEODE-873-VECTOR-DECIMAL-OVERFLOW; FEATURE="VectorSimilarityFunctions"; ASPECT=CheckedFloatToDecimal; STATUS=TESTED; TEST=tests/test_vector_knn_silent_failures.zig; OWNER=eval; UPDATED=2026-08-29
+/// geode#873-B: the CHECKED float -> scale-6 DECIMAL conversion used by the
+/// vector scalar-function family. The bare `@intFromFloat(x * 1e6)` it replaces
+/// is illegal behaviour for a NaN / infinite / out-of-i128-range operand, and
+/// `RETURN distance(vectorf32([1e35]), vectorf32([-1e35]), 'l2')` therefore
+/// PANICKED the whole server process — an unauthenticated denial of service.
+/// Out-of-range magnitudes are now refused with `error.DecimalOverflow`
+/// (GQLSTATE 22003); in-range results are bit-identical to before.
+pub fn decimalFromF64(value: f64) EvalError!Value {
+    const coeff = try @import("types/decimal128.zig").checkedScaledCoeff(value, float_to_decimal_scale_f64);
+    return .{ .Decimal = .{ .coeff = coeff, .scale = 6 } };
+}
 
 // CANARY: REQ=REQ-M5.2-EVAL-REFACTOR-005; FEATURE="Circular Dependency Resolution"; ASPECT=FunctionAlias; STATUS=EXEMPT; OWNER=eval; UPDATED=2025-11-13
 // Phase 5 M5.2: Use toDec from value_types module
@@ -2206,6 +2234,23 @@ fn compareVectorCandidates(_: void, lhs: VectorCandidate, rhs: VectorCandidate) 
     return lhs.score < rhs.score;
 }
 
+// CANARY: REQ=REQ-GEODE-877-KNN-LIST-PROPERTY; FEATURE="VectorKnn"; ASPECT=NumericListCoercion; STATUS=TESTED; TEST=tests/test_vector_knn_silent_failures.zig; OWNER=eval; UPDATED=2026-08-29
+/// geode#877 (a): a numeric element of a stored LIST property as f64, or null
+/// for anything non-numeric. The stored-value twin of `numericValueAsF64`; kept
+/// in lock-step with `index_manager.numericExtValueAsF64` so the scan path and
+/// the index path agree on exactly which rows are vector candidates.
+fn numericExtValueAsF64(item: @import("eval_extended.zig").ExtValue) ?f64 {
+    return switch (item) {
+        .Int => |v| @floatFromInt(v),
+        .SmallInt => |v| @floatFromInt(v),
+        .BigInt => |v| @floatFromInt(v),
+        .Real => |v| @floatCast(v),
+        .Double => |v| v,
+        .Decimal => |d| @as(f64, @floatFromInt(d.coeff)) / std.math.pow(f64, 10.0, @floatFromInt(d.scale)),
+        else => null,
+    };
+}
+
 fn propertyVectorCandidate(allocator: std.mem.Allocator, value: graph_store.PropertyValue) EvalError!?OwnedVector {
     return switch (value) {
         .ExtValue => |ext| switch (ext) {
@@ -2215,6 +2260,29 @@ fn propertyVectorCandidate(allocator: std.mem.Allocator, value: graph_store.Prop
                 for (vec.data, 0..) |item, i| data[i] = @floatFromInt(item);
                 break :blk .{
                     .vector = .{ .dim = vec.dim, .data = data },
+                    .owned = data,
+                };
+            },
+            // geode#877 (a): a node written `{embedding: [1.0, 0.0]}` — the
+            // natural shape for a JSON / client-side embedding — stores an
+            // ExtValue.List and was NEVER a knn candidate, with no error.
+            // Coerce it the same way `valueToVectorF32` coerces a GQL list
+            // literal. An empty / over-wide / non-numeric list is SKIPPED
+            // (null), never an error: it must not poison a query the way a
+            // String-typed property never did.
+            .List => |items| blk: {
+                if (items.len == 0 or items.len > std.math.maxInt(u16)) break :blk null;
+                const data = try allocator.alloc(f32, items.len);
+                errdefer allocator.free(data);
+                for (items, 0..) |item, i| {
+                    const numeric = numericExtValueAsF64(item) orelse {
+                        allocator.free(data);
+                        break :blk null;
+                    };
+                    data[i] = @floatCast(numeric);
+                }
+                break :blk .{
+                    .vector = .{ .dim = @intCast(items.len), .data = data },
                     .owned = data,
                 };
             },
@@ -2256,6 +2324,8 @@ fn vectorCandidatesToList(allocator: std.mem.Allocator, candidates: []const Vect
 /// RESIDENT entries of the bounded caches (the deliberate, separately-tracked
 /// incompleteness noted at the edge loop), scoring them identically.
 /// CANARY: REQ=REQ-CONCURRENCY-KNN-SCAN-RACE; FEATURE="KnnScanRaceSafety"; ASPECT=ScanVectorKnn; STATUS=TESTED; TEST=tests/test_knn_scan_race.zig; OWNER=eval; UPDATED=2026-08-28
+// CANARY: REQ=REQ-GEODE-877-KNN-GRAPH-ISOLATION; FEATURE="VectorKnn"; ASPECT=ScanRespectsSessionGraph; STATUS=TESTED; TEST=tests/test_vector_knn_silent_failures.zig; OWNER=eval; UPDATED=2026-08-29
+// CANARY: REQ=REQ-GEODE-875-KNN-SCAN-CANCELLABLE; FEATURE="VectorKnn"; ASPECT=ReadBudgetPoll; STATUS=TESTED; TEST=tests/test_vector_knn_silent_failures.zig; OWNER=eval; UPDATED=2026-08-29
 fn scanVectorKnnBatched(
     comptime Cache: type,
     allocator: std.mem.Allocator,
@@ -2264,9 +2334,18 @@ fn scanVectorKnnBatched(
     property_name: []const u8,
     query_vec: vector_types.VectorF32,
     metric: VectorMetric,
+    scope: KnnScanScope,
     candidates: *std.ArrayList(VectorCandidate),
+    property_seen: *bool,
 ) EvalError!void {
     for (ids) |id| {
+        // geode#875 (i): the ONLY cancellation point in a brute-force knn scan.
+        // Without it an abandoned `RETURN knn(...)` pinned a core for the whole
+        // O(resident) walk with the client already gone. Polled at the entry
+        // boundary, outside the shard guard, so an abort never leaves a shard
+        // lock held.
+        try read_budget.check();
+
         // EVERYTHING that touches the entry's interior stays inside the guard:
         // for a VECTORF32 property `propertyVectorCandidate` BORROWS the stored
         // `data` slice rather than copying it, so the metric must be computed
@@ -2276,7 +2355,19 @@ fn scanVectorKnnBatched(
         cache.lockShardShared(id);
         defer cache.unlockShardShared(id);
         const entry = cache.getPtrUnlocked(id) orelse continue;
+        // geode#877 F6 (cross-graph data leak): the scan walked the GLOBAL
+        // store, so a session on one graph received another graph's node ids —
+        // and, with no tenant predicate, another tenant's. Both tags live on
+        // the entry (graph_store.Node/Edge), so the filter is read inside the
+        // same shard guard as the property lookup and the scoring: the
+        // ENG-3954/#874 discipline is preserved exactly.
+        if (!scope.admits(entry.graph_name, entry.tenant_id)) continue;
         const prop = entry.properties.get(property_name) orelse continue;
+        // geode#877 (c): the property EXISTS on an in-scope row. Recorded even
+        // when it does not coerce to a vector, so "property known, zero
+        // scoreable neighbours" stays a clean empty list while a MISSPELLED
+        // property becomes a diagnostic.
+        property_seen.* = true;
         const maybe_vec = try propertyVectorCandidate(allocator, prop);
         if (maybe_vec) |candidate_vec| {
             defer if (candidate_vec.owned) |data| allocator.free(data);
@@ -2286,16 +2377,61 @@ fn scanVectorKnnBatched(
     }
 }
 
+// CANARY: REQ=REQ-GEODE-877-KNN-GRAPH-ISOLATION; FEATURE="VectorKnn"; ASPECT=ScanRespectsSessionGraph; STATUS=TESTED; TEST=tests/test_vector_knn_silent_failures.zig; OWNER=eval; UPDATED=2026-08-29
+/// The querying session's graph + tenant scope, applied per candidate by the
+/// brute-force knn scan. Mirrors the `filter_graph` / `passesTenantFilter` pair
+/// the MATCH loop applies (src/execution/match_operations.zig, GAP-0509).
+const KnnScanScope = struct {
+    graph: []const u8,
+    tenant: ?[]const u8,
+
+    fn admits(self: KnnScanScope, entry_graph: []const u8, entry_tenant: []const u8) bool {
+        if (!std.mem.eql(u8, entry_graph, self.graph)) return false;
+        const tid = self.tenant orelse return true;
+        return std.mem.eql(u8, entry_tenant, tid);
+    }
+};
+
+/// Resolve the scope the way the MATCH read paths do: the session's current
+/// graph (defaulting to "default"), and the strict-tenancy-aware tenant filter.
+/// A strict-tenancy refusal propagates instead of silently widening the scan to
+/// every tenant (GAP-0840 fail-closed).
+fn currentKnnScanScope() EvalError!KnnScanScope {
+    const execution = @import("execution.zig");
+    const tenancy = @import("execution/tenancy.zig");
+
+    const ctx = execution.getActiveContext();
+    const graph = blk: {
+        const c = ctx orelse break :blk graph_store.DEFAULT_GRAPH_NAME;
+        const session = c.session_state orelse break :blk graph_store.DEFAULT_GRAPH_NAME;
+        break :blk session.graph orelse graph_store.DEFAULT_GRAPH_NAME;
+    };
+    const maybe_tid = if (ctx) |c| c.tenant_id else null;
+    const tenant = tenancy.resolveTenantFilter(maybe_tid) catch |err| switch (err) {
+        error.TenantScopeRequired => return error.TenantScopeRequired,
+    };
+    return .{ .graph = graph, .tenant = tenant };
+}
+
+const KnnScanResult = struct {
+    value: Value,
+    /// True when at least one IN-SCOPE row supplied the property (whether or
+    /// not it coerced to a vector). See geode#877 (c).
+    property_seen: bool,
+};
+
 fn scanVectorKnn(
     allocator: std.mem.Allocator,
     property_name: []const u8,
     query_vec: vector_types.VectorF32,
     k: usize,
     metric: VectorMetric,
-) EvalError!Value {
+) EvalError!KnnScanResult {
+    const scope = try currentKnnScanScope();
     const store = graph_store.getGlobalStore(allocator);
     var candidates = std.ArrayList(VectorCandidate).empty;
     defer candidates.deinit(allocator);
+    var property_seen = false;
 
     // ENG-3954 / #874: snapshot the resident ids under each shard's map_lock
     // instead of walking the live, unlocked cache iterator.
@@ -2309,7 +2445,9 @@ fn scanVectorKnn(
         property_name,
         query_vec,
         metric,
+        scope,
         &candidates,
+        &property_seen,
     );
 
     // PHASE 1 note (edge-engine-direct): this brute-force vector scan over edge
@@ -2329,11 +2467,16 @@ fn scanVectorKnn(
         property_name,
         query_vec,
         metric,
+        scope,
         &candidates,
+        &property_seen,
     );
 
     std.sort.pdq(VectorCandidate, candidates.items, {}, compareVectorCandidates);
-    return vectorCandidatesToList(allocator, candidates.items, k);
+    return .{
+        .value = try vectorCandidatesToList(allocator, candidates.items, k),
+        .property_seen = property_seen,
+    };
 }
 
 // CANARY: REQ=REQ-VECTOR-SCALAR-FN-001; FEATURE="VectorSimilarityFunctions"; ASPECT=DocumentedNames; STATUS=TESTED; TEST=tests/test_bug731_aggregates_vectors.zig; OWNER=eval; UPDATED=2026-07-31
@@ -2403,7 +2546,7 @@ fn evalVectorScalarFunction(
         },
     };
 
-    return .{ .Decimal = .{ .coeff = @intFromFloat(result * float_to_decimal_scale_f64), .scale = 6 } };
+    return decimalFromF64(result);
 }
 
 // CANARY: REQ=REQ-FN-DISPATCH-PARITY; FEATURE="VectorFunctions"; ASPECT=CosineOnVectors; STATUS=TESTED; TEST=tests/test_fn_dispatch_parity.zig; OWNER=eval; UPDATED=2026-08-25
@@ -2431,7 +2574,7 @@ fn vectorCosineSimilarity(allocator: std.mem.Allocator, lhs_value: Value, rhs_va
     // metricDistance(.cosine) is the cosine DISTANCE (1 - cos); the similarity
     // surface reports the cosine itself.
     const similarity = 1.0 - try metricDistance(.cosine, lhs.vector, rhs.vector);
-    return .{ .Decimal = .{ .coeff = @intFromFloat(similarity * float_to_decimal_scale_f64), .scale = 6 } };
+    return decimalFromF64(similarity);
 }
 
 fn evalVectorKnn(allocator: std.mem.Allocator, args: []*ast.Expr, env: Env) EvalError!Value {
@@ -2471,34 +2614,91 @@ fn evalVectorKnn(allocator: std.mem.Allocator, args: []*ast.Expr, env: Env) Eval
     @import("execution/statement_dispatcher.zig")
         .ensureAdvancedVectorIndexForProperty(allocator, property_name) catch {};
 
+    // CANARY: REQ=REQ-GEODE-877-KNN-INDEX-SHADOW; FEATURE="VectorKnn"; ASPECT=UnrelatedIndexMustNotShadowScan; STATUS=TESTED; TEST=tests/test_vector_knn_silent_failures.zig; OWNER=eval; UPDATED=2026-08-29
+    // geode#877 (b): this used to COMMIT to any index registered for the
+    // property name and fall back only on error.IndexNotFound — which an HNSW
+    // index with no matching entries never raises. Two independent silent-empty
+    // paths came out of that:
+    //   * `findAdvancedVectorIndexForProperty` ignores the LABEL, so a vector
+    //     index created on a completely unrelated label that merely reuses the
+    //     property name answered a working knn with that label's rows (or with
+    //     nothing). `labelSolelyCarriesProperty` is the authority predicate:
+    //     the index may serve a property-scoped, label-UNSCOPED knn only when
+    //     its label provably covers every row the scan would visit, in this
+    //     graph and this tenant scope. Anything else takes the scan — a
+    //     correct, if O(n), answer instead of a wrong one.
+    //   * an index that ends up EMPTY (dropped rows, a stale build) returns an
+    //     empty slice, so the scan is re-run rather than trusted blindly.
+    // `index_consulted` also feeds the geode#877 (c) diagnostic below: a
+    // property an index is registered for is a KNOWN property even when the
+    // scan happens to score nothing.
+    var index_consulted = false;
     if (index_manager.getGlobalIndexManager()) |manager| {
         if (manager.findAdvancedVectorIndexForProperty(property_name)) |index_name| {
-            const results = manager.queryAdvancedVectorIndexWithMetric(index_name, query_vec.vector, @intCast(k), metric) catch |err| switch (err) {
-                error.OutOfMemory => return error.OutOfMemory,
-                error.IndexNotFound => return scanVectorKnn(allocator, property_name, query_vec.vector, k, metric),
-                error.DimensionMismatch, error.InvalidDimension, error.InvalidConfig => return error.InvalidArgs,
-                // Spec geode-vectorization-and-reranking: the query metric does
-                // not match the metric the HNSW index was built with. Let this
-                // propagate distinctly instead of folding it into InvalidArgs —
-                // it gets its own GQLSTATE (42704) in proto_util.mapError.
-                error.VectorMetricMismatch => return error.VectorMetricMismatch,
-            };
-            defer manager.allocator.free(results);
+            index_consulted = true;
+            if (advancedVectorIndexIsAuthoritative(allocator, manager, index_name, property_name)) {
+                const no_results: []advanced_types_index.VectorSearchResult = &.{};
+                const results = manager.queryAdvancedVectorIndexWithMetric(index_name, query_vec.vector, @intCast(k), metric) catch |err| switch (err) {
+                    error.OutOfMemory => return error.OutOfMemory,
+                    // An index the manager no longer holds is treated exactly
+                    // like an EMPTY one: fall through to the scan below.
+                    error.IndexNotFound => no_results,
+                    error.DimensionMismatch, error.InvalidDimension, error.InvalidConfig => return error.InvalidArgs,
+                    // Spec geode-vectorization-and-reranking: the query metric does
+                    // not match the metric the HNSW index was built with. Let this
+                    // propagate distinctly instead of folding it into InvalidArgs —
+                    // it gets its own GQLSTATE (42704) in proto_util.mapError.
+                    error.VectorMetricMismatch => return error.VectorMetricMismatch,
+                };
+                defer manager.allocator.free(results);
 
-            var candidates = std.ArrayList(VectorCandidate).empty;
-            defer candidates.deinit(allocator);
-            for (results) |result| {
-                try candidates.append(allocator, .{
-                    .id = result.node_id,
-                    .score = result.distance,
-                });
+                if (results.len != 0) {
+                    var candidates = std.ArrayList(VectorCandidate).empty;
+                    defer candidates.deinit(allocator);
+                    for (results) |result| {
+                        try candidates.append(allocator, .{
+                            .id = result.node_id,
+                            .score = result.distance,
+                        });
+                    }
+                    std.sort.pdq(VectorCandidate, candidates.items, {}, compareVectorCandidates);
+                    return vectorCandidatesToList(allocator, candidates.items, k);
+                }
             }
-            std.sort.pdq(VectorCandidate, candidates.items, {}, compareVectorCandidates);
-            return vectorCandidatesToList(allocator, candidates.items, k);
         }
     }
 
-    return scanVectorKnn(allocator, property_name, query_vec.vector, k, metric);
+    const scanned = try scanVectorKnn(allocator, property_name, query_vec.vector, k, metric);
+
+    // CANARY: REQ=REQ-GEODE-877-KNN-UNKNOWN-PROPERTY; FEATURE="VectorKnn"; ASPECT=UnknownPropertyDiagnostic; STATUS=TESTED; TEST=tests/test_vector_knn_silent_failures.zig; OWNER=eval; UPDATED=2026-08-29
+    // geode#877 (c): a MISSPELLED property name used to be reported as "no
+    // neighbours" (empty list, SQLSTATE 00000). It is a diagnostic — but ONLY
+    // when nothing in scope knows the property: no advanced index is registered
+    // for it AND no in-scope row supplies it. "Property known, zero scoreable
+    // neighbours" stays a clean empty list.
+    if (!index_consulted and !scanned.property_seen) return error.UnknownProperty;
+    return scanned.value;
+}
+
+// CANARY: REQ=REQ-GEODE-877-KNN-INDEX-SHADOW; FEATURE="VectorKnn"; ASPECT=UnrelatedIndexMustNotShadowScan; STATUS=TESTED; TEST=tests/test_vector_knn_silent_failures.zig; OWNER=eval; UPDATED=2026-08-29
+/// May the (label, property) index `index_name` answer a property-scoped,
+/// label-UNSCOPED `knn('<property>', …)` for the current session on its own?
+///
+/// Only when its label is the sole carrier of the property inside the session's
+/// graph and tenant scope (see `GraphStore.labelSolelyCarriesProperty`). Every
+/// other shape — a second carrying label, a carrier in another graph or tenant,
+/// an index whose metadata cannot be resolved — falls back to the brute-force
+/// scan. Fail-CLOSED by construction: the fallback is the correct answer.
+fn advancedVectorIndexIsAuthoritative(
+    allocator: std.mem.Allocator,
+    manager: *index_manager.IndexManager,
+    index_name: []const u8,
+    property_name: []const u8,
+) bool {
+    const meta = manager.advanced_property_indexes.get(index_name) orelse return false;
+    const scope = currentKnnScanScope() catch return false;
+    const store = graph_store.getGlobalStore(allocator);
+    return store.labelSolelyCarriesProperty(scope.graph, scope.tenant, meta.label, property_name);
 }
 
 // CANARY: REQ=REQ-M6.1-EVAL-REFACTOR-003; FEATURE="Phase 6 Modularization"; ASPECT=ValueConverters; STATUS=EXEMPT; OWNER=eval; UPDATED=2025-11-13
