@@ -57,17 +57,16 @@
 // server.
 //
 // ---------------------------------------------------------------------
-// 2d — swallowed allocation failures (NO AUTOMATED CASE HERE).
+// 2d — swallowed allocation failures.
 // ---------------------------------------------------------------------
 // src/cli/main.zig:1357, 1359, 1399, 1400, 2478, 2481, 2483, 2489, 2490 all
-// discard an allocation error with `catch {}`, so an OOM mid-assembly
-// silently TRUNCATES a statement or a chunk and then executes the corrupted
+// discarded an allocation error with `catch {}`, so an OOM mid-assembly
+// silently TRUNCATED a statement or a chunk and then executed the corrupted
 // remainder.  That path cannot be driven from a subprocess: it needs a
-// failing allocator, which needs the statement-assembly loop lifted out of
-// `cmdQuery` (it is inline today, and every failure branch calls
-// std.process.exit).  The fixer-owned unit test is specified verbatim in the
-// commented skeleton at the bottom of this file; it is a FIX DELIVERABLE, not
-// something this lane can assert today.
+// failing allocator, which needed the statement-assembly loop lifted out of
+// `cmdQuery`.  The seam now exists (src/cli/query_file.zig), and the
+// failing-allocator cases specified for it live at the bottom of this file —
+// they need no server.
 //
 // Subprocess e2e shape, skip semantics, and the Proc helper mirror
 // tests/test_cli_batch_mode.zig / tests/test_datadir_lock_subprocess.zig:
@@ -731,55 +730,68 @@ test "geode query --help documents the --file size cap" {
 }
 
 // =====================================================================
-// 2d — FIXER DELIVERABLE (no automated case here; see the header note).
+// 2d — swallowed allocation failures, now driven for real.
 // =====================================================================
 // The nine `catch {}` sites in the statement-assembly and chunk-building
 // loops (src/cli/main.zig:1357, 1359, 1399, 1400, 2478, 2481, 2483, 2489,
-// 2490) turn an allocation failure into a SILENTLY TRUNCATED statement that
-// is then executed.  Driving that needs a failing allocator, which needs the
-// loop lifted out of `cmdQuery`.  Uncomment and wire this once the seam
-// exists — the assertions are already the contract:
-//
-//     const cli = @import("geode").cli;  // or the extracted module
-//
-//     test "assembleStatements is fatal on allocation failure (2d)" {
-//         const src =
-//             \\CREATE (n:A {p: 'one'});
-//             \\CREATE (n:B {p: 'two'});
-//             \\
-//         ;
-//         // Fail every allocation after the Nth so the failure lands MID
-//         // statement, which is exactly the truncation shape today's
-//         // `catch {}` hides.
-//         var failing = std.testing.FailingAllocator.init(testing.allocator, .{ .fail_index = 3 });
-//         try testing.expectError(
-//             error.OutOfMemory,
-//             cli.assembleStatements(failing.allocator(), src),
-//         );
-//     }
-//
-//     test "assembleStatements never returns a truncated statement (2d)" {
-//         // Sweep the fail index across the whole allocation sequence: for
-//         // EVERY index the call must either return the complete statement
-//         // list or return error.OutOfMemory — never a short/partial one.
-//         const src = "CREATE (n:A {p: 'one'});\nCREATE (n:B {p: 'two'});\n";
-//         var idx: usize = 0;
-//         while (idx < 64) : (idx += 1) {
-//             var failing = std.testing.FailingAllocator.init(testing.allocator, .{ .fail_index = idx });
-//             const res = cli.assembleStatements(failing.allocator(), src) catch |err| {
-//                 try testing.expectEqual(error.OutOfMemory, err);
-//                 continue;
-//             };
-//             defer cli.freeStatements(failing.allocator(), res);
-//             try testing.expectEqual(@as(usize, 2), res.len);
-//             try testing.expect(std.mem.endsWith(u8, res[0], ";"));
-//             try testing.expect(std.mem.endsWith(u8, res[1], ";"));
-//         }
-//     }
-//
-// Suggested seam:
-//     pub fn assembleStatements(gpa: std.mem.Allocator, contents: []const u8)
-//         error{OutOfMemory}![][]const u8
-//     pub fn freeStatements(gpa: std.mem.Allocator, stmts: [][]const u8) void
-// with `cmdQuery` calling it and exiting on error, and the chunk builder
-// (src/cli/main.zig:2478-2490) propagating `try` instead of `catch {}`.
+// 2490) turned an allocation failure into a SILENTLY TRUNCATED statement that
+// was then executed.  Driving that needs a failing allocator, which needed the
+// loop lifted out of `cmdQuery`: it now lives in src/cli/query_file.zig, which
+// imports nothing but std and is wired into this lane as the `cli_query_file`
+// module (build.zig).  The chunk builder propagates `try`, and every remaining
+// `--file` allocation site in `cmdQuery` exits with a message.
+const cli = @import("cli_query_file");
+
+test "assembleStatements is fatal on allocation failure (2d)" {
+    const src =
+        \\CREATE (n:A {p: 'one'});
+        \\CREATE (n:B {p: 'two'});
+        \\
+    ;
+    // Fail every allocation after the Nth so the failure lands MID
+    // statement, which is exactly the truncation shape the old
+    // `catch {}` hid.
+    var failing = std.testing.FailingAllocator.init(testing.allocator, .{ .fail_index = 3 });
+    try testing.expectError(
+        error.OutOfMemory,
+        cli.assembleStatements(failing.allocator(), src),
+    );
+}
+
+test "assembleStatements never returns a truncated statement (2d)" {
+    // Sweep the fail index across the whole allocation sequence: for
+    // EVERY index the call must either return the complete statement
+    // list or return error.OutOfMemory — never a short/partial one.
+    const src = "CREATE (n:A {p: 'one'});\nCREATE (n:B {p: 'two'});\n";
+    var idx: usize = 0;
+    while (idx < 64) : (idx += 1) {
+        var failing = std.testing.FailingAllocator.init(testing.allocator, .{ .fail_index = idx });
+        const res = cli.assembleStatements(failing.allocator(), src) catch |err| {
+            try testing.expectEqual(error.OutOfMemory, err);
+            continue;
+        };
+        defer cli.freeStatements(failing.allocator(), res);
+        try testing.expectEqual(@as(usize, 2), res.len);
+        try testing.expect(std.mem.endsWith(u8, res[0], ";"));
+        try testing.expect(std.mem.endsWith(u8, res[1], ";"));
+    }
+}
+
+test "assembleStatements joins continuation lines and drops comments (2d)" {
+    const src =
+        \\-- a comment
+        \\# another comment
+        \\CREATE (n:A {p: 'one'});
+        \\
+        \\CREATE (n:B
+        \\  {p: 'two'});
+        \\RETURN 3
+        \\
+    ;
+    const stmts = try cli.assembleStatements(testing.allocator, src);
+    defer cli.freeStatements(testing.allocator, stmts);
+    // The unterminated trailing fragment is dropped, as it always was.
+    try testing.expectEqual(@as(usize, 2), stmts.len);
+    try testing.expectEqualStrings("CREATE (n:A {p: 'one'});", stmts[0]);
+    try testing.expectEqualStrings("CREATE (n:B {p: 'two'});", stmts[1]);
+}

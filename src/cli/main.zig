@@ -114,6 +114,9 @@ const stdio_util = @import("../utils/stdio.zig");
 const query_deadline = @import("query_deadline.zig");
 // SEC-CLI-01: production-posture gate for --insecure-tls-skip-verify.
 const insecure_tls_gate = @import("insecure_tls_gate.zig");
+// `--file` size cap + statement assembly, extracted so the assembly loop can
+// be driven by a failing allocator from tests/test_cli_file_chunked.zig.
+const query_file = @import("query_file.zig");
 const QueryDeadlineState = query_deadline.QueryDeadlineState;
 const startDeadlineWatchdogTask = query_deadline.startDeadlineWatchdogTask;
 
@@ -246,6 +249,14 @@ fn printServeUsage() void {
         "\n", .{});
 }
 
+/// 2d: an allocation failure while assembling `--file` input is fatal, never
+/// swallowed.  The `catch {}` sites this replaces produced a truncated
+/// statement (or a truncated chunk) that was then executed against the server.
+fn fatalOutOfMemory(context: []const u8) noreturn {
+    std.debug.print("Error: out of memory {s}\n", .{context});
+    std.process.exit(@intFromEnum(ExitCode.general_error));
+}
+
 fn printQueryUsage() void {
     std.debug.print("geode query - Execute a GQL query\n" ++
         "\n" ++
@@ -256,7 +267,8 @@ fn printQueryUsage() void {
         "  --server <addr:port>   Server address (default: 127.0.0.1:3141)\n" ++
         "  --grpc                 Use gRPC transport instead of QUIC\n" ++
         "  -g, --graph <name>     Graph to query against (auto-prepends USE GRAPH)\n" ++
-        "  -f, --file <path>      Execute GQL statements from a file (supports ~)\n" ++
+        "  -f, --file <path>      Execute GQL statements from a file (supports ~; max 16 MiB —\n" ++
+        "                         split larger files, or stream them with --batch)\n" ++
         "  --batch                Read statements from stdin, ONE PER LINE, and execute\n" ++
         "                         them over a single connection (one HELLO, one stream).\n" ++
         "                         Blank lines are skipped; each statement renders its own\n" ++
@@ -1279,14 +1291,9 @@ fn cmdQuery(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !voi
 
     // CANARY: REQ=REQ-CLI-CHUNKED-EXEC-001; FEATURE="ChunkedExecution"; ASPECT=LargeFileSupport; STATUS=TESTED; TEST=geodetestlab/specs/transaction_chunked_execution.yml; OWNER=cli; UPDATED=2026-06-10
     // For large files, we'll collect individual statements to enable chunked execution
-    var file_statements: ?std.ArrayList([]const u8) = null;
+    var file_statements: ?[][]const u8 = null;
     defer {
-        if (file_statements) |*stmts| {
-            for (stmts.items) |stmt| {
-                allocator.free(stmt);
-            }
-            stmts.deinit(allocator);
-        }
+        if (file_statements) |stmts| query_file.freeStatements(allocator, stmts);
     }
 
     if (source_file) |filepath| {
@@ -1322,8 +1329,19 @@ fn cmdQuery(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !voi
             std.debug.print("Error: Cannot read file: {s}\n", .{@errorName(err)});
             std.process.exit(@intFromEnum(ExitCode.usage_error));
         };
-        if (file_len > 1 << 24) {
-            std.debug.print("Error: File too large\n", .{});
+        // CANARY: REQ=REQ-CLI-FILE-SIZE-CAP-001; FEATURE="QueryFileFlag"; ASPECT=SizeCap; STATUS=TESTED; TEST=tests/test_cli_file_chunked.zig; OWNER=cli; UPDATED=2026-08-31
+        // The refusal has to be actionable: an operator told only "File too
+        // large" knows neither how far over the line they are, nor what the
+        // line is, nor what to do about it.  Name all three.
+        if (file_len > query_file.max_file_bytes) {
+            std.debug.print(
+                "Error: file '{s}' is {d} bytes, which is over the --file limit of " ++
+                    query_file.max_file_size_label ++ " ({d} bytes).\n" ++
+                    "  Remedy: split the file into smaller files (each one is chunked\n" ++
+                    "  automatically), or stream the statements with 'geode query --batch'\n" ++
+                    "  (one statement per line, over a single connection).\n",
+                .{ resolved_path, file_len, query_file.max_file_bytes },
+            );
             std.process.exit(@intFromEnum(ExitCode.usage_error));
         }
         const contents = allocator.alloc(u8, @intCast(file_len)) catch |err| {
@@ -1337,44 +1355,17 @@ fn cmdQuery(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !voi
         defer allocator.free(contents);
 
         // Strip comments and collect individual statements
-        // CANARY: REQ=REQ-CLI-CHUNKED-EXEC-002; FEATURE="ChunkedExecution"; ASPECT=StatementParsing; STATUS=TESTED; TEST=geodetestlab/specs/transaction_chunked_execution.yml; OWNER=cli; UPDATED=2026-06-10
-        var statements = std.ArrayList([]const u8).empty;
-        var current_stmt = std.ArrayList(u8).empty;
-        defer current_stmt.deinit(allocator);
+        // CANARY: REQ=REQ-CLI-CHUNKED-EXEC-002; FEATURE="ChunkedExecution"; ASPECT=StatementParsing; STATUS=TESTED; TEST=tests/test_cli_file_chunked.zig; OWNER=cli; UPDATED=2026-08-31
+        // 2d: the assembly loop lives in query_file.zig and propagates every
+        // allocation failure.  It used to swallow them with `catch {}`, which
+        // turned an OOM into a silently TRUNCATED statement that was then
+        // executed against the server.
+        const statements = query_file.assembleStatements(allocator, contents) catch {
+            fatalOutOfMemory("assembling statements from --file");
+        };
 
-        var line_iter = std.mem.splitSequence(u8, contents, "\n");
-        while (line_iter.next()) |raw_line| {
-            const line = std.mem.trimEnd(u8, raw_line, "\r");
-            const trimmed = std.mem.trim(u8, line, " \t");
-
-            // Skip empty lines and comments
-            if (trimmed.len == 0) continue;
-            if (std.mem.startsWith(u8, trimmed, "--")) continue;
-            if (std.mem.startsWith(u8, trimmed, "#")) continue;
-
-            // Append line to current statement
-            if (current_stmt.items.len > 0) {
-                current_stmt.append(allocator, ' ') catch {};
-            }
-            current_stmt.appendSlice(allocator, trimmed) catch {};
-
-            // Check if statement is complete (ends with semicolon)
-            if (std.mem.endsWith(u8, trimmed, ";")) {
-                // Save complete statement
-                const stmt_copy = allocator.dupe(u8, current_stmt.items) catch {
-                    std.debug.print("Error: Memory allocation failed\n", .{});
-                    std.process.exit(@intFromEnum(ExitCode.usage_error));
-                };
-                statements.append(allocator, stmt_copy) catch {
-                    allocator.free(stmt_copy);
-                    std.debug.print("Error: Memory allocation failed\n", .{});
-                    std.process.exit(@intFromEnum(ExitCode.usage_error));
-                };
-                current_stmt.clearRetainingCapacity();
-            }
-        }
-
-        if (statements.items.len == 0) {
+        if (statements.len == 0) {
+            query_file.freeStatements(allocator, statements);
             std.debug.print("Error: File contains no valid GQL statements\n", .{});
             std.process.exit(@intFromEnum(ExitCode.usage_error));
         }
@@ -1383,7 +1374,7 @@ fn cmdQuery(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !voi
         // CANARY: REQ=REQ-CLI-CHUNKED-EXEC-003; FEATURE="ChunkedExecution"; ASPECT=SizeDetection; STATUS=TESTED; TEST=geodetestlab/specs/transaction_chunked_execution.yml; OWNER=cli; UPDATED=2026-06-10
         const max_single_query_size: usize = 16 * 1024; // 16KB threshold for chunking
         var total_size: usize = 0;
-        for (statements.items) |stmt| {
+        for (statements) |stmt| {
             total_size += stmt.len + 1; // +1 for separator
         }
 
@@ -1392,27 +1383,22 @@ fn cmdQuery(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !voi
         if (total_size <= max_single_query_size) {
             // Small enough to send as single query - concatenate all statements
             var processed = std.ArrayList(u8).initCapacity(allocator, total_size) catch {
-                std.debug.print("Error: Memory allocation failed\n", .{});
-                std.process.exit(@intFromEnum(ExitCode.usage_error));
+                fatalOutOfMemory("building the single-query text from --file");
             };
-            for (statements.items) |stmt| {
-                processed.appendSlice(allocator, stmt) catch {};
-                processed.append(allocator, ' ') catch {};
+            for (statements) |stmt| {
+                processed.appendSlice(allocator, stmt) catch fatalOutOfMemory("building the single-query text from --file");
+                processed.append(allocator, ' ') catch fatalOutOfMemory("building the single-query text from --file");
             }
             // Clean up statements since we don't need them anymore
-            for (statements.items) |stmt| {
-                allocator.free(stmt);
-            }
-            statements.deinit(allocator);
+            query_file.freeStatements(allocator, statements);
 
             file_allocated = processed.toOwnedSlice(allocator) catch {
-                std.debug.print("Error: Memory allocation failed\n", .{});
-                std.process.exit(@intFromEnum(ExitCode.usage_error));
+                fatalOutOfMemory("building the single-query text from --file");
             };
             query_text = file_allocated;
         } else {
             // Large file - use chunked execution
-            std.debug.print("Large file detected ({d} bytes, {d} statements) - using chunked execution\n", .{ total_size, statements.items.len });
+            std.debug.print("Large file detected ({d} bytes, {d} statements) - using chunked execution\n", .{ total_size, statements.len });
             file_statements = statements;
             query_text = null; // Will use chunked execution instead
         }
@@ -1600,7 +1586,7 @@ fn cmdQuery(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !voi
         // per-chunk headroom for TLS setup (~2s) plus execution time.
         const per_chunk_secs: u32 = timeout_secs + 3; // query timeout + TLS/connect overhead
         var stmt_bytes: usize = 0;
-        for (statements.items) |s| stmt_bytes += s.len + 1;
+        for (statements) |s| stmt_bytes += s.len + 1;
         const estimated_chunks = @max(1, stmt_bytes / (8 * 1024)) + 1; // match executeChunkedQueries chunk size
         const chunked_deadline = @min(600, per_chunk_secs * @as(u32, @intCast(estimated_chunks)));
         var chunked_deadline_state = QueryDeadlineState.init();
@@ -1610,9 +1596,14 @@ fn cmdQuery(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !voi
             query_deadline.active_query_deadline_state = null;
         }
         startDeadlineWatchdogTask(allocator, chunked_deadline, &chunked_deadline_state);
-        try executeChunkedQueries(allocator, .{
+        // CANARY: REQ=REQ-CLI-CHUNKED-EXEC-008; FEATURE="ChunkedExecution"; ASPECT=ExitCode; STATUS=TESTED; TEST=tests/test_cli_file_chunked.zig; OWNER=cli; UPDATED=2026-08-31
+        // 2c: a statement the server rejects must be visible in the exit code.
+        // Mirrors the --batch contract (REQ-CLI-BATCH-MODE-004): statement
+        // errors do not abort the run, but they can never be swallowed by a
+        // zero exit status.
+        const chunk_errors = try executeChunkedQueries(allocator, .{
             .server_addr = server_addr,
-            .statements = statements.items,
+            .statements = statements,
             .format = format,
             .insecure = insecure,
             .timeout_secs = timeout_secs,
@@ -1627,6 +1618,7 @@ fn cmdQuery(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !voi
             .use_grpc = use_grpc,
             .role = role,
         });
+        if (chunk_errors > 0) std.process.exit(@intFromEnum(ExitCode.general_error));
         return;
     }
 
@@ -1897,6 +1889,12 @@ const QuicQueryOptions = struct {
     // Spec geode-vectorization-and-reranking: per-request hard read-only floor.
     // CANARY: REQ=REQ-EXEC-READ-ONLY-REQUEST-001; FEATURE="ReadOnlyExecute"; ASPECT=CliOption; STATUS=TESTED; TEST=tests/test_read_only_execute.zig; OWNER=engine; UPDATED=2026-08-28
     read_only: bool = false,
+    // CANARY: REQ=REQ-CLI-CHUNKED-EXEC-008; FEATURE="ChunkedExecution"; ASPECT=ServerErrorSignal; STATUS=TESTED; TEST=tests/test_cli_file_chunked.zig; OWNER=cli; UPDATED=2026-08-31
+    // 2c: a server-side statement error (GQLSTATE 42000 &c.) arrives as a
+    // NORMAL response, not a Zig error, so a `catch |err|` around the call can
+    // never see it.  When set, the render verdict is written here so a caller
+    // (the chunked driver) can react to a rejected program.
+    failed_out: ?*bool = null,
 };
 
 const GrpcQueryOptions = struct {
@@ -1914,6 +1912,8 @@ const GrpcQueryOptions = struct {
     // Spec geode-vectorization-and-reranking: per-request hard read-only floor.
     // CANARY: REQ=REQ-EXEC-READ-ONLY-REQUEST-001; FEATURE="ReadOnlyExecute"; ASPECT=CliOption; STATUS=TESTED; TEST=tests/test_read_only_execute.zig; OWNER=engine; UPDATED=2026-08-28
     read_only: bool = false,
+    // 2c: see QuicQueryOptions.failed_out — same contract on the gRPC path.
+    failed_out: ?*bool = null,
 };
 
 /// Issue #424: Set SO_RCVTIMEO and SO_SNDTIMEO on a TCP socket so that
@@ -1988,7 +1988,7 @@ fn executeGrpcQuery(allocator: std.mem.Allocator, opts: GrpcQueryOptions) !void 
 
         // Execute query on the gRPC connection
         params_transferred = true;
-        return executeQueryOnGrpc(allocator, tcp_stream, query_text, format, username, password, graph, graph_for_hello, params, page_size, timeout_secs, opts.read_only) catch |err| {
+        return executeQueryOnGrpc(allocator, tcp_stream, query_text, format, username, password, graph, graph_for_hello, params, page_size, timeout_secs, opts.read_only, opts.failed_out) catch |err| {
             last_error = @errorName(err);
             params_transferred = false;
             if (attempts + 1 < max_attempts) {
@@ -2058,6 +2058,7 @@ fn executeQueryOnGrpc(
     page_size: u32,
     timeout_secs: u32,
     read_only: bool,
+    failed_out: ?*bool,
 ) !void {
     // Issue #424: timeout_secs is now enforced at two levels:
     // 1. TCP socket SO_RCVTIMEO/SO_SNDTIMEO set by the caller (executeGrpcQuery)
@@ -2138,7 +2139,8 @@ fn executeQueryOnGrpc(
     });
     defer result.deinit();
 
-    _ = try result.render(stdout, stderr_handle);
+    const failed = try result.render(stdout, stderr_handle);
+    if (failed_out) |out| out.* = failed;
 }
 
 // CANARY: REQ=REQ-CLI-BATCH-MODE-003; FEATURE="QueryBatchMode"; ASPECT=SingleStreamLoop; STATUS=TESTED; TEST=tests/test_cli_batch_mode.zig; OWNER=cli; UPDATED=2026-08-29
@@ -2328,7 +2330,11 @@ const ChunkedQueryOptions = struct {
 /// Execute statements in chunks, batching multiple statements per request while staying under the size limit.
 /// Transaction-aware: never splits chunks within BEGIN/COMMIT boundaries.
 /// Context-aware: carries USE GRAPH forward to subsequent chunks on new connections.
-fn executeChunkedQueries(allocator: std.mem.Allocator, opts: ChunkedQueryOptions) !void {
+///
+/// Returns the number of statements the server refused (0 on a clean run).
+/// The caller turns a non-zero count into ExitCode.general_error, which is the
+/// same contract `--batch` already honours.
+fn executeChunkedQueries(allocator: std.mem.Allocator, opts: ChunkedQueryOptions) !usize {
     const max_chunk_size: usize = 32 * 1024; // 32KB per chunk
     const statements = opts.statements;
 
@@ -2472,28 +2478,35 @@ fn executeChunkedQueries(allocator: std.mem.Allocator, opts: ChunkedQueryOptions
         defer chunk_query.deinit(allocator);
 
         // Prepend USE GRAPH context for chunks after the first (each is a new connection)
-        if (chunk_start > 0) {
-            if (use_graph_stmt) |ug| {
-                const ug_trimmed = std.mem.trim(u8, ug, " \t\r\n");
-                chunk_query.appendSlice(allocator, ug_trimmed) catch {};
-                // Ensure it ends with semicolon
-                if (ug_trimmed.len == 0 or ug_trimmed[ug_trimmed.len - 1] != ';') {
-                    chunk_query.append(allocator, ';') catch {};
-                }
-                chunk_query.append(allocator, ' ') catch {};
+        // 2d: allocation failures here used to be swallowed with `catch {}`,
+        // which shipped a TRUNCATED program to the server as if it were whole.
+        const chunk_use_graph: ?[]const u8 = if (chunk_start > 0) use_graph_stmt else null;
+        if (chunk_use_graph) |ug| {
+            const ug_trimmed = std.mem.trim(u8, ug, " \t\r\n");
+            try chunk_query.appendSlice(allocator, ug_trimmed);
+            // Ensure it ends with semicolon
+            if (ug_trimmed.len == 0 or ug_trimmed[ug_trimmed.len - 1] != ';') {
+                try chunk_query.append(allocator, ';');
             }
+            try chunk_query.append(allocator, ' ');
         }
 
         for (chunk_start..chunk_end) |idx| {
             if (txn_strip.items[idx]) continue; // Skip stripped BEGIN/COMMIT
-            chunk_query.appendSlice(allocator, statements[idx]) catch {};
-            chunk_query.append(allocator, ' ') catch {};
+            try chunk_query.appendSlice(allocator, statements[idx]);
+            try chunk_query.append(allocator, ' ');
         }
 
         // Execute this chunk
         const chunk_count = chunk_end - chunk_start;
         std.debug.print("Executing chunk {d}-{d} of {d} statements...\n", .{ chunk_start + 1, chunk_end, statements.len });
 
+        // CANARY: REQ=REQ-CLI-CHUNKED-EXEC-008; FEATURE="ChunkedExecution"; ASPECT=ChunkFailureDetection; STATUS=TESTED; TEST=tests/test_cli_file_chunked.zig; OWNER=cli; UPDATED=2026-08-31
+        // 2c: the server answers a rejected program with a NORMAL response
+        // carrying a GQLSTATE, so `catch |err|` alone can never see it.  The
+        // render verdict comes back through `failed_out`; a Zig (transport)
+        // error still counts as a failed chunk.
+        var chunk_failed = false;
         const empty_params = std.ArrayList(schema.Param).empty;
         if (opts.use_grpc) {
             executeGrpcQuery(allocator, .{
@@ -2508,9 +2521,10 @@ fn executeChunkedQueries(allocator: std.mem.Allocator, opts: ChunkedQueryOptions
                 .graph_for_hello = opts.graph_for_hello,
                 .page_size = default_stream_page_size,
                 .params = empty_params,
+                .failed_out = &chunk_failed,
             }) catch |err| {
                 std.debug.print("Error executing chunk: {}\n", .{err});
-                error_count += 1;
+                chunk_failed = true;
             };
         } else {
             executeQuicQuery(allocator, .{
@@ -2530,13 +2544,40 @@ fn executeChunkedQueries(allocator: std.mem.Allocator, opts: ChunkedQueryOptions
                 .page_size = default_stream_page_size,
                 .params = empty_params,
                 .role = opts.role,
+                .failed_out = &chunk_failed,
             }) catch |err| {
                 std.debug.print("Error executing chunk: {}\n", .{err});
-                error_count += 1;
+                chunk_failed = true;
             };
         }
 
-        executed += chunk_count;
+        if (!chunk_failed) {
+            executed += chunk_count;
+        } else {
+            // CANARY: REQ=REQ-CLI-CHUNKED-EXEC-009; FEATURE="ChunkedExecution"; ASPECT=StatementFallback; STATUS=TESTED; TEST=tests/test_cli_file_chunked.zig; OWNER=cli; UPDATED=2026-08-31
+            // 2c: the whole chunk is ONE program, so a single bad statement
+            // takes its (up to 32KB of) innocent neighbours down with it.
+            // Re-run the chunk statement by statement so exactly the bad
+            // statements are lost.  Only reached on the failure path, and it
+            // uses ONE connection for the whole retry, so the happy path keeps
+            // its per-chunk connection cost.
+            const outcome = retryChunkStatementByStatement(
+                allocator,
+                opts,
+                statements,
+                txn_strip.items,
+                chunk_start,
+                chunk_end,
+                chunk_use_graph,
+            ) catch |err| {
+                std.debug.print("Error retrying chunk statement-by-statement: {}\n", .{err});
+                error_count += 1;
+                chunk_start = chunk_end;
+                continue;
+            };
+            executed += outcome.succeeded;
+            error_count += outcome.failed;
+        }
         chunk_start = chunk_end;
     }
 
@@ -2546,6 +2587,195 @@ fn executeChunkedQueries(allocator: std.mem.Allocator, opts: ChunkedQueryOptions
     if (error_count > 0) {
         std.debug.print("  Errors: {d}\n", .{error_count});
     }
+
+    return error_count;
+}
+
+const ChunkRetryOutcome = struct {
+    succeeded: usize = 0,
+    failed: usize = 0,
+};
+
+// CANARY: REQ=REQ-CLI-CHUNKED-EXEC-009; FEATURE="ChunkedExecution"; ASPECT=StatementFallback; STATUS=TESTED; TEST=tests/test_cli_file_chunked.zig; OWNER=cli; UPDATED=2026-08-31
+/// Re-execute the statements of a rejected chunk one at a time so only the
+/// genuinely-bad statements are lost.
+///
+/// The whole retry rides ONE QUIC connection with ONE HELLO (the `--batch`
+/// shape, see executeBatchQueries): re-connecting per statement would cost a
+/// TLS handshake each time.  gRPC has no single-connection multi-statement
+/// helper, so it retries per statement over fresh connections — still only on
+/// the failure path.
+///
+/// A chunk that still carries live transaction control (BEGIN/COMMIT/ROLLBACK
+/// that the pre-scan did NOT strip) is deliberately NOT retried: replaying its
+/// statements outside the transaction would auto-commit work the file asked to
+/// keep atomic — the same silent-corruption class #830 refuses elsewhere.
+fn retryChunkStatementByStatement(
+    allocator: std.mem.Allocator,
+    opts: ChunkedQueryOptions,
+    statements: []const []const u8,
+    txn_strip: []const bool,
+    chunk_start: usize,
+    chunk_end: usize,
+    use_graph_prefix: ?[]const u8,
+) !ChunkRetryOutcome {
+    var live_txn_control = false;
+    var live_count: usize = 0;
+    for (chunk_start..chunk_end) |idx| {
+        if (txn_strip[idx]) continue;
+        live_count += 1;
+        const trimmed = std.mem.trim(u8, statements[idx], " \t\r\n");
+        if (isTransactionBegin(trimmed) or isTransactionEnd(trimmed)) live_txn_control = true;
+    }
+
+    if (live_txn_control) {
+        std.debug.print(
+            "Chunk {d}-{d} was rejected and contains transaction control; not retrying it\n" ++
+                "  statement-by-statement (that would auto-commit work meant to be atomic).\n",
+            .{ chunk_start + 1, chunk_end },
+        );
+        return .{ .succeeded = 0, .failed = 1 };
+    }
+
+    std.debug.print(
+        "Chunk {d}-{d} was rejected; retrying its {d} statements individually...\n",
+        .{ chunk_start + 1, chunk_end, live_count },
+    );
+
+    var outcome = ChunkRetryOutcome{};
+
+    // Statement text with the carried-forward USE GRAPH context prepended,
+    // mirroring what the chunk program itself did.
+    var scoped = std.ArrayList(u8).empty;
+    defer scoped.deinit(allocator);
+
+    var current_use_graph: ?[]const u8 = use_graph_prefix;
+
+    if (opts.use_grpc) {
+        for (chunk_start..chunk_end) |idx| {
+            if (txn_strip[idx]) continue;
+            const stmt = statements[idx];
+            const trimmed = std.mem.trim(u8, stmt, " \t\r\n");
+            const text = try scopeStatement(allocator, &scoped, stmt, current_use_graph);
+            if (isUseGraphStmt(trimmed)) current_use_graph = stmt;
+
+            var stmt_failed = false;
+            const empty_params = std.ArrayList(schema.Param).empty;
+            executeGrpcQuery(allocator, .{
+                .server_addr = opts.server_addr,
+                .query_text = text,
+                .format = "json",
+                .timeout_secs = opts.timeout_secs,
+                .retry_count = opts.retry_count,
+                .username = opts.username,
+                .password = opts.password,
+                .graph = opts.graph,
+                .graph_for_hello = opts.graph_for_hello,
+                .page_size = default_stream_page_size,
+                .params = empty_params,
+                .failed_out = &stmt_failed,
+            }) catch |err| {
+                std.debug.print("Error executing statement {d}: {}\n", .{ idx + 1, err });
+                stmt_failed = true;
+            };
+            if (stmt_failed) outcome.failed += 1 else outcome.succeeded += 1;
+        }
+        return outcome;
+    }
+
+    // QUIC: one connection, one HELLO, one stream for the whole retry.
+    var addr_port = std.mem.splitSequence(u8, opts.server_addr, ":");
+    const host = addr_port.next() orelse "127.0.0.1";
+    const port_str = addr_port.next() orelse "3141";
+    const port = std.fmt.parseInt(u16, port_str, 10) catch return error.InvalidAddress;
+
+    var raw_client = zig_quic_bridge.initClient(
+        allocator,
+        host,
+        port,
+        .{
+            .insecure = opts.insecure,
+            .ca_cert_path = opts.ca_cert_path,
+            .client_cert_path = opts.client_cert_path,
+            .client_key_path = opts.client_key_path,
+        },
+        null,
+        null,
+    ) catch return error.ConnectionFailed;
+    defer raw_client.deinit();
+    raw_client.connect() catch return error.ConnectionFailed;
+
+    raw_client.closeStream();
+    defer raw_client.closeStream();
+
+    const session_id = try helloOnConnection(
+        allocator,
+        &raw_client,
+        opts.username,
+        opts.password,
+        opts.graph_for_hello,
+        opts.role,
+        opts.timeout_secs,
+    );
+    defer allocator.free(session_id);
+
+    for (chunk_start..chunk_end) |idx| {
+        if (txn_strip[idx]) continue;
+        const stmt = statements[idx];
+        const trimmed = std.mem.trim(u8, stmt, " \t\r\n");
+        const text = try scopeStatement(allocator, &scoped, stmt, current_use_graph);
+        if (isUseGraphStmt(trimmed)) current_use_graph = stmt;
+
+        const empty_params = std.ArrayList(schema.Param).empty;
+        const stmt_failed = runQueryOnHelloedStream(
+            allocator,
+            &raw_client,
+            session_id,
+            text,
+            "json",
+            opts.graph,
+            empty_params,
+            default_stream_page_size,
+            opts.timeout_secs,
+            null,
+            false,
+        ) catch |err| {
+            // A transport failure kills the shared stream; continuing would
+            // only produce a cascade of misleading timeouts.
+            std.debug.print(
+                "Error: chunk retry aborted at statement {d}: {t}\n",
+                .{ idx + 1, err },
+            );
+            return err;
+        };
+        if (stmt_failed) outcome.failed += 1 else outcome.succeeded += 1;
+    }
+
+    return outcome;
+}
+
+/// Render `stmt` with the carried-forward USE GRAPH context prepended, reusing
+/// `scratch` so the retry loop performs one allocation, not one per statement.
+/// Returns a slice valid until the next call.
+fn scopeStatement(
+    allocator: std.mem.Allocator,
+    scratch: *std.ArrayList(u8),
+    stmt: []const u8,
+    use_graph_stmt: ?[]const u8,
+) ![]const u8 {
+    const ug = use_graph_stmt orelse return stmt;
+    const trimmed = std.mem.trim(u8, stmt, " \t\r\n");
+    if (isUseGraphStmt(trimmed)) return stmt;
+
+    const ug_trimmed = std.mem.trim(u8, ug, " \t\r\n");
+    scratch.clearRetainingCapacity();
+    try scratch.appendSlice(allocator, ug_trimmed);
+    if (ug_trimmed.len == 0 or ug_trimmed[ug_trimmed.len - 1] != ';') {
+        try scratch.append(allocator, ';');
+    }
+    try scratch.append(allocator, ' ');
+    try scratch.appendSlice(allocator, stmt);
+    return scratch.items;
 }
 
 /// Check if a trimmed statement is a transaction begin (START TRANSACTION or BEGIN)
@@ -2656,7 +2886,7 @@ fn executeQuicQuery(allocator: std.mem.Allocator, opts: QuicQueryOptions) !void 
         };
 
         params_transferred = true;
-        executeQueryOnConnection(allocator, &raw_client, query_text, format, username, password, graph, graph_for_hello, params, page_size, timeout_secs, fle_role, principal_envelope_bytes, read_only) catch |err| {
+        executeQueryOnConnection(allocator, &raw_client, query_text, format, username, password, graph, graph_for_hello, params, page_size, timeout_secs, fle_role, principal_envelope_bytes, read_only, opts.failed_out) catch |err| {
             // GAP-0260/GAP-0263: Auto-retry on connection failure. QUIC
             // transport can drop messages under rapid sequential
             // connections; retries resolve most transient failures
@@ -2829,6 +3059,7 @@ fn executeQueryOnConnection(
     fle_role: ?[]const u8,
     principal_envelope_bytes: ?[]const u8,
     read_only: bool,
+    failed_out: ?*bool,
 ) !void {
     const binding = resolveQueryGraphBinding(query_text, graph, graph_for_hello);
 
@@ -2847,7 +3078,7 @@ fn executeQueryOnConnection(
     );
     defer allocator.free(session_id);
 
-    _ = try runQueryOnHelloedStream(
+    const failed = try runQueryOnHelloedStream(
         allocator,
         raw_client,
         session_id,
@@ -2860,6 +3091,7 @@ fn executeQueryOnConnection(
         principal_envelope_bytes,
         read_only,
     );
+    if (failed_out) |out| out.* = failed;
 }
 
 // CANARY: REQ=REQ-CLI-BATCH-MODE-006; FEATURE="QueryBatchMode"; ASPECT=StatementOnStream; STATUS=TESTED; TEST=tests/test_cli_batch_mode.zig; OWNER=cli; UPDATED=2026-08-29

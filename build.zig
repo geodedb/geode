@@ -7349,10 +7349,23 @@ pub fn build(b: *std.Build) void {
     //       "Error: File too large": no size, no limit, no remedy, and no
     //       mention in `geode query --help`.
     // The all-valid control case passes at HEAD and must stay passing.
+    //
+    // 2d addendum: the same lane now also carries the two failing-allocator
+    // unit cases for the extracted statement-assembly seam.  `query_file.zig`
+    // imports nothing but std, so wiring it in as a named module keeps the
+    // "no geode import graph in the test artifact" property intact.
+    const cli_query_file_mod = b.createModule(.{
+        .root_source_file = b.path("src/cli/query_file.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
     const cli_file_chunked_tests = b.addTest(.{ .root_module = b.createModule(.{
         .root_source_file = b.path("tests/test_cli_file_chunked.zig"),
         .target = target,
         .optimize = optimize,
+        .imports = &.{
+            .{ .name = "cli_query_file", .module = cli_query_file_mod },
+        },
     }) });
     cli_file_chunked_tests.root_module.link_libc = true;
     const run_cli_file_chunked_tests = b.addRunArtifact(cli_file_chunked_tests);

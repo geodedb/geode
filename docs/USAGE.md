@@ -24,7 +24,10 @@
 # Execute single query
 ./geode query "MATCH (n) RETURN n LIMIT 10"
 
-# Execute from file
+# Execute from file (max 16 MiB / 16777216 bytes; split larger files, or
+# stream them with `--batch`, one statement per line).  Files over ~16 KB are
+# executed in chunks: a statement the server rejects is retried on its own so
+# only that statement is lost, and the process exits non-zero.
 ./geode query -f queries.gql
 
 # JSON output (default)

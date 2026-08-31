@@ -2767,8 +2767,17 @@ pub fn executeSourceFile(state: anytype, filename: []const u8) !void {
         try stderr.writeStreamingAll(replIo(), msg);
         return;
     };
-    if (file_len > 1 << 24) { // 16MB max
-        try stderr.writeStreamingAll(replIo(), "Error [GEODE-E2005]: File too large (>16MB)\r\n");
+    // Same cap, and the same actionable wording, as `geode query --file`
+    // (src/cli/query_file.zig): name the size, the limit, and the remedy.
+    if (file_len > 16 * 1024 * 1024) {
+        var buf: [256]u8 = undefined;
+        const msg = std.fmt.bufPrint(
+            &buf,
+            "Error [GEODE-E2005]: file is {d} bytes, over the /source limit of 16 MiB " ++
+                "(16777216 bytes); split the file into smaller files\r\n",
+            .{file_len},
+        ) catch "Error [GEODE-E2005]: file is over the /source limit of 16 MiB; split it\r\n";
+        try stderr.writeStreamingAll(replIo(), msg);
         return;
     }
     const contents = state.allocator.alloc(u8, @intCast(file_len)) catch |err| {
