@@ -159,7 +159,30 @@ const Harness = struct {
     }
 
     pub fn exec(self: *Harness, query: []const u8) !execution.ExecutionResult {
+        return self.execWithParams(query, &.{}, &.{});
+    }
+
+    /// Execute `query` with request-level query parameters bound, exactly as the
+    /// transport handler wires them onto the ExecutionContext before dispatch
+    /// (query_execution.zig builds the same `query_param_names`/`query_param_values`
+    /// arrays at :1566-1601, and executeForBody reads them at
+    /// statement_handlers.zig:666-673). This is the seam the FOR..IN
+    /// parameter-bound-list bug lives on: the FOR *header* (collection) env and
+    /// the per-iteration RETURN env drop these params, so a `$param` collection
+    /// resolves to Null.
+    pub fn execWithParams(
+        self: *Harness,
+        query: []const u8,
+        names: []const []const u8,
+        values: []const Value,
+    ) !execution.ExecutionResult {
         self.ctx.session_state = &self.session;
+        self.ctx.query_param_names = names;
+        self.ctx.query_param_values = values;
+        defer {
+            self.ctx.query_param_names = &.{};
+            self.ctx.query_param_values = &.{};
+        }
         const aa = self.arena.allocator();
         var parsed = geode.parseGqlOptions(query, aa, .{}) catch |err| {
             std.debug.print("\nPARSE FAILED for: {s}\n  error: {any}\n", .{ query, err });
@@ -167,6 +190,37 @@ const Harness = struct {
         };
         defer parsed.deinit();
         return execution.executeStatementWithContext(aa, parsed.program.statements[0], self.ctx);
+    }
+
+    /// Row count for a query executed WITH params — honest "did the write land?"
+    /// assertion when the read-back itself needs a bound parameter (rare, but
+    /// keeps the API symmetric).
+    pub fn countRowsParams(self: *Harness, query: []const u8, names: []const []const u8, values: []const Value) !usize {
+        const res = try self.execWithParams(query, names, values);
+        return res.rows.len;
+    }
+
+    /// Collect every Str value projected by a read query. Used to assert that
+    /// map-valued loop rows land distinct, non-null string properties.
+    pub fn collectStrs(self: *Harness, allocator: std.mem.Allocator, query: []const u8) ![][]const u8 {
+        const res = try self.exec(query);
+        var out = std.ArrayList([]const u8).empty;
+        errdefer out.deinit(allocator);
+        for (res.rows) |row| {
+            for (row) |value| {
+                switch (value) {
+                    .Str => |s| try out.append(allocator, try allocator.dupe(u8, s)),
+                    else => {},
+                }
+            }
+        }
+        const slice = try out.toOwnedSlice(allocator);
+        std.mem.sort([]const u8, slice, {}, struct {
+            fn lt(_: void, a: []const u8, b: []const u8) bool {
+                return std.mem.order(u8, a, b) == .lt;
+            }
+        }.lt);
+        return slice;
     }
 
     /// Row count of a read query — the honest "did the write land?" assertion.
@@ -419,4 +473,289 @@ test "geode#876 control: isMutatingProgram stays FALSE for a read-only FOR … R
     // exclusive write lock on read-only loops and regress concurrency.
     try testing.expect(!(try parseAndClassify("FOR x IN [1, 2, 3] RETURN x AS x")));
     try testing.expect(!(try parseAndClassify("FOR i IN range(1, 4) WITH ORDINALITY k RETURN i AS i, k AS k")));
+}
+
+// ===========================================================================
+// FOR..IN PARAMETER-BOUND LIST — the collapse-to-one-null-iteration bug.
+//
+// Root cause: executeFor evaluates the FOR collection expression in an Env with
+// NO request params wired in (statement_handlers.zig:832-836 builds
+// `Env{ .names = &.{}, .values = &.{} }`), so a `$param` collection resolves to
+// Null (eval.zig:886-893 .Param arm), and a non-conformant "treat non-list as a
+// single-item list" fallback (:843-853) turns that Null into ONE iteration with
+// the loop var = Null. The same missing-params seam is at the per-iteration
+// RETURN env (:895-899), executeForWithBindings' collection + iteration envs
+// (:694-700, :760-764), and executeValues (:938-942, :1036-1040).
+//
+// The write-loss sibling (planned_read_runtime.zig:3714-3742 isStorageNativeQuery
+// does not reject q.for_statement, so WITH…FOR…CREATE is served as a plain WITH
+// projection and never reaches executeForWithBindings) is exercised on the WIRE
+// path only — see ../geode-test-harness/geodetestlab-cli/specs/for_write_body.yml.
+// In THIS in-process harness, WITH…FOR routes through executeForWithBindings
+// directly (query_execution.zig:2192-2194), so case (e) below exercises the
+// param seam in executeForWithBindings' collection env instead.
+//
+// Per ISO/IEC 39075:2024 `<for item source>` is a `<list value expression>`:
+// `FOR n IN $nums` is valid and must iterate the bound list; a non-list/Null
+// collection is a TYPE ERROR, never a one-element null iteration. The empty-list
+// boundary below pins the minimum conformant contract: zero iterations, and in
+// particular NEVER exactly one null row/node.
+// ===========================================================================
+
+// Helper: an owned `[]Value` list param (List variant needs a mutable slice).
+fn intListValue(allocator: std.mem.Allocator, ints: []const i64) !Value {
+    const slice = try allocator.alloc(Value, ints.len);
+    for (ints, 0..) |n, i| slice[i] = Value{ .Int = n };
+    return Value{ .List = slice };
+}
+
+test "for-in-param (a): FOR n IN \\$nums RETURN n projects every bound element" {
+    // RC: currently $nums -> Null -> one null iteration -> collectInts == [].
+    lockStore();
+    defer unlockStore();
+
+    var h = try Harness.init(testing.allocator);
+    defer h.deinit();
+
+    var arena = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena.deinit();
+    const aa = arena.allocator();
+
+    const nums = try intListValue(aa, &[_]i64{ 10, 20, 30 });
+    const res = try h.execWithParams("FOR n IN $nums RETURN n AS v", &[_][]const u8{"nums"}, &[_]Value{nums});
+    try testing.expectEqual(@as(usize, 3), res.rows.len);
+
+    var out = std.ArrayList(i64).empty;
+    for (res.rows) |row| for (row) |value| switch (value) {
+        .Int => |v| try out.append(aa, v),
+        else => {},
+    };
+    std.mem.sort(i64, out.items, {}, std.sort.asc(i64));
+    try testing.expectEqualSlices(i64, &[_]i64{ 10, 20, 30 }, out.items);
+}
+
+test "for-in-param (b): FOR row IN \\$rows CREATE persists one node per element" {
+    // RC: currently $rows -> Null -> one iteration with row=Null -> a single
+    // node with NULL props. Read back EXACTLY two nodes with distinct, non-null
+    // props (asserted via a follow-up MATCH, not via the FOR result rows).
+    lockStore();
+    defer unlockStore();
+
+    var h = try Harness.init(testing.allocator);
+    defer h.deinit();
+
+    var arena = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena.deinit();
+    const aa = arena.allocator();
+
+    _ = try h.exec("CREATE GRAPH forparam_rows");
+    _ = try h.exec("USE GRAPH forparam_rows");
+
+    var m0 = std.StringHashMap(Value).init(aa);
+    try m0.put("k", Value{ .Int = 1 });
+    try m0.put("v", Value{ .Str = "a" });
+    var m1 = std.StringHashMap(Value).init(aa);
+    try m1.put("k", Value{ .Int = 2 });
+    try m1.put("v", Value{ .Str = "b" });
+
+    const rows_slice = try aa.alloc(Value, 2);
+    rows_slice[0] = Value{ .Map = m0 };
+    rows_slice[1] = Value{ .Map = m1 };
+    const rows_param = Value{ .List = rows_slice };
+
+    _ = try h.execWithParams(
+        "FOR row IN $rows CREATE (n:PRow {k: row.k, v: row.v})",
+        &[_][]const u8{"rows"},
+        &[_]Value{rows_param},
+    );
+
+    try testing.expectEqual(@as(usize, 2), try h.countRows("MATCH (n:PRow) RETURN n"));
+    const ks = try h.collectInts(aa, "MATCH (n:PRow) RETURN n.k AS k");
+    try testing.expectEqualSlices(i64, &[_]i64{ 1, 2 }, ks);
+    const vs = try h.collectStrs(aa, "MATCH (n:PRow) RETURN n.v AS v");
+    try testing.expectEqual(@as(usize, 2), vs.len);
+    try testing.expect(!std.mem.eql(u8, vs[0], vs[1])); // distinct, non-null
+}
+
+test "for-in-param (c): per-iteration RETURN env resolves an outer \\$param" {
+    // Defect 2: the per-iteration RETURN env (statement_handlers.zig:895-899)
+    // drops request params, so $x -> Null. Collection is an inline list so only
+    // the RETURN env is under test. Expect px=99 on both rows -> ints [1,2,99,99].
+    lockStore();
+    defer unlockStore();
+
+    var h = try Harness.init(testing.allocator);
+    defer h.deinit();
+
+    var arena = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena.deinit();
+    const aa = arena.allocator();
+
+    const got = try blk: {
+        const res = try h.execWithParams("FOR i IN [1, 2] RETURN i AS i, $x AS px", &[_][]const u8{"x"}, &[_]Value{Value{ .Int = 99 }});
+        var out = std.ArrayList(i64).empty;
+        for (res.rows) |row| for (row) |value| switch (value) {
+            .Int => |v| try out.append(aa, v),
+            else => {},
+        };
+        std.mem.sort(i64, out.items, {}, std.sort.asc(i64));
+        break :blk out.toOwnedSlice(aa);
+    };
+    try testing.expectEqualSlices(i64, &[_]i64{ 1, 2, 99, 99 }, got);
+}
+
+test "for-in-param (d): FOR n IN \\$missing (empty list) writes/returns nothing" {
+    // RC boundary + non-conformant fallback: an empty-list collection must yield
+    // ZERO iterations, never exactly one null row. Currently $missing -> Null (params
+    // not wired) -> the "non-list => single item" fallback mints ONE null row.
+    // Contract chosen: zero rows (and in no case exactly one null row).
+    lockStore();
+    defer unlockStore();
+
+    var h = try Harness.init(testing.allocator);
+    defer h.deinit();
+
+    var arena = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena.deinit();
+    const aa = arena.allocator();
+
+    const empty = Value{ .List = try aa.alloc(Value, 0) };
+    const res = try h.execWithParams("FOR n IN $missing RETURN n AS v", &[_][]const u8{"missing"}, &[_]Value{empty});
+    try testing.expectEqual(@as(usize, 0), res.rows.len);
+}
+
+test "for-in-param (e): WITH … FOR n IN \\$nums CREATE persists one node per element" {
+    // Write-loss guard (defect 2) + collection-env params (defect 1b): even
+    // in-process, executeQueryWithContext calls planned_read_runtime.executeIfSupported
+    // (query_execution.zig:1744/1762) BEFORE the WITH…FOR branch, and
+    // isStorageNativeQuery (planned_read_runtime.zig:3714-3742) does NOT reject a
+    // q.for_statement (chains.len==0 => returns true at :3737, unlike the 4 sibling
+    // gates), so this is served as a plain WITH projection and the FOR body never
+    // runs — ZERO nodes written. Once the guard routes it to executeForWithBindings,
+    // that path's collection env (statement_handlers.zig:694-700) must also carry
+    // params so $nums resolves. Expect three nodes with n in {1,2,3} and w=1.
+    lockStore();
+    defer unlockStore();
+
+    var h = try Harness.init(testing.allocator);
+    defer h.deinit();
+
+    var arena = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena.deinit();
+    const aa = arena.allocator();
+
+    _ = try h.exec("CREATE GRAPH forparam_withfor");
+    _ = try h.exec("USE GRAPH forparam_withfor");
+
+    const nums = try intListValue(aa, &[_]i64{ 1, 2, 3 });
+    _ = try h.execWithParams(
+        "WITH 1 AS w FOR n IN $nums CREATE (:WF {n: n, w: w})",
+        &[_][]const u8{"nums"},
+        &[_]Value{nums},
+    );
+
+    try testing.expectEqual(@as(usize, 3), try h.countRows("MATCH (n:WF) RETURN n"));
+    const ns = try h.collectInts(aa, "MATCH (x:WF) RETURN x.n AS n");
+    try testing.expectEqualSlices(i64, &[_]i64{ 1, 2, 3 }, ns);
+    const ws = try h.collectInts(aa, "MATCH (x:WF) RETURN x.w AS w");
+    try testing.expectEqualSlices(i64, &[_]i64{ 1, 1, 1 }, ws);
+}
+
+test "for-in-param (e-inline): WITH … FOR n IN [inline] RETURN projects every element" {
+    // Write-loss guard, inline collection (no param seam). Proves the
+    // isStorageNativeQuery routing defect in isolation: executeQueryWithContext
+    // hands this to planned_read_runtime.executeIfSupported (query_execution.zig:1744/1762),
+    // isStorageNativeQuery returns true for the chains.len==0 + for_statement shape,
+    // so the FOR is dropped and only the single WITH projection row comes back.
+    // Must yield 3 rows once the guard rejects q.for_statement.
+    lockStore();
+    defer unlockStore();
+
+    var h = try Harness.init(testing.allocator);
+    defer h.deinit();
+
+    const res = try h.exec("WITH 1 AS w FOR n IN [1, 2, 3] RETURN n AS v, w AS w");
+    try testing.expectEqual(@as(usize, 3), res.rows.len);
+}
+
+test "for-in-param (f): VALUES (\\$x, 2) AS (a, b) binds the outer param" {
+    // Defect 3: executeValues evaluates row exprs in an empty env
+    // (statement_handlers.zig:938-942), so $x -> Null and a=null. Expect a=5,b=2.
+    lockStore();
+    defer unlockStore();
+
+    var h = try Harness.init(testing.allocator);
+    defer h.deinit();
+
+    const res = try h.execWithParams("VALUES ($x, 2) AS (a, b)", &[_][]const u8{"x"}, &[_]Value{Value{ .Int = 5 }});
+    try testing.expectEqual(@as(usize, 1), res.rows.len);
+    try testing.expectEqual(@as(usize, 2), res.rows[0].len);
+
+    var a_val: ?i64 = null;
+    var b_val: ?i64 = null;
+    for (res.columns, 0..) |col, i| {
+        if (std.mem.eql(u8, col, "a")) a_val = switch (res.rows[0][i]) {
+            .Int => |v| v,
+            else => null,
+        };
+        if (std.mem.eql(u8, col, "b")) b_val = switch (res.rows[0][i]) {
+            .Int => |v| v,
+            else => null,
+        };
+    }
+    try testing.expectEqual(@as(?i64, 5), a_val);
+    try testing.expectEqual(@as(?i64, 2), b_val);
+}
+
+// ===========================================================================
+// REGRESSION GUARDS — body params ALREADY work and must stay green after the
+// fix. `$param` inside the FOR BODY resolves via executeForBody's param
+// forwarding (statement_handlers.zig:666-673); the fix to the header/collection
+// and RETURN envs must not regress these.
+// ===========================================================================
+
+test "for-in-param guard: FOR i IN [inline] CREATE with a body \\$param stays green" {
+    lockStore();
+    defer unlockStore();
+
+    var h = try Harness.init(testing.allocator);
+    defer h.deinit();
+
+    var arena = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena.deinit();
+    const aa = arena.allocator();
+
+    _ = try h.exec("CREATE GRAPH forparam_bodyguard");
+    _ = try h.exec("USE GRAPH forparam_bodyguard");
+
+    _ = try h.execWithParams("FOR i IN [1, 2] CREATE (:PB {i: i, px: $x})", &[_][]const u8{"x"}, &[_]Value{Value{ .Int = 99 }});
+
+    try testing.expectEqual(@as(usize, 2), try h.countRows("MATCH (n:PB) RETURN n"));
+    const is = try h.collectInts(aa, "MATCH (n:PB) RETURN n.i AS i");
+    try testing.expectEqualSlices(i64, &[_]i64{ 1, 2 }, is);
+    const pxs = try h.collectInts(aa, "MATCH (n:PB) RETURN n.px AS px");
+    try testing.expectEqualSlices(i64, &[_]i64{ 99, 99 }, pxs);
+}
+
+test "for-in-param guard: FOR row IN [inline maps] CREATE stays green" {
+    lockStore();
+    defer unlockStore();
+
+    var h = try Harness.init(testing.allocator);
+    defer h.deinit();
+
+    var arena = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena.deinit();
+    const aa = arena.allocator();
+
+    _ = try h.exec("CREATE GRAPH forparam_inlinemaps");
+    _ = try h.exec("USE GRAPH forparam_inlinemaps");
+
+    _ = try h.exec("FOR row IN [{k: 1, v: 10}, {k: 2, v: 20}] CREATE (:IM {k: row.k, v: row.v})");
+
+    try testing.expectEqual(@as(usize, 2), try h.countRows("MATCH (n:IM) RETURN n"));
+    const ks = try h.collectInts(aa, "MATCH (n:IM) RETURN n.k AS k");
+    try testing.expectEqualSlices(i64, &[_]i64{ 1, 2 }, ks);
+    const vs = try h.collectInts(aa, "MATCH (n:IM) RETURN n.v AS v");
+    try testing.expectEqualSlices(i64, &[_]i64{ 10, 20 }, vs);
 }

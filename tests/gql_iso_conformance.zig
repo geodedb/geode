@@ -485,6 +485,13 @@ test "ISO Let: FOR IN list" {
     try expectParseOk("FOR x IN [1, 2, 3] RETURN x");
 }
 
+test "ISO Let: FOR IN parameter-bound list" {
+    // geode#for-in-param: `<for item source>` is a `<list value expression>`
+    // (ISO/IEC 39075:2024), so a `$param` collection is grammatically valid.
+    // Parse-only guard; execution correctness is pinned in tests/test_for_write_body.zig.
+    try expectParseOk("FOR x IN $rows RETURN x");
+}
+
 test "ISO Let: Chained WITH clauses" {
     try expectParseOk("MATCH (n:Person) WITH n.name AS name WITH name RETURN name");
 }

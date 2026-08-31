@@ -74,6 +74,45 @@ fn runQuery(allocator: std.mem.Allocator, query: []const u8) !util.ExecResult {
     return client.executeAndCollect(allocator, query, params, 1024);
 }
 
+/// runQuery variant that binds request-level query parameters over the wire.
+/// Used to pin FOR..IN parameter-bound-list execution end-to-end
+/// (geode#for-in-param): the FOR collection env must resolve `$param` to the
+/// bound list, not Null.
+fn runQueryParams(allocator: std.mem.Allocator, query: []const u8, params: std.ArrayList(schema.Param)) !util.ExecResult {
+    const addr = "127.0.0.1:3181";
+    const serial = run_query_serial.fetchAdd(1, .monotonic);
+    const pid = if (comptime @import("builtin").os.tag == .linux)
+        @as(i64, std.os.linux.getpid())
+    else
+        @as(i64, std.c.getpid());
+    var dir_buf: [96]u8 = undefined;
+    const data_dir = try std.fmt.bufPrint(&dir_buf, "/tmp/geode-gqlconf-{d}-{d}", .{ pid, serial });
+    var server = try util.spawnServer(allocator, &.{ "./zig-out/bin/geode", "serve", "--listen", addr, "--data-dir", data_dir }, null);
+    defer server.deinit();
+
+    var attempts: u32 = 0;
+    const max_attempts: u32 = 50;
+    var client: util.QuicProtoClient = undefined;
+    while (attempts < max_attempts) : (attempts += 1) {
+        client = util.QuicProtoClient.connect(allocator, addr) catch |err| {
+            if (err == error.HandshakeError or err == error.ConnectionFailed) {
+                compat_sleep(100 * std.time.ns_per_ms);
+                continue;
+            }
+            return err;
+        };
+        break;
+    } else {
+        return error.HandshakeError;
+    }
+    defer client.deinit();
+
+    var hello = try client.hello(allocator, util.defaultUsername(), util.defaultPassword());
+    hello.deinit(allocator);
+
+    return client.executeAndCollect(allocator, query, params, 1024);
+}
+
 fn expectValueEqual(expected: ExpectedValue, actual: util.TestValue) !void {
     switch (expected) {
         .Null => try testing.expect(actual == .null),
@@ -395,6 +434,37 @@ test "T19: GROUP BY legality (error)" {
     defer result.deinit(allocator);
 
     try expectError(&result, "42000", "grouping error: non-aggregated expression not in GROUP BY", &.{});
+}
+
+test "T20: FOR over a parameter-bound list iterates every element" {
+    // geode#for-in-param: `FOR n IN $nums RETURN n` must iterate the wire-bound
+    // list. The bug collapses this to a single NULL iteration because the FOR
+    // collection env (statement_handlers.zig:832-836) drops request params.
+    const allocator = testing.allocator;
+
+    // Build the $nums list param inline (util.makeIntListParam has a pre-existing
+    // Zig 0.16 `append` signature bug and is not touched here). Ownership of the
+    // param contents transfers to the wire path (executeAndCollect frees them),
+    // mirroring tests/e2e_protocol_groupby_hashagg.zig — so no manual deinit here.
+    var list_values = std.ArrayList(schema.Value).empty;
+    for ([_]i64{ 10, 20, 30 }) |v| {
+        try list_values.append(allocator, .{ .kind = .{ .int_val = .{ .value = v, .kind = .INT } } });
+    }
+    var params = util.emptyParams();
+    try params.append(allocator, .{
+        .name = try allocator.dupe(u8, "nums"),
+        .value = .{ .kind = .{ .list_val = .{ .values = list_values } } },
+    });
+
+    var result = try runQueryParams(allocator, "FOR n IN $nums RETURN n AS v", params);
+    defer result.deinit(allocator);
+
+    const expected_rows = [_][]const ExpectedValue{
+        &[_]ExpectedValue{.{ .Int = 10 }},
+        &[_]ExpectedValue{.{ .Int = 20 }},
+        &[_]ExpectedValue{.{ .Int = 30 }},
+    };
+    try expectSuccess(allocator, &result, &.{"v"}, &expected_rows, &.{});
 }
 
 // Cleanup placeholder to keep ordering stable in reports
