@@ -1105,7 +1105,7 @@ pub fn evalExpr(allocator: std.mem.Allocator, e: ast.Expr, env: Env) EvalError!V
             // arity (e.g. the doc's `knn(d.embedding, $q, 10)`) raises
             // InvalidArgs rather than silently resolving to NULL.
             if (std.mem.eql(u8, lowercase_name, "vector_knn") or std.mem.eql(u8, lowercase_name, "knn")) {
-                break :blk_call try evalVectorKnn(allocator, call.args, env);
+                break :blk_call try evalVectorKnnMemoized(allocator, call.args, env);
             }
 
             // docs/@BUGS_731.md bug 8a: the documented scalar vector functions.
@@ -2366,6 +2366,7 @@ fn vectorCandidatesToList(allocator: std.mem.Allocator, candidates: []const Vect
 // CANARY: REQ=REQ-GEODE-875-KNN-SCAN-CANCELLABLE; FEATURE="VectorKnn"; ASPECT=ReadBudgetPoll; STATUS=TESTED; TEST=tests/test_vector_knn_silent_failures.zig; OWNER=eval; UPDATED=2026-08-29
 fn scanVectorKnnBatched(
     comptime Cache: type,
+    comptime hydrate: bool,
     allocator: std.mem.Allocator,
     cache: *Cache,
     ids: []const u64,
@@ -2383,6 +2384,18 @@ fn scanVectorKnnBatched(
         // boundary, outside the shard guard, so an abort never leaves a shard
         // lock held.
         try read_budget.check();
+
+        // geode#875 RC-3 (bounded-cache-safe node scan): pull an evicted / cold
+        // body from the durable engine BEFORE taking the shard guard, so the scan
+        // is not blind to non-resident nodes (the resident cache is EMPTY after a
+        // restart until first access). getOrHydratePtr manages its own shard
+        // locking, so it must run OUTSIDE the SHARED guard below; the score/filter
+        // then read the now-resident entry under the shard lock, preserving the
+        // ENG-3954/#874 race discipline. Only enabled for the node cache — the
+        // edge scan stays resident-only (documented Phase-1 asymmetry below).
+        if (comptime hydrate) {
+            _ = cache.getOrHydratePtr(id) catch null;
+        }
 
         // EVERYTHING that touches the entry's interior stays inside the guard:
         // for a VECTORF32 property `propertyVectorCandidate` BORROWS the stored
@@ -2458,6 +2471,81 @@ const KnnScanResult = struct {
     property_seen: bool,
 };
 
+// geode#875 RC-6: a test-only counter of how many times the brute-force
+// `scanVectorKnn` runs. The row-invariant-knn hoist (see KnnMemo below) makes a
+// `WHERE id(n) IN knn(...)` over N rows scan ONCE instead of once per row; the
+// contract is pinned deterministically on this counter rather than wall-clock
+// timing (see tests/test_geode875_incremental_index.zig).
+var knn_scan_invocations: std.atomic.Value(u64) = std.atomic.Value(u64).init(0);
+
+pub fn resetKnnScanInvocations() void {
+    knn_scan_invocations.store(0, .seq_cst);
+}
+
+pub fn knnScanInvocationCount() u64 {
+    return knn_scan_invocations.load(.seq_cst);
+}
+
+// geode#875 RC-6: row-invariant knn() memoization. A `knn(...)` inside a WHERE /
+// WITH / RETURN is a row expression, so a `MATCH (n:V) WHERE id(n) IN knn(q)`
+// re-runs the O(n) brute-force scan ONCE PER CANDIDATE ROW — O(n²) overall. When
+// the knn's arguments reference no bound variable, its result is constant across
+// every row and must be evaluated exactly once. The match executor installs a
+// KnnMemo for the duration of one statement; the first evaluation of a
+// variable-free knn() call runs the scan and caches the Value keyed by the
+// call's AST identity, and every subsequent row reuses it. Scoped strictly to
+// one statement (push/pop) because AST arena addresses are reused across queries.
+pub const KnnMemo = struct {
+    map: std.AutoHashMapUnmanaged(usize, Value) = .{},
+    allocator: std.mem.Allocator,
+
+    pub fn deinit(self: *KnnMemo) void {
+        self.map.deinit(self.allocator);
+    }
+};
+
+threadlocal var active_knn_memo: ?*KnnMemo = null;
+
+/// Install `memo` as the active row-invariant knn cache, returning the previous
+/// one so the caller can restore it (supports nested statement execution).
+pub fn pushKnnMemo(memo: *KnnMemo) ?*KnnMemo {
+    const prev = active_knn_memo;
+    active_knn_memo = memo;
+    return prev;
+}
+
+pub fn popKnnMemo(prev: ?*KnnMemo) void {
+    active_knn_memo = prev;
+}
+
+/// True when NONE of `args` references a bound variable — i.e. the knn() call is
+/// constant across candidate rows and safe to evaluate once + memoize.
+fn knnArgsRowInvariant(args: []const *ast.Expr) bool {
+    if (args.len == 0) return false;
+    const pattern_helpers = @import("execution/pattern_helpers.zig");
+    for (args) |arg| {
+        if (pattern_helpers.containsVariableReference(arg.*)) return false;
+    }
+    return true;
+}
+
+/// Evaluate a knn()/vector_knn() call, reusing a memoized result when the call
+/// is row-invariant and a KnnMemo is active (geode#875 RC-6).
+fn evalVectorKnnMemoized(allocator: std.mem.Allocator, call_args: []*ast.Expr, env: Env) EvalError!Value {
+    const memo = active_knn_memo orelse return evalVectorKnn(allocator, call_args, env);
+    if (!knnArgsRowInvariant(call_args)) return evalVectorKnn(allocator, call_args, env);
+    const key = @intFromPtr(call_args.ptr);
+    if (memo.map.get(key)) |cached| return cached;
+    // Evaluate + store the result on the memo's (query-stable) allocator, NOT the
+    // caller's per-row allocator: the cached Value is reused across every later
+    // row, so it must outlive any per-row arena. The result is a small k-element
+    // id List; the scan's large transient candidate buffer is freed inside
+    // evalVectorKnn regardless.
+    const computed = try evalVectorKnn(memo.allocator, call_args, env);
+    memo.map.put(memo.allocator, key, computed) catch {};
+    return computed;
+}
+
 fn scanVectorKnn(
     allocator: std.mem.Allocator,
     property_name: []const u8,
@@ -2465,18 +2553,25 @@ fn scanVectorKnn(
     k: usize,
     metric: VectorMetric,
 ) EvalError!KnnScanResult {
+    _ = knn_scan_invocations.fetchAdd(1, .seq_cst);
+
     const scope = try currentKnnScanScope();
     const store = graph_store.getGlobalStore(allocator);
     var candidates = std.ArrayList(VectorCandidate).empty;
     defer candidates.deinit(allocator);
     var property_seen = false;
 
-    // ENG-3954 / #874: snapshot the resident ids under each shard's map_lock
-    // instead of walking the live, unlocked cache iterator.
-    const node_ids = store.nodes.snapshotKeys(allocator) catch return error.OutOfMemory;
+    // geode#875 RC-3: enumerate the COMPLETE persisted node id set
+    // (bounded-cache-safe) rather than snapshotting the resident cache only.
+    // After a cold restart the resident node cache is EMPTY, so a resident-only
+    // snapshot answers [] (a silent wrong answer / spurious UnknownProperty).
+    // getAllNodes reads the fully-resident per-graph IdMaps; the scan then
+    // hydrates each id on demand (hydrate=true).
+    const node_ids = store.getAllNodes(allocator) catch return error.OutOfMemory;
     defer allocator.free(node_ids);
     try scanVectorKnnBatched(
         graph_store.NodeCache,
+        true,
         allocator,
         &store.nodes,
         node_ids,
@@ -2499,6 +2594,7 @@ fn scanVectorKnn(
     defer allocator.free(edge_ids);
     try scanVectorKnnBatched(
         graph_store.EdgeCache,
+        false,
         allocator,
         &store.edges,
         edge_ids,

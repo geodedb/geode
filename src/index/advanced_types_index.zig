@@ -480,6 +480,12 @@ pub const VectorIndexWrapper = struct {
     hnsw_index: ?hnsw.Hnsw,
     metric: DistanceMetric,
     dimension: u16,
+    // geode#875 RC-1: the set of entity ids currently inserted into the HNSW
+    // graph. HNSW has no in-place update/remove, so the incremental-insert fast
+    // path (property_mutation) must detect an OVERWRITE of an already-present id
+    // and fall back to a full rebuild rather than append a stale duplicate. Reset
+    // implicitly on rebuild (the wrapper is dropped+recreated).
+    ids: std.AutoHashMapUnmanaged(u64, void) = .{},
 
     pub const DistanceMetric = enum {
         l2,
@@ -497,6 +503,7 @@ pub const VectorIndexWrapper = struct {
             }),
             .metric = metric,
             .dimension = dim,
+            .ids = .{},
         };
     }
 
@@ -505,12 +512,19 @@ pub const VectorIndexWrapper = struct {
             index.deinit();
             self.hnsw_index = null;
         }
+        self.ids.deinit(self.allocator);
+    }
+
+    /// geode#875 RC-1: is `node_id` already present in the HNSW graph?
+    pub fn contains(self: *const VectorIndexWrapper, node_id: u64) bool {
+        return self.ids.contains(node_id);
     }
 
     pub fn insert(self: *VectorIndexWrapper, node_id: u64, vec: vector.VectorF32) !void {
         try self.ensureInitialized(vec.dim);
         if (self.dimension != vec.dim) return error.DimensionMismatch;
         try self.hnsw_index.?.insert(node_id, vec.data);
+        try self.ids.put(self.allocator, node_id, {});
     }
 
     pub fn search(self: *VectorIndexWrapper, query: vector.VectorF32, k: u32, allocator: std.mem.Allocator) ![]VectorSearchResult {

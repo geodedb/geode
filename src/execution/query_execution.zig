@@ -1559,6 +1559,20 @@ pub fn executeQueryWithContext(allocator: std.mem.Allocator, q: ast.Query, conte
     const exec_ctx: *ExecutionContext = @constCast(&context);
     const prev_ctx = execution.pushActiveContext(&context);
     defer execution.popActiveContext(prev_ctx);
+
+    // geode#875 RC-6: install a per-query row-invariant knn() memo across the
+    // WHOLE read/write dispatch (planned-read runtime AND the legacy executor).
+    // A `WHERE id(n) IN knn(q)` over N candidate rows otherwise re-runs the O(n)
+    // brute-force scan once per row (O(n²)); with the memo the variable-free
+    // knn() is scanned once and reused for every row. Torn down on return, and
+    // AST addresses are never reused within a query, so a cached hit is always
+    // the same call site's constant result.
+    var knn_memo = eval.KnnMemo{ .allocator = allocator };
+    const prev_knn_memo = eval.pushKnnMemo(&knn_memo);
+    defer {
+        eval.popKnnMemo(prev_knn_memo);
+        knn_memo.deinit();
+    }
     // CANARY: REQ=REQ-GQL-CHAIN; FEATURE="Query Chaining via WITH"; ASPECT=Execution; STATUS=TESTED; TEST=graph_algorithms; OWNER=execution; UPDATED=2026-01-17
 
     // Evaluate LET bindings first and add them to parameter environment

@@ -6634,21 +6634,24 @@ pub const GraphStore = struct {
         // node-cache eviction. When unbounded, the resident map equals the full
         // set, so use it directly (fast path, no behavior change).
         if (self.nodes.effectiveCap() == 0) {
-            var result = try allocator.alloc(u64, self.nodes.count());
-            var iter = self.nodes.iterator();
-            var i: usize = 0;
-            while (iter.next()) |entry| {
-                result[i] = entry.key_ptr.*;
-                i += 1;
-            }
-            return result;
+            // geode#875 RC-3: snapshot resident keys UNDER each shard's map_lock
+            // instead of walking the live, unlocked cache iterator — a concurrent
+            // MERGE/insert grows the cache between `count()` and the walk, so the
+            // pre-sized alloc + unlocked iteration faulted (the knn-scan-race
+            // crash). Unbounded ⇒ resident set == full set, so this stays exact.
+            return @constCast(&self.nodes).snapshotKeys(allocator);
         }
         var ids: std.ArrayList(u64) = .empty;
         errdefer ids.deinit(allocator);
         var it = @constCast(self).id_maps.iterator();
         while (it.next()) |entry| {
-            var nit = entry.value_ptr.nodeUuidIterator();
-            while (nit.next()) |nuuid| try ids.append(allocator, @as(u64, @truncate(nuuid)));
+            // geode#875 RC-3: snapshot each graph's node uuids UNDER the IdMap
+            // leaf mutex — an unlocked `nodeUuidIterator` walk faults when a
+            // concurrent MERGE/insert resizes `node_uuid_to_slot` (the
+            // knn-scan-race crash).
+            const uuids = try entry.value_ptr.snapshotNodeUuids(allocator);
+            defer allocator.free(uuids);
+            for (uuids) |nuuid| try ids.append(allocator, @as(u64, @truncate(nuuid)));
         }
         return ids.toOwnedSlice(allocator);
     }
@@ -6682,8 +6685,11 @@ pub const GraphStore = struct {
         var it = @constCast(self).id_maps.iterator();
         while (it.next()) |entry| {
             const graph_name = entry.key_ptr.*;
-            var nit = entry.value_ptr.nodeUuidIterator();
-            while (nit.next()) |nuuid| {
+            // geode#875 RC-3: snapshot uuids under the IdMap leaf mutex (race-safe
+            // vs. concurrent insert), then resolve each id's tenant outside it.
+            const uuids = try entry.value_ptr.snapshotNodeUuids(allocator);
+            defer allocator.free(uuids);
+            for (uuids) |nuuid| {
                 const id = @as(u64, @truncate(nuuid));
                 if (@constCast(self).nodeMatchesTenant(graph_name, entry.value_ptr, id, tid)) {
                     try result.append(allocator, id);

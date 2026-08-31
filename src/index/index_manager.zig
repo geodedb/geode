@@ -1854,6 +1854,46 @@ pub const IndexManager = struct {
         }
     }
 
+    /// geode#875 RC-1: incrementally insert ONE entity's vector into every
+    /// advanced VECTOR index registered for (label, property), instead of the
+    /// O((K+M)·M) full drop+rebuild the write path used to run per write.
+    ///
+    /// Returns true only when EVERY matching index was updated incrementally.
+    /// Returns false (and the caller must fall back to a full rebuild) when:
+    ///   * a matching index is not a vector index (no incremental path here),
+    ///   * the id is ALREADY present — an OVERWRITE — because HNSW has no
+    ///     in-place update/remove, so a second insert would leave a stale
+    ///     duplicate; the rebuild rebuilds from the committed store state, and
+    ///   * the property value does not coerce to a vector, or the insert failed.
+    /// On a false return any partial incremental inserts are harmless: the
+    /// caller's rebuild drops and repopulates the index from scratch.
+    pub fn tryIncrementalInsertForProperty(
+        self: *IndexManager,
+        label: []const u8,
+        property: []const u8,
+        entity_id: u64,
+        prop: graph_store.PropertyValue,
+    ) bool {
+        self.rebuild_mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
+        defer self.rebuild_mutex.unlock(std.Io.Threaded.global_single_threaded.io());
+
+        var handled_any = false;
+        var iter = self.advanced_property_indexes.iterator();
+        while (iter.next()) |entry| {
+            const meta = entry.value_ptr.*;
+            if (!std.mem.eql(u8, meta.label, label) or !std.mem.eql(u8, meta.property, property)) continue;
+            if (meta.index_type != .vector_f32) return false;
+            const wrapper = self.advanced_vector_indexes.get(meta.name) orelse return false;
+            // OVERWRITE of an already-indexed id: fall back to a full rebuild.
+            if (wrapper.contains(entity_id)) return false;
+            const vec = vectorFromPropertyValue(self.allocator, prop) orelse return false;
+            defer if (vec.owned) |data| self.allocator.free(data);
+            self.insertIntoAdvancedVectorIndex(meta.name, vec.value, entity_id) catch return false;
+            handled_any = true;
+        }
+        return handled_any;
+    }
+
     /// GAP-0511: Rebuild an advanced index. Acquires rebuild_mutex internally
     /// so callers do NOT need to hold the graph write lock during rebuild.
     /// The rebuild drops the old index, creates a new empty one, re-registers
@@ -1864,9 +1904,21 @@ pub const IndexManager = struct {
         store: *graph_store.GraphStore,
         index_name: []const u8,
     ) !void {
+        _ = try self.rebuildAdvancedIndexCounted(store, index_name);
+    }
+
+    /// Same as `rebuildAdvancedIndex`, but returns the number of entities the
+    /// backfill inserted (geode#875 RC-5). CREATE INDEX and the quic/grpc rebuild
+    /// call sites use this to log/surface a real nodes_indexed count instead of
+    /// swallowing a silently-zero-indexed backfill.
+    pub fn rebuildAdvancedIndexCounted(
+        self: *IndexManager,
+        store: *graph_store.GraphStore,
+        index_name: []const u8,
+    ) !usize {
         self.rebuild_mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
         defer self.rebuild_mutex.unlock(std.Io.Threaded.global_single_threaded.io());
-        const meta = self.advanced_property_indexes.get(index_name) orelse return;
+        const meta = self.advanced_property_indexes.get(index_name) orelse return 0;
         const index_name_copy = try self.allocator.dupe(u8, index_name);
         defer self.allocator.free(index_name_copy);
         const label_copy = try self.allocator.dupe(u8, meta.label);
@@ -1906,12 +1958,13 @@ pub const IndexManager = struct {
                 _ = try self.dropAdvancedIndex(index_name, .domain_trie);
                 try self.createAdvancedDomainIndex(index_name_copy);
             },
-            else => return,
+            else => return 0,
         }
 
         try self.registerAdvancedPropertyIndex(index_name_copy, label_copy, property_copy, index_type);
-        try self.populateAdvancedIndex(store, self.advanced_property_indexes.get(index_name_copy).?);
+        const indexed = try self.populateAdvancedIndex(store, self.advanced_property_indexes.get(index_name_copy).?);
         self.statistics.rebuild_count += 1;
+        return indexed;
     }
 
     pub fn dropAdvancedIndex(
@@ -1995,13 +2048,26 @@ pub const IndexManager = struct {
         return false;
     }
 
-    fn populateAdvancedIndex(self: *IndexManager, store: *graph_store.GraphStore, meta: AdvancedPropertyIndex) !void {
-        var node_iter = store.nodes.iterator();
-        while (node_iter.next()) |entry| {
-            const node = entry.value_ptr;
+    /// Backfill `meta`'s index from the store. Returns the number of entities
+    /// (nodes + edges) actually inserted, so a caller can surface a real
+    /// nodes_indexed count instead of swallowing a zero-indexed backfill as
+    /// success (geode#875 RC-5).
+    fn populateAdvancedIndex(self: *IndexManager, store: *graph_store.GraphStore, meta: AdvancedPropertyIndex) !usize {
+        var indexed: usize = 0;
+
+        // geode#875 RC-2 (bounded-cache-safe): enumerate the COMPLETE persisted
+        // node id set and hydrate each body, mirroring the edge half below.
+        // Iterating the resident `store.nodes` map alone misses evicted / cold
+        // nodes (the resident cache is EMPTY after a restart until first access),
+        // so a rebuild/backfill over the resident iterator inserts ~nothing and
+        // leaves a populated-count-0 shell.
+        const adv_node_ids = try store.getAllNodes(self.allocator);
+        defer self.allocator.free(adv_node_ids);
+        for (adv_node_ids) |__nid| {
+            const node = store.getNodePtrHydrated(__nid) orelse continue;
             if (!nodeHasLabel(node.labels, meta.label)) continue;
             const prop = node.properties.get(meta.property) orelse continue;
-            try self.insertAdvancedPropertyValue(meta, node.id, prop);
+            if (try self.insertAdvancedPropertyValue(meta, node.id, prop)) indexed += 1;
         }
 
         // PHASE 1 (edge-engine-direct): enumerate the COMPLETE edge id set
@@ -2014,31 +2080,38 @@ pub const IndexManager = struct {
             const edge = store.getEdgePtrHydrated(__eid) orelse continue;
             if (!std.mem.eql(u8, edge.label, meta.label)) continue;
             const prop = edge.properties.get(meta.property) orelse continue;
-            try self.insertAdvancedPropertyValue(meta, edge.id, prop);
+            if (try self.insertAdvancedPropertyValue(meta, edge.id, prop)) indexed += 1;
         }
+        return indexed;
     }
 
+    /// Insert one entity's property value into `meta`'s index. Returns true when
+    /// a value was actually inserted (the property coerced to the index's type),
+    /// so the backfill can report an honest indexed count (geode#875 RC-5).
     fn insertAdvancedPropertyValue(
         self: *IndexManager,
         meta: AdvancedPropertyIndex,
         entity_id: u64,
         prop: graph_store.PropertyValue,
-    ) !void {
+    ) !bool {
         switch (meta.index_type) {
             .vector_f32 => {
                 if (vectorFromPropertyValue(self.allocator, prop)) |vec| {
                     defer if (vec.owned) |data| self.allocator.free(data);
                     try self.insertIntoAdvancedVectorIndex(meta.name, vec.value, entity_id);
+                    return true;
                 }
             },
             .spatial_geographic => {
                 if (latLonFromPropertyValue(prop)) |location| {
                     try self.insertIntoAdvancedSpatialIndex(meta.name, location, entity_id);
+                    return true;
                 }
             },
             .network_cidr => {
                 if (networkValueFromPropertyValue(prop)) |network_value| {
                     try self.insertIntoAdvancedNetworkIndex(meta.name, network_value, entity_id);
+                    return true;
                 }
             },
             .signature_crypto => {
@@ -2047,6 +2120,7 @@ pub const IndexManager = struct {
                     if (self.advanced_signature_indexes.getPtr(meta.name)) |wrapper| {
                         try wrapper.*.insert(entity_id, signature);
                         self.statistics.total_entries += 1;
+                        return true;
                     }
                 }
             },
@@ -2055,6 +2129,7 @@ pub const IndexManager = struct {
                     if (r.lower) |lower| {
                         if (r.upper) |upper| {
                             try self.insertIntoAdvancedIntervalIndex(meta.name, lower, upper, entity_id);
+                            return true;
                         }
                     }
                 }
@@ -2063,16 +2138,19 @@ pub const IndexManager = struct {
                 if (jsonbFromPropertyValue(self.allocator, prop)) |doc| {
                     defer doc.deinit();
                     try self.insertIntoAdvancedJsonbIndex(meta.name, entity_id, doc);
+                    return true;
                 }
             },
             .domain_trie => {
                 if (domainFromPropertyValue(self.allocator, prop)) |domain| {
                     defer domain.deinit(self.allocator);
                     try self.insertIntoAdvancedDomainIndex(meta.name, domain, entity_id);
+                    return true;
                 }
             },
             else => {},
         }
+        return false;
     }
 
     fn removeAdvancedPropertyIndex(self: *IndexManager, index_name: []const u8) void {

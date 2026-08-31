@@ -531,6 +531,21 @@ pub const IdMap = struct {
         };
     }
 
+    /// geode#875 RC-3: race-safe snapshot of every live node uuid in this graph.
+    /// Holds the leaf mutex for the whole walk, so it is safe against a concurrent
+    /// `insertNode` growing/rehashing `node_uuid_to_slot` (an unlocked
+    /// `nodeUuidIterator` walk faults when a writer resizes the map underneath).
+    /// Caller owns the returned slice.
+    pub fn snapshotNodeUuids(self: *IdMap, allocator: std.mem.Allocator) ![]u128 {
+        self.lockMu();
+        defer self.unlockMu();
+        var list: std.ArrayList(u128) = .empty;
+        errdefer list.deinit(allocator);
+        var it = self.nodeUuidIterator();
+        while (it.next()) |uuid| try list.append(allocator, uuid);
+        return list.toOwnedSlice(allocator);
+    }
+
     pub fn edgeCount(self: *const IdMap) u32 {
         switch (self.mode) {
             .resident => return self.edge_uuid_to_slot.count(),

@@ -171,6 +171,50 @@ pub fn rebuildAdvancedIndexesForPropertyPublic(
     rebuildAdvancedIndexesForProperty(store, label, property);
 }
 
+/// geode#875 RC-1: keep advanced indexes current for a single node property
+/// write. In the AUTOCOMMIT / non-transactional path this is an INCREMENTAL
+/// HNSW insert of the one changed node — NOT the O((K+M)·M) full drop+rebuild
+/// the write path used to run per write (133 s for a single write at 24 k).
+/// Falls back to a full rebuild when:
+///   * a deferred rebuild context is active (an open txn undo log, or a
+///     per-statement pending-rebuild set) — the deferred rebuild dedupes AND is
+///     the only rollback-safe path (HNSW cannot un-insert on rollback), or
+///   * the incremental insert declines (an OVERWRITE of an already-indexed id, a
+///     non-vector index type, or a value that does not coerce to a vector).
+fn maintainAdvancedIndexesForNodeWrite(
+    store: *graph_store.GraphStore,
+    label: []const u8,
+    property: []const u8,
+    node_id: u64,
+    prop: graph_store.PropertyValue,
+) void {
+    const manager = index_manager.getGlobalIndexManager() orelse return;
+    if (!manager.hasAdvancedIndexForProperty(label, property)) return;
+
+    if (advancedIndexRebuildIsDeferred(store)) {
+        rebuildAdvancedIndexesForProperty(store, label, property);
+        return;
+    }
+
+    if (!manager.tryIncrementalInsertForProperty(label, property, node_id, prop)) {
+        rebuildAdvancedIndexesForProperty(store, label, property);
+    }
+}
+
+/// True when a node property write's advanced-index maintenance would be
+/// DEFERRED to a batched full rebuild (an open txn undo log, or a per-statement
+/// pending-rebuild set on the active execution context). Mirrors the branch
+/// selection in `queueAdvancedIndexRebuild`.
+fn advancedIndexRebuildIsDeferred(store: *graph_store.GraphStore) bool {
+    const txn_undo_log = @import("../txn_undo_log.zig");
+    if (txn_undo_log.getGlobalUndoLog(store.allocator).active) return true;
+    const execution = @import("../execution.zig");
+    if (execution.getActiveContext()) |ctx| {
+        if (ctx.pending_index_rebuilds != null) return true;
+    }
+    return false;
+}
+
 fn rebuildAdvancedIndexesForLabel(store: *graph_store.GraphStore, label: []const u8) void {
     const manager = index_manager.getGlobalIndexManager() orelse return;
     if (!manager.hasAdvancedIndexForLabel(label)) return;
@@ -382,7 +426,7 @@ pub fn setNodePropertyFromValue(
         }
     }
 
-    if (labels.len > 0) rebuildAdvancedIndexesForProperty(store, labels[0], key);
+    if (labels.len > 0) maintainAdvancedIndexesForNodeWrite(store, labels[0], key, node_id, prop_value);
 
     // A4b: keep fulltext indexes current. This is the single property-write
     // chokepoint for ALL node SET paths (CREATE…SET, MATCH…SET, MERGE ON
