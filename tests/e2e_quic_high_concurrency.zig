@@ -15,7 +15,12 @@ const default_execute_timeout_secs = if (builtin.mode == .Debug) 5 else 10;
 const default_execute_retries = if (builtin.mode == .Debug) 0 else 1;
 const default_request_stagger_us = if (builtin.mode == .Debug) 0 else 100;
 const default_detached_first_stream_threads = if (builtin.mode == .Debug) 64 else 256;
-const default_poll_worker_count = if (builtin.mode == .Debug) 1 else 16;
+// ENG-3914 (RC-4): mirrors `default_quic_poll_worker_count` in
+// src/server/main.zig, which moved its Debug default 1 -> 4 (one endpoint poll
+// worker serialises datagram delivery for every connection; measured >30x
+// slower than 2+ under four concurrent batch sessions). Kept in lockstep so
+// this harness spawns servers with the shipping default.
+const default_poll_worker_count = if (builtin.mode == .Debug) 4 else 16;
 const default_cooperative_first_stream_worker_count = if (builtin.mode == .Debug) 16 else 256;
 const default_connection_worker_count = 64;
 const default_group_commit_coalesce_us: u32 = 500;

@@ -268,7 +268,21 @@ const default_quic_acceptor_queue_capacity = 4096;
 const default_quic_connection_worker_count = 64;
 const default_quic_detached_first_stream_threads = if (builtin.mode == .Debug) 64 else 256;
 const default_quic_cooperative_first_stream_worker_count = if (builtin.mode == .Debug) 16 else 512;
-const default_quic_poll_worker_count = if (builtin.mode == .Debug) 1 else 16;
+// ENG-3914 (RC-4): the Debug default used to be 1 ("deterministic local
+// traces"). ONE endpoint poll worker serialises datagram delivery for EVERY
+// connection, and the stall is not linear — measured on this repo's Debug
+// binary with four concurrent `geode query --batch` sessions replaying 200
+// MERGE statements each: 1 worker drained 149/200 statements in 120 s
+// (~800 ms/statement) while 2 workers drained 200/200 in 3.4 s and 4 in 3.2 s
+// (~16 ms/statement) — a >30x cliff that exists ONLY at 1. Every local
+// `zig build test-*` step, every geodetestlab spec and every developer shell
+// runs a Debug binary, so that cliff was the real cause of "concurrent writers
+// time out" spec failures (merge_cross_session_idempotency.yml's 30 s shell
+// budget). 4 matches `high_fanout_poll_worker_cap` for Debug in
+// tests/e2e_quic_high_concurrency.zig, so it stays well clear of the
+// poll-thread CPU storm the release cap guards against in same-process
+// harnesses while restoring sane concurrent latency.
+const default_quic_poll_worker_count = if (builtin.mode == .Debug) 4 else 16;
 const quic_connection_queue_capacity = 1024;
 const default_quic_connection_admission_threads = if (builtin.mode == .Debug) 64 else 4096;
 const quic_connection_admission_stack_size = 1024 * 1024;
