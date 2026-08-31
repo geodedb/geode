@@ -567,23 +567,34 @@ CANARY: REQ=REQ-DOC-MCP-LSP-BRIDGE; FEATURE="MCPLSPBridgeDoc"; ASPECT=Documentat
 
 ---
 
-## Brute-Force Lockout (per-source-IP)
+## Brute-Force Lockout (per-principal, with a per-IP ceiling)
 
-Geode counts failed authentications per **source IP address** across both
-transports (QUIC HELLO and gRPC HELLO). Once an IP reaches the threshold it is
-refused for the duration of the lockout window, regardless of which username it
-tries — this is what stops a username-rotating password-spray.
+Geode counts failed authentications per **(source IP, username) principal**
+across both transports (QUIC HELLO and gRPC HELLO). Once a principal reaches the
+per-principal threshold it is refused for the duration of the lockout window
+(ENG-3954 RC-1). A **coarse per-IP ceiling**, counted across ALL usernames from
+an IP, sits above that threshold and still stops a username-rotating
+password-spray without letting one attacker deny every other account on a shared
+NAT egress. A failed login for one principal therefore never locks out another
+principal from the same IP — including the operator.
 
 ### Operator configuration
 
 | Knob | CLI flag | Environment variable | Default | Accepted range |
 |---|---|---|---|---|
-| Failures before lockout | `--auth-lockout-attempts <n>` | `GEODE_AUTH_RATE_MAX_ATTEMPTS` | `10` | 1 - 4294967295 |
+| Failures before a principal is locked | `--auth-lockout-attempts <n>` | `GEODE_AUTH_RATE_MAX_ATTEMPTS` | `10` | 1 - 4294967295 |
+| Coarse per-IP ceiling (all usernames) | `--auth-lockout-ip-attempts <n>` | `GEODE_AUTH_RATE_IP_MAX_ATTEMPTS` | `50` | must exceed the per-principal threshold |
 | Lockout window (seconds) | `--auth-lockout-secs <n>` | `GEODE_AUTH_RATE_LOCKOUT_SECS` | `60` | 1 - 86400 (1 day) |
+
+The per-IP ceiling MUST be strictly above the per-principal threshold; a value
+at or under it (or non-numeric) is REJECTED and falls through to the next source
+— otherwise per-principal keying would buy nothing because the ceiling would
+fire at the same count.
 
 ```bash
 # Widen the lockout for a NATed office that shares one egress IP
-geode serve --listen 0.0.0.0:3141 --auth-lockout-attempts 25 --auth-lockout-secs 300
+geode serve --listen 0.0.0.0:3141 \
+  --auth-lockout-attempts 25 --auth-lockout-ip-attempts 200 --auth-lockout-secs 300
 ```
 
 **Precedence** is the geode-wide `flags > environment > defaults`, resolved
@@ -594,19 +605,36 @@ the next source, so an operator typo can never disable brute-force protection.
 
 ### Behaviour notes
 
-- **Keyed on the source IP only**, so every client behind a shared NAT egress
-  address shares one counter. Size `--auth-lockout-attempts` accordingly.
+- **Keyed on the (source IP, username) pair**, with a coarse per-IP ceiling as a
+  backstop (ENG-3954 RC-1). A stranger spraying a username that does not exist
+  charges only that `(ip, bogus-username)` principal, so a legitimate user — and
+  the admin — behind the same NAT egress keep their own independent budgets. The
+  ceiling only fires once the IP as a whole crosses `--auth-lockout-ip-attempts`,
+  which is why it must sit well above the per-principal threshold.
 - **In-memory and per-process**: the counters are not persisted and are not
   shared across cluster nodes. A restart clears every lockout.
-- **A successful authentication resets that IP's counter**, and only a
+- **A successful authentication resets that principal's counter**, and only a
   credential that was actually checked and rejected increments it. Transport
   faults, malformed HELLOs, and "the security store could not answer"
   (`error.AuthUnavailable`) are NOT counted (ENG-3954 / #874), so a legitimate
-  client cannot lock itself out by hitting a degraded server.
+  client cannot lock itself out by hitting a degraded server. (Store-unavailable
+  resolver reads are surfaced as the `geode_security_auth_store_unavailable_total`
+  runtime metric so an operator can see a degraded store even though it never
+  arms a lockout.)
 - **A correct credential does not clear an active lockout.** This is deliberate:
   verifying the password first would let an attacker force an unbounded number
-  of Argon2id verifications from a locked IP (a CPU-amplification DoS). The
-  lockout check therefore runs BEFORE credential verification and simply expires
-  on its own.
+  of Argon2id verifications from a locked principal (a CPU-amplification DoS).
+  The lockout check therefore runs BEFORE credential verification.
+- **The lockout window is anchored, not sliding (ENG-3954 RC-2).** When a bucket
+  arms, its deadline is fixed at `now + window`. Failures that keep arriving
+  while it is already locked are still counted but do NOT push the deadline
+  forward, so sustained guessing can no longer turn a fixed window into an
+  indefinite one. Once the anchored window elapses the lockout expires on its
+  own and the client may retry.
+- **Introspection and recovery (ENG-3954 RC-3).** A denial is logged with the
+  attempted username and which bucket denied (`denial_reason=principal` vs
+  `ip_ceiling`), and the limiter exposes `lockoutReason`, `lockoutRemainingNs`,
+  and `clearLockout` (an empty username clears an IP's ceiling bucket) so an
+  operator can see and release a misfiring lockout without restarting the server.
 
 CANARY: REQ=REQ-DOC-AUTH-LOCKOUT-CONFIG; FEATURE="AuthRateLimiting"; ASPECT=Documentation; STATUS=EXEMPT; OWNER=security; UPDATED=2026-08-29

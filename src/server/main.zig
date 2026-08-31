@@ -1919,6 +1919,10 @@ pub fn main() !void {
     // the lockout-expiry path with a short window).
     const lockout_cfg = auth_rate_limiter_mod.resolveConfig(config.auth_lockout_attempts, config.auth_lockout_secs);
     var ip_rate_limiter = auth_rate_limiter_mod.AuthRateLimiter.initWithConfig(gpa, lockout_cfg.max_attempts, lockout_cfg.lockout_duration_ns);
+    // ENG-3954 RC-1c: the coarse per-IP ceiling (across ALL usernames) resolves
+    // with the same flags > env > default precedence, validated to stay strictly
+    // above the per-principal threshold so username-keyed limiting keeps meaning.
+    ip_rate_limiter.ip_max_attempts = auth_rate_limiter_mod.resolveIpMaxAttempts(config.auth_lockout_ip_attempts, lockout_cfg.max_attempts);
     defer ip_rate_limiter.deinit();
     quic_connection_handler.setAuthRateLimiter(&ip_rate_limiter);
     defer quic_connection_handler.setAuthRateLimiter(null);
@@ -2683,6 +2687,12 @@ pub fn main() !void {
             "quic_active_connections",
             quic_metrics.activeConnections,
             quic_metrics_ctx,
+        );
+        // ENG-3954 RC-4: surface store-unavailable auth resolver reads (the
+        // "we could not check" outcomes the rate limiter does not count).
+        try metrics_registry.register(
+            "geode_security_auth_store_unavailable_total",
+            persistent_auth_resolver.storeUnavailableCounter(),
         );
         try metrics_registry.registerGauge(
             "quic_total_bytes_in_flight",

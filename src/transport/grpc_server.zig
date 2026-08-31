@@ -1425,7 +1425,19 @@ fn handleHandshake(request_bytes: []const u8, trans: *GrpcTransport, allocator: 
 
     // S6: Check auth rate limiter before authentication attempt (parity with QUIC handler).
     if (auth_rate_limiter_mod.getGlobalRateLimiter()) |limiter| {
-        if (limiter.isLocked(peer_ip)) {
+        if (limiter.isLockedForPrincipal(peer_ip, req.username)) {
+            // ENG-3954 RC-3 (QUIC parity): name the attempted username and which
+            // bucket denied so a per-account guessing run is distinguishable from
+            // a NAT-egress spray in the logs.
+            const reason = limiter.lockoutReason(peer_ip, req.username);
+            log.warn("Authentication rate limit exceeded", &.{
+                Attr.string("peer_ip", peer_ip),
+                Attr.string("username", req.username),
+                Attr.string("denial_reason", switch (reason orelse .principal) {
+                    .principal => "principal",
+                    .ip_ceiling => "ip_ceiling",
+                }),
+            });
             const resp = schema.HelloResponse{
                 .success = false,
                 .session_id = "",
@@ -1472,8 +1484,11 @@ fn handleHandshake(request_bytes: []const u8, trans: *GrpcTransport, allocator: 
             // credential counts against the per-IP lockout.
             const checked = auth_rate_limiter_mod.shouldCountFailedAttempt(auth_err);
             if (checked) {
+                // ENG-3954 RC-1 (QUIC parity): charge the ATTEMPTED principal so
+                // one principal's failures never lock another; the coarse per-IP
+                // ceiling still accrues a username-rotating spray.
                 if (auth_rate_limiter_mod.getGlobalRateLimiter()) |limiter| {
-                    limiter.recordFailure(peer_ip);
+                    limiter.recordFailureForPrincipal(peer_ip, req.username);
                 }
             }
             const resp = schema.HelloResponse{
@@ -1485,9 +1500,9 @@ fn handleHandshake(request_bytes: []const u8, trans: *GrpcTransport, allocator: 
             return encodeMessage(allocator, resp);
         };
 
-        // S6: Successful authentication — reset failure counter.
+        // S6: Successful authentication — reset this principal's counter.
         if (auth_rate_limiter_mod.getGlobalRateLimiter()) |limiter| {
-            limiter.recordSuccess(peer_ip);
+            limiter.recordSuccessForPrincipal(peer_ip, req.username);
         }
         // CANARY: REQ=REQ-DSN-GRAPH-BIND-005; FEATURE="DSNGraphBinding"; ASPECT=GrpcGraphResolution; STATUS=IMPL; OWNER=transport; UPDATED=2026-03-25
         // Resolve graph from HELLO request — validate, auto-create, bind session

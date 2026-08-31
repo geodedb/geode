@@ -5903,9 +5903,19 @@ fn handleClientMessage(
             // S6: Per-IP rate limiting — reject locked-out IPs before attempting authentication.
             // CANARY: REQ=REQ-SEC-RATE-LIMIT-006; FEATURE="AuthRateLimiting"; ASPECT=HelloCheck; STATUS=TESTED; TEST=geodetestlab/specs/authn_rate_limiter.yml; OWNER=security; UPDATED=2026-06-11
             if (g_auth_rate_limiter) |limiter| {
-                if (limiter.isLocked(peer_ip)) {
+                if (limiter.isLockedForPrincipal(peer_ip, hello_req.username)) {
+                    // ENG-3954 RC-3: the field incident was un-triageable because
+                    // the denial log named only the peer IP. Name the attempted
+                    // username and WHICH bucket denied so an operator can tell a
+                    // per-account guessing run from a NAT-egress spray.
+                    const reason = limiter.lockoutReason(peer_ip, hello_req.username);
                     log.warn("Authentication rate limit exceeded", &.{
                         Attr.string("peer_ip", peer_ip),
+                        Attr.string("username", hello_req.username),
+                        Attr.string("denial_reason", switch (reason orelse .principal) {
+                            .principal => "principal",
+                            .ip_ceiling => "ip_ceiling",
+                        }),
                     });
                     const resp = schema.QuicServerMessage{ .hello = .{
                         .success = false,
@@ -5963,7 +5973,11 @@ fn handleClientMessage(
                     // answer (error.AuthUnavailable) is a server-side fault.
                     const checked = auth_rate_limiter.shouldCountFailedAttempt(auth_err);
                     if (checked) {
-                        if (g_auth_rate_limiter) |limiter| limiter.recordFailure(peer_ip);
+                        // ENG-3954 RC-1: charge the failure to the ATTEMPTED
+                        // (peer_ip, username) principal — including a nonexistent
+                        // username — so the victim's own bucket is untouched
+                        // while the coarse per-IP ceiling still accrues a spray.
+                        if (g_auth_rate_limiter) |limiter| limiter.recordFailureForPrincipal(peer_ip, hello_req.username);
                     }
                     const resp = schema.QuicServerMessage{ .hello = .{
                         .success = false,
@@ -5978,8 +5992,8 @@ fn handleClientMessage(
                     return;
                 };
 
-                // S6: Successful authentication — reset failure counter for this IP.
-                if (g_auth_rate_limiter) |limiter| limiter.recordSuccess(peer_ip);
+                // S6: Successful authentication — reset this principal's counter.
+                if (g_auth_rate_limiter) |limiter| limiter.recordSuccessForPrincipal(peer_ip, hello_req.username);
 
                 if (state.authenticated_user) |u| gpa.free(u);
                 if (state.authenticated_password) |p| {

@@ -59,8 +59,26 @@ fn duplicatePersistentUser(allocator: std.mem.Allocator, store: *geode.graph_sto
 /// answering "no such user".
 fn beginResolverRead() error{SecurityStoreUnavailable}!geode.graph_store.StoreReadAccess {
     const access = geode.graph_store.beginStoreRead();
-    if (access == .unavailable) return user_storage.UserStorageBackend.SecurityStoreUnavailable;
+    if (access == .unavailable) {
+        // ENG-3954 RC-4 (latent): count store-unavailable resolver reads so an
+        // operator can SEE the "we could not check" outcomes the rate limiter
+        // deliberately does not count against a lockout. A monotonic counter
+        // only — the locking protocol is unchanged.
+        _ = g_store_unavailable_total.fetchAdd(1, .monotonic);
+        return user_storage.UserStorageBackend.SecurityStoreUnavailable;
+    }
     return access;
+}
+
+/// ENG-3954 RC-4: monotonic count of resolver reads refused because the
+/// security store lock was held by another thread (`.unavailable`). Registered
+/// into the runtime metrics registry at server startup as
+/// `geode_security_auth_store_unavailable_total`.
+var g_store_unavailable_total = std.atomic.Value(u64).init(0);
+
+/// Accessor for the RC-4 store-unavailable counter (registry registration).
+pub fn storeUnavailableCounter() *std.atomic.Value(u64) {
+    return &g_store_unavailable_total;
 }
 
 pub fn lookupPersistentAuthUser(_: ?*anyopaque, allocator: std.mem.Allocator, username: []const u8) anyerror!?geode.user_management.User {

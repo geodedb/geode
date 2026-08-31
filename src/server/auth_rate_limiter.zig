@@ -36,11 +36,32 @@ pub const AuthRateLimiter = struct {
         lockout_until_ns: i128 = 0,
     };
 
+    /// Which bucket denied a principal (ENG-3954 RC-3). Lets the denial log,
+    /// the admin escape hatch, and any metric label tell "this account is being
+    /// guessed" (`principal`) apart from "this NAT egress is spraying"
+    /// (`ip_ceiling`) — the exact call field triage could not make.
+    pub const DenialReason = enum { principal, ip_ceiling };
+
     /// Maximum failed attempts before an IP is locked out.
     max_attempts: u32,
+    /// COARSE per-IP ceiling counted across ALL usernames (ENG-3954 RC-1c).
+    /// Bounds a username-rotating password-spray without catching a bystander,
+    /// so it MUST stay strictly above `max_attempts`; otherwise per-principal
+    /// keying buys nothing (the ceiling would fire at the same count).
+    ip_max_attempts: u32,
     /// Duration of the lockout window in nanoseconds.
     lockout_duration_ns: u64,
+    /// Legacy IP-only buckets (keyed on the bare peer-IP string). Retained so
+    /// the pre-existing `isLocked`/`recordFailure`/`recordSuccess` semantics are
+    /// unchanged during the migration to the principal-keyed surface.
     entries: std.StringHashMap(Entry),
+    /// Principal buckets keyed on the (ip, username) pair — the composite key is
+    /// `ip ++ "\x00" ++ username`. Threshold is `max_attempts` (ENG-3954 RC-1).
+    principal_entries: std.StringHashMap(Entry),
+    /// Coarse per-IP ceiling buckets keyed on the bare peer-IP string. Threshold
+    /// is `ip_max_attempts` (ENG-3954 RC-1c). Kept apart from `entries` so the
+    /// two thresholds never collide on one shared entry.
+    ip_ceiling_entries: std.StringHashMap(Entry),
     /// Keys that this map owns (heap-duped IP strings).
     allocator: std.mem.Allocator,
     mutex: std.Io.Mutex = std.Io.Mutex.init,
@@ -49,6 +70,10 @@ pub const AuthRateLimiter = struct {
 
     /// Default configuration constants.
     pub const default_max_attempts: u32 = 10;
+    /// Default coarse per-IP ceiling. Strictly above `default_max_attempts` so
+    /// the reproduced burst (10 failures for a single bogus username) locks that
+    /// principal WITHOUT collaterally locking every other user on the IP.
+    pub const default_ip_max_attempts: u32 = 50;
     pub const default_lockout_duration_ns: u64 = 60 * std.time.ns_per_s; // 60 seconds
 
     /// Create a rate limiter with default thresholds.
@@ -91,8 +116,15 @@ pub const AuthRateLimiter = struct {
     pub fn initWithConfig(allocator: std.mem.Allocator, max_attempts: u32, lockout_duration_ns: u64) Self {
         return .{
             .max_attempts = max_attempts,
+            // Strictly above `max_attempts` for every configuration: 5x
+            // (saturating) keeps the invariant even for an operator-raised
+            // threshold, and the floor of `default_ip_max_attempts` keeps a
+            // small threshold from producing a ceiling that catches a bystander.
+            .ip_max_attempts = @max(default_ip_max_attempts, max_attempts *| 5),
             .lockout_duration_ns = lockout_duration_ns,
             .entries = std.StringHashMap(Entry).init(allocator),
+            .principal_entries = std.StringHashMap(Entry).init(allocator),
+            .ip_ceiling_entries = std.StringHashMap(Entry).init(allocator),
             .allocator = allocator,
         };
     }
@@ -101,11 +133,21 @@ pub const AuthRateLimiter = struct {
     pub fn deinit(self: *Self) void {
         self.mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
         defer self.mutex.unlock(std.Io.Threaded.global_single_threaded.io());
-        var iter = self.entries.iterator();
-        while (iter.next()) |kv| {
-            self.allocator.free(kv.key_ptr.*);
-        }
+        freeAllKeys(&self.entries, self.allocator);
+        freeAllKeys(&self.principal_entries, self.allocator);
+        freeAllKeys(&self.ip_ceiling_entries, self.allocator);
         self.entries.deinit();
+        self.principal_entries.deinit();
+        self.ip_ceiling_entries.deinit();
+    }
+
+    /// Free every owned key in a bucket map (composite or IP), then leave it
+    /// ready for `deinit`.
+    fn freeAllKeys(map: *std.StringHashMap(Entry), allocator: std.mem.Allocator) void {
+        var iter = map.iterator();
+        while (iter.next()) |kv| {
+            allocator.free(kv.key_ptr.*);
+        }
     }
 
     /// Return true if the given IP is currently locked out.
@@ -117,41 +159,57 @@ pub const AuthRateLimiter = struct {
 
     /// Internal lock-free check (caller must hold mutex).
     fn isLockedUnlocked(self: *Self, ip: []const u8) bool {
-        const entry = self.entries.get(ip) orelse return false;
+        return bucketLocked(&self.entries, ip, compat_nanoTimestamp());
+    }
+
+    /// Whether a single bucket in `map` under `key` is currently locked.
+    fn bucketLocked(map: *std.StringHashMap(Entry), key: []const u8, now: i128) bool {
+        const entry = map.get(key) orelse return false;
         if (entry.lockout_until_ns == 0) return false;
-        const now = compat_nanoTimestamp();
         return now < entry.lockout_until_ns;
     }
 
-    /// Record a failed authentication attempt for the given IP.
-    /// If the failure count reaches `max_attempts`, the IP is locked out.
-    /// Periodically evicts expired entries to prevent unbounded memory growth.
-    pub fn recordFailure(self: *Self, ip: []const u8) void {
-        self.mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
-        defer self.mutex.unlock(std.Io.Threaded.global_single_threaded.io());
+    /// Remaining lockout time for a bucket, or null when it is not locked.
+    fn bucketRemainingNs(map: *std.StringHashMap(Entry), key: []const u8, now: i128) ?u64 {
+        const entry = map.get(key) orelse return null;
+        if (entry.lockout_until_ns == 0 or now >= entry.lockout_until_ns) return null;
+        return @intCast(entry.lockout_until_ns - now);
+    }
 
-        // Evict expired entries every 100 failures to bound memory growth
-        self.record_count +%= 1;
-        if (self.record_count % 100 == 0) {
-            self.evictExpiredLocked();
-        }
-
-        const now = compat_nanoTimestamp();
-
-        if (self.entries.getPtr(ip)) |entry| {
-            // If an existing lockout has expired, reset before counting.
-            if (entry.lockout_until_ns != 0 and now >= entry.lockout_until_ns) {
-                entry.* = .{};
-            }
-            entry.failed_attempts += 1;
-            entry.last_failure_ns = now;
-            if (entry.failed_attempts >= self.max_attempts) {
-                entry.lockout_until_ns = now + @as(i128, self.lockout_duration_ns);
+    /// Record a failure against one bucket, applying the ANCHORED lockout window
+    /// (ENG-3954 RC-2): a failure that lands while the bucket is ALREADY locked
+    /// still counts but must NEVER push `lockout_until_ns` forward, so sustained
+    /// guessing cannot turn a fixed window into an indefinite one. The
+    /// post-expiry reset-and-recount is preserved. `key` is duplicated on first
+    /// insertion and owned by `map`.
+    fn recordFailureInBucket(self: *Self, map: *std.StringHashMap(Entry), key: []const u8, threshold: u32, now: i128) void {
+        if (map.getPtr(key)) |entry| {
+            if (entry.lockout_until_ns != 0) {
+                if (now >= entry.lockout_until_ns) {
+                    // The window elapsed: reset and recount from scratch.
+                    entry.* = .{};
+                    entry.failed_attempts += 1;
+                    entry.last_failure_ns = now;
+                    if (entry.failed_attempts >= threshold) {
+                        entry.lockout_until_ns = now + @as(i128, @intCast(self.lockout_duration_ns));
+                    }
+                } else {
+                    // ANCHORED: still locked — count, but leave the deadline put.
+                    entry.failed_attempts +|= 1;
+                    entry.last_failure_ns = now;
+                }
+            } else {
+                entry.failed_attempts += 1;
+                entry.last_failure_ns = now;
+                if (entry.failed_attempts >= threshold) {
+                    entry.lockout_until_ns = now + @as(i128, @intCast(self.lockout_duration_ns));
+                }
             }
         } else {
-            // First failure for this IP -- insert a new entry.
-            const owned_key = self.allocator.dupe(u8, ip) catch return;
-            self.entries.put(owned_key, .{
+            // First failure for this key -- insert a new entry (never arms on the
+            // first failure, matching the long-standing IP-only behaviour).
+            const owned_key = self.allocator.dupe(u8, key) catch return;
+            map.put(owned_key, .{
                 .failed_attempts = 1,
                 .last_failure_ns = now,
                 .lockout_until_ns = 0,
@@ -161,14 +219,148 @@ pub const AuthRateLimiter = struct {
         }
     }
 
+    /// Remove a bucket entry (freeing its owned key). Returns whether one was
+    /// present.
+    fn removeBucket(self: *Self, map: *std.StringHashMap(Entry), key: []const u8) bool {
+        if (map.fetchRemove(key)) |kv| {
+            self.allocator.free(kv.key);
+            return true;
+        }
+        return false;
+    }
+
+    /// Bump the periodic eviction counter and sweep every map at the interval.
+    fn tickEviction(self: *Self) void {
+        self.record_count +%= 1;
+        if (self.record_count % 100 == 0) {
+            self.evictExpiredLocked();
+        }
+    }
+
+    /// Record a failed authentication attempt for the given IP.
+    /// If the failure count reaches `max_attempts`, the IP is locked out.
+    /// Periodically evicts expired entries to prevent unbounded memory growth.
+    pub fn recordFailure(self: *Self, ip: []const u8) void {
+        self.mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
+        defer self.mutex.unlock(std.Io.Threaded.global_single_threaded.io());
+        self.tickEviction();
+        self.recordFailureInBucket(&self.entries, ip, self.max_attempts, compat_nanoTimestamp());
+    }
+
     /// Record a successful authentication, resetting the failure counter.
     pub fn recordSuccess(self: *Self, ip: []const u8) void {
         self.mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
         defer self.mutex.unlock(std.Io.Threaded.global_single_threaded.io());
+        _ = self.removeBucket(&self.entries, ip);
+    }
 
-        if (self.entries.fetchRemove(ip)) |kv| {
-            self.allocator.free(kv.key);
+    // ── Principal-keyed surface (ENG-3954 RC-1/RC-3) ───────────────────────
+    // Keyed on the (ip, username) PAIR so a failure charged to one principal
+    // never denies another principal from the same IP, while a coarse per-IP
+    // ceiling (`ip_max_attempts`, counted across ALL usernames) still bounds a
+    // username-rotating spray. Both HELLO gates use these entry points.
+
+    /// Build the composite `ip ++ "\x00" ++ username` key into `buf`; returns the
+    /// used slice, or null when it does not fit. The NUL separator keeps
+    /// ("a", "bc") distinct from ("ab", "c").
+    fn compositeKeyInto(buf: []u8, ip: []const u8, username: []const u8) ?[]const u8 {
+        const need = ip.len + 1 + username.len;
+        if (need > buf.len) return null;
+        @memcpy(buf[0..ip.len], ip);
+        buf[ip.len] = 0;
+        @memcpy(buf[ip.len + 1 ..][0..username.len], username);
+        return buf[0..need];
+    }
+
+    /// Record a failed attempt for the (ip, username) principal AND against the
+    /// coarse per-IP ceiling. For a nonexistent username the caller still passes
+    /// the ATTEMPTED name, so the victim's own bucket stays untouched while the
+    /// ceiling still accrues the spray (ENG-3954 RC-1).
+    pub fn recordFailureForPrincipal(self: *Self, ip: []const u8, username: []const u8) void {
+        self.mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
+        defer self.mutex.unlock(std.Io.Threaded.global_single_threaded.io());
+        self.tickEviction();
+        const now = compat_nanoTimestamp();
+
+        var key_buf: [512]u8 = undefined;
+        if (compositeKeyInto(&key_buf, ip, username)) |key| {
+            self.recordFailureInBucket(&self.principal_entries, key, self.max_attempts, now);
         }
+        self.recordFailureInBucket(&self.ip_ceiling_entries, ip, self.ip_max_attempts, now);
+    }
+
+    /// True when the (ip, username) principal bucket is locked OR the coarse
+    /// per-IP ceiling bucket is locked.
+    pub fn isLockedForPrincipal(self: *Self, ip: []const u8, username: []const u8) bool {
+        self.mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
+        defer self.mutex.unlock(std.Io.Threaded.global_single_threaded.io());
+        const now = compat_nanoTimestamp();
+        if (bucketLocked(&self.ip_ceiling_entries, ip, now)) return true;
+        var key_buf: [512]u8 = undefined;
+        if (compositeKeyInto(&key_buf, ip, username)) |key| {
+            if (bucketLocked(&self.principal_entries, key, now)) return true;
+        }
+        return false;
+    }
+
+    /// Record a successful authentication for the (ip, username) principal,
+    /// clearing that principal's bucket. A success for one principal is not an
+    /// amnesty for another, so the coarse ceiling and other principals are left
+    /// untouched.
+    pub fn recordSuccessForPrincipal(self: *Self, ip: []const u8, username: []const u8) void {
+        self.mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
+        defer self.mutex.unlock(std.Io.Threaded.global_single_threaded.io());
+        var key_buf: [512]u8 = undefined;
+        if (compositeKeyInto(&key_buf, ip, username)) |key| {
+            _ = self.removeBucket(&self.principal_entries, key);
+        }
+    }
+
+    /// Which bucket currently denies the (ip, username) principal, or null when
+    /// it is admissible (ENG-3954 RC-3). A principal denial takes precedence so
+    /// an operator sees "this account is being guessed" over the coarser signal.
+    pub fn lockoutReason(self: *Self, ip: []const u8, username: []const u8) ?DenialReason {
+        self.mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
+        defer self.mutex.unlock(std.Io.Threaded.global_single_threaded.io());
+        const now = compat_nanoTimestamp();
+        var key_buf: [512]u8 = undefined;
+        if (compositeKeyInto(&key_buf, ip, username)) |key| {
+            if (bucketLocked(&self.principal_entries, key, now)) return .principal;
+        }
+        if (bucketLocked(&self.ip_ceiling_entries, ip, now)) return .ip_ceiling;
+        return null;
+    }
+
+    /// Remaining lockout time for the (ip, username) principal, or null when it
+    /// is not locked. Mirrors `lockoutReason`: reports the principal window when
+    /// that bucket is the reason, else the ceiling window.
+    pub fn lockoutRemainingNs(self: *Self, ip: []const u8, username: []const u8) ?u64 {
+        self.mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
+        defer self.mutex.unlock(std.Io.Threaded.global_single_threaded.io());
+        const now = compat_nanoTimestamp();
+        var key_buf: [512]u8 = undefined;
+        if (compositeKeyInto(&key_buf, ip, username)) |key| {
+            if (bucketRemainingNs(&self.principal_entries, key, now)) |rem| return rem;
+        }
+        return bucketRemainingNs(&self.ip_ceiling_entries, ip, now);
+    }
+
+    /// Operator escape hatch (ENG-3954 RC-3): clear a lockout. A non-empty
+    /// username clears that (ip, username) principal bucket; an EMPTY username
+    /// clears the IP's coarse ceiling bucket. Returns whether anything was
+    /// actually cleared, so an admin path can report "no such lockout" instead
+    /// of a silent success.
+    pub fn clearLockout(self: *Self, ip: []const u8, username: []const u8) bool {
+        self.mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
+        defer self.mutex.unlock(std.Io.Threaded.global_single_threaded.io());
+        if (username.len == 0) {
+            return self.removeBucket(&self.ip_ceiling_entries, ip);
+        }
+        var key_buf: [512]u8 = undefined;
+        if (compositeKeyInto(&key_buf, ip, username)) |key| {
+            return self.removeBucket(&self.principal_entries, key);
+        }
+        return false;
     }
 
     /// Evict entries whose lockout has expired.  Call periodically to
@@ -179,17 +371,26 @@ pub const AuthRateLimiter = struct {
         self.evictExpiredLocked();
     }
 
-    /// Internal: evict expired entries while already holding the mutex.
+    /// Internal: evict expired entries while already holding the mutex. Sweeps
+    /// every bucket map — legacy IP-only, principal, and the coarse per-IP
+    /// ceiling — so none of the three grows unbounded (ENG-3954 RC-1).
     fn evictExpiredLocked(self: *Self) void {
         const now = compat_nanoTimestamp();
+        self.evictMapLocked(&self.entries, now);
+        self.evictMapLocked(&self.principal_entries, now);
+        self.evictMapLocked(&self.ip_ceiling_entries, now);
+    }
+
+    /// Evict expired entries from a single bucket map (caller holds the mutex).
+    fn evictMapLocked(self: *Self, map: *std.StringHashMap(Entry), now: i128) void {
         // Collect keys to remove (cannot mutate while iterating).
         var to_remove = std.ArrayList([]const u8).initCapacity(self.allocator, 0) catch return;
         defer to_remove.deinit(self.allocator);
 
-        var iter = self.entries.iterator();
+        const cutoff = now - @as(i128, @intCast(self.lockout_duration_ns));
+        var iter = map.iterator();
         while (iter.next()) |kv| {
             const entry = kv.value_ptr.*;
-            const cutoff = now - @as(i128, self.lockout_duration_ns);
             if (entry.lockout_until_ns != 0 and now >= entry.lockout_until_ns) {
                 to_remove.append(self.allocator, kv.key_ptr.*) catch continue;
             } else if (entry.lockout_until_ns == 0 and entry.last_failure_ns < cutoff) {
@@ -198,7 +399,7 @@ pub const AuthRateLimiter = struct {
         }
 
         for (to_remove.items) |key| {
-            if (self.entries.fetchRemove(key)) |kv| {
+            if (map.fetchRemove(key)) |kv| {
                 self.allocator.free(kv.key);
             }
         }
@@ -314,6 +515,35 @@ pub fn resolveConfig(cli_max_attempts: ?u32, cli_lockout_secs: ?u64) LockoutConf
         .max_attempts = cli_attempts orelse env_attempts orelse AuthRateLimiter.default_max_attempts,
         .lockout_duration_ns = cli_ns orelse env_ns orelse AuthRateLimiter.default_lockout_duration_ns,
     };
+}
+
+/// Env var name for the coarse per-IP ceiling (also settable as a CLI flag).
+pub const ip_max_attempts_env = "GEODE_AUTH_RATE_IP_MAX_ATTEMPTS";
+
+/// A ceiling is only meaningful strictly ABOVE the per-principal threshold —
+/// otherwise per-principal keying buys nothing (ENG-3954 RC-1c). A value at or
+/// below `max_attempts`, zero, or beyond u32 is an operator typo and is
+/// rejected so it falls through to the next source.
+fn validIpCeiling(v: u64, max_attempts: u32) ?u32 {
+    if (v == 0 or v > std.math.maxInt(u32)) return null;
+    const c: u32 = @intCast(v);
+    if (c <= max_attempts) return null;
+    return c;
+}
+
+/// Resolve the coarse per-IP ceiling with the same geode-wide precedence as
+/// `resolveConfig` — flags > env > default — but validated against the already
+/// resolved `max_attempts` so the ceiling can never drop to/under the
+/// per-principal threshold. Kept as a separate resolver (rather than a third
+/// `resolveConfig` argument) so the pinned two-argument `resolveConfig` surface
+/// is unchanged.
+pub fn resolveIpMaxAttempts(cli_ip_max_attempts: ?u32, max_attempts: u32) u32 {
+    const cli: ?u32 = if (cli_ip_max_attempts) |v| validIpCeiling(v, max_attempts) else null;
+    const env: ?u32 = if (AuthRateLimiter.readEnvU64(ip_max_attempts_env)) |v| validIpCeiling(v, max_attempts) else null;
+    // The default floor is `default_ip_max_attempts`, but never at/under an
+    // operator-raised `max_attempts` — 5x (saturating) keeps the invariant.
+    const dflt: u32 = @max(AuthRateLimiter.default_ip_max_attempts, max_attempts *| 5);
+    return cli orelse env orelse dflt;
 }
 
 // ── Tests ──────────────────────────────────────────────────────────────
