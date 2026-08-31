@@ -7334,6 +7334,32 @@ pub fn build(b: *std.Build) void {
     const cli_batch_mode_step = b.step("test-cli-batch-mode", "ENG-3914: `geode query --batch` executes every statement on one connection (subprocess e2e)");
     cli_batch_mode_step.dependOn(&run_cli_batch_mode_tests.step);
 
+    // `geode query --file` chunked-execution defects.  Same subprocess e2e
+    // shape as test-cli-batch-mode directly above (real server + real CLI,
+    // stdio only, no geode import graph in the test artifact) — which is why
+    // this lane is deliberately NOT wired into the aggregate `test` step via
+    // shardDep: it binds real ports and spawns servers, exactly like its two
+    // siblings above.  Run it by name.
+    //
+    // RED-first at e46ece27:
+    //   2c  a chunk the server REJECTS is credited as a success — exit 0,
+    //       "Statements executed: 401", no Errors line, and all 400 valid
+    //       CREATEs in that chunk silently lost (read-back returns 0).
+    //   2   the 16 MiB cap (src/cli/main.zig:1325-1327) refuses with a bare
+    //       "Error: File too large": no size, no limit, no remedy, and no
+    //       mention in `geode query --help`.
+    // The all-valid control case passes at HEAD and must stay passing.
+    const cli_file_chunked_tests = b.addTest(.{ .root_module = b.createModule(.{
+        .root_source_file = b.path("tests/test_cli_file_chunked.zig"),
+        .target = target,
+        .optimize = optimize,
+    }) });
+    cli_file_chunked_tests.root_module.link_libc = true;
+    const run_cli_file_chunked_tests = b.addRunArtifact(cli_file_chunked_tests);
+    run_cli_file_chunked_tests.step.dependOn(b.getInstallStep());
+    const cli_file_chunked_step = b.step("test-cli-file-chunked", "`geode query --file`: a rejected chunk must not exit 0, and the 16 MiB cap must be actionable (subprocess e2e)");
+    cli_file_chunked_step.dependOn(&run_cli_file_chunked_tests.step);
+
     // Parallel-ingest hang reproduction tests — see triage of the
     // "thread-pool deinit timed out after 30000ms with 1 active tasks"
     // shutdown warning under a 16-worker Go-client ingest workload.
