@@ -7282,6 +7282,24 @@ pub fn build(b: *std.Build) void {
     const data_dir_lock_step = b.step("test-data-dir-lock", "ENG-3921: cross-process data-dir lock primitive (unit)");
     data_dir_lock_step.dependOn(&run_data_dir_lock_tests.step);
 
+    // ENG-3921 residual R1: the DEFAULT data dir is the bare shared "/tmp"
+    // (src/graph_store.zig:794-802, literal at :800), which is also what the
+    // startup lock resolves and flocks (src/server/main.zig:1116-1120).  This
+    // lane pins the default-resolution seam itself, so it needs the real
+    // `geode` module (unlike the leaf-module lock lane above).
+    //
+    // RED-first: at HEAD the default resolves to "/tmp" and the three
+    // scoping assertions fail; the two guard cases ($GEODE_DATA_DIR override,
+    // determinism) pass at HEAD and must stay passing.
+    const default_data_dir_mod = b.createModule(.{ .root_source_file = b.path("tests/test_default_data_dir.zig"), .target = target, .optimize = optimize });
+    default_data_dir_mod.addImport("geode", root_mod);
+    default_data_dir_mod.link_libc = true;
+    const default_data_dir_tests = b.addTest(.{ .root_module = default_data_dir_mod });
+    const run_default_data_dir_tests = b.addRunArtifact(default_data_dir_tests);
+    shardDep(test_step, &run_default_data_dir_tests.step, 1, test_shard_loads, test_shard_index);
+    const default_data_dir_step = b.step("test-default-data-dir", "ENG-3921 R1: default data dir must be user-scoped, not bare /tmp");
+    default_data_dir_step.dependOn(&run_default_data_dir_tests.step);
+
     // ENG-3921 end-to-end: spawns real `./zig-out/bin/geode serve`
     // processes and asserts that a second server (and an offline
     // `geode auth reseal`) on a LIVE data dir is refused, while a
