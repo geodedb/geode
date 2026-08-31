@@ -126,6 +126,10 @@ const Harness = struct {
         defer parsed.deinit();
         return execution.executeStatementWithContext(aa, parsed.program.statements[0], self.ctx);
     }
+
+    pub fn run(self: *Harness, query: []const u8) !void {
+        _ = try self.exec(query);
+    }
 };
 
 /// The observable: is an advanced vector index REGISTERED for this property?
@@ -264,6 +268,221 @@ test "ADVANCED-INDEX-RESTART: the HNSW index comes back after a restart, with it
     _ = try h.exec("CREATE (:AirNone {emb_n: vectorf32([1.0,2.0])})");
     _ = try h.exec("MATCH (n:AirNone) RETURN knn('emb_n', vectorf32([1.0,2.0]), 1, 'l2')");
     try testing.expect(indexNameForProperty("emb_n") == null);
+}
+
+// ===========================================================================
+// geode#875 — bounded-node-cache blindness in the backfill AND the scan.
+//
+// VERIFIED READ-ONLY against this branch before the fix:
+//
+//   RC-2: `IndexManager.populateAdvancedIndex` (src/index/index_manager.zig
+//     :1998-2019) iterates `store.nodes.iterator()` — the RESIDENT node cache
+//     only. The EDGE half of the SAME function was already fixed to enumerate
+//     the COMPLETE id set via `store.allEdgeIds()` + `store.getEdgePtrHydrated()`
+//     (:2011-2018); the NODE half was never given the twin
+//     `store.getAllNodes()` + `store.getNodePtrHydrated()` treatment. After a
+//     restart the resident node cache is EMPTY (it fills only on access), so a
+//     rebuild/backfill over the resident iterator inserts ~nothing and the
+//     index is a populated-count-0 shell.
+//
+//   RC-3: the brute-force fallback `scanVectorKnn` (src/eval.zig:2476) snapshots
+//     `store.nodes.snapshotKeys()` — RESIDENT ONLY, same blindness. So when the
+//     empty index (RC-2) falls through to the scan, the scan is ALSO blind and
+//     the query answers [] with SQLSTATE 00000: a silent wrong answer.
+//
+//   RC-9: the restart tests ABOVE seed only a handful of nodes AND run a warming
+//     `MATCH (n:AirL) …` before the knn, which HYDRATES those nodes back into
+//     the resident cache — so the resident iterator happens to see them and the
+//     defect is masked. The tests below deliberately (a) never run a warming
+//     MATCH before the first knn/CREATE INDEX after restart, and (b) drive the
+//     knn as a BARE `RETURN knn(...)` (no MATCH row source to warm the cache),
+//     so the ONLY way the answer can be correct is if the backfill/scan reaches
+//     the durable engine rather than the resident mirror.
+//
+// The correct-answer contract is scale-invariant, so it is pinned at small,
+// fast scale (a few dozen nodes) — the eviction/cold-cache mechanism, not row
+// count, is what exposes the bug, and a cold cache after restart is empty at
+// ANY scale.
+//
+// CANARY: REQ=REQ-GEODE-875-BACKFILL-BOUNDED-CACHE; FEATURE="VectorIndex"; ASPECT=BackfillEnumeratesFullNodeSet; STATUS=TESTED; TEST=tests/test_advanced_index_restart.zig; OWNER=index; UPDATED=2026-08-31
+// CANARY: REQ=REQ-GEODE-875-KNN-SCAN-BOUNDED-CACHE; FEATURE="VectorKnn"; ASPECT=ScanEnumeratesFullNodeSet; STATUS=TESTED; TEST=tests/test_advanced_index_restart.zig; OWNER=eval; UPDATED=2026-08-31
+
+const Value = geode.value_types.Value;
+
+/// The id list a `RETURN knn(...)` projected, or an empty slice when the query
+/// answered [] (the silent-wrong-answer shape RC-2/RC-3 produce).
+fn knnIds(res: execution.ExecutionResult) ![]Value {
+    if (res.rows.len == 0 or res.rows[0].len == 0) return &.{};
+    return switch (res.rows[0][0]) {
+        .List => |items| items,
+        else => error.ExpectedKnnList,
+    };
+}
+
+fn idsContain(ids: []Value, want: i64) bool {
+    for (ids) |v| {
+        const got: i64 = switch (v) {
+            .Int => |i| i,
+            .BigInt => |i| i,
+            else => continue,
+        };
+        if (got == want) return true;
+    }
+    return false;
+}
+
+fn nodeIdOf(h: *Harness, query: []const u8) !i64 {
+    const res = try h.exec(query);
+    if (res.rows.len == 0 or res.rows[0].len == 0) return error.NoNodeId;
+    return switch (res.rows[0][0]) {
+        .Int => |i| i,
+        .BigInt => |i| i,
+        else => error.ExpectedNodeId,
+    };
+}
+
+/// Neighbour count answered by the BUILT index (0 if the index is an empty
+/// shell / dimension-0 / not built), swallowing the query error so a red run
+/// reports "0 indexed" rather than an opaque error.
+fn indexedCountOrZero(index_name: []const u8, query: []const f32, k: u32) usize {
+    return indexedNeighbourCount(index_name, query, k) catch 0;
+}
+
+/// Seed `n` :V875 nodes with a 2-D vector emb = [i, 0]. Returns the engine id of
+/// the node whose emb is `[target, 0]` (its i == target), captured BEFORE any
+/// restart. The MATCH used to capture it warms only THAT node — the true NN of a
+/// [target,0] probe lives in it, so a resident-only scan would still have to see
+/// the rest to know it is nearest, and the cold-cache tests restart afterwards.
+fn seedV875(h: *Harness, n: usize, target: usize) !i64 {
+    var i: usize = 0;
+    while (i < n) : (i += 1) {
+        var buf: [128]u8 = undefined;
+        try h.run(try std.fmt.bufPrint(
+            &buf,
+            "CREATE (:V875 {{i: {d}, emb: vectorf32([{d}.0, 0.0])}})",
+            .{ i, i },
+        ));
+    }
+    var qbuf: [96]u8 = undefined;
+    return nodeIdOf(h, try std.fmt.bufPrint(&qbuf, "MATCH (n:V875 {{i: {d}}}) RETURN id(n)", .{target}));
+}
+
+// RC-3 — the brute-force scan must enumerate the FULL persisted node set, not
+// just the resident cache. After a cold restart the resident cache is empty, so
+// a bare `RETURN knn(...)` with NO index and NO warming MATCH answers [] today.
+test "geode#875 RC-3: a bare knn scan after a cold restart finds the correct nearest neighbour across all persisted nodes" {
+    var h = try Harness.init(testing.allocator);
+    defer h.deinit();
+
+    _ = try h.exec("CREATE GRAPH v875_scan");
+    _ = try h.exec("USE GRAPH v875_scan");
+
+    // No CREATE INDEX at all — this is the pure brute-force scan path.
+    const nn = try seedV875(&h, 30, 12);
+
+    try h.restart();
+    _ = try h.exec("USE GRAPH v875_scan");
+
+    // BARE RETURN knn — no MATCH row source, so nothing warms the resident cache
+    // before the scan runs. RED: scanVectorKnn snapshots the (empty) resident
+    // cache. With zero rows in scope the scan reports `property_seen == false`,
+    // so evalVectorKnn raises error.UnknownProperty (src/eval.zig:2717) — a valid
+    // property looks UNKNOWN purely because every node was evicted. GREEN: the
+    // scan enumerates the full persisted set, the property is seen, and the true
+    // nearest neighbour comes back.
+    const res = h.exec("RETURN knn('emb', vectorf32([12.0, 0.0]), 1, 'l2') AS ids") catch |err| {
+        std.debug.print(
+            "\n[geode#875 RC-3] cold-cache bare knn raised {s}: the scan walked only the (empty) resident mirror, so the valid property 'emb' and its {d} persisted rows were invisible\n",
+            .{ @errorName(err), @as(usize, 30) },
+        );
+        return error.KnnScanBlindToNonResidentNodes;
+    };
+    const ids = try knnIds(res);
+    if (!idsContain(ids, nn)) {
+        std.debug.print(
+            "\n[geode#875 RC-3] cold-cache brute-force knn returned {d} id(s); the true NN id {d} (an evicted/non-resident node) is missing — the scan walked only the resident mirror\n",
+            .{ ids.len, nn },
+        );
+        return error.KnnScanBlindToNonResidentNodes;
+    }
+}
+
+// RC-2 — CREATE INDEX after a cold restart must backfill EVERY persisted node,
+// not just the resident cache. The knn then answers from a populated index.
+test "geode#875 RC-2: CREATE INDEX after a cold restart backfills every persisted node" {
+    var h = try Harness.init(testing.allocator);
+    defer h.deinit();
+
+    _ = try h.exec("CREATE GRAPH v875_backfill");
+    _ = try h.exec("USE GRAPH v875_backfill");
+
+    const nn = try seedV875(&h, 30, 7);
+
+    try h.restart();
+    _ = try h.exec("USE GRAPH v875_backfill");
+
+    // Build the index on a COLD cache, with NO warming MATCH first. RED:
+    // populateAdvancedIndex iterates the empty resident node map and indexes 0.
+    _ = try h.exec("CREATE INDEX v875_idx ON V875 (emb) USING vector WITH (metric = 'l2')");
+
+    // (a) The index is POPULATED with all 30 nodes — not an empty shell.
+    const indexed = indexedCountOrZero("v875_idx", &[_]f32{ 7.0, 0.0 }, 100);
+    if (indexed != 30) {
+        std.debug.print(
+            "\n[geode#875 RC-2] CREATE INDEX after cold restart populated {d} of 30 persisted nodes — the backfill walked only the resident mirror\n",
+            .{indexed},
+        );
+        return error.BackfillBlindToNonResidentNodes;
+    }
+
+    // (b) The knn answers the correct nearest neighbour from that index.
+    const res = try h.exec("RETURN knn('emb', vectorf32([7.0, 0.0]), 1, 'l2') AS ids");
+    const ids = try knnIds(res);
+    try testing.expect(idsContain(ids, nn));
+}
+
+// RC-9 — the LAZY rebuild driven from the knn read path (index created BEFORE
+// the restart, rebuilt on first query after) must also enumerate the full set.
+// This is the exact gap the ADVANCED-INDEX-RESTART tests above leave open: they
+// seed 5 nodes and warm the cache with a MATCH, so their rebuild never has to
+// reach past the resident mirror.
+test "geode#875 RC-9: the lazy rebuild after a restart repopulates from the durable engine, not the empty resident cache" {
+    var h = try Harness.init(testing.allocator);
+    defer h.deinit();
+
+    _ = try h.exec("CREATE GRAPH v875_lazy");
+    _ = try h.exec("USE GRAPH v875_lazy");
+
+    const nn = try seedV875(&h, 30, 21);
+    // Index created while every node is still resident — it is fully populated
+    // in THIS process (baseline: the lazy rebuild after restart must match it).
+    _ = try h.exec("CREATE INDEX v875_lazy_idx ON V875 (emb) USING vector WITH (metric = 'l2')");
+    {
+        const res = try h.exec("RETURN knn('emb', vectorf32([21.0, 0.0]), 1, 'l2') AS ids");
+        try testing.expect(idsContain(try knnIds(res), nn));
+    }
+
+    try h.restart();
+    _ = try h.exec("USE GRAPH v875_lazy");
+
+    // First knn after restart, BARE, no warming MATCH: the runtime index is gone
+    // (catalog row survives), so evalVectorKnn drives the lazy rebuild
+    // (ensureAdvancedVectorIndexForProperty -> rebuildAdvancedIndex ->
+    // populateAdvancedIndex). RED: that rebuild walks the empty resident cache,
+    // indexes 0, and the empty index falls through to the equally-blind scan → [].
+    const res = try h.exec("RETURN knn('emb', vectorf32([21.0, 0.0]), 1, 'l2') AS ids");
+    const ids = try knnIds(res);
+    if (!idsContain(ids, nn)) {
+        std.debug.print(
+            "\n[geode#875 RC-9] lazy rebuild after restart returned {d} id(s); the true NN id {d} is missing — the rebuild repopulated from the empty resident cache\n",
+            .{ ids.len, nn },
+        );
+        return error.LazyRebuildBlindToNonResidentNodes;
+    }
+
+    // And the rebuilt index is a real, fully-populated index (30 entries), the
+    // same populated-count contract the small-N warmed test above pins at 3.
+    try testing.expectEqual(@as(usize, 30), indexedCountOrZero("v875_lazy_idx", &[_]f32{ 21.0, 0.0 }, 100));
 }
 
 test "ADVANCED-INDEX-RESTART: an index with no explicit metric keeps the documented l2 default across a restart" {

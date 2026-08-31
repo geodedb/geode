@@ -9858,6 +9858,18 @@ pub fn build(b: *std.Build) void {
     const advanced_index_restart_step = b.step("test-advanced-index-restart", "Run advanced (HNSW) index rebuild-after-restart regressions");
     advanced_index_restart_step.dependOn(&run_advanced_index_restart_tests.step);
 
+    // geode#875: the vector index is fully rebuilt on every single write (RC-1,
+    // O(N^2) ingest), a row-invariant knn() in WHERE/WITH is re-evaluated once
+    // per candidate row (RC-6, O(N^2) query), and the backfill reports no indexed
+    // count / swallows errors (RC-5). See tests/test_geode875_incremental_index.zig.
+    const geode875_incremental_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_geode875_incremental_index.zig"), .target = target, .optimize = optimize });
+    geode875_incremental_test_mod.addImport("geode", root_mod);
+    const geode875_incremental_tests = b.addTest(.{ .root_module = geode875_incremental_test_mod });
+    const run_geode875_incremental_tests = b.addRunArtifact(geode875_incremental_tests);
+    shardDep(test_step, &run_geode875_incremental_tests.step, 0, test_shard_loads, test_shard_index);
+    const geode875_incremental_step = b.step("test-geode875-incremental", "Run geode#875 incremental-insert / hoisted-knn / backfill-count regressions");
+    geode875_incremental_step.dependOn(&run_geode875_incremental_tests.step);
+
     // DATE-PART-EXACT: date_part()/time_part() were unreachable from GQL (the temporal
     // ExtValue bridge nulled their argument) and date_part's arithmetic used a
     // 365-day year with 30-day months, disagreeing with member access.
