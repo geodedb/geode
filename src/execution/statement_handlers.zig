@@ -690,11 +690,15 @@ pub fn executeForWithBindings(allocator: std.mem.Allocator, for_stmt: ast.ForSta
         };
     }
 
-    // Create environment from WITH results
+    // Create environment from WITH results, with the request params in scope so
+    // a `$param` collection (FOR..IN parameter-bound list) resolves to the bound
+    // value instead of Null.
     const env = Env{
         .names = with_result.columns,
         .values = with_result.rows[0], // Use first row
         .allocator = allocator,
+        .param_names = context.query_param_names,
+        .param_values = context.query_param_values,
     };
 
     const collection_value = try eval.evalExpr(allocator, for_stmt.collection, env);
@@ -707,6 +711,10 @@ pub fn executeForWithBindings(allocator: std.mem.Allocator, for_stmt: ast.ForSta
             for (list) |item| {
                 try items.append(allocator, item);
             }
+        },
+        .Null => {
+            // A Null collection (e.g. an unbound/absent $param) yields ZERO
+            // iterations — never one spurious null iteration.
         },
         else => {
             // If it's not a list, treat it as a single-item list
@@ -756,11 +764,14 @@ pub fn executeForWithBindings(allocator: std.mem.Allocator, for_stmt: ast.ForSta
             try env_values_list.append(allocator, Value{ .Int = @intCast(idx) });
         }
 
-        // Create environment for this iteration
+        // Create environment for this iteration. The request params ride along
+        // so a per-iteration RETURN item referencing `$param` resolves.
         const iteration_env = Env{
             .names = env_names_list.items,
             .values = env_values_list.items,
             .allocator = allocator,
+            .param_names = context.query_param_names,
+            .param_values = context.query_param_values,
         };
 
         // Evaluate RETURN items for this iteration
@@ -828,11 +839,15 @@ fn allocateColumnStrings(allocator: std.mem.Allocator, strings: []const []const 
 }
 
 pub fn executeFor(allocator: std.mem.Allocator, for_stmt: ast.ForStatement, context: ExecutionContext) !ExecutionResult {
-    // Evaluate the collection expression with an empty environment
+    // Evaluate the collection expression with the request params in scope so a
+    // `$param` collection (FOR..IN parameter-bound list) resolves to the bound
+    // value instead of Null.
     const empty_env = Env{
         .allocator = allocator,
         .names = &.{},
         .values = &.{},
+        .param_names = context.query_param_names,
+        .param_values = context.query_param_values,
     };
 
     const collection_value = try eval.evalExpr(allocator, for_stmt.collection, empty_env);
@@ -845,6 +860,10 @@ pub fn executeFor(allocator: std.mem.Allocator, for_stmt: ast.ForStatement, cont
             for (list) |item| {
                 try items.append(allocator, item);
             }
+        },
+        .Null => {
+            // A Null collection (e.g. an unbound/absent $param) yields ZERO
+            // iterations — never one spurious null iteration.
         },
         else => {
             // If it's not a list, treat it as a single-item list
@@ -891,11 +910,16 @@ pub fn executeFor(allocator: std.mem.Allocator, for_stmt: ast.ForStatement, cont
             try env_values_list.append(allocator, Value{ .Int = @intCast(idx) });
         }
 
-        // Create environment for this iteration
+        // Create environment for this iteration. The request params ride along
+        // so a per-iteration RETURN item referencing `$param` resolves; the loop
+        // variable in `names` still shadows a same-named param (Env.get scans
+        // `names` first).
         const iteration_env = Env{
             .names = env_names_list.items,
             .values = env_values_list.items,
             .allocator = allocator,
+            .param_names = context.query_param_names,
+            .param_values = context.query_param_values,
         };
 
         // Evaluate RETURN items for this iteration (pre-sized to return clause length)
@@ -934,11 +958,14 @@ pub fn executeFor(allocator: std.mem.Allocator, for_stmt: ast.ForStatement, cont
 }
 
 pub fn executeValues(allocator: std.mem.Allocator, values_stmt: ast.ValuesStatement, context: ExecutionContext) !ExecutionResult {
-    // Evaluate all row expressions with empty environment
+    // Evaluate all row expressions with the request params in scope so a
+    // `VALUES ($param, ...)` row resolves the bound value instead of Null.
     const empty_env = Env{
         .allocator = allocator,
         .names = &.{},
         .values = &.{},
+        .param_names = context.query_param_names,
+        .param_values = context.query_param_values,
     };
 
     // Prepare result rows
@@ -1032,11 +1059,15 @@ pub fn executeValues(allocator: std.mem.Allocator, values_stmt: ast.ValuesStatem
                             }
                         }
 
-                        // Create environment for this row
+                        // Create environment for this row. The request params
+                        // ride along so a RETURN item referencing `$param`
+                        // resolves.
                         const row_env = Env{
                             .allocator = allocator,
                             .names = env_names_list.items,
                             .values = env_values_list.items,
+                            .param_names = context.query_param_names,
+                            .param_values = context.query_param_values,
                         };
 
                         // Evaluate RETURN items for this row (pre-sized)

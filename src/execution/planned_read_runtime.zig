@@ -3713,6 +3713,12 @@ pub fn isStorageNativeReadShape(q: *const ast.Query) bool {
 
 fn isStorageNativeQuery(q: *const ast.Query) bool {
     if (q.next_query != null) return false;
+    // A `WITH … FOR …` shape must NOT be served as a plain WITH projection —
+    // the storage-native path would drop the FOR body entirely (write loss for
+    // `WITH … FOR … CREATE`, and a collapsed one-row result for a read-bodied
+    // FOR). Route it to the executeForWithBindings path instead. Mirrors the 4
+    // sibling gates (:2157/:3680/:3848/:3932).
+    if (q.for_statement != null) return false;
     if (q.unwind_clause != null or q.create_pattern != null) return false;
     if (q.call_clause != null or q.initial_call_subquery != null or q.merge_statement != null) return false;
     if (q.path_variable != null or q.has_recursive_cte) return false;
