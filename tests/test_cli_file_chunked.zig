@@ -413,6 +413,54 @@ fn buildChunkedGql(
     return buf.toOwnedSlice(aa);
 }
 
+// ---------------------------------------------------------------------
+// #830 ROLLBACK-guard fixture: an oversized BEGIN … ROLLBACK/COMMIT block.
+// ---------------------------------------------------------------------
+// The pre-scan in executeChunkedQueries (src/cli/main.zig:2347-2423) measures
+// every BEGIN…COMMIT/ROLLBACK block; a block whose byte total exceeds the 32KB
+// chunk limit (:2338, :2376) cannot ride a single QUIC connection, so the
+// wrappers are stripped and the inner writes auto-commit.  For a COMMIT
+// terminator that strip IS the intended behaviour (:2347-2352); for a ROLLBACK
+// terminator it is silent data corruption, so the code is SUPPOSED to refuse
+// with error.TransactionTooLargeForChunkedRollback (:2389-2397).
+//
+// The inline `ends_with_rollback` re-check (:2384-2388) trims WHITESPACE ONLY
+// then compares `eqlIgnoreCase(last, "ROLLBACK")`.  A file-assembled statement
+// keeps its trailing `;` (src/cli/query_file.zig:61), so `"ROLLBACK;"` never
+// equals `"ROLLBACK"`, the guard misses, and the block falls through to the
+// COMMIT-strip branch that AUTO-COMMITS the writes the user asked to roll back.
+
+/// CREATEs inside the BEGIN…terminator block.  Sized so the block itself clears
+/// the 32KB chunk limit (each padded CREATE is ~65 bytes; 800×65 ≈ 52KB), which
+/// is the precondition for the pre-scan's `txn_bytes > max_chunk_size` branch.
+const txn_stmt_count: usize = 800;
+
+/// Build `BEGIN;` + `txn_stmt_count` CREATEs on `label` + `terminator`, one
+/// statement per line.  `terminator` is written verbatim (e.g. "ROLLBACK;",
+/// "COMMIT;", or a bare "ROLLBACK" with no semicolon) so a test can exercise
+/// each terminator spelling the assembler will produce.  Caller owns the slice.
+fn buildTxnGql(
+    aa: std.mem.Allocator,
+    label: []const u8,
+    terminator: []const u8,
+) ![]const u8 {
+    var buf = std.ArrayList(u8).empty;
+    errdefer buf.deinit(aa);
+    var line: [256]u8 = undefined;
+    try buf.appendSlice(aa, "BEGIN;\n");
+    for (0..txn_stmt_count) |i| {
+        const rendered = try std.fmt.bufPrint(
+            &line,
+            "CREATE (n:{s} {{i: {d}, pad: 'xxxxxxxxxxxxxxxxxxxxxxxxxxxxxx'}});\n",
+            .{ label, i },
+        );
+        try buf.appendSlice(aa, rendered);
+    }
+    try buf.appendSlice(aa, terminator);
+    try buf.append(aa, '\n');
+    return buf.toOwnedSlice(aa);
+}
+
 /// Read `count(n)` back out of a `--format json` result row.  Returns null
 /// when the transcript carries no such row (which is itself a failure the
 /// caller reports).
@@ -619,6 +667,130 @@ test "geode query --file commits every statement of an all-valid chunked file" {
     try testing.expectEqual(@as(i64, @intCast(valid_stmt_count)), persisted);
 }
 
+// =====================================================================
+// #830 — the ROLLBACK-guard bypass: an oversized BEGIN…ROLLBACK block must
+// be REFUSED, never silently auto-committed.
+// =====================================================================
+// PRIMARY (the reported corruption).  RED at HEAD: the inline
+// `ends_with_rollback` re-check (src/cli/main.zig:2384-2388) trims whitespace
+// only, so `"ROLLBACK;"` != `"ROLLBACK"`, the guard misses, the COMMIT-strip
+// branch (:2402-2408) runs, all 800 CREATEs auto-commit, and the CLI exits 0.
+// Observed at HEAD: exit 0, MATCH (n:RbTest) count = 800 (expected 0).
+//
+// Contract (green after fix): the block is refused BEFORE any chunk is shipped
+// — the guard returns error.TransactionTooLargeForChunkedRollback from the
+// pre-scan (:2389-2397), which propagates through cmdQuery → dispatch → main
+// as a nonzero process exit.  The fixer owns the exact code (error propagation
+// yields 1; a pre-send catch could map it to ExitCode.usage_error = 2), so the
+// hard clauses pinned here are the two the corruption actually violates:
+//   1. the process exits NONZERO, and
+//   2. exactly ZERO :RbTest nodes persist (nothing was committed).
+// Both are RED now (exit 0, count 800) and clean-GREEN once the guard fires.
+test "geode query --file refuses an oversized BEGIN...ROLLBACK; block instead of silently committing it (#830)" {
+    const gpa = testing.allocator;
+    var fx = (try setUp(gpa, "rollback-guard", 4811, true)) orelse return error.SkipZigTest;
+    defer fx.deinit();
+
+    const content = try buildTxnGql(fx.aa(), "RbTest", "ROLLBACK;");
+    // The block itself must exceed the 32KB chunk limit, else the pre-scan
+    // keeps it intact and the guard never runs.
+    try testing.expect(content.len > 32 * 1024);
+    const path = try fx.writeGqlFile("rollback_big.gql", content);
+
+    const arg = try std.fmt.allocPrint(fx.aa(), "--file {s}", .{path});
+    const code = blk: {
+        var p = try fx.runQuery(arg);
+        defer p.deinit();
+        const c = p.waitExit(cli_deadline_ms) orelse {
+            p.dump("rollback file client (never exited)");
+            return error.FileClientHung;
+        };
+        // Guard: the fixture really did take the chunked path.
+        if (!p.saw("using chunked execution")) {
+            p.dump("rollback file client (never entered chunked execution)");
+            return error.FixtureDidNotChunk;
+        }
+        if (c == 0) {
+            std.debug.print(
+                "\n#830 VIOLATION: `--file` exited 0 on a >32KB BEGIN…ROLLBACK; block.\n" ++
+                    "  The inline `ends_with_rollback` re-check (src/cli/main.zig:2384-2388)\n" ++
+                    "  trims whitespace only, so the file-assembled \"ROLLBACK;\" (trailing `;`\n" ++
+                    "  kept by src/cli/query_file.zig:61) never equals \"ROLLBACK\"; the guard\n" ++
+                    "  misses and the COMMIT-strip branch (:2402-2408) auto-commits the writes\n" ++
+                    "  the user asked to roll back.  Expected a nonzero exit\n" ++
+                    "  (error.TransactionTooLargeForChunkedRollback).\n",
+                .{},
+            );
+        }
+        break :blk c;
+    };
+
+    // The read-back runs on a FRESH connection, so anything it sees was actually
+    // committed rather than merely rendered.
+    const persisted = (try readBackCount(&fx, "RbTest")) orelse
+        return error.ReadBackReturnedNoRow;
+
+    var violations: usize = 0;
+    if (code == 0) violations += 1;
+    if (persisted != 0) {
+        std.debug.print(
+            "\n#830 VIOLATION (silent data corruption): {d} :RbTest nodes persisted after a\n" ++
+                "  BEGIN…ROLLBACK; block — the ROLLBACK was silently converted to a COMMIT.\n" ++
+                "  Expected 0: the oversized-rollback block must be refused before any chunk\n" ++
+                "  is shipped, so nothing is ever committed.\n",
+            .{persisted},
+        );
+        violations += 1;
+    }
+    if (violations > 0) return error.OversizedRollbackSilentlyCommitted;
+}
+
+// ---------------------------------------------------------------------
+// CONTROL (regression guard, PASSES at HEAD and must stay green): an
+// oversized BEGIN…COMMIT block IS designed to strip its wrappers and
+// auto-commit (src/cli/main.zig:2347-2352, :2398-2408).
+// ---------------------------------------------------------------------
+// This proves the fix does not over-refuse: only ROLLBACK is refused; a large
+// COMMIT-terminated transaction still strips + auto-commits every inner write.
+test "geode query --file auto-commits an oversized BEGIN...COMMIT; block (chunked strip is intended)" {
+    const gpa = testing.allocator;
+    var fx = (try setUp(gpa, "commit-strip", 4812, true)) orelse return error.SkipZigTest;
+    defer fx.deinit();
+
+    const content = try buildTxnGql(fx.aa(), "RbCommit", "COMMIT;");
+    try testing.expect(content.len > 32 * 1024);
+    const path = try fx.writeGqlFile("commit_big.gql", content);
+
+    const arg = try std.fmt.allocPrint(fx.aa(), "--file {s}", .{path});
+    {
+        var p = try fx.runQuery(arg);
+        defer p.deinit();
+        const code = p.waitExit(cli_deadline_ms) orelse {
+            p.dump("commit file client (never exited)");
+            return error.FileClientHung;
+        };
+        if (!p.saw("using chunked execution")) {
+            p.dump("commit file client (never entered chunked execution)");
+            return error.FixtureDidNotChunk;
+        }
+        if (code != 0) {
+            p.dump("commit file client (oversized COMMIT block was refused)");
+            std.debug.print(
+                "\nCONTROL VIOLATION: an oversized BEGIN…COMMIT; block exited {d}; the chunked\n" ++
+                    "  path is DESIGNED to strip its wrappers and auto-commit these writes\n" ++
+                    "  (src/cli/main.zig:2347-2352).  A fix for the ROLLBACK guard must not\n" ++
+                    "  over-refuse the legitimate COMMIT case.\n",
+                .{code},
+            );
+            return error.OversizedCommitOverRefused;
+        }
+    }
+
+    const persisted = (try readBackCount(&fx, "RbCommit")) orelse
+        return error.ReadBackReturnedNoRow;
+    try testing.expectEqual(@as(i64, @intCast(txn_stmt_count)), persisted);
+}
+
 // ---------------------------------------------------------------------
 // 4. (2) The 16 MiB cap must refuse with an ACTIONABLE message.
 // ---------------------------------------------------------------------
@@ -794,4 +966,114 @@ test "assembleStatements joins continuation lines and drops comments (2d)" {
     try testing.expectEqual(@as(usize, 2), stmts.len);
     try testing.expectEqualStrings("CREATE (n:A {p: 'one'});", stmts[0]);
     try testing.expectEqualStrings("CREATE (n:B {p: 'two'});", stmts[1]);
+}
+
+// =====================================================================
+// #830 — the guard predicate.  UNIT-testable seam.
+// =====================================================================
+// The fix must make the inline `ends_with_rollback` re-check
+// (src/cli/main.zig:2384-2388) semicolon-tolerant the same way the sibling
+// helpers isTransactionBegin/isTransactionEnd (:2782-2801) already are —
+// `std.mem.trimEnd(u8, trimmed, "; \t")` then `eqlIgnoreCase`.  The natural,
+// server-free place for that logic is a `pub fn isRollback` on the std-only
+// src/cli/query_file.zig seam this lane already imports as `cli_query_file`
+// (main.zig imports the same module at src/cli/main.zig:119), so the inline
+// guard can call `query_file.isRollback(last)`.
+//
+// FIXER SEAM CONTRACT:
+//   pub fn isRollback(stmt: []const u8) bool   // in src/cli/query_file.zig
+//     - whitespace- AND semicolon-tolerant, case-insensitive
+//     - true  for: "ROLLBACK", "ROLLBACK;", "ROLLBACK ;", "  ROLLBACK ;  ",
+//                   "rollback;", "RollBack;"
+//     - false for: "COMMIT;", "ROLLBACKS;", "ROLL BACK;", any CREATE
+//
+// Uses the `@hasDecl` guard-sentinel pattern (see
+// tests/test_geode875_incremental_index.zig): a clean, named RED now (the seam
+// does not exist), the real classification assertions once the fixer adds it.
+test "#830 isRollback classifies every ROLLBACK spelling the assembler emits (guard predicate)" {
+    if (comptime @hasDecl(cli, "isRollback")) {
+        // Terminators the file assembler actually produces / an operator writes.
+        const rollbacks = [_][]const u8{
+            "ROLLBACK",
+            "ROLLBACK;",
+            "ROLLBACK ;",
+            "  ROLLBACK ;  ",
+            "rollback;",
+            "RollBack;",
+        };
+        for (rollbacks) |s| {
+            if (!cli.isRollback(s)) {
+                std.debug.print(
+                    "\n#830 VIOLATION: isRollback(\"{s}\") = false; every ROLLBACK spelling\n" ++
+                        "  (with/without `;`, any case, surrounding whitespace) must classify as\n" ++
+                        "  ROLLBACK so the oversized-transaction guard fires on the assembled form.\n",
+                    .{s},
+                );
+                return error.RollbackSpellingMisclassified;
+            }
+        }
+        // Must NOT match COMMIT, a near-miss keyword, a split keyword, or a write.
+        const non_rollbacks = [_][]const u8{
+            "COMMIT;",
+            "ROLLBACKS;",
+            "ROLL BACK;",
+            "CREATE (n:RbTest {i: 0});",
+        };
+        for (non_rollbacks) |s| {
+            if (cli.isRollback(s)) {
+                std.debug.print(
+                    "\n#830 VIOLATION: isRollback(\"{s}\") = true; only a bare ROLLBACK terminator\n" ++
+                        "  may match — COMMIT, ROLLBACKS, ROLL BACK, and CREATEs must not, or the\n" ++
+                        "  guard would over-refuse legitimate transactions.\n",
+                    .{s},
+                );
+                return error.NonRollbackMisclassified;
+            }
+        }
+    } else {
+        // FIXER SEAM REQUIRED: extract the semicolon-tolerant ROLLBACK test into
+        // `pub fn isRollback(stmt: []const u8) bool` on src/cli/query_file.zig and
+        // call it from the inline guard at src/cli/main.zig:2384-2388 (replacing
+        // the whitespace-only `std.mem.trim` + `eqlIgnoreCase(last, "ROLLBACK")`).
+        return error.IsRollbackSeamMissing;
+    }
+}
+
+// ---------------------------------------------------------------------
+// #830 SECONDARY (documented known gap, asserts CURRENT behaviour): the
+// assembler DROPS a bare no-`;` ROLLBACK terminator.
+// ---------------------------------------------------------------------
+// src/cli/query_file.zig:61 only completes a statement when its last line ends
+// with `;`, so a file whose transaction is terminated by a bare `ROLLBACK`
+// (no semicolon) loses the terminator entirely.  The pre-scan then finds no
+// isTransactionEnd, treats the LAST inner CREATE as the block terminator, and
+// (via the COMMIT-strip branch) strips it — leaving count = N-1 committed.
+//
+// The guard-normalization fix (isRollback) does NOT reach this input, because
+// the terminator is dropped before the guard ever sees it.  So this is pinned
+// as a KNOWN-GAP tripwire on the CURRENT assembler behaviour, NOT as a
+// refuse-count-0 contract.  A follow-up that makes src/cli/query_file.zig:61
+// preserve a no-`;` terminator would flip this test and should update it (and
+// then the e2e refusal contract above would extend to cover the no-`;` form).
+test "#830 SECONDARY: assembleStatements drops a bare no-semicolon ROLLBACK terminator (known gap)" {
+    const src =
+        \\BEGIN;
+        \\CREATE (n:RbNoSemi {i: 0});
+        \\CREATE (n:RbNoSemi {i: 1});
+        \\ROLLBACK
+        \\
+    ;
+    const stmts = try cli.assembleStatements(testing.allocator, src);
+    defer cli.freeStatements(testing.allocator, stmts);
+
+    // Current behaviour: BEGIN; + 2 CREATEs = 3 statements; the bare ROLLBACK is
+    // dropped.  If this ever becomes 4 (terminator preserved), the assembler gap
+    // was fixed — update this test AND extend the e2e refusal to the no-`;` form.
+    try testing.expectEqual(@as(usize, 3), stmts.len);
+    try testing.expectEqualStrings("BEGIN;", stmts[0]);
+    // The last surviving statement is a CREATE, NOT the intended ROLLBACK
+    // terminator — this is exactly the fragment the pre-scan mis-strips as the
+    // block's "COMMIT", corrupting the rolled-back data.
+    try testing.expect(!std.mem.startsWith(u8, stmts[stmts.len - 1], "ROLLBACK"));
+    try testing.expectEqualStrings("CREATE (n:RbNoSemi {i: 1});", stmts[stmts.len - 1]);
 }
