@@ -1088,19 +1088,7 @@ pub fn main() !void {
     const data_dir = config.data_dir;
     const log_level_arg = config.log_level_arg;
 
-    // GAP-0909: a --data-dir that does not exist used to crash the server at
-    // startup. Create it (mkdir -p); refuse cleanly only if creation fails.
-    if (data_dir) |dir| {
-        graph_store.ensureDataDir(dir) catch |err| {
-            log.err("data dir unavailable; refusing to start", &.{
-                Attr.string("path", dir),
-                Attr.string("error", @errorName(err)),
-            });
-            return error.DataDirUnavailable;
-        };
-    }
-
-    // CANARY: REQ=REQ-ENG-3921-DATA-DIR-LOCK-001; FEATURE="DataDirLock"; ASPECT=ServerStartup; STATUS=TESTED; TEST=tests/test_datadir_lock_subprocess.zig; OWNER=storage; UPDATED=2026-08-29
+    // CANARY: REQ=REQ-ENG-3921-DATA-DIR-LOCK-001; FEATURE="DataDirLock"; ASPECT=ServerStartup; STATUS=TESTED; TEST=tests/test_datadir_lock_subprocess.zig; OWNER=storage; UPDATED=2026-08-31
     // ENG-3921: take single-writer ownership of the data directory before any
     // component opens it. Two `geode serve` processes on one --data-dir used
     // to both come up (split-brain over one on-disk store, last snapshot
@@ -1108,16 +1096,51 @@ pub fn main() !void {
     // which is the first thing to open the store.
     //
     // The lock covers the RESOLVED directory, not the raw flag: an omitted
-    // --data-dir still resolves (GEODE_DATA_DIR, else /tmp) to a real
-    // directory that a second process would share, so resolve it exactly the
-    // way graph_store does before locking. `--data-dir` is not yet installed
-    // as the store override at this point (server_init.initialize does that),
-    // so apply the flag first and fall back to graph_store's own chain.
+    // --data-dir still resolves (GEODE_DATA_DIR, else the per-user default
+    // from graph_store.defaultDataDir) to a real directory that a second
+    // process would share, so resolve it exactly the way graph_store does
+    // before locking. `--data-dir` is not yet installed as the store override
+    // at this point (server_init.initialize does that), so apply the flag
+    // first and fall back to graph_store's own chain.
     const resolved_data_dir: []const u8 = if (data_dir) |dir|
         try gpa.dupe(u8, dir)
     else
         try graph_store.getPersistenceFilePath(gpa);
     defer gpa.free(resolved_data_dir);
+
+    // GAP-0909: a --data-dir that does not exist used to crash the server at
+    // startup. Create it (mkdir -p); refuse cleanly only if creation fails.
+    // ENG-3921 R1: the RESOLVED directory is created, not just the flag —
+    // the per-user default ($XDG_STATE_HOME/geode, $HOME/.local/state/geode)
+    // does not exist on a fresh machine, and the lockfile below lives in it.
+    graph_store.ensureDataDir(resolved_data_dir) catch |err| {
+        log.err("data dir unavailable; refusing to start", &.{
+            Attr.string("path", resolved_data_dir),
+            Attr.string("error", @errorName(err)),
+        });
+        return error.DataDirUnavailable;
+    };
+
+    // CANARY: REQ=REQ-ENG-3921-DATA-DIR-LOCK-005; FEATURE="DataDirLock"; ASPECT=NestedTreeRefusal; STATUS=TESTED; TEST=tests/test_datadir_lock_subprocess.zig; OWNER=storage; UPDATED=2026-08-31
+    // ENG-3921 R3: the lock is per-DIRECTORY, so `--data-dir <live_dir>/nested`
+    // used to start cleanly INSIDE a running server's tree and write into it.
+    // Refuse when any ANCESTOR holds a live `.geode.lock` (flock probe, so a
+    // stale lockfile left by a dead holder never blocks a legitimate start).
+    if (data_dir_lock_mod.findLiveAncestorLock(gpa, resolved_data_dir)) |ancestor| {
+        var holder = ancestor;
+        defer holder.deinit(gpa);
+        std.debug.print(
+            "[startup] data directory {s} is nested inside {s}, which is locked by pid {d}; refusing to start\n",
+            .{ resolved_data_dir, holder.dir, holder.pid },
+        );
+        log.err("data directory is nested inside a locked data directory; refusing to start", &.{
+            Attr.string("path", resolved_data_dir),
+            Attr.string("locked_ancestor", holder.dir),
+            Attr.int("holder_pid", holder.pid),
+        });
+        return error.DataDirLocked;
+    }
+
     const lock_budget_ms = data_dir_lock_mod.timeoutFromEnv();
     var data_dir_guard = data_dir_lock_mod.DataDirLock.acquireWithTimeout(
         gpa,
@@ -1140,7 +1163,20 @@ pub fn main() !void {
             return error.DataDirLocked;
         },
         else => {
-            log.err("cannot lock data directory; refusing to start (fail-closed)", &.{
+            // CANARY: REQ=REQ-ENG-3921-DATA-DIR-LOCK-007; FEATURE="DataDirLock"; ASPECT=LockUnavailableDiagnostic; STATUS=TESTED; TEST=tests/test_datadir_lock_subprocess.zig; OWNER=storage; UPDATED=2026-08-31
+            // ENG-3921 R2: this branch used to log.err only, which the default
+            // log configuration does not emit — an unopenable
+            // `{data_dir}/.geode.lock` (mode 000, or owned by another uid)
+            // killed startup with nothing but a raw error trace. Print an
+            // operator message naming the directory, exactly as the
+            // DataDirLocked branch above does. Wording is load-bearing.
+            std.debug.print(
+                "[startup] cannot acquire data directory lock for {s}: {s}; refusing to start\n" ++
+                    "  Check that {s}/{s} is a regular file this user can read and write,\n" ++
+                    "  and that the filesystem supports advisory locks.\n",
+                .{ resolved_data_dir, @errorName(err), resolved_data_dir, data_dir_lock_mod.lock_filename },
+            );
+            log.err("cannot acquire data directory lock; refusing to start (fail-closed)", &.{
                 Attr.string("path", resolved_data_dir),
                 Attr.string("error", @errorName(err)),
             });

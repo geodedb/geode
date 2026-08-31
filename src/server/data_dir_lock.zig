@@ -122,6 +122,84 @@ pub fn readHolderPid(allocator: std.mem.Allocator, data_dir: []const u8) ?i64 {
     return std.fmt.parseInt(i64, trimmed, 10) catch null;
 }
 
+// CANARY: REQ=REQ-ENG-3921-DATA-DIR-LOCK-005; FEATURE="DataDirLock"; ASPECT=NestedTreeRefusal; STATUS=TESTED; TEST=tests/test_datadir_lock_subprocess.zig; OWNER=storage; UPDATED=2026-08-31
+/// ENG-3921 R3: an ANCESTOR directory that is currently locked by a live
+/// process. `dir` is owned by the caller-supplied allocator.
+pub const AncestorLockHolder = struct {
+    dir: []u8,
+    /// Pid recorded in the ancestor's lockfile, or -1 when it is unreadable.
+    pid: i64,
+
+    pub fn deinit(self: *AncestorLockHolder, allocator: std.mem.Allocator) void {
+        allocator.free(self.dir);
+        self.dir = &.{};
+    }
+};
+
+/// Bound on the ancestor walk so a pathological path can never spin.
+const max_ancestor_walk_depth: usize = 64;
+
+/// Absolute, normalised (`.`/`..`/trailing-slash free) form of `path`.
+fn absolutePathAlloc(allocator: std.mem.Allocator, path: []const u8) ![]u8 {
+    if (std.fs.path.isAbsolute(path)) return std.fs.path.resolve(allocator, &.{path});
+    const cwd = try std.process.currentPathAlloc(ioHandle(), allocator);
+    defer allocator.free(cwd);
+    return std.fs.path.resolve(allocator, &.{ cwd, path });
+}
+
+/// Is `{dir}/.geode.lock` held by a LIVE process right now?
+///
+/// Probes with a non-blocking `flock`: taking the lock proves nobody holds it
+/// (the file is then just stale bookkeeping left by a dead holder — the kernel
+/// released its lock — so we drop ours again and report "not held"). Failing
+/// to take it is the only evidence of a live incumbent. Never creates the
+/// lockfile; an unopenable one is treated as "not held" because it is not
+/// evidence of a geode process.
+fn liveLockHolderPid(allocator: std.mem.Allocator, dir: []const u8) ?i64 {
+    const io = ioHandle();
+    const path = std.fs.path.join(allocator, &.{ dir, lock_filename }) catch return null;
+    defer allocator.free(path);
+
+    const file = std.Io.Dir.cwd().openFile(io, path, .{}) catch return null;
+    defer file.close(io);
+
+    const held = file.tryLock(io, .exclusive) catch return null;
+    if (held) {
+        file.unlock(io);
+        return null;
+    }
+    return readHolderPid(allocator, dir) orelse -1;
+}
+
+/// ENG-3921 R3: walk the ancestors of `data_dir` looking for a directory whose
+/// `.geode.lock` is held by a live process.
+///
+/// The lock itself is per-DIRECTORY, so `serve --data-dir <live_dir>/nested`
+/// used to start cleanly INSIDE a running server's tree and write into it —
+/// the same split-brain ENG-3921 removed, one path component down. Callers
+/// refuse startup when this returns non-null.
+///
+/// Only ANCESTORS are probed (the directory itself is covered by the ordinary
+/// `acquire`), and staleness is decided by the flock probe, never by the
+/// presence of the file.
+pub fn findLiveAncestorLock(allocator: std.mem.Allocator, data_dir: []const u8) ?AncestorLockHolder {
+    const abs = absolutePathAlloc(allocator, data_dir) catch return null;
+    defer allocator.free(abs);
+
+    var cur: []const u8 = abs;
+    var depth: usize = 0;
+    while (depth < max_ancestor_walk_depth) : (depth += 1) {
+        const parent = std.fs.path.dirname(cur) orelse return null;
+        if (parent.len == 0 or parent.len >= cur.len) return null;
+        if (liveLockHolderPid(allocator, parent)) |pid| {
+            const owned = allocator.dupe(u8, parent) catch return null;
+            return .{ .dir = owned, .pid = pid };
+        }
+        cur = parent;
+    }
+    return null;
+}
+
 pub const DataDirLock = struct {
     allocator: std.mem.Allocator,
     /// Owned `{data_dir}/.geode.lock` path; kept for diagnostics and freed by
@@ -172,12 +250,21 @@ pub const DataDirLock = struct {
     /// Bounded handoff retry: re-attempts `acquire` until `budget_ms` elapses.
     /// `budget_ms == 0` means "refuse immediately" (no retry). Always
     /// terminates — the underlying acquire never blocks.
+    ///
+    /// CANARY: REQ=REQ-ENG-3921-DATA-DIR-LOCK-006; FEATURE="DataDirLock"; ASPECT=WaitProgress; STATUS=TESTED; TEST=tests/test_datadir_lock_subprocess.zig; OWNER=storage; UPDATED=2026-08-31
+    /// ENG-3921 R4: the wait is announced ONCE, before the first sleep, so an
+    /// operator who restarts into a still-live data dir is not staring at a
+    /// process that prints nothing for the whole (15s default) budget and then
+    /// dies — indistinguishable from a hang. A zero budget never prints: it
+    /// refuses before the first sleep, and the caller's refusal message is the
+    /// diagnostic.
     pub fn acquireWithTimeout(
         allocator: std.mem.Allocator,
         data_dir: []const u8,
         budget_ms: u64,
     ) Error!DataDirLock {
         const deadline = nowMillis() +| budget_ms;
+        var announced = false;
         while (true) {
             if (acquire(allocator, data_dir)) |lock| {
                 return lock;
@@ -187,6 +274,14 @@ pub const DataDirLock = struct {
             }
             const now = nowMillis();
             if (now >= deadline) return error.DataDirLocked;
+            if (!announced) {
+                announced = true;
+                const holder = readHolderPid(allocator, data_dir) orelse -1;
+                std.debug.print(
+                    "[startup] waiting for data-dir lock held by pid {d} ({s}); up to {d}ms\n",
+                    .{ holder, data_dir, budget_ms },
+                );
+            }
             sleepMillis(@min(retry_step_ms, deadline - now));
         }
     }

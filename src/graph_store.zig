@@ -788,6 +788,46 @@ pub fn getDataDirOverride() ?[]const u8 {
     return null;
 }
 
+// CANARY: REQ=REQ-ENG-3921-DATA-DIR-LOCK-004; FEATURE="DataDirLock"; ASPECT=DefaultDataDirScoping; STATUS=TESTED; TEST=tests/test_default_data_dir.zig; OWNER=storage; UPDATED=2026-08-31
+/// ENG-3921 R1: the per-user default data directory, used when neither the
+/// in-process override nor `GEODE_DATA_DIR` is set.
+///
+/// The old default was the bare, shared, world-writable `/tmp`. Since the
+/// startup lock (`src/server/data_dir_lock.zig`) flocks `{data_dir}/.geode.lock`,
+/// that made a default-configured `geode serve` contend on `/tmp/.geode.lock` —
+/// a path any local user (or unrelated program) can pre-create unopenable or
+/// hold, and one that silently pointed two different users' servers at ONE
+/// on-disk store.
+///
+/// Resolution order (deterministic, same chain as `cli_auth_helpers.resolveStateDir`):
+///   1. `$XDG_STATE_HOME/geode`
+///   2. `$HOME/.local/state/geode`
+///   3. `/tmp/geode-<uid>` (per-user, so two uids never collide)
+pub fn defaultDataDir(allocator: std.mem.Allocator) ![]u8 {
+    if (getEnvVarOwned(allocator, "XDG_STATE_HOME")) |xdg_state_home| {
+        defer allocator.free(xdg_state_home);
+        if (xdg_state_home.len > 0) {
+            return std.fs.path.join(allocator, &.{ xdg_state_home, "geode" });
+        }
+    } else |_| {}
+
+    if (getEnvVarOwned(allocator, "HOME")) |home| {
+        defer allocator.free(home);
+        if (home.len > 1) {
+            return std.fs.path.join(allocator, &.{ home, ".local", "state", "geode" });
+        }
+    } else |_| {}
+
+    if (comptime @import("builtin").os.tag == .windows) {
+        return std.fs.path.join(allocator, &.{ ".", ".geode", "state" });
+    }
+    const uid = if (comptime @import("builtin").os.tag == .linux)
+        std.os.linux.getuid()
+    else
+        std.c.getuid();
+    return std.fmt.allocPrint(allocator, "/tmp/geode-{d}", .{uid});
+}
+
 /// DEPRECATED: Legacy persistence file path. Retained as a stub for callers
 /// that have not yet been updated. Returns the data directory path.
 // CANARY: REQ=REQ-BINARY-PERSIST-PATH-001; FEATURE="BinaryPersistence"; ASPECT=PathResolution; STATUS=EXEMPT; OWNER=storage; UPDATED=2026-03-28
@@ -797,7 +837,7 @@ pub fn getPersistenceFilePath(allocator: std.mem.Allocator) ![]u8 {
         return try allocator.dupe(u8, override);
     }
     return getEnvVarOwned(allocator, "GEODE_DATA_DIR") catch {
-        return try allocator.dupe(u8, "/tmp");
+        return defaultDataDir(allocator);
     };
 }
 
