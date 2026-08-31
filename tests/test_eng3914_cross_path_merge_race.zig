@@ -747,3 +747,229 @@ test "ENG-3914 T2b regression: cross-path SINGLE-property MERGE of the SAME key 
 // `../geode-test-harness/geodetestlab-cli/specs/merge_cross_session_idempotency.yml`
 // for the two-connection cross-session shape; a timeout-specific spec is the
 // right home for RC-3 and is called out in the ENG-3914 fix plan.
+
+// ---------------------------------------------------------------------------
+// T2c/T2d — RC-3: the graph-CREATION window
+// ---------------------------------------------------------------------------
+//
+// A THIRD way the two MERGE implementations can lose their shared mutual
+// exclusion, distinct from RC-2's probe→insert gap: they can end up on two
+// DIFFERENT locks entirely.
+//
+//   bulk path    `bulkMergeNodeWithReservedIdMultiPropForTenant` opens with
+//                `self.getOrCreateGraph(graph_name)` — it MATERIALIZES the
+//                `ManagedGraph` and then locks it (tuple lock → `mg.rwlock`
+//                SHARED across probe→insert, the RC-2 contract).
+//
+//   general path the connection handler calls
+//                `graph_store.acquireGraphWriteLockCancelable(graph_name, …)`.
+//                Before this fix, an adapter that had not materialized
+//                `graph_name` YET answered `error.GraphNotFound`, and that was
+//                treated as "legacy store, no per-graph rwlock exists" — so the
+//                acquire escalated to the GLOBAL store lock EXCLUSIVE.
+//
+// The bulk path never touches the global store lock. So for as long as the
+// graph was unmaterialized, the two writers excluded each other on NOTHING and
+// both completed probe→create for the same key. Every session starts at the
+// same first key, so the observable symptom is exactly one duplicate, on the
+// FIRST key, on a fresh data dir — reproduced at the wire level in 5 of 15
+// runs (4 bulk + 4 general `geode query --batch` sessions, 8 shared keys).
+//
+// Fix: `acquireGraphWriteLockCancelable` materializes the graph (the SAME
+// `getOrCreateGraph` the bulk path uses) and takes the normal per-graph path.
+// The legacy global-exclusive escalation is now reached only when there is NO
+// adapter at all.
+
+/// A graph name no harness step creates, so the adapter genuinely does not
+/// know it when the writers arrive — the production shape is `default` on a
+/// fresh server, but pinning a dedicated name keeps the precondition
+/// assertable instead of dependent on store-init internals.
+const window_graph_name = "eng3914_window";
+
+fn bulkMergeWindow(adapter: *adapter_mod.StorageAdapter, k: Key) !u64 {
+    const merge_props = [_]PropKV{
+        .{ .key = "docId", .value = .{ .Int = k.doc_id } },
+        .{ .key = "seq", .value = .{ .Int = k.seq } },
+    };
+    const on_create = [_]PropKV{
+        .{ .key = "origin", .value = .{ .String = "bulk" } },
+    };
+    const store = graph_store.getGlobalStore(graph_store.global_allocator());
+    const res = try adapter.bulkMergeNodeWithReservedIdMultiProp(
+        window_graph_name,
+        store.reserveNodeId(),
+        label,
+        &merge_props,
+        &on_create,
+        false,
+    );
+    return res.id;
+}
+
+/// General MERGE against `window_graph_name`, under the same write-lock pair
+/// the connection handler uses. The session's current graph is what routes
+/// `executeMerge` to that graph, mirroring a client that ran `USE GRAPH`.
+fn generalMergeWindow(
+    ctx: *execution.ExecutionContext,
+    session: *execution.SessionState,
+    arena: *std.heap.ArenaAllocator,
+    k: Key,
+) !void {
+    const aa = arena.allocator();
+    const q = try std.fmt.allocPrint(
+        aa,
+        "MERGE (n:" ++ label ++ " {{docId: {d}, seq: {d}}}) ON CREATE SET n.origin = 'general'",
+        .{ k.doc_id, k.seq },
+    );
+    var parsed = try geode.parseGqlOptions(q, aa, .{});
+    defer parsed.deinit();
+
+    ctx.session_state = session;
+
+    const deadline = nowNs() + 60 * std.time.ns_per_s;
+    const handle = try graph_store.acquireGraphWriteLockCancelable(window_graph_name, deadline);
+    defer graph_store.releaseGraphLock(handle);
+
+    _ = try execution.executeStatementWithContext(aa, parsed.program.statements[0], ctx.*);
+}
+
+const CreationWindowCtx = struct {
+    adapter: *adapter_mod.StorageAdapter,
+    catalog: @TypeOf(@as(execution.ExecutionContext, undefined).catalog),
+    allocator: std.mem.Allocator,
+    use_general_path: bool,
+    barrier: *Barrier,
+    key_total: usize,
+    err: std.atomic.Value(u32) = std.atomic.Value(u32).init(0),
+};
+
+fn creationWindowWorker(ctx: *CreationWindowCtx) void {
+    var arena = std.heap.ArenaAllocator.init(ctx.allocator);
+    defer arena.deinit();
+    var session = execution.SessionState.init(ctx.allocator);
+    defer session.deinit();
+    session.graph = ctx.allocator.dupe(u8, window_graph_name) catch {
+        ctx.err.store(1, .release);
+        ctx.barrier.abort.store(1, .release);
+        return;
+    };
+    var exec_ctx = execution.ExecutionContext{ .catalog = ctx.catalog };
+    exec_ctx.session_state = &session;
+
+    var i: usize = 0;
+    while (i < ctx.key_total) : (i += 1) {
+        ctx.barrier.wait();
+        if (ctx.barrier.aborted()) continue;
+        const k = keyAt(i);
+        if (ctx.use_general_path) {
+            generalMergeWindow(&exec_ctx, &session, &arena, k) catch {
+                ctx.err.store(1, .release);
+                ctx.barrier.abort.store(1, .release);
+                continue;
+            };
+        } else {
+            _ = bulkMergeWindow(ctx.adapter, k) catch {
+                ctx.err.store(1, .release);
+                ctx.barrier.abort.store(1, .release);
+                continue;
+            };
+        }
+    }
+}
+
+// CANARY: REQ=REQ-ENG-3914-MERGE-CROSS-PATH-RACE; FEATURE="MergeIdempotency"; ASPECT=CreationWindowLockUnification; STATUS=TESTED; TEST=tests/test_eng3914_cross_path_merge_race.zig; OWNER=storage; UPDATED=2026-08-30
+test "ENG-3914 T2d regression: an UNMATERIALIZED graph must still lock PER-GRAPH, never the global exclusive" {
+    // Deterministic statement of the RC-3 contract — no race needed. The two
+    // MERGE implementations are mutually exclusive only if they lock the SAME
+    // object, so this asserts (a) the write-lock acquire returns a per-graph
+    // handle for a graph the adapter has not materialized, and (b) that handle
+    // names the very `ManagedGraph` the bulk path reaches via
+    // `getOrCreateGraph`.
+    var h = try Harness.init(testing.allocator);
+    defer h.deinit();
+
+    // Precondition: the adapter genuinely does not know this graph yet, so
+    // this test really is exercising the creation window.
+    try testing.expectError(error.GraphNotFound, h.adapter.lookupManagedGraph(window_graph_name));
+
+    const deadline = nowNs() + 60 * std.time.ns_per_s;
+    const handle = try graph_store.acquireGraphWriteLockCancelable(window_graph_name, deadline);
+    // RED pre-fix: `managed_graph == null` and `global_lock_is_exclusive == true`
+    // (the legacy global-exclusive escalation the bulk path never participates in).
+    try testing.expect(handle.managed_graph != null);
+    try testing.expect(!handle.global_lock_is_exclusive);
+    const locked_mg = handle.managed_graph.?;
+    graph_store.releaseGraphLock(handle);
+
+    // The bulk MERGE fast path resolves its graph with `getOrCreateGraph`; the
+    // handle above must be the SAME ManagedGraph, i.e. the same `mg.rwlock`.
+    const bulk_mg = try h.adapter.getOrCreateGraph(window_graph_name);
+    try testing.expectEqual(locked_mg, bulk_mg);
+
+    // Non-cancelable sibling honours the same contract.
+    const h2 = graph_store.acquireGraphWriteLock(window_graph_name);
+    defer graph_store.releaseGraphLock(h2);
+    try testing.expect(h2.managed_graph != null);
+    try testing.expect(!h2.global_lock_is_exclusive);
+    try testing.expectEqual(bulk_mg, h2.managed_graph.?);
+}
+
+// CANARY: REQ=REQ-ENG-3914-MERGE-CROSS-PATH-RACE; FEATURE="MergeIdempotency"; ASPECT=CreationWindowConcurrency; STATUS=TESTED; TEST=tests/test_eng3914_cross_path_merge_race.zig; OWNER=storage; UPDATED=2026-08-30
+test "ENG-3914 T2c regression: cross-path MERGE racing the graph-CREATION window must not duplicate" {
+    // The window exists exactly ONCE per store lifetime (the first write to a
+    // not-yet-materialized graph), so the whole scenario is re-run against a
+    // fresh store each round to make the one-shot race observable. The wire
+    // repro duplicated in 5 of 15 rounds with 8 shared keys.
+    const rounds = 10;
+    const t2c_keys = 8;
+    const bulk_workers = 3;
+    const general_workers = 3;
+    const workers = bulk_workers + general_workers;
+
+    var round: usize = 0;
+    while (round < rounds) : (round += 1) {
+        var h = try Harness.init(testing.allocator);
+        defer h.deinit();
+        // Deliberately NO setUpGraph(): `window_graph_name` must not exist yet.
+        try testing.expectError(error.GraphNotFound, h.adapter.lookupManagedGraph(window_graph_name));
+
+        var barrier = Barrier{ .n = workers };
+        var ctxs: [workers]CreationWindowCtx = undefined;
+        var threads: [workers]std.Thread = undefined;
+
+        for (0..workers) |i| {
+            ctxs[i] = .{
+                .adapter = h.adapter,
+                .catalog = h.catalog,
+                .allocator = testing.allocator,
+                .use_general_path = i >= bulk_workers,
+                .barrier = &barrier,
+                .key_total = t2c_keys,
+            };
+        }
+        for (0..workers) |i| {
+            threads[i] = try std.Thread.spawn(.{}, creationWindowWorker, .{&ctxs[i]});
+        }
+        for (threads) |t| t.join();
+
+        for (ctxs, 0..) |c, i| {
+            if (c.err.load(.acquire) != 0) {
+                std.debug.print(
+                    "creation-window worker {d} ({s}) errored in round {d}\n",
+                    .{ i, if (c.use_general_path) "general" else "bulk", round },
+                );
+                return error.WorkerError;
+            }
+        }
+
+        // Read back from the window graph, not the session default.
+        h.session.graph = try testing.allocator.dupe(u8, window_graph_name);
+
+        var expected: [t2c_keys]Key = undefined;
+        for (0..t2c_keys) |i| expected[i] = keyAt(i);
+        h.assertOneNodePerKey(&expected) catch |err| {
+            std.debug.print("  (round {d} of {d})\n", .{ round, rounds });
+            return err;
+        };
+    }
+}

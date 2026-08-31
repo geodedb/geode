@@ -13521,6 +13521,9 @@ pub fn acquireGraphReadLockTagged(graph_name: []const u8, tag: LockSiteTag) Grap
 /// When the per-graph adapter is unavailable (legacy / test-only path),
 /// we fall back to the global EXCLUSIVE lock — there is no per-graph
 /// rwlock in that case, so the global exclusive is the only option.
+///
+/// ENG-3914 (RC-3): an adapter that simply does not know `graph_name` YET is
+/// NOT the legacy case — see `materializeGraphForWriteLock`.
 pub fn acquireGraphWriteLock(graph_name: []const u8) GraphLockHandle {
     if (global_adapter) |adapter| {
         acquireStoreLock();
@@ -13531,11 +13534,24 @@ pub fn acquireGraphWriteLock(graph_name: []const u8) GraphLockHandle {
                 .holds_global_store_lock = true,
                 .global_lock_is_exclusive = false,
             };
-        } else |_| {
+        } else |err| {
             // Adapter saw the graph but couldn't acquire — release the
             // shared global and fall through to the legacy global-only
             // exclusive path below.
             releaseStoreLock();
+            if (err == error.GraphNotFound and materializeGraphForWriteLock(adapter, graph_name)) {
+                acquireStoreLock();
+                if (adapter.acquireGraphWriteLock(graph_name)) |mg| {
+                    return .{
+                        .managed_graph = mg,
+                        .is_write = true,
+                        .holds_global_store_lock = true,
+                        .global_lock_is_exclusive = false,
+                    };
+                } else |_| {
+                    releaseStoreLock();
+                }
+            }
         }
     }
     acquireStoreWriteLock();
@@ -13545,6 +13561,50 @@ pub fn acquireGraphWriteLock(graph_name: []const u8) GraphLockHandle {
         .holds_global_store_lock = true,
         .global_lock_is_exclusive = true,
     };
+}
+
+/// ENG-3914 (RC-3), cross-path MERGE duplication in the GRAPH-CREATION window.
+///
+/// The two MERGE implementations must exclude each other on the SAME lock:
+/// the bulk fast path (`bulkMergeNodeWithReservedId*`) calls
+/// `adapter.getOrCreateGraph` and then holds that graph's `mg.rwlock` SHARED
+/// across its whole probe→insert, while the general executor MERGE runs under
+/// the whole-graph `mg.rwlock` EXCLUSIVE the connection handler takes here.
+///
+/// Before this fix, a graph the adapter had not materialized yet (the very
+/// first statements against `default` on a fresh server) sent the two paths to
+/// DIFFERENT locks: the bulk writer created the `ManagedGraph` and took its
+/// per-graph lock, while the general writer got `error.GraphNotFound` and
+/// escalated to the GLOBAL store lock — which the bulk path never touches. The
+/// probe→create of both writers then interleaved freely and the first merge key
+/// every session races on (`{docId: 0, seq: 0}`) landed TWICE. Reproduced at
+/// the wire level in ~1 run in 3 (4 bulk + 4 general `geode query --batch`
+/// sessions over the same 8 keys on a fresh data dir).
+///
+/// Fix: materialize the graph, then take the normal per-graph path. The legacy
+/// global-EXCLUSIVE escalation now serves ONLY its actual purpose — a store
+/// with no adapter at all (unit tests, `initGlobalStore`-less harnesses), where
+/// no per-graph rwlock exists to take. Returns false when materialization fails
+/// (read-only data dir, quota, registry error), leaving the legacy fallback as
+/// the fail-safe.
+///
+/// Called with NO store lock held: `getOrCreateGraph` opens/creates an engine
+/// (file I/O) under the adapter's own `mutex` (tier 0), which must never be
+/// taken while a tier-1 store lock is held.
+///
+/// CANARY: REQ=REQ-ENG-3914-MERGE-CROSS-PATH-RACE; FEATURE="MergeIdempotency"; ASPECT=CreationWindowLockUnification; STATUS=TESTED; TEST=tests/test_eng3914_cross_path_merge_race.zig; OWNER=storage; UPDATED=2026-08-30
+fn materializeGraphForWriteLock(
+    adapter: *graph_storage_adapter.StorageAdapter,
+    graph_name: []const u8,
+) bool {
+    _ = adapter.getOrCreateGraph(graph_name) catch |err| {
+        log.warn("write-lock graph materialization failed; using legacy global-exclusive lock", &.{
+            Attr.string("graph", graph_name),
+            Attr.string("error", @errorName(err)),
+        });
+        return false;
+    };
+    return true;
 }
 
 /// R2 (2026-04-22): deadline-aware variant of `acquireGraphWriteLock`.
@@ -13583,10 +13643,34 @@ pub fn acquireGraphWriteLockCancelable(graph_name: []const u8, deadline_mono_ns:
                 return error.Deadline;
             },
             else => {
-                // GraphNotFound / other errors — drop the shared lock and
-                // fall through to the legacy global-exclusive path below
-                // (matches the old behaviour for these errors).
+                // Drop the shared lock we optimistically took.
                 releaseStoreLock();
+                // ENG-3914 (RC-3): `GraphNotFound` means the adapter has not
+                // materialized this graph YET — NOT that there is no per-graph
+                // rwlock to take. Escalating to the global exclusive here put
+                // the general MERGE on a DIFFERENT lock from the bulk MERGE
+                // fast path (which materializes the graph itself via
+                // `getOrCreateGraph`), so their probe→create windows
+                // interleaved and duplicated the first contended merge key.
+                // Materialize, then take the normal per-graph path. See
+                // `materializeGraphForWriteLock`.
+                if (err == error.GraphNotFound and materializeGraphForWriteLock(adapter, graph_name)) {
+                    acquireStoreLock();
+                    if (adapter.acquireGraphWriteLockCancelable(graph_name, deadline_mono_ns)) |mg| {
+                        return .{
+                            .managed_graph = mg,
+                            .is_write = true,
+                            .holds_global_store_lock = true,
+                            .global_lock_is_exclusive = false,
+                        };
+                    } else |err2| switch (err2) {
+                        error.Deadline => {
+                            releaseStoreLock();
+                            return error.Deadline;
+                        },
+                        else => releaseStoreLock(),
+                    }
+                }
             },
         }
     }

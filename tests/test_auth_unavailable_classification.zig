@@ -471,7 +471,7 @@ test "authenticate reports AuthUnavailable when the storage lookup could not ans
 // EXCLUSIVE, and that is the normal state of every mutating auth procedure:
 //
 //   quic_connection_handler -> graph_store.acquireGraphWriteLockCancelable("default", …)
-//     -> adapter reports GraphNotFound for a graph that was never created
+//     -> NO storage adapter is installed, so there is no per-graph rwlock
 //     -> legacy fallback escalates to the GLOBAL EXCLUSIVE store lock
 //        (graph_store.zig acquireGraphWriteLockCancelable, "Legacy fallback")
 //     -> lock held across the whole executor run
@@ -530,8 +530,10 @@ test "persistent resolver resolves while THIS thread holds the store lock exclus
     // EXCLUSIVE store lock, taken by the SAME thread that now calls back into
     // the resolver. Drive the real acquire path — with no adapter installed,
     // `acquireGraphWriteLockCancelable` takes the legacy global-exclusive
-    // branch, exactly as it does in production for a graph the adapter does
-    // not know ("default" before any DDL created it).
+    // branch. `requireNoGlobalAdapter()` above is what selects it: since
+    // ENG-3914 (RC-3) an adapter that merely has not materialized `graph_name`
+    // yet is materialized and locked PER-GRAPH instead of escalating, so a
+    // missing graph alone no longer reaches this branch.
     const handle = try graph_store.acquireGraphWriteLockCancelable(
         "default",
         graph_store.monoNanosNowPub() + std.time.ns_per_s,
