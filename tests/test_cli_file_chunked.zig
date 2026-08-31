@@ -679,11 +679,11 @@ test "geode query --file commits every statement of an all-valid chunked file" {
 //
 // Contract (green after fix): the block is refused BEFORE any chunk is shipped
 // — the guard returns error.TransactionTooLargeForChunkedRollback from the
-// pre-scan (:2389-2397), which propagates through cmdQuery → dispatch → main
-// as a nonzero process exit.  The fixer owns the exact code (error propagation
-// yields 1; a pre-send catch could map it to ExitCode.usage_error = 2), so the
-// hard clauses pinned here are the two the corruption actually violates:
-//   1. the process exits NONZERO, and
+// pre-scan (:2389-2397).  cmdQuery catches that error at the executeChunkedQueries
+// call site and maps it to ExitCode.general_error = 1 (the same code the sibling
+// "a chunk failed" path uses), after printing an actionable refusal message.  So
+// the two hard clauses pinned here are:
+//   1. the process exits with EXACTLY 1 (ExitCode.general_error), and
 //   2. exactly ZERO :RbTest nodes persist (nothing was committed).
 // Both are RED now (exit 0, count 800) and clean-GREEN once the guard fires.
 test "geode query --file refuses an oversized BEGIN...ROLLBACK; block instead of silently committing it (#830)" {
@@ -731,7 +731,19 @@ test "geode query --file refuses an oversized BEGIN...ROLLBACK; block instead of
         return error.ReadBackReturnedNoRow;
 
     var violations: usize = 0;
-    if (code == 0) violations += 1;
+    // Tightened from "nonzero" to the exact code the fixer settled on: the
+    // pre-send refusal is caught in cmdQuery (src/cli/main.zig, the
+    // executeChunkedQueries call site) and mapped to ExitCode.general_error = 1,
+    // matching the sibling "a chunk failed" path.
+    if (code != 1) {
+        std.debug.print(
+            "\n#830 VIOLATION: `--file` exited {d} on a >32KB BEGIN…ROLLBACK; block;\n" ++
+                "  expected 1 (ExitCode.general_error) — the oversized-rollback refusal is\n" ++
+                "  caught at the executeChunkedQueries call site and mapped to general_error.\n",
+            .{code},
+        );
+        violations += 1;
+    }
     if (persisted != 0) {
         std.debug.print(
             "\n#830 VIOLATION (silent data corruption): {d} :RbTest nodes persisted after a\n" ++

@@ -1601,7 +1601,7 @@ fn cmdQuery(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !voi
         // Mirrors the --batch contract (REQ-CLI-BATCH-MODE-004): statement
         // errors do not abort the run, but they can never be swallowed by a
         // zero exit status.
-        const chunk_errors = try executeChunkedQueries(allocator, .{
+        const chunk_errors = executeChunkedQueries(allocator, .{
             .server_addr = server_addr,
             .statements = statements,
             .format = format,
@@ -1617,7 +1617,25 @@ fn cmdQuery(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !voi
             .graph_for_hello = graph,
             .use_grpc = use_grpc,
             .role = role,
-        });
+        }) catch |err| switch (err) {
+            // #830: an oversized BEGIN…ROLLBACK block cannot ride a single
+            // chunked connection, and silently stripping its wrappers would
+            // auto-commit writes the user asked to roll back.  The pre-scan
+            // refuses it (having already printed an actionable message naming
+            // the size, the chunk limit, and the split/reduce remedy); map that
+            // refusal to a definite nonzero code, the same general_error the
+            // sibling "a chunk failed" path uses below.
+            error.TransactionTooLargeForChunkedRollback => {
+                std.debug.print(
+                    "refusing to execute: a BEGIN…ROLLBACK transaction larger than one " ++
+                        "chunk cannot be safely rolled back over chunked --file; split it " ++
+                        "into smaller transactions or use --batch.\n",
+                    .{},
+                );
+                std.process.exit(@intFromEnum(ExitCode.general_error));
+            },
+            else => return err,
+        };
         if (chunk_errors > 0) std.process.exit(@intFromEnum(ExitCode.general_error));
         return;
     }
@@ -2383,8 +2401,12 @@ fn executeChunkedQueries(allocator: std.mem.Allocator, opts: ChunkedQueryOptions
                     // problem and can split the work manually.
                     const ends_with_rollback = blk: {
                         if (txn_end == 0 or txn_end - 1 >= statements.len) break :blk false;
-                        const last = std.mem.trim(u8, statements[txn_end - 1], " \t\r\n");
-                        break :blk std.ascii.eqlIgnoreCase(last, "ROLLBACK");
+                        // #830: the file assembler keeps the trailing `;`, so a
+                        // whitespace-only trim leaves "ROLLBACK;" != "ROLLBACK"
+                        // and the guard missed.  isRollback is semicolon- and
+                        // whitespace-tolerant and case-insensitive, mirroring
+                        // isTransactionEnd's normalization.
+                        break :blk query_file.isRollback(statements[txn_end - 1]);
                     };
                     if (ends_with_rollback) {
                         std.debug.print(

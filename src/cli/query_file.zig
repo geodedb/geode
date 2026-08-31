@@ -71,6 +71,25 @@ pub fn assembleStatements(
     return statements.toOwnedSlice(gpa);
 }
 
+/// Classify an assembled statement as a bare `ROLLBACK` terminator.
+///
+/// Semicolon- and whitespace-tolerant, case-insensitive — mirroring the
+/// normalization in `main.zig`'s `isTransactionEnd`: leading/trailing whitespace
+/// is trimmed, then a trailing run of `; \t` is stripped before an
+/// `eqlIgnoreCase` against "ROLLBACK". The file assembler keeps the trailing
+/// `;` on every statement (see `assembleStatements`), so the oversized-rollback
+/// guard in `executeChunkedQueries` must accept "ROLLBACK;" — not just the bare
+/// "ROLLBACK" — or it silently auto-commits a transaction the user asked to roll
+/// back (#830).
+///
+/// CANARY: REQ=REQ-CLI-CHUNKED-EXEC-009; FEATURE="ChunkedExecution"; ASPECT=RollbackGuard; STATUS=TESTED; TEST=tests/test_cli_file_chunked.zig; OWNER=cli; UPDATED=2026-08-31
+pub fn isRollback(stmt: []const u8) bool {
+    const trimmed = std.mem.trim(u8, stmt, " \t\r\n");
+    const normalized = std.mem.trimEnd(u8, trimmed, "; \t");
+    if (normalized.len == 0) return false;
+    return std.ascii.eqlIgnoreCase(normalized, "ROLLBACK");
+}
+
 /// Release a slice returned by `assembleStatements`.
 pub fn freeStatements(gpa: std.mem.Allocator, stmts: [][]const u8) void {
     for (stmts) |stmt| gpa.free(stmt);
