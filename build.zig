@@ -7352,6 +7352,44 @@ pub fn build(b: *std.Build) void {
     const cli_timeout_exit_step = b.step("test-cli-timeout-exit-code", "`geode query` timeout gets its own exit code + truthful message (subprocess e2e)");
     cli_timeout_exit_step.dependOn(&run_cli_timeout_exit_tests.step);
 
+    // gRPC CLIENT HTTP/2 FRAMING: `grpc_query_transport.sendRequest` (:218)
+    // writes the whole message as ONE DATA frame while `drainInitialSettings`
+    // (:84-102) discards the peer's SETTINGS_MAX_FRAME_SIZE, so a >16 KiB
+    // program is reset by the server's spec-correct FRAME_SIZE_ERROR; the
+    // mirror defect in `readResponse` (:236-253) assumes one DATA frame is one
+    // gRPC message and mis-decodes a fragmented reply. Drives the REAL gRPC
+    // listener with NO reframing proxy, with QUIC controls. Subprocess e2e (real
+    // server + real CLI, binds real ports) so — like the CLI lanes above — it is
+    // NOT wired into the aggregate `test` step; run it by name.
+    const grpc_large_payload_tests = b.addTest(.{ .root_module = b.createModule(.{
+        .root_source_file = b.path("tests/test_grpc_large_payload.zig"),
+        .target = target,
+        .optimize = optimize,
+    }) });
+    grpc_large_payload_tests.root_module.link_libc = true;
+    const run_grpc_large_payload_tests = b.addRunArtifact(grpc_large_payload_tests);
+    run_grpc_large_payload_tests.step.dependOn(b.getInstallStep());
+    const grpc_large_payload_step = b.step("test-grpc-large-payload", "gRPC client carries >16KiB requests and reassembles >16KiB responses (subprocess e2e)");
+    grpc_large_payload_step.dependOn(&run_grpc_large_payload_tests.step);
+
+    // gRPC SHUTDOWN USE-AFTER-FREE: SIGTERM frees the global store
+    // (server/main.zig:2346, LIFO-ordered BEFORE the gRPC teardown at :2058)
+    // while detached vendored gRPC handler threads are still reading it —
+    // `GeodeGrpcServer` (grpc_server.zig:625) exposes no requestShutdown and
+    // gRPC connections are invisible to the QUIC-only drain. Reproduced as a
+    // panic ("incorrect alignment") under a slow in-flight streaming query.
+    // Subprocess e2e; not in the aggregate `test` step.
+    const grpc_shutdown_drain_tests = b.addTest(.{ .root_module = b.createModule(.{
+        .root_source_file = b.path("tests/test_grpc_shutdown_drain.zig"),
+        .target = target,
+        .optimize = optimize,
+    }) });
+    grpc_shutdown_drain_tests.root_module.link_libc = true;
+    const run_grpc_shutdown_drain_tests = b.addRunArtifact(grpc_shutdown_drain_tests);
+    run_grpc_shutdown_drain_tests.step.dependOn(b.getInstallStep());
+    const grpc_shutdown_drain_step = b.step("test-grpc-shutdown-drain", "SIGTERM with an in-flight gRPC query drains instead of use-after-freeing the store (subprocess e2e)");
+    grpc_shutdown_drain_step.dependOn(&run_grpc_shutdown_drain_tests.step);
+
     // `geode query --file` chunked-execution defects.  Same subprocess e2e
     // shape as test-cli-batch-mode directly above (real server + real CLI,
     // stdio only, no geode import graph in the test artifact) — which is why
@@ -9926,6 +9964,38 @@ pub fn build(b: *std.Build) void {
     shardDep(test_step, &run_create_vector_leak_tests.step, 0, test_shard_loads, test_shard_index);
     const create_vector_leak_step = b.step("test-create-vector-value-leak", "Run CREATE/MERGE evaluated-property Value leak regressions");
     create_vector_leak_step.dependOn(&run_create_vector_leak_tests.step);
+
+    // ENV.OWNED DOUBLE-FREE: `Env.owned = true` on a BY-VALUE `Env` makes
+    // `value_types.withBinding` (:269-272, the only reader of `owned`) free the
+    // caller's arrays mid-loop. `eval.zig:1535` calls it in a LOOP over a list
+    // comprehension, so iteration 2 memcpys from freed memory and frees again.
+    // Two sites still set `.owned = true` with no frame free:
+    // match_operations.zig:1830-1841 (pointWriteFastPath) and :3446-3460
+    // (handleShortestPathAssignment); :11046-11067 is the reference fix.
+    // Runs under std.testing.allocator — the existing point-write suite uses an
+    // arena and is structurally blind to both the double free and the leak.
+    const env_owned_double_free_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_env_owned_double_free.zig"), .target = target, .optimize = optimize });
+    env_owned_double_free_test_mod.addImport("geode", root_mod);
+    const env_owned_double_free_tests = b.addTest(.{ .root_module = env_owned_double_free_test_mod });
+    const run_env_owned_double_free_tests = b.addRunArtifact(env_owned_double_free_tests);
+    shardDep(test_step, &run_env_owned_double_free_tests.step, 0, test_shard_loads, test_shard_index);
+    const env_owned_double_free_step = b.step("test-env-owned-double-free", "Run Env.owned by-value double-free / binding-env leak regressions");
+    env_owned_double_free_step.dependOn(&run_env_owned_double_free_tests.step);
+
+    // MATERIALIZE INTERIOR LEAK (no-arena callers): materializeNode:2935-2943 /
+    // materializeEdge:2978-2986 route interior bytes through `scratchOr(allocator)`,
+    // and `OwnedGraphEntities.deinit` (execution.zig:662-671) destroys only the
+    // struct — so cleanup is CONDITIONAL on a thread arena being installed.
+    // query/materialized_views.zig:711 and distributed/query_coordinator.zig:375
+    // both call executeProgramWithContext with `self.allocator` and no
+    // pushScratchAllocator, so every row they read leaks its interior.
+    const materialize_no_arena_leak_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_materialize_node_no_arena_leak.zig"), .target = target, .optimize = optimize });
+    materialize_no_arena_leak_test_mod.addImport("geode", root_mod);
+    const materialize_no_arena_leak_tests = b.addTest(.{ .root_module = materialize_no_arena_leak_test_mod });
+    const run_materialize_no_arena_leak_tests = b.addRunArtifact(materialize_no_arena_leak_tests);
+    shardDep(test_step, &run_materialize_no_arena_leak_tests.step, 1, test_shard_loads, test_shard_index);
+    const materialize_no_arena_leak_step = b.step("test-materialize-node-no-arena-leak", "Run planned-read materialize interior-byte leak regressions for no-arena callers");
+    materialize_no_arena_leak_step.dependOn(&run_materialize_no_arena_leak_tests.step);
 
     // DATE-PART-EXACT: date_part()/time_part() were unreachable from GQL (the temporal
     // ExtValue bridge nulled their argument) and date_part's arithmetic used a

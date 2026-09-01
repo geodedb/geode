@@ -637,6 +637,8 @@ REQ-CLI-GRAPH-FLAG-003,GraphFlag,ExecuteWithGraph,TESTED,,,cli,2026-06-10,src/cl
 REQ-CLI-GRAPH-FLAG-004,GraphFlag,ExecuteQuicQuery,TESTED,,,cli,2026-06-10,src/cli/main.zig,1903
 REQ-CLI-GRAPH-FLAG-005,GraphFlag,ExecuteOnConnection,TESTED,,,cli,2026-06-10,src/cli/main.zig,3137
 REQ-CLI-GRAPH-FLAG-006,GraphFlag,PrependUseGraph,TESTED,,,cli,2026-06-10,src/cli/main.zig,3213
+REQ-CLI-GRPC-FRAMING-001,GrpcQueryTransport,RequestFrameSplitting,TESTED,,,cli,2026-09-01,tests/test_grpc_large_payload.zig,48
+REQ-CLI-GRPC-FRAMING-002,GrpcQueryTransport,ResponseReassembly,TESTED,,,cli,2026-09-01,tests/test_grpc_large_payload.zig,49
 REQ-CLI-MERMAID-FORMAT-001,MermaidQueryFormat,AmpersandEscapePreservesBrTag,TESTED,,,cli,2026-05-06,tests/test_query_result_mermaid.zig,201
 REQ-CLI-MERMAID-FORMAT-001,MermaidQueryFormat,DuplicateNodeDedup,TESTED,,,cli,2026-05-06,tests/test_query_result_mermaid.zig,158
 REQ-CLI-MERMAID-FORMAT-001,MermaidQueryFormat,EdgeLabelAngleBracketEscape,TESTED,,,cli,2026-05-06,tests/test_query_result_mermaid.zig,222
@@ -1140,6 +1142,10 @@ REQ-ENGINE-QUERY-001,Engine,QueryExec,TESTED,,,engine,2026-01-16,tests/test_gap_
 REQ-ENGINE-RUNTIME-001,Engine,RuntimeEngine,TESTED,,,engine,2026-01-16,tests/test_gap_0193_batch5_comprehensive.zig,312
 REQ-ENGINE-STATS-001,Engine,StatisticsEngine,TESTED,,,engine,2026-01-16,tests/test_gap_0193_batch6_comprehensive.zig,291
 REQ-ENGINE-STREAMING-001,Engine,Streaming,TESTED,,,engine,2026-01-16,tests/test_gap_0193_batch2_engine.zig,339
+REQ-EVAL-ENV-OWNERSHIP-001,EnvBindingOwnership,WithBindingDoubleFree,TESTED,,,execution,2026-09-01,tests/test_env_owned_double_free.zig,114
+REQ-EVAL-ENV-OWNERSHIP-002,EnvBindingOwnership,PointWriteFastPathEnvLeak,TESTED,,,execution,2026-09-01,tests/test_env_owned_double_free.zig,115
+REQ-EVAL-ENV-OWNERSHIP-003,EnvBindingOwnership,ShortestPathEnvLeak,TESTED,,,execution,2026-09-01,tests/test_env_owned_double_free.zig,116
+REQ-EVAL-ENV-OWNERSHIP-004,EnvBindingOwnership,WithBindingResultLeak,TESTED,,,eval,2026-09-01,tests/test_env_owned_double_free.zig,117
 REQ-EVAL-EXPR-001,Evaluation,ExpressionEval,TESTED,,,engine,2026-01-16,tests/test_gap_0193_batch3_comprehensive.zig,449
 REQ-EVAL-EXPR-001,Evaluation,ExpressionEval,TESTED,,,eval,2026-01-16,tests/test_gap_0193_batch4_comprehensive.zig,531
 REQ-EVAL-REFACTOR-001,EvalExpr Refactoring,CallHandlers,TESTED,,,eval,2026-01-30,src/eval/call_handlers.zig,1
@@ -1168,6 +1174,8 @@ REQ-EXEC-CREATE-VALUE-OWNERSHIP-002,CreatePropertyEvaluation,StoreAliasNotDouble
 REQ-EXEC-DELETE-001,Execution,DeleteExecution,TESTED,,,exec,2026-01-16,tests/test_gap_0193_batch5_comprehensive.zig,348
 REQ-EXEC-MATCH-001,Execution,MatchExecution,TESTED,,,execution,2026-01-16,tests/test_gap_0193_batch3_comprehensive.zig,266
 REQ-EXEC-MATCH-001,Execution,MatchExecution,TESTED,,,exec,2026-01-16,tests/test_gap_0193_batch4_comprehensive.zig,246
+REQ-EXEC-MATERIALIZE-OWNERSHIP-001,PlannedReadMaterialize,InteriorBytesUnconditionalOwnership,TESTED,,,execution,2026-09-01,tests/test_materialize_node_no_arena_leak.zig,76
+REQ-EXEC-MATERIALIZE-OWNERSHIP-002,PlannedReadMaterialize,NoArenaCallerLeak,TESTED,,,execution,2026-09-01,tests/test_materialize_node_no_arena_leak.zig,77
 REQ-EXEC-MERGE-001,Execution,MergeExecution,TESTED,,,exec,2026-01-16,tests/test_gap_0193_batch5_comprehensive.zig,341
 REQ-EXEC-READ-ONLY-REQUEST-001,ReadOnlyExecute,BuildStep,TESTED,,,engine,2026-08-28,build.zig,2734
 REQ-EXEC-READ-ONLY-REQUEST-001,ReadOnlyExecute,CliFlag,TESTED,,,engine,2026-08-28,src/cli/main.zig,1051
@@ -1779,7 +1787,7 @@ REQ-GPS-DIST-002,GPS Distributed Envelope,TruncatedBuffer,TESTED,,,security,2026
 REQ-GPS-DIST-002,GPS Distributed Envelope,UnsupportedVersion,TESTED,,,security,2026-05-20,tests/test_gps_distributed_envelope.zig,257
 REQ-GPS-EXPLAIN-001,GPS EXPLAIN POLICY,ASTType,TESTED,,,security,2026-05-21,src/gql/ast.zig,820
 REQ-GPS-EXPLAIN-001,GPS EXPLAIN POLICY,ASTVariant,TESTED,,,security,2026-05-21,src/gql/ast.zig,60
-REQ-GPS-EXPLAIN-001,GPS EXPLAIN POLICY,BuildStep,TESTED,,,security,2026-05-21,build.zig,10336
+REQ-GPS-EXPLAIN-001,GPS EXPLAIN POLICY,BuildStep,TESTED,,,security,2026-05-21,build.zig,10406
 REQ-GPS-EXPLAIN-001,GPS EXPLAIN POLICY,CreateClassifiedAsCreate,TESTED,,,security,2026-05-21,tests/test_gps_explain_policy.zig,197
 REQ-GPS-EXPLAIN-001,GPS EXPLAIN POLICY,DispatchArm,TESTED,,,security,2026-05-21,src/execution.zig,1609
 REQ-GPS-EXPLAIN-001,GPS EXPLAIN POLICY,ExecutorFunction,TESTED,,,security,2026-05-21,src/execution/statement_handlers.zig,1471
@@ -1936,7 +1944,7 @@ REQ-GPS-PROC-001,GPS Procedure Enforcement,ReadWriteAllowsMutating,TESTED,,,secu
 REQ-GPS-PROC-001,GPS Procedure Enforcement,UnauthenticatedDenied,TESTED,,,security,2026-05-20,tests/test_gps_procedure_enforcement.zig,168
 REQ-GPS-PROC-003,GPS Phase 5 Procedure,MetadataReadOnly,TESTED,,,security,2026-05-21,src/execution/procedure_access.zig,114
 REQ-GPS-WIRE-001,GPS Wire Principal Forwarding,BeginQuery,IMPL,,,security,2026-05-21,src/client/quic_query_runner.zig,106
-REQ-GPS-WIRE-001,GPS Wire Principal Forwarding,BuildStep,TESTED,,,security,2026-05-21,build.zig,10345
+REQ-GPS-WIRE-001,GPS Wire Principal Forwarding,BuildStep,TESTED,,,security,2026-05-21,build.zig,10415
 REQ-GPS-WIRE-001,GPS Wire Principal Forwarding,CliEnvelopeBuild,TESTED,,,security,2026-06-11,src/cli/main.zig,1680
 REQ-GPS-WIRE-001,GPS Wire Principal Forwarding,CliForwardPrincipal,TESTED,,,security,2026-06-11,src/cli/main.zig,1922
 REQ-GPS-WIRE-001,GPS Wire Principal Forwarding,CliForwardPrincipalFlag,TESTED,,,security,2026-06-11,src/cli/main.zig,1034
@@ -1949,7 +1957,7 @@ REQ-GPS-WIRE-001,GPS Wire Principal Forwarding,SchemaField,TESTED,,,security,202
 REQ-GPS-WIRE-001,GPS Wire Principal Forwarding,ServerUnpack,TESTED,,,security,2026-06-10,src/server/quic_connection_handler.zig,6582
 REQ-GPS-WIRE-002,GPS Distributed Wire,BackwardCompat,TESTED,,,security,2026-05-21,tests/test_gps_distributed_wire.zig,167
 REQ-GPS-WIRE-002,GPS Distributed Wire,BatchQueries,EXEMPT,,,security,2026-06-11,src/distributed/query_transport.zig,179
-REQ-GPS-WIRE-002,GPS Distributed Wire,BuildStep,TESTED,,,security,2026-05-21,build.zig,10357
+REQ-GPS-WIRE-002,GPS Distributed Wire,BuildStep,TESTED,,,security,2026-05-21,build.zig,10427
 REQ-GPS-WIRE-002,GPS Distributed Wire,ConnectionExecuteQuery,EXEMPT,,,security,2026-06-11,src/distributed/query_transport.zig,395
 REQ-GPS-WIRE-002,GPS Distributed Wire,ExecutePlan,IMPL,,,security,2026-05-21,src/distributed/enhanced_query_coordinator.zig,250
 REQ-GPS-WIRE-002,GPS Distributed Wire,ExecuteRemoteQuery,EXEMPT,,,security,2026-06-11,src/distributed/query_transport.zig,141
@@ -5370,6 +5378,8 @@ REQ-TIMESERIES-WIRE-001,TimeseriesServerWiring,GlobalStore,TESTED,,,eval,2026-04
 REQ-TIMESERIES-WIRE-002,TimeseriesServerWiring,ExecutionContext,TESTED,,,engine,2026-04-01,src/execution.zig,544
 REQ-TIMESERIES-WIRE-003,TimeseriesServerWiring,ServerInit,TESTED,,,server,2026-04-01,src/server/main.zig,2235
 REQ-TLS-CERT-002,TLSCertVerification,Core,EXEMPT,,,cli,2026-01-12,src/cli/main.zig,1902
+REQ-TRANSPORT-GRPC-SHUTDOWN-001,GrpcServerLifecycle,InFlightHandlerDrain,TESTED,,,transport,2026-09-01,tests/test_grpc_shutdown_drain.zig,53
+REQ-TRANSPORT-GRPC-SHUTDOWN-002,GrpcServerLifecycle,NoFalseSuccessOnShutdown,TESTED,,,transport,2026-09-01,tests/test_grpc_shutdown_drain.zig,54
 REQ-TRIG-001,TrigonometricFunctions,Sin,TESTED,,,eval,2026-01-15,tests/test_gap_0193_impl_verification.zig,261
 REQ-TRIG-002,TrigonometricFunctions,Cos,TESTED,,,eval,2026-01-15,tests/test_gap_0193_impl_verification.zig,270
 REQ-TS-BACKUP-001,TimeSeriesBackupRestore,Backup,TESTED,,,timeseries,2026-06-10,tests/ts_durability.zig,64
