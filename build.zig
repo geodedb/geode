@@ -7334,6 +7334,24 @@ pub fn build(b: *std.Build) void {
     const cli_batch_mode_step = b.step("test-cli-batch-mode", "ENG-3914: `geode query --batch` executes every statement on one connection (subprocess e2e)");
     cli_batch_mode_step.dependOn(&run_cli_batch_mode_tests.step);
 
+    // `geode query` client-side TIMEOUT classification: a timeout is reported
+    // as a generic "query execution failed" with exit 1, indistinguishable
+    // from a syntax error or a dropped connection, and never says the
+    // statement may still be executing server-side. Same subprocess e2e shape
+    // as test-cli-batch-mode directly above (real server + real CLI, stdio
+    // only), so likewise NOT wired into the aggregate `test` step — it binds
+    // real ports and spawns servers. Run it by name.
+    const cli_timeout_exit_tests = b.addTest(.{ .root_module = b.createModule(.{
+        .root_source_file = b.path("tests/test_cli_timeout_exit_code.zig"),
+        .target = target,
+        .optimize = optimize,
+    }) });
+    cli_timeout_exit_tests.root_module.link_libc = true;
+    const run_cli_timeout_exit_tests = b.addRunArtifact(cli_timeout_exit_tests);
+    run_cli_timeout_exit_tests.step.dependOn(b.getInstallStep());
+    const cli_timeout_exit_step = b.step("test-cli-timeout-exit-code", "`geode query` timeout gets its own exit code + truthful message (subprocess e2e)");
+    cli_timeout_exit_step.dependOn(&run_cli_timeout_exit_tests.step);
+
     // `geode query --file` chunked-execution defects.  Same subprocess e2e
     // shape as test-cli-batch-mode directly above (real server + real CLI,
     // stdio only, no geode import graph in the test artifact) — which is why
@@ -9869,6 +9887,19 @@ pub fn build(b: *std.Build) void {
     shardDep(test_step, &run_geode875_incremental_tests.step, 0, test_shard_loads, test_shard_index);
     const geode875_incremental_step = b.step("test-geode875-incremental", "Run geode#875 incremental-insert / hoisted-knn / backfill-count regressions");
     geode875_incremental_step.dependOn(&run_geode875_incremental_tests.step);
+
+    // geode#875 residual (RC-2b): the vector-index backfill holds the per-graph
+    // SHARED lock across its whole hydrating scan + HNSW build (~90 s at
+    // 4 000 x 256 dims), so every EXCLUSIVE-lock writer in the database stalls
+    // for the duration, and the index is dropped-then-empty for readers
+    // meanwhile. Pins the rebuild-window API a shadow build needs.
+    const geode875_nonblocking_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_geode875_nonblocking_backfill.zig"), .target = target, .optimize = optimize });
+    geode875_nonblocking_test_mod.addImport("geode", root_mod);
+    const geode875_nonblocking_tests = b.addTest(.{ .root_module = geode875_nonblocking_test_mod });
+    const run_geode875_nonblocking_tests = b.addRunArtifact(geode875_nonblocking_tests);
+    shardDep(test_step, &run_geode875_nonblocking_tests.step, 0, test_shard_loads, test_shard_index);
+    const geode875_nonblocking_step = b.step("test-geode875-nonblocking-backfill", "Run geode#875 non-blocking (shadow) vector-index backfill regressions");
+    geode875_nonblocking_step.dependOn(&run_geode875_nonblocking_tests.step);
 
     // DATE-PART-EXACT: date_part()/time_part() were unreachable from GQL (the temporal
     // ExtValue bridge nulled their argument) and date_part's arithmetic used a

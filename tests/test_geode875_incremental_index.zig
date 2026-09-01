@@ -216,6 +216,170 @@ test "geode#875 RC-1: writes into an indexed label do not each trigger a full in
 }
 
 // ===========================================================================
+// RC-1b (geode#875 residual, 2026-09-01) — the incremental path is DEAD in
+// production. RC-1 above proves `tryIncrementalInsertForProperty` works when
+// nothing else is in the way; this pins the shape the WIRE actually uses.
+//
+// VERIFIED READ-ONLY against this branch:
+//   * `advancedIndexRebuildIsDeferred` (src/execution/property_mutation.zig
+//     :208-216) returns TRUE whenever `ctx.pending_index_rebuilds != null` —
+//     the mere PRESENCE of the map, regardless of whether this statement queued
+//     anything into it.
+//   * The QUIC handler installs that map UNCONDITIONALLY for EVERY statement
+//     (src/server/quic_connection_handler.zig:6663-6670); gRPC does the same
+//     (src/transport/grpc_server.zig:2129-2136).
+//   => `maintainAdvancedIndexesForNodeWrite` (:194) therefore never reaches
+//      `tryIncrementalInsertForProperty` (:199) on any real connection: every
+//      single write to an indexed vector property queues a FULL drop+rebuild.
+//
+// Measured on the wire at 3 000 nodes x 256 dims (Debug build, 2026-09-01):
+//   CREATE of ONE node on the indexed label ............ 100 s
+//   CREATE of ONE node on an UNindexed label ............   1 s
+//   SET of the vector property on ONE node .............  99 s
+//
+// The fix must narrow the guard so deferral applies only when the statement
+// itself queued a rebuild (CREATE INDEX) or an undo log is active, leaving the
+// ordinary write on the incremental path.
+//
+// CANARY: REQ=REQ-GEODE-875-INCREMENTAL-INSERT; FEATURE="VectorIndex"; ASPECT=IncrementalPathReachableOnWirePath; STATUS=TESTED; TEST=tests/test_geode875_incremental_index.zig; OWNER=index; UPDATED=2026-09-01
+// ===========================================================================
+
+/// Stands in for the transport handler's per-statement pending-rebuild queue
+/// (installed for EVERY statement, drained after the write lock is released).
+const PendingRebuilds = struct {
+    map: std.StringHashMap(void),
+
+    fn init(allocator: std.mem.Allocator) PendingRebuilds {
+        return .{ .map = std.StringHashMap(void).init(allocator) };
+    }
+
+    fn deinit(self: *PendingRebuilds, allocator: std.mem.Allocator) void {
+        var it = self.map.keyIterator();
+        while (it.next()) |k| allocator.free(k.*);
+        self.map.deinit();
+    }
+
+    fn names(self: *PendingRebuilds, buf: []u8) []const u8 {
+        var w: usize = 0;
+        var it = self.map.keyIterator();
+        while (it.next()) |k| {
+            const chunk = std.fmt.bufPrint(buf[w..], "{s} ", .{k.*}) catch break;
+            w += chunk.len;
+        }
+        return buf[0..w];
+    }
+};
+
+fn indexContains(name: []const u8, id: u64) !bool {
+    const wrapper = mgr().advanced_vector_indexes.get(name) orelse return error.IndexNotFound;
+    return wrapper.contains(id);
+}
+
+test "geode#875 RC-1b: a CREATE still takes the incremental path with the transport's pending-rebuild map installed" {
+    var h = try Harness.init(testing.allocator);
+    defer h.deinit();
+
+    try h.run("CREATE GRAPH inc_wire");
+    try h.run("USE GRAPH inc_wire");
+    try seed(&h, 10);
+    // Built with no queue installed, so the backfill lands inline and the index
+    // starts fully populated — exactly the steady state a live server is in.
+    try h.run("CREATE INDEX incw_idx ON IncV (emb) USING vector WITH (metric = 'l2')");
+
+    // From here on, mirror the transport: a pending-rebuild queue is present on
+    // the context for every statement, even though THIS statement queues no
+    // CREATE INDEX of its own.
+    var pending = PendingRebuilds.init(testing.allocator);
+    defer pending.deinit(testing.allocator);
+    h.ctx.pending_index_rebuilds = &pending.map;
+    h.ctx.pending_index_rebuilds_allocator = testing.allocator;
+
+    const rebuilds_before = mgr().statistics.rebuild_count;
+    try h.run("CREATE (:IncV {i: 10, emb: vectorf32([10.0, 0.0])})");
+    const delta = mgr().statistics.rebuild_count - rebuilds_before;
+
+    const written = try h.nodeId("MATCH (n:IncV {i: 10}) RETURN id(n)");
+
+    // KEY ASSERTION. RED: the write queued a FULL rebuild of incw_idx onto the
+    // handler's drain queue and the node is absent from the live index until
+    // that O(N) rebuild runs. GREEN: nothing queued, the id is in the index
+    // already, no rebuild counted.
+    if (pending.map.count() != 0) {
+        var buf: [256]u8 = undefined;
+        std.debug.print(
+            "\n[geode#875 RC-1b] one CREATE on an indexed vector label queued {d} FULL index rebuild(s) ({s}) instead of an incremental insert — advancedIndexRebuildIsDeferred short-circuits on the mere presence of the transport's pending-rebuild map, so tryIncrementalInsertForProperty is unreachable on every real connection\n",
+            .{ pending.map.count(), pending.names(&buf) },
+        );
+        return error.WireWriteQueuedFullIndexRebuild;
+    }
+    try testing.expectEqual(@as(u64, 0), delta);
+    try testing.expect(try indexContains("incw_idx", @intCast(written)));
+
+    // The incrementally inserted vector is really searchable.
+    const res = try h.exec("RETURN knn('emb', vectorf32([10.0, 0.0]), 1, 'l2') AS ids");
+    try testing.expect(idsContain(try knnIds(res), written));
+}
+
+test "geode#875 RC-1b: a SET of the vector property takes the incremental path with the pending-rebuild map installed" {
+    var h = try Harness.init(testing.allocator);
+    defer h.deinit();
+
+    try h.run("CREATE GRAPH inc_wire_set");
+    try h.run("USE GRAPH inc_wire_set");
+    try seed(&h, 10);
+    try h.run("CREATE INDEX incws_idx ON IncV (emb) USING vector WITH (metric = 'l2')");
+    // A node of the indexed label that carries NO vector yet: SETting `emb` on
+    // it is a FIRST insert for that id, which is precisely the case the
+    // incremental path exists for (an OVERWRITE legitimately falls back — HNSW
+    // cannot un-insert).
+    try h.run("CREATE (:IncV {i: 77})");
+    const target = try h.nodeId("MATCH (n:IncV {i: 77}) RETURN id(n)");
+
+    var pending = PendingRebuilds.init(testing.allocator);
+    defer pending.deinit(testing.allocator);
+    h.ctx.pending_index_rebuilds = &pending.map;
+    h.ctx.pending_index_rebuilds_allocator = testing.allocator;
+
+    const rebuilds_before = mgr().statistics.rebuild_count;
+    try h.run("MATCH (n:IncV {i: 77}) SET n.emb = vectorf32([77.0, 0.0])");
+    const delta = mgr().statistics.rebuild_count - rebuilds_before;
+
+    if (pending.map.count() != 0) {
+        var buf: [256]u8 = undefined;
+        std.debug.print(
+            "\n[geode#875 RC-1b] one SET of an indexed vector property queued {d} FULL index rebuild(s) ({s}) — measured 99 s on the wire at 3 000 x 256 dims versus 1 s for the same write on an unindexed label\n",
+            .{ pending.map.count(), pending.names(&buf) },
+        );
+        return error.WireSetQueuedFullIndexRebuild;
+    }
+    try testing.expectEqual(@as(u64, 0), delta);
+    try testing.expect(try indexContains("incws_idx", @intCast(target)));
+}
+
+// The narrowed guard must NOT break the case it was written for: a statement
+// that DOES queue a rebuild (CREATE INDEX, whose backfill is deliberately
+// deferred out of the exclusive write lock) still defers.
+// See tests/test_create_index_backfill_deferral.zig for the primary gate.
+test "geode#875 RC-1b: CREATE INDEX still defers its own backfill onto the pending queue" {
+    var h = try Harness.init(testing.allocator);
+    defer h.deinit();
+
+    try h.run("CREATE GRAPH inc_wire_ddl");
+    try h.run("USE GRAPH inc_wire_ddl");
+    try seed(&h, 6);
+
+    var pending = PendingRebuilds.init(testing.allocator);
+    defer pending.deinit(testing.allocator);
+    h.ctx.pending_index_rebuilds = &pending.map;
+    h.ctx.pending_index_rebuilds_allocator = testing.allocator;
+
+    try h.run("CREATE INDEX incwd_idx ON IncV (emb) USING vector WITH (metric = 'l2')");
+
+    try testing.expectEqual(@as(usize, 1), pending.map.count());
+    try testing.expect(pending.map.contains("incwd_idx"));
+}
+
+// ===========================================================================
 // RC-6 — a row-invariant knn() in WHERE/WITH is evaluated ONCE, not per row.
 //
 // Needs a fixer-provided scan-invocation counter on scanVectorKnn. Desired seam:
