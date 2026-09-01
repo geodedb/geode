@@ -9901,6 +9901,32 @@ pub fn build(b: *std.Build) void {
     const geode875_nonblocking_step = b.step("test-geode875-nonblocking-backfill", "Run geode#875 non-blocking (shadow) vector-index backfill regressions");
     geode875_nonblocking_step.dependOn(&run_geode875_nonblocking_tests.step);
 
+    // VECTOR-INDEX READER UAF: every knn read path resolves a *VectorIndexWrapper
+    // with no lifetime guard while DROP INDEX (no lock at all) and the rebuild
+    // swap (rebuild_mutex only) deinit+destroy it. Pins the fts-style refcounted
+    // require/release handle API, drop/swap quiescence, entry-statistics
+    // bookkeeping and metadata ownership.
+    const vector_reader_quiescence_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_vector_index_reader_quiescence.zig"), .target = target, .optimize = optimize });
+    vector_reader_quiescence_test_mod.addImport("geode", root_mod);
+    const vector_reader_quiescence_tests = b.addTest(.{ .root_module = vector_reader_quiescence_test_mod });
+    const run_vector_reader_quiescence_tests = b.addRunArtifact(vector_reader_quiescence_tests);
+    shardDep(test_step, &run_vector_reader_quiescence_tests.step, 0, test_shard_loads, test_shard_index);
+    const vector_reader_quiescence_step = b.step("test-vector-index-reader-quiescence", "Run vector-index reader use-after-free / handle-quiescence regressions");
+    vector_reader_quiescence_step.dependOn(&run_vector_reader_quiescence_tests.step);
+
+    // CREATE-FAMILY EVALUATED-PROPERTY LEAK: `eval.evalExpr` results that own heap
+    // memory (vectorf32 -> allocator.dupe) are dropped on the floor by the
+    // write_precheck pre-pass and by the CREATE pre-evaluation buffers (which free
+    // the []Value slice but not the values). Runs the real executor under
+    // std.testing.allocator so the leak detector is the assertion.
+    const create_vector_leak_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_create_vector_value_leak.zig"), .target = target, .optimize = optimize });
+    create_vector_leak_test_mod.addImport("geode", root_mod);
+    const create_vector_leak_tests = b.addTest(.{ .root_module = create_vector_leak_test_mod });
+    const run_create_vector_leak_tests = b.addRunArtifact(create_vector_leak_tests);
+    shardDep(test_step, &run_create_vector_leak_tests.step, 0, test_shard_loads, test_shard_index);
+    const create_vector_leak_step = b.step("test-create-vector-value-leak", "Run CREATE/MERGE evaluated-property Value leak regressions");
+    create_vector_leak_step.dependOn(&run_create_vector_leak_tests.step);
+
     // DATE-PART-EXACT: date_part()/time_part() were unreachable from GQL (the temporal
     // ExtValue bridge nulled their argument) and date_part's arithmetic used a
     // 365-day year with 30-day months, disagreeing with member access.

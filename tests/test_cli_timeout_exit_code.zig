@@ -200,6 +200,8 @@ const Fixture = struct {
     arena: std.heap.ArenaAllocator,
     data_dir: []const u8,
     listen: []const u8,
+    /// Set only when the fixture was brought up with a gRPC listener.
+    grpc_listen: ?[]const u8 = null,
     spawn_threaded: *std.Io.Threaded,
     server: ?Proc = null,
     gpa: std.mem.Allocator,
@@ -245,6 +247,25 @@ const Fixture = struct {
         return p.waitExit(cli_deadline_ms);
     }
 
+    /// Run `geode query` over the gRPC transport (`--dsn grpc://...`) against
+    /// `dsn_authority` (`host:port`), which is either the server's own gRPC
+    /// listener or the stalling proxy in front of it.
+    fn runGrpcQuery(self: *Fixture, dsn_authority: []const u8, extra_args: []const u8) !Proc {
+        const cmd = try std.fmt.allocPrint(
+            self.aa(),
+            "{s} query --dsn 'grpc://{s}:{s}@{s}' --insecure-tls-skip-verify --format json {s} < /dev/null",
+            .{ binary_path, admin_username, admin_password, dsn_authority, extra_args },
+        );
+        const argv = try self.aa().alloc([]const u8, 3);
+        argv[0] = "/bin/sh";
+        argv[1] = "-c";
+        argv[2] = cmd;
+        return spawnProc(self.gpa, self.aa(), self.io(), argv, &.{
+            .{ .key = "GEODE_ALLOW_INSECURE_TLS", .value = "1" },
+            .{ .key = "GEODE_LOG_LEVEL", .value = "warn" },
+        });
+    }
+
     /// Seed `n` nodes of :SlowP in one statement so the cartesian probe below
     /// has enough rows to keep the server busy well past the client timeout.
     fn seed(self: *Fixture, n: usize) !void {
@@ -265,6 +286,17 @@ const Fixture = struct {
 
 /// Returns null when the lane must SKIP (no binary / opt-out env).
 fn setUp(gpa: std.mem.Allocator, tag: []const u8, port: u16) !?Fixture {
+    return setUpWithGrpc(gpa, tag, port, null);
+}
+
+/// Same fixture, additionally bringing up the gRPC listener on `grpc_port`.
+/// Geode's gRPC listener requires TLS unless
+/// `GEODE_GRPC_ALLOW_PLAINTEXT_FALLBACK` is set AND the build is Debug
+/// (src/transport/grpc_server.zig:151-157), which is exactly the `zig build`
+/// posture this lane runs in; the CLI's gRPC client speaks plaintext HTTP/2
+/// only, so that fallback is what makes the transport reachable from `geode
+/// query --dsn grpc://...` at all.
+fn setUpWithGrpc(gpa: std.mem.Allocator, tag: []const u8, port: u16, grpc_port: ?u16) !?Fixture {
     if (comptime builtin.os.tag != .linux) return null;
     if (getenvOwned("GEODE_SKIP_SUBPROC_CLUSTER") != null) return null;
 
@@ -300,8 +332,11 @@ fn setUp(gpa: std.mem.Allocator, tag: []const u8, port: u16) !?Fixture {
         .gpa = gpa,
     };
     errdefer fx.deinit();
+    if (grpc_port) |gp| {
+        fx.grpc_listen = try std.fmt.allocPrint(aa, "127.0.0.1:{d}", .{gp});
+    }
 
-    const serve_args = try fx.aa().alloc([]const u8, 7);
+    const serve_args = try fx.aa().alloc([]const u8, if (grpc_port == null) 7 else 9);
     serve_args[0] = binary_path;
     serve_args[1] = "serve";
     serve_args[2] = "--listen";
@@ -309,10 +344,15 @@ fn setUp(gpa: std.mem.Allocator, tag: []const u8, port: u16) !?Fixture {
     serve_args[4] = "--data-dir";
     serve_args[5] = fx.data_dir;
     serve_args[6] = "--log-level=warn";
+    if (fx.grpc_listen) |gl| {
+        serve_args[7] = "--listen-grpc";
+        serve_args[8] = gl;
+    }
 
     var srv = try spawnProc(gpa, fx.aa(), fx.io(), serve_args, &.{
         .{ .key = "GEODE_ADMIN_USERNAME", .value = admin_username },
         .{ .key = "GEODE_ADMIN_PASSWORD", .value = admin_password },
+        .{ .key = "GEODE_GRPC_ALLOW_PLAINTEXT_FALLBACK", .value = "1" },
     });
     if (!srv.waitForMarker(ready_marker, ready_deadline_ms)) {
         srv.dump("server");
@@ -428,4 +468,520 @@ test "geode query keeps exit code 1 for a non-timeout statement failure" {
     if (!p.saw("timed out")) return; // expected: no timeout wording at all
     p.dump("query client (a syntax error was described as a timeout)");
     return error.NonTimeoutFailureDescribedAsTimeout;
+}
+
+// =====================================================================
+// gRPC TRANSPORT LANE — timeout MISCLASSIFICATION + SILENT RE-SUBMISSION
+// =====================================================================
+//
+// VERIFIED READ-ONLY against this branch before the fix:
+//
+//   `executeGrpcQuery` (src/cli/main.zig:2010-2036) wraps the whole
+//   connect+execute in a retry loop with `max_attempts = @max(retry_count+1, 3)`
+//   and catches EVERY error from `executeQueryOnGrpc` — including
+//   `error.ReadTimeout`, which `grpc_query_transport.readExact`
+//   (src/client/grpc_query_transport.zig:148-159) raises when the SO_RCVTIMEO
+//   set at :52-61 from `--timeout` expires. A client-side deadline is therefore
+//   treated as a RETRYABLE transport fault:
+//
+//     * the statement is RE-SUBMITTED, on a fresh connection, up to 3 times —
+//       for a mutating statement that is a silent duplicate write, and the CLI
+//       never says a word about it;
+//     * after the last attempt the process exits `ExitCode.general_error` (=1)
+//       at :2080 while printing the "Geode's gRPC listener REQUIRES TLS ..."
+//       diagnostic, which is FALSE here (the handshake succeeded; the server
+//       is simply still working);
+//     * the run takes ~3 x `--timeout` instead of ~1 x.
+//
+//   The QUIC path is already correct (exit 4 + "may still be executing"), and
+//   `query_deadline.zig`'s process watchdog also exits 4 — which is precisely
+//   what makes this defect nondeterministic against a bare server: the two
+//   trip-wires race, and the watchdog usually wins.
+//
+//   MEASURED against a live server on this branch (2026-09-01, Debug build,
+//   `--timeout 3`, gRPC DSN straight at `--listen-grpc`):
+//     batch A: 16 runs -> 13 x (exit 4, ~3.69 s)  3 x (exit 1, ~11.3 s, false TLS text)
+//     batch B: 20 runs -> 19 x (exit 4, ~3.69 s)  1 x (exit 1, ~11.4 s, false TLS text)
+//     => the broken transport path wins only ~11% of runs (4/36). A repeat-N
+//        assertion would be flaky, and WHICH wire-wire wins is decided by
+//        (handshake_duration mod the watchdog's 100 ms tick), i.e. by the host,
+//        so on another machine the rate can be 0.
+//
+// HOW THIS LANE MAKES IT DETERMINISTIC — `StallProxy`, a transport-level fault
+// injector, NOT a mock:
+//
+//   The CLI, the wire protocol and the geode server are all REAL. The proxy is
+//   a byte pump between them that does exactly one thing: after it has
+//   forwarded the client's `Execute` request to the real server, it writes 4
+//   bytes to the client and then stops forwarding the response.
+//
+//   Those 4 bytes are what removes the race. `readExact` calls
+//   `notifyProgress` after EVERY short read, so the watchdog's progress clock
+//   is reset microseconds before the client blocks for the remaining 5 bytes of
+//   the frame header — the transport's SO_RCVTIMEO therefore expires first,
+//   every time, instead of ~11% of the time.
+//
+//   The request itself really reaches the real server and really executes, so
+//   a re-submission is observable BOTH as a proxy-side count and as duplicate
+//   rows in the database.
+//
+// CANARY: REQ=REQ-CLI-TIMEOUT-EXIT-CODE-002; FEATURE="QueryTimeoutClassification"; ASPECT=GrpcTransportTimeout; STATUS=TESTED; TEST=tests/test_cli_timeout_exit_code.zig; OWNER=cli; UPDATED=2026-09-01
+// CANARY: REQ=REQ-CLI-TIMEOUT-NO-RESUBMIT-001; FEATURE="QueryTimeoutClassification"; ASPECT=NoSilentResubmission; STATUS=TESTED; TEST=tests/test_cli_timeout_exit_code.zig; OWNER=cli; UPDATED=2026-09-01
+
+const H2_DATA: u8 = 0x0;
+const H2_HEADERS: u8 = 0x1;
+/// `grpc_query_transport.execute_stream_id` — the Execute RPC always rides
+/// HTTP/2 stream 3 (the Handshake rides stream 1).
+const execute_stream_id: u32 = 3;
+const h2_preface_len: usize = 24;
+
+fn netIo() std.Io {
+    return std.Io.Threaded.global_single_threaded.io();
+}
+
+fn readSome(fd: std.Io.File.Handle, buf: []u8) ?usize {
+    const n = std.posix.read(fd, buf) catch return null;
+    if (n == 0) return null;
+    return n;
+}
+
+fn readExactFd(fd: std.Io.File.Handle, dest: []u8) bool {
+    var total: usize = 0;
+    while (total < dest.len) {
+        const n = std.posix.read(fd, dest[total..]) catch return false;
+        if (n == 0) return false;
+        total += n;
+    }
+    return true;
+}
+
+fn writeAllFd(fd: std.Io.File.Handle, bytes: []const u8) bool {
+    var total: usize = 0;
+    while (total < bytes.len) {
+        const rc = linux.write(fd, bytes[total..].ptr, bytes.len - total);
+        const signed: isize = @bitCast(rc);
+        if (signed == -4) continue; // EINTR
+        if (signed <= 0) return false;
+        total += @intCast(signed);
+    }
+    return true;
+}
+
+/// HTTP/2 SETTINGS_MAX_FRAME_SIZE default. geode's gRPC listener advertises the
+/// default and RESETS the connection on anything larger, while the CLI's client
+/// (`grpc_query_transport.sendRequest`) emits the whole request as ONE DATA
+/// frame with no regard for the limit — so a >16 KiB program dies with
+/// `ConnectionResetByPeer` before it can ever time out. Splitting it here is a
+/// pure transport-layer detail (multi-frame DATA is ordinary HTTP/2 and the
+/// server reassembles it); it changes no byte of the gRPC message.
+const max_h2_frame: usize = 16 * 1024;
+
+/// Forward one client frame upstream, splitting an oversized DATA frame into
+/// legal-size DATA frames. END_STREAM is carried on the LAST fragment only.
+fn forwardFrame(ufd: std.Io.File.Handle, header: [9]u8, payload: []const u8) bool {
+    if (header[3] != H2_DATA or payload.len <= max_h2_frame) {
+        if (!writeAllFd(ufd, &header)) return false;
+        if (payload.len > 0 and !writeAllFd(ufd, payload)) return false;
+        return true;
+    }
+    var off: usize = 0;
+    while (off < payload.len) {
+        const take: usize = @min(max_h2_frame, payload.len - off);
+        const last = (off + take) == payload.len;
+        var hdr: [9]u8 = header;
+        const take32: u32 = @intCast(take);
+        hdr[0] = @intCast((take32 >> 16) & 0xFF);
+        hdr[1] = @intCast((take32 >> 8) & 0xFF);
+        hdr[2] = @intCast(take32 & 0xFF);
+        hdr[4] = if (last) header[4] else header[4] & ~@as(u8, 0x1);
+        if (!writeAllFd(ufd, &hdr)) return false;
+        if (!writeAllFd(ufd, payload[off .. off + take])) return false;
+        off += take;
+    }
+    return true;
+}
+
+/// A transparent TCP relay in front of the real gRPC listener that withholds
+/// the RESPONSE to every `Execute` request (after nudging the client with a
+/// partial frame header, see the lane header for why).
+///
+/// Counts, across the whole test:
+///   * `sessions`  — accepted client connections (one per CLI connect attempt)
+///   * `executes`  — `Execute` RPCs actually forwarded to the server
+const StallProxy = struct {
+    server: std.Io.net.Server,
+    port: u16,
+    upstream_port: u16,
+    sessions: std.atomic.Value(u32) = .init(0),
+    executes: std.atomic.Value(u32) = .init(0),
+    stop_flag: std.atomic.Value(bool) = .init(false),
+    accept_thread: ?std.Thread = null,
+    gpa: std.mem.Allocator,
+
+    fn start(gpa: std.mem.Allocator, upstream_port: u16, first_port: u16) !*StallProxy {
+        const self = try gpa.create(StallProxy);
+        errdefer gpa.destroy(self);
+
+        var bound: u16 = 0;
+        var server: std.Io.net.Server = undefined;
+        var p: u16 = first_port;
+        while (p < first_port + 200) : (p += 1) {
+            const addr = std.Io.net.IpAddress.parseIp4("127.0.0.1", p) catch unreachable;
+            server = std.Io.net.IpAddress.listen(&addr, netIo(), .{ .reuse_address = true }) catch continue;
+            bound = p;
+            break;
+        }
+        if (bound == 0) return error.NoFreeProxyPort;
+
+        self.* = .{
+            .server = server,
+            .port = bound,
+            .upstream_port = upstream_port,
+            .gpa = gpa,
+        };
+        self.accept_thread = try std.Thread.spawn(.{}, acceptLoop, .{self});
+        return self;
+    }
+
+    fn stop(self: *StallProxy) void {
+        self.stop_flag.store(true, .release);
+        // Unblock the parked accept() with a throwaway connection.
+        var addr = std.Io.net.IpAddress.parseIp4("127.0.0.1", self.port) catch unreachable;
+        if (std.Io.net.IpAddress.connect(&addr, netIo(), .{ .mode = .stream })) |s| {
+            s.close(netIo());
+        } else |_| {}
+        if (self.accept_thread) |t| t.join();
+        self.server.deinit(netIo());
+        self.gpa.destroy(self);
+    }
+
+    fn acceptLoop(self: *StallProxy) void {
+        var sessions: [16]?std.Thread = @splat(null);
+        var live: usize = 0;
+        while (!self.stop_flag.load(.acquire) and live < sessions.len) {
+            const client = self.server.accept(netIo()) catch return;
+            if (self.stop_flag.load(.acquire)) {
+                client.close(netIo());
+                break;
+            }
+            _ = self.sessions.fetchAdd(1, .monotonic);
+            const holder = self.gpa.create(std.Io.net.Stream) catch {
+                client.close(netIo());
+                continue;
+            };
+            holder.* = client;
+            sessions[live] = std.Thread.spawn(.{}, session, .{ self, holder }) catch {
+                client.close(netIo());
+                self.gpa.destroy(holder);
+                continue;
+            };
+            live += 1;
+        }
+        for (sessions[0..live]) |maybe_t| {
+            if (maybe_t) |t| t.join();
+        }
+    }
+
+    const Pump = struct {
+        from: std.Io.File.Handle,
+        to: std.Io.File.Handle,
+        stall: *std.atomic.Value(bool),
+
+        /// Server -> client. Everything is forwarded verbatim until the
+        /// session flips `stall`; from then on the response is swallowed, so
+        /// the client sits in `readExact` until SO_RCVTIMEO fires.
+        fn run(self: *Pump) void {
+            var buf: [16 * 1024]u8 = undefined;
+            while (true) {
+                const n = readSome(self.from, &buf) orelse return;
+                if (self.stall.load(.acquire)) continue;
+                if (!writeAllFd(self.to, buf[0..n])) return;
+            }
+        }
+    };
+
+    fn session(self: *StallProxy, client_holder: *std.Io.net.Stream) void {
+        const client = client_holder.*;
+        defer {
+            client.close(netIo());
+            self.gpa.destroy(client_holder);
+        }
+
+        var addr = std.Io.net.IpAddress.parseIp4("127.0.0.1", self.upstream_port) catch unreachable;
+        const upstream = std.Io.net.IpAddress.connect(&addr, netIo(), .{ .mode = .stream }) catch return;
+        defer upstream.close(netIo());
+
+        const cfd = client.socket.handle;
+        const ufd = upstream.socket.handle;
+
+        var stall = std.atomic.Value(bool).init(false);
+        var pump = Pump{ .from = ufd, .to = cfd, .stall = &stall };
+        const s2c = std.Thread.spawn(.{}, Pump.run, .{&pump}) catch return;
+        defer s2c.join();
+
+        // 1. HTTP/2 connection preface, verbatim.
+        var preface: [h2_preface_len]u8 = undefined;
+        if (!readExactFd(cfd, &preface)) return;
+        if (!writeAllFd(ufd, &preface)) return;
+
+        // 2. Frame-by-frame relay of the client's stream, so we can see the
+        //    exact moment the Execute request has been handed to the server.
+        var payload: [64 * 1024]u8 = undefined;
+        var saw_execute = false;
+        while (true) {
+            var header: [9]u8 = undefined;
+            if (!readExactFd(cfd, &header)) break;
+            const length: usize = (@as(usize, header[0]) << 16) |
+                (@as(usize, header[1]) << 8) | @as(usize, header[2]);
+            const frame_type = header[3];
+            const stream_id: u32 = (@as(u32, header[5] & 0x7F) << 24) |
+                (@as(u32, header[6]) << 16) | (@as(u32, header[7]) << 8) | @as(u32, header[8]);
+            if (length > payload.len) break;
+            if (length > 0 and !readExactFd(cfd, payload[0..length])) break;
+            if (!forwardFrame(ufd, header, payload[0..length])) break;
+
+            if (frame_type == H2_HEADERS and stream_id == execute_stream_id) {
+                _ = self.executes.fetchAdd(1, .monotonic);
+                saw_execute = true;
+            }
+            if (saw_execute and frame_type == H2_DATA and stream_id == execute_stream_id) {
+                // The request is now with the real server, which will execute
+                // it for real. Nudge the client with a PARTIAL frame header so
+                // its deadline watchdog's progress clock is reset immediately
+                // before it blocks, then withhold the response.
+                stall.store(true, .release);
+                _ = writeAllFd(cfd, &[_]u8{ 0x00, 0x00, 0x00, 0x00 });
+                // Keep the connection open until the client gives up.
+                var sink: [4096]u8 = undefined;
+                while (readSome(cfd, &sink) != null) {}
+                break;
+            }
+        }
+
+        // The client is gone. Tear the upstream socket down so the
+        // server->client pump's blocking read returns and the `s2c` join in
+        // the deferred teardown cannot park forever (the geode server has no
+        // reason to close its side first).
+        _ = linux.shutdown(ufd, 2); // SHUT_RDWR
+    }
+};
+
+/// A MUTATING statement that the server executes and commits promptly. The
+/// timeout comes from the proxy withholding the RESPONSE, not from server-side
+/// slowness — so every submission that reaches the server leaves exactly one
+/// durable row behind, which is what makes a silent re-submission countable.
+///
+/// It is padded past 16 KiB and delivered with `--file` ON PURPOSE. That is the
+/// SECOND half of making this lane deterministic:
+///
+///   `cmdQuery` arms the deadline watchdog with the raw `--timeout` for a
+///   single query (src/cli/main.zig:1736), i.e. with the SAME number the
+///   transport's SO_RCVTIMEO uses — so the two trip-wires expire within a
+///   watchdog tick of each other and the process usually dies inside the
+///   retry's 50 ms backoff, hiding the re-submission. A `--file` larger than
+///   `max_single_query_size` (16 KiB, :1379) takes the chunked branch, which
+///   arms the watchdog with `min(600, (timeout+3) * estimated_chunks)`
+///   (:1590-1601) = 18 s here, while the per-chunk socket timeout stays 3 s.
+///   The transport deadline therefore expires ~15 s before the watchdog can
+///   interfere, and whatever `executeGrpcQuery` does with `error.ReadTimeout`
+///   is observed directly instead of through a race.
+///
+///   Same `executeGrpcQuery` retry loop either way (`executeChunkedQueries`
+///   calls it per chunk, :2553) — the chunked route is only the vehicle that
+///   silences the watchdog.
+fn buildPaddedMutation(aa: std.mem.Allocator) ![]const u8 {
+    const pad_len: usize = 17_000; // > max_single_query_size (16 KiB)
+    var buf = std.ArrayList(u8).empty;
+    try buf.appendSlice(aa, "CREATE (:GrpcTmo {n: 1, pad: '");
+    try buf.appendNTimes(aa, 'x', pad_len);
+    try buf.appendSlice(aa, "'});\n");
+    return buf.toOwnedSlice(aa);
+}
+
+/// Pull the integer out of the CLI's `{"c":N}` JSON row.
+fn countFromJson(transcript: []const u8) ?u64 {
+    const needle = "\"c\":";
+    const at = std.mem.indexOf(u8, transcript, needle) orelse return null;
+    var i = at + needle.len;
+    var value: u64 = 0;
+    var digits: usize = 0;
+    while (i < transcript.len and transcript[i] >= '0' and transcript[i] <= '9') : (i += 1) {
+        value = value * 10 + (transcript[i] - '0');
+        digits += 1;
+    }
+    return if (digits == 0) null else value;
+}
+
+// ---------------------------------------------------------------------
+// 4. THE gRPC REGRESSION TEST: a client-side timeout on the gRPC transport
+//    must be classified as a timeout (exit 4, truthful message) and must NOT
+//    silently re-submit the statement.
+// ---------------------------------------------------------------------
+test "geode query over gRPC reports a client timeout without re-submitting the statement" {
+    const gpa = testing.allocator;
+    var fx = (try setUpWithGrpc(gpa, "grpctmo", 23984, 23985)) orelse return error.SkipZigTest;
+    defer fx.deinit();
+
+    const proxy = try StallProxy.start(gpa, 23985, 24501);
+    defer proxy.stop();
+
+    const io_fs = std.Io.Threaded.global_single_threaded.io();
+    const script_path = try std.fmt.allocPrint(fx.aa(), "{s}.gql", .{fx.data_dir});
+    try std.Io.Dir.cwd().writeFile(io_fs, .{
+        .sub_path = script_path,
+        .data = try buildPaddedMutation(fx.aa()),
+    });
+    defer std.Io.Dir.cwd().deleteFile(io_fs, script_path) catch {};
+
+    const authority = try std.fmt.allocPrint(fx.aa(), "127.0.0.1:{d}", .{proxy.port});
+    const args = try std.fmt.allocPrint(fx.aa(), "--timeout 3 --file {s}", .{script_path});
+
+    const started_ms = nowMillis();
+    var p = try fx.runGrpcQuery(authority, args);
+    defer p.deinit();
+    const code = p.waitExit(cli_deadline_ms) orelse {
+        p.dump("grpc query client (never exited)");
+        return error.GrpcTimeoutClientHung;
+    };
+    const elapsed_ms = nowMillis() - started_ms;
+
+    // ---- gather every piece of evidence FIRST, then assert on all of it ----
+
+    // How many :GrpcTmo rows the ONE `geode query` invocation actually left
+    // behind. Read over QUIC, which is unaffected by any of this.
+    var verify = try fx.runQuery("--timeout 60 \"MATCH (n:GrpcTmo) RETURN count(*) AS c\"");
+    defer verify.deinit();
+    const verify_code = verify.waitExit(cli_deadline_ms) orelse return error.VerifyQueryHung;
+    if (verify_code != 0) {
+        verify.dump("verify query");
+        return error.VerifyQueryFailed;
+    }
+    const rows_created = countFromJson(verify.transcript.items) orelse {
+        verify.dump("verify query (no count in output)");
+        return error.VerifyQueryUnparsable;
+    };
+    const executes = proxy.executes.load(.acquire);
+    const sessions = proxy.sessions.load(.acquire);
+
+    // Sanity: the request really reached the real server at least once. If it
+    // did not, the proxy or the plaintext-fallback listener is broken and the
+    // lane proves nothing.
+    if (executes == 0) {
+        p.dump("grpc query client (no Execute reached the server)");
+        return error.GrpcRequestNeverReachedServer;
+    }
+
+    // ASSERTION 1 — the statement is submitted EXACTLY ONCE. RED: 3.
+    // This is the data-integrity half of the bug: `error.ReadTimeout` is
+    // retryable in the loop at src/cli/main.zig:2010-2036, so a mutating
+    // statement that merely outlived its CLIENT deadline is written again, on
+    // a fresh connection, without a word to the operator.
+    if (executes != 1) {
+        p.dump("grpc query client (statement re-submitted after a timeout)");
+        std.debug.print(
+            "\n[cli-timeout/grpc] ONE `geode query` invocation timed out and the CLI submitted the statement {d} times over {d} connections (exit {d} after {d} ms), leaving {d} :GrpcTmo row(s) in the graph\n",
+            .{ executes, sessions, code, elapsed_ms, rows_created },
+        );
+        return error.TimeoutSilentlyResubmittedStatement;
+    }
+
+    // ASSERTION 2 — and the database agrees: a single invocation can never
+    // leave MORE THAN ONE row behind.
+    //
+    // Deliberately an upper bound, not `== 1`. Whether a submission commits at
+    // all is a genuine server-side race: when the client walks away the server
+    // cancels the in-flight statement ("ReadQueryCancelled: the client
+    // disconnected"), so 0 rows is a legitimate outcome for a timed-out write
+    // and asserting `== 1` would flake in BOTH directions. Two or more rows,
+    // though, can only come from the CLI submitting the statement more than
+    // once. Measured pre-fix over 5 runs: 3, 0, 1, 2, 1 rows — every run
+    // submitted 3 times, and 2 of the 5 committed duplicates.
+    if (rows_created > 1) {
+        std.debug.print(
+            "\n[cli-timeout/grpc] ONE timed-out `CREATE (:GrpcTmo ...)` left {d} nodes in the graph — the timeout retry duplicated the write\n",
+            .{rows_created},
+        );
+        return error.TimeoutResubmissionDuplicatedWrite;
+    }
+
+    // ASSERTION 3 — the distinct exit code. RED: 1 (general_error).
+    if (code != expected_timeout_exit) {
+        p.dump("grpc query client (timeout exit code)");
+        std.debug.print(
+            "\n[cli-timeout/grpc] `geode query --dsn grpc://... --timeout 3` exited {d} after {d} ms; expected {d} (ExitCode.timeout_error)\n",
+            .{ code, elapsed_ms, expected_timeout_exit },
+        );
+        return error.GrpcTimeoutNotDistinguishedFromGeneralError;
+    }
+
+    // ASSERTION 4 — the message is truthful and actionable, the same contract
+    // the QUIC path already honours.
+    if (!p.saw("timed out")) {
+        p.dump("grpc query client (message did not mention a timeout)");
+        return error.GrpcTimeoutMessageMissing;
+    }
+    if (!p.saw("may still be executing")) {
+        p.dump("grpc query client (message did not warn the statement may still be running)");
+        return error.GrpcTimeoutMessageNotActionable;
+    }
+
+    // ASSERTION 5 — the timeout must not be dressed up as a TLS problem. RED:
+    // the retry loop exhausts its attempts and prints the "Geode's gRPC
+    // listener REQUIRES TLS" diagnostic even though the handshake plainly
+    // succeeded (this very connection carried a Handshake RPC).
+    if (p.saw("REQUIRES TLS")) {
+        p.dump("grpc query client (timeout misdiagnosed as a TLS mismatch)");
+        return error.TimeoutMisdiagnosedAsTlsFailure;
+    }
+
+    // ASSERTION 6 — one deadline, not three. A retry loop spends ~3 x the
+    // timeout before giving up; a correct classification returns after one.
+    if (elapsed_ms >= 2 * 3 * 1000) {
+        p.dump("grpc query client (took multiple deadlines to give up)");
+        std.debug.print(
+            "\n[cli-timeout/grpc] the client took {d} ms to report a 3 s timeout — more than one deadline, i.e. it reconnected and waited again\n",
+            .{elapsed_ms},
+        );
+        return error.GrpcTimeoutBurnedMultipleDeadlines;
+    }
+}
+
+// ---------------------------------------------------------------------
+// 5. Guardrails: the new classification must not leak into the gRPC happy
+//    path, and a genuine statement error must not become a timeout.
+// ---------------------------------------------------------------------
+test "geode query over gRPC still exits 0 for a fast query and never claims a timeout" {
+    const gpa = testing.allocator;
+    var fx = (try setUpWithGrpc(gpa, "grpcok", 23986, 23987)) orelse return error.SkipZigTest;
+    defer fx.deinit();
+
+    const authority = fx.grpc_listen.?;
+
+    var p = try fx.runGrpcQuery(authority, "--timeout 30 \"RETURN 1 AS x\"");
+    defer p.deinit();
+    const code = p.waitExit(cli_deadline_ms) orelse {
+        p.dump("grpc query client (never exited)");
+        return error.GrpcHappyPathHung;
+    };
+    if (code != 0) {
+        p.dump("grpc query client (fast query did not exit 0)");
+        return error.GrpcHappyPathNonZeroExit;
+    }
+    try testing.expect(p.saw("\"x\":1"));
+    try testing.expect(!p.saw("timed out"));
+    try testing.expect(!p.saw("REQUIRES TLS"));
+
+    var bad = try fx.runGrpcQuery(authority, "--timeout 30 \"THIS IS NOT GQL AT ALL\"");
+    defer bad.deinit();
+    const bad_code = bad.waitExit(cli_deadline_ms) orelse {
+        bad.dump("grpc query client (never exited)");
+        return error.GrpcBadQueryHung;
+    };
+    if (bad_code == expected_timeout_exit) {
+        bad.dump("grpc query client (a syntax error was reported as a timeout)");
+        return error.GrpcNonTimeoutFailureReportedAsTimeout;
+    }
+    try testing.expect(bad.saw("42000"));
+    try testing.expect(!bad.saw("timed out"));
+    try testing.expect(!bad.saw("REQUIRES TLS"));
 }
