@@ -142,7 +142,11 @@ pub fn ensureAdvancedVectorIndexForProperty(allocator: std.mem.Allocator, proper
     // Already registered in this process — the overwhelmingly common case, and
     // what keeps a per-query call cheap.
     if (index_manager.getGlobalIndexManager()) |existing| {
-        if (existing.findAdvancedVectorIndexForProperty(property) != null) return;
+        // Existence probe only — `hasAdvancedVectorIndexForProperty` resolves
+        // it under the registry mutex and lets nothing escape, unlike
+        // `findAdvancedVectorIndexForProperty`, whose borrowed `meta.name` a
+        // concurrent DROP INDEX frees.
+        if (existing.hasAdvancedVectorIndexForProperty(property)) return;
     }
 
     const execution = @import("../execution.zig");
@@ -171,7 +175,7 @@ pub fn ensureAdvancedVectorIndexForProperty(allocator: std.mem.Allocator, proper
     // src/eval_extended.zig. If a manager already exists this argument is
     // ignored, so no other call site's ownership changes.
     const manager = try index_manager.ensureGlobalIndexManager(std.heap.smp_allocator);
-    if (manager.findAdvancedVectorIndexForProperty(property) != null) return;
+    if (manager.hasAdvancedVectorIndexForProperty(property)) return;
 
     // Same order as ensureAdvancedRuntimeIndex: arm the dimension guard, create
     // the (empty, dimension-0) wrapper with the RECORDED metric, register the

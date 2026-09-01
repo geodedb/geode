@@ -212,8 +212,26 @@ pub fn checkPatternPropsWritableScoped(
     scratch: ?*VectorDimScratch,
 ) !void {
     const entries = props orelse return;
+
+    // OWNERSHIP: `evalExpr` may return a Value that OWNS heap memory (a
+    // `vectorf32(...)` literal ends in `allocator.dupe` — types/vector.zig:55),
+    // may return a Value BORROWED from the AST (a string literal), and may
+    // return a Value ALIASING live store memory (`n.emb`). Freeing the result
+    // unconditionally is therefore a double-free; freeing nothing leaks the
+    // owned ones — which is what this pre-pass did for every inline property of
+    // every CREATE / INSERT / MERGE pattern.
+    //
+    // The pre-pass value is DISCARDED by contract (see the module header), so
+    // the correct scope is an arena that dies with this call: owned
+    // allocations are reclaimed, borrowed/aliased ones are never touched.
+    // `scratch` keeps the CALLER's allocator — it is statement-scoped and
+    // outlives this arena — and so does `checkPropertyWritableScoped`, whose
+    // own allocations it frees itself.
+    var eval_arena = std.heap.ArenaAllocator.init(allocator);
+    defer eval_arena.deinit();
+
     for (entries) |prop| {
-        const value = eval.evalExpr(allocator, prop.value.*, env) catch continue;
+        const value = eval.evalExpr(eval_arena.allocator(), prop.value.*, env) catch continue;
         try checkPropertyWritableScoped(allocator, labels, prop.key, value, scratch, null);
     }
 }
@@ -278,13 +296,20 @@ pub fn checkSetClausesWritableExcluding(
     var scratch = VectorDimScratch.init(allocator);
     defer scratch.deinit();
 
+    // Same discarded-pre-pass-value ownership rule as
+    // `checkPatternPropsWritableScoped` — see the comment there. The arena
+    // outlives every consumer of the values (including the `.AllProperties`
+    // map, which is iterated inside this function and never escapes).
+    var eval_arena = std.heap.ArenaAllocator.init(allocator);
+    defer eval_arena.deinit();
+
     for (set_clauses) |set_clause| {
         switch (set_clause) {
             .Property => |prop| {
                 if (target_var) |v| {
                     if (!std.mem.eql(u8, prop.target.object, v)) continue;
                 }
-                const value = eval.evalExpr(allocator, prop.value, env) catch continue;
+                const value = eval.evalExpr(eval_arena.allocator(), prop.value, env) catch continue;
                 try checkPropertyWritableScoped(allocator, labels, prop.target.property, value, &scratch, exclude_node_id);
             },
             .AllProperties => |all_props| {
@@ -293,7 +318,7 @@ pub fn checkSetClausesWritableExcluding(
                 }
                 // `SET n = {map}` clears the node and writes every map entry;
                 // one unstorable entry must not cost the caller the old ones.
-                const props_value = eval.evalExpr(allocator, all_props.properties, env) catch continue;
+                const props_value = eval.evalExpr(eval_arena.allocator(), all_props.properties, env) catch continue;
                 if (props_value != .Map) continue;
                 var iter = props_value.Map.iterator();
                 while (iter.next()) |entry| {

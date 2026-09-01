@@ -336,6 +336,26 @@ repos:
       # 2 h CI limit; pipeline #2516770059 cut 6 h → 56 min via sharding).
       # Running the 4 shards in parallel keeps the pre-push hook within a
       # tolerable window (~25 min wall, dominated by the slowest shard).
+      #
+      # 2026-09-01 WEDGE: this hook was observed TWICE hanging for >60 min at
+      # 0% CPU across all four shards, recoverable only with SIGKILL, with no
+      # output and no failing step named. It was NOT reproducible standalone,
+      # so the cause is unproven — but a silent multi-hour wedge on every push
+      # is unacceptable regardless of cause. Two hardening measures below turn
+      # it into a LOUD, bounded failure:
+      #   1. each shard runs under `timeout --signal=TERM --kill-after=60 40m`
+      #      (per-shard, not global; 40 min = the ~25 min wall estimate plus
+      #      generous margin for a cold cache). rc=124 is reported by name.
+      #   2. each shard gets its OWN --cache-dir, removing shared-cache
+      #      contention as a hang candidate and making any single shard
+      #      independently re-runnable. COST, measured 2026-09-01 on a cold
+      #      (empty) set of per-shard caches: 29 GB total under
+      #      .zig-cache/shard-* (4.7 / 7.3 / 7.2 / 9.9 GB) and 17m46s wall for
+      #      the whole 4-shard run. Later runs reuse those caches and are much
+      #      faster; `rm -rf .zig-cache/shard-*` reclaims the space at the cost
+      #      of one cold run. `--summary failures` keeps a passing run silent
+      #      and still names every failing step, and the tail-30 dump below
+      #      keeps a failure legible.
   - id: zig-test
     name: zig build test (sharded x4 parallel)
     entry: bash
@@ -365,13 +385,24 @@ repos:
       export GEODE_SKIP_SUBPROC_CLUSTER=1
       pids=()
       for idx in 0 1 2 3; do
-        zig build test -Dtest-shard-total=4 -Dtest-shard-index="$idx" --summary all \
+        mkdir -p "$PWD/.zig-cache/shard-${idx}"
+        timeout --signal=TERM --kill-after=60 40m \
+          zig build test -Dtest-shard-total=4 -Dtest-shard-index="$idx" \
+            --cache-dir "$PWD/.zig-cache/shard-${idx}" --summary failures \
           > ".zig-cache/pre-push-shard-${idx}.log" 2>&1 &
         pids+=($!)
       done
       rc=0
       for i in "${!pids[@]}"; do
-        wait "${pids[$i]}" || { echo "shard ${i} FAILED — see .zig-cache/pre-push-shard-${i}.log"; rc=1; }
+        shard_rc=0
+        wait "${pids[$i]}" || shard_rc=$?
+        if [ "$shard_rc" -eq 124 ]; then
+          echo "shard ${i} TIMED OUT after 40m (see .zig-cache/pre-push-shard-${i}.log) — the pre-push wedge, not a test failure"
+          rc=1
+        elif [ "$shard_rc" -ne 0 ]; then
+          echo "shard ${i} FAILED (rc=${shard_rc}) — see .zig-cache/pre-push-shard-${i}.log"
+          rc=1
+        fi
       done
       if [ "$rc" -ne 0 ]; then
         for i in 0 1 2 3; do

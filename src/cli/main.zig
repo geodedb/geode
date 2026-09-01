@@ -2027,6 +2027,37 @@ fn executeGrpcQuery(allocator: std.mem.Allocator, opts: GrpcQueryOptions) !void 
         // Execute query on the gRPC connection
         params_transferred = true;
         return executeQueryOnGrpc(allocator, tcp_stream, query_text, format, username, password, graph, graph_for_hello, params, page_size, timeout_secs, opts.read_only, opts.failed_out) catch |err| {
+            // CANARY: REQ=REQ-CLI-TIMEOUT-EXIT-CODE-002; FEATURE="QueryTimeoutClassification"; ASPECT=GrpcTransportTimeout; STATUS=TESTED; TEST=tests/test_cli_timeout_exit_code.zig; OWNER=cli; UPDATED=2026-09-01
+            // CANARY: REQ=REQ-CLI-TIMEOUT-NO-RESUBMIT-001; FEATURE="QueryTimeoutClassification"; ASPECT=NoSilentResubmission; STATUS=TESTED; TEST=tests/test_cli_timeout_exit_code.zig; OWNER=cli; UPDATED=2026-09-01
+            //
+            // A CLIENT-SIDE DEADLINE IS TERMINAL — never retried.
+            //
+            // `grpc_query_transport.readExact` raises `error.ReadTimeout` when
+            // the SO_RCVTIMEO derived from `--timeout` expires. That is not a
+            // transport fault: the handshake succeeded, the request reached the
+            // server, and the statement is very likely STILL EXECUTING there.
+            // Treating it as retryable re-submitted the statement on a fresh
+            // connection up to `max_attempts` times — for a mutating statement
+            // that is a SILENT DUPLICATE WRITE — burned ~3x the deadline before
+            // giving up, and then exited 1 while printing the "REQUIRES TLS"
+            // diagnostic below, which is plainly false for a connection that
+            // completed a Handshake RPC.
+            //
+            // Same contract the QUIC path already honours (see `cmdQuery`):
+            // exit `timeout_error` with a message that says the statement may
+            // still be running. Genuine connect/transport failures keep their
+            // existing retry behaviour above and below.
+            if (err == error.ReadTimeout or err == error.Timeout) {
+                const io_t = std.Io.Threaded.global_single_threaded.io();
+                var timeout_msg_buf: [192]u8 = undefined;
+                const timeout_msg = std.fmt.bufPrint(
+                    &timeout_msg_buf,
+                    "Error: query timed out after {d} seconds; the statement may still be executing on the server\n",
+                    .{timeout_secs},
+                ) catch "Error: query timed out; the statement may still be executing on the server\n";
+                stderr.writeStreamingAll(io_t, timeout_msg) catch {};
+                std.process.exit(@intFromEnum(ExitCode.timeout_error));
+            }
             last_error = @errorName(err);
             params_transferred = false;
             if (attempts + 1 < max_attempts) {
@@ -2047,6 +2078,24 @@ fn executeGrpcQuery(allocator: std.mem.Allocator, opts: GrpcQueryOptions) !void 
     // error name (it is what a bug report needs) and add the diagnosis.
     if (last_error) |le| {
         const io = std.Io.Threaded.global_single_threaded.io();
+        // Belt-and-braces for the deadline classification above: a timeout that
+        // reaches here (e.g. raised by `connectPlaintext` rather than by the
+        // request) must NEVER be dressed up as a TLS mismatch — the handshake
+        // is not the problem and the advice would send the operator down the
+        // wrong path entirely.
+        if (std.mem.eql(u8, le, "ReadTimeout") or
+            std.mem.eql(u8, le, "WriteTimeout") or
+            std.mem.eql(u8, le, "Timeout"))
+        {
+            var tbuf: [192]u8 = undefined;
+            const tmsg = std.fmt.bufPrint(
+                &tbuf,
+                "Error: query timed out after {d} seconds; the statement may still be executing on the server\n",
+                .{timeout_secs},
+            ) catch "Error: query timed out; the statement may still be executing on the server\n";
+            stderr.writeStreamingAll(io, tmsg) catch {};
+            std.process.exit(@intFromEnum(ExitCode.timeout_error));
+        }
         // A failure to even establish the TCP connection is a different
         // problem and must not be misdiagnosed as a TLS mismatch.
         const connect_level = std.mem.eql(u8, le, "ConnectionRefused") or

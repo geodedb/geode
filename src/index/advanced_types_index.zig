@@ -487,6 +487,27 @@ pub const VectorIndexWrapper = struct {
     // implicitly on rebuild (the wrapper is dropped+recreated).
     ids: std.AutoHashMapUnmanaged(u64, void) = .{},
 
+    // CANARY: REQ=REQ-VECTOR-INDEX-READER-QUIESCENCE-001; FEATURE="VectorIndex"; ASPECT=ReaderHandleApi; STATUS=TESTED; TEST=tests/test_vector_index_reader_quiescence.zig; OWNER=index; UPDATED=2026-09-01
+    /// In-flight reader references, and the "retired, awaiting quiescence"
+    /// marker. BOTH are guarded by `IndexManager.rebuild_mutex` — the registry
+    /// mutex that also guards `advanced_vector_indexes` — and are meaningless
+    /// for a wrapper that is not owned by an `IndexManager`.
+    ///
+    /// WHY: `Hnsw.deinit` does not take the index's own rw_lock, so the library
+    /// offers no lifetime protection to a search that is already inside it.
+    /// DROP INDEX and the non-blocking rebuild's SWAP both destroy a live
+    /// wrapper, and every knn read path resolved the pointer with no lock at
+    /// all — a use-after-free with a multi-millisecond window. `refs` is what a
+    /// reader takes (`IndexManager.requireVectorIndex`) to keep the wrapper
+    /// addressable for the duration of its search; teardown waits for it to
+    /// drain. Same contract, and the same reasoning, as
+    /// `fts_storage_adapter.IndexEngine.refs`.
+    refs: u32 = 0,
+    /// Set when the wrapper has been removed from the registry and is waiting
+    /// for `refs` to reach zero. A pin is refused from this point on, so a
+    /// reader can never resurrect a retired wrapper.
+    dropped: bool = false,
+
     pub const DistanceMetric = enum {
         l2,
         cosine,
@@ -504,6 +525,8 @@ pub const VectorIndexWrapper = struct {
             .metric = metric,
             .dimension = dim,
             .ids = .{},
+            .refs = 0,
+            .dropped = false,
         };
     }
 
@@ -567,7 +590,14 @@ pub const VectorIndexWrapper = struct {
         if (metric != self.metric) return error.VectorMetricMismatch;
 
         const results = try self.hnsw_index.?.knnSearch(query.data, k);
-        defer allocator.free(results);
+        // `Hnsw.knnSearch` allocates its result slice with the HNSW's OWN
+        // allocator (`self.allocator`, the one `init` was handed), NOT with the
+        // caller's. Freeing it with `allocator` is an invalid free whenever the
+        // two differ — latent while every caller happened to pass
+        // `IndexManager.allocator`, and an immediate DebugAllocator "Invalid
+        // free" panic for any caller that does not. Only `search_results` below
+        // belongs to the caller.
+        defer self.allocator.free(results);
 
         const search_results = try allocator.alloc(VectorSearchResult, results.len);
         for (results, 0..) |result, i| {

@@ -119,7 +119,32 @@ pub const IndexManager = struct {
     statistics: IndexStatistics,
     /// GAP-0511: Mutex protecting rebuild operations so they can safely run
     /// outside the graph write lock without racing with concurrent rebuilds.
+    ///
+    /// It is ALSO the vector-index REGISTRY mutex: it guards the
+    /// `advanced_vector_indexes` map AND every wrapper's `refs`/`dropped`
+    /// in-flight reference state (see `requireVectorIndex`). Reusing it rather
+    /// than adding a second lock keeps a single tier: every teardown of a
+    /// vector wrapper already ran under it, so "held ⇒ no wrapper can be
+    /// destroyed" is an invariant the incremental-insert path relied on
+    /// implicitly and now relies on explicitly.
+    ///
+    /// LOCK ORDERING (GAP-0278 table): sits BELOW the per-graph rwlock — a
+    /// caller may hold a graph lock and then take `rebuild_mutex`, never the
+    /// reverse. `rebuild_window_mutex` is below this one.
+    /// INVARIANT: never acquire a graph lock while holding `rebuild_mutex`
+    /// (`rebuildAdvancedVectorIndexNonBlocking` deliberately releases it before
+    /// taking the SHARED lock for its snapshot and again for its drain).
     rebuild_mutex: std.Io.Mutex = std.Io.Mutex.init,
+    // CANARY: REQ=REQ-VECTOR-INDEX-READER-QUIESCENCE-002; FEATURE="VectorIndex"; ASPECT=DropWaitsForReaders; STATUS=TESTED; TEST=tests/test_vector_index_reader_quiescence.zig; OWNER=index; UPDATED=2026-09-01
+    /// Signalled when the last in-flight reference on a RETIRED vector wrapper
+    /// is released. Broadcast (not signal): the condition is shared by every
+    /// index in the registry, so a single wake could land on a teardown waiting
+    /// for a different wrapper and be swallowed by its predicate re-check.
+    /// Waiters use `waitUncancelable`, which releases `rebuild_mutex` while
+    /// parked — so a drop that is waiting for quiescence never blocks an
+    /// unrelated lookup, and never blocks the very `releaseVectorIndex` it is
+    /// waiting for. Mirrors `fts_storage_adapter.drained`.
+    vector_drained: std.Io.Condition = .init,
     /// geode#875 RC-2b: the set of indexes currently being rebuilt into a
     /// SHADOW wrapper, each mapped to the entity ids written while its window
     /// was armed. Mirrors `fts_storage_adapter.rebuilds` exactly: a rebuild
@@ -1179,18 +1204,129 @@ pub const IndexManager = struct {
 
     // Advanced type index operations
 
+    // =======================================================================
+    // Vector-index reader handles (refcount + quiescence).
+    //
+    // `Hnsw.deinit` does not take the index's own rw_lock, so a search that is
+    // already inside the graph gets NO lifetime protection from the library —
+    // exactly the posture `fts.Engine.deinit` documents, which is why the fts
+    // adapter pins every reader. Both writers here destroy a live wrapper (the
+    // shadow SWAP in `rebuildAdvancedVectorIndexNonBlocking` and
+    // `dropAdvancedIndex`), so every read path that dereferences a wrapper
+    // WITHOUT holding `rebuild_mutex` must pin it first.
+    //
+    // Code that already holds `rebuild_mutex` needs no pin: every teardown runs
+    // under that mutex, so "mutex held ⇒ no wrapper can be destroyed".
+    // =======================================================================
+
+    // CANARY: REQ=REQ-VECTOR-INDEX-READER-QUIESCENCE-001; FEATURE="VectorIndex"; ASPECT=ReaderHandleApi; STATUS=TESTED; TEST=tests/test_vector_index_reader_quiescence.zig; OWNER=index; UPDATED=2026-09-01
+    /// Pin the live wrapper for `index_name` and return it. EVERY caller must
+    /// pair this with `releaseVectorIndex` via a `defer` placed on the line
+    /// IMMEDIATELY after the call, before any early return can fire — the
+    /// reference is what keeps DROP INDEX and the rebuild swap from destroying
+    /// the wrapper mid-search.
+    ///
+    /// `error.IndexNotFound` when the name is absent OR already retired, so a
+    /// dangling pointer is never handed out.
+    pub fn requireVectorIndex(
+        self: *IndexManager,
+        index_name: []const u8,
+    ) !*advanced_types.VectorIndexWrapper {
+        const io = std.Io.Threaded.global_single_threaded.io();
+        self.rebuild_mutex.lockUncancelable(io);
+        defer self.rebuild_mutex.unlock(io);
+        return self.requireVectorIndexLocked(index_name);
+    }
+
+    /// `requireVectorIndex` for a caller that ALREADY holds `rebuild_mutex`.
+    fn requireVectorIndexLocked(
+        self: *IndexManager,
+        index_name: []const u8,
+    ) !*advanced_types.VectorIndexWrapper {
+        const wrapper = self.advanced_vector_indexes.get(index_name) orelse return error.IndexNotFound;
+        if (wrapper.dropped) return error.IndexNotFound;
+        wrapper.refs += 1;
+        return wrapper;
+    }
+
+    // CANARY: REQ=REQ-VECTOR-INDEX-READER-QUIESCENCE-002; FEATURE="VectorIndex"; ASPECT=DropWaitsForReaders; STATUS=TESTED; TEST=tests/test_vector_index_reader_quiescence.zig; OWNER=index; UPDATED=2026-09-01
+    /// Drop the in-flight reference taken by `requireVectorIndex`. When the
+    /// last reference on a RETIRED wrapper drains, wakes the teardown waiting
+    /// on it. The broadcast happens AFTER `rebuild_mutex` is released so the
+    /// woken waiter is not handed a lock we still hold; see
+    /// `fts_storage_adapter.releaseIndex` for the full lost-wakeup argument
+    /// (the waiter registers itself before parking, inside `waitUncancelable`).
+    pub fn releaseVectorIndex(
+        self: *IndexManager,
+        wrapper: *advanced_types.VectorIndexWrapper,
+    ) void {
+        const io = std.Io.Threaded.global_single_threaded.io();
+        self.rebuild_mutex.lockUncancelable(io);
+        if (wrapper.refs > 0) wrapper.refs -= 1;
+        const wake = wrapper.refs == 0 and wrapper.dropped;
+        self.rebuild_mutex.unlock(io);
+        if (wake) self.vector_drained.broadcast(io);
+    }
+
+    /// Retire `wrapper`: mark it dropped, wait for every in-flight reader to
+    /// release, then tear it down and release its entries from the statistics.
+    ///
+    /// PRECONDITION: `rebuild_mutex` is held AND `wrapper` has already been
+    /// removed (or replaced) in `advanced_vector_indexes`, so no new pin can be
+    /// taken against it. The wait uses `waitUncancelable`, which releases the
+    /// mutex while parked — unrelated lookups and the very `releaseVectorIndex`
+    /// this is waiting for both proceed. NEVER call this while holding a graph
+    /// lock that an in-flight reader could need (no read path does: a pinned
+    /// knn touches only the wrapper).
+    fn retireVectorWrapperLocked(
+        self: *IndexManager,
+        wrapper: *advanced_types.VectorIndexWrapper,
+    ) void {
+        const io = std.Io.Threaded.global_single_threaded.io();
+        wrapper.dropped = true;
+        while (wrapper.refs != 0) self.vector_drained.waitUncancelable(io, &self.rebuild_mutex);
+        // Sole owner from here: unreachable through the registry and drained to
+        // zero references, so no other thread holds this pointer.
+        // CANARY: REQ=REQ-VECTOR-INDEX-READER-QUIESCENCE-004; FEATURE="VectorIndex"; ASPECT=EntryStatisticsNoDrift; STATUS=TESTED; TEST=tests/test_vector_index_reader_quiescence.zig; OWNER=index; UPDATED=2026-09-01
+        // The retired wrapper's rows leave the total with it. Without this a
+        // rebuild reported 2N entries for an N-row index and a dropped index's
+        // rows stayed in the total forever.
+        const entries: u64 = wrapper.ids.count();
+        self.statistics.total_entries -|= entries;
+        wrapper.deinit();
+        self.allocator.destroy(wrapper);
+    }
+
+    /// Insert one vector into `index_name`'s wrapper.
+    ///
+    /// Pins the wrapper for the duration of the insert; a caller that already
+    /// holds `rebuild_mutex` must use `insertIntoAdvancedVectorIndexLocked`
+    /// instead (this one would self-deadlock).
     pub fn insertIntoAdvancedVectorIndex(
         self: *IndexManager,
         index_name: []const u8,
         vector_value: vector_types.VectorF32,
         entity_id: u64,
     ) !void {
-        if (self.advanced_vector_indexes.getPtr(index_name)) |wrapper| {
-            try wrapper.*.insert(entity_id, vector_value);
-            self.statistics.total_entries += 1;
-        } else {
-            return error.IndexNotFound;
-        }
+        const io = std.Io.Threaded.global_single_threaded.io();
+        self.rebuild_mutex.lockUncancelable(io);
+        defer self.rebuild_mutex.unlock(io);
+        return self.insertIntoAdvancedVectorIndexLocked(index_name, vector_value, entity_id);
+    }
+
+    /// `insertIntoAdvancedVectorIndex` for a caller that ALREADY holds
+    /// `rebuild_mutex` (the backfill and the incremental-insert fast path). No
+    /// pin is needed: teardown only ever runs under that same mutex.
+    fn insertIntoAdvancedVectorIndexLocked(
+        self: *IndexManager,
+        index_name: []const u8,
+        vector_value: vector_types.VectorF32,
+        entity_id: u64,
+    ) !void {
+        const wrapper = self.advanced_vector_indexes.get(index_name) orelse return error.IndexNotFound;
+        if (wrapper.dropped) return error.IndexNotFound;
+        try wrapper.insert(entity_id, vector_value);
+        self.statistics.total_entries += 1;
     }
 
     pub fn insertIntoAdvancedSpatialIndex(
@@ -1265,19 +1401,23 @@ pub const IndexManager = struct {
         }
     }
 
+    /// knn against `index_name`. The wrapper is PINNED across the search: a
+    /// concurrent DROP INDEX / rebuild swap waits for this reference before
+    /// tearing the HNSW graph down (`Hnsw.deinit` takes no rw_lock, so nothing
+    /// else would stop it from freeing the graph mid-search).
+    // CANARY: REQ=REQ-VECTOR-INDEX-READER-QUIESCENCE-001; FEATURE="VectorIndex"; ASPECT=ReaderHandleApi; STATUS=TESTED; TEST=tests/test_vector_index_reader_quiescence.zig; OWNER=index; UPDATED=2026-09-01
     pub fn queryAdvancedVectorIndex(
         self: *IndexManager,
         index_name: []const u8,
         query_vector: @import("../types/vector.zig").VectorF32,
         k: u32,
     ) ![]advanced_types.VectorSearchResult {
-        if (self.advanced_vector_indexes.getPtr(index_name)) |wrapper| {
-            return try wrapper.*.search(query_vector, k, self.allocator);
-        } else {
-            return error.IndexNotFound;
-        }
+        const wrapper = try self.requireVectorIndex(index_name);
+        defer self.releaseVectorIndex(wrapper);
+        return try wrapper.search(query_vector, k, self.allocator);
     }
 
+    // CANARY: REQ=REQ-VECTOR-INDEX-READER-QUIESCENCE-001; FEATURE="VectorIndex"; ASPECT=ReaderHandleApi; STATUS=TESTED; TEST=tests/test_vector_index_reader_quiescence.zig; OWNER=index; UPDATED=2026-09-01
     pub fn queryAdvancedVectorIndexWithMetric(
         self: *IndexManager,
         index_name: []const u8,
@@ -1285,11 +1425,9 @@ pub const IndexManager = struct {
         k: u32,
         metric: advanced_types.VectorIndexWrapper.DistanceMetric,
     ) ![]advanced_types.VectorSearchResult {
-        if (self.advanced_vector_indexes.getPtr(index_name)) |wrapper| {
-            return try wrapper.*.searchWithMetric(query_vector, k, metric, self.allocator);
-        } else {
-            return error.IndexNotFound;
-        }
+        const wrapper = try self.requireVectorIndex(index_name);
+        defer self.releaseVectorIndex(wrapper);
+        return try wrapper.searchWithMetric(query_vector, k, metric, self.allocator);
     }
 
     pub fn searchAdvancedVectorIndex(
@@ -1800,6 +1938,12 @@ pub const IndexManager = struct {
         }
     }
 
+    /// UNSAFE FOR CONCURRENT USE — the returned slice is `meta.name`, the
+    /// MANAGER's own allocation, which `removeAdvancedPropertyIndex` frees on
+    /// the next DROP INDEX. Kept only for single-threaded callers (tests) that
+    /// consume the name immediately. Production read paths must use
+    /// `findAdvancedVectorIndexForPropertyAlloc` (owned duplicate) or
+    /// `hasAdvancedVectorIndexForProperty` (existence probe, nothing escapes).
     pub fn findAdvancedVectorIndexForProperty(self: *IndexManager, property: []const u8) ?[]const u8 {
         var iter = self.advanced_property_indexes.iterator();
         while (iter.next()) |entry| {
@@ -1809,6 +1953,66 @@ pub const IndexManager = struct {
             }
         }
         return null;
+    }
+
+    // CANARY: REQ=REQ-VECTOR-INDEX-READER-QUIESCENCE-005; FEATURE="VectorIndex"; ASPECT=MetadataOwnership; STATUS=TESTED; TEST=tests/test_vector_index_reader_quiescence.zig; OWNER=index; UPDATED=2026-09-01
+    /// The name of the vector index registered for `property`, as an
+    /// `allocator`-owned DUPLICATE the caller frees.
+    ///
+    /// Ownership is in the signature on purpose. The borrowed spelling above
+    /// hands out `meta.name`, and every caller then holds it across work the
+    /// manager knows nothing about — in `eval.zig`'s knn path, across an
+    /// O(store) `labelSolelyCarriesProperty` scan — while a concurrent DROP
+    /// INDEX frees exactly that allocation in `removeAdvancedPropertyIndex`.
+    /// A duplicate cannot be regressed into a dangling read by a later change
+    /// to the manager's own free discipline.
+    pub fn findAdvancedVectorIndexForPropertyAlloc(
+        self: *IndexManager,
+        allocator: Allocator,
+        property: []const u8,
+    ) !?[]u8 {
+        const io = std.Io.Threaded.global_single_threaded.io();
+        self.rebuild_mutex.lockUncancelable(io);
+        defer self.rebuild_mutex.unlock(io);
+        var iter = self.advanced_property_indexes.iterator();
+        while (iter.next()) |entry| {
+            const meta = entry.value_ptr.*;
+            if (meta.index_type == .vector_f32 and std.mem.eql(u8, meta.property, property)) {
+                return try allocator.dupe(u8, meta.name);
+            }
+        }
+        return null;
+    }
+
+    /// Existence probe for a vector index on `property`. Nothing escapes the
+    /// registry mutex, so this is safe against a concurrent DROP INDEX where
+    /// `findAdvancedVectorIndexForProperty(..) != null` is not.
+    pub fn hasAdvancedVectorIndexForProperty(self: *IndexManager, property: []const u8) bool {
+        const io = std.Io.Threaded.global_single_threaded.io();
+        self.rebuild_mutex.lockUncancelable(io);
+        defer self.rebuild_mutex.unlock(io);
+        var iter = self.advanced_property_indexes.iterator();
+        while (iter.next()) |entry| {
+            const meta = entry.value_ptr.*;
+            if (meta.index_type == .vector_f32 and std.mem.eql(u8, meta.property, property)) return true;
+        }
+        return false;
+    }
+
+    /// The LABEL an advanced index is registered for, as an `allocator`-owned
+    /// duplicate (caller frees), or null when the index is unknown. Same
+    /// ownership reasoning as `findAdvancedVectorIndexForPropertyAlloc`: the
+    /// knn authority check holds the label across an O(store) scan.
+    pub fn advancedIndexLabelAlloc(
+        self: *IndexManager,
+        allocator: Allocator,
+        index_name: []const u8,
+    ) !?[]u8 {
+        const io = std.Io.Threaded.global_single_threaded.io();
+        self.rebuild_mutex.lockUncancelable(io);
+        defer self.rebuild_mutex.unlock(io);
+        const meta = self.advanced_property_indexes.get(index_name) orelse return null;
+        return try allocator.dupe(u8, meta.label);
     }
 
     /// O(1) check whether any advanced index is registered for a label+property pair.
@@ -1920,7 +2124,10 @@ pub const IndexManager = struct {
             if (wrapper.contains(entity_id)) return false;
             const vec = vectorFromPropertyValue(self.allocator, prop) orelse return false;
             defer if (vec.owned) |data| self.allocator.free(data);
-            self.insertIntoAdvancedVectorIndex(meta.name, vec.value, entity_id) catch return false;
+            // `rebuild_mutex` is held by this function — the *Locked* variant
+            // is mandatory (the public one would self-deadlock), and no pin is
+            // needed because teardown also runs under this mutex.
+            self.insertIntoAdvancedVectorIndexLocked(meta.name, vec.value, entity_id) catch return false;
             handled_any = true;
         }
         return handled_any;
@@ -2037,35 +2244,44 @@ pub const IndexManager = struct {
         defer self.allocator.free(property_copy);
         const index_type = meta.index_type;
 
+        // `rebuild_mutex` is HELD for this whole sequence, so every drop below
+        // goes through `dropAdvancedIndexLocked` — taking it again would
+        // self-deadlock (`std.Io.Mutex` is not reentrant). Holding it across
+        // drop -> recreate -> repopulate is also what makes the rebuild atomic
+        // to a concurrent reader: it either pins the old wrapper (and the drop
+        // waits for it) or is refused until the new one is registered.
         switch (index_type) {
             .vector_f32 => {
                 const dimension: u16 = if (self.advanced_vector_indexes.get(index_name)) |wrapper| wrapper.dimension else 0;
                 const metric = if (self.advanced_vector_indexes.get(index_name)) |wrapper| wrapper.metric else advanced_types.VectorIndexWrapper.DistanceMetric.l2;
-                _ = try self.dropAdvancedIndex(index_name, .vector_f32);
+                // The drop releases the old wrapper's entries from
+                // `statistics.total_entries`; the repopulate below adds the new
+                // ones. No double-count either way.
+                _ = try self.dropAdvancedIndexLocked(index_name, .vector_f32);
                 try self.createAdvancedVectorIndex(index_name_copy, dimension, metric);
             },
             .spatial_geographic => {
-                _ = try self.dropAdvancedIndex(index_name, .spatial_geographic);
+                _ = try self.dropAdvancedIndexLocked(index_name, .spatial_geographic);
                 try self.createAdvancedSpatialIndex(index_name_copy);
             },
             .network_cidr => {
-                _ = try self.dropAdvancedIndex(index_name, .network_cidr);
+                _ = try self.dropAdvancedIndexLocked(index_name, .network_cidr);
                 try self.createAdvancedNetworkIndex(index_name_copy);
             },
             .signature_crypto => {
-                _ = try self.dropAdvancedIndex(index_name, .signature_crypto);
+                _ = try self.dropAdvancedIndexLocked(index_name, .signature_crypto);
                 try self.createAdvancedSignatureIndex(index_name_copy);
             },
             .interval_tree => {
-                _ = try self.dropAdvancedIndex(index_name, .interval_tree);
+                _ = try self.dropAdvancedIndexLocked(index_name, .interval_tree);
                 try self.createAdvancedIntervalIndex(index_name_copy);
             },
             .jsonb_inverted => {
-                _ = try self.dropAdvancedIndex(index_name, .jsonb_inverted);
+                _ = try self.dropAdvancedIndexLocked(index_name, .jsonb_inverted);
                 try self.createAdvancedJsonbIndex(index_name_copy);
             },
             .domain_trie => {
-                _ = try self.dropAdvancedIndex(index_name, .domain_trie);
+                _ = try self.dropAdvancedIndexLocked(index_name, .domain_trie);
                 try self.createAdvancedDomainIndex(index_name_copy);
             },
             else => return 0,
@@ -2221,8 +2437,19 @@ pub const IndexManager = struct {
                 const old = slot.*;
                 slot.* = shadow;
                 shadow_owned = false;
-                old.deinit();
-                self.allocator.destroy(old);
+                // CANARY: REQ=REQ-VECTOR-INDEX-READER-QUIESCENCE-003; FEATURE="VectorIndex"; ASPECT=SwapPinnedReader; STATUS=TESTED; TEST=tests/test_vector_index_reader_quiescence.zig; OWNER=index; UPDATED=2026-09-01
+                // The slot now points at the shadow, so any pin taken from here
+                // on resolves to the NEW wrapper. The OLD one is retired: its
+                // holders keep getting correct rows out of it and the teardown
+                // waits for them (the wait releases `rebuild_mutex`). NO graph
+                // lock is held at this point — step 1 released it — which is
+                // what keeps this wait from deadlocking a writer.
+                //
+                // `retireVectorWrapperLocked` also SUBTRACTS the retired
+                // wrapper's entries before `indexed` is added: the swap REPLACES
+                // the index's rows, it does not add a second copy (a rebuild of
+                // an N-row index used to report 2N).
+                self.retireVectorWrapperLocked(old);
                 self.statistics.total_entries += indexed;
                 self.statistics.rebuild_count += 1;
             } else {
@@ -2289,7 +2516,25 @@ pub const IndexManager = struct {
         try flat.appendSlice(allocator, vec.value.data[0..vec.value.dim]);
     }
 
+    // CANARY: REQ=REQ-VECTOR-INDEX-READER-QUIESCENCE-002; FEATURE="VectorIndex"; ASPECT=DropWaitsForReaders; STATUS=TESTED; TEST=tests/test_vector_index_reader_quiescence.zig; OWNER=index; UPDATED=2026-09-01
+    /// Drop an advanced index. For a VECTOR index the teardown blocks until
+    /// every in-flight `requireVectorIndex` reference has been released, so a
+    /// knn already inside the HNSW graph is never freed under.
     pub fn dropAdvancedIndex(
+        self: *IndexManager,
+        index_name: []const u8,
+        index_type: IndexType,
+    ) !bool {
+        const io = std.Io.Threaded.global_single_threaded.io();
+        self.rebuild_mutex.lockUncancelable(io);
+        defer self.rebuild_mutex.unlock(io);
+        return self.dropAdvancedIndexLocked(index_name, index_type);
+    }
+
+    /// `dropAdvancedIndex` for a caller that ALREADY holds `rebuild_mutex`
+    /// (`rebuildAdvancedIndexCounted`'s drop→recreate, which must keep the
+    /// registry locked across the whole sequence).
+    fn dropAdvancedIndexLocked(
         self: *IndexManager,
         index_name: []const u8,
         index_type: IndexType,
@@ -2297,8 +2542,11 @@ pub const IndexManager = struct {
         switch (index_type) {
             .vector_f32 => {
                 if (self.advanced_vector_indexes.fetchRemove(index_name)) |kv| {
-                    kv.value.deinit();
-                    self.allocator.destroy(kv.value);
+                    // Unreachable through the registry from here, so no new pin
+                    // can be taken; `retireVectorWrapperLocked` waits for the
+                    // in-flight ones, releases the entries from the statistics,
+                    // and only then frees the wrapper.
+                    self.retireVectorWrapperLocked(kv.value);
                     self.allocator.free(kv.key);
                     self.removeAdvancedPropertyIndex(index_name);
                     self.statistics.total_indexes -= 1;
@@ -2420,7 +2668,9 @@ pub const IndexManager = struct {
             .vector_f32 => {
                 if (vectorFromPropertyValue(self.allocator, prop)) |vec| {
                     defer if (vec.owned) |data| self.allocator.free(data);
-                    try self.insertIntoAdvancedVectorIndex(meta.name, vec.value, entity_id);
+                    // Reached only from `populateAdvancedIndex`, which runs
+                    // under `rebuild_mutex` — hence the *Locked* variant.
+                    try self.insertIntoAdvancedVectorIndexLocked(meta.name, vec.value, entity_id);
                     return true;
                 }
             },

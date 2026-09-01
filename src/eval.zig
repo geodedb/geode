@@ -2766,9 +2766,16 @@ fn evalVectorKnn(allocator: std.mem.Allocator, args: []*ast.Expr, env: Env) Eval
     // `index_consulted` also feeds the geode#877 (c) diagnostic below: a
     // property an index is registered for is a KNOWN property even when the
     // scan happens to score nothing.
+    //
+    // LIFETIME (REQ-VECTOR-INDEX-READER-QUIESCENCE-005): the resolved index
+    // NAME is an owned duplicate. The borrowed spelling handed back the
+    // manager's own `meta.name`, which a concurrent DROP INDEX frees in
+    // `removeAdvancedPropertyIndex` — and this call site holds it across an
+    // O(store) authority scan before it is ever used.
     var index_consulted = false;
     if (index_manager.getGlobalIndexManager()) |manager| {
-        if (manager.findAdvancedVectorIndexForProperty(property_name)) |index_name| {
+        if (try manager.findAdvancedVectorIndexForPropertyAlloc(allocator, property_name)) |index_name| {
+            defer allocator.free(index_name);
             index_consulted = true;
             if (advancedVectorIndexIsAuthoritative(allocator, manager, index_name, property_name)) {
                 const no_results: []advanced_types_index.VectorSearchResult = &.{};
@@ -2829,10 +2836,15 @@ fn advancedVectorIndexIsAuthoritative(
     index_name: []const u8,
     property_name: []const u8,
 ) bool {
-    const meta = manager.advanced_property_indexes.get(index_name) orelse return false;
+    // The LABEL is duplicated out of the registry before the scan: the scan is
+    // O(store) and `removeAdvancedPropertyIndex` frees `meta.label` on a
+    // concurrent DROP INDEX, so reading it straight out of the map here was the
+    // longest metadata exposure on the knn path.
+    const label = (manager.advancedIndexLabelAlloc(allocator, index_name) catch return false) orelse return false;
+    defer allocator.free(label);
     const scope = currentKnnScanScope() catch return false;
     const store = graph_store.getGlobalStore(allocator);
-    return store.labelSolelyCarriesProperty(scope.graph, scope.tenant, meta.label, property_name);
+    return store.labelSolelyCarriesProperty(scope.graph, scope.tenant, label, property_name);
 }
 
 // CANARY: REQ=REQ-M6.1-EVAL-REFACTOR-003; FEATURE="Phase 6 Modularization"; ASPECT=ValueConverters; STATUS=EXEMPT; OWNER=eval; UPDATED=2025-11-13

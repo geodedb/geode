@@ -11022,7 +11022,27 @@ pub fn executeMatchQueryImpl(allocator: std.mem.Allocator, q: ast.Query, param_n
                     if (!props_match) continue;
                 }
 
-                // Create environment with matched node bound to variable
+                // Create environment with matched node bound to variable.
+                //
+                // OWNERSHIP: these two arrays belong to THIS loop iteration and
+                // are released by the `defer` below on every exit path,
+                // including the `continue`s in the WHERE / FILTER branches.
+                //
+                // The `Env` is deliberately NOT `owned`. `Env.owned` is read in
+                // exactly one place — `Env.withBinding` (value_types.zig:269) —
+                // where it means "free `self.names`/`self.values` before
+                // returning the extended copy". But `env` is passed BY VALUE
+                // into `evalExpr`, so that free would (a) leave THIS frame's
+                // `env_names`/`env_values` dangling while they are still read
+                // and copied into the inline-LET environment below, and (b)
+                // make releasing them conditional on whether the query happened
+                // to contain a comprehension. That unknowable condition is
+                // precisely why the frees were commented out
+                // (REQ-MEM-FIX-001/002/003) and the arrays were simply leaked —
+                // once per matched row, forever. With `owned = false`
+                // `withBinding` copies out of the arrays and leaves them alone,
+                // so this frame's ownership is unconditional: no leak, and no
+                // double-free to guard against.
                 var env_names: [][]const u8 = &.{};
                 var env_values: []Value = &.{};
 
@@ -11032,6 +11052,10 @@ pub fn executeMatchQueryImpl(allocator: std.mem.Allocator, q: ast.Query, param_n
                     env_names[0] = var_name;
                     env_values[0] = Value{ .Node = node };
                 }
+                defer if (env_names.len > 0) {
+                    allocator.free(env_names);
+                    allocator.free(env_values);
+                };
 
                 const env = Env{
                     .names = env_names,
@@ -11039,7 +11063,7 @@ pub fn executeMatchQueryImpl(allocator: std.mem.Allocator, q: ast.Query, param_n
                     .param_names = param_names,
                     .param_values = param_values,
                     .allocator = allocator,
-                    .owned = true, // Owns allocated arrays (lines 1642-1643) when match_variable is set
+                    .owned = false, // released by this frame's `defer`, see above
                 };
 
                 // Evaluate WHERE clause if present
@@ -11060,13 +11084,10 @@ pub fn executeMatchQueryImpl(allocator: std.mem.Allocator, q: ast.Query, param_n
                     };
 
                     if (!passes_where) {
-                        // NOTE: Don't free env_names/env_values here as evalExpr for WHERE
-                        // may have called withBinding which already freed them.
-                        // CANARY: REQ=REQ-MEM-FIX-002; FEATURE="MemorySafety"; ASPECT=DoubleFreeFix; STATUS=EXEMPT; OWNER=execution; UPDATED=2025-10-25
-                        // if (match_variable != null) {
-                        //     allocator.free(env_names);
-                        //     allocator.free(env_values);
-                        // }
+                        // env_names/env_values are released by this iteration's
+                        // `defer` (see the ownership note above) — no longer
+                        // leaked here to dodge a withBinding double-free.
+                        // CANARY: REQ=REQ-MEM-FIX-002; FEATURE="MemorySafety"; ASPECT=DoubleFreeFix; STATUS=TESTED; TEST=tests/test_create_vector_value_leak.zig; OWNER=execution; UPDATED=2026-09-01
                         continue;
                     }
                 }
@@ -11082,13 +11103,9 @@ pub fn executeMatchQueryImpl(allocator: std.mem.Allocator, q: ast.Query, param_n
                     };
 
                     if (!passes_filter) {
-                        // NOTE: Don't free env_names/env_values here as evalExpr for FILTER
-                        // may have called withBinding which already freed them.
-                        // CANARY: REQ=REQ-MEM-FIX-003; FEATURE="MemorySafety"; ASPECT=DoubleFreeFix; STATUS=EXEMPT; OWNER=execution; UPDATED=2025-10-25
-                        // if (match_variable != null) {
-                        //     allocator.free(env_names);
-                        //     allocator.free(env_values);
-                        // }
+                        // Released by this iteration's `defer` — see the
+                        // ownership note above.
+                        // CANARY: REQ=REQ-MEM-FIX-003; FEATURE="MemorySafety"; ASPECT=DoubleFreeFix; STATUS=TESTED; TEST=tests/test_create_vector_value_leak.zig; OWNER=execution; UPDATED=2026-09-01
                         continue;
                     }
                 }
@@ -11200,7 +11217,10 @@ pub fn executeMatchQueryImpl(allocator: std.mem.Allocator, q: ast.Query, param_n
                         .param_names = param_names,
                         .param_values = param_values,
                         .allocator = allocator,
-                        .owned = true, // Owns allocated arrays (lines 1809-1810)
+                        // Same reasoning as `env` above: this frame frees
+                        // `all_names`/`all_values` unconditionally below, so
+                        // `withBinding` must not also free them.
+                        .owned = false,
                     };
                 }
 
@@ -11237,15 +11257,10 @@ pub fn executeMatchQueryImpl(allocator: std.mem.Allocator, q: ast.Query, param_n
                     allocator.free(extended_env.values);
                 }
 
-                // NOTE: Don't free env_names/env_values here as they may have been
-                // freed by eval.withBinding during pattern comprehension evaluation.
-                // withBinding takes ownership of the arrays when creating new bindings.
-                // This prevents double-free errors.
-                // CANARY: REQ=REQ-MEM-FIX-001; FEATURE="MemorySafety"; ASPECT=DoubleFreeFix; STATUS=EXEMPT; OWNER=execution; UPDATED=2025-10-25
-                // if (match_variable != null) {
-                //     allocator.free(env_names);
-                //     allocator.free(env_values);
-                // }
+                // env_names/env_values are released by this iteration's
+                // `defer`; `withBinding` no longer takes them (owned = false),
+                // so there is nothing left to guard against here.
+                // CANARY: REQ=REQ-MEM-FIX-001; FEATURE="MemorySafety"; ASPECT=DoubleFreeFix; STATUS=TESTED; TEST=tests/test_create_vector_value_leak.zig; OWNER=execution; UPDATED=2026-09-01
 
                 try rows.append(allocator, row);
             }

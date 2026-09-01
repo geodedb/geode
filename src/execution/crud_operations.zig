@@ -142,28 +142,37 @@ fn applySetClausesToEdge(
     }
 }
 
-fn evaluatePatternProps(allocator: std.mem.Allocator, props: ?[]ast.Property, context: ExecutionContext) !?[]EvaluatedPatternProp {
+/// Evaluate a MERGE/MATCH pattern's inline properties into comparable `Value`s.
+///
+/// OWNERSHIP CONTRACT — `arena_allocator` MUST be an arena the caller tears down
+/// once it is finished with the returned slice, and the returned values must not
+/// outlive it.
+///
+/// The reason is that `evalExpr` returns a MIX of ownerships and the caller
+/// cannot tell them apart:
+///   * OWNED heap — `vectorf32('[...]')` ends in `allocator.dupe(f32, ...)`
+///     (types/vector.zig:55), as do the other constructed ExtValues;
+///   * BORROWED from the AST — a string literal is a slice of parser memory;
+///   * ALIASED live store memory — `n.emb` hands back the stored value itself.
+/// Freeing each result unconditionally therefore double-frees the AST/store
+/// cases (`value_utilities.freeValue` does not even handle `.ExtValue`), and
+/// freeing none of them leaks the owned ones — which is what this used to do
+/// for every evaluated MERGE property. An arena is the only discipline that is
+/// correct for all three: owned allocations are reclaimed in one pass, borrowed
+/// and aliased ones are never touched.
+fn evaluatePatternProps(arena_allocator: std.mem.Allocator, props: ?[]ast.Property, context: ExecutionContext) !?[]EvaluatedPatternProp {
     const pattern_props = props orelse return null;
 
-    const owned = try allocator.alloc(EvaluatedPatternProp, pattern_props.len);
-    errdefer allocator.free(owned);
+    const owned = try arena_allocator.alloc(EvaluatedPatternProp, pattern_props.len);
 
-    const pattern_env = envFromContext(allocator, context);
+    const pattern_env = envFromContext(arena_allocator, context);
     for (pattern_props, 0..) |prop, i| {
         owned[i] = .{
             .key = prop.key,
-            .value = try eval.evalExpr(allocator, prop.value.*, pattern_env),
+            .value = try eval.evalExpr(arena_allocator, prop.value.*, pattern_env),
         };
     }
     return owned;
-}
-
-fn freeEvaluatedPatternProps(allocator: std.mem.Allocator, props: ?[]EvaluatedPatternProp) void {
-    if (props) |owned| {
-        // Values are borrowed from the AST (evalExpr returns references to parser-owned
-        // strings) — freeing them would cause Invalid free. Only free the slice itself.
-        allocator.free(owned);
-    }
 }
 
 fn nodeHasAllLabels(node: *const graph_store.Node, labels: []const []const u8) bool {
@@ -1420,7 +1429,16 @@ fn executeBatchCreateHomogeneous(
         // Evaluate each property expression in this clause and coerce to
         // a PropertyValue that `setNodePropertiesBatch` can consume.
         for (props, 0..) |prop, pi| {
-            const value = try eval.evalExpr(allocator, prop.value.*, env);
+            // Evaluate into the batch arena, not the request allocator: an
+            // evaluated Value can OWN heap (a `vectorf32(...)` literal dupes
+            // its payload) and `coercePropertyValue` DEEP-COPIES it into `ba`,
+            // so the intermediate is pure garbage the instant the copy is made.
+            // `ba` dies at the end of this call and the batch path (chosen by
+            // `homogeneousCreateEligible`, which excludes RETURN) lets nothing
+            // escape, so this is the right scope — and it is correct for the
+            // AST-borrowed / store-aliased results too, which an explicit free
+            // would corrupt.
+            const value = try eval.evalExpr(ba, prop.value.*, env);
             const prop_value = try property_mutation.coercePropertyValue(ba, value);
             batch_entries[pi] = .{ .key = prop.key, .value = prop_value };
         }
@@ -1552,6 +1570,21 @@ pub fn executeCreateQuery(
 
     // Create nodes from pattern
     for (create_pattern.chains) |chain| {
+        // OWNERSHIP for the GAP-0930 pre-evaluation buffers in this chain.
+        //
+        // `evalExpr` results are a MIX of ownerships — OWNED heap (a
+        // `vectorf32(...)` literal ends in `allocator.dupe`, types/vector.zig:55),
+        // AST-BORROWED (string literals), and ALIASES of live store memory
+        // (`n.emb`) — so neither "free every value" (double free / UAF of store
+        // memory) nor "free nothing" (the pre-fix behaviour: only the []Value
+        // SLICE was freed, orphaning every owned payload) is correct. The apply
+        // calls below DEEP-COPY into the store and nothing derived from these
+        // values escapes the chain iteration, so an arena scoped to one chain
+        // reclaims exactly the owned intermediates and touches nothing else.
+        var chain_arena = std.heap.ArenaAllocator.init(allocator);
+        defer chain_arena.deinit();
+        const ca = chain_arena.allocator();
+
         // Handle single node creation
         if (chain.head) |node_pattern| {
             // GAP-0930: evaluate ALL property-value expressions BEFORE creating
@@ -1566,11 +1599,11 @@ pub fn executeCreateQuery(
                     .values = &.{},
                     .param_names = param_names,
                     .param_values = param_values,
-                    .allocator = allocator,
+                    .allocator = ca,
                 };
-                const buf = try allocator.alloc(Value, props.len);
+                const buf = try ca.alloc(Value, props.len);
                 for (props, 0..) |prop, i| {
-                    buf[i] = try eval.evalExpr(allocator, prop.value.*, env);
+                    buf[i] = try eval.evalExpr(ca, prop.value.*, env);
                 }
                 break :blk_eval buf;
             } else &.{};
@@ -1599,7 +1632,6 @@ pub fn executeCreateQuery(
                     try property_mutation.setNodePropertyFromValue(allocator, store, node_pattern.labels, node_id, prop.key, value);
                 }
             }
-            if (evaluated_values.len > 0) allocator.free(evaluated_values);
 
             // Auto-create indexes for node labels
             ensureAutoIndexes(allocator, node_pattern.labels);
@@ -1617,26 +1649,23 @@ pub fn executeCreateQuery(
                 .values = &.{},
                 .param_names = param_names,
                 .param_values = param_values,
-                .allocator = allocator,
+                .allocator = ca,
             };
             const left_values: []Value = if (hop.left.props) |props| blk_lv: {
-                const buf = try allocator.alloc(Value, props.len);
-                for (props, 0..) |prop, i| buf[i] = try eval.evalExpr(allocator, prop.value.*, hop_env);
+                const buf = try ca.alloc(Value, props.len);
+                for (props, 0..) |prop, i| buf[i] = try eval.evalExpr(ca, prop.value.*, hop_env);
                 break :blk_lv buf;
             } else &.{};
             const right_values: []Value = if (hop.right.props) |props| blk_rv: {
-                const buf = try allocator.alloc(Value, props.len);
-                for (props, 0..) |prop, i| buf[i] = try eval.evalExpr(allocator, prop.value.*, hop_env);
+                const buf = try ca.alloc(Value, props.len);
+                for (props, 0..) |prop, i| buf[i] = try eval.evalExpr(ca, prop.value.*, hop_env);
                 break :blk_rv buf;
             } else &.{};
             const rel_values: []Value = if (hop.rel.props) |props| blk_rev: {
-                const buf = try allocator.alloc(Value, props.len);
-                for (props, 0..) |prop, i| buf[i] = try eval.evalExpr(allocator, prop.value.*, hop_env);
+                const buf = try ca.alloc(Value, props.len);
+                for (props, 0..) |prop, i| buf[i] = try eval.evalExpr(ca, prop.value.*, hop_env);
                 break :blk_rev buf;
             } else &.{};
-            defer if (left_values.len > 0) allocator.free(left_values);
-            defer if (right_values.len > 0) allocator.free(right_values);
-            defer if (rel_values.len > 0) allocator.free(rel_values);
 
             // Check if left node exists in bindings (from MATCH), otherwise create new
             const left_id = blk: {
@@ -2611,6 +2640,21 @@ pub fn executeCreate(allocator: std.mem.Allocator, c: ast.CreateStatement, curre
 
     // Create nodes from pattern
     for (c.pattern.chains) |chain| {
+        // OWNERSHIP for the GAP-0930 pre-evaluation buffers in this chain.
+        //
+        // `evalExpr` results are a MIX of ownerships — OWNED heap (a
+        // `vectorf32(...)` literal ends in `allocator.dupe`, types/vector.zig:55),
+        // AST-BORROWED (string literals), and ALIASES of live store memory
+        // (`n.emb`) — so neither "free every value" (double free / UAF of store
+        // memory) nor "free nothing" (the pre-fix behaviour: only the []Value
+        // SLICE was freed, orphaning every owned payload) is correct. The apply
+        // calls below DEEP-COPY into the store and nothing derived from these
+        // values escapes the chain iteration, so an arena scoped to one chain
+        // reclaims exactly the owned intermediates and touches nothing else.
+        var chain_arena = std.heap.ArenaAllocator.init(allocator);
+        defer chain_arena.deinit();
+        const ca = chain_arena.allocator();
+
         // Handle single node creation
         if (chain.head) |node_pattern| {
             // GAP-0930: evaluate ALL property-value expressions BEFORE creating
@@ -2623,9 +2667,9 @@ pub fn executeCreate(allocator: std.mem.Allocator, c: ast.CreateStatement, curre
             // stmt_txn_open stays false, so no engine txn would roll the node
             // back on error.
             const evaluated_values: []Value = if (node_pattern.props) |props| blk_ev: {
-                const env = envFromContext(allocator, context);
-                const buf = try allocator.alloc(Value, props.len);
-                for (props, 0..) |prop, i| buf[i] = try eval.evalExpr(allocator, prop.value.*, env);
+                const env = envFromContext(ca, context);
+                const buf = try ca.alloc(Value, props.len);
+                for (props, 0..) |prop, i| buf[i] = try eval.evalExpr(ca, prop.value.*, env);
                 break :blk_ev buf;
             } else &.{};
 
@@ -2644,7 +2688,6 @@ pub fn executeCreate(allocator: std.mem.Allocator, c: ast.CreateStatement, curre
                     try property_mutation.setNodePropertyFromValue(allocator, store, node_pattern.labels, node_id, prop.key, value);
                 }
             }
-            if (evaluated_values.len > 0) allocator.free(evaluated_values);
 
             // Store node ID if it has a variable name
             if (node_pattern.name) |name| {
@@ -2662,25 +2705,22 @@ pub fn executeCreate(allocator: std.mem.Allocator, c: ast.CreateStatement, curre
             // edge, so a mid-property eval error aborts the whole relationship
             // CREATE atomically rather than committing partially-populated
             // endpoints. Self-contained (no reliance on stmt_txn/undo-log).
-            const hop_env = envFromContext(allocator, context);
+            const hop_env = envFromContext(ca, context);
             const left_values: []Value = if (hop.left.props) |props| blk_lv: {
-                const buf = try allocator.alloc(Value, props.len);
-                for (props, 0..) |prop, i| buf[i] = try eval.evalExpr(allocator, prop.value.*, hop_env);
+                const buf = try ca.alloc(Value, props.len);
+                for (props, 0..) |prop, i| buf[i] = try eval.evalExpr(ca, prop.value.*, hop_env);
                 break :blk_lv buf;
             } else &.{};
             const right_values: []Value = if (hop.right.props) |props| blk_rv: {
-                const buf = try allocator.alloc(Value, props.len);
-                for (props, 0..) |prop, i| buf[i] = try eval.evalExpr(allocator, prop.value.*, hop_env);
+                const buf = try ca.alloc(Value, props.len);
+                for (props, 0..) |prop, i| buf[i] = try eval.evalExpr(ca, prop.value.*, hop_env);
                 break :blk_rv buf;
             } else &.{};
             const rel_values: []Value = if (hop.rel.props) |props| blk_rev: {
-                const buf = try allocator.alloc(Value, props.len);
-                for (props, 0..) |prop, i| buf[i] = try eval.evalExpr(allocator, prop.value.*, hop_env);
+                const buf = try ca.alloc(Value, props.len);
+                for (props, 0..) |prop, i| buf[i] = try eval.evalExpr(ca, prop.value.*, hop_env);
                 break :blk_rev buf;
             } else &.{};
-            defer if (left_values.len > 0) allocator.free(left_values);
-            defer if (right_values.len > 0) allocator.free(right_values);
-            defer if (rel_values.len > 0) allocator.free(rel_values);
 
             // Create left node if not already created (in target graph)
             var left_node_id: u64 = undefined;
@@ -2885,15 +2925,30 @@ pub fn executeInsert(allocator: std.mem.Allocator, ins: ast.InsertStatement, cur
 
     // Create nodes from pattern
     for (ins.pattern.chains) |chain| {
+        // OWNERSHIP for the GAP-0930 pre-evaluation buffers in this chain.
+        //
+        // `evalExpr` results are a MIX of ownerships — OWNED heap (a
+        // `vectorf32(...)` literal ends in `allocator.dupe`, types/vector.zig:55),
+        // AST-BORROWED (string literals), and ALIASES of live store memory
+        // (`n.emb`) — so neither "free every value" (double free / UAF of store
+        // memory) nor "free nothing" (the pre-fix behaviour: only the []Value
+        // SLICE was freed, orphaning every owned payload) is correct. The apply
+        // calls below DEEP-COPY into the store and nothing derived from these
+        // values escapes the chain iteration, so an arena scoped to one chain
+        // reclaims exactly the owned intermediates and touches nothing else.
+        var chain_arena = std.heap.ArenaAllocator.init(allocator);
+        defer chain_arena.deinit();
+        const ca = chain_arena.allocator();
+
         // Handle single node creation
         if (chain.head) |node_pattern| {
             // GAP-0930: evaluate property-value expressions BEFORE creating the
             // node so an eval error aborts the INSERT atomically (no orphan node
             // with the failed property defaulted to NULL).
             const evaluated_values: []Value = if (node_pattern.props) |props| blk_ev: {
-                const env = Env{ .allocator = allocator, .names = &.{}, .values = &.{} };
-                const buf = try allocator.alloc(Value, props.len);
-                for (props, 0..) |prop, i| buf[i] = try eval.evalExpr(allocator, prop.value.*, env);
+                const env = Env{ .allocator = ca, .names = &.{}, .values = &.{} };
+                const buf = try ca.alloc(Value, props.len);
+                for (props, 0..) |prop, i| buf[i] = try eval.evalExpr(ca, prop.value.*, env);
                 break :blk_ev buf;
             } else &.{};
 
@@ -2905,7 +2960,6 @@ pub fn executeInsert(allocator: std.mem.Allocator, ins: ast.InsertStatement, cur
                     try property_mutation.setNodePropertyFromValue(allocator, store, node_pattern.labels, node_id, prop.key, value);
                 }
             }
-            if (evaluated_values.len > 0) allocator.free(evaluated_values);
 
             // Store node ID if it has a variable name
             if (node_pattern.name) |name| {
@@ -2921,25 +2975,22 @@ pub fn executeInsert(allocator: std.mem.Allocator, ins: ast.InsertStatement, cur
             // GAP-0930: pre-evaluate all endpoint + relationship property
             // expressions before creating any node/edge so an eval error aborts
             // the INSERT atomically instead of committing partial endpoints.
-            const hop_env = Env{ .allocator = allocator, .names = &.{}, .values = &.{} };
+            const hop_env = Env{ .allocator = ca, .names = &.{}, .values = &.{} };
             const left_values: []Value = if (hop.left.props) |props| blk_lv: {
-                const buf = try allocator.alloc(Value, props.len);
-                for (props, 0..) |prop, i| buf[i] = try eval.evalExpr(allocator, prop.value.*, hop_env);
+                const buf = try ca.alloc(Value, props.len);
+                for (props, 0..) |prop, i| buf[i] = try eval.evalExpr(ca, prop.value.*, hop_env);
                 break :blk_lv buf;
             } else &.{};
             const right_values: []Value = if (hop.right.props) |props| blk_rv: {
-                const buf = try allocator.alloc(Value, props.len);
-                for (props, 0..) |prop, i| buf[i] = try eval.evalExpr(allocator, prop.value.*, hop_env);
+                const buf = try ca.alloc(Value, props.len);
+                for (props, 0..) |prop, i| buf[i] = try eval.evalExpr(ca, prop.value.*, hop_env);
                 break :blk_rv buf;
             } else &.{};
             const rel_values: []Value = if (hop.rel.props) |props| blk_rev: {
-                const buf = try allocator.alloc(Value, props.len);
-                for (props, 0..) |prop, i| buf[i] = try eval.evalExpr(allocator, prop.value.*, hop_env);
+                const buf = try ca.alloc(Value, props.len);
+                for (props, 0..) |prop, i| buf[i] = try eval.evalExpr(ca, prop.value.*, hop_env);
                 break :blk_rev buf;
             } else &.{};
-            defer if (left_values.len > 0) allocator.free(left_values);
-            defer if (right_values.len > 0) allocator.free(right_values);
-            defer if (rel_values.len > 0) allocator.free(rel_values);
 
             // Create left node if not already created (in target graph)
             var left_node_id: u64 = undefined;
@@ -3158,8 +3209,9 @@ fn clusterReplicateMerge(
 
     // Evaluate the MERGE match locally on the leader (same predicate the local
     // path uses) — this is the ONE authoritative match-or-create decision.
-    const evaluated_props = try evaluatePatternProps(allocator, node_pattern.props, context);
-    defer freeEvaluatedPatternProps(allocator, evaluated_props);
+    var prop_arena = std.heap.ArenaAllocator.init(allocator);
+    defer prop_arena.deinit();
+    const evaluated_props = try evaluatePatternProps(prop_arena.allocator(), node_pattern.props, context);
 
     const matched_id = try findFirstMatchingNodeId(
         allocator,
@@ -3286,8 +3338,17 @@ fn mergeNodeChain(
 
     // Look for existing node matching the pattern (filtered by graph)
     var found_node: ?*graph_store.Node = null;
-    const evaluated_props = try evaluatePatternProps(allocator, node_pattern.props, context);
-    defer freeEvaluatedPatternProps(allocator, evaluated_props);
+    // Function-scoped evaluation arena. It backs BOTH the match predicate
+    // (`evaluatePatternProps`, see its ownership contract) and every apply-side
+    // `evalExpr` below: the pattern props and the ON CREATE / ON MATCH SET
+    // values are all handed to `setNodePropertyFromValue` /
+    // `replaceNodeProperties`, which DEEP-COPY into the store and never take
+    // ownership. Nothing evaluated here reaches `MergedNodeBinding` (ids and
+    // the AST pattern only), so the arena outlives every consumer.
+    var prop_arena = std.heap.ArenaAllocator.init(allocator);
+    defer prop_arena.deinit();
+    const pa = prop_arena.allocator();
+    const evaluated_props = try evaluatePatternProps(pa, node_pattern.props, context);
 
     if (try findFirstMatchingNodeId(
         allocator,
@@ -3312,7 +3373,7 @@ fn mergeNodeChain(
                     if (node_pattern.name) |var_name| {
                         if (std.mem.eql(u8, prop.target.object, var_name)) {
                             // Evaluate the property expression
-                            const value = try eval.evalExpr(allocator, prop.value, envFromContext(allocator, context));
+                            const value = try eval.evalExpr(pa, prop.value, envFromContext(pa, context));
                             const node_ptr = (store.nodes.getOrHydratePtr(node_id) catch null) orelse return error.NodeNotFound;
                             try property_mutation.setNodePropertyFromValue(allocator, store, node_ptr.labels, node_id, prop.target.property, value);
                         }
@@ -3331,7 +3392,7 @@ fn mergeNodeChain(
                     if (node_pattern.name) |var_name| {
                         if (std.mem.eql(u8, all_props.node, var_name)) {
                             // Evaluate the properties expression (should be a map literal)
-                            const props_value = try eval.evalExpr(allocator, all_props.properties, envFromContext(allocator, context));
+                            const props_value = try eval.evalExpr(pa, all_props.properties, envFromContext(pa, context));
 
                             // Clear all existing properties by getting node and manually clearing
                             if ((store.nodes.getOrHydratePtr(node_id) catch null)) |node_ptr| {
@@ -3353,7 +3414,7 @@ fn mergeNodeChain(
         // Set properties from pattern
         if (node_pattern.props) |props| {
             for (props) |prop| {
-                const value = try eval.evalExpr(allocator, prop.value.*, envFromContext(allocator, context));
+                const value = try eval.evalExpr(pa, prop.value.*, envFromContext(pa, context));
                 try property_mutation.setNodePropertyFromValue(allocator, store, node_pattern.labels, node_id, prop.key, value);
             }
         }
@@ -3365,7 +3426,7 @@ fn mergeNodeChain(
                     if (node_pattern.name) |var_name| {
                         if (std.mem.eql(u8, prop.target.object, var_name)) {
                             // Evaluate the property expression
-                            const value = try eval.evalExpr(allocator, prop.value, envFromContext(allocator, context));
+                            const value = try eval.evalExpr(pa, prop.value, envFromContext(pa, context));
                             const node_ptr = (store.nodes.getOrHydratePtr(node_id) catch null) orelse return error.NodeNotFound;
                             try property_mutation.setNodePropertyFromValue(allocator, store, node_ptr.labels, node_id, prop.target.property, value);
                         }
@@ -3384,7 +3445,7 @@ fn mergeNodeChain(
                     if (node_pattern.name) |var_name| {
                         if (std.mem.eql(u8, all_props.node, var_name)) {
                             // Evaluate the properties expression (should be a map literal)
-                            const props_value = try eval.evalExpr(allocator, all_props.properties, envFromContext(allocator, context));
+                            const props_value = try eval.evalExpr(pa, all_props.properties, envFromContext(pa, context));
 
                             // Clear all existing properties by getting node and manually clearing
                             if ((store.nodes.getOrHydratePtr(node_id) catch null)) |node_ptr| {
@@ -3443,8 +3504,9 @@ fn resolveMergeEndpoint(
         for (pp) |prop| graph_store.registerMergeIndexKey(prop.key);
     }
 
-    const evaluated_props = try evaluatePatternProps(allocator, node_pattern.props, context);
-    defer freeEvaluatedPatternProps(allocator, evaluated_props);
+    var prop_arena = std.heap.ArenaAllocator.init(allocator);
+    defer prop_arena.deinit();
+    const evaluated_props = try evaluatePatternProps(prop_arena.allocator(), node_pattern.props, context);
 
     if (try findFirstMatchingNodeId(
         allocator,
@@ -3937,9 +3999,10 @@ fn clusterReplicateMatchSet(
     const filter_tenant = try tenantFilterFromContext(context);
 
     // Resolve the MATCH set to stable candidate ids (tenant-honored, GAP-0840).
-    const evaluated_match_props = evaluatePatternProps(allocator, node_pattern.props, context) catch
+    var match_prop_arena = std.heap.ArenaAllocator.init(allocator);
+    defer match_prop_arena.deinit();
+    const evaluated_match_props = evaluatePatternProps(match_prop_arena.allocator(), node_pattern.props, context) catch
         return error.ClusterWriteNotReplicable;
-    defer freeEvaluatedPatternProps(allocator, evaluated_match_props);
 
     const candidate_ids = try collectCandidateNodeIds(
         allocator,
@@ -4173,9 +4236,10 @@ fn clusterReplicateMatchCreate(
         const node_pattern = chain.head orelse return error.ClusterWriteNotReplicable;
         const match_var = node_pattern.name orelse return error.ClusterWriteNotReplicable;
 
-        const evaluated_props = evaluatePatternProps(allocator, node_pattern.props, context) catch
+        var prop_arena = std.heap.ArenaAllocator.init(allocator);
+        defer prop_arena.deinit();
+        const evaluated_props = evaluatePatternProps(prop_arena.allocator(), node_pattern.props, context) catch
             return error.ClusterWriteNotReplicable;
-        defer freeEvaluatedPatternProps(allocator, evaluated_props);
 
         const candidate_ids = try collectCandidateNodeIds(
             allocator,
