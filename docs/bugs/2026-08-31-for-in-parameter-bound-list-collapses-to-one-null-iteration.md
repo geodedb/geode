@@ -1,9 +1,30 @@
 # FOR var IN $param — parameter-bound list collapses to one null iteration
 
-Status: **root cause not yet located; live-reproduced and isolated on dev `235fc55`**
-Date: 2026-08-31
+Status: **RESOLVED — re-verified fixed on dev `v0.8.8-12-ge1c95f6` (digest `8f56522d...`, pulled 2026-09-01)**
+Date filed: 2026-08-31 · Date resolved (observed): 2026-09-01
 Reporter: dgx-spark-playbooks / knowledge-graph ingestion project (external caller)
 Relates to: GitLab devnw/codepros/geode/geode#876 (see "Relationship to #876" below)
+
+## Resolution confirmation (2026-09-01)
+
+Both core repros from this report were re-run verbatim against the newer dev
+build and now behave correctly:
+
+```
+geode query --param nums '[10,20,30]' 'FOR n IN $nums RETURN n AS v'
+# -> 3 rows, v = 10, 20, 30   (was: 1 row, v = null)
+
+geode query --param rows '[{"k":1,"v":"a"},{"k":2,"v":"b"}]' \
+  'FOR row IN $rows CREATE (n:T {k: row.k, v: row.v})'
+geode query 'MATCH (n:T) RETURN n.k AS k, n.v AS v ORDER BY n.k'
+# -> 2 correctly-bound nodes: {k:1,v:"a"}, {k:2,v:"b"}   (was: 1 all-null node)
+```
+
+The inline-literal control (`FOR n IN [10,20,30] RETURN n AS v`) still works,
+confirming no regression there. No code-level root cause was identified as
+part of this report (the "suspected code location" section below was written
+pre-fix and is retained for historical/regression-test reference only) — this
+is closed based on observed behavior, not a verified diff.
 
 ## Summary
 
@@ -51,19 +72,23 @@ Q() { docker exec -e GEODE_ALLOW_INSECURE_TLS=1 geode-forin-test \
 ```bash
 Q 'FOR i IN [1,2,3] RETURN i'
 ```
+
 ```json
 {"status_class":"00000", ...,
  "columns":[{"name":"?column?","type":"INTEGER"}],
  "rows":[{"?column?":1},{"?column?":2},{"?column?":3}]}
 ```
+
 3 rows, correct values, correct order.
 
 ```bash
 Q 'FOR row IN [{a:1,b:"x"},{a:2,b:"y"}] RETURN row.a AS a, row.b AS b'
 ```
+
 ```json
 {"rows":[{"a":1,"b":"x"},{"a":2,"b":"y"}]}
 ```
+
 Property (dot) access on the loop variable also works correctly for inline
 lists-of-maps.
 
@@ -72,19 +97,23 @@ lists-of-maps.
 ```bash
 Q --param nums '[10,20,30]' 'FOR n IN $nums RETURN n AS v'
 ```
+
 ```json
 {"status_class":"00000", ...,
  "columns":[{"name":"v","type":"NULL"}],
  "rows":[{"v":null}]}
 ```
+
 **Exactly one row, `v: null`.** Expected 3 rows with `v` = 10, 20, 30.
 
 Confirmed the parameter itself deserializes correctly and is a real 3-element
 list when NOT consumed by `FOR`:
+
 ```bash
 Q --param nums '[10,20,30]' 'RETURN size($nums) AS n'
 # -> {"rows":[{"n":3}]}   (correct — the param IS a 3-element list server-side)
 ```
+
 So the defect is specific to `FOR`'s collection-expression evaluation, not to
 parameter deserialization in general.
 
@@ -101,6 +130,7 @@ Q 'MATCH (c:TC2) RETURN c.docId AS d, c.seq AS s, c.text AS t ORDER BY c.seq'
 # -> {"status_class":"00000","rows":[{}]}                (CREATE ran once)
 # -> {"rows":[{"d":null,"s":null,"t":null}]}              (single node, all-null props)
 ```
+
 Only **one** `TC2` node is created (not two), and its properties are all
 `NULL` — consistent with the loop body running exactly once with the loop
 variable unbound/null, then property access on `NULL.docId` etc. evaluating to
@@ -112,9 +142,11 @@ variable unbound/null, then property access on `NULL.docId` etc. evaluating to
 Q --param rows '[{"docId":"a.md","seq":0,"text":"alpha chunk","vec":"[0.1,0.2,0.3]"},{"docId":"a.md","seq":1,"text":"beta chunk","vec":"[0.4,0.5,0.6]"}]' \
   'FOR row IN $rows MERGE (c:TC {docId: row.docId, seq: row.seq}) SET c.text = row.text, c.source = row.docId, c.emb = vectorf32(toString(row.vec))'
 ```
+
 ```json
 {"status_class":"58000","error_code":"58000","error":"TypeMismatch"}
 ```
+
 Here it doesn't even get to the null-collapse behavior — it fails outright
 with `TypeMismatch` before executing. (Isolated separately: the failure here
 is compounded — `toString(row.vec)` where `row` is itself already unresolved
@@ -130,9 +162,11 @@ exactly what a bulk-ingestion caller needs.)
 Q 'FOR row IN [{docId:"a.md",seq:0,text:"alpha"},{docId:"a.md",seq:1,text:"beta"}] CREATE (c:TC3 {docId: row.docId, seq: row.seq, text: row.text, emb: vectorf32([0.1,0.2,0.3])})'
 Q 'MATCH (c:TC3) RETURN c.docId AS d, c.seq AS s, c.text AS t, size(c.emb) AS dim ORDER BY c.seq'
 ```
+
 ```json
 {"rows":[{"d":"a.md","s":0,"t":"alpha","dim":3},{"d":"a.md","s":1,"t":"beta","dim":3}]}
 ```
+
 Both nodes created correctly with distinct properties and 3-dim vectors. This
 confirms the entire `FOR...IN <write>` pipeline (parse → per-iteration
 environment binding → property access → `vectorf32` → persist) is otherwise
@@ -229,5 +263,6 @@ geode query --param rows '[{"k":1,"v":"a"},{"k":2,"v":"b"}]' \
 geode query 'MATCH (n:T) RETURN n.k AS k, n.v AS v ORDER BY n.k'
 # expected: 2 rows: {k:1,v:"a"}, {k:2,v:"b"}
 ```
+
 Both should behave identically to the equivalent inline-literal form already
 verified working today.
