@@ -120,6 +120,13 @@ pub const ExitCode = enum(u8) {
     general_error = 1,
     usage_error = 2,
     auth_error = 3,
+    /// A CLIENT-SIDE deadline expired. Distinct from `general_error` because
+    /// the statement is NOT known to have failed — it may still be executing
+    /// server-side, so a caller can retry/poll instead of treating it as a hard
+    /// failure. Kept in sync with `query_deadline.EXIT_TIMEOUT_ERROR`, which
+    /// duplicates the value to avoid a cross-module import.
+    // CANARY: REQ=REQ-CLI-TIMEOUT-EXIT-CODE-001; FEATURE="QueryTimeoutClassification"; ASPECT=DistinctExitCode; STATUS=TESTED; TEST=tests/test_cli_timeout_exit_code.zig; OWNER=cli; UPDATED=2026-09-01
+    timeout_error = 4,
 };
 
 /// CLI Audit Configuration

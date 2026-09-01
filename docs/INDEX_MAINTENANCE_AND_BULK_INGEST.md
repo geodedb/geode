@@ -1,6 +1,6 @@
 # Index Maintenance and Bulk Ingest
 
-*Last updated: 2026-08-25*
+*Last updated: 2026-09-01*
 
 This page is the operator-facing truth about how Geode's **advanced indexes**
 (HNSW vector, spatial, network, signature, interval, JSONB, domain-trie) are
@@ -26,16 +26,21 @@ CREATE INDEX my_vec_idx ON Doc (embedding) USING vector WITH (metric = 'cosine')
 
 Why this and not "just load with the index in place":
 
-* Every node property write that touches an indexed `(label, property)` pair
-  triggers `rebuildAdvancedIndexesForProperty`, and an advanced-index rebuild
-  **drops and re-creates the index and then re-scans the whole label**. That is
-  O(rows) work *per written row*, i.e. O(n²) over a load. There is no
-  incremental insert path — see
-  [Incremental maintenance is a gap](#incremental-maintenance-is-a-known-architectural-gap).
-* A single `CREATE INDEX` at the end does exactly one full scan.
+* A **vector** index takes an incremental HNSW insert for a first-time write of
+  an id (geode#875), so a plain append load is no longer quadratic. But an
+  **overwrite** of an already-indexed vector, and **every** write to a
+  non-vector advanced index, still triggers `rebuildAdvancedIndexesForProperty`
+  — which **drops and re-creates the index and then re-scans the whole label**.
+  That is O(rows) work *per written row*, i.e. O(n²) over such a load. See
+  [Incremental maintenance](#incremental-maintenance-partly-closed-partly-still-a-gap).
+* Even on the incremental path, a single `CREATE INDEX` at the end does exactly
+  one full scan and builds the graph in one batch, which is cheaper than N
+  individual inserts.
 
 If you cannot drop the index (e.g. queries must keep running against it),
-expect the load to be dramatically slower and plan accordingly.
+a first-time-write vector load is now viable; a re-embedding (overwrite) load or
+a non-vector advanced index will still be dramatically slower — plan
+accordingly.
 
 ### Vector dimensions and bulk loads
 
@@ -99,15 +104,48 @@ exclusive lock, under a shared lock. Before this, a `CREATE INDEX` over a large
 label blocked *every* write in the database — any label, any session — for the
 whole scan (measured at >150 s).
 
+**Fixed (geode#875 RC-2b, 2026-09-01):** moving the scan out of the *exclusive*
+lock did not stop it pinning a *shared* one for the whole build, and
+`StorageAdapter.acquireGraphWriteLock` spins until readers drain — so an
+unrelated `EXCLUSIVE` writer still stalled for the entire backfill (measured
+~49 s against a 3 000 x 256-dim build). A **vector**-index backfill now runs as
+a *shadow* build (`IndexManager.rebuildAdvancedVectorIndexNonBlocking`,
+mirroring the `fts-storage` rebuild window):
+
+1. arm a rebuild window for the index (a second concurrent rebuild of the same
+   index is refused with `error.RebuildInProgress`),
+2. take the shared graph lock only long enough to **copy out** every
+   `(entity id, vector)` pair — a hydrating scan plus an `N x dim` memcpy — and
+   release it,
+3. build a **shadow** `VectorIndexWrapper` from the copies with **no graph lock
+   held** (`Hnsw.batchInsert` takes the HNSW write lock once for the batch),
+4. swap the shadow in under `rebuild_mutex`, and
+5. disarm the window and re-apply the writes it captured, skipping ids the
+   shadow already carries.
+
+Two consequences worth knowing: readers keep seeing the **old, fully populated**
+index right up to the swap (it is no longer dropped-then-empty for the whole
+build), and writes that land mid-build are queued into the window instead of
+being lost against the pre-write snapshot.
+
 **Still true, plan for it:**
 
 * The **creating session** still waits for the backfill: the statement does not
   respond until the queued rebuild has been drained.
-* The backfill takes a **shared** graph lock while it scans, so a writer on the
-  **same graph** can still be delayed by lock hand-off. Writers on other graphs
-  are unaffected.
+* Only **vector** indexes take the shadow path. The other advanced index types
+  (spatial, network, interval, jsonb, domain) keep the in-place rebuild under
+  the shared graph lock — they are cheap to build, but a very large one will
+  still hold that lock for its scan.
+* The snapshot pass itself still takes the shared graph lock, so a writer on the
+  **same graph** can be delayed by that pass. It is a scan plus a memcpy, not an
+  HNSW build.
 * The backfill is not restartable or cancellable. A client disconnect does not
   stop it.
+* Swapping the shadow in deinits the old wrapper while a concurrent `knn` reader
+  may still hold a pointer to it. This hazard is **unchanged** from the previous
+  drop-and-recreate shape (readers and the rebuild both hold the graph lock
+  SHARED, which does not exclude them from each other); closing it needs
+  refcounted index handles, as `fts_storage_adapter` has.
 * There is no progress reporting. `SHOW INDEXES` lists the index as soon as the
   catalog row exists, which is **before** the backfill completes — presence in
   `SHOW INDEXES` is not a statement about the index being populated.
@@ -117,19 +155,43 @@ window, or on a graph that is not taking concurrent writes.
 
 ---
 
-## Incremental maintenance is a known architectural gap
+## Incremental maintenance: partly closed, partly still a gap
 
-There is **no incremental insert** into an advanced index. Every path that
-needs the index to reflect a new value performs a full **rebuild**:
-`dropAdvancedIndex` → `createAdvanced…Index` → full scan
-(`populateAdvancedIndex`).
+**Fixed (geode#875 RC-1 / RC-1b):** an ordinary node write into a **vector**-
+indexed `(label, property)` is now an **incremental HNSW insert** of the one
+changed node (`IndexManager.tryIncrementalInsertForProperty`, reached from the
+single write chokepoint `execution/property_mutation.zig`
+`setNodePropertyFromValue`), not a full drop-and-rescan.
+
+RC-1b is the part that matters operationally: the deferral guard
+(`advancedIndexRebuildIsDeferred`) used to short-circuit on the mere **presence**
+of the transport's per-statement `pending_index_rebuilds` map — which the QUIC
+and gRPC handlers install for *every* statement — so the incremental path was
+unreachable on any real connection and every single write queued a full `O(N)`
+rebuild (measured 100 s for ONE write at 3 000 x 256 dims, versus 1 s for the
+same write on an unindexed label). The guard now defers only when the map
+actually holds a rebuild for an index covering *this* `(label, property)`.
+
+**Still a full rebuild, by design or by gap:**
+
+* An **overwrite** of an already-indexed id. HNSW has no un-insert, so a second
+  insert would leave a stale duplicate; the write falls back to the honest full
+  rebuild. Sustained *re-embedding* of the same nodes is therefore still
+  quadratic. A first insert for an id — the ingest case — is not.
+* An open **transaction undo log**. The deferred rebuild is the only
+  rollback-safe path, for the same un-insert reason.
+* **Deletes.** There is no removal path; a deleted node's vector stays in the
+  index until something triggers a rebuild.
+* Every **non-vector** advanced index type (spatial, network, interval, jsonb,
+  domain). Those still do `dropAdvancedIndex` → `createAdvanced…Index` → full
+  scan (`populateAdvancedIndex`) per write.
 
 Consequences you will observe:
 
-* Sustained writes to an indexed `(label, property)` are quadratic.
 * A `knn` query issued while a rebuild is in flight contends with the rebuild's
-  per-vector write locks on the HNSW structure; long rebuilds can starve
-  readers for the duration.
+  write locks on the HNSW structure; long rebuilds can starve readers for the
+  duration. (A *backfill* no longer does this to unrelated writers — see the
+  shadow-build section above.)
 * `vector_knn` / `knn` fall back to a brute-force scan (`scanVectorKnn`) when no
   runtime index is registered for the property. Results stay correct, so a
   missing index is silent — measure, don't assume.
@@ -139,12 +201,13 @@ Consequences you will observe:
   rebuild. (The vector *dimension guard* is re-armed on catalog reload —
   ENG-3912 — but that is the validator, not the index.)
 
-Real incremental maintenance (insert/update/delete against the live HNSW
-structure, plus a consistent view for readers during a backfill) is a design
-change, not a patch. It is tracked as follow-up design work alongside
-ENG-3914 / ENG-3915 and is deliberately **not** attempted piecemeal — a partial
-implementation that leaves the index inconsistent with the store is worse than
-the honest full rebuild.
+Insert is closed (geode#875 RC-1/RC-1b) and readers now keep a consistent view
+across a backfill (RC-2b's shadow swap). **Update and delete against the live
+HNSW structure remain open** — they need an un-insert the library does not have,
+so they stay a design change rather than a patch, tracked as follow-up work
+alongside ENG-3914 / ENG-3915 and deliberately **not** attempted piecemeal: a
+partial implementation that leaves the index inconsistent with the store is
+worse than the honest full rebuild.
 
 ---
 

@@ -284,7 +284,10 @@ fn printQueryUsage() void {
         "  --format <fmt>         Output format: json|table|csv|dot|mermaid (default: json)\n" ++
         "  --param <name> <value>       Add query parameter (JSON literal)\n" ++
         "  --page-size <n>        Page size for results (default: 128)\n" ++
-        "  --timeout <secs>       Connection timeout in seconds (default: 30)\n" ++
+        "  --timeout <secs>       Client-side no-progress timeout in seconds (default: 30).\n" ++
+        "                         On expiry the CLI exits 4 and the statement may still be\n" ++
+        "                         executing server-side — raise this for long-running DDL\n" ++
+        "                         such as CREATE INDEX over a large label\n" ++
         "  --retry <count>        Number of retry attempts on failure (default: 0)\n" ++
         "  --read-only            Reject mutating statements with GQLSTATE 42501,\n" ++
         "                         independent of the authenticated user's role\n" ++
@@ -1776,6 +1779,23 @@ fn cmdQuery(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !voi
                 std.process.exit(@intFromEnum(ExitCode.auth_error));
             // GAP-0272: Connection or transport failures — report to stderr
             const stderr_fd = std.Io.File{ .handle = getStderrHandle() catch std.process.exit(1), .flags = .{ .nonblocking = false } };
+            // REQ-CLI-TIMEOUT-EXIT-CODE-001: a CLIENT-SIDE deadline is not a
+            // statement failure. Nothing cancelled the statement server-side,
+            // so it may still be running; folding it into the generic
+            // catch-all below made it indistinguishable from a syntax error, an
+            // auth-less refusal, or a dropped connection. Report it with its
+            // own exit code and a message that says what actually happened.
+            // CANARY: REQ=REQ-CLI-TIMEOUT-EXIT-CODE-001; FEATURE="QueryTimeoutClassification"; ASPECT=ClientTimeoutBranch; STATUS=TESTED; TEST=tests/test_cli_timeout_exit_code.zig; OWNER=cli; UPDATED=2026-09-01
+            if (err == error.Timeout) {
+                var timeout_msg_buf: [192]u8 = undefined;
+                const timeout_msg = std.fmt.bufPrint(
+                    &timeout_msg_buf,
+                    "Error: query timed out after {d} seconds; the statement may still be executing on the server\n",
+                    .{timeout_secs},
+                ) catch "Error: query timed out; the statement may still be executing on the server\n";
+                stderr_fd.writeStreamingAll(std.Io.Threaded.global_single_threaded.io(), timeout_msg) catch {};
+                std.process.exit(@intFromEnum(ExitCode.timeout_error));
+            }
             stderr_fd.writeStreamingAll(std.Io.Threaded.global_single_threaded.io(), "Error: query execution failed\n") catch {};
             std.process.exit(@intFromEnum(ExitCode.general_error));
         };

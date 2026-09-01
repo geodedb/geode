@@ -186,12 +186,26 @@ fn rebuildPendingIndexes(
     if (pending_index_rebuilds.count() == 0) return;
     const manager = index_manager.getGlobalIndexManager() orelse return;
 
-    const rebuild_lock = graph_store.acquireGraphReadLockTagged(graph_name, .misc);
-    defer graph_store.releaseGraphLock(rebuild_lock);
-
-    const store = graph_store.getGlobalStore(allocator);
+    // geode#875 RC-2b / RC-5: identical to the QUIC drain site — snapshot under
+    // the SHARED lock, build the shadow index lock-free, swap, and REPORT the
+    // indexed count instead of swallowing it. See
+    // `quic_connection_handler.rebuildPendingIndexes`.
     var iter = pending_index_rebuilds.keyIterator();
-    while (iter.next()) |k| manager.rebuildAdvancedIndex(store, k.*) catch {};
+    while (iter.next()) |k| {
+        const indexed = manager.rebuildAdvancedVectorIndexNonBlocking(allocator, graph_name, k.*) catch |err| {
+            log.warn("Advanced index backfill failed", &.{
+                Attr.string("index", k.*),
+                Attr.string("graph", graph_name),
+                Attr.string("error", @errorName(err)),
+            });
+            continue;
+        };
+        log.info("Advanced index backfill complete", &.{
+            Attr.string("index", k.*),
+            Attr.string("graph", graph_name),
+            Attr.uint("entities_indexed", indexed),
+        });
+    }
 }
 
 // Issue #453: Use RwLock instead of Mutex to allow concurrent readers

@@ -420,12 +420,30 @@ fn rebuildPendingIndexes(
     if (pending_index_rebuilds.count() == 0) return;
     const manager = index_manager.getGlobalIndexManager() orelse return;
 
-    const rebuild_lock = graph_store.acquireGraphReadLockTagged(graph_name, .misc);
-    defer graph_store.releaseGraphLock(rebuild_lock);
-
-    const store = graph_store.getGlobalStore(allocator);
+    // geode#875 RC-2b: the backfill no longer pins the per-graph SHARED lock
+    // for its whole duration. `rebuildAdvancedVectorIndexNonBlocking` takes it
+    // only for a snapshot pass, builds the shadow index lock-free, and swaps —
+    // so an unrelated EXCLUSIVE writer (which spins until readers drain) is no
+    // longer stalled for the entire build.
+    // geode#875 RC-5: report the indexed count and any failure instead of
+    // `catch {}`-swallowing them — a backfill that indexed ZERO rows used to be
+    // indistinguishable from a healthy one.
     var iter = pending_index_rebuilds.keyIterator();
-    while (iter.next()) |k| manager.rebuildAdvancedIndex(store, k.*) catch {};
+    while (iter.next()) |k| {
+        const indexed = manager.rebuildAdvancedVectorIndexNonBlocking(allocator, graph_name, k.*) catch |err| {
+            log.warn("Advanced index backfill failed", &.{
+                Attr.string("index", k.*),
+                Attr.string("graph", graph_name),
+                Attr.string("error", @errorName(err)),
+            });
+            continue;
+        };
+        log.info("Advanced index backfill complete", &.{
+            Attr.string("index", k.*),
+            Attr.string("graph", graph_name),
+            Attr.uint("entities_indexed", indexed),
+        });
+    }
 }
 
 /// Task 11 (enterprise-ingest-throughput) fast-path dispatcher for the

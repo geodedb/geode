@@ -120,6 +120,20 @@ pub const IndexManager = struct {
     /// GAP-0511: Mutex protecting rebuild operations so they can safely run
     /// outside the graph write lock without racing with concurrent rebuilds.
     rebuild_mutex: std.Io.Mutex = std.Io.Mutex.init,
+    /// geode#875 RC-2b: the set of indexes currently being rebuilt into a
+    /// SHADOW wrapper, each mapped to the entity ids written while its window
+    /// was armed. Mirrors `fts_storage_adapter.rebuilds` exactly: a rebuild
+    /// snapshots the id set under a brief SHARED graph lock and then builds
+    /// with NO lock held, so a write landing mid-build would otherwise be lost
+    /// against the pre-write snapshot. Armed by `beginRebuild`, fed by
+    /// `noteWriteDuringRebuild` (called from the write path via
+    /// `tryIncrementalInsertForProperty`), drained by `endRebuild`.
+    rebuild_windows: std.StringHashMapUnmanaged(std.AutoHashMapUnmanaged(u64, void)) = .{},
+    /// Guards `rebuild_windows` only. LOCK ORDERING: leaf, and strictly BELOW
+    /// `rebuild_mutex` — `tryIncrementalInsertForProperty` takes
+    /// `rebuild_mutex` and then this one; nothing ever takes `rebuild_mutex`
+    /// while holding this.
+    rebuild_window_mutex: std.Io.Mutex = std.Io.Mutex.init,
 
     // GAP-0918: entry in the vector dimension-validation registry.
     pub const VectorDimEntry = struct {
@@ -350,6 +364,14 @@ pub const IndexManager = struct {
             self.allocator.destroy(hnsw_index);
         }
         self.vector_indexes.deinit();
+
+        // geode#875 RC-2b: any rebuild window still armed at shutdown.
+        var rebuild_window_it = self.rebuild_windows.iterator();
+        while (rebuild_window_it.next()) |entry| {
+            entry.value_ptr.deinit(self.allocator);
+            self.allocator.free(entry.key_ptr.*);
+        }
+        self.rebuild_windows.deinit(self.allocator);
 
         // Cleanup advanced type indexes
         var adv_vector_it = self.advanced_vector_indexes.iterator();
@@ -1883,6 +1905,16 @@ pub const IndexManager = struct {
             const meta = entry.value_ptr.*;
             if (!std.mem.eql(u8, meta.label, label) or !std.mem.eql(u8, meta.property, property)) continue;
             if (meta.index_type != .vector_f32) return false;
+            // geode#875 RC-2b: while this index is rebuilding into a SHADOW
+            // wrapper, the live write is QUEUED into the rebuild window rather
+            // than inserted — the visible wrapper is about to be replaced by
+            // one built from a snapshot taken BEFORE this write, so an insert
+            // here would be thrown away at the swap. `endRebuild`'s drain
+            // re-applies the queued ids to the new wrapper.
+            if (self.queueIfRebuilding(meta.name, entity_id)) {
+                handled_any = true;
+                continue;
+            }
             const wrapper = self.advanced_vector_indexes.get(meta.name) orelse return false;
             // OVERWRITE of an already-indexed id: fall back to a full rebuild.
             if (wrapper.contains(entity_id)) return false;
@@ -1892,6 +1924,84 @@ pub const IndexManager = struct {
             handled_any = true;
         }
         return handled_any;
+    }
+
+    // =======================================================================
+    // geode#875 RC-2b: the non-blocking (shadow) rebuild window.
+    //
+    // `rebuildAdvancedIndexCounted` below drops the live index, recreates it
+    // EMPTY and repopulates it with a hydrating scan + one HNSW insert per row.
+    // Its transport call sites used to hold the per-graph rwlock SHARED across
+    // the whole thing, and `StorageAdapter.acquireGraphWriteLock` spins until
+    // readers drain — so every unrelated writer in the database stalled for the
+    // full build (measured ~90 s at 4 000 x 256 dims).
+    //
+    // `rebuildAdvancedVectorIndexNonBlocking` replaces that for vector indexes:
+    // it takes the SHARED lock only long enough to COPY the (id, vector) pairs
+    // out of the store, builds a shadow wrapper with NO graph lock held, and
+    // swaps it in under `rebuild_mutex`. This window API is what keeps a write
+    // landing mid-build from being lost against the pre-write snapshot; it
+    // mirrors `fts_storage_adapter.zig`'s rebuild window one-for-one.
+    // =======================================================================
+
+    /// Arm the rebuild window for `index_name`. Returns
+    /// `error.RebuildInProgress` when a rebuild of the SAME index is already in
+    /// flight, so two builds cannot race for the same swap slot.
+    // CANARY: REQ=REQ-GEODE-875-NONBLOCKING-BACKFILL; FEATURE="VectorIndex"; ASPECT=RebuildWindowApi; STATUS=TESTED; TEST=tests/test_geode875_nonblocking_backfill.zig; OWNER=index; UPDATED=2026-09-01
+    pub fn beginRebuild(self: *IndexManager, index_name: []const u8) !void {
+        self.rebuild_window_mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
+        defer self.rebuild_window_mutex.unlock(std.Io.Threaded.global_single_threaded.io());
+        if (self.rebuild_windows.contains(index_name)) return error.RebuildInProgress;
+        const name_copy = try self.allocator.dupe(u8, index_name);
+        errdefer self.allocator.free(name_copy);
+        try self.rebuild_windows.put(self.allocator, name_copy, .{});
+    }
+
+    /// Queue `entity_id` into `index_name`'s rebuild window when that window is
+    /// armed, and report whether it was captured (deduped — noting the same id
+    /// twice drains once). A `true` return means the caller MUST NOT perform
+    /// the live index write: the id is safely captured and `endRebuild`'s drain
+    /// re-applies it to the freshly swapped-in wrapper. `false` is the ordinary
+    /// path (no rebuild in flight, caller proceeds as usual) and is also what an
+    /// OOM queue-insert returns, so a failed capture falls through to the live
+    /// write instead of silently dropping the row.
+    // CANARY: REQ=REQ-GEODE-875-NONBLOCKING-BACKFILL; FEATURE="VectorIndex"; ASPECT=ConcurrentWriteQueued; STATUS=TESTED; TEST=tests/test_geode875_nonblocking_backfill.zig; OWNER=index; UPDATED=2026-09-01
+    pub fn noteWriteDuringRebuild(self: *IndexManager, index_name: []const u8, entity_id: u64) bool {
+        return self.queueIfRebuilding(index_name, entity_id);
+    }
+
+    fn queueIfRebuilding(self: *IndexManager, index_name: []const u8, entity_id: u64) bool {
+        self.rebuild_window_mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
+        defer self.rebuild_window_mutex.unlock(std.Io.Threaded.global_single_threaded.io());
+        const pending = self.rebuild_windows.getPtr(index_name) orelse return false;
+        pending.put(self.allocator, entity_id, {}) catch return false;
+        return true;
+    }
+
+    /// True when `index_name` currently has an armed rebuild window.
+    pub fn isRebuilding(self: *IndexManager, index_name: []const u8) bool {
+        self.rebuild_window_mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
+        defer self.rebuild_window_mutex.unlock(std.Io.Threaded.global_single_threaded.io());
+        return self.rebuild_windows.contains(index_name);
+    }
+
+    /// Atomically disarm `index_name`'s rebuild window and return the entity
+    /// ids queued while it was armed, as an `allocator`-owned slice (caller
+    /// frees). A name that was never armed returns an empty slice.
+    // CANARY: REQ=REQ-GEODE-875-NONBLOCKING-BACKFILL; FEATURE="VectorIndex"; ASPECT=RebuildWindowApi; STATUS=TESTED; TEST=tests/test_geode875_nonblocking_backfill.zig; OWNER=index; UPDATED=2026-09-01
+    pub fn endRebuild(self: *IndexManager, index_name: []const u8, allocator: std.mem.Allocator) ![]u64 {
+        self.rebuild_window_mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
+        defer self.rebuild_window_mutex.unlock(std.Io.Threaded.global_single_threaded.io());
+        const kv = self.rebuild_windows.fetchRemove(index_name) orelse return &[_]u64{};
+        var pending = kv.value;
+        defer pending.deinit(self.allocator);
+        self.allocator.free(kv.key);
+
+        const out = try allocator.alloc(u64, pending.count());
+        var it = pending.keyIterator();
+        var i: usize = 0;
+        while (it.next()) |k| : (i += 1) out[i] = k.*;
+        return out;
     }
 
     /// GAP-0511: Rebuild an advanced index. Acquires rebuild_mutex internally
@@ -1965,6 +2075,218 @@ pub const IndexManager = struct {
         const indexed = try self.populateAdvancedIndex(store, self.advanced_property_indexes.get(index_name_copy).?);
         self.statistics.rebuild_count += 1;
         return indexed;
+    }
+
+    /// geode#875 RC-2b: rebuild `index_name` WITHOUT pinning the per-graph
+    /// SHARED lock across the HNSW build.
+    ///
+    /// `rebuildAdvancedIndexCounted` above drops the live index, recreates it
+    /// EMPTY, and repopulates it with a hydrating scan plus one HNSW insert per
+    /// row. Its transport call sites used to hold the graph rwlock SHARED for
+    /// that whole span, and `StorageAdapter.acquireGraphWriteLock` spins until
+    /// readers drain — so EVERY unrelated writer stalled for the full build
+    /// (~90 s at 4 000 x 256 dims), and readers saw an EMPTY index throughout.
+    ///
+    /// This variant instead:
+    ///   1. arms the rebuild window (a concurrent rebuild of the same index is
+    ///      refused rather than racing for the same swap slot),
+    ///   2. takes the SHARED lock only long enough to COPY out every
+    ///      (entity id, vector) pair — a hydrating scan plus an N x dim memcpy,
+    ///      trivial next to the graph build — and RELEASES it,
+    ///   3. builds a SHADOW `VectorIndexWrapper` from the copies with NO graph
+    ///      lock held (`batchInsert` takes the HNSW write lock once),
+    ///   4. swaps the shadow in under `rebuild_mutex` — readers keep seeing the
+    ///      OLD, fully populated index right up to the swap — and
+    ///   5. disarms the window and re-applies the ids written while it was
+    ///      armed, skipping any the shadow already carries (HNSW has no remove,
+    ///      so a double insert would leave a stale duplicate).
+    ///
+    /// Only vector indexes take this path; the other advanced index types are
+    /// cheap to build and keep the in-place rebuild under the caller's lock.
+    /// Returns the number of entities the shadow build indexed.
+    // CANARY: REQ=REQ-GEODE-875-NONBLOCKING-BACKFILL; FEATURE="VectorIndex"; ASPECT=IndexQueryableDuringRebuild; STATUS=TESTED; TEST=tests/test_geode875_nonblocking_backfill.zig; OWNER=index; UPDATED=2026-09-01
+    pub fn rebuildAdvancedVectorIndexNonBlocking(
+        self: *IndexManager,
+        allocator: std.mem.Allocator,
+        graph_name: []const u8,
+        index_name: []const u8,
+    ) !usize {
+        const io = std.Io.Threaded.global_single_threaded.io();
+
+        // Snapshot the metadata we need under `rebuild_mutex` — a concurrent
+        // DROP INDEX frees the manager-owned label/property strings, so the
+        // lock-free phases below run against copies.
+        var label_copy: ?[]u8 = null;
+        var property_copy: ?[]u8 = null;
+        var dimension: u16 = 0;
+        var metric: advanced_types.VectorIndexWrapper.DistanceMetric = .l2;
+        var is_vector = false;
+        var exists = false;
+        {
+            self.rebuild_mutex.lockUncancelable(io);
+            defer self.rebuild_mutex.unlock(io);
+            if (self.advanced_property_indexes.get(index_name)) |meta| {
+                exists = true;
+                if (meta.index_type == .vector_f32) {
+                    is_vector = true;
+                    label_copy = try self.allocator.dupe(u8, meta.label);
+                    errdefer self.allocator.free(label_copy.?);
+                    property_copy = try self.allocator.dupe(u8, meta.property);
+                    if (self.advanced_vector_indexes.get(index_name)) |w| {
+                        dimension = w.dimension;
+                        metric = w.metric;
+                    }
+                }
+            }
+        }
+        defer {
+            if (label_copy) |l| self.allocator.free(l);
+            if (property_copy) |p| self.allocator.free(p);
+        }
+        if (!exists) return 0;
+
+        if (!is_vector) {
+            const lock = graph_store.acquireGraphReadLockTagged(graph_name, .misc);
+            defer graph_store.releaseGraphLock(lock);
+            return self.rebuildAdvancedIndexCounted(graph_store.getGlobalStore(allocator), index_name);
+        }
+
+        const label = label_copy.?;
+        const property = property_copy.?;
+
+        try self.beginRebuild(index_name);
+        var window_armed = true;
+        defer if (window_armed) {
+            const leftover = self.endRebuild(index_name, allocator) catch &[_]u64{};
+            allocator.free(leftover);
+        };
+
+        // --- 1. Snapshot under the SHARED lock: ids plus a COPY of every
+        //        indexed vector, into one flat owned buffer.
+        var ids: std.ArrayListUnmanaged(u64) = .empty;
+        defer ids.deinit(allocator);
+        var flat: std.ArrayListUnmanaged(f32) = .empty;
+        defer flat.deinit(allocator);
+        {
+            const lock = graph_store.acquireGraphReadLockTagged(graph_name, .misc);
+            defer graph_store.releaseGraphLock(lock);
+            const store = graph_store.getGlobalStore(allocator);
+
+            // geode#875 RC-2 (bounded-cache-safe): enumerate the COMPLETE
+            // persisted id set and hydrate each body — the resident map alone
+            // misses evicted / cold entities (it is EMPTY after a restart).
+            const node_ids = try store.getAllNodes(allocator);
+            defer allocator.free(node_ids);
+            for (node_ids) |nid| {
+                const node = store.getNodePtrHydrated(nid) orelse continue;
+                if (!nodeHasLabel(node.labels, label)) continue;
+                const prop = node.properties.get(property) orelse continue;
+                try self.snapshotVectorRow(allocator, prop, node.id, &dimension, &ids, &flat);
+            }
+
+            const edge_ids = try store.allEdgeIds(allocator);
+            defer allocator.free(edge_ids);
+            for (edge_ids) |eid| {
+                const edge = store.getEdgePtrHydrated(eid) orelse continue;
+                if (!std.mem.eql(u8, edge.label, label)) continue;
+                const prop = edge.properties.get(property) orelse continue;
+                try self.snapshotVectorRow(allocator, prop, edge.id, &dimension, &ids, &flat);
+            }
+        }
+        // --- The graph lock is RELEASED. Everything below is lock-free, so an
+        //     EXCLUSIVE writer can acquire immediately instead of spinning for
+        //     the whole build.
+
+        // --- 2/3. Build the shadow wrapper. The live wrapper is untouched, so
+        //     readers keep seeing the fully populated old index.
+        const shadow = try self.allocator.create(advanced_types.VectorIndexWrapper);
+        errdefer self.allocator.destroy(shadow);
+        shadow.* = try advanced_types.VectorIndexWrapper.init(self.allocator, dimension, metric);
+        var shadow_owned = true;
+        errdefer if (shadow_owned) shadow.deinit();
+
+        if (ids.items.len > 0 and dimension > 0) {
+            const rows = try allocator.alloc([]const f32, ids.items.len);
+            defer allocator.free(rows);
+            for (rows, 0..) |*row, i| row.* = flat.items[i * dimension ..][0..dimension];
+            try shadow.batchInsert(ids.items, rows);
+        }
+        const indexed = ids.items.len;
+
+        // --- 4. Swap under `rebuild_mutex`.
+        {
+            self.rebuild_mutex.lockUncancelable(io);
+            defer self.rebuild_mutex.unlock(io);
+            if (self.advanced_vector_indexes.getPtr(index_name)) |slot| {
+                const old = slot.*;
+                slot.* = shadow;
+                shadow_owned = false;
+                old.deinit();
+                self.allocator.destroy(old);
+                self.statistics.total_entries += indexed;
+                self.statistics.rebuild_count += 1;
+            } else {
+                // DROP INDEX won the race while we were building: discard the
+                // shadow rather than resurrecting a dropped index.
+                shadow.deinit();
+                shadow_owned = false;
+                self.allocator.destroy(shadow);
+                return 0;
+            }
+        }
+
+        // --- 5. Disarm the window and re-apply the writes it captured. The
+        //     SHARED lock is retaken per id (each hold covers one property read
+        //     plus one HNSW insert) — never re-held across the whole drain.
+        const drained = try self.endRebuild(index_name, allocator);
+        window_armed = false;
+        defer allocator.free(drained);
+        for (drained) |entity_id| {
+            const lock = graph_store.acquireGraphReadLockTagged(graph_name, .misc);
+            defer graph_store.releaseGraphLock(lock);
+            const store = graph_store.getGlobalStore(allocator);
+            const prop = blk: {
+                if (store.getNodePtrHydrated(entity_id)) |node| break :blk node.properties.get(property);
+                if (store.getEdgePtrHydrated(entity_id)) |edge| break :blk edge.properties.get(property);
+                break :blk null;
+            } orelse continue; // deleted inside the window — nothing to index
+            // Skips ids the shadow build already carries (`wrapper.contains`),
+            // so a write captured by the window AND visible to the snapshot is
+            // never double-inserted.
+            _ = self.tryIncrementalInsertForProperty(label, property, entity_id, prop);
+        }
+
+        return indexed;
+    }
+
+    /// Copy one entity's indexed vector into the flat snapshot buffer. The
+    /// FIRST vector seen establishes the build dimension when the index has
+    /// none yet (a deferred-init wrapper); a row of a different dimension is
+    /// skipped rather than aborting the whole rebuild.
+    fn snapshotVectorRow(
+        self: *IndexManager,
+        allocator: std.mem.Allocator,
+        prop: graph_store.PropertyValue,
+        entity_id: u64,
+        dimension: *u16,
+        ids: *std.ArrayListUnmanaged(u64),
+        flat: *std.ArrayListUnmanaged(f32),
+    ) !void {
+        const vec = vectorFromPropertyValue(self.allocator, prop) orelse return;
+        defer if (vec.owned) |data| self.allocator.free(data);
+        if (dimension.* == 0) dimension.* = vec.value.dim;
+        if (vec.value.dim != dimension.*) {
+            // error-policy: B — a dimension-mismatched row cannot enter an HNSW
+            // graph of a different width; skip it and keep the rest of the
+            // index buildable (the GAP-0918 write guard is what prevents this).
+            std.log.scoped(.index_manager).warn(
+                "skipping entity {d} in vector index rebuild: dim {d} != index dim {d}",
+                .{ entity_id, vec.value.dim, dimension.* },
+            );
+            return;
+        }
+        try ids.append(allocator, entity_id);
+        try flat.appendSlice(allocator, vec.value.data[0..vec.value.dim]);
     }
 
     pub fn dropAdvancedIndex(

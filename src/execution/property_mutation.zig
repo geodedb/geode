@@ -191,7 +191,7 @@ fn maintainAdvancedIndexesForNodeWrite(
     const manager = index_manager.getGlobalIndexManager() orelse return;
     if (!manager.hasAdvancedIndexForProperty(label, property)) return;
 
-    if (advancedIndexRebuildIsDeferred(store)) {
+    if (advancedIndexRebuildIsDeferred(store, manager, label, property)) {
         rebuildAdvancedIndexesForProperty(store, label, property);
         return;
     }
@@ -201,16 +201,44 @@ fn maintainAdvancedIndexesForNodeWrite(
     }
 }
 
-/// True when a node property write's advanced-index maintenance would be
-/// DEFERRED to a batched full rebuild (an open txn undo log, or a per-statement
-/// pending-rebuild set on the active execution context). Mirrors the branch
-/// selection in `queueAdvancedIndexRebuild`.
-fn advancedIndexRebuildIsDeferred(store: *graph_store.GraphStore) bool {
+/// True when a node property write's advanced-index maintenance must be
+/// DEFERRED to a batched full rebuild instead of taking the incremental insert.
+/// Mirrors the branch selection in `queueAdvancedIndexRebuild`. Two cases:
+///
+///   * an open txn undo log — the deferred rebuild is the only rollback-safe
+///     path, because HNSW cannot un-insert on rollback; and
+///   * this statement ALREADY queued a full rebuild of an index covering
+///     (label, property) — i.e. a CREATE INDEX whose backfill is deliberately
+///     deferred out of the exclusive write lock. Racing an incremental insert
+///     against that pending build would either be discarded by it or duplicate
+///     a row it also inserts.
+///
+/// geode#875 RC-1b: this used to short-circuit on the mere PRESENCE of
+/// `ctx.pending_index_rebuilds`, which the QUIC and gRPC handlers install for
+/// EVERY statement — so `tryIncrementalInsertForProperty` was unreachable on
+/// any real connection and every single write to an indexed vector property
+/// queued a full O(N) drop+rebuild (measured 100 s for ONE write at
+/// 3 000 x 256 dims). The queue being INSTALLED is not the signal; the queue
+/// holding a rebuild for THIS property is.
+fn advancedIndexRebuildIsDeferred(
+    store: *graph_store.GraphStore,
+    manager: *index_manager.IndexManager,
+    label: []const u8,
+    property: []const u8,
+) bool {
     const txn_undo_log = @import("../txn_undo_log.zig");
     if (txn_undo_log.getGlobalUndoLog(store.allocator).active) return true;
     const execution = @import("../execution.zig");
     if (execution.getActiveContext()) |ctx| {
-        if (ctx.pending_index_rebuilds != null) return true;
+        if (ctx.pending_index_rebuilds) |rebuilds| {
+            if (rebuilds.count() == 0) return false;
+            var iter = manager.advanced_property_indexes.iterator();
+            while (iter.next()) |entry| {
+                const meta = entry.value_ptr.*;
+                if (!std.mem.eql(u8, meta.label, label) or !std.mem.eql(u8, meta.property, property)) continue;
+                if (rebuilds.contains(meta.name)) return true;
+            }
+        }
     }
     return false;
 }

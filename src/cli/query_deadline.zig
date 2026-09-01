@@ -43,9 +43,16 @@ const std = @import("std");
 const STDERR_FD: std.Io.File.Handle = 2;
 
 /// Process-exit code the watchdog uses when it trips.  Matches
-/// `cli_dispatcher.ExitCode.general_error` (=1).  Duplicated here as a bare
+/// `cli_dispatcher.ExitCode.timeout_error` (=4).  Duplicated here as a bare
 /// constant to avoid a cross-module import.
-const EXIT_GENERAL_ERROR: u8 = 1;
+///
+/// REQ-CLI-TIMEOUT-EXIT-CODE-001: this used to be `general_error` (=1), the
+/// same code a syntax error or a dropped connection produces — so neither of
+/// the two client-side trip-wires (this watchdog and `cmdQuery`'s
+/// `error.Timeout` branch) could be told apart from a hard failure.  Both now
+/// exit 4, so whichever fires first is consistent.
+// CANARY: REQ=REQ-CLI-TIMEOUT-EXIT-CODE-001; FEATURE="QueryTimeoutClassification"; ASPECT=WatchdogExitCode; STATUS=TESTED; TEST=tests/test_cli_timeout_exit_code.zig; OWNER=cli; UPDATED=2026-09-01
+const EXIT_TIMEOUT_ERROR: u8 = 4;
 
 pub const QueryDeadlineState = struct {
     last_progress_ns: std.atomic.Value(i64),
@@ -187,7 +194,9 @@ pub fn deadlineWatchdog(timeout_secs: u32, state: *QueryDeadlineState) void {
         var buf: [20]u8 = undefined;
         const timeout_str = std.fmt.bufPrint(&buf, "{d}", .{timeout_secs}) catch "?";
         stderr.writeStreamingAll(io_wd, timeout_str) catch {};
-        stderr.writeStreamingAll(io_wd, " seconds\n") catch {};
-        std.process.exit(EXIT_GENERAL_ERROR);
+        // The statement was never cancelled server-side — say so, so an
+        // operator does not assume the work was rolled back.
+        stderr.writeStreamingAll(io_wd, " seconds; the statement may still be executing on the server\n") catch {};
+        std.process.exit(EXIT_TIMEOUT_ERROR);
     }
 }

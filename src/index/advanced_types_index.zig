@@ -527,6 +527,23 @@ pub const VectorIndexWrapper = struct {
         try self.ids.put(self.allocator, node_id, {});
     }
 
+    /// geode#875 RC-2b: bulk-load `ids`/`vectors` with the HNSW write lock
+    /// taken ONCE for the whole batch (per-vector `insert` takes and drops it
+    /// per row). Used by the SHADOW build in `IndexManager`'s non-blocking
+    /// rebuild, which runs with NO graph lock held, so the batch cost is paid
+    /// entirely off the critical path.
+    // CANARY: REQ=REQ-GEODE-875-NONBLOCKING-BACKFILL; FEATURE="VectorIndex"; ASPECT=ShadowBatchBuild; STATUS=TESTED; TEST=tests/test_geode875_nonblocking_backfill.zig; OWNER=index; UPDATED=2026-09-01
+    pub fn batchInsert(self: *VectorIndexWrapper, ids: []const u64, vectors: []const []const f32) !void {
+        if (ids.len != vectors.len) return error.DimensionMismatch;
+        if (ids.len == 0) return;
+        const dim: u16 = @intCast(vectors[0].len);
+        try self.ensureInitialized(dim);
+        if (self.dimension != dim) return error.DimensionMismatch;
+        try self.ids.ensureUnusedCapacity(self.allocator, @intCast(ids.len));
+        try self.hnsw_index.?.batchInsert(ids, vectors);
+        for (ids) |id| self.ids.putAssumeCapacity(id, {});
+    }
+
     pub fn search(self: *VectorIndexWrapper, query: vector.VectorF32, k: u32, allocator: std.mem.Allocator) ![]VectorSearchResult {
         return self.searchWithMetric(query, k, self.metric, allocator);
     }
