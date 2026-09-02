@@ -708,6 +708,21 @@ pub const MaterializedViewManager = struct {
                             });
                         }
 
+                        // REQ-EXEC-MATERIALIZE-OWNERSHIP-002: this refresh thread
+                        // installs NO per-query arena, so planned-read row
+                        // materialization would dupe every node/edge interior
+                        // straight onto `self.allocator` and leak it for the life
+                        // of the process (OwnedGraphEntities.deinit frees only the
+                        // struct). Push a scoped arena as the scratch allocator so
+                        // the interior drops with it; the rows are copied into
+                        // `result_rows` (scalar values on `self.allocator`) before
+                        // the arena is torn down below.
+                        const mv_query_arena = @import("../server/query_arena.zig");
+                        var interior_arena = std.heap.ArenaAllocator.init(self.allocator);
+                        defer interior_arena.deinit();
+                        const prev_scratch = mv_query_arena.pushScratchAllocator(interior_arena.allocator());
+                        defer mv_query_arena.popScratchAllocator(prev_scratch);
+
                         const exec_result = lib.executeProgramWithContext(
                             self.allocator,
                             pr.program,
@@ -727,7 +742,12 @@ pub const MaterializedViewManager = struct {
                             for (row.cols, 0..) |col_val, idx| {
                                 if (idx < result_schema.items.len) {
                                     const col_name = result_schema.items[idx].name;
-                                    const pv = bindingValueToPropertyValue(col_val);
+                                    var pv = bindingValueToPropertyValue(col_val);
+                                    // A string col value may alias the scratch
+                                    // arena (installed above) via a projected
+                                    // property; dupe onto `self.allocator` so the
+                                    // returned binding survives the arena teardown.
+                                    if (pv == .String) pv = .{ .String = try self.allocator.dupe(u8, pv.String) };
                                     try binding.vars.put(col_name, .{ .Value = pv });
                                 }
                             }

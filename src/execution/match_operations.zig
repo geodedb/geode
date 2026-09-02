@@ -1825,10 +1825,20 @@ pub fn pointWriteFastPath(
         rows[0] = row;
     } else {
         columns = try generateUniqueColumnNames(allocator, items);
-        // Mirror the legacy env exactly (heap arrays, owned): eval.withBinding
-        // may take ownership during pattern-comprehension evaluation.
+        // OWNERSHIP (REQ-EVAL-ENV-OWNERSHIP-002): these arrays belong to this
+        // frame and are released unconditionally by the `defer` below. The env
+        // is deliberately NOT `owned` — see the reference note at the legacy
+        // match loop (~:11046): `Env.owned` used to make `withBinding` free
+        // `self.names`/`self.values`, but `env` is passed BY VALUE into
+        // `evalExpr`, so a list comprehension in RETURN would free (and, on the
+        // next element, double-free + read) this frame's arrays. With frame
+        // ownership the release is unconditional: no leak, no double-free.
         const env_names = try allocator.alloc([]const u8, 1);
         const env_values = try allocator.alloc(Value, 1);
+        defer {
+            allocator.free(env_names);
+            allocator.free(env_values);
+        }
         env_names[0] = match_var;
         env_values[0] = Value{ .Node = node_ptr };
         const env = Env{
@@ -1837,7 +1847,7 @@ pub fn pointWriteFastPath(
             .param_names = param_names,
             .param_values = param_values,
             .allocator = allocator,
-            .owned = true,
+            .owned = false, // released by this frame's `defer`
         };
         const row = try allocator.alloc(Value, items.len);
         for (items, 0..) |item, i| {
@@ -3442,9 +3452,17 @@ pub fn handleShortestPathAssignment(
                     // Create result with path bound to path_variable
                     const columns = try generateUniqueColumnNames(allocator, q.ret.items);
 
-                    // Build environment with path variable
+                    // Build environment with path variable.
+                    // OWNERSHIP (REQ-EVAL-ENV-OWNERSHIP-003): frame owns these
+                    // arrays; `owned = false` keeps a comprehension in RETURN
+                    // from double-freeing them via `withBinding` (same reasoning
+                    // as pointWriteFastPath above and the legacy loop at ~:11046).
                     var path_env_names = try allocator.alloc([]const u8, param_names.len + 1);
                     var path_env_values = try allocator.alloc(Value, param_values.len + 1);
+                    defer {
+                        allocator.free(path_env_names);
+                        allocator.free(path_env_values);
+                    }
                     for (param_names, 0..) |name, i| {
                         path_env_names[i] = name;
                         path_env_values[i] = param_values[i];
@@ -3456,13 +3474,33 @@ pub fn handleShortestPathAssignment(
                         .names = path_env_names,
                         .values = path_env_values,
                         .allocator = allocator,
-                        .owned = true, // Owns allocated arrays
+                        .owned = false, // released by this frame's `defer`
                     };
 
                     // Evaluate RETURN expressions with path in environment
                     var row = try allocator.alloc(Value, q.ret.items.len);
                     for (q.ret.items, 0..) |item, i| {
                         row[i] = try eval.evalExpr(allocator, item.expr, path_env);
+                    }
+
+                    // OWNERSHIP: `findShortestPath` heap-allocated the node/edge
+                    // slices inside `path_result`. When a RETURN expression
+                    // aliases that Path into the row (e.g. `RETURN p`) the row now
+                    // owns those slices and must not be freed underneath it. When
+                    // nothing aliased it (e.g. `RETURN 1`) nobody downstream will
+                    // ever free it, so release it here rather than leak it.
+                    if (path_result == .Path) {
+                        var escaped = false;
+                        for (row) |val| {
+                            if (val == .Path and val.Path.nodes.ptr == path_result.Path.nodes.ptr) {
+                                escaped = true;
+                                break;
+                            }
+                        }
+                        if (!escaped) {
+                            allocator.free(path_result.Path.nodes);
+                            allocator.free(path_result.Path.edges);
+                        }
                     }
 
                     var rows = try allocator.alloc([]Value, 1);

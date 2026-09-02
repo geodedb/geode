@@ -317,6 +317,43 @@ fn setSessionStore(store: ?*SessionStore) void {
     g_session_store_atomic.store(store, .release);
 }
 
+// ── gRPC shutdown drain (REQ-TRANSPORT-GRPC-SHUTDOWN-001/002) ───────────────
+// gRPC request handlers run on threads the vendored grpc_zig accept loop
+// DETACHES (its accept loop is `while (true)` + `Thread.detach`), so geode
+// cannot join or cancel them. Without a geode-side drain, SIGTERM frees the
+// global store (src/server/main.zig deinit defer) while a detached handler is
+// still reading it — a use-after-free that panics with "incorrect alignment"
+// inside graph_storage_adapter. This gate lets the shutdown path (a) refuse new
+// handlers once shutdown has begun and (b) wait for the in-flight count to reach
+// zero BEFORE the store is torn down. It mirrors the QUIC connection drain.
+var g_grpc_shutting_down: std.atomic.Value(bool) = std.atomic.Value(bool).init(false);
+var g_grpc_inflight: std.atomic.Value(u32) = std.atomic.Value(u32).init(0);
+
+/// Begin gRPC shutdown: new handlers are refused from this instant.
+pub fn requestGrpcShutdown() void {
+    g_grpc_shutting_down.store(true, .release);
+}
+
+/// Number of gRPC handlers currently executing.
+pub fn grpcInflightCount() u32 {
+    return g_grpc_inflight.load(.acquire);
+}
+
+/// Block until no gRPC handler is executing, or until `timeout_ms` elapses.
+/// Returns the residual in-flight count (0 on a clean drain). Bounded so a
+/// long-running or stuck handler cannot hang shutdown forever.
+pub fn waitForGrpcInflightZero(timeout_ms: u64) u32 {
+    const start = compat_milliTimestamp();
+    while (true) {
+        const n = g_grpc_inflight.load(.acquire);
+        if (n == 0) return 0;
+        if (compat_milliTimestamp() - start >= @as(i64, @intCast(timeout_ms))) return n;
+        var req = std.posix.timespec{ .sec = 0, .nsec = 25 * std.time.ns_per_ms };
+        var rem: std.posix.timespec = undefined;
+        _ = std.os.linux.nanosleep(&req, &rem);
+    }
+}
+
 fn initServerState(allocator: std.mem.Allocator, config: GrpcConfig) !*server_state.ServerState {
     const state = try allocator.create(server_state.ServerState);
     state.* = .{ .allocator = allocator };
@@ -779,6 +816,20 @@ fn sendStreamResponse(trans: *GrpcTransport, response: []const u8, is_first: boo
 }
 
 fn handlePacket(request_bytes: []const u8, method: []const u8, trans: *GrpcTransport, allocator: std.mem.Allocator) anyerror!void {
+    // gRPC shutdown drain (REQ-TRANSPORT-GRPC-SHUTDOWN-001/002): register this
+    // handler so the shutdown path can wait for it before freeing the store, and
+    // refuse new work once shutdown has begun so a late request cannot race the
+    // teardown. Increment BEFORE the flag check so a handler admitted just
+    // before the flag flips is always counted by the drain.
+    _ = g_grpc_inflight.fetchAdd(1, .acq_rel);
+    defer _ = g_grpc_inflight.fetchSub(1, .acq_rel);
+    if (g_grpc_shutting_down.load(.acquire)) {
+        // Refuse cleanly instead of touching the (about-to-be-freed) store.
+        const err_resp = try buildPacketError(allocator, "57P01", "Server is shutting down");
+        defer allocator.free(err_resp);
+        return sendUnaryResponse(trans, err_resp);
+    }
+
     log.info("gRPC dispatch", &.{
         Attr.string("method", if (method.len > 0) method else "(empty)"),
         Attr.uint("payload_len", request_bytes.len),
@@ -2314,13 +2365,32 @@ fn handleExecute(request_bytes: []const u8, allocator: std.mem.Allocator) ![]u8 
             var scratch_arena: ?*query_arena.Arena = null;
             var prev_scratch: ?std.mem.Allocator = null;
             var scratch_installed = false;
+            // REQ-EXEC-MATERIALIZE-OWNERSHIP-002: a scratch arena MUST back this
+            // query so materialized row interior drops with it (no row-by-row
+            // leak). If the pooled arena is unavailable, install a per-request
+            // fallback arena rather than silently degrading to the leaking
+            // graph-store global allocator.
+            var fallback_arena: ?std.heap.ArenaAllocator = null;
             if (query_arena.ensureDefaultPool(graph_store.global_allocator())) |pool| {
                 if (pool.acquire()) |a| {
                     scratch_arena = a;
                     prev_scratch = query_arena.pushScratchAllocator(a.allocator());
                     scratch_installed = true;
-                } else |_| {}
-            } else |_| {}
+                } else |err| {
+                    log.warn("gRPC query scratch arena acquire failed; using per-request fallback arena", &.{
+                        Attr.string("error", @errorName(err)),
+                    });
+                }
+            } else |err| {
+                log.warn("gRPC query scratch arena pool init failed; using per-request fallback arena", &.{
+                    Attr.string("error", @errorName(err)),
+                });
+            }
+            if (!scratch_installed) {
+                fallback_arena = std.heap.ArenaAllocator.init(allocator);
+                prev_scratch = query_arena.pushScratchAllocator(fallback_arena.?.allocator());
+                scratch_installed = true;
+            }
             defer {
                 if (!lock_released) {
                     if (graph_lock_handle) |h| {
@@ -2352,6 +2422,8 @@ fn handleExecute(request_bytes: []const u8, allocator: std.mem.Allocator) ![]u8 
                 if (scratch_arena) |a| {
                     if (query_arena.defaultPool()) |pool| pool.release(a);
                 }
+                // Deinit the per-request fallback arena AFTER it is popped.
+                if (fallback_arena) |*fa| fa.deinit();
             }
 
             switch (analysis.kind) {

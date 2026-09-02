@@ -20,6 +20,27 @@ const H2_PING: u8 = 0x6;
 const H2_GOAWAY: u8 = 0x7;
 const H2_WINDOW_UPDATE: u8 = 0x8;
 
+// HTTP/2 SETTINGS identifiers (RFC 7540 §6.5.2).
+const H2_SETTINGS_INITIAL_WINDOW_SIZE: u16 = 0x04;
+const H2_SETTINGS_MAX_FRAME_SIZE: u16 = 0x05;
+
+/// RFC 7540 §6.5.2: the default AND minimum legal SETTINGS_MAX_FRAME_SIZE. A
+/// peer may advertise a larger value but never a smaller one, so splitting an
+/// outbound request into <= this many payload bytes per DATA frame is always
+/// accepted even before the peer's SETTINGS are parsed.
+const h2_default_max_frame_size: usize = 16384;
+
+/// Window we advertise for our receive side so a large streamed response is not
+/// throttled by the 65535-byte default. Paired with per-frame WINDOW_UPDATE
+/// replenishment in `readResponse` for the connection-level (stream 0) window.
+const h2_client_initial_window: u32 = 16 * 1024 * 1024;
+
+/// Peer's SETTINGS_MAX_FRAME_SIZE, learned in `drainInitialSettings` and read by
+/// `sendRequest` to cap outbound DATA-frame fragmentation. Thread-local so each
+/// connection (the CLI query thread, a distributed-coordination worker) keeps
+/// its own negotiated value without a shared-state race.
+threadlocal var tl_peer_max_frame_size: usize = h2_default_max_frame_size;
+
 pub const ProgressHooks = struct {
     on_progress: ?*const fn () void = null,
 };
@@ -75,10 +96,50 @@ pub fn connectPlaintext(
     errdefer stream.close(io);
 
     setSocketTimeouts(stream, timeout_secs);
+    // Reset the negotiated peer frame size for this (thread's) connection; it is
+    // refined below when the peer's SETTINGS arrive.
+    tl_peer_max_frame_size = h2_default_max_frame_size;
     try writeAll(stream, "PRI * HTTP/2.0\r\n\r\nSM\r\n\r\n");
-    try writeFrame(stream, H2_SETTINGS, 0, 0, &.{});
+    // Advertise a large receive window so a big streamed response is not stalled
+    // by the 65535-byte default per-stream window (RFC 7540 §6.9.2). Connection-
+    // level (stream 0) flow control is replenished incrementally in readResponse.
+    var settings_payload: [6]u8 = undefined;
+    writeSetting(&settings_payload, H2_SETTINGS_INITIAL_WINDOW_SIZE, h2_client_initial_window);
+    try writeFrame(stream, H2_SETTINGS, 0, 0, &settings_payload);
     try drainInitialSettings(allocator, stream, hooks);
     return stream;
+}
+
+/// Encode one HTTP/2 SETTINGS entry (2-byte id + 4-byte value, big-endian).
+fn writeSetting(dest: *[6]u8, id: u16, value: u32) void {
+    dest[0] = @intCast((id >> 8) & 0xFF);
+    dest[1] = @intCast(id & 0xFF);
+    dest[2] = @intCast((value >> 24) & 0xFF);
+    dest[3] = @intCast((value >> 16) & 0xFF);
+    dest[4] = @intCast((value >> 8) & 0xFF);
+    dest[5] = @intCast(value & 0xFF);
+}
+
+/// Parse a SETTINGS frame payload and apply the peer's SETTINGS_MAX_FRAME_SIZE
+/// to `tl_peer_max_frame_size`, so `sendRequest` can split an oversized request
+/// into frames the peer will accept. Malformed/partial payloads are ignored
+/// (the default stays in effect).
+fn applyPeerSettings(payload: []const u8) void {
+    var i: usize = 0;
+    while (i + 6 <= payload.len) : (i += 6) {
+        const id = (@as(u16, payload[i]) << 8) | @as(u16, payload[i + 1]);
+        const value = (@as(u32, payload[i + 2]) << 24) |
+            (@as(u32, payload[i + 3]) << 16) |
+            (@as(u32, payload[i + 4]) << 8) |
+            @as(u32, payload[i + 5]);
+        if (id == H2_SETTINGS_MAX_FRAME_SIZE) {
+            // Clamp to the RFC-legal range [16384, 16777215]; never go below the
+            // default (a smaller value would be a peer protocol violation, and a
+            // smaller split gains nothing).
+            const clamped = @max(@as(usize, value), h2_default_max_frame_size);
+            tl_peer_max_frame_size = @min(clamped, @as(usize, 16_777_215));
+        }
+    }
 }
 
 pub fn drainInitialSettings(
@@ -96,6 +157,8 @@ pub fn drainInitialSettings(
         if ((frame.flags & 0x1) != 0) {
             got_settings_ack = true;
         } else {
+            // The peer's own SETTINGS: learn its MAX_FRAME_SIZE, then ACK.
+            applyPeerSettings(frame.payload);
             try writeFrame(stream, H2_SETTINGS, 0x1, 0, &.{});
         }
     }
@@ -108,6 +171,10 @@ pub fn writeFrame(
     stream_id: u31,
     payload: []const u8,
 ) !void {
+    // A single HTTP/2 frame length is a u24; a payload of 16 MiB or more cannot
+    // be expressed. Callers that can produce large payloads (DATA) fragment
+    // before calling here; guard so an out-of-range @intCast can never wrap.
+    if (payload.len > std.math.maxInt(u24)) return error.FrameTooLarge;
     const length: u24 = @intCast(payload.len);
     var header: [9]u8 = undefined;
     header[0] = @intCast((length >> 16) & 0xFF);
@@ -215,14 +282,57 @@ pub fn sendRequest(
     grpc_frame[4] = @intCast(message_len & 0xFF);
     @memcpy(grpc_frame[5..], message);
 
-    try writeFrame(stream, H2_DATA, 0x1, stream_id, grpc_frame);
+    // Split the length-prefixed gRPC message across as many DATA frames as the
+    // peer's SETTINGS_MAX_FRAME_SIZE requires (HTTP/2 default 16384). Emitting it
+    // as one oversized frame drew a spec-correct FRAME_SIZE_ERROR from the server
+    // and looked like a bogus TLS reset to the caller. END_STREAM rides ONLY the
+    // final frame; the gRPC message boundary is the whole reassembled byte run.
+    const chunk_size = @max(tl_peer_max_frame_size, @as(usize, 1));
+    var offset: usize = 0;
+    if (grpc_frame.len == 0) {
+        // Degenerate: still send an empty END_STREAM DATA frame.
+        try writeFrame(stream, H2_DATA, 0x1, stream_id, grpc_frame);
+        return;
+    }
+    while (offset < grpc_frame.len) {
+        const end = @min(offset + chunk_size, grpc_frame.len);
+        const is_last = end == grpc_frame.len;
+        const flags: u8 = if (is_last) 0x1 else 0x0;
+        try writeFrame(stream, H2_DATA, flags, stream_id, grpc_frame[offset..end]);
+        offset = end;
+    }
 }
 
+/// Emit a WINDOW_UPDATE with `increment` credit on `stream_id` (0 = connection).
+/// Best-effort: a write failure here just means the peer may throttle, not that
+/// the response is lost, so callers ignore the error.
+fn sendWindowUpdate(stream: std.Io.net.Stream, stream_id: u31, increment: u32) !void {
+    if (increment == 0) return;
+    var payload: [4]u8 = .{
+        @intCast((increment >> 24) & 0x7F),
+        @intCast((increment >> 16) & 0xFF),
+        @intCast((increment >> 8) & 0xFF),
+        @intCast(increment & 0xFF),
+    };
+    try writeFrame(stream, H2_WINDOW_UPDATE, 0, stream_id, &payload);
+}
+
+/// Read ONE complete gRPC message off the HTTP/2 stream, reassembling it from
+/// however many DATA frames the peer fragmented it into (a reply larger than its
+/// SETTINGS_MAX_FRAME_SIZE MUST span multiple frames). Returns the message
+/// payload WITHOUT its 5-byte gRPC length prefix, or null at end of stream.
+///
+/// The peer sends each gRPC message as its own DATA-frame run (it never packs
+/// two messages into one frame), so a run of DATA frames accumulates to exactly
+/// one message with no trailing bytes to carry over between calls.
 pub fn readResponse(
     allocator: std.mem.Allocator,
     stream: std.Io.net.Stream,
     hooks: ProgressHooks,
 ) !?[]u8 {
+    var msg_buf: std.ArrayList(u8) = .empty;
+    defer msg_buf.deinit(allocator);
+
     while (true) {
         const frame = readFrame(allocator, stream, hooks) catch |err| {
             if (err == error.ConnectionClosed) return null;
@@ -233,35 +343,48 @@ pub fn readResponse(
         const payload = frame.payload;
 
         if (frame_type == H2_DATA) {
-            if (payload.len >= 5) {
-                const msg_len = (@as(u32, payload[1]) << 24) |
-                    (@as(u32, payload[2]) << 16) |
-                    (@as(u32, payload[3]) << 8) |
-                    @as(u32, payload[4]);
-                if (payload.len >= 5 + msg_len) {
-                    const result = try allocator.alloc(u8, msg_len);
-                    @memcpy(result, payload[5 .. 5 + msg_len]);
+            if (payload.len > 0) {
+                // Replenish flow-control credit for the bytes just received so a
+                // large streamed response is not stalled by the connection-level
+                // (stream 0) window default of 65535.
+                sendWindowUpdate(stream, 0, @intCast(payload.len)) catch {};
+                sendWindowUpdate(stream, frame.stream_id, @intCast(payload.len)) catch {};
+                msg_buf.appendSlice(allocator, payload) catch {
                     allocator.free(payload);
+                    return error.OutOfMemory;
+                };
+            }
+            const end_stream = (flags & 0x1) != 0;
+            allocator.free(payload);
+
+            if (msg_buf.items.len >= 5) {
+                const msg_len: usize = (@as(usize, msg_buf.items[1]) << 24) |
+                    (@as(usize, msg_buf.items[2]) << 16) |
+                    (@as(usize, msg_buf.items[3]) << 8) |
+                    @as(usize, msg_buf.items[4]);
+                if (msg_buf.items.len >= 5 + msg_len) {
+                    const result = try allocator.alloc(u8, msg_len);
+                    @memcpy(result, msg_buf.items[5 .. 5 + msg_len]);
                     return result;
                 }
             }
-            if (payload.len == 0) {
-                allocator.free(payload);
-                if ((flags & 0x1) != 0) return null;
-                continue;
-            }
-            return payload;
+            // Message not complete yet; keep accumulating unless the stream ends.
+            if (end_stream) return null;
+            continue;
         }
 
         if (frame_type == H2_HEADERS) {
             const end_stream = (flags & 0x1) != 0;
             allocator.free(payload);
+            // Trailers (END_STREAM HEADERS) close the stream. Any partially
+            // accumulated message was truncated — surface end of stream.
             if (end_stream) return null;
             continue;
         }
 
         if (frame_type == H2_SETTINGS) {
             if ((flags & 0x1) == 0) {
+                applyPeerSettings(payload);
                 try writeFrame(stream, H2_SETTINGS, 0x1, 0, &.{});
             }
             allocator.free(payload);

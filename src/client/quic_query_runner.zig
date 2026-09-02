@@ -206,11 +206,13 @@ pub fn consumeQueryWithTransport(
     var schema_received = false;
     var saw_inline_page = false;
     var inline_final = false;
+    var received_any_event = false;
 
     while (!schema_received) {
         var arena = std.heap.ArenaAllocator.init(allocator);
         defer arena.deinit();
         const event = try transport.nextEvent(arena.allocator(), opts.timeout_secs) orelse break;
+        received_any_event = true;
         // Bug 731-4b: a status-only ExecutionResponse (status set, no payload)
         // is the server's TERMINAL acknowledgement for a statement that
         // produces no result set — `ALTER USER ... SET PASSWORD` answers this
@@ -232,6 +234,17 @@ pub fn consumeQueryWithTransport(
         if (summary.stop) return;
         if (status_only_ack) return;
     }
+
+    // REQ-TRANSPORT-GRPC-SHUTDOWN-002: if the loop exited because `nextEvent`
+    // returned null (`schema_received` still false) AND the server delivered
+    // NOTHING at all — no schema, page, error payload, status-only ack, or even
+    // a metrics/heartbeat frame — the stream was closed prematurely, e.g. the
+    // server was interrupted mid-execution and its shutdown drain timed out.
+    // Surface that as a failure instead of fabricating an empty success a caller
+    // cannot distinguish from a real no-match. (Legitimate terminal outcomes all
+    // return from inside the loop above, so this only fires on an abandoned
+    // request.)
+    if (!schema_received and !received_any_event) return error.IncompleteResponse;
 
     // Read ALL remaining inline pages.  The server sends all result pages
     // as EXECUTE responses (no PULL round-trip needed).  This avoids the

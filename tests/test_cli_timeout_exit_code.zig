@@ -567,40 +567,6 @@ fn writeAllFd(fd: std.Io.File.Handle, bytes: []const u8) bool {
     return true;
 }
 
-/// HTTP/2 SETTINGS_MAX_FRAME_SIZE default. geode's gRPC listener advertises the
-/// default and RESETS the connection on anything larger, while the CLI's client
-/// (`grpc_query_transport.sendRequest`) emits the whole request as ONE DATA
-/// frame with no regard for the limit — so a >16 KiB program dies with
-/// `ConnectionResetByPeer` before it can ever time out. Splitting it here is a
-/// pure transport-layer detail (multi-frame DATA is ordinary HTTP/2 and the
-/// server reassembles it); it changes no byte of the gRPC message.
-const max_h2_frame: usize = 16 * 1024;
-
-/// Forward one client frame upstream, splitting an oversized DATA frame into
-/// legal-size DATA frames. END_STREAM is carried on the LAST fragment only.
-fn forwardFrame(ufd: std.Io.File.Handle, header: [9]u8, payload: []const u8) bool {
-    if (header[3] != H2_DATA or payload.len <= max_h2_frame) {
-        if (!writeAllFd(ufd, &header)) return false;
-        if (payload.len > 0 and !writeAllFd(ufd, payload)) return false;
-        return true;
-    }
-    var off: usize = 0;
-    while (off < payload.len) {
-        const take: usize = @min(max_h2_frame, payload.len - off);
-        const last = (off + take) == payload.len;
-        var hdr: [9]u8 = header;
-        const take32: u32 = @intCast(take);
-        hdr[0] = @intCast((take32 >> 16) & 0xFF);
-        hdr[1] = @intCast((take32 >> 8) & 0xFF);
-        hdr[2] = @intCast(take32 & 0xFF);
-        hdr[4] = if (last) header[4] else header[4] & ~@as(u8, 0x1);
-        if (!writeAllFd(ufd, &hdr)) return false;
-        if (!writeAllFd(ufd, payload[off .. off + take])) return false;
-        off += take;
-    }
-    return true;
-}
-
 /// A transparent TCP relay in front of the real gRPC listener that withholds
 /// the RESPONSE to every `Execute` request (after nudging the client with a
 /// partial frame header, see the lane header for why).
@@ -738,7 +704,11 @@ const StallProxy = struct {
                 (@as(u32, header[6]) << 16) | (@as(u32, header[7]) << 8) | @as(u32, header[8]);
             if (length > payload.len) break;
             if (length > 0 and !readExactFd(cfd, payload[0..length])) break;
-            if (!forwardFrame(ufd, header, payload[0..length])) break;
+            // The CLI's gRPC client now fragments oversized requests into
+            // legal-size DATA frames itself (grpc_query_transport.sendRequest),
+            // so this relay forwards every frame VERBATIM — no reframing crutch.
+            if (!writeAllFd(ufd, &header)) break;
+            if (length > 0 and !writeAllFd(ufd, payload[0..length])) break;
 
             if (frame_type == H2_HEADERS and stream_id == execute_stream_id) {
                 _ = self.executes.fetchAdd(1, .monotonic);

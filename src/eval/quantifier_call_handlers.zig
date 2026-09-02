@@ -98,6 +98,14 @@ pub fn evalQuantifierFunction(
         for (list) |item| {
             // Create new environment with variable binding
             const new_env = try env.withBinding(allocator, comp.variable, item);
+            // OWNERSHIP (REQ-EVAL-ENV-OWNERSHIP-004): free the per-iteration
+            // binding arrays `withBinding` allocates. `defer` fires on every
+            // exit path, including the early `return`s below for the various
+            // quantifiers.
+            defer {
+                allocator.free(new_env.names);
+                allocator.free(new_env.values);
+            }
 
             const filter_result = try evalExpr(allocator, filter.*, new_env);
             const item_matches = switch (filter_result) {

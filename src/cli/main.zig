@@ -2058,6 +2058,21 @@ fn executeGrpcQuery(allocator: std.mem.Allocator, opts: GrpcQueryOptions) !void 
                 stderr.writeStreamingAll(io_t, timeout_msg) catch {};
                 std.process.exit(@intFromEnum(ExitCode.timeout_error));
             }
+            // REQ-TRANSPORT-GRPC-SHUTDOWN-002: the server closed the stream
+            // before delivering any response — typically because it was shutting
+            // down and its in-flight drain timed out. Like a client deadline this
+            // is TERMINAL and must NOT be re-submitted (the statement reached the
+            // server and may have partially executed). Exit non-zero rather than
+            // let the fall-through print a false "REQUIRES TLS" diagnostic or a
+            // caller mistake it for an empty success.
+            if (err == error.IncompleteResponse) {
+                const io_t = std.Io.Threaded.global_single_threaded.io();
+                stderr.writeStreamingAll(
+                    io_t,
+                    "Error: the server closed the connection before the query completed; it may have been shutting down, and the statement may or may not have executed\n",
+                ) catch {};
+                std.process.exit(@intFromEnum(ExitCode.general_error));
+            }
             last_error = @errorName(err);
             params_transferred = false;
             if (attempts + 1 < max_attempts) {

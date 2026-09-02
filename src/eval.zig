@@ -1533,6 +1533,16 @@ pub fn evalExpr(allocator: std.mem.Allocator, e: ast.Expr, env: Env) EvalError!V
             for (source_list) |item| {
                 // Create new environment with variable binding
                 const new_env = try env.withBinding(allocator, comp.variable, item);
+                // OWNERSHIP (REQ-EVAL-ENV-OWNERSHIP-004): `withBinding` allocates
+                // a fresh names/values array pair per element that nobody else
+                // frees. Release them at the end of every iteration (including
+                // the `continue` below). Only the arrays are freed; their
+                // elements are borrowed (the variable name is AST-owned and the
+                // bound value is a shallow copy).
+                defer {
+                    allocator.free(new_env.names);
+                    allocator.free(new_env.values);
+                }
 
                 // Check filter condition if present
                 if (comp.filter) |filter| {

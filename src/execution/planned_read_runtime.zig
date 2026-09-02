@@ -2906,7 +2906,9 @@ pub fn materializeNode(allocator: std.mem.Allocator, graph_name: []const u8, slo
     // Task 1.5 / GAP-0806: the Node struct itself stays on `allocator`
     // (OwnedGraphEntities.deinit destroys it). All interior bytes go through
     // `scratch` — the per-query arena when installed — so they drop with the
-    // query instead of leaking row-by-row.
+    // query instead of leaking row-by-row. REQ-EXEC-MATERIALIZE-OWNERSHIP-002:
+    // the two non-arena callers (materialized-view refresh, distributed local
+    // fragment) install their own scoped arena so their interior drops too.
     const scratch = scratchOr(allocator);
 
     const adapter = graph_store.getGlobalAdapter() orelse return error.Unsupported;

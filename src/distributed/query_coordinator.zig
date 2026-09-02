@@ -370,6 +370,21 @@ pub const QueryCoordinator = struct {
             .principal = &coordinator_principal,
         };
 
+        // REQ-EXEC-MATERIALIZE-OWNERSHIP-002: this local-fragment worker installs
+        // NO per-query arena, so planned-read row materialization would dupe
+        // every node/edge interior onto `self.allocator` and leak it
+        // (OwnedGraphEntities.deinit frees only the struct). Push a scoped arena
+        // as the scratch allocator so the interior drops with it. The rows are
+        // deep-copied via `duplicateValue` onto `self.allocator` below, so the
+        // returned federation results survive the arena teardown. Ordering: the
+        // arena.deinit defer is registered FIRST, so it runs LAST (after
+        // exec_result.deinit frees the structs), never freeing live interior.
+        const qc_query_arena = @import("../server/query_arena.zig");
+        var interior_arena = std.heap.ArenaAllocator.init(self.allocator);
+        defer interior_arena.deinit();
+        const prev_scratch = qc_query_arena.pushScratchAllocator(interior_arena.allocator());
+        defer qc_query_arena.popScratchAllocator(prev_scratch);
+
         // Execute the program (GAP-0889: propagate — an empty result set is
         // indistinguishable from a successful empty match).
         var exec_result = execution.executeProgramWithContext(self.allocator, &parse_result.program, context) catch |err| {

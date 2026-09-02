@@ -292,57 +292,65 @@ test "writers make progress during a sparse WHERE-predicate scan (read<->write c
     //
     // Also confirm the scan is genuinely long (so RED really would block for a
     // long time) by timing one scan with no EXCLUSIVE contention.
-    sh.scan_active.store(true, .release);
-
-    // Time one full scan (single-scan duration = the worst-case RED stall).
-    const scan_t0 = nowNs();
-    const before_scans = sh.scans_done.load(.monotonic);
-    while (sh.scans_done.load(.monotonic) == before_scans) {
-        if (sh.scan_err.load(.acquire)) break;
-        std.atomic.spinLoopHint();
-    }
-    const single_scan_ns = nowNs() - scan_t0;
-    try testing.expect(!sh.scan_err.load(.acquire));
-
-    // Worst EXCLUSIVE-acquire latency observed over a window spanning MORE than
-    // one full scan, attempting back-to-back so at least one acquire begins
-    // MID-scan (while a SHARED hold is in progress). RED (one unbroken SHARED
-    // hold per scan): an acquire that begins mid-scan waits the REST of the scan
-    // (~seconds). GREEN (chunked): every acquire slots in within ~one batch.
-    var worst_excl_ns: u64 = 0;
-    {
-        // Span at least 1.2 scans so a mid-scan acquire is guaranteed.
-        const excl_deadline = nowNs() + single_scan_ns + single_scan_ns / 5;
-        while (nowNs() < excl_deadline) {
-            if (sh.scan_err.load(.acquire)) break;
-            const e0 = nowNs();
-            mg.rwlock.lockUncancelable(io);
-            const e1 = nowNs();
-            std.atomic.spinLoopHint();
-            mg.rwlock.unlock(io);
-            const excl_ns = e1 - e0;
-            if (excl_ns > worst_excl_ns) worst_excl_ns = excl_ns;
-        }
-    }
-
-    // ---- Secondary signal: writer keeps progressing during the scan ----
-    // Measure over a HALF-scan window (the scanner is still hammering) to keep
-    // total test runtime bounded.
+    // Both the max-statistic (worst EXCLUSIVE-acquire latency) and the two
+    // throughput windows are wall-clock measurements that skew under external
+    // machine load (parallel test shards, CI). A single deschedule inside the
+    // one-shot EXCLUSIVE window used to fail the `worst_excl_ns * 4 <
+    // single_scan_ns` bar deterministically even with a correct (chunked) fix.
     //
-    // Both throughput windows are wall-clock measurements and skew under
-    // external machine load (parallel test shards, CI). A genuine livelock
-    // fails every attempt; a transient load spike does not — so retry the
-    // measurement up to 3 times and only fail if no attempt meets the bar.
-    const window_ns = single_scan_ns / 2;
+    // A genuine livelock fails EVERY attempt (RED: an unbroken SHARED hold gives
+    // worst_excl ~= single_scan, ratio ~= 1, so the 4x bar fails every attempt);
+    // a transient load spike does not. So re-measure the ENTIRE region — re-arm
+    // the scanner, re-time one scan, re-run the EXCLUSIVE window, and re-run both
+    // throughput windows — up to 3 times, breaking as soon as one attempt meets
+    // every bar (including the EXCLUSIVE ratio), and assert only after the
+    // attempts are exhausted.
+    var single_scan_ns: u64 = 0;
+    var worst_excl_ns: u64 = 0;
     var ops_during: u64 = 0;
     var baseline_ops: u64 = 0;
     var attempt: usize = 0;
     while (attempt < 3) : (attempt += 1) {
-        if (attempt > 0) {
-            // Re-arm the scanner and let a scan get in flight again.
-            sh.scan_active.store(true, .release);
-            sleepMs(10);
+        // Re-arm the scanner and let a scan get in flight.
+        sh.scan_active.store(true, .release);
+        if (attempt > 0) sleepMs(10);
+
+        // Time one full scan (single-scan duration = the worst-case RED stall).
+        const scan_t0 = nowNs();
+        const before_scans = sh.scans_done.load(.monotonic);
+        while (sh.scans_done.load(.monotonic) == before_scans) {
+            if (sh.scan_err.load(.acquire)) break;
+            std.atomic.spinLoopHint();
         }
+        single_scan_ns = nowNs() - scan_t0;
+        try testing.expect(!sh.scan_err.load(.acquire));
+
+        // Worst EXCLUSIVE-acquire latency observed over a window spanning MORE
+        // than one full scan, attempting back-to-back so at least one acquire
+        // begins MID-scan (while a SHARED hold is in progress). RED (one unbroken
+        // SHARED hold per scan): an acquire that begins mid-scan waits the REST
+        // of the scan (~seconds). GREEN (chunked): every acquire slots in within
+        // ~one batch.
+        worst_excl_ns = 0;
+        {
+            // Span at least 1.2 scans so a mid-scan acquire is guaranteed.
+            const excl_deadline = nowNs() + single_scan_ns + single_scan_ns / 5;
+            while (nowNs() < excl_deadline) {
+                if (sh.scan_err.load(.acquire)) break;
+                const e0 = nowNs();
+                mg.rwlock.lockUncancelable(io);
+                const e1 = nowNs();
+                std.atomic.spinLoopHint();
+                mg.rwlock.unlock(io);
+                const excl_ns = e1 - e0;
+                if (excl_ns > worst_excl_ns) worst_excl_ns = excl_ns;
+            }
+        }
+
+        // ---- Secondary signal: writer keeps progressing during the scan ----
+        // Measure over a HALF-scan window (the scanner is still hammering) to
+        // keep total test runtime bounded.
+        const window_ns = single_scan_ns / 2;
         const ops_before = sh.ops_applied.load(.monotonic);
         const dur_start = nowNs();
         while (nowNs() - dur_start < window_ns) std.atomic.spinLoopHint();
@@ -369,7 +377,12 @@ test "writers make progress during a sparse WHERE-predicate scan (read<->write c
             .{ attempt, single_scan_ns / std.time.ns_per_ms, worst_excl_ns / std.time.ns_per_ms, ops_during, baseline_ops },
         );
 
-        if (baseline_ops >= 20 and ops_during * 4 >= baseline_ops) break;
+        // Break as soon as ALL bars (including the decisive EXCLUSIVE ratio) hold
+        // for a single attempt.
+        if (baseline_ops >= 20 and
+            ops_during * 4 >= baseline_ops and
+            single_scan_ns >= 50 * std.time.ns_per_ms and
+            worst_excl_ns * 4 < single_scan_ns) break;
     }
 
     // The scan must genuinely be long (else the test proves nothing).

@@ -263,21 +263,24 @@ pub const Env = struct {
         new_names[self.names.len] = name;
         new_values[self.values.len] = value;
 
-        // Free old arrays to prevent memory leak (C4 fix)
-        // Only free if this Env owns its arrays AND they were allocated
-        // CANARY: REQ=REQ-MEM-FIX-005; FEATURE="MemorySafety"; ASPECT=OwnershipRespect; STATUS=EXEMPT; OWNER=eval; UPDATED=2025-10-25
-        if (self.owned and self.names.len > 0) {
-            self.allocator.free(self.names);
-            self.allocator.free(self.values);
-        }
-
+        // OWNERSHIP (REQ-EVAL-ENV-OWNERSHIP-004): `withBinding` NEVER frees
+        // `self.names`/`self.values`. `self` is a BY-VALUE `Env`, so the old
+        // "free-self-if-owned" collapse corrupted the caller's arrays whenever
+        // this was called in a loop over a source list (the comprehension /
+        // quantifier evaluators call it on the SAME by-value env once per
+        // element): iteration 2 would `@memcpy` out of freed memory and free
+        // the same pointers a second time. The freshly-allocated arrays
+        // returned here are owned by the CALLER, which is responsible for
+        // releasing them (see the per-iteration `defer` in the comprehension
+        // and quantifier loops). `owned` is therefore no longer read anywhere;
+        // it is left on the struct only for source compatibility.
         return Env{
             .names = new_names,
             .values = new_values,
             .param_names = self.param_names,
             .param_values = self.param_values,
             .allocator = allocator,
-            .owned = true, // New Env owns its newly allocated arrays
+            .owned = false, // caller owns and frees the returned arrays
             .timeseries_store = self.timeseries_store,
             .exec_context = self.exec_context,
         };

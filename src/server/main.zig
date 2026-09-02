@@ -2348,7 +2348,22 @@ pub fn main() !void {
             // Without deinitGlobalStore(), all in-memory graph data (nodes, edges, indexes,
             // properties) leaks and the GPA reports errors on SIGTERM exit.
             if (!persistence_flushed_eagerly) graph_store.stopPersistenceThread(gpa);
-            graph_store.deinitGlobalStore();
+            // REQ-TRANSPORT-GRPC-SHUTDOWN-001: never free the store while a
+            // detached gRPC handler thread is still executing against it — the
+            // vendored accept loop detaches handlers geode cannot join, so a
+            // free here is a use-after-free (panics inside graph_storage_adapter).
+            // The shutdown tail waits for in-flight handlers; if one outlived the
+            // bounded drain, leak the store deliberately (the process is exiting
+            // and the teardown watchdog force-exits rc=0) rather than free it out
+            // from under the handler.
+            const grpc_still_running = grpc_transport.grpcInflightCount();
+            if (grpc_still_running == 0) {
+                graph_store.deinitGlobalStore();
+            } else {
+                log.warn("skipping global store free at teardown: gRPC handler still in flight", &.{
+                    Attr.int("grpc_inflight", @intCast(grpc_still_running)),
+                });
+            }
         }
 
         // #540: Spawn a dedicated poll thread to continuously process incoming
@@ -3306,6 +3321,10 @@ pub fn main() !void {
         // signals every tracked connection (per-connection shutdown flag +
         // best-effort CONNECTION_CLOSE).
         transport.requestShutdown();
+        // REQ-TRANSPORT-GRPC-SHUTDOWN-002: refuse new gRPC handlers from this
+        // instant (mirrors transport.requestShutdown for QUIC). The in-flight
+        // drain happens below, after the QUIC connection drain.
+        grpc_transport.requestGrpcShutdown();
         if (detached_connection_admission and !g_connection_admission_gate.waitForZero(10 * std.time.ns_per_s)) {
             log.warn("Connection admission threads still active during shutdown", &.{
                 Attr.int("active_admission", @intCast(g_connection_admission_gate.active.load(.acquire))),
@@ -3356,6 +3375,40 @@ pub fn main() !void {
                     "[shutdown] connection drain complete ({d}ms)\n",
                     .{compat_milliTimestamp() - drain_t0},
                 );
+            }
+        }
+
+        // ── gRPC in-flight handler drain (REQ-TRANSPORT-GRPC-SHUTDOWN-001) ──
+        // gRPC handlers run on threads the vendored accept loop detaches, so
+        // they are invisible to the QUIC connection drain above and to
+        // getConnectionCount(). Wait for them here — bounded by the same drain
+        // timeout — BEFORE the store is flushed and freed, so a handler cannot
+        // read a freed StorageAdapter. If a handler outlives the wait, the store
+        // free is skipped (see the deinit defer above) and the teardown watchdog
+        // force-exits rc=0.
+        {
+            const gdrain_t0 = compat_milliTimestamp();
+            const grpc_inflight0 = grpc_transport.grpcInflightCount();
+            if (grpc_inflight0 > 0) {
+                std.debug.print(
+                    "[shutdown] draining {d} in-flight gRPC handler(s) (timeout {d}ms)\n",
+                    .{ grpc_inflight0, drain_timeout_ms },
+                );
+                const residual = grpc_transport.waitForGrpcInflightZero(drain_timeout_ms);
+                if (residual > 0) {
+                    std.debug.print(
+                        "[shutdown] {d} gRPC handler(s) still in flight after {d}ms; leaking store to avoid use-after-free and proceeding\n",
+                        .{ residual, compat_milliTimestamp() - gdrain_t0 },
+                    );
+                    log.warn("gRPC handlers still in flight after drain timeout", &.{
+                        Attr.int("grpc_inflight", @intCast(residual)),
+                    });
+                } else {
+                    std.debug.print(
+                        "[shutdown] gRPC handler drain complete ({d}ms)\n",
+                        .{compat_milliTimestamp() - gdrain_t0},
+                    );
+                }
             }
         }
 

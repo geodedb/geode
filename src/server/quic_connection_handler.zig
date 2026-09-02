@@ -7224,17 +7224,30 @@ fn handleClientMessage(
             var scratch_arena: ?*query_arena.Arena = null;
             var prev_scratch: ?std.mem.Allocator = null;
             var scratch_installed = false;
+            // REQ-EXEC-MATERIALIZE-OWNERSHIP-002: a scratch arena MUST back this
+            // query so materialized row interior drops with it. On pool
+            // unavailability install a per-request fallback arena instead of
+            // silently degrading to the leaking global allocator.
+            var fallback_arena: ?std.heap.ArenaAllocator = null;
             if (query_arena.ensureDefaultPool(graph_store.global_allocator())) |pool| {
                 if (pool.acquire()) |a| {
                     scratch_arena = a;
                     prev_scratch = query_arena.pushScratchAllocator(a.allocator());
                     scratch_installed = true;
-                } else |_| {
-                    // Acquisition failure is non-fatal — the executor falls
-                    // back to the graph_store global allocator.
+                } else |err| {
+                    log.warn("query scratch arena acquire failed; using per-request fallback arena", &.{
+                        Attr.string("error", @errorName(err)),
+                    });
                 }
-            } else |_| {
-                // Pool init failure is non-fatal for the same reason.
+            } else |err| {
+                log.warn("query scratch arena pool init failed; using per-request fallback arena", &.{
+                    Attr.string("error", @errorName(err)),
+                });
+            }
+            if (!scratch_installed) {
+                fallback_arena = std.heap.ArenaAllocator.init(gpa);
+                prev_scratch = query_arena.pushScratchAllocator(fallback_arena.?.allocator());
+                scratch_installed = true;
             }
             defer {
                 if (!lock_released) {
@@ -7274,6 +7287,8 @@ fn handleClientMessage(
                 if (scratch_arena) |a| {
                     if (query_arena.defaultPool()) |pool| pool.release(a);
                 }
+                // Deinit the per-request fallback arena AFTER it is popped.
+                if (fallback_arena) |*fa| fa.deinit();
             }
 
             switch (analysis.kind) {
