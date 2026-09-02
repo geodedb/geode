@@ -901,6 +901,7 @@ fn cmdServe(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !voi
 // in-file call sites.
 const touchActiveQueryDeadlineWatchdog = query_deadline.touchActiveQueryDeadlineWatchdog;
 const finishActiveQueryDeadlineWatchdog = query_deadline.finishActiveQueryDeadlineWatchdog;
+const markActiveQuerySent = query_deadline.markActiveQuerySent;
 
 // Issue #417: DSN (Data Source Name) parsing for --dsn flag
 // Supports: quic://host:port, grpc://host:port, host:port (defaults to QUIC)
@@ -2230,6 +2231,13 @@ fn executeQueryOnGrpc(
     };
     var grpc_transport = grpc_adapter.asTransport();
 
+    // REQ-CLI-CONNECT-TIMEOUT-CLASSIFY-001: the gRPC HELLO handshake above has
+    // succeeded (connection established), and collectQueryWithTransport is
+    // about to write the ExecuteRequest — so a tripped deadline from here on is
+    // an exec-phase timeout (exit 4), not a connect-phase failure (exit 1).
+    // Mirrors the QUIC path so the watchdog classifies both transports alike.
+    markActiveQuerySent();
+
     var result = try query_runner.collectQueryWithTransport(allocator, &grpc_transport, .{
         .session_id = session_id,
         .query_text = final_query,
@@ -3254,6 +3262,13 @@ fn runQueryOnHelloedStream(
             self.notifyProgress();
             try writeProtoMessageViaZigClient(alloc, self.raw_client, msg);
             self.notifyProgress();
+            // REQ-CLI-CONNECT-TIMEOUT-CLASSIFY-001: the HELLO handshake has
+            // already completed on this stream (helloOnConnection) before this
+            // adapter is used, so once the Execute request bytes are on the
+            // wire the query has genuinely reached the server — a deadline that
+            // trips from here on is an exec-phase timeout (exit 4), not a
+            // connect-phase failure (exit 1).
+            if (msg == .execute) markActiveQuerySent();
         }
 
         fn readServerMessage(proto: *query_runner.ProtocolClient, alloc: std.mem.Allocator, timeout: u32) !schema.QuicServerMessage {

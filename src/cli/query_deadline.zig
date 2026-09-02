@@ -54,6 +54,21 @@ const STDERR_FD: std.Io.File.Handle = 2;
 // CANARY: REQ=REQ-CLI-TIMEOUT-EXIT-CODE-001; FEATURE="QueryTimeoutClassification"; ASPECT=WatchdogExitCode; STATUS=TESTED; TEST=tests/test_cli_timeout_exit_code.zig; OWNER=cli; UPDATED=2026-09-01
 const EXIT_TIMEOUT_ERROR: u8 = 4;
 
+/// Process-exit code the watchdog uses when the deadline elapsed BEFORE the
+/// query was ever handed to a server — i.e. a connect-phase failure. Matches
+/// `cli_dispatcher.ExitCode.general_error` (=1). Duplicated here as a bare
+/// constant to avoid a cross-module import.
+///
+/// REQ-CLI-CONNECT-TIMEOUT-CLASSIFY-001: a client-side deadline that trips
+/// before any query reached a server is a CONNECTION failure, not a
+/// query-execution timeout — the main-thread connect path already returns
+/// `error.ConnectionFailed` -> exit 1, and this watchdog now agrees when it
+/// wins the race pre-send (instead of falsely exiting 4 with "the statement
+/// may still be executing on the server", which is untrue when nothing ever
+/// connected).
+// CANARY: REQ=REQ-CLI-CONNECT-TIMEOUT-CLASSIFY-001; FEATURE="QueryTimeoutClassification"; ASPECT=ConnectPhaseVsExecPhase; STATUS=TESTED; TEST=tests/test_cli_timeout_exit_code.zig; OWNER=cli; UPDATED=2026-09-02
+const EXIT_CONNECTION_ERROR: u8 = 1;
+
 pub const QueryDeadlineState = struct {
     last_progress_ns: std.atomic.Value(i64),
     done: std.atomic.Value(bool),
@@ -70,6 +85,14 @@ pub const QueryDeadlineState = struct {
     /// (cmdQuery owns the state and makes both calls on its own thread), so
     /// no extra synchronization is required beyond the done-flag acquire/release.
     watchdog_thread: ?std.Thread,
+    /// REQ-CLI-CONNECT-TIMEOUT-CLASSIFY-001: set true once the query has
+    /// actually been transmitted to a server over an established connection
+    /// (see `markQuerySent`).  The watchdog reads this to decide whether a
+    /// tripped deadline is a query-execution timeout (true -> exit 4, "may
+    /// still be executing on the server") or a connect-phase failure
+    /// (false -> exit 1, a plain connection timeout).  Written by the CLI's
+    /// send path, read by the watchdog thread, so acquire/release ordered.
+    query_sent: std.atomic.Value(bool),
 
     pub fn init() QueryDeadlineState {
         const now_ns: i128 = blk: {
@@ -83,7 +106,16 @@ pub const QueryDeadlineState = struct {
             .done = std.atomic.Value(bool).init(false),
             .tick_count = std.atomic.Value(u64).init(0),
             .watchdog_thread = null,
+            .query_sent = std.atomic.Value(bool).init(false),
         };
+    }
+
+    /// REQ-CLI-CONNECT-TIMEOUT-CLASSIFY-001: mark that the query has been
+    /// transmitted to a server over an established connection.  Called from the
+    /// CLI send path once the Execute request bytes are written to the stream —
+    /// after this, a tripped deadline is a genuine query-execution timeout.
+    pub fn markQuerySent(self: *QueryDeadlineState) void {
+        self.query_sent.store(true, .release);
     }
 
     pub fn touch(self: *QueryDeadlineState) void {
@@ -133,6 +165,18 @@ pub fn touchActiveQueryDeadlineWatchdog() void {
 pub fn finishActiveQueryDeadlineWatchdog() void {
     if (active_query_deadline_state) |state| {
         state.finish();
+    }
+}
+
+/// REQ-CLI-CONNECT-TIMEOUT-CLASSIFY-001: global mirror of
+/// `QueryDeadlineState.markQuerySent`, following the same
+/// `active_query_deadline_state` pattern as `touchActiveQueryDeadlineWatchdog`.
+/// Called from the CLI execute path once the query has actually been sent to a
+/// server, so the watchdog can distinguish an exec-phase timeout (exit 4) from
+/// a connect-phase failure (exit 1).
+pub fn markActiveQuerySent() void {
+    if (active_query_deadline_state) |state| {
+        state.markQuerySent();
     }
 }
 
@@ -190,13 +234,28 @@ pub fn deadlineWatchdog(timeout_secs: u32, state: *QueryDeadlineState) void {
 
         const stderr = std.Io.File{ .handle = STDERR_FD, .flags = .{ .nonblocking = false } };
         const io_wd = std.Io.Threaded.global_single_threaded.io();
-        stderr.writeStreamingAll(io_wd, "Error: query timed out after ") catch {};
         var buf: [20]u8 = undefined;
         const timeout_str = std.fmt.bufPrint(&buf, "{d}", .{timeout_secs}) catch "?";
-        stderr.writeStreamingAll(io_wd, timeout_str) catch {};
-        // The statement was never cancelled server-side — say so, so an
-        // operator does not assume the work was rolled back.
-        stderr.writeStreamingAll(io_wd, " seconds; the statement may still be executing on the server\n") catch {};
-        std.process.exit(EXIT_TIMEOUT_ERROR);
+
+        // REQ-CLI-CONNECT-TIMEOUT-CLASSIFY-001: phase-aware classification.
+        if (state.query_sent.load(.acquire)) {
+            // The query really reached a server and is still unanswered — a
+            // genuine query-execution timeout.  The statement was never
+            // cancelled server-side, so say so: an operator must not assume the
+            // work was rolled back.
+            stderr.writeStreamingAll(io_wd, "Error: query timed out after ") catch {};
+            stderr.writeStreamingAll(io_wd, timeout_str) catch {};
+            stderr.writeStreamingAll(io_wd, " seconds; the statement may still be executing on the server\n") catch {};
+            std.process.exit(EXIT_TIMEOUT_ERROR);
+        } else {
+            // Nothing was ever handed to a server — the deadline elapsed during
+            // the connect/handshake phase.  This is a CONNECTION failure, not a
+            // query-execution timeout: exit 1, and NEVER claim the statement is
+            // executing anywhere (it is not).
+            stderr.writeStreamingAll(io_wd, "Error: connection to the server timed out after ") catch {};
+            stderr.writeStreamingAll(io_wd, timeout_str) catch {};
+            stderr.writeStreamingAll(io_wd, " seconds\n") catch {};
+            std.process.exit(EXIT_CONNECTION_ERROR);
+        }
     }
 }
