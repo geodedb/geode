@@ -60,6 +60,11 @@ const cli_deadline_ms: i64 = 120_000;
 /// The exit code a client-side timeout must carry (ExitCode.timeout_error).
 const expected_timeout_exit: u8 = 4;
 
+/// A generic/connection failure (cli_dispatcher.ExitCode.general_error).
+/// Duplicated as a bare const — like `expected_timeout_exit` — so this lane
+/// need not import the full CLI module graph.
+const expected_general_error_exit: u8 = 1;
+
 fn getenvOwned(name: [*:0]const u8) ?[:0]const u8 {
     return if (std.c.getenv(name)) |p| std.mem.span(p) else null;
 }
@@ -283,6 +288,183 @@ const Fixture = struct {
         if (code != 0) return error.SeedFailed;
     }
 };
+
+/// Bind a UDP socket to 127.0.0.1:0, read the ephemeral port the kernel handed
+/// out, then close it — so the returned port was provably free at this instant.
+/// QUIC is UDP, so a UDP-free port is exactly "nothing is listening" for the
+/// `geode query --server` connect path; a fixed high port could in principle be
+/// bound by another process, this cannot. Returns null if the socket dance
+/// fails (the caller then SKIPs rather than asserting on a bogus port).
+fn pickDeadUdpPort() ?u16 {
+    const rc_socket = linux.socket(linux.AF.INET, linux.SOCK.DGRAM, 0);
+    if (@as(isize, @bitCast(rc_socket)) < 0) return null;
+    const fd: i32 = @intCast(@as(isize, @bitCast(rc_socket)));
+    defer _ = linux.close(fd);
+
+    var bind_addr = linux.sockaddr.in{
+        .port = 0,
+        .addr = 0x0100007f, // 127.0.0.1 in network byte order
+    };
+    const rc_bind = linux.bind(fd, @ptrCast(&bind_addr), @sizeOf(linux.sockaddr.in));
+    if (@as(isize, @bitCast(rc_bind)) != 0) return null;
+
+    var out_addr: linux.sockaddr.in = undefined;
+    var out_len: linux.socklen_t = @sizeOf(linux.sockaddr.in);
+    const rc_gsn = linux.getsockname(fd, @ptrCast(&out_addr), &out_len);
+    if (@as(isize, @bitCast(rc_gsn)) != 0) return null;
+    // sockaddr.in.port is network byte order.
+    return std.mem.bigToNative(u16, out_addr.port);
+}
+
+/// A server-less rig for the connect-phase lanes: no `geode serve` at all, just
+/// enough scaffolding to spawn a real `geode query` against a dead port and read
+/// its exit code + stderr. Mirrors `Fixture`'s allocator/io ownership so the
+/// same `spawnProc`/`Proc` machinery drives the real binary (no mocks).
+const DeadPortFixture = struct {
+    arena: std.heap.ArenaAllocator,
+    threaded: *std.Io.Threaded,
+    gpa: std.mem.Allocator,
+
+    fn aa(self: *DeadPortFixture) std.mem.Allocator {
+        return self.arena.allocator();
+    }
+    fn io(self: *DeadPortFixture) std.Io {
+        return self.threaded.io();
+    }
+
+    /// Returns null when the lane must SKIP (no binary / opt-out env).
+    fn setUp(gpa: std.mem.Allocator) !?DeadPortFixture {
+        if (comptime builtin.os.tag != .linux) return null;
+        if (getenvOwned("GEODE_SKIP_SUBPROC_CLUSTER") != null) return null;
+        const io_fs = std.Io.Threaded.global_single_threaded.io();
+        std.Io.Dir.cwd().access(io_fs, binary_path, .{}) catch {
+            std.debug.print(
+                "geode binary missing at {s}; run `zig build` first to populate zig-out/bin\n",
+                .{binary_path},
+            );
+            return null;
+        };
+        var arena = std.heap.ArenaAllocator.init(gpa);
+        errdefer arena.deinit();
+        const threaded = try gpa.create(std.Io.Threaded);
+        threaded.* = std.Io.Threaded.init(std.heap.smp_allocator, .{});
+        return DeadPortFixture{ .arena = arena, .threaded = threaded, .gpa = gpa };
+    }
+
+    fn deinit(self: *DeadPortFixture) void {
+        self.threaded.deinit();
+        self.arena.child_allocator.destroy(self.threaded);
+        self.arena.deinit();
+    }
+
+    /// Run `geode query --server 127.0.0.1:<port> --timeout <secs> "RETURN 1"`.
+    fn runDeadPort(self: *DeadPortFixture, port: u16, timeout_secs: u32) !Proc {
+        const cmd = try std.fmt.allocPrint(
+            self.aa(),
+            "{s} query --server 127.0.0.1:{d} --insecure --timeout {d} \"RETURN 1\" < /dev/null",
+            .{ binary_path, port, timeout_secs },
+        );
+        const argv = try self.aa().alloc([]const u8, 3);
+        argv[0] = "/bin/sh";
+        argv[1] = "-c";
+        argv[2] = cmd;
+        return spawnProc(self.gpa, self.aa(), self.io(), argv, &.{
+            .{ .key = "GEODE_LOG_LEVEL", .value = "warn" },
+        });
+    }
+};
+
+// ---------------------------------------------------------------------
+// CONNECT-PHASE LANES — a client-side deadline that elapses BEFORE the query
+// was ever handed to a server is a CONNECTION failure (exit 1), NOT a query
+// execution timeout (exit 4). Mirrors the harness spec cases
+// `../geode-test-harness/geodetestlab-cli/specs/geode_quic_transport.yml`
+// `connection-timeout` (exit 1 + stderr "timed out") and `connection-refused`
+// (exit 1). RED today: the phase-blind watchdog in
+// src/cli/query_deadline.zig:166-201 unconditionally exits 4 with "the
+// statement may still be executing on the server" even though nothing ever
+// connected, so nothing is executing anywhere.
+//
+// CANARY: REQ=REQ-CLI-CONNECT-TIMEOUT-CLASSIFY-001; FEATURE="QueryTimeoutClassification"; ASPECT=ConnectPhaseVsExecPhase; STATUS=TESTED; TEST=tests/test_cli_timeout_exit_code.zig; OWNER=cli; UPDATED=2026-09-02
+
+test "geode query against an unreachable server reports a connect timeout (exit 1), not an exec timeout (exit 4)" {
+    const gpa = testing.allocator;
+    var fx = (try DeadPortFixture.setUp(gpa)) orelse return error.SkipZigTest;
+    defer fx.deinit();
+
+    const dead_port = pickDeadUdpPort() orelse return error.SkipZigTest;
+
+    var p = try fx.runDeadPort(dead_port, 1);
+    defer p.deinit();
+    const code = p.waitExit(cli_deadline_ms) orelse {
+        p.dump("query client (never exited)");
+        return error.ConnectTimeoutClientHung;
+    };
+
+    // ASSERTION 1 — connect failure is a GENERAL error (exit 1), the contract
+    // the harness `connection-timeout` case pins. RED today: 4
+    // (ExitCode.timeout_error), because the watchdog fires before the connect
+    // path's own `error.ConnectionFailed`->exit-1 can win.
+    if (code != expected_general_error_exit) {
+        p.dump("query client (connect-timeout exit code)");
+        std.debug.print(
+            "\n[cli-connect-timeout] `geode query --server 127.0.0.1:{d} --timeout 1` on a dead port exited {d}; expected {d} (ExitCode.general_error) — a never-connected server is a CONNECTION failure, not a query-execution timeout\n",
+            .{ dead_port, code, expected_general_error_exit },
+        );
+        return error.ConnectTimeoutMisclassifiedAsExecTimeout;
+    }
+
+    // ASSERTION 2 — the message still names the deadline (harness
+    // `stderr_contains: ['timed out']`).
+    if (!p.saw("timed out")) {
+        p.dump("query client (connect-timeout message did not mention a timeout)");
+        return error.ConnectTimeoutMessageMissing;
+    }
+
+    // ASSERTION 3 — but it must NOT claim server-side work is in flight: nothing
+    // ever connected. RED today: the watchdog prints "the statement may still
+    // be executing on the server", which is false for an unreachable server.
+    if (p.saw("may still be executing")) {
+        p.dump("query client (connect-timeout falsely claimed server-side execution)");
+        std.debug.print(
+            "\n[cli-connect-timeout] the client never connected to 127.0.0.1:{d}, yet reported the statement 'may still be executing on the server'\n",
+            .{dead_port},
+        );
+        return error.ConnectTimeoutFalselyClaimedServerExecution;
+    }
+}
+
+test "geode query against a refused/dead connection port exits 1, not exec-timeout 4" {
+    const gpa = testing.allocator;
+    var fx = (try DeadPortFixture.setUp(gpa)) orelse return error.SkipZigTest;
+    defer fx.deinit();
+
+    const dead_port = pickDeadUdpPort() orelse return error.SkipZigTest;
+
+    var p = try fx.runDeadPort(dead_port, 1);
+    defer p.deinit();
+    const code = p.waitExit(cli_deadline_ms) orelse {
+        p.dump("query client (never exited)");
+        return error.ConnectRefusedClientHung;
+    };
+
+    // The harness `connection-refused` case pins only `exit_code: 1`. RED today:
+    // 4 (ExitCode.timeout_error) from the phase-blind watchdog.
+    if (code != expected_general_error_exit) {
+        p.dump("query client (connect-refused exit code)");
+        std.debug.print(
+            "\n[cli-connect-refused] `geode query --server 127.0.0.1:{d} --timeout 1` on a dead port exited {d}; expected {d} (ExitCode.general_error)\n",
+            .{ dead_port, code, expected_general_error_exit },
+        );
+        return error.ConnectRefusedMisclassifiedAsExecTimeout;
+    }
+
+    // And, as above, it must not pretend the statement is running server-side.
+    if (p.saw("may still be executing")) {
+        p.dump("query client (connect-refused falsely claimed server-side execution)");
+        return error.ConnectRefusedFalselyClaimedServerExecution;
+    }
+}
 
 /// Returns null when the lane must SKIP (no binary / opt-out env).
 fn setUp(gpa: std.mem.Allocator, tag: []const u8, port: u16) !?Fixture {

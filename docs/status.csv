@@ -617,6 +617,7 @@ REQ-CLI-CHUNKED-EXEC-009,ChunkedExecution,RollbackGuard,TESTED,,,cli,2026-08-31,
 REQ-CLI-CHUNKED-EXEC-009,ChunkedExecution,StatementFallback,TESTED,,,cli,2026-08-31,src/cli/main.zig,2663
 REQ-CLI-CHUNKED-EXEC-009,ChunkedExecution,StatementFallback,TESTED,,,cli,2026-08-31,src/cli/main.zig,2705
 REQ-CLI-COMPLETE-001,REPL Tab Completion,Testing,TESTED,,,cli,2026-01-30,src/client/repl/repl_complete.zig,456
+REQ-CLI-CONNECT-TIMEOUT-CLASSIFY-001,QueryTimeoutClassification,ConnectPhaseVsExecPhase,TESTED,,,cli,2026-09-02,tests/test_cli_timeout_exit_code.zig,388
 REQ-CLI-DEADLINE-WATCHDOG-001,QueryDeadlineWatchdog,FalsePositiveRegression,TESTED,,,cli,2026-04-16,tests/test_deadline_watchdog_false_positive.sh,4
 REQ-CLI-DEADLINE-WATCHDOG-001,QueryDeadlineWatchdog,Lifetime,TESTED,,,cli,2026-04-16,src/cli/query_deadline.zig,9
 REQ-CLI-DEADLINE-WATCHDOG-001,QueryDeadlineWatchdog,LifetimeRegression,TESTED,,,cli,2026-04-16,tests/test_query_deadline_state_lifetime.zig,40
@@ -695,9 +696,9 @@ REQ-CLI-TIMEOUT-EXIT-CODE-001,QueryTimeoutClassification,DistinctExitCode,TESTED
 REQ-CLI-TIMEOUT-EXIT-CODE-001,QueryTimeoutClassification,SubprocessE2E,TESTED,,,cli,2026-09-01,tests/test_cli_timeout_exit_code.zig,1
 REQ-CLI-TIMEOUT-EXIT-CODE-001,QueryTimeoutClassification,WatchdogExitCode,TESTED,,,cli,2026-09-01,src/cli/query_deadline.zig,54
 REQ-CLI-TIMEOUT-EXIT-CODE-002,QueryTimeoutClassification,GrpcTransportTimeout,TESTED,,,cli,2026-09-01,src/cli/main.zig,2030
-REQ-CLI-TIMEOUT-EXIT-CODE-002,QueryTimeoutClassification,GrpcTransportTimeout,TESTED,,,cli,2026-09-01,tests/test_cli_timeout_exit_code.zig,528
+REQ-CLI-TIMEOUT-EXIT-CODE-002,QueryTimeoutClassification,GrpcTransportTimeout,TESTED,,,cli,2026-09-01,tests/test_cli_timeout_exit_code.zig,710
 REQ-CLI-TIMEOUT-NO-RESUBMIT-001,QueryTimeoutClassification,NoSilentResubmission,TESTED,,,cli,2026-09-01,src/cli/main.zig,2031
-REQ-CLI-TIMEOUT-NO-RESUBMIT-001,QueryTimeoutClassification,NoSilentResubmission,TESTED,,,cli,2026-09-01,tests/test_cli_timeout_exit_code.zig,529
+REQ-CLI-TIMEOUT-NO-RESUBMIT-001,QueryTimeoutClassification,NoSilentResubmission,TESTED,,,cli,2026-09-01,tests/test_cli_timeout_exit_code.zig,711
 REQ-CLI-USER-CMD-001,User CLI Commands,UserManagement,TESTED,,,security,2026-01-15,src/security/user_manager.zig,854
 REQ-CLI-WD-001,CLI Working Directory Handling,TestInfrastructure,TESTED,,,cli,2025-10-04,tests/cli_working_directory_regression_test.sh,3
 REQ-CLIENT-ENV-001,ClientEnvironmentVariables,IntegrationTests,TESTED,,,clients,2025-10-04,tests/test_environment_variables_integration.zig,4
