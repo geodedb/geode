@@ -348,8 +348,15 @@ pub fn waitForGrpcInflightZero(timeout_ms: u64) u32 {
         const n = g_grpc_inflight.load(.acquire);
         if (n == 0) return 0;
         if (compat_milliTimestamp() - start >= @as(i64, @intCast(timeout_ms))) return n;
-        var req = std.posix.timespec{ .sec = 0, .nsec = 25 * std.time.ns_per_ms };
-        var rem: std.posix.timespec = undefined;
+        // Use std.os.linux.timespec (NOT std.posix.timespec) to match the type
+        // std.os.linux.nanosleep expects. std.posix.timespec resolves to
+        // std.c.timespec when libc is linked (the OpenSSL-enabled release
+        // cross-build), producing a timespec type mismatch that broke
+        // v0.8.12 build-release (grpc_server.zig:353); the native/no-libc test
+        // builds never linked libc so never saw it. Mirrors quic.zig
+        // compat_sleepNs. std.Thread.sleep is unavailable in Zig 0.16.
+        const req = std.os.linux.timespec{ .sec = 0, .nsec = 25 * std.time.ns_per_ms };
+        var rem: std.os.linux.timespec = undefined;
         _ = std.os.linux.nanosleep(&req, &rem);
     }
 }
