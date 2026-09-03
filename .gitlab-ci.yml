@@ -1627,7 +1627,12 @@ snapshot:
     # the hooks landed (v0.8.6/v0.8.7). The script now unsets OPENSSL_CONF
     # itself; keep the scoping here as-is for the zig build lane.
   before_script:
-    - apk add --no-cache curl git bash tar xz coreutils jq python3
+    # binutils provides `ar`, needed by scripts/ci/fetch-openssl-prefix.sh to
+    # unpack the libssl-dev .deb on Alpine (no dpkg-deb, so the `ar x` fallback
+    # is taken). zstd covers zstd-compressed .deb data members. Absence of `ar`
+    # broke the GoReleaser openssl before-hook ("error: 'ar' is required"
+    # fetching libssl-dev_3.5.6-1~deb13u2_amd64.deb) — v0.8.10 build-release.
+    - apk add --no-cache curl git bash tar xz zstd coreutils jq python3 binutils
     # Defensive cleanup: remove any stale artifacts or generated files
     # that could make GoReleaser detect a dirty git state.
     - git clean -fdx -e .zig-cache/ -e zig-cache/
@@ -2151,7 +2156,12 @@ build-release:
     # the hooks landed (v0.8.6/v0.8.7). The script now unsets OPENSSL_CONF
     # itself; keep the scoping here as-is for the zig build lane.
   before_script:
-    - apk add --no-cache curl git bash tar xz coreutils jq python3
+    # binutils provides `ar`, needed by scripts/ci/fetch-openssl-prefix.sh to
+    # unpack the libssl-dev .deb on Alpine (no dpkg-deb, so the `ar x` fallback
+    # is taken). zstd covers zstd-compressed .deb data members. Absence of `ar`
+    # broke the GoReleaser openssl before-hook ("error: 'ar' is required"
+    # fetching libssl-dev_3.5.6-1~deb13u2_amd64.deb) — v0.8.10 build-release.
+    - apk add --no-cache curl git bash tar xz zstd coreutils jq python3 binutils
     # Defensive cleanup: remove any stale artifacts or generated files
     # that could make GoReleaser detect a dirty git state.
     - git clean -fdx -e .zig-cache/ -e zig-cache/
