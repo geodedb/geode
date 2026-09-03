@@ -12,24 +12,30 @@ force_token: gitlab
 
 before:
   hooks:
-    # Ensure clean state
-  - rm -rf dist/
+    # Ensure clean state. `.openssl-sysroot/` is cleaned here too because the
+    # openssl prefixes MUST live OUTSIDE dist/: GoReleaser runs before.hooks
+    # AFTER `--clean` empties dist/ but BEFORE its "ensuring distribution
+    # directory" empty-check, so any before.hook that writes into dist/ trips
+    # "dist is not empty" (this silently blocked every release once the `ar`
+    # hook failure was fixed — v0.8.10/v0.8.11 build-release).
+  - rm -rf dist/ .openssl-sysroot/
     # gRPC TLS for cross-compiled releases. Zig does not search host system
     # library paths for a non-native target, so without a per-target OpenSSL
     # prefix every shipped binary linked WITHOUT libssl: `src/transport/
     # grpc_tls.zig` fell back to its stub and `serve --listen-grpc` refused to
     # start with error.TlsRequired. These hooks materialize one prefix per
-    # target under dist/openssl/<zig-triple>/, which build.zig consumes via
-    # -Dopenssl-sysroot (see the `geode` build flags below).
+    # target under .openssl-sysroot/<zig-triple>/ (OUTSIDE dist/ — see the
+    # rm hook above), which build.zig consumes via -Dopenssl-sysroot (see the
+    # `geode` build flags below).
     #
     # riscv64 and the macOS targets are deliberately absent — see the
     # `openssl_unsupported_target` note in build.zig and the
     # "grpc_transport" fields in release/target_manifest.json. They ship
     # QUIC-only and -Dopenssl-sysroot is a no-op for them.
-  - scripts/ci/fetch-openssl-prefix.sh x86_64-linux-gnu dist/openssl/x86_64-linux-gnu
-  - scripts/ci/fetch-openssl-prefix.sh aarch64-linux-gnu dist/openssl/aarch64-linux-gnu
-  - scripts/ci/fetch-openssl-prefix.sh x86_64-linux-musl dist/openssl/x86_64-linux-musl
-  - scripts/ci/fetch-openssl-prefix.sh aarch64-linux-musl dist/openssl/aarch64-linux-musl
+  - scripts/ci/fetch-openssl-prefix.sh x86_64-linux-gnu .openssl-sysroot/x86_64-linux-gnu
+  - scripts/ci/fetch-openssl-prefix.sh aarch64-linux-gnu .openssl-sysroot/aarch64-linux-gnu
+  - scripts/ci/fetch-openssl-prefix.sh x86_64-linux-musl .openssl-sysroot/x86_64-linux-musl
+  - scripts/ci/fetch-openssl-prefix.sh aarch64-linux-musl .openssl-sysroot/aarch64-linux-musl
 
 # =============================================================================
 # Zig Cross-Compilation Builds
@@ -45,9 +51,9 @@ builds:
   command: build
   flags:
   - -Doptimize=ReleaseSafe
-    # Links gRPC TLS for every target that has a prefix under dist/openssl
+    # Links gRPC TLS for every target that has a prefix under .openssl-sysroot
     # (provisioned by the `before:` hooks). build.zig derives
-    # dist/openssl/<arch>-<os>-<abi> from the resolved target, applies the
+    # .openssl-sysroot/<arch>-<os>-<abi> from the resolved target, applies the
     # GLIBC_2.38 floor the Debian libssl needs, and no-ops on riscv64/macOS.
     #
     # This is a single build-option rather than per-target build ids carrying
@@ -57,7 +63,7 @@ builds:
     # #1523 — the same constraint that put the FIPS glibc floor in build.zig).
     # Keeping one `geode` id also keeps the generated target block below in
     # sync with release/target_manifest.json with no tooling change.
-  - -Dopenssl-sysroot=dist/openssl
+  - -Dopenssl-sysroot=.openssl-sysroot
   targets:
     # BEGIN GENERATED ZIG TARGETS (tools/release_target_manifest.py)
   - x86_64-linux-gnu

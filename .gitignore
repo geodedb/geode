@@ -12,6 +12,7 @@
 core
 /external/
 /dist/
+/.openssl-sysroot/
 /out/
 /results
 /.mcp.json
