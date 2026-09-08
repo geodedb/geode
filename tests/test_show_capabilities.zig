@@ -51,6 +51,46 @@ const new_rows = [_][]const u8{
     "explain_policy",
 };
 
+// GEO-UP-001 appends these rows while preserving the original 23 above.
+const sonny_profile_rows = [_][]const u8{
+    "sonny_profile_version",
+    "read_only_covers_admin_ddl",
+    "strict_tenancy_production_default",
+    "tenant_scope_fail_closed",
+    "tenant_binding_server_verified",
+    "fts_strict_tenancy",
+    "fts_multi_graph",
+    "knn_row_visibility",
+    "knn_delete_liveness",
+    "knn_filtered_ann_pushdown",
+    "graph_procedure_tenancy",
+    "embedding_space_pinning",
+    "vector_index_generations",
+    "vector_generation_rollback",
+    "vector_build_bounded",
+    "vector_index_restart_rebuild",
+    "bulk_vector_index_maintenance",
+    "bulk_create_fts_maintenance",
+    "bulk_delete_batch",
+    "index_build_telemetry",
+    "retrieval_ready",
+    "traversal_multi_edge_type",
+    "traversal_bounded_nodes_cost_time",
+    "traversal_cycle_hub_control",
+    "traversal_cancellation",
+    "traversal_deterministic_ties",
+    "traversal_path_provenance",
+    "weighted_path_raw_property",
+    "temporal_traversal_predicates",
+    "cdc_ordered_resumable",
+    "cdc_tenant_bound",
+    "cdc_backpressure_dlq_observable",
+    "federation_authorization_preserved",
+    "federation_deterministic_topk",
+    "federation_partial_shard_errors",
+    "graph_community_summary_layer",
+};
+
 fn findRow(res: anytype, name: []const u8) ?[]const u8 {
     for (res.rows) |row| {
         if (std.mem.eql(u8, row[0].Str, name)) return row[1].Str;
@@ -100,6 +140,6 @@ test "SHOW CAPABILITIES: row count equals expected total exactly" {
     var res = try admin_ddl.executeShowCapabilities(allocator);
     defer res.deinit(allocator);
 
-    const expected: usize = legacy_rows.len + new_rows.len;
+    const expected: usize = legacy_rows.len + new_rows.len + sonny_profile_rows.len;
     try std.testing.expectEqual(expected, res.rows.len);
 }

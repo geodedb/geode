@@ -166,54 +166,127 @@ pub fn executeShowVersion(allocator: std.mem.Allocator) !ExecutionResult {
 
 // CANARY: REQ=REQ-CAPABILITY-DISCOVERY-001; FEATURE="SHOW CAPABILITIES"; ASPECT=DiscoveryRows; STATUS=TESTED; TEST=tests/test_show_capabilities.zig; OWNER=execution; UPDATED=2026-08-28
 pub fn executeShowCapabilities(allocator: std.mem.Allocator) !ExecutionResult {
-    // Two columns: feature, supported. Static truthful snapshot for the
-    // current release — this surface's documented design is a fixed list
-    // reflecting what has actually landed, not a live introspection query.
+    // Two string columns: feature, supported. The wire label is retained for
+    // compatibility; sonny_profile_version is typed metadata rather than a
+    // boolean. This is a static truthful snapshot for the current release.
     // The geode-ui consumes this for admin_writable feature detection; every
     // legacy row name below MUST keep its name and only become more truthful.
-    const Feature = struct { name: []const u8, supported: bool };
+    const CapabilityValue = union(enum) {
+        boolean: bool,
+        profile_version: void,
+
+        fn wireValue(self: @This()) []const u8 {
+            return switch (self) {
+                .boolean => |supported| if (supported) "true" else "false",
+                .profile_version => "1",
+            };
+        }
+    };
+    const Feature = struct { name: []const u8, value: CapabilityValue };
     const features = [_]Feature{
         // --- legacy rows (Geode Auth DDL, GAP-0858 admin surface) ---
-        .{ .name = "auth_ddl", .supported = true },
-        .{ .name = "admin_writable", .supported = true },
-        .{ .name = "role_ddl", .supported = true },
-        .{ .name = "grant_ddl", .supported = true },
-        .{ .name = "show_permissions", .supported = true },
-        .{ .name = "show_version", .supported = true },
+        .{ .name = "auth_ddl", .value = .{ .boolean = true } },
+        .{ .name = "admin_writable", .value = .{ .boolean = true } },
+        .{ .name = "role_ddl", .value = .{ .boolean = true } },
+        .{ .name = "grant_ddl", .value = .{ .boolean = true } },
+        .{ .name = "show_permissions", .value = .{ .boolean = true } },
+        .{ .name = "show_version", .value = .{ .boolean = true } },
         // GAP-0858 (2026-06-xx): durable GPS policy DDL persistence landed —
         // CREATE/ALTER/DROP POLICY (incl. RENAME TO) write through to
         // __geode_security and survive restart. The residual is the manual
         // GQL->bytecode expression-compilation path (see CLAUDE.md Known
         // Limitations), not policy DDL persistence itself, so this flips true.
-        .{ .name = "policy_ddl", .supported = true },
-        .{ .name = "fle_ddl", .supported = false },
-        .{ .name = "tenant_ddl", .supported = false },
+        .{ .name = "policy_ddl", .value = .{ .boolean = true } },
+        .{ .name = "fle_ddl", .value = .{ .boolean = false } },
+        .{ .name = "tenant_ddl", .value = .{ .boolean = false } },
         // --- discovery rows added for hybrid-RAG capability discovery
         // (Task 7): every feature below landed in Tasks 1-6 of that plan. ---
-        .{ .name = "vector_knn", .supported = true },
-        .{ .name = "vector_index_metrics", .supported = true },
-        .{ .name = "knn_metric_validation", .supported = true },
-        .{ .name = "fts_search", .supported = true },
-        .{ .name = "fts_phrase_proximity", .supported = true },
-        .{ .name = "fts_rebuild", .supported = true },
-        .{ .name = "fts_bulk_merge_live_maintenance", .supported = true },
-        .{ .name = "fts_row_visibility", .supported = true },
-        .{ .name = "ts_procedures", .supported = true },
-        .{ .name = "read_only_execute", .supported = true },
-        .{ .name = "mcp_read_only", .supported = true },
-        .{ .name = "explain", .supported = true },
-        .{ .name = "profile", .supported = true },
-        .{ .name = "explain_policy", .supported = true },
+        .{ .name = "vector_knn", .value = .{ .boolean = true } },
+        .{ .name = "vector_index_metrics", .value = .{ .boolean = true } },
+        .{ .name = "knn_metric_validation", .value = .{ .boolean = true } },
+        .{ .name = "fts_search", .value = .{ .boolean = true } },
+        .{ .name = "fts_phrase_proximity", .value = .{ .boolean = true } },
+        .{ .name = "fts_rebuild", .value = .{ .boolean = true } },
+        .{ .name = "fts_bulk_merge_live_maintenance", .value = .{ .boolean = true } },
+        .{ .name = "fts_row_visibility", .value = .{ .boolean = true } },
+        .{ .name = "ts_procedures", .value = .{ .boolean = true } },
+        .{ .name = "read_only_execute", .value = .{ .boolean = true } },
+        .{ .name = "mcp_read_only", .value = .{ .boolean = true } },
+        .{ .name = "explain", .value = .{ .boolean = true } },
+        .{ .name = "profile", .value = .{ .boolean = true } },
+        .{ .name = "explain_policy", .value = .{ .boolean = true } },
+        // GEO-UP-001 (ENG-4653): Sonny GraphRAG capability profile rows.
+        // CANARY: REQ=REQ-SONNY-CAPABILITY-PROFILE-001; FEATURE="SonnyCapabilityProfile"; ASPECT=DiscoveryRows; STATUS=TESTED; TEST=tests/test_sonny_capability_profile.zig; OWNER=execution; UPDATED=2026-09-08
+        .{ .name = "sonny_profile_version", .value = .{ .profile_version = {} } },
+        .{ .name = "read_only_covers_admin_ddl", .value = .{ .boolean = false } },
+        .{ .name = "strict_tenancy_production_default", .value = .{ .boolean = false } },
+        .{ .name = "tenant_scope_fail_closed", .value = .{ .boolean = false } },
+        .{ .name = "tenant_binding_server_verified", .value = .{ .boolean = false } },
+        .{ .name = "fts_strict_tenancy", .value = .{ .boolean = false } },
+        .{ .name = "fts_multi_graph", .value = .{ .boolean = false } },
+        .{ .name = "knn_row_visibility", .value = .{ .boolean = false } },
+        .{ .name = "knn_delete_liveness", .value = .{ .boolean = false } },
+        .{ .name = "knn_filtered_ann_pushdown", .value = .{ .boolean = false } },
+        .{ .name = "graph_procedure_tenancy", .value = .{ .boolean = false } },
+        .{ .name = "embedding_space_pinning", .value = .{ .boolean = false } },
+        .{ .name = "vector_index_generations", .value = .{ .boolean = false } },
+        .{ .name = "vector_generation_rollback", .value = .{ .boolean = false } },
+        .{ .name = "vector_build_bounded", .value = .{ .boolean = false } },
+        .{ .name = "vector_index_restart_rebuild", .value = .{ .boolean = false } },
+        .{ .name = "bulk_vector_index_maintenance", .value = .{ .boolean = false } },
+        .{ .name = "bulk_create_fts_maintenance", .value = .{ .boolean = false } },
+        .{ .name = "bulk_delete_batch", .value = .{ .boolean = false } },
+        .{ .name = "index_build_telemetry", .value = .{ .boolean = false } },
+        .{ .name = "retrieval_ready", .value = .{ .boolean = false } },
+        .{ .name = "traversal_multi_edge_type", .value = .{ .boolean = false } },
+        .{ .name = "traversal_bounded_nodes_cost_time", .value = .{ .boolean = false } },
+        .{ .name = "traversal_cycle_hub_control", .value = .{ .boolean = false } },
+        .{ .name = "traversal_cancellation", .value = .{ .boolean = false } },
+        .{ .name = "traversal_deterministic_ties", .value = .{ .boolean = false } },
+        .{ .name = "traversal_path_provenance", .value = .{ .boolean = false } },
+        .{ .name = "weighted_path_raw_property", .value = .{ .boolean = false } },
+        .{ .name = "temporal_traversal_predicates", .value = .{ .boolean = false } },
+        .{ .name = "cdc_ordered_resumable", .value = .{ .boolean = false } },
+        .{ .name = "cdc_tenant_bound", .value = .{ .boolean = false } },
+        .{ .name = "cdc_backpressure_dlq_observable", .value = .{ .boolean = false } },
+        .{ .name = "federation_authorization_preserved", .value = .{ .boolean = false } },
+        .{ .name = "federation_deterministic_topk", .value = .{ .boolean = false } },
+        .{ .name = "federation_partial_shard_errors", .value = .{ .boolean = false } },
+        .{ .name = "graph_community_summary_layer", .value = .{ .boolean = false } },
     };
     const columns = try allocator.alloc([]const u8, 2);
+    var initialized_columns: usize = 0;
+    errdefer {
+        for (columns[0..initialized_columns]) |column| allocator.free(column);
+        allocator.free(columns);
+    }
     columns[0] = try allocator.dupe(u8, "feature");
+    initialized_columns += 1;
     columns[1] = try allocator.dupe(u8, "supported");
+    initialized_columns += 1;
+
     const rows = try allocator.alloc([]Value, features.len);
+    var initialized_rows: usize = 0;
+    errdefer {
+        for (rows[0..initialized_rows]) |row| {
+            for (row) |value| execution.freeValue(allocator, value);
+            allocator.free(row);
+        }
+        allocator.free(rows);
+    }
     for (features, 0..) |f, i| {
         const row = try allocator.alloc(Value, 2);
+        var initialized_values: usize = 0;
+        errdefer {
+            for (row[0..initialized_values]) |value| execution.freeValue(allocator, value);
+            allocator.free(row);
+        }
         row[0] = Value{ .Str = try allocator.dupe(u8, f.name) };
-        row[1] = Value{ .Str = try allocator.dupe(u8, if (f.supported) "true" else "false") };
+        initialized_values += 1;
+        row[1] = Value{ .Str = try allocator.dupe(u8, f.value.wireValue()) };
+        initialized_values += 1;
         rows[i] = row;
+        initialized_rows += 1;
     }
     return ExecutionResult{
         .columns = columns,
@@ -221,10 +294,9 @@ pub fn executeShowCapabilities(allocator: std.mem.Allocator) !ExecutionResult {
         .flags = std.ArrayList([]const u8).empty,
         // Row values are heap-duped strings (allocator.dupe above) — without
         // this flag ExecutionResult.deinit skips freeValue on each row and
-        // every feature/supported string leaks. Pre-existing bug, surfaced
-        // now because this row set grew from 9 to 23 (Task 7) and
-        // tests/test_show_capabilities.zig drives the real dispatch under
-        // std.testing.allocator's strict leak checking.
+        // every feature/value string leaks. The legacy ownership regression
+        // and the profile's exhaustive allocation-failure sweep both drive
+        // the real builder under std.testing.allocator.
         .owns_value_memory = true,
     };
 }

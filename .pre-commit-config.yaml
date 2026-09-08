@@ -477,9 +477,17 @@ repos:
     args:
     - -c
     - |
+      set -euo pipefail
+      status_tmp_dir="$(mktemp -d "${TMPDIR:-/tmp}/geode-status-check.XXXXXX")"
+      status_tmp_file="$status_tmp_dir/status.csv"
+      cleanup_status_tmp() {
+        rm -f -- "$status_tmp_file"
+        rmdir -- "$status_tmp_dir"
+      }
+      trap cleanup_status_tmp EXIT
       echo "Checking if docs/status.csv is up to date..."
-      python3 tools/status_generate.py --repo . --out /tmp/status_check.csv 2>/dev/null
-      if ! diff -q docs/status.csv /tmp/status_check.csv > /dev/null 2>&1; then
+      python3 tools/status_generate.py --repo . --out "$status_tmp_file" 2>/dev/null
+      if ! diff -q docs/status.csv "$status_tmp_file" > /dev/null 2>&1; then
         echo "✗ docs/status.csv is stale - regenerating..."
         python3 tools/status_generate.py --repo . --out docs/status.csv
         git add docs/status.csv

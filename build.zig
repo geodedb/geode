@@ -2113,6 +2113,19 @@ pub fn build(b: *std.Build) void {
     const show_capabilities_step = b.step("test-show-capabilities", "Run SHOW CAPABILITIES truthful discovery-grade row tests (Task 7)");
     show_capabilities_step.dependOn(&run_show_capabilities_tests.step);
 
+    // GEO-UP-001 (ENG-4653): immutable requirements manifest and real
+    // SHOW CAPABILITIES dispatch parity, including allocation-failure cleanup.
+    const sonny_capability_profile_tests = b.addTest(.{ .root_module = b.createModule(.{
+        .root_source_file = b.path("tests/test_sonny_capability_profile.zig"),
+        .target = target,
+        .optimize = optimize,
+    }) });
+    sonny_capability_profile_tests.root_module.addImport("geode", root_mod);
+    sonny_capability_profile_tests.root_module.link_libc = true;
+    const run_sonny_capability_profile_tests = b.addRunArtifact(sonny_capability_profile_tests);
+    const sonny_capability_profile_step = b.step("test-sonny-capability-profile", "Run Sonny capability profile publication contract tests (GEO-UP-001)");
+    sonny_capability_profile_step.dependOn(&run_sonny_capability_profile_tests.step);
+
     // drainReady-and-bridge dispatch test (Task A5b of the 2026-05-25
     // distributed cluster testing plan).  Confirms that
     // RaftNode.setTransport installs the bridge into the inner raft library
@@ -3576,6 +3589,8 @@ pub fn build(b: *std.Build) void {
     @memset(test_shard_loads, 0);
 
     const test_step = b.step("test", "Run unit tests");
+    shardDep(test_step, &run_show_capabilities_tests.step, 1, test_shard_loads, test_shard_index);
+    shardDep(test_step, &run_sonny_capability_profile_tests.step, 1, test_shard_loads, test_shard_index);
     shardDep(test_step, &run_lib_unit_tests.step, 10, test_shard_loads, test_shard_index);
     // REQ-CLI-PORTABLE-ARGV-001: portable process-argv holder (declared near
     // cli_args_mod above). Cross-platform replacement for /proc/self/cmdline.
