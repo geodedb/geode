@@ -161,14 +161,46 @@ fn readManifest(allocator: std.mem.Allocator) ![]u8 {
     );
 }
 
-fn initCatalog(allocator: std.mem.Allocator) !*geode.catalog.Catalog {
-    return geode.catalog.Catalog.init(allocator, "/nonexistent/geode-sonny-capability-profile-test");
+fn tmpDirRealpathAlloc(allocator: std.mem.Allocator, dir: std.Io.Dir) ![]u8 {
+    var path_buf: [std.fs.max_path_bytes]u8 = undefined;
+    const path_len = try dir.realPath(testing.io, &path_buf);
+    return allocator.dupe(u8, path_buf[0..path_len]);
 }
 
-fn deinitCatalog(allocator: std.mem.Allocator, catalog: *geode.catalog.Catalog) void {
-    catalog.deinit();
-    allocator.destroy(catalog);
-}
+const TestCatalog = struct {
+    allocator: std.mem.Allocator,
+    tmp: std.testing.TmpDir,
+    data_dir: []u8,
+    catalog: *geode.catalog.Catalog,
+
+    fn init(allocator: std.mem.Allocator) !TestCatalog {
+        var tmp = std.testing.tmpDir(.{});
+        errdefer tmp.cleanup();
+
+        const data_dir = try tmpDirRealpathAlloc(allocator, tmp.dir);
+        errdefer allocator.free(data_dir);
+
+        const catalog = try geode.catalog.Catalog.init(allocator, data_dir);
+        errdefer {
+            catalog.deinit();
+            allocator.destroy(catalog);
+        }
+
+        return .{
+            .allocator = allocator,
+            .tmp = tmp,
+            .data_dir = data_dir,
+            .catalog = catalog,
+        };
+    }
+
+    fn deinit(self: *TestCatalog) void {
+        self.catalog.deinit();
+        self.allocator.destroy(self.catalog);
+        self.allocator.free(self.data_dir);
+        self.tmp.cleanup();
+    }
+};
 
 const AllocationEvent = struct {
     len: usize,
@@ -264,9 +296,9 @@ fn requireJsonString(object: std.json.ObjectMap, name: []const u8) ![]const u8 {
 }
 
 test "SHOW CAPABILITIES emits the exact ordered 59-row typed value oracle" {
-    const catalog = try initCatalog(testing.allocator);
-    defer deinitCatalog(testing.allocator, catalog);
-    var result = try showCapabilities(testing.allocator, catalog);
+    var catalog = try TestCatalog.init(testing.allocator);
+    defer catalog.deinit();
+    var result = try showCapabilities(testing.allocator, catalog.catalog);
     defer result.deinit(testing.allocator);
 
     try testing.expectEqual(@as(usize, 2), result.columns.len);
@@ -291,12 +323,12 @@ test "SHOW CAPABILITIES emits the exact ordered 59-row typed value oracle" {
 }
 
 test "SHOW CAPABILITIES production dispatch cleans every capability-builder allocation failure" {
-    const catalog = try initCatalog(testing.allocator);
-    defer deinitCatalog(testing.allocator, catalog);
+    var catalog = try TestCatalog.init(testing.allocator);
+    defer catalog.deinit();
     var parsed = try geode.parseGql("SHOW CAPABILITIES", testing.allocator);
     defer parsed.deinit();
     const statement = parsed.program.statements[0];
-    const context = execution.ExecutionContext{ .catalog = catalog };
+    const context = execution.ExecutionContext{ .catalog = catalog.catalog };
 
     // The real SHOW dispatcher first builds a query-read snapshot. Its OOM
     // handling belongs to that subsystem, so identify the terminal builder's
@@ -401,9 +433,9 @@ test "every requirement names an actually emitted discovery row" {
     var parsed = try std.json.parseFromSlice(std.json.Value, testing.allocator, manifest_bytes, .{});
     defer parsed.deinit();
 
-    const catalog = try initCatalog(testing.allocator);
-    defer deinitCatalog(testing.allocator, catalog);
-    var result = try showCapabilities(testing.allocator, catalog);
+    var catalog = try TestCatalog.init(testing.allocator);
+    defer catalog.deinit();
+    var result = try showCapabilities(testing.allocator, catalog.catalog);
     defer result.deinit(testing.allocator);
     var emitted = std.StringHashMap(void).init(testing.allocator);
     defer emitted.deinit();
