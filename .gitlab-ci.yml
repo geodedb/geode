@@ -4,6 +4,13 @@
 # =============================================================================
 
 include:
+  # Publish README + docs/*.md to the SUP support portal knowledge base
+  # (Confluence space SUPKB) so portal users can read product docs without
+  # repo access. Idempotent, default-branch only, never blocks the pipeline.
+  - component: gitlab.com/devnw/ci-catalog/confluence-kb-publish@v1.51.0
+    inputs:
+      stage: .post
+      project_title: Geode
   # Zig code formatting and quality check
   # CI-FIX: pinned to project's Zig version (0.16.0). Previously "0.15.2"
   # which caused Exec-format-error on ARM64 runners because that version
