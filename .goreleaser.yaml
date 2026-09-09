@@ -56,26 +56,51 @@ builds:
     # .openssl-sysroot/<arch>-<os>-<abi> from the resolved target, applies the
     # GLIBC_2.38 floor the Debian libssl needs, and no-ops on riscv64/macOS.
     #
-    # This is a single build-option rather than per-target build ids carrying
-    # their own --search-prefix because GoReleaser's zig builder takes ONE flag
-    # list per build id, AND its `targets:` list rejects the glibc-versioned
-    # triple needed here ("invalid target: x86_64-linux-gnu.2.38", pipeline
-    # #1523 — the same constraint that put the FIPS glibc floor in build.zig).
-    # Keeping one `geode` id also keeps the generated target block below in
-    # sync with release/target_manifest.json with no tooling change.
+    # This is a single build-option rather than per-target --search-prefix
+    # flags because GoReleaser's zig builder takes ONE flag list per build
+    # id, AND its `targets:` list rejects the glibc-versioned triple needed
+    # here ("invalid target: x86_64-linux-gnu.2.38", pipeline #1523 — the
+    # same constraint that put the FIPS glibc floor in build.zig).
+    #
+    # ENG-5008: the musl targets live in the separate `geode-musl` build id
+    # below, NOT here. With gnu and musl targets sharing one id, every
+    # consumer that selects artifacts by goos/goarch got an AMBIGUOUS pick:
+    # nfpm rendered two debs per arch under the same Os/Arch-keyed filename
+    # and the last build to finish clobbered the other (v0.8.13 shipped a
+    # musl-linked amd64 deb no glibc host could exec, while arm64 happened
+    # to keep gnu — a race, not a choice), and the docker image defs had
+    # the same coin-flip between the Debian and Alpine base images. Both
+    # generated blocks are kept in sync from release/target_manifest.json
+    # by tools/release_target_manifest.py (musl targets are recognized by
+    # the -linux-musl suffix).
   - -Dopenssl-sysroot=.openssl-sysroot
   targets:
     # BEGIN GENERATED ZIG TARGETS (tools/release_target_manifest.py)
   - x86_64-linux-gnu
-  - x86_64-linux-musl
   - aarch64-linux-gnu
-  - aarch64-linux-musl
   - riscv64-linux-gnu
   - x86_64-macos
   - aarch64-macos
     # END GENERATED ZIG TARGETS
     # Windows targets are intentionally excluded due to QUIC library socket type incompatibilities.
     # Re-enable once vendor/quic Windows socket support is available.
+
+  # musl builds (Alpine images + musl tarballs + apk packages). Same flags
+  # as `geode`; split out solely so goos/goarch artifact selection is
+  # unambiguous — see the ENG-5008 note above.
+- id: geode-musl
+  builder: zig
+  binary: geode
+  dir: .
+  command: build
+  flags:
+  - -Doptimize=ReleaseSafe
+  - -Dopenssl-sysroot=.openssl-sysroot
+  targets:
+    # BEGIN GENERATED ZIG MUSL TARGETS (tools/release_target_manifest.py)
+  - x86_64-linux-musl
+  - aarch64-linux-musl
+    # END GENERATED ZIG MUSL TARGETS
 
   # FIPS-validated build: amd64-only, dynamically links the validated OpenSSL
   # FIPS provider. The provider must be present at /usr/local/ssl on the BUILD
@@ -110,6 +135,7 @@ archives:
 - id: geode-archives
   ids:
   - geode
+  - geode-musl
     # Use Target directly which contains the full Zig target string
   name_template: '{{ .ProjectName }}_{{ .Version }}_{{ .Target }}'
   format_overrides:
@@ -254,8 +280,9 @@ dockers:
 
   # Alpine-based images (smaller, musl-linked) - GitLab Registry
 - id: geode-alpine-amd64
+  # Alpine base is musl — must consume the geode-musl build (ENG-5008).
   ids:
-  - geode
+  - geode-musl
   goos: linux
   goarch: amd64
   image_templates:
@@ -275,8 +302,9 @@ dockers:
   - --label=org.opencontainers.image.version={{.Version}}
 
 - id: geode-alpine-arm64
+  # Alpine base is musl — must consume the geode-musl build (ENG-5008).
   ids:
-  - geode
+  - geode-musl
   goos: linux
   goarch: arm64
   image_templates:
@@ -342,8 +370,9 @@ dockers:
 
   # Docker Hub images - Alpine-based
 - id: geode-dockerhub-alpine-amd64
+  # Alpine base is musl — must consume the geode-musl build (ENG-5008).
   ids:
-  - geode
+  - geode-musl
   goos: linux
   goarch: amd64
   image_templates:
@@ -362,8 +391,9 @@ dockers:
   - --label=org.opencontainers.image.version={{.Version}}
 
 - id: geode-dockerhub-alpine-arm64
+  # Alpine base is musl — must consume the geode-musl build (ENG-5008).
   ids:
-  - geode
+  - geode-musl
   goos: linux
   goarch: arm64
   image_templates:
@@ -622,6 +652,13 @@ docker_manifests:
 # =============================================================================
 
 nfpms:
+  # deb/rpm consume ONLY the glibc (`geode`) build id. ENG-5008: when the
+  # musl targets shared that id, nfpm rendered gnu and musl debs under the
+  # same Os/Arch-keyed filename and the LAST build to finish won — v0.8.13
+  # published a musl-linked amd64 deb that no Debian/Ubuntu/Kali host could
+  # exec (interpreter /lib/ld-musl-x86_64.so.1 → ENOENT, and the
+  # postinst-enabled unit crash-looped 12x/min fleet-wide for days). The
+  # apk format moved to the geode-musl-packages block below: Alpine IS musl.
 - id: geode-packages
   package_name: geode
   ids:
@@ -638,7 +675,6 @@ nfpms:
   formats:
   - deb
   - rpm
-  - apk
   bindir: /usr/bin
   section: database
   priority: optional
@@ -657,7 +693,7 @@ nfpms:
     {{- else if eq .Arch "arm64" }}arm64
     {{- else if eq .Arch "riscv64" }}riscv64
     {{- else }}{{ .Arch }}{{ end }}
-  contents:
+  contents: &geode-package-contents
       # Documentation
   - src: README.md
     dst: /usr/share/doc/geode/README.md
@@ -751,11 +787,51 @@ nfpms:
       - ca-certificates
       - libssl3
 
-  scripts:
+  scripts: &geode-package-scripts
     preinstall: scripts/packaging/preinstall.sh
     postinstall: scripts/packaging/postinstall.sh
     preremove: scripts/packaging/preremove.sh
     postremove: scripts/packaging/postremove.sh
+
+  # apk packages consume the musl build — Alpine IS musl (ENG-5008). Same
+  # metadata, contents, and maintainer scripts as the deb/rpm block (the
+  # scripts guard every systemctl call behind `command -v systemctl`, so
+  # they are no-ops on Alpine); only the source build id and the package
+  # format differ.
+- id: geode-musl-packages
+  package_name: geode
+  ids:
+  - geode-musl
+  vendor: CodePros
+  homepage: https://gitlab.com/devnw/codepros/geode/geode
+  maintainer: Geode Team <geode@codepros.dev>
+  description: |-
+    Geode Graph Database - ISO/IEC 39075:2024 GQL-compliant property-graph database.
+
+    Geode is a high-performance graph database implementing the GQL standard
+    with ACID guarantees, QUIC/TLS transport, and enterprise security features.
+  license: Apache-2.0
+  formats:
+  - apk
+  bindir: /usr/bin
+  section: database
+  priority: optional
+  provides:
+  - geode
+  dependencies:
+  - ca-certificates
+  - libssl3
+  file_name_template: >-
+    {{ .ProjectName }}_{{ .Version }}_
+    {{- if eq .Os "linux" }}Linux{{- else }}{{ title .Os }}{{ end }}_
+    {{- if eq .Arch "amd64" }}x86_64
+    {{- else if eq .Arch "386" }}i386
+    {{- else if eq .Arch "arm" }}armv{{ .Arm }}
+    {{- else if eq .Arch "arm64" }}arm64
+    {{- else if eq .Arch "riscv64" }}riscv64
+    {{- else }}{{ .Arch }}{{ end }}
+  contents: *geode-package-contents
+  scripts: *geode-package-scripts
 
 # =============================================================================
 # GitLab Release
