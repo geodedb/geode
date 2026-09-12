@@ -300,7 +300,9 @@ Storage, authentication, tenant, certificate, audit, and lock initialization may
 already have created protected files; refusal is before serving, not rollback
 of those files. The gate does not certify broader registry fallback or startup
 allocation ownership. Positive live canonical-profile startup still requires
-the owning capability behaviors and a compatible release identity.
+the owning capability behaviors and a compatible release identity. On a
+release at or above the floor the live refusal reason is
+`MandatoryCapabilityUnsupported` until every required row reports `true`.
 
 `zig build test-capability-gate` runs pure/schema/bounds/config tests, including
 allocation-failure checks. `zig build test-capability-gate-startup` runs the

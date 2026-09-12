@@ -2154,6 +2154,7 @@ pub fn build(b: *std.Build) void {
         .optimize = optimize,
         .link_libc = true,
     }) });
+    capability_gate_startup_tests.root_module.addImport("build_options", build_options_mod);
     const run_capability_gate_startup_tests = b.addRunArtifact(capability_gate_startup_tests);
     run_capability_gate_startup_tests.step.dependOn(b.getInstallStep());
     b.step("test-capability-gate-startup", "Run native observed capability startup refusal and ordinary controls").dependOn(&run_capability_gate_startup_tests.step);

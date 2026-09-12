@@ -2,13 +2,26 @@
 // Linux process acceptance uses real installed geode and native syscall tracing.
 // Python orchestrates bounded children/fixtures; it never supplies engine rows.
 const std = @import("std");
+const build_options = @import("build_options");
+
+// The live refusal reason for a canonical profile is version-relative: below the
+// engine floor the gate stops at the version check, at or above it the still-false
+// mandatory capability rows decide. The harness never guesses it; Zig computes it
+// from the build version and hands it over as argv[1].
+fn expectedCanonicalReason() ![]const u8 {
+    const label = build_options.version;
+    const running = try std.SemanticVersion.parse(if (std.mem.startsWith(u8, label, "v")) label[1..] else label);
+    const floor: std.SemanticVersion = .{ .major = 0, .minor = 8, .patch = 14 };
+    return if (running.order(floor) == .lt) "IncompatibleEngineVersion" else "MandatoryCapabilityUnsupported";
+}
 
 test "real startup gate refuses before every listener and releases its lock" {
     if (@import("builtin").os.tag != .linux) return error.NativeObservationPlatformUnavailable;
     var threaded = std.Io.Threaded.init(std.testing.allocator, .{});
     defer threaded.deinit();
+    const expected_reason = try expectedCanonicalReason();
     const result = try std.process.run(std.testing.allocator, threaded.io(), .{
-        .argv = &.{ "/usr/bin/python3", "-c", process_test ++ "\n" ++ growth_test },
+        .argv = &.{ "/usr/bin/python3", "-c", process_test ++ "\n" ++ growth_test, expected_reason },
         .stdout_limit = .limited(1 << 20),
         .stderr_limit = .limited(1 << 20),
     });
@@ -19,7 +32,8 @@ test "real startup gate refuses before every listener and releases its lock" {
 }
 
 const process_test =
-    \\import ctypes, datetime, fcntl, hashlib, json, os, pathlib, re, signal, socket, stat, subprocess, tempfile, time
+    \\import ctypes, datetime, fcntl, hashlib, json, os, pathlib, re, signal, socket, stat, subprocess, sys, tempfile, time
+    \\canonical_reason = sys.argv[1]
     \\assert ctypes.CDLL(None).prctl(36, 1, 0, 0, 0) == 0, 'subreaper unavailable'
     \\work = pathlib.Path.cwd()
     \\binary = work / 'zig-out/bin/geode'
@@ -54,7 +68,7 @@ const process_test =
     \\    if mode == 'cluster':
     \\        env.update(GEODE_NODE_ID='1', GEODE_CLUSTER_TOKEN='task2-owned-local-cluster-token', GEODE_CLUSTER_LISTEN_ADDRESS='127.0.0.1', GEODE_CLUSTER_PORT=str(c))
     \\        expected += [c]
-    \\    reason = 'IncompatibleEngineVersion'
+    \\    reason = canonical_reason
     \\    if profile_kind:
     \\        path = d/'profile.json'
     \\        data = manifest.read_bytes()

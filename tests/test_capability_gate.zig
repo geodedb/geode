@@ -328,7 +328,17 @@ test "real discovery refuses the actual engine floor" {
     try testing.expectEqual(rows.len, caps.rows.len);
     for (caps.rows, 0..) |row, i| rows[i] = .{ .name = row[0].Str, .value = row[1].Str };
     try testing.expectError(error.InvalidEngineVersion, gate.validateProfile(testing.allocator, bytes, &rows, @import("build_options").version));
-    try testing.expectError(error.IncompatibleEngineVersion, gate.validateProfile(testing.allocator, bytes, &rows, gate.engineVersionFromBuildLabel(@import("build_options").version)));
+    // The running build's refusal reason is version-relative: below the engine
+    // floor the gate stops at the version check, at or above it the still-false
+    // mandatory rows decide. Both are refusals; only the reason moves.
+    const running_label = gate.engineVersionFromBuildLabel(@import("build_options").version);
+    const running = try std.SemanticVersion.parse(running_label);
+    const floor: std.SemanticVersion = .{ .major = 0, .minor = 8, .patch = 14 };
+    const expected_running: anyerror = if (running.order(floor) == .lt) error.IncompatibleEngineVersion else error.MandatoryCapabilityUnsupported;
+    try testing.expectError(expected_running, gate.validateProfile(testing.allocator, bytes, &rows, running_label));
+    // Floor refusal stays covered deterministically, independent of the build.
+    try testing.expectError(error.IncompatibleEngineVersion, gate.validateProfile(testing.allocator, bytes, &rows, "0.8.13"));
+    try testing.expectError(error.IncompatibleEngineVersion, gate.validateProfile(testing.allocator, bytes, &rows, "0.8.14-2-g080f1737"));
     try testing.expectError(error.MandatoryCapabilityUnsupported, gate.validateProfile(testing.allocator, bytes, &rows, "0.8.14"));
 }
 
