@@ -33,7 +33,7 @@ endif
 .PHONY: canary canary-verify go-test-fips governance-check update-status-hash governance-delta governance-dry-run governance-freshness-prewarn governance-aggregate match-ops-parity match-ops-bench cli-transport-parity stdio-abstraction-check release-target-manifest-check docker-release-sync docker-release-check docker-release-signoff docker-healthcheck-test
 .PHONY: test-shim test-fips test-dual test-fips-seam
 .PHONY: telemetry-smoke quic-smoke quic-smoke-strict quic-test client-test-zig
-.PHONY: transport-parity-smokes status-generate status-generate-test no-feature-flags zig-package-cache-check cluster-test
+.PHONY: transport-parity-smokes status-generate status-csv status-generate-test no-feature-flags zig-package-cache-check cluster-test
 .PHONY: loadtest-compare loadtest-save-baseline loadtest-save-all-baselines bench-timeseries
 # Note: geodetestlab and client-test-harness moved to separate repository (geode-test-harness)
 .PHONY: deps deps-check
@@ -1173,6 +1173,11 @@ status-generate:
 		echo "tools/status_generate.py not found or not executable"; \
 		exit 1; \
 	fi
+
+# Regenerate the tracked status.csv. The status-csv-check pre-commit hook is
+# check-only and points here when docs/status.csv is stale.
+status-csv:
+	python3 tools/status_generate.py --repo . --out docs/status.csv
 
 # Quality #730: golden unit tests for the CANARY parser/generator tooling
 # (status_generate.py marker regex + strict STATUS filter, canary_lint.py

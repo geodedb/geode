@@ -488,10 +488,8 @@ repos:
       echo "Checking if docs/status.csv is up to date..."
       python3 tools/status_generate.py --repo . --out "$status_tmp_file" 2>/dev/null
       if ! diff -q docs/status.csv "$status_tmp_file" > /dev/null 2>&1; then
-        echo "✗ docs/status.csv is stale - regenerating..."
-        python3 tools/status_generate.py --repo . --out docs/status.csv
-        git add docs/status.csv
-        echo "✓ Updated and staged docs/status.csv"
+        echo "docs/status.csv is stale — run: make status-csv"
+        exit 1
       fi
       echo "✓ docs/status.csv is up to date"
     language: system

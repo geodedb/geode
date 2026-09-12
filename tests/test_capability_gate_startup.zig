@@ -19,7 +19,7 @@ test "real startup gate refuses before every listener and releases its lock" {
 }
 
 const process_test =
-    \\import ctypes, datetime, fcntl, hashlib, json, os, pathlib, re, signal, socket, subprocess, tempfile, time
+    \\import ctypes, datetime, fcntl, hashlib, json, os, pathlib, re, signal, socket, stat, subprocess, tempfile, time
     \\assert ctypes.CDLL(None).prctl(36, 1, 0, 0, 0) == 0, 'subreaper unavailable'
     \\work = pathlib.Path.cwd()
     \\binary = work / 'zig-out/bin/geode'
@@ -146,14 +146,23 @@ const process_test =
     \\        if profile_kind not in ('bad-config','empty-path'): assert 'capability profile' in output and 'refusing to start' in output, 'missing refusal diagnostic'
     \\        assert '[startup] server ready' not in output and 'status":"listening' not in output, 'premature readiness'
     \\    else: assert reached, 'ordinary listener prerequisite failed: '+str(d)
+    \\    if profile_kind == 'fifo' and path.is_fifo(): path.unlink()
     \\    print('PASS '+d.name,flush=True)
-    \\for mode in ('quic','grpc','combined','metrics','lsp','cluster','env','file','discovery'):
-    \\    case(mode)
-    \\    case(mode,'canonical')
-    \\for kind in ('missing','directory','fifo','oversize','exact-size','symlink','unreadable','malformed'): case('quic',kind)
-    \\case('file','bad-config')
-    \\case('discovery','bad-config')
-    \\case('env','empty-path')
+    \\def sweep_fifos():
+    \\    for p in root.rglob('*'):
+    \\        try:
+    \\            if stat.S_ISFIFO(p.lstat().st_mode): p.unlink()
+    \\        except OSError: pass
+    \\try:
+    \\    for mode in ('quic','grpc','combined','metrics','lsp','cluster','env','file','discovery'):
+    \\        case(mode)
+    \\        case(mode,'canonical')
+    \\    for kind in ('missing','directory','fifo','oversize','exact-size','symlink','unreadable','malformed'): case('quic',kind)
+    \\    case('file','bad-config')
+    \\    case('discovery','bad-config')
+    \\    case('env','empty-path')
+    \\finally:
+    \\    sweep_fifos()
 ;
 
 // Stop the real process on the successful same-descriptor stat syscall exit,
