@@ -4,6 +4,13 @@
 # =============================================================================
 
 include:
+  # Publish README + docs/*.md to the SUP support portal knowledge base
+  # (Confluence space SUPKB) so portal users can read product docs without
+  # repo access. Idempotent, default-branch only, never blocks the pipeline.
+  - component: gitlab.com/devnw/ci-catalog/confluence-kb-publish@v1.52.0
+    inputs:
+      stage: .post
+      project_title: Geode
   # Zig code formatting and quality check
   # CI-FIX: pinned to project's Zig version (0.16.0). Previously "0.15.2"
   # which caused Exec-format-error on ARM64 runners because that version
@@ -51,7 +58,10 @@ include:
       vault_secret_path: geode/apt
       package_path: dist/*.deb
       gpg_key_name: geode.gpg
-      sign_needs: build-release
+      # ENG-5008: sign (and therefore the whole apt-publish chain) takes
+      # its dist/*.deb from verify-packages, the packaging smoke test —
+      # an unverified .deb can no longer reach apt.geodedb.com.
+      sign_needs: verify-packages
       allow_failure: false
   - component: gitlab.com/devnw/ci-catalog/zig-version-tag-check@v1.48.0
   # NOTE: the FIPS dual-mode parity gate is defined INLINE below as
@@ -2101,6 +2111,88 @@ dev-image-fips:
       echo "✓ pushed geode FIPS dev image tags [${FIPS_TAGS}] (no latest)"
 
 # Build release artifacts for tags (alpha, beta, stable)
+# ENG-5008 packaging smoke test. v0.8.13 published an amd64 .deb whose
+# binary was musl-linked (a build-id ambiguity raced the gnu and musl
+# builds onto one filename) — no glibc host could exec it, and nothing in
+# the pipeline noticed: the corruption class is one exec away from
+# detection. This job extracts every .deb on a real glibc image, rejects
+# any musl-linked /usr/bin/geode, and RUNS the amd64 binary. dpkg-deb -x
+# also re-catches the nfpm AR-alignment corruption (Issue #379) at the
+# gate rather than on customer hosts. Publishing is impossible without
+# it: the apt-publish component's sign job takes its dist/*.deb artifacts
+# from THIS job (`sign_needs: verify-packages` above), so a failed or
+# skipped verify starves the publish chain of packages entirely.
+#
+# debian:trixie-slim, not bookworm: the release binaries carry the
+# GLIBC_2.38 floor (see build.zig / target_manifest runtime_requires),
+# and trixie is what the fleet actually runs.
+verify-packages:
+  stage: release
+  interruptible: false
+  needs:
+    - job: build-release
+      artifacts: true
+  tags:
+    - company
+    - k8s
+    - linux
+  image: debian:trixie-slim
+  rules:
+    - if: '$CI_COMMIT_TAG =~ /^v?\d+\.\d+\.\d+(-alpha\.\d+|-beta\.\d+|-rc\.\d+)?$/'
+  script:
+    - apt-get update -qq
+    - apt-get install -y -qq --no-install-recommends file openssl ca-certificates >/dev/null
+    - |
+      set -euo pipefail
+      shopt -s nullglob
+      debs=(dist/*.deb)
+      if [ "${#debs[@]}" -eq 0 ]; then
+        echo "FAIL: no .deb packages found in dist/" >&2
+        exit 1
+      fi
+      status=0
+      for deb in "${debs[@]}"; do
+        rm -rf /tmp/pkg && mkdir -p /tmp/pkg
+        if ! dpkg-deb -x "$deb" /tmp/pkg; then
+          echo "FAIL: ${deb} does not extract (corrupt archive?)" >&2
+          status=1
+          continue
+        fi
+        bin=/tmp/pkg/usr/bin/geode
+        if [ ! -x "$bin" ]; then
+          echo "FAIL: ${deb} ships no executable /usr/bin/geode" >&2
+          status=1
+          continue
+        fi
+        linkage="$(file -b "$bin")"
+        echo "${deb}: ${linkage}"
+        case "$linkage" in
+          *musl*)
+            echo "FAIL: ${deb} ships a musl-linked binary — glibc hosts cannot exec it (ENG-5008)" >&2
+            status=1
+            continue
+            ;;
+        esac
+        case "$deb" in
+          *x86_64*)
+            if version_output="$("$bin" --version 2>&1)"; then
+              echo "${deb}: executes OK (${version_output})"
+            else
+              echo "FAIL: ${deb} binary does not execute on glibc: ${version_output}" >&2
+              status=1
+            fi
+            ;;
+          *)
+            echo "${deb}: non-amd64 — static linkage check only"
+            ;;
+        esac
+      done
+      exit "$status"
+  artifacts:
+    paths:
+      - dist/*.deb
+    expire_in: 1 week
+
 build-release:
   stage: release
   interruptible: false  # Never cancel in-flight release builds

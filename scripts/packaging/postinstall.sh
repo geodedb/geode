@@ -63,21 +63,34 @@ if [ ! -f /etc/geode/certs/server.crt ] || [ ! -f /etc/geode/certs/server.key ];
     fi
 fi
 
-# Reload systemd to recognize the new service files and start geode.
+# Reload systemd to recognize the new service files.
+#
+# ENG-5008: the package no longer enables or starts geode.service on a
+# fresh install. Most hosts install this package for the CLI; the
+# enabled-by-default server has a history of resource starvation on
+# hosts that never asked for it (constant CPU + I/O), and when the
+# shipped binary cannot exec at all, an enabled unit turns a packaging
+# defect into an unbounded 12-per-minute crash loop on every install.
+# Running the server is one explicit command away; upgrades of hosts
+# that DID opt in are restarted onto the new binary below.
 if command -v systemctl >/dev/null 2>&1; then
     systemctl daemon-reload
-    echo "Enabling geode.service..."
-    systemctl enable geode.service || true
-    echo "Starting geode.service..."
-    systemctl start geode.service || true
-    echo ""
-    echo "Geode service enabled and started."
-    echo ""
-    echo "To view the initial admin password:"
-    echo "  sudo journalctl -u geode | grep 'Generated admin password'"
-    echo ""
-    echo "To check status:"
-    echo "  sudo systemctl status geode"
+    if systemctl is-enabled --quiet geode.service 2>/dev/null; then
+        # The operator enabled the server on this host; pick up the new
+        # binary now rather than on the next reboot.
+        echo "geode.service is enabled on this host; restarting it on the new binary..."
+        systemctl restart geode.service || true
+        echo ""
+        echo "To check status:"
+        echo "  sudo systemctl status geode"
+    else
+        echo ""
+        echo "The geode server is NOT enabled by default. To run it as a service:"
+        echo "  sudo systemctl enable --now geode.service"
+        echo ""
+        echo "Then to view the initial admin password:"
+        echo "  sudo journalctl -u geode | grep 'Generated admin password'"
+    fi
 fi
 
 echo ""

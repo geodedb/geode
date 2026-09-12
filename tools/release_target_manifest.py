@@ -12,6 +12,18 @@ from typing import Any
 
 BEGIN_MARKER = "# BEGIN GENERATED ZIG TARGETS (tools/release_target_manifest.py)"
 END_MARKER = "# END GENERATED ZIG TARGETS"
+# The musl targets live in their own build id (`geode-musl`). ENG-5008:
+# with gnu and musl targets in ONE build id, nfpm rendered two debs per
+# arch under the same Os/Arch-keyed filename and the last build to finish
+# clobbered the other — v0.8.13 shipped a musl-linked amd64 deb that no
+# glibc host could exec. The split gives packagers (nfpms) and docker
+# image defs an unambiguous artifact set to pull from.
+BEGIN_MUSL_MARKER = "# BEGIN GENERATED ZIG MUSL TARGETS (tools/release_target_manifest.py)"
+END_MUSL_MARKER = "# END GENERATED ZIG MUSL TARGETS"
+
+
+def is_musl_target(target: str) -> bool:
+    return target.endswith("-linux-musl")
 
 
 def load_manifest(path: pathlib.Path) -> dict[str, Any]:
@@ -50,31 +62,49 @@ def render_target_lines(targets: list[str], indent: str) -> list[str]:
     return lines
 
 
-def sync_goreleaser(manifest: dict[str, Any], goreleaser_path: pathlib.Path, check_only: bool) -> int:
-    text = goreleaser_path.read_text(encoding="utf-8")
+def _replace_block(
+    text: str,
+    begin_marker: str,
+    end_marker: str,
+    targets: list[str],
+    goreleaser_path: pathlib.Path,
+) -> str | None:
     pattern = re.compile(
-        f"(?P<prefix>^[ \\t]*{re.escape(BEGIN_MARKER)}\\n)(?P<body>.*?)(?P<suffix>^[ \\t]*{re.escape(END_MARKER)}$)",
+        f"(?P<prefix>^[ \\t]*{re.escape(begin_marker)}\\n)(?P<body>.*?)(?P<suffix>^[ \\t]*{re.escape(end_marker)}$)",
         re.DOTALL | re.MULTILINE,
     )
     match = pattern.search(text)
     if not match:
         print(
-            f"error: could not find generated target markers in {goreleaser_path}",
+            f"error: could not find marker '{begin_marker}' in {goreleaser_path}",
             file=sys.stderr,
         )
-        return 1
+        return None
 
     target_indent = detect_target_indent(match.group("body"), text, match.start())
-    replacement_body = "\n".join(render_target_lines(manifest["zig_targets"], target_indent)) + "\n"
+    replacement_body = "\n".join(render_target_lines(targets, target_indent)) + "\n"
     replacement = f"{match.group('prefix')}{replacement_body}{match.group('suffix')}"
-    new_text = text[: match.start()] + replacement + text[match.end() :]
+    return text[: match.start()] + replacement + text[match.end() :]
+
+
+def sync_goreleaser(manifest: dict[str, Any], goreleaser_path: pathlib.Path, check_only: bool) -> int:
+    text = goreleaser_path.read_text(encoding="utf-8")
+    default_targets = [t for t in manifest["zig_targets"] if not is_musl_target(t)]
+    musl_targets = [t for t in manifest["zig_targets"] if is_musl_target(t)]
+
+    new_text = _replace_block(text, BEGIN_MARKER, END_MARKER, default_targets, goreleaser_path)
+    if new_text is None:
+        return 1
+    new_text = _replace_block(new_text, BEGIN_MUSL_MARKER, END_MUSL_MARKER, musl_targets, goreleaser_path)
+    if new_text is None:
+        return 1
 
     if check_only:
         if new_text != text:
             print(f"error: {goreleaser_path} is out of sync with release/target_manifest.json", file=sys.stderr)
             print("run: python3 tools/release_target_manifest.py sync-goreleaser", file=sys.stderr)
             return 1
-        print("goreleaser target block is in sync")
+        print("goreleaser target blocks are in sync")
         return 0
 
     goreleaser_path.write_text(new_text, encoding="utf-8")
