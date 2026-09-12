@@ -1041,6 +1041,50 @@ fn rehydrateTenantDerivedState(
     log.info("tenant_registry.rehydrated", &.{Attr.int("tenants", @intCast(recs.len))});
 }
 
+fn readCapabilityProfile(allocator: std.mem.Allocator, path: []const u8) ![]u8 {
+    switch (builtin.os.tag) {
+        .linux, .macos, .freebsd, .netbsd, .openbsd, .dragonfly => {},
+        else => return error.UnsupportedCapabilityProfileFilePlatform,
+    }
+    const max_bytes = 1 << 20;
+    const io = std.Io.Threaded.global_single_threaded.io();
+    const fd = try std.posix.openat(std.Io.Dir.cwd().handle, path, .{
+        .ACCMODE = .RDONLY,
+        .NONBLOCK = true,
+        .CLOEXEC = true,
+        .NOCTTY = true,
+    }, 0);
+    const file: std.Io.File = .{ .handle = fd, .flags = .{ .nonblocking = true } };
+    defer file.close(io);
+    const stat = try file.stat(io);
+    if (stat.kind != .file) return error.InvalidCapabilityProfileFileType;
+    if (stat.size > max_bytes) return error.StreamTooLong;
+    var reader = file.reader(io, &.{});
+    const bytes = reader.interface.allocRemaining(allocator, .limited(max_bytes + 1)) catch |err| switch (err) {
+        error.ReadFailed => return reader.err orelse error.ReadFailed,
+        else => return err,
+    };
+    errdefer allocator.free(bytes);
+    if (bytes.len > max_bytes) return error.StreamTooLong;
+    return bytes;
+}
+
+fn enforceCapabilityProfile(allocator: std.mem.Allocator, path: []const u8) !void {
+    const bytes = try readCapabilityProfile(allocator, path);
+    defer allocator.free(bytes);
+    var caps = try geode.execution.admin_ddl.executeShowCapabilities(allocator);
+    defer caps.deinit(allocator);
+    if (caps.columns.len != 2 or !std.mem.eql(u8, caps.columns[0], "feature") or
+        !std.mem.eql(u8, caps.columns[1], "supported") or caps.rows.len > 256) return error.MalformedCapabilityRows;
+    const rows = try allocator.alloc(geode.capability_gate.CapabilityRow, caps.rows.len);
+    defer allocator.free(rows);
+    for (caps.rows, 0..) |row, i| {
+        if (row.len != 2 or row[0] != .Str or row[1] != .Str) return error.MalformedCapabilityRows;
+        rows[i] = .{ .name = row[0].Str, .value = row[1].Str };
+    }
+    try geode.capability_gate.validateProfile(allocator, bytes, rows, geode.capability_gate.engineVersionFromBuildLabel(build_options.version));
+}
+
 pub fn main() !void {
     // Return freed large per-connection allocations to the OS (see notes on
     // tuneServerMalloc). Must run before the first glibc allocation.
@@ -1570,6 +1614,97 @@ pub fn main() !void {
     const compact_profile = init_ctx.env_config.compact_profile;
     memcurve_profile = init_ctx.env_config.memcurve_profile;
 
+    // GAP-0848 follow-up: hoisted tenant-state setup.
+    //
+    // This block was hoisted out of the `if (listen_quic)` block (where it used
+    // to sit just after the RLS dispatch callback wiring) to run BEFORE the gRPC
+    // serve paths below. The gRPC-only path does a blocking
+    // `grpc_server.start(); return;` and the combined path submits a serve task,
+    // both of which begin serving immediately — so any tenant state they depend
+    // on (the global quota manager that gRPC handlers consult, the tenant
+    // registry, and the resolved strict-tenancy mode) MUST be published first or
+    // a multi-tenant gRPC deployment serves permissively. The `defer`s below live
+    // in main()'s scope, so the globals remain published for the full lifetime of
+    // BOTH the gRPC and QUIC serve loops and tear down on return exactly as
+    // before. Nothing in this block performs network I/O or depends on the QUIC
+    // transport; its only prerequisites (`gpa`, `config`, `data_dir`, and
+    // `init_ctx` storage init at line ~1280) are already satisfied here.
+
+    // GAP-0510 Task D1: Initialize the global expression RLS engine so that
+    // property-based and temporal RLS policies are evaluated during query
+    // execution.  The engine lives on the main thread's stack; connection
+    // handlers access it via rls_types.getGlobalExprRLSEngine().
+    // CANARY: REQ=REQ-SEC-RLS-WIRE-014; FEATURE="RLS Expression Wiring"; ASPECT=ServerInitExprEngine; STATUS=TESTED; TEST=tests/test_rls_expr_engine_wiring.zig; OWNER=security; UPDATED=2026-06-11
+    const rls_core_mod = @import("rls");
+    const rls_types_mod_hoist = @import("rls_types");
+    var expr_rls_engine = try rls_core_mod.RLSEngine.init(gpa);
+    defer expr_rls_engine.deinit();
+    rls_types_mod_hoist.setGlobalExprRLSEngine(@ptrCast(&expr_rls_engine));
+    defer rls_types_mod_hoist.setGlobalExprRLSEngine(null);
+
+    // GAP-0839: Initialize the production per-tenant quota manager and the
+    // durable tenant lifecycle registry, then publish both as process globals.
+    // Before this, getGlobalQuotaManager() always returned null in production (so
+    // every tenant resolved to default_quota — setQuota was tests-only), and
+    // there was no tenant lifecycle surface at all.
+    //
+    // The registry is file-backed under {data_dir}/tenants/registry.jsonl and is
+    // hydrated here on startup. After hydration we replay each persisted tenant
+    // into (a) the expr-RLS HierarchyManager and (b) the quota manager, so a
+    // server RESTART restores the full tenant hierarchy and per-tenant quota
+    // overrides — not just the registry rows.
+    //
+    // The global manager is constructed with an UNLIMITED default_quota
+    // (initUnlimited) so that PUBLISHING it is behavior-neutral: a tenant WITHOUT
+    // an explicit set_quota override stays unlimited, exactly as before GAP-0839
+    // (when getGlobalQuotaManager() was null and every quota check was skipped).
+    // Only tenants with an explicit override — set via CALL geode.tenant.set_quota
+    // or restored from the registry below — are enforced. Using the plain init()
+    // (struct default 100/32) here would silently activate enforcement on every
+    // existing deployment.
+    // CANARY: REQ=REQ-TENANT-LIFECYCLE-003; FEATURE="TenantRegistryServerWiring"; ASPECT=ServerInit; STATUS=TESTED; TEST=tests/test_gap0839_tenant_lifecycle.zig; OWNER=security; UPDATED=2026-06-11
+    var quota_manager = geode.tenant_quota.TenantQuotaManager.initUnlimited(gpa);
+    defer quota_manager.deinit();
+    geode.tenant_quota.setGlobalQuotaManager(&quota_manager);
+    defer geode.tenant_quota.setGlobalQuotaManager(null);
+
+    var tenant_reg = geode.tenant_registry.TenantRegistry.initWithDataDir(gpa, data_dir) catch blk: {
+        log.warn("tenant_registry.init_failed_fallback_in_memory", &.{});
+        break :blk geode.tenant_registry.TenantRegistry.init(gpa);
+    };
+    defer tenant_reg.deinit();
+    geode.tenant_registry.setGlobalRegistry(&tenant_reg);
+    defer geode.tenant_registry.setGlobalRegistry(null);
+
+    // Replay persisted tenants into the live hierarchy + quota manager. The
+    // registry is the source of truth; these structures are derived. Tenants are
+    // sorted parent-before-child by their created_at so addTenant's "parent must
+    // exist" invariant holds for hierarchies built in order; any out-of-order
+    // parent is retried until the set stabilizes.
+    rehydrateTenantDerivedState(gpa, &tenant_reg, &expr_rls_engine, &quota_manager);
+
+    // CANARY: REQ=REQ-GAP-0848-TENANCY-DEFAULT-001; FEATURE="StrictTenancyAutoDefault"; ASPECT=Startup; STATUS=TESTED; TEST=tests/test_gap0848_tenancy_default.zig; OWNER=security; UPDATED=2026-06-09
+    // GAP-0848: resolve the FINAL effective strict-tenancy mode now that the
+    // tenant registry is hydrated, and BEFORE any gRPC/QUIC serve path begins. In
+    // a multi-tenant deployment (>=1 non-default tenant registered) strict tenancy
+    // auto-enables unless the operator explicitly opted out with
+    // GEODE_PERMISSIVE_TENANCY=1. Explicit --strict-tenancy / GEODE_STRICT_TENANCY
+    // (already applied above) always wins; single-tenant deployments keep the
+    // legacy permissive behaviour.
+    applyEffectiveStrictTenancy(gpa, config.strict_tenancy, tenant_reg.hasNonDefaultTenant());
+
+    // CANARY: REQ=REQ-SONNY-CAPABILITY-PROFILE-002; FEATURE="SonnyCapabilityProfile"; ASPECT=StartupOrdering; STATUS=IMPL; TEST=tests/test_capability_gate_startup.zig; OWNER=server; UPDATED=2026-09-08
+    if (config.require_capability_profile) |path| {
+        enforceCapabilityProfile(gpa, path) catch |err| {
+            std.debug.print("[startup] capability profile rejected; refusing to start: {s} (engine {s})\n", .{ @errorName(err), build_options.version[0..@min(build_options.version.len, 128)] });
+            log.err("capability profile rejected; refusing to start", &.{
+                Attr.string("error", @errorName(err)),
+                Attr.string("engine_version", build_options.version[0..@min(build_options.version.len, 128)]),
+            });
+            return err;
+        };
+    }
+
     // CANARY: REQ=REQ-OTEL-METRICS-002; FEATURE="OTel Instrumentation"; ASPECT=ServerInit; STATUS=TESTED; TEST=tests/test_otel_facade_smoke.zig; OWNER=monitoring; UPDATED=2026-04-28
     //
     // Initialise the OTel MeterProvider BEFORE the legacy Prometheus
@@ -1815,85 +1950,6 @@ pub fn main() !void {
         if (metrics_bind_env) |b| gpa.free(b);
     }
     defer metrics_server.shutdownGlobalMetrics(gpa);
-
-    // GAP-0848 follow-up: hoisted tenant-state setup.
-    //
-    // This block was hoisted out of the `if (listen_quic)` block (where it used
-    // to sit just after the RLS dispatch callback wiring) to run BEFORE the gRPC
-    // serve paths below. The gRPC-only path does a blocking
-    // `grpc_server.start(); return;` and the combined path submits a serve task,
-    // both of which begin serving immediately — so any tenant state they depend
-    // on (the global quota manager that gRPC handlers consult, the tenant
-    // registry, and the resolved strict-tenancy mode) MUST be published first or
-    // a multi-tenant gRPC deployment serves permissively. The `defer`s below live
-    // in main()'s scope, so the globals remain published for the full lifetime of
-    // BOTH the gRPC and QUIC serve loops and tear down on return exactly as
-    // before. Nothing in this block performs network I/O or depends on the QUIC
-    // transport; its only prerequisites (`gpa`, `config`, `data_dir`, and
-    // `init_ctx` storage init at line ~1280) are already satisfied here.
-
-    // GAP-0510 Task D1: Initialize the global expression RLS engine so that
-    // property-based and temporal RLS policies are evaluated during query
-    // execution.  The engine lives on the main thread's stack; connection
-    // handlers access it via rls_types.getGlobalExprRLSEngine().
-    // CANARY: REQ=REQ-SEC-RLS-WIRE-014; FEATURE="RLS Expression Wiring"; ASPECT=ServerInitExprEngine; STATUS=TESTED; TEST=tests/test_rls_expr_engine_wiring.zig; OWNER=security; UPDATED=2026-06-11
-    const rls_core_mod = @import("rls");
-    const rls_types_mod_hoist = @import("rls_types");
-    var expr_rls_engine = try rls_core_mod.RLSEngine.init(gpa);
-    defer expr_rls_engine.deinit();
-    rls_types_mod_hoist.setGlobalExprRLSEngine(@ptrCast(&expr_rls_engine));
-    defer rls_types_mod_hoist.setGlobalExprRLSEngine(null);
-
-    // GAP-0839: Initialize the production per-tenant quota manager and the
-    // durable tenant lifecycle registry, then publish both as process globals.
-    // Before this, getGlobalQuotaManager() always returned null in production (so
-    // every tenant resolved to default_quota — setQuota was tests-only), and
-    // there was no tenant lifecycle surface at all.
-    //
-    // The registry is file-backed under {data_dir}/tenants/registry.jsonl and is
-    // hydrated here on startup. After hydration we replay each persisted tenant
-    // into (a) the expr-RLS HierarchyManager and (b) the quota manager, so a
-    // server RESTART restores the full tenant hierarchy and per-tenant quota
-    // overrides — not just the registry rows.
-    //
-    // The global manager is constructed with an UNLIMITED default_quota
-    // (initUnlimited) so that PUBLISHING it is behavior-neutral: a tenant WITHOUT
-    // an explicit set_quota override stays unlimited, exactly as before GAP-0839
-    // (when getGlobalQuotaManager() was null and every quota check was skipped).
-    // Only tenants with an explicit override — set via CALL geode.tenant.set_quota
-    // or restored from the registry below — are enforced. Using the plain init()
-    // (struct default 100/32) here would silently activate enforcement on every
-    // existing deployment.
-    // CANARY: REQ=REQ-TENANT-LIFECYCLE-003; FEATURE="TenantRegistryServerWiring"; ASPECT=ServerInit; STATUS=TESTED; TEST=tests/test_gap0839_tenant_lifecycle.zig; OWNER=security; UPDATED=2026-06-11
-    var quota_manager = geode.tenant_quota.TenantQuotaManager.initUnlimited(gpa);
-    defer quota_manager.deinit();
-    geode.tenant_quota.setGlobalQuotaManager(&quota_manager);
-    defer geode.tenant_quota.setGlobalQuotaManager(null);
-
-    var tenant_reg = geode.tenant_registry.TenantRegistry.initWithDataDir(gpa, data_dir) catch blk: {
-        log.warn("tenant_registry.init_failed_fallback_in_memory", &.{});
-        break :blk geode.tenant_registry.TenantRegistry.init(gpa);
-    };
-    defer tenant_reg.deinit();
-    geode.tenant_registry.setGlobalRegistry(&tenant_reg);
-    defer geode.tenant_registry.setGlobalRegistry(null);
-
-    // Replay persisted tenants into the live hierarchy + quota manager. The
-    // registry is the source of truth; these structures are derived. Tenants are
-    // sorted parent-before-child by their created_at so addTenant's "parent must
-    // exist" invariant holds for hierarchies built in order; any out-of-order
-    // parent is retried until the set stabilizes.
-    rehydrateTenantDerivedState(gpa, &tenant_reg, &expr_rls_engine, &quota_manager);
-
-    // CANARY: REQ=REQ-GAP-0848-TENANCY-DEFAULT-001; FEATURE="StrictTenancyAutoDefault"; ASPECT=Startup; STATUS=TESTED; TEST=tests/test_gap0848_tenancy_default.zig; OWNER=security; UPDATED=2026-06-09
-    // GAP-0848: resolve the FINAL effective strict-tenancy mode now that the
-    // tenant registry is hydrated, and BEFORE any gRPC/QUIC serve path begins. In
-    // a multi-tenant deployment (>=1 non-default tenant registered) strict tenancy
-    // auto-enables unless the operator explicitly opted out with
-    // GEODE_PERMISSIVE_TENANCY=1. Explicit --strict-tenancy / GEODE_STRICT_TENANCY
-    // (already applied above) always wins; single-tenant deployments keep the
-    // legacy permissive behaviour.
-    applyEffectiveStrictTenancy(gpa, config.strict_tenancy, tenant_reg.hasNonDefaultTenant());
 
     // CANARY: REQ=REQ-GAP-0901-GRPC-GLOBAL-INIT; FEATURE="GrpcTransport"; ASPECT=TransportAgnosticGlobals; STATUS=IMPL; TEST=tests/test_gap0901_grpc_globals.zig; OWNER=transport; UPDATED=2026-07-10
     // GAP-0901: these transport-agnostic globals — the per-IP auth rate

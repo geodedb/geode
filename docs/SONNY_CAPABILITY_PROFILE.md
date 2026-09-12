@@ -262,12 +262,54 @@ There are five, not four, optional gates:
 
 ## Startup contract
 
-Task 1 publishes discovery and requirements only. Task 2 is planned to add
-`--require-capability-profile release/sonny_capability_profile.json` and refuse
-startup before listeners when any required boolean row is missing or false,
-the profile version differs, or the engine is below the declared floor. Until
-that validator lands, this document and manifest do not claim startup
-enforcement.
+Select the startup gate with
+`--require-capability-profile release/sonny_capability_profile.json`,
+`GEODE_REQUIRE_CAPABILITY_PROFILE`, or the configuration-file string key
+`require_capability_profile`. Precedence is CLI > environment > selected file
+> unset. Every relative path resolves from the process working directory.
+Unset preserves ordinary startup. Explicit empty, malformed, duplicate CLI,
+or missing-value selections fail; an invalid lower-precedence source cannot be
+overridden to hide its error. Existing unreadable or malformed configuration
+files also refuse startup; discovery skips only files that do not exist.
+
+The gate validates the complete immutable v1 inventory, strict JSON schema,
+profile identity, semantic versions, and every discovery row before checking
+required support. Missing or false required booleans refuse startup. Optional
+entries remain strictly parsed; missing/false optional support does not satisfy
+the dependent application feature. Unknown well-formed boolean discovery rows
+are allowed. Manifest input is bounded to 1 MiB, nesting to eight levels, and
+discovery to 256 rows. Duplicate keys and duplicate row names are rejected.
+
+Validation runs immediately after effective tenancy resolution, before OTel
+export, cluster bootstrap, metrics, gRPC, QUIC, or embedded LSP startup. The
+profile is opened once read-only with NONBLOCK/CLOEXEC, then statted and read
+through that same descriptor. Only regular files are accepted (including normal
+symlinks to regular files); writerless FIFOs cannot block open. Oversize and
+growing input is refused without truncation. Unverified non-POSIX file-reading
+paths refuse an explicitly requested gate.
+
+The real display version comes from `git describe`. The production adapter
+removes only one leading ASCII `v`; the strict validator preserves the remaining
+SemVer suffix and precedence. For example, `v0.8.13-2-g080f1737` becomes
+`0.8.13-2-g080f1737` and refuses the unchanged `0.8.14` floor. Bare hashes,
+unknown versions, doubled prefixes, and malformed versions remain invalid.
+Neither support values nor build identity are changed to pass this gate.
+
+Refusal returns an error with a bounded diagnostic so registered cleanup runs.
+Storage, authentication, tenant, certificate, audit, and lock initialization may
+already have created protected files; refusal is before serving, not rollback
+of those files. The gate does not certify broader registry fallback or startup
+allocation ownership. Positive live canonical-profile startup still requires
+the owning capability behaviors and a compatible release identity.
+
+`zig build test-capability-gate` runs pure/schema/bounds/config tests, including
+allocation-failure checks. `zig build test-capability-gate-startup` runs the
+installed real binary, paired ordinary listener controls, native Linux syscall
+observation, file refusal cases, and lock-release checks. Native prerequisites
+(Python 3, strace, OpenSSL, ptrace, non-root permission checks, and x86_64 for
+the deterministic file-growth observer) are required; missing prerequisites
+are test failures. Tests retain fresh isolated fixture/evidence directories
+under `.superpowers/sdd/` and never use existing deployment data.
 
 ## Change policy
 

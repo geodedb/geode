@@ -256,6 +256,7 @@ pub const streaming = struct {
 pub const graph_exec = @import("server/graph/exec.zig");
 // Re-export server state for unified binary
 pub const server_state = @import("server/server_state.zig");
+pub const capability_gate = @import("server/capability_gate.zig");
 pub const node_scan_stream = @import("server/node_scan_stream.zig");
 // Re-export server txn/mvcc for unified binary
 pub const server_mvcc = @import("server/txn/mvcc.zig");

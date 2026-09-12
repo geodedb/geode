@@ -56,6 +56,10 @@ pub const ServerConfig = struct {
     // treated as all-tenants. Default false (unchanged single-tenant behaviour).
     strict_tenancy: bool = false,
 
+    // CANARY: REQ=REQ-SONNY-CAPABILITY-PROFILE-002; FEATURE="SonnyCapabilityProfile"; ASPECT=Config; STATUS=IMPL; TEST=tests/test_capability_gate.zig; OWNER=server; UPDATED=2026-09-08
+    require_capability_profile: ?[]const u8 = null,
+    _allocated_require_capability_profile: bool = false,
+
     // CANARY: REQ=REQ-SEC-RATE-LIMIT-008; FEATURE="AuthRateLimiting"; ASPECT=CLIConfig; STATUS=TESTED; TEST=tests/test_cli_args_cluster.zig; OWNER=security; UPDATED=2026-08-29
     // ENG-3954: operator-configurable per-source-IP brute-force lockout.
     // null = "operator said nothing", so auth_rate_limiter.resolveConfig falls
@@ -116,6 +120,7 @@ pub const ServerConfig = struct {
 
     /// Free all allocated memory
     pub fn deinit(self: *ServerConfig, allocator: std.mem.Allocator) void {
+        if (self._allocated_require_capability_profile) if (self.require_capability_profile) |s| allocator.free(s);
         if (self._allocated_listen_quic) if (self.listen_quic) |s| allocator.free(s);
         if (self._allocated_listen_grpc) if (self.listen_grpc) |s| allocator.free(s);
         if (self._allocated_cert_path) if (self.cert_path) |s| allocator.free(s);
@@ -152,24 +157,26 @@ pub fn loadConfigFile(allocator: std.mem.Allocator) !?config_lib.Value {
     for (project_paths) |path| {
         if (config_lib.parseFile(allocator, path)) |result| {
             return result;
-        } else |_| {
-            continue;
+        } else |err| switch (err) {
+            error.FileNotFound => continue,
+            else => return err,
         }
     }
 
     // Try user config
-    var paths = config_lib.getPaths(allocator) catch return null;
+    var paths = try config_lib.getPaths(allocator);
     defer paths.deinit();
 
     var user_path_buf: [512]u8 = undefined;
     const user_extensions = [_][]const u8{ "yaml", "yml", "toml", "json" };
 
     for (user_extensions) |ext| {
-        const user_path = std.fmt.bufPrint(&user_path_buf, "{s}/geode/config.{s}", .{ paths.config_home, ext }) catch continue;
+        const user_path = try std.fmt.bufPrint(&user_path_buf, "{s}/geode/config.{s}", .{ paths.config_home, ext });
         if (config_lib.parseFile(allocator, user_path)) |result| {
             return result;
-        } else |_| {
-            continue;
+        } else |err| switch (err) {
+            error.FileNotFound => continue,
+            else => return err,
         }
     }
 
@@ -219,6 +226,23 @@ pub fn mergeFileConfig(config: *ServerConfig, file_result: config_lib.Value) voi
     }
 }
 
+fn setCapabilityProfile(allocator: std.mem.Allocator, config: *ServerConfig, path: []const u8) !void {
+    if (path.len == 0 or path.len > 4096 or std.mem.trim(u8, path, " \t\r\n").len == 0)
+        return error.InvalidCapabilityProfilePath;
+    for (path) |byte| if (byte < 0x20 or byte == 0x7f) return error.InvalidCapabilityProfilePath;
+    const owned = try allocator.dupe(u8, path);
+    if (config._allocated_require_capability_profile) if (config.require_capability_profile) |old| allocator.free(old);
+    config.require_capability_profile = owned;
+    config._allocated_require_capability_profile = true;
+}
+
+fn mergeFileCapabilityProfile(allocator: std.mem.Allocator, config: *ServerConfig, value: config_lib.Value) !void {
+    if (value.has("require_capability_profile")) {
+        const path = value.getString("require_capability_profile") orelse return error.InvalidCapabilityProfilePath;
+        try setCapabilityProfile(allocator, config, path);
+    }
+}
+
 /// Print help message to stdout
 pub fn printHelp() void {
     const build_options = @import("build_options");
@@ -243,6 +267,7 @@ pub fn printHelp() void {
     std.debug.print("  --no-auth                    Disable authentication (NOT recommended for production)\n", .{});
     std.debug.print("  --insecure-allow-all         Bypass ALL authorization checks (NOT FOR PRODUCTION)\n", .{});
     std.debug.print("  --strict-tenancy             Reject tenant-scoped ops with no tenant scope (also GEODE_STRICT_TENANCY=1)\n", .{});
+    std.debug.print("  --require-capability-profile <path>  Refuse startup unless the required capability profile is satisfied (also GEODE_REQUIRE_CAPABILITY_PROFILE)\n", .{});
     std.debug.print("  --auth-lockout-attempts <n>  Failed logins per source IP before lockout (default 10; also GEODE_AUTH_RATE_MAX_ATTEMPTS)\n", .{});
     std.debug.print("  --auth-lockout-secs <n>      Lockout window in seconds, 1-86400 (default 60; also GEODE_AUTH_RATE_LOCKOUT_SECS)\n", .{});
     std.debug.print("  --auth-lockout-ip-attempts <n>  Coarse per-source-IP failure ceiling across ALL usernames (default 50; must exceed --auth-lockout-attempts; also GEODE_AUTH_RATE_IP_MAX_ATTEMPTS)\n", .{});
@@ -280,6 +305,7 @@ pub fn parseArgs(allocator: std.mem.Allocator) !?ServerConfig {
 /// Returns null if --help/-h was encountered (caller should exit).
 pub fn parseArgsFromSlice(allocator: std.mem.Allocator, args: []const []const u8) !?ServerConfig {
     var config = ServerConfig{};
+    errdefer config.deinit(allocator);
     var custom_config_path: ?[]const u8 = null;
 
     if (args.len == 0) return error.StdioUnavailable;
@@ -298,9 +324,8 @@ pub fn parseArgsFromSlice(allocator: std.mem.Allocator, args: []const []const u8
     var ai: usize = 1;
     while (ai < args.len) : (ai += 1) {
         if (std.mem.eql(u8, args[ai], "--config") or std.mem.eql(u8, args[ai], "-c")) {
-            if (ai + 1 < args.len) {
-                custom_config_path = args[ai + 1];
-            }
+            if (ai + 1 >= args.len) return error.MissingArgument;
+            custom_config_path = args[ai + 1];
             break;
         }
     }
@@ -312,8 +337,10 @@ pub fn parseArgsFromSlice(allocator: std.mem.Allocator, args: []const []const u8
             var mutable_result = result;
             defer mutable_result.deinit();
             mergeFileConfig(&config, result);
+            try mergeFileCapabilityProfile(allocator, &config, result);
         } else |err| {
-            std.debug.print("Warning: Failed to load config file '{s}': {}\n", .{ path, err });
+            std.debug.print("[startup] config load failed; refusing to start: {s}\n", .{@errorName(err)});
+            return err;
         }
     } else {
         // Search for config file in default locations
@@ -322,18 +349,31 @@ pub fn parseArgsFromSlice(allocator: std.mem.Allocator, args: []const []const u8
                 var mutable_result = result;
                 defer mutable_result.deinit();
                 mergeFileConfig(&config, mutable_result);
+                try mergeFileCapabilityProfile(allocator, &config, mutable_result);
             }
-        } else |_| {
-            // No config file found, use defaults (this is normal)
+        } else |err| {
+            std.debug.print("[startup] config discovery failed; refusing to start: {s}\n", .{@errorName(err)});
+            return err;
         }
     }
 
+    if (posixGetenv("GEODE_REQUIRE_CAPABILITY_PROFILE")) |path|
+        try setCapabilityProfile(allocator, &config, path);
+
     // Parse all arguments (CLI flags override config file values)
+    var saw_capability_profile = false;
     ai = 1;
     while (ai < args.len) : (ai += 1) {
         const arg = args[ai];
 
-        if ((std.mem.eql(u8, arg, "--listen-quic") or std.mem.eql(u8, arg, "--listen")) and ai + 1 < args.len) {
+        if (std.mem.eql(u8, arg, "--require-capability-profile")) {
+            if (saw_capability_profile) return error.DuplicateCapabilityProfileArgument;
+            saw_capability_profile = true;
+            if (ai + 1 >= args.len) return error.MissingArgument;
+            ai += 1;
+            if (std.mem.startsWith(u8, args[ai], "-")) return error.InvalidCapabilityProfilePath;
+            try setCapabilityProfile(allocator, &config, args[ai]);
+        } else if ((std.mem.eql(u8, arg, "--listen-quic") or std.mem.eql(u8, arg, "--listen")) and ai + 1 < args.len) {
             config.listen_quic = try allocator.dupe(u8, args[ai + 1]);
             config._allocated_listen_quic = true;
             ai += 1;
