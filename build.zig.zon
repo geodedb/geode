@@ -1,7 +1,7 @@
 .{
     // Geode Graph Database - ISO/IEC 39075:2024 GQL Implementation
     .name = .geode,
-    .version = "0.8.14",
+    .version = "0.8.15",
     .fingerprint = 0x9e0aec1832a82609,
     .minimum_zig_version = "0.16.0",
 
