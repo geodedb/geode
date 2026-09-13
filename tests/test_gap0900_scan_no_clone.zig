@@ -132,7 +132,11 @@ test "GAP-0900: MATCH (n:Taxon) RETURN n LIMIT k streams O(k), clones 0 nodes" {
     var qa = std.heap.ArenaAllocator.init(testing.allocator);
     defer qa.deinit();
     const scan_q = try parseQuery(&qa, "MATCH (n:Taxon) RETURN n LIMIT 5");
-    try testing.expect(node_scan_stream.isEligible(scan_q));
+    // SONNY-1229: `isEligible` takes the session's tenant scope (the same value
+    // the caller passes to `prepare` via the ExecutionContext). These harnesses
+    // are unscoped single-tenant (`ctx.tenant_id == null`) with strict tenancy
+    // off, so `null` is the scope under test and the fast path stays engaged.
+    try testing.expect(node_scan_stream.isEligible(scan_q, null));
 
     // Reset the deep-clone counter, then run the bounded scan via the engine
     // streaming path the handler now uses. NO snapshot clone should occur.
@@ -224,7 +228,7 @@ test "GAP-0900: streamed scan results match the snapshot-clone population" {
     var qa = std.heap.ArenaAllocator.init(testing.allocator);
     defer qa.deinit();
     const scan_q = try parseQuery(&qa, "MATCH (n:Taxon) RETURN n");
-    try testing.expect(node_scan_stream.isEligible(scan_q));
+    try testing.expect(node_scan_stream.isEligible(scan_q, null));
 
     var stream = (try node_scan_stream.prepare(aa, scan_q, h.ctx, &.{}, &.{}, &.{})) orelse {
         return error.StreamPathNotEligible;
@@ -284,17 +288,17 @@ test "GAP-0900: isEligible is false for non-streamable shapes" {
     // A WHERE using a predicate operator outside the streamable subset
     // (CONTAINS) must NOT stream — it stays on the snapshot path.
     const where_q = try parseQuery(&qa, "MATCH (n:Taxon) WHERE n.name CONTAINS 'x' RETURN n");
-    try testing.expect(!node_scan_stream.isEligible(where_q));
+    try testing.expect(!node_scan_stream.isEligible(where_q, null));
 
     var qa2 = std.heap.ArenaAllocator.init(testing.allocator);
     defer qa2.deinit();
     const order_q = try parseQuery(&qa2, "MATCH (n:Taxon) RETURN n ORDER BY n.taxon_id LIMIT 5");
-    try testing.expect(!node_scan_stream.isEligible(order_q));
+    try testing.expect(!node_scan_stream.isEligible(order_q, null));
 
     var qa3 = std.heap.ArenaAllocator.init(testing.allocator);
     defer qa3.deinit();
     const traverse_q = try parseQuery(&qa3, "MATCH (n:Taxon)-[:CHILD_OF]->(m) RETURN n");
-    try testing.expect(!node_scan_stream.isEligible(traverse_q));
+    try testing.expect(!node_scan_stream.isEligible(traverse_q, null));
 }
 
 // ===================================================================
@@ -314,7 +318,7 @@ fn streamSinglePage(
     var qa = std.heap.ArenaAllocator.init(testing.allocator);
     defer qa.deinit();
     const q = try parseQuery(&qa, src);
-    try testing.expect(node_scan_stream.isEligible(q));
+    try testing.expect(node_scan_stream.isEligible(q, null));
 
     var stream = (try node_scan_stream.prepare(aa, q, h.ctx, &.{}, &.{}, &.{})) orelse {
         return error.StreamPathNotEligible;
@@ -574,17 +578,17 @@ test "GAP-0900: broadened eligibility gate" {
     defer qa.deinit();
 
     // Now eligible (broadened):
-    try testing.expect(node_scan_stream.isEligible(try parseQuery(&qa, "MATCH (n:Taxon) RETURN n.name LIMIT 5")));
-    try testing.expect(node_scan_stream.isEligible(try parseQuery(&qa, "MATCH (n:Taxon) WHERE n.rank = 'species' RETURN n.name LIMIT 3")));
-    try testing.expect(node_scan_stream.isEligible(try parseQuery(&qa, "MATCH (n:Taxon {source: 'col'}) RETURN count(n)")));
-    try testing.expect(node_scan_stream.isEligible(try parseQuery(&qa, "MATCH (n:Taxon) RETURN count(n)")));
+    try testing.expect(node_scan_stream.isEligible(try parseQuery(&qa, "MATCH (n:Taxon) RETURN n.name LIMIT 5"), null));
+    try testing.expect(node_scan_stream.isEligible(try parseQuery(&qa, "MATCH (n:Taxon) WHERE n.rank = 'species' RETURN n.name LIMIT 3"), null));
+    try testing.expect(node_scan_stream.isEligible(try parseQuery(&qa, "MATCH (n:Taxon {source: 'col'}) RETURN count(n)"), null));
+    try testing.expect(node_scan_stream.isEligible(try parseQuery(&qa, "MATCH (n:Taxon) RETURN count(n)"), null));
 
     // Still NOT eligible (out of subset):
-    try testing.expect(!node_scan_stream.isEligible(try parseQuery(&qa, "MATCH (n:Taxon) RETURN n ORDER BY n.taxon_id LIMIT 5")));
-    try testing.expect(!node_scan_stream.isEligible(try parseQuery(&qa, "MATCH (n:Taxon) RETURN DISTINCT n.name")));
-    try testing.expect(!node_scan_stream.isEligible(try parseQuery(&qa, "MATCH (n:Taxon) RETURN sum(n.taxon_id)")));
-    try testing.expect(!node_scan_stream.isEligible(try parseQuery(&qa, "MATCH (n:Taxon)-[:CHILD_OF]->(m) RETURN n.name")));
-    try testing.expect(!node_scan_stream.isEligible(try parseQuery(&qa, "MATCH (n:Taxon) RETURN n.name, m.name")));
+    try testing.expect(!node_scan_stream.isEligible(try parseQuery(&qa, "MATCH (n:Taxon) RETURN n ORDER BY n.taxon_id LIMIT 5"), null));
+    try testing.expect(!node_scan_stream.isEligible(try parseQuery(&qa, "MATCH (n:Taxon) RETURN DISTINCT n.name"), null));
+    try testing.expect(!node_scan_stream.isEligible(try parseQuery(&qa, "MATCH (n:Taxon) RETURN sum(n.taxon_id)"), null));
+    try testing.expect(!node_scan_stream.isEligible(try parseQuery(&qa, "MATCH (n:Taxon)-[:CHILD_OF]->(m) RETURN n.name"), null));
+    try testing.expect(!node_scan_stream.isEligible(try parseQuery(&qa, "MATCH (n:Taxon) RETURN n.name, m.name"), null));
 }
 
 // -------------------------------------------------------------------
@@ -623,7 +627,7 @@ test "GAP-0900: multi-label count tallies matching nodes, not the whole graph" {
     var qa = std.heap.ArenaAllocator.init(testing.allocator);
     defer qa.deinit();
     const count_q = try parseQuery(&qa, "MATCH (n:Dual:Extra) RETURN count(n) AS c");
-    try testing.expect(node_scan_stream.isEligible(count_q));
+    try testing.expect(node_scan_stream.isEligible(count_q, null));
 
     var stream = (try node_scan_stream.prepare(aa, count_q, h.ctx, &.{}, &.{}, &.{})) orelse {
         return error.StreamPathNotEligible;

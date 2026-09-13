@@ -7887,6 +7887,24 @@ pub fn build(b: *std.Build) void {
     const inmem_scan_decline_step = b.step("test-sonny1218-in-memory-node-scan", "Run SONNY-1218 regression (engine-direct node scan declines without a storage adapter instead of answering empty)");
     inmem_scan_decline_step.dependOn(&run_inmem_scan_decline_tests.step);
 
+    // SONNY-1229 (GEO-UP-002) P0: the engine-direct node_scan_stream fast path
+    // has NO tenant logic, so a session bound to a concrete tenant was served
+    // EVERY tenant's rows (and an unregistered tenant read everything) for
+    // `MATCH (n:L) RETURN n.p` / `RETURN n` / `count(n)`. It must now DECLINE to
+    // the tenant-aware executor whenever the session has a concrete tenant scope
+    // or strict tenancy is effective. Needs `geode`, `rls` (rls_core) and
+    // `rls_types` to publish + populate a live expr-RLS engine whose
+    // HierarchyManager holds the registered tenants (the GAP-0846 seam).
+    const sonny1229_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny1229_strict_tenancy_read.zig"), .target = target, .optimize = optimize });
+    sonny1229_test_mod.addImport("geode", root_mod);
+    sonny1229_test_mod.addImport("rls", rls_mod);
+    sonny1229_test_mod.addImport("rls_types", rls_types_mod);
+    const sonny1229_tests = b.addTest(.{ .root_module = sonny1229_test_mod });
+    const run_sonny1229_tests = b.addRunArtifact(sonny1229_tests);
+    shardDep(test_step, &run_sonny1229_tests.step, 1, test_shard_loads, test_shard_index);
+    const sonny1229_step = b.step("test-sonny1229-strict-tenancy-read", "Run SONNY-1229 regression (engine-direct reads are tenant-scoped: the node-scan fast path declines to the executor under a concrete tenant scope / strict tenancy)");
+    sonny1229_step.dependOn(&run_sonny1229_tests.step);
+
     // GAP-0903 (P3a) RLS clone-gate regression: RLS-active reads must no longer
     // force the O(graph) snapshot clone.  The secondary gates at QCH:7040
     // (!rls_active) and query_execution.zig:1673 (!wouldEvaluateRLS()) route

@@ -5794,6 +5794,15 @@ fn preamblePermitsStreaming(analysis: *const query_traits.ProgramAnalysis, query
     return std.mem.eql(u8, selector, query_graph_name);
 }
 
+/// SONNY-1229 (GEO-UP-002): the session's tenant binding, as HELLO recorded it.
+/// This is the SAME value threaded into the `ExecutionContext.tenant_id` the
+/// `.rows` arm hands to `node_scan_stream.prepare` (QCH:6662), so the
+/// snapshot-skip / will-stream predicates below decide on exactly the scope the
+/// stream itself will be judged against.
+fn sessionTenantId(state: *const ServerState) ?[]const u8 {
+    return if (state.session_config) |cfg| cfg.tenant_id else null;
+}
+
 fn readWillStreamEngineSide(
     state: *const ServerState,
     analysis: *const query_traits.ProgramAnalysis,
@@ -5814,7 +5823,10 @@ fn readWillStreamEngineSide(
     if (!preamblePermitsStreaming(analysis, query_graph_name)) return false;
     const target = analysis.target orelse return false;
     if (target.* != .Query) return false;
-    return node_scan_stream.isEligible(&target.Query);
+    // SONNY-1229: the tenant half of the decision lives inside `isEligible`
+    // (shared with `prepare`), so a tenant-scoped session can never be told the
+    // stream will serve a read the stream will then refuse.
+    return node_scan_stream.isEligible(&target.Query, sessionTenantId(state));
 }
 
 /// GAP-0902 / P3a: true iff this read will be served ENGINE-DIRECT (no whole-graph
@@ -5858,10 +5870,10 @@ fn readServedEngineDirect(
     analysis: *const query_traits.ProgramAnalysis,
     query_graph_name: []const u8,
 ) bool {
-    // `state` is unused now that the RLS clone-force gate below is lifted (P3a);
-    // retained in the signature for P3a-step2, which will re-gate on RLS once
-    // per-candidate passesRLSFilter is added to node_scan_stream / planned_read.
-    _ = state;
+    // SONNY-1229: `state` is live again — it carries the session tenant binding
+    // consulted below. (The RLS clone-force gate remains lifted per P3a; it is
+    // reinstated by P3a-step2 once per-candidate passesRLSFilter is added to
+    // node_scan_stream / planned_read.)
     if (graph_store.getGlobalAdapter() == null) return false;
     if (analysis.kind != .rows) return false;
     // P3a (read-path OOM): RLS-active reads no longer force the O(graph)
@@ -5881,7 +5893,14 @@ fn readServedEngineDirect(
     if (!preamblePermitsStreaming(analysis, query_graph_name)) return false;
     const target = analysis.target orelse return false;
     if (target.* != .Query) return false;
-    return node_scan_stream.isEligible(&target.Query) or
+    // SONNY-1229: `isEligible` now also declines for a concrete tenant scope /
+    // effective strict tenancy (shared with `prepare`). `isStorageNativeReadShape`
+    // needs no tenant gate of its own: `planned_read_runtime.buildPlanIfSupported`
+    // already DEMOTES a data-touching storage-native plan to the legacy
+    // (tenant-aware) executor for a concrete scope, and that executor reads the
+    // LIVE store — so skipping the snapshot here stays correct for it, exactly as
+    // it already does for RLS.
+    return node_scan_stream.isEligible(&target.Query, sessionTenantId(state)) or
         planned_read_runtime.isStorageNativeReadShape(&target.Query);
 }
 

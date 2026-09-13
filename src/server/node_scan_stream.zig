@@ -10,6 +10,13 @@ const property_value_codec = @import("../property_value_codec.zig");
 const value_types = @import("../value_types.zig");
 const result_utils = @import("../execution/result_utils.zig");
 const type_helpers = @import("../eval/type_helpers.zig");
+// SONNY-1229 (GEO-UP-002): the shared strict-tenancy / tenant-scope decision.
+// Same leaf module `crud_operations.tenantFilterFromContext`,
+// `match_operations.getSessionTenantFilter` and
+// `planned_read_runtime.buildPlanIfSupported` delegate to, so this path's
+// "can I serve it?" answer is derived from the SAME resolution as the
+// executor's "what may it see?" answer.
+const tenancy = @import("../execution/tenancy.zig");
 
 const ExecutionContext = execution.ExecutionContext;
 const ExecutionResult = execution.ExecutionResult;
@@ -640,6 +647,60 @@ fn adapterCanServeEngineDirect() bool {
     return graph_store.getGlobalAdapter() != null;
 }
 
+// CANARY: REQ=REQ-SONNY-1229-ENGINE-DIRECT-TENANCY; FEATURE="EngineDirectTenantScope"; ASPECT=TenantGuard; STATUS=TESTED; TEST=tests/test_sonny1229_strict_tenancy_read.zig; OWNER=security; UPDATED=2026-09-13
+/// SONNY-1229 (GEO-UP-002) — P0 cross-tenant READ leak. Fail-closed tenant
+/// gate for the engine-direct scan, shared by `prepare` and `isEligible`.
+///
+/// This path has NO tenant logic of its own: `collectMatchingSlotIds` walks the
+/// storage adapter's label posting / slot range and `materializeNode` reads the
+/// slot's properties — neither consults `node.tenant_id`, neither calls
+/// `match_operations.passesTenantFilterSlice`, and neither knows about the
+/// GAP-0846 tenant HIERARCHY (`canAccessTenantSafe`, ancestor-or-self). It
+/// therefore cannot enforce exact-match isolation OR hierarchy access, and the
+/// transports gated it only on `rls_active` — so a session bound to a concrete
+/// tenant was served EVERY tenant's rows for `MATCH (n:L) RETURN n.p`,
+/// `RETURN n` and `count(n)`, and a session bound to an UNREGISTERED tenant read
+/// everything (verified end-to-end against 0.8.15 by the Go driver lane).
+///
+/// The decision is derived from `tenancy.resolveTenantFilter` — the SAME shared
+/// resolution `crud_operations.tenantFilterFromContext`,
+/// `match_operations.getSessionTenantFilter` and
+/// `planned_read_runtime.buildPlanIfSupported` use — so this gate can never
+/// drift from what the executor would enforce:
+///
+///   * CONCRETE scope (a real tenant id) -> DECLINE. The executor applies the
+///     hierarchy-aware `passesTenantFilter` at every read site.
+///   * strict tenancy ON, no concrete scope -> `error.TenantScopeRequired`, so
+///     DECLINE; the executor re-resolves and surfaces GQLSTATE 42501 on the
+///     normal wire-error path. Serving here would answer a request the engine
+///     is contractually required to REFUSE.
+///   * no scope, strict OFF (the single-tenant deployment this fast path
+///     exists for) -> the filter is `null` = all-tenants, which is exactly what
+///     this path already does. ALLOW, zero behaviour change.
+///
+/// Declining, rather than filtering in-path, is deliberate for this P0:
+/// correctness first. Applying the filter here would mean reading each slot's
+/// tenant tag engine-direct AND reproducing `hierarchyForFilter` +
+/// `canAccessTenantSafe` in a second place — a second copy of an isolation
+/// control is exactly how this class of defect recurs. See the SONNY-1229
+/// report for the performance consequence (tenant-scoped reads pay the executor
+/// path until a per-slot tenant filter is added here).
+///
+/// Pure: one atomic load + (at most) one string compare. No I/O, no locks, safe
+/// to call before acquiring anything.
+pub fn tenantScopePermitsEngineDirect(session_tenant_id: ?[]const u8) bool {
+    const resolved = tenancy.resolveTenantFilter(session_tenant_id) catch return false;
+    return resolved == null;
+}
+
+/// The single "can this stream serve a scan for THIS session at all?" predicate.
+/// `prepare` and `isEligible` both route through it so the transports'
+/// snapshot-clone-skip / will-stream decisions can never claim a shape
+/// `prepare` will refuse.
+fn canServeEngineDirect(session_tenant_id: ?[]const u8) bool {
+    return adapterCanServeEngineDirect() and tenantScopePermitsEngineDirect(session_tenant_id);
+}
+
 // CANARY: REQ=REQ-PERF-UNORDERED-STREAM-001; FEATURE="UnorderedNodeScanStreaming"; ASPECT=TransportFastPath; STATUS=IMPL; OWNER=engine; UPDATED=2026-06-19
 pub fn prepare(
     allocator: std.mem.Allocator,
@@ -649,10 +710,13 @@ pub fn prepare(
     param_values: []const Value,
     flags: []const []const u8,
 ) !?NodeScanStream {
-    // SONNY-1218: no persisted adapter ⇒ this path can produce NOTHING. Decline
-    // for EVERY mode (.node / .projection / .count) so the query falls through
-    // to the executor, which reads the in-memory store and answers correctly.
-    if (!adapterCanServeEngineDirect()) return null;
+    // SONNY-1218: no persisted adapter ⇒ this path can produce NOTHING.
+    // SONNY-1229: a concrete tenant scope (or effective strict tenancy) ⇒ this
+    // path cannot enforce tenant isolation, so it must not answer at all.
+    // Decline for EVERY mode (.node / .projection / .count) so the query falls
+    // through to the executor, which reads the in-memory store and applies the
+    // hierarchy-aware tenant filter — both answers are correct there.
+    if (!canServeEngineDirect(context.tenant_id)) return null;
 
     const eligibility = eligibleQuery(q) orelse return null;
     const variable_name = eligibility.pattern.name orelse return null;
@@ -975,13 +1039,20 @@ fn addKeyUnique(arena: std.mem.Allocator, key: []const u8, out: *std.ArrayList([
 /// query plus one global pointer) and takes no lock, so it is safe to call
 /// before acquiring any lock.
 ///
-/// SONNY-1218: this MUST stay in agreement with `prepare` — it shares the same
-/// `adapterCanServeEngineDirect` guard, so on an in-memory deployment (no
-/// `--data-dir`) it reports NOT eligible for every shape and the transports
-/// keep the snapshot the executor fallback needs. The AST-shape half of the
-/// decision is `eligibleQuery`, which remains pure.
-pub fn isEligible(q: *const ast.Query) bool {
-    if (!adapterCanServeEngineDirect()) return false;
+/// SONNY-1218 / SONNY-1229: this MUST stay in agreement with `prepare` — it
+/// shares the same `canServeEngineDirect` guard, so on an in-memory deployment
+/// (no `--data-dir`) OR for a session with a concrete tenant scope / under
+/// effective strict tenancy it reports NOT eligible for every shape and the
+/// transports keep the snapshot the executor fallback needs. The AST-shape half
+/// of the decision is `eligibleQuery`, which remains pure.
+///
+/// `session_tenant_id` is the session's `tenant_id` (`ExecutionContext.tenant_id`
+/// / `state.session_config.?.tenant_id`) — the SAME value the caller will pass
+/// to `prepare` via the execution context. It is a required parameter, not an
+/// ambient lookup, precisely so a transport cannot forget it: there is no
+/// active-context to read at the point the transports make this decision.
+pub fn isEligible(q: *const ast.Query, session_tenant_id: ?[]const u8) bool {
+    if (!canServeEngineDirect(session_tenant_id)) return false;
     return eligibleQuery(q) != null;
 }
 

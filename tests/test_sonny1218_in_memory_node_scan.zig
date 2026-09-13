@@ -275,10 +275,13 @@ test "SONNY-1218: isEligible declines every shape without a storage adapter" {
     var qa = std.heap.ArenaAllocator.init(testing.allocator);
     defer qa.deinit();
 
-    try testing.expect(!node_scan_stream.isEligible(try parseQuery(&qa, "MATCH (n:Person) RETURN n.name")));
-    try testing.expect(!node_scan_stream.isEligible(try parseQuery(&qa, "MATCH (n:Person) RETURN n")));
-    try testing.expect(!node_scan_stream.isEligible(try parseQuery(&qa, "MATCH (n:Person) RETURN count(n)")));
-    try testing.expect(!node_scan_stream.isEligible(try parseQuery(&qa, "MATCH (n:Person {team: 'blue'}) RETURN n.name")));
+    // SONNY-1229: `isEligible` now also takes the session tenant scope. `null`
+    // (unscoped, strict tenancy off) isolates the ADAPTER guard under test here —
+    // the tenant guard is exercised by tests/test_sonny1229_strict_tenancy_read.zig.
+    try testing.expect(!node_scan_stream.isEligible(try parseQuery(&qa, "MATCH (n:Person) RETURN n.name"), null));
+    try testing.expect(!node_scan_stream.isEligible(try parseQuery(&qa, "MATCH (n:Person) RETURN n"), null));
+    try testing.expect(!node_scan_stream.isEligible(try parseQuery(&qa, "MATCH (n:Person) RETURN count(n)"), null));
+    try testing.expect(!node_scan_stream.isEligible(try parseQuery(&qa, "MATCH (n:Person {team: 'blue'}) RETURN n.name"), null));
 }
 
 // -------------------------------------------------------------------
@@ -299,7 +302,7 @@ test "SONNY-1218: with a storage adapter the engine-direct fast path still serve
     var qa = std.heap.ArenaAllocator.init(testing.allocator);
     defer qa.deinit();
 
-    try testing.expect(node_scan_stream.isEligible(try parseQuery(&qa, "MATCH (n:Person) RETURN n.name")));
+    try testing.expect(node_scan_stream.isEligible(try parseQuery(&qa, "MATCH (n:Person) RETURN n.name"), null));
 
     var qa2 = std.heap.ArenaAllocator.init(testing.allocator);
     defer qa2.deinit();

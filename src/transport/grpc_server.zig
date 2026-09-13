@@ -1853,6 +1853,14 @@ fn handleHandshake(request_bytes: []const u8, trans: *GrpcTransport, allocator: 
     return encodeMessage(allocator, resp);
 }
 
+/// SONNY-1229 (GEO-UP-002): the session's tenant binding, as HELLO recorded it —
+/// the SAME value threaded into the `ExecutionContext.tenant_id` the `.rows` arm
+/// hands to `node_scan_stream.prepare`. Mirrors
+/// `quic_connection_handler.sessionTenantId`.
+fn sessionTenantId(state: *const server_state.ServerState) ?[]const u8 {
+    return if (state.session_config) |cfg| cfg.tenant_id else null;
+}
+
 /// GAP-0900 (scan-no-clone): mirror of
 /// `quic_connection_handler.readWillStreamEngineSide`. True iff this read is
 /// served by the engine-backed `node_scan_stream` path in the `.rows` arm, so
@@ -1866,7 +1874,9 @@ fn readWillStreamEngineSide(state: *const server_state.ServerState, analysis: *c
     if (analysis.has_effectful_preamble) return false;
     const target = analysis.target orelse return false;
     if (target.* != .Query) return false;
-    return node_scan_stream.isEligible(&target.Query);
+    // SONNY-1229: the tenant half of the decision lives inside `isEligible`
+    // (shared with `prepare`), so this can never claim a read the stream refuses.
+    return node_scan_stream.isEligible(&target.Query, sessionTenantId(state));
 }
 
 /// GAP-0902: true iff this read is served ENGINE-DIRECT (no whole-graph snapshot
@@ -1885,7 +1895,11 @@ fn readServedEngineDirect(state: *const server_state.ServerState, analysis: *con
     if (analysis.has_effectful_preamble) return false;
     const target = analysis.target orelse return false;
     if (target.* != .Query) return false;
-    return node_scan_stream.isEligible(&target.Query) or
+    // SONNY-1229: see the QUIC twin — `isEligible` now also declines for a
+    // concrete tenant scope / effective strict tenancy, and the storage-native
+    // shape needs no tenant gate here because `buildPlanIfSupported` demotes a
+    // tenant-scoped plan to the legacy (tenant-aware) executor on the live store.
+    return node_scan_stream.isEligible(&target.Query, sessionTenantId(state)) or
         planned_read_runtime.isStorageNativeReadShape(&target.Query);
 }
 

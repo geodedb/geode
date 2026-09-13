@@ -397,7 +397,11 @@ test "GAP-0902: selective per-key read — WHERE+projection on wide nodes is cor
     var qa = std.heap.ArenaAllocator.init(testing.allocator);
     defer qa.deinit();
     const q = try parseQueryAst(&qa, "MATCH (n:Wide) WHERE n.ordinal < 5 RETURN n.p3, n.ordinal");
-    try testing.expect(node_scan_stream.isEligible(q));
+    // SONNY-1229: `isEligible` takes the session's tenant scope (the same value
+    // the caller passes to `prepare` via the ExecutionContext). These harnesses
+    // are unscoped single-tenant (`ctx.tenant_id == null`) with strict tenancy
+    // off, so `null` is the scope under test and the fast path stays engaged.
+    try testing.expect(node_scan_stream.isEligible(q, null));
 
     var stream = (try node_scan_stream.prepare(aa, q, h.ctx, &.{}, &.{}, &.{})) orelse return error.NotEligible;
     defer stream.deinit();
@@ -460,7 +464,7 @@ test "GAP-ENT-0055: seekable-eq filtered count is O(1) posting length — zero m
     var qa = std.heap.ArenaAllocator.init(testing.allocator);
     defer qa.deinit();
     const q = try parseQueryAst(&qa, "MATCH (n:Wide) WHERE n.rank = 'species' RETURN count(n) AS c");
-    try testing.expect(node_scan_stream.isEligible(q));
+    try testing.expect(node_scan_stream.isEligible(q, null));
 
     node_scan_stream.resetNodesMaterializedTotal();
     var stream = (try node_scan_stream.prepare(aa, q, h.ctx, &.{}, &.{}, &.{})) orelse return error.NotEligible;

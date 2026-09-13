@@ -158,7 +158,11 @@ test "inline-key index seek: present source_id returns 1 row via index" {
     const aa = qa.allocator();
 
     const q = try parseQuery(&qa, "MATCH (n:Taxon {source_id: 'sid42'}) RETURN n");
-    try testing.expect(node_scan_stream.isEligible(q));
+    // SONNY-1229: `isEligible` takes the session's tenant scope (the same value
+    // the caller passes to `prepare` via the ExecutionContext). These harnesses
+    // are unscoped single-tenant (`ctx.tenant_id == null`) with strict tenancy
+    // off, so `null` is the scope under test and the fast path stays engaged.
+    try testing.expect(node_scan_stream.isEligible(q, null));
 
     graph_storage_adapter.resetLookupCounters();
     const rows = try streamRowCount(aa, q, h.ctx);
@@ -269,7 +273,7 @@ test "inline-key index seek: filtered count is correct via index" {
     const aa = qa.allocator();
 
     const q = try parseQuery(&qa, "MATCH (n:Taxon {source_id: 'sid100'}) RETURN count(n)");
-    try testing.expect(node_scan_stream.isEligible(q));
+    try testing.expect(node_scan_stream.isEligible(q, null));
 
     var stream = (try node_scan_stream.prepare(aa, q, h.ctx, &.{}, &.{}, &.{})) orelse {
         return error.StreamPathNotEligible;
@@ -336,7 +340,7 @@ test "where-clause index seek: selective WHERE equality uses seek, count == 1" {
     const aa = qa.allocator();
 
     const q = try parseQuery(&qa, "MATCH (n:Taxon) WHERE n.source_id = 'sid5' RETURN count(n)");
-    try testing.expect(node_scan_stream.isEligible(q));
+    try testing.expect(node_scan_stream.isEligible(q, null));
 
     graph_storage_adapter.resetLookupCounters();
     const got = try countOfStream(aa, q, h.ctx);

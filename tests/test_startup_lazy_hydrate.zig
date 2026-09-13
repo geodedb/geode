@@ -2996,7 +2996,11 @@ test "engine-direct single-label count serves the in-memory refcount, never the 
         var qa = std.heap.ArenaAllocator.init(allocator);
         defer qa.deinit();
         const count_q = try parseSingleQuery(&qa, "MATCH (n:Person) RETURN count(n) AS c");
-        try testing.expect(geode.node_scan_stream.isEligible(count_q));
+        // SONNY-1229: `isEligible` takes the session's tenant scope (the same value
+        // the caller passes to `prepare` via the ExecutionContext). These harnesses
+        // are unscoped single-tenant (`ctx.tenant_id == null`) with strict tenancy
+        // off, so `null` is the scope under test and the fast path stays engaged.
+        try testing.expect(geode.node_scan_stream.isEligible(count_q, null));
 
         var stream = (try geode.node_scan_stream.prepare(aa, count_q, ctx, &.{}, &.{}, &.{})) orelse
             return error.StreamPathNotEligible;
