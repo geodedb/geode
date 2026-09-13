@@ -26,14 +26,25 @@ const rls_types = @import("rls_types");
 
 const graph_store = geode.graph_store;
 const user_management = geode.user_management;
+// SONNY-1318 (GEO-UP-005): route the session tenant through the SHARED
+// strict-tenancy decision instead of passing `ctx.tenant_id` raw, so this LSP
+// metadata path and the `db.labels` / `db.relationshipTypes` dispatch path
+// (`meta_dispatch.zig:115`) agree about strict mode. Raw pass-through gave an
+// unscoped/"default" session the ALL-TENANTS label view from the LSP while
+// `db.labels` correctly refused it — the same silent-widening footgun
+// GAP-0840 closed for the executor.
+const tenancy = geode.tenancy;
 
 /// Per-call introspection context bound to the LSP session.
 ///
-/// `tenant_id == null` is the admin / un-scoped introspection path —
-/// every label, edge type, and property is visible regardless of the
-/// row-level tenant tag. When `tenant_id` is set, the underlying
-/// `GraphStore` accessors filter by `tenant_id` so cross-tenant labels
-/// stay invisible.
+/// `tenant_id == null` is the un-scoped introspection path. SONNY-1318:
+/// it is resolved through `tenancy.resolveTenantFilter`, so it means
+/// "every label, edge type and property regardless of row-level tenant
+/// tag" ONLY in a non-strict deployment; under strict tenancy an
+/// unscoped (or empty / "default") scope is REFUSED with
+/// `error.TenantScopeRequired`, exactly as `db.labels` refuses it. When
+/// `tenant_id` names a concrete tenant, the underlying `GraphStore`
+/// accessors filter by it so cross-tenant labels stay invisible.
 ///
 /// `auth_mgr == null` is the permissive default used by unit tests and
 /// the `--no-auth` developer flow. With a real auth manager wired in
@@ -141,7 +152,8 @@ pub fn listLabelsForUser(
     ctx: IntrospectionContext,
 ) ![][]const u8 {
     if (!graphVisible(ctx)) return try allocator.alloc([]const u8, 0);
-    const all = try store.listNodeLabels(allocator, ctx.tenant_id);
+    const filter_tenant = try tenancy.resolveTenantFilter(ctx.tenant_id);
+    const all = try store.listNodeLabels(allocator, filter_tenant);
     return filterLabelsByPermission(allocator, ctx, all);
 }
 
@@ -160,7 +172,8 @@ pub fn listEdgeTypesForUser(
     ctx: IntrospectionContext,
 ) ![][]const u8 {
     if (!graphVisible(ctx)) return try allocator.alloc([]const u8, 0);
-    const all = try store.listEdgeTypes(allocator, ctx.tenant_id);
+    const filter_tenant = try tenancy.resolveTenantFilter(ctx.tenant_id);
+    const all = try store.listEdgeTypes(allocator, filter_tenant);
     return filterLabelsByPermission(allocator, ctx, all);
 }
 
@@ -183,7 +196,8 @@ pub fn listPropertiesForLabelForUser(
 ) ![][]const u8 {
     if (!graphVisible(ctx)) return try allocator.alloc([]const u8, 0);
     if (!labelVisible(ctx, label)) return try allocator.alloc([]const u8, 0);
-    return store.listPropertiesForLabel(allocator, ctx.tenant_id, label);
+    const filter_tenant = try tenancy.resolveTenantFilter(ctx.tenant_id);
+    return store.listPropertiesForLabel(allocator, filter_tenant, label);
 }
 
 /// Returns the graph-name list the caller can see.

@@ -19,6 +19,21 @@ const ExecutionContext = execution.ExecutionContext;
 
 const Value = value_types.Value;
 
+// SONNY-1318 (GEO-UP-005): the session's tenant scope is resolved ONCE per
+// procedure invocation here (`execute` below) and threaded into every handler
+// as an explicit parameter. Before this, not one of the `algo.*` procedures
+// read `context.tenant_id` at all, so a tenant could traverse into and score
+// another tenant's nodes through a `CALL` even though the equivalent `MATCH`
+// read is filtered (`match_operations.passesTenantFilterSlice`).
+//
+// `resolveTenantFilter` is the SAME decision the executor's read paths make:
+// a concrete scope yields that tenant id; an unscoped/"default" session yields
+// `null` (all tenants, legacy behaviour) in a non-strict deployment and
+// `error.TenantScopeRequired` (42501) under strict tenancy. The error
+// PROPAGATES out of `execute`, so an unscoped strict session is refused rather
+// than silently widened.
+const tenancy = @import("tenancy.zig");
+
 // ---------------------------------------------------------------------------
 // StaticStringMap dispatch table — O(1) lookup replaces sequential if-else chain.
 // Each procedure name (including aliases) maps to a handler with a uniform
@@ -29,6 +44,10 @@ const AlgoHandler = *const fn (
     *graph_store.GraphStore,
     ast.CallProcedure,
     ExecutionContext,
+    /// SONNY-1318: the session's RESOLVED tenant scope (null = all tenants).
+    /// A required parameter, not an ambient lookup, so a handler added later
+    /// that forgets tenancy is a compile error and not a silent leak.
+    ?[]const u8,
 ) anyerror!ExecutionResult;
 
 const dispatch_table = std.StaticStringMap(AlgoHandler).initComptime(.{
@@ -133,7 +152,11 @@ pub fn execute(
     context: ExecutionContext,
 ) !?ExecutionResult {
     if (dispatch_table.get(proc_name)) |handler| {
-        return try handler(allocator, store, call_stmt, context);
+        // SONNY-1318: resolve ONCE, here, before any graph data is touched.
+        // Under strict tenancy with no scope this raises
+        // `error.TenantScopeRequired` and the procedure never runs.
+        const tenant_filter = try tenancy.resolveTenantFilter(context.tenant_id);
+        return try handler(allocator, store, call_stmt, context, tenant_filter);
     }
     return null;
 }
@@ -142,23 +165,23 @@ pub fn execute(
 // Handler functions — each has the uniform AlgoHandler signature.
 // ===========================================================================
 
-fn handleDegree(allocator: std.mem.Allocator, store: *graph_store.GraphStore, _: ast.CallProcedure, _: ExecutionContext) anyerror!ExecutionResult {
+fn handleDegree(allocator: std.mem.Allocator, store: *graph_store.GraphStore, _: ast.CallProcedure, _: ExecutionContext, tenant_filter: ?[]const u8) anyerror!ExecutionResult {
     const columns = try allocTwoColumns(allocator, "nodeId", "degree");
-    return execution.executeDegreeCentrality(allocator, store, columns);
+    return execution.executeDegreeCentrality(allocator, store, columns, tenant_filter);
 }
-fn handleBetweenness(allocator: std.mem.Allocator, store: *graph_store.GraphStore, _: ast.CallProcedure, _: ExecutionContext) anyerror!ExecutionResult {
+fn handleBetweenness(allocator: std.mem.Allocator, store: *graph_store.GraphStore, _: ast.CallProcedure, _: ExecutionContext, tenant_filter: ?[]const u8) anyerror!ExecutionResult {
     const columns = try allocTwoColumns(allocator, "nodeId", "betweenness");
-    return execution.executeBetweennessCentrality(allocator, store, columns);
+    return execution.executeBetweennessCentrality(allocator, store, columns, tenant_filter);
 }
-fn handleCloseness(allocator: std.mem.Allocator, store: *graph_store.GraphStore, _: ast.CallProcedure, _: ExecutionContext) anyerror!ExecutionResult {
+fn handleCloseness(allocator: std.mem.Allocator, store: *graph_store.GraphStore, _: ast.CallProcedure, _: ExecutionContext, tenant_filter: ?[]const u8) anyerror!ExecutionResult {
     const columns = try allocTwoColumns(allocator, "nodeId", "closeness");
-    return execution.executeClosenessCentrality(allocator, store, columns);
+    return execution.executeClosenessCentrality(allocator, store, columns, tenant_filter);
 }
-fn handleEigenvector(allocator: std.mem.Allocator, store: *graph_store.GraphStore, _: ast.CallProcedure, _: ExecutionContext) anyerror!ExecutionResult {
+fn handleEigenvector(allocator: std.mem.Allocator, store: *graph_store.GraphStore, _: ast.CallProcedure, _: ExecutionContext, tenant_filter: ?[]const u8) anyerror!ExecutionResult {
     const columns = try allocTwoColumns(allocator, "nodeId", "eigenvector");
-    return execution.executeEigenvectorCentrality(allocator, store, columns);
+    return execution.executeEigenvectorCentrality(allocator, store, columns, tenant_filter);
 }
-fn handlePageRank(allocator: std.mem.Allocator, store: *graph_store.GraphStore, call_stmt: ast.CallProcedure, _: ExecutionContext) anyerror!ExecutionResult {
+fn handlePageRank(allocator: std.mem.Allocator, store: *graph_store.GraphStore, call_stmt: ast.CallProcedure, _: ExecutionContext, tenant_filter: ?[]const u8) anyerror!ExecutionResult {
     const columns = try allocTwoColumns(allocator, "nodeId", "score");
     var params: ?std.json.Value = null;
     if (call_stmt.procedure == .Call) {
@@ -166,74 +189,74 @@ fn handlePageRank(allocator: std.mem.Allocator, store: *graph_store.GraphStore, 
             params = null;
         }
     }
-    return execution.executePageRank(allocator, store, columns, params);
+    return execution.executePageRank(allocator, store, columns, params, tenant_filter);
 }
-fn handleLouvain(allocator: std.mem.Allocator, store: *graph_store.GraphStore, _: ast.CallProcedure, _: ExecutionContext) anyerror!ExecutionResult {
+fn handleLouvain(allocator: std.mem.Allocator, store: *graph_store.GraphStore, _: ast.CallProcedure, _: ExecutionContext, tenant_filter: ?[]const u8) anyerror!ExecutionResult {
     const columns = try allocTwoColumns(allocator, "nodeId", "community");
-    return execution.executeLouvainCommunities(allocator, store, columns);
+    return execution.executeLouvainCommunities(allocator, store, columns, tenant_filter);
 }
-fn handleLabelPropagation(allocator: std.mem.Allocator, store: *graph_store.GraphStore, _: ast.CallProcedure, _: ExecutionContext) anyerror!ExecutionResult {
+fn handleLabelPropagation(allocator: std.mem.Allocator, store: *graph_store.GraphStore, _: ast.CallProcedure, _: ExecutionContext, tenant_filter: ?[]const u8) anyerror!ExecutionResult {
     const columns = try allocTwoColumns(allocator, "nodeId", "label");
-    return execution.executeLabelPropagation(allocator, store, columns);
+    return execution.executeLabelPropagation(allocator, store, columns, tenant_filter);
 }
-fn handleUnionFind(allocator: std.mem.Allocator, store: *graph_store.GraphStore, _: ast.CallProcedure, _: ExecutionContext) anyerror!ExecutionResult {
+fn handleUnionFind(allocator: std.mem.Allocator, store: *graph_store.GraphStore, _: ast.CallProcedure, _: ExecutionContext, tenant_filter: ?[]const u8) anyerror!ExecutionResult {
     const columns = try allocTwoColumns(allocator, "nodeId", "setId");
-    return execution.executeUnionFind(allocator, store, columns);
+    return execution.executeUnionFind(allocator, store, columns, tenant_filter);
 }
-fn handleSCC(allocator: std.mem.Allocator, store: *graph_store.GraphStore, _: ast.CallProcedure, _: ExecutionContext) anyerror!ExecutionResult {
+fn handleSCC(allocator: std.mem.Allocator, store: *graph_store.GraphStore, _: ast.CallProcedure, _: ExecutionContext, tenant_filter: ?[]const u8) anyerror!ExecutionResult {
     const columns = try allocTwoColumns(allocator, "nodeId", "componentId");
-    return execution.executeSCC(allocator, store, columns);
+    return execution.executeSCC(allocator, store, columns, tenant_filter);
 }
-fn handleHarmonic(allocator: std.mem.Allocator, store: *graph_store.GraphStore, _: ast.CallProcedure, _: ExecutionContext) anyerror!ExecutionResult {
+fn handleHarmonic(allocator: std.mem.Allocator, store: *graph_store.GraphStore, _: ast.CallProcedure, _: ExecutionContext, tenant_filter: ?[]const u8) anyerror!ExecutionResult {
     const columns = try allocTwoColumns(allocator, "nodeId", "harmonic");
-    return execution.executeHarmonicCentrality(allocator, store, columns);
+    return execution.executeHarmonicCentrality(allocator, store, columns, tenant_filter);
 }
-fn handleBridgeLeverage(allocator: std.mem.Allocator, store: *graph_store.GraphStore, _: ast.CallProcedure, _: ExecutionContext) anyerror!ExecutionResult {
+fn handleBridgeLeverage(allocator: std.mem.Allocator, store: *graph_store.GraphStore, _: ast.CallProcedure, _: ExecutionContext, tenant_filter: ?[]const u8) anyerror!ExecutionResult {
     const columns = try allocTwoColumns(allocator, "nodeId", "bridgeLeverage");
-    return execution.executeBridgeLeverageCentrality(allocator, store, columns);
+    return execution.executeBridgeLeverageCentrality(allocator, store, columns, tenant_filter);
 }
-fn handleGreyCardinal(allocator: std.mem.Allocator, store: *graph_store.GraphStore, _: ast.CallProcedure, _: ExecutionContext) anyerror!ExecutionResult {
+fn handleGreyCardinal(allocator: std.mem.Allocator, store: *graph_store.GraphStore, _: ast.CallProcedure, _: ExecutionContext, tenant_filter: ?[]const u8) anyerror!ExecutionResult {
     const columns = try allocTwoColumns(allocator, "nodeId", "composite");
-    return execution.executeGreyCardinalComposite(allocator, store, columns);
+    return execution.executeGreyCardinalComposite(allocator, store, columns, tenant_filter);
 }
-fn handleLeiden(allocator: std.mem.Allocator, store: *graph_store.GraphStore, _: ast.CallProcedure, _: ExecutionContext) anyerror!ExecutionResult {
+fn handleLeiden(allocator: std.mem.Allocator, store: *graph_store.GraphStore, _: ast.CallProcedure, _: ExecutionContext, tenant_filter: ?[]const u8) anyerror!ExecutionResult {
     const columns = try allocTwoColumns(allocator, "nodeId", "community");
-    return execution.executeLeidenCommunities(allocator, store, columns);
+    return execution.executeLeidenCommunities(allocator, store, columns, tenant_filter);
 }
-fn handleArticulationPoints(allocator: std.mem.Allocator, store: *graph_store.GraphStore, _: ast.CallProcedure, _: ExecutionContext) anyerror!ExecutionResult {
+fn handleArticulationPoints(allocator: std.mem.Allocator, store: *graph_store.GraphStore, _: ast.CallProcedure, _: ExecutionContext, tenant_filter: ?[]const u8) anyerror!ExecutionResult {
     const columns = try allocator.alloc([]const u8, 1);
     columns[0] = try allocator.dupe(u8, "nodeId");
-    return execution.executeArticulationPoints(allocator, store, columns);
+    return execution.executeArticulationPoints(allocator, store, columns, tenant_filter);
 }
-fn handleBridges(allocator: std.mem.Allocator, store: *graph_store.GraphStore, _: ast.CallProcedure, _: ExecutionContext) anyerror!ExecutionResult {
+fn handleBridges(allocator: std.mem.Allocator, store: *graph_store.GraphStore, _: ast.CallProcedure, _: ExecutionContext, tenant_filter: ?[]const u8) anyerror!ExecutionResult {
     const columns = try allocTwoColumns(allocator, "sourceId", "targetId");
-    return execution.executeBridges(allocator, store, columns);
+    return execution.executeBridges(allocator, store, columns, tenant_filter);
 }
-fn handleBiconnected(allocator: std.mem.Allocator, store: *graph_store.GraphStore, _: ast.CallProcedure, _: ExecutionContext) anyerror!ExecutionResult {
+fn handleBiconnected(allocator: std.mem.Allocator, store: *graph_store.GraphStore, _: ast.CallProcedure, _: ExecutionContext, tenant_filter: ?[]const u8) anyerror!ExecutionResult {
     const columns = try allocTwoColumns(allocator, "nodeId", "componentId");
-    return execution.executeBiconnectedComponents(allocator, store, columns);
+    return execution.executeBiconnectedComponents(allocator, store, columns, tenant_filter);
 }
-fn handleGraphDensity(allocator: std.mem.Allocator, store: *graph_store.GraphStore, _: ast.CallProcedure, _: ExecutionContext) anyerror!ExecutionResult {
+fn handleGraphDensity(allocator: std.mem.Allocator, store: *graph_store.GraphStore, _: ast.CallProcedure, _: ExecutionContext, tenant_filter: ?[]const u8) anyerror!ExecutionResult {
     const columns = try allocator.alloc([]const u8, 1);
     columns[0] = try allocator.dupe(u8, "density");
-    return execution.executeGraphDensity(allocator, store, columns);
+    return execution.executeGraphDensity(allocator, store, columns, tenant_filter);
 }
-fn handleGraphDiameter(allocator: std.mem.Allocator, store: *graph_store.GraphStore, _: ast.CallProcedure, _: ExecutionContext) anyerror!ExecutionResult {
+fn handleGraphDiameter(allocator: std.mem.Allocator, store: *graph_store.GraphStore, _: ast.CallProcedure, _: ExecutionContext, tenant_filter: ?[]const u8) anyerror!ExecutionResult {
     const columns = try allocator.alloc([]const u8, 1);
     columns[0] = try allocator.dupe(u8, "diameter");
-    return execution.executeGraphDiameter(allocator, store, columns);
+    return execution.executeGraphDiameter(allocator, store, columns, tenant_filter);
 }
-fn handleMeanDistance(allocator: std.mem.Allocator, store: *graph_store.GraphStore, _: ast.CallProcedure, _: ExecutionContext) anyerror!ExecutionResult {
+fn handleMeanDistance(allocator: std.mem.Allocator, store: *graph_store.GraphStore, _: ast.CallProcedure, _: ExecutionContext, tenant_filter: ?[]const u8) anyerror!ExecutionResult {
     const columns = try allocator.alloc([]const u8, 1);
     columns[0] = try allocator.dupe(u8, "meanDistance");
-    return execution.executeMeanDistance(allocator, store, columns);
+    return execution.executeMeanDistance(allocator, store, columns, tenant_filter);
 }
-fn handleGlobalClustering(allocator: std.mem.Allocator, store: *graph_store.GraphStore, _: ast.CallProcedure, _: ExecutionContext) anyerror!ExecutionResult {
+fn handleGlobalClustering(allocator: std.mem.Allocator, store: *graph_store.GraphStore, _: ast.CallProcedure, _: ExecutionContext, tenant_filter: ?[]const u8) anyerror!ExecutionResult {
     const columns = try allocator.alloc([]const u8, 1);
     columns[0] = try allocator.dupe(u8, "coefficient");
-    return execution.executeGlobalClusteringCoefficient(allocator, store, columns);
+    return execution.executeGlobalClusteringCoefficient(allocator, store, columns, tenant_filter);
 }
-fn handleKatz(allocator: std.mem.Allocator, store: *graph_store.GraphStore, call_stmt: ast.CallProcedure, _: ExecutionContext) anyerror!ExecutionResult {
+fn handleKatz(allocator: std.mem.Allocator, store: *graph_store.GraphStore, call_stmt: ast.CallProcedure, _: ExecutionContext, tenant_filter: ?[]const u8) anyerror!ExecutionResult {
     const columns = try allocTwoColumns(allocator, "nodeId", "score");
     var params: ?std.json.Value = null;
     if (call_stmt.procedure == .Call) {
@@ -241,9 +264,9 @@ fn handleKatz(allocator: std.mem.Allocator, store: *graph_store.GraphStore, call
             params = null;
         }
     }
-    return execution.executeKatzCentrality(allocator, store, columns, params);
+    return execution.executeKatzCentrality(allocator, store, columns, params, tenant_filter);
 }
-fn handleHITS(allocator: std.mem.Allocator, store: *graph_store.GraphStore, call_stmt: ast.CallProcedure, _: ExecutionContext) anyerror!ExecutionResult {
+fn handleHITS(allocator: std.mem.Allocator, store: *graph_store.GraphStore, call_stmt: ast.CallProcedure, _: ExecutionContext, tenant_filter: ?[]const u8) anyerror!ExecutionResult {
     const columns = try allocator.alloc([]const u8, 3);
     columns[0] = try allocator.dupe(u8, "nodeId");
     columns[1] = try allocator.dupe(u8, "hub");
@@ -254,29 +277,29 @@ fn handleHITS(allocator: std.mem.Allocator, store: *graph_store.GraphStore, call
             params = null;
         }
     }
-    return execution.executeHITS(allocator, store, columns, params);
+    return execution.executeHITS(allocator, store, columns, params, tenant_filter);
 }
-fn handleTriangleCount(allocator: std.mem.Allocator, store: *graph_store.GraphStore, _: ast.CallProcedure, _: ExecutionContext) anyerror!ExecutionResult {
+fn handleTriangleCount(allocator: std.mem.Allocator, store: *graph_store.GraphStore, _: ast.CallProcedure, _: ExecutionContext, tenant_filter: ?[]const u8) anyerror!ExecutionResult {
     const columns = try allocator.alloc([]const u8, 1);
     columns[0] = try allocator.dupe(u8, "triangleCount");
-    return execution.executeTriangleCounting(allocator, store, columns);
+    return execution.executeTriangleCounting(allocator, store, columns, tenant_filter);
 }
-fn handleLocalClustering(allocator: std.mem.Allocator, store: *graph_store.GraphStore, _: ast.CallProcedure, _: ExecutionContext) anyerror!ExecutionResult {
+fn handleLocalClustering(allocator: std.mem.Allocator, store: *graph_store.GraphStore, _: ast.CallProcedure, _: ExecutionContext, tenant_filter: ?[]const u8) anyerror!ExecutionResult {
     const columns = try allocTwoColumns(allocator, "nodeId", "coefficient");
-    return execution.executeLocalClusteringCoefficient(allocator, store, columns);
+    return execution.executeLocalClusteringCoefficient(allocator, store, columns, tenant_filter);
 }
-fn handleKCore(allocator: std.mem.Allocator, store: *graph_store.GraphStore, _: ast.CallProcedure, _: ExecutionContext) anyerror!ExecutionResult {
+fn handleKCore(allocator: std.mem.Allocator, store: *graph_store.GraphStore, _: ast.CallProcedure, _: ExecutionContext, tenant_filter: ?[]const u8) anyerror!ExecutionResult {
     const columns = try allocTwoColumns(allocator, "nodeId", "coreness");
-    return execution.executeKCore(allocator, store, columns);
+    return execution.executeKCore(allocator, store, columns, tenant_filter);
 }
-fn handleKShell(allocator: std.mem.Allocator, store: *graph_store.GraphStore, _: ast.CallProcedure, _: ExecutionContext) anyerror!ExecutionResult {
+fn handleKShell(allocator: std.mem.Allocator, store: *graph_store.GraphStore, _: ast.CallProcedure, _: ExecutionContext, tenant_filter: ?[]const u8) anyerror!ExecutionResult {
     const columns = try allocTwoColumns(allocator, "nodeId", "shell");
-    return execution.executeKShell(allocator, store, columns);
+    return execution.executeKShell(allocator, store, columns, tenant_filter);
 }
 
 // ==================== Traversal Handlers ====================
 
-fn handleBFS(allocator: std.mem.Allocator, store: *graph_store.GraphStore, call_stmt: ast.CallProcedure, context: ExecutionContext) anyerror!ExecutionResult {
+fn handleBFS(allocator: std.mem.Allocator, store: *graph_store.GraphStore, call_stmt: ast.CallProcedure, context: ExecutionContext, tenant_filter: ?[]const u8) anyerror!ExecutionResult {
     const args = switch (call_stmt.procedure) {
         .Call => |call| call.args,
         else => &[_]*ast.Expr{},
@@ -287,14 +310,14 @@ fn handleBFS(allocator: std.mem.Allocator, store: *graph_store.GraphStore, call_
 
     const bfs_columns = try allocator.alloc([]const u8, 1);
     bfs_columns[0] = try allocator.dupe(u8, "path");
-    var result = try execution.executeBFS(allocator, store, bfs_columns, start_id, max_depth);
+    var result = try execution.executeBFS(allocator, store, bfs_columns, start_id, max_depth, tenant_filter);
 
     if (call_stmt.yield_items) |yield_items| {
         result = try filterYieldColumns(allocator, result, yield_items);
     }
     return result;
 }
-fn handleDFS(allocator: std.mem.Allocator, store: *graph_store.GraphStore, call_stmt: ast.CallProcedure, context: ExecutionContext) anyerror!ExecutionResult {
+fn handleDFS(allocator: std.mem.Allocator, store: *graph_store.GraphStore, call_stmt: ast.CallProcedure, context: ExecutionContext, tenant_filter: ?[]const u8) anyerror!ExecutionResult {
     const args = switch (call_stmt.procedure) {
         .Call => |call| call.args,
         else => &[_]*ast.Expr{},
@@ -305,14 +328,14 @@ fn handleDFS(allocator: std.mem.Allocator, store: *graph_store.GraphStore, call_
 
     const columns = try allocator.alloc([]const u8, 1);
     columns[0] = try allocator.dupe(u8, "path");
-    var result = try execution.executeDFS(allocator, store, columns, start_id, max_depth);
+    var result = try execution.executeDFS(allocator, store, columns, start_id, max_depth, tenant_filter);
 
     if (call_stmt.yield_items) |yield_items| {
         result = try filterYieldColumns(allocator, result, yield_items);
     }
     return result;
 }
-fn handleDijkstra(allocator: std.mem.Allocator, store: *graph_store.GraphStore, call_stmt: ast.CallProcedure, context: ExecutionContext) anyerror!ExecutionResult {
+fn handleDijkstra(allocator: std.mem.Allocator, store: *graph_store.GraphStore, call_stmt: ast.CallProcedure, context: ExecutionContext, tenant_filter: ?[]const u8) anyerror!ExecutionResult {
     const args = switch (call_stmt.procedure) {
         .Call => |call| call.args,
         else => &[_]*ast.Expr{},
@@ -339,7 +362,7 @@ fn handleDijkstra(allocator: std.mem.Allocator, store: *graph_store.GraphStore, 
     }
 
     const columns = try allocTwoColumns(allocator, "path", "cost");
-    var result = try execution.executeDijkstra(allocator, store, columns, start_id, end_id, weight_property);
+    var result = try execution.executeDijkstra(allocator, store, columns, start_id, end_id, weight_property, tenant_filter);
 
     if (call_stmt.yield_items) |yield_items| {
         result = try filterYieldColumns(allocator, result, yield_items);

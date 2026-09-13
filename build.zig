@@ -7905,6 +7905,26 @@ pub fn build(b: *std.Build) void {
     const sonny1229_step = b.step("test-sonny1229-strict-tenancy-read", "Run SONNY-1229 regression (engine-direct reads are tenant-scoped: the node-scan fast path declines to the executor under a concrete tenant scope / strict tenancy)");
     sonny1229_step.dependOn(&run_sonny1229_tests.step);
 
+    // SONNY-1318 (GEO-UP-005) P0: the `CALL algo.*` graph procedures
+    // (algo_dispatch -> recursion_handler BFS/DFS/Dijkstra and
+    // centrality_algorithms) had NO tenant handling at all, so a tenant could
+    // traverse into and score another tenant's nodes through a procedure even
+    // though the equivalent MATCH read is filtered. Also pins
+    // schema_introspection to the same strict-tenancy resolver meta_dispatch
+    // uses. Needs `geode`, `rls`/`rls_types` (live expr-RLS engine whose
+    // HierarchyManager holds the registered tenants — the GAP-0846 seam) and
+    // `schema_introspection` (its own module, the LSP metadata path).
+    const sonny1318_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny1318_procedure_tenancy.zig"), .target = target, .optimize = optimize });
+    sonny1318_test_mod.addImport("geode", root_mod);
+    sonny1318_test_mod.addImport("rls", rls_mod);
+    sonny1318_test_mod.addImport("rls_types", rls_types_mod);
+    sonny1318_test_mod.addImport("schema_introspection", schema_introspection_mod);
+    const sonny1318_tests = b.addTest(.{ .root_module = sonny1318_test_mod });
+    const run_sonny1318_tests = b.addRunArtifact(sonny1318_tests);
+    shardDep(test_step, &run_sonny1318_tests.step, 1, test_shard_loads, test_shard_index);
+    const sonny1318_step = b.step("test-sonny1318-procedure-tenancy", "Run SONNY-1318 regression (CALL algo.* traversal/centrality procedures and LSP schema introspection are tenant-scoped, fail-closed under strict tenancy)");
+    sonny1318_step.dependOn(&run_sonny1318_tests.step);
+
     // GAP-0903 (P3a) RLS clone-gate regression: RLS-active reads must no longer
     // force the O(graph) snapshot clone.  The secondary gates at QCH:7040
     // (!rls_active) and query_execution.zig:1673 (!wouldEvaluateRLS()) route

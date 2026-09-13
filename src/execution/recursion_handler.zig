@@ -15,6 +15,13 @@ const value_types = @import("../value_types.zig");
 const execution = @import("../execution.zig");
 const ExecutionResult = execution.ExecutionResult;
 
+// SONNY-1318 (GEO-UP-005): the shared, hierarchy-aware tenant visibility
+// predicate — the SAME one `match_operations.zig` applies to a MATCH read.
+// Before this, BFS/DFS/Dijkstra walked raw adjacency with no tenant term at
+// all, so `CALL algo.bfs.stream(<A node>)` happily crossed into another
+// tenant's subgraph.
+const tenant_visibility = @import("tenant_visibility.zig");
+
 // Local type aliases
 const Value = value_types.Value;
 
@@ -47,7 +54,24 @@ pub fn buildMemberPath(allocator: std.mem.Allocator, expr: *ast.Expr, result: *s
 ///
 /// Performs breadth-first traversal up to max_depth, returning all paths discovered.
 /// Useful for finding shortest paths and level-by-level exploration.
-pub fn executeBFS(allocator: std.mem.Allocator, store: *graph_store.GraphStore, columns: [][]const u8, start_node_id: u64, max_depth: u32) !ExecutionResult {
+/// `tenant_filter` is the session's RESOLVED tenant scope
+/// (`tenancy.resolveTenantFilter(ctx.tenant_id)`), `null` meaning all-tenants.
+/// It is a required parameter rather than an ambient lookup so that a new
+/// traversal entry point which forgets tenancy is a COMPILE ERROR, not a
+/// silent cross-tenant leak (SONNY-1318; same reasoning as SONNY-1229's
+/// `isEligible` parameter).
+pub fn executeBFS(allocator: std.mem.Allocator, store: *graph_store.GraphStore, columns: [][]const u8, start_node_id: u64, max_depth: u32, tenant_filter: ?[]const u8) !ExecutionResult {
+    // SONNY-1318: a start node the caller cannot see reads as NOT FOUND — zero
+    // rows, no error. An error here would confirm the id exists, which is
+    // itself a cross-tenant disclosure.
+    if (!tenant_visibility.nodeIdVisible(store, start_node_id, tenant_filter)) {
+        return ExecutionResult{
+            .columns = columns,
+            .rows = try allocator.alloc([]Value, 0),
+            .flags = std.ArrayList([]const u8).empty,
+        };
+    }
+
     var paths = std.ArrayList([]u64).empty;
     defer {
         for (paths.items) |path| {
@@ -97,12 +121,16 @@ pub fn executeBFS(allocator: std.mem.Allocator, store: *graph_store.GraphStore, 
         if (store.getOutgoingEdgeIds(current_id)) |out_ids| {
             for (out_ids) |eid| {
                 const edge = store.getEdgePtrHydrated(eid) orelse continue;
+                // SONNY-1318: the edge AND both its endpoints must be visible —
+                // never traverse THROUGH an invisible node.
+                if (!tenant_visibility.edgeTraversable(store, edge.*, tenant_filter)) continue;
                 try ExpandBFS.pushNeighbor(allocator, &queue, current_path, edge.to_id, current_depth + 1);
             }
         }
         if (store.getIncomingEdgeIds(current_id)) |in_ids| {
             for (in_ids) |eid| {
                 const edge = store.getEdgePtrHydrated(eid) orelse continue;
+                if (!tenant_visibility.edgeTraversable(store, edge.*, tenant_filter)) continue;
                 try ExpandBFS.pushNeighbor(allocator, &queue, current_path, edge.from_id, current_depth + 1);
             }
         }
@@ -134,7 +162,17 @@ pub fn executeBFS(allocator: std.mem.Allocator, store: *graph_store.GraphStore, 
 ///
 /// Performs depth-first traversal up to max_depth, returning all paths discovered.
 /// Useful for exhaustive exploration and finding all possible paths.
-pub fn executeDFS(allocator: std.mem.Allocator, store: *graph_store.GraphStore, columns: [][]const u8, start_node_id: u64, max_depth: u32) !ExecutionResult {
+/// `tenant_filter`: see `executeBFS`.
+pub fn executeDFS(allocator: std.mem.Allocator, store: *graph_store.GraphStore, columns: [][]const u8, start_node_id: u64, max_depth: u32, tenant_filter: ?[]const u8) !ExecutionResult {
+    // SONNY-1318: invisible start node -> not found (zero rows), not an error.
+    if (!tenant_visibility.nodeIdVisible(store, start_node_id, tenant_filter)) {
+        return ExecutionResult{
+            .columns = columns,
+            .rows = try allocator.alloc([]Value, 0),
+            .flags = std.ArrayList([]const u8).empty,
+        };
+    }
+
     var paths = std.ArrayList([]u64).empty;
     defer {
         for (paths.items) |path| {
@@ -183,12 +221,15 @@ pub fn executeDFS(allocator: std.mem.Allocator, store: *graph_store.GraphStore, 
         if (store.getOutgoingEdgeIds(current_id)) |out_ids| {
             for (out_ids) |eid| {
                 const edge = store.getEdgePtrHydrated(eid) orelse continue;
+                // SONNY-1318: edge + both endpoints must be visible.
+                if (!tenant_visibility.edgeTraversable(store, edge.*, tenant_filter)) continue;
                 try PushDfs.push(allocator, &stack, current_path, edge.to_id, current_depth + 1);
             }
         }
         if (store.getIncomingEdgeIds(current_id)) |in_ids| {
             for (in_ids) |eid| {
                 const edge = store.getEdgePtrHydrated(eid) orelse continue;
+                if (!tenant_visibility.edgeTraversable(store, edge.*, tenant_filter)) continue;
                 try PushDfs.push(allocator, &stack, current_path, edge.from_id, current_depth + 1);
             }
         }
@@ -220,7 +261,19 @@ pub fn executeDFS(allocator: std.mem.Allocator, store: *graph_store.GraphStore, 
 ///
 /// Finds the shortest weighted path from start_id to end_id using Dijkstra's algorithm.
 /// Edge weights are extracted from the specified property, defaulting to 1.0 if not present.
-pub fn executeDijkstra(allocator: std.mem.Allocator, store: *graph_store.GraphStore, columns: [][]const u8, start_id: u64, end_id: u64, weight_property: []const u8) !ExecutionResult {
+/// `tenant_filter`: see `executeBFS`. An end node the caller cannot see is
+/// simply never reached, so the procedure reports NO PATH — it never reveals
+/// that the id exists.
+pub fn executeDijkstra(allocator: std.mem.Allocator, store: *graph_store.GraphStore, columns: [][]const u8, start_id: u64, end_id: u64, weight_property: []const u8, tenant_filter: ?[]const u8) !ExecutionResult {
+    // SONNY-1318: invisible start node -> not found (zero rows), not an error.
+    if (!tenant_visibility.nodeIdVisible(store, start_id, tenant_filter)) {
+        return ExecutionResult{
+            .columns = columns,
+            .rows = try allocator.alloc([]Value, 0),
+            .flags = std.ArrayList([]const u8).empty,
+        };
+    }
+
     // Priority queue entry: (node_id, distance, path)
     const PQEntry = struct {
         node_id: u64,
@@ -314,12 +367,16 @@ pub fn executeDijkstra(allocator: std.mem.Allocator, store: *graph_store.GraphSt
             if (store.getOutgoingEdgeIds(current_id)) |out_ids| {
                 for (out_ids) |eid| {
                     const edge = store.getEdgePtrHydrated(eid) orelse continue;
+                    // SONNY-1318: never relax across an edge, or into a node,
+                    // the session's tenant scope cannot see.
+                    if (!tenant_visibility.edgeTraversable(store, edge.*, tenant_filter)) continue;
                     try nbrs.append(allocator, edge.to_id);
                 }
             }
             if (store.getIncomingEdgeIds(current_id)) |in_ids| {
                 for (in_ids) |eid| {
                     const edge = store.getEdgePtrHydrated(eid) orelse continue;
+                    if (!tenant_visibility.edgeTraversable(store, edge.*, tenant_filter)) continue;
                     try nbrs.append(allocator, edge.from_id);
                 }
             }
@@ -390,17 +447,22 @@ pub fn executeDijkstra(allocator: std.mem.Allocator, store: *graph_store.GraphSt
 
         // Helper to check if an edge exists (PHASE 1: via adjacency, not a full
         // `store.edges` scan — bounded-cache-correct + O(degree)).
+        // SONNY-1318: this fallback is a SECOND traversal surface — it must
+        // apply the same visibility rule as the main relaxation loop, or an
+        // invisible two-hop path would leak through the back door.
         const maybeEdgeCost = struct {
-            fn get(gs: *graph_store.GraphStore, a: u64, b: u64, weight_prop: []const u8) ?f64 {
+            fn get(gs: *graph_store.GraphStore, a: u64, b: u64, weight_prop: []const u8, filter: ?[]const u8) ?f64 {
                 if (gs.getOutgoingEdgeIds(a)) |out_ids| {
                     for (out_ids) |eid| {
                         const e = gs.getEdgePtrHydrated(eid) orelse continue;
+                        if (!tenant_visibility.edgeTraversable(gs, e.*, filter)) continue;
                         if (e.to_id == b) return getEdgeWeight(gs, a, b, weight_prop);
                     }
                 }
                 if (gs.getIncomingEdgeIds(a)) |in_ids| {
                     for (in_ids) |eid| {
                         const e = gs.getEdgePtrHydrated(eid) orelse continue;
+                        if (!tenant_visibility.edgeTraversable(gs, e.*, filter)) continue;
                         if (e.from_id == b) return getEdgeWeight(gs, a, b, weight_prop);
                     }
                 }
@@ -408,7 +470,7 @@ pub fn executeDijkstra(allocator: std.mem.Allocator, store: *graph_store.GraphSt
             }
         }.get;
 
-        if (maybeEdgeCost(store, start_id, end_id, weight_property)) |direct| {
+        if (maybeEdgeCost(store, start_id, end_id, weight_property, tenant_filter)) |direct| {
             best_cost = direct;
             best_path = .{ start_id, end_id, 0 };
             best_len = 2;
@@ -422,17 +484,19 @@ pub fn executeDijkstra(allocator: std.mem.Allocator, store: *graph_store.GraphSt
         if (store.getOutgoingEdgeIds(start_id)) |out_ids| {
             for (out_ids) |eid| {
                 const edge = store.getEdgePtrHydrated(eid) orelse continue;
+                if (!tenant_visibility.edgeTraversable(store, edge.*, tenant_filter)) continue;
                 try mids.append(allocator, edge.to_id);
             }
         }
         if (store.getIncomingEdgeIds(start_id)) |in_ids| {
             for (in_ids) |eid| {
                 const edge = store.getEdgePtrHydrated(eid) orelse continue;
+                if (!tenant_visibility.edgeTraversable(store, edge.*, tenant_filter)) continue;
                 try mids.append(allocator, edge.from_id);
             }
         }
         for (mids.items) |m| {
-            if (maybeEdgeCost(store, m, end_id, weight_property)) |tail_cost| {
+            if (maybeEdgeCost(store, m, end_id, weight_property, tenant_filter)) |tail_cost| {
                 const head_cost = getEdgeWeight(store, start_id, m, weight_property);
                 const total = head_cost + tail_cost;
                 if (best_cost == null or total < best_cost.?) {
@@ -564,7 +628,7 @@ test "BFS - single node" {
     _ = try store.createNode(&[_][]const u8{});
 
     const columns = &[_][]const u8{"path"};
-    var result = try executeBFS(testing.allocator, &store, @as([][]const u8, @constCast(columns)), 1, 0);
+    var result = try executeBFS(testing.allocator, &store, @as([][]const u8, @constCast(columns)), 1, 0, null);
     defer {
         for (result.rows) |row| {
             for (row) |val| {
@@ -591,7 +655,7 @@ test "DFS - single node" {
     _ = try store.createNode(&[_][]const u8{});
 
     const columns = &[_][]const u8{"path"};
-    var result = try executeDFS(testing.allocator, &store, @as([][]const u8, @constCast(columns)), 1, 0);
+    var result = try executeDFS(testing.allocator, &store, @as([][]const u8, @constCast(columns)), 1, 0, null);
     defer {
         for (result.rows) |row| {
             for (row) |val| {
@@ -621,7 +685,7 @@ test "Dijkstra - no path" {
     _ = n2;
 
     const columns = &[_][]const u8{ "path", "distance" };
-    var result = try executeDijkstra(testing.allocator, &store, @as([][]const u8, @constCast(columns)), 1, 2, "weight"); // start_id=1 end_id=2 OK
+    var result = try executeDijkstra(testing.allocator, &store, @as([][]const u8, @constCast(columns)), 1, 2, "weight", null); // start_id=1 end_id=2 OK
     defer {
         for (result.rows) |row| {
             testing.allocator.free(row);

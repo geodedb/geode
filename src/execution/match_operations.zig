@@ -4,6 +4,9 @@ const eval = @import("../eval.zig");
 const graph_store = @import("../graph_store.zig");
 // GAP-0840: shared strict-tenancy decision (opt-in rejection of unscoped reads).
 const tenancy = @import("tenancy.zig");
+// SONNY-1318: the ONE hierarchy-aware tenant visibility predicate, shared with
+// the `CALL algo.*` graph procedures (see tenant_visibility.zig).
+const tenant_visibility = @import("tenant_visibility.zig");
 // GAP-0755: Per-query arena pool — executor scratch sites can opt in via
 // `query_arena.currentScratchAllocator()` when one is installed by the
 // transport handler. When unset (legacy / test paths), the fallback
@@ -175,93 +178,18 @@ fn getSessionTenantFilter() tenancy.TenancyError!?[]const u8 {
     return tenancy.resolveTenantFilter(maybe_tid);
 }
 
-// GAP-0846: resolve the global tenant HierarchyManager IFF it is configured AND
-// the session's filter tenant participates in it. Returns null in the common
-// (single-tenant / no-hierarchy) case so the exact-match fast path below stays
-// allocation-free and branch-cheap.
-//
-// `filter_tenant` is the session's concrete tenant scope (never null here — the
-// callers only reach this when a concrete scope exists). The result, when
-// non-null, is a manager whose `canAccessTenantSafe(filter_tenant, row_tenant)`
-// decides ancestor-or-self access (parent → descendant grant; sibling deny).
-//
-// Thread-safety: the HierarchyManager is provisioned at server start
-// (rehydrateTenantDerivedState) and via `CALL geode.tenant.create`. It is read
-// here under the same no-additional-lock posture as the existing population
-// seam (GAP-0838/0839); this is a leaf read of a StringHashMap and acquires no
-// geode lock, so it never violates the CLAUDE.md lock-ordering table.
-inline fn hierarchyForFilter(filter_tenant: []const u8) ?*rls.HierarchyManager {
-    const engine_ptr = rls_types.getGlobalExprRLSEngine() orelse return null;
-    const engine: *rls.RLSEngine = @ptrCast(@alignCast(engine_ptr));
-    const hm = &engine.hierarchy_manager;
-    // Fast path: no hierarchy provisioned -> exact match only (zero overhead).
-    if (hm.count() == 0) return null;
-    // The session tenant must itself be a registered node for ancestor access
-    // to mean anything; an unregistered concrete tenant falls back to exact
-    // match (it can only ever see its own rows).
-    if (!hm.contains(filter_tenant)) return null;
-    return hm;
-}
-
-// GAP-0279 / GAP-0846: Check if a node passes the tenant filter.
-// Returns true if node should be included in results.
-//
-//   * No filter (null) -> admin/all-tenants, always true (unchanged).
-//   * Exact tenant match -> true (GAP-0509 isolation fast path, unchanged).
-//   * Otherwise, when a tenant hierarchy is configured for the session tenant,
-//     consult `canAccessTenantSafe`: a parent (ancestor-or-self) tenant may read
-//     its descendants' rows; siblings/ancestors are still denied (fail-closed).
-inline fn passesTenantFilter(node: graph_store.Node, filter_tenant: ?[]const u8) bool {
-    return passesTenantFilterSlice(node.tenant_id, filter_tenant);
-}
-
-// GAP-0902: tenant-filter variant taking the node's tenant id as a bare slice,
-// for engine-direct read paths (the bounded-cache top-K scan) that read the
-// tenant tag straight from the engine without materializing a `Node`.
-// Identical semantics to `passesTenantFilter`.
-inline fn passesTenantFilterSlice(node_tenant: []const u8, filter_tenant: ?[]const u8) bool {
-    const tid = filter_tenant orelse return true;
-    if (std.mem.eql(u8, node_tenant, tid)) return true;
-    const hm = hierarchyForFilter(tid) orelse return false;
-    return hm.canAccessTenantSafe(tid, node_tenant);
-}
-
-// GAP-0279 / GAP-0846: Check if an edge passes the tenant filter (hierarchy-aware).
-inline fn passesTenantFilterEdge(edge: graph_store.Edge, filter_tenant: ?[]const u8) bool {
-    const tid = filter_tenant orelse return true;
-    if (std.mem.eql(u8, edge.tenant_id, tid)) return true;
-    const hm = hierarchyForFilter(tid) orelse return false;
-    return hm.canAccessTenantSafe(tid, edge.tenant_id);
-}
-
-// GAP-0891 (defense-in-depth): hierarchy-aware, endpoint-derived edge
-// visibility. The edge is visible when its own tag passes the (hierarchy-aware)
-// tenant filter OR when BOTH endpoints pass it. This bridges legacy edges
-// mis-tagged "default" (the pre-fix worker bug) whose endpoint nodes carry the
-// correct tenant, matching the store-level `GraphStore.edgeVisibleForTenant`.
-//
-// Isolation is preserved: a genuine "default"-tagged edge between
-// "default"-tagged nodes stays hidden from a non-default reader because both
-// endpoints fail `passesTenantFilter` (fail-closed). Endpoint lookups reuse the
-// already-held store/rwlock read pattern from the surrounding match loop
-// (`store.nodes.get`) — no new lock is acquired.
-inline fn edgeVisibleForTenantHierarchy(
-    store: *graph_store.GraphStore,
-    edge: graph_store.Edge,
-    filter_tenant: ?[]const u8,
-) bool {
-    if (passesTenantFilterEdge(edge, filter_tenant)) return true;
-    // GAP-ENT-0023 P3 (review I1): residency is NOT existence — on a bounded
-    // (or snapshot-warm, cold) cache a resident-only endpoint lookup denied
-    // every legacy-tagged edge whose endpoints were merely evicted. Read the
-    // endpoint tenant tags resident-first with an engine fallback; the helper
-    // never mutates the cache (callers hold retained `*Node` pointers).
-    const from_tenant = store.dupeNodeTenantForRead(store.allocator, edge.from_id) orelse return false;
-    defer store.allocator.free(from_tenant);
-    const to_tenant = store.dupeNodeTenantForRead(store.allocator, edge.to_id) orelse return false;
-    defer store.allocator.free(to_tenant);
-    return passesTenantFilterSlice(from_tenant, filter_tenant) and passesTenantFilterSlice(to_tenant, filter_tenant);
-}
+// SONNY-1318: the hierarchy-aware tenant predicates below used to be defined
+// HERE and were file-private, which is why the `CALL algo.*` graph procedures
+// could not reuse them and shipped with no tenant handling at all (GEO-UP-005).
+// They now live in `tenant_visibility.zig` and are aliased in, so the MATCH
+// path and the procedure paths run literally the same code and cannot drift.
+// Semantics are unchanged — see that module for the GAP-0279 / GAP-0509 /
+// GAP-0846 / GAP-0891 / GAP-0902 rationale each predicate carries.
+const hierarchyForFilter = tenant_visibility.hierarchyForFilter;
+const passesTenantFilter = tenant_visibility.passesTenantFilter;
+const passesTenantFilterSlice = tenant_visibility.passesTenantFilterSlice;
+const passesTenantFilterEdge = tenant_visibility.passesTenantFilterEdge;
+const edgeVisibleForTenantHierarchy = tenant_visibility.edgeVisibleForTenantHierarchy;
 
 // GAP-0846: storage-level tenant filter for the LABEL-INDEXED read paths
 // (`store.getNodesByLabels(..., tenant)` and `store.getEdgesByType(..., tenant, ...)`).

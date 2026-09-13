@@ -3,6 +3,12 @@
 //   src/execution/graph_algorithms.zig
 //
 // These functions are re-exported via execution.zig -> lib.zig -> geode module.
+//
+// SONNY-1318: these helpers now take a trailing `tenant_filter` (the session's
+// resolved tenant scope). This harness is single-tenant and unscoped, so it
+// passes `null` — the all-tenants value, which is exactly the behaviour these
+// tests asserted before the parameter existed. The tenant-scoped behaviour is
+// covered by tests/test_sonny1318_procedure_tenancy.zig.
 const std = @import("std");
 const testing = std.testing;
 const geode = @import("geode");
@@ -68,7 +74,7 @@ test "getNeighbors: isolated node returns empty slice" {
     defer store.deinit();
     try addTestNode(&store, 1, &.{"Person"});
 
-    const neighbors = try execution.getNeighbors(&store, 1, testing.allocator);
+    const neighbors = try execution.getNeighbors(&store, 1, testing.allocator, null);
     defer testing.allocator.free(neighbors);
 
     try testing.expectEqual(@as(usize, 0), neighbors.len);
@@ -83,7 +89,7 @@ test "getNeighbors: outgoing edges" {
     try addTestEdge(&store, 100, 1, 2, "KNOWS");
     try addTestEdge(&store, 101, 1, 3, "KNOWS");
 
-    const neighbors = try execution.getNeighbors(&store, 1, testing.allocator);
+    const neighbors = try execution.getNeighbors(&store, 1, testing.allocator, null);
     defer testing.allocator.free(neighbors);
 
     try testing.expectEqual(@as(usize, 2), neighbors.len);
@@ -104,7 +110,7 @@ test "getNeighbors: incoming edges" {
     try addTestNode(&store, 2, &.{"B"});
     try addTestEdge(&store, 100, 2, 1, "FOLLOWS");
 
-    const neighbors = try execution.getNeighbors(&store, 1, testing.allocator);
+    const neighbors = try execution.getNeighbors(&store, 1, testing.allocator, null);
     defer testing.allocator.free(neighbors);
 
     try testing.expectEqual(@as(usize, 1), neighbors.len);
@@ -119,7 +125,7 @@ test "getNeighbors: bidirectional edges" {
     try addTestEdge(&store, 100, 1, 2, "KNOWS");
     try addTestEdge(&store, 101, 2, 1, "KNOWS");
 
-    const neighbors = try execution.getNeighbors(&store, 1, testing.allocator);
+    const neighbors = try execution.getNeighbors(&store, 1, testing.allocator, null);
     defer testing.allocator.free(neighbors);
 
     // outgoing to 2 AND incoming from 2
@@ -130,7 +136,7 @@ test "getNeighbors: nonexistent node returns empty" {
     var store = try createTestStore();
     defer store.deinit();
 
-    const neighbors = try execution.getNeighbors(&store, 999, testing.allocator);
+    const neighbors = try execution.getNeighbors(&store, 999, testing.allocator, null);
     defer testing.allocator.free(neighbors);
 
     try testing.expectEqual(@as(usize, 0), neighbors.len);
@@ -151,7 +157,7 @@ test "precomputeAdjacency: triangle graph" {
     try addTestEdge(&store, 12, 3, 1, "E");
 
     const node_list = [_]u64{ 1, 2, 3 };
-    var adj = try execution.precomputeAdjacency(&store, &node_list, testing.allocator);
+    var adj = try execution.precomputeAdjacency(&store, &node_list, testing.allocator, null);
     defer execution.deinitAdjacency(&adj, testing.allocator);
 
     // Each node has 1 outgoing + 1 incoming = 2 neighbors
@@ -165,7 +171,7 @@ test "precomputeAdjacency: empty node list" {
     defer store.deinit();
 
     const node_list = [_]u64{};
-    var adj = try execution.precomputeAdjacency(&store, &node_list, testing.allocator);
+    var adj = try execution.precomputeAdjacency(&store, &node_list, testing.allocator, null);
     defer execution.deinitAdjacency(&adj, testing.allocator);
 
     try testing.expectEqual(@as(u32, 0), adj.count());
@@ -201,7 +207,7 @@ test "buildNeighborSets: O(1) adjacency check" {
     try addTestEdge(&store, 11, 1, 3, "E");
 
     const node_list = [_]u64{ 1, 2, 3 };
-    var sets = try execution.buildNeighborSets(&node_list, &store, testing.allocator);
+    var sets = try execution.buildNeighborSets(&node_list, &store, testing.allocator, null);
     defer execution.deinitNeighborSets(&sets);
 
     const set1 = sets.get(1).?;
