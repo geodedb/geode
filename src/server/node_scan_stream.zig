@@ -607,6 +607,39 @@ const Eligibility = struct {
     mode: ProjectionMode,
 };
 
+// CANARY: REQ=REQ-SONNY-1218-INMEM-SCAN; FEATURE="EngineDirectNodeScanDecline"; ASPECT=AdapterGuard; STATUS=TESTED; TEST=tests/test_sonny1218_in_memory_node_scan.zig; OWNER=engine; UPDATED=2026-09-13
+/// SONNY-1218 (GEO-UP-006): the single "can this stream serve a scan at all?"
+/// guard, shared by `prepare` (every projection mode) and `isEligible`.
+///
+/// This whole path is ENGINE-DIRECT: every row it can ever produce comes from
+/// the persisted storage adapter (`collectMatchingSlotIds` →
+/// `getNodesByLabelCapped` / `scanAllNodes`, then the lazy per-page
+/// `materializeNode`). It never consults the in-memory `GraphStore`. On an
+/// IN-MEMORY deployment — `geode serve` without `--data-dir`, so
+/// `global_adapter` is null (see the comment at graph_store.zig:1788) — the
+/// adapter has nothing to read, and `collectMatchingSlotIds` returns an empty
+/// slot slice.
+///
+/// The bug this closes: `prepare` used to accept that empty slot slice for the
+/// `.node` / `.projection` modes (and for a FILTERED `.count`, which skips the
+/// unfiltered precompute's `else return null`) and render it as a SUCCESSFUL
+/// (`status_class 00000`) ZERO-row response — a silent wrong answer, because
+/// the correct rows were sitting in the in-memory store the executor reads.
+/// "Cannot serve" must mean DECLINE, never "the answer is no rows".
+///
+/// `isEligible` consults the same guard so the transports' snapshot-clone-SKIP
+/// decision (`quic_connection_handler.readServedEngineDirect`,
+/// `grpc_server.readServedEngineDirect`) can never claim a shape this stream
+/// will then refuse — if the two disagreed, the executor fallback would run
+/// without the snapshot it needs and the bug would simply move.
+///
+/// Mirrors the guards `planned_read_runtime.executeIfSupported` and both
+/// transports' `readWillStreamEngineSide` already apply. Reads one global
+/// pointer: no I/O, no locks, safe to call before acquiring anything.
+fn adapterCanServeEngineDirect() bool {
+    return graph_store.getGlobalAdapter() != null;
+}
+
 // CANARY: REQ=REQ-PERF-UNORDERED-STREAM-001; FEATURE="UnorderedNodeScanStreaming"; ASPECT=TransportFastPath; STATUS=IMPL; OWNER=engine; UPDATED=2026-06-19
 pub fn prepare(
     allocator: std.mem.Allocator,
@@ -616,6 +649,11 @@ pub fn prepare(
     param_values: []const Value,
     flags: []const []const u8,
 ) !?NodeScanStream {
+    // SONNY-1218: no persisted adapter ⇒ this path can produce NOTHING. Decline
+    // for EVERY mode (.node / .projection / .count) so the query falls through
+    // to the executor, which reads the in-memory store and answers correctly.
+    if (!adapterCanServeEngineDirect()) return null;
+
     const eligibility = eligibleQuery(q) orelse return null;
     const variable_name = eligibility.pattern.name orelse return null;
 
@@ -690,7 +728,13 @@ pub fn prepare(
             // `nodeMatchesPattern` verifies the FULL label set. (The previous
             // `scanAllNodes` arm counted EVERY node in the graph for
             // multi-label patterns — silent over-count.)
-        } else return null;
+        } else {
+            // SONNY-1218: now redundant — prepare's shared
+            // `adapterCanServeEngineDirect` guard declined before we got here.
+            // Kept as a local invariant so this arm can never render a null
+            // adapter as a count of 0.
+            return null;
+        }
     }
 
     // GAP-ENT-0055: O(1) FILTERED count for `MATCH (n:L) WHERE n.<indexed> =
@@ -927,9 +971,17 @@ fn addKeyUnique(arena: std.mem.Allocator, key: []const u8, out: *std.ArrayList([
 /// filters on the scanned variable, and `count(n)` over a label — all served
 /// in O(result)/O(scanned) with no whole-graph clone. The transport handlers
 /// use this to skip the O(graph) `QueryReadSession` deep-clone for shapes the
-/// streaming path serves engine-side. It does no I/O and inspects only the
-/// parsed query, so it is safe to call before acquiring any lock.
+/// streaming path serves engine-side. It does no I/O (it inspects the parsed
+/// query plus one global pointer) and takes no lock, so it is safe to call
+/// before acquiring any lock.
+///
+/// SONNY-1218: this MUST stay in agreement with `prepare` — it shares the same
+/// `adapterCanServeEngineDirect` guard, so on an in-memory deployment (no
+/// `--data-dir`) it reports NOT eligible for every shape and the transports
+/// keep the snapshot the executor fallback needs. The AST-shape half of the
+/// decision is `eligibleQuery`, which remains pure.
 pub fn isEligible(q: *const ast.Query) bool {
+    if (!adapterCanServeEngineDirect()) return false;
     return eligibleQuery(q) != null;
 }
 
@@ -1308,6 +1360,10 @@ fn collectMatchingSlotIds(
     // WHERE re-eval done by the caller's tally/paging). null when absent.
     where_expr: ?ast.Expr,
 ) ![]u64 {
+    // SONNY-1218: UNREACHABLE with a null adapter — `prepare` declines the
+    // whole path before it gets here (`adapterCanServeEngineDirect`), which is
+    // where "the engine cannot serve this" is turned into a DECLINE instead of
+    // an empty (silently wrong) row set. Kept as a defensive floor.
     const adapter = graph_store.getGlobalAdapter() orelse return try allocator.alloc(u64, 0);
     if (!adapter.graphExists(graph_name)) {
         return try allocator.alloc(u64, 0);

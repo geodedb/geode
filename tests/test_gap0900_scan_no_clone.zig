@@ -271,6 +271,13 @@ test "GAP-0900: streamed scan results match the snapshot-clone population" {
 // (preserving RLS/where-eval correctness).
 // -------------------------------------------------------------------
 test "GAP-0900: isEligible is false for non-streamable shapes" {
+    // SONNY-1218: `isEligible` now also requires a persisted storage adapter
+    // (it must agree with `prepare`, which declines without one). The harness
+    // supplies it, so these negatives still prove the AST-SHAPE gate rejects
+    // them rather than passing vacuously on a missing adapter.
+    var h = try Harness.init(testing.allocator);
+    defer h.deinit();
+
     var qa = std.heap.ArenaAllocator.init(testing.allocator);
     defer qa.deinit();
 
@@ -556,6 +563,13 @@ test "GAP-0900: projection of missing property yields Null" {
 // Test 14 — broadened shapes are eligible; out-of-subset stays excluded.
 // -------------------------------------------------------------------
 test "GAP-0900: broadened eligibility gate" {
+    // SONNY-1218: `isEligible` now also requires a persisted storage adapter,
+    // so the positive assertions below need the harness (which sets the
+    // data-dir override) — without one the engine-direct path correctly
+    // declines every shape. See tests/test_sonny1218_in_memory_node_scan.zig.
+    var h = try Harness.init(testing.allocator);
+    defer h.deinit();
+
     var qa = std.heap.ArenaAllocator.init(testing.allocator);
     defer qa.deinit();
 

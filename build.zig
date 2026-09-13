@@ -7872,6 +7872,21 @@ pub fn build(b: *std.Build) void {
     const scan_no_clone_step = b.step("test-gap0900-scan-no-clone", "Run GAP-0900 scan-no-clone regression (bounded scan is O(result), no whole-graph deep clone)");
     scan_no_clone_step.dependOn(&run_scan_no_clone_tests.step);
 
+    // SONNY-1218 (GEO-UP-006): the engine-direct node_scan_stream fast path
+    // reads ONLY the persisted storage adapter, so on an in-memory deployment
+    // (no `--data-dir`, `getGlobalAdapter() == null`) it must DECLINE to the
+    // executor instead of serving a successful EMPTY row set. Asserts the
+    // in-memory rows are correct for `RETURN n.p` / `RETURN n` / inline-map
+    // predicates / filtered count, that `isEligible` agrees with `prepare`,
+    // and that the fast path STILL engages when the adapter is present.
+    const inmem_scan_decline_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny1218_in_memory_node_scan.zig"), .target = target, .optimize = optimize });
+    inmem_scan_decline_test_mod.addImport("geode", root_mod);
+    const inmem_scan_decline_tests = b.addTest(.{ .root_module = inmem_scan_decline_test_mod });
+    const run_inmem_scan_decline_tests = b.addRunArtifact(inmem_scan_decline_tests);
+    shardDep(test_step, &run_inmem_scan_decline_tests.step, 1, test_shard_loads, test_shard_index);
+    const inmem_scan_decline_step = b.step("test-sonny1218-in-memory-node-scan", "Run SONNY-1218 regression (engine-direct node scan declines without a storage adapter instead of answering empty)");
+    inmem_scan_decline_step.dependOn(&run_inmem_scan_decline_tests.step);
+
     // GAP-0903 (P3a) RLS clone-gate regression: RLS-active reads must no longer
     // force the O(graph) snapshot clone.  The secondary gates at QCH:7040
     // (!rls_active) and query_execution.zig:1673 (!wouldEvaluateRLS()) route
