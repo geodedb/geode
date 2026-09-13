@@ -265,10 +265,21 @@ const RecordingAllocator = struct {
     }
 };
 
+// The builder's allocation sequence is identified by shape (len + alignment)
+// in every optimize mode, and additionally by return_address only in Debug.
+// Return addresses are not optimize-mode stable: under ReleaseSafe the
+// inlining of `executeShowCapabilities` differs between the direct call used
+// to record the builder trace and the same code reached through
+// `executeStatementWithContext`, so the recorded addresses never match and the
+// search would report the sequence as missing. `len` + `alignment` alone
+// already pins the sequence uniquely (asserted below), and in Debug the
+// return_address check keeps the stricter identity guarantee.
+const compare_return_addresses = @import("builtin").mode == .Debug;
+
 fn sameAllocationEvent(left: AllocationEvent, right: AllocationEvent) bool {
     return left.len == right.len and
         left.alignment == right.alignment and
-        left.return_address == right.return_address;
+        (!compare_return_addresses or left.return_address == right.return_address);
 }
 
 fn findAllocationSequence(all: []const AllocationEvent, sequence: []const AllocationEvent) !usize {
@@ -283,7 +294,8 @@ fn findAllocationSequence(all: []const AllocationEvent, sequence: []const Alloca
             match_start = start;
         }
     }
-    if (match_count != 1) return error.AllocationSequenceNotUnique;
+    if (match_count == 0) return error.AllocationSequenceMissing;
+    if (match_count > 1) return error.AllocationSequenceNotUnique;
     return match_start;
 }
 
