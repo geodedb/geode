@@ -95,6 +95,10 @@ fn sleepNs(ns: u64) void {
 /// `query_runner.default_page_size`; the push loop pages at this width.
 const page_rows: usize = 128;
 
+/// gRPC length-prefix width the library adds before reserving send credit
+/// (grpc_zig/src/transport.zig:2194-2205).
+const grpc_framing_overhead: i64 = 5;
+
 // ── fixtures ────────────────────────────────────────────────────────────────
 
 fn makeResult(gpa: std.mem.Allocator, row_count: usize) !execution.ExecutionResult {
@@ -167,7 +171,13 @@ const StubSink = struct {
     /// Set once the stalling write has actually entered its park.
     in_stall: std.atomic.Value(bool) = .init(false),
 
-    /// Constant window reported to the push loop (null = sink reports none).
+    /// Remaining peer window reported to the push loop (null = sink reports
+    /// none, i.e. an unbounded peer). NOT constant: every accepted write
+    /// decrements it by the framed message size (`bytes.len + 5`), exactly as
+    /// `Transport.writeStreamMessage` reserves it
+    /// (grpc_zig/src/transport.zig:2192-2205). A constant window could never
+    /// exercise the ticket's actual shape -- sufficient at page 1, exhausted at
+    /// page N -- which is what a real 1 MiB initial window produces.
     window: ?i64 = null,
 
     /// Captured `failFn` classification.
@@ -184,8 +194,7 @@ const StubSink = struct {
         self.pages.deinit(self.gpa);
     }
 
-    fn writeThunk(ctx: *anyopaque, bytes: []const u8, is_first: bool) anyerror!void {
-        _ = is_first;
+    fn writeThunk(ctx: *anyopaque, bytes: []const u8) anyerror!void {
         const self: *StubSink = @ptrCast(@alignCast(ctx));
         const idx = self.writes;
         self.writes += 1;
@@ -207,6 +216,11 @@ const StubSink = struct {
 
         if (self.fail_at) |at| {
             if (idx == at) return self.fail_error;
+        }
+
+        // Spend the peer's credit for this message, framing included.
+        if (self.window) |*remaining| {
+            remaining.* -= @as(i64, @intCast(bytes.len)) + grpc_framing_overhead;
         }
 
         try self.pages.append(self.gpa, try self.gpa.dupe(u8, bytes));
@@ -437,4 +451,74 @@ test "SONNY-1560: a peer window that fits the page lets the drain complete" {
     const outcome = grpc.pushResultPages(fx.entry, fx.entry.result_epoch, stub.sink(), gpa);
     try std.testing.expectEqual(grpc.PushOutcome.complete, outcome);
     try std.testing.expectEqual(total_rows, try stub.totalRows(gpa));
+}
+
+// ── the ticket's shape: enough window for page 1, none for page 2 ───────────
+
+test "SONNY-1560: a draining window sufficient at page 1 is classified when it runs out at page N" {
+    silenceEngineLogs();
+    const gpa = std.testing.allocator;
+
+    // Measure one encoded page against an unbounded peer so the budget below is
+    // derived from the real wire size rather than a guessed constant.
+    const framed_first_page: i64 = blk: {
+        var probe_fx = try Fixture.init(gpa, page_rows * 6);
+        defer probe_fx.deinit();
+        var probe = StubSink{ .gpa = gpa };
+        defer probe.deinit();
+        _ = grpc.pushResultPages(probe_fx.entry, probe_fx.entry.result_epoch, probe.sink(), gpa);
+        try std.testing.expect(probe.pages.items.len > 1);
+        break :blk @as(i64, @intCast(probe.pages.items[0].len)) + grpc_framing_overhead;
+    };
+
+    var fx = try Fixture.init(gpa, page_rows * 6);
+    defer fx.deinit();
+
+    const claimed = fx.entry.result_epoch;
+    // Exactly one page of credit: page 1 fits, and the decrement leaves nothing
+    // for page 2 — the 1 MiB-initial-window shape the ticket measured.
+    var stub = StubSink{ .gpa = gpa, .window = framed_first_page };
+    defer stub.deinit();
+
+    const outcome = grpc.pushResultPages(fx.entry, claimed, stub.sink(), gpa);
+    try std.testing.expectEqual(grpc.PushOutcome.window_exhausted, outcome);
+
+    // One page went out, then the probe refused rather than parking.
+    try std.testing.expectEqual(@as(usize, 1), stub.writes);
+    try std.testing.expectEqual(@as(i64, 0), stub.window.?);
+    // This path sends no RST, so the handler owes the peer the trailer.
+    try std.testing.expectEqual(@as(?u8, 8), stub.fail_code);
+    try std.testing.expect(fx.released());
+    try std.testing.expect(fx.entry.result_epoch != claimed);
+}
+
+// ── the library's RST is the terminal signal: no conflicting trailer ────────
+
+test "SONNY-1560: a write-time FlowControlTimeout writes no trailer because the library's RST already ended the stream" {
+    silenceEngineLogs();
+    const gpa = std.testing.allocator;
+
+    var fx = try Fixture.init(gpa, page_rows * 6);
+    defer fx.deinit();
+
+    const claimed = fx.entry.result_epoch;
+    // Simulate the library surfacing `error.FlowControlTimeout` from
+    // `writeStreamMessage` (grpc_zig/src/transport.zig:2205 -> :1100). By the
+    // time that error reaches us `reserveSendCreditOrRst` has ALREADY emitted
+    // RST_STREAM(FLOW_CONTROL_ERROR) and the stream is closed at the peer.
+    var stub = StubSink{ .gpa = gpa, .fail_at = 1, .fail_error = error.FlowControlTimeout };
+    defer stub.deinit();
+
+    const outcome = grpc.pushResultPages(fx.entry, claimed, stub.sink(), gpa);
+
+    // Still classified as exhaustion, not as a broken connection.
+    try std.testing.expectEqual(grpc.PushOutcome.window_exhausted, outcome);
+    // ...but NOTHING more was written to the closed stream. A trailer HEADERS
+    // frame here would be RFC 7540 §5.1 STREAM_CLOSED at the peer and would
+    // race a second, conflicting gRPC status against the RST.
+    try std.testing.expectEqual(@as(?u8, null), stub.fail_code);
+    try std.testing.expect(stub.fail_message == null);
+    // The session is still released deterministically.
+    try std.testing.expect(fx.released());
+    try std.testing.expect(fx.entry.result_epoch != claimed);
 }

@@ -1064,6 +1064,78 @@ const max_pushed_pages: usize = 1000;
 /// (grpc_zig/src/transport.zig:2192) adds before reserving send credit.
 const grpc_message_prefix_len: usize = 5;
 
+// SONNY-1560 seam pin. The window probe below reaches into grpc-zig's
+// flow-control state because the library exposes no accessor for it (the
+// report's §4 secondary ask is
+// `pub fn availableSendWindow(self: *Transport, stream_id: u31) i32`). These
+// assertions fail the BUILD -- not a test, not production -- if a library
+// upgrade renames or retypes any part of that seam, so the mirroring below can
+// never drift silently.
+comptime {
+    // (a) The exhaustion signal. `Transport.writeStreamMessage`
+    //     (grpc_zig/src/transport.zig:2192) surfaces this verbatim from
+    //     `reserveSendCreditOrRst` (:2205 -> :1100), whose error set is
+    //     `reserveSendCredit`'s explicit one (:1017).
+    const ReserveErr = @typeInfo(@typeInfo(@TypeOf(GrpcTransport.reserveSendCredit)).@"fn".return_type.?).error_union.error_set;
+    const reserve_errs = @typeInfo(ReserveErr).error_set orelse
+        @compileError("SONNY-1560: grpc-zig's reserveSendCredit no longer has an explicit error set; re-pin the exhaustion classification in pushResultPages");
+    var has_flow_control_timeout = false;
+    for (reserve_errs) |e| {
+        if (std.mem.eql(u8, e.name, "FlowControlTimeout")) has_flow_control_timeout = true;
+    }
+    if (!has_flow_control_timeout) @compileError(
+        "SONNY-1560: grpc-zig no longer signals error.FlowControlTimeout from reserveSendCredit; " ++
+            "pushResultPages' window-exhaustion classification must be re-pinned",
+    );
+
+    // (b) The flow-control state `peerSendWindow` reads directly. `@FieldType`
+    //     itself fails the build if a field is renamed away.
+    if (@FieldType(GrpcTransport, "flow_mutex") != std.Io.Mutex)
+        @compileError("SONNY-1560: grpc-zig's Transport.flow_mutex changed type; re-pin peerSendWindow");
+    if (@FieldType(GrpcTransport, "conn_send_window") != i32)
+        @compileError("SONNY-1560: grpc-zig's Transport.conn_send_window changed type; re-pin peerSendWindow");
+    if (@FieldType(GrpcTransport, "stream_send_windows") != []i32)
+        @compileError("SONNY-1560: grpc-zig's Transport.stream_send_windows changed type; re-pin peerSendWindow");
+    if (@FieldType(GrpcTransport, "last_stream_id") != u31)
+        @compileError("SONNY-1560: grpc-zig's Transport.last_stream_id changed type; re-pin peerSendWindow");
+}
+
+/// Octets the library will reserve send credit for when handing `message_len`
+/// payload bytes to `Transport.writeStreamMessage`
+/// (grpc_zig/src/transport.zig:2192-2196: it prefixes the 5-byte gRPC header
+/// and reserves for the whole framed message in one call).
+fn framedMessageLen(message_len: usize) i64 {
+    return @intCast(message_len + grpc_message_prefix_len);
+}
+
+/// SONNY-1560: peer send-window headroom for `sid`, in octets.
+///
+/// THE ONE PLACE that mirrors grpc-zig's own effective-window rule, taken from
+/// `reserveSendCredit` (grpc_zig/src/transport.zig:1017-1033):
+///
+///   * the effective window is `@min(conn_send_window, <stream window>)`;
+///   * stream id 0, and any id at or past the tracked-stream bound
+///     (`MAX_TRACKED_STREAMS` = the length of `stream_send_windows`,
+///     grpc_zig/src/transport.zig:94/:426-431), are gated on the CONNECTION
+///     window only -- the library treats the per-stream window as unbounded
+///     there, and so must we, or we would refuse writes the library would
+///     happily make.
+///
+/// Read under the library's own `flow_mutex` so the value is consistent with
+/// what the next `reserveSendCredit` will see. Still ADVISORY: the lock is
+/// released before the write, so the library's reservation remains the
+/// authoritative gate (report §7.4).
+fn peerSendWindow(trans: *GrpcTransport, sid: u31) i64 {
+    trans.flow_mutex.lockUncancelable(trans.io);
+    defer trans.flow_mutex.unlock(trans.io);
+    const idx: usize = @intCast(sid);
+    const stream_avail: i32 = if (sid != 0 and idx < trans.stream_send_windows.len)
+        trans.stream_send_windows[idx]
+    else
+        std.math.maxInt(i32);
+    return @min(trans.conn_send_window, stream_avail);
+}
+
 /// SONNY-1560: how a pushed-result drain ended. Every non-`complete` outcome
 /// has already released the session's cursor.
 pub const PushOutcome = enum {
@@ -1091,15 +1163,18 @@ pub const PushOutcome = enum {
 pub const PageSink = struct {
     ctx: *anyopaque,
     /// Hand one encoded `ExecutionResponse` to the peer as a stream message.
-    writeFn: *const fn (ctx: *anyopaque, bytes: []const u8, is_first: bool) anyerror!void,
+    /// There is deliberately no `is_first` parameter: the schema/HEADERS write
+    /// is issued by `handleExecuteStreaming` before the drain begins, so every
+    /// page pushed through this seam is a continuation.
+    writeFn: *const fn (ctx: *anyopaque, bytes: []const u8) anyerror!void,
     /// Octets the peer will currently accept on this stream. `null` means the
     /// sink cannot report a window and writes are treated as unbounded.
     windowFn: ?*const fn (ctx: *anyopaque) i64 = null,
     /// Emit a loud, classified terminal status for an abandoned stream.
     failFn: ?*const fn (ctx: *anyopaque, code: u8, message: []const u8) void = null,
 
-    fn write(self: PageSink, bytes: []const u8, is_first: bool) anyerror!void {
-        return self.writeFn(self.ctx, bytes, is_first);
+    fn write(self: PageSink, bytes: []const u8) anyerror!void {
+        return self.writeFn(self.ctx, bytes);
     }
 
     fn window(self: PageSink) ?i64 {
@@ -1188,8 +1263,7 @@ pub fn pushResultPages(
         // fit cannot be made to fit from here: this handler owns the connection
         // thread, so the peer's WINDOW_UPDATE cannot be read until we return.
         if (sink.window()) |avail| {
-            const need: i64 = @intCast(page.bytes.len + grpc_message_prefix_len);
-            if (avail < need) {
+            if (avail < framedMessageLen(page.bytes.len)) {
                 log.err("gRPC streaming: peer flow-control window cannot accept the next page", &.{
                     Attr.uint("page", page_count),
                     Attr.uint("page_bytes", page.bytes.len),
@@ -1200,19 +1274,30 @@ pub fn pushResultPages(
             }
         }
 
-        sink.write(page.bytes, false) catch |err| {
+        sink.write(page.bytes) catch |err| {
             log.err("gRPC streaming: write failed mid-stream", &.{
                 Attr.string("error", @errorName(err)),
                 Attr.uint("page", page_count),
             });
-            // `error.FlowControlTimeout` means the library already gave up on
-            // the peer's credit and emitted RST_STREAM(FLOW_CONTROL_ERROR)
-            // (grpc_zig/src/transport.zig:1100); classify it as exhaustion
-            // rather than as a broken connection.
-            const exhausted = std.mem.eql(u8, @errorName(err), "FlowControlTimeout");
-            if (exhausted) sink.fail(grpc_status_resource_exhausted, stream_window_exhausted_message);
             releaseClaimedResult(entry, claimed_epoch);
-            return if (exhausted) .window_exhausted else .write_failed;
+            // Typed, not a name compare: the seam pin above asserts at COMPILE
+            // time that the library still signals this error, so a rename in
+            // grpc-zig fails the build rather than silently downgrading this
+            // branch to `.write_failed`.
+            return switch (err) {
+                // The library's `reserveSendCreditOrRst`
+                // (grpc_zig/src/transport.zig:1100) has ALREADY emitted
+                // RST_STREAM(FLOW_CONTROL_ERROR) for this stream before
+                // surfacing the error, so the stream is closed at the peer.
+                // Writing a trailer HEADERS frame now would be a RFC 7540 §5.1
+                // STREAM_CLOSED violation and would race a second, conflicting
+                // status against the RST. The RST is the terminal signal:
+                // classify the outcome, say nothing more on the wire.
+                // (Contrast the pre-write probe above, which sends no RST and
+                // therefore MUST supply the trailer itself.)
+                error.FlowControlTimeout => .window_exhausted,
+                else => .write_failed,
+            };
         };
 
         if (page.is_final) return .complete;
@@ -1229,28 +1314,19 @@ pub fn pushResultPages(
 const TransportSink = struct {
     trans: *GrpcTransport,
 
-    fn writeThunk(ctx: *anyopaque, bytes: []const u8, is_first: bool) anyerror!void {
+    fn writeThunk(ctx: *anyopaque, bytes: []const u8) anyerror!void {
         const self: *TransportSink = @ptrCast(@alignCast(ctx));
-        return sendStreamResponse(self.trans, bytes, is_first);
+        // Never `is_first`: the HEADERS-bearing schema write is already out by
+        // the time the drain starts.
+        return sendStreamResponse(self.trans, bytes, false);
     }
 
-    /// Peer send-window headroom for the stream currently being served, read
-    /// under the library's own `flow_mutex` (grpc_zig/src/transport.zig:443) so
-    /// the value is consistent with what `reserveSendCredit`
-    /// (grpc_zig/src/transport.zig:1017) would see on the next write.
+    /// Peer send-window headroom for the stream currently being served.
+    /// Delegates to `peerSendWindow`, the single place that mirrors the
+    /// library's tracked-stream fallback rule.
     fn windowThunk(ctx: *anyopaque) i64 {
         const self: *TransportSink = @ptrCast(@alignCast(ctx));
-        const trans = self.trans;
-        trans.flow_mutex.lockUncancelable(trans.io);
-        defer trans.flow_mutex.unlock(trans.io);
-        const sid: usize = @intCast(trans.last_stream_id);
-        // Stream ids past MAX_TRACKED_STREAMS are connection-window-only in the
-        // library (grpc_zig/src/transport.zig:1021); mirror that here.
-        const stream_avail: i32 = if (sid != 0 and sid < trans.stream_send_windows.len)
-            trans.stream_send_windows[sid]
-        else
-            std.math.maxInt(i32);
-        return @min(trans.conn_send_window, stream_avail);
+        return peerSendWindow(self.trans, self.trans.last_stream_id);
     }
 
     fn failThunk(ctx: *anyopaque, code: u8, message: []const u8) void {
@@ -1278,6 +1354,32 @@ fn handleExecuteStreaming(request_bytes: []const u8, trans: *GrpcTransport, allo
     var claimed_epoch: u64 = 0;
     const exec_resp = try handleExecute(request_bytes, allocator, &claimed_epoch);
     defer allocator.free(exec_resp);
+
+    // SONNY-1560: probe the initial schema write the same way the page writes
+    // are probed. Without this it is still possible to park here for the
+    // library's 30 s `flow_credit_timeout_ns` -- a pipelined request arriving
+    // on a connection whose window a previous response already drained, from a
+    // peer that never credits it back, cannot be satisfied from inside this
+    // handler (it owns the connection thread, so no WINDOW_UPDATE can be read
+    // until it returns). Probing is preferred over documenting the residual
+    // because it is the same advisory read the loop already performs and it
+    // turns the last remaining 30 s stall into an immediate, classified status.
+    if (peerSendWindow(trans, trans.last_stream_id) < framedMessageLen(exec_resp.len)) {
+        log.err("gRPC streaming: peer flow-control window cannot accept the initial response", &.{
+            Attr.uint("response_bytes", exec_resp.len),
+        });
+        // No RST has been emitted on this path (nothing was written), so this
+        // handler owes the peer the terminal status.
+        trans.endStreamWithStatus(
+            trans.last_stream_id,
+            grpc_status_resource_exhausted,
+            stream_window_exhausted_message,
+        ) catch {};
+        // The session's result set is deliberately left installed, matching the
+        // pre-existing initial-write-failure path below: not one page was
+        // pushed, so a follow-up Pull can still retrieve the whole result.
+        return;
+    }
 
     // Send first streaming message (with HEADERS).
     // If this fails, the connection is broken — propagate the error so the
@@ -1335,8 +1437,10 @@ fn handleExecuteStreaming(request_bytes: []const u8, trans: *GrpcTransport, allo
         var sink_ctx = TransportSink{ .trans = trans };
         switch (pushResultPages(entry, claimed_epoch, sink_ctx.sink(), allocator)) {
             .complete => {},
-            // The classified RESOURCE_EXHAUSTED trailer already terminated the
-            // stream; emitting another END_STREAM would be a protocol error.
+            // The stream is already terminated: either by our own classified
+            // RESOURCE_EXHAUSTED trailer (pre-write probe) or by the library's
+            // RST_STREAM(FLOW_CONTROL_ERROR) (write-time `FlowControlTimeout`).
+            // Emitting another END_STREAM would be a protocol error either way.
             .window_exhausted => return,
             else => {
                 // Try to end the stream gracefully so the client gets a clean
