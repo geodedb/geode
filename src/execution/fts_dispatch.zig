@@ -119,6 +119,13 @@ fn handleFtsSearch(
         max_results = @intCast(n);
     }
 
+    // SONNY-1318 review m-3: resolve the session scope ONCE, at handler entry,
+    // BEFORE the index read. Strict tenancy + no concrete scope must refuse the
+    // request outright rather than search the index and then discard every hit
+    // in `filterAuthorizedHits` — same fail-closed-first ordering the other
+    // tenant-scoped procedures use.
+    const filter_tenant = try resolveHandlerScope(context);
+
     // Resolve the named fulltext facade on the DEFAULT graph (mirrors the
     // resolver the prior scalar function used; the in-process / CLI graph has no
     // per-context graph dimension here). A missing adapter, graph, or index is a
@@ -142,7 +149,7 @@ fn handleFtsSearch(
     // ids -> resolve under database-enforced authorization -> discard
     // unauthorized rows BEFORE results leave the engine.
     // CANARY: REQ=REQ-FTS-ROW-VISIBILITY-001; FEATURE="FullText"; ASPECT=SearchRowFilter; STATUS=TESTED; TEST=tests/test_fts_authorization.zig; OWNER=security; UPDATED=2026-08-28
-    var authorized = try filterAuthorizedHits(allocator, hits, context);
+    var authorized = try filterAuthorizedHits(allocator, hits, filter_tenant);
     defer authorized.deinit(allocator);
 
     // Build the (node, score) binding table. Column names are dupe'd so they own
@@ -207,6 +214,9 @@ fn handleFtsPhrase(
         max_results = @intCast(n);
     }
 
+    // SONNY-1318 review m-3: refuse before the index read (see handleFtsSearch).
+    const filter_tenant = try resolveHandlerScope(context);
+
     const facade = try resolveFacade(index_name);
     const hits = facade.phraseSearch(phrase_text, max_results) catch return error.Unsupported;
     defer facade.allocator.free(hits);
@@ -215,7 +225,7 @@ fn handleFtsPhrase(
     // ids -> resolve under database-enforced authorization -> discard
     // unauthorized rows BEFORE results leave the engine.
     // CANARY: REQ=REQ-FTS-ROW-VISIBILITY-001; FEATURE="FullText"; ASPECT=PhraseRowFilter; STATUS=TESTED; TEST=tests/test_fts_authorization.zig; OWNER=security; UPDATED=2026-08-28
-    var authorized = try filterAuthorizedHits(allocator, hits, context);
+    var authorized = try filterAuthorizedHits(allocator, hits, filter_tenant);
     defer authorized.deinit(allocator);
 
     return try buildNodeScoreResult(allocator, call_stmt, authorized.items);
@@ -257,6 +267,9 @@ fn handleFtsProximity(
         max_results = @intCast(n);
     }
 
+    // SONNY-1318 review m-3: refuse before the index read (see handleFtsSearch).
+    const filter_tenant = try resolveHandlerScope(context);
+
     const facade = try resolveFacade(index_name);
     const hits = facade.proximitySearch(query_text, distance, max_results) catch |err| switch (err) {
         error.TooFewTerms => return error.InvalidArgs,
@@ -268,10 +281,27 @@ fn handleFtsProximity(
     // ids -> resolve under database-enforced authorization -> discard
     // unauthorized rows BEFORE results leave the engine.
     // CANARY: REQ=REQ-FTS-ROW-VISIBILITY-001; FEATURE="FullText"; ASPECT=ProximityRowFilter; STATUS=TESTED; TEST=tests/test_fts_authorization.zig; OWNER=security; UPDATED=2026-08-28
-    var authorized = try filterAuthorizedHits(allocator, hits, context);
+    var authorized = try filterAuthorizedHits(allocator, hits, filter_tenant);
     defer authorized.deinit(allocator);
 
     return try buildNodeScoreResult(allocator, call_stmt, authorized.items);
+}
+
+/// SONNY-1318 review R2 + m-3: the ONE strict-tenancy decision every
+/// `geode.fts.*` row-returning handler makes, resolved ONCE at handler entry
+/// and BEFORE the index read.
+///
+///   * concrete scope            -> that tenant id (filtered exactly as before)
+///   * unscoped, strict mode ON  -> error.TenantScopeRequired (propagated to
+///                                  the wire through each handler's `!`)
+///   * unscoped, strict mode OFF -> null (all tenants, legacy, unchanged)
+///
+/// Resolving here rather than inside `filterAuthorizedHits` means a strict
+/// session with no scope is refused before `facade.search`/`phraseSearch`/
+/// `proximitySearch` touches the index at all. The three handlers are otherwise
+/// unchanged: the same value reaches the same row filter.
+fn resolveHandlerScope(context: ExecutionContext) tenancy.TenancyError!?[]const u8 {
+    return tenancy.resolveTenantFilter(context.tenant_id);
 }
 
 /// Resolve the named fulltext facade on the DEFAULT graph (same resolver and
@@ -384,17 +414,8 @@ fn handleFtsRebuild(
 fn filterAuthorizedHits(
     allocator: std.mem.Allocator,
     hits: []const fulltext.FullTextIndex.SearchResult,
-    context: ExecutionContext,
+    filter_tenant: ?[]const u8,
 ) !std.ArrayList(fulltext.FullTextIndex.SearchResult) {
-    // SONNY-1318 review R2: resolve the session scope through the SHARED
-    // strict-tenancy decision instead of reading `context.tenant_id` raw.
-    //   * concrete scope            -> that tenant id (filtered exactly as before)
-    //   * unscoped, strict mode ON  -> error.TenantScopeRequired (propagated to
-    //                                  the wire through this fn's `!` and the
-    //                                  handlers' `try filterAuthorizedHits`)
-    //   * unscoped, strict mode OFF -> null (all tenants, legacy, unchanged)
-    const filter_tenant = try tenancy.resolveTenantFilter(context.tenant_id);
-
     const store = graph_store.getGlobalStore(graph_store.global_allocator());
     var reusable_row = std.StringHashMap(rls.Value).init(allocator);
     defer reusable_row.deinit();

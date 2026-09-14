@@ -541,6 +541,32 @@ test "fts search fails closed under strict tenancy with no tenant scope" {
         try testing.expect(saw_a and saw_b);
     }
 
+    // (1b) NON-STRICT, the OTHER two unscoped spellings. SONNY-1318 review m-4:
+    //      the control above only covered `null`, but `tenancy.resolveTenantFilter`
+    //      treats "" and "default" as the SAME unscoped session — that is the
+    //      whole point of routing FTS through it. Under permissive tenancy all
+    //      three must therefore give the identical all-tenants view.
+    //
+    //      This is a deliberate WIDENING for these two spellings: before the R2
+    //      fix `filterAuthorizedHits` passed the raw `context.tenant_id`, so
+    //      `"default"` filtered to literally-"default"-tagged rows (0 here) and
+    //      `""` to literally-""-tagged rows (0 here) — FTS disagreed with the
+    //      MATCH path, which has resolved all three spellings through the shared
+    //      tenancy decision since GAP-0840. FTS now matches MATCH.
+    for ([_][]const u8{ graph_store.DEFAULT_TENANT_ID, "" }) |unscoped| {
+        h.ctx.tenant_id = unscoped;
+        var res = try h.runQuery("CALL geode.fts.search('ftsauth_strict_idx', 'canary')");
+        defer res.deinit(aa);
+        try testing.expectEqual(@as(usize, 2), res.rows.len);
+        var saw_a = false;
+        var saw_b = false;
+        for (res.rows) |row| {
+            if (row[0].Int == tenant_a_id) saw_a = true;
+            if (row[0].Int == tenant_b_id) saw_b = true;
+        }
+        try testing.expect(saw_a and saw_b);
+    }
+
     geode.tenancy.setStrictTenancy(true);
     geode.tenancy.resetWarnState();
 

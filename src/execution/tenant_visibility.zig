@@ -42,12 +42,48 @@
 // The four "NO" rows fall back to `store.dupeNodeTenantForRead(store.allocator,
 // …)`, which both takes the STORE allocator (shared, not worker-local) and can
 // reach the storage adapter for a node the bounded cache evicted. Neither is
-// permitted on a `parallelForEach` worker. `centrality_algorithms.executeDegree-
-// Centrality` is the only parallel section in the engine that used to reach
-// them and no longer does: it computes every scoped degree on the CALLING
-// thread and hands the workers a pre-filled array (see the comment there).
-// Every other caller (`recursion_handler.zig`, the serial centrality loops,
-// `match_operations.zig`) runs on the connection thread.
+// permitted on a worker thread.
+//
+// PARALLEL SECTIONS THAT REACH THESE PREDICATES (corrected, review R2 — the
+// first cut of this table claimed `executeDegreeCentrality` was the ONLY one
+// and that `match_operations.zig` always runs on the connection thread; BOTH
+// claims were wrong):
+//
+//   | parallel section                          | reaches a "NO" row? | status |
+//   |-------------------------------------------|---------------------|--------|
+//   | centrality_algorithms.executeDegree-      | no, not any more    | FIXED  |
+//   |   Centrality (`parallelForEach` workers)  |                     | here   |
+//   | set_operations.tryParallelUnion           | YES                 | PRE-   |
+//   |   (one `std.Thread` per UNION arm)        |                     | EXIST. |
+//
+//   * `executeDegreeCentrality` computes every scoped degree on the CALLING
+//     thread and hands the workers a pre-filled array (see the comment there),
+//     so its workers touch no predicate here.
+//
+//   * `set_operations.tryParallelUnion` (`set_operations.zig` ~:852 eligibility,
+//     ~:953 `ArmJob.runnerEntry`, ~:1023-1082 the spawn/join loop) spawns ONE
+//     `std.Thread` per UNION arm and runs a FULL query on each — so the MATCH
+//     path runs on a spawned arm thread, not the connection thread. Those arms
+//     call `edgeVisibleForTenantHierarchy` (`match_operations.zig:5234,5258`),
+//     which is a "NO" row: shared-store-allocator + adapter read on a worker.
+//     The same arms also raw-deref `getEdgePtrHydrated` (the torn-edge-body
+//     hazard `graph_store.zig` ~:3156-3175 documents) rather than taking
+//     `getEdgeHydrated` by value.
+//
+//     This exposure is PRE-EXISTING — it predates SONNY-1318, which neither
+//     introduced nor fixed it. SONNY-1318 only moved the predicates into this
+//     module; the parallel-UNION arms reached the equivalent file-private
+//     predicates in `match_operations.zig` before the move, byte for byte.
+//     Fixing it means either making the arm threads allocator-safe or making
+//     the MATCH edge reads by-value under the shard lock, both of which are
+//     larger than this ticket's scope and carry their own perf regression
+//     risk on the hot MATCH path. It is TRACKED SEPARATELY under its own
+//     follow-up ticket (SONNY-13xx — key filed by the controller alongside
+//     this branch; do not treat the placeholder as a real key).
+//
+// Every OTHER caller (`recursion_handler.zig`, the serial centrality loops, and
+// `match_operations.zig` when it is NOT running under a parallel UNION arm)
+// runs on the connection thread.
 //
 // All edge-body reads here go through `GraphStore.getEdgeHydrated` (BY VALUE,
 // copied under the per-shard map lock SHARED), never `getEdgePtrHydrated` —

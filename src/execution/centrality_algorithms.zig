@@ -1029,8 +1029,15 @@ pub fn executeUnionFind(allocator: std.mem.Allocator, store: *graph_store.GraphS
     const uf_edge_ids = try store.allEdgeIds(allocator);
     defer allocator.free(uf_edge_ids);
     for (uf_edge_ids) |__eid| {
-        const edge_ptr = store.getEdgePtrHydrated(__eid) orelse continue;
-        const edge = edge_ptr.*;
+        // SONNY-1318 review m-1: read the edge BY VALUE. `getEdgePtrHydrated`
+        // hands back a raw `*Edge` into the bounded edge-body cache and the
+        // raw `edge_ptr.*` deref happened BEFORE the visibility check, so a
+        // concurrent shard-locked edge-create writer resizing that shard could
+        // tear the copy. `getEdgeHydrated` copies under the per-shard map lock
+        // SHARED — the same accessor `getNeighbors`/`buildNeighborSets` already
+        // use, and the one `graph_store.zig` (~:3169) names as safe for an
+        // analytical read that overlaps ingest.
+        const edge = store.getEdgeHydrated(__eid) orelse continue;
 
         // SONNY-1318: an invisible edge must not union two components, or a
         // cross-tenant bridge would merge another tenant's nodes into this
