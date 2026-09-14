@@ -173,6 +173,15 @@ pub fn batchCreateInvocations() u64 {
 pub fn parallelUnionInvocations() u64 {
     return set_operations.parallel_union_invocations.load(.monotonic);
 }
+
+/// SONNY-1330 regression probe. Monotonic count of UNIONs that started on the
+/// parallel fork-join path and were DISCARDED because an arm needed a
+/// hydrate-on-miss (forbidden on an arm thread: it mutates the shared bounded
+/// caches under the sibling arms' live `*Node`/`*Edge` pointers). Those UNIONs
+/// produced their rows on the serial path instead.
+pub fn parallelUnionSerialFallbacks() u64 {
+    return set_operations.parallel_union_serial_fallbacks.load(.monotonic);
+}
 pub const executeCreateForBatchWithTracking = crud_operations.executeCreateForBatchWithTracking;
 pub const CreateBatchResult = crud_operations.CreateBatchResult;
 pub const executeCreateQuery = crud_operations.executeCreateQuery;

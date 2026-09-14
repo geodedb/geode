@@ -80,60 +80,97 @@
 //   |-------------------------------------------|---------------------|--------|
 //   | centrality_algorithms.executeDegree-      | no, not any more    | FIXED  |
 //   |   Centrality (`parallelForEach` workers)  |                     | here   |
-//   | set_operations.tryParallelUnion           | YES                 | PRE-   |
-//   |   (one `std.Thread` per UNION arm)        |                     | EXIST. |
-//   | graph_algorithms.zig expression path      | YES, on a           | SONNY- |
-//   |   under a tryParallelUnion arm            | non-resident        | 1326,  |
-//   |   (shortestPath()/COUNT{}/EXISTS{}/       | endpoint only       | see    |
-//   |   pattern comprehension)                  |                     | below  |
+//   | set_operations.tryParallelUnion           | no, not any more    | FIXED  |
+//   |   (one `std.Thread` per UNION arm)        |                     | SONNY- |
+//   |                                           |                     | 1330   |
+//   | graph_algorithms.zig expression path      | no, not any more    | FIXED  |
+//   |   under a tryParallelUnion arm            |                     | SONNY- |
+//   |   (shortestPath()/COUNT{}/EXISTS{}/       |                     | 1330   |
+//   |   pattern comprehension)                  |                     |        |
 //
 //   * `executeDegreeCentrality` computes every scoped degree on the CALLING
 //     thread and hands the workers a pre-filled array (see the comment there),
 //     so its workers touch no predicate here.
 //
-//   * `set_operations.tryParallelUnion` (`set_operations.zig` ~:852 eligibility,
-//     ~:953 `ArmJob.runnerEntry`, ~:1023-1082 the spawn/join loop) spawns ONE
-//     `std.Thread` per UNION arm and runs a FULL query on each — so the MATCH
-//     path runs on a spawned arm thread, not the connection thread. Those arms
-//     call `edgeVisibleForTenantHierarchy` (`match_operations.zig:5234,5258`),
-//     which is a "NO" row: shared-store-allocator + adapter read on a worker.
-//     The same arms also raw-deref `getEdgePtrHydrated` (the torn-edge-body
-//     hazard `graph_store.zig` ~:3156-3175 documents) rather than taking
-//     `getEdgeHydrated` by value.
+//   * `set_operations.tryParallelUnion` (`set_operations.zig` eligibility in
+//     `unionArmsAreParallelEligible`, `ArmJob.runnerEntry`, and the spawn/join
+//     loop in `tryParallelUnion`) spawns ONE `std.Thread` per UNION arm and
+//     runs a FULL query on each — so the MATCH path, and every predicate here,
+//     runs on a spawned arm thread rather than the connection thread.
 //
-//     This exposure is PRE-EXISTING — it predates SONNY-1318, which neither
-//     introduced nor fixed it. SONNY-1318 only moved the predicates into this
-//     module; the parallel-UNION arms reached the equivalent file-private
-//     predicates in `match_operations.zig` before the move, byte for byte.
-//     Fixing it means either making the arm threads allocator-safe or making
-//     the MATCH edge reads by-value under the shard lock, both of which are
-//     larger than this ticket's scope and carry their own perf regression
-//     risk on the hot MATCH path. It is TRACKED SEPARATELY under its own
-//     follow-up ticket SONNY-1330.
+//     SONNY-1330 CLOSED THIS, fail-safe rather than by making the arm safe.
+//     An arm now runs inside `node_cache.beginReadOnlyHydration()`, and the
+//     TWO distinct shared-state hazards on that thread are both refused:
+//
+//       1. CACHE MUTATION. `nodes`/`edges`/`outgoing_edges`/`incoming_edges`
+//          are process-wide bounded caches whose `getOrHydratePtr` /
+//          `getOrHydrate` INSERT on a miss (rehashing the shard and MOVING
+//          every value slot) and EVICT past the cap. Sibling arms hold raw
+//          `*Node`/`*Edge` pointers into those slots, so one arm's miss is a
+//          cross-thread use-after-move that per-shard locking cannot prevent
+//          (the pointer escapes the lock by design). Inside the scope a miss
+//          returns `error.CacheHydrationSuppressed` and touches nothing.
+//
+//       2. SHARED ALLOCATOR + ADAPTER READ — the hazard THIS file owns. The
+//          "NO" rows fall back to `store.dupeNodeTenantForRead(store.allocator,
+//          …)`, which does NOT go through the bounded cache at all (it uses the
+//          resident-only `nodes.get`, then reads the STORAGE ADAPTER and
+//          allocates from the SHARED store allocator). The accessor-level
+//          guard in (1) therefore does NOT cover it. `tenantTagFallbackAllowed`
+//          (above) refuses it on an arm and the predicate answers fail-closed.
+//
+//     Neither refusal is allowed to change an ANSWER. Both record the decline
+//     on the thread; after the join, `tryParallelUnion` sees that any arm
+//     declined, DISCARDS every arm result, and returns null — which re-runs the
+//     whole UNION on the serial connection-thread path, where hydration and the
+//     tenant-tag fallback are legal again. Arm output is therefore either
+//     byte-identical to the serial path's or thrown away; it is never merged
+//     half-resolved. That re-run is why `unionArmsAreParallelEligible` now
+//     admits only side-effect-free arms (`queryIsReadOnly`, EVERY arm, not just
+//     arm 0) — re-running a CREATE/MERGE/SET/DELETE/CALL arm would apply it
+//     twice.
+//
+//     A fully-resident UNION keeps its parallelism: a cache HIT is not a
+//     decline, and a resident endpoint never reaches the tenant-tag fallback.
+//     Regression: `tests/test_sonny1330_parallel_union.zig`, whose end-to-end
+//     case pins a cold-store `WHERE EXISTS { … }` UNION (arms yield 0 rows with
+//     hydration refused, 600 serially) to the serial path's rows.
+//
+//     STILL OPEN, tracked for SONNY-1332: the read-only flag is THREADLOCAL and
+//     does not propagate to threads an arm itself spawns (e.g. a nested
+//     `parallelForEach` fan-out); such workers start with the mode OFF. Nested
+//     parallel UNION is already handled — `unionArmsAreParallelEligible`
+//     refuses to fan out from a thread that is itself an arm.
 //
 //   * SONNY-1326 — `graph_algorithms.zig` (the EXPRESSION path:
 //     `findShortestPath`, `countPatternMatches`, `executePatternComprehension`)
 //     is reached from `eval.zig:1860/1869/1880/1929`, i.e. from ordinary
 //     RETURN/WHERE evaluation, which a `tryParallelUnion` arm ALSO runs
 //     (`ArmJob.runnerEntry` -> `executeQueryNoLimitWithContext` -> the full
-//     query). So YES, these new call sites can execute on a spawned arm thread.
-//     Two things bound the exposure, and neither is a claim that the arm is
-//     safe:
+//     query). So YES, these call sites can execute on a spawned arm thread —
+//     and measurement confirms it: a cold-store `WHERE EXISTS { (a)-[:R]->(:B) }`
+//     arm takes 300 declines through `countPatternMatches` ->
+//     `store.nodes.getOrHydratePtr` (`graph_algorithms.zig:304/366`).
+//
+//     Those declines are now REFUSALS rather than mutations, and they trigger
+//     the serial re-run described above, so this path is closed by the same
+//     mechanism. Its two pre-existing bounds still hold and are still not a
+//     claim that the arm is independently safe:
 //       1. Every call site that has a `Node` in hand uses `passesTenantFilter` /
 //          `passesTenantFilterSlice` — the worker-safe "yes" rows — rather than
 //          `nodeIdVisible`. Nothing is allocated and no adapter is touched.
 //       2. The frontier/edge gates use `edgeTraversable`, whose only allocating
 //          arm is a NON-RESIDENT endpoint; for a resident endpoint it is
 //          allocation-free and engine-read-free (`nodeIdVisible`'s resident fast
-//          path). On a non-resident endpoint it is a "NO" row, exactly like the
-//          `edgeVisibleForTenantHierarchy` calls `match_operations.zig` already
-//          makes from those same arms.
-//     SONNY-1326 therefore does not WIDEN the SONNY-1330 exposure: the
-//     surrounding pre-existing code on this path (`store.nodes.getOrHydratePtr`,
-//     which MUTATES the shared bounded node cache, and `store.allEdgeIds`)
-//     already reaches the engine from an arm thread, which is strictly larger
-//     than the predicate's transient tenant-tag dupe. Closing it belongs to
-//     SONNY-1330, which owns the arm-thread allocator/adapter contract.
+//          path). The non-resident case is exactly what
+//          `tenantTagFallbackAllowed` now refuses on an arm.
+//
+//     SEPARATE PRE-EXISTING BUG found while pinning this ticket, NOT a race and
+//     NOT fixed here — recorded for SONNY-1332: `countPatternMatches` scans
+//     `store.nodes.iterator()`, which is RESIDENT-ONLY. Over a cold store a
+//     bare `RETURN COUNT { (a:A)-[:R]->(b:B) }` answers 0 on the SERIAL path
+//     too, because it never sees a node to expand from. `COUNT {}` / `EXISTS {}`
+//     results are therefore residency-dependent, independent of threading.
 //
 // Every OTHER caller (`recursion_handler.zig`, the serial centrality loops, and
 // `match_operations.zig` when it is NOT running under a parallel UNION arm)
@@ -146,6 +183,12 @@
 const std = @import("std");
 const graph_store = @import("../graph_store.zig");
 const tenancy = @import("tenancy.zig");
+
+// SONNY-1330: reached THROUGH `graph_store` on purpose. `node_cache`'s
+// read-only-hydration flag is a THREADLOCAL, so importing the file by a second
+// path would give this module a second, independent copy of it and the arm's
+// scope would be invisible here.
+const node_cache = graph_store.node_cache_mod;
 
 // GAP-0510: shared RLS types module holds the process-global expr-RLS engine
 // pointer; `rls` holds the HierarchyManager itself. Both are NAMED build
@@ -211,6 +254,29 @@ pub inline fn passesTenantFilterEdge(edge: graph_store.Edge, filter_tenant: ?[]c
     return hm.canAccessTenantSafe(tid, edge.tenant_id);
 }
 
+/// SONNY-1330: is this thread allowed to take the non-resident tenant-tag
+/// fallback (`GraphStore.dupeNodeTenantForRead`)?
+///
+/// That fallback allocates from the SHARED `store.allocator` and reads the
+/// storage adapter. On a `set_operations.tryParallelUnion` ARM THREAD both are
+/// forbidden — the arm shares the store allocator with its siblings and with
+/// the connection thread, and nothing serializes them.
+///
+/// Returns FALSE on an arm, having recorded the decline, so the caller answers
+/// fail-closed. The wrong answer never reaches the client: the recorded
+/// decline makes `tryParallelUnion` discard EVERY arm result and re-run the
+/// whole UNION on the connection thread, where the fallback is legal.
+///
+/// Note this is a DIFFERENT hazard from the bounded-cache insert/evict race
+/// the same ticket closes in `node_cache.getOrHydratePtr` — this path never
+/// touches the cache (it uses the resident-only `nodes.get`), which is exactly
+/// why the accessor-level guard does not cover it.
+inline fn tenantTagFallbackAllowed() bool {
+    if (!node_cache.readOnlyHydrationActive()) return true;
+    node_cache.noteHydrationDeclined();
+    return false;
+}
+
 // GAP-0891 (defense-in-depth): hierarchy-aware, endpoint-derived edge
 // visibility. The edge is visible when its own tag passes the (hierarchy-aware)
 // tenant filter OR when BOTH endpoints pass it. This bridges legacy edges
@@ -231,6 +297,7 @@ pub inline fn edgeVisibleForTenantHierarchy(
     // every legacy-tagged edge whose endpoints were merely evicted. Read the
     // endpoint tenant tags resident-first with an engine fallback; the helper
     // never mutates the cache (callers hold retained `*Node` pointers).
+    if (!tenantTagFallbackAllowed()) return false; // SONNY-1330
     const from_tenant = store.dupeNodeTenantForRead(store.allocator, edge.from_id) orelse return false;
     defer store.allocator.free(from_tenant);
     const to_tenant = store.dupeNodeTenantForRead(store.allocator, edge.to_id) orelse return false;
@@ -255,6 +322,7 @@ pub fn nodeIdVisible(
     if (filter_tenant == null) return true;
     // Resident fast path: no allocation for the overwhelmingly common case.
     if (store.nodes.get(node_id)) |node| return passesTenantFilterSlice(node.tenant_id, filter_tenant);
+    if (!tenantTagFallbackAllowed()) return false; // SONNY-1330
     const tag = store.dupeNodeTenantForRead(store.allocator, node_id) orelse return false;
     defer store.allocator.free(tag);
     return passesTenantFilterSlice(tag, filter_tenant);

@@ -51,6 +51,129 @@ pub const SHARD_COUNT = sharded_store.SHARD_COUNT;
 /// Default resident cap when `GEODE_NODE_CACHE_ENTRIES` is unset.
 pub const DEFAULT_CAP: usize = 1_000_000;
 
+// ───────────────────────────────────────────────────────────────────────────
+// SONNY-1330: READ-ONLY HYDRATION MODE (parallel UNION arm threads)
+//
+// `getOrHydratePtr` / `getOrHydrate` MUTATE this cache on a miss: they insert
+// the freshly-built value into the shard's AutoHashMap and, past the cap,
+// evict (UNLINK + RETIRE) cold entries from that shard. Both are correct for a
+// single reader — the per-shard `hydrate_mutex` + `map_lock` make the map op
+// itself atomic — but they are NOT safe to run from a `set_operations
+// .tryParallelUnion` ARM THREAD, for a reason the locks cannot fix:
+//
+//   * an insert that GROWS a shard REHASHES it and MOVES every value slot;
+//   * an eviction UNLINKs a live entry, copying the value out to `retired`.
+//
+// Sibling arms hold raw `*V` pointers returned by earlier `getOrHydratePtr`
+// calls (bindings, `base_nodes`, `Value{ .Node = ptr }` in result rows) and
+// keep dereferencing them for the whole arm. One arm's hydrate-on-miss
+// therefore invalidates another arm's live pointers — a cross-thread
+// use-after-move that no amount of per-shard locking prevents, because the
+// pointer escapes the lock by design.
+//
+// The fix is to make an arm thread's hydration path READ-ONLY: while this mode
+// is active on a thread, a MISS never hydrates and never touches the map. It
+// records that it declined and returns `error.CacheHydrationSuppressed`, and
+// `tryParallelUnion` discards every arm result and re-runs the whole UNION on
+// the serial (connection-thread) path, where hydration is legal again. Results
+// are therefore always the SERIAL path's results, by construction.
+//
+// This is a THREAD-scoped, nesting-safe flag: a thread that never opens a scope
+// (every connection thread, every startup/CLI path) is completely unaffected.
+//
+// Limitation, tracked for SONNY-1332: the flag does not propagate to threads an
+// arm itself spawns (e.g. a nested `parallelForEach` fan-out). Those workers
+// start with the mode OFF and would hydrate normally.
+// ───────────────────────────────────────────────────────────────────────────
+
+/// Nesting depth of the read-only-hydration scope on THIS thread. 0 = normal
+/// (hydrating) behaviour, which is every non-arm thread.
+threadlocal var t_read_only_depth: u32 = 0;
+
+/// Sticky within the innermost scope: set when a lookup was declined because
+/// serving it would have mutated the shared cache.
+threadlocal var t_hydration_declined: bool = false;
+
+/// Saved state for one read-only-hydration scope. Nesting-safe: `end` restores
+/// exactly what `begin` observed.
+pub const ReadOnlyHydrationScope = struct {
+    prev_depth: u32,
+    prev_declined: bool,
+};
+
+/// Enter read-only-hydration mode on this thread. Pair with `endReadOnly`.
+pub fn beginReadOnlyHydration() ReadOnlyHydrationScope {
+    const saved = ReadOnlyHydrationScope{
+        .prev_depth = t_read_only_depth,
+        .prev_declined = t_hydration_declined,
+    };
+    t_read_only_depth += 1;
+    t_hydration_declined = false;
+    return saved;
+}
+
+/// Leave read-only-hydration mode, restoring the enclosing scope's state.
+/// Returns TRUE when at least one lookup was declined inside this scope — the
+/// caller must then treat everything the scope produced as unusable.
+pub fn endReadOnlyHydration(saved: ReadOnlyHydrationScope) bool {
+    const declined = t_hydration_declined;
+    t_read_only_depth = saved.prev_depth;
+    // An enclosing scope inherits the decline: a nested scope that could not be
+    // served means the outer scope's output is equally untrustworthy.
+    t_hydration_declined = saved.prev_declined or (declined and saved.prev_depth > 0);
+    return declined;
+}
+
+/// Is this thread currently forbidden from mutating the shared caches?
+pub inline fn readOnlyHydrationActive() bool {
+    return t_read_only_depth > 0;
+}
+
+/// Has a lookup been declined inside the CURRENT scope on this thread?
+pub inline fn hydrationDeclined() bool {
+    return t_hydration_declined;
+}
+
+/// Returned by `getOrHydratePtr` / `getOrHydrate` on a miss taken while
+/// read-only-hydration mode is active. Callers that `catch null` degrade to a
+/// plain miss; the scope owner sees `endReadOnlyHydration() == true` either way
+/// and throws the whole computation away.
+pub const HydrationSuppressedError = error{CacheHydrationSuppressed};
+
+/// Record a declined lookup and produce the sentinel error. `inline` so the
+/// non-arm fast path stays a single threadlocal load.
+/// Process-wide count of declined hydrations, across every cache
+/// instantiation. Monotonic, and only ever touched on the (rare) decline path,
+/// so it costs nothing on the hit path. Read by metrics and by the SONNY-1330
+/// regression to prove the arm-thread refusal actually fired.
+pub var declined_hydrations_total: std.atomic.Value(u64) = std.atomic.Value(u64).init(0);
+
+inline fn declineHydration() HydrationSuppressedError {
+    noteHydrationDeclined();
+    return error.CacheHydrationSuppressed;
+}
+
+/// Record a declined shared-state read WITHOUT producing an error, for the
+/// call sites whose signature is a plain `bool` and that therefore cannot
+/// propagate `error.CacheHydrationSuppressed`.
+///
+/// SONNY-1330: the tenancy predicates in `execution/tenant_visibility.zig` are
+/// the motivating case. Their non-resident fallback
+/// (`GraphStore.dupeNodeTenantForRead`) does NOT go through this cache at all —
+/// it uses the resident-only `nodes.get` and then reads the STORAGE ADAPTER
+/// directly, allocating from the SHARED `store.allocator`. That is a second,
+/// distinct arm-thread hazard from the insert/evict race above: not a cache
+/// mutation, but a shared-allocator + adapter read on a spawned arm.
+///
+/// Those predicates call this and then answer fail-closed (`false`). The
+/// answer is deliberately wrong-but-safe: the scope owner sees the decline,
+/// throws the arm's whole result away, and re-runs the UNION serially, where
+/// the fallback is legal again.
+pub inline fn noteHydrationDeclined() void {
+    _ = declined_hydrations_total.fetchAdd(1, .monotonic);
+    t_hydration_declined = true;
+}
+
 /// Bounded cache over `ShardedStore(K, V)`.
 ///
 /// `K` must be an unsigned integer (enforced by `ShardedStore`). `V` is the
@@ -266,6 +389,9 @@ pub fn BoundedNodeCache(comptime K: type, comptime V: type) type {
                 defer self.shards[idx].map_lock.unlockShared(io());
                 if (self.store.getPtr(key)) |p| return p;
             }
+            // SONNY-1330: a miss from a parallel-UNION arm thread must NOT
+            // insert/evict — see the READ-ONLY HYDRATION MODE note above.
+            if (t_read_only_depth > 0) return declineHydration();
             const hydrate = self.hydrate_fn orelse return null;
             const ctx = self.hydrate_ctx orelse return null;
 
@@ -307,6 +433,9 @@ pub fn BoundedNodeCache(comptime K: type, comptime V: type) type {
                 defer self.shards[idx].map_lock.unlockShared(io());
                 if (self.store.getPtr(key)) |p| return p.*; // copy under SHARED
             }
+            // SONNY-1330: same rule for the by-value variant — its miss path
+            // inserts into the shard map exactly like `getOrHydratePtr`.
+            if (t_read_only_depth > 0) return declineHydration();
             const hydrate = self.hydrate_fn orelse return null;
             const ctx = self.hydrate_ctx orelse return null;
             var value = (try hydrate(ctx, self.allocator, key)) orelse return null;

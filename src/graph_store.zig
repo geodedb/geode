@@ -28,7 +28,10 @@ const id_map_mod = @import("storage/id_map.zig");
 const hydration_snapshot = @import("storage/hydration_snapshot.zig");
 const uuid = @import("uuid");
 const sharded_store = @import("graph_storage").sharded_store;
-const node_cache_mod = @import("storage/node_cache.zig");
+// SONNY-1330: PUBLIC so `execution/set_operations.zig` can open/close the
+// read-only-hydration scope around a parallel UNION arm without importing the
+// file by a second path (which would give it a SECOND set of threadlocals).
+pub const node_cache_mod = @import("storage/node_cache.zig");
 const pooled = @import("transport/thread_pool");
 
 // CANARY: REQ=REQ-TDE-GRAPHSTORE-001; FEATURE="TDEFileLevelEncryption"; ASPECT=GraphStorePersistence; STATUS=EXEMPT; OWNER=security; UPDATED=2026-03-28

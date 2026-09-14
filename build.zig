@@ -2675,6 +2675,13 @@ pub fn build(b: *std.Build) void {
     }) });
     gap0814_union_parallelism_tests.root_module.addImport("geode", root_mod);
     const run_gap0814_union_parallelism_tests = b.addRunArtifact(gap0814_union_parallelism_tests);
+    // SONNY-1330: named step added so the GAP-0814 fork-join can be verified on
+    // its own. SONNY-1330 changes `unionArmsAreParallelEligible` (every arm must
+    // now be side-effect free, and an arm may not fan out again), so this suite
+    // is the direct no-regression gate for parallel-UNION eligibility. It was
+    // previously reachable only through the aggregate `test` step.
+    const gap0814_step = b.step("test-gap0814-union-parallelism", "Run the GAP-0814 parallel UNION arm fork-join tests (eligibility + merge); SONNY-1330's no-regression gate");
+    gap0814_step.dependOn(&run_gap0814_union_parallelism_tests.step);
 
     // GAP-0815 Task 6.1: batch-CREATE fast path for homogeneous inline node
     // patterns. A single query with N >= 3 `CREATE (:Label {...}), ...`
@@ -7969,6 +7976,56 @@ pub fn build(b: *std.Build) void {
     shardDep(test_step, &run_sonny1326_tests.step, 1, test_shard_loads, test_shard_index);
     const sonny1326_step = b.step("test-sonny1326-expression-tenancy", "Run SONNY-1326 regression (shortestPath(), COUNT{}, EXISTS{} and pattern comprehensions are tenant-scoped, fail-closed under strict tenancy)");
     sonny1326_step.dependOn(&run_sonny1326_tests.step);
+
+    // SONNY-1330: parallel UNION arm thread safety. `tryParallelUnion` runs a
+    // full query per arm on its own `std.Thread`; the hydrate-on-miss cache
+    // accessors INSERT (and past the cap EVICT) into the process-wide bounded
+    // node/edge/adjacency caches, moving the value slots that sibling arms hold
+    // raw `*Node`/`*Edge` pointers into. Arms now run with hydration disabled
+    // on their thread and the whole UNION falls back to the serial path if any
+    // arm needed it. The regression drives a UNION whose arms must read
+    // NON-RESIDENT nodes (store reopened cold against a persisted data dir) and
+    // pins the rows to the serial path's rows.
+    const sonny1330_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny1330_parallel_union.zig"), .target = target, .optimize = optimize });
+    sonny1330_test_mod.addImport("geode", root_mod);
+    const sonny1330_tests = b.addTest(.{ .root_module = sonny1330_test_mod });
+    const run_sonny1330_tests = b.addRunArtifact(sonny1330_tests);
+    // Bound the resident node/edge/adjacency caches HARD (16 shards x 4 entries)
+    // so the seeded rows genuinely fall out of residency and the UNION arms must
+    // take the hydrate-on-miss path this ticket forbids them. Without this the
+    // reopen's lazy per-graph hydration leaves every row resident and the
+    // regression proves nothing. See nodeCacheCapFromEnv in graph_store.zig.
+    run_sonny1330_tests.setEnvironmentVariable("GEODE_NODE_CACHE_ENTRIES", "64");
+    run_sonny1330_tests.setEnvironmentVariable("GEODE_EDGE_CACHE_ENTRIES", "64");
+    run_sonny1330_tests.setEnvironmentVariable("GEODE_ADJ_CACHE_ENTRIES", "64");
+    shardDep(test_step, &run_sonny1330_tests.step, 1, test_shard_loads, test_shard_index);
+    const sonny1330_step = b.step("test-sonny1330-parallel-union", "Run SONNY-1330 regression (parallel UNION arms never mutate the shared bounded caches; a UNION with non-resident arms falls back to the serial path and returns the serial path's rows)");
+    sonny1330_step.dependOn(&run_sonny1330_tests.step);
+
+    // SONNY-1330 TSan companion: the same regression file under
+    // -fsanitize-thread, so the fork-join over a COLD store is checked for the
+    // cross-arm cache mutation this ticket closes rather than merely asserted
+    // to produce the right rows. Opt-in (not part of the default test_step):
+    // TSan adds ~5-8x overhead and needs libtsan at runtime.
+    // Run via: zig build test-sonny1330-parallel-union-tsan
+    const sonny1330_tsan_mod = b.createModule(.{
+        .root_source_file = b.path("tests/test_sonny1330_parallel_union.zig"),
+        .target = target,
+        .optimize = .Debug,
+        .link_libc = true,
+        .sanitize_thread = true,
+    });
+    sonny1330_tsan_mod.addImport("geode", root_mod);
+    const sonny1330_tsan_tests = b.addTest(.{ .root_module = sonny1330_tsan_mod });
+    const run_sonny1330_tsan_tests = b.addRunArtifact(sonny1330_tsan_tests);
+    run_sonny1330_tsan_tests.setEnvironmentVariable("GEODE_NODE_CACHE_ENTRIES", "64");
+    run_sonny1330_tsan_tests.setEnvironmentVariable("GEODE_EDGE_CACHE_ENTRIES", "64");
+    run_sonny1330_tsan_tests.setEnvironmentVariable("GEODE_ADJ_CACHE_ENTRIES", "64");
+    const sonny1330_tsan_step = b.step(
+        "test-sonny1330-parallel-union-tsan",
+        "TSan companion: SONNY-1330 parallel UNION fork-join over a cold store under -fsanitize-thread (race detection across the arm threads)",
+    );
+    sonny1330_tsan_step.dependOn(&run_sonny1330_tsan_tests.step);
 
     // GAP-0903 (P3a) RLS clone-gate regression: RLS-active reads must no longer
     // force the O(graph) snapshot clone.  The secondary gates at QCH:7040

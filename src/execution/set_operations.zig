@@ -95,6 +95,45 @@ fn freeDroppedRowValues(allocator: std.mem.Allocator, result: *const ExecutionRe
 /// clock budget assertions that flaked on contended hosts. Monotonic.
 pub var parallel_union_invocations: std.atomic.Value(u64) = std.atomic.Value(u64).init(0);
 
+/// SONNY-1330 regression probe: counts UNIONs that STARTED on the parallel
+/// fork-join path and were thrown away because an arm needed to hydrate a
+/// non-resident node/edge/adjacency (which would have mutated the shared
+/// bounded caches under its sibling arms' live pointers). Every increment is
+/// one UNION that produced its rows on the SERIAL path instead. Monotonic.
+pub var parallel_union_serial_fallbacks: std.atomic.Value(u64) = std.atomic.Value(u64).init(0);
+
+/// SONNY-1330: may this arm's query be executed, thrown away, and executed
+/// AGAIN (serially) without the client observing it twice?
+///
+/// The parallel path's safety valve is "discard every arm result and re-run the
+/// whole UNION serially". That is only sound for arms with NO side effects: a
+/// CREATE / MERGE / SET / REMOVE / DELETE arm that already ran would be applied
+/// a SECOND time by the serial retry. `unionArmsAreParallelEligible` used to
+/// reject writes only for `union_query.first` (and only CREATE/MERGE, and only
+/// because of `variable_bindings`), so a `... UNION ALL CREATE (…) RETURN …`
+/// TAIL was eligible — latent before this ticket, load-bearing now.
+///
+/// `call_clause` / `initial_call_subquery` are rejected wholesale: a procedure
+/// body is opaque here and `CALL geode.*` includes mutating procedures.
+/// Conservative by design — the cost of a false "not read-only" is one serial
+/// UNION, the cost of a false "read-only" is a duplicated write.
+fn queryIsReadOnly(q: ast.Query) bool {
+    if (q.create_pattern != null) return false;
+    if (q.merge_statement != null) return false;
+    if (q.set_clauses.len != 0) return false;
+    if (q.remove_clauses.len != 0) return false;
+    if (q.delete_items.len != 0) return false;
+    if (q.call_clause != null) return false;
+    if (q.initial_call_subquery != null) return false;
+    if (q.for_statement != null) return false;
+    // Query chaining (`... WITH ... MATCH/CREATE ...`) hangs the continuation
+    // off `next_query`; walk it, or a chained CREATE slips through.
+    if (q.next_query) |nq| {
+        if (!queryIsReadOnly(nq.*)) return false;
+    }
+    return true;
+}
+
 // CANARY: REQ=REQ-EXEC-REFACTOR-002; FEATURE="ExecutionRefactoring"; ASPECT=SET_OPERATIONS; STATUS=EXEMPT; OWNER=refactor; UPDATED=2025-10-17
 // Extracted set operation functions from execution.zig for better modularity (M1 Phase 2)
 
@@ -851,6 +890,13 @@ fn applyUnionPagination(
 /// CANARY: REQ=REQ-PERF-QPS-0814; FEATURE="ParallelUnionArms"; ASPECT=CostModelThreshold; STATUS=TESTED; TEST=tests/test_gap0814_union_parallelism.zig; OWNER=performance; UPDATED=2026-04-20
 fn unionArmsAreParallelEligible(union_query: ast.UnionQuery, context: ExecutionContext) bool {
     if (union_query.tails.len == 0) return false;
+
+    // SONNY-1330: never fan out from a thread that is ITSELF a parallel-UNION
+    // arm. `beginReadOnlyHydration` is threadlocal, so freshly spawned inner
+    // arms would start with hydration ENABLED and mutate the shared caches
+    // right under the outer arms' live pointers — exactly what this ticket
+    // closes. A nested UNION therefore runs serially inside its arm.
+    if (graph_store.node_cache_mod.readOnlyHydrationActive()) return false;
     for (union_query.tails) |tail| {
         if (tail.operation != .union_op) return false;
     }
@@ -870,6 +916,15 @@ fn unionArmsAreParallelEligible(union_query: ast.UnionQuery, context: ExecutionC
     // expects rows for a/b/c but only the first arm's row had values.
     if (union_query.first.create_pattern != null) return false;
     if (union_query.first.merge_statement != null) return false;
+
+    // SONNY-1330: EVERY arm must be side-effect free, not just arm 0. The
+    // parallel path can now abandon its arms mid-flight and re-run the UNION
+    // serially (read-only-hydration fallback below), and re-running a write arm
+    // would apply it twice. See `queryIsReadOnly`.
+    if (!queryIsReadOnly(union_query.first)) return false;
+    for (union_query.tails) |tail| {
+        if (!queryIsReadOnly(tail.query)) return false;
+    }
 
     // Cost model: if EVERY arm has a predictably small anchor posting-list,
     // serial execution is cheaper than thread-spawn.
@@ -949,15 +1004,34 @@ const ArmJob = struct {
     allocator: std.mem.Allocator,
     result: ?ExecutionResult = null,
     err: ?anyerror = null,
+    /// SONNY-1330: set when this arm hit a NON-RESIDENT node / edge / adjacency
+    /// and was refused the hydrate-on-miss that would have mutated the shared
+    /// bounded cache. The arm's rows are then INCOMPLETE and must be discarded.
+    needs_hydration: bool = false,
 
     fn runnerEntry(self: *ArmJob) void {
         // Each thread gets its own threadlocal active context via
         // `executeQueryNoLimitWithContext` -> `executeQueryWithContext`
         // which pushes/pops `g_active_context`. No shared mutable state.
+        //
+        // SONNY-1330: …except the four bounded caches (`nodes`, `edges`,
+        // `outgoing_edges`, `incoming_edges`). `getOrHydratePtr` INSERTS on a
+        // miss, which rehashes/moves the shard's value slots and can evict live
+        // entries — invalidating the raw `*Node` / `*Edge` pointers a SIBLING
+        // arm is holding in its bindings and result rows. Run the arm with
+        // hydration disabled on this thread; a miss records `needs_hydration`
+        // and the caller throws EVERY arm away and re-runs the UNION serially.
+        const scope = graph_store.node_cache_mod.beginReadOnlyHydration();
         self.result = executeQueryNoLimitWithContext(self.allocator, self.query, self.context) catch |err| {
-            self.err = err;
+            self.needs_hydration = graph_store.node_cache_mod.endReadOnlyHydration(scope);
+            // A suppressed hydration is the LIKELY cause of this error (a
+            // `try`-ing caller propagates `error.CacheHydrationSuppressed`, and
+            // fail-closed read paths turn a miss into NodeNotFound). Report the
+            // fallback, not the error: the serial retry is the real answer.
+            if (!self.needs_hydration) self.err = err;
             return;
         };
+        self.needs_hydration = graph_store.node_cache_mod.endReadOnlyHydration(scope);
     }
 };
 
@@ -1094,6 +1168,31 @@ fn tryParallelUnion(
     // unwinds through this errdefer and previously crashed the server
     // (panic stack rooted at `set_operations.zig:786 in tryParallelUnion`).
     spawned = 0;
+
+    // SONNY-1330: did ANY arm get refused a hydrate-on-miss? If so its rows are
+    // incomplete (a non-resident node/edge simply did not exist as far as that
+    // arm could tell), so NOTHING any arm produced may be merged. Drop every
+    // arm result and return `null`, which sends the caller to the serial path
+    // below — the connection thread, where hydration mutates the shared caches
+    // with no sibling reader holding pointers into them.
+    //
+    // Checked BEFORE error propagation on purpose: a suppressed hydration
+    // surfaces at fail-closed read sites as `error.CacheHydrationSuppressed`,
+    // `NodeNotFound`, or simply as a missing row, and "re-run serially" is the
+    // right answer for all three. Safe to re-run because
+    // `unionArmsAreParallelEligible` now admits only side-effect-free arms.
+    var needs_hydration = false;
+    for (jobs) |*job| {
+        if (job.needs_hydration) needs_hydration = true;
+    }
+    if (needs_hydration) {
+        _ = parallel_union_serial_fallbacks.fetchAdd(1, .monotonic);
+        for (jobs) |*job| {
+            if (job.result) |*res| res.deinit(allocator);
+            job.result = null;
+        }
+        return null;
+    }
 
     // Propagate the first error, if any.
     for (jobs) |*job| {
