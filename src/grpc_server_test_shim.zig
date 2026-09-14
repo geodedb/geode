@@ -17,3 +17,11 @@ const _impl = @import("transport/grpc_server.zig");
 comptime {
     _ = _impl;
 }
+
+/// SONNY-1560: re-export so a test file OUTSIDE src/ can reach
+/// grpc_server.zig's public decls. A test module rooted at tests/ cannot
+/// `@import("../src/transport/grpc_server.zig")` — that file's own
+/// `../server/*.zig` imports would escape the module root — so the regression
+/// suite imports this shim as a named module and reaches the implementation
+/// through `impl`.
+pub const impl = _impl;

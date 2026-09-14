@@ -120,9 +120,23 @@ pub const GrpcConfig = struct {
     shared_optimizer: ?*query_plan_cache.SharedQueryOptimizer = null,
 };
 
-const SessionEntry = struct {
+/// SONNY-1560: made `pub` so the flow-control regression suite can drive
+/// `pushResultPages` against a hand-built session without standing up the
+/// global session store.
+pub const SessionEntry = struct {
     state: *server_state.ServerState,
     mutex: std.Io.Mutex = std.Io.Mutex.init,
+    /// SONNY-1560: monotonic generation of this session's active result set.
+    /// Bumped under `mutex` by every Execute that installs a new result and by
+    /// the deterministic release path below. A pushed gRPC stream claims the
+    /// generation it is draining and re-validates it after every UNLOCKED page
+    /// write; a mismatch means a newer Execute superseded this stream, so the
+    /// stream stops instead of touching (or freeing) the newer result. This is
+    /// what lets the push loop drop the session mutex between pages without
+    /// reintroducing the Issue #514 use-after-free.
+    ///
+    /// CANARY: REQ=REQ-TRANSPORT-GRPC-RESULT-EPOCH-001; FEATURE="GrpcSessionSafety"; ASPECT=ResultGeneration; STATUS=TESTED; TEST=tests/test_sonny1560_grpc_flow_control.zig; OWNER=transport; UPDATED=2026-09-14
+    result_epoch: u64 = 0,
 };
 
 const SessionAuthStatus = enum {
@@ -1003,12 +1017,266 @@ fn buildStreamDataPageLocked(state: *server_state.ServerState, allocator: std.me
     return .{ .bytes = encoded, .is_final = is_final };
 }
 
+// ── SONNY-1560: bounded, lock-free-between-pages pushed-result drain ────────
+//
+// grpc-zig 0.1.8 DOES honour HTTP/2 WINDOW_UPDATE: every outbound DATA write
+// goes through `Transport.reserveSendCredit`
+// (grpc_zig/src/transport.zig:1017), which blocks until the connection AND
+// per-stream send windows both have headroom, and `processWindowUpdate`
+// (grpc_zig/src/transport.zig:935) credits those windows back.
+//
+// What it does NOT do is read the socket while a handler is writing. The
+// server runs one thread per connection (grpc_zig/src/server.zig:319) and that
+// thread's loop is `readMessage()` -> `handler_fn()`
+// (grpc_zig/src/server.zig:361/471). The ONLY server-side WINDOW_UPDATE
+// dispatch sits inside `readMessageCore` (grpc_zig/src/transport.zig:1547), so
+// while this handler is pushing pages nobody is draining the socket and the
+// peer's WINDOW_UPDATE cannot be processed. Once the advertised 1 MiB initial
+// window (grpc_zig/src/transport.zig:88) is consumed the writer parks in the
+// futex at grpc_zig/src/transport.zig:1076 until `flow_credit_timeout_ns`
+// (30 s default, grpc_zig/src/transport.zig:457) expires and the library emits
+// RST_STREAM(FLOW_CONTROL_ERROR). That is the 30 s stall SONNY-1560 observed.
+//
+// The engine cannot fix the missing reader thread (see the report's
+// "SONNY-1560 library half"). What it CAN do, and now does:
+//
+//   1. Never hold the session mutex across a page write, so a stalled or
+//      abandoned stream cannot block the next Execute on that session.
+//   2. Probe the peer's remaining send window BEFORE each write and refuse to
+//      enter a wait it knows cannot be satisfied, turning a silent 30 s stall
+//      into an immediate, classified RESOURCE_EXHAUSTED.
+//   3. Release the session's cursor deterministically on every abandonment.
+
+/// gRPC status code (https://grpc.io/docs/guides/status-codes/) used when the
+/// peer's flow-control window cannot accept the next page.
+const grpc_status_resource_exhausted: u8 = 8;
+
+/// Static, identifier-free trailer text for a stream abandoned mid-push.
+/// MUST stay under 128 bytes: `Transport.endStreamWithStatus`
+/// (grpc_zig/src/transport.zig:2237) truncates past a 7-bit HPACK prefix.
+const stream_window_exhausted_message: []const u8 =
+    "stream window exhausted: peer stopped draining the pushed result";
+
+/// Safety bound on pages pushed for one Execute (pre-existing limit, kept).
+const max_pushed_pages: usize = 1000;
+
+/// Per-message gRPC length-prefix width that `Transport.writeStreamMessage`
+/// (grpc_zig/src/transport.zig:2192) adds before reserving send credit.
+const grpc_message_prefix_len: usize = 5;
+
+/// SONNY-1560: how a pushed-result drain ended. Every non-`complete` outcome
+/// has already released the session's cursor.
+pub const PushOutcome = enum {
+    /// Final page produced and handed to the peer; the result set is drained.
+    complete,
+    /// A newer Execute replaced this session's result mid-push. This stream
+    /// stopped without reading, freeing, or paging the newer result.
+    superseded,
+    /// The session had no active result set to push.
+    no_result,
+    /// Page materialisation failed.
+    build_failed,
+    /// The peer's stream write failed (client gone, connection broken).
+    write_failed,
+    /// The peer's flow-control window cannot accept the next page. Classified
+    /// to the caller as RESOURCE_EXHAUSTED rather than waited out.
+    window_exhausted,
+    /// The per-Execute page bound was hit before the result drained.
+    page_limit,
+};
+
+/// SONNY-1560: sink for pushed result pages. Production wraps the vendored
+/// grpc-zig transport; the regression suite substitutes a stub that stalls,
+/// abandons, or reports a bounded window.
+pub const PageSink = struct {
+    ctx: *anyopaque,
+    /// Hand one encoded `ExecutionResponse` to the peer as a stream message.
+    writeFn: *const fn (ctx: *anyopaque, bytes: []const u8, is_first: bool) anyerror!void,
+    /// Octets the peer will currently accept on this stream. `null` means the
+    /// sink cannot report a window and writes are treated as unbounded.
+    windowFn: ?*const fn (ctx: *anyopaque) i64 = null,
+    /// Emit a loud, classified terminal status for an abandoned stream.
+    failFn: ?*const fn (ctx: *anyopaque, code: u8, message: []const u8) void = null,
+
+    fn write(self: PageSink, bytes: []const u8, is_first: bool) anyerror!void {
+        return self.writeFn(self.ctx, bytes, is_first);
+    }
+
+    fn window(self: PageSink) ?i64 {
+        const f = self.windowFn orelse return null;
+        return f(self.ctx);
+    }
+
+    fn fail(self: PageSink, code: u8, message: []const u8) void {
+        const f = self.failFn orelse return;
+        f(self.ctx, code, message);
+    }
+};
+
+/// Release a session's result set, but only while this stream still owns it.
+///
+/// Bumping the epoch makes the release visible to any other claimant and makes
+/// a second release by the same stream a no-op. A stream that was superseded
+/// leaves the newer result completely alone.
+fn releaseClaimedResult(entry: *SessionEntry, claimed_epoch: u64) void {
+    const io = std.Io.Threaded.global_single_threaded.io();
+    entry.mutex.lockUncancelable(io);
+    defer entry.mutex.unlock(io);
+    if (entry.result_epoch != claimed_epoch) return;
+    entry.state.resetResult();
+    entry.result_epoch +%= 1;
+}
+
+/// SONNY-1560: drain `entry`'s active result set to `sink`, one page at a time.
+///
+/// Locking contract — the whole point of this function:
+///   * `entry.mutex` is held ONLY while a page is materialised
+///     (`buildStreamDataPageLocked` advances the cursor and copies the encoded
+///     bytes out of the arena into caller-owned memory).
+///   * `entry.mutex` is NOT held while the page is written to the peer.
+///   * After every unlocked write the claimed epoch is re-validated, so a
+///     concurrent Execute that reset the result while we were writing is
+///     detected instead of being paged over. This preserves the Issue #514
+///     invariant (`active_result_values` is only ever read, written, or freed
+///     under `entry.mutex`) without the Issue #514 whole-loop lock.
+///
+/// CANARY: REQ=REQ-TRANSPORT-GRPC-PUSH-UNLOCKED-001; FEATURE="GrpcSessionSafety"; ASPECT=PushLoopLockScope; STATUS=TESTED; TEST=tests/test_sonny1560_grpc_flow_control.zig; OWNER=transport; UPDATED=2026-09-14
+/// Mirrors the QUIC push loop's ownership invariant
+/// (src/server/quic_connection_handler.zig:7729-7743), where the pushed result
+/// is stream-local and therefore never blocks another statement on the session.
+pub fn pushResultPages(
+    entry: *SessionEntry,
+    claimed_epoch: u64,
+    sink: PageSink,
+    allocator: std.mem.Allocator,
+) PushOutcome {
+    const io = std.Io.Threaded.global_single_threaded.io();
+
+    var page_count: usize = 0;
+    while (page_count < max_pushed_pages) : (page_count += 1) {
+        // ── produce one page: session lock held for this block ONLY ─────────
+        entry.mutex.lockUncancelable(io);
+
+        if (entry.result_epoch != claimed_epoch) {
+            entry.mutex.unlock(io);
+            log.warn("gRPC streaming: result superseded by a newer statement", &.{
+                Attr.uint("page", page_count),
+            });
+            return .superseded;
+        }
+        if (entry.state.active_result_values == null) {
+            entry.mutex.unlock(io);
+            return .no_result;
+        }
+
+        const page = buildStreamDataPageLocked(entry.state, allocator) catch |err| {
+            entry.mutex.unlock(io);
+            log.err("gRPC streaming: failed to build data page", &.{
+                Attr.string("error", @errorName(err)),
+                Attr.uint("page", page_count),
+            });
+            releaseClaimedResult(entry, claimed_epoch);
+            return .build_failed;
+        };
+
+        entry.mutex.unlock(io);
+        // ── hand the page to the peer: NO session lock held ─────────────────
+        defer allocator.free(page.bytes);
+
+        // Bound the write by the peer's advertised window instead of parking in
+        // `reserveSendCredit` for `flow_credit_timeout_ns`. A page that does not
+        // fit cannot be made to fit from here: this handler owns the connection
+        // thread, so the peer's WINDOW_UPDATE cannot be read until we return.
+        if (sink.window()) |avail| {
+            const need: i64 = @intCast(page.bytes.len + grpc_message_prefix_len);
+            if (avail < need) {
+                log.err("gRPC streaming: peer flow-control window cannot accept the next page", &.{
+                    Attr.uint("page", page_count),
+                    Attr.uint("page_bytes", page.bytes.len),
+                });
+                sink.fail(grpc_status_resource_exhausted, stream_window_exhausted_message);
+                releaseClaimedResult(entry, claimed_epoch);
+                return .window_exhausted;
+            }
+        }
+
+        sink.write(page.bytes, false) catch |err| {
+            log.err("gRPC streaming: write failed mid-stream", &.{
+                Attr.string("error", @errorName(err)),
+                Attr.uint("page", page_count),
+            });
+            // `error.FlowControlTimeout` means the library already gave up on
+            // the peer's credit and emitted RST_STREAM(FLOW_CONTROL_ERROR)
+            // (grpc_zig/src/transport.zig:1100); classify it as exhaustion
+            // rather than as a broken connection.
+            const exhausted = std.mem.eql(u8, @errorName(err), "FlowControlTimeout");
+            if (exhausted) sink.fail(grpc_status_resource_exhausted, stream_window_exhausted_message);
+            releaseClaimedResult(entry, claimed_epoch);
+            return if (exhausted) .window_exhausted else .write_failed;
+        };
+
+        if (page.is_final) return .complete;
+    }
+
+    log.err("gRPC streaming: page bound reached before the result drained", &.{
+        Attr.uint("pages", max_pushed_pages),
+    });
+    releaseClaimedResult(entry, claimed_epoch);
+    return .page_limit;
+}
+
+/// SONNY-1560: `PageSink` backed by the vendored grpc-zig transport.
+const TransportSink = struct {
+    trans: *GrpcTransport,
+
+    fn writeThunk(ctx: *anyopaque, bytes: []const u8, is_first: bool) anyerror!void {
+        const self: *TransportSink = @ptrCast(@alignCast(ctx));
+        return sendStreamResponse(self.trans, bytes, is_first);
+    }
+
+    /// Peer send-window headroom for the stream currently being served, read
+    /// under the library's own `flow_mutex` (grpc_zig/src/transport.zig:443) so
+    /// the value is consistent with what `reserveSendCredit`
+    /// (grpc_zig/src/transport.zig:1017) would see on the next write.
+    fn windowThunk(ctx: *anyopaque) i64 {
+        const self: *TransportSink = @ptrCast(@alignCast(ctx));
+        const trans = self.trans;
+        trans.flow_mutex.lockUncancelable(trans.io);
+        defer trans.flow_mutex.unlock(trans.io);
+        const sid: usize = @intCast(trans.last_stream_id);
+        // Stream ids past MAX_TRACKED_STREAMS are connection-window-only in the
+        // library (grpc_zig/src/transport.zig:1021); mirror that here.
+        const stream_avail: i32 = if (sid != 0 and sid < trans.stream_send_windows.len)
+            trans.stream_send_windows[sid]
+        else
+            std.math.maxInt(i32);
+        return @min(trans.conn_send_window, stream_avail);
+    }
+
+    fn failThunk(ctx: *anyopaque, code: u8, message: []const u8) void {
+        const self: *TransportSink = @ptrCast(@alignCast(ctx));
+        self.trans.endStreamWithStatus(self.trans.last_stream_id, code, message) catch {};
+    }
+
+    fn sink(self: *TransportSink) PageSink {
+        return .{
+            .ctx = @ptrCast(self),
+            .writeFn = writeThunk,
+            .windowFn = windowThunk,
+            .failFn = failThunk,
+        };
+    }
+};
+
 /// Handle Execute as a server-streaming RPC: send schema, then all data pages.
 /// Issue #479: Added error recovery to prevent leaving HTTP/2 streams in an
 /// inconsistent state when writes fail (e.g. client disconnect, partial write).
 fn handleExecuteStreaming(request_bytes: []const u8, trans: *GrpcTransport, allocator: std.mem.Allocator) !void {
-    // Get the schema/first response from handleExecute
-    const exec_resp = try handleExecute(request_bytes, allocator);
+    // Get the schema/first response from handleExecute. `claimed_epoch` is the
+    // session result generation this Execute installed (SONNY-1560); the push
+    // loop below re-validates it after every unlocked write.
+    var claimed_epoch: u64 = 0;
+    const exec_resp = try handleExecute(request_bytes, allocator, &claimed_epoch);
     defer allocator.free(exec_resp);
 
     // Send first streaming message (with HEADERS).
@@ -1049,8 +1317,6 @@ fn handleExecuteStreaming(request_bytes: []const u8, trans: *GrpcTransport, allo
         };
         defer req.deinit(allocator);
 
-        // Issue #514: Hold session mutex for the ENTIRE streaming loop to prevent
-        // concurrent Execute from calling resetResult() mid-stream (use-after-free).
         const store = getSessionStore() orelse {
             trans.endStream() catch {};
             return;
@@ -1061,40 +1327,24 @@ fn handleExecuteStreaming(request_bytes: []const u8, trans: *GrpcTransport, allo
             return;
         };
 
-        entry.mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
-        defer entry.mutex.unlock(std.Io.Threaded.global_single_threaded.io());
-
-        // Pull all data pages under a single lock scope
-        var page_count: usize = 0;
-        var stream_error = false;
-        while (page_count < 1000) : (page_count += 1) { // safety limit
-            const result = buildStreamDataPageLocked(entry.state, allocator) catch |err| {
-                log.err("gRPC streaming: failed to build data page", &.{
-                    Attr.string("error", @errorName(err)),
-                    Attr.uint("page", page_count),
-                });
-                stream_error = true;
-                break;
-            };
-            defer allocator.free(result.bytes);
-
-            sendStreamResponse(trans, result.bytes, false) catch |err| {
-                log.err("gRPC streaming: write failed mid-stream", &.{
-                    Attr.string("error", @errorName(err)),
-                    Attr.uint("page", page_count),
-                });
-                stream_error = true;
-                break;
-            };
-            if (result.is_final) break;
-        }
-
-        if (stream_error) {
-            // Try to end the stream gracefully so the client gets a clean close.
-            // If this also fails, the connection is broken and the connection
-            // loop will detect it on the next readMessage.
-            trans.endStream() catch {};
-            return;
+        // SONNY-1560: drain the pages WITHOUT pinning the session mutex across
+        // the writes. Issue #514's use-after-free is prevented by the epoch
+        // claim re-validated inside `pushResultPages`, not by a whole-loop lock,
+        // so a stalled or abandoned stream can no longer block the next Execute
+        // on this session for the library's 30 s flow-credit timeout.
+        var sink_ctx = TransportSink{ .trans = trans };
+        switch (pushResultPages(entry, claimed_epoch, sink_ctx.sink(), allocator)) {
+            .complete => {},
+            // The classified RESOURCE_EXHAUSTED trailer already terminated the
+            // stream; emitting another END_STREAM would be a protocol error.
+            .window_exhausted => return,
+            else => {
+                // Try to end the stream gracefully so the client gets a clean
+                // close. If this also fails the connection is broken and the
+                // connection loop will detect it on the next readMessage.
+                trans.endStream() catch {};
+                return;
+            },
         }
     }
 
@@ -1134,7 +1384,7 @@ fn handleLegacyPacket(request_bytes: []const u8, trans: *GrpcTransport, allocato
         .execute => |req| blk: {
             const req_bytes = try encodeMessage(allocator, req);
             defer allocator.free(req_bytes);
-            const resp_bytes = try handleExecute(req_bytes, allocator);
+            const resp_bytes = try handleExecute(req_bytes, allocator, null);
             defer allocator.free(resp_bytes);
 
             var resp_reader: std.Io.Reader = .fixed(resp_bytes);
@@ -1903,7 +2153,10 @@ fn readServedEngineDirect(state: *const server_state.ServerState, analysis: *con
         planned_read_runtime.isStorageNativeReadShape(&target.Query);
 }
 
-fn handleExecute(request_bytes: []const u8, allocator: std.mem.Allocator) ![]u8 {
+/// SONNY-1560: `epoch_out`, when supplied, receives the session result
+/// generation this Execute installs. The streaming push loop claims it and
+/// aborts if a later Execute supersedes it mid-push.
+fn handleExecute(request_bytes: []const u8, allocator: std.mem.Allocator, epoch_out: ?*u64) ![]u8 {
     var reader: std.Io.Reader = .fixed(request_bytes);
     var req = protobuf.decode(schema.ExecuteRequest, &reader, allocator) catch |err| {
         log.err("Failed to decode Execute request", &.{Attr.string("error", @errorName(err))});
@@ -1937,6 +2190,12 @@ fn handleExecute(request_bytes: []const u8, allocator: std.mem.Allocator) ![]u8 
     const state = entry.state;
 
     state.resetResult();
+    // SONNY-1560: a new statement invalidates any in-flight pushed stream on
+    // this session. Bumped under `entry.mutex`, which is held from here until
+    // this function returns, so the generation reported to the caller is the
+    // generation of whatever result this Execute goes on to install.
+    entry.result_epoch +%= 1;
+    if (epoch_out) |out| out.* = entry.result_epoch;
 
     switch (try validateSessionAuth(allocator, state)) {
         .ok => {},

@@ -8011,6 +8011,59 @@ pub fn build(b: *std.Build) void {
     const sonny1330_step = b.step("test-sonny1330-parallel-union", "Run SONNY-1330 regression (parallel UNION arms never mutate the shared bounded caches; a UNION with non-resident arms falls back to the serial path and returns the serial path's rows)");
     sonny1330_step.dependOn(&run_sonny1330_tests.step);
 
+    // SONNY-1560: a pushed gRPC result must never pin the session.
+    //
+    // `handleExecuteStreaming` used to hold the session mutex for the ENTIRE
+    // push loop (Issue #514's fix for a concurrent-Execute use-after-free), so
+    // a peer that stopped draining its HTTP/2 flow-control window locked every
+    // other statement on that session out for the vendored grpc-zig library's
+    // 30 s `flow_credit_timeout_ns`. The suite drives `pushResultPages` through
+    // its `PageSink` seam with stub sinks that stall, abandon, supersede, or
+    // report a too-small window, and pins: the mutex is never held across a
+    // page write, a normal reader gets every row, and every abandonment path
+    // releases the session cursor deterministically.
+    //
+    // The suite reaches grpc_server.zig's public decls through
+    // `src/grpc_server_test_shim.zig`, which is rooted at src/ so that file's
+    // own `../server/*.zig` imports resolve; a module rooted at tests/ cannot
+    // import it directly.
+    const sonny1560_shim_mod = b.createModule(.{
+        .root_source_file = b.path("src/grpc_server_test_shim.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+    sonny1560_shim_mod.link_libc = true;
+    sonny1560_shim_mod.addImport("crypto_backend", crypto_backend_mod);
+    sonny1560_shim_mod.addImport("geode", root_mod);
+    sonny1560_shim_mod.addImport("schema", schema_mod);
+    sonny1560_shim_mod.addImport("protobuf", protobuf_mod);
+    sonny1560_shim_mod.addImport("grpc_server", grpc_server_mod);
+    sonny1560_shim_mod.addImport("geode_auth", auth_mod);
+    sonny1560_shim_mod.addImport("logging", logging_mod);
+    sonny1560_shim_mod.addImport("build_options", build_options_mod);
+    sonny1560_shim_mod.addOptions("openssl_config", openssl_options);
+
+    const sonny1560_test_mod = b.createModule(.{
+        .root_source_file = b.path("tests/test_sonny1560_grpc_flow_control.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+    sonny1560_test_mod.link_libc = true;
+    sonny1560_test_mod.addImport("geode", root_mod);
+    sonny1560_test_mod.addImport("schema", schema_mod);
+    sonny1560_test_mod.addImport("protobuf", protobuf_mod);
+    sonny1560_test_mod.addImport("grpc_impl", sonny1560_shim_mod);
+    // The suite drives every `.err`-logging abandonment path on purpose; it
+    // needs the SAME `logging` module instance the engine logs through to pin
+    // the logger to `.fatal` and keep the build runner's piped-stderr echo
+    // quiet on a clean run. Mirrors the SONNY-1330 target.
+    sonny1560_test_mod.addImport("logging", logging_mod);
+    const sonny1560_tests = b.addTest(.{ .root_module = sonny1560_test_mod });
+    const run_sonny1560_tests = b.addRunArtifact(sonny1560_tests);
+    shardDep(test_step, &run_sonny1560_tests.step, 1, test_shard_loads, test_shard_index);
+    const sonny1560_step = b.step("test-sonny1560-grpc-flow-control", "Run SONNY-1560 regression (a pushed gRPC result never holds the session mutex across a page write; a stalled, abandoned, or superseded stream releases the session cursor deterministically; an unsatisfiable peer flow-control window is classified RESOURCE_EXHAUSTED instead of waited out)");
+    sonny1560_step.dependOn(&run_sonny1560_tests.step);
+
     // SONNY-1330 TSan companion: the same regression file under
     // -fsanitize-thread, so the fork-join over a COLD store is checked for the
     // cross-arm cache mutation this ticket closes rather than merely asserted
