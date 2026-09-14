@@ -84,7 +84,7 @@ the 36 profile additions are appended.
 | 31 | `knn_row_visibility` | `false` | vector/security |
 | 32 | `knn_delete_liveness` | `false` | vector/index |
 | 33 | `knn_filtered_ann_pushdown` | `false` | vector/security |
-| 34 | `graph_procedure_tenancy` | `false` | graph/security |
+| 34 | `graph_procedure_tenancy` | `true` | graph/security |
 | 35 | `embedding_space_pinning` | `false` | vector/index |
 | 36 | `vector_index_generations` | `false` | vector/index |
 | 37 | `vector_generation_rollback` | `false` | vector/index |

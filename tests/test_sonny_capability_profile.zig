@@ -51,7 +51,10 @@ const expected_rows = [_]ExpectedRow{
     .{ .name = "knn_row_visibility", .value = "false" },
     .{ .name = "knn_delete_liveness", .value = "false" },
     .{ .name = "knn_filtered_ann_pushdown", .value = "false" },
-    .{ .name = "graph_procedure_tenancy", .value = "false" },
+    // SONNY-1326: was "false"; the engine now advertises graph_procedure_tenancy
+    // because the expression path (shortestPath()/COUNT{}/EXISTS{}/pattern
+    // comprehensions) is tenant-scoped and fail-closed alongside CALL algo.*.
+    .{ .name = "graph_procedure_tenancy", .value = "true" },
     .{ .name = "embedding_space_pinning", .value = "false" },
     .{ .name = "vector_index_generations", .value = "false" },
     .{ .name = "vector_generation_rollback", .value = "false" },

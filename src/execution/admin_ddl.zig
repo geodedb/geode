@@ -227,7 +227,15 @@ pub fn executeShowCapabilities(allocator: std.mem.Allocator) !ExecutionResult {
         .{ .name = "knn_row_visibility", .value = .{ .boolean = false } },
         .{ .name = "knn_delete_liveness", .value = .{ .boolean = false } },
         .{ .name = "knn_filtered_ann_pushdown", .value = .{ .boolean = false } },
-        .{ .name = "graph_procedure_tenancy", .value = .{ .boolean = false } },
+        // SONNY-1326 (GEO-UP-005): flipped to `true` once the EXPRESSION path
+        // (`graph_algorithms.zig`: shortestPath(), COUNT{}, EXISTS{}, pattern
+        // comprehensions) joined `CALL algo.*` (SONNY-1318), MATCH (GAP-0279 /
+        // 0509 / 0846 / 0891) and LSP schema introspection (SONNY-1318) in
+        // applying the shared, hierarchy-aware, fail-closed tenant predicate
+        // from `tenant_visibility.zig`.
+        // Evidence: `zig build test-sonny1326-expression-tenancy` +
+        // `test-sonny1318-procedure-tenancy`.
+        .{ .name = "graph_procedure_tenancy", .value = .{ .boolean = true } },
         .{ .name = "embedding_space_pinning", .value = .{ .boolean = false } },
         .{ .name = "vector_index_generations", .value = .{ .boolean = false } },
         .{ .name = "vector_generation_rollback", .value = .{ .boolean = false } },

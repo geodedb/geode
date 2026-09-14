@@ -976,7 +976,7 @@ REQ-DIST-REGISTRY-001,Node Registry,NodeLookup,TESTED,,,distributed,2026-04-06,s
 REQ-DIST-ROW-CMP-001,Distributed Row Comparison,Distributed,TESTED,,,protocol,2026-02-03,src/protocol.zig,37
 REQ-DIST-ROW-CMP-002,Distributed Row Comparison,Distributed,IMPL,,,distributed,2026-04-05,src/distributed/query_coordinator.zig,901
 REQ-DIST-ROW-SORT-001,Distributed Row Sorting,Distributed,IMPL,,,distributed,2026-04-05,src/distributed/merge_strategies.zig,407
-REQ-DIST-SHOW-CLUSTER-STATUS,SHOW CLUSTER STATUS,ExecuteHandler,TESTED,,,distributed,2026-05-26,src/execution/admin_ddl.zig,304
+REQ-DIST-SHOW-CLUSTER-STATUS,SHOW CLUSTER STATUS,ExecuteHandler,TESTED,,,distributed,2026-05-26,src/execution/admin_ddl.zig,312
 REQ-DIST-SHOW-CLUSTER-STATUS,SHOW CLUSTER STATUS,GlobalCoordinatorHandle,TESTED,,,distributed,2026-05-26,src/distributed/cluster.zig,88
 REQ-DIST-SHOW-CLUSTER-STATUS,SHOW CLUSTER STATUS,ParserDispatch,TESTED,,,distributed,2026-05-26,src/gql/parser.zig,5672
 REQ-DIST-SHOW-CLUSTER-STATUS,SHOW CLUSTER STATUS,ShowClusterStatusTest,TESTED,,,distributed,2026-05-26,tests/test_show_cluster_status.zig,1
