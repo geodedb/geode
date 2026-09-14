@@ -31,7 +31,12 @@
 //
 // That fallback re-runs the arms, so `unionArmsAreParallelEligible` now admits
 // only side-effect-free arms (`queryIsReadOnly`, every arm not just arm 0) —
-// re-running a CREATE/MERGE/SET/DELETE/CALL arm would apply it twice.
+// re-running a CREATE/MERGE/SET/DELETE/CALL arm would apply it twice. A write
+// can hide BELOW the arm's own clauses in two places, each with its own
+// regression below: a CTE body (test 5) and an `IN (…)` / `NOT IN (…)`
+// expression subquery (test 6). `queryIsReadOnly` therefore walks `cte_list`,
+// `next_query`, and every expression-bearing field through `exprIsReadOnly`,
+// which switches exhaustively over `ast.Expr`.
 //
 // Harness: real store, real parser, real executor — no mocks (the
 // `test_gap0814_union_parallelism.zig` pattern).
@@ -456,7 +461,8 @@ test "SONNY-1330: UNION whose arms must hydrate equals the serial path, and the 
 // an arm's OWN clauses plus its `next_query` chain. It did not look at
 // `cte_list`, and a CTE body is a FULL `*Query`
 // (`ast.CommonTableExpression.CTEBody.simple`, and both halves of
-// `.recursive`), parsed by the same `parseQuery` and executed by
+// `.recursive`), parsed by `parser.parseQueryForCTE` — which delegates
+// straight to `parseQuery` — and executed by
 // `query_execution.executeCTE` -> `executeQueryWithContext`. So
 //
 //   WITH w AS (MATCH (n:T) SET n.c = n.c + 1 RETURN n) MATCH … UNION ALL …
@@ -549,6 +555,157 @@ test "SONNY-1330: a UNION arm whose CTE body WRITES is never run in parallel, an
     // The read-only sibling arm is untouched, so a stray write cannot be
     // mistaken for the CTE's.
     try testing.expectEqual(CTE_ROWS, try countersEqualTo(&s, "S1330CteOther", "0"));
+}
+
+// ---------------------------------------------------------------------------
+// 2c. …and a write can hide inside an EXPRESSION, not just a clause or a CTE.
+//
+// `queryIsReadOnly` inspected only CLAUSE fields. But `ast.Expr` has two
+// variants that each carry a FULL `*Query`:
+//
+//   InSubquery    { value: *Expr, subquery: *Query }   (ast.zig)
+//   NotInSubquery { value: *Expr, subquery: *Query }
+//
+// Both are built by the `IN (` / `NOT IN (` branches of the parser's
+// comparison tail (`parser.zig`), which call the ordinary `parseQuery` — so
+// the subquery can carry `set_clauses`, `create_pattern`, `merge_statement`,
+// `delete_items`, `remove_clauses`, `call_clause`, `cte_list` and
+// `next_query` of its own. `eval.evalExpr`'s `.InSubquery` arm runs it via
+// `getExecutionCallbacks().executeQueryWithEnv` ->
+// `evaluator_adapter.executeQueryWithContext`, i.e. the real executor, writes
+// included. Hence
+//
+//   MATCH (n:T) WHERE n.k IN (MATCH (m:U) SET m.c = m.c + 1 RETURN m.k)
+//     RETURN n.k  UNION ALL  MATCH (o:V) RETURN o.k
+//
+// passed the gate with a LIVE SET on the arm — the same defect class as the
+// `cte_list` hole above, and just as parallel-PREFERRED: `predictArmRowCount`
+// bails to `null` the instant it sees `where_clause`, and the cost model reads
+// `null` as "unknown -> expensive -> KEEP PARALLEL". One declined hydration
+// then discarded every arm and re-ran the UNION serially, applying the SET a
+// SECOND time.
+//
+// RED against 1a2e2e18 by construction (reasoned from source, not assumed):
+//   * `unionArmsAreParallelEligible` clears every earlier gate — one
+//     `union_op` tail, no `create_pattern` / `merge_statement` on arm 0, no
+//     enclosing read-only scope.
+//   * pre-fix `queryIsReadOnly(arm0)` returned TRUE: the arm's own
+//     `set_clauses` / `remove_clauses` / `delete_items` are EMPTY and its
+//     `cte_list` is null — the SET lives inside an expression, which the
+//     pre-fix walk never opened.
+//   * `predictArmRowCount(arm0)` returned null (`where_clause != null`, and
+//     for the RETURN-expression variant below the same `where_clause` bail),
+//     so `all_small` is false and the UNION stays on the parallel path.
+// Therefore `parallelUnionInvocations()` MOVED on 1a2e2e18 and the
+// `expectEqual(0, …)` below FAILED there; post-fix the gate rejects the arm
+// before any fork-join.
+//
+// Each anchor label holds exactly ONE node, so the predicate — and with it the
+// subquery — is evaluated exactly once per serial execution of the UNION. A
+// discarded parallel attempt followed by a serial re-run would therefore leave
+// every counter at c == 2 rather than c == 1.
+// ---------------------------------------------------------------------------
+
+/// Create the single anchor row whose WHERE / RETURN expression hosts the
+/// mutating subquery.
+fn seedSingleAnchor(s: *Session, comptime label: []const u8) !void {
+    const aa = s.arena.allocator();
+    var r = try s.runQuery("CREATE (:" ++ label ++ " {k: 0})");
+    r.deinit(aa);
+}
+
+test "SONNY-1330: a UNION arm whose IN/NOT IN subquery WRITES is never run in parallel, and the write applies once" {
+    const allocator = testing.allocator;
+
+    var tmp = testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const data_dir = try tmpDirRealpathAlloc(allocator, &tmp.sub_path);
+    defer allocator.free(data_dir);
+
+    var s = try Session.open(allocator, data_dir);
+    defer s.close();
+    const aa = s.arena.allocator();
+
+    // Three independent (anchor, mutation target, sibling arm) triples so the
+    // three shapes cannot contaminate each other's counters.
+    try seedSingleAnchor(&s, "S1330InAnchor");
+    try seedCounters(&s, "S1330InSub");
+    try seedCounters(&s, "S1330InOther");
+
+    try seedSingleAnchor(&s, "S1330NotInAnchor");
+    try seedCounters(&s, "S1330NotInSub");
+    try seedCounters(&s, "S1330NotInOther");
+
+    try seedSingleAnchor(&s, "S1330RetAnchor");
+    try seedCounters(&s, "S1330RetSub");
+    try seedCounters(&s, "S1330RetOther");
+
+    // --- (a) the mutating subquery sits in WHERE, behind IN ----------------
+    {
+        const invocations_before = execution.parallelUnionInvocations();
+        var r = try s.runQuery(
+            "MATCH (a:S1330InAnchor)" ++
+                " WHERE a.k IN (MATCH (m:S1330InSub) SET m.c = m.c + 1 RETURN m.k)" ++
+                " RETURN a.k" ++
+                " UNION ALL MATCH (o:S1330InOther) RETURN o.k",
+        );
+        defer r.deinit(aa);
+
+        try testing.expectEqual(
+            @as(u64, 0),
+            execution.parallelUnionInvocations() - invocations_before,
+        );
+        // The SET really ran (so the arm is a genuine writer, not a no-op)…
+        try testing.expectEqual(CTE_ROWS, try countersEqualTo(&s, "S1330InSub", "1"));
+        // …and it ran EXACTLY once: nothing reached 2, which is what a
+        // discarded parallel attempt plus a serial re-run would have produced.
+        try testing.expectEqual(@as(usize, 0), try countersEqualTo(&s, "S1330InSub", "2"));
+        // The read-only sibling arm is untouched.
+        try testing.expectEqual(CTE_ROWS, try countersEqualTo(&s, "S1330InOther", "0"));
+    }
+
+    // --- (b) the NOT IN variant -------------------------------------------
+    {
+        const invocations_before = execution.parallelUnionInvocations();
+        var r = try s.runQuery(
+            "MATCH (a:S1330NotInAnchor)" ++
+                " WHERE a.k NOT IN (MATCH (m:S1330NotInSub) SET m.c = m.c + 1 RETURN m.k)" ++
+                " RETURN a.k" ++
+                " UNION ALL MATCH (o:S1330NotInOther) RETURN o.k",
+        );
+        defer r.deinit(aa);
+
+        try testing.expectEqual(
+            @as(u64, 0),
+            execution.parallelUnionInvocations() - invocations_before,
+        );
+        try testing.expectEqual(CTE_ROWS, try countersEqualTo(&s, "S1330NotInSub", "1"));
+        try testing.expectEqual(@as(usize, 0), try countersEqualTo(&s, "S1330NotInSub", "2"));
+        try testing.expectEqual(CTE_ROWS, try countersEqualTo(&s, "S1330NotInOther", "0"));
+    }
+
+    // --- (c) the mutating subquery sits in a RETURN expression -------------
+    // Not a WHERE predicate this time: `ret.items[].expr` is an expression
+    // carrier too, and the pre-fix walk did not look at it either. The
+    // `a.k >= 0` WHERE is there only to make `predictArmRowCount` bail, so the
+    // shape stays on the parallel path the way the other two do.
+    {
+        const invocations_before = execution.parallelUnionInvocations();
+        var r = try s.runQuery(
+            "MATCH (a:S1330RetAnchor) WHERE a.k >= 0" ++
+                " RETURN a.k IN (MATCH (m:S1330RetSub) SET m.c = m.c + 1 RETURN m.k) AS hit" ++
+                " UNION ALL MATCH (o:S1330RetOther) RETURN o.k",
+        );
+        defer r.deinit(aa);
+
+        try testing.expectEqual(
+            @as(u64, 0),
+            execution.parallelUnionInvocations() - invocations_before,
+        );
+        try testing.expectEqual(CTE_ROWS, try countersEqualTo(&s, "S1330RetSub", "1"));
+        try testing.expectEqual(@as(usize, 0), try countersEqualTo(&s, "S1330RetSub", "2"));
+        try testing.expectEqual(CTE_ROWS, try countersEqualTo(&s, "S1330RetOther", "0"));
+    }
 }
 
 // ---------------------------------------------------------------------------
