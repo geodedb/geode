@@ -7925,6 +7925,34 @@ pub fn build(b: *std.Build) void {
     const sonny1318_step = b.step("test-sonny1318-procedure-tenancy", "Run SONNY-1318 regression (CALL algo.* traversal/centrality procedures and LSP schema introspection are tenant-scoped, fail-closed under strict tenancy)");
     sonny1318_step.dependOn(&run_sonny1318_tests.step);
 
+    // SONNY-1318 review R1 — TSan companion: the same regression file compiled
+    // with -fsanitize-thread so the SCOPED `algo.degree.stream` case that runs
+    // over more than `Thresholds.forEach` (32) visible nodes exercises the real
+    // `parallelForEach` worker fan-out under the thread sanitizer. The workers
+    // must touch no tenant predicate, no shared allocator and no storage
+    // adapter (scoped degrees are computed on the calling thread) — this step
+    // is what proves it rather than asserting it. Opt-in (not part of the
+    // default test_step): TSan adds ~5-8x overhead and needs libtsan at runtime.
+    // Run via: zig build test-sonny1318-procedure-tenancy-tsan
+    const sonny1318_tsan_mod = b.createModule(.{
+        .root_source_file = b.path("tests/test_sonny1318_procedure_tenancy.zig"),
+        .target = target,
+        .optimize = .Debug,
+        .link_libc = true,
+        .sanitize_thread = true,
+    });
+    sonny1318_tsan_mod.addImport("geode", root_mod);
+    sonny1318_tsan_mod.addImport("rls", rls_mod);
+    sonny1318_tsan_mod.addImport("rls_types", rls_types_mod);
+    sonny1318_tsan_mod.addImport("schema_introspection", schema_introspection_mod);
+    const sonny1318_tsan_tests = b.addTest(.{ .root_module = sonny1318_tsan_mod });
+    const run_sonny1318_tsan_tests = b.addRunArtifact(sonny1318_tsan_tests);
+    const sonny1318_tsan_step = b.step(
+        "test-sonny1318-procedure-tenancy-tsan",
+        "TSan companion: SONNY-1318 scoped parallel degree path under -fsanitize-thread (race detection in the algo.degree.stream worker fan-out)",
+    );
+    sonny1318_tsan_step.dependOn(&run_sonny1318_tsan_tests.step);
+
     // GAP-0903 (P3a) RLS clone-gate regression: RLS-active reads must no longer
     // force the O(graph) snapshot clone.  The secondary gates at QCH:7040
     // (!rls_active) and query_execution.zig:1673 (!wouldEvaluateRLS()) route

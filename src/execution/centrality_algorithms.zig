@@ -266,20 +266,51 @@ pub fn executeDegreeCentrality(allocator: std.mem.Allocator, store: *graph_store
         row.* = try allocator.alloc(Value, 2);
     }
 
+    // SONNY-1318 review R1: the SCOPED degree is computed HERE, on the calling
+    // thread, and the workers only read the result.
+    //
+    // `visibleDegree(.., tenant_filter != null)` calls `edgeIdTraversable` ->
+    // `edgeTraversable` -> `nodeIdVisible`, whose bounded-cache-miss arm takes
+    // `store.dupeNodeTenantForRead(store.allocator, ..)` — the SHARED store
+    // allocator — and can reach the storage adapter for an evicted node. Both
+    // are forbidden on a `parallelForEach` worker, and doing them there
+    // contradicted this function's own invariant ("pre-allocate all row arrays
+    // so parallel workers don't need the allocator"). Precomputing on the
+    // calling thread is the smaller of the two fixes the review offered: it
+    // needs no worker-local arena plumbing through the shared predicate module,
+    // it keeps `tenant_visibility.zig` allocator-parameter-free for every other
+    // caller, and the parallel section still runs (it fills the rows), so the
+    // >32-node threshold and its worker fan-out are unchanged.
+    //
+    // `tenant_filter == null` needs none of this: `visibleDegree` short-circuits
+    // to the raw adjacency lengths with no predicate call at all, so the legacy
+    // all-tenants path keeps its full parallel degree computation byte for byte.
+    const scoped_degrees: ?[]u64 = if (tenant_filter == null) null else blk: {
+        const degs = try allocator.alloc(u64, n);
+        errdefer allocator.free(degs);
+        for (node_list.items, 0..) |node_id, i| {
+            const deg = visibleDegree(store, node_id, tenant_filter);
+            degs[i] = deg.out + deg.in;
+        }
+        break :blk degs;
+    };
+    defer if (scoped_degrees) |degs| allocator.free(degs);
+
     const DegreeCtx = struct {
         nodes: []const u64,
         rows: [][]Value,
         store_ptr: *graph_store.GraphStore,
-        // SONNY-1318: the session's resolved tenant scope, carried into the
-        // parallel workers so degree counts only edges this tenant may see.
-        tenant_filter: ?[]const u8,
+        // SONNY-1318: non-null ONLY when the session has a concrete tenant
+        // scope, in which case it already holds every degree and the worker
+        // touches no tenant predicate, no allocator and no storage adapter.
+        scoped_degrees: ?[]const u64,
     };
 
     const ctx = DegreeCtx{
         .nodes = node_list.items,
         .rows = rows,
         .store_ptr = store,
-        .tenant_filter = tenant_filter,
+        .scoped_degrees = scoped_degrees,
     };
 
     // GAP-0273: Parallel degree computation — each node's degree is independent
@@ -292,9 +323,13 @@ pub fn executeDegreeCentrality(allocator: std.mem.Allocator, store: *graph_store
         struct {
             fn compute(_: *parallel_wrapper.Task, idx: usize, c: DegreeCtx) void {
                 const node_id = c.nodes[idx];
-                const deg = visibleDegree(c.store_ptr, node_id, c.tenant_filter);
+                const total: u64 = if (c.scoped_degrees) |degs| degs[idx] else total_blk: {
+                    // Unscoped: raw adjacency lengths, allocation-free.
+                    const deg = visibleDegree(c.store_ptr, node_id, null);
+                    break :total_blk deg.out + deg.in;
+                };
                 c.rows[idx][0] = safeU64ToValue(node_id);
-                c.rows[idx][1] = safeU64ToValue(deg.out + deg.in);
+                c.rows[idx][1] = safeU64ToValue(total);
             }
         }.compute,
         parallel_wrapper.Thresholds.forEach,

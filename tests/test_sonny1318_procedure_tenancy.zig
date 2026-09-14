@@ -588,3 +588,192 @@ test "SONNY-1318: schema introspection labels are tenant-scoped under strict mod
     try testing.expectError(error.TenantScopeRequired, intro.listEdgeTypesForUser(allocator, h.store, ctxFor(null)));
     try testing.expectError(error.TenantScopeRequired, intro.listPropertiesForLabelForUser(allocator, h.store, ctxFor(null), label_a));
 }
+
+// ---------------------------------------------------------------------------
+// 10 — REVIEW R1 (parallel degree path): `algo.degree.stream` scoped over MORE
+//      than `parallel_wrapper.Thresholds.forEach` (32) visible nodes, so
+//      `parallelForEach` really fans out onto worker threads rather than
+//      running the inline fallback.
+//
+//      Two hazards this pins, both introduced by the first SONNY-1318 pass:
+//        * `edgeIdTraversable` dereferenced a raw `*Edge` from
+//          `getEdgePtrHydrated` OUTSIDE the shard lock (graph_store.zig
+//          ~:3161-3175 documents that hazard and names `getEdgeHydrated` as the
+//          safe by-value accessor). It now uses the by-value accessor.
+//        * the mis-tagged-edge arm called `dupeNodeTenantForRead(store.allocator,
+//          …)` — the SHARED store allocator, plus a possible storage-adapter
+//          read — from inside a worker, contradicting the function's own
+//          "pre-allocate all row arrays so parallel workers don't need the
+//          allocator" invariant. Scoped degrees are now computed on the calling
+//          thread and the workers only read the resulting array.
+//
+//      The fixture deliberately contains BOTH edge shapes the predicates
+//      disagree about: cross-tenant edges (one tagged with the READER's own
+//      tenant, so only the endpoint check can stop it) and an intra-tenant edge
+//      mis-tagged "default" (which MUST still count, via the legacy
+//      endpoint-derived bridge). Degrees are asserted EXACTLY, per node.
+// ---------------------------------------------------------------------------
+
+/// Strictly greater than `parallel_wrapper.Thresholds.forEach` (32) so the
+/// parallel section is taken, not the inline small-input fallback.
+const parallel_a_nodes: usize = 40;
+
+const ParallelFixture = struct {
+    a: [parallel_a_nodes]u64,
+    b0: u64,
+    b1: u64,
+};
+
+fn seedParallelFixture(h: *Harness, allocator: std.mem.Allocator) !ParallelFixture {
+    try h.createTenant(tenant_a, null);
+    try h.createTenant(tenant_b, null);
+
+    var arena = std.heap.ArenaAllocator.init(allocator);
+    defer arena.deinit();
+    const aa = arena.allocator();
+
+    // Nodes go through the REAL CRUD path under each tenant's session context,
+    // so their tenant tags are produced exactly as a wire CREATE produces them.
+    var create_a = std.ArrayList(u8).empty;
+    defer create_a.deinit(aa);
+    try create_a.appendSlice(aa, "CREATE ");
+    for (0..parallel_a_nodes) |i| {
+        if (i > 0) try create_a.appendSlice(aa, ", ");
+        const pattern = try std.fmt.allocPrint(aa, "(n{d}:" ++ label_a ++ " {{who: 'pa{d}'}})", .{ i, i });
+        try create_a.appendSlice(aa, pattern);
+    }
+    var ra = try h.runAs(aa, tenant_a, create_a.items);
+    ra.deinit(aa);
+
+    var rb = try h.runAs(aa, tenant_b, "CREATE (m0:" ++ label_b ++ " {who: 'pb0'}), (m1:" ++ label_b ++ " {who: 'pb1'})");
+    rb.deinit(aa);
+
+    var f: ParallelFixture = undefined;
+    for (0..parallel_a_nodes) |i| {
+        const who = try std.fmt.allocPrint(aa, "pa{d}", .{i});
+        f.a[i] = try h.idByWho(who);
+        // No assertion below may pass because a row was mis-tagged at write time.
+        if (!std.mem.eql(u8, try h.tenantOfNode(who), tenant_a)) return error.WriteDidNotCarryTenantTag;
+    }
+    f.b0 = try h.idByWho("pb0");
+    f.b1 = try h.idByWho("pb1");
+    if (!std.mem.eql(u8, try h.tenantOfNode("pb0"), tenant_b)) return error.WriteDidNotCarryTenantTag;
+    if (!std.mem.eql(u8, try h.tenantOfNode("pb1"), tenant_b)) return error.WriteDidNotCarryTenantTag;
+
+    // Edges are written with EXPLICIT tenant tags (the same seam the base
+    // fixture's bridge uses) because the mis-tagged and cross-tenant shapes
+    // under test cannot be produced through GQL under strict tenancy at all.
+    const expectTag = struct {
+        fn check(hh: *Harness, edge_id: u64, want: []const u8) !void {
+            const e = hh.store.getEdgeHydrated(edge_id) orelse return error.EdgeMissing;
+            if (!std.mem.eql(u8, e.tenant_id, want)) return error.EdgeDidNotCarryTenantTag;
+        }
+    }.check;
+
+    // (1) The tenant-A chain: a0 -> a1 -> … -> a39.
+    for (0..parallel_a_nodes - 1) |i| {
+        const eid = try h.store.createEdgeWithGraphAndTenant(f.a[i], f.a[i + 1], "L", graph_store.DEFAULT_GRAPH_NAME, tenant_a);
+        try expectTag(h, eid, tenant_a);
+    }
+
+    // (2) LEGACY MIS-TAG: an intra-tenant-A edge carrying the "default"
+    //     sentinel. Its own tag fails tenant A's filter, so it counts ONLY via
+    //     the endpoint-derived bridge — the arm that used to allocate inside a
+    //     worker. It MUST still be counted (a fix that simply dropped the
+    //     fallback would make a5/a7 one degree short).
+    const mistagged = try h.store.createEdgeWithGraphAndTenant(f.a[5], f.a[7], "L", graph_store.DEFAULT_GRAPH_NAME, graph_store.DEFAULT_TENANT_ID);
+    try expectTag(h, mistagged, graph_store.DEFAULT_TENANT_ID);
+
+    // (3) CROSS-TENANT, tagged with the READER's OWN tenant: only the
+    //     destination-node check can stop this one, exactly like the base
+    //     fixture's bridge.
+    const bridge_a = try h.store.createEdgeWithGraphAndTenant(f.a[10], f.b0, "L", graph_store.DEFAULT_GRAPH_NAME, tenant_a);
+    try expectTag(h, bridge_a, tenant_a);
+
+    // (4) CROSS-TENANT, tagged tenant-B, pointing INTO tenant A: invisible to
+    //     both sides (each one's endpoint check fails).
+    const bridge_b = try h.store.createEdgeWithGraphAndTenant(f.b1, f.a[20], "L", graph_store.DEFAULT_GRAPH_NAME, tenant_b);
+    try expectTag(h, bridge_b, tenant_b);
+
+    return f;
+}
+
+test "SONNY-1318: scoped algo.degree.stream over the parallel threshold reports exact degrees" {
+    const allocator = testing.allocator;
+    var h = try Harness.init(allocator, true);
+    defer h.deinit();
+    const f = try seedParallelFixture(&h, allocator);
+
+    var arena = std.heap.ArenaAllocator.init(allocator);
+    defer arena.deinit();
+    const aa = arena.allocator();
+
+    // Exact expected degree per tenant-A node: the chain contributes one
+    // incoming and/or one outgoing edge, the mis-tagged a5->a7 edge contributes
+    // one more at each of its endpoints, and NEITHER cross-tenant edge
+    // contributes anything (a10 and a20 keep their plain chain degree).
+    var expected: [parallel_a_nodes]i64 = undefined;
+    for (0..parallel_a_nodes) |i| {
+        var d: i64 = 0;
+        if (i + 1 < parallel_a_nodes) d += 1;
+        if (i > 0) d += 1;
+        expected[i] = d;
+    }
+    expected[5] += 1;
+    expected[7] += 1;
+
+    var res = try h.runAs(aa, tenant_a, "CALL algo.degree.stream()");
+    defer res.deinit(aa);
+    var ids = try collectIds(allocator, res);
+    defer ids.deinit();
+
+    // The parallel section is only taken above `Thresholds.forEach` (32); this
+    // count IS that precondition, so assert it before the degrees.
+    try testing.expectEqual(@as(u32, parallel_a_nodes), ids.count());
+    try testing.expect(parallel_a_nodes > 32);
+
+    for (0..parallel_a_nodes) |i| {
+        const got = ids.get(f.a[i]) orelse return error.MissingNodeInResult;
+        try testing.expectEqual(expected[i], got);
+    }
+    try testing.expect(!ids.contains(f.b0));
+    try testing.expect(!ids.contains(f.b1));
+
+    // Tenant B's own view: both cross-tenant edges are invisible from this side
+    // too, so B's nodes have degree 0 — which also proves those edges really
+    // exist (otherwise tenant A's degrees above would be green for free).
+    var res_b = try h.runAs(aa, tenant_b, "CALL algo.degree.stream()");
+    defer res_b.deinit(aa);
+    var ids_b = try collectIds(allocator, res_b);
+    defer ids_b.deinit();
+    try testing.expectEqual(@as(u32, 2), ids_b.count());
+    try testing.expectEqual(@as(i64, 0), ids_b.get(f.b0).?);
+    try testing.expectEqual(@as(i64, 0), ids_b.get(f.b1).?);
+}
+
+test "SONNY-1318: unscoped algo.degree.stream over the parallel threshold is unchanged" {
+    // The anti-"just make the scoped path serial" control: with no filter the
+    // workers still compute every degree themselves (allocation-free raw
+    // adjacency), and every edge — cross-tenant and mis-tagged alike — counts.
+    const allocator = testing.allocator;
+    var h = try Harness.init(allocator, false);
+    defer h.deinit();
+    const f = try seedParallelFixture(&h, allocator);
+
+    var arena = std.heap.ArenaAllocator.init(allocator);
+    defer arena.deinit();
+    const aa = arena.allocator();
+
+    var res = try h.runAs(aa, null, "CALL algo.degree.stream()");
+    defer res.deinit(aa);
+    var ids = try collectIds(allocator, res);
+    defer ids.deinit();
+
+    try testing.expectEqual(@as(u32, parallel_a_nodes + 2), ids.count());
+    // a10 now counts its bridge to b0, a20 its bridge from b1, and b0/b1 each
+    // count the cross-tenant edge the scoped view hid.
+    try testing.expectEqual(@as(i64, 3), ids.get(f.a[10]).?);
+    try testing.expectEqual(@as(i64, 3), ids.get(f.a[20]).?);
+    try testing.expectEqual(@as(i64, 1), ids.get(f.b0).?);
+    try testing.expectEqual(@as(i64, 1), ids.get(f.b1).?);
+}

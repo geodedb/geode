@@ -24,6 +24,34 @@
 //     (parent reads descendants; siblings and ancestors stay denied).
 //   * a node/edge that cannot be resolved AT ALL -> NOT visible. Residency is
 //     not existence, so the id lookups fall back to the engine before denying.
+//
+// THREAD-SAFETY AUDIT (review R1, 2026-09-13) — read this before calling any
+// predicate here from a parallel worker:
+//
+//   | predicate                       | allocates? | engine read? | worker-safe |
+//   |---------------------------------|------------|--------------|-------------|
+//   | passesTenantFilterSlice         | no         | no           | yes         |
+//   | passesTenantFilter              | no         | no           | yes         |
+//   | passesTenantFilterEdge          | no         | no           | yes         |
+//   | hierarchyForFilter              | no         | no           | yes         |
+//   | nodeIdVisible                   | on miss    | on miss      | NO          |
+//   | edgeVisibleForTenantHierarchy   | on mis-tag | on mis-tag   | NO          |
+//   | edgeTraversable                 | on miss    | on miss      | NO          |
+//   | edgeIdTraversable               | on miss    | on miss      | NO          |
+//
+// The four "NO" rows fall back to `store.dupeNodeTenantForRead(store.allocator,
+// …)`, which both takes the STORE allocator (shared, not worker-local) and can
+// reach the storage adapter for a node the bounded cache evicted. Neither is
+// permitted on a `parallelForEach` worker. `centrality_algorithms.executeDegree-
+// Centrality` is the only parallel section in the engine that used to reach
+// them and no longer does: it computes every scoped degree on the CALLING
+// thread and hands the workers a pre-filled array (see the comment there).
+// Every other caller (`recursion_handler.zig`, the serial centrality loops,
+// `match_operations.zig`) runs on the connection thread.
+//
+// All edge-body reads here go through `GraphStore.getEdgeHydrated` (BY VALUE,
+// copied under the per-shard map lock SHARED), never `getEdgePtrHydrated` —
+// see the hazard note on those two accessors in `graph_store.zig`.
 
 const std = @import("std");
 const graph_store = @import("../graph_store.zig");
@@ -157,7 +185,28 @@ pub fn edgeTraversable(
     filter_tenant: ?[]const u8,
 ) bool {
     if (filter_tenant == null) return true;
-    if (!edgeVisibleForTenantHierarchy(store, edge, filter_tenant)) return false;
+    // Review R4 — ONE pass over the endpoints, no extra allocations.
+    //
+    // The previous body was
+    //     edgeVisibleForTenantHierarchy(edge) and nodeIdVisible(from) and nodeIdVisible(to)
+    // and `edgeVisibleForTenantHierarchy`'s mis-tagged-edge arm itself resolved
+    // BOTH endpoint tenant tags (`dupeNodeTenantForRead`, one allocation each),
+    // so a legacy-tagged edge resolved every endpoint TWICE.
+    //
+    // Write E for the edge-tag check and F/T for the endpoint checks. The
+    // endpoint arm of `edgeVisibleForTenantHierarchy` is the SAME predicate as
+    // `nodeIdVisible` (resident-first, engine fallback, unresolvable -> false),
+    // so the old expression is
+    //     (E or (F and T)) and F and T
+    //   = (E and F and T) or (F and T and F and T)
+    //   = F and T
+    // The endpoint requirement SUBSUMES the edge-tag check: an edge whose own
+    // tag passes but whose endpoint does not was already denied, and an edge
+    // whose tag fails between two visible endpoints was already admitted by the
+    // legacy-tag bridge. Same answer for every input, half the lookups, and the
+    // allocating `dupeNodeTenantForRead` arm is never entered for a resident
+    // endpoint (`nodeIdVisible` has a resident fast path that
+    // `edgeVisibleForTenantHierarchy` lacked).
     return nodeIdVisible(store, edge.from_id, filter_tenant) and
         nodeIdVisible(store, edge.to_id, filter_tenant);
 }
@@ -170,8 +219,15 @@ pub fn edgeIdTraversable(
     filter_tenant: ?[]const u8,
 ) bool {
     if (filter_tenant == null) return true;
-    const edge = store.getEdgePtrHydrated(edge_id) orelse return false;
-    return edgeTraversable(store, edge.*, filter_tenant);
+    // Review R1 — read the edge BY VALUE. `getEdgePtrHydrated` hands back a raw
+    // `*Edge` pointing into the bounded edge-body cache; `graph_store.zig`
+    // (~:3161-3175) documents that a concurrent shard-locked edge-create writer
+    // can resize that shard under the reader and names `getEdgeHydrated` as the
+    // safe accessor — it copies the body under the per-shard map lock SHARED,
+    // which is exactly what `getNeighbors` already uses. This predicate runs on
+    // analytical reads that overlap ingest, so it takes the by-value accessor.
+    const edge = store.getEdgeHydrated(edge_id) orelse return false;
+    return edgeTraversable(store, edge, filter_tenant);
 }
 
 const testing = std.testing;

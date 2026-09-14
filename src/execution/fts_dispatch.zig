@@ -38,6 +38,14 @@ const ExecutionContext = execution.ExecutionContext;
 const rls = @import("rls");
 const match_operations = @import("match_operations.zig");
 
+// SONNY-1318 review R2: the ONE strict-tenancy decision every tenant-scoped
+// read makes (`schema_introspection.zig:155`, `meta_dispatch.zig:115`,
+// `algo_dispatch.zig`). `geode.fts.*` passed the RAW `context.tenant_id`
+// straight to `passesRowVisibilityFilters`, so under strict tenancy an
+// UNSCOPED session got the all-tenants view from FTS while every other
+// procedure refused it — a fail-OPEN hole in the strict-tenancy contract.
+const tenancy = @import("tenancy.zig");
+
 // Task 3 (geode-vectorization-and-reranking ingestion invariant): CALL
 // geode.fts.rebuild backfill procedure + cluster fail-closed gate (mirrors
 // ts_dispatch.zig's import of the same gate for geode.ts.insert).
@@ -378,6 +386,15 @@ fn filterAuthorizedHits(
     hits: []const fulltext.FullTextIndex.SearchResult,
     context: ExecutionContext,
 ) !std.ArrayList(fulltext.FullTextIndex.SearchResult) {
+    // SONNY-1318 review R2: resolve the session scope through the SHARED
+    // strict-tenancy decision instead of reading `context.tenant_id` raw.
+    //   * concrete scope            -> that tenant id (filtered exactly as before)
+    //   * unscoped, strict mode ON  -> error.TenantScopeRequired (propagated to
+    //                                  the wire through this fn's `!` and the
+    //                                  handlers' `try filterAuthorizedHits`)
+    //   * unscoped, strict mode OFF -> null (all tenants, legacy, unchanged)
+    const filter_tenant = try tenancy.resolveTenantFilter(context.tenant_id);
+
     const store = graph_store.getGlobalStore(graph_store.global_allocator());
     var reusable_row = std.StringHashMap(rls.Value).init(allocator);
     defer reusable_row.deinit();
@@ -400,7 +417,7 @@ fn filterAuthorizedHits(
             // lock here (the block above already released it).
             (store.nodes.getOrHydrate(hit.doc_id) catch null) orelse continue; // genuinely gone — no fallback possible
 
-        if (match_operations.passesRowVisibilityFilters(&reusable_row, node, context.tenant_id)) {
+        if (match_operations.passesRowVisibilityFilters(&reusable_row, node, filter_tenant)) {
             authorized.appendAssumeCapacity(hit);
         }
     }

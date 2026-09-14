@@ -32,7 +32,11 @@ const Value = value_types.Value;
 // `error.TenantScopeRequired` (42501) under strict tenancy. The error
 // PROPAGATES out of `execute`, so an unscoped strict session is refused rather
 // than silently widened.
-const tenancy = @import("tenancy.zig");
+// Review R3: the shared visibility module re-exports this decision as
+// `resolveScope`, so the algo dispatcher imports THAT rather than `tenancy`
+// directly — one module, one name, for both the scope decision and the
+// per-row/edge predicates the handlers thread it into.
+const tenant_visibility = @import("tenant_visibility.zig");
 
 // ---------------------------------------------------------------------------
 // StaticStringMap dispatch table — O(1) lookup replaces sequential if-else chain.
@@ -155,7 +159,11 @@ pub fn execute(
         // SONNY-1318: resolve ONCE, here, before any graph data is touched.
         // Under strict tenancy with no scope this raises
         // `error.TenantScopeRequired` and the procedure never runs.
-        const tenant_filter = try tenancy.resolveTenantFilter(context.tenant_id);
+        // Review R3: name the decision through `tenant_visibility.resolveScope`,
+        // the single alias the shared visibility module exports, so "the one
+        // name every call site uses" is true rather than aspirational (it is a
+        // thin `tenancy.resolveTenantFilter` forwarder — same behaviour).
+        const tenant_filter = try tenant_visibility.resolveScope(context.tenant_id);
         return try handler(allocator, store, call_stmt, context, tenant_filter);
     }
     return null;

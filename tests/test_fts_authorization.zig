@@ -459,3 +459,125 @@ test "fts search applies tenant filter to a hydrated (evicted) node" {
         try testing.expectEqual(tenant_a_id, res.rows[0][0].Int);
     }
 }
+
+// CANARY: REQ=REQ-SONNY-1318-PROCEDURE-TENANCY; FEATURE="GraphProcedureTenantScope"; ASPECT=FtsStrictTenancyFailClosed; STATUS=TESTED; TEST=tests/test_fts_authorization.zig; OWNER=security; UPDATED=2026-09-13
+//
+// SONNY-1318 review R2: `CALL geode.fts.search` did NOT fail closed under
+// strict tenancy. `filterAuthorizedHits` passed the RAW `context.tenant_id`
+// to `passesRowVisibilityFilters`, so an UNSCOPED session (null / "" /
+// "default") resolved to the null all-tenants filter and got every tenant's
+// hits — while `db.labels` (meta_dispatch.zig:115), the LSP introspection path
+// (schema_introspection.zig:155) and every `CALL algo.*` procedure
+// (algo_dispatch.zig) refused the same session with `TenantScopeRequired`.
+//
+// The fix routes it through the SAME `tenancy.resolveTenantFilter` decision.
+// This test pins all three arms of that decision on the FTS surface.
+test "fts search fails closed under strict tenancy with no tenant scope" {
+    var h = try Harness.init(testing.allocator);
+    defer h.deinit();
+    const aa = h.arena.allocator();
+
+    geode.tenancy.setStrictTenancy(false);
+    geode.tenancy.resetWarnState();
+    defer {
+        geode.tenancy.setStrictTenancy(false);
+        geode.tenancy.resetWarnState();
+    }
+
+    // Same body text for both tenants, so isolation can only come from the
+    // row-visibility filter and never from a term mismatch.
+    var tenant_a_id: i64 = undefined;
+    {
+        h.ctx.tenant_id = "tenant_a";
+        const prev = execution.pushActiveContext(&h.ctx);
+        defer execution.popActiveContext(prev);
+
+        var r = try h.runQuery("CREATE (:FtsAuthDoc {body: 'strict tenancy canary'})");
+        r.deinit(aa);
+
+        var res = try h.runQuery("MATCH (n:FtsAuthDoc) RETURN id(n)");
+        defer res.deinit(aa);
+        try testing.expectEqual(@as(usize, 1), res.rows.len);
+        tenant_a_id = res.rows[0][0].Int;
+    }
+
+    var tenant_b_id: i64 = undefined;
+    {
+        h.ctx.tenant_id = "tenant_b";
+        const prev = execution.pushActiveContext(&h.ctx);
+        defer execution.popActiveContext(prev);
+
+        var r = try h.runQuery("CREATE (:FtsAuthDoc {body: 'strict tenancy canary'})");
+        r.deinit(aa);
+
+        var res = try h.runQuery("MATCH (n:FtsAuthDoc) RETURN id(n)");
+        defer res.deinit(aa);
+        try testing.expectEqual(@as(usize, 1), res.rows.len);
+        tenant_b_id = res.rows[0][0].Int;
+    }
+    try testing.expect(tenant_a_id != tenant_b_id);
+
+    h.ctx.tenant_id = null;
+    {
+        var r = try h.runQuery("CREATE INDEX ftsauth_strict_idx FOR (d:FtsAuthDoc) ON (d.body) USING fulltext");
+        r.deinit(aa);
+    }
+
+    // (1) NON-STRICT control: an unscoped session keeps the legacy all-tenants
+    //     view, byte for byte — the fix must not break single-tenant / legacy
+    //     deployments. Asserted BEFORE strict is enabled so a failure here can
+    //     never be mistaken for the strict arm.
+    {
+        h.ctx.tenant_id = null;
+        var res = try h.runQuery("CALL geode.fts.search('ftsauth_strict_idx', 'canary')");
+        defer res.deinit(aa);
+        try testing.expectEqual(@as(usize, 2), res.rows.len);
+        var saw_a = false;
+        var saw_b = false;
+        for (res.rows) |row| {
+            if (row[0].Int == tenant_a_id) saw_a = true;
+            if (row[0].Int == tenant_b_id) saw_b = true;
+        }
+        try testing.expect(saw_a and saw_b);
+    }
+
+    geode.tenancy.setStrictTenancy(true);
+    geode.tenancy.resetWarnState();
+
+    // (2) STRICT + NO SCOPE: refused with the same TenantScopeRequired every
+    //     other tenant-scoped read surface raises — NOT silently widened.
+    {
+        h.ctx.tenant_id = null;
+        try testing.expectError(error.TenantScopeRequired, h.runQuery("CALL geode.fts.search('ftsauth_strict_idx', 'canary')"));
+    }
+    {
+        h.ctx.tenant_id = "";
+        try testing.expectError(error.TenantScopeRequired, h.runQuery("CALL geode.fts.search('ftsauth_strict_idx', 'canary')"));
+    }
+    {
+        h.ctx.tenant_id = graph_store.DEFAULT_TENANT_ID;
+        try testing.expectError(error.TenantScopeRequired, h.runQuery("CALL geode.fts.search('ftsauth_strict_idx', 'canary')"));
+    }
+    // The sibling procedures share `filterAuthorizedHits`, so they refuse too.
+    {
+        h.ctx.tenant_id = null;
+        try testing.expectError(error.TenantScopeRequired, h.runQuery("CALL geode.fts.phrase('ftsauth_strict_idx', 'strict tenancy')"));
+        try testing.expectError(error.TenantScopeRequired, h.runQuery("CALL geode.fts.proximity('ftsauth_strict_idx', 'strict canary', 3)"));
+    }
+
+    // (3) STRICT + CONCRETE SCOPE: filtered exactly as before — only own rows.
+    {
+        h.ctx.tenant_id = "tenant_a";
+        var res = try h.runQuery("CALL geode.fts.search('ftsauth_strict_idx', 'canary')");
+        defer res.deinit(aa);
+        try testing.expectEqual(@as(usize, 1), res.rows.len);
+        try testing.expectEqual(tenant_a_id, res.rows[0][0].Int);
+    }
+    {
+        h.ctx.tenant_id = "tenant_b";
+        var res = try h.runQuery("CALL geode.fts.search('ftsauth_strict_idx', 'canary')");
+        defer res.deinit(aa);
+        try testing.expectEqual(@as(usize, 1), res.rows.len);
+        try testing.expectEqual(tenant_b_id, res.rows[0][0].Int);
+    }
+}
