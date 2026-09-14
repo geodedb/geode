@@ -7953,6 +7953,23 @@ pub fn build(b: *std.Build) void {
     );
     sonny1318_tsan_step.dependOn(&run_sonny1318_tsan_tests.step);
 
+    // SONNY-1326 (GEO-UP-005) P0: the EXPRESSION evaluation path in
+    // `graph_algorithms.zig` (`shortestPath()`, `COUNT { … }`, `EXISTS { … }`
+    // and pattern comprehensions) applied NO tenant scope at all, so a scoped
+    // session still observed another tenant's nodes/edges through path length,
+    // counts and existence even after SONNY-1318 filtered MATCH and
+    // `CALL algo.*`. Needs `geode` plus `rls`/`rls_types` for the live
+    // expr-RLS engine whose HierarchyManager holds the registered tenants.
+    const sonny1326_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny1326_expression_tenancy.zig"), .target = target, .optimize = optimize });
+    sonny1326_test_mod.addImport("geode", root_mod);
+    sonny1326_test_mod.addImport("rls", rls_mod);
+    sonny1326_test_mod.addImport("rls_types", rls_types_mod);
+    const sonny1326_tests = b.addTest(.{ .root_module = sonny1326_test_mod });
+    const run_sonny1326_tests = b.addRunArtifact(sonny1326_tests);
+    shardDep(test_step, &run_sonny1326_tests.step, 1, test_shard_loads, test_shard_index);
+    const sonny1326_step = b.step("test-sonny1326-expression-tenancy", "Run SONNY-1326 regression (shortestPath(), COUNT{}, EXISTS{} and pattern comprehensions are tenant-scoped, fail-closed under strict tenancy)");
+    sonny1326_step.dependOn(&run_sonny1326_tests.step);
+
     // GAP-0903 (P3a) RLS clone-gate regression: RLS-active reads must no longer
     // force the O(graph) snapshot clone.  The secondary gates at QCH:7040
     // (!rls_active) and query_execution.zig:1673 (!wouldEvaluateRLS()) route

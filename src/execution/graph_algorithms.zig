@@ -9,6 +9,12 @@ const value_types = @import("../value_types.zig");
 const execution = @import("../execution.zig");
 const valuesEqual = execution.valuesEqual;
 
+// SONNY-1326 (GEO-UP-005): the ONE shared tenant-visibility predicate module.
+// SONNY-1318 moved the hierarchy-aware predicates out of `match_operations.zig`
+// into `tenant_visibility.zig` precisely so a second read surface could not
+// drift from the MATCH path's answer; this file is that second surface.
+const tenant_visibility = @import("tenant_visibility.zig");
+
 // Local type aliases
 const Value = value_types.Value;
 const Env = value_types.Env;
@@ -18,6 +24,33 @@ const Env = value_types.Env;
 
 // CANARY: REQ=REQ-NESTING-REFACTOR-001; FEATURE="NestingReduction"; ASPECT=HelperFunctions; STATUS=TESTED; OWNER=refactor; UPDATED=2026-01-30
 // Helper functions extracted to reduce nesting levels (#412)
+
+// CANARY: REQ=REQ-SONNY-1326-EXPRESSION-TENANCY; FEATURE="ExpressionPathTenantScope"; ASPECT=ScopeResolution; STATUS=TESTED; TEST=tests/test_sonny1326_expression_tenancy.zig; OWNER=security; UPDATED=2026-09-13
+//
+// SONNY-1326: resolve the session's tenant scope ONCE per expression
+// evaluation, BEFORE any graph read.
+//
+// The three public entry points here (`findShortestPath`, `countPatternMatches`,
+// `executePatternComprehension`) are reached through the evaluator-adapter
+// callback vtable (`eval.zig:1860 / :1869 / :1880 / :1929`), whose signatures
+// carry no `ExecutionContext` — so the scope comes from the THREADLOCAL active
+// context (`execution.getActiveContext`, `execution.zig:582`), which
+// `executeQueryWithContext` pushes on whatever thread the query runs on
+// (including a spawned `set_operations.tryParallelUnion` arm thread — see the
+// thread-safety note on `edgeTraversable` usage below).
+//
+// `resolveScope` is the SAME decision `match_operations.getSessionTenantFilter`
+// and `algo_dispatch.execute` make:
+//   * concrete scope            -> that tenant id
+//   * unscoped, strict mode ON  -> `error.TenantScopeRequired` (42501)
+//   * unscoped, strict mode OFF -> `null` (all tenants, legacy behaviour)
+//
+// Every helper below takes the resolved scope as a REQUIRED parameter, so a
+// future helper that forgets it is a compile error rather than a silent leak.
+fn sessionScope() tenant_visibility.TenancyError!?[]const u8 {
+    const ctx = execution.getActiveContext();
+    return tenant_visibility.resolveScope(if (ctx) |c| c.tenant_id else null);
+}
 
 /// Check if a node has all the required labels
 pub fn nodeHasAllLabels(node_labels: []const []const u8, required_labels: []const []const u8) bool {
@@ -60,21 +93,37 @@ fn nodeMatchesProperties(
 
 /// Find an edge between two nodes using adjacency indexes (O(degree) instead of O(E)).
 /// Checks both directions (from_id -> to_id and to_id -> from_id).
-pub fn findEdgeBetween(store: *graph_store.GraphStore, from_id: u64, to_id: u64) ?*const graph_store.Edge {
+///
+/// SONNY-1326: `filter_tenant` is REQUIRED (the resolved session scope, `null`
+/// meaning all-tenants). Only an edge the scope may TRAVERSE is returned — a
+/// cross-tenant edge that happens to carry the reader's own tenant tag is
+/// rejected on its endpoints by the shared `edgeTraversable` predicate. The
+/// edge BODY is read by value (`getEdgeHydrated`, copied under the per-shard
+/// map lock SHARED); the raw `*Edge` is taken only for the returned binding,
+/// never dereferenced for a decision (see the torn-edge-body hazard note on
+/// `getEdgePtrHydrated` in `graph_store.zig` ~:3156-3175).
+pub fn findEdgeBetween(
+    store: *graph_store.GraphStore,
+    from_id: u64,
+    to_id: u64,
+    filter_tenant: ?[]const u8,
+) ?*const graph_store.Edge {
     // Check outgoing edges from from_id
     if (store.getOutgoingEdgeIds(from_id)) |out_edge_ids| {
         for (out_edge_ids) |edge_id| {
-            if (store.getEdgePtrHydrated(edge_id)) |edge_ptr| {
-                if (edge_ptr.to_id == to_id) return edge_ptr;
-            }
+            const edge = store.getEdgeHydrated(edge_id) orelse continue;
+            if (edge.to_id != to_id) continue;
+            if (!tenant_visibility.edgeTraversable(store, edge, filter_tenant)) continue;
+            if (store.getEdgePtrHydrated(edge_id)) |edge_ptr| return edge_ptr;
         }
     }
     // Check outgoing edges from to_id (reverse direction)
     if (store.getOutgoingEdgeIds(to_id)) |out_edge_ids| {
         for (out_edge_ids) |edge_id| {
-            if (store.getEdgePtrHydrated(edge_id)) |edge_ptr| {
-                if (edge_ptr.to_id == from_id) return edge_ptr;
-            }
+            const edge = store.getEdgeHydrated(edge_id) orelse continue;
+            if (edge.to_id != from_id) continue;
+            if (!tenant_visibility.edgeTraversable(store, edge, filter_tenant)) continue;
+            if (store.getEdgePtrHydrated(edge_id)) |edge_ptr| return edge_ptr;
         }
     }
     return null;
@@ -111,10 +160,14 @@ fn findFirstMatchingNode(
     node_pattern: ast.NodePattern,
     env: Env,
     allocator: std.mem.Allocator,
+    filter_tenant: ?[]const u8,
 ) ?u64 {
     var node_iter = store.nodes.iterator();
     while (node_iter.next()) |entry| {
         const node = entry.value_ptr.*;
+        // SONNY-1326: a start/end node the session cannot see must read as
+        // ABSENT (`null`), never as an error that would confirm it exists.
+        if (!tenant_visibility.passesTenantFilter(node, filter_tenant)) continue;
         if (nodeMatchesPattern(node, node_pattern, env, allocator)) {
             return node.id;
         }
@@ -184,6 +237,7 @@ fn countVariableLengthPathMatches(
     where_filter: ?*ast.Expr,
     env: Env,
     store: *graph_store.GraphStore,
+    filter_tenant: ?[]const u8,
 ) !i64 {
     var count: i64 = 0;
     const min_len: usize = if (hop.rel.min_len) |m| @intCast(m) else 1;
@@ -216,6 +270,11 @@ fn countVariableLengthPathMatches(
             for (out_edge_ids) |edge_id| {
                 const edge = store.getEdgeHydrated(edge_id) orelse continue;
 
+                // SONNY-1326: the frontier gate. BOTH endpoints must be visible
+                // to the session scope, so a bridge edge carrying the READER's
+                // own tenant tag cannot walk into another tenant's subgraph.
+                if (!tenant_visibility.edgeTraversable(store, edge, filter_tenant)) continue;
+
                 // Filter by relationship type if specified
                 if (rel_type != null and !std.mem.eql(u8, edge.label, rel_type.?)) continue;
 
@@ -243,6 +302,9 @@ fn countVariableLengthPathMatches(
                     // Hydrate-on-miss so variable-length traversal crosses
                     // evicted-but-live nodes correctly under the bounded cache.
                     if (store.nodes.getOrHydratePtr(next_node_id) catch null) |target_node_ptr| {
+                        // SONNY-1326: only a COUNTED match the scope may see.
+                        // Allocation-free (the tag is already in hand).
+                        if (!tenant_visibility.passesTenantFilter(target_node_ptr.*, filter_tenant)) continue;
                         // Check label constraints on target using helper
                         if (!nodeHasAllLabels(target_node_ptr.labels, target_pattern.labels)) continue;
 
@@ -272,6 +334,7 @@ fn countSingleHopMatches(
     where_filter: ?*ast.Expr,
     env: Env,
     store: *graph_store.GraphStore,
+    filter_tenant: ?[]const u8,
 ) !i64 {
     var count: i64 = 0;
     const target_pattern = hop.right;
@@ -284,6 +347,12 @@ fn countSingleHopMatches(
         for (out_edge_ids) |edge_id| {
             const edge = store.getEdgeHydrated(edge_id) orelse continue;
 
+            // SONNY-1326: BOTH endpoints must be visible. `a2`'s only outgoing
+            // `:L` edge in the regression fixture is the tenant-A-tagged bridge
+            // to `b1`; without this gate a tenant-A `COUNT { (a2)-[:L]->(x) }`
+            // reports 1 and discloses that `b1` exists.
+            if (!tenant_visibility.edgeTraversable(store, edge, filter_tenant)) continue;
+
             // Filter by relationship type if specified
             if (rel_type != null and !std.mem.eql(u8, edge.label, rel_type.?)) continue;
 
@@ -295,6 +364,8 @@ fn countSingleHopMatches(
             // Check target node pattern (right side of the hop). Hydrate-on-miss
             // so the hop crosses evicted-but-live nodes under the bounded cache.
             if (store.nodes.getOrHydratePtr(edge.to_id) catch null) |target_node| {
+                // SONNY-1326: only a COUNTED match the scope may see.
+                if (!tenant_visibility.passesTenantFilter(target_node.*, filter_tenant)) continue;
                 // Check label constraints on target using helper
                 if (!nodeHasAllLabels(target_node.labels, target_pattern.labels)) continue;
 
@@ -322,6 +393,10 @@ fn countSingleHopMatches(
 /// Now accepts env parameter for correlated subqueries (EXISTS with outer variable references)
 /// Also accepts optional WHERE filter for EXISTS { MATCH ... WHERE ... } patterns
 pub fn countPatternMatches(allocator: std.mem.Allocator, pattern: ast.GraphPattern, where_filter: ?*ast.Expr, env: Env) !i64 {
+    // SONNY-1326: resolve the session scope ONCE, BEFORE any graph read. Under
+    // strict tenancy an unscoped session is refused here (42501) rather than
+    // silently widened to every tenant.
+    const filter_tenant = try sessionScope();
     const store = graph_store.getGlobalStore(allocator);
     var count: i64 = 0;
 
@@ -339,6 +414,9 @@ pub fn countPatternMatches(allocator: std.mem.Allocator, pattern: ast.GraphPatte
             const maybe_bound_node: ?*const graph_store.Node = if (node_pattern.name) |var_name| findBoundNode(var_name, env) else null;
 
             if (maybe_bound_node) |bound_node| {
+                // SONNY-1326: a correlated outer binding the session cannot see
+                // contributes ZERO, never an error that discloses existence.
+                if (!tenant_visibility.passesTenantFilter(bound_node.*, filter_tenant)) return 0;
                 // Check if this bound node matches the remaining pattern (labels, properties)
                 if (!nodeHasAllLabels(bound_node.labels, node_pattern.labels)) {
                     return 0; // Bound node doesn't match required labels
@@ -360,11 +438,11 @@ pub fn countPatternMatches(allocator: std.mem.Allocator, pattern: ast.GraphPatte
                     // C01/C02 Fix: Handle variable-length paths (*1..3)
                     const is_var_length = hop.rel.min_len != null or hop.rel.max_len != null;
                     if (is_var_length) {
-                        return countVariableLengthPathMatches(allocator, bound_node, hop, rel_type, where_filter, env, store);
+                        return countVariableLengthPathMatches(allocator, bound_node, hop, rel_type, where_filter, env, store, filter_tenant);
                     }
 
                     // Original single-hop handling for non-variable-length patterns
-                    return countSingleHopMatches(allocator, bound_node, hop, rel_type, where_filter, env, store);
+                    return countSingleHopMatches(allocator, bound_node, hop, rel_type, where_filter, env, store, filter_tenant);
                 }
 
                 // No relationship pattern, just count the bound node if it matched
@@ -376,6 +454,8 @@ pub fn countPatternMatches(allocator: std.mem.Allocator, pattern: ast.GraphPatte
             var iter = store.nodes.iterator();
             while (iter.next()) |entry| {
                 const node = entry.value_ptr.*;
+                // SONNY-1326: count only rows the session scope admits.
+                if (!tenant_visibility.passesTenantFilter(node, filter_tenant)) continue;
                 var matches = true;
 
                 // Check labels
@@ -461,8 +541,15 @@ pub fn countPatternMatches(allocator: std.mem.Allocator, pattern: ast.GraphPatte
             const all_edge_ids = try store.allEdgeIds(allocator);
             defer allocator.free(all_edge_ids);
             for (all_edge_ids) |__eid| {
-                const edge_ptr = store.getEdgePtrHydrated(__eid) orelse continue;
-                const edge = edge_ptr.*;
+                // SONNY-1326 / review R1 discipline: read the edge BY VALUE.
+                // `getEdgePtrHydrated` hands back a raw `*Edge` into the bounded
+                // edge-body cache which a concurrent shard-locked writer can
+                // resize under the reader (`graph_store.zig` ~:3156-3175);
+                // `getEdgeHydrated` copies under the per-shard map lock SHARED.
+                const edge = store.getEdgeHydrated(__eid) orelse continue;
+
+                // SONNY-1326: the edge and BOTH its endpoints must be visible.
+                if (!tenant_visibility.edgeTraversable(store, edge, filter_tenant)) continue;
 
                 // Filter by relationship type if specified
                 if (rel_type != null and !std.mem.eql(u8, edge.label, rel_type.?)) {
@@ -612,6 +699,8 @@ pub fn countPatternMatches(allocator: std.mem.Allocator, pattern: ast.GraphPatte
 /// Find shortest path between nodes using BFS
 /// CANARY: REQ=REQ-GQL-SHORTESTPATH; FEATURE="ShortestPath"; ASPECT=BFS; STATUS=IMPL; TEST=geodetestlab/specs/geode_graph_algorithms.yml; OWNER=engine; UPDATED=2025-10-12
 pub fn findShortestPath(allocator: std.mem.Allocator, pattern: ast.GraphPattern, all: bool, env: Env) !Value {
+    // SONNY-1326: resolve the session scope ONCE, BEFORE any graph read.
+    const filter_tenant = try sessionScope();
     const store = graph_store.getGlobalStore(allocator);
 
     // Extract start and end nodes from pattern
@@ -630,6 +719,10 @@ pub fn findShortestPath(allocator: std.mem.Allocator, pattern: ast.GraphPattern,
     if (hop.left.name) |left_name| {
         if (env.get(left_name)) |left_val| {
             if (left_val == .Node) {
+                // SONNY-1326: an endpoint bound by the OUTER query that this
+                // session cannot see reads as ABSENT, so the whole expression
+                // collapses to "no path" below rather than confirming the id.
+                if (!tenant_visibility.passesTenantFilter(left_val.Node.*, filter_tenant)) return Value{ .Null = {} };
                 start_id = left_val.Node.id;
             }
         }
@@ -639,6 +732,7 @@ pub fn findShortestPath(allocator: std.mem.Allocator, pattern: ast.GraphPattern,
     if (hop.right.name) |right_name| {
         if (env.get(right_name)) |right_val| {
             if (right_val == .Node) {
+                if (!tenant_visibility.passesTenantFilter(right_val.Node.*, filter_tenant)) return Value{ .Null = {} };
                 end_id = right_val.Node.id;
             }
         }
@@ -647,13 +741,13 @@ pub fn findShortestPath(allocator: std.mem.Allocator, pattern: ast.GraphPattern,
     // CANARY: REQ=REQ-NESTING-REFACTOR-006; FEATURE="NestingReduction"; ASPECT=ShortestPathStart; STATUS=TESTED; OWNER=refactor; UPDATED=2026-01-30
     // If not found in env, try pattern matching using helper
     if (start_id == null) {
-        start_id = findFirstMatchingNode(store, hop.left, env, allocator);
+        start_id = findFirstMatchingNode(store, hop.left, env, allocator, filter_tenant);
     }
 
     // CANARY: REQ=REQ-NESTING-REFACTOR-007; FEATURE="NestingReduction"; ASPECT=ShortestPathEnd; STATUS=TESTED; OWNER=refactor; UPDATED=2026-01-30
     // Use helper for end node matching
     if (end_id == null) {
-        end_id = findFirstMatchingNode(store, hop.right, env, allocator);
+        end_id = findFirstMatchingNode(store, hop.right, env, allocator, filter_tenant);
     }
 
     if (start_id == null or end_id == null) {
@@ -681,6 +775,12 @@ pub fn findShortestPath(allocator: std.mem.Allocator, pattern: ast.GraphPattern,
         }
         all_nodes.deinit(allocator);
     }
+
+    // SONNY-1326: final fail-closed gate on the start node itself. An id that
+    // resolves NOWHERE, or to a row the scope may not see, yields "no path" —
+    // never an error that would confirm the id exists.
+    if (!tenant_visibility.nodeIdVisible(store, start_id.?, filter_tenant)) return Value{ .Null = {} };
+    if (!tenant_visibility.nodeIdVisible(store, end_id.?, filter_tenant)) return Value{ .Null = {} };
 
     // Start BFS from start_id
     const start_path_node = try allocator.create(PathNode);
@@ -717,6 +817,9 @@ pub fn findShortestPath(allocator: std.mem.Allocator, pattern: ast.GraphPattern,
         if (store.getOutgoingEdgeIds(current.node_id)) |out_edge_ids| {
             for (out_edge_ids) |edge_id| {
                 const edge = store.getEdgeHydrated(edge_id) orelse continue;
+                // SONNY-1326: the frontier gate — the edge AND both endpoints
+                // must be visible to the session scope.
+                if (!tenant_visibility.edgeTraversable(store, edge, filter_tenant)) continue;
                 const neighbor_id = edge.to_id;
                 if (!visited.contains(neighbor_id)) {
                     const neighbor_node = try allocator.create(PathNode);
@@ -732,6 +835,7 @@ pub fn findShortestPath(allocator: std.mem.Allocator, pattern: ast.GraphPattern,
             if (store.getIncomingEdgeIds(current.node_id)) |in_edge_ids| {
                 for (in_edge_ids) |edge_id| {
                     const edge = store.getEdgeHydrated(edge_id) orelse continue;
+                    if (!tenant_visibility.edgeTraversable(store, edge, filter_tenant)) continue;
                     const neighbor_id = edge.from_id;
                     if (!visited.contains(neighbor_id)) {
                         const neighbor_node = try allocator.create(PathNode);
@@ -749,86 +853,91 @@ pub fn findShortestPath(allocator: std.mem.Allocator, pattern: ast.GraphPattern,
         return Value{ .Null = {} };
     }
 
-    // Reconstruct path(s)
-    if (all and found_paths.items.len > 1) {
-        // Return list of paths
-        var paths_list = try allocator.alloc(Value, found_paths.items.len);
+    // Reconstruct path(s).
+    //
+    // SONNY-1326: materialization RE-APPLIES the scope to every node and every
+    // connecting edge (`materializePath`). The BFS above already refused to
+    // cross an invisible edge, so this is defence in depth for the paths that
+    // reach here by some other route — and it is what makes "a path is never
+    // handed back containing an element the session may not see" a property of
+    // the materializer rather than of the traversal that happened to feed it.
+    var reconstructed = std.ArrayList(Value).empty;
+    defer reconstructed.deinit(allocator);
 
-        for (found_paths.items, 0..) |end_node, i| {
-            var path_nodes = std.ArrayList(*const graph_store.Node).empty;
-            var path_edges = std.ArrayList(*const graph_store.Edge).empty;
-
-            // Reconstruct path by following parent pointers
-            var current_node: ?*PathNode = end_node;
-            var node_ids = std.ArrayList(u64).empty;
-            defer node_ids.deinit(allocator);
-
-            while (current_node != null) {
-                try node_ids.append(allocator, current_node.?.node_id);
-                current_node = current_node.?.parent;
-            }
-            std.mem.reverse(u64, node_ids.items);
-
-            // Build path with actual nodes and edges
-            for (node_ids.items, 0..) |node_id, idx| {
-                if ((store.nodes.getOrHydratePtr(node_id) catch null)) |node_ptr| {
-                    try path_nodes.append(allocator, node_ptr);
-                }
-
-                // Add edges between consecutive nodes using adjacency index
-                if (idx > 0) {
-                    const prev_id = node_ids.items[idx - 1];
-                    const found_edge = findEdgeBetween(store, prev_id, node_id);
-                    if (found_edge) |edge_ptr| {
-                        try path_edges.append(allocator, edge_ptr);
-                    }
-                }
-            }
-
-            paths_list[i] = Value{ .Path = .{
-                .nodes = try path_nodes.toOwnedSlice(allocator),
-                .edges = try path_edges.toOwnedSlice(allocator),
-            } };
-        }
-
-        return Value{ .List = paths_list };
-    } else {
-        // Return single path
-        var path_nodes = std.ArrayList(*const graph_store.Node).empty;
-        var path_edges = std.ArrayList(*const graph_store.Edge).empty;
-
-        // Reconstruct path by following parent pointers
-        var current_node: ?*PathNode = found_paths.items[0];
+    const path_limit: usize = if (all) found_paths.items.len else 1;
+    for (found_paths.items[0..path_limit]) |end_node| {
         var node_ids = std.ArrayList(u64).empty;
         defer node_ids.deinit(allocator);
 
+        // Reconstruct path by following parent pointers
+        var current_node: ?*PathNode = end_node;
         while (current_node != null) {
             try node_ids.append(allocator, current_node.?.node_id);
             current_node = current_node.?.parent;
         }
         std.mem.reverse(u64, node_ids.items);
 
-        // Build path with actual nodes and edges
-        for (node_ids.items, 0..) |node_id, idx| {
-            if ((store.nodes.getOrHydratePtr(node_id) catch null)) |node_ptr| {
-                try path_nodes.append(allocator, node_ptr);
-            }
+        if (try materializePath(allocator, store, node_ids.items, filter_tenant)) |path_value| {
+            try reconstructed.append(allocator, path_value);
+        }
+    }
 
-            // Add edges between consecutive nodes using adjacency index
-            if (idx > 0) {
-                const prev_id = node_ids.items[idx - 1];
-                const found_edge = findEdgeBetween(store, prev_id, node_id);
-                if (found_edge) |edge_ptr| {
-                    try path_edges.append(allocator, edge_ptr);
-                }
+    if (reconstructed.items.len == 0) return Value{ .Null = {} };
+    if (all and reconstructed.items.len > 1) {
+        return Value{ .List = try reconstructed.toOwnedSlice(allocator) };
+    }
+    return reconstructed.items[0];
+}
+
+// CANARY: REQ=REQ-SONNY-1326-EXPRESSION-TENANCY; FEATURE="ExpressionPathTenantScope"; ASPECT=PathMaterialization; STATUS=TESTED; TEST=tests/test_sonny1326_expression_tenancy.zig; OWNER=security; UPDATED=2026-09-13
+/// SONNY-1326: turn one reconstructed node-id chain into a `Value.Path`,
+/// applying the session scope to every node and to every connecting edge.
+///
+/// Returns `null` (not an error) when any node on the chain is not visible to
+/// `filter_tenant` — an invisible element must make the whole path read as
+/// ABSENT, never as an error that discloses that the row exists.
+///
+/// OWNERSHIP: the returned `.Path` owns two heap slices allocated from
+/// `allocator`, exactly as the pre-SONNY-1326 inline code did (see the
+/// ownership note at `match_operations.zig:3414`).
+fn materializePath(
+    allocator: std.mem.Allocator,
+    store: *graph_store.GraphStore,
+    node_ids: []const u64,
+    filter_tenant: ?[]const u8,
+) !?Value {
+    var path_nodes = std.ArrayList(*const graph_store.Node).empty;
+    errdefer path_nodes.deinit(allocator);
+    var path_edges = std.ArrayList(*const graph_store.Edge).empty;
+    errdefer path_edges.deinit(allocator);
+
+    for (node_ids, 0..) |node_id, idx| {
+        // Hydrate-on-miss, as before: a node evicted from the bounded cache is
+        // still live. A node that resolves nowhere is skipped (pre-existing
+        // behaviour); a node that resolves but is OUT OF SCOPE kills the path.
+        const node_ptr = (store.nodes.getOrHydratePtr(node_id) catch null) orelse continue;
+        if (!tenant_visibility.passesTenantFilter(node_ptr.*, filter_tenant)) {
+            path_nodes.deinit(allocator);
+            path_edges.deinit(allocator);
+            return null;
+        }
+        try path_nodes.append(allocator, node_ptr);
+
+        // Add edges between consecutive nodes using adjacency index. The edge
+        // lookup is scope-aware (`findEdgeBetween` takes the filter), so a
+        // parallel edge the session may not traverse is never attached.
+        if (idx > 0) {
+            const prev_id = node_ids[idx - 1];
+            if (findEdgeBetween(store, prev_id, node_id, filter_tenant)) |edge_ptr| {
+                try path_edges.append(allocator, edge_ptr);
             }
         }
-
-        return Value{ .Path = .{
-            .nodes = try path_nodes.toOwnedSlice(allocator),
-            .edges = try path_edges.toOwnedSlice(allocator),
-        } };
     }
+
+    return Value{ .Path = .{
+        .nodes = try path_nodes.toOwnedSlice(allocator),
+        .edges = try path_edges.toOwnedSlice(allocator),
+    } };
 }
 
 /// Execute a pattern comprehension: [(pattern) WHERE filter | map_expr]
@@ -851,6 +960,8 @@ fn freeExtendedEnv(allocator: std.mem.Allocator, extended: Env, base: Env) void 
 /// Returns a list of values generated by evaluating map_expr for each pattern match
 /// CANARY: REQ=REQ-GQL-166; FEATURE="Pattern Comprehension Execution"; ASPECT=Execution; STATUS=TESTED; OWNER=execution; UPDATED=2025-10-14
 pub fn executePatternComprehension(allocator: std.mem.Allocator, pattern: ast.GraphPattern, where_filter: ?*ast.Expr, map_expr: ast.Expr, env: Env) !Value {
+    // SONNY-1326: resolve the session scope ONCE, BEFORE any graph read.
+    const filter_tenant = try sessionScope();
     const store = graph_store.getGlobalStore(allocator);
 
     // Collect all results in a list
@@ -872,6 +983,9 @@ pub fn executePatternComprehension(allocator: std.mem.Allocator, pattern: ast.Gr
             while (iter.next()) |entry| {
                 const node_ptr = entry.value_ptr;
                 const node = node_ptr.*;
+
+                // SONNY-1326: yield only elements the session scope admits.
+                if (!tenant_visibility.passesTenantFilter(node, filter_tenant)) continue;
 
                 // Use helper for pattern matching
                 if (!nodeMatchesPattern(node, node_pattern, env, allocator)) continue;
@@ -906,7 +1020,11 @@ pub fn executePatternComprehension(allocator: std.mem.Allocator, pattern: ast.Gr
         if (hop.left.name) |left_name| {
             if (env.get(left_name)) |left_val| {
                 if (left_val == .Node) {
-                    try source_nodes.append(allocator, left_val.Node);
+                    // SONNY-1326: a correlated outer binding the session cannot
+                    // see contributes no source node (empty list, not an error).
+                    if (tenant_visibility.passesTenantFilter(left_val.Node.*, filter_tenant)) {
+                        try source_nodes.append(allocator, left_val.Node);
+                    }
                 }
             }
         }
@@ -918,6 +1036,9 @@ pub fn executePatternComprehension(allocator: std.mem.Allocator, pattern: ast.Gr
             while (iter.next()) |entry| {
                 const node_ptr: *const graph_store.Node = entry.value_ptr;
                 const node = node_ptr.*;
+                // SONNY-1326: never start a comprehension walk from a row the
+                // session scope cannot see.
+                if (!tenant_visibility.passesTenantFilter(node, filter_tenant)) continue;
                 if (nodeMatchesPattern(node, hop.left, env, allocator)) {
                     try source_nodes.append(allocator, node_ptr);
                 }
@@ -930,11 +1051,20 @@ pub fn executePatternComprehension(allocator: std.mem.Allocator, pattern: ast.Gr
             if (hop.rel.dir == .right or hop.rel.dir == .undirected) {
                 if (store.getOutgoingEdgeIds(source_node.id)) |out_edge_ids| {
                     for (out_edge_ids) |edge_id| {
+                        // SONNY-1326: read the edge BY VALUE for every DECISION
+                        // (`getEdgeHydrated` copies under the per-shard map lock
+                        // SHARED); the raw `*Edge` below is taken only for the
+                        // `Value.Edge` binding the map expression may reference,
+                        // never dereferenced to decide anything.
+                        const edge = store.getEdgeHydrated(edge_id) orelse continue;
+                        // The edge AND both endpoints must be visible.
+                        if (!tenant_visibility.edgeTraversable(store, edge, filter_tenant)) continue;
                         const edge_ptr = store.getEdgePtrHydrated(edge_id) orelse continue;
-                        const target_id = edge_ptr.to_id;
+                        const target_id = edge.to_id;
 
                         const target_node_ptr = (store.nodes.getOrHydratePtr(target_id) catch null) orelse continue;
                         const target_node = target_node_ptr.*;
+                        if (!tenant_visibility.passesTenantFilter(target_node, filter_tenant)) continue;
 
                         // CANARY: REQ=REQ-NESTING-REFACTOR-010; FEATURE="NestingReduction"; ASPECT=TargetNodeMatch; STATUS=TESTED; OWNER=refactor; UPDATED=2026-01-30
                         // Check if target node matches the right pattern using helper
@@ -981,11 +1111,16 @@ pub fn executePatternComprehension(allocator: std.mem.Allocator, pattern: ast.Gr
             if (hop.rel.dir == .left or hop.rel.dir == .undirected) {
                 if (store.getIncomingEdgeIds(source_node.id)) |in_edge_ids| {
                     for (in_edge_ids) |edge_id| {
+                        // SONNY-1326: by-value read for every decision; the raw
+                        // pointer is only the `Value.Edge` binding (see above).
+                        const edge = store.getEdgeHydrated(edge_id) orelse continue;
+                        if (!tenant_visibility.edgeTraversable(store, edge, filter_tenant)) continue;
                         const edge_ptr = store.getEdgePtrHydrated(edge_id) orelse continue;
-                        const target_id = edge_ptr.from_id;
+                        const target_id = edge.from_id;
 
                         const target_node_ptr = (store.nodes.getOrHydratePtr(target_id) catch null) orelse continue;
                         const target_node = target_node_ptr.*;
+                        if (!tenant_visibility.passesTenantFilter(target_node, filter_tenant)) continue;
 
                         // Check if target node matches the right pattern using helper
                         if (!nodeHasAllLabels(target_node.labels, hop.right.labels)) continue;

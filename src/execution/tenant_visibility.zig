@@ -1,4 +1,5 @@
 // CANARY: REQ=REQ-SONNY-1318-PROCEDURE-TENANCY; FEATURE="GraphProcedureTenantScope"; ASPECT=SharedVisibilityPredicate; STATUS=TESTED; TEST=tests/test_sonny1318_procedure_tenancy.zig; OWNER=security; UPDATED=2026-09-13
+// CANARY: REQ=REQ-SONNY-1326-EXPRESSION-TENANCY; FEATURE="ExpressionPathTenantScope"; ASPECT=SharedVisibilityPredicate; STATUS=TESTED; TEST=tests/test_sonny1326_expression_tenancy.zig; OWNER=security; UPDATED=2026-09-13
 //
 // SONNY-1318 (GEO-UP-005): the ONE row/edge visibility predicate for every
 // tenant-scoped read in the execution engine.
@@ -39,6 +40,32 @@
 //   | edgeTraversable                 | on miss    | on miss      | NO          |
 //   | edgeIdTraversable               | on miss    | on miss      | NO          |
 //
+// CALL SITES ADDED BY SONNY-1326 (`src/execution/graph_algorithms.zig`):
+//
+//   | site                                             | predicate               |
+//   |--------------------------------------------------|-------------------------|
+//   | findFirstMatchingNode (start/end node scan)      | passesTenantFilter      |
+//   | findEdgeBetween (path edge lookup)               | edgeTraversable         |
+//   | countVariableLengthPathMatches (frontier edge)   | edgeTraversable         |
+//   | countVariableLengthPathMatches (counted target)  | passesTenantFilter      |
+//   | countSingleHopMatches (hop edge)                 | edgeTraversable         |
+//   | countSingleHopMatches (counted target)           | passesTenantFilter      |
+//   | countPatternMatches (correlated outer binding)   | passesTenantFilter      |
+//   | countPatternMatches (bare node loop)             | passesTenantFilter      |
+//   | countPatternMatches (relationship arm)           | edgeTraversable         |
+//   | findShortestPath (env-bound start/end)           | passesTenantFilter      |
+//   | findShortestPath (start/end id gate)             | nodeIdVisible           |
+//   | findShortestPath (BFS out/in frontier)           | edgeTraversable         |
+//   | materializePath (every path node)                | passesTenantFilter      |
+//   | executePatternComprehension (node-only scan)     | passesTenantFilter      |
+//   | executePatternComprehension (env source node)    | passesTenantFilter      |
+//   | executePatternComprehension (scanned source)     | passesTenantFilter      |
+//   | executePatternComprehension (out/in edge)        | edgeTraversable         |
+//   | executePatternComprehension (target node)        | passesTenantFilter      |
+//
+// The scope itself is resolved once per evaluation by
+// `graph_algorithms.sessionScope()` -> `resolveScope` (below).
+//
 // The four "NO" rows fall back to `store.dupeNodeTenantForRead(store.allocator,
 // …)`, which both takes the STORE allocator (shared, not worker-local) and can
 // reach the storage adapter for a node the bounded cache evicted. Neither is
@@ -55,6 +82,10 @@
 //   |   Centrality (`parallelForEach` workers)  |                     | here   |
 //   | set_operations.tryParallelUnion           | YES                 | PRE-   |
 //   |   (one `std.Thread` per UNION arm)        |                     | EXIST. |
+//   | graph_algorithms.zig expression path      | YES, on a           | SONNY- |
+//   |   under a tryParallelUnion arm            | non-resident        | 1326,  |
+//   |   (shortestPath()/COUNT{}/EXISTS{}/       | endpoint only       | see    |
+//   |   pattern comprehension)                  |                     | below  |
 //
 //   * `executeDegreeCentrality` computes every scoped degree on the CALLING
 //     thread and hands the workers a pre-filled array (see the comment there),
@@ -79,6 +110,30 @@
 //     larger than this ticket's scope and carry their own perf regression
 //     risk on the hot MATCH path. It is TRACKED SEPARATELY under its own
 //     follow-up ticket SONNY-1330.
+//
+//   * SONNY-1326 — `graph_algorithms.zig` (the EXPRESSION path:
+//     `findShortestPath`, `countPatternMatches`, `executePatternComprehension`)
+//     is reached from `eval.zig:1860/1869/1880/1929`, i.e. from ordinary
+//     RETURN/WHERE evaluation, which a `tryParallelUnion` arm ALSO runs
+//     (`ArmJob.runnerEntry` -> `executeQueryNoLimitWithContext` -> the full
+//     query). So YES, these new call sites can execute on a spawned arm thread.
+//     Two things bound the exposure, and neither is a claim that the arm is
+//     safe:
+//       1. Every call site that has a `Node` in hand uses `passesTenantFilter` /
+//          `passesTenantFilterSlice` — the worker-safe "yes" rows — rather than
+//          `nodeIdVisible`. Nothing is allocated and no adapter is touched.
+//       2. The frontier/edge gates use `edgeTraversable`, whose only allocating
+//          arm is a NON-RESIDENT endpoint; for a resident endpoint it is
+//          allocation-free and engine-read-free (`nodeIdVisible`'s resident fast
+//          path). On a non-resident endpoint it is a "NO" row, exactly like the
+//          `edgeVisibleForTenantHierarchy` calls `match_operations.zig` already
+//          makes from those same arms.
+//     SONNY-1326 therefore does not WIDEN the SONNY-1330 exposure: the
+//     surrounding pre-existing code on this path (`store.nodes.getOrHydratePtr`,
+//     which MUTATES the shared bounded node cache, and `store.allEdgeIds`)
+//     already reaches the engine from an arm thread, which is strictly larger
+//     than the predicate's transient tenant-tag dupe. Closing it belongs to
+//     SONNY-1330, which owns the arm-thread allocator/adapter contract.
 //
 // Every OTHER caller (`recursion_handler.zig`, the serial centrality loops, and
 // `match_operations.zig` when it is NOT running under a parallel UNION arm)

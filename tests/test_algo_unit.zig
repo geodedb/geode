@@ -468,6 +468,11 @@ test "findBoundNode: not found returns null" {
 
 // ===========================================================================
 // graph_algorithms.zig — findEdgeBetween
+//
+// SONNY-1326: `findEdgeBetween` takes the resolved session tenant scope as a
+// REQUIRED parameter. This is a single-tenant unit harness with no session
+// context, so every call here passes `null` (all-tenants), which is exactly the
+// legacy behaviour these cases were written against.
 // ===========================================================================
 
 test "findEdgeBetween: direct edge found" {
@@ -477,7 +482,7 @@ test "findEdgeBetween: direct edge found" {
     try addTestNode(&store, 2, &.{"B"});
     try addTestEdge(&store, 100, 1, 2, "KNOWS");
 
-    const edge = execution.findEdgeBetween(&store, 1, 2);
+    const edge = execution.findEdgeBetween(&store, 1, 2, null);
     try testing.expect(edge != null);
     try testing.expectEqual(@as(u64, 100), edge.?.id);
     try testing.expectEqual(@as(u64, 1), edge.?.from_id);
@@ -492,7 +497,7 @@ test "findEdgeBetween: reverse direction found" {
     try addTestEdge(&store, 100, 2, 1, "FOLLOWS");
 
     // Searching from 1 to 2: edge is 2->1, found via reverse check
-    const edge = execution.findEdgeBetween(&store, 1, 2);
+    const edge = execution.findEdgeBetween(&store, 1, 2, null);
     try testing.expect(edge != null);
     try testing.expectEqual(@as(u64, 100), edge.?.id);
 }
@@ -503,7 +508,7 @@ test "findEdgeBetween: no edge returns null" {
     try addTestNode(&store, 1, &.{"A"});
     try addTestNode(&store, 2, &.{"B"});
 
-    const edge = execution.findEdgeBetween(&store, 1, 2);
+    const edge = execution.findEdgeBetween(&store, 1, 2, null);
     try testing.expect(edge == null);
 }
 
@@ -515,7 +520,7 @@ test "findEdgeBetween: multiple edges returns first match" {
     try addTestEdge(&store, 100, 1, 2, "KNOWS");
     try addTestEdge(&store, 101, 1, 2, "LIKES");
 
-    const edge = execution.findEdgeBetween(&store, 1, 2);
+    const edge = execution.findEdgeBetween(&store, 1, 2, null);
     try testing.expect(edge != null);
     try testing.expect(edge.?.id == 100 or edge.?.id == 101);
 }
@@ -524,6 +529,6 @@ test "findEdgeBetween: nonexistent nodes returns null" {
     var store = try createTestStore();
     defer store.deinit();
 
-    const edge = execution.findEdgeBetween(&store, 999, 888);
+    const edge = execution.findEdgeBetween(&store, 999, 888, null);
     try testing.expect(edge == null);
 }

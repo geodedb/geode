@@ -1857,7 +1857,11 @@ pub fn evalExpr(allocator: std.mem.Allocator, e: ast.Expr, env: Env) EvalError!V
         .ShortestPath => |sp| blk_shortest: {
             // ShortestPath expression: shortestPath((a)-[*]-(b))
             // Call the execution layer to find the shortest path(s)
-            const path_value = getExecutionCallbacks().findShortestPath(allocator, sp.pattern.*, sp.all, env) catch {
+            // SONNY-1326: a strict-tenancy refusal must reach the client as
+            // 42501, never degrade to NULL (same contract as
+            // `currentKnnScanScope` and `isPropagatableEvalError`).
+            const path_value = getExecutionCallbacks().findShortestPath(allocator, sp.pattern.*, sp.all, env) catch |err| {
+                if (err == error.TenantScopeRequired) return error.TenantScopeRequired;
                 break :blk_shortest Value{ .Null = {} };
             };
             break :blk_shortest path_value;
@@ -1866,7 +1870,9 @@ pub fn evalExpr(allocator: std.mem.Allocator, e: ast.Expr, env: Env) EvalError!V
             // CANARY: REQ=REQ-GQL-COUNT-SUBQUERY-002; FEATURE="CountSubquery"; ASPECT=Evaluation; STATUS=TESTED; TEST=geodetestlab/specs/gql_query_comprehensive.yml; OWNER=eval; UPDATED=2025-12-28
             // C02 Fix: Pattern comprehension count with optional WHERE clause
             // Call the execution layer to count pattern matches (pass env for correlated patterns)
-            const count = getExecutionCallbacks().countPatternMatches(allocator, pc.pattern.*, pc.where, env) catch {
+            // SONNY-1326: a strict-tenancy refusal must not degrade to 0.
+            const count = getExecutionCallbacks().countPatternMatches(allocator, pc.pattern.*, pc.where, env) catch |err| {
+                if (err == error.TenantScopeRequired) return error.TenantScopeRequired;
                 break :blk_count Value{ .Int = 0 };
             };
             break :blk_count Value{ .Int = count };
@@ -1877,7 +1883,9 @@ pub fn evalExpr(allocator: std.mem.Allocator, e: ast.Expr, env: Env) EvalError!V
             // EXISTS predicate: return true if pattern matches at least once
             // Call the execution layer to count pattern matches (pass env for correlated subqueries)
             // Pass the optional WHERE clause for EXISTS { MATCH ... WHERE ... } patterns
-            const count = getExecutionCallbacks().countPatternMatches(allocator, ex.pattern.*, ex.where, env) catch {
+            // SONNY-1326: a strict-tenancy refusal must not degrade to false.
+            const count = getExecutionCallbacks().countPatternMatches(allocator, ex.pattern.*, ex.where, env) catch |err| {
+                if (err == error.TenantScopeRequired) return error.TenantScopeRequired;
                 break :blk_exists Value{ .Bool = false };
             };
             break :blk_exists Value{ .Bool = count > 0 };
@@ -1926,7 +1934,9 @@ pub fn evalExpr(allocator: std.mem.Allocator, e: ast.Expr, env: Env) EvalError!V
             // Pattern comprehension: [ (pattern) WHERE condition | expression ]
             // Shorthand: [(a)--()]  means  [(a)--(x) | x]
             // Execute the pattern and collect results based on the map expression
-            const result_list = getExecutionCallbacks().executePatternComprehension(allocator, pc.pattern.*, pc.where, pc.map.*, env) catch {
+            // SONNY-1326: a strict-tenancy refusal must not degrade to [].
+            const result_list = getExecutionCallbacks().executePatternComprehension(allocator, pc.pattern.*, pc.where, pc.map.*, env) catch |err| {
+                if (err == error.TenantScopeRequired) return error.TenantScopeRequired;
                 break :blk_patterncomp Value{ .List = &.{} };
             };
             break :blk_patterncomp result_list;
