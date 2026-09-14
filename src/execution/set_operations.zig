@@ -117,6 +117,15 @@ pub var parallel_union_serial_fallbacks: std.atomic.Value(u64) = std.atomic.Valu
 /// body is opaque here and `CALL geode.*` includes mutating procedures.
 /// Conservative by design — the cost of a false "not read-only" is one serial
 /// UNION, the cost of a false "read-only" is a duplicated write.
+///
+/// SONNY-1330 review follow-up: the walk MUST descend into `cte_list`. A CTE
+/// body (`CommonTableExpression.CTEBody.simple`, and both halves of
+/// `.recursive`) is a FULL `*Query` — parsed by the same `parseQuery` and run
+/// by `executeCTE` — so `WITH w AS (MATCH (n:T) SET n.c = n.c + 1 RETURN n)
+/// MATCH … RETURN … UNION ALL …` is a writing arm. It was not merely eligible
+/// but PREFERENTIALLY parallel: `predictArmRowCount` bails to `null` the moment
+/// it sees `cte_list`, and `null` means "unknown → expensive → keep parallel".
+/// A decline therefore re-ran the arm and applied the SET a second time.
 fn queryIsReadOnly(q: ast.Query) bool {
     if (q.create_pattern != null) return false;
     if (q.merge_statement != null) return false;
@@ -126,6 +135,20 @@ fn queryIsReadOnly(q: ast.Query) bool {
     if (q.call_clause != null) return false;
     if (q.initial_call_subquery != null) return false;
     if (q.for_statement != null) return false;
+    // GAP-0082 CTEs: every body is a full query and runs before the main one.
+    // Recursing (rather than spot-checking clauses) also covers a CTE body's
+    // own `next_query` chain, `initial_call_subquery`, and nested CTEs.
+    if (q.cte_list) |cte_list| {
+        for (cte_list.ctes) |cte| switch (cte.body) {
+            .simple => |body| {
+                if (!queryIsReadOnly(body.*)) return false;
+            },
+            .recursive => |rec| {
+                if (!queryIsReadOnly(rec.anchor.*)) return false;
+                if (!queryIsReadOnly(rec.recursive_term.*)) return false;
+            },
+        };
+    }
     // Query chaining (`... WITH ... MATCH/CREATE ...`) hangs the continuation
     // off `next_query`; walk it, or a chained CREATE slips through.
     if (q.next_query) |nq| {

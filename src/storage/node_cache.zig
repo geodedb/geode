@@ -160,10 +160,18 @@ inline fn declineHydration() HydrationSuppressedError {
 /// SONNY-1330: the tenancy predicates in `execution/tenant_visibility.zig` are
 /// the motivating case. Their non-resident fallback
 /// (`GraphStore.dupeNodeTenantForRead`) does NOT go through this cache at all —
-/// it uses the resident-only `nodes.get` and then reads the STORAGE ADAPTER
-/// directly, allocating from the SHARED `store.allocator`. That is a second,
+/// it uses the resident-only `nodes.get`, then on a miss walks the store's
+/// `id_maps` WITHOUT A LOCK (`GraphStore.resolveNodeGraphSlot`,
+/// `graph_store.zig:2554`) and reads the STORAGE ADAPTER
+/// (`adapter.getNodeProperty`) directly from the arm thread. That is a second,
 /// distinct arm-thread hazard from the insert/evict race above: not a cache
-/// mutation, but a shared-allocator + adapter read on a spawned arm.
+/// mutation, but an unlocked engine/adapter read on a spawned arm.
+///
+/// CORRECTION (review, 2026-09-14): this note previously blamed the "SHARED
+/// `store.allocator`". That was wrong — `store.allocator` is
+/// `graph_store.global_allocator()` == `std.heap.smp_allocator`, a sharded
+/// per-core allocator that IS thread-safe. Sharing it across arms is not a
+/// hazard; the unlocked `id_maps` iteration and the adapter read are.
 ///
 /// Those predicates call this and then answer fail-closed (`false`). The
 /// answer is deliberately wrong-but-safe: the scope owner sees the decline,

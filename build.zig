@@ -7988,6 +7988,15 @@ pub fn build(b: *std.Build) void {
     // pins the rows to the serial path's rows.
     const sonny1330_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny1330_parallel_union.zig"), .target = target, .optimize = optimize });
     sonny1330_test_mod.addImport("geode", root_mod);
+    // SONNY-1330 review follow-up: this suite opens the store through the
+    // PRODUCTION `initGlobalStore` path (data dir + storage adapter), unlike the
+    // other `test-sonny*` suites, so the adapter emits a steady stream of
+    // `geode.storage` INFO lines. The Zig 0.16 build runner pipes a
+    // `--listen=-` test child's stderr and echoes it back under the step banner
+    // with a red `failed command:` line even on a clean, exit-0 run. The test
+    // silences the engine logger at startup (`silenceEngineLogs`); it needs the
+    // SAME `logging` module instance the engine logs through to do that.
+    sonny1330_test_mod.addImport("logging", logging_mod);
     const sonny1330_tests = b.addTest(.{ .root_module = sonny1330_test_mod });
     const run_sonny1330_tests = b.addRunArtifact(sonny1330_tests);
     // Bound the resident node/edge/adjacency caches HARD (16 shards x 4 entries)
@@ -8016,6 +8025,7 @@ pub fn build(b: *std.Build) void {
         .sanitize_thread = true,
     });
     sonny1330_tsan_mod.addImport("geode", root_mod);
+    sonny1330_tsan_mod.addImport("logging", logging_mod);
     const sonny1330_tsan_tests = b.addTest(.{ .root_module = sonny1330_tsan_mod });
     const run_sonny1330_tsan_tests = b.addRunArtifact(sonny1330_tsan_tests);
     run_sonny1330_tsan_tests.setEnvironmentVariable("GEODE_NODE_CACHE_ENTRIES", "64");

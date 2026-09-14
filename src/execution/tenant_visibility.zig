@@ -40,6 +40,25 @@
 //   | edgeTraversable                 | on miss    | on miss      | NO          |
 //   | edgeIdTraversable               | on miss    | on miss      | NO          |
 //
+// ROW SOURCING, for completeness (review follow-up, 2026-09-14) — not a
+// predicate, but the accessor those predicates are handed nodes FROM, and the
+// one most likely to be mistaken for a missing "NO" row:
+//
+//   | accessor                        | allocates? | engine read? | worker-safe |
+//   |---------------------------------|------------|--------------|-------------|
+//   | GraphStore.getNodePtrForScan    | on miss    | on miss      | yes (H1)    |
+//
+//   `getNodePtrForScan` (`graph_store.zig:2774-2800`) serves a resident hit
+//   from the cache and a MISS as a DETACHED engine rebuild: `hydrateNodeCb`
+//   + `allocator.create(Node)` + append to `scan_hydrated_nodes` under
+//   `scan_hydrated_mutex`. It NEVER inserts into a bounded cache and never
+//   rehashes a shard, so it cannot invalidate a sibling arm's live `*Node` —
+//   Hazard-1-safe by construction, which is why an arm taking this path
+//   records NO decline and the UNION stays parallel. (It shares the unlocked
+//   `resolveNodeGraphSlot` walk with Hazard 2 via `hydrateNodeCb`; that is a
+//   separate, pre-existing concern this ticket does not claim to close, and
+//   it is why the row says "H1" and not an unqualified "yes".)
+//
 // CALL SITES ADDED BY SONNY-1326 (`src/execution/graph_algorithms.zig`):
 //
 //   | site                                             | predicate               |
@@ -67,9 +86,25 @@
 // `graph_algorithms.sessionScope()` -> `resolveScope` (below).
 //
 // The four "NO" rows fall back to `store.dupeNodeTenantForRead(store.allocator,
-// …)`, which both takes the STORE allocator (shared, not worker-local) and can
-// reach the storage adapter for a node the bounded cache evicted. Neither is
-// permitted on a worker thread.
+// …)` for a node the bounded cache evicted.
+//
+// CORRECTION (review, 2026-09-14): the earlier wording here blamed the SHARED
+// STORE ALLOCATOR, and that was wrong. `store.allocator` is
+// `graph_store.global_allocator()` == `std.heap.smp_allocator`, a sharded
+// per-core allocator with thread-local fast paths — explicitly thread-safe, and
+// already the allocator the server uses across every connection thread. Sharing
+// it across arms is fine.
+//
+// The real hazard is the ENGINE-SIDE READ that fallback performs
+// (`graph_store.zig:2894` ff.), on a node the resident-only `nodes.get` missed:
+//
+//   * `resolveNodeGraphSlot` (`graph_store.zig:2554`) iterates `self.id_maps`
+//     with NO LOCK HELD. A concurrent insert into that map (a new graph, a
+//     rehash) invalidates the iterator under the reading arm.
+//   * `adapter.getNodeProperty(graph, slot, …)` then reads the storage adapter
+//     directly from the arm thread.
+//
+// Neither is permitted on a worker thread; the allocator never was the problem.
 //
 // PARALLEL SECTIONS THAT REACH THESE PREDICATES (corrected, review R2 — the
 // first cut of this table claimed `executeDegreeCentrality` was the ONLY one
@@ -111,13 +146,17 @@
 //          (the pointer escapes the lock by design). Inside the scope a miss
 //          returns `error.CacheHydrationSuppressed` and touches nothing.
 //
-//       2. SHARED ALLOCATOR + ADAPTER READ — the hazard THIS file owns. The
-//          "NO" rows fall back to `store.dupeNodeTenantForRead(store.allocator,
-//          …)`, which does NOT go through the bounded cache at all (it uses the
-//          resident-only `nodes.get`, then reads the STORAGE ADAPTER and
-//          allocates from the SHARED store allocator). The accessor-level
-//          guard in (1) therefore does NOT cover it. `tenantTagFallbackAllowed`
-//          (above) refuses it on an arm and the predicate answers fail-closed.
+//       2. UNLOCKED ENGINE READ — the hazard THIS file owns. The "NO" rows
+//          fall back to `store.dupeNodeTenantForRead(store.allocator, …)`,
+//          which does NOT go through the bounded cache at all: it uses the
+//          resident-only `nodes.get`, then on a miss walks `id_maps` WITHOUT A
+//          LOCK (`resolveNodeGraphSlot`, `graph_store.zig:2554`) and reads the
+//          STORAGE ADAPTER (`adapter.getNodeProperty`) straight from the arm.
+//          (NOT the allocator: `store.allocator` is `smp_allocator`, which is
+//          thread-safe — see the correction in the audit table above.) The
+//          accessor-level guard in (1) therefore does NOT cover it.
+//          `tenantTagFallbackAllowed` (above) refuses it on an arm and the
+//          predicate answers fail-closed.
 //
 //     Neither refusal is allowed to change an ANSWER. Both record the decline
 //     on the thread; after the join, `tryParallelUnion` sees that any arm
@@ -166,7 +205,8 @@
 //          `tenantTagFallbackAllowed` now refuses on an arm.
 //
 //     SEPARATE PRE-EXISTING BUG found while pinning this ticket, NOT a race and
-//     NOT fixed here — recorded for SONNY-1332: `countPatternMatches` scans
+//     NOT fixed here — recorded for SONNY-1562 (NOT 1332; 1332 tracks the
+//     threadlocal-propagation residual above): `countPatternMatches` scans
 //     `store.nodes.iterator()`, which is RESIDENT-ONLY. Over a cold store a
 //     bare `RETURN COUNT { (a:A)-[:R]->(b:B) }` answers 0 on the SERIAL path
 //     too, because it never sees a node to expand from. `COUNT {}` / `EXISTS {}`
@@ -257,10 +297,18 @@ pub inline fn passesTenantFilterEdge(edge: graph_store.Edge, filter_tenant: ?[]c
 /// SONNY-1330: is this thread allowed to take the non-resident tenant-tag
 /// fallback (`GraphStore.dupeNodeTenantForRead`)?
 ///
-/// That fallback allocates from the SHARED `store.allocator` and reads the
-/// storage adapter. On a `set_operations.tryParallelUnion` ARM THREAD both are
-/// forbidden — the arm shares the store allocator with its siblings and with
-/// the connection thread, and nothing serializes them.
+/// On a non-resident node that fallback (`graph_store.zig:2894` ff.) walks the
+/// store's `id_maps` WITHOUT A LOCK (`GraphStore.resolveNodeGraphSlot`,
+/// `graph_store.zig:2554`) and then reads the storage adapter
+/// (`adapter.getNodeProperty`). On a `set_operations.tryParallelUnion` ARM
+/// THREAD neither is permitted: nothing serializes the arm's `id_maps`
+/// iteration against a concurrent insert/rehash, and the adapter read is an
+/// outward call from a thread the query path never expected to make one.
+///
+/// NOT the allocator (review correction, 2026-09-14): `store.allocator` is
+/// `graph_store.global_allocator()` == `std.heap.smp_allocator`, which is
+/// thread-safe. An earlier version of this comment named the shared allocator
+/// as the hazard; it is not one.
 ///
 /// Returns FALSE on an arm, having recorded the decline, so the caller answers
 /// fail-closed. The wrong answer never reaches the client: the recorded

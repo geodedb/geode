@@ -44,6 +44,47 @@ const execution = geode.execution;
 const graph_store = geode.graph_store;
 const node_cache = graph_store.node_cache_mod;
 
+// SONNY-1330 review follow-up: reached as the NAMED build module (build.zig
+// wires `logging` into this test module), which is the SAME `*Module` the
+// geode root module imports — so this is the one, shared logger instance the
+// engine itself logs through, not a second copy with its own globals.
+const logging = @import("logging");
+
+/// Why this test file silences the engine logger and the other `test-sonny*`
+/// targets do not:
+///
+/// SONNY-1318 / SONNY-1326 open their store with the bare
+/// `graph_store.getGlobalStore` — no data dir, no storage adapter, so nothing
+/// under `geode.storage` ever logs. This suite deliberately uses the
+/// PRODUCTION `initGlobalStore` path against a real data dir (that is what
+/// installs the hydrate-on-miss hooks and activates the resident caps), which
+/// brings the adapter — and with it a steady stream of INFO lines
+/// ("loadFromAdapter complete", "full checkpoint: exact-index persist
+/// decision", "graph hydration served from loop2 snapshots", …), roughly one
+/// per Session.open/close and one per checkpoint, plus the once-per-process
+/// `geode.tenancy` WARN.
+///
+/// Those go to the engine logger's stderr writer. The Zig 0.16 build runner
+/// PIPES a `--listen=-` test child's stderr (`Step/Run.zig` `evalZigTest`,
+/// which stores it as `step.result_stderr`), so the whole stream is echoed
+/// back under the step banner together with a red `failed command:` line even
+/// though every test passed and `zig build` exits 0. That is pure noise that
+/// makes a green run read as a failure — and `test-sonny1330-parallel-union`
+/// is sharded into the default `test_step`, so it polluted the aggregate run
+/// too.
+///
+/// Level `.fatal` rather than `.err`: the `geode.tenancy` line above is a WARN
+/// and the engine emits it on the very first tenant-scoped read here, so
+/// anything looser still produces the banner. Nothing in this suite asserts on
+/// log output.
+fn silenceEngineLogs() void {
+    // `init` latches on first call (level baked into the handler), `setLevel`
+    // covers the case where something already forced a default `.info` logger
+    // into existence before we got here. Both are idempotent and cheap.
+    logging.init(.{ .level = .fatal });
+    logging.setLevel(.fatal);
+}
+
 fn tmpDirRealpathAlloc(allocator: std.mem.Allocator, tmp_sub_path: []const u8) ![]u8 {
     var cwd_buf: [std.fs.max_path_bytes]u8 = undefined;
     const rc = std.os.linux.getcwd(&cwd_buf, cwd_buf.len);
@@ -62,6 +103,9 @@ const Session = struct {
     ctx: execution.ExecutionContext,
 
     fn open(allocator: std.mem.Allocator, data_dir: []const u8) !Session {
+        // Before ANY store/adapter work, so the first adapter INFO line never
+        // reaches the piped stderr channel. See `silenceEngineLogs`.
+        silenceEngineLogs();
         execution.cleanupCatalogInstance();
         graph_store.deinitGlobalStore();
         // `initGlobalStore` (not the bare `getGlobalStore` the GAP-0814 harness
@@ -282,7 +326,7 @@ fn seedPairs(s: *Session, comptime from_label: []const u8, comptime to_label: []
 //     which is RESIDENT-ONLY, so over a cold store it counts 0 on the SERIAL
 //     path too. It never reaches a hydrating accessor because it never sees a
 //     node. That is a real pre-existing residency-dependent-correctness bug,
-//     recorded in the SONNY-1330 report for SONNY-1332; it is NOT this
+//     recorded in the SONNY-1330 report for SONNY-1562; it is NOT this
 //     ticket's race and cannot serve as its oracle (0 == 0 proves nothing).
 //   * The pattern-comprehension arm declines, but still returns all 300 rows
 //     (the refusal only empties the per-row list), so serial and arm output
@@ -402,6 +446,109 @@ test "SONNY-1330: UNION whose arms must hydrate equals the serial path, and the 
         // serial path's rows.
         try testing.expectEqualSlices(i64, expected, got);
     }
+}
+
+// ---------------------------------------------------------------------------
+// 2b. The serial re-run makes WRITE-FREEDOM a correctness precondition, and a
+//     write can hide inside a CTE body.
+//
+// `unionArmsAreParallelEligible` -> `queryIsReadOnly` originally inspected only
+// an arm's OWN clauses plus its `next_query` chain. It did not look at
+// `cte_list`, and a CTE body is a FULL `*Query`
+// (`ast.CommonTableExpression.CTEBody.simple`, and both halves of
+// `.recursive`), parsed by the same `parseQuery` and executed by
+// `query_execution.executeCTE` -> `executeQueryWithContext`. So
+//
+//   WITH w AS (MATCH (n:T) SET n.c = n.c + 1 RETURN n) MATCH … UNION ALL …
+//
+// passed the read-only gate with a live SET on the arm.
+//
+// It was worse than merely eligible. `predictArmRowCount` bails to `null` the
+// instant it sees `cte_list`, and the cost model reads `null` as
+// "unknown -> expensive -> KEEP PARALLEL" — so this shape was the parallel
+// path's PREFERRED input. One declined hydration anywhere in the UNION then
+// discarded every arm result and re-ran the whole thing serially, applying the
+// SET a SECOND time.
+// ---------------------------------------------------------------------------
+
+const CTE_ROWS: usize = 5;
+
+fn seedCounters(s: *Session, comptime label: []const u8) !void {
+    var i: usize = 0;
+    while (i < CTE_ROWS) : (i += 1) {
+        const aa = s.arena.allocator();
+        const q = try std.fmt.allocPrint(aa, "CREATE (:" ++ label ++ " {{k: {d}, c: 0}})", .{i});
+        var r = try s.runQuery(q);
+        r.deinit(aa);
+    }
+}
+
+/// How many `label` nodes currently have `c == want`.
+fn countersEqualTo(s: *Session, comptime label: []const u8, comptime want: []const u8) !usize {
+    const aa = s.arena.allocator();
+    var r = try s.runQuery("MATCH (n:" ++ label ++ ") WHERE n.c = " ++ want ++ " RETURN n.k");
+    defer r.deinit(aa);
+    return r.rows.len;
+}
+
+test "SONNY-1330: a UNION arm whose CTE body WRITES is never run in parallel, and the write applies once" {
+    const allocator = testing.allocator;
+
+    var tmp = testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const data_dir = try tmpDirRealpathAlloc(allocator, &tmp.sub_path);
+    defer allocator.free(data_dir);
+
+    var s = try Session.open(allocator, data_dir);
+    defer s.close();
+    const aa = s.arena.allocator();
+
+    try seedCounters(&s, "S1330CteArm");
+    try seedCounters(&s, "S1330CteOther");
+
+    const invocations_before = execution.parallelUnionInvocations();
+
+    var r = try s.runQuery(
+        "WITH w AS (MATCH (n:S1330CteArm) SET n.c = n.c + 1 RETURN n)" ++
+            " MATCH (m:S1330CteArm) RETURN m.k" ++
+            " UNION ALL MATCH (o:S1330CteOther) RETURN o.k",
+    );
+    defer r.deinit(aa);
+
+    // THE gate assertion, and the one that is RED on the pre-fix tree: the
+    // parallel fork-join was never even ATTEMPTED for this UNION, because
+    // `queryIsReadOnly` now descends into `cte_list` and finds the SET.
+    //
+    // NOT VACUOUS — this really is a UNION that the pre-fix gate admitted, and
+    // every step of that is pinned by the parser/eligibility source rather than
+    // assumed:
+    //   * `parser.parseProgram` recognises the leading `WITH w AS (…)` as a CTE
+    //     list, then `parseStatement` -> `handleQueryResult` folds the trailing
+    //     `UNION ALL` into an `ast.Union`, and the `.Union` branch attaches the
+    //     CTE list to `union_query.first` — so arm 0 carries `cte_list`.
+    //   * `unionArmsAreParallelEligible` clears every earlier gate for this
+    //     shape: one `union_op` tail, no `create_pattern`/`merge_statement` on
+    //     arm 0, and no enclosing read-only scope.
+    //   * pre-fix `queryIsReadOnly` then returned true (the arm's OWN
+    //     `set_clauses` are empty; the SET lives one level down in the CTE
+    //     body), and `predictArmRowCount` returned null on `cte_list`, which
+    //     the cost model reads as "expensive -> parallel".
+    // The `c == 1` assertions below independently prove the CTE body was
+    // actually executed, so the arm is a genuine writer and not a no-op.
+    try testing.expectEqual(
+        @as(u64, 0),
+        execution.parallelUnionInvocations() - invocations_before,
+    );
+
+    // …and the consequence that actually matters to a client: the CTE's write
+    // landed EXACTLY once. Every seeded node went 0 -> 1 and none went to 2,
+    // which is precisely what a discarded parallel attempt followed by a
+    // serial re-run would have produced.
+    try testing.expectEqual(CTE_ROWS, try countersEqualTo(&s, "S1330CteArm", "1"));
+    try testing.expectEqual(@as(usize, 0), try countersEqualTo(&s, "S1330CteArm", "2"));
+    // The read-only sibling arm is untouched, so a stray write cannot be
+    // mistaken for the CTE's.
+    try testing.expectEqual(CTE_ROWS, try countersEqualTo(&s, "S1330CteOther", "0"));
 }
 
 // ---------------------------------------------------------------------------
