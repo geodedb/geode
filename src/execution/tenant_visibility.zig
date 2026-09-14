@@ -78,8 +78,7 @@
 //     the MATCH edge reads by-value under the shard lock, both of which are
 //     larger than this ticket's scope and carry their own perf regression
 //     risk on the hot MATCH path. It is TRACKED SEPARATELY under its own
-//     follow-up ticket (SONNY-13xx — key filed by the controller alongside
-//     this branch; do not treat the placeholder as a real key).
+//     follow-up ticket SONNY-1330.
 //
 // Every OTHER caller (`recursion_handler.zig`, the serial centrality loops, and
 // `match_operations.zig` when it is NOT running under a parallel UNION arm)
