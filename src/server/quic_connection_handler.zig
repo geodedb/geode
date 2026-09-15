@@ -3023,15 +3023,28 @@ fn handleAdditionalStream(ctx_ptr: *anyopaque) void {
 // `min_park_ns` and `max_park_ns`, backing off while nothing is accepted and
 // snapping back to the floor as soon as something is. Within a pass, a
 // connection whose per-connection RX generation has not moved since its last
-// empty `tryAcceptStream` is SKIPPED — a peer-opened stream always arrives as
-// RX data and bumps that generation — so a pass over quiet connections costs
-// one atomic load each. That is what keeps a 10k-connection server, and the
+// empty `tryAcceptStream` is SKIPPED, so a pass over quiet connections costs one
+// atomic load each. That is what keeps a 10k-connection server, and the
 // idle-server CPU regression (tests/test_quic_idle_cpu.zig), off the reactor's
 // back.
+//
+// SONNY-1219c (m-3): that memo is a fast path, not a guarantee. A peer-opened
+// stream USUALLY arrives as RX data and bumps the generation, but the vendored
+// producer (`connection/methods_a.zig:896-906`) sets `wake_readers` only on FIN
+// or `available() > 0`, so a stream opened by a zero-length STREAM frame — or
+// one whose first frame is out of order — is queued for accept without bumping
+// it. Geode's own client always writes immediately; an arbitrary QUIC peer need
+// not. The memo is therefore BOUNDED: a connection is fully polled at least
+// every `max_park_ns` regardless of its generation.
 
 /// Outcome of one non-blocking accept pass over a single connection.
 const AcceptStepResult = enum {
-    /// A stream was accepted and dispatched. Re-poll this shard immediately.
+    /// A stream was accepted and dispatched. SONNY-1219c (m-8): the pass moves
+    /// on to the NEXT connection and the shard's park drops back to
+    /// `min_park_ns`; it does not re-poll this connection before parking, so one
+    /// connection accepts at most one stream per pass (~2000 streams/s at the
+    /// 500 µs floor). Deliberate: looping `runPass` while `did_work` would let a
+    /// single busy connection starve every other connection on the shard.
     accepted,
     /// Nothing to do right now; the connection stays registered.
     idle,
@@ -3224,6 +3237,10 @@ pub const StreamAcceptReactor = struct {
         /// Memo of the RX generation at which `tryAcceptStream` last came back
         /// empty. `null` means "poll regardless".
         rx_gen: ?u32 = null,
+        /// SONNY-1219c (m-3): when this connection was last polled REGARDLESS of
+        /// `rx_gen`. Bounds the memo so a stream the vendored producer queued
+        /// without bumping the generation cannot be stranded.
+        last_full_poll_ns: u64 = 0,
         /// The accept loop for this connection has stopped; it is now waiting
         /// for its sibling handlers before its teardown can run.
         finished: bool = false,
@@ -3267,15 +3284,38 @@ pub const StreamAcceptReactor = struct {
             };
         }
 
+        /// Move the registration inbox into `entries`.
+        ///
+        /// SONNY-1219c (M-1): the critical section is the list hand-over and
+        /// NOTHING else. The registry append is the reactor's one allocation
+        /// per connection; when it fails, the only honest response is to run
+        /// the teardown that context is owed — but that teardown is
+        /// `firstStreamOwnerConnTeardown` → `destroyConnectionOwnerResources` →
+        /// `waitForAllStreamsDrained()`, whose wait is deliberately UNBOUNDED
+        /// (a sibling handler mid-request must not be freed under). Running it
+        /// while holding `mu` parked every `register()` for this shard behind
+        /// that unbounded wait: connection admission for 1/64th of all new
+        /// connections wedged — the F1 failure mode this reactor exists to
+        /// remove, reintroduced on the allocation-failure path.
         fn drainPending(self: *Shard) void {
             const io = std.Io.Threaded.global_single_threaded.io();
             self.mu.lockUncancelable(io);
-            defer self.mu.unlock(io);
-            for (self.pending.items) |ctx| {
+            // A quiet pass does not touch `pending` at all, so its capacity
+            // survives and a steady-state shard allocates nothing here.
+            var inbox: std.ArrayList(*StreamAcceptorContext) = .empty;
+            if (self.pending.items.len != 0) {
+                inbox = self.pending;
+                self.pending = .empty;
+            }
+            self.mu.unlock(io);
+            defer inbox.deinit(self.reactor.gpa);
+
+            for (inbox.items) |ctx| {
                 self.entries.append(self.reactor.gpa, .{ .ctx = ctx }) catch {
                     // The registry cannot grow. Refusing loudly is the only
                     // honest option: run the teardown this context is owed so
-                    // the connection is not left to the idle timeout.
+                    // the connection is not left to the idle timeout. Outside
+                    // `mu` — see the doc comment.
                     log.warn("accept reactor registry append failed; closing connection", &.{});
                     if (ctx.claimConnOwnerTeardown()) |t| t.run(t.owner_ctx);
                     ctx.markDone();
@@ -3284,7 +3324,6 @@ pub const StreamAcceptReactor = struct {
                     continue;
                 };
             }
-            self.pending.clearRetainingCapacity();
         }
 
         /// A finished connection may still have sibling handlers running. Its
@@ -3325,17 +3364,28 @@ pub const StreamAcceptReactor = struct {
         /// happened, which resets the park to the floor.
         fn runPass(self: *Shard) bool {
             self.drainPending();
+            // One clock read per pass, reused by every entry's memo bound.
+            const pass_ns = monoNsFromHandler();
             var did_work = false;
             var i: usize = 0;
             while (i < self.entries.items.len) {
                 const e = &self.entries.items[i];
                 if (!e.finished) {
                     // Skip a connection whose RX generation has not moved since
-                    // its last empty accept: a peer-opened stream always arrives
-                    // as RX data. `isDrained` / `shutdown_requested` are NOT
-                    // covered by that memo, so check them first.
+                    // its last empty accept. `isDrained` / `shutdown_requested`
+                    // are NOT covered by that memo, so check them first.
+                    //
+                    // SONNY-1219c (m-3): the memo is bounded by `max_park_ns`.
+                    // A peer-opened stream usually arrives as RX data, but the
+                    // vendored producer bumps `rx_data_generation` only on FIN
+                    // or `available() > 0` — a zero-length STREAM frame, or a
+                    // first frame that lands out of order, queues a stream for
+                    // accept without bumping it. The bound costs one extra full
+                    // poll per connection per 8 ms and removes the liveness
+                    // hole against an arbitrary QUIC peer.
                     if (e.rx_gen) |memo| {
-                        if (!e.ctx.conn.isDrained() and
+                        if (pass_ns -| e.last_full_poll_ns <= max_park_ns and
+                            !e.ctx.conn.isDrained() and
                             !e.ctx.conn.shutdown_requested.load(.acquire) and
                             !e.ctx.shutdown.load(.acquire) and
                             e.ctx.conn.readGeneration() == memo)
@@ -3344,6 +3394,7 @@ pub const StreamAcceptReactor = struct {
                             continue;
                         }
                     }
+                    e.last_full_poll_ns = pass_ns;
                     switch (streamAcceptorStep(e.ctx, &e.rx_gen)) {
                         .accepted => {
                             did_work = true;
@@ -3437,6 +3488,17 @@ pub const StreamAcceptReactor = struct {
             self.entries.deinit(self.reactor.gpa);
             const io = std.Io.Threaded.global_single_threaded.io();
             self.mu.lockUncancelable(io);
+            // SONNY-1219c (m-7): a `register` that took `mu` before it could
+            // observe `stopping` left its context here. Deiniting without
+            // draining leaked the reactor's reference and left that caller
+            // waiting on a `done` nobody would ever set. `register` re-checks
+            // `stopping` under this same lock, so after this point nothing new
+            // can arrive.
+            for (self.pending.items) |ctx| {
+                ctx.markDone();
+                ctx.release();
+                _ = self.registered.fetchSub(1, .monotonic);
+            }
             self.pending.deinit(self.reactor.gpa);
             self.mu.unlock(io);
         }
@@ -3490,12 +3552,22 @@ pub const StreamAcceptReactor = struct {
         const shard = &self.shards[idx];
         const io = std.Io.Threaded.global_single_threaded.io();
         shard.mu.lockUncancelable(io);
+        // SONNY-1219c (m-7): the check above is only an early-out. `drainOnStop`
+        // drains and deinits `pending` under THIS lock after `stopping` is set,
+        // so re-checking here is what makes "accepted into `pending`" and "the
+        // shard will never look at `pending` again" mutually exclusive.
+        if (self.stopping.load(.acquire)) {
+            shard.mu.unlock(io);
+            return false;
+        }
         shard.pending.append(self.gpa, ctx) catch {
             shard.mu.unlock(io);
             return false;
         };
-        shard.mu.unlock(io);
+        // Bumped under the lock so the gauge can never out-live an entry that
+        // `drainOnStop` released without it.
         _ = shard.registered.fetchAdd(1, .monotonic);
+        shard.mu.unlock(io);
         shard.wake();
         return true;
     }
