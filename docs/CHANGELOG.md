@@ -17,6 +17,59 @@
 
 ---
 
+## [v0.8.16] - September 15, 2026
+
+Engine release. Re-pins the whole `devnw/zig` dependency spine onto
+grpc-zig v0.1.10 (SONNY-1568 per-connection reader threads) via the
+`zig-tool sync-diamond` cascade, and ships the reviewed server/execution
+/storage/transport fixes.
+
+### Fixed
+
+- **Tenant scope on engine-direct reads (SONNY-1229):** engine-direct reads now
+  apply the caller's tenant scope instead of bypassing it.
+- **Node-scan fast path (SONNY-1218):** the fast path is declined when no
+  storage adapter is present rather than silently returning unscoped rows.
+- **Tenant visibility in graph execution (SONNY-1318):** scoped degree workers
+  hardened, FTS fails closed under strict tenancy, union-find edges are read by
+  value, and the thread-safety audit was corrected.
+- **Tenant scope in path and subquery operators (SONNY-1326):** `shortestPath`,
+  `COUNT{}`, `EXISTS{}` and pattern comprehensions apply tenant scope;
+  `graph_procedure_tenancy` is advertised as a capability.
+- **UNION read-only gate (SONNY-1330):** the gate walks CTE bodies and
+  expression subqueries, and parallel UNION arms no longer mutate shared state.
+- **Exact-index persistence accounting (SONNY-1574):** a skipped or unattempted
+  exact-index persist is never reported as done; it counts only for a FULL
+  checkpoint the engine accepted, a timed-out worker wait fails, and the persist
+  is spawned outside the build mutex.
+- **gRPC flow control (SONNY-1560):** a pushed gRPC result no longer holds the
+  session mutex across a page write; a stalled, abandoned or superseded stream
+  releases the session cursor deterministically; an unsatisfiable peer
+  flow-control window is classified `RESOURCE_EXHAUSTED` instead of being waited
+  out; the library's RST ends an exhausted stream and the flow-control seam is
+  pinned.
+- **QUIC connection lifecycle (SONNY-1219):** every server-initiated connection
+  close is named, the five try-escapes out of `handleQuicConnection` are named,
+  stream wrappers are no longer double-freed, stream release is idempotent, and
+  the accept reactor's OOM teardown runs outside `shard.mu`.
+
+### Changed
+
+- Re-pinned `grpc_zig` to v0.1.10 and cascaded the 18 intermediate libraries
+  that sit between it and the engine (see the release report for the full tag
+  list).
+
+### Known limitations
+
+- **Server-initiated close codes are named on the SENDING side only.** The
+  connection-close codes introduced by SONNY-1219 are set when the server
+  closes, but a peer cannot read them: the vendored quic layer discards the
+  close code on receive. Until that is fixed the codes are useful for
+  server-side logging and tests only, not for client-side behavior. Tracked as
+  **T-8**.
+
+---
+
 ## [v0.18.1] - January 28, 2026
 
 ### Added
