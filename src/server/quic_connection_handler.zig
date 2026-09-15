@@ -2893,10 +2893,23 @@ fn handleAdditionalStream(ctx_ptr: *anyopaque) void {
     const gpa = ctx.allocator;
     const cs = ctx.conn_state;
     const stream = ctx.stream;
+    const conn = ctx.conn;
+    const stream_id = stream.stream_id;
     const transport = ctx.transport;
     defer {
         stream.close();
-        cs.unregisterActiveStream(stream.stream_id);
+        // SONNY-1219b (F2): hand the wrapper back. Before this, a served stream
+        // was `close()`d but its `*QuicStream` stayed in `conn.streams` until the
+        // whole connection was destroyed — bounded by the first stream's life
+        // pre-SONNY-1219, unbounded once a connection outlives it.
+        //
+        // Ordered BEFORE `unregisterActiveStream` on purpose: while this stream
+        // id is still registered, a re-queued accept for it takes the acceptor's
+        // `is_new_stream == false` branch and destroys only ITS OWN, different
+        // wrapper — so the accept side can never be holding this one. `stream`
+        // is dangling from here on; `stream_id` was captured above.
+        conn.destroyStream(stream);
+        cs.unregisterActiveStream(stream_id);
         cs.releaseActiveStream();
         // PERF-P1-004: Release the global stream thread slot so another
         // connection's stream can proceed.
@@ -4040,12 +4053,20 @@ pub const PreHelloExit = enum {
     mtls_rejected,
 };
 
-/// SONNY-1219b RED (this commit): faithfully encodes what the engine does
-/// TODAY — every pre-HELLO exit closes with 0. The next commit replaces the
-/// body; the test below is what forces it.
+/// Peer EOF is the only pre-HELLO exit the peer initiated; everything else is
+/// the server refusing or failing, and says so.
 fn preHelloCloseCode(exit: PreHelloExit) u64 {
-    _ = exit;
-    return quic_transport.app_error.no_error;
+    return switch (exit) {
+        .peer_eof => quic_transport.app_error.no_error,
+        .no_stream_timeout,
+        .hello_timeout,
+        .hello_read_error,
+        .hello_processing_error,
+        .tenant_quota_exceeded,
+        .conn_state_capture_failed,
+        .mtls_rejected,
+        => quic_transport.app_error.server_teardown,
+    };
 }
 
 /// SONNY-1219: why the server is destroying a QUIC connection. Drives BOTH the
@@ -4108,7 +4129,18 @@ fn connTeardownReasonFor(ctx: *FirstStreamOwnerContext, graceful: ConnTeardownRe
 /// is safe while sibling handlers are still running against `ctx.conn_state`.
 fn releaseFirstStreamResources(ctx: *FirstStreamOwnerContext) void {
     const gpa = ctx.allocator;
-    ctx.conn_state.unregisterActiveStream(ctx.stream.stream_id);
+    const stream_id = ctx.stream.stream_id;
+    // SONNY-1219b (F2): release the first stream's wrapper too. Safe here and
+    // only here: `cleanupFirstStreamOwner` has already deinit'd `ctx.reader`,
+    // cleared the poll-thread RX-ready notifier and waited for in-flight
+    // callbacks to drain, and closed the stream — nothing dereferences the
+    // wrapper past this point. The notifier itself lives on the inner
+    // `Connection`, not on the wrapper, so the vendored library's capture window
+    // does not reach it. One wrapper per connection is O(1), not the unbounded
+    // sibling leak, but leaving it would keep `quic_max_tracked_streams`
+    // permanently off zero and make the F2 regression unable to say what it means.
+    ctx.conn.destroyStream(ctx.stream);
+    ctx.conn_state.unregisterActiveStream(stream_id);
     ctx.conn_state.releaseActiveStream();
     ctx.dist_planner.deinit();
     ctx.federation_manager.deinit();
@@ -5392,7 +5424,13 @@ pub fn handleQuicConnection(
     // next `tryAcceptStream` would UAF.  The QUIC library will eventually
     // idle-timeout the leaked conn at the protocol layer.
     var destroy_conn: bool = true;
-    defer if (destroy_conn) transport.destroyConnection(conn);
+    // SONNY-1219b (F3): which code that teardown carries. Every pre-HELLO exit
+    // used to close with 0, so a refusal (tenant quota, mTLS) was
+    // indistinguishable from a peer that hung up. `peer_eof` is the default
+    // because the overwhelmingly common pre-HELLO exit IS a peer disconnect;
+    // every refusal / failure path below sets its own `PreHelloExit` first.
+    var pre_hello_exit: PreHelloExit = .peer_eof;
+    defer if (destroy_conn) transport.destroyConnectionWithError(conn, preHelloCloseCode(pre_hello_exit));
     log.debug("Entering handleQuicConnection", &.{});
 
     // Wait for incoming STREAM frames with handler-driven polling.
@@ -5444,6 +5482,7 @@ pub fn handleQuicConnection(
         log.debug("No streams after handshake timeout, closing connection", &.{
             Attr.int("waited_ms", @intCast(total_waited_us / 1000)),
         });
+        pre_hello_exit = .no_stream_timeout;
         return;
     }
 
@@ -5526,6 +5565,7 @@ pub fn handleQuicConnection(
     if (conn.getPeerCertificateDer()) |cert_der| {
         const identity = mtls_provider.extractIdentity(gpa, cert_der) catch |err| {
             log.warn("mTLS: Failed to extract certificate identity", &.{Attr.string("error", @errorName(err))});
+            pre_hello_exit = .mtls_rejected;
             return err;
         };
         // Look up global mTLS provider (set in server/main.zig startup)
@@ -5541,12 +5581,14 @@ pub fn handleQuicConnection(
             } else |err| {
                 log.warn("mTLS: Authentication failed", &.{Attr.string("error", @errorName(err))});
                 if (transport.config.require_client_cert) {
+                    pre_hello_exit = .mtls_rejected;
                     return err;
                 }
             }
         }
     } else if (transport.config.require_client_cert) {
         log.warn("mTLS: No client certificate presented (required)", &.{});
+        pre_hello_exit = .mtls_rejected;
         return error.CertificateError;
     }
 
@@ -5597,6 +5639,7 @@ pub fn handleQuicConnection(
                 log.warn("Timed out waiting for QUIC HELLO message", &.{
                     Attr.int("timeout_ms", @intCast(hello_read_timeout_ns / std.time.ns_per_ms)),
                 });
+                pre_hello_exit = .hello_timeout;
                 return;
             }
             const packet_opt = line_reader.nextMessage() catch |err| {
@@ -5610,6 +5653,7 @@ pub fn handleQuicConnection(
                     continue;
                 }
                 log.err("Protobuf read error during HELLO", &.{Attr.string("error", @errorName(err))});
+                pre_hello_exit = .hello_read_error;
                 return err;
             };
 
@@ -5625,7 +5669,10 @@ pub fn handleQuicConnection(
             // Process the message (should be HELLO, but handleClientMessage handles all types).
             handleClientMessage(gpa, &state, stream, msg, disable_estimates, compact_profile, memcurve_profile, peer_ip) catch |err| {
                 log.err("HELLO processing error", &.{Attr.string("error", @errorName(err))});
-                sendExecuteError(gpa, stream, "58000", "Internal Server Error", &.{}, &.{}) catch return;
+                sendExecuteError(gpa, stream, "58000", "Internal Server Error", &.{}, &.{}) catch {
+                    pre_hello_exit = .hello_processing_error;
+                    return;
+                };
                 continue;
             };
 
@@ -5646,6 +5693,7 @@ pub fn handleQuicConnection(
                         Attr.string("tenant", tid),
                     });
                     sendExecuteError(gpa, stream, "42000", "Connection quota exceeded for tenant", &.{}, &.{}) catch {};
+                    pre_hello_exit = .tenant_quota_exceeded;
                     return;
                 };
                 quota_tenant_id = gpa.dupe(u8, tid) catch null;
@@ -5675,6 +5723,7 @@ pub fn handleQuicConnection(
     conn_state.captureFromState(&state) catch |err| {
         // S7: Do NOT allow unauthenticated streams — close connection on capture failure
         log.err("Failed to capture connection state for multiplexing", &.{Attr.string("error", @errorName(err))});
+        pre_hello_exit = .conn_state_capture_failed;
         return;
     };
     state.shared_conn = &conn_state;

@@ -1835,13 +1835,17 @@ pub fn build(b: *std.Build) void {
     // receive-path deadlock (cross-repo "Ask #3" with geode-client-go v0.1.26:
     // a server-accepted, never-written stream whose graceful FIN cannot be
     // emitted left the client's receive direction half-open with no terminator).
+    // SONNY-1219b (F2): `tracked streams` pins that a served stream's wrapper is
+    // handed back to `conn.streams` instead of accumulating there for the
+    // connection's life, and that the list survives a handler thread releasing
+    // while the accept reactor appends.
     const transport_quic_tests = b.addTest(.{
         .root_module = transport_quic_mod,
-        .filters = &.{"finalizeStreamSend"},
+        .filters = &.{ "finalizeStreamSend", "tracked streams" },
     });
     transport_quic_tests.root_module.link_libc = true;
     const run_transport_quic_tests = b.addRunArtifact(transport_quic_tests);
-    const transport_quic_step = b.step("test-quic-transport", "Run src/transport/quic.zig finalizeStreamSend guaranteed-terminator unit tests");
+    const transport_quic_step = b.step("test-quic-transport", "Run src/transport/quic.zig finalizeStreamSend + tracked-stream-wrapper unit tests");
     transport_quic_step.dependOn(&run_transport_quic_tests.step);
 
     // Out-of-band /health liveness breadcrumb regression for

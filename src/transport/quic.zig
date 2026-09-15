@@ -1209,11 +1209,17 @@ pub const QuicTransport = struct {
         // Use poll_sync to ensure poll() doesn't race with connection teardown.
         // Close streams and connection. The QUIC library's closeStream/
         // closeConnection are thread-safe (per-connection mutex).
-        for (conn.streams.items) |stream| {
-            finalizeStreamSend(conn.inner, stream.stream_id); // FIN (with TX-init fallback)
-            conn.allocator.destroy(stream);
+        {
+            const streams_io = std.Io.Threaded.global_single_threaded.io();
+            conn.streams_mu.lockUncancelable(streams_io);
+            defer conn.streams_mu.unlock(streams_io);
+            for (conn.streams.items) |stream| {
+                finalizeStreamSend(conn.inner, stream.stream_id); // FIN (with TX-init fallback)
+                conn.allocator.destroy(stream);
+            }
+            conn.streams.deinit(conn.allocator);
+            conn.streams = .empty;
         }
-        conn.streams.deinit(conn.allocator);
         api.closeConnection(conn.inner, app_error_code) catch {}; // Best-effort cleanup
 
         // Queue the inner connection for deferred destruction on the main thread.
@@ -1280,7 +1286,26 @@ pub const QuicConnection = struct {
     quic_connection: ?*Connection = null,
     /// Non-nullable alias for the underlying connection (stays set after close).
     inner: *Connection,
+    /// Wrapper objects for every stream currently tracked on this connection.
+    ///
+    /// SONNY-1219b (F2): GUARDED BY `streams_mu`. This list used to have no lock
+    /// at all, which was survivable only because the per-connection acceptor
+    /// thread was its sole mutator — handlers never released their wrapper, so
+    /// every served sibling stream left a `*QuicStream` here until the whole
+    /// connection was destroyed. That was bounded by the first stream's life
+    /// before SONNY-1219; afterwards a pooled connection lives for hours and the
+    /// list grows without bound. Handlers now hand their wrapper back through
+    /// `destroyStream`, which means two threads mutate the list (the accept
+    /// reactor appending, a stream handler removing) and the `tracking_index`
+    /// fix-up in `destroyStream` has to be atomic with the `swapRemove`.
     streams: std.ArrayList(*QuicStream),
+    /// Guards `streams` (and the `tracking_index` bookkeeping inside it).
+    /// Leaf lock: nothing is acquired while it is held except the vendored
+    /// library's own per-connection lock via `finalizeStreamSend`. Never taken
+    /// while holding `QuicTransport.connections_mutex`... except by the
+    /// read-only metrics gauges, which take them in that order and nothing takes
+    /// them in the other.
+    streams_mu: std.Io.Mutex = std.Io.Mutex.init,
     /// Shared poll synchronization — see PollSync docs.
     poll_sync: ?*PollSync = null,
     shutdown_requested: std.atomic.Value(bool) = std.atomic.Value(bool).init(false),
@@ -1296,10 +1321,34 @@ pub const QuicConnection = struct {
             .stream_id = stream_id,
             .poll_sync = self.poll_sync,
             .shutdown_requested = &self.shutdown_requested,
-            .tracking_index = self.streams.items.len,
+            .tracking_index = 0, // assigned by appendTrackedStream under the lock
         };
-        try self.streams.append(self.allocator, stream);
+        self.appendTrackedStream(stream) catch |err| {
+            self.allocator.destroy(stream);
+            return err;
+        };
         return stream;
+    }
+
+    /// Append a wrapper to `streams` under `streams_mu`, assigning its
+    /// `tracking_index`. The index MUST be assigned under the same lock as the
+    /// append or a concurrent `destroyStream` swap can invalidate it.
+    fn appendTrackedStream(self: *QuicConnection, stream: *QuicStream) !void {
+        const io = std.Io.Threaded.global_single_threaded.io();
+        self.streams_mu.lockUncancelable(io);
+        defer self.streams_mu.unlock(io);
+        stream.tracking_index = self.streams.items.len;
+        try self.streams.append(self.allocator, stream);
+    }
+
+    /// Number of stream wrappers currently tracked. Surfaced as the
+    /// `quic_max_tracked_streams` gauge so the SONNY-1219b F2 regression can
+    /// assert the list stays bounded.
+    pub fn trackedStreamCount(self: *QuicConnection) usize {
+        const io = std.Io.Threaded.global_single_threaded.io();
+        self.streams_mu.lockUncancelable(io);
+        defer self.streams_mu.unlock(io);
+        return self.streams.items.len;
     }
 
     pub fn acceptStream(self: *QuicConnection) !*QuicStream {
@@ -1313,9 +1362,12 @@ pub const QuicConnection = struct {
             .stream_id = stream_id,
             .poll_sync = self.poll_sync,
             .shutdown_requested = &self.shutdown_requested,
-            .tracking_index = self.streams.items.len,
+            .tracking_index = 0, // assigned by appendTrackedStream under the lock
         };
-        try self.streams.append(self.allocator, stream);
+        self.appendTrackedStream(stream) catch |err| {
+            self.allocator.destroy(stream);
+            return err;
+        };
         return stream;
     }
 
@@ -1333,9 +1385,9 @@ pub const QuicConnection = struct {
             .stream_id = stream_id,
             .poll_sync = self.poll_sync,
             .shutdown_requested = &self.shutdown_requested,
-            .tracking_index = self.streams.items.len,
+            .tracking_index = 0, // assigned by appendTrackedStream under the lock
         };
-        self.streams.append(self.allocator, stream) catch {
+        self.appendTrackedStream(stream) catch {
             self.allocator.destroy(stream);
             return null;
         };
@@ -1396,24 +1448,37 @@ pub const QuicConnection = struct {
     /// CANARY: REQ=REQ-QUIC-STREAM-CLEANUP-001; FEATURE="StreamMemoryManagement"; ASPECT=DoubleFreePrevention; STATUS=EXEMPT; OWNER=transport; UPDATED=2025-12-27
     /// GAP-0201: Use swapRemove for O(1) removal instead of O(n) orderedRemove
     /// CANARY: REQ=REQ-PERF-STREAM-REMOVE-001; FEATURE="StreamRemovalOptimization"; ASPECT=O1Removal; STATUS=TESTED; TEST=test_performance_optimizations.zig; OWNER=transport; UPDATED=2026-01-30
+    /// SONNY-1219b (F2): safe to call from a stream-handler thread while the
+    /// accept reactor is appending on another — the lookup, the `swapRemove` and
+    /// the `tracking_index` fix-up are one critical section. A stream id the
+    /// library re-queues while this runs produces a DIFFERENT wrapper object, so
+    /// there is no double free: the re-queued wrapper is either destroyed by the
+    /// acceptor's `is_new_stream == false` branch or handed to a fresh handler.
     pub fn destroyStream(self: *QuicConnection, stream: *QuicStream) void {
-        // Prefer O(1) removal using stream-tracked index.
-        var idx = stream.tracking_index;
-        if (idx >= self.streams.items.len or self.streams.items[idx] != stream) {
-            // Fallback for defensive consistency if index drifted.
-            idx = 0;
-            while (idx < self.streams.items.len and self.streams.items[idx] != stream) : (idx += 1) {}
-            if (idx >= self.streams.items.len) {
-                self.allocator.destroy(stream);
-                return;
+        {
+            const io = std.Io.Threaded.global_single_threaded.io();
+            self.streams_mu.lockUncancelable(io);
+            defer self.streams_mu.unlock(io);
+
+            // Prefer O(1) removal using stream-tracked index.
+            var idx = stream.tracking_index;
+            if (idx >= self.streams.items.len or self.streams.items[idx] != stream) {
+                // Fallback for defensive consistency if index drifted.
+                idx = 0;
+                while (idx < self.streams.items.len and self.streams.items[idx] != stream) : (idx += 1) {}
+                if (idx >= self.streams.items.len) {
+                    // Already untracked (e.g. `close()` emptied the list first).
+                    self.allocator.destroy(stream);
+                    return;
+                }
+            }
+
+            _ = self.streams.swapRemove(idx);
+            if (idx < self.streams.items.len) {
+                self.streams.items[idx].tracking_index = idx;
             }
         }
-
-        _ = self.streams.swapRemove(idx);
-        if (idx < self.streams.items.len) {
-            self.streams.items[idx].tracking_index = idx;
-        }
-        // Now destroy the stream
+        // Now destroy the stream, outside the lock.
         self.allocator.destroy(stream);
     }
 
@@ -1423,11 +1488,17 @@ pub const QuicConnection = struct {
         defer {
             if (self.poll_sync) |ps| ps.leaveIo();
         }
-        for (self.streams.items) |stream| {
-            finalizeStreamSend(self.inner, stream.stream_id); // FIN (with TX-init fallback)
-            self.allocator.destroy(stream);
+        {
+            const io = std.Io.Threaded.global_single_threaded.io();
+            self.streams_mu.lockUncancelable(io);
+            defer self.streams_mu.unlock(io);
+            for (self.streams.items) |stream| {
+                finalizeStreamSend(self.inner, stream.stream_id); // FIN (with TX-init fallback)
+                self.allocator.destroy(stream);
+            }
+            self.streams.deinit(self.allocator);
+            self.streams = .empty;
         }
-        self.streams.deinit(self.allocator);
         // CANARY: REQ=REQ-QUIC-CONN-CLEANUP-001; FEATURE="ConnectionMemoryManagement"; ASPECT=ResourceLeak; STATUS=EXEMPT; OWNER=transport; UPDATED=2025-12-27
         // Use quic_connection and null it out to prevent double-close.
         if (self.quic_connection) |qc| {
@@ -2399,6 +2470,114 @@ test "PollSync: enterIo/leaveIo/enterPoll/leavePoll still correct" {
 // and emits a FIN-only frame, so it terminates exactly the streams `closeStream`
 // cannot. These tests pin the FIN-then-writeStream-FIN fallback policy.
 // ---------------------------------------------------------------------------
+
+// =============================================================================
+// SONNY-1219b (F2) — `conn.streams` must not accumulate served stream wrappers.
+//
+// `handleAdditionalStream` used to `close()` a served sibling stream but never
+// hand its `*QuicStream` back, so the wrapper stayed in `conn.streams` until the
+// whole connection was destroyed. Bounded by the first stream's life before
+// SONNY-1219; unbounded once a connection outlives it. These pin the release
+// path and the lock that lets a handler thread use it while the accept reactor
+// is appending on another thread.
+//
+// No live QUIC connection is needed: `appendTrackedStream` / `destroyStream` /
+// `trackedStreamCount` touch only the list, the allocator and `streams_mu`.
+// =============================================================================
+
+fn trackedStreamsTestConn(allocator: std.mem.Allocator) QuicConnection {
+    // `inner` is never dereferenced by the list operations under test.
+    const dummy_inner: *Connection = @ptrFromInt(0xDEAD_1219_B000);
+    return .{ .allocator = allocator, .inner = dummy_inner, .streams = .empty };
+}
+
+fn trackedStreamsTestStream(conn: *QuicConnection, stream_id: u64) !*QuicStream {
+    const stream = try conn.allocator.create(QuicStream);
+    stream.* = .{
+        .allocator = conn.allocator,
+        .connection = conn.inner,
+        .stream_id = stream_id,
+        .shutdown_requested = &conn.shutdown_requested,
+        .tracking_index = 0,
+    };
+    try conn.appendTrackedStream(stream);
+    return stream;
+}
+
+test "tracked streams: N served streams leave conn.streams bounded (SONNY-1219b F2)" {
+    const allocator = std.testing.allocator;
+    var conn = trackedStreamsTestConn(allocator);
+    defer conn.streams.deinit(allocator);
+
+    // Serve 128 streams the way a pooled client does: open, use, release. The
+    // tracked count must never exceed one, and must end at zero.
+    var i: u64 = 0;
+    var high_water: usize = 0;
+    while (i < 128) : (i += 1) {
+        const stream = try trackedStreamsTestStream(&conn, i);
+        high_water = @max(high_water, conn.trackedStreamCount());
+        conn.destroyStream(stream);
+    }
+    try std.testing.expectEqual(@as(usize, 1), high_water);
+    try std.testing.expectEqual(@as(usize, 0), conn.trackedStreamCount());
+}
+
+test "tracked streams: interleaved release keeps every tracking_index valid (SONNY-1219b F2)" {
+    // `destroyStream` swaps the last wrapper into the removed slot, so the
+    // survivors' `tracking_index` has to be fixed up under the same lock as the
+    // `swapRemove` or a later O(1) removal targets the wrong element.
+    const allocator = std.testing.allocator;
+    var conn = trackedStreamsTestConn(allocator);
+    defer conn.streams.deinit(allocator);
+
+    var streams: [16]*QuicStream = undefined;
+    for (&streams, 0..) |*slot, i| slot.* = try trackedStreamsTestStream(&conn, i);
+
+    // Release out of order: evens first, then odds.
+    for (streams, 0..) |stream, i| {
+        if (i % 2 == 0) conn.destroyStream(stream);
+    }
+    try std.testing.expectEqual(@as(usize, 8), conn.trackedStreamCount());
+    for (conn.streams.items, 0..) |stream, idx| {
+        try std.testing.expectEqual(idx, stream.tracking_index);
+    }
+    for (streams, 0..) |stream, i| {
+        if (i % 2 == 1) conn.destroyStream(stream);
+    }
+    try std.testing.expectEqual(@as(usize, 0), conn.trackedStreamCount());
+}
+
+test "tracked streams: concurrent append and release do not corrupt the list (SONNY-1219b F2)" {
+    // The production pattern: the accept reactor appends wrappers on its shard
+    // thread while stream handlers release theirs on pool threads. Before
+    // SONNY-1219b `conn.streams` had NO lock and handlers never released, so
+    // this pairing did not exist; now it does.
+    const allocator = std.testing.allocator;
+    var conn = trackedStreamsTestConn(allocator);
+    defer conn.streams.deinit(allocator);
+
+    const Worker = struct {
+        fn run(c: *QuicConnection, base: u64) void {
+            var i: u64 = 0;
+            while (i < 256) : (i += 1) {
+                const stream = trackedStreamsTestStream(c, base + i) catch return;
+                std.Thread.yield() catch {};
+                c.destroyStream(stream);
+            }
+        }
+    };
+
+    const t1 = try std.Thread.spawn(.{}, Worker.run, .{ &conn, 0 });
+    const t2 = try std.Thread.spawn(.{}, Worker.run, .{ &conn, 1_000 });
+    const t3 = try std.Thread.spawn(.{}, Worker.run, .{ &conn, 2_000 });
+    t1.join();
+    t2.join();
+    t3.join();
+
+    // Every wrapper was released exactly once: no leak (the testing allocator
+    // fails the test otherwise), no double free, and nothing stranded.
+    try std.testing.expectEqual(@as(usize, 0), conn.trackedStreamCount());
+}
 
 test "finalizeStreamSend: graceful FIN path, no fallback when closeStream succeeds" {
     const FakeConn = struct {

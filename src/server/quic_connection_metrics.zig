@@ -65,6 +65,30 @@ pub fn activeConnections(ctx_ptr: *anyopaque) u64 {
     return @intCast(ctx.transport.connections.items.len);
 }
 
+/// SONNY-1219b (F2): the largest number of `*QuicStream` WRAPPERS tracked on
+/// any one live connection.
+///
+/// Served sibling streams used to be `close()`d but never handed back with
+/// `conn.destroyStream`, so their wrappers accumulated in `conn.streams` for the
+/// connection's life — bounded by the first stream before SONNY-1219, unbounded
+/// once a connection outlives it. This is the gauge the regression asserts on:
+/// churn N streams on one connection and it must stay small, not reach N.
+///
+/// Takes `connections_mutex` (Tier-3) for the iteration and each connection's
+/// `streams_mu` (leaf) for the length. Nothing takes them in the other order.
+pub fn maxTrackedStreams(ctx_ptr: *anyopaque) u64 {
+    const ctx: *Ctx = @ptrCast(@alignCast(ctx_ptr));
+    const io = std.Io.Threaded.global_single_threaded.io();
+    ctx.transport.connections_mutex.lockUncancelable(io);
+    defer ctx.transport.connections_mutex.unlock(io);
+    var max: u64 = 0;
+    for (ctx.transport.connections.items) |conn| {
+        const n: u64 = @intCast(conn.trackedStreamCount());
+        if (n > max) max = n;
+    }
+    return max;
+}
+
 /// SONNY-1219b (F1): connections whose stream accepts the process-wide
 /// `StreamAcceptReactor` is currently driving.
 ///

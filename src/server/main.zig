@@ -2772,7 +2772,13 @@ pub fn main() !void {
             "geode_security_auth_store_unavailable_total",
             persistent_auth_resolver.storeUnavailableCounter(),
         );
-        // SONNY-1219b (F1): reactor-occupancy gauge.
+        // SONNY-1219b: F2's wrapper-accumulation gauge and F1's reactor-occupancy
+        // gauge. `tests/e2e_quic_first_stream_close_mux.zig` asserts on both.
+        try metrics_registry.registerGauge(
+            "quic_max_tracked_streams",
+            quic_metrics.maxTrackedStreams,
+            quic_metrics_ctx,
+        );
         try metrics_registry.registerGauge(
             "quic_accept_reactor_connections",
             quic_metrics.acceptReactorConnections,
