@@ -195,6 +195,20 @@ pub fn setEagerExactRebuildOnReopenDisabledForTest(disabled: ?bool) void {
     g_test_disable_eager_reopen_rebuild = disabled;
 }
 
+/// SONNY-1574 (fix pass 1574b) TEST-ONLY: force `graphDirPath` to fail the
+/// next time(s) it is called, so the "graph dir path unavailable" branch of
+/// `checkpointOneGraph`'s exact-index decision — in production reachable
+/// only via an allocator OOM — can be driven deterministically. A
+/// `std.testing.FailingAllocator` cannot aim at that one call: its
+/// fail-index counts every allocation on every thread sharing the
+/// allocator, including the persist worker's OWN background thread, so it
+/// cannot be pointed at this call without also perturbing setup. `false`
+/// (default) = normal behavior. Compiled out under `is_test == false`.
+var g_test_force_graph_dir_path_failure: bool = false;
+pub fn setForceGraphDirPathFailureForTesting(force: bool) void {
+    g_test_force_graph_dir_path_failure = force;
+}
+
 /// GAP-0064 FIX C: the ORDER-BY auto-build (`spawnOrderedIndexBuildAsync`) is
 /// ALWAYS ON in production. Under `is_test` it defaults to SUPPRESSED so the
 /// existing test corpus — which runs many `ORDER BY <non-indexed> LIMIT` queries
@@ -8093,7 +8107,16 @@ pub const StorageAdapter = struct {
     pub const ExactIndexPersistOutcome = enum {
         /// No persist decision ran for this checkpoint (LIGHT checkpoint, engine
         /// checkpoint failed, graph dir path unavailable, or the graph rwlock
-        /// was busy past the deadline).
+        /// was busy past the deadline). SONNY-1574 (fix pass 1574b): the
+        /// graph-dir-path-unavailable cause is ALSO counted in
+        /// `g_exact_persist_failures`, at the decision site
+        /// (`checkpointOneGraph`'s dir-path branch) — a FULL checkpoint that
+        /// "succeeded" (`.ok`) while never even reaching the persist decision
+        /// must not silently report zero writes, zero skips, zero failures,
+        /// and zero completions. The other causes need no extra counting: the
+        /// enclosing checkpoint already reports its own distinct outcome
+        /// (`OneGraphCheckpointOutcome.skipped_busy` / `.engine_failed`), and a
+        /// LIGHT checkpoint deliberately never attempts this decision.
         not_attempted,
         /// `saveToFile` succeeded — a fresh `prop_exact.idx` (+ reverse map) is
         /// on disk, stamped at this checkpoint's (epoch, covered_lsn).
@@ -8323,6 +8346,19 @@ pub const StorageAdapter = struct {
             }
             self.allocator.free(dir_path);
         } else |err| {
+            // SONNY-1574 (fix pass 1574b): this left `exact_out` at
+            // `.not_attempted` while the FULL checkpoint still returned `.ok`
+            // (this failure does not touch `engine_ok`) — so a caller like the
+            // persist-on-build worker saw a checkpoint that "succeeded" having
+            // made NO exact-index persist decision at all, and its warn-only
+            // handling counted nothing: zero writes, zero skips, zero
+            // failures, zero completions for a run that materially happened.
+            // Count it as a FAILURE here, at the decision site — the same
+            // place a `saveToFile` failure is counted
+            // (`checkpointPersistExactIndexLocked`'s two `write_failed`
+            // arms) — so every persist decision stays observable even when
+            // the failure is "we could not even ask the question."
+            _ = g_exact_persist_failures.fetchAdd(1, .monotonic);
             log.warn("failed to build graph dir path for property index persist '{s}': {}", .{ mg.name, err });
         }
         // bound-node-mirror grace point: we hold mg.rwlock EXCLUSIVE here,
@@ -8852,9 +8888,25 @@ pub const StorageAdapter = struct {
             // NOT a completion: post-fix the spawn happens outside the build
             // mutex, so reaching here means a DIFFERENT build owns the index and
             // will persist on its own completion.
-            .skipped_build_locked, .skipped_empty, .not_attempted => slog.warn("exact-index persist-on-build persisted nothing (skipped); the index stays memory-only until another build or checkpoint persists it", &.{
+            .skipped_build_locked, .skipped_empty => slog.warn("exact-index persist-on-build persisted nothing (skipped); the index stays memory-only until another build or checkpoint persists it", &.{
                 SAttr.string("graph", graph_name),
                 SAttr.string("outcome", @tagName(outcome)),
+            }),
+            // SONNY-1574 (fix pass 1574b): this worker always drives a FULL
+            // (non-light) checkpoint (`checkpointGraphEx` calls
+            // `checkpointOneGraph` with `light = false`), so reaching `.ok`
+            // with `exact_out` still `.not_attempted` here can ONLY mean the
+            // graph-dir-path resolution failed — the busy-rwlock and
+            // engine-checkpoint-failed cases return `.skipped_busy` /
+            // `.engine_failed` from `checkpointOneGraph`, never `.ok`
+            // (handled by the `catch` above via the propagated error), and a
+            // LIGHT checkpoint is never run from this worker. Already counted
+            // in `g_exact_persist_failures` at the decision site
+            // (`checkpointOneGraph`'s dir-path branch): this is a genuine
+            // failure to even DECIDE, not a benign skip, so it gets its own
+            // arm rather than being lumped in with the skip log above.
+            .not_attempted => slog.warn("exact-index persist-on-build persisted nothing: the exact-index persist decision never ran (graph dir path unavailable)", &.{
+                SAttr.string("graph", graph_name),
             }),
         }
     }
@@ -9217,6 +9269,11 @@ pub const StorageAdapter = struct {
     /// Pinned by tests/test_admin_bootstrap_env_and_reset.zig "offline
     /// reset-password writes a single graphs root (storage layout invariant)".
     fn graphDirPath(allocator: Allocator, data_dir: []const u8, graph_uuid: [16]u8) ![]const u8 {
+        if (comptime @import("builtin").is_test) {
+            // SONNY-1574 (fix pass 1574b): test-only fault injection — see
+            // `setForceGraphDirPathFailureForTesting`.
+            if (g_test_force_graph_dir_path_failure) return error.OutOfMemory;
+        }
         const hex = std.fmt.bytesToHex(graph_uuid, .lower);
         return std.fmt.allocPrint(allocator, "{s}/{s}", .{
             data_dir,

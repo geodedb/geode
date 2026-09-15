@@ -64,12 +64,22 @@ fn sleepMs(ms: u64) void {
 /// `writes` lands inside its checkpoint, its `completions` only after the
 /// checkpoint returns). Never waits on `completions`: that is exactly the
 /// surface under test, and waiting on it would assume the answer.
-fn waitForPersistWorkers(target: u64, deadline_ms: u64) void {
+///
+/// SONNY-1574 (fix pass 1574b): a bare timeout used to return SILENTLY, so a
+/// caller's assertions right after could pass spuriously against a worker
+/// that had not actually finished (its counters not yet final) if the 15 s
+/// bound expired mid-flight — the timeout would masquerade as the assertion
+/// having verified the real thing. Fail LOUDLY here instead: re-check the
+/// run count one last time via `expectEqual` so a timed-out wait fails the
+/// test with the actual vs. expected run count, rather than silently letting
+/// a stuck/slow worker's non-final counters get asserted on below.
+fn waitForPersistWorkers(target: u64, deadline_ms: u64) !void {
     var waited: u64 = 0;
     while (waited < deadline_ms) : (waited += 10) {
         if (adapter_mod.getExactIndexPersistWorkerRunsForTesting() >= target) return;
         sleepMs(10);
     }
+    try testing.expectEqual(target, adapter_mod.getExactIndexPersistWorkerRunsForTesting());
 }
 
 fn seed(adapter: *StorageAdapter, graph: []const u8, label: []const u8, n: usize, ids: []u64) !void {
@@ -116,7 +126,7 @@ test "exact-index persist: a skipped persist reports a skip, never a completion,
     // ---- (a) mutex held: the persist must SKIP and must NOT claim success. ----
     try adapter.holdExactIndexBuildMutexForTesting(graph);
     adapter.spawnExactIndexPersistForTesting(graph);
-    waitForPersistWorkers(1, 15_000);
+    try waitForPersistWorkers(1, 15_000);
 
     try testing.expectEqual(@as(u64, 1), adapter_mod.getExactIndexPersistAttemptsForTesting());
     try testing.expectEqual(@as(u64, 1), adapter_mod.getExactIndexPersistSkipsForTesting());
@@ -132,7 +142,7 @@ test "exact-index persist: a skipped persist reports a skip, never a completion,
     try adapter.releaseExactIndexBuildMutexForTesting(graph);
 
     adapter.spawnExactIndexPersistForTesting(graph);
-    waitForPersistWorkers(2, 15_000);
+    try waitForPersistWorkers(2, 15_000);
 
     try testing.expectEqual(@as(u64, 2), adapter_mod.getExactIndexPersistAttemptsForTesting());
     try testing.expectEqual(@as(u64, 1), adapter_mod.getExactIndexPersistWritesForTesting());
@@ -191,7 +201,7 @@ test "exact-index persist-on-build: the lazy rebuild's persist is spawned OUTSID
 
         // Wait for the persist WORKER to finish, then assert on the WRITE — not
         // on "the checkpoint returned".
-        waitForPersistWorkers(1, 15_000);
+        try waitForPersistWorkers(1, 15_000);
 
         try testing.expectEqual(@as(u64, 1), adapter_mod.getExactIndexPersistAttemptsForTesting());
         try testing.expectEqual(@as(u64, 1), adapter_mod.getExactIndexPersistWritesForTesting());
@@ -214,4 +224,62 @@ test "exact-index persist-on-build: the lazy rebuild's persist is spawned OUTSID
         try testing.expectEqualSlices(u64, node_ids[7..8], got);
         try testing.expectEqual(@as(u64, 0), adapter_mod.getExactRebuildRunsForTesting());
     }
+}
+
+// SONNY-1574 (fix pass 1574b) — review of e9fe7421 (minor #1): a
+// `graphDirPath` failure inside `checkpointOneGraph`'s FULL-checkpoint
+// exact-index decision logged and fell through, leaving `exact_out` at
+// `.not_attempted` while the checkpoint itself still returned `.ok`. The
+// persist-on-build worker's switch then warned without incrementing
+// ANYTHING: a run that materially happened (the persist decision could not
+// even be asked) reported zero writes, zero skips, zero failures, and zero
+// completions — the exact "lying success surface" shape this file's other
+// tests pin, just from a different entry point.
+//
+// `graphDirPath` only fails on an allocator OOM, and a
+// `std.testing.FailingAllocator`'s fail-index counts EVERY allocation on
+// EVERY thread sharing the allocator — including the persist worker's own
+// background thread — so it cannot be aimed at this one call without also
+// perturbing setup (seeding, the prior `checkpointAll`, thread spawns, ...).
+// This is driven deterministically instead via the dedicated test-only hook
+// `setForceGraphDirPathFailureForTesting`, flipped on only for the narrow
+// window of the deliberate spawn below and off again immediately after.
+test "exact-index persist: a graph-dir-path failure is counted as a failure, never a silent no-op" {
+    const allocator = testing.allocator;
+    adapter_mod.setEagerExactRebuildOnReopenDisabledForTest(true);
+    defer adapter_mod.setEagerExactRebuildOnReopenDisabledForTest(null);
+
+    var tmp = testing.tmpDir(.{});
+    defer tmp.cleanup();
+
+    const path = try std.fmt.allocPrint(allocator, ".zig-cache/tmp/{s}", .{&tmp.sub_path});
+    defer allocator.free(path);
+
+    const graph = "persist_dirpath_failure_graph";
+    const label = "Item";
+    const N: usize = 8;
+
+    const node_ids = try allocator.alloc(u64, N);
+    defer allocator.free(node_ids);
+
+    const adapter = try StorageAdapter.init(allocator, path, testConfig());
+    defer adapter.deinit();
+
+    try seed(adapter, graph, label, N, node_ids);
+    try adapter.checkpointAll();
+
+    adapter_mod.resetExactIndexPersistCountersForTesting();
+
+    adapter_mod.setForceGraphDirPathFailureForTesting(true);
+    adapter.spawnExactIndexPersistForTesting(graph);
+    try waitForPersistWorkers(1, 15_000);
+    adapter_mod.setForceGraphDirPathFailureForTesting(false);
+
+    try testing.expectEqual(@as(u64, 1), adapter_mod.getExactIndexPersistAttemptsForTesting());
+    // RED (pre-fix): this was 0 — a persist decision that never even ran
+    // counted as NOTHING instead of a failure.
+    try testing.expectEqual(@as(u64, 1), adapter_mod.getExactIndexPersistFailuresForTesting());
+    try testing.expectEqual(@as(u64, 0), adapter_mod.getExactIndexPersistWritesForTesting());
+    try testing.expectEqual(@as(u64, 0), adapter_mod.getExactIndexPersistSkipsForTesting());
+    try testing.expectEqual(@as(u64, 0), adapter_mod.getExactIndexPersistCompletionsForTesting());
 }
