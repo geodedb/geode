@@ -9607,6 +9607,264 @@ test "pre-HELLO close code: every refusal and failure is named, exhaustively" {
 }
 
 // =============================================================================
+// SONNY-1219c (M-1) — `drainPending`'s allocation-failure teardown must not run
+// under `shard.mu`.
+//
+// The registry append is the one allocation the reactor makes per connection.
+// When it fails, the shard owes that connection the teardown nobody else will
+// run — but that teardown is `firstStreamOwnerConnTeardown` →
+// `destroyConnectionOwnerResources` → `waitForAllStreamsDrained()`, whose wait
+// is deliberately UNBOUNDED (a sibling handler mid-request must not be freed
+// under). Running it inside the `shard.mu` critical section therefore parks
+// every `register()` for that shard behind an unbounded wait: connection
+// admission for 1/64th of all new connections wedges — the exact F1 failure
+// mode the reactor was built to remove, reintroduced on the OOM path.
+// =============================================================================
+
+/// Allocator that can be switched to "every allocation fails" at a point the
+/// test chooses. Thread-safe (the shard thread allocates concurrently), unlike
+/// `std.testing.FailingAllocator`'s unsynchronized index.
+const ToggledOomAllocator = struct {
+    backing: std.mem.Allocator,
+    fail: std.atomic.Value(bool) = std.atomic.Value(bool).init(false),
+
+    fn allocator(self: *ToggledOomAllocator) std.mem.Allocator {
+        return .{ .ptr = self, .vtable = &.{
+            .alloc = alloc,
+            .resize = resize,
+            .remap = remap,
+            .free = free,
+        } };
+    }
+
+    fn alloc(ctx: *anyopaque, len: usize, alignment: std.mem.Alignment, ra: usize) ?[*]u8 {
+        const self: *ToggledOomAllocator = @ptrCast(@alignCast(ctx));
+        if (self.fail.load(.acquire)) return null;
+        return self.backing.rawAlloc(len, alignment, ra);
+    }
+
+    fn resize(ctx: *anyopaque, memory: []u8, alignment: std.mem.Alignment, new_len: usize, ra: usize) bool {
+        const self: *ToggledOomAllocator = @ptrCast(@alignCast(ctx));
+        if (self.fail.load(.acquire)) return false;
+        return self.backing.rawResize(memory, alignment, new_len, ra);
+    }
+
+    fn remap(ctx: *anyopaque, memory: []u8, alignment: std.mem.Alignment, new_len: usize, ra: usize) ?[*]u8 {
+        const self: *ToggledOomAllocator = @ptrCast(@alignCast(ctx));
+        if (self.fail.load(.acquire)) return null;
+        return self.backing.rawRemap(memory, alignment, new_len, ra);
+    }
+
+    fn free(ctx: *anyopaque, memory: []u8, alignment: std.mem.Alignment, ra: usize) void {
+        const self: *ToggledOomAllocator = @ptrCast(@alignCast(ctx));
+        self.backing.rawFree(memory, alignment, ra);
+    }
+};
+
+test "accept reactor: a wedged OOM teardown still leaves register answering on that shard" {
+    const allocator = std.testing.allocator;
+
+    var oom: ToggledOomAllocator = .{ .backing = allocator };
+    const gpa = oom.allocator();
+
+    const dummy_transport: *quic_transport.QuicTransport = @ptrFromInt(0xDEAD_1219_C000);
+    const dummy_conn: *quic_transport.QuicConnection = @ptrFromInt(0xDEAD_1219_C100);
+    var dummy_conn_state: SharedConnState = .{ .allocator = allocator };
+    defer dummy_conn_state.deinit();
+    const dummy_pool: *pooled.ThreadPool = @ptrFromInt(0xDEAD_1219_C200);
+
+    // One shard, so every registration lands on the same `shard.mu`.
+    const reactor = try StreamAcceptReactor.init(gpa, 1);
+
+    // Stands in for `waitForAllStreamsDrained` on a connection whose sibling
+    // handler has not finished: it does not return until the test says so. The
+    // 10 s ceiling is a safety net — a regression must FAIL this test, never
+    // hang the suite.
+    const Wedge = struct {
+        var entered: std.atomic.Value(bool) = std.atomic.Value(bool).init(false);
+        var release: std.atomic.Value(bool) = std.atomic.Value(bool).init(false);
+        fn run(_: *anyopaque) void {
+            entered.store(true, .release);
+            var spins: usize = 0;
+            while (!release.load(.acquire) and spins < 2_000) : (spins += 1) {
+                compat_sleepNs(5 * std.time.ns_per_ms);
+            }
+        }
+    };
+    Wedge.entered.store(false, .release);
+    Wedge.release.store(false, .release);
+
+    const wedged = try StreamAcceptorContext.create(allocator, dummy_transport, dummy_conn, &dummy_conn_state, dummy_pool);
+    var owner: u8 = 0;
+    try std.testing.expect(wedged.handOffConnectionOwner(@ptrCast(&owner), Wedge.run));
+
+    // Give the registration inbox its capacity while allocation still works, so
+    // the ONLY allocation that fails is the `entries.append` inside
+    // `drainPending` — the failure this test is about. Done under `shard.mu`,
+    // which is also what `drainPending` takes, so no pass can interleave.
+    {
+        const io = std.Io.Threaded.global_single_threaded.io();
+        reactor.shards[0].mu.lockUncancelable(io);
+        defer reactor.shards[0].mu.unlock(io);
+        try reactor.shards[0].pending.ensureTotalCapacity(gpa, 4);
+        oom.fail.store(true, .release);
+    }
+
+    try std.testing.expect(reactor.register(wedged));
+
+    var waited_ms: usize = 0;
+    while (!Wedge.entered.load(.acquire) and waited_ms < 5_000) : (waited_ms += 1) {
+        compat_sleepNs(std.time.ns_per_ms);
+    }
+    try std.testing.expect(Wedge.entered.load(.acquire));
+
+    // THE ASSERTION: a second registration on the same shard must be ANSWERED
+    // while that teardown runs. Refusal is a legitimate answer under allocation
+    // failure (the caller falls back to single-stream mode); never returning is
+    // not.
+    const Probe = struct {
+        var done: std.atomic.Value(bool) = std.atomic.Value(bool).init(false);
+        fn run(r: *StreamAcceptReactor, c: *StreamAcceptorContext) void {
+            _ = r.register(c);
+            done.store(true, .release);
+        }
+    };
+    Probe.done.store(false, .release);
+    const second = try StreamAcceptorContext.create(allocator, dummy_transport, dummy_conn, &dummy_conn_state, dummy_pool);
+    const prober = try std.Thread.spawn(.{}, Probe.run, .{ reactor, second });
+
+    var bound_ms: usize = 0;
+    while (!Probe.done.load(.acquire) and bound_ms < 1_000) : (bound_ms += 1) {
+        compat_sleepNs(std.time.ns_per_ms);
+    }
+    const answered = Probe.done.load(.acquire);
+
+    // Unwedge BEFORE asserting so the test tears down cleanly either way.
+    Wedge.release.store(true, .release);
+    prober.join();
+    oom.fail.store(false, .release);
+    reactor.deinit();
+
+    // The reactor consumes the caller's reference (markDone + release) on the
+    // contexts it took over; a refused registration leaves both refs with us.
+    if (wedged.done.load(.acquire)) wedged.release() else {
+        wedged.release();
+        wedged.release();
+    }
+    if (second.done.load(.acquire)) second.release() else {
+        second.release();
+        second.release();
+    }
+
+    try std.testing.expect(answered);
+}
+
+// =============================================================================
+// SONNY-1219c (m-5) — the close-code tests above are tautologies on their own.
+//
+// `preHelloCloseCode(.x) == y` restates the `switch`; it would still pass if
+// every `pre_hello_exit = ...` assignment were deleted from the production
+// path. These two source-text guards pin what the switch cannot: that every
+// variant is actually REACHED, and that no `try` escapes `handleQuicConnection`
+// around the enum and back out through the `.peer_eof` default (code 0).
+//
+// Source-text scanning is the idiom `tests/test_quic_condition_timedwait_cadence.zig`
+// already uses for guards no type system can express.
+// =============================================================================
+
+/// Read a file via raw Linux syscalls — same reason as the cadence audit: no
+/// Io.Dir/allocator churn between Zig versions, self-contained.
+fn preHelloReadSource(allocator: std.mem.Allocator, path: []const u8) !?[]u8 {
+    const linux = std.os.linux;
+    var pathz: [4096]u8 = undefined;
+    if (path.len + 1 > pathz.len) return error.PathTooLong;
+    @memcpy(pathz[0..path.len], path);
+    pathz[path.len] = 0;
+
+    const open_flags: linux.O = .{ .ACCMODE = .RDONLY };
+    const rc = linux.open(@ptrCast(&pathz), open_flags, 0);
+    if (@as(isize, @bitCast(rc)) < 0) return null;
+    const fd: i32 = @intCast(rc);
+    defer _ = linux.close(fd);
+
+    var buf: std.ArrayList(u8) = .empty;
+    errdefer buf.deinit(allocator);
+    var chunk: [16384]u8 = undefined;
+    while (true) {
+        const n_rc = linux.read(fd, &chunk, chunk.len);
+        const n_signed: isize = @bitCast(n_rc);
+        if (n_signed < 0) return error.ReadFailed;
+        const n: usize = @intCast(n_signed);
+        if (n == 0) break;
+        try buf.appendSlice(allocator, chunk[0..n]);
+    }
+    return try buf.toOwnedSlice(allocator);
+}
+
+const pre_hello_handler_source_path = "src/server/quic_connection_handler.zig";
+
+test "pre-HELLO close code: every exit variant is actually assigned in the handler" {
+    const allocator = std.testing.allocator;
+    const maybe_src = try preHelloReadSource(allocator, pre_hello_handler_source_path);
+    // Only reachable when the test runner's cwd is not the repo root.
+    const src = maybe_src orelse return error.SkipZigTest;
+    defer allocator.free(src);
+
+    inline for (comptime std.enums.values(PreHelloExit)) |exit| {
+        const assignment = "pre_hello_exit = ." ++ @tagName(exit) ++ ";";
+        const declared = "pre_hello_exit: PreHelloExit = ." ++ @tagName(exit) ++ ";";
+        if (std.mem.indexOf(u8, src, assignment) == null and
+            std.mem.indexOf(u8, src, declared) == null)
+        {
+            std.debug.print(
+                "PreHelloExit.{s} is mapped by preHelloCloseCode but never assigned in {s}\n",
+                .{ @tagName(exit), pre_hello_handler_source_path },
+            );
+            return error.UnassignedPreHelloExit;
+        }
+    }
+}
+
+test "pre-HELLO close code: no bare try escapes handleQuicConnection before the hand-off" {
+    const allocator = std.testing.allocator;
+    const maybe_src = try preHelloReadSource(allocator, pre_hello_handler_source_path);
+    const src = maybe_src orelse return error.SkipZigTest;
+    defer allocator.free(src);
+
+    // The region is everything the `defer` covers while `destroy_conn` is still
+    // true: from the defer itself to the hand-off that clears it. A `try` in
+    // here returns WITHOUT setting `pre_hello_exit`, so the defer closes on the
+    // `.peer_eof` default — application error 0, the very thing F3 set out to
+    // remove.
+    const start_marker = "defer if (destroy_conn) transport.destroyConnectionWithError(conn, preHelloCloseCode(pre_hello_exit));";
+    const end_marker = "\n    destroy_conn = false;";
+    const start = std.mem.indexOf(u8, src, start_marker) orelse return error.HandlerDeferNotFound;
+    const end = std.mem.indexOfPos(u8, src, start, end_marker) orelse return error.HandlerHandOffNotFound;
+
+    var line_no: usize = 1 + std.mem.count(u8, src[0..start], "\n");
+    var it = std.mem.splitScalar(u8, src[start + start_marker.len .. end], '\n');
+    var offenders: usize = 0;
+    while (it.next()) |raw| {
+        line_no += 1;
+        // Comments are not code: truncate at the first `//`.
+        const code = if (std.mem.indexOf(u8, raw, "//")) |c| raw[0..c] else raw;
+        var i: usize = 0;
+        while (std.mem.indexOfPos(u8, code, i, "try ")) |hit| {
+            i = hit + 1;
+            // `retry `, `sentry ` … are not the `try` keyword.
+            if (hit > 0 and (std.ascii.isAlphanumeric(code[hit - 1]) or code[hit - 1] == '_')) continue;
+            offenders += 1;
+            std.debug.print(
+                "{s}:{d}: bare `try` escapes handleQuicConnection with the pre-HELLO default (code 0):{s}\n",
+                .{ pre_hello_handler_source_path, line_no, raw },
+            );
+            break;
+        }
+    }
+    if (offenders != 0) return error.UnnamedPreHelloExit;
+}
+
+// =============================================================================
 // REQ-QUIC-FIRST-STREAM-OWNER-LIFETIME — FirstStreamOwnerContext use-after-free
 // =============================================================================
 //

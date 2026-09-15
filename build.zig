@@ -1841,7 +1841,9 @@ pub fn build(b: *std.Build) void {
     // while the accept reactor appends.
     const transport_quic_tests = b.addTest(.{
         .root_module = transport_quic_mod,
-        .filters = &.{ "finalizeStreamSend", "tracked streams" },
+        // SONNY-1219c: "server-initiated close" adds the M-2a close-code tests.
+        // Filters only — the step ROOT is untouched (that is ticket T-2).
+        .filters = &.{ "finalizeStreamSend", "tracked streams", "server-initiated close" },
     });
     transport_quic_tests.root_module.link_libc = true;
     const run_transport_quic_tests = b.addRunArtifact(transport_quic_tests);

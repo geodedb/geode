@@ -2579,6 +2579,115 @@ test "tracked streams: concurrent append and release do not corrupt the list (SO
     try std.testing.expectEqual(@as(usize, 0), conn.trackedStreamCount());
 }
 
+test "tracked streams: destroyStream will not free a wrapper another release path owns (SONNY-1219c m-6)" {
+    // `QuicConnection.close()` and `QuicTransport.deinit` empty `streams` and
+    // free EVERY wrapper in it. A stream handler still inside
+    // `handleAdditionalStream` then hands the same wrapper back through
+    // `destroyStream`, whose not-found fallback used to free it a second time —
+    // a double free, and a read of freed memory on the way in. Nothing called
+    // `destroyStream` before SONNY-1219b, so the fallback was inert; the F2
+    // release path made it reachable.
+    //
+    // The list is emptied here WITHOUT the frees, so the second free is
+    // observable (the testing allocator fails on it) instead of undefined.
+    const allocator = std.testing.allocator;
+    var conn = trackedStreamsTestConn(allocator);
+    defer conn.streams.deinit(allocator);
+
+    const stream = try trackedStreamsTestStream(&conn, 42);
+    conn.streams.clearRetainingCapacity();
+
+    conn.destroyStream(stream);
+
+    // The owning release path's free. If `destroyStream` freed it too, this is
+    // a double free and the testing allocator says so.
+    allocator.destroy(stream);
+}
+
+test "tracked streams: destroyStream is a no-op once a wrapper is latched released (SONNY-1219c m-6)" {
+    // The explicit form of the same contract: whichever release path reaches a
+    // wrapper first latches `released` under `streams_mu`, and `destroyStream`
+    // then neither untracks nor frees it.
+    const allocator = std.testing.allocator;
+    var conn = trackedStreamsTestConn(allocator);
+    defer conn.streams.deinit(allocator);
+
+    const stream = try trackedStreamsTestStream(&conn, 7);
+    stream.released.store(true, .release);
+
+    conn.destroyStream(stream);
+    try std.testing.expectEqual(@as(usize, 1), conn.trackedStreamCount());
+
+    _ = conn.streams.swapRemove(0);
+    allocator.destroy(stream);
+}
+
+// =============================================================================
+// SONNY-1219c (M-2a) — a server-initiated shutdown must name itself on the wire.
+//
+// `QuicConnection.requestShutdown` and `close()` hard-coded `closeConnection(qc, 0)`.
+// Those are the ROUTINE server-stop paths — `QuicTransport.requestShutdown`
+// (SIGTERM, via `src/server/main.zig`), `forceCloseConnections` (the Gap-0039
+// bounded drain deadline) and `QuicTransport.deinit` — so the CONNECTION_CLOSE
+// that actually reaches the peer carried NO_ERROR and the later
+// `destroyConnectionWithError(conn, server_teardown)` was a no-op on the wire,
+// because the connection was already closing. The whole `server_teardown`
+// mechanism was defeated on the single most important server-initiated close.
+//
+// The code each path hands to `api.closeConnection` is latched in
+// `close_app_error`, which is what these assert. (The peer-side assertion the
+// SONNY-1219c addendum asks for is not expressible against vendored quic
+// v0.1.40: `endpoint/frame_handler.zig:308 handleConnectionClose` discards the
+// received error code entirely — it returns only `saw_close` — so no
+// `QuicClient` can observe it. That is review follow-up T-8.)
+// =============================================================================
+
+test "server-initiated close: transport shutdown names every connection teardown (SONNY-1219c M-2a)" {
+    const allocator = std.testing.allocator;
+    var conn = trackedStreamsTestConn(allocator);
+    defer conn.streams.deinit(allocator);
+
+    var transport = try QuicTransport.init(allocator, .{});
+    defer transport.connections.deinit(allocator);
+    try transport.connections.append(allocator, &conn);
+
+    try std.testing.expectEqual(app_error.no_error, conn.close_app_error.load(.acquire));
+
+    transport.requestShutdown();
+
+    try std.testing.expect(conn.shutdown_requested.load(.acquire));
+    try std.testing.expectEqual(app_error.server_teardown, conn.close_app_error.load(.acquire));
+}
+
+test "server-initiated close: the drain-deadline force close names itself too (SONNY-1219c M-2a)" {
+    const allocator = std.testing.allocator;
+    var conn = trackedStreamsTestConn(allocator);
+    defer conn.streams.deinit(allocator);
+
+    var transport = try QuicTransport.init(allocator, .{});
+    defer transport.connections.deinit(allocator);
+    try transport.connections.append(allocator, &conn);
+
+    try std.testing.expectEqual(@as(usize, 1), transport.forceCloseConnections());
+    try std.testing.expectEqual(app_error.server_teardown, conn.close_app_error.load(.acquire));
+}
+
+test "server-initiated close: a graceful close stays NO_ERROR (SONNY-1219c M-2a)" {
+    // The parameter is not a licence to name everything `server_teardown`: a
+    // caller that IS closing gracefully still says so, and `peer_eof` /
+    // `no_error` must stay distinguishable from a server pulling the
+    // connection out from under the peer.
+    const allocator = std.testing.allocator;
+    var conn = trackedStreamsTestConn(allocator);
+    defer conn.streams.deinit(allocator);
+
+    conn.requestShutdown(app_error.no_error);
+    try std.testing.expectEqual(app_error.no_error, conn.close_app_error.load(.acquire));
+
+    conn.close(app_error.server_teardown);
+    try std.testing.expectEqual(app_error.server_teardown, conn.close_app_error.load(.acquire));
+}
+
 test "finalizeStreamSend: graceful FIN path, no fallback when closeStream succeeds" {
     const FakeConn = struct {
         close_calls: u32 = 0,
