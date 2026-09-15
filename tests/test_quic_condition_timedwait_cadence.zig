@@ -2531,9 +2531,16 @@ test "optimized server builds use high-concurrency allocator" {
 }
 
 test "optimized quic stream pools are tunable for high fanout" {
-    // Stream and acceptor workers are long-lived per connection/stream loops.
-    // Keep their defaults and env knobs pinned so high fan-out tests are not
-    // silently capped by a 64-worker pool.
+    // Stream workers are long-lived per-stream loops. Keep their defaults and
+    // env knobs pinned so high fan-out tests are not silently capped by a
+    // 64-worker pool.
+    //
+    // SONNY-1219b: there is no acceptor POOL any more, so
+    // `GEODE_QUIC_ACCEPTOR_QUEUE_CAPACITY` is gone — a connection no longer
+    // submits a long-lived accept task, so there is no accept-task queue to
+    // size. `GEODE_QUIC_ACCEPTOR_WORKERS` survives with its name and its
+    // meaning and now sizes the `StreamAcceptReactor`'s threads, which is what
+    // this assertion pins instead.
     const allocator = testing.allocator;
     const maybe_content = try readFile(allocator, "src/server/main.zig");
     const content = maybe_content orelse return error.FileNotFound;
@@ -2544,7 +2551,8 @@ test "optimized quic stream pools are tunable for high fanout" {
     try testing.expect(std.mem.indexOf(u8, content, "\"GEODE_QUIC_STREAM_WORKERS\"") != null);
     try testing.expect(std.mem.indexOf(u8, content, "\"GEODE_QUIC_STREAM_QUEUE_CAPACITY\"") != null);
     try testing.expect(std.mem.indexOf(u8, content, "\"GEODE_QUIC_ACCEPTOR_WORKERS\"") != null);
-    try testing.expect(std.mem.indexOf(u8, content, "\"GEODE_QUIC_ACCEPTOR_QUEUE_CAPACITY\"") != null);
+    try testing.expect(std.mem.indexOf(u8, content, "StreamAcceptReactor.init(gpa, quic_acceptor_worker_count)") != null);
+    try testing.expect(std.mem.indexOf(u8, content, "quic_connection_handler.setAcceptReactor") != null);
     try testing.expect(std.mem.indexOf(u8, content, ".blocking_workers = 0") != null);
 }
 

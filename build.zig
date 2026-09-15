@@ -1514,18 +1514,19 @@ pub fn build(b: *std.Build) void {
     // "acceptor bail deadline" tests so the connection-burst-wedge fix can be
     // validated without running the entire exe unit-test suite. These inline
     // tests also run as part of `test` (via exe_unit_tests shard 8).
-    const acceptor_bail_test_mod = b.createModule(.{ .root_source_file = b.path("src/main.zig"), .target = target, .optimize = optimize });
-    acceptor_bail_test_mod.addImport("geode", root_mod);
-    acceptor_bail_test_mod.addImport("json", json_mod);
-    acceptor_bail_test_mod.addImport("build_options", build_options_mod);
-    acceptor_bail_test_mod.addImport("timeseries_lib", timeseries_ext_mod);
-    acceptor_bail_test_mod.addImport("timeseries_storage_lib", timeseries_storage_ext_mod);
-    acceptor_bail_test_mod.addImport("fts_storage_lib", fts_storage_ext_mod);
-    const acceptor_bail_tests = b.addTest(.{ .root_module = acceptor_bail_test_mod, .filters = &.{"acceptor bail deadline"} });
-    acceptor_bail_tests.root_module.link_libc = true; // std.c.getenv via posixGetenv
-    const run_acceptor_bail_tests = b.addRunArtifact(acceptor_bail_tests);
-    const acceptor_bail_step = b.step("test-acceptor-bail", "Run acceptor-shutdown bail-deadline regression (connection-burst wedge)");
-    acceptor_bail_step.dependOn(&run_acceptor_bail_tests.step);
+    // SONNY-1219b (F5): the acceptor-shutdown BAIL path is gone. SONNY-1219 had
+    // already made it unreachable (`shutdownAcceptorOwner` is only ever called
+    // with `acceptor_submitted == false`) and, had it re-armed, its deferred
+    // teardown released the first stream's slot twice — `assert(prev > 0)` in
+    // `releaseActiveStream`. Its three unit tests went with it.
+    //
+    // They were never running anyway: this step was rooted at `src/main.zig`,
+    // the untouched `zig init` scaffold, which references nothing, so it
+    // discovered ZERO tests and passed vacuously in ~86 ms — less than the
+    // 150 ms its own wedge test slept. The step name is kept so existing
+    // tooling and runbooks keep working, but it now points at the
+    // `test-quic-accept-reactor` runner (defined below, with a root that
+    // actually reaches the handler), which covers what replaced the bail path.
 
     // GAP-0844: focused runner for the FLE role-isolation regression. Roots
     // src/fle_integration.zig directly so its inline tests are test-discovered
@@ -7838,6 +7839,9 @@ pub fn build(b: *std.Build) void {
     const run_accept_reactor_tests = b.addRunArtifact(accept_reactor_tests);
     const accept_reactor_step = b.step("test-quic-accept-reactor", "SONNY-1219b: QUIC accept-reactor occupancy + pre-HELLO close codes (inline handler tests)");
     accept_reactor_step.dependOn(&run_accept_reactor_tests.step);
+    // Retired name, repointed — see the note where the old bail runner was.
+    const acceptor_bail_step = b.step("test-acceptor-bail", "Retired (SONNY-1219b): the acceptor bail path is deleted; runs test-quic-accept-reactor instead");
+    acceptor_bail_step.dependOn(&run_accept_reactor_tests.step);
     shardDep(test_step, &run_accept_reactor_tests.step, 8, test_shard_loads, test_shard_index);
 
     // Focused runner for the idle-connection reap-cap regression

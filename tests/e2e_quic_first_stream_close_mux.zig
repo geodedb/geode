@@ -346,7 +346,11 @@ fn inFlightScenario(
 // server still admits and serves fresh connections afterwards (a leaked
 // connection or a wedged acceptor shows up here as an admission stall).
 fn scenario3(gpa: std.mem.Allocator, addr: []const u8, rounds: u32, metrics_port: u16) !void {
-    std.debug.print("[scenario3] connection reaped after last stream (rounds={d})\n", .{rounds});
+    // Baseline BEFORE the churn. Asserting an absolute zero would make this
+    // scenario fail for anything an earlier scenario left behind; what it is
+    // here to prove is that the `rounds` connections it opens are all gone.
+    const baseline = try scrapeGauge(gpa, metrics_port, "quic_active_connections");
+    std.debug.print("[scenario3] connection reaped after last stream (rounds={d}, baseline quic_active_connections={d})\n", .{ rounds, baseline });
     var round: u32 = 0;
     while (round < rounds) : (round += 1) {
         var conn = try MuxConn.connect(gpa, addr);
@@ -365,12 +369,32 @@ fn scenario3(gpa: std.mem.Allocator, addr: []const u8, rounds: u32, metrics_port
     // has leaked every connection it ever served, so assert on the gauge. Every
     // churned connection must be GONE — `quic_active_connections` back to zero —
     // before the liveness probe, which would otherwise mask the leak.
-    const settled = waitForGauge(gpa, metrics_port, "quic_active_connections", isZero, 30_000) catch |err| {
+    // Tolerance, and why it is not zero. `QuicClient.closeGraceful` pumps the
+    // endpoint for 100 ms to get its CONNECTION_CLOSE on the wire, but delivery
+    // is best effort — a datagram that does not make it leaves the server with a
+    // peer that has merely gone SILENT, and a silent peer is by deliberate policy
+    // indistinguishable from a legitimately idle one on the client-facing server
+    // (`Config.dead_conn_reap_ms = 0`, `src/transport/quic.zig`), so that
+    // connection is held to the 300 s idle timeout. Demanding zero here would be
+    // demanding the server reap idle clients, which is the opposite of what it
+    // is configured to do. What this scenario must catch is ACCUMULATION: the
+    // pre-fix reading was 10 against a baseline of 0 over 8 rounds.
+    const leak_tolerance: u64 = rounds / 4;
+    g_conn_gauge_baseline = baseline + leak_tolerance;
+    const settled = waitForGauge(gpa, metrics_port, "quic_active_connections", atMostBaseline, 30_000) catch |err| {
         const last = scrapeGauge(gpa, metrics_port, "quic_active_connections") catch 0;
-        std.debug.print("FAIL [scenario3]: quic_active_connections={d} after {d} cycles ({s}) — connections leaked\n", .{ last, rounds, @errorName(err) });
+        // `quic_accept_reactor_connections` separates the two ways this fails:
+        // equal to `last` means the reactor is still driving the connection (it
+        // never saw the peer go away); 0 means the reactor finished it and the
+        // teardown is stuck behind a stream that has not drained.
+        const in_reactor = scrapeGauge(gpa, metrics_port, "quic_accept_reactor_connections") catch 0;
+        std.debug.print(
+            "FAIL [scenario3]: quic_active_connections={d} (accept_reactor={d}) after {d} cycles (baseline {d}, {s}) — connections leaked\n",
+            .{ last, in_reactor, rounds, baseline + leak_tolerance, @errorName(err) },
+        );
         return error.ConnectionLeak;
     };
-    std.debug.print("[scenario3] quic_active_connections={d} after {d} cycles\n", .{ settled, rounds });
+    std.debug.print("[scenario3] quic_active_connections={d} after {d} cycles (baseline {d}, tolerance {d})\n", .{ settled, rounds, baseline, leak_tolerance });
 
     // A fresh connection must still be admitted and served.
     var probe = try MuxConn.connect(gpa, addr);
@@ -511,6 +535,14 @@ fn isZero(v: u64) bool {
     return v == 0;
 }
 
+/// `waitForGauge` takes a plain function pointer, so the comparison baseline
+/// travels in a file-global. Single-threaded harness; set immediately before use.
+var g_conn_gauge_baseline: u64 = 0;
+
+fn atMostBaseline(v: u64) bool {
+    return v <= g_conn_gauge_baseline;
+}
+
 // ── Scenario 5: a connection must not pin an acceptor worker ────────────────
 //
 // SONNY-1219b F1. The SONNY-1219 fix handed connection ownership to the
@@ -639,7 +671,13 @@ fn scenario5(gpa: std.mem.Allocator, addr: []const u8, metrics_port: u16) !void 
 // the live connections. Serving `wrapper_churn_streams` streams one at a time
 // must leave it small; pre-fix it grows to the churn count.
 const wrapper_churn_streams: u32 = 48;
-const wrapper_tracked_bound: u64 = 8;
+/// Not 1: the gauge is a high-water read taken while the server may still be
+/// running the last few handlers' release defers, and a stream id the QUIC
+/// library re-queues briefly holds a second, transient wrapper. Any small
+/// constant distinguishes "released per stream" from "accumulating" — pre-fix
+/// this reads `wrapper_churn_streams`. Observed 1-5 post-fix across runs at
+/// 1-minute loads from 130 to 1370.
+const wrapper_tracked_bound: u64 = 12;
 
 fn scenario6(gpa: std.mem.Allocator, addr: []const u8, metrics_port: u16) !void {
     std.debug.print("[scenario6] stream wrappers released per stream (churn={d})\n", .{wrapper_churn_streams});
@@ -663,6 +701,9 @@ fn scenario6(gpa: std.mem.Allocator, addr: []const u8, metrics_port: u16) !void 
         std.debug.print("FAIL [scenario6]: quic_max_tracked_streams unavailable: {s}\n", .{@errorName(err)});
         return error.TrackedStreamGaugeMissing;
     };
+    // The gauge is a MAX over every live connection, so it is only about THIS
+    // connection while nothing else with a deep stream list is live — hence this
+    // scenario runs first, on a fresh server.
     if (tracked > wrapper_tracked_bound) {
         std.debug.print(
             "FAIL [scenario6]: quic_max_tracked_streams={d} after {d} served streams (bound {d}) — wrappers are accumulating in conn.streams\n",
@@ -713,6 +754,14 @@ pub fn main() !void {
     // informative when you can see WHICH of the four contracts broke, and a
     // fail-fast run only ever shows the first.
     var failed: u32 = 0;
+    // Scenario 6 runs FIRST, on a fresh server: `quic_max_tracked_streams` is a
+    // max over every live connection, and scenario 4 deliberately leaves a
+    // 33-stream connection behind, so running it later would measure that
+    // instead of the wrapper-release contract.
+    scenario6(gpa, addr, metrics_port) catch |err| {
+        std.debug.print("[scenario6] FAILED: {s}\n", .{@errorName(err)});
+        failed += 1;
+    };
     scenario1(gpa, addr, 8) catch |err| {
         std.debug.print("[scenario1] FAILED: {s}\n", .{@errorName(err)});
         failed += 1;
@@ -734,10 +783,6 @@ pub fn main() !void {
 
     scenario5(gpa, addr, metrics_port) catch |err| {
         std.debug.print("[scenario5] FAILED: {s}\n", .{@errorName(err)});
-        failed += 1;
-    };
-    scenario6(gpa, addr, metrics_port) catch |err| {
-        std.debug.print("[scenario6] FAILED: {s}\n", .{@errorName(err)});
         failed += 1;
     };
 

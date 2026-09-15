@@ -65,6 +65,20 @@ pub fn activeConnections(ctx_ptr: *anyopaque) u64 {
     return @intCast(ctx.transport.connections.items.len);
 }
 
+/// SONNY-1219b (F1): connections whose stream accepts the process-wide
+/// `StreamAcceptReactor` is currently driving.
+///
+/// Before the reactor each of these occupied one `acceptor_pool` worker, so this
+/// number was capped at `GEODE_QUIC_ACCEPTOR_WORKERS` (64) against a
+/// `max_connections` of 10000 and every connection past the cap silently lost
+/// multiplexing. It should now track `quic_active_connections` for multiplexed
+/// clients; a persistent gap between the two means connections are falling back
+/// to single-stream mode.
+pub fn acceptReactorConnections(ctx_ptr: *anyopaque) u64 {
+    _ = ctx_ptr;
+    return quic_connection_handler.getAcceptReactorConnections();
+}
+
 /// Number of stream-handler OS threads currently in flight across all
 /// QUIC connections (i.e. the saturation level of the global stream
 /// throttle). Operators should watch this against `maxStreamHandlers`

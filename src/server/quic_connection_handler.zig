@@ -287,12 +287,18 @@ pub fn getProtoReaderRegistry() *proto_reader_registry.Registry {
 }
 
 // #864 / qa-seed deadlock §6.5: process-wide leaked-connection registry.
-// `handleQuicConnection`'s acceptor-wait bail path adds entries here when
-// it leaves a conn alive to avoid UAF; a periodic reaper task in main.zig
-// (`reaperLoop`) detects when each entry's acceptor has finished and
-// calls `destroyConnection` to reclaim it.  Nullable so unit tests can
-// skip wiring; main.zig installs the registry at startup via
+// A periodic reaper task in main.zig (`reaperLoop`) detects when each entry's
+// acceptor has finished and calls `destroyConnection` to reclaim it.  Nullable
+// so unit tests can skip wiring; main.zig installs the registry at startup via
 // `setLeakedConnRegistry`.
+//
+// SONNY-1219b (F5): the ONLY producer of entries was `shutdownAcceptorOwner`'s
+// acceptor-wait bail, which SONNY-1219 already made unreachable (it is now only
+// called with `acceptor_submitted == false`) and which this change deletes.
+// Nothing registers here any more. The registry, its reaper and its three
+// `quic_leaked_connections_*` gauges are left in place — they are separately
+// tested and cost nothing when empty — but they are now dead weight and want a
+// follow-up to retire.
 const leaked_conn_reaper_mod = @import("leaked_conn_reaper.zig");
 var g_leaked_conn_registry: ?*leaked_conn_reaper_mod.LeakedConnRegistry = null;
 
@@ -306,16 +312,6 @@ pub fn setLeakedConnRegistry(reg: ?*leaked_conn_reaper_mod.LeakedConnRegistry) v
 /// Snapshot accessor for the metrics layer.
 pub fn getLeakedConnRegistry() ?*leaked_conn_reaper_mod.LeakedConnRegistry {
     return g_leaked_conn_registry;
-}
-
-fn acceptorCtxIsDone(ptr: *anyopaque) bool {
-    const ctx: *StreamAcceptorContext = @ptrCast(@alignCast(ptr));
-    return ctx.done.load(.acquire);
-}
-
-fn acceptorCtxRelease(ptr: *anyopaque) void {
-    const ctx: *StreamAcceptorContext = @ptrCast(@alignCast(ptr));
-    ctx.release();
 }
 
 /// Override the global stream thread limit (called from server startup).
@@ -2497,12 +2493,50 @@ pub const SharedConnState = struct {
         }
     }
 
+    /// SONNY-1219b (F4): the drain barrier parks in BOUNDED slices and says so.
+    ///
+    /// It used to be `futexWaitUncancelable` with no timeout and no log line, so
+    /// a connection whose last handler never released was a silent, permanent
+    /// stall on whatever thread called it. The slices make it observable.
+    ///
+    /// The total wait is still unbounded, deliberately: the next statement in
+    /// every caller is `conn_state.deinit()`, and abandoning the wait while a
+    /// handler is still inside `conn_state` is precisely the 2026-06-02
+    /// use-after-free (docs/bugs/2026-06-02-sendexecuteerror-memcpy-alias-and-quic-initial-crash.md).
+    /// What SONNY-1219b removes is the reason the bound mattered — the accept
+    /// reactor polls `active_streams` across passes and never calls this until it
+    /// reads zero, so no reactor thread is ever parked here.
     pub fn waitForAllStreamsDrained(self: *SharedConnState) void {
         const io = std.Io.Threaded.global_single_threaded.io();
+        const slice_ns: u64 = 1 * std.time.ns_per_s;
+        // Deliberately spelled in milliseconds. The REQ-QUIC-HC-014
+        // bounded-HELLO-admission guard in
+        // tests/test_quic_condition_timedwait_cadence.zig asserts that the
+        // five-second nanosecond literal does not appear anywhere in this file
+        // (it used to be a hardcoded HELLO read timeout), and a drain WARN
+        // threshold has nothing to do with HELLO admission — it must not trip
+        // that guard.
+        const warn_after_ns: u64 = 5_000 * std.time.ns_per_ms;
+        const start_ns = monoNsFromHandler();
+        var next_warn_ns: u64 = warn_after_ns;
         while (true) {
             const observed = self.active_streams.load(.acquire);
             if (observed == 0) return;
-            std.Io.futexWaitUncancelable(io, u32, &self.active_streams.raw, observed);
+            const timeout: std.Io.Timeout = .{ .duration = .{
+                .raw = std.Io.Duration.fromNanoseconds(@intCast(slice_ns)),
+                .clock = .awake,
+            } };
+            io.futexWaitTimeout(u32, &self.active_streams.raw, observed, timeout) catch |err| switch (err) {
+                error.Canceled => {},
+            };
+            const elapsed_ns = monoNsFromHandler() -| start_ns;
+            if (elapsed_ns >= next_warn_ns) {
+                log.warn("waiting for QUIC connection streams to drain", &.{
+                    Attr.int("active_streams", @intCast(self.active_streams.load(.acquire))),
+                    Attr.int("waited_ms", @intCast(elapsed_ns / std.time.ns_per_ms)),
+                });
+                next_warn_ns = elapsed_ns + 30 * std.time.ns_per_s;
+            }
         }
     }
 
@@ -2555,6 +2589,11 @@ pub const SharedConnState = struct {
 const StreamHandlerContext = struct {
     allocator: std.mem.Allocator,
     transport: *quic_transport.QuicTransport,
+    /// SONNY-1219b (F2): the handler needs the CONNECTION, not just the stream,
+    /// so its defer can hand the `*QuicStream` wrapper back to
+    /// `conn.destroyStream` instead of leaving it in `conn.streams` for the
+    /// connection's (now much longer) life.
+    conn: *quic_transport.QuicConnection,
     stream: *quic_transport.QuicStream,
     conn_state: *SharedConnState,
 };
@@ -2726,17 +2765,36 @@ pub const StreamAcceptorContext = struct {
         return self.conn_owner_state.cmpxchgStrong(0, 1, .acq_rel, .acquire) == null;
     }
 
-    /// SONNY-1219: acceptor side of the handoff. Run from the acceptor's exit
-    /// path, AFTER the accept loop has stopped, and before `markDone`.
-    /// Performs the connection teardown iff the first-stream owner got its
-    /// handoff in first; otherwise it latches state 2 so a later handoff
-    /// attempt returns `false` and the owner tears down inline.
-    pub fn runConnOwnerTeardownIfOwned(self: *StreamAcceptorContext) void {
+    /// The connection teardown a first-stream owner handed over, once claimed.
+    pub const ConnOwnerTeardown = struct {
+        owner_ctx: *anyopaque,
+        run: *const fn (*anyopaque) void,
+    };
+
+    /// SONNY-1219: acceptor side of the handoff. Called ONCE, from the accept
+    /// path's exit, AFTER the accept loop has stopped and before `markDone`.
+    ///
+    /// Latches state 2 — so a later `handOffConnectionOwner` returns `false` and
+    /// the owner tears down inline — and returns the teardown iff the owner got
+    /// its handoff in first. Exactly one of the two parties ever gets it.
+    ///
+    /// SONNY-1219b: split from `runConnOwnerTeardownIfOwned` so the caller
+    /// decides WHEN to run it. The accept reactor must claim the teardown at the
+    /// moment the accept loop stops (that is the point the state machine is
+    /// defined at) but may only RUN it once the connection's sibling handlers
+    /// have drained — and it polls for that instead of blocking a shard thread
+    /// inside `waitForAllStreamsDrained`.
+    pub fn claimConnOwnerTeardown(self: *StreamAcceptorContext) ?ConnOwnerTeardown {
         const prev = self.conn_owner_state.swap(2, .acq_rel);
-        if (prev != 1) return;
-        const owner_ctx = self.conn_owner_ctx orelse return;
-        const teardown = self.conn_owner_teardown orelse return;
-        teardown(owner_ctx);
+        if (prev != 1) return null;
+        const owner_ctx = self.conn_owner_ctx orelse return null;
+        const teardown = self.conn_owner_teardown orelse return null;
+        return .{ .owner_ctx = owner_ctx, .run = teardown };
+    }
+
+    /// Claim-and-run, for callers that are allowed to block.
+    pub fn runConnOwnerTeardownIfOwned(self: *StreamAcceptorContext) void {
+        if (self.claimConnOwnerTeardown()) |t| t.run(t.owner_ctx);
     }
 };
 
@@ -2916,166 +2974,548 @@ fn handleAdditionalStream(ctx_ptr: *anyopaque) void {
     runStreamQueryLoop(gpa, transport, stream, &state, cs, cs.disable_estimates, cs.compact_profile, cs.memcurve_profile, cs.peer_ip);
 }
 
-/// Stream acceptor loop: runs on a dedicated thread after the first stream's
-/// HELLO succeeds. Polls the connection for new peer-initiated streams and
-/// spawns a handler thread for each one.
-// CANARY: REQ=REQ-QUIC-MUX-003; FEATURE="StreamMultiplexing"; ASPECT=StreamAcceptor; STATUS=IMPL; OWNER=server; UPDATED=2026-03-27
-fn streamAcceptorLoop(ctx: *StreamAcceptorContext) void {
+// ── SONNY-1219b (F1): the stream-accept REACTOR ──────────────────────────────
+//
+// SONNY-1219 moved connection ownership off the first stream and onto the
+// per-connection stream acceptor. That fixed the teardown bug and introduced an
+// occupancy bug: `runStreamAcceptorLoop` was submitted to `acceptor_pool` and
+// then looped until `conn.isDrained()` / `conn.shutdown_requested`, so ONE POOL
+// WORKER was pinned for the WHOLE connection lifetime — including a one-shot
+// CLI query, whose connection then sits there until the peer closes or the QUIC
+// idle timeout fires (300 s; `Config.dead_conn_reap_ms` is deliberately 0 for
+// the client-facing server). With `W` workers (default 64), connection W+1
+// onwards silently lost multiplexing: `submit` still returned true because the
+// 4096-deep queue had room, but no worker ever ran the task, so nothing called
+// `tryAcceptStream` for that connection, every sibling stream hung to the
+// client's timeout, and the connection teardown handed to that task was owed to
+// something that was not running. Reproduced at `GEODE_QUIC_ACCEPTOR_WORKERS`
+// = 2/4/8: the e2e fails at the 3rd/5th/9th connection.
+//
+// The fix is to stop giving a connection a thread. `tryAcceptStream` is a
+// non-blocking poll, so accepting is reactor work, not per-connection work: a
+// small fixed set of threads drives the accept pass for EVERY multiplexed
+// connection and dispatches each accepted stream to `stream_pool` exactly as
+// before. A connection now costs a registry entry, not a worker, so the number
+// of live multiplexed connections is bounded by `Config.max_connections`
+// (10000) rather than by the accept-worker count.
+//
+// Connections are sharded round-robin across the reactor's threads so one
+// thread's pass length does not gate another's. `GEODE_QUIC_ACCEPTOR_WORKERS`
+// now sizes the reactor's threads; it keeps its [2, 64] clamp and its meaning
+// ("how many threads drive accepts"), which is why
+// `GEODE_QUIC_ACCEPTOR_WORKERS=2` remains the F1 regression run.
+//
+// Pacing. A shard with no connections parks on its wake futex until `register`
+// bumps it. A shard with connections runs a pass and then parks between
+// `min_park_ns` and `max_park_ns`, backing off while nothing is accepted and
+// snapping back to the floor as soon as something is. Within a pass, a
+// connection whose per-connection RX generation has not moved since its last
+// empty `tryAcceptStream` is SKIPPED — a peer-opened stream always arrives as
+// RX data and bumps that generation — so a pass over quiet connections costs
+// one atomic load each. That is what keeps a 10k-connection server, and the
+// idle-server CPU regression (tests/test_quic_idle_cpu.zig), off the reactor's
+// back.
+
+/// Outcome of one non-blocking accept pass over a single connection.
+const AcceptStepResult = enum {
+    /// A stream was accepted and dispatched. Re-poll this shard immediately.
+    accepted,
+    /// Nothing to do right now; the connection stays registered.
+    idle,
+    /// The accept loop for this connection is over (peer close / drain / server
+    /// shutdown). Start its teardown.
+    finished,
+};
+
+/// One non-blocking accept pass over a single connection. This is the body of
+/// the former `streamAcceptorLoop`, with every blocking wait
+/// (`waitForStreamSlot`, `waitForReadGeneration`) replaced by a return to the
+/// reactor, which owns all the pacing.
+///
+/// `rx_gen` carries the caller's memo of the RX generation at which
+/// `tryAcceptStream` last came back empty; the caller skips the whole step when
+/// the generation has not moved since.
+fn streamAcceptorStep(ctx: *StreamAcceptorContext, rx_gen: *?u32) AcceptStepResult {
     const gpa = ctx.allocator;
     const transport = ctx.transport;
     const conn = ctx.conn;
     const conn_state = ctx.conn_state;
     const stream_pool = ctx.stream_pool;
-    // 2026-04-28 lifetime model: `ctx` is heap-allocated and refcounted.
-    // We hold one ref for the duration of this function; on exit we
-    // store `done=true` (the owner's wait condition) and release our
-    // ref.  Even if the owner gives up waiting and unwinds early, the
-    // refcount keeps `ctx` alive until we exit, and accessing `ctx`
-    // fields (including `shutdown` / `done`) is always safe.
-    defer {
-        // SONNY-1219: if the first-stream owner handed connection ownership to
-        // this acceptor, the connection teardown (drain barrier, conn_state
-        // deinit, `transport.destroyConnection`, owner-context free) runs HERE,
-        // once the accept loop is guaranteed to be out of the picture. It must
-        // precede `markDone`/`release` because both of those can let the last
-        // reference to `ctx` go.
-        ctx.runConnOwnerTeardownIfOwned();
-        ctx.markDone();
-        ctx.release();
-    }
-    while (true) {
-        // Check if connection is still alive
-        if (conn.isDrained()) break;
-        // SONNY-1219: server shutdown (`QuicTransport.requestShutdown` /
-        // `forceCloseConnections`) sets the per-connection flag and sends
-        // CONNECTION_CLOSE, but `isDrained()` only flips once the library has
-        // finished the close. Exit promptly on the flag so the bounded shutdown
-        // drain keeps its ordering now that the acceptor outlives its first
-        // stream.
-        if (conn.shutdown_requested.load(.acquire)) break;
 
-        // Check the total per-connection stream limit, including the first
-        // stream that bootstraps the session before the acceptor starts.
-        if (conn_state.active_streams.load(.acquire) >= stream_registry.max_total_streams_per_connection) {
-            // Every stream occupying a slot is already REGISTERED, so it is
-            // covered by `waitForAllStreamsDrained`; honouring shutdown here
-            // cannot strand an unaccepted stream.
-            if (ctx.shutdown.load(.acquire)) break;
-            conn_state.waitForStreamSlot(stream_registry.max_total_streams_per_connection, 5 * std.time.ns_per_ms);
-            continue;
+    // Check if connection is still alive.
+    if (conn.isDrained()) return .finished;
+    // SONNY-1219: server shutdown (`QuicTransport.requestShutdown` /
+    // `forceCloseConnections`) sets the per-connection flag and sends
+    // CONNECTION_CLOSE, but `isDrained()` only flips once the library has
+    // finished the close. Exit promptly on the flag so the bounded shutdown
+    // drain keeps its ordering now that the acceptor outlives its first stream.
+    //
+    // SONNY-1219b (F6): yes, this finishes WITHOUT first draining the accept
+    // queue to empty, and the `ctx.shutdown` check further down deliberately
+    // will not. The two flags mean different things. `conn.shutdown_requested`
+    // is set only by `requestShutdown` / `forceCloseConnections`, both of which
+    // have ALREADY put a CONNECTION_CLOSE on the wire: the connection is going
+    // away whatever this loop does, so a stream still sitting in the library's
+    // accept queue cannot be served by anyone — accepting it would only create a
+    // handler that fails its first read, and it would ADD to `active_streams`,
+    // delaying the very drain this check exists to keep prompt (Gap-0039).
+    // `ctx.shutdown` says only "stop accepting on this connection"; the
+    // connection stays open, so a queued stream IS still serviceable and
+    // dropping it would destroy a stream under an in-flight request.
+    if (conn.shutdown_requested.load(.acquire)) return .finished;
+
+    // Check the total per-connection stream limit, including the first stream
+    // that bootstraps the session before the acceptor starts.
+    if (conn_state.active_streams.load(.acquire) >= stream_registry.max_total_streams_per_connection) {
+        // Every stream occupying a slot is already REGISTERED, so it is covered
+        // by `waitForAllStreamsDrained`; honouring shutdown here cannot strand
+        // an unaccepted stream. (The other `ctx.shutdown` check, below, is the
+        // one that has to wait for an EMPTY accept queue.)
+        if (ctx.shutdown.load(.acquire)) return .finished;
+        // Full. Do not clear the RX memo: a slot freeing is not an RX event, so
+        // the next pass must retry regardless of the generation.
+        rx_gen.* = null;
+        return .idle;
+    }
+
+    // Non-blocking attempt to accept a new stream. Snapshot the per-connection
+    // RX generation before checking the queue so a STREAM frame that lands
+    // between the check and the memo cannot be missed.
+    const read_generation = conn.readGeneration();
+    if (conn.tryAcceptStream()) |new_stream| {
+        // Something arrived: the memo is stale by definition.
+        rx_gen.* = null;
+        const is_new_stream = conn_state.registerActiveStream(new_stream.stream_id) catch |err| {
+            log.warn("Failed to register multiplexed stream", &.{
+                Attr.int("stream_id", @intCast(new_stream.stream_id)),
+                Attr.string("error", @errorName(err)),
+            });
+            new_stream.close();
+            conn.destroyStream(new_stream);
+            return .accepted;
+        };
+
+        // The QUIC library re-queues active stream IDs when more data arrives.
+        // Accept notifications are therefore readiness signals, not proof of a
+        // brand-new stream. Only spawn a handler once per active stream ID.
+        if (!is_new_stream) {
+            conn.destroyStream(new_stream);
+            return .accepted;
         }
 
-        // Non-blocking attempt to accept a new stream. Snapshot the
-        // per-connection RX generation before checking the queue so a STREAM
-        // frame that lands between the check and wait cannot be missed.
-        const read_generation = conn.readGeneration();
-        if (conn.tryAcceptStream()) |new_stream| {
-            const is_new_stream = conn_state.registerActiveStream(new_stream.stream_id) catch |err| {
-                log.warn("Failed to register multiplexed stream", &.{
-                    Attr.int("stream_id", @intCast(new_stream.stream_id)),
-                    Attr.string("error", @errorName(err)),
-                });
-                new_stream.close();
-                conn.destroyStream(new_stream);
-                continue;
-            };
+        log.debug("Accepted additional multiplexed stream", &.{});
 
-            // The QUIC library re-queues active stream IDs when more data arrives.
-            // Accept notifications are therefore readiness signals, not proof of a
-            // brand-new stream. Only spawn a handler once per active stream ID.
-            if (!is_new_stream) {
-                conn.destroyStream(new_stream);
-                continue;
-            }
+        // PERF-P1-004: Enforce the global stream thread cap before spawning.
+        // The reactor must not block, so the old 10 ms wait becomes a
+        // non-blocking try: on refusal, apply backpressure by closing this
+        // stream so the peer retries.
+        //
+        // #864 / qa-seed deadlock §6.4: count rejections via the dedicated
+        // `g_stream_admission_rejections` counter so the condition is
+        // observable independently of the would-block counter (which fires on
+        // quiescent streams too) and so operators can correlate dashboards with
+        // client back-off.
+        g_stream_throttle.acquire(0) catch {
+            _ = g_stream_admission_rejections.fetchAdd(1, .monotonic);
+            log.warn("Global stream thread limit reached, rejecting stream", &.{
+                Attr.int("active_global", @intCast(g_stream_throttle.count())),
+                Attr.int("max_global", @intCast(g_stream_throttle.max)),
+            });
+            new_stream.close();
+            conn_state.unregisterActiveStream(new_stream.stream_id);
+            conn.destroyStream(new_stream);
+            return .accepted;
+        };
 
-            log.debug("Accepted additional multiplexed stream", &.{});
+        _ = conn_state.active_streams.fetchAdd(1, .release);
 
-            // PERF-P1-004: Enforce the global stream thread cap before
-            // spawning. Wait up to 10 ms for a slot; if still full, apply
-            // backpressure by closing this stream so the peer retries.
-            //
-            // #864 / qa-seed deadlock §6.4: count rejections via the
-            // dedicated `g_stream_admission_rejections` counter so the
-            // condition is observable independently of the would-block
-            // counter (which fires on quiescent streams too) and so
-            // operators can correlate dashboards with client back-off.
-            g_stream_throttle.acquire(10 * std.time.ns_per_ms) catch {
-                _ = g_stream_admission_rejections.fetchAdd(1, .monotonic);
-                log.warn("Global stream thread limit reached, rejecting stream", &.{
-                    Attr.int("active_global", @intCast(g_stream_throttle.count())),
-                    Attr.int("max_global", @intCast(g_stream_throttle.max)),
-                });
-                new_stream.close();
-                conn_state.unregisterActiveStream(new_stream.stream_id);
-                conn.destroyStream(new_stream);
-                continue;
-            };
+        // Allocate context for the handler thread.
+        const handler_ctx = gpa.create(StreamHandlerContext) catch {
+            log.warn("Failed to allocate stream handler context", &.{});
+            new_stream.close();
+            conn_state.unregisterActiveStream(new_stream.stream_id);
+            conn_state.releaseActiveStream();
+            g_stream_throttle.release();
+            conn.destroyStream(new_stream);
+            return .accepted;
+        };
+        handler_ctx.* = .{
+            .allocator = gpa,
+            .transport = transport,
+            .conn = conn,
+            .stream = new_stream,
+            .conn_state = conn_state,
+        };
 
-            _ = conn_state.active_streams.fetchAdd(1, .release);
-
-            // Allocate context for the handler thread
-            const handler_ctx = gpa.create(StreamHandlerContext) catch {
-                log.warn("Failed to allocate stream handler context", &.{});
-                new_stream.close();
-                conn_state.unregisterActiveStream(new_stream.stream_id);
-                conn_state.releaseActiveStream();
-                g_stream_throttle.release();
-                continue;
-            };
-            handler_ctx.* = .{
-                .allocator = gpa,
-                .transport = transport,
-                .stream = new_stream,
-                .conn_state = conn_state,
-            };
-
-            if (!stream_pool.submit(.{
-                .context = @ptrCast(handler_ctx),
-                .callback = handleAdditionalStream,
-            })) {
-                log.warn("Failed to submit stream handler task", &.{});
-                new_stream.close();
-                conn_state.unregisterActiveStream(new_stream.stream_id);
-                conn_state.releaseActiveStream();
-                g_stream_throttle.release();
-                gpa.destroy(handler_ctx);
-                continue;
-            }
-        } else {
-            // SONNY-1219: `tryAcceptStream` just returned null, i.e. the
-            // library's accept queue is EMPTY. That is the only point at which
-            // honouring the shutdown flag is safe: a stream the peer has opened
-            // but this loop has not yet accepted is invisible to
-            // `waitForAllStreamsDrained` (streams are only counted at
-            // `registerActiveStream` above), so breaking out with the queue
-            // non-empty destroys it under an in-flight request. Draining to
-            // empty first closes that acceptance race.
-            if (ctx.shutdown.load(.acquire)) break;
-            // No stream pending — sleep and re-check shutdown.
-            //
-            // 2026-04-28: removed `transport.poll(0)` from this branch.
-            // The dedicated server poll thread (`runPollLoopTask` in
-            // main.zig) is the single owner of packet delivery; calling
-            // poll(0) here just contends with the poll thread and with
-            // every other connection's acceptor on `ep.mu`.  Under heavy
-            // close-churn (e.g. 16 client connections all closing at
-            // once when an msft-graph file boundary tears them down),
-            // that contention blocked individual acceptors inside
-            // poll(0) for >5 seconds — long enough to miss the
-            // `acceptor_shutdown` signal and trip the
-            // "acceptor thread did not exit within deadline; bailing
-            // despite UAF risk" guard in handleQuicConnection's defer,
-            // and ultimately crash the server.  Just sleeping here is
-            // both correct (the poll thread keeps running) and lets the
-            // loop re-check `shutdown` whenever the next poll cycle lands.
-            conn.waitForReadGeneration(read_generation, quic_transport.server_handler_wait_for_poll_ns);
+        if (!stream_pool.submit(.{
+            .context = @ptrCast(handler_ctx),
+            .callback = handleAdditionalStream,
+        })) {
+            log.warn("Failed to submit stream handler task", &.{});
+            new_stream.close();
+            conn_state.unregisterActiveStream(new_stream.stream_id);
+            conn_state.releaseActiveStream();
+            g_stream_throttle.release();
+            conn.destroyStream(new_stream);
+            gpa.destroy(handler_ctx);
+            return .accepted;
         }
+        return .accepted;
     }
+
+    // SONNY-1219: `tryAcceptStream` just returned null, i.e. the library's
+    // accept queue is EMPTY. That is the only point at which honouring the
+    // shutdown flag is safe: a stream the peer has opened but this loop has not
+    // yet accepted is invisible to `waitForAllStreamsDrained` (streams are only
+    // counted at `registerActiveStream` above), so finishing with the queue
+    // non-empty destroys it under an in-flight request. Draining to empty first
+    // closes that acceptance race.
+    if (ctx.shutdown.load(.acquire)) return .finished;
+
+    // Memo the generation this empty accept was taken at. The next pass skips
+    // this connection entirely until the poll thread delivers something.
+    rx_gen.* = read_generation;
+    return .idle;
 }
 
-fn runStreamAcceptorLoop(ctx: *anyopaque) void {
-    const acceptor_ctx: *StreamAcceptorContext = @ptrCast(@alignCast(ctx));
-    streamAcceptorLoop(acceptor_ctx);
+/// Drives `tryAcceptStream` for every multiplexed connection on a fixed,
+/// server-wide set of threads, so a connection never occupies one.
+pub const StreamAcceptReactor = struct {
+    /// Upper bound on shard threads. Matches the `GEODE_QUIC_ACCEPTOR_WORKERS`
+    /// clamp it is sized from.
+    pub const max_shards: usize = 64;
+    /// Floor between passes over a shard that is doing work. Matches the poll
+    /// thread's 500 µs low-latency floor while any connection is live, so an
+    /// accepted stream is picked up within one poll cycle.
+    const min_park_ns: u64 = 500 * std.time.ns_per_us;
+    /// Ceiling between passes over a shard whose connections are all quiet.
+    /// Bounds the worst-case accept latency for a stream opened on a long-idle
+    /// pooled connection — the SONNY-1219 workload — so it stays well inside a
+    /// client's round-trip budget.
+    const max_park_ns: u64 = 8 * std.time.ns_per_ms;
+    /// A shard with NO registered connections cannot accept anything until
+    /// `register` bumps its wake generation, which wakes this park early.
+    const empty_park_ns: u64 = 1 * std.time.ns_per_s;
+    /// Announce a connection whose sibling handlers have not finished this long
+    /// after its accept loop stopped. The wait itself is NOT abandoned — see
+    /// `SharedConnState.waitForAllStreamsDrained`.
+    /// Spelled in milliseconds — see `waitForAllStreamsDrained` for why the
+    /// five-second nanosecond literal must not appear in this file.
+    const drain_warn_ns: u64 = 5_000 * std.time.ns_per_ms;
+    /// Budget for finishing the remaining connections at server shutdown.
+    /// Mirrors the 2 s `deinit_timeout_ns` the acceptor pool used to carry.
+    const stop_budget_ns: u64 = 2 * std.time.ns_per_s;
+
+    const Entry = struct {
+        ctx: *StreamAcceptorContext,
+        /// Memo of the RX generation at which `tryAcceptStream` last came back
+        /// empty. `null` means "poll regardless".
+        rx_gen: ?u32 = null,
+        /// The accept loop for this connection has stopped; it is now waiting
+        /// for its sibling handlers before its teardown can run.
+        finished: bool = false,
+        teardown: ?StreamAcceptorContext.ConnOwnerTeardown = null,
+        finished_ns: u64 = 0,
+        drain_warned: bool = false,
+    };
+
+    const Shard = struct {
+        reactor: *StreamAcceptReactor = undefined,
+        /// Guards `pending` only.
+        mu: std.Io.Mutex = std.Io.Mutex.init,
+        /// Registration inbox. `register` (any thread) appends here; the shard
+        /// thread drains it into `entries` at the top of each pass, so the pass
+        /// itself runs without a lock.
+        pending: std.ArrayList(*StreamAcceptorContext) = .empty,
+        /// Owned SOLELY by this shard's thread. No lock.
+        entries: std.ArrayList(Entry) = .empty,
+        /// Bumped by `register` and by `requestStop`; the shard parks on it.
+        wake_gen: std.atomic.Value(u32) = std.atomic.Value(u32).init(0),
+        /// Gauge: connections this shard is driving (registered, not yet freed).
+        registered: std.atomic.Value(u32) = std.atomic.Value(u32).init(0),
+        park_ns: u64 = min_park_ns,
+        thread: ?std.Thread = null,
+
+        fn wake(self: *Shard) void {
+            const io = std.Io.Threaded.global_single_threaded.io();
+            _ = self.wake_gen.fetchAdd(1, .release);
+            io.futexWake(u32, &self.wake_gen.raw, std.math.maxInt(u32));
+        }
+
+        fn park(self: *Shard, timeout_ns: u64) void {
+            const io = std.Io.Threaded.global_single_threaded.io();
+            const observed = self.wake_gen.load(.acquire);
+            const timeout: std.Io.Timeout = .{ .duration = .{
+                .raw = std.Io.Duration.fromNanoseconds(@intCast(timeout_ns)),
+                .clock = .awake,
+            } };
+            io.futexWaitTimeout(u32, &self.wake_gen.raw, observed, timeout) catch |err| switch (err) {
+                error.Canceled => {},
+            };
+        }
+
+        fn drainPending(self: *Shard) void {
+            const io = std.Io.Threaded.global_single_threaded.io();
+            self.mu.lockUncancelable(io);
+            defer self.mu.unlock(io);
+            for (self.pending.items) |ctx| {
+                self.entries.append(self.reactor.gpa, .{ .ctx = ctx }) catch {
+                    // The registry cannot grow. Refusing loudly is the only
+                    // honest option: run the teardown this context is owed so
+                    // the connection is not left to the idle timeout.
+                    log.warn("accept reactor registry append failed; closing connection", &.{});
+                    if (ctx.claimConnOwnerTeardown()) |t| t.run(t.owner_ctx);
+                    ctx.markDone();
+                    ctx.release();
+                    _ = self.registered.fetchSub(1, .monotonic);
+                    continue;
+                };
+            }
+            self.pending.clearRetainingCapacity();
+        }
+
+        /// A finished connection may still have sibling handlers running. Its
+        /// teardown (`waitForAllStreamsDrained` → `conn_state.deinit()` →
+        /// `destroyConnection`) is only safe once they are gone, and blocking
+        /// here would stall every other connection on this shard — so the drain
+        /// is polled like everything else.
+        ///
+        /// This is NOT the forbidden "exit the accept loop when active_streams
+        /// hits 0" shortcut, which would re-break SONNY-1219 for a pooled client
+        /// that idles between bursts. The loop has ALREADY decided to stop
+        /// (peer close / drain / server shutdown); a connection whose streams
+        /// merely go quiet never reaches here.
+        fn tryComplete(self: *Shard, e: *Entry) bool {
+            if (e.teardown) |t| {
+                if (e.ctx.conn_state.active_streams.load(.acquire) != 0) {
+                    if (!e.drain_warned and monoNsFromHandler() -| e.finished_ns > drain_warn_ns) {
+                        e.drain_warned = true;
+                        log.warn("QUIC connection stopped accepting but its streams have not drained", &.{
+                            Attr.int("active_streams", @intCast(e.ctx.conn_state.active_streams.load(.acquire))),
+                            Attr.int("waited_ms", @intCast((monoNsFromHandler() -| e.finished_ns) / std.time.ns_per_ms)),
+                        });
+                    }
+                    return false;
+                }
+                t.run(t.owner_ctx);
+            }
+            // Same order as the acceptor task's old defer: the teardown first,
+            // because `markDone` / `release` can each drop the last reference to
+            // `ctx`.
+            e.ctx.markDone();
+            e.ctx.release();
+            _ = self.registered.fetchSub(1, .monotonic);
+            return true;
+        }
+
+        /// One pass over this shard's connections. Returns true if anything
+        /// happened, which resets the park to the floor.
+        fn runPass(self: *Shard) bool {
+            self.drainPending();
+            var did_work = false;
+            var i: usize = 0;
+            while (i < self.entries.items.len) {
+                const e = &self.entries.items[i];
+                if (!e.finished) {
+                    // Skip a connection whose RX generation has not moved since
+                    // its last empty accept: a peer-opened stream always arrives
+                    // as RX data. `isDrained` / `shutdown_requested` are NOT
+                    // covered by that memo, so check them first.
+                    if (e.rx_gen) |memo| {
+                        if (!e.ctx.conn.isDrained() and
+                            !e.ctx.conn.shutdown_requested.load(.acquire) and
+                            !e.ctx.shutdown.load(.acquire) and
+                            e.ctx.conn.readGeneration() == memo)
+                        {
+                            i += 1;
+                            continue;
+                        }
+                    }
+                    switch (streamAcceptorStep(e.ctx, &e.rx_gen)) {
+                        .accepted => {
+                            did_work = true;
+                            i += 1;
+                            continue;
+                        },
+                        .idle => {
+                            i += 1;
+                            continue;
+                        },
+                        .finished => {
+                            e.finished = true;
+                            e.finished_ns = monoNsFromHandler();
+                            e.teardown = e.ctx.claimConnOwnerTeardown();
+                            if (e.teardown == null) {
+                                // The first-stream owner has NOT handed the
+                                // connection over yet, so IT owns the teardown —
+                                // but it is parked on a connection whose peer has
+                                // gone, and nothing else will tell it. Its read
+                                // loop only ends on EndOfStream / Timeout /
+                                // Closed, and on a drained connection the library
+                                // just keeps answering WouldBlock, so the owner
+                                // (and the connection object behind it) survived
+                                // to the 300 s QUIC idle timeout. Setting the
+                                // per-connection flag makes `QuicStream.read`
+                                // return `error.Closed` on its next pass, which
+                                // `isIdleStreamReadError` treats as a clean exit.
+                                //
+                                // It does NOT mislabel the close:
+                                // `connTeardownReasonFor` only promotes to
+                                // `server_shutdown` when the flag is set AND the
+                                // connection has not drained, and we are here
+                                // precisely because it has.
+                                e.ctx.conn.shutdown_requested.store(true, .release);
+                                if (e.ctx.conn.poll_sync) |ps| ps.notifyPoll();
+                            }
+                            did_work = true;
+                        },
+                    }
+                }
+                if (self.tryComplete(e)) {
+                    // swapRemove moved the last entry into slot i — re-examine it.
+                    _ = self.entries.swapRemove(i);
+                    did_work = true;
+                    continue;
+                }
+                i += 1;
+            }
+            return did_work;
+        }
+
+        fn loop(self: *Shard) void {
+            while (!self.reactor.stopping.load(.acquire)) {
+                const did_work = self.runPass();
+                self.park_ns = if (did_work)
+                    min_park_ns
+                else
+                    @min(self.park_ns *| 2, max_park_ns);
+                self.park(if (self.entries.items.len == 0) empty_park_ns else self.park_ns);
+            }
+            self.drainOnStop();
+        }
+
+        /// Server shutdown. `QuicTransport.requestShutdown` /
+        /// `forceCloseConnections` have already flagged every connection, so a
+        /// few passes finish them all; the budget bounds a wedged one.
+        fn drainOnStop(self: *Shard) void {
+            const start_ns = monoNsFromHandler();
+            while (self.entries.items.len != 0) {
+                _ = self.runPass();
+                if (self.entries.items.len == 0) break;
+                if (monoNsFromHandler() -| start_ns > stop_budget_ns) {
+                    log.warn("accept reactor stopping with connections still draining; leaving them to process exit", &.{
+                        Attr.int("remaining", @intCast(self.entries.items.len)),
+                    });
+                    // Release the reactor's reference so nothing is left
+                    // dereferencing a context we will not poll again. The
+                    // teardown is deliberately NOT forced: running it while a
+                    // sibling handler is still inside `conn_state` is the
+                    // 2026-06-02 use-after-free, and the process is exiting.
+                    for (self.entries.items) |*e| {
+                        e.ctx.markDone();
+                        e.ctx.release();
+                        _ = self.registered.fetchSub(1, .monotonic);
+                    }
+                    self.entries.clearRetainingCapacity();
+                    break;
+                }
+                compat_sleepNs(min_park_ns);
+            }
+            self.entries.deinit(self.reactor.gpa);
+            const io = std.Io.Threaded.global_single_threaded.io();
+            self.mu.lockUncancelable(io);
+            self.pending.deinit(self.reactor.gpa);
+            self.mu.unlock(io);
+        }
+    };
+
+    gpa: std.mem.Allocator,
+    shards: []Shard,
+    next_shard: std.atomic.Value(usize) = std.atomic.Value(usize).init(0),
+    stopping: std.atomic.Value(bool) = std.atomic.Value(bool).init(false),
+
+    pub fn init(gpa: std.mem.Allocator, shard_count: usize) !*StreamAcceptReactor {
+        const n = std.math.clamp(shard_count, 1, max_shards);
+        const self = try gpa.create(StreamAcceptReactor);
+        errdefer gpa.destroy(self);
+        const shards = try gpa.alloc(Shard, n);
+        errdefer gpa.free(shards);
+        self.* = .{ .gpa = gpa, .shards = shards };
+        for (shards) |*s| s.* = .{ .reactor = self };
+        var started: usize = 0;
+        errdefer {
+            self.stopping.store(true, .release);
+            for (shards[0..started]) |*s| {
+                s.wake();
+                if (s.thread) |t| t.join();
+            }
+        }
+        for (shards) |*s| {
+            s.thread = try std.Thread.spawn(.{}, Shard.loop, .{s});
+            started += 1;
+        }
+        return self;
+    }
+
+    pub fn deinit(self: *StreamAcceptReactor) void {
+        self.stopping.store(true, .release);
+        for (self.shards) |*s| s.wake();
+        for (self.shards) |*s| {
+            if (s.thread) |t| t.join();
+            s.thread = null;
+        }
+        self.gpa.free(self.shards);
+        self.gpa.destroy(self);
+    }
+
+    /// Take over driving accepts for one connection. Returns false only when the
+    /// reactor is stopping or the registry could not grow — the caller then
+    /// falls back to single-stream mode, exactly as it did on a full pool queue.
+    pub fn register(self: *StreamAcceptReactor, ctx: *StreamAcceptorContext) bool {
+        if (self.stopping.load(.acquire)) return false;
+        const idx = self.next_shard.fetchAdd(1, .monotonic) % self.shards.len;
+        const shard = &self.shards[idx];
+        const io = std.Io.Threaded.global_single_threaded.io();
+        shard.mu.lockUncancelable(io);
+        shard.pending.append(self.gpa, ctx) catch {
+            shard.mu.unlock(io);
+            return false;
+        };
+        shard.mu.unlock(io);
+        _ = shard.registered.fetchAdd(1, .monotonic);
+        shard.wake();
+        return true;
+    }
+
+    /// Gauge: connections whose accepts this reactor is driving.
+    pub fn registeredConnections(self: *StreamAcceptReactor) u64 {
+        var total: u64 = 0;
+        for (self.shards) |*s| total += s.registered.load(.monotonic);
+        return total;
+    }
+
+    pub fn shardCount(self: *StreamAcceptReactor) usize {
+        return self.shards.len;
+    }
+};
+
+/// Process-global accept reactor, installed by `src/server/main.zig` at startup
+/// and cleared before the transport is torn down. Null in unit tests and in the
+/// embedded paths that never multiplex.
+var g_accept_reactor: ?*StreamAcceptReactor = null;
+
+pub fn setAcceptReactor(reactor: ?*StreamAcceptReactor) void {
+    g_accept_reactor = reactor;
+}
+
+pub fn getAcceptReactor() ?*StreamAcceptReactor {
+    return g_accept_reactor;
+}
+
+/// Gauge callback shim for `src/server/quic_connection_metrics.zig`.
+pub fn getAcceptReactorConnections() u64 {
+    const reactor = g_accept_reactor orelse return 0;
+    return reactor.registeredConnections();
 }
 
 /// Run the protobuf message loop using an already-owned reader.
@@ -3236,132 +3676,6 @@ fn runStreamQueryLoop(
         memcurve_profile,
         peer_ip,
     );
-}
-
-/// Signal the stream acceptor to exit and wait (bounded) for it to do so.
-///
-/// Returns `true` if it BAILED — i.e. the acceptor did not exit within the
-/// deadline and is therefore still dereferencing `first_ctx.conn_state` and
-/// `first_ctx.conn` from inside `streamAcceptorLoop`. On bail the caller MUST
-/// NOT free `first_ctx`: ownership of the conn_state + FirstStreamOwnerContext
-/// + conn teardown is transferred to the leaked-conn reaper, which runs
-/// `deferredDestroyFirstStreamOwner` only after the acceptor has exited
-/// (`acceptor_ctx.done`). If no reaper is available (or registration fails) the
-/// resources are intentionally LEAKED and reclaimed at the QUIC idle timeout —
-/// a leak is strictly safer than the use-after-free.
-///
-/// 2026-06-02 fix: the previous code set `destroy_conn=false` (sparing only the
-/// conn wrapper) and then let the owner UNCONDITIONALLY free `first_ctx` (and
-/// its embedded `conn_state`). The still-running acceptor's stale atomic/mutex
-/// writes through the freed `conn_state` corrupted whatever the allocator
-/// recycled the block into, surfacing later as the protobuf `@memcpy`-alias
-/// panic or the poll-thread `recovery.onPacketSent` SIGSEGV on an unrelated
-/// connection. See docs/bugs/2026-06-02-sendexecuteerror-memcpy-alias-and-quic-initial-crash.md.
-/// Default grace period (ms) the first-stream owner waits for a shutdown-signalled
-/// acceptor to exit before deferring teardown to the leaked-conn reaper.
-///
-/// A healthy acceptor checks `ctx.shutdown` at the top of every loop iteration
-/// and its idle sleep is bounded by `server_handler_wait_for_poll_ns` (100 ms),
-/// so it exits well within this window. A WEDGED acceptor (blocked inside the
-/// QUIC library on endpoint-lock contention under a connection-burst) never
-/// exits; capping the wait here — rather than at the old 30 s — frees the
-/// owner's capped concurrency slot (stream-pool worker / first-stream detach
-/// gate) ~30x faster, so a burst of closing+wedged connections can no longer
-/// starve NEW-connection admission. The reaper reclaims the wedged conn once its
-/// acceptor finally exits (or at the QUIC idle timeout).
-/// See docs/bugs/2026-06-03-acceptor-wedge-connection-burst-new-conns-refused.md.
-const default_acceptor_bail_deadline_ms: i64 = 1_000;
-/// After this much elapsed time (ms) the owner logs that the acceptor is still
-/// running, at most once per second, while it waits out the bail deadline.
-const default_acceptor_bail_warn_ms: i64 = 500;
-
-/// Parse the `GEODE_ACCEPTOR_BAIL_MS` override value. Pure (no env access) so it
-/// is unit-testable. Falls back to the default on null / unparseable input and
-/// clamps to a sane [50 ms, 60 s] range so a typo cannot reintroduce a
-/// many-second owner-thread stall (or a 0 ms busy-bail).
-fn parseAcceptorBailMs(env_val: ?[]const u8) i64 {
-    const raw = env_val orelse return default_acceptor_bail_deadline_ms;
-    const trimmed = std.mem.trim(u8, raw, " \t\r\n");
-    const parsed = std.fmt.parseInt(i64, trimmed, 10) catch return default_acceptor_bail_deadline_ms;
-    return std.math.clamp(parsed, 50, 60_000);
-}
-
-/// Resolve the acceptor bail deadline from the environment (operator override
-/// via `GEODE_ACCEPTOR_BAIL_MS`), defaulting to `default_acceptor_bail_deadline_ms`.
-fn acceptorBailDeadlineMs() i64 {
-    return parseAcceptorBailMs(posixGetenv("GEODE_ACCEPTOR_BAIL_MS"));
-}
-
-/// Wait for a shutdown-signalled acceptor to set `done`, up to `deadline_ms`.
-/// Returns `true` if the deadline elapsed first (the acceptor is still wedged and
-/// the caller MUST defer teardown to the reaper to avoid a UAF), `false` if the
-/// acceptor exited cleanly in time (the caller may tear down inline).
-///
-/// Touches only `acceptor_ctx`'s done flag / futex, so it is unit-testable
-/// without a live connection. Parks in ≤100 ms slices on the done futex so a
-/// prompt acceptor exit returns immediately rather than after a fixed sleep.
-fn waitForAcceptorExit(acceptor_ctx: *StreamAcceptorContext, deadline_ms: i64, warn_ms: i64) bool {
-    const wait_start = compat_milliTimestamp();
-    var last_warn_ms: i64 = wait_start;
-    while (!acceptor_ctx.done.load(.acquire)) {
-        _ = acceptor_ctx.waitUntilDone(100 * std.time.ns_per_ms);
-        const now = compat_milliTimestamp();
-        const elapsed = now - wait_start;
-        if (elapsed >= deadline_ms) return true;
-        if (elapsed > warn_ms and now - last_warn_ms > 1_000) {
-            log.warn("acceptor still running after shutdown signal", &.{
-                Attr.int("elapsed_ms", @intCast(elapsed)),
-            });
-            last_warn_ms = now;
-        }
-    }
-    return false;
-}
-
-fn shutdownAcceptorOwner(
-    gpa: std.mem.Allocator,
-    first_ctx: *FirstStreamOwnerContext,
-    acceptor_ctx: *StreamAcceptorContext,
-    acceptor_submitted: bool,
-) bool {
-    var bailed = false;
-    if (acceptor_submitted) {
-        acceptor_ctx.shutdown.store(true, .release);
-        const deadline_ms = acceptorBailDeadlineMs();
-        if (waitForAcceptorExit(acceptor_ctx, deadline_ms, default_acceptor_bail_warn_ms)) {
-            bailed = true;
-            var registered = false;
-            if (g_leaked_conn_registry) |reg| {
-                acceptor_ctx.addRef();
-                if (reg.register(gpa, first_ctx.transport, first_ctx.conn, .{
-                    .self = @ptrCast(acceptor_ctx),
-                    .is_done = acceptorCtxIsDone,
-                    .release = acceptorCtxRelease,
-                }, .{
-                    .self = @ptrCast(first_ctx),
-                    .run = deferredDestroyFirstStreamOwner,
-                })) |_| {
-                    registered = true;
-                } else |reg_err| {
-                    acceptor_ctx.release();
-                    log.warn("failed to register leaked conn for deferred reaping", &.{
-                        Attr.string("error", @errorName(reg_err)),
-                    });
-                }
-            }
-            if (registered) {
-                log.err("acceptor did not exit within bail deadline; deferring conn+conn_state teardown to reaper to avoid UAF (connection-burst wedge; reaper reclaims once acceptor exits)", &.{
-                    Attr.int("deadline_ms", @intCast(deadline_ms)),
-                });
-            } else {
-                log.err("acceptor did not exit within bail deadline; leaking conn+ctx to avoid UAF (no reaper; reclaimed at QUIC idle timeout)", &.{
-                    Attr.int("deadline_ms", @intCast(deadline_ms)),
-                });
-            }
-        }
-    }
-    acceptor_ctx.release();
-    return bailed;
 }
 
 /// Minimal one-shot signal used only by the lifetime test seams. Zig 0.16
@@ -3672,18 +3986,21 @@ fn cleanupFirstStreamOwner(ctx: *FirstStreamOwnerContext) void {
             return;
         }
 
-        // The acceptor context was allocated but its task never ran, so there
-        // are no sibling streams and no thread to hand the connection to.
-        // `shutdownAcceptorOwner` just drops the owner's ref in that case.
-        const bailed = shutdownAcceptorOwner(gpa, ctx, acceptor_ctx, false);
+        // The acceptor context was allocated but the reactor never took it, so
+        // there are no sibling streams and nobody to hand the connection to:
+        // drop the owner's reference and tear down inline below.
+        //
+        // SONNY-1219b (F5): this used to go through `shutdownAcceptorOwner`,
+        // whose bail path (wait for the acceptor, else park the connection with
+        // the leaked-conn reaper) SONNY-1219 had already made unreachable — it
+        // was only ever called with `acceptor_submitted == false`, where it did
+        // nothing but this `release()`. Worse, had it ever re-armed, its
+        // `deferredDestroyFirstStreamOwner` ran the COMBINED teardown, which
+        // releases the first stream's slot a second time and trips
+        // `assert(prev > 0)` in `releaseActiveStream`. Deleted rather than left
+        // as a trap.
+        acceptor_ctx.release();
         ctx.acceptor_ctx = null;
-        if (bailed) {
-            // Unreachable for a never-submitted acceptor (the bail path is
-            // gated on `acceptor_submitted`), but keep the 2026-06-02
-            // use-after-free guard: on a bail, ownership of conn_state + this
-            // context + the conn has moved to the reaper.
-            return;
-        }
     }
 
     destroyFirstStreamOwnerResources(ctx, connTeardownReasonFor(ctx, .last_stream_closed));
@@ -3747,9 +4064,6 @@ const ConnTeardownReason = enum {
     /// The acceptor exited because the SERVER is shutting this connection down
     /// (server stop / Gap-0039 bounded drain). Server-initiated.
     server_shutdown,
-    /// The acceptor did not exit within its bail deadline and the leaked-conn
-    /// reaper is performing the teardown. Server-initiated.
-    acceptor_bail,
 
     /// Stable, allocation-free label for the `warn` line. Deliberately carries
     /// no peer address and no tenant material.
@@ -3758,7 +4072,6 @@ const ConnTeardownReason = enum {
             .last_stream_closed => "last_stream_closed",
             .peer_closed => "peer_closed",
             .server_shutdown => "server_shutdown",
-            .acceptor_bail => "acceptor_bail",
         };
     }
 
@@ -3766,7 +4079,7 @@ const ConnTeardownReason = enum {
     fn serverInitiated(self: ConnTeardownReason) bool {
         return switch (self) {
             .last_stream_closed, .peer_closed => false,
-            .server_shutdown, .acceptor_bail => true,
+            .server_shutdown => true,
         };
     }
 };
@@ -3851,13 +4164,6 @@ fn destroyConnectionOwnerResources(ctx: *FirstStreamOwnerContext, reason: ConnTe
 fn destroyFirstStreamOwnerResources(ctx: *FirstStreamOwnerContext, reason: ConnTeardownReason) void {
     releaseFirstStreamResources(ctx);
     destroyConnectionOwnerResources(ctx, reason);
-}
-
-/// Reaper callback: runs `destroyFirstStreamOwnerResources` once the acceptor
-/// has exited. Registered by `shutdownAcceptorOwner` on the bail path.
-fn deferredDestroyFirstStreamOwner(p: *anyopaque) void {
-    const ctx: *FirstStreamOwnerContext = @ptrCast(@alignCast(p));
-    destroyFirstStreamOwnerResources(ctx, .acceptor_bail);
 }
 
 /// SONNY-1219: connection-teardown callback handed to the stream acceptor when
@@ -5076,7 +5382,6 @@ pub fn handleQuicConnection(
     shared_optimizer: ?*query_plan_cache.SharedQueryOptimizer, // Issue #460
     env_config: *const server_init.EnvironmentConfig, // #683: Cached env vars
     stream_pool: *pooled.ThreadPool,
-    acceptor_pool: *pooled.ThreadPool,
 ) !void {
     _ = _force_serialization_failure_unused;
     // CANARY: REQ=REQ-QUIC-CONN-CLEANUP-003; FEATURE="ConnectionMemoryManagement"; ASPECT=ProperCleanup; STATUS=EXEMPT; OWNER=server; UPDATED=2025-12-27
@@ -5456,56 +5761,66 @@ pub fn handleQuicConnection(
     // long-lived task per connection during the HELLO fan-out.
     if (env_config.quic_stream_multiplexing_enabled) {
         // 2026-04-28 lifetime rewrite: the acceptor context is HEAP-allocated
-        // and refcounted (owner=1, acceptor=1).  This eliminates the previous
+        // and refcounted (owner=1, reactor=1).  This eliminates the previous
         // UAF crash where a popped-stack `acceptor_ctx` was dereferenced by
-        // a still-running acceptor (segfault at address 0x6 in
-        // `streamAcceptorLoop`'s first `shutdown.load(.acquire)`).  See the
+        // a still-running acceptor (segfault at address 0x6 in the acceptor
+        // loop's first `shutdown.load(.acquire)`).  See the
         // `StreamAcceptorContext` doc-comment for the full rationale.
-        const acceptor_ctx = StreamAcceptorContext.create(
+        //
+        // SONNY-1219b (F1): the second reference now belongs to the process-wide
+        // `StreamAcceptReactor`, not to a per-connection task on `acceptor_pool`.
+        // The old arrangement pinned ONE pool worker per live connection — a
+        // one-shot CLI query included — so past `GEODE_QUIC_ACCEPTOR_WORKERS`
+        // live connections the accept task was queued but never scheduled: no
+        // multiplexing, siblings hung to their timeout, and the connection
+        // teardown handed to that task was owed to something that was not
+        // running.  The reactor drives `tryAcceptStream` for every connection
+        // from a fixed set of threads, so a connection costs a registry entry.
+        const reactor = g_accept_reactor;
+        const acceptor_ctx = if (reactor != null) StreamAcceptorContext.create(
             gpa,
             transport,
             conn,
             &first_ctx.conn_state,
             stream_pool,
-        ) catch |err| {
+        ) catch |err| blk: {
             log.warn("Failed to allocate acceptor context, single-stream mode", &.{
                 Attr.string("error", @errorName(err)),
             });
+            break :blk null;
+        } else null;
+
+        if (acceptor_ctx) |actx| {
+            first_ctx.acceptor_ctx = actx;
+            if (reactor.?.register(actx)) {
+                first_ctx.acceptor_submitted = true;
+            } else {
+                // The reactor is stopping or could not grow its registry. Refuse
+                // LOUDLY and take the documented single-stream path rather than
+                // leaving the connection with nobody accepting for it.
+                log.warn("Stream accept reactor refused registration, single-stream mode", &.{
+                    Attr.int("registered_connections", @intCast(reactor.?.registeredConnections())),
+                    Attr.int("reactor_threads", @intCast(reactor.?.shardCount())),
+                });
+                // The reactor's ref will never be released because it never took
+                // the context. Drop it here so the deferred owner release brings
+                // the refcount to zero and frees the heap struct.
+                first_ctx.acceptor_ctx = null;
+                actx.release();
+                actx.release();
+                handleFirstStreamOwner(@ptrCast(first_ctx));
+                return;
+            }
+        } else if (reactor == null) {
+            // No reactor installed (embedded / unit-test paths). Single-stream
+            // mode is the documented fallback.
+            log.debug("No stream accept reactor installed, single-stream mode", &.{});
             handleFirstStreamOwner(@ptrCast(first_ctx));
             return;
-        };
-        first_ctx.acceptor_ctx = acceptor_ctx;
-        // 2026-04-28 ROOT-CAUSE FIX: use submit() (default lane, ~63 workers)
-        // not submitBlocking() (blocking lane, ONLY 1 WORKER).  submitBlocking's
-        // name describes the backpressure policy (block if queue full), not the
-        // lane — but its implementation routes to `.lane = .blocking` which has
-        // a single dedicated worker.  With 8 active conns the previous code
-        // serialized all acceptors through that one worker; the first acceptor
-        // (whose conn was still actively reading its first stream) never exited,
-        // and the other 7 acceptor tasks sat in the blocking-lane queue forever
-        // — owners spinning on `done.load()=false` because their acceptor's
-        // `done.store(true)` was waiting in the queue.  Symptom in production:
-        //
-        //   WARN acceptor still running after shutdown signal elapsed_ms=300000+
-        //
-        // The default lane has ~63 workers (acceptor_pool num_threads=64 minus
-        // 1 reserved for the blocking lane) and a 256-task queue.  With ≤ 16
-        // production conns we never come close to saturating it.  If submit()
-        // does return false on queue-full we fall back to single-stream mode
-        // like the previous error path.
-        if (!acceptor_pool.submit(.{
-            .context = @ptrCast(acceptor_ctx),
-            .callback = runStreamAcceptorLoop,
-        })) {
-            log.warn("Failed to start stream acceptor (queue full), single-stream mode", &.{});
-            // The acceptor's ref will never be released because its task
-            // never starts.  Drop it here so the deferred owner release
-            // brings the refcount to zero and frees the heap struct.
-            acceptor_ctx.release();
+        } else {
             handleFirstStreamOwner(@ptrCast(first_ctx));
             return;
         }
-        first_ctx.acceptor_submitted = true;
     }
 
     // ── Phase 3: First stream query loop (bounded detached owner) ──────────
@@ -9087,102 +9402,116 @@ test "StreamAcceptorContext: owner-bails-then-acceptor-finishes does not UAF or 
 }
 
 // =============================================================================
-// 2026-06-03 — acceptor-shutdown bail-deadline regression.
+// SONNY-1219b (F1) — the stream-accept reactor.
 //
-// Bug: docs/bugs/2026-06-03-acceptor-wedge-connection-burst-new-conns-refused.md
-//
-// `shutdownAcceptorOwner` runs on the first-stream owner thread (a capped
-// stream-pool worker / first-stream detach-gate slot). Under a connection-burst
-// + close-churn the per-connection acceptor can wedge inside the QUIC library on
-// endpoint-lock contention and never observe `ctx.shutdown`. The owner used to
-// wait up to 30 s for it, pinning that capped slot the whole time; a burst of
-// such closures exhausts the pool/gate, so NEW connections can no longer be
-// admitted ("transport dial ... timeout: no recent network activity") until a
-// pod restart. The fix caps the owner-side wait at a short, env-tunable deadline
-// (default 1 s) and defers the wedged conn to the already-safe leaked-conn
-// reaper, so capped slots free ~30x faster and the accept path survives the
-// burst. These tests pin (a) the short bail deadline is honored (not 30 s),
-// (b) a healthy acceptor that exits in time does NOT bail, and (c) the env
-// override parses + clamps sanely (regression guard against reverting to 30 s).
+// The hand-off state machine is what decides which party runs a connection's
+// teardown, and the reactor split `runConnOwnerTeardownIfOwned` into
+// claim-then-run so it can claim at the moment the accept loop stops but run
+// only once the connection's sibling handlers have drained. These pin that the
+// split kept the "exactly one party, whichever order they arrive in" contract.
 // =============================================================================
 
-test "acceptor bail deadline: wedged acceptor bails within the short deadline (not 30s)" {
+test "accept reactor: claimConnOwnerTeardown hands the teardown over exactly once" {
     const allocator = std.testing.allocator;
-    const dummy_transport: *quic_transport.QuicTransport = @ptrFromInt(0xDEAD_2026_1000);
-    const dummy_conn: *quic_transport.QuicConnection = @ptrFromInt(0xDEAD_2026_2000);
+    const dummy_transport: *quic_transport.QuicTransport = @ptrFromInt(0xDEAD_1219_1000);
+    const dummy_conn: *quic_transport.QuicConnection = @ptrFromInt(0xDEAD_1219_2000);
     var dummy_conn_state: SharedConnState = .{ .allocator = allocator };
     defer dummy_conn_state.deinit();
-    const dummy_pool: *pooled.ThreadPool = @ptrFromInt(0xDEAD_2026_4000);
+    const dummy_pool: *pooled.ThreadPool = @ptrFromInt(0xDEAD_1219_3000);
 
-    const ctx = try StreamAcceptorContext.create(
-        allocator,
-        dummy_transport,
-        dummy_conn,
-        &dummy_conn_state,
-        dummy_pool,
-    );
-    // No acceptor thread runs here, so `done` is never set — the "wedged
-    // acceptor" case. We hold both refs (owner + would-be acceptor) and free
-    // them at the end.
+    const ctx = try StreamAcceptorContext.create(allocator, dummy_transport, dummy_conn, &dummy_conn_state, dummy_pool);
     defer {
         ctx.release();
         ctx.release();
     }
 
-    const start = compat_milliTimestamp();
-    const bailed = waitForAcceptorExit(ctx, 150, 75);
-    const elapsed = compat_milliTimestamp() - start;
+    const Probe = struct {
+        var runs: u32 = 0;
+        fn run(_: *anyopaque) void {
+            runs += 1;
+        }
+    };
+    Probe.runs = 0;
 
-    try std.testing.expect(bailed); // deadline elapsed before done -> defer to reaper
-    try std.testing.expect(elapsed >= 150); // honored the deadline
-    try std.testing.expect(elapsed < 5_000); // nowhere near the old 30 s
+    var owner: u8 = 0;
+    try std.testing.expect(ctx.handOffConnectionOwner(@ptrCast(&owner), Probe.run));
+
+    const claimed = ctx.claimConnOwnerTeardown();
+    try std.testing.expect(claimed != null);
+    claimed.?.run(claimed.?.owner_ctx);
+    try std.testing.expectEqual(@as(u32, 1), Probe.runs);
+
+    // The state is latched: a second claim gets nothing, and so does a
+    // `runConnOwnerTeardownIfOwned` on the same context.
+    try std.testing.expect(ctx.claimConnOwnerTeardown() == null);
+    ctx.runConnOwnerTeardownIfOwned();
+    try std.testing.expectEqual(@as(u32, 1), Probe.runs);
 }
 
-test "acceptor bail deadline: a timely acceptor exit does NOT bail" {
+test "accept reactor: a claim before the hand-off leaves the teardown with the owner" {
     const allocator = std.testing.allocator;
-    const dummy_transport: *quic_transport.QuicTransport = @ptrFromInt(0xDEAD_2026_5000);
-    const dummy_conn: *quic_transport.QuicConnection = @ptrFromInt(0xDEAD_2026_6000);
+    const dummy_transport: *quic_transport.QuicTransport = @ptrFromInt(0xDEAD_1219_4000);
+    const dummy_conn: *quic_transport.QuicConnection = @ptrFromInt(0xDEAD_1219_5000);
     var dummy_conn_state: SharedConnState = .{ .allocator = allocator };
     defer dummy_conn_state.deinit();
-    const dummy_pool: *pooled.ThreadPool = @ptrFromInt(0xDEAD_2026_7000);
+    const dummy_pool: *pooled.ThreadPool = @ptrFromInt(0xDEAD_1219_6000);
 
-    const ctx = try StreamAcceptorContext.create(
-        allocator,
-        dummy_transport,
-        dummy_conn,
-        &dummy_conn_state,
-        dummy_pool,
-    );
+    const ctx = try StreamAcceptorContext.create(allocator, dummy_transport, dummy_conn, &dummy_conn_state, dummy_pool);
+    defer {
+        ctx.release();
+        ctx.release();
+    }
 
-    // Acceptor exits ~20 ms after being signalled — well within a 5 s deadline.
-    const thread = try std.Thread.spawn(.{}, struct {
-        fn run(c: *StreamAcceptorContext) void {
-            const req = std.os.linux.timespec{ .sec = 0, .nsec = 20 * std.time.ns_per_ms };
-            var rem: std.os.linux.timespec = undefined;
-            _ = std.os.linux.nanosleep(&req, &rem);
-            c.markDone();
+    const Probe = struct {
+        fn run(_: *anyopaque) void {
+            unreachable; // the reactor got there first; the owner tears down inline
         }
-    }.run, .{ctx});
+    };
 
-    const bailed = waitForAcceptorExit(ctx, 5_000, 1_000);
-    thread.join();
+    // Reactor side reaches its exit first: nothing to run, state latched to 2.
+    try std.testing.expect(ctx.claimConnOwnerTeardown() == null);
 
-    try std.testing.expect(!bailed); // exited in time -> owner tears down inline
-    ctx.release();
-    ctx.release();
+    // Owner side now offers the hand-off and must be told to do it itself.
+    var owner: u8 = 0;
+    try std.testing.expect(!ctx.handOffConnectionOwner(@ptrCast(&owner), Probe.run));
 }
 
-test "acceptor bail deadline: env parse defaults, clamps, and stays short" {
-    // Regression guard: the default must never silently revert to the old 30 s.
-    try std.testing.expect(default_acceptor_bail_deadline_ms >= 100);
-    try std.testing.expect(default_acceptor_bail_deadline_ms <= 5_000);
+test "accept reactor: shard count honours the GEODE_QUIC_ACCEPTOR_WORKERS clamp" {
+    const allocator = std.testing.allocator;
+    // 1 shard: the smallest reactor that can still drive every connection.
+    const one = try StreamAcceptReactor.init(allocator, 1);
+    try std.testing.expectEqual(@as(usize, 1), one.shardCount());
+    try std.testing.expectEqual(@as(u64, 0), one.registeredConnections());
+    one.deinit();
 
-    // Pure env-value parser: default on null/garbage, clamp to [50, 60000].
-    try std.testing.expectEqual(default_acceptor_bail_deadline_ms, parseAcceptorBailMs(null));
-    try std.testing.expectEqual(default_acceptor_bail_deadline_ms, parseAcceptorBailMs("garbage"));
-    try std.testing.expectEqual(@as(i64, 2000), parseAcceptorBailMs("2000"));
-    try std.testing.expectEqual(@as(i64, 50), parseAcceptorBailMs("0")); // clamp low
-    try std.testing.expectEqual(@as(i64, 60_000), parseAcceptorBailMs("100000000")); // clamp high
+    // Over the cap clamps rather than failing: the reactor must never be the
+    // reason a server refuses to start.
+    const capped = try StreamAcceptReactor.init(allocator, 1024);
+    try std.testing.expectEqual(StreamAcceptReactor.max_shards, capped.shardCount());
+    capped.deinit();
+}
+
+test "accept reactor: registration is refused once the reactor is stopping" {
+    const allocator = std.testing.allocator;
+    const dummy_transport: *quic_transport.QuicTransport = @ptrFromInt(0xDEAD_1219_7000);
+    const dummy_conn: *quic_transport.QuicConnection = @ptrFromInt(0xDEAD_1219_8000);
+    var dummy_conn_state: SharedConnState = .{ .allocator = allocator };
+    defer dummy_conn_state.deinit();
+    const dummy_pool: *pooled.ThreadPool = @ptrFromInt(0xDEAD_1219_9000);
+
+    const reactor = try StreamAcceptReactor.init(allocator, 2);
+    const ctx = try StreamAcceptorContext.create(allocator, dummy_transport, dummy_conn, &dummy_conn_state, dummy_pool);
+    defer {
+        ctx.release();
+        ctx.release();
+    }
+
+    reactor.stopping.store(true, .release);
+    // Refused, not silently accepted — the caller falls back to single-stream
+    // mode. Accepting it would leave a connection with nobody driving accepts,
+    // which is the F1 failure mode in miniature.
+    try std.testing.expect(!reactor.register(ctx));
+    reactor.deinit();
 }
 
 // =============================================================================

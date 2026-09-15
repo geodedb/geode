@@ -1928,13 +1928,21 @@ pub const QuicClient = struct {
     pub fn closeGraceful(self: *QuicClient, app_error_code: u64) void {
         if (self.connection) |conn| {
             api.closeConnection(conn, app_error_code) catch {}; // Best-effort goodbye.
-            // Give the endpoint a poll cycle to actually put the
-            // CONNECTION_CLOSE frame on the wire before it is torn down.
+            // `closeConnection` only QUEUES the CONNECTION_CLOSE frame; the
+            // endpoint has to be pumped for it to reach the socket, and
+            // `endpointDeinit` below does not pump. One poll is not enough
+            // either — the frame can need a later cycle once the path is
+            // writable. Pump for a bounded window, ignoring errors (a poll that
+            // fails on a closing connection is expected and must not cut the
+            // window short: that is what left the server holding connections to
+            // its 300 s idle timeout).
             if (self.endpoint) |ep| {
-                var attempts: usize = 0;
-                while (attempts < 16) : (attempts += 1) {
-                    _ = api.poll(ep, 0) catch break;
-                    compat_sleepNs(1 * std.time.ns_per_ms);
+                const step_ns: u64 = 2 * std.time.ns_per_ms;
+                const budget_ns: u64 = 100 * std.time.ns_per_ms;
+                var waited_ns: u64 = 0;
+                while (waited_ns < budget_ns) : (waited_ns += step_ns) {
+                    api.poll(ep, 0) catch {};
+                    compat_sleepNs(step_ns);
                 }
             }
         }

@@ -264,7 +264,6 @@ else
 const default_quic_stream_worker_count = 64;
 const default_quic_stream_queue_capacity = 8192;
 const default_quic_acceptor_worker_count = 64;
-const default_quic_acceptor_queue_capacity = 4096;
 const default_quic_connection_worker_count = 64;
 const default_quic_detached_first_stream_threads = if (builtin.mode == .Debug) 64 else 256;
 const default_quic_cooperative_first_stream_worker_count = if (builtin.mode == .Debug) 16 else 512;
@@ -322,11 +321,16 @@ const ConnectionContext = struct {
     shared_optimizer: ?*query_plan_cache.SharedQueryOptimizer = null,
     // #683: Cached env config to avoid per-connection syscalls
     env_config: *const server_init.EnvironmentConfig = undefined,
-    // Shared stream + acceptor pools owned by main(); one per server lifetime
-    // instead of one per connection (which leaked under msft-graph reconnect).
+    // Shared stream pool owned by main(); one per server lifetime instead of one
+    // per connection (which leaked under msft-graph reconnect).
     // See docs/performance/2026-04-25-enterprise-rwlock-fairness/stacks-analysis.md.
+    //
+    // SONNY-1219b (F1): there is no longer an acceptor POOL. Stream accepts are
+    // driven for every multiplexed connection by the process-wide
+    // `StreamAcceptReactor` (installed via `setAcceptReactor` below), because a
+    // per-connection accept task pinned one pool worker for the connection's
+    // whole life and silently disabled multiplexing past the worker count.
     stream_pool: *thread_pool.ThreadPool,
-    acceptor_pool: *thread_pool.ThreadPool,
     admission_gate: ?*ConnectionAdmissionGate = null,
 };
 
@@ -418,7 +422,6 @@ fn handleConnectionAsync(context: *anyopaque) void {
         ctx.shared_optimizer,
         ctx.env_config,
         ctx.stream_pool,
-        ctx.acceptor_pool,
     ) catch |err| {
         log.err("Error handling QUIC connection (async)", &.{
             Attr.string("error", @errorName(err)),
@@ -2478,7 +2481,7 @@ pub fn main() !void {
             .queue_capacity = @max(quic_poll_worker_count * 2, 4),
             .blocking_workers = 0,
             // 2026-04-27: same shutdown-budget cap as stream_pool /
-            // acceptor_pool — see the comment at stream_pool's init for
+            // accept reactor — see the comment at stream_pool's init for
             // the full rationale (data-loss on harness `restart_server`
             // when shutdown waits the upstream 30s default).
             .deinit_timeout_ns = 2 * std.time.ns_per_s,
@@ -2545,15 +2548,18 @@ pub fn main() !void {
         defer stream_pool.deinit();
 
         // 2026-04-28: bumped from 4 → 64 threads.  Each accepted QUIC
-        // connection submits ONE long-lived `runStreamAcceptorLoop` task
-        // (an infinite poll loop that exits only when its connection
-        // tears down).  With only 4 acceptor threads any concurrent
-        // client fan-out > 4 would queue acceptor loops behind already-
-        // running ones — they would never start, and the queued
-        // connections' client-initiated streams would never get
-        // accepted server-side.  64 covers realistic client fan-out
-        // without burning CPU since acceptors now park on poll-generation
-        // wakeups when no peer stream is pending.
+        // connection used to submit ONE long-lived accept task (an infinite
+        // poll loop that exits only when its connection tears down), so any
+        // concurrent client fan-out beyond the worker count queued accept loops
+        // behind already-running ones — they never started, and those
+        // connections' client-initiated streams were never accepted
+        // server-side.
+        //
+        // SONNY-1219b (F1): raising the worker count was a mitigation, not a
+        // fix — 64 live connections (one-shot CLI queries included) still
+        // exhausted it, against a `max_connections` of 10000. Accepts are now
+        // driven by the reactor below and a connection occupies no worker at
+        // all; this value sizes the reactor's THREADS.
         //
         const quic_acceptor_worker_count = envUsize(
             gpa,
@@ -2562,20 +2568,21 @@ pub fn main() !void {
             2,
             64,
         );
-        const quic_acceptor_queue_capacity = envUsize(
-            gpa,
-            "GEODE_QUIC_ACCEPTOR_QUEUE_CAPACITY",
-            default_quic_acceptor_queue_capacity,
-            64,
-            65536,
-        );
-        const acceptor_pool = try thread_pool.ThreadPool.init(gpa, .{
-            .num_threads = quic_acceptor_worker_count,
-            .queue_capacity = quic_acceptor_queue_capacity,
-            .blocking_workers = 0,
-            .deinit_timeout_ns = 2 * std.time.ns_per_s,
-        });
-        defer acceptor_pool.deinit();
+        // SONNY-1219b (F1): `GEODE_QUIC_ACCEPTOR_WORKERS` now sizes the stream
+        // ACCEPT REACTOR's threads, not a pool of per-connection accept tasks.
+        // It keeps its name, its [2, 64] clamp and its meaning ("how many
+        // threads drive stream accepts"), but a connection no longer occupies
+        // one of them: the reactor shards every multiplexed connection across
+        // these threads and drives `tryAcceptStream` for all of them, so the
+        // live-connection ceiling is `Config.max_connections` (10000) rather
+        // than the worker count. `GEODE_QUIC_ACCEPTOR_QUEUE_CAPACITY` is gone
+        // with the pool — there is no accept-task queue to size.
+        const accept_reactor = try quic_connection_handler.StreamAcceptReactor.init(gpa, quic_acceptor_worker_count);
+        quic_connection_handler.setAcceptReactor(accept_reactor);
+        defer {
+            quic_connection_handler.setAcceptReactor(null);
+            accept_reactor.deinit();
+        }
 
         // CANARY: REQ=REQ-PERF-ASYNC-CONN-002; FEATURE="AsyncConnectionHandling"; ASPECT=ThreadPoolInit; STATUS=TESTED; TEST=tests/e2e_quic_high_concurrency.zig; OWNER=server; UPDATED=2026-06-11
         // CANARY: REQ=REQ-QUIC-HC-132; FEATURE="QUIC High-Concurrency Requests"; ASPECT=ConnectionPoolCapCompatibility; STATUS=TESTED; TEST=test_quic_condition_timedwait_cadence; OWNER=transport; UPDATED=2026-06-11
@@ -2624,7 +2631,7 @@ pub fn main() !void {
                     });
                     continue;
                 };
-                quic_connection_handler.handleQuicConnection(gpa, &transport, conn, disable_estimates, compact_profile, memcurve_profile, env_spill_threshold, env_storage_checksum_error, false, init_ctx.security_manager, init_ctx.shared_ast_cache, init_ctx.shared_optimizer, &init_ctx.env_config, stream_pool, acceptor_pool) catch |err2| {
+                quic_connection_handler.handleQuicConnection(gpa, &transport, conn, disable_estimates, compact_profile, memcurve_profile, env_spill_threshold, env_storage_checksum_error, false, init_ctx.security_manager, init_ctx.shared_ast_cache, init_ctx.shared_optimizer, &init_ctx.env_config, stream_pool) catch |err2| {
                     log.err("Error handling QUIC connection", &.{
                         Attr.string("error", @errorName(err2)),
                     });
@@ -2764,6 +2771,12 @@ pub fn main() !void {
         try metrics_registry.register(
             "geode_security_auth_store_unavailable_total",
             persistent_auth_resolver.storeUnavailableCounter(),
+        );
+        // SONNY-1219b (F1): reactor-occupancy gauge.
+        try metrics_registry.registerGauge(
+            "quic_accept_reactor_connections",
+            quic_metrics.acceptReactorConnections,
+            quic_metrics_ctx,
         );
         try metrics_registry.registerGauge(
             "quic_total_bytes_in_flight",
@@ -3318,7 +3331,6 @@ pub fn main() !void {
                 .shared_optimizer = init_ctx.shared_optimizer,
                 .env_config = &init_ctx.env_config,
                 .stream_pool = stream_pool,
-                .acceptor_pool = acceptor_pool,
             };
 
             if (detached_connection_admission) {
