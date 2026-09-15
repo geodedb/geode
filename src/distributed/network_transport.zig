@@ -76,7 +76,10 @@ pub const NetworkTransport = struct {
         var it = self.peers.iterator();
         while (it.next()) |entry| {
             if (entry.value_ptr.connection) |conn| {
-                conn.close();
+                // SONNY-1219c (M-2a): an outbound raft peer connection we are
+                // closing on our own shutdown — graceful, not a teardown under
+                // an in-flight request.
+                conn.close(quic.app_error.no_error);
             }
         }
         self.peers.deinit();
@@ -202,7 +205,9 @@ pub const NetworkTransport = struct {
 
             if (elapsed > 5000) { // 5 second timeout
                 if (peer.connection) |conn| {
-                    conn.close();
+                    // SONNY-1219c (M-2a): the peer went silent past the 5 s
+                    // budget; we are giving up on it, not refusing it.
+                    conn.close(quic.app_error.no_error);
                     peer.connection = null;
                 }
                 peer.retry_count += 1;

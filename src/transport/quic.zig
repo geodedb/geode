@@ -563,7 +563,10 @@ pub const QuicTransport = struct {
         self.connections_mutex.unlock(std.Io.Threaded.global_single_threaded.io());
 
         for (conns.items) |conn| {
-            conn.close();
+            // SONNY-1219c (M-2a): the transport is being torn down under a peer
+            // that did not ask for it — that is a server teardown, not a
+            // graceful goodbye.
+            conn.close(app_error.server_teardown);
             self.allocator.destroy(conn);
         }
         conns.deinit(self.allocator);
@@ -1015,7 +1018,7 @@ pub const QuicTransport = struct {
         defer self.connections_mutex.unlock(std.Io.Threaded.global_single_threaded.io());
 
         for (self.connections.items) |conn| {
-            conn.requestShutdown();
+            conn.requestShutdown(app_error.server_teardown);
         }
         self.poll_sync.notifyPoll();
     }
@@ -1035,7 +1038,7 @@ pub const QuicTransport = struct {
         self.connections_mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
         const stalled = self.connections.items.len;
         for (self.connections.items) |conn| {
-            conn.requestShutdown();
+            conn.requestShutdown(app_error.server_teardown);
         }
         self.connections_mutex.unlock(std.Io.Threaded.global_single_threaded.io());
         self.poll_sync.notifyPoll();
@@ -1215,10 +1218,13 @@ pub const QuicTransport = struct {
             defer conn.streams_mu.unlock(streams_io);
             for (conn.streams.items) |stream| {
                 finalizeStreamSend(conn.inner, stream.stream_id); // FIN (with TX-init fallback)
+                // m-6: claim before freeing — see `destroyStream`.
+                stream.released.store(true, .release);
                 conn.allocator.destroy(stream);
             }
             conn.streams.deinit(conn.allocator);
             conn.streams = .empty;
+            conn.tracked_stream_count.store(0, .release);
         }
         api.closeConnection(conn.inner, app_error_code) catch {}; // Best-effort cleanup
 
@@ -1309,6 +1315,23 @@ pub const QuicConnection = struct {
     /// Shared poll synchronization — see PollSync docs.
     poll_sync: ?*PollSync = null,
     shutdown_requested: std.atomic.Value(bool) = std.atomic.Value(bool).init(false),
+    /// SONNY-1219c (M-2a): the QUIC application error code this wrapper last
+    /// handed to `api.closeConnection` — i.e. what the peer is told on the
+    /// CONNECTION_CLOSE frame. `requestShutdown` and `close()` used to hard-code
+    /// 0 (NO_ERROR), which defeated the whole `app_error.server_teardown`
+    /// mechanism on the routine server-stop path: the frame was already on the
+    /// wire by the time `destroyConnectionWithError` ran, so its named code was
+    /// a no-op. Latched here so the code is assertable without a live peer —
+    /// vendored quic v0.1.40 discards the received code on the receiving side
+    /// (`endpoint/frame_handler.zig handleConnectionClose`), so no client can
+    /// observe it yet (review follow-up T-8).
+    close_app_error: std.atomic.Value(u64) = std.atomic.Value(u64).init(app_error.no_error),
+    /// SONNY-1219c (m-9): lock-free mirror of `streams.items.len`, maintained
+    /// under `streams_mu` at every append/release. The `quic_max_tracked_streams`
+    /// gauge reads THIS while holding `connections_mutex`, instead of taking up
+    /// to 10 000 `streams_mu` locks inside that hold and stalling the accept loop
+    /// on every `/metrics` scrape.
+    tracked_stream_count: std.atomic.Value(u32) = std.atomic.Value(u32).init(0),
 
     pub fn openStream(self: *QuicConnection, bidirectional: bool) !*QuicStream {
         const qc = self.quic_connection orelse return QuicError.Closed;
@@ -1339,6 +1362,7 @@ pub const QuicConnection = struct {
         defer self.streams_mu.unlock(io);
         stream.tracking_index = self.streams.items.len;
         try self.streams.append(self.allocator, stream);
+        self.tracked_stream_count.store(@intCast(self.streams.items.len), .release);
     }
 
     /// Number of stream wrappers currently tracked. Surfaced as the
@@ -1349,6 +1373,14 @@ pub const QuicConnection = struct {
         self.streams_mu.lockUncancelable(io);
         defer self.streams_mu.unlock(io);
         return self.streams.items.len;
+    }
+
+    /// SONNY-1219c (m-9): `trackedStreamCount` without `streams_mu`. For the
+    /// metrics gauges only — a momentarily stale value is harmless in a gauge,
+    /// and it is what lets the `/metrics` scrape hold `connections_mutex` for a
+    /// pointer walk instead of for N lock acquisitions.
+    pub fn trackedStreamCountRelaxed(self: *const QuicConnection) usize {
+        return @intCast(self.tracked_stream_count.load(.acquire));
     }
 
     pub fn acceptStream(self: *QuicConnection) !*QuicStream {
@@ -1454,6 +1486,14 @@ pub const QuicConnection = struct {
     /// library re-queues while this runs produces a DIFFERENT wrapper object, so
     /// there is no double free: the re-queued wrapper is either destroyed by the
     /// acceptor's `is_new_stream == false` branch or handed to a fresh handler.
+    /// SONNY-1219c (m-6): `destroyStream` frees ONLY a wrapper it found in
+    /// `streams` and latched itself. The old not-found fallback freed anyway,
+    /// and its own comment named the reachable case — `close()` /
+    /// `QuicTransport.deinit` empty the list AND free every wrapper in it, so a
+    /// handler still inside `handleAdditionalStream` (reachable after
+    /// `drainOnStop`'s 2 s budget bails) handed the same pointer back and
+    /// double-freed it. Nothing called `destroyStream` before SONNY-1219b, so
+    /// the fallback was inert; the F2 release path made it live.
     pub fn destroyStream(self: *QuicConnection, stream: *QuicStream) void {
         {
             const io = std.Io.Threaded.global_single_threaded.io();
@@ -1467,22 +1507,32 @@ pub const QuicConnection = struct {
                 idx = 0;
                 while (idx < self.streams.items.len and self.streams.items[idx] != stream) : (idx += 1) {}
                 if (idx >= self.streams.items.len) {
-                    // Already untracked (e.g. `close()` emptied the list first).
-                    self.allocator.destroy(stream);
+                    // Untracked: another release path owns this wrapper and has
+                    // already freed (or is about to free) it. Freeing here is
+                    // the double free. Do nothing.
                     return;
                 }
             }
+            // Tracked, so the wrapper is still allocated and `released` is safe
+            // to read. Latching it under `streams_mu` is what makes the release
+            // idempotent for every path that shares the list.
+            if (stream.released.swap(true, .acq_rel)) return;
 
             _ = self.streams.swapRemove(idx);
             if (idx < self.streams.items.len) {
                 self.streams.items[idx].tracking_index = idx;
             }
+            self.tracked_stream_count.store(@intCast(self.streams.items.len), .release);
         }
         // Now destroy the stream, outside the lock.
         self.allocator.destroy(stream);
     }
 
-    pub fn close(self: *QuicConnection) void {
+    /// SONNY-1219c (M-2a): `app_error_code` is what the peer is told on the
+    /// CONNECTION_CLOSE frame (see `app_error`). It is a REQUIRED parameter, not
+    /// a default, because the hard-coded 0 this replaces made a server tearing a
+    /// connection down look exactly like a graceful goodbye.
+    pub fn close(self: *QuicConnection, app_error_code: u64) void {
         self.shutdown_requested.store(true, .release);
         if (self.poll_sync) |ps| ps.enterIo();
         defer {
@@ -1494,23 +1544,35 @@ pub const QuicConnection = struct {
             defer self.streams_mu.unlock(io);
             for (self.streams.items) |stream| {
                 finalizeStreamSend(self.inner, stream.stream_id); // FIN (with TX-init fallback)
+                // m-6: claim it before freeing, so a handler racing here takes
+                // `destroyStream`'s untracked no-op instead of a second free.
+                stream.released.store(true, .release);
                 self.allocator.destroy(stream);
             }
             self.streams.deinit(self.allocator);
             self.streams = .empty;
+            self.tracked_stream_count.store(0, .release);
         }
         // CANARY: REQ=REQ-QUIC-CONN-CLEANUP-001; FEATURE="ConnectionMemoryManagement"; ASPECT=ResourceLeak; STATUS=EXEMPT; OWNER=transport; UPDATED=2025-12-27
         // Use quic_connection and null it out to prevent double-close.
+        self.close_app_error.store(app_error_code, .release);
         if (self.quic_connection) |qc| {
-            api.closeConnection(qc, 0) catch {}; // Best-effort cleanup
+            api.closeConnection(qc, app_error_code) catch {}; // Best-effort cleanup
             self.quic_connection = null;
         }
     }
 
-    pub fn requestShutdown(self: *QuicConnection) void {
+    /// SONNY-1219c (M-2a): as `close`, `app_error_code` is required. This is the
+    /// routine server-stop path (`QuicTransport.requestShutdown` on SIGTERM and
+    /// `forceCloseConnections` at the drain deadline), so the code it sends is
+    /// the one the peer actually sees — the later
+    /// `destroyConnectionWithError(conn, server_teardown)` is a no-op on the
+    /// wire because the connection is already closing.
+    pub fn requestShutdown(self: *QuicConnection, app_error_code: u64) void {
         self.shutdown_requested.store(true, .release);
+        self.close_app_error.store(app_error_code, .release);
         if (self.quic_connection) |qc| {
-            api.closeConnection(qc, 0) catch {}; // Best-effort close signal.
+            api.closeConnection(qc, app_error_code) catch {}; // Best-effort close signal.
         }
         if (self.poll_sync) |ps| ps.notifyPoll();
     }
@@ -1607,6 +1669,12 @@ pub const QuicStream = struct {
     poll_sync: ?*PollSync = null,
     shutdown_requested: ?*std.atomic.Value(bool) = null,
     tracking_index: usize = 0,
+    /// SONNY-1219c (m-6): latched under the owning connection's `streams_mu` by
+    /// whichever release path reaches this wrapper first (`destroyStream`,
+    /// `QuicConnection.close`, `QuicTransport.destroyConnectionWithError`).
+    /// `destroyStream` frees only when it latches the flag itself, so a handler
+    /// racing a connection teardown cannot double-free.
+    released: std.atomic.Value(bool) = std.atomic.Value(bool).init(false),
 
     pub fn write(self: *QuicStream, data: []const u8) !usize {
         if (self.shutdown_requested) |shutdown| {

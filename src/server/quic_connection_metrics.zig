@@ -74,8 +74,18 @@ pub fn activeConnections(ctx_ptr: *anyopaque) u64 {
 /// once a connection outlives it. This is the gauge the regression asserts on:
 /// churn N streams on one connection and it must stay small, not reach N.
 ///
-/// Takes `connections_mutex` (Tier-3) for the iteration and each connection's
-/// `streams_mu` (leaf) for the length. Nothing takes them in the other order.
+/// SONNY-1219c (m-9): takes `connections_mutex` (Tier-3) for the iteration and
+/// NOTHING else. It used to acquire each connection's `streams_mu` inside that
+/// hold, so at 10 000 connections every `/metrics` scrape serialised 10 000 leaf
+/// locks while the accept loop and `destroyConnection` waited on Tier-3.
+/// `trackedStreamCountRelaxed` reads the lock-free mirror the list maintains
+/// under `streams_mu` instead; a gauge sampled one append late is exactly as
+/// correct as one sampled one append early.
+///
+/// Snapshotting the connection list and releasing the mutex first — the obvious
+/// alternative — is NOT safe: `destroyConnectionWithError` frees the wrapper
+/// under the same mutex, so a released snapshot is a use-after-free waiting to
+/// happen.
 pub fn maxTrackedStreams(ctx_ptr: *anyopaque) u64 {
     const ctx: *Ctx = @ptrCast(@alignCast(ctx_ptr));
     const io = std.Io.Threaded.global_single_threaded.io();
@@ -83,7 +93,7 @@ pub fn maxTrackedStreams(ctx_ptr: *anyopaque) u64 {
     defer ctx.transport.connections_mutex.unlock(io);
     var max: u64 = 0;
     for (ctx.transport.connections.items) |conn| {
-        const n: u64 = @intCast(conn.trackedStreamCount());
+        const n: u64 = @intCast(conn.trackedStreamCountRelaxed());
         if (n > max) max = n;
     }
     return max;
