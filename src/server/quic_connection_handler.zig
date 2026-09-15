@@ -3689,6 +3689,48 @@ fn cleanupFirstStreamOwner(ctx: *FirstStreamOwnerContext) void {
     destroyFirstStreamOwnerResources(ctx, connTeardownReasonFor(ctx, .last_stream_closed));
 }
 
+/// SONNY-1219b (F3): why `handleQuicConnection` is closing a connection it
+/// never handed to a first-stream owner.
+///
+/// Every pre-HELLO exit — the handshake wait expiring, the HELLO read timing
+/// out, a protobuf framing error, a failed HELLO, a tenant over its connection
+/// quota, a connection-state capture failure, an mTLS rejection — funnels
+/// through ONE `defer if (destroy_conn) transport.destroyConnection(conn)`,
+/// which always sent application error code 0 (NO_ERROR). A refused client and
+/// a client that simply hung up were indistinguishable on the wire, and the
+/// SONNY-1219 close-code work stopped short of this path.
+///
+/// `preHelloCloseCode` is the single mapping, so the refusal codes are pinned by
+/// a unit test instead of by reading eight scattered `return`s.
+pub const PreHelloExit = enum {
+    /// The peer closed the stream/connection before sending HELLO. Nothing was
+    /// refused and nothing failed — this is the ONLY graceful pre-HELLO exit.
+    peer_eof,
+    /// No stream arrived within the post-accept handshake wait.
+    no_stream_timeout,
+    /// HELLO did not arrive within `quic_hello_read_timeout_ms`.
+    hello_timeout,
+    /// The HELLO-bearing stream could not be read (framing/transport error).
+    hello_read_error,
+    /// HELLO arrived but processing it failed.
+    hello_processing_error,
+    /// The tenant is already at its connection quota (GAP-0289).
+    tenant_quota_exceeded,
+    /// Shared connection state could not be captured, so multiplexed streams
+    /// would run unauthenticated (S7).
+    conn_state_capture_failed,
+    /// mTLS was required and the peer certificate was absent or rejected.
+    mtls_rejected,
+};
+
+/// SONNY-1219b RED (this commit): faithfully encodes what the engine does
+/// TODAY — every pre-HELLO exit closes with 0. The next commit replaces the
+/// body; the test below is what forces it.
+fn preHelloCloseCode(exit: PreHelloExit) u64 {
+    _ = exit;
+    return quic_transport.app_error.no_error;
+}
+
 /// SONNY-1219: why the server is destroying a QUIC connection. Drives BOTH the
 /// application error code on the CONNECTION_CLOSE frame and whether the
 /// teardown is announced at `warn`, so a client can tell a graceful close apart
@@ -8809,11 +8851,11 @@ test "StreamAcceptorContext: create allocates heap struct with refcount=2" {
     // unit test we only exercise the heap allocation + refcount semantics
     // — the pointed-to fields never get dereferenced — so undefined dummy
     // pointers are fine and won't escape the test scope.
-    const dummy_transport: *quic_transport.QuicTransport = @ptrFromInt(0xDEAD_BEEF_0001);
-    const dummy_conn: *quic_transport.QuicConnection = @ptrFromInt(0xDEAD_BEEF_0002);
+    const dummy_transport: *quic_transport.QuicTransport = @ptrFromInt(0xDEAD_BEEF_1000);
+    const dummy_conn: *quic_transport.QuicConnection = @ptrFromInt(0xDEAD_BEEF_2000);
     var dummy_conn_state: SharedConnState = .{ .allocator = allocator };
     defer dummy_conn_state.deinit();
-    const dummy_pool: *pooled.ThreadPool = @ptrFromInt(0xDEAD_BEEF_0004);
+    const dummy_pool: *pooled.ThreadPool = @ptrFromInt(0xDEAD_BEEF_4000);
 
     const ctx = try StreamAcceptorContext.create(
         allocator,
@@ -8841,11 +8883,11 @@ test "StreamAcceptorContext: create allocates heap struct with refcount=2" {
 
 test "StreamAcceptorContext: single release does not free (refcount stays >0)" {
     const allocator = std.testing.allocator;
-    const dummy_transport: *quic_transport.QuicTransport = @ptrFromInt(0xDEAD_BEEF_0001);
-    const dummy_conn: *quic_transport.QuicConnection = @ptrFromInt(0xDEAD_BEEF_0002);
+    const dummy_transport: *quic_transport.QuicTransport = @ptrFromInt(0xDEAD_BEEF_1000);
+    const dummy_conn: *quic_transport.QuicConnection = @ptrFromInt(0xDEAD_BEEF_2000);
     var dummy_conn_state: SharedConnState = .{ .allocator = allocator };
     defer dummy_conn_state.deinit();
-    const dummy_pool: *pooled.ThreadPool = @ptrFromInt(0xDEAD_BEEF_0004);
+    const dummy_pool: *pooled.ThreadPool = @ptrFromInt(0xDEAD_BEEF_4000);
 
     const ctx = try StreamAcceptorContext.create(
         allocator,
@@ -8873,11 +8915,11 @@ test "StreamAcceptorContext: shutdown/done atomics survive owner release" {
     // already called release().  Pre-fix, this was the segfault site
     // (stack-allocated atomics, popped frame, address 0x6 garbage).
     const allocator = std.testing.allocator;
-    const dummy_transport: *quic_transport.QuicTransport = @ptrFromInt(0xDEAD_BEEF_0001);
-    const dummy_conn: *quic_transport.QuicConnection = @ptrFromInt(0xDEAD_BEEF_0002);
+    const dummy_transport: *quic_transport.QuicTransport = @ptrFromInt(0xDEAD_BEEF_1000);
+    const dummy_conn: *quic_transport.QuicConnection = @ptrFromInt(0xDEAD_BEEF_2000);
     var dummy_conn_state: SharedConnState = .{ .allocator = allocator };
     defer dummy_conn_state.deinit();
-    const dummy_pool: *pooled.ThreadPool = @ptrFromInt(0xDEAD_BEEF_0004);
+    const dummy_pool: *pooled.ThreadPool = @ptrFromInt(0xDEAD_BEEF_4000);
 
     const ctx = try StreamAcceptorContext.create(
         allocator,
@@ -8906,11 +8948,11 @@ test "StreamAcceptorContext: shutdown/done atomics survive owner release" {
 
 test "StreamAcceptorContext: waitUntilDone wakes on markDone" {
     const allocator = std.testing.allocator;
-    const dummy_transport: *quic_transport.QuicTransport = @ptrFromInt(0xDEAD_BEEF_0001);
-    const dummy_conn: *quic_transport.QuicConnection = @ptrFromInt(0xDEAD_BEEF_0002);
+    const dummy_transport: *quic_transport.QuicTransport = @ptrFromInt(0xDEAD_BEEF_1000);
+    const dummy_conn: *quic_transport.QuicConnection = @ptrFromInt(0xDEAD_BEEF_2000);
     var dummy_conn_state: SharedConnState = .{ .allocator = allocator };
     defer dummy_conn_state.deinit();
-    const dummy_pool: *pooled.ThreadPool = @ptrFromInt(0xDEAD_BEEF_0004);
+    const dummy_pool: *pooled.ThreadPool = @ptrFromInt(0xDEAD_BEEF_4000);
 
     const ctx = try StreamAcceptorContext.create(
         allocator,
@@ -8943,11 +8985,11 @@ test "StreamAcceptorContext: concurrent release from two threads is safe" {
     //
     // Repeated 256 times to amplify the probability of catching a race.
     const allocator = std.testing.allocator;
-    const dummy_transport: *quic_transport.QuicTransport = @ptrFromInt(0xDEAD_BEEF_0001);
-    const dummy_conn: *quic_transport.QuicConnection = @ptrFromInt(0xDEAD_BEEF_0002);
+    const dummy_transport: *quic_transport.QuicTransport = @ptrFromInt(0xDEAD_BEEF_1000);
+    const dummy_conn: *quic_transport.QuicConnection = @ptrFromInt(0xDEAD_BEEF_2000);
     var dummy_conn_state: SharedConnState = .{ .allocator = allocator };
     defer dummy_conn_state.deinit();
-    const dummy_pool: *pooled.ThreadPool = @ptrFromInt(0xDEAD_BEEF_0004);
+    const dummy_pool: *pooled.ThreadPool = @ptrFromInt(0xDEAD_BEEF_4000);
 
     const Worker = struct {
         fn run(c: *StreamAcceptorContext) void {
@@ -9066,11 +9108,11 @@ test "StreamAcceptorContext: owner-bails-then-acceptor-finishes does not UAF or 
 
 test "acceptor bail deadline: wedged acceptor bails within the short deadline (not 30s)" {
     const allocator = std.testing.allocator;
-    const dummy_transport: *quic_transport.QuicTransport = @ptrFromInt(0xDEAD_2026_0601);
-    const dummy_conn: *quic_transport.QuicConnection = @ptrFromInt(0xDEAD_2026_0602);
+    const dummy_transport: *quic_transport.QuicTransport = @ptrFromInt(0xDEAD_2026_1000);
+    const dummy_conn: *quic_transport.QuicConnection = @ptrFromInt(0xDEAD_2026_2000);
     var dummy_conn_state: SharedConnState = .{ .allocator = allocator };
     defer dummy_conn_state.deinit();
-    const dummy_pool: *pooled.ThreadPool = @ptrFromInt(0xDEAD_2026_0604);
+    const dummy_pool: *pooled.ThreadPool = @ptrFromInt(0xDEAD_2026_4000);
 
     const ctx = try StreamAcceptorContext.create(
         allocator,
@@ -9098,11 +9140,11 @@ test "acceptor bail deadline: wedged acceptor bails within the short deadline (n
 
 test "acceptor bail deadline: a timely acceptor exit does NOT bail" {
     const allocator = std.testing.allocator;
-    const dummy_transport: *quic_transport.QuicTransport = @ptrFromInt(0xDEAD_2026_0611);
-    const dummy_conn: *quic_transport.QuicConnection = @ptrFromInt(0xDEAD_2026_0612);
+    const dummy_transport: *quic_transport.QuicTransport = @ptrFromInt(0xDEAD_2026_5000);
+    const dummy_conn: *quic_transport.QuicConnection = @ptrFromInt(0xDEAD_2026_6000);
     var dummy_conn_state: SharedConnState = .{ .allocator = allocator };
     defer dummy_conn_state.deinit();
-    const dummy_pool: *pooled.ThreadPool = @ptrFromInt(0xDEAD_2026_0614);
+    const dummy_pool: *pooled.ThreadPool = @ptrFromInt(0xDEAD_2026_7000);
 
     const ctx = try StreamAcceptorContext.create(
         allocator,
@@ -9141,6 +9183,49 @@ test "acceptor bail deadline: env parse defaults, clamps, and stays short" {
     try std.testing.expectEqual(@as(i64, 2000), parseAcceptorBailMs("2000"));
     try std.testing.expectEqual(@as(i64, 50), parseAcceptorBailMs("0")); // clamp low
     try std.testing.expectEqual(@as(i64, 60_000), parseAcceptorBailMs("100000000")); // clamp high
+}
+
+// =============================================================================
+// SONNY-1219b (F3) — every server-initiated pre-HELLO close is named.
+//
+// `handleQuicConnection`'s `defer if (destroy_conn) transport.destroyConnection(conn)`
+// closed with application error 0 for EVERY pre-HELLO exit: HELLO timeout,
+// protobuf read error, failed HELLO, tenant connection quota exceeded,
+// connection-state capture failure, and mTLS rejection all looked exactly like
+// a peer that hung up. Peer EOF before HELLO is the only one of these that IS
+// graceful; everything else is the server refusing or failing, and the peer
+// needs to be able to tell the difference (the driver's retry classification
+// turns on it — see the SONNY-1219 report §6.3).
+// =============================================================================
+
+test "pre-HELLO close code: peer EOF stays graceful" {
+    try std.testing.expectEqual(
+        quic_transport.app_error.no_error,
+        preHelloCloseCode(.peer_eof),
+    );
+}
+
+test "pre-HELLO close code: the tenant connection quota refusal is named" {
+    // GAP-0289's refusal path. A client refused because its tenant is at its
+    // connection cap must not be told NO_ERROR — that is what made a refusal
+    // indistinguishable from a graceful close in the SONNY-1219 triage.
+    try std.testing.expectEqual(
+        quic_transport.app_error.server_teardown,
+        preHelloCloseCode(.tenant_quota_exceeded),
+    );
+}
+
+test "pre-HELLO close code: every refusal and failure is named, exhaustively" {
+    // Exhaustive over the enum so a NEW pre-HELLO exit path cannot be added
+    // without deciding what the peer is told.
+    for (std.enums.values(PreHelloExit)) |exit| {
+        const code = preHelloCloseCode(exit);
+        if (exit == .peer_eof) {
+            try std.testing.expectEqual(quic_transport.app_error.no_error, code);
+        } else {
+            try std.testing.expectEqual(quic_transport.app_error.server_teardown, code);
+        }
+    }
 }
 
 // =============================================================================

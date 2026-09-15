@@ -1913,6 +1913,34 @@ pub const QuicClient = struct {
         };
     }
 
+    /// SONNY-1219b: say goodbye before tearing the endpoint down.
+    ///
+    /// `deinit` frees the endpoint locally WITHOUT sending CONNECTION_CLOSE, so
+    /// from the server's point of view the peer simply goes silent — and a
+    /// silent peer is indistinguishable from a legitimately idle one, so the
+    /// client-facing server (whose `Config.dead_conn_reap_ms` is deliberately 0)
+    /// keeps the connection until the 300 s idle timeout. Every real client
+    /// (the Go driver included) sends CONNECTION_CLOSE on close; harnesses that
+    /// assert on the server's connection accounting must do the same or they
+    /// measure the idle timeout instead of the server's reaping.
+    ///
+    /// `app_error_code` is a Geode application code (see `app_error`).
+    pub fn closeGraceful(self: *QuicClient, app_error_code: u64) void {
+        if (self.connection) |conn| {
+            api.closeConnection(conn, app_error_code) catch {}; // Best-effort goodbye.
+            // Give the endpoint a poll cycle to actually put the
+            // CONNECTION_CLOSE frame on the wire before it is torn down.
+            if (self.endpoint) |ep| {
+                var attempts: usize = 0;
+                while (attempts < 16) : (attempts += 1) {
+                    _ = api.poll(ep, 0) catch break;
+                    compat_sleepNs(1 * std.time.ns_per_ms);
+                }
+            }
+        }
+        self.deinit();
+    }
+
     pub fn deinit(self: *QuicClient) void {
         // Let endpointDeinit handle connection cleanup — calling
         // closeConnection before deinit can leave dangling pointers

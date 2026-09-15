@@ -32,14 +32,33 @@
 //      pre-acceptance, for N in {2, 8, 32} opened across the first stream's
 //      close.
 //
+// SONNY-1219b (review of the SONNY-1219 fix) adds two more contracts:
+//
+//   5. A connection does not PIN an accept worker. The first fix handed
+//      connection ownership to a per-connection acceptor task that then sat on
+//      an `acceptor_pool` worker until the connection died — so with W workers,
+//      connection W+1 onwards silently lost multiplexing and its teardown was
+//      owed to a task that never ran. More connections than workers must all
+//      multiplex. Regression run: `GEODE_QUIC_ACCEPTOR_WORKERS=2`.
+//   6. Served stream wrappers are released per stream, not accumulated in
+//      `conn.streams` for the connection's (now much longer) life.
+//
+// Scenarios 3, 5 and 6 assert on the server's runtime gauges
+// (`quic_active_connections`, `quic_max_tracked_streams`) scraped from the
+// out-of-band `/metrics` listener, because "the server still answers" is also
+// true of a server that has leaked everything it ever served.
+//
 // RED at 26f066c4: scenarios 1, 2 and 4 fail — every sibling stream reports
 // `error.EndOfStream` / `error.Closed` off a NO_ERROR CONNECTION_CLOSE.
+// RED at f80a812d under `GEODE_QUIC_ACCEPTOR_WORKERS=2`: scenario 5 fails from
+// the 3rd connection on, and scenario 6 fails for want of the gauge.
 //
 // Executable, not a `test`: `builtin.is_test` turns on verbose byte dumps
 // inside the vendored QUIC dependency, exactly as documented for
 // tests/e2e_quic_high_concurrency.zig.
 //
 // CANARY: REQ=REQ-QUIC-MUX-010; FEATURE="StreamMultiplexing"; ASPECT=ConnectionOutlivesFirstStream; STATUS=TESTED; TEST=test-quic-first-stream-close-mux-e2e; OWNER=server; UPDATED=2026-09-15
+// CANARY: REQ=REQ-QUIC-MUX-011; FEATURE="StreamMultiplexing"; ASPECT=AcceptReactorOccupancy; STATUS=TESTED; TEST=test-quic-first-stream-close-mux-e2e; OWNER=server; UPDATED=2026-09-15
 
 const std = @import("std");
 const builtin = @import("builtin");
@@ -120,8 +139,14 @@ const MuxConn = struct {
         return .{ .allocator = allocator, .client = client };
     }
 
+    /// Close the way a real client does: CONNECTION_CLOSE on the wire, THEN
+    /// tear the endpoint down. `QuicClient.deinit` alone frees the endpoint
+    /// silently, and a silent peer is indistinguishable from an idle one — the
+    /// server would hold the connection to its 300 s idle timeout and the
+    /// connection-count assertions below would be measuring that timeout
+    /// instead of the server's reaping.
     fn deinit(self: *MuxConn) void {
-        self.client.deinit();
+        self.client.closeGraceful(quic.app_error.no_error);
     }
 
     /// Open an additional client-initiated bidirectional stream on this
@@ -320,7 +345,7 @@ fn inFlightScenario(
 // connections that each open, use and close every stream, then assert the
 // server still admits and serves fresh connections afterwards (a leaked
 // connection or a wedged acceptor shows up here as an admission stall).
-fn scenario3(gpa: std.mem.Allocator, addr: []const u8, rounds: u32) !void {
+fn scenario3(gpa: std.mem.Allocator, addr: []const u8, rounds: u32, metrics_port: u16) !void {
     std.debug.print("[scenario3] connection reaped after last stream (rounds={d})\n", .{rounds});
     var round: u32 = 0;
     while (round < rounds) : (round += 1) {
@@ -336,6 +361,17 @@ fn scenario3(gpa: std.mem.Allocator, addr: []const u8, rounds: u32) !void {
         conn.deinit();
     }
 
+    // SONNY-1219b F7: "the server still answers" is also true of a server that
+    // has leaked every connection it ever served, so assert on the gauge. Every
+    // churned connection must be GONE — `quic_active_connections` back to zero —
+    // before the liveness probe, which would otherwise mask the leak.
+    const settled = waitForGauge(gpa, metrics_port, "quic_active_connections", isZero, 30_000) catch |err| {
+        const last = scrapeGauge(gpa, metrics_port, "quic_active_connections") catch 0;
+        std.debug.print("FAIL [scenario3]: quic_active_connections={d} after {d} cycles ({s}) — connections leaked\n", .{ last, rounds, @errorName(err) });
+        return error.ConnectionLeak;
+    };
+    std.debug.print("[scenario3] quic_active_connections={d} after {d} cycles\n", .{ settled, rounds });
+
     // A fresh connection must still be admitted and served.
     var probe = try MuxConn.connect(gpa, addr);
     defer probe.deinit();
@@ -346,6 +382,295 @@ fn scenario3(gpa: std.mem.Allocator, addr: []const u8, rounds: u32) !void {
         return error.ConnectionLeak;
     };
     std.debug.print("[scenario3] OK: server healthy after {d} connection cycles\n", .{rounds});
+}
+
+// ── SONNY-1219b: runtime-metric scrape helpers ──────────────────────────────
+//
+// F7 of the SONNY-1219 review: scenario 3 could not actually DETECT a leak —
+// "the server still answers" is true of a server that has leaked every
+// connection it ever served. The server's `/metrics` surface already carries
+// `quic_active_connections` (registered in src/server/main.zig against
+// src/server/quic_connection_metrics.zig:activeConnections), so the churn
+// scenario now asserts the count returns to zero, and the new occupancy /
+// wrapper scenarios assert on gauges rather than on liveness.
+
+fn linuxWriteAll(fd: i32, bytes: []const u8) !void {
+    var offset: usize = 0;
+    while (offset < bytes.len) {
+        const rc = std.os.linux.write(fd, bytes[offset..].ptr, bytes.len - offset);
+        const signed: isize = @bitCast(rc);
+        if (signed <= 0) return error.WriteFailed;
+        offset += @intCast(signed);
+    }
+}
+
+fn httpResponseComplete(data: []const u8) bool {
+    const header_end = std.mem.indexOf(u8, data, "\r\n\r\n") orelse return false;
+    const headers = data[0..header_end];
+    const key = "Content-Length:";
+    const key_start = std.mem.indexOf(u8, headers, key) orelse return false;
+    var idx = key_start + key.len;
+    while (idx < headers.len and (headers[idx] == ' ' or headers[idx] == '\t')) : (idx += 1) {}
+    const value_start = idx;
+    while (idx < headers.len and std.ascii.isDigit(headers[idx])) : (idx += 1) {}
+    if (idx == value_start) return false;
+    const content_len = std.fmt.parseUnsigned(usize, headers[value_start..idx], 10) catch return false;
+    return data.len >= header_end + 4 + content_len;
+}
+
+fn httpGetLoopback(allocator: std.mem.Allocator, port: u16, path: []const u8, max_bytes: usize) ![]u8 {
+    const linux = std.os.linux;
+    const fd_raw = linux.socket(linux.AF.INET, linux.SOCK.STREAM | linux.SOCK.CLOEXEC, linux.IPPROTO.TCP);
+    if (linux.errno(fd_raw) != .SUCCESS) return error.SocketCreateFailed;
+    const fd: i32 = @intCast(fd_raw);
+    defer _ = linux.close(fd);
+
+    const sa = linux.sockaddr.in{
+        .family = linux.AF.INET,
+        .port = std.mem.nativeToBig(u16, port),
+        .addr = std.mem.nativeToBig(u32, 0x7F00_0001),
+        .zero = .{0} ** 8,
+    };
+    const conn_rc = linux.connect(fd, @ptrCast(&sa), @sizeOf(linux.sockaddr.in));
+    if (@as(isize, @bitCast(conn_rc)) < 0) return error.ConnectFailed;
+
+    const request = try std.fmt.allocPrint(
+        allocator,
+        "GET {s} HTTP/1.1\r\nHost: 127.0.0.1:{d}\r\nConnection: close\r\n\r\n",
+        .{ path, port },
+    );
+    defer allocator.free(request);
+    try linuxWriteAll(fd, request);
+
+    var response: std.ArrayList(u8) = .empty;
+    errdefer response.deinit(allocator);
+    var chunk: [8192]u8 = undefined;
+    while (response.items.len < max_bytes) {
+        const n_rc = linux.read(fd, &chunk, chunk.len);
+        const signed: isize = @bitCast(n_rc);
+        if (signed < 0) return error.ReadFailed;
+        if (signed == 0) break;
+        try response.appendSlice(allocator, chunk[0..@intCast(signed)]);
+        if (httpResponseComplete(response.items)) break;
+    }
+
+    const header_end = std.mem.indexOf(u8, response.items, "\r\n\r\n") orelse return try response.toOwnedSlice(allocator);
+    const owned = try allocator.dupe(u8, response.items[header_end + 4 ..]);
+    response.deinit(allocator);
+    return owned;
+}
+
+/// Parse one runtime gauge out of a Prometheus text body. Returns null when the
+/// metric is ABSENT — the distinction matters: a missing gauge must fail the
+/// assertion loudly instead of reading as a convenient zero.
+fn metricValue(body: []const u8, name: []const u8) ?u64 {
+    var lines = std.mem.splitScalar(u8, body, '\n');
+    while (lines.next()) |raw_line| {
+        const line = std.mem.trim(u8, raw_line, "\r");
+        if (line.len == 0 or line[0] == '#') continue;
+        if (!std.mem.startsWith(u8, line, name)) continue;
+        if (line.len <= name.len or !std.ascii.isWhitespace(line[name.len])) continue;
+        var rest = std.mem.trim(u8, line[name.len..], " \t");
+        const end = std.mem.indexOfAny(u8, rest, " \t\r") orelse rest.len;
+        rest = rest[0..end];
+        return std.fmt.parseUnsigned(u64, rest, 10) catch continue;
+    }
+    return null;
+}
+
+/// Scrape one gauge, requiring it to be present.
+fn scrapeGauge(gpa: std.mem.Allocator, metrics_port: u16, name: []const u8) !u64 {
+    const body = try httpGetLoopback(gpa, metrics_port, "/metrics", 4 * 1024 * 1024);
+    defer gpa.free(body);
+    return metricValue(body, name) orelse error.MetricAbsent;
+}
+
+/// Poll a gauge until it satisfies `want`, or the deadline elapses.
+fn waitForGauge(
+    gpa: std.mem.Allocator,
+    metrics_port: u16,
+    name: []const u8,
+    want: *const fn (u64) bool,
+    deadline_ms: u64,
+) !u64 {
+    var waited: u64 = 0;
+    var last: u64 = 0;
+    while (waited <= deadline_ms) : (waited += 100) {
+        last = scrapeGauge(gpa, metrics_port, name) catch |err| {
+            if (err == error.MetricAbsent) return err;
+            sleepMs(100);
+            continue;
+        };
+        if (want(last)) return last;
+        sleepMs(100);
+    }
+    return error.GaugeNeverSettled;
+}
+
+fn isZero(v: u64) bool {
+    return v == 0;
+}
+
+// ── Scenario 5: a connection must not pin an acceptor worker ────────────────
+//
+// SONNY-1219b F1. The SONNY-1219 fix handed connection ownership to the
+// per-connection acceptor task, and that task then sat on an `acceptor_pool`
+// worker for the WHOLE connection lifetime — the loop only exits on
+// `conn.isDrained()` / `conn.shutdown_requested`, i.e. at the 300 s QUIC idle
+// timeout for a connection whose peer is still there. With `W` acceptor
+// workers, connection `W+1` onwards silently loses multiplexing: its acceptor
+// task is queued (submit() returns true while the 4096-deep queue has room) but
+// never scheduled, so nothing ever calls `tryAcceptStream` for it and every
+// sibling stream hangs to the client's timeout. The teardown handed to that
+// task is owed to something that is not running.
+//
+// This scenario holds `conn_count` connections open SIMULTANEOUSLY, closes the
+// first stream on each (the SONNY-1219 handoff), and then uses every one of
+// them. Run under `GEODE_QUIC_ACCEPTOR_WORKERS=2` it is the F1 regression:
+// pre-fix the 3rd connection onwards fails.
+/// `std.posix.environ` was retired in Zig 0.16 and linking libc just to read one
+/// variable is not worth it, so read /proc/self/environ — the same stdlib-only,
+/// linux-only idiom `tests/proto_test_util.zig:spawnServer` already uses.
+fn envValue(name: []const u8, buf: []u8) ?[]const u8 {
+    const io = std.Io.Threaded.global_single_threaded.io();
+    var f = std.Io.Dir.cwd().openFile(io, "/proc/self/environ", .{ .mode = .read_only }) catch return null;
+    defer f.close(io);
+    const n = f.readPositionalAll(io, buf, 0) catch return null;
+    const data = buf[0..n];
+    var start: usize = 0;
+    for (data, 0..) |c, i| {
+        if (c != 0) continue;
+        if (i > start) {
+            const entry = data[start..i];
+            if (std.mem.indexOfScalar(u8, entry, '=')) |eq| {
+                if (std.mem.eql(u8, entry[0..eq], name)) return entry[eq + 1 ..];
+            }
+        }
+        start = i + 1;
+    }
+    return null;
+}
+
+fn acceptorWorkerEnv() ?u32 {
+    var buf: [64 * 1024]u8 = undefined;
+    const raw = envValue("GEODE_QUIC_ACCEPTOR_WORKERS", &buf) orelse return null;
+    const trimmed = std.mem.trim(u8, raw, " \t\r\n");
+    return std.fmt.parseUnsigned(u32, trimmed, 10) catch null;
+}
+
+/// More connections than acceptor workers, always. With the env var set (the
+/// regression run) that is workers+3; without it, a fixed 12 — enough to prove
+/// the reactor serves many connections per thread without making the default
+/// run pay for 67 connections.
+fn occupancyConnCount() u32 {
+    if (acceptorWorkerEnv()) |w| return @min(w, 64) + 3;
+    return 12;
+}
+
+fn scenario5(gpa: std.mem.Allocator, addr: []const u8, metrics_port: u16) !void {
+    const conn_count = occupancyConnCount();
+    std.debug.print("[scenario5] connections outlive acceptor workers (conns={d}, GEODE_QUIC_ACCEPTOR_WORKERS={?d})\n", .{ conn_count, acceptorWorkerEnv() });
+
+    const conns = try gpa.alloc(MuxConn, conn_count);
+    defer gpa.free(conns);
+    const live = try gpa.alloc(bool, conn_count);
+    defer gpa.free(live);
+    @memset(live, false);
+    defer for (conns, live) |*c, was_live| {
+        if (was_live) c.deinit();
+    };
+
+    // Phase A: open every connection, HELLO on its first stream, then close
+    // that first stream — the exact hand-off the acceptor is supposed to take.
+    for (conns, live, 0..) |*c, *was_live, i| {
+        c.* = MuxConn.connect(gpa, addr) catch |err| {
+            std.debug.print("[scenario5] conn {d}: connect failed: {s}\n", .{ i, @errorName(err) });
+            return error.OccupancyConnectFailed;
+        };
+        was_live.* = true;
+        var first = try c.openStream();
+        try helloAndQuery(gpa, &first);
+        c.releaseStream(&first);
+    }
+    std.debug.print("[scenario5] {d} connections open, first stream closed on each\n", .{conn_count});
+
+    // The gauge must see every one of them. A connection that the engine has
+    // already torn down would not be counted, so this also pins that the
+    // hand-off did not destroy anything.
+    const active = try scrapeGauge(gpa, metrics_port, "quic_active_connections");
+    if (active < conn_count) {
+        std.debug.print("FAIL [scenario5]: quic_active_connections={d}, expected >= {d}\n", .{ active, conn_count });
+        return error.ConnectionsDisappeared;
+    }
+
+    // Phase B: every connection must still multiplex. Pre-fix, connections
+    // beyond the acceptor-worker count have no running acceptor at all.
+    sleepMs(250);
+    var failures: u32 = 0;
+    for (conns, 0..) |*c, i| {
+        var s = c.openStream() catch |err| {
+            std.debug.print("[scenario5] conn {d}: open failed: {s}\n", .{ i, @errorName(err) });
+            failures += 1;
+            continue;
+        };
+        defer c.releaseStream(&s);
+        helloAndQuery(gpa, &s) catch |err| {
+            std.debug.print("[scenario5] conn {d}: {s}\n", .{ i, @errorName(err) });
+            failures += 1;
+            continue;
+        };
+    }
+    if (failures != 0) {
+        std.debug.print("FAIL [scenario5]: {d}/{d} connections lost multiplexing (acceptor workers exhausted)\n", .{ failures, conn_count });
+        return error.AcceptorWorkerExhaustion;
+    }
+    std.debug.print("[scenario5] OK: {d}/{d} connections multiplexed with {?d} acceptor workers\n", .{ conn_count, conn_count, acceptorWorkerEnv() });
+}
+
+// ── Scenario 6: served stream wrappers are released, not accumulated ────────
+//
+// SONNY-1219b F2. `handleAdditionalStream`'s defer called `stream.close()` but
+// never `conn.destroyStream(stream)`, so every served sibling left a
+// `*QuicStream` wrapper in `conn.streams` until the whole connection was
+// destroyed. Before SONNY-1219 that was bounded by the first stream's life;
+// afterwards a pooled connection lives for hours and the list is unbounded.
+//
+// Assert on `quic_max_tracked_streams` — the largest `conn.streams` length over
+// the live connections. Serving `wrapper_churn_streams` streams one at a time
+// must leave it small; pre-fix it grows to the churn count.
+const wrapper_churn_streams: u32 = 48;
+const wrapper_tracked_bound: u64 = 8;
+
+fn scenario6(gpa: std.mem.Allocator, addr: []const u8, metrics_port: u16) !void {
+    std.debug.print("[scenario6] stream wrappers released per stream (churn={d})\n", .{wrapper_churn_streams});
+    var conn = try MuxConn.connect(gpa, addr);
+    defer conn.deinit();
+
+    var first = try conn.openStream();
+    try helloAndQuery(gpa, &first);
+    defer conn.releaseStream(&first);
+
+    var i: u32 = 0;
+    while (i < wrapper_churn_streams) : (i += 1) {
+        var s = try conn.openStream();
+        try helloAndQuery(gpa, &s);
+        conn.releaseStream(&s);
+    }
+    // Give the server a moment to run each handler's release defer.
+    sleepMs(500);
+
+    const tracked = scrapeGauge(gpa, metrics_port, "quic_max_tracked_streams") catch |err| {
+        std.debug.print("FAIL [scenario6]: quic_max_tracked_streams unavailable: {s}\n", .{@errorName(err)});
+        return error.TrackedStreamGaugeMissing;
+    };
+    if (tracked > wrapper_tracked_bound) {
+        std.debug.print(
+            "FAIL [scenario6]: quic_max_tracked_streams={d} after {d} served streams (bound {d}) — wrappers are accumulating in conn.streams\n",
+            .{ tracked, wrapper_churn_streams, wrapper_tracked_bound },
+        );
+        return error.StreamWrappersLeaked;
+    }
+    std.debug.print("[scenario6] OK: quic_max_tracked_streams={d} after {d} served streams\n", .{ tracked, wrapper_churn_streams });
 }
 
 pub fn main() !void {
@@ -364,7 +689,19 @@ pub fn main() !void {
     // Multiplexing defaults on at main, but the whole point of this regression
     // is the multiplexed path — pin it explicitly so a default flip cannot turn
     // the test green by disabling the feature under test.
-    var server = try util.spawnServerRandom(gpa, &.{"GEODE_QUIC_ENABLE_STREAM_MULTIPLEXING=1"});
+    // SONNY-1219b F7: the assertions below read the server's runtime gauges, so
+    // the out-of-band metrics listener has to be up. `GEODE_QUIC_ACCEPTOR_WORKERS`
+    // is deliberately NOT set here — it is inherited from this process's
+    // environment so the regression run is `GEODE_QUIC_ACCEPTOR_WORKERS=2 zig
+    // build test-quic-first-stream-close-mux-e2e`.
+    const metrics_port = try util.getRandomPort();
+    const metrics_port_env = try std.fmt.allocPrint(gpa, "GEODE_METRICS_PORT={d}", .{metrics_port});
+    defer gpa.free(metrics_port_env);
+    var server = try util.spawnServerRandom(gpa, &.{
+        "GEODE_QUIC_ENABLE_STREAM_MULTIPLEXING=1",
+        "GEODE_METRICS_BIND=127.0.0.1",
+        metrics_port_env,
+    });
     defer {
         g_server_pid.store(0, .release);
         server.deinit();
@@ -384,7 +721,7 @@ pub fn main() !void {
         std.debug.print("[scenario2] FAILED: {s}\n", .{@errorName(err)});
         failed += 1;
     };
-    scenario3(gpa, addr, 8) catch |err| {
+    scenario3(gpa, addr, 8, metrics_port) catch |err| {
         std.debug.print("[scenario3] FAILED: {s}\n", .{@errorName(err)});
         failed += 1;
     };
@@ -394,6 +731,15 @@ pub fn main() !void {
             failed += 1;
         };
     }
+
+    scenario5(gpa, addr, metrics_port) catch |err| {
+        std.debug.print("[scenario5] FAILED: {s}\n", .{@errorName(err)});
+        failed += 1;
+    };
+    scenario6(gpa, addr, metrics_port) catch |err| {
+        std.debug.print("[scenario6] FAILED: {s}\n", .{@errorName(err)});
+        failed += 1;
+    };
 
     if (failed != 0) {
         std.debug.print("FAIL: SONNY-1219 — {d} scenario(s) failed\n", .{failed});

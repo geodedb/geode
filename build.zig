@@ -7798,6 +7798,48 @@ pub fn build(b: *std.Build) void {
     // full server module in TEST mode.
     shardDep(test_step, &run_first_stream_lifetime_tests.step, 8, test_shard_loads, test_shard_index);
 
+    // SONNY-1219b — QUIC accept-reactor + pre-HELLO close-code regressions.
+    //
+    // These tests are INLINE in src/server/quic_connection_handler.zig for the
+    // same reason the first-stream-owner ones are: the acceptor/reactor and
+    // close-code internals are private to the handler and not exported through
+    // the `geode` root module. They therefore need the SAME fully-wired root
+    // (src/first_stream_owner_lifetime_test_root.zig force-references the
+    // handler namespace so Zig 0.16 collects its inline `test` blocks).
+    //
+    // NOT the `test-acceptor-bail` runner: that step is rooted at `src/main.zig`
+    // — the untouched `zig init` scaffold, which references nothing — so it has
+    // always discovered ZERO tests and passed vacuously (its run completes in
+    // ~86 ms, less than the 150 ms its own wedge test sleeps).
+    const accept_reactor_mod = b.createModule(.{
+        .root_source_file = b.path("src/first_stream_owner_lifetime_test_root.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+    {
+        var it = geode_exe.root_module.import_table.iterator();
+        while (it.next()) |entry| {
+            accept_reactor_mod.addImport(entry.key_ptr.*, entry.value_ptr.*);
+        }
+    }
+    accept_reactor_mod.link_libc = true;
+    if (enable_openssl) {
+        accept_reactor_mod.linkSystemLibrary("ssl", .{});
+        accept_reactor_mod.linkSystemLibrary("crypto", .{});
+    }
+    if (target.result.os.tag == .linux and (is_native or enable_openssl)) {
+        accept_reactor_mod.linkSystemLibrary("dl", .{});
+    }
+    accept_reactor_mod.addOptions("openssl_config", openssl_options);
+    const accept_reactor_tests = b.addTest(.{
+        .root_module = accept_reactor_mod,
+        .filters = &.{ "pre-HELLO close code", "accept reactor", "StreamAcceptorContext" },
+    });
+    const run_accept_reactor_tests = b.addRunArtifact(accept_reactor_tests);
+    const accept_reactor_step = b.step("test-quic-accept-reactor", "SONNY-1219b: QUIC accept-reactor occupancy + pre-HELLO close codes (inline handler tests)");
+    accept_reactor_step.dependOn(&run_accept_reactor_tests.step);
+    shardDep(test_step, &run_accept_reactor_tests.step, 8, test_shard_loads, test_shard_index);
+
     // Focused runner for the idle-connection reap-cap regression
     // (docs/bugs/2026-06-18-idle-pool-spin-reap-cap.md). `nextMessage` reaps a
     // lingering connection on a WouldBlock-attempt counter whose comment
