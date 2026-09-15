@@ -8997,6 +8997,24 @@ pub fn build(b: *std.Build) void {
     const exact_index_deferred_step = b.step("test-exact-index-deferred-build", "H4: defer exact node-property index rebuild to lazy first-access (cold-open phase 1)");
     exact_index_deferred_step.dependOn(&run_exact_index_deferred_tests.step);
 
+    // SONNY-1574: the exact-index persist must never report a persist it
+    // SKIPPED, and the persist-on-build spawn must happen OUTSIDE the build
+    // mutex. Deterministic interleaving (the test thread holds the build mutex)
+    // instead of the load-sensitive production race.
+    const exact_index_persist_interleave_mod = b.createModule(.{
+        .root_source_file = b.path("tests/test_exact_index_persist_interleave.zig"),
+        .target = target,
+        .optimize = optimize,
+        .link_libc = true,
+    });
+    exact_index_persist_interleave_mod.addImport("geode", root_mod);
+    exact_index_persist_interleave_mod.addImport("graph_storage", graph_storage_mod);
+    const exact_index_persist_interleave_tests = b.addTest(.{ .root_module = exact_index_persist_interleave_mod });
+    const run_exact_index_persist_interleave_tests = b.addRunArtifact(exact_index_persist_interleave_tests);
+    shardDep(test_step, &run_exact_index_persist_interleave_tests.step, 1, test_shard_loads, test_shard_index);
+    const exact_index_persist_interleave_step = b.step("test-exact-index-persist-interleave", "SONNY-1574: a skipped exact-index persist is never reported as a completion; persist-on-build spawns outside the build mutex");
+    exact_index_persist_interleave_step.dependOn(&run_exact_index_persist_interleave_tests.step);
+
     // GAP-ENT-0048 crash-reconcile (Phase E): on a crash-reopen with a committed
     // WAL tail, geode RECONCILES prop_exact.idx (O(tail)) instead of REBUILDING.
     // Asserts reconcile == full-rebuild key-for-key AND count-for-count for an

@@ -378,19 +378,30 @@ test "exact node-property index: lazy build persists immediately (crash before a
         }
         try testing.expectEqual(@as(u64, 1), adapter_mod.getExactRebuildRunsForTesting());
 
-        // ... and triggers the background graph-scoped persist. Wait for it
-        // to land (bounded; adapter.deinit would also join it, but assert
-        // the SUCCESS surface explicitly).
+        // ... and triggers the background graph-scoped persist. Wait for the
+        // persist WORKER to finish (bounded; adapter.deinit would also join it),
+        // then assert on what it actually DID.
+        //
+        // SONNY-1574: this gate used to wait on `completions + failures` and
+        // assert `completions == 1` — a surface that was satisfied by a
+        // checkpoint which SKIPPED the persist (the worker's non-blocking
+        // tryLock lost to the build mutex its own builder still held). The test
+        // then passed with NOTHING on disk and session 3 re-paid the rebuild —
+        // the load-sensitive failure triaged in sonny-1560-shard-triage.md.
+        // Wait on, and assert, a REAL WRITE.
         var waited_ms: u64 = 0;
-        while (adapter_mod.getExactIndexPersistCompletionsForTesting() +
-            adapter_mod.getExactIndexPersistFailuresForTesting() == 0 and
+        while (adapter_mod.getExactIndexPersistWorkerRunsForTesting() == 0 and
             waited_ms < 15_000) : (waited_ms += 10)
         {
             sleepMsDeferred(10);
         }
         try testing.expectEqual(@as(u64, 1), adapter_mod.getExactIndexPersistAttemptsForTesting());
+        try testing.expectEqual(@as(u64, 1), adapter_mod.getExactIndexPersistWritesForTesting());
+        try testing.expectEqual(@as(u64, 0), adapter_mod.getExactIndexPersistSkipsForTesting());
         try testing.expectEqual(@as(u64, 1), adapter_mod.getExactIndexPersistCompletionsForTesting());
         try testing.expectEqual(@as(u64, 0), adapter_mod.getExactIndexPersistFailuresForTesting());
+        // Ground truth: the snapshot is really on disk before the "crash".
+        try testing.expect(adapter.exactIndexFileSizeForTesting(graph) != null);
 
         // CRASH: deinit runs NO full checkpoint (mirrors the existing suite's
         // sessions) — on-disk state = durable pages + the persist-on-build

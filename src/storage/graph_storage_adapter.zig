@@ -214,6 +214,24 @@ fn orderedAutobuildDisabled() bool {
 }
 var g_exact_persist_completions: std.atomic.Value(u64) = std.atomic.Value(u64).init(0);
 var g_exact_persist_failures: std.atomic.Value(u64) = std.atomic.Value(u64).init(0);
+// SONNY-1574: the ONLY counter that means "an exact-index snapshot actually
+// reached disk". `completions` used to be bumped by the persist worker purely
+// because `checkpointGraph` RETURNED OK — including when the checkpoint's
+// persist decision SKIPPED the write (tryLock lost to the build mutex) or when
+// `saveToFile` failed (warn-only). That success surface lied: the test's
+// attempts/completions/failures gate passed while nothing was durable, and the
+// crash-reopen re-paid the O(graph) rebuild. `writes` is incremented at the one
+// site that observes a successful `saveToFile`; `skips` counts a persist
+// decision that deliberately wrote nothing; a `saveToFile` error now lands in
+// `failures` instead of a bare log line.
+var g_exact_persist_writes: std.atomic.Value(u64) = std.atomic.Value(u64).init(0);
+var g_exact_persist_skips: std.atomic.Value(u64) = std.atomic.Value(u64).init(0);
+// SONNY-1574: persist-on-build workers that have RUN TO COMPLETION (every exit
+// path, after their counters are final). A test that asserts on the outcome
+// counters must wait on THIS, not on a counter the worker's own checkpoint
+// bumps mid-flight — `writes` lands inside `checkpointGraphEx`, `completions`
+// only after it returns.
+var g_exact_persist_worker_runs: std.atomic.Value(u64) = std.atomic.Value(u64).init(0);
 // GAP-ENT-0048 PRIMARY: number of graphs whose exact node-property index was
 // RELOADED from a persisted `prop_exact.idx` snapshot at open (the O(snapshot)
 // bulk-load path, NOT the O(graph) rebuild). Test instrumentation for the
@@ -545,11 +563,38 @@ pub fn getExactIndexPersistFailuresForTesting() u64 {
     return g_exact_persist_failures.load(.acquire);
 }
 
+/// SONNY-1574: exact-index snapshots that ACTUALLY reached disk (a successful
+/// `NodePropertyExactIndex.saveToFile` inside a FULL checkpoint's persist
+/// decision). This — never `completions` — is what a durability test must wait
+/// on: `completions` only means the persist worker's checkpoint returned, and a
+/// checkpoint can legitimately return OK having persisted nothing.
+pub fn getExactIndexPersistWritesForTesting() u64 {
+    return g_exact_persist_writes.load(.acquire);
+}
+
+/// SONNY-1574: FULL-checkpoint persist decisions that deliberately wrote
+/// NOTHING — the build-mutex `tryLock` skip (another build owns the index and
+/// persists on completion) or an empty deferred graph (nothing to snapshot).
+/// Counted separately from failures: a skip is a correct outcome, it just must
+/// never be reported as a completed persist.
+pub fn getExactIndexPersistSkipsForTesting() u64 {
+    return g_exact_persist_skips.load(.acquire);
+}
+
+/// SONNY-1574: persist-on-build background workers that have finished (all
+/// their counters final). The synchronisation point for tests.
+pub fn getExactIndexPersistWorkerRunsForTesting() u64 {
+    return g_exact_persist_worker_runs.load(.acquire);
+}
+
 /// H4 persist-on-build: reset the persist counters (test-only).
 pub fn resetExactIndexPersistCountersForTesting() void {
     g_exact_persist_attempts.store(0, .release);
     g_exact_persist_completions.store(0, .release);
     g_exact_persist_failures.store(0, .release);
+    g_exact_persist_writes.store(0, .release);
+    g_exact_persist_skips.store(0, .release);
+    g_exact_persist_worker_runs.store(0, .release);
 }
 
 /// GAP-ENT-0048 PRIMARY: graphs whose exact index was RELOADED from the
@@ -2557,46 +2602,78 @@ fn rebuildExactNodePropertyIndex(mg: *ManagedGraph, cancel: read_budget.CancelFl
 /// checkpoint does not re-pay the O(graph) build on reopen. Triggered
 /// strictly AFTER the `exact_index_built` latch store so the persist's
 /// checkpoint observes `built == true` (the 88a05773 never-persist-unbuilt
-/// discipline re-checks the latch under the EXCLUSIVE rwlock).
+/// discipline re-checks the latch under the EXCLUSIVE rwlock), and — SONNY-1574
+/// — strictly AFTER `exact_index_build_mutex` is RELEASED, so the worker's
+/// checkpoint can never lose its non-blocking `tryLock` to the very build it is
+/// persisting (the lost persist).
 fn ensureExactNodePropertyIndexBuilt(adapter: *StorageAdapter, mg: *ManagedGraph) !void {
     if (mg.exact_index_built.load(.acquire)) return;
     const io = std.Io.Threaded.global_single_threaded.io();
-    mg.exact_index_build_mutex.lockUncancelable(io);
-    defer mg.exact_index_build_mutex.unlock(io);
-    // Double-check under the mutex: a peer first-accessor may have built it
-    // while we waited for the lock.
-    if (mg.exact_index_built.load(.acquire)) return;
-    // GAP-0064 (adversarial review — TEST-ONLY): hold the LAZY build "in flight"
-    // (mutex held, mid-build) so a test can prove a concurrent FULL checkpoint's
-    // eager build does NOT run a second concurrent rebuild (the lazy-vs-checkpoint
-    // double-insert race). Reuses the same gate the worker path uses; never blocks
-    // in production (gate == 0).
-    if (comptime @import("builtin").is_test) {
-        if (g_test_exact_build_gate.load(.acquire) != 0) {
-            _ = g_test_build_gate_waiters.fetchAdd(1, .acq_rel);
-            const gate_req = std.os.linux.timespec{ .sec = 0, .nsec = std.time.ns_per_ms };
-            var gate_rem: std.os.linux.timespec = undefined;
-            while (g_test_exact_build_gate.load(.acquire) != 0) {
-                _ = std.os.linux.nanosleep(&gate_req, &gate_rem);
+    // SONNY-1574: the build runs in an INNER scope so `exact_index_build_mutex`
+    // is released BEFORE the persist worker is spawned (see the spawn below).
+    const built_here = blk: {
+        mg.exact_index_build_mutex.lockUncancelable(io);
+        defer mg.exact_index_build_mutex.unlock(io);
+        // Double-check under the mutex: a peer first-accessor may have built it
+        // while we waited for the lock.
+        if (mg.exact_index_built.load(.acquire)) break :blk false;
+        // GAP-0064 (adversarial review — TEST-ONLY): hold the LAZY build "in flight"
+        // (mutex held, mid-build) so a test can prove a concurrent FULL checkpoint's
+        // eager build does NOT run a second concurrent rebuild (the lazy-vs-checkpoint
+        // double-insert race). Reuses the same gate the worker path uses; never blocks
+        // in production (gate == 0).
+        if (comptime @import("builtin").is_test) {
+            if (g_test_exact_build_gate.load(.acquire) != 0) {
+                _ = g_test_build_gate_waiters.fetchAdd(1, .acq_rel);
+                const gate_req = std.os.linux.timespec{ .sec = 0, .nsec = std.time.ns_per_ms };
+                var gate_rem: std.os.linux.timespec = undefined;
+                while (g_test_exact_build_gate.load(.acquire) != 0) {
+                    _ = std.os.linux.nanosleep(&gate_req, &gate_rem);
+                }
+                _ = g_test_build_gate_waiters.fetchSub(1, .acq_rel);
             }
-            _ = g_test_build_gate_waiters.fetchSub(1, .acq_rel);
         }
-    }
-    // GAP-ENT-0048 DEFECT B: capture THIS (handler) thread's read-executor
-    // cancel flags and hand them to the parallel rebuild, whose per-shard pool
-    // workers run on threads that do not inherit the threadlocal read scope. If
-    // the driving client genuinely DISCONNECTS (STREAM cancel) mid-rebuild, the
-    // scan aborts with error.ReadQueryCancelled and the latch stays UNbuilt — the
-    // next accessor retries the rebuild cleanly (idempotent: rebuild clears
-    // first). GAP-ENT-0048 SECONDARY: a proto-reader STALL (watchdog) abort does
-    // NOT stop the build — a progressing build is not a wedged handler, so it
-    // runs to completion and latches, and every later query is served from the
-    // built (and persist-on-build durable) index instead of restarting the
-    // O(graph) rebuild forever. Write paths install no read scope, so
-    // `activeCancelFlags` is empty for them and their rebuild is never cancelled.
-    try rebuildExactNodePropertyIndex(mg, read_budget.activeCancelFlags());
-    mg.exact_index_built.store(true, .release);
-    adapter.spawnExactIndexPersistAfterBuild(mg.name);
+        // GAP-ENT-0048 DEFECT B: capture THIS (handler) thread's read-executor
+        // cancel flags and hand them to the parallel rebuild, whose per-shard pool
+        // workers run on threads that do not inherit the threadlocal read scope. If
+        // the driving client genuinely DISCONNECTS (STREAM cancel) mid-rebuild, the
+        // scan aborts with error.ReadQueryCancelled and the latch stays UNbuilt — the
+        // next accessor retries the rebuild cleanly (idempotent: rebuild clears
+        // first). GAP-ENT-0048 SECONDARY: a proto-reader STALL (watchdog) abort does
+        // NOT stop the build — a progressing build is not a wedged handler, so it
+        // runs to completion and latches, and every later query is served from the
+        // built (and persist-on-build durable) index instead of restarting the
+        // O(graph) rebuild forever. Write paths install no read scope, so
+        // `activeCancelFlags` is empty for them and their rebuild is never cancelled.
+        try rebuildExactNodePropertyIndex(mg, read_budget.activeCancelFlags());
+        mg.exact_index_built.store(true, .release);
+        break :blk true;
+    };
+    // SONNY-1574 (lost persist under load): spawn the background persist ONLY
+    // after the build mutex above has been RELEASED. Previously this call was
+    // the last statement of the function while the `defer unlock` had not yet
+    // fired, so the worker's checkpoint could reach
+    // `checkpointPersistExactIndexLocked` — whose acquire is a deliberate
+    // NON-BLOCKING `tryLock` (it holds mg.rwlock EXCLUSIVE and must not park
+    // behind a ~14-min rebuild) — while THIS thread still held the mutex. The
+    // worker then skipped the persist against a build that was already
+    // FINISHED and whose only persist action was spawning that very worker:
+    // nothing was written, and (pre-fix) the worker reported a completion
+    // anyway. Under normal load the builder returned first and the tryLock won;
+    // under the pre-push shard load (145-175) it lost.
+    //
+    // The documented invariant is preserved: the spawn still happens strictly
+    // AFTER the `exact_index_built` latch store, so the persist's checkpoint
+    // observes `built == true` (the 88a05773 never-persist-unbuilt discipline
+    // re-checks the latch under the EXCLUSIVE rwlock). The invariant is about
+    // the LATCH, not the mutex.
+    //
+    // No deadlock is introduced (this strictly SHORTENS a lock hold and adds no
+    // acquire), and no double-persist: `built` is already true, so no peer
+    // re-enters the rebuild branch, and every writer of `prop_exact.idx` holds
+    // the same build mutex around `saveToFile` — concurrent persists serialize
+    // and each writes the same (now immutable-until-mutation) index.
+    if (built_here) adapter.spawnExactIndexPersistAfterBuild(mg.name);
 }
 
 // ============================================================================
@@ -6932,6 +7009,24 @@ pub const StorageAdapter = struct {
         return stat.size;
     }
 
+    /// SONNY-1574 test-only: size of the persisted `prop_exact.idx` snapshot, or
+    /// null when the file is absent. The ground truth behind the persist
+    /// counters — a test can prove that a "completed" persist really did put a
+    /// snapshot on disk (and that a SKIPPED one did not).
+    pub fn exactIndexFileSizeForTesting(self: *StorageAdapter, graph_name: []const u8) ?u64 {
+        const mg = blk: {
+            self.mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
+            defer self.mutex.unlock(std.Io.Threaded.global_single_threaded.io());
+            break :blk self.requireExistingGraphLocked(graph_name) catch return null;
+        };
+        const dir_path = graphDirPath(self.allocator, self.data_dir, mg.uuid) catch return null;
+        defer self.allocator.free(dir_path);
+        const idx_path = std.fmt.allocPrint(self.allocator, "{s}/prop_exact.idx", .{dir_path}) catch return null;
+        defer self.allocator.free(idx_path);
+        const stat = std.Io.Dir.cwd().statFile(std.Io.Threaded.global_single_threaded.io(), idx_path, .{}) catch return null;
+        return stat.size;
+    }
+
     /// TEST-ONLY (Phase E1): load the persisted `prop_rev.idx` reverse map and
     /// return it as a flat, key-sorted list of (node_id, encoded_key) pairs, so a
     /// round-trip test can assert it equals the inversion of the forward index.
@@ -7755,6 +7850,42 @@ pub const StorageAdapter = struct {
         } else |_| {}
     }
 
+    /// SONNY-1574 test-only: take `mg.exact_index_build_mutex` from the CALLING
+    /// thread and keep holding it, standing in for an in-flight rebuild (the
+    /// background-reopen worker or a lazy first-access build). Lets a test drive
+    /// a FULL checkpoint's exact-index persist decision straight into the
+    /// `tryLock` skip branch DETERMINISTICALLY, instead of waiting for the
+    /// scheduler to lose the production race under load. Must be paired with
+    /// `releaseExactIndexBuildMutexForTesting` FROM THE SAME THREAD.
+    pub fn holdExactIndexBuildMutexForTesting(self: *StorageAdapter, graph_name: []const u8) !void {
+        const mg = blk: {
+            self.mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
+            defer self.mutex.unlock(std.Io.Threaded.global_single_threaded.io());
+            break :blk try self.requireExistingGraphLocked(graph_name);
+        };
+        mg.exact_index_build_mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
+    }
+
+    /// SONNY-1574 test-only: release a hold taken by
+    /// `holdExactIndexBuildMutexForTesting`.
+    pub fn releaseExactIndexBuildMutexForTesting(self: *StorageAdapter, graph_name: []const u8) !void {
+        const mg = blk: {
+            self.mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
+            defer self.mutex.unlock(std.Io.Threaded.global_single_threaded.io());
+            break :blk try self.requireExistingGraphLocked(graph_name);
+        };
+        mg.exact_index_build_mutex.unlock(std.Io.Threaded.global_single_threaded.io());
+    }
+
+    /// SONNY-1574 test-only: fire the persist-on-build background worker exactly
+    /// as `ensureExactNodePropertyIndexBuilt` does after a successful rebuild —
+    /// same attempt counting, same thread tracking (joined by `deinit`) — without
+    /// having to stage a real deferred rebuild. Used to pin the worker's counter
+    /// contract (a persist that wrote nothing must never report a completion).
+    pub fn spawnExactIndexPersistForTesting(self: *StorageAdapter, graph_name: []const u8) void {
+        self.spawnExactIndexPersistAfterBuild(graph_name);
+    }
+
     /// GAP-ENT-0048 (task0048d): open the adapter engine of every registry graph
     /// that is not yet loaded, so a FULL checkpoint covers on-disk graphs that
     /// were served this whole session from loop2/counter snapshots (which never
@@ -7865,7 +7996,7 @@ pub const StorageAdapter = struct {
             // Bounded rwlock deadline for the periodic LIGHT checkpoint;
             // unbounded (null) for the durability-critical FULL checkpoint.
             const timeout_ns: ?u64 = if (light) 5 * std.time.ns_per_s else null;
-            switch (self.checkpointOneGraph(mg, light, set_writer_pref, timeout_ns)) {
+            switch (self.checkpointOneGraph(mg, light, set_writer_pref, timeout_ns, null)) {
                 .ok, .engine_failed => {},
                 // GAP-0900 bug #2: an rwlock-deadline skip leaves the graph's
                 // dirty pages un-flushed — any_skipped keeps the backpressure
@@ -7953,6 +8084,31 @@ pub const StorageAdapter = struct {
         self.last_checkpoint_mono_ns.store(monoNanosNow(), .release);
     }
 
+    /// SONNY-1574: what a FULL checkpoint's exact-index persist decision
+    /// ACTUALLY did. Reported out of `checkpointPersistExactIndexLocked` (and,
+    /// optionally, out of `checkpointOneGraph` / `checkpointGraphEx`) so a
+    /// caller can distinguish "the snapshot is durable" from "the checkpoint
+    /// returned OK having written nothing" — the distinction whose absence let
+    /// the persist-on-build worker report a completion for a skipped persist.
+    pub const ExactIndexPersistOutcome = enum {
+        /// No persist decision ran for this checkpoint (LIGHT checkpoint, engine
+        /// checkpoint failed, graph dir path unavailable, or the graph rwlock
+        /// was busy past the deadline).
+        not_attempted,
+        /// `saveToFile` succeeded — a fresh `prop_exact.idx` (+ reverse map) is
+        /// on disk, stamped at this checkpoint's (epoch, covered_lsn).
+        wrote,
+        /// `saveToFile` was called and FAILED — nothing durable. Counted in
+        /// `g_exact_persist_failures`.
+        write_failed,
+        /// The build-mutex `tryLock` lost: another build owns the index and
+        /// persists on its own completion. Nothing written here.
+        skipped_build_locked,
+        /// A deferred graph with no durable nodes: nothing to snapshot, any
+        /// stale file invalidated.
+        skipped_empty,
+    };
+
     /// Outcome of a single-graph checkpoint pass (`checkpointOneGraph`).
     const OneGraphCheckpointOutcome = enum {
         /// Engine checkpoint (and exact-index persist/invalidate + retired-
@@ -7982,13 +8138,19 @@ pub const StorageAdapter = struct {
     ///   null spins unboundedly (the durability-critical clean-shutdown FULL
     ///   path). The acquisition NEVER parks on the RwLock semaphore — see the
     ///   HANG FIX below.
+    /// * `exact_out` — SONNY-1574: optional out-param that receives what the
+    ///   FULL path's exact-index persist decision actually did. Left at
+    ///   `.not_attempted` on every path that runs no decision (LIGHT, busy
+    ///   rwlock, failed engine checkpoint, dir-path error).
     fn checkpointOneGraph(
         self: *StorageAdapter,
         mg: *ManagedGraph,
         light: bool,
         set_writer_pref: bool,
         acquire_timeout_ns: ?u64,
+        exact_out: ?*ExactIndexPersistOutcome,
     ) OneGraphCheckpointOutcome {
+        if (exact_out) |o| o.* = .not_attempted;
         const _t_start = monoNanosNow();
         // GAP-0900 bug #1: announce that this checkpoint wants the EXCLUSIVE
         // lock so the SHARED apply/read paths back off and drain the reader
@@ -8156,7 +8318,8 @@ pub const StorageAdapter = struct {
                 // The prior `exact_rebuild_inflight`-only skip covered only the
                 // worker, not the lazy build. tryLock never blocks, so the
                 // checkpoint (holding mg.rwlock EXCLUSIVE) never waits ~14 min.
-                self.checkpointPersistExactIndexLocked(mg, dir_path);
+                const exact_outcome = self.checkpointPersistExactIndexLocked(mg, dir_path);
+                if (exact_out) |o| o.* = exact_outcome;
             }
             self.allocator.free(dir_path);
         } else |err| {
@@ -8290,16 +8453,32 @@ pub const StorageAdapter = struct {
     /// invalidating (dropping its soon-to-be-persisted file would only cost a
     /// needless reopen rebuild). Caller MUST hold mg.rwlock EXCLUSIVE (the FULL,
     /// non-light checkpoint path).
-    fn checkpointPersistExactIndexLocked(self: *StorageAdapter, mg: *ManagedGraph, dir_path: []const u8) void {
+    ///
+    /// SONNY-1574: RETURNS what it actually did. Every "wrote nothing" path is
+    /// now observable (and counted) instead of silently returning `void` while
+    /// the enclosing `checkpointGraph` reported success — the lost-persist bug:
+    /// the tryLock skip fired, nothing was written, and the persist-on-build
+    /// worker still bumped `completions`.
+    fn checkpointPersistExactIndexLocked(self: *StorageAdapter, mg: *ManagedGraph, dir_path: []const u8) ExactIndexPersistOutcome {
         const io = std.Io.Threaded.global_single_threaded.io();
         if (!mg.exact_index_build_mutex.tryLock()) {
             // A background-reopen worker or a lazy-first-access build holds the
             // mutex (it is mid-scan). It latches `built` + persists on completion;
             // do NOT run a second rebuild here and do NOT invalidate its file.
+            //
+            // SONNY-1574: KEPT non-blocking (a blocking acquire here would park
+            // the checkpoint — which holds mg.rwlock EXCLUSIVE — behind a ~14-min
+            // O(graph) rebuild and freeze every operation on the graph; that is
+            // exactly why 6e9a7e34/GAP-0064 chose tryLock). The lost persist is
+            // fixed at the SOURCE instead: `ensureExactNodePropertyIndexBuilt` no
+            // longer spawns its persist while still holding this mutex. What
+            // changes here is only the REPORTING — a skip is counted as a skip
+            // and never laundered into a completion.
+            _ = g_exact_persist_skips.fetchAdd(1, .monotonic);
             slog.info("skipping exact-index persist: a rebuild holds the build mutex (background worker or lazy first-access) — it persists on completion", &.{
                 SAttr.string("graph", mg.name),
             });
-            return;
+            return .skipped_build_locked;
         }
         defer mg.exact_index_build_mutex.unlock(io);
 
@@ -8308,9 +8487,14 @@ pub const StorageAdapter = struct {
             // Persist the current index — under the build mutex, so no concurrent
             // rebuild mutates it during the save.
             mg.exact_node_property_index.saveToFile(dir_path, mgCheckpointEpoch(mg), mgDurableFrontierLsn(mg)) catch |err| {
+                // SONNY-1574: a failed save is a FAILURE, not a warning the
+                // success surface swallows.
+                _ = g_exact_persist_failures.fetchAdd(1, .monotonic);
                 log.warn("failed to persist property index for graph '{s}': {}", .{ mg.name, err });
+                return .write_failed;
             };
-            return;
+            _ = g_exact_persist_writes.fetchAdd(1, .monotonic);
+            return .wrote;
         }
 
         // Deferred AND no build in flight (we hold the mutex): materialise it now
@@ -8319,11 +8503,16 @@ pub const StorageAdapter = struct {
         // (0-node) deferred graph has nothing to build → invalidate any stale file.
         if (self.eagerBuildDeferredIndexForFullCheckpoint(mg)) {
             mg.exact_node_property_index.saveToFile(dir_path, mgCheckpointEpoch(mg), mgDurableFrontierLsn(mg)) catch |err| {
+                _ = g_exact_persist_failures.fetchAdd(1, .monotonic);
                 log.warn("failed to persist eagerly-built property index for graph '{s}': {}", .{ mg.name, err });
+                return .write_failed;
             };
-        } else {
-            invalidateExactPropertyIndexFile(self.allocator, dir_path);
+            _ = g_exact_persist_writes.fetchAdd(1, .monotonic);
+            return .wrote;
         }
+        invalidateExactPropertyIndexFile(self.allocator, dir_path);
+        _ = g_exact_persist_skips.fetchAdd(1, .monotonic);
+        return .skipped_empty;
     }
 
     fn eagerBuildDeferredIndexForFullCheckpoint(self: *StorageAdapter, mg: *ManagedGraph) bool {
@@ -8516,12 +8705,24 @@ pub const StorageAdapter = struct {
     /// logs loudly and degrades (products stay memory-only until the next
     /// full checkpoint — pre-Task-3 behaviour).
     pub fn checkpointGraph(self: *StorageAdapter, graph_name: []const u8) !void {
+        return self.checkpointGraphEx(graph_name, null);
+    }
+
+    /// SONNY-1574: `checkpointGraph` + the exact-index persist outcome. A caller
+    /// that runs this checkpoint FOR the index snapshot (the persist-on-build
+    /// worker) must know whether the snapshot actually reached disk — a
+    /// successful return alone does not imply it did.
+    pub fn checkpointGraphEx(
+        self: *StorageAdapter,
+        graph_name: []const u8,
+        exact_out: ?*ExactIndexPersistOutcome,
+    ) !void {
         const mg = blk: {
             self.mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
             defer self.mutex.unlock(std.Io.Threaded.global_single_threaded.io());
             break :blk try self.requireExistingGraphLocked(graph_name);
         };
-        switch (self.checkpointOneGraph(mg, false, true, 5 * std.time.ns_per_s)) {
+        switch (self.checkpointOneGraph(mg, false, true, 5 * std.time.ns_per_s, exact_out)) {
             .ok => {},
             .skipped_busy => return error.CheckpointLockBusy,
             .engine_failed => return error.CheckpointFailed,
@@ -8621,7 +8822,14 @@ pub const StorageAdapter = struct {
     /// to persist).
     fn exactIndexPersistWorker(self: *StorageAdapter, graph_name: []u8) void {
         defer self.allocator.free(graph_name);
-        self.checkpointGraph(graph_name) catch |err| {
+        // SONNY-1574: ask the checkpoint what its exact-index persist decision
+        // actually DID. A successful `checkpointGraph` is NOT evidence that a
+        // snapshot reached disk.
+        // Bumped LAST (every exit path): publishes "this worker's counters are
+        // final" to any observer.
+        defer _ = g_exact_persist_worker_runs.fetchAdd(1, .release);
+        var outcome: ExactIndexPersistOutcome = .not_attempted;
+        self.checkpointGraphEx(graph_name, &outcome) catch |err| {
             _ = g_exact_persist_failures.fetchAdd(1, .monotonic);
             slog.warn("exact-index persist-on-build failed; index stays memory-only until the next full checkpoint (a crash before then re-pays the rebuild)", &.{
                 SAttr.string("graph", graph_name),
@@ -8629,10 +8837,26 @@ pub const StorageAdapter = struct {
             });
             return;
         };
-        _ = g_exact_persist_completions.fetchAdd(1, .monotonic);
-        slog.info("exact-index persist-on-build complete (crash-safe)", &.{
-            SAttr.string("graph", graph_name),
-        });
+        switch (outcome) {
+            .wrote => {
+                _ = g_exact_persist_completions.fetchAdd(1, .monotonic);
+                slog.info("exact-index persist-on-build complete (crash-safe)", &.{
+                    SAttr.string("graph", graph_name),
+                });
+            },
+            // Already counted in `g_exact_persist_failures` at the write site.
+            .write_failed => slog.warn("exact-index persist-on-build wrote NOTHING: the snapshot save failed; a crash before the next full checkpoint re-pays the rebuild", &.{
+                SAttr.string("graph", graph_name),
+            }),
+            // Already counted in `g_exact_persist_skips` at the decision site.
+            // NOT a completion: post-fix the spawn happens outside the build
+            // mutex, so reaching here means a DIFFERENT build owns the index and
+            // will persist on its own completion.
+            .skipped_build_locked, .skipped_empty, .not_attempted => slog.warn("exact-index persist-on-build persisted nothing (skipped); the index stays memory-only until another build or checkpoint persists it", &.{
+                SAttr.string("graph", graph_name),
+                SAttr.string("outcome", @tagName(outcome)),
+            }),
+        }
     }
 
     /// GAP-ENT-0048 crash-reconcile (Phase E2): on a `.stale` reopen (a present
