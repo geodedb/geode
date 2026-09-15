@@ -21,9 +21,12 @@
 // silent, manual-restart outage into automatic recovery within the deadline.
 //
 // Everything decision-related here is a pure function (no env, no syscalls, no
-// process exit) so it is unit-testable, mirroring the parseAcceptorBailMs /
-// waitForAcceptorExit split in quic_connection_handler.zig. The single side
-// effect (read /proc/net/udp; exit the process) lives in the caller.
+// process exit) so it is unit-testable. The single side effect (read
+// /proc/net/udp; exit the process) lives in the caller. (SONNY-1219c: this note
+// used to point at `parseAcceptorBailMs` / `waitForAcceptorExit` in
+// quic_connection_handler.zig as the model for that split; SONNY-1219b deleted
+// both along with the acceptor bail path. The watchdog itself is live and
+// unrelated to that change.)
 //
 // CANARY: REQ=REQ-QUIC-ACCEPTOR-WEDGE-WATCHDOG; FEATURE="QUIC High-Concurrency Connection Admission"; ASPECT=AcceptPathWedgeAutoRecovery; STATUS=TESTED; TEST=src/server/acceptor_watchdog.zig; OWNER=transport; UPDATED=2026-06-05
 

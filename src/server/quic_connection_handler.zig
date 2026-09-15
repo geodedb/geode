@@ -3080,7 +3080,11 @@ fn streamAcceptorStep(ctx: *StreamAcceptorContext, rx_gen: *?u32) AcceptStepResu
     // queue to empty, and the `ctx.shutdown` check further down deliberately
     // will not. The two flags mean different things. `conn.shutdown_requested`
     // is set only by `requestShutdown` / `forceCloseConnections`, both of which
-    // have ALREADY put a CONNECTION_CLOSE on the wire: the connection is going
+    // have ALREADY put a CONNECTION_CLOSE on the wire — since SONNY-1219c (M-2a)
+    // carrying `app_error.server_teardown`, not the NO_ERROR that made this
+    // frame indistinguishable from a graceful goodbye and made the later
+    // `destroyConnectionWithError(conn, server_teardown)` a no-op on the wire.
+    // The connection is going
     // away whatever this loop does, so a stream still sitting in the library's
     // accept queue cannot be served by anyone — accepting it would only create a
     // handler that fails its first read, and it would ADD to `active_streams`,
@@ -4123,6 +4127,18 @@ pub const PreHelloExit = enum {
     conn_state_capture_failed,
     /// mTLS was required and the peer certificate was absent or rejected.
     mtls_rejected,
+    /// SONNY-1219c (M-2b): the post-handshake `acceptStream` failed. The peer
+    /// had a stream pending (`hasIncomingStreams`) but the library could not
+    /// hand it over.
+    accept_stream_failed,
+    /// SONNY-1219c (M-2b): the server ran out of a resource it needed to admit
+    /// this connection — the mTLS identity string, the protobuf reader, or the
+    /// first stream's registry slot. A retry on a fresh connection is the right
+    /// client response, which is exactly what `server_teardown` says.
+    resource_exhausted,
+    /// SONNY-1219c (M-2b): the server could not write its own error response to
+    /// the HELLO-bearing stream, so the peer will never learn why.
+    send_failed,
 };
 
 /// Peer EOF is the only pre-HELLO exit the peer initiated; everything else is
@@ -4137,6 +4153,9 @@ fn preHelloCloseCode(exit: PreHelloExit) u64 {
         .tenant_quota_exceeded,
         .conn_state_capture_failed,
         .mtls_rejected,
+        .accept_stream_failed,
+        .resource_exhausted,
+        .send_failed,
         => quic_transport.app_error.server_teardown,
     };
 }
@@ -5560,7 +5579,15 @@ pub fn handleQuicConnection(
 
     // Accept a stream for the protocol communication
     log.debug("Attempting to accept stream", &.{});
-    const stream = try conn.acceptStream();
+    const stream = conn.acceptStream() catch |err| {
+        // SONNY-1219c (M-2b): a bare `try` here returned WITHOUT setting
+        // `pre_hello_exit`, so the defer above closed on the `.peer_eof`
+        // default — application error 0 — and the peer could not tell a server
+        // failure from its own disconnect.
+        log.warn("Failed to accept the first stream after handshake", &.{Attr.string("error", @errorName(err))});
+        pre_hello_exit = .accept_stream_failed;
+        return;
+    };
     log.debug("Stream accepted successfully", &.{});
     var stream_handed_off = false;
     defer if (!stream_handed_off) stream.close();
@@ -5645,7 +5672,11 @@ pub fn handleQuicConnection(
             if (provider.authenticate(&identity)) |auth_result_opt| {
                 if (auth_result_opt) |auth_result| {
                     // Store the authenticated user from the mTLS certificate
-                    state.authenticated_user = try std.fmt.allocPrint(gpa, "mtls:{}", .{auth_result.user_id});
+                    state.authenticated_user = std.fmt.allocPrint(gpa, "mtls:{}", .{auth_result.user_id}) catch |err| {
+                        log.err("mTLS: failed to record the authenticated identity", &.{Attr.string("error", @errorName(err))});
+                        pre_hello_exit = .resource_exhausted;
+                        return;
+                    };
                     log.info("mTLS: Authenticated user via certificate", &.{
                         Attr.int("user_id", @intCast(auth_result.user_id)),
                     });
@@ -5683,7 +5714,11 @@ pub fn handleQuicConnection(
     // retry budgets without per-connection environment lookups.
     const hello_read_timeout_ns: u64 = env_config.quic_hello_read_timeout_ms * std.time.ns_per_ms;
     const hello_read_start_ns = monoNsFromHandler();
-    var line_reader = try BufferedProtoReader.init(gpa, transport, stream);
+    var line_reader = BufferedProtoReader.init(gpa, transport, stream) catch |err| {
+        log.err("Failed to allocate the HELLO protobuf reader", &.{Attr.string("error", @errorName(err))});
+        pre_hello_exit = .resource_exhausted;
+        return;
+    };
     line_reader.peer_addr = peer_ip;
     var line_reader_handed_off = false;
     var line_reader_registered = false;
@@ -5734,7 +5769,11 @@ pub fn handleQuicConnection(
             defer packet.deinit(gpa);
 
             const msg = packet.quic orelse {
-                try sendExecuteError(gpa, stream, "58000", "Empty packet", &.{}, &.{});
+                sendExecuteError(gpa, stream, "58000", "Empty packet", &.{}, &.{}) catch |err| {
+                    log.err("Failed to report an empty pre-HELLO packet", &.{Attr.string("error", @errorName(err))});
+                    pre_hello_exit = .send_failed;
+                    return;
+                };
                 continue;
             };
 
@@ -5799,7 +5838,11 @@ pub fn handleQuicConnection(
         return;
     };
     state.shared_conn = &conn_state;
-    _ = try conn_state.registerActiveStream(stream.stream_id);
+    _ = conn_state.registerActiveStream(stream.stream_id) catch |err| {
+        log.err("Failed to register the first stream for multiplexing", &.{Attr.string("error", @errorName(err))});
+        pre_hello_exit = .resource_exhausted;
+        return;
+    };
     // First stream counts as active.
     _ = conn_state.active_streams.fetchAdd(1, .release);
     var conn_state_handed_off = false;
