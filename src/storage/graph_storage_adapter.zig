@@ -8107,16 +8107,25 @@ pub const StorageAdapter = struct {
     pub const ExactIndexPersistOutcome = enum {
         /// No persist decision ran for this checkpoint (LIGHT checkpoint, engine
         /// checkpoint failed, graph dir path unavailable, or the graph rwlock
-        /// was busy past the deadline). SONNY-1574 (fix pass 1574b): the
-        /// graph-dir-path-unavailable cause is ALSO counted in
-        /// `g_exact_persist_failures`, at the decision site
-        /// (`checkpointOneGraph`'s dir-path branch) — a FULL checkpoint that
-        /// "succeeded" (`.ok`) while never even reaching the persist decision
-        /// must not silently report zero writes, zero skips, zero failures,
-        /// and zero completions. The other causes need no extra counting: the
-        /// enclosing checkpoint already reports its own distinct outcome
-        /// (`OneGraphCheckpointOutcome.skipped_busy` / `.engine_failed`), and a
-        /// LIGHT checkpoint deliberately never attempts this decision.
+        /// was busy past the deadline). SONNY-1574 (fix pass 1574b, gated
+        /// correctly in 1574c): the graph-dir-path-unavailable cause is ALSO
+        /// counted in `g_exact_persist_failures`, at the decision site
+        /// (`checkpointOneGraph`'s dir-path branch) — but ONLY when this is a
+        /// FULL checkpoint (`!light`) whose engine checkpoint SUCCEEDED
+        /// (`engine_ok`). A FULL checkpoint that "succeeded" (`.ok`) while
+        /// never even reaching the persist decision must not silently report
+        /// zero writes, zero skips, zero failures, and zero completions. The
+        /// other causes need no extra counting at this decision site: a LIGHT
+        /// checkpoint deliberately never attempts this decision (the
+        /// dir-path branch runs before the light/!light split, so it is
+        /// reachable from LIGHT too, but is deliberately NOT counted there),
+        /// an engine-checkpoint failure is already reported as the enclosing
+        /// checkpoint's own distinct `OneGraphCheckpointOutcome.engine_failed`
+        /// (double-counting it here would bump `g_exact_persist_failures`
+        /// twice for one failed attempt, since `checkpointGraphEx` turns
+        /// `.engine_failed` into `error.CheckpointFailed` and the worker's
+        /// outer `catch` bumps it again), and a busy rwlock is reported as
+        /// `OneGraphCheckpointOutcome.skipped_busy`.
         not_attempted,
         /// `saveToFile` succeeded — a fresh `prop_exact.idx` (+ reverse map) is
         /// on disk, stamped at this checkpoint's (epoch, covered_lsn).
@@ -8346,19 +8355,35 @@ pub const StorageAdapter = struct {
             }
             self.allocator.free(dir_path);
         } else |err| {
-            // SONNY-1574 (fix pass 1574b): this left `exact_out` at
-            // `.not_attempted` while the FULL checkpoint still returned `.ok`
-            // (this failure does not touch `engine_ok`) — so a caller like the
-            // persist-on-build worker saw a checkpoint that "succeeded" having
-            // made NO exact-index persist decision at all, and its warn-only
-            // handling counted nothing: zero writes, zero skips, zero
-            // failures, zero completions for a run that materially happened.
-            // Count it as a FAILURE here, at the decision site — the same
-            // place a `saveToFile` failure is counted
-            // (`checkpointPersistExactIndexLocked`'s two `write_failed`
-            // arms) — so every persist decision stays observable even when
-            // the failure is "we could not even ask the question."
-            _ = g_exact_persist_failures.fetchAdd(1, .monotonic);
+            // SONNY-1574 (fix pass 1574b, corrected in 1574c): this left
+            // `exact_out` at `.not_attempted` while a FULL checkpoint whose
+            // engine checkpoint SUCCEEDED still returned `.ok` — so a caller
+            // like the persist-on-build worker saw a checkpoint that
+            // "succeeded" having made NO exact-index persist decision at all,
+            // and its warn-only handling counted nothing: zero writes, zero
+            // skips, zero failures, zero completions for a run that
+            // materially happened. Count it as a FAILURE here, at the
+            // decision site — the same place a `saveToFile` failure is
+            // counted (`checkpointPersistExactIndexLocked`'s two
+            // `write_failed` arms) — so every persist decision stays
+            // observable even when the failure is "we could not even ask the
+            // question."
+            //
+            // Gated on `!light and engine_ok` (1574c fix): `graphDirPath` is
+            // called before the light/!light split, so this `else` arm is
+            // also reachable from a LIGHT checkpoint (`exact_out == null`) —
+            // the enum doc comment above states a LIGHT checkpoint
+            // deliberately never attempts this decision, so it must not be
+            // counted as a failure either. And when the engine checkpoint
+            // itself already failed, `checkpointOneGraph` returns
+            // `.engine_failed`, which `checkpointGraphEx` turns into
+            // `error.CheckpointFailed` — the worker's outer `catch` already
+            // bumps `g_exact_persist_failures` for that one attempt, so
+            // bumping it again here would double-count a single failed
+            // attempt as two failures.
+            if (!light and engine_ok) {
+                _ = g_exact_persist_failures.fetchAdd(1, .monotonic);
+            }
             log.warn("failed to build graph dir path for property index persist '{s}': {}", .{ mg.name, err });
         }
         // bound-node-mirror grace point: we hold mg.rwlock EXCLUSIVE here,

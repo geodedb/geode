@@ -271,9 +271,9 @@ test "exact-index persist: a graph-dir-path failure is counted as a failure, nev
     adapter_mod.resetExactIndexPersistCountersForTesting();
 
     adapter_mod.setForceGraphDirPathFailureForTesting(true);
+    defer adapter_mod.setForceGraphDirPathFailureForTesting(false);
     adapter.spawnExactIndexPersistForTesting(graph);
     try waitForPersistWorkers(1, 15_000);
-    adapter_mod.setForceGraphDirPathFailureForTesting(false);
 
     try testing.expectEqual(@as(u64, 1), adapter_mod.getExactIndexPersistAttemptsForTesting());
     // RED (pre-fix): this was 0 — a persist decision that never even ran
