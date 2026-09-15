@@ -87,6 +87,34 @@ pub const QuicError = error{
     InvalidState,
 };
 
+// CANARY: REQ=REQ-QUIC-CLOSE-CODE-001; FEATURE="QuicCloseCodes"; ASPECT=ApplicationErrorSpace; STATUS=TESTED; TEST=test-quic-first-stream-close-mux-e2e; OWNER=transport; UPDATED=2026-09-15
+/// Geode's QUIC **application** error codes, carried in the CONNECTION_CLOSE
+/// frame of a server-initiated close (SONNY-1219).
+///
+/// RFC 9000 §20.2 gives the application protocol the whole application error
+/// space; QUIC's own transport codes live in a separate space, so nothing here
+/// can collide with a transport error. Before SONNY-1219 every geode teardown
+/// path — graceful close, resource teardown, refusal — funnelled through
+/// `api.closeConnection(conn.inner, 0)`, so a client saw `NO_ERROR` for all of
+/// them and could not tell "you closed cleanly" from "the server tore your
+/// connection down under an in-flight request".
+///
+/// Values are the ASCII bytes `GE` (0x4745) in the high half, so a code is
+/// recognisable as geode's in a packet capture, plus a small ordinal.
+pub const app_error = struct {
+    /// Graceful close. The peer asked, or the connection drained with every
+    /// stream already finished. This is the historical (and still correct)
+    /// value for a clean teardown.
+    pub const no_error: u64 = 0;
+
+    /// SONNY-1219: the SERVER ended the connection on its own initiative while
+    /// it still owned stream state — shutdown, resource teardown, or a handler
+    /// that could not hand connection ownership on. A client that sees this
+    /// knows the connection died under it and that a retry on a fresh
+    /// connection is the correct response (it is not a graceful close).
+    pub const server_teardown: u64 = 0x4745_0001;
+};
+
 // Module-level pointer set by listen() so the OTel gauge callback can read
 // the current connection count without holding a reference to the transport.
 // Single-writer (listen() runs once at startup), multiple readers (gauge callback).
@@ -1129,6 +1157,19 @@ pub const QuicTransport = struct {
     /// GAP-0202: Thread-safe connection removal for async connection handling
     /// GAP-0203: Defer inner connection deinit to main thread to prevent use-after-free
     pub fn destroyConnection(self: *QuicTransport, conn: *QuicConnection) void {
+        self.destroyConnectionWithError(conn, app_error.no_error);
+    }
+
+    /// SONNY-1219: `destroyConnection` with an explicit QUIC **application**
+    /// error code for the CONNECTION_CLOSE frame. Server-initiated teardowns
+    /// pass `app_error.server_teardown` so the peer can distinguish them from
+    /// the graceful `app_error.no_error` close; every other behaviour (list
+    /// removal, admission-slot wake, deferred inner destroy) is identical.
+    pub fn destroyConnectionWithError(
+        self: *QuicTransport,
+        conn: *QuicConnection,
+        app_error_code: u64,
+    ) void {
         conn.shutdown_requested.store(true, .release);
         @import("otel_metrics").recordTransportConnectionClosed("destroy");
         // GAP-0202: Lock mutex for thread-safe list modification
@@ -1173,7 +1214,7 @@ pub const QuicTransport = struct {
             conn.allocator.destroy(stream);
         }
         conn.streams.deinit(conn.allocator);
-        api.closeConnection(conn.inner, 0) catch {}; // Best-effort cleanup
+        api.closeConnection(conn.inner, app_error_code) catch {}; // Best-effort cleanup
 
         // Queue the inner connection for deferred destruction on the main thread.
         // drainPendingDestroy() will use api.destroy() to properly remove it

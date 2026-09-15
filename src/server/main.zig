@@ -3297,7 +3297,10 @@ pub fn main() !void {
             // #50: Reject connection on alloc failure instead of blocking main thread
             const ctx = gpa.create(ConnectionContext) catch {
                 log.err("Failed to allocate connection context, rejecting connection", &.{});
-                transport.destroyConnection(conn);
+                // SONNY-1219: a refusal is a server-initiated close. Close with
+                // the distinct application error code so the peer does not read
+                // it as a graceful NO_ERROR teardown.
+                transport.destroyConnectionWithError(conn, quic_transport.app_error.server_teardown);
                 continue;
             };
 
@@ -3324,7 +3327,8 @@ pub fn main() !void {
                         Attr.int("active_admission", @intCast(g_connection_admission_gate.active.load(.acquire))),
                         Attr.int("max_admission", @intCast(g_connection_admission_gate.max.load(.acquire))),
                     });
-                    transport.destroyConnection(conn);
+                    // SONNY-1219: server-initiated refusal, not a graceful close.
+                    transport.destroyConnectionWithError(conn, quic_transport.app_error.server_teardown);
                     gpa.destroy(ctx);
                     continue;
                 }
@@ -3340,7 +3344,8 @@ pub fn main() !void {
                     });
                     ctx.admission_gate = null;
                     g_connection_admission_gate.release();
-                    transport.destroyConnection(conn);
+                    // SONNY-1219: server-initiated refusal, not a graceful close.
+                    transport.destroyConnectionWithError(conn, quic_transport.app_error.server_teardown);
                     gpa.destroy(ctx);
                     continue;
                 };
@@ -3365,7 +3370,8 @@ pub fn main() !void {
                         Attr.int("queue_size", @intCast(pool.pendingTasks())),
                         Attr.int("active_workers", @intCast(pool.activeWorkers())),
                     });
-                    transport.destroyConnection(conn);
+                    // SONNY-1219: server-initiated refusal, not a graceful close.
+                    transport.destroyConnectionWithError(conn, quic_transport.app_error.server_teardown);
                     gpa.destroy(ctx);
                 } else {
                     log.debug("Connection submitted to thread pool", &.{});

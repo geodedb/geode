@@ -2611,6 +2611,36 @@ pub const StreamAcceptorContext = struct {
     /// last release frees the heap struct.
     refcount: std.atomic.Value(u32) = std.atomic.Value(u32).init(2),
 
+    // ── CONNECTION-OWNERSHIP HANDOFF (SONNY-1219) ────────────────────────
+    //
+    // Before SONNY-1219 the QUIC connection's lifetime was the FIRST stream's
+    // lifetime: `cleanupFirstStreamOwner` shut this acceptor down the moment
+    // the HELLO-bearing stream closed and then destroyed the connection, so
+    // every sibling multiplexed stream — including ones with a request already
+    // in flight — died with a `CONNECTION_CLOSE` carrying error code 0. A burst
+    // of 64 pooled requests over 8 multiplexed connections completed 8.
+    //
+    // The connection is now refcounted between the first-stream owner and this
+    // acceptor. When the first stream ends, the owner releases only ITS stream
+    // slot and hands connection ownership here; the acceptor keeps accepting
+    // siblings and performs the connection teardown when IT exits (peer close,
+    // `conn.isDrained()`, server shutdown, or the QUIC idle timeout). Sibling
+    // handlers are covered by `conn_state.waitForAllStreamsDrained()`, which
+    // the teardown runs after this loop has stopped accepting.
+    //
+    // `conn_owner_state` is the two-party handshake that makes the handoff
+    // race-free: the owner and the acceptor can reach their exit points in
+    // either order, and exactly ONE of them runs the teardown.
+    //   0 = first-stream owner still owns the connection (initial)
+    //   1 = ownership published: this acceptor tears down when it exits
+    //   2 = this acceptor has already exited: the owner must tear down itself
+    conn_owner_state: std.atomic.Value(u8) = std.atomic.Value(u8).init(0),
+    /// Owner context + teardown entry point published under `conn_owner_state`.
+    /// Written before the 0->1 store-release, read after the acquire-swap, so
+    /// plain fields are correctly synchronized.
+    conn_owner_ctx: ?*anyopaque = null,
+    conn_owner_teardown: ?*const fn (*anyopaque) void = null,
+
     /// Heap-allocate and initialize a new context.  Caller owns one
     /// reference; the acceptor will own the other once its task starts.
     pub fn create(
@@ -2674,6 +2704,39 @@ pub const StreamAcceptorContext = struct {
             error.Canceled => return self.done.load(.acquire),
         };
         return self.done.load(.acquire);
+    }
+
+    /// SONNY-1219: hand connection ownership from the first-stream owner to
+    /// this acceptor. Returns `true` when the acceptor accepted ownership (it
+    /// will run `teardown(owner_ctx)` when it exits, so the caller must NOT
+    /// tear the connection down and must NOT touch `owner_ctx` again). Returns
+    /// `false` when the acceptor has ALREADY exited, in which case the caller
+    /// keeps ownership and performs the teardown itself.
+    ///
+    /// Called exactly once, from the first-stream owner thread.
+    pub fn handOffConnectionOwner(
+        self: *StreamAcceptorContext,
+        owner_ctx: *anyopaque,
+        teardown: *const fn (*anyopaque) void,
+    ) bool {
+        self.conn_owner_ctx = owner_ctx;
+        self.conn_owner_teardown = teardown;
+        // 0 -> 1 publishes the two plain fields above; failure means the
+        // acceptor already swapped in 2 and is (or is about to be) done.
+        return self.conn_owner_state.cmpxchgStrong(0, 1, .acq_rel, .acquire) == null;
+    }
+
+    /// SONNY-1219: acceptor side of the handoff. Run from the acceptor's exit
+    /// path, AFTER the accept loop has stopped, and before `markDone`.
+    /// Performs the connection teardown iff the first-stream owner got its
+    /// handoff in first; otherwise it latches state 2 so a later handoff
+    /// attempt returns `false` and the owner tears down inline.
+    pub fn runConnOwnerTeardownIfOwned(self: *StreamAcceptorContext) void {
+        const prev = self.conn_owner_state.swap(2, .acq_rel);
+        if (prev != 1) return;
+        const owner_ctx = self.conn_owner_ctx orelse return;
+        const teardown = self.conn_owner_teardown orelse return;
+        teardown(owner_ctx);
     }
 };
 
@@ -2870,16 +2933,34 @@ fn streamAcceptorLoop(ctx: *StreamAcceptorContext) void {
     // refcount keeps `ctx` alive until we exit, and accessing `ctx`
     // fields (including `shutdown` / `done`) is always safe.
     defer {
+        // SONNY-1219: if the first-stream owner handed connection ownership to
+        // this acceptor, the connection teardown (drain barrier, conn_state
+        // deinit, `transport.destroyConnection`, owner-context free) runs HERE,
+        // once the accept loop is guaranteed to be out of the picture. It must
+        // precede `markDone`/`release` because both of those can let the last
+        // reference to `ctx` go.
+        ctx.runConnOwnerTeardownIfOwned();
         ctx.markDone();
         ctx.release();
     }
-    while (!ctx.shutdown.load(.acquire)) {
+    while (true) {
         // Check if connection is still alive
         if (conn.isDrained()) break;
+        // SONNY-1219: server shutdown (`QuicTransport.requestShutdown` /
+        // `forceCloseConnections`) sets the per-connection flag and sends
+        // CONNECTION_CLOSE, but `isDrained()` only flips once the library has
+        // finished the close. Exit promptly on the flag so the bounded shutdown
+        // drain keeps its ordering now that the acceptor outlives its first
+        // stream.
+        if (conn.shutdown_requested.load(.acquire)) break;
 
         // Check the total per-connection stream limit, including the first
         // stream that bootstraps the session before the acceptor starts.
         if (conn_state.active_streams.load(.acquire) >= stream_registry.max_total_streams_per_connection) {
+            // Every stream occupying a slot is already REGISTERED, so it is
+            // covered by `waitForAllStreamsDrained`; honouring shutdown here
+            // cannot strand an unaccepted stream.
+            if (ctx.shutdown.load(.acquire)) break;
             conn_state.waitForStreamSlot(stream_registry.max_total_streams_per_connection, 5 * std.time.ns_per_ms);
             continue;
         }
@@ -2961,6 +3042,15 @@ fn streamAcceptorLoop(ctx: *StreamAcceptorContext) void {
                 continue;
             }
         } else {
+            // SONNY-1219: `tryAcceptStream` just returned null, i.e. the
+            // library's accept queue is EMPTY. That is the only point at which
+            // honouring the shutdown flag is safe: a stream the peer has opened
+            // but this loop has not yet accepted is invisible to
+            // `waitForAllStreamsDrained` (streams are only counted at
+            // `registerActiveStream` above), so breaking out with the queue
+            // non-empty destroys it under an in-flight request. Draining to
+            // empty first closes that acceptance race.
+            if (ctx.shutdown.load(.acquire)) break;
             // No stream pending — sleep and re-check shutdown.
             //
             // 2026-04-28: removed `transport.poll(0)` from this branch.
@@ -3548,43 +3638,156 @@ fn cleanupFirstStreamOwner(ctx: *FirstStreamOwnerContext) void {
     ctx.stream.close();
 
     if (ctx.acceptor_ctx) |acceptor_ctx| {
-        const bailed = shutdownAcceptorOwner(gpa, ctx, acceptor_ctx, ctx.acceptor_submitted);
+        // ── SONNY-1219: the connection outlives its first stream ───────────
+        //
+        // This is the defect's site. The old code unconditionally signalled
+        // `acceptor_ctx.shutdown` here and then destroyed the whole QUIC
+        // connection, so closing the HELLO-bearing stream killed every sibling
+        // multiplexed stream — including ones with a request in flight — with
+        // CONNECTION_CLOSE error 0. `waitForAllStreamsDrained` did not protect
+        // them, because a sibling is only counted once the acceptor has
+        // REGISTERED it, and the acceptor had just been told to stop.
+        //
+        // Now the first stream gives back only what is its own (its stream slot
+        // and its per-stream server state) and hands connection ownership to
+        // the still-running acceptor. The acceptor keeps accepting siblings and
+        // tears the connection down when IT exits: peer close, `isDrained()`,
+        // server shutdown, or the QUIC idle timeout.
+        if (ctx.acceptor_submitted) {
+            releaseFirstStreamResources(ctx);
+            ctx.acceptor_ctx = null;
+            ctx.acceptor_submitted = false;
+            if (acceptor_ctx.handOffConnectionOwner(@ptrCast(ctx), firstStreamOwnerConnTeardown)) {
+                // The acceptor owns `ctx`, `ctx.conn_state` and `ctx.conn` from
+                // here on. Drop only the owner's reference to the acceptor
+                // context; touching anything else would race its teardown.
+                acceptor_ctx.release();
+                return;
+            }
+            // The acceptor had already exited, so nobody else can tear the
+            // connection down — do it here. `done` is already set, so nothing
+            // is still dereferencing `ctx.conn_state`.
+            acceptor_ctx.release();
+            destroyConnectionOwnerResources(ctx, connTeardownReasonFor(ctx, .peer_closed));
+            return;
+        }
+
+        // The acceptor context was allocated but its task never ran, so there
+        // are no sibling streams and no thread to hand the connection to.
+        // `shutdownAcceptorOwner` just drops the owner's ref in that case.
+        const bailed = shutdownAcceptorOwner(gpa, ctx, acceptor_ctx, false);
         ctx.acceptor_ctx = null;
-        ctx.acceptor_submitted = false;
         if (bailed) {
-            // The acceptor thread did not exit within the deadline and is
-            // still dereferencing `&ctx.conn_state` and `ctx.conn` every loop
-            // iteration. Ownership of the conn_state + this
-            // FirstStreamOwnerContext + the conn has been transferred to the
-            // reaper (or intentionally leaked when no reaper is available).
-            // Freeing any of it here is the 2026-06-02 use-after-free.
+            // Unreachable for a never-submitted acceptor (the bail path is
+            // gated on `acceptor_submitted`), but keep the 2026-06-02
+            // use-after-free guard: on a bail, ownership of conn_state + this
+            // context + the conn has moved to the reaper.
             return;
         }
     }
 
-    destroyFirstStreamOwnerResources(ctx);
+    destroyFirstStreamOwnerResources(ctx, connTeardownReasonFor(ctx, .last_stream_closed));
 }
 
-/// Tear down a first-stream owner's per-connection resources and free the
-/// context, then destroy the underlying connection. Runs on the owner thread
-/// for a normal close, or — via `deferredDestroyFirstStreamOwner` — on the
-/// reaper thread for the acceptor-bail path, but ONLY after the acceptor has
-/// exited (`acceptor_ctx.done`), so nothing else still references
-/// `ctx.conn_state` / `ctx.conn`. `waitForAllStreamsDrained` then blocks until
-/// every additional-stream handler the acceptor spawned has also released
-/// `conn_state`, making the subsequent `deinit`/free safe.
-fn destroyFirstStreamOwnerResources(ctx: *FirstStreamOwnerContext) void {
+/// SONNY-1219: why the server is destroying a QUIC connection. Drives BOTH the
+/// application error code on the CONNECTION_CLOSE frame and whether the
+/// teardown is announced at `warn`, so a client can tell a graceful close apart
+/// from the server pulling the connection out from under it.
+const ConnTeardownReason = enum {
+    /// The connection's last stream ended and no acceptor was running to take
+    /// connection ownership (multiplexing disabled, the acceptor context could
+    /// not be allocated, or its task was never submitted). There is nothing
+    /// left to serve on this connection — a graceful close.
+    last_stream_closed,
+    /// The acceptor exited because the peer closed the connection, it drained,
+    /// or the QUIC idle timeout fired. Graceful.
+    peer_closed,
+    /// The acceptor exited because the SERVER is shutting this connection down
+    /// (server stop / Gap-0039 bounded drain). Server-initiated.
+    server_shutdown,
+    /// The acceptor did not exit within its bail deadline and the leaked-conn
+    /// reaper is performing the teardown. Server-initiated.
+    acceptor_bail,
+
+    /// Stable, allocation-free label for the `warn` line. Deliberately carries
+    /// no peer address and no tenant material.
+    fn label(self: ConnTeardownReason) []const u8 {
+        return switch (self) {
+            .last_stream_closed => "last_stream_closed",
+            .peer_closed => "peer_closed",
+            .server_shutdown => "server_shutdown",
+            .acceptor_bail => "acceptor_bail",
+        };
+    }
+
+    /// True when the server, not the peer, ended the connection.
+    fn serverInitiated(self: ConnTeardownReason) bool {
+        return switch (self) {
+            .last_stream_closed, .peer_closed => false,
+            .server_shutdown, .acceptor_bail => true,
+        };
+    }
+};
+
+/// SONNY-1219: classify a teardown at the moment it happens.
+///
+/// `QuicTransport.requestShutdown` / `forceCloseConnections` set the
+/// per-connection shutdown flag (and send a best-effort CONNECTION_CLOSE)
+/// before the library has finished draining, so a connection carrying that flag
+/// while still undrained is one the SERVER is ending — announce it and give the
+/// peer the distinct application error code. Everything else keeps the caller's
+/// graceful classification.
+fn connTeardownReasonFor(ctx: *FirstStreamOwnerContext, graceful: ConnTeardownReason) ConnTeardownReason {
+    if (ctx.conn.shutdown_requested.load(.acquire) and !ctx.conn.isDrained()) return .server_shutdown;
+    return graceful;
+}
+
+/// SONNY-1219: release the FIRST stream's own resources — its slot in the
+/// connection's active-stream accounting and its per-stream server state.
+///
+/// Split out of `destroyFirstStreamOwnerResources` so the first stream can end
+/// WITHOUT ending the connection. Releasing the slot here (rather than at
+/// connection teardown) is what keeps `waitForAllStreamsDrained` able to reach
+/// zero once the siblings finish; forgetting it would deadlock the acceptor's
+/// teardown. Everything touched here belongs to the first stream alone, so it
+/// is safe while sibling handlers are still running against `ctx.conn_state`.
+fn releaseFirstStreamResources(ctx: *FirstStreamOwnerContext) void {
     const gpa = ctx.allocator;
     ctx.conn_state.unregisterActiveStream(ctx.stream.stream_id);
     ctx.conn_state.releaseActiveStream();
-    ctx.conn_state.waitForAllStreamsDrained();
-    ctx.conn_state.deinit();
-
     ctx.dist_planner.deinit();
     ctx.federation_manager.deinit();
     releaseQuotaTenant(gpa, &ctx.quota_tenant_id);
     deinitQuicServerState(gpa, &ctx.state, "first stream close");
-    ctx.transport.destroyConnection(ctx.conn);
+}
+
+/// SONNY-1219: tear the CONNECTION down and free the owner context. Runs on
+/// whichever party held the last connection reference — the first-stream owner
+/// when no acceptor was running, the acceptor thread after the handoff, or the
+/// leaked-conn reaper on the bail path. In every case the acceptor is already
+/// out of the picture, so `waitForAllStreamsDrained` only has to wait for the
+/// additional-stream handlers before `conn_state.deinit()` is safe.
+///
+/// Must be called exactly once per context, AFTER `releaseFirstStreamResources`.
+fn destroyConnectionOwnerResources(ctx: *FirstStreamOwnerContext, reason: ConnTeardownReason) void {
+    const gpa = ctx.allocator;
+    ctx.conn_state.waitForAllStreamsDrained();
+    ctx.conn_state.deinit();
+
+    if (reason.serverInitiated()) {
+        // SONNY-1219: the engine used to tear a connection down in complete
+        // silence, at info AND at debug. Announce a server-initiated teardown
+        // so it is attributable in the logs, and close with a distinct
+        // application error code so the peer can tell it apart from a graceful
+        // close. No peer address and no tenant material in the message.
+        log.warn("closing QUIC connection from the server side", &.{
+            Attr.string("reason", reason.label()),
+            Attr.uint("quic_app_error", quic_transport.app_error.server_teardown),
+        });
+        ctx.transport.destroyConnectionWithError(ctx.conn, quic_transport.app_error.server_teardown);
+    } else {
+        ctx.transport.destroyConnection(ctx.conn);
+    }
     if (ctx.peer_ip_allocated) gpa.free(ctx.peer_ip);
 
     // REQ-QUIC-FIRST-STREAM-OWNER-LIFETIME: free behind the lifetime refcount.
@@ -3600,11 +3803,27 @@ fn destroyFirstStreamOwnerResources(ctx: *FirstStreamOwnerContext) void {
     }
 }
 
+/// Combined first-stream + connection teardown, for the paths where the first
+/// stream really is the last thing on the connection (no acceptor to hand
+/// ownership to) and for the reaper's bail path, which owns both halves.
+fn destroyFirstStreamOwnerResources(ctx: *FirstStreamOwnerContext, reason: ConnTeardownReason) void {
+    releaseFirstStreamResources(ctx);
+    destroyConnectionOwnerResources(ctx, reason);
+}
+
 /// Reaper callback: runs `destroyFirstStreamOwnerResources` once the acceptor
 /// has exited. Registered by `shutdownAcceptorOwner` on the bail path.
 fn deferredDestroyFirstStreamOwner(p: *anyopaque) void {
     const ctx: *FirstStreamOwnerContext = @ptrCast(@alignCast(p));
-    destroyFirstStreamOwnerResources(ctx);
+    destroyFirstStreamOwnerResources(ctx, .acceptor_bail);
+}
+
+/// SONNY-1219: connection-teardown callback handed to the stream acceptor when
+/// the first stream ends while the acceptor is still serving siblings. Runs on
+/// the acceptor thread, from its exit path, after the accept loop has stopped.
+fn firstStreamOwnerConnTeardown(p: *anyopaque) void {
+    const ctx: *FirstStreamOwnerContext = @ptrCast(@alignCast(p));
+    destroyConnectionOwnerResources(ctx, connTeardownReasonFor(ctx, .peer_closed));
 }
 
 fn cleanupFirstStreamOwnerAsync(ctx: *FirstStreamOwnerContext) void {
