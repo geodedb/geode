@@ -4589,6 +4589,33 @@ pub fn build(b: *std.Build) void {
     quic_high_concurrency_e2e_step.dependOn(&run_quic_high_concurrency_e2e_tests.step);
     test_e2e_step.dependOn(&run_quic_high_concurrency_e2e_tests.step);
 
+    // SONNY-1219 / GEO-UP-007: a QUIC connection must outlive its FIRST stream.
+    // The engine used to tie connection lifetime to stream #1, so closing the
+    // HELLO-bearing stream destroyed the whole connection with NO_ERROR and
+    // killed every sibling multiplexed stream (burst of 64 -> ok=8, err=56 in
+    // the Go driver's TestLoad_BurstExceedsPoolSize_NoDeadlock). Executable,
+    // not a `test`, for the same builtin.is_test reason as
+    // e2e_quic_high_concurrency above.
+    // CANARY: REQ=REQ-QUIC-MUX-010; FEATURE="StreamMultiplexing"; ASPECT=ConnectionOutlivesFirstStreamBuild; STATUS=TESTED; OWNER=server; UPDATED=2026-09-15
+    const quic_first_stream_close_mux_e2e = b.addExecutable(.{ .name = "e2e_quic_first_stream_close_mux", .root_module = b.createModule(.{ .root_source_file = b.path("tests/e2e_quic_first_stream_close_mux.zig"), .target = target, .optimize = optimize }) });
+    quic_first_stream_close_mux_e2e.root_module.addImport("geode", root_mod);
+    quic_first_stream_close_mux_e2e.root_module.addImport("protobuf", protobuf_mod);
+    quic_first_stream_close_mux_e2e.root_module.addImport("schema", schema_mod);
+    quic_first_stream_close_mux_e2e.root_module.addImport("transport/quic", transport_quic_mod);
+    quic_first_stream_close_mux_e2e.root_module.link_libc = true;
+    if (enable_openssl) {
+        quic_first_stream_close_mux_e2e.root_module.linkSystemLibrary("ssl", .{});
+        quic_first_stream_close_mux_e2e.root_module.linkSystemLibrary("crypto", .{});
+    }
+    if (target.result.os.tag == .linux and (is_native or enable_openssl)) {
+        quic_first_stream_close_mux_e2e.root_module.linkSystemLibrary("dl", .{});
+    }
+    const run_quic_first_stream_close_mux_e2e = b.addRunArtifact(quic_first_stream_close_mux_e2e);
+    run_quic_first_stream_close_mux_e2e.step.dependOn(&install_geode_exe.step);
+    const quic_first_stream_close_mux_step = b.step("test-quic-first-stream-close-mux-e2e", "SONNY-1219: a QUIC connection must outlive its first stream (multiplexed siblings survive)");
+    quic_first_stream_close_mux_step.dependOn(&run_quic_first_stream_close_mux_e2e.step);
+    test_e2e_step.dependOn(&run_quic_first_stream_close_mux_e2e.step);
+
     // CANARY: REQ=REQ-ENG-3907-GRPC-TRANSPORT; FEATURE="GrpcTransport"; ASPECT=TransportParitySmokeWiring; STATUS=TESTED; TEST=test-transport-parity; OWNER=transport; UPDATED=2026-08-24
     //
     // ENG-3907 (B4): the twelve stdio-vs-QUIC transport-parity smokes were only
