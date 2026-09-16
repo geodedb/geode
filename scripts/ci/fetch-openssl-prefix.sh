@@ -56,11 +56,11 @@ fi
 
 # --- Pinned upstream package sets --------------------------------------------
 #
-# Debian trixie (13), OpenSSL 3.5.6-1~deb13u2. `libssl-dev` carries the headers
+# Debian trixie (13), OpenSSL 3.5.7-1~deb13u2 (3.5.6 was removed from the pool 2026-09-16). `libssl-dev` carries the headers
 # and the `libssl.so`/`libcrypto.so` link-time symlinks; `libssl3t64` carries
 # the `.so.3` runtime objects those symlinks point at.
 DEB_SNAPSHOT="https://deb.debian.org/debian/pool/main/o/openssl"
-DEB_VERSION="3.5.6-1~deb13u2"
+DEB_VERSION="3.5.7-1~deb13u2"
 
 # Alpine v3.22, OpenSSL 3.5.8-r0. `openssl-dev` carries headers + link symlinks;
 # `libssl3`/`libcrypto3` carry the runtime objects.
@@ -69,10 +69,10 @@ APK_VERSION="3.5.8-r0"
 
 # sha256 of each fetched artifact, keyed "<target>:<filename>".
 declare -A CHECKSUMS=(
-    ["x86_64-linux-gnu:libssl-dev_${DEB_VERSION}_amd64.deb"]="04250d9e51fc87ef6d539f36cf0b66668dd34beec101af56dc35198ea99cef00"
-    ["x86_64-linux-gnu:libssl3t64_${DEB_VERSION}_amd64.deb"]="b2dab3fe29c1fcb82ef58c2db0ff4bd830a442cf37b9a8b730b7b6ce87181349"
-    ["aarch64-linux-gnu:libssl-dev_${DEB_VERSION}_arm64.deb"]="afdd9c57261502a3a434ba606ddfd1e8fd0f288c663f2dc4f7570ce927867651"
-    ["aarch64-linux-gnu:libssl3t64_${DEB_VERSION}_arm64.deb"]="f7e09a12ccb2d6bd28bcc87a6e2462a0558dcb3cc34d56f90ee86fbd3402d8ba"
+    ["x86_64-linux-gnu:libssl-dev_${DEB_VERSION}_amd64.deb"]="f245b646a4fe5beb31d6a387da9db3399e3b14a904efef1a23227ff5465a1d11"
+    ["x86_64-linux-gnu:libssl3t64_${DEB_VERSION}_amd64.deb"]="916f7f40b34a06e6ebfaefcdab331bff458328411da672598f126a760472467d"
+    ["aarch64-linux-gnu:libssl-dev_${DEB_VERSION}_arm64.deb"]="b81910e8728fab596158c8384d6aa101c8249c1769eb2d33c73643b2be7a0bcf"
+    ["aarch64-linux-gnu:libssl3t64_${DEB_VERSION}_arm64.deb"]="ec131326aa9fa9ec934eca386bc7991f328fe383eaefd3e43bd8901a9199c5ae"
     ["x86_64-linux-musl:openssl-dev-${APK_VERSION}.apk"]="2f153a06be854681a2162879fca949021ba5db73450966804a6d2174aa9b0953"
     ["x86_64-linux-musl:libssl3-${APK_VERSION}.apk"]="e8d3ea5e9750cb1f4c4b459d172630925fe6bc13c113c590ac36c78013821e62"
     ["x86_64-linux-musl:libcrypto3-${APK_VERSION}.apk"]="1d111bc0ad6380fdda22e6513941dc2e7988d6b1621d535bed6b3fa5ef086fae"
