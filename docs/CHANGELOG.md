@@ -17,6 +17,20 @@
 
 ---
 
+## [v0.8.18] - September 16, 2026
+
+CI-only re-cut of v0.8.17. No engine code changes.
+
+### Fixed
+
+- **Cross-build shards (CI):** the v0.8.17 tag pipeline lost both aarch64
+  cross-build shards to an out-of-memory kill inside `zig build` on the k8s
+  cluster runner, so `build-release` never ran. `test-cross-build` now runs on
+  the dedicated docker-executor fleet with `zig build -j2`. The v0.8.17 tag
+  remains but never produced an image or packages.
+
+---
+
 ## [v0.8.17] - September 16, 2026
 
 CI-only re-cut of v0.8.16. No engine code changes.
