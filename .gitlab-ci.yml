@@ -778,6 +778,20 @@ test-zig-unit:
 test-cross-build:
   stage: test
   image: $ZIG_IMAGE
+  # 2026-09-16 (v0.8.17 pipeline #1721): both aarch64 shards died OOMKilled
+  # (exit 137) inside `zig build` on the k8s cluster runner, repeatably, after
+  # the 0.8.16 cascade grew build.zig by 22 artifact declarations. A local
+  # ReleaseSafe aarch64-linux-gnu build peaks at ~7.1 GiB RSS summed across
+  # the zig process tree at -j4 (largest single compile step 724 MiB, up from
+  # 606 MiB at v0.8.15). Two mitigations, both needed: run the shards on the
+  # dedicated (docker-executor) fleet, which has no per-pod memory cap, and
+  # bound zig's compile parallelism so peak memory stays predictable.
+  tags:
+    - company
+    - dedicated
+    - docker
+    - linux
+    - x86
   # One shard per release target: the sequential all-targets loop outgrew the
   # 2h job timeout as the dep tree grew (pipeline #1508 timed out mid
   # riscv64-linux-gnu after 4 targets). Shards run in parallel, each finishes
@@ -867,7 +881,7 @@ test-cross-build:
         *) scripts/ci/fetch-openssl-prefix.sh "${ZIG_TARGET}" "dist/openssl/${ZIG_TARGET}" ;;
       esac
       echo "--- zig build target=${ZIG_TARGET} ---"
-      zig build -Doptimize=ReleaseSafe -Dtarget="${ZIG_TARGET}" -Dopenssl-sysroot=dist/openssl --summary all
+      zig build -j2 -Doptimize=ReleaseSafe -Dtarget="${ZIG_TARGET}" -Dopenssl-sysroot=dist/openssl --summary all
       # Prove the shipped configuration: gRPC-TLS targets MUST link libssl.
       case "${ZIG_TARGET}" in
         riscv64-*|*-macos) ;;
