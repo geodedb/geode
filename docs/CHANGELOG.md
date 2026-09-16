@@ -17,6 +17,21 @@
 
 ---
 
+## [v0.8.17] - September 16, 2026
+
+CI-only re-cut of v0.8.16. No engine code changes.
+
+### Fixed
+
+- **Cross-build OpenSSL prefix (CI):** Debian removed openssl `3.5.6-1~deb13u2`
+  from the trixie pool on 2026-09-16, so `scripts/ci/fetch-openssl-prefix.sh`
+  404'd and the v0.8.16 tag pipeline's `aarch64-linux-gnu` cross-build failed
+  before `build-release` could run. The Debian pins are refreshed to
+  `3.5.7-1~deb13u2` with digests cross-checked against the trixie Packages
+  index. The v0.8.16 tag remains but never produced an image or packages.
+
+---
+
 ## [v0.8.16] - September 15, 2026
 
 Engine release. Re-pins the whole `devnw/zig` dependency spine onto
