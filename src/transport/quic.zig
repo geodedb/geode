@@ -1500,18 +1500,25 @@ pub const QuicConnection = struct {
             self.streams_mu.lockUncancelable(io);
             defer self.streams_mu.unlock(io);
 
-            // Prefer O(1) removal using stream-tracked index.
-            var idx = stream.tracking_index;
-            if (idx >= self.streams.items.len or self.streams.items[idx] != stream) {
-                // Fallback for defensive consistency if index drifted.
-                idx = 0;
-                while (idx < self.streams.items.len and self.streams.items[idx] != stream) : (idx += 1) {}
-                if (idx >= self.streams.items.len) {
-                    // Untracked: another release path owns this wrapper and has
-                    // already freed (or is about to free) it. Freeing here is
-                    // the double free. Do nothing.
-                    return;
-                }
+            // SONNY-1794: prove liveness BEFORE touching the wrapper's own
+            // memory. `close()` / `QuicTransport.deinit` can already have
+            // `allocator.destroy`'d this wrapper under this same `streams_mu`;
+            // reading `stream.tracking_index` first (the old O(1) fast path)
+            // would be a use-after-free read of freed memory. Scanning `streams`
+            // only compares pointer values against the list — it never
+            // dereferences `stream` — so it is safe against a freed wrapper. A
+            // wrapper still present in `streams` is, by construction, still
+            // allocated, so its fields become safe to read only past this point.
+            // The list is bounded by the stream-worker count, so the scan is
+            // cheap; `tracking_index` is still maintained (below) for callers
+            // that can prove liveness by other means.
+            var idx: usize = 0;
+            while (idx < self.streams.items.len and self.streams.items[idx] != stream) : (idx += 1) {}
+            if (idx >= self.streams.items.len) {
+                // Untracked: another release path owns this wrapper and has
+                // already freed (or is about to free) it. Touching it here —
+                // even to read one field — is the use-after-free. Do nothing.
+                return;
             }
             // Tracked, so the wrapper is still allocated and `released` is safe
             // to read. Latching it under `streams_mu` is what makes the release
@@ -2688,6 +2695,48 @@ test "tracked streams: destroyStream is a no-op once a wrapper is latched releas
 
     _ = conn.streams.swapRemove(0);
     allocator.destroy(stream);
+}
+
+test "tracked streams: destroyStream proves liveness by list membership, never trusts tracking_index (SONNY-1794)" {
+    // SONNY-1794: the old fast path read `stream.tracking_index` BEFORE proving
+    // the wrapper was still in `streams`. A wrapper already freed by
+    // `close()`/`deinit` made that a use-after-free read. `destroyStream` must
+    // decide membership only by scanning the list for the pointer, never by
+    // trusting a field of a wrapper that may be untracked (and, in production,
+    // freed).
+    //
+    // Here `stale` is NOT in the list but carries a `tracking_index` that points
+    // at a real, live, DIFFERENT wrapper's slot. A `destroyStream` that trusted
+    // the hint would wrongly evict/steal that slot. The correct behaviour is a
+    // clean no-op that leaves the tracked wrapper untouched.
+    const allocator = std.testing.allocator;
+    var conn = trackedStreamsTestConn(allocator);
+    defer conn.streams.deinit(allocator);
+
+    const live = try trackedStreamsTestStream(&conn, 100); // occupies slot 0
+    try std.testing.expectEqual(@as(usize, 0), live.tracking_index);
+
+    // A wrapper that never joined the list but whose stale index aliases slot 0.
+    const stale = try allocator.create(QuicStream);
+    defer allocator.destroy(stale);
+    stale.* = .{
+        .allocator = allocator,
+        .connection = conn.inner,
+        .stream_id = 999,
+        .shutdown_requested = &conn.shutdown_requested,
+        .tracking_index = 0, // aliases `live`'s slot — must be ignored
+    };
+
+    conn.destroyStream(stale);
+
+    // The live wrapper is still tracked; nothing was freed or evicted on the
+    // strength of the stale hint (the testing allocator would flag a bad free).
+    try std.testing.expectEqual(@as(usize, 1), conn.trackedStreamCount());
+    try std.testing.expectEqual(@as(?*QuicStream, live), if (conn.streams.items.len > 0) conn.streams.items[0] else null);
+    try std.testing.expect(!stale.released.load(.acquire));
+
+    conn.destroyStream(live);
+    try std.testing.expectEqual(@as(usize, 0), conn.trackedStreamCount());
 }
 
 // =============================================================================
