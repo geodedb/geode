@@ -17,6 +17,37 @@
 
 ---
 
+## [v0.8.20] - September 18, 2026
+
+QUIC stream semantics: sibling-stream binding, idle-stream reclamation, and
+statement cancellation on the wire (SONNY).
+
+### Fixed
+
+- **Unbound sibling QUIC streams (SONNY-1835):** a sibling stream opened without
+  its own HELLO inherited no tenant/graph identity and silently returned zero
+  rows. Such an unbound sibling is now refused with a typed error (GQLSTATE
+  08003) instead of running unbound. Clients that send a per-stream HELLO,
+  including the Go driver, are unaffected.
+- **Statement cancellation on the QUIC wire (SONNY-1841):** there was no way to
+  cancel an in-flight statement, so an abandoned mutation ran to completion
+  holding the per-graph write lock to its ~120s deadline and blocking the next
+  writer on another connection. A per-stream CANCEL message (proto oneof tag
+  15, backward-compatible — old clients simply never send it) and a QUIC stream
+  reset now abort the statement; the write path polls the cancellation and
+  releases the write lock promptly (SQLSTATE 57014).
+
+### Changed
+
+- **Idle-open sibling stream reclamation (SONNY-1837):** idle-open sibling QUIC
+  streams can now be reaped on an independent, tighter deadline via
+  `GEODE_QUIC_STREAM_IDLE_REAP_MS` (default 0 = opt-in; the existing ~300s
+  connection-deadline reclamation and the admission rejection on slot
+  exhaustion are unchanged), letting operators reclaim stream-pool slots faster
+  under handshake pressure.
+
+---
+
 ## [v0.8.19] - September 18, 2026
 
 Engine metrics correctness and QUIC teardown safety, plus CI/test-suite
