@@ -3441,8 +3441,33 @@ test "GAP-ENT-0048f: hydration builds+persists the exact index (race-free, no sh
         const nodes = store.getNodesByLabel(G, LBL) orelse return error.NoLabelIndex;
         try testing.expectEqual(N, nodes.len);
 
+        // SONNY-1799: this reopen is `.absent` (idmap.snapshot + prop_exact.idx
+        // were removed above), so `openGraph` already spawned the background
+        // `exactIndexRebuildOnReopenWorker` and latched `exact_rebuild_inflight`
+        // BEFORE `getNodesByLabel` ran. The synchronous hydration fold
+        // (`buildAndPersistExactIndexForHydratedGraphEx`, is_background_worker
+        // == false) sees that flag and NO-OPs in favor of the background
+        // worker — so the counter/persist below are set by a thread that is
+        // still racing against this one, not by anything on this call stack.
+        // On a quiet box the 3000-node scan+persist finishes in low
+        // milliseconds, well inside the time this thread spends re-entering
+        // the store; under host contention (e.g. a concurrent Sonny lane,
+        // pipeline #1799 evidence) the worker can simply not have been
+        // scheduled yet. Poll with a generous bound instead of asserting
+        // immediately — mirrors the existing bounded `spun < 5000` /
+        // `sleepMs(1)` wait pattern used above in this file for the
+        // hydration_build_mutex holder handshake. Functional correctness is
+        // unchanged: this still fails if the build genuinely never happens.
+        {
+            var spun: u64 = 0;
+            while (adapter_mod.getExactHydrationBuildsForTesting() < 1 and spun < 5000) : (spun += 1) sleepMs(1);
+        }
         // Hydration built + persisted the exact index — with NO shutdown checkpoint.
         try testing.expect(adapter_mod.getExactHydrationBuildsForTesting() >= 1);
+        {
+            var spun: u64 = 0;
+            while (countPropExactIdx(allocator, data_dir) < 1 and spun < 5000) : (spun += 1) sleepMs(1);
+        }
         try testing.expect(countPropExactIdx(allocator, data_dir) >= 1);
 
         // A WHERE-seek is served from the built index with ZERO lazy rebuild
