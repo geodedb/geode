@@ -340,6 +340,36 @@ test "distributed and cluster metrics register" {
     }) |name| try std.testing.expect(std.mem.indexOf(u8, body, name) != null);
 }
 
+test "cluster node health is a gauge observable in both directions" {
+    // SONNY-1803: geode.cluster.node.health must be a last-value gauge, not a
+    // monotonic counter — a node has to be able to fall to 0 (unhealthy) and
+    // recover to 1 (healthy). A counter would only ever sum add(0|1).
+    const gpa = std.testing.allocator;
+    try otel_metrics.initForTesting(gpa);
+    defer otel_metrics.shutdown();
+
+    // Flip node-1 healthy -> unhealthy -> healthy. A counter would accumulate
+    // these writes to 2; a gauge keeps the last value (1).
+    otel_metrics.recordClusterNodeHealth("node-1", true);
+    otel_metrics.recordClusterNodeHealth("node-1", false);
+    otel_metrics.recordClusterNodeHealth("node-1", true);
+    // node-2 stays unhealthy so the downward direction (0) is observable.
+    otel_metrics.recordClusterNodeHealth("node-2", false);
+
+    var prom = otel.exporters.prometheus.Prometheus.init(gpa, otel_metrics.getProvider().?);
+    const body = try prom.render();
+    defer gpa.free(body);
+
+    // Instrument TYPE must be a gauge, never a counter.
+    try std.testing.expect(std.mem.indexOf(u8, body, "# TYPE geode_cluster_node_health gauge") != null);
+    try std.testing.expect(std.mem.indexOf(u8, body, "# TYPE geode_cluster_node_health counter") == null);
+
+    // node-1 recovered: last value is 1, not the sum (2) a counter would show.
+    try std.testing.expect(std.mem.indexOf(u8, body, "geode_cluster_node_id=\"node-1\"} 1") != null);
+    // node-2 unhealthy: the 0 (down) direction is representable.
+    try std.testing.expect(std.mem.indexOf(u8, body, "geode_cluster_node_id=\"node-2\"} 0") != null);
+}
+
 test "CDC and analytics metrics register" {
     const gpa = std.testing.allocator;
     try otel_metrics.initForTesting(gpa);

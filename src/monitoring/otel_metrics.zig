@@ -2613,8 +2613,10 @@ const DistributedMetrics = struct {
     dist_query_fanout: otel.api.metrics.Histogram,
     // geode.distributed.query.partial_failure.count
     partial_failure_count: otel.api.metrics.Counter,
-    // geode.cluster.node.health — per-node health (1 = healthy, 0 = unhealthy)
-    node_health: otel.api.metrics.Counter,
+    // geode.cluster.node.health — per-node health level (1 = healthy, 0 = unhealthy).
+    // A gauge (last-value) so health can fall back to 0 and recover to 1; a
+    // counter could only ever increase and never reflect return-to-healthy.
+    node_health: otel.api.metrics.Gauge,
 };
 
 var g_distributed: ?DistributedMetrics = null;
@@ -2659,11 +2661,11 @@ fn ensureDistributed() !*DistributedMetrics {
             .kind = .counter,
             .description = "Distributed queries that completed with one or more shard failures",
         }),
-        .node_health = try m.counter(.{
+        .node_health = try m.gauge(.{
             .name = "geode.cluster.node.health",
             .unit = "1",
-            .kind = .counter,
-            .description = "Cluster node health state change events (1=healthy, 0=unhealthy transitions)",
+            .kind = .gauge,
+            .description = "Cluster node health level (1=healthy, 0=unhealthy); last-value gauge",
         }),
     };
     return &g_distributed.?;
@@ -2724,8 +2726,8 @@ pub fn registerShardCountGauge(provider_fn: *const fn () i64) !void {
 /// Call whenever a health check transitions a node between states.
 pub fn recordClusterNodeHealth(node_id_low_card: []const u8, healthy: bool) void {
     const d = ensureDistributed() catch return;
-    const v: i64 = if (healthy) 1 else 0;
-    d.node_health.add(v, &.{.{ .key = "geode.cluster.node_id", .value = .{ .string = node_id_low_card } }});
+    const v: f64 = if (healthy) 1 else 0;
+    d.node_health.set(v, &.{.{ .key = "geode.cluster.node_id", .value = .{ .string = node_id_low_card } }});
 }
 
 /// Record a query routed to a specific shard.

@@ -4205,17 +4205,17 @@ REQ-OTEL-METRICS-008,OTel Instrumentation,GraphDataModel,TESTED,,,monitoring,202
 REQ-OTEL-METRICS-009,OTel Instrumentation,IndexVector,TESTED,,,monitoring,2026-04-28,src/monitoring/otel_metrics.zig,2176
 REQ-OTEL-METRICS-010,OTel Instrumentation,SecurityRLSAuditTDE,TESTED,,,monitoring,2026-04-28,src/monitoring/otel_metrics.zig,2313
 REQ-OTEL-METRICS-011,OTel Instrumentation,DistributedCluster,TESTED,,,monitoring,2026-04-28,src/monitoring/otel_metrics.zig,2600
-REQ-OTEL-METRICS-012,OTel Instrumentation,CdcAnalytics,TESTED,,,monitoring,2026-04-28,src/monitoring/otel_metrics.zig,2785
-REQ-OTEL-METRICS-013,OTel Instrumentation,Backup,TESTED,,,monitoring,2026-04-28,src/monitoring/otel_metrics.zig,3001
+REQ-OTEL-METRICS-012,OTel Instrumentation,CdcAnalytics,TESTED,,,monitoring,2026-04-28,src/monitoring/otel_metrics.zig,2787
+REQ-OTEL-METRICS-013,OTel Instrumentation,Backup,TESTED,,,monitoring,2026-04-28,src/monitoring/otel_metrics.zig,3003
 REQ-OTEL-METRICS-014,OTel Instrumentation,DbClientMetrics,EXEMPT,,,monitoring,2026-06-11,src/distributed/query_transport.zig,132
-REQ-OTEL-METRICS-014,OTel Instrumentation,ProcessMetrics,TESTED,,,monitoring,2026-04-28,src/monitoring/otel_metrics.zig,3142
+REQ-OTEL-METRICS-014,OTel Instrumentation,ProcessMetrics,TESTED,,,monitoring,2026-04-28,src/monitoring/otel_metrics.zig,3144
 REQ-OTEL-METRICS-014,OTel Instrumentation,ProcessMetrics,TESTED,,,monitoring,2026-06-11,src/server/main.zig,1912
-REQ-OTEL-METRICS-014,OTel Instrumentation,ProcessMetrics+DbClient,TESTED,,,monitoring,2026-04-28,tests/test_otel_facade_smoke.zig,390
+REQ-OTEL-METRICS-014,OTel Instrumentation,ProcessMetrics+DbClient,TESTED,,,monitoring,2026-04-28,tests/test_otel_facade_smoke.zig,420
 REQ-OTEL-METRICS-RUNTIME-BRIDGE-001,OTel Instrumentation,RuntimeCounterBridge,TESTED,,,monitoring,2026-05-29,src/monitoring/otel_metrics.zig,1337
 REQ-OTEL-METRICS-RUNTIME-BRIDGE-001,OTel Instrumentation,RuntimeCounterBridge,TESTED,,,monitoring,2026-05-29,tests/test_otel_runtime_bridge.zig,1
 REQ-OTEL-METRICS-SUMS-001,Metric histogram sums,Regression,TESTED,,,monitoring,2026-06-10,tests/test_gap0874_metrics_sums.zig,10
 REQ-OTEL-OTLP-PUSH-001,OTel Instrumentation,OTLPPush,TESTED,,,monitoring,2026-04-28,src/monitoring/otel_metrics.zig,2
-REQ-OTEL-OTLP-PUSH-001,OTel Instrumentation,OTLPPush,TESTED,,,monitoring,2026-04-28,tests/test_otel_facade_smoke.zig,414
+REQ-OTEL-OTLP-PUSH-001,OTel Instrumentation,OTLPPush,TESTED,,,monitoring,2026-04-28,tests/test_otel_facade_smoke.zig,444
 REQ-OTEL-OTLP-PUSH-001,OTel Instrumentation,OTLPTransportCompiledIn,TESTED,,,monitoring,2026-05-29,tests/test_otel_otlp_transport_delivery.zig,75
 REQ-OTEL-OTLP-PUSH-002,OTel Instrumentation,OTLPExportStatusVisibility,TESTED,,,monitoring,2026-06-03,tests/test_otel_export_status.zig,18
 REQ-OTEL-PRIV-001,OTel Instrumentation,CardinalityPrivacyGuard,TESTED,,,monitoring,2026-04-28,tests/test_otel_cardinality_guard.zig,1
