@@ -2527,6 +2527,21 @@ pub fn main() !void {
             64,
             65536,
         );
+        // SONNY-1837: independent idle-reap deadline (ms) for ADDITIONAL (sibling)
+        // QUIC streams. An idle-OPEN sibling pins a shared stream-pool worker + a
+        // global throttle slot for its lifetime; without this it is only reclaimed
+        // on the ~300s connection idle timeout, so 64 idle-open siblings starve new
+        // handshakes (the admission gate already rejects+logs, but the slots stay
+        // held). This lets operators reap idle siblings on a tighter, independent
+        // schedule. 0 (default) = fall back to the connection idle timeout.
+        const quic_stream_idle_reap_ms = envUsize(
+            gpa,
+            "GEODE_QUIC_STREAM_IDLE_REAP_MS",
+            0,
+            0,
+            3_600_000,
+        );
+        quic_connection_handler.BufferedProtoReader.setStreamIdleReapDeadlineMs(@intCast(quic_stream_idle_reap_ms));
         const stream_pool = try thread_pool.ThreadPool.init(gpa, .{
             .num_threads = quic_stream_worker_count,
             .queue_capacity = quic_stream_queue_capacity,

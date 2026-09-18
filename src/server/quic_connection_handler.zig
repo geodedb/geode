@@ -1804,6 +1804,15 @@ pub const BufferedProtoReader = struct {
     /// connection-level `stream.shutdown_requested` (client disconnect),
     /// which the handler wires as the primary cancel source.
     cancel_requested: std.atomic.Value(bool) = std.atomic.Value(bool).init(false),
+    /// SONNY-1837: per-reader idle-reap deadline override (ms). When > 0 it
+    /// supersedes the connection-scoped `g_idle_reap_deadline_ms` for THIS
+    /// stream, so an idle-OPEN sibling (additional) stream can be reaped — and
+    /// its shared stream-pool worker + global throttle slot released — on a
+    /// tighter, independent schedule than the 300s connection idle timeout,
+    /// which is what starves new handshakes when the connection stays alive via
+    /// other streams. 0 = fall back to the connection-scoped deadline (default,
+    /// no behavior change).
+    idle_reap_deadline_override_ms: i64 = 0,
 
     pub fn init(
         allocator: std.mem.Allocator,
@@ -1997,6 +2006,32 @@ pub const BufferedProtoReader = struct {
         return g_idle_reap_deadline_ms.load(.acquire);
     }
 
+    /// SONNY-1837: process-wide idle-reap deadline (ms) applied specifically to
+    /// ADDITIONAL (sibling) streams, independent of the connection idle timeout.
+    /// 0 = disabled (siblings fall back to `g_idle_reap_deadline_ms`, i.e. the
+    /// pre-1837 behavior). Set once at startup from `GEODE_QUIC_STREAM_IDLE_REAP_MS`.
+    var g_stream_idle_reap_deadline_ms: std.atomic.Value(i64) = std.atomic.Value(i64).init(0);
+
+    /// SONNY-1837: set the sibling-stream idle-reap deadline (ms). <= 0 disables
+    /// (falls back to the connection-scoped deadline).
+    pub fn setStreamIdleReapDeadlineMs(ms: i64) void {
+        g_stream_idle_reap_deadline_ms.store(if (ms > 0) ms else 0, .release);
+    }
+
+    pub fn getStreamIdleReapDeadlineMs() i64 {
+        return g_stream_idle_reap_deadline_ms.load(.acquire);
+    }
+
+    /// SONNY-1837: resolve the effective idle-reap deadline for a reap check,
+    /// preferring a per-reader override (set only for additional/sibling streams
+    /// from `g_stream_idle_reap_deadline_ms`) over the connection-scoped
+    /// deadline. First/handshake streams carry no override, so their idle
+    /// semantics are unchanged. Pure over its inputs — unit-testable without
+    /// touching the clock or globals.
+    pub fn effectiveReapDeadlineMs(reader_override_ms: i64, conn_deadline_ms: i64) i64 {
+        return if (reader_override_ms > 0) reader_override_ms else conn_deadline_ms;
+    }
+
     /// Pure reap predicate against an EXPLICIT deadline — deterministic and
     /// unit-testable (reads neither the clock nor global state).
     pub fn shouldReapIdleConnectionWith(elapsed_idle_ms: i64, deadline_ms: i64) bool {
@@ -2034,7 +2069,16 @@ pub const BufferedProtoReader = struct {
                         break :blk now;
                     };
                     const elapsed_ms = compat_milliTimestamp() - start_ms;
-                    if (shouldReapIdleConnection(elapsed_ms)) {
+                    // SONNY-1837: an idle-OPEN sibling stream is reaped on the
+                    // tighter of its per-reader override / the sibling-stream
+                    // global / the connection deadline, so its stream-pool
+                    // worker + global throttle slot are reclaimed without
+                    // waiting out the full connection idle timeout.
+                    const reap_deadline_ms = effectiveReapDeadlineMs(
+                        self.idle_reap_deadline_override_ms,
+                        getIdleReapDeadlineMs(),
+                    );
+                    if (shouldReapIdleConnectionWith(elapsed_ms, reap_deadline_ms)) {
                         return error.Timeout;
                     }
                     // QUIC-HC-037: wait on this connection's RX generation.
@@ -3790,6 +3834,12 @@ fn runStreamQueryLoop(
 ) void {
     var line_reader = BufferedProtoReader.init(gpa, transport, stream) catch return;
     line_reader.peer_addr = peer_ip;
+    // SONNY-1837: this loop drives ADDITIONAL (sibling) streams only. Apply the
+    // independent sibling idle-reap deadline (GEODE_QUIC_STREAM_IDLE_REAP_MS; 0 =
+    // fall back to the connection idle timeout) so an idle-OPEN sibling releases
+    // its stream-pool worker + global throttle slot on a tighter schedule and
+    // stops starving new handshakes while the connection stays alive.
+    line_reader.idle_reap_deadline_override_ms = BufferedProtoReader.getStreamIdleReapDeadlineMs();
     // #864 §10 per-stream stall observability: hand the reader to the
     // process-wide registry so the watchdog can detect this specific
     // stream stalling while others keep delivering messages.  Register
@@ -10518,4 +10568,38 @@ test "sonny1835_sibling_stream_unbound_refuse_predicate" {
     first_stream.graph_bound = false;
     first_stream.current_graph = null;
     try std.testing.expect(!siblingStreamUnbound(&first_stream));
+}
+
+// SONNY-1837: an idle-OPEN sibling stream is reaped — releasing its stream-pool
+// worker + global throttle slot — on an independent, tighter deadline than the
+// 300s connection idle timeout, so 64 idle-open siblings can no longer starve
+// new handshakes indefinitely while the connection stays alive. First/handshake
+// streams (no per-reader override) keep the connection idle semantics. This
+// pins the deadline-resolution + reap predicate and the global setter/getter.
+test "sonny1837_sibling_idle_reap_override_predicate" {
+    const R = BufferedProtoReader;
+    const conn_deadline: i64 = 300_000; // connection idle reap (~300s)
+
+    // No sibling override → sibling uses the connection deadline (unchanged).
+    try std.testing.expectEqual(conn_deadline, R.effectiveReapDeadlineMs(0, conn_deadline));
+    // A positive sibling override wins over the connection deadline.
+    try std.testing.expectEqual(@as(i64, 30_000), R.effectiveReapDeadlineMs(30_000, conn_deadline));
+
+    // Under a 30s sibling override, a sibling idle for 45s IS reaped even though
+    // the 300s connection deadline has NOT elapsed (the starvation fix); a
+    // sibling idle for only 10s is NOT reaped.
+    const sib_deadline = R.effectiveReapDeadlineMs(30_000, conn_deadline);
+    try std.testing.expect(R.shouldReapIdleConnectionWith(45_000, sib_deadline));
+    try std.testing.expect(!R.shouldReapIdleConnectionWith(10_000, sib_deadline));
+    // Same 45s idle under NO override (first stream) is NOT reaped early.
+    try std.testing.expect(!R.shouldReapIdleConnectionWith(45_000, R.effectiveReapDeadlineMs(0, conn_deadline)));
+
+    // Global setter/getter round-trips; 0 and negatives disable (fall back).
+    R.setStreamIdleReapDeadlineMs(30_000);
+    defer R.setStreamIdleReapDeadlineMs(0); // restore default (disabled)
+    try std.testing.expectEqual(@as(i64, 30_000), R.getStreamIdleReapDeadlineMs());
+    R.setStreamIdleReapDeadlineMs(0);
+    try std.testing.expectEqual(@as(i64, 0), R.getStreamIdleReapDeadlineMs());
+    R.setStreamIdleReapDeadlineMs(-5);
+    try std.testing.expectEqual(@as(i64, 0), R.getStreamIdleReapDeadlineMs());
 }
