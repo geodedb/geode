@@ -726,6 +726,18 @@ test-zig-unit:
   # land disproportionately on index 7. Bumped 3h → 6h (6h was the
   # proven survivable cap for the *unsharded* build; a single shard is
   # far lighter, so 6h is generous headroom for the index-7 cluster).
+  #
+  # SONNY-1798: pipeline #1719 (tag v0.8.16) lost 14 jobs to
+  # `runner_system_failure` ("0/3 nodes are available: 3 Insufficient cpu")
+  # on the company k8s cluster — a tag pipeline's 8-way test-zig-unit +
+  # 8-way test-zig-release-safe matrices (16 pods) can run fully concurrently
+  # with the SAME 16 pods from an in-flight main-branch pipeline on the same
+  # 3-node pool. resource_group serializes a given shard index against its
+  # own twin in another concurrently-running pipeline (tag vs main, or two
+  # tags) without reducing intra-pipeline shard parallelism or reopening the
+  # shard-count/timeout history above — worst case concurrent k8s pods for
+  # this job drops from 8 (this pipeline) + 8 (a second pipeline) to 8 total.
+  resource_group: "test-zig-unit-shard-$TEST_SHARD_INDEX"
   tags:
     - company
     - k8s
@@ -1093,6 +1105,13 @@ test-zig-release-safe:
   # 2026-05-12: shard [7] hit the 3h cap (pipeline #2520265814) — bumped
   # 3h → 6h (see test-zig-unit) and added the stuck_or_timeout_failure
   # retry that test-zig-unit already has.
+  #
+  # SONNY-1798: same company-k8s cluster capacity fix as test-zig-unit above
+  # — serialize a shard index against its own twin in a concurrently-running
+  # pipeline (tag vs main) instead of letting both pipelines' 8-way matrices
+  # compete for the 3-node pool at once. See test-zig-unit's comment for the
+  # full rationale.
+  resource_group: "test-zig-release-safe-shard-$TEST_SHARD_INDEX"
   tags:
     - company
     - k8s
