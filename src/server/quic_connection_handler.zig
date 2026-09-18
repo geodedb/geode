@@ -3261,6 +3261,12 @@ pub const StreamAcceptReactor = struct {
         /// thread drains it into `entries` at the top of each pass, so the pass
         /// itself runs without a lock.
         pending: std.ArrayList(*StreamAcceptorContext) = .empty,
+        /// SONNY-1796: persistent scratch buffer swapped in as the new empty
+        /// `pending` on every non-quiet drain, so the inbox backing capacity is
+        /// reused across passes instead of freed and re-grown from zero. Owned by
+        /// the shard thread between passes; only ever swapped under `mu`. Freed
+        /// once, in `deinit`.
+        pending_scratch: std.ArrayList(*StreamAcceptorContext) = .empty,
         /// Owned SOLELY by this shard's thread. No lock.
         entries: std.ArrayList(Entry) = .empty,
         /// Bumped by `register` and by `requestStop`; the shard parks on it.
@@ -3305,14 +3311,29 @@ pub const StreamAcceptReactor = struct {
             const io = std.Io.Threaded.global_single_threaded.io();
             self.mu.lockUncancelable(io);
             // A quiet pass does not touch `pending` at all, so its capacity
-            // survives and a steady-state shard allocates nothing here.
-            var inbox: std.ArrayList(*StreamAcceptorContext) = .empty;
-            if (self.pending.items.len != 0) {
-                inbox = self.pending;
-                self.pending = .empty;
+            // survives, a steady-state shard allocates nothing here, and the
+            // scratch buffer is left untouched (returning early avoids clobbering
+            // its retained capacity).
+            if (self.pending.items.len == 0) {
+                self.mu.unlock(io);
+                return;
             }
+            // SONNY-1796: swap the reusable scratch buffer in as the new empty
+            // `pending`. The old inbox is processed below and then retained as
+            // next pass's scratch, so its backing capacity is preserved across
+            // passes rather than freed on every non-quiet pass (which forced
+            // `register` to re-grow `pending` from zero each time).
+            var inbox = self.pending;
+            self.pending = self.pending_scratch;
+            self.pending_scratch = .empty;
             self.mu.unlock(io);
-            defer inbox.deinit(self.reactor.gpa);
+            // Reuse `inbox`'s capacity: clear its length (keep the buffer) and
+            // retain it as the next drain's scratch. Never deinit on this hot
+            // path — the buffer is freed once, in `deinit`.
+            defer {
+                inbox.clearRetainingCapacity();
+                self.pending_scratch = inbox;
+            }
 
             for (inbox.items) |ctx| {
                 self.entries.append(self.reactor.gpa, .{ .ctx = ctx }) catch {
@@ -3504,6 +3525,8 @@ pub const StreamAcceptReactor = struct {
                 _ = self.registered.fetchSub(1, .monotonic);
             }
             self.pending.deinit(self.reactor.gpa);
+            // SONNY-1796: the reusable inbox scratch is freed exactly once, here.
+            self.pending_scratch.deinit(self.reactor.gpa);
             self.mu.unlock(io);
         }
     };
@@ -9653,6 +9676,51 @@ test "accept reactor: shard count honours the GEODE_QUIC_ACCEPTOR_WORKERS clamp"
     const capped = try StreamAcceptReactor.init(allocator, 1024);
     try std.testing.expectEqual(StreamAcceptReactor.max_shards, capped.shardCount());
     capped.deinit();
+}
+
+test "accept reactor: drainPending reuses the pending inbox capacity across passes (SONNY-1796)" {
+    // SONNY-1796: a non-quiet drain used to `deinit` the inbox backing buffer
+    // every pass, so the next `register` re-grew `pending` from zero. The fix
+    // double-buffers: the drained inbox is retained (cleared, not freed) as the
+    // next pass's scratch and swapped back in, so in steady state the inbox the
+    // next `register` appends to already has capacity.
+    const allocator = std.testing.allocator;
+
+    // Minimal reactor: `drainPending` reads only `reactor.gpa`. Constructing it
+    // directly (not via `init`) means no shard threads spawn to race this test.
+    const reactor = try allocator.create(StreamAcceptReactor);
+    defer allocator.destroy(reactor);
+    var no_shards = [_]StreamAcceptReactor.Shard{};
+    reactor.* = .{ .gpa = allocator, .shards = no_shards[0..] };
+
+    var shard: StreamAcceptReactor.Shard = .{ .reactor = reactor };
+    defer {
+        shard.pending.deinit(allocator);
+        shard.pending_scratch.deinit(allocator);
+        shard.entries.deinit(allocator);
+    }
+
+    // Only ever stored in `entries`, never dereferenced on the success path.
+    const ctx: *StreamAcceptorContext = @ptrFromInt(0x1219_1796_0000);
+
+    // Two warm-up passes so both ping-pong buffers have grown their capacity.
+    var pass: usize = 0;
+    while (pass < 2) : (pass += 1) {
+        for (0..8) |_| try shard.pending.append(allocator, ctx);
+        shard.drainPending();
+        try std.testing.expectEqual(@as(usize, 0), shard.pending.items.len);
+    }
+
+    // After warm-up the reused buffer is swapped back in, so `pending` already
+    // carries capacity. The pre-fix code left this at 0 (freed every pass).
+    try std.testing.expect(shard.pending.capacity > 0);
+
+    // A further non-quiet pass fills within that retained capacity — no realloc.
+    const cap_before = shard.pending.capacity;
+    for (0..8) |_| try shard.pending.append(allocator, ctx);
+    try std.testing.expectEqual(cap_before, shard.pending.capacity);
+    shard.drainPending();
+    try std.testing.expectEqual(@as(usize, 0), shard.pending.items.len);
 }
 
 test "accept reactor: registration is refused once the reactor is stopping" {
