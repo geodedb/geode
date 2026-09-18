@@ -30,6 +30,13 @@ const executeReturnClauseWithEnv = execution.executeReturnClauseWithEnv;
 const match_operations = @import("match_operations.zig");
 const generateUniqueColumnNames = match_operations.generateUniqueColumnNames;
 
+// SONNY-1841: poll cancellation in the write apply loops so an abandoned
+// write-carrying mutation (DELETE/DETACH DELETE/leader SET) aborts at a safe
+// boundary and releases the per-graph write lock instead of running to its
+// deadline. `write_budget.check()` is a no-op unless the executor installed a
+// scope (query_execution.zig) that captured the stream's cancel source.
+const write_budget = @import("../write_budget.zig");
+
 // Cluster write replication (root cause #2 of
 // docs/bugs/2026-06-04-cluster-raft-no-stable-quorum-writes-time-out.md). These
 // imports are read-only here; the executor consults the coordinator only when a
@@ -4030,6 +4037,10 @@ fn clusterReplicateMatchSet(
     }
 
     for (candidate_ids) |node_id| {
+        // SONNY-1841: the leader's SET/REMOVE candidate loop (an alternate,
+        // distributed write executor) can iterate a large match set — poll
+        // cancellation here so an abandoned mutation aborts before proposing.
+        try write_budget.check();
         const node = (read_store.nodes.getOrHydratePtr(node_id) catch null) orelse continue;
         if (!nodeMatchesPattern(node, filter_graph, filter_tenant, node_pattern.labels, evaluated_match_props)) continue;
 
@@ -4481,6 +4492,10 @@ pub fn executeDelete(allocator: std.mem.Allocator, d: ast.DeleteStatement, curre
 
         // Delete the resolved nodes
         for (targets.node_ids) |node_id| {
+            // SONNY-1841: poll cancellation BETWEEN node deletes — an abandoned
+            // DETACH DELETE over a large match set must release the write lock
+            // promptly, not run to the deadline (no-op without a write scope).
+            try write_budget.check();
             // A4b: drop the node's fulltext postings BEFORE the store delete,
             // while its labels are still readable (covering-index lookup is
             // keyed by label). Runs on the executor/connection thread
@@ -4522,6 +4537,9 @@ pub fn executeDelete(allocator: std.mem.Allocator, d: ast.DeleteStatement, curre
                     }
                 }
                 for (edges_to_delete.items) |edge_id| {
+                    // SONNY-1841: a high-degree DETACH can spin here for a long
+                    // time — poll cancellation between incident-edge deletes.
+                    try write_budget.check();
                     // ENG-3983: an incident edge whose body cannot be resolved
                     // cannot be durably deleted (`deleteEdge` needs its endpoint
                     // + edge slots), so proceeding would leave it DANGLING once
@@ -4541,6 +4559,8 @@ pub fn executeDelete(allocator: std.mem.Allocator, d: ast.DeleteStatement, curre
         // resolved match set, so a WHERE over the relationship variable is
         // honoured here exactly as it is for nodes.
         for (targets.edge_ids) |edge_id| {
+            // SONNY-1841: poll cancellation between edge deletes too.
+            try write_budget.check();
             if (store.getEdgePtr(edge_id) == null) {
                 // Already gone (removed as an incident edge of a DETACH'd node
                 // above) — do not double-count it.

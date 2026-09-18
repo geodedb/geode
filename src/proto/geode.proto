@@ -49,6 +49,12 @@ message QuicClientMessage {
     BackupRequest backup = 12;
     RestoreRequest restore = 13;
     UploadBackupRequest upload_backup = 14;
+    // SONNY-1841: per-stream statement cancellation. Backward-compatible
+    // addition (old clients simply never send it); existing tags 1-14 are
+    // unchanged. Honoured by aborting the target stream's in-flight statement
+    // so it releases the per-graph write lock instead of running to its own
+    // deadline.
+    CancelRequest cancel = 15;
   }
 }
 
@@ -68,6 +74,9 @@ message QuicServerMessage {
     BackupResponse backup = 12;
     RestoreResponse restore = 13;
     UploadBackupResponse upload_backup = 14;
+    // SONNY-1841: acknowledgement for a per-stream CANCEL. Backward-compatible
+    // addition; existing tags 1-14 are unchanged.
+    CancelResponse cancel = 15;
   }
 }
 
@@ -590,4 +599,20 @@ message UploadBackupResponse {
   bool success = 1;
   string message = 2;
   string upload_path = 3;
+}
+
+// SONNY-1841: per-stream statement cancellation on the QUIC wire. Cancels the
+// in-flight statement on the target QUIC stream so it aborts and releases the
+// per-graph write lock instead of running to its ~120s deadline while the next
+// writer on another connection waits it out.
+message CancelRequest {
+  // Target QUIC stream id to cancel. 0 means "this stream" (self-cancel).
+  uint64 stream_id = 1;
+  // Optional session id, for parity/routing; ignored by the QUIC handler.
+  string session_id = 2;
+}
+message CancelResponse {
+  // True when a matching in-flight stream was found and its cancel flag set.
+  bool cancelled = 1;
+  string message = 2;
 }

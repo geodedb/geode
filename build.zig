@@ -8456,6 +8456,17 @@ pub fn build(b: *std.Build) void {
     const read_budget_step = b.step("test-gap0044-read-budget-cancel", "Run GAP-ENT-0044/0045 read-executor budget + cancel-on-disconnect regression (53200 budget abort, 57014 cancel within one batch)");
     read_budget_step.dependOn(&run_read_budget_tests.step);
 
+    // SONNY-1841: a per-stream QUIC CANCEL must abort an abandoned WRITE-carrying
+    // mutation and RELEASE the per-graph write lock so a concurrent writer
+    // proceeds promptly (57014) instead of stalling to the ~120 s deadline.
+    const sonny1841_write_cancel_mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny1841_write_lock_cancel.zig"), .target = target, .optimize = optimize });
+    sonny1841_write_cancel_mod.addImport("geode", root_mod);
+    const sonny1841_write_cancel_tests = b.addTest(.{ .root_module = sonny1841_write_cancel_mod });
+    const run_sonny1841_write_cancel_tests = b.addRunArtifact(sonny1841_write_cancel_tests);
+    shardDep(test_step, &run_sonny1841_write_cancel_tests.step, 1, test_shard_loads, test_shard_index);
+    const sonny1841_write_cancel_step = b.step("test-sonny1841-write-lock-cancel", "Run SONNY-1841 write-cancel regression: an abandoned write-carrying mutation aborts (57014) and releases the per-graph write lock for a waiting writer");
+    sonny1841_write_cancel_step.dependOn(&run_sonny1841_write_cancel_tests.step);
+
     // Traversal-seed perf micro-benchmark (P1 close-out): proves O(degree) seed
     // over a large filler graph — 8000 unrelated Taxon nodes + 1 parent with 64
     // PARENT_OF children.  Counter assertions (label-scan == 0, exact >= 1) are

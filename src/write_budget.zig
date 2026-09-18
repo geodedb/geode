@@ -47,12 +47,24 @@
 //! `setBudgetBytesForTest`.
 
 const std = @import("std");
+// SONNY-1841: the WRITE scope captures the SAME per-stream / watchdog cancel
+// flags the transport installs for the READ scope (the QUIC CANCEL message maps
+// a stream id → that reader's `cancel_requested` atomic, wired through
+// `read_budget.setWatchdogCancelSource`). Capturing them here lets the write
+// executor's poll sites observe an abandoned-mutation cancel and release the
+// per-graph write lock instead of holding it to the ~120 s deadline.
+const read_budget = @import("read_budget.zig");
 
 pub const env_var_name = "GEODE_WRITE_EXECUTOR_BUDGET_MB";
 pub const default_budget_mb: u64 = 8192;
 
 /// Sentinel for "no budget" (env set to 0): never trips.
 pub const unlimited: u64 = std.math.maxInt(u64);
+
+/// The write executor's two abort identities: working-set budget exceeded, or
+/// the client/stream was cancelled (SONNY-1841). Mapped to SQLSTATE 53200 /
+/// 57014 in proto_util.
+pub const CheckError = error{ WriteQueryBudgetExceeded, WriteQueryCancelled };
 
 var g_env_parsed = std.atomic.Value(bool).init(false);
 var g_env_bytes = std.atomic.Value(u64).init(0);
@@ -94,10 +106,18 @@ pub const Scope = struct {
     live_bytes: u64 = 0,
     peak_bytes: u64 = 0,
     exceeded: bool = false,
+    /// SONNY-1841: per-stream (connection close) cancel flag captured at install.
+    cancel: ?*const std.atomic.Value(bool) = null,
+    /// SONNY-1841: per-reader (QUIC CANCEL / stall watchdog) cancel flag.
+    watchdog_cancel: ?*const std.atomic.Value(bool) = null,
     prev: ?*Scope = null,
 
     pub fn init() Scope {
-        return .{ .budget_bytes = budgetBytes() };
+        return .{
+            .budget_bytes = budgetBytes(),
+            .cancel = read_budget.streamCancelSource(),
+            .watchdog_cancel = read_budget.watchdogCancelSource(),
+        };
     }
 };
 
@@ -144,10 +164,35 @@ pub fn exceeded() bool {
     return s.exceeded;
 }
 
-/// Poll site for the executor's candidate loops: aborts the write query with
-/// a clean, client-mappable error once the working set crossed the budget.
-pub fn check() error{WriteQueryBudgetExceeded}!void {
-    if (exceeded()) return error.WriteQueryBudgetExceeded;
+/// SONNY-1841: true when either captured cancel source has been set
+/// (cross-thread safe; no-op without an installed scope).
+pub fn cancelled() bool {
+    const s = t_active orelse return false;
+    if (s.cancel) |flag| {
+        if (flag.load(.acquire)) return true;
+    }
+    if (s.watchdog_cancel) |flag| {
+        if (flag.load(.acquire)) return true;
+    }
+    return false;
+}
+
+/// Poll site for the executor's candidate/apply loops: aborts the write query
+/// with a clean, client-mappable error once the working set crossed the budget
+/// (SQLSTATE 53200) OR the stream was cancelled (SONNY-1841, SQLSTATE 57014).
+/// Polled BETWEEN candidates, before a candidate's mutation is applied, so the
+/// abort unwinds and RELEASES the per-graph write lock at a safe boundary with
+/// per-node atomicity (no statement-level rollback on the autocommit path).
+/// No-op without an installed scope.
+pub fn check() CheckError!void {
+    const s = t_active orelse return;
+    if (s.exceeded) return error.WriteQueryBudgetExceeded;
+    if (s.cancel) |flag| {
+        if (flag.load(.acquire)) return error.WriteQueryCancelled;
+    }
+    if (s.watchdog_cancel) |flag| {
+        if (flag.load(.acquire)) return error.WriteQueryCancelled;
+    }
 }
 
 /// Pass-through observer allocator. Forwards every call to `inner` unchanged
@@ -251,4 +296,37 @@ test "no active scope: charge/check are no-ops" {
     charge(1 << 40);
     try check();
     try std.testing.expect(!exceeded());
+}
+
+test "SONNY-1841: a set cancel flag aborts check() with WriteQueryCancelled" {
+    var flag = std.atomic.Value(bool).init(false);
+    read_budget.setWatchdogCancelSource(&flag);
+    defer read_budget.setWatchdogCancelSource(null);
+
+    var s = Scope.init();
+    try std.testing.expect(s.watchdog_cancel != null);
+    beginScope(&s);
+    defer endScope(&s);
+
+    try check(); // not cancelled yet
+    flag.store(true, .release); // QUIC CANCEL / watchdog: abandoned mutation
+    try std.testing.expect(cancelled());
+    try std.testing.expectError(error.WriteQueryCancelled, check());
+}
+
+test "SONNY-1841: budget trip takes precedence over cancel; no scope = no-op" {
+    var flag = std.atomic.Value(bool).init(true);
+    read_budget.setStreamCancelSource(&flag);
+    defer read_budget.setStreamCancelSource(null);
+
+    var s = Scope.init();
+    s.budget_bytes = 10;
+    beginScope(&s);
+    charge(11);
+    try std.testing.expectError(error.WriteQueryBudgetExceeded, check());
+    endScope(&s);
+
+    // No active scope: check() is a no-op even with the flag set.
+    try check();
+    try std.testing.expect(!cancelled());
 }

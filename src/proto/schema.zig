@@ -1342,6 +1342,37 @@ pub const UploadBackupResponse = struct {
     }
 };
 
+// SONNY-1841: per-stream statement cancellation on the QUIC wire.
+pub const CancelRequest = struct {
+    // Target QUIC stream id to cancel. 0 means "this stream" (self-cancel).
+    stream_id: u64 = 0,
+    // Optional session id, for parity/routing; ignored by the QUIC handler.
+    session_id: []const u8 = "",
+
+    pub const _desc_table = .{
+        .stream_id = fd(1, .{ .scalar = .uint64 }),
+        .session_id = fd(2, .{ .scalar = .string }),
+    };
+
+    pub fn deinit(self: *CancelRequest, allocator: std.mem.Allocator) void {
+        protobuf.deinit(allocator, self);
+    }
+};
+
+pub const CancelResponse = struct {
+    cancelled: bool = false,
+    message: []const u8 = "",
+
+    pub const _desc_table = .{
+        .cancelled = fd(1, .{ .scalar = .bool }),
+        .message = fd(2, .{ .scalar = .string }),
+    };
+
+    pub fn deinit(self: *CancelResponse, allocator: std.mem.Allocator) void {
+        protobuf.deinit(allocator, self);
+    }
+};
+
 // ============================================================================
 // Top-Level Messages (Unions)
 // ============================================================================
@@ -1360,6 +1391,8 @@ pub const QuicClientMessage = union(enum) {
     backup: BackupRequest,
     restore: RestoreRequest,
     upload_backup: UploadBackupRequest,
+    // SONNY-1841: per-stream statement cancellation (backward-compatible tag 15).
+    cancel: CancelRequest,
 
     pub const _desc_table = .{
         .hello = fd(1, .{ .submessage = {} }),
@@ -1376,6 +1409,7 @@ pub const QuicClientMessage = union(enum) {
         .backup = fd(12, .{ .submessage = {} }),
         .restore = fd(13, .{ .submessage = {} }),
         .upload_backup = fd(14, .{ .submessage = {} }),
+        .cancel = fd(15, .{ .submessage = {} }),
     };
 
     pub fn deinit(self: *QuicClientMessage, allocator: std.mem.Allocator) void {
@@ -1400,6 +1434,8 @@ pub const QuicServerMessage = union(enum) {
     backup: BackupResponse,
     restore: RestoreResponse,
     upload_backup: UploadBackupResponse,
+    // SONNY-1841: per-stream CANCEL acknowledgement (backward-compatible tag 15).
+    cancel: CancelResponse,
 
     pub const _desc_table = .{
         .hello = fd(1, .{ .submessage = {} }),
@@ -1416,6 +1452,7 @@ pub const QuicServerMessage = union(enum) {
         .backup = fd(12, .{ .submessage = {} }),
         .restore = fd(13, .{ .submessage = {} }),
         .upload_backup = fd(14, .{ .submessage = {} }),
+        .cancel = fd(15, .{ .submessage = {} }),
     };
 
     pub fn deinit(self: *QuicServerMessage, allocator: std.mem.Allocator) void {

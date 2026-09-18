@@ -240,6 +240,29 @@ pub const Registry = struct {
         return n;
     }
 
+    /// SONNY-1841: request cancellation of the reader(s) driving a SPECIFIC
+    /// QUIC stream id — the plumbing behind the per-stream CANCEL wire message
+    /// (and a peer STOP_SENDING / reset for that stream). Sets the target
+    /// stream's existing `cancel_requested` atomic so its in-flight statement
+    /// (including a mutation waiting on / holding the per-graph write lock)
+    /// aborts and releases the lock at the next row/batch boundary, instead of
+    /// running to its own ~120s deadline while the next writer waits it out.
+    /// Reuses the GAP-ENT-0045 `requestCancel` callback. Returns the number of
+    /// matching readers whose cancel was requested (0 = no such live stream).
+    pub fn requestCancelByStreamId(self: *Registry, stream_id: u64) usize {
+        const io = std.Io.Threaded.global_single_threaded.io();
+        self.mu.lockUncancelable(io);
+        defer self.mu.unlock(io);
+        var n: usize = 0;
+        for (self.entries.items) |entry| {
+            if (entry.getStreamId(entry.self) != stream_id) continue;
+            const cb = entry.requestCancel orelse continue;
+            cb(entry.self);
+            n += 1;
+        }
+        return n;
+    }
+
     /// Current number of registered readers (== active handler threads
     /// currently inside the read loop).  Used by the metrics layer.
     pub fn count(self: *Registry) usize {
@@ -303,6 +326,38 @@ test "Registry register/unregister round-trip" {
 
     reg.unregister(@ptrCast(&r));
     try testing.expectEqual(@as(usize, 0), reg.count());
+}
+
+// SONNY-1841: the per-stream CANCEL wire message (and a peer STOP_SENDING /
+// reset) maps an incoming target stream id to that stream's `cancel_requested`
+// atomic via the registry. This pins that mapping: only the matching stream's
+// flag is set, non-matching streams are untouched, and an unknown id is a
+// no-op that reports zero cancellations.
+test "sonny1841_request_cancel_by_stream_id" {
+    var reg = Registry.init();
+    defer reg.deinit(testing.allocator);
+
+    var a = FakeReader{ .activity = 10, .stream_id = 4, .peer = "10.0.0.1" };
+    var b = FakeReader{ .activity = 20, .stream_id = 8, .peer = "10.0.0.1" };
+    var c = FakeReader{ .activity = 30, .stream_id = 12, .peer = "10.0.0.2" };
+    try reg.register(testing.allocator, a.handle());
+    try reg.register(testing.allocator, b.handle());
+    try reg.register(testing.allocator, c.handle());
+
+    // Cancelling stream 8 sets ONLY stream 8's flag.
+    try testing.expectEqual(@as(usize, 1), reg.requestCancelByStreamId(8));
+    try testing.expect(!a.cancel_requested.load(.acquire));
+    try testing.expect(b.cancel_requested.load(.acquire));
+    try testing.expect(!c.cancel_requested.load(.acquire));
+
+    // An unknown stream id cancels nothing and reports zero.
+    try testing.expectEqual(@as(usize, 0), reg.requestCancelByStreamId(999));
+    try testing.expect(!a.cancel_requested.load(.acquire));
+    try testing.expect(!c.cancel_requested.load(.acquire));
+
+    // A second, distinct stream id still resolves independently.
+    try testing.expectEqual(@as(usize, 1), reg.requestCancelByStreamId(4));
+    try testing.expect(a.cancel_requested.load(.acquire));
 }
 
 test "Registry unregister is idempotent when entry missing" {

@@ -1635,6 +1635,19 @@ fn handleLegacyPacket(request_bytes: []const u8, trans: *GrpcTransport, allocato
             defer out.deinit(allocator);
             break :blk encodeMessage(allocator, out);
         },
+        .cancel => blk: {
+            // SONNY-1841: per-stream CANCEL is a QUIC-transport concept — it maps
+            // an incoming QUIC stream id to that stream's cancel flag via the
+            // proto_reader_registry. The gRPC bridge has no equivalent per-stream
+            // registry (each RPC is its own call), so acknowledge it as a no-op
+            // here rather than silently dropping the message.
+            var out = schema.ServerPacket{ .quic = .{ .cancel = .{
+                .cancelled = false,
+                .message = try allocator.dupe(u8, "per-stream cancel is not supported over the gRPC bridge"),
+            } } };
+            defer out.deinit(allocator);
+            break :blk encodeMessage(allocator, out);
+        },
     };
 }
 

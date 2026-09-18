@@ -378,6 +378,16 @@ pub fn getUnboundSiblingRefusalsTotal() u64 {
     return g_unbound_sibling_refusals.load(.monotonic);
 }
 
+/// SONNY-1841: count of per-stream CANCEL wire messages received. Exposed for
+/// runtime metrics so operators can observe client-driven statement
+/// cancellation independently of the time-based watchdog aborts.
+var g_stream_cancel_requests: std.atomic.Value(u64) = std.atomic.Value(u64).init(0);
+
+/// Snapshot of the cumulative per-stream CANCEL request counter.
+pub fn getStreamCancelRequestsTotal() u64 {
+    return g_stream_cancel_requests.load(.monotonic);
+}
+
 /// SONNY-1835: a sibling (additional) QUIC stream is "unbound" when it reaches
 /// query execution with no graph binding established through EITHER inheritance
 /// from the connection HELLO OR its own per-stream HELLO. Executing such a
@@ -6765,7 +6775,10 @@ fn handleClientMessage(
     // when auth is disabled (no authentication concept to enforce).
     if (user_mgmt.isAuthEnabled() and state.authenticated_user == null) {
         const pre_auth_allowed = switch (msg) {
-            .hello, .ping => true,
+            // SONNY-1841: CANCEL only flips an existing per-stream cancel flag on
+            // a stream this connection already owns; it exposes no data, so it is
+            // permitted pre-auth alongside the handshake and liveness probe.
+            .hello, .ping, .cancel => true,
             else => false,
         };
         if (!pre_auth_allowed) {
@@ -9243,6 +9256,30 @@ fn handleClientMessage(
 
             const stored_path = try std.fmt.allocPrint(gpa, "./server_backups/full_{x}.backup", .{ingested.backup_id});
             try sendQuicMessage(gpa, stream, .{ .upload_backup = .{ .success = true, .message = try gpa.dupe(u8, "Backup uploaded, verified, and registered"), .upload_path = stored_path } });
+        },
+        .cancel => |cancel_req| {
+            // SONNY-1841: per-stream statement cancellation on the QUIC wire.
+            // Map the target stream id to its BufferedProtoReader's existing
+            // `cancel_requested` atomic (GAP-ENT-0045 plumbing). The executor /
+            // write-lock waiter polls it at the next row/batch boundary and
+            // aborts with SQLSTATE 57014, RELEASING the per-graph write lock so
+            // the next writer on another connection is not blocked for the full
+            // ~120s lock timeout. stream_id 0 targets this stream (self-cancel).
+            // A peer STOP_SENDING / reset for a stream reaches the same abort via
+            // the connection-close cancel source wired at
+            // runStreamQueryLoopWithReader (setStreamCancelSource); this message
+            // is the explicit, still-connected cancel.
+            const target: u64 = if (cancel_req.stream_id != 0) cancel_req.stream_id else stream.stream_id;
+            const n = g_proto_reader_registry.requestCancelByStreamId(target);
+            _ = g_stream_cancel_requests.fetchAdd(1, .monotonic);
+            log.info("QUIC per-stream CANCEL", &.{
+                Attr.int("target_stream_id", @intCast(target)),
+                Attr.int("readers_cancelled", @intCast(n)),
+            });
+            try sendQuicMessage(gpa, stream, .{ .cancel = .{
+                .cancelled = n > 0,
+                .message = try gpa.dupe(u8, if (n > 0) "cancel requested" else "no matching in-flight stream"),
+            } });
         },
     }
 }

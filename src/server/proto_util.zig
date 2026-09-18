@@ -294,6 +294,14 @@ pub fn mapError(err: anyerror) ErrorInfo {
         // burning CPU+RSS for an abandoned result.
         // 57014 = SQLSTATE query_canceled (class 57, operator intervention).
         error.ReadQueryCancelled => .{ .code = "57014", .message = "ReadQueryCancelled: the client disconnected or the server canceled this read (stall watchdog); execution aborted at a row/batch boundary. No data was modified" },
+        // SONNY-1841: a per-stream QUIC CANCEL (or connection close / stall
+        // watchdog) reached the write executor; the write-carrying mutation
+        // aborted at a candidate/apply boundary and RELEASED the per-graph write
+        // lock instead of holding it to the ~120 s deadline. Aborted BETWEEN row
+        // mutations: rows already written remain applied (no statement-level
+        // rollback on the autocommit path), matching the budget-abort semantics.
+        // 57014 = SQLSTATE query_canceled (class 57, operator intervention).
+        error.WriteQueryCancelled => .{ .code = "57014", .message = "WriteQueryCancelled: the client canceled this write (per-stream CANCEL, disconnect, or stall watchdog); execution aborted at a row-mutation boundary and released the per-graph write lock. Rows already written remain applied (no statement-level rollback in autocommit)" },
         // ENG-3911: an oversized property VALUE used to reach the client as
         // `PropertyKeyTooLong` under the generic 58000 system-error class — the
         // wrong noun AND a "the server broke" class for a documented resource

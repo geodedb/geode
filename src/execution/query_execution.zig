@@ -1803,26 +1803,43 @@ pub fn executeQueryWithContext(allocator: std.mem.Allocator, q: ast.Query, conte
             q.create_pattern != null or q.merge_statement != null);
     if (budget_write_carrying) {
         var budget_scope = write_budget.Scope.init();
-        if (budget_scope.budget_bytes != write_budget.unlimited) {
+        const meter = budget_scope.budget_bytes != write_budget.unlimited;
+        // SONNY-1841: install the write scope whenever the budget is finite OR a
+        // per-stream/watchdog cancel source is present — a write-carrying
+        // mutation MUST poll cancellation (so an abandoned mutation aborts and
+        // releases the per-graph write lock) even when the memory budget is
+        // disabled (GEODE_WRITE_EXECUTOR_BUDGET_MB=0). Metering is enabled only
+        // when the budget is finite; a cancel-only scope runs on the caller's
+        // allocator (no MeteredAllocator wrapper, so no repoint is needed).
+        const scope_active = meter or
+            budget_scope.cancel != null or budget_scope.watchdog_cancel != null;
+        if (scope_active) {
             write_budget.beginScope(&budget_scope);
             defer write_budget.endScope(&budget_scope);
-            var metered = write_budget.MeteredAllocator{ .inner = allocator };
-            var result = executeLegacyQueryWithResolvedParams(metered.allocator(), q, context, param_names.items, param_values.items) catch |err| {
-                if (budget_scope.exceeded and err == error.OutOfMemory) return error.WriteQueryBudgetExceeded;
-                return err;
-            };
-            // T5 follow-up hardening: same allocator-escape repoint as the
-            // read scope (a MATCH..CREATE RETURN result can carry
-            // variable_bindings whose managed map captured the metered
-            // wrapper — dangling once this frame returns).
-            repointResultAllocators(&result, allocator);
-            if (budget_scope.exceeded) {
-                // A catch-and-continue site may have swallowed the backstop's
-                // refusal: a tripped scope NEVER returns success.
-                result.deinit(allocator);
-                return error.WriteQueryBudgetExceeded;
+            if (meter) {
+                var metered = write_budget.MeteredAllocator{ .inner = allocator };
+                var result = executeLegacyQueryWithResolvedParams(metered.allocator(), q, context, param_names.items, param_values.items) catch |err| {
+                    if (budget_scope.exceeded and err == error.OutOfMemory) return error.WriteQueryBudgetExceeded;
+                    return err;
+                };
+                // T5 follow-up hardening: same allocator-escape repoint as the
+                // read scope (a MATCH..CREATE RETURN result can carry
+                // variable_bindings whose managed map captured the metered
+                // wrapper — dangling once this frame returns).
+                repointResultAllocators(&result, allocator);
+                if (budget_scope.exceeded) {
+                    // A catch-and-continue site may have swallowed the backstop's
+                    // refusal: a tripped scope NEVER returns success.
+                    result.deinit(allocator);
+                    return error.WriteQueryBudgetExceeded;
+                }
+                return result;
             }
-            return result;
+            // Cancel-only scope (budget disabled): the executor's write-side
+            // candidate/apply loops poll write_budget.check() and abort with
+            // error.WriteQueryCancelled at a safe boundary, unwinding to release
+            // the write lock. No metering, so run on the caller's allocator.
+            return executeLegacyQueryWithResolvedParams(allocator, q, context, param_names.items, param_values.items);
         }
     }
 

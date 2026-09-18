@@ -100,6 +100,15 @@ pub fn streamCancelSource() ?*const std.atomic.Value(bool) {
     return t_stream_cancel;
 }
 
+/// SONNY-1841: expose the CURRENT thread's watchdog cancel flag (the per-reader
+/// `cancel_requested` the QUIC CANCEL / stall watchdog sets) so the WRITE-path
+/// budget scope can capture the SAME cancel sources the read scope does — a
+/// write-carrying mutation must observe cancellation and release the per-graph
+/// write lock, not run to its deadline. Null on threads with no transport.
+pub fn watchdogCancelSource() ?*const std.atomic.Value(bool) {
+    return t_watchdog_cancel;
+}
+
 /// Install the CURRENT thread's watchdog cancel flag (the per-reader
 /// `cancel_requested` set by the stall watchdog via the reader registry).
 pub fn setWatchdogCancelSource(flag: ?*const std.atomic.Value(bool)) void {
