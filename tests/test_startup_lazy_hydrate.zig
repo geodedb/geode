@@ -235,9 +235,17 @@ test "PHASE 1b: concurrent first-queries hydrate a cold graph exactly once" {
         };
         var ok = std.atomic.Value(usize).init(0);
         const t1 = try std.Thread.spawn(.{}, Worker.run, .{ store, &ok });
+        // SONNY-1982: join both workers on every path (e.g. if the second spawn
+        // fails) so neither can outlive this frame's `ok`.
+        var t1_joined = false;
+        defer if (!t1_joined) t1.join();
         const t2 = try std.Thread.spawn(.{}, Worker.run, .{ store, &ok });
+        var t2_joined = false;
+        defer if (!t2_joined) t2.join();
         t1.join();
+        t1_joined = true;
         t2.join();
+        t2_joined = true;
 
         try testing.expectEqual(@as(usize, 2), ok.load(.monotonic)); // both correct
         // Hydrated EXACTLY ONCE: the deferred scan walked N nodes, not 2N.
@@ -329,10 +337,25 @@ test "PHASE 1b: hydrate A || read B -- concurrent cross-graph hydration is race-
             };
 
             const ta = try std.Thread.spawn(.{}, W.readA, .{ store, &start, &a_ok });
+            // SONNY-1982: these workers spin on `start`; release `start` and join
+            // on every early-exit path so neither can outlive this frame's atomics
+            // (a `defer join` alone would deadlock a worker still waiting on start).
+            var ta_joined = false;
+            defer if (!ta_joined) {
+                start.store(true, .release);
+                ta.join();
+            };
             const tb = try std.Thread.spawn(.{}, W.readB, .{ store, &start, &b_ok });
+            var tb_joined = false;
+            defer if (!tb_joined) {
+                start.store(true, .release);
+                tb.join();
+            };
             start.store(true, .release); // release both threads simultaneously
             ta.join();
+            ta_joined = true;
             tb.join();
+            tb_joined = true;
 
             // No torn results: A correct once, B correct on every one of its reads.
             try testing.expectEqual(@as(usize, 1), a_ok.load(.monotonic));
@@ -3341,6 +3364,17 @@ test "GAP-ENT-0048e: eager build fires at FULL checkpoint with hydration_build_m
         var acquired = std.atomic.Value(bool).init(false);
         var release = std.atomic.Value(bool).init(false);
         const holder = try std.Thread.spawn(.{}, Holder.run, .{ store, &acquired, &release });
+        // SONNY-1982: the `try` assertions between this spawn and the explicit join
+        // could return the body while the holder is still parked in its
+        // `while (!release)` loop. Signal `release` and join on every early-exit
+        // path so the holder cannot outlive this frame's `acquired`/`release`.
+        var holder_joined = false;
+        defer {
+            if (!holder_joined) {
+                release.store(true, .release);
+                holder.join();
+            }
+        }
         var spun: u64 = 0;
         while (!acquired.load(.acquire) and spun < 5000) : (spun += 1) sleepMs(1);
         try testing.expect(acquired.load(.acquire)); // the holder owns the mutex now
@@ -3355,6 +3389,7 @@ test "GAP-ENT-0048e: eager build fires at FULL checkpoint with hydration_build_m
 
         release.store(true, .release);
         holder.join();
+        holder_joined = true;
         graph_store.deinitGlobalStore();
     }
 
@@ -3742,7 +3777,14 @@ test "GAP-0064 FIX A: reopen + concurrent readers + checkpoint — reads return 
         var errs = std.atomic.Value(u32).init(0);
         var ctx = RCtx{ .store = store, .graph = G, .label = LBL, .n = N, .errs = &errs };
         var threads: [4]std.Thread = undefined;
-        for (&threads) |*t| t.* = try std.Thread.spawn(.{}, RCtx.run, .{&ctx});
+        // SONNY-1982: if a spawn fails mid-loop, join only the readers already
+        // started (they self-exit) so none outlives this frame's `ctx`/`errs`.
+        var nspawned: usize = 0;
+        defer for (threads[0..nspawned]) |t| t.join();
+        for (&threads) |*t| {
+            t.* = try std.Thread.spawn(.{}, RCtx.run, .{&ctx});
+            nspawned += 1;
+        }
 
         // Concurrent FULL checkpoint while the build is in flight — exercises the
         // inflight-gated exact-index branch in checkpointOneGraph (must NOT run a
@@ -3750,7 +3792,8 @@ test "GAP-0064 FIX A: reopen + concurrent readers + checkpoint — reads return 
         // may report the rwlock busy against the concurrent hydration persist).
         adapter.checkpointGraph(G) catch {};
 
-        for (&threads) |*t| t.join();
+        for (threads[0..nspawned]) |t| t.join();
+        nspawned = 0; // all joined — disarm the guard so it cannot double-join
 
         // Every reader returned the correct count while the build is STILL gated:
         // the fold did NOT park them behind the O(graph) build.
@@ -3852,6 +3895,24 @@ test "GAP-0064 review CRITICAL: lazy rebuild || FULL checkpoint — checkpoint s
         var errs = std.atomic.Value(u32).init(0);
         var ctx = LazyCtx{ .adapter = adapter, .alloc = allocator, .val = sources[1], .want = N / sources.len, .errs = &errs };
         var lazy_thread = try std.Thread.spawn(.{}, LazyCtx.run, .{&ctx});
+        // SONNY-1982: the worker MUST NOT outlive this test body on any path. The
+        // `try` assertions below (gate-waiter wait, checkpoint-delta) sit between
+        // the spawn and the explicit join; under the pre-push x4 `--listen` load a
+        // starved worker can miss the 30s gate-wait, so the `try` errors and the
+        // body returns while the worker is still parked at the closed build gate.
+        // The outer `defer openExactBuildGateForTesting()` then releases that worker
+        // during teardown, after this stack frame's `ctx`/`errs` are gone -> the
+        // worker writes freed test-local state -> abrupt SIGSEGV (no panic/no TSan
+        // report), and only under the `--listen` runner (the default runner waits
+        // for spawned threads). This guarded defer releases the gate and joins the
+        // worker on EVERY early-exit path, before `ctx`/`errs` die.
+        var lazy_joined = false;
+        defer {
+            if (!lazy_joined) {
+                adapter_mod.openExactBuildGateForTesting();
+                lazy_thread.join();
+            }
+        }
 
         // Wait until the lazy build is parked at the gate HOLDING the build mutex.
         var waited: usize = 0;
@@ -3871,6 +3932,7 @@ test "GAP-0064 review CRITICAL: lazy rebuild || FULL checkpoint — checkpoint s
         // Release the gate → the lazy build completes; it is the ONLY builder.
         adapter_mod.openExactBuildGateForTesting();
         lazy_thread.join();
+        lazy_joined = true;
         try testing.expectEqual(@as(u32, 0), errs.load(.acquire));
 
         // The index-served count is CORRECT — no duplicated postings / inflation.
