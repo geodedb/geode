@@ -1174,7 +1174,7 @@ pub const QuicTransport = struct {
         app_error_code: u64,
     ) void {
         conn.shutdown_requested.store(true, .release);
-        @import("otel_metrics").recordTransportConnectionClosed("destroy");
+        @import("otel_metrics").recordTransportConnectionClosed(.destroy);
         // GAP-0202: Lock mutex for thread-safe list modification
         self.connections_mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
         // Remove connection from the tracked list using O(1) swapRemove

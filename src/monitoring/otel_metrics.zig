@@ -1236,9 +1236,14 @@ pub fn recordTransportConnectionOpened(proto: TransportProtocol) void {
     t.connection_opened.add(1, &.{attrs.Entry{ .key = "geode.transport.protocol", .value = .{ .string = @tagName(proto) } }});
 }
 
-pub fn recordTransportConnectionClosed(reason: []const u8) void {
+/// Bounded set of transport connection-close reasons. SONNY-1806: a closed
+/// enum keeps `geode.close.reason` low-cardinality and typo-proof. Tag names
+/// are the exact label values emitted (via @tagName).
+pub const CloseReason = enum { client_close, server_close, idle_timeout, protocol_error, destroy };
+
+pub fn recordTransportConnectionClosed(reason: CloseReason) void {
     const t = ensureTransport() catch return;
-    t.connection_closed.add(1, &.{attrs.Entry{ .key = "geode.close.reason", .value = .{ .string = reason } }});
+    t.connection_closed.add(1, &.{attrs.Entry{ .key = "geode.close.reason", .value = .{ .string = @tagName(reason) } }});
 }
 
 // NOTE: recordTransportHandshake and recordTransportTimeout are
@@ -1574,7 +1579,11 @@ pub fn recordQueryParseError(error_type: []const u8) void {
     q.parse_error_count.add(1, &.{.{ .key = "error.type", .value = .{ .string = error_type } }});
 }
 
-pub fn recordQueryPlan(op: []const u8, duration_s: f64, planner_strategy: []const u8) void {
+/// Bounded set of query planner strategies. SONNY-1806: closed enum bounds the
+/// `geode.planner.strategy` label. Tag names are the emitted label values.
+pub const PlannerStrategy = enum { cbo, rbo, heuristic };
+
+pub fn recordQueryPlan(op: []const u8, duration_s: f64, planner_strategy: PlannerStrategy) void {
     if (g_provider == null) return;
     const io = initIo();
     g_query_mu.lockUncancelable(io);
@@ -1582,7 +1591,7 @@ pub fn recordQueryPlan(op: []const u8, duration_s: f64, planner_strategy: []cons
     const q = ensureQueryLocked() catch return;
     q.plan_duration.record(duration_s, &.{
         .{ .key = "db.operation.name", .value = .{ .string = op } },
-        .{ .key = "geode.planner.strategy", .value = .{ .string = planner_strategy } },
+        .{ .key = "geode.planner.strategy", .value = .{ .string = @tagName(planner_strategy) } },
     });
 }
 
@@ -2574,12 +2583,14 @@ pub fn registerAuditQueueGauge(provider_fn: *const fn () i64) !void {
     );
 }
 
+/// Bounded set of audit-drop reasons. SONNY-1806: closed enum keeps
+/// `geode.audit.drop_reason` low-cardinality. Tag names are the label values.
+pub const AuditDropReason = enum { queue_full, append_error, write_error, io_error };
+
 /// Record an audit event that was dropped before being written.
-/// `reason` MUST be a low-cardinality classifier (e.g. "queue_full",
-/// "io_error"). NEVER pass a session ID or query text here.
-pub fn recordAuditDropped(reason: []const u8) void {
+pub fn recordAuditDropped(reason: AuditDropReason) void {
     const s = ensureSecurity() catch return;
-    s.audit_event_dropped.add(1, &.{.{ .key = "geode.audit.drop_reason", .value = .{ .string = reason } }});
+    s.audit_event_dropped.add(1, &.{.{ .key = "geode.audit.drop_reason", .value = .{ .string = @tagName(reason) } }});
 }
 
 /// Record a TDE/KMS cryptographic operation. Bumps both count (via duration
@@ -2933,12 +2944,14 @@ pub fn recordCdcSinkError(sink: SinkType, error_type: []const u8) void {
     });
 }
 
+/// Bounded set of CDC event-drop reasons. SONNY-1806: closed enum keeps
+/// `geode.drop.reason` low-cardinality. Tag names are the label values.
+pub const CdcDropReason = enum { queue_full, serialization_error, io_error };
+
 /// Record a CDC event that was dropped before delivery.
-/// `reason` MUST be a low-cardinality classifier (e.g. "queue_full",
-/// "serialization_error").  NEVER pass document content here.
-pub fn recordCdcEventDropped(reason: []const u8) void {
+pub fn recordCdcEventDropped(reason: CdcDropReason) void {
     const c = ensureCdc() catch return;
-    c.event_dropped.add(1, &.{.{ .key = "geode.drop.reason", .value = .{ .string = reason } }});
+    c.event_dropped.add(1, &.{.{ .key = "geode.drop.reason", .value = .{ .string = @tagName(reason) } }});
 }
 
 // ---- Real-time analytics metrics ----

@@ -198,7 +198,7 @@ pub fn logSecurityGraphEvent(allocator: Allocator, event: SecurityGraphEvent) vo
         // Phase C2: a security-graph audit event was produced but its append
         // failed and is being swallowed here — a genuine drop. The reason is a
         // bounded constant (the append error type, not user content).
-        otel_metrics.recordAuditDropped("append_error");
+        otel_metrics.recordAuditDropped(.append_error);
     };
 }
 
@@ -603,7 +603,7 @@ pub const AuditLogger = struct {
                     Attr.string("error", @errorName(err)),
                     Attr.string("sink", self.config.file_path),
                 });
-                otel_metrics.recordAuditDropped("write_error");
+                otel_metrics.recordAuditDropped(.write_error);
                 return err;
             };
             self.write_degraded.store(false, .release);

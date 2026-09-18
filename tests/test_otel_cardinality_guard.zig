@@ -25,7 +25,7 @@ test "no forbidden attribute keys appear in default metric stream" {
 
     // Transport
     otel_metrics.recordTransportConnectionOpened(.quic);
-    otel_metrics.recordTransportConnectionClosed("client_close");
+    otel_metrics.recordTransportConnectionClosed(.client_close);
     otel_metrics.recordTransportHandshake(0.012, .success, null);
     otel_metrics.recordTransportRequest("MATCH", 0.034, .success, null);
     otel_metrics.recordTransportBytes(.transmit, 1024);
@@ -38,7 +38,7 @@ test "no forbidden attribute keys appear in default metric stream" {
     otel_metrics.recordQueryExecution("MATCH", "MATCH Person", .read, 0.012, .success, null);
     otel_metrics.recordQueryParse(0.0001, .success, null);
     otel_metrics.recordQueryParseError("SyntaxError");
-    otel_metrics.recordQueryPlan("MATCH", 0.0005, "cbo");
+    otel_metrics.recordQueryPlan("MATCH", 0.0005, .cbo);
     otel_metrics.recordQueryRowsReturned("MATCH", "MATCH Person", 42);
     otel_metrics.recordQueryTimeout("MATCH", .request);
     otel_metrics.decQueryActive(.read);
@@ -82,7 +82,7 @@ test "no forbidden attribute keys appear in default metric stream" {
     otel_metrics.recordAuthzCheck(.allow, .rbac, 0.0001);
     otel_metrics.recordRlsEvaluation(.allow, .rls, 0.0002);
     otel_metrics.recordAuditEvent("login", .success);
-    otel_metrics.recordAuditDropped("queue_full");
+    otel_metrics.recordAuditDropped(.queue_full);
     otel_metrics.recordTdeOperation(.encrypt, 0.001, .success);
     otel_metrics.recordTdeBytes(.encrypt, 1024);
     otel_metrics.recordTdeError("KeyMissing");
@@ -97,7 +97,7 @@ test "no forbidden attribute keys appear in default metric stream" {
     // CDC + analytics
     otel_metrics.recordCdcEvent(.node_change, .success);
     otel_metrics.recordCdcSinkError(.kafka, "ConnectionRefused");
-    otel_metrics.recordCdcEventDropped("queue_full");
+    otel_metrics.recordCdcEventDropped(.queue_full);
     otel_metrics.recordAnalyticsEvent("aggregate", .success);
     otel_metrics.recordAnalyticsProcessing("aggregate", 0.005);
 

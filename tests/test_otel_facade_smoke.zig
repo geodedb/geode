@@ -71,7 +71,7 @@ test "transport metrics register and increment" {
     defer otel_metrics.shutdown();
 
     otel_metrics.recordTransportConnectionOpened(.quic);
-    otel_metrics.recordTransportConnectionClosed("client_close");
+    otel_metrics.recordTransportConnectionClosed(.client_close);
     otel_metrics.recordTransportHandshake(0.012, .success, null);
     otel_metrics.recordTransportRequest("MATCH", 0.034, .success, null);
     otel_metrics.recordTransportBytes(.transmit, 1024);
@@ -104,7 +104,7 @@ test "query metrics register" {
     otel_metrics.recordQueryExecution("MATCH", "MATCH Person", .read, 0.012, .success, null);
     otel_metrics.recordQueryParse(0.0001, .success, null);
     otel_metrics.recordQueryParseError("SyntaxError");
-    otel_metrics.recordQueryPlan("MATCH", 0.0005, "cbo");
+    otel_metrics.recordQueryPlan("MATCH", 0.0005, .cbo);
     otel_metrics.recordQueryRowsReturned("MATCH", "MATCH Person", 42);
     otel_metrics.recordQueryTimeout("MATCH", .request);
     otel_metrics.decQueryActive(.read);
@@ -134,7 +134,7 @@ const QueryMetricsThreadCtx = struct {
             const op = if (((ctx.worker_id + i) % 3) == 0) "CREATE" else "MATCH";
             otel_metrics.incQueryActive(qt);
             otel_metrics.recordQueryParse(0.0001, .success, null);
-            otel_metrics.recordQueryPlan(op, 0.0002, "cbo");
+            otel_metrics.recordQueryPlan(op, 0.0002, .cbo);
             otel_metrics.recordQueryRowsReturned(op, op, @intCast((ctx.worker_id + i) % 128));
             otel_metrics.recordQueryExecution(op, op, qt, 0.001, .success, null);
             if ((i % 17) == 0) {
@@ -310,7 +310,7 @@ test "security metrics register without identifier leakage" {
     otel_metrics.recordAuthzCheck(.allow, .rbac, 0.0001);
     otel_metrics.recordRlsEvaluation(.allow, .rls, 0.0002);
     otel_metrics.recordAuditEvent("login", .success);
-    otel_metrics.recordAuditDropped("queue_full");
+    otel_metrics.recordAuditDropped(.queue_full);
     otel_metrics.recordTdeOperation(.encrypt, 0.001, .success);
     otel_metrics.recordTdeBytes(.encrypt, 1024);
     otel_metrics.recordTdeError("KeyMissing");
@@ -402,7 +402,7 @@ test "CDC and analytics metrics register" {
 
     otel_metrics.recordCdcEvent(.node_change, .success);
     otel_metrics.recordCdcSinkError(.kafka, "ConnectionRefused");
-    otel_metrics.recordCdcEventDropped("queue_full");
+    otel_metrics.recordCdcEventDropped(.queue_full);
     otel_metrics.recordAnalyticsEvent("aggregate", .success);
     otel_metrics.recordAnalyticsProcessing("aggregate", 0.005);
 
@@ -416,6 +416,39 @@ test "CDC and analytics metrics register" {
         "geode_analytics_event_count",
         "geode_analytics_event_processing_duration",
     }) |name| try std.testing.expect(std.mem.indexOf(u8, body, name) != null);
+}
+
+test "reason and strategy metric attrs are closed enums" {
+    // SONNY-1806: reason/strategy attrs are closed enums; only their tag names
+    // may appear as label values. Compile-time exhaustiveness guards typos;
+    // this asserts every enum value renders as its bounded label string.
+    const gpa = std.testing.allocator;
+    try otel_metrics.initForTesting(gpa);
+    defer otel_metrics.shutdown();
+
+    inline for (std.meta.tags(otel_metrics.CloseReason)) |r| otel_metrics.recordTransportConnectionClosed(r);
+    inline for (std.meta.tags(otel_metrics.PlannerStrategy)) |s| otel_metrics.recordQueryPlan("MATCH", 0.0005, s);
+    inline for (std.meta.tags(otel_metrics.AuditDropReason)) |r| otel_metrics.recordAuditDropped(r);
+    inline for (std.meta.tags(otel_metrics.CdcDropReason)) |r| otel_metrics.recordCdcEventDropped(r);
+
+    var prom = otel.exporters.prometheus.Prometheus.init(gpa, otel_metrics.getProvider().?);
+    const body = try prom.render();
+    defer gpa.free(body);
+
+    const Case = struct { label: []const u8, E: type };
+    const cases = [_]Case{
+        .{ .label = "geode_close_reason", .E = otel_metrics.CloseReason },
+        .{ .label = "geode_planner_strategy", .E = otel_metrics.PlannerStrategy },
+        .{ .label = "geode_audit_drop_reason", .E = otel_metrics.AuditDropReason },
+        .{ .label = "geode_drop_reason", .E = otel_metrics.CdcDropReason },
+    };
+    inline for (cases) |c| {
+        inline for (std.meta.tags(c.E)) |tag| {
+            var b: [96]u8 = undefined;
+            const needle = try std.fmt.bufPrint(&b, "{s}=\"{s}\"", .{ c.label, @tagName(tag) });
+            try std.testing.expect(std.mem.indexOf(u8, body, needle) != null);
+        }
+    }
 }
 
 test "backup and restore metrics register" {
