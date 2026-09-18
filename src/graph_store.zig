@@ -2772,10 +2772,22 @@ pub const GraphStore = struct {
     /// grace boundary). Null only when the id exists in neither the cache nor
     /// the engine. NEVER mutates the bounded cache.
     pub fn getNodePtrForScan(self: *const GraphStore, node_id: u64) ?*Node {
-        if (self.nodes.getPtr(node_id)) |p| return p;
         const mut: *GraphStore = @constCast(self);
-        // Engine rebuild OUTSIDE the box-list lock (slow I/O; leaf discipline).
-        var built = (hydrateNodeCb(@ptrCast(mut), mut.allocator, node_id) catch return null) orelse return null;
+        // SONNY-1979 (CWE-362, use-after-MOVE): a resident HIT must NOT return the
+        // raw in-map `*Node`. The shard `map_lock` only makes the LOOKUP atomic;
+        // the moment it is released, a concurrent (or later) hydration insert that
+        // GROWS this shard rehashes the backing AutoHashMap and MOVES every value
+        // slot, so the previously-returned pointer dangles (the rare ~1/60 SIGSEGV
+        // that failed the pre-push aggregate). Snapshot the hit into a grace-stable
+        // DETACHED box — exactly as the miss path below already does — so every
+        // return survives a subsequent shard grow. The copy is taken UNDER the
+        // shard's SHARED map_lock (so the resident value can't be moved/freed
+        // mid-copy); that lock is a LEAF, released before box adoption, and never
+        // spans the consumer's extended pointer use.
+        var built: Node = mut.snapshotResidentNodeForScan(node_id) orelse
+            // Miss: rebuild from the engine OUTSIDE every lock (slow I/O; leaf
+            // discipline; the callback must not re-enter this cache).
+            ((hydrateNodeCb(@ptrCast(mut), mut.allocator, node_id) catch return null) orelse return null);
         const box = mut.allocator.create(Node) catch {
             freeNodeValue(mut.allocator, &built);
             return null;
@@ -2801,6 +2813,44 @@ pub const GraphStore = struct {
         // bytes + per-property entry overhead + string payloads.
         write_budget.chargeStoreBytes(approxDetachedNodeBytes(box));
         return box;
+    }
+
+    /// SONNY-1979: deep-copy the RESIDENT node body for `node_id` into a caller-
+    /// owned `Node`, or null when it is not resident (→ caller falls back to the
+    /// engine rebuild). Taken under the shard's SHARED `map_lock` so a concurrent
+    /// EXCLUSIVE writer (insert/grow/in-place mutate) on that shard cannot move or
+    /// free the value during the copy. LEAF lock — held only across the copy, no
+    /// re-entrant cache call (uses `getPtrUnlocked`). On clone OOM returns null so
+    /// the caller degrades to the engine path rather than the unstable in-map ptr.
+    fn snapshotResidentNodeForScan(self: *GraphStore, node_id: u64) ?Node {
+        self.nodes.lockShardShared(node_id);
+        defer self.nodes.unlockShardShared(node_id);
+        const resident = self.nodes.getPtrUnlocked(node_id) orelse return null;
+        return self.cloneNodeOwned(resident) catch null;
+    }
+
+    /// SONNY-1979: deep-copy a `Node` into a fresh caller-owned value (all heap
+    /// duped: labels, property keys/values, graph_name, tenant_id). Touches NO
+    /// cache or index — the copy is destined for a detached scan box freed at the
+    /// per-graph grace boundary. Mirrors the copy half of `cloneOneNode`.
+    fn cloneNodeOwned(self: *GraphStore, src: *const Node) !Node {
+        const labels_copy = try self.allocator.alloc([]const u8, src.labels.len);
+        for (src.labels, 0..) |label, i| {
+            labels_copy[i] = try self.allocator.dupe(u8, label);
+        }
+        var props = CompactPropertyMap.init(self.allocator);
+        var prop_it = src.properties.iterator();
+        while (prop_it.next()) |prop| {
+            const key = try self.allocator.dupe(u8, prop.key_ptr.*);
+            try props.put(key, try copyPropertyValue(self, prop.value_ptr.*));
+        }
+        return .{
+            .id = src.id,
+            .labels = labels_copy,
+            .properties = props,
+            .graph_name = try self.allocator.dupe(u8, src.graph_name),
+            .tenant_id = try self.allocator.dupe(u8, src.tenant_id),
+        };
     }
 
     /// Coarse per-box working-set estimate for the write-executor budget

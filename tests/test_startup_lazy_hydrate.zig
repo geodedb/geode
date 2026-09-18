@@ -3885,3 +3885,57 @@ test "GAP-0064 review CRITICAL: lazy rebuild || FULL checkpoint — checkpoint s
         graph_store.deinitGlobalStore();
     }
 }
+
+// SONNY-1979 (CWE-362, use-after-MOVE): `getNodePtrForScan`'s resident-HIT fast
+// path returned a `*Node` pointing INTO the shard AutoHashMap's value storage,
+// and the shared `map_lock` is released when the accessor returns. A later insert
+// that GROWS that shard (AutoHashMap getOrPut → rehash) MOVES every value slot, so
+// the previously-returned pointer dangles → use-after-move (the rare ~1/60 SIGSEGV
+// that failed the pre-push aggregate; it surfaces later inside an unrelated getPtr
+// walking the corrupted heap). This is fully deterministic and SINGLE-THREADED: the
+// grow-move invalidates the pointer on THIS thread — no ThreadSanitizer and no
+// second thread are needed (which is exactly why the counting-only PHASE-1b tsan
+// reader stayed green). Under `testing.allocator` (the leak/UAF-flagging GPA) the
+// freed+reused old slot makes the stale read observable.
+//
+// RED at HEAD: `p` aliases the freed/moved slot → `p.id` != x (or GPA trips).
+// GREEN after fix: `getNodePtrForScan` snapshots the resident hit into a
+// grace-stable detached box (mirroring the miss path), so `p` stays valid.
+test "SONNY-1979: getNodePtrForScan return survives a resident-cache shard grow (no use-after-move)" {
+    const allocator = testing.allocator;
+    var store = try GraphStore.init(allocator);
+    defer store.deinit();
+
+    const G = "sonny1979";
+
+    // Seed node X, resident in the (unbounded, no-adapter) bounded-node cache.
+    const x = try store.createNodeWithGraph(&[_][]const u8{"L"}, G);
+
+    // Address of X's resident value BEFORE any grow (in-map slot).
+    const before_addr = @intFromPtr(store.nodes.getPtr(x).?);
+
+    // Scan-source X: resident HIT. Pre-fix this returns the volatile in-map slot.
+    const p = store.getNodePtrForScan(x).?;
+
+    // Force the resident cache to GROW → rehash → MOVE every value slot. Inserting
+    // many new nodes outgrows every shard's initial AutoHashMap capacity, X's
+    // shard included, relocating (and freeing the old backing of) X's value.
+    var i: usize = 0;
+    while (i < 4096) : (i += 1) {
+        _ = try store.createNodeWithGraph(&[_][]const u8{"L"}, G);
+    }
+
+    // Precondition: the grow really MOVED X's resident value (else the test proves
+    // nothing) — a fresh lookup resolves to a different address.
+    const after_addr = @intFromPtr(store.nodes.getPtr(x).?);
+    try testing.expect(after_addr != before_addr);
+
+    // THE GATE: the pointer `getNodePtrForScan` handed back must still be valid and
+    // correct after the move. Pre-fix `p` == the FREED old slot (use-after-move) →
+    // clobbered/faulting read. Post-fix `p` is a detached grace-stable box,
+    // independent of the shard, so it remains correct.
+    try testing.expectEqual(x, p.id);
+    try testing.expectEqual(@as(usize, 1), p.labels.len);
+    try testing.expectEqualStrings("L", p.labels[0]);
+    try testing.expectEqualStrings(G, p.graph_name);
+}
