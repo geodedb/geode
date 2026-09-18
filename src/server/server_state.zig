@@ -265,6 +265,17 @@ pub const ServerState = struct {
     // Pointer to the shared connection state for cross-stream PULL fallback.
     // Set during stream handler init; null for standalone (non-multiplexed) usage.
     shared_conn: ?*anyopaque = null,
+    // SONNY-1835: true when this ServerState drives an ADDITIONAL (sibling) QUIC
+    // stream rather than the connection's first/handshake stream. Set at sibling
+    // handler init. Used to refuse a sibling that reaches execute with no graph
+    // binding (neither inherited from the connection HELLO nor established by its
+    // own per-stream HELLO) instead of silently querying the default graph and
+    // returning zero rows.
+    additional_stream: bool = false,
+    // SONNY-1835: set true once this stream has processed its own HELLO. A
+    // sibling that never HELLOs and never inherits a binding is refused at
+    // execute time; first/handshake streams are never gated on this.
+    own_hello_seen: bool = false,
     // Transaction session state: single active txn baseline
     in_txn: bool = false,
     txn_id: u64 = 0,

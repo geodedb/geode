@@ -367,6 +367,32 @@ pub fn getStreamAdmissionRejectionsTotal() u64 {
     return g_stream_admission_rejections.load(.monotonic);
 }
 
+/// SONNY-1835: count of sibling/additional QUIC streams refused at execute
+/// because they reached query execution with no graph binding. Exposed for
+/// runtime metrics so operators can see clients still relying on the removed
+/// cross-stream inheritance instead of per-stream HELLO.
+var g_unbound_sibling_refusals: std.atomic.Value(u64) = std.atomic.Value(u64).init(0);
+
+/// Snapshot of the cumulative unbound-sibling refusal counter.
+pub fn getUnboundSiblingRefusalsTotal() u64 {
+    return g_unbound_sibling_refusals.load(.monotonic);
+}
+
+/// SONNY-1835: a sibling (additional) QUIC stream is "unbound" when it reaches
+/// query execution with no graph binding established through EITHER inheritance
+/// from the connection HELLO OR its own per-stream HELLO. Executing such a
+/// stream silently targets the default graph and returns zero rows for data
+/// that lives in another graph. Since the Go driver now sends a per-stream
+/// HELLO (DECISION-D-16b-01), an unbound sibling is a protocol error we refuse
+/// with a typed status rather than serving misleading empty results. First /
+/// handshake streams (`additional_stream == false`) are never affected.
+fn siblingStreamUnbound(state: *const ServerState) bool {
+    return state.additional_stream and
+        !state.own_hello_seen and
+        !state.graph_bound and
+        state.current_graph == null;
+}
+
 /// Set the global mTLS provider (called from server/main.zig during startup)
 pub fn setMtlsProvider(provider: ?*mtls_provider.MtlsProvider) void {
     g_mtls_provider = provider;
@@ -2932,6 +2958,10 @@ fn handleAdditionalStream(ctx_ptr: *anyopaque) void {
     state.query_ast_cache = cs.shared_ast_cache;
     state.graph_bound = cs.graph_bound;
     state.shared_conn = cs;
+    // SONNY-1835: mark this as a sibling/additional stream so the execute path
+    // can refuse it with a typed error if it reaches query execution without a
+    // graph binding (see siblingStreamUnbound).
+    state.additional_stream = true;
 
     // Inherit authenticated identity from the connection's HELLO.
     if (cs.authenticated_user) |u| {
@@ -6695,6 +6725,10 @@ fn handleClientMessage(
     }
     switch (msg) {
         .hello => |hello_req| {
+            // SONNY-1835: record that this stream received its own HELLO, so a
+            // sibling that binds per-stream (the Go driver's current behavior,
+            // DECISION-D-16b-01) is never refused as "unbound" at execute time.
+            state.own_hello_seen = true;
             var caps = std.ArrayList([]const u8).initCapacity(gpa, 3) catch return error.OutOfMemory;
             try caps.append(gpa, try gpa.dupe(u8, "QUIC"));
             try caps.append(gpa, try gpa.dupe(u8, "TLS1.3"));
@@ -7124,6 +7158,20 @@ fn handleClientMessage(
                     try sendExecuteError(gpa, stream, "28000", "Session invalidated due to credential or role change", &.{}, &.{});
                     return;
                 },
+            }
+
+            // SONNY-1835: refuse an unbound sibling stream with a typed error
+            // instead of silently querying the default graph and returning zero
+            // rows. Only additional (sibling) streams that never inherited a
+            // binding and never sent their own HELLO are affected — first /
+            // handshake streams and per-stream-HELLO siblings pass through.
+            if (siblingStreamUnbound(state)) {
+                _ = g_unbound_sibling_refusals.fetchAdd(1, .monotonic);
+                log.warn("Refusing unbound sibling QUIC stream: no graph binding (send HELLO on this stream before executing)", &.{
+                    Attr.int("stream_id", @intCast(stream.stream_id)),
+                });
+                try sendExecuteError(gpa, stream, "08003", "unbound stream: this multiplexed QUIC stream has no graph binding; send a HELLO on this stream before executing", &.{}, &.{});
+                return;
             }
 
             // Handle ALTER USER SET PASSWORD — intercept before GQL parser since
@@ -10428,4 +10476,46 @@ test "gap0927_idle_reap_deadline_wired_to_config" {
     // The pure explicit-deadline predicate is independent of global state.
     try std.testing.expect(R.shouldReapIdleConnectionWith(100, 50));
     try std.testing.expect(!R.shouldReapIdleConnectionWith(40, 50));
+}
+
+// SONNY-1835: a sibling/additional QUIC stream that reaches execute with no
+// graph binding — neither inherited from the connection HELLO nor set by its
+// own per-stream HELLO — is refused with a typed error instead of silently
+// querying the default graph and returning zero rows. This pins the exact
+// refuse condition (`siblingStreamUnbound`).
+test "sonny1835_sibling_stream_unbound_refuse_predicate" {
+    const alloc = std.testing.allocator;
+
+    // The reported bug: a sibling opened without its own HELLO, whose
+    // inheritance from the connection HELLO did not populate a graph binding.
+    // MUST be refused (else it queries default and returns zero rows).
+    var unbound = ServerState{ .allocator = alloc };
+    unbound.additional_stream = true;
+    unbound.own_hello_seen = false;
+    unbound.graph_bound = false;
+    unbound.current_graph = null;
+    try std.testing.expect(siblingStreamUnbound(&unbound));
+
+    // A sibling that sent its OWN per-stream HELLO (the Go driver's current
+    // behavior) is bound and MUST pass through even before graph_bound is set.
+    var per_stream_hello = ServerState{ .allocator = alloc };
+    per_stream_hello.additional_stream = true;
+    per_stream_hello.own_hello_seen = true;
+    try std.testing.expect(!siblingStreamUnbound(&per_stream_hello));
+
+    // A sibling that successfully inherited the connection's graph binding
+    // (graph_bound == true) MUST pass through.
+    var inherited = ServerState{ .allocator = alloc };
+    inherited.additional_stream = true;
+    inherited.graph_bound = true;
+    try std.testing.expect(!siblingStreamUnbound(&inherited));
+
+    // The connection's FIRST/handshake stream is never gated on this, even
+    // before it binds a graph (single-graph deployments use the default).
+    var first_stream = ServerState{ .allocator = alloc };
+    first_stream.additional_stream = false;
+    first_stream.own_hello_seen = false;
+    first_stream.graph_bound = false;
+    first_stream.current_graph = null;
+    try std.testing.expect(!siblingStreamUnbound(&first_stream));
 }

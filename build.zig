@@ -10013,6 +10013,43 @@ pub fn build(b: *std.Build) void {
     const gap0927_step = b.step("test-gap0927", "Run GAP-0927/GAP-0928 connection-pool operability regressions (idle-reap wiring + pool-exhausted diagnostic)");
     gap0927_step.dependOn(&run_conn_pool_diag_tests.step);
 
+    // SONNY-1835 / SONNY-1837 / SONNY-1841: QUIC stream-semantics batch. The
+    // proof predicates are inline tests in server/quic_connection_handler.zig
+    // and server/proto_reader_registry.zig, collected via a thin src/-rooted
+    // module that copies geode_exe's fully-wired imports (same pattern as the
+    // conn-pool-diag step above).
+    const sonny_quic_stream_mod = b.createModule(.{
+        .root_source_file = b.path("src/sonny_quic_stream_test_root.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+    {
+        var it = geode_exe.root_module.import_table.iterator();
+        while (it.next()) |entry| {
+            sonny_quic_stream_mod.addImport(entry.key_ptr.*, entry.value_ptr.*);
+        }
+    }
+    sonny_quic_stream_mod.link_libc = true;
+    if (enable_openssl) {
+        sonny_quic_stream_mod.linkSystemLibrary("ssl", .{});
+        sonny_quic_stream_mod.linkSystemLibrary("crypto", .{});
+    }
+    if (target.result.os.tag == .linux and (is_native or enable_openssl)) {
+        sonny_quic_stream_mod.linkSystemLibrary("dl", .{});
+    }
+    sonny_quic_stream_mod.addOptions("openssl_config", openssl_options);
+    const sonny_quic_stream_tests = b.addTest(.{
+        .root_module = sonny_quic_stream_mod,
+        .filters = &.{
+            "sonny1835_sibling_stream_unbound_refuse_predicate",
+            "sonny1837_sibling_idle_reap_override_predicate",
+            "sonny1841_request_cancel_by_stream_id",
+        },
+    });
+    const run_sonny_quic_stream_tests = b.addRunArtifact(sonny_quic_stream_tests);
+    const sonny_quic_stream_step = b.step("test-sonny-quic-stream-semantics", "Run SONNY-1835/1837/1841 QUIC stream-semantics proof predicates (unbound-sibling refusal, sibling idle-reap override, per-stream cancel-by-id)");
+    sonny_quic_stream_step.dependOn(&run_sonny_quic_stream_tests.step);
+
     // GAP-0929: GEODE_PORT env var now sets the bind address (was inert).
     const gap0929_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_gap0929_geode_port.zig"), .target = target, .optimize = optimize });
     gap0929_test_mod.addImport("cli_args", cli_args_mod);
