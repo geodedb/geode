@@ -17,6 +17,62 @@
 
 ---
 
+## [v0.8.19] - September 18, 2026
+
+Engine metrics correctness and QUIC teardown safety, plus CI/test-suite
+hardening. Cut to unblock the sonny-upstream integration work (SONNY).
+
+### Fixed
+
+- **Cluster node health metric (SONNY-1803):** `geode.cluster.node.health`
+  was a monotonic Counter and could never represent a return to healthy. It is
+  now a Gauge (0 = unhealthy, 1 = healthy) observable in both directions.
+- **QUIC stream-teardown use-after-free read (SONNY-1794):** teardown proved
+  stream liveness by reading `tracking_index` on a wrapper that could already
+  be freed. Membership is now decided by a pointer-only scan of the tracked
+  list under `streams_mu`, so a freed wrapper is never dereferenced.
+- **Accept-reactor inbox churn (SONNY-1796):** the stream accept reactor's
+  `drainPending` discarded and reallocated the pending inbox on every
+  non-quiet pass; it now reuses the backing capacity across passes.
+- **Resident node-cache use-after-move (SONNY-1979):** `getNodePtrForScan`
+  returned a live `*Node` into a shard's `AutoHashMap` value storage; a
+  concurrent hydration insert that grew that shard rehash-moved the value,
+  dangling the pointer (CWE-362, use-after-move). Resident hits are now
+  snapshotted into a grace-lifetime detached box under the shared shard lock
+  (matching the existing scan-miss path), so the returned pointer is stable
+  across a concurrent shard grow.
+
+### Changed
+
+- **Bounded metric cardinality (SONNY-1805):** `db.namespace` on graph
+  mutation metrics no longer emits the raw, unbounded (tenant-revealing) graph
+  name; it emits a bounded id.
+- **Closed metric label sets (SONNY-1806):** the reason/strategy attributes on
+  the transport-close, query-plan, audit-drop, and CDC-drop metrics are now
+  closed enums instead of open `[]const u8` strings.
+
+### CI / Tests
+
+- **Serialized k8s test shards (SONNY-1798):** the two 8-way test-stage
+  matrices now carry a per-shard `resource_group`, capping concurrent pods.
+- **Load-independent pre-push assertions (SONNY-1799):** the startup
+  lazy-hydrate and gap0813 timing assertions no longer flake under host load;
+  the gap0813 latency budget scales under CI.
+- **Quarantined intermittent torn-read stress (SONNY-1797):**
+  `test-edge-torn-read-stress` removed from the aggregate `test` step (still
+  standalone-runnable), tracked in `docs/KNOWN_TEST_ISSUES.md`.
+- **Verified SONNY-1795:** the `close_app_error` double-latch was confirmed
+  already resolved — it is latched only in the disjoint `close()` and
+  `requestShutdown()` paths.
+- **Join spawned workers on all paths (SONNY-1982):** the lazy-hydrate
+  concurrency tests could let a spawned worker outlive its test body on an
+  error path (a `try` between spawn and join), which SIGSEGV'd under Zig's
+  `--listen` test runner in the x4-sharded pre-push. Each worker is now joined
+  on every exit path (guarded `defer`, release-then-join before captured state
+  dies), fixing a pre-existing pre-push flake.
+
+---
+
 ## [v0.8.18] - September 16, 2026
 
 CI-only re-cut of v0.8.17. No engine code changes.
