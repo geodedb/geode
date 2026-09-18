@@ -256,6 +256,31 @@ test "graph metrics register" {
     try std.testing.expect(std.mem.indexOf(u8, body, "geode_graph_edge_operation_count") != null);
 }
 
+test "graph mutation db.namespace is a bounded id, never the raw graph name" {
+    // SONNY-1805: db.namespace on node/edge mutation metrics must be a bounded
+    // id, not the raw per-tenant graph name (unbounded cardinality + pseudonym
+    // leakage). Two distinct long names must both map to bounded ns-<n> ids and
+    // neither raw name may appear anywhere in the exposition.
+    const gpa = std.testing.allocator;
+    try otel_metrics.initForTesting(gpa);
+    defer otel_metrics.shutdown();
+
+    const raw_a = "tenant-acme-corp-private-customer-graph-0001";
+    const raw_b = "tenant-globex-confidential-analytics-graph-9999";
+    otel_metrics.recordNodeMutation(.create, raw_a, .success);
+    otel_metrics.recordEdgeMutation(.create, raw_b, .success);
+
+    var prom = otel.exporters.prometheus.Prometheus.init(gpa, otel_metrics.getProvider().?);
+    const body = try prom.render();
+    defer gpa.free(body);
+
+    // The raw per-tenant graph names must never reach the label set.
+    try std.testing.expect(std.mem.indexOf(u8, body, raw_a) == null);
+    try std.testing.expect(std.mem.indexOf(u8, body, raw_b) == null);
+    // Bounded ids are emitted instead.
+    try std.testing.expect(std.mem.indexOf(u8, body, "db_namespace=\"ns-") != null);
+}
+
 test "index and vector metrics register" {
     const gpa = std.testing.allocator;
     try otel_metrics.initForTesting(gpa);

@@ -2147,24 +2147,50 @@ pub fn registerEdgeCountGauge(provider_fn: *const fn () i64) !void {
     );
 }
 
+// SONNY-1805: number of buckets a raw graph namespace can hash into. Keeps
+// `db.namespace` cardinality bounded (this many + the "default" literal).
+const graph_id_buckets: u64 = 64;
+
+/// Map a graph namespace to a bounded, stable metric-attribute id.
+///
+/// The raw graph name is a per-tenant pseudonym and an unbounded-cardinality
+/// value — it MUST NOT be emitted as a metric label (privacy + cardinality
+/// blow-up). `"default"` is preserved verbatim so this path aligns with the
+/// observable node/edge-count gauges, which emit `db.namespace = "default"`.
+/// Every other name hashes (FNV-1a 64, stable across runs) into one of
+/// `graph_id_buckets` fixed buckets rendered as `ns-<n>`. `buf` must be the
+/// caller's stack buffer (>= 24 bytes); the returned slice borrows it.
+fn boundedGraphId(namespace: []const u8, buf: []u8) []const u8 {
+    if (std.mem.eql(u8, namespace, "default")) return "default";
+    var h: u64 = 0xcbf29ce484222325;
+    for (namespace) |c| {
+        h ^= c;
+        h *%= 0x100000001b3;
+    }
+    return std.fmt.bufPrint(buf, "ns-{d}", .{h % graph_id_buckets}) catch "ns-?";
+}
+
 /// Record a node mutation (create/update/delete). `namespace` is the graph
-/// name; defaults to `"default"` when the caller does not have a name.
+/// name; it is mapped to a bounded id (see `boundedGraphId`) before emission so
+/// the raw per-tenant name never reaches the metric label.
 pub fn recordNodeMutation(op: GraphMutation, namespace: []const u8, outcome: Outcome) void {
     const g = ensureGraph() catch return;
+    var ns_buf: [24]u8 = undefined;
     g.node_op_count.add(1, &.{
         .{ .key = "geode.graph.operation", .value = .{ .string = graphMutationName(op) } },
-        .{ .key = "db.namespace", .value = .{ .string = namespace } },
+        .{ .key = "db.namespace", .value = .{ .string = boundedGraphId(namespace, &ns_buf) } },
         .{ .key = "geode.result.outcome", .value = .{ .string = outcomeName(outcome) } },
     });
 }
 
 /// Record an edge mutation (create/update/delete). Same attribute semantics as
-/// `recordNodeMutation`.
+/// `recordNodeMutation` — the raw namespace is bounded before emission.
 pub fn recordEdgeMutation(op: GraphMutation, namespace: []const u8, outcome: Outcome) void {
     const g = ensureGraph() catch return;
+    var ns_buf: [24]u8 = undefined;
     g.edge_op_count.add(1, &.{
         .{ .key = "geode.graph.operation", .value = .{ .string = graphMutationName(op) } },
-        .{ .key = "db.namespace", .value = .{ .string = namespace } },
+        .{ .key = "db.namespace", .value = .{ .string = boundedGraphId(namespace, &ns_buf) } },
         .{ .key = "geode.result.outcome", .value = .{ .string = outcomeName(outcome) } },
     });
 }
