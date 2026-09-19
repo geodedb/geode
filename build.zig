@@ -9728,6 +9728,10 @@ pub fn build(b: *std.Build) void {
     otel_prom_parity_tests.root_module.link_libc = true; // std.c.getenv in tryWireOtlpReader
     const run_otel_prom_parity_tests = b.addRunArtifact(otel_prom_parity_tests);
     shardDep(test_step, &run_otel_prom_parity_tests.step, 1, test_shard_loads, test_shard_index);
+    // SONNY-1807: dedicated step so the OTel->Prometheus naming-convention
+    // parity test (counter `_total` + unit suffixes) is runnable in isolation.
+    const otel_prom_parity_step = b.step("test-otel-prometheus-parity", "Run OTel->Prometheus naming-convention parity test");
+    otel_prom_parity_step.dependOn(&run_otel_prom_parity_tests.step);
 
     // GAP-0874: histogram sum regression — legacy registry query-latency
     // `_sum` tracks real cumulative ms, and recordAuthDuration records into

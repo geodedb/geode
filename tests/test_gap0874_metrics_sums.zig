@@ -74,8 +74,11 @@ test "GAP-0874: recordAuthDuration records duration into a real histogram" {
     const body = try otel_resp.render(gpa);
     defer gpa.free(body);
 
-    const sum = try extractMetricValue(body, "geode_security_authentication_duration_sum");
-    const count = try extractMetricValue(body, "geode_security_authentication_duration_count");
+    // SONNY-1807: the OTel->Prometheus responder now applies the base-unit
+    // suffix, so this seconds-unit histogram renders as
+    // `geode_security_authentication_duration_seconds{_sum,_count}`.
+    const sum = try extractMetricValue(body, "geode_security_authentication_duration_seconds_sum");
+    const count = try extractMetricValue(body, "geode_security_authentication_duration_seconds_count");
     try std.testing.expectApproxEqAbs(@as(f64, 0.012), sum, 0.000001);
     try std.testing.expectApproxEqAbs(@as(f64, 2.0), count, 0.0001);
 
