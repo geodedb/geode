@@ -8732,25 +8732,23 @@ pub fn build(b: *std.Build) void {
     // PHASE 4 (edge-engine-direct): focused STRESS for the borrowed-slice
     // torn-read SEGV fix (many short rounds of concurrent append + traverse).
     //
-    // SONNY-1797 QUARANTINE (2026-09-18): this stress test raises a general
-    // protection exception (UAF-class) reproduced at Geode main / v0.8.16 —
-    // a genuine borrowed-slice torn read in the graph-storage adapter hot
-    // path under concurrent batched append + traverse, root-cause deferred
-    // (tracked in docs/KNOWN_TEST_ISSUES.md and follow-up ticket SONNY-1797).
-    // Deliberately NOT wired via `shardDep(test_step, ...)` — it is no
-    // longer part of the aggregate `test` step (and therefore no longer part
-    // of the pre-push/tag-pipeline sharded run that a GPE would abort),
-    // mirroring `test-cluster-3node-subprocess`'s known-hang quarantine
-    // pattern above. The step itself is kept (test NOT deleted) and remains
-    // directly runnable via `zig build test-edge-torn-read-stress` for
-    // root-cause work. Un-quarantine by restoring the shardDep call once
-    // SONNY-1797 is fixed.
+    // SONNY-1797 (FIXED 2026-09-19): the borrowed-slice torn read is resolved on
+    // BOTH sides of the race — the appender (`appendAdjId`) publishes a
+    // grown buffer via immutable-swap + grace-list retire of the old one, and
+    // the reader (`adjItemsSnapshot`) takes a torn-free (ptr,len) snapshot with an
+    // ACQUIRE-load of len paired to the writer's release store. The test is now
+    // part of the aggregate `test` step (sharded pre-push / tag pipeline) via
+    // `shardDep`. It stays directly runnable via `zig build
+    // test-edge-torn-read-stress`. Weight 15 matches the sibling group-commit /
+    // two-phase-edge concurrency stress tests (~12 s wall). No subprocess/cluster
+    // dependency, so no CI/env self-skip is needed.
     const edge_torn_stress_mod = b.createModule(.{ .root_source_file = b.path("tests/test_edge_torn_read_stress.zig"), .target = target, .optimize = optimize });
     edge_torn_stress_mod.addImport("geode", root_mod);
     edge_torn_stress_mod.addImport("graph_storage", graph_storage_dep.module("graph_storage"));
     const edge_torn_stress_tests = b.addTest(.{ .root_module = edge_torn_stress_mod });
     const run_edge_torn_stress_tests = b.addRunArtifact(edge_torn_stress_tests);
-    const edge_torn_stress_step = b.step("test-edge-torn-read-stress", "Run Phase-4 borrowed-slice torn-read SEGV stress (concurrent append + traverse, UAF/torn-free) — QUARANTINED (SONNY-1797), not part of `test`");
+    shardDep(test_step, &run_edge_torn_stress_tests.step, 15, test_shard_loads, test_shard_index);
+    const edge_torn_stress_step = b.step("test-edge-torn-read-stress", "Run Phase-4 borrowed-slice torn-read SEGV stress (concurrent append + traverse, UAF/torn-free)");
     edge_torn_stress_step.dependOn(&run_edge_torn_stress_tests.step);
 
     // Merge-edge fast-path detection (FIX #3 routing): the from-dump edge query

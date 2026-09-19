@@ -7165,16 +7165,38 @@ pub const GraphStore = struct {
     // we `@constCast`: callers already hold the store/graph read lock that
     // serializes this against the per-graph-exclusive evict/reclaim, matching the
     // node cache's hydrate-on-miss contract.
+    // PHASE 4 (SONNY-1797): borrowed-slice-SAFE snapshot of a resident adjacency
+    // list's `items` header. A concurrent `appendAdjId` REALLOC publishes a fresh
+    // grown buffer by storing the new `.ptr` FIRST and only THEN release-storing
+    // the new `.len`. A reader that reads the two slice words in NATURAL order
+    // (`.ptr` then `.len`) can load `.ptr` BEFORE that swap and `.len` AFTER it,
+    // observing (OLD ptr, NEW len) and indexing one PAST the old buffer — a torn
+    // out-of-bounds read (the residual half of the borrowed-slice UAF). Mirror the
+    // writer's release ordering with an ACQUIRE: load `.len` FIRST, then read
+    // `.ptr`. If we observe the NEW len, the acquire pairs with the writer's
+    // release store on that same word, so we are guaranteed to also observe the
+    // NEW ptr → (new_ptr, new_len). If we observe the OLD len, `.ptr` is valid for
+    // [0..old_len) either way: the old buffer is still alive on the grace list, and
+    // the grown buffer's first old_len slots are a copy of it. No (old_ptr,
+    // new_len) tear is reachable. For the fits-in-capacity append (ptr unchanged,
+    // len release-stored after the slot write) the same acquire load guarantees a
+    // reader that sees the new len also sees the fully-written slot.
+    fn adjItemsSnapshot(list: *const std.ArrayList(u64)) []const u64 {
+        const len = @atomicLoad(usize, &list.items.len, .acquire);
+        const ptr = list.items.ptr;
+        return ptr[0..len];
+    }
+
     fn outAdjItems(self: *const GraphStore, node_id: u64) ?[]const u64 {
         const cache: *AdjCache = @constCast(&self.outgoing_edges);
         const p = (cache.getOrHydratePtr(node_id) catch return null) orelse return null;
-        return p.list.items;
+        return adjItemsSnapshot(&p.list);
     }
 
     fn inAdjItems(self: *const GraphStore, node_id: u64) ?[]const u64 {
         const cache: *AdjCache = @constCast(&self.incoming_edges);
         const p = (cache.getOrHydratePtr(node_id) catch return null) orelse return null;
-        return p.list.items;
+        return adjItemsSnapshot(&p.list);
     }
 
     pub fn getOutgoingEdgeIds(self: *const GraphStore, node_id: u64) ?[]const u64 {
@@ -7197,13 +7219,13 @@ pub const GraphStore = struct {
     pub fn getOutgoingEdgeIdsChecked(self: *const GraphStore, node_id: u64) ![]const u64 {
         const cache: *AdjCache = @constCast(&self.outgoing_edges);
         const p = (try cache.getOrHydratePtr(node_id)) orelse return &[_]u64{};
-        return p.list.items;
+        return adjItemsSnapshot(&p.list);
     }
 
     pub fn getIncomingEdgeIdsChecked(self: *const GraphStore, node_id: u64) ![]const u64 {
         const cache: *AdjCache = @constCast(&self.incoming_edges);
         const p = (try cache.getOrHydratePtr(node_id)) orelse return &[_]u64{};
-        return p.list.items;
+        return adjItemsSnapshot(&p.list);
     }
 
     pub fn getOutgoingEdges(self: *const GraphStore, allocator: std.mem.Allocator, node_id: u64) ![]Edge {
@@ -8073,17 +8095,19 @@ pub const GraphStore = struct {
             return err;
         };
 
-        // Publish the grown buffer WITHOUT exposing a torn (ptr,len) header. A
-        // concurrent SHARED reader reads `list.items` (ptr THEN len) as two
-        // words; we order the writer so no reader can observe the OLD pointer
-        // paired with the NEW length (which would read one-past the old buffer):
-        //   1) store the new PTR + capacity while len is still the OLD len. A
-        //      reader sees (new_ptr, old_len) — valid: the first old_len slots of
-        //      the grown buffer are a copy of the old list.
-        //   2) THEN release-store the new len. A reader now sees (new_ptr,
-        //      new_len) — valid. The only old-ptr combo a reader can see is
-        //      (old_ptr, old_len) (len is never raised before the ptr store), and
-        //      the old buffer is still alive on the grace list.
+        // Publish the grown buffer WITHOUT exposing a torn (ptr,len) header:
+        //   1) store the new PTR + capacity while len is still the OLD len.
+        //   2) THEN release-store the new len.
+        // This is only HALF of the ordering. A reader that read the two slice
+        // words in natural order (ptr THEN len) could still load the OLD ptr
+        // (before step 1) and the NEW len (after step 2) → (old_ptr, new_len),
+        // one-past the old buffer. The reader MUST mirror this release with an
+        // ACQUIRE that loads len FIRST, then ptr — see `adjItemsSnapshot`. With
+        // that pairing the reachable (ptr,len) combos are: (new_ptr, new_len)
+        // [reader saw the new len ⇒ acquire ⇒ sees the new ptr], (old_ptr,
+        // old_len), and (new_ptr, old_len) — all valid (the first old_len slots
+        // of the grown buffer copy the old list; the old buffer is still alive on
+        // the grace list). (old_ptr, new_len) is NOT reachable.
         // entry.graph is untouched (still owned, now paired with the grown buffer).
         const old_len = list.items.len;
         list.items.ptr = grown.items.ptr;
