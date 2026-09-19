@@ -17,6 +17,21 @@
 
 ---
 
+## [v0.8.22] - September 19, 2026
+
+Concurrency memory-safety fix in the graph-storage adjacency read path.
+
+### Fixed
+
+- **Borrowed-slice torn read on concurrent edge append (SONNY-1797):** the
+  adjacency-list accessors now take an acquire-ordered (ptr,len) snapshot that
+  pairs with the appender release publish, eliminating a torn
+  one-past-the-old-buffer out-of-bounds read (UAF-class) reachable by any
+  concurrent reader during edge append. The `test_edge_torn_read_stress`
+  regression is un-quarantined and back in the sharded `test` suite.
+
+---
+
 ## [v0.8.21] - September 19, 2026
 
 grpc-zig fixes propagated through the devnw/zig dependency diamond, plus
