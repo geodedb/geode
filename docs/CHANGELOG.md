@@ -17,6 +17,36 @@
 
 ---
 
+## [v0.8.21] - September 19, 2026
+
+grpc-zig fixes propagated through the devnw/zig dependency diamond, plus
+Prometheus exposition naming (SONNY).
+
+### Fixed
+
+- **grpc-zig RST_STREAM handled as a stream error (SONNY-1838):** re-pinned
+  onto grpc-zig v0.1.12, which handles an inbound RST_STREAM as an HTTP/2
+  §5.4.2 stream error — failing only that stream's RPC and continuing to read
+  the connection — instead of tearing the whole connection down and dropping
+  every other in-flight RPC. GOAWAY and real connection loss still tear down.
+- **grpc-zig FIPS dependency resolvable (SONNY-1852):** grpc-zig v0.1.12 pins
+  `.fips` to the published git dependency (the spine's v0.1.1 content hash)
+  rather than a machine-local `.path`, so `-Dfips=true` and the FIPS CI job
+  resolve.
+- **Prometheus naming conventions on /metrics (SONNY-1807):** the OTel →
+  Prometheus responder now applies Prometheus/OpenMetrics naming — `_total`
+  for monotonic counters and base-unit suffixes (`_seconds`, `_bytes`) — so
+  scrapers and dashboards work without manual renaming.
+
+### Changed
+
+- **Dependency diamond re-pinned onto grpc-zig v0.1.12:** the `zig-tool
+  sync-diamond` cascade re-released the ~18 intermediate devnw/zig libraries
+  (otel v0.1.24, quic v0.1.44, geode-client-zig v0.3.12, graph-storage v0.4.6,
+  …) so a single grpc-zig version converges across the dependency tree.
+
+---
+
 ## [v0.8.20] - September 18, 2026
 
 QUIC stream semantics: sibling-stream binding, idle-stream reclamation, and
