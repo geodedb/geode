@@ -84,10 +84,12 @@ test "phone number detection" {
     try testing.expect(filters.isPhone("123-456-7890"));
     try testing.expect(filters.isPhone("(123) 456-7890"));
     try testing.expect(filters.isPhone("+1 123 456 7890"));
-    // SONNY-2394: audit v0.1.19 accepts only ' ', '-', '(', ')', '+' as phone
-    // separators, so a dotted number is not classified as a phone (see the
-    // SONNY-2394 report: upstream PII-detection gap, not a geode regression).
-    try testing.expect(!filters.isPhone("123.456.7890.1234"));
+    // Dotted numbers are phones (PII) since audit v0.1.20 (SONNY-2394).
+    try testing.expect(filters.isPhone("123.456.7890.1234")); // Extension
+    try testing.expect(filters.isPhone("555.123.4567"));
+    try testing.expect(filters.isPhone("+1.555.123.4567"));
+    // ...but an IPv4-shaped value is not.
+    try testing.expect(!filters.isPhone("192.168.100.200"));
 
     // Invalid phone numbers
     try testing.expect(!filters.isPhone("123456789")); // Too short
