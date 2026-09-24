@@ -101,7 +101,9 @@ test "TestCANARY_REQ_GQL_022_RedoOptimizationDeltaSmoke" {
 
 test "BenchmarkCANARY_REQ_GQL_022_RedoOptimizationDeltaVarianceEnvelope" {
     var arr: [2048]u64 = undefined;
-    for (arr, 0..) |_, i| arr[i] = (@as(u64, i) * 6364136223846793005) + 1;
+    // Wrapping LCG-style fill (SONNY-2394: the plain `*`/`+` overflowed u64
+    // and panicked in Debug before a single sample was taken).
+    for (arr, 0..) |_, i| arr[i] = (@as(u64, i) *% 6364136223846793005) +% 1;
     const iterations: usize = 64;
     var base_samples: [iterations]u64 = undefined;
     var opt_samples: [iterations]u64 = undefined;
