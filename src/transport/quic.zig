@@ -429,6 +429,54 @@ pub fn shouldWarnSlowPoll(cycle_ns: u64, threshold_ns: u64, last_warn_ns: u64, n
     return (now_ns -% last_warn_ns) >= min_interval_ns;
 }
 
+/// SONNY-2394 (review): whether a listener whose certificate is missing may
+/// self-sign one into `cert_path` (see `QuicTransport.listen`). 4272d00d made
+/// auto-generation work at all, which also let a PRODUCTION listener with no
+/// certificate quietly self-sign and start, where it used to refuse.
+pub const CertAutoGenerate = enum {
+    /// Self-sign only in dev posture -- a Debug build with GEODE_ENV not
+    /// "production" -- or when the operator opts in with
+    /// `cert_autogen_opt_in_env`. Production posture (release build OR
+    /// GEODE_ENV=production, the GAP-0850 / SEC-CLI-01 posture rule) refuses
+    /// to start. The default.
+    dev_only,
+    /// Never self-sign: a missing certificate always refuses to start.
+    never,
+    /// Always self-sign a missing certificate (explicit per-listener opt-in).
+    always,
+};
+
+/// Operator opt-in that lets a production-posture listener self-sign a missing
+/// certificate. Exported so the refusal message and the tests name the exact
+/// same variable.
+pub const cert_autogen_opt_in_env = "GEODE_TLS_AUTOGENERATE_CERT";
+
+/// Pure policy: posture and opt-in are PARAMETERS (not read from the process)
+/// so every combination is unit-testable from a Debug build. `listen` supplies
+/// the live values.
+pub fn certAutoGenerationAllowed(policy: CertAutoGenerate, is_release: bool, env_production: bool, opt_in: bool) bool {
+    return switch (policy) {
+        .never => false,
+        .always => true,
+        .dev_only => opt_in or !(is_release or env_production),
+    };
+}
+
+fn envValue(name: [*:0]const u8) ?[]const u8 {
+    return if (std.c.getenv(name)) |p| std.mem.span(p) else null;
+}
+
+fn envTruthy(name: [*:0]const u8) bool {
+    const v = envValue(name) orelse return false;
+    return std.mem.eql(u8, v, "1") or std.ascii.eqlIgnoreCase(v, "true") or
+        std.ascii.eqlIgnoreCase(v, "yes") or std.ascii.eqlIgnoreCase(v, "on");
+}
+
+fn envIsProduction() bool {
+    const v = envValue("GEODE_ENV") orelse return false;
+    return std.ascii.eqlIgnoreCase(v, "production");
+}
+
 /// SONNY-2394 (review): an Io that can spawn a child without touching
 /// process-wide signal dispositions. `Threaded.init` installs SIGIO/SIGPIPE
 /// handlers and restores the saved ones on deinit, so a transient instance
@@ -549,6 +597,9 @@ pub const QuicTransport = struct {
         /// When true, connections without a valid client certificate will be rejected.
         /// CANARY: REQ=REQ-AUTH-MTLS-QUIC-002; FEATURE="mTLS over QUIC"; ASPECT=Config; STATUS=TESTED; TEST=geodetestlab-cli/specs/authn_mtls_rejection_matrix.yml; OWNER=transport; UPDATED=2026-06-11
         require_client_cert: bool = false,
+        /// SONNY-2394: may `listen` self-sign a missing certificate? The
+        /// default refuses in production posture (see `CertAutoGenerate`).
+        cert_auto_generate: CertAutoGenerate = .dev_only,
     };
 
     pub fn init(allocator: std.mem.Allocator, config: Config) !QuicTransport {
@@ -723,6 +774,22 @@ pub const QuicTransport = struct {
         // absence. See
         // docs/bugs/2026-06-04-cluster-cert-provided-cert-discarded-containerized.md.
         if (!certPathReadable(self.config.cert_path)) {
+            // SONNY-2394 (review): fail closed in production posture unless
+            // self-signing was explicitly enabled (CertAutoGenerate).
+            if (!certAutoGenerationAllowed(
+                self.config.cert_auto_generate,
+                builtin.mode != .Debug,
+                envIsProduction(),
+                envTruthy(cert_autogen_opt_in_env),
+            )) {
+                tlog.err("TLS certificate missing; self-signing is disabled in production posture", &.{
+                    Attr.string("cert_path", self.config.cert_path),
+                    Attr.string("key_path", self.config.key_path),
+                });
+                std.debug.print("SECURITY: Refusing to start without TLS: {s} is missing and self-signing is disabled in production posture (release build or GEODE_ENV=production). Provide a certificate, or set " ++ cert_autogen_opt_in_env ++ "=1 to allow a self-signed one:\n", .{self.config.cert_path});
+                std.debug.print("  openssl req -x509 -newkey ec -pkeyopt ec_paramgen_curve:prime256v1 -nodes -keyout {s} -out {s} -days 365\n", .{ self.config.key_path, self.config.cert_path });
+                return QuicError.CertificateError;
+            }
             // Cert genuinely absent → try to generate self-signed certificates.
             if (self.generateSelfSignedCert()) {
                 tlog.info("auto-generated self-signed TLS certificate", &.{

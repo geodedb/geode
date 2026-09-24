@@ -17,6 +17,20 @@
 
 ---
 
+## [v0.8.23] - Unreleased
+
+### Security
+
+- **QUIC listener certificate auto-generation fails closed in production
+  (SONNY-2394):** a listener whose certificate is missing self-signs one only
+  in dev posture (Debug build, `GEODE_ENV` not `production`) or when explicitly
+  enabled (`GEODE_TLS_AUTOGENERATE_CERT=1`, or the per-listener
+  `cert_auto_generate = .always` transport config). In production posture
+  (release build or `GEODE_ENV=production`) a missing certificate refuses to
+  start, as it did before auto-generation was repaired.
+
+---
+
 ## [v0.8.22] - September 19, 2026
 
 Concurrency memory-safety fix in the graph-storage adjacency read path.

@@ -728,7 +728,9 @@ pub fn build(b: *std.Build) void {
 
     // QUIC Transport Module - Uses external QUIC library (Phase 2 migration complete)
     // The external quic library provides the same API as the vendored version
-    const transport_quic_mod = b.createModule(.{ .root_source_file = b.path("src/transport/quic.zig"), .target = target, .optimize = optimize });
+    // link_libc: listen() reads GEODE_ENV / GEODE_TLS_AUTOGENERATE_CERT via
+    // libc getenv (SONNY-2394 certificate auto-generation posture).
+    const transport_quic_mod = b.createModule(.{ .root_source_file = b.path("src/transport/quic.zig"), .target = target, .optimize = optimize, .link_libc = true });
     transport_quic_mod.addImport("vendor_quic", quic_ext_mod); // External library replaces vendored QUIC
     transport_quic_mod.addImport("logging", logging_mod);
     transport_quic_mod.addImport("dns", dns_mod);
@@ -11167,4 +11169,28 @@ pub fn build(b: *std.Build) void {
     shardDep(test_step, &run_sonny2394_kms_deadline_tests.step, 1, test_shard_loads, test_shard_index);
     const sonny2394_kms_deadline_step = b.step("test-sonny2394-kms-client-deadline", "Run SONNY-2394 regression (remote-KMS client waits on a wall-clock deadline, fails fast on a closed connection; server ignores re-announced streams)");
     sonny2394_kms_deadline_step.dependOn(&run_sonny2394_kms_deadline_tests.step);
+
+    // SONNY-2394 (review): a QUIC listener with no certificate self-signs one
+    // only in dev posture or when explicitly enabled; production posture
+    // (release build or GEODE_ENV=production) refuses to start. The same
+    // binary runs in three environments so both postures and the opt-in are
+    // exercised end to end.
+    const cert_posture_tests = b.addTest(.{ .root_module = b.createModule(.{ .root_source_file = b.path("tests/test_sonny2394_cert_autogen_posture.zig"), .target = target, .optimize = optimize }) });
+    cert_posture_tests.root_module.addImport("transport/quic", transport_quic_mod);
+    cert_posture_tests.root_module.addImport("vendor_quic", quic_ext_mod);
+    cert_posture_tests.root_module.link_libc = true;
+    const cert_posture_step = b.step("test-sonny2394-cert-autogen-posture", "Run SONNY-2394 regression (listener certificate auto-generation fails closed in production posture; dev posture and explicit opt-in still self-sign)");
+    const run_cert_posture_prod = b.addRunArtifact(cert_posture_tests);
+    run_cert_posture_prod.setEnvironmentVariable("GEODE_ENV", "production");
+    run_cert_posture_prod.removeEnvironmentVariable("GEODE_TLS_AUTOGENERATE_CERT");
+    const run_cert_posture_optin = b.addRunArtifact(cert_posture_tests);
+    run_cert_posture_optin.setEnvironmentVariable("GEODE_ENV", "production");
+    run_cert_posture_optin.setEnvironmentVariable("GEODE_TLS_AUTOGENERATE_CERT", "1");
+    const run_cert_posture_dev = b.addRunArtifact(cert_posture_tests);
+    run_cert_posture_dev.removeEnvironmentVariable("GEODE_ENV");
+    run_cert_posture_dev.removeEnvironmentVariable("GEODE_TLS_AUTOGENERATE_CERT");
+    for ([_]*std.Build.Step.Run{ run_cert_posture_prod, run_cert_posture_optin, run_cert_posture_dev }) |run_cert_posture| {
+        shardDep(test_step, &run_cert_posture.step, 1, test_shard_loads, test_shard_index);
+        cert_posture_step.dependOn(&run_cert_posture.step);
+    }
 }
