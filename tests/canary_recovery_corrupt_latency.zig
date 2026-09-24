@@ -13,10 +13,10 @@
 //   * flipped body bytes -> the pager's CRC32C check (error.ChecksumMismatch);
 //   * a fully zeroed page (torn write / zeroed sectors) -> the pager treats an
 //     all-zero page as FRESH, so its node records read as empty. The label scan
-//     used to skip them silently (169 of 300 rows, status OK, while count()
-//     still said 300); it now fails with error.DataCorruption -- but only
-//     because the label index here is loaded from its (clean) snapshot and
-//     still lists the lost ids.
+//     used to skip them silently (169 of 300 rows (before page 0 was damaged),
+//     status OK, while count() still said 300); it now fails with
+//     error.DataCorruption -- but only because the label index here is loaded
+//     from its (clean) snapshot and still lists the lost ids.
 // NOT guaranteed (engine-level gaps, root fix tracked as SONNY-2409: the pager
 // must not treat a zeroed page below the written high-water mark as fresh):
 //   * zeroed pages read by an UNLABELED scan, or by a label scan after the
