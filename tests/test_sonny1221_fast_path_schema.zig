@@ -37,18 +37,24 @@
 
 const std = @import("std");
 const testing = std.testing;
-const geode = @import("geode");
 const schema = @import("schema");
 const protobuf = @import("protobuf");
-const logging = @import("logging");
+const geode = @import("geode");
 const grpc = @import("grpc_impl").impl;
 const util = @import("proto_test_util.zig");
+const harness = @import("node_scan_stream_harness.zig");
 
-const execution = geode.execution;
-const graph_store = geode.graph_store;
-const node_scan_stream = geode.node_scan_stream;
-const proto_util = geode.proto_util;
 const user_mgmt = geode.user_management;
+const Harness = harness.Harness;
+const silenceEngineLogs = harness.silenceEngineLogs;
+const tmpDirRealpathAlloc = harness.tmpDirRealpathAlloc;
+const many = harness.many;
+const many_query = harness.many_query;
+const seedMany = harness.seedMany;
+const openStream = harness.openStream;
+const drainColumn0 = harness.drainColumn0;
+const freeStrings = harness.freeStrings;
+const expectDistinct = harness.expectDistinct;
 
 const seed_queries = [_][]const u8{
     "CREATE (:L {s: 'a', i: 1})",
@@ -70,22 +76,6 @@ const cases = [_]Case{
     .{ .query = "MATCH (n:L) RETURN n.s, n.missing", .types = &.{ "STRING", "NULL" } },
 };
 
-/// Pin the engine logger to `.fatal`: the in-process handlers log every request
-/// at info, which the build runner would echo back as piped stderr.
-fn silenceEngineLogs() void {
-    logging.init(.{ .level = .fatal });
-    logging.setLevel(.fatal);
-}
-
-fn tmpDirRealpathAlloc(allocator: std.mem.Allocator, tmp_sub_path: []const u8) ![]u8 {
-    var cwd_buf: [std.fs.max_path_bytes]u8 = undefined;
-    const rc = std.os.linux.getcwd(&cwd_buf, cwd_buf.len);
-    const cwd_len = if (@as(isize, @bitCast(rc)) < 0) return error.GetCwdFailed else rc;
-    var actual_len = cwd_len;
-    while (actual_len > 0 and cwd_buf[actual_len - 1] == 0) : (actual_len -= 1) {}
-    return std.fmt.allocPrint(allocator, "{s}/.zig-cache/tmp/{s}", .{ cwd_buf[0..actual_len], tmp_sub_path });
-}
-
 fn expectTypes(expected: []const []const u8, actual: []const []const u8) !void {
     if (expected.len != actual.len) {
         std.debug.print("column count: expected {d}, found {d}\n", .{ expected.len, actual.len });
@@ -98,76 +88,6 @@ fn expectTypes(expected: []const []const u8, actual: []const []const u8) !void {
         }
     }
 }
-
-/// In-process PERSISTED deployment (`--data-dir`): the storage adapter exists,
-/// so the engine-direct fast path is live (SONNY-1218 declines without it).
-const Harness = struct {
-    allocator: std.mem.Allocator,
-    tmp: std.testing.TmpDir,
-    data_dir: []u8,
-    arena: std.heap.ArenaAllocator,
-    ctx: execution.ExecutionContext,
-
-    fn init(allocator: std.mem.Allocator) !Harness {
-        execution.cleanupCatalogInstance();
-        graph_store.deinitGlobalStore();
-        graph_store.setDataDirOverride(allocator, null);
-
-        var tmp = std.testing.tmpDir(.{});
-        errdefer tmp.cleanup();
-        const data_dir = try tmpDirRealpathAlloc(allocator, &tmp.sub_path);
-        errdefer allocator.free(data_dir);
-
-        graph_store.setDataDirOverride(allocator, data_dir);
-        _ = graph_store.getGlobalStore(allocator);
-        // Fail loud rather than prove nothing: without the adapter every read
-        // below would be the executor's.
-        if (graph_store.getGlobalAdapter() == null) return error.ExpectedPersistedAdapter;
-
-        const catalog = try execution.ensureCatalogInstance(allocator);
-        return .{
-            .allocator = allocator,
-            .tmp = tmp,
-            .data_dir = data_dir,
-            .arena = std.heap.ArenaAllocator.init(allocator),
-            .ctx = execution.ExecutionContext{ .catalog = catalog },
-        };
-    }
-
-    fn deinit(self: *Harness) void {
-        self.arena.deinit();
-        execution.cleanupCatalogInstance();
-        graph_store.deinitGlobalStore();
-        graph_store.setDataDirOverride(self.allocator, null);
-        self.allocator.free(self.data_dir);
-        self.tmp.cleanup();
-    }
-
-    fn run(self: *Harness, query: []const u8) !execution.ExecutionResult {
-        const aa = self.arena.allocator();
-        var parsed = try geode.parseGql(query, aa);
-        defer parsed.deinit();
-        return execution.executeStatementWithContext(aa, parsed.program.statements[0], self.ctx);
-    }
-
-    fn seed(self: *Harness) !void {
-        for (seed_queries) |q| {
-            var r = try self.run(q);
-            r.deinit(self.arena.allocator());
-        }
-    }
-
-    /// The executor path's schema types for `query` (arena-owned).
-    fn executorTypes(self: *Harness, query: []const u8) ![]const []const u8 {
-        const aa = self.arena.allocator();
-        var result = try self.run(query);
-        defer result.deinit(aa);
-        const def = try proto_util.buildSchemaDefinition(aa, &result);
-        const types = try aa.alloc([]const u8, def.columns.items.len);
-        for (def.columns.items, 0..) |col, i| types[i] = col.type;
-        return types;
-    }
-};
 
 fn encodeProto(allocator: std.mem.Allocator, msg: anytype) ![]u8 {
     var aw: std.Io.Writer.Allocating = try .initCapacity(allocator, 256);
@@ -193,7 +113,7 @@ test "SONNY-1221: gRPC fast-path schema frame reports the executor's column type
     silenceEngineLogs();
     var h = try Harness.init(testing.allocator);
     defer h.deinit();
-    try h.seed();
+    try h.seed(&seed_queries);
 
     // An unauthenticated session: auth off, no global RLS filter engine in
     // process, so the `.rows` arm takes the node-scan fast path.
@@ -343,74 +263,10 @@ test "SONNY-1221: QUIC fast-path schema frame reports the executor's column type
 // The stream: rows prefetched for the schema frame are served exactly once.
 // ---------------------------------------------------------------------------
 
-/// More rows than one type sample (10), spread over several small pages.
-const many: usize = 25;
-const many_query = "MATCH (n:M) RETURN n.s, n.i";
-
-fn seedMany(h: *Harness) !void {
-    const aa = h.arena.allocator();
-    for (0..many) |i| {
-        var r = try h.run(try std.fmt.allocPrint(aa, "CREATE (:M {{s: 's{d:0>2}', i: {d}}})", .{ i, i }));
-        r.deinit(aa);
-    }
-}
-
-fn parseQuery(arena: *std.heap.ArenaAllocator, src: []const u8) !*const geode.gql.ast.Query {
-    var lx = geode.gql.lexer.Lexer{ .src = src };
-    var p = geode.gql.parser.Parser{ .lx = &lx, .arena = arena, .cur = lx.next() };
-    const program = try p.parseProgram();
-    return &program.statements[0].Query;
-}
-
-/// A fast-path stream for `src`. `query_arena` must outlive it: the stream
-/// borrows column names from the parsed query.
-fn openStream(
-    h: *Harness,
-    allocator: std.mem.Allocator,
-    query_arena: *std.heap.ArenaAllocator,
-    src: []const u8,
-) !node_scan_stream.NodeScanStream {
-    const q = try parseQuery(query_arena, src);
-    return (try node_scan_stream.prepare(allocator, q, h.ctx, &.{}, &.{}, &.{})) orelse error.FastPathDeclined;
-}
-
 fn schemaTypes(arena: std.mem.Allocator, def: schema.SchemaDefinition) ![]const []const u8 {
     const types = try arena.alloc([]const u8, def.columns.items.len);
     for (def.columns.items, 0..) |col, i| types[i] = col.type;
     return types;
-}
-
-/// Page `stream` to its end with `page_size` and return column 0 (`n.s`) in
-/// serve order, owned by `allocator`. Every page but the last must be full.
-fn drainColumn0(stream: *node_scan_stream.NodeScanStream, allocator: std.mem.Allocator, page_size: usize) ![][]const u8 {
-    var out = std.ArrayList([]const u8).empty;
-    errdefer {
-        for (out.items) |s| allocator.free(s);
-        out.deinit(allocator);
-    }
-    const full = if (page_size == 0) node_scan_stream.default_page_rows else page_size;
-    var pages: usize = 0;
-    while (true) : (pages += 1) {
-        if (pages > many + 1) return error.NeverFinal;
-        var page = try stream.buildNextPage(allocator, page_size);
-        defer page.result.deinit(allocator);
-        if (!page.final) try testing.expectEqual(full, page.result.rows.len);
-        for (page.result.rows) |row| try out.append(allocator, try allocator.dupe(u8, row[0].Str));
-        if (page.final) break;
-    }
-    try testing.expect(!stream.hasRemaining());
-    return out.toOwnedSlice(allocator);
-}
-
-fn freeStrings(allocator: std.mem.Allocator, items: [][]const u8) void {
-    for (items) |s| allocator.free(s);
-    allocator.free(items);
-}
-
-fn expectDistinct(items: []const []const u8) !void {
-    for (items, 0..) |s, i| {
-        for (items[i + 1 ..]) |t| try testing.expect(!std.mem.eql(u8, s, t));
-    }
 }
 
 test "SONNY-1221: rows prefetched for the schema frame are served once, in order, at any page size" {
