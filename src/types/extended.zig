@@ -125,11 +125,17 @@ pub fn decimalToString(dec: Decimal, allocator: std.mem.Allocator) ![]u8 {
         digits[dlen] = rev[@intCast(i)];
         dlen += 1;
     }
-    const int_len = if (dec.scale > 0 and dlen > dec.scale) dlen - dec.scale else if (dec.scale > 0) 0 else dlen;
-    const frac_len = if (dec.scale > 0) @min(@as(usize, dec.scale), dlen) else 0;
-    var needed: usize = int_len + frac_len;
+    // SONNY-2394: the fraction is always exactly `scale` digits. When the
+    // coefficient has fewer digits than the scale (e.g. coeff=1, scale=2 for
+    // 0.01) the missing leading fractional zeros must be emitted -- the old
+    // code emitted only the available digits, so 0.01 rendered as "0.1" (a
+    // 10x value change) and -0.01 as "-0.1".
+    const scale: usize = dec.scale;
+    const int_len = if (dlen > scale) dlen - scale else 0;
+    const frac_len = scale;
+    const frac_digits = @min(scale, dlen); // taken from the coefficient; the rest are leading zeros
+    var needed: usize = (if (int_len == 0) 1 else int_len) + frac_len;
     if (frac_len > 0) needed += 1; // dot
-    if (int_len == 0 and frac_len > 0) needed += 1; // leading 0
     if (negative) needed += 1;
     var out = try allocator.alloc(u8, needed);
     var o: usize = 0;
@@ -137,11 +143,11 @@ pub fn decimalToString(dec: Decimal, allocator: std.mem.Allocator) ![]u8 {
         out[o] = '-';
         o += 1;
     }
-    if (int_len == 0 and frac_len > 0) {
+    // integer part ("0" when every coefficient digit is fractional)
+    if (int_len == 0) {
         out[o] = '0';
         o += 1;
     }
-    // integer part
     var k: usize = 0;
     while (k < int_len) : (k += 1) {
         out[o] = digits[k];
@@ -150,12 +156,18 @@ pub fn decimalToString(dec: Decimal, allocator: std.mem.Allocator) ![]u8 {
     if (frac_len > 0) {
         out[o] = '.';
         o += 1;
-        var fstart = dlen - frac_len;
+        var z: usize = frac_digits;
+        while (z < frac_len) : (z += 1) {
+            out[o] = '0';
+            o += 1;
+        }
+        var fstart = dlen - frac_digits;
         while (fstart < dlen) : (fstart += 1) {
             out[o] = digits[fstart];
             o += 1;
         }
     }
+    std.debug.assert(o == needed);
     return out;
 }
 
