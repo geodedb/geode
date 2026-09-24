@@ -4365,6 +4365,10 @@ pub fn build(b: *std.Build) void {
         transport_fuzz_step.dependOn(&run_transport_perf_fuzz.step);
     }
 
+    // SONNY-2394: shared gate for perf / variance claims in unit tests --
+    // enforced only when CI is unset (repo convention; see tests/perf_gate.zig).
+    const perf_gate_mod = b.createModule(.{ .root_source_file = b.path("tests/perf_gate.zig"), .target = target, .optimize = optimize, .link_libc = true });
+
     // Attach physiological redo canary tests after test_step defined
     const redo_canary_test = b.addTest(.{ .root_module = b.createModule(.{ .root_source_file = b.path("tests/canary_physiological_redo.zig"), .target = target, .optimize = optimize }) });
     // Provide tde_hierarchy for encryption import (even if disabled)
@@ -4372,6 +4376,7 @@ pub fn build(b: *std.Build) void {
     tde_hierarchy_mod_tests.addImport("crypto_backend", crypto_backend_mod);
     redo_canary_test.root_module.addImport("tde_hierarchy", tde_hierarchy_mod_tests);
     redo_canary_test.root_module.addImport("geode", root_mod);
+    redo_canary_test.root_module.addImport("perf_gate", perf_gate_mod);
     const run_redo_canary_test = b.addRunArtifact(redo_canary_test);
     shardDep(test_step, &run_redo_canary_test.step, 1, test_shard_loads, test_shard_index);
     const redo_canary_test_step = b.step("test-canary-physiological-redo", "Run GraphStore snapshot load correctness + variance CANARY tests (REQ-GQL-022)");
@@ -4423,10 +4428,13 @@ pub fn build(b: *std.Build) void {
     txn_mod_for_phantom_range_tests.addImport("otel_metrics", otel_metrics_mod_for_txn_tests);
     const phantom_range_tests = b.addTest(.{ .root_module = b.createModule(.{ .root_source_file = b.path("tests/canary_txn_phantom_range.zig"), .target = target, .optimize = optimize }) });
     phantom_range_tests.root_module.addImport("txn", txn_mod_for_phantom_range_tests);
+    phantom_range_tests.root_module.addImport("perf_gate", perf_gate_mod);
     const planner_enumerator_mod = b.createModule(.{ .root_source_file = b.path("src/planner/enumerator.zig"), .target = target, .optimize = optimize });
     const planner_enumerator_tests = b.addTest(.{ .root_module = b.createModule(.{ .root_source_file = b.path("tests/canary_planner_enumerator.zig"), .target = target, .optimize = optimize }) });
     planner_enumerator_tests.root_module.addImport("planner_enumerator", planner_enumerator_mod);
+    planner_enumerator_tests.root_module.addImport("perf_gate", perf_gate_mod);
     const path_varlen_predicate_tests = b.addTest(.{ .root_module = b.createModule(.{ .root_source_file = b.path("tests/canary_path_varlen_predicate.zig"), .target = target, .optimize = optimize }) });
+    path_varlen_predicate_tests.root_module.addImport("perf_gate", perf_gate_mod);
     const txn_manager_mod_for_write_skew = b.createModule(.{ .root_source_file = b.path("src/transactions/manager.zig"), .target = target, .optimize = optimize });
     txn_manager_mod_for_write_skew.addImport("mvcc_adv", mvcc_adv_mod_for_tests);
     txn_manager_mod_for_write_skew.addImport("range_tracker", range_tracker_mod_for_tests);
@@ -4434,19 +4442,25 @@ pub fn build(b: *std.Build) void {
     txn_manager_mod_for_write_skew.addImport("otel_metrics", otel_metrics_mod_for_txn_tests);
     const write_skew_tests = b.addTest(.{ .root_module = b.createModule(.{ .root_source_file = b.path("tests/canary_txn_write_skew.zig"), .target = target, .optimize = optimize }) });
     write_skew_tests.root_module.addImport("txn", txn_manager_mod_for_write_skew);
+    write_skew_tests.root_module.addImport("perf_gate", perf_gate_mod);
     const redo_delta_tests = b.addTest(.{ .root_module = b.createModule(.{ .root_source_file = b.path("tests/canary_storage_redo_delta.zig"), .target = target, .optimize = optimize }) });
+    redo_delta_tests.root_module.addImport("perf_gate", perf_gate_mod);
     const recovery_corrupt_latency_tests = b.addTest(.{ .root_module = b.createModule(.{ .root_source_file = b.path("tests/canary_recovery_corrupt_latency.zig"), .target = target, .optimize = optimize }) });
     recovery_corrupt_latency_tests.root_module.addImport("geode", root_mod);
     const planner_plan_selection_tests = b.addTest(.{ .root_module = b.createModule(.{ .root_source_file = b.path("tests/canary_planner_plan_selection.zig"), .target = target, .optimize = optimize }) });
     planner_plan_selection_tests.root_module.addImport("planner_enumerator", planner_enumerator_mod);
+    planner_plan_selection_tests.root_module.addImport("perf_gate", perf_gate_mod);
     // Planner enumeration pruning tests
     const planner_prune_tests = b.addTest(.{ .root_module = b.createModule(.{ .root_source_file = b.path("tests/canary_planner_prune.zig"), .target = target, .optimize = optimize }) });
     planner_prune_tests.root_module.addImport("planner_enumerator", planner_enumerator_mod);
+    planner_prune_tests.root_module.addImport("perf_gate", perf_gate_mod);
     const planner_pipeline_selection_tests = b.addTest(.{ .root_module = b.createModule(.{ .root_source_file = b.path("tests/canary_planner_pipeline_selection.zig"), .target = target, .optimize = optimize }) });
     // Import shared geode root for planner + pipeline access
     planner_pipeline_selection_tests.root_module.addImport("geode", root_mod);
     planner_pipeline_selection_tests.root_module.addImport("planner_enumerator", planner_enumerator_mod);
+    planner_pipeline_selection_tests.root_module.addImport("perf_gate", perf_gate_mod);
     phantom_tests.root_module.addImport("txn", txn_mod_for_phantom_tests);
+    phantom_tests.root_module.addImport("perf_gate", perf_gate_mod);
     const run_phantom_tests = b.addRunArtifact(phantom_tests);
     shardDep(test_step, &run_phantom_tests.step, 1, test_shard_loads, test_shard_index);
     const phantom_tests_step = b.step("test-canary-txn-phantom-anomaly", "Run MVCC phantom (predicate range) detection CANARY tests (REQ-GQL-023)");
@@ -6041,6 +6055,7 @@ pub fn build(b: *std.Build) void {
     });
     json_opt_test_mod.addImport("json_opt", json_opt_fixed_mod_for_test);
     json_opt_test_mod.addImport("json", json_mod);
+    json_opt_test_mod.addImport("perf_gate", perf_gate_mod);
     const json_opt_tests = b.addTest(.{ .root_module = json_opt_test_mod });
     const run_json_opt_tests = b.addRunArtifact(json_opt_tests);
     shardDep(test_step, &run_json_opt_tests.step, 1, test_shard_loads, test_shard_index);
@@ -11091,4 +11106,12 @@ pub fn build(b: *std.Build) void {
     shardDep(test_step, &run_sonny2394_varlen_tests.step, 1, test_shard_loads, test_shard_index);
     const sonny2394_varlen_step = b.step("test-sonny2394-varlen-rel-list", "Run SONNY-2394 regression (variable-length MATCH frees accepted rows' rel-var list/path arrays unless the row projects them)");
     sonny2394_varlen_step.dependOn(&run_sonny2394_varlen_tests.step);
+
+    // SONNY-2394: self-tests of the shared perf-claim gate (enforced with CI
+    // unset, reported-only under CI, selftest violation hook).
+    const perf_gate_tests = b.addTest(.{ .root_module = perf_gate_mod });
+    const run_perf_gate_tests = b.addRunArtifact(perf_gate_tests);
+    shardDep(test_step, &run_perf_gate_tests.step, 1, test_shard_loads, test_shard_index);
+    const perf_gate_step = b.step("test-perf-gate", "Run the shared perf-claim gate self-tests (SONNY-2394: perf claims enforced only when CI is unset)");
+    perf_gate_step.dependOn(&run_perf_gate_tests.step);
 }

@@ -1,4 +1,5 @@
 const std = @import("std");
+const perf_gate = @import("perf_gate");
 
 // Zig 0.16 compat: std.time.Timer removed; use clock_gettime.
 // Cross-platform: Linux uses vDSO-accelerated std.os.linux.*; macOS/BSD
@@ -220,8 +221,11 @@ test "JSON processing performance benchmark" {
     std.debug.print("  Serialize time: {d}ns\n", .{results.serialize_ns});
 
     // Performance expectations (should be significantly better than baseline 630μs)
-    try testing.expect(results.parse_ns < 100_000); // Less than 100μs
-    try testing.expect(results.serialize_ns < 150_000); // Less than 150μs
+    // Perf claims go through the shared gate (SONNY-2394): enforced only when
+    // `CI` is unset -- repo convention, see tests/perf_gate.zig. Correctness
+    // assertions in this file are not gated.
+    try perf_gate.check("JSON parse < 100us", results.parse_ns < 100_000, "parse_ns={d}", .{results.parse_ns});
+    try perf_gate.check("JSON serialize < 150us", results.serialize_ns < 150_000, "serialize_ns={d}", .{results.serialize_ns});
 }
 
 test "Large result set streaming performance" {
@@ -274,7 +278,8 @@ test "Large result set streaming performance" {
     try testing.expectEqual(@as(i64, 999), large_array.items[999].object.get("id").?.integer);
 
     // Should be much faster than 5.37ms file I/O baseline
-    try testing.expect(elapsed < 5_000_000); // Less than 5ms
+    // (perf claim: shared gate, SONNY-2394 -- see tests/perf_gate.zig)
+    try perf_gate.check("large result streaming < 5ms", elapsed < 5_000_000, "elapsed_ns={d}", .{elapsed});
 }
 
 test "Memory usage optimization validation" {
@@ -366,5 +371,6 @@ test "CANARY: REQ=REQ-PERF-JSON-001" {
     try testing.expectEqual(rows.items.len, parsed.value.object.get("rows").?.array.items.len);
 
     // Performance regression test: should be significantly faster than 630μs baseline
-    try testing.expect(processing_time < 300_000); // Less than 300μs (2x improvement target)
+    // (perf claim: shared gate, SONNY-2394 -- see tests/perf_gate.zig)
+    try perf_gate.check("CANARY query-result serialization < 300us", processing_time < 300_000, "processing_ns={d}", .{processing_time});
 }
