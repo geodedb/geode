@@ -7887,10 +7887,68 @@ fn executeVariableLengthPathTraversal(
             for (items, 0..) |item, i| {
                 row[i] = try eval.evalExpr(allocator, item.expr, env);
             }
+            // SONNY-2394: release this path's heap-bound env values (the
+            // rel-var edge list / path node+edge arrays) once the projected
+            // row no longer needs them. Rejected paths already free them
+            // above, but every ACCEPTED path leaked them (on the caller's
+            // allocator -- `gpa` in production -- once per result row).
+            // evalExpr(.Ident) returns env values by shallow copy, so a row
+            // that projects `r`/`p` (even nested, e.g. `RETURN [r]`) aliases
+            // the buffer: then ownership passes to the row, as before.
+            for (stack_env_values[0..env_idx]) |bound| {
+                if (rowReferencesEnvBuffer(row, bound)) continue;
+                switch (bound) {
+                    .List => |list| allocator.free(list),
+                    .Path => |p| {
+                        allocator.free(p.nodes);
+                        allocator.free(p.edges);
+                    },
+                    else => {},
+                }
+            }
         }
 
         try rows.append(allocator, row);
     }
+}
+
+/// SONNY-2394: does `row` (walked recursively through List/Map values)
+/// reference the heap buffer behind the var-length env value `bound`? Only
+/// `.List` (rel-var edge list) and `.Path` (path var) env values own buffers.
+fn rowReferencesEnvBuffer(row: []const Value, bound: Value) bool {
+    for (row) |v| {
+        if (valueReferencesEnvBuffer(v, bound)) return true;
+    }
+    return false;
+}
+
+fn valueReferencesEnvBuffer(v: Value, bound: Value) bool {
+    switch (bound) {
+        .List => |bl| {
+            if (bl.len == 0) return false;
+            if (v == .List and v.List.ptr == bl.ptr) return true;
+        },
+        .Path => |bp| {
+            if (bp.nodes.len == 0 and bp.edges.len == 0) return false;
+            if (v == .Path and
+                ((bp.nodes.len != 0 and v.Path.nodes.ptr == bp.nodes.ptr) or
+                    (bp.edges.len != 0 and v.Path.edges.ptr == bp.edges.ptr))) return true;
+        },
+        else => return false,
+    }
+    switch (v) {
+        .List => |items| for (items) |item| {
+            if (valueReferencesEnvBuffer(item, bound)) return true;
+        },
+        .Map => |m| {
+            var it = m.valueIterator();
+            while (it.next()) |mv| {
+                if (valueReferencesEnvBuffer(mv.*, bound)) return true;
+            }
+        },
+        else => {},
+    }
+    return false;
 }
 
 /// Execute standard single-hop edge traversal for a given left node.

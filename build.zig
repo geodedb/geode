@@ -11074,4 +11074,21 @@ pub fn build(b: *std.Build) void {
     shardDep(test_step, &run_buffer_pool_env_tests.step, 1, test_shard_loads, test_shard_index);
     const buffer_pool_env_step = b.step("test-buffer-pool-env", "Run GEODE_BUFFER_POOL_PAGES env-knob regression (default=1024, explicit=N, bad-value=1024)");
     buffer_pool_env_step.dependOn(&run_buffer_pool_env_tests.step);
+
+    // SONNY-2394: variable-length MATCH released the per-path rel-var edge list
+    // / path arrays only for REJECTED paths; every accepted row leaked them on
+    // the caller's allocator. Pins no-leak when unprojected and no premature
+    // free when `r` is projected (directly or nested).
+    const sonny2394_varlen_test_mod = b.createModule(.{
+        .root_source_file = b.path("tests/test_sonny2394_varlen_rel_list_ownership.zig"),
+        .target = target,
+        .optimize = optimize,
+        .link_libc = true,
+    });
+    sonny2394_varlen_test_mod.addImport("geode", root_mod);
+    const sonny2394_varlen_tests = b.addTest(.{ .root_module = sonny2394_varlen_test_mod });
+    const run_sonny2394_varlen_tests = b.addRunArtifact(sonny2394_varlen_tests);
+    shardDep(test_step, &run_sonny2394_varlen_tests.step, 1, test_shard_loads, test_shard_index);
+    const sonny2394_varlen_step = b.step("test-sonny2394-varlen-rel-list", "Run SONNY-2394 regression (variable-length MATCH frees accepted rows' rel-var list/path arrays unless the row projects them)");
+    sonny2394_varlen_step.dependOn(&run_sonny2394_varlen_tests.step);
 }
