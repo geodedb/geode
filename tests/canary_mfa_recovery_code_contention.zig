@@ -19,7 +19,7 @@
 // cost (the verifier honours the PHC-embedded m/t) so the contention window --
 // not password hashing -- dominates each round.
 //
-// CANARY: REQ=REQ-GQL-MFA-CORE-001; FEATURE="MfaRecoveryCodeContention"; ASPECT=ConcurrentSingleUseRedemption; STATUS=TESTED; TEST=TestCANARY_REQ_GQL_MFA_CORE_001_RecoveryCodeContentionRatioBounds; OWNER=security; UPDATED=2026-09-23
+// CANARY: REQ=REQ-GQL-MFA-CORE-001; FEATURE="MfaRecoveryCodeContention"; ASPECT=ConcurrentSingleUseRedemption; STATUS=TESTED; TEST=TestCANARY_REQ_GQL_MFA_CORE_001_RecoveryCodeSingleUseUnderContention; OWNER=security; UPDATED=2026-09-23
 
 const std = @import("std");
 const geode_auth = @import("geode_auth");
@@ -78,6 +78,7 @@ const Attempt = struct {
     sm: *SecurityManager,
     code: []const u8,
     go: *std.atomic.Value(bool),
+    abort: *std.atomic.Value(bool),
     ready: *std.atomic.Value(usize),
     token: ?[]const u8 = null,
     err: ?anyerror = null,
@@ -85,6 +86,7 @@ const Attempt = struct {
     fn run(self: *Attempt) void {
         _ = self.ready.fetchAdd(1, .acq_rel);
         while (!self.go.load(.acquire)) std.atomic.spinLoopHint();
+        if (self.abort.load(.acquire)) return;
         if (self.sm.authenticateWithMFA(USERNAME, PASSWORD, 0, self.code)) |token| {
             self.token = token;
         } else |e| {
@@ -94,17 +96,31 @@ const Attempt = struct {
 };
 
 /// Release `codes.len` threads together, thread i redeeming codes[i].
+///
+/// Every spawned thread is joined before this frame (which owns `go`, `abort`
+/// and `ready`) returns -- also when a later spawn fails: the waiting threads
+/// are released with `abort` set and exit without redeeming anything, instead
+/// of spinning on atomics that have gone out of scope.
 fn race(sm: *SecurityManager, attempts: []Attempt, codes: []const []const u8) !void {
     var go = std.atomic.Value(bool).init(false);
+    var abort = std.atomic.Value(bool).init(false);
     var ready = std.atomic.Value(usize).init(0);
     var threads: [THREADS]std.Thread = undefined;
+    var spawned: usize = 0;
+    defer {
+        go.store(true, .release);
+        for (threads[0..spawned]) |t| t.join();
+    }
     for (attempts, codes, 0..) |*a, code, i| {
-        a.* = .{ .sm = sm, .code = code, .go = &go, .ready = &ready };
-        threads[i] = try std.Thread.spawn(.{}, Attempt.run, .{a});
+        a.* = .{ .sm = sm, .code = code, .go = &go, .abort = &abort, .ready = &ready };
+        threads[i] = std.Thread.spawn(.{}, Attempt.run, .{a}) catch |err| {
+            abort.store(true, .release);
+            return err;
+        };
+        spawned += 1;
     }
     while (ready.load(.acquire) < attempts.len) std.atomic.spinLoopHint();
     go.store(true, .release);
-    for (threads[0..attempts.len]) |t| t.join();
 }
 
 /// Every winner got a distinct token for the racer's session; every loser was
@@ -125,7 +141,7 @@ fn expectOutcome(sm: *SecurityManager, attempts: []const Attempt, want_wins: usi
     try std.testing.expectEqual(want_wins, wins);
 }
 
-test "TestCANARY_REQ_GQL_MFA_CORE_001_RecoveryCodeContentionRatioBounds" {
+test "TestCANARY_REQ_GQL_MFA_CORE_001_RecoveryCodeSingleUseUnderContention" {
     const allocator = std.testing.allocator;
 
     // 1) N threads race to redeem the SAME code.

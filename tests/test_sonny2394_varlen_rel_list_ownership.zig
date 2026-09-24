@@ -53,6 +53,10 @@ const Env = struct {
         defer allocator.free(dir);
         const store = try graph_store.initGlobalStore(allocator, dir);
         errdefer graph_store.deinitGlobalStore();
+        // Create the catalog singleton on THIS allocator up front, so a query
+        // run on another allocator (see `runOnPrivateAllocator`) reuses it.
+        _ = try execution.ensureCatalogInstance(allocator);
+        errdefer execution.cleanupCatalogInstance();
         const scratch = try allocator.create(std.heap.ArenaAllocator);
         scratch.* = std.heap.ArenaAllocator.init(allocator);
         return .{
@@ -152,54 +156,80 @@ test "SONNY-2394: accepted var-length rows do not leak the bound path arrays" {
     try testing.expectEqual(@as(usize, 2), result.rows.len);
 }
 
-test "SONNY-2394: projecting the relationship variable keeps its list alive" {
-    const allocator = testing.allocator;
-    var env = try Env.init(allocator);
-    defer env.deinit();
-    try env.seedChain();
+/// Run `query` on a private DebugAllocator and release the result ONLY through
+/// its owning API (`ExecutionResult.deinit`). The legacy result path does not
+/// own a directly projected var-length list (`owns_value_memory` is false), so
+/// those lists are the one allocation allowed to remain -- a pre-existing gap,
+/// not something a test may free by hand: a manual free would become a double
+/// free the day the owning API releases them. `inspect` reads every row (a list
+/// the executor had already freed would read back as poisoned memory) and
+/// returns the bytes the projected lists occupy; anything else still allocated
+/// after the release is a leak.
+fn runOnPrivateAllocator(env: *Env, query: []const u8, inspect: *const fn ([]const []geode.eval.Value) anyerror!usize) !void {
+    var dbg: std.heap.DebugAllocator(.{ .enable_memory_limit = true }) = .init;
+    defer dbg.deinitWithoutLeakChecks();
+    const allocator = dbg.allocator();
 
-    var q = try env.run(allocator,
-        \\MATCH (a)-[r:KNOWS*1..2]->(b)
-        \\WHERE a.name = 'Alice'
-        \\RETURN r AS rels
-    );
-    defer q.deinit(allocator);
-    const result = q.result;
-    try testing.expectEqual(@as(usize, 2), result.rows.len);
-    for (result.rows) |row| {
-        // Reading the list proves it was not freed (poisoned) by the executor.
-        try testing.expect(row[0] == .List);
-        try expectKnowsEdgeList(row[0].List);
-        // The row owns the aliased buffer (a legacy result does not free its
-        // values); releasing it here would be a DOUBLE FREE if the executor had
-        // already freed it -- std.testing.allocator panics on that.
-        allocator.free(row[0].List);
+    var q = try env.run(allocator, query);
+    const list_bytes = inspect(q.result.rows) catch |err| {
+        q.deinit(allocator);
+        return err;
+    };
+    q.deinit(allocator);
+
+    const remaining = dbg.total_requested_bytes;
+    if (remaining != 0 and remaining != list_bytes) {
+        std.debug.print("after ExecutionResult.deinit: {d} bytes still allocated (projected lists: {d})\n", .{ remaining, list_bytes });
+        return error.UnexpectedAllocationRemains;
     }
 }
 
-test "SONNY-2394: a nested projection of the relationship variable keeps its list alive" {
-    const allocator = testing.allocator;
-    var env = try Env.init(allocator);
-    defer env.deinit();
-    try env.seedChain();
+fn inspectDirectLists(rows: []const []geode.eval.Value) !usize {
+    try testing.expectEqual(@as(usize, 2), rows.len);
+    var bytes: usize = 0;
+    for (rows) |row| {
+        // Reading the list proves it was not freed (poisoned) by the executor.
+        try testing.expect(row[0] == .List);
+        try expectKnowsEdgeList(row[0].List);
+        bytes += row[0].List.len * @sizeOf(geode.eval.Value);
+    }
+    return bytes;
+}
 
-    var q = try env.run(allocator,
-        \\MATCH (a)-[r:KNOWS*1..2]->(b)
-        \\WHERE a.name = 'Alice'
-        \\RETURN [r] AS wrapped
-    );
-    defer q.deinit(allocator);
-    const result = q.result;
-    try testing.expectEqual(@as(usize, 2), result.rows.len);
-    for (result.rows) |row| {
+fn inspectNestedLists(rows: []const []geode.eval.Value) !usize {
+    try testing.expectEqual(@as(usize, 2), rows.len);
+    var bytes: usize = 0;
+    for (rows) |row| {
         try testing.expect(row[0] == .List);
         try testing.expectEqual(@as(usize, 1), row[0].List.len);
         const inner = row[0].List[0];
         try testing.expect(inner == .List);
         try expectKnowsEdgeList(inner.List);
-        allocator.free(inner.List);
-        allocator.free(row[0].List);
+        bytes += (row[0].List.len + inner.List.len) * @sizeOf(geode.eval.Value);
     }
+    return bytes;
+}
+
+test "SONNY-2394: projecting the relationship variable keeps its list alive" {
+    var env = try Env.init(testing.allocator);
+    defer env.deinit();
+    try env.seedChain();
+    try runOnPrivateAllocator(&env,
+        \\MATCH (a)-[r:KNOWS*1..2]->(b)
+        \\WHERE a.name = 'Alice'
+        \\RETURN r AS rels
+    , &inspectDirectLists);
+}
+
+test "SONNY-2394: a nested projection of the relationship variable keeps its list alive" {
+    var env = try Env.init(testing.allocator);
+    defer env.deinit();
+    try env.seedChain();
+    try runOnPrivateAllocator(&env,
+        \\MATCH (a)-[r:KNOWS*1..2]->(b)
+        \\WHERE a.name = 'Alice'
+        \\RETURN [r] AS wrapped
+    , &inspectNestedLists);
 }
 
 // SONNY-2394: `OwnedGraphEntities.deinit()` released the tracked entities but
