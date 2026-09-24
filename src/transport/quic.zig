@@ -2328,6 +2328,16 @@ pub const QuicClient = struct {
         }
     }
 
+    /// SONNY-2394: true once this client's connection can deliver nothing more
+    /// -- the peer closed it (CONNECTION_CLOSE), it idled out or was reset, or
+    /// it was never established. A request/response caller checks this while
+    /// it waits so that a dead connection fails fast instead of running out
+    /// its whole response deadline.
+    pub fn isClosed(self: *const QuicClient) bool {
+        const conn = self.connection orelse return true;
+        return api.isDrained(conn);
+    }
+
     pub fn debugLocalPort(self: *QuicClient) u16 {
         const ep = self.endpoint orelse return 0;
         const addr = ep.transport.getLocalAddr() catch return 0;

@@ -13,7 +13,10 @@ const quic = @import("transport/quic");
 // its whole lifetime, so a second client -- let alone the 16-client stress --
 // could never be served. The server now accepts and serves every connection
 // (`serveOnce` / `serveUntilStopped`), and each test runs a serving thread that
-// is stopped and joined before a clean deinit (`withServer`).
+// is stopped and joined before a clean deinit (`withServer`). The
+// ConcurrencyStress flake that followed (15 of 16 clients timing out on a loaded
+// host) was the client's retry-count response wait -- see
+// tests/test_sonny2394_kms_client_deadline.zig.
 //
 // CANARY: REQ=REQ-GQL-TDE-EXT-KMS-REMOTE-001; FEATURE="RemoteKMSPrototype"; ASPECT=NegativeAuthMatrix; STATUS=TESTED; TEST=TestCANARY_REQ_GQL_TDE_EXT_KMS_REMOTE_001_InvalidAuth; OWNER=security; UPDATED=2025-09-26
 // CANARY: REQ=REQ-GQL-TDE-ATTEST-001; FEATURE="RemoteKmsAttestation"; ASPECT=ExpiredAttestation; STATUS=TESTED; TEST=TestCANARY_REQ_GQL_TDE_ATTEST_001_ExpiredAttestation; OWNER=security; UPDATED=2025-09-26

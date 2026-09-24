@@ -11125,4 +11125,17 @@ pub fn build(b: *std.Build) void {
     shardDep(test_step, &run_perf_gate_tests.step, 1, test_shard_loads, test_shard_index);
     const perf_gate_step = b.step("test-perf-gate", "Run the shared perf-claim gate self-tests (SONNY-2394: perf claims enforced only when CI is unset)");
     perf_gate_step.dependOn(&run_perf_gate_tests.step);
+
+    // SONNY-2394: root cause of the test-remote-kms-hardening ConcurrencyStress
+    // flake -- the remote-KMS client's response wait was a retry count, not a
+    // wall-clock deadline -- plus the server's handling of re-announced streams.
+    const sonny2394_kms_deadline_tests = b.addTest(.{ .root_module = b.createModule(.{ .root_source_file = b.path("tests/test_sonny2394_kms_client_deadline.zig"), .target = target, .optimize = optimize }) });
+    sonny2394_kms_deadline_tests.root_module.addImport("transport/quic", transport_quic_mod);
+    sonny2394_kms_deadline_tests.root_module.addImport("vendor_quic", quic_ext_mod);
+    sonny2394_kms_deadline_tests.root_module.addImport("security/kms_remote", kms_remote_mod);
+    sonny2394_kms_deadline_tests.root_module.link_libc = true;
+    const run_sonny2394_kms_deadline_tests = b.addRunArtifact(sonny2394_kms_deadline_tests);
+    shardDep(test_step, &run_sonny2394_kms_deadline_tests.step, 1, test_shard_loads, test_shard_index);
+    const sonny2394_kms_deadline_step = b.step("test-sonny2394-kms-client-deadline", "Run SONNY-2394 regression (remote-KMS client waits on a wall-clock deadline, fails fast on a closed connection; server ignores re-announced streams)");
+    sonny2394_kms_deadline_step.dependOn(&run_sonny2394_kms_deadline_tests.step);
 }

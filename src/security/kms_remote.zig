@@ -11,6 +11,12 @@ fn compat_fillRandom(buf: []u8) void {
 }
 const quic = @import("transport/quic");
 
+fn monoNs() u64 {
+    var ts: std.os.linux.timespec = undefined;
+    _ = std.os.linux.clock_gettime(.MONOTONIC, &ts);
+    return @as(u64, @intCast(ts.sec)) * std.time.ns_per_s + @as(u64, @intCast(ts.nsec));
+}
+
 // CANARY: REQ=REQ-M6-UNREACHABLE-001; FEATURE="CodeQuality"; ASPECT=ErrorHandling; STATUS=EXEMPT; OWNER=security; UPDATED=2025-10-17
 // M6: Replaced all 'unreachable' statements with proper error handling (try/panic)
 
@@ -176,9 +182,51 @@ pub const RemoteKmsServer = struct {
     /// held for the server's whole lifetime, so a second client (let alone 16
     /// concurrent ones) was never accepted or served. Owned by the serving
     /// thread; destroyed in deinit().
-    conns: std.ArrayListUnmanaged(*quic.QuicConnection) = .empty,
+    conns: std.ArrayListUnmanaged(ServedConn) = .empty,
     server: Server,
     port: u16 = 0,
+    /// Serving counters. Owned by the serving thread: read them only while it
+    /// is stopped or parked.
+    stats: Stats = .{},
+
+    pub const Stats = struct {
+        /// Request lines read and answered (error replies included).
+        requests_served: u64 = 0,
+        /// Accept notifications for a stream already served on its connection,
+        /// released unread (see `ServedConn`).
+        stale_notifications: u64 = 0,
+    };
+
+    /// An accepted client connection plus the ids of the streams recently
+    /// served on it. SONNY-2394: the transport re-queues a stream id EVERY time
+    /// more data lands on it -- accept notifications are readiness signals,
+    /// not proof of a new stream (the rule src/server/quic_connection_handler.zig
+    /// already applies) -- so a request that arrives in two datagrams is
+    /// announced twice. Reading the repeat announcement found nothing (the line
+    /// was already consumed) and, before the client's FIN, parked the whole
+    /// serving loop -- every connection -- for up to 100 x poll(10). The
+    /// protocol is one request per stream, so a served id is dropped unread.
+    pub const ServedConn = struct {
+        conn: *quic.QuicConnection,
+        recent: [recent_capacity]u64 = undefined,
+        recent_len: usize = 0,
+        recent_next: usize = 0,
+
+        /// Repeat announcements are queued before the original is read, so
+        /// they trail it closely and a short window of ids suffices. An id
+        /// that has left the window is merely read and found empty, as before.
+        const recent_capacity = 32;
+
+        fn wasServed(self: *const ServedConn, stream_id: u64) bool {
+            return std.mem.indexOfScalar(u64, self.recent[0..self.recent_len], stream_id) != null;
+        }
+
+        fn markServed(self: *ServedConn, stream_id: u64) void {
+            self.recent[self.recent_next] = stream_id;
+            self.recent_next = (self.recent_next + 1) % recent_capacity;
+            self.recent_len = @min(self.recent_len + 1, recent_capacity);
+        }
+    };
 
     pub fn init(allocator: std.mem.Allocator, seed: u64) !RemoteKmsServer {
         return .{ .allocator = allocator, .server = try Server.init(allocator, seed) };
@@ -188,7 +236,7 @@ pub const RemoteKmsServer = struct {
     /// calling this: the connection list is owned by that thread.
     pub fn deinit(self: *RemoteKmsServer) void {
         if (self.quic_transport) |qt| {
-            for (self.conns.items) |conn| qt.destroyConnection(conn);
+            for (self.conns.items) |sc| qt.destroyConnection(sc.conn);
             self.conns.clearRetainingCapacity();
             qt.deinit();
             self.allocator.destroy(qt);
@@ -232,7 +280,7 @@ pub const RemoteKmsServer = struct {
 
         // Accept loop: every connection that completed its handshake.
         while (qt.tryAccept()) |conn| {
-            self.conns.append(self.allocator, conn) catch |err| {
+            self.conns.append(self.allocator, .{ .conn = conn }) catch |err| {
                 qt.destroyConnection(conn);
                 return err;
             };
@@ -240,18 +288,30 @@ pub const RemoteKmsServer = struct {
         }
 
         // Per-connection handling. GAP-0514 P3: connections persist across
-        // requests (one QUIC stream per request).
+        // requests (one QUIC stream per request). At most one request per
+        // connection per cycle; repeat announcements of an already-served
+        // stream are released unread, and every stream wrapper is released
+        // once its request is answered (it used to live until the connection
+        // closed, one per request).
         var served = false;
         var i: usize = 0;
         while (i < self.conns.items.len) {
-            const conn = self.conns.items[i];
-            if (conn.isDrained()) {
-                qt.destroyConnection(conn);
+            const sc = &self.conns.items[i];
+            if (sc.conn.isDrained()) {
+                qt.destroyConnection(sc.conn);
                 _ = self.conns.swapRemove(i);
                 continue;
             }
-            if (conn.tryAcceptStream()) |stream| {
+            while (sc.conn.tryAcceptStream()) |stream| {
+                if (sc.wasServed(stream.stream_id)) {
+                    self.stats.stale_notifications += 1;
+                    sc.conn.destroyStream(stream);
+                    continue;
+                }
+                sc.markServed(stream.stream_id);
                 if (self.serveStream(qt, stream)) served = true;
+                sc.conn.destroyStream(stream);
+                break;
             }
             i += 1;
         }
@@ -284,6 +344,7 @@ pub const RemoteKmsServer = struct {
             return false;
         };
         defer self.allocator.free(request);
+        self.stats.requests_served += 1;
 
         std.debug.print("KMS_SERVER: Received request: {s}\n", .{request});
 
@@ -465,6 +526,16 @@ pub const RemoteKmsClient = struct {
     quic_client: ?quic.QuicClient = null,
     auth_token: ?[]const u8 = null,
     connected: bool = false,
+    /// Wall-clock bound, in milliseconds, on waiting for the response to one
+    /// request (SONNY-2394; see `sendRequest`).
+    response_timeout_ms: u32 = default_response_timeout_ms,
+
+    /// Generous on purpose: a live server answers as soon as its serving loop
+    /// reaches the request, and that loop can legitimately be busy for
+    /// seconds -- e.g. completing a burst of concurrent TLS handshakes, which
+    /// its endpoint poll processes one after another (~120 ms each on a
+    /// starved CPU). A closed connection is detected separately and fails fast.
+    pub const default_response_timeout_ms: u32 = 30_000;
 
     pub fn init(allocator: std.mem.Allocator) RemoteKmsClient {
         return .{ .allocator = allocator, .quic_client = null, .connected = false };
@@ -494,35 +565,43 @@ pub const RemoteKmsClient = struct {
         return if (self.auth_token) |t| t else "";
     }
 
-    /// Send a JSON request over QUIC and read the JSON response line
+    /// Send a JSON request over QUIC and read the JSON response line.
+    ///
+    /// SONNY-2394: the wait is bounded by WALL-CLOCK time
+    /// (`response_timeout_ms`), not by a retry count. The old bound -- 100 x
+    /// (poll(50) + 10 ms sleep) -- was nominally ~6 s but shrank to ~1.5 s
+    /// whenever the connection had timer/ACK activity, so a live server busy
+    /// for a couple of seconds (16 concurrent handshakes on a loaded host) saw
+    /// 15 of its 16 clients give up just before it answered them. A connection
+    /// the server has closed fails fast with error.ConnectionClosed.
     fn sendRequest(self: *RemoteKmsClient, request: []const u8) ![]u8 {
         if (!self.connected or self.quic_client == null) {
             return error.NotConnected;
         }
+        const client = &self.quic_client.?;
 
         // Open a stream for this request
-        var stream = try self.quic_client.?.getStream();
+        var stream = try client.getStream();
         defer stream.close();
 
         // Write the request (must end with newline)
         try stream.writeAll(request);
 
-        // Poll and read response
-        var retries: usize = 0;
-        while (retries < 100) : (retries += 1) {
-            try self.quic_client.?.poll(50);
+        // Poll and read the response until the deadline.
+        const deadline_ns = monoNs() + @as(u64, self.response_timeout_ms) * std.time.ns_per_ms;
+        while (true) {
+            try client.poll(50);
             const response = stream.readLine(8192) catch |err| {
-                if (err == error.WouldBlock) {
-                    const req = std.os.linux.timespec{ .sec = 0, .nsec = 10 * std.time.ns_per_ms };
-                    var rem: std.os.linux.timespec = undefined;
-                    _ = std.os.linux.nanosleep(&req, &rem);
-                    continue;
-                }
-                return err;
+                if (err != error.WouldBlock) return err;
+                if (client.isClosed()) return error.ConnectionClosed;
+                if (monoNs() >= deadline_ns) return error.Timeout;
+                const req = std.os.linux.timespec{ .sec = 0, .nsec = 10 * std.time.ns_per_ms };
+                var rem: std.os.linux.timespec = undefined;
+                _ = std.os.linux.nanosleep(&req, &rem);
+                continue;
             };
             return response;
         }
-        return error.Timeout;
     }
 
     pub fn generate(self: *RemoteKmsClient) !Envelope {
