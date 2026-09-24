@@ -6050,6 +6050,15 @@ pub const StorageAdapter = struct {
                 // zero header). Skipping it (the old `continue`) silently
                 // dropped every node on the page from label scans while
                 // count() still reported them.
+                //
+                // Scope (SONNY-2394 review): this catches the loss only while
+                // the label posting list still names the slot, i.e. the label
+                // index came from its snapshot. It is NOT a general guarantee:
+                // an unlabeled scan, or a label index REBUILT from the node
+                // store (engine scanNodes skips empty records), no longer
+                // references the lost ids and returns partial rows silently.
+                // The root fix -- the pager must not treat a zeroed page below
+                // the written high-water mark as fresh -- is SONNY-2409.
                 if (node_mod.isEmpty(&rec)) {
                     // warn, not err: the typed error below is the contract the
                     // caller surfaces (std.log.err would also fail every test

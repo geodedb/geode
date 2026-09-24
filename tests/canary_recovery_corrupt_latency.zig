@@ -6,17 +6,24 @@
 // holds one set of engine files per shard (`nodes.store`, `props.store`, ...),
 // 8 KiB pages, each with a 32-byte header carrying a CRC32C of the body.
 //
-// Asserted contract: after a clean shutdown, damaging durable page data and
-// reopening is NEVER silently accepted -- a read that touches the damaged data
-// fails with a typed error (no crash, no partial "OK" result):
+// Asserted contract (what IS guaranteed today): after a clean shutdown,
+// damaging durable page data and reopening, a LABEL scan (`MATCH (n:Person)`)
+// that touches the damaged data fails with a typed error -- no crash, no
+// partial "OK" result:
 //   * flipped body bytes -> the pager's CRC32C check (error.ChecksumMismatch);
 //   * a fully zeroed page (torn write / zeroed sectors) -> the pager treats an
 //     all-zero page as FRESH, so its node records read as empty. The label scan
 //     used to skip them silently (169 of 300 rows, status OK, while count()
-//     still said 300); it now fails with error.DataCorruption.
-// Known engine-level gap, NOT covered here: a page whose 32-byte HEADER alone is
-// zeroed skips CRC verification in the external graph_storage pager, so damage
-// in the rest of that page can go undetected (see the SONNY-2394 report).
+//     still said 300); it now fails with error.DataCorruption -- but only
+//     because the label index here is loaded from its (clean) snapshot and
+//     still lists the lost ids.
+// NOT guaranteed (engine-level gaps, root fix tracked as SONNY-2409: the pager
+// must not treat a zeroed page below the written high-water mark as fresh):
+//   * zeroed pages read by an UNLABELED scan, or by a label scan after the
+//     derived label index is REBUILT from the node store (engine scanNodes
+//     skips empty records, so the lost ids vanish): partial rows, status OK;
+//   * a page whose 32-byte HEADER alone is zeroed: CRC verification is
+//     skipped, so damage in the rest of that page can go undetected.
 //
 // CANARY: REQ=REQ-GQL-028; FEATURE="SnapshotCompaction"; ASPECT=CorruptPageRecoveryLatency; STATUS=TESTED; TEST=TestCANARY_REQ_GQL_028_CorruptPageRecoveryLatency; OWNER=storage; UPDATED=2026-09-23
 // CANARY: REQ=REQ-GQL-028; FEATURE="SnapshotCompaction"; ASPECT=CorruptPageRecoveryLatency; STATUS=BENCHED; BENCH=BenchmarkCANARY_REQ_GQL_028_CorruptPageRecoveryLatencyVarianceEnvelope; OWNER=storage; UPDATED=2026-09-23
