@@ -717,7 +717,6 @@ Add tracking markers for migration progress:
 - [ ] `src/security/tde_key_manager.zig`
 - [ ] `src/security/kms_remote.zig`
 - [ ] `src/security/tde.zig`
-- [ ] `src/performance/json_optimized.zig`
 - [ ] `src/performance/json_optimized_fixed.zig`
 - [ ] `src/performance/test_json_optimization.zig`
 - [ ] `src/eval_extended.zig`
