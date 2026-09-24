@@ -8330,6 +8330,40 @@ pub fn build(b: *std.Build) void {
     const sonny1560_step = b.step("test-sonny1560-grpc-flow-control", "Run SONNY-1560 regression (a pushed gRPC result never holds the session mutex across a page write; a stalled, abandoned, or superseded stream releases the session cursor deterministically; an unsatisfiable peer flow-control window is classified RESOURCE_EXHAUSTED instead of waited out)");
     sonny1560_step.dependOn(&run_sonny1560_tests.step);
 
+    // SONNY-1221 (GEO-UP-008): the engine-direct node-scan fast path typed
+    // every projected column NULL in its schema frame, where the executor path
+    // types each column from its first rows. Compares the fast path's column
+    // types with the executor's for the same query over QUIC (a real
+    // `geode serve`, hence the install dependency) and over gRPC (the real
+    // Execute/Pull handlers in process, reached through the SONNY-1560 shim),
+    // and pins the stream serving the rows it prefetched for the frame exactly
+    // once, in order, at any page size.
+    const sonny1221_test_mod = b.createModule(.{
+        .root_source_file = b.path("tests/test_sonny1221_fast_path_schema.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+    sonny1221_test_mod.link_libc = true;
+    sonny1221_test_mod.addImport("geode", root_mod);
+    sonny1221_test_mod.addImport("schema", schema_mod);
+    sonny1221_test_mod.addImport("protobuf", protobuf_mod);
+    sonny1221_test_mod.addImport("transport/quic", transport_quic_mod);
+    sonny1221_test_mod.addImport("grpc_impl", sonny1560_shim_mod);
+    sonny1221_test_mod.addImport("logging", logging_mod);
+    if (enable_openssl) {
+        sonny1221_test_mod.linkSystemLibrary("ssl", .{});
+        sonny1221_test_mod.linkSystemLibrary("crypto", .{});
+    }
+    if (target.result.os.tag == .linux and (is_native or enable_openssl)) {
+        sonny1221_test_mod.linkSystemLibrary("dl", .{});
+    }
+    const sonny1221_tests = b.addTest(.{ .root_module = sonny1221_test_mod });
+    const run_sonny1221_tests = b.addRunArtifact(sonny1221_tests);
+    run_sonny1221_tests.step.dependOn(&install_geode_exe.step);
+    shardDep(test_step, &run_sonny1221_tests.step, 1, test_shard_loads, test_shard_index);
+    const sonny1221_step = b.step("test-sonny1221-fast-path-schema", "Run SONNY-1221 regression (the node-scan fast path's schema frame reports the executor's projection column types over QUIC and gRPC, NULL only for an all-null column)");
+    sonny1221_step.dependOn(&run_sonny1221_tests.step);
+
     // SONNY-1330 TSan companion: the same regression file under
     // -fsanitize-thread, so the fork-join over a COLD store is checked for the
     // cross-arm cache mutation this ticket closes rather than merely asserted

@@ -223,7 +223,14 @@ fn rebuildPendingIndexes(
 }
 
 // Issue #453: Use RwLock instead of Mutex to allow concurrent readers
-const SessionStore = struct {
+//
+// SONNY-1221: `pub`, with `setSessionStore`, `handleExecute` and `handlePull`,
+// so the fast-path schema regression can drive the REAL Execute and Pull
+// handlers in process. Over a real `geode serve` the gRPC node-scan fast path
+// is unreachable for an authenticated session (the global RLS filter engine is
+// always installed there, see `rls_active`), so that handler's fast-path schema
+// frame can only be exercised in process.
+pub const SessionStore = struct {
     allocator: std.mem.Allocator,
     rwlock: std.Io.RwLock = std.Io.RwLock.init,
     sessions: std.StringHashMap(*SessionEntry),
@@ -326,8 +333,8 @@ fn getSessionStore() ?*SessionStore {
     return g_session_store_atomic.load(.acquire);
 }
 
-/// Thread-safe setter for session store.
-fn setSessionStore(store: ?*SessionStore) void {
+/// Thread-safe setter for session store. `pub` for SONNY-1221 (see SessionStore).
+pub fn setSessionStore(store: ?*SessionStore) void {
     g_session_store_atomic.store(store, .release);
 }
 
@@ -2273,7 +2280,8 @@ fn readServedEngineDirect(state: *const server_state.ServerState, analysis: *con
 /// SONNY-1560: `epoch_out`, when supplied, receives the session result
 /// generation this Execute installs. The streaming push loop claims it and
 /// aborts if a later Execute supersedes it mid-push.
-fn handleExecute(request_bytes: []const u8, allocator: std.mem.Allocator, epoch_out: ?*u64) ![]u8 {
+/// `pub` for SONNY-1221 (see SessionStore).
+pub fn handleExecute(request_bytes: []const u8, allocator: std.mem.Allocator, epoch_out: ?*u64) ![]u8 {
     var reader: std.Io.Reader = .fixed(request_bytes);
     var req = protobuf.decode(schema.ExecuteRequest, &reader, allocator) catch |err| {
         log.err("Failed to decode Execute request", &.{Attr.string("error", @errorName(err))});
@@ -3012,6 +3020,21 @@ fn handleExecute(request_bytes: []const u8, allocator: std.mem.Allocator, epoch_
                                         }
                                     }
 
+                                    // SONNY-1221: build the rows the schema
+                                    // frame's column types come from BEFORE the
+                                    // frame; they stay on the stream and the
+                                    // first Pull serves them (twin of the QUIC
+                                    // handler). If they cannot be built, answer
+                                    // as the executor path does when its rows
+                                    // fail.
+                                    active_stream.prefetchSchemaSample(allocator) catch |err| {
+                                        const info = proto_util.mapError(err);
+                                        var err_resp = try buildErrorResponse(allocator, info.code, info.message, &.{}, &.{});
+                                        defer err_resp.deinit(allocator);
+                                        const encoded = try encodeMessage(allocator, err_resp);
+                                        active_stream.deinit();
+                                        return encoded;
+                                    };
                                     const status = try proto_util.buildStatus(allocator, "00000", active_stream.flags);
                                     const schema_def = try active_stream.buildSchema(allocator);
                                     var schema_resp = schema.ExecutionResponse{
@@ -3114,7 +3137,8 @@ fn handleExecute(request_bytes: []const u8, allocator: std.mem.Allocator, epoch_
     }
 }
 
-fn handlePull(request_bytes: []const u8, allocator: std.mem.Allocator) ![]u8 {
+/// `pub` for SONNY-1221 (see SessionStore).
+pub fn handlePull(request_bytes: []const u8, allocator: std.mem.Allocator) ![]u8 {
     var reader: std.Io.Reader = .fixed(request_bytes);
     var req = protobuf.decode(schema.PullRequest, &reader, allocator) catch |err| {
         log.err("Failed to decode Pull request", &.{Attr.string("error", @errorName(err))});

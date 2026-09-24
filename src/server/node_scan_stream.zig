@@ -10,6 +10,10 @@ const property_value_codec = @import("../property_value_codec.zig");
 const value_types = @import("../value_types.zig");
 const result_utils = @import("../execution/result_utils.zig");
 const type_helpers = @import("../eval/type_helpers.zig");
+// SONNY-1221 (GEO-UP-008): the executor path's schema typing
+// (`buildSchemaDefinition`), so this path's schema frame types a projection
+// column exactly the way the executor's does.
+const proto_util = @import("proto_util.zig");
 // SONNY-1229 (GEO-UP-002): the shared strict-tenancy / tenant-scope decision.
 // Same leaf module `crud_operations.tenantFilterFromContext`,
 // `match_operations.getSessionTenantFilter` and
@@ -162,7 +166,23 @@ pub const NodeScanStream = struct {
     /// boundary exactly like a set `cancel_token`. `0` means "no deadline".
     deadline_mono_ns: u64 = 0,
 
+    /// SONNY-1221: rows built BEFORE the schema frame (`prefetchSchemaSample`),
+    /// so the frame can type each projection column from real values.
+    /// `buildNextPage` serves them first, in order, before it scans on, so no
+    /// row is dropped, repeated or reordered. null once all have been served.
+    prefetched: ?Prefetched = null,
+
+    const Prefetched = struct {
+        result: ExecutionResult,
+        /// Index of the first row not yet moved to a page.
+        next: usize = 0,
+        /// The allocator `result` was built with. It is also the one passed to
+        /// `buildNextPage`, whose pages free the rows they are handed.
+        allocator: std.mem.Allocator,
+    };
+
     pub fn deinit(self: *NodeScanStream) void {
+        self.dropPrefetched();
         self.allocator.free(self.slot_ids);
         for (self.flags) |flag| {
             self.allocator.free(flag);
@@ -175,6 +195,12 @@ pub const NodeScanStream = struct {
 
     pub fn hasRemaining(self: *const NodeScanStream) bool {
         if (self.mode == .count) return !self.count_emitted;
+        return self.prefetched != null or self.scanRemaining();
+    }
+
+    /// True while the slot scan can still produce rows (cursor not exhausted,
+    /// LIMIT not reached). Rows already prefetched are not counted here.
+    fn scanRemaining(self: *const NodeScanStream) bool {
         return self.next_index < self.slot_ids.len and self.rows_emitted < self.row_limit;
     }
 
@@ -191,6 +217,39 @@ pub const NodeScanStream = struct {
             if (graph_store.monoNanosNowPub() >= self.deadline_mono_ns) return true;
         }
         return false;
+    }
+
+    // CANARY: REQ=REQ-SONNY-1221-FAST-PATH-SCHEMA; FEATURE="EngineDirectProjectionSchema"; ASPECT=SchemaFrameTyping; STATUS=TESTED; TEST=tests/test_sonny1221_fast_path_schema.zig; OWNER=engine; UPDATED=2026-09-24
+    /// SONNY-1221: build, BEFORE the schema frame is sent, the rows the frame's
+    /// projection column types are inferred from: the first
+    /// `proto_util.column_type_sample_rows` rows of this stream's result, the
+    /// executor path's sample. The rows stay on the stream and `buildNextPage`
+    /// serves them first, so the scan does no extra work and the page
+    /// boundaries a caller asks for are unchanged. `allocator` must be the one
+    /// later passed to `buildNextPage` (the pages that serve these rows free
+    /// them). Node and count columns have fixed types, so only a projection
+    /// prefetches. Call once, before `buildSchema` and before any page.
+    pub fn prefetchSchemaSample(self: *NodeScanStream, allocator: std.mem.Allocator) !void {
+        if (self.mode != .projection or self.prefetched != null) return;
+        const page = try self.buildNextPage(allocator, proto_util.column_type_sample_rows);
+        var result = page.result;
+        if (result.rows.len == 0) {
+            result.deinit(allocator);
+            return;
+        }
+        self.prefetched = .{ .result = result, .allocator = allocator };
+    }
+
+    /// Restart from the first row: drop any prefetched rows and reset the scan
+    /// cursor, the LIMIT/OFFSET counters and the count flag. Only for a stream
+    /// that has not sent a single row yet (the QUIC inline path re-serves the
+    /// whole result over PULL when its FIRST inline page fails to build).
+    pub fn rewind(self: *NodeScanStream) void {
+        self.dropPrefetched();
+        self.next_index = 0;
+        self.rows_emitted = 0;
+        self.rows_skipped = 0;
+        self.count_emitted = false;
     }
 
     pub fn buildSchema(self: *const NodeScanStream, allocator: std.mem.Allocator) !schema.SchemaDefinition {
@@ -212,20 +271,21 @@ pub const NodeScanStream = struct {
                 return .{ .columns = cols };
             },
             .projection => {
-                var cols = try std.ArrayList(schema.ColumnDefinition).initCapacity(allocator, self.columns.len);
-                for (self.columns) |name| {
-                    try cols.append(allocator, .{
-                        .name = try allocator.dupe(u8, name),
-                        // Projection element types are value-dependent; the
-                        // authoritative per-value type rides on each DataPage
-                        // Value. The snapshot path infers a placeholder column
-                        // type from the first rows (NULL when unknown). We emit
-                        // NULL here so transport schema matches the snapshot
-                        // path's "unknown until first row" contract.
-                        .type = try allocator.dupe(u8, "NULL"),
-                    });
-                }
-                return .{ .columns = cols };
+                // SONNY-1221: a projection's column types depend on its values.
+                // Type them with the executor path's own inference
+                // (`proto_util.buildSchemaDefinition`: the first non-null value
+                // among the first `column_type_sample_rows` rows) over the rows
+                // `prefetchSchemaSample` built -- exactly the rows this stream
+                // serves first -- so both paths report the same type for the
+                // same rows, and NULL only when every sampled value is null or
+                // no row matched. This used to hard-code NULL for every column.
+                const sample: [][]Value = if (self.prefetched) |pre| pre.result.rows[pre.next..] else &.{};
+                const view = ExecutionResult{
+                    .columns = self.columns,
+                    .rows = sample,
+                    .flags = std.ArrayList([]const u8).empty,
+                };
+                return proto_util.buildSchemaDefinition(allocator, &view);
             },
         }
     }
@@ -239,7 +299,7 @@ pub const NodeScanStream = struct {
         if (self.mode == .count) return self.buildCountPage(allocator);
 
         const page_len = if (page_size == 0) default_page_rows else page_size;
-        if (self.next_index >= self.slot_ids.len or self.rows_emitted >= self.row_limit) {
+        if (self.prefetched == null and !self.scanRemaining()) {
             return .{
                 .result = try self.emptyResult(allocator),
                 .final = true,
@@ -257,6 +317,17 @@ pub const NodeScanStream = struct {
 
         var owned_entities = try OwnedGraphEntities.init(allocator);
         errdefer owned_entities.deinit();
+
+        // SONNY-1221: rows built for the schema frame are served first. When
+        // they fill the page, or nothing is left to scan, no scan runs.
+        try self.takePrefetched(allocator, &rows, owned_entities, page_len);
+        if (rows.items.len >= page_len or !self.scanRemaining()) {
+            const result = try self.finishResult(allocator, rows, owned_entities);
+            return .{
+                .result = result,
+                .final = self.prefetched == null and !self.scanRemaining(),
+            };
+        }
 
         // Materialization reads node pages, so it runs under the per-graph
         // SHARED read lock — but CHUNKED: acquire + release per
@@ -423,6 +494,52 @@ pub const NodeScanStream = struct {
         };
         if (!owned) owned_entities.deinit();
         return result;
+    }
+
+    /// SONNY-1221: move prefetched rows, in order, onto `rows` until it holds
+    /// `page_len`. A row that projects the bare node carries that node, and the
+    /// node moves with the row to `owned_entities`, so the serving page keeps it
+    /// alive exactly as it would a node it had materialized itself. Space is
+    /// reserved before anything moves, so an allocation failure leaves every
+    /// row and node owned by exactly one side.
+    fn takePrefetched(
+        self: *NodeScanStream,
+        allocator: std.mem.Allocator,
+        rows: *std.ArrayList([]Value),
+        owned_entities: *OwnedGraphEntities,
+        page_len: usize,
+    ) !void {
+        const pre = if (self.prefetched) |*p| p else return;
+        while (rows.items.len < page_len and pre.next < pre.result.rows.len) {
+            const row = pre.result.rows[pre.next];
+            try rows.ensureUnusedCapacity(allocator, 1);
+            try owned_entities.nodes.ensureUnusedCapacity(owned_entities.allocator, row.len);
+            rows.appendAssumeCapacity(row);
+            // Leave an empty slice behind: the prefetched result's deinit then
+            // frees only the rows it still owns (freeing a zero-length slice is
+            // a no-op).
+            pre.result.rows[pre.next] = row[0..0];
+            pre.next += 1;
+            if (pre.result.owned_graph_entities) |from| {
+                for (row) |val| {
+                    if (val != .Node) continue;
+                    for (from.nodes.items, 0..) |node, idx| {
+                        if (node != val.Node) continue;
+                        owned_entities.nodes.appendAssumeCapacity(from.nodes.swapRemove(idx));
+                        break;
+                    }
+                }
+            }
+        }
+        if (pre.next == pre.result.rows.len) self.dropPrefetched();
+    }
+
+    /// Free whatever the prefetched rows still own.
+    fn dropPrefetched(self: *NodeScanStream) void {
+        if (self.prefetched) |*pre| {
+            pre.result.deinit(pre.allocator);
+            self.prefetched = null;
+        }
     }
 
     fn emptyResult(self: *NodeScanStream, allocator: std.mem.Allocator) !ExecutionResult {
@@ -601,6 +718,13 @@ pub const NodeScanStream = struct {
 };
 
 fn destroyNode(allocator: std.mem.Allocator, node: *graph_store.Node) void {
+    // `CompactPropertyMap.deinit` frees only its entry slice: the caller owns
+    // the keys. `materializeNode` / `materializeNodeProjected` dupe every key
+    // for this node alone (a row holds copies of values, never a key), so they
+    // are freed here. They used to leak: one allocation per materialized
+    // property per scanned node.
+    var keys = node.properties.iterator();
+    while (keys.next()) |entry| allocator.free(entry.key_ptr.*);
     node.properties.deinit();
     allocator.free(node.graph_name);
     for (node.labels) |label| allocator.free(label);

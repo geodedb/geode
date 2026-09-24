@@ -8403,6 +8403,19 @@ fn handleClientMessage(
                                         lock_released = true;
                                     }
 
+                                    // SONNY-1221: build the rows the schema
+                                    // frame's column types come from BEFORE
+                                    // the frame (the executor path types its
+                                    // columns from its first rows). They stay
+                                    // on the stream and are served first. If
+                                    // they cannot be built, answer as the
+                                    // executor path does when its rows fail.
+                                    active_stream.prefetchSchemaSample(gpa) catch |err| {
+                                        const info = proto_util.mapError(err);
+                                        try sendExecuteError(gpa, stream, info.code, info.message, &.{}, &.{});
+                                        active_stream.deinit();
+                                        return;
+                                    };
                                     {
                                         var schema_arena = std.heap.ArenaAllocator.init(gpa);
                                         defer schema_arena.deinit();
@@ -8444,16 +8457,18 @@ fn handleClientMessage(
                                         while (true) {
                                             var page_result = active_stream.buildNextPage(gpa, inline_max) catch |err| {
                                                 // Inline page failed (e.g. concurrent ingest modified
-                                                // nodes). If nothing was sent yet, reset the cursor so
-                                                // PULL starts clean and fall through to store the stream
-                                                // for PULL. If pages were already pushed, we cannot
-                                                // cleanly restart mid-stream — leave the cursor where it
-                                                // is and defer the REMAINDER to PULL (page_final stays
-                                                // false, so the stream is stored below).
+                                                // nodes). If nothing was sent yet, rewind the stream so
+                                                // PULL starts clean (cursor, LIMIT/OFFSET counters and
+                                                // any rows prefetched for the schema frame, SONNY-1221)
+                                                // and fall through to store the stream for PULL. If
+                                                // pages were already pushed, we cannot cleanly restart
+                                                // mid-stream — leave the cursor where it is and defer
+                                                // the REMAINDER to PULL (page_final stays false, so the
+                                                // stream is stored below).
                                                 log.warn("Inline page build failed, deferring to PULL", &.{
                                                     Attr.string("error", @errorName(err)),
                                                 });
-                                                if (pages_sent == 0) active_stream.next_index = 0;
+                                                if (pages_sent == 0) active_stream.rewind();
                                                 break :inline_blk;
                                             };
                                             defer page_result.result.deinit(gpa);

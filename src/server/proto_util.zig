@@ -435,8 +435,14 @@ fn dupOrderKeys(allocator: std.mem.Allocator, keys: []const []const u8) !std.Arr
     return list;
 }
 
+/// Leading rows `inferColumnType` samples to type a column. SONNY-1221: the
+/// node-scan fast path builds exactly this many rows before its schema frame
+/// (`NodeScanStream.prefetchSchemaSample`), so both paths type a column from
+/// the same rows.
+pub const column_type_sample_rows: usize = 10;
+
 fn inferColumnType(rows: [][]value_types.Value, col_idx: usize) []const u8 {
-    const sample_size = @min(rows.len, 10);
+    const sample_size = @min(rows.len, column_type_sample_rows);
     for (rows[0..sample_size]) |row| {
         if (col_idx >= row.len) continue;
         const val = row[col_idx];

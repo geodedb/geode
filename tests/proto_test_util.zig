@@ -505,6 +505,9 @@ pub const ExecResult = struct {
     additional_statuses: [][]const u8,
     flagger_findings: [][]const u8,
     columns: [][]const u8,
+    /// The schema frame's column types, parallel to `columns` ("ANY" when the
+    /// frame left a type empty). SONNY-1221: `execResultsEqual` ignores them.
+    column_types: [][]const u8 = &.{},
     rows: [][]TestValue,
     ordered: bool,
     order_keys: [][]const u8,
@@ -519,6 +522,8 @@ pub const ExecResult = struct {
         allocator.free(self.flagger_findings);
         for (self.columns) |c| allocator.free(c);
         allocator.free(self.columns);
+        for (self.column_types) |t| allocator.free(t);
+        allocator.free(self.column_types);
         for (self.rows) |row| {
             for (row) |cell| {
                 switch (cell) {
@@ -647,11 +652,23 @@ fn execResultFromAccumulator(
         columns[idx] = try allocator.dupe(u8, column.name);
     }
 
+    var column_types = try allocator.alloc([]const u8, result.columns.items.len);
+    var types_done: usize = 0;
+    errdefer {
+        for (column_types[0..types_done]) |t| allocator.free(t);
+        allocator.free(column_types);
+    }
+    for (result.columns.items) |column| {
+        column_types[types_done] = try allocator.dupe(u8, column.type);
+        types_done += 1;
+    }
+
     return .{
         .status_class = try allocator.dupe(u8, result.status_class),
         .additional_statuses = try dupeStringSliceList(allocator, result.additional_statuses.items),
         .flagger_findings = try dupeStringSliceList(allocator, result.flagger_findings.items),
         .columns = columns,
+        .column_types = column_types,
         .rows = rows,
         .ordered = result.ordered,
         .order_keys = try dupeStringSliceList(allocator, result.order_keys.items),
