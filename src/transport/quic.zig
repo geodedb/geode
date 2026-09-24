@@ -1246,7 +1246,16 @@ pub const QuicTransport = struct {
     }
 
     fn generateSelfSignedCert(self: *QuicTransport) !void {
-        const io = std.Io.Threaded.global_single_threaded.io();
+        // SONNY-2394: do NOT spawn through `global_single_threaded` -- that Io
+        // ships with `.allocator = .failing`, so `std.process.spawn` OOMs
+        // inside spawnPosix's argv arena before it ever forks, and this
+        // auto-generation path could never succeed (the "generateSelfSignedCert
+        // is unimplemented in Zig 0.16" note in distributed/cluster.zig).
+        // Same fix as src/tools/cert_gen.zig: a local Threaded Io backed by
+        // smp_allocator.
+        var local_threaded = std.Io.Threaded.init(std.heap.smp_allocator, .{});
+        defer local_threaded.deinit();
+        const io = local_threaded.io();
 
         // Ensure the parent directory for the certificate exists.
         if (std.fs.path.dirname(self.config.cert_path)) |dir_path| {
