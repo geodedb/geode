@@ -1526,8 +1526,20 @@ pub const SecurityManager = struct {
         const id = @as(UserId, @intCast(self.users.count() + 1));
         const attrs = std.StringHashMap([]const u8).init(self.allocator);
 
-        // Hash the password
-        const password_hash = try self.hashPassword(default_password);
+        // Hash the password.
+        // SONNY-2394: only an OPERATOR-supplied password (GEODE_DEFAULT_PASSWORD)
+        // goes through the human-password policy (`hashPassword` validates
+        // first). The generated fallback is 32 CSPRNG bytes rendered as 64
+        // lowercase hex -- a single "word" with no uppercase -- so the
+        // passphrase policy (upper+lower, >=3 words) rejected it and
+        // `SecurityManager.init` failed whenever GEODE_DEFAULT_PASSWORD was
+        // unset (breaking the `geode-auth` tool and every init() caller).
+        // Hash the random secret directly, exactly as the production
+        // first-boot path (AuthGraphManager bootstrap) already does.
+        const password_hash = if (password_from_env)
+            try self.hashPassword(default_password)
+        else
+            try hashPasswordArgon2id(self.allocator, default_password);
 
         // Default user bootstrap:
         // - Allow login when an explicit password is provided (env or debug default),
@@ -2017,11 +2029,57 @@ pub fn verifyPasswordArgon2id(allocator: Allocator, password: []const u8, phc_st
 // ============================================================================
 
 test "SecurityManager.deinit releases default startup allocations" {
+    // Zig 0.16 removed std.posix.setenv; use libc directly (test-scoped).
+    const c = struct {
+        extern "c" fn setenv(name: [*:0]const u8, value: [*:0]const u8, overwrite: c_int) c_int;
+        extern "c" fn unsetenv(name: [*:0]const u8) c_int;
+
+        fn save(a: Allocator, name: [*:0]const u8) !?[:0]u8 {
+            return if (std.c.getenv(name)) |v| try a.dupeZ(u8, std.mem.span(v)) else null;
+        }
+        fn restore(a: Allocator, name: [*:0]const u8, saved: ?[:0]u8) void {
+            if (saved) |v| {
+                _ = setenv(name, v.ptr, 1);
+                a.free(v);
+            } else _ = unsetenv(name);
+        }
+    };
     var gpa = std.heap.DebugAllocator(.{}){};
     defer std.debug.assert(gpa.deinit() == .ok);
+    const allocator = gpa.allocator();
 
-    var sm = try SecurityManager.init(gpa.allocator());
+    // Hermetic env. SONNY-2394 regression: with GEODE_DEFAULT_PASSWORD unset,
+    // init() generates a random admin secret, which the human-password
+    // passphrase policy used to reject (init() failed with
+    // PasswordMissingUppercase). GEODE_DATA_DIR points the generated-password
+    // file at a tmp dir so the test never writes `.geode_admin_password` into
+    // the build root.
+    const saved_pw = try c.save(allocator, "GEODE_DEFAULT_PASSWORD");
+    defer c.restore(allocator, "GEODE_DEFAULT_PASSWORD", saved_pw);
+    const saved_dir = try c.save(allocator, "GEODE_DATA_DIR");
+    defer c.restore(allocator, "GEODE_DATA_DIR", saved_dir);
+    _ = c.unsetenv("GEODE_DEFAULT_PASSWORD");
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const data_dir = try std.fmt.allocPrintSentinel(allocator, ".zig-cache/tmp/{s}", .{tmp.sub_path}, 0);
+    defer allocator.free(data_dir);
+    try std.testing.expect(c.setenv("GEODE_DATA_DIR", data_dir.ptr, 1) == 0);
+
+    var sm = try SecurityManager.init(allocator);
     defer sm.deinit();
+
+    // The generated secret was handed to the operator via the password file
+    // and is the credential actually stored for the default admin.
+    const written = try tmp.dir.readFileAlloc(std.testing.io, ".geode_admin_password", allocator, .limited(256));
+    defer allocator.free(written);
+    try std.testing.expectEqual(@as(usize, 64), written.len);
+    var admin: ?*User = null;
+    var it = sm.users.valueIterator();
+    while (it.next()) |u| {
+        if (u.is_default_user) admin = u;
+    }
+    try std.testing.expect(admin != null);
+    try std.testing.expect(try verifyPasswordArgon2id(allocator, written, admin.?.password_hash));
 }
 
 test "SecurityManager.deinit releases hydrated runtime state" {
