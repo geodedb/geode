@@ -4540,7 +4540,14 @@ pub fn build(b: *std.Build) void {
     const run_quic_condition_cadence_tests = b.addRunArtifact(quic_condition_cadence_tests);
     const quic_condition_cadence_step = b.step("test-quic-condition-cadence", "Run QUIC hand-rolled timedWait cadence audit");
     quic_condition_cadence_step.dependOn(&run_quic_condition_cadence_tests.step);
-    shardDep(test_step, &quic_condition_cadence_tests.step, 1, test_shard_loads, test_shard_index);
+    // SONNY-1843: this shardDep used to take &quic_condition_cadence_tests.step
+    // (the bare Step.Compile) instead of &run_quic_condition_cadence_tests.step
+    // (the Step.Run wrapping it). Depending on the compile step only proves the
+    // test binary BUILDS; it never invokes it, so the aggregate `test` step
+    // (and the sharded pre-push/CI run built on it) silently never executed
+    // this test's runtime assertions -- only `zig build test-quic-condition-cadence`
+    // (the named step, which correctly depends on the run step above) did.
+    shardDep(test_step, &run_quic_condition_cadence_tests.step, 1, test_shard_loads, test_shard_index);
 
     // GAP-0838 (Bug A): resolv.conf `search`-domain + `ndots` aware hostname
     // expansion so short k8s headless peer names (geode-0.geode) resolve.

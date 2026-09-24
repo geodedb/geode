@@ -354,7 +354,11 @@ test "quic endpoint poll cycle has a receive fairness budget" {
     try testing.expect(std.mem.indexOf(u8, endpoint, "REQ=REQ-QUIC-HC-142") != null);
     try testing.expect(std.mem.indexOf(u8, endpoint, "server_poll_receive_batches") != null);
     try testing.expect(std.mem.indexOf(u8, endpoint, "fn maxPacketsPerPollCycleForRole(role: EndpointRole) usize") != null);
-    try testing.expect(std.mem.indexOf(u8, endpoint, "const max_packets_this_poll = maxPacketsPerPollCycleForRole(self.role);") != null);
+    // REQ-QUIC-HC (acceptor-wedge RC-A, 2026-xx): the master socket-drain cap
+    // was decoupled from the per-poll-cycle processing budget so servers can
+    // drain a larger slice while per-class processing stays bounded
+    // separately (see maxSocketDrainPacketsForRole's doc comment).
+    try testing.expect(std.mem.indexOf(u8, endpoint, "const max_packets_this_poll = maxSocketDrainPacketsForRole(self.role);") != null);
     try testing.expect(std.mem.indexOf(u8, endpoint, "stats.packets_processed >= max_packets_this_poll") != null);
     try testing.expect(std.mem.indexOf(u8, endpoint, "REQ=REQ-QUIC-HC-123") != null);
     try testing.expect(std.mem.indexOf(u8, endpoint, "server_short_header_receive_batches") != null);
@@ -1217,8 +1221,14 @@ test "quic short header processing uses endpoint rx lifetime guard" {
     try testing.expect(std.mem.indexOf(u8, conn, "refs + 1") != null);
     try testing.expect(std.mem.indexOf(u8, conn, "releaseEndpointRxRef") != null);
     try testing.expect(std.mem.indexOf(u8, conn, "beginEndpointDestroy") != null);
-    try testing.expect(std.mem.indexOf(u8, api, "conn.beginEndpointDestroy();") != null);
-    try testing.expect(std.mem.indexOf(u8, api, "ep.clearShortHeaderRouteCacheForConnection(conn);") != null);
+    // REQ-QUIC-HC-099 (batch teardown) moved these two calls out of api.zig's
+    // single-conn destroy() into Endpoint.destroyConnections() (endpoint.zig),
+    // which destroy() and destroyBatch() now both call. Check the calls where
+    // they live today, and that the public single-conn entrypoint still
+    // delegates into the guarded batch path instead of bypassing it.
+    try testing.expect(std.mem.indexOf(u8, endpoint, "conn.beginEndpointDestroy();") != null);
+    try testing.expect(std.mem.indexOf(u8, endpoint, "self.clearShortHeaderRouteCacheForConnection(conn);") != null);
+    try testing.expect(std.mem.indexOf(u8, api, "ep.destroyConnections(&[_]*Connection{conn});") != null);
     try testing.expect(std.mem.indexOf(u8, endpoint, "REQ=REQ-QUIC-HC-052") != null);
     try testing.expect(std.mem.indexOf(u8, endpoint, "REQ=REQ-QUIC-HC-054") != null);
     try testing.expect(std.mem.indexOf(u8, endpoint, "REQ=REQ-QUIC-HC-098") != null);
@@ -1438,8 +1448,8 @@ test "quic udp transport raises socket buffers for high fanout" {
 
 test "quic deferred destroy removes all endpoint side-set references" {
     // Handler threads queue inner connections for main-thread destruction.
-    // Before api.destroy() frees the connection, Geode must remove every
-    // endpoint side-set that stores raw connection pointers.
+    // Before api.destroyBatch() frees the batch, Geode must remove every
+    // endpoint side-set that stores raw connection pointers for each member.
     const allocator = testing.allocator;
 
     const maybe_transport = try readFile(allocator, "src/transport/quic.zig");
@@ -1451,7 +1461,11 @@ test "quic deferred destroy removes all endpoint side-set references" {
     try testing.expect(std.mem.indexOf(u8, transport, "ep.pto_dirty_set.remove(inner_conn)") != null);
     try testing.expect(std.mem.indexOf(u8, transport, "ep.pending_hs_send_set.remove(inner_conn)") != null);
     try testing.expect(std.mem.indexOf(u8, transport, "ep.pto_lifetime_mu.lockUncancelable") != null);
-    try testing.expect(std.mem.indexOf(u8, transport, "api.destroy(ep, inner_conn)") != null);
+    // REQ-QUIC-HC-099: the old per-conn api.destroy() loop was replaced by a
+    // single api.destroyBatch() call over the whole drained batch (one O(N +
+    // keys) map sweep instead of O(B x N)); side-set removal above still runs
+    // per-connection before the batch is freed.
+    try testing.expect(std.mem.indexOf(u8, transport, "api.destroyBatch(ep, doomed)") != null);
 }
 
 test "quic connection handlers are not cpu-count auto sized" {
@@ -1781,7 +1795,16 @@ test "multi-property merge mutations avoid whole graph writer lock" {
     try testing.expect(std.mem.indexOf(u8, adapter_content, "lockCandidateShardReads") != null);
     try testing.expect(std.mem.indexOf(u8, adapter_content, "if (candidates.len == 0) return null;") != null);
     try testing.expect(std.mem.indexOf(u8, adapter_content, "id_map.nodeUuid(slot_id)") != null);
-    try testing.expect(std.mem.indexOf(u8, adapter_content, "store.getNodesByLabel(graph_name, label)") == null);
+    // Whole-file scope false-positives on the UNRELATED, read-lock-only
+    // getNodesByLabel() fallback inside lookupPublicNodeIdByLabelAndAllProps
+    // (2026-06-24, bulk-edge endpoint resolution; runs under a brief SHARED
+    // read lock, never a graph writer lock, and is not the multi-property
+    // MERGE dedup path this test guards). Scope the check to
+    // findNodeMatchingMergeProps's own body, which still starts from the
+    // smallest exact-property posting and never label-scans, so a real
+    // regression there still fails this test.
+    const merge_probe_body = try sliceBetween(adapter_content, "fn findNodeMatchingMergeProps(", "/// Result of `StorageAdapter.acquireGraphReadLock`");
+    try testing.expect(std.mem.indexOf(u8, merge_probe_body, "store.getNodesByLabel(graph_name, label)") == null);
 
     const maybe_group = try readFile(allocator, "src/storage/group_commit.zig");
     const group_content = maybe_group orelse return error.FileNotFound;
@@ -2672,7 +2695,11 @@ test "quic high fanout e2e runs in single stream stress mode" {
     const init_content = maybe_init orelse return error.FileNotFound;
     defer allocator.free(init_content);
     try testing.expect(std.mem.indexOf(u8, init_content, "REQ=REQ-QUIC-HC-030") != null);
-    try testing.expect(std.mem.indexOf(u8, init_content, "quic_stream_multiplexing_enabled: bool = false") != null);
+    // 2026-06-10: default flipped true -- a non-multiplexing server hangs the
+    // Go client on secondary streams (verified). The single-stream stress
+    // scenario below forces GEODE_QUIC_ENABLE_STREAM_MULTIPLEXING=0 itself, so
+    // this only pins the compiled default's documented value.
+    try testing.expect(std.mem.indexOf(u8, init_content, "quic_stream_multiplexing_enabled: bool = true") != null);
     try testing.expect(std.mem.indexOf(u8, init_content, "\"GEODE_QUIC_ENABLE_STREAM_MULTIPLEXING\"") != null);
     try testing.expect(std.mem.indexOf(u8, init_content, "REQ=REQ-QUIC-HC-054") != null);
     try testing.expect(std.mem.indexOf(u8, init_content, "quic_cooperative_first_streams_enabled: bool = true") != null);
@@ -2848,7 +2875,10 @@ test "quic group commit keeps bulk create properties in shard transaction" {
     try testing.expect(std.mem.indexOf(u8, adapter_content, "mg.engine.getOrAssignLabel(label)") != null);
     try testing.expect(std.mem.indexOf(u8, adapter_content, "REQ=REQ-QUIC-HC-022") != null);
     try testing.expect(std.mem.indexOf(u8, adapter_content, "node_shard.putPropertyTxn(rec.prop_head, kv.key, storage_val, local_txn)") != null);
-    try testing.expect(std.mem.indexOf(u8, adapter_content, "addIndexedNodeProperty(mg, label_id, slot_id, kv.key, storage_val)") != null);
+    // GAP-0900 throughput: bulk insert reserves a FRESH slot_id that was never
+    // indexed, so the call now skips the O(N) de-dup scan via the `Ex` variant
+    // (trailing `true` = assume_new); it still indexes the property.
+    try testing.expect(std.mem.indexOf(u8, adapter_content, "addIndexedNodePropertyEx(mg, label_id, slot_id, kv.key, storage_val, true)") != null);
     try testing.expect(std.mem.indexOf(u8, adapter_content, "setNodePropertiesBatchInMemoryOnly") != null);
     try testing.expect(std.mem.indexOf(u8, adapter_content, "store.setNodePropertiesBatch(reserved_id, entries)") == null);
 
