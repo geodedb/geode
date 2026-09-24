@@ -70,6 +70,9 @@ pub const KMSConfig = struct {
     master_key_id: ?[]const u8 = null, // Optional explicit master key ID
     vault_addr: ?[]const u8 = null, // Vault server address
     vault_key_path: ?[]const u8 = null, // Vault key storage path
+    /// Remote KMS: wall-clock bound on waiting for one response, in ms
+    /// (null = RemoteKmsClient.default_response_timeout_ms, 30 s). SONNY-2394.
+    remote_response_timeout_ms: ?u32 = null,
 };
 
 pub const KMSProvider = struct {
@@ -107,10 +110,10 @@ pub const KMSProvider = struct {
 
     pub fn deinit(self: *KMSProvider) void {
         // Clean up any allocated resources
-        if (self.remote_client) |*client| {
-            // Remote client cleanup handled by QUIC transport
-            _ = client;
-        }
+        // SONNY-2394 (review): the client owns a QUIC endpoint and socket;
+        // this used to be a no-op that leaked them.
+        if (self.remote_client) |*client| client.deinit();
+        self.remote_client = null;
     }
 
     /// Returns a stable master key identifier
@@ -291,23 +294,43 @@ pub const KMSProvider = struct {
         return try self.allocator.dupe(u8, &plaintext);
     }
 
+    /// The remote-KMS client, created on first use with the configured
+    /// response deadline (SONNY-2394: `KMSConfig.remote_response_timeout_ms`)
+    /// and auth token.
+    fn remoteClient(self: *KMSProvider) *kms_remote.RemoteKmsClient {
+        if (self.remote_client == null) {
+            self.remote_client = kms_remote.RemoteKmsClient.initWithOptions(self.allocator, .{
+                .response_timeout_ms = self.config.remote_response_timeout_ms orelse
+                    kms_remote.RemoteKmsClient.default_response_timeout_ms,
+            });
+            if (self.config.auth_token) |token| self.remote_client.?.setAuthToken(token);
+        }
+        return &self.remote_client.?;
+    }
+
+    /// The remote client, connected. SONNY-2394 (review): (re)connect only
+    /// when there is no live connection -- every wrap/unwrap used to call
+    /// connect() again, replacing (and leaking) the previous QUIC endpoint.
+    fn connectedRemoteClient(self: *KMSProvider) !*kms_remote.RemoteKmsClient {
+        const client = self.remoteClient();
+        const live = client.connected and client.quic_client != null and !client.quic_client.?.isClosed();
+        if (!live) {
+            client.deinit(); // release a failed or closed connection's endpoint
+            const endpoint = self.config.endpoint orelse "localhost";
+            const port = self.config.port orelse 3141;
+            try client.connect(endpoint, port);
+        }
+        return client;
+    }
+
     // Remote KMS provider (QUIC-based)
     fn wrapRemoteKMS(self: *KMSProvider, key_id: MasterKeyId, plaintext: []const u8) !WrappedKey {
         _ = plaintext; // Will use remote generation
 
-        if (self.remote_client == null) {
-            self.remote_client = kms_remote.RemoteKmsClient.init(self.allocator);
-            if (self.config.auth_token) |token| {
-                self.remote_client.?.setAuthToken(token);
-            }
-        }
-
-        const endpoint = self.config.endpoint orelse "localhost";
-        const port = self.config.port orelse 3141;
-        try self.remote_client.?.connect(endpoint, port);
+        const client = try self.connectedRemoteClient();
 
         // Generate new key remotely (ignores input plaintext)
-        const envelope = try self.remote_client.?.generate();
+        const envelope = try client.generate();
 
         // Serialize envelope to JSON metadata
         var aw_km: std.Io.Writer.Allocating = try std.Io.Writer.Allocating.initCapacity(self.allocator, 256);
@@ -347,16 +370,7 @@ pub const KMSProvider = struct {
     fn unwrapRemoteKMS(self: *KMSProvider, wrapped: WrappedKey) ![]u8 {
         if (wrapped.metadata == null) return error.MissingMetadata;
 
-        if (self.remote_client == null) {
-            self.remote_client = kms_remote.RemoteKmsClient.init(self.allocator);
-            if (self.config.auth_token) |token| {
-                self.remote_client.?.setAuthToken(token);
-            }
-        }
-
-        const endpoint = self.config.endpoint orelse "localhost";
-        const port = self.config.port orelse 3141;
-        try self.remote_client.?.connect(endpoint, port);
+        const client = try self.connectedRemoteClient();
 
         // Parse envelope from metadata
         const envelope = try external_kms.envelopeFromJson(wrapped.metadata.?);
@@ -371,7 +385,7 @@ pub const KMSProvider = struct {
             .ct = envelope.ct[0..32].*,
         };
 
-        const plaintext = try self.remote_client.?.unwrap(remote_envelope);
+        const plaintext = try client.unwrap(remote_envelope);
         return try self.allocator.dupe(u8, &plaintext);
     }
 
