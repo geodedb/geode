@@ -2964,6 +2964,11 @@ pub fn build(b: *std.Build) void {
     gap0203_tests.root_module.addImport("transport/quic", transport_quic_mod);
     gap0203_tests.root_module.addImport("grpc_client", grpc_client_mod);
     const run_gap0203_tests = b.addRunArtifact(gap0203_tests);
+    // SONNY-2394: named step so the GAP-0203 QUIC suite (spawns
+    // ./zig-out/bin/geode; lives in test-e2e only) can run on its own.
+    run_gap0203_tests.step.dependOn(&install_geode_exe.step);
+    const gap0203_step = b.step("test-gap0203", "Run the GAP-0203 query-pipeline suite (spawns a real geode server over QUIC)");
+    gap0203_step.dependOn(&run_gap0203_tests.step);
 
     // Compile Vulkan shaders to SPIR-V (Phase 2)
     const shader_compile_step = b.step("shaders", "Compile Vulkan shaders to SPIR-V");

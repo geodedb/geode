@@ -113,6 +113,19 @@ pub const TestEnv = struct {
 // Server Handle
 // ============================================================================
 
+/// SONNY-2394 (GAP-0203): non-reaping liveness probe for a spawned child.
+/// `waitid(WNOWAIT)` reports an exited (zombie) child without reaping it, so
+/// `ServerHandle.deinit`'s wait still works. True while the process has not
+/// exited (running OR stopped).
+pub fn processAlive(pid: posix.pid_t) bool {
+    if (comptime builtin.os.tag != .linux) return true;
+    const linux = std.os.linux;
+    var info = std.mem.zeroes(linux.siginfo_t);
+    const rc = linux.waitid(.PID, pid, &info, linux.W.EXITED | linux.W.NOHANG | linux.W.NOWAIT, null);
+    if (linux.errno(rc) != .SUCCESS) return false; // ECHILD: not a live child of ours
+    return info.fields.common.first.piduid.pid == 0; // no exit reported yet
+}
+
 pub const ServerHandle = struct {
     allocator: std.mem.Allocator,
     threaded: std.Io.Threaded,
@@ -721,6 +734,11 @@ pub const QuicProtoClient = struct {
     session_id: []const u8 = "",
     read_wait_misses: u32 = 0,
     post_write_poll: bool = true,
+    /// SONNY-2394 (GAP-0203): the spawned server this client talks to (see
+    /// `watchServerLiveness`). null = plain fixed per-reply deadlines.
+    server_pid: ?posix.pid_t = null,
+    slow_server_reported: bool = false,
+    liveness_checked_ns: u64 = 0,
 
     // CANARY: REQ=REQ-QUIC-HC-154; FEATURE="QUIC High-Concurrency Diagnostics"; ASPECT=ClientExecutePhaseTiming; STATUS=IMPL; TEST=test_quic_condition_timedwait_cadence; OWNER=transport; UPDATED=2026-05-29
     //
@@ -892,8 +910,57 @@ pub const QuicProtoClient = struct {
     }
 
     // CANARY: REQ=REQ-QUIC-HC-005; FEATURE="QUIC High-Concurrency Client Wait"; ASPECT=ProtoReadDeadline; STATUS=TESTED; TEST=test_quic_condition_timedwait_cadence; OWNER=transport; UPDATED=2026-05-25
-    fn waitForReadProgress(self: *QuicProtoClient, deadline_ns: u64) !void {
-        if (compat_monoNs() >= deadline_ns) return error.Timeout;
+    /// SONNY-2394 (GAP-0203 Fix #4 flake): bind this client to the server
+    /// process it talks to. Every reply wait then treats its timeout as a SOFT
+    /// deadline: once it expires, the wait continues in 1 s slices for as long
+    /// as the server process is alive (running or stopped), up to
+    /// `liveness_cap_ns`. A live-but-slow server -- a Debug build doing real
+    /// work (first-touch graph creation on COMMIT, Argon2id on HELLO) under
+    /// parallel test load -- is waited for instead of failing at a fixed 5 s;
+    /// a server that EXITED fails immediately with error.ServerExited; a
+    /// genuine hang still fails at the cap.
+    pub fn watchServerLiveness(self: *QuicProtoClient, pid: posix.pid_t) void {
+        self.server_pid = pid;
+    }
+
+    pub const liveness_cap_ns: u64 = 60 * std.time.ns_per_s;
+
+    const ReadDeadline = struct {
+        soft_ns: u64,
+        hard_ns: u64,
+
+        fn init(self: *const QuicProtoClient, timeout_ms: u32) ReadDeadline {
+            const now = compat_monoNs();
+            const soft = now + @as(u64, timeout_ms) * std.time.ns_per_ms;
+            return .{ .soft_ns = soft, .hard_ns = if (self.server_pid != null) @max(soft, now + liveness_cap_ns) else soft };
+        }
+    };
+
+    /// The soft deadline expired: extend it by one slice if the bound server is
+    /// still alive and the liveness cap has not been reached.
+    fn extendReadDeadline(self: *QuicProtoClient, deadline: *ReadDeadline) !void {
+        const pid = self.server_pid orelse return error.Timeout;
+        if (!processAlive(pid)) return error.ServerExited;
+        const now = compat_monoNs();
+        if (now >= deadline.hard_ns) return error.Timeout;
+        if (!self.slow_server_reported) {
+            self.slow_server_reported = true;
+            std.debug.print("QuicProtoClient: server pid {d} is alive but slow; waiting past the reply deadline (cap {d} s)\n", .{ pid, liveness_cap_ns / std.time.ns_per_s });
+        }
+        deadline.soft_ns = @min(now + std.time.ns_per_s, deadline.hard_ns);
+    }
+
+    fn waitForReadProgress(self: *QuicProtoClient, deadline: *ReadDeadline) !void {
+        // A bound server that has EXITED fails the wait at once (probed at most
+        // every 100 ms) instead of burning the rest of the reply deadline.
+        if (self.server_pid) |pid| {
+            const now = compat_monoNs();
+            if (now -| self.liveness_checked_ns >= 100 * std.time.ns_per_ms) {
+                self.liveness_checked_ns = now;
+                if (!processAlive(pid)) return error.ServerExited;
+            }
+        }
+        if (compat_monoNs() >= deadline.soft_ns) try self.extendReadDeadline(deadline);
         // CANARY: REQ=REQ-QUIC-HC-149; FEATURE="High-Concurrency Test Client"; ASPECT=AdaptiveReadPolling; STATUS=IMPL; TEST=test_quic_condition_timedwait_cadence; OWNER=transport; UPDATED=2026-05-29
         //
         // In 1024+ local-client runs, a fixed 1ms poll per WouldBlock makes
@@ -904,7 +971,7 @@ pub const QuicProtoClient = struct {
         // miss counter.
         try self.client.poll(0);
         const now_ns = compat_monoNs();
-        if (now_ns >= deadline_ns) return error.Timeout;
+        if (now_ns >= deadline.soft_ns) return self.extendReadDeadline(deadline);
         self.read_wait_misses +|= 1;
         const wait_ns: u64 = if (self.read_wait_misses <= 32)
             100 * std.time.ns_per_us
@@ -912,19 +979,18 @@ pub const QuicProtoClient = struct {
             250 * std.time.ns_per_us
         else
             std.time.ns_per_ms;
-        compat_sleep(@min(wait_ns, deadline_ns - now_ns));
-        if (compat_monoNs() >= deadline_ns) return error.Timeout;
+        compat_sleep(@min(wait_ns, deadline.soft_ns - now_ns));
     }
 
     pub fn readPacket(self: *QuicProtoClient, allocator: std.mem.Allocator, timeout_ms: u32) !schema.ServerPacket {
         var len_buf: [4]u8 = undefined;
         var total_read: usize = 0;
-        const deadline_ns = compat_monoNs() + @as(u64, timeout_ms) * std.time.ns_per_ms;
+        var deadline = ReadDeadline.init(self, timeout_ms);
 
         while (total_read < 4) {
             const n = self.stream.read(len_buf[total_read..]) catch |err| {
                 if (err == error.WouldBlock) {
-                    try self.waitForReadProgress(deadline_ns);
+                    try self.waitForReadProgress(&deadline);
                     continue;
                 }
                 return err;
@@ -944,7 +1010,7 @@ pub const QuicProtoClient = struct {
         while (total_read < msg_len) {
             const n = self.stream.read(msg_bytes[total_read..]) catch |err| {
                 if (err == error.WouldBlock) {
-                    try self.waitForReadProgress(deadline_ns);
+                    try self.waitForReadProgress(&deadline);
                     continue;
                 }
                 return err;
@@ -968,14 +1034,14 @@ pub const QuicProtoClient = struct {
 
     fn drainBytes(self: *QuicProtoClient, len: u64, timeout_ms: u32) !void {
         var remaining: u64 = len;
-        const deadline_ns = compat_monoNs() + @as(u64, timeout_ms) * std.time.ns_per_ms;
+        var deadline = ReadDeadline.init(self, timeout_ms);
         var buf: [4096]u8 = undefined;
 
         while (remaining > 0) {
             const chunk: usize = @intCast(@min(remaining, @as(u64, buf.len)));
             const n = self.stream.read(buf[0..chunk]) catch |err| {
                 if (err == error.WouldBlock) {
-                    try self.waitForReadProgress(deadline_ns);
+                    try self.waitForReadProgress(&deadline);
                     continue;
                 }
                 return err;
