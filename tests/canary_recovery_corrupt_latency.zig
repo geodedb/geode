@@ -72,8 +72,14 @@ fn seedCleanStore(allocator: std.mem.Allocator, data_dir: []const u8) !void {
     }
 }
 
-/// Damage every written data page (page_id >= 1, non-zero header) of every
-/// `file_name` under `data_dir`. Returns the number of pages damaged.
+/// Damage every written page (non-zero header) of every `file_name` under
+/// `data_dir`, page 0 included. Returns the number of pages damaged.
+///
+/// Page 0 is NOT metadata in `nodes.store`: `graph_storage`'s NodeStore maps a
+/// node id to page `id / nodes_per_page`, so page 0 holds the first
+/// nodes_per_page node records and is a CRC-checked data page like any other.
+/// In `props.store` page 0 is the free-space manager's reserved page; nothing
+/// writes it, so the never-written check below skips it.
 fn damageFiles(data_dir: []const u8, file_name: []const u8, damage: Damage) !usize {
     const io = std.Io.Threaded.global_single_threaded.io();
     var dir = try std.Io.Dir.cwd().openDir(io, data_dir, .{ .iterate = true });
@@ -86,7 +92,7 @@ fn damageFiles(data_dir: []const u8, file_name: []const u8, damage: Damage) !usi
         var file = try entry.dir.openFile(io, entry.basename, .{ .mode = .read_write });
         defer file.close(io);
         const len = try file.length(io);
-        var page: u64 = 1;
+        var page: u64 = 0;
         while ((page + 1) * PAGE_SIZE <= len) : (page += 1) {
             var header: [PAGE_HEADER_SIZE]u8 = undefined;
             _ = try file.readPositionalAll(io, &header, page * PAGE_SIZE);
