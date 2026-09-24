@@ -3266,7 +3266,7 @@ REQ-GQL-TDE-003,Key provider abstraction,SECURITY,TESTED,,,security,2026-01-15,s
 REQ-GQL-TDE-004,MockKMSProvider,SECURITY,TESTED,,,security,2026-01-15,src/security/key_provider.zig,224
 REQ-GQL-TDE-004,MockKMSProvider,TEST,TESTED,,,security,2025-09-26,src/security/key_provider.zig,238
 REQ-GQL-TDE-005,ExternalKmsStub,SECURITY,TESTED,,,security,2026-01-15,src/security/key_provider.zig,222
-REQ-GQL-TDE-ATTEST-001,RemoteKmsAttestation,ExpiredAttestation,TESTED,,,security,2025-09-26,tests/canary_remote_kms_hardening.zig,10
+REQ-GQL-TDE-ATTEST-001,RemoteKmsAttestation,ExpiredAttestation,TESTED,,,security,2025-09-26,tests/canary_remote_kms_hardening.zig,19
 REQ-GQL-TDE-ATTEST-001,RemoteKmsAttestation,SECURITY,TESTED,,,security,2025-09-26,docs/SECURITY_PROGRESS.md,44
 REQ-GQL-TDE-ATTEST-001,RemoteKmsAttestation,SECURITY,TESTED,,,security,2025-09-26,src/security/kms_remote.zig,37
 REQ-GQL-TDE-ATTEST-001,RemoteKmsAttestation,SECURITY,TESTED,,,security,2025-09-26,tests/test_remote_kms_attestation.zig,3
@@ -3283,9 +3283,9 @@ REQ-GQL-TDE-EXT-KMS-001,ExternalKMSWrapUnwrap,TEST,TESTED,,,security,2025-09-26,
 REQ-GQL-TDE-EXT-KMS-REMOTE-001,RemoteKMSAuthGuard,SECURITY,TESTED,,,security,2025-09-26,tests/test_remote_kms_auth_negative.zig,3
 REQ-GQL-TDE-EXT-KMS-REMOTE-001,RemoteKMSPrototype,ConcurrencyStressVariance,BENCHED,,,security,2025-09-26,benchmarks/benchmark_remote_kms_unwrap_concurrency.zig,5
 REQ-GQL-TDE-EXT-KMS-REMOTE-001,RemoteKMSPrototype,ConcurrencyStressVariance,BENCHED,,,security,2025-09-26,benchmarks/benchmark_remote_kms_unwrap_concurrency.zig,40
-REQ-GQL-TDE-EXT-KMS-REMOTE-001,RemoteKMSPrototype,ConcurrencyStressVariance,TESTED,,,security,2025-09-26,tests/canary_remote_kms_hardening.zig,11
-REQ-GQL-TDE-EXT-KMS-REMOTE-001,RemoteKMSPrototype,ConcurrencyStressVariance,BENCHED,,,security,2025-09-26,tests/canary_remote_kms_hardening.zig,12
-REQ-GQL-TDE-EXT-KMS-REMOTE-001,RemoteKMSPrototype,NegativeAuthMatrix,TESTED,,,security,2025-09-26,tests/canary_remote_kms_hardening.zig,9
+REQ-GQL-TDE-EXT-KMS-REMOTE-001,RemoteKMSPrototype,ConcurrencyStressVariance,TESTED,,,security,2025-09-26,tests/canary_remote_kms_hardening.zig,20
+REQ-GQL-TDE-EXT-KMS-REMOTE-001,RemoteKMSPrototype,ConcurrencyStressVariance,BENCHED,,,security,2025-09-26,tests/canary_remote_kms_hardening.zig,21
+REQ-GQL-TDE-EXT-KMS-REMOTE-001,RemoteKMSPrototype,NegativeAuthMatrix,TESTED,,,security,2025-09-26,tests/canary_remote_kms_hardening.zig,18
 REQ-GQL-TDE-EXT-KMS-REMOTE-001,RemoteKMSPrototype,SECURITY,TESTED,,,security,2025-09-26,docs/SECURITY_PROGRESS.md,38
 REQ-GQL-TDE-EXT-KMS-REMOTE-001,RemoteKMSPrototype,SECURITY,TESTED,,,security,2025-09-26,src/security/kms_remote.zig,36
 REQ-GQL-TDE-EXT-KMS-REMOTE-001,RemoteKMSPrototype,TEST,TESTED,,,security,2025-09-26,tests/canary_remote_kms.zig,6
@@ -3515,7 +3515,7 @@ REQ-KEY-ROTATION-001,SecureKeyGeneration,Security,EXEMPT,,,security,2026-01-10,s
 REQ-KEY-ROTATION-002,SecureKeyRotation,PolicyEnforcement,TESTED,,,security,2026-06-10,tests/test_gap0890_rotation_policy.zig,18
 REQ-KEY-ROTATION-002,SecureKeyRotation,Security,TESTED,,,security,2026-06-10,src/security/key_rotation.zig,278
 REQ-KEY-ROTATION-003,SecureKmsKeyRotation,Security,EXEMPT,,,security,2026-01-10,src/security/key_rotation.zig,327
-REQ-KMS-REMOTE-CLIENT-001,RemoteKMSClient,NETWORK,TESTED,,,security,2026-01-09,src/security/kms_remote.zig,422
+REQ-KMS-REMOTE-CLIENT-001,RemoteKMSClient,NETWORK,TESTED,,,security,2026-01-09,src/security/kms_remote.zig,462
 REQ-KMS-SECURITY-001,KMS,KeyManagement,TESTED,,,security,2026-01-16,tests/test_gap_0193_batch2_security.zig,302
 REQ-KMS-SECURITY-002,KMS,KeyGeneration,TESTED,,,security,2026-01-16,tests/test_gap_0193_batch2_security.zig,309
 REQ-KMS-SECURITY-003,KMS,KeyDerivation,TESTED,,,security,2026-01-16,tests/test_gap_0193_batch2_security.zig,316

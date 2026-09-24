@@ -171,9 +171,12 @@ pub const Server = struct {
 pub const RemoteKmsServer = struct {
     allocator: std.mem.Allocator,
     quic_transport: ?*quic.QuicTransport = null,
-    /// GAP-0514 P3: persistent accepted connection (one client at a time);
-    /// previously serveOnce closed the connection after every request.
-    active_conn: ?*quic.QuicConnection = null,
+    /// SONNY-2394: every accepted client connection, each served until it
+    /// drains or the server is deinit'ed. Previously a single `active_conn` was
+    /// held for the server's whole lifetime, so a second client (let alone 16
+    /// concurrent ones) was never accepted or served. Owned by the serving
+    /// thread; destroyed in deinit().
+    conns: std.ArrayListUnmanaged(*quic.QuicConnection) = .empty,
     server: Server,
     port: u16 = 0,
 
@@ -181,12 +184,17 @@ pub const RemoteKmsServer = struct {
         return .{ .allocator = allocator, .server = try Server.init(allocator, seed) };
     }
 
+    /// Clean shutdown. Stop any serving thread (`serveUntilStopped`) BEFORE
+    /// calling this: the connection list is owned by that thread.
     pub fn deinit(self: *RemoteKmsServer) void {
         if (self.quic_transport) |qt| {
+            for (self.conns.items) |conn| qt.destroyConnection(conn);
+            self.conns.clearRetainingCapacity();
             qt.deinit();
             self.allocator.destroy(qt);
             self.quic_transport = null;
         }
+        self.conns.deinit(self.allocator);
         self.server.deinit();
     }
 
@@ -212,28 +220,47 @@ pub const RemoteKmsServer = struct {
         std.debug.print("KMS_SERVER: Listening on port {d}\n", .{port});
     }
 
-    /// Serve at most one request. Returns true when a request was processed
-    /// (or a reply attempt was made), false when nothing was pending.
+    /// One serving cycle (SONNY-2394 multi-connection): poll the transport,
+    /// accept EVERY pending connection, then give each live connection one
+    /// pending request stream; connections that have drained (client closed)
+    /// are released. Returns true when at least one request was processed.
     pub fn serveOnce(self: *RemoteKmsServer) !bool {
         const qt = self.quic_transport orelse return error.NotStarted;
 
         // Poll for events
         try qt.poll(100);
 
-        // GAP-0514 P3 FIX: keep the accepted connection alive across requests.
-        // The old code closed the connection after EVERY request (defer
-        // conn.close()), so a client issuing a second request on the same
-        // connection (e.g. generate then privUnwrap) timed out — the
-        // multi-request KMS round-trip never worked. One QUIC stream per
-        // request; the connection persists until transport shutdown.
-        if (self.active_conn == null) {
-            self.active_conn = qt.tryAccept() orelse return false;
-            std.debug.print("KMS_SERVER: Accepted connection\n", .{});
+        // Accept loop: every connection that completed its handshake.
+        while (qt.tryAccept()) |conn| {
+            self.conns.append(self.allocator, conn) catch |err| {
+                qt.destroyConnection(conn);
+                return err;
+            };
+            std.debug.print("KMS_SERVER: Accepted connection ({d} open)\n", .{self.conns.items.len});
         }
-        const conn = self.active_conn.?;
 
-        // Accept the next request stream; no pending stream is not an error.
-        const stream = conn.tryAcceptStream() orelse return false;
+        // Per-connection handling. GAP-0514 P3: connections persist across
+        // requests (one QUIC stream per request).
+        var served = false;
+        var i: usize = 0;
+        while (i < self.conns.items.len) {
+            const conn = self.conns.items[i];
+            if (conn.isDrained()) {
+                qt.destroyConnection(conn);
+                _ = self.conns.swapRemove(i);
+                continue;
+            }
+            if (conn.tryAcceptStream()) |stream| {
+                if (self.serveStream(qt, stream)) served = true;
+            }
+            i += 1;
+        }
+        return served;
+    }
+
+    /// Serve the single request carried by `stream`, then close the stream.
+    /// Returns false when no request line arrived within the read window.
+    fn serveStream(self: *RemoteKmsServer, qt: *quic.QuicTransport, stream: *quic.QuicStream) bool {
         defer stream.close();
 
         // Read request line. GAP-0514 P3 FIX: a stream can be accepted before
@@ -276,6 +303,19 @@ pub const RemoteKmsServer = struct {
             std.debug.print("KMS_SERVER: Failed to send response: {}\n", .{err});
         };
         return true;
+    }
+
+    /// Serving-thread body (SONNY-2394): run serving cycles until `stop` is
+    /// set. Pair with deinit(): set `stop`, join the thread, then deinit.
+    pub fn serveUntilStopped(self: *RemoteKmsServer, stop: *const std.atomic.Value(bool)) void {
+        while (!stop.load(.acquire)) {
+            _ = self.serveOnce() catch |err| {
+                if (err != error.NotStarted) {
+                    std.debug.print("KMS_SERVER: serveOnce error: {}\n", .{err});
+                }
+                continue;
+            };
+        }
     }
 
     fn processRequest(self: *RemoteKmsServer, request: []const u8, response_buf: []u8) ![]const u8 {
@@ -617,6 +657,18 @@ pub const RemoteKmsClient = struct {
         return try parseAttestResponse(response);
     }
 
+    /// Map an `{"status":"ERR","code":...}` reply to a typed error. SONNY-2394:
+    /// the server reports auth failures as `"code":"AuthenticationFailed"`
+    /// (the documented protocol above), but every ERR used to collapse into
+    /// the generic `error.RemoteError`, so callers could not tell a rejected
+    /// credential from any other remote failure.
+    fn remoteError(response: []const u8) error{ AuthenticationFailed, RemoteError } {
+        if (std.mem.indexOf(u8, response, "\"code\":\"AuthenticationFailed\"") != null) {
+            return error.AuthenticationFailed;
+        }
+        return error.RemoteError;
+    }
+
     /// Parse envelope from JSON response like {"status":"OK","envelope":{...}}
     fn parseEnvelopeResponse(response: []const u8) !Envelope {
         // Simple JSON parsing - look for envelope field
@@ -624,7 +676,7 @@ pub const RemoteKmsClient = struct {
         if (envelope_start == null) {
             // Check for error status
             if (std.mem.indexOf(u8, response, "\"ERR\"") != null) {
-                return error.RemoteError;
+                return remoteError(response);
             }
             return error.InvalidResponse;
         }
@@ -639,7 +691,7 @@ pub const RemoteKmsClient = struct {
         const pt_start = std.mem.indexOf(u8, response, "\"plaintext\":\"");
         if (pt_start == null) {
             if (std.mem.indexOf(u8, response, "\"ERR\"") != null) {
-                return error.RemoteError;
+                return remoteError(response);
             }
             return error.InvalidResponse;
         }
@@ -662,7 +714,7 @@ pub const RemoteKmsClient = struct {
         const hash_start = std.mem.indexOf(u8, response, "\"hash\":\"");
         if (hash_start == null) {
             if (std.mem.indexOf(u8, response, "\"ERR\"") != null) {
-                return error.RemoteError;
+                return remoteError(response);
             }
             return error.InvalidResponse;
         }
