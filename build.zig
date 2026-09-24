@@ -739,6 +739,14 @@ pub fn build(b: *std.Build) void {
     // expansion so short k8s headless peer names (geode-0.geode) resolve.
     const dns_search_mod = b.createModule(.{ .root_source_file = b.path("src/transport/dns_search.zig"), .target = target, .optimize = optimize });
     transport_quic_mod.addImport("dns_search", dns_search_mod);
+    // SONNY-2394: the Io the QUIC listener and the `geode serve` startup
+    // certificate generator (src/tools/cert_gen.zig) spawn openssl with: no
+    // process-wide signal-handler swap, and the process environment (PATH and
+    // OPENSSL_CONF). A module of its own because cert_gen.zig is compiled into
+    // several modules (the geode exe, cert_provided_mod, the cert_gen tool) and
+    // a file may belong to only one module per compilation.
+    const spawn_io_mod = b.createModule(.{ .root_source_file = b.path("src/transport/spawn_io.zig"), .target = target, .optimize = optimize, .link_libc = true });
+    transport_quic_mod.addImport("spawn_io", spawn_io_mod);
 
     // Thread Pool Module - High-performance worker threads for query execution (GAP-0201)
     // GAP-0275: thread_pool is now self-contained (no external concurrency dep)
@@ -950,6 +958,8 @@ pub fn build(b: *std.Build) void {
     });
     geode_exe.root_module.addImport("build_options", build_options_mod);
     geode_exe.root_module.addImport("geode", root_mod);
+    // server/main.zig -> tools/cert_gen.zig (SONNY-2394).
+    geode_exe.root_module.addImport("spawn_io", spawn_io_mod);
     // FIPS seam: wire crypto_backend into the executable for later routing tasks.
     geode_exe.root_module.addImport("crypto_backend", crypto_backend_mod);
     // GAP-0810: named-module form to keep a single owning module for
@@ -1795,6 +1805,7 @@ pub fn build(b: *std.Build) void {
         .target = target,
         .optimize = optimize,
     });
+    cert_provided_mod.addImport("spawn_io", spawn_io_mod);
     const cert_provided_tests = b.addTest(.{ .root_module = b.createModule(.{
         .root_source_file = b.path("tests/test_cert_provided_cert_honored.zig"),
         .target = target,
@@ -5714,6 +5725,7 @@ pub fn build(b: *std.Build) void {
         .name = "cert_gen",
         .root_module = b.createModule(.{ .root_source_file = b.path("src/tools/cert_gen.zig"), .target = target, .optimize = optimize }),
     });
+    cert_gen_exe.root_module.addImport("spawn_io", spawn_io_mod);
     b.installArtifact(cert_gen_exe);
     tools_step.dependOn(&cert_gen_exe.step);
 
@@ -11212,6 +11224,8 @@ pub fn build(b: *std.Build) void {
     const cert_posture_tests = b.addTest(.{ .root_module = b.createModule(.{ .root_source_file = b.path("tests/test_sonny2394_cert_autogen_posture.zig"), .target = target, .optimize = optimize }) });
     cert_posture_tests.root_module.addImport("transport/quic", transport_quic_mod);
     cert_posture_tests.root_module.addImport("vendor_quic", quic_ext_mod);
+    // The startup path: `geode serve` self-signs through cert_gen.
+    cert_posture_tests.root_module.addImport("cert_gen", cert_provided_mod);
     cert_posture_tests.root_module.link_libc = true;
     const cert_posture_step = b.step("test-sonny2394-cert-autogen-posture", "Run SONNY-2394 regression (listener certificate auto-generation fails closed in production posture; dev posture and explicit opt-in still self-sign)");
     const run_cert_posture_prod = b.addRunArtifact(cert_posture_tests);

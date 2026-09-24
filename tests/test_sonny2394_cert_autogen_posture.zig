@@ -16,10 +16,12 @@
 // CANARY: REQ=REQ-SONNY2394-CERT-AUTOGEN-POSTURE-001; FEATURE="ListenerCertAutogenPosture"; ASPECT=ProductionFailClosed; STATUS=TESTED; TEST=TestSONNY2394_ListenerCertAutogenFollowsPosture; OWNER=transport; UPDATED=2026-09-24
 // CANARY: REQ=REQ-SONNY2394-CERT-AUTOGEN-POSTURE-001; FEATURE="ListenerCertAutogenPosture"; ASPECT=PolicyMatrix; STATUS=TESTED; TEST=TestSONNY2394_CertAutogenPolicyMatrix; OWNER=transport; UPDATED=2026-09-24
 // CANARY: REQ=REQ-SONNY2394-CERT-AUTOGEN-POSTURE-001; FEATURE="ListenerCertAutogenPosture"; ASPECT=ProcessEnvironment; STATUS=TESTED; TEST=TestSONNY2394_CertAutogenSpawnsWithProcessEnvironment; OWNER=transport; UPDATED=2026-09-24
+// CANARY: REQ=REQ-SONNY2394-CERT-AUTOGEN-POSTURE-001; FEATURE="ListenerCertAutogenPosture"; ASPECT=StartupProcessEnvironment; STATUS=TESTED; TEST=TestSONNY2394_StartupCertGenSpawnsWithProcessEnvironment; OWNER=transport; UPDATED=2026-09-24
 
 const std = @import("std");
 const builtin = @import("builtin");
 const quic = @import("transport/quic");
+const cert_gen = @import("cert_gen");
 
 extern "c" fn setenv(name: [*:0]const u8, value: [*:0]const u8, overwrite: c_int) c_int;
 extern "c" fn unsetenv(name: [*:0]const u8) c_int;
@@ -308,6 +310,29 @@ test "TestSONNY2394_CertAutogenSpawnsWithProcessEnvironment" {
     const before = sigpipeAction();
     // The shim's marker is not a PEM certificate, so the listener refuses it.
     try std.testing.expectError(quic.QuicError.CertificateError, qt.listen());
+    const after = sigpipeAction();
+    try std.testing.expectEqual(handlerAddress(before), handlerAddress(after));
+    try std.testing.expectEqual(before.flags, after.flags);
+
+    try shim.expectRan(paths.cert);
+}
+
+// `geode serve` without --cert/--key generates its certificate at startup
+// through cert_gen.ensureCertificatesAtPath (server/main.zig) when none exists.
+// That spawns openssl too, so it must also use the process environment and
+// leave SIGPIPE alone.
+test "TestSONNY2394_StartupCertGenSpawnsWithProcessEnvironment" {
+    const allocator = std.testing.allocator;
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const paths = try Paths.init(allocator, &tmp);
+    defer paths.deinit(allocator);
+    var shim = try ShimEnv.init(allocator, &tmp, paths.dir);
+    defer shim.deinit();
+
+    const before = sigpipeAction();
+    // The shim exits 0, and startup generation does not parse what it wrote.
+    try cert_gen.ensureCertificatesAtPath(allocator, paths.cert, paths.key);
     const after = sigpipeAction();
     try std.testing.expectEqual(handlerAddress(before), handlerAddress(after));
     try std.testing.expectEqual(before.flags, after.flags);

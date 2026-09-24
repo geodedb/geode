@@ -48,6 +48,9 @@ const Endpoint = api.QuicEndpoint;
 const Connection = api.QuicConnection;
 const VendorQuicConfig = api.QuicConfig;
 const builtin = @import("builtin");
+// SONNY-2394: the signal-safe, environment-carrying Io certificate
+// auto-generation spawns openssl with (shared with tools/cert_gen.zig).
+const spawn_io = @import("spawn_io");
 
 /// Allocation-free, Io-independent readability check for a cert/key file.
 /// Mirrors `cert_gen.certFileReadable`: it attempts a raw `openat` and lets the
@@ -475,38 +478,6 @@ fn envTruthy(name: [*:0]const u8) bool {
 fn envIsProduction() bool {
     const v = envValue("GEODE_ENV") orelse return false;
     return std.ascii.eqlIgnoreCase(v, "production");
-}
-
-/// SONNY-2394 (review): an Io that can spawn a child without touching
-/// process-wide signal dispositions. `Threaded.init` installs SIGIO/SIGPIPE
-/// handlers and restores the saved ones on deinit, so a transient instance
-/// created inside a running server -- concurrently with another thread's
-/// Threaded -- can restore a stale disposition (SIGPIPE back to "terminate")
-/// under a live process. `init_single_threaded` never touches signals; spawning
-/// only needs a real allocator (spawnPosix's argv arena; the stock global
-/// instance ships with `.failing`). No concurrency is available or needed: the
-/// child's stdio is ignored and we only wait for it.
-///
-/// It also carries the PROCESS environment (libc `environ`, the table
-/// `envValue` reads), seeded the way std's own start code seeds its Io.
-/// `init_single_threaded` starts with an EMPTY environment, and std uses the
-/// spawning Io's environment twice: to resolve argv[0] (its PATH, else the
-/// fixed `std.Io.Threaded.default_PATH`, /usr/local/bin:/bin/:/usr/bin) and,
-/// when no `environ_map` is given, as the child's whole environment. So
-/// `openssl` was found only in those three directories and ran with no
-/// environment at all (no PATH, no OPENSSL_CONF): certificate generation
-/// failed wherever openssl lives elsewhere (Nix, Homebrew, a FIPS build under
-/// /usr/local/ssl). Passing `SpawnOptions.environ_map` alone would not fix the
-/// lookup: `spawnPosix` searches the Io's PATH, never the map's.
-fn spawnOnlyThreaded() std.Io.Threaded {
-    var t: std.Io.Threaded = .init_single_threaded;
-    t.allocator = std.heap.smp_allocator;
-    if (comptime std.process.Environ.Block == std.process.Environ.PosixBlock and builtin.link_libc) {
-        const block: std.process.Environ.Block = .{ .slice = std.mem.span(std.c.environ) };
-        t.environ = .{ .process_environ = .{ .block = block } };
-        t.environ_initialized = block.isEmpty();
-    }
-    return t;
 }
 
 pub const QuicTransport = struct {
@@ -1350,9 +1321,9 @@ pub const QuicTransport = struct {
         // inside spawnPosix's argv arena before it ever forks, and this
         // auto-generation path could never succeed (the old "unimplemented in
         // Zig 0.16" note in distributed/cluster.zig). Nor through a second
-        // `Threaded.init` instance: that swaps process-wide signal handlers
-        // (see spawnOnlyThreaded).
-        var spawn_threaded = spawnOnlyThreaded();
+        // `Threaded.init` instance: that swaps process-wide signal handlers.
+        // `spawn_io` has neither problem and carries the process environment.
+        var spawn_threaded = spawn_io.threaded();
         defer spawn_threaded.deinit();
         const io = spawn_threaded.io();
 
