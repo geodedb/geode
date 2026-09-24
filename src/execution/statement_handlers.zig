@@ -546,8 +546,7 @@ const ForBodyAccumulator = struct {
                 // Ownership of the pointers moved to the accumulator.
                 entities.nodes.clearRetainingCapacity();
                 entities.edges.clearRetainingCapacity();
-                entities.deinit();
-                entities.allocator.destroy(entities);
+                entities.deinit(); // also frees the tracker (SONNY-2394)
             } else {
                 self.entities = entities;
             }
@@ -595,8 +594,7 @@ const ForBodyAccumulator = struct {
         }
         if (self.flags) |*flags| flags.deinit(allocator);
         if (self.entities) |entities| {
-            entities.deinit();
-            entities.allocator.destroy(entities);
+            entities.deinit(); // also frees the tracker (SONNY-2394)
         }
         if (self.bindings) |bindings| {
             bindings.deinit();

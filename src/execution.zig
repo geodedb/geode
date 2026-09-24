@@ -668,15 +668,22 @@ pub const OwnedGraphEntities = struct {
         try self.edges.append(self.allocator, edge);
     }
 
+    /// Release the tracked entities AND the tracker itself (always
+    /// heap-allocated by `init`). SONNY-2394: this used to leave the tracker
+    /// allocated, so every call site that only called deinit() -- each planned
+    /// read's error path, empty-result path and missing-graph path -- leaked it
+    /// once per query on the caller's allocator (gpa in production).
     pub fn deinit(self: *OwnedGraphEntities) void {
+        const allocator = self.allocator;
         for (self.nodes.items) |node| {
-            self.allocator.destroy(node);
+            allocator.destroy(node);
         }
-        self.nodes.deinit(self.allocator);
+        self.nodes.deinit(allocator);
         for (self.edges.items) |edge| {
-            self.allocator.destroy(edge);
+            allocator.destroy(edge);
         }
-        self.edges.deinit(self.allocator);
+        self.edges.deinit(allocator);
+        allocator.destroy(self);
     }
 };
 
@@ -731,10 +738,9 @@ pub const ExecutionResult = struct {
             allocator.destroy(bindings);
         }
 
-        // Free owned graph entities if present
+        // Free owned graph entities if present (deinit also frees the tracker)
         if (self.owned_graph_entities) |entities| {
             entities.deinit();
-            entities.allocator.destroy(entities);
         }
     }
 

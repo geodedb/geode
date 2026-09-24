@@ -201,3 +201,20 @@ test "SONNY-2394: a nested projection of the relationship variable keeps its lis
         allocator.free(row[0].List);
     }
 }
+
+// SONNY-2394: `OwnedGraphEntities.deinit()` released the tracked entities but
+// not the tracker itself, which `init()` heap-allocates. Every planned read
+// that materializes no entity (no matching rows) -- and every planned read that
+// FAILS mid-scan (found via tests/canary_recovery_corrupt_latency.zig) -- only
+// called deinit(), leaking the tracker on the caller's allocator (gpa in
+// production) once per query.
+test "SONNY-2394: a planned read that matches nothing does not leak its entity tracker" {
+    const allocator = testing.allocator;
+    var env = try Env.init(allocator);
+    defer env.deinit();
+    try env.seedChain();
+
+    var q = try env.run(allocator, "MATCH (n:Person) WHERE n.name = 'nobody' RETURN n.name AS name");
+    defer q.deinit(allocator);
+    try testing.expectEqual(@as(usize, 0), q.result.rows.len);
+}
