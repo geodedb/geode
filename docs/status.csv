@@ -769,7 +769,7 @@ REQ-DATE-INTERVAL-002,DateIntervalArithmetic,Subtraction,TESTED,,,eval,2026-01-0
 REQ-DATE-INTERVAL-003,DateIntervalArithmetic,Helper,TESTED,,,datetime,2026-01-09,src/types/datetime.zig,32
 REQ-DATE-INTERVAL-004,DateIntervalArithmetic,Helper,TESTED,,,datetime,2026-01-09,src/types/datetime.zig,75
 REQ-DATE-PART-EXACT-CALENDAR,ExtendedBuiltins,AdapterRegistryLifetime,TESTED,,,engine,2026-08-25,src/eval_extended.zig,28
-REQ-DATE-PART-EXACT-CALENDAR,ExtendedBuiltins,FUNCTION_DATE_PART,TESTED,,,engine,2026-08-25,src/types/extended_functions.zig,120
+REQ-DATE-PART-EXACT-CALENDAR,ExtendedBuiltins,FUNCTION_DATE_PART,TESTED,,,engine,2026-08-25,src/types/extended_functions.zig,122
 REQ-DATE-PART-EXACT-CALENDAR,ExtendedBuiltins,FUNCTION_DATE_PART,TESTED,,,engine,2026-08-25,tests/test_date_part_exact.zig,40
 REQ-DATE-PART-EXACT-CALENDAR,ExtendedBuiltins,TemporalArgumentBridge,TESTED,,,eval,2026-08-25,src/eval_extended.zig,54
 REQ-DATETIME-001,DateTimeFunctions,Timestamp,TESTED,,,eval,2026-01-15,tests/test_gap_0193_impl_verification.zig,236
@@ -2636,14 +2636,14 @@ REQ-GQL-081,SessionManagement,State,TESTED,,,engine,2025-10-09,src/execution.zig
 REQ-GQL-082,ExtendedBuiltins,ADAPTER_BRIDGE,TESTED,,,engine,2025-09-27,tests/canary_extended_builtins.zig,6
 REQ-GQL-082,ExtendedBuiltins,ADAPTER_BRIDGE,TESTED,,,engine,2025-09-26,tests/test_extended_canary.zig,5
 REQ-GQL-082,ExtendedBuiltins,ADAPTER_CACHE,TESTED,,,engine,2025-09-26,src/eval_extended.zig,22
-REQ-GQL-082,ExtendedBuiltins,ENGINE,TESTED,,,engine,2025-09-26,src/types/extended_functions.zig,8
-REQ-GQL-082,ExtendedBuiltins,FUNCTION_DATE_PART,TESTED,,,engine,2026-08-25,src/types/extended_functions.zig,382
-REQ-GQL-082,ExtendedBuiltins,FUNCTION_DURATION_ARITH,TESTED,,,engine,2025-09-26,src/types/extended_functions.zig,330
-REQ-GQL-082,ExtendedBuiltins,FUNCTION_GEOBOX_CONTAINS,TESTED,,,engine,2025-09-26,src/types/extended_functions.zig,301
-REQ-GQL-082,ExtendedBuiltins,FUNCTION_JSON_GET,TESTED,,,engine,2025-09-26,src/types/extended_functions.zig,342
-REQ-GQL-082,ExtendedBuiltins,FUNCTION_POLYGON_AREA,TESTED,,,engine,2025-09-26,src/types/extended_functions.zig,314
-REQ-GQL-082,ExtendedBuiltins,FUNCTION_UUID_V4,TESTED,,,engine,2025-09-26,src/types/extended_functions.zig,266
-REQ-GQL-082,ExtendedBuiltins,FUNCTION_VECTOR_COSINE,TESTED,,,engine,2025-09-26,src/types/extended_functions.zig,280
+REQ-GQL-082,ExtendedBuiltins,ENGINE,TESTED,,,engine,2025-09-26,src/types/extended_functions.zig,9
+REQ-GQL-082,ExtendedBuiltins,FUNCTION_DATE_PART,TESTED,,,engine,2026-08-25,src/types/extended_functions.zig,384
+REQ-GQL-082,ExtendedBuiltins,FUNCTION_DURATION_ARITH,TESTED,,,engine,2025-09-26,src/types/extended_functions.zig,332
+REQ-GQL-082,ExtendedBuiltins,FUNCTION_GEOBOX_CONTAINS,TESTED,,,engine,2025-09-26,src/types/extended_functions.zig,303
+REQ-GQL-082,ExtendedBuiltins,FUNCTION_JSON_GET,TESTED,,,engine,2025-09-26,src/types/extended_functions.zig,344
+REQ-GQL-082,ExtendedBuiltins,FUNCTION_POLYGON_AREA,TESTED,,,engine,2025-09-26,src/types/extended_functions.zig,316
+REQ-GQL-082,ExtendedBuiltins,FUNCTION_UUID_V4,TESTED,,,engine,2026-09-23,src/types/extended_functions.zig,268
+REQ-GQL-082,ExtendedBuiltins,FUNCTION_VECTOR_COSINE,TESTED,,,engine,2025-09-26,src/types/extended_functions.zig,282
 REQ-GQL-082,ExtendedBuiltins,PERFORMANCE,BENCHED,,,engine,2025-09-26,benchmarks/benchmark_extended_builtins_overhead.zig,7
 REQ-GQL-082,Float Types,NaNForbidden,TESTED,,,types,2025-09-27,src/canary.zig,35
 REQ-GQL-082,TransactionManagement,Commit,TESTED,,,engine,2025-10-12,src/execution.zig,1462

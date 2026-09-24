@@ -1,5 +1,6 @@
 const std = @import("std");
 const ext = @import("extended.zig");
+const cb = @import("crypto_backend");
 // DATE-PART-EXACT: date_part must use the SAME calendar conversion that member access
 // (`date(...).month`) uses, so it shares datetime.Date rather than
 // re-approximating one.
@@ -64,10 +65,11 @@ fn expectArgs(len: usize, args: []const BuiltinValue) !void {
 // uuid_v4() -> Str (canonical text form)
 fn fn_uuid_v4(allocator: std.mem.Allocator, args: []const BuiltinValue) !BuiltinValue {
     try expectArgs(0, args);
-    // Deterministic pseudo uuid: fill bytes with simple sequence for Zig 0.15 (no std.rand in namespace)
+    // RFC 4122 v4: 122 random bits. SONNY-2394: the bytes used to come from a
+    // FIXED sequence (a Zig 0.15 stop-gap), so every call returned the same
+    // "random" UUID. Draw them from the (FIPS-seamed) CSPRNG.
     var u: ext.Uuid = undefined;
-    var i: usize = 0;
-    while (i < 16) : (i += 1) u.bytes[i] = @as(u8, @intCast((i * 97 + 13) & 0xFF));
+    try cb.Csprng.bytes(&u.bytes);
     u.bytes[6] = (u.bytes[6] & 0x0F) | 0x40;
     u.bytes[8] = (u.bytes[8] & 0x3F) | 0x80;
     // Zig 0.16: std.Io.fixedBufferStream was removed. Use a minimal
@@ -252,7 +254,7 @@ fn freeValue(allocator: std.mem.Allocator, v: BuiltinValue) void {
     }
 }
 
-test "uuid_v4 deterministic" {
+test "uuid_v4 random v4 format" {
     var reg = try initRegistry(std.testing.allocator);
     defer reg.deinit();
     const fnp = reg.get("uuid_v4") orelse return error.NotFound;
@@ -263,7 +265,7 @@ test "uuid_v4 deterministic" {
     try std.testing.expect(v.Str[14] == '4');
 }
 
-// CANARY: REQ=REQ-GQL-082; FEATURE="ExtendedBuiltins"; ASPECT=FUNCTION_UUID_V4; STATUS=TESTED; TEST=extended_functions.uuid_v4 deterministic; OWNER=engine; UPDATED=2025-09-26
+// CANARY: REQ=REQ-GQL-082; FEATURE="ExtendedBuiltins"; ASPECT=FUNCTION_UUID_V4; STATUS=TESTED; TEST=extended_functions.uuid_v4 random v4 format; OWNER=engine; UPDATED=2026-09-23
 
 test "vector cosine identical" {
     var reg = try initRegistry(std.testing.allocator);
