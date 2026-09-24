@@ -2088,6 +2088,14 @@ test "SecurityManager.deinit releases default startup allocations" {
     // PasswordMissingUppercase). GEODE_DATA_DIR points the generated-password
     // file at a tmp dir so the test never writes `.geode_admin_password` into
     // the build root.
+    //
+    // Memoize Zig's own view of the environment FIRST. Zig 0.16 scans its
+    // startup envp lazily (first std.debug.print, first spawn, ...) and
+    // panics on a NULL inside the captured slice -- which an in-place libc
+    // unsetenv of a variable present at startup leaves behind; the panic
+    // handler then deadlocks re-taking the environ mutex (SONNY-2394: this
+    // test hung whenever GEODE_DEFAULT_PASSWORD was exported by the caller).
+    _ = std.Io.Threaded.global_single_threaded.environString("PATH");
     const saved_pw = try c.save(allocator, "GEODE_DEFAULT_PASSWORD");
     defer c.restore(allocator, "GEODE_DEFAULT_PASSWORD", saved_pw);
     const saved_dir = try c.save(allocator, "GEODE_DATA_DIR");
