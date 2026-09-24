@@ -4603,8 +4603,8 @@ REQ-QUALITY-GAP-413-003,OrphanedTestRemediation,AuditFilters,TESTED,,,quality,20
 REQ-QUALITY-GAP-413-004,OrphanedTestRemediation,AuditTransports,TESTED,,,quality,2026-01-30,tests/test_transports.zig,3
 REQ-QUALITY-GAP-413-005,OrphanedTestRemediation,AuditCef,TESTED,,,quality,2026-01-30,tests/test_cef.zig,3
 REQ-QUALITY-GAP-413-006,OrphanedTestRemediation,TimingAttacks,TESTED,,,quality,2026-01-30,src/security/test_timing_attacks.zig,4
-REQ-QUALITY-GAP-413-013,OrphanedTestRemediation,ConstCorrectness,TESTED,,,quality,2026-01-30,tests/test_filters.zig,166
-REQ-QUALITY-GAP-413-014,OrphanedTestRemediation,ConstCorrectness,TESTED,,,quality,2026-01-30,tests/test_filters.zig,199
+REQ-QUALITY-GAP-413-013,OrphanedTestRemediation,ConstCorrectness,TESTED,,,quality,2026-01-30,tests/test_filters.zig,172
+REQ-QUALITY-GAP-413-014,OrphanedTestRemediation,ConstCorrectness,TESTED,,,quality,2026-01-30,tests/test_filters.zig,209
 REQ-QUALITY-GAP-413-015,OrphanedTestRemediation,FileAccessAPI,TESTED,,,quality,2026-01-30,tests/test_transports.zig,219
 REQ-QUALITY-GAP-413-016,OrphanedTestRemediation,FormatString,TESTED,,,quality,2026-01-30,tests/test_cef.zig,161
 REQ-QUERY-CHAIN-LIMIT-001,QueryChainingWithLimitFix,ChainLimit,TESTED,,,engine,2026-01-15,tests/test_gap_0193_impl_verification.zig,340
