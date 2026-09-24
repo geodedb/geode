@@ -15,10 +15,14 @@
 //
 // CANARY: REQ=REQ-SONNY2394-CERT-AUTOGEN-POSTURE-001; FEATURE="ListenerCertAutogenPosture"; ASPECT=ProductionFailClosed; STATUS=TESTED; TEST=TestSONNY2394_ListenerCertAutogenFollowsPosture; OWNER=transport; UPDATED=2026-09-24
 // CANARY: REQ=REQ-SONNY2394-CERT-AUTOGEN-POSTURE-001; FEATURE="ListenerCertAutogenPosture"; ASPECT=PolicyMatrix; STATUS=TESTED; TEST=TestSONNY2394_CertAutogenPolicyMatrix; OWNER=transport; UPDATED=2026-09-24
+// CANARY: REQ=REQ-SONNY2394-CERT-AUTOGEN-POSTURE-001; FEATURE="ListenerCertAutogenPosture"; ASPECT=ProcessEnvironment; STATUS=TESTED; TEST=TestSONNY2394_CertAutogenSpawnsWithProcessEnvironment; OWNER=transport; UPDATED=2026-09-24
 
 const std = @import("std");
 const builtin = @import("builtin");
 const quic = @import("transport/quic");
+
+extern "c" fn setenv(name: [*:0]const u8, value: [*:0]const u8, overwrite: c_int) c_int;
+extern "c" fn unsetenv(name: [*:0]const u8) c_int;
 
 fn getenv(name: [*:0]const u8) ?[]const u8 {
     return if (std.c.getenv(name)) |p| std.mem.span(p) else null;
@@ -131,6 +135,99 @@ fn listenWithPolicy(policy: quic.CertAutoGenerate) !bool {
 test "TestSONNY2394_ListenerCertAutogenExplicitPolicy" {
     try std.testing.expect(!try listenWithPolicy(.never));
     try std.testing.expect(try listenWithPolicy(.always));
+}
+
+/// Stands in for `openssl`: records that it ran, and the OPENSSL_CONF it was
+/// given, into the certificate path it was asked to write (`-out <path>`).
+const openssl_shim =
+    \\#!/bin/sh
+    \\out=""
+    \\while [ "$#" -gt 0 ]; do
+    \\  if [ "$1" = "-out" ]; then out="$2"; fi
+    \\  shift
+    \\done
+    \\printf 'geode-openssl-shim OPENSSL_CONF=%s\n' "$OPENSSL_CONF" > "$out"
+    \\
+;
+
+/// Set (or, with null, unset) an environment variable, returning the previous
+/// value (owned) so the caller can put it back.
+fn swapEnv(allocator: std.mem.Allocator, name: [*:0]const u8, value: ?[:0]const u8) !?[:0]u8 {
+    const previous: ?[:0]u8 = if (getenv(name)) |v| try allocator.dupeZ(u8, v) else null;
+    errdefer if (previous) |p| allocator.free(p);
+    if (value) |v| {
+        if (setenv(name, v.ptr, 1) != 0) return error.SetEnvFailed;
+    } else {
+        _ = unsetenv(name);
+    }
+    return previous;
+}
+
+fn restoreEnv(allocator: std.mem.Allocator, name: [*:0]const u8, previous: ?[:0]u8) void {
+    if (previous) |p| {
+        _ = setenv(name, p.ptr, 1);
+        allocator.free(p);
+    } else {
+        _ = unsetenv(name);
+    }
+}
+
+// Certificate auto-generation runs `openssl` with the PROCESS environment: the
+// binary is resolved on the process PATH and the child inherits variables such
+// as OPENSSL_CONF. It used to run with an empty environment and std's fixed
+// default PATH (/usr/local/bin:/bin/:/usr/bin), so an openssl installed
+// anywhere else (Nix, Homebrew, a FIPS build under /usr/local/ssl) was never
+// found and OPENSSL_CONF never reached it.
+//
+// Hermetic: a shim `openssl` in a temporary directory is put FIRST on PATH, and
+// no real openssl runs. The shim writes a marker instead of a certificate, so
+// the listener then refuses the file; what is asserted is that the shim ran and
+// saw OPENSSL_CONF.
+test "TestSONNY2394_CertAutogenSpawnsWithProcessEnvironment" {
+    const allocator = std.testing.allocator;
+    const io = std.Io.Threaded.global_single_threaded.io();
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const paths = try Paths.init(allocator, &tmp);
+    defer paths.deinit(allocator);
+
+    try tmp.dir.createDirPath(io, "bin");
+    try tmp.dir.writeFile(io, .{
+        .sub_path = "bin/openssl",
+        .data = openssl_shim,
+        .flags = .{ .permissions = .executable_file },
+    });
+
+    const new_path = if (getenv("PATH")) |p|
+        try std.fmt.allocPrintSentinel(allocator, "{s}/bin:{s}", .{ paths.dir, p }, 0)
+    else
+        try std.fmt.allocPrintSentinel(allocator, "{s}/bin", .{paths.dir}, 0);
+    defer allocator.free(new_path);
+    const conf = try std.fmt.allocPrintSentinel(allocator, "{s}/sonny2394-openssl.cnf", .{paths.dir}, 0);
+    defer allocator.free(conf);
+
+    const old_path = try swapEnv(allocator, "PATH", new_path);
+    defer restoreEnv(allocator, "PATH", old_path);
+    const old_conf = try swapEnv(allocator, "OPENSSL_CONF", conf);
+    defer restoreEnv(allocator, "OPENSSL_CONF", old_conf);
+
+    var qt = try quic.QuicTransport.init(allocator, .{
+        .port = 0,
+        .address = "127.0.0.1",
+        .cert_path = paths.cert,
+        .key_path = paths.key,
+        .cert_auto_generate = .always,
+    });
+    defer qt.deinit();
+
+    // The shim's marker is not a PEM certificate, so the listener refuses it.
+    try std.testing.expectError(quic.QuicError.CertificateError, qt.listen());
+
+    const written = try std.Io.Dir.cwd().readFileAlloc(io, paths.cert, allocator, .limited(4096));
+    defer allocator.free(written);
+    const expected = try std.fmt.allocPrint(allocator, "geode-openssl-shim OPENSSL_CONF={s}\n", .{conf});
+    defer allocator.free(expected);
+    try std.testing.expectEqualStrings(expected, written);
 }
 
 test "TestSONNY2394_CertAutogenPolicyMatrix" {

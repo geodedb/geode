@@ -486,9 +486,26 @@ fn envIsProduction() bool {
 /// only needs a real allocator (spawnPosix's argv arena; the stock global
 /// instance ships with `.failing`). No concurrency is available or needed: the
 /// child's stdio is ignored and we only wait for it.
+///
+/// It also carries the PROCESS environment (libc `environ`, the table
+/// `envValue` reads), seeded the way std's own start code seeds its Io.
+/// `init_single_threaded` starts with an EMPTY environment, and std uses the
+/// spawning Io's environment twice: to resolve argv[0] (its PATH, else the
+/// fixed `std.Io.Threaded.default_PATH`, /usr/local/bin:/bin/:/usr/bin) and,
+/// when no `environ_map` is given, as the child's whole environment. So
+/// `openssl` was found only in those three directories and ran with no
+/// environment at all (no PATH, no OPENSSL_CONF): certificate generation
+/// failed wherever openssl lives elsewhere (Nix, Homebrew, a FIPS build under
+/// /usr/local/ssl). Passing `SpawnOptions.environ_map` alone would not fix the
+/// lookup: `spawnPosix` searches the Io's PATH, never the map's.
 fn spawnOnlyThreaded() std.Io.Threaded {
     var t: std.Io.Threaded = .init_single_threaded;
     t.allocator = std.heap.smp_allocator;
+    if (comptime std.process.Environ.Block == std.process.Environ.PosixBlock and builtin.link_libc) {
+        const block: std.process.Environ.Block = .{ .slice = std.mem.span(std.c.environ) };
+        t.environ = .{ .process_environ = .{ .block = block } };
+        t.environ_initialized = block.isEmpty();
+    }
     return t;
 }
 
