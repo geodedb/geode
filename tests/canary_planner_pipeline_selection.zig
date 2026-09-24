@@ -48,7 +48,8 @@ test "TestCANARY_REQ_GQL_024_PlanSelectionPipelineAdoption" {
     const q = pipeline.defaultEmptyQuery();
     var gpa = std.heap.DebugAllocator(.{}){};
     defer _ = gpa.deinit();
-    const res = try pipeline.planQuerySelectBest(gpa.allocator(), q, .{ .max_plans = 128, .enable_prune = true, .prune_factor = 2.0 });
+    var res = try pipeline.planQuerySelectBest(gpa.allocator(), q, .{ .max_plans = 128, .enable_prune = true, .prune_factor = 2.0 });
+    defer res.deinit();
     try std.testing.expect(res.best != null and res.total_candidates > 0);
 }
 
@@ -62,8 +63,9 @@ test "BenchmarkCANARY_REQ_GQL_024_PlanSelectionPipelineVarianceEnvelope" {
     var i: usize = 0;
     while (i < iterations) : (i += 1) {
         const start = compat_nanoTimestamp();
-        _ = try pipeline.planQuerySelectBest(gpa.allocator(), q, .{ .max_plans = 256, .enable_prune = true, .prune_factor = 2.5 });
+        var res = try pipeline.planQuerySelectBest(gpa.allocator(), q, .{ .max_plans = 256, .enable_prune = true, .prune_factor = 2.5 });
         const end = compat_nanoTimestamp();
+        res.deinit();
         samples[i] = @as(u64, @intCast(end - start));
     }
     var s: f128 = 0;

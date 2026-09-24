@@ -54,6 +54,7 @@ test "TestCANARY_REQ_GQL_024_PlanSelectionIntegration" {
     const root = enumerator_mod.LogicalPlan{ .op = .join, .children = join_children[0..] };
 
     var enumr = enumerator_mod.PlanEnumerator.init(alloc, .{ .max_plans = 32 });
+    defer enumr.deinit();
     var buf = std.ArrayList(enumerator_mod.CandidatePlan).empty;
     const best = try enumr.selectBestUnmanaged(root, alloc, &buf) orelse return error.UnexpectedEmptyEnumeration;
     // Expect cost non-negative and enumerate produced at least 2 plans
@@ -83,6 +84,7 @@ test "BenchmarkCANARY_REQ_GQL_024_PlanSelectionVarianceEnvelope" {
     var i: usize = 0;
     while (i < iterations) : (i += 1) {
         var enumr = enumerator_mod.PlanEnumerator.init(alloc, .{ .max_plans = 128 });
+        defer enumr.deinit();
         var buf = std.ArrayList(enumerator_mod.CandidatePlan).empty;
         const start = compat_nanoTimestamp();
         _ = try enumr.selectBestUnmanaged(join2, alloc, &buf);

@@ -43,24 +43,35 @@ const enumerator_mod = @import("planner_enumerator");
 // CANARY: REQ=REQ-GQL-024; FEATURE="Cost Based Optimizer"; ASPECT=PlanEnumerationCostPrune; STATUS=TESTED; TEST=TestCANARY_REQ_GQL_024_PlanEnumerationCostPrune; BENCH=BenchmarkCANARY_REQ_GQL_024_PlanEnumerationCostPruneVarianceEnvelope; OWNER=planner; UPDATED=2025-09-22
 // CANARY: REQ=REQ-GQL-024; FEATURE="Cost Based Optimizer"; ASPECT=PlanEnumerationCostPruneVarianceEnvelope; STATUS=BENCHED; TEST=TestCANARY_REQ_GQL_024_PlanEnumerationCostPrune; BENCH=BenchmarkCANARY_REQ_GQL_024_PlanEnumerationCostPruneVarianceEnvelope; OWNER=planner; UPDATED=2025-09-22
 
-fn buildDeepTree(depth: usize, leaf: enumerator_mod.LogicalPlan) enumerator_mod.LogicalPlan {
+// SONNY-2394: the children arrays must outlive this call. They used to be a
+// local `[2]LogicalPlan` in each recursive frame, so the returned tree pointed
+// into dead stack frames and the enumerator crashed (GPF) walking it.
+fn buildDeepTree(a: std.mem.Allocator, depth: usize, leaf: enumerator_mod.LogicalPlan) !enumerator_mod.LogicalPlan {
     if (depth == 0) return leaf;
-    var children: [2]enumerator_mod.LogicalPlan = .{ buildDeepTree(depth - 1, leaf), leaf };
-    return enumerator_mod.LogicalPlan{ .op = .join, .children = children[0..] };
+    const children = try a.alloc(enumerator_mod.LogicalPlan, 2);
+    children[0] = try buildDeepTree(a, depth - 1, leaf);
+    children[1] = leaf;
+    return enumerator_mod.LogicalPlan{ .op = .join, .children = children };
 }
 
 test "TestCANARY_REQ_GQL_024_PlanEnumerationCostPrune" {
     var gpa = std.heap.DebugAllocator(.{}){};
     defer _ = gpa.deinit();
     const alloc = gpa.allocator();
+    var tree_arena = std.heap.ArenaAllocator.init(alloc);
+    defer tree_arena.deinit();
     const leaf = enumerator_mod.LogicalPlan{ .op = .scan, .children = &[_]enumerator_mod.LogicalPlan{} };
-    const root = buildDeepTree(4, leaf); // depth 4 tree
+    const root = try buildDeepTree(tree_arena.allocator(), 4, leaf); // depth 4 tree
 
     var enum_prune = enumerator_mod.PlanEnumerator.init(alloc, .{ .max_plans = 1024, .enable_prune = true, .prune_factor = 1.2 });
+    defer enum_prune.deinit();
     var enum_full = enumerator_mod.PlanEnumerator.init(alloc, .{ .max_plans = 1024, .enable_prune = false });
+    defer enum_full.deinit();
 
     var list_prune = std.ArrayList(enumerator_mod.CandidatePlan).empty;
+    defer list_prune.deinit(alloc);
     var list_full = std.ArrayList(enumerator_mod.CandidatePlan).empty;
+    defer list_full.deinit(alloc);
     try enum_prune.enumerateUnmanaged(root, alloc, &list_prune);
     try enum_full.enumerateUnmanaged(root, alloc, &list_full);
 
@@ -77,17 +88,16 @@ test "TestCANARY_REQ_GQL_024_PlanEnumerationCostPrune" {
         if (cp.cost < best_prune) best_prune = cp.cost;
     }
     try std.testing.expect(best_prune <= best_full * 1.2 + 0.0001);
-
-    list_prune.deinit(alloc);
-    list_full.deinit(alloc);
 }
 
 test "BenchmarkCANARY_REQ_GQL_024_PlanEnumerationCostPruneVarianceEnvelope" {
     var gpa = std.heap.DebugAllocator(.{}){};
     defer _ = gpa.deinit();
     const alloc = gpa.allocator();
+    var tree_arena = std.heap.ArenaAllocator.init(alloc);
+    defer tree_arena.deinit();
     const leaf = enumerator_mod.LogicalPlan{ .op = .scan, .children = &[_]enumerator_mod.LogicalPlan{} };
-    const root = buildDeepTree(5, leaf);
+    const root = try buildDeepTree(tree_arena.allocator(), 5, leaf);
     const iterations: usize = 64;
     var samples_prune = try alloc.alloc(u64, iterations);
     defer alloc.free(samples_prune);
@@ -96,7 +106,9 @@ test "BenchmarkCANARY_REQ_GQL_024_PlanEnumerationCostPruneVarianceEnvelope" {
     var i: usize = 0;
     while (i < iterations) : (i += 1) {
         var ep = enumerator_mod.PlanEnumerator.init(alloc, .{ .max_plans = 2048, .enable_prune = true, .prune_factor = 1.3 });
+        defer ep.deinit();
         var ef = enumerator_mod.PlanEnumerator.init(alloc, .{ .max_plans = 2048, .enable_prune = false });
+        defer ef.deinit();
         var lp = std.ArrayList(enumerator_mod.CandidatePlan).empty;
         var lf = std.ArrayList(enumerator_mod.CandidatePlan).empty;
         const start_p = compat_nanoTimestamp();

@@ -53,10 +53,11 @@ test "TestCANARY_REQ_GQL_024_PlanEnumerationEngine" {
     const root = enumerator_mod.LogicalPlan{ .op = .join, .children = join_children[0..] };
 
     var enumerator = enumerator_mod.PlanEnumerator.init(alloc, .{});
+    defer enumerator.deinit();
     var plans = std.ArrayList(enumerator_mod.CandidatePlan).empty;
+    // SONNY-2394: this defer used to appear twice (double free -> GPF).
     defer plans.deinit(alloc);
     try plans.ensureTotalCapacity(alloc, 16);
-    defer plans.deinit(alloc);
     try enumerator.enumerateUnmanaged(root, alloc, &plans);
     try std.testing.expect(plans.items.len >= 2); // original + swapped
     // check distinct signatures
@@ -89,6 +90,7 @@ test "BenchmarkCANARY_REQ_GQL_024_PlanEnumerationVarianceEnvelope" {
     var i: usize = 0;
     while (i < iterations) : (i += 1) {
         var enumerator = enumerator_mod.PlanEnumerator.init(alloc, .{ .max_plans = 512 });
+        defer enumerator.deinit();
         var plans_iter = std.ArrayList(enumerator_mod.CandidatePlan).empty;
         try plans_iter.ensureTotalCapacity(alloc, 32);
         const start = compat_nanoTimestamp();
