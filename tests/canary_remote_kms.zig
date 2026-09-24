@@ -2,6 +2,9 @@ const std = @import("std");
 const quic = @import("transport/quic");
 // kms_remote exposed via build.zig module alias added below (security/kms_remote)
 const kms = @import("security/kms_remote");
+// SONNY-2394 review: a private certificate pair per server -- the aggregate
+// runs the KMS test binaries concurrently, and they used to race on ./certs.
+const kms_tls = @import("kms_test_tls.zig");
 
 // CANARY: REQ=REQ-GQL-TDE-EXT-KMS-REMOTE-001; FEATURE="RemoteKMSPrototype"; ASPECT=TEST; STATUS=TESTED; TEST=TestCANARY_REQ_GQL_TDE_EXT_KMS_REMOTE_001_Generate; OWNER=security; UPDATED=2025-09-26
 // CANARY: REQ=REQ-GQL-TDE-ATTEST-001; FEATURE="RemoteKmsAttestation"; ASPECT=TEST; STATUS=TESTED; TEST=TestCANARY_REQ_GQL_TDE_ATTEST_001_AttestationStub; OWNER=security; UPDATED=2025-09-26
@@ -24,7 +27,9 @@ test "TestCANARY_REQ_GQL_TDE_EXT_KMS_REMOTE_001_Generate" {
         }
     }{ .a = arena.allocator() };
     var server = try kms.RemoteKmsServer.init(gpa.allocator(), 0xBEEFCAFE);
-    try server.start(8876);
+    var tls = try kms_tls.TestTls.init(gpa.allocator());
+    defer tls.deinit(gpa.allocator());
+    try server.startWithOptions(8876, tls.startOptions());
     try server.server.setAuthToken("TOKEN123");
 
     // Spawn a thread to process a few requests sequentially
@@ -52,7 +57,9 @@ test "TestCANARY_REQ_GQL_TDE_ATTEST_001_AttestationStub" {
         }
     }{ .a = arena.allocator() };
     var server = try kms.RemoteKmsServer.init(gpa.allocator(), 0xABCD1234);
-    try server.start(8877);
+    var tls = try kms_tls.TestTls.init(gpa.allocator());
+    defer tls.deinit(gpa.allocator());
+    try server.startWithOptions(8877, tls.startOptions());
     try server.server.setAuthToken("TOKEN123");
     var t = try std.Thread.spawn(.{}, struct {
         fn run(s: *kms.RemoteKmsServer) void {
@@ -77,7 +84,9 @@ test "TestCANARY_REQ_GQL_SEC_UNWRAP_001_PrivilegedUnwrap" {
         }
     }{ .a = arena.allocator() };
     var server = try kms.RemoteKmsServer.init(gpa.allocator(), 0x11223344);
-    try server.start(8878);
+    var tls = try kms_tls.TestTls.init(gpa.allocator());
+    defer tls.deinit(gpa.allocator());
+    try server.startWithOptions(8878, tls.startOptions());
     try server.server.setAuthToken("TOKEN123");
     var t = try std.Thread.spawn(.{}, struct {
         fn run(s: *kms.RemoteKmsServer) void {
@@ -107,7 +116,9 @@ test "QuicClient.connect normalizes localhost to 127.0.0.1 (GAP-0514 P3)" {
         }
     }{ .a = arena.allocator() };
     var server = try kms.RemoteKmsServer.init(gpa.allocator(), 0x10CA1057);
-    try server.start(8879);
+    var tls = try kms_tls.TestTls.init(gpa.allocator());
+    defer tls.deinit(gpa.allocator());
+    try server.startWithOptions(8879, tls.startOptions());
     try server.server.setAuthToken("TOKEN123");
     var t = try std.Thread.spawn(.{}, struct {
         fn run(s: *kms.RemoteKmsServer) void {
@@ -136,7 +147,9 @@ test "QuicClientStream.readLine: WouldBlock on quiet stream, Interrupted with ar
         }
     }{ .a = arena.allocator() };
     var server = try kms.RemoteKmsServer.init(gpa.allocator(), 0x0DDB17E5);
-    try server.start(8880);
+    var tls = try kms_tls.TestTls.init(gpa.allocator());
+    defer tls.deinit(gpa.allocator());
+    try server.startWithOptions(8880, tls.startOptions());
     try server.server.setAuthToken("TOKEN123");
     var t = try std.Thread.spawn(.{}, struct {
         fn run(s: *kms.RemoteKmsServer) void {

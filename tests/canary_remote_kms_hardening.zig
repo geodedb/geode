@@ -2,6 +2,7 @@ const std = @import("std");
 const builtin = @import("builtin");
 const kms = @import("security/kms_remote"); // Provided via build.zig for zig build test; direct zig test on file unsupported
 const quic = @import("transport/quic");
+const kms_tls = @import("kms_test_tls.zig");
 
 // Remote KMS hardening tests & benchmark additions
 // Covers negative auth, expired attestation simulation, and concurrency stress unwrap.
@@ -26,9 +27,13 @@ const quic = @import("transport/quic");
 /// Start a KMS server on `port`, serve it from a background thread for the
 /// duration of `body`, then stop + join the thread and deinit the server.
 fn withServer(port: u16, auth: []const u8, body: fn (*kms.RemoteKmsServer) anyerror!void) !void {
+    // A private certificate pair per server (SONNY-2394 review): the
+    // aggregate runs the KMS test binaries concurrently.
+    var tls = try kms_tls.TestTls.init(std.testing.allocator);
+    defer tls.deinit(std.testing.allocator);
     var server = try kms.RemoteKmsServer.init(std.testing.allocator, 0xdeadbeefcafebabe);
     defer server.deinit();
-    try server.start(port);
+    try server.startWithOptions(port, tls.startOptions());
     try server.server.setAuthToken(auth);
 
     var stop = std.atomic.Value(bool).init(false);

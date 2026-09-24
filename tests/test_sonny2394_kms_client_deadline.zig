@@ -18,11 +18,15 @@
 // CANARY: REQ=REQ-KMS-REMOTE-CLIENT-001; FEATURE="RemoteKMSClient"; ASPECT=ResponseDeadline; STATUS=TESTED; TEST=TestSONNY2394_KmsClientWaitsOutBusyServer; OWNER=security; UPDATED=2026-09-23
 // CANARY: REQ=REQ-KMS-REMOTE-CLIENT-001; FEATURE="RemoteKMSClient"; ASPECT=ResponseDeadlineWallClock; STATUS=TESTED; TEST=TestSONNY2394_KmsClientDeadlineIsWallClock; OWNER=security; UPDATED=2026-09-23
 // CANARY: REQ=REQ-KMS-REMOTE-CLIENT-001; FEATURE="RemoteKMSClient"; ASPECT=ClosedConnectionFailFast; STATUS=TESTED; TEST=TestSONNY2394_KmsClientFailsFastOnClosedConnection; OWNER=security; UPDATED=2026-09-23
-// CANARY: REQ=REQ-REMOTE-KMS-SERVER-001; FEATURE="Remote KMS Server"; ASPECT=StaleStreamNotifications; STATUS=TESTED; TEST=TestSONNY2394_KmsServerIgnoresStaleStreamNotifications; OWNER=security; UPDATED=2026-09-23
+// CANARY: REQ=REQ-REMOTE-KMS-SERVER-001; FEATURE="Remote KMS Server"; ASPECT=SplitRequestAnsweredOnce; STATUS=TESTED; TEST=TestSONNY2394_KmsServerAnswersSplitRequestOnce; OWNER=security; UPDATED=2026-09-24
+// CANARY: REQ=REQ-REMOTE-KMS-SERVER-001; FEATURE="Remote KMS Server"; ASPECT=PerConnectionRequestAssembly; STATUS=TESTED; TEST=TestSONNY2394_KmsServerAssemblesPartialRequestPerConnection; OWNER=security; UPDATED=2026-09-24
+// CANARY: REQ=REQ-REMOTE-KMS-SERVER-001; FEATURE="Remote KMS Server"; ASPECT=ServingLoopNoSpin; STATUS=TESTED; TEST=TestSONNY2394_KmsServeUntilStoppedDoesNotSpin; OWNER=security; UPDATED=2026-09-24
+// CANARY: REQ=REQ-KMS-REMOTE-CLIENT-001; FEATURE="RemoteKMSClient"; ASPECT=DeadlineConfigRoute; STATUS=TESTED; TEST=TestSONNY2394_KmsClientOptionsCarryDeadline; OWNER=security; UPDATED=2026-09-24
 
 const std = @import("std");
 const kms = @import("security/kms_remote"); // module provided by build.zig
 const quic = @import("transport/quic");
+const kms_tls = @import("kms_test_tls.zig");
 
 fn monoMs() u64 {
     var ts: std.os.linux.timespec = undefined;
@@ -45,6 +49,7 @@ fn sleepMs(ms: u64) void {
 /// test may then inspect the server's state.
 const PausableServer = struct {
     server: kms.RemoteKmsServer,
+    tls: kms_tls.TestTls,
     stop: std.atomic.Value(bool) = .init(false),
     paused: std.atomic.Value(bool) = .init(false),
     pause_seq: std.atomic.Value(u32) = .init(0),
@@ -52,9 +57,14 @@ const PausableServer = struct {
     thread: ?std.Thread = null,
 
     fn start(self: *PausableServer, port: u16, auth: []const u8) !void {
-        self.* = .{ .server = try kms.RemoteKmsServer.init(std.testing.allocator, 0x2394) };
+        self.* = .{
+            .server = try kms.RemoteKmsServer.init(std.testing.allocator, 0x2394),
+            .tls = undefined,
+        };
         errdefer self.server.deinit();
-        try self.server.start(port);
+        self.tls = try kms_tls.TestTls.init(std.testing.allocator);
+        errdefer self.tls.deinit(std.testing.allocator);
+        try self.server.startWithOptions(port, self.tls.startOptions());
         try self.server.server.setAuthToken(auth);
         self.thread = try std.Thread.spawn(.{}, run, .{self});
     }
@@ -85,6 +95,7 @@ const PausableServer = struct {
         if (self.thread) |t| t.join();
         self.thread = null;
         self.server.deinit();
+        self.tls.deinit(std.testing.allocator);
     }
 };
 
@@ -221,13 +232,12 @@ fn readResponseLine(client: *kms.RemoteKmsClient, stream: *quic.QuicClientStream
     }
 }
 
-// The transport re-queues a stream id every time more data lands on it, so a
-// request that reaches the server in two datagrams is announced twice (see the
-// same note in src/server/quic_connection_handler.zig). The second
-// announcement must not be read as another request -- with nothing left to read
-// and no FIN yet, the old serving loop blocked EVERY connection for up to
-// 100 x poll(10) on it -- and no stream wrapper may outlive its request.
-test "TestSONNY2394_KmsServerIgnoresStaleStreamNotifications" {
+// The transport announces a request stream once per arriving datagram, so a
+// request that reaches the server in pieces can be announced more than once
+// (see the same note in src/server/quic_connection_handler.zig). However many
+// announcements there were, the request is answered exactly once and no
+// stream wrapper outlives it.
+test "TestSONNY2394_KmsServerAnswersSplitRequestOnce" {
     const port: u16 = 13064;
     var ps: PausableServer = undefined;
     try ps.start(port, "stale-token");
@@ -248,22 +258,97 @@ test "TestSONNY2394_KmsServerIgnoresStaleStreamNotifications" {
     defer std.heap.page_allocator.free(line);
     try std.testing.expect(std.mem.indexOf(u8, line, "\"status\":\"OK\"") != null);
 
-    // Let the server drain the second announcement of the same stream. The
-    // stream stays open (no FIN): a server that tries to READ the stale
-    // announcement finds nothing and blocks on it.
+    // Let the server finish with the stream (bounded), then inspect it parked.
     const give_up_ms = monoMs() + 10_000;
     while (true) {
         ps.pause();
-        if (ps.server.stats.stale_notifications >= 1 or monoMs() >= give_up_ms) break;
+        const sc = &ps.server.conns.items[0];
+        if ((sc.pending.items.len == 0 and sc.conn.trackedStreamCount() == 0) or monoMs() >= give_up_ms) break;
         ps.unpause();
         sleepMs(20);
     }
     defer ps.unpause();
 
     try std.testing.expectEqual(@as(u64, 1), ps.server.stats.requests_served);
-    try std.testing.expect(ps.server.stats.stale_notifications >= 1);
     try std.testing.expectEqual(@as(usize, 1), ps.server.conns.items.len);
-    // No wrapper outlives its request (the served stream and the stale
-    // announcement are both released).
+    try std.testing.expectEqual(@as(usize, 0), ps.server.conns.items[0].pending.items.len);
     try std.testing.expectEqual(@as(usize, 0), ps.server.conns.items[0].conn.trackedStreamCount());
+}
+
+// Per-connection handling (review): a request whose line arrives in pieces --
+// the second piece well after the first -- must still be answered, and must
+// not hold up requests on other connections meanwhile. The old serving loop
+// read the partial line with a blocking retry, gave up after ~50 ms and closed
+// the stream, so the request was lost.
+test "TestSONNY2394_KmsServerAssemblesPartialRequestPerConnection" {
+    const port: u16 = 13065;
+    var ps: PausableServer = undefined;
+    try ps.start(port, "partial-token");
+    defer ps.deinit();
+
+    var slow = try connectClient(port, "partial-token");
+    defer slow.deinit();
+    var fast = try connectClient(port, "partial-token");
+    defer fast.deinit();
+
+    var stream = try slow.quic_client.?.getStream();
+    defer stream.close();
+    try stream.writeAll("{\"op\":\"Generate\",");
+
+    // Another connection is served while the first request is incomplete.
+    const env = try fast.generate();
+    _ = try fast.unwrap(env);
+    sleepMs(300);
+
+    try stream.writeAll("\"auth\":\"partial-token\"}\n");
+    const line = try readResponseLine(&slow, stream, 10_000);
+    defer std.heap.page_allocator.free(line);
+    try std.testing.expect(std.mem.indexOf(u8, line, "\"status\":\"OK\"") != null);
+}
+
+const StopWatch = struct {
+    server: *kms.RemoteKmsServer,
+    stop: *std.atomic.Value(bool),
+    returned: std.atomic.Value(bool) = .init(false),
+
+    fn run(self: *StopWatch) void {
+        self.server.serveUntilStopped(self.stop);
+        self.returned.store(true, .release);
+    }
+};
+
+// serveUntilStopped must not spin on a server that cannot serve: a server
+// that was never started returns at once instead of burning a core until
+// someone sets `stop`.
+test "TestSONNY2394_KmsServeUntilStoppedDoesNotSpin" {
+    var server = try kms.RemoteKmsServer.init(std.testing.allocator, 0x2394);
+    defer server.deinit();
+    var stop = std.atomic.Value(bool).init(false);
+    var watch = StopWatch{ .server = &server, .stop = &stop };
+    const t = try std.Thread.spawn(.{}, StopWatch.run, .{&watch});
+    const deadline = monoMs() + 2_000;
+    while (!watch.returned.load(.acquire) and monoMs() < deadline) sleepMs(5);
+    const returned_on_its_own = watch.returned.load(.acquire);
+    stop.store(true, .release);
+    t.join();
+    try std.testing.expect(returned_on_its_own);
+}
+
+// The response deadline has a configuration route (KMSConfig.remote_response_timeout_ms
+// reaches production KMSProvider callers through initWithOptions).
+test "TestSONNY2394_KmsClientOptionsCarryDeadline" {
+    const default_client = kms.RemoteKmsClient.init(std.heap.page_allocator);
+    try std.testing.expectEqual(kms.RemoteKmsClient.default_response_timeout_ms, default_client.response_timeout_ms);
+    const configured = kms.RemoteKmsClient.initWithOptions(std.heap.page_allocator, .{ .response_timeout_ms = 1234 });
+    try std.testing.expectEqual(@as(u32, 1234), configured.response_timeout_ms);
+    try std.testing.expect(!configured.connected);
+}
+
+test "TestSONNY2394_KmsServeFailureBackoffIsBounded" {
+    const backoff = kms.RemoteKmsServer.serveFailureBackoffMs;
+    try std.testing.expectEqual(@as(i64, 10), backoff(1));
+    try std.testing.expectEqual(@as(i64, 20), backoff(2));
+    try std.testing.expectEqual(@as(i64, 640), backoff(7));
+    try std.testing.expectEqual(@as(i64, 1000), backoff(8));
+    try std.testing.expectEqual(@as(i64, 1000), backoff(1000));
 }
