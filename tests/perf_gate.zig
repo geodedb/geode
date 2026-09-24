@@ -14,24 +14,43 @@
 //! does not hold is reported on stderr either way and fails the test only when
 //! enforced.
 //!
+//! Explicit override (SONNY-2394 review): `GEODE_PERF_GATES=enforce` enforces
+//! every claim even when `CI` is set. Without it the claims would never bite in
+//! any automated run (the pre-push hook and every GitLab pipeline set CI); the
+//! scheduled-pipeline job `test-perf-gates-enforced` (.gitlab-ci.yml) runs the
+//! gated steps with the override.
+//!
 //! Self-test hook: `GEODE_PERF_GATE_SELFTEST=violate` makes every claim count
 //! as violated, so any call site can be shown to route through the gate (the
-//! step fails with CI unset and passes with CI set).
+//! step fails when enforced and passes when reported).
 
 const std = @import("std");
 
 pub const Error = error{PerfClaimViolated};
 
 pub const Mode = enum {
-    /// `CI` unset: a violated claim fails the test.
+    /// `CI` unset, or `GEODE_PERF_GATES=enforce`: a violated claim fails the test.
     enforced,
-    /// `CI` set: a violated claim is reported only.
+    /// `CI` set (no override): a violated claim is reported only.
     reported,
 };
 
-/// The gate mode for this process, from the `CI` environment variable.
+/// Explicit override variable; the value `enforce` enforces even under CI.
+pub const override_env = "GEODE_PERF_GATES";
+
+/// Pure mode resolution (reads no environment): the override wins, otherwise
+/// claims are enforced exactly when `CI` is unset.
+pub fn modeFor(ci_set: bool, override: ?[]const u8) Mode {
+    if (override) |v| {
+        if (std.mem.eql(u8, v, "enforce")) return .enforced;
+    }
+    return if (ci_set) .reported else .enforced;
+}
+
+/// The gate mode for this process, from `CI` and `GEODE_PERF_GATES`.
 pub fn currentMode() Mode {
-    return if (std.c.getenv("CI") == null) .enforced else .reported;
+    const override: ?[]const u8 = if (std.c.getenv(override_env)) |p| std.mem.span(p) else null;
+    return modeFor(std.c.getenv("CI") != null, override);
 }
 
 fn selftestForcesViolation() bool {
@@ -78,9 +97,22 @@ pub fn envelopeIn(mode: Mode, force_violation: bool, name: []const u8, cv: anyty
 
 // -- Self tests (no environment mutation: see `checkIn`) ---------------------
 
-test "perf_gate: currentMode follows CI (unset => enforced)" {
+test "perf_gate: currentMode follows CI and the GEODE_PERF_GATES override" {
     const ci_set = std.c.getenv("CI") != null;
-    try std.testing.expectEqual(if (ci_set) Mode.reported else Mode.enforced, currentMode());
+    const override: ?[]const u8 = if (std.c.getenv(override_env)) |p| std.mem.span(p) else null;
+    const forced = if (override) |v| std.mem.eql(u8, v, "enforce") else false;
+    try std.testing.expectEqual(if (forced or !ci_set) Mode.enforced else Mode.reported, currentMode());
+}
+
+test "perf_gate: modeFor -- the enforce override wins over CI" {
+    try std.testing.expectEqual(Mode.enforced, modeFor(false, null));
+    try std.testing.expectEqual(Mode.reported, modeFor(true, null));
+    try std.testing.expectEqual(Mode.enforced, modeFor(true, "enforce"));
+    try std.testing.expectEqual(Mode.enforced, modeFor(false, "enforce"));
+    // Any other value is not an override.
+    try std.testing.expectEqual(Mode.reported, modeFor(true, "1"));
+    try std.testing.expectEqual(Mode.reported, modeFor(true, "ENFORCE "));
+    try std.testing.expectEqual(Mode.enforced, modeFor(false, "report"));
 }
 
 test "perf_gate: a clearly-violating claim FAILS when enforced (CI unset)" {
