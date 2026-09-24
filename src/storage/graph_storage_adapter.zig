@@ -6041,7 +6041,22 @@ pub const StorageAdapter = struct {
                 const rec = std.mem.bytesToValue(NodeRec, data[slot_offset..][0..@sizeOf(NodeRec)]);
 
                 if (node_mod.isDeleted(&rec)) continue;
-                if (node_mod.isEmpty(&rec)) continue;
+                // SONNY-2394 fail-closed: this slot is LISTED in the label
+                // posting list and its page is allocated, yet its record is
+                // all-zero ("empty"). The engine never zeroes a node record
+                // (deleteNode only sets NODE_FLAG_DELETED, handled above), so
+                // this is lost/zeroed page data -- e.g. a torn write the pager
+                // accepts as a fresh all-zero page (it skips the CRC for a
+                // zero header). Skipping it (the old `continue`) silently
+                // dropped every node on the page from label scans while
+                // count() still reported them.
+                if (node_mod.isEmpty(&rec)) {
+                    // warn, not err: the typed error below is the contract the
+                    // caller surfaces (std.log.err would also fail every test
+                    // that deliberately exercises this path).
+                    log.warn("label scan: indexed node record is empty (lost or zeroed page) -- refusing to serve partial results (shard={d} slot={d} page={d})", .{ shard_idx, nid, page_id });
+                    return error.DataCorruption;
+                }
                 // H1 instrumentation: one live slot enumerated (materialized into
                 // a label-scan result). Bounded by the WHERE+LIMIT fix once the
                 // caller stops requesting shards after `offset+limit` matches.

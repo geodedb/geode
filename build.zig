@@ -4447,6 +4447,7 @@ pub fn build(b: *std.Build) void {
     redo_delta_tests.root_module.addImport("perf_gate", perf_gate_mod);
     const recovery_corrupt_latency_tests = b.addTest(.{ .root_module = b.createModule(.{ .root_source_file = b.path("tests/canary_recovery_corrupt_latency.zig"), .target = target, .optimize = optimize }) });
     recovery_corrupt_latency_tests.root_module.addImport("geode", root_mod);
+    recovery_corrupt_latency_tests.root_module.addImport("perf_gate", perf_gate_mod);
     const planner_plan_selection_tests = b.addTest(.{ .root_module = b.createModule(.{ .root_source_file = b.path("tests/canary_planner_plan_selection.zig"), .target = target, .optimize = optimize }) });
     planner_plan_selection_tests.root_module.addImport("planner_enumerator", planner_enumerator_mod);
     planner_plan_selection_tests.root_module.addImport("perf_gate", perf_gate_mod);
