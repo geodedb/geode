@@ -429,6 +429,21 @@ pub fn shouldWarnSlowPoll(cycle_ns: u64, threshold_ns: u64, last_warn_ns: u64, n
     return (now_ns -% last_warn_ns) >= min_interval_ns;
 }
 
+/// SONNY-2394 (review): an Io that can spawn a child without touching
+/// process-wide signal dispositions. `Threaded.init` installs SIGIO/SIGPIPE
+/// handlers and restores the saved ones on deinit, so a transient instance
+/// created inside a running server -- concurrently with another thread's
+/// Threaded -- can restore a stale disposition (SIGPIPE back to "terminate")
+/// under a live process. `init_single_threaded` never touches signals; spawning
+/// only needs a real allocator (spawnPosix's argv arena; the stock global
+/// instance ships with `.failing`). No concurrency is available or needed: the
+/// child's stdio is ignored and we only wait for it.
+fn spawnOnlyThreaded() std.Io.Threaded {
+    var t: std.Io.Threaded = .init_single_threaded;
+    t.allocator = std.heap.smp_allocator;
+    return t;
+}
+
 pub const QuicTransport = struct {
     allocator: std.mem.Allocator,
     config: Config,
@@ -1249,13 +1264,13 @@ pub const QuicTransport = struct {
         // SONNY-2394: do NOT spawn through `global_single_threaded` -- that Io
         // ships with `.allocator = .failing`, so `std.process.spawn` OOMs
         // inside spawnPosix's argv arena before it ever forks, and this
-        // auto-generation path could never succeed (the "generateSelfSignedCert
-        // is unimplemented in Zig 0.16" note in distributed/cluster.zig).
-        // Same fix as src/tools/cert_gen.zig: a local Threaded Io backed by
-        // smp_allocator.
-        var local_threaded = std.Io.Threaded.init(std.heap.smp_allocator, .{});
-        defer local_threaded.deinit();
-        const io = local_threaded.io();
+        // auto-generation path could never succeed (the old "unimplemented in
+        // Zig 0.16" note in distributed/cluster.zig). Nor through a second
+        // `Threaded.init` instance: that swaps process-wide signal handlers
+        // (see spawnOnlyThreaded).
+        var spawn_threaded = spawnOnlyThreaded();
+        defer spawn_threaded.deinit();
+        const io = spawn_threaded.io();
 
         // Ensure the parent directory for the certificate exists.
         if (std.fs.path.dirname(self.config.cert_path)) |dir_path| {
