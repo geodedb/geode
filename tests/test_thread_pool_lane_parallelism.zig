@@ -79,9 +79,10 @@ fn barrierTask(ctx: *anyopaque) void {
             break;
         }
     }
-    // Spin until release, bounded to ~2 s so a buggy pool doesn't hang
-    // the test forever.
-    const deadline = monoNanos() + 2 * std.time.ns_per_s;
+    // Spin until release, bounded so a buggy pool doesn't hang the test
+    // forever. The bound must outlast the submitter's start wait, or early
+    // tasks give up before the last one starts (SONNY-2394).
+    const deadline = monoNanos() + 15 * std.time.ns_per_s;
     while (!c.release.load(.acquire)) {
         if (monoNanos() > deadline) break;
         sleepNs(1 * std.time.ns_per_ms);
@@ -159,10 +160,20 @@ test "submitDefault: 8-way parallelism via default-lane workers" {
         }
     }
 
-    // Wait up to 500 ms for all N to reach the barrier.  If the default
-    // lane is serialized (pre-fix bug: blocking_workers=1 path) only 1
-    // task ever starts, started_count caps at 1, and we time out.
-    const deadline = monoNanos() + 500 * std.time.ns_per_ms;
+    // Wait for all N to reach the barrier.  If the default lane is
+    // serialized (pre-fix bug: blocking_workers=1 path) only 1 task ever
+    // starts, started_count caps at 1, and we time out.
+    //
+    // SONNY-2394: the bound was 500 ms -- exactly the pool's idle park
+    // (`idle_park_after_ns`). With the default config one of the N workers
+    // is the blocking-lane worker, which helps the default lane only when it
+    // wakes on its own: default-lane submits wake default-lane workers only
+    // (thread_pool scanAndWake). So the N-th task starts up to one park
+    // interval late, and a loaded aggregate shard missed the 500 ms window
+    // ("expected 8, found 7"). A generous bound keeps the same assertion --
+    // N tasks running at once -- without racing the park timer; a correct
+    // pool releases the barrier as soon as the last task starts.
+    const deadline = monoNanos() + 10 * std.time.ns_per_s;
     while (ctx.started_count.load(.acquire) < n) {
         if (monoNanos() > deadline) break;
         sleepNs(1 * std.time.ns_per_ms);
@@ -173,7 +184,7 @@ test "submitDefault: 8-way parallelism via default-lane workers" {
     // Release the barrier and let workers drain before assertions fire
     // (so a failing assertion doesn't leave worker threads spinning).
     ctx.release.store(true, .release);
-    const drain_deadline = monoNanos() + 2 * std.time.ns_per_s;
+    const drain_deadline = monoNanos() + 15 * std.time.ns_per_s;
     while (ctx.finished_count.load(.acquire) < started) {
         if (monoNanos() > drain_deadline) break;
         sleepNs(1 * std.time.ns_per_ms);
@@ -282,7 +293,8 @@ test "blocking_workers=0: submitBlocking disabled and default lane owns all work
         }));
     }
 
-    const deadline = monoNanos() + 500 * std.time.ns_per_ms;
+    // Generous bound for a loaded host (SONNY-2394); see the test above.
+    const deadline = monoNanos() + 10 * std.time.ns_per_s;
     while (ctx.started_count.load(.acquire) < n) {
         if (monoNanos() > deadline) break;
         sleepNs(1 * std.time.ns_per_ms);
@@ -290,7 +302,7 @@ test "blocking_workers=0: submitBlocking disabled and default lane owns all work
 
     const started = ctx.started_count.load(.acquire);
     ctx.release.store(true, .release);
-    const drain_deadline = monoNanos() + 2 * std.time.ns_per_s;
+    const drain_deadline = monoNanos() + 15 * std.time.ns_per_s;
     while (ctx.finished_count.load(.acquire) < started) {
         if (monoNanos() > drain_deadline) break;
         sleepNs(1 * std.time.ns_per_ms);
