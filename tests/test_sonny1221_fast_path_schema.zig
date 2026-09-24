@@ -286,6 +286,17 @@ test "SONNY-1221: gRPC fast-path schema frame reports the executor's column type
 // QUIC: a real server, a real client.
 // ---------------------------------------------------------------------------
 test "SONNY-1221: QUIC fast-path schema frame reports the executor's column types" {
+    // These reads take the node-scan fast path, not the executor. The QUIC
+    // `.rows` arm streams a query through `node_scan_stream` when the storage
+    // adapter exists (`--data-dir` below), the session has no tenant scope, the
+    // program has no effectful preamble, and no RLS policy is installed
+    // (`authenticatedReadNeedsRlsSnapshot`: an authenticated session alone
+    // does not force the snapshot path). All four hold for this fresh server
+    // and these queries, and the gRPC test above asserts that the same query
+    // shapes are served by a node-scan stream. Nothing on the wire tells the
+    // two paths apart once their types agree. The evidence is the RED run:
+    // before the fix this test failed with "expected type STRING, found
+    // NULL", and only the fast path ever typed these columns NULL.
     const allocator = testing.allocator;
     var tmp = testing.tmpDir(.{});
     defer tmp.cleanup();

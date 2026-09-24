@@ -230,6 +230,8 @@ fn rebuildPendingIndexes(
 // is unreachable for an authenticated session (the global RLS filter engine is
 // always installed there, see `rls_active`), so that handler's fast-path schema
 // frame can only be exercised in process.
+/// `pub` as a SONNY-1221 test seam only; production dispatch must go through
+/// `handlePacket`, and production installs the store in `GeodeGrpcServer.init`.
 pub const SessionStore = struct {
     allocator: std.mem.Allocator,
     rwlock: std.Io.RwLock = std.Io.RwLock.init,
@@ -333,7 +335,9 @@ fn getSessionStore() ?*SessionStore {
     return g_session_store_atomic.load(.acquire);
 }
 
-/// Thread-safe setter for session store. `pub` for SONNY-1221 (see SessionStore).
+/// Thread-safe setter for session store. `pub` as a SONNY-1221 test seam
+/// only; production dispatch must go through `handlePacket`, and production
+/// installs the store in `GeodeGrpcServer.init` (see SessionStore).
 pub fn setSessionStore(store: ?*SessionStore) void {
     g_session_store_atomic.store(store, .release);
 }
@@ -2280,7 +2284,8 @@ fn readServedEngineDirect(state: *const server_state.ServerState, analysis: *con
 /// SONNY-1560: `epoch_out`, when supplied, receives the session result
 /// generation this Execute installs. The streaming push loop claims it and
 /// aborts if a later Execute supersedes it mid-push.
-/// `pub` for SONNY-1221 (see SessionStore).
+/// `pub` as a SONNY-1221 test seam only; production dispatch must go through
+/// `handlePacket` (see SessionStore).
 pub fn handleExecute(request_bytes: []const u8, allocator: std.mem.Allocator, epoch_out: ?*u64) ![]u8 {
     var reader: std.Io.Reader = .fixed(request_bytes);
     var req = protobuf.decode(schema.ExecuteRequest, &reader, allocator) catch |err| {
@@ -3137,7 +3142,8 @@ pub fn handleExecute(request_bytes: []const u8, allocator: std.mem.Allocator, ep
     }
 }
 
-/// `pub` for SONNY-1221 (see SessionStore).
+/// `pub` as a SONNY-1221 test seam only; production dispatch must go through
+/// `handlePacket` (see SessionStore).
 pub fn handlePull(request_bytes: []const u8, allocator: std.mem.Allocator) ![]u8 {
     var reader: std.Io.Reader = .fixed(request_bytes);
     var req = protobuf.decode(schema.PullRequest, &reader, allocator) catch |err| {

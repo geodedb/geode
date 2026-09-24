@@ -175,6 +175,10 @@ pub const NodeScanStream = struct {
     /// `buildNextPage` serves them first, in order, before it scans on, so no
     /// row is dropped, repeated or reordered. null once all have been served.
     prefetched: ?Prefetched = null,
+    /// SONNY-1221: set by `prefetchSchemaSample`. `buildSchema` asserts it for
+    /// a projection, so a call site that skips the prefetch fails loudly in a
+    /// safe build instead of silently typing every column NULL.
+    prefetch_attempted: bool = false,
 
     const Prefetched = struct {
         result: ExecutionResult,
@@ -234,6 +238,7 @@ pub const NodeScanStream = struct {
     /// them). Node and count columns have fixed types, so only a projection
     /// prefetches. Call once, before `buildSchema` and before any page.
     pub fn prefetchSchemaSample(self: *NodeScanStream, allocator: std.mem.Allocator) !void {
+        self.prefetch_attempted = true;
         if (self.mode != .projection or self.prefetched != null) return;
         const page = try self.buildNextPage(allocator, proto_util.column_type_sample_rows);
         var result = page.result;
@@ -284,6 +289,9 @@ pub const NodeScanStream = struct {
                 // serves first -- so both paths report the same type for the
                 // same rows, and NULL only when every sampled value is null or
                 // no row matched. This used to hard-code NULL for every column.
+                // Without the prefetch there are no rows to type from, and
+                // every column would silently come out NULL.
+                std.debug.assert(self.prefetch_attempted);
                 const sample: [][]Value = if (self.prefetched) |pre| pre.result.rows[pre.next..] else &.{};
                 const view = ExecutionResult{
                     .columns = self.columns,
@@ -518,7 +526,10 @@ pub const NodeScanStream = struct {
         while (rows.items.len < page_len and pre.next < pre.result.rows.len) {
             const row = pre.result.rows[pre.next];
             try rows.ensureUnusedCapacity(allocator, 1);
-            try owned_entities.nodes.ensureUnusedCapacity(owned_entities.allocator, row.len);
+            // Only rows that projected a bare node carry one to move.
+            if (pre.result.owned_graph_entities != null) {
+                try owned_entities.nodes.ensureUnusedCapacity(owned_entities.allocator, row.len);
+            }
             rows.appendAssumeCapacity(row);
             // Leave an empty slice behind: the prefetched result's deinit then
             // frees only the rows it still owns (freeing a zero-length slice is
@@ -723,11 +734,9 @@ pub const NodeScanStream = struct {
 };
 
 fn destroyNode(allocator: std.mem.Allocator, node: *graph_store.Node) void {
-    // `CompactPropertyMap.deinit` frees only its entry slice: the caller owns
-    // the keys. `materializeNode` / `materializeNodeProjected` dupe every key
-    // for this node alone (a row holds copies of values, never a key), so they
-    // are freed here. They used to leak: one allocation per materialized
-    // property per scanned node.
+    // Keys only. Nothing references a key. Values must NOT be freed here:
+    // .Member evaluation hands the row the node's own string, and the row
+    // frees it.
     var keys = node.properties.iterator();
     while (keys.next()) |entry| allocator.free(entry.key_ptr.*);
     node.properties.deinit();
