@@ -262,9 +262,19 @@ test "Large result set streaming performance" {
     std.debug.print("  Size: {d} bytes\n", .{result.len});
     std.debug.print("  Rate: {d:.2} MB/s\n", .{(@as(f64, @floatFromInt(result.len)) / 1024.0 / 1024.0) / (@as(f64, @floatFromInt(elapsed)) / 1_000_000_000.0)});
 
+    // SONNY-2394: the old `result.len > 50_000` could never hold -- 1000
+    // `{"id":N,"value":"test_value"}` elements serialize to ~32 KB. Validate
+    // the output itself instead: it must be well-formed JSON holding every
+    // element, in order.
+    const parsed = try std.json.parseFromSlice(std.json.Value, allocator, result, .{});
+    defer parsed.deinit();
+    const large_array = parsed.value.object.get("large_array").?.array;
+    try testing.expectEqual(@as(usize, 1000), large_array.items.len);
+    try testing.expectEqual(@as(i64, 0), large_array.items[0].object.get("id").?.integer);
+    try testing.expectEqual(@as(i64, 999), large_array.items[999].object.get("id").?.integer);
+
     // Should be much faster than 5.37ms file I/O baseline
     try testing.expect(elapsed < 5_000_000); // Less than 5ms
-    try testing.expect(result.len > 50_000); // Should generate substantial output
 }
 
 test "Memory usage optimization validation" {
@@ -346,9 +356,15 @@ test "CANARY: REQ=REQ-PERF-JSON-001" {
     std.debug.print("  Result size: {d} bytes\n", .{result.len});
     std.debug.print("  Throughput: {d:.2} MB/s\n", .{(@as(f64, @floatFromInt(result.len)) / 1024.0 / 1024.0) / (@as(f64, @floatFromInt(processing_time)) / 1_000_000_000.0)});
 
+    // Correctness validation (runs before the timing gate). SONNY-2394: the
+    // schema lists the "user_id" column once and every row carries it once,
+    // so the count is 1 + rows -- the old `schema.len + rows.items.len`
+    // (5 + 50) could never match. The result must also be well-formed JSON.
+    try testing.expectEqual(1 + rows.items.len, std.mem.count(u8, result, "user_id"));
+    const parsed = try std.json.parseFromSlice(std.json.Value, allocator, result, .{});
+    defer parsed.deinit();
+    try testing.expectEqual(rows.items.len, parsed.value.object.get("rows").?.array.items.len);
+
     // Performance regression test: should be significantly faster than 630μs baseline
     try testing.expect(processing_time < 300_000); // Less than 300μs (2x improvement target)
-
-    // Correctness validation
-    try testing.expect(std.mem.count(u8, result, "user_id") == schema.len + rows.items.len); // Schema + data references
 }
