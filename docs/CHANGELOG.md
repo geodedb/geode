@@ -22,12 +22,18 @@
 ### Security
 
 - **QUIC listener certificate auto-generation fails closed in production
-  (SONNY-2394):** a listener whose certificate is missing self-signs one only
-  in dev posture (Debug build, `GEODE_ENV` not `production`) or when explicitly
+  (SONNY-2394):** this covers `QuicTransport.listen`'s own auto-generation
+  only. That path serves the listeners whose certificate is not prepared at
+  startup: the intra-cluster (cluster and Raft) QUIC listeners and the
+  remote-KMS server. Such a listener self-signs a missing certificate only in
+  dev posture (Debug build, `GEODE_ENV` not `production`) or when explicitly
   enabled (`GEODE_TLS_AUTOGENERATE_CERT=1`, or the per-listener
   `cert_auto_generate = .always` transport config). In production posture
-  (release build or `GEODE_ENV=production`) a missing certificate refuses to
-  start, as it did before auto-generation was repaired.
+  (release build or `GEODE_ENV=production`) it refuses to start instead.
+  Server startup is unchanged: `geode serve` without `--cert`/`--key` still
+  generates a self-signed certificate at startup when none exists (in its data
+  or certificate directory, or `/tmp` when that is not writable), in every
+  posture.
 
 ---
 
