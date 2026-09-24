@@ -2950,7 +2950,7 @@ REQ-GQL-IN-LISTEXPR-002,NotInListExpr,FunctionCall,TESTED,,,parser,2025-12-27,sr
 REQ-GQL-INDEGREE-001,IndegreeFunction,NodeDegree,TESTED,,,eval,2026-01-03,src/eval.zig,3242
 REQ-GQL-INDEX-PERFORMANCE,IndexPerformance,Performance,TESTED,,,team,2025-10-02,tests/integration/test_index_performance.zig,291
 REQ-GQL-INDEX-RANGE-001,B-Tree Range Scan,QUERY,TESTED,,,storage,2026-01-15,src/index/index_manager.zig,760
-REQ-GQL-INTEGRATION-001,October2025Features,Integration,TESTED,,,engine,2025-10-09,tests/test_october_2025_features_integration.zig,7
+REQ-GQL-INTEGRATION-001,October2025Features,Integration,TESTED,,,engine,2025-10-09,tests/test_october_2025_features_integration.zig,8
 REQ-GQL-IOT-NETWORK,IoTNetwork,Domain,TESTED,,,team,2025-10-02,tests/integration/test_iot_network_dataset.zig,600
 REQ-GQL-ISO-CATALOG-001,ISOCatalog,SchemaManagement,TESTED,,,compliance,2026-06-11,tests/gql_iso_conformance.zig,501
 REQ-GQL-ISO-CONFORM-001,ISOConformanceEvidence,TestSuite,TESTED,,,compliance,2026-06-11,tests/gql_iso_conformance.zig,3

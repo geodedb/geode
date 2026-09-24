@@ -3,6 +3,7 @@ const testing = std.testing;
 const geode = @import("geode");
 const execution = geode.execution;
 const graph_store = geode.graph_store;
+const query_arena = geode.query_arena;
 
 // CANARY: REQ=REQ-GQL-INTEGRATION-001; FEATURE="October2025Features"; ASPECT=Integration; STATUS=TESTED; OWNER=engine; UPDATED=2025-10-09
 
@@ -11,16 +12,75 @@ fn makeContext(allocator: std.mem.Allocator) !execution.ExecutionContext {
     return execution.ExecutionContext{ .catalog = catalog };
 }
 
+/// SONNY-2394: per-test isolated global store + catalog. These tests used the
+/// process-global store / catalog / undo log without ever releasing them, so
+/// every allocation those singletons made on std.testing.allocator was
+/// reported as a leak by whichever test first touched them, and the store
+/// persisted into the shared default data dir. Each test now gets its own tmp
+/// data dir and releases the globals on exit (the teardown order of
+/// tests/test_gap0839_tenant_lifecycle.zig: store, then catalog).
+///
+/// It also installs a query scratch arena, as every production entry point
+/// does (quic_connection_handler / grpc_server / query_coordinator push one
+/// per query): row materialization allocates node interiors from the scratch
+/// allocator (REQ-EXEC-MATERIALIZE-OWNERSHIP), which falls back to the
+/// caller's allocator -- and leaks per row -- when none is installed. Heap-
+/// allocated so the pushed allocator stays valid after `init` returns.
+const Env = struct {
+    tmp: std.testing.TmpDir,
+    store: *graph_store.GraphStore,
+    scratch: *std.heap.ArenaAllocator,
+    prev_scratch: ?std.mem.Allocator,
+
+    fn init(allocator: std.mem.Allocator) !Env {
+        var tmp = std.testing.tmpDir(.{});
+        errdefer tmp.cleanup();
+        const dir = try tmpDirRealpathAlloc(allocator, &tmp.sub_path);
+        defer allocator.free(dir);
+        const store = try graph_store.initGlobalStore(allocator, dir);
+        errdefer graph_store.deinitGlobalStore();
+        const scratch = try allocator.create(std.heap.ArenaAllocator);
+        scratch.* = std.heap.ArenaAllocator.init(allocator);
+        return .{
+            .tmp = tmp,
+            .store = store,
+            .scratch = scratch,
+            .prev_scratch = query_arena.pushScratchAllocator(scratch.allocator()),
+        };
+    }
+
+    fn deinit(self: *Env) void {
+        query_arena.popScratchAllocator(self.prev_scratch);
+        self.scratch.deinit();
+        testing.allocator.destroy(self.scratch);
+        graph_store.deinitGlobalStore();
+        execution.cleanupCatalogInstance();
+        graph_store.setDataDirOverride(testing.allocator, null);
+        self.tmp.cleanup();
+    }
+};
+
+// Zig 0.16 has no std.Io.Dir realpath: rebuild the absolute tmp-dir path.
+fn tmpDirRealpathAlloc(allocator: std.mem.Allocator, tmp_sub_path: []const u8) ![]u8 {
+    var cwd_buf: [std.fs.max_path_bytes]u8 = undefined;
+    const rc = std.os.linux.getcwd(&cwd_buf, cwd_buf.len);
+    const cwd_len = if (@as(isize, @bitCast(rc)) < 0) return error.GetCwdFailed else rc;
+    var actual_len = cwd_len;
+    while (actual_len > 0 and cwd_buf[actual_len - 1] == 0) : (actual_len -= 1) {}
+    return std.fmt.allocPrint(allocator, "{s}/.zig-cache/tmp/{s}", .{ cwd_buf[0..actual_len], tmp_sub_path });
+}
+
 // Integration test: FILTER clause with complex graph patterns
 test "Integration: FILTER clause with relationship patterns" {
     const allocator = testing.allocator;
-    const store = graph_store.getGlobalStore(allocator);
-    store.clearNodes();
+    var env = try Env.init(allocator);
+    defer env.deinit();
+    const store = env.store;
 
     // Create a social network
     const labels_person = try allocator.alloc([]const u8, 1);
     defer allocator.free(labels_person);
-    labels_person[0] = try allocator.dupe(u8, "Person");
+    labels_person[0] = "Person";
 
     const alice_id = try store.createNode(labels_person);
     const bob_id = try store.createNode(labels_person);
@@ -65,8 +125,9 @@ test "Integration: FILTER clause with relationship patterns" {
 // Integration test: type() function with real relationships
 test "Integration: type() function returns relationship labels" {
     const allocator = testing.allocator;
-    const store = graph_store.getGlobalStore(allocator);
-    store.clearNodes();
+    var env = try Env.init(allocator);
+    defer env.deinit();
+    const store = env.store;
 
     const labels_empty = try allocator.alloc([]const u8, 0);
     defer allocator.free(labels_empty);
@@ -107,8 +168,9 @@ test "Integration: type() function returns relationship labels" {
 // Integration test: SET label operations in complex query
 test "Integration: SET label operations with CREATE and MATCH" {
     const allocator = testing.allocator;
-    const store = graph_store.getGlobalStore(allocator);
-    store.clearNodes();
+    var env = try Env.init(allocator);
+    defer env.deinit();
+    const store = env.store;
 
     // Create node and add labels dynamically
     const create_query = "CREATE (n:Person {name: 'Alice', age: 30}) RETURN n";
@@ -148,8 +210,9 @@ test "Integration: SET label operations with CREATE and MATCH" {
 // Integration test: Variable-length paths with filtering
 test "Integration: Variable-length paths in social network" {
     const allocator = testing.allocator;
-    const store = graph_store.getGlobalStore(allocator);
-    store.clearNodes();
+    var env = try Env.init(allocator);
+    defer env.deinit();
+    const store = env.store;
 
     // Create a chain: A -> B -> C -> D
     const labels_empty = try allocator.alloc([]const u8, 0);
@@ -202,6 +265,8 @@ test "Integration: Variable-length paths in social network" {
 // Integration test: Session management with graph switching
 test "Integration: Session management graph switching" {
     const allocator = testing.allocator;
+    var env = try Env.init(allocator);
+    defer env.deinit();
 
     // Create session state
     var session_state = execution.SessionState.init(allocator);
@@ -236,6 +301,8 @@ test "Integration: Session management graph switching" {
 // Integration test: Transaction lifecycle
 test "Integration: Transaction lifecycle START/COMMIT/ROLLBACK" {
     const allocator = testing.allocator;
+    var env = try Env.init(allocator);
+    defer env.deinit();
 
     // Start transaction
     const start_query = "START TRANSACTION";
@@ -265,8 +332,9 @@ test "Integration: Transaction lifecycle START/COMMIT/ROLLBACK" {
 // Integration test: Combined features in realistic scenario
 test "Integration: Combined features - social network analysis" {
     const allocator = testing.allocator;
-    const store = graph_store.getGlobalStore(allocator);
-    store.clearNodes();
+    var env = try Env.init(allocator);
+    defer env.deinit();
+    const store = env.store;
 
     // Create session
     var session_state = execution.SessionState.init(allocator);
@@ -285,12 +353,16 @@ test "Integration: Combined features - social network analysis" {
     // Create network
     const labels_person = try allocator.alloc([]const u8, 1);
     defer allocator.free(labels_person);
-    labels_person[0] = try allocator.dupe(u8, "Person");
+    labels_person[0] = "Person";
 
-    const alice_id = try store.createNode(labels_person);
-    const bob_id = try store.createNode(labels_person);
-    const carol_id = try store.createNode(labels_person);
-    const dave_id = try store.createNode(labels_person);
+    // SONNY-2394: the session above selects graph `social_network`, and MATCH
+    // is graph-scoped, so the fixture must live in that graph -- created in
+    // the default graph (store.createNode/createEdge) the query saw 0 rows.
+    const social = "social_network";
+    const alice_id = try store.createNodeWithGraph(labels_person, social);
+    const bob_id = try store.createNodeWithGraph(labels_person, social);
+    const carol_id = try store.createNodeWithGraph(labels_person, social);
+    const dave_id = try store.createNodeWithGraph(labels_person, social);
 
     try store.setNodeProperty(alice_id, "name", .{ .String = "Alice" });
     try store.setNodeProperty(alice_id, "age", .{ .Int = 30 });
@@ -308,10 +380,10 @@ test "Integration: Combined features - social network analysis" {
     try store.setNodeProperty(dave_id, "age", .{ .Int = 40 });
     try store.setNodeProperty(dave_id, "city", .{ .String = "Seattle" });
 
-    _ = try store.createEdge(alice_id, bob_id, "KNOWS");
-    _ = try store.createEdge(bob_id, carol_id, "KNOWS");
-    _ = try store.createEdge(carol_id, dave_id, "KNOWS");
-    _ = try store.createEdge(alice_id, carol_id, "KNOWS");
+    _ = try store.createEdgeWithGraph(alice_id, bob_id, "KNOWS", social);
+    _ = try store.createEdgeWithGraph(bob_id, carol_id, "KNOWS", social);
+    _ = try store.createEdgeWithGraph(carol_id, dave_id, "KNOWS", social);
+    _ = try store.createEdgeWithGraph(alice_id, carol_id, "KNOWS", social);
 
     // Complex query combining all features:
     // - Variable-length paths (1..2 hops)
@@ -353,6 +425,8 @@ test "Integration: Combined features - social network analysis" {
 // Integration test: Error handling in transactions
 test "Integration: Transaction error handling" {
     const allocator = testing.allocator;
+    var env = try Env.init(allocator);
+    defer env.deinit();
 
     // Try to commit without active transaction
     const commit_query = "COMMIT";
@@ -360,10 +434,16 @@ test "Integration: Transaction error handling" {
     defer commit_result.arena.deinit();
 
     const context = try makeContext(allocator);
-    const result = execution.executeStatementWithContext(allocator, commit_result.program.statements[0], context);
+    var result = try execution.executeStatementWithContext(allocator, commit_result.program.statements[0], context);
+    defer result.deinit(allocator);
 
-    // Should return NoActiveTransaction error
-    try testing.expectError(error.NoActiveTransaction, result);
+    // SONNY-2394: this used to expect error.NoActiveTransaction. Since
+    // 2025-10-12 (after this test was written) COMMIT without an active
+    // transaction is a deliberate no-op per the SQL/GQL standards
+    // (execution.zig `.Commit`, REQ-GQL-082): it succeeds with a status row.
+    try testing.expectEqual(@as(usize, 1), result.rows.len);
+    try testing.expect(result.rows[0][0] == .Str);
+    try testing.expectEqualStrings("no transaction active", result.rows[0][0].Str);
 
     // Try to start transaction when one is already active
     const start_query = "START TRANSACTION";
@@ -381,12 +461,18 @@ test "Integration: Transaction error handling" {
 // Integration test: Memory leak prevention
 test "Integration: Memory management in complex scenarios" {
     const allocator = testing.allocator;
-    const store = graph_store.getGlobalStore(allocator);
 
-    // Run multiple iterations to detect memory leaks
+    // Run multiple iterations to detect memory leaks. SONNY-2394: each
+    // iteration gets a fresh isolated store. It used to "reset" with
+    // store.clearNodes(), which only wipes the in-memory cache (the reload
+    // primitive loadFromFile uses) and leaves the durable engine's edges in
+    // place; the next engine read then found edge slots whose IdMap entries
+    // had been cleared (error.EdgeSlotMappingMissing).
     var i: usize = 0;
     while (i < 10) : (i += 1) {
-        store.clearNodes();
+        var env = try Env.init(allocator);
+        defer env.deinit();
+        const store = env.store;
 
         // Create and destroy nodes
         const labels_empty = try allocator.alloc([]const u8, 0);
