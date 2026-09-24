@@ -169,9 +169,6 @@ fn configureVulkanPaths(b: *std.Build, exe: *std.Build.Step.Compile) void {
     exe.root_module.linkSystemLibrary("vulkan", .{});
 }
 
-/// Get version string from git tags.
-/// Returns git tag if on a tag, or tag+offset+hash if ahead of tag.
-/// Falls back to commit hash or "unknown" if git is unavailable.
 /// SONNY-2394 (review): `zig build test-compile` -- compiles every artifact the
 /// aggregate `test` step runs, across ALL shards, without running any of them.
 /// Set once in build() right after the `test` step is created; shardDep adds
@@ -239,6 +236,9 @@ fn shardDep(
     if (min_idx == index) test_step.dependOn(dep);
 }
 
+/// Get version string from git tags.
+/// Returns git tag if on a tag, or tag+offset+hash if ahead of tag.
+/// Falls back to commit hash or "unknown" if git is unavailable.
 fn getGitVersion(b: *std.Build) []const u8 {
     var exit_code: u8 = 0;
     const result = b.runAllowFail(&.{ "git", "describe", "--tags", "--always" }, &exit_code, .inherit) catch {
