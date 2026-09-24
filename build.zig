@@ -8376,6 +8376,22 @@ pub fn build(b: *std.Build) void {
     const sonny1221_step = b.step("test-sonny1221-fast-path-schema", "Run SONNY-1221 regression (the node-scan fast path's schema frame reports the executor's projection column types over QUIC and gRPC, NULL only for an all-null column)");
     sonny1221_step.dependOn(&run_sonny1221_tests.step);
 
+    // KNOWN RED: intentionally red TDD reproductions of defects found in
+    // review of SONNY-1221 (docs/KNOWN_TEST_ISSUES.md). They are named steps
+    // but deliberately NOT passed to shardDep, so the aggregate `test` step
+    // (the pre-push hook and the CI shards) stays green while they are red.
+    // Register each with shardDep in the commit that fixes it.
+    //
+    // P4: a string property projected twice (`RETURN n.s, n.s AS t`) is freed
+    // twice when the page is torn down.
+    const node_scan_dup_proj_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_node_scan_duplicate_projection.zig"), .target = target, .optimize = optimize });
+    node_scan_dup_proj_test_mod.addImport("geode", root_mod);
+    node_scan_dup_proj_test_mod.addImport("logging", logging_mod);
+    const node_scan_dup_proj_tests = b.addTest(.{ .root_module = node_scan_dup_proj_test_mod });
+    const run_node_scan_dup_proj_tests = b.addRunArtifact(node_scan_dup_proj_tests);
+    const node_scan_dup_proj_step = b.step("test-node-scan-duplicate-projection", "KNOWN RED, not in the aggregate: a string property projected twice by the node-scan fast path is freed twice (P4, SONNY-1221 review)");
+    node_scan_dup_proj_step.dependOn(&run_node_scan_dup_proj_tests.step);
+
     // SONNY-1330 TSan companion: the same regression file under
     // -fsanitize-thread, so the fork-join over a COLD store is checked for the
     // cross-arm cache mutation this ticket closes rather than merely asserted
