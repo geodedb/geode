@@ -185,6 +185,14 @@ fn configureVulkanPaths(b: *std.Build, exe: *std.Build.Step.Compile) void {
 // a handful of known-heavy tests pass a larger weight (see the cost overrides
 // at the call sites below), the slow tests get spread across distinct shards
 // instead of all colliding on whichever shard the source order parks them on.
+//
+// SONNY-2394: `dep` MUST be a Step.Run (`b.addRunArtifact(x)` /
+// `b.addSystemCommand(...)`). `b.addTest(...)` returns a Step.Compile, and
+// depending on its `.step` only proves the test binary BUILDS -- it is never
+// executed, so the aggregate `test` step (the sharded pre-push hook and the
+// CI shard jobs) silently passed without running 54 test binaries. The check
+// runs on every call, before the shard filter, so a compile-only registration
+// fails every `zig build` invocation (and every shard) at configure time.
 fn shardDep(
     test_step: *std.Build.Step,
     dep: *std.Build.Step,
@@ -192,6 +200,18 @@ fn shardDep(
     loads: []usize,
     index: usize,
 ) void {
+    if (dep.cast(std.Build.Step.Run) == null) {
+        const what = if (dep.cast(std.Build.Step.Compile)) |c|
+            if (c.root_module.root_source_file) |p| p.getDisplayName() else dep.name
+        else
+            dep.name;
+        std.debug.panic(
+            "shardDep: '{s}' is a .{s} step, not a Run step, so `zig build test` would never execute it. " ++
+                "Register the run step instead: `const run_x = b.addRunArtifact(x_tests); " ++
+                "shardDep(test_step, &run_x.step, ...)` (SONNY-2394).",
+            .{ what, @tagName(dep.id) },
+        );
+    }
     if (loads.len <= 1) {
         test_step.dependOn(dep);
         return;
@@ -4115,7 +4135,10 @@ pub fn build(b: *std.Build) void {
     // Extended built-ins CANARY adapter + decimal formatter tests
     const canary_extended_builtins_tests = b.addTest(.{ .root_module = b.createModule(.{ .root_source_file = b.path("tests/canary_extended_builtins.zig"), .target = target, .optimize = optimize }) });
     canary_extended_builtins_tests.root_module.addImport("geode", root_mod);
-    shardDep(test_step, &canary_extended_builtins_tests.step, 1, test_shard_loads, test_shard_index);
+    const run_canary_extended_builtins_tests = b.addRunArtifact(canary_extended_builtins_tests);
+    shardDep(test_step, &run_canary_extended_builtins_tests.step, 1, test_shard_loads, test_shard_index);
+    const canary_extended_builtins_tests_step = b.step("test-canary-extended-builtins", "Run extended built-ins adapter + decimal formatter CANARY tests (REQ-GQL-082/083)");
+    canary_extended_builtins_tests_step.dependOn(&run_canary_extended_builtins_tests.step);
 
     // Add canary test target
     const canary_exe = b.addExecutable(.{
@@ -4349,7 +4372,10 @@ pub fn build(b: *std.Build) void {
     tde_hierarchy_mod_tests.addImport("crypto_backend", crypto_backend_mod);
     redo_canary_test.root_module.addImport("tde_hierarchy", tde_hierarchy_mod_tests);
     redo_canary_test.root_module.addImport("geode", root_mod);
-    shardDep(test_step, &redo_canary_test.step, 1, test_shard_loads, test_shard_index);
+    const run_redo_canary_test = b.addRunArtifact(redo_canary_test);
+    shardDep(test_step, &run_redo_canary_test.step, 1, test_shard_loads, test_shard_index);
+    const redo_canary_test_step = b.step("test-canary-physiological-redo", "Run GraphStore snapshot load correctness + variance CANARY tests (REQ-GQL-022)");
+    redo_canary_test_step.dependOn(&run_redo_canary_test.step);
 
     const quic_tls_tests = b.addTest(.{ .root_module = b.createModule(.{ .root_source_file = b.path("tests/e2e_quic_tls_comprehensive.zig"), .target = target, .optimize = optimize }) });
     if (target.result.os.tag == .windows) {
@@ -4362,7 +4388,10 @@ pub fn build(b: *std.Build) void {
     const mvcc_adv_mod_for_tests = b.createModule(.{ .root_source_file = b.path("src/transactions/mvcc_adv/mod.zig"), .target = target, .optimize = optimize });
     const mvcc_adv_tests = b.addTest(.{ .root_module = b.createModule(.{ .root_source_file = b.path("tests/canary_mvcc_advanced.zig"), .target = target, .optimize = optimize }) });
     mvcc_adv_tests.root_module.addImport("mvcc_adv", mvcc_adv_mod_for_tests);
-    shardDep(test_step, &mvcc_adv_tests.step, 1, test_shard_loads, test_shard_index);
+    const run_mvcc_adv_tests = b.addRunArtifact(mvcc_adv_tests);
+    shardDep(test_step, &run_mvcc_adv_tests.step, 1, test_shard_loads, test_shard_index);
+    const mvcc_adv_tests_step = b.step("test-canary-mvcc-advanced", "Run advanced MVCC (early conflict, predictive, repair, partial rollback) CANARY tests (REQ-GQL-073)");
+    mvcc_adv_tests_step.dependOn(&run_mvcc_adv_tests.step);
     const txn_mod_for_tests = b.createModule(.{ .root_source_file = b.path("src/transactions/manager.zig"), .target = target, .optimize = optimize });
     txn_mod_for_tests.addImport("mvcc_adv", mvcc_adv_mod_for_tests);
     const range_tracker_mod_for_tests = b.createModule(.{ .root_source_file = b.path("src/transactions/range_tracker.zig"), .target = target, .optimize = optimize });
@@ -4372,7 +4401,10 @@ pub fn build(b: *std.Build) void {
     const mvcc_adv_integration_tests = b.addTest(.{ .root_module = b.createModule(.{ .root_source_file = b.path("tests/canary_mvcc_adv_integration.zig"), .target = target, .optimize = optimize }) });
     mvcc_adv_integration_tests.root_module.addImport("mvcc_adv", mvcc_adv_mod_for_tests);
     mvcc_adv_integration_tests.root_module.addImport("txn", txn_mod_for_tests);
-    shardDep(test_step, &mvcc_adv_integration_tests.step, 1, test_shard_loads, test_shard_index);
+    const run_mvcc_adv_integration_tests = b.addRunArtifact(mvcc_adv_integration_tests);
+    shardDep(test_step, &run_mvcc_adv_integration_tests.step, 1, test_shard_loads, test_shard_index);
+    const mvcc_adv_integration_tests_step = b.step("test-canary-mvcc-adv-integration", "Run advanced MVCC early-conflict integration CANARY test (REQ-GQL-073)");
+    mvcc_adv_integration_tests_step.dependOn(&run_mvcc_adv_integration_tests.step);
     const mvcc_adv_bench_tests = b.addTest(.{ .root_module = b.createModule(.{ .root_source_file = b.path("tests/benchmark_mvcc_repair_throughput.zig"), .target = target, .optimize = optimize }) });
     mvcc_adv_bench_tests.root_module.addImport("mvcc_adv", mvcc_adv_mod_for_tests);
     test_e2e_step.dependOn(&mvcc_adv_bench_tests.step);
@@ -4415,29 +4447,68 @@ pub fn build(b: *std.Build) void {
     planner_pipeline_selection_tests.root_module.addImport("geode", root_mod);
     planner_pipeline_selection_tests.root_module.addImport("planner_enumerator", planner_enumerator_mod);
     phantom_tests.root_module.addImport("txn", txn_mod_for_phantom_tests);
-    shardDep(test_step, &phantom_tests.step, 1, test_shard_loads, test_shard_index);
-    shardDep(test_step, &phantom_range_tests.step, 1, test_shard_loads, test_shard_index);
-    shardDep(test_step, &planner_enumerator_tests.step, 1, test_shard_loads, test_shard_index);
-    shardDep(test_step, &path_varlen_predicate_tests.step, 1, test_shard_loads, test_shard_index);
-    shardDep(test_step, &write_skew_tests.step, 1, test_shard_loads, test_shard_index);
-    shardDep(test_step, &redo_delta_tests.step, 1, test_shard_loads, test_shard_index);
-    shardDep(test_step, &recovery_corrupt_latency_tests.step, 1, test_shard_loads, test_shard_index);
-    shardDep(test_step, &planner_plan_selection_tests.step, 1, test_shard_loads, test_shard_index);
-    shardDep(test_step, &planner_prune_tests.step, 1, test_shard_loads, test_shard_index);
-    shardDep(test_step, &planner_pipeline_selection_tests.step, 1, test_shard_loads, test_shard_index);
+    const run_phantom_tests = b.addRunArtifact(phantom_tests);
+    shardDep(test_step, &run_phantom_tests.step, 1, test_shard_loads, test_shard_index);
+    const phantom_tests_step = b.step("test-canary-txn-phantom-anomaly", "Run MVCC phantom (predicate range) detection CANARY tests (REQ-GQL-023)");
+    phantom_tests_step.dependOn(&run_phantom_tests.step);
+    const run_phantom_range_tests = b.addRunArtifact(phantom_range_tests);
+    shardDep(test_step, &run_phantom_range_tests.step, 1, test_shard_loads, test_shard_index);
+    const phantom_range_tests_step = b.step("test-canary-txn-phantom-range", "Run MVCC phantom-prevention range tracker CANARY tests (REQ-GQL-023)");
+    phantom_range_tests_step.dependOn(&run_phantom_range_tests.step);
+    const run_planner_enumerator_tests = b.addRunArtifact(planner_enumerator_tests);
+    shardDep(test_step, &run_planner_enumerator_tests.step, 1, test_shard_loads, test_shard_index);
+    const planner_enumerator_tests_step = b.step("test-canary-planner-enumerator", "Run cost-based plan enumeration engine CANARY tests (REQ-GQL-024)");
+    planner_enumerator_tests_step.dependOn(&run_planner_enumerator_tests.step);
+    const run_path_varlen_predicate_tests = b.addRunArtifact(path_varlen_predicate_tests);
+    shardDep(test_step, &run_path_varlen_predicate_tests.step, 1, test_shard_loads, test_shard_index);
+    const path_varlen_predicate_tests_step = b.step("test-canary-path-varlen-predicate", "Run variable-length path property predicate CANARY tests (REQ-GQL-017)");
+    path_varlen_predicate_tests_step.dependOn(&run_path_varlen_predicate_tests.step);
+    const run_write_skew_tests = b.addRunArtifact(write_skew_tests);
+    shardDep(test_step, &run_write_skew_tests.step, 1, test_shard_loads, test_shard_index);
+    const write_skew_tests_step = b.step("test-canary-txn-write-skew", "Run MVCC write-skew detection CANARY tests (REQ-GQL-025)");
+    write_skew_tests_step.dependOn(&run_write_skew_tests.step);
+    const run_redo_delta_tests = b.addRunArtifact(redo_delta_tests);
+    shardDep(test_step, &run_redo_delta_tests.step, 1, test_shard_loads, test_shard_index);
+    const redo_delta_tests_step = b.step("test-canary-storage-redo-delta", "Run redo optimization delta CANARY tests (REQ-GQL-022)");
+    redo_delta_tests_step.dependOn(&run_redo_delta_tests.step);
+    const run_recovery_corrupt_latency_tests = b.addRunArtifact(recovery_corrupt_latency_tests);
+    shardDep(test_step, &run_recovery_corrupt_latency_tests.step, 1, test_shard_loads, test_shard_index);
+    const recovery_corrupt_latency_tests_step = b.step("test-canary-recovery-corrupt-latency", "Run corrupt-page recovery latency CANARY tests (REQ-GQL-028)");
+    recovery_corrupt_latency_tests_step.dependOn(&run_recovery_corrupt_latency_tests.step);
+    const run_planner_plan_selection_tests = b.addRunArtifact(planner_plan_selection_tests);
+    shardDep(test_step, &run_planner_plan_selection_tests.step, 1, test_shard_loads, test_shard_index);
+    const planner_plan_selection_tests_step = b.step("test-canary-planner-plan-selection", "Run cost-based plan selection CANARY tests (REQ-GQL-024)");
+    planner_plan_selection_tests_step.dependOn(&run_planner_plan_selection_tests.step);
+    const run_planner_prune_tests = b.addRunArtifact(planner_prune_tests);
+    shardDep(test_step, &run_planner_prune_tests.step, 1, test_shard_loads, test_shard_index);
+    const planner_prune_tests_step = b.step("test-canary-planner-prune", "Run plan enumeration cost-prune CANARY tests (REQ-GQL-024)");
+    planner_prune_tests_step.dependOn(&run_planner_prune_tests.step);
+    const run_planner_pipeline_selection_tests = b.addRunArtifact(planner_pipeline_selection_tests);
+    shardDep(test_step, &run_planner_pipeline_selection_tests.step, 1, test_shard_loads, test_shard_index);
+    const planner_pipeline_selection_tests_step = b.step("test-canary-planner-pipeline-selection", "Run plan selection pipeline adoption CANARY tests (REQ-GQL-024)");
+    planner_pipeline_selection_tests_step.dependOn(&run_planner_pipeline_selection_tests.step);
 
     // Variance auto-calibration tests (cost model & pagination)
     const cost_model_autocalib_tests = b.addTest(.{ .root_module = b.createModule(.{ .root_source_file = b.path("tests/canary_cost_model_variance_autocalib.zig"), .target = target, .optimize = optimize }) });
     cost_model_autocalib_tests.root_module.addImport("geode", root_mod);
-    shardDep(test_step, &cost_model_autocalib_tests.step, 1, test_shard_loads, test_shard_index);
+    const run_cost_model_autocalib_tests = b.addRunArtifact(cost_model_autocalib_tests);
+    shardDep(test_step, &run_cost_model_autocalib_tests.step, 1, test_shard_loads, test_shard_index);
+    const cost_model_autocalib_tests_step = b.step("test-canary-cost-model-variance-autocalib", "Run cost model variance auto-calibration CANARY test (REQ-GQL-075)");
+    cost_model_autocalib_tests_step.dependOn(&run_cost_model_autocalib_tests.step);
     const pagination_autocalib_tests = b.addTest(.{ .root_module = b.createModule(.{ .root_source_file = b.path("tests/canary_pagination_variance_autocalib.zig"), .target = target, .optimize = optimize }) });
     pagination_autocalib_tests.root_module.addImport("geode", root_mod);
-    shardDep(test_step, &pagination_autocalib_tests.step, 1, test_shard_loads, test_shard_index);
+    const run_pagination_autocalib_tests = b.addRunArtifact(pagination_autocalib_tests);
+    shardDep(test_step, &run_pagination_autocalib_tests.step, 1, test_shard_loads, test_shard_index);
+    const pagination_autocalib_tests_step = b.step("test-canary-pagination-variance-autocalib", "Run pagination page-size auto-calibration CANARY test (REQ-GQL-004)");
+    pagination_autocalib_tests_step.dependOn(&run_pagination_autocalib_tests.step);
     // Unified benchmark JSON lines variance calibration (parses historical benchmarks corpus)
     const variance_hist_calib_mod = b.createModule(.{ .root_source_file = b.path("src/monitoring/variance_calibration.zig"), .target = target, .optimize = optimize });
     const variance_hist_calib_tests = b.addTest(.{ .root_module = b.createModule(.{ .root_source_file = b.path("tests/canary_variance_autocalibration.zig"), .target = target, .optimize = optimize }) });
     variance_hist_calib_tests.root_module.addImport("monitoring/variance_calibration.zig", variance_hist_calib_mod);
-    shardDep(test_step, &variance_hist_calib_tests.step, 1, test_shard_loads, test_shard_index);
+    const run_variance_hist_calib_tests = b.addRunArtifact(variance_hist_calib_tests);
+    shardDep(test_step, &run_variance_hist_calib_tests.step, 1, test_shard_loads, test_shard_index);
+    const variance_hist_calib_tests_step = b.step("test-canary-variance-autocalibration", "Run benchmark-corpus variance calibration CANARY tests (REQ-GQL-004/075)");
+    variance_hist_calib_tests_step.dependOn(&run_variance_hist_calib_tests.step);
 
     // MFA risk sensitivity & step-up tests
     const mfa_risk_mod = b.createModule(.{ .root_source_file = b.path("src/security/mfa_risk.zig"), .target = target, .optimize = optimize });
@@ -4445,17 +4516,23 @@ pub fn build(b: *std.Build) void {
     mfa_risk_mod.addImport("crypto_backend", crypto_backend_mod);
     const mfa_risk_tests = b.addTest(.{ .root_module = b.createModule(.{ .root_source_file = b.path("tests/canary_mfa_risk_stepup.zig"), .target = target, .optimize = optimize }) });
     mfa_risk_tests.root_module.addImport("security/mfa_risk.zig", mfa_risk_mod);
-    shardDep(test_step, &mfa_risk_tests.step, 1, test_shard_loads, test_shard_index);
     // Dedicated step: zig build test-mfa-totp — RFC 6238 vector + seam routing check, both -Dfips modes.
     const run_mfa_risk_tests = b.addRunArtifact(mfa_risk_tests);
+    shardDep(test_step, &run_mfa_risk_tests.step, 1, test_shard_loads, test_shard_index);
     const mfa_totp_step = b.step("test-mfa-totp", "Task 6: MFA TOTP HMAC-SHA1 seam routing — RFC 6238 KAT + step-up logic");
     mfa_totp_step.dependOn(&run_mfa_risk_tests.step);
     // Recovery code contention test
     const mfa_recovery_contention_tests = b.addTest(.{ .root_module = b.createModule(.{ .root_source_file = b.path("tests/canary_mfa_recovery_code_contention.zig"), .target = target, .optimize = optimize }) });
-    shardDep(test_step, &mfa_recovery_contention_tests.step, 1, test_shard_loads, test_shard_index);
+    const run_mfa_recovery_contention_tests = b.addRunArtifact(mfa_recovery_contention_tests);
+    shardDep(test_step, &run_mfa_recovery_contention_tests.step, 1, test_shard_loads, test_shard_index);
+    const mfa_recovery_contention_tests_step = b.step("test-canary-mfa-recovery-code-contention", "Run MFA recovery-code contention CANARY test (REQ-GQL-MFA-CORE-001)");
+    mfa_recovery_contention_tests_step.dependOn(&run_mfa_recovery_contention_tests.step);
     // TDE published overhead sync test
     const tde_published_sync_tests = b.addTest(.{ .root_module = b.createModule(.{ .root_source_file = b.path("tests/canary_tde_published_overhead_sync.zig"), .target = target, .optimize = optimize }) });
-    shardDep(test_step, &tde_published_sync_tests.step, 1, test_shard_loads, test_shard_index);
+    const run_tde_published_sync_tests = b.addRunArtifact(tde_published_sync_tests);
+    shardDep(test_step, &run_tde_published_sync_tests.step, 1, test_shard_loads, test_shard_index);
+    const tde_published_sync_tests_step = b.step("test-canary-tde-published-overhead-sync", "Run TDE published-overhead claim sync CANARY test");
+    tde_published_sync_tests_step.dependOn(&run_tde_published_sync_tests.step);
 
     // GAP-0201: Performance optimization tests (thread pool, DRR scheduler, adaptive backoff)
     // CANARY: REQ=REQ-PERF-TEST-BUILD-001; FEATURE="PerformanceTests"; ASPECT=BuildIntegration; STATUS=TESTED; TEST=test-perf-optimizations; OWNER=build; UPDATED=2026-06-11
@@ -4468,7 +4545,7 @@ pub fn build(b: *std.Build) void {
     const run_perf_opt_tests = b.addRunArtifact(perf_opt_tests);
     const perf_opt_test_step = b.step("test-perf-optimizations", "Run performance optimization unit tests (thread pool, DRR scheduler, adaptive backoff)");
     perf_opt_test_step.dependOn(&run_perf_opt_tests.step);
-    shardDep(test_step, &perf_opt_tests.step, 1, test_shard_loads, test_shard_index);
+    shardDep(test_step, &run_perf_opt_tests.step, 1, test_shard_loads, test_shard_index);
 
     // CANARY: REQ=REQ-PERF-SPICE-027; FEATURE="ParallelWrapperTests"; ASPECT=BuildIntegration; STATUS=TESTED; TEST=test-thread-pool-parallel; OWNER=performance; UPDATED=2026-06-11
     // Dedicated tests for the thread-pool-backed parallel wrapper.
@@ -4481,7 +4558,7 @@ pub fn build(b: *std.Build) void {
     parallel_wrapper_test_step.dependOn(&run_parallel_wrapper_tests.step);
 
     // Also add to main test step
-    shardDep(test_step, &parallel_wrapper_tests.step, 1, test_shard_loads, test_shard_index);
+    shardDep(test_step, &run_parallel_wrapper_tests.step, 1, test_shard_loads, test_shard_index);
 
     // CANARY: REQ=REQ-QUIC-MUX-008; FEATURE="StreamRegistryBuildIntegration"; ASPECT=ParallelRegression; STATUS=TESTED; TEST=test-quic-streams; OWNER=build; UPDATED=2026-06-11
     const quic_stream_registry_tests = b.addTest(.{ .root_module = b.createModule(.{ .root_source_file = b.path("tests/test_quic_stream_registry.zig"), .target = target, .optimize = optimize }) });
@@ -4490,7 +4567,7 @@ pub fn build(b: *std.Build) void {
     const run_quic_stream_registry_tests = b.addRunArtifact(quic_stream_registry_tests);
     const quic_stream_registry_test_step = b.step("test-quic-streams", "Run QUIC stream dedupe and churn regression tests");
     quic_stream_registry_test_step.dependOn(&run_quic_stream_registry_tests.step);
-    shardDep(test_step, &quic_stream_registry_tests.step, 1, test_shard_loads, test_shard_index);
+    shardDep(test_step, &run_quic_stream_registry_tests.step, 1, test_shard_loads, test_shard_index);
 
     // PERF-D / #816: GlobalStreamThrottle wake-on-release regression tests.
     // Pins that release() unblocks a parked acquire() in sub-ms (via the new
@@ -4503,7 +4580,7 @@ pub fn build(b: *std.Build) void {
     const run_perf_d_admission_tests = b.addRunArtifact(perf_d_admission_tests);
     const perf_d_admission_step = b.step("test-perf-d-admission-signal", "PERF-D: GlobalStreamThrottle futex wake-on-release regression (issue #816)");
     perf_d_admission_step.dependOn(&run_perf_d_admission_tests.step);
-    shardDep(test_step, &perf_d_admission_tests.step, 1, test_shard_loads, test_shard_index);
+    shardDep(test_step, &run_perf_d_admission_tests.step, 1, test_shard_loads, test_shard_index);
 
     // PERF-D / #816 follow-up: QuicTransport.connection_slot_freed_gen
     // wake regression. Pins that the admission-loop futex word can be
@@ -4521,7 +4598,7 @@ pub fn build(b: *std.Build) void {
     const run_perf_d_admission_wake_tests = b.addRunArtifact(perf_d_admission_wake_tests);
     const perf_d_admission_wake_step = b.step("test-perf-d-admission-wake", "PERF-D follow-up: QuicTransport admission-loop futex wake regression (issue #816)");
     perf_d_admission_wake_step.dependOn(&run_perf_d_admission_wake_tests.step);
-    shardDep(test_step, &perf_d_admission_wake_tests.step, 1, test_shard_loads, test_shard_index);
+    shardDep(test_step, &run_perf_d_admission_wake_tests.step, 1, test_shard_loads, test_shard_index);
 
     // QUIC-HC-001: PollSync no longer hand-rolls timed waits with
     // nanosleep. Readers park on a futex generation and wake immediately
@@ -4533,7 +4610,7 @@ pub fn build(b: *std.Build) void {
     const run_quic_pollsync_wake_tests = b.addRunArtifact(quic_pollsync_wake_tests);
     const quic_pollsync_wake_step = b.step("test-quic-pollsync-wake", "Run QUIC PollSync futex wake regression tests");
     quic_pollsync_wake_step.dependOn(&run_quic_pollsync_wake_tests.step);
-    shardDep(test_step, &quic_pollsync_wake_tests.step, 1, test_shard_loads, test_shard_index);
+    shardDep(test_step, &run_quic_pollsync_wake_tests.step, 1, test_shard_loads, test_shard_index);
 
     const quic_condition_cadence_tests = b.addTest(.{ .root_module = b.createModule(.{ .root_source_file = b.path("tests/test_quic_condition_timedwait_cadence.zig"), .target = target, .optimize = optimize }) });
     quic_condition_cadence_tests.root_module.link_libc = true;
@@ -4557,7 +4634,7 @@ pub fn build(b: *std.Build) void {
     const run_dns_search_tests = b.addRunArtifact(dns_search_tests);
     const dns_search_step = b.step("test-dns-search", "Run resolv.conf search-domain/ndots expansion unit tests (GAP-0838 Bug A)");
     dns_search_step.dependOn(&run_dns_search_tests.step);
-    shardDep(test_step, &dns_search_tests.step, 1, test_shard_loads, test_shard_index);
+    shardDep(test_step, &run_dns_search_tests.step, 1, test_shard_loads, test_shard_index);
 
     // GAP-0838 (Bug B hardening): boot-time cluster identity-contract
     // self-diagnostic. Pure std-only module.
@@ -4566,7 +4643,7 @@ pub fn build(b: *std.Build) void {
     const run_cluster_identity_tests = b.addRunArtifact(cluster_identity_tests);
     const cluster_identity_step = b.step("test-cluster-identity", "Run cluster identity-contract self-diagnostic unit tests (GAP-0838 Bug B)");
     cluster_identity_step.dependOn(&run_cluster_identity_tests.step);
-    shardDep(test_step, &cluster_identity_tests.step, 1, test_shard_loads, test_shard_index);
+    shardDep(test_step, &run_cluster_identity_tests.step, 1, test_shard_loads, test_shard_index);
 
     // QUIC-HC-029: Geode-owned bounded parallel facade for the QUIC package.
     // This compiles the facade against the current quic package API and runs
@@ -4577,7 +4654,7 @@ pub fn build(b: *std.Build) void {
     const run_quic_parallel_facade_tests = b.addRunArtifact(quic_parallel_facade_tests);
     const quic_parallel_facade_step = b.step("test-quic-parallel-facade", "Run QUIC bounded parallel facade unit tests");
     quic_parallel_facade_step.dependOn(&run_quic_parallel_facade_tests.step);
-    shardDep(test_step, &quic_parallel_facade_tests.step, 1, test_shard_loads, test_shard_index);
+    shardDep(test_step, &run_quic_parallel_facade_tests.step, 1, test_shard_loads, test_shard_index);
 
     // QUIC-HC-002: Real-server integration guard for many concurrent QUIC
     // clients issuing a mixed read/write workload. This is an executable, not
@@ -4773,7 +4850,7 @@ pub fn build(b: *std.Build) void {
     const run_query_deadline_lifetime_tests = b.addRunArtifact(query_deadline_lifetime_tests);
     const query_deadline_lifetime_test_step = b.step("test-deadline-watchdog", "Run QueryDeadlineState lifetime regression (issue #746)");
     query_deadline_lifetime_test_step.dependOn(&run_query_deadline_lifetime_tests.step);
-    shardDep(test_step, &query_deadline_lifetime_tests.step, 1, test_shard_loads, test_shard_index);
+    shardDep(test_step, &run_query_deadline_lifetime_tests.step, 1, test_shard_loads, test_shard_index);
 
     // GitLab #751: connection-admission thread-pool lane regression — pins
     // the contract that the main accept-loop pool exposes a default-lane
@@ -4787,7 +4864,7 @@ pub fn build(b: *std.Build) void {
     const run_thread_pool_lane_tests = b.addRunArtifact(thread_pool_lane_tests);
     const thread_pool_lane_test_step = b.step("test-thread-pool-lane-parallelism", "Run thread-pool admission-lane parallelism regression (issue #751)");
     thread_pool_lane_test_step.dependOn(&run_thread_pool_lane_tests.step);
-    shardDep(test_step, &thread_pool_lane_tests.step, 1, test_shard_loads, test_shard_index);
+    shardDep(test_step, &run_thread_pool_lane_tests.step, 1, test_shard_loads, test_shard_index);
 
     // Task #31: QUIC stream multiplex hang — per-connection stream pool
     // must run 4 concurrent streams, not 2.  Root cause: `submit()` routes
@@ -4798,7 +4875,7 @@ pub fn build(b: *std.Build) void {
     const run_stream_pool_lane_tests = b.addRunArtifact(stream_pool_lane_tests);
     const stream_pool_lane_test_step = b.step("test-stream-pool-concurrent-lanes", "Run per-connection stream-pool concurrent-lane regression (Task #31)");
     stream_pool_lane_test_step.dependOn(&run_stream_pool_lane_tests.step);
-    shardDep(test_step, &stream_pool_lane_tests.step, 1, test_shard_loads, test_shard_index);
+    shardDep(test_step, &run_stream_pool_lane_tests.step, 1, test_shard_loads, test_shard_index);
 
     // GitLab #749: MetricsServer HTTP listener lifecycle regression — pins
     // the contract that `start()` actually binds a TCP listen socket (the
@@ -4836,7 +4913,7 @@ pub fn build(b: *std.Build) void {
     const run_metrics_server_lifetime_tests = b.addRunArtifact(metrics_server_lifetime_tests);
     const metrics_server_lifetime_test_step = b.step("test-metrics-server", "Run MetricsServer HTTP listener lifecycle regression (issue #749)");
     metrics_server_lifetime_test_step.dependOn(&run_metrics_server_lifetime_tests.step);
-    shardDep(test_step, &metrics_server_lifetime_tests.step, 1, test_shard_loads, test_shard_index);
+    shardDep(test_step, &run_metrics_server_lifetime_tests.step, 1, test_shard_loads, test_shard_index);
 
     // CANARY: REQ=REQ-PERF-SPICE-028; FEATURE="ParallelWrapperBenchBuild"; ASPECT=BuildIntegration; STATUS=BENCHED; BENCH=bench-thread-pool-parallel; OWNER=performance; UPDATED=2026-06-11
     // Thread-pool parallel wrapper benchmarks.
@@ -5032,12 +5109,13 @@ pub fn build(b: *std.Build) void {
     kms_remote_mod.addImport("crypto_backend", crypto_backend_mod);
     remote_kms_tests.root_module.addImport("security/kms_remote", kms_remote_mod);
     remote_kms_tests.root_module.link_libc = true;
-    shardDep(test_step, &remote_kms_tests.step, 1, test_shard_loads, test_shard_index);
     // GAP-0514 Phase 6 P3: these tests were COMPILE-ONLY (shardDep got the
     // Compile step, never a run artifact). Named step actually RUNS the
     // remote-KMS QUIC round trip — the only live exerciser of
     // QuicClient.connect/connectInsecure + QuicClientStream.readLine.
+    // SONNY-2394: the aggregate `test` step now depends on the run step too.
     const run_remote_kms_tests = b.addRunArtifact(remote_kms_tests);
+    shardDep(test_step, &run_remote_kms_tests.step, 1, test_shard_loads, test_shard_index);
     const remote_kms_step = b.step("test-remote-kms", "Run remote KMS QUIC round-trip tests (generate/attest/unwrap over real QUIC)");
     remote_kms_step.dependOn(&run_remote_kms_tests.step);
 
@@ -5047,7 +5125,10 @@ pub fn build(b: *std.Build) void {
     remote_kms_hardening_tests.root_module.addImport("vendor_quic", quic_ext_mod);
     remote_kms_hardening_tests.root_module.addImport("security/kms_remote", kms_remote_mod);
     remote_kms_hardening_tests.root_module.link_libc = true;
-    shardDep(test_step, &remote_kms_hardening_tests.step, 1, test_shard_loads, test_shard_index);
+    const run_remote_kms_hardening_tests = b.addRunArtifact(remote_kms_hardening_tests);
+    shardDep(test_step, &run_remote_kms_hardening_tests.step, 1, test_shard_loads, test_shard_index);
+    const remote_kms_hardening_tests_step = b.step("test-remote-kms-hardening", "Run remote KMS hardening tests (negative auth, expired attestation, concurrent unwrap)");
+    remote_kms_hardening_tests_step.dependOn(&run_remote_kms_hardening_tests.step);
 
     // Standalone executable to surface concurrency variance benchmark JSON (tests suppress stdout on success)
     const remote_kms_concurrency_bench = b.addExecutable(.{ .name = "bench_remote_kms_unwrap_concurrency", .root_module = b.createModule(.{ .root_source_file = b.path("benchmarks/benchmark_remote_kms_unwrap_concurrency.zig"), .target = target, .optimize = optimize }) });
@@ -5638,14 +5719,20 @@ pub fn build(b: *std.Build) void {
     // October 2025 feature integration tests
     const october_2025_integration_test = b.addTest(.{ .root_module = b.createModule(.{ .root_source_file = b.path("tests/test_october_2025_features_integration.zig"), .target = target, .optimize = optimize }) });
     october_2025_integration_test.root_module.addImport("geode", root_mod);
-    shardDep(test_step, &october_2025_integration_test.step, 1, test_shard_loads, test_shard_index);
+    const run_october_2025_integration_test = b.addRunArtifact(october_2025_integration_test);
+    shardDep(test_step, &run_october_2025_integration_test.step, 1, test_shard_loads, test_shard_index);
+    const october_2025_integration_test_step = b.step("test-october-2025-features", "Run October 2025 feature integration tests (FILTER, type(), SET label, var-length paths)");
+    october_2025_integration_test_step.dependOn(&run_october_2025_integration_test.step);
 
     // FLE Lifecycle Test
     const fle_lifecycle_test = b.addTest(.{
         .root_module = b.createModule(.{ .root_source_file = b.path("tests/test_fle_lifecycle.zig"), .target = target, .optimize = optimize }),
     });
     fle_lifecycle_test.root_module.addImport("geode", root_mod);
-    shardDep(test_step, &fle_lifecycle_test.step, 1, test_shard_loads, test_shard_index);
+    const run_fle_lifecycle_test = b.addRunArtifact(fle_lifecycle_test);
+    shardDep(test_step, &run_fle_lifecycle_test.step, 1, test_shard_loads, test_shard_index);
+    const fle_lifecycle_test_step = b.step("test-fle-lifecycle", "Run FLE complete lifecycle test");
+    fle_lifecycle_test_step.dependOn(&run_fle_lifecycle_test.step);
 
     // REQ-FLE-CONCURRENT-RECORDID-001: regression guard for celebrimbor
     // 2026-04-22 panic "@memcpy arguments alias" in FLE record-id allocPrint.
@@ -5653,13 +5740,19 @@ pub fn build(b: *std.Build) void {
         .root_module = b.createModule(.{ .root_source_file = b.path("tests/test_fle_allocprint_alias_regression.zig"), .target = target, .optimize = optimize }),
     });
     fle_allocprint_alias_test.root_module.addImport("geode", root_mod);
-    shardDep(test_step, &fle_allocprint_alias_test.step, 1, test_shard_loads, test_shard_index);
+    const run_fle_allocprint_alias_test = b.addRunArtifact(fle_allocprint_alias_test);
+    shardDep(test_step, &run_fle_allocprint_alias_test.step, 1, test_shard_loads, test_shard_index);
+    const fle_allocprint_alias_test_step = b.step("test-fle-allocprint-alias", "Run FLE concurrent getNodeProperty @memcpy-alias regression (REQ-FLE-CONCURRENT-RECORDID-001)");
+    fle_allocprint_alias_test_step.dependOn(&run_fle_allocprint_alias_test.step);
 
     // FLE Enforcement Security Tests - Critical security verification
     const fle_enforcement_test = b.addTest(.{
         .root_module = b.createModule(.{ .root_source_file = b.path("src/security/test_fle_enforcement.zig"), .target = target, .optimize = optimize }),
     });
-    shardDep(test_step, &fle_enforcement_test.step, 1, test_shard_loads, test_shard_index);
+    const run_fle_enforcement_test = b.addRunArtifact(fle_enforcement_test);
+    shardDep(test_step, &run_fle_enforcement_test.step, 1, test_shard_loads, test_shard_index);
+    const fle_enforcement_test_step = b.step("test-fle-enforcement", "Run FLE enforcement security tests");
+    fle_enforcement_test_step.dependOn(&run_fle_enforcement_test.step);
 
     // Add unit tests for new modules
     const tde_file_encryption_test = b.addTest(.{
@@ -5669,7 +5762,10 @@ pub fn build(b: *std.Build) void {
     tde_file_encryption_test.root_module.addImport("logging", logging_mod);
     // Task 5 (FIPS seam): tde_file_encryption.zig routes AES-GCM + HMAC + secureZero through crypto_backend.
     tde_file_encryption_test.root_module.addImport("crypto_backend", crypto_backend_mod);
-    shardDep(test_step, &tde_file_encryption_test.step, 1, test_shard_loads, test_shard_index);
+    const run_tde_file_encryption_test = b.addRunArtifact(tde_file_encryption_test);
+    shardDep(test_step, &run_tde_file_encryption_test.step, 1, test_shard_loads, test_shard_index);
+    const tde_file_encryption_test_step = b.step("test-tde-file-encryption", "Run tde_file_encryption.zig inline unit tests");
+    tde_file_encryption_test_step.dependOn(&run_tde_file_encryption_test.step);
 
     // GAP-0883: src/ml/integration.zig (demo MLEngine with random embeddings
     // and an embedding-sign "community detection" hack) was dead code — no
@@ -5683,12 +5779,18 @@ pub fn build(b: *std.Build) void {
     streaming_test.root_module.addImport("logging", logging_mod);
     streaming_test.root_module.addImport("json", json_mod);
     streaming_test.root_module.addImport("transport/thread_pool", thread_pool_mod);
-    shardDep(test_step, &streaming_test.step, 1, test_shard_loads, test_shard_index);
+    const run_streaming_test = b.addRunArtifact(streaming_test);
+    shardDep(test_step, &run_streaming_test.step, 1, test_shard_loads, test_shard_index);
+    const streaming_test_step = b.step("test-cdc-enhanced", "Run cdc_enhanced.zig inline unit tests");
+    streaming_test_step.dependOn(&run_streaming_test.step);
 
     const temporal_test = b.addTest(.{
         .root_module = b.createModule(.{ .root_source_file = b.path("src/temporal/time_travel.zig"), .target = target, .optimize = optimize }),
     });
-    shardDep(test_step, &temporal_test.step, 1, test_shard_loads, test_shard_index);
+    const run_temporal_test = b.addRunArtifact(temporal_test);
+    shardDep(test_step, &run_temporal_test.step, 1, test_shard_loads, test_shard_index);
+    const temporal_test_step = b.step("test-temporal-time-travel", "Run time_travel.zig inline unit tests");
+    temporal_test_step.dependOn(&run_temporal_test.step);
 
     // GPU tests (moved to test-gpu step below - not part of default tests)
     const gpu_test = b.addTest(.{
@@ -5846,12 +5948,18 @@ pub fn build(b: *std.Build) void {
     const auth_test = b.addTest(.{
         .root_module = auth_mod,
     });
-    shardDep(test_step, &auth_test.step, 1, test_shard_loads, test_shard_index);
+    const run_auth_test = b.addRunArtifact(auth_test);
+    shardDep(test_step, &run_auth_test.step, 1, test_shard_loads, test_shard_index);
+    const auth_test_step = b.step("test-geode-auth-lib", "Run geode_auth_lib.zig inline unit tests");
+    auth_test_step.dependOn(&run_auth_test.step);
 
     const rls_test = b.addTest(.{
         .root_module = rls_mod,
     });
-    shardDep(test_step, &rls_test.step, 1, test_shard_loads, test_shard_index);
+    const run_rls_test = b.addRunArtifact(rls_test);
+    shardDep(test_step, &run_rls_test.step, 1, test_shard_loads, test_shard_index);
+    const rls_test_step = b.step("test-rls-core", "Run rls_core.zig inline unit tests");
+    rls_test_step.dependOn(&run_rls_test.step);
 
     // CANARY: REQ=REQ-AUTH-ENFORCE-004; FEATURE="AuthEnforcement"; ASPECT=BuildIntegration; STATUS=TESTED; OWNER=security; UPDATED=2026-01-28
     // CRITICAL SECURITY: Authentication enforcement tests - verify permission checking and role management
@@ -5869,7 +5977,7 @@ pub fn build(b: *std.Build) void {
     const run_auth_enforcement_tests = b.addRunArtifact(auth_enforcement_tests);
     const auth_enforcement_step = b.step("test-auth-enforcement", "Run auth enforcement + FIPS fail-close password hashing tests");
     auth_enforcement_step.dependOn(&run_auth_enforcement_tests.step);
-    shardDep(test_step, &auth_enforcement_tests.step, 1, test_shard_loads, test_shard_index);
+    shardDep(test_step, &run_auth_enforcement_tests.step, 1, test_shard_loads, test_shard_index);
 
     // user_management.zig's OWN inline tests, rooted at that file so they can be
     // run (and cache-invalidated) directly instead of only riding along inside
@@ -5911,7 +6019,10 @@ pub fn build(b: *std.Build) void {
     });
     tde_enforcement_test_mod.link_libc = true;
     const tde_enforcement_tests = b.addTest(.{ .root_module = tde_enforcement_test_mod });
-    shardDep(test_step, &tde_enforcement_tests.step, 1, test_shard_loads, test_shard_index);
+    const run_tde_enforcement_tests = b.addRunArtifact(tde_enforcement_tests);
+    shardDep(test_step, &run_tde_enforcement_tests.step, 1, test_shard_loads, test_shard_index);
+    const tde_enforcement_tests_step = b.step("test-tde-enforcement", "Run TDE enforcement security tests");
+    tde_enforcement_tests_step.dependOn(&run_tde_enforcement_tests.step);
 
     // CANARY: REQ=REQ-QUALITY-GAP-413-002; FEATURE="OrphanedTestRemediation"; ASPECT=BuildSystem; STATUS=TESTED; OWNER=quality; UPDATED=2026-01-30
     // GAP-413: Orphaned test files - PARTIAL REMEDIATION (11 tests now running)
@@ -5931,26 +6042,38 @@ pub fn build(b: *std.Build) void {
     json_opt_test_mod.addImport("json_opt", json_opt_fixed_mod_for_test);
     json_opt_test_mod.addImport("json", json_mod);
     const json_opt_tests = b.addTest(.{ .root_module = json_opt_test_mod });
-    shardDep(test_step, &json_opt_tests.step, 1, test_shard_loads, test_shard_index);
+    const run_json_opt_tests = b.addRunArtifact(json_opt_tests);
+    shardDep(test_step, &run_json_opt_tests.step, 1, test_shard_loads, test_shard_index);
+    const json_opt_tests_step = b.step("test-json-optimization", "Run optimized JSON processor tests (GAP-413)");
+    json_opt_tests_step.dependOn(&run_json_opt_tests.step);
 
     // GAP-413 FIXED: test_filters.zig (10 tests) - audit filter tests
     const test_filters_mod = b.createModule(.{ .root_source_file = b.path("tests/test_filters.zig"), .target = target, .optimize = optimize });
     test_filters_mod.addImport("audit_lib", audit_ext_mod);
     const test_filters_tests = b.addTest(.{ .root_module = test_filters_mod });
-    shardDep(test_step, &test_filters_tests.step, 1, test_shard_loads, test_shard_index);
+    const run_test_filters_tests = b.addRunArtifact(test_filters_tests);
+    shardDep(test_step, &run_test_filters_tests.step, 1, test_shard_loads, test_shard_index);
+    const test_filters_tests_step = b.step("test-audit-filters", "Run audit filter tests (GAP-413)");
+    test_filters_tests_step.dependOn(&run_test_filters_tests.step);
 
     // GAP-413 FIXED: test_transports.zig (7 tests) - syslog and file sink tests
     const test_transports_mod = b.createModule(.{ .root_source_file = b.path("tests/test_transports.zig"), .target = target, .optimize = optimize });
     test_transports_mod.link_libc = true;
     test_transports_mod.addImport("audit_lib", audit_ext_mod);
     const test_transports_tests = b.addTest(.{ .root_module = test_transports_mod });
-    shardDep(test_step, &test_transports_tests.step, 1, test_shard_loads, test_shard_index);
+    const run_test_transports_tests = b.addRunArtifact(test_transports_tests);
+    shardDep(test_step, &run_test_transports_tests.step, 1, test_shard_loads, test_shard_index);
+    const test_transports_tests_step = b.step("test-audit-transports", "Run audit syslog/file sink transport tests (GAP-413)");
+    test_transports_tests_step.dependOn(&run_test_transports_tests.step);
 
     // GAP-413 FIXED: test_cef.zig (4 tests) - CEF formatting tests
     const test_cef_mod = b.createModule(.{ .root_source_file = b.path("tests/test_cef.zig"), .target = target, .optimize = optimize });
     test_cef_mod.addImport("audit_lib", audit_ext_mod);
     const test_cef_tests = b.addTest(.{ .root_module = test_cef_mod });
-    shardDep(test_step, &test_cef_tests.step, 1, test_shard_loads, test_shard_index);
+    const run_test_cef_tests = b.addRunArtifact(test_cef_tests);
+    shardDep(test_step, &run_test_cef_tests.step, 1, test_shard_loads, test_shard_index);
+    const test_cef_tests_step = b.step("test-audit-cef", "Run audit CEF formatting tests (GAP-413)");
+    test_cef_tests_step.dependOn(&run_test_cef_tests.step);
 
     // GAP-413 BLOCKED: test_timing_attacks.zig (6 tests) - hash.zig imports storage/heap.zig outside module path
     // Requires restructuring types_hash module with proper dependencies from root module
@@ -9403,28 +9526,37 @@ pub fn build(b: *std.Build) void {
     // Unicode UTF-16 / WTF-8 conversion canary tests
     const unicode_utf16_tests = b.addTest(.{ .root_module = b.createModule(.{ .root_source_file = b.path("tests/canary_unicode_utf16.zig"), .target = target, .optimize = optimize }) });
     unicode_utf16_tests.root_module.addImport("geode", root_mod);
-    shardDep(test_step, &unicode_utf16_tests.step, 1, test_shard_loads, test_shard_index);
+    const run_unicode_utf16_tests = b.addRunArtifact(unicode_utf16_tests);
+    shardDep(test_step, &run_unicode_utf16_tests.step, 1, test_shard_loads, test_shard_index);
+    const unicode_utf16_tests_step = b.step("test-canary-unicode-utf16", "Run UTF-8/UTF-16/WTF-8 conversion CANARY tests");
+    unicode_utf16_tests_step.dependOn(&run_unicode_utf16_tests.step);
 
     // Issue #445: WAL (Write-Ahead Log) unit tests
     const wal_tests = b.addTest(.{ .root_module = b.createModule(.{ .root_source_file = b.path("tests/test_wal.zig"), .target = target, .optimize = optimize }) });
     wal_tests.root_module.addImport("geode", root_mod);
     wal_tests.root_module.addImport("logging", logging_mod);
-    shardDep(test_step, &wal_tests.step, 1, test_shard_loads, test_shard_index);
     // #812 (GAP-0886a): named step so the WAL unit suite is runnable outside
     // the blocked monolithic `test` step (per-step sweep is the canonical gate).
     const run_wal_tests = b.addRunArtifact(wal_tests);
+    shardDep(test_step, &run_wal_tests.step, 1, test_shard_loads, test_shard_index);
     const wal_test_step = b.step("test-wal", "Run WAL unit tests (append, deprecated no-op replay, checkpoint, CRC)");
     wal_test_step.dependOn(&run_wal_tests.step);
 
     // Issue #460: Shared cross-connection optimizer unit tests
     const shared_opt_tests = b.addTest(.{ .root_module = b.createModule(.{ .root_source_file = b.path("tests/test_shared_optimizer.zig"), .target = target, .optimize = optimize }) });
     shared_opt_tests.root_module.addImport("geode", root_mod);
-    shardDep(test_step, &shared_opt_tests.step, 1, test_shard_loads, test_shard_index);
+    const run_shared_opt_tests = b.addRunArtifact(shared_opt_tests);
+    shardDep(test_step, &run_shared_opt_tests.step, 1, test_shard_loads, test_shard_index);
+    const shared_opt_tests_step = b.step("test-shared-optimizer", "Run shared cross-connection optimizer unit tests (issue #460)");
+    shared_opt_tests_step.dependOn(&run_shared_opt_tests.step);
 
     // Issue #452: Plan cache lifecycle unit tests
     const plan_lifecycle_tests = b.addTest(.{ .root_module = b.createModule(.{ .root_source_file = b.path("tests/test_plan_cache_lifecycle.zig"), .target = target, .optimize = optimize }) });
     plan_lifecycle_tests.root_module.addImport("geode", root_mod);
-    shardDep(test_step, &plan_lifecycle_tests.step, 1, test_shard_loads, test_shard_index);
+    const run_plan_lifecycle_tests = b.addRunArtifact(plan_lifecycle_tests);
+    shardDep(test_step, &run_plan_lifecycle_tests.step, 1, test_shard_loads, test_shard_index);
+    const plan_lifecycle_tests_step = b.step("test-plan-cache-lifecycle", "Run plan cache lifecycle unit tests (issue #452)");
+    plan_lifecycle_tests_step.dependOn(&run_plan_lifecycle_tests.step);
 
     const e2e_rls_test = b.addTest(.{
         .root_module = b.createModule(.{ .root_source_file = b.path("tests/e2e_rls_security.zig"), .target = target, .optimize = optimize }),
