@@ -8391,6 +8391,16 @@ pub fn build(b: *std.Build) void {
     const run_node_scan_dup_proj_tests = b.addRunArtifact(node_scan_dup_proj_tests);
     const node_scan_dup_proj_step = b.step("test-node-scan-duplicate-projection", "KNOWN RED, not in the aggregate: a string property projected twice by the node-scan fast path is freed twice (P4, SONNY-1221 review)");
     node_scan_dup_proj_step.dependOn(&run_node_scan_dup_proj_tests.step);
+    //
+    // P5: `SKIP k` with no LIMIT and no WHERE returns one row: the OFFSET-only
+    // slot bound (k+1) caps slot collection.
+    const node_scan_skip_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_node_scan_skip_without_limit.zig"), .target = target, .optimize = optimize });
+    node_scan_skip_test_mod.addImport("geode", root_mod);
+    node_scan_skip_test_mod.addImport("logging", logging_mod);
+    const node_scan_skip_tests = b.addTest(.{ .root_module = node_scan_skip_test_mod });
+    const run_node_scan_skip_tests = b.addRunArtifact(node_scan_skip_tests);
+    const node_scan_skip_step = b.step("test-node-scan-skip-without-limit", "KNOWN RED, not in the aggregate: SKIP without LIMIT on the node-scan fast path returns one row instead of every row after the offset (P5, SONNY-1221 review)");
+    node_scan_skip_step.dependOn(&run_node_scan_skip_tests.step);
 
     // SONNY-1330 TSan companion: the same regression file under
     // -fsanitize-thread, so the fork-join over a COLD store is checked for the
