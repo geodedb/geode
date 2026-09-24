@@ -2232,7 +2232,7 @@ REQ-GQL-022,Storage/Recovery,SnapshotLoadOptimizationDeltaVariance,BENCHED,,,sto
 REQ-GQL-023,DistributedQueryPlanning,ShardAffinityAnalysis,TESTED,,,distributed,2025-10-05,tests/distributed_query_planner_test.zig,27
 REQ-GQL-023,MVCC Phantom Prevention,PredicateRangeDetection,TESTED,,,txn,2025-09-26,src/transactions/manager.zig,9
 REQ-GQL-023,MVCC Phantom Prevention,PredicateRangeDetection,TESTED,,,txn,2025-09-21,tests/canary_txn_phantom_anomaly.zig,43
-REQ-GQL-023,MVCC Phantom Prevention,RangeTracker,TESTED,,,txn,2025-09-26,src/transactions/manager.zig,532
+REQ-GQL-023,MVCC Phantom Prevention,RangeTracker,TESTED,,,txn,2025-09-26,src/transactions/manager.zig,542
 REQ-GQL-023,MVCC Phantom Prevention,RangeTracker,TESTED,,,txn,2025-09-26,src/transactions/range_tracker.zig,19
 REQ-GQL-023,MVCC Phantom Prevention,RangeTracker,TESTED,,,txn,2025-09-22,tests/canary_txn_phantom_range.zig,43
 REQ-GQL-023,MVCC Phantom Prevention,RangeTracker,BENCHED,,,txn,2025-09-22,tests/canary_txn_phantom_range.zig,76
