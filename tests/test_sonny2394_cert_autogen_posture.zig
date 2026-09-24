@@ -137,8 +137,9 @@ test "TestSONNY2394_ListenerCertAutogenExplicitPolicy" {
     try std.testing.expect(try listenWithPolicy(.always));
 }
 
-/// Stands in for `openssl`: records that it ran, and the OPENSSL_CONF it was
-/// given, into the certificate path it was asked to write (`-out <path>`).
+/// Stands in for `openssl`. Into the certificate path it was asked to write
+/// (`-out <path>`) it records that it ran, the OPENSSL_CONF it was given, and
+/// its own ignored-signal mask (`SigIgn` from /proc/<pid>/status).
 const openssl_shim =
     \\#!/bin/sh
     \\out=""
@@ -146,7 +147,11 @@ const openssl_shim =
     \\  if [ "$1" = "-out" ]; then out="$2"; fi
     \\  shift
     \\done
-    \\printf 'geode-openssl-shim OPENSSL_CONF=%s\n' "$OPENSSL_CONF" > "$out"
+    \\sigign=""
+    \\while IFS= read -r line; do
+    \\  case "$line" in SigIgn:*) sigign="${line#SigIgn:}" ;; esac
+    \\done < /proc/$$/status
+    \\printf 'geode-openssl-shim OPENSSL_CONF=%s\nSigIgn=%s\n' "$OPENSSL_CONF" "$sigign" > "$out"
     \\
 ;
 
@@ -172,6 +177,101 @@ fn restoreEnv(allocator: std.mem.Allocator, name: [*:0]const u8, previous: ?[:0]
     }
 }
 
+fn sigpipeAction() std.posix.Sigaction {
+    var current: std.posix.Sigaction = undefined;
+    std.posix.sigaction(.PIPE, null, &current);
+    return current;
+}
+
+fn handlerAddress(action: std.posix.Sigaction) usize {
+    return if (action.handler.handler) |h| @intFromPtr(h) else 0;
+}
+
+/// SIGPIPE's bit in a /proc/<pid>/status signal mask (bit n-1 for signal n).
+const sigpipe_mask_bit: u64 = @as(u64, 1) << (@intFromEnum(std.posix.SIG.PIPE) - 1);
+
+/// A shim `openssl` first on PATH, a sentinel OPENSSL_CONF, and SIGPIPE
+/// ignored, for one test. `deinit` puts all three back.
+const ShimEnv = struct {
+    allocator: std.mem.Allocator,
+    conf: [:0]u8,
+    old_path: ?[:0]u8,
+    old_conf: ?[:0]u8,
+    old_sigpipe: std.posix.Sigaction,
+
+    fn init(allocator: std.mem.Allocator, tmp: *std.testing.TmpDir, dir: []const u8) !ShimEnv {
+        const io = std.Io.Threaded.global_single_threaded.io();
+        try tmp.dir.createDirPath(io, "bin");
+        try tmp.dir.writeFile(io, .{
+            .sub_path = "bin/openssl",
+            .data = openssl_shim,
+            .flags = .{ .permissions = .executable_file },
+        });
+
+        const new_path = if (getenv("PATH")) |p|
+            try std.fmt.allocPrintSentinel(allocator, "{s}/bin:{s}", .{ dir, p }, 0)
+        else
+            try std.fmt.allocPrintSentinel(allocator, "{s}/bin", .{dir}, 0);
+        defer allocator.free(new_path);
+        const conf = try std.fmt.allocPrintSentinel(allocator, "{s}/sonny2394-openssl.cnf", .{dir}, 0);
+        errdefer allocator.free(conf);
+
+        const old_path = try swapEnv(allocator, "PATH", new_path);
+        errdefer restoreEnv(allocator, "PATH", old_path);
+        const old_conf = try swapEnv(allocator, "OPENSSL_CONF", conf);
+
+        const ignore: std.posix.Sigaction = .{
+            .handler = .{ .handler = std.posix.SIG.IGN },
+            .mask = std.posix.sigemptyset(),
+            .flags = 0,
+        };
+        var old_sigpipe: std.posix.Sigaction = undefined;
+        std.posix.sigaction(.PIPE, &ignore, &old_sigpipe);
+
+        return .{
+            .allocator = allocator,
+            .conf = conf,
+            .old_path = old_path,
+            .old_conf = old_conf,
+            .old_sigpipe = old_sigpipe,
+        };
+    }
+
+    fn deinit(self: *ShimEnv) void {
+        std.posix.sigaction(.PIPE, &self.old_sigpipe, null);
+        restoreEnv(self.allocator, "OPENSSL_CONF", self.old_conf);
+        restoreEnv(self.allocator, "PATH", self.old_path);
+        self.allocator.free(self.conf);
+    }
+
+    /// The shim, not a real openssl, wrote `cert_path`; it saw OPENSSL_CONF;
+    /// and it inherited the ignored SIGPIPE. That last part pins a78b2f29:
+    /// exec keeps an ignored signal ignored but resets a handled one to the
+    /// default, so the bit is set only if nothing installed a SIGPIPE handler
+    /// in this process while the child was spawned.
+    fn expectRan(self: *const ShimEnv, cert_path: []const u8) !void {
+        const io = std.Io.Threaded.global_single_threaded.io();
+        const written = try std.Io.Dir.cwd().readFileAlloc(io, cert_path, self.allocator, .limited(4096));
+        defer self.allocator.free(written);
+        var lines = std.mem.splitScalar(u8, written, '\n');
+
+        const expected = try std.fmt.allocPrint(self.allocator, "geode-openssl-shim OPENSSL_CONF={s}", .{self.conf});
+        defer self.allocator.free(expected);
+        try std.testing.expectEqualStrings(expected, lines.next() orelse "");
+
+        const sigign = lines.next() orelse "";
+        if (!std.mem.startsWith(u8, sigign, "SigIgn=")) {
+            std.debug.print("shim output has no SigIgn line: {s}\n", .{written});
+            return error.TestUnexpectedResult;
+        }
+        const mask = try std.fmt.parseInt(u64, std.mem.trim(u8, sigign["SigIgn=".len..], " \t"), 16);
+        if (mask & sigpipe_mask_bit == 0) {
+            std.debug.print("the child did not inherit the ignored SIGPIPE (SigIgn={x:0>16}): a handler was installed while it was spawned\n", .{mask});
+            return error.TestUnexpectedResult;
+        }
+    }
+};
+
 // Certificate auto-generation runs `openssl` with the PROCESS environment: the
 // binary is resolved on the process PATH and the child inherits variables such
 // as OPENSSL_CONF. It used to run with an empty environment and std's fixed
@@ -185,31 +285,12 @@ fn restoreEnv(allocator: std.mem.Allocator, name: [*:0]const u8, previous: ?[:0]
 // saw OPENSSL_CONF.
 test "TestSONNY2394_CertAutogenSpawnsWithProcessEnvironment" {
     const allocator = std.testing.allocator;
-    const io = std.Io.Threaded.global_single_threaded.io();
     var tmp = std.testing.tmpDir(.{});
     defer tmp.cleanup();
     const paths = try Paths.init(allocator, &tmp);
     defer paths.deinit(allocator);
-
-    try tmp.dir.createDirPath(io, "bin");
-    try tmp.dir.writeFile(io, .{
-        .sub_path = "bin/openssl",
-        .data = openssl_shim,
-        .flags = .{ .permissions = .executable_file },
-    });
-
-    const new_path = if (getenv("PATH")) |p|
-        try std.fmt.allocPrintSentinel(allocator, "{s}/bin:{s}", .{ paths.dir, p }, 0)
-    else
-        try std.fmt.allocPrintSentinel(allocator, "{s}/bin", .{paths.dir}, 0);
-    defer allocator.free(new_path);
-    const conf = try std.fmt.allocPrintSentinel(allocator, "{s}/sonny2394-openssl.cnf", .{paths.dir}, 0);
-    defer allocator.free(conf);
-
-    const old_path = try swapEnv(allocator, "PATH", new_path);
-    defer restoreEnv(allocator, "PATH", old_path);
-    const old_conf = try swapEnv(allocator, "OPENSSL_CONF", conf);
-    defer restoreEnv(allocator, "OPENSSL_CONF", old_conf);
+    var shim = try ShimEnv.init(allocator, &tmp, paths.dir);
+    defer shim.deinit();
 
     var qt = try quic.QuicTransport.init(allocator, .{
         .port = 0,
@@ -220,14 +301,18 @@ test "TestSONNY2394_CertAutogenSpawnsWithProcessEnvironment" {
     });
     defer qt.deinit();
 
+    // a78b2f29: spawning openssl leaves process-wide signal dispositions
+    // alone. SIGPIPE is the same after listen() as before it. This alone
+    // would not catch a handler that is swapped in and restored around the
+    // spawn; the child-side check in `expectRan` does.
+    const before = sigpipeAction();
     // The shim's marker is not a PEM certificate, so the listener refuses it.
     try std.testing.expectError(quic.QuicError.CertificateError, qt.listen());
+    const after = sigpipeAction();
+    try std.testing.expectEqual(handlerAddress(before), handlerAddress(after));
+    try std.testing.expectEqual(before.flags, after.flags);
 
-    const written = try std.Io.Dir.cwd().readFileAlloc(io, paths.cert, allocator, .limited(4096));
-    defer allocator.free(written);
-    const expected = try std.fmt.allocPrint(allocator, "geode-openssl-shim OPENSSL_CONF={s}\n", .{conf});
-    defer allocator.free(expected);
-    try std.testing.expectEqualStrings(expected, written);
+    try shim.expectRan(paths.cert);
 }
 
 test "TestSONNY2394_CertAutogenPolicyMatrix" {
