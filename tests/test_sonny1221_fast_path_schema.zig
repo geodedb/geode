@@ -459,18 +459,26 @@ test "SONNY-1221: a stream dropped or rewound with prefetched rows pending leaks
         var page = try stream.buildNextPage(allocator, 3);
         page.result.deinit(allocator);
     }
-    // Rewound after one page: the whole result again, each row once.
-    {
-        var stream = try openStream(&h, allocator, &qa, many_query);
+    // Rewound after one page: the same rows as a stream that was never
+    // rewound, in the same order, each once. Without a WHERE the OFFSET is
+    // where the cursor STARTS (slot collection is bounded by OFFSET+LIMIT), so
+    // a rewind must go back there, not to slot 0.
+    for ([_][]const u8{ many_query, "MATCH (n:M) RETURN n.s, n.i SKIP 5 LIMIT 3" }) |query| {
+        var plain = try openStream(&h, allocator, &qa, query);
+        defer plain.deinit();
+        const want = try drainColumn0(&plain, allocator, 0);
+        defer freeStrings(allocator, want);
+
+        var stream = try openStream(&h, allocator, &qa, query);
         defer stream.deinit();
         try stream.prefetchSchemaSample(allocator);
-        var page = try stream.buildNextPage(allocator, 3);
+        var page = try stream.buildNextPage(allocator, 1);
         page.result.deinit(allocator);
         stream.rewind();
-        const got = try drainColumn0(&stream, allocator, 4);
+        const got = try drainColumn0(&stream, allocator, 2);
         defer freeStrings(allocator, got);
-        try testing.expectEqual(many, got.len);
-        try expectDistinct(got);
+        try testing.expectEqual(want.len, got.len);
+        for (want, got) |w, g| try testing.expectEqualStrings(w, g);
     }
 }
 

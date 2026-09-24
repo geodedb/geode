@@ -104,6 +104,10 @@ pub const NodeScanStream = struct {
     var_name: []const u8,
     slot_ids: []u64,
     next_index: usize = 0,
+    /// Where `prepare` started the cursor: the OFFSET when there is no WHERE
+    /// (slot collection is bounded by OFFSET+LIMIT, so the cursor skips the
+    /// first OFFSET slots), else 0. `rewind` returns here (SONNY-1221).
+    first_index: usize = 0,
     flags: [][]const u8,
 
     mode: ProjectionMode,
@@ -241,12 +245,13 @@ pub const NodeScanStream = struct {
     }
 
     /// Restart from the first row: drop any prefetched rows and reset the scan
-    /// cursor, the LIMIT/OFFSET counters and the count flag. Only for a stream
-    /// that has not sent a single row yet (the QUIC inline path re-serves the
-    /// whole result over PULL when its FIRST inline page fails to build).
+    /// cursor (to where `prepare` put it, which honours a no-WHERE OFFSET), the
+    /// LIMIT/OFFSET counters and the count flag. Only for a stream that has not
+    /// sent a single row yet (the QUIC inline path re-serves the whole result
+    /// over PULL when its FIRST inline page fails to build).
     pub fn rewind(self: *NodeScanStream) void {
         self.dropPrefetched();
-        self.next_index = 0;
+        self.next_index = self.first_index;
         self.rows_emitted = 0;
         self.rows_skipped = 0;
         self.count_emitted = false;
@@ -1076,6 +1081,7 @@ pub fn prepare(
         .var_name = var_name,
         .slot_ids = slot_ids,
         .next_index = start_index,
+        .first_index = start_index,
         .flags = owned_flags,
         .mode = eligibility.mode,
         .ret_items = ret_items,

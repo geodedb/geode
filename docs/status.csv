@@ -4510,7 +4510,7 @@ REQ-PERF-TRAVERSAL-COMPOSITE-SEED,TraversalCompositeSeed,Regression,TESTED,,,per
 REQ-PERF-TRAVERSAL-REVERSE-SEED,TraversalReverseSeed,Regression,TESTED,,,performance,2026-06-26,tests/test_traversal_reverse_seed.zig,19
 REQ-PERF-TRAVERSAL-SEED,TraversalSeedPerf,PerfMicrobenchmark,TESTED,,,performance,2026-06-26,tests/test_traversal_seed_perf.zig,22
 REQ-PERF-TYPED-EDGE-ENUM,TypedEdgeIndexScan,NoNodeWalk,TESTED,,,storage,2026-07-02,tests/test_typed_edge_index_scan.zig,36
-REQ-PERF-UNORDERED-STREAM-001,UnorderedNodeScanStreaming,TransportFastPath,IMPL,,,engine,2026-06-19,src/server/node_scan_stream.zig,828
+REQ-PERF-UNORDERED-STREAM-001,UnorderedNodeScanStreaming,TransportFastPath,IMPL,,,engine,2026-06-19,src/server/node_scan_stream.zig,833
 REQ-PERF-WAL-001,WriteAheadLog,DeltaPersistence,TESTED,,,storage,2026-03-31,src/wal.zig,51
 REQ-PERF-WAL-001,WriteAheadLog,UnitTest,TESTED,,,storage,2026-02-17,tests/test_wal.zig,47
 REQ-PERF-WAL-002,WriteAheadLog,MutationCallback,TESTED,,,storage,2026-02-17,src/graph_store.zig,14427
@@ -5146,12 +5146,12 @@ REQ-SNAPSHOT-002,SnapshotInstallation,SnapshotRestore,TESTED,,,backup,2026-01-15
 REQ-SNAPSHOT-003,SnapshotInstallation,IncrementalSnapshot,TESTED,,,backup,2026-01-15,tests/test_gap_0193_remaining_categories.zig,282
 REQ-SNAPSHOT-004,SnapshotInstallation,SnapshotValidation,TESTED,,,backup,2026-01-15,tests/test_gap_0193_remaining_categories.zig,290
 REQ-SNAPSHOT-005,SnapshotInstallation,SnapshotCleanup,TESTED,,,backup,2026-01-15,tests/test_gap_0193_remaining_categories.zig,298
-REQ-SONNY-1218-INMEM-SCAN,EngineDirectNodeScanDecline,AdapterGuard,TESTED,,,engine,2026-09-13,src/server/node_scan_stream.zig,741
+REQ-SONNY-1218-INMEM-SCAN,EngineDirectNodeScanDecline,AdapterGuard,TESTED,,,engine,2026-09-13,src/server/node_scan_stream.zig,746
 REQ-SONNY-1218-INMEM-SCAN,EngineDirectNodeScanDecline,Regression,TESTED,,,engine,2026-09-13,tests/test_sonny1218_in_memory_node_scan.zig,34
 REQ-SONNY-1221-FAST-PATH-SCHEMA,EngineDirectProjectionSchema,Regression,TESTED,,,engine,2026-09-24,tests/test_sonny1221_fast_path_schema.zig,36
-REQ-SONNY-1221-FAST-PATH-SCHEMA,EngineDirectProjectionSchema,SchemaFrameTyping,TESTED,,,engine,2026-09-24,src/server/node_scan_stream.zig,222
+REQ-SONNY-1221-FAST-PATH-SCHEMA,EngineDirectProjectionSchema,SchemaFrameTyping,TESTED,,,engine,2026-09-24,src/server/node_scan_stream.zig,226
 REQ-SONNY-1229-ENGINE-DIRECT-TENANCY,EngineDirectTenantScope,Regression,TESTED,,,security,2026-09-13,tests/test_sonny1229_strict_tenancy_read.zig,40
-REQ-SONNY-1229-ENGINE-DIRECT-TENANCY,EngineDirectTenantScope,TenantGuard,TESTED,,,security,2026-09-13,src/server/node_scan_stream.zig,774
+REQ-SONNY-1229-ENGINE-DIRECT-TENANCY,EngineDirectTenantScope,TenantGuard,TESTED,,,security,2026-09-13,src/server/node_scan_stream.zig,779
 REQ-SONNY-1318-PROCEDURE-TENANCY,GraphProcedureTenantScope,FtsStrictTenancyFailClosed,TESTED,,,security,2026-09-13,tests/test_fts_authorization.zig,463
 REQ-SONNY-1318-PROCEDURE-TENANCY,GraphProcedureTenantScope,Regression,TESTED,,,security,2026-09-13,tests/test_sonny1318_procedure_tenancy.zig,46
 REQ-SONNY-1318-PROCEDURE-TENANCY,GraphProcedureTenantScope,SharedVisibilityPredicate,TESTED,,,security,2026-09-13,src/execution/tenant_visibility.zig,1
