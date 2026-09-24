@@ -1743,13 +1743,17 @@ fn executeMultiChainHashJoin(
 
     if (!adapter.graphExists(plan.graph_name)) {
         const col_result = try buildBindingColumns(allocator, plan.binding_names, q.inline_let_bindings);
-        owned_entities.deinit();
-        return ExecutionResult{
+        // Release the tracker only after the last fallible step: a failed
+        // toOwnedSlice would otherwise run the errdefer on a freed tracker
+        // (same order as the other three early-return sites).
+        const empty_result = ExecutionResult{
             .columns = col_result.columns,
             .rows = try rows.toOwnedSlice(allocator),
             .flags = std.ArrayList([]const u8).empty,
             .column_buffer = col_result.buffer,
         };
+        owned_entities.deinit();
+        return empty_result;
     }
 
     const n_chains = q.match.chains.len;
