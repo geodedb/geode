@@ -3300,7 +3300,7 @@ REQ-GQL-TDE-KMS-CONN-001,RealKMSConnectionTest,SECURITY,TESTED,,,security,2026-0
 REQ-GQL-TDE-OLTP-PERF-001,TDEOlptOverheadValidation,PERFORMANCE,BENCHED,,,perf,2025-09-26,benchmarks/benchmark_tde_oltp_overhead.zig,3
 REQ-GQL-TDE-OLTP-PERF-001,TDEOlptOverheadValidation,PERFORMANCE,TESTED,,,perf,2025-09-26,docs/SECURITY_PROGRESS.md,45
 REQ-GQL-TDE-OLTP-PERF-001,TDEOlptOverheadValidation,PERFORMANCE,TESTED,,,perf,2025-09-26,tests/test_tde_oltp_overhead_threshold.zig,2
-REQ-GQL-TDE-OLTP-PERF-001,TDEOlptOverheadValidation,PublishedSync,TESTED,,,perf,2025-09-27,tests/canary_tde_published_overhead_sync.zig,6
+REQ-GQL-TDE-OLTP-PERF-001,TDEOlptOverheadValidation,PublishedSync,TESTED,,,perf,2026-09-23,tests/canary_tde_published_overhead_sync.zig,8
 REQ-GQL-TDE-OVERHEAD-001,TDEOverheadSmoke,BENCH,TESTED,,,security,2026-01-16,tests/benchmark_tde_overhead_smoke.zig,8
 REQ-GQL-TDE-OVERHEAD-002,TDE real-path overhead benchmark,PERF,BENCHED,,,security,2025-09-26,benchmarks/benchmark_tde_overhead_realpath.zig,5
 REQ-GQL-TDE-OVERHEAD-003,TDE real AEAD overhead benchmark,PERF,BENCHED,,,security,2025-09-26,benchmarks/benchmark_tde_overhead_aead.zig,8
