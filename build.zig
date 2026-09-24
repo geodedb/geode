@@ -5250,6 +5250,11 @@ pub fn build(b: *std.Build) void {
     auth_mod.addImport("crypto_backend", crypto_backend_mod);
     root_mod.addImport("geode_auth", auth_mod);
     root_mod.addImport("mfa", mfa_mod);
+    // SONNY-2394: the recovery-code contention CANARY drives the real
+    // SecurityManager redemption path (auth_mod is only declared here, after
+    // the test's registration, so the import is wired late like
+    // graph_store_unit_tests below).
+    mfa_recovery_contention_tests.root_module.addImport("geode_auth", auth_mod);
     root_mod.addImport("feature_flags", runtime_flags_mod);
     root_mod.addImport("mfa_policy", mfa_policy_mod);
     // GAP-0860: the `graph_store_unit_tests` artifact (declared earlier, rooted

@@ -590,6 +590,17 @@ pub const SecurityManager = struct {
     audit_log: AuditLog,
     password_policy: PasswordPolicy,
     elevation_ttl_ms: i64 = 5 * 60 * 1000, // default 5 minutes; configurable
+    /// SONNY-2394: serializes the credential entry points -- `authenticate`,
+    /// `authenticateWithMFA` and `updatePassword`. One SecurityManager is
+    /// shared by every connection thread (server_init), and these paths mutate
+    /// shared state with no other synchronization: a user's single-use
+    /// recovery-code list (orderedRemove), password hashes and lockout
+    /// counters, the `sessions` map and the `audit_log` entries. Concurrent MFA
+    /// recovery-code redemption crashed on the unsynchronized audit-log /
+    /// session-map growth (DebugAllocator: "Double free detected") and could
+    /// redeem one code twice. Not re-entrant: the three bodies never call each
+    /// other.
+    auth_mu: std.Io.Mutex = std.Io.Mutex.init,
     // CANARY: REQ=REQ-AUTH-GRAPH-WIRE-001; FEATURE="AuthGraphManager Integration"; ASPECT=SecurityManager; STATUS=TESTED; TEST="SecurityManager runtime mutations persist through AGM wiring (GAP-0514 P3)"; OWNER=security; UPDATED=2026-06-11
     // Opaque pointer to AuthGraphManager for runtime mutation persistence (set by server_init).
     // Uses anyopaque because geode_auth_lib cannot import auth_graph_manager (circular dep).
@@ -1611,6 +1622,13 @@ pub const SecurityManager = struct {
 
     // Update password and clear reset requirement
     pub fn updatePassword(self: *Self, user_id: UserId, new_password: []const u8) !void {
+        const io = std.Io.Threaded.global_single_threaded.io();
+        self.auth_mu.lockUncancelable(io);
+        defer self.auth_mu.unlock(io);
+        return self.updatePasswordLocked(user_id, new_password);
+    }
+
+    fn updatePasswordLocked(self: *Self, user_id: UserId, new_password: []const u8) !void {
         // CANARY: REQ=REQ-AUTH-POLICY-009; FEATURE="Password Update Policy Validation"; ASPECT=Security; STATUS=TESTED; TEST=TestCANARY_REQ_AUTH_POLICY_009_UpdateValidation; OWNER=security; UPDATED=2025-09-30
         // Validate new password against current policy before accepting
         try self.validatePasswordAgainstCurrentPolicy(new_password);
@@ -1671,6 +1689,13 @@ pub const SecurityManager = struct {
     // If MFA required, returns error.MFARequired after logging issuance.
     // CANARY: REQ=REQ-GQL-AUTH-002; FEATURE="Password authentication"; ASPECT=SECURITY; STATUS=TESTED; TEST=TestCANARY_REQ_GQL_AUTH_002_AuthPassword; OWNER=security; UPDATED=2025-09-26
     pub fn authenticate(self: *Self, username: []const u8, password: []const u8) ![]const u8 {
+        const io = std.Io.Threaded.global_single_threaded.io();
+        self.auth_mu.lockUncancelable(io);
+        defer self.auth_mu.unlock(io);
+        return self.authenticateLocked(username, password);
+    }
+
+    fn authenticateLocked(self: *Self, username: []const u8, password: []const u8) ![]const u8 {
         // Locate user
         var user_opt: ?*User = null;
         var it = self.users.iterator();
@@ -1782,6 +1807,13 @@ pub const SecurityManager = struct {
     // Recovery codes are single-use; upon successful use it is removed and audited.
     // CANARY: REQ=REQ-GQL-AUTH-004; FEATURE="MFA recovery code"; ASPECT=SECURITY; STATUS=TESTED; TEST=TestCANARY_REQ_GQL_AUTH_004_Recovery|TestCANARY_REQ_GQL_MFA_007_RecoverySingleUse; OWNER=security; UPDATED=2025-09-26
     pub fn authenticateWithMFA(self: *Self, username: []const u8, password: []const u8, code: u32, recovery_code: ?[]const u8) ![]const u8 {
+        const io = std.Io.Threaded.global_single_threaded.io();
+        self.auth_mu.lockUncancelable(io);
+        defer self.auth_mu.unlock(io);
+        return self.authenticateWithMFALocked(username, password, code, recovery_code);
+    }
+
+    fn authenticateWithMFALocked(self: *Self, username: []const u8, password: []const u8, code: u32, recovery_code: ?[]const u8) ![]const u8 {
         var user_opt: ?*User = null;
         var it = self.users.iterator();
         while (it.next()) |entry| {
@@ -1829,8 +1861,10 @@ pub const SecurityManager = struct {
                 var idx: usize = 0;
                 while (idx < codes.items.len) : (idx += 1) {
                     if (std.mem.eql(u8, codes.items[idx], rc)) {
-                        // Remove single-use code by swap-remove
-                        _ = codes.orderedRemove(idx);
+                        // Remove the single-use code. SONNY-2394: free it too
+                        // -- the removed string used to be discarded (leaked
+                        // once per redemption).
+                        self.allocator.free(codes.orderedRemove(idx));
                         try self.audit_log.logMfaRecoveryCodeUsed(user.id);
                         used_recovery = true;
                         break;
