@@ -42,7 +42,19 @@ python3 scripts/test/extended_test_runner.py geode_auth
 
 # Run specific Zig test filter
 zig build test -Dtest-filter="CANARY"
+
+# Run one named regression step (every regression test has one)
+zig build test-<name>
+
+# Compile every artifact the aggregate `test` step runs, in all shards,
+# without running them. Run it before claiming the aggregate is green.
+zig build test-compile
 ```
+
+**Zig test conventions:**
+
+- Every regression test is a named step: `tests/test_<ticket>_<topic>.zig`, registered in `build.zig` as `zig build test-<name>`. Pass its RUN step to `shardDep`, as the neighbouring tests do (`const run_x = b.addRunArtifact(x_tests); shardDep(test_step, &run_x.step, 1, test_shard_loads, test_shard_index);`), so it joins the sharded aggregate that the pre-push hook and the CI shard jobs run. `shardDep` rejects a compile step at configure time: a compile step is built but never run (SONNY-2394).
+- `zig build test-compile` is the check to run before claiming the aggregate `zig build test` is green. A sweep of named steps cannot see aggregate artifacts that have no named step, so the sweep can pass while the aggregate does not compile (SONNY-2394). It builds several hundred artifacts; run it on its own.
 
 ### Run Server/Client
 
@@ -273,9 +285,11 @@ Before making architectural changes, verify against the authoritative spec:
 Always run tests immediately after modifications:
 
 ```bash
+zig build test-<name>    # The named step(s) covering your change
 zig build test           # Quick unit tests
 make test                # Full test suite
 make geodetestlab-spec SPEC=<relevant_spec>  # Relevant integration tests
+zig build test-compile   # Before claiming the aggregate `zig build test` is green
 ```
 
 ---

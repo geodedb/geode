@@ -170,6 +170,12 @@ grep -oE 'b\.step\("test-[^"]+"' build.zig | sed -E 's/b\.step\("//;s/"$//' \
       echo "$step rc=$?"
     done
 
+# Before claiming the aggregate `zig build test` is green: compile every
+# artifact it runs, in all shards, without running them. The sweep above only
+# reaches artifacts that have a named step; this also reaches the rest
+# (SONNY-2394). Heavy: run it on its own.
+zig build test-compile
+
 # Re-run a single failing/hanging step:
 zig build test-count-pushdown        # SLOW: passes in ~7-13 min (use timeout >= 15 min)
 zig build test-e2e                   # gql_conformance 20/20 since GAP-0892 (2026-06-11); residual flakes under load: GAP-0203 QUIC deadline + RSS read (both pass idle)

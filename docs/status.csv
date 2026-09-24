@@ -1973,7 +1973,7 @@ REQ-GPU-PAGERANK-001,GPUPageRank,PTXKernel,EXEMPT,,,gpu,2026-01-10,src/gpu/kerne
 REQ-GPU-SORT-001,GPUSort,PTXKernel,EXEMPT,,,gpu,2026-01-10,src/gpu/kernel_sources.zig,376
 REQ-GPU-TELEMETRY-001,GPUTelemetryMetrics,OccupancyBandwidth,EXEMPT,,,gpu,2026-01-10,src/gpu/telemetry.zig,108
 REQ-GPU-VK-001,Vulkan FFI,Foundation,TESTED,,,gpu,2025-10-26,src/gpu/vulkan_ffi.zig,3
-REQ-GQL-001,BasicQuery,Testing,TESTED,,,test,2025-10-02,docs/TESTING.md,293
+REQ-GQL-001,BasicQuery,Testing,TESTED,,,test,2025-10-02,docs/TESTING.md,312
 REQ-GQL-001,Binary Protocol Frames,Wire,TESTED,,,wire,2025-09-20,src/canary.zig,5
 REQ-GQL-001,GQLCompliance,ISOCompliance,TESTED,,,parser,2026-01-16,tests/test_gap_0193_batch2_testing.zig,197
 REQ-GQL-001,KeywordsAsIdentifiers,ParserSupport,TESTED,,,parser,2025-10-09,src/gql/parser.zig,270
@@ -2408,7 +2408,7 @@ REQ-GQL-042,CDCEngine,GuardrailTimestamps,TESTED,,,streaming,2026-01-15,tests/te
 REQ-GQL-042,CDCEngine,GuardrailTimestampsAbort,TESTED,,,streaming,2026-01-15,tests/test_gap_0193_remaining_categories.zig,202
 REQ-GQL-042,CDCEngine,TxnAttribution,TESTED,,,streaming,2026-01-15,tests/test_gap_0193_remaining_categories.zig,210
 REQ-GQL-042,CDC_CONTROL,Refactor,TESTED,,,server,2025-09-20,src/server/main.zig,911
-REQ-GQL-042,Vector Search,Index,TESTED,,,core,2025-10-16,AGENTS.md,199
+REQ-GQL-042,Vector Search,Index,TESTED,,,core,2025-10-16,AGENTS.md,211
 REQ-GQL-046,TDE,EncryptionKeyDeriveVarianceEnvelope,BENCHED,,,security,2025-09-21,tests/benchmark_encryption_key_derive_variance.zig,3
 REQ-GQL-046,TDE,KeyHierarchy,TESTED,,,security,2025-09-21,tests/canary_tde_multi_key_hierarchy.zig,3
 REQ-GQL-046,TDE Key Hierarchy,Storage,TESTED,,,security,2025-09-20,src/security/tde_hierarchy.zig,4

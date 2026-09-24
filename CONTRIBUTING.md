@@ -154,8 +154,10 @@ Geode targets 98%+ compliance with ISO/IEC 39075:2024 (GQL standard). Always ver
 ### Testing Requirements
 
 - **Unit Tests**: All new code must have test coverage
+- **Regression Tests**: Each is a named `zig build test-<name>` step whose RUN step is registered with `shardDep`, so it also runs in the sharded aggregate `zig build test` (see [docs/TESTING.md](docs/TESTING.md))
 - **Integration Tests**: Add to `geodetestlab/specs/` for black-box testing
 - **No Regressions**: CI must pass with no test failures
+- **Aggregate Compiles**: Run `zig build test-compile` before claiming the aggregate `zig build test` is green; it compiles every aggregate artifact, including those with no named step
 - **Geodetestlab**: Maintain >90% pass rate
 
 Run tests with:
