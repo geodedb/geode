@@ -172,6 +172,12 @@ fn configureVulkanPaths(b: *std.Build, exe: *std.Build.Step.Compile) void {
 /// Get version string from git tags.
 /// Returns git tag if on a tag, or tag+offset+hash if ahead of tag.
 /// Falls back to commit hash or "unknown" if git is unavailable.
+/// SONNY-2394 (review): `zig build test-compile` -- compiles every artifact the
+/// aggregate `test` step runs, across ALL shards, without running any of them.
+/// Set once in build() right after the `test` step is created; shardDep adds
+/// each registered Run step's artifact to it.
+var g_test_compile_step: ?*std.Build.Step = null;
+
 // CI test sharding: `zig build test` aggregates ~176 separately-compiled
 // test binaries. On a CPU-constrained runner that exceeds the 6h job
 // budget. `shardDep` lets CI split the aggregate `test` step into N
@@ -193,6 +199,12 @@ fn configureVulkanPaths(b: *std.Build, exe: *std.Build.Step.Compile) void {
 // CI shard jobs) silently passed without running 54 test binaries. The check
 // runs on every call, before the shard filter, so a compile-only registration
 // fails every `zig build` invocation (and every shard) at configure time.
+//
+// SONNY-2394 (review): every artifact behind a registered Run step also joins
+// `test-compile` (see g_test_compile_step), in every shard. Many aggregate
+// artifacts have no named step, so per-step sweeps cannot see them; a module
+// graph that breaks only there (a new named @import missing from one test
+// module) used to surface only in the full aggregate run.
 fn shardDep(
     test_step: *std.Build.Step,
     dep: *std.Build.Step,
@@ -200,7 +212,7 @@ fn shardDep(
     loads: []usize,
     index: usize,
 ) void {
-    if (dep.cast(std.Build.Step.Run) == null) {
+    const run = dep.cast(std.Build.Step.Run) orelse {
         const what = if (dep.cast(std.Build.Step.Compile)) |c|
             if (c.root_module.root_source_file) |p| p.getDisplayName() else dep.name
         else
@@ -211,6 +223,9 @@ fn shardDep(
                 "shardDep(test_step, &run_x.step, ...)` (SONNY-2394).",
             .{ what, @tagName(dep.id) },
         );
+    };
+    if (g_test_compile_step) |compile_all| {
+        if (run.producer) |artifact| compile_all.dependOn(&artifact.step);
     }
     if (loads.len <= 1) {
         test_step.dependOn(dep);
@@ -1094,6 +1109,9 @@ pub fn build(b: *std.Build) void {
     // Note: transport_quic_mod is defined later after vendor_quic_mod is available
 
     const protocol_mod = b.createModule(.{ .root_source_file = b.path("src/protocol.zig"), .target = target, .optimize = optimize });
+    // SONNY-2394: every module whose file graph reaches
+    // types/extended_functions.zig needs crypto_backend (uuid_v4's CSPRNG).
+    protocol_mod.addImport("crypto_backend", crypto_backend_mod);
     geode_exe.root_module.addImport("protocol", protocol_mod);
 
     // Proto Schema Module
@@ -1209,6 +1227,7 @@ pub fn build(b: *std.Build) void {
     fle_key_manager_mod.addImport("crypto_backend", crypto_backend_mod);
     fle_blind_index_mod.addImport("fle_hmac", fle_hmac_mod);
     fle_catalog_mod.addImport("annotations", fle_annotations_mod);
+    fle_catalog_mod.addImport("crypto_backend", crypto_backend_mod); // SONNY-2394: graph reaches types/extended_functions.zig
 
     // Import FLE modules into root module for global access
     root_mod.addImport("fle_aead", fle_aead_mod);
@@ -1506,6 +1525,8 @@ pub fn build(b: *std.Build) void {
     // Extended type built-in functions tests (new module)
     const ext_builtins_tests = b.addTest(.{ .root_module = b.createModule(.{ .root_source_file = b.path("src/types/extended_functions.zig"), .target = target, .optimize = optimize }) });
     ext_builtins_tests.root_module.addImport("uuid", uuid_ext_mod);
+    // SONNY-2394: uuid_v4() draws from the crypto_backend CSPRNG.
+    ext_builtins_tests.root_module.addImport("crypto_backend", crypto_backend_mod);
     const run_ext_builtins_tests = b.addRunArtifact(ext_builtins_tests);
 
     const exe_unit_tests = b.addTest(.{ .root_module = b.createModule(.{ .root_source_file = b.path("src/main.zig"), .target = target, .optimize = optimize }) });
@@ -2845,6 +2866,12 @@ pub fn build(b: *std.Build) void {
     eval_handler_mod.addImport("fle_key_types", fle_key_types_mod);
     eval_handler_mod.addImport("fle_blind_index", fle_blind_index_mod);
     eval_handler_mod.addImport("uuid", uuid_ext_mod);
+    // SONNY-2394: eval_extended.zig reaches types/extended_functions.zig
+    // (uuid_v4 draws from the crypto_backend CSPRNG).
+    eval_handler_mod.addImport("crypto_backend", crypto_backend_mod);
+    // fle_integration.zig / user_management.zig (reached from eval.zig)
+    // read build_options; this artifact only builds under test-gap0866.
+    eval_handler_mod.addImport("build_options", build_options_mod);
     eval_handler_mod.addImport("wal", wal_ext_mod);
     eval_handler_mod.addImport("advanced_types_lib", advanced_types_ext_mod);
     eval_handler_mod.addImport("timeseries_lib", timeseries_ext_mod);
@@ -3661,6 +3688,7 @@ pub fn build(b: *std.Build) void {
     @memset(test_shard_loads, 0);
 
     const test_step = b.step("test", "Run unit tests");
+    g_test_compile_step = b.step("test-compile", "Compile every artifact the aggregate `test` step runs, in all shards, without running them (SONNY-2394)");
     shardDep(test_step, &run_show_capabilities_tests.step, 1, test_shard_loads, test_shard_index);
     shardDep(test_step, &run_sonny_capability_profile_tests.step, 1, test_shard_loads, test_shard_index);
     shardDep(test_step, &run_capability_gate_tests.step, 1, test_shard_loads, test_shard_index);
@@ -4978,6 +5006,7 @@ pub fn build(b: *std.Build) void {
     merge_bench_gs_mod.addImport("fle_aead", fle_aead_mod);
     merge_bench_gs_mod.addImport("fle_key_manager", fle_key_manager_mod);
     merge_bench_gs_mod.addImport("fle_key_types", fle_key_types_mod);
+    merge_bench_gs_mod.addImport("crypto_backend", crypto_backend_mod); // SONNY-2394: graph reaches types/extended_functions.zig
     merge_bench_gs_mod.addImport("fle_blind_index", fle_blind_index_mod);
     merge_bench_gs_mod.addImport("uuid", uuid_ext_mod);
     merge_bench_gs_mod.addImport("wal", wal_ext_mod);
