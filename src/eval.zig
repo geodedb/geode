@@ -164,6 +164,109 @@ var execution_callbacks: ?evaluator_adapter.ExecutionCallbacks = null;
 /// Called by execution.zig during initialization to provide callback functions
 pub fn setExecutionCallbacks(callbacks: evaluator_adapter.ExecutionCallbacks) void {
     execution_callbacks = callbacks;
+    // SONNY-2691: the execution layer's row visibility arrives with the other
+    // execution callbacks (see `RowScope`).
+    begin_row_scope = beginHopRowScope;
+}
+
+// CANARY: REQ=REQ-SONNY-2691-DEGREE-VISIBILITY; FEATURE="NodeDegreeFunctions"; ASPECT=RowScopeInterface; STATUS=TESTED; TEST=tests/test_sonny2691_degree_visibility.zig; OWNER=security; UPDATED=2026-09-25
+/// SONNY-2691: the session's row visibility, for rows the evaluator reads
+/// from the store itself (the indegree() / outdegree() neighbours), where no
+/// MATCH applied it.
+///
+/// It is the SONNY-2679 traversal scope (`match_operations.HopScope`: the
+/// graph, then `passesRowVisibilityFilters`' tenant and RLS halves) behind an
+/// opaque interface, because eval.zig must not reach the execution layer's RLS
+/// code by a static reference (M5.3): every artifact that compiles the
+/// evaluator would then need the RLS modules, and `test-graph-store`, rooted
+/// at graph_store.zig, has none. `setExecutionCallbacks`, which
+/// `execution.initEvaluator` calls at server, CLI and harness start-up,
+/// installs `beginHopRowScope`; until then there is no scope, and the callers
+/// keep their graph and tenant checks.
+const RowScope = struct {
+    ptr: *anyopaque,
+    vtable: *const VTable,
+
+    const VTable = struct {
+        restrictsNodes: *const fn (ptr: *anyopaque) bool,
+        nodeVisible: *const fn (ptr: *anyopaque, node: *const graph_store.Node) bool,
+        stepAllowed: *const fn (ptr: *anyopaque, store: *graph_store.GraphStore, edge: *const graph_store.Edge, next_node_id: u64) bool,
+        deinit: *const fn (ptr: *anyopaque) void,
+    };
+
+    /// `HopScope.restrictsNodes`: may the scope hide a node in the graph (a
+    /// tenant scope, or an RLS policy that may deny the session a row)?
+    fn restrictsNodes(self: RowScope) bool {
+        return self.vtable.restrictsNodes(self.ptr);
+    }
+
+    /// `HopScope.nodeVisible`: may the session see `node`?
+    fn nodeVisible(self: RowScope, node: *const graph_store.Node) bool {
+        return self.vtable.nodeVisible(self.ptr, node);
+    }
+
+    /// `HopScope.stepAllowed`: may a traversal walk `edge` onto `next_node_id`?
+    fn stepAllowed(self: RowScope, store: *graph_store.GraphStore, edge: *const graph_store.Edge, next_node_id: u64) bool {
+        return self.vtable.stepAllowed(self.ptr, store, edge, next_node_id);
+    }
+
+    fn deinit(self: RowScope) void {
+        self.vtable.deinit(self.ptr);
+    }
+};
+
+const BeginRowScopeFn = *const fn (allocator: std.mem.Allocator, graph: []const u8, tenant: ?[]const u8) std.mem.Allocator.Error!RowScope;
+
+/// Installed by `setExecutionCallbacks`; null before the evaluator is set up.
+var begin_row_scope: ?BeginRowScopeFn = null;
+
+/// The session's row scope for `graph` / `tenant`, or null when the execution
+/// layer has not installed one. The caller deinits it.
+fn beginRowScope(allocator: std.mem.Allocator, graph: []const u8, tenant: ?[]const u8) EvalError!?RowScope {
+    const begin = begin_row_scope orelse return null;
+    return try begin(allocator, graph, tenant);
+}
+
+/// The execution layer's `RowScope`: a `HopScope` and the RLS scratch row it
+/// evaluates expression policies over. Referenced only by
+/// `setExecutionCallbacks`, so only an artifact that sets the evaluator up
+/// compiles it (and the RLS modules it needs).
+fn beginHopRowScope(allocator: std.mem.Allocator, graph: []const u8, tenant: ?[]const u8) std.mem.Allocator.Error!RowScope {
+    const match_operations = @import("execution/match_operations.zig");
+    const Impl = struct {
+        allocator: std.mem.Allocator,
+        rls_row: std.StringHashMap(@import("rls").Value),
+        hop: match_operations.HopScope,
+
+        fn from(ptr: *anyopaque) *@This() {
+            return @ptrCast(@alignCast(ptr));
+        }
+        fn restrictsNodes(ptr: *anyopaque) bool {
+            return from(ptr).hop.restrictsNodes();
+        }
+        fn nodeVisible(ptr: *anyopaque, node: *const graph_store.Node) bool {
+            return from(ptr).hop.nodeVisible(node);
+        }
+        fn stepAllowed(ptr: *anyopaque, store: *graph_store.GraphStore, edge: *const graph_store.Edge, next_node_id: u64) bool {
+            return from(ptr).hop.stepAllowed(store, edge, next_node_id);
+        }
+        fn deinit(ptr: *anyopaque) void {
+            const self = from(ptr);
+            self.rls_row.deinit();
+            self.allocator.destroy(self);
+        }
+        const vtable = RowScope.VTable{
+            .restrictsNodes = restrictsNodes,
+            .nodeVisible = nodeVisible,
+            .stepAllowed = stepAllowed,
+            .deinit = deinit,
+        };
+    };
+    const self = try allocator.create(Impl);
+    self.* = .{ .allocator = allocator, .rls_row = .init(allocator), .hop = undefined };
+    // After the struct is in place: the scope keeps a pointer to the row.
+    self.hop = match_operations.HopScope.init(graph, tenant, &self.rls_row);
+    return .{ .ptr = self, .vtable = &Impl.vtable };
 }
 
 /// Get execution callbacks (internal use only)
@@ -1230,6 +1333,11 @@ pub fn evalExpr(allocator: std.mem.Allocator, e: ast.Expr, env: Env) EvalError!V
                     // Wrong arity on a resolved basic function is a caller
                     // error (22023), not a silent NULL.
                     return EvalError.InvalidArgs;
+                } else if (std.mem.eql(u8, err_name, "TenantScopeRequired")) {
+                    // GAP-0840 / SONNY-2691: a strict-tenancy refusal (the
+                    // degree functions resolve their node under the session's
+                    // tenant scope) must never degrade to NULL.
+                    return EvalError.TenantScopeRequired;
                 }
                 // For other errors, fall back to null
                 break :blk_call .{ .Null = {} };
@@ -2466,7 +2574,8 @@ const KnnScanScope = struct {
 /// Resolve the scope the way the MATCH read paths do: the session's current
 /// graph (defaulting to "default"), and the strict-tenancy-aware tenant filter.
 /// A strict-tenancy refusal propagates instead of silently widening the scan to
-/// every tenant (GAP-0840 fail-closed).
+/// every tenant (GAP-0840 fail-closed). The degree functions resolve their node
+/// under the same scope (SONNY-2691).
 fn currentKnnScanScope() EvalError!KnnScanScope {
     const execution = @import("execution.zig");
     const tenancy = @import("execution/tenancy.zig");
@@ -2867,6 +2976,72 @@ fn advancedVectorIndexIsAuthoritative(
     return store.labelSolelyCarriesProperty(scope.graph, scope.tenant, label, property_name);
 }
 
+/// Which adjacency `indegree()` / `outdegree()` count.
+const DegreeDirection = enum { incoming, outgoing };
+
+// CANARY: REQ=REQ-SONNY-2691-DEGREE-VISIBILITY; FEATURE="NodeDegreeFunctions"; ASPECT=VisibleDegree; STATUS=TESTED; TEST=tests/test_sonny2691_degree_visibility.zig; OWNER=security; UPDATED=2026-09-25
+/// SONNY-2691: `indegree(n)` / `outdegree(n)`, where `n` is a node or a raw
+/// node id, counted the way a traversal from `n` sees the graph.
+///
+/// * An id that does not fit u64 (any negative id) names no node, so its
+///   degree is 0: the answer these functions already give for every id no
+///   node has. It used to reach `@intCast`, a safety-checked panic that
+///   aborted the server on `RETURN indegree(-1)`. 0 rather than an error: the
+///   argument is still just an id that names nothing, and answering it
+///   differently from every other such id would single it out for nothing.
+/// * The node must be visible to the session: in its graph, inside its tenant
+///   scope, and allowed by its RLS policies. A hidden or foreign node behaves
+///   as absent (degree 0). The raw-id form used to report the degree of any
+///   node, in any tenant and under any policy.
+/// * The count includes exactly the edges a traversal from the node may take
+///   (`HopScope.stepAllowed`, SONNY-2679): the edge is in the graph and the
+///   tenant scope, and the neighbour at its other end is visible. So a degree
+///   no longer counts the neighbours a policy hides (the degree half of
+///   SONNY-2685). A session that no tenant scope or policy restricts keeps
+///   the O(1) adjacency length.
+/// Both checks are the session's `RowScope`. Before the evaluator is set up
+/// there is none, and the node gets the graph and exact-tenant check the knn()
+/// scan applies, with every edge counted.
+fn visibleNodeDegree(allocator: std.mem.Allocator, arg: Value, direction: DegreeDirection) EvalError!Value {
+    const absent = Value{ .Int = 0 };
+    const store = graph_store.getGlobalStore(allocator);
+    const node: *const graph_store.Node = switch (arg) {
+        .Node => |n| n,
+        .Int => |raw_id| blk: {
+            const id = std.math.cast(u64, raw_id) orelse return absent;
+            // A grace-stable copy: it outlives a concurrent shard rehash.
+            break :blk store.getNodePtrForScan(id) orelse return absent;
+        },
+        else => return absent,
+    };
+
+    const scope = try currentKnnScanScope();
+    const row = try beginRowScope(allocator, scope.graph, scope.tenant);
+    defer if (row) |r| r.deinit();
+    const visible = if (row) |r| r.nodeVisible(node) else scope.admits(node.graph_name, node.tenant_id);
+    if (!visible) return absent;
+
+    const edge_ids = switch (direction) {
+        .incoming => store.getIncomingEdgeIds(node.id),
+        .outgoing => store.getOutgoingEdgeIds(node.id),
+    } orelse return absent;
+    const hop = row orelse return .{ .Int = @intCast(edge_ids.len) };
+    if (!hop.restrictsNodes()) return .{ .Int = @intCast(edge_ids.len) };
+
+    var degree: i64 = 0;
+    for (edge_ids) |edge_id| {
+        // By value: a copy taken under the edge shard's lock
+        // (`getEdgeHydrated`), safe against a concurrent edge writer.
+        const edge = store.getEdgeHydrated(edge_id) orelse continue;
+        const neighbour = switch (direction) {
+            .incoming => edge.from_id,
+            .outgoing => edge.to_id,
+        };
+        if (hop.stepAllowed(store, &edge, neighbour)) degree += 1;
+    }
+    return .{ .Int = degree };
+}
+
 // CANARY: REQ=REQ-M6.1-EVAL-REFACTOR-003; FEATURE="Phase 6 Modularization"; ASPECT=ValueConverters; STATUS=EXEMPT; OWNER=eval; UPDATED=2025-11-13
 // Phase 6 M6.1: Value converter functions moved to eval/type_promotion.zig
 // Functions: valueToExtValue, extValueToValue, evalValueToHeapValue, heapValueToEvalValue
@@ -3248,20 +3423,9 @@ fn tryBasicFunction(allocator: std.mem.Allocator, function_name: []const u8, arg
         // INCOMING adjacency (engine-backed, hydrate-on-miss). The old full
         // `store.edges.iterator()` scan was both O(all edges) AND incorrect under
         // a bounded edge cache (it counted only resident edges). Adjacency is the
-        // authoritative, bounded-correct, O(degree) source.
-        switch (arg) {
-            .Node => |n| {
-                const store = graph_store.getGlobalStore(allocator);
-                const ids = store.getIncomingEdgeIds(n.id) orelse return Value{ .Int = 0 };
-                return Value{ .Int = @intCast(ids.len) };
-            },
-            .Int => |node_id| {
-                const store = graph_store.getGlobalStore(allocator);
-                const ids = store.getIncomingEdgeIds(@as(u64, @intCast(node_id))) orelse return Value{ .Int = 0 };
-                return Value{ .Int = @intCast(ids.len) };
-            },
-            else => return Value{ .Int = 0 },
-        }
+        // authoritative, bounded-correct, O(degree) source. SONNY-2691: counted
+        // as the session may see it (`visibleNodeDegree`).
+        return try visibleNodeDegree(allocator, arg, .incoming);
     }
 
     // CANARY: REQ=REQ-GQL-OUTDEGREE-001; FEATURE="OutdegreeFunction"; ASPECT=NodeDegree; STATUS=TESTED; TEST=geodetestlab/specs/geode_graph_algorithms.yml; OWNER=eval; UPDATED=2026-01-03
@@ -3272,17 +3436,8 @@ fn tryBasicFunction(allocator: std.mem.Allocator, function_name: []const u8, arg
         // PHASE 1: out-degree IS the length of the node's OUTGOING adjacency
         // (engine-backed). See indegree above — replaces an O(all edges),
         // bounded-incorrect full edge scan with the O(degree) adjacency length.
-        switch (arg) {
-            .Node => |n| {
-                const store = graph_store.getGlobalStore(allocator);
-                return Value{ .Int = @intCast(store.getOutDegree(n.id)) };
-            },
-            .Int => |node_id| {
-                const store = graph_store.getGlobalStore(allocator);
-                return Value{ .Int = @intCast(store.getOutDegree(@as(u64, @intCast(node_id)))) };
-            },
-            else => return Value{ .Int = 0 },
-        }
+        // SONNY-2691: counted as the session may see it (`visibleNodeDegree`).
+        return try visibleNodeDegree(allocator, arg, .outgoing);
     }
 
     // Handle length() function - returns length of path, string, or list

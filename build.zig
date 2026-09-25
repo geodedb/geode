@@ -8534,6 +8534,20 @@ pub fn build(b: *std.Build) void {
     const sonny2686_step = b.step("test-sonny2686-merge-rls", "Run SONNY-2686 regression (a MERGE whose only match an RLS policy hides is refused with MergeMatchNotVisible and never reads, rewrites or attaches to it, under label and expression policies; unscoped sessions and tenant/graph scoping unchanged; the key-resolved write fast paths decline a row-scoped session)");
     sonny2686_step.dependOn(&run_sonny2686_tests.step);
 
+    // SONNY-2691: indegree()/outdegree() panicked on a negative id (a server
+    // abort) and read the degree of any node in any tenant, counting the
+    // neighbours an RLS policy hides.
+    const sonny2691_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny2691_degree_visibility.zig"), .target = target, .optimize = optimize });
+    sonny2691_test_mod.addImport("geode", root_mod);
+    sonny2691_test_mod.addImport("logging", logging_mod);
+    sonny2691_test_mod.addImport("rls", rls_mod);
+    sonny2691_test_mod.addImport("rls_types", rls_types_mod);
+    const sonny2691_tests = b.addTest(.{ .root_module = sonny2691_test_mod });
+    const run_sonny2691_tests = b.addRunArtifact(sonny2691_tests);
+    shardDep(test_step, &run_sonny2691_tests.step, 1, test_shard_loads, test_shard_index);
+    const sonny2691_step = b.step("test-sonny2691-degree-visibility", "Run SONNY-2691 regression (indegree()/outdegree() of a negative or unknown id is 0 instead of a panic; a hidden, foreign-tenant or other-graph node behaves as absent; a degree counts only visible neighbours)");
+    sonny2691_step.dependOn(&run_sonny2691_tests.step);
+
     // SONNY-2656: the node-scan fast path leaked the clone of every typed
     // extended value (Text, Json, Bytea, Char, Varchar, Url, ...) it projected
     // (page teardown freed only strings, lists and maps) or filtered on (IS
