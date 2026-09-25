@@ -114,7 +114,7 @@ test "E2E: CREATE POLICY then SHOW POLICIES returns it; DROP removes it" {
     // SHOW POLICIES -- should list p1
     var show_res = try h.exec("SHOW POLICIES;");
     defer show_res.deinit(allocator);
-    try std.testing.expectEqual(@as(usize, 4), show_res.columns.len);
+    try std.testing.expectEqual(@as(usize, 5), show_res.columns.len);
     try std.testing.expectEqual(@as(usize, 1), show_res.rows.len);
     try std.testing.expectEqualStrings("name", show_res.columns[0]);
     try std.testing.expectEqualStrings("graph", show_res.columns[1]);
@@ -124,6 +124,9 @@ test "E2E: CREATE POLICY then SHOW POLICIES returns it; DROP removes it" {
     try std.testing.expectEqualStrings("*", show_res.rows[0][1].Str);
     try std.testing.expectEqualStrings("read", show_res.rows[0][2].Str);
     try std.testing.expect(show_res.rows[0][3].Bool);
+    // SONNY-2732: a policy that compiled is valid.
+    try std.testing.expectEqualStrings("valid", show_res.columns[4]);
+    try std.testing.expect(show_res.rows[0][4].Bool);
 
     // DROP POLICY
     var drop_res = try h.exec("DROP POLICY p1;");
@@ -221,6 +224,6 @@ test "SHOW POLICIES on empty catalog returns no rows" {
 
     var res = try h.exec("SHOW POLICIES;");
     defer res.deinit(allocator);
-    try std.testing.expectEqual(@as(usize, 4), res.columns.len);
+    try std.testing.expectEqual(@as(usize, 5), res.columns.len);
     try std.testing.expectEqual(@as(usize, 0), res.rows.len);
 }

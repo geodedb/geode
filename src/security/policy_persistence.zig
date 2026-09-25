@@ -197,4 +197,14 @@ pub fn hydrateCatalog(
             else => return err,
         };
     }
+
+    // SONNY-2732: one line with the count, so an operator sees at startup
+    // how many stored policies are kept fail-closed (SHOW POLICIES and
+    // geode.auth.policy_list mark them valid = false).
+    const invalid = cat.invalidPolicyCount();
+    if (invalid > 0) {
+        std.log.scoped(.gps).warn("{d} of {d} stored policies do not compile and are kept FAIL-CLOSED until rewritten; SHOW POLICIES lists them with valid = false", .{ invalid, cat.listPolicies().len });
+    } else {
+        std.log.scoped(.gps).info("hydrated {d} stored policies; none invalid", .{cat.listPolicies().len});
+    }
 }

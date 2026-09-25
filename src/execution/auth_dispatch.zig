@@ -1300,19 +1300,24 @@ fn handlePolicyCreate(allocator: std.mem.Allocator, _: []const u8, call_stmt: as
 // CANARY: REQ=REQ-GPS-DDL-003; FEATURE="GPS Policy DDL"; ASPECT=AuthDispatchPolicyList; STATUS=TESTED; TEST=tests/test_gps_policy_ddl_integration.zig; OWNER=security; UPDATED=2026-05-20
 fn handlePolicyList(allocator: std.mem.Allocator, _: []const u8, _: ast.CallProcedure, _: ExecutionContext) anyerror!ExecutionResult {
     const policy_catalog_mod = @import("../security/policy_catalog.zig");
-    const columns = try allocator.alloc([]const u8, 2);
+    // SONNY-2732: `valid` is false for a stored policy whose expression no
+    // longer compiles (kept fail-closed until rewritten).
+    const columns = try allocator.alloc([]const u8, 3);
     columns[0] = try allocator.dupe(u8, "name");
     columns[1] = try allocator.dupe(u8, "scope_graph");
+    columns[2] = try allocator.dupe(u8, "valid");
     var rows_list = std.ArrayList([]Value).empty;
     if (policy_catalog_mod.getGlobalCatalog()) |pol_cat| {
-        for (pol_cat.listPolicies()) |pol| {
-            const row = try allocator.alloc(Value, 2);
+        for (pol_cat.listPolicies()) |*pol| {
+            const row = try allocator.alloc(Value, 3);
             row[0] = Value{ .Str = try allocator.dupe(u8, pol.name) };
             row[1] = Value{ .Str = try allocator.dupe(u8, pol.scope_graph) };
+            row[2] = Value{ .Bool = policy_catalog_mod.PolicyCatalog.policyIsValid(pol) };
             try rows_list.append(allocator, row);
         }
     }
-    return .{ .columns = columns, .rows = try rows_list.toOwnedSlice(allocator), .flags = std.ArrayList([]const u8).empty };
+    // The result owns its duplicated strings (they were leaked before).
+    return .{ .columns = columns, .rows = try rows_list.toOwnedSlice(allocator), .flags = std.ArrayList([]const u8).empty, .owns_value_memory = true };
 }
 
 // CANARY: REQ=REQ-GPS-DDL-002; FEATURE="GPS Policy DDL"; ASPECT=AuthDispatchPolicyDelete; STATUS=TESTED; TEST=tests/test_gps_policy_ddl_integration.zig; OWNER=security; UPDATED=2026-05-20

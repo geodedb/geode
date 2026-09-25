@@ -94,6 +94,28 @@ This document describes the comprehensive Row-Level Security (RLS) implementatio
   every row and the engine logs a warning. (Before SONNY-2709, a valid
   prefix was compiled and the rest silently dropped.)
 
+  **Creating a policy is strict (SONNY-2732).** `RLSEngine.createPolicy`
+  and `updatePolicy` (the API, procedure and DDL paths) refuse an expression
+  that does not compile, with `error.InvalidRlsExpression`, and install
+  nothing. The lexer is strict too:
+  - a missing `)`, an unterminated string, and an empty `row.` or
+    `principal.attribute.` name are errors;
+  - a bare name such as `cls` is an error; write `row.cls`.
+
+  Only `RLSEngine.loadPolicy`, for policies read back from storage, keeps a
+  policy that no longer compiles. It installs it denying every row, marks it
+  `invalid`, and logs a warning, so that a grammar change cannot brick
+  startup. The GPS catalog (`CREATE POLICY`) has the same split. SHOW
+  POLICIES and `CALL geode.auth.policy_list()` show a policy kept that way
+  with `valid = false`, and startup logs how many there are.
+  `CALL geode.rls.add_attribute_policy` accepts only identifiers
+  (`[A-Za-z_][A-Za-z0-9_]*`) for its row property and attribute key, because
+  both are pasted into the policy text.
+
+  **The VM refuses malformed bytecode.** A constant, row or jump index past
+  its table, a jump outside the program, or more steps than the program has
+  bytes (a loop) all fail the policy, which denies the row.
+
   Limits (SONNY-2730): an expression may use at most 256 distinct constants.
   Every field name, attribute key and literal is a constant, and a repeated
   one counts once. It may nest `(` and `NOT` at most 64 levels deep. A
@@ -111,6 +133,18 @@ This document describes the comprehensive Row-Level Security (RLS) implementatio
   | any comparison with a missing field or `NULL`, a NaN, or two values of different kinds (a string and a number, say), and any range comparison of booleans | UNKNOWN |
   | `principal.attribute.<key>` against a number | the attribute is parsed strictly as that number's type, then compared; UNKNOWN if it does not parse |
   | `x IS NULL`, `x IS NOT NULL` | true or false, never UNKNOWN |
+
+  **Range comparisons on strings are lexicographic.** `<`, `<=`, `>` and
+  `>=` on two strings compare bytes, so `'10' < '9'` and `'top' > '3'`. A
+  range policy needs numeric row values: a numeric field stored as a string
+  compares as text against a string literal or attribute, and is UNKNOWN
+  (denied) against a number. Store levels, clearances and other ordered
+  values as integers or floats.
+
+  **Only a boolean TRUE admits a row (SONNY-2732).** A policy whose value is
+  not a boolean admits nothing. That includes a bare `row.flag` holding the
+  string `'no'`, a bare `'anything'`, a number, and `NULL`. `NOT`, `AND` and
+  `OR` treat any non-boolean operand as UNKNOWN.
 
   UNKNOWN never admits a row. `NOT`, `AND` and `OR` follow SQL's
   three-valued logic:

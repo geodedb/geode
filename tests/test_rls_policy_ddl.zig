@@ -358,3 +358,40 @@ test "RLS-POLICY-DDL: CREATE POLICY … USING <uncompilable> fails end-to-end; a
     try testing.expectEqual(@as(usize, 4), cat.listPolicies().len);
     try testing.expectEqualStrings("true", cat.listPolicies()[3].expression_source);
 }
+
+// CANARY: REQ=REQ-SONNY-2732-RLS-STRICT-POLICIES; FEATURE="GPS Policy DDL"; ASPECT=InvalidPolicyListing; STATUS=TESTED; TEST=tests/test_rls_policy_ddl.zig; OWNER=security; UPDATED=2026-09-25
+// SONNY-2732: a stored policy retained fail-closed was invisible as such: it
+// listed like any other. SHOW POLICIES and geode.auth.policy_list now report
+// `valid`, and the catalog counts them (logged once at startup).
+test "SONNY-2732: SHOW POLICIES and geode.auth.policy_list mark a policy retained fail-closed as invalid" {
+    test_mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
+    defer test_mutex.unlock(std.Io.Threaded.global_single_threaded.io());
+
+    const allocator = testing.allocator;
+    var cat = policy_catalog.PolicyCatalog.init(allocator);
+    defer cat.deinit();
+    var h = try DdlHarness.init(allocator, &cat);
+    defer h.deinit();
+
+    // As hydration loads them: one no longer compiles, one does, one is the
+    // trivial "true".
+    try cat.addPolicy(spec("p_stored_bad", "current_user() = 'x' AND ("));
+    try cat.addPolicy(spec("p_stored_ok", "current_user() = 'alice'"));
+    try cat.addPolicy(spec("p_stored_true", "true"));
+    try testing.expectEqual(@as(usize, 1), cat.invalidPolicyCount());
+
+    var show = try h.exec("SHOW POLICIES;");
+    defer show.deinit(allocator);
+    try testing.expectEqualStrings("valid", show.columns[4]);
+    var listed = try h.exec("CALL geode.auth.policy_list()");
+    defer listed.deinit(allocator);
+    try testing.expectEqualStrings("valid", listed.columns[2]);
+
+    for ([_]struct { res: *execution.ExecutionResult, col: usize }{ .{ .res = &show, .col = 4 }, .{ .res = &listed, .col = 2 } }) |t| {
+        try testing.expectEqual(@as(usize, 3), t.res.rows.len);
+        for (t.res.rows) |row| {
+            const bad = std.mem.eql(u8, row[0].Str, "p_stored_bad");
+            try testing.expectEqual(!bad, row[t.col].Bool);
+        }
+    }
+}

@@ -79,7 +79,9 @@ pub fn executeShow(allocator: std.mem.Allocator, s: ast.ShowStatement, context: 
         .cluster_status => return admin_ddl.executeShowClusterStatus(allocator, context),
         // GPS policy DDL (Phase 4): SHOW POLICIES returns empty result set until
         // Phase 5 wires the persistent catalog.  Column schema matches Phase 5 plan.
-        .policies => &[_][]const u8{ "name", "graph", "actions", "enabled" },
+        // SONNY-2732: `valid` is false for a stored policy whose expression no
+        // longer compiles (kept fail-closed until rewritten).
+        .policies => &[_][]const u8{ "name", "graph", "actions", "enabled", "valid" },
         // CANARY: REQ=REQ-GPS-DDL-004; FEATURE="GPS SHOW GRANTS FOR"; ASPECT=ShowGrantsColumns; STATUS=TESTED; TEST=tests/test_gps_show_grants_for.zig; OWNER=security; UPDATED=2026-05-21
         .grants_for => &[_][]const u8{ "policy_name", "graph", "actions", "effect", "enabled" },
     };
@@ -306,7 +308,7 @@ pub fn executeShow(allocator: std.mem.Allocator, s: ast.ShowStatement, context: 
         .policies => {
             const policy_catalog_mod = @import("../security/policy_catalog.zig");
             if (policy_catalog_mod.getGlobalCatalog()) |pol_cat| {
-                for (pol_cat.listPolicies()) |pol| {
+                for (pol_cat.listPolicies()) |*pol| {
                     // Build "actions" column: comma-separated action names.
                     var actions_buf = std.ArrayList(u8).empty;
                     for (pol.actions, 0..) |a, ai| {
@@ -315,11 +317,12 @@ pub fn executeShow(allocator: std.mem.Allocator, s: ast.ShowStatement, context: 
                     }
                     const actions_str = try actions_buf.toOwnedSlice(allocator);
 
-                    var row = try allocator.alloc(Value, 4);
+                    var row = try allocator.alloc(Value, 5);
                     row[0] = Value{ .Str = try allocator.dupe(u8, pol.name) };
                     row[1] = Value{ .Str = try allocator.dupe(u8, pol.scope_graph) };
                     row[2] = Value{ .Str = actions_str };
                     row[3] = Value{ .Bool = pol.enabled };
+                    row[4] = Value{ .Bool = policy_catalog_mod.PolicyCatalog.policyIsValid(pol) };
                     try rows_list.append(allocator, row);
                 }
             }

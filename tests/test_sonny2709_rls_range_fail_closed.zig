@@ -83,19 +83,23 @@ const Session = struct {
         r.deinit(self.arena.allocator());
     }
 
+    /// The session's expression engine, published as the global one.
+    fn ensureEngine(self: *Session) !*rls.RLSEngine {
+        if (self.engine) |e| return e;
+        const e = try testing.allocator.create(rls.RLSEngine);
+        e.* = rls.RLSEngine.init(testing.allocator) catch |err| {
+            testing.allocator.destroy(e);
+            return err;
+        };
+        self.engine = e;
+        rls_types.setGlobalExprRLSEngine(@ptrCast(e));
+        return e;
+    }
+
     /// A restrictive expression policy `expr` on `table` (a node label or a
     /// relationship type), compiled by the engine from its text.
     fn addPolicy(self: *Session, table: []const u8, expr: []const u8) !void {
-        const engine = self.engine orelse blk: {
-            const e = try testing.allocator.create(rls.RLSEngine);
-            e.* = rls.RLSEngine.init(testing.allocator) catch |err| {
-                testing.allocator.destroy(e);
-                return err;
-            };
-            self.engine = e;
-            rls_types.setGlobalExprRLSEngine(@ptrCast(e));
-            break :blk e;
-        };
+        const engine = try self.ensureEngine();
         self.next_policy_id += 1;
         try engine.createPolicy(.{
             .id = self.next_policy_id,
@@ -317,4 +321,73 @@ test "SONNY-2709: = and <> policies deny a missing, null or mistyped value on no
         if (f.lines.items.len != 0) std.debug.print("  under policy {s}:\n", .{want.expr});
         try f.check();
     }
+}
+
+test "SONNY-2732: a policy whose value is not a boolean admits nothing, and one that does not parse is refused (probe P18)" {
+    harness.silenceEngineLogs();
+    var s = try Session.init();
+    defer s.deinit();
+    for ([_][]const u8{ "T3", "T4" }) |l| {
+        const aa = s.arena.allocator();
+        try s.exec(try std.fmt.allocPrint(aa, "CREATE (:{s} {{s: 'yes_a', cls: 'a', flag: 'no'}})", .{l}));
+        try s.exec(try std.fmt.allocPrint(aa, "CREATE (:{s} {{s: 'secret_b', cls: 'b', flag: false}})", .{l}));
+        try s.exec(try std.fmt.allocPrint(aa, "CREATE (:{s} {{s: 'none'}})", .{l}));
+    }
+    // A bare string field: 'no' used to count as true. A bare string
+    // constant used to admit every row.
+    try s.addPolicy("T3", "row.flag");
+    try s.addPolicy("T4", "'anything'");
+    var f: Failures = .{};
+    try f.expectRows(&s, "bob2732", "MATCH (n:T3) RETURN n.s", &.{});
+    try f.expectRows(&s, "bob2732", "MATCH (n:T4) RETURN n.s", &.{});
+    try f.check();
+
+    // Leftover input, unsupported syntax, a missing `)`, a bare name: each was
+    // installed (denying every row, or worse, part of the policy); now none is.
+    for ([_][]const u8{ "row.cls = 'a' garbage", "row.cls IN ('a', 'c')", "(row.cls = 'a'", "cls = 'a'" }) |text| {
+        try testing.expectError(error.InvalidRlsExpression, s.addPolicy("T1", text));
+    }
+}
+
+test "SONNY-2732: add_attribute_policy refuses a property or key that is not an identifier" {
+    harness.silenceEngineLogs();
+    const user_mgmt = geode.user_management;
+    var s = try Session.init();
+    defer s.deinit();
+    try s.exec("CREATE (:Doc {s: 'd_eng', dept: 'eng'})");
+    try s.exec("CREATE (:Doc {s: 'd_sales', dept: 'sales'})");
+    // The procedure copies the policy's strings into the engine's allocator
+    // and never frees them (policies live as long as the server): an arena
+    // keeps this test leak-free.
+    var engine_arena = std.heap.ArenaAllocator.init(testing.allocator);
+    defer engine_arena.deinit();
+    var engine_value = try rls.RLSEngine.init(engine_arena.allocator());
+    const engine = &engine_value;
+    rls_types.setGlobalExprRLSEngine(@ptrCast(engine));
+    defer rls_types.setGlobalExprRLSEngine(null);
+
+    user_mgmt.setAuthEnabled(false);
+    defer user_mgmt.setAuthEnabled(true);
+    const alloc = testing.allocator;
+    try user_attr_store.setAttribute(alloc, "eng2732", "department", "eng");
+    defer _ = user_attr_store.removeAttribute("eng2732", "department", alloc);
+
+    // Both are pasted into `row.<prop> = principal.attribute.<key>`: this
+    // property used to install `row.dept OR TRUE OR row.x = …`, which admits
+    // every row.
+    const injected = [_][]const u8{
+        "CALL geode.rls.add_attribute_policy('default', 'Doc', 'dept OR TRUE OR row.x', 'department')",
+        "CALL geode.rls.add_attribute_policy('default', 'Doc', 'dept', 'department OR TRUE')",
+        "CALL geode.rls.add_attribute_policy('default', 'Doc', '1dept', 'department')",
+    };
+    for (injected) |q| {
+        try testing.expectError(error.InvalidPolicyIdentifier, s.run(q));
+        try testing.expect(!engine.hasPolicies());
+    }
+
+    // Identifiers still work, and the policy does what it says.
+    try s.exec("CALL geode.rls.add_attribute_policy('default', 'Doc', 'dept', 'department')");
+    var f: Failures = .{};
+    try f.expectRows(&s, "eng2732", "MATCH (d:Doc) RETURN d.s", &.{"d_eng"});
+    try f.check();
 }

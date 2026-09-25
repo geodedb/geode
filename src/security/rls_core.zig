@@ -155,6 +155,11 @@ pub const RLSEngine = struct {
         temporal: ?TemporalConstraint,
         data_classification: ?DataClassification,
         audit_level: AuditLevel,
+
+        /// SONNY-2732: set by `loadPolicy` when a stored expression no longer
+        /// compiles. The policy is kept, and denies every row, until an
+        /// operator rewrites it; `createPolicy` never installs one.
+        invalid: bool = false,
     };
 
     pub const Operation = enum {
@@ -394,34 +399,117 @@ pub const RLSEngine = struct {
         self.unlockPoliciesShared();
     }
 
-    // Policy Management
-    pub fn createPolicy(self: *Self, policy: Policy) !void {
-        const key = PolicyKey{
-            .graph = policy.graph,
-            .table = policy.table,
-        };
+    // CANARY: REQ=REQ-SONNY-2732-RLS-STRICT-POLICIES; FEATURE="RLSExpressionCompilation"; ASPECT=StrictCreatePolicy; STATUS=TESTED; TEST=src/security/rls_core.zig; OWNER=security; UPDATED=2026-09-25
+    /// SONNY-2732: what installing a policy does with an expression the
+    /// compiler refuses. Mirrors the GPS catalog's
+    /// `PolicyCatalog.CompileFailureMode`.
+    pub const CompileFailureMode = enum {
+        /// API and DDL callers (`createPolicy`, `updatePolicy`): fail with
+        /// error.InvalidRlsExpression and install nothing. Only the author can
+        /// fix the text, and only now; installing it would silently deny
+        /// everything it was written to allow.
+        reject,
+        /// Loading a stored policy (`loadPolicy`): keep it, denying every
+        /// row, marked `invalid`, with a warning, so that a record written
+        /// before a grammar change cannot brick startup.
+        retain_fail_closed,
+    };
 
-        // Compile expressions if provided
+    /// The expressions compiled for a policy, to free if installing it fails.
+    const CompiledExprs = struct {
+        using: ?*CompiledExpression = null,
+        check: ?*CompiledExpression = null,
+
+        fn free(self: CompiledExprs, engine: *Self) void {
+            if (self.using) |c| engine.freeCompiledExpression(c);
+            if (self.check) |c| engine.freeCompiledExpression(c);
+        }
+    };
+
+    fn freeCompiledExpression(self: *Self, c: *CompiledExpression) void {
+        self.allocator.free(c.bytecode);
+        self.allocator.free(c.constants);
+        self.allocator.free(c.jump_table);
+        self.allocator.destroy(c);
+    }
+
+    /// Compile every expression of `policy` that has no bytecode yet, per
+    /// `mode`. Returns what it compiled; on error nothing is left allocated.
+    fn compilePolicyExpressions(self: *Self, policy: *Policy, mode: CompileFailureMode) !CompiledExprs {
+        var made: CompiledExprs = .{};
+        errdefer made.free(self);
         // CANARY: REQ=REQ-RLS-EXPR-002; FEATURE="RLSExpressionCompilation"; ASPECT=PolicyCompilation; STATUS=EXEMPT; OWNER=security; UPDATED=2025-12-30
-        var compiled_policy = policy;
-        if (compiled_policy.using_expr) |*expr| {
+        if (policy.using_expr) |*expr| {
             if (expr.compiled == null) {
-                expr.compiled = try self.compileExpression(expr.raw);
+                made.using = try self.compilePolicyExpression(policy, expr.raw, mode);
+                expr.compiled = made.using;
             } else {
                 // PERF-A / #808: pinned pre-compiled expressions bypass
                 // compileExpression, so compute the row-skip flag here.
                 expr.compiled.?.needs_row_data = CompiledExpression.bytecodeNeedsRowData(expr.compiled.?.bytecode);
             }
         }
-        if (compiled_policy.check_expr) |*expr| {
+        if (policy.check_expr) |*expr| {
             if (expr.compiled == null) {
-                expr.compiled = try self.compileExpression(expr.raw);
+                made.check = try self.compilePolicyExpression(policy, expr.raw, mode);
+                expr.compiled = made.check;
             } else {
                 expr.compiled.?.needs_row_data = CompiledExpression.bytecodeNeedsRowData(expr.compiled.?.bytecode);
             }
         }
+        return made;
+    }
 
-        // Compiled above, outside the lock; only the map change is under it.
+    fn compilePolicyExpression(self: *Self, policy: *Policy, raw: []const u8, mode: CompileFailureMode) !*CompiledExpression {
+        return self.compileExpressionStrict(raw) catch |err| switch (err) {
+            error.InvalidRlsExpression => switch (mode) {
+                .reject => {
+                    log.warn("refusing RLS policy: its expression does not compile", &.{
+                        Attr.string("policy", policy.name),
+                        Attr.string("expression", raw),
+                    });
+                    return error.InvalidRlsExpression;
+                },
+                .retain_fail_closed => {
+                    log.warn("stored RLS policy kept FAIL-CLOSED: its expression does not compile, and it denies every row until it is rewritten", &.{
+                        Attr.string("policy", policy.name),
+                        Attr.string("expression", raw),
+                    });
+                    policy.invalid = true;
+                    return self.compileDenyAll();
+                },
+            },
+            else => return err,
+        };
+    }
+
+    // Policy Management
+    /// SONNY-2732: install `policy` for an API or DDL caller. An expression
+    /// the compiler refuses fails with error.InvalidRlsExpression and nothing
+    /// is installed. It used to be installed as a program that denies every
+    /// row, with only a warning in the log.
+    pub fn createPolicy(self: *Self, policy: Policy) !void {
+        return self.installPolicy(policy, .reject);
+    }
+
+    /// SONNY-2732: install a STORED policy, e.g. when loading policies at
+    /// startup: an expression that no longer compiles is kept, denying every
+    /// row and marked `invalid`, with a warning (`invalidPolicyCount`).
+    pub fn loadPolicy(self: *Self, policy: Policy) !void {
+        return self.installPolicy(policy, .retain_fail_closed);
+    }
+
+    fn installPolicy(self: *Self, policy: Policy, mode: CompileFailureMode) !void {
+        const key = PolicyKey{
+            .graph = policy.graph,
+            .table = policy.table,
+        };
+
+        // Compiled first, outside the lock; only the map change is under it.
+        var compiled_policy = policy;
+        const made = try self.compilePolicyExpressions(&compiled_policy, mode);
+        errdefer made.free(self);
+
         self.lockPoliciesExclusive();
         defer self.unlockPoliciesExclusive();
 
@@ -429,10 +517,26 @@ pub const RLSEngine = struct {
         if (!result.found_existing) {
             result.value_ptr.* = std.ArrayList(Policy).empty;
         }
-        try result.value_ptr.append(self.allocator, compiled_policy);
-
-        // Invalidate cache
+        // Invalidate the cache before the append: once the policy is in the
+        // list nothing may fail, or the errdefer would free the bytecode it
+        // uses.
         try self.policy_cache.invalidate(key);
+        try result.value_ptr.append(self.allocator, compiled_policy);
+    }
+
+    /// SONNY-2732: how many installed policies were loaded `invalid` (their
+    /// stored expression no longer compiles, so they deny every row).
+    pub fn invalidPolicyCount(self: *Self) usize {
+        self.lockPoliciesShared();
+        defer self.unlockPoliciesShared();
+        var n: usize = 0;
+        var it = self.policies.iterator();
+        while (it.next()) |entry| {
+            for (entry.value_ptr.items) |p| {
+                if (p.invalid) n += 1;
+            }
+        }
+        return n;
     }
 
     /// Return true once any expression RLS policy has been installed.
@@ -447,29 +551,38 @@ pub const RLSEngine = struct {
         return self.policies.count() != 0;
     }
 
+    // CANARY: REQ=REQ-SONNY-2732-RLS-STRICT-POLICIES; FEATURE="RLSExpressionCompilation"; ASPECT=AtomicUpdatePolicy; STATUS=TESTED; TEST=src/security/rls_core.zig; OWNER=security; UPDATED=2026-09-25
+    /// Replace policy `policy_id` with `updates` (same graph and table).
+    ///
+    /// SONNY-2732: the update is compiled first, strictly and outside the
+    /// lock, and then stored in one assignment under the exclusive lock, so a
+    /// reader sees the old policy or the new one, never a mix, and an update
+    /// that does not compile changes nothing (error.InvalidRlsExpression).
+    /// Before, the new fields were stored first and the recompiled bytecode
+    /// was written into the caller's copy, so the stored policy kept no
+    /// bytecode for its new expression. Moving a policy to another graph or
+    /// table is refused (error.PolicyKeyChange): the map is keyed by them;
+    /// delete it and create it again.
     pub fn updatePolicy(self: *Self, policy_id: u64, updates: Policy) !void {
+        var replacement = updates;
+        replacement.id = policy_id;
+        replacement.updated_at = compat_milliTimestamp();
+        replacement.invalid = false;
+        const made = try self.compilePolicyExpressions(&replacement, .reject);
+        errdefer made.free(self);
+
         self.lockPoliciesExclusive();
         defer self.unlockPoliciesExclusive();
         var it = self.policies.iterator();
         while (it.next()) |entry| {
             for (entry.value_ptr.items) |*policy| {
-                if (policy.id == policy_id) {
-                    // Update fields
-                    policy.* = updates;
-                    policy.updated_at = compat_milliTimestamp();
-
-                    // Recompile expressions if changed
-                    if (updates.using_expr) |*expr| {
-                        expr.compiled = try self.compileExpression(expr.raw);
-                    }
-                    if (updates.check_expr) |*expr| {
-                        expr.compiled = try self.compileExpression(expr.raw);
-                    }
-
-                    // Invalidate cache
-                    try self.policy_cache.invalidate(entry.key_ptr.*);
-                    return;
-                }
+                if (policy.id != policy_id) continue;
+                const new_key = PolicyKey{ .graph = replacement.graph, .table = replacement.table };
+                if (!PolicyKey.HashContext.eql(.{}, entry.key_ptr.*, new_key)) return error.PolicyKeyChange;
+                // Invalidate first: after the store nothing may fail.
+                try self.policy_cache.invalidate(entry.key_ptr.*);
+                policy.* = replacement;
+                return;
             }
         }
         return error.PolicyNotFound;
@@ -621,25 +734,6 @@ pub const RLSEngine = struct {
         }
 
         return result;
-    }
-
-    /// Compile `expr` for `createPolicy`: an expression the compiler refuses
-    /// becomes a program that denies every row, with a warning.
-    fn compileExpression(self: *Self, expr: []const u8) !*CompiledExpression {
-        return self.compileExpressionStrict(expr) catch |err| switch (err) {
-            error.InvalidRlsExpression => {
-                // Malformed / empty expression, input left over after a valid
-                // prefix (SONNY-2709: `row.x IS NULL OR …` used to compile as
-                // `row.x`), or past a compiler limit (SONNY-2730): fail closed
-                // with a program that denies every row, rather than enforcing
-                // part of the policy.
-                log.warn("RLS expression not understood; the policy denies every row", &.{
-                    Attr.string("expression", expr),
-                });
-                return self.compileDenyAll();
-            },
-            else => return err,
-        };
     }
 
     /// A program that denies every row: push_false; ret.
@@ -825,7 +919,9 @@ pub const RLSEngine = struct {
                     c.pos += 1;
                     try c.parseOr();
                     c.skipWs();
-                    if (c.pos < c.src.len and c.src[c.pos] == ')') c.pos += 1;
+                    // SONNY-2732: a missing `)` used to be forgiven.
+                    if (c.pos >= c.src.len or c.src[c.pos] != ')') return error.InvalidRlsExpression;
+                    c.pos += 1;
                     return;
                 }
                 if (c.matchKw("true")) {
@@ -844,6 +940,7 @@ pub const RLSEngine = struct {
                 // time against the global user attribute store.
                 if (c.matchLit("principal.attribute.")) {
                     const key = c.ident();
+                    if (key.len == 0) return error.InvalidRlsExpression; // SONNY-2732
                     const idx = try c.internConst(.{ .string = key });
                     try c.emit(.load_attr);
                     try c.emitArg(idx);
@@ -851,6 +948,7 @@ pub const RLSEngine = struct {
                 }
                 if (c.matchLit("row.")) {
                     const field = c.ident();
+                    if (field.len == 0) return error.InvalidRlsExpression; // SONNY-2732
                     const idx = try c.internConst(.{ .string = field });
                     try c.emit(.load_row);
                     try c.emitArg(idx);
@@ -864,8 +962,11 @@ pub const RLSEngine = struct {
                     c.pos += 1;
                     const start = c.pos;
                     while (c.pos < c.src.len and c.src[c.pos] != '\'') : (c.pos += 1) {}
+                    // SONNY-2732: an unterminated string used to run to the
+                    // end of the policy.
+                    if (c.pos >= c.src.len) return error.InvalidRlsExpression;
                     const sv = c.src[start..c.pos];
-                    if (c.pos < c.src.len) c.pos += 1; // closing quote
+                    c.pos += 1; // closing quote
                     try c.pushConst(.{ .string = sv });
                     return;
                 }
@@ -980,7 +1081,13 @@ pub const RLSEngine = struct {
         var sp: usize = 0; // Stack pointer
 
         var pc: usize = 0; // Program counter
+        // SONNY-2732: the compiler emits no backward jump, so a program runs
+        // each instruction at most once. One that executes more instructions
+        // than it has bytes has looped (malformed bytecode): refused.
+        var steps: usize = 0;
         while (pc < expr.bytecode.len) {
+            steps += 1;
+            if (steps > expr.bytecode.len) return error.StepLimitExceeded;
             // GAP-0723: validate opcode byte before dispatch.  `@enumFromInt`
             // on an unknown u8 is UB in release mode.  We accept only the
             // explicit tag values declared on Opcode; anything else returns
@@ -996,12 +1103,13 @@ pub const RLSEngine = struct {
                     if (pc >= expr.bytecode.len) return error.BytecodeUnderrun;
                     const idx = expr.bytecode[pc];
                     pc += 1;
-                    if (idx < expr.constants.len) {
-                        if (sp >= stack.len) return error.StackOverflow;
-                        stack[sp] = expr.constants[idx];
-                        from_attr[sp] = false;
-                        sp += 1;
-                    }
+                    // SONNY-2732: an index past the constants was skipped,
+                    // silently changing what the program computes: refused.
+                    if (idx >= expr.constants.len) return error.InvalidConstantIndex;
+                    if (sp >= stack.len) return error.StackOverflow;
+                    stack[sp] = expr.constants[idx];
+                    from_attr[sp] = false;
+                    sp += 1;
                 },
                 .push_true => {
                     if (sp >= stack.len) return error.StackOverflow;
@@ -1026,20 +1134,20 @@ pub const RLSEngine = struct {
                     if (pc >= expr.bytecode.len) return error.BytecodeUnderrun;
                     const idx = expr.bytecode[pc];
                     pc += 1;
-                    if (idx < expr.constants.len) {
-                        if (sp >= stack.len) return error.StackOverflow;
-                        const field_name = switch (expr.constants[idx]) {
-                            .string => |s| s,
-                            else => "",
-                        };
-                        if (row.get(field_name)) |val| {
-                            stack[sp] = val;
-                        } else {
-                            stack[sp] = .null;
-                        }
-                        from_attr[sp] = false;
-                        sp += 1;
+                    // SONNY-2732: see push_const.
+                    if (idx >= expr.constants.len) return error.InvalidConstantIndex;
+                    if (sp >= stack.len) return error.StackOverflow;
+                    const field_name = switch (expr.constants[idx]) {
+                        .string => |s| s,
+                        else => return error.InvalidConstantIndex,
+                    };
+                    if (row.get(field_name)) |val| {
+                        stack[sp] = val;
+                    } else {
+                        stack[sp] = .null;
                     }
+                    from_attr[sp] = false;
+                    sp += 1;
                 },
                 .load_user => {
                     if (sp >= stack.len) return error.StackOverflow;
@@ -1055,6 +1163,8 @@ pub const RLSEngine = struct {
                     const idx = expr.bytecode[pc];
                     pc += 1;
                     if (sp >= stack.len) return error.StackOverflow;
+                    // SONNY-2732: see push_const.
+                    if (idx >= expr.constants.len) return error.InvalidConstantIndex;
                     if (idx < expr.constants.len) {
                         const var_name = switch (expr.constants[idx]) {
                             .string => |s| s,
@@ -1094,6 +1204,8 @@ pub const RLSEngine = struct {
                     const idx = expr.bytecode[pc];
                     pc += 1;
                     if (sp >= stack.len) return error.StackOverflow;
+                    // SONNY-2732: see push_const.
+                    if (idx >= expr.constants.len) return error.InvalidConstantIndex;
                     stack[sp] = self.resolvePrincipalAttribute(context.user.username, expr.constants, idx);
                     from_attr[sp] = true;
                     sp += 1;
@@ -1151,9 +1263,7 @@ pub const RLSEngine = struct {
                     if (pc >= expr.bytecode.len) return error.BytecodeUnderrun;
                     const idx = expr.bytecode[pc];
                     pc += 1;
-                    if (idx < expr.jump_table.len) {
-                        pc = expr.jump_table[idx];
-                    }
+                    pc = try jumpTarget(expr, idx);
                 },
                 .jump_if_false => {
                     if (pc >= expr.bytecode.len) return error.BytecodeUnderrun;
@@ -1161,15 +1271,13 @@ pub const RLSEngine = struct {
                     pc += 1;
                     if (sp == 0) return error.StackUnderflow;
                     sp -= 1;
-                    // SONNY-2709: a branch cannot take UNKNOWN as false (the
-                    // skipped arm may be the one that denies); the policy is
-                    // undecided, and an undecided policy denies.
-                    if (stack[sp] == .null) return error.IndeterminatePolicy;
-                    if (!self.valueToBool(stack[sp])) {
-                        if (idx < expr.jump_table.len) {
-                            pc = expr.jump_table[idx];
-                        }
-                    }
+                    // SONNY-2709 / SONNY-2732: a branch cannot take UNKNOWN
+                    // (or a non-boolean) as false: the skipped arm may be the
+                    // one that denies. The policy is undecided, and an
+                    // undecided policy denies.
+                    const target = try jumpTarget(expr, idx);
+                    const cond = self.truthOf(stack[sp]) orelse return error.IndeterminatePolicy;
+                    if (!cond) pc = target;
                 },
                 .jump_if_true => {
                     if (pc >= expr.bytecode.len) return error.BytecodeUnderrun;
@@ -1177,29 +1285,24 @@ pub const RLSEngine = struct {
                     pc += 1;
                     if (sp == 0) return error.StackUnderflow;
                     sp -= 1;
-                    // SONNY-2709: see jump_if_false.
-                    if (stack[sp] == .null) return error.IndeterminatePolicy;
-                    if (self.valueToBool(stack[sp])) {
-                        if (idx < expr.jump_table.len) {
-                            pc = expr.jump_table[idx];
-                        }
-                    }
+                    // SONNY-2709 / SONNY-2732: see jump_if_false.
+                    const target = try jumpTarget(expr, idx);
+                    const cond = self.truthOf(stack[sp]) orelse return error.IndeterminatePolicy;
+                    if (cond) pc = target;
                 },
                 .ret => {
-                    // Return top of stack as boolean result
-                    if (sp > 0) {
-                        return self.valueToBool(stack[sp - 1]);
-                    }
-                    return true; // Default to true if stack is empty
+                    // SONNY-2732: only a boolean TRUE on top admits the row,
+                    // and an empty stack denies (it used to admit).
+                    if (sp > 0) return admits(stack[sp - 1]);
+                    return false;
                 },
             }
         }
 
-        // If we fall through, return top of stack or true
-        if (sp > 0) {
-            return self.valueToBool(stack[sp - 1]);
-        }
-        return true;
+        // Fell off the end without `ret`: as for `ret`, except that an empty
+        // stack is undecided (SONNY-2732: it used to admit the row).
+        if (sp > 0) return admits(stack[sp - 1]);
+        return error.IndeterminatePolicy;
     }
 
     // CANARY: REQ=REQ-SONNY-2709-RLS-EQUALITY-3VL; FEATURE="RLSExpressionCompilation"; ASPECT=EqualityThreeValued; STATUS=TESTED; TEST=tests/test_sonny2709_rls_range_fail_closed.zig; OWNER=security; UPDATED=2026-09-25
@@ -1397,11 +1500,36 @@ pub const RLSEngine = struct {
         return std.math.order(a, b);
     }
 
-    /// SONNY-2709: a value's truth for NOT, AND and OR: null is UNKNOWN;
-    /// every other value is `valueToBool`'s.
+    /// SONNY-2709 / SONNY-2732: a value's truth for NOT, AND, OR and a
+    /// branch. Only a boolean is true or false; anything else (null, a
+    /// string, a number, …) is UNKNOWN. A non-empty string or a non-zero
+    /// number used to count as true, so `row.flag` admitted a row whose flag
+    /// was the string 'no', and a bare `'anything'` admitted every row.
     fn truthOf(self: *Self, v: Value) ?bool {
-        if (v == .null) return null;
-        return self.valueToBool(v);
+        _ = self;
+        return switch (v) {
+            .boolean => |b| b,
+            else => null,
+        };
+    }
+
+    /// SONNY-2732: jump table entry `idx`, which must name an instruction in
+    /// the program. An index past the table used to be ignored (no jump), and
+    /// a target past the end ended the program: malformed bytecode is refused.
+    fn jumpTarget(expr: *const CompiledExpression, idx: u8) !usize {
+        if (idx >= expr.jump_table.len) return error.InvalidJumpIndex;
+        const target = expr.jump_table[idx];
+        if (target >= expr.bytecode.len) return error.InvalidJumpTarget;
+        return target;
+    }
+
+    /// SONNY-2732: the policy's verdict on its final value: only a boolean
+    /// TRUE admits the row.
+    fn admits(v: Value) bool {
+        return switch (v) {
+            .boolean => |b| b,
+            else => false,
+        };
     }
 
     /// Kleene AND: false if either side is false, else UNKNOWN if either is.
@@ -1423,8 +1551,8 @@ pub const RLSEngine = struct {
         return known == want;
     }
 
-    /// UNKNOWN is carried on the stack as null: `valueToBool` makes it false
-    /// (deny) wherever a verdict is taken, and `truthOf` keeps it UNKNOWN.
+    /// UNKNOWN is carried on the stack as null: `admits` makes it a deny
+    /// wherever a verdict is taken, and `truthOf` keeps it UNKNOWN.
     fn truthValue(t: ?bool) Value {
         const known = t orelse return .null;
         return .{ .boolean = known };
@@ -1452,18 +1580,6 @@ pub const RLSEngine = struct {
         const attrs = user_attr_store.get(username) orelse return .null;
         const val = attrs.get(key) orelse return .null;
         return .{ .string = val };
-    }
-
-    fn valueToBool(self: *Self, v: Value) bool {
-        _ = self;
-        return switch (v) {
-            .null => false,
-            .boolean => |b| b,
-            .integer => |i| i != 0,
-            .float => |f| f != 0.0,
-            .string => |s| s.len > 0,
-            else => true,
-        };
     }
 
     // CANARY: REQ=REQ-RLS-TEMPORAL-001; FEATURE="RLSTemporalConstraints"; ASPECT=Security; STATUS=TESTED; OWNER=security; UPDATED=2026-01-30
@@ -1706,7 +1822,11 @@ pub const RLSEngine = struct {
         var sp: usize = 0;
 
         var pc: usize = 0;
+        // SONNY-2732: see evaluateCompiledExpression.
+        var steps: usize = 0;
         while (pc < expr.bytecode.len) {
+            steps += 1;
+            if (steps > expr.bytecode.len) return error.StepLimitExceeded;
             // GAP-0723: validate opcode before dispatch (avoid UB from @enumFromInt).
             const opcode: Opcode = Opcode.fromByte(expr.bytecode[pc]) orelse {
                 return error.InvalidOpcode;
@@ -1719,12 +1839,13 @@ pub const RLSEngine = struct {
                     if (pc >= expr.bytecode.len) return error.BytecodeUnderrun;
                     const idx = expr.bytecode[pc];
                     pc += 1;
-                    if (idx < expr.constants.len) {
-                        if (sp >= stack.len) return error.StackOverflow;
-                        stack[sp] = expr.constants[idx];
-                        from_attr[sp] = false;
-                        sp += 1;
-                    }
+                    // SONNY-2732: an index past the constants was skipped,
+                    // silently changing what the program computes: refused.
+                    if (idx >= expr.constants.len) return error.InvalidConstantIndex;
+                    if (sp >= stack.len) return error.StackOverflow;
+                    stack[sp] = expr.constants[idx];
+                    from_attr[sp] = false;
+                    sp += 1;
                 },
                 .push_true => {
                     if (sp >= stack.len) return error.StackOverflow;
@@ -1749,20 +1870,20 @@ pub const RLSEngine = struct {
                     if (pc >= expr.bytecode.len) return error.BytecodeUnderrun;
                     const idx = expr.bytecode[pc];
                     pc += 1;
-                    if (idx < expr.constants.len) {
-                        if (sp >= stack.len) return error.StackOverflow;
-                        const field_name = switch (expr.constants[idx]) {
-                            .string => |s| s,
-                            else => "",
-                        };
-                        if (row.get(field_name)) |val| {
-                            stack[sp] = val;
-                        } else {
-                            stack[sp] = .null;
-                        }
-                        from_attr[sp] = false;
-                        sp += 1;
+                    // SONNY-2732: see push_const.
+                    if (idx >= expr.constants.len) return error.InvalidConstantIndex;
+                    if (sp >= stack.len) return error.StackOverflow;
+                    const field_name = switch (expr.constants[idx]) {
+                        .string => |s| s,
+                        else => return error.InvalidConstantIndex,
+                    };
+                    if (row.get(field_name)) |val| {
+                        stack[sp] = val;
+                    } else {
+                        stack[sp] = .null;
                     }
+                    from_attr[sp] = false;
+                    sp += 1;
                 },
                 .load_user => {
                     if (sp >= stack.len) return error.StackOverflow;
@@ -1780,7 +1901,8 @@ pub const RLSEngine = struct {
                     if (pc >= expr.bytecode.len) return error.BytecodeUnderrun;
                     const idx = expr.bytecode[pc];
                     pc += 1;
-                    _ = idx;
+                    // SONNY-2732: see push_const.
+                    if (idx >= expr.constants.len) return error.InvalidConstantIndex;
                     if (sp >= stack.len) return error.StackOverflow;
                     stack[sp] = .null;
                     from_attr[sp] = false;
@@ -1794,6 +1916,8 @@ pub const RLSEngine = struct {
                     const idx = expr.bytecode[pc];
                     pc += 1;
                     if (sp >= stack.len) return error.StackOverflow;
+                    // SONNY-2732: see push_const.
+                    if (idx >= expr.constants.len) return error.InvalidConstantIndex;
                     stack[sp] = self.resolvePrincipalAttribute(username, expr.constants, idx);
                     from_attr[sp] = true;
                     sp += 1;
@@ -1851,9 +1975,7 @@ pub const RLSEngine = struct {
                     if (pc >= expr.bytecode.len) return error.BytecodeUnderrun;
                     const idx = expr.bytecode[pc];
                     pc += 1;
-                    if (idx < expr.jump_table.len) {
-                        pc = expr.jump_table[idx];
-                    }
+                    pc = try jumpTarget(expr, idx);
                 },
                 .jump_if_false => {
                     if (pc >= expr.bytecode.len) return error.BytecodeUnderrun;
@@ -1861,15 +1983,13 @@ pub const RLSEngine = struct {
                     pc += 1;
                     if (sp == 0) return error.StackUnderflow;
                     sp -= 1;
-                    // SONNY-2709: a branch cannot take UNKNOWN as false (the
-                    // skipped arm may be the one that denies); the policy is
-                    // undecided, and an undecided policy denies.
-                    if (stack[sp] == .null) return error.IndeterminatePolicy;
-                    if (!self.valueToBool(stack[sp])) {
-                        if (idx < expr.jump_table.len) {
-                            pc = expr.jump_table[idx];
-                        }
-                    }
+                    // SONNY-2709 / SONNY-2732: a branch cannot take UNKNOWN
+                    // (or a non-boolean) as false: the skipped arm may be the
+                    // one that denies. The policy is undecided, and an
+                    // undecided policy denies.
+                    const target = try jumpTarget(expr, idx);
+                    const cond = self.truthOf(stack[sp]) orelse return error.IndeterminatePolicy;
+                    if (!cond) pc = target;
                 },
                 .jump_if_true => {
                     if (pc >= expr.bytecode.len) return error.BytecodeUnderrun;
@@ -1877,27 +1997,21 @@ pub const RLSEngine = struct {
                     pc += 1;
                     if (sp == 0) return error.StackUnderflow;
                     sp -= 1;
-                    // SONNY-2709: see jump_if_false.
-                    if (stack[sp] == .null) return error.IndeterminatePolicy;
-                    if (self.valueToBool(stack[sp])) {
-                        if (idx < expr.jump_table.len) {
-                            pc = expr.jump_table[idx];
-                        }
-                    }
+                    // SONNY-2709 / SONNY-2732: see jump_if_false.
+                    const target = try jumpTarget(expr, idx);
+                    const cond = self.truthOf(stack[sp]) orelse return error.IndeterminatePolicy;
+                    if (cond) pc = target;
                 },
                 .ret => {
-                    if (sp > 0) {
-                        return self.valueToBool(stack[sp - 1]);
-                    }
+                    // SONNY-2732: only a boolean TRUE on top admits the row.
+                    if (sp > 0) return admits(stack[sp - 1]);
                     return false;
                 },
             }
         }
 
         // If no explicit return, check top of stack
-        if (sp > 0) {
-            return self.valueToBool(stack[sp - 1]);
-        }
+        if (sp > 0) return admits(stack[sp - 1]);
 
         // CANARY: REQ=REQ-GPS-INVARIANT-001; FEATURE="GPS Fail-Open Catalog"; ASPECT=FailOpenInterim; STATUS=COMPLETE; OWNER=security; UPDATED=2026-05-20
         // GPS Phase 2 (task 2-8): VM no-result is now surfaced as
@@ -4342,19 +4456,18 @@ test "SONNY-2709: a principal attribute in = and <> is coerced as it is in a ran
     try std.testing.expect(!try sonny2709Sees(&neq, "u2709e_nobody", "team", .{ .string = "red" }));
 }
 
-test "SONNY-2709: input the compiler does not understand denies every row" {
+test "SONNY-2709: input the compiler does not understand is refused" {
     const allocator = std.testing.allocator;
     // Only the prefix `row.cls = 'public'` used to be compiled, and the rest
-    // silently dropped.
-    var junk = try sonny2709Engine(allocator, "row.cls = 'public' junk");
-    defer sonny2709Deinit(&junk);
-    try std.testing.expect(!try sonny2709Sees(&junk, "u", "cls", .{ .string = "public" }));
-    // `IN` is not supported: the policy used to read as `row.cls` alone,
-    // which any non-empty string passes.
-    var in_list = try sonny2709Engine(allocator, "row.cls IN 'secret'");
-    defer sonny2709Deinit(&in_list);
-    try std.testing.expect(!try sonny2709Sees(&in_list, "u", "cls", .{ .string = "secret" }));
-    try std.testing.expect(!try sonny2709Sees(&in_list, "u", "cls", .{ .string = "public" }));
+    // silently dropped; `IN` is not supported, and the policy used to read as
+    // `row.cls` alone, which any non-empty string passed. SONNY-2732: such a
+    // policy is refused outright (it was installed denying every row).
+    for ([_][]const u8{ "row.cls = 'public' junk", "row.cls IN 'secret'" }) |text| {
+        var engine = try RLSEngine.init(allocator);
+        defer engine.deinit();
+        try std.testing.expectError(error.InvalidRlsExpression, engine.compileExpressionStrict(text));
+        try std.testing.expectError(error.InvalidRlsExpression, sonny2709Engine(allocator, text));
+    }
 }
 
 test "SONNY-2709: a decimal literal compares as a float" {
@@ -4559,4 +4672,203 @@ test "SONNY-2730: nesting past the limit is refused, not a stack overflow" {
     for (0..RLS_MAX_NESTING) |_| try ok_text.append(allocator, ')');
     const compiled = try engine.compileExpressionStrict(ok_text.items);
     defer sonny2730FreeCompiled(allocator, compiled);
+}
+
+// ---------------------------------------------------------------------------
+// SONNY-2732: strict truth, strict policy creation, strict lexer, malformed
+// bytecode, atomic update.
+// CANARY: REQ=REQ-SONNY-2732-RLS-STRICT-POLICIES; FEATURE="RLSExpressionCompilation"; ASPECT=Regression; STATUS=TESTED; TEST=src/security/rls_core.zig; OWNER=security; UPDATED=2026-09-25
+// ---------------------------------------------------------------------------
+
+test "SONNY-2732: only a boolean TRUE admits a row" {
+    const allocator = std.testing.allocator;
+    // Probe P18: a bare string field admitted a row whose flag was 'no', and
+    // a bare string constant admitted every row.
+    var flag = try sonny2709Engine(allocator, "row.flag");
+    defer sonny2709Deinit(&flag);
+    try std.testing.expect(try sonny2709Sees(&flag, "u", "flag", .{ .boolean = true }));
+    try std.testing.expect(!try sonny2709Sees(&flag, "u", "flag", .{ .boolean = false }));
+    try std.testing.expect(!try sonny2709Sees(&flag, "u", "flag", .{ .string = "no" }));
+    try std.testing.expect(!try sonny2709Sees(&flag, "u", "flag", .{ .string = "" }));
+    try std.testing.expect(!try sonny2709Sees(&flag, "u", "flag", .{ .integer = 1 }));
+    try std.testing.expect(!try sonny2709Sees(&flag, "u", "flag", null));
+    for ([_][]const u8{ "'anything'", "1", "2.5", "NULL" }) |text| {
+        var bare = try sonny2709Engine(allocator, text);
+        defer sonny2709Deinit(&bare);
+        try std.testing.expect(!try sonny2709Sees(&bare, "u", "x", .{ .string = "anything" }));
+    }
+
+    // AND, OR and NOT over a non-boolean are UNKNOWN.
+    var and_true = try sonny2709Engine(allocator, "row.flag AND TRUE");
+    defer sonny2709Deinit(&and_true);
+    try std.testing.expect(!try sonny2709Sees(&and_true, "u", "flag", .{ .string = "yes" }));
+    try std.testing.expect(try sonny2709Sees(&and_true, "u", "flag", .{ .boolean = true }));
+    var not_flag = try sonny2709Engine(allocator, "NOT row.flag");
+    defer sonny2709Deinit(&not_flag);
+    try std.testing.expect(!try sonny2709Sees(&not_flag, "u", "flag", .{ .string = "" }));
+    try std.testing.expect(try sonny2709Sees(&not_flag, "u", "flag", .{ .boolean = false }));
+    var or_true = try sonny2709Engine(allocator, "row.flag OR TRUE");
+    defer sonny2709Deinit(&or_true);
+    try std.testing.expect(try sonny2709Sees(&or_true, "u", "flag", .{ .string = "yes" }));
+    var or_false = try sonny2709Engine(allocator, "row.flag OR FALSE");
+    defer sonny2709Deinit(&or_false);
+    try std.testing.expect(!try sonny2709Sees(&or_false, "u", "flag", .{ .string = "yes" }));
+}
+
+fn sonny2732Policy(id: u64, table: []const u8, raw: []const u8) RLSEngine.Policy {
+    return .{
+        .id = id,
+        .name = "p2732",
+        .description = "SONNY-2732",
+        .graph = "g",
+        .table = table,
+        .operation = .all,
+        .permissive = false,
+        .roles = &.{},
+        .using_expr = .{ .raw = raw, .parsed = null, .compiled = null, .parameters = &.{} },
+        .check_expr = null,
+        .enabled = true,
+        .created_at = 0,
+        .updated_at = 0,
+        .created_by = 0,
+        .temporal = null,
+        .data_classification = null,
+        .audit_level = .none,
+    };
+}
+
+fn sonny2732Compiled(engine: *RLSEngine, table: []const u8) *RLSEngine.CompiledExpression {
+    const list = engine.policies.get(.{ .graph = "g", .table = table }).?;
+    return list.items[0].using_expr.?.compiled.?;
+}
+
+test "SONNY-2732: createPolicy refuses an expression that does not compile; loadPolicy keeps it fail-closed" {
+    const allocator = std.testing.allocator;
+    var engine = try RLSEngine.init(allocator);
+    defer sonny2709Deinit(&engine);
+
+    // It used to be installed as a program denying every row, with only a
+    // warning: the author never learned the policy was broken.
+    try std.testing.expectError(error.InvalidRlsExpression, engine.createPolicy(sonny2732Policy(1, "T", "row.cls = ")));
+    try std.testing.expect(!engine.hasPolicies());
+    try std.testing.expectEqual(@as(usize, 0), engine.invalidPolicyCount());
+
+    // A stored policy that no longer compiles is kept, denying every row.
+    try engine.loadPolicy(sonny2732Policy(2, "T", "row.cls = "));
+    try std.testing.expect(engine.hasPolicies());
+    try std.testing.expectEqual(@as(usize, 1), engine.invalidPolicyCount());
+    try std.testing.expect(!try sonny2709Sees(&engine, "u", "cls", .{ .string = "a" }));
+    // A valid stored policy loads as usual.
+    try engine.loadPolicy(sonny2732Policy(3, "U", "row.cls = 'a'"));
+    try std.testing.expectEqual(@as(usize, 1), engine.invalidPolicyCount());
+}
+
+test "SONNY-2732: the lexer refuses a missing parenthesis, an unterminated string and an empty name" {
+    const allocator = std.testing.allocator;
+    var engine = try RLSEngine.init(allocator);
+    defer engine.deinit();
+    // Probe P18's `(row.cls = 'a'` used to compile as `row.cls = 'a'`.
+    const refused = [_][]const u8{ "(row.cls = 'a'", "row.cls = 'a", "row.cls = 'a' OR 'b", "row. = 'a'", "principal.attribute. = 'a'", "(TRUE))", "cls = 'a'" };
+    for (refused) |text| {
+        std.testing.expectError(error.InvalidRlsExpression, engine.compileExpressionStrict(text)) catch |err| {
+            std.debug.print("  compiled: {s}\n", .{text});
+            return err;
+        };
+    }
+    const c = try engine.compileExpressionStrict("(row.cls = 'a')");
+    sonny2730FreeCompiled(allocator, c);
+}
+
+test "SONNY-2732: malformed bytecode is refused, and a loop stops" {
+    const allocator = std.testing.allocator;
+    const one_constant = [_]Value{.{ .string = "cls" }};
+    const Case = struct { code: []const u8, jumps: []const usize, err: anyerror };
+    const cases = [_]Case{
+        // An index past the constants used to be skipped: push_true; ret
+        // then admitted the row.
+        .{ .code = &.{ 0x01, 0x09, 0x02, 0xFF }, .jumps = &.{}, .err = error.InvalidConstantIndex },
+        .{ .code = &.{ 0x10, 0x05, 0xFF }, .jumps = &.{}, .err = error.InvalidConstantIndex },
+        .{ .code = &.{ 0x13, 0x05, 0xFF }, .jumps = &.{}, .err = error.InvalidConstantIndex },
+        .{ .code = &.{ 0x12, 0x05, 0xFF }, .jumps = &.{}, .err = error.InvalidConstantIndex },
+        // A jump index past the table used to fall through.
+        .{ .code = &.{ 0x40, 0x03, 0x02, 0xFF }, .jumps = &.{0}, .err = error.InvalidJumpIndex },
+        .{ .code = &.{ 0x40, 0x00, 0x02, 0xFF }, .jumps = &.{99}, .err = error.InvalidJumpTarget },
+        .{ .code = &.{ 0x02, 0x41, 0x00, 0x02, 0xFF }, .jumps = &.{99}, .err = error.InvalidJumpTarget },
+        // A backward jump used to loop forever.
+        .{ .code = &.{ 0x00, 0x40, 0x00 }, .jumps = &.{0}, .err = error.StepLimitExceeded },
+        // A branch on a non-boolean is undecided.
+        .{ .code = &.{ 0x01, 0x00, 0x41, 0x00, 0x02, 0xFF }, .jumps = &.{4}, .err = error.IndeterminatePolicy },
+    };
+    for (cases) |case| {
+        var compiled = RLSEngine.CompiledExpression{ .bytecode = case.code, .constants = &one_constant, .jump_table = case.jumps };
+        var engine = try sonny2709PinnedEngine(allocator, &compiled);
+        defer engine.deinit();
+        std.testing.expectError(case.err, sonny2709Sees(&engine, "u", "cls", .{ .string = "a" })) catch |err| {
+            std.debug.print("  bytecode {any}\n", .{case.code});
+            return err;
+        };
+    }
+}
+
+test "SONNY-2732: the SecurityContext VM denies an empty stack and stops a loop" {
+    const allocator = std.testing.allocator;
+    var engine = try RLSEngine.init(allocator);
+    defer engine.deinit();
+    var user = createTestUser(allocator, 1, "u", "u@example.com");
+    defer user.attributes.deinit();
+    var session_attrs = std.StringHashMap([]const u8).init(allocator);
+    defer session_attrs.deinit();
+    var request_attrs = std.StringHashMap([]const u8).init(allocator);
+    defer request_attrs.deinit();
+    var context = auth.SecurityContext{
+        .user = &user,
+        .roles = &.{},
+        .session_attributes = session_attrs,
+        .request_attributes = request_attrs,
+        .environment = .{ .ip_address = "10.0.0.1", .user_agent = "test", .device_id = null, .location = null, .timestamp = 0 },
+    };
+    var row = std.StringHashMap(Value).init(allocator);
+    defer row.deinit();
+
+    // `ret` on an empty stack used to admit the row, and so did running off
+    // the end with an empty stack.
+    var empty_ret = RLSEngine.CompiledExpression{ .bytecode = &.{0xFF}, .constants = &.{}, .jump_table = &.{} };
+    try std.testing.expect(!try engine.evaluateCompiledExpression(&empty_ret, &row, &context));
+    var empty = RLSEngine.CompiledExpression{ .bytecode = &.{0x00}, .constants = &.{}, .jump_table = &.{} };
+    try std.testing.expectError(error.IndeterminatePolicy, engine.evaluateCompiledExpression(&empty, &row, &context));
+    // A string on top does not admit it.
+    const one = [_]Value{.{ .string = "yes" }};
+    var string_top = RLSEngine.CompiledExpression{ .bytecode = &.{ 0x01, 0x00, 0xFF }, .constants = &one, .jump_table = &.{} };
+    try std.testing.expect(!try engine.evaluateCompiledExpression(&string_top, &row, &context));
+    // A backward jump stops.
+    var loop = RLSEngine.CompiledExpression{ .bytecode = &.{ 0x00, 0x40, 0x00 }, .constants = &.{}, .jump_table = &.{0} };
+    try std.testing.expectError(error.StepLimitExceeded, engine.evaluateCompiledExpression(&loop, &row, &context));
+}
+
+test "SONNY-2732: updatePolicy compiles first, then swaps the policy in one store" {
+    const allocator = std.testing.allocator;
+    var engine = try RLSEngine.init(allocator);
+    defer sonny2709Deinit(&engine);
+
+    try engine.createPolicy(sonny2732Policy(7, "T", "row.cls = 'a'"));
+    try std.testing.expect(try sonny2709Sees(&engine, "u", "cls", .{ .string = "a" }));
+    try std.testing.expect(!try sonny2709Sees(&engine, "u", "cls", .{ .string = "b" }));
+    const first = sonny2732Compiled(&engine, "T");
+
+    // The new expression takes effect; the stored policy carries its own
+    // bytecode (it used to keep the old one, compiled into a copy).
+    try engine.updatePolicy(7, sonny2732Policy(7, "T", "row.cls = 'b'"));
+    sonny2730FreeCompiled(allocator, first);
+    try std.testing.expect(try sonny2709Sees(&engine, "u", "cls", .{ .string = "b" }));
+    try std.testing.expect(!try sonny2709Sees(&engine, "u", "cls", .{ .string = "a" }));
+    try std.testing.expect(sonny2732Compiled(&engine, "T").bytecode.len > 0);
+
+    // An update that does not compile changes nothing.
+    try std.testing.expectError(error.InvalidRlsExpression, engine.updatePolicy(7, sonny2732Policy(7, "T", "row.cls = ")));
+    try std.testing.expect(try sonny2709Sees(&engine, "u", "cls", .{ .string = "b" }));
+    // Neither does moving it to another table, or updating a policy that
+    // does not exist (the compiled update is freed: no leak).
+    try std.testing.expectError(error.PolicyKeyChange, engine.updatePolicy(7, sonny2732Policy(7, "Other", "row.cls = 'c'")));
+    try std.testing.expectError(error.PolicyNotFound, engine.updatePolicy(99, sonny2732Policy(99, "T", "row.cls = 'c'")));
+    try std.testing.expect(try sonny2709Sees(&engine, "u", "cls", .{ .string = "b" }));
 }

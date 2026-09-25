@@ -214,6 +214,25 @@ pub const PolicyCatalog = struct {
         return error.PolicyNotFound;
     }
 
+    // CANARY: REQ=REQ-SONNY-2732-RLS-STRICT-POLICIES; FEATURE="GPS Policy DDL"; ASPECT=InvalidPolicyListing; STATUS=TESTED; TEST=tests/test_rls_policy_ddl.zig; OWNER=security; UPDATED=2026-09-25
+    /// SONNY-2732: can `p` ever grant access? Not when its non-trivial USING
+    /// expression failed to compile as it was loaded (`retain_fail_closed`):
+    /// it is kept, fail-closed, until an operator rewrites it. SHOW POLICIES
+    /// and `geode.auth.policy_list` report this as `valid`.
+    pub fn policyIsValid(p: *const Policy) bool {
+        return p.compiled != null or std.mem.eql(u8, p.expression_source, "true");
+    }
+
+    /// SONNY-2732: how many policies are not `policyIsValid` (logged at
+    /// startup after hydration).
+    pub fn invalidPolicyCount(self: *const PolicyCatalog) usize {
+        var n: usize = 0;
+        for (self.policies.items) |*p| {
+            if (!policyIsValid(p)) n += 1;
+        }
+        return n;
+    }
+
     // CANARY: REQ=REQ-GPS-DDL-003; FEATURE="GPS Policy DDL"; ASPECT=PolicyCatalogList; STATUS=TESTED; TEST=tests/test_gps_policy_catalog.zig; OWNER=security; UPDATED=2026-05-20
     /// Return a read-only slice of the current policies.  The slice is valid
     /// only until the next addPolicy or removePolicy call.

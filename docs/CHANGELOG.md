@@ -80,6 +80,31 @@
   post-filter's label-deny snapshot, and the traversal's, now hold their own
   copy of each denied label. If a deny policy was removed while a query's
   post-filter ran, the post-filter could read freed memory.
+- **Strict RLS expression policies (SONNY-2732):**
+  - Only a boolean TRUE admits a row. A policy that evaluated to a
+    non-empty string or a non-zero number used to admit it. So `row.flag`
+    admitted a flag of `'no'`, and a bare `'anything'` admitted every row.
+  - `NOT`, `AND` and `OR` treat a non-boolean operand as UNKNOWN.
+  - Creating or updating a policy whose expression does not compile now
+    fails with `InvalidRlsExpression` and installs nothing. Such a policy
+    used to be installed denying every row, with only a log line. Only
+    policies loaded back from storage keep the deny-all fallback, and they
+    are marked invalid.
+  - SHOW POLICIES and `geode.auth.policy_list` have a new `valid` column.
+    Startup logs how many stored GPS policies are invalid.
+  - The lexer rejects a missing `)`, an unterminated string and an empty
+    field name.
+  - `geode.rls.add_attribute_policy` accepts only identifiers for its row
+    property and attribute key. Both are pasted into the policy text, so a
+    crafted property could append `OR TRUE`.
+  - The expression VMs refuse out-of-range constant and jump indexes and
+    stop a looping program.
+  - An empty stack now denies in the second VM.
+  - An update is compiled before it replaces the policy.
+
+  **Behaviour change:** policies that relied on truthy strings or numbers,
+  or on a forgiven `)`, must be rewritten. Range comparisons on string
+  values are lexicographic, so range policies need numeric row values.
 - **A large RLS policy no longer aborts the server (SONNY-2730):** the
   expression compiler cast every constant's index to a byte, so a policy with
   more than 256 constants crashed the server when it was compiled; a

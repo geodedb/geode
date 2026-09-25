@@ -501,8 +501,15 @@ pub const UserManager = struct {
             .audit_level = request.audit_level,
         };
 
+        // SONNY-2732: createPolicy refuses an expression that does not
+        // compile (error.InvalidRlsExpression) before anything is stored, and
+        // a policy that cannot be persisted is taken out again, so the engine
+        // and the store never disagree.
         try self.rls_engine.createPolicy(policy);
-        try self.persistPolicy(policy);
+        self.persistPolicy(policy) catch |err| {
+            self.rls_engine.deletePolicy(policy_id) catch {};
+            return err;
+        };
 
         return policy_id;
     }

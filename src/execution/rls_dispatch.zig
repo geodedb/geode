@@ -301,6 +301,21 @@ fn handleListDenyPolicies(
 // REQ=GAP-0284: ABAC attribute-based row-level policies.
 // ===========================================================================
 
+// CANARY: REQ=REQ-SONNY-2732-RLS-STRICT-POLICIES; FEATURE="RLS deny-policy procedure"; ASPECT=AttributePolicyIdentifiers; STATUS=TESTED; TEST=tests/test_sonny2709_rls_range_fail_closed.zig; OWNER=security; UPDATED=2026-09-25
+/// SONNY-2732: is `name` a plain identifier (`[A-Za-z_][A-Za-z0-9_]*`, at
+/// most 128 bytes)? `add_attribute_policy` pastes the row property and the
+/// attribute key into the policy's text (`row.<prop> = principal.attribute.<key>`),
+/// so anything else would be compiled as part of the expression: a property
+/// of `x = 'a' OR TRUE OR row.y` yielded a policy that admits every row.
+fn isPolicyIdentifier(name: []const u8) bool {
+    if (name.len == 0 or name.len > 128) return false;
+    if (!(std.ascii.isAlphabetic(name[0]) or name[0] == '_')) return false;
+    for (name[1..]) |ch| {
+        if (!(std.ascii.isAlphanumeric(ch) or ch == '_')) return false;
+    }
+    return true;
+}
+
 /// Deterministic policy id derived from (graph, label, row_property,
 /// attribute_key) so `remove_attribute_policy` can locate the same policy
 /// `add_attribute_policy` installed.
@@ -336,6 +351,11 @@ fn handleAddAttributePolicy(
 
     if (graph.len == 0 or label.len == 0 or row_property.len == 0 or attribute_key.len == 0) {
         return try singleStatusRow(allocator, "error: graph, label, row_property and attribute_key are required");
+    }
+    // SONNY-2732: both are pasted into the policy text; refuse anything but
+    // an identifier, and install nothing.
+    if (!isPolicyIdentifier(row_property) or !isPolicyIdentifier(attribute_key)) {
+        return error.InvalidPolicyIdentifier;
     }
 
     const engine_ptr = rls_types.getGlobalExprRLSEngine() orelse {
