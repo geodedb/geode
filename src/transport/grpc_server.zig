@@ -2265,6 +2265,14 @@ fn readWillStreamEngineSide(state: *const server_state.ServerState, analysis: *c
 /// planned_read instead of materializing an O(all-nodes)-resident snapshot
 /// (the RSS balloon under the bounded node cache). Same RLS / preamble / adapter
 /// gates as the streaming predicate; RLS reads stay on the snapshot path.
+/// SONNY-2749: the session's graph as the executor sees it: the graph a
+/// program's statements start on (`state.current_graph` is not kept in step
+/// on gRPC).
+fn sessionGraphName(state: *const server_state.ServerState) []const u8 {
+    if (state.exec_session) |*sess| return sess.graph orelse graph_store.DEFAULT_GRAPH_NAME;
+    return state.current_graph orelse graph_store.DEFAULT_GRAPH_NAME;
+}
+
 fn readServedEngineDirect(state: *const server_state.ServerState, analysis: *const query_traits.ProgramAnalysis) bool {
     if (graph_store.getGlobalAdapter() == null) return false;
     if (analysis.kind != .rows) return false;
@@ -2661,8 +2669,18 @@ pub fn handleExecute(request_bytes: []const u8, allocator: std.mem.Allocator, ep
             // from the whole program (`statementPlan`, shared with QUIC). A
             // program ending in EXPLAIN used to skip the gate whatever else it
             // held.
-            const query_graph_name = state.current_graph orelse graph_store.DEFAULT_GRAPH_NAME;
-            const stmt_plan = query_traits.statementPlan(&parse_result.program, &analysis, query_graph_name, .grpc);
+            // SONNY-2749: the graph the program starts on is the executor
+            // session's (`exec_session.graph`). gRPC never synced
+            // `state.current_graph`, so every write here locked `default`,
+            // whatever graph the session was on. Copied, because a USE GRAPH
+            // in the program frees the session's string.
+            const query_graph_name = try allocator.dupe(u8, sessionGraphName(state));
+            defer allocator.free(query_graph_name);
+            const stmt_plan = query_traits.statementPlan(&parse_result.program, &analysis, query_graph_name, graph_store.DEFAULT_GRAPH_NAME, .grpc);
+            // CANARY: REQ=REQ-SONNY-2749-PROGRAM-GRAPH-LOCK; FEATURE="StatementAuthorization"; ASPECT=GrpcHandler; STATUS=TESTED; TEST=tests/test_sonny2749_program_graph_lock.zig; OWNER=security; UPDATED=2026-09-25
+            // SONNY-2749: every lock below is on the graph the program's
+            // statements run on, which a USE GRAPH in it moves.
+            const lock_graph = stmt_plan.lock_graph;
             const self_locking = stmt_plan.self_locking;
             const needs_store_lock = stmt_plan.needs_store_lock;
             const program_is_mutating = stmt_plan.is_mutation;
@@ -2695,6 +2713,14 @@ pub fn handleExecute(request_bytes: []const u8, allocator: std.mem.Allocator, ep
                 }
             }
 
+            // SONNY-2749: one graph's write lock cannot cover a program that
+            // changes data on several, and a handler never holds two.
+            if (stmt_plan.spans_graphs) {
+                var resp = try buildErrorResponse(allocator, "0A000", query_traits.spans_graphs_message, &.{}, &.{});
+                defer resp.deinit(allocator);
+                return encodeMessage(allocator, resp);
+            }
+
             var graph_lock_handle: ?graph_store.GraphLockHandle = null;
             // GAP-0753: Read path takes the shared graph lock only long
             // enough to capture a QueryReadSession snapshot; downstream
@@ -2714,14 +2740,20 @@ pub fn handleExecute(request_bytes: []const u8, allocator: std.mem.Allocator, ep
                 if (is_mutation) {
                     // Mutations: exclusive writer lock held across execute to
                     // prevent HashMap rehash races (GAP-0001, CWE-362/CWE-416).
-                    graph_lock_handle = graph_store.acquireGraphWriteLock(query_graph_name);
+                    // SONNY-2749: the graph the program writes; no deadline.
+                    graph_lock_handle = graph_store.acquireProgramWriteLockCancelable(lock_graph, query_graph_name, std.math.maxInt(u64)) catch |err| {
+                        const info = proto_util.mapError(err);
+                        var resp = try buildErrorResponse(allocator, info.code, info.message, &.{}, &.{});
+                        defer resp.deinit(allocator);
+                        return encodeMessage(allocator, resp);
+                    };
                 } else if (stmt_plan.point_read and !execution.wouldEvaluateRLS()) {
                     // GAP-0805: zero-copy point-read view scoped by the
                     // shared read lock (handle kept alive until defer).
                     // NOTE: RLS-evaluating reads bypass this path (wouldEvaluateRLS()
                     // returns true) and fall through to the snapshot path below, so
                     // the SHARED rwlock is released before per-node row construction.
-                    graph_lock_handle = graph_store.acquireGraphReadLockTagged(query_graph_name, .point_read);
+                    graph_lock_handle = graph_store.acquireGraphReadLockTagged(lock_graph, .point_read);
                     const store_ref = graph_store.getWritableGlobalStore(allocator);
                     if (graph_store.PointReadView.init(store_ref)) |view| {
                         point_read_view = view;
@@ -2731,13 +2763,13 @@ pub fn handleExecute(request_bytes: []const u8, allocator: std.mem.Allocator, ep
                     } else |_| {
                         if (graph_lock_handle) |h| graph_store.releaseGraphLock(h);
                         graph_lock_handle = null;
-                        if (graph_store.snapshotUnderReadLock(allocator, query_graph_name)) |session| {
+                        if (graph_store.snapshotUnderReadLock(allocator, lock_graph)) |session| {
                             read_session = session;
                             prev_active_read_store = graph_store.pushActiveQueryReadStore(
                                 read_session.?.store(),
                             );
                         } else |_| {
-                            graph_lock_handle = graph_store.acquireGraphReadLockTagged(query_graph_name, .fallback);
+                            graph_lock_handle = graph_store.acquireGraphReadLockTagged(lock_graph, .fallback);
                         }
                     }
                 } else if (readServedEngineDirect(state, &analysis)) {
@@ -2759,7 +2791,7 @@ pub fn handleExecute(request_bytes: []const u8, allocator: std.mem.Allocator, ep
                     // Reads: snapshot under the shared reader lock, then
                     // release immediately. Executor reads from the thread-
                     // local active-snapshot store installed below.
-                    if (graph_store.snapshotUnderReadLock(allocator, query_graph_name)) |session| {
+                    if (graph_store.snapshotUnderReadLock(allocator, lock_graph)) |session| {
                         read_session = session;
                         prev_active_read_store = graph_store.pushActiveQueryReadStore(
                             read_session.?.store(),
@@ -2768,7 +2800,7 @@ pub fn handleExecute(request_bytes: []const u8, allocator: std.mem.Allocator, ep
                         // Snapshot path unavailable (e.g. legacy no-adapter
                         // test path): fall back to the wide-scope shared
                         // reader lock, same semantics as GAP-0752.
-                        graph_lock_handle = graph_store.acquireGraphReadLockTagged(query_graph_name, .fallback);
+                        graph_lock_handle = graph_store.acquireGraphReadLockTagged(lock_graph, .fallback);
                     }
                 }
             }
@@ -2811,7 +2843,7 @@ pub fn handleExecute(request_bytes: []const u8, allocator: std.mem.Allocator, ep
                     if (graph_lock_handle) |h| {
                         // GAP-0511: Release lock before index rebuild
                         graph_store.releaseGraphLock(h);
-                        rebuildPendingIndexes(allocator, query_graph_name, &pending_index_rebuilds);
+                        rebuildPendingIndexes(allocator, lock_graph, &pending_index_rebuilds);
                     }
                 }
                 // GAP-0753: Always pop the active-store thread-local and
@@ -2905,7 +2937,7 @@ pub fn handleExecute(request_bytes: []const u8, allocator: std.mem.Allocator, ep
                                     // GAP-0511: Release lock before index rebuild
                                     graph_store.releaseGraphLock(h);
                                     lock_released = true;
-                                    rebuildPendingIndexes(allocator, query_graph_name, &pending_index_rebuilds);
+                                    rebuildPendingIndexes(allocator, lock_graph, &pending_index_rebuilds);
                                 }
                             }
 
@@ -2963,7 +2995,7 @@ pub fn handleExecute(request_bytes: []const u8, allocator: std.mem.Allocator, ep
                             // GAP-0511: Release lock before index rebuild
                             graph_store.releaseGraphLock(h);
                             lock_released = true;
-                            rebuildPendingIndexes(allocator, query_graph_name, &pending_index_rebuilds);
+                            rebuildPendingIndexes(allocator, lock_graph, &pending_index_rebuilds);
                         }
                     }
 
@@ -3026,7 +3058,7 @@ pub fn handleExecute(request_bytes: []const u8, allocator: std.mem.Allocator, ep
                                             // GAP-0511: Release lock before index rebuild
                                             graph_store.releaseGraphLock(h);
                                             lock_released = true;
-                                            rebuildPendingIndexes(allocator, query_graph_name, &pending_index_rebuilds);
+                                            rebuildPendingIndexes(allocator, lock_graph, &pending_index_rebuilds);
                                         }
                                     }
 
@@ -3095,7 +3127,7 @@ pub fn handleExecute(request_bytes: []const u8, allocator: std.mem.Allocator, ep
                             // GAP-0511: Release lock before index rebuild
                             graph_store.releaseGraphLock(h);
                             lock_released = true;
-                            rebuildPendingIndexes(allocator, query_graph_name, &pending_index_rebuilds);
+                            rebuildPendingIndexes(allocator, lock_graph, &pending_index_rebuilds);
                         }
                     }
 

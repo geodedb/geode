@@ -6656,6 +6656,14 @@ fn sessionTenantId(state: *const ServerState) ?[]const u8 {
     return if (state.session_config) |cfg| cfg.tenant_id else null;
 }
 
+/// SONNY-2749: the session's graph as the executor sees it: the graph a
+/// program's statements start on. `state.current_graph` is a copy synced after
+/// a request that succeeds, so it is stale after one that failed part way.
+fn sessionGraphName(state: *const ServerState) []const u8 {
+    if (state.exec_session) |*sess| return sess.graph orelse graph_store.DEFAULT_GRAPH_NAME;
+    return state.current_graph orelse graph_store.DEFAULT_GRAPH_NAME;
+}
+
 fn readWillStreamEngineSide(
     state: *const ServerState,
     analysis: *const query_traits.ProgramAnalysis,
@@ -7374,13 +7382,22 @@ fn handleClientMessage(
             const ordered = traits.ordered;
             const distinct = traits.distinct;
             const heur_index = traits.has_where_eq or traits.has_filter_eq;
-            const query_graph_name = state.current_graph orelse graph_store.DEFAULT_GRAPH_NAME;
+            // SONNY-2749: the graph the program starts on is the executor
+            // session's (`exec_session.graph`); `state.current_graph` is a copy
+            // synced only after a request that succeeds. Copied, because a USE
+            // GRAPH in the program frees the session's string.
+            const query_graph_name = try gpa.dupe(u8, sessionGraphName(state));
+            defer gpa.free(query_graph_name);
             // CANARY: REQ=REQ-SONNY-2743-WHOLE-PROGRAM-GATE; FEATURE="StatementAuthorization"; ASPECT=QuicHandler; STATUS=TESTED; TEST=tests/test_sonny2743_whole_program_gate.zig; OWNER=security; UPDATED=2026-09-25
             // SONNY-2743: the lock, and whether the write gate applies, come
             // from the whole program (`statementPlan`), never from its last
             // query alone.
-            const stmt_plan = query_traits.statementPlan(&parse_result.program, &analysis, query_graph_name, .quic);
+            const stmt_plan = query_traits.statementPlan(&parse_result.program, &analysis, query_graph_name, graph_store.DEFAULT_GRAPH_NAME, .quic);
             const program_is_mutating = stmt_plan.is_mutation;
+            // CANARY: REQ=REQ-SONNY-2749-PROGRAM-GRAPH-LOCK; FEATURE="StatementAuthorization"; ASPECT=QuicHandler; STATUS=TESTED; TEST=tests/test_sonny2749_program_graph_lock.zig; OWNER=security; UPDATED=2026-09-25
+            // SONNY-2749: every lock below is on the graph the program's
+            // statements run on, which a USE GRAPH in it moves.
+            const lock_graph = stmt_plan.lock_graph;
 
             // Spec geode-vectorization-and-reranking: per-request hard read-only
             // floor, independent of the principal's role ("authorization must be
@@ -7662,6 +7679,13 @@ fn handleClientMessage(
                     try sendExecuteError(gpa, stream, "42501", "Permission denied: insufficient privileges for data modification", &.{}, &.{});
                     return;
                 }
+            }
+
+            // SONNY-2749: one graph's write lock cannot cover a program that
+            // changes data on several, and a handler never holds two.
+            if (stmt_plan.spans_graphs) {
+                try sendExecuteError(gpa, stream, "0A000", query_traits.spans_graphs_message, &.{}, &.{});
+                return;
             }
 
             quic_response_metrics.recordFirstStreamQueryPrepare(monoNsFromHandler() -| first_stream_prepare_start_ns);
@@ -8013,16 +8037,22 @@ fn handleClientMessage(
                     // shutdown warning under the 16-worker ingest workload.
                     const write_lock_timeout_ns = mutationWriteLockTimeoutNs(state);
                     const deadline = monoNanosNow() + write_lock_timeout_ns;
-                    if (graph_store.acquireGraphWriteLockCancelable(query_graph_name, deadline)) |h| {
+                    // SONNY-2749: the graph the program writes, not the session's.
+                    if (graph_store.acquireProgramWriteLockCancelable(lock_graph, query_graph_name, deadline)) |h| {
                         graph_lock_handle = h;
                         if (mut_sample) |*s| s.markLockAcquired();
                     } else |err| {
                         if (err == error.Deadline) {
                             log.warn("Write lock acquisition timed out", &.{
-                                Attr.string("graph", query_graph_name),
+                                Attr.string("graph", lock_graph),
                                 Attr.uint("timeout_ns", write_lock_timeout_ns),
                             });
                             try sendExecuteError(gpa, stream, "40001", "Write lock acquisition timed out", &.{}, &.{});
+                            return;
+                        }
+                        if (err == error.GraphNotFound) {
+                            const info = proto_util.mapError(err);
+                            try sendExecuteError(gpa, stream, info.code, info.message, &.{}, &.{});
                             return;
                         }
                         return err;
@@ -8037,7 +8067,7 @@ fn handleClientMessage(
                     // NOTE: RLS-evaluating reads bypass this path (wouldEvaluateRLS()
                     // returns true) and fall through to the snapshot path below, so
                     // the SHARED rwlock is released before per-node row construction.
-                    graph_lock_handle = graph_store.acquireGraphReadLockTagged(query_graph_name, .point_read);
+                    graph_lock_handle = graph_store.acquireGraphReadLockTagged(lock_graph, .point_read);
                     const store_ref = graph_store.getWritableGlobalStore(gpa);
                     if (graph_store.PointReadView.init(store_ref)) |view| {
                         point_read_view = view;
@@ -8049,13 +8079,13 @@ fn handleClientMessage(
                         // took and use the snapshot path instead.
                         if (graph_lock_handle) |h| graph_store.releaseGraphLock(h);
                         graph_lock_handle = null;
-                        if (graph_store.snapshotUnderReadLock(gpa, query_graph_name)) |session| {
+                        if (graph_store.snapshotUnderReadLock(gpa, lock_graph)) |session| {
                             read_session = session;
                             prev_active_read_store = graph_store.pushActiveQueryReadStore(
                                 read_session.?.store(),
                             );
                         } else |_| {
-                            graph_lock_handle = graph_store.acquireGraphReadLockTagged(query_graph_name, .fallback);
+                            graph_lock_handle = graph_store.acquireGraphReadLockTagged(lock_graph, .fallback);
                         }
                     }
                 } else if (readServedEngineDirect(state, &analysis, query_graph_name)) {
@@ -8096,7 +8126,8 @@ fn handleClientMessage(
                     // Reads: snapshot under the shared reader lock, then
                     // release immediately. Executor reads from the thread-
                     // local active-snapshot store installed below.
-                    if (graph_store.snapshotUnderReadLock(gpa, query_graph_name)) |session| {
+                    // SONNY-2749: the graph the program reads (`lock_graph`).
+                    if (graph_store.snapshotUnderReadLock(gpa, lock_graph)) |session| {
                         read_session = session;
                         prev_active_read_store = graph_store.pushActiveQueryReadStore(
                             read_session.?.store(),
@@ -8105,7 +8136,7 @@ fn handleClientMessage(
                         // Snapshot path unavailable (e.g. legacy no-adapter
                         // test path): fall back to the wide-scope shared
                         // reader lock, same semantics as GAP-0752.
-                        graph_lock_handle = graph_store.acquireGraphReadLockTagged(query_graph_name, .fallback);
+                        graph_lock_handle = graph_store.acquireGraphReadLockTagged(lock_graph, .fallback);
                     }
                 }
             }
@@ -8153,7 +8184,7 @@ fn handleClientMessage(
                         // reads the store, so it does not need the graph write lock.
                         // This prevents MERGE stalls under sustained ingest.
                         graph_store.releaseGraphLock(h);
-                        rebuildPendingIndexes(gpa, query_graph_name, &pending_index_rebuilds);
+                        rebuildPendingIndexes(gpa, lock_graph, &pending_index_rebuilds);
                     }
                 }
                 // The snapshot session is owned by this handler scope —
@@ -8248,7 +8279,7 @@ fn handleClientMessage(
                                 if (graph_lock_handle) |h| {
                                     // GAP-0511: Release lock before index rebuild
                                     graph_store.releaseGraphLock(h);
-                                    rebuildPendingIndexes(gpa, query_graph_name, &pending_index_rebuilds);
+                                    rebuildPendingIndexes(gpa, lock_graph, &pending_index_rebuilds);
                                 }
                                 lock_released = true;
                             }
@@ -8317,7 +8348,7 @@ fn handleClientMessage(
                         if (graph_lock_handle) |h| {
                             // GAP-0511: Release lock before index rebuild
                             graph_store.releaseGraphLock(h);
-                            rebuildPendingIndexes(gpa, query_graph_name, &pending_index_rebuilds);
+                            rebuildPendingIndexes(gpa, lock_graph, &pending_index_rebuilds);
                         }
                         lock_released = true;
                     }
@@ -8401,7 +8432,7 @@ fn handleClientMessage(
                                         if (graph_lock_handle) |h| {
                                             // GAP-0511: Release lock before index rebuild
                                             graph_store.releaseGraphLock(h);
-                                            rebuildPendingIndexes(gpa, query_graph_name, &pending_index_rebuilds);
+                                            rebuildPendingIndexes(gpa, lock_graph, &pending_index_rebuilds);
                                         }
                                         lock_released = true;
                                     }
@@ -8553,7 +8584,7 @@ fn handleClientMessage(
                         if (graph_lock_handle) |h| {
                             // GAP-0511: Release lock before index rebuild
                             graph_store.releaseGraphLock(h);
-                            rebuildPendingIndexes(gpa, query_graph_name, &pending_index_rebuilds);
+                            rebuildPendingIndexes(gpa, lock_graph, &pending_index_rebuilds);
                         }
                         lock_released = true;
                     }

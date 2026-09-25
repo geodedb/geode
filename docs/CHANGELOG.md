@@ -80,6 +80,21 @@
   post-filter's label-deny snapshot, and the traversal's, now hold their own
   copy of each denied label. If a deny policy was removed while a query's
   post-filter ran, the post-filter could read freed memory.
+- **Writes after `USE GRAPH` lock the graph they write (SONNY-2749):** the
+  QUIC and gRPC handlers took the write lock of the session's graph as it
+  was before the request. A request such as `USE GRAPH g2; MERGE (:K {id: 1})`
+  therefore wrote `g2` while holding the other graph's lock. Two such
+  requests at once could create the node twice, or corrupt `g2`'s label
+  dictionary. gRPC always locked `default`, because it did not track the
+  session's graph.
+  The lock is now taken on the graph that the request's statements run on,
+  after the request's own `USE GRAPH`, `SESSION SET GRAPH` or `SESSION RESET`.
+  A request that changes data on more than one graph is refused with 0A000;
+  send one request per graph. This includes `CREATE GRAPH g; USE GRAPH g;
+  CREATE …`, which must now be two requests.
+  A request that changes a graph that does not exist is refused with 3F000,
+  and the graph is not created. The CLI's `-g` flag, which sends a
+  `USE GRAPH` of the current graph before the query, works as before.
 - **GPS deny policies deny (SONNY-2744):** `decide()` skipped deny-effect
   policies, and the builtin-role check ran before the policy catalog, so a
   deny never denied. A matching deny now wins over a builtin role, an Admin
