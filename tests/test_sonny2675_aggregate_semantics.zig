@@ -19,7 +19,12 @@
 //     group by value, 1 and '1' and 'null' and NULL are four groups, and a
 //     `|` inside a string does not move a multi-key boundary. Every grouping
 //     site, the GROUP BY fast paths included, wrote integers and strings as
-//     text, NULL as "null" and anything else as "?", joined with "|".
+//     text, NULL as "null" and anything else as "?", joined with "|";
+//   * inside a HAVING aggregate, an alias is the item's expression
+//     (`RETURN n.i AS amt ... HAVING sum(amt) > 100`); it was NULL for every
+//     row, so every group was dropped;
+//   * a HAVING name that is no column, binding or parameter is refused with
+//     42703; it was NULL.
 // Every check runs in the three legacy sessions and on a persisted deployment
 // with no policy or tenant scope (the planned read and the GROUP BY fast
 // paths), with the node cache bounded (the default: the fast paths read the
@@ -382,4 +387,34 @@ fn checkGroupKeys(s: *Session, f: *Failures) !void {
 
 test "SONNY-2675: a group key keeps its type" {
     try inEveryMode("group keys", checkGroupKeys);
+}
+
+fn checkAliasInAggregate(s: *Session, f: *Failures) !void {
+    // An alias inside an aggregate names the item's expression, per row.
+    try expectRowsN(s, f, "MATCH (n:G) RETURN n.g AS k, n.i AS amt GROUP BY n.g HAVING sum(amt) > 100", &.{}, 1, &.{ "'b'", "'c'" });
+    try expectRowsN(s, f, "MATCH (n:G) WITH n.g AS k, n.i AS amt GROUP BY n.g HAVING sum(amt) > 100 RETURN k", &.{}, 1, &.{ "'b'", "'c'" });
+    try expectRows(s, f, "MATCH (n:G) RETURN n.g AS k, count(*) AS c GROUP BY n.g HAVING count(DISTINCT k) = 1", &.{}, &.{ "'a', 10", "'b', 10", "'c', 5" });
+    // An alias of an aggregate inside an aggregate nests them.
+    try expectFail(s, f, "MATCH (n:G) RETURN n.g AS k, count(*) AS c GROUP BY n.g HAVING sum(c) > 1", &.{}, error.NestedAggregate);
+}
+
+test "SONNY-2675: an alias inside a HAVING aggregate names the item's expression" {
+    try inEveryMode("alias in aggregate", checkAliasInAggregate);
+}
+
+fn checkUnknownNames(s: *Session, f: *Failures) !void {
+    const lim: []const Param = &.{.{ .name = "lim", .value = .{ .Int = 7 } }};
+    // A parameter, named with or without its `$`.
+    try expectRows(s, f, "MATCH (n:G) RETURN n.g AS g, count(*) AS c GROUP BY n.g HAVING count(*) > lim", lim, &.{ "'a', 10", "'b', 10" });
+    try expectRows(s, f, "MATCH (n:G) RETURN n.g AS g, count(*) AS c GROUP BY n.g HAVING count(*) > $lim", lim, &.{ "'a', 10", "'b', 10" });
+    // Anything else is refused: over groups, inside an aggregate, per row.
+    try expectFail(s, f, "MATCH (n:G) RETURN n.g AS g, count(*) AS c GROUP BY n.g HAVING nosuchalias > 2", &.{}, error.UnknownHavingReference);
+    try expectFail(s, f, "MATCH (n:G) RETURN n.g AS g, count(*) AS c GROUP BY n.g HAVING nosuchalias IS NULL", &.{}, error.UnknownHavingReference);
+    try expectFail(s, f, "MATCH (n:G) RETURN n.g AS g GROUP BY n.g HAVING sum(nosuch) > 1", &.{}, error.UnknownHavingReference);
+    try expectFail(s, f, "MATCH (n:G) RETURN n.i AS i WHERE nosuch > 1", &.{}, error.UnknownHavingReference);
+    try expectFail(s, f, "MATCH (n:G) RETURN n.i AS i WHERE nosuch.x > 1", &.{}, error.UnknownHavingReference);
+}
+
+test "SONNY-2675: a HAVING name that is no column, binding or parameter is refused" {
+    try inEveryMode("unknown names", checkUnknownNames);
 }

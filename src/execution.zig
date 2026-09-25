@@ -3534,6 +3534,10 @@ const HavingGrouping = struct { items: []const ast.ReturnItem, keys: []const ast
 /// the output row came from, so `n.i` in `RETURN n.i WHERE n.i >= 10`
 /// resolves through `n` (SONNY-2667). An aggregate there fails the query with
 /// `error.AggregateInRowFilter` (SQLSTATE 42803).
+///
+/// Over groups and per row, a name that is no column, input binding or query
+/// parameter fails the query with `error.UnknownHavingReference` (SQLSTATE
+/// 42703); inside an aggregate, an alias is the item's expression.
 const HavingFilter = struct {
     /// The predicate as evaluated: the rewritten HAVING over groups.
     expr: ast.Expr,
@@ -3566,10 +3570,15 @@ const HavingFilter = struct {
                 .output_columns = output_columns,
                 .input_columns = input_columns,
                 .keys = g.keys,
+                .param_names = param_names,
             });
             rest_len = plan.?.slot_names.len;
         } else {
-            try grouped_having.checkRowFilter(expr);
+            try grouped_having.checkRowFilter(allocator, expr, .{
+                .output_columns = output_columns,
+                .input_columns = input_columns,
+                .param_names = param_names,
+            });
         }
         const names = try allocator.alloc([]const u8, output_columns.len + rest_len);
         errdefer allocator.free(names);

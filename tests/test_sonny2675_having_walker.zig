@@ -14,7 +14,8 @@
 //     with none is accepted as it is; a pattern or subquery predicate is
 //     refused (error.UnsupportedGroupedHavingPredicate);
 //   * per row, an aggregate inside any variant is refused
-//     (error.AggregateInRowFilter), except inside a pattern's own WHERE;
+//     (error.AggregateInRowFilter), except inside a pattern's own WHERE, and
+//     a name inside it is checked;
 //   * the expression equals itself (a pattern or subquery equals nothing);
 //   * a name inside the variant is found.
 //
@@ -218,8 +219,8 @@ test "SONNY-2675: every expression variant is walked over groups, per row, for e
         // Per row, with an aggregate inside.
         const with_agg = try sample(a, tag, try aggregate(a, "count"));
         switch (kind) {
-            .composite, .subquery => try testing.expectError(error.AggregateInRowFilter, grouped_having.checkRowFilter(with_agg)),
-            .leaf, .name, .pattern => try grouped_having.checkRowFilter(with_agg),
+            .composite, .subquery => try testing.expectError(error.AggregateInRowFilter, grouped_having.checkRowFilter(testing.allocator, with_agg, fixture.scope())),
+            .leaf, .name, .pattern => try grouped_having.checkRowFilter(testing.allocator, with_agg, fixture.scope()),
         }
 
         // Equality with itself.
@@ -284,5 +285,51 @@ test "SONNY-2675: grouped HAVING slots: a key, a projected column, a reused aggr
     {
         const nested: ast.Expr = .{ .Call = .{ .callee = try box(a, ident("sum")), .args = try list(a, &.{try aggregate(a, "count")}) } };
         try testing.expectError(error.NestedAggregate, grouped_having.planGrouped(testing.allocator, nested, fixture.scope()));
+    }
+}
+
+test "SONNY-2675: inside an aggregate an alias is the item's expression, and an unknown name is refused" {
+    var arena = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const fixture = try Fixture.init(a);
+    var scope = fixture.scope();
+    scope.param_names = &.{"lim"};
+    const one = try box(a, .{ .Int = 1 });
+
+    // `sum(k)`: the alias k is the item's expression n.g, summed per row.
+    {
+        const sum_k: ast.Expr = .{ .Binary = .{ .op = .Gt, .left = try box(a, .{ .Call = .{ .callee = try box(a, ident("sum")), .args = try list(a, &.{try box(a, ident("k"))}) } }), .right = one } };
+        var plan = try grouped_having.planGrouped(testing.allocator, sum_k, scope);
+        defer plan.deinit();
+        try testing.expectEqual(@as(usize, 1), plan.slots.len);
+        const want: ast.Expr = .{ .Call = .{ .callee = try box(a, ident("sum")), .args = try list(a, &.{try box(a, .{ .PropertyAccess = .{ .object = "n", .property = "g" } })}) } };
+        try testing.expect(grouped_having.exprEql(want, plan.slots[0].aggregate));
+    }
+    // `sum(c)`: the alias of an aggregate nests the aggregates.
+    {
+        const sum_c: ast.Expr = .{ .Call = .{ .callee = try box(a, ident("sum")), .args = try list(a, &.{try box(a, ident("c"))}) } };
+        try testing.expectError(error.NestedAggregate, grouped_having.planGrouped(testing.allocator, sum_c, scope));
+    }
+    // A name that is no column, binding or parameter: over groups, inside an
+    // aggregate, and per row.
+    {
+        const unknown = try box(a, ident("zzz"));
+        try testing.expectError(error.UnknownHavingReference, grouped_having.planGrouped(testing.allocator, unknown.*, scope));
+        const sum_unknown: ast.Expr = .{ .Call = .{ .callee = try box(a, ident("sum")), .args = try list(a, &.{unknown}) } };
+        try testing.expectError(error.UnknownHavingReference, grouped_having.planGrouped(testing.allocator, sum_unknown, scope));
+        try testing.expectError(error.UnknownHavingReference, grouped_having.checkRowFilter(testing.allocator, unknown.*, scope));
+        const unknown_property: ast.Expr = .{ .PropertyAccess = .{ .object = "zzz", .property = "i" } };
+        try testing.expectError(error.UnknownHavingReference, grouped_having.checkRowFilter(testing.allocator, unknown_property, scope));
+    }
+    // A query parameter, named with or without its `$`, is not unknown.
+    {
+        const by_name: ast.Expr = .{ .Binary = .{ .op = .Gt, .left = try box(a, ident("c")), .right = try box(a, ident("lim")) } };
+        var plan = try grouped_having.planGrouped(testing.allocator, by_name, scope);
+        plan.deinit();
+        const by_param: ast.Expr = .{ .Binary = .{ .op = .Gt, .left = try box(a, ident("c")), .right = try box(a, .{ .Param = "lim" }) } };
+        var plan2 = try grouped_having.planGrouped(testing.allocator, by_param, scope);
+        plan2.deinit();
+        try grouped_having.checkRowFilter(testing.allocator, by_name, scope);
     }
 }

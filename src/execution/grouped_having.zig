@@ -20,8 +20,19 @@
 //! A projected column's name (an alias, or an unaliased item's name) resolves
 //! to the column. Any other reference to an input column is refused with
 //! `error.UngroupedHavingReference` (SQLSTATE 42803): no single value of it
-//! belongs to the group. A name that is neither a column nor an input binding
-//! is left alone and evaluates to NULL, as GAP-0926 documents.
+//! belongs to the group.
+//!
+//! An aggregate's argument is evaluated for each input row of the group, so
+//! its names are the input row's. A projected column's name there stands for
+//! the item's expression (`RETURN n.i AS amt ... HAVING sum(amt) > 100` sums
+//! `n.i`); it was NULL for every row. An alias of an aggregate there nests
+//! the aggregates (`error.NestedAggregate`).
+//!
+//! A name that is no column, input binding, comprehension variable or query
+//! parameter is refused with `error.UnknownHavingReference` (SQLSTATE 42703),
+//! over groups, inside an aggregate and per row. SONNY-2675: it evaluated to
+//! NULL, so a misspelt alias silently dropped every group. (GAP-0926 had kept
+//! that NULL for HAVING on purpose; outside a HAVING it is unchanged.)
 //!
 //! Pattern and subquery predicates are refused in a grouped HAVING with
 //! `error.UnsupportedGroupedHavingPredicate` (SQLSTATE 0A000): they read their
@@ -31,8 +42,9 @@
 //! input row binds that variable.
 //!
 //! A HAVING that is not over groups (a WHERE after a RETURN that neither groups
-//! nor aggregates, evaluated for each row) may not contain an aggregate:
-//! `error.AggregateInRowFilter` (SQLSTATE 42803).
+//! nor aggregates, evaluated for each row) may not contain an aggregate
+//! (`error.AggregateInRowFilter`, SQLSTATE 42803), and its names are checked
+//! the same way (`checkRowFilter`).
 //!
 //! Every walker here switches over every `ast.Expr` variant with no `else`, so
 //! a new variant does not compile until it is handled; the SONNY-2675 test
@@ -51,8 +63,12 @@ pub const Error = error{
     /// A pattern or subquery predicate, or an aggregate of a list
     /// comprehension's variable, in a grouped HAVING.
     UnsupportedGroupedHavingPredicate,
-    /// An aggregate inside an aggregate's argument (GAP-0926).
+    /// An aggregate inside an aggregate's argument (GAP-0926), also through
+    /// an alias.
     NestedAggregate,
+    /// A name that is no column, input binding, comprehension variable or
+    /// query parameter.
+    UnknownHavingReference,
     OutOfMemory,
 };
 
@@ -69,14 +85,16 @@ pub const Slot = union(enum) {
 /// What a grouped HAVING can see.
 pub const Scope = struct {
     /// The projection items, in column order.
-    items: []const ast.ReturnItem,
+    items: []const ast.ReturnItem = &.{},
     /// The projected column names: an alias, or an unaliased item's name.
     output_columns: []const []const u8,
     /// The input columns: the bindings the projection reads.
     input_columns: []const []const u8,
     /// The GROUP BY keys, each resolved through a projection alias. Empty for
     /// an implicit grouping, whose keys are projected items.
-    keys: []const ast.Expr,
+    keys: []const ast.Expr = &.{},
+    /// The query's parameters, which a name can also stand for.
+    param_names: []const []const u8 = &.{},
 };
 
 /// A grouped HAVING, rewritten to read slots.
@@ -105,9 +123,14 @@ pub fn planGrouped(gpa: std.mem.Allocator, having: ast.Expr, scope: Scope) Error
 }
 
 /// Check a HAVING evaluated for each row (not over groups): it may not
-/// contain an aggregate, which would count or sum one row.
-pub fn checkRowFilter(having: ast.Expr) Error!void {
-    if (containsAggregate(having)) return error.AggregateInRowFilter;
+/// contain an aggregate, which would count or sum one row, and every name in
+/// it must be a column, an input binding, a comprehension variable or a query
+/// parameter. The HAVING itself is evaluated as written.
+pub fn checkRowFilter(gpa: std.mem.Allocator, having: ast.Expr, scope: Scope) Error!void {
+    var arena: std.heap.ArenaAllocator = .init(gpa);
+    defer arena.deinit();
+    var rewriter: Rewriter = .{ .arena = arena.allocator(), .scope = scope, .mode = .row };
+    _ = try rewriter.rewrite(having);
 }
 
 /// Whether `e` is a call of one of the aggregates the grouped projection
@@ -119,11 +142,32 @@ pub fn isAggregateCall(e: ast.Expr) bool {
 const Rewriter = struct {
     arena: std.mem.Allocator,
     scope: Scope,
+    mode: Mode = .grouped,
     slots: std.ArrayList(Slot) = .empty,
     slot_names: std.ArrayList([]const u8) = .empty,
     /// The variables of the list comprehensions around the expression being
     /// rewritten.
     locals: std.ArrayList([]const u8) = .empty,
+
+    const Mode = enum {
+        /// A HAVING over groups: what it reads from a group becomes a slot.
+        grouped,
+        /// An aggregate's argument inside it, evaluated per input row: an
+        /// alias becomes the item's expression.
+        argument,
+        /// A HAVING evaluated per row: names are checked, nothing changes.
+        row,
+    };
+
+    /// What a name stands for.
+    const Name = union(enum) {
+        /// Itself: evaluate it as written.
+        keep,
+        /// A slot, by name (over groups).
+        slot: []const u8,
+        /// An item's expression (inside an aggregate's argument).
+        item: ast.Expr,
+    };
 
     fn rewrite(self: *Rewriter, e: ast.Expr) Error!ast.Expr {
         switch (e) {
@@ -132,14 +176,38 @@ const Rewriter = struct {
             .SmallIntLit, .BigIntLit, .RealLit, .DoubleLit, .CharLit, .VarcharLit, .TextLit, .ByteaLit => return e,
             .JsonLit, .JsonbLit, .XmlLit, .UrlLit, .DomainLit, .UuidLit, .EnumLit, .BitLit, .VarBitLit => return e,
             .Param => return e,
-            .InSubquery, .NotInSubquery, .PatternComp, .Exists, .ShortestPath, .PatternCount => return error.UnsupportedGroupedHavingPredicate,
-            .Ident => |id| return ident(try self.variable(id.orig)),
+            // Over groups, refused (see the module doc). Elsewhere a pattern
+            // reads the row it is evaluated with, as before; a subquery's
+            // tested value is in this scope.
+            .PatternComp, .Exists, .ShortestPath, .PatternCount => {
+                if (self.mode == .grouped) return error.UnsupportedGroupedHavingPredicate;
+                return e;
+            },
+            .InSubquery => |x| {
+                if (self.mode == .grouped) return error.UnsupportedGroupedHavingPredicate;
+                return .{ .InSubquery = .{ .value = try self.child(x.value), .subquery = x.subquery } };
+            },
+            .NotInSubquery => |x| {
+                if (self.mode == .grouped) return error.UnsupportedGroupedHavingPredicate;
+                return .{ .NotInSubquery = .{ .value = try self.child(x.value), .subquery = x.subquery } };
+            },
+            .Ident => |id| return switch (try self.resolve(id.orig)) {
+                .keep => e,
+                .slot => |slot_name| ident(slot_name),
+                .item => |expr| expr,
+            },
             .List, .ArrayLit, .Member, .PropertyAccess, .Index, .Slice, .Call, .Unary, .Binary => {},
             .In, .InListExpr, .IsNull, .IsUnknown, .StartsWith, .EndsWith, .Contains, .NotIn => {},
             .NotInListExpr, .Case, .Map, .HasLabel, .MapProjection, .ListComprehension => {},
         }
-        if (isAggregateCall(e)) return self.aggregate(e);
-        if (try self.matchSlot(e)) |slot| return slot;
+        if (isAggregateCall(e)) return switch (self.mode) {
+            .grouped => self.aggregate(e),
+            .argument => error.NestedAggregate,
+            .row => error.AggregateInRowFilter,
+        };
+        if (self.mode == .grouped) {
+            if (try self.matchSlot(e)) |slot| return slot;
+        }
         return self.rebuild(e);
     }
 
@@ -151,8 +219,25 @@ const Rewriter = struct {
             .JsonLit, .JsonbLit, .XmlLit, .UrlLit, .DomainLit, .UuidLit, .EnumLit, .BitLit, .VarBitLit => unreachable,
             .Param, .Ident => unreachable,
             .InSubquery, .NotInSubquery, .PatternComp, .Exists, .ShortestPath, .PatternCount => unreachable,
-            .PropertyAccess => |pa| .{ .PropertyAccess = .{ .object = try self.variable(pa.object), .property = pa.property } },
-            .HasLabel => |hl| .{ .HasLabel = .{ .node = try self.variable(hl.node), .label = hl.label } },
+            .PropertyAccess => |pa| switch (try self.resolve(pa.object)) {
+                .keep => e,
+                .slot => |slot_name| .{ .PropertyAccess = .{ .object = slot_name, .property = pa.property } },
+                // A property of an alias: of the item's expression.
+                .item => |expr| if (expr == .Ident)
+                    .{ .PropertyAccess = .{ .object = expr.Ident.orig, .property = pa.property } }
+                else
+                    .{ .Member = .{ .target = try self.boxed(expr), .field = pa.property } },
+            },
+            .HasLabel => |hl| switch (try self.resolve(hl.node)) {
+                .keep => e,
+                .slot => |slot_name| .{ .HasLabel = .{ .node = slot_name, .label = hl.label } },
+                // A label test needs a variable: an alias of one is it; an
+                // alias of anything else names no binding.
+                .item => |expr| if (expr == .Ident)
+                    .{ .HasLabel = .{ .node = expr.Ident.orig, .label = hl.label } }
+                else
+                    error.UnknownHavingReference,
+            },
             .List => |xs| .{ .List = try self.children(xs) },
             .ArrayLit => |xs| .{ .ArrayLit = try self.children(xs) },
             .Member => |m| .{ .Member = .{ .target = try self.child(m.target), .field = m.field } },
@@ -194,8 +279,12 @@ const Rewriter = struct {
     }
 
     fn child(self: *Rewriter, e: *const ast.Expr) Error!*ast.Expr {
+        return self.boxed(try self.rewrite(e.*));
+    }
+
+    fn boxed(self: *Rewriter, e: ast.Expr) Error!*ast.Expr {
         const out = try self.arena.create(ast.Expr);
-        out.* = try self.rewrite(e.*);
+        out.* = e;
         return out;
     }
 
@@ -210,16 +299,28 @@ const Rewriter = struct {
     }
 
     /// An aggregate: the column of an item that computes it, else a hidden
-    /// aggregate.
+    /// aggregate. Its argument is evaluated per input row: its names are
+    /// resolved there first (an alias becomes the item's expression).
     fn aggregate(self: *Rewriter, e: ast.Expr) Error!ast.Expr {
         for (e.Call.args) |arg| {
             if (containsAggregate(arg.*)) return error.NestedAggregate;
         }
         if (self.locals.items.len != 0 and mentionsAnyName(e, self.locals.items)) return error.UnsupportedGroupedHavingPredicate;
-        for (self.scope.items, 0..) |item, i| {
-            if (isAggregateCall(item.expr) and exprEql(item.expr, e)) return self.slotIdent(.{ .column = i });
+        const call = e.Call;
+        const args = try self.arena.alloc(*ast.Expr, call.args.len);
+        {
+            self.mode = .argument;
+            defer self.mode = .grouped;
+            for (call.args, args) |arg, *out| {
+                // count(*): the star is no name.
+                out.* = if (arg.* == .Ident and std.mem.eql(u8, arg.Ident.orig, "*")) arg else try self.child(arg);
+            }
         }
-        return self.slotIdent(.{ .aggregate = e });
+        const resolved: ast.Expr = .{ .Call = .{ .callee = call.callee, .args = args, .distinct = call.distinct } };
+        for (self.scope.items, 0..) |item, i| {
+            if (isAggregateCall(item.expr) and exprEql(item.expr, resolved)) return self.slotIdent(.{ .column = i });
+        }
+        return self.slotIdent(.{ .aggregate = resolved });
     }
 
     /// The slot for `e` when it is a projected expression or a grouping key.
@@ -240,16 +341,36 @@ const Rewriter = struct {
         return null;
     }
 
-    /// The name to evaluate for a variable the HAVING names: a comprehension's
-    /// variable or a projected column's name as it is, a projected or grouped
-    /// variable as its slot, any other input column refused, and an unknown
-    /// name as it is (NULL).
-    fn variable(self: *Rewriter, name: []const u8) Error![]const u8 {
-        if (containsName(self.locals.items, name)) return name;
-        if (containsName(self.scope.output_columns, name)) return name;
-        if (try self.matchSlot(ident(name))) |slot| return slot.Ident.orig;
-        if (containsName(self.scope.input_columns, name)) return error.UngroupedHavingReference;
-        return name;
+    /// What a name the HAVING uses stands for. A comprehension's variable is
+    /// itself. Over groups, a projected column's name is itself, a projected
+    /// or grouped variable its slot, and any other input column is refused.
+    /// Inside an aggregate's argument, an input column is itself and a
+    /// projected column's name the item's expression (an aggregate item's
+    /// nests the aggregates). Per row, a column or input column is itself. In
+    /// every mode a query parameter is itself, and any other name is refused.
+    fn resolve(self: *Rewriter, name: []const u8) Error!Name {
+        if (containsName(self.locals.items, name)) return .keep;
+        switch (self.mode) {
+            .grouped => {
+                if (containsName(self.scope.output_columns, name)) return .keep;
+                if (try self.matchSlot(ident(name))) |slot| return .{ .slot = slot.Ident.orig };
+                if (containsName(self.scope.input_columns, name)) return error.UngroupedHavingReference;
+            },
+            .argument => {
+                if (containsName(self.scope.input_columns, name)) return .keep;
+                for (self.scope.items, self.scope.output_columns) |item, column| {
+                    if (!std.mem.eql(u8, column, name)) continue;
+                    if (containsAggregate(item.expr)) return error.NestedAggregate;
+                    return .{ .item = item.expr };
+                }
+            },
+            .row => {
+                if (containsName(self.scope.output_columns, name)) return .keep;
+                if (containsName(self.scope.input_columns, name)) return .keep;
+            },
+        }
+        if (containsName(self.scope.param_names, name)) return .keep;
+        return error.UnknownHavingReference;
     }
 
     fn slotIdent(self: *Rewriter, slot: Slot) Error!ast.Expr {

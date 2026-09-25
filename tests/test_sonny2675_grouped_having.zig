@@ -292,9 +292,10 @@ fn checkMode(mode: Mode) !void {
     try expectSet(&s, &f, .planned, "MATCH (n:G) RETURN n.g AS k GROUP BY k HAVING n.g <> 'a'", &.{ "b", "c" });
     try expectSet(&s, &f, .planned, "MATCH (n:G) RETURN count(*) AS c GROUP BY n HAVING n.i >= 22", &.{ "1", "1", "1" });
 
-    // A name that is neither a column nor a binding stays NULL (GAP-0926).
-    try expectSet(&s, &f, .planned, "MATCH (n:G) RETURN n.g, count(*) AS c GROUP BY n.g HAVING nosuchalias IS NULL", &.{ "a|10", "b|10", "c|5" });
-    try expectSet(&s, &f, .planned, "MATCH (n:G) RETURN n.g, count(*) AS c GROUP BY n.g HAVING nosuchalias > 2", &.{});
+    // A name that is neither a column nor a binding is refused (it was NULL,
+    // GAP-0926's silent-accept, which dropped every group).
+    try expectFail(&s, &f, "MATCH (n:G) RETURN n.g, count(*) AS c GROUP BY n.g HAVING nosuchalias IS NULL", error.UnknownHavingReference);
+    try expectFail(&s, &f, "MATCH (n:G) RETURN n.g, count(*) AS c GROUP BY n.g HAVING nosuchalias > 2", error.UnknownHavingReference);
 
     // Refused: an input column that is neither grouped, projected nor
     // aggregated (42803), also through a WITH and over the one aggregate
@@ -335,5 +336,6 @@ test "SONNY-2675: a refused HAVING reaches the client as SQLSTATE 42803 (0A000 f
     try testing.expectEqualStrings("42803", geode.proto_util.mapError(error.UngroupedHavingReference).code);
     try testing.expectEqualStrings("42803", geode.proto_util.mapError(error.AggregateInRowFilter).code);
     try testing.expectEqualStrings("0A000", geode.proto_util.mapError(error.UnsupportedGroupedHavingPredicate).code);
+    try testing.expectEqualStrings("42703", geode.proto_util.mapError(error.UnknownHavingReference).code);
     try testing.expectEqualStrings("42803", geode.proto_util.mapError(error.NestedAggregate).code);
 }
