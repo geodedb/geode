@@ -687,7 +687,13 @@ fn handleSetQuota(allocator: std.mem.Allocator, call_stmt: ast.CallProcedure) !E
 /// and it is not part of a transaction (ROLLBACK could not undo its re-tags),
 /// so it is refused inside one (`BackfillInTransaction`). A dry run is allowed
 /// in both.
+///
+/// It takes no RETURN or ORDER BY (`BackfillProjection`): the executor would
+/// evaluate them after this returns, against the store, and the handlers hold
+/// no lock for a lone CALL of it (`query_traits.isSelfLockingProgram`). YIELD,
+/// LIMIT and OFFSET are fine.
 fn handleBackfillEdgeTags(allocator: std.mem.Allocator, call_stmt: ast.CallProcedure, context: ExecutionContext) !ExecutionResult {
+    if (call_stmt.return_clause != null or call_stmt.order_by != null) return error.BackfillProjection;
     if (context.tenant_id) |tid| {
         if (tenancy.isConcreteScope(tid)) return error.TenantScopedSession;
     }

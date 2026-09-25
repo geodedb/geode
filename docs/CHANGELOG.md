@@ -143,6 +143,11 @@
     without the session graph's statement lock. Beside any other statement,
     including the `USE GRAPH` the CLI's `-g` flag prepends, it fails with
     `GraphLockHeld` and changes nothing;
+  - it takes no `RETURN` or `ORDER BY` (`BackfillProjection`, 0A000), and
+    changes nothing when it is given one. The server evaluates an
+    `ORDER BY` after the procedure returns, and an expression such as
+    `COUNT { MATCH … }` reads the store. With no statement lock held, that
+    read ran unlocked. `YIELD`, `LIMIT` and `OFFSET` still work;
   - it skips the engine's own graphs (`__geode_security` and any other
     `__geode_…` graph);
   - an edge it cannot re-tag or read is listed with the new action `failed`,

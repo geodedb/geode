@@ -533,11 +533,20 @@ pub fn restOfProgramIsNoop(analysis: *const ProgramAnalysis, session_graph: []co
 /// exactly one statement, so nothing else in the request runs unlocked. In
 /// any other program the handler takes its usual lock, and the procedure,
 /// finding a lock held, refuses to run (`error.GraphLockHeld`).
+///
+/// The CALL must have no RETURN and no ORDER BY. The executor evaluates an
+/// ORDER BY after the procedure returns, and its expressions reach the live
+/// store (`ORDER BY COUNT { MATCH (n) }`, EXISTS, a pattern
+/// comprehension), which would run with no lock at all. Such a CALL takes the
+/// handler's lock like any other, and the procedure refuses a RETURN or ORDER
+/// BY itself (`error.BackfillProjection`). YIELD only picks columns by name,
+/// and LIMIT and OFFSET are numbers.
 pub fn isSelfLockingProgram(program: *const ast.Program) bool {
     if (program.statements.len != 1) return false;
     return switch (program.statements[0]) {
         .Call => |call_stmt| switch (call_stmt) {
-            .Procedure => |proc| procedure_access.isSelfLockingProcedure(proc),
+            .Procedure => |proc| proc.return_clause == null and proc.order_by == null and
+                procedure_access.isSelfLockingProcedure(proc),
             .Subquery => false,
         },
         else => false,
