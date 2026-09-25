@@ -3219,18 +3219,26 @@ fn rowEnv(allocator: std.mem.Allocator, columns: []const []const u8, row: []cons
 // CANARY: REQ=REQ-SONNY-2675-AGGREGATE-ERRORS; FEATURE="GroupedAggregates"; ASPECT=QueryLevelErrorsEscape; STATUS=TESTED; TEST=tests/test_sonny2675_aggregate_semantics.zig; OWNER=execution; UPDATED=2026-09-25
 /// Whether an evaluation error inside a grouped projection belongs to the query
 /// rather than to one row: a defect in the query text (an unknown function, a
-/// positional parameter that was not supplied), a refusal (strict tenancy, the
-/// read budget, a cancel), or running out of memory. These fail the query. Any
+/// positional parameter that was not supplied), a refusal (strict tenancy, an
+/// encrypted field searched without permission, the read or write budget, a
+/// cancel), or running out of memory. These fail the query. Any
 /// other error is the row's value that cannot be computed, which the grouped
 /// path tolerates: the aggregate skips the row, a projected cell is the
 /// caller's fallback.
-fn isQueryLevelEvalError(err: anyerror) bool {
+pub fn isQueryLevelEvalError(err: anyerror) bool {
     return switch (err) {
         error.UnknownFunction,
         error.MissingParameter,
         error.TenantScopeRequired,
         error.ReadQueryBudgetExceeded,
         error.ReadQueryCancelled,
+        // Round 3 (M1): an encrypted (FLE) field searched without permission
+        // (42501) was a skipped row, so the aggregate ran over the rest; a
+        // write statement's budget abort and cancel were swallowed the same
+        // way.
+        error.SearchNotPermitted,
+        error.WriteQueryBudgetExceeded,
+        error.WriteQueryCancelled,
         error.OutOfMemory,
         => true,
         else => false,

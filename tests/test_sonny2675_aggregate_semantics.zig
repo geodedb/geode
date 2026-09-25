@@ -634,3 +634,24 @@ fn checkDistinct(s: *Session, f: *Failures) !void {
 test "SONNY-2735: RETURN and WITH DISTINCT keep every typed value apart" {
     try inEveryMode("distinct", checkDistinct);
 }
+
+test "SONNY-2675: a refusal inside a grouped expression fails the query" {
+    // Round 3 (M1): an FLE refusal (42501) and a write statement's budget
+    // abort (53200) or cancel (57014) were a skipped row, so the aggregate ran
+    // over the other rows.
+    const q = execution.isQueryLevelEvalError;
+    for ([_]anyerror{
+        error.SearchNotPermitted,      error.WriteQueryBudgetExceeded, error.WriteQueryCancelled,
+        error.ReadQueryBudgetExceeded, error.ReadQueryCancelled,       error.TenantScopeRequired,
+        error.MissingParameter,        error.UnknownFunction,          error.OutOfMemory,
+    }) |err| {
+        if (!q(err)) {
+            std.debug.print("{s} is a query-level error\n", .{@errorName(err)});
+            return error.RefusalSkipped;
+        }
+    }
+    // A value that cannot be computed stays the row's: the aggregate skips it.
+    for ([_]anyerror{ error.TypeMismatch, error.DivisionByZero, error.DecimalOverflow, error.IntegerOverflow }) |err| {
+        try testing.expect(!q(err));
+    }
+}
