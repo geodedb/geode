@@ -164,15 +164,15 @@ var execution_callbacks: ?evaluator_adapter.ExecutionCallbacks = null;
 /// Called by execution.zig during initialization to provide callback functions
 pub fn setExecutionCallbacks(callbacks: evaluator_adapter.ExecutionCallbacks) void {
     execution_callbacks = callbacks;
-    // SONNY-2691: the execution layer's row visibility arrives with the other
-    // execution callbacks (see `RowScope`).
+    // SONNY-2691 / SONNY-2692: the execution layer's row visibility arrives
+    // with the other execution callbacks (see `RowScope`).
     begin_row_scope = beginHopRowScope;
 }
 
 // CANARY: REQ=REQ-SONNY-2691-DEGREE-VISIBILITY; FEATURE="NodeDegreeFunctions"; ASPECT=RowScopeInterface; STATUS=TESTED; TEST=tests/test_sonny2691_degree_visibility.zig; OWNER=security; UPDATED=2026-09-25
-/// SONNY-2691: the session's row visibility, for rows the evaluator reads
-/// from the store itself (the indegree() / outdegree() neighbours), where no
-/// MATCH applied it.
+/// SONNY-2691 / SONNY-2692: the session's row visibility, for rows the
+/// evaluator reads from the store itself (indegree() / outdegree()
+/// neighbours, knn() candidates), where no MATCH applied it.
 ///
 /// It is the SONNY-2679 traversal scope (`match_operations.HopScope`: the
 /// graph, then `passesRowVisibilityFilters`' tenant and RLS halves) behind an
@@ -188,11 +188,18 @@ const RowScope = struct {
     vtable: *const VTable,
 
     const VTable = struct {
+        rlsMayDeny: *const fn (ptr: *anyopaque) bool,
         restrictsNodes: *const fn (ptr: *anyopaque) bool,
         nodeVisible: *const fn (ptr: *anyopaque, node: *const graph_store.Node) bool,
         stepAllowed: *const fn (ptr: *anyopaque, store: *graph_store.GraphStore, edge: *const graph_store.Edge, next_node_id: u64) bool,
         deinit: *const fn (ptr: *anyopaque) void,
     };
+
+    /// `HopScope.rls_may_deny` (`rlsMayDenyForSession`): may an RLS policy
+    /// deny the session a row?
+    fn rlsMayDeny(self: RowScope) bool {
+        return self.vtable.rlsMayDeny(self.ptr);
+    }
 
     /// `HopScope.restrictsNodes`: may the scope hide a node in the graph (a
     /// tenant scope, or an RLS policy that may deny the session a row)?
@@ -241,6 +248,9 @@ fn beginHopRowScope(allocator: std.mem.Allocator, graph: []const u8, tenant: ?[]
         fn from(ptr: *anyopaque) *@This() {
             return @ptrCast(@alignCast(ptr));
         }
+        fn rlsMayDeny(ptr: *anyopaque) bool {
+            return from(ptr).hop.rls_may_deny;
+        }
         fn restrictsNodes(ptr: *anyopaque) bool {
             return from(ptr).hop.restrictsNodes();
         }
@@ -256,6 +266,7 @@ fn beginHopRowScope(allocator: std.mem.Allocator, graph: []const u8, tenant: ?[]
             self.allocator.destroy(self);
         }
         const vtable = RowScope.VTable{
+            .rlsMayDeny = rlsMayDeny,
             .restrictsNodes = restrictsNodes,
             .nodeVisible = nodeVisible,
             .stepAllowed = stepAllowed,
@@ -2504,6 +2515,10 @@ fn scanVectorKnnBatched(
     scope: KnnScanScope,
     candidates: *std.ArrayList(VectorCandidate),
     property_seen: *bool,
+    /// SONNY-2692 (edge scan only): when set, every in-scope edge that carries
+    /// the property is recorded here instead of being ranked, for the endpoint
+    /// check `scanVectorKnn` runs after the scan.
+    edge_carriers: ?*std.ArrayList(KnnEdgeCarrier),
 ) EvalError!void {
     for (ids) |id| {
         // geode#875 (i): the ONLY cancellation point in a brute-force knn scan.
@@ -2541,7 +2556,34 @@ fn scanVectorKnnBatched(
         // same shard guard as the property lookup and the scoring: the
         // ENG-3954/#874 discipline is preserved exactly.
         if (!scope.admits(entry.graph_name, entry.tenant_id)) continue;
+        // SONNY-2692: nor may a node the session's RLS policies hide. It is
+        // dropped before ranking, so it can never take one of the k slots, and
+        // before it can make the property "known" (`property_seen`), so the
+        // UnknownProperty diagnostic is no oracle either. Evaluated inside the
+        // shard guard like every other read of the entry: the policy reads the
+        // node's labels and properties, which a concurrent writer may free
+        // otherwise (ENG-3954). The only locks a policy takes are the RLS label
+        // engine's policy mutex and the metrics', and neither is ever held
+        // while a graph lock is taken, so holding the guard cannot deadlock.
+        if (comptime Cache == graph_store.NodeCache) {
+            if (!scope.nodeVisible(entry)) continue;
+        }
         const prop = entry.properties.get(property_name) orelse continue;
+        if (comptime Cache == graph_store.EdgeCache) {
+            if (edge_carriers) |carriers| {
+                // SONNY-2692: whether the session may see this edge depends on
+                // its endpoints, and resolving a node inside this edge shard's
+                // guard would nest a second shard lock, so it is decided after
+                // the scan (`scanVectorKnn`).
+                try carriers.append(allocator, .{
+                    .id = entry.id,
+                    .from_id = entry.from_id,
+                    .to_id = entry.to_id,
+                    .score = try knnScore(allocator, prop, query_vec, metric),
+                });
+                continue;
+            }
+        }
         // geode#877 (c): the property EXISTS on an in-scope row. Recorded even
         // when it does not coerce to a vector, so "property known, zero
         // scoreable neighbours" stays a clean empty list while a MISSPELLED
@@ -2563,13 +2605,75 @@ fn scanVectorKnnBatched(
 const KnnScanScope = struct {
     graph: []const u8,
     tenant: ?[]const u8,
+    /// SONNY-2692: the session's row visibility (`RowScope`), or null when the
+    /// execution layer has installed none (`currentKnnRowScope`).
+    row: ?RowScope = null,
+    /// SONNY-2692: may an RLS policy hide a row from this session? Decided once
+    /// per knn() call; while false the scope is the graph and the tenant only,
+    /// exactly as before.
+    rls_may_deny: bool = false,
 
     fn admits(self: KnnScanScope, entry_graph: []const u8, entry_tenant: []const u8) bool {
         if (!std.mem.eql(u8, entry_graph, self.graph)) return false;
         const tid = self.tenant orelse return true;
         return std.mem.eql(u8, entry_tenant, tid);
     }
+
+    // CANARY: REQ=REQ-SONNY-2692-KNN-ROW-VISIBILITY; FEATURE="VectorKnn"; ASPECT=CandidateRowVisibility; STATUS=TESTED; TEST=tests/test_sonny2692_knn_rls.zig; OWNER=security; UPDATED=2026-09-25
+    /// SONNY-2692: may the session see `node`, a row `admits` let in? The
+    /// row-visibility filter the MATCH read paths apply (`HopScope.nodeVisible`:
+    /// `passesRowVisibilityFilters`' tenant and RLS halves). knn() applied the
+    /// graph and the tenant only, so it ranked the rows a policy hides against
+    /// the caller's vector and returned their ids.
+    fn nodeVisible(self: KnnScanScope, node: *const graph_store.Node) bool {
+        if (!self.rls_may_deny) return true;
+        const row = self.row orelse return true;
+        return row.nodeVisible(node);
+    }
+
+    fn deinit(self: KnnScanScope) void {
+        if (self.row) |row| row.deinit();
+    }
 };
+
+/// SONNY-2692: the knn() scope with the session's row visibility; the caller
+/// deinits it.
+fn currentKnnRowScope(allocator: std.mem.Allocator) EvalError!KnnScanScope {
+    var scope = try currentKnnScanScope();
+    scope.row = try beginRowScope(allocator, scope.graph, scope.tenant);
+    if (scope.row) |row| scope.rls_may_deny = row.rlsMayDeny();
+    return scope;
+}
+
+/// SONNY-2692: may the session see the node `id` (a vector index's answer, or
+/// an edge's endpoint)? The scan's own test, under the scan's shard
+/// discipline: hydrate outside the guard, read the entry inside it.
+fn knnNodeIdVisible(store: *graph_store.GraphStore, scope: KnnScanScope, id: u64) bool {
+    _ = store.nodes.getOrHydratePtr(id) catch null;
+    store.nodes.lockShardShared(id);
+    defer store.nodes.unlockShardShared(id);
+    const node = store.nodes.getPtrUnlocked(id) orelse return false;
+    return scope.admits(node.graph_name, node.tenant_id) and scope.nodeVisible(node);
+}
+
+/// SONNY-2692: an edge that carries the knn() property, recorded by the edge
+/// scan of a session an RLS policy may restrict, for the endpoint check that
+/// follows the scan.
+const KnnEdgeCarrier = struct {
+    id: u64,
+    from_id: u64,
+    to_id: u64,
+    /// Null when the property's value is not a vector the query can score.
+    score: ?f64,
+};
+
+/// The distance from the query to a stored property value, or null when the
+/// value is not a vector of the query's dimension.
+fn knnScore(allocator: std.mem.Allocator, prop: graph_store.PropertyValue, query_vec: vector_types.VectorF32, metric: VectorMetric) EvalError!?f64 {
+    const candidate_vec = (try propertyVectorCandidate(allocator, prop)) orelse return null;
+    defer if (candidate_vec.owned) |data| allocator.free(data);
+    return metricDistance(metric, query_vec, candidate_vec.vector) catch null;
+}
 
 /// Resolve the scope the way the MATCH read paths do: the session's current
 /// graph (defaulting to "default"), and the strict-tenancy-aware tenant filter.
@@ -2684,7 +2788,8 @@ fn scanVectorKnn(
 ) EvalError!KnnScanResult {
     _ = knn_scan_invocations.fetchAdd(1, .seq_cst);
 
-    const scope = try currentKnnScanScope();
+    const scope = try currentKnnRowScope(allocator);
+    defer scope.deinit();
     const store = graph_store.getGlobalStore(allocator);
     var candidates = std.ArrayList(VectorCandidate).empty;
     defer candidates.deinit(allocator);
@@ -2710,6 +2815,7 @@ fn scanVectorKnn(
         scope,
         &candidates,
         &property_seen,
+        null,
     );
 
     // PHASE 1 note (edge-engine-direct): this brute-force vector scan over edge
@@ -2719,6 +2825,14 @@ fn scanVectorKnn(
     // best-effort operation; making it scan the full edge set via the engine is
     // a future enhancement tracked alongside the node-side scan, not a Phase-1
     // regression (the node side already had this behavior).
+    //
+    // SONNY-2692: under an RLS policy that may hide a row, the session sees an
+    // edge's vector only where a traversal could return the edge: between two
+    // nodes it may see (SONNY-2679). The edge scan records every edge in scope
+    // that carries the property; its endpoints are checked here, one node
+    // shard at a time, before the edge is ranked or makes the property known.
+    var edge_carriers = std.ArrayList(KnnEdgeCarrier).empty;
+    defer edge_carriers.deinit(allocator);
     const edge_ids = store.edges.snapshotKeys(allocator) catch return error.OutOfMemory;
     defer allocator.free(edge_ids);
     try scanVectorKnnBatched(
@@ -2733,7 +2847,15 @@ fn scanVectorKnn(
         scope,
         &candidates,
         &property_seen,
+        if (scope.rls_may_deny) &edge_carriers else null,
     );
+    for (edge_carriers.items) |carrier| {
+        if (!knnNodeIdVisible(store, scope, carrier.from_id)) continue;
+        if (!knnNodeIdVisible(store, scope, carrier.to_id)) continue;
+        property_seen = true;
+        const score = carrier.score orelse continue;
+        try candidates.append(allocator, .{ .id = carrier.id, .score = score });
+    }
 
     std.sort.pdq(VectorCandidate, candidates.items, {}, compareVectorCandidates);
     return .{
@@ -2907,33 +3029,7 @@ fn evalVectorKnn(allocator: std.mem.Allocator, args: []*ast.Expr, env: Env) Eval
             defer allocator.free(index_name);
             index_consulted = true;
             if (advancedVectorIndexIsAuthoritative(allocator, manager, index_name, property_name)) {
-                const no_results: []advanced_types_index.VectorSearchResult = &.{};
-                const results = manager.queryAdvancedVectorIndexWithMetric(index_name, query_vec.vector, @intCast(k), metric) catch |err| switch (err) {
-                    error.OutOfMemory => return error.OutOfMemory,
-                    // An index the manager no longer holds is treated exactly
-                    // like an EMPTY one: fall through to the scan below.
-                    error.IndexNotFound => no_results,
-                    error.DimensionMismatch, error.InvalidDimension, error.InvalidConfig => return error.InvalidArgs,
-                    // Spec geode-vectorization-and-reranking: the query metric does
-                    // not match the metric the HNSW index was built with. Let this
-                    // propagate distinctly instead of folding it into InvalidArgs —
-                    // it gets its own GQLSTATE (42704) in proto_util.mapError.
-                    error.VectorMetricMismatch => return error.VectorMetricMismatch,
-                };
-                defer manager.allocator.free(results);
-
-                if (results.len != 0) {
-                    var candidates = std.ArrayList(VectorCandidate).empty;
-                    defer candidates.deinit(allocator);
-                    for (results) |result| {
-                        try candidates.append(allocator, .{
-                            .id = result.node_id,
-                            .score = result.distance,
-                        });
-                    }
-                    std.sort.pdq(VectorCandidate, candidates.items, {}, compareVectorCandidates);
-                    return vectorCandidatesToList(allocator, candidates.items, k);
-                }
+                if (try knnFromVectorIndex(allocator, manager, index_name, query_vec.vector, k, metric)) |ranked| return ranked;
             }
         }
     }
@@ -2948,6 +3044,64 @@ fn evalVectorKnn(allocator: std.mem.Allocator, args: []*ast.Expr, env: Env) Eval
     // neighbours" stays a clean empty list.
     if (!index_consulted and !scanned.property_seen) return error.UnknownProperty;
     return scanned.value;
+}
+
+// CANARY: REQ=REQ-SONNY-2692-KNN-ROW-VISIBILITY; FEATURE="VectorKnn"; ASPECT=IndexPathVisibility; STATUS=TESTED; TEST=tests/test_sonny2692_knn_rls.zig; OWNER=security; UPDATED=2026-09-25
+/// knn()'s answer from the authoritative vector index `index_name`, or null
+/// when the index holds nothing (the scan answers then, geode#877 (b)).
+///
+/// SONNY-2692: the index ranks every row it holds, the rows the session may
+/// not see included. Each row it returns passes the scan's row-visibility test
+/// BEFORE the ranking is cut to k, so a hidden row can never take one of the k
+/// slots: while fewer than k visible rows came back and the index returned all
+/// it was asked for, it is asked again for twice as many. When no policy can
+/// deny the session a row, this is the single query it always was.
+fn knnFromVectorIndex(
+    allocator: std.mem.Allocator,
+    manager: *index_manager.IndexManager,
+    index_name: []const u8,
+    query_vec: vector_types.VectorF32,
+    k: usize,
+    metric: VectorMetric,
+) EvalError!?Value {
+    const scope = try currentKnnRowScope(allocator);
+    defer scope.deinit();
+    const store = graph_store.getGlobalStore(allocator);
+
+    var candidates = std.ArrayList(VectorCandidate).empty;
+    defer candidates.deinit(allocator);
+    // The index takes a u32 k; `@intCast` of a larger one was a safety panic.
+    // maxInt(u32) rows already asks for every row an index can hold.
+    const max_fetch = std.math.maxInt(u32);
+    var fetch: u32 = std.math.cast(u32, k) orelse max_fetch;
+    while (true) {
+        const no_results: []advanced_types_index.VectorSearchResult = &.{};
+        const results = manager.queryAdvancedVectorIndexWithMetric(index_name, query_vec, fetch, metric) catch |err| switch (err) {
+            error.OutOfMemory => return error.OutOfMemory,
+            // An index the manager no longer holds is treated exactly
+            // like an EMPTY one: fall through to the scan.
+            error.IndexNotFound => no_results,
+            error.DimensionMismatch, error.InvalidDimension, error.InvalidConfig => return error.InvalidArgs,
+            // Spec geode-vectorization-and-reranking: the query metric does
+            // not match the metric the HNSW index was built with. Let this
+            // propagate distinctly instead of folding it into InvalidArgs —
+            // it gets its own GQLSTATE (42704) in proto_util.mapError.
+            error.VectorMetricMismatch => return error.VectorMetricMismatch,
+        };
+        defer manager.allocator.free(results);
+        if (results.len == 0) return null;
+
+        candidates.clearRetainingCapacity();
+        for (results) |result| {
+            if (scope.rls_may_deny and !knnNodeIdVisible(store, scope, result.node_id)) continue;
+            try candidates.append(allocator, .{ .id = result.node_id, .score = result.distance });
+        }
+        // Enough visible rows, or nothing more to ask the index for.
+        if (candidates.items.len >= k or results.len < fetch or fetch == max_fetch) break;
+        fetch = std.math.mul(u32, fetch, 2) catch max_fetch;
+    }
+    std.sort.pdq(VectorCandidate, candidates.items, {}, compareVectorCandidates);
+    return try vectorCandidatesToList(allocator, candidates.items, k);
 }
 
 // CANARY: REQ=REQ-GEODE-877-KNN-INDEX-SHADOW; FEATURE="VectorKnn"; ASPECT=UnrelatedIndexMustNotShadowScan; STATUS=TESTED; TEST=tests/test_vector_knn_silent_failures.zig; OWNER=eval; UPDATED=2026-08-29

@@ -8548,6 +8548,20 @@ pub fn build(b: *std.Build) void {
     const sonny2691_step = b.step("test-sonny2691-degree-visibility", "Run SONNY-2691 regression (indegree()/outdegree() of a negative or unknown id is 0 instead of a panic; a hidden, foreign-tenant or other-graph node behaves as absent; a degree counts only visible neighbours)");
     sonny2691_step.dependOn(&run_sonny2691_tests.step);
 
+    // SONNY-2692: knn()/vector_knn() scoped candidates by graph and tenant
+    // only, so they returned the ids of RLS-hidden rows ranked against the
+    // caller's vector, on the scan path and the vector-index path.
+    const sonny2692_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny2692_knn_rls.zig"), .target = target, .optimize = optimize });
+    sonny2692_test_mod.addImport("geode", root_mod);
+    sonny2692_test_mod.addImport("logging", logging_mod);
+    sonny2692_test_mod.addImport("rls", rls_mod);
+    sonny2692_test_mod.addImport("rls_types", rls_types_mod);
+    const sonny2692_tests = b.addTest(.{ .root_module = sonny2692_test_mod });
+    const run_sonny2692_tests = b.addRunArtifact(sonny2692_tests);
+    shardDep(test_step, &run_sonny2692_tests.step, 1, test_shard_loads, test_shard_index);
+    const sonny2692_step = b.step("test-sonny2692-knn-rls", "Run SONNY-2692 regression (knn()/vector_knn() filter every candidate through the row-visibility filter before ranking and truncating to k, on the scan path and the vector-index path, under label and expression policies)");
+    sonny2692_step.dependOn(&run_sonny2692_tests.step);
+
     // SONNY-2656: the node-scan fast path leaked the clone of every typed
     // extended value (Text, Json, Bytea, Char, Varchar, Url, ...) it projected
     // (page teardown freed only strings, lists and maps) or filtered on (IS
