@@ -8501,6 +8501,26 @@ pub fn build(b: *std.Build) void {
     const sonny2674_step = b.step("test-sonny2674-legacy-return", "Run SONNY-2674 regression (the legacy executor's RETURN groups, applies HAVING and a WHERE after RETURN like the planned read: in-memory, RLS-policy and tenant-scoped sessions)");
     sonny2674_step.dependOn(&run_sonny2674_tests.step);
 
+    // SONNY-2675: an aggregate named in a grouped HAVING is computed for each
+    // group; an ungrouped input column there is refused (42803).
+    const sonny2675_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny2675_grouped_having.zig"), .target = target, .optimize = optimize });
+    sonny2675_test_mod.addImport("geode", root_mod);
+    sonny2675_test_mod.addImport("logging", logging_mod);
+    sonny2675_test_mod.addImport("rls_types", rls_types_mod);
+    const sonny2675_tests = b.addTest(.{ .root_module = sonny2675_test_mod });
+    const run_sonny2675_tests = b.addRunArtifact(sonny2675_tests);
+    shardDep(test_step, &run_sonny2675_tests.step, 1, test_shard_loads, test_shard_index);
+    const sonny2675_step = b.step("test-sonny2675-grouped-having", "Run SONNY-2675 regression (a grouped HAVING computes the aggregates it names per group and refuses an ungrouped input column: in-memory, RLS-policy and tenant-scoped sessions, and the planned read)");
+    sonny2675_step.dependOn(&run_sonny2675_tests.step);
+
+    const sonny2675_walker_mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny2675_having_walker.zig"), .target = target, .optimize = optimize });
+    sonny2675_walker_mod.addImport("geode", root_mod);
+    const sonny2675_walker_tests = b.addTest(.{ .root_module = sonny2675_walker_mod });
+    const run_sonny2675_walker_tests = b.addRunArtifact(sonny2675_walker_tests);
+    shardDep(test_step, &run_sonny2675_walker_tests.step, 1, test_shard_loads, test_shard_index);
+    const sonny2675_walker_step = b.step("test-sonny2675-having-walker", "Run SONNY-2675 walker test (every expression variant is checked, rewritten and compared by the grouped HAVING walkers)");
+    sonny2675_walker_step.dependOn(&run_sonny2675_walker_tests.step);
+
     // SONNY-2656: the node-scan fast path leaked the clone of every typed
     // extended value (Text, Json, Bytea, Char, Varchar, Url, ...) it projected
     // (page teardown freed only strings, lists and maps) or filtered on (IS
