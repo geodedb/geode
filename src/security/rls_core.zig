@@ -216,6 +216,8 @@ pub const RLSEngine = struct {
             gt = 0x23, // >
             lte = 0x24, // <=
             gte = 0x25, // >=
+            // SONNY-2709: pop 1, push whether it is null (never UNKNOWN).
+            is_null = 0x26, // IS NULL
             // Logical (pop 1-2, push bool)
             op_and = 0x30, // AND
             op_or = 0x31, // OR
@@ -249,6 +251,7 @@ pub const RLSEngine = struct {
                     0x23 => .gt,
                     0x24 => .lte,
                     0x25 => .gte,
+                    0x26 => .is_null,
                     0x30 => .op_and,
                     0x31 => .op_or,
                     0x32 => .op_not,
@@ -627,14 +630,21 @@ pub const RLSEngine = struct {
         // operand and the VM underflowed (every row denied). Postfix emit is
         // the fix.
         //
-        // Grammar (OR loosest, then AND, then comparison; NOT is prefix):
+        // Grammar (OR loosest, then AND, then NOT, then comparison, as in
+        // SQL; SONNY-2709 moved NOT below the comparisons, so
+        // `NOT row.x = 'a'` is `NOT (row.x = 'a')`):
         //   or_     := and_ ( "OR"  and_ )*
-        //   and_    := cmp  ( "AND" cmp  )*
-        //   cmp     := unary ( ("=" | "<>" | "!=" | "<=" | ">=" | "<" | ">") unary )?
-        //   unary   := "NOT" unary | primary
+        //   and_    := not_ ( "AND" not_ )*
+        //   not_    := "NOT" not_ | cmp
+        //   cmp     := primary ( ("=" | "<>" | "!=" | "<=" | ">=" | "<" | ">") primary
+        //                      | "IS" ["NOT"] "NULL" )?
         //   primary := "(" or_ ")" | "TRUE" | "FALSE" | "NULL"
         //            | "row." ident | "principal.attribute." ident
-        //            | "current_user" | "'" string "'" | integer
+        //            | "current_user" | "'" string "'" | integer | decimal
+        //
+        // The whole input must parse: anything left over (SONNY-2709: a
+        // prefix used to be compiled and the rest dropped) makes the policy
+        // deny every row, like any other malformed expression.
         const C = struct {
             self: *Self,
             src: []const u8,
@@ -692,32 +702,41 @@ pub const RLSEngine = struct {
                 }
             }
             fn parseAnd(c: *@This()) anyerror!void {
-                try c.parseCmp();
+                try c.parseNot();
                 while (true) {
                     c.skipWs();
                     if (!c.matchKw("and")) break;
-                    try c.parseCmp();
+                    try c.parseNot();
                     try c.emit(.op_and);
                 }
             }
-            fn parseCmp(c: *@This()) anyerror!void {
-                try c.parseUnary();
-                c.skipWs();
-                const op: ?Opcode =
-                    if (c.matchLit("<>")) Opcode.neq else if (c.matchLit("!=")) Opcode.neq else if (c.matchLit("<=")) Opcode.lte else if (c.matchLit(">=")) Opcode.gte else if (c.matchLit("=")) Opcode.eq else if (c.matchLit("<")) Opcode.lt else if (c.matchLit(">")) Opcode.gt else null;
-                if (op) |o| {
-                    try c.parseUnary();
-                    try c.emit(o);
-                }
-            }
-            fn parseUnary(c: *@This()) anyerror!void {
+            fn parseNot(c: *@This()) anyerror!void {
                 c.skipWs();
                 if (c.matchKw("not")) {
-                    try c.parseUnary();
+                    try c.parseNot();
                     try c.emit(.op_not);
                     return;
                 }
+                try c.parseCmp();
+            }
+            fn parseCmp(c: *@This()) anyerror!void {
                 try c.parsePrimary();
+                c.skipWs();
+                if (c.matchKw("is")) {
+                    c.skipWs();
+                    const negate = c.matchKw("not");
+                    c.skipWs();
+                    if (!c.matchKw("null")) return error.InvalidRlsExpression;
+                    try c.emit(.is_null);
+                    if (negate) try c.emit(.op_not);
+                    return;
+                }
+                const op: ?Opcode =
+                    if (c.matchLit("<>")) Opcode.neq else if (c.matchLit("!=")) Opcode.neq else if (c.matchLit("<=")) Opcode.lte else if (c.matchLit(">=")) Opcode.gte else if (c.matchLit("=")) Opcode.eq else if (c.matchLit("<")) Opcode.lt else if (c.matchLit(">")) Opcode.gt else null;
+                if (op) |o| {
+                    try c.parsePrimary();
+                    try c.emit(o);
+                }
             }
             fn parsePrimary(c: *@This()) anyerror!void {
                 c.skipWs();
@@ -774,6 +793,16 @@ pub const RLSEngine = struct {
                     const start = c.pos;
                     if (c.src[c.pos] == '-') c.pos += 1;
                     while (c.pos < c.src.len and std.ascii.isDigit(c.src[c.pos])) : (c.pos += 1) {}
+                    // SONNY-2709: a decimal literal (`2.5`). It used to stop
+                    // at the '.', leaving `.5` unparsed.
+                    if (c.pos + 1 < c.src.len and c.src[c.pos] == '.' and std.ascii.isDigit(c.src[c.pos + 1])) {
+                        c.pos += 1;
+                        while (c.pos < c.src.len and std.ascii.isDigit(c.src[c.pos])) : (c.pos += 1) {}
+                        const f = std.fmt.parseFloat(f64, c.src[start..c.pos]) catch return error.InvalidRlsExpression;
+                        if (!std.math.isFinite(f)) return error.InvalidRlsExpression;
+                        try c.pushConst(.{ .float = f });
+                        return;
+                    }
                     const num = std.fmt.parseInt(i64, c.src[start..c.pos], 10) catch {
                         log.warn("Invalid integer literal in RLS expression", &.{
                             Attr.string("literal", c.src[start..c.pos]),
@@ -788,12 +817,22 @@ pub const RLSEngine = struct {
         };
 
         var comp = C{ .self = self, .src = expr, .bc = &bytecode, .ks = &constants };
-        comp.parseOr() catch {
-            // Malformed / empty expression: fail closed — emit a lone
-            // push_false so the VM denies every row rather than crashing.
+        const parsed_whole = blk: {
+            comp.parseOr() catch break :blk false;
+            comp.skipWs();
+            break :blk comp.pos == comp.src.len;
+        };
+        if (!parsed_whole) {
+            // Malformed / empty expression, or input left over after a valid
+            // prefix (SONNY-2709: `row.x IS NULL OR …` used to compile as
+            // `row.x`): fail closed — emit a lone push_false so the VM denies
+            // every row rather than enforcing part of the policy.
+            log.warn("RLS expression not understood; the policy denies every row", &.{
+                Attr.string("expression", expr),
+            });
             bytecode.clearRetainingCapacity();
             try bytecode.append(self.allocator, @intFromEnum(Opcode.push_false));
-        };
+        }
 
         // Add return instruction
         try bytecode.append(self.allocator, @intFromEnum(Opcode.ret));
@@ -985,21 +1024,22 @@ pub const RLSEngine = struct {
                     from_attr[sp] = true;
                     sp += 1;
                 },
-                .eq => {
+                .eq, .neq => {
                     if (sp < 2) return error.StackUnderflow;
-                    const b = stack[sp - 1];
-                    const a = stack[sp - 2];
+                    const b = Operand{ .value = stack[sp - 1], .from_attr = from_attr[sp - 1] };
+                    const a = Operand{ .value = stack[sp - 2], .from_attr = from_attr[sp - 2] };
                     sp -= 2;
-                    stack[sp] = .{ .boolean = self.valuesEqual(a, b) };
+                    stack[sp] = self.evalEquality(opcode, a, b);
+                    from_attr[sp] = false;
                     sp += 1;
                 },
-                .neq => {
-                    if (sp < 2) return error.StackUnderflow;
-                    const b = stack[sp - 1];
-                    const a = stack[sp - 2];
-                    sp -= 2;
-                    stack[sp] = .{ .boolean = !self.valuesEqual(a, b) };
-                    sp += 1;
+                .is_null => {
+                    if (sp < 1) return error.StackUnderflow;
+                    // Read before writing: the literal's tag would be stored
+                    // into the slot before the test below reads it.
+                    const is_null = stack[sp - 1] == .null;
+                    stack[sp - 1] = .{ .boolean = is_null };
+                    from_attr[sp - 1] = false;
                 },
                 .lt, .gt, .lte, .gte => {
                     if (sp < 2) return error.StackUnderflow;
@@ -1047,6 +1087,10 @@ pub const RLSEngine = struct {
                     pc += 1;
                     if (sp == 0) return error.StackUnderflow;
                     sp -= 1;
+                    // SONNY-2709: a branch cannot take UNKNOWN as false (the
+                    // skipped arm may be the one that denies); the policy is
+                    // undecided, and an undecided policy denies.
+                    if (stack[sp] == .null) return error.IndeterminatePolicy;
                     if (!self.valueToBool(stack[sp])) {
                         if (idx < expr.jump_table.len) {
                             pc = expr.jump_table[idx];
@@ -1059,6 +1103,8 @@ pub const RLSEngine = struct {
                     pc += 1;
                     if (sp == 0) return error.StackUnderflow;
                     sp -= 1;
+                    // SONNY-2709: see jump_if_false.
+                    if (stack[sp] == .null) return error.IndeterminatePolicy;
                     if (self.valueToBool(stack[sp])) {
                         if (idx < expr.jump_table.len) {
                             pc = expr.jump_table[idx];
@@ -1082,35 +1128,72 @@ pub const RLSEngine = struct {
         return true;
     }
 
-    fn valuesEqual(self: *Self, a: Value, b: Value) bool {
+    // CANARY: REQ=REQ-SONNY-2709-RLS-EQUALITY-3VL; FEATURE="RLSExpressionCompilation"; ASPECT=EqualityThreeValued; STATUS=TESTED; TEST=tests/test_sonny2709_rls_range_fail_closed.zig; OWNER=security; UPDATED=2026-09-25
+    /// SONNY-2709 (round 4): `a = b` and `a <> b` in SQL's three-valued
+    /// logic: a boolean, or null (UNKNOWN) when either side is null or the
+    /// two are not alike (`equalValues`). A policy that ends UNKNOWN denies,
+    /// so `row.cls <> 'secret'` no longer admits a row without `cls`; write
+    /// `row.cls IS NULL OR row.cls <> 'secret'` for that. Before this, `=`
+    /// was false and `<>` true for a null or a mismatched pair. A principal
+    /// attribute is coerced as for the range operators (`coerceAttribute`).
+    fn evalEquality(self: *Self, opcode: CompiledExpression.Opcode, a: Operand, b: Operand) Value {
+        const equal = self.equalOperands(a, b) orelse return .null;
+        return .{ .boolean = if (opcode == .eq) equal else !equal };
+    }
+
+    fn equalOperands(self: *Self, a: Operand, b: Operand) ?bool {
+        if (a.from_attr and a.value == .string and isNumber(b.value)) {
+            const coerced = coerceAttribute(a.value.string, b.value) orelse return null;
+            return self.equalValues(coerced, b.value);
+        }
+        if (b.from_attr and b.value == .string and isNumber(a.value)) {
+            const coerced = coerceAttribute(b.value.string, a.value) orelse return null;
+            return self.equalValues(a.value, coerced);
+        }
+        return self.equalValues(a.value, b.value);
+    }
+
+    /// Whether two values are equal, or null (UNKNOWN) when either is null
+    /// or they are not alike. Alike: two numbers (an integer and a float
+    /// compare as floats; NaN is equal to nothing, so UNKNOWN), two strings,
+    /// two booleans, two timestamps.
+    fn equalValues(self: *Self, a: Value, b: Value) ?bool {
         _ = self;
         return switch (a) {
-            .null => b == .null,
-            .boolean => |av| switch (b) {
-                .boolean => |bv| av == bv,
-                else => false,
-            },
             .integer => |av| switch (b) {
                 .integer => |bv| av == bv,
-                .float => |bv| @as(f64, @floatFromInt(av)) == bv,
-                else => false,
+                .float => |bv| equalFloats(@floatFromInt(av), bv),
+                else => null,
             },
             .float => |av| switch (b) {
-                .float => |bv| av == bv,
-                .integer => |bv| av == @as(f64, @floatFromInt(bv)),
-                else => false,
+                .float => |bv| equalFloats(av, bv),
+                .integer => |bv| equalFloats(av, @floatFromInt(bv)),
+                else => null,
             },
             .string => |av| switch (b) {
                 .string => |bv| std.mem.eql(u8, av, bv),
-                else => false,
+                else => null,
             },
-            else => false,
+            .boolean => |av| switch (b) {
+                .boolean => |bv| av == bv,
+                else => null,
+            },
+            .timestamp => |av| switch (b) {
+                .timestamp => |bv| av == bv,
+                else => null,
+            },
+            else => null,
         };
     }
 
+    fn equalFloats(a: f64, b: f64) ?bool {
+        if (std.math.isNan(a) or std.math.isNan(b)) return null;
+        return a == b;
+    }
+
     // CANARY: REQ=REQ-SONNY-2709-RLS-RANGE-FAIL-CLOSED; FEATURE="RLSExpressionCompilation"; ASPECT=RangeOperatorsFailClosed; STATUS=TESTED; TEST=tests/test_sonny2709_rls_range_fail_closed.zig; OWNER=security; UPDATED=2026-09-25
-    /// SONNY-2709: a range operator's operand, and whether it came from
-    /// `principal.attribute.<key>` (`load_attr`).
+    /// SONNY-2709: a comparison operator's operand (range, `=`, `<>`), and
+    /// whether it came from `principal.attribute.<key>` (`load_attr`).
     ///
     /// The VM tracks this per stack slot (`from_attr`). Only a push puts a
     /// string on the stack, and every string-producing opcode (push_const,
@@ -1641,21 +1724,22 @@ pub const RLSEngine = struct {
                     from_attr[sp] = true;
                     sp += 1;
                 },
-                .eq => {
+                .eq, .neq => {
                     if (sp < 2) return error.StackUnderflow;
-                    const b = stack[sp - 1];
-                    const a = stack[sp - 2];
+                    const b = Operand{ .value = stack[sp - 1], .from_attr = from_attr[sp - 1] };
+                    const a = Operand{ .value = stack[sp - 2], .from_attr = from_attr[sp - 2] };
                     sp -= 2;
-                    stack[sp] = .{ .boolean = self.valuesEqual(a, b) };
+                    stack[sp] = self.evalEquality(opcode, a, b);
+                    from_attr[sp] = false;
                     sp += 1;
                 },
-                .neq => {
-                    if (sp < 2) return error.StackUnderflow;
-                    const b = stack[sp - 1];
-                    const a = stack[sp - 2];
-                    sp -= 2;
-                    stack[sp] = .{ .boolean = !self.valuesEqual(a, b) };
-                    sp += 1;
+                .is_null => {
+                    if (sp < 1) return error.StackUnderflow;
+                    // Read before writing: the literal's tag would be stored
+                    // into the slot before the test below reads it.
+                    const is_null = stack[sp - 1] == .null;
+                    stack[sp - 1] = .{ .boolean = is_null };
+                    from_attr[sp - 1] = false;
                 },
                 .lt, .gt, .lte, .gte => {
                     if (sp < 2) return error.StackUnderflow;
@@ -1703,6 +1787,10 @@ pub const RLSEngine = struct {
                     pc += 1;
                     if (sp == 0) return error.StackUnderflow;
                     sp -= 1;
+                    // SONNY-2709: a branch cannot take UNKNOWN as false (the
+                    // skipped arm may be the one that denies); the policy is
+                    // undecided, and an undecided policy denies.
+                    if (stack[sp] == .null) return error.IndeterminatePolicy;
                     if (!self.valueToBool(stack[sp])) {
                         if (idx < expr.jump_table.len) {
                             pc = expr.jump_table[idx];
@@ -1715,6 +1803,8 @@ pub const RLSEngine = struct {
                     pc += 1;
                     if (sp == 0) return error.StackUnderflow;
                     sp -= 1;
+                    // SONNY-2709: see jump_if_false.
+                    if (stack[sp] == .null) return error.IndeterminatePolicy;
                     if (self.valueToBool(stack[sp])) {
                         if (idx < expr.jump_table.len) {
                             pc = expr.jump_table[idx];
@@ -4043,4 +4133,264 @@ test "SONNY-2679: policies created and deleted while other threads check rows" {
 
     try std.testing.expectEqual(@as(usize, 0), shared.wrong.load(.monotonic));
     try std.testing.expect(shared.checks.load(.monotonic) > 0);
+}
+
+// ---------------------------------------------------------------------------
+// SONNY-2709 (round 4): SQL three-valued logic for `=` and `<>`, IS [NOT]
+// NULL, decimal literals, trailing input, and branches on UNKNOWN.
+// CANARY: REQ=REQ-SONNY-2709-RLS-EQUALITY-3VL; FEATURE="RLSExpressionCompilation"; ASPECT=EqualityThreeValued; STATUS=TESTED; TEST=src/security/rls_core.zig; OWNER=security; UPDATED=2026-09-25
+// ---------------------------------------------------------------------------
+
+/// A row field: its name and value.
+const Sonny2709Field = struct { []const u8, Value };
+
+/// Does `user` see a row holding `fields`?
+fn sonny2709SeesRow(engine: *RLSEngine, user: []const u8, fields: []const Sonny2709Field) !bool {
+    var row = std.StringHashMap(Value).init(std.testing.allocator);
+    defer row.deinit();
+    for (fields) |f| try row.put(f[0], f[1]);
+    return engine.checkRowAccessByUsername(&row, .select, user, "g", "T");
+}
+
+test "SONNY-2709: = and <> are UNKNOWN when a side is missing, null or of another type" {
+    const allocator = std.testing.allocator;
+
+    var neq = try sonny2709Engine(allocator, "row.cls <> 'secret'");
+    defer sonny2709Deinit(&neq);
+    try std.testing.expect(try sonny2709Sees(&neq, "u", "cls", .{ .string = "public" }));
+    try std.testing.expect(!try sonny2709Sees(&neq, "u", "cls", .{ .string = "secret" }));
+    // A row without the field used to pass `<>`: now UNKNOWN, denied.
+    try std.testing.expect(!try sonny2709Sees(&neq, "u", "cls", null));
+    try std.testing.expect(!try sonny2709Sees(&neq, "u", "cls", .null));
+    try std.testing.expect(!try sonny2709Sees(&neq, "u", "cls", .{ .integer = 7 }));
+    try std.testing.expect(!try sonny2709Sees(&neq, "u", "cls", .{ .boolean = true }));
+
+    var eq = try sonny2709Engine(allocator, "row.cls = 'public'");
+    defer sonny2709Deinit(&eq);
+    try std.testing.expect(try sonny2709Sees(&eq, "u", "cls", .{ .string = "public" }));
+    try std.testing.expect(!try sonny2709Sees(&eq, "u", "cls", .{ .string = "secret" }));
+    try std.testing.expect(!try sonny2709Sees(&eq, "u", "cls", null));
+    try std.testing.expect(!try sonny2709Sees(&eq, "u", "cls", .{ .integer = 7 }));
+
+    // Under NOT, AND and OR the unknown comparison stays unknown.
+    var not_eq = try sonny2709Engine(allocator, "NOT (row.cls = 'secret')");
+    defer sonny2709Deinit(&not_eq);
+    try std.testing.expect(try sonny2709Sees(&not_eq, "u", "cls", .{ .string = "public" }));
+    try std.testing.expect(!try sonny2709Sees(&not_eq, "u", "cls", .{ .string = "secret" }));
+    try std.testing.expect(!try sonny2709Sees(&not_eq, "u", "cls", null));
+    try std.testing.expect(!try sonny2709Sees(&not_eq, "u", "cls", .{ .integer = 7 }));
+    var or_true = try sonny2709Engine(allocator, "row.cls <> 'secret' OR TRUE");
+    defer sonny2709Deinit(&or_true);
+    try std.testing.expect(try sonny2709Sees(&or_true, "u", "cls", null));
+    var not_and_false = try sonny2709Engine(allocator, "NOT (row.cls <> 'secret' AND FALSE)");
+    defer sonny2709Deinit(&not_and_false);
+    try std.testing.expect(try sonny2709Sees(&not_and_false, "u", "cls", null));
+    var not_or_false = try sonny2709Engine(allocator, "NOT (row.cls = 'secret' OR FALSE)");
+    defer sonny2709Deinit(&not_or_false);
+    try std.testing.expect(!try sonny2709Sees(&not_or_false, "u", "cls", null));
+    try std.testing.expect(try sonny2709Sees(&not_or_false, "u", "cls", .{ .string = "public" }));
+
+    // Numbers compare across integer and float; booleans with booleans only.
+    var num = try sonny2709Engine(allocator, "row.level = 3");
+    defer sonny2709Deinit(&num);
+    try std.testing.expect(try sonny2709Sees(&num, "u", "level", .{ .integer = 3 }));
+    try std.testing.expect(try sonny2709Sees(&num, "u", "level", .{ .float = 3.0 }));
+    try std.testing.expect(!try sonny2709Sees(&num, "u", "level", .{ .integer = 4 }));
+    try std.testing.expect(!try sonny2709Sees(&num, "u", "level", .{ .string = "3" }));
+    try std.testing.expect(!try sonny2709Sees(&num, "u", "level", .{ .float = std.math.nan(f64) }));
+    var flag = try sonny2709Engine(allocator, "row.flag = TRUE");
+    defer sonny2709Deinit(&flag);
+    try std.testing.expect(try sonny2709Sees(&flag, "u", "flag", .{ .boolean = true }));
+    try std.testing.expect(!try sonny2709Sees(&flag, "u", "flag", .{ .boolean = false }));
+    try std.testing.expect(!try sonny2709Sees(&flag, "u", "flag", .{ .integer = 1 }));
+    try std.testing.expect(!try sonny2709Sees(&flag, "u", "flag", null));
+
+    // Two fields: equal only when both are present and alike.
+    var pair = try sonny2709Engine(allocator, "row.a = row.b");
+    defer sonny2709Deinit(&pair);
+    try std.testing.expect(try sonny2709SeesRow(&pair, "u", &.{ .{ "a", .{ .string = "x" } }, .{ "b", .{ .string = "x" } } }));
+    try std.testing.expect(!try sonny2709SeesRow(&pair, "u", &.{}));
+    try std.testing.expect(!try sonny2709SeesRow(&pair, "u", &.{ .{ "a", .null }, .{ "b", .null } }));
+}
+
+test "SONNY-2709: IS NULL and IS NOT NULL are never UNKNOWN, so the old <> behaviour can be written out" {
+    const allocator = std.testing.allocator;
+    var old = try sonny2709Engine(allocator, "row.cls IS NULL OR row.cls <> 'secret'");
+    defer sonny2709Deinit(&old);
+    try std.testing.expect(try sonny2709Sees(&old, "u", "cls", null));
+    try std.testing.expect(try sonny2709Sees(&old, "u", "cls", .null));
+    try std.testing.expect(try sonny2709Sees(&old, "u", "cls", .{ .string = "public" }));
+    try std.testing.expect(!try sonny2709Sees(&old, "u", "cls", .{ .string = "secret" }));
+    // A mistyped value is not NULL, and `<>` cannot compare it: still denied.
+    try std.testing.expect(!try sonny2709Sees(&old, "u", "cls", .{ .integer = 7 }));
+
+    var present = try sonny2709Engine(allocator, "row.cls IS NOT NULL");
+    defer sonny2709Deinit(&present);
+    try std.testing.expect(!try sonny2709Sees(&present, "u", "cls", null));
+    try std.testing.expect(try sonny2709Sees(&present, "u", "cls", .{ .string = "public" }));
+    try std.testing.expect(try sonny2709Sees(&present, "u", "cls", .{ .integer = 7 }));
+    var not_null = try sonny2709Engine(allocator, "NOT (row.cls IS NULL)");
+    defer sonny2709Deinit(&not_null);
+    try std.testing.expect(!try sonny2709Sees(&not_null, "u", "cls", null));
+    try std.testing.expect(try sonny2709Sees(&not_null, "u", "cls", .{ .string = "public" }));
+
+    // `= NULL` compares with NULL, which is UNKNOWN (as in SQL): no row.
+    var eq_null = try sonny2709Engine(allocator, "row.cls = NULL");
+    defer sonny2709Deinit(&eq_null);
+    try std.testing.expect(!try sonny2709Sees(&eq_null, "u", "cls", null));
+    try std.testing.expect(!try sonny2709Sees(&eq_null, "u", "cls", .{ .string = "public" }));
+}
+
+test "SONNY-2709: a principal attribute in = and <> is coerced as it is in a range" {
+    const allocator = std.testing.allocator;
+    const store_alloc = std.testing.allocator;
+    try user_attr_store.setAttribute(store_alloc, "u2709e_three", "clearance", "3");
+    defer _ = user_attr_store.removeAttribute("u2709e_three", "clearance", store_alloc);
+    try user_attr_store.setAttribute(store_alloc, "u2709e_blue", "team", "blue");
+    defer _ = user_attr_store.removeAttribute("u2709e_blue", "team", store_alloc);
+
+    var eq = try sonny2709Engine(allocator, "row.level = principal.attribute.clearance");
+    defer sonny2709Deinit(&eq);
+    try std.testing.expect(try sonny2709Sees(&eq, "u2709e_three", "level", .{ .integer = 3 }));
+    try std.testing.expect(try sonny2709Sees(&eq, "u2709e_three", "level", .{ .float = 3.0 }));
+    try std.testing.expect(!try sonny2709Sees(&eq, "u2709e_three", "level", .{ .integer = 4 }));
+    try std.testing.expect(!try sonny2709Sees(&eq, "u2709e_three", "level", null));
+    try std.testing.expect(!try sonny2709Sees(&eq, "u2709e_nobody", "level", .{ .integer = 3 }));
+    // A string column compares with the attribute as a string.
+    try std.testing.expect(try sonny2709Sees(&eq, "u2709e_three", "level", .{ .string = "3" }));
+
+    var neq = try sonny2709Engine(allocator, "row.team <> principal.attribute.team");
+    defer sonny2709Deinit(&neq);
+    try std.testing.expect(try sonny2709Sees(&neq, "u2709e_blue", "team", .{ .string = "red" }));
+    try std.testing.expect(!try sonny2709Sees(&neq, "u2709e_blue", "team", .{ .string = "blue" }));
+    try std.testing.expect(!try sonny2709Sees(&neq, "u2709e_blue", "team", null));
+    // A user without the attribute used to pass every row's `<>`.
+    try std.testing.expect(!try sonny2709Sees(&neq, "u2709e_nobody", "team", .{ .string = "red" }));
+}
+
+test "SONNY-2709: input the compiler does not understand denies every row" {
+    const allocator = std.testing.allocator;
+    // Only the prefix `row.cls = 'public'` used to be compiled, and the rest
+    // silently dropped.
+    var junk = try sonny2709Engine(allocator, "row.cls = 'public' junk");
+    defer sonny2709Deinit(&junk);
+    try std.testing.expect(!try sonny2709Sees(&junk, "u", "cls", .{ .string = "public" }));
+    // `IN` is not supported: the policy used to read as `row.cls` alone,
+    // which any non-empty string passes.
+    var in_list = try sonny2709Engine(allocator, "row.cls IN 'secret'");
+    defer sonny2709Deinit(&in_list);
+    try std.testing.expect(!try sonny2709Sees(&in_list, "u", "cls", .{ .string = "secret" }));
+    try std.testing.expect(!try sonny2709Sees(&in_list, "u", "cls", .{ .string = "public" }));
+}
+
+test "SONNY-2709: a decimal literal compares as a float" {
+    const allocator = std.testing.allocator;
+    var ge = try sonny2709Engine(allocator, "row.score >= 2.5");
+    defer sonny2709Deinit(&ge);
+    try std.testing.expect(try sonny2709Sees(&ge, "u", "score", .{ .float = 2.5 }));
+    try std.testing.expect(try sonny2709Sees(&ge, "u", "score", .{ .integer = 3 }));
+    try std.testing.expect(!try sonny2709Sees(&ge, "u", "score", .{ .integer = 2 }));
+    try std.testing.expect(!try sonny2709Sees(&ge, "u", "score", .{ .float = 2.4 }));
+    var neg = try sonny2709Engine(allocator, "row.score >= -0.5");
+    defer sonny2709Deinit(&neg);
+    try std.testing.expect(try sonny2709Sees(&neg, "u", "score", .{ .float = -0.25 }));
+    try std.testing.expect(!try sonny2709Sees(&neg, "u", "score", .{ .integer = -1 }));
+}
+
+/// An engine whose only policy on (g, T) is `compiled` (hand-written
+/// bytecode; nothing to free).
+fn sonny2709PinnedEngine(allocator: Allocator, compiled: *RLSEngine.CompiledExpression) !RLSEngine {
+    var engine = try RLSEngine.init(allocator);
+    errdefer engine.deinit();
+    try engine.createPolicy(.{
+        .id = 2710,
+        .name = "pinned",
+        .description = "SONNY-2709 hand-written bytecode",
+        .graph = "g",
+        .table = "T",
+        .operation = .all,
+        .permissive = false,
+        .roles = &.{},
+        .using_expr = .{ .raw = "(bytecode)", .parsed = null, .compiled = compiled, .parameters = &.{} },
+        .check_expr = null,
+        .enabled = true,
+        .created_at = 0,
+        .updated_at = 0,
+        .created_by = 0,
+        .temporal = null,
+        .data_classification = null,
+        .audit_level = .none,
+    });
+    return engine;
+}
+
+test "SONNY-2709: a branch on UNKNOWN fails the policy instead of taking the false arm" {
+    const allocator = std.testing.allocator;
+    const jump_table = [_]usize{5};
+    const no_constants = [_]Value{};
+
+    // NOT x, written as a branch: push_null; jump_if_false L; push_false; ret;
+    // L: push_true; ret. Taking UNKNOWN as false would admit the row.
+    const if_false = [_]u8{ 0x04, 0x41, 0x00, 0x03, 0xFF, 0x02, 0xFF };
+    var c1 = RLSEngine.CompiledExpression{ .bytecode = &if_false, .constants = &no_constants, .jump_table = &jump_table };
+    var e1 = try sonny2709PinnedEngine(allocator, &c1);
+    defer e1.deinit();
+    try std.testing.expectError(error.IndeterminatePolicy, sonny2709Sees(&e1, "u", "x", null));
+
+    // The same with jump_if_true: push_null; jump_if_true L; push_true; ret;
+    // L: push_false; ret.
+    const if_true = [_]u8{ 0x04, 0x42, 0x00, 0x02, 0xFF, 0x03, 0xFF };
+    var c2 = RLSEngine.CompiledExpression{ .bytecode = &if_true, .constants = &no_constants, .jump_table = &jump_table };
+    var e2 = try sonny2709PinnedEngine(allocator, &c2);
+    defer e2.deinit();
+    try std.testing.expectError(error.IndeterminatePolicy, sonny2709Sees(&e2, "u", "x", null));
+
+    // A missing row field is UNKNOWN too: load_row 0; jump_if_false L; ...
+    const field_constants = [_]Value{.{ .string = "flag" }};
+    const load_branch = [_]u8{ 0x10, 0x00, 0x41, 0x00, 0x03, 0xFF, 0x02, 0xFF };
+    const load_jump_table = [_]usize{6};
+    var c3 = RLSEngine.CompiledExpression{ .bytecode = &load_branch, .constants = &field_constants, .jump_table = &load_jump_table };
+    var e3 = try sonny2709PinnedEngine(allocator, &c3);
+    defer e3.deinit();
+    try std.testing.expectError(error.IndeterminatePolicy, sonny2709Sees(&e3, "u", "flag", null));
+    // A known boolean still branches: flag = false takes L (push_true).
+    try std.testing.expect(try sonny2709Sees(&e3, "u", "flag", .{ .boolean = false }));
+    try std.testing.expect(!try sonny2709Sees(&e3, "u", "flag", .{ .boolean = true }));
+}
+
+test "SONNY-2709: the SecurityContext VM applies the same three-valued rules" {
+    const allocator = std.testing.allocator;
+    var engine = try RLSEngine.init(allocator);
+    defer engine.deinit();
+
+    var user = createTestUser(allocator, 1, "u", "u@example.com");
+    defer user.attributes.deinit();
+    var session_attrs = std.StringHashMap([]const u8).init(allocator);
+    defer session_attrs.deinit();
+    var request_attrs = std.StringHashMap([]const u8).init(allocator);
+    defer request_attrs.deinit();
+    var context = auth.SecurityContext{
+        .user = &user,
+        .roles = &.{},
+        .session_attributes = session_attrs,
+        .request_attributes = request_attrs,
+        .environment = .{ .ip_address = "10.0.0.1", .user_agent = "test", .device_id = null, .location = null, .timestamp = 0 },
+    };
+    var row = std.StringHashMap(Value).init(allocator);
+    defer row.deinit();
+
+    // row.cls <> 'secret' (load_row 0; push_const 1; neq; ret) on a row
+    // without cls.
+    const neq_constants = [_]Value{ .{ .string = "cls" }, .{ .string = "secret" } };
+    const neq_bytecode = [_]u8{ 0x10, 0x00, 0x01, 0x01, 0x21, 0xFF };
+    var neq = RLSEngine.CompiledExpression{ .bytecode = &neq_bytecode, .constants = &neq_constants, .jump_table = &.{} };
+    try std.testing.expect(!try engine.evaluateCompiledExpression(&neq, &row, &context));
+    try row.put("cls", .{ .string = "public" });
+    try std.testing.expect(try engine.evaluateCompiledExpression(&neq, &row, &context));
+
+    // A branch on UNKNOWN fails there too.
+    const jump_table = [_]usize{5};
+    const if_false = [_]u8{ 0x04, 0x41, 0x00, 0x03, 0xFF, 0x02, 0xFF };
+    var branch = RLSEngine.CompiledExpression{ .bytecode = &if_false, .constants = &.{}, .jump_table = &jump_table };
+    try std.testing.expectError(error.IndeterminatePolicy, engine.evaluateCompiledExpression(&branch, &row, &context));
 }

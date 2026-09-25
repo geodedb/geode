@@ -83,36 +83,66 @@ This document describes the comprehensive Row-Level Security (RLS) implementatio
 
 - **Comparisons in policy expressions (SONNY-2709)**
 
-  An expression policy (`row.<field>`, `principal.attribute.<key>`,
-  `current_user`, literals, `=`, `<>`, `<`, `<=`, `>`, `>=`, `AND`, `OR`,
-  `NOT`) is compiled to bytecode and evaluated per row. Its comparisons
-  follow these rules:
+  An expression policy is compiled to bytecode and evaluated for each row.
+  It can use `row.<field>`, `principal.attribute.<key>`, `current_user`,
+  `TRUE`, `FALSE`, `NULL`, string, integer and decimal literals, the
+  operators `=`, `<>` (or `!=`), `<`, `<=`, `>`, `>=`, `IS [NOT] NULL`,
+  `NOT`, `AND` and `OR`, and parentheses. Precedence follows SQL, from
+  loosest: `OR`, `AND`, `NOT`, then the comparisons. So `NOT row.x = 'a'`
+  means `NOT (row.x = 'a')`. The whole expression must parse. If anything is
+  left over, or the expression is otherwise malformed, the policy denies
+  every row and the engine logs a warning. (Before SONNY-2709, a valid
+  prefix was compiled and the rest silently dropped.)
+
+  The engine uses SQL's three-valued logic: a comparison is true, false or
+  UNKNOWN.
 
   | Comparison | Result |
   |---|---|
-  | `<`, `<=`, `>`, `>=` on two numbers (integer or float, mixed) | ordered as numbers |
-  | the same on two strings | ordered by bytes |
-  | the same on two timestamps | ordered |
-  | the same on anything else: a missing field or `NULL`, NaN, a boolean, a string against a number | UNKNOWN |
-  | `principal.attribute.<key>` against a number | the attribute is parsed strictly as that number's type, then compared; if it does not parse, UNKNOWN |
-  | `=`, `<>` | true or false; a missing field equals only `NULL` |
+  | `=`, `<>`, `<`, `<=`, `>`, `>=` on two numbers (integer or float, mixed) | compared as numbers |
+  | the same on two strings | compared by bytes |
+  | the same on two timestamps | compared |
+  | `=`, `<>` on two booleans | compared |
+  | any comparison with a missing field or `NULL`, a NaN, or two values of different kinds (a string and a number, say), and any range comparison of booleans | UNKNOWN |
+  | `principal.attribute.<key>` against a number | the attribute is parsed strictly as that number's type, then compared; UNKNOWN if it does not parse |
+  | `x IS NULL`, `x IS NOT NULL` | true or false, never UNKNOWN |
 
   UNKNOWN never admits a row. `NOT`, `AND` and `OR` follow SQL's
-  three-valued logic: `NOT` UNKNOWN is UNKNOWN, `false AND` UNKNOWN is
-  false, `true OR` UNKNOWN is true, and every other combination with
-  UNKNOWN is UNKNOWN. A policy whose result is UNKNOWN denies the row. So
-  `row.level <= 3` and `NOT (row.level > 3)` both deny a row with no
-  `level`, or with a `level` that is not a number.
+  three-valued logic:
+  - `NOT` UNKNOWN is UNKNOWN;
+  - `false AND` UNKNOWN is false;
+  - `true OR` UNKNOWN is true;
+  - every other combination with UNKNOWN is UNKNOWN.
+
+  A policy whose result is UNKNOWN denies the row, as PostgreSQL row
+  security does. So `row.level <= 3`, `NOT (row.level > 3)` and
+  `row.cls <> 'secret'` all deny a row whose field is missing or of the
+  wrong kind. A hand-written bytecode branch (`jump_if_false` or
+  `jump_if_true`) on UNKNOWN makes the policy undecided, and the row is
+  denied. The compiler emits no branches today.
+
+  **Behaviour change (SONNY-2709).** `=` and `<>` used to treat a missing
+  value as unequal: `row.cls <> 'secret'` admitted every row without `cls`.
+  Now that comparison is UNKNOWN and the row is hidden. To keep the old
+  behaviour, say so explicitly:
+
+  ```text
+  row.cls IS NULL OR row.cls <> 'secret'
+  ```
+
+  `row.cls = NULL` is UNKNOWN for every row, as in SQL. Use `IS NULL`.
 
   A principal attribute is stored as a string. Compared with an integer
-  field it must be an optional `-` followed by ASCII digits, within the
-  64-bit range (`"3"`, `"-1"`). Compared with a float field it may also have
-  a `.` and at least one fraction digit (`"2.5"`). Anything else, such as
-  `" 3"`, `"+3"`, `"3.0"` (against an integer), `"1e3"`, `"0x3"` or `"inf"`,
-  is not a number, and the comparison is UNKNOWN. A user without the
+  field, it must be an optional `-` followed by ASCII digits, within the
+  64-bit range (`"3"`, `"-1"`). Compared with a float field, it may also have
+  a `.` and at least one fraction digit (`"2.5"`). Anything else is not a
+  number, and the comparison is UNKNOWN: for example `" 3"`, `"+3"`, `"3.0"`
+  (against an integer), `"1e3"`, `"0x3"` or `"inf"`. A user without the
   attribute gets UNKNOWN too. Compared with a string field, the attribute is
-  compared as a string. Only a principal attribute is converted: a row's
-  string field is never read as a number.
+  compared as a string. The same rules apply to `=` and `<>`, so
+  `row.level = principal.attribute.clearance` matches an integer `level` of
+  3 for a clearance of `"3"`. Only a principal attribute is converted: a
+  row's string field is never read as a number.
 
 ### 5. User Management CLI (`src/tools/user_auth.zig`)
 

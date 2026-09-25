@@ -258,3 +258,63 @@ test "SONNY-2709: a range policy against a principal attribute admits only a str
     try f.expectRows(&s, "decimal2709", "MATCH (g:G)-[r:CLR]->(t) RETURN r.x", &.{"f_l2f"});
     try f.check();
 }
+
+/// g1 links, by `HOP`, to one `:Eq` node per shape of `cls` (a string, the
+/// policed value, missing, an integer, a boolean) and, by `EQE`, to a `:T`
+/// node over an edge of each shape.
+fn seedEquality(s: *Session) !void {
+    try s.exec("CREATE (:G {s: 'g1'})");
+    const shapes = [_][]const u8{ "public', cls: 'public'", "secret', cls: 'secret'", "none'", "int', cls: 7", "bool', cls: true" };
+    const aa = s.arena.allocator();
+    for (shapes) |shape| {
+        try s.exec(try std.fmt.allocPrint(aa, "MATCH (g:G {{s: 'g1'}}) CREATE (g)-[:HOP]->(:Eq {{s: 'n_{s}}})", .{shape}));
+        try s.exec(try std.fmt.allocPrint(aa, "MATCH (g:G {{s: 'g1'}}) CREATE (g)-[:EQE {{x: 'e_{s}}}]->(:T)", .{shape}));
+    }
+}
+
+test "SONNY-2709: = and <> policies deny a missing, null or mistyped value on nodes and edges, under NOT, AND and OR" {
+    harness.silenceEngineLogs();
+    const u = "alice2709eq";
+    const Want = struct { expr: []const u8, rows: []const []const u8 };
+    // For each policy, the `cls` shapes a user sees.
+    const wants = [_]Want{
+        // `<>` used to pass a row without the field.
+        .{ .expr = "row.cls <> 'secret'", .rows = &.{"public"} },
+        .{ .expr = "row.cls = 'public'", .rows = &.{"public"} },
+        .{ .expr = "NOT (row.cls = 'secret')", .rows = &.{"public"} },
+        .{ .expr = "row.cls <> 'secret' AND TRUE", .rows = &.{"public"} },
+        .{ .expr = "row.cls <> 'secret' OR FALSE", .rows = &.{"public"} },
+        .{ .expr = "NOT (row.cls = 'secret' OR FALSE)", .rows = &.{"public"} },
+        // The old behaviour, written out.
+        .{ .expr = "row.cls IS NULL OR row.cls <> 'secret'", .rows = &.{ "none", "public" } },
+        .{ .expr = "row.cls IS NOT NULL", .rows = &.{ "bool", "int", "public", "secret" } },
+    };
+
+    for (wants) |want| {
+        var s = try Session.init();
+        defer s.deinit();
+        try seedEquality(&s);
+        try s.addPolicy("Eq", want.expr);
+        try s.addPolicy("EQE", want.expr);
+
+        const aa = s.arena.allocator();
+        const nodes = try aa.alloc([]const u8, want.rows.len);
+        const edges = try aa.alloc([]const u8, want.rows.len);
+        for (want.rows, nodes, edges) |shape, *n, *e| {
+            n.* = try std.fmt.allocPrint(aa, "n_{s}", .{shape});
+            e.* = try std.fmt.allocPrint(aa, "e_{s}", .{shape});
+        }
+        const count: []const u8 = try std.fmt.allocPrint(aa, "{d}", .{want.rows.len});
+        const edge_list: []const u8 = try std.fmt.allocPrint(aa, "[{s}]", .{try std.mem.join(aa, ",", edges)});
+
+        // One report per session: its lines live in the session's arena.
+        var f: Failures = .{};
+        try f.expectRows(&s, u, "MATCH (n:Eq) RETURN n.s", nodes);
+        try f.expectRows(&s, u, "MATCH (g:G)-[:HOP]->(n:Eq) RETURN n.s", nodes);
+        try f.expectRows(&s, u, "MATCH (g:G)-[r:EQE]->(t) RETURN r.x", edges);
+        try f.expectRows(&s, u, "MATCH (g:G) RETURN COUNT { (g)-[:EQE]->() } AS c", &.{count});
+        try f.expectRows(&s, u, "MATCH (g:G) RETURN [(g)-[r:EQE]->(t) | r.x] AS xs", &.{edge_list});
+        if (f.lines.items.len != 0) std.debug.print("  under policy {s}:\n", .{want.expr});
+        try f.check();
+    }
+}

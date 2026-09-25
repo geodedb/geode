@@ -95,11 +95,23 @@
   two strings (in byte order) compare as before, and two timestamps now
   compare too (they were always "equal").
 
-  **Behaviour change:** a policy whose range comparison meets a missing or
-  mistyped value now denies that row. A policy that relied on a numeric
-  principal attribute now works as written. `NOT` over a missing value or an
-  UNKNOWN comparison now denies instead of allowing. `=` and `<>` are
-  unchanged.
+  `=` and `<>` follow the same SQL three-valued logic. A comparison with a
+  missing value or `NULL`, or between values of different kinds, is UNKNOWN,
+  and a principal attribute is coerced for them as for the range operators.
+  `IS NULL` and `IS NOT NULL` are new, and are never UNKNOWN. Decimal
+  literals (`2.5`) are new. `NOT` now binds below the comparisons, as in SQL.
+  An expression that does not parse completely now denies every row.
+  Before, a valid prefix was enforced and the rest dropped, so
+  `row.x IS NULL OR …` compiled as `row.x`. A branch on UNKNOWN in
+  hand-written bytecode denies.
+
+  **Behaviour change:** a policy comparison that meets a missing or mistyped
+  value now denies the row. This covers the range operators, `=` and `<>`.
+  `row.cls <> 'secret'` no longer admits a row without `cls`; write
+  `row.cls IS NULL OR row.cls <> 'secret'` to keep that. `row.cls = NULL`
+  matches nothing. A policy that relied on a numeric principal attribute now
+  works as written. `NOT` over a missing value or an UNKNOWN comparison now
+  denies instead of allowing.
 
 ---
 
