@@ -8427,14 +8427,15 @@ pub fn build(b: *std.Build) void {
 
     // SONNY-2652: `SKIP k` with no LIMIT returned one row on the executor's
     // planned-read path: the OFFSET-only bound (k+1) capped materialization,
-    // at the single-chain and the multi-chain cap sites.
+    // at the single-chain and the multi-chain cap sites. The same cap ignored
+    // a FILTER, so `FILTER ... LIMIT m` returned fewer than m rows.
     const sonny2652_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny2652_planned_read_skip_without_limit.zig"), .target = target, .optimize = optimize });
     sonny2652_test_mod.addImport("geode", root_mod);
     sonny2652_test_mod.addImport("logging", logging_mod);
     const sonny2652_tests = b.addTest(.{ .root_module = sonny2652_test_mod });
     const run_sonny2652_tests = b.addRunArtifact(sonny2652_tests);
     shardDep(test_step, &run_sonny2652_tests.step, 1, test_shard_loads, test_shard_index);
-    const sonny2652_step = b.step("test-sonny2652-planned-read-skip-without-limit", "Run SONNY-2652 regression (SKIP without LIMIT on the executor's planned-read path returns every row after the offset: node scan, path and multi-chain queries, with and without a WHERE)");
+    const sonny2652_step = b.step("test-sonny2652-planned-read-skip-without-limit", "Run SONNY-2652 regression (SKIP without LIMIT on the executor's planned-read path returns every row after the offset: node scan, path and multi-chain queries, with and without a WHERE; a FILTER is applied before the LIMIT)");
     sonny2652_step.dependOn(&run_sonny2652_tests.step);
 
     // SONNY-1330 TSan companion: the same regression file under

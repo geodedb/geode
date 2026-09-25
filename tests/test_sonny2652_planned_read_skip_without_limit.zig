@@ -21,6 +21,11 @@
 // still bounds materialization. A WHERE turns the cap off, so the WHERE cases
 // pin that the fix leaves them alone.
 //
+// The same cap ignored a FILTER, which removes rows after materialization just
+// as a WHERE does: `MATCH (n:M) FILTER n.i >= 10 RETURN n.s LIMIT 5`
+// materialized 5 rows and returned the 2 of them that passed. The FILTER tests
+// pin that a FILTER turns the cap off too, at both sites.
+//
 // CANARY: REQ=REQ-SONNY-2652-PLANNED-READ-SKIP; FEATURE="PlannedReadRowWindow"; ASPECT=Regression; STATUS=TESTED; TEST=tests/test_sonny2652_planned_read_skip_without_limit.zig; OWNER=engine; UPDATED=2026-09-25
 
 const std = @import("std");
@@ -247,4 +252,60 @@ test "SONNY-2652: SKIP without LIMIT on a planned three-chain query returns ever
     const all = try expectBase(&h, base, want.items, n);
     for ([_]usize{ 5, 1, 23, 24 }) |k| try expectSkip(&h, base, all, k, n);
     try expectSkipLimit(&h, base, all, 5, 3);
+}
+
+/// `base SKIP k LIMIT m` returns the `m` rows after the first k of `all`, and
+/// the planned read materialized every row (`total`): the cap must be off.
+fn expectWindowUncapped(h: *harness.Harness, base: []const u8, all: []const []const u8, k: usize, m: usize, total: u64) !void {
+    const query = try std.fmt.allocPrint(h.arena.allocator(), "{s} SKIP {d} LIMIT {d}", .{ base, k, m });
+    const got = try executor(h, query);
+    const want = all[k .. k + m];
+    if (got.rows.len != want.len) {
+        std.debug.print("{s}: expected {d} rows, found {d} ({d} materialized)\n", .{ query, want.len, got.rows.len, got.materialized });
+        return error.TestExpectedEqual;
+    }
+    for (want, got.rows) |w, g| try testing.expectEqualStrings(w, g);
+    try testing.expectEqual(total, got.materialized);
+}
+
+test "SONNY-2652: a FILTER is applied before the LIMIT on a planned node scan" {
+    harness.silenceEngineLogs();
+    var h = try harness.Harness.init(testing.allocator);
+    defer h.deinit();
+    try harness.seedMany(&h);
+
+    // FILTER removes rows after materialization, like a WHERE, so the first
+    // rows materialized are not the answer's first rows: no cap.
+    const base = "MATCH (n:M) FILTER n.i >= 10 RETURN n.s";
+    const all = try expectBase(&h, base, (try names(&h, "s", many))[10..], many);
+    try expectWindowUncapped(&h, base, all, 0, 5, many);
+    try expectWindowUncapped(&h, base, all, 2, 5, many);
+}
+
+test "SONNY-2652: a FILTER is applied before the LIMIT on a planned path query" {
+    harness.silenceEngineLogs();
+    var h = try harness.Harness.init(testing.allocator);
+    defer h.deinit();
+    try seedPairs(&h);
+
+    const base = "MATCH (a:A)-[:R]->(b:B) FILTER a.i >= 10 RETURN b.s";
+    const all = try expectBase(&h, base, (try names(&h, "b", many))[10..], many);
+    try expectWindowUncapped(&h, base, all, 0, 5, many);
+    try expectWindowUncapped(&h, base, all, 2, 5, many);
+}
+
+test "SONNY-2652: a FILTER is applied before the LIMIT on a planned multi-chain query" {
+    harness.silenceEngineLogs();
+    var h = try harness.Harness.init(testing.allocator);
+    defer h.deinit();
+    try seedCartesian(&h);
+    const aa = h.arena.allocator();
+
+    const base = "MATCH (p:P), (q:Q) FILTER p.s = 'p1' RETURN p.s, q.s";
+    var want: std.ArrayList([]const u8) = .empty;
+    for (0..q_count) |j| try want.append(aa, try std.fmt.allocPrint(aa, "p1|q{d}", .{j}));
+    const n = p_count * q_count;
+    const all = try expectBase(&h, base, want.items, n);
+    try expectWindowUncapped(&h, base, all, 0, 2, n);
+    try expectWindowUncapped(&h, base, all, 1, 2, n);
 }
