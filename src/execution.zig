@@ -3384,50 +3384,28 @@ pub fn computeGroupAggregation(allocator: std.mem.Allocator, expr: ast.Expr, gro
         return Value{ .Double = (float_sum + @as(f64, @floatFromInt(int_sum))) / @as(f64, @floatFromInt(count)) };
     }
 
-    // Handle min(expr)
-    if (std.ascii.eqlIgnoreCase(func_name, "min")) {
+    // Handle min(expr) and max(expr). SONNY-2675: in the value order ORDER BY
+    // uses (`compareValuesWithNullsPolicy`); only Int and Str used to be
+    // compared, so over doubles, decimals, dates or mixed numbers the first
+    // value won.
+    const is_min = std.ascii.eqlIgnoreCase(func_name, "min");
+    if (is_min or std.ascii.eqlIgnoreCase(func_name, "max")) {
         if (arg_ptr == null) return Value{ .Null = {} };
-        var min_val: ?Value = null;
+        var best: ?Value = null;
         for (group_rows) |row| {
             const val = (try evalAggregateArgument(allocator, arg_ptr.?.*, rowEnv(allocator, columns, row, param_names, param_values))) orelse continue;
             if (val == .Null) continue;
             if (distinct) |*d| {
                 if (!try d.add(val)) continue;
             }
-            if (min_val == null) {
-                min_val = val;
-            } else if (val == .Int and min_val.? == .Int and val.Int < min_val.?.Int) {
-                min_val = val;
-            } else if (val == .Str and min_val.? == .Str) {
-                if (std.mem.order(u8, val.Str, min_val.?.Str) == .lt) {
-                    min_val = val;
-                }
+            if (best) |current| {
+                const order = return_and_sorting.compareValuesWithNullsPolicy(val, current, .default);
+                if ((is_min and order < 0) or (!is_min and order > 0)) best = val;
+            } else {
+                best = val;
             }
         }
-        return min_val orelse Value{ .Null = {} };
-    }
-
-    // Handle max(expr)
-    if (std.ascii.eqlIgnoreCase(func_name, "max")) {
-        if (arg_ptr == null) return Value{ .Null = {} };
-        var max_val: ?Value = null;
-        for (group_rows) |row| {
-            const val = (try evalAggregateArgument(allocator, arg_ptr.?.*, rowEnv(allocator, columns, row, param_names, param_values))) orelse continue;
-            if (val == .Null) continue;
-            if (distinct) |*d| {
-                if (!try d.add(val)) continue;
-            }
-            if (max_val == null) {
-                max_val = val;
-            } else if (val == .Int and max_val.? == .Int and val.Int > max_val.?.Int) {
-                max_val = val;
-            } else if (val == .Str and max_val.? == .Str) {
-                if (std.mem.order(u8, val.Str, max_val.?.Str) == .gt) {
-                    max_val = val;
-                }
-            }
-        }
-        return max_val orelse Value{ .Null = {} };
+        return best orelse Value{ .Null = {} };
     }
 
     // Handle collect(expr)

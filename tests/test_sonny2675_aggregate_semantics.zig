@@ -8,10 +8,18 @@
 //     other expression: `sum(n.i * $f)`, `count(CASE WHEN n.i > $t ...)`. The
 //     argument was evaluated without them, so `$f` was NULL; and a positional
 //     `$2` that was not supplied, an error anywhere else (GAP-0926), was
-//     swallowed as a skipped row.
+//     swallowed as a skipped row;
+//   * min and max order every value type: doubles, decimals, dates, and
+//     integers mixed with doubles, in the value order ORDER BY uses. Only
+//     integers and strings were compared, so otherwise the first value won.
+//     The GROUP BY fast path also skipped a double sent as a parameter
+//     (stored as an extended value) as not a number, and reported a float
+//     extreme for an integer one.
 // Every check runs in the three legacy sessions and on a persisted deployment
 // with no policy or tenant scope (the planned read and the GROUP BY fast
-// paths). The expected rows come from the seed.
+// paths), with the node cache bounded (the default: the fast paths read the
+// storage engine) and unbounded (they read the resident nodes). The expected
+// rows come from the seed.
 //
 // CANARY: REQ=REQ-SONNY-2675-AGGREGATE-SEMANTICS; FEATURE="GroupedAggregates"; ASPECT=Regression; STATUS=TESTED; TEST=tests/test_sonny2675_aggregate_semantics.zig; OWNER=engine; UPDATED=2026-09-25
 
@@ -33,11 +41,19 @@ const Mode = enum {
     rls_policy,
     /// Persisted, tenant-scoped: the legacy executor.
     tenant_scoped,
-    /// Persisted, no policy, no tenant: the planned read and the fast paths.
+    /// Persisted, no policy, no tenant: the planned read and the fast paths,
+    /// which read the storage engine directly (the node cache is bounded).
     persisted,
+    /// The same with an unbounded node cache
+    /// (`GEODE_NODE_CACHE_ENTRIES=0`): the fast paths read the resident
+    /// nodes instead.
+    unbounded_cache,
 };
 
-const modes = [_]Mode{ .in_memory, .rls_policy, .tenant_scoped, .persisted };
+const modes = [_]Mode{ .in_memory, .rls_policy, .tenant_scoped, .persisted, .unbounded_cache };
+
+extern "c" fn setenv(name: [*:0]const u8, value: [*:0]const u8, overwrite: c_int) c_int;
+extern "c" fn unsetenv(name: [*:0]const u8) c_int;
 
 const Param = struct { name: []const u8, value: Value };
 
@@ -51,6 +67,10 @@ const Session = struct {
 
     fn init(mode: Mode) !Session {
         const allocator = testing.allocator;
+        if (mode == .unbounded_cache) {
+            if (setenv("GEODE_NODE_CACHE_ENTRIES", "0", 1) != 0) return error.SetEnvFailed;
+        }
+        errdefer _ = unsetenv("GEODE_NODE_CACHE_ENTRIES");
         execution.cleanupCatalogInstance();
         graph_store.deinitGlobalStore();
         graph_store.setDataDirOverride(allocator, null);
@@ -84,6 +104,7 @@ const Session = struct {
         graph_store.setDataDirOverride(testing.allocator, null);
         if (self.data_dir) |d| testing.allocator.free(d);
         if (self.tmp) |*t| t.cleanup();
+        _ = unsetenv("GEODE_NODE_CACHE_ENTRIES");
     }
 
     fn run(self: *Session, query: []const u8, params: []const Param) !execution.ExecutionResult {
@@ -293,4 +314,33 @@ fn checkParameters(s: *Session, f: *Failures) !void {
 
 test "SONNY-2675: query parameters reach grouped aggregates" {
     try inEveryMode("parameters", checkParameters);
+}
+
+fn checkMinMax(s: *Session, f: *Failures) !void {
+    // Over the shared projection (a HAVING makes every path group there), and
+    // as a plain GROUP BY (on a persisted deployment, the fast path).
+    try expectRows(s, f, "MATCH (n:M) RETURN n.g2 AS g, max(n.d) AS hi, min(n.d) AS lo GROUP BY n.g2 HAVING count(*) > 0", &.{}, &.{ "'x', 3.25d, 1.5d", "'y', 7.5d, 7" });
+    try expectRows(s, f, "MATCH (n:M) RETURN n.g2 AS g, max(n.d) AS hi, min(n.d) AS lo GROUP BY n.g2", &.{}, &.{ "'x', 3.25d, 1.5d", "'y', 7.5d, 7" });
+    try expectRows(s, f, "MATCH (n:M) RETURN n.g2 AS g, max(n.dt) AS hi, min(n.dt) AS lo GROUP BY n.g2 HAVING count(*) > 0", &.{}, &.{ "'x', 2026-03-01, 2026-01-15", "'y', 2026-06-30, 2025-12-31" });
+    try expectRows(s, f, "MATCH (n:M) RETURN n.g2 AS g, max(n.m) AS hi, min(n.m) AS lo GROUP BY n.g2 HAVING count(*) > 0", &.{}, &.{ "'x', 10.0m, 0.25m", "'y', 2.5m, 2.25m" });
+    try expectRows(s, f, "MATCH (n:M) RETURN n.g2 AS g, max(n.dt) AS hi, min(n.dt) AS lo GROUP BY n.g2", &.{}, &.{ "'x', 2026-03-01, 2026-01-15", "'y', 2026-06-30, 2025-12-31" });
+    try expectRows(s, f, "MATCH (n:M) RETURN n.g2 AS g, max(n.m) AS hi, min(n.m) AS lo GROUP BY n.g2", &.{}, &.{ "'x', 10.0m, 0.25m", "'y', 2.5m, 2.25m" });
+    // A double sent as a parameter is a number to sum.
+    try expectRows(s, f, "MATCH (n:M) RETURN n.g2 AS g, sum(n.d) AS t GROUP BY n.g2", &.{}, &.{ "'x', 6.75d", "'y', 14.5d" });
+    // In a HAVING-only aggregate.
+    try expectRows(s, f, "MATCH (n:M) RETURN n.g2 AS g GROUP BY n.g2 HAVING max(n.d) > 5", &.{}, &.{"'y'"});
+    try expectRows(s, f, "MATCH (n:M) RETURN n.g2 AS g GROUP BY n.g2 HAVING min(n.dt) < DATE '2026-01-01'", &.{}, &.{"'y'"});
+    // Without a GROUP BY, on the persisted deployments (the property
+    // aggregate fast path; a date declines to the planned read). The legacy
+    // executor's own ungrouped aggregates are not this code.
+    if (s.mode == .persisted or s.mode == .unbounded_cache) {
+        try expectRows(s, f, "MATCH (n:M) RETURN max(n.d) AS hi", &.{}, &.{"7.5d"});
+        try expectRows(s, f, "MATCH (n:M) RETURN min(n.d) AS lo", &.{}, &.{"1.5d"});
+        try expectRows(s, f, "MATCH (n:M) RETURN max(n.dt) AS hi", &.{}, &.{"2026-06-30"});
+        try expectRows(s, f, "MATCH (n:M) RETURN min(n.m) AS lo", &.{}, &.{"0.25m"});
+    }
+}
+
+test "SONNY-2675: min and max order doubles, decimals, dates and mixed numbers" {
+    try inEveryMode("min/max", checkMinMax);
 }

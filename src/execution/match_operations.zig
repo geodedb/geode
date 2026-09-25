@@ -877,10 +877,12 @@ const AggAcc = struct {
     sum_float: f64 = 0,
     has_float: bool = false,
     count: u64 = 0,
-    min_int: ?i64 = null,
-    max_int: ?i64 = null,
-    min_float: ?f64 = null,
-    max_float: ?f64 = null,
+    /// SONNY-2675: the smallest and largest value folded, kept as the value
+    /// itself so an integer extreme comes out as an Int and a float one as a
+    /// Double. The four int/float fields this replaces reported a float
+    /// extreme whenever any value was a float.
+    min: ?NumericExtreme = null,
+    max: ?NumericExtreme = null,
 
     /// Fold one numeric value. `maybe_int` is set iff the value was integer
     /// typed; `f` is always the f64 view (used for min/max + float sum).
@@ -898,8 +900,6 @@ const AggAcc = struct {
             } else {
                 self.sum_float += @as(f64, @floatFromInt(iv));
             }
-            if (self.min_int == null or iv < self.min_int.?) self.min_int = iv;
-            if (self.max_int == null or iv > self.max_int.?) self.max_int = iv;
         } else {
             if (!self.has_float) {
                 self.has_float = true;
@@ -907,8 +907,33 @@ const AggAcc = struct {
             }
             self.sum_float += f;
         }
-        if (self.min_float == null or f < self.min_float.?) self.min_float = f;
-        if (self.max_float == null or f > self.max_float.?) self.max_float = f;
+        const e: NumericExtreme = .{ .f = f, .int = maybe_int };
+        if (self.min == null or e.lessThan(self.min.?)) self.min = e;
+        if (self.max == null or self.max.?.lessThan(e)) self.max = e;
+    }
+
+    fn minValue(self: AggAcc) Value {
+        return if (self.min) |e| e.value() else .{ .Null = {} };
+    }
+
+    fn maxValue(self: AggAcc) Value {
+        return if (self.max) |e| e.value() else .{ .Null = {} };
+    }
+};
+
+/// A number folded by `AggAcc`: its f64 view, and the integer itself when it
+/// was one. Two integers compare exactly.
+const NumericExtreme = struct {
+    f: f64,
+    int: ?i64,
+
+    fn lessThan(a: NumericExtreme, b: NumericExtreme) bool {
+        if (a.int != null and b.int != null) return a.int.? < b.int.?;
+        return a.f < b.f;
+    }
+
+    fn value(e: NumericExtreme) Value {
+        return if (e.int) |i| .{ .Int = i } else .{ .Double = e.f };
     }
 };
 
@@ -1142,7 +1167,12 @@ fn propToF64(pv: graph_store.PropertyValue) ?f64 {
         // GAP-0916: numeric ExtValues participate in aggregation like the
         // grouped slow path (aggregation_evaluation) already does.
         .ExtValue => |ev| switch (ev) {
-            .Int => |i| @as(f64, @floatFromInt(i)),
+            .Int, .BigInt => |i| @as(f64, @floatFromInt(i)),
+            .SmallInt => |i| @as(f64, @floatFromInt(i)),
+            .Real => |f| @as(f64, f),
+            // SONNY-2675: a double sent as a parameter is stored as an
+            // extended Double; it was skipped as not a number.
+            .Double => |f| f,
             .Decimal => |d| @as(f64, @floatFromInt(d.coeff)) / std.math.pow(f64, 10, @as(f64, @floatFromInt(d.scale))),
             else => null,
         },
@@ -1155,10 +1185,40 @@ fn propToI64(pv: graph_store.PropertyValue) ?i64 {
     return switch (pv) {
         .Int => |i| i,
         .ExtValue => |ev| switch (ev) {
-            .Int => |i| i,
+            .Int, .BigInt => |i| i,
+            .SmallInt => |i| i,
             else => null,
         },
         else => null,
+    };
+}
+
+/// Whether min or max can fold `pv` here: an integer or a float, whose f64
+/// view orders it exactly as the value order does. Anything else (a decimal,
+/// whose result must stay a decimal; a string, a date) is for the value order
+/// of the shared projection (SONNY-2675), so the fast path declines.
+fn minMaxFoldable(pv: graph_store.PropertyValue) bool {
+    return switch (pv) {
+        .Int, .Float => true,
+        .ExtValue => |ev| switch (ev) {
+            .Int, .BigInt, .SmallInt, .Real, .Double => true,
+            else => false,
+        },
+        else => false,
+    };
+}
+
+/// A storage (engine) value as a geode property value. An extended value is
+/// decoded into `scratch`, which the caller resets; null if it cannot be.
+fn storageToGraphPv(scratch: std.mem.Allocator, pv: gs.PropertyValue) ?graph_store.PropertyValue {
+    return switch (pv) {
+        .string => |s| .{ .String = s },
+        .int => |i| .{ .Int = i },
+        .float => |f| .{ .Float = f },
+        .bool => |b| .{ .Bool = b },
+        .null => .Null,
+        .decimal => |d| .{ .Decimal = .{ .coeff = d.coeff, .scale = d.scale } },
+        .ext => graph_storage_adapter.fromStorageProperty(scratch, pv) catch null,
     };
 }
 
@@ -1227,22 +1287,6 @@ fn comparePvLit(pv: graph_store.PropertyValue, op: Cmp, lit: LitValue) bool {
 // comparison helpers above, for the engine-direct fast-path reads. The engine
 // PropertyValue uses lower-case variants (.int/.float/.string/.decimal); the
 // in-memory cache one uses .Int/.Float/.String. Semantics are identical.
-fn storagePropToF64(pv: gs.PropertyValue) ?f64 {
-    return switch (pv) {
-        .int => |i| @as(f64, @floatFromInt(i)),
-        .float => |f| f,
-        .decimal => |d| @as(f64, @floatFromInt(d.coeff)) / std.math.pow(f64, 10, @as(f64, @floatFromInt(d.scale))),
-        else => null,
-    };
-}
-
-fn storagePropToI64(pv: gs.PropertyValue) ?i64 {
-    return switch (pv) {
-        .int => |i| i,
-        else => null,
-    };
-}
-
 /// Storage-side (engine `gs.PropertyValue`) variant of `comparePvLit`.
 ///
 /// Convert the engine value to a geode `graph_store.PropertyValue` (string data
@@ -1376,6 +1420,10 @@ pub fn propertyAggregateFastPath(
     var acc = AggAcc{};
     const tenant_active = filter_tenant != null;
     const writable_store = graph_store.getGlobalStore(allocator);
+    const min_or_max = kind == .min or kind == .max;
+    // Decoded extended values, reset after each node.
+    var ext_scratch = std.heap.ArenaAllocator.init(allocator);
+    defer ext_scratch.deinit();
 
     if (writable_store.nodes.effectiveCap() == 0) {
         // Unbounded: in-memory posting (public ids) + resident reads.
@@ -1394,11 +1442,13 @@ pub fn propertyAggregateFastPath(
                     if (!comparePvLit(w_val, p.op, p.lit)) continue;
                 }
                 const t_val = prop_store.getNodeProperty(node_id, target_key) orelse continue;
+                // SONNY-2675: min/max over a value an f64 cannot order exactly
+                // (a string, a date, a decimal) is the value order's: decline.
+                if (min_or_max and t_val != .Null and !minMaxFoldable(t_val)) return null;
                 const maybe_f = propToF64(t_val) orelse {
                     // GAP-0916: a present non-numeric value is a type error for
                     // sum/avg (the silent skip made sum return 0 and avg NULL).
-                    // Nulls are skipped per standard semantics; min/max keep
-                    // the historical skip (different comparison semantics).
+                    // Nulls are skipped per standard semantics.
                     if ((kind == .sum or kind == .avg) and t_val != .Null) return error.TypeMismatch;
                     continue;
                 };
@@ -1431,17 +1481,22 @@ pub fn propertyAggregateFastPath(
                 };
                 if (!compareStoragePvLit(w_val, p.op, p.lit)) continue;
             }
-            const t_val = (adapter.getNodeProperty(filter_graph, slot_id, target_key, allocator) catch continue) orelse continue;
-            defer switch (t_val) {
+            const t_raw = (adapter.getNodeProperty(filter_graph, slot_id, target_key, allocator) catch continue) orelse continue;
+            defer switch (t_raw) {
                 .string => |s| allocator.free(s),
+                .ext => |e| allocator.free(e.data),
                 else => {},
             };
-            const maybe_f = storagePropToF64(t_val) orelse {
+            defer _ = ext_scratch.reset(.retain_capacity);
+            const t_val = storageToGraphPv(ext_scratch.allocator(), t_raw) orelse return null;
+            // SONNY-2675: see the resident branch above.
+            if (min_or_max and t_val != .Null and !minMaxFoldable(t_val)) return null;
+            const maybe_f = propToF64(t_val) orelse {
                 // GAP-0916: see the resident branch above.
-                if ((kind == .sum or kind == .avg) and t_val != .null) return error.TypeMismatch;
+                if ((kind == .sum or kind == .avg) and t_val != .Null) return error.TypeMismatch;
                 continue;
             };
-            acc.update(storagePropToI64(t_val), maybe_f);
+            acc.update(propToI64(t_val), maybe_f);
         }
     }
 
@@ -1456,16 +1511,8 @@ pub fn propertyAggregateFastPath(
             const total: f64 = if (acc.has_float) acc.sum_float else @as(f64, @floatFromInt(acc.sum_int));
             break :blk Value{ .Double = total / @as(f64, @floatFromInt(acc.count)) };
         },
-        .min => blk: {
-            if (acc.count == 0) break :blk Value{ .Null = {} };
-            if (acc.has_float) break :blk Value{ .Double = acc.min_float.? };
-            break :blk Value{ .Int = acc.min_int.? };
-        },
-        .max => blk: {
-            if (acc.count == 0) break :blk Value{ .Null = {} };
-            if (acc.has_float) break :blk Value{ .Double = acc.max_float.? };
-            break :blk Value{ .Int = acc.max_int.? };
-        },
+        .min => acc.minValue(),
+        .max => acc.maxValue(),
     };
 
     // --- Column name: prefer explicit alias, else synthesize `<agg>(var.key)` ---
@@ -2502,6 +2549,9 @@ pub fn groupByAggregateFastPath(
 
     const writable_store = graph_store.getGlobalStore(allocator);
     const tenant_active = filter_tenant != null;
+    // Decoded extended values, reset after each read.
+    var ext_scratch = std.heap.ArenaAllocator.init(allocator);
+    defer ext_scratch.deinit();
 
     if (writable_store.nodes.effectiveCap() == 0) {
         // ---- Unbounded: in-memory posting + resident reads ----
@@ -2590,7 +2640,12 @@ pub fn groupByAggregateFastPath(
                         },
                         .sum, .avg, .min, .max => {
                             const t_val = prop_store.getNodeProperty(node_id, item_agg_prop[i].?) orelse continue;
-                            const maybe_f = propToF64(t_val) orelse continue;
+                            if (t_val == .Null) continue;
+                            // SONNY-2675: a value this path cannot fold exactly
+                            // (a string, a date; a decimal for min/max) was
+                            // skipped. The shared projection computes it.
+                            const maybe_f = propToF64(t_val) orelse return null;
+                            if ((item_kinds[i] == .min or item_kinds[i] == .max) and !minMaxFoldable(t_val)) return null;
                             group.accs[item_acc_idx[i]].update(propToI64(t_val), maybe_f);
                         },
                     }
@@ -2709,13 +2764,19 @@ pub fn groupByAggregateFastPath(
                         }
                     },
                     .sum, .avg, .min, .max => {
-                        const t_val = readScanNodeProp(adapter, filter_graph, slot_id, prop_head, item_agg_prop[i].?, allocator) orelse continue;
-                        defer switch (t_val) {
+                        const t_raw = readScanNodeProp(adapter, filter_graph, slot_id, prop_head, item_agg_prop[i].?, allocator) orelse continue;
+                        defer switch (t_raw) {
                             .string => |s| allocator.free(s),
+                            .ext => |e| allocator.free(e.data),
                             else => {},
                         };
-                        const maybe_f = storagePropToF64(t_val) orelse continue;
-                        group.accs[item_acc_idx[i]].update(storagePropToI64(t_val), maybe_f);
+                        defer _ = ext_scratch.reset(.retain_capacity);
+                        const t_val = storageToGraphPv(ext_scratch.allocator(), t_raw) orelse return null;
+                        if (t_val == .Null) continue;
+                        // SONNY-2675: see the resident branch above.
+                        const maybe_f = propToF64(t_val) orelse return null;
+                        if ((item_kinds[i] == .min or item_kinds[i] == .max) and !minMaxFoldable(t_val)) return null;
+                        group.accs[item_acc_idx[i]].update(propToI64(t_val), maybe_f);
                     },
                 }
             }
@@ -2801,16 +2862,8 @@ pub fn groupByAggregateFastPath(
                     const total: f64 = if (a.has_float) a.sum_float else @as(f64, @floatFromInt(a.sum_int));
                     break :blk Value{ .Double = total / @as(f64, @floatFromInt(a.count)) };
                 },
-                .min => blk: {
-                    const a = group.accs[item_acc_idx[i]];
-                    if (a.count == 0) break :blk Value{ .Null = {} };
-                    break :blk if (a.has_float) Value{ .Double = a.min_float.? } else Value{ .Int = a.min_int.? };
-                },
-                .max => blk: {
-                    const a = group.accs[item_acc_idx[i]];
-                    if (a.count == 0) break :blk Value{ .Null = {} };
-                    break :blk if (a.has_float) Value{ .Double = a.max_float.? } else Value{ .Int = a.max_int.? };
-                },
+                .min => group.accs[item_acc_idx[i]].minValue(),
+                .max => group.accs[item_acc_idx[i]].maxValue(),
             };
             n_vals_filled += 1;
         }
