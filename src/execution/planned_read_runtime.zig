@@ -2909,6 +2909,7 @@ fn materializeNodeProjected(
             else => return err,
         };
         const val = maybe_val orelse continue;
+        defer freeStoragePropertyValue(scratch, val);
         const decoded = try graph_storage_adapter.fromStorageProperty(scratch, val);
         const owned_key = try scratch.dupe(u8, key);
         try node.properties.put(owned_key, decoded);
@@ -3025,10 +3026,7 @@ fn resolveExternalNodeId(
 
     // Slow path: read the persisted public ID property from the adapter.
     if (adapter.getNodeProperty(graph_name, slot_id, graph_store.INTERNAL_NODE_ID_PROPERTY_KEY, allocator) catch null) |stored_prop| {
-        defer switch (stored_prop) {
-            .string => |text| allocator.free(text),
-            else => {},
-        };
+        defer freeStoragePropertyValue(allocator, stored_prop);
         const public_id: ?u64 = switch (stored_prop) {
             .string => |text| graph_store.parsePersistedPublicId(text),
             .int => |n| if (n >= 0) @as(u64, @intCast(n)) else null,
@@ -3349,9 +3347,16 @@ fn freeTrackedEntities(allocator: std.mem.Allocator, nodes: []const *graph_store
     }
 }
 
+// CANARY: REQ=REQ-SONNY-2653-PLANNED-READ-EXT-LEAK; FEATURE="PlannedReadStorageReads"; ASPECT=FreeExtendedReadCopy; STATUS=TESTED; TEST=tests/test_sonny2653_planned_read_ext_read_leak.zig; OWNER=engine; UPDATED=2026-09-25
+/// Free a value the storage adapter read for this file (`getNodeProperty`,
+/// `getAllNodeProperties`, `getAllEdgeProperties`). The engine's decode copies
+/// both a string and an extended value's bytes onto the caller's allocator
+/// (SONNY-2653: the extended value's bytes used to leak on every read, the
+/// planned-read twin of SONNY-2464).
 fn freeStoragePropertyValue(allocator: std.mem.Allocator, value: gs.PropertyValue) void {
     switch (value) {
         .string => |text| allocator.free(text),
+        .ext => |ext| allocator.free(ext.data),
         else => {},
     }
 }

@@ -8438,6 +8438,18 @@ pub fn build(b: *std.Build) void {
     const sonny2652_step = b.step("test-sonny2652-planned-read-skip-without-limit", "Run SONNY-2652 regression (SKIP without LIMIT on the executor's planned-read path returns every row after the offset: node scan, path and multi-chain queries, with and without a WHERE; a FILTER is applied before the LIMIT)");
     sonny2652_step.dependOn(&run_sonny2652_tests.step);
 
+    // SONNY-2653: planned reads leaked the storage adapter's read copy of every
+    // extended property value (a list, say) they checked a pattern against:
+    // the free helper released strings only.
+    const sonny2653_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny2653_planned_read_ext_read_leak.zig"), .target = target, .optimize = optimize });
+    sonny2653_test_mod.addImport("geode", root_mod);
+    sonny2653_test_mod.addImport("logging", logging_mod);
+    const sonny2653_tests = b.addTest(.{ .root_module = sonny2653_test_mod });
+    const run_sonny2653_tests = b.addRunArtifact(sonny2653_tests);
+    shardDep(test_step, &run_sonny2653_tests.step, 1, test_shard_loads, test_shard_index);
+    const sonny2653_step = b.step("test-sonny2653-planned-read-ext-read-leak", "Run SONNY-2653 regression (a planned read frees the storage adapter's read copy of every extended property value it checks a node or edge pattern against)");
+    sonny2653_step.dependOn(&run_sonny2653_tests.step);
+
     // SONNY-1330 TSan companion: the same regression file under
     // -fsanitize-thread, so the fork-join over a COLD store is checked for the
     // cross-arm cache mutation this ticket closes rather than merely asserted
