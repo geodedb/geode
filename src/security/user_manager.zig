@@ -518,13 +518,20 @@ pub const UserManager = struct {
         var found_policy: ?rls.RLSEngine.Policy = null;
         var policy_key: ?rls.RLSEngine.PolicyKey = null;
 
-        var it = self.rls_engine.policies.iterator();
-        while (it.next()) |entry| {
-            for (entry.value_ptr.items) |policy| {
-                if (policy.id == policy_id) {
-                    found_policy = policy;
-                    policy_key = entry.key_ptr.*;
-                    break;
+        {
+            // SONNY-2679 (review): query threads read this map; copy the
+            // policy out under the engine's read lock (`updatePolicy` below
+            // takes it exclusively).
+            self.rls_engine.acquirePoliciesRead();
+            defer self.rls_engine.releasePoliciesRead();
+            var it = self.rls_engine.policies.iterator();
+            while (it.next()) |entry| {
+                for (entry.value_ptr.items) |policy| {
+                    if (policy.id == policy_id) {
+                        found_policy = policy;
+                        policy_key = entry.key_ptr.*;
+                        break;
+                    }
                 }
             }
         }

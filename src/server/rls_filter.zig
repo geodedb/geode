@@ -376,14 +376,27 @@ fn rowContainsDeniedLabel(
     return false;
 }
 
+/// How many lists and maps deep `valueContainsDeniedLabel` searches. A list or
+/// map nested deeper is not searched, and counts as carrying a denied label:
+/// the search has to end, and a row the filter could not search is not a row
+/// it may pass (fail closed). Real rows nest a few levels; this only bounds the
+/// recursion, and the stack it uses, for an adversarial value.
+const max_nested_value_depth: usize = 64;
+
 // CANARY: REQ=REQ-SONNY-2687-NESTED-POSTFILTER; FEATURE="RLS Query Enforcement"; ASPECT=NestedValues; STATUS=TESTED; TEST=test-rls-filter; OWNER=security; UPDATED=2026-09-25
 /// Does `val`, or any value nested in it, carry a denied label? A node, an
 /// edge, and every node and edge of a path are checked; a list or a map is
 /// searched element by element (SONNY-2687: `collect(h)`, `[h]`, `{n: h}` and
 /// the like carry whole nodes, and this filter used to look at top-level
 /// values only). The executor drops denied rows itself (SONNY-2679); this is
-/// the defence-in-depth layer behind it.
+/// the defence-in-depth layer behind it. Past `max_nested_value_depth` it
+/// answers true.
 fn valueContainsDeniedLabel(denied_labels: *const std.StringHashMap(void), val: Value) bool {
+    return valueContainsDeniedLabelAt(denied_labels, val, 0);
+}
+
+/// `valueContainsDeniedLabel` for a value `depth` lists or maps down.
+fn valueContainsDeniedLabelAt(denied_labels: *const std.StringHashMap(void), val: Value, depth: usize) bool {
     switch (val) {
         .Node => |node| {
             for (node.labels) |label| {
@@ -405,14 +418,16 @@ fn valueContainsDeniedLabel(denied_labels: *const std.StringHashMap(void), val: 
             }
         },
         .List => |items| {
+            if (depth >= max_nested_value_depth) return true;
             for (items) |item| {
-                if (valueContainsDeniedLabel(denied_labels, item)) return true;
+                if (valueContainsDeniedLabelAt(denied_labels, item, depth + 1)) return true;
             }
         },
         .Map => |map| {
+            if (depth >= max_nested_value_depth) return true;
             var it = map.valueIterator();
             while (it.next()) |item| {
-                if (valueContainsDeniedLabel(denied_labels, item.*)) return true;
+                if (valueContainsDeniedLabelAt(denied_labels, item.*, depth + 1)) return true;
             }
         },
         else => {},
@@ -680,6 +695,43 @@ test "SONNY-2687: rowContainsDeniedLabel looks inside lists, maps and paths nest
     defer clean_map.deinit();
     try clean_map.put("n", .{ .Node = &public_node });
     try std.testing.expect(!rowContainsDeniedLabel(&denied, &[_]Value{ .{ .List = &clean }, .{ .Map = clean_map } }));
+}
+
+// CANARY: REQ=REQ-SONNY-2687-NESTED-POSTFILTER; FEATURE="RLS Query Enforcement"; ASPECT=NestedDepthLimit; STATUS=TESTED; TEST=test-rls-filter; OWNER=security; UPDATED=2026-09-25
+test "SONNY-2687: a value nested past the search depth is treated as denied" {
+    const allocator = std.testing.allocator;
+    var denied = std.StringHashMap(void).init(allocator);
+    defer denied.deinit();
+    try denied.put("Secret", {});
+
+    // Lists nested one past the limit, with nothing denied at the bottom:
+    // the search stops at the limit and the row is dropped.
+    const deep = max_nested_value_depth + 2;
+    var deep_cells: [deep][1]Value = undefined;
+    deep_cells[deep - 1][0] = .{ .Int = 1 };
+    var i: usize = deep - 1;
+    while (i > 0) : (i -= 1) deep_cells[i - 1][0] = .{ .List = &deep_cells[i] };
+    try std.testing.expect(rowContainsDeniedLabel(&denied, &[_]Value{.{ .List = &deep_cells[0] }}));
+
+    // The same shape at the limit is searched to the bottom and kept...
+    const at_limit = max_nested_value_depth;
+    var cells: [at_limit][1]Value = undefined;
+    cells[at_limit - 1][0] = .{ .Int = 1 };
+    i = at_limit - 1;
+    while (i > 0) : (i -= 1) cells[i - 1][0] = .{ .List = &cells[i] };
+    try std.testing.expect(!rowContainsDeniedLabel(&denied, &[_]Value{.{ .List = &cells[0] }}));
+
+    // ...and a denied node at its bottom is still found.
+    var secret_labels = [_][]const u8{"Secret"};
+    const secret_node = graph_store.Node{ .id = 1, .labels = &secret_labels, .properties = graph_store.CompactPropertyMap.init(allocator) };
+    cells[at_limit - 1][0] = .{ .Node = &secret_node };
+    try std.testing.expect(rowContainsDeniedLabel(&denied, &[_]Value{.{ .List = &cells[0] }}));
+
+    // A map past the limit fails closed the same way.
+    var map = std.StringHashMap(Value).init(allocator);
+    defer map.deinit();
+    try map.put("deep", .{ .List = &deep_cells[0] });
+    try std.testing.expect(rowContainsDeniedLabel(&denied, &[_]Value{.{ .Map = map }}));
 }
 
 test "SONNY-2687: applyRLSFilter drops a row whose collected list carries a denied node" {

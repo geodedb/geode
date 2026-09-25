@@ -69,6 +69,14 @@
   pattern comprehensions, `COUNT {}`, `EXISTS {}` and `shortestPath()` now read
   only the session's graph. The transport RLS post-filter now also finds a
   denied node or edge inside a list or a map, such as `collect(h)`.
+- **RLS policy changes no longer race with queries (SONNY-2679 review):**
+  creating or deleting an expression RLS policy changed the engine's policy
+  map while queries on other connections read it; this covers
+  `CALL geode.rls.add_attribute_policy` and the other policy procedures.
+  That could crash the server. The map is now locked. A traversal now reads
+  the label-deny policies once per statement, not once per edge. The
+  transport RLS post-filter now stops searching at 64 levels of nested lists
+  or maps, and drops a row nested deeper instead of passing it.
 - **RLS range policies fail closed (SONNY-2709):** in an expression RLS
   policy, `<`, `<=`, `>` and `>=` treated a missing value, or two values of
   different types, as equal. So `<=` and `>=` held: a policy such as

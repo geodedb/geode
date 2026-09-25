@@ -168,6 +168,37 @@ pub const RLSFilterEngine = struct {
         return denied;
     }
 
+    /// SONNY-2679 (review): `snapshotDeniedLabels` with its own copy of every
+    /// label, for a caller that keeps the set after the lock is released, such
+    /// as a traversal that checks every node and edge it reaches against one
+    /// snapshot instead of calling `isLabelDenied`, which takes the lock, per
+    /// label. (`snapshotDeniedLabels` borrows the policies' strings, which
+    /// `removeDenyPolicy` frees.) Free with `freeOwnedLabelSet`.
+    pub fn snapshotDeniedLabelsOwned(self: *Self, allocator: std.mem.Allocator, graph: []const u8, username: []const u8) !std.StringHashMapUnmanaged(void) {
+        self.mu.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
+        defer self.mu.unlock(std.Io.Threaded.global_single_threaded.io());
+
+        var denied: std.StringHashMapUnmanaged(void) = .empty;
+        errdefer freeOwnedLabelSet(allocator, &denied);
+        for (self.policies.items) |p| {
+            if (!p.deny) continue;
+            if (!std.mem.eql(u8, p.graph, graph)) continue;
+            if (p.username.len != 0 and !std.mem.eql(u8, p.username, username)) continue;
+            if (denied.contains(p.label)) continue;
+            const label = try allocator.dupe(u8, p.label);
+            errdefer allocator.free(label);
+            try denied.put(allocator, label, {});
+        }
+        return denied;
+    }
+
+    /// Free a set from `snapshotDeniedLabelsOwned`.
+    pub fn freeOwnedLabelSet(allocator: std.mem.Allocator, set: *std.StringHashMapUnmanaged(void)) void {
+        var it = set.keyIterator();
+        while (it.next()) |key| allocator.free(key.*);
+        set.deinit(allocator);
+    }
+
     /// Return the number of currently active label policies.
     pub fn policyCount(self: *Self) usize {
         self.mu.lockUncancelable(std.Io.Threaded.global_single_threaded.io());

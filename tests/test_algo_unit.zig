@@ -469,10 +469,11 @@ test "findBoundNode: not found returns null" {
 // ===========================================================================
 // graph_algorithms.zig — findEdgeBetween
 //
-// SONNY-1326: `findEdgeBetween` takes the resolved session tenant scope as a
-// REQUIRED parameter. This is a single-tenant unit harness with no session
-// context, so every call here passes `null` (all-tenants), which is exactly the
-// legacy behaviour these cases were written against.
+// SONNY-2687 (review): `findEdgeBetween` resolves the whole expression scope
+// from the active session (its graph, tenant rule and RLS policies). This unit
+// harness has no session, so every call reads the default graph with every
+// tenant and no RLS: the legacy behaviour these cases were written against.
+// The last case pins that an edge in another graph is not returned.
 // ===========================================================================
 
 test "findEdgeBetween: direct edge found" {
@@ -482,7 +483,7 @@ test "findEdgeBetween: direct edge found" {
     try addTestNode(&store, 2, &.{"B"});
     try addTestEdge(&store, 100, 1, 2, "KNOWS");
 
-    const edge = execution.findEdgeBetween(&store, 1, 2, null);
+    const edge = try execution.findEdgeBetween(testing.allocator, &store, 1, 2);
     try testing.expect(edge != null);
     try testing.expectEqual(@as(u64, 100), edge.?.id);
     try testing.expectEqual(@as(u64, 1), edge.?.from_id);
@@ -497,7 +498,7 @@ test "findEdgeBetween: reverse direction found" {
     try addTestEdge(&store, 100, 2, 1, "FOLLOWS");
 
     // Searching from 1 to 2: edge is 2->1, found via reverse check
-    const edge = execution.findEdgeBetween(&store, 1, 2, null);
+    const edge = try execution.findEdgeBetween(testing.allocator, &store, 1, 2);
     try testing.expect(edge != null);
     try testing.expectEqual(@as(u64, 100), edge.?.id);
 }
@@ -508,7 +509,7 @@ test "findEdgeBetween: no edge returns null" {
     try addTestNode(&store, 1, &.{"A"});
     try addTestNode(&store, 2, &.{"B"});
 
-    const edge = execution.findEdgeBetween(&store, 1, 2, null);
+    const edge = try execution.findEdgeBetween(testing.allocator, &store, 1, 2);
     try testing.expect(edge == null);
 }
 
@@ -520,7 +521,7 @@ test "findEdgeBetween: multiple edges returns first match" {
     try addTestEdge(&store, 100, 1, 2, "KNOWS");
     try addTestEdge(&store, 101, 1, 2, "LIKES");
 
-    const edge = execution.findEdgeBetween(&store, 1, 2, null);
+    const edge = try execution.findEdgeBetween(testing.allocator, &store, 1, 2);
     try testing.expect(edge != null);
     try testing.expect(edge.?.id == 100 or edge.?.id == 101);
 }
@@ -529,6 +530,18 @@ test "findEdgeBetween: nonexistent nodes returns null" {
     var store = try createTestStore();
     defer store.deinit();
 
-    const edge = execution.findEdgeBetween(&store, 999, 888, null);
+    const edge = try execution.findEdgeBetween(testing.allocator, &store, 999, 888);
+    try testing.expect(edge == null);
+}
+
+test "findEdgeBetween: an edge in another graph is not returned" {
+    var store = try createTestStore();
+    defer store.deinit();
+    try store.createNodeWithIdNoSave(1, &.{"A"}, "other");
+    try store.createNodeWithIdNoSave(2, &.{"B"}, "other");
+    try store.createEdgeWithIdNoSave(100, 1, 2, "KNOWS", "other");
+
+    // The session's graph is the default one; the edge lives in "other".
+    const edge = try execution.findEdgeBetween(testing.allocator, &store, 1, 2);
     try testing.expect(edge == null);
 }

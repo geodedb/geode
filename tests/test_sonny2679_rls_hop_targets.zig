@@ -594,6 +594,52 @@ test "SONNY-2679: a parent tenant reads its child's rows through a hop, and not 
     try checkMode(.tenant_hierarchy);
 }
 
+// CANARY: REQ=REQ-SONNY-2679-LABEL-DENY-SNAPSHOT; FEATURE="TraversalRowVisibility"; ASPECT=LabelDenySnapshot; STATUS=TESTED; TEST=tests/test_sonny2679_rls_hop_targets.zig; OWNER=security; UPDATED=2026-09-25
+// Review (LOW): a traversal took the label-deny engine's mutex for every edge
+// it walked and every node label it checked. It now reads the session's
+// denied labels once, into a snapshot that answers every check while the
+// traversal runs. This pins that the snapshot, not the engine, answers: a
+// policy removed from the engine while a snapshot is current still applies,
+// until the snapshot ends; the next traversal takes a fresh one.
+test "SONNY-2679: while a traversal's label-deny snapshot is current, the checks read it and not the engine" {
+    harness.silenceEngineLogs();
+    var s = try Session.init(.label_policy);
+    defer s.deinit();
+    try s.seed();
+    const engine = s.label_engine orelse return error.NoLabelEngine;
+
+    const store = graph_store.getGlobalStore(testing.allocator);
+    const g1 = try idOf("g1");
+    const secret = for (store.getOutgoingEdgeIds(g1) orelse &.{}) |eid| {
+        const e = store.getEdgeHydrated(eid) orelse continue;
+        if (std.mem.eql(u8, e.label, "SECRET")) break e;
+    } else return error.SecretEdgeMissing;
+
+    const prev = execution.pushActiveContext(&s.ctx);
+    defer execution.popActiveContext(prev);
+    var row = std.StringHashMap(rls.Value).init(testing.allocator);
+    defer row.deinit();
+
+    // The engine denies SECRET to the session.
+    try testing.expect(!execution.passesEdgeRLSFilter(&row, &secret));
+
+    const snapshot = execution.LabelDenySnapshot.begin(testing.allocator, graph_store.DEFAULT_GRAPH_NAME, session_user) orelse return error.NoSnapshot;
+    engine.removeDenyPolicy(graph_store.DEFAULT_GRAPH_NAME, "SECRET", session_user);
+    // The engine no longer denies it; the current snapshot still does.
+    try testing.expect(!execution.passesEdgeRLSFilter(&row, &secret));
+    snapshot.end();
+    // With no snapshot current, the engine answers again.
+    try testing.expect(execution.passesEdgeRLSFilter(&row, &secret));
+
+    // A traversal after the change takes its own snapshot and follows the edge.
+    var f: Failures = .{};
+    try expectRows(&s, &f, "MATCH (g:G)-[r:SECRET]->(h) RETURN h.s", &.{"viaSecret"});
+    if (f.items.items.len != 0) {
+        for (f.items.items) |msg| std.debug.print("  {s}\n", .{msg});
+        return error.SnapshotNotRefreshed;
+    }
+}
+
 /// Detached node copies the store retains until the per-graph checkpoint
 /// (`getNodePtrForScan` boxes every node it hands out).
 fn retainedNodeCopies() usize {

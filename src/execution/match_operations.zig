@@ -261,6 +261,77 @@ pub fn passesRowRLSFilter(reusable_row: *std.StringHashMap(rls.Value), node: gra
     return passesRLSFilter(reusable_row, node);
 }
 
+// CANARY: REQ=REQ-SONNY-2679-LABEL-DENY-SNAPSHOT; FEATURE="TraversalRowVisibility"; ASPECT=LabelDenySnapshot; STATUS=TESTED; TEST=tests/test_sonny2679_rls_hop_targets.zig; OWNER=security; UPDATED=2026-09-25
+/// SONNY-2679 (review): the label-deny policies that apply to one session in
+/// one graph, read once for a whole traversal.
+///
+/// `passesRLSFilter` and `passesEdgeRLSFilter` ask the label-deny engine about
+/// every label of every node and every edge, and each question takes the
+/// engine's mutex, so a traversal took it for every edge it walked. While a
+/// traversal's snapshot is current on its thread (`begin` .. `end`), those
+/// questions are answered from the snapshot, which took the mutex once.
+///
+/// It holds its own copy of the labels (the engine frees a policy's strings
+/// when the policy is removed). It is a statement-level snapshot: a policy
+/// added or removed during the traversal applies from the next statement.
+/// Scopes nest (a pattern comprehension evaluated inside a MATCH); `end`
+/// restores the snapshot `begin` replaced. A snapshot that cannot be taken
+/// (out of memory) is not installed, and the engine is asked as before.
+pub const LabelDenySnapshot = struct {
+    allocator: std.mem.Allocator,
+    graph: []const u8,
+    username: []const u8,
+    labels: std.StringHashMapUnmanaged(void),
+    previous: ?*const LabelDenySnapshot,
+
+    /// Take a snapshot for `username` in `graph` and make it current on this
+    /// thread. Null (nothing installed) when no label-deny engine is
+    /// configured or the snapshot cannot be taken. `graph` and `username`
+    /// must outlive it.
+    pub fn begin(allocator: std.mem.Allocator, graph: []const u8, username: []const u8) ?*LabelDenySnapshot {
+        const engine = rls_types.getGlobalRLSFilterEngine() orelse return null;
+        const snapshot = allocator.create(LabelDenySnapshot) catch return null;
+        const labels = engine.snapshotDeniedLabelsOwned(allocator, graph, username) catch {
+            allocator.destroy(snapshot);
+            return null;
+        };
+        snapshot.* = .{ .allocator = allocator, .graph = graph, .username = username, .labels = labels, .previous = t_label_deny };
+        t_label_deny = snapshot;
+        return snapshot;
+    }
+
+    /// Restore the snapshot `begin` replaced, and free this one.
+    pub fn end(self: *LabelDenySnapshot) void {
+        t_label_deny = self.previous;
+        rls_types.RLSFilterEngine.freeOwnedLabelSet(self.allocator, &self.labels);
+        self.allocator.destroy(self);
+    }
+};
+
+/// The label-deny snapshot of the traversal running on this thread, if any.
+threadlocal var t_label_deny: ?*const LabelDenySnapshot = null;
+
+/// Is `label` denied to `username` in `graph`? From the current traversal's
+/// snapshot when it covers this graph and user, else from the engine.
+fn labelDenied(filter_engine: *rls_types.RLSFilterEngine, graph: []const u8, label: []const u8, username: []const u8) bool {
+    if (t_label_deny) |snapshot| {
+        if (std.mem.eql(u8, snapshot.graph, graph) and std.mem.eql(u8, snapshot.username, username)) {
+            return snapshot.labels.contains(label);
+        }
+    }
+    return filter_engine.isLabelDenied(graph, label, username);
+}
+
+/// A traversal's label-deny snapshot for `graph`: taken when an RLS policy may
+/// deny the active session a row (`may_deny`, from `rlsMayDenyForSession`)
+/// and the session has an RLS identity; null otherwise. End it with `end`.
+pub fn beginTraversalLabelDeny(allocator: std.mem.Allocator, graph: []const u8, may_deny: bool) ?*LabelDenySnapshot {
+    if (!may_deny) return null;
+    const ctx = execution.getActiveContext() orelse return null;
+    const username = rlsUsername(ctx) orelse return null;
+    return LabelDenySnapshot.begin(allocator, graph, username);
+}
+
 // CANARY: REQ=REQ-SONNY-2679-EDGE-RLS; FEATURE="TraversalRowVisibility"; ASPECT=EdgeRLS; STATUS=TESTED; TEST=tests/test_sonny2679_rls_hop_targets.zig; OWNER=security; UPDATED=2026-09-25
 /// SONNY-2679: may this session walk `edge` under its RLS policies? The
 /// label-deny engine treats a relationship type like a node label (a deny
@@ -274,7 +345,7 @@ pub fn passesEdgeRLSFilter(reusable_row: *std.StringHashMap(rls.Value), edge: *c
     const ctx = execution.getActiveContext() orelse return true;
     const username = rlsUsername(ctx) orelse return true;
     if (rls_types.getGlobalRLSFilterEngine()) |filter_engine| {
-        if (filter_engine.isLabelDenied(edge.graph_name, edge.label, username)) return false;
+        if (labelDenied(filter_engine, edge.graph_name, edge.label, username)) return false;
     }
     const tables = [_][]const u8{edge.label};
     return exprPoliciesAllow(reusable_row, &edge.properties, edge.graph_name, &tables, username);
@@ -315,18 +386,24 @@ pub const HopScope = struct {
     rls_may_deny: bool,
     /// Node id -> visible, for the nodes this traversal has decided.
     verdicts: std.AutoHashMapUnmanaged(u64, bool) = .empty,
+    /// The session's label-deny policies in `filter_graph`, current on this
+    /// thread until `deinit`; every RLS check of the traversal reads it.
+    label_deny: ?*LabelDenySnapshot = null,
 
     pub fn init(allocator: std.mem.Allocator, filter_graph: []const u8, filter_tenant: ?[]const u8, rls_row: *std.StringHashMap(rls.Value)) HopScope {
+        const may_deny = rlsMayDenyForSession();
         return .{
             .allocator = allocator,
             .filter_graph = filter_graph,
             .filter_tenant = filter_tenant,
             .rls_row = rls_row,
-            .rls_may_deny = rlsMayDenyForSession(),
+            .rls_may_deny = may_deny,
+            .label_deny = beginTraversalLabelDeny(allocator, filter_graph, may_deny),
         };
     }
 
     pub fn deinit(self: *HopScope) void {
+        if (self.label_deny) |snapshot| snapshot.end();
         self.verdicts.deinit(self.allocator);
     }
 
@@ -435,7 +512,7 @@ fn passesRLSFilter(
         return passesRLSExprFilter(reusable_row, node, username);
     };
     for (node.labels) |label| {
-        if (filter_engine.isLabelDenied(node.graph_name, label, username)) return false;
+        if (labelDenied(filter_engine, node.graph_name, label, username)) return false;
     }
 
     // Layer 2: Expression-based property check

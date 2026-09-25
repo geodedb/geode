@@ -228,6 +228,10 @@ pub const countNodesLabelRefcountFastPath = match_operations.countNodesLabelRefc
 pub const countEdgesFastPath = match_operations.countEdgesFastPath;
 pub const countFilteredFastPath = match_operations.countFilteredFastPath;
 pub const wouldEvaluateRLS = match_operations.wouldEvaluateRLS;
+// SONNY-2679 (review): a traversal's label-deny snapshot, and the edge RLS
+// check that reads it, so a test can pin that the snapshot is what answers.
+pub const LabelDenySnapshot = match_operations.LabelDenySnapshot;
+pub const passesEdgeRLSFilter = match_operations.passesEdgeRLSFilter;
 pub const activeRlsPoliciesConfigured = match_operations.activeRlsPoliciesConfigured;
 // H3-P3: planner ordered-scan fast-path hit counter (test path signal).
 pub const getOrderedScanFastPathHits = match_operations.getOrderedScanFastPathHits;

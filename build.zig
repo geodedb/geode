@@ -2907,6 +2907,8 @@ pub fn build(b: *std.Build) void {
     algo_unit_tests.root_module.addImport("json", json_mod);
     algo_unit_tests.root_module.link_libc = true;
     const run_algo_unit_tests = b.addRunArtifact(algo_unit_tests);
+    const algo_unit_step = b.step("test-algo-unit", "Run the graph-algorithm helper unit tests (tests/test_algo_unit.zig: centrality helpers, findEdgeBetween scoping)");
+    algo_unit_step.dependOn(&run_algo_unit_tests.step);
 
     // Storage migration removed (Phase 2: engine-backed persistence)
 

@@ -81,7 +81,20 @@ pub const Value = union(ValueType) {
 // Enhanced Row-Level Security Engine with fine-grained access control
 pub const RLSEngine = struct {
     allocator: Allocator,
+    /// Guarded by `policies_lock`.
     policies: std.HashMap(PolicyKey, std.ArrayList(Policy), PolicyKey.HashContext, 80),
+    // CANARY: REQ=REQ-SONNY-2679-RLS-POLICY-LOCK; FEATURE="RLS Expression Wiring"; ASPECT=PolicyMapLock; STATUS=TESTED; TEST=src/security/rls_core.zig; OWNER=security; UPDATED=2026-09-25
+    /// SONNY-2679 (review): `CALL geode.rls.add_attribute_policy` (and the
+    /// other policy procedures) create and delete policies on a connection
+    /// thread while queries on other connections read the same map for every
+    /// row (`checkRowAccessByUsername`, `needsRowDataForTable`,
+    /// `hasPolicies`). A `getOrPut` that rehashes the map, or an `append` that
+    /// moves a policy list, under a reader was a use-after-free: nothing
+    /// serialized them (a per-graph write lock does not stop a read of another
+    /// graph). Writers hold this exclusively, readers shared, for as long as
+    /// they touch the map or a policy list. Nothing that holds it calls back
+    /// into the engine, so it is never taken twice on one thread.
+    policies_lock: std.Io.RwLock = std.Io.RwLock.init,
     policy_cache: PolicyCache,
     context_evaluator: ContextEvaluator,
     query_rewriter: QueryRewriter,
@@ -345,17 +358,38 @@ pub const RLSEngine = struct {
         self.audit_logger.deinit();
     }
 
+    fn lockPoliciesShared(self: *Self) void {
+        self.policies_lock.lockSharedUncancelable(std.Io.Threaded.global_single_threaded.io());
+    }
+
+    fn unlockPoliciesShared(self: *Self) void {
+        self.policies_lock.unlockShared(std.Io.Threaded.global_single_threaded.io());
+    }
+
+    fn lockPoliciesExclusive(self: *Self) void {
+        self.policies_lock.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
+    }
+
+    fn unlockPoliciesExclusive(self: *Self) void {
+        self.policies_lock.unlock(std.Io.Threaded.global_single_threaded.io());
+    }
+
+    /// Hold the policy map for reading, for a caller outside the engine that
+    /// walks `policies` itself. Pair with `releasePoliciesRead`.
+    pub fn acquirePoliciesRead(self: *Self) void {
+        self.lockPoliciesShared();
+    }
+
+    pub fn releasePoliciesRead(self: *Self) void {
+        self.unlockPoliciesShared();
+    }
+
     // Policy Management
     pub fn createPolicy(self: *Self, policy: Policy) !void {
         const key = PolicyKey{
             .graph = policy.graph,
             .table = policy.table,
         };
-
-        const result = try self.policies.getOrPut(key);
-        if (!result.found_existing) {
-            result.value_ptr.* = std.ArrayList(Policy).empty;
-        }
 
         // Compile expressions if provided
         // CANARY: REQ=REQ-RLS-EXPR-002; FEATURE="RLSExpressionCompilation"; ASPECT=PolicyCompilation; STATUS=EXEMPT; OWNER=security; UPDATED=2025-12-30
@@ -377,6 +411,14 @@ pub const RLSEngine = struct {
             }
         }
 
+        // Compiled above, outside the lock; only the map change is under it.
+        self.lockPoliciesExclusive();
+        defer self.unlockPoliciesExclusive();
+
+        const result = try self.policies.getOrPut(key);
+        if (!result.found_existing) {
+            result.value_ptr.* = std.ArrayList(Policy).empty;
+        }
         try result.value_ptr.append(self.allocator, compiled_policy);
 
         // Invalidate cache
@@ -390,10 +432,14 @@ pub const RLSEngine = struct {
     /// initialized-but-empty engine is therefore not evidence that a query
     /// needs row-level filtering.
     pub fn hasPolicies(self: *Self) bool {
+        self.lockPoliciesShared();
+        defer self.unlockPoliciesShared();
         return self.policies.count() != 0;
     }
 
     pub fn updatePolicy(self: *Self, policy_id: u64, updates: Policy) !void {
+        self.lockPoliciesExclusive();
+        defer self.unlockPoliciesExclusive();
         var it = self.policies.iterator();
         while (it.next()) |entry| {
             for (entry.value_ptr.items) |*policy| {
@@ -420,6 +466,8 @@ pub const RLSEngine = struct {
     }
 
     pub fn deletePolicy(self: *Self, policy_id: u64) !void {
+        self.lockPoliciesExclusive();
+        defer self.unlockPoliciesExclusive();
         var it = self.policies.iterator();
         while (it.next()) |entry| {
             for (entry.value_ptr.items, 0..) |policy, i| {
@@ -466,6 +514,10 @@ pub const RLSEngine = struct {
         table: []const u8,
     ) !bool {
         const key = PolicyKey{ .graph = graph, .table = table };
+
+        // Exclusive: this path also writes `policy_cache`.
+        self.lockPoliciesExclusive();
+        defer self.unlockPoliciesExclusive();
 
         // Check cache first
         if (self.policy_cache.get(key, context.user.id, operation)) |allowed| {
@@ -532,6 +584,8 @@ pub const RLSEngine = struct {
     ) !std.ArrayList(Policy) {
         var result = std.ArrayList(Policy).empty;
 
+        self.lockPoliciesShared();
+        defer self.unlockPoliciesShared();
         var it = self.policies.iterator();
         while (it.next()) |entry| {
             if (!std.mem.eql(u8, entry.key_ptr.graph, graph)) continue;
@@ -1348,6 +1402,8 @@ pub const RLSEngine = struct {
         table: []const u8,
     ) bool {
         const key = PolicyKey{ .graph = graph, .table = table };
+        self.lockPoliciesShared();
+        defer self.unlockPoliciesShared();
         const policies = self.policies.get(key) orelse return false;
 
         for (policies.items) |policy| {
@@ -1397,6 +1453,10 @@ pub const RLSEngine = struct {
         // CANARY: REQ=REQ-GPS-INVARIANT-001; FEATURE="GPS Fail-Open Catalog"; ASPECT=FailOpenInterim; STATUS=EXEMPT; OWNER=security; UPDATED=2026-05-20
         // Phase 0: no-policy default-allow for pre-RLS data. GPS Phase 4 makes "allow by
         // absence" an explicit policy choice in the catalog.
+        // SONNY-2679 (review): held across the evaluation, which reads the
+        // policy list; the VM calls nothing that takes this lock again.
+        self.lockPoliciesShared();
+        defer self.unlockPoliciesShared();
         const policies = self.policies.get(key) orelse return true; // No policies
 
         var any_permissive_allows = false;
@@ -3886,4 +3946,101 @@ test "SONNY-2709: a principal attribute is parsed strictly as the number it is c
     var lit = try sonny2709Engine(allocator, "row.level <= 3");
     defer sonny2709Deinit(&lit);
     try std.testing.expect(!try sonny2709Sees(&lit, "u2709_three", "level", .{ .string = "1" }));
+}
+
+// ---------------------------------------------------------------------------
+// SONNY-2679 (review): the policy map is shared between the threads that
+// create and delete policies and the threads that check rows.
+// CANARY: REQ=REQ-SONNY-2679-RLS-POLICY-LOCK; FEATURE="RLS Expression Wiring"; ASPECT=PolicyMapLock; STATUS=TESTED; TEST=src/security/rls_core.zig; OWNER=security; UPDATED=2026-09-25
+// ---------------------------------------------------------------------------
+
+const PolicyRaceShared = struct {
+    engine: *RLSEngine,
+    stop: std.atomic.Value(bool) = .init(false),
+    wrong: std.atomic.Value(usize) = .init(0),
+    checks: std.atomic.Value(usize) = .init(0),
+};
+
+fn policyRaceReader(shared: *PolicyRaceShared) void {
+    var denied_row = std.StringHashMap(Value).init(std.testing.allocator);
+    defer denied_row.deinit();
+    var allowed_row = std.StringHashMap(Value).init(std.testing.allocator);
+    defer allowed_row.deinit();
+    denied_row.put("x", .{ .integer = 1 }) catch return;
+    allowed_row.put("x", .{ .integer = 0 }) catch return;
+    while (!shared.stop.load(.acquire)) {
+        // Every policy the writer adds on (g, T) allows every row, so the
+        // verdict is fixed by `row.x <> 1` whatever the writer is doing.
+        const deny = shared.engine.checkRowAccessByUsername(&denied_row, .select, "u", "g", "T") catch true;
+        const allow = shared.engine.checkRowAccessByUsername(&allowed_row, .select, "u", "g", "T") catch false;
+        if (deny or !allow) _ = shared.wrong.fetchAdd(1, .monotonic);
+        if (!shared.engine.hasPolicies()) _ = shared.wrong.fetchAdd(1, .monotonic);
+        if (!shared.engine.needsRowDataForTable(.select, "g", "T")) _ = shared.wrong.fetchAdd(1, .monotonic);
+        _ = shared.checks.fetchAdd(1, .monotonic);
+    }
+}
+
+fn policyRacePolicy(id: u64, table: []const u8, compiled: *RLSEngine.CompiledExpression) RLSEngine.Policy {
+    return .{
+        .id = id,
+        .name = "race",
+        .description = "SONNY-2679 policy map race",
+        .graph = "g",
+        .table = table,
+        .operation = .all,
+        .permissive = false,
+        .roles = &.{},
+        .using_expr = .{ .raw = "TRUE", .parsed = null, .compiled = compiled, .parameters = &.{} },
+        .check_expr = null,
+        .enabled = true,
+        .created_at = 0,
+        .updated_at = 0,
+        .created_by = 0,
+        .temporal = null,
+        .data_classification = null,
+        .audit_level = .none,
+    };
+}
+
+test "SONNY-2679: policies created and deleted while other threads check rows" {
+    const allocator = std.testing.allocator;
+    const rounds = 400;
+
+    var engine = try RLSEngine.init(allocator);
+    defer engine.deinit();
+
+    // The fixed policy: row.x <> 1 (load_row 0; push_const 1; neq; ret).
+    const fixed_constants = [_]Value{ .{ .string = "x" }, .{ .integer = 1 } };
+    const fixed_bytecode = [_]u8{ 0x10, 0x00, 0x01, 0x01, 0x21, 0xFF };
+    var fixed = RLSEngine.CompiledExpression{ .bytecode = &fixed_bytecode, .constants = &fixed_constants, .jump_table = &.{} };
+    var fixed_policy = policyRacePolicy(1, "T", &fixed);
+    fixed_policy.using_expr.?.raw = "row.x <> 1";
+    try engine.createPolicy(fixed_policy);
+
+    // One `TRUE` (push_true; ret) expression per policy the writer adds.
+    const true_bytecode = [_]u8{ 0x02, 0xFF };
+    const always = try allocator.alloc(RLSEngine.CompiledExpression, 2 * rounds);
+    defer allocator.free(always);
+    for (always) |*c| c.* = .{ .bytecode = &true_bytecode, .constants = &.{}, .jump_table = &.{} };
+    var names = std.heap.ArenaAllocator.init(allocator);
+    defer names.deinit();
+
+    var shared = PolicyRaceShared{ .engine = &engine };
+    var readers: [4]std.Thread = undefined;
+    for (&readers) |*t| t.* = try std.Thread.spawn(.{}, policyRaceReader, .{&shared});
+
+    var i: usize = 0;
+    while (i < rounds) : (i += 1) {
+        // A new table every round grows (and rehashes) the map; a policy on
+        // (g, T) grows the list the readers walk, and is removed again.
+        const table = try std.fmt.allocPrint(names.allocator(), "W{d}", .{i});
+        try engine.createPolicy(policyRacePolicy(1000 + i, table, &always[2 * i]));
+        try engine.createPolicy(policyRacePolicy(100_000 + i, "T", &always[2 * i + 1]));
+        if (i % 2 == 0) try engine.deletePolicy(100_000 + i);
+    }
+    shared.stop.store(true, .release);
+    for (readers) |t| t.join();
+
+    try std.testing.expectEqual(@as(usize, 0), shared.wrong.load(.monotonic));
+    try std.testing.expect(shared.checks.load(.monotonic) > 0);
 }

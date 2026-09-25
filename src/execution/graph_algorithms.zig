@@ -72,15 +72,22 @@ fn sessionScope() tenant_visibility.TenancyError!?[]const u8 {
 const RowRls = struct {
     row: std.StringHashMap(rls.Value),
     may_deny: bool,
+    /// The session's label-deny policies in the evaluation's graph, read once
+    /// and current on this thread until `deinit` (see
+    /// `match_operations.LabelDenySnapshot`).
+    label_deny: ?*match_operations.LabelDenySnapshot = null,
 
-    fn init(allocator: std.mem.Allocator) RowRls {
+    fn init(allocator: std.mem.Allocator, graph: []const u8) RowRls {
+        const may_deny = match_operations.rlsMayDenyForSession();
         return .{
             .row = std.StringHashMap(rls.Value).init(allocator),
-            .may_deny = match_operations.rlsMayDenyForSession(),
+            .may_deny = may_deny,
+            .label_deny = match_operations.beginTraversalLabelDeny(allocator, graph, may_deny),
         };
     }
 
     fn deinit(self: *RowRls) void {
+        if (self.label_deny) |snapshot| snapshot.end();
         self.row.deinit();
     }
 
@@ -124,7 +131,9 @@ const ExprScope = struct {
     verdicts: std.AutoHashMapUnmanaged(u64, bool) = .empty,
 
     fn init(allocator: std.mem.Allocator) tenant_visibility.TenancyError!ExprScope {
-        return .{ .allocator = allocator, .graph = sessionGraph(), .tenant = try sessionScope(), .rls = RowRls.init(allocator) };
+        const graph = sessionGraph();
+        const tenant = try sessionScope();
+        return .{ .allocator = allocator, .graph = graph, .tenant = tenant, .rls = RowRls.init(allocator, graph) };
     }
 
     fn deinit(self: *ExprScope) void {
@@ -225,43 +234,29 @@ fn nodeMatchesProperties(
     return true;
 }
 
-/// Find an edge between two nodes using adjacency indexes (O(degree) instead of O(E)).
-/// Checks both directions (from_id -> to_id and to_id -> from_id).
+// CANARY: REQ=REQ-SONNY-2687-GRAPH-SCOPE; FEATURE="ExpressionPathGraphScope"; ASPECT=ScopedEdgeLookup; STATUS=TESTED; TEST=tests/test_algo_unit.zig; OWNER=security; UPDATED=2026-09-25
+/// Find an edge between two nodes, in either direction, using the adjacency
+/// indexes (O(degree) instead of O(E)).
 ///
-/// SONNY-1326: `filter_tenant` is REQUIRED (the resolved session scope, `null`
-/// meaning all-tenants). Only an edge the scope may TRAVERSE is returned — a
-/// cross-tenant edge that happens to carry the reader's own tenant tag is
-/// rejected on its endpoints, and another tenant's edge between the reader's
-/// nodes on its tag, by the shared `edgeTraversable` predicate. The
-/// edge BODY is read by value (`getEdgeHydrated`, copied under the per-shard
-/// map lock SHARED); the raw `*Edge` is taken only for the returned binding,
-/// never dereferenced for a decision (see the torn-edge-body hazard note on
-/// `getEdgePtrHydrated` in `graph_store.zig` ~:3156-3175).
+/// SONNY-2687 (review): scoped to the ACTIVE SESSION, the way every read the
+/// expression path makes is: the edge must be in the session's graph, visible
+/// to its tenant scope (its own tag and both endpoints,
+/// `tenant_visibility.edgeTraversable`) and allowed by its RLS policies. The
+/// scope is resolved here, so a caller cannot leave part of it out. (This
+/// took a tenant filter and nothing else: it ignored the graph and RLS, and
+/// its only callers were tests.) With no active session that is the default
+/// graph, every tenant (strict tenancy off; `error.TenantScopeRequired` when
+/// on) and no RLS. The edge body is read by value; the raw `*Edge` is taken
+/// only for the returned binding.
 pub fn findEdgeBetween(
+    allocator: std.mem.Allocator,
     store: *graph_store.GraphStore,
     from_id: u64,
     to_id: u64,
-    filter_tenant: ?[]const u8,
-) ?*const graph_store.Edge {
-    // Check outgoing edges from from_id
-    if (store.getOutgoingEdgeIds(from_id)) |out_edge_ids| {
-        for (out_edge_ids) |edge_id| {
-            const edge = store.getEdgeHydrated(edge_id) orelse continue;
-            if (edge.to_id != to_id) continue;
-            if (!tenant_visibility.edgeTraversable(store, edge, filter_tenant)) continue;
-            if (store.getEdgePtrHydrated(edge_id)) |edge_ptr| return edge_ptr;
-        }
-    }
-    // Check outgoing edges from to_id (reverse direction)
-    if (store.getOutgoingEdgeIds(to_id)) |out_edge_ids| {
-        for (out_edge_ids) |edge_id| {
-            const edge = store.getEdgeHydrated(edge_id) orelse continue;
-            if (edge.to_id != from_id) continue;
-            if (!tenant_visibility.edgeTraversable(store, edge, filter_tenant)) continue;
-            if (store.getEdgePtrHydrated(edge_id)) |edge_ptr| return edge_ptr;
-        }
-    }
-    return null;
+) tenant_visibility.TenancyError!?*const graph_store.Edge {
+    var scope = try ExprScope.init(allocator);
+    defer scope.deinit();
+    return findScopedEdgeBetween(store, from_id, to_id, &scope);
 }
 
 /// SONNY-2687: `findEdgeBetween` under the whole expression scope (graph,
@@ -1107,8 +1102,8 @@ fn materializePath(
         try path_nodes.append(allocator, node_ptr);
 
         // Add edges between consecutive nodes using adjacency index. The edge
-        // lookup is scope-aware (`findEdgeBetween` takes the filter), so a
-        // parallel edge the session may not traverse is never attached.
+        // lookup is scope-aware (`findScopedEdgeBetween` takes the scope), so
+        // a parallel edge the session may not traverse is never attached.
         if (idx > 0) {
             const prev_id = node_ids[idx - 1];
             if (findScopedEdgeBetween(store, prev_id, node_id, scope)) |edge_ptr| {
