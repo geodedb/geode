@@ -3746,22 +3746,13 @@ pub fn executeWithClauseWithGroupByAndParams(allocator: std.mem.Allocator, input
             var key_aw: std.Io.Writer.Allocating = try std.Io.Writer.Allocating.initCapacity(allocator, 128);
             errdefer key_aw.deinit();
             const key_writer = &key_aw.writer;
-            for (gb.keys, 0..) |raw_key_expr, k| {
-                if (k > 0) try key_writer.writeAll("|");
+            for (gb.keys) |raw_key_expr| {
                 // GAP-ENT-0055: follow a projection alias (`GROUP BY s`) to its
                 // underlying expression before evaluating against the input row.
                 const key_expr = resolveGroupByKeyThroughAlias(raw_key_expr, with_items, input_result.columns);
                 const key_val = try evalGroupedExpr(allocator, key_expr, env, Value{ .Null = {} });
-                // Serialize key value to string
-                switch (key_val) {
-                    .Int => |i| try key_writer.print("{d}", .{i}),
-                    .Str => |s| try key_writer.writeAll(s),
-                    .Bool => |b| try key_writer.writeAll(if (b) "true" else "false"),
-                    .Null => try key_writer.writeAll("null"),
-                    .Node => |n| try key_writer.print("node:{d}", .{n.id}),
-                    .Edge => |e| try key_writer.print("edge:{d}", .{e.id}),
-                    else => try key_writer.writeAll("?"),
-                }
+                // SONNY-2675: the key's typed canonical encoding.
+                try distinct_set.writeGroupKeyPart(key_writer, allocator, key_val);
             }
             var key_buf = key_aw.toArrayList();
             const group_key = try key_buf.toOwnedSlice(allocator);
@@ -3877,21 +3868,11 @@ pub fn executeWithClauseWithGroupByAndParams(allocator: std.mem.Allocator, input
                     var key_aw: std.Io.Writer.Allocating = try std.Io.Writer.Allocating.initCapacity(allocator, 128);
                     errdefer key_aw.deinit();
                     const key_writer = &key_aw.writer;
-                    var first_key = true;
                     for (with_items) |item| {
                         if (!return_and_sorting.isAggregationExpr(item.expr) and return_and_sorting.isNonConstantExpr(item.expr)) {
-                            if (!first_key) try key_writer.writeAll("|");
-                            first_key = false;
                             const key_val = try evalGroupedExpr(allocator, item.expr, env, Value{ .Null = {} });
-                            switch (key_val) {
-                                .Int => |iv| try key_writer.print("{d}", .{iv}),
-                                .Str => |s| try key_writer.writeAll(s),
-                                .Bool => |b| try key_writer.writeAll(if (b) "true" else "false"),
-                                .Null => try key_writer.writeAll("null"),
-                                .Node => |n| try key_writer.print("node:{d}", .{n.id}),
-                                .Edge => |e| try key_writer.print("edge:{d}", .{e.id}),
-                                else => try key_writer.writeAll("?"),
-                            }
+                            // SONNY-2675: the key's typed canonical encoding.
+                            try distinct_set.writeGroupKeyPart(key_writer, allocator, key_val);
                         }
                     }
                     var key_buf = key_aw.toArrayList();

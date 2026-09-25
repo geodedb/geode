@@ -1208,6 +1208,28 @@ fn minMaxFoldable(pv: graph_store.PropertyValue) bool {
     };
 }
 
+/// A GROUP BY key read by the streaming fast path, as the value it returns:
+/// an integer, float, boolean or NULL, a string (borrowed: the caller copies
+/// it), a decimal, or an extended number, date, time, timestamp, interval,
+/// UUID or enum (plain values, returned by copy). Null for anything else (an
+/// extended string, a list, a document, ...), whose value the path would have
+/// to own: the path declines, and the shared projection groups it.
+fn fastPathKeyValue(pv: graph_store.PropertyValue) ?Value {
+    return switch (pv) {
+        .String => |str| .{ .Str = str },
+        .Int => |i| .{ .Int = i },
+        .Float => |f| .{ .Double = f },
+        .Bool => |b| .{ .Bool = b },
+        .Null => .{ .Null = {} },
+        .Decimal => |d| .{ .Decimal = .{ .coeff = d.coeff, .scale = d.scale, .orig_scale = d.scale, .orig_repr = null } },
+        .ExtValue => |ev| switch (ev) {
+            .Int, .SmallInt, .BigInt, .Real, .Double, .Bool, .Decimal => property_value_codec.extValueToValue(ev),
+            .Date, .Time, .TimeTZ, .Timestamp, .TimestampTZ, .Interval, .UUID, .Enum => property_value_codec.extValueToValue(ev),
+            else => null,
+        },
+    };
+}
+
 /// A storage (engine) value as a geode property value. An extended value is
 /// decoded into `scratch`, which the caller resets; null if it cannot be.
 fn storageToGraphPv(scratch: std.mem.Allocator, pv: gs.PropertyValue) ?graph_store.PropertyValue {
@@ -2237,17 +2259,15 @@ pub fn indexServedGroupByFastPath(
     // ---- Recover each distinct value: ONE single-property read per posting ----
     // (arena-owned; a decline mid-way just drops the arena.)
     //
-    // MERGE step (legacy parity): the legacy GROUP BY (execution.zig ~3095) and
-    // the streaming fast path both group on the SERIALIZED key — Int "{d}",
-    // Str raw bytes, Bool "true"/"false", any other type (incl. Double) "?" —
-    // so int 5 and string "5" land in ONE group, and all float-valued keys
-    // collapse into the "?" group (first-seen value wins). The index keeps
-    // those as SEPARATE postings (distinct encoded bytes), so we re-serialize
-    // each recovered value with the SAME rules and merge posting counts that
-    // collide, keeping the first-seen value — byte-parity by construction.
+    // MERGE step: every grouping site groups on the key's typed canonical
+    // encoding (`distinct_set.writeGroupKeyPart`, SONNY-2675), under which
+    // 10 and 10.0 are one value while 5 and '5' are two. The index keeps a
+    // posting per encoded value, so postings whose values are one value merge
+    // (first-seen value wins).
     var merged_vals = try std.ArrayList(Value).initCapacity(sa, summaries.len);
     var merged_counts = try std.ArrayList(u64).initCapacity(sa, summaries.len);
     var merged_index = std.StringHashMap(usize).init(sa);
+    var merge_key: std.Io.Writer.Allocating = .init(sa);
     for (summaries) |s| {
         try read_budget.check(); // T5: budget/cancel poll (O(distinct) loop, but distinct can be large)
         const pv = (adapter.getNodeProperty(filter_graph, s.representative_slot, key_prop, sa) catch return null) orelse return null;
@@ -2261,13 +2281,9 @@ pub fn indexServedGroupByFastPath(
             // diverge from the legacy result tags → decline, streaming path.
             else => return null,
         };
-        const ser: []const u8 = switch (val) {
-            .Int => |iv| try std.fmt.allocPrint(sa, "{d}", .{iv}),
-            .Str => |sv| sv,
-            .Bool => |bv| if (bv) "true" else "false",
-            else => "?", // Double (legacy `else` arm)
-        };
-        const gop = try merged_index.getOrPut(ser);
+        merge_key.clearRetainingCapacity();
+        try distinct_set.writeGroupKeyPart(&merge_key.writer, sa, val);
+        const gop = try merged_index.getOrPut(try sa.dupe(u8, merge_key.written()));
         if (gop.found_existing) {
             merged_counts.items[gop.value_ptr.*] += s.count;
         } else {
@@ -2582,37 +2598,17 @@ pub fn groupByAggregateFastPath(
                     if (!comparePvLit(w_val, p.op, p.lit)) continue;
                 }
 
-                // I2: Group-key serialization — must stay in sync with the legacy
-                // GROUP BY serialization in execution.zig (computeGroupAggregation /
-                // evaluateGroupAggregation). Types handled: Int ("{d}"), String (raw
-                // bytes), Bool ("true"/"false"), Null ("null"); Node/Edge/other falls
-                // to "?" (safe: shape gate rejects non-property RETURN exprs earlier).
+                // SONNY-2675: each key by its typed canonical encoding, the
+                // one every grouping site uses (`writeGroupKeyPart`). A key
+                // this path cannot return without an owned copy declines.
                 var key_val_captures: [MAX_KEYS]Value = undefined;
                 var key_aw: std.Io.Writer.Allocating = try std.Io.Writer.Allocating.initCapacity(ga, 64);
                 const key_w = &key_aw.writer;
                 for (gb_key_props[0..n_gb_keys], 0..) |kprop, ki| {
-                    if (ki > 0) try key_w.writeAll("|");
-                    const pv_opt = prop_store.getNodeProperty(node_id, kprop);
-                    if (pv_opt) |pv| {
-                        switch (pv) {
-                            .Int => |iv| try key_w.print("{d}", .{iv}),
-                            .String => |s| try key_w.writeAll(s),
-                            .Bool => |bv| try key_w.writeAll(if (bv) "true" else "false"),
-                            .Null => try key_w.writeAll("null"),
-                            else => try key_w.writeAll("?"),
-                        }
-                        key_val_captures[ki] = switch (pv) {
-                            .Int => |iv| Value{ .Int = iv },
-                            .String => |s| Value{ .Str = try ga.dupe(u8, s) },
-                            .Bool => |bv| Value{ .Bool = bv },
-                            .Float => |fv| Value{ .Double = fv },
-                            .Null => Value{ .Null = {} },
-                            else => Value{ .Null = {} },
-                        };
-                    } else {
-                        try key_w.writeAll("null");
-                        key_val_captures[ki] = Value{ .Null = {} };
-                    }
+                    const pv: graph_store.PropertyValue = prop_store.getNodeProperty(node_id, kprop) orelse .Null;
+                    const key_val = fastPathKeyValue(pv) orelse return null;
+                    try distinct_set.writeGroupKeyPart(key_w, ga, key_val);
+                    key_val_captures[ki] = if (key_val == .Str) Value{ .Str = try ga.dupe(u8, key_val.Str) } else key_val;
                 }
                 var key_list = key_aw.toArrayList();
                 const group_key = try key_list.toOwnedSlice(ga);
@@ -2696,43 +2692,24 @@ pub fn groupByAggregateFastPath(
                 if (!compareStoragePvLit(w_val, p.op, p.lit)) continue;
             }
 
-            // I2: Group-key serialization (bounded path) — must stay in sync with
-            // the legacy GROUP BY serialization in execution.zig. Types: int ("{d}"),
-            // string (raw bytes), bool ("true"/"false"), null ("null"); other → "?"
-            // (safe: shape gate rejects non-property RETURN exprs before reaching here).
+            // SONNY-2675: see the resident branch above.
             var key_val_captures: [MAX_KEYS]Value = undefined;
             var key_aw: std.Io.Writer.Allocating = try std.Io.Writer.Allocating.initCapacity(ga, 64);
             const key_w = &key_aw.writer;
             for (gb_key_props[0..n_gb_keys], 0..) |kprop, ki| {
-                if (ki > 0) try key_w.writeAll("|");
-                const pv = readScanNodeProp(adapter, filter_graph, slot_id, prop_head, kprop, allocator);
-                if (pv) |pval| {
-                    // m1: defer frees the engine-owned string when this block exits
-                    // (success or error), so a ga.dupe OOM below cannot leak it.
-                    defer switch (pval) {
-                        .string => |s| allocator.free(s),
-                        else => {},
-                    };
-                    switch (pval) {
-                        .int => |iv| try key_w.print("{d}", .{iv}),
-                        .string => |s| try key_w.writeAll(s),
-                        .bool => |bv| try key_w.writeAll(if (bv) "true" else "false"),
-                        .null => try key_w.writeAll("null"),
-                        else => try key_w.writeAll("?"),
-                    }
-                    // Capture: dupe strings to ga before pval is freed by defer above.
-                    key_val_captures[ki] = switch (pval) {
-                        .int => |iv| Value{ .Int = iv },
-                        .string => |s| Value{ .Str = try ga.dupe(u8, s) },
-                        .bool => |bv| Value{ .Bool = bv },
-                        .float => |fv| Value{ .Double = fv },
-                        .null => Value{ .Null = {} },
-                        else => Value{ .Null = {} },
-                    };
-                } else {
-                    try key_w.writeAll("null");
-                    key_val_captures[ki] = Value{ .Null = {} };
-                }
+                const raw = readScanNodeProp(adapter, filter_graph, slot_id, prop_head, kprop, allocator);
+                // m1: the engine-owned bytes are freed when this block exits
+                // (success or error), after the capture below copied them.
+                defer if (raw) |r| switch (r) {
+                    .string => |str| allocator.free(str),
+                    .ext => |e| allocator.free(e.data),
+                    else => {},
+                };
+                defer _ = ext_scratch.reset(.retain_capacity);
+                const pv: graph_store.PropertyValue = if (raw) |r| (storageToGraphPv(ext_scratch.allocator(), r) orelse return null) else .Null;
+                const key_val = fastPathKeyValue(pv) orelse return null;
+                try distinct_set.writeGroupKeyPart(key_w, ga, key_val);
+                key_val_captures[ki] = if (key_val == .Str) Value{ .Str = try ga.dupe(u8, key_val.Str) } else key_val;
             }
             var key_list = key_aw.toArrayList();
             const group_key = try key_list.toOwnedSlice(ga);
@@ -4831,17 +4808,10 @@ pub fn executeMultiNodeMatch(allocator: std.mem.Allocator, q: ast.Query, param_n
                         var key_aw: std.Io.Writer.Allocating = try std.Io.Writer.Allocating.initCapacity(self.allocator, 128);
                         errdefer key_aw.deinit();
                         const key_writer = &key_aw.writer;
-                        for (self.group_by.keys, 0..) |key_expr, k| {
-                            if (k > 0) try key_writer.writeAll("|");
+                        for (self.group_by.keys) |key_expr| {
                             const key_val = eval.evalExpr(self.allocator, key_expr, env) catch Value{ .Null = {} };
-                            switch (key_val) {
-                                .Int => |i| try key_writer.print("{d}", .{i}),
-                                .Str => |s| try key_writer.writeAll(s),
-                                .Bool => |b| try key_writer.writeAll(if (b) "true" else "false"),
-                                .Null => try key_writer.writeAll("null"),
-                                .Node => |n| try key_writer.print("node:{d}", .{n.id}),
-                                else => try key_writer.writeAll("?"),
-                            }
+                            // SONNY-2675: the key's typed canonical encoding.
+                            try distinct_set.writeGroupKeyPart(key_writer, self.allocator, key_val);
                         }
                         var key_list = key_aw.toArrayList();
                         const group_key = try key_list.toOwnedSlice(self.allocator);
@@ -7404,19 +7374,10 @@ fn executeMatchWithOptionalPatterns(allocator: std.mem.Allocator, q: ast.Query, 
             var key_aw: std.Io.Writer.Allocating = try std.Io.Writer.Allocating.initCapacity(allocator, 128);
             errdefer key_aw.deinit();
             const key_writer = &key_aw.writer;
-            for (group_by.keys, 0..) |key_expr, k| {
-                if (k > 0) try key_writer.writeAll("|");
+            for (group_by.keys) |key_expr| {
                 const key_val = eval.evalExpr(allocator, key_expr, env) catch Value{ .Null = {} };
-                // Serialize key value to string
-                switch (key_val) {
-                    .Int => |i| try key_writer.print("{d}", .{i}),
-                    .Str => |s| try key_writer.writeAll(s),
-                    .Bool => |b| try key_writer.writeAll(if (b) "true" else "false"),
-                    .Null => try key_writer.writeAll("null"),
-                    .Node => |n| try key_writer.print("node:{d}", .{n.id}),
-                    .Edge => |e| try key_writer.print("edge:{d}", .{e.id}),
-                    else => try key_writer.writeAll("?"),
-                }
+                // SONNY-2675: the key's typed canonical encoding.
+                try distinct_set.writeGroupKeyPart(key_writer, allocator, key_val);
             }
             var key_buf = key_aw.toArrayList();
             const group_key = try key_buf.toOwnedSlice(allocator);
@@ -8570,16 +8531,10 @@ fn executeMultiHopGroupBy(
         errdefer key_aw.deinit();
         const writer = &key_aw.writer;
 
-        for (group_by.keys, 0..) |key_expr, key_idx| {
-            if (key_idx > 0) try writer.writeAll("|");
+        for (group_by.keys) |key_expr| {
             const key_val = eval.evalExpr(allocator, key_expr, env) catch Value{ .Null = {} };
-            switch (key_val) {
-                .Null => try writer.writeAll("<null>"),
-                .Int => |n| try writer.print("{}", .{n}),
-                .Str => |s| try writer.writeAll(s),
-                .Bool => |b| try writer.print("{}", .{b}),
-                else => try writer.writeAll("<val>"),
-            }
+            // SONNY-2675: the key's typed canonical encoding.
+            try distinct_set.writeGroupKeyPart(writer, arena, key_val);
         }
 
         var key_buf = key_aw.toArrayList();
@@ -9167,18 +9122,10 @@ pub fn executeMatchQueryImpl(allocator: std.mem.Allocator, q: ast.Query, param_n
                         var key_aw: std.Io.Writer.Allocating = try std.Io.Writer.Allocating.initCapacity(allocator, 128);
                         errdefer key_aw.deinit();
                         const key_writer = &key_aw.writer;
-                        for (group_by.keys, 0..) |key_expr, k| {
-                            if (k > 0) try key_writer.writeAll("|");
+                        for (group_by.keys) |key_expr| {
                             const key_val = eval.evalExpr(allocator, key_expr, env) catch Value{ .Null = {} };
-                            switch (key_val) {
-                                .Int => |i| try key_writer.print("{d}", .{i}),
-                                .Str => |s| try key_writer.writeAll(s),
-                                .Bool => |b| try key_writer.writeAll(if (b) "true" else "false"),
-                                .Null => try key_writer.writeAll("null"),
-                                .Node => |n| try key_writer.print("node:{d}", .{n.id}),
-                                .Edge => |e| try key_writer.print("edge:{d}", .{e.id}),
-                                else => try key_writer.writeAll("?"),
-                            }
+                            // SONNY-2675: the key's typed canonical encoding.
+                            try distinct_set.writeGroupKeyPart(key_writer, allocator, key_val);
                         }
                         var key_buf = key_aw.toArrayList();
                         const group_key = try key_buf.toOwnedSlice(allocator);
@@ -9312,18 +9259,10 @@ pub fn executeMatchQueryImpl(allocator: std.mem.Allocator, q: ast.Query, param_n
                         var key_aw: std.Io.Writer.Allocating = try std.Io.Writer.Allocating.initCapacity(allocator, 128);
                         errdefer key_aw.deinit();
                         const key_writer = &key_aw.writer;
-                        for (group_by.keys, 0..) |key_expr, k| {
-                            if (k > 0) try key_writer.writeAll("|");
+                        for (group_by.keys) |key_expr| {
                             const key_val = eval.evalExpr(allocator, key_expr, env) catch Value{ .Null = {} };
-                            switch (key_val) {
-                                .Int => |i| try key_writer.print("{d}", .{i}),
-                                .Str => |s| try key_writer.writeAll(s),
-                                .Bool => |b| try key_writer.writeAll(if (b) "true" else "false"),
-                                .Null => try key_writer.writeAll("null"),
-                                .Node => |n| try key_writer.print("node:{d}", .{n.id}),
-                                .Edge => |e| try key_writer.print("edge:{d}", .{e.id}),
-                                else => try key_writer.writeAll("?"),
-                            }
+                            // SONNY-2675: the key's typed canonical encoding.
+                            try distinct_set.writeGroupKeyPart(key_writer, allocator, key_val);
                         }
                         var key_buf = key_aw.toArrayList();
                         const group_key = try key_buf.toOwnedSlice(allocator);

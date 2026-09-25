@@ -14,7 +14,12 @@
 //     integers and strings were compared, so otherwise the first value won.
 //     The GROUP BY fast path also skipped a double sent as a parameter
 //     (stored as an extended value) as not a number, and reported a float
-//     extreme for an integer one.
+//     extreme for an integer one;
+//   * a group key keeps its type: doubles, dates, decimals, texts and lists
+//     group by value, 1 and '1' and 'null' and NULL are four groups, and a
+//     `|` inside a string does not move a multi-key boundary. Every grouping
+//     site, the GROUP BY fast paths included, wrote integers and strings as
+//     text, NULL as "null" and anything else as "?", joined with "|".
 // Every check runs in the three legacy sessions and on a persisted deployment
 // with no policy or tenant scope (the planned read and the GROUP BY fast
 // paths), with the node cache bounded (the default: the fast paths read the
@@ -134,6 +139,7 @@ const Session = struct {
     ///     1.5 (twice) and 2.5, the dates 2026-01-01 (twice) and 2026-01-02,
     ///     the decimal 1.25, and the texts 't1' and 't2';
     ///   * `:P {a, b}`: ('a|b', 'c') and ('a', 'b|c');
+    ///   * `:L {v}`: the lists [1, 2] (twice), [1, 3] and [2, 1];
     ///   * `:M {g2, d, dt, m}`: group x has d = 1.5, 3.25 (doubles) and 2,
     ///     dt = 2026-03-01, 2026-01-15, 2026-02-01, m = 1.5, 0.25, 10.0;
     ///     group y has d = 7 and 7.5 (a double), dt = 2025-12-31, 2026-06-30,
@@ -173,6 +179,9 @@ const Session = struct {
             try self.exec("CREATE (:K {k: $v})", &.{.{ .name = "v", .value = .{ .Text = "t2" } }});
             try self.exec("CREATE (:P {a: 'a|b', b: 'c'})", &.{});
             try self.exec("CREATE (:P {a: 'a', b: 'b|c'})", &.{});
+            for (0..2) |_| try self.exec("CREATE (:L {v: [1, 2]})", &.{});
+            try self.exec("CREATE (:L {v: [1, 3]})", &.{});
+            try self.exec("CREATE (:L {v: [2, 1]})", &.{});
             try self.exec("CREATE (:M {g2: 'x', d: $v, dt: DATE '2026-03-01', m: 1.5})", &.{.{ .name = "v", .value = .{ .Double = 1.5 } }});
             try self.exec("CREATE (:M {g2: 'x', d: $v, dt: DATE '2026-01-15', m: 0.25})", &.{.{ .name = "v", .value = .{ .Double = 3.25 } }});
             try self.exec("CREATE (:M {g2: 'x', d: 2, dt: DATE '2026-02-01', m: 10.0})", &.{});
@@ -204,6 +213,16 @@ fn renderCell(aa: std.mem.Allocator, cell: Value) ![]const u8 {
         .Date => try aa.dupe(u8, try geode.value_types.stringify(cell, &buf)),
         .Bool => |b| if (b) "true" else "false",
         .Null => "null",
+        .List => |items| blk: {
+            var out: std.ArrayList(u8) = .empty;
+            try out.append(aa, '[');
+            for (items, 0..) |item, i| {
+                if (i > 0) try out.appendSlice(aa, ", ");
+                try out.appendSlice(aa, try renderCell(aa, item));
+            }
+            try out.append(aa, ']');
+            break :blk try out.toOwnedSlice(aa);
+        },
         else => try std.fmt.allocPrint(aa, "<{s}>", .{@tagName(cell)}),
     };
 }
@@ -343,4 +362,24 @@ fn checkMinMax(s: *Session, f: *Failures) !void {
 
 test "SONNY-2675: min and max order doubles, decimals, dates and mixed numbers" {
     try inEveryMode("min/max", checkMinMax);
+}
+
+fn checkGroupKeys(s: *Session, f: *Failures) !void {
+    const all_k: []const []const u8 = &.{
+        "1, 2",     "'1', 1",  "'null', 1",     "null, 2",
+        "1.5d, 2",  "2.5d, 1", "2026-01-01, 2", "2026-01-02, 1",
+        "1.25m, 1", "'t1', 1", "'t2', 1",
+    };
+    try expectRows(s, f, "MATCH (n:K) RETURN n.k AS k, count(*) AS c GROUP BY n.k", &.{}, all_k);
+    try expectRows(s, f, "MATCH (n:K) RETURN n.k AS k, count(*) AS c GROUP BY n.k HAVING count(*) > 0", &.{}, all_k);
+    try expectRows(s, f, "MATCH (n:K) WITH n.k AS k, count(*) AS c GROUP BY n.k RETURN k, c", &.{}, all_k);
+    // A `|` inside a key does not move the boundary between two keys.
+    try expectRows(s, f, "MATCH (n:P) RETURN n.a AS a, n.b AS b, count(*) AS c GROUP BY n.a, n.b", &.{}, &.{ "'a|b', 'c', 1", "'a', 'b|c', 1" });
+    try expectRows(s, f, "MATCH (n:P) RETURN n.a AS a, n.b AS b, count(*) AS c GROUP BY n.a, n.b HAVING count(*) > 0", &.{}, &.{ "'a|b', 'c', 1", "'a', 'b|c', 1" });
+    // A list groups element by element, in order.
+    try expectRows(s, f, "MATCH (n:L) RETURN n.v AS v, count(*) AS c GROUP BY n.v", &.{}, &.{ "[1, 2], 2", "[1, 3], 1", "[2, 1], 1" });
+}
+
+test "SONNY-2675: a group key keeps its type" {
+    try inEveryMode("group keys", checkGroupKeys);
 }
