@@ -8413,29 +8413,17 @@ pub fn build(b: *std.Build) void {
     const sonny2463_step = b.step("test-sonny2463-bare-node-leak", "Run SONNY-2463 regression (a node the node-scan fast path returns is freed in full when its page is torn down)");
     sonny2463_step.dependOn(&run_sonny2463_tests.step);
 
-    // KNOWN RED: an intentionally red TDD reproduction
-    // (docs/KNOWN_TEST_ISSUES.md). It is a named step but deliberately NOT
-    // passed to shardDep, so the aggregate `test` step (the pre-push hook and
-    // the CI shards) stays green while it is red. The commit that fixes it
-    // registers it with shardDep.
-    //
-    // SONNY-2473: `SKIP k` with no LIMIT and no WHERE returns one row: the
-    // OFFSET-only slot bound (k+1) caps slot collection.
-    const node_scan_skip_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_node_scan_skip_without_limit.zig"), .target = target, .optimize = optimize });
-    node_scan_skip_test_mod.addImport("geode", root_mod);
-    node_scan_skip_test_mod.addImport("logging", logging_mod);
-    const node_scan_skip_tests = b.addTest(.{ .root_module = node_scan_skip_test_mod });
-    const run_node_scan_skip_tests = b.addRunArtifact(node_scan_skip_tests);
-    const node_scan_skip_step = b.step("test-node-scan-skip-without-limit", "KNOWN RED, not in the aggregate: SKIP without LIMIT on the node-scan fast path returns one row instead of every row after the offset (SONNY-2473)");
-    node_scan_skip_step.dependOn(&run_node_scan_skip_tests.step);
-    //
-    // Out of the aggregate, but still compiled by `test-compile` (shardDep is
-    // what adds an artifact there), so a known-red reproduction that stops
-    // compiling fails `test-compile` instead of going unnoticed until its fix.
-    // Drop the line when shardDep takes the test over.
-    if (g_test_compile_step) |c| {
-        c.dependOn(&node_scan_skip_tests.step);
-    }
+    // SONNY-2473: `SKIP k` with no LIMIT and no WHERE returned one row on the
+    // node-scan fast path: the OFFSET-only slot bound (k+1) capped slot
+    // collection.
+    const sonny2473_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny2473_skip_without_limit.zig"), .target = target, .optimize = optimize });
+    sonny2473_test_mod.addImport("geode", root_mod);
+    sonny2473_test_mod.addImport("logging", logging_mod);
+    const sonny2473_tests = b.addTest(.{ .root_module = sonny2473_test_mod });
+    const run_sonny2473_tests = b.addRunArtifact(sonny2473_tests);
+    shardDep(test_step, &run_sonny2473_tests.step, 1, test_shard_loads, test_shard_index);
+    const sonny2473_step = b.step("test-sonny2473-skip-without-limit", "Run SONNY-2473 regression (SKIP without LIMIT on the node-scan fast path returns every row after the offset, with and without a WHERE)");
+    sonny2473_step.dependOn(&run_sonny2473_tests.step);
 
     // SONNY-1330 TSan companion: the same regression file under
     // -fsanitize-thread, so the fork-join over a COLD store is checked for the

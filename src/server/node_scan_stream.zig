@@ -1451,19 +1451,21 @@ fn resolveGraphName(context: ExecutionContext) []const u8 {
     return graph_store.DEFAULT_GRAPH_NAME;
 }
 
+// CANARY: REQ=REQ-SONNY-2473-SKIP-WITHOUT-LIMIT; FEATURE="EngineDirectRowWindow"; ASPECT=UnboundedWithoutLimit; STATUS=TESTED; TEST=tests/test_sonny2473_skip_without_limit.zig; OWNER=engine; UPDATED=2026-09-25
+/// How many slots a scan with no WHERE must collect (matched == scanned):
+/// OFFSET + LIMIT, or null (every slot) when there is no LIMIT.
+/// `collectMatchingSlotIds` caps collection at this, and `prepare` starts the
+/// cursor at the OFFSET. An OFFSET alone bounds nothing: `SKIP k` returns every
+/// row after the first k (SONNY-2473: this answered k+1 for it, so `SKIP k`
+/// returned one row).
 fn resolveRequiredRows(
     q: *const ast.Query,
     param_names: []const []const u8,
     param_values: []const Value,
 ) ?usize {
+    const limit = resolveWindowValue(q.limit, q.limit_param, param_names, param_values) orelse return null;
     const offset = resolveWindowValue(q.offset, q.offset_param, param_names, param_values) orelse 0;
-    if (resolveWindowValue(q.limit, q.limit_param, param_names, param_values)) |limit| {
-        return std.math.add(usize, offset, limit) catch std.math.maxInt(usize);
-    }
-    if (offset != 0) {
-        return std.math.add(usize, offset, 1) catch std.math.maxInt(usize);
-    }
-    return null;
+    return std.math.add(usize, offset, limit) catch std.math.maxInt(usize);
 }
 
 fn resolveWindowValue(
