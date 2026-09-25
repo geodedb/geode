@@ -214,6 +214,9 @@ const Session = struct {
                 try self.exec("CREATE (:Q {v: $v})", &.{.{ .name = "v", .value = .{ .Double = std.math.nan(f64) } }});
                 try self.exec("CREATE (:Q {v: $v})", &.{.{ .name = "v", .value = .{ .Double = -std.math.nan(f64) } }});
                 try self.exec("CREATE (:Q {v: $v})", &.{.{ .name = "v", .value = .{ .Double = @bitCast(@as(u64, 0x7ff8000000000001)) } }});
+                try self.exec("CREATE (:QN {g: 'n', v: $v})", &.{.{ .name = "v", .value = .{ .Double = std.math.nan(f64) } }});
+                try self.exec("CREATE (:QN {g: 'n', v: $v})", &.{.{ .name = "v", .value = .{ .Double = 2.5 } }});
+                try self.exec("CREATE (:QN {g: 'n', v: $v})", &.{.{ .name = "v", .value = .{ .Double = 1.5 } }});
             }
         }
         if (self.mode == .rls_policy) {
@@ -376,14 +379,31 @@ fn checkMinMax(s: *Session, f: *Failures) !void {
     // In a HAVING-only aggregate.
     try expectRows(s, f, "MATCH (n:M) RETURN n.g2 AS g GROUP BY n.g2 HAVING max(n.d) > 5", &.{}, &.{"'y'"});
     try expectRows(s, f, "MATCH (n:M) RETURN n.g2 AS g GROUP BY n.g2 HAVING min(n.dt) < DATE '2026-01-01'", &.{}, &.{"'y'"});
-    // Without a GROUP BY, on the persisted deployments (the property
-    // aggregate fast path; a date declines to the planned read). The legacy
+    // Without a GROUP BY, on the persisted deployments: the property
+    // aggregate fast path, also on a tenant-scoped session (round 3, I1: a
+    // decimal or a date made the path decline there, and the legacy fallback
+    // answered NULL). The fast path folds a decimal exactly. The legacy
     // executor's own ungrouped aggregates are not this code.
-    if (s.mode == .persisted or s.mode == .unbounded_cache) {
+    if (s.mode == .persisted or s.mode == .unbounded_cache or s.mode == .tenant_scoped) {
         try expectRows(s, f, "MATCH (n:M) RETURN max(n.d) AS hi", &.{}, &.{"7.5d"});
         try expectRows(s, f, "MATCH (n:M) RETURN min(n.d) AS lo", &.{}, &.{"1.5d"});
         try expectRows(s, f, "MATCH (n:M) RETURN max(n.dt) AS hi", &.{}, &.{"2026-06-30"});
+        try expectRows(s, f, "MATCH (n:M) RETURN min(n.dt) AS lo", &.{}, &.{"2025-12-31"});
         try expectRows(s, f, "MATCH (n:M) RETURN min(n.m) AS lo", &.{}, &.{"0.25m"});
+        try expectRows(s, f, "MATCH (n:M) RETURN max(n.m) AS hi", &.{}, &.{"10.0m"});
+        try expectRows(s, f, "MATCH (n:N) WHERE n.g = 'p' RETURN max(n.v) AS hi", &.{}, &.{"1234567890.123456789m"});
+        try expectRows(s, f, "MATCH (n:N) WHERE n.g = 'p' RETURN min(n.v) AS lo", &.{}, &.{"1234567890.123456788m"});
+        try expectRows(s, f, "MATCH (n:N) WHERE n.g = 'r' RETURN max(n.v) AS hi", &.{}, &.{"0.1d"});
+    }
+    // Grouped, over decimals past 16 significant digits (the GROUP BY fast
+    // path folds them exactly instead of declining).
+    try expectRows(s, f, "MATCH (n:N) WHERE n.g = 'p' RETURN n.g AS g, max(n.v) AS hi, min(n.v) AS lo GROUP BY n.g", &.{}, &.{"'p', 1234567890.123456789m, 1234567890.123456788m"});
+    // A NaN folded first is not the minimum: NaN sorts after every number
+    // (in memory, grouped: the storage engine refuses a non-finite double,
+    // so the fast paths never see one, and the legacy executor's own
+    // ungrouped aggregates are SONNY-2734's).
+    if (s.mode == .in_memory) {
+        try expectRows(s, f, "MATCH (n:QN) RETURN n.g AS g, min(n.v) AS lo GROUP BY n.g", &.{}, &.{"'n', 1.5d"});
     }
 }
 

@@ -114,6 +114,7 @@ const property_mutation = @import("property_mutation.zig");
 const write_precheck = @import("write_precheck.zig");
 const value_types = @import("../value_types.zig");
 const distinct_set = @import("distinct_set.zig");
+const return_and_sorting = @import("return_and_sorting.zig");
 const property_value_codec = @import("../property_value_codec.zig");
 const graph_storage_adapter = @import("../storage/graph_storage_adapter.zig");
 // Engine-storage PropertyValue (lower-case variants: .int/.float/.string/…),
@@ -877,15 +878,19 @@ const AggAcc = struct {
     sum_float: f64 = 0,
     has_float: bool = false,
     count: u64 = 0,
-    /// SONNY-2675: the smallest and largest value folded, kept as the value
-    /// itself so an integer extreme comes out as an Int and a float one as a
-    /// Double. The four int/float fields this replaces reported a float
-    /// extreme whenever any value was a float.
-    min: ?NumericExtreme = null,
-    max: ?NumericExtreme = null,
+    /// SONNY-2675: the smallest and largest value folded, the value itself
+    /// (an Int stays an Int, a decimal a decimal), in the value order ORDER
+    /// BY and the shared projection's min and max use: numbers by their exact
+    /// value with NaN after every number, then dates, times, timestamps and
+    /// intervals. They were an f64 view and an optional integer, so a decimal
+    /// could not be folded (the path declined, and on a tenant-scoped
+    /// session the legacy fallback answered NULL), and a NaN folded first
+    /// stayed the minimum.
+    min: ?Value = null,
+    max: ?Value = null,
 
-    /// Fold one numeric value. `maybe_int` is set iff the value was integer
-    /// typed; `f` is always the f64 view (used for min/max + float sum).
+    /// Fold one numeric value into sum and avg. `maybe_int` is set iff the
+    /// value was integer typed; `f` is always the f64 view.
     fn update(self: *AggAcc, maybe_int: ?i64, f: f64) void {
         self.count += 1;
         if (maybe_int) |iv| {
@@ -907,33 +912,22 @@ const AggAcc = struct {
             }
             self.sum_float += f;
         }
-        const e: NumericExtreme = .{ .f = f, .int = maybe_int };
-        if (self.min == null or e.lessThan(self.min.?)) self.min = e;
-        if (self.max == null or self.max.?.lessThan(e)) self.max = e;
+    }
+
+    /// Fold one value (from `minMaxValue`) into min and max; the first of
+    /// equal values stays.
+    fn fold(self: *AggAcc, v: Value) void {
+        self.count += 1;
+        if (self.min == null or return_and_sorting.compareValuesWithNullsPolicy(v, self.min.?, .default) < 0) self.min = v;
+        if (self.max == null or return_and_sorting.compareValuesWithNullsPolicy(v, self.max.?, .default) > 0) self.max = v;
     }
 
     fn minValue(self: AggAcc) Value {
-        return if (self.min) |e| e.value() else .{ .Null = {} };
+        return self.min orelse .{ .Null = {} };
     }
 
     fn maxValue(self: AggAcc) Value {
-        return if (self.max) |e| e.value() else .{ .Null = {} };
-    }
-};
-
-/// A number folded by `AggAcc`: its f64 view, and the integer itself when it
-/// was one. Two integers compare exactly.
-const NumericExtreme = struct {
-    f: f64,
-    int: ?i64,
-
-    fn lessThan(a: NumericExtreme, b: NumericExtreme) bool {
-        if (a.int != null and b.int != null) return a.int.? < b.int.?;
-        return a.f < b.f;
-    }
-
-    fn value(e: NumericExtreme) Value {
-        return if (e.int) |i| .{ .Int = i } else .{ .Double = e.f };
+        return self.max orelse .{ .Null = {} };
     }
 };
 
@@ -1193,18 +1187,17 @@ fn propToI64(pv: graph_store.PropertyValue) ?i64 {
     };
 }
 
-/// Whether min or max can fold `pv` here: an integer or a float, whose f64
-/// view orders it exactly as the value order does. Anything else (a decimal,
-/// whose result must stay a decimal; a string, a date) is for the value order
-/// of the shared projection (SONNY-2675), so the fast path declines.
-fn minMaxFoldable(pv: graph_store.PropertyValue) bool {
-    return switch (pv) {
-        .Int, .Float => true,
-        .ExtValue => |ev| switch (ev) {
-            .Int, .BigInt, .SmallInt, .Real, .Double => true,
-            else => false,
-        },
-        else => false,
+/// The value min or max folds for the non-NULL `pv`: a number of any kind (a
+/// decimal exactly), a date, time, timestamp or interval, a boolean or a
+/// UUID, returned by copy. Null for anything else (a string the path would
+/// have to own, an enum or a document the value order does not order): the
+/// path declines, and the shared projection computes it (SONNY-2675).
+fn minMaxValue(pv: graph_store.PropertyValue) ?Value {
+    const v = fastPathKeyValue(pv) orelse return null;
+    return switch (v) {
+        .Int, .SmallInt, .BigInt, .Real, .Double, .Decimal, .Bool => v,
+        .Date, .Time, .TimeTZ, .Timestamp, .TimestampTZ, .Interval, .UUID => v,
+        else => null,
     };
 }
 
@@ -1464,9 +1457,12 @@ pub fn propertyAggregateFastPath(
                     if (!comparePvLit(w_val, p.op, p.lit)) continue;
                 }
                 const t_val = prop_store.getNodeProperty(node_id, target_key) orelse continue;
-                // SONNY-2675: min/max over a value an f64 cannot order exactly
-                // (a string, a date, a decimal) is the value order's: decline.
-                if (min_or_max and t_val != .Null and !minMaxFoldable(t_val)) return null;
+                // SONNY-2675: min and max fold the value itself, in the value
+                // order; one they cannot (a string) declines.
+                if (min_or_max) {
+                    if (t_val != .Null) acc.fold(minMaxValue(t_val) orelse return null);
+                    continue;
+                }
                 const maybe_f = propToF64(t_val) orelse {
                     // GAP-0916: a present non-numeric value is a type error for
                     // sum/avg (the silent skip made sum return 0 and avg NULL).
@@ -1511,8 +1507,12 @@ pub fn propertyAggregateFastPath(
             };
             defer _ = ext_scratch.reset(.retain_capacity);
             const t_val = storageToGraphPv(ext_scratch.allocator(), t_raw) orelse return null;
-            // SONNY-2675: see the resident branch above.
-            if (min_or_max and t_val != .Null and !minMaxFoldable(t_val)) return null;
+            // SONNY-2675: see the resident branch above. The folded value is
+            // a copy, so resetting the scratch does not free it.
+            if (min_or_max) {
+                if (t_val != .Null) acc.fold(minMaxValue(t_val) orelse return null);
+                continue;
+            }
             const maybe_f = propToF64(t_val) orelse {
                 // GAP-0916: see the resident branch above.
                 if ((kind == .sum or kind == .avg) and t_val != .Null) return error.TypeMismatch;
@@ -2637,11 +2637,15 @@ pub fn groupByAggregateFastPath(
                         .sum, .avg, .min, .max => {
                             const t_val = prop_store.getNodeProperty(node_id, item_agg_prop[i].?) orelse continue;
                             if (t_val == .Null) continue;
-                            // SONNY-2675: a value this path cannot fold exactly
-                            // (a string, a date; a decimal for min/max) was
-                            // skipped. The shared projection computes it.
+                            // SONNY-2675: min and max fold the value itself, in
+                            // the value order. A value this path cannot fold
+                            // (a string; a date for sum or avg) was skipped;
+                            // the shared projection computes it.
+                            if (item_kinds[i] == .min or item_kinds[i] == .max) {
+                                group.accs[item_acc_idx[i]].fold(minMaxValue(t_val) orelse return null);
+                                continue;
+                            }
                             const maybe_f = propToF64(t_val) orelse return null;
-                            if ((item_kinds[i] == .min or item_kinds[i] == .max) and !minMaxFoldable(t_val)) return null;
                             group.accs[item_acc_idx[i]].update(propToI64(t_val), maybe_f);
                         },
                     }
@@ -2751,8 +2755,11 @@ pub fn groupByAggregateFastPath(
                         const t_val = storageToGraphPv(ext_scratch.allocator(), t_raw) orelse return null;
                         if (t_val == .Null) continue;
                         // SONNY-2675: see the resident branch above.
+                        if (item_kinds[i] == .min or item_kinds[i] == .max) {
+                            group.accs[item_acc_idx[i]].fold(minMaxValue(t_val) orelse return null);
+                            continue;
+                        }
                         const maybe_f = propToF64(t_val) orelse return null;
-                        if ((item_kinds[i] == .min or item_kinds[i] == .max) and !minMaxFoldable(t_val)) return null;
                         group.accs[item_acc_idx[i]].update(propToI64(t_val), maybe_f);
                     },
                 }
