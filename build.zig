@@ -8513,6 +8513,18 @@ pub fn build(b: *std.Build) void {
     const sonny2675_step = b.step("test-sonny2675-grouped-having", "Run SONNY-2675 regression (a grouped HAVING computes the aggregates it names per group and refuses an ungrouped input column: in-memory, RLS-policy and tenant-scoped sessions, and the planned read)");
     sonny2675_step.dependOn(&run_sonny2675_tests.step);
 
+    // SONNY-2675 follow-up: parameters inside aggregates, typed min/max and
+    // typed group keys in the shared aggregate code.
+    const sonny2675_agg_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny2675_aggregate_semantics.zig"), .target = target, .optimize = optimize });
+    sonny2675_agg_test_mod.addImport("geode", root_mod);
+    sonny2675_agg_test_mod.addImport("logging", logging_mod);
+    sonny2675_agg_test_mod.addImport("rls_types", rls_types_mod);
+    const sonny2675_agg_tests = b.addTest(.{ .root_module = sonny2675_agg_test_mod });
+    const run_sonny2675_agg_tests = b.addRunArtifact(sonny2675_agg_tests);
+    shardDep(test_step, &run_sonny2675_agg_tests.step, 1, test_shard_loads, test_shard_index);
+    const sonny2675_agg_step = b.step("test-sonny2675-aggregate-semantics", "Run SONNY-2675 follow-up regression (parameters inside aggregates, typed min/max, typed group keys: in-memory, RLS-policy, tenant-scoped and persisted sessions)");
+    sonny2675_agg_step.dependOn(&run_sonny2675_agg_tests.step);
+
     const sonny2675_walker_mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny2675_having_walker.zig"), .target = target, .optimize = optimize });
     sonny2675_walker_mod.addImport("geode", root_mod);
     const sonny2675_walker_tests = b.addTest(.{ .root_module = sonny2675_walker_mod });

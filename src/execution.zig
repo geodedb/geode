@@ -3203,9 +3203,54 @@ pub fn allocateColumnStrings(allocator: std.mem.Allocator, strings: []const []co
     return .{ .columns = columns, .buffer = buffer };
 }
 
+/// The environment an aggregate's argument is evaluated in for one input row:
+/// the row's columns, then the query's parameters (SONNY-2675: they were
+/// missing, so `sum(n.i * $f)` read `$f` as NULL).
+fn rowEnv(allocator: std.mem.Allocator, columns: []const []const u8, row: []const Value, param_names: []const []const u8, param_values: []const Value) Env {
+    return .{
+        .names = columns,
+        .values = row,
+        .param_names = param_names,
+        .param_values = param_values,
+        .allocator = allocator,
+    };
+}
+
+// CANARY: REQ=REQ-SONNY-2675-AGGREGATE-ERRORS; FEATURE="GroupedAggregates"; ASPECT=QueryLevelErrorsEscape; STATUS=TESTED; TEST=tests/test_sonny2675_aggregate_semantics.zig; OWNER=execution; UPDATED=2026-09-25
+/// Whether an evaluation error inside a grouped projection belongs to the query
+/// rather than to one row: a defect in the query text (an unknown function, a
+/// positional parameter that was not supplied), a refusal (strict tenancy, the
+/// read budget, a cancel), or running out of memory. These fail the query. Any
+/// other error is the row's value that cannot be computed, which the grouped
+/// path tolerates: the aggregate skips the row, a projected cell is the
+/// caller's fallback.
+fn isQueryLevelEvalError(err: anyerror) bool {
+    return switch (err) {
+        error.UnknownFunction,
+        error.MissingParameter,
+        error.TenantScopeRequired,
+        error.ReadQueryBudgetExceeded,
+        error.ReadQueryCancelled,
+        error.OutOfMemory,
+        => true,
+        else => false,
+    };
+}
+
+/// An aggregate's argument for one input row, or null when the row's value
+/// cannot be computed and the aggregate skips it. SONNY-2675: a query-level
+/// error (above) used to be skipped too, so `sum(n.i * $2)` without a `$2` was
+/// a sum over no rows instead of GAP-0926's MissingParameter.
+fn evalAggregateArgument(allocator: std.mem.Allocator, arg: ast.Expr, env: Env) !?Value {
+    return eval.evalExpr(allocator, arg, env) catch |err| {
+        if (isQueryLevelEvalError(err)) return err;
+        return null;
+    };
+}
+
 // CANARY: REQ=REQ-GQL-WITH-GROUPBY-002; FEATURE="WithGroupByAggregation"; ASPECT=AggregationComputation; STATUS=TESTED; TEST=geodetestlab/specs/gql_query_comprehensive.yml; OWNER=execution; UPDATED=2025-12-22
 /// Compute aggregation function over a group of rows
-pub fn computeGroupAggregation(allocator: std.mem.Allocator, expr: ast.Expr, group_rows: []const []const Value, columns: []const []const u8) !Value {
+pub fn computeGroupAggregation(allocator: std.mem.Allocator, expr: ast.Expr, group_rows: []const []const Value, columns: []const []const u8, param_names: []const []const u8, param_values: []const Value) !Value {
     // expr should be a Call expression for aggregation functions
     if (expr != .Call) return Value{ .Null = {} };
 
@@ -3237,12 +3282,7 @@ pub fn computeGroupAggregation(allocator: std.mem.Allocator, expr: ast.Expr, gro
         // count(expr) - count non-null values
         var count: i64 = 0;
         for (group_rows) |row| {
-            const env = Env{
-                .names = columns,
-                .values = row,
-                .allocator = allocator,
-            };
-            const val = eval.evalExpr(allocator, arg_ptr.?.*, env) catch continue;
+            const val = (try evalAggregateArgument(allocator, arg_ptr.?.*, rowEnv(allocator, columns, row, param_names, param_values))) orelse continue;
             if (distinct) |*d| {
                 if (!try d.add(val)) continue;
                 count += 1;
@@ -3261,12 +3301,7 @@ pub fn computeGroupAggregation(allocator: std.mem.Allocator, expr: ast.Expr, gro
         var has_float = false;
         var has_value = false;
         for (group_rows) |row| {
-            const env = Env{
-                .names = columns,
-                .values = row,
-                .allocator = allocator,
-            };
-            const val = eval.evalExpr(allocator, arg_ptr.?.*, env) catch continue;
+            const val = (try evalAggregateArgument(allocator, arg_ptr.?.*, rowEnv(allocator, columns, row, param_names, param_values))) orelse continue;
             if (distinct) |*d| {
                 if (!try d.add(val)) continue;
             }
@@ -3310,12 +3345,7 @@ pub fn computeGroupAggregation(allocator: std.mem.Allocator, expr: ast.Expr, gro
         var has_float = false;
         var count: i64 = 0;
         for (group_rows) |row| {
-            const env = Env{
-                .names = columns,
-                .values = row,
-                .allocator = allocator,
-            };
-            const val = eval.evalExpr(allocator, arg_ptr.?.*, env) catch continue;
+            const val = (try evalAggregateArgument(allocator, arg_ptr.?.*, rowEnv(allocator, columns, row, param_names, param_values))) orelse continue;
             if (distinct) |*d| {
                 if (!try d.add(val)) continue;
             }
@@ -3359,12 +3389,7 @@ pub fn computeGroupAggregation(allocator: std.mem.Allocator, expr: ast.Expr, gro
         if (arg_ptr == null) return Value{ .Null = {} };
         var min_val: ?Value = null;
         for (group_rows) |row| {
-            const env = Env{
-                .names = columns,
-                .values = row,
-                .allocator = allocator,
-            };
-            const val = eval.evalExpr(allocator, arg_ptr.?.*, env) catch continue;
+            const val = (try evalAggregateArgument(allocator, arg_ptr.?.*, rowEnv(allocator, columns, row, param_names, param_values))) orelse continue;
             if (val == .Null) continue;
             if (distinct) |*d| {
                 if (!try d.add(val)) continue;
@@ -3387,12 +3412,7 @@ pub fn computeGroupAggregation(allocator: std.mem.Allocator, expr: ast.Expr, gro
         if (arg_ptr == null) return Value{ .Null = {} };
         var max_val: ?Value = null;
         for (group_rows) |row| {
-            const env = Env{
-                .names = columns,
-                .values = row,
-                .allocator = allocator,
-            };
-            const val = eval.evalExpr(allocator, arg_ptr.?.*, env) catch continue;
+            const val = (try evalAggregateArgument(allocator, arg_ptr.?.*, rowEnv(allocator, columns, row, param_names, param_values))) orelse continue;
             if (val == .Null) continue;
             if (distinct) |*d| {
                 if (!try d.add(val)) continue;
@@ -3416,12 +3436,7 @@ pub fn computeGroupAggregation(allocator: std.mem.Allocator, expr: ast.Expr, gro
         // GAP-0220 FIX: Use try for proper error propagation
         var list = std.ArrayList(Value).initCapacity(allocator, group_rows.len) catch return Value{ .List = &.{} };
         for (group_rows) |row| {
-            const env = Env{
-                .names = columns,
-                .values = row,
-                .allocator = allocator,
-            };
-            const val = eval.evalExpr(allocator, arg_ptr.?.*, env) catch continue;
+            const val = (try evalAggregateArgument(allocator, arg_ptr.?.*, rowEnv(allocator, columns, row, param_names, param_values))) orelse continue;
             if (distinct) |*d| {
                 if (!try d.add(val)) continue;
             }
@@ -3500,12 +3515,14 @@ fn resolveGroupByKeyThroughAlias(
 /// (SQLSTATE 42883, src/server/proto_util.zig). An unknown function is a static
 /// defect in the query text, not a per-group evaluation failure: it cannot
 /// depend on which rows landed in the group, and it must be reported the same
-/// way in both shapes. Every other error keeps collapsing to the caller's
+/// way in both shapes. SONNY-2675: the other query-level errors
+/// (`isQueryLevelEvalError`: a missing positional parameter, a refusal, OOM)
+/// escape the same way. Every other error keeps collapsing to the caller's
 /// fallback, so the six aggregates and ordinary scalar functions are untouched.
 fn evalGroupedExpr(allocator: std.mem.Allocator, expr: ast.Expr, env: Env, fallback: Value) !Value {
-    return eval.evalExpr(allocator, expr, env) catch |err| switch (err) {
-        error.UnknownFunction => err,
-        else => fallback,
+    return eval.evalExpr(allocator, expr, env) catch |err| {
+        if (isQueryLevelEvalError(err)) return err;
+        return fallback;
     };
 }
 
@@ -3620,7 +3637,7 @@ const HavingFilter = struct {
         for (self.plan.?.slots, self.values[self.output_len..]) |slot, *value| {
             value.* = switch (slot) {
                 .column => |i| output_row[i],
-                .aggregate => |agg| try computeGroupAggregation(allocator, agg, group_rows, input_columns),
+                .aggregate => |agg| try computeGroupAggregation(allocator, agg, group_rows, input_columns, self.param_names, self.param_values),
                 // Every row of the group shares its key.
                 .key => |key| try evalGroupedExpr(allocator, key, key_env, Value{ .Null = {} }),
             };
@@ -3807,7 +3824,7 @@ pub fn executeWithClauseWithGroupByAndParams(allocator: std.mem.Allocator, input
                 // Check if this is an aggregation expression
                 if (return_and_sorting.isAggregationExpr(item.expr)) {
                     // Compute aggregation over all rows in the group
-                    new_row[i] = try computeGroupAggregation(allocator, item.expr, group_rows, input_result.columns);
+                    new_row[i] = try computeGroupAggregation(allocator, item.expr, group_rows, input_result.columns, param_names, param_values);
                 } else {
                     // Non-aggregation expression: evaluate with first row
                     new_row[i] = try evalGroupedExpr(allocator, item.expr, base_env, Value{ .Null = {} });
@@ -3932,7 +3949,7 @@ pub fn executeWithClauseWithGroupByAndParams(allocator: std.mem.Allocator, input
                     var new_row = try allocator.alloc(Value, with_items.len);
                     for (with_items, 0..) |item, i| {
                         if (return_and_sorting.isAggregationExpr(item.expr)) {
-                            new_row[i] = try computeGroupAggregation(allocator, item.expr, group_rows, input_result.columns);
+                            new_row[i] = try computeGroupAggregation(allocator, item.expr, group_rows, input_result.columns, param_names, param_values);
                         } else {
                             new_row[i] = try evalGroupedExpr(allocator, item.expr, base_env, Value{ .Null = {} });
                         }
@@ -3966,7 +3983,7 @@ pub fn executeWithClauseWithGroupByAndParams(allocator: std.mem.Allocator, input
 
                 for (with_items, 0..) |item, i| {
                     if (return_and_sorting.isAggregationExpr(item.expr)) {
-                        new_row[i] = try computeGroupAggregation(allocator, item.expr, input_result.rows, input_result.columns);
+                        new_row[i] = try computeGroupAggregation(allocator, item.expr, input_result.rows, input_result.columns, param_names, param_values);
                     } else if (input_result.rows.len == 0) {
                         // CANARY: REQ=REQ-GQL-EMPTY-MATCH-WITH-001; FEATURE="EmptyMatchWithClause"; ASPECT=NullOnNoRows; STATUS=TESTED; TEST=geodetestlab/specs/gql_query_comprehensive.yml; OWNER=execution; UPDATED=2025-12-27
                         // When there are no input rows, non-aggregation expressions cannot be evaluated

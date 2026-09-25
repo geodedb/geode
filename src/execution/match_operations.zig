@@ -7407,7 +7407,7 @@ fn executeMatchWithOptionalPatterns(allocator: std.mem.Allocator, q: ast.Query, 
                 // Check if this is an aggregation expression
                 if (isAggregationExpr(item.expr)) {
                     // Compute aggregation over all rows in the group
-                    new_row[i] = try execution.computeGroupAggregation(allocator, item.expr, group_rows, intermediate_result.columns);
+                    new_row[i] = try execution.computeGroupAggregation(allocator, item.expr, group_rows, intermediate_result.columns, param_names, param_values);
                 } else {
                     // Non-aggregation expression: evaluate with first row
                     new_row[i] = eval.evalExpr(allocator, item.expr, base_env) catch Value{ .Null = {} };
@@ -10326,7 +10326,7 @@ pub fn executeMatchQueryImpl(allocator: std.mem.Allocator, q: ast.Query, param_n
             if (q.with_clause) |with_clause| {
                 // Apply WITH clause to transform matched variables
                 // CANARY: REQ=REQ-GQL-WITH-GROUPBY-003; FEATURE="WithGroupByAggregation"; ASPECT=CallSite; STATUS=TESTED; TEST=geodetestlab/specs/gql_query_comprehensive.yml; OWNER=execution; UPDATED=2025-12-22
-                var with_result = try execution.executeWithClauseWithGroupBy(allocator, result, with_clause, q.group_by, execution.withStageHaving(q));
+                var with_result = try execution.executeWithClauseWithGroupByAndParams(allocator, result, with_clause, q.group_by, execution.withStageHaving(q), param_names, param_values);
 
                 // Clean up original result since it's been transformed by WITH
                 for (result.columns) |col| {
@@ -10788,7 +10788,7 @@ pub fn executeMatchQueryImpl(allocator: std.mem.Allocator, q: ast.Query, param_n
                             .flags = std.ArrayList([]const u8).empty,
                         };
 
-                        const with_result = try execution.executeWithClauseWithGroupBy(allocator, intermediate_result, with_clause, q.group_by, execution.withStageHaving(q));
+                        const with_result = try execution.executeWithClauseWithGroupByAndParams(allocator, intermediate_result, with_clause, q.group_by, execution.withStageHaving(q), param_names, param_values);
 
                         // Clean up intermediate result
                         for (intermediate_result.columns) |col| {
@@ -11533,7 +11533,7 @@ pub fn executeMatchQueryImpl(allocator: std.mem.Allocator, q: ast.Query, param_n
         if (q.with_clause) |with_clause| {
             // Apply WITH clause to transform matched variables
             // CANARY: REQ=REQ-GQL-WITH-GROUPBY-003; FEATURE="WithGroupByAggregation"; ASPECT=CallSite; STATUS=TESTED; TEST=geodetestlab/specs/gql_query_comprehensive.yml; OWNER=execution; UPDATED=2025-12-22
-            var with_result = try execution.executeWithClauseWithGroupBy(allocator, result, with_clause, q.group_by, execution.withStageHaving(q));
+            var with_result = try execution.executeWithClauseWithGroupByAndParams(allocator, result, with_clause, q.group_by, execution.withStageHaving(q), param_names, param_values);
 
             // Clean up original result since it's been transformed by WITH
             for (result.columns) |col| {
