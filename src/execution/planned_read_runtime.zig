@@ -756,13 +756,15 @@ fn executePatternQuery(
     // window — no WHERE residual filter, no ORDER BY (reorders), no
     // DISTINCT/aggregate (cardinality), no WITH (reshape). Otherwise null =
     // materialize all (unchanged); the window is applied post-hoc.
+    // SONNY-2652: the bound is `materializeWindowEnd` (null without a LIMIT),
+    // not the start-slot threshold, which answers offset+1 for an OFFSET alone.
     const materialize_cap: ?usize = blk: {
         if (q.where_clause != null) break :blk null;
         if (q.order_by != null) break :blk null;
         if (q.with_clause != null) break :blk null;
         if (q.ret.distinct) break :blk null;
         if (hasAggregationItems(q.ret.items)) break :blk null;
-        break :blk requiredStartRows(q, param_names, param_values); // null if no limit/offset
+        break :blk materializeWindowEnd(q, param_names, param_values); // null if no limit
     };
 
     if (!adapter.graphExists(plan.graph_name)) {
@@ -807,7 +809,7 @@ fn executePatternQuery(
         adapter,
         plan.graph_name,
         start_pattern,
-        requiredStartRows(q, param_names, param_values),
+        staleLabelIndexThreshold(q, param_names, param_values),
         param_names,
         param_values,
         context,
@@ -1816,13 +1818,15 @@ fn executeMultiChainHashJoin(
     // residual filter, no ORDER BY (reorders), no DISTINCT/aggregate (cardinality),
     // no WITH (reshape). The hash-join branch requires where_clause != null, so this
     // cap applies only to the pure-cartesian loops.
+    // SONNY-2652: the bound is `materializeWindowEnd` (null without a LIMIT);
+    // an OFFSET alone used to cap the loops at offset+1 rows.
     const materialize_cap: ?usize = blk: {
         if (q.where_clause != null) break :blk null;
         if (q.order_by != null) break :blk null;
         if (q.with_clause != null) break :blk null;
         if (q.ret.distinct) break :blk null;
         if (hasAggregationItems(q.ret.items)) break :blk null;
-        break :blk requiredStartRows(q, param_names, param_values); // null if no limit
+        break :blk materializeWindowEnd(q, param_names, param_values); // null if no limit
     };
 
     // Extract a cross-chain join predicate from the WHERE clause (if any).
@@ -2492,7 +2496,8 @@ fn collectStartSlots(
     adapter: *graph_storage_adapter.StorageAdapter,
     graph_name: []const u8,
     pattern: ast.NodePattern,
-    required_rows: ?usize,
+    /// `staleLabelIndexThreshold`, or null. Never a cap on the slots returned.
+    stale_index_threshold: ?usize,
     param_names: []const []const u8,
     param_values: []const Value,
     context: ExecutionContext,
@@ -2632,7 +2637,9 @@ fn collectStartSlots(
     };
     errdefer allocator.free(initial);
 
-    if (required_rows) |needed| {
+    // Fewer label-index slots than the window needs: the index may be stale,
+    // so collect the start slots from a full scan instead.
+    if (stale_index_threshold) |needed| {
         if (pattern.labels.len > 0 and initial.len < needed) {
             allocator.free(initial);
             return scanAndFilterStartSlots(allocator, adapter, graph_name, pattern, param_names, param_values, context);
@@ -3513,19 +3520,40 @@ fn elapsedSince(start_ns: i128) u64 {
     return if (now > start_ns) @intCast(now - start_ns) else 0;
 }
 
-fn requiredStartRows(
+// CANARY: REQ=REQ-SONNY-2652-PLANNED-READ-SKIP; FEATURE="PlannedReadRowWindow"; ASPECT=MaterializeCapNeedsLimit; STATUS=TESTED; TEST=tests/test_sonny2652_planned_read_skip_without_limit.zig; OWNER=engine; UPDATED=2026-09-25
+/// The most rows a planned read needs to materialize when its first rows are
+/// the answer's first rows (the caller decides that): OFFSET + LIMIT, or null
+/// (every row) when there is no LIMIT. It feeds `materialize_cap`, which stops
+/// the materialization loops. An OFFSET alone bounds nothing: `SKIP k` returns
+/// every row after the first k (SONNY-2652: the cap used to be
+/// `staleLabelIndexThreshold`, which answers k+1 for it, so `SKIP k` returned
+/// one row).
+fn materializeWindowEnd(
     q: *const ast.Query,
     param_names: []const []const u8,
     param_values: []const Value,
 ) ?usize {
+    const limit = resolveWindowValue(q.limit, q.limit_param, param_names, param_values) orelse return null;
     const offset = resolveWindowValue(q.offset, q.offset_param, param_names, param_values) orelse 0;
-    if (resolveWindowValue(q.limit, q.limit_param, param_names, param_values)) |limit| {
-        return std.math.add(usize, offset, limit) catch std.math.maxInt(usize);
-    }
-    if (offset != 0) {
-        return std.math.add(usize, offset, 1) catch std.math.maxInt(usize);
-    }
-    return null;
+    return std.math.add(usize, offset, limit) catch std.math.maxInt(usize);
+}
+
+/// The fewest start slots `collectStartSlots` expects from a label index
+/// before it trusts it: OFFSET + LIMIT with a LIMIT, OFFSET + 1 with an OFFSET
+/// alone (the window needs at least one row after the offset), and null (no
+/// expectation) with neither. A label index that returns fewer is treated as
+/// possibly stale, and the start slots come from a full scan instead. This is
+/// a threshold, not a cap: it never bounds how many rows are materialized
+/// (that is `materializeWindowEnd`).
+fn staleLabelIndexThreshold(
+    q: *const ast.Query,
+    param_names: []const []const u8,
+    param_values: []const Value,
+) ?usize {
+    if (materializeWindowEnd(q, param_names, param_values)) |end| return end;
+    const offset = resolveWindowValue(q.offset, q.offset_param, param_names, param_values) orelse 0;
+    if (offset == 0) return null;
+    return std.math.add(usize, offset, 1) catch std.math.maxInt(usize);
 }
 
 fn hasPreProjectionFilter(q: *const ast.Query) bool {
