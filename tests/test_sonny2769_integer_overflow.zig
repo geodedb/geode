@@ -376,3 +376,17 @@ test "SONNY-2769: the response encoder formats every date and decimal" {
     const v = try geode.proto_util.valueToProto(arena.allocator(), .{ .Decimal = .{ .coeff = std.math.minInt(i128), .scale = 1 } });
     try testing.expectEqualStrings("-17014118346046923173168730371588410572.8", v.kind.?.decimal_val.orig_repr);
 }
+
+test "SONNY-2769: a zoned time at the i64 edge orders and keys without overflow" {
+    // Round-3 helper audit: the UTC time of day was i64 arithmetic
+    // (micros - offset * 10^6), which overflowed for a decoded time of day at
+    // the edge of i64.
+    const edge = Value{ .TimeTZ = .{ .time = .{ .micros_since_midnight = std.math.minInt(i64) }, .offset_seconds = 14 * 3600 } };
+    const other = Value{ .TimeTZ = .{ .time = .{ .micros_since_midnight = std.math.maxInt(i64) }, .offset_seconds = -14 * 3600 } };
+    try testing.expect(geode.value_order.timeTzUtcMicros(edge.TimeTZ) < geode.value_order.timeTzUtcMicros(other.TimeTZ));
+    var set = geode.execution.distinct_set.DistinctSet.init(testing.allocator);
+    defer set.deinit();
+    try testing.expect(try set.add(edge));
+    try testing.expect(try set.add(other));
+    try testing.expect(!try set.add(edge));
+}

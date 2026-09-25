@@ -111,8 +111,11 @@ pub fn decimalRound(coeff: i128, scale: u32, mode: Rounding) i128 {
         .trunc => q,
         .floor => if (r < 0) q - 1 else q,
         .ceil => if (r > 0) q + 1 else q,
-        // |r| < divisor <= 10^38, so 2|r| cannot overflow.
-        .half_away_from_zero => if (2 * @as(i128, @intCast(@abs(r))) >= divisor)
+        // |r| against divisor / 2, which is exact (10^s is even for s >= 1).
+        // Round 4 (C1'): 2|r| overflowed i128 at scale 38, where |r| can
+        // reach 10^38 - 1 > maxInt(i128) / 2: `round(0.<38 nines>)` aborted
+        // the server.
+        .half_away_from_zero => if (@abs(r) >= @as(u128, @intCast(@divExact(divisor, 2))))
             (if (coeff < 0) q - 1 else q + 1)
         else
             q,
@@ -189,6 +192,12 @@ test "decimalRound rounds exactly, at every scale" {
     try std.testing.expectEqual(@as(i128, 0), decimalRound(std.math.maxInt(i128), 39, .half_away_from_zero));
     try std.testing.expectEqual(@as(i128, 2), decimalRound(std.math.maxInt(i128), 38, .half_away_from_zero));
     try std.testing.expectEqual(@as(i128, -2), decimalRound(std.math.minInt(i128), 38, .floor));
+    // Scale 38 with |r| near 10^38 (2|r| overflowed i128).
+    const nines38: i128 = 99999999999999999999999999999999999999;
+    try std.testing.expectEqual(@as(i128, 1), decimalRound(nines38, 38, .half_away_from_zero));
+    try std.testing.expectEqual(@as(i128, -1), decimalRound(-nines38, 38, .half_away_from_zero));
+    try std.testing.expectEqual(@as(i128, 0), decimalRound(49999999999999999999999999999999999999, 38, .half_away_from_zero));
+    try std.testing.expectEqual(@as(i128, 1), decimalRound(50000000000000000000000000000000000000, 38, .half_away_from_zero));
 }
 
 test "decimalToInt refuses what does not fit i64" {

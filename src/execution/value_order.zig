@@ -252,7 +252,9 @@ pub fn writeIntervalKey(w: *std.Io.Writer, iv: Interval) std.Io.Writer.Error!voi
     try w.writeInt(i128, intervalDayTime(iv), .little);
 }
 
-/// A time with a time zone as its UTC time of day, in microseconds.
-pub fn timeTzUtcMicros(t: TimeTZ) i64 {
-    return t.time.micros_since_midnight - @as(i64, t.offset_seconds) * std.time.us_per_s;
+/// A time with a time zone as its UTC time of day, in microseconds. i128:
+/// a decoded value's time of day is any i64, and subtracting the offset in
+/// i64 could overflow (round 4 audit of the round-3 helpers).
+pub fn timeTzUtcMicros(t: TimeTZ) i128 {
+    return @as(i128, t.time.micros_since_midnight) - @as(i128, t.offset_seconds) * std.time.us_per_s;
 }

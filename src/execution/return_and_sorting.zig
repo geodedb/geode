@@ -331,7 +331,7 @@ pub fn compareValuesWithNullsPolicy(a: Value, b: Value, nulls: ast.OrderBy.Nulls
             .Bool => |x| return if (x == b.Bool) 0 else if (x) 1 else -1,
             .Date => |x| return cmpOrdered(i32, x.days_since_epoch, b.Date.days_since_epoch),
             .Time => |x| return cmpOrdered(i64, x.micros_since_midnight, b.Time.micros_since_midnight),
-            .TimeTZ => |x| return cmpOrdered(i64, value_order.timeTzUtcMicros(x), value_order.timeTzUtcMicros(b.TimeTZ)),
+            .TimeTZ => |x| return cmpOrdered(i128, value_order.timeTzUtcMicros(x), value_order.timeTzUtcMicros(b.TimeTZ)),
             .Timestamp => |x| return cmpOrdered(i64, x.micros_since_epoch, b.Timestamp.micros_since_epoch),
             .TimestampTZ => |x| return cmpOrdered(i64, x.micros_since_epoch_utc, b.TimestampTZ.micros_since_epoch_utc),
             .Interval => |x| return value_order.compareIntervals(x, b.Interval),

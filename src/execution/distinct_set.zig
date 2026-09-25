@@ -148,7 +148,7 @@ pub fn writeKey(w: *std.Io.Writer, scratch: std.mem.Allocator, value: Value) Wri
         },
         .TimeTZ => |t| {
             try w.writeByte('t');
-            try w.writeInt(i64, value_order.timeTzUtcMicros(t), .little);
+            try w.writeInt(i128, value_order.timeTzUtcMicros(t), .little);
         },
         .Timestamp => |t| {
             try w.writeByte('P');
