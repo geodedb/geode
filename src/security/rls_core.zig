@@ -808,6 +808,8 @@ pub const RLSEngine = struct {
     ) !bool {
         const Opcode = CompiledExpression.Opcode;
         var stack: [RLS_STACK_DEPTH]Value = undefined;
+        // SONNY-2709: which slots hold a principal attribute (see `Operand`).
+        var from_attr = [_]bool{false} ** RLS_STACK_DEPTH;
         var sp: usize = 0; // Stack pointer
 
         var pc: usize = 0; // Program counter
@@ -830,6 +832,7 @@ pub const RLSEngine = struct {
                     if (idx < expr.constants.len) {
                         if (sp >= stack.len) return error.StackOverflow;
                         stack[sp] = expr.constants[idx];
+                        from_attr[sp] = false;
                         sp += 1;
                     }
                 },
@@ -867,6 +870,7 @@ pub const RLSEngine = struct {
                         } else {
                             stack[sp] = .null;
                         }
+                        from_attr[sp] = false;
                         sp += 1;
                     }
                 },
@@ -874,6 +878,7 @@ pub const RLSEngine = struct {
                     if (sp >= stack.len) return error.StackOverflow;
                     // Push current user ID as integer
                     stack[sp] = .{ .integer = @intCast(context.user.id) };
+                    from_attr[sp] = false;
                     sp += 1;
                 },
                 .load_session => {
@@ -888,6 +893,7 @@ pub const RLSEngine = struct {
                             .string => |s| s,
                             else => {
                                 stack[sp] = .null;
+                                from_attr[sp] = false;
                                 sp += 1;
                                 continue;
                             },
@@ -910,6 +916,7 @@ pub const RLSEngine = struct {
                     } else {
                         stack[sp] = .null;
                     }
+                    from_attr[sp] = false;
                     sp += 1;
                 },
                 .load_attr => {
@@ -921,6 +928,7 @@ pub const RLSEngine = struct {
                     pc += 1;
                     if (sp >= stack.len) return error.StackOverflow;
                     stack[sp] = self.resolvePrincipalAttribute(context.user.username, expr.constants, idx);
+                    from_attr[sp] = true;
                     sp += 1;
                 },
                 .eq => {
@@ -941,41 +949,34 @@ pub const RLSEngine = struct {
                 },
                 .lt, .gt, .lte, .gte => {
                     if (sp < 2) return error.StackUnderflow;
-                    const b = stack[sp - 1];
-                    const a = stack[sp - 2];
+                    const b = Operand{ .value = stack[sp - 1], .from_attr = from_attr[sp - 1] };
+                    const a = Operand{ .value = stack[sp - 2], .from_attr = from_attr[sp - 2] };
                     sp -= 2;
-                    const cmp = self.compareValues(a, b);
-                    const result = switch (opcode) {
-                        .lt => cmp < 0,
-                        .gt => cmp > 0,
-                        .lte => cmp <= 0,
-                        .gte => cmp >= 0,
-                        else => false,
-                    };
-                    stack[sp] = .{ .boolean = result };
+                    stack[sp] = self.evalRange(opcode, a, b);
+                    from_attr[sp] = false;
                     sp += 1;
                 },
                 .op_and => {
                     if (sp < 2) return error.StackUnderflow;
-                    const b = self.valueToBool(stack[sp - 1]);
-                    const a = self.valueToBool(stack[sp - 2]);
+                    const b = self.truthOf(stack[sp - 1]);
+                    const a = self.truthOf(stack[sp - 2]);
                     sp -= 2;
-                    stack[sp] = .{ .boolean = a and b };
+                    stack[sp] = truthValue(kleeneAnd(a, b));
                     sp += 1;
                 },
                 .op_or => {
                     if (sp < 2) return error.StackUnderflow;
-                    const b = self.valueToBool(stack[sp - 1]);
-                    const a = self.valueToBool(stack[sp - 2]);
+                    const b = self.truthOf(stack[sp - 1]);
+                    const a = self.truthOf(stack[sp - 2]);
                     sp -= 2;
-                    stack[sp] = .{ .boolean = a or b };
+                    stack[sp] = truthValue(kleeneOr(a, b));
                     sp += 1;
                 },
                 .op_not => {
                     if (sp < 1) return error.StackUnderflow;
-                    const a = self.valueToBool(stack[sp - 1]);
+                    const a = self.truthOf(stack[sp - 1]);
                     sp -= 1;
-                    stack[sp] = .{ .boolean = !a };
+                    stack[sp] = truthValue(if (a) |t| !t else null);
                     sp += 1;
                 },
                 .jump => {
@@ -1053,38 +1054,169 @@ pub const RLSEngine = struct {
         };
     }
 
-    fn compareValues(self: *Self, a: Value, b: Value) i32 {
+    // CANARY: REQ=REQ-SONNY-2709-RLS-RANGE-FAIL-CLOSED; FEATURE="RLSExpressionCompilation"; ASPECT=RangeOperatorsFailClosed; STATUS=TESTED; TEST=tests/test_sonny2709_rls_range_fail_closed.zig; OWNER=security; UPDATED=2026-09-25
+    /// SONNY-2709: a range operator's operand, and whether it came from
+    /// `principal.attribute.<key>` (`load_attr`).
+    ///
+    /// The VM tracks this per stack slot (`from_attr`). Only a push puts a
+    /// string on the stack, and every string-producing opcode (push_const,
+    /// load_row, load_session, load_attr) sets its slot's flag, so a string's
+    /// flag is always right. A slot a boolean or null result reuses may keep a
+    /// stale flag; that is harmless, because only a string is ever coerced.
+    /// A new opcode that pushes a string must set the flag too.
+    const Operand = struct {
+        value: Value,
+        from_attr: bool,
+    };
+
+    /// SONNY-2709: `a <op> b` for the four range operators: a boolean, or
+    /// null (UNKNOWN) when the operands have no order.
+    ///
+    /// Before this, `compareValues` answered 0 ("equal") for a null or for
+    /// two values of different types, so `<=` and `>=` held. A range policy
+    /// passed every row whose value was missing or of another type, and
+    /// `level <= principal.attribute.clearance` passed every row for every
+    /// user, since a principal attribute is always a string.
+    ///
+    /// UNKNOWN is not false: it stays UNKNOWN under NOT, AND and OR (Kleene
+    /// logic, `kleeneAnd`/`kleeneOr`), and a policy that ends UNKNOWN denies
+    /// the row. With a plain false, `NOT (level > 3)` would admit a row with
+    /// no level.
+    ///
+    /// A principal attribute compared with a number is parsed strictly as
+    /// that number's type (`coerceAttribute`); compared with a string it is
+    /// a string. Nothing else is converted: a row's string is never read as a
+    /// number.
+    fn evalRange(self: *Self, opcode: CompiledExpression.Opcode, a: Operand, b: Operand) Value {
+        const order = self.orderOperands(a, b) orelse return .null;
+        const holds = switch (opcode) {
+            .lt => order == .lt,
+            .gt => order == .gt,
+            .lte => order != .gt,
+            .gte => order != .lt,
+            else => return .null,
+        };
+        return .{ .boolean = holds };
+    }
+
+    fn orderOperands(self: *Self, a: Operand, b: Operand) ?std.math.Order {
+        if (a.from_attr and a.value == .string and isNumber(b.value)) {
+            const coerced = coerceAttribute(a.value.string, b.value) orelse return null;
+            return self.compareValues(coerced, b.value);
+        }
+        if (b.from_attr and b.value == .string and isNumber(a.value)) {
+            const coerced = coerceAttribute(b.value.string, a.value) orelse return null;
+            return self.compareValues(a.value, coerced);
+        }
+        return self.compareValues(a.value, b.value);
+    }
+
+    fn isNumber(v: Value) bool {
+        return v == .integer or v == .float;
+    }
+
+    /// SONNY-2709: the principal attribute `text` as a value of `like`'s
+    /// numeric type, or null (not comparable, so the row is denied).
+    ///
+    /// Strict on purpose, since the attribute decides what a user may read:
+    /// - against an integer: an optional '-' and ASCII digits only, in range
+    ///   of i64 ("3", "-1"; not " 3", "+3", "3.0", "1_000", "0x3");
+    /// - against a float: the same, optionally followed by '.' and at least
+    ///   one digit ("3", "2.5"; not "2.", ".5", "1e3", "inf", "nan").
+    fn coerceAttribute(text: []const u8, like: Value) ?Value {
+        const unsigned = if (text.len > 0 and text[0] == '-') text[1..] else text;
+        const dot = std.mem.indexOfScalar(u8, unsigned, '.');
+        const whole = unsigned[0 .. dot orelse unsigned.len];
+        const fraction: []const u8 = if (dot) |d| unsigned[d + 1 ..] else "";
+        if (whole.len == 0 or !allDigits(whole)) return null;
+        switch (like) {
+            .integer => {
+                if (dot != null) return null;
+                return .{ .integer = std.fmt.parseInt(i64, text, 10) catch return null };
+            },
+            .float => {
+                if (dot != null and (fraction.len == 0 or !allDigits(fraction))) return null;
+                const f = std.fmt.parseFloat(f64, text) catch return null;
+                if (!std.math.isFinite(f)) return null;
+                return .{ .float = f };
+            },
+            else => return null,
+        }
+    }
+
+    fn allDigits(text: []const u8) bool {
+        for (text) |c| {
+            if (!std.ascii.isDigit(c)) return false;
+        }
+        return true;
+    }
+
+    /// SONNY-2709: the order of two values, or null when they have none.
+    /// Only like is ordered with like: two numbers (an integer and a float
+    /// compare as floats), two strings (by bytes), two timestamps. A null, a
+    /// NaN, a boolean, an array, an object, and every mixed pair (a string
+    /// and a number, say) have no order.
+    fn compareValues(self: *Self, a: Value, b: Value) ?std.math.Order {
         _ = self;
         return switch (a) {
             .integer => |av| switch (b) {
-                .integer => |bv| if (av < bv) @as(i32, -1) else if (av > bv) @as(i32, 1) else @as(i32, 0),
-                .float => |bv| blk: {
-                    const af: f64 = @floatFromInt(av);
-                    break :blk if (af < bv) @as(i32, -1) else if (af > bv) @as(i32, 1) else @as(i32, 0);
-                },
-                else => 0,
+                .integer => |bv| std.math.order(av, bv),
+                .float => |bv| orderFloats(@floatFromInt(av), bv),
+                else => null,
             },
             .float => |av| switch (b) {
-                .float => |bv| if (av < bv) @as(i32, -1) else if (av > bv) @as(i32, 1) else @as(i32, 0),
-                .integer => |bv| blk: {
-                    const bf: f64 = @floatFromInt(bv);
-                    break :blk if (av < bf) @as(i32, -1) else if (av > bf) @as(i32, 1) else @as(i32, 0);
-                },
-                else => 0,
+                .float => |bv| orderFloats(av, bv),
+                .integer => |bv| orderFloats(av, @floatFromInt(bv)),
+                else => null,
             },
             .string => |av| switch (b) {
-                .string => |bv| blk: {
-                    const order = std.mem.order(u8, av, bv);
-                    break :blk switch (order) {
-                        .lt => @as(i32, -1),
-                        .gt => @as(i32, 1),
-                        .eq => @as(i32, 0),
-                    };
-                },
-                else => 0,
+                .string => |bv| std.mem.order(u8, av, bv),
+                else => null,
             },
-            else => 0,
+            .timestamp => |av| switch (b) {
+                .timestamp => |bv| std.math.order(av, bv),
+                else => null,
+            },
+            else => null,
         };
+    }
+
+    fn orderFloats(a: f64, b: f64) ?std.math.Order {
+        if (std.math.isNan(a) or std.math.isNan(b)) return null;
+        return std.math.order(a, b);
+    }
+
+    /// SONNY-2709: a value's truth for NOT, AND and OR: null is UNKNOWN;
+    /// every other value is `valueToBool`'s.
+    fn truthOf(self: *Self, v: Value) ?bool {
+        if (v == .null) return null;
+        return self.valueToBool(v);
+    }
+
+    /// Kleene AND: false if either side is false, else UNKNOWN if either is.
+    fn kleeneAnd(a: ?bool, b: ?bool) ?bool {
+        if (isKnown(a, false) or isKnown(b, false)) return false;
+        if (a == null or b == null) return null;
+        return true;
+    }
+
+    /// Kleene OR: true if either side is true, else UNKNOWN if either is.
+    fn kleeneOr(a: ?bool, b: ?bool) ?bool {
+        if (isKnown(a, true) or isKnown(b, true)) return true;
+        if (a == null or b == null) return null;
+        return false;
+    }
+
+    fn isKnown(t: ?bool, want: bool) bool {
+        const known = t orelse return false;
+        return known == want;
+    }
+
+    /// UNKNOWN is carried on the stack as null: `valueToBool` makes it false
+    /// (deny) wherever a verdict is taken, and `truthOf` keeps it UNKNOWN.
+    fn truthValue(t: ?bool) Value {
+        const known = t orelse return .null;
+        return .{ .boolean = known };
     }
 
     // CANARY: REQ=GAP-0284; FEATURE="ABAC user attribute store"; ASPECT=RLSExprAttrResolve; STATUS=TESTED; TEST=geode-test-harness/geodetestlab-cli/specs/abac_attribute_policies.yml; OWNER=security; UPDATED=2026-05-22
@@ -1352,6 +1484,8 @@ pub const RLSEngine = struct {
     ) !bool {
         const Opcode = CompiledExpression.Opcode;
         var stack: [RLS_STACK_DEPTH]Value = undefined;
+        // SONNY-2709: which slots hold a principal attribute (see `Operand`).
+        var from_attr = [_]bool{false} ** RLS_STACK_DEPTH;
         var sp: usize = 0;
 
         var pc: usize = 0;
@@ -1371,6 +1505,7 @@ pub const RLSEngine = struct {
                     if (idx < expr.constants.len) {
                         if (sp >= stack.len) return error.StackOverflow;
                         stack[sp] = expr.constants[idx];
+                        from_attr[sp] = false;
                         sp += 1;
                     }
                 },
@@ -1408,6 +1543,7 @@ pub const RLSEngine = struct {
                         } else {
                             stack[sp] = .null;
                         }
+                        from_attr[sp] = false;
                         sp += 1;
                     }
                 },
@@ -1419,6 +1555,7 @@ pub const RLSEngine = struct {
                     // hash has the high bit set (~50% of usernames). @bitCast
                     // keeps the full 64-bit identity deterministically.
                     stack[sp] = .{ .integer = @bitCast(std.hash.Wyhash.hash(0, username)) };
+                    from_attr[sp] = false;
                     sp += 1;
                 },
                 .load_session => {
@@ -1429,6 +1566,7 @@ pub const RLSEngine = struct {
                     _ = idx;
                     if (sp >= stack.len) return error.StackOverflow;
                     stack[sp] = .null;
+                    from_attr[sp] = false;
                     sp += 1;
                 },
                 .load_attr => {
@@ -1440,6 +1578,7 @@ pub const RLSEngine = struct {
                     pc += 1;
                     if (sp >= stack.len) return error.StackOverflow;
                     stack[sp] = self.resolvePrincipalAttribute(username, expr.constants, idx);
+                    from_attr[sp] = true;
                     sp += 1;
                 },
                 .eq => {
@@ -1458,59 +1597,36 @@ pub const RLSEngine = struct {
                     stack[sp] = .{ .boolean = !self.valuesEqual(a, b) };
                     sp += 1;
                 },
-                .lt => {
+                .lt, .gt, .lte, .gte => {
                     if (sp < 2) return error.StackUnderflow;
-                    const b = stack[sp - 1];
-                    const a = stack[sp - 2];
+                    const b = Operand{ .value = stack[sp - 1], .from_attr = from_attr[sp - 1] };
+                    const a = Operand{ .value = stack[sp - 2], .from_attr = from_attr[sp - 2] };
                     sp -= 2;
-                    stack[sp] = .{ .boolean = self.compareValues(a, b) < 0 };
-                    sp += 1;
-                },
-                .gt => {
-                    if (sp < 2) return error.StackUnderflow;
-                    const b = stack[sp - 1];
-                    const a = stack[sp - 2];
-                    sp -= 2;
-                    stack[sp] = .{ .boolean = self.compareValues(a, b) > 0 };
-                    sp += 1;
-                },
-                .lte => {
-                    if (sp < 2) return error.StackUnderflow;
-                    const b = stack[sp - 1];
-                    const a = stack[sp - 2];
-                    sp -= 2;
-                    stack[sp] = .{ .boolean = self.compareValues(a, b) <= 0 };
-                    sp += 1;
-                },
-                .gte => {
-                    if (sp < 2) return error.StackUnderflow;
-                    const b = stack[sp - 1];
-                    const a = stack[sp - 2];
-                    sp -= 2;
-                    stack[sp] = .{ .boolean = self.compareValues(a, b) >= 0 };
+                    stack[sp] = self.evalRange(opcode, a, b);
+                    from_attr[sp] = false;
                     sp += 1;
                 },
                 .op_and => {
                     if (sp < 2) return error.StackUnderflow;
-                    const b = self.valueToBool(stack[sp - 1]);
-                    const a = self.valueToBool(stack[sp - 2]);
+                    const b = self.truthOf(stack[sp - 1]);
+                    const a = self.truthOf(stack[sp - 2]);
                     sp -= 2;
-                    stack[sp] = .{ .boolean = a and b };
+                    stack[sp] = truthValue(kleeneAnd(a, b));
                     sp += 1;
                 },
                 .op_or => {
                     if (sp < 2) return error.StackUnderflow;
-                    const b = self.valueToBool(stack[sp - 1]);
-                    const a = self.valueToBool(stack[sp - 2]);
+                    const b = self.truthOf(stack[sp - 1]);
+                    const a = self.truthOf(stack[sp - 2]);
                     sp -= 2;
-                    stack[sp] = .{ .boolean = a or b };
+                    stack[sp] = truthValue(kleeneOr(a, b));
                     sp += 1;
                 },
                 .op_not => {
                     if (sp < 1) return error.StackUnderflow;
-                    const a = self.valueToBool(stack[sp - 1]);
+                    const a = self.truthOf(stack[sp - 1]);
                     sp -= 1;
-                    stack[sp] = .{ .boolean = !a };
+                    stack[sp] = truthValue(if (a) |t| !t else null);
                     sp += 1;
                 },
                 .jump => {
@@ -3593,4 +3709,181 @@ test "GAP-0287: parseIpv4 unit tests" {
     try std.testing.expectEqual(@as(?u32, null), BuiltinFunctions.parseIpv4("192.168.1.1.1"));
     try std.testing.expectEqual(@as(?u32, null), BuiltinFunctions.parseIpv4("abc.def.ghi.jkl"));
     try std.testing.expectEqual(@as(?u32, null), BuiltinFunctions.parseIpv4("256.0.0.1"));
+}
+
+// ---------------------------------------------------------------------------
+// SONNY-2709: range operators fail closed.
+// CANARY: REQ=REQ-SONNY-2709-RLS-RANGE-FAIL-CLOSED; FEATURE="RLSExpressionCompilation"; ASPECT=RangeOperatorsFailClosed; STATUS=TESTED; TEST=src/security/rls_core.zig; OWNER=security; UPDATED=2026-09-25
+// ---------------------------------------------------------------------------
+
+/// An engine holding one restrictive policy on (g, T) compiled from `expr`.
+fn sonny2709Engine(allocator: Allocator, expr: []const u8) !RLSEngine {
+    var engine = try RLSEngine.init(allocator);
+    errdefer engine.deinit();
+    try engine.createPolicy(.{
+        .id = 2709,
+        .name = "range",
+        .description = "SONNY-2709",
+        .graph = "g",
+        .table = "T",
+        .operation = .all,
+        .permissive = false,
+        .roles = &.{},
+        .using_expr = .{ .raw = expr, .parsed = null, .compiled = null, .parameters = &.{} },
+        .check_expr = null,
+        .enabled = true,
+        .created_at = 0,
+        .updated_at = 0,
+        .created_by = 0,
+        .temporal = null,
+        .data_classification = null,
+        .audit_level = .none,
+    });
+    return engine;
+}
+
+/// Free the compiled expressions `createPolicy` built (the engine's `deinit`
+/// leaves a policy's expressions to its owner).
+fn sonny2709Deinit(engine: *RLSEngine) void {
+    var it = engine.policies.iterator();
+    while (it.next()) |entry| {
+        for (entry.value_ptr.items) |policy| {
+            if (policy.using_expr) |e| {
+                if (e.compiled) |c| {
+                    engine.allocator.free(c.bytecode);
+                    engine.allocator.free(c.constants);
+                    engine.allocator.free(c.jump_table);
+                    engine.allocator.destroy(c);
+                }
+            }
+        }
+    }
+    engine.deinit();
+}
+
+/// Does `user` see a row whose `field` is `value` (null: the row lacks it)?
+fn sonny2709Sees(engine: *RLSEngine, user: []const u8, field: []const u8, value: ?Value) !bool {
+    var row = std.StringHashMap(Value).init(std.testing.allocator);
+    defer row.deinit();
+    if (value) |v| try row.put(field, v);
+    return engine.checkRowAccessByUsername(&row, .select, user, "g", "T");
+}
+
+test "SONNY-2709: a range policy denies a row whose value is missing or of another type" {
+    const allocator = std.testing.allocator;
+    var le = try sonny2709Engine(allocator, "row.level <= 3");
+    defer sonny2709Deinit(&le);
+    try std.testing.expect(try sonny2709Sees(&le, "u", "level", .{ .integer = 1 }));
+    try std.testing.expect(try sonny2709Sees(&le, "u", "level", .{ .integer = 3 }));
+    try std.testing.expect(try sonny2709Sees(&le, "u", "level", .{ .float = 2.5 }));
+    try std.testing.expect(!try sonny2709Sees(&le, "u", "level", .{ .integer = 9 }));
+    // Missing, null and mistyped values are not comparable with 3: denied.
+    try std.testing.expect(!try sonny2709Sees(&le, "u", "level", null));
+    try std.testing.expect(!try sonny2709Sees(&le, "u", "level", .null));
+    try std.testing.expect(!try sonny2709Sees(&le, "u", "level", .{ .string = "top" }));
+    try std.testing.expect(!try sonny2709Sees(&le, "u", "level", .{ .string = "2" }));
+    try std.testing.expect(!try sonny2709Sees(&le, "u", "level", .{ .boolean = true }));
+    try std.testing.expect(!try sonny2709Sees(&le, "u", "level", .{ .float = std.math.nan(f64) }));
+
+    // Every range operator, the same way.
+    const exprs = [_][]const u8{ "row.level < 3", "row.level > 3", "row.level <= 3", "row.level >= 3" };
+    for (exprs) |expr| {
+        var e = try sonny2709Engine(allocator, expr);
+        defer sonny2709Deinit(&e);
+        try std.testing.expect(!try sonny2709Sees(&e, "u", "level", null));
+        try std.testing.expect(!try sonny2709Sees(&e, "u", "level", .{ .string = "top" }));
+        try std.testing.expect(!try sonny2709Sees(&e, "u", "level", .{ .boolean = false }));
+    }
+
+    // Strings order by bytes, against a string.
+    var s = try sonny2709Engine(allocator, "row.name >= 'm'");
+    defer sonny2709Deinit(&s);
+    try std.testing.expect(try sonny2709Sees(&s, "u", "name", .{ .string = "zed" }));
+    try std.testing.expect(!try sonny2709Sees(&s, "u", "name", .{ .string = "abe" }));
+    try std.testing.expect(!try sonny2709Sees(&s, "u", "name", .{ .integer = 99 }));
+}
+
+test "SONNY-2709: a comparison that cannot be made stays denied under NOT, AND and OR" {
+    const allocator = std.testing.allocator;
+    // NOT (level > 3) must not admit a row whose level is missing.
+    var not_gt = try sonny2709Engine(allocator, "NOT (row.level > 3)");
+    defer sonny2709Deinit(&not_gt);
+    try std.testing.expect(try sonny2709Sees(&not_gt, "u", "level", .{ .integer = 1 }));
+    try std.testing.expect(!try sonny2709Sees(&not_gt, "u", "level", .{ .integer = 9 }));
+    try std.testing.expect(!try sonny2709Sees(&not_gt, "u", "level", null));
+    try std.testing.expect(!try sonny2709Sees(&not_gt, "u", "level", .{ .string = "top" }));
+
+    // Nor may comparing the verdict with false.
+    var eq_false = try sonny2709Engine(allocator, "(row.level > 3) = false");
+    defer sonny2709Deinit(&eq_false);
+    try std.testing.expect(try sonny2709Sees(&eq_false, "u", "level", .{ .integer = 1 }));
+    try std.testing.expect(!try sonny2709Sees(&eq_false, "u", "level", null));
+
+    // OR with a true operand is true; AND with a false one is false.
+    var or_true = try sonny2709Engine(allocator, "row.level > 3 OR TRUE");
+    defer sonny2709Deinit(&or_true);
+    try std.testing.expect(try sonny2709Sees(&or_true, "u", "level", null));
+    var not_and = try sonny2709Engine(allocator, "NOT (row.level > 3 AND FALSE)");
+    defer sonny2709Deinit(&not_and);
+    try std.testing.expect(try sonny2709Sees(&not_and, "u", "level", null));
+    var not_or = try sonny2709Engine(allocator, "NOT (row.level > 3 OR FALSE)");
+    defer sonny2709Deinit(&not_or);
+    try std.testing.expect(!try sonny2709Sees(&not_or, "u", "level", null));
+}
+
+test "SONNY-2709: a principal attribute is parsed strictly as the number it is compared with" {
+    const allocator = std.testing.allocator;
+    const store_alloc = std.testing.allocator;
+    try user_attr_store.setAttribute(store_alloc, "u2709_three", "clearance", "3");
+    defer _ = user_attr_store.removeAttribute("u2709_three", "clearance", store_alloc);
+    try user_attr_store.setAttribute(store_alloc, "u2709_word", "clearance", "high");
+    defer _ = user_attr_store.removeAttribute("u2709_word", "clearance", store_alloc);
+    try user_attr_store.setAttribute(store_alloc, "u2709_space", "clearance", " 3");
+    defer _ = user_attr_store.removeAttribute("u2709_space", "clearance", store_alloc);
+    try user_attr_store.setAttribute(store_alloc, "u2709_decimal", "clearance", "3.0");
+    defer _ = user_attr_store.removeAttribute("u2709_decimal", "clearance", store_alloc);
+    try user_attr_store.setAttribute(store_alloc, "u2709_plus", "clearance", "+3");
+    defer _ = user_attr_store.removeAttribute("u2709_plus", "clearance", store_alloc);
+    try user_attr_store.setAttribute(store_alloc, "u2709_neg", "clearance", "-1");
+    defer _ = user_attr_store.removeAttribute("u2709_neg", "clearance", store_alloc);
+
+    var le = try sonny2709Engine(allocator, "row.level <= principal.attribute.clearance");
+    defer sonny2709Deinit(&le);
+    // "3" is the integer 3 against an integer column.
+    try std.testing.expect(try sonny2709Sees(&le, "u2709_three", "level", .{ .integer = 1 }));
+    try std.testing.expect(try sonny2709Sees(&le, "u2709_three", "level", .{ .integer = 3 }));
+    try std.testing.expect(!try sonny2709Sees(&le, "u2709_three", "level", .{ .integer = 9 }));
+    try std.testing.expect(!try sonny2709Sees(&le, "u2709_three", "level", null));
+    try std.testing.expect(try sonny2709Sees(&le, "u2709_neg", "level", .{ .integer = -5 }));
+    try std.testing.expect(!try sonny2709Sees(&le, "u2709_neg", "level", .{ .integer = 0 }));
+    // Against a float column it is the float 3.
+    try std.testing.expect(try sonny2709Sees(&le, "u2709_three", "level", .{ .float = 2.5 }));
+    try std.testing.expect(!try sonny2709Sees(&le, "u2709_three", "level", .{ .float = 3.5 }));
+    try std.testing.expect(try sonny2709Sees(&le, "u2709_decimal", "level", .{ .float = 2.5 }));
+    // Anything that is not exactly an integer is denied against an integer column.
+    try std.testing.expect(!try sonny2709Sees(&le, "u2709_decimal", "level", .{ .integer = 1 }));
+    try std.testing.expect(!try sonny2709Sees(&le, "u2709_word", "level", .{ .integer = 1 }));
+    try std.testing.expect(!try sonny2709Sees(&le, "u2709_space", "level", .{ .integer = 1 }));
+    try std.testing.expect(!try sonny2709Sees(&le, "u2709_plus", "level", .{ .integer = 1 }));
+    // A user without the attribute sees no row.
+    try std.testing.expect(!try sonny2709Sees(&le, "u2709_nobody", "level", .{ .integer = 1 }));
+    try std.testing.expect(!try sonny2709Sees(&le, "u2709_nobody", "level", .{ .integer = -100 }));
+    // A string column is compared as a string; a boolean one not at all.
+    try std.testing.expect(try sonny2709Sees(&le, "u2709_three", "level", .{ .string = "2" }));
+    try std.testing.expect(!try sonny2709Sees(&le, "u2709_three", "level", .{ .string = "top" }));
+    try std.testing.expect(!try sonny2709Sees(&le, "u2709_three", "level", .{ .boolean = true }));
+
+    // The attribute on the left reads the same.
+    var ge = try sonny2709Engine(allocator, "principal.attribute.clearance >= row.level");
+    defer sonny2709Deinit(&ge);
+    try std.testing.expect(try sonny2709Sees(&ge, "u2709_three", "level", .{ .integer = 2 }));
+    try std.testing.expect(!try sonny2709Sees(&ge, "u2709_three", "level", .{ .integer = 4 }));
+    try std.testing.expect(!try sonny2709Sees(&ge, "u2709_nobody", "level", .{ .integer = 2 }));
+    try std.testing.expect(!try sonny2709Sees(&ge, "u2709_word", "level", .{ .integer = 2 }));
+
+    // A row value that is a numeric string is NOT coerced: only the
+    // principal attribute is.
+    var lit = try sonny2709Engine(allocator, "row.level <= 3");
+    defer sonny2709Deinit(&lit);
+    try std.testing.expect(!try sonny2709Sees(&lit, "u2709_three", "level", .{ .string = "1" }));
 }

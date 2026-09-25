@@ -81,6 +81,39 @@ This document describes the comprehensive Row-Level Security (RLS) implementatio
   - Context-aware query modification
   - Performance-optimized predicate evaluation
 
+- **Comparisons in policy expressions (SONNY-2709)**
+
+  An expression policy (`row.<field>`, `principal.attribute.<key>`,
+  `current_user`, literals, `=`, `<>`, `<`, `<=`, `>`, `>=`, `AND`, `OR`,
+  `NOT`) is compiled to bytecode and evaluated per row. Its comparisons
+  follow these rules:
+
+  | Comparison | Result |
+  |---|---|
+  | `<`, `<=`, `>`, `>=` on two numbers (integer or float, mixed) | ordered as numbers |
+  | the same on two strings | ordered by bytes |
+  | the same on two timestamps | ordered |
+  | the same on anything else: a missing field or `NULL`, NaN, a boolean, a string against a number | UNKNOWN |
+  | `principal.attribute.<key>` against a number | the attribute is parsed strictly as that number's type, then compared; if it does not parse, UNKNOWN |
+  | `=`, `<>` | true or false; a missing field equals only `NULL` |
+
+  UNKNOWN never admits a row. `NOT`, `AND` and `OR` follow SQL's
+  three-valued logic: `NOT` UNKNOWN is UNKNOWN, `false AND` UNKNOWN is
+  false, `true OR` UNKNOWN is true, and every other combination with
+  UNKNOWN is UNKNOWN. A policy whose result is UNKNOWN denies the row. So
+  `row.level <= 3` and `NOT (row.level > 3)` both deny a row with no
+  `level`, or with a `level` that is not a number.
+
+  A principal attribute is stored as a string. Compared with an integer
+  field it must be an optional `-` followed by ASCII digits, within the
+  64-bit range (`"3"`, `"-1"`). Compared with a float field it may also have
+  a `.` and at least one fraction digit (`"2.5"`). Anything else, such as
+  `" 3"`, `"+3"`, `"3.0"` (against an integer), `"1e3"`, `"0x3"` or `"inf"`,
+  is not a number, and the comparison is UNKNOWN. A user without the
+  attribute gets UNKNOWN too. Compared with a string field, the attribute is
+  compared as a string. Only a principal attribute is converted: a row's
+  string field is never read as a number.
+
 ### 5. User Management CLI (`src/tools/user_auth.zig`)
 
 - **User Commands**

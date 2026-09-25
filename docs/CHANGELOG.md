@@ -69,6 +69,29 @@
   pattern comprehensions, `COUNT {}`, `EXISTS {}` and `shortestPath()` now read
   only the session's graph. The transport RLS post-filter now also finds a
   denied node or edge inside a list or a map, such as `collect(h)`.
+- **RLS range policies fail closed (SONNY-2709):** in an expression RLS
+  policy, `<`, `<=`, `>` and `>=` treated a missing value, or two values of
+  different types, as equal. So `<=` and `>=` held: a policy such as
+  `row.level <= 3` passed every row whose `level` was missing or not a number,
+  on nodes and on edges. A principal attribute is always a string, so
+  `row.level <= principal.attribute.clearance` passed every row for every
+  user. Now a comparison of values that have no order is UNKNOWN: a null, a
+  NaN, a boolean, or a string against a number, say. UNKNOWN denies the row
+  and stays UNKNOWN under `NOT`, `AND` and `OR`, so `NOT (row.level > 3)` does
+  not pass a row with no level. A principal attribute compared with a number
+  is parsed strictly as that number's type. Against an integer it must be an
+  optional `-` and digits (`"3"`, `"-1"`). Against a float it may also have a
+  `.` and a fraction (`"2.5"`). Anything else denies the row, and so does a
+  missing attribute; for example `" 3"`, `"+3"`, `"3.0"` against an integer,
+  or `"1e3"`. A row's own string is never read as a number. Two numbers and
+  two strings (in byte order) compare as before, and two timestamps now
+  compare too (they were always "equal").
+
+  **Behaviour change:** a policy whose range comparison meets a missing or
+  mistyped value now denies that row. A policy that relied on a numeric
+  principal attribute now works as written. `NOT` over a missing value or an
+  UNKNOWN comparison now denies instead of allowing. `=` and `<>` are
+  unchanged.
 
 ---
 

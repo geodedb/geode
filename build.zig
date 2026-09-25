@@ -6213,6 +6213,8 @@ pub fn build(b: *std.Build) void {
     const rls_vm_bounds_tests = b.addTest(.{ .root_module = rls_vm_bounds_test_mod });
     const run_rls_vm_bounds_tests = b.addRunArtifact(rls_vm_bounds_tests);
     shardDep(test_step, &run_rls_vm_bounds_tests.step, 1, test_shard_loads, test_shard_index);
+    const rls_vm_bounds_step = b.step("test-rls-vm-bounds", "Run GAP-0723 RLS bytecode VM bounds regression (stack overflow/underflow, invalid opcodes, bytecode underrun)");
+    rls_vm_bounds_step.dependOn(&run_rls_vm_bounds_tests.step);
 
     // GPS Phase 2 task 2-8 regression: RLS VM no-result returns error.IndeterminatePolicy.
     const rls_indeterminate_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_rls_indeterminate_policy.zig"), .target = target, .optimize = optimize });
@@ -8558,6 +8560,22 @@ pub fn build(b: *std.Build) void {
     shardDep(test_step, &run_sonny2693_tests.step, 1, test_shard_loads, test_shard_index);
     const sonny2693_step = b.step("test-sonny2693-edge-tenant-rule", "Run SONNY-2693 regression (every read path shows a tenant an edge only when the edge's own tag and both endpoints are visible to it, with no exception for default; geode.tenant.backfill_edge_tags re-tags legacy default edges and reports mixed ones)");
     sonny2693_step.dependOn(&run_sonny2693_tests.step);
+
+    // SONNY-2709: the RLS expression VM's range operators treated a null or a
+    // mistyped value as equal, so `<=`/`>=` policies passed rows with a missing
+    // or mistyped value, and every row against a principal attribute (always a
+    // string). Nodes and edges, through the executor.
+    const sonny2709_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny2709_rls_range_fail_closed.zig"), .target = target, .optimize = optimize });
+    sonny2709_test_mod.addImport("geode", root_mod);
+    sonny2709_test_mod.addImport("logging", logging_mod);
+    sonny2709_test_mod.addImport("rls", rls_mod);
+    sonny2709_test_mod.addImport("rls_types", rls_types_mod);
+    sonny2709_test_mod.addImport("user_attr_store", user_attr_store_mod);
+    const sonny2709_tests = b.addTest(.{ .root_module = sonny2709_test_mod });
+    const run_sonny2709_tests = b.addRunArtifact(sonny2709_tests);
+    shardDep(test_step, &run_sonny2709_tests.step, 1, test_shard_loads, test_shard_index);
+    const sonny2709_step = b.step("test-sonny2709-rls-range-fail-closed", "Run SONNY-2709 regression (RLS range policies deny a missing or mistyped value on nodes and edges, stay denied under NOT, and compare a principal attribute only when it parses strictly as the column's number)");
+    sonny2709_step.dependOn(&run_sonny2709_tests.step);
 
     // SONNY-2656: the node-scan fast path leaked the clone of every typed
     // extended value (Text, Json, Bytea, Char, Varchar, Url, ...) it projected
