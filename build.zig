@@ -8488,6 +8488,19 @@ pub fn build(b: *std.Build) void {
     const sonny2668_step = b.step("test-sonny2668-having-group-key", "Run SONNY-2668 regression (a HAVING on a grouping key keeps the groups that pass: planned RETURN and WITH stages, and the legacy executor's WITH stage)");
     sonny2668_step.dependOn(&run_sonny2668_tests.step);
 
+    // SONNY-2674: the legacy executor's RETURN (in-memory stores, RLS-policy
+    // and tenant-scoped sessions) ignored a WHERE after RETURN, did not group
+    // without an aggregate, and replaced HAVING with "group has >= 2 rows".
+    const sonny2674_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny2674_legacy_return.zig"), .target = target, .optimize = optimize });
+    sonny2674_test_mod.addImport("geode", root_mod);
+    sonny2674_test_mod.addImport("logging", logging_mod);
+    sonny2674_test_mod.addImport("rls_types", rls_types_mod);
+    const sonny2674_tests = b.addTest(.{ .root_module = sonny2674_test_mod });
+    const run_sonny2674_tests = b.addRunArtifact(sonny2674_tests);
+    shardDep(test_step, &run_sonny2674_tests.step, 1, test_shard_loads, test_shard_index);
+    const sonny2674_step = b.step("test-sonny2674-legacy-return", "Run SONNY-2674 regression (the legacy executor's RETURN groups, applies HAVING and a WHERE after RETURN like the planned read: in-memory, RLS-policy and tenant-scoped sessions)");
+    sonny2674_step.dependOn(&run_sonny2674_tests.step);
+
     // SONNY-2656: the node-scan fast path leaked the clone of every typed
     // extended value (Text, Json, Bytea, Char, Varchar, Url, ...) it projected
     // (page teardown freed only strings, lists and maps) or filtered on (IS

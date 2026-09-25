@@ -151,6 +151,9 @@ const propertyValueToValue = pattern_helpers.propertyValueToValue;
 // Import result processing utilities (extracted for modularity)
 // CANARY: REQ=REQ-REFACTOR-MATCH-009; FEATURE="MatchOperationsRefactor"; ASPECT=ResultUtilsImport; STATUS=TESTED; OWNER=refactor; UPDATED=2026-01-30
 const result_utils = @import("result_utils.zig");
+// SONNY-2674: a grouped RETURN's projection owns its values, as the planned
+// read's does (`adoptProjectionRowValues`).
+const value_utilities = @import("value_utilities.zig");
 pub const generateUniqueColumnNames = result_utils.generateUniqueColumnNames;
 const applyDistinct = result_utils.applyDistinct;
 
@@ -8564,10 +8567,117 @@ fn executeMultiHopGroupBy(
     return result;
 }
 
+/// SONNY-2674: whether a plain read's RETURN goes through the shared projection
+/// (`executeWithClauseWithGroupByAndParams`), the one the planned read and
+/// every WITH stage use: a RETURN-level GROUP BY (a GROUP BY after a WITH
+/// belongs to the WITH, which already uses it), or a WHERE after RETURN (the
+/// parser's HAVING without a GROUP BY). The legacy executor's own grouping,
+/// one copy per pattern shape, ignored a WHERE after RETURN, did not group
+/// without an aggregate, and replaced HAVING with "the group has at least two
+/// rows" or evaluated it over the output row alone.
+fn returnUsesSharedProjection(q: ast.Query) bool {
+    const return_group_by = q.group_by != null and q.with_clause == null;
+    const return_where = q.having != null and q.group_by == null;
+    if (!return_group_by and !return_where) return false;
+    if (q.ret.items.len == 0) return false;
+    // Only a plain read: nothing else produces or rewrites the rows.
+    if (q.set_clauses.len != 0 or q.remove_clauses.len != 0 or q.delete_items.len != 0) return false;
+    if (q.create_pattern != null or q.merge_statement != null) return false;
+    if (q.call_clause != null or q.unwind_clause != null or q.initial_call_subquery != null) return false;
+    if (q.next_query != null or q.for_statement != null) return false;
+    if (q.cte_list != null or q.has_recursive_cte) return false;
+    return true;
+}
+
+fn appendNameOnce(allocator: std.mem.Allocator, names: *std.ArrayList([]const u8), name: []const u8) !void {
+    for (names.items) |existing| {
+        if (std.mem.eql(u8, existing, name)) return;
+    }
+    try names.append(allocator, name);
+}
+
+// CANARY: REQ=REQ-SONNY-2674-LEGACY-RETURN; FEATURE="LegacyReturnProjection"; ASPECT=SharedProjection; STATUS=TESTED; TEST=tests/test_sonny2674_legacy_return.zig; OWNER=engine; UPDATED=2026-09-25
+/// SONNY-2674: a read whose RETURN groups or has a WHERE after RETURN, done as
+/// the planned read does it. The legacy executor itself reads the bindings the
+/// RETURN can see (the pattern's named variables, a path variable and LET
+/// bindings, or a WITH's output columns), with this session's tenant scope,
+/// RLS policies and WHERE applied as for any other read. The shared projection
+/// then groups, applies the HAVING (a key or an alias resolves as it does on
+/// the planned read) and projects; DISTINCT and ORDER BY follow. The SKIP /
+/// LIMIT window is left to the caller, as for a planned read.
+fn executeReturnOverBindings(
+    allocator: std.mem.Allocator,
+    q: ast.Query,
+    param_names: []const []const u8,
+    param_values: []const Value,
+    inline_let_bindings: []ast.LetBinding,
+    current_graph: ?[]const u8,
+) anyerror!ExecutionResult {
+    // (An explicit error set: this and executeMatchQueryImpl call each other.)
+    var names: std.ArrayList([]const u8) = .empty;
+    defer names.deinit(allocator);
+    if (q.with_clause) |with_clause| {
+        for (with_clause.items) |item| try appendNameOnce(allocator, &names, item.alias orelse execution.getExpressionNameFromAst(item.expr));
+    } else {
+        for (q.match.chains) |chain| {
+            if (chain.name) |name| try appendNameOnce(allocator, &names, name);
+            if (chain.head) |head| if (head.name) |name| try appendNameOnce(allocator, &names, name);
+            for (chain.hops) |hop| {
+                if (hop.left.name) |name| try appendNameOnce(allocator, &names, name);
+                if (hop.rel.name) |name| try appendNameOnce(allocator, &names, name);
+                if (hop.right.name) |name| try appendNameOnce(allocator, &names, name);
+            }
+        }
+        if (q.path_variable) |name| try appendNameOnce(allocator, &names, name);
+        for (inline_let_bindings) |binding| try appendNameOnce(allocator, &names, binding.variable);
+    }
+
+    // One row per binding: each name as it is, or a constant when the pattern
+    // names nothing (a count over it still needs the rows).
+    const items = try allocator.alloc(ast.ReturnItem, @max(names.items.len, 1));
+    defer allocator.free(items);
+    if (names.items.len == 0) {
+        items[0] = .{ .expr = .{ .Int = 1 }, .alias = "__row" };
+    } else {
+        for (names.items, items) |name, *item| item.* = .{ .expr = .{ .Ident = .{ .orig = name, .cnf = name } }, .alias = null };
+    }
+    var bindings_query = q;
+    bindings_query.ret = .{ .items = items, .distinct = false };
+    bindings_query.group_by = null;
+    bindings_query.having = null;
+    bindings_query.order_by = null;
+    bindings_query.limit = null;
+    bindings_query.offset = null;
+    bindings_query.limit_param = null;
+    bindings_query.offset_param = null;
+
+    var bindings = try executeMatchQueryImpl(allocator, bindings_query, param_names, param_values, inline_let_bindings, current_graph);
+    defer bindings.deinit(allocator);
+
+    const return_group_by = if (q.with_clause == null) q.group_by else null;
+    var projected = try execution.executeWithClauseWithGroupByAndParams(allocator, bindings, .{ .items = q.ret.items }, return_group_by, q.having, param_names, param_values);
+    errdefer projected.deinit(allocator);
+    // The result owns its values, as the planned read's does (GAP-0535), and
+    // keeps alive any node or edge the bindings own.
+    try value_utilities.adoptProjectionRowValues(allocator, &projected, q.ret.items);
+    projected.owned_graph_entities = bindings.owned_graph_entities;
+    bindings.owned_graph_entities = null;
+
+    if (q.ret.distinct) try applyDistinct(allocator, &projected);
+    if (q.order_by) |order| try sortRowsEx(allocator, &projected, order, q.ret.items);
+    return projected;
+}
+
 // CANARY: REQ=REQ-MULTI-GRAPH-006; FEATURE="MultiGraphIsolation"; ASPECT=MatchFiltering; STATUS=TESTED; TEST=geodetestlab/specs/multi_graph.yml; OWNER=engine; UPDATED=2025-12-22
 // Execute MATCH query with graph isolation - only matches nodes in the specified graph
 // CANARY: REQ=REQ-REFACTOR-MATCH-007; FEATURE="MatchOperationsRefactor"; ASPECT=RefactoredFunction; STATUS=TESTED; TEST=geodetestlab/specs/grpc_rapid_sequential_writes_479.yml; OWNER=engine; UPDATED=2026-06-11
 pub fn executeMatchQueryImpl(allocator: std.mem.Allocator, q: ast.Query, param_names: []const []const u8, param_values: []const Value, inline_let_bindings: []ast.LetBinding, current_graph: ?[]const u8) !ExecutionResult {
+    // SONNY-2674: a RETURN-level GROUP BY, and a WHERE after RETURN, go through
+    // the shared projection, before any of the shape-specific grouping below.
+    if (returnUsesSharedProjection(q)) {
+        return executeReturnOverBindings(allocator, q, param_names, param_values, inline_let_bindings, current_graph);
+    }
+
     // Per-function reusable RLS row buffer. Shared across every
     // passesRLSFilter call site in this function; nodePropertiesToRLSRowInto
     // (Tasks 1-2 of the H5a fix) clears + refills the buffer per call so
