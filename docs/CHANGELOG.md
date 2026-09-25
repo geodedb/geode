@@ -34,6 +34,85 @@
   generates a self-signed certificate at startup when none exists (in its data
   or certificate directory, or `/tmp` when that is not writable), in every
   posture.
+- **A float or a decimal narrowed to an integer no longer aborts the server
+  (SONNY-2739):** a read-only query aborted a Debug or ReleaseSafe server
+  wherever a float or a decimal was narrowed to an integer without a range
+  check. This covers:
+  - a GROUP BY or DISTINCT key of 2^63
+    (`RETURN count(DISTINCT 9223372036854775808.0)`);
+  - the power operator (`2 ^ 63`, `10 ^ 40`, `10 ^ 400`, `0 ^ -1`);
+  - `toFloat`, `CAST(... AS FLOAT/DOUBLE/REAL)`, `degrees` and `radians`;
+  - `ceil`, `floor`, `round` and `toInteger` over a decimal, and `sum()` and
+    `avg()` of a list;
+  - a JSON number, a typed ARRAY parameter, and a decimal literal with more
+    than 255 fraction digits;
+  - the geography and geometry functions (`st_x(st_point(1e35, 0))`,
+    `altitude(latlonalt('0,0,1e300'))`);
+  - weighted path costs, vector index scores, centrality scores, time-series
+    interpolation and the distributed merge of a summed column.
+
+  NaN produced a garbage value instead (`toFloat('nan')`,
+  `latitude(latlon('nan,0'))`). Every such conversion is now checked: a value
+  that does not fit is refused with SQLSTATE 22003, and zero to a negative
+  power is 22012. An integer power is now exact (`3 ^ 39`), a JSON number
+  past the decimal comes back as a double, `latlon()` refuses a NaN
+  coordinate, and the TDE and audit benchmark procedures saturate their
+  measurements.
+
+### Fixed
+
+- **Grouped queries report their errors (SONNY-2675):**
+  - **Behaviour change:** a HAVING name that is no column, binding or
+    parameter is refused with 42703; it was NULL.
+  - **Behaviour change:** a grouping error (an ungrouped input column in a
+    grouped HAVING or RETURN, a nested aggregate, an aggregate in a row
+    filter) reaches the client as 42803; it was 42000.
+  - An error that belongs to the query, not to one row, now fails a grouped
+    query: an unknown function, a missing positional parameter, strict
+    tenancy, an encrypted field searched without permission (42501), the read
+    and write budgets, a cancel. Each was a skipped row, so the aggregate ran
+    over the other rows.
+  - `sum()` and `avg()` refuse every non-numeric input with a type error;
+    they skipped a date, a list or an interval. A SmallInt or a BigInt is
+    summed (it was skipped), and an integer sum past i64 continues as a
+    double.
+- **Group and DISTINCT keys keep their type (SONNY-2675, SONNY-2735):** a
+  GROUP BY, `count(DISTINCT)`, RETURN DISTINCT and WITH DISTINCT key keeps
+  its type and value. Doubles, dates, decimals, texts, UUIDs and lists group
+  by value; 1, '1', 'null' and NULL are four groups; a `|` inside a string no
+  longer moves a key boundary. Keys were text, with "?" or "Other" for most
+  types, so DISTINCT over doubles or dates returned one row whenever the
+  streaming fast path declined (with ORDER BY, say). Keys now agree with the
+  value order: numbers by their exact value (DECIMAL 0.5 equals DOUBLE 0.5,
+  DECIMAL 0.1 does not equal DOUBLE 0.1), every NaN is one value, and a time
+  with a time zone keys by its UTC time.
+
+  **Behaviour change:** durations follow the standard's two kinds. A month
+  is not 30 days: 1 month and 30 days are two groups and no longer sort as
+  equal. A day is 24 hours: P1D and PT24H are one group. Intervals order by
+  months, then by their day-to-second length.
+- **min, max and ORDER BY order every value type (SONNY-2675):** min and max
+  compared only integers and strings, so over doubles, decimals, dates or
+  mixed numbers the first value won, and ORDER BY ranked doubles, temporal
+  values and node or edge ids as equal. They now share one value order:
+  numbers by exact value with NaN last, strings by bytes, dates, times,
+  timestamps and intervals by their own order, booleans, then ids. The GROUP
+  BY fast paths fold min and max exactly, a decimal included, so an ungrouped
+  min or max over decimals or dates on a tenant-scoped session no longer
+  answers NULL.
+
+  **Upgrade note:** distributed merges use the new order too. During a
+  rolling upgrade, a mixed-version cluster can merge distributed results out
+  of order, because nodes still on the old order rank doubles, temporal
+  values and ids as equal.
+
+### Changed
+
+- **More GROUP BY shapes materialize every row (SONNY-2675):** a GROUP BY on
+  a text, a list or a document key, and a min or max over a string, an enum
+  or a document, no longer stream on the GROUP BY fast path. The shared
+  projection computes them, which materializes every input row and can reach
+  the read budget (`GEODE_READ_EXECUTOR_BUDGET_MB`) on a large input.
 
 ---
 
