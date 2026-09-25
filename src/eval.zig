@@ -391,92 +391,41 @@ pub fn evalBinary(alloc: std.mem.Allocator, op: ast.BinOp, l: Value, r: Value) E
             }
             // CANARY: REQ=REQ-GQL-BOOL-INT-COERCE-001; FEATURE="TypeCoercion"; ASPECT=BoolToInt; STATUS=TESTED; TEST=geodetestlab/specs/gql_type_system_comprehensive.yml; OWNER=eval; UPDATED=2025-12-27
             // Bool + Int / Int + Bool: Coerce bool to int (true=1, false=0)
+            // SONNY-2769: checked like Int + Int (`true + 9223372036854775807`
+            // aborted the server).
             if (l == .Bool and r == .Int) {
                 const bool_val: i64 = if (l.Bool) 1 else 0;
-                break :blk .{ .Int = bool_val + r.Int };
+                break :blk .{ .Int = std.math.add(i64, bool_val, r.Int) catch return EvalError.IntegerOverflow };
             }
             if (l == .Int and r == .Bool) {
                 const bool_val: i64 = if (r.Bool) 1 else 0;
-                break :blk .{ .Int = l.Int + bool_val };
+                break :blk .{ .Int = std.math.add(i64, l.Int, bool_val) catch return EvalError.IntegerOverflow };
             }
             // Decimal + Int / Int + Decimal / Decimal + Decimal
             if ((l == .Decimal and r == .Int) or (l == .Int and r == .Decimal) or (l == .Decimal and r == .Decimal)) {
                 const ld = toDec(l);
                 const rd = toDec(r);
+                // SONNY-2769: a sum (or an operand at the common scale) past
+                // i128 is 22003; `lc + rc` aborted the server.
                 const maxs: u8 = @max(ld.scale, rd.scale);
-                const lc = try scaleTo(ld.coeff, ld.scale, maxs);
-                const rc = try scaleTo(rd.coeff, rd.scale, maxs);
-                const sum = lc + rc; // overflow ignored for now (would return Unsupported if needed)
+                const lc = scaleTo(ld.coeff, ld.scale, maxs) catch return EvalError.DecimalOverflow;
+                const rc = scaleTo(rd.coeff, rd.scale, maxs) catch return EvalError.DecimalOverflow;
+                const sum = std.math.add(i128, lc, rc) catch return EvalError.DecimalOverflow;
                 break :blk .{ .Decimal = .{ .coeff = sum, .scale = maxs } };
             }
             // CANARY: REQ=REQ-DATE-INTERVAL-001; FEATURE="DateIntervalArithmetic"; ASPECT=Addition; STATUS=TESTED; TEST=geodetestlab/specs/geode_functions_comprehensive.yml; OWNER=eval; UPDATED=2026-01-09
             // Date + Interval: Add months and days from interval to date
-            if (l == .Date and r == .Interval) {
-                const datetime_module = @import("types/datetime.zig");
-                const date = l.Date;
-                const interval = r.Interval;
-
-                // Convert date to year/month/day components
-                const ymd = datetime_module.Date.dateFromDays(date.days_since_epoch);
-
-                // Add months (with year overflow handling)
-                var new_month: i32 = @as(i32, ymd.month) + interval.months;
-                var new_year: i32 = ymd.year;
-
-                // Handle month overflow/underflow
-                while (new_month > 12) {
-                    new_month -= 12;
-                    new_year += 1;
-                }
-                while (new_month < 1) {
-                    new_month += 12;
-                    new_year -= 1;
-                }
-
-                // Clamp day to valid range for new month
-                const max_day = datetime_module.Date.daysInMonth(new_year, @intCast(new_month));
-                const new_day: u8 = @min(ymd.day, max_day);
-
-                // Calculate new days since epoch
-                const new_days = datetime_module.Date.daysSinceEpoch(new_year, @intCast(new_month), new_day) catch {
-                    return EvalError.Unsupported;
-                };
-
-                // Add interval days
-                const final_days = new_days + interval.days;
-
-                break :blk .{ .Date = .{ .days_since_epoch = final_days } };
-            }
-            // Interval + Date: commutative
-            if (l == .Interval and r == .Date) {
-                const datetime_module = @import("types/datetime.zig");
-                const date = r.Date;
-                const interval = l.Interval;
-
-                const ymd = datetime_module.Date.dateFromDays(date.days_since_epoch);
-
-                var new_month: i32 = @as(i32, ymd.month) + interval.months;
-                var new_year: i32 = ymd.year;
-
-                while (new_month > 12) {
-                    new_month -= 12;
-                    new_year += 1;
-                }
-                while (new_month < 1) {
-                    new_month += 12;
-                    new_year -= 1;
-                }
-
-                const max_day = datetime_module.Date.daysInMonth(new_year, @intCast(new_month));
-                const new_day: u8 = @min(ymd.day, max_day);
-
-                const new_days = datetime_module.Date.daysSinceEpoch(new_year, @intCast(new_month), new_day) catch {
-                    return EvalError.Unsupported;
-                };
-
-                const final_days = new_days + interval.days;
-
-                break :blk .{ .Date = .{ .days_since_epoch = final_days } };
+            // Date + Interval (either order): the months, the day clamped to
+            // the target month, then the days. SONNY-2769: the month and day
+            // arithmetic was i32 and aborted the server past it
+            // (`DATE '2026-01-01' + duration('P2147483647D')`); a date past the
+            // day range is 22003.
+            if ((l == .Date and r == .Interval) or (l == .Interval and r == .Date)) {
+                const date = if (l == .Date) l.Date else r.Date;
+                const interval = if (l == .Interval) l.Interval else r.Interval;
+                const days = @import("types/datetime.zig").Date.addMonthsDays(date.days_since_epoch, interval.months, interval.days) catch
+                    return EvalError.IntegerOverflow;
+                break :blk .{ .Date = .{ .days_since_epoch = days } };
             }
             return EvalError.TypeMismatch;
         },
@@ -493,48 +442,20 @@ pub fn evalBinary(alloc: std.mem.Allocator, op: ast.BinOp, l: Value, r: Value) E
             if ((l == .Decimal and r == .Int) or (l == .Int and r == .Decimal) or (l == .Decimal and r == .Decimal)) {
                 const ld = toDec(l);
                 const rd = toDec(r);
+                // SONNY-2769: see Add.
                 const maxs: u8 = @max(ld.scale, rd.scale);
-                const lc = try scaleTo(ld.coeff, ld.scale, maxs);
-                const rc = try scaleTo(rd.coeff, rd.scale, maxs);
-                const diff = lc - rc;
+                const lc = scaleTo(ld.coeff, ld.scale, maxs) catch return EvalError.DecimalOverflow;
+                const rc = scaleTo(rd.coeff, rd.scale, maxs) catch return EvalError.DecimalOverflow;
+                const diff = std.math.sub(i128, lc, rc) catch return EvalError.DecimalOverflow;
                 break :blk2 .{ .Decimal = .{ .coeff = diff, .scale = maxs } };
             }
             // CANARY: REQ=REQ-DATE-INTERVAL-002; FEATURE="DateIntervalArithmetic"; ASPECT=Subtraction; STATUS=TESTED; TEST=geodetestlab/specs/geode_functions_comprehensive.yml; OWNER=eval; UPDATED=2026-01-09
             // Date - Interval: Subtract months and days from interval
             if (l == .Date and r == .Interval) {
-                const datetime_module = @import("types/datetime.zig");
-                const date = l.Date;
-                const interval = r.Interval;
-
-                // Convert date to year/month/day components
-                const ymd = datetime_module.Date.dateFromDays(date.days_since_epoch);
-
-                // Subtract months (with year underflow handling)
-                var new_month: i32 = @as(i32, ymd.month) - interval.months;
-                var new_year: i32 = ymd.year;
-
-                while (new_month > 12) {
-                    new_month -= 12;
-                    new_year += 1;
-                }
-                while (new_month < 1) {
-                    new_month += 12;
-                    new_year -= 1;
-                }
-
-                // Clamp day to valid range for new month
-                const max_day = datetime_module.Date.daysInMonth(new_year, @intCast(new_month));
-                const new_day: u8 = @min(ymd.day, max_day);
-
-                // Calculate new days since epoch
-                const new_days = datetime_module.Date.daysSinceEpoch(new_year, @intCast(new_month), new_day) catch {
-                    return EvalError.Unsupported;
-                };
-
-                // Subtract interval days
-                const final_days = new_days - interval.days;
-
-                break :blk2 .{ .Date = .{ .days_since_epoch = final_days } };
+                // SONNY-2769: see Date + Interval.
+                const days = @import("types/datetime.zig").Date.addMonthsDays(l.Date.days_since_epoch, -@as(i64, r.Interval.months), -@as(i64, r.Interval.days)) catch
+                    return EvalError.IntegerOverflow;
+                break :blk2 .{ .Date = .{ .days_since_epoch = days } };
             }
             return EvalError.TypeMismatch;
         },
@@ -551,9 +472,11 @@ pub fn evalBinary(alloc: std.mem.Allocator, op: ast.BinOp, l: Value, r: Value) E
             if ((l == .Decimal and r == .Int) or (l == .Int and r == .Decimal) or (l == .Decimal and r == .Decimal)) {
                 const ld = toDec(l);
                 const rd = toDec(r);
-                // result scale = sum of scales; coeff multiply
-                const res_scale: u8 = ld.scale + rd.scale;
-                const prod = ld.coeff * rd.coeff; // naive; overflow risk
+                // result scale = sum of scales; coeff multiply. SONNY-2769: a
+                // product past i128, or with more than 255 fraction digits, is
+                // 22003; both aborted the server.
+                const res_scale = std.math.cast(u8, @as(u16, ld.scale) + rd.scale) orelse return EvalError.DecimalOverflow;
+                const prod = std.math.mul(i128, ld.coeff, rd.coeff) catch return EvalError.DecimalOverflow;
                 break :blk3 .{ .Decimal = .{ .coeff = prod, .scale = res_scale } };
             }
             return EvalError.TypeMismatch;
@@ -565,8 +488,9 @@ pub fn evalBinary(alloc: std.mem.Allocator, op: ast.BinOp, l: Value, r: Value) E
                 // Use safe division helper to avoid builtin trap and surface TypeMismatch.
                 const denom = r.Int;
                 if (denom == 0) return EvalError.DivisionByZero; // division by zero (maps to TypeMismatch.DivZero diagnostic)
-                // Avoid direct @divTrunc which can still trap if denom==0 due to race on optimization; explicit branch first.
-                break :blk4 .{ .Int = @divTrunc(l.Int, denom) };
+                // SONNY-2769: minInt(i64) / -1 does not fit; @divTrunc aborted
+                // the server.
+                break :blk4 .{ .Int = std.math.divTrunc(i64, l.Int, denom) catch return EvalError.IntegerOverflow };
             }
             // Support decimal division with type coercion
             if ((l == .Decimal and r == .Int) or (l == .Int and r == .Decimal) or (l == .Decimal and r == .Decimal)) {
@@ -579,9 +503,11 @@ pub fn evalBinary(alloc: std.mem.Allocator, op: ast.BinOp, l: Value, r: Value) E
                 // For decimal division, we need to ensure precision
                 // Scale the numerator to maintain precision (add extra scale before division)
                 const extra_scale: u8 = 6; // Provide 6 decimal places of precision (reasonable for most calculations)
+                // SONNY-2769: a numerator past i128 / 10^6 is 22003; the
+                // multiplication aborted the server.
                 const scale_factor = std.math.pow(i128, 10, extra_scale);
-                const scaled_num = ld.coeff * scale_factor;
-                const quotient = @divTrunc(scaled_num, rd.coeff);
+                const scaled_num = std.math.mul(i128, ld.coeff, scale_factor) catch return EvalError.DecimalOverflow;
+                const quotient = std.math.divTrunc(i128, scaled_num, rd.coeff) catch return EvalError.DecimalOverflow;
 
                 // Result scale = numerator scale - denominator scale + extra scale
                 const result_scale: i16 = @as(i16, ld.scale) - @as(i16, rd.scale) + extra_scale;
@@ -597,6 +523,9 @@ pub fn evalBinary(alloc: std.mem.Allocator, op: ast.BinOp, l: Value, r: Value) E
             if (l == .Int and r == .Int) {
                 const denom = r.Int;
                 if (denom == 0) return EvalError.DivisionByZero;
+                // SONNY-2769: x % -1 is 0; @rem(minInt(i64), -1) is a
+                // hardware division overflow that killed the server (SIGFPE).
+                if (denom == -1) break :blk_mod .{ .Int = 0 };
                 break :blk_mod .{ .Int = @rem(l.Int, denom) };
             }
             return EvalError.TypeMismatch;
@@ -915,9 +844,11 @@ pub fn evalExpr(allocator: std.mem.Allocator, e: ast.Expr, env: Env) EvalError!V
                     if (v == .Null) break :blk Value{ .Null = {} };
                     break :blk .{ .Bool = !truthy(v) };
                 },
+                // SONNY-2769: -minInt does not fit; the negation aborted the
+                // server (`-(-9223372036854775807 - 1)`).
                 .Neg => switch (v) {
-                    .Int => |i| break :blk .{ .Int = -i },
-                    .Decimal => |d| break :blk .{ .Decimal = .{ .coeff = -d.coeff, .scale = d.scale, .orig_scale = d.orig_scale } },
+                    .Int => |i| break :blk .{ .Int = std.math.negate(i) catch return EvalError.IntegerOverflow },
+                    .Decimal => |d| break :blk .{ .Decimal = .{ .coeff = std.math.negate(d.coeff) catch return EvalError.DecimalOverflow, .scale = d.scale, .orig_scale = d.orig_scale } },
                     else => return EvalError.TypeMismatch,
                 },
                 .Pos => switch (v) {

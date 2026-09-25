@@ -604,7 +604,8 @@ fn propertyValueToProto(allocator: std.mem.Allocator, value: graph_store.Propert
 /// e.g., coeff=1999, scale=2 → "19.99"; coeff=5, scale=2 → "0.05"
 fn reconstructDecimalRepr(allocator: std.mem.Allocator, coeff: i128, scale: u8) ![]const u8 {
     const is_negative = coeff < 0;
-    const abs_coeff: u128 = if (is_negative) @intCast(-coeff) else @intCast(coeff);
+    // SONNY-2769: @abs, not -coeff, which overflows for minInt(i128).
+    const abs_coeff: u128 = @abs(coeff);
     const digits = try std.fmt.allocPrint(allocator, "{d}", .{abs_coeff});
     defer allocator.free(digits);
 

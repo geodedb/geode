@@ -8539,6 +8539,21 @@ pub fn build(b: *std.Build) void {
     const sonny2739_step = b.step("test-sonny2739-float-narrowing", "Run SONNY-2739 regression (every float or decimal narrowed to an integer is checked: group and DISTINCT keys at +-2^63, the power operator, casts, rounding, geometry and decoders refuse a value that does not fit instead of aborting)");
     sonny2739_step.dependOn(&run_sonny2739_tests.step);
 
+    // SONNY-2769: integer overflow and narrowing (decimal arithmetic, minInt
+    // negation and division, date arithmetic, pre-1970 timestamps in a result,
+    // CAST to DECIMAL, function and procedure argument casts, parameter
+    // decoders) no longer abort the server; a value that does not fit is a
+    // typed error (22003).
+    const sonny2769_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny2769_integer_overflow.zig"), .target = target, .optimize = optimize });
+    sonny2769_test_mod.addImport("geode", root_mod);
+    sonny2769_test_mod.addImport("logging", logging_mod);
+    sonny2769_test_mod.addImport("rls_types", rls_types_mod);
+    const sonny2769_tests = b.addTest(.{ .root_module = sonny2769_test_mod });
+    const run_sonny2769_tests = b.addRunArtifact(sonny2769_tests);
+    shardDep(test_step, &run_sonny2769_tests.step, 1, test_shard_loads, test_shard_index);
+    const sonny2769_step = b.step("test-sonny2769-integer-overflow", "Run SONNY-2769 regression (integer overflow and narrowing: decimal arithmetic, minInt negation and division, date arithmetic, pre-1970 timestamps, CAST to DECIMAL, function and procedure argument casts and parameter decoders refuse a value that does not fit instead of aborting)");
+    sonny2769_step.dependOn(&run_sonny2769_tests.step);
+
     const sonny2675_walker_mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny2675_having_walker.zig"), .target = target, .optimize = optimize });
     sonny2675_walker_mod.addImport("geode", root_mod);
     const sonny2675_walker_tests = b.addTest(.{ .root_module = sonny2675_walker_mod });
