@@ -3245,6 +3245,50 @@ pub fn isQueryLevelEvalError(err: anyerror) bool {
     };
 }
 
+/// One sum() or avg() input: an integer, or a float (a double, a real, or a
+/// decimal as f64).
+const SumAddend = union(enum) { int: i64, float: f64 };
+
+// CANARY: REQ=REQ-SONNY-2675-SUM-TYPES; FEATURE="GroupedAggregates"; ASPECT=NonNumericSumAvg; STATUS=TESTED; TEST=tests/test_sonny2675_aggregate_semantics.zig; OWNER=execution; UPDATED=2026-09-25
+/// A sum() or avg() input as a number, null for NULL (skipped), or
+/// TypeMismatch for anything that is not a number. Round 3 (M4): only a
+/// string or a boolean was a type error; a date, a list, an interval or a
+/// document was skipped, so the aggregate ran over the other rows, and a
+/// SmallInt or BigInt was skipped too. (No path sums durations.)
+fn sumAddend(val: Value) error{TypeMismatch}!?SumAddend {
+    return switch (val) {
+        .Null => null,
+        .Int, .BigInt => |n| .{ .int = n },
+        .SmallInt => |n| .{ .int = n },
+        .Real => |f| .{ .float = f },
+        .Double => |f| .{ .float = f },
+        .Decimal => |d| .{ .float = @as(f64, @floatFromInt(d.coeff)) / std.math.pow(f64, 10.0, @floatFromInt(d.scale)) },
+        .ExtValue => |ev| switch (ev) {
+            .Int, .BigInt => |n| .{ .int = n },
+            .SmallInt => |n| .{ .int = n },
+            .Real => |f| .{ .float = f },
+            .Double => |f| .{ .float = f },
+            .Decimal => |d| .{ .float = @as(f64, @floatFromInt(d.coeff)) / std.math.pow(f64, 10.0, @floatFromInt(d.scale)) },
+            else => error.TypeMismatch,
+        },
+        else => error.TypeMismatch,
+    };
+}
+
+/// Adds an integer to a sum kept as an i64 while it fits; past i64 the sum
+/// continues as a double, as the GROUP BY fast path's does. (`+=` aborted the
+/// server on an i64 overflow: SONNY-2739's class.)
+fn addInt(int_sum: *i64, float_sum: *f64, has_float: *bool, n: i64) void {
+    const r = @addWithOverflow(int_sum.*, n);
+    if (r[1] == 0) {
+        int_sum.* = r[0];
+        return;
+    }
+    float_sum.* += @as(f64, @floatFromInt(int_sum.*)) + @as(f64, @floatFromInt(n));
+    int_sum.* = 0;
+    has_float.* = true;
+}
+
 /// An aggregate's argument for one input row, or null when the row's value
 /// cannot be computed and the aggregate skips it. SONNY-2675: a query-level
 /// error (above) used to be skipped too, so `sum(n.i * $2)` without a `$2` was
@@ -3313,32 +3357,16 @@ pub fn computeGroupAggregation(allocator: std.mem.Allocator, expr: ast.Expr, gro
             if (distinct) |*d| {
                 if (!try d.add(val)) continue;
             }
-            switch (val) {
-                .Int => |n| {
-                    int_sum += n;
-                    has_value = true;
-                },
-                .Real => |f| {
-                    float_sum += @floatCast(f);
-                    has_float = true;
-                    has_value = true;
-                },
-                .Double => |f| {
+            // GAP-0916: non-numeric input to sum() is a type error, not a
+            // silent skip (`sumAddend`).
+            switch (try sumAddend(val) orelse continue) {
+                .int => |n| addInt(&int_sum, &float_sum, &has_float, n),
+                .float => |f| {
                     float_sum += f;
                     has_float = true;
-                    has_value = true;
                 },
-                .Decimal => |d| {
-                    const divisor = std.math.pow(f64, 10.0, @floatFromInt(d.scale));
-                    float_sum += @as(f64, @floatFromInt(d.coeff)) / divisor;
-                    has_float = true;
-                    has_value = true;
-                },
-                // GAP-0916: non-numeric input to sum() is a type error, not a
-                // silent skip.
-                .Str, .Bool => return error.TypeMismatch,
-                else => {},
             }
+            has_value = true;
         }
         if (!has_value) return Value{ .Null = {} };
         if (has_float) return Value{ .Double = float_sum + @as(f64, @floatFromInt(int_sum)) };
@@ -3357,32 +3385,16 @@ pub fn computeGroupAggregation(allocator: std.mem.Allocator, expr: ast.Expr, gro
             if (distinct) |*d| {
                 if (!try d.add(val)) continue;
             }
-            switch (val) {
-                .Int => |n| {
-                    int_sum += n;
-                    count += 1;
-                },
-                .Real => |f| {
-                    float_sum += @floatCast(f);
-                    has_float = true;
-                    count += 1;
-                },
-                .Double => |f| {
+            // GAP-0916: non-numeric input to avg() is a type error, not a
+            // silent NULL (`sumAddend`).
+            switch (try sumAddend(val) orelse continue) {
+                .int => |n| addInt(&int_sum, &float_sum, &has_float, n),
+                .float => |f| {
                     float_sum += f;
                     has_float = true;
-                    count += 1;
                 },
-                .Decimal => |d| {
-                    const divisor = std.math.pow(f64, 10.0, @floatFromInt(d.scale));
-                    float_sum += @as(f64, @floatFromInt(d.coeff)) / divisor;
-                    has_float = true;
-                    count += 1;
-                },
-                // GAP-0916: non-numeric input to avg() is a type error, not a
-                // silent NULL.
-                .Str, .Bool => return error.TypeMismatch,
-                else => {},
             }
+            count += 1;
         }
         if (count == 0) return Value{ .Null = {} };
         // avg() is a mean: pure-integer inputs must NOT integer-divide (avg(1,2)

@@ -225,6 +225,12 @@ const Session = struct {
             try self.exec("CREATE (:T {k: '5'})", &.{});
             try self.exec("CREATE (:T {z: 0})", &.{});
             try self.exec("CREATE (:T {z: 1})", &.{});
+            // Round 3 (M4): an integer sum past i64; SmallInt and BigInt.
+            try self.exec("CREATE (:O {g: 'o', x: 9223372036854775807})", &.{});
+            try self.exec("CREATE (:O {g: 'o', x: 1})", &.{});
+            try self.exec("CREATE (:O {g: 's', x: $v})", &.{.{ .name = "v", .value = .{ .SmallInt = 7 } }});
+            try self.exec("CREATE (:O {g: 's', x: $v})", &.{.{ .name = "v", .value = .{ .BigInt = 5 } }});
+            try self.exec("CREATE (:O {g: 's', x: 1})", &.{});
             // NaN in memory only: the storage engine refuses a non-finite
             // double. Two NaNs of different bit patterns.
             if (self.mode == .in_memory) {
@@ -654,4 +660,26 @@ test "SONNY-2675: a refusal inside a grouped expression fails the query" {
     for ([_]anyerror{ error.TypeMismatch, error.DivisionByZero, error.DecimalOverflow, error.IntegerOverflow }) |err| {
         try testing.expect(!q(err));
     }
+}
+
+fn checkSumTypes(s: *Session, f: *Failures) !void {
+    // Round 3 (M4): every non-numeric input is a type error, not only a
+    // string or a boolean (a date, a list or a duration was skipped).
+    for ([_][]const u8{
+        "MATCH (n:M) RETURN n.g2 AS g, sum(n.dt) AS s GROUP BY n.g2 HAVING count(*) > 0",
+        "MATCH (n:M) RETURN n.g2 AS g, avg(n.dt) AS s GROUP BY n.g2 HAVING count(*) > 0",
+        "MATCH (n:M) RETURN n.g2 AS g, sum(n.dt) AS s GROUP BY n.g2",
+        "MATCH (n:L) RETURN count(*) AS c, sum(n.v) AS s GROUP BY n.v HAVING count(*) > 0",
+        "MATCH (n:D) RETURN n.g AS g, sum(duration(n.t)) AS s GROUP BY n.g HAVING count(*) > 0",
+    }) |q| try expectFail(s, f, q, &.{}, error.TypeMismatch);
+    // A SmallInt and a BigInt are integers to sum (they were skipped).
+    try expectRows(s, f, "MATCH (n:O) WHERE n.g = 's' RETURN n.g AS g, sum(n.x) AS t GROUP BY n.g HAVING count(*) > 0", &.{}, &.{"'s', 13"});
+    try expectRows(s, f, "MATCH (n:O) WHERE n.g = 's' RETURN n.g AS g, avg(n.x) AS t GROUP BY n.g HAVING count(*) > 0", &.{}, &.{"'s', 4.333333333333333d"});
+    // An integer sum past i64 continues as a double (`+=` aborted).
+    try expectRows(s, f, "MATCH (n:O) WHERE n.g = 'o' RETURN n.g AS g, sum(n.x) AS t GROUP BY n.g HAVING count(*) > 0", &.{}, &.{"'o', 9223372036854776000d"});
+    try expectRows(s, f, "MATCH (n:O) WHERE n.g = 'o' RETURN n.g AS g, sum(n.x) AS t GROUP BY n.g", &.{}, &.{"'o', 9223372036854776000d"});
+}
+
+test "SONNY-2675: sum and avg refuse every non-numeric input" {
+    try inEveryMode("sum types", checkSumTypes);
 }
