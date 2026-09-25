@@ -7630,8 +7630,13 @@ fn handleClientMessage(
             // Pure scalar row queries such as `RETURN 1 AS c` do not touch
             // graph storage, so they should not contend with mutation-heavy
             // workloads on the graph read/snapshot path.
-            const needs_store_lock = analysis.kind != .explain and !(analysis.kind == .rows and analysis.is_store_free);
-            const is_mutation = needs_store_lock and program_is_mutating;
+            // SONNY-2733: a lone CALL of a procedure that takes each graph's
+            // lock itself (geode.tenant.backfill_edge_tags) runs holding none:
+            // under this graph's lock it would deadlock on it, or hold two. It
+            // is still a mutation for the permission gate below.
+            const self_locking = query_traits.isSelfLockingProgram(&parse_result.program);
+            const needs_store_lock = !self_locking and analysis.kind != .explain and !(analysis.kind == .rows and analysis.is_store_free);
+            const is_mutation = (needs_store_lock or self_locking) and program_is_mutating;
 
             // CANARY: REQ=REQ-GPS-PDP-010; FEATURE="GPS Phase 2/4 Enforcement"; ASPECT=MutationGateViaDecide; STATUS=TESTED; TEST=geode-test-harness/geodetestlab-cli/specs/gps_phase6_abac_migration.yml; OWNER=security; UPDATED=2026-05-21
             // GAP-0526 was originally enforced by a direct `user_mgmt.hasPermission` call
@@ -8531,10 +8536,14 @@ fn handleClientMessage(
                     // S1: Algorithm RLS filter BEFORE lock release — requires store access
                     // to look up node labels for integer nodeId values in algorithm results.
                     // Must run while store read lock is held for thread-safe HashMap access.
-                    if (rls_filter.getGlobalRLSFilterEngine()) |rls_engine| {
-                        if (state.authenticated_user) |auth_user| {
-                            const rls_graph = state.current_graph orelse graph_store.DEFAULT_GRAPH_NAME;
-                            _ = rls_filter.applyAlgorithmRLSFilter(gpa, &exec_result, rls_engine, store, auth_user, rls_graph);
+                    // SONNY-2733: a self-locking program holds no lock here, and
+                    // its rows (edge ids) carry no node ids to look up.
+                    if (!self_locking) {
+                        if (rls_filter.getGlobalRLSFilterEngine()) |rls_engine| {
+                            if (state.authenticated_user) |auth_user| {
+                                const rls_graph = state.current_graph orelse graph_store.DEFAULT_GRAPH_NAME;
+                                _ = rls_filter.applyAlgorithmRLSFilter(gpa, &exec_result, rls_engine, store, auth_user, rls_graph);
+                            }
                         }
                     }
 

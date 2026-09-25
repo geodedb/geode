@@ -25,7 +25,7 @@
 ///                            max_graphs, max_nodes_per_graph) → YIELD tenant_id, updated
 ///   - geode.tenant.backfill_edge_tags([dry_run])  → YIELD edge_id, graph, edge_type,
 ///                                                          edge_tenant, from_tenant,
-///                                                          to_tenant, action
+///                                                          to_tenant, action, reason
 ///     (SONNY-2693: re-tags the `default` edges between two nodes of one
 ///     tenant and reports every other edge whose tags disagree)
 ///
@@ -62,6 +62,7 @@ const tenant_registry = @import("../security/tenant_registry.zig");
 const tenant_quota = @import("../security/tenant_quota.zig");
 const graph_store = @import("../graph_store.zig");
 const cluster_mod = @import("../distributed/cluster.zig");
+const tenancy = @import("tenancy.zig");
 const rls_core = @import("rls");
 const rls_types = @import("rls_types");
 
@@ -112,7 +113,7 @@ pub fn execute(
     if (is_drop) return try handleDrop(allocator, call_stmt);
     if (is_set_quota) return try handleSetQuota(allocator, call_stmt);
     // Gates its own cluster write (a dry run writes nothing).
-    if (is_backfill) return try handleBackfillEdgeTags(allocator, call_stmt);
+    if (is_backfill) return try handleBackfillEdgeTags(allocator, call_stmt, context);
     unreachable;
 }
 
@@ -657,7 +658,7 @@ fn handleSetQuota(allocator: std.mem.Allocator, call_stmt: ast.CallProcedure) !E
 // CANARY: REQ=REQ-SONNY-2693-EDGE-TAG-BACKFILL; FEATURE="PerTenantIsolation"; ASPECT=BackfillProcedure; STATUS=TESTED; TEST=tests/test_sonny2693_edge_tenant_rule.zig; OWNER=security; UPDATED=2026-09-25
 /// `geode.tenant.backfill_edge_tags([dry_run])` → one row per edge it
 /// re-tagged or reports: (edge_id, graph, edge_type, edge_tenant, from_tenant,
-/// to_tenant, action).
+/// to_tenant, action, reason).
 ///
 /// SONNY-2693: a session sees an edge only when the edge's own tenant tag and
 /// both endpoints are visible to it, with no exception for `default`. Edges
@@ -671,13 +672,29 @@ fn handleSetQuota(allocator: std.mem.Allocator, call_stmt: ast.CallProcedure) !E
 /// report 'would_retag'. Rerunning is safe: a re-tagged edge is consistent
 /// and is not listed again. See `GraphStore.backfillEdgeTenantTags`.
 ///
-/// Admin-only (the family's `admin_tenant` gate). A real run is a durable
-/// write with no Raft slice, so a cluster refuses it like create/drop; a dry
-/// run is allowed anywhere.
-fn handleBackfillEdgeTags(allocator: std.mem.Allocator, call_stmt: ast.CallProcedure) !ExecutionResult {
+/// SONNY-2733: it takes each graph's write lock in turn, and holds no other.
+/// An edge it cannot re-tag or read is 'failed', with the error's name in
+/// `reason` (null on every other row), and the run goes on; so is a graph it
+/// cannot lock in time, as one row with a null `edge_id`. It skips the
+/// engine's own graphs (`__geode_security`). It must be the only statement in
+/// its request: the transport handlers then run it without their statement
+/// lock, and anywhere else it fails with `GraphLockHeld`.
+///
+/// Admin-only (the family's `admin_tenant` gate), and only in a session with
+/// no concrete tenant scope: it changes every tenant's edges, so an admin
+/// scoped to one tenant is refused (`TenantScopedSession`). A real run is a
+/// durable write with no Raft slice, so a cluster refuses it like create/drop,
+/// and it is not part of a transaction (ROLLBACK could not undo its re-tags),
+/// so it is refused inside one (`BackfillInTransaction`). A dry run is allowed
+/// in both.
+fn handleBackfillEdgeTags(allocator: std.mem.Allocator, call_stmt: ast.CallProcedure, context: ExecutionContext) !ExecutionResult {
+    if (context.tenant_id) |tid| {
+        if (tenancy.isConcreteScope(tid)) return error.TenantScopedSession;
+    }
     const a = try args(call_stmt);
     if (a.len > 1) return error.InvalidArgs;
     const dry_run: bool = if (a.len == 1) try literalBool(a[0]) else false;
+    if (!dry_run and context.transaction_state == .Active) return error.BackfillInTransaction;
     if (!dry_run) try cluster_mod.gateUnreplicatedWrite();
 
     const entries: []const graph_store.GraphStore.EdgeTagBackfillEntry = if (graph_store.getCurrentGlobalStore()) |store|
@@ -688,17 +705,25 @@ fn handleBackfillEdgeTags(allocator: std.mem.Allocator, call_stmt: ast.CallProce
 
     var retagged: usize = 0;
     var mixed: usize = 0;
+    var failed: usize = 0;
     for (entries) |entry| switch (entry.action) {
         .retagged, .would_retag => retagged += 1,
         .mixed => mixed += 1,
+        .failed => failed += 1,
     };
-    log.info("tenant_admin.backfill_edge_tags", &.{
+    const summary = [_]Attr{
         Attr.string("dry_run", if (dry_run) "true" else "false"),
         Attr.int("retagged", @intCast(retagged)),
         Attr.int("mixed", @intCast(mixed)),
-    });
+        Attr.int("failed", @intCast(failed)),
+    };
+    if (failed > 0) {
+        log.warn("tenant_admin.backfill_edge_tags: some edges failed; run it again to retry them", &summary);
+    } else {
+        log.info("tenant_admin.backfill_edge_tags", &summary);
+    }
 
-    const column_names = [_][]const u8{ "edge_id", "graph", "edge_type", "edge_tenant", "from_tenant", "to_tenant", "action" };
+    const column_names = [_][]const u8{ "edge_id", "graph", "edge_type", "edge_tenant", "from_tenant", "to_tenant", "action", "reason" };
     const columns = try allocator.alloc([]const u8, column_names.len);
     var columns_filled: usize = 0;
     errdefer {
@@ -726,13 +751,14 @@ fn handleBackfillEdgeTags(allocator: std.mem.Allocator, call_stmt: ast.CallProce
             for (row) |v| freeValue(allocator, v);
             allocator.free(row);
         }
-        row[0] = Value{ .Int = @bitCast(entry.edge_id) };
+        if (entry.edge_id) |id| row[0] = Value{ .Int = @bitCast(id) };
         row[1] = Value{ .Str = try allocator.dupe(u8, entry.graph_name) };
-        row[2] = Value{ .Str = try allocator.dupe(u8, entry.edge_type) };
-        row[3] = Value{ .Str = try allocator.dupe(u8, entry.edge_tenant) };
+        if (entry.edge_type) |t| row[2] = Value{ .Str = try allocator.dupe(u8, t) };
+        if (entry.edge_tenant) |t| row[3] = Value{ .Str = try allocator.dupe(u8, t) };
         if (entry.from_tenant) |t| row[4] = Value{ .Str = try allocator.dupe(u8, t) };
         if (entry.to_tenant) |t| row[5] = Value{ .Str = try allocator.dupe(u8, t) };
         row[6] = Value{ .Str = try allocator.dupe(u8, @tagName(entry.action)) };
+        if (entry.reason) |r| row[7] = Value{ .Str = try allocator.dupe(u8, r) };
         rows[rows_filled] = row;
         rows_filled += 1;
     }

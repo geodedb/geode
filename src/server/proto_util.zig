@@ -238,6 +238,10 @@ pub fn mapError(err: anyerror) ErrorInfo {
         // concrete tenant scope (unset/empty/"default"). Surface as a
         // permission-denied class error rather than the generic internal fallback.
         error.TenantScopeRequired => .{ .code = "42501", .message = "Tenant scope required: strict tenancy is enabled and this session has no concrete tenant scope" },
+        // SONNY-2733: geode.tenant.backfill_edge_tags refusals.
+        error.TenantScopedSession => .{ .code = "42501", .message = "geode.tenant.backfill_edge_tags changes every tenant's edges; run it in a session with no tenant scope" },
+        error.GraphLockHeld => .{ .code = "0A000", .message = "geode.tenant.backfill_edge_tags takes each graph's lock itself; send it as the only statement in its request" },
+        error.BackfillInTransaction => .{ .code = "25000", .message = "geode.tenant.backfill_edge_tags cannot run inside a transaction: ROLLBACK would not undo its re-tags (a dry run can)" },
         error.SearchNotPermitted => .{ .code = "42501", .message = "Access denied: READ_PLAINTEXT privilege required for encrypted searchable field" },
         error.InvalidIpAddress => .{ .code = "22P02", .message = "Invalid IP address format" },
         error.InvalidMac, error.InvalidMacFormat, error.InvalidMacTag => .{ .code = "22P02", .message = "Invalid MAC address format" },

@@ -369,6 +369,26 @@ pub fn isMutatingCallStatement(call_stmt: *const ast.CallStatement) bool {
     };
 }
 
+// CANARY: REQ=REQ-SONNY-2733-BACKFILL-LOCKING; FEATURE="PerTenantIsolation"; ASPECT=HandlerLockBypass; STATUS=TESTED; TEST=tests/test_sonny2733_backfill_locking.zig; OWNER=security; UPDATED=2026-09-25
+/// SONNY-2733: is `program` a single CALL of a procedure that takes each
+/// graph's lock itself (`procedure_access.isSelfLockingProcedure`, i.e.
+/// `geode.tenant.backfill_edge_tags`)? The QUIC and gRPC handlers run such a
+/// program holding no graph lock: under the session graph's lock the procedure
+/// would deadlock on that graph, or hold two graph locks at once. It is
+/// exactly one statement, so nothing else in the request runs unlocked. In
+/// any other program the handler takes its usual lock, and the procedure,
+/// finding a lock held, refuses to run (`error.GraphLockHeld`).
+pub fn isSelfLockingProgram(program: *const ast.Program) bool {
+    if (program.statements.len != 1) return false;
+    return switch (program.statements[0]) {
+        .Call => |call_stmt| switch (call_stmt) {
+            .Procedure => |proc| procedure_access.isSelfLockingProcedure(proc),
+            .Subquery => false,
+        },
+        else => false,
+    };
+}
+
 /// CANARY: REQ=REQ-QUIC-HC-110; FEATURE="High-Concurrency Store-Free Reads"; ASPECT=LockBypassClassifier; STATUS=TESTED; TEST=test_quic_condition_timedwait_cadence; OWNER=transport; UPDATED=2026-05-27
 ///
 /// Detect a pure scalar `RETURN` query that cannot read or mutate graph

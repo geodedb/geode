@@ -42,7 +42,8 @@ const default_tenant = graph_store.DEFAULT_TENANT_ID;
 
 fn entryFor(entries: []const GraphStore.EdgeTagBackfillEntry, edge_id: u64) ?GraphStore.EdgeTagBackfillEntry {
     for (entries) |entry| {
-        if (entry.edge_id == edge_id) return entry;
+        const id = entry.edge_id orelse continue;
+        if (id == edge_id) return entry;
     }
     return null;
 }
@@ -57,7 +58,7 @@ fn expectEntry(
 ) !void {
     const entry = entryFor(entries, edge_id) orelse return error.EdgeNotReported;
     try testing.expectEqual(action, entry.action);
-    try testing.expectEqualStrings(edge_tenant, entry.edge_tenant);
+    try testing.expectEqualStrings(edge_tenant, entry.edge_tenant orelse return error.MissingEdgeTenant);
     try testing.expectEqualStrings(from_tenant, entry.from_tenant orelse return error.MissingFromTenant);
     try testing.expectEqualStrings(to_tenant, entry.to_tenant orelse return error.MissingToTenant);
 }
@@ -147,7 +148,8 @@ test "SONNY-2693: the backfill re-tags only a default edge between two nodes of 
         try expectEntry(run, own_cross, .mixed, tenant_a, tenant_a, tenant_b);
         const report = entryFor(run, legacy).?;
         try testing.expectEqualStrings(g, report.graph_name);
-        try testing.expectEqualStrings("LEGACY", report.edge_type);
+        try testing.expectEqualStrings("LEGACY", report.edge_type orelse return error.MissingEdgeType);
+        try testing.expect(report.reason == null);
     }
     try testing.expectEqualStrings(tenant_a, try tagOf(&store, legacy));
     try testing.expectEqualStrings(tenant_b, try tagOf(&store, foreign));
@@ -481,4 +483,150 @@ test "SONNY-2693: backfill_edge_tags is admin-only and takes one optional boolea
     defer user_mgmt.setAuthEnabled(true);
     try testing.expectError(error.TypeMismatch, s.runAs(null, "CALL geode.tenant.backfill_edge_tags('yes')"));
     try testing.expectError(error.InvalidArgs, s.runAs(null, "CALL geode.tenant.backfill_edge_tags(true, true)"));
+}
+
+// ---------------------------------------------------------------------------
+// SONNY-2733: who may run the backfill, what it leaves alone, and how it
+// reports an edge it cannot re-tag. (Its locking is covered by
+// tests/test_sonny2733_backfill_locking.zig.)
+// ---------------------------------------------------------------------------
+
+test "SONNY-2733: backfill_edge_tags refuses a tenant-scoped session, and a real run inside a transaction" {
+    harness.silenceEngineLogs();
+    var s = try Session.init();
+    defer s.deinit();
+    const fx = try seed(&s);
+
+    user_mgmt.setAuthEnabled(false);
+    defer user_mgmt.setAuthEnabled(true);
+
+    // It changes every tenant's edges, so a session scoped to one tenant may
+    // not run it, not even as a dry run.
+    try testing.expectError(error.TenantScopedSession, s.runAs(tenant_a, "CALL geode.tenant.backfill_edge_tags()"));
+    try testing.expectError(error.TenantScopedSession, s.runAs(tenant_b, "CALL geode.tenant.backfill_edge_tags(true)"));
+    try testing.expectEqualStrings(default_tenant, try tagOf(s.store(), fx.legacy));
+    // An unset, empty or `default` scope is no tenant's.
+    try s.execAs(default_tenant, "CALL geode.tenant.backfill_edge_tags(true)");
+    try s.execAs("", "CALL geode.tenant.backfill_edge_tags(true)");
+
+    // A ROLLBACK could not undo its re-tags, so a real run is refused inside a
+    // transaction. A dry run changes nothing and is not.
+    s.ctx.transaction_state = .Active;
+    defer s.ctx.transaction_state = .None;
+    try testing.expectError(error.BackfillInTransaction, s.runAs(null, "CALL geode.tenant.backfill_edge_tags()"));
+    try s.execAs(null, "CALL geode.tenant.backfill_edge_tags(true)");
+    try testing.expectEqualStrings(default_tenant, try tagOf(s.store(), fx.legacy));
+}
+
+test "SONNY-2733: the backfill leaves the engine's own graphs alone" {
+    harness.silenceEngineLogs();
+    var s = try Session.init();
+    defer s.deinit();
+    const st = s.store();
+    const node_labels = [_][]const u8{"N"};
+
+    // A legacy-shaped edge in the security graph, and the same shape in a
+    // user graph.
+    const internal = graph_store.SECURITY_GRAPH_NAME;
+    try st.createGraph(internal);
+    const n1 = try st.createNodeWithGraphAndTenant(&node_labels, internal, tenant_a);
+    const n2 = try st.createNodeWithGraphAndTenant(&node_labels, internal, tenant_a);
+    const kept = try st.createEdgeWithGraphAndTenant(n1, n2, "K", internal, default_tenant);
+    const user_graph = "g2733";
+    try st.createGraph(user_graph);
+    const m1 = try st.createNodeWithGraphAndTenant(&node_labels, user_graph, tenant_a);
+    const m2 = try st.createNodeWithGraphAndTenant(&node_labels, user_graph, tenant_a);
+    const fixed = try st.createEdgeWithGraphAndTenant(m1, m2, "K", user_graph, default_tenant);
+
+    const run = try st.backfillEdgeTenantTags(testing.allocator, false);
+    defer GraphStore.freeEdgeTagBackfillEntries(testing.allocator, run);
+    try testing.expect(entryFor(run, kept) == null);
+    try expectEntry(run, fixed, .retagged, default_tenant, tenant_a, tenant_a);
+    try testing.expectEqualStrings(default_tenant, try tagOf(st, kept));
+    try testing.expectEqualStrings(tenant_a, try tagOf(st, fixed));
+
+    // `__geode_…` is the engine's namespace; nothing else is.
+    try testing.expect(graph_store.isInternalGraphName(internal));
+    try testing.expect(graph_store.isInternalGraphName("__geode_other"));
+    try testing.expect(!graph_store.isInternalGraphName("geode_security"));
+    try testing.expect(!graph_store.isInternalGraphName("__staging"));
+}
+
+test "SONNY-2733: an edge the backfill cannot re-tag is listed as failed and left as it was, and the run goes on" {
+    harness.silenceEngineLogs();
+    var s = try Session.init();
+    defer s.deinit();
+    const fx = try seed(&s);
+    const st = s.store();
+    const node_labels = [_][]const u8{"N"};
+    const g = graph_store.DEFAULT_GRAPH_NAME;
+
+    // A second legacy edge, which the run must still re-tag.
+    const a3 = try st.createNodeWithGraphAndTenant(&node_labels, g, tenant_a);
+    const a4 = try st.createNodeWithGraphAndTenant(&node_labels, g, tenant_a);
+    const other = try st.createEdgeWithGraphAndTenant(a3, a4, "L2", g, default_tenant);
+
+    // Break the first legacy edge's re-tag: its source node loses its engine
+    // slot mapping, so the re-tag cannot address the edge in storage. The
+    // node's tenant still reads from the cache, so the backfill still decides
+    // to re-tag it.
+    const id_map = st.getIdMap(g) orelse return error.IdMapMissing;
+    const a1_slot = id_map.nodeSlot(fx.a1) orelse return error.NodeSlotMissing;
+    try testing.expect(id_map.removeNode(fx.a1));
+    var restored = false;
+    defer if (!restored) id_map.insertNodeWithSlot(fx.a1, a1_slot) catch {};
+
+    {
+        const run = try st.backfillEdgeTenantTags(testing.allocator, false);
+        defer GraphStore.freeEdgeTagBackfillEntries(testing.allocator, run);
+        try expectEntry(run, fx.legacy, .failed, default_tenant, tenant_a, tenant_a);
+        const failed = entryFor(run, fx.legacy).?;
+        try testing.expectEqualStrings("NodeSlotMappingMissing", failed.reason orelse return error.MissingReason);
+        try expectEntry(run, other, .retagged, default_tenant, tenant_a, tenant_a);
+        try testing.expect(entryFor(run, other).?.reason == null);
+        try expectEntry(run, fx.foreign, .mixed, tenant_b, tenant_a, tenant_a);
+    }
+    try testing.expectEqualStrings(default_tenant, try tagOf(st, fx.legacy));
+    try testing.expectEqualStrings(tenant_a, try tagOf(st, other));
+
+    // Nothing reached storage either: with the mapping back, drop the cached
+    // body and read the edge back from the engine.
+    try id_map.insertNodeWithSlot(fx.a1, a1_slot);
+    restored = true;
+    st.edges.remove(fx.legacy);
+    try testing.expectEqualStrings(default_tenant, try tagOf(st, fx.legacy));
+
+    // The next run re-tags it, and lists nothing it re-tagged before.
+    {
+        const run = try st.backfillEdgeTenantTags(testing.allocator, false);
+        defer GraphStore.freeEdgeTagBackfillEntries(testing.allocator, run);
+        try expectEntry(run, fx.legacy, .retagged, default_tenant, tenant_a, tenant_a);
+        try testing.expect(entryFor(run, other) == null);
+    }
+    try testing.expectEqualStrings(tenant_a, try tagOf(st, fx.legacy));
+}
+
+test "SONNY-2733: CALL geode.tenant.backfill_edge_tags reports a failed edge's reason" {
+    harness.silenceEngineLogs();
+    var s = try Session.init();
+    defer s.deinit();
+    const fx = try seed(&s);
+    const st = s.store();
+
+    user_mgmt.setAuthEnabled(false);
+    defer user_mgmt.setAuthEnabled(true);
+
+    const id_map = st.getIdMap(graph_store.DEFAULT_GRAPH_NAME) orelse return error.IdMapMissing;
+    const a1_slot = id_map.nodeSlot(fx.a1) orelse return error.NodeSlotMissing;
+    try testing.expect(id_map.removeNode(fx.a1));
+    defer id_map.insertNodeWithSlot(fx.a1, a1_slot) catch {};
+
+    // Rows render as edge_type|edge_tenant|action|reason.
+    var f: Failures = .{};
+    try f.expectRows(&s, null, "CALL geode.tenant.backfill_edge_tags() YIELD edge_type, edge_tenant, action, reason", &.{
+        "L|default|failed|NodeSlotMappingMissing",
+        "M|default|mixed|null",
+        "R|tenant_b|mixed|null",
+    });
+    try f.check();
 }

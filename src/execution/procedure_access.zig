@@ -146,6 +146,23 @@ pub fn classifyProcedureName(proc_name: []const u8) ProcedureAccess {
     return .mutating;
 }
 
+// CANARY: REQ=REQ-SONNY-2733-BACKFILL-LOCKING; FEATURE="PerTenantIsolation"; ASPECT=SelfLockingProcedures; STATUS=TESTED; TEST=tests/test_sonny2733_backfill_locking.zig; OWNER=security; UPDATED=2026-09-25
+/// SONNY-2733: procedures that take each graph's lock themselves, one graph
+/// at a time, and so must run with no graph lock held. See
+/// `query_traits.isSelfLockingProgram`.
+const self_locking_procedure_names = [_][]const u8{
+    "geode.tenant.backfill_edge_tags",
+};
+
+/// SONNY-2733: does `call_stmt` call a procedure that takes each graph's lock
+/// itself?
+pub fn isSelfLockingProcedure(call_stmt: ast.CallProcedure) bool {
+    for (self_locking_procedure_names) |name| {
+        if (callProcedureMatchesName(call_stmt, name)) return true;
+    }
+    return false;
+}
+
 fn resolveProcedureCalleeName(allocator: std.mem.Allocator, callee: *const ast.Expr) !ResolvedProcedureName {
     return switch (callee.*) {
         .Ident => |ident| .{ .name = ident.orig },

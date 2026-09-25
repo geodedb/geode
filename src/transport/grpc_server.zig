@@ -2652,9 +2652,14 @@ pub fn handleExecute(request_bytes: []const u8, allocator: std.mem.Allocator, ep
             // Without this, gRPC queries ran with no synchronization, allowing
             // concurrent mutations to corrupt shared HashMaps and ArrayLists.
             // P1: Per-graph locking — queries against different graphs no longer serialize.
-            const needs_store_lock = analysis.kind != .explain;
+            // SONNY-2733: a lone CALL of a procedure that takes each graph's
+            // lock itself (geode.tenant.backfill_edge_tags) runs holding none:
+            // under this graph's lock it would deadlock on it, or hold two. It
+            // is still a mutation for the permission gate below.
+            const self_locking = query_traits.isSelfLockingProgram(&parse_result.program);
+            const needs_store_lock = !self_locking and analysis.kind != .explain;
             const program_is_mutating = query_traits.isMutatingProgram(&parse_result.program);
-            const is_mutation = needs_store_lock and program_is_mutating;
+            const is_mutation = (needs_store_lock or self_locking) and program_is_mutating;
 
             // Spec geode-vectorization-and-reranking: per-request hard read-only
             // floor, independent of the principal's role ("authorization must be
@@ -3072,7 +3077,9 @@ pub fn handleExecute(request_bytes: []const u8, allocator: std.mem.Allocator, ep
 
                     // CANARY: REQ=REQ-SEC-RLS-ALGO-001; FEATURE="RLS Algorithm Filtering"; ASPECT=gRPCRowsWire; STATUS=IMPL; OWNER=security; UPDATED=2026-04-01
                     // Algorithm RLS filter BEFORE lock release — requires store access.
-                    {
+                    // SONNY-2733: a self-locking program holds no lock here, and
+                    // its rows (edge ids) carry no node ids to look up.
+                    if (!self_locking) {
                         const algo_store = graph_store.getGlobalStore(allocator);
                         if (rls_filter.getGlobalRLSFilterEngine()) |rls_engine| {
                             if (state.authenticated_user) |auth_user| {

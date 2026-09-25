@@ -8568,6 +8568,24 @@ pub fn build(b: *std.Build) void {
     const sonny2693_step = b.step("test-sonny2693-edge-tenant-rule", "Run SONNY-2693 regression (every read path shows a tenant an edge only when the edge's own tag and both endpoints are visible to it, with no exception for default; geode.tenant.backfill_edge_tags re-tags legacy default edges and reports mixed ones)");
     sonny2693_step.dependOn(&run_sonny2693_tests.step);
 
+    // SONNY-2733: geode.tenant.backfill_edge_tags takes each graph's write
+    // lock in turn and never holds two. Runs it beside reader and writer
+    // threads, and drives the real gRPC Execute handler in process (through
+    // the SONNY-1560 shim) to pin that a lone CALL runs holding no statement
+    // lock while a CALL beside another statement is refused.
+    const sonny2733_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny2733_backfill_locking.zig"), .target = target, .optimize = optimize });
+    sonny2733_test_mod.link_libc = true;
+    sonny2733_test_mod.addImport("geode", root_mod);
+    sonny2733_test_mod.addImport("schema", schema_mod);
+    sonny2733_test_mod.addImport("protobuf", protobuf_mod);
+    sonny2733_test_mod.addImport("grpc_impl", sonny1560_shim_mod);
+    sonny2733_test_mod.addImport("logging", logging_mod);
+    const sonny2733_tests = b.addTest(.{ .root_module = sonny2733_test_mod });
+    const run_sonny2733_tests = b.addRunArtifact(sonny2733_tests);
+    shardDep(test_step, &run_sonny2733_tests.step, 1, test_shard_loads, test_shard_index);
+    const sonny2733_step = b.step("test-sonny2733-backfill-locking", "Run SONNY-2733 regression (geode.tenant.backfill_edge_tags takes each graph's write lock in turn and never holds two; readers and writers run beside it; a lone CALL runs without the handler's statement lock, and beside another statement it is refused)");
+    sonny2733_step.dependOn(&run_sonny2733_tests.step);
+
     // SONNY-2709: the RLS expression VM's range operators treated a null or a
     // mistyped value as equal, so `<=`/`>=` policies passed rows with a missing
     // or mistyped value, and every row against a principal attribute (always a

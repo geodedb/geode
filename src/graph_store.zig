@@ -1351,6 +1351,14 @@ fn isSecurityGraphName(graph_name: []const u8) bool {
     return std.mem.eql(u8, graph_name, SECURITY_GRAPH_NAME);
 }
 
+/// SONNY-2733: is `graph_name` one of the engine's own graphs? They are named
+/// `__geode_…`, like `SECURITY_GRAPH_NAME` (users, roles, policies).
+/// Store-wide admin passes over user data, such as the edge tag backfill,
+/// leave them alone.
+pub fn isInternalGraphName(graph_name: []const u8) bool {
+    return std.mem.startsWith(u8, graph_name, "__geode_");
+}
+
 fn encodePersistedPublicId(buf: *[16]u8, public_id: u64) []const u8 {
     return std.fmt.bufPrint(buf, "{x:0>16}", .{public_id}) catch unreachable;
 }
@@ -6860,25 +6868,40 @@ pub const GraphStore = struct {
         /// tenant's tag, or an endpoint resolves nowhere). Left as it is: no
         /// tenant can see it, and only an operator can say whose it is.
         mixed,
+        /// SONNY-2733: the backfill could not re-tag the edge (it would
+        /// otherwise be `retagged`), or could not read it, or (with a null
+        /// `edge_id`) could not lock the edge's whole graph in time. Left as
+        /// it is; the entry's `reason` names the error, and the next run
+        /// tries again.
+        failed,
     };
 
     /// SONNY-2693: one edge `backfillEdgeTenantTags` re-tagged or reports.
-    /// Every slice is owned; free with `deinit`.
+    /// Every slice but `reason` is owned; free with `deinit`.
     pub const EdgeTagBackfillEntry = struct {
-        edge_id: u64,
+        /// Null only on a `failed` row for a whole graph the backfill could
+        /// not lock in time (`reason` GraphLockTimeout); its edges were not
+        /// scanned.
+        edge_id: ?u64,
         action: EdgeTagBackfillAction,
         graph_name: []const u8,
-        edge_type: []const u8,
-        /// The edge's tag before the backfill.
-        edge_tenant: []const u8,
-        /// Null when the endpoint resolves nowhere.
+        /// Null when the edge could not be read (`failed`).
+        edge_type: ?[]const u8,
+        /// The edge's tag before the backfill; null when the edge could not
+        /// be read (`failed`).
+        edge_tenant: ?[]const u8,
+        /// Null when the endpoint resolves nowhere, or the edge could not be
+        /// read.
         from_tenant: ?[]const u8,
         to_tenant: ?[]const u8,
+        /// SONNY-2733: why a `failed` edge failed: an error name (static,
+        /// not owned). Null for every other action.
+        reason: ?[]const u8 = null,
 
         pub fn deinit(self: *const EdgeTagBackfillEntry, allocator: std.mem.Allocator) void {
             allocator.free(self.graph_name);
-            allocator.free(self.edge_type);
-            allocator.free(self.edge_tenant);
+            if (self.edge_type) |t| allocator.free(t);
+            if (self.edge_tenant) |t| allocator.free(t);
             if (self.from_tenant) |t| allocator.free(t);
             if (self.to_tenant) |t| allocator.free(t);
         }
@@ -6906,8 +6929,24 @@ pub const GraphStore = struct {
     /// neither changed nor listed. Tags are compared exactly: a tenant
     /// hierarchy does not make a parent's tag match a child's.
     ///
-    /// Every store graph is scanned, evicted edges included. Each re-tag is
-    /// durable on its own (`retagEdgeTenant`), so a run that fails part way
+    /// SONNY-2733: it works one graph at a time, in name order. For each graph
+    /// it takes that graph's write lock, scans and re-tags that graph's edges
+    /// (evicted ones included), and releases the lock before it takes the
+    /// next; it never holds two graph locks. It waits for each lock as a
+    /// statement does (writer-preferring, up to
+    /// `backfill_graph_lock_timeout_ns`); a graph still busy then is listed as
+    /// one `failed` row with a null `edge_id` and reason GraphLockTimeout, and
+    /// the run goes on. It skips the engine's own graphs
+    /// (`isInternalGraphName`), and a graph dropped since it listed them. The
+    /// caller must hold no store or graph lock, or it fails with
+    /// `error.GraphLockHeld` and changes nothing: taking the lock the caller
+    /// holds would deadlock, and taking another would hold two. So the
+    /// transport handlers run a lone `CALL geode.tenant.backfill_edge_tags`
+    /// without their statement lock (`query_traits.isSelfLockingProgram`).
+    ///
+    /// An edge it fails to re-tag, or to read, is listed as `failed` with the
+    /// error's name and left as it was, and the scan goes on. Each re-tag is
+    /// durable on its own (`retagEdgeTenant`), so a run that stops part way
     /// keeps what it did, and running it again finishes the job: an edge it
     /// re-tagged is consistent and is not listed again. Returns the listed
     /// edges in scan order; the caller frees them with
@@ -6915,9 +6954,12 @@ pub const GraphStore = struct {
     ///
     /// Runs on the calling thread and reads endpoint tags with the engine
     /// fallback, so it must not run on a parallel-UNION arm.
+    // CANARY: REQ=REQ-SONNY-2733-BACKFILL-LOCKING; FEATURE="PerTenantIsolation"; ASPECT=OneGraphLockAtATime; STATUS=TESTED; TEST=tests/test_sonny2733_backfill_locking.zig; OWNER=security; UPDATED=2026-09-25
     pub fn backfillEdgeTenantTags(self: *GraphStore, allocator: std.mem.Allocator, dry_run: bool) ![]EdgeTagBackfillEntry {
-        const edge_ids = try self.getAllEdgesForTenant(allocator, null);
-        defer allocator.free(edge_ids);
+        if (storeLockHeldByCurrentThread()) return error.GraphLockHeld;
+
+        const graph_names = try self.sortedGraphNames(allocator);
+        defer freeGraphNames(allocator, graph_names);
 
         var entries: std.ArrayList(EdgeTagBackfillEntry) = .empty;
         errdefer {
@@ -6925,35 +6967,173 @@ pub const GraphStore = struct {
             entries.deinit(allocator);
         }
 
-        for (edge_ids) |edge_id| {
-            const edge = self.getEdgeHydrated(edge_id) orelse continue;
-            const from_tenant = self.dupeNodeTenantForRead(allocator, edge.from_id);
-            defer if (from_tenant) |t| allocator.free(t);
-            const to_tenant = self.dupeNodeTenantForRead(allocator, edge.to_id);
-            defer if (to_tenant) |t| allocator.free(t);
-
-            const action = classifyEdgeTags(edge.tenant_id, from_tenant, to_tenant, dry_run) orelse continue;
-
-            // Copy the edge's strings before a re-tag replaces its body.
-            var entry = EdgeTagBackfillEntry{
-                .edge_id = edge_id,
-                .action = action,
-                .graph_name = try allocator.dupe(u8, edge.graph_name),
-                .edge_type = &.{},
-                .edge_tenant = &.{},
-                .from_tenant = null,
-                .to_tenant = null,
+        for (graph_names) |graph_name| {
+            if (isInternalGraphName(graph_name)) continue;
+            // PHASE 1b chokepoint: build a deferred graph first. Loading it
+            // opens it in the engine, and the lock below finds only open
+            // graphs; the build takes no store or graph lock.
+            self.ensureGraphHydrated(graph_name);
+            const deadline = monoNanosNow() + backfill_graph_lock_timeout_ns;
+            const maybe_lock = acquireExistingGraphWriteLock(graph_name, deadline) catch {
+                // Busy past the budget: list the graph as failed, unscanned,
+                // and go on to the next.
+                log.warn("edge tag backfill: a graph's write lock did not come in time; its edges were not scanned", &.{
+                    Attr.string("graph", graph_name),
+                });
+                try entries.ensureUnusedCapacity(allocator, 1);
+                entries.appendAssumeCapacity(.{
+                    .edge_id = null,
+                    .action = .failed,
+                    .graph_name = try allocator.dupe(u8, graph_name),
+                    .edge_type = null,
+                    .edge_tenant = null,
+                    .from_tenant = null,
+                    .to_tenant = null,
+                    .reason = @errorName(error.GraphLockTimeout),
+                });
+                continue;
             };
-            errdefer entry.deinit(allocator);
-            entry.edge_type = try allocator.dupe(u8, edge.label);
-            entry.edge_tenant = try allocator.dupe(u8, edge.tenant_id);
-            if (from_tenant) |t| entry.from_tenant = try allocator.dupe(u8, t);
-            if (to_tenant) |t| entry.to_tenant = try allocator.dupe(u8, t);
-
-            if (action == .retagged) try self.retagEdgeTenant(edge_id, DEFAULT_TENANT_ID, from_tenant.?);
-            try entries.append(allocator, entry);
+            const lock = maybe_lock orelse continue; // dropped since it was listed
+            defer releaseGraphLock(lock);
+            try self.backfillGraphEdgeTags(allocator, graph_name, dry_run, &entries);
         }
         return entries.toOwnedSlice(allocator);
+    }
+
+    /// SONNY-2733: every graph's name, sorted; free with `freeGraphNames`.
+    /// Read under `graphs_mutex`, which CREATE and DROP GRAPH hold while they
+    /// change the graph maps.
+    fn sortedGraphNames(self: *GraphStore, allocator: std.mem.Allocator) ![][]const u8 {
+        const listed = blk: {
+            const io = std.Io.Threaded.global_single_threaded.io();
+            self.graphs_mutex.lockUncancelable(io);
+            defer self.graphs_mutex.unlock(io);
+            break :blk try self.listGraphNames(allocator);
+        };
+        // `listGraphNames` hands over the slice it allocated.
+        const names: [][]const u8 = @constCast(listed);
+        std.mem.sort([]const u8, names, {}, graphNameLessThan);
+        return names;
+    }
+
+    fn graphNameLessThan(_: void, a: []const u8, b: []const u8) bool {
+        return std.mem.lessThan(u8, a, b);
+    }
+
+    fn freeGraphNames(allocator: std.mem.Allocator, names: []const []const u8) void {
+        for (names) |name| allocator.free(name);
+        allocator.free(names);
+    }
+
+    /// SONNY-2733: `backfillEdgeTenantTags` for graph `graph_name`, whose
+    /// write lock the caller holds. Appends what it lists to `entries`.
+    fn backfillGraphEdgeTags(
+        self: *GraphStore,
+        allocator: std.mem.Allocator,
+        graph_name: []const u8,
+        dry_run: bool,
+        entries: *std.ArrayList(EdgeTagBackfillEntry),
+    ) !void {
+        const edge_ids = try self.graphEdgeIdsLocked(allocator, graph_name);
+        defer allocator.free(edge_ids);
+        for (edge_ids) |edge_id| try self.backfillEdgeTag(allocator, graph_name, edge_id, dry_run, entries);
+    }
+
+    /// SONNY-2733: the ids of graph `graph_name`'s edges, evicted ones
+    /// included. The caller holds the graph's write lock.
+    fn graphEdgeIdsLocked(self: *GraphStore, allocator: std.mem.Allocator, graph_name: []const u8) ![]u64 {
+        var ids: std.ArrayList(u64) = .empty;
+        errdefer ids.deinit(allocator);
+        if (global_vtable != null) {
+            // With a storage adapter the graph's IdMap lists every edge of the
+            // graph, cached or not, and only the graph's writers change it.
+            const id_map = self.getIdMap(graph_name) orelse return ids.toOwnedSlice(allocator);
+            var it = id_map.edgeUuidIterator();
+            while (it.next()) |edge_uuid| try ids.append(allocator, @as(u64, @truncate(edge_uuid)));
+            return ids.toOwnedSlice(allocator);
+        }
+        // No adapter: the cache holds every edge, and the caller's lock is the
+        // global EXCLUSIVE one, so nothing changes during the scan.
+        const all = try self.edges.snapshotKeys(allocator);
+        defer allocator.free(all);
+        for (all) |edge_id| {
+            const edge = self.edges.get(edge_id) orelse continue;
+            if (std.mem.eql(u8, edge.graph_name, graph_name)) try ids.append(allocator, edge_id);
+        }
+        return ids.toOwnedSlice(allocator);
+    }
+
+    /// SONNY-2733: classify edge `edge_id` of graph `graph_name`, re-tag it
+    /// when that is the verdict and this is not a dry run, and append what the
+    /// backfill lists for it to `entries`. The caller holds the graph's write
+    /// lock. A failed re-tag or read is listed as `failed`, not returned.
+    fn backfillEdgeTag(
+        self: *GraphStore,
+        allocator: std.mem.Allocator,
+        graph_name: []const u8,
+        edge_id: u64,
+        dry_run: bool,
+        entries: *std.ArrayList(EdgeTagBackfillEntry),
+    ) !void {
+        // Room for the entry first, so an edge the backfill re-tags is always
+        // listed.
+        try entries.ensureUnusedCapacity(allocator, 1);
+
+        const edge = self.getEdgeHydrated(edge_id) orelse {
+            log.warn("edge tag backfill: an edge of the graph cannot be read; it is listed as failed", &.{
+                Attr.string("graph", graph_name),
+                Attr.uint("edge_id", edge_id),
+            });
+            entries.appendAssumeCapacity(.{
+                .edge_id = edge_id,
+                .action = .failed,
+                .graph_name = try allocator.dupe(u8, graph_name),
+                .edge_type = null,
+                .edge_tenant = null,
+                .from_tenant = null,
+                .to_tenant = null,
+                .reason = @errorName(error.EdgeNotFound),
+            });
+            return;
+        };
+        // Only the graph whose lock the caller holds.
+        if (!std.mem.eql(u8, edge.graph_name, graph_name)) return;
+
+        const from_tenant = self.dupeNodeTenantForRead(allocator, edge.from_id);
+        defer if (from_tenant) |t| allocator.free(t);
+        const to_tenant = self.dupeNodeTenantForRead(allocator, edge.to_id);
+        defer if (to_tenant) |t| allocator.free(t);
+
+        const action = classifyEdgeTags(edge.tenant_id, from_tenant, to_tenant, dry_run) orelse return;
+
+        // Copy the edge's strings before a re-tag replaces its body.
+        var entry = EdgeTagBackfillEntry{
+            .edge_id = edge_id,
+            .action = action,
+            .graph_name = try allocator.dupe(u8, graph_name),
+            .edge_type = null,
+            .edge_tenant = null,
+            .from_tenant = null,
+            .to_tenant = null,
+        };
+        errdefer entry.deinit(allocator);
+        entry.edge_type = try allocator.dupe(u8, edge.label);
+        entry.edge_tenant = try allocator.dupe(u8, edge.tenant_id);
+        if (from_tenant) |t| entry.from_tenant = try allocator.dupe(u8, t);
+        if (to_tenant) |t| entry.to_tenant = try allocator.dupe(u8, t);
+
+        if (action == .retagged) {
+            self.retagEdgeTenant(edge_id, DEFAULT_TENANT_ID, from_tenant.?) catch |err| {
+                log.warn("edge tag backfill: re-tag failed; the edge is unchanged and listed as failed", &.{
+                    Attr.string("graph", graph_name),
+                    Attr.uint("edge_id", edge_id),
+                    Attr.string("error", @errorName(err)),
+                });
+                entry.action = .failed;
+                entry.reason = @errorName(err);
+            };
+        }
+        entries.appendAssumeCapacity(entry);
     }
 
     /// `backfillEdgeTenantTags`'s decision for one edge; null when the edge is
@@ -6981,23 +7161,29 @@ pub const GraphStore = struct {
     /// re-tag. With no adapter (an in-memory store) only the cached body
     /// changes, as for every in-memory edge write.
     ///
+    /// SONNY-2733: a failed re-tag changes nothing, so the backfill can list
+    /// the edge as `failed` and go on. Every step that can fail runs before the
+    /// durable write, except the cache update; when that fails, the stored tag
+    /// is put back (`restoreEdgeTenantId`).
+    ///
     /// The cached body is replaced, never edited in place: `put` retires the
-    /// old body to the cache's grace list, so a reader still holding it (the
-    /// backfill runs under one graph's write lock and re-tags edges in every
-    /// graph) reads the old tag until the next grace window instead of freed
-    /// memory. The tenant-keyed edge-type counter moves with the tag.
+    /// old body to the cache's grace list, which frees it only in this graph's
+    /// next exclusive grace window. The backfill holds the graph's write lock
+    /// while it calls this, so no reader of the graph is holding the old body.
+    /// The tenant-keyed edge-type counter moves with the tag.
     fn retagEdgeTenant(self: *GraphStore, edge_id: u64, expected: []const u8, tenant: []const u8) !void {
         if (std.mem.eql(u8, tenant, DEFAULT_TENANT_ID)) return error.InvalidTenantTag;
         self.ensureEdgeGraphHydrated(edge_id); // PHASE 1b chokepoint (hydrate before write)
         const current = self.getEdgeHydrated(edge_id) orelse return error.EdgeNotFound;
         if (!std.mem.eql(u8, current.tenant_id, expected)) return error.EdgeTenantChanged;
 
-        if (global_vtable) |vt| {
-            const from_slot = try self.requireNodeSlot(current.graph_name, current.from_id);
-            const to_slot = try self.requireNodeSlot(current.graph_name, current.to_id);
-            const edge_slot = try self.requireEdgeSlot(current.graph_name, edge_id);
-            try persistEdgeTenantId(vt, current.graph_name, from_slot, to_slot, edge_slot, tenant);
-        }
+        // The engine addresses the edge by its endpoints' slots and its own.
+        const Slots = struct { from: u64, to: u64, edge: u64 };
+        const slots: ?Slots = if (global_vtable != null) Slots{
+            .from = try self.requireNodeSlot(current.graph_name, current.from_id),
+            .to = try self.requireNodeSlot(current.graph_name, current.to_id),
+            .edge = try self.requireEdgeSlot(current.graph_name, edge_id),
+        } else null;
 
         var replacement = Edge{
             .id = current.id,
@@ -7022,16 +7208,49 @@ pub const GraphStore = struct {
         }
 
         // The counter moves before `put`: once the cache owns `replacement`,
-        // its strings are not ours to read (the backfill does not hold the
-        // edge's graph lock, so the body could be evicted and reclaimed).
+        // its strings are not ours to read.
         try self.bumpEdgeTypeCount(replacement.graph_name, tenant, replacement.label);
         errdefer self.decEdgeTypeCount(replacement.graph_name, tenant, replacement.label);
         self.decEdgeTypeCount(replacement.graph_name, expected, replacement.label);
         errdefer self.bumpEdgeTypeCount(replacement.graph_name, expected, replacement.label) catch {};
+
+        if (slots) |s| try persistEdgeTenantId(global_vtable.?, current.graph_name, s.from, s.to, s.edge, tenant);
+        errdefer if (slots) |s| restoreEdgeTenantId(global_vtable.?, current.graph_name, s.from, s.to, s.edge, expected);
         try self.edges.put(edge_id, replacement);
 
         self.dirty.store(true, .release);
         incrementMutationEpoch();
+    }
+
+    /// SONNY-2733: put back the stored tenant tag of an edge whose re-tag
+    /// failed after `persistEdgeTenantId` stored the new one. Unlike that
+    /// function it writes `default` out too (a stored `default` reads back
+    /// the same as a missing tag). Best effort: a failure is logged, and the
+    /// edge then reads the new tag after a restart.
+    fn restoreEdgeTenantId(
+        vt: AdapterVTable,
+        graph_name: []const u8,
+        from_slot: u64,
+        to_slot: u64,
+        edge_slot: u64,
+        tenant: []const u8,
+    ) void {
+        const set_edge_property = vt.setEdgePropertyFn orelse return;
+        set_edge_property(
+            vt.ctx,
+            graph_name,
+            from_slot,
+            to_slot,
+            edge_slot,
+            INTERNAL_TENANT_ID_PROPERTY_KEY,
+            .{ .String = tenant },
+        ) catch |err| {
+            log.err("edge tenant re-tag failed and its stored tag could not be put back; the edge reads the new tag after a restart", &.{
+                Attr.string("graph", graph_name),
+                Attr.uint("edge_slot", edge_slot),
+                Attr.string("error", @errorName(err)),
+            });
+        };
     }
 
     pub fn getNodeCount(self: *GraphStore) usize {
@@ -13869,6 +14088,42 @@ pub fn acquireGraphWriteLock(graph_name: []const u8) GraphLockHandle {
         .is_write = true,
         .holds_global_store_lock = true,
         .global_lock_is_exclusive = true,
+    };
+}
+
+/// SONNY-2733: how long `GraphStore.backfillEdgeTenantTags` waits for each
+/// graph's write lock: the default statement write-lock budget. Tests shorten
+/// it.
+pub var backfill_graph_lock_timeout_ns: u64 = 120 * std.time.ns_per_s;
+
+/// SONNY-2733: `acquireGraphWriteLockCancelable` for a graph that already
+/// exists, for `GraphStore.backfillEdgeTenantTags`. Like that function it
+/// announces the pending writer, so new readers back off instead of starving
+/// it, and gives up at `deadline_mono_ns` (`error.Deadline`). Null when the
+/// engine does not have the graph open (it was dropped after the caller listed
+/// it): where the other acquires would create the graph again, this leaves it
+/// gone. With no adapter it takes the global EXCLUSIVE lock, as they do.
+fn acquireExistingGraphWriteLock(graph_name: []const u8, deadline_mono_ns: u64) error{Deadline}!?GraphLockHandle {
+    const adapter = global_adapter orelse {
+        try acquireStoreWriteLockCancelable(deadline_mono_ns);
+        return .{
+            .managed_graph = null,
+            .is_write = true,
+            .holds_global_store_lock = true,
+            .global_lock_is_exclusive = true,
+        };
+    };
+    acquireStoreLock();
+    const mg = adapter.acquireGraphWriteLockCancelable(graph_name, deadline_mono_ns) catch |err| {
+        releaseStoreLock();
+        if (err == error.Deadline) return error.Deadline;
+        return null;
+    };
+    return .{
+        .managed_graph = mg,
+        .is_write = true,
+        .holds_global_store_lock = true,
+        .global_lock_is_exclusive = false,
     };
 }
 

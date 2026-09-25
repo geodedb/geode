@@ -380,10 +380,10 @@ CALL geode.tenant.backfill_edge_tags(true)   -- dry run: report only
 CALL geode.tenant.backfill_edge_tags()       -- re-tag, and report
 ```
 
-The procedure scans every edge in every graph, including edges evicted from
-the cache, and returns one row per edge it re-tags or reports. The columns are
-`edge_id`, `graph`, `edge_type`, `edge_tenant` (the tag before the run),
-`from_tenant`, `to_tenant` and `action`:
+The procedure scans every edge in every user graph, including edges evicted
+from the cache, and returns one row per edge it re-tags or reports. The columns
+are `edge_id`, `graph`, `edge_type`, `edge_tenant` (the tag before the run),
+`from_tenant`, `to_tenant`, `action` and `reason`:
 
 - **`retagged`** (`would_retag` in a dry run): the edge was tagged `default`
   and both endpoints belong to the same tenant T. It is now tagged T. This is
@@ -394,26 +394,61 @@ the cache, and returns one row per edge it re-tags or reports. The columns are
   share, or an endpoint no longer resolves (its tenant is null). No tenant can
   see such an edge. The procedure leaves it unchanged, because only an operator
   can say whose it is.
+- **`failed`** (SONNY-2733): the edge was due to be re-tagged, or could not be
+  read, and the procedure failed on it. The edge is left as it was, `reason`
+  names the error, and the run goes on to the next edge. A `failed` row with a
+  null `edge_id` and reason `GraphLockTimeout` is a whole graph the procedure
+  could not lock in time (see Locking below); none of its edges were scanned.
+  Running the procedure again retries them. `reason` is null on every other
+  row.
 
 An edge whose tag equals both endpoints' tags is consistent and is not listed.
 That includes a `default` edge between two `default` nodes.
 
+**Review the dry run first.** The procedure cannot tell a legacy edge from a
+`default` edge that an operator placed between two nodes of one tenant on
+purpose. Such an edge is hidden from that tenant, and a real run moves it to
+the tenant, which then sees it. So run the dry run, review every `would_retag`
+row, and change or remove any edge that must stay `default` before the real
+run.
+
 With a storage adapter, each re-tag is written to storage before the cached
 edge changes. It uses the same reserved key as the create path, so it survives
-a restart, and an adapter that cannot store the tag fails the run. The
-tenant-keyed edge-type counts (`db.relationshipTypes()` per tenant) move with
-the tag. A run that fails part way keeps the re-tags it already made. Running
-it again is safe: an edge it re-tagged is consistent and is not listed again.
+a restart. An edge whose tag cannot be stored is listed as `failed`, and
+nothing about it changes. The tenant-keyed edge-type counts
+(`db.relationshipTypes()` per tenant) move with the tag. A run that stops part
+way keeps the re-tags it already made. Running it again is safe: an edge it
+re-tagged is consistent and is not listed again.
+
+**Locking (SONNY-2733).** The procedure works one graph at a time, in name
+order. It takes that graph's write lock, re-tags that graph's edges, and
+releases the lock before it takes the next graph, so it never holds two graph
+locks. While it holds a graph, queries and writes on that graph wait, as they
+do for any write; other graphs are not blocked. It waits for each graph's lock
+the way a write statement does, for up to 120 seconds, and new readers of the
+graph hold back meanwhile. A graph still busy after that is listed as `failed`
+(see above) and the run goes on to the next graph. It skips the engine's own
+graphs (named `__geode_…`, such as `__geode_security`) and any graph dropped
+while it runs. Send the CALL as the only statement in its request: the server
+then runs it without the statement lock it would take on the session graph.
+Beside any other statement, including the `USE GRAPH` that the CLI's `-g` flag
+prepends, it fails with `GraphLockHeld` and changes nothing.
 
 The procedure is admin-only (the `admin_tenant` gate, like the rest of the
-family). A cluster refuses a real run, as it does `create`/`drop`/`set_quota`,
-because the re-tag has no Raft replication. A dry run is allowed anywhere. The
-result has one row per listed edge, so on a large legacy store run the dry run
-first to size it.
+family), and it runs only in a session with no tenant scope. It changes every
+tenant's edges, so a session scoped to a tenant is refused with
+`TenantScopedSession`, even for a dry run. A real run is refused inside a
+transaction with `BackfillInTransaction`, because a ROLLBACK could not undo its
+re-tags. A cluster refuses a real run, as it does `create`/`drop`/`set_quota`,
+because the re-tag has no Raft replication. A dry run is allowed in a
+transaction and in a cluster. The result has one row per listed edge, so on a
+large legacy store the dry run also shows how big the real run will be.
 
-Regression suite:
+Regression suites:
 [`tests/test_sonny2693_edge_tenant_rule.zig`](../../tests/test_sonny2693_edge_tenant_rule.zig)
-(`zig build test-sonny2693-edge-tenant-rule`).
+(`zig build test-sonny2693-edge-tenant-rule`) and
+[`tests/test_sonny2733_backfill_locking.zig`](../../tests/test_sonny2733_backfill_locking.zig)
+(`zig build test-sonny2733-backfill-locking`).
 
 ## At-rest TDE is master-keyed, not per-tenant (GAP-0843 / GAP-0290)
 
@@ -497,5 +532,6 @@ key across tenants.
       and a non-cascade drop that returns `TenantHasData` / `TenantHasChildren` is
       understood as a refusal that protected live data (GAP-0847).
 - [ ] After upgrading past SONNY-2693, `CALL geode.tenant.backfill_edge_tags()`
-      has re-tagged legacy `default` edges between a tenant's own nodes, and
-      every `mixed` edge it lists has been reviewed.
+      has re-tagged legacy `default` edges between a tenant's own nodes. Its
+      dry run was reviewed first for `default` edges placed on purpose, every
+      `mixed` edge it lists has been reviewed, and no `failed` row remains.

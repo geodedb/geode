@@ -80,6 +80,31 @@
   post-filter's label-deny snapshot, and the traversal's, now hold their own
   copy of each denied label. If a deny policy was removed while a query's
   post-filter ran, the post-filter could read freed memory.
+- **`geode.tenant.backfill_edge_tags` locks one graph at a time (SONNY-2733):**
+  the procedure ran under the statement's lock on the session graph and
+  re-tagged edges in every graph, while readers and writers of the other
+  graphs ran alongside. Now:
+  - it takes each graph's write lock in turn, re-tags that graph's edges, and
+    releases the lock before it takes the next; it never holds two graph
+    locks. It waits up to 120 seconds for each lock, as a write does; a graph
+    still busy then is listed as one `failed` row with a null `edge_id`, and
+    the run goes on;
+  - send it as the only statement in its request. The server then runs it
+    without the session graph's statement lock. Beside any other statement,
+    including the `USE GRAPH` the CLI's `-g` flag prepends, it fails with
+    `GraphLockHeld` and changes nothing;
+  - it skips the engine's own graphs (`__geode_security` and any other
+    `__geode_…` graph);
+  - an edge it cannot re-tag or read is listed with the new action `failed`,
+    and the new `reason` column names the error. The edge is left as it was
+    and the run goes on; a failure used to abort the run;
+  - a session with a tenant scope is refused (`TenantScopedSession`), and so
+    is a real run inside a transaction (`BackfillInTransaction`), which a
+    ROLLBACK could not undo.
+
+  Run the dry run first and review its `would_retag` rows: a `default` edge
+  that an operator placed between one tenant's nodes on purpose looks like a
+  legacy edge, and a real run moves it to that tenant.
 - **Policy text no longer changes meaning across a restart (SONNY-2731):**
   `__geode_security` stores a policy's name and scope graph in 64-byte
   fields and its USING text in a 512-byte field. `CREATE POLICY` accepted
