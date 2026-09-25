@@ -375,9 +375,32 @@ fn passesRLSFilter(
 // Returns true (allow) when no expression engine is configured, or when the
 // expression engine grants access. Fails closed on evaluation errors (GAP-0524).
 // CANARY: REQ=REQ-SEC-RLS-WIRE-015; FEATURE="RLS Expression Wiring"; ASPECT=MatchExprEval; STATUS=TESTED; TEST=tests/test_rls_expr_engine_wiring.zig; OWNER=security; UPDATED=2026-06-11
+// CANARY: REQ=REQ-SONNY-2690-ALL-LABELS; FEATURE="RLS Expression Wiring"; ASPECT=EveryLabelPolicy; STATUS=TESTED; TEST=tests/test_sonny2690_multi_label_expr_policy.zig; OWNER=security; UPDATED=2026-09-25
+// SONNY-2690: the policies of EVERY label on the node apply, and the node is
+// visible only if none of them denies it. The lookup used `labels[0]` alone,
+// and a label with no policy allows the row, so `(:Other:Doc)` escaped a
+// `:Doc` policy. A node with no label is looked up as table "default", as
+// before.
 fn passesRLSExprFilter(
     reusable_row: *std.StringHashMap(rls.Value),
     node: graph_store.Node,
+    username: []const u8,
+) bool {
+    const unlabeled = [_][]const u8{"default"};
+    const tables: []const []const u8 = if (node.labels.len > 0) node.labels else &unlabeled;
+    return exprPoliciesAllow(reusable_row, &node.properties, node.graph_name, tables, username);
+}
+
+/// Evaluate the expression RLS policies of every table in `tables` (a node's
+/// labels, or an edge's type) against one row's `properties`. True (allow)
+/// when no expression engine is configured, for an admin session, or when no
+/// policy of any table denies the row; a table with no policy allows it.
+/// Fails closed on a conversion or evaluation error (GAP-0524).
+fn exprPoliciesAllow(
+    reusable_row: *std.StringHashMap(rls.Value),
+    properties: *const graph_store.CompactPropertyMap,
+    graph_name: []const u8,
+    tables: []const []const u8,
     username: []const u8,
 ) bool {
     const expr_engine_ptr = rls_types.getGlobalExprRLSEngine() orelse return true;
@@ -393,20 +416,21 @@ fn passesRLSExprFilter(
         }
     }
 
-    // Use first label as the table name for policy lookup.
-    const table = if (node.labels.len > 0) node.labels[0] else "default";
-
     // CANARY: REQ=REQ-PERF-RLS-ROW-SKIP-003; FEATURE="RLSRowBuildSkip"; ASPECT=MatchLoopSkip; STATUS=TESTED; TEST=tests/test_rls_expr_engine_wiring.zig; OWNER=performance; UPDATED=2026-06-11
     // PERF-A / #808: only rebuild the RLS row when an applicable compiled
     // policy actually reads row data (bytecode contains `load_row`). For
     // row-free policies (e.g. pure current_user / principal.attribute
     // checks) and for tables with no policies at all, the VM never touches
     // the row, so an empty scratch row is sufficient and the per-property
-    // conversion + hash-insert cost vanishes from the per-row hot path.
-    if (expr_engine.needsRowDataForTable(.select, node.graph_name, table)) {
+    // conversion + hash-insert cost vanishes from the per-row hot path. The
+    // row is built at most once, however many tables read it.
+    const needs_row = for (tables) |table| {
+        if (expr_engine.needsRowDataForTable(.select, graph_name, table)) break true;
+    } else false;
+    if (needs_row) {
         // Reuse the caller's row buffer to avoid one HashMap init/deinit per
         // node. GAP-0524: Fail closed on conversion errors.
-        rls_value_bridge.nodePropertiesToRLSRowInto(reusable_row, &node.properties) catch return false;
+        rls_value_bridge.nodePropertiesToRLSRowInto(reusable_row, properties) catch return false;
     } else {
         // Keep the scratch row empty so stale entries from a previous node
         // can never leak into a policy evaluation (hygiene; no allocation).
@@ -414,22 +438,26 @@ fn passesRLSExprFilter(
     }
 
     // Phase C2: this is the REAL expression-RLS evaluation point — the
-    // compiled-policy VM decides per-row allow/deny. Measure the VM call and
-    // emit geode.security.rls.evaluation.* with the bounded decision + policy
-    // type (rls). Reached only when an expr engine is active and the session
-    // is non-admin (admins bypass above without evaluating a policy, so no
-    // sample is recorded for them — that would be a false "allow").
+    // compiled-policy VM decides per-row allow/deny. Measure the VM calls and
+    // emit geode.security.rls.evaluation.* once per row with the bounded
+    // decision + policy type (rls). Reached only when an expr engine is active
+    // and the session is non-admin (admins bypass above without evaluating a
+    // policy, so no sample is recorded for them — that would be a false
+    // "allow").
     // GAP-0524: Fail closed on evaluation errors.
     const om = @import("otel_metrics");
     const otel_lib = @import("otel");
     const t0 = otel_lib.internal.clock.unixNanoNow();
-    const allowed = expr_engine.checkRowAccessByUsername(
-        reusable_row,
-        .select,
-        username,
-        node.graph_name,
-        table,
-    ) catch false;
+    const allowed = for (tables) |table| {
+        const table_allows = expr_engine.checkRowAccessByUsername(
+            reusable_row,
+            .select,
+            username,
+            graph_name,
+            table,
+        ) catch false;
+        if (!table_allows) break false;
+    } else true;
     const dur_s = @as(f64, @floatFromInt(otel_lib.internal.clock.unixNanoNow() - t0)) / 1_000_000_000.0;
     om.recordRlsEvaluation(if (allowed) .allow else .deny, .rls, dur_s);
     return allowed;

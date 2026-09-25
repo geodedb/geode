@@ -8519,6 +8519,19 @@ pub fn build(b: *std.Build) void {
     const sonny2679_step = b.step("test-sonny2679-rls-hop-targets", "Run SONNY-2679 regression (every traversal applies the session's RLS policies and tenant scope to each hop target and every node a path passes through: single hop, count/collect, grouping, OPTIONAL MATCH, variable length, multi-hop, and the expression path)");
     sonny2679_step.dependOn(&run_sonny2679_tests.step);
 
+    // SONNY-2690: an expression RLS policy was applied to a node's first label
+    // only, so a node whose policed label came second escaped it.
+    const sonny2690_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny2690_multi_label_expr_policy.zig"), .target = target, .optimize = optimize });
+    sonny2690_test_mod.addImport("geode", root_mod);
+    sonny2690_test_mod.addImport("logging", logging_mod);
+    sonny2690_test_mod.addImport("rls", rls_mod);
+    sonny2690_test_mod.addImport("rls_types", rls_types_mod);
+    const sonny2690_tests = b.addTest(.{ .root_module = sonny2690_test_mod });
+    const run_sonny2690_tests = b.addRunArtifact(sonny2690_tests);
+    shardDep(test_step, &run_sonny2690_tests.step, 1, test_shard_loads, test_shard_index);
+    const sonny2690_step = b.step("test-sonny2690-multi-label-expr-policy", "Run SONNY-2690 regression (the expression RLS policies of every label on a node apply, in either label order, under a scan and under a hop)");
+    sonny2690_step.dependOn(&run_sonny2690_tests.step);
+
     // SONNY-2656: the node-scan fast path leaked the clone of every typed
     // extended value (Text, Json, Bytea, Char, Varchar, Url, ...) it projected
     // (page teardown freed only strings, lists and maps) or filtered on (IS
