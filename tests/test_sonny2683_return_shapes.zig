@@ -320,6 +320,35 @@ test "SONNY-2683: a persisted deployment groups and filters a RETURN after a CTE
     try checkMode(.planned);
 }
 
+// A routed write reads its bindings through the legacy executor, which
+// applies the session's RLS policy to every candidate before it writes. The
+// pattern here reaches the node the policy hides from bob (it has no label,
+// and the hidden node's `s` matches): bob's grouped and filtered RETURNs after
+// a SET must neither write that node nor count or return it.
+test "SONNY-2683: a routed SET skips the node the session's RLS policy hides" {
+    harness.silenceEngineLogs();
+    var s = try Session.init(.rls_policy);
+    defer s.deinit();
+    try s.seed();
+    var f: Failures = .{};
+
+    try expectSet(&s, &f, .any, "MATCH (n) WHERE n.s = 'h' OR n.s = 's00' SET n.hit = 1 RETURN n.s, count(*) AS c GROUP BY n.s", &.{"s00|1"});
+    try expectSet(&s, &f, .any, "MATCH (n) WHERE n.s = 'h' OR n.s = 's01' SET n.hit = 2 RETURN n.s WHERE n.s <> 'zzz'", &.{"s01"});
+    try expectSet(&s, &f, .any, "MATCH (n) WHERE n.s = 'h' REMOVE n.s RETURN count(*) AS c GROUP BY n.s", &.{});
+    // bob does not see the hidden node at all.
+    try expectSet(&s, &f, .any, "MATCH (n) WHERE n.s = 'h' RETURN count(*) AS c", &.{"0"});
+    // A user the policy does not cover sees it, unwritten.
+    s.ctx.user = "alice";
+    try expectSet(&s, &f, .any, "MATCH (n:Hidden) RETURN n.s, n.hit", &.{"h|null"});
+    try expectSet(&s, &f, .any, "MATCH (n) WHERE n.hit IS NOT NULL RETURN n.s, n.hit", &.{ "s00|1", "s01|2" });
+
+    if (f.items.items.len != 0) {
+        std.debug.print("\n{d} failed check(s):\n", .{f.items.items.len});
+        for (f.items.items) |msg| std.debug.print("  {s}\n", .{msg});
+        return error.RoutedWriteRlsWrong;
+    }
+}
+
 test "SONNY-2683: a refused RETURN reaches the client as SQLSTATE 0A000" {
     try testing.expectEqualStrings("0A000", geode.proto_util.mapError(error.UnsupportedGroupedReturn).code);
 }
