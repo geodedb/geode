@@ -5374,8 +5374,13 @@ pub fn build(b: *std.Build) void {
     });
     rls_injection_tests.root_module.addImport("geode_auth", auth_mod);
     rls_injection_tests.root_module.addImport("logging", logging_mod);
+    // rls_core.zig is compiled into this test as a file, with its inline
+    // tests; the SONNY-2709 ones set principal attributes directly.
+    rls_injection_tests.root_module.addImport("user_attr_store", user_attr_store_mod);
     const run_rls_injection_tests = b.addRunArtifact(rls_injection_tests);
     shardDep(test_step, &run_rls_injection_tests.step, 1, test_shard_loads, test_shard_index);
+    const rls_injection_step = b.step("test-rls-injection", "Run the GAP-0496 RLS injection-guard tests (src/security/test_rls_injection.zig, with rls_core.zig's inline tests)");
+    rls_injection_step.dependOn(&run_rls_injection_tests.step);
 
     // S1: RLS filter engine unit tests (label-based post-execution row filtering)
     // CANARY: REQ=REQ-SEC-RLS-WIRE-005; FEATURE="RLS Query Enforcement"; ASPECT=UnitTests; STATUS=TESTED; TEST=test-rls-filter; OWNER=security; UPDATED=2026-06-11
