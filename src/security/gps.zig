@@ -565,6 +565,23 @@ pub fn decide(allocator: std.mem.Allocator, req: *const DecisionRequest) !Policy
     });
 }
 
+// CANARY: REQ=REQ-SONNY-2743-WHOLE-PROGRAM-GATE; FEATURE="StatementAuthorization"; ASPECT=WriteGate; STATUS=TESTED; TEST=tests/test_sonny2743_whole_program_gate.zig; OWNER=security; UPDATED=2026-09-25
+/// SONNY-2743: the QUIC and gRPC handlers' write-permission gate: may
+/// `principal` run a program that changes the store
+/// (`query_traits.statementPlan(..).is_mutation`)? `decide(write, database)`
+/// answers; an error answers no. A builtin role with WRITE is allowed by
+/// `decide` itself, so this is what QUIC's inline role check followed by
+/// `decide` answered; both handlers now run this one function.
+pub fn writePermitted(allocator: std.mem.Allocator, principal: *const principal_mod.Principal) bool {
+    const req = DecisionRequest{
+        .principal = principal,
+        .action = .write,
+        .resource = .{ .database = {} },
+    };
+    const decision = decide(allocator, &req) catch return false;
+    return decision.kind == .allow;
+}
+
 fn policyMatchesAction(policy: @import("policy_catalog.zig").Policy, action: Action) bool {
     const pc = @import("policy_catalog.zig");
     for (policy.actions) |a| {

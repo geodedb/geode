@@ -7374,7 +7374,13 @@ fn handleClientMessage(
             const ordered = traits.ordered;
             const distinct = traits.distinct;
             const heur_index = traits.has_where_eq or traits.has_filter_eq;
-            const program_is_mutating = isMutatingProgram(&parse_result.program);
+            const query_graph_name = state.current_graph orelse graph_store.DEFAULT_GRAPH_NAME;
+            // CANARY: REQ=REQ-SONNY-2743-WHOLE-PROGRAM-GATE; FEATURE="StatementAuthorization"; ASPECT=QuicHandler; STATUS=TESTED; TEST=tests/test_sonny2743_whole_program_gate.zig; OWNER=security; UPDATED=2026-09-25
+            // SONNY-2743: the lock, and whether the write gate applies, come
+            // from the whole program (`statementPlan`), never from its last
+            // query alone.
+            const stmt_plan = query_traits.statementPlan(&parse_result.program, &analysis, query_graph_name, .quic);
+            const program_is_mutating = stmt_plan.is_mutation;
 
             // Spec geode-vectorization-and-reranking: per-request hard read-only
             // floor, independent of the principal's role ("authorization must be
@@ -7634,9 +7640,12 @@ fn handleClientMessage(
             // lock itself (geode.tenant.backfill_edge_tags) runs holding none:
             // under this graph's lock it would deadlock on it, or hold two. It
             // is still a mutation for the permission gate below.
-            const self_locking = query_traits.isSelfLockingProgram(&parse_result.program);
-            const needs_store_lock = !self_locking and analysis.kind != .explain and !(analysis.kind == .rows and analysis.is_store_free);
-            const is_mutation = (needs_store_lock or self_locking) and program_is_mutating;
+            // SONNY-2743: `stmt_plan` decides over the whole program. A store-free
+            // last query (`CREATE (:X); RETURN 1 AS c`) no longer drops the
+            // lock, and a mutation anywhere in the program is gated.
+            const self_locking = stmt_plan.self_locking;
+            const needs_store_lock = stmt_plan.needs_store_lock;
+            const is_mutation = stmt_plan.is_mutation;
 
             // CANARY: REQ=REQ-GPS-PDP-010; FEATURE="GPS Phase 2/4 Enforcement"; ASPECT=MutationGateViaDecide; STATUS=TESTED; TEST=geode-test-harness/geodetestlab-cli/specs/gps_phase6_abac_migration.yml; OWNER=security; UPDATED=2026-05-21
             // GAP-0526 was originally enforced by a direct `user_mgmt.hasPermission` call
@@ -7644,30 +7653,17 @@ fn handleClientMessage(
             // `current_user() = '...'` or `true` could not override the role-based deny.
             // Phase 2's `decide()` already implements role + policy evaluation; route the
             // mutation gate through it so policies actually take effect at the wire layer.
-            if (is_mutation) {
-                if (state.authenticated_role) |role_u8| {
-                    const auth_role = @as(user_mgmt.Role, @enumFromInt(role_u8));
-                    if (!user_mgmt.hasPermission(auth_role, .Write)) {
-                        // Builtin role lacks WRITE — consult the policy catalog before denying.
-                        const gps_mod = geode.security.gps;
-                        const req_local = gps_mod.DecisionRequest{
-                            .principal = &principal_for_request,
-                            .action = .write,
-                            .resource = .{ .database = {} },
-                        };
-                        const decision_kind = blk: {
-                            const decision = gps_mod.decide(gpa, &req_local) catch break :blk gps_mod.PolicyDecisionKind.unauthorized;
-                            break :blk decision.kind;
-                        };
-                        if (decision_kind != .allow) {
-                            try sendExecuteError(gpa, stream, "42501", "Permission denied: insufficient privileges for data modification", &.{}, &.{});
-                            return;
-                        }
-                    }
+            // SONNY-2743: the gate is `gps.writePermitted` (`decide(write)`),
+            // the same function gRPC runs. A builtin role with WRITE passes
+            // there as it did in the role check this replaces. A session with
+            // no role (auth disabled) is not gated, as before.
+            if (is_mutation and state.authenticated_role != null) {
+                if (!geode.security.gps.writePermitted(gpa, &principal_for_request)) {
+                    try sendExecuteError(gpa, stream, "42501", "Permission denied: insufficient privileges for data modification", &.{}, &.{});
+                    return;
                 }
             }
 
-            const query_graph_name = state.current_graph orelse graph_store.DEFAULT_GRAPH_NAME;
             quic_response_metrics.recordFirstStreamQueryPrepare(monoNsFromHandler() -| first_stream_prepare_start_ns);
 
             // GAP-0900 lever (c): opt-in concurrent batch-merge fast path.
@@ -8031,9 +8027,11 @@ fn handleClientMessage(
                         }
                         return err;
                     }
-                } else if (analysis.is_point_read and !execution.wouldEvaluateRLS()) {
+                } else if (stmt_plan.point_read and !execution.wouldEvaluateRLS()) {
                     // GAP-0805: hold the shared read lock across the brief
                     // point-read execute window, backed by a zero-copy view.
+                    // SONNY-2743: only when the rest of the program does
+                    // nothing (`stmt_plan.point_read`).
                     // `graph_lock_handle` keeps the lock alive until the
                     // defer block releases it.
                     // NOTE: RLS-evaluating reads bypass this path (wouldEvaluateRLS()

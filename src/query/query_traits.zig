@@ -26,6 +26,8 @@ pub const ProgramAnalysis = struct {
     /// True iff the executable row query cannot touch graph storage. This is
     /// deliberately narrower than "read-only": graph reads still need the
     /// snapshot/read-lock path, while pure scalar projections can run lock-free.
+    /// SONNY-2743: it describes `target` only, not the program; the handlers
+    /// decide through `statementPlan`, which checks the rest of the program.
     is_store_free: bool = false,
     /// GAP-0805 / M1.3: True iff this query is a simple point read —
     /// a single-node MATCH with a single literal label and a single
@@ -34,6 +36,7 @@ pub const ProgramAnalysis = struct {
     /// the zero-copy `PointReadView` path; any other shape MUST use
     /// `QueryReadSession` for isolation. False positives are correctness
     /// bugs, so this flag is deliberately conservative.
+    /// SONNY-2743: `target` only, like `is_store_free`; see `statementPlan`.
     is_point_read: bool = false,
     /// GAP-0892: True iff the program contains any statement OTHER than the
     /// fast-path `target` and bare transaction control (START TRANSACTION /
@@ -367,6 +370,78 @@ pub fn isMutatingCallStatement(call_stmt: *const ast.CallStatement) bool {
         .Procedure => |proc| procedure_access.classifyCallProcedure(proc) == .mutating,
         .Subquery => |sq| isMutatingStatement(sq.statement),
     };
+}
+
+// CANARY: REQ=REQ-SONNY-2743-WHOLE-PROGRAM-GATE; FEATURE="StatementAuthorization"; ASPECT=HandlerDecision; STATUS=TESTED; TEST=tests/test_sonny2743_whole_program_gate.zig; OWNER=security; UPDATED=2026-09-25
+/// SONNY-2743: the transport handler a `statementPlan` is for. Only QUIC runs
+/// a store-free program without a lock (REQ-QUIC-HC-110).
+pub const HandlerTransport = enum { quic, grpc };
+
+/// SONNY-2743: how the QUIC or gRPC handler runs a parsed program. Both
+/// handlers take these four facts from `statementPlan` and from nowhere else,
+/// so a test of `statementPlan` covers their decision.
+pub const StatementPlan = struct {
+    /// Some statement in the program changes the store (`isMutatingProgram`,
+    /// the whole program). The handler applies its write-permission gate
+    /// (`gps.writePermitted`), and takes the write lock when it takes one.
+    is_mutation: bool,
+    /// The handler takes a graph lock before it runs the program: the write
+    /// lock for a mutation, else a read lock or a read snapshot.
+    needs_store_lock: bool,
+    /// SONNY-2733: a lone CALL of a procedure that takes each graph's lock
+    /// itself (`isSelfLockingProgram`); the handler takes none.
+    self_locking: bool,
+    /// The handler may serve the program through the zero-copy point-read view
+    /// (GAP-0805): its target is a simple point read, and the rest of the
+    /// program does nothing (`restOfProgramIsNoop`).
+    point_read: bool,
+};
+
+/// SONNY-2743: decide the `StatementPlan` for `program` (analysed as
+/// `analysis`) in a session whose graph is `session_graph`.
+///
+/// `ProgramAnalysis.kind`, `.target`, `.is_store_free` and `.is_point_read`
+/// describe the program's LAST query only, and they used to decide alone. QUIC
+/// took no lock for a program whose last query was store-free, and since
+/// `is_mutation` was `needs_store_lock and isMutatingProgram(..)`, it skipped
+/// the write-permission gate as well: `CREATE (:X); RETURN 1 AS c` from a
+/// read-only principal wrote, with no lock. Both handlers also skipped the gate
+/// for a program ending in EXPLAIN, and ran any program whose last query was a
+/// point read through the point-read view. Now:
+///   * `is_mutation` is the whole program's, whatever lock is taken;
+///   * the store-free (QUIC) and point-read paths also need the rest of the
+///     program to do nothing but, at most, re-select `session_graph`;
+///   * a program whose last query is EXPLAIN still takes no lock (the handlers
+///     only plan the EXPLAIN and run nothing), but it goes through the gate
+///     if any statement in it changes the store.
+pub fn statementPlan(
+    program: *const ast.Program,
+    analysis: *const ProgramAnalysis,
+    session_graph: []const u8,
+    transport: HandlerTransport,
+) StatementPlan {
+    const self_locking = isSelfLockingProgram(program);
+    const is_mutation = isMutatingProgram(program);
+    const rest_is_noop = restOfProgramIsNoop(analysis, session_graph);
+    const store_free = transport == .quic and analysis.kind == .rows and analysis.is_store_free and rest_is_noop;
+    const needs_store_lock = !self_locking and analysis.kind != .explain and !store_free;
+    return .{
+        .is_mutation = is_mutation,
+        .needs_store_lock = needs_store_lock,
+        .self_locking = self_locking,
+        .point_read = needs_store_lock and !is_mutation and analysis.is_point_read and rest_is_noop,
+    };
+}
+
+/// SONNY-2743: does the program do nothing besides its target query and bare
+/// transaction control, except re-select `session_graph`? That re-selection is
+/// the `USE GRAPH g;` the CLI's `-g` flag and pooled drivers put in front of
+/// every query; it is a no-op for the target (see
+/// `ProgramAnalysis.preamble_graph_selector`).
+pub fn restOfProgramIsNoop(analysis: *const ProgramAnalysis, session_graph: []const u8) bool {
+    if (!analysis.has_effectful_preamble) return true;
+    const selector = analysis.preamble_graph_selector orelse return false;
+    return std.mem.eql(u8, selector, session_graph);
 }
 
 // CANARY: REQ=REQ-SONNY-2733-BACKFILL-LOCKING; FEATURE="PerTenantIsolation"; ASPECT=HandlerLockBypass; STATUS=TESTED; TEST=tests/test_sonny2733_backfill_locking.zig; OWNER=security; UPDATED=2026-09-25

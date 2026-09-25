@@ -2656,10 +2656,17 @@ pub fn handleExecute(request_bytes: []const u8, allocator: std.mem.Allocator, ep
             // lock itself (geode.tenant.backfill_edge_tags) runs holding none:
             // under this graph's lock it would deadlock on it, or hold two. It
             // is still a mutation for the permission gate below.
-            const self_locking = query_traits.isSelfLockingProgram(&parse_result.program);
-            const needs_store_lock = !self_locking and analysis.kind != .explain;
-            const program_is_mutating = query_traits.isMutatingProgram(&parse_result.program);
-            const is_mutation = (needs_store_lock or self_locking) and program_is_mutating;
+            // CANARY: REQ=REQ-SONNY-2743-WHOLE-PROGRAM-GATE; FEATURE="StatementAuthorization"; ASPECT=GrpcHandler; STATUS=TESTED; TEST=tests/test_sonny2743_whole_program_gate.zig; OWNER=security; UPDATED=2026-09-25
+            // SONNY-2743: the lock, and whether the write gate applies, come
+            // from the whole program (`statementPlan`, shared with QUIC). A
+            // program ending in EXPLAIN used to skip the gate whatever else it
+            // held.
+            const query_graph_name = state.current_graph orelse graph_store.DEFAULT_GRAPH_NAME;
+            const stmt_plan = query_traits.statementPlan(&parse_result.program, &analysis, query_graph_name, .grpc);
+            const self_locking = stmt_plan.self_locking;
+            const needs_store_lock = stmt_plan.needs_store_lock;
+            const program_is_mutating = stmt_plan.is_mutation;
+            const is_mutation = stmt_plan.is_mutation;
 
             // Spec geode-vectorization-and-reranking: per-request hard read-only
             // floor, independent of the principal's role ("authorization must be
@@ -2679,22 +2686,15 @@ pub fn handleExecute(request_bytes: []const u8, allocator: std.mem.Allocator, ep
             // CANARY: REQ=REQ-GPS-PDP-005; FEATURE="GPS Decision Engine"; ASPECT=GrpcEnforcement; STATUS=TESTED; TEST=tests/test_gps_decide.zig; OWNER=security; UPDATED=2026-05-20
             // Phase 2: delegated to gps.decide() so the PDP is uniform across all transports.
             // principal_for_request is derived above (line ~1964) and is in scope here.
+            // SONNY-2743: `gps.writePermitted`, the same gate QUIC runs.
             if (is_mutation) {
-                const gps = geode.security.gps;
-                const gps_req = gps.DecisionRequest{
-                    .principal = &principal_for_request,
-                    .action = .write,
-                    .resource = .{ .database = {} },
-                };
-                const decision = try gps.decide(std.heap.smp_allocator, &gps_req);
-                if (decision.kind != .allow) {
+                if (!geode.security.gps.writePermitted(std.heap.smp_allocator, &principal_for_request)) {
                     var resp = try buildErrorResponse(allocator, "42501", "Permission denied: insufficient privileges for data modification", &.{}, &.{});
                     defer resp.deinit(allocator);
                     return encodeMessage(allocator, resp);
                 }
             }
 
-            const query_graph_name = state.current_graph orelse graph_store.DEFAULT_GRAPH_NAME;
             var graph_lock_handle: ?graph_store.GraphLockHandle = null;
             // GAP-0753: Read path takes the shared graph lock only long
             // enough to capture a QueryReadSession snapshot; downstream
@@ -2715,7 +2715,7 @@ pub fn handleExecute(request_bytes: []const u8, allocator: std.mem.Allocator, ep
                     // Mutations: exclusive writer lock held across execute to
                     // prevent HashMap rehash races (GAP-0001, CWE-362/CWE-416).
                     graph_lock_handle = graph_store.acquireGraphWriteLock(query_graph_name);
-                } else if (analysis.is_point_read and !execution.wouldEvaluateRLS()) {
+                } else if (stmt_plan.point_read and !execution.wouldEvaluateRLS()) {
                     // GAP-0805: zero-copy point-read view scoped by the
                     // shared read lock (handle kept alive until defer).
                     // NOTE: RLS-evaluating reads bypass this path (wouldEvaluateRLS()

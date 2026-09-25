@@ -80,6 +80,17 @@
   post-filter's label-deny snapshot, and the traversal's, now hold their own
   copy of each denied label. If a deny policy was removed while a query's
   post-filter ran, the post-filter could read freed memory.
+- **A read-only principal can no longer write through a multi-statement
+  request (SONNY-2743):** the QUIC handler decided the lock and the
+  write-permission check from a request's last query alone. If that query
+  touched no data (`RETURN 1 AS c`), it took no lock and skipped the check,
+  so `CREATE (:X); RETURN 1 AS c` from a read-only principal wrote, with no
+  lock held; so did SET, DELETE, MERGE, REMOVE and DDL. Both QUIC and gRPC
+  now decide over the whole request. The lock-free path for queries that
+  touch no data, and the point-read path, are taken only when nothing else
+  in the request does anything; a `USE GRAPH` of the current graph, as the
+  CLI's `-g` flag prepends, still qualifies. A request ending in EXPLAIN is
+  also checked if it changes data.
 - **`geode.tenant.backfill_edge_tags` locks one graph at a time (SONNY-2733):**
   the procedure ran under the statement's lock on the session graph and
   re-tagged edges in every graph, while readers and writers of the other

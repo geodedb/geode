@@ -758,9 +758,11 @@ test "query cache misses singleflight by key without serializing unrelated misse
     try testing.expect(std.mem.indexOf(u8, plan_hit, "std.Thread.spawn") != null);
 
     try testing.expect(std.mem.indexOf(u8, handler, "REQ=REQ-QUIC-HC-166") != null);
-    try testing.expect(std.mem.indexOf(u8, handler, "const program_is_mutating = isMutatingProgram(&parse_result.program);") != null);
+    // SONNY-2743: both come from `statementPlan` (the whole program's
+    // `isMutatingProgram`), whatever lock the program takes.
+    try testing.expect(std.mem.indexOf(u8, handler, "const program_is_mutating = stmt_plan.is_mutation;") != null);
     try testing.expect(std.mem.indexOf(u8, handler, "if (!program_is_mutating) {") != null);
-    try testing.expect(std.mem.indexOf(u8, handler, "const is_mutation = needs_store_lock and program_is_mutating;") != null);
+    try testing.expect(std.mem.indexOf(u8, handler, "const is_mutation = stmt_plan.is_mutation;") != null);
 }
 
 test "cooperative first stream clears running before consuming reschedule flags" {
@@ -1048,7 +1050,10 @@ test "store-free scalar reads bypass graph snapshot locks" {
     try testing.expect(std.mem.indexOf(u8, traits, "MATCH (n:Person) RETURN 1 AS c") != null);
 
     try testing.expect(std.mem.indexOf(u8, handler, "REQ=REQ-QUIC-HC-110") != null);
-    try testing.expect(std.mem.indexOf(u8, handler, "analysis.kind == .rows and analysis.is_store_free") != null);
+    // SONNY-2743: the decision moved to `query_traits.statementPlan`, which
+    // bypasses the lock only when the rest of the program does nothing.
+    try testing.expect(std.mem.indexOf(u8, handler, "query_traits.statementPlan(&parse_result.program, &analysis, query_graph_name, .quic)") != null);
+    try testing.expect(std.mem.indexOf(u8, traits, "analysis.kind == .rows and analysis.is_store_free and rest_is_noop") != null);
     try testing.expect(std.mem.indexOf(u8, handler, "snapshotUnderReadLock(gpa, query_graph_name)") != null);
 }
 
