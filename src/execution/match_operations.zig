@@ -488,6 +488,16 @@ const CountFastPathPlan = struct {
     column_name: []const u8,
 };
 
+// CANARY: REQ=REQ-SONNY-2683-FAST-PATH-WRITES; FEATURE="ReadFastPaths"; ASPECT=DeclineWrites; STATUS=TESTED; TEST=tests/test_sonny2683_return_shapes.zig; OWNER=engine; UPDATED=2026-09-25
+/// SONNY-2683: a read fast path declines a query that sets or removes
+/// properties on the rows it matches. The fast paths answer by reading and
+/// apply no write. They declined a SET but not a REMOVE, so the streaming
+/// GROUP BY / DISTINCT path answered `MATCH (n:G) REMOVE n.t RETURN DISTINCT
+/// n.g`, and a grouped RETURN after a REMOVE, without removing anything.
+fn readFastPathDeclinesWrite(q: ast.Query) bool {
+    return q.set_clauses.len != 0 or q.remove_clauses.len != 0;
+}
+
 fn analyzeCountFastPath(q: ast.Query) ?CountFastPathPlan {
     // Shape: single chain, single simple node pattern, no relationship.
     if (q.match.chains.len != 1) return null;
@@ -515,7 +525,7 @@ fn analyzeCountFastPath(q: ast.Query) ?CountFastPathPlan {
     if (q.group_by != null) return null;
     if (q.having != null) return null;
     if (q.order_by != null) return null;
-    if (q.set_clauses.len != 0) return null;
+    if (readFastPathDeclinesWrite(q)) return null;
     // LIMIT 0 would require an empty result (not a single-row count); any
     // other LIMIT value yields the same single-row count regardless, so we
     // accept it. LIMIT literal == 0 bails to the regular path.
@@ -752,7 +762,7 @@ fn analyzeEdgeCountFastPath(q: ast.Query) ?EdgeCountFastPathPlan {
     if (q.group_by != null) return null;
     if (q.having != null) return null;
     if (q.order_by != null) return null;
-    if (q.set_clauses.len != 0) return null;
+    if (readFastPathDeclinesWrite(q)) return null;
     if (q.limit) |lim| {
         if (lim == 0) return null;
     }
@@ -1299,7 +1309,7 @@ pub fn propertyAggregateFastPath(
     if (q.group_by != null) return null;
     if (q.having != null) return null;
     if (q.order_by != null) return null;
-    if (q.set_clauses.len != 0) return null;
+    if (readFastPathDeclinesWrite(q)) return null;
     if (q.limit) |lim| {
         if (lim == 0) return null;
     }
@@ -1821,7 +1831,7 @@ pub fn countFilteredFastPath(
     if (q.group_by != null) return null;
     if (q.having != null) return null;
     if (q.order_by != null) return null;
-    if (q.set_clauses.len != 0) return null;
+    if (readFastPathDeclinesWrite(q)) return null;
     if (q.limit) |lim| {
         if (lim == 0) return null;
     }
@@ -2075,7 +2085,7 @@ pub fn indexServedGroupByFastPath(
     if (q.with_clause != null) return null;
     if (q.having != null) return null;
     if (q.order_by != null) return null;
-    if (q.set_clauses.len != 0) return null;
+    if (readFastPathDeclinesWrite(q)) return null;
     if (q.limit) |lim| if (lim == 0) return null;
 
     // ---- Classify RETURN items: single group key + count-only aggregates ----
@@ -2352,7 +2362,7 @@ pub fn groupByAggregateFastPath(
     if (q.with_clause != null) return null;
     if (q.having != null) return null;
     if (q.order_by != null) return null;
-    if (q.set_clauses.len != 0) return null;
+    if (readFastPathDeclinesWrite(q)) return null;
     if (q.limit) |lim| if (lim == 0) return null;
 
     // Must be GROUP BY or RETURN DISTINCT (at least one)
@@ -2969,7 +2979,7 @@ pub fn topKOrderedFastPath(
     if (q.with_clause != null) return null;
     if (q.group_by != null) return null;
     if (q.having != null) return null;
-    if (q.set_clauses.len != 0) return null;
+    if (readFastPathDeclinesWrite(q)) return null;
 
     // --- LIMIT must be a positive literal, bounded ---
     const k_raw = q.limit orelse return null;
@@ -3217,7 +3227,7 @@ pub fn orderedScanFastPath(
     if (q.with_clause != null) return null;
     if (q.group_by != null) return null;
     if (q.having != null) return null;
-    if (q.set_clauses.len != 0) return null;
+    if (readFastPathDeclinesWrite(q)) return null;
 
     // --- LIMIT must be a positive literal, bounded ---
     const k_raw = q.limit orelse return null;
@@ -3872,6 +3882,8 @@ pub fn executeMatchCreateQuery(allocator: std.mem.Allocator, q: ast.Query, param
 // Execute MATCH + CALL pattern with node binding
 // CANARY: REQ=REQ-MULTI-GRAPH-010; FEATURE="MultiGraphIsolation"; ASPECT=MatchCallFiltering; STATUS=TESTED; TEST=geodetestlab/specs/multi_graph.yml; OWNER=engine; UPDATED=2025-12-22
 pub fn executeMatchCallQuery(allocator: std.mem.Allocator, q: ast.Query, context: ExecutionContext) !ExecutionResult {
+    // SONNY-2683: this executor neither groups nor filters the RETURN.
+    try validateGroupedReturnShape(q);
     // Per-function reusable RLS row buffer. Shared across every
     // passesRLSFilter call site in this function; nodePropertiesToRLSRowInto
     // (Tasks 1-2 of the H5a fix) clears + refills the buffer per call so
@@ -8567,26 +8579,52 @@ fn executeMultiHopGroupBy(
     return result;
 }
 
-/// SONNY-2674: whether a plain read's RETURN goes through the shared projection
-/// (`executeWithClauseWithGroupByAndParams`), the one the planned read and
-/// every WITH stage use: a RETURN-level GROUP BY (a GROUP BY after a WITH
-/// belongs to the WITH, which already uses it), or a WHERE after RETURN (the
-/// parser's HAVING without a GROUP BY). The legacy executor's own grouping,
-/// one copy per pattern shape, ignored a WHERE after RETURN, did not group
-/// without an aggregate, and replaced HAVING with "the group has at least two
-/// rows" or evaluated it over the output row alone.
-fn returnUsesSharedProjection(q: ast.Query) bool {
+/// Whether the RETURN groups or filters: a RETURN-level GROUP BY (a GROUP BY
+/// after a WITH belongs to the WITH, which groups in the shared projection
+/// already), or a WHERE after RETURN (the parser's HAVING without a GROUP BY).
+fn returnGroupsOrFilters(q: ast.Query) bool {
     const return_group_by = q.group_by != null and q.with_clause == null;
     const return_where = q.having != null and q.group_by == null;
-    if (!return_group_by and !return_where) return false;
-    if (q.ret.items.len == 0) return false;
-    // Only a plain read: nothing else produces or rewrites the rows.
-    if (q.set_clauses.len != 0 or q.remove_clauses.len != 0 or q.delete_items.len != 0) return false;
+    return return_group_by or return_where;
+}
+
+/// SONNY-2674: whether the RETURN goes through the shared projection
+/// (`executeWithClauseWithGroupByAndParams`), the one the planned read and
+/// every WITH stage use: when it groups or filters. The legacy executor's own
+/// grouping, one copy per pattern shape, ignored a WHERE after RETURN, did
+/// not group without an aggregate, and replaced HAVING with "the group has at
+/// least two rows" or evaluated it over the output row alone.
+fn returnUsesSharedProjection(q: ast.Query) bool {
+    return returnGroupsOrFilters(q) and q.ret.items.len != 0 and sharedProjectionServes(q);
+}
+
+// CANARY: REQ=REQ-SONNY-2683-RETURN-SHAPES; FEATURE="LegacyReturnProjection"; ASPECT=ExcludedShapes; STATUS=TESTED; TEST=tests/test_sonny2683_return_shapes.zig; OWNER=engine; UPDATED=2026-09-25
+/// Whether the shared projection can serve a query's RETURN: the RETURN is
+/// computed from the rows the pattern binds. That holds for a read, with or
+/// without a CTE (its results are already parameters when the read runs),
+/// and for a SET or REMOVE (SONNY-2683): reading the bindings applies it to
+/// every matched row, and the RETURN is computed after. The grouping code
+/// these shapes fell to kept the "at least two rows" HAVING stand-in, and a
+/// grouped RETURN after a SET or REMOVE never applied the write.
+///
+/// Not served: a DELETE, CREATE or MERGE (the rows the RETURN sees are not
+/// the bindings), a procedure CALL (its own executor), and the chained
+/// shapes (UNWIND, CALL { }, NEXT, FOR), which the parser does not let
+/// group or filter.
+fn sharedProjectionServes(q: ast.Query) bool {
+    if (q.delete_items.len != 0) return false;
     if (q.create_pattern != null or q.merge_statement != null) return false;
     if (q.call_clause != null or q.unwind_clause != null or q.initial_call_subquery != null) return false;
     if (q.next_query != null or q.for_statement != null) return false;
-    if (q.cte_list != null or q.has_recursive_cte) return false;
     return true;
+}
+
+/// SONNY-2683: refuse a RETURN that groups or filters where the shared
+/// projection cannot serve it, before any write. The executors of those
+/// shapes ignored the GROUP BY, HAVING or WHERE after RETURN, or returned
+/// rows unrelated to the matched ones.
+pub fn validateGroupedReturnShape(q: ast.Query) error{UnsupportedGroupedReturn}!void {
+    if (returnGroupsOrFilters(q) and !sharedProjectionServes(q)) return error.UnsupportedGroupedReturn;
 }
 
 fn appendNameOnce(allocator: std.mem.Allocator, names: *std.ArrayList([]const u8), name: []const u8) !void {
@@ -8672,6 +8710,9 @@ fn executeReturnOverBindings(
 // Execute MATCH query with graph isolation - only matches nodes in the specified graph
 // CANARY: REQ=REQ-REFACTOR-MATCH-007; FEATURE="MatchOperationsRefactor"; ASPECT=RefactoredFunction; STATUS=TESTED; TEST=geodetestlab/specs/grpc_rapid_sequential_writes_479.yml; OWNER=engine; UPDATED=2026-06-11
 pub fn executeMatchQueryImpl(allocator: std.mem.Allocator, q: ast.Query, param_names: []const []const u8, param_values: []const Value, inline_let_bindings: []ast.LetBinding, current_graph: ?[]const u8) !ExecutionResult {
+    // SONNY-2683: a CREATE or MERGE after the MATCH reads its bindings here
+    // first; refuse its grouped or filtered RETURN before anything is written.
+    try validateGroupedReturnShape(q);
     // SONNY-2674: a RETURN-level GROUP BY, and a WHERE after RETURN, go through
     // the shared projection, before any of the shape-specific grouping below.
     if (returnUsesSharedProjection(q)) {

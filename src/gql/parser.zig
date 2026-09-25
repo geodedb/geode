@@ -5867,6 +5867,15 @@ pub const Parser = struct {
         var return_items = std.ArrayList(ast.ReturnItem).empty;
         try self.parseProjectionItems(&return_items);
 
+        // CANARY: REQ=REQ-SONNY-2683-RETURN-SHAPES; FEATURE="ForStatement"; ASPECT=NoGroupedReturn; STATUS=TESTED; TEST=tests/test_sonny2683_return_shapes.zig; OWNER=parser; UPDATED=2026-09-25
+        // SONNY-2683: a FOR's RETURN neither groups nor filters. A GROUP BY,
+        // HAVING or WHERE here was left for an enclosing query to parse, so
+        // `MATCH (n) WITH n FOR x IN [1, 2] RETURN x, count(*) AS c GROUP BY x`
+        // grouped that query's WITH by `x` and returned unrelated rows.
+        if (self.cur.kind == .GROUP or self.cur.kind == .HAVING or self.cur.kind == .WHERE) {
+            return self.unexpected("GROUP BY, HAVING and WHERE are not supported after a FOR's RETURN");
+        }
+
         const return_clause = ast.ReturnClause{
             .items = try return_items.toOwnedSlice(self.arena.allocator()),
             .distinct = distinct,

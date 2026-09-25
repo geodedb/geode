@@ -1628,6 +1628,10 @@ pub fn executeQueryWithContext(allocator: std.mem.Allocator, q: ast.Query, conte
         // GAP-0926: reject nested aggregates (sum(avg(...))) — always invalid,
         // previously silently NULL.
         try execution.validateNoNestedAggregate(q.ret);
+        // SONNY-2683: refuse a RETURN that groups or filters after a CREATE,
+        // MERGE, DELETE or procedure CALL, before a read fast path answers it
+        // and before anything is written.
+        try match_operations.validateGroupedReturnShape(q);
     }
 
     // COUNT_PUSHDOWN: short-circuit unlabeled `MATCH (n) RETURN count(n)` /
