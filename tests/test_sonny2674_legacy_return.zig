@@ -31,8 +31,10 @@ const graph_store = geode.graph_store;
 const planned_read_runtime = geode.planned_read_runtime;
 const Value = geode.value_types.Value;
 
-/// How the session reaches the legacy executor.
-const Mode = enum { in_memory, rls_policy, tenant_scoped };
+/// How the session reaches the legacy executor. `persisted` (no policy, no
+/// tenant) reaches it only through a caller of the executor itself, as
+/// executeQueryWithBindingsImpl and VALUES ... MATCH are.
+const Mode = enum { in_memory, rls_policy, tenant_scoped, persisted };
 
 const Session = struct {
     mode: Mode,
@@ -258,4 +260,67 @@ test "SONNY-2674: an RLS-policy session's RETURN groups, applies HAVING and a WH
 
 test "SONNY-2674: a tenant-scoped session's RETURN groups, applies HAVING and a WHERE after RETURN" {
     try checkMode(.tenant_scoped);
+}
+
+/// Run `query` on the legacy executor directly, as
+/// executeQueryWithBindingsImpl and VALUES ... MATCH do: no planned read and
+/// none of the query executor's fast paths.
+fn runLegacyDirect(s: *Session, query: []const u8) !execution.ExecutionResult {
+    const aa = s.arena.allocator();
+    var parsed = try geode.parseGql(query, aa);
+    defer parsed.deinit();
+    return execution.executeMatchQueryImpl(aa, parsed.program.statements[0].Query, &.{}, &.{}, &.{}, null);
+}
+
+fn expectRows(s: *Session, result: execution.ExecutionResult, want: []const []const u8) !void {
+    const aa = s.arena.allocator();
+    const got = try aa.alloc([]const u8, result.rows.len);
+    for (result.rows, got) |row, *g| g.* = try renderRow(aa, row);
+    std.mem.sort([]const u8, got, {}, lessThan);
+    const exp = try aa.dupe([]const u8, want);
+    std.mem.sort([]const u8, exp, {}, lessThan);
+    try testing.expectEqual(exp.len, got.len);
+    for (exp, got) |w, g| try testing.expectEqualStrings(w, g);
+}
+
+// M5 (the SONNY-2674 review): the check that sends a grouped RETURN to the
+// shared projection runs first in executeMatchQueryImpl, ahead of the two
+// GROUP BY fast paths the executor used to try, so the callers that reach it
+// directly lost them. They now run first inside that branch.
+test "SONNY-2674: a grouped RETURN given to the legacy executor directly still takes its GROUP BY fast paths" {
+    harness.silenceEngineLogs();
+    var s = try Session.init(.persisted);
+    defer s.deinit();
+    try s.seed();
+    const aa = s.arena.allocator();
+
+    // Counts of the indexed key: served from the index postings.
+    execution.resetIndexServedAggregateTotal();
+    execution.resetReturnOverBindingsTotal();
+    {
+        var r = try runLegacyDirect(&s, "MATCH (n:G) RETURN n.g AS k, count(*) AS c GROUP BY n.g");
+        defer r.deinit(aa);
+        try expectRows(&s, r, &.{ "a|10", "b|10", "c|5" });
+    }
+    try testing.expectEqual(@as(u64, 1), execution.getIndexServedAggregateTotal());
+    try testing.expectEqual(@as(u64, 0), execution.getReturnOverBindingsTotal());
+
+    // A sum, which the index path declines: the streaming GROUP BY scan.
+    execution.resetIndexServedAggregateTotal();
+    {
+        var r = try runLegacyDirect(&s, "MATCH (n:G) RETURN n.g AS k, sum(n.i) AS t GROUP BY n.g");
+        defer r.deinit(aa);
+        try expectRows(&s, r, &.{ "a|45", "b|145", "c|110" });
+    }
+    try testing.expectEqual(@as(u64, 0), execution.getIndexServedAggregateTotal());
+    try testing.expectEqual(@as(u64, 0), execution.getReturnOverBindingsTotal());
+
+    // A HAVING, which both decline: the shared projection.
+    {
+        var r = try runLegacyDirect(&s, "MATCH (n:G) RETURN n.g AS k, sum(n.i) AS t GROUP BY n.g HAVING t > 100");
+        defer r.deinit(aa);
+        try expectRows(&s, r, &.{ "b|145", "c|110" });
+    }
+    try testing.expectEqual(@as(u64, 0), execution.getIndexServedAggregateTotal());
+    try testing.expectEqual(@as(u64, 1), execution.getReturnOverBindingsTotal());
 }

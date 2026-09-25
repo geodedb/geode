@@ -89,6 +89,17 @@ pub fn resetLegacyWriteScanTotal() void {
     g_legacy_write_scan_total.store(0, .monotonic);
 }
 
+// SONNY-2674: routing counter for a legacy RETURN that groups or filters
+// through the shared projection (`executeReturnOverBindings`) rather than a
+// GROUP BY fast path. Tests assert it alongside the fast paths' own signals.
+var g_return_over_bindings_total: std.atomic.Value(u64) = std.atomic.Value(u64).init(0);
+pub fn getReturnOverBindingsTotal() u64 {
+    return g_return_over_bindings_total.load(.monotonic);
+}
+pub fn resetReturnOverBindingsTotal() void {
+    g_return_over_bindings_total.store(0, .monotonic);
+}
+
 const match_log = std.log.scoped(.match_ops);
 // GAP (write-path OOM, 2026-07-04): working-set budget for write-carrying
 // legacy scans. `write_budget.check()` is a no-op unless the dispatcher
@@ -8652,6 +8663,7 @@ fn executeReturnOverBindings(
     current_graph: ?[]const u8,
 ) anyerror!ExecutionResult {
     // (An explicit error set: this and executeMatchQueryImpl call each other.)
+    _ = g_return_over_bindings_total.fetchAdd(1, .monotonic);
     var names: std.ArrayList([]const u8) = .empty;
     defer names.deinit(allocator);
     if (q.with_clause) |with_clause| {
@@ -8716,6 +8728,21 @@ pub fn executeMatchQueryImpl(allocator: std.mem.Allocator, q: ast.Query, param_n
     // SONNY-2674: a RETURN-level GROUP BY, and a WHERE after RETURN, go through
     // the shared projection, before any of the shape-specific grouping below.
     if (returnUsesSharedProjection(q)) {
+        // First the two GROUP BY fast paths the code below would try. They
+        // serve a grouped RETURN over one label with the shared projection's
+        // results, and decline a HAVING, a WITH, a WHERE after RETURN (the
+        // parser's HAVING), a SET and a REMOVE. The query executor tries them
+        // before its planned read; the callers that reach this executor
+        // directly (executeQueryWithBindingsImpl, VALUES ... MATCH) have only
+        // these.
+        const filter_graph = current_graph orelse "default";
+        const filter_tenant = try getSessionTenantFilter();
+        if (try indexServedGroupByFastPath(allocator, q, filter_graph, filter_tenant)) |fast_result| {
+            return fast_result;
+        }
+        if (try groupByAggregateFastPath(allocator, q, filter_graph, filter_tenant)) |fast_result| {
+            return fast_result;
+        }
         return executeReturnOverBindings(allocator, q, param_names, param_values, inline_let_bindings, current_graph);
     }
 

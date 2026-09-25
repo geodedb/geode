@@ -235,6 +235,10 @@ pub const getPointWriteFastPathTotal = match_operations.getPointWriteFastPathTot
 pub const resetPointWriteFastPathTotal = match_operations.resetPointWriteFastPathTotal;
 pub const getLegacyWriteScanTotal = match_operations.getLegacyWriteScanTotal;
 pub const resetLegacyWriteScanTotal = match_operations.resetLegacyWriteScanTotal;
+// SONNY-2674: a legacy grouped or filtered RETURN served by the shared
+// projection rather than a GROUP BY fast path (routing-table test signal).
+pub const getReturnOverBindingsTotal = match_operations.getReturnOverBindingsTotal;
+pub const resetReturnOverBindingsTotal = match_operations.resetReturnOverBindingsTotal;
 // GAP-ENT-0043 T1: index-served GROUP BY/DISTINCT/count-by-value fast path
 // (routing-table test signals: index-served == 1 AND rows-materialized == 0).
 pub const indexServedGroupByFastPath = match_operations.indexServedGroupByFastPath;
