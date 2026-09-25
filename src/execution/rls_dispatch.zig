@@ -137,14 +137,22 @@ fn argStr(call_stmt: ast.CallProcedure, idx: usize) []const u8 {
     return args[idx].String;
 }
 
+/// SONNY-2746: frees what it allocated when a later allocation fails, and
+/// the result owns its status string (`owns_value_memory`, as the meta, auth
+/// and tenant dispatchers' results do), so `deinit` frees it too.
 fn singleStatusRow(allocator: std.mem.Allocator, status: []const u8) !ExecutionResult {
     const columns = try allocator.alloc([]const u8, 1);
+    errdefer allocator.free(columns);
     columns[0] = try allocator.dupe(u8, "status");
+    errdefer allocator.free(columns[0]);
     const row = try allocator.alloc(Value, 1);
-    row[0] = Value{ .Str = try allocator.dupe(u8, status) };
+    errdefer allocator.free(row);
+    const status_copy = try allocator.dupe(u8, status);
+    errdefer allocator.free(status_copy);
+    row[0] = Value{ .Str = status_copy };
     const rows = try allocator.alloc([]Value, 1);
     rows[0] = row;
-    return .{ .columns = columns, .rows = rows, .flags = std.ArrayList([]const u8).empty };
+    return .{ .columns = columns, .rows = rows, .flags = std.ArrayList([]const u8).empty, .owns_value_memory = true };
 }
 
 /// CALL geode.rls.add_deny_policy(graph, label, username)
@@ -363,46 +371,20 @@ fn handleAddAttributePolicy(
         return try singleStatusRow(allocator, "error: RLS expression engine not initialized");
     };
     const engine: *RLSEngine = @ptrCast(@alignCast(engine_ptr));
-    const eng_alloc = engine.allocator;
 
-    // Build the policy expression: row.<prop> = principal.attribute.<key>.
-    // Strings persisted with the engine's allocator so the compiled policy
-    // outlives this request.
-    const raw_expr = try std.fmt.allocPrint(
-        eng_alloc,
-        "row.{s} = principal.attribute.{s}",
-        .{ row_property, attribute_key },
+    // SONNY-2746: build the reply first. Installing the policy is then the
+    // last step that can fail, so a call that fails (OutOfMemory anywhere,
+    // or an expression the engine refuses) changes nothing and leaks nothing.
+    const msg = try std.fmt.allocPrint(
+        allocator,
+        "attribute policy added: graph={s} label={s} row.{s}=principal.attribute.{s}",
+        .{ graph, label, row_property, attribute_key },
     );
+    defer allocator.free(msg);
+    var reply = try singleStatusRow(allocator, msg);
+    errdefer reply.deinit(allocator);
 
-    const policy_id = attributePolicyId(graph, label, row_property, attribute_key);
-
-    const now: i64 = 0; // metadata only; not load-bearing for enforcement
-    const policy = RLSEngine.Policy{
-        .id = policy_id,
-        .name = try eng_alloc.dupe(u8, "abac_attribute_policy"),
-        .description = try eng_alloc.dupe(u8, "ABAC: row property must equal principal attribute"),
-        .graph = try eng_alloc.dupe(u8, graph),
-        .table = try eng_alloc.dupe(u8, label),
-        .operation = .select,
-        .permissive = false, // restrictive: row must satisfy the expression
-        .roles = &[_]u64{},
-        .using_expr = RLSEngine.Expression{
-            .raw = raw_expr,
-            .parsed = null,
-            .compiled = null, // createPolicy compiles it
-            .parameters = &[_]RLSEngine.Expression.Parameter{},
-        },
-        .check_expr = null,
-        .enabled = true,
-        .created_at = now,
-        .updated_at = now,
-        .created_by = 0,
-        .temporal = null,
-        .data_classification = null,
-        .audit_level = .denials,
-    };
-
-    try engine.createPolicy(policy);
+    try installAttributePolicy(engine, graph, label, row_property, attribute_key);
 
     log.info("RLS attribute policy added", &.{
         Attr.string("graph", graph),
@@ -429,13 +411,66 @@ fn handleAddAttributePolicy(
         });
     }
 
-    const msg = try std.fmt.allocPrint(
-        allocator,
-        "attribute policy added: graph={s} label={s} row.{s}=principal.attribute.{s}",
-        .{ graph, label, row_property, attribute_key },
+    return reply;
+}
+
+// CANARY: REQ=REQ-SONNY-2746-RLS-ATTRIBUTE-POLICY-OOM; FEATURE="RLS deny-policy procedure"; ASPECT=AttributePolicyOomCleanup; STATUS=TESTED; TEST=tests/test_sonny2746_rls_attribute_policy_oom.zig; OWNER=security; UPDATED=2026-09-25
+/// SONNY-2746: copy the attribute policy into the expression engine's
+/// allocator and install it. Once `createPolicy` accepts the policy its
+/// strings are the engine's, for as long as the server runs; until then they
+/// are this function's, and an error (OutOfMemory at any copy or inside
+/// `createPolicy`) frees every one of them. They used to leak. On failure the
+/// engine keeps no pointer to them either (`RLSEngine.installPolicy`).
+fn installAttributePolicy(
+    engine: *RLSEngine,
+    graph: []const u8,
+    label: []const u8,
+    row_property: []const u8,
+    attribute_key: []const u8,
+) !void {
+    const eng_alloc = engine.allocator;
+
+    // The policy expression: row.<prop> = principal.attribute.<key>.
+    const raw_expr = try std.fmt.allocPrint(
+        eng_alloc,
+        "row.{s} = principal.attribute.{s}",
+        .{ row_property, attribute_key },
     );
-    defer allocator.free(msg);
-    return try singleStatusRow(allocator, msg);
+    errdefer eng_alloc.free(raw_expr);
+    const name = try eng_alloc.dupe(u8, "abac_attribute_policy");
+    errdefer eng_alloc.free(name);
+    const description = try eng_alloc.dupe(u8, "ABAC: row property must equal principal attribute");
+    errdefer eng_alloc.free(description);
+    const policy_graph = try eng_alloc.dupe(u8, graph);
+    errdefer eng_alloc.free(policy_graph);
+    const policy_table = try eng_alloc.dupe(u8, label);
+    errdefer eng_alloc.free(policy_table);
+
+    const now: i64 = 0; // metadata only; not load-bearing for enforcement
+    try engine.createPolicy(.{
+        .id = attributePolicyId(graph, label, row_property, attribute_key),
+        .name = name,
+        .description = description,
+        .graph = policy_graph,
+        .table = policy_table,
+        .operation = .select,
+        .permissive = false, // restrictive: row must satisfy the expression
+        .roles = &[_]u64{},
+        .using_expr = RLSEngine.Expression{
+            .raw = raw_expr,
+            .parsed = null,
+            .compiled = null, // createPolicy compiles it
+            .parameters = &[_]RLSEngine.Expression.Parameter{},
+        },
+        .check_expr = null,
+        .enabled = true,
+        .created_at = now,
+        .updated_at = now,
+        .created_by = 0,
+        .temporal = null,
+        .data_classification = null,
+        .audit_level = .denials,
+    });
 }
 
 /// CALL geode.rls.remove_attribute_policy(graph, label, row_property, attribute_key)

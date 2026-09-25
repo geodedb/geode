@@ -8701,6 +8701,18 @@ pub fn build(b: *std.Build) void {
     const sonny2709_step = b.step("test-sonny2709-rls-range-fail-closed", "Run SONNY-2709 regression (RLS range policies deny a missing or mistyped value on nodes and edges, stay denied under NOT, and compare a principal attribute only when it parses strictly as the column's number)");
     sonny2709_step.dependOn(&run_sonny2709_tests.step);
 
+    // SONNY-2746: a failing-allocator sweep over every allocation of
+    // `CALL geode.rls.add_attribute_policy`, in the request and the engine.
+    const sonny2746_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny2746_rls_attribute_policy_oom.zig"), .target = target, .optimize = optimize });
+    sonny2746_test_mod.addImport("geode", root_mod);
+    sonny2746_test_mod.addImport("rls", rls_mod);
+    sonny2746_test_mod.addImport("rls_types", rls_types_mod);
+    const sonny2746_tests = b.addTest(.{ .root_module = sonny2746_test_mod });
+    const run_sonny2746_tests = b.addRunArtifact(sonny2746_tests);
+    shardDep(test_step, &run_sonny2746_tests.step, 1, test_shard_loads, test_shard_index);
+    const sonny2746_step = b.step("test-sonny2746-rls-attribute-policy-oom", "Run SONNY-2746 regression (add_attribute_policy frees every allocation, in the request and the engine, when any one fails; a failed call leaves the engine unchanged)");
+    sonny2746_step.dependOn(&run_sonny2746_tests.step);
+
     // SONNY-2656: the node-scan fast path leaked the clone of every typed
     // extended value (Text, Json, Bytea, Char, Varchar, Url, ...) it projected
     // (page teardown freed only strings, lists and maps) or filtered on (IS

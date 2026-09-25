@@ -517,6 +517,11 @@ pub const RLSEngine = struct {
         if (!result.found_existing) {
             result.value_ptr.* = std.ArrayList(Policy).empty;
         }
+        // SONNY-2746: a new entry's key borrows `policy.graph` and
+        // `policy.table`, which stay the caller's until this returns and
+        // which the caller frees when it fails. Drop the entry again on
+        // failure, so the map keeps no pointer into them.
+        errdefer if (!result.found_existing) self.policies.removeByPtr(result.key_ptr);
         // Invalidate the cache before the append: once the policy is in the
         // list nothing may fail, or the errdefer would free the bytecode it
         // uses.
