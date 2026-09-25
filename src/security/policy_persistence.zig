@@ -103,19 +103,15 @@ pub fn persistPolicy(
 ) !void {
     const op = actionsToOperationByte(spec.actions);
     const permissive = spec.effect == .allow;
-    // Only store the filter expression if it is not the trivial "true" sentinel.
-    const using: ?[]const u8 = if (std.mem.eql(u8, spec.expression_source, "true"))
-        null
-    else
-        spec.expression_source;
-
+    // SONNY-2750: the USING text is stored even when it is the trivial "true",
+    // so a GPS record without one is malformed rather than unconditional.
     _ = try agm.createPolicy(
         hmac_key,
         spec.name,
         spec.scope_graph,
         op,
         permissive,
-        using,
+        spec.expression_source,
         spec.enabled,
     );
 }
@@ -161,6 +157,33 @@ pub fn hydrateCatalog(
 ) !void {
     var it = agm.storage.policyIterator();
     while (it.next()) |record| {
+        // CANARY: REQ=REQ-SONNY-2750-POLICY-RECORD-KIND; FEATURE="GPS Policy Persistence"; ASPECT=HydrateGpsOnly; STATUS=TESTED; TEST=tests/test_sonny2750_policy_record_kind.zig; OWNER=security; UPDATED=2026-09-25
+        // SONNY-2750: only GPS records are GPS policies. The RLS writers (the
+        // geode-auth CLI, `geode auth policy create`) store the same record
+        // type with other meanings, and an RLS `update` policy used to load
+        // here as "allow write on `default` for everyone". A record that is
+        // not a GPS policy, or whose kind is not recognised, or that lacks a
+        // property the policy needs, is refused: it is not loaded (it grants
+        // nothing), and the refusal is audited. It is never reinterpreted.
+        const kind = record.effectiveKind();
+        if (kind != .gps or record.malformed) {
+            const reason: []const u8 = if (kind == .rls)
+                "not a GPS policy: an RLS policy record"
+            else if (kind != .gps)
+                "not a GPS policy: the record's kind is not recognised"
+            else
+                "a GPS policy record that lacks a property it needs";
+            std.log.scoped(.gps).warn("refusing to load policy record '{s}' (id {d}) as a GPS policy: {s}", .{ record.getName(), record.id, reason });
+            agm.auditRefusedPolicyRecord(record, reason);
+            continue;
+        }
+        if (record.kind == .legacy) {
+            // Written before records carried a kind; it has the shape GPS gave
+            // its records. It becomes `kind = gps` the next time it is written
+            // (ALTER POLICY).
+            std.log.scoped(.gps).info("policy record '{s}' (id {d}) has no kind; loaded as a GPS policy by its shape", .{ record.getName(), record.id });
+        }
+
         // Reconstruct actions slice from the packed operation byte.
         const actions = try operationByteToActions(allocator, record.operation);
         defer allocator.free(actions);

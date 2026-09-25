@@ -80,6 +80,22 @@
   post-filter's label-deny snapshot, and the traversal's, now hold their own
   copy of each denied label. If a deny policy was removed while a query's
   post-filter ran, the post-filter could read freed memory.
+- **An RLS policy from `geode-auth` no longer loads as a GPS policy
+  (SONNY-2750):** GPS policies (`CREATE POLICY`) and RLS policies
+  (`geode-auth policy create`, `geode auth policy create`) are stored as the
+  same `:Policy` records in `__geode_security`. GPS loaded every record at
+  startup as a GPS policy. An RLS `update` policy on any table therefore came
+  back after a restart as "allow write on `default`, for everyone", which
+  also passed the database-level write check.
+  Policy records now carry a `kind` (`gps` or `rls`), covered by the record
+  HMAC. GPS loads only GPS records. It refuses any other record, and any GPS
+  record with a missing or mistyped property. For each refusal it logs a
+  warning and writes a `REFUSE_POLICY_RECORD` audit event.
+  A record written before this release has no kind. GPS loads one only if it
+  has the properties GPS wrote. Its HMAC is unchanged, so an existing chain
+  still verifies.
+  `geode auth policy list`, `show` and `delete` see only RLS records. See
+  `docs/security/gps-policy-ddl.md`.
 - **Writes after `USE GRAPH` lock the graph they write (SONNY-2749):** the
   QUIC and gRPC handlers took the write lock of the session's graph as it
   was before the request. A request such as `USE GRAPH g2; MERGE (:K {id: 1})`

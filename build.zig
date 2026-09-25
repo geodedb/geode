@@ -10404,6 +10404,24 @@ pub fn build(b: *std.Build) void {
     const gps_policy_persistence_step = b.step("test-gps-policy-persistence", "Run GPS policy persistence round-trip tests (persist/drop/hydrate in __geode_security)");
     gps_policy_persistence_step.dependOn(&run_gps_policy_persistence_tests.step);
 
+    // SONNY-2750: an RLS policy record (the geode-auth CLI, `geode auth policy
+    // create`) is never loaded as a GPS policy; records carry a kind.
+    const sonny2750_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny2750_policy_record_kind.zig"), .target = target, .optimize = optimize });
+    sonny2750_test_mod.link_libc = true;
+    sonny2750_test_mod.addImport("geode", root_mod);
+    sonny2750_test_mod.addImport("geode_auth", auth_mod);
+    sonny2750_test_mod.addImport("auth_lib", auth_ext_mod);
+    sonny2750_test_mod.addImport("rls", rls_mod);
+    sonny2750_test_mod.addImport("user_manager", user_manager_mod);
+    sonny2750_test_mod.addImport("user_storage", user_storage_mod);
+    sonny2750_test_mod.addImport("auth_graph_manager", auth_graph_manager_mod);
+    sonny2750_test_mod.addImport("policy_persistence", policy_persistence_mod);
+    const sonny2750_tests = b.addTest(.{ .root_module = sonny2750_test_mod });
+    const run_sonny2750_tests = b.addRunArtifact(sonny2750_tests);
+    shardDep(test_step, &run_sonny2750_tests.step, 0, test_shard_loads, test_shard_index);
+    const sonny2750_step = b.step("test-sonny2750-policy-record-kind", "Run SONNY-2750 regression (an RLS policy created by the geode-auth CLI grants nothing through GPS after a restart; GPS loads only GPS records, legacy ones by their stored shape, and refuses any other kind or a record with a missing property; the kind is covered by the record HMAC)");
+    sonny2750_step.dependOn(&run_sonny2750_tests.step);
+
     // GAP-0514 Phase 6 P2: AuthGraphManager unit tests (global accessor,
     // periodic HMAC verification thread lifecycle, login-state persistence,
     // coarse LSP graph-visibility gate).

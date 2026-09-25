@@ -189,6 +189,46 @@ pub const UserStorageBackend = struct {
         }
     };
 
+    // CANARY: REQ=REQ-SONNY-2750-POLICY-RECORD-KIND; FEATURE="GPS Policy Persistence"; ASPECT=RecordKind; STATUS=TESTED; TEST=tests/test_sonny2750_policy_record_kind.zig; OWNER=security; UPDATED=2026-09-25
+    /// SONNY-2750: which policy system a :Policy record in `__geode_security`
+    /// belongs to. GPS (`policy_persistence`, CREATE POLICY) and RLS (the
+    /// geode-auth CLI through `user_manager`, and `geode auth policy create`)
+    /// write the same record type, with different meanings for `operation`,
+    /// `permissive` and the USING text. GPS startup hydration loaded every
+    /// record as a GPS policy, so an RLS `update` policy came back as a GPS
+    /// "allow write on `default` for everyone". Stored as the `kind` property;
+    /// see `fromProperty`.
+    pub const PolicyKind = enum(u8) {
+        /// No `kind` property: written before SONNY-2750. `effectiveKind`
+        /// classifies it by shape.
+        legacy = 0,
+        gps = 1,
+        rls = 2,
+        /// A `kind` property that is neither "gps" nor "rls". No loader
+        /// accepts it.
+        invalid = 3,
+
+        /// Strict decoding of a stored `kind` property: exactly "gps" or
+        /// "rls"; any other value, or another type, is `.invalid`; a missing
+        /// property is `.legacy`.
+        pub fn fromProperty(value: ?graph_store.PropertyValue) PolicyKind {
+            const v = value orelse return .legacy;
+            if (v != .String) return .invalid;
+            if (std.mem.eql(u8, v.String, "gps")) return .gps;
+            if (std.mem.eql(u8, v.String, "rls")) return .rls;
+            return .invalid;
+        }
+
+        /// The stored form of a kind a writer may persist.
+        pub fn property(self: PolicyKind) ?[]const u8 {
+            return switch (self) {
+                .gps => "gps",
+                .rls => "rls",
+                .legacy, .invalid => null,
+            };
+        }
+    };
+
     pub const PolicyRecord = extern struct {
         id: u64,
         name: [64]u8,
@@ -210,9 +250,27 @@ pub const UserStorageBackend = struct {
         created_at: i64,
         updated_at: i64,
         created_by: u64,
+        /// SONNY-2750: see `PolicyKind`.
+        kind: PolicyKind,
+        /// SONNY-2750: for a `.legacy` record, the writer its stored
+        /// properties show (`legacyPolicyShape`), decided when it was
+        /// loaded; `.invalid` otherwise.
+        legacy_shape: PolicyKind,
+        /// SONNY-2750: a property a policy needs was missing or of the wrong
+        /// type when the record was loaded (`loadPoliciesFromGraph`). The
+        /// defaults stand in for it, so no loader may use the record.
+        malformed: bool,
 
         pub fn getName(self: *const PolicyRecord) []const u8 {
             return self.name[0..self.name_len];
+        }
+
+        /// SONNY-2750: the record's kind; for a `.legacy` record (no `kind`
+        /// property, written before SONNY-2750), the writer its stored
+        /// properties show (`legacy_shape`), which is `.invalid` when a
+        /// property that decides it is missing.
+        pub fn effectiveKind(self: *const PolicyRecord) PolicyKind {
+            return if (self.kind == .legacy) self.legacy_shape else self.kind;
         }
 
         pub fn getDescription(self: *const PolicyRecord) []const u8 {
@@ -671,6 +729,20 @@ pub const UserStorageBackend = struct {
             record.operation = @intCast(@max(0, getIntProp(self.store, node_id, "operation", 0)));
             record.permissive = getBoolProp(self.store, node_id, "permissive", false);
             record.enabled = getBoolProp(self.store, node_id, "enabled", true);
+            // SONNY-2750: the kind, decoded strictly, and whether a property
+            // the policy needs is missing: its default must not stand in for
+            // it (an absent `enabled` read as true, an absent USING text as
+            // "true").
+            record.kind = PolicyKind.fromProperty(self.store.getNodeProperty(node_id, "kind"));
+            if (record.kind == .legacy) record.legacy_shape = legacyPolicyShape(self.store, node_id);
+            record.malformed = !hasProp(self.store, node_id, "name", .String) or
+                !hasProp(self.store, node_id, "graph", .String) or
+                !hasProp(self.store, node_id, "operation", .Int) or
+                !hasProp(self.store, node_id, "permissive", .Bool) or
+                !hasProp(self.store, node_id, "enabled", .Bool) or
+                // Since SONNY-2750 a GPS record stores its USING text even
+                // when it is "true"; a legacy one omitted it for "true".
+                (record.kind == .gps and !hasProp(self.store, node_id, "using_clause", .String));
             // CANARY: REQ=REQ-SONNY-2731-POLICY-TEXT-LIMITS; FEATURE="GPS Policy Persistence"; ASPECT=OverlongStoredPolicy; STATUS=TESTED; TEST=tests/test_gps_policy_persistence.zig; OWNER=security; UPDATED=2026-09-25
             // SONNY-2731: a stored name, graph or clause longer than its field
             // (persistPolicy never writes one; an older or foreign writer
@@ -1248,12 +1320,16 @@ pub const UserStorageBackend = struct {
         /// `created_at` so an enable/disable/rename does NOT falsify the
         /// original creation timestamp in the HMAC-chained security graph.
         created_at: ?i64 = null,
+        /// SONNY-2750: which system the record belongs to: `.gps` or `.rls`.
+        /// Required, with no default, so no writer can leave it out.
+        kind: PolicyKind,
     };
 
     pub fn persistPolicy(self: *Self, opts: PolicyPersistOptions) !void {
         if (opts.name.len > 63 or opts.description.len > 255 or opts.graph.len > 63 or opts.table.len > 63) {
             return error.FieldTooLong;
         }
+        if (opts.kind.property() == null) return error.InvalidPolicyKind;
 
         var record = blankPolicyRecord(opts.policy_id);
         record.name_len = copyIntoField(&record.name, opts.name);
@@ -1279,6 +1355,7 @@ pub const UserStorageBackend = struct {
         record.created_at = opts.created_at orelse now;
         record.updated_at = now;
         record.created_by = opts.created_by;
+        record.kind = opts.kind;
 
         try self.policy_cache.put(opts.policy_id, record);
         try self.upsertPolicyNode(record);
@@ -1394,6 +1471,9 @@ pub const UserStorageBackend = struct {
             .created_at = compat_milliTimestamp(),
             .updated_at = compat_milliTimestamp(),
             .created_by = 0,
+            .kind = .legacy,
+            .legacy_shape = .invalid,
+            .malformed = false,
         };
     }
 
@@ -1452,6 +1532,43 @@ pub const UserStorageBackend = struct {
             if (val == .Int) return val.Int;
         }
         return default;
+    }
+
+    /// SONNY-2750: does node `node_id` have property `key`, of type `tag`?
+    fn hasProp(store: *graph_store.GraphStore, node_id: u64, key: []const u8, tag: std.meta.Tag(graph_store.PropertyValue)) bool {
+        const val = store.getNodeProperty(node_id, key) orelse return false;
+        return val == tag;
+    }
+
+    /// SONNY-2750: which writer stored a :Policy record that has no `kind`
+    /// (written before SONNY-2750), by the properties each one wrote. GPS
+    /// (`AuthGraphManager.createPolicy`) wrote its scope graph (a name or
+    /// "*"), an empty description and table, no CHECK clause, and a zero
+    /// audit level and creator. The RLS writers do not: the geode-auth CLI
+    /// (`user_manager`) writes the description "RLS policy" and a table, and
+    /// `geode auth policy create` a table and an empty graph. A record that
+    /// lacks a property this reads, or has one of another type, is
+    /// `.invalid`: a missing property is never read as the value GPS wrote.
+    fn legacyPolicyShape(store: *graph_store.GraphStore, node_id: u64) PolicyKind {
+        const description = exactStringProp(store, node_id, "description") orelse return .invalid;
+        const graph = exactStringProp(store, node_id, "graph") orelse return .invalid;
+        const table = exactStringProp(store, node_id, "table") orelse return .invalid;
+        const audit_level = exactIntProp(store, node_id, "audit_level") orelse return .invalid;
+        const created_by = exactIntProp(store, node_id, "created_by") orelse return .invalid;
+        const has_check = store.getNodeProperty(node_id, "check_clause") != null;
+        const gps_shape = description.len == 0 and table.len == 0 and graph.len != 0 and !has_check and
+            audit_level == 0 and created_by == 0;
+        return if (gps_shape) .gps else .rls;
+    }
+
+    fn exactStringProp(store: *graph_store.GraphStore, node_id: u64, key: []const u8) ?[]const u8 {
+        const val = store.getNodeProperty(node_id, key) orelse return null;
+        return if (val == .String) val.String else null;
+    }
+
+    fn exactIntProp(store: *graph_store.GraphStore, node_id: u64, key: []const u8) ?i64 {
+        const val = store.getNodeProperty(node_id, key) orelse return null;
+        return if (val == .Int) val.Int else null;
     }
 
     fn getBoolProp(store: *graph_store.GraphStore, node_id: u64, key: []const u8, default: bool) bool {
@@ -1582,6 +1699,8 @@ pub const UserStorageBackend = struct {
         try self.store.setNodeProperty(node_id, "created_at", .{ .Int = record.created_at });
         try self.store.setNodeProperty(node_id, "updated_at", .{ .Int = record.updated_at });
         try self.store.setNodeProperty(node_id, "created_by", .{ .Int = safeI64(record.created_by) });
+        // SONNY-2750: persistPolicy admits only a kind with a stored form.
+        try self.store.setNodeProperty(node_id, "kind", .{ .String = record.kind.property() orelse return error.InvalidPolicyKind });
     }
 
     fn createEntityNode(self: *Self, label: []const u8) !u64 {
