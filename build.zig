@@ -8476,6 +8476,18 @@ pub fn build(b: *std.Build) void {
     const sonny2667_step = b.step("test-sonny2667-return-where", "Run SONNY-2667 regression (a WHERE after RETURN filters a planned read's rows before its SKIP/LIMIT window: node scan, path, after a WITH, and an aggregate row)");
     sonny2667_step.dependOn(&run_sonny2667_tests.step);
 
+    // SONNY-2668: a HAVING on a grouping key (`GROUP BY n.g HAVING n.g <> 'a'`)
+    // dropped every group: HAVING saw only the projected columns, so `n` was
+    // unbound.
+    const sonny2668_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny2668_having_group_key.zig"), .target = target, .optimize = optimize });
+    sonny2668_test_mod.addImport("geode", root_mod);
+    sonny2668_test_mod.addImport("logging", logging_mod);
+    const sonny2668_tests = b.addTest(.{ .root_module = sonny2668_test_mod });
+    const run_sonny2668_tests = b.addRunArtifact(sonny2668_tests);
+    shardDep(test_step, &run_sonny2668_tests.step, 1, test_shard_loads, test_shard_index);
+    const sonny2668_step = b.step("test-sonny2668-having-group-key", "Run SONNY-2668 regression (a HAVING on a grouping key keeps the groups that pass: planned RETURN and WITH stages, and the legacy executor's WITH stage)");
+    sonny2668_step.dependOn(&run_sonny2668_tests.step);
+
     // SONNY-2656: the node-scan fast path leaked the clone of every typed
     // extended value (Text, Json, Bytea, Char, Varchar, Url, ...) it projected
     // (page teardown freed only strings, lists and maps) or filtered on (IS

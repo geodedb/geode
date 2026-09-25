@@ -3510,7 +3510,9 @@ fn evalGroupedExpr(allocator: std.mem.Allocator, expr: ast.Expr, env: Env, fallb
 /// or an unaliased item's expression name), then to the input row the output
 /// row came from: the row itself, or a group's first row. So `n.i` in
 /// `RETURN n.i WHERE n.i >= 10` (the parser stores a WHERE after RETURN as
-/// HAVING) resolves through `n` (SONNY-2667).
+/// HAVING) resolves through `n` (SONNY-2667), and so does the grouping key
+/// `n.g` in `GROUP BY n.g HAVING n.g <> 'a'`, which every row of the group
+/// shares (SONNY-2668).
 const HavingFilter = struct {
     expr: ast.Expr,
     /// The output columns, then the input columns.
@@ -3599,15 +3601,14 @@ pub fn executeWithClauseWithGroupByAndParams(allocator: std.mem.Allocator, input
         try new_columns.append(allocator, owned_alias);
     }
 
-    // SONNY-2667: without a GROUP BY, a HAVING filters the output rows. The
-    // parser produces one only from a WHERE after RETURN, and callers pass it
-    // only to the RETURN stage.
-    var having_filter: ?HavingFilter = null;
-    if (group_by == null) {
-        if (having) |expr| {
-            having_filter = try HavingFilter.init(allocator, expr, new_columns.items, input_result.columns, param_names, param_values);
-        }
-    }
+    // A HAVING filters the output rows: the groups of a GROUP BY (SONNY-2668)
+    // and, without one, every output row (SONNY-2667). The parser produces a
+    // HAVING without a GROUP BY only from a WHERE after RETURN, and callers
+    // pass that only to the RETURN stage.
+    var having_filter: ?HavingFilter = if (having) |expr|
+        try HavingFilter.init(allocator, expr, new_columns.items, input_result.columns, param_names, param_values)
+    else
+        null;
     defer if (having_filter) |*filter| filter.deinit(allocator);
 
     // Transform each row according to WITH items
@@ -3713,23 +3714,11 @@ pub fn executeWithClauseWithGroupByAndParams(allocator: std.mem.Allocator, input
                 }
             }
 
-            // Apply HAVING filter if present
-            if (having) |having_expr| {
-                // Create environment from the aggregated row
-                const having_env = Env{
-                    .names = new_columns.items,
-                    .values = new_row,
-                    .param_names = param_names,
-                    .param_values = param_values,
-                    .allocator = allocator,
-                };
-                const having_result = try evalGroupedExpr(allocator, having_expr, having_env, Value{ .Bool = false });
-                const passes_having = switch (having_result) {
-                    .Bool => |b| b,
-                    .Int => |i| i != 0,
-                    else => false,
-                };
-                if (!passes_having) {
+            // Apply HAVING filter if present. SONNY-2668: a name the grouped
+            // row does not project (the grouping key `n.g` of `GROUP BY n.g`)
+            // resolves through the group's first row, which shares its key.
+            if (having_filter) |*filter| {
+                if (!try filter.passes(allocator, new_row, first_row)) {
                     allocator.free(new_row);
                     continue;
                 }
