@@ -8621,6 +8621,18 @@ pub fn build(b: *std.Build) void {
     const sonny2749_step = b.step("test-sonny2749-program-graph-lock", "Run SONNY-2749 regression (a program's writes take the write lock of the graph they write, after its own USE GRAPH; concurrent MERGEs of one key from different session graphs make one node; a write program on several graphs is refused)");
     sonny2749_step.dependOn(&run_sonny2749_tests.step);
 
+    // SONNY-2755: a YIELD that names a column twice is refused (it was a
+    // double free), and the YIELD filter keeps the result's value ownership.
+    // Every procedure that honours YIELD, under the leak-checking allocator.
+    const sonny2755_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny2755_yield_duplicate_columns.zig"), .target = target, .optimize = optimize });
+    sonny2755_test_mod.link_libc = true;
+    sonny2755_test_mod.addImport("geode", root_mod);
+    const sonny2755_tests = b.addTest(.{ .root_module = sonny2755_test_mod });
+    const run_sonny2755_tests = b.addRunArtifact(sonny2755_tests);
+    shardDep(test_step, &run_sonny2755_tests.step, 0, test_shard_loads, test_shard_index);
+    const sonny2755_step = b.step("test-sonny2755-yield-duplicate-columns", "Run SONNY-2755 regression (a YIELD that names a column twice is refused before the procedure runs, for every procedure that honours YIELD; the YIELD filter frees what it drops and keeps the result's value ownership; no double free, no leak)");
+    sonny2755_step.dependOn(&run_sonny2755_tests.step);
+
     // SONNY-2744: a matching deny-effect GPS policy refuses what a builtin role,
     // an Admin shortcut or an allow policy would allow (gps.decide).
     const sonny2744_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny2744_gps_deny.zig"), .target = target, .optimize = optimize });

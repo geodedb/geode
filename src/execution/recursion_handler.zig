@@ -151,10 +151,13 @@ pub fn executeBFS(allocator: std.mem.Allocator, store: *graph_store.GraphStore, 
         rows[i] = row;
     }
 
+    // SONNY-2755: each row's path list is allocated here, and the result
+    // frees it. It used to own nothing, so every path leaked.
     return ExecutionResult{
         .columns = columns,
         .rows = rows,
         .flags = std.ArrayList([]const u8).empty,
+        .owns_value_memory = true,
     };
 }
 
@@ -250,10 +253,13 @@ pub fn executeDFS(allocator: std.mem.Allocator, store: *graph_store.GraphStore, 
         rows[i] = row;
     }
 
+    // SONNY-2755: each row's path list is allocated here, and the result
+    // frees it. It used to own nothing, so every path leaked.
     return ExecutionResult{
         .columns = columns,
         .rows = rows,
         .flags = std.ArrayList([]const u8).empty,
+        .owns_value_memory = true,
     };
 }
 
@@ -434,10 +440,12 @@ pub fn executeDijkstra(allocator: std.mem.Allocator, store: *graph_store.GraphSt
 
         allocator.free(path);
 
+        // SONNY-2755: the result frees the path list (see executeBFS).
         return ExecutionResult{
             .columns = columns,
             .rows = rows,
             .flags = std.ArrayList([]const u8).empty,
+            .owns_value_memory = true,
         };
     } else {
         // Fallback: attempt a simple two-hop search to avoid empty results in test scenarios
@@ -523,6 +531,7 @@ pub fn executeDijkstra(allocator: std.mem.Allocator, store: *graph_store.GraphSt
                 .columns = columns,
                 .rows = rows,
                 .flags = std.ArrayList([]const u8).empty,
+                .owns_value_memory = true,
             };
         }
 
@@ -538,6 +547,7 @@ pub fn executeDijkstra(allocator: std.mem.Allocator, store: *graph_store.GraphSt
             .columns = columns,
             .rows = rows,
             .flags = std.ArrayList([]const u8).empty,
+            .owns_value_memory = true,
         };
     }
 }

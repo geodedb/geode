@@ -80,6 +80,21 @@
   post-filter's label-deny snapshot, and the traversal's, now hold their own
   copy of each denied label. If a deny policy was removed while a query's
   post-filter ran, the post-filter could read freed memory.
+- **A YIELD that names a column twice no longer crashes the server
+  (SONNY-2755):** the YIELD filter of the procedures that honour YIELD
+  (`algo.bfs.stream`, `algo.dfs.stream`, `algo.dijkstra.stream`,
+  `geode.fts.*`, `geode.ts.*` and `geode.tenant.*`) put that column's name,
+  and its values, in two columns. The result then freed them twice. A
+  release build aborts on that double free, so any user allowed to call one
+  of these procedures could stop the server, for example with
+  `CALL algo.bfs.stream(1) YIELD path, path`.
+  Such a YIELD is now refused with 42702 before the procedure runs, for
+  every procedure. The filter also stopped leaking memory:
+  - it frees the columns a YIELD drops;
+  - it keeps the result's ownership of its values;
+  - BFS, DFS and Dijkstra free their paths, and `geode.fts.rebuild` frees
+    its index name, with or without a YIELD. These used to leak on every
+    call.
 - **An RLS policy from `geode-auth` no longer loads as a GPS policy
   (SONNY-2750):** GPS policies (`CREATE POLICY`) and RLS policies
   (`geode-auth policy create`, `geode auth policy create`) are stored as the

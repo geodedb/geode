@@ -128,6 +128,8 @@ pub fn mapError(err: anyerror) ErrorInfo {
         error.TransactionAborted => .{ .code = "25P02", .message = "Current transaction is aborted; statements are rejected until ROLLBACK" },
         error.NoActiveTransaction => .{ .code = "25000", .message = "No active transaction" },
         error.UnionColumnCountMismatch => .{ .code = "42601", .message = "UNION column count mismatch" },
+        // SONNY-2755: `YIELD path, path` used to free that column twice.
+        error.DuplicateYieldColumn => .{ .code = "42702", .message = "YIELD names the same column more than once; name each column once" },
         error.DuplicateGraph => .{ .code = "42P07", .message = "Duplicate graph name" },
         error.GraphNotFound => .{ .code = "3F000", .message = "Graph does not exist" },
         // ENG-3903: a MERGE relationship endpoint that is neither bound by a

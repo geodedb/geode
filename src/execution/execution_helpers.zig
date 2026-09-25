@@ -78,61 +78,98 @@ pub fn extractNodeId(args: []const *ast.Expr, arg_idx: usize, context: Execution
     return null;
 }
 
-/// Filter result columns based on YIELD items
-/// Creates a new ExecutionResult with only the requested columns
-pub fn filterYieldColumns(allocator: std.mem.Allocator, result: ExecutionResult, yield_items: []ast.ReturnItem) !ExecutionResult {
-    // Build list of requested column names
-    var requested_columns = try std.ArrayList([]const u8).initCapacity(allocator, yield_items.len);
-    defer requested_columns.deinit(allocator);
-
-    for (yield_items) |item| {
-        const col_name = item.alias orelse switch (item.expr) {
-            .Ident => |ident| ident.orig,
-            .Member => |member| member.field,
-            else => "column",
-        };
-        try requested_columns.append(allocator, col_name);
-    }
-
-    // Find indices of requested columns in original result
-    var col_indices = try std.ArrayList(usize).initCapacity(allocator, requested_columns.items.len);
-    defer col_indices.deinit(allocator);
-
-    for (requested_columns.items) |req_col| {
-        for (result.columns, 0..) |res_col, idx| {
-            if (std.mem.eql(u8, req_col, res_col)) {
-                try col_indices.append(allocator, idx);
-                break;
-            }
-        }
-    }
-
-    // Create new filtered columns array
-    const new_columns = try allocator.alloc([]const u8, col_indices.items.len);
-    for (col_indices.items, 0..) |idx, i| {
-        new_columns[i] = result.columns[idx];
-    }
-
-    // Create new filtered rows
-    const new_rows = try allocator.alloc([]Value, result.rows.len);
-    for (result.rows, 0..) |row, row_idx| {
-        const new_row = try allocator.alloc(Value, col_indices.items.len);
-        for (col_indices.items, 0..) |col_idx, i| {
-            new_row[i] = row[col_idx];
-        }
-        new_rows[row_idx] = new_row;
-    }
-
-    // Clean up old data
-    allocator.free(result.columns);
-    for (result.rows) |row| {
-        allocator.free(row);
-    }
-    allocator.free(result.rows);
-
-    return ExecutionResult{
-        .columns = new_columns,
-        .rows = new_rows,
-        .flags = result.flags,
+/// SONNY-2755: the result column a YIELD item names: its alias, or else the
+/// identifier or property it projects.
+fn yieldColumnName(item: ast.ReturnItem) []const u8 {
+    return item.alias orelse switch (item.expr) {
+        .Ident => |ident| ident.orig,
+        .Member => |member| member.field,
+        else => "column",
     };
+}
+
+// CANARY: REQ=REQ-SONNY-2755-YIELD-COLUMNS; FEATURE="ProcedureYield"; ASPECT=DistinctYieldNames; STATUS=TESTED; TEST=tests/test_sonny2755_yield_duplicate_columns.zig; OWNER=security; UPDATED=2026-09-25
+/// SONNY-2755: refuse a YIELD that names one column twice (`YIELD path,
+/// path`, or `YIELD a, b AS a`) with `error.DuplicateYieldColumn` (42702).
+/// `procedure_registry.executeCallProcedure` checks this before a procedure
+/// runs, so a procedure that changes something is not run by a statement
+/// that then fails.
+pub fn requireDistinctYieldNames(yield_items: []const ast.ReturnItem) error{DuplicateYieldColumn}!void {
+    for (yield_items, 0..) |item, i| {
+        const name = yieldColumnName(item);
+        for (yield_items[0..i]) |earlier| {
+            if (std.mem.eql(u8, yieldColumnName(earlier), name)) return error.DuplicateYieldColumn;
+        }
+    }
+}
+
+// CANARY: REQ=REQ-SONNY-2755-YIELD-COLUMNS; FEATURE="ProcedureYield"; ASPECT=FilterYieldColumns; STATUS=TESTED; TEST=tests/test_sonny2755_yield_duplicate_columns.zig; OWNER=security; UPDATED=2026-09-25
+/// Keep the result columns a YIELD names, in the YIELD's order. A name that
+/// is not a result column is dropped. Takes ownership of `result`: the
+/// returned result holds what is kept, what is not is freed, and on an error
+/// `result` is freed.
+///
+/// SONNY-2755:
+/// - A YIELD that names a column twice is refused (`requireDistinctYieldNames`).
+///   It used to put that column's name, and each of its values, in two
+///   columns, and `ExecutionResult.deinit` freed both copies. That double
+///   free aborts the server (release builds use the C allocator), and any
+///   user who may call a procedure could reach it.
+/// - The result keeps `result`'s ownership: `owns_value_memory`,
+///   `free_value`, `column_buffer`, the flags, the bindings and the owned
+///   entities. It used to own no values, so every allocated value it kept
+///   leaked (a BFS path per row).
+/// - The dropped columns' names are freed, and so are their values when
+///   `result` owns them. The names used to leak.
+pub fn filterYieldColumns(allocator: std.mem.Allocator, result: ExecutionResult, yield_items: []ast.ReturnItem) !ExecutionResult {
+    var source = result;
+    errdefer source.deinit(allocator);
+    try requireDistinctYieldNames(yield_items);
+
+    // kept.items[k]: the source column of output column k.
+    var kept = try std.ArrayList(usize).initCapacity(allocator, yield_items.len);
+    defer kept.deinit(allocator);
+    for (yield_items) |item| {
+        const name = yieldColumnName(item);
+        for (source.columns, 0..) |column, idx| {
+            if (!std.mem.eql(u8, name, column)) continue;
+            // Distinct names pick distinct columns; a column in the result
+            // twice would be freed twice all the same.
+            if (std.mem.indexOfScalar(usize, kept.items, idx) == null) kept.appendAssumeCapacity(idx);
+            break;
+        }
+    }
+
+    const new_columns = try allocator.alloc([]const u8, kept.items.len);
+    errdefer allocator.free(new_columns);
+    const new_rows = try allocator.alloc([]Value, source.rows.len);
+    errdefer allocator.free(new_rows);
+    var built: usize = 0;
+    errdefer for (new_rows[0..built]) |row| allocator.free(row);
+    for (source.rows) |row| {
+        const new_row = try allocator.alloc(Value, kept.items.len);
+        for (kept.items, 0..) |src, k| new_row[k] = if (src < row.len) row[src] else .{ .Null = {} };
+        new_rows[built] = new_row;
+        built += 1;
+    }
+
+    // Nothing below fails: move what is kept, free what is not.
+    for (kept.items, 0..) |src, k| new_columns[k] = source.columns[src];
+    const free_value = source.free_value orelse &execution.freeValue;
+    for (source.columns, 0..) |column, idx| {
+        if (std.mem.indexOfScalar(usize, kept.items, idx) != null) continue;
+        if (source.column_buffer == null) allocator.free(column);
+        if (!source.owns_value_memory) continue;
+        for (source.rows) |row| {
+            if (idx < row.len) free_value(allocator, row[idx]);
+        }
+    }
+    allocator.free(source.columns);
+    for (source.rows) |row| allocator.free(row);
+    allocator.free(source.rows);
+
+    var filtered = source;
+    filtered.columns = new_columns;
+    filtered.rows = new_rows;
+    return filtered;
 }

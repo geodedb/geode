@@ -372,10 +372,12 @@ fn handleFtsRebuild(
     row[1] = Value{ .Int = @intCast(nodes_indexed) };
     rows[0] = row;
 
+    // SONNY-2755: the result frees the `index` string it dupes; it leaked.
     var result = ExecutionResult{
         .columns = columns,
         .rows = rows,
         .flags = std.ArrayList([]const u8).empty,
+        .owns_value_memory = true,
     };
 
     if (call_stmt.yield_items) |yield_items| {
