@@ -208,6 +208,23 @@ const Session = struct {
             for ([_][]const u8{ "10:00:00+01:00", "09:00:00+00:00", "11:00:00+00:00" }) |t| {
                 try self.exec(try std.fmt.allocPrint(aa, "CREATE (:Z {{g: 'z', t: '{s}'}})", .{t}), &.{});
             }
+            // SONNY-2735: DISTINCT over typed values: doubles, dates, texts,
+            // UUIDs, decimals, and 5 against '5'.
+            for ([_]f64{ 1.5, 1.5, 2.5 }) |v| try self.exec("CREATE (:T {k: $v})", &.{.{ .name = "v", .value = .{ .Double = v } }});
+            for ([_][]const u8{ "2026-01-01", "2026-01-01", "2026-01-02" }) |d| {
+                try self.exec(try std.fmt.allocPrint(aa, "CREATE (:T {{k: DATE '{s}'}})", .{d}), &.{});
+            }
+            for ([_][]const u8{ "t1", "t1", "t2" }) |t| try self.exec("CREATE (:T {k: $v})", &.{.{ .name = "v", .value = .{ .Text = t } }});
+            for ([_][]const u8{ "00000000-0000-4000-8000-000000000001", "00000000-0000-4000-8000-000000000001", "00000000-0000-4000-8000-000000000002" }) |u| {
+                try self.exec(try std.fmt.allocPrint(aa, "CREATE (:T {{k: uuid('{s}')}})", .{u}), &.{});
+            }
+            try self.exec("CREATE (:T {k: 1.25})", &.{});
+            try self.exec("CREATE (:T {k: 1.25})", &.{});
+            try self.exec("CREATE (:T {k: 1.2500000000000000001})", &.{});
+            try self.exec("CREATE (:T {k: 5})", &.{});
+            try self.exec("CREATE (:T {k: '5'})", &.{});
+            try self.exec("CREATE (:T {z: 0})", &.{});
+            try self.exec("CREATE (:T {z: 1})", &.{});
             // NaN in memory only: the storage engine refuses a non-finite
             // double. Two NaNs of different bit patterns.
             if (self.mode == .in_memory) {
@@ -589,4 +606,31 @@ test "SONNY-2675: a month is not 30 days, a day is 24 hours" {
     try testing.expectEqual(@as(i8, 1), value_order.compareIntervals(month, .{ .months = 0, .days = 400, .micros = 0 }));
     try testing.expectEqual(@as(i8, 0), value_order.compareIntervals(day, hours24));
     try testing.expectEqual(@as(i8, -1), value_order.compareIntervals(hours24, .{ .months = 0, .days = 1, .micros = 1 }));
+}
+
+fn checkDistinct(s: *Session, f: *Failures) !void {
+    // Each value once: equal doubles, dates, texts, UUIDs and decimals
+    // collapse, different ones do not, 5 and '5' differ, NULL once. The
+    // streaming DISTINCT fast path answers the plain query on a persisted
+    // deployment; ORDER BY makes it decline to applyDistinct, which every
+    // other path (the planned read, WITH DISTINCT, the legacy executor) uses.
+    const want: []const []const u8 = &.{
+        "1.5d",   "2.5d",   "2026-01-01", "2026-01-02",             "'t1'", "'t2'",
+        "<UUID>", "<UUID>", "1.25m",      "1.2500000000000000001m", "5",    "'5'",
+        "null",
+    };
+    try expectRows(s, f, "MATCH (n:T) RETURN DISTINCT n.k AS k", &.{}, want);
+    try expectRows(s, f, "MATCH (n:T) RETURN DISTINCT n.k AS k ORDER BY k", &.{}, want);
+    // WITH DISTINCT on the planned read (the legacy executor does not
+    // deduplicate a WITH at all: SONNY-2734's routing).
+    if (s.mode == .persisted or s.mode == .unbounded_cache) {
+        try expectRows(s, f, "MATCH (n:T) WITH DISTINCT n.k AS k RETURN k", &.{}, want);
+        try expectRows(s, f, "MATCH (n:T) WITH DISTINCT n.k AS k RETURN k ORDER BY k", &.{}, want);
+    }
+    // count(DISTINCT) agrees: 12 non-NULL values.
+    try expectRows(s, f, "MATCH (n:T) RETURN count(DISTINCT n.k) AS c", &.{}, &.{"12"});
+}
+
+test "SONNY-2735: RETURN and WITH DISTINCT keep every typed value apart" {
+    try inEveryMode("distinct", checkDistinct);
 }
