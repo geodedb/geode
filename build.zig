@@ -8376,38 +8376,39 @@ pub fn build(b: *std.Build) void {
     const sonny1221_step = b.step("test-sonny1221-fast-path-schema", "Run SONNY-1221 regression (the node-scan fast path's schema frame reports the executor's projection column types over QUIC and gRPC, NULL only for an all-null column)");
     sonny1221_step.dependOn(&run_sonny1221_tests.step);
 
-    // KNOWN RED: intentionally red TDD reproductions of defects found in
-    // review of SONNY-1221 (docs/KNOWN_TEST_ISSUES.md). They are named steps
-    // but deliberately NOT passed to shardDep, so the aggregate `test` step
-    // (the pre-push hook and the CI shards) stays green while they are red.
-    // Register each with shardDep in the commit that fixes it.
+    // SONNY-2472: a string property projected twice by the node-scan fast path
+    // (`RETURN n.s, n.s AS t`) was one allocation in two cells, and page
+    // teardown freed it once per cell. Each cell must hold its own copy.
+    const sonny2472_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny2472_duplicate_projection.zig"), .target = target, .optimize = optimize });
+    sonny2472_test_mod.addImport("geode", root_mod);
+    sonny2472_test_mod.addImport("logging", logging_mod);
+    const sonny2472_tests = b.addTest(.{ .root_module = sonny2472_test_mod });
+    const run_sonny2472_tests = b.addRunArtifact(sonny2472_tests);
+    shardDep(test_step, &run_sonny2472_tests.step, 1, test_shard_loads, test_shard_index);
+    const sonny2472_step = b.step("test-sonny2472-duplicate-projection", "Run SONNY-2472 regression (a string property projected twice by the node-scan fast path is two allocations, each freed once)");
+    sonny2472_step.dependOn(&run_sonny2472_tests.step);
+
+    // KNOWN RED: an intentionally red TDD reproduction
+    // (docs/KNOWN_TEST_ISSUES.md). It is a named step but deliberately NOT
+    // passed to shardDep, so the aggregate `test` step (the pre-push hook and
+    // the CI shards) stays green while it is red. The commit that fixes it
+    // registers it with shardDep.
     //
-    // P4: a string property projected twice (`RETURN n.s, n.s AS t`) is freed
-    // twice when the page is torn down.
-    const node_scan_dup_proj_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_node_scan_duplicate_projection.zig"), .target = target, .optimize = optimize });
-    node_scan_dup_proj_test_mod.addImport("geode", root_mod);
-    node_scan_dup_proj_test_mod.addImport("logging", logging_mod);
-    const node_scan_dup_proj_tests = b.addTest(.{ .root_module = node_scan_dup_proj_test_mod });
-    const run_node_scan_dup_proj_tests = b.addRunArtifact(node_scan_dup_proj_tests);
-    const node_scan_dup_proj_step = b.step("test-node-scan-duplicate-projection", "KNOWN RED, not in the aggregate: a string property projected twice by the node-scan fast path is freed twice (P4, SONNY-1221 review)");
-    node_scan_dup_proj_step.dependOn(&run_node_scan_dup_proj_tests.step);
-    //
-    // P5: `SKIP k` with no LIMIT and no WHERE returns one row: the OFFSET-only
-    // slot bound (k+1) caps slot collection.
+    // SONNY-2473: `SKIP k` with no LIMIT and no WHERE returns one row: the
+    // OFFSET-only slot bound (k+1) caps slot collection.
     const node_scan_skip_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_node_scan_skip_without_limit.zig"), .target = target, .optimize = optimize });
     node_scan_skip_test_mod.addImport("geode", root_mod);
     node_scan_skip_test_mod.addImport("logging", logging_mod);
     const node_scan_skip_tests = b.addTest(.{ .root_module = node_scan_skip_test_mod });
     const run_node_scan_skip_tests = b.addRunArtifact(node_scan_skip_tests);
-    const node_scan_skip_step = b.step("test-node-scan-skip-without-limit", "KNOWN RED, not in the aggregate: SKIP without LIMIT on the node-scan fast path returns one row instead of every row after the offset (P5, SONNY-1221 review)");
+    const node_scan_skip_step = b.step("test-node-scan-skip-without-limit", "KNOWN RED, not in the aggregate: SKIP without LIMIT on the node-scan fast path returns one row instead of every row after the offset (SONNY-2473)");
     node_scan_skip_step.dependOn(&run_node_scan_skip_tests.step);
     //
     // Out of the aggregate, but still compiled by `test-compile` (shardDep is
     // what adds an artifact there), so a known-red reproduction that stops
     // compiling fails `test-compile` instead of going unnoticed until its fix.
-    // Drop each line when shardDep takes its test over.
+    // Drop the line when shardDep takes the test over.
     if (g_test_compile_step) |c| {
-        c.dependOn(&node_scan_dup_proj_tests.step);
         c.dependOn(&node_scan_skip_tests.step);
     }
 

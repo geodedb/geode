@@ -466,7 +466,10 @@ pub const NodeScanStream = struct {
                 }
                 var produced_node_value = false;
                 for (self.ret_items, 0..) |item, i| {
-                    row[i] = try eval.evalExpr(allocator, item.expr, env);
+                    const value = try eval.evalExpr(allocator, item.expr, env);
+                    // SONNY-2472: set the cell before `produced` counts it, so
+                    // the errdefer never frees a string an earlier cell holds.
+                    row[i] = try copyIfShared(allocator, row[0..i], value);
                     produced = i + 1;
                     if (row[i] == .Node) produced_node_value = true;
                 }
@@ -732,6 +735,31 @@ pub const NodeScanStream = struct {
         };
     }
 };
+
+// CANARY: REQ=REQ-SONNY-2472-DUPLICATE-PROJECTION; FEATURE="EngineDirectProjectionOwnership"; ASPECT=DuplicateCellCopy; STATUS=TESTED; TEST=tests/test_sonny2472_duplicate_projection.zig; OWNER=engine; UPDATED=2026-09-25
+/// SONNY-2472: `value`, or a copy of it when its string is already held by one
+/// of `earlier`, the cells before it in the same projection row. `.Member`
+/// evaluation hands a cell the node's own string, not a copy, and the page
+/// frees every cell (`owns_value_memory`), so `RETURN n.s, n.s AS t` used to
+/// put one allocation in two cells and free it twice. The first cell keeps the
+/// node's string; every later cell that repeats it gets its own copy. Only a
+/// `.Str` can be shared this way: every other value `.Member` or
+/// `.PropertyAccess` yields is either a fresh copy or holds no memory.
+fn copyIfShared(allocator: std.mem.Allocator, earlier: []const Value, value: Value) !Value {
+    const s = switch (value) {
+        .Str => |s| s,
+        else => return value,
+    };
+    if (s.len == 0) return value;
+    for (earlier) |cell| {
+        const held = switch (cell) {
+            .Str => |t| t,
+            else => continue,
+        };
+        if (held.ptr == s.ptr) return .{ .Str = try allocator.dupe(u8, s) };
+    }
+    return value;
+}
 
 fn destroyNode(allocator: std.mem.Allocator, node: *graph_store.Node) void {
     // Keys only. Nothing references a key. Values must NOT be freed here:
