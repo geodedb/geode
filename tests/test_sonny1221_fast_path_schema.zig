@@ -364,14 +364,11 @@ test "SONNY-1221: a prefetched row's bare node moves with the row" {
     var qa = std.heap.ArenaAllocator.init(testing.allocator);
     defer qa.deinit();
 
-    // Catches a node destroyed twice (by the prefetched rows and by the page
-    // that served its row) or destroyed while its row is still being served.
-    // Deliberately never deinit'd: a page frees a projected node only
-    // shallowly (`OwnedGraphEntities.deinit` destroys the struct, not its
-    // labels, properties or graph name), a separate pre-existing issue whose
-    // leak report would otherwise fail this test.
-    var debug_allocator: std.heap.DebugAllocator(.{}) = .init;
-    const allocator = debug_allocator.allocator();
+    // Leak-checked. That also catches a node destroyed twice (by the
+    // prefetched rows and by the page that served its row) or destroyed while
+    // its row is still being served. The page that serves a row frees its node
+    // in full (SONNY-2463).
+    const allocator = testing.allocator;
 
     var stream = try openStream(&h, allocator, &qa, "MATCH (n:M) RETURN n, n.s");
     defer stream.deinit();

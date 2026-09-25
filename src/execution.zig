@@ -649,6 +649,13 @@ pub const OwnedGraphEntities = struct {
     nodes: std.ArrayList(*graph_store.Node),
     edges: std.ArrayList(*graph_store.Edge),
     allocator: std.mem.Allocator,
+    /// How `deinit` releases each tracked node. null, the default for every
+    /// executor tracker: destroy the Node struct only, because an executor node
+    /// need not own its interior (planned reads keep it in a per-query arena,
+    /// GAP-0806). A producer whose nodes own ALL their memory sets its own
+    /// destroy here, so the node is freed in full: the engine-direct node scan
+    /// does (SONNY-2463).
+    destroy_node: ?*const fn (std.mem.Allocator, *graph_store.Node) void = null,
 
     pub fn init(allocator: std.mem.Allocator) !*OwnedGraphEntities {
         const self = try allocator.create(OwnedGraphEntities);
@@ -676,7 +683,7 @@ pub const OwnedGraphEntities = struct {
     pub fn deinit(self: *OwnedGraphEntities) void {
         const allocator = self.allocator;
         for (self.nodes.items) |node| {
-            allocator.destroy(node);
+            if (self.destroy_node) |destroy| destroy(allocator, node) else allocator.destroy(node);
         }
         self.nodes.deinit(allocator);
         for (self.edges.items) |edge| {

@@ -329,6 +329,10 @@ pub const NodeScanStream = struct {
         }
 
         var owned_entities = try OwnedGraphEntities.init(allocator);
+        // CANARY: REQ=REQ-SONNY-2463-BARE-NODE-LEAK; FEATURE="EngineDirectNodeOwnership"; ASPECT=PageFreesReturnedNode; STATUS=TESTED; TEST=tests/test_sonny2463_bare_node_leak.zig; OWNER=engine; UPDATED=2026-09-25
+        // SONNY-2463: a node this page returns owns its whole interior (see
+        // "Node ownership" at `destroyNode`), so page teardown frees all of it.
+        owned_entities.destroy_node = destroyNode;
         errdefer owned_entities.deinit();
 
         // SONNY-1221: rows built for the schema frame are served first. When
@@ -741,7 +745,8 @@ pub const NodeScanStream = struct {
     }
 };
 
-// Node ownership on the engine-direct scan (SONNY-2472, SONNY-2464).
+// Node ownership on the engine-direct scan (SONNY-2472, SONNY-2464,
+// SONNY-2463).
 //
 // Every node this file materializes (`materializeNode`,
 // `materializeNodeProjected`) owns ALL of its memory, on the allocator it was
@@ -760,7 +765,11 @@ pub const NodeScanStream = struct {
 //      skip, a filtered count's tally, `slotMatchesPredicate`'s check, and a
 //      projection row that only reads properties. So a value is freed whether
 //      or not a row read it (SONNY-2464). A node that a row returns (`RETURN
-//      n`) is kept alive by the page's `OwnedGraphEntities` instead.
+//      n`, or a bare `n` column) belongs to the page's `OwnedGraphEntities`
+//      instead, which `buildNextPage` creates with `destroy_node =
+//      destroyNode`, so page teardown frees it in full, after the rows that
+//      point at it (SONNY-2463). A prefetched row's node moves with its row
+//      from one such tracker to another, and is never in two.
 //
 // No arena is involved, so nothing is released in bulk and no cell can be left
 // pointing at memory released under it.
