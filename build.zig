@@ -6341,6 +6341,10 @@ pub fn build(b: *std.Build) void {
     gap0891_test_mod.addImport("geode", root_mod);
     const gap0891_tests = b.addTest(.{ .root_module = gap0891_test_mod });
     const run_gap0891_tests = b.addRunArtifact(gap0891_tests);
+    // SONNY-2689: in the aggregate (and so in test-compile). Out of both, its
+    // RC-2 case went red after Phase 1b and the file later stopped compiling,
+    // and nothing noticed.
+    shardDep(test_step, &run_gap0891_tests.step, 1, test_shard_loads, test_shard_index);
     const gap0891_step = b.step("test-gap0891-repro", "GAP-0891 regression (native-tenant write tenant tagging + edge reads)");
     gap0891_step.dependOn(&run_gap0891_tests.step);
 
