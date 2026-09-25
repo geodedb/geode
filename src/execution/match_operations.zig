@@ -281,7 +281,7 @@ pub const LabelDenySnapshot = struct {
     allocator: std.mem.Allocator,
     graph: []const u8,
     username: []const u8,
-    labels: std.StringHashMapUnmanaged(void),
+    labels: std.StringHashMap(void),
     previous: ?*const LabelDenySnapshot,
 
     /// Take a snapshot for `username` in `graph` and make it current on this
@@ -291,7 +291,7 @@ pub const LabelDenySnapshot = struct {
     pub fn begin(allocator: std.mem.Allocator, graph: []const u8, username: []const u8) ?*LabelDenySnapshot {
         const engine = rls_types.getGlobalRLSFilterEngine() orelse return null;
         const snapshot = allocator.create(LabelDenySnapshot) catch return null;
-        const labels = engine.snapshotDeniedLabelsOwned(allocator, graph, username) catch {
+        const labels = engine.snapshotDeniedLabels(allocator, graph, username) catch {
             allocator.destroy(snapshot);
             return null;
         };
@@ -303,7 +303,7 @@ pub const LabelDenySnapshot = struct {
     /// Restore the snapshot `begin` replaced, and free this one.
     pub fn end(self: *LabelDenySnapshot) void {
         t_label_deny = self.previous;
-        rls_types.RLSFilterEngine.freeOwnedLabelSet(self.allocator, &self.labels);
+        rls_types.RLSFilterEngine.freeDeniedLabels(&self.labels);
         self.allocator.destroy(self);
     }
 };

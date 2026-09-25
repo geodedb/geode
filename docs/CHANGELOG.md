@@ -76,7 +76,10 @@
   That could crash the server. The map is now locked. A traversal now reads
   the label-deny policies once per statement, not once per edge. The
   transport RLS post-filter now stops searching at 64 levels of nested lists
-  or maps, and drops a row nested deeper instead of passing it.
+  or maps, and drops a row nested deeper instead of passing it. The
+  post-filter's label-deny snapshot, and the traversal's, now hold their own
+  copy of each denied label. If a deny policy was removed while a query's
+  post-filter ran, the post-filter could read freed memory.
 - **RLS range policies fail closed (SONNY-2709):** in an expression RLS
   policy, `<`, `<=`, `>` and `>=` treated a missing value, or two values of
   different types, as equal. So `<=` and `>=` held: a policy such as

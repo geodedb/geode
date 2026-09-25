@@ -108,22 +108,40 @@ pub const RLSFilterEngine = struct {
         return false;
     }
 
+    // CANARY: REQ=REQ-SONNY-2679-LABEL-SNAPSHOT-OWNED; FEATURE="RLS Query Enforcement"; ASPECT=SnapshotOwnsLabels; STATUS=TESTED; TEST=test-rls-filter; OWNER=security; UPDATED=2026-09-25
     /// Snapshot denied labels for a specific user+graph into a HashSet.
-    /// Single lock acquisition instead of per-label locking.  Caller must call
-    /// `deinit()` on the returned map when done.
+    /// Single lock acquisition instead of per-label locking. Free the set with
+    /// `freeDeniedLabels`.
+    ///
+    /// The set holds its own copy of every label (SONNY-2679 review). It used
+    /// to borrow each policy's string, which `removeDenyPolicy` frees under
+    /// this lock; the post-filter reads the set after the lock is released,
+    /// so a policy removed meanwhile left it reading freed memory. Holding
+    /// the lock for the set's lifetime instead would serialize every
+    /// post-filter against every policy change.
     pub fn snapshotDeniedLabels(self: *Self, allocator: std.mem.Allocator, graph: []const u8, username: []const u8) !std.StringHashMap(void) {
         self.mu.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
         defer self.mu.unlock(std.Io.Threaded.global_single_threaded.io());
 
         var denied = std.StringHashMap(void).init(allocator);
+        errdefer freeDeniedLabels(&denied);
         for (self.policies.items) |p| {
             if (!p.deny) continue;
             if (!std.mem.eql(u8, p.graph, graph)) continue;
-            if (p.username.len == 0 or std.mem.eql(u8, p.username, username)) {
-                try denied.put(p.label, {});
-            }
+            if (p.username.len != 0 and !std.mem.eql(u8, p.username, username)) continue;
+            if (denied.contains(p.label)) continue;
+            const label = try allocator.dupe(u8, p.label);
+            errdefer allocator.free(label);
+            try denied.put(label, {});
         }
         return denied;
+    }
+
+    /// Free a set from `snapshotDeniedLabels`: its labels, then the set.
+    pub fn freeDeniedLabels(set: *std.StringHashMap(void)) void {
+        var it = set.keyIterator();
+        while (it.next()) |key| set.allocator.free(key.*);
+        set.deinit();
     }
 
     /// Return the number of currently active policies.
@@ -192,7 +210,7 @@ pub fn applyRLSFilter(
     // Snapshot denied labels once (single lock acquisition) instead of
     // acquiring the mutex per-label per-row — O(1) lock instead of O(R*L).
     var denied = engine.snapshotDeniedLabels(allocator, graph_name, username) catch return 0;
-    defer denied.deinit();
+    defer RLSFilterEngine.freeDeniedLabels(&denied);
 
     // If no labels are denied for this user+graph, skip the row scan.
     if (denied.count() == 0) return 0;
@@ -300,7 +318,7 @@ pub fn applyAlgorithmRLSFilter(
 
     // Snapshot denied labels (single lock acquisition).
     var denied = engine.snapshotDeniedLabels(allocator, graph_name, username) catch return 0;
-    defer denied.deinit();
+    defer RLSFilterEngine.freeDeniedLabels(&denied);
 
     if (denied.count() == 0) return 0;
 
@@ -462,7 +480,7 @@ pub fn applyRLSToFederatedResults(
 
     // Snapshot denied labels once (single lock acquisition).
     var denied = engine.snapshotDeniedLabels(allocator, graph_name, username) catch return 0;
-    defer denied.deinit();
+    defer RLSFilterEngine.freeDeniedLabels(&denied);
 
     if (denied.count() == 0) return 0;
 
@@ -596,12 +614,38 @@ test "RLSFilterEngine: snapshotDeniedLabels returns correct labels" {
 
     // alice in "default" graph should see Secret + TopSecret denied
     var denied = try engine.snapshotDeniedLabels(allocator, "default", "alice");
-    defer denied.deinit();
+    defer RLSFilterEngine.freeDeniedLabels(&denied);
 
     try std.testing.expect(denied.contains("Secret"));
     try std.testing.expect(denied.contains("TopSecret"));
     try std.testing.expect(!denied.contains("Private")); // wrong graph
     try std.testing.expectEqual(@as(usize, 2), denied.count());
+}
+
+// CANARY: REQ=REQ-SONNY-2679-LABEL-SNAPSHOT-OWNED; FEATURE="RLS Query Enforcement"; ASPECT=SnapshotOwnsLabels; STATUS=TESTED; TEST=test-rls-filter; OWNER=security; UPDATED=2026-09-25
+// Review (round 4): the snapshot borrowed each policy's label string, which
+// `removeDenyPolicy` frees, while the post-filter still reads the snapshot.
+// A policy removed between a snapshot and its use is the race; run in order
+// on one thread it is deterministic: the snapshot must still hold "Secret",
+// read from its own copy.
+test "RLSFilterEngine: a snapshot keeps its labels after the policy is removed" {
+    const allocator = std.testing.allocator;
+    var engine = RLSFilterEngine.init(allocator);
+    defer engine.deinit();
+    try engine.addDenyPolicy("default", "Secret", "alice");
+
+    var denied = try engine.snapshotDeniedLabels(allocator, "default", "alice");
+    defer RLSFilterEngine.freeDeniedLabels(&denied);
+
+    // Frees the engine's copy of "Secret"; a new policy of the same size may
+    // take that memory.
+    engine.removeDenyPolicy("default", "Secret", "alice");
+    try engine.addDenyPolicy("default", "Public", "bob");
+
+    try std.testing.expect(denied.contains("Secret"));
+    try std.testing.expect(!denied.contains("Public"));
+    var it = denied.keyIterator();
+    while (it.next()) |key| try std.testing.expectEqualStrings("Secret", key.*);
 }
 
 test "RLSFilterEngine: snapshotDeniedLabels empty for non-matching user" {
@@ -613,7 +657,7 @@ test "RLSFilterEngine: snapshotDeniedLabels empty for non-matching user" {
 
     // bob should get empty snapshot (user-specific policy for alice only)
     var denied = try engine.snapshotDeniedLabels(allocator, "default", "bob");
-    defer denied.deinit();
+    defer RLSFilterEngine.freeDeniedLabels(&denied);
 
     try std.testing.expectEqual(@as(usize, 0), denied.count());
 }
