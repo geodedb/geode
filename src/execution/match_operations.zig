@@ -241,13 +241,18 @@ pub fn passesRowVisibilityFilters(
 /// hop.
 pub fn rlsMayDenyForSession() bool {
     const ctx = execution.getActiveContext() orelse return false;
-    const has_user = blk: {
-        if (ctx.principal) |p| {
-            if (p.username != null) break :blk true;
-        }
-        break :blk ctx.user != null;
-    };
-    return has_user and activeRlsPoliciesConfigured();
+    if (rlsUsername(ctx) == null) return false;
+    return activeRlsPoliciesConfigured();
+}
+
+/// The identity RLS is evaluated under: the GPS-resolved principal's username
+/// when one is attached, else the connection user; null when there is neither
+/// (RLS then allows every row). See `passesRLSFilter`.
+fn rlsUsername(ctx: *const ExecutionContext) ?[]const u8 {
+    if (ctx.principal) |p| {
+        if (p.username) |u| return u;
+    }
+    return ctx.user;
 }
 
 /// SONNY-2679: the RLS half of `passesRowVisibilityFilters`, for a read path
@@ -257,6 +262,25 @@ pub fn passesRowRLSFilter(reusable_row: *std.StringHashMap(rls.Value), node: gra
     return passesRLSFilter(reusable_row, node);
 }
 
+// CANARY: REQ=REQ-SONNY-2679-EDGE-RLS; FEATURE="TraversalRowVisibility"; ASPECT=EdgeRLS; STATUS=TESTED; TEST=tests/test_sonny2679_rls_hop_targets.zig; OWNER=security; UPDATED=2026-09-25
+/// SONNY-2679: may this session walk `edge` under its RLS policies? The
+/// label-deny engine treats a relationship type like a node label (a deny
+/// policy names "nodes/edges with `label`"; schema introspection and the
+/// transport post-filter already hide denied types), and an expression policy
+/// names a table, a node label or an edge type, evaluated here against the
+/// edge's own properties. No traversal applied either to an edge before, so a
+/// denied relationship, its properties, and every row reached through it were
+/// returned. True (allow) with no active session or no user, as for a node.
+pub fn passesEdgeRLSFilter(reusable_row: *std.StringHashMap(rls.Value), edge: *const graph_store.Edge) bool {
+    const ctx = execution.getActiveContext() orelse return true;
+    const username = rlsUsername(ctx) orelse return true;
+    if (rls_types.getGlobalRLSFilterEngine()) |filter_engine| {
+        if (filter_engine.isLabelDenied(edge.graph_name, edge.label, username)) return false;
+    }
+    const tables = [_][]const u8{edge.label};
+    return exprPoliciesAllow(reusable_row, &edge.properties, edge.graph_name, &tables, username);
+}
+
 // CANARY: REQ=REQ-SONNY-2679-HOP-VISIBILITY; FEATURE="TraversalRowVisibility"; ASPECT=HopScope; STATUS=TESTED; TEST=tests/test_sonny2679_rls_hop_targets.zig; OWNER=security; UPDATED=2026-09-25
 /// SONNY-2679: the visibility a traversal applies to every step it takes.
 ///
@@ -264,9 +288,10 @@ pub fn passesRowRLSFilter(reusable_row: *std.StringHashMap(rls.Value), node: gra
 /// from it must pass the same checks: the node an edge leads to, and every
 /// node a variable-length path passes through, must be in the query's graph,
 /// visible to the session's tenant scope, and allowed by its RLS policies
-/// (label and expression); the edge itself must be in the graph and visible
-/// to the tenant scope. A node that fails is neither returned nor traversed,
-/// so it also breaks every path through it.
+/// (label and expression); the edge itself must be in the graph, visible to
+/// the tenant scope, and allowed by the RLS policies on its type. A node or
+/// edge that fails is neither returned nor traversed, so it also breaks every
+/// path through it.
 ///
 /// Before this, only the single hop checked its target's graph and tenant (and
 /// not RLS); the aggregation loop, the legacy grouping, OPTIONAL MATCH and
@@ -305,10 +330,27 @@ pub const HopScope = struct {
         return passesRLSFilter(self.rls_row, node.*);
     }
 
-    /// May a traversal walk `edge`?
+    /// May a traversal walk `edge`? It must be in the graph, carry a tenant
+    /// tag the scope can see, and be allowed by the RLS policies on its type.
     pub fn edgeVisible(self: *const HopScope, edge: *const graph_store.Edge) bool {
         if (!std.mem.eql(u8, edge.graph_name, self.filter_graph)) return false;
-        return passesTenantFilterEdge(edge.*, self.filter_tenant);
+        if (!passesTenantFilterEdge(edge.*, self.filter_tenant)) return false;
+        return self.edgeRlsAllows(edge);
+    }
+
+    /// `edgeVisible` with the GAP-0891 endpoint-derived tenant rule: the edge
+    /// is also visible when both its endpoints are, whatever its own tag. Only
+    /// the multi-chain executor's first hop uses this rule today; which rule
+    /// every path should use is SONNY-2693.
+    pub fn edgeVisibleBridged(self: *const HopScope, store: *graph_store.GraphStore, edge: *const graph_store.Edge) bool {
+        if (!std.mem.eql(u8, edge.graph_name, self.filter_graph)) return false;
+        if (!edgeVisibleForTenantHierarchy(store, edge.*, self.filter_tenant)) return false;
+        return self.edgeRlsAllows(edge);
+    }
+
+    fn edgeRlsAllows(self: *const HopScope, edge: *const graph_store.Edge) bool {
+        if (!self.rls_may_deny) return true;
+        return passesEdgeRLSFilter(self.rls_row, edge);
     }
 
     /// `PathIterator`'s gate: may a path be extended by `edge` onto the node
@@ -351,12 +393,7 @@ fn passesRLSFilter(
     // Keying the deny filter on the principal username ensures the shard worker
     // enforces the forwarded caller's scope. Falls back to ctx.user when no
     // principal is attached (direct, non-forwarded requests).
-    const username = blk: {
-        if (ctx.principal) |p| {
-            if (p.username) |u| break :blk u;
-        }
-        break :blk ctx.user orelse return true;
-    };
+    const username = rlsUsername(ctx) orelse return true;
 
     // Layer 1: Label-deny check
     const filter_engine = rls_types.getGlobalRLSFilterEngine() orelse {
@@ -5184,7 +5221,8 @@ fn executeMultiChainRelationshipMatch(allocator: std.mem.Allocator, q: ast.Query
     const filter_graph = current_graph orelse "default";
     // GAP-0279: Get tenant filter from session context
     const filter_tenant = try getSessionTenantFilter();
-    // SONNY-2679: the scope a quantified hop's walk applies to every step.
+    // SONNY-2679: the scope every hop applies to the edge it walks (its graph,
+    // tenant and RLS), and a quantified hop's walk to every step.
     const hop_scope = HopScope.init(filter_graph, filter_tenant, &rls_row_local);
 
     // CANARY: REQ=REQ-BUG731-MATCH-SCOPING; FEATURE="MultiChainRelationshipMatch"; ASPECT=InlineNodeProps; STATUS=TESTED; TEST=tests/test_bug731_match_scoping.zig:201; OWNER=execution; UPDATED=2026-07-31
@@ -5365,7 +5403,7 @@ fn executeMultiChainRelationshipMatch(allocator: std.mem.Allocator, q: ast.Query
                         if (!std.mem.eql(u8, edge.label, rt)) continue;
                     }
                     // GAP-0891 (defense-in-depth): endpoint-derived edge visibility.
-                    if (!edgeVisibleForTenantHierarchy(store, edge.*, filter_tenant)) continue;
+                    if (!hop_scope.edgeVisibleBridged(store, edge)) continue;
                     if (!matchesEdgeProperties(allocator, edge.*, rel_props)) continue;
                     if (store.getNodePtrForScan(edge.to_id)) |right_node| {
                         if (!std.mem.eql(u8, right_node.graph_name, filter_graph)) continue;
@@ -5389,7 +5427,7 @@ fn executeMultiChainRelationshipMatch(allocator: std.mem.Allocator, q: ast.Query
                         if (!std.mem.eql(u8, edge.label, rt)) continue;
                     }
                     // GAP-0891 (defense-in-depth): endpoint-derived edge visibility.
-                    if (!edgeVisibleForTenantHierarchy(store, edge.*, filter_tenant)) continue;
+                    if (!hop_scope.edgeVisibleBridged(store, edge)) continue;
                     if (!matchesEdgeProperties(allocator, edge.*, rel_props)) continue;
                     if (store.getNodePtrForScan(edge.from_id)) |right_node| {
                         if (!std.mem.eql(u8, right_node.graph_name, filter_graph)) continue;
@@ -5434,7 +5472,7 @@ fn executeMultiChainRelationshipMatch(allocator: std.mem.Allocator, q: ast.Query
                     // GAP-0846 hardening: tenant-check the edge OBJECT itself, not
                     // just its endpoints (symmetry with the left-anchor branch at
                     // ~2813/2834). Fail-closed, cheap string compare.
-                    if (!passesTenantFilterEdge(edge.*, filter_tenant)) continue;
+                    if (!hop_scope.edgeVisible(edge)) continue;
                     if (!matchesEdgeProperties(allocator, edge.*, rel_props)) continue;
                     if (store.getNodePtrForScan(edge.from_id)) |left_node| {
                         if (!std.mem.eql(u8, left_node.graph_name, filter_graph)) continue;
@@ -5458,7 +5496,7 @@ fn executeMultiChainRelationshipMatch(allocator: std.mem.Allocator, q: ast.Query
                     }
                     // GAP-0846 hardening: tenant-check the edge OBJECT itself
                     // (symmetry with the left-anchor branch). Fail-closed.
-                    if (!passesTenantFilterEdge(edge.*, filter_tenant)) continue;
+                    if (!hop_scope.edgeVisible(edge)) continue;
                     if (!matchesEdgeProperties(allocator, edge.*, rel_props)) continue;
                     if (store.getNodePtrForScan(edge.to_id)) |left_node| {
                         if (!std.mem.eql(u8, left_node.graph_name, filter_graph)) continue;
@@ -5507,7 +5545,7 @@ fn executeMultiChainRelationshipMatch(allocator: std.mem.Allocator, q: ast.Query
                     // undirected pattern evaluates this edge again below with the
                     // endpoints swapped — skipping the iteration would drop the
                     // reversed orientation that may well satisfy the predicate.
-                    if (passesTenantFilterEdge(edge_ptr.*, filter_tenant) and std.mem.eql(u8, from_node.graph_name, filter_graph) and std.mem.eql(u8, to_node.graph_name, filter_graph) and passesTenantFilter(from_node.*, filter_tenant) and passesTenantFilter(to_node.*, filter_tenant) and passesRLSFilter(&rls_row_local, from_node.*) and passesRLSFilter(&rls_row_local, to_node.*) and nodeMatchesProps(allocator, from_node, left_props, prop_env) and nodeMatchesProps(allocator, to_node, right_props, prop_env)) {
+                    if (hop_scope.edgeVisible(edge_ptr) and std.mem.eql(u8, from_node.graph_name, filter_graph) and std.mem.eql(u8, to_node.graph_name, filter_graph) and passesTenantFilter(from_node.*, filter_tenant) and passesTenantFilter(to_node.*, filter_tenant) and passesRLSFilter(&rls_row_local, from_node.*) and passesRLSFilter(&rls_row_local, to_node.*) and nodeMatchesProps(allocator, from_node, left_props, prop_env) and nodeMatchesProps(allocator, to_node, right_props, prop_env)) {
                         var binding = MatchBinding.init(allocator);
                         if (hop.left.name) |v| try binding.vars.put(v, from_node);
                         if (hop.right.name) |v| try binding.vars.put(v, to_node);
@@ -5522,7 +5560,7 @@ fn executeMultiChainRelationshipMatch(allocator: std.mem.Allocator, q: ast.Query
                     // GAP-0846 hardening: edge-object tenant check (symmetry).
                     // BUG-731: endpoints' inline property predicates folded into the
                     // guard — see the note on the .right/.undirected branch above.
-                    if (passesTenantFilterEdge(edge_ptr.*, filter_tenant) and std.mem.eql(u8, from_node.graph_name, filter_graph) and std.mem.eql(u8, to_node.graph_name, filter_graph) and passesTenantFilter(from_node.*, filter_tenant) and passesTenantFilter(to_node.*, filter_tenant) and passesRLSFilter(&rls_row_local, from_node.*) and passesRLSFilter(&rls_row_local, to_node.*) and nodeMatchesProps(allocator, to_node, left_props, prop_env) and nodeMatchesProps(allocator, from_node, right_props, prop_env)) {
+                    if (hop_scope.edgeVisible(edge_ptr) and std.mem.eql(u8, from_node.graph_name, filter_graph) and std.mem.eql(u8, to_node.graph_name, filter_graph) and passesTenantFilter(from_node.*, filter_tenant) and passesTenantFilter(to_node.*, filter_tenant) and passesRLSFilter(&rls_row_local, from_node.*) and passesRLSFilter(&rls_row_local, to_node.*) and nodeMatchesProps(allocator, to_node, left_props, prop_env) and nodeMatchesProps(allocator, from_node, right_props, prop_env)) {
                         var binding = MatchBinding.init(allocator);
                         if (hop.left.name) |v| try binding.vars.put(v, to_node);
                         if (hop.right.name) |v| try binding.vars.put(v, from_node);
@@ -5551,7 +5589,7 @@ fn executeMultiChainRelationshipMatch(allocator: std.mem.Allocator, q: ast.Query
 
                 for (outgoing_edge_ids) |edge_id| {
                     const edge = store.getEdgePtrHydrated(edge_id) orelse continue;
-                    if (!passesTenantFilterEdge(edge.*, filter_tenant)) continue;
+                    if (!hop_scope.edgeVisible(edge)) continue;
                     if (!matchesEdgeProperties(allocator, edge.*, rel_props)) continue;
                     if (store.getNodePtrForScan(edge.to_id)) |right_node| {
                         if (!std.mem.eql(u8, right_node.graph_name, filter_graph)) continue;
@@ -5570,7 +5608,7 @@ fn executeMultiChainRelationshipMatch(allocator: std.mem.Allocator, q: ast.Query
 
                 for (incoming_edge_ids) |edge_id| {
                     const edge = store.getEdgePtrHydrated(edge_id) orelse continue;
-                    if (!passesTenantFilterEdge(edge.*, filter_tenant)) continue;
+                    if (!hop_scope.edgeVisible(edge)) continue;
                     if (!matchesEdgeProperties(allocator, edge.*, rel_props)) continue;
                     if (store.getNodePtrForScan(edge.from_id)) |right_node| {
                         if (!std.mem.eql(u8, right_node.graph_name, filter_graph)) continue;
@@ -5687,7 +5725,7 @@ fn executeMultiChainRelationshipMatch(allocator: std.mem.Allocator, q: ast.Query
                         if (extra_rel_type) |rt| {
                             if (!std.mem.eql(u8, edge.label, rt)) continue;
                         }
-                        if (!passesTenantFilterEdge(edge.*, filter_tenant)) continue;
+                        if (!hop_scope.edgeVisible(edge)) continue;
                         if (!matchesEdgeProperties(allocator, edge.*, extra_rel_props_m)) continue;
 
                         if (store.getNodePtrForScan(edge.to_id)) |right_node| {
@@ -5736,7 +5774,7 @@ fn executeMultiChainRelationshipMatch(allocator: std.mem.Allocator, q: ast.Query
                         if (extra_rel_type) |rt| {
                             if (!std.mem.eql(u8, edge.label, rt)) continue;
                         }
-                        if (!passesTenantFilterEdge(edge.*, filter_tenant)) continue;
+                        if (!hop_scope.edgeVisible(edge)) continue;
                         if (!matchesEdgeProperties(allocator, edge.*, extra_rel_props_m)) continue;
 
                         if (store.getNodePtrForScan(edge.from_id)) |right_node| {
@@ -5824,7 +5862,7 @@ fn executeMultiChainRelationshipMatch(allocator: std.mem.Allocator, q: ast.Query
                     if (rel_type) |rt| {
                         if (!std.mem.eql(u8, edge.label, rt)) continue;
                     }
-                    if (!passesTenantFilterEdge(edge.*, filter_tenant)) continue;
+                    if (!hop_scope.edgeVisible(edge)) continue;
 
                     if (store.getNodePtrForScan(edge.to_id)) |right_node| {
                         if (!std.mem.eql(u8, right_node.graph_name, filter_graph)) continue;
@@ -5848,7 +5886,7 @@ fn executeMultiChainRelationshipMatch(allocator: std.mem.Allocator, q: ast.Query
                     if (rel_type) |rt| {
                         if (!std.mem.eql(u8, edge.label, rt)) continue;
                     }
-                    if (!passesTenantFilterEdge(edge.*, filter_tenant)) continue;
+                    if (!hop_scope.edgeVisible(edge)) continue;
 
                     if (store.getNodePtrForScan(edge.from_id)) |right_node| {
                         if (!std.mem.eql(u8, right_node.graph_name, filter_graph)) continue;
@@ -5894,7 +5932,7 @@ fn executeMultiChainRelationshipMatch(allocator: std.mem.Allocator, q: ast.Query
                         if (rel_type) |rt| {
                             if (!std.mem.eql(u8, edge.label, rt)) continue;
                         }
-                        if (!passesTenantFilterEdge(edge.*, filter_tenant)) continue;
+                        if (!hop_scope.edgeVisible(edge)) continue;
 
                         if (store.getNodePtrForScan(edge.to_id)) |right_node| {
                             if (!std.mem.eql(u8, right_node.graph_name, filter_graph)) continue;
@@ -5928,7 +5966,7 @@ fn executeMultiChainRelationshipMatch(allocator: std.mem.Allocator, q: ast.Query
                         if (rel_type) |rt| {
                             if (!std.mem.eql(u8, edge.label, rt)) continue;
                         }
-                        if (!passesTenantFilterEdge(edge.*, filter_tenant)) continue;
+                        if (!hop_scope.edgeVisible(edge)) continue;
 
                         if (store.getNodePtrForScan(edge.from_id)) |right_node| {
                             if (!std.mem.eql(u8, right_node.graph_name, filter_graph)) continue;

@@ -88,6 +88,12 @@ const RowRls = struct {
         if (!self.may_deny) return true;
         return match_operations.passesRowRLSFilter(&self.row, node.*);
     }
+
+    /// The RLS policies on an edge's type (label deny and expression).
+    fn allowsEdge(self: *RowRls, edge: *const graph_store.Edge) bool {
+        if (!self.may_deny) return true;
+        return match_operations.passesEdgeRLSFilter(&self.row, edge);
+    }
 };
 
 /// SONNY-2687: the graph the expression path reads, resolved the way the
@@ -129,11 +135,13 @@ const ExprScope = struct {
         return self.rls.allows(node);
     }
 
-    /// May the expression path walk `edge`? It must be in the graph, and
-    /// traversable by the tenant scope (both endpoints visible, SONNY-1318).
+    /// May the expression path walk `edge`? It must be in the graph,
+    /// traversable by the tenant scope (both endpoints visible, SONNY-1318),
+    /// and allowed by the RLS policies on its type (SONNY-2679).
     fn edgeWalkable(self: *ExprScope, store: *graph_store.GraphStore, edge: graph_store.Edge) bool {
         if (!std.mem.eql(u8, edge.graph_name, self.graph)) return false;
-        return tenant_visibility.edgeTraversable(store, edge, self.tenant);
+        if (!tenant_visibility.edgeTraversable(store, edge, self.tenant)) return false;
+        return self.rls.allowsEdge(&edge);
     }
 
     /// May a walk take `edge` onto the node `next_id`? The edge check, and,
@@ -148,6 +156,16 @@ const ExprScope = struct {
         return self.nodeVisible(node);
     }
 };
+
+/// Does a relationship of type `label` match the pattern's types (`[:A|B]`;
+/// none means any type)?
+fn relTypeMatches(types: []const []const u8, label: []const u8) bool {
+    if (types.len == 0) return true;
+    for (types) |t| {
+        if (std.mem.eql(u8, t, label)) return true;
+    }
+    return false;
+}
 
 /// Check if a node has all the required labels
 pub fn nodeHasAllLabels(node_labels: []const []const u8, required_labels: []const []const u8) bool {
@@ -1206,6 +1224,8 @@ pub fn executePatternComprehension(allocator: std.mem.Allocator, pattern: ast.Gr
                         // `Value.Edge` binding the map expression may reference,
                         // never dereferenced to decide anything.
                         const edge = store.getEdgeHydrated(edge_id) orelse continue;
+                        // SONNY-2679: only the pattern's relationship types.
+                        if (!relTypeMatches(hop.rel.types, edge.label)) continue;
                         // The edge (in the session's graph) AND both endpoints
                         // must be visible.
                         if (!scope.edgeWalkable(store, edge)) continue;
@@ -1266,6 +1286,7 @@ pub fn executePatternComprehension(allocator: std.mem.Allocator, pattern: ast.Gr
                         // SONNY-1326: by-value read for every decision; the raw
                         // pointer is only the `Value.Edge` binding (see above).
                         const edge = store.getEdgeHydrated(edge_id) orelse continue;
+                        if (!relTypeMatches(hop.rel.types, edge.label)) continue;
                         if (!scope.edgeWalkable(store, edge)) continue;
                         const edge_ptr = store.getEdgePtrHydrated(edge_id) orelse continue;
                         const target_id = edge.from_id;
