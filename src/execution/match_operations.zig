@@ -8733,6 +8733,11 @@ pub fn executeMatchQueryImpl(allocator: std.mem.Allocator, q: ast.Query, param_n
     // SONNY-2683: a CREATE or MERGE after the MATCH reads its bindings here
     // first; refuse its grouped or filtered RETURN before anything is written.
     try validateGroupedReturnShape(q);
+    // The graph and tenant every read and write below is scoped to, derived
+    // once, here: the session's graph (else "default") and its tenant filter
+    // (GAP-0279).
+    const filter_graph = current_graph orelse "default";
+    const filter_tenant = try getSessionTenantFilter();
     // SONNY-2674: a RETURN-level GROUP BY, and a WHERE after RETURN, go through
     // the shared projection, before any of the shape-specific grouping below.
     if (returnUsesSharedProjection(q)) {
@@ -8743,8 +8748,6 @@ pub fn executeMatchQueryImpl(allocator: std.mem.Allocator, q: ast.Query, param_n
         // before its planned read; the callers that reach this executor
         // directly (executeQueryWithBindingsImpl, VALUES ... MATCH) have only
         // these.
-        const filter_graph = current_graph orelse "default";
-        const filter_tenant = try getSessionTenantFilter();
         if (try indexServedGroupByFastPath(allocator, q, filter_graph, filter_tenant)) |fast_result| {
             return fast_result;
         }
@@ -8775,10 +8778,6 @@ pub fn executeMatchQueryImpl(allocator: std.mem.Allocator, q: ast.Query, param_n
     defer read_view.deinit();
 
     const store = read_view.getReadStore();
-    // Graph to filter by - use "default" if no graph specified
-    const filter_graph = current_graph orelse "default";
-    // GAP-0279: Get tenant filter from session context
-    const filter_tenant = try getSessionTenantFilter();
 
     // GAP (write-path OOM, 2026-07-04): route the covered single-node indexed-
     // equality point-write shapes ENGINE-DIRECT (exact-index seek + durable
