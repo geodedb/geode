@@ -4,6 +4,7 @@ const builtin = @import("builtin");
 const heap = @import("../storage/heap.zig");
 const Value = heap.Value;
 const decimal128 = @import("decimal128.zig");
+const narrowing = @import("narrowing.zig");
 const datetime = @import("datetime.zig");
 const jsonb = @import("jsonb.zig");
 const xml = @import("xml.zig");
@@ -1238,6 +1239,20 @@ pub fn sqrt_val(val: Value) EvaluatorError!Value {
     };
 }
 
+// CANARY: REQ=REQ-SONNY-2739-CHECKED-NARROWING; FEATURE="NumericNarrowing"; ASPECT=HeapRounding; STATUS=TESTED; TEST=tests/test_sonny2739_float_narrowing.zig; OWNER=types; UPDATED=2026-09-25
+/// A Decimal128 rounded to an i64, exactly (a negative scale is a power-of-ten
+/// multiplier), or Overflow. SONNY-2739: ceil, floor and toInteger went
+/// through f64 and a bare or wrongly guarded `@intFromFloat`, which aborts the
+/// process past i64.
+fn decimal128ToInt(dec: decimal128.Decimal128, mode: narrowing.Rounding) EvaluatorError!i64 {
+    if (dec.scale < 0) {
+        const factor = narrowing.pow10(@intCast(-@as(i32, dec.scale))) orelse return EvaluatorError.Overflow;
+        const v = std.math.mul(i128, dec.coeff, factor) catch return EvaluatorError.Overflow;
+        return std.math.cast(i64, v) orelse EvaluatorError.Overflow;
+    }
+    return narrowing.decimalToInt(dec.coeff, @intCast(dec.scale), mode) catch EvaluatorError.Overflow;
+}
+
 pub fn ceil_val(val: Value) EvaluatorError!Value {
     return switch (val) {
         .Int => val,
@@ -1245,12 +1260,7 @@ pub fn ceil_val(val: Value) EvaluatorError!Value {
         .BigInt => val,
         .Real => |f| Value{ .Real = @ceil(f) },
         .Double => |d| Value{ .Double = @ceil(d) },
-        .Decimal128 => |dec| blk: {
-            // Convert to float, apply ceil, convert back
-            const float_val = @as(f64, @floatFromInt(dec.coeff)) / std.math.pow(f64, 10.0, @floatFromInt(dec.scale));
-            const ceiled = @ceil(float_val);
-            break :blk Value{ .Int = @as(i64, @intFromFloat(ceiled)) };
-        },
+        .Decimal128 => |dec| Value{ .Int = try decimal128ToInt(dec, .ceil) },
         else => EvaluatorError.TypeMismatch,
     };
 }
@@ -1262,12 +1272,7 @@ pub fn floor_val(val: Value) EvaluatorError!Value {
         .BigInt => val,
         .Real => |f| Value{ .Real = @floor(f) },
         .Double => |d| Value{ .Double = @floor(d) },
-        .Decimal128 => |dec| blk: {
-            // Convert to float, apply floor, convert back
-            const float_val = @as(f64, @floatFromInt(dec.coeff)) / std.math.pow(f64, 10.0, @floatFromInt(dec.scale));
-            const floored = @floor(float_val);
-            break :blk Value{ .Int = @as(i64, @intFromFloat(floored)) };
-        },
+        .Decimal128 => |dec| Value{ .Int = try decimal128ToInt(dec, .floor) },
         else => EvaluatorError.TypeMismatch,
     };
 }
@@ -1372,19 +1377,11 @@ pub fn toInteger_val(val: Value) EvaluatorError!Value {
             if (i > std.math.maxInt(i64) or i < std.math.minInt(i64)) return EvaluatorError.Overflow;
             return Value{ .Int = @intCast(i) };
         },
-        .Real => |f| {
-            if (f > 9.223372e18 or f < -9.223372e18) return EvaluatorError.Overflow;
-            return Value{ .Int = @intFromFloat(f) };
-        },
-        .Double => |d| {
-            if (d > 9.223372036854775807e18 or d < -9.223372036854775808e18) return EvaluatorError.Overflow;
-            return Value{ .Int = @intFromFloat(d) };
-        },
-        .Decimal128 => |dec| blk: {
-            const float_val = @as(f64, @floatFromInt(dec.coeff)) / std.math.pow(f64, 10.0, @floatFromInt(dec.scale));
-            if (float_val > 9.223372036854775807e18 or float_val < -9.223372036854775808e18) return EvaluatorError.Overflow;
-            break :blk Value{ .Int = @intFromFloat(float_val) };
-        },
+        // SONNY-2739: the guards compared with 9.223372036854775807e18, which
+        // is 2^63 as a float, so 2^63 and NaN got through to `@intFromFloat`.
+        .Real => |f| Value{ .Int = narrowing.floatToInt(i64, f) catch return EvaluatorError.Overflow },
+        .Double => |d| Value{ .Int = narrowing.floatToInt(i64, d) catch return EvaluatorError.Overflow },
+        .Decimal128 => |dec| Value{ .Int = try decimal128ToInt(dec, .trunc) },
         .Bool => |b| Value{ .Int = if (b) 1 else 0 },
         .Str => |s| blk: {
             const result = std.fmt.parseInt(i64, s, 10) catch return EvaluatorError.InvalidFormat;

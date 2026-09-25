@@ -182,10 +182,23 @@ fn renderCell(aa: std.mem.Allocator, cell: Value) ![]const u8 {
     return switch (cell) {
         .Str => |s| try std.fmt.allocPrint(aa, "'{s}'", .{s}),
         .Int => |n| try std.fmt.allocPrint(aa, "{d}", .{n}),
-        .Double => |d| try std.fmt.allocPrint(aa, "{d}d", .{d}),
+        .Double => |d| if (@abs(d) >= 1e21)
+            try std.fmt.allocPrint(aa, "{e}d", .{d})
+        else
+            try std.fmt.allocPrint(aa, "{d}d", .{d}),
         .Decimal => try std.fmt.allocPrint(aa, "{s}m", .{try geode.value_types.stringify(cell, &buf)}),
         .Bool => |b| if (b) "true" else "false",
         .Null => "null",
+        .List => |items| blk: {
+            var out: std.ArrayList(u8) = .empty;
+            try out.append(aa, '[');
+            for (items, 0..) |item, i| {
+                if (i > 0) try out.appendSlice(aa, ", ");
+                try out.appendSlice(aa, try renderCell(aa, item));
+            }
+            try out.append(aa, ']');
+            break :blk try out.toOwnedSlice(aa);
+        },
         else => try std.fmt.allocPrint(aa, "<{s}>", .{@tagName(cell)}),
     };
 }
@@ -396,4 +409,107 @@ fn checkPower(s: *Session, f: *Failures) !void {
 
 test "SONNY-2739: the power operator refuses a result that does not fit" {
     try inModes("power", &eval_modes, checkPower);
+}
+
+// ---------------------------------------------------------------------------
+// Casts, conversions and rounding
+// ---------------------------------------------------------------------------
+
+/// 0.000...01 with 60 and 40 fraction digits: past 10^38, where
+/// `std.math.pow(i128, 10, scale)` panicked.
+const scale60 = "0." ++ "0" ** 59 ++ "1";
+const scale40 = "0." ++ "0" ** 39 ++ "1";
+
+fn checkConversions(s: *Session, f: *Failures) !void {
+    // toFloat and CAST to a float type are a scale-6 decimal: a string past
+    // it, NaN or an infinity is 22003 (NaN was a garbage coefficient).
+    for ([_][]const u8{ "1e400", "-1e400", "nan", "inf", "1e33" }) |text| {
+        try expectFail(s, f, try std.fmt.allocPrint(s.arena.allocator(), "RETURN toFloat('{s}') AS x", .{text}), &.{}, error.DecimalOverflow);
+    }
+    try expectValue(s, f, "RETURN toFloat('4503599627370496') AS x", "4503599627370496.000000m");
+    try expectValue(s, f, "RETURN toFloat('2.5') AS x", "2.500000m");
+    try expectFail(s, f, "RETURN CAST('nan' AS DOUBLE) AS x", &.{}, error.DecimalOverflow);
+    try expectFail(s, f, "RETURN CAST('1e400' AS FLOAT) AS x", &.{}, error.DecimalOverflow);
+    try expectFail(s, f, "RETURN CAST('-inf' AS REAL) AS x", &.{}, error.DecimalOverflow);
+    try expectValue(s, f, "RETURN CAST('2.5' AS DOUBLE) AS x", "2.500000m");
+    // degrees and radians.
+    try expectFail(s, f, "RETURN degrees(1e33) AS x", &.{}, error.DecimalOverflow);
+    try expectFail(s, f, "RETURN radians(1e35) AS x", &.{}, error.DecimalOverflow);
+    try expectValue(s, f, "RETURN radians(180) AS x", "3.141593m");
+    // A JSON number past the decimal is its double.
+    try expectValue(s, f, "RETURN json('{\"a\": 1e300}').a AS x", "1e300d");
+    try expectValue(s, f, "RETURN json('{\"a\": 1.5}').a AS x", "1.500000m");
+    // ceil, floor, round and toInteger over a decimal: exact, 22003 past i64.
+    try expectFail(s, f, "RETURN ceil(9223372036854775807.5) AS x", &.{}, error.IntegerOverflow);
+    try expectValue(s, f, "RETURN floor(9223372036854775807.5) AS x", "9223372036854775807");
+    try expectValue(s, f, "RETURN ceil(-9223372036854775808.5) AS x", "-9223372036854775808");
+    try expectFail(s, f, "RETURN floor(-9223372036854775808.5) AS x", &.{}, error.IntegerOverflow);
+    try expectFail(s, f, "RETURN floor(1e30) AS x", &.{}, error.IntegerOverflow);
+    try expectFail(s, f, "RETURN round(1e30) AS x", &.{}, error.IntegerOverflow);
+    try expectValue(s, f, "RETURN round(2.5) AS x", "3");
+    try expectValue(s, f, "RETURN round(-2.5) AS x", "-3");
+    try expectValue(s, f, "RETURN round(" ++ scale60 ++ ") AS x", "0");
+    try expectValue(s, f, "RETURN ceil(" ++ scale60 ++ ") AS x", "1");
+    try expectValue(s, f, "RETURN floor(-" ++ scale60 ++ ") AS x", "-1");
+    try expectValue(s, f, "RETURN round(" ++ scale60 ++ ", 2) AS x", "0.00m");
+    try expectValue(s, f, "RETURN round(1.2345, 2) AS x", "1.23m");
+    try expectValue(s, f, "RETURN round(1234, -2) AS x", "1200");
+    try expectValue(s, f, "RETURN round(5, -19) AS x", "0");
+    try expectFail(s, f, "RETURN round(5000000000000000000, -19) AS x", &.{}, error.IntegerOverflow);
+    try expectValue(s, f, "RETURN round(1250.5, -2) AS x", "1300");
+    try expectValue(s, f, "RETURN round(1.5, -300) AS x", "0");
+    try expectFail(s, f, "RETURN toInteger(9223372036854775808.0) AS x", &.{}, error.IntegerOverflow);
+    try expectValue(s, f, "RETURN toInteger(9223372036854775807.9) AS x", "9223372036854775807");
+    try expectValue(s, f, "RETURN toInteger(" ++ scale40 ++ ") AS x", "0");
+    try expectValue(s, f, "RETURN toInteger(-" ++ scale40 ++ ") AS x", "-1");
+    // sum() and avg() of a list (a scalar function, in WHERE or a list
+    // comprehension): a decimal narrowed to its floor, and the sum, checked.
+    // (The planned read's WHERE drops a row whose predicate fails, so there
+    // the overflow filters every row out instead of failing the query.)
+    for ([_][]const u8{
+        "MATCH (n:F) WHERE sum([9223372036854775808.0]) > 0 RETURN count(*) AS c",
+        "MATCH (n:F) WHERE sum([9223372036854775807, 1]) > 0 RETURN count(*) AS c",
+        "MATCH (n:F) WHERE avg([9223372036854775808.0]) > 0 RETURN count(*) AS c",
+    }) |q| {
+        if (s.mode == .in_memory) try expectFail(s, f, q, &.{}, error.IntegerOverflow) else try expectValue(s, f, q, "0");
+    }
+    try expectValue(s, f, "RETURN [x IN [1] | sum([1.5, 2])] AS s", "[3]");
+    try expectValue(s, f, "RETURN [x IN [1] | avg([2.5, 4])] AS s", "[3]");
+    // A decimal literal with more than 255 fraction digits is out of range.
+    try expectFail(s, f, "RETURN 0." ++ "0" ** 299 ++ "1 AS x", &.{}, error.Overflow);
+}
+
+test "SONNY-2739: casts, conversions and rounding refuse a value that does not fit" {
+    try inModes("conversions", &eval_modes, checkConversions);
+}
+
+test "SONNY-2739: the heap rounding functions refuse a value past i64" {
+    const ef = geode.types.evaluator_functions;
+    const D = geode.types.decimal128.Decimal128;
+    const HeapValue = geode.heap.Value;
+    const big = HeapValue{ .Decimal128 = D{ .coeff = 92233720368547758075, .scale = 1 } };
+    try testing.expectError(error.Overflow, ef.ceil_val(big));
+    try testing.expectEqual(@as(i64, std.math.maxInt(i64)), (try ef.floor_val(big)).Int);
+    try testing.expectEqual(@as(i64, std.math.maxInt(i64)), (try ef.toInteger_val(big)).Int);
+    try testing.expectEqual(@as(i64, 5), (try ef.ceil_val(.{ .Decimal128 = D{ .coeff = 45, .scale = 1 } })).Int);
+    try testing.expectEqual(@as(i64, -5), (try ef.floor_val(.{ .Decimal128 = D{ .coeff = -45, .scale = 1 } })).Int);
+    try testing.expectEqual(@as(i64, 500), (try ef.ceil_val(.{ .Decimal128 = D{ .coeff = 5, .scale = -2 } })).Int);
+    try testing.expectError(error.Overflow, ef.toInteger_val(.{ .Decimal128 = D{ .coeff = 92233720368547758080, .scale = 1 } }));
+    try testing.expectError(error.Overflow, ef.toInteger_val(.{ .Double = rt(two63) }));
+    try testing.expectError(error.Overflow, ef.toInteger_val(.{ .Double = rt(std.math.nan(f64)) }));
+    try testing.expectError(error.Overflow, ef.toInteger_val(.{ .Double = rt(std.math.inf(f64)) }));
+    try testing.expectError(error.Overflow, ef.toInteger_val(.{ .Real = @floatCast(rt(two63)) }));
+    try testing.expectEqual(@as(i64, std.math.minInt(i64)), (try ef.toInteger_val(.{ .Double = rt(-two63) })).Int);
+}
+
+test "SONNY-2739: a typed ARRAY parameter past the decimal is refused" {
+    var arena = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const codec = geode.property_value_codec;
+    try testing.expectError(error.DecimalOverflow, codec.protoExtendedToHeapValue(a, .{ .type_name = "ARRAY", .data = .{ .text = "[1e300]" } }));
+    try testing.expectError(error.DecimalOverflow, codec.protoExtendedToHeapValue(a, .{ .type_name = "ARRAY", .data = .{ .text = "[-1e33]" } }));
+    // An integer past i64 / 10^6 after a float: was an i64 overflow.
+    _ = try codec.protoExtendedToHeapValue(a, .{ .type_name = "ARRAY", .data = .{ .text = "[1.5, 10000000000000]" } });
+    _ = try codec.protoExtendedToHeapValue(a, .{ .type_name = "ARRAY", .data = .{ .text = "[1.5, 2.25]" } });
 }

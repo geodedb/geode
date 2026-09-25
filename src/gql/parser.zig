@@ -3888,7 +3888,9 @@ pub const Parser = struct {
                     if (dot_idx >= lex.len) return error.UnexpectedToken;
                     const int_part = lex[0..dot_idx];
                     const frac_part = lex[dot_idx + 1 .. lex.len];
-                    const scale: u8 = @intCast(frac_part.len);
+                    // SONNY-2739: more than 255 fraction digits aborted the
+                    // server here (`@intCast`); it is an out-of-range literal.
+                    const scale: u8 = std.math.cast(u8, frac_part.len) orelse return error.Overflow;
                     // coeff = parse int_part ++ frac_part as i128
                     var buf = std.ArrayList(u8).empty;
                     try buf.appendSlice(self.arena.allocator(), int_part);

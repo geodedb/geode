@@ -1186,6 +1186,10 @@ pub fn evalExpr(allocator: std.mem.Allocator, e: ast.Expr, env: Env) EvalError!V
                         return EvalError.DivisionByZero;
                     } else if (std.mem.eql(u8, err_name, "DecimalOverflow")) {
                         return EvalError.DecimalOverflow;
+                    } else if (std.mem.eql(u8, err_name, "IntegerOverflow")) {
+                        // SONNY-2739: a geo or geometry result past its
+                        // integer type (22003).
+                        return EvalError.IntegerOverflow;
                     } else if (std.mem.eql(u8, err_name, "VectorTooLarge")) {
                         // CANARY: REQ=REQ-ENG-3922-VECTOR-DIM-GUARD; FEATURE="VectorF32"; ASPECT=OverCapErrorIdentity; STATUS=TESTED; TEST=tests/test_eng3922_dim_guard.zig; OWNER=eval; UPDATED=2026-08-29
                         // ENG-3922(b): keep the over-cap identity instead of
@@ -1964,17 +1968,23 @@ pub fn evalExpr(allocator: std.mem.Allocator, e: ast.Expr, env: Env) EvalError!V
 // CANARY: REQ=REQ-MAP-PROP-004; FEATURE="MapProperties"; ASPECT=JsonFieldExtraction; STATUS=TESTED; TEST=geodetestlab/specs/gql_expressions_comprehensive.yml; OWNER=eval; UPDATED=2026-01-09
 /// Extract a field from a JSON string and return it as a Value
 /// Supports nested JSON object access by returning the nested JSON as ExtValue.Json
+// CANARY: REQ=REQ-SONNY-2739-CHECKED-NARROWING; FEATURE="NumericNarrowing"; ASPECT=JsonNumbers; STATUS=TESTED; TEST=tests/test_sonny2739_float_narrowing.zig; OWNER=eval; UPDATED=2026-09-25
+/// A JSON number with a fraction or an exponent: a scale-6 Decimal (truncated),
+/// or the double itself when that does not fit the decimal. SONNY-2739: it was
+/// always narrowed with a bare `@intFromFloat`, so `json('{"a": 1e300}').a`
+/// aborted the server.
+fn jsonFloatValue(f: f64) Value {
+    const coeff = @import("types/decimal128.zig").checkedScaledCoeff(f, float_to_decimal_scale_f64) catch
+        return .{ .Double = f };
+    return .{ .Decimal = .{ .coeff = coeff, .scale = 6, .orig_scale = 6, .orig_repr = null } };
+}
+
 fn jsonStdValueToValue(allocator: std.mem.Allocator, value: std.json.Value) !Value {
     return switch (value) {
         .null => .{ .Null = {} },
         .bool => |b| .{ .Bool = b },
         .integer => |i| .{ .Int = @intCast(i) },
-        .float => |f| .{ .Decimal = .{
-            .coeff = @intFromFloat(f * 1_000_000.0),
-            .scale = 6,
-            .orig_scale = 6,
-            .orig_repr = null,
-        } },
+        .float => |f| jsonFloatValue(f),
         .string => |s| .{ .Str = try allocator.dupe(u8, s) },
         .array => |arr| blk: {
             const values = try allocator.alloc(Value, arr.items.len);
@@ -2178,7 +2188,7 @@ fn parseJsonValue(allocator: std.mem.Allocator, json_str: []const u8, i: *usize)
         const num_str = json_str[num_start..i.*];
         if (is_float) {
             const float_val = std.fmt.parseFloat(f64, num_str) catch return Value{ .Null = {} };
-            return Value{ .Decimal = .{ .coeff = @intFromFloat(float_val * float_to_decimal_scale_f64), .scale = 6, .orig_scale = 6, .orig_repr = null } };
+            return jsonFloatValue(float_val);
         } else {
             const int_val = std.fmt.parseInt(i64, num_str, 10) catch return Value{ .Null = {} };
             return Value{ .Int = int_val };
@@ -4247,7 +4257,8 @@ fn tryBasicFunction(allocator: std.mem.Allocator, function_name: []const u8, arg
             .Decimal => |d| return Value{ .Decimal = d },
             .Str => |s| {
                 const f = std.fmt.parseFloat(f64, s) catch return Value{ .Null = {} };
-                const scaled: i128 = @intFromFloat(@round(f * float_to_decimal_scale_f64));
+                // SONNY-2739: 'nan', 'inf' or past the decimal is 22003.
+                const scaled = try @import("types/decimal128.zig").checkedScaledCoeff(@round(f * float_to_decimal_scale_f64), 1.0);
                 return Value{ .Decimal = .{ .coeff = scaled, .scale = float_scale } };
             },
             else => return Value{ .Null = {} },
@@ -4256,7 +4267,8 @@ fn tryBasicFunction(allocator: std.mem.Allocator, function_name: []const u8, arg
         // Convert to integer
         switch (first_arg) {
             .Int => |i| return Value{ .Int = i },
-            .Decimal => |d| return Value{ .Int = @intCast(@divFloor(d.coeff, std.math.pow(i128, 10, d.scale))) },
+            // SONNY-2739: exact and checked; the floor, as before.
+            .Decimal => |d| return Value{ .Int = try narrowing.decimalToInt(d.coeff, d.scale, .floor) },
             .Bool => |b| return Value{ .Int = if (b) 1 else 0 },
             .Str => |s| {
                 const i = std.fmt.parseInt(i64, s, 10) catch return Value{ .Null = {} };
