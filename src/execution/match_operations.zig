@@ -231,6 +231,107 @@ pub fn passesRowVisibilityFilters(
     return passesTenantFilter(node, filter_tenant) and passesRLSFilter(reusable_row, node);
 }
 
+/// SONNY-2679: can an installed RLS policy deny any row to this session?
+///
+/// False exactly when `passesRLSFilter` allows every node: there is no active
+/// session, no user (neither a forwarded principal nor the connection user),
+/// or no policy in either RLS engine (an empty engine is default-allow, see
+/// `activeRlsPoliciesConfigured`). A traversal decides this once, so an
+/// unscoped session without a policy gets the same answer and pays nothing per
+/// hop.
+pub fn rlsMayDenyForSession() bool {
+    const ctx = execution.getActiveContext() orelse return false;
+    const has_user = blk: {
+        if (ctx.principal) |p| {
+            if (p.username != null) break :blk true;
+        }
+        break :blk ctx.user != null;
+    };
+    return has_user and activeRlsPoliciesConfigured();
+}
+
+/// SONNY-2679: the RLS half of `passesRowVisibilityFilters`, for a read path
+/// that applies the tenant half itself (graph_algorithms.zig's expression
+/// path uses `tenant_visibility`).
+pub fn passesRowRLSFilter(reusable_row: *std.StringHashMap(rls.Value), node: graph_store.Node) bool {
+    return passesRLSFilter(reusable_row, node);
+}
+
+// CANARY: REQ=REQ-SONNY-2679-HOP-VISIBILITY; FEATURE="TraversalRowVisibility"; ASPECT=HopScope; STATUS=TESTED; TEST=tests/test_sonny2679_rls_hop_targets.zig; OWNER=security; UPDATED=2026-09-25
+/// SONNY-2679: the visibility a traversal applies to every step it takes.
+///
+/// A pattern's start node is checked where it is scanned. Everything reached
+/// from it must pass the same checks: the node an edge leads to, and every
+/// node a variable-length path passes through, must be in the query's graph,
+/// visible to the session's tenant scope, and allowed by its RLS policies
+/// (label and expression); the edge itself must be in the graph and visible
+/// to the tenant scope. A node that fails is neither returned nor traversed,
+/// so it also breaks every path through it.
+///
+/// Before this, only the single hop checked its target's graph and tenant (and
+/// not RLS); the aggregation loop, the legacy grouping, OPTIONAL MATCH and
+/// variable length checked nothing, and `PathIterator` walked every edge.
+///
+/// `rls_row` is the caller's reusable RLS scratch row; checks never nest, so
+/// sharing it with the caller's own start-node checks is safe.
+pub const HopScope = struct {
+    filter_graph: []const u8,
+    filter_tenant: ?[]const u8,
+    rls_row: *std.StringHashMap(rls.Value),
+    /// `rlsMayDenyForSession()`, decided once when the scope is made.
+    rls_may_deny: bool,
+
+    pub fn init(filter_graph: []const u8, filter_tenant: ?[]const u8, rls_row: *std.StringHashMap(rls.Value)) HopScope {
+        return .{
+            .filter_graph = filter_graph,
+            .filter_tenant = filter_tenant,
+            .rls_row = rls_row,
+            .rls_may_deny = rlsMayDenyForSession(),
+        };
+    }
+
+    /// Does the scope hide any node beyond other graphs' (a tenant scope, or an
+    /// RLS policy that may deny)? When it does not, a node on a path need not
+    /// be resolved at all: the edge's graph check below covers it.
+    pub fn restrictsNodes(self: *const HopScope) bool {
+        return self.filter_tenant != null or self.rls_may_deny;
+    }
+
+    /// May a traversal return, or step onto, `node`?
+    pub fn nodeVisible(self: *const HopScope, node: *const graph_store.Node) bool {
+        if (!std.mem.eql(u8, node.graph_name, self.filter_graph)) return false;
+        if (!passesTenantFilter(node.*, self.filter_tenant)) return false;
+        if (!self.rls_may_deny) return true;
+        return passesRLSFilter(self.rls_row, node.*);
+    }
+
+    /// May a traversal walk `edge`?
+    pub fn edgeVisible(self: *const HopScope, edge: *const graph_store.Edge) bool {
+        if (!std.mem.eql(u8, edge.graph_name, self.filter_graph)) return false;
+        return passesTenantFilterEdge(edge.*, self.filter_tenant);
+    }
+
+    /// `PathIterator`'s gate: may a path be extended by `edge` onto the node
+    /// `next_node_id`? A node that resolves nowhere is not visible.
+    pub fn stepAllowed(self: *const HopScope, store: *graph_store.GraphStore, edge: *const graph_store.Edge, next_node_id: u64) bool {
+        if (!self.edgeVisible(edge)) return false;
+        if (!self.restrictsNodes()) return true;
+        const node = store.getNodePtrForScan(next_node_id) orelse return false;
+        return self.nodeVisible(node);
+    }
+
+    /// This scope as `PathIterator`'s step gate. The scope must outlive the
+    /// iterator (both are locals of the traversing function).
+    pub fn pathStepFilter(self: *const HopScope) execution.PathStepFilter {
+        return .{ .ctx = self, .allowFn = stepAllowedErased };
+    }
+
+    fn stepAllowedErased(ctx: *const anyopaque, store: *graph_store.GraphStore, edge: *const graph_store.Edge, next_node_id: u64) bool {
+        const self: *const HopScope = @ptrCast(@alignCast(ctx));
+        return self.stepAllowed(store, edge, next_node_id);
+    }
+};
+
 // GAP-0510 Task 4a: Check if a node passes the RLS denied-labels filter AND
 // expression-based property policies for the current session.
 // Returns true (allow) when no RLS engine is active, no user is authenticated,
@@ -4974,14 +5075,15 @@ const VarLenTarget = struct {
 /// Before this existed, `executeMultiChainRelationshipMatch` silently ignored
 /// `rel.min_len`/`rel.max_len` and degraded every quantified hop to a single
 /// fixed hop — so `-[:R*0..1]-(x)-[:S]->(y)` returned the *1..1 answer.
+///
+/// SONNY-2679: the scope gates every step of the walk, not just the endpoint,
+/// so a path through a node the session may not see is not followed.
 fn expandVarLengthHop(
     allocator: std.mem.Allocator,
     store: *graph_store.GraphStore,
-    rls_row: *std.StringHashMap(rls.Value),
+    scope: *const HopScope,
     start_node: *graph_store.Node,
     hop: ast.Hop,
-    filter_graph: []const u8,
-    filter_tenant: ?[]const u8,
     prop_env: Env,
     path_mode: ast.PathMode,
     out: *std.ArrayList(VarLenTarget),
@@ -4995,7 +5097,7 @@ fn expandVarLengthHop(
         .undirected => 'u',
     };
 
-    var path_iter = try execution.PathIterator.init(allocator, store, start_node.id, min_len, max_len, rel_type, rel_direction, path_mode);
+    var path_iter = try execution.PathIterator.init(allocator, store, start_node.id, min_len, max_len, rel_type, rel_direction, path_mode, scope.pathStepFilter());
     defer path_iter.deinit();
 
     while (try path_iter.next()) |raw_path| {
@@ -5007,9 +5109,7 @@ fn expandVarLengthHop(
         const end_node = store.getNodePtrForScan(end_id) orelse continue;
         // Graph scoping + tenant + RLS on the endpoint, same as every other
         // seeding site in this executor.
-        if (!std.mem.eql(u8, end_node.graph_name, filter_graph)) continue;
-        if (!passesTenantFilter(end_node.*, filter_tenant)) continue;
-        if (!passesRLSFilter(rls_row, end_node.*)) continue;
+        if (!scope.nodeVisible(end_node)) continue;
         if (!matchesLabels(end_node, hop.right.labels)) continue;
         if (!nodeMatchesProps(allocator, end_node, hop.right.props, prop_env)) continue;
 
@@ -5020,8 +5120,9 @@ fn expandVarLengthHop(
                 edges_ok = false;
                 break;
             };
-            // GAP-0846: edge-object tenant check on every relationship traversed.
-            if (!passesTenantFilterEdge(ep.*, filter_tenant)) {
+            // GAP-0846 / SONNY-2679: graph and tenant check on every
+            // relationship traversed.
+            if (!scope.edgeVisible(ep)) {
                 edges_ok = false;
                 break;
             }
@@ -5055,6 +5156,8 @@ fn executeMultiChainRelationshipMatch(allocator: std.mem.Allocator, q: ast.Query
     const filter_graph = current_graph orelse "default";
     // GAP-0279: Get tenant filter from session context
     const filter_tenant = try getSessionTenantFilter();
+    // SONNY-2679: the scope a quantified hop's walk applies to every step.
+    const hop_scope = HopScope.init(filter_graph, filter_tenant, &rls_row_local);
 
     // CANARY: REQ=REQ-BUG731-MATCH-SCOPING; FEATURE="MultiChainRelationshipMatch"; ASPECT=InlineNodeProps; STATUS=TESTED; TEST=tests/test_bug731_match_scoping.zig:201; OWNER=execution; UPDATED=2026-07-31
     // Env used to evaluate inline node-property predicates (`{k: <expr>}`).
@@ -5196,7 +5299,7 @@ fn executeMultiChainRelationshipMatch(allocator: std.mem.Allocator, q: ast.Query
             defer targets.deinit(allocator);
             for (left_candidates.items) |left_node| {
                 targets.clearRetainingCapacity();
-                try expandVarLengthHop(allocator, store, &rls_row_local, left_node, hop, filter_graph, filter_tenant, prop_env, effectivePathMode(q), &targets);
+                try expandVarLengthHop(allocator, store, &hop_scope, left_node, hop, prop_env, effectivePathMode(q), &targets);
                 for (targets.items) |target| {
                     var binding = MatchBinding.init(allocator);
                     if (hop.left.name) |v| try binding.vars.put(v, left_node);
@@ -5531,7 +5634,7 @@ fn executeMultiChainRelationshipMatch(allocator: std.mem.Allocator, q: ast.Query
                     if (extra_hop.rel.min_len != null or extra_hop.rel.max_len != null) {
                         var targets: std.ArrayList(VarLenTarget) = .empty;
                         defer targets.deinit(allocator);
-                        try expandVarLengthHop(allocator, store, &rls_row_local, ln, extra_hop, filter_graph, filter_tenant, prop_env, effectivePathMode(q), &targets);
+                        try expandVarLengthHop(allocator, store, &hop_scope, ln, extra_hop, prop_env, effectivePathMode(q), &targets);
                         for (targets.items) |target| {
                             // Cyclic constraint: if right_var is already bound, the target must match.
                             if (extra_right_var) |rv| {
@@ -5668,7 +5771,7 @@ fn executeMultiChainRelationshipMatch(allocator: std.mem.Allocator, q: ast.Query
                 if (hop.rel.min_len != null or hop.rel.max_len != null) {
                     var targets: std.ArrayList(VarLenTarget) = .empty;
                     defer targets.deinit(allocator);
-                    try expandVarLengthHop(allocator, store, &rls_row_local, ln, hop, filter_graph, filter_tenant, prop_env, effectivePathMode(q), &targets);
+                    try expandVarLengthHop(allocator, store, &hop_scope, ln, hop, prop_env, effectivePathMode(q), &targets);
                     for (targets.items) |target| {
                         if (right_var) |rv| {
                             if (existing.vars.get(rv)) |already_bound| {
@@ -6009,6 +6112,10 @@ fn executeMatchWithOptionalPatterns(allocator: std.mem.Allocator, q: ast.Query, 
     const filter_graph = current_graph orelse "default";
     // GAP-0279: Get tenant filter from session context
     const filter_tenant = try getSessionTenantFilter();
+    // SONNY-2679: every edge a chain walks, and every node it reaches, passes
+    // the session's graph, tenant and RLS scope (the OPTIONAL hop and a
+    // required chain after it used to check neither).
+    const hop_scope = HopScope.init(filter_graph, filter_tenant, &rls_row_local);
 
     // CANARY: REQ=REQ-GQL-OPTIONAL-MATCH-HOP-002; FEATURE="OptionalMatchWithHops"; ASPECT=FirstChainExecution; STATUS=TESTED; TEST=geodetestlab/specs/gql_pattern_matching_comprehensive.yml; OWNER=execution; UPDATED=2026-01-29
     // Step 1: Execute required chain (first chain) to get base bindings
@@ -6282,15 +6389,12 @@ fn executeMatchWithOptionalPatterns(allocator: std.mem.Allocator, q: ast.Query, 
                 if (rel_type) |rt| {
                     if (!std.mem.eql(u8, edge.label, rt)) continue;
                 }
-                // GAP-0509: Filter edge by tenant
-                if (!passesTenantFilterEdge(edge.*, filter_tenant)) continue;
+                // GAP-0509 / SONNY-2679: the edge's graph and tenant.
+                if (!hop_scope.edgeVisible(edge)) continue;
                 const right_node = store.getNodePtrForScan(edge.to_id) orelse continue;
 
-                // Filter right node by graph
-                if (!std.mem.eql(u8, right_node.graph_name, filter_graph)) continue;
-                // GAP-0279: Filter by tenant
-                if (!passesTenantFilter(right_node.*, filter_tenant)) continue;
-                if (!passesRLSFilter(&rls_row_local, right_node.*)) continue;
+                // GAP-0279 / SONNY-2679: the right node's graph, tenant and RLS.
+                if (!hop_scope.nodeVisible(right_node)) continue;
 
                 // Filter by right node labels
                 if (right_labels.len > 0) {
@@ -6364,15 +6468,12 @@ fn executeMatchWithOptionalPatterns(allocator: std.mem.Allocator, q: ast.Query, 
                 if (rel_type) |rt| {
                     if (!std.mem.eql(u8, edge.label, rt)) continue;
                 }
-                // GAP-0509: Filter edge by tenant
-                if (!passesTenantFilterEdge(edge.*, filter_tenant)) continue;
+                // GAP-0509 / SONNY-2679: the edge's graph and tenant.
+                if (!hop_scope.edgeVisible(edge)) continue;
                 const right_node = store.getNodePtrForScan(edge.from_id) orelse continue;
 
-                // Filter right node by graph
-                if (!std.mem.eql(u8, right_node.graph_name, filter_graph)) continue;
-                // GAP-0279: Filter by tenant
-                if (!passesTenantFilter(right_node.*, filter_tenant)) continue;
-                if (!passesRLSFilter(&rls_row_local, right_node.*)) continue;
+                // GAP-0279 / SONNY-2679: the right node's graph, tenant and RLS.
+                if (!hop_scope.nodeVisible(right_node)) continue;
 
                 // Filter by right node labels
                 if (right_labels.len > 0) {
@@ -6662,9 +6763,14 @@ fn executeMatchWithOptionalPatterns(allocator: std.mem.Allocator, q: ast.Query, 
                         if (rel_type) |rt| {
                             if (!std.mem.eql(u8, edge.label, rt)) continue;
                         }
-                        // GAP-0509: Filter edge by tenant
-                        if (!passesTenantFilterEdge(edge.*, filter_tenant)) continue;
+                        // GAP-0509 / SONNY-2679: the edge's graph and tenant.
+                        if (!hop_scope.edgeVisible(edge)) continue;
                         const right_node = store.getNodePtrForScan(edge.to_id) orelse continue;
+                        // SONNY-2679: the OPTIONAL hop's target passes the
+                        // session's graph, tenant and RLS scope (it checked
+                        // none of them, so a denied or foreign node filled the
+                        // optional variable).
+                        if (!hop_scope.nodeVisible(right_node)) continue;
 
                         // Filter by labels
                         if (right_labels.len > 0) {
@@ -6732,9 +6838,14 @@ fn executeMatchWithOptionalPatterns(allocator: std.mem.Allocator, q: ast.Query, 
                         if (rel_type) |rt| {
                             if (!std.mem.eql(u8, edge.label, rt)) continue;
                         }
-                        // GAP-0509: Filter edge by tenant
-                        if (!passesTenantFilterEdge(edge.*, filter_tenant)) continue;
+                        // GAP-0509 / SONNY-2679: the edge's graph and tenant.
+                        if (!hop_scope.edgeVisible(edge)) continue;
                         const right_node = store.getNodePtrForScan(edge.from_id) orelse continue;
+                        // SONNY-2679: the OPTIONAL hop's target passes the
+                        // session's graph, tenant and RLS scope (it checked
+                        // none of them, so a denied or foreign node filled the
+                        // optional variable).
+                        if (!hop_scope.nodeVisible(right_node)) continue;
 
                         // Filter by labels
                         if (right_labels.len > 0) {
@@ -6911,6 +7022,7 @@ fn executeMatchWithOptionalPatterns(allocator: std.mem.Allocator, q: ast.Query, 
                         fn consider(
                             a: std.mem.Allocator,
                             st: *graph_store.GraphStore,
+                            scope: *const HopScope,
                             edge_id: u64,
                             is_incoming: bool,
                             rtypes: []const []const u8,
@@ -6928,8 +7040,13 @@ fn executeMatchWithOptionalPatterns(allocator: std.mem.Allocator, q: ast.Query, 
                                 }
                                 if (!type_matches) return;
                             }
+                            // SONNY-2679: this expansion checked neither the
+                            // edge nor its target; both now pass the session's
+                            // graph, tenant and RLS scope.
+                            if (!scope.edgeVisible(edge)) return;
                             const target_id = if (is_incoming) edge.from_id else edge.to_id;
                             const target_node = st.getNodePtrForScan(target_id) orelse return;
+                            if (!scope.nodeVisible(target_node)) return;
                             if (tpat.labels.len > 0) {
                                 for (tpat.labels) |required_label| {
                                     var found = false;
@@ -6947,10 +7064,10 @@ fn executeMatchWithOptionalPatterns(allocator: std.mem.Allocator, q: ast.Query, 
                     };
 
                     for (out_edge_ids) |edge_id| {
-                        ChainExpand.consider(allocator, store, edge_id, false, rel_types, target_pattern, &matched_targets);
+                        ChainExpand.consider(allocator, store, &hop_scope, edge_id, false, rel_types, target_pattern, &matched_targets);
                     }
                     for (in_edge_ids) |edge_id| {
-                        ChainExpand.consider(allocator, store, edge_id, true, rel_types, target_pattern, &matched_targets);
+                        ChainExpand.consider(allocator, store, &hop_scope, edge_id, true, rel_types, target_pattern, &matched_targets);
                     }
 
                     // If no matches found, filter out this row
@@ -7650,9 +7767,15 @@ const RelEnvLayout = struct {
 /// Expands BFS paths from the left node and applies right-node filters,
 /// WHERE/FILTER clauses, and row building for each valid path.
 /// Appends matching rows to the provided rows list.
+///
+/// SONNY-2679: `scope` gates every step of the walk (PathIterator) and the
+/// path's end node. This traversal checked no edge and no node at all, so a
+/// tenant-scoped or RLS session read a denied node, and every node and path
+/// beyond it.
 fn executeVariableLengthPathTraversal(
     allocator: std.mem.Allocator,
     store: *graph_store.GraphStore,
+    scope: *const HopScope,
     left_node: *graph_store.Node,
     rows: *std.ArrayList([]Value),
     var_len_min: ?u32,
@@ -7679,7 +7802,7 @@ fn executeVariableLengthPathTraversal(
     const min_len = var_len_min orelse 0;
     const max_len = var_len_max;
 
-    var path_iter = try execution.PathIterator.init(allocator, store, left_node.id, min_len, max_len, rel_type, rel_direction, path_mode);
+    var path_iter = try execution.PathIterator.init(allocator, store, left_node.id, min_len, max_len, rel_type, rel_direction, path_mode, scope.pathStepFilter());
     defer path_iter.deinit();
 
     // Process each path found
@@ -7698,6 +7821,9 @@ fn executeVariableLengthPathTraversal(
         // Get the last node in the path as the right node
         const right_node_id = path.nodes.items[path.nodes.items.len - 1];
         const right_node_ptr = store.getNodePtrForScan(right_node_id) orelse continue;
+        // SONNY-2679: the end node passes the session's graph, tenant and RLS
+        // scope (every earlier step already did, in the PathIterator).
+        if (!scope.nodeVisible(right_node_ptr)) continue;
 
         // CANARY: REQ=REQ-GAP-0912-VARLEN-ENDPOINT-UNIFY; FEATURE="VariableLengthPaths"; ASPECT=EndpointUnification; STATUS=TESTED; TEST=tests/test_gap0912_0913_varlen_semantics.zig; OWNER=execution; UPDATED=2026-07-10
         // GAP-0912: reusing one variable at both pattern endpoints constrains
@@ -7961,6 +8087,7 @@ fn valueReferencesEnvBuffer(v: Value, bound: Value) bool {
 fn executeSingleHopEdgeTraversal(
     allocator: std.mem.Allocator,
     store: *graph_store.GraphStore,
+    scope: *const HopScope,
     left_node: *graph_store.Node,
     rows: *std.ArrayList([]Value),
     rel_direction: u8,
@@ -7974,7 +8101,6 @@ fn executeSingleHopEdgeTraversal(
     chain_path_var: ?[]const u8,
     param_names: []const []const u8,
     param_values: []const Value,
-    filter_tenant: ?[]const u8,
     where_clause: ?ast.Expr,
     filter_clause: ?ast.Expr,
     set_clauses: []const ast.SetClause,
@@ -7999,8 +8125,8 @@ fn executeSingleHopEdgeTraversal(
             if (rel_type) |rt| {
                 if (!std.mem.eql(u8, edge.label, rt)) continue;
             }
-            // GAP-0509: Filter edge by tenant
-            if (!passesTenantFilterEdge(edge.*, filter_tenant)) continue;
+            // GAP-0509 / SONNY-2679: the edge's graph and tenant.
+            if (!scope.edgeVisible(edge)) continue;
             // Filter by relationship properties if specified
             if (!matchesEdgeProperties(allocator, edge.*, rel_props_filter)) continue;
 
@@ -8010,12 +8136,14 @@ fn executeSingleHopEdgeTraversal(
 
             // GAP-0846 hardening: tenant-filter the RIGHT (target) node too. The
             // left node was already tenant-checked by the caller and the edge by
-            // passesTenantFilterEdge above, but the target endpoint was NOT —
-            // a cross-tenant edge whose target sits in a tenant the session
-            // cannot reach (hierarchy-denied sibling/ancestor) would otherwise
-            // leak the target row. Fail-closed, hierarchy-aware.
-            if (!std.mem.eql(u8, right_node_ptr.graph_name, left_node.graph_name)) continue;
-            if (!passesTenantFilter(right_node_ptr.*, filter_tenant)) continue;
+            // the scope above, but the target endpoint was NOT — a cross-tenant
+            // edge whose target sits in a tenant the session cannot reach
+            // (hierarchy-denied sibling/ancestor) would otherwise leak the
+            // target row. Fail-closed, hierarchy-aware.
+            // SONNY-2679: and RLS. The target's label and expression policies
+            // were never checked, so `RETURN h.s` read a denied node's
+            // properties and `RETURN h` returned it whole.
+            if (!scope.nodeVisible(right_node_ptr)) continue;
 
             // CANARY: REQ=REQ-GQL-SINGLEHOP-RIGHTNODE; FEATURE="SingleHopRightNodeFilter"; ASPECT=LabelFiltering; STATUS=TESTED; TEST=geodetestlab/specs/gql_pattern_matching_comprehensive.yml; OWNER=engine; UPDATED=2025-12-18
             // Filter right node by labels if specified
@@ -8256,6 +8384,8 @@ fn executeMultiHopGroupBy(
     // the per-node init/deinit pair is amortized away.
     var rls_row_local = std.StringHashMap(rls.Value).init(allocator);
     defer rls_row_local.deinit();
+    // SONNY-2679: every hop's edge and target pass the session's scope.
+    const hop_scope = HopScope.init(filter_graph, filter_tenant, &rls_row_local);
 
     // Arena allocator for all intermediate binding arrays (env_names, env_values,
     // group keys, copy arrays). These are bulk-freed when the arena is torn down
@@ -8416,11 +8546,14 @@ fn executeMultiHopGroupBy(
                     }
                     if (!matches_type) continue;
                 }
-                // GAP-0509: Filter edge by tenant
-                if (!passesTenantFilterEdge(edge.*, filter_tenant)) continue;
+                // GAP-0509 / SONNY-2679: the edge's graph and tenant.
+                if (!hop_scope.edgeVisible(edge)) continue;
 
                 const right_node_id = if (hop_direction == 'l') edge.from_id else edge.to_id;
                 const right_node_ptr = store.getNodePtrForScan(right_node_id) orelse continue;
+                // SONNY-2679: the hop target's graph, tenant and RLS (none were
+                // checked, so a denied or foreign node joined a group).
+                if (!hop_scope.nodeVisible(right_node_ptr)) continue;
 
                 // Filter right node by labels
                 if (hop.right.labels.len > 0) {
@@ -8703,6 +8836,10 @@ pub fn executeMatchQueryImpl(allocator: std.mem.Allocator, q: ast.Query, param_n
     const filter_graph = current_graph orelse "default";
     // GAP-0279: Get tenant filter from session context
     const filter_tenant = try getSessionTenantFilter();
+    // SONNY-2679: the graph, tenant and RLS scope every traversal below applies
+    // to each edge it walks and each node it reaches, not only to the start
+    // node it scans.
+    const hop_scope = HopScope.init(filter_graph, filter_tenant, &rls_row_local);
 
     // GAP (write-path OOM, 2026-07-04): route the covered single-node indexed-
     // equality point-write shapes ENGINE-DIRECT (exact-index seek + durable
@@ -8934,12 +9071,16 @@ pub fn executeMatchQueryImpl(allocator: std.mem.Allocator, q: ast.Query, param_n
                         if (rel_type) |rt| {
                             if (!std.mem.eql(u8, edge.label, rt)) continue;
                         }
-                        // GAP-0509: Filter edge by tenant
-                        if (!passesTenantFilterEdge(edge.*, filter_tenant)) continue;
+                        // GAP-0509 / SONNY-2679: the edge's graph and tenant.
+                        if (!hop_scope.edgeVisible(edge)) continue;
 
                         // Get the target node (to_id for outgoing edges)
                         const right_node_id = edge.to_id;
                         const right_node_ptr = store.getNodePtrForScan(right_node_id) orelse continue;
+                        // SONNY-2679: the target's graph, tenant and RLS. This
+                        // grouping loop checked none of them, so a denied or
+                        // foreign node formed its own group.
+                        if (!hop_scope.nodeVisible(right_node_ptr)) continue;
 
                         // Filter right node by labels
                         if (right_labels.len > 0) {
@@ -9082,12 +9223,16 @@ pub fn executeMatchQueryImpl(allocator: std.mem.Allocator, q: ast.Query, param_n
                         if (rel_type) |rt| {
                             if (!std.mem.eql(u8, edge.label, rt)) continue;
                         }
-                        // GAP-0509: Filter edge by tenant
-                        if (!passesTenantFilterEdge(edge.*, filter_tenant)) continue;
+                        // GAP-0509 / SONNY-2679: the edge's graph and tenant.
+                        if (!hop_scope.edgeVisible(edge)) continue;
 
                         // Get the target node (from_id for incoming edges)
                         const right_node_id = edge.from_id;
                         const right_node_ptr = store.getNodePtrForScan(right_node_id) orelse continue;
+                        // SONNY-2679: the target's graph, tenant and RLS. This
+                        // grouping loop checked none of them, so a denied or
+                        // foreign node formed its own group.
+                        if (!hop_scope.nodeVisible(right_node_ptr)) continue;
 
                         // Filter right node by labels
                         if (right_labels.len > 0) {
@@ -9572,14 +9717,18 @@ pub fn executeMatchQueryImpl(allocator: std.mem.Allocator, q: ast.Query, param_n
                         if (rel_type) |rt| {
                             if (!std.mem.eql(u8, edge.label, rt)) continue;
                         }
-                        // GAP-0509: Filter edge by tenant
-                        if (!passesTenantFilterEdge(edge.*, filter_tenant)) continue;
+                        // GAP-0509 / SONNY-2679: the edge's graph and tenant.
+                        if (!hop_scope.edgeVisible(edge)) continue;
                         // Filter by relationship properties
                         if (!matchesEdgeProperties(allocator, edge.*, rel_props_filter)) continue;
 
                         // Get the target node (to_id for outgoing edges)
                         const right_node_id = edge.to_id;
                         const right_node_ptr = store.getNodePtrForScan(right_node_id) orelse continue;
+                        // SONNY-2679: the target's graph, tenant and RLS. This
+                        // loop checked none of them, so `count(h)` counted a
+                        // denied or foreign node and `collect(h)` returned it.
+                        if (!hop_scope.nodeVisible(right_node_ptr)) continue;
 
                         // Filter right node by labels
                         if (right_labels.len > 0) {
@@ -9662,14 +9811,18 @@ pub fn executeMatchQueryImpl(allocator: std.mem.Allocator, q: ast.Query, param_n
                         if (rel_type) |rt| {
                             if (!std.mem.eql(u8, edge.label, rt)) continue;
                         }
-                        // GAP-0509: Filter edge by tenant
-                        if (!passesTenantFilterEdge(edge.*, filter_tenant)) continue;
+                        // GAP-0509 / SONNY-2679: the edge's graph and tenant.
+                        if (!hop_scope.edgeVisible(edge)) continue;
                         // Filter by relationship properties
                         if (!matchesEdgeProperties(allocator, edge.*, rel_props_filter)) continue;
 
                         // Get the target node (from_id for incoming edges)
                         const right_node_id = edge.from_id;
                         const right_node_ptr = store.getNodePtrForScan(right_node_id) orelse continue;
+                        // SONNY-2679: the target's graph, tenant and RLS. This
+                        // loop checked none of them, so `count(h)` counted a
+                        // denied or foreign node and `collect(h)` returned it.
+                        if (!hop_scope.nodeVisible(right_node_ptr)) continue;
 
                         // Filter right node by labels
                         if (right_labels.len > 0) {
@@ -9847,7 +10000,9 @@ pub fn executeMatchQueryImpl(allocator: std.mem.Allocator, q: ast.Query, param_n
                     }
 
                     // Stream variable-length paths from this starting node via PathIterator
-                    var path_iter = try execution.PathIterator.init(allocator, store, start_node.id, min_len, max_len, rel_type, rel_direction, effectivePathMode(q));
+                    // SONNY-2679: scoped, so no path steps onto or through a
+                    // node the session may not see.
+                    var path_iter = try execution.PathIterator.init(allocator, store, start_node.id, min_len, max_len, rel_type, rel_direction, effectivePathMode(q), hop_scope.pathStepFilter());
                     defer path_iter.deinit();
 
                     // Collect all target nodes from paths (deduplicated by node ID)
@@ -9862,6 +10017,11 @@ pub fn executeMatchQueryImpl(allocator: std.mem.Allocator, q: ast.Query, param_n
 
                         const target_node_id = path.nodes.items[path.nodes.items.len - 1];
                         const target_node_ptr = store.getNodePtrForScan(target_node_id) orelse continue;
+                        // SONNY-2679: the end node's graph, tenant and RLS
+                        // (nothing on this path was checked, so `count(h)`
+                        // counted, and `collect(h)` returned, every node
+                        // reachable through a denied one).
+                        if (!hop_scope.nodeVisible(target_node_ptr)) continue;
 
                         // Filter by right node labels (e.g., :Category in MATCH (a)-[*]->(b:Category {name: 'X'}))
                         if (right_labels.len > 0) {
@@ -10552,9 +10712,16 @@ pub fn executeMatchQueryImpl(allocator: std.mem.Allocator, q: ast.Query, param_n
                                 if (!matches_type) continue;
                             }
 
+                            // SONNY-2679: this block checked neither the edge
+                            // (not even its tenant) nor the node it leads to;
+                            // both now pass the session's graph, tenant and
+                            // RLS scope, so a denied middle node breaks the path.
+                            if (!hop_scope.edgeVisible(&edge)) continue;
+
                             // Get the target node based on direction
                             const right_node_id = if (hop_direction == 'l') edge.from_id else edge.to_id;
                             const right_node_ptr = store.getNodePtrForScan(right_node_id) orelse continue;
+                            if (!hop_scope.nodeVisible(right_node_ptr)) continue;
 
                             // Filter right node by labels
                             if (hop.right.labels.len > 0) {
@@ -10984,10 +11151,10 @@ pub fn executeMatchQueryImpl(allocator: std.mem.Allocator, q: ast.Query, param_n
                         resolveLimitParam(q.limit, q.limit_param, param_names, param_values)
                     else
                         null;
-                    try executeVariableLengthPathTraversal(allocator, store, left_node, &rows, var_len_min, var_len_max, rel_type, rel_direction, right_labels, right_props, left_node_var, right_node_var, rel_var, chain_path_var, param_names, param_values, traversal_where, q.filter_clause, has_with, items, limit_hint, effectivePathMode(q));
+                    try executeVariableLengthPathTraversal(allocator, store, &hop_scope, left_node, &rows, var_len_min, var_len_max, rel_type, rel_direction, right_labels, right_props, left_node_var, right_node_var, rel_var, chain_path_var, param_names, param_values, traversal_where, q.filter_clause, has_with, items, limit_hint, effectivePathMode(q));
                 } else {
                     // Standard single-hop edge traversal — delegated to helper
-                    try executeSingleHopEdgeTraversal(allocator, store, left_node, &rows, rel_direction, rel_type, rel_props_filter, right_labels, right_props, left_node_var, rel_var, right_node_var, chain_path_var, param_names, param_values, filter_tenant, traversal_where, q.filter_clause, q.set_clauses, has_with, items);
+                    try executeSingleHopEdgeTraversal(allocator, store, &hop_scope, left_node, &rows, rel_direction, rel_type, rel_props_filter, right_labels, right_props, left_node_var, rel_var, right_node_var, chain_path_var, param_names, param_values, traversal_where, q.filter_clause, q.set_clauses, has_with, items);
                 }
             }
         } else {

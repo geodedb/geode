@@ -14,6 +14,9 @@ const valuesEqual = execution.valuesEqual;
 // into `tenant_visibility.zig` precisely so a second read surface could not
 // drift from the MATCH path's answer; this file is that second surface.
 const tenant_visibility = @import("tenant_visibility.zig");
+// SONNY-2679: the RLS predicate is the MATCH path's own (see `RowRls`).
+const match_operations = @import("match_operations.zig");
+const rls = @import("rls");
 
 // Local type aliases
 const Value = value_types.Value;
@@ -51,6 +54,49 @@ fn sessionScope() tenant_visibility.TenancyError!?[]const u8 {
     const ctx = execution.getActiveContext();
     return tenant_visibility.resolveScope(if (ctx) |c| c.tenant_id else null);
 }
+
+// CANARY: REQ=REQ-SONNY-2679-HOP-VISIBILITY; FEATURE="TraversalRowVisibility"; ASPECT=ExpressionPathRLS; STATUS=TESTED; TEST=tests/test_sonny2679_rls_hop_targets.zig; OWNER=security; UPDATED=2026-09-25
+/// SONNY-2679: the RLS half of the expression path's row visibility.
+///
+/// SONNY-1326 gave these entry points the session's tenant scope but not its
+/// RLS policies, so `[(a)-[:R]->(b) | b.x]`, `COUNT { … }`, `EXISTS { … }` and
+/// `shortestPath()` read, counted and walked through nodes a label or
+/// expression policy denies. Every node the expression path yields, counts,
+/// starts from or steps onto now passes the same `passesRLSFilter` the MATCH
+/// path applies (`match_operations.passesRowRLSFilter`).
+///
+/// One scratch row per evaluation. `may_deny` is decided once: when no policy
+/// can deny a row to this session the check is skipped, which gives the same
+/// answer, so an unscoped session without a policy is unchanged and pays
+/// nothing per node.
+const RowRls = struct {
+    row: std.StringHashMap(rls.Value),
+    may_deny: bool,
+
+    fn init(allocator: std.mem.Allocator) RowRls {
+        return .{
+            .row = std.StringHashMap(rls.Value).init(allocator),
+            .may_deny = match_operations.rlsMayDenyForSession(),
+        };
+    }
+
+    fn deinit(self: *RowRls) void {
+        self.row.deinit();
+    }
+
+    fn allows(self: *RowRls, node: *const graph_store.Node) bool {
+        if (!self.may_deny) return true;
+        return match_operations.passesRowRLSFilter(&self.row, node.*);
+    }
+
+    /// May a walk step onto the node `node_id`? Resolved only when a policy
+    /// may deny it; a node that resolves nowhere is then not visible.
+    fn allowsId(self: *RowRls, store: *graph_store.GraphStore, node_id: u64) bool {
+        if (!self.may_deny) return true;
+        const node = (store.nodes.getOrHydratePtr(node_id) catch null) orelse return false;
+        return self.allows(node);
+    }
+};
 
 /// Check if a node has all the required labels
 pub fn nodeHasAllLabels(node_labels: []const []const u8, required_labels: []const []const u8) bool {
@@ -161,6 +207,7 @@ fn findFirstMatchingNode(
     env: Env,
     allocator: std.mem.Allocator,
     filter_tenant: ?[]const u8,
+    row_rls: *RowRls,
 ) ?u64 {
     var node_iter = store.nodes.iterator();
     while (node_iter.next()) |entry| {
@@ -168,6 +215,8 @@ fn findFirstMatchingNode(
         // SONNY-1326: a start/end node the session cannot see must read as
         // ABSENT (`null`), never as an error that would confirm it exists.
         if (!tenant_visibility.passesTenantFilter(node, filter_tenant)) continue;
+        // SONNY-2679: and one an RLS policy denies.
+        if (!row_rls.allows(entry.value_ptr)) continue;
         if (nodeMatchesPattern(node, node_pattern, env, allocator)) {
             return node.id;
         }
@@ -238,6 +287,7 @@ fn countVariableLengthPathMatches(
     env: Env,
     store: *graph_store.GraphStore,
     filter_tenant: ?[]const u8,
+    row_rls: *RowRls,
 ) !i64 {
     var count: i64 = 0;
     const min_len: usize = if (hop.rel.min_len) |m| @intCast(m) else 1;
@@ -281,6 +331,10 @@ fn countVariableLengthPathMatches(
                 const next_depth = current.depth + 1;
                 const next_node_id = edge.to_id;
 
+                // SONNY-2679: never step onto a node an RLS policy denies, so
+                // it is neither counted nor walked through.
+                if (!row_rls.allowsId(store, next_node_id)) continue;
+
                 // Skip if already visited at same or lower depth
                 if (visited.get(next_node_id)) |prev_depth| {
                     if (prev_depth <= next_depth) continue;
@@ -305,6 +359,8 @@ fn countVariableLengthPathMatches(
                         // SONNY-1326: only a COUNTED match the scope may see.
                         // Allocation-free (the tag is already in hand).
                         if (!tenant_visibility.passesTenantFilter(target_node_ptr.*, filter_tenant)) continue;
+                        // SONNY-2679: and its RLS policies allow.
+                        if (!row_rls.allows(target_node_ptr)) continue;
                         // Check label constraints on target using helper
                         if (!nodeHasAllLabels(target_node_ptr.labels, target_pattern.labels)) continue;
 
@@ -335,6 +391,7 @@ fn countSingleHopMatches(
     env: Env,
     store: *graph_store.GraphStore,
     filter_tenant: ?[]const u8,
+    row_rls: *RowRls,
 ) !i64 {
     var count: i64 = 0;
     const target_pattern = hop.right;
@@ -366,6 +423,8 @@ fn countSingleHopMatches(
             if (store.nodes.getOrHydratePtr(edge.to_id) catch null) |target_node| {
                 // SONNY-1326: only a COUNTED match the scope may see.
                 if (!tenant_visibility.passesTenantFilter(target_node.*, filter_tenant)) continue;
+                // SONNY-2679: and its RLS policies allow.
+                if (!row_rls.allows(target_node)) continue;
                 // Check label constraints on target using helper
                 if (!nodeHasAllLabels(target_node.labels, target_pattern.labels)) continue;
 
@@ -398,6 +457,9 @@ pub fn countPatternMatches(allocator: std.mem.Allocator, pattern: ast.GraphPatte
     // silently widened to every tenant.
     const filter_tenant = try sessionScope();
     const store = graph_store.getGlobalStore(allocator);
+    // SONNY-2679: and its RLS policies, for every node counted or walked.
+    var row_rls = RowRls.init(allocator);
+    defer row_rls.deinit();
     var count: i64 = 0;
 
     // Handle simple node patterns
@@ -417,6 +479,7 @@ pub fn countPatternMatches(allocator: std.mem.Allocator, pattern: ast.GraphPatte
                 // SONNY-1326: a correlated outer binding the session cannot see
                 // contributes ZERO, never an error that discloses existence.
                 if (!tenant_visibility.passesTenantFilter(bound_node.*, filter_tenant)) return 0;
+                if (!row_rls.allows(bound_node)) return 0;
                 // Check if this bound node matches the remaining pattern (labels, properties)
                 if (!nodeHasAllLabels(bound_node.labels, node_pattern.labels)) {
                     return 0; // Bound node doesn't match required labels
@@ -438,11 +501,11 @@ pub fn countPatternMatches(allocator: std.mem.Allocator, pattern: ast.GraphPatte
                     // C01/C02 Fix: Handle variable-length paths (*1..3)
                     const is_var_length = hop.rel.min_len != null or hop.rel.max_len != null;
                     if (is_var_length) {
-                        return countVariableLengthPathMatches(allocator, bound_node, hop, rel_type, where_filter, env, store, filter_tenant);
+                        return countVariableLengthPathMatches(allocator, bound_node, hop, rel_type, where_filter, env, store, filter_tenant, &row_rls);
                     }
 
                     // Original single-hop handling for non-variable-length patterns
-                    return countSingleHopMatches(allocator, bound_node, hop, rel_type, where_filter, env, store, filter_tenant);
+                    return countSingleHopMatches(allocator, bound_node, hop, rel_type, where_filter, env, store, filter_tenant, &row_rls);
                 }
 
                 // No relationship pattern, just count the bound node if it matched
@@ -456,6 +519,8 @@ pub fn countPatternMatches(allocator: std.mem.Allocator, pattern: ast.GraphPatte
                 const node = entry.value_ptr.*;
                 // SONNY-1326: count only rows the session scope admits.
                 if (!tenant_visibility.passesTenantFilter(node, filter_tenant)) continue;
+                // SONNY-2679: and its RLS policies allow.
+                if (!row_rls.allows(entry.value_ptr)) continue;
                 var matches = true;
 
                 // Check labels
@@ -560,6 +625,8 @@ pub fn countPatternMatches(allocator: std.mem.Allocator, pattern: ast.GraphPatte
                 // hop sees evicted-but-live endpoints under the bounded cache).
                 const from_node_ptr = (store.nodes.getOrHydratePtr(edge.from_id) catch null) orelse continue;
                 const to_node_ptr = (store.nodes.getOrHydratePtr(edge.to_id) catch null) orelse continue;
+                // SONNY-2679: both endpoints' RLS policies allow.
+                if (!row_rls.allows(from_node_ptr) or !row_rls.allows(to_node_ptr)) continue;
                 const from_node = from_node_ptr.*;
                 const to_node = to_node_ptr.*;
 
@@ -702,6 +769,9 @@ pub fn findShortestPath(allocator: std.mem.Allocator, pattern: ast.GraphPattern,
     // SONNY-1326: resolve the session scope ONCE, BEFORE any graph read.
     const filter_tenant = try sessionScope();
     const store = graph_store.getGlobalStore(allocator);
+    // SONNY-2679: and its RLS policies, for the endpoints and every step.
+    var row_rls = RowRls.init(allocator);
+    defer row_rls.deinit();
 
     // Extract start and end nodes from pattern
     if (pattern.chains.len == 0 or pattern.chains[0].hops.len == 0) {
@@ -723,6 +793,7 @@ pub fn findShortestPath(allocator: std.mem.Allocator, pattern: ast.GraphPattern,
                 // session cannot see reads as ABSENT, so the whole expression
                 // collapses to "no path" below rather than confirming the id.
                 if (!tenant_visibility.passesTenantFilter(left_val.Node.*, filter_tenant)) return Value{ .Null = {} };
+                if (!row_rls.allows(left_val.Node)) return Value{ .Null = {} };
                 start_id = left_val.Node.id;
             }
         }
@@ -733,6 +804,7 @@ pub fn findShortestPath(allocator: std.mem.Allocator, pattern: ast.GraphPattern,
         if (env.get(right_name)) |right_val| {
             if (right_val == .Node) {
                 if (!tenant_visibility.passesTenantFilter(right_val.Node.*, filter_tenant)) return Value{ .Null = {} };
+                if (!row_rls.allows(right_val.Node)) return Value{ .Null = {} };
                 end_id = right_val.Node.id;
             }
         }
@@ -741,13 +813,13 @@ pub fn findShortestPath(allocator: std.mem.Allocator, pattern: ast.GraphPattern,
     // CANARY: REQ=REQ-NESTING-REFACTOR-006; FEATURE="NestingReduction"; ASPECT=ShortestPathStart; STATUS=TESTED; OWNER=refactor; UPDATED=2026-01-30
     // If not found in env, try pattern matching using helper
     if (start_id == null) {
-        start_id = findFirstMatchingNode(store, hop.left, env, allocator, filter_tenant);
+        start_id = findFirstMatchingNode(store, hop.left, env, allocator, filter_tenant, &row_rls);
     }
 
     // CANARY: REQ=REQ-NESTING-REFACTOR-007; FEATURE="NestingReduction"; ASPECT=ShortestPathEnd; STATUS=TESTED; OWNER=refactor; UPDATED=2026-01-30
     // Use helper for end node matching
     if (end_id == null) {
-        end_id = findFirstMatchingNode(store, hop.right, env, allocator, filter_tenant);
+        end_id = findFirstMatchingNode(store, hop.right, env, allocator, filter_tenant, &row_rls);
     }
 
     if (start_id == null or end_id == null) {
@@ -821,6 +893,8 @@ pub fn findShortestPath(allocator: std.mem.Allocator, pattern: ast.GraphPattern,
                 // must be visible to the session scope.
                 if (!tenant_visibility.edgeTraversable(store, edge, filter_tenant)) continue;
                 const neighbor_id = edge.to_id;
+                // SONNY-2679: never step onto a node an RLS policy denies.
+                if (!row_rls.allowsId(store, neighbor_id)) continue;
                 if (!visited.contains(neighbor_id)) {
                     const neighbor_node = try allocator.create(PathNode);
                     neighbor_node.* = .{ .node_id = neighbor_id, .parent = current, .depth = current.depth + 1 };
@@ -837,6 +911,8 @@ pub fn findShortestPath(allocator: std.mem.Allocator, pattern: ast.GraphPattern,
                     const edge = store.getEdgeHydrated(edge_id) orelse continue;
                     if (!tenant_visibility.edgeTraversable(store, edge, filter_tenant)) continue;
                     const neighbor_id = edge.from_id;
+                    // SONNY-2679: never step onto a node an RLS policy denies.
+                    if (!row_rls.allowsId(store, neighbor_id)) continue;
                     if (!visited.contains(neighbor_id)) {
                         const neighbor_node = try allocator.create(PathNode);
                         neighbor_node.* = .{ .node_id = neighbor_id, .parent = current, .depth = current.depth + 1 };
@@ -877,7 +953,7 @@ pub fn findShortestPath(allocator: std.mem.Allocator, pattern: ast.GraphPattern,
         }
         std.mem.reverse(u64, node_ids.items);
 
-        if (try materializePath(allocator, store, node_ids.items, filter_tenant)) |path_value| {
+        if (try materializePath(allocator, store, node_ids.items, filter_tenant, &row_rls)) |path_value| {
             try reconstructed.append(allocator, path_value);
         }
     }
@@ -905,6 +981,7 @@ fn materializePath(
     store: *graph_store.GraphStore,
     node_ids: []const u64,
     filter_tenant: ?[]const u8,
+    row_rls: *RowRls,
 ) !?Value {
     var path_nodes = std.ArrayList(*const graph_store.Node).empty;
     errdefer path_nodes.deinit(allocator);
@@ -916,7 +993,8 @@ fn materializePath(
         // still live. A node that resolves nowhere is skipped (pre-existing
         // behaviour); a node that resolves but is OUT OF SCOPE kills the path.
         const node_ptr = (store.nodes.getOrHydratePtr(node_id) catch null) orelse continue;
-        if (!tenant_visibility.passesTenantFilter(node_ptr.*, filter_tenant)) {
+        // SONNY-2679: an RLS-denied node kills the path the same way.
+        if (!tenant_visibility.passesTenantFilter(node_ptr.*, filter_tenant) or !row_rls.allows(node_ptr)) {
             path_nodes.deinit(allocator);
             path_edges.deinit(allocator);
             return null;
@@ -963,6 +1041,10 @@ pub fn executePatternComprehension(allocator: std.mem.Allocator, pattern: ast.Gr
     // SONNY-1326: resolve the session scope ONCE, BEFORE any graph read.
     const filter_tenant = try sessionScope();
     const store = graph_store.getGlobalStore(allocator);
+    // SONNY-2679: and its RLS policies, for every node the comprehension
+    // starts from or yields.
+    var row_rls = RowRls.init(allocator);
+    defer row_rls.deinit();
 
     // Collect all results in a list
     var results = std.ArrayList(Value).empty;
@@ -986,6 +1068,8 @@ pub fn executePatternComprehension(allocator: std.mem.Allocator, pattern: ast.Gr
 
                 // SONNY-1326: yield only elements the session scope admits.
                 if (!tenant_visibility.passesTenantFilter(node, filter_tenant)) continue;
+                // SONNY-2679: and its RLS policies allow.
+                if (!row_rls.allows(node_ptr)) continue;
 
                 // Use helper for pattern matching
                 if (!nodeMatchesPattern(node, node_pattern, env, allocator)) continue;
@@ -1022,7 +1106,7 @@ pub fn executePatternComprehension(allocator: std.mem.Allocator, pattern: ast.Gr
                 if (left_val == .Node) {
                     // SONNY-1326: a correlated outer binding the session cannot
                     // see contributes no source node (empty list, not an error).
-                    if (tenant_visibility.passesTenantFilter(left_val.Node.*, filter_tenant)) {
+                    if (tenant_visibility.passesTenantFilter(left_val.Node.*, filter_tenant) and row_rls.allows(left_val.Node)) {
                         try source_nodes.append(allocator, left_val.Node);
                     }
                 }
@@ -1039,6 +1123,8 @@ pub fn executePatternComprehension(allocator: std.mem.Allocator, pattern: ast.Gr
                 // SONNY-1326: never start a comprehension walk from a row the
                 // session scope cannot see.
                 if (!tenant_visibility.passesTenantFilter(node, filter_tenant)) continue;
+                // SONNY-2679: nor from one an RLS policy denies.
+                if (!row_rls.allows(node_ptr)) continue;
                 if (nodeMatchesPattern(node, hop.left, env, allocator)) {
                     try source_nodes.append(allocator, node_ptr);
                 }
@@ -1065,6 +1151,8 @@ pub fn executePatternComprehension(allocator: std.mem.Allocator, pattern: ast.Gr
                         const target_node_ptr = (store.nodes.getOrHydratePtr(target_id) catch null) orelse continue;
                         const target_node = target_node_ptr.*;
                         if (!tenant_visibility.passesTenantFilter(target_node, filter_tenant)) continue;
+                        // SONNY-2679: and the target's RLS policies allow it.
+                        if (!row_rls.allows(target_node_ptr)) continue;
 
                         // CANARY: REQ=REQ-NESTING-REFACTOR-010; FEATURE="NestingReduction"; ASPECT=TargetNodeMatch; STATUS=TESTED; OWNER=refactor; UPDATED=2026-01-30
                         // Check if target node matches the right pattern using helper
@@ -1121,6 +1209,8 @@ pub fn executePatternComprehension(allocator: std.mem.Allocator, pattern: ast.Gr
                         const target_node_ptr = (store.nodes.getOrHydratePtr(target_id) catch null) orelse continue;
                         const target_node = target_node_ptr.*;
                         if (!tenant_visibility.passesTenantFilter(target_node, filter_tenant)) continue;
+                        // SONNY-2679: and the target's RLS policies allow it.
+                        if (!row_rls.allows(target_node_ptr)) continue;
 
                         // Check if target node matches the right pattern using helper
                         if (!nodeHasAllLabels(target_node.labels, hop.right.labels)) continue;

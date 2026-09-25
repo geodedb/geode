@@ -143,7 +143,7 @@ test "GAP-0520 bench: PathIterator streaming with LIMIT" {
 
     const iterations: usize = 50;
     for (0..iterations) |_| {
-        var iter = try execution.PathIterator.init(allocator, store, node_ids[0], 1, 10, "NEXT", 'r', .acyclic);
+        var iter = try execution.PathIterator.init(allocator, store, node_ids[0], 1, 10, "NEXT", 'r', .acyclic, null);
         defer iter.deinit();
 
         var path_count: usize = 0;

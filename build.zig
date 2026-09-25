@@ -8501,6 +8501,24 @@ pub fn build(b: *std.Build) void {
     const sonny2674_step = b.step("test-sonny2674-legacy-return", "Run SONNY-2674 regression (the legacy executor's RETURN groups, applies HAVING and a WHERE after RETURN like the planned read: in-memory, RLS-policy and tenant-scoped sessions)");
     sonny2674_step.dependOn(&run_sonny2674_tests.step);
 
+    // SONNY-2679: a traversal did not apply the session's RLS policies, and on
+    // most paths its tenant scope, to the node an edge leads to or the nodes a
+    // path passes through (single hop, count/collect, the legacy grouping,
+    // OPTIONAL MATCH, variable length, a quantified hop inside a longer
+    // pattern, and pattern comprehensions / COUNT {} / EXISTS {} /
+    // shortestPath()), so a denied or foreign node, and a path through it,
+    // reached the result.
+    const sonny2679_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny2679_rls_hop_targets.zig"), .target = target, .optimize = optimize });
+    sonny2679_test_mod.addImport("geode", root_mod);
+    sonny2679_test_mod.addImport("logging", logging_mod);
+    sonny2679_test_mod.addImport("rls", rls_mod);
+    sonny2679_test_mod.addImport("rls_types", rls_types_mod);
+    const sonny2679_tests = b.addTest(.{ .root_module = sonny2679_test_mod });
+    const run_sonny2679_tests = b.addRunArtifact(sonny2679_tests);
+    shardDep(test_step, &run_sonny2679_tests.step, 1, test_shard_loads, test_shard_index);
+    const sonny2679_step = b.step("test-sonny2679-rls-hop-targets", "Run SONNY-2679 regression (every traversal applies the session's RLS policies and tenant scope to each hop target and every node a path passes through: single hop, count/collect, grouping, OPTIONAL MATCH, variable length, multi-hop, and the expression path)");
+    sonny2679_step.dependOn(&run_sonny2679_tests.step);
+
     // SONNY-2656: the node-scan fast path leaked the clone of every typed
     // extended value (Text, Json, Bytea, Char, Varchar, Url, ...) it projected
     // (page teardown freed only strings, lists and maps) or filtered on (IS

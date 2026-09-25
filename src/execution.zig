@@ -2676,6 +2676,20 @@ pub const VariableLengthPath = struct {
     }
 };
 
+/// SONNY-2679: the visibility gate every `PathIterator` step must pass (the
+/// edge walked, and the node it leads to). Type-erased so this module does not
+/// depend on `match_operations`, whose RLS predicate needs the `rls` module
+/// that not every build of this file provides; `match_operations.HopScope`
+/// supplies it through `pathStepFilter()`.
+pub const PathStepFilter = struct {
+    ctx: *const anyopaque,
+    allowFn: *const fn (ctx: *const anyopaque, store: *graph_store.GraphStore, edge: *const graph_store.Edge, next_node_id: u64) bool,
+
+    pub fn allows(self: PathStepFilter, store: *graph_store.GraphStore, edge: *const graph_store.Edge, next_node_id: u64) bool {
+        return self.allowFn(self.ctx, store, edge, next_node_id);
+    }
+};
+
 // CANARY: REQ=REQ-GQL-080; FEATURE="VariableLengthPaths"; ASPECT=PathIterator; STATUS=TESTED; OWNER=engine; UPDATED=2026-04-10
 // CANARY: REQ=REQ-GQL-VARLEN-REVERSE-001; FEATURE="VariableLengthPaths"; ASPECT=ReverseTraversal; STATUS=TESTED; TEST=geodetestlab/specs/gql_pattern_matching_comprehensive.yml; OWNER=engine; UPDATED=2026-04-10
 // CANARY: REQ=REQ-GQL-PATH-MODES-004; FEATURE="GQL Path Mode Execution"; ASPECT=PathExpansion; STATUS=TESTED; TEST=geodetestlab/specs/gql_pattern_matching_comprehensive.yml; OWNER=engine; UPDATED=2026-04-10
@@ -2707,6 +2721,14 @@ pub const PathIterator = struct {
     // the consumed portion exceeds half the backing array.
     queue_front: usize,
     pending_front: usize,
+    // CANARY: REQ=REQ-SONNY-2679-HOP-VISIBILITY; FEATURE="TraversalRowVisibility"; ASPECT=PathIteratorGate; STATUS=TESTED; TEST=tests/test_sonny2679_rls_hop_targets.zig; OWNER=security; UPDATED=2026-09-25
+    // SONNY-2679: the session's graph, tenant and RLS scope. Every edge the
+    // BFS walks, and every node it steps onto, must pass it, so a path never
+    // contains, ends at or runs through a node the session may not see. A step
+    // is refused BEFORE it is expanded, so a denied node also never claims a
+    // `visited_states` slot another route to the same node would need. Null
+    // only for a caller with no session to apply (unit tests, benchmarks).
+    scope: ?PathStepFilter,
 
     const max_iterations: u64 = 10_000;
     const max_queue_size: usize = 5000;
@@ -2720,6 +2742,7 @@ pub const PathIterator = struct {
         rel_type: ?[]const u8,
         rel_direction: u8,
         path_mode: ast.PathMode,
+        scope: ?PathStepFilter,
     ) !PathIterator {
         var queue = try std.ArrayList(QueueItem).initCapacity(allocator, 16);
         errdefer {
@@ -2750,7 +2773,14 @@ pub const PathIterator = struct {
             .pending_results = std.ArrayList(VariableLengthPath).empty,
             .queue_front = 0,
             .pending_front = 0,
+            .scope = scope,
         };
+    }
+
+    /// SONNY-2679: may the BFS take `edge` onto `next_node_id`?
+    fn stepVisible(self: *const PathIterator, edge: *const graph_store.Edge, next_node_id: u64) bool {
+        const scope = self.scope orelse return true;
+        return scope.allows(self.store, edge, next_node_id);
     }
 
     pub fn deinit(self: *PathIterator) void {
@@ -2953,6 +2983,7 @@ pub const PathIterator = struct {
                         if (!std.mem.eql(u8, edge_ptr.label, rt)) continue;
                     }
                     if (self.shouldSkipByPathMode(&current_path, edge_ptr.id, edge_ptr.to_id)) continue;
+                    if (!self.stepVisible(edge_ptr, edge_ptr.to_id)) continue;
                     try self.expandEdge(&current_path, edge_ptr.id, edge_ptr.to_id, depth);
                 }
             }
@@ -2966,6 +2997,7 @@ pub const PathIterator = struct {
                     }
                     const next_node_id = edge_ptr.from_id;
                     if (self.shouldSkipByPathMode(&current_path, edge_ptr.id, next_node_id)) continue;
+                    if (!self.stepVisible(edge_ptr, next_node_id)) continue;
                     try self.expandEdge(&current_path, edge_ptr.id, next_node_id, depth);
                 }
             }
@@ -4217,6 +4249,7 @@ test "GAP-0525: PathIterator streaming with early termination" {
         "NEXT",
         'r',
         .acyclic,
+        null, // no session scope in this unit test
     );
     defer iter.deinit();
 
