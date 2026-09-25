@@ -371,36 +371,51 @@ fn rowContainsDeniedLabel(
     row: []const Value,
 ) bool {
     for (row) |val| {
-        switch (val) {
-            .Node => |node| {
+        if (valueContainsDeniedLabel(denied_labels, val)) return true;
+    }
+    return false;
+}
+
+// CANARY: REQ=REQ-SONNY-2687-NESTED-POSTFILTER; FEATURE="RLS Query Enforcement"; ASPECT=NestedValues; STATUS=TESTED; TEST=test-rls-filter; OWNER=security; UPDATED=2026-09-25
+/// Does `val`, or any value nested in it, carry a denied label? A node, an
+/// edge, and every node and edge of a path are checked; a list or a map is
+/// searched element by element (SONNY-2687: `collect(h)`, `[h]`, `{n: h}` and
+/// the like carry whole nodes, and this filter used to look at top-level
+/// values only). The executor drops denied rows itself (SONNY-2679); this is
+/// the defence-in-depth layer behind it.
+fn valueContainsDeniedLabel(denied_labels: *const std.StringHashMap(void), val: Value) bool {
+    switch (val) {
+        .Node => |node| {
+            for (node.labels) |label| {
+                if (denied_labels.contains(label)) return true;
+            }
+        },
+        .Edge => |edge| {
+            if (denied_labels.contains(edge.label)) return true;
+        },
+        .Path => |path| {
+            // Check all nodes and edges in the path.
+            for (path.nodes) |node| {
                 for (node.labels) |label| {
-                    if (denied_labels.contains(label)) {
-                        return true;
-                    }
+                    if (denied_labels.contains(label)) return true;
                 }
-            },
-            .Edge => |edge| {
-                if (denied_labels.contains(edge.label)) {
-                    return true;
-                }
-            },
-            .Path => |path| {
-                // Check all nodes and edges in the path.
-                for (path.nodes) |node| {
-                    for (node.labels) |label| {
-                        if (denied_labels.contains(label)) {
-                            return true;
-                        }
-                    }
-                }
-                for (path.edges) |edge| {
-                    if (denied_labels.contains(edge.label)) {
-                        return true;
-                    }
-                }
-            },
-            else => {},
-        }
+            }
+            for (path.edges) |edge| {
+                if (denied_labels.contains(edge.label)) return true;
+            }
+        },
+        .List => |items| {
+            for (items) |item| {
+                if (valueContainsDeniedLabel(denied_labels, item)) return true;
+            }
+        },
+        .Map => |map| {
+            var it = map.valueIterator();
+            while (it.next()) |item| {
+                if (valueContainsDeniedLabel(denied_labels, item.*)) return true;
+            }
+        },
+        else => {},
     }
     return false;
 }
@@ -620,6 +635,84 @@ test "rowContainsDeniedLabel uses snapshot correctly" {
     const ok_edge_val = Value{ .Edge = &public_edge };
     const ok_row = [_]Value{ok_edge_val};
     try std.testing.expect(!rowContainsDeniedLabel(&denied, &ok_row));
+}
+
+// CANARY: REQ=REQ-SONNY-2687-NESTED-POSTFILTER; FEATURE="RLS Query Enforcement"; ASPECT=NestedValues; STATUS=TESTED; TEST=test-rls-filter; OWNER=security; UPDATED=2026-09-25
+test "SONNY-2687: rowContainsDeniedLabel looks inside lists, maps and paths nested in them" {
+    const allocator = std.testing.allocator;
+    var denied = std.StringHashMap(void).init(allocator);
+    defer denied.deinit();
+    try denied.put("Secret", {});
+
+    var secret_labels = [_][]const u8{"Secret"};
+    var public_labels = [_][]const u8{"Public"};
+    const secret_node = graph_store.Node{ .id = 1, .labels = &secret_labels, .properties = graph_store.CompactPropertyMap.init(allocator) };
+    const public_node = graph_store.Node{ .id = 2, .labels = &public_labels, .properties = graph_store.CompactPropertyMap.init(allocator) };
+    const secret_edge = graph_store.Edge{ .id = 3, .label = "Secret", .from_id = 2, .to_id = 2, .properties = graph_store.CompactPropertyMap.init(allocator) };
+
+    // collect(h) carrying a denied node.
+    var collected = [_]Value{ .{ .Node = &public_node }, .{ .Node = &secret_node } };
+    try std.testing.expect(rowContainsDeniedLabel(&denied, &[_]Value{.{ .List = &collected }}));
+
+    // A denied edge two lists deep.
+    var inner = [_]Value{.{ .Edge = &secret_edge }};
+    var outer = [_]Value{ .{ .Int = 1 }, .{ .List = &inner } };
+    try std.testing.expect(rowContainsDeniedLabel(&denied, &[_]Value{.{ .List = &outer }}));
+
+    // A path through a denied node, inside a list.
+    const path_nodes = [_]*const graph_store.Node{ &public_node, &secret_node };
+    var paths = [_]Value{.{ .Path = .{ .nodes = &path_nodes, .edges = &.{} } }};
+    try std.testing.expect(rowContainsDeniedLabel(&denied, &[_]Value{.{ .List = &paths }}));
+
+    // A map value holding a denied node, and a list inside a map.
+    var map = std.StringHashMap(Value).init(allocator);
+    defer map.deinit();
+    try map.put("who", .{ .Node = &secret_node });
+    try std.testing.expect(rowContainsDeniedLabel(&denied, &[_]Value{.{ .Map = map }}));
+    var map_list = std.StringHashMap(Value).init(allocator);
+    defer map_list.deinit();
+    try map_list.put("all", .{ .List = &inner });
+    try std.testing.expect(rowContainsDeniedLabel(&denied, &[_]Value{.{ .Map = map_list }}));
+
+    // Nothing denied anywhere: kept.
+    var clean = [_]Value{ .{ .Node = &public_node }, .{ .Str = "Secret" } };
+    var clean_map = std.StringHashMap(Value).init(allocator);
+    defer clean_map.deinit();
+    try clean_map.put("n", .{ .Node = &public_node });
+    try std.testing.expect(!rowContainsDeniedLabel(&denied, &[_]Value{ .{ .List = &clean }, .{ .Map = clean_map } }));
+}
+
+test "SONNY-2687: applyRLSFilter drops a row whose collected list carries a denied node" {
+    const allocator = std.testing.allocator;
+    var engine = RLSFilterEngine.init(allocator);
+    defer engine.deinit();
+    try engine.addDenyPolicy("default", "Secret", "alice");
+
+    var secret_labels = [_][]const u8{"Secret"};
+    var public_labels = [_][]const u8{"Public"};
+    const secret_node = graph_store.Node{ .id = 1, .labels = &secret_labels, .properties = graph_store.CompactPropertyMap.init(allocator) };
+    const public_node = graph_store.Node{ .id = 2, .labels = &public_labels, .properties = graph_store.CompactPropertyMap.init(allocator) };
+    var leaked = [_]Value{ .{ .Node = &public_node }, .{ .Node = &secret_node } };
+    var kept = [_]Value{.{ .Node = &public_node }};
+
+    const columns = try allocator.alloc([]const u8, 1);
+    defer allocator.free(columns);
+    columns[0] = "hs";
+    const rows = try allocator.alloc([]Value, 2);
+    const rows_orig = rows;
+    rows[0] = try allocator.alloc(Value, 1);
+    rows[0][0] = .{ .List = &leaked };
+    rows[1] = try allocator.alloc(Value, 1);
+    rows[1][0] = .{ .List = &kept };
+    var result = execution.ExecutionResult{ .columns = columns, .rows = rows, .flags = std.ArrayList([]const u8).empty };
+
+    const removed = applyRLSFilter(allocator, &result, &engine, "alice", "default");
+    try std.testing.expectEqual(@as(usize, 1), removed);
+    try std.testing.expectEqual(@as(usize, 1), result.rows.len);
+    try std.testing.expectEqual(@as(usize, 1), result.rows[0][0].List.len);
+
+    for (result.rows) |row| allocator.free(row);
+    allocator.free(rows_orig);
 }
 
 // ---- Algorithm RLS filter tests ----

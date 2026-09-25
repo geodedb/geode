@@ -88,13 +88,64 @@ const RowRls = struct {
         if (!self.may_deny) return true;
         return match_operations.passesRowRLSFilter(&self.row, node.*);
     }
+};
 
-    /// May a walk step onto the node `node_id`? Resolved only when a policy
-    /// may deny it; a node that resolves nowhere is then not visible.
-    fn allowsId(self: *RowRls, store: *graph_store.GraphStore, node_id: u64) bool {
-        if (!self.may_deny) return true;
-        const node = (store.nodes.getOrHydratePtr(node_id) catch null) orelse return false;
-        return self.allows(node);
+/// SONNY-2687: the graph the expression path reads, resolved the way the
+/// MATCH read paths and knn() resolve it: the session's current graph,
+/// "default" when none is set.
+fn sessionGraph() []const u8 {
+    const ctx = execution.getActiveContext() orelse return graph_store.DEFAULT_GRAPH_NAME;
+    const session = ctx.session_state orelse return graph_store.DEFAULT_GRAPH_NAME;
+    return session.graph orelse graph_store.DEFAULT_GRAPH_NAME;
+}
+
+// CANARY: REQ=REQ-SONNY-2687-GRAPH-SCOPE; FEATURE="ExpressionPathGraphScope"; ASPECT=ExprScope; STATUS=TESTED; TEST=tests/test_sonny2687_expression_graph_scope.zig; OWNER=security; UPDATED=2026-09-25
+/// Everything the expression path checks before it reads a node or walks an
+/// edge. Resolved once per evaluation, BEFORE any graph read, and passed to
+/// every helper as a REQUIRED parameter, so a helper that forgets it does not
+/// compile:
+/// - the session's graph (SONNY-2687): the node scans walked `store.nodes`,
+///   which holds every graph's nodes, and no hop checked the graph it reached;
+/// - the tenant scope (SONNY-1326), hierarchy-aware and fail-closed;
+/// - the RLS policies (SONNY-2679).
+const ExprScope = struct {
+    graph: []const u8,
+    tenant: ?[]const u8,
+    rls: RowRls,
+
+    fn init(allocator: std.mem.Allocator) tenant_visibility.TenancyError!ExprScope {
+        return .{ .graph = sessionGraph(), .tenant = try sessionScope(), .rls = RowRls.init(allocator) };
+    }
+
+    fn deinit(self: *ExprScope) void {
+        self.rls.deinit();
+    }
+
+    /// May the expression path scan, start from, count, yield or put on a
+    /// path `node`?
+    fn nodeVisible(self: *ExprScope, node: *const graph_store.Node) bool {
+        if (!std.mem.eql(u8, node.graph_name, self.graph)) return false;
+        if (!tenant_visibility.passesTenantFilter(node.*, self.tenant)) return false;
+        return self.rls.allows(node);
+    }
+
+    /// May the expression path walk `edge`? It must be in the graph, and
+    /// traversable by the tenant scope (both endpoints visible, SONNY-1318).
+    fn edgeWalkable(self: *ExprScope, store: *graph_store.GraphStore, edge: graph_store.Edge) bool {
+        if (!std.mem.eql(u8, edge.graph_name, self.graph)) return false;
+        return tenant_visibility.edgeTraversable(store, edge, self.tenant);
+    }
+
+    /// May a walk take `edge` onto the node `next_id`? The edge check, and,
+    /// when a policy may deny a row, the node's own visibility (resolved on
+    /// demand; a node that resolves nowhere is not visible). Without a policy
+    /// the edge check suffices: its graph check keeps the walk in the graph
+    /// and `edgeTraversable` already checked both endpoints' tenants.
+    fn stepVisible(self: *ExprScope, store: *graph_store.GraphStore, edge: graph_store.Edge, next_id: u64) bool {
+        if (!self.edgeWalkable(store, edge)) return false;
+        if (!self.rls.may_deny) return true;
+        const node = (store.nodes.getOrHydratePtr(next_id) catch null) orelse return false;
+        return self.nodeVisible(node);
     }
 };
 
@@ -175,6 +226,33 @@ pub fn findEdgeBetween(
     return null;
 }
 
+/// SONNY-2687: `findEdgeBetween` under the whole expression scope (graph,
+/// tenant and RLS), for path materialization.
+fn findScopedEdgeBetween(
+    store: *graph_store.GraphStore,
+    from_id: u64,
+    to_id: u64,
+    scope: *ExprScope,
+) ?*const graph_store.Edge {
+    if (store.getOutgoingEdgeIds(from_id)) |out_edge_ids| {
+        for (out_edge_ids) |edge_id| {
+            const edge = store.getEdgeHydrated(edge_id) orelse continue;
+            if (edge.to_id != to_id) continue;
+            if (!scope.edgeWalkable(store, edge)) continue;
+            if (store.getEdgePtrHydrated(edge_id)) |edge_ptr| return edge_ptr;
+        }
+    }
+    if (store.getOutgoingEdgeIds(to_id)) |out_edge_ids| {
+        for (out_edge_ids) |edge_id| {
+            const edge = store.getEdgeHydrated(edge_id) orelse continue;
+            if (edge.to_id != from_id) continue;
+            if (!scope.edgeWalkable(store, edge)) continue;
+            if (store.getEdgePtrHydrated(edge_id)) |edge_ptr| return edge_ptr;
+        }
+    }
+    return null;
+}
+
 /// Find a bound node's ID in the environment by variable name
 pub fn findBoundNodeId(name: []const u8, env: Env) ?u64 {
     for (env.names, 0..) |env_name, i| {
@@ -206,17 +284,15 @@ fn findFirstMatchingNode(
     node_pattern: ast.NodePattern,
     env: Env,
     allocator: std.mem.Allocator,
-    filter_tenant: ?[]const u8,
-    row_rls: *RowRls,
+    scope: *ExprScope,
 ) ?u64 {
     var node_iter = store.nodes.iterator();
     while (node_iter.next()) |entry| {
         const node = entry.value_ptr.*;
-        // SONNY-1326: a start/end node the session cannot see must read as
+        // SONNY-1326 / SONNY-2679 / SONNY-2687: a start/end node the session
+        // cannot see (another graph or tenant, or denied by RLS) must read as
         // ABSENT (`null`), never as an error that would confirm it exists.
-        if (!tenant_visibility.passesTenantFilter(node, filter_tenant)) continue;
-        // SONNY-2679: and one an RLS policy denies.
-        if (!row_rls.allows(entry.value_ptr)) continue;
+        if (!scope.nodeVisible(entry.value_ptr)) continue;
         if (nodeMatchesPattern(node, node_pattern, env, allocator)) {
             return node.id;
         }
@@ -286,8 +362,7 @@ fn countVariableLengthPathMatches(
     where_filter: ?*ast.Expr,
     env: Env,
     store: *graph_store.GraphStore,
-    filter_tenant: ?[]const u8,
-    row_rls: *RowRls,
+    scope: *ExprScope,
 ) !i64 {
     var count: i64 = 0;
     const min_len: usize = if (hop.rel.min_len) |m| @intCast(m) else 1;
@@ -320,20 +395,19 @@ fn countVariableLengthPathMatches(
             for (out_edge_ids) |edge_id| {
                 const edge = store.getEdgeHydrated(edge_id) orelse continue;
 
-                // SONNY-1326: the frontier gate. BOTH endpoints must be visible
-                // to the session scope, so a bridge edge carrying the READER's
-                // own tenant tag cannot walk into another tenant's subgraph.
-                if (!tenant_visibility.edgeTraversable(store, edge, filter_tenant)) continue;
-
                 // Filter by relationship type if specified
                 if (rel_type != null and !std.mem.eql(u8, edge.label, rel_type.?)) continue;
 
                 const next_depth = current.depth + 1;
                 const next_node_id = edge.to_id;
 
-                // SONNY-2679: never step onto a node an RLS policy denies, so
-                // it is neither counted nor walked through.
-                if (!row_rls.allowsId(store, next_node_id)) continue;
+                // SONNY-1326 / SONNY-2679 / SONNY-2687: the frontier gate. The
+                // edge must be in the session's graph with BOTH endpoints
+                // visible to the tenant scope (so a bridge edge carrying the
+                // READER's own tenant tag cannot walk into another tenant's
+                // subgraph), and the node it leads to must not be denied by
+                // RLS, so a hidden node is neither counted nor walked through.
+                if (!scope.stepVisible(store, edge, next_node_id)) continue;
 
                 // Skip if already visited at same or lower depth
                 if (visited.get(next_node_id)) |prev_depth| {
@@ -356,11 +430,9 @@ fn countVariableLengthPathMatches(
                     // Hydrate-on-miss so variable-length traversal crosses
                     // evicted-but-live nodes correctly under the bounded cache.
                     if (store.nodes.getOrHydratePtr(next_node_id) catch null) |target_node_ptr| {
-                        // SONNY-1326: only a COUNTED match the scope may see.
-                        // Allocation-free (the tag is already in hand).
-                        if (!tenant_visibility.passesTenantFilter(target_node_ptr.*, filter_tenant)) continue;
-                        // SONNY-2679: and its RLS policies allow.
-                        if (!row_rls.allows(target_node_ptr)) continue;
+                        // SONNY-1326 / SONNY-2679 / SONNY-2687: only a COUNTED
+                        // match the scope may see.
+                        if (!scope.nodeVisible(target_node_ptr)) continue;
                         // Check label constraints on target using helper
                         if (!nodeHasAllLabels(target_node_ptr.labels, target_pattern.labels)) continue;
 
@@ -390,8 +462,7 @@ fn countSingleHopMatches(
     where_filter: ?*ast.Expr,
     env: Env,
     store: *graph_store.GraphStore,
-    filter_tenant: ?[]const u8,
-    row_rls: *RowRls,
+    scope: *ExprScope,
 ) !i64 {
     var count: i64 = 0;
     const target_pattern = hop.right;
@@ -407,8 +478,9 @@ fn countSingleHopMatches(
             // SONNY-1326: BOTH endpoints must be visible. `a2`'s only outgoing
             // `:L` edge in the regression fixture is the tenant-A-tagged bridge
             // to `b1`; without this gate a tenant-A `COUNT { (a2)-[:L]->(x) }`
-            // reports 1 and discloses that `b1` exists.
-            if (!tenant_visibility.edgeTraversable(store, edge, filter_tenant)) continue;
+            // reports 1 and discloses that `b1` exists. SONNY-2687: and the
+            // edge must be in the session's graph.
+            if (!scope.edgeWalkable(store, edge)) continue;
 
             // Filter by relationship type if specified
             if (rel_type != null and !std.mem.eql(u8, edge.label, rel_type.?)) continue;
@@ -421,10 +493,9 @@ fn countSingleHopMatches(
             // Check target node pattern (right side of the hop). Hydrate-on-miss
             // so the hop crosses evicted-but-live nodes under the bounded cache.
             if (store.nodes.getOrHydratePtr(edge.to_id) catch null) |target_node| {
-                // SONNY-1326: only a COUNTED match the scope may see.
-                if (!tenant_visibility.passesTenantFilter(target_node.*, filter_tenant)) continue;
-                // SONNY-2679: and its RLS policies allow.
-                if (!row_rls.allows(target_node)) continue;
+                // SONNY-1326 / SONNY-2679 / SONNY-2687: only a COUNTED match
+                // the scope may see.
+                if (!scope.nodeVisible(target_node)) continue;
                 // Check label constraints on target using helper
                 if (!nodeHasAllLabels(target_node.labels, target_pattern.labels)) continue;
 
@@ -455,11 +526,10 @@ pub fn countPatternMatches(allocator: std.mem.Allocator, pattern: ast.GraphPatte
     // SONNY-1326: resolve the session scope ONCE, BEFORE any graph read. Under
     // strict tenancy an unscoped session is refused here (42501) rather than
     // silently widened to every tenant.
-    const filter_tenant = try sessionScope();
+    // SONNY-2679 / SONNY-2687: with the session's graph and RLS policies.
+    var scope = try ExprScope.init(allocator);
+    defer scope.deinit();
     const store = graph_store.getGlobalStore(allocator);
-    // SONNY-2679: and its RLS policies, for every node counted or walked.
-    var row_rls = RowRls.init(allocator);
-    defer row_rls.deinit();
     var count: i64 = 0;
 
     // Handle simple node patterns
@@ -478,8 +548,7 @@ pub fn countPatternMatches(allocator: std.mem.Allocator, pattern: ast.GraphPatte
             if (maybe_bound_node) |bound_node| {
                 // SONNY-1326: a correlated outer binding the session cannot see
                 // contributes ZERO, never an error that discloses existence.
-                if (!tenant_visibility.passesTenantFilter(bound_node.*, filter_tenant)) return 0;
-                if (!row_rls.allows(bound_node)) return 0;
+                if (!scope.nodeVisible(bound_node)) return 0;
                 // Check if this bound node matches the remaining pattern (labels, properties)
                 if (!nodeHasAllLabels(bound_node.labels, node_pattern.labels)) {
                     return 0; // Bound node doesn't match required labels
@@ -501,11 +570,11 @@ pub fn countPatternMatches(allocator: std.mem.Allocator, pattern: ast.GraphPatte
                     // C01/C02 Fix: Handle variable-length paths (*1..3)
                     const is_var_length = hop.rel.min_len != null or hop.rel.max_len != null;
                     if (is_var_length) {
-                        return countVariableLengthPathMatches(allocator, bound_node, hop, rel_type, where_filter, env, store, filter_tenant, &row_rls);
+                        return countVariableLengthPathMatches(allocator, bound_node, hop, rel_type, where_filter, env, store, &scope);
                     }
 
                     // Original single-hop handling for non-variable-length patterns
-                    return countSingleHopMatches(allocator, bound_node, hop, rel_type, where_filter, env, store, filter_tenant, &row_rls);
+                    return countSingleHopMatches(allocator, bound_node, hop, rel_type, where_filter, env, store, &scope);
                 }
 
                 // No relationship pattern, just count the bound node if it matched
@@ -517,10 +586,9 @@ pub fn countPatternMatches(allocator: std.mem.Allocator, pattern: ast.GraphPatte
             var iter = store.nodes.iterator();
             while (iter.next()) |entry| {
                 const node = entry.value_ptr.*;
-                // SONNY-1326: count only rows the session scope admits.
-                if (!tenant_visibility.passesTenantFilter(node, filter_tenant)) continue;
-                // SONNY-2679: and its RLS policies allow.
-                if (!row_rls.allows(entry.value_ptr)) continue;
+                // SONNY-1326 / SONNY-2679 / SONNY-2687: count only rows the
+                // session scope admits (graph, tenant and RLS).
+                if (!scope.nodeVisible(entry.value_ptr)) continue;
                 var matches = true;
 
                 // Check labels
@@ -613,8 +681,9 @@ pub fn countPatternMatches(allocator: std.mem.Allocator, pattern: ast.GraphPatte
                 // `getEdgeHydrated` copies under the per-shard map lock SHARED.
                 const edge = store.getEdgeHydrated(__eid) orelse continue;
 
-                // SONNY-1326: the edge and BOTH its endpoints must be visible.
-                if (!tenant_visibility.edgeTraversable(store, edge, filter_tenant)) continue;
+                // SONNY-1326 / SONNY-2687: the edge (in the session's graph)
+                // and BOTH its endpoints must be visible.
+                if (!scope.edgeWalkable(store, edge)) continue;
 
                 // Filter by relationship type if specified
                 if (rel_type != null and !std.mem.eql(u8, edge.label, rel_type.?)) {
@@ -625,8 +694,8 @@ pub fn countPatternMatches(allocator: std.mem.Allocator, pattern: ast.GraphPatte
                 // hop sees evicted-but-live endpoints under the bounded cache).
                 const from_node_ptr = (store.nodes.getOrHydratePtr(edge.from_id) catch null) orelse continue;
                 const to_node_ptr = (store.nodes.getOrHydratePtr(edge.to_id) catch null) orelse continue;
-                // SONNY-2679: both endpoints' RLS policies allow.
-                if (!row_rls.allows(from_node_ptr) or !row_rls.allows(to_node_ptr)) continue;
+                // SONNY-2679 / SONNY-2687: both endpoints are visible.
+                if (!scope.nodeVisible(from_node_ptr) or !scope.nodeVisible(to_node_ptr)) continue;
                 const from_node = from_node_ptr.*;
                 const to_node = to_node_ptr.*;
 
@@ -766,12 +835,13 @@ pub fn countPatternMatches(allocator: std.mem.Allocator, pattern: ast.GraphPatte
 /// Find shortest path between nodes using BFS
 /// CANARY: REQ=REQ-GQL-SHORTESTPATH; FEATURE="ShortestPath"; ASPECT=BFS; STATUS=IMPL; TEST=geodetestlab/specs/geode_graph_algorithms.yml; OWNER=engine; UPDATED=2025-10-12
 pub fn findShortestPath(allocator: std.mem.Allocator, pattern: ast.GraphPattern, all: bool, env: Env) !Value {
-    // SONNY-1326: resolve the session scope ONCE, BEFORE any graph read.
-    const filter_tenant = try sessionScope();
+    // SONNY-1326: resolve the session scope ONCE, BEFORE any graph read,
+    // with its graph (SONNY-2687) and RLS policies (SONNY-2679), for the
+    // endpoints and every step.
+    var scope = try ExprScope.init(allocator);
+    defer scope.deinit();
+    const filter_tenant = scope.tenant;
     const store = graph_store.getGlobalStore(allocator);
-    // SONNY-2679: and its RLS policies, for the endpoints and every step.
-    var row_rls = RowRls.init(allocator);
-    defer row_rls.deinit();
 
     // Extract start and end nodes from pattern
     if (pattern.chains.len == 0 or pattern.chains[0].hops.len == 0) {
@@ -792,8 +862,7 @@ pub fn findShortestPath(allocator: std.mem.Allocator, pattern: ast.GraphPattern,
                 // SONNY-1326: an endpoint bound by the OUTER query that this
                 // session cannot see reads as ABSENT, so the whole expression
                 // collapses to "no path" below rather than confirming the id.
-                if (!tenant_visibility.passesTenantFilter(left_val.Node.*, filter_tenant)) return Value{ .Null = {} };
-                if (!row_rls.allows(left_val.Node)) return Value{ .Null = {} };
+                if (!scope.nodeVisible(left_val.Node)) return Value{ .Null = {} };
                 start_id = left_val.Node.id;
             }
         }
@@ -803,8 +872,7 @@ pub fn findShortestPath(allocator: std.mem.Allocator, pattern: ast.GraphPattern,
     if (hop.right.name) |right_name| {
         if (env.get(right_name)) |right_val| {
             if (right_val == .Node) {
-                if (!tenant_visibility.passesTenantFilter(right_val.Node.*, filter_tenant)) return Value{ .Null = {} };
-                if (!row_rls.allows(right_val.Node)) return Value{ .Null = {} };
+                if (!scope.nodeVisible(right_val.Node)) return Value{ .Null = {} };
                 end_id = right_val.Node.id;
             }
         }
@@ -813,13 +881,13 @@ pub fn findShortestPath(allocator: std.mem.Allocator, pattern: ast.GraphPattern,
     // CANARY: REQ=REQ-NESTING-REFACTOR-006; FEATURE="NestingReduction"; ASPECT=ShortestPathStart; STATUS=TESTED; OWNER=refactor; UPDATED=2026-01-30
     // If not found in env, try pattern matching using helper
     if (start_id == null) {
-        start_id = findFirstMatchingNode(store, hop.left, env, allocator, filter_tenant, &row_rls);
+        start_id = findFirstMatchingNode(store, hop.left, env, allocator, &scope);
     }
 
     // CANARY: REQ=REQ-NESTING-REFACTOR-007; FEATURE="NestingReduction"; ASPECT=ShortestPathEnd; STATUS=TESTED; OWNER=refactor; UPDATED=2026-01-30
     // Use helper for end node matching
     if (end_id == null) {
-        end_id = findFirstMatchingNode(store, hop.right, env, allocator, filter_tenant, &row_rls);
+        end_id = findFirstMatchingNode(store, hop.right, env, allocator, &scope);
     }
 
     if (start_id == null or end_id == null) {
@@ -889,12 +957,12 @@ pub fn findShortestPath(allocator: std.mem.Allocator, pattern: ast.GraphPattern,
         if (store.getOutgoingEdgeIds(current.node_id)) |out_edge_ids| {
             for (out_edge_ids) |edge_id| {
                 const edge = store.getEdgeHydrated(edge_id) orelse continue;
-                // SONNY-1326: the frontier gate — the edge AND both endpoints
-                // must be visible to the session scope.
-                if (!tenant_visibility.edgeTraversable(store, edge, filter_tenant)) continue;
                 const neighbor_id = edge.to_id;
-                // SONNY-2679: never step onto a node an RLS policy denies.
-                if (!row_rls.allowsId(store, neighbor_id)) continue;
+                // SONNY-1326 / SONNY-2679 / SONNY-2687: the frontier gate — the
+                // edge (in the session's graph) AND both endpoints must be
+                // visible to the session scope, and the neighbour must not be
+                // denied by RLS.
+                if (!scope.stepVisible(store, edge, neighbor_id)) continue;
                 if (!visited.contains(neighbor_id)) {
                     const neighbor_node = try allocator.create(PathNode);
                     neighbor_node.* = .{ .node_id = neighbor_id, .parent = current, .depth = current.depth + 1 };
@@ -909,10 +977,8 @@ pub fn findShortestPath(allocator: std.mem.Allocator, pattern: ast.GraphPattern,
             if (store.getIncomingEdgeIds(current.node_id)) |in_edge_ids| {
                 for (in_edge_ids) |edge_id| {
                     const edge = store.getEdgeHydrated(edge_id) orelse continue;
-                    if (!tenant_visibility.edgeTraversable(store, edge, filter_tenant)) continue;
                     const neighbor_id = edge.from_id;
-                    // SONNY-2679: never step onto a node an RLS policy denies.
-                    if (!row_rls.allowsId(store, neighbor_id)) continue;
+                    if (!scope.stepVisible(store, edge, neighbor_id)) continue;
                     if (!visited.contains(neighbor_id)) {
                         const neighbor_node = try allocator.create(PathNode);
                         neighbor_node.* = .{ .node_id = neighbor_id, .parent = current, .depth = current.depth + 1 };
@@ -953,7 +1019,7 @@ pub fn findShortestPath(allocator: std.mem.Allocator, pattern: ast.GraphPattern,
         }
         std.mem.reverse(u64, node_ids.items);
 
-        if (try materializePath(allocator, store, node_ids.items, filter_tenant, &row_rls)) |path_value| {
+        if (try materializePath(allocator, store, node_ids.items, &scope)) |path_value| {
             try reconstructed.append(allocator, path_value);
         }
     }
@@ -970,8 +1036,9 @@ pub fn findShortestPath(allocator: std.mem.Allocator, pattern: ast.GraphPattern,
 /// applying the session scope to every node and to every connecting edge.
 ///
 /// Returns `null` (not an error) when any node on the chain is not visible to
-/// `filter_tenant` — an invisible element must make the whole path read as
-/// ABSENT, never as an error that discloses that the row exists.
+/// `scope` (its graph, tenant or RLS policies) — an invisible element must
+/// make the whole path read as ABSENT, never as an error that discloses that
+/// the row exists.
 ///
 /// OWNERSHIP: the returned `.Path` owns two heap slices allocated from
 /// `allocator`, exactly as the pre-SONNY-1326 inline code did (see the
@@ -980,8 +1047,7 @@ fn materializePath(
     allocator: std.mem.Allocator,
     store: *graph_store.GraphStore,
     node_ids: []const u64,
-    filter_tenant: ?[]const u8,
-    row_rls: *RowRls,
+    scope: *ExprScope,
 ) !?Value {
     var path_nodes = std.ArrayList(*const graph_store.Node).empty;
     errdefer path_nodes.deinit(allocator);
@@ -993,8 +1059,9 @@ fn materializePath(
         // still live. A node that resolves nowhere is skipped (pre-existing
         // behaviour); a node that resolves but is OUT OF SCOPE kills the path.
         const node_ptr = (store.nodes.getOrHydratePtr(node_id) catch null) orelse continue;
-        // SONNY-2679: an RLS-denied node kills the path the same way.
-        if (!tenant_visibility.passesTenantFilter(node_ptr.*, filter_tenant) or !row_rls.allows(node_ptr)) {
+        // SONNY-2679 / SONNY-2687: a node denied by RLS, or in another graph,
+        // kills the path the same way.
+        if (!scope.nodeVisible(node_ptr)) {
             path_nodes.deinit(allocator);
             path_edges.deinit(allocator);
             return null;
@@ -1006,7 +1073,7 @@ fn materializePath(
         // parallel edge the session may not traverse is never attached.
         if (idx > 0) {
             const prev_id = node_ids[idx - 1];
-            if (findEdgeBetween(store, prev_id, node_id, filter_tenant)) |edge_ptr| {
+            if (findScopedEdgeBetween(store, prev_id, node_id, scope)) |edge_ptr| {
                 try path_edges.append(allocator, edge_ptr);
             }
         }
@@ -1038,13 +1105,12 @@ fn freeExtendedEnv(allocator: std.mem.Allocator, extended: Env, base: Env) void 
 /// Returns a list of values generated by evaluating map_expr for each pattern match
 /// CANARY: REQ=REQ-GQL-166; FEATURE="Pattern Comprehension Execution"; ASPECT=Execution; STATUS=TESTED; OWNER=execution; UPDATED=2025-10-14
 pub fn executePatternComprehension(allocator: std.mem.Allocator, pattern: ast.GraphPattern, where_filter: ?*ast.Expr, map_expr: ast.Expr, env: Env) !Value {
-    // SONNY-1326: resolve the session scope ONCE, BEFORE any graph read.
-    const filter_tenant = try sessionScope();
+    // SONNY-1326: resolve the session scope ONCE, BEFORE any graph read, with
+    // its graph (SONNY-2687) and RLS policies (SONNY-2679), for every node the
+    // comprehension starts from or yields.
+    var scope = try ExprScope.init(allocator);
+    defer scope.deinit();
     const store = graph_store.getGlobalStore(allocator);
-    // SONNY-2679: and its RLS policies, for every node the comprehension
-    // starts from or yields.
-    var row_rls = RowRls.init(allocator);
-    defer row_rls.deinit();
 
     // Collect all results in a list
     var results = std.ArrayList(Value).empty;
@@ -1066,10 +1132,9 @@ pub fn executePatternComprehension(allocator: std.mem.Allocator, pattern: ast.Gr
                 const node_ptr = entry.value_ptr;
                 const node = node_ptr.*;
 
-                // SONNY-1326: yield only elements the session scope admits.
-                if (!tenant_visibility.passesTenantFilter(node, filter_tenant)) continue;
-                // SONNY-2679: and its RLS policies allow.
-                if (!row_rls.allows(node_ptr)) continue;
+                // SONNY-1326 / SONNY-2679 / SONNY-2687: yield only elements
+                // the session scope admits.
+                if (!scope.nodeVisible(node_ptr)) continue;
 
                 // Use helper for pattern matching
                 if (!nodeMatchesPattern(node, node_pattern, env, allocator)) continue;
@@ -1106,7 +1171,7 @@ pub fn executePatternComprehension(allocator: std.mem.Allocator, pattern: ast.Gr
                 if (left_val == .Node) {
                     // SONNY-1326: a correlated outer binding the session cannot
                     // see contributes no source node (empty list, not an error).
-                    if (tenant_visibility.passesTenantFilter(left_val.Node.*, filter_tenant) and row_rls.allows(left_val.Node)) {
+                    if (scope.nodeVisible(left_val.Node)) {
                         try source_nodes.append(allocator, left_val.Node);
                     }
                 }
@@ -1120,11 +1185,9 @@ pub fn executePatternComprehension(allocator: std.mem.Allocator, pattern: ast.Gr
             while (iter.next()) |entry| {
                 const node_ptr: *const graph_store.Node = entry.value_ptr;
                 const node = node_ptr.*;
-                // SONNY-1326: never start a comprehension walk from a row the
-                // session scope cannot see.
-                if (!tenant_visibility.passesTenantFilter(node, filter_tenant)) continue;
-                // SONNY-2679: nor from one an RLS policy denies.
-                if (!row_rls.allows(node_ptr)) continue;
+                // SONNY-1326 / SONNY-2679 / SONNY-2687: never start a
+                // comprehension walk from a row the session scope cannot see.
+                if (!scope.nodeVisible(node_ptr)) continue;
                 if (nodeMatchesPattern(node, hop.left, env, allocator)) {
                     try source_nodes.append(allocator, node_ptr);
                 }
@@ -1143,16 +1206,17 @@ pub fn executePatternComprehension(allocator: std.mem.Allocator, pattern: ast.Gr
                         // `Value.Edge` binding the map expression may reference,
                         // never dereferenced to decide anything.
                         const edge = store.getEdgeHydrated(edge_id) orelse continue;
-                        // The edge AND both endpoints must be visible.
-                        if (!tenant_visibility.edgeTraversable(store, edge, filter_tenant)) continue;
+                        // The edge (in the session's graph) AND both endpoints
+                        // must be visible.
+                        if (!scope.edgeWalkable(store, edge)) continue;
                         const edge_ptr = store.getEdgePtrHydrated(edge_id) orelse continue;
                         const target_id = edge.to_id;
 
                         const target_node_ptr = (store.nodes.getOrHydratePtr(target_id) catch null) orelse continue;
                         const target_node = target_node_ptr.*;
-                        if (!tenant_visibility.passesTenantFilter(target_node, filter_tenant)) continue;
-                        // SONNY-2679: and the target's RLS policies allow it.
-                        if (!row_rls.allows(target_node_ptr)) continue;
+                        // SONNY-1326 / SONNY-2679 / SONNY-2687: the target
+                        // passes the session scope.
+                        if (!scope.nodeVisible(target_node_ptr)) continue;
 
                         // CANARY: REQ=REQ-NESTING-REFACTOR-010; FEATURE="NestingReduction"; ASPECT=TargetNodeMatch; STATUS=TESTED; OWNER=refactor; UPDATED=2026-01-30
                         // Check if target node matches the right pattern using helper
@@ -1202,15 +1266,15 @@ pub fn executePatternComprehension(allocator: std.mem.Allocator, pattern: ast.Gr
                         // SONNY-1326: by-value read for every decision; the raw
                         // pointer is only the `Value.Edge` binding (see above).
                         const edge = store.getEdgeHydrated(edge_id) orelse continue;
-                        if (!tenant_visibility.edgeTraversable(store, edge, filter_tenant)) continue;
+                        if (!scope.edgeWalkable(store, edge)) continue;
                         const edge_ptr = store.getEdgePtrHydrated(edge_id) orelse continue;
                         const target_id = edge.from_id;
 
                         const target_node_ptr = (store.nodes.getOrHydratePtr(target_id) catch null) orelse continue;
                         const target_node = target_node_ptr.*;
-                        if (!tenant_visibility.passesTenantFilter(target_node, filter_tenant)) continue;
-                        // SONNY-2679: and the target's RLS policies allow it.
-                        if (!row_rls.allows(target_node_ptr)) continue;
+                        // SONNY-1326 / SONNY-2679 / SONNY-2687: the target
+                        // passes the session scope.
+                        if (!scope.nodeVisible(target_node_ptr)) continue;
 
                         // Check if target node matches the right pattern using helper
                         if (!nodeHasAllLabels(target_node.labels, hop.right.labels)) continue;

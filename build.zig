@@ -8532,6 +8532,19 @@ pub fn build(b: *std.Build) void {
     const sonny2690_step = b.step("test-sonny2690-multi-label-expr-policy", "Run SONNY-2690 regression (the expression RLS policies of every label on a node apply, in either label order, under a scan and under a hop)");
     sonny2690_step.dependOn(&run_sonny2690_tests.step);
 
+    // SONNY-2687: pattern comprehensions, COUNT {}, EXISTS {} and
+    // shortestPath() scanned and walked every graph's nodes, not the
+    // session's graph. (The transport post-filter half is tested inline in
+    // src/server/rls_filter.zig, test-rls-filter.)
+    const sonny2687_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny2687_expression_graph_scope.zig"), .target = target, .optimize = optimize });
+    sonny2687_test_mod.addImport("geode", root_mod);
+    sonny2687_test_mod.addImport("logging", logging_mod);
+    const sonny2687_tests = b.addTest(.{ .root_module = sonny2687_test_mod });
+    const run_sonny2687_tests = b.addRunArtifact(sonny2687_tests);
+    shardDep(test_step, &run_sonny2687_tests.step, 1, test_shard_loads, test_shard_index);
+    const sonny2687_step = b.step("test-sonny2687-expression-graph-scope", "Run SONNY-2687 regression (pattern comprehensions, COUNT {}, EXISTS {} and shortestPath() scan, start from and reach only the session graph's nodes and edges)");
+    sonny2687_step.dependOn(&run_sonny2687_tests.step);
+
     // SONNY-2656: the node-scan fast path leaked the clone of every typed
     // extended value (Text, Json, Bytea, Char, Varchar, Url, ...) it projected
     // (page teardown freed only strings, lists and maps) or filtered on (IS
