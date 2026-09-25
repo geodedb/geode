@@ -236,6 +236,84 @@ fn shardDep(
     if (min_idx == index) test_step.dependOn(dep);
 }
 
+/// SONNY-2746: `test-compile` also compiles every executable target of this
+/// build, so a change cannot break one unseen (the `geode-auth` user_auth CLI
+/// was reached only by the default install step; most benchmark and tool
+/// executables only by steps no gate runs). Runs once, when build() returns,
+/// and walks the dependency graph of every top-level step instead of keeping
+/// a list, so an executable added later joins as soon as any step uses it.
+/// Two kinds stay out, each built by its own step:
+///   * an executable for another target: the `cross-clients` builds;
+///   * an executable that links Vulkan: the GPU benchmarks (`bench-gpu`).
+///     test-compile, like the aggregate, must not require the Vulkan SDK.
+/// And the executables in `rotted_executables` stay out until they compile.
+fn addExecutablesToTestCompile(b: *std.Build, target: std.Build.ResolvedTarget) void {
+    const compile_all = g_test_compile_step orelse return;
+    var seen: std.AutoHashMapUnmanaged(*std.Build.Step, void) = .empty;
+    defer seen.deinit(b.allocator);
+    var pending: std.ArrayList(*std.Build.Step) = .empty;
+    defer pending.deinit(b.allocator);
+    var exes: std.ArrayList(*std.Build.Step) = .empty;
+    defer exes.deinit(b.allocator);
+    var rotted_found = [_]bool{false} ** rotted_executables.len;
+    for (b.top_level_steps.values()) |tls| pending.append(b.allocator, &tls.step) catch @panic("OOM");
+    walk: while (pending.pop()) |step| {
+        const gop = seen.getOrPut(b.allocator, step) catch @panic("OOM");
+        if (gop.found_existing) continue;
+        pending.appendSlice(b.allocator, step.dependencies.items) catch @panic("OOM");
+        const compile = step.cast(std.Build.Step.Compile) orelse continue;
+        if (compile.kind != .exe or step.owner != b) continue;
+        const exe_target = compile.root_module.resolved_target orelse continue;
+        if (!exe_target.query.eql(target.query)) continue;
+        if (linksSystemLibrary(compile, "vulkan")) continue;
+        for (rotted_executables, 0..) |name, i| {
+            if (std.mem.eql(u8, compile.name, name)) {
+                rotted_found[i] = true;
+                continue :walk;
+            }
+        }
+        exes.append(b.allocator, step) catch @panic("OOM");
+    }
+    for (rotted_executables, rotted_found) |name, found| {
+        if (!found) std.debug.panic("SONNY-2746: rotted_executables names '{s}', which is no executable of this build; remove it from the list", .{name});
+    }
+    for (exes.items) |step| compile_all.dependOn(step);
+}
+
+/// SONNY-2746: executables that did not compile when test-compile first took
+/// in every executable (2026-09-25). No step that a gate runs compiled them,
+/// so they rotted unseen: Zig 0.16 removed std.process.argsAlloc and
+/// argsWithAllocator, std.time.nanoTimestamp, heap.GeneralPurposeAllocator,
+/// Io.fixedBufferStream and File.read, and the engine APIs two benchmarks
+/// call have moved. canary_main also reaches AdvancedIndexManager
+/// persistAll/loadAll and src/index/interval_persist.zig, engine code that no
+/// longer compiles and that nothing calls. Each stays out of test-compile
+/// until it is migrated (then delete its line) or deleted. A name that
+/// matches no executable fails every build, so the list cannot go stale.
+const rotted_executables = [_][]const u8{
+    "bench_extract", // src/tools/bench_extract.zig: File.read
+    "bench_regress", // src/tools/bench_regress.zig: process.argsAlloc
+    "bench_remote_kms_unwrap_concurrency", // RemoteKmsServer.init now returns an error union
+    "benchmark_rls_row_skip", // expects a CompactPropertyMap, passes a StringHashMap
+    "canary_main", // tools/canary_main.zig -> src/index/interval_persist.zig: Io.fixedBufferStream
+    "fed_latency_aggregate", // Io.fixedBufferStream; std.c without libc
+    "fed_latency_governance", // process.argsWithAllocator
+    "fed_latency_streak", // process.argsWithAllocator
+    "fed_latency_validate", // process.argsWithAllocator
+    "gen_fuzz", // tools/gen_fuzz.zig: process.argsAlloc
+    "generate_fuzz_dict", // scripts/generate_fuzz_dict.zig: heap.GeneralPurposeAllocator
+    "impl_reality_delta", // src/tools/implementation_reality_delta.zig: process.argsAlloc
+    "run_variance_benches", // src/tools/run_variance_benches.zig: time.nanoTimestamp
+};
+
+fn linksSystemLibrary(compile: *std.Build.Step.Compile, name: []const u8) bool {
+    for (compile.root_module.link_objects.items) |link_object| switch (link_object) {
+        .system_lib => |lib| if (std.mem.eql(u8, lib.name, name)) return true,
+        else => {},
+    };
+    return false;
+}
+
 /// Get version string from git tags.
 /// Returns git tag if on a tag, or tag+offset+hash if ahead of tag.
 /// Falls back to commit hash or "unknown" if git is unavailable.
@@ -3714,7 +3792,9 @@ pub fn build(b: *std.Build) void {
     @memset(test_shard_loads, 0);
 
     const test_step = b.step("test", "Run unit tests");
-    g_test_compile_step = b.step("test-compile", "Compile every artifact the aggregate `test` step runs, in all shards, without running them (SONNY-2394)");
+    g_test_compile_step = b.step("test-compile", "Compile every artifact the aggregate `test` step runs, in all shards, and every executable target, without running any of them (SONNY-2394, SONNY-2746)");
+    // SONNY-2746: deferred so it runs once every step of build() exists.
+    defer addExecutablesToTestCompile(b, target);
     shardDep(test_step, &run_show_capabilities_tests.step, 1, test_shard_loads, test_shard_index);
     shardDep(test_step, &run_sonny_capability_profile_tests.step, 1, test_shard_loads, test_shard_index);
     shardDep(test_step, &run_capability_gate_tests.step, 1, test_shard_loads, test_shard_index);
