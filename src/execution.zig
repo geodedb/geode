@@ -699,6 +699,16 @@ pub const ExecutionResult = struct {
     rows: [][]Value,
     flags: std.ArrayList([]const u8),
     owns_value_memory: bool = false, // Set to true when values were duplicated and need freeing
+    /// How `deinit` and `applyRowWindow` free a row value when
+    /// `owns_value_memory` is set. null, the default, is `freeValue`, which
+    /// frees strings, lists and maps only. That is all most producers may free:
+    /// their rows can hold a typed extended value (Text, Json, Bytea, ...) or a
+    /// decimal's literal that they do not own (`duplicateValue` copies those
+    /// shallowly), so a complete free would free memory twice, or memory that
+    /// is not theirs. A producer whose rows own every value they hold sets a
+    /// complete free here: the engine-direct node scan sets
+    /// `property_value_codec.freeValue` (SONNY-2656).
+    free_value: ?*const fn (std.mem.Allocator, Value) void = null,
     // Variable bindings from CREATE patterns (for passing to UNION parts)
     variable_bindings: ?*std.StringHashMap(u64) = null,
     // PERF: PHASE5_COLUMN_BATCH_ALLOC - Batch column string allocation optimization
@@ -719,11 +729,12 @@ pub const ExecutionResult = struct {
         }
         allocator.free(self.columns);
 
+        const free_value = self.free_value orelse &freeValue;
         for (self.rows) |row| {
             // Only free values if this result owns the memory (was duplicated)
             if (self.owns_value_memory) {
                 for (row) |val| {
-                    freeValue(allocator, val);
+                    free_value(allocator, val);
                 }
             }
             allocator.free(row);
@@ -863,8 +874,9 @@ fn appendFlagIfMissing(allocator: std.mem.Allocator, result: *ExecutionResult, f
 
 fn freeRowValues(allocator: std.mem.Allocator, result: *ExecutionResult, row: []Value) void {
     if (result.owns_value_memory) {
+        const free_value = result.free_value orelse &freeValue;
         for (row) |val| {
-            freeValue(allocator, val);
+            free_value(allocator, val);
         }
     }
     allocator.free(row);

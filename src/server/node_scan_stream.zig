@@ -21,6 +21,9 @@ const proto_util = @import("proto_util.zig");
 // "can I serve it?" answer is derived from the SAME resolution as the
 // executor's "what may it see?" answer.
 const tenancy = @import("../execution/tenancy.zig");
+// SONNY-2656: `hasEncryptedFields` decides whether a WHERE may run on the
+// per-node scratch arena (see `predicateAllocator`).
+const fle_integration = @import("../fle_integration.zig");
 
 const ExecutionContext = execution.ExecutionContext;
 const ExecutionResult = execution.ExecutionResult;
@@ -322,7 +325,7 @@ pub const NodeScanStream = struct {
         var rows = try std.ArrayList([]Value).initCapacity(allocator, @min(page_len, 256));
         errdefer {
             for (rows.items) |row| {
-                for (row) |val| execution.freeValue(allocator, val);
+                for (row) |val| property_value_codec.freeValue(allocator, val);
                 allocator.free(row);
             }
             rows.deinit(allocator);
@@ -359,6 +362,9 @@ pub const NodeScanStream = struct {
         var lock_held = true;
         errdefer if (lock_held) graph_store.releaseGraphLock(lock);
         var batch_count: usize = 0;
+        // SONNY-2656: each node's WHERE runs on this arena, reset after it.
+        var scratch = std.heap.ArenaAllocator.init(allocator);
+        defer scratch.deinit();
 
         // Fill the page up to `page_len` MATCHED rows. With a predicate this
         // may scan more slots than rows produced (O(scanned)); LIMIT still
@@ -414,7 +420,7 @@ pub const NodeScanStream = struct {
             errdefer if (!node_tracked) destroyNode(allocator, node);
 
             if (self.where_expr) |where_expr| {
-                const passes = self.evalPredicate(allocator, where_expr, node) catch false;
+                const passes = self.evalPredicate(&scratch, allocator, where_expr, node);
                 if (!passes) {
                     destroyNode(allocator, node);
                     continue;
@@ -465,7 +471,7 @@ pub const NodeScanStream = struct {
                 // error path, so we don't free it here.
                 var produced: usize = 0;
                 errdefer {
-                    for (row[0..produced]) |val| execution.freeValue(allocator, val);
+                    for (row[0..produced]) |val| property_value_codec.freeValue(allocator, val);
                     allocator.free(row);
                 }
                 var produced_node_value = false;
@@ -515,6 +521,9 @@ pub const NodeScanStream = struct {
             // freeValue is a no-op for .Node, which is owned by
             // owned_graph_entities, so a mixed row is freed once too.
             .owns_value_memory = self.mode == .projection,
+            // SONNY-2656: every other cell is a fresh clone of the kind it
+            // projects (Text, Json, Bytea, ...), so free every kind.
+            .free_value = property_value_codec.freeValue,
             .owned_graph_entities = if (owned) owned_entities else null,
         };
         if (!owned) owned_entities.deinit();
@@ -577,6 +586,7 @@ pub const NodeScanStream = struct {
             .rows = try allocator.alloc([]Value, 0),
             .flags = std.ArrayList([]const u8).empty,
             .owns_value_memory = self.mode == .projection,
+            .free_value = property_value_codec.freeValue,
         };
     }
 
@@ -655,6 +665,10 @@ pub const NodeScanStream = struct {
                 var count_lock_held = true;
                 errdefer if (count_lock_held) graph_store.releaseGraphLock(lock);
                 var batch_count: usize = 0;
+                // SONNY-2656: each node's WHERE runs on this arena, reset
+                // after it.
+                var scratch = std.heap.ArenaAllocator.init(allocator);
+                defer scratch.deinit();
                 for (self.slot_ids) |slot_id| {
                     if (batch_count == materialize_batch_nodes) {
                         graph_store.releaseGraphLock(lock);
@@ -678,8 +692,7 @@ pub const NodeScanStream = struct {
                     else
                         materializeNode(allocator, self.graph_name, slot_id) catch continue;
                     defer destroyNode(allocator, node);
-                    const passes = self.evalPredicate(allocator, where_expr, node) catch false;
-                    if (passes) matched += 1;
+                    if (self.evalPredicate(&scratch, allocator, where_expr, node)) matched += 1;
                 }
                 // Released already if we bailed at a batch boundary on cancel.
                 if (count_lock_held) graph_store.releaseGraphLock(lock);
@@ -730,18 +743,15 @@ pub const NodeScanStream = struct {
         };
     }
 
-    fn evalPredicate(self: *NodeScanStream, allocator: std.mem.Allocator, where_expr: ast.Expr, node: *graph_store.Node) !bool {
-        const env = self.makeEnv(allocator, node);
-        const where_result = try eval.evalExpr(allocator, where_expr, env);
-        // Match the snapshot executor's label-scan WHERE coercion exactly
-        // (match_operations.zig generateCombinations): Bool→value, Null→false,
-        // Int→nonzero, else→false.
-        return switch (where_result) {
-            .Bool => |b| b,
-            .Null => false,
-            .Int => |i| i != 0,
-            else => false,
-        };
+    /// Whether `node` passes `where_expr`. The evaluation runs on `scratch`
+    /// (see `predicateAllocator`), which is reset before this returns. An
+    /// evaluation error is a miss, as it always was.
+    fn evalPredicate(self: *NodeScanStream, scratch: *std.heap.ArenaAllocator, allocator: std.mem.Allocator, where_expr: ast.Expr, node: *graph_store.Node) bool {
+        defer _ = scratch.reset(.retain_capacity);
+        const eval_allocator = predicateAllocator(scratch, allocator);
+        const env = self.makeEnv(eval_allocator, node);
+        const where_result = eval.evalExpr(eval_allocator, where_expr, env) catch return false;
+        return predicateHolds(where_result);
     }
 };
 
@@ -758,7 +768,9 @@ pub const NodeScanStream = struct {
 //      the node's own string, not a copy; `detachFromNode` replaces such a cell
 //      with a copy before the row keeps it. So a cell owns exactly what it
 //      holds, and the page frees it (`owns_value_memory`), however many cells
-//      read the same property (SONNY-2472).
+//      read the same property (SONNY-2472). Every other value a cell can hold
+//      is a fresh clone, of any extended kind, so the page frees cells with
+//      `property_value_codec.freeValue`, which frees every kind (SONNY-2656).
 //   2. A node has exactly one owner, which frees all of it once with
 //      `destroyNode`. That is the code that materialized it, straight after
 //      use, whenever no row returns the node itself: a WHERE miss, an OFFSET
@@ -1767,6 +1779,10 @@ fn collectMatchingSlotIds(
         // (correct: 0-match returns none, selective-near-end still scans most).
         if (where_pushdown) |wp| {
             if (try adapter.beginLabelScan(graph_name, pattern.labels[0])) |cursor| {
+                // SONNY-2656: each candidate's WHERE runs on this arena,
+                // reset after it.
+                var scratch = std.heap.ArenaAllocator.init(allocator);
+                defer scratch.deinit();
                 var shard_idx: usize = 0;
                 outer: while (shard_idx < cursor.shard_count) : (shard_idx += 1) {
                     var chunk = std.ArrayList(u64).empty;
@@ -1778,7 +1794,7 @@ fn collectMatchingSlotIds(
                         // predicate. Only predicate-passing slots count toward
                         // `match_cap`; capping on raw slots would under-return.
                         if (!try nodeMatchesPattern(allocator, adapter, graph_name, slot_id, pattern, param_names, param_values, context)) continue;
-                        if (!slotMatchesPredicate(allocator, graph_name, slot_id, wp.where_expr, wp.var_name, param_names, param_values, context)) continue;
+                        if (!slotMatchesPredicate(allocator, &scratch, graph_name, slot_id, wp.where_expr, wp.var_name, param_names, param_values, context)) continue;
                         try result.append(allocator, slot_id);
                         if (result.items.len >= wp.match_cap) break :outer;
                     }
@@ -1966,6 +1982,7 @@ fn nodeMatchesPattern(
 /// paging path's catch-skip — so the bounded set never includes a stale slot.
 fn slotMatchesPredicate(
     allocator: std.mem.Allocator,
+    scratch: *std.heap.ArenaAllocator,
     graph_name: []const u8,
     slot_id: u64,
     where_expr: ast.Expr,
@@ -1976,6 +1993,10 @@ fn slotMatchesPredicate(
 ) bool {
     const node = materializeNode(allocator, graph_name, slot_id) catch return false;
     defer destroyNode(allocator, node);
+    // SONNY-2656: as in `evalPredicate`, the evaluation runs on `scratch`,
+    // reset before this returns.
+    defer _ = scratch.reset(.retain_capacity);
+    const eval_allocator = predicateAllocator(scratch, allocator);
     var names = [_][]const u8{var_name};
     var values = [_]Value{.{ .Node = node }};
     const env = Env{
@@ -1983,19 +2004,38 @@ fn slotMatchesPredicate(
         .values = values[0..1],
         .param_names = param_names,
         .param_values = param_values,
-        .allocator = allocator,
+        .allocator = eval_allocator,
         .exec_context = @constCast(&context),
     };
-    // Same as evalPredicate: do NOT free `where_result` — the eligible boolean
-    // predicate folds to a fresh Bool (no heap), and freeing risks touching a
-    // value that borrows the node/params.
-    const where_result = eval.evalExpr(allocator, where_expr, env) catch return false;
+    const where_result = eval.evalExpr(eval_allocator, where_expr, env) catch return false;
+    return predicateHolds(where_result);
+}
+
+/// The snapshot executor's label-scan WHERE coercion, exactly
+/// (match_operations.zig generateCombinations): Bool is itself, Null is false,
+/// Int is nonzero, and anything else is false.
+fn predicateHolds(where_result: Value) bool {
     return switch (where_result) {
         .Bool => |b| b,
         .Null => false,
         .Int => |i| i != 0,
         else => false,
     };
+}
+
+// CANARY: REQ=REQ-SONNY-2656-EXTENDED-VALUE-LEAKS; FEATURE="EngineDirectExtendedValueOwnership"; ASPECT=PredicateScratchArena; STATUS=TESTED; TEST=tests/test_sonny2656_extended_value_leaks.zig; OWNER=engine; UPDATED=2026-09-25
+/// The allocator a WHERE runs on for one node (SONNY-2656). A WHERE yields
+/// only a Bool, but what it reads along the way is allocated: `.Member`
+/// hands back a fresh clone of an extended value (Text, Json, Bytea, a list,
+/// ...), and `IS NULL` and the comparisons drop it unfreed. So the WHERE runs
+/// on `scratch`, which its caller resets after each node, and the clones go
+/// with it. The one exception is a deployment with encrypted fields:
+/// decrypting one can create the process-wide FLE key manager on the
+/// evaluation allocator, and that must never be an arena that is reset. There
+/// the WHERE runs on `allocator`, as it always did.
+fn predicateAllocator(scratch: *std.heap.ArenaAllocator, allocator: std.mem.Allocator) std.mem.Allocator {
+    if (fle_integration.hasEncryptedFields()) return allocator;
+    return scratch.allocator();
 }
 
 fn materializeNode(allocator: std.mem.Allocator, graph_name: []const u8, slot_id: u64) !*graph_store.Node {

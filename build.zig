@@ -8450,6 +8450,19 @@ pub fn build(b: *std.Build) void {
     const sonny2653_step = b.step("test-sonny2653-planned-read-ext-read-leak", "Run SONNY-2653 regression (a planned read frees the storage adapter's read copy of every extended property value it checks a node or edge pattern against)");
     sonny2653_step.dependOn(&run_sonny2653_tests.step);
 
+    // SONNY-2656: the node-scan fast path leaked the clone of every typed
+    // extended value (Text, Json, Bytea, Char, Varchar, Url, ...) it projected
+    // (page teardown freed only strings, lists and maps) or filtered on (IS
+    // NULL and the comparisons drop the clone).
+    const sonny2656_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny2656_extended_value_leaks.zig"), .target = target, .optimize = optimize });
+    sonny2656_test_mod.addImport("geode", root_mod);
+    sonny2656_test_mod.addImport("logging", logging_mod);
+    const sonny2656_tests = b.addTest(.{ .root_module = sonny2656_test_mod });
+    const run_sonny2656_tests = b.addRunArtifact(sonny2656_tests);
+    shardDep(test_step, &run_sonny2656_tests.step, 1, test_shard_loads, test_shard_index);
+    const sonny2656_step = b.step("test-sonny2656-extended-value-leaks", "Run SONNY-2656 regression (the node-scan fast path frees a projected typed extended value with its row, and the clone a WHERE reads at every predicate site, for every extended kind)");
+    sonny2656_step.dependOn(&run_sonny2656_tests.step);
+
     // SONNY-1330 TSan companion: the same regression file under
     // -fsanitize-thread, so the fork-join over a COLD store is checked for the
     // cross-arm cache mutation this ticket closes rather than merely asserted
