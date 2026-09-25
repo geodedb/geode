@@ -3432,6 +3432,14 @@ pub fn executeWithClause(allocator: std.mem.Allocator, input_result: ExecutionRe
     return executeWithClauseWithGroupBy(allocator, input_result, with_clause, null, null);
 }
 
+/// The HAVING a WITH stage applies: the query's HAVING when it has a GROUP BY,
+/// else none. The parser produces a HAVING without a GROUP BY only from a WHERE
+/// after RETURN, which belongs to the RETURN, not to a WITH before it
+/// (SONNY-2667).
+pub fn withStageHaving(q: ast.Query) ?ast.Expr {
+    return if (q.group_by != null) q.having else null;
+}
+
 // CANARY: REQ=REQ-GQL-WITH-GROUPBY-001; FEATURE="WithGroupByAggregation"; ASPECT=Execution; STATUS=TESTED; TEST=geodetestlab/specs/gql_query_comprehensive.yml; OWNER=execution; UPDATED=2025-12-22
 /// Execute WITH clause with optional GROUP BY aggregation
 pub fn executeWithClauseWithGroupBy(allocator: std.mem.Allocator, input_result: ExecutionResult, with_clause: ast.WithClause, group_by: ?ast.GroupBy, having: ?ast.Expr) !ExecutionResult {
@@ -3496,6 +3504,75 @@ fn evalGroupedExpr(allocator: std.mem.Allocator, expr: ast.Expr, env: Env, fallb
     };
 }
 
+// CANARY: REQ=REQ-SONNY-2667-RETURN-WHERE; FEATURE="PlannedReadReturnWhere"; ASPECT=PostProjectionFilter; STATUS=TESTED; TEST=tests/test_sonny2667_return_where.zig; OWNER=engine; UPDATED=2026-09-25
+/// A HAVING, evaluated for each output row of a projection. HAVING runs after
+/// the projection, so a name resolves first to a projected column (an alias,
+/// or an unaliased item's expression name), then to the input row the output
+/// row came from: the row itself, or a group's first row. So `n.i` in
+/// `RETURN n.i WHERE n.i >= 10` (the parser stores a WHERE after RETURN as
+/// HAVING) resolves through `n` (SONNY-2667).
+const HavingFilter = struct {
+    expr: ast.Expr,
+    /// The output columns, then the input columns.
+    names: [][]const u8,
+    /// Scratch for one row's values, in the order of `names`.
+    values: []Value,
+    output_len: usize,
+    param_names: []const []const u8,
+    param_values: []const Value,
+
+    fn init(
+        allocator: std.mem.Allocator,
+        expr: ast.Expr,
+        output_columns: []const []const u8,
+        input_columns: []const []const u8,
+        param_names: []const []const u8,
+        param_values: []const Value,
+    ) !HavingFilter {
+        const names = try allocator.alloc([]const u8, output_columns.len + input_columns.len);
+        errdefer allocator.free(names);
+        const values = try allocator.alloc(Value, names.len);
+        @memcpy(names[0..output_columns.len], output_columns);
+        @memcpy(names[output_columns.len..], input_columns);
+        return .{
+            .expr = expr,
+            .names = names,
+            .values = values,
+            .output_len = output_columns.len,
+            .param_names = param_names,
+            .param_values = param_values,
+        };
+    }
+
+    fn deinit(self: *HavingFilter, allocator: std.mem.Allocator) void {
+        allocator.free(self.values);
+        allocator.free(self.names);
+    }
+
+    /// Whether `output_row` passes, with `input_row` behind it (empty when there
+    /// is none, as for a single group over no rows). An unknown function still
+    /// fails the query. Any other evaluation error, and any result but a true
+    /// Bool or a nonzero Int, fails the row.
+    fn passes(self: *HavingFilter, allocator: std.mem.Allocator, output_row: []const Value, input_row: []const Value) !bool {
+        @memcpy(self.values[0..self.output_len], output_row);
+        const input_len = @min(input_row.len, self.names.len - self.output_len);
+        @memcpy(self.values[self.output_len..][0..input_len], input_row[0..input_len]);
+        const env = Env{
+            .names = self.names[0 .. self.output_len + input_len],
+            .values = self.values[0 .. self.output_len + input_len],
+            .param_names = self.param_names,
+            .param_values = self.param_values,
+            .allocator = allocator,
+        };
+        const result = try evalGroupedExpr(allocator, self.expr, env, Value{ .Bool = false });
+        return switch (result) {
+            .Bool => |b| b,
+            .Int => |i| i != 0,
+            else => false,
+        };
+    }
+};
+
 /// Execute WITH clause with optional GROUP BY aggregation and query parameter bindings
 pub fn executeWithClauseWithGroupByAndParams(allocator: std.mem.Allocator, input_result: ExecutionResult, with_clause: ast.WithClause, group_by: ?ast.GroupBy, having: ?ast.Expr, param_names: []const []const u8, param_values: []const eval.Value) !ExecutionResult {
     // CANARY(memory-safety): Validate input_result structure
@@ -3521,6 +3598,17 @@ pub fn executeWithClauseWithGroupByAndParams(allocator: std.mem.Allocator, input
         const owned_alias = try allocator.dupe(u8, alias);
         try new_columns.append(allocator, owned_alias);
     }
+
+    // SONNY-2667: without a GROUP BY, a HAVING filters the output rows. The
+    // parser produces one only from a WHERE after RETURN, and callers pass it
+    // only to the RETURN stage.
+    var having_filter: ?HavingFilter = null;
+    if (group_by == null) {
+        if (having) |expr| {
+            having_filter = try HavingFilter.init(allocator, expr, new_columns.items, input_result.columns, param_names, param_values);
+        }
+    }
+    defer if (having_filter) |*filter| filter.deinit(allocator);
 
     // Transform each row according to WITH items
     // GAP-0220 FIX: Use try for proper error propagation
@@ -3762,6 +3850,12 @@ pub fn executeWithClauseWithGroupByAndParams(allocator: std.mem.Allocator, input
                             new_row[i] = try evalGroupedExpr(allocator, item.expr, base_env, Value{ .Null = {} });
                         }
                     }
+                    if (having_filter) |*filter| {
+                        if (!try filter.passes(allocator, new_row, first_row)) {
+                            allocator.free(new_row);
+                            continue;
+                        }
+                    }
                     try new_rows.append(allocator, new_row);
                 }
             } else {
@@ -3797,7 +3891,15 @@ pub fn executeWithClauseWithGroupByAndParams(allocator: std.mem.Allocator, input
                     }
                 }
 
-                try new_rows.append(allocator, new_row);
+                const passes = if (having_filter) |*filter|
+                    try filter.passes(allocator, new_row, if (input_result.rows.len > 0) input_result.rows[0] else &.{})
+                else
+                    true;
+                if (passes) {
+                    try new_rows.append(allocator, new_row);
+                } else {
+                    allocator.free(new_row);
+                }
             }
         } else {
             // No aggregations - transform each row individually
@@ -3818,6 +3920,12 @@ pub fn executeWithClauseWithGroupByAndParams(allocator: std.mem.Allocator, input
                     new_row[i] = try eval.evalExpr(allocator, item.expr, env);
                 }
 
+                if (having_filter) |*filter| {
+                    if (!try filter.passes(allocator, new_row, input_row)) {
+                        allocator.free(new_row);
+                        continue;
+                    }
+                }
                 try new_rows.append(allocator, new_row);
             }
         }

@@ -2016,7 +2016,7 @@ pub fn executeLegacyQueryWithResolvedParams(
         // If there's a WITH clause, apply it to the CALL results
         if (q.with_clause) |with_clause| {
             // CANARY: REQ=REQ-GQL-WITH-GROUPBY-003; FEATURE="WithGroupByAggregation"; ASPECT=CallSite; STATUS=TESTED; TEST=geodetestlab/specs/gql_query_comprehensive.yml; OWNER=execution; UPDATED=2025-12-22
-            const with_result = try execution.executeWithClauseWithGroupBy(allocator, call_result, with_clause, q.group_by, q.having);
+            const with_result = try execution.executeWithClauseWithGroupBy(allocator, call_result, with_clause, q.group_by, execution.withStageHaving(q));
 
             // Apply WHERE filter if present
             const filtered_result = if (q.where_clause) |where_expr| blk: {
@@ -2217,7 +2217,7 @@ pub fn executeLegacyQueryWithResolvedParams(
 
         // Apply WITH clause to transform the empty row into WITH variables
         // CANARY: REQ=REQ-GQL-WITH-GROUPBY-003; FEATURE="WithGroupByAggregation"; ASPECT=CallSite; STATUS=TESTED; TEST=geodetestlab/specs/gql_query_comprehensive.yml; OWNER=execution; UPDATED=2025-12-22
-        const with_result = try execution.executeWithClauseWithGroupBy(allocator, initial_result, with_clause, q.group_by, q.having);
+        const with_result = try execution.executeWithClauseWithGroupBy(allocator, initial_result, with_clause, q.group_by, execution.withStageHaving(q));
 
         // Check if there's a FOR statement to execute with WITH bindings
         if (q.for_statement) |for_stmt| {

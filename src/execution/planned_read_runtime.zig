@@ -511,7 +511,9 @@ pub fn executeProfiledIfSupported(
         const with_stage = stripWithExecutionModifiers(with_clause);
         const input_rows = result.rows.len;
         const start_ns = nowNs();
-        var with_result = try transformResultRowsWithParams(allocator, result, with_stage, q.group_by, q.having, param_names, param_values);
+        // SONNY-2667: a HAVING without a GROUP BY is a WHERE after RETURN, so it
+        // belongs to the RETURN stage below, not to this one.
+        var with_result = try transformResultRowsWithParams(allocator, result, with_stage, q.group_by, execution.withStageHaving(q.*), param_names, param_values);
         transferOwnedGraphEntities(&result, &with_result);
         deinitResultKeepingOwnedGraphEntities(allocator, &result);
 
@@ -560,7 +562,9 @@ pub fn executeProfiledIfSupported(
 
     if (needsFinalProjection(q)) {
         const return_group_by = if (q.with_clause == null) q.group_by else null;
-        const return_having = if (q.with_clause == null) q.having else null;
+        // SONNY-2667: a WHERE after RETURN (parsed as a HAVING with no GROUP BY)
+        // filters the RETURN's rows, with or without a WITH before it.
+        const return_having = if (q.with_clause == null or q.group_by == null) q.having else null;
         const return_kind: OpKind = if ((q.with_clause == null and q.group_by != null) or hasAggregationItems(q.ret.items)) .Aggregate else .Project;
         const return_op_index = switch (return_kind) {
             .Aggregate => nextOpIndex(trace.ops, .Aggregate, &aggregate_occurrence),

@@ -8465,6 +8465,17 @@ pub fn build(b: *std.Build) void {
     const sonny2653_step = b.step("test-sonny2653-planned-read-ext-read-leak", "Run SONNY-2653 regression (a planned read frees the storage adapter's read copy of every extended property value it checks a node or edge pattern against)");
     sonny2653_step.dependOn(&run_sonny2653_tests.step);
 
+    // SONNY-2667: planned reads ignored a WHERE placed after RETURN (parsed as
+    // HAVING): `RETURN n.i WHERE n.i >= 10` returned every row.
+    const sonny2667_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny2667_return_where.zig"), .target = target, .optimize = optimize });
+    sonny2667_test_mod.addImport("geode", root_mod);
+    sonny2667_test_mod.addImport("logging", logging_mod);
+    const sonny2667_tests = b.addTest(.{ .root_module = sonny2667_test_mod });
+    const run_sonny2667_tests = b.addRunArtifact(sonny2667_tests);
+    shardDep(test_step, &run_sonny2667_tests.step, 1, test_shard_loads, test_shard_index);
+    const sonny2667_step = b.step("test-sonny2667-return-where", "Run SONNY-2667 regression (a WHERE after RETURN filters a planned read's rows before its SKIP/LIMIT window: node scan, path, after a WITH, and an aggregate row)");
+    sonny2667_step.dependOn(&run_sonny2667_tests.step);
+
     // SONNY-2656: the node-scan fast path leaked the clone of every typed
     // extended value (Text, Json, Bytea, Char, Varchar, Url, ...) it projected
     // (page teardown freed only strings, lists and maps) or filtered on (IS
