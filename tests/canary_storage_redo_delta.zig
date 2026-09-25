@@ -121,9 +121,9 @@ test "BenchmarkCANARY_REQ_GQL_022_RedoOptimizationDeltaVarianceEnvelope" {
     }
     const s_base = stats(&base_samples);
     const s_opt = stats(&opt_samples);
-    // Perf claims go through the shared gate (SONNY-2394): enforced only when
-    // `CI` is unset -- repo convention, see tests/perf_gate.zig. Correctness
-    // assertions in this file are not gated.
+    // Perf claims go through the shared gate (SONNY-2394): reported unless
+    // GEODE_PERF_GATES=enforce (SONNY-2439) -- see tests/perf_gate.zig.
+    // Correctness assertions in this file are not gated.
     // variance envelopes
     try perf_gate.envelope("redo baseline apply", s_base.cv, s_base.p95_mean, 0.22, 2.55);
     try perf_gate.envelope("redo optimized apply", s_opt.cv, s_opt.p95_mean, 0.22, 2.55);

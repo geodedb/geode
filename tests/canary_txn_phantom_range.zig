@@ -132,9 +132,9 @@ test "BenchmarkCANARY_REQ_GQL_023_PhantomPreventionOverheadVarianceEnvelope" {
     const ratio_p95_mean_range = if (m_range == 0) 0 else p95_range / m_range;
 
     // Envelope thresholds (general CV <=0.22, p95/mean <=2.55) + overhead guard <5%
-    // Perf claims go through the shared gate (SONNY-2394): enforced only when
-    // `CI` is unset -- repo convention, see tests/perf_gate.zig. Correctness
-    // assertions in this file are not gated.
+    // Perf claims go through the shared gate (SONNY-2394): reported unless
+    // GEODE_PERF_GATES=enforce (SONNY-2439) -- see tests/perf_gate.zig.
+    // Correctness assertions in this file are not gated.
     const overhead = if (m_base == 0) 0 else (m_range - m_base) / m_base;
     std.debug.print("CANARY_RANGE_OVERHEAD mean_base={d:.2} mean_range={d:.2} overhead={d:.4} cv_range={d:.4} p95/mean={d:.2}\n", .{ m_base, m_range, overhead, cv_range, ratio_p95_mean_range });
     try perf_gate.envelope("range-tracked commit latency", cv_range, ratio_p95_mean_range, 0.22, 2.55);

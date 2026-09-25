@@ -4428,7 +4428,8 @@ pub fn build(b: *std.Build) void {
     }
 
     // SONNY-2394: shared gate for perf / variance claims in unit tests --
-    // enforced only when CI is unset (repo convention; see tests/perf_gate.zig).
+    // reported by default and enforced only under GEODE_PERF_GATES=enforce
+    // (SONNY-2439; see tests/perf_gate.zig).
     const perf_gate_mod = b.createModule(.{ .root_source_file = b.path("tests/perf_gate.zig"), .target = target, .optimize = optimize, .link_libc = true });
 
     // Attach physiological redo canary tests after test_step defined
@@ -11457,7 +11458,7 @@ pub fn build(b: *std.Build) void {
     const perf_gate_tests = b.addTest(.{ .root_module = perf_gate_mod });
     const run_perf_gate_tests = b.addRunArtifact(perf_gate_tests);
     shardDep(test_step, &run_perf_gate_tests.step, 1, test_shard_loads, test_shard_index);
-    const perf_gate_step = b.step("test-perf-gate", "Run the shared perf-claim gate self-tests (SONNY-2394: perf claims enforced only when CI is unset)");
+    const perf_gate_step = b.step("test-perf-gate", "Run the shared perf-claim gate self-tests (SONNY-2439: perf claims are reported unless GEODE_PERF_GATES=enforce)");
     perf_gate_step.dependOn(&run_perf_gate_tests.step);
 
     // SONNY-2394: root cause of the test-remote-kms-hardening ConcurrencyStress

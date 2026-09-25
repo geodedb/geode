@@ -158,9 +158,9 @@ test "BenchmarkCANARY_REQ_GQL_023_PhantomOverheadVarianceEnvelope" {
     // Compute stats
     const st_disabled = stats(samples_disabled);
     const st_enabled = stats(samples_enabled);
-    // Perf claims go through the shared gate (SONNY-2394): enforced only when
-    // `CI` is unset -- repo convention, see tests/perf_gate.zig. Correctness
-    // assertions in this file are not gated.
+    // Perf claims go through the shared gate (SONNY-2394): reported unless
+    // GEODE_PERF_GATES=enforce (SONNY-2439) -- see tests/perf_gate.zig.
+    // Correctness assertions in this file are not gated.
     // Overhead <=5%
     if (st_disabled.mean > 0) {
         const overhead = (st_enabled.mean - st_disabled.mean) / st_disabled.mean;

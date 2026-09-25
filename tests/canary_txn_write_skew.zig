@@ -137,8 +137,8 @@ test "BenchmarkCANARY_REQ_GQL_025_WriteSkewVarianceEnvelope" {
     }
     const p95 = @as(f128, @floatFromInt(scratch[rank]));
     const p95_mean = p95 / mean;
-    // Perf claims go through the shared gate (SONNY-2394): enforced only when
-    // `CI` is unset -- repo convention, see tests/perf_gate.zig. Correctness
-    // assertions in this file are not gated.
+    // Perf claims go through the shared gate (SONNY-2394): reported unless
+    // GEODE_PERF_GATES=enforce (SONNY-2439) -- see tests/perf_gate.zig.
+    // Correctness assertions in this file are not gated.
     try perf_gate.envelope("write-skew detection commit", cv, p95_mean, 0.22, 2.55);
 }

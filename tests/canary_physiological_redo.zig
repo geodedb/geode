@@ -146,9 +146,9 @@ test "BenchmarkCANARY_REQ_GQL_022_GraphStoreLoadVarianceEnvelope" {
     const p95 = tmp[@min(tmp.len - 1, (tmp.len * 95) / 100)];
     const p95_ratio = @as(f128, @floatFromInt(p95)) / mean;
 
-    // Perf claims go through the shared gate (SONNY-2394): enforced only when
-    // `CI` is unset -- repo convention, see tests/perf_gate.zig. Correctness
-    // assertions in this file are not gated.
+    // Perf claims go through the shared gate (SONNY-2394): reported unless
+    // GEODE_PERF_GATES=enforce (SONNY-2439) -- see tests/perf_gate.zig.
+    // Correctness assertions in this file are not gated.
     std.debug.print("GraphStoreLoadVarianceEnvelope cv={d:.4} p95_ratio={d:.2} mean={d:.2}\n", .{ cv, p95_ratio, mean });
     try perf_gate.envelope("GraphStore reopen+load", cv, p95_ratio, 0.18, 2.3);
 }

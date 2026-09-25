@@ -372,6 +372,11 @@ repos:
       # meaningful". Local pre-push is the same scenario, so we set the
       # same env so the same tests skip. Functional correctness tests are
       # unaffected -- they do not gate on this env var.
+      # The claims routed through tests/perf_gate.zig no longer depend on CI:
+      # they are reported, never enforced, unless GEODE_PERF_GATES=enforce is
+      # set (SONNY-2439, until their methodology measures the product), so a
+      # local run of their named steps with CI unset reports them too. The
+      # scheduled CI job test-perf-gates-enforced sets the override.
       export CI=1
       # 2026-06-08: also opt out of subprocess cluster tests in the LOCAL
       # pre-push gate. Each spawns 3 geode processes on distinct IPs with tight
