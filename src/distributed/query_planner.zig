@@ -313,7 +313,9 @@ pub const DistributedQueryPlanner = struct {
     fn estimateDataTransfer(self: *DistributedQueryPlanner, plan: ShardLocalPlan) usize {
         _ = self;
         // Base: 256 bytes per estimated cost unit (proxy for rows * avg_row_size)
-        const cost_based: usize = @intFromFloat(@max(1.0, plan.estimated_cost) * 256.0);
+        // SONNY-2739: an estimate past usize (or NaN) saturates; it is capped
+        // below anyway. `@intFromFloat` aborted the coordinator.
+        const cost_based: usize = std.math.lossyCast(usize, @max(1.0, plan.estimated_cost) * 256.0);
         // Minimum 1KB, capped at 100MB
         return @min(100 * 1024 * 1024, @max(1024, cost_based));
     }

@@ -1385,7 +1385,8 @@ fn handleAuditDetectAnomalies(allocator: std.mem.Allocator, _: ast.CallProcedure
     const row = try allocator.alloc(Value, 3);
     row[0] = Value{ .Bool = result.anomalies_detected > 0 };
     row[1] = Value{ .Int = @intCast(result.anomalies_detected) };
-    row[2] = Value{ .Int = @intFromFloat(result.risk_score) }; // Convert risk score to severity level
+    // SONNY-2739: measurements saturate (NaN is 0) instead of aborting.
+    row[2] = Value{ .Int = std.math.lossyCast(i64, result.risk_score) }; // Convert risk score to severity level
     rows[0] = row;
 
     // Free the patterns string
@@ -1493,10 +1494,11 @@ fn handleAuditPerformanceTest(allocator: std.mem.Allocator, _: ast.CallProcedure
     const rows = try allocator.alloc([]Value, 1);
     const row = try allocator.alloc(Value, 5);
     row[0] = Value{ .Int = @intCast(result.events_per_second) };
-    row[1] = Value{ .Int = @intFromFloat(result.avg_latency_ms) };
-    row[2] = Value{ .Int = @intFromFloat(result.max_latency_ms) };
-    row[3] = Value{ .Int = @intFromFloat(result.memory_used_mb) };
-    row[4] = Value{ .Int = @intFromFloat(result.cpu_percent) };
+    // SONNY-2739: measurements saturate (NaN is 0) instead of aborting.
+    row[1] = Value{ .Int = std.math.lossyCast(i64, result.avg_latency_ms) };
+    row[2] = Value{ .Int = std.math.lossyCast(i64, result.max_latency_ms) };
+    row[3] = Value{ .Int = std.math.lossyCast(i64, result.memory_used_mb) };
+    row[4] = Value{ .Int = std.math.lossyCast(i64, result.cpu_percent) };
     rows[0] = row;
     return ExecutionResult{
         .columns = columns,
@@ -1518,9 +1520,10 @@ fn handleAuditMemoryUsageTest(allocator: std.mem.Allocator, _: ast.CallProcedure
     columns[3] = try allocator.dupe(u8, "leak_detected");
     const rows = try allocator.alloc([]Value, 1);
     const row = try allocator.alloc(Value, 4);
-    row[0] = Value{ .Int = @intFromFloat(result.baseline_mb) };
-    row[1] = Value{ .Int = @intFromFloat(result.peak_mb) };
-    row[2] = Value{ .Int = @intFromFloat(result.current_mb) };
+    // SONNY-2739: measurements saturate (NaN is 0) instead of aborting.
+    row[0] = Value{ .Int = std.math.lossyCast(i64, result.baseline_mb) };
+    row[1] = Value{ .Int = std.math.lossyCast(i64, result.peak_mb) };
+    row[2] = Value{ .Int = std.math.lossyCast(i64, result.current_mb) };
     row[3] = Value{ .Bool = result.leak_detected };
     rows[0] = row;
     return ExecutionResult{

@@ -513,3 +513,82 @@ test "SONNY-2739: a typed ARRAY parameter past the decimal is refused" {
     _ = try codec.protoExtendedToHeapValue(a, .{ .type_name = "ARRAY", .data = .{ .text = "[1.5, 10000000000000]" } });
     _ = try codec.protoExtendedToHeapValue(a, .{ .type_name = "ARRAY", .data = .{ .text = "[1.5, 2.25]" } });
 }
+
+// ---------------------------------------------------------------------------
+// Geography, geometry, extended builtins, time series
+// ---------------------------------------------------------------------------
+
+fn checkGeo(s: *Session, f: *Failures) !void {
+    // A NaN coordinate is no longer a valid LatLon (it passed both range
+    // checks), so latitude() and friends no longer answer a garbage decimal
+    // (2^127 - 1) or a garbage distance (minInt(i64)).
+    for ([_][]const u8{
+        "RETURN latitude(latlon('nan,0')) AS x",
+        "RETURN longitude(latlon('0,nan')) AS x",
+        "RETURN geo_lat(latlon('nan,0')) AS x",
+        "RETURN geo_lon(latlon('0,nan')) AS x",
+        "RETURN geo_bearing(latlon('nan,0'), latlon('0,0')) AS x",
+        "RETURN distance_haversine(latlon('nan,0'), latlon('0,0')) AS x",
+        "RETURN altitude(latlonalt('0,0,nan')) AS x",
+    }) |q| try expectFail(s, f, q, &.{}, error.TypeMismatch);
+    try expectValue(s, f, "RETURN latitude(latlon('45.5,10')) AS x", "45.500000m");
+    try expectValue(s, f, "RETURN distance_haversine(latlon('0,0'), latlon('0,90')) AS x", "10007543");
+    // An altitude or a coordinate past the decimal is 22003.
+    try expectFail(s, f, "RETURN altitude(latlonalt('0,0,1e300')) AS x", &.{}, error.DecimalOverflow);
+    try expectValue(s, f, "RETURN altitude(latlonalt('0,0,1500.25')) AS x", "1500.250m");
+    try expectFail(s, f, "RETURN st_x(st_point(1e35, 0)) AS x", &.{}, error.DecimalOverflow);
+    try expectFail(s, f, "RETURN st_y(st_point(0, 1e35)) AS x", &.{}, error.DecimalOverflow);
+    try expectFail(s, f, "RETURN st_distance(st_point(1e35, 0), st_point(-1e35, 0)) AS x", &.{}, error.DecimalOverflow);
+    try expectFail(s, f, "RETURN st_area(geometryfromtext('POLYGON((0 0, 1e200 0, 1e200 1e200, 0 1e200, 0 0))')) AS x", &.{}, error.DecimalOverflow);
+    try expectValue(s, f, "RETURN st_x(st_point(1.5, 2)) AS x", "1.500000m");
+    try expectValue(s, f, "RETURN st_distance(st_point(0, 0), st_point(3, 4)) AS x", "5.000000m");
+    try expectValue(s, f, "RETURN st_area(geometryfromtext('POLYGON((0 0, 2 0, 2 2, 0 2, 0 0))')) AS x", "4.000000m");
+}
+
+test "SONNY-2739: geography and geometry refuse a value that does not fit" {
+    try inModes("geo", &eval_modes, checkGeo);
+}
+
+test "SONNY-2739: the extended builtins refuse an area or a similarity past the decimal" {
+    const extf = geode.types.extended_functions;
+    const Point = geode.ext_types.Point;
+    var reg = try extf.initRegistry(testing.allocator);
+    defer reg.deinit();
+    const area = reg.get("polygon_area").?;
+    const huge = [_]Point{ .{ .x = 0, .y = 0 }, .{ .x = 1e200, .y = 0 }, .{ .x = 1e200, .y = 1e200 }, .{ .x = 0, .y = 1e200 } };
+    try testing.expectError(error.DecimalOverflow, area(testing.allocator, &.{extf.makeGeoPolygon(&huge)}));
+    const square = [_]Point{ .{ .x = 0, .y = 0 }, .{ .x = 2, .y = 0 }, .{ .x = 2, .y = 2 }, .{ .x = 0, .y = 2 } };
+    try testing.expectEqual(@as(i128, 4_000_000), (try area(testing.allocator, &.{extf.makeGeoPolygon(&square)})).Decimal.coeff);
+    // [1e200, 1e200] with itself: the dot product overflows to +inf and the
+    // similarity is NaN.
+    const cosine = reg.get("vector_cosine").?;
+    const v = [_]f64{ 1e200, 1e200 };
+    try testing.expectError(error.DecimalOverflow, cosine(testing.allocator, &.{ try extf.makeVector(&v), try extf.makeVector(&v) }));
+    const w = [_]f64{ 3, 4 };
+    try testing.expectEqual(@as(i128, 1_000_000), (try cosine(testing.allocator, &.{ try extf.makeVector(&w), try extf.makeVector(&w) })).Decimal.coeff);
+}
+
+test "SONNY-2739: a linear interpolation between far-apart points does not abort" {
+    harness.silenceEngineLogs();
+    var s = try Session.init(.in_memory);
+    defer s.deinit();
+    var store = geode.timeseries.Store.init(testing.allocator);
+    defer store.deinit();
+    // The span of the first series overflows i64; the second series' f64
+    // estimate rounds to 2^63.
+    try store.insertMany(.{ .device_id = 1, .metric = "m" }, &.{
+        .{ .ts = 100, .value = -std.math.maxInt(i64) },
+        .{ .ts = 200, .value = std.math.maxInt(i64) },
+    });
+    try store.insertMany(.{ .device_id = 2, .metric = "m" }, &.{
+        .{ .ts = 100, .value = std.math.maxInt(i64) - 1 },
+        .{ .ts = 200, .value = std.math.maxInt(i64) },
+    });
+    geode.eval.setGlobalTimeseriesStore(&store);
+    defer geode.eval.setGlobalTimeseriesStore(null);
+    var f: Failures = .{};
+    defer f.deinit();
+    try expectValue(&s, &f, "WITH timeseries.interpolate(1, 'm', 150, 'linear') AS p RETURN p.value AS v", "0");
+    try expectValue(&s, &f, "WITH timeseries.interpolate(2, 'm', 199, 'linear') AS p RETURN p.value AS v", "9223372036854775807");
+    try f.check("interpolation");
+}

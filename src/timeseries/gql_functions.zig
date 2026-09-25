@@ -343,8 +343,16 @@ pub fn executeFunction(
                     const r = right.?;
                     const ratio = @as(f64, @floatFromInt(params.timestamp - l.ts)) /
                         @as(f64, @floatFromInt(r.ts - l.ts));
-                    const interpolated_value = @as(i64, @intFromFloat(@as(f64, @floatFromInt(l.value)) +
-                        ratio * @as(f64, @floatFromInt(r.value - l.value))));
+                    // SONNY-2739: `r.value - l.value` overflowed i64 for
+                    // points far apart, and the f64 estimate could round to
+                    // 2^63; either aborted the server. The span is an i128,
+                    // and the estimate is clamped between the two points
+                    // (where the exact value lies) before it is narrowed.
+                    const span: f64 = @floatFromInt(@as(i128, r.value) - l.value);
+                    const estimate = @as(f64, @floatFromInt(l.value)) + ratio * span;
+                    const lo = @min(l.value, r.value);
+                    const hi = @max(l.value, r.value);
+                    const interpolated_value = std.math.clamp(std.math.lossyCast(i64, estimate), lo, hi);
 
                     return Value{
                         .Map = try createPointObject(.{

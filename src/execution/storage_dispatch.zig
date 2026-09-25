@@ -64,6 +64,7 @@ const Value = value_types.Value;
 
 // Security and streaming imports
 const tde_mod = @import("../security/tde.zig");
+const decimal128 = @import("../types/decimal128.zig");
 const cdc_mod = @import("../streaming/cdc_enhanced.zig");
 const fle_catalog = @import("../schema/fle_catalog.zig");
 const fle_annotations = @import("../schema/annotations.zig");
@@ -954,7 +955,8 @@ fn handleTdeTestTransparentEncryption(allocator: std.mem.Allocator, _: ast.CallP
     row[0] = Value{ .Int = @intCast(result.types_tested) };
     row[1] = Value{ .Bool = result.all_transparent };
     // Convert float to decimal (performance_impact_pct is a percentage like 15.5)
-    const pct_int: i128 = @intFromFloat(result.performance_impact_pct * 100);
+    // SONNY-2739: checked (22003) instead of a bare `@intFromFloat`.
+    const pct_int = try decimal128.checkedScaledCoeff(result.performance_impact_pct, 100.0);
     row[2] = Value{ .Decimal = .{ .coeff = pct_int, .scale = 2 } };
     row[3] = Value{ .Int = @intCast(result.errors_encountered) };
     rows[0] = row;
@@ -1744,7 +1746,7 @@ fn handleTdeMeasureOverhead(allocator: std.mem.Allocator, _: ast.CallProcedure) 
     const row = try allocator.alloc(Value, 4);
     row[0] = Value{ .Int = result.baseline_ops_per_sec };
     row[1] = Value{ .Int = result.encrypted_ops_per_sec };
-    row[2] = Value{ .Decimal = .{ .coeff = @intFromFloat(result.overhead_percentage * 100.0), .scale = 2 } };
+    row[2] = Value{ .Decimal = .{ .coeff = try decimal128.checkedScaledCoeff(result.overhead_percentage, 100.0), .scale = 2 } };
     row[3] = Value{ .Bool = result.passes_threshold };
     rows[0] = row;
 
@@ -1800,10 +1802,10 @@ fn handleTdeSimulateOltpWorkload(allocator: std.mem.Allocator, call_stmt: ast.Ca
 
     const rows = try allocator.alloc([]Value, 1);
     const row = try allocator.alloc(Value, 4);
-    row[0] = Value{ .Decimal = .{ .coeff = @intFromFloat(result.avg_transaction_time_ms * 100.0), .scale = 2 } };
+    row[0] = Value{ .Decimal = .{ .coeff = try decimal128.checkedScaledCoeff(result.avg_transaction_time_ms, 100.0), .scale = 2 } };
     row[1] = Value{ .Int = result.tps_with_encryption };
     row[2] = Value{ .Int = result.tps_without_encryption };
-    row[3] = Value{ .Decimal = .{ .coeff = @intFromFloat(result.degradation_percentage * 100.0), .scale = 2 } };
+    row[3] = Value{ .Decimal = .{ .coeff = try decimal128.checkedScaledCoeff(result.degradation_percentage, 100.0), .scale = 2 } };
     rows[0] = row;
 
     return ExecutionResult{
