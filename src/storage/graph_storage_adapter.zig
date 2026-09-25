@@ -1542,6 +1542,30 @@ pub fn freeOwnedStorageProperty(allocator: Allocator, val: gs.PropertyValue) voi
     }
 }
 
+/// Free a property map `getAllNodeProperties` / `getAllEdgeProperties` built:
+/// every key and value, then the table.
+fn freeReadPropertyMap(allocator: Allocator, map: *std.StringHashMap(gs.PropertyValue)) void {
+    var it = map.iterator();
+    while (it.next()) |entry| {
+        allocator.free(entry.key_ptr.*);
+        freeOwnedStorageProperty(allocator, entry.value_ptr.*);
+    }
+    map.deinit();
+}
+
+// CANARY: REQ=REQ-SONNY-2463-MATERIALIZE-OOM; FEATURE="EngineDirectNodeOwnership"; ASPECT=ReadMapPartialFailure; STATUS=TESTED; TEST=tests/test_sonny2463_materialize_oom.zig; OWNER=engine; UPDATED=2026-09-25
+/// Decode `encoded` and put it into `map` under a copy of `key`. The map owns
+/// both copies once the put succeeds. If a copy or the put itself fails, the
+/// copies made so far are freed here, and the map is unchanged (SONNY-2463:
+/// they used to leak).
+fn putDecodedProperty(allocator: Allocator, map: *std.StringHashMap(gs.PropertyValue), key: []const u8, encoded: []const u8) !void {
+    const decoded = try gs.property.decode(allocator, encoded);
+    errdefer freeOwnedStorageProperty(allocator, decoded.value);
+    const owned_key = try allocator.dupe(u8, key);
+    errdefer allocator.free(owned_key);
+    try map.put(owned_key, decoded.value);
+}
+
 fn hashStorageProperty(allocator: Allocator, value: gs.PropertyValue) !u64 {
     var stack_buf: [64]u8 = undefined;
     const encoded_len = gs.property.encodedSize(value);
@@ -5279,7 +5303,10 @@ pub const StorageAdapter = struct {
 
         for (label_ids) |label_id| {
             if (mg.label_dict.getString(label_id)) |name| {
-                try result.append(allocator, try allocator.dupe(u8, name));
+                // SONNY-2463: room first, so a failed append cannot drop the
+                // copy.
+                try result.ensureUnusedCapacity(allocator, 1);
+                result.appendAssumeCapacity(try allocator.dupe(u8, name));
             }
         }
 
@@ -7735,7 +7762,9 @@ pub const StorageAdapter = struct {
         const rec = try mg.engine.getNode(node_id) orelse return error.NodeNotFound;
 
         var result = std.StringHashMap(gs.PropertyValue).init(allocator);
-        errdefer result.deinit();
+        // SONNY-2463: a failure part way frees every key and value already
+        // put, not only the table.
+        errdefer freeReadPropertyMap(allocator, &result);
 
         if (rec.prop_head == 0) return result;
 
@@ -7750,9 +7779,7 @@ pub const StorageAdapter = struct {
 
         while (try iter.next()) |entry| {
             if (!shouldExposePropertyKey(entry.key)) continue;
-            const decoded = try gs.property.decode(allocator, entry.encoded_value);
-            const owned_key = try allocator.dupe(u8, entry.key);
-            try result.put(owned_key, decoded.value);
+            try putDecodedProperty(allocator, &result, entry.key, entry.encoded_value);
         }
 
         return result;
@@ -7785,7 +7812,8 @@ pub const StorageAdapter = struct {
         };
 
         var result = std.StringHashMap(gs.PropertyValue).init(allocator);
-        errdefer result.deinit();
+        // SONNY-2463: as in `getAllNodeProperties`.
+        errdefer freeReadPropertyMap(allocator, &result);
 
         if (prop_head == 0) return result;
 
@@ -7798,9 +7826,7 @@ pub const StorageAdapter = struct {
 
         while (try iter.next()) |entry| {
             if (!shouldExposePropertyKey(entry.key)) continue;
-            const decoded = try gs.property.decode(allocator, entry.encoded_value);
-            const owned_key = try allocator.dupe(u8, entry.key);
-            try result.put(owned_key, decoded.value);
+            try putDecodedProperty(allocator, &result, entry.key, entry.encoded_value);
         }
 
         return result;

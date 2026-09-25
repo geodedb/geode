@@ -8413,6 +8413,18 @@ pub fn build(b: *std.Build) void {
     const sonny2463_step = b.step("test-sonny2463-bare-node-leak", "Run SONNY-2463 regression (a node the node-scan fast path returns is freed in full when its page is torn down)");
     sonny2463_step.dependOn(&run_sonny2463_tests.step);
 
+    // SONNY-2463 follow-up: the adapter reads that build a node's labels and
+    // properties leaked what they had built when an allocation failed part
+    // way. Swept under std.testing.FailingAllocator.
+    const sonny2463_oom_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny2463_materialize_oom.zig"), .target = target, .optimize = optimize });
+    sonny2463_oom_test_mod.addImport("geode", root_mod);
+    sonny2463_oom_test_mod.addImport("logging", logging_mod);
+    const sonny2463_oom_tests = b.addTest(.{ .root_module = sonny2463_oom_test_mod });
+    const run_sonny2463_oom_tests = b.addRunArtifact(sonny2463_oom_tests);
+    shardDep(test_step, &run_sonny2463_oom_tests.step, 1, test_shard_loads, test_shard_index);
+    const sonny2463_oom_step = b.step("test-sonny2463-materialize-oom", "Run SONNY-2463 follow-up regression (a label or property read that fails part way frees what it built, swept under a failing allocator)");
+    sonny2463_oom_step.dependOn(&run_sonny2463_oom_tests.step);
+
     // SONNY-2473: `SKIP k` with no LIMIT and no WHERE returned one row on the
     // node-scan fast path: the OFFSET-only slot bound (k+1) capped slot
     // collection.
