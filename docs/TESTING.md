@@ -271,10 +271,15 @@ tests do (`const run_x = b.addRunArtifact(x_tests);
 shardDep(test_step, &run_x.step, 1, test_shard_loads, test_shard_index);`), so
 it also runs in the sharded aggregate `zig build test` (the pre-push hook and
 the CI shard jobs). `shardDep` rejects a compile step at configure time, since
-a compile step is built but never run. Before claiming the aggregate is green,
-run `zig build test-compile`: it compiles every aggregate artifact in all
-shards, including those with no named step, which a sweep of named steps
-cannot see.
+a compile step is built but never run. The one exception is an intentionally
+red TDD reproduction listed in [KNOWN_TEST_ISSUES.md](KNOWN_TEST_ISSUES.md): it
+may stay out of `shardDep`, so the aggregate stays green, until the commit that
+fixes it registers it there, and until then its test artifact is added to
+`test-compile` directly
+(`if (g_test_compile_step) |c| c.dependOn(&x_tests.step);`). Before claiming
+the aggregate is green, run `zig build test-compile`: it compiles every
+aggregate artifact in all shards, including those with no named step, which a
+sweep of named steps cannot see.
 
 Shell-based regression scripts go in the `tests/` directory:
 

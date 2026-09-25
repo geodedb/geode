@@ -8401,6 +8401,15 @@ pub fn build(b: *std.Build) void {
     const run_node_scan_skip_tests = b.addRunArtifact(node_scan_skip_tests);
     const node_scan_skip_step = b.step("test-node-scan-skip-without-limit", "KNOWN RED, not in the aggregate: SKIP without LIMIT on the node-scan fast path returns one row instead of every row after the offset (P5, SONNY-1221 review)");
     node_scan_skip_step.dependOn(&run_node_scan_skip_tests.step);
+    //
+    // Out of the aggregate, but still compiled by `test-compile` (shardDep is
+    // what adds an artifact there), so a known-red reproduction that stops
+    // compiling fails `test-compile` instead of going unnoticed until its fix.
+    // Drop each line when shardDep takes its test over.
+    if (g_test_compile_step) |c| {
+        c.dependOn(&node_scan_dup_proj_tests.step);
+        c.dependOn(&node_scan_skip_tests.step);
+    }
 
     // SONNY-1330 TSan companion: the same regression file under
     // -fsanitize-thread, so the fork-join over a COLD store is checked for the
