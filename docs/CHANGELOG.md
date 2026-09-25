@@ -80,6 +80,13 @@
   post-filter's label-deny snapshot, and the traversal's, now hold their own
   copy of each denied label. If a deny policy was removed while a query's
   post-filter ran, the post-filter could read freed memory.
+- **A large RLS policy no longer aborts the server (SONNY-2730):** the
+  expression compiler cast every constant's index to a byte, so a policy with
+  more than 256 constants crashed the server when it was compiled; a
+  129-term allow-list was enough. It also recursed without a bound, so a long
+  enough run of `(` or `NOT` overflowed the stack. A repeated field name or
+  literal now takes one constant slot. A policy with more than 256 distinct
+  constants, or nested more than 64 levels deep, is refused.
 - **RLS range policies fail closed (SONNY-2709):** in an expression RLS
   policy, `<`, `<=`, `>` and `>=` treated a missing value, or two values of
   different types, as equal. So `<=` and `>=` held: a policy such as

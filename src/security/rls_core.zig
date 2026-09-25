@@ -54,6 +54,13 @@ const RLS_POLICY_CACHE_TTL_MS = 60_000; // Cache TTL: 60 seconds (1 minute)
 // `error.StackUnderflow`, so even a corrupted / adversarial bytecode payload
 // can't write beyond the stack.
 const RLS_STACK_DEPTH: usize = 64;
+// CANARY: REQ=REQ-SONNY-2730-RLS-COMPILER-LIMITS; FEATURE="RLSExpressionCompilation"; ASPECT=CompilerLimits; STATUS=TESTED; TEST=src/security/rls_core.zig; OWNER=security; UPDATED=2026-09-25
+/// SONNY-2730: how deeply an RLS expression may nest parentheses and NOTs.
+/// The compiler is recursive descent, so without a bound a long enough run of
+/// `(` or `NOT` overflows the native stack and takes the server down; past it
+/// the expression is refused. (A bytecode operand is a u8, so at most 256
+/// distinct constants can be addressed; that bound is enforced in `internConst`.)
+const RLS_MAX_NESTING: usize = 64;
 
 // Type definitions that would normally come from other modules
 pub const ValueType = enum {
@@ -616,12 +623,52 @@ pub const RLSEngine = struct {
         return result;
     }
 
-    // CANARY: REQ=REQ-RLS-EXPR-003; FEATURE="RLSExpressionCompilation"; ASPECT=ExpressionCompiler; STATUS=EXEMPT; OWNER=security; UPDATED=2025-12-30
+    /// Compile `expr` for `createPolicy`: an expression the compiler refuses
+    /// becomes a program that denies every row, with a warning.
     fn compileExpression(self: *Self, expr: []const u8) !*CompiledExpression {
+        return self.compileExpressionStrict(expr) catch |err| switch (err) {
+            error.InvalidRlsExpression => {
+                // Malformed / empty expression, input left over after a valid
+                // prefix (SONNY-2709: `row.x IS NULL OR …` used to compile as
+                // `row.x`), or past a compiler limit (SONNY-2730): fail closed
+                // with a program that denies every row, rather than enforcing
+                // part of the policy.
+                log.warn("RLS expression not understood; the policy denies every row", &.{
+                    Attr.string("expression", expr),
+                });
+                return self.compileDenyAll();
+            },
+            else => return err,
+        };
+    }
+
+    /// A program that denies every row: push_false; ret.
+    fn compileDenyAll(self: *Self) !*CompiledExpression {
+        const Opcode = CompiledExpression.Opcode;
+        const bytecode = try self.allocator.dupe(u8, &.{ @intFromEnum(Opcode.push_false), @intFromEnum(Opcode.ret) });
+        errdefer self.allocator.free(bytecode);
+        const compiled = try self.allocator.create(CompiledExpression);
+        compiled.* = .{
+            .bytecode = bytecode,
+            .constants = &.{},
+            .jump_table = &.{},
+            .needs_row_data = false,
+        };
+        return compiled;
+    }
+
+    // CANARY: REQ=REQ-RLS-EXPR-003; FEATURE="RLSExpressionCompilation"; ASPECT=ExpressionCompiler; STATUS=EXEMPT; OWNER=security; UPDATED=2025-12-30
+    /// Compile `expr`, or fail with error.InvalidRlsExpression: the whole
+    /// input must parse, nest at most `RLS_MAX_NESTING` deep and use at most
+    /// 256 distinct constants.
+    fn compileExpressionStrict(self: *Self, expr: []const u8) !*CompiledExpression {
         const Opcode = CompiledExpression.Opcode;
         var bytecode = std.ArrayList(u8).empty;
+        defer bytecode.deinit(self.allocator);
         var constants = std.ArrayList(Value).empty;
+        defer constants.deinit(self.allocator);
         var jump_table = std.ArrayList(usize).empty;
+        defer jump_table.deinit(self.allocator);
 
         // GAP-0284: recursive-descent compiler emitting POSTFIX (RPN)
         // bytecode for the stack VM. The previous implementation was a flat
@@ -649,6 +696,8 @@ pub const RLSEngine = struct {
             self: *Self,
             src: []const u8,
             pos: usize = 0,
+            /// SONNY-2730: current depth of `(` and `NOT` nesting.
+            depth: usize = 0,
             bc: *std.ArrayList(u8),
             ks: *std.ArrayList(Value),
 
@@ -662,9 +711,36 @@ pub const RLSEngine = struct {
                 try c.bc.append(c.self.allocator, a);
             }
             fn pushConst(c: *@This(), v: Value) !void {
-                try c.ks.append(c.self.allocator, v);
+                const idx = try c.internConst(v);
                 try c.emit(.push_const);
-                try c.emitArg(@intCast(c.ks.items.len - 1));
+                try c.emitArg(idx);
+            }
+            /// SONNY-2730: the u8 operand of `v` in the constants table. An
+            /// equal constant is reused, so a field or literal repeated across
+            /// the policy takes one slot. The index was an `@intCast` to u8,
+            /// which aborted the server on the 257th constant (a 129-term
+            /// allow-list is enough); past 256 distinct constants the
+            /// expression is refused instead.
+            fn internConst(c: *@This(), v: Value) !u8 {
+                for (c.ks.items, 0..) |existing, i| {
+                    if (sameConstant(existing, v)) return @intCast(i); // i < 256: never appended past it
+                }
+                const idx = std.math.cast(u8, c.ks.items.len) orelse return error.InvalidRlsExpression;
+                try c.ks.append(c.self.allocator, v);
+                return idx;
+            }
+            fn sameConstant(a: Value, b: Value) bool {
+                return switch (a) {
+                    .string => |x| b == .string and std.mem.eql(u8, x, b.string),
+                    .integer => |x| b == .integer and b.integer == x,
+                    .float => |x| b == .float and @as(u64, @bitCast(x)) == @as(u64, @bitCast(b.float)),
+                    else => false,
+                };
+            }
+            /// SONNY-2730: enter one more level of `(` or `NOT`.
+            fn enter(c: *@This()) !void {
+                if (c.depth >= RLS_MAX_NESTING) return error.InvalidRlsExpression;
+                c.depth += 1;
             }
             /// Case-insensitive keyword match at pos, requiring the next char
             /// (if any) is not an identifier char. Consumes + returns true.
@@ -713,6 +789,8 @@ pub const RLSEngine = struct {
             fn parseNot(c: *@This()) anyerror!void {
                 c.skipWs();
                 if (c.matchKw("not")) {
+                    try c.enter();
+                    defer c.depth -= 1;
                     try c.parseNot();
                     try c.emit(.op_not);
                     return;
@@ -742,6 +820,8 @@ pub const RLSEngine = struct {
                 c.skipWs();
                 if (c.pos >= c.src.len) return error.InvalidRlsExpression;
                 if (c.src[c.pos] == '(') {
+                    try c.enter();
+                    defer c.depth -= 1;
                     c.pos += 1;
                     try c.parseOr();
                     c.skipWs();
@@ -764,16 +844,16 @@ pub const RLSEngine = struct {
                 // time against the global user attribute store.
                 if (c.matchLit("principal.attribute.")) {
                     const key = c.ident();
-                    try c.ks.append(c.self.allocator, .{ .string = key });
+                    const idx = try c.internConst(.{ .string = key });
                     try c.emit(.load_attr);
-                    try c.emitArg(@intCast(c.ks.items.len - 1));
+                    try c.emitArg(idx);
                     return;
                 }
                 if (c.matchLit("row.")) {
                     const field = c.ident();
-                    try c.ks.append(c.self.allocator, .{ .string = field });
+                    const idx = try c.internConst(.{ .string = field });
                     try c.emit(.load_row);
-                    try c.emitArg(@intCast(c.ks.items.len - 1));
+                    try c.emitArg(idx);
                     return;
                 }
                 if (c.matchKw("current_user")) {
@@ -817,31 +897,25 @@ pub const RLSEngine = struct {
         };
 
         var comp = C{ .self = self, .src = expr, .bc = &bytecode, .ks = &constants };
-        const parsed_whole = blk: {
-            comp.parseOr() catch break :blk false;
-            comp.skipWs();
-            break :blk comp.pos == comp.src.len;
+        comp.parseOr() catch |err| switch (err) {
+            error.OutOfMemory => return error.OutOfMemory,
+            else => return error.InvalidRlsExpression,
         };
-        if (!parsed_whole) {
-            // Malformed / empty expression, or input left over after a valid
-            // prefix (SONNY-2709: `row.x IS NULL OR …` used to compile as
-            // `row.x`): fail closed — emit a lone push_false so the VM denies
-            // every row rather than enforcing part of the policy.
-            log.warn("RLS expression not understood; the policy denies every row", &.{
-                Attr.string("expression", expr),
-            });
-            bytecode.clearRetainingCapacity();
-            try bytecode.append(self.allocator, @intFromEnum(Opcode.push_false));
-        }
+        comp.skipWs();
+        if (comp.pos != comp.src.len) return error.InvalidRlsExpression;
 
         // Add return instruction
         try bytecode.append(self.allocator, @intFromEnum(Opcode.ret));
 
         const compiled = try self.allocator.create(CompiledExpression);
+        errdefer self.allocator.destroy(compiled);
         const owned_bytecode = try bytecode.toOwnedSlice(self.allocator);
+        errdefer self.allocator.free(owned_bytecode);
+        const owned_constants = try constants.toOwnedSlice(self.allocator);
+        errdefer self.allocator.free(owned_constants);
         compiled.* = CompiledExpression{
             .bytecode = owned_bytecode,
-            .constants = try constants.toOwnedSlice(self.allocator),
+            .constants = owned_constants,
             .jump_table = try jump_table.toOwnedSlice(self.allocator),
             // PERF-A / #808: pre-scan once at compile time so the match
             // loop can skip per-row StringHashMap construction when no
@@ -4393,4 +4467,96 @@ test "SONNY-2709: the SecurityContext VM applies the same three-valued rules" {
     const if_false = [_]u8{ 0x04, 0x41, 0x00, 0x03, 0xFF, 0x02, 0xFF };
     var branch = RLSEngine.CompiledExpression{ .bytecode = &if_false, .constants = &.{}, .jump_table = &jump_table };
     try std.testing.expectError(error.IndeterminatePolicy, engine.evaluateCompiledExpression(&branch, &row, &context));
+}
+
+// ---------------------------------------------------------------------------
+// SONNY-2730: compiler limits.
+// CANARY: REQ=REQ-SONNY-2730-RLS-COMPILER-LIMITS; FEATURE="RLSExpressionCompilation"; ASPECT=CompilerLimits; STATUS=TESTED; TEST=src/security/rls_core.zig; OWNER=security; UPDATED=2026-09-25
+// ---------------------------------------------------------------------------
+
+fn sonny2730FreeCompiled(allocator: Allocator, c: *RLSEngine.CompiledExpression) void {
+    allocator.free(c.bytecode);
+    allocator.free(c.constants);
+    allocator.free(c.jump_table);
+    allocator.destroy(c);
+}
+
+/// `row.cls = 'v0' OR row.cls = 'v1' OR …` with `terms` terms.
+fn sonny2730AllowList(allocator: Allocator, terms: usize) ![]u8 {
+    var text: std.ArrayList(u8) = .empty;
+    errdefer text.deinit(allocator);
+    var i: usize = 0;
+    while (i < terms) : (i += 1) {
+        if (i > 0) try text.appendSlice(allocator, " OR ");
+        try text.print(allocator, "row.cls = 'v{d}'", .{i});
+    }
+    return text.toOwnedSlice(allocator);
+}
+
+test "SONNY-2730: a 129-term allow-list compiles, with the repeated field stored once" {
+    const allocator = std.testing.allocator;
+    // Probe P19: 129 literals and 129 uses of `row.cls` took 258 constants,
+    // and the 257th index aborted the server (`@intCast` to u8).
+    const text = try sonny2730AllowList(allocator, 129);
+    defer allocator.free(text);
+
+    var engine = try RLSEngine.init(allocator);
+    defer engine.deinit();
+    const compiled = try engine.compileExpressionStrict(text);
+    defer sonny2730FreeCompiled(allocator, compiled);
+    try std.testing.expectEqual(@as(usize, 130), compiled.constants.len);
+
+    var e = try sonny2709Engine(allocator, text);
+    defer sonny2709Deinit(&e);
+    try std.testing.expect(try sonny2709Sees(&e, "u", "cls", .{ .string = "v0" }));
+    try std.testing.expect(try sonny2709Sees(&e, "u", "cls", .{ .string = "v128" }));
+    try std.testing.expect(!try sonny2709Sees(&e, "u", "cls", .{ .string = "v129" }));
+}
+
+test "SONNY-2730: more distinct constants than a u8 can address is refused, not a crash" {
+    const allocator = std.testing.allocator;
+    // 256 literals plus the field: 257 distinct constants.
+    const text = try sonny2730AllowList(allocator, 256);
+    defer allocator.free(text);
+
+    var engine = try RLSEngine.init(allocator);
+    defer engine.deinit();
+    try std.testing.expectError(error.InvalidRlsExpression, engine.compileExpressionStrict(text));
+
+    // 255 literals plus the field is exactly 256: the last index that fits.
+    const at_limit = try sonny2730AllowList(allocator, 255);
+    defer allocator.free(at_limit);
+    const compiled = try engine.compileExpressionStrict(at_limit);
+    defer sonny2730FreeCompiled(allocator, compiled);
+    try std.testing.expectEqual(@as(usize, 256), compiled.constants.len);
+}
+
+test "SONNY-2730: nesting past the limit is refused, not a stack overflow" {
+    const allocator = std.testing.allocator;
+    var engine = try RLSEngine.init(allocator);
+    defer engine.deinit();
+
+    // 100 000 parentheses around TRUE, and 100 000 NOTs in front of it.
+    const n = 100_000;
+    const parens = try allocator.alloc(u8, 2 * n + 4);
+    defer allocator.free(parens);
+    @memset(parens[0..n], '(');
+    @memcpy(parens[n .. n + 4], "TRUE");
+    @memset(parens[n + 4 ..], ')');
+    try std.testing.expectError(error.InvalidRlsExpression, engine.compileExpressionStrict(parens));
+
+    var nots: std.ArrayList(u8) = .empty;
+    defer nots.deinit(allocator);
+    for (0..n) |_| try nots.appendSlice(allocator, "NOT ");
+    try nots.appendSlice(allocator, "TRUE");
+    try std.testing.expectError(error.InvalidRlsExpression, engine.compileExpressionStrict(nots.items));
+
+    // At the limit it compiles.
+    var ok_text: std.ArrayList(u8) = .empty;
+    defer ok_text.deinit(allocator);
+    for (0..RLS_MAX_NESTING) |_| try ok_text.append(allocator, '(');
+    try ok_text.appendSlice(allocator, "TRUE");
+    for (0..RLS_MAX_NESTING) |_| try ok_text.append(allocator, ')');
+    const compiled = try engine.compileExpressionStrict(ok_text.items);
+    defer sonny2730FreeCompiled(allocator, compiled);
 }

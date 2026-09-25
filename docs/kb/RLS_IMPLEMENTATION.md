@@ -94,6 +94,11 @@ This document describes the comprehensive Row-Level Security (RLS) implementatio
   every row and the engine logs a warning. (Before SONNY-2709, a valid
   prefix was compiled and the rest silently dropped.)
 
+  Limits (SONNY-2730): an expression may use at most 256 distinct constants.
+  Every field name, attribute key and literal is a constant, and a repeated
+  one counts once. It may nest `(` and `NOT` at most 64 levels deep. A
+  policy past either limit is refused.
+
   The engine uses SQL's three-valued logic: a comparison is true, false or
   UNKNOWN.
 
