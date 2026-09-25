@@ -2,7 +2,7 @@ const std = @import("std");
 const value_types = @import("../value_types.zig");
 const graph_store = @import("../graph_store.zig");
 const property_codec = @import("../property_value_codec.zig");
-const narrowing = @import("../types/narrowing.zig");
+const value_order = @import("value_order.zig");
 
 const Value = value_types.Value;
 
@@ -15,13 +15,21 @@ const Value = value_types.Value;
 //
 // Identity rules (ISO/IEC 39075:2024 <set quantifier>):
 //   * Node / Edge          -> by entity id, never by pointer.
-//   * integral numerics    -> by the i64 value, so 10, 10.0 and DECIMAL '10.00'
-//                             are the SAME value.
-//   * fractional numerics  -> by the IEEE-754 bit pattern of the f64.
+//   * numbers              -> by their exact value, the comparator's
+//                             (value_order.zig): 10, 10.0 and DECIMAL '10.00'
+//                             are the SAME value, so are DECIMAL 0.5 and
+//                             DOUBLE 0.5, and every NaN; DECIMAL 0.1 and
+//                             DOUBLE 0.1 are not. (SONNY-2675: a decimal was
+//                             keyed through f64, so decimals past ~16
+//                             significant digits merged, and each NaN bit
+//                             pattern was a value of its own.)
 //   * strings              -> by bytes (Str / Text / Char / Varchar alias).
 //   * Bool                 -> by the boolean.
-//   * everything else      -> by its type and value: dates, times and
-//                             intervals by their fields, lists element by
+//   * intervals            -> by months and day-to-second length (a month is
+//                             not 30 days; a day is 24 hours); a time with a
+//                             time zone by its UTC time: the comparator's.
+//   * everything else      -> by its type and value: dates and times by
+//                             their fields, lists element by
 //                             element, maps entry by entry (sorted by key),
 //                             extended values by their binary encoding.
 //                             (SONNY-2675: they were by a rendering into 64
@@ -117,15 +125,7 @@ pub fn writeKey(w: *std.Io.Writer, scratch: std.mem.Allocator, value: Value) Wri
             for (path.edges) |e| try w.writeInt(u64, e.id, .little);
         },
         .Bool => |b| try w.writeAll(if (b) "B1" else "B0"),
-        .Int => |n| try writeInt(w, n),
-        .SmallInt => |n| try writeInt(w, n),
-        .BigInt => |n| try writeInt(w, n),
-        .Real => |f| try writeFloat(w, @floatCast(f)),
-        .Double => |f| try writeFloat(w, f),
-        .Decimal => |d| {
-            const divisor = std.math.pow(f64, 10.0, @floatFromInt(d.scale));
-            try writeFloat(w, @as(f64, @floatFromInt(d.coeff)) / divisor);
-        },
+        .Int, .SmallInt, .BigInt, .Real, .Double, .Decimal => try value_order.writeNumberKey(w, value_order.numberOf(value).?),
         .Str => |t| try writeBytes(w, 'S', t),
         .Text => |t| try writeBytes(w, 'S', t),
         .Char => |c| try writeBytes(w, 'S', c.data),
@@ -148,8 +148,7 @@ pub fn writeKey(w: *std.Io.Writer, scratch: std.mem.Allocator, value: Value) Wri
         },
         .TimeTZ => |t| {
             try w.writeByte('t');
-            try w.writeInt(i64, t.time.micros_since_midnight, .little);
-            try w.writeInt(i32, t.offset_seconds, .little);
+            try w.writeInt(i64, value_order.timeTzUtcMicros(t), .little);
         },
         .Timestamp => |t| {
             try w.writeByte('P');
@@ -159,12 +158,7 @@ pub fn writeKey(w: *std.Io.Writer, scratch: std.mem.Allocator, value: Value) Wri
             try w.writeByte('Z');
             try w.writeInt(i64, t.micros_since_epoch_utc, .little);
         },
-        .Interval => |iv| {
-            try w.writeByte('V');
-            try w.writeInt(i32, iv.months, .little);
-            try w.writeInt(i32, iv.days, .little);
-            try w.writeInt(i64, iv.micros, .little);
-        },
+        .Interval => |iv| try value_order.writeIntervalKey(w, iv),
         .Url => |u| {
             try w.writeByte('W');
             try writeBytes(w, 'S', u.scheme);
@@ -228,25 +222,6 @@ pub fn writeKey(w: *std.Io.Writer, scratch: std.mem.Allocator, value: Value) Wri
         },
     }
     return true;
-}
-
-fn writeInt(w: *std.Io.Writer, n: i64) std.Io.Writer.Error!void {
-    try w.writeByte('I');
-    try w.writeInt(i64, n, .little);
-}
-
-/// Integral floats share the integer key space so `10` and `10.0` are one value.
-///
-/// SONNY-2739: the range check compared with `@floatFromInt(maxInt(i64))`,
-/// which rounds up to 2^63, so 2^63 passed it and `@intFromFloat` aborted the
-/// process: `count(DISTINCT 9223372036854775808.0)`, or a GROUP BY over that
-/// value (a decimal key arrives here as its f64). The bounds are exact now.
-fn writeFloat(w: *std.Io.Writer, f: f64) std.Io.Writer.Error!void {
-    if (@trunc(f) == f and narrowing.floatFits(i64, f)) {
-        return writeInt(w, @intFromFloat(f));
-    }
-    try w.writeByte('F');
-    try w.writeInt(u64, @bitCast(f), .little);
 }
 
 fn writeBytes(w: *std.Io.Writer, tag: u8, bytes: []const u8) std.Io.Writer.Error!void {

@@ -193,6 +193,28 @@ const Session = struct {
             try self.exec("CREATE (:M {g2: 'y', d: 7, dt: DATE '2025-12-31', m: 2.5})", &.{});
             try self.exec("CREATE (:M {g2: 'y', d: $v, dt: DATE '2026-06-30', m: 2.25})", &.{.{ .name = "v", .value = .{ .Double = 7.5 } }});
             try self.exec("CREATE (:Hidden {s: 'h'})", &.{});
+            // SONNY-2675 M2: decimals past 16 significant digits, a decimal
+            // and a double of the same and of different exact values,
+            // durations, zoned times.
+            try self.exec("CREATE (:N {g: 'p', v: 1234567890.123456789})", &.{});
+            try self.exec("CREATE (:N {g: 'p', v: 1234567890.123456788})", &.{});
+            try self.exec("CREATE (:N {g: 'q', v: 0.5})", &.{});
+            try self.exec("CREATE (:N {g: 'q', v: $v})", &.{.{ .name = "v", .value = .{ .Double = 0.5 } }});
+            try self.exec("CREATE (:N {g: 'r', v: 0.1})", &.{});
+            try self.exec("CREATE (:N {g: 'r', v: $v})", &.{.{ .name = "v", .value = .{ .Double = 0.1 } }});
+            for ([_][]const u8{ "P1M", "P30D", "P1D", "PT24H" }) |t| {
+                try self.exec(try std.fmt.allocPrint(aa, "CREATE (:D {{g: 'd', t: '{s}'}})", .{t}), &.{});
+            }
+            for ([_][]const u8{ "10:00:00+01:00", "09:00:00+00:00", "11:00:00+00:00" }) |t| {
+                try self.exec(try std.fmt.allocPrint(aa, "CREATE (:Z {{g: 'z', t: '{s}'}})", .{t}), &.{});
+            }
+            // NaN in memory only: the storage engine refuses a non-finite
+            // double. Two NaNs of different bit patterns.
+            if (self.mode == .in_memory) {
+                try self.exec("CREATE (:Q {v: $v})", &.{.{ .name = "v", .value = .{ .Double = std.math.nan(f64) } }});
+                try self.exec("CREATE (:Q {v: $v})", &.{.{ .name = "v", .value = .{ .Double = -std.math.nan(f64) } }});
+                try self.exec("CREATE (:Q {v: $v})", &.{.{ .name = "v", .value = .{ .Double = @bitCast(@as(u64, 0x7ff8000000000001)) } }});
+            }
         }
         if (self.mode == .rls_policy) {
             const engine = try testing.allocator.create(rls_types.RLSFilterEngine);
@@ -424,4 +446,127 @@ test "SONNY-2675: a grouping error reaches the client as SQLSTATE 42803" {
     try testing.expectEqualStrings("42803", geode.proto_util.mapError(error.GroupingError).code);
     try testing.expectEqualStrings("42803", geode.proto_util.mapError(error.NestedAggregate).code);
     try testing.expectEqualStrings("42803", geode.proto_util.mapError(error.UngroupedHavingReference).code);
+}
+
+fn checkExactKeys(s: *Session, f: *Failures) !void {
+    // Decimals past 16 significant digits are two values (they went through
+    // f64 and merged), under GROUP BY, count(DISTINCT) and a HAVING.
+    try expectRows(s, f, "MATCH (n:N) WHERE n.g = 'p' RETURN count(*) AS c GROUP BY n.v", &.{}, &.{ "1", "1" });
+    try expectRows(s, f, "MATCH (n:N) WHERE n.g = 'p' RETURN count(*) AS c GROUP BY n.v HAVING count(*) > 0", &.{}, &.{ "1", "1" });
+    try expectRows(s, f, "MATCH (n:N) WHERE n.g = 'p' RETURN count(DISTINCT n.v) AS c", &.{}, &.{"2"});
+    // DECIMAL 0.5 and DOUBLE 0.5 are one value; DECIMAL 0.1 and DOUBLE 0.1
+    // (0.1000000000000000055...) are two, for keys, min and max alike.
+    try expectRows(s, f, "MATCH (n:N) WHERE n.g = 'q' RETURN count(*) AS c GROUP BY n.v", &.{}, &.{"2"});
+    try expectRows(s, f, "MATCH (n:N) WHERE n.g = 'r' RETURN count(*) AS c GROUP BY n.v", &.{}, &.{ "1", "1" });
+    try expectRows(s, f, "MATCH (n:N) WHERE n.g = 'r' RETURN count(DISTINCT n.v) AS c", &.{}, &.{"2"});
+    try expectRows(s, f, "MATCH (n:N) WHERE n.g = 'r' RETURN n.g AS g, max(n.v) AS hi, min(n.v) AS lo GROUP BY n.g", &.{}, &.{"'r', 0.1d, 0.1m"});
+    try expectRows(s, f, "MATCH (n:N) WHERE n.g = 'r' RETURN n.g AS g, max(n.v) AS hi, min(n.v) AS lo GROUP BY n.g HAVING count(*) > 0", &.{}, &.{"'r', 0.1d, 0.1m"});
+    // A month is not 30 days; a day is 24 hours. (Grouped with a HAVING:
+    // the legacy executor's own ungrouped aggregates do not evaluate a
+    // computed argument, SONNY-2734.)
+    try expectRows(s, f, "MATCH (n:D) RETURN n.g AS g, count(DISTINCT duration(n.t)) AS c GROUP BY n.g HAVING count(*) > 0", &.{}, &.{"'d', 3"});
+    // A time with a time zone is its UTC time: 10:00+01:00 is 09:00+00:00.
+    try expectRows(s, f, "MATCH (n:Z) RETURN n.g AS g, count(DISTINCT timetz(n.t)) AS c GROUP BY n.g HAVING count(*) > 0", &.{}, &.{"'z', 2"});
+    // Every NaN is one value.
+    if (s.mode == .in_memory) {
+        try expectRows(s, f, "MATCH (n:Q) RETURN count(DISTINCT n.v) AS c", &.{}, &.{"1"});
+        try expectRows(s, f, "MATCH (n:Q) RETURN count(*) AS c GROUP BY n.v", &.{}, &.{"3"});
+    }
+}
+
+test "SONNY-2675: group and DISTINCT keys agree with the value order" {
+    try inEveryMode("exact keys", checkExactKeys);
+}
+
+// The comparator and the keys, unit by unit (value_order.zig).
+const value_order = geode.value_order;
+
+fn dec(c: i128, sc: u8) value_order.Number {
+    return .{ .exact = .{ .coeff = c, .scale = sc } };
+}
+
+fn dbl(x: f64) value_order.Number {
+    var y = x;
+    _ = &y;
+    return .{ .float = y };
+}
+
+test "SONNY-2675: numbers compare by their exact value" {
+    const cmp = value_order.compareNumbers;
+    const nan = std.math.nan(f64);
+    const inf = std.math.inf(f64);
+    try testing.expectEqual(@as(i8, 0), cmp(dec(5, 1), dbl(0.5)));
+    try testing.expectEqual(@as(i8, -1), cmp(dec(1, 1), dbl(0.1)));
+    try testing.expectEqual(@as(i8, 1), cmp(dbl(0.1), dec(1, 1)));
+    try testing.expectEqual(@as(i8, 0), cmp(dec(9223372036854775808, 0), dbl(0x1p63)));
+    try testing.expectEqual(@as(i8, -1), cmp(dec(9223372036854775807, 0), dbl(0x1p63)));
+    try testing.expectEqual(@as(i8, 1), cmp(dec(100000000000000000001, 0), dbl(1e20)));
+    try testing.expectEqual(@as(i8, 0), cmp(dec(100000000000000000000, 0), dbl(1e20)));
+    try testing.expectEqual(@as(i8, -1), cmp(dbl(-0.0), dec(1, 255)));
+    try testing.expectEqual(@as(i8, 0), cmp(dbl(-0.0), dec(0, 3)));
+    try testing.expectEqual(@as(i8, 1), cmp(dbl(nan), dec(1, 0)));
+    try testing.expectEqual(@as(i8, 0), cmp(dbl(nan), dbl(-nan)));
+    try testing.expectEqual(@as(i8, -1), cmp(dbl(-inf), dec(std.math.minInt(i128), 0)));
+    try testing.expectEqual(@as(i8, 1), cmp(dbl(inf), dec(std.math.maxInt(i128), 0)));
+    // Decimals whose common scale overflows i128.
+    try testing.expectEqual(@as(i8, 1), cmp(dec(std.math.maxInt(i128), 0), dec(1, 200)));
+    try testing.expectEqual(@as(i8, 0), cmp(dec(12345, 2), dec(123450000000000000000000000000000000000, 36)));
+    try testing.expectEqual(@as(i8, 1), cmp(dec(99999, 0), dec(123450000000000000000000000000000000000, 34)));
+    try testing.expectEqual(@as(i8, -1), cmp(dec(-99999, 0), dec(-123450000000000000000000000000000000000, 34)));
+    try testing.expectEqual(@as(i8, -1), cmp(dec(12344, 0), dec(123450000000000000000000000000000000000, 34)));
+    // Past 16 significant digits.
+    try testing.expectEqual(@as(i8, 1), cmp(dec(1234567890123456789, 9), dec(1234567890123456788, 9)));
+    // Subnormal and huge doubles against a decimal.
+    try testing.expectEqual(@as(i8, -1), cmp(dbl(4.9e-324), dec(1, 255)));
+    try testing.expectEqual(@as(i8, 1), cmp(dbl(1e300), dec(std.math.maxInt(i128), 0)));
+    try testing.expectEqual(@as(i8, -1), cmp(dbl(-1e300), dec(std.math.minInt(i128), 0)));
+}
+
+fn numberKey(buf: []u8, n: value_order.Number) ![]const u8 {
+    var w: std.Io.Writer = .fixed(buf);
+    try value_order.writeNumberKey(&w, n);
+    return w.buffered();
+}
+
+test "SONNY-2675: two numbers share a key exactly when they compare equal" {
+    const nums = [_]value_order.Number{
+        dec(5, 1),                     dbl(0.5),
+        dec(1, 1),                     dbl(0.1),
+        dec(10, 1),                    dbl(1.0),
+        dec(1, 0),                     dbl(-0.0),
+        dec(0, 5),                     dbl(std.math.nan(f64)),
+        dbl(-std.math.nan(f64)),       dbl(@bitCast(@as(u64, 0x7ff8000000000001))),
+        dbl(std.math.inf(f64)),        dbl(-std.math.inf(f64)),
+        dbl(0x1p63),                   dec(92233720368547758080, 1),
+        dbl(-0x1p63),                  dec(std.math.minInt(i64), 0),
+        dbl(1e20),                     dec(100000000000000000000, 0),
+        dec(100000000000000000001, 0), dec(1000000000000000000010, 1),
+        dec(1234567890123456789, 18),  dec(1234567890123456788, 18),
+        dbl(0x1p-54),                  dec(55511151231257827021181583404541015625, 54),
+        dbl(0x1.fffffffffffffp62),     dec(9223372036854774784, 0),
+    };
+    var ba: [64]u8 = undefined;
+    var bb: [64]u8 = undefined;
+    for (nums) |a| {
+        for (nums) |b| {
+            const same_key = std.mem.eql(u8, try numberKey(&ba, a), try numberKey(&bb, b));
+            const equal = value_order.compareNumbers(a, b) == 0;
+            if (same_key != equal) {
+                std.debug.print("key and order disagree: {any} vs {any}: same key {}, equal {}\n", .{ a, b, same_key, equal });
+                return error.KeyOrderMismatch;
+            }
+        }
+    }
+}
+
+test "SONNY-2675: a month is not 30 days, a day is 24 hours" {
+    const Interval = @FieldType(Value, "Interval");
+    const month: Interval = .{ .months = 1, .days = 0, .micros = 0 };
+    const thirty_days: Interval = .{ .months = 0, .days = 30, .micros = 0 };
+    const day: Interval = .{ .months = 0, .days = 1, .micros = 0 };
+    const hours24: Interval = .{ .months = 0, .days = 0, .micros = 24 * std.time.us_per_hour };
+    try testing.expect(value_order.compareIntervals(month, thirty_days) != 0);
+    try testing.expectEqual(@as(i8, 1), value_order.compareIntervals(month, .{ .months = 0, .days = 400, .micros = 0 }));
+    try testing.expectEqual(@as(i8, 0), value_order.compareIntervals(day, hours24));
+    try testing.expectEqual(@as(i8, -1), value_order.compareIntervals(hours24, .{ .months = 0, .days = 1, .micros = 1 }));
 }

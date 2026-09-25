@@ -13,6 +13,7 @@ const executeReturnClauseWithNodes = execution.executeReturnClauseWithNodes;
 
 // GAP-0535: value ownership helpers for projection results
 const value_utilities = @import("value_utilities.zig");
+const value_order = @import("value_order.zig");
 
 // Import for unique column name generation
 const match_operations = @import("match_operations.zig");
@@ -291,12 +292,14 @@ fn compareValues(a: Value, b: Value) i8 {
 // CANARY: REQ=REQ-SONNY-2675-TYPED-ORDERING; FEATURE="ValueOrdering"; ASPECT=NumericTextTemporal; STATUS=TESTED; TEST=tests/test_sonny2675_aggregate_semantics.zig; OWNER=execution; UPDATED=2026-09-25
 /// The order of two values: ORDER BY's, min's and max's. Returns -1, 0 or 1.
 ///
-/// NULL sorts per `nulls`. Numbers compare by value across their types
-/// (integers and decimals exactly, anything with a float as f64, NaN after
-/// every number); strings compare by bytes across Str, Text, Char and
-/// Varchar; dates, times, timestamps and intervals compare with their own
-/// type; booleans false < true; nodes and edges by id. Values of different
-/// kinds order by kind (`getTypeOrder`).
+/// NULL sorts per `nulls`. Numbers compare by their exact value across their
+/// types (NaN after every number); strings compare by bytes across Str, Text,
+/// Char and Varchar; dates, times, timestamps and intervals compare with
+/// their own type (an interval by months, then by its day-to-second length);
+/// booleans false < true; nodes and edges by id. Values of different kinds
+/// order by kind (`getTypeOrder`). The numbers, intervals and zoned times
+/// are value_order.zig's, which GROUP BY and DISTINCT keys share: two values
+/// compare equal exactly when their keys are equal.
 ///
 /// SONNY-2675: numbers other than Int and Decimal, and every temporal value,
 /// used to fall through to the kind order, which ranked them all equal, so
@@ -328,10 +331,10 @@ pub fn compareValuesWithNullsPolicy(a: Value, b: Value, nulls: ast.OrderBy.Nulls
             .Bool => |x| return if (x == b.Bool) 0 else if (x) 1 else -1,
             .Date => |x| return cmpOrdered(i32, x.days_since_epoch, b.Date.days_since_epoch),
             .Time => |x| return cmpOrdered(i64, x.micros_since_midnight, b.Time.micros_since_midnight),
-            .TimeTZ => |x| return cmpOrdered(i64, utcMicros(x), utcMicros(b.TimeTZ)),
+            .TimeTZ => |x| return cmpOrdered(i64, value_order.timeTzUtcMicros(x), value_order.timeTzUtcMicros(b.TimeTZ)),
             .Timestamp => |x| return cmpOrdered(i64, x.micros_since_epoch, b.Timestamp.micros_since_epoch),
             .TimestampTZ => |x| return cmpOrdered(i64, x.micros_since_epoch_utc, b.TimestampTZ.micros_since_epoch_utc),
-            .Interval => |x| return cmpOrdered(i128, intervalMicros(x), intervalMicros(b.Interval)),
+            .Interval => |x| return value_order.compareIntervals(x, b.Interval),
             .Node => |x| return cmpOrdered(u64, x.id, b.Node.id),
             .Edge => |x| return cmpOrdered(u64, x.id, b.Edge.id),
             .UUID => |x| return orderToI8(std.mem.order(u8, &x.bytes, &b.UUID.bytes)),
@@ -362,73 +365,15 @@ fn cmpOrdered(comptime T: type, a: T, b: T) i8 {
     return 0;
 }
 
-fn utcMicros(t: @FieldType(Value, "TimeTZ")) i64 {
-    return t.time.micros_since_midnight - @as(i64, t.offset_seconds) * std.time.us_per_s;
-}
-
-/// An interval as microseconds, a month counting 30 days (the SQL convention
-/// for ordering intervals).
-fn intervalMicros(iv: @FieldType(Value, "Interval")) i128 {
-    const day: i128 = std.time.us_per_day;
-    return @as(i128, iv.months) * 30 * day + @as(i128, iv.days) * day + iv.micros;
-}
-
-/// A number, exactly (an integer or a decimal: coeff * 10^-scale) or as f64.
-const Number = union(enum) {
-    exact: struct { coeff: i128, scale: u8 },
-    float: f64,
-};
-
-fn numberOf(v: Value) ?Number {
-    return switch (v) {
-        .Int => |n| .{ .exact = .{ .coeff = n, .scale = 0 } },
-        .SmallInt => |n| .{ .exact = .{ .coeff = n, .scale = 0 } },
-        .BigInt => |n| .{ .exact = .{ .coeff = n, .scale = 0 } },
-        .Decimal => |d| .{ .exact = .{ .coeff = d.coeff, .scale = d.scale } },
-        .Real => |f| .{ .float = f },
-        .Double => |f| .{ .float = f },
-        else => null,
-    };
-}
-
-fn numberAsF64(n: Number) f64 {
-    return switch (n) {
-        .float => |f| f,
-        .exact => |e| @as(f64, @floatFromInt(e.coeff)) / std.math.pow(f64, 10.0, @floatFromInt(e.scale)),
-    };
-}
+const Number = value_order.Number;
+const numberOf = value_order.numberOf;
 
 // CANARY: REQ=REQ-GQL-ORDERBY-DECIMAL-001; FEATURE="OrderByDecimalComparison"; ASPECT=DecimalSort; STATUS=TESTED; TEST=geodetestlab/specs/order_by_sorting_comprehensive.yml; OWNER=execution; UPDATED=2025-12-26
 /// Decimals (and integers, and a decimal against an integer) compare exactly
-/// at a common scale, as ORDER BY on aggregate results like avg() needs.
+/// at a common scale, as ORDER BY on aggregate results like avg() needs; a
+/// double against them compares exactly too (value_order.zig, SONNY-2675).
 fn compareNumbers(a: Number, b: Number) i8 {
-    if (a == .exact and b == .exact) {
-        // Bring both to the larger scale; fall back to f64 if that overflows.
-        const ea = a.exact;
-        const eb = b.exact;
-        const scale = @max(ea.scale, eb.scale);
-        const ca = scaleUp(ea.coeff, scale - ea.scale);
-        const cb = scaleUp(eb.coeff, scale - eb.scale);
-        if (ca != null and cb != null) return cmpOrdered(i128, ca.?, cb.?);
-    }
-    const fa = numberAsF64(a);
-    const fb = numberAsF64(b);
-    // NaN sorts after every number and equals itself.
-    if (std.math.isNan(fa) or std.math.isNan(fb)) {
-        if (std.math.isNan(fa) and std.math.isNan(fb)) return 0;
-        return if (std.math.isNan(fa)) 1 else -1;
-    }
-    return cmpOrdered(f64, fa, fb);
-}
-
-fn scaleUp(coeff: i128, by: u8) ?i128 {
-    var out = coeff;
-    for (0..by) |_| {
-        const r = @mulWithOverflow(out, 10);
-        if (r[1] != 0) return null;
-        out = r[0];
-    }
-    return out;
+    return value_order.compareNumbers(a, b);
 }
 
 fn textOf(v: Value) ?[]const u8 {
