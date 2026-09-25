@@ -48,11 +48,20 @@
   relationship type, and an expression policy on one, now hide those edges on
   every traversal.
 
-  **Behaviour change:** tenant-scoped variable-length, aggregation, grouping
-  and OPTIONAL MATCH paths now require the edge's own tenant tag, as the single
-  hop already did. Legacy edges tagged `default` between a tenant's own nodes
-  (GAP-0891) are no longer followed there. Operators should backfill legacy
-  `default` edge tags from their endpoints.
+  **Behaviour change (SONNY-2693):** a tenant-scoped session sees an edge only
+  when the edge's own tenant tag and both of its endpoints are visible to it,
+  on every path. The single hop already did this. It is new for variable
+  length, aggregation, grouping, OPTIONAL MATCH, the first hop of a multi-hop
+  pattern, pattern comprehensions, `COUNT {}`, `EXISTS {}` and
+  `shortestPath()`. Those paths followed any edge whose endpoints were
+  visible, whatever its tag. So a tenant could read another tenant's edge
+  between its own nodes, with its properties, and `COUNT {}`, `EXISTS {}` and
+  `shortestPath()` showed that the edge existed. There is no exception for
+  `default`: legacy edges tagged `default` between a tenant's own nodes
+  (GAP-0891) are no longer followed. To re-tag them from their endpoints, an
+  admin runs `CALL geode.tenant.backfill_edge_tags()`; pass `true` for a dry
+  run. The procedure also lists every edge whose tags disagree in any other
+  way, and leaves those edges unchanged.
 - **Expression RLS policies apply to every label on a node (SONNY-2690):** a
   policy was looked up for a node's first label only, so a node whose policed
   label came second escaped it.

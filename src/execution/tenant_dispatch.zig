@@ -23,6 +23,11 @@
 ///   - geode.tenant.drop(tenant_id)                → YIELD tenant_id, dropped
 ///   - geode.tenant.set_quota(tenant_id, max_connections, max_concurrent_queries,
 ///                            max_graphs, max_nodes_per_graph) → YIELD tenant_id, updated
+///   - geode.tenant.backfill_edge_tags([dry_run])  → YIELD edge_id, graph, edge_type,
+///                                                          edge_tenant, from_tenant,
+///                                                          to_tenant, action
+///     (SONNY-2693: re-tags the `default` edges between two nodes of one
+///     tenant and reports every other edge whose tags disagree)
 ///
 /// Wiring (the load-bearing integrations):
 ///   - create / create-with-parent registers the tenant in the DURABLE
@@ -85,7 +90,8 @@ pub fn execute(
     const is_show = std.mem.eql(u8, proc_name, "geode.tenant.show");
     const is_drop = std.mem.eql(u8, proc_name, "geode.tenant.drop");
     const is_set_quota = std.mem.eql(u8, proc_name, "geode.tenant.set_quota");
-    if (!(is_create or is_list or is_show or is_drop or is_set_quota)) return null;
+    const is_backfill = std.mem.eql(u8, proc_name, "geode.tenant.backfill_edge_tags");
+    if (!(is_create or is_list or is_show or is_drop or is_set_quota or is_backfill)) return null;
 
     // ── Authorization gate (fail-closed): admin_tenant on every op. ──────────
     try requireAdminTenant(allocator, context, proc_name);
@@ -105,6 +111,8 @@ pub fn execute(
     if (is_show) return try handleShow(allocator, call_stmt);
     if (is_drop) return try handleDrop(allocator, call_stmt);
     if (is_set_quota) return try handleSetQuota(allocator, call_stmt);
+    // Gates its own cluster write (a dry run writes nothing).
+    if (is_backfill) return try handleBackfillEdgeTags(allocator, call_stmt);
     unreachable;
 }
 
@@ -636,6 +644,98 @@ fn handleSetQuota(allocator: std.mem.Allocator, call_stmt: ast.CallProcedure) !E
     rows[0] = try allocator.alloc(Value, 2);
     rows[0][0] = Value{ .Str = try allocator.dupe(u8, tenant_id) };
     rows[0][1] = Value{ .Bool = true };
+
+    const result = ExecutionResult{
+        .columns = columns,
+        .rows = rows,
+        .flags = std.ArrayList([]const u8).empty,
+        .owns_value_memory = true,
+    };
+    return try maybeYield(allocator, result, call_stmt);
+}
+
+// CANARY: REQ=REQ-SONNY-2693-EDGE-TAG-BACKFILL; FEATURE="PerTenantIsolation"; ASPECT=BackfillProcedure; STATUS=TESTED; TEST=tests/test_sonny2693_edge_tenant_rule.zig; OWNER=security; UPDATED=2026-09-25
+/// `geode.tenant.backfill_edge_tags([dry_run])` → one row per edge it
+/// re-tagged or reports: (edge_id, graph, edge_type, edge_tenant, from_tenant,
+/// to_tenant, action).
+///
+/// SONNY-2693: a session sees an edge only when the edge's own tenant tag and
+/// both endpoints are visible to it, with no exception for `default`. Edges
+/// the GAP-0891 worker bug wrote as `default` between two nodes of one tenant
+/// were visible to that tenant through the removed endpoint bridge and are
+/// now hidden. This re-tags each of them to its endpoints' tenant (`action`
+/// 'retagged'), and lists every other edge whose tags disagree ('mixed') for
+/// an operator to resolve; it changes nothing else. `edge_tenant` is the tag
+/// before the run; a null endpoint tenant means that endpoint resolves
+/// nowhere. With `dry_run` = true nothing is changed and would-be re-tags
+/// report 'would_retag'. Rerunning is safe: a re-tagged edge is consistent
+/// and is not listed again. See `GraphStore.backfillEdgeTenantTags`.
+///
+/// Admin-only (the family's `admin_tenant` gate). A real run is a durable
+/// write with no Raft slice, so a cluster refuses it like create/drop; a dry
+/// run is allowed anywhere.
+fn handleBackfillEdgeTags(allocator: std.mem.Allocator, call_stmt: ast.CallProcedure) !ExecutionResult {
+    const a = try args(call_stmt);
+    if (a.len > 1) return error.InvalidArgs;
+    const dry_run: bool = if (a.len == 1) try literalBool(a[0]) else false;
+    if (!dry_run) try cluster_mod.gateUnreplicatedWrite();
+
+    const entries: []const graph_store.GraphStore.EdgeTagBackfillEntry = if (graph_store.getCurrentGlobalStore()) |store|
+        try store.backfillEdgeTenantTags(allocator, dry_run)
+    else
+        &.{};
+    defer if (entries.len > 0) graph_store.GraphStore.freeEdgeTagBackfillEntries(allocator, entries);
+
+    var retagged: usize = 0;
+    var mixed: usize = 0;
+    for (entries) |entry| switch (entry.action) {
+        .retagged, .would_retag => retagged += 1,
+        .mixed => mixed += 1,
+    };
+    log.info("tenant_admin.backfill_edge_tags", &.{
+        Attr.string("dry_run", if (dry_run) "true" else "false"),
+        Attr.int("retagged", @intCast(retagged)),
+        Attr.int("mixed", @intCast(mixed)),
+    });
+
+    const column_names = [_][]const u8{ "edge_id", "graph", "edge_type", "edge_tenant", "from_tenant", "to_tenant", "action" };
+    const columns = try allocator.alloc([]const u8, column_names.len);
+    var columns_filled: usize = 0;
+    errdefer {
+        for (columns[0..columns_filled]) |c| allocator.free(c);
+        allocator.free(columns);
+    }
+    for (column_names) |name| {
+        columns[columns_filled] = try allocator.dupe(u8, name);
+        columns_filled += 1;
+    }
+
+    const rows = try allocator.alloc([]Value, entries.len);
+    var rows_filled: usize = 0;
+    errdefer {
+        for (rows[0..rows_filled]) |row| {
+            for (row) |v| freeValue(allocator, v);
+            allocator.free(row);
+        }
+        allocator.free(rows);
+    }
+    for (entries) |entry| {
+        const row = try allocator.alloc(Value, column_names.len);
+        @memset(row, Value{ .Null = {} });
+        errdefer {
+            for (row) |v| freeValue(allocator, v);
+            allocator.free(row);
+        }
+        row[0] = Value{ .Int = @bitCast(entry.edge_id) };
+        row[1] = Value{ .Str = try allocator.dupe(u8, entry.graph_name) };
+        row[2] = Value{ .Str = try allocator.dupe(u8, entry.edge_type) };
+        row[3] = Value{ .Str = try allocator.dupe(u8, entry.edge_tenant) };
+        if (entry.from_tenant) |t| row[4] = Value{ .Str = try allocator.dupe(u8, t) };
+        if (entry.to_tenant) |t| row[5] = Value{ .Str = try allocator.dupe(u8, t) };
+        row[6] = Value{ .Str = try allocator.dupe(u8, @tagName(entry.action)) };
+        rows[rows_filled] = row;
+        rows_filled += 1;
+    }
 
     const result = ExecutionResult{
         .columns = columns,

@@ -27,15 +27,19 @@
 //     createNodeWithIdInternal (graph_store.zig:2306) and
 //     createEdgeWithIdInternal (:4469).
 //
-//   Defense-in-depth: edge visibility should ALSO be derivable from endpoint
-//     visibility (edge visible iff both endpoints pass the tenant filter), to
-//     match the GPS path and tolerate legacy mis-tagged edges.
+//   Defense-in-depth (SUPERSEDED by SONNY-2693): edge visibility was ALSO
+//     derived from endpoint visibility, so a legacy edge mis-tagged "default"
+//     between two t_DEMO nodes stayed visible to t_DEMO. That bridge also
+//     showed t_DEMO an edge tagged for ANOTHER tenant between its own nodes,
+//     with its properties, so it is gone: an edge is visible only when its own
+//     tag AND both endpoints are (`tenant_visibility.edgeTraversable`), and
+//     `CALL geode.tenant.backfill_edge_tags()` re-tags the legacy edges. The
+//     test below pins both halves.
 //
 // SKELETON seams added to production so these tests compile against the layer
 // the fixer will change (each currently delegates to the broken path):
 //   * graph_store.GraphStore.createNodeForRequestTenant  (RC-1 node seam)
 //   * graph_store.GraphStore.createEdgeForRequestTenant  (RC-1 edge seam)
-//   * graph_store.GraphStore.edgeVisibleForTenant        (endpoint-derived read)
 
 const std = @import("std");
 const testing = std.testing;
@@ -217,12 +221,14 @@ test "GAP-0891 RC-2: restart hydration preserves tenant tags" {
     try testing.expectEqualStrings(T_DEMO, reloaded_edge.tenant_id);
 }
 
-// Defense-in-depth: an edge whose BOTH endpoints are visible to t_DEMO but which
-// itself carries a legacy "default" tag must be visible to a t_DEMO edge read
-// (migration-bridge semantics). Pre-fix: edgeVisibleForTenant does exact-tag
-// match only, so the legacy edge is wrongly hidden (RED).
-test "GAP-0891 defense-in-depth: t_DEMO-endpoint edge with legacy default tag is visible" {
+// SONNY-2693 (supersedes the GAP-0891 defense-in-depth bridge): an edge whose
+// BOTH endpoints are t_DEMO but which itself carries a legacy "default" tag is
+// HIDDEN from a t_DEMO read — a "default" edge gets no endpoint-derived
+// exception, exactly like a "default" node — until the backfill re-tags it to
+// its endpoints' tenant. Then it is visible, and a second run changes nothing.
+test "GAP-0891 / SONNY-2693: a legacy default-tagged edge between t_DEMO nodes is hidden until backfilled" {
     const allocator = testing.allocator;
+    const tenant_visibility = geode.execution.tenant_visibility;
 
     var store = try graph_store.GraphStore.init(allocator);
     defer store.deinit();
@@ -234,7 +240,7 @@ test "GAP-0891 defense-in-depth: t_DEMO-endpoint edge with legacy default tag is
     const a2 = try store.createNodeWithGraphAndTenant(&asset_labels, GRAPH, T_DEMO);
 
     // The edge itself carries a legacy "default" tag (the kind a worker thread
-    // would have mis-written before the RC-1 fix lands / for pre-existing data).
+    // would have mis-written before the RC-1 fix, or pre-existing data).
     const legacy_edge_id = try store.createEdgeWithGraphAndTenant(
         a1,
         a2,
@@ -242,11 +248,27 @@ test "GAP-0891 defense-in-depth: t_DEMO-endpoint edge with legacy default tag is
         GRAPH,
         graph_store.DEFAULT_TENANT_ID,
     );
-    const legacy_edge = store.edges.get(legacy_edge_id) orelse return error.EdgeNotFound;
+    const legacy_edge = store.getEdgeHydrated(legacy_edge_id) orelse return error.EdgeNotFound;
     try testing.expectEqualStrings(graph_store.DEFAULT_TENANT_ID, legacy_edge.tenant_id);
 
-    // DESIRED: visible because both endpoints pass the t_DEMO filter.
-    try testing.expect(store.edgeVisibleForTenant(legacy_edge, T_DEMO));
+    // Hidden from t_DEMO, visible to an unscoped (admin) read.
+    try testing.expect(!tenant_visibility.edgeTraversable(&store, legacy_edge, T_DEMO));
+    try testing.expect(tenant_visibility.edgeTraversable(&store, legacy_edge, null));
+
+    const report = try store.backfillEdgeTenantTags(allocator, false);
+    defer graph_store.GraphStore.freeEdgeTagBackfillEntries(allocator, report);
+    try testing.expectEqual(@as(usize, 1), report.len);
+    try testing.expectEqual(graph_store.GraphStore.EdgeTagBackfillAction.retagged, report[0].action);
+    try testing.expectEqual(legacy_edge_id, report[0].edge_id);
+    try testing.expectEqualStrings(graph_store.DEFAULT_TENANT_ID, report[0].edge_tenant);
+
+    const retagged = store.getEdgeHydrated(legacy_edge_id) orelse return error.EdgeNotFound;
+    try testing.expectEqualStrings(T_DEMO, retagged.tenant_id);
+    try testing.expect(tenant_visibility.edgeTraversable(&store, retagged, T_DEMO));
+
+    const again = try store.backfillEdgeTenantTags(allocator, false);
+    defer graph_store.GraphStore.freeEdgeTagBackfillEntries(allocator, again);
+    try testing.expectEqual(@as(usize, 0), again.len);
 }
 
 // Leak-direction invariant pin (must be GREEN now AND after the fix): a

@@ -3307,9 +3307,11 @@ pub const GraphStore = struct {
     // property fetch — see hydrateAdjFromEngine and the loop1 edge rebuild.
 
     /// GAP-0891 (RC-2): edge analog of `persistNodeTenantId`. No-op for
-    /// `DEFAULT_TENANT_ID`; absent-on-read means default. When the adapter has
-    /// no edge-property setter the tag simply is not persisted (the
-    /// endpoint-derived edge-visibility bridge still recovers visibility).
+    /// `DEFAULT_TENANT_ID`; absent-on-read means default. An adapter with no
+    /// edge-property setter fails with `error.Unsupported`, and every caller
+    /// then fails its write: a tag that is not stored would read back as
+    /// `default` after a restart, and since SONNY-2693 a `default` edge is
+    /// hidden from every tenant (there is no endpoint-derived bridge).
     fn persistEdgeTenantId(
         vt: AdapterVTable,
         graph_name: []const u8,
@@ -6845,6 +6847,193 @@ pub const GraphStore = struct {
         return result.toOwnedSlice(allocator);
     }
 
+    // CANARY: REQ=REQ-SONNY-2693-EDGE-TAG-BACKFILL; FEATURE="PerTenantIsolation"; ASPECT=EdgeTagBackfill; STATUS=TESTED; TEST=tests/test_sonny2693_edge_tenant_rule.zig; OWNER=security; UPDATED=2026-09-25
+    /// SONNY-2693: what `backfillEdgeTenantTags` did, or would do, to an edge.
+    pub const EdgeTagBackfillAction = enum {
+        /// Tagged `default` between two nodes of one tenant, and now tagged
+        /// with that tenant.
+        retagged,
+        /// `retagged`, in a dry run: nothing was changed.
+        would_retag,
+        /// Its tag and its endpoints' tags disagree in any other way (the
+        /// endpoints belong to different tenants, the edge carries another
+        /// tenant's tag, or an endpoint resolves nowhere). Left as it is: no
+        /// tenant can see it, and only an operator can say whose it is.
+        mixed,
+    };
+
+    /// SONNY-2693: one edge `backfillEdgeTenantTags` re-tagged or reports.
+    /// Every slice is owned; free with `deinit`.
+    pub const EdgeTagBackfillEntry = struct {
+        edge_id: u64,
+        action: EdgeTagBackfillAction,
+        graph_name: []const u8,
+        edge_type: []const u8,
+        /// The edge's tag before the backfill.
+        edge_tenant: []const u8,
+        /// Null when the endpoint resolves nowhere.
+        from_tenant: ?[]const u8,
+        to_tenant: ?[]const u8,
+
+        pub fn deinit(self: *const EdgeTagBackfillEntry, allocator: std.mem.Allocator) void {
+            allocator.free(self.graph_name);
+            allocator.free(self.edge_type);
+            allocator.free(self.edge_tenant);
+            if (self.from_tenant) |t| allocator.free(t);
+            if (self.to_tenant) |t| allocator.free(t);
+        }
+    };
+
+    pub fn freeEdgeTagBackfillEntries(allocator: std.mem.Allocator, entries: []const EdgeTagBackfillEntry) void {
+        for (entries) |*entry| entry.deinit(allocator);
+        allocator.free(entries);
+    }
+
+    /// SONNY-2693: re-tag the `default` edges whose endpoints both belong to
+    /// one tenant, and report every other edge whose tags disagree.
+    ///
+    /// An edge is consistent when its own tag equals both endpoints' tags.
+    /// Since SONNY-2693 a session sees an edge only when its tag AND both
+    /// endpoints are visible, so an inconsistent edge is hidden from every
+    /// tenant. The GAP-0891 worker bug wrote intra-tenant edges as `default`;
+    /// the read path used to bridge them through their endpoints and no
+    /// longer does. This puts such an edge under its endpoints' tenant (the
+    /// only change it makes), and lists the rest for an operator:
+    ///   * `default` between two nodes of tenant T (T not `default`):
+    ///     `retagged` (`would_retag` when `dry_run`);
+    ///   * any other disagreement: `mixed`, unchanged.
+    /// A consistent edge (including `default` between two `default` nodes) is
+    /// neither changed nor listed. Tags are compared exactly: a tenant
+    /// hierarchy does not make a parent's tag match a child's.
+    ///
+    /// Every store graph is scanned, evicted edges included. Each re-tag is
+    /// durable on its own (`retagEdgeTenant`), so a run that fails part way
+    /// keeps what it did, and running it again finishes the job: an edge it
+    /// re-tagged is consistent and is not listed again. Returns the listed
+    /// edges in scan order; the caller frees them with
+    /// `freeEdgeTagBackfillEntries`.
+    ///
+    /// Runs on the calling thread and reads endpoint tags with the engine
+    /// fallback, so it must not run on a parallel-UNION arm.
+    pub fn backfillEdgeTenantTags(self: *GraphStore, allocator: std.mem.Allocator, dry_run: bool) ![]EdgeTagBackfillEntry {
+        const edge_ids = try self.getAllEdgesForTenant(allocator, null);
+        defer allocator.free(edge_ids);
+
+        var entries: std.ArrayList(EdgeTagBackfillEntry) = .empty;
+        errdefer {
+            for (entries.items) |*entry| entry.deinit(allocator);
+            entries.deinit(allocator);
+        }
+
+        for (edge_ids) |edge_id| {
+            const edge = self.getEdgeHydrated(edge_id) orelse continue;
+            const from_tenant = self.dupeNodeTenantForRead(allocator, edge.from_id);
+            defer if (from_tenant) |t| allocator.free(t);
+            const to_tenant = self.dupeNodeTenantForRead(allocator, edge.to_id);
+            defer if (to_tenant) |t| allocator.free(t);
+
+            const action = classifyEdgeTags(edge.tenant_id, from_tenant, to_tenant, dry_run) orelse continue;
+
+            // Copy the edge's strings before a re-tag replaces its body.
+            var entry = EdgeTagBackfillEntry{
+                .edge_id = edge_id,
+                .action = action,
+                .graph_name = try allocator.dupe(u8, edge.graph_name),
+                .edge_type = &.{},
+                .edge_tenant = &.{},
+                .from_tenant = null,
+                .to_tenant = null,
+            };
+            errdefer entry.deinit(allocator);
+            entry.edge_type = try allocator.dupe(u8, edge.label);
+            entry.edge_tenant = try allocator.dupe(u8, edge.tenant_id);
+            if (from_tenant) |t| entry.from_tenant = try allocator.dupe(u8, t);
+            if (to_tenant) |t| entry.to_tenant = try allocator.dupe(u8, t);
+
+            if (action == .retagged) try self.retagEdgeTenant(edge_id, DEFAULT_TENANT_ID, from_tenant.?);
+            try entries.append(allocator, entry);
+        }
+        return entries.toOwnedSlice(allocator);
+    }
+
+    /// `backfillEdgeTenantTags`'s decision for one edge; null when the edge is
+    /// consistent and is left out of the report.
+    fn classifyEdgeTags(edge_tenant: []const u8, from_tenant: ?[]const u8, to_tenant: ?[]const u8, dry_run: bool) ?EdgeTagBackfillAction {
+        const from = from_tenant orelse return .mixed;
+        const to = to_tenant orelse return .mixed;
+        if (!std.mem.eql(u8, from, to)) return .mixed;
+        if (std.mem.eql(u8, edge_tenant, from)) return null;
+        // Both endpoints are T. T is not `default` here: a `default` edge
+        // between `default` nodes returned null above.
+        if (std.mem.eql(u8, edge_tenant, DEFAULT_TENANT_ID)) return if (dry_run) .would_retag else .retagged;
+        return .mixed;
+    }
+
+    /// SONNY-2693: change edge `edge_id`'s tenant tag from `expected` to
+    /// `tenant`, which may not be `default`. Fails with
+    /// `error.EdgeTenantChanged`, changing nothing, when the edge no longer
+    /// carries `expected`.
+    ///
+    /// Durable before visible: with a storage adapter the tag is written under
+    /// the same key the create paths write (`persistEdgeTenantId`, read back
+    /// by `hydrateEdgeCb` and the restart load) before the cached body
+    /// changes, and an adapter that cannot store an edge property fails the
+    /// re-tag. With no adapter (an in-memory store) only the cached body
+    /// changes, as for every in-memory edge write.
+    ///
+    /// The cached body is replaced, never edited in place: `put` retires the
+    /// old body to the cache's grace list, so a reader still holding it (the
+    /// backfill runs under one graph's write lock and re-tags edges in every
+    /// graph) reads the old tag until the next grace window instead of freed
+    /// memory. The tenant-keyed edge-type counter moves with the tag.
+    fn retagEdgeTenant(self: *GraphStore, edge_id: u64, expected: []const u8, tenant: []const u8) !void {
+        if (std.mem.eql(u8, tenant, DEFAULT_TENANT_ID)) return error.InvalidTenantTag;
+        self.ensureEdgeGraphHydrated(edge_id); // PHASE 1b chokepoint (hydrate before write)
+        const current = self.getEdgeHydrated(edge_id) orelse return error.EdgeNotFound;
+        if (!std.mem.eql(u8, current.tenant_id, expected)) return error.EdgeTenantChanged;
+
+        if (global_vtable) |vt| {
+            const from_slot = try self.requireNodeSlot(current.graph_name, current.from_id);
+            const to_slot = try self.requireNodeSlot(current.graph_name, current.to_id);
+            const edge_slot = try self.requireEdgeSlot(current.graph_name, edge_id);
+            try persistEdgeTenantId(vt, current.graph_name, from_slot, to_slot, edge_slot, tenant);
+        }
+
+        var replacement = Edge{
+            .id = current.id,
+            .from_id = current.from_id,
+            .to_id = current.to_id,
+            .label = &.{},
+            .properties = CompactPropertyMap.init(self.allocator),
+            .graph_name = &.{},
+            .tenant_id = &.{},
+        };
+        errdefer freeEdgeValue(self.allocator, &replacement);
+        replacement.label = try self.allocator.dupe(u8, current.label);
+        replacement.graph_name = try self.allocator.dupe(u8, current.graph_name);
+        replacement.tenant_id = try self.allocator.dupe(u8, tenant);
+        var prop_it = current.properties.iterator();
+        while (prop_it.next()) |prop| {
+            const key = try self.allocator.dupe(u8, prop.key_ptr.*);
+            errdefer self.allocator.free(key);
+            const value = try copyPropertyValue(self, prop.value_ptr.*);
+            errdefer freePropertyValue(self, value);
+            try replacement.properties.put(key, value);
+        }
+
+        // The counter moves before `put`: once the cache owns `replacement`,
+        // its strings are not ours to read (the backfill does not hold the
+        // edge's graph lock, so the body could be evicted and reclaimed).
+        try self.bumpEdgeTypeCount(replacement.graph_name, tenant, replacement.label);
+        errdefer self.decEdgeTypeCount(replacement.graph_name, tenant, replacement.label);
+        self.decEdgeTypeCount(replacement.graph_name, expected, replacement.label);
+        errdefer self.bumpEdgeTypeCount(replacement.graph_name, expected, replacement.label) catch {};
+        try self.edges.put(edge_id, replacement);
+
+        self.dirty.store(true, .release);
+        incrementMutationEpoch();
+    }
+
     pub fn getNodeCount(self: *GraphStore) usize {
         // PHASE 1b chokepoint (H3): store-wide node count, the node analog of
         // getEdgeCount. Reads deferred state (the per-graph IdMaps, and the
@@ -6943,33 +7132,6 @@ pub const GraphStore = struct {
             count += 1;
         }
         return count;
-    }
-
-    // GAP-0891 (defense-in-depth): edge visibility for a tenant-filtered edge
-    // read is derivable from ENDPOINT visibility — an edge is visible to a
-    // tenant when its own tag matches OR BOTH of its endpoint nodes pass that
-    // tenant's filter. This matches the GPS path and tolerates legacy edges
-    // that were mis-tagged "default" (the pre-fix worker bug) while their
-    // endpoints carry the correct tenant.
-    //
-    // SECURITY (invariant — must hold): this NEVER leaks a genuine
-    // "default"-tagged edge between "default"-tagged nodes to a non-default
-    // reader. If `edge.tenant_id != tid` and either endpoint also fails the
-    // exact-tenant filter, the edge stays hidden (fail-closed). Bridging only
-    // fires when both endpoints are already visible to the reader — i.e. the
-    // reader can already see both nodes, so revealing the connecting edge leaks
-    // nothing new.
-    //
-    // This store-level check is EXACT-tenant only (it has no tenant-hierarchy
-    // manager — that lives on the execution engine). The match loop wraps this
-    // semantics with `passesTenantFilter`, which is hierarchy-aware; see
-    // `match_operations.edgeVisibleForTenantHierarchy`.
-    pub fn edgeVisibleForTenant(self: *const GraphStore, edge: Edge, filter_tenant: ?[]const u8) bool {
-        const tid = filter_tenant orelse return true;
-        if (std.mem.eql(u8, edge.tenant_id, tid)) return true;
-        const from = self.nodes.get(edge.from_id) orelse return false;
-        const to = self.nodes.get(edge.to_id) orelse return false;
-        return std.mem.eql(u8, from.tenant_id, tid) and std.mem.eql(u8, to.tenant_id, tid);
     }
 
     // CANARY: REQ=REQ-PERF-QPS-0811; FEATURE="CountFastPath"; ASPECT=LabelIndexCardinality; STATUS=TESTED; TEST=tests/test_gap0811_aggregation_fastpath.zig; OWNER=performance; UPDATED=2026-04-20

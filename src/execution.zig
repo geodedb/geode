@@ -122,6 +122,10 @@ pub const findBoundNodeId = graph_algorithms.findBoundNodeId;
 pub const findBoundNode = graph_algorithms.findBoundNode;
 pub const findEdgeBetween = graph_algorithms.findEdgeBetween;
 
+// SONNY-2693: the shared tenant visibility predicates, so a test can pin the
+// one edge rule (`tenant_visibility.edgeTraversable`) directly.
+pub const tenant_visibility = @import("execution/tenant_visibility.zig");
+
 // Re-export centrality algorithm functions for backward compatibility (M1 Phase 3 extraction)
 pub const getNeighbors = centrality_algorithms.getNeighbors;
 pub const executeDegreeCentrality = centrality_algorithms.executeDegreeCentrality;

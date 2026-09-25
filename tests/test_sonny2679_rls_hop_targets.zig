@@ -51,11 +51,12 @@
 // it. The control session has no policy and no tenant scope, and must still
 // see the whole fixture: the fix changes nothing for it.
 //
-// SONNY-2693: a tenant-scoped session still walks the foreign SECRET edge where
-// the path admits an edge whose two endpoints are visible (the multi-chain
-// executor's first hop, and the expression path). Those expectations are
-// pinned as `bridged` below, so the rule SONNY-2693 settles on must update
-// them on purpose.
+// SONNY-2693: the SECRET edge is a foreign edge between two visible nodes.
+// Every path now applies the one edge rule (the edge's own tag AND both
+// endpoints), the multi-chain executor's first hop and the expression path
+// included, so a tenant-scoped session gets `secure` everywhere. Those two
+// paths used to admit an edge whose endpoints were visible whatever its tag,
+// and their cases were pinned to what that leaked.
 //
 // CANARY: REQ=REQ-SONNY-2679-RLS-HOP-TARGETS; FEATURE="TraversalRowVisibility"; ASPECT=Regression; STATUS=TESTED; TEST=tests/test_sonny2679_rls_hop_targets.zig; OWNER=security; UPDATED=2026-09-25
 
@@ -86,10 +87,6 @@ const Mode = enum {
     /// Session tenant `t_parent`; `ok`/`ok2` are its child's, `leak` and the
     /// SECRET edge its sibling's.
     tenant_hierarchy,
-
-    fn tenantScoped(mode: Mode) bool {
-        return mode == .tenant_scoped or mode == .tenant_hierarchy;
-    }
 };
 
 /// Who owns the fixture's nodes, and which tenant tag its edges carry.
@@ -409,14 +406,9 @@ const Case = struct {
     /// What the control session (no policy, no tenant scope) gets: the whole
     /// fixture, as before the fix.
     open: []const []const u8,
-    /// SONNY-2693: what a tenant-scoped session gets where the path admits the
-    /// foreign SECRET edge because both its endpoints are visible. Null: the
-    /// same as `secure`.
-    bridged: ?[]const []const u8 = null,
 
     fn expected(self: Case, mode: Mode) []const []const u8 {
         if (mode == .no_policy) return self.open;
-        if (mode.tenantScoped()) return self.bridged orelse self.secure;
         return self.secure;
     }
 };
@@ -497,11 +489,11 @@ const cases = [_]Case{
     .{ .q = "MATCH (g:G)-[*1..3]->(h) RETURN h.s", .secure = &.{ "ok", "ok2" }, .open = &.{ "beyond", "far", "far2", "leak", "ok", "ok2", "viaSecret" } },
     .{ .q = "MATCH (g:G) OPTIONAL MATCH (g)-[r:SECRET]->(h) RETURN h.s", .secure = &.{"null"}, .open = &.{"viaSecret"} },
     .{ .q = "MATCH (a)-[:SECRET]->(b), (b)-[:R]->(c) RETURN c.s", .secure = &.{}, .open = &.{"beyond"} },
-    .{ .q = "MATCH (g:G)-[:SECRET]->(m)-[:R]->(h) RETURN h.s", .secure = &.{}, .open = &.{"beyond"}, .bridged = &.{"beyond"} },
-    .{ .q = "MATCH (g:G) RETURN COUNT { (g)-[:SECRET]->() } AS c", .secure = &.{"0"}, .open = &.{"1"}, .bridged = &.{"1"} },
-    .{ .q = "MATCH (g:G) RETURN [(g)-[r:SECRET]->(h) | r.x] AS xs", .secure = &.{"[]"}, .open = &.{"[topsecret]"}, .bridged = &.{"[topsecret]"} },
-    .{ .q = "MATCH (g:G) RETURN COUNT { (g)-[*1..3]->() } AS c", .secure = &.{"2"}, .open = &.{"7"}, .bridged = &.{"4"} },
-    .{ .q = "RETURN shortestPath((a:G {s: 'g1'})-[*]-(b {s: 'beyond'})) AS p", .secure = &.{"null"}, .open = &.{"p(g1>viaSecret>beyond)"}, .bridged = &.{"p(g1>viaSecret>beyond)"} },
+    .{ .q = "MATCH (g:G)-[:SECRET]->(m)-[:R]->(h) RETURN h.s", .secure = &.{}, .open = &.{"beyond"} },
+    .{ .q = "MATCH (g:G) RETURN COUNT { (g)-[:SECRET]->() } AS c", .secure = &.{"0"}, .open = &.{"1"} },
+    .{ .q = "MATCH (g:G) RETURN [(g)-[r:SECRET]->(h) | r.x] AS xs", .secure = &.{"[]"}, .open = &.{"[topsecret]"} },
+    .{ .q = "MATCH (g:G) RETURN COUNT { (g)-[*1..3]->() } AS c", .secure = &.{"2"}, .open = &.{"7"} },
+    .{ .q = "RETURN shortestPath((a:G {s: 'g1'})-[*]-(b {s: 'beyond'})) AS p", .secure = &.{"null"}, .open = &.{"p(g1>viaSecret>beyond)"} },
 };
 
 /// The value of integer property `key` on node `s`, read straight from the

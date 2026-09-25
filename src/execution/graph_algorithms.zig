@@ -141,8 +141,9 @@ const ExprScope = struct {
     }
 
     /// May the expression path walk `edge`? It must be in the graph,
-    /// traversable by the tenant scope (both endpoints visible, SONNY-1318),
-    /// and allowed by the RLS policies on its type (SONNY-2679).
+    /// traversable by the tenant scope (the edge's own tag and both endpoints
+    /// visible: SONNY-1318, SONNY-2693), and allowed by the RLS policies on
+    /// its type (SONNY-2679).
     fn edgeWalkable(self: *ExprScope, store: *graph_store.GraphStore, edge: graph_store.Edge) bool {
         if (!std.mem.eql(u8, edge.graph_name, self.graph)) return false;
         if (!tenant_visibility.edgeTraversable(store, edge, self.tenant)) return false;
@@ -153,10 +154,10 @@ const ExprScope = struct {
     /// when a policy may deny a row, the node's own visibility (a node that
     /// resolves nowhere is not visible). Without a policy the edge check
     /// suffices: its graph check keeps the walk in the graph and
-    /// `edgeTraversable` already checked both endpoints' tenants. The node is
-    /// read through a transient copy, freed at once, and decided once per
-    /// evaluation; the walk neither retains node copies nor fills the bounded
-    /// node cache.
+    /// `edgeTraversable` already checked the edge's tag and both endpoints'
+    /// tenants. The node is read through a transient copy, freed at once,
+    /// and decided once per evaluation; the walk neither retains node copies
+    /// nor fills the bounded node cache.
     fn stepVisible(self: *ExprScope, store: *graph_store.GraphStore, edge: graph_store.Edge, next_id: u64) bool {
         if (!self.edgeWalkable(store, edge)) return false;
         if (!self.rls.may_deny) return true;
@@ -230,7 +231,8 @@ fn nodeMatchesProperties(
 /// SONNY-1326: `filter_tenant` is REQUIRED (the resolved session scope, `null`
 /// meaning all-tenants). Only an edge the scope may TRAVERSE is returned — a
 /// cross-tenant edge that happens to carry the reader's own tenant tag is
-/// rejected on its endpoints by the shared `edgeTraversable` predicate. The
+/// rejected on its endpoints, and another tenant's edge between the reader's
+/// nodes on its tag, by the shared `edgeTraversable` predicate. The
 /// edge BODY is read by value (`getEdgeHydrated`, copied under the per-shard
 /// map lock SHARED); the raw `*Edge` is taken only for the returned binding,
 /// never dereferenced for a decision (see the torn-edge-body hazard note on

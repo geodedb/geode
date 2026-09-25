@@ -8545,6 +8545,20 @@ pub fn build(b: *std.Build) void {
     const sonny2687_step = b.step("test-sonny2687-expression-graph-scope", "Run SONNY-2687 regression (pattern comprehensions, COUNT {}, EXISTS {} and shortestPath() scan, start from and reach only the session graph's nodes and edges)");
     sonny2687_step.dependOn(&run_sonny2687_tests.step);
 
+    // SONNY-2693: the multi-chain executor's first hop and the expression path
+    // admitted an edge whose endpoints were visible whatever its own tenant
+    // tag, so a tenant read another tenant's edge (and its properties) between
+    // its own nodes. One rule now: the edge's tag AND both endpoints. Also
+    // covers CALL geode.tenant.backfill_edge_tags().
+    const sonny2693_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny2693_edge_tenant_rule.zig"), .target = target, .optimize = optimize });
+    sonny2693_test_mod.addImport("geode", root_mod);
+    sonny2693_test_mod.addImport("logging", logging_mod);
+    const sonny2693_tests = b.addTest(.{ .root_module = sonny2693_test_mod });
+    const run_sonny2693_tests = b.addRunArtifact(sonny2693_tests);
+    shardDep(test_step, &run_sonny2693_tests.step, 1, test_shard_loads, test_shard_index);
+    const sonny2693_step = b.step("test-sonny2693-edge-tenant-rule", "Run SONNY-2693 regression (every read path shows a tenant an edge only when the edge's own tag and both endpoints are visible to it, with no exception for default; geode.tenant.backfill_edge_tags re-tags legacy default edges and reports mixed ones)");
+    sonny2693_step.dependOn(&run_sonny2693_tests.step);
+
     // SONNY-2656: the node-scan fast path leaked the clone of every typed
     // extended value (Text, Json, Bytea, Char, Varchar, Url, ...) it projected
     // (page teardown freed only strings, lists and maps) or filtered on (IS

@@ -36,7 +36,6 @@
 //   | passesTenantFilterEdge          | no         | no           | yes         |
 //   | hierarchyForFilter              | no         | no           | yes         |
 //   | nodeIdVisible                   | on miss    | on miss      | NO          |
-//   | edgeVisibleForTenantHierarchy   | on mis-tag | on mis-tag   | NO          |
 //   | edgeTraversable                 | on miss    | on miss      | NO          |
 //   | edgeIdTraversable               | on miss    | on miss      | NO          |
 //
@@ -325,34 +324,6 @@ inline fn tenantTagFallbackAllowed() bool {
     return false;
 }
 
-// GAP-0891 (defense-in-depth): hierarchy-aware, endpoint-derived edge
-// visibility. The edge is visible when its own tag passes the (hierarchy-aware)
-// tenant filter OR when BOTH endpoints pass it. This bridges legacy edges
-// mis-tagged "default" (the pre-fix worker bug) whose endpoint nodes carry the
-// correct tenant, matching the store-level `GraphStore.edgeVisibleForTenant`.
-//
-// Isolation is preserved: a genuine "default"-tagged edge between
-// "default"-tagged nodes stays hidden from a non-default reader because both
-// endpoints fail the filter (fail-closed).
-pub inline fn edgeVisibleForTenantHierarchy(
-    store: *graph_store.GraphStore,
-    edge: graph_store.Edge,
-    filter_tenant: ?[]const u8,
-) bool {
-    if (passesTenantFilterEdge(edge, filter_tenant)) return true;
-    // GAP-ENT-0023 P3 (review I1): residency is NOT existence — on a bounded
-    // (or snapshot-warm, cold) cache a resident-only endpoint lookup denied
-    // every legacy-tagged edge whose endpoints were merely evicted. Read the
-    // endpoint tenant tags resident-first with an engine fallback; the helper
-    // never mutates the cache (callers hold retained `*Node` pointers).
-    if (!tenantTagFallbackAllowed()) return false; // SONNY-1330
-    const from_tenant = store.dupeNodeTenantForRead(store.allocator, edge.from_id) orelse return false;
-    defer store.allocator.free(from_tenant);
-    const to_tenant = store.dupeNodeTenantForRead(store.allocator, edge.to_id) orelse return false;
-    defer store.allocator.free(to_tenant);
-    return passesTenantFilterSlice(from_tenant, filter_tenant) and passesTenantFilterSlice(to_tenant, filter_tenant);
-}
-
 /// SONNY-1318: is the node with this id visible to the session's tenant scope?
 ///
 /// Resident-first with an engine fallback (`dupeNodeTenantForRead`), because a
@@ -376,43 +347,40 @@ pub fn nodeIdVisible(
     return passesTenantFilterSlice(tag, filter_tenant);
 }
 
-/// SONNY-1318: may a traversal walk this edge?
+// CANARY: REQ=REQ-SONNY-2693-EDGE-TENANT-RULE; FEATURE="PerTenantIsolation"; ASPECT=EdgeTenantRule; STATUS=TESTED; TEST=tests/test_sonny2693_edge_tenant_rule.zig; OWNER=security; UPDATED=2026-09-25
+/// SONNY-1318 / SONNY-2693: may the session walk, count or return this edge?
 ///
-/// Strictly stronger than `edgeVisibleForTenantHierarchy`: BOTH endpoints must
-/// also be visible. A cross-tenant edge that happens to carry the READER's own
-/// tenant tag (mis-tagged, or written by an admin path) passes the edge-tag
-/// check, so without the endpoint check the walk would step straight into the
-/// other tenant's subgraph. This is the "do not traverse through invisible
-/// nodes" rule, and it is what the SONNY-1318 fixture's tenant-A-tagged bridge
-/// edge exists to pin.
+/// The one edge rule, the same on every read path: the edge's own tenant tag
+/// passes the (hierarchy-aware) filter AND both of its endpoints are visible.
+/// Each half stops a leak the other lets through:
+///   * the endpoints: a cross-tenant edge carrying the reader's own tag
+///     (mis-tagged, or written by an admin path) would lead the walk straight
+///     into the other tenant's subgraph. The SONNY-1318 fixture's
+///     tenant-A-tagged bridge edge pins this.
+///   * the tag: an edge between two of the reader's nodes that belongs to
+///     another tenant would hand the reader that tenant's edge and its
+///     properties. SONNY-2693 (probe P8): a tenant_b edge between two
+///     tenant_a nodes was readable by tenant_a through the multi-chain first
+///     hop, a comprehension and `relationships(shortestPath(..))`, and its
+///     existence showed in `COUNT {}`, `EXISTS {}` and `shortestPath()`.
+///
+/// There is deliberately no exception for a `default` tag (the GAP-0891
+/// endpoint bridge, removed). Unscoped and admin writes and follower
+/// replication write `default`, and a `default` node is hidden from every
+/// tenant; a `default` edge is hidden the same way. An edge the pre-GAP-0891
+/// worker bug left `default` between two nodes of tenant T is re-tagged by
+/// `CALL geode.tenant.backfill_edge_tags()`, which also reports the edges
+/// whose tags disagree.
+///
+/// The tag is tested first because it needs no lookup; an endpoint that
+/// resolves nowhere is not visible.
 pub fn edgeTraversable(
     store: *graph_store.GraphStore,
     edge: graph_store.Edge,
     filter_tenant: ?[]const u8,
 ) bool {
     if (filter_tenant == null) return true;
-    // Review R4 — ONE pass over the endpoints, no extra allocations.
-    //
-    // The previous body was
-    //     edgeVisibleForTenantHierarchy(edge) and nodeIdVisible(from) and nodeIdVisible(to)
-    // and `edgeVisibleForTenantHierarchy`'s mis-tagged-edge arm itself resolved
-    // BOTH endpoint tenant tags (`dupeNodeTenantForRead`, one allocation each),
-    // so a legacy-tagged edge resolved every endpoint TWICE.
-    //
-    // Write E for the edge-tag check and F/T for the endpoint checks. The
-    // endpoint arm of `edgeVisibleForTenantHierarchy` is the SAME predicate as
-    // `nodeIdVisible` (resident-first, engine fallback, unresolvable -> false),
-    // so the old expression is
-    //     (E or (F and T)) and F and T
-    //   = (E and F and T) or (F and T and F and T)
-    //   = F and T
-    // The endpoint requirement SUBSUMES the edge-tag check: an edge whose own
-    // tag passes but whose endpoint does not was already denied, and an edge
-    // whose tag fails between two visible endpoints was already admitted by the
-    // legacy-tag bridge. Same answer for every input, half the lookups, and the
-    // allocating `dupeNodeTenantForRead` arm is never entered for a resident
-    // endpoint (`nodeIdVisible` has a resident fast path that
-    // `edgeVisibleForTenantHierarchy` lacked).
+    if (!passesTenantFilterEdge(edge, filter_tenant)) return false;
     return nodeIdVisible(store, edge.from_id, filter_tenant) and
         nodeIdVisible(store, edge.to_id, filter_tenant);
 }

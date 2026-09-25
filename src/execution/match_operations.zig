@@ -192,7 +192,6 @@ const hierarchyForFilter = tenant_visibility.hierarchyForFilter;
 const passesTenantFilter = tenant_visibility.passesTenantFilter;
 const passesTenantFilterSlice = tenant_visibility.passesTenantFilterSlice;
 const passesTenantFilterEdge = tenant_visibility.passesTenantFilterEdge;
-const edgeVisibleForTenantHierarchy = tenant_visibility.edgeVisibleForTenantHierarchy;
 
 // GAP-0846: storage-level tenant filter for the LABEL-INDEXED read paths
 // (`store.getNodesByLabels(..., tenant)` and `store.getEdgesByType(..., tenant, ...)`).
@@ -348,19 +347,16 @@ pub const HopScope = struct {
 
     /// May a traversal walk `edge`? It must be in the graph, carry a tenant
     /// tag the scope can see, and be allowed by the RLS policies on its type.
+    ///
+    /// SONNY-2693: this is the tag half of the edge rule
+    /// (`tenant_visibility.edgeTraversable`); every caller checks the
+    /// endpoints itself. The node a hop starts from is already bound, so it
+    /// passed; the node it reaches is checked before it is bound, and
+    /// `stepAllowed` checks it for a variable-length step. A `default` tag
+    /// gets no exception (see `edgeTraversable`).
     pub fn edgeVisible(self: *const HopScope, edge: *const graph_store.Edge) bool {
         if (!std.mem.eql(u8, edge.graph_name, self.filter_graph)) return false;
         if (!passesTenantFilterEdge(edge.*, self.filter_tenant)) return false;
-        return self.edgeRlsAllows(edge);
-    }
-
-    /// `edgeVisible` with the GAP-0891 endpoint-derived tenant rule: the edge
-    /// is also visible when both its endpoints are, whatever its own tag. Only
-    /// the multi-chain executor's first hop uses this rule today; which rule
-    /// every path should use is SONNY-2693.
-    pub fn edgeVisibleBridged(self: *const HopScope, store: *graph_store.GraphStore, edge: *const graph_store.Edge) bool {
-        if (!std.mem.eql(u8, edge.graph_name, self.filter_graph)) return false;
-        if (!edgeVisibleForTenantHierarchy(store, edge.*, self.filter_tenant)) return false;
         return self.edgeRlsAllows(edge);
     }
 
@@ -5442,8 +5438,9 @@ fn executeMultiChainRelationshipMatch(allocator: std.mem.Allocator, q: ast.Query
                     if (rel_type) |rt| {
                         if (!std.mem.eql(u8, edge.label, rt)) continue;
                     }
-                    // GAP-0891 (defense-in-depth): endpoint-derived edge visibility.
-                    if (!hop_scope.edgeVisibleBridged(store, edge)) continue;
+                    // SONNY-2693: the edge's own tag, like every other hop; the
+                    // anchor was checked above and the far node is checked below.
+                    if (!hop_scope.edgeVisible(edge)) continue;
                     if (!matchesEdgeProperties(allocator, edge.*, rel_props)) continue;
                     if (store.getNodePtrForScan(edge.to_id)) |right_node| {
                         if (!std.mem.eql(u8, right_node.graph_name, filter_graph)) continue;
@@ -5466,8 +5463,9 @@ fn executeMultiChainRelationshipMatch(allocator: std.mem.Allocator, q: ast.Query
                     if (rel_type) |rt| {
                         if (!std.mem.eql(u8, edge.label, rt)) continue;
                     }
-                    // GAP-0891 (defense-in-depth): endpoint-derived edge visibility.
-                    if (!hop_scope.edgeVisibleBridged(store, edge)) continue;
+                    // SONNY-2693: the edge's own tag, like every other hop; the
+                    // anchor was checked above and the far node is checked below.
+                    if (!hop_scope.edgeVisible(edge)) continue;
                     if (!matchesEdgeProperties(allocator, edge.*, rel_props)) continue;
                     if (store.getNodePtrForScan(edge.from_id)) |right_node| {
                         if (!std.mem.eql(u8, right_node.graph_name, filter_graph)) continue;
