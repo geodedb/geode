@@ -539,6 +539,11 @@ const ForBodyAccumulator = struct {
 
         if (result.owned_graph_entities) |entities| {
             if (self.entities) |acc_entities| {
+                // SONNY-2463: the merged nodes are freed with the
+                // accumulator's `destroy_node`, so both trackers must free
+                // their nodes the same way. Every executor tracker has the
+                // default (struct only); only a node-scan page frees in full.
+                std.debug.assert(acc_entities.destroy_node == entities.destroy_node);
                 try acc_entities.nodes.ensureUnusedCapacity(acc_entities.allocator, entities.nodes.items.len);
                 try acc_entities.edges.ensureUnusedCapacity(acc_entities.allocator, entities.edges.items.len);
                 acc_entities.nodes.appendSliceAssumeCapacity(entities.nodes.items);
