@@ -8629,6 +8629,49 @@ pub fn build(b: *std.Build) void {
     const sonny2709_step = b.step("test-sonny2709-rls-range-fail-closed", "Run SONNY-2709 regression (RLS range policies deny a missing or mistyped value on nodes and edges, stay denied under NOT, and compare a principal attribute only when it parses strictly as the column's number)");
     sonny2709_step.dependOn(&run_sonny2709_tests.step);
 
+    // SONNY-2686: MERGE's match phase checked graph, tenant, labels and
+    // properties only, so a MERGE bound a node an RLS policy hides: it returned
+    // the node's properties, rewrote it through ON MATCH SET / SET, and attached
+    // relationships to it.
+    const sonny2686_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny2686_merge_rls.zig"), .target = target, .optimize = optimize });
+    sonny2686_test_mod.addImport("geode", root_mod);
+    sonny2686_test_mod.addImport("logging", logging_mod);
+    sonny2686_test_mod.addImport("rls", rls_mod);
+    sonny2686_test_mod.addImport("rls_types", rls_types_mod);
+    const sonny2686_tests = b.addTest(.{ .root_module = sonny2686_test_mod });
+    const run_sonny2686_tests = b.addRunArtifact(sonny2686_tests);
+    shardDep(test_step, &run_sonny2686_tests.step, 1, test_shard_loads, test_shard_index);
+    const sonny2686_step = b.step("test-sonny2686-merge-rls", "Run SONNY-2686 regression (a MERGE whose only match an RLS policy hides is refused with MergeMatchNotVisible and never reads, rewrites or attaches to it, under label and expression policies; unscoped sessions and tenant/graph scoping unchanged; the key-resolved write fast paths decline a row-scoped session)");
+    sonny2686_step.dependOn(&run_sonny2686_tests.step);
+
+    // SONNY-2691: indegree()/outdegree() panicked on a negative id (a server
+    // abort) and read the degree of any node in any tenant, counting the
+    // neighbours an RLS policy hides.
+    const sonny2691_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny2691_degree_visibility.zig"), .target = target, .optimize = optimize });
+    sonny2691_test_mod.addImport("geode", root_mod);
+    sonny2691_test_mod.addImport("logging", logging_mod);
+    sonny2691_test_mod.addImport("rls", rls_mod);
+    sonny2691_test_mod.addImport("rls_types", rls_types_mod);
+    const sonny2691_tests = b.addTest(.{ .root_module = sonny2691_test_mod });
+    const run_sonny2691_tests = b.addRunArtifact(sonny2691_tests);
+    shardDep(test_step, &run_sonny2691_tests.step, 1, test_shard_loads, test_shard_index);
+    const sonny2691_step = b.step("test-sonny2691-degree-visibility", "Run SONNY-2691 regression (indegree()/outdegree() of a negative or unknown id is 0 instead of a panic; a hidden, foreign-tenant or other-graph node behaves as absent; a degree counts only visible neighbours)");
+    sonny2691_step.dependOn(&run_sonny2691_tests.step);
+
+    // SONNY-2692: knn()/vector_knn() scoped candidates by graph and tenant
+    // only, so they returned the ids of RLS-hidden rows ranked against the
+    // caller's vector, on the scan path and the vector-index path.
+    const sonny2692_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny2692_knn_rls.zig"), .target = target, .optimize = optimize });
+    sonny2692_test_mod.addImport("geode", root_mod);
+    sonny2692_test_mod.addImport("logging", logging_mod);
+    sonny2692_test_mod.addImport("rls", rls_mod);
+    sonny2692_test_mod.addImport("rls_types", rls_types_mod);
+    const sonny2692_tests = b.addTest(.{ .root_module = sonny2692_test_mod });
+    const run_sonny2692_tests = b.addRunArtifact(sonny2692_tests);
+    shardDep(test_step, &run_sonny2692_tests.step, 1, test_shard_loads, test_shard_index);
+    const sonny2692_step = b.step("test-sonny2692-knn-rls", "Run SONNY-2692 regression (knn()/vector_knn() filter every candidate through the row-visibility filter before ranking and truncating to k, on the scan path and the vector-index path, under label and expression policies)");
+    sonny2692_step.dependOn(&run_sonny2692_tests.step);
+
     // SONNY-2656: the node-scan fast path leaked the clone of every typed
     // extended value (Text, Json, Bytea, Char, Varchar, Url, ...) it projected
     // (page teardown freed only strings, lists and maps) or filtered on (IS

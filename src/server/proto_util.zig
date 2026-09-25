@@ -242,6 +242,11 @@ pub fn mapError(err: anyerror) ErrorInfo {
         error.TenantScopedSession => .{ .code = "42501", .message = "geode.tenant.backfill_edge_tags changes every tenant's edges; run it in a session with no tenant scope" },
         error.GraphLockHeld => .{ .code = "0A000", .message = "geode.tenant.backfill_edge_tags takes each graph's lock itself; send it as the only statement in its request" },
         error.BackfillInTransaction => .{ .code = "25000", .message = "geode.tenant.backfill_edge_tags cannot run inside a transaction: ROLLBACK would not undo its re-tags (a dry run can)" },
+        // SONNY-2686: a MERGE whose pattern only nodes the session's row-level
+        // security hides match is refused (nothing bound, updated or created)
+        // rather than binding the hidden node or creating a duplicate of it.
+        // CANARY: REQ=REQ-SONNY-2686-MERGE-ROW-VISIBILITY; FEATURE="MergeRowVisibility"; ASPECT=SqlstateMapping; STATUS=TESTED; TEST=tests/test_sonny2686_merge_rls.zig; OWNER=security; UPDATED=2026-09-25
+        error.MergeMatchNotVisible => .{ .code = "42501", .message = "MergeMatchNotVisible: the MERGE pattern matches an existing node that row-level security hides from this session; the statement was refused, and nothing was bound, updated or created" },
         error.SearchNotPermitted => .{ .code = "42501", .message = "Access denied: READ_PLAINTEXT privilege required for encrypted searchable field" },
         error.InvalidIpAddress => .{ .code = "22P02", .message = "Invalid IP address format" },
         error.InvalidMac, error.InvalidMacFormat, error.InvalidMacTag => .{ .code = "22P02", .message = "Invalid MAC address format" },

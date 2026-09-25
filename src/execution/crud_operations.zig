@@ -30,6 +30,10 @@ const executeReturnClauseWithEnv = execution.executeReturnClauseWithEnv;
 const match_operations = @import("match_operations.zig");
 const generateUniqueColumnNames = match_operations.generateUniqueColumnNames;
 
+// SONNY-2686: the RLS scratch row MERGE's match phase hands to
+// `match_operations.passesRowVisibilityFilters` holds `rls.Value`s.
+const rls = @import("rls");
+
 // SONNY-1841: poll cancellation in the write apply loops so an abandoned
 // write-carrying mutation (DELETE/DETACH DELETE/leader SET) aborts at a safe
 // boundary and releases the per-graph write lock instead of running to its
@@ -234,15 +238,97 @@ fn valueToPropertyValueForIndex(val: Value) ?graph_store.PropertyValue {
     };
 }
 
-fn findFirstMatchingNodeId(
-    allocator: std.mem.Allocator,
+// CANARY: REQ=REQ-SONNY-2686-MERGE-ROW-VISIBILITY; FEATURE="MergeRowVisibility"; ASPECT=MatchPhaseVisibility; STATUS=TESTED; TEST=tests/test_sonny2686_merge_rls.zig; OWNER=security; UPDATED=2026-09-25
+/// SONNY-2686: the row visibility MERGE's match phase applies to every node it
+/// finds, for a node chain and for each relationship endpoint alike.
+///
+/// The pattern predicate (`nodeMatchesPattern`) confines a candidate to the
+/// statement's graph and the session's exact tenant, and it matched on labels
+/// and properties only. It never applied the session's RLS policies, so a MERGE
+/// bound a node the session may not read: RETURN projected it, ON MATCH SET and
+/// a bare SET rewrote it, and a relationship MERGE attached an edge to it. Every
+/// node that matches the pattern now also has to pass
+/// `passesRowVisibilityFilters`, the combinator the other engine-direct read
+/// paths use, before MERGE may bind it.
+///
+/// Whether a policy can deny this session anything is decided once per
+/// statement (`rlsMayDenyForSession`, as `HopScope` does per traversal). When
+/// none can (no policy is installed, or the session has no user) the check is
+/// skipped, and MERGE behaves exactly as it did.
+const MergeVisibility = struct {
+    filter_tenant: ?[]const u8,
+    rls_may_deny: bool,
+    rls_row: std.StringHashMap(rls.Value),
+
+    /// Call with the statement's context active: the RLS half reads it.
+    fn init(allocator: std.mem.Allocator, filter_tenant: ?[]const u8) MergeVisibility {
+        return .{
+            .filter_tenant = filter_tenant,
+            .rls_may_deny = match_operations.rlsMayDenyForSession(),
+            .rls_row = std.StringHashMap(rls.Value).init(allocator),
+        };
+    }
+
+    fn deinit(self: *MergeVisibility) void {
+        self.rls_row.deinit();
+    }
+
+    /// May MERGE bind `node`, a node that already matches its pattern?
+    fn allows(self: *MergeVisibility, node: *const graph_store.Node) bool {
+        if (!self.rls_may_deny) return true;
+        return match_operations.passesRowVisibilityFilters(&self.rls_row, node.*, self.filter_tenant);
+    }
+};
+
+/// SONNY-2686: what MERGE's match phase found for one node pattern.
+const MergeMatch = union(enum) {
+    /// No node in the statement's graph and the session's tenant matches.
+    none,
+    /// A node the session may see matches (the first one found).
+    visible: u64,
+    /// Nodes match, and the session may see none of them.
+    hidden,
+
+    /// The node MERGE binds, or null when it creates one.
+    ///
+    /// A pattern whose only matches are hidden REFUSES the statement with
+    /// `error.MergeMatchNotVisible` (42501, proto_util.mapError), before
+    /// anything is bound, updated or created. The two other answers are both
+    /// wrong:
+    ///   * binding the hidden node is the leak: RETURN reads it, ON MATCH SET
+    ///     rewrites it (under an expression policy, reclassifying it so that it
+    ///     becomes visible), and a relationship attaches to it;
+    ///   * treating it as absent CREATES A DUPLICATE of an existing row. That
+    ///     breaks the one-node-per-pattern contract MERGE exists for (the merge
+    ///     index keeps one id per key, so later MERGEs bind either copy), and
+    ///     it surfaces as two rows the moment the policy changes.
+    /// The refusal does tell the session that some row it may not see matches
+    /// the pattern, the fact a unique-key violation reveals, but never which
+    /// row, nor anything it holds, and nothing is written.
+    fn bindable(self: MergeMatch) error{MergeMatchNotVisible}!?u64 {
+        return switch (self) {
+            .none => null,
+            .visible => |id| id,
+            .hidden => error.MergeMatchNotVisible,
+        };
+    }
+};
+
+/// Find the node MERGE binds for a pattern: the first node in the graph and
+/// the tenant that carries every label and property of the pattern AND that
+/// the session may see (SONNY-2686). A visible match is preferred over a
+/// hidden one wherever the two sit, so a hidden node found first (for
+/// example, by the merge index) never ends the search.
+fn findMergeMatch(
     read_store: *graph_store.GraphStore,
     graph_name: []const u8,
     tenant_id: ?[]const u8,
     labels: []const []const u8,
     props: ?[]const EvaluatedPatternProp,
-) !?u64 {
-    _ = allocator;
+    visibility: *MergeVisibility,
+) MergeMatch {
+    // A node that matches the pattern but that the session may not see.
+    var saw_hidden = false;
 
     // Fast path: use the merge property index for O(1) lookup when we have
     // at least one label and at least one property.
@@ -288,7 +374,13 @@ fn findFirstMatchingNodeId(
                                 // Verify the candidate matches ALL labels, ALL properties, and tenant
                                 if ((read_store.nodes.getOrHydratePtr(out_id) catch null)) |node| {
                                     if (nodeMatchesPattern(node, graph_name, tenant_id, labels, evaluated_props)) {
-                                        return out_id;
+                                        if (visibility.allows(node)) return .{ .visible = out_id };
+                                        // SONNY-2686: the bucket holds a node
+                                        // the session may not see. It holds
+                                        // ONE id per key, so a visible node
+                                        // with the same key can still exist:
+                                        // the fallback scan looks for it.
+                                        saw_hidden = true;
                                     }
                                 }
                                 // The bucket is occupied by a DIFFERENT node,
@@ -306,37 +398,41 @@ fn findFirstMatchingNodeId(
                 // Only when every probe came back as an authoritative MISS can
                 // the node be declared absent and the expensive O(n) label
                 // scan skipped.
-                if (index_authoritative) return null;
+                if (index_authoritative) return .none;
             }
         }
 
         // Fallback: stream through the label index directly (no ArrayList materialization).
         // Uses the first label for O(1) index lookup, then checks remaining labels + props inline.
         // Only reached when the merge property index could not be consulted
-        // (non-indexable value type or key too long for the 1024-byte buffer).
-        const first_label_nodes = read_store.getNodesByLabel(graph_name, labels[0]) orelse return null;
+        // (non-indexable value type or key too long for the 1024-byte buffer),
+        // or when its bucket held a node the session may not see.
+        const first_label_nodes = read_store.getNodesByLabel(graph_name, labels[0]) orelse
+            return if (saw_hidden) .hidden else .none;
         for (first_label_nodes) |node_id| {
             if ((read_store.nodes.getOrHydratePtr(node_id) catch null)) |node| {
                 if (nodeMatchesPattern(node, graph_name, tenant_id, labels, props)) {
-                    return node_id;
+                    if (visibility.allows(node)) return .{ .visible = node_id };
+                    saw_hidden = true;
                 }
             }
         }
-        return null;
+        return if (saw_hidden) .hidden else .none;
     }
 
     // No labels — must scan all nodes (unchanged behavior, but streaming)
     var iter = read_store.nodes.iterator();
     while (iter.next()) |entry| {
         if (nodeMatchesPattern(entry.value_ptr, graph_name, tenant_id, &.{}, props)) {
-            return entry.key_ptr.*;
+            if (visibility.allows(entry.value_ptr)) return .{ .visible = entry.key_ptr.* };
+            saw_hidden = true;
         }
     }
-    return null;
+    return if (saw_hidden) .hidden else .none;
 }
 
 /// Collect ALL candidate node IDs matching labels (used by relationship MERGE and DELETE).
-/// For single-node MERGE, prefer findFirstMatchingNodeId which uses the merge property index.
+/// For single-node MERGE, prefer findMergeMatch which uses the merge property index.
 fn collectCandidateNodeIds(
     allocator: std.mem.Allocator,
     read_store: *graph_store.GraphStore,
@@ -3220,14 +3316,18 @@ fn clusterReplicateMerge(
     defer prop_arena.deinit();
     const evaluated_props = try evaluatePatternProps(prop_arena.allocator(), node_pattern.props, context);
 
-    const matched_id = try findFirstMatchingNodeId(
-        allocator,
+    // SONNY-2686: including the session's row visibility, so the leader never
+    // proposes an ON MATCH SET for a node the session may not see.
+    var visibility = MergeVisibility.init(allocator, filter_tenant);
+    defer visibility.deinit();
+    const matched_id = try findMergeMatch(
         read_store,
         target_graph,
         filter_tenant,
         node_pattern.labels,
         evaluated_props,
-    );
+        &visibility,
+    ).bindable();
 
     const empty_result = ExecutionResult{
         .columns = try allocator.alloc([]const u8, 0),
@@ -3332,6 +3432,7 @@ fn mergeNodeChain(
     node_pattern: ast.NodePattern,
     m: ast.MergeStatement,
     context: ExecutionContext,
+    visibility: *MergeVisibility,
 ) !MergedNodeBinding {
     // GAP-0900 Layer-3 (Fix 2): in lean-index mode the MERGE pattern keys
     // MUST stay indexed in the merge_prop_index, otherwise dedup breaks (a
@@ -3357,14 +3458,17 @@ fn mergeNodeChain(
     const pa = prop_arena.allocator();
     const evaluated_props = try evaluatePatternProps(pa, node_pattern.props, context);
 
-    if (try findFirstMatchingNodeId(
-        allocator,
+    // SONNY-2686: a node the session may not see is never bound, so none of
+    // the ON MATCH clauses below can reach it; a pattern that only such a node
+    // matches refuses the statement here, before anything is written.
+    if (try findMergeMatch(
         read_store,
         target_graph,
         filter_tenant,
         node_pattern.labels,
         evaluated_props,
-    )) |found_id| {
+        visibility,
+    ).bindable()) |found_id| {
         found_node = (read_store.nodes.getOrHydratePtr(found_id) catch null);
     }
 
@@ -3468,16 +3572,93 @@ fn mergeNodeChain(
     return .{ .pattern = node_pattern, .node_id = node_id, .created = created };
 }
 
+/// The node the statement's caller bound to the endpoint variable `name`: a
+/// procedure binding (`context.bindings`) or the MATCH row the dispatcher
+/// threads through the query parameters. Null when the caller bound nothing.
+fn endpointBoundByCaller(context: ExecutionContext, name: []const u8) ?u64 {
+    if (context.bindings) |bindings| {
+        if (bindings.get(name)) |binding| {
+            switch (binding) {
+                .node_id => |nid| return nid,
+                .edge_id => {},
+            }
+        }
+    }
+    return lookupNodeIdInQueryParams(context, name);
+}
+
+/// SONNY-2686: refuse a MERGE, BEFORE it writes anything, when any node
+/// pattern it would match inline (a chain's node, or a relationship endpoint
+/// its caller did not bind) is matched only by nodes the session may not see.
+///
+/// The chains run in order, and an endpoint that does not exist is created
+/// before the next one is matched, so the inline refusal alone could leave the
+/// first half of a pattern behind a refused statement: an aborted statement's
+/// engine txn discards what it wrote, but the in-memory store keeps it. The
+/// inline check stays, for the answer this pre-pass cannot give (a pattern an
+/// earlier chain's CREATE makes match a visible node); this pass can only be
+/// stricter than it, never looser.
+fn refuseHiddenMergeMatches(
+    allocator: std.mem.Allocator,
+    read_store: *graph_store.GraphStore,
+    target_graph: []const u8,
+    filter_tenant: ?[]const u8,
+    m: ast.MergeStatement,
+    context: ExecutionContext,
+    visibility: *MergeVisibility,
+) !void {
+    // Nothing can be hidden from this session.
+    if (!visibility.rls_may_deny) return;
+    for (m.pattern.chains) |chain| {
+        // A chain's node is always matched (`mergeNodeChain`).
+        if (chain.head) |node_pattern| {
+            try refuseIfOnlyHiddenMatches(allocator, read_store, target_graph, filter_tenant, node_pattern, context, visibility);
+        }
+        // An endpoint is matched only when it carries a label or a property
+        // and its caller did not bind it (`resolveMergeEndpoint`).
+        for (chain.hops) |hop| {
+            for ([_]ast.NodePattern{ hop.left, hop.right }) |endpoint| {
+                if (endpoint.labels.len == 0 and endpoint.props == null) continue;
+                if (endpoint.name) |name| {
+                    if (endpointBoundByCaller(context, name) != null) continue;
+                }
+                try refuseIfOnlyHiddenMatches(allocator, read_store, target_graph, filter_tenant, endpoint, context, visibility);
+            }
+        }
+    }
+}
+
+fn refuseIfOnlyHiddenMatches(
+    allocator: std.mem.Allocator,
+    read_store: *graph_store.GraphStore,
+    target_graph: []const u8,
+    filter_tenant: ?[]const u8,
+    node_pattern: ast.NodePattern,
+    context: ExecutionContext,
+    visibility: *MergeVisibility,
+) !void {
+    var prop_arena = std.heap.ArenaAllocator.init(allocator);
+    defer prop_arena.deinit();
+    const evaluated_props = try evaluatePatternProps(prop_arena.allocator(), node_pattern.props, context);
+    _ = try findMergeMatch(read_store, target_graph, filter_tenant, node_pattern.labels, evaluated_props, visibility).bindable();
+}
+
 /// Resolve ONE endpoint of a MERGE relationship pattern to a concrete node id.
 ///
 /// Resolution order: variables bound by an earlier chain of THIS statement,
 /// then `context.bindings`, then the MATCH-row parameters the dispatcher
 /// propagates (query_execution.zig:1911-1920), then an inline label/property
-/// match. An endpoint that still does not resolve but DOES carry a label or
-/// properties is CREATED — that is the match-or-create contract MERGE promises
-/// for the whole pattern. A bare, unbound variable (`(zz)`) carries nothing to
-/// match or create on, so the statement is REJECTED instead of silently
-/// committing an empty success (ENG-3903 silent write loss).
+/// match of a node the session may see (SONNY-2686: a pattern that only hidden
+/// nodes match refuses the statement). An endpoint that still does not resolve
+/// but DOES carry a label or properties is CREATED — that is the
+/// match-or-create contract MERGE promises for the whole pattern. A bare,
+/// unbound variable (`(zz)`) carries nothing to match or create on, so the
+/// statement is REJECTED instead of silently committing an empty success
+/// (ENG-3903 silent write loss).
+///
+/// A bound endpoint is not re-checked for visibility: the clause that bound it
+/// (the MATCH that produced the row, or an earlier chain of this MERGE) already
+/// applied the session's visibility, or created the node itself.
 // CANARY: REQ=REQ-MERGE-RELPROPS-001; FEATURE="MergeRelationship"; ASPECT=UnresolvableEndpointFailsLoud; STATUS=TESTED; TEST=tests/test_merge_relationship_bugs.zig; OWNER=execution; UPDATED=2026-08-24
 fn resolveMergeEndpoint(
     allocator: std.mem.Allocator,
@@ -3488,18 +3669,11 @@ fn resolveMergeEndpoint(
     node_pattern: ast.NodePattern,
     context: ExecutionContext,
     merged_vars: *std.StringHashMap(u64),
+    visibility: *MergeVisibility,
 ) !u64 {
     if (node_pattern.name) |name| {
         if (merged_vars.get(name)) |bound_id| return bound_id;
-        if (context.bindings) |bindings| {
-            if (bindings.get(name)) |binding| {
-                switch (binding) {
-                    .node_id => |nid| return nid,
-                    .edge_id => {},
-                }
-            }
-        }
-        if (lookupNodeIdInQueryParams(context, name)) |nid| return nid;
+        if (endpointBoundByCaller(context, name)) |nid| return nid;
     }
 
     // Nothing to match on and nothing bound: the variable is undefined.
@@ -3515,14 +3689,14 @@ fn resolveMergeEndpoint(
     defer prop_arena.deinit();
     const evaluated_props = try evaluatePatternProps(prop_arena.allocator(), node_pattern.props, context);
 
-    if (try findFirstMatchingNodeId(
-        allocator,
+    if (try findMergeMatch(
         read_store,
         target_graph,
         filter_tenant,
         node_pattern.labels,
         evaluated_props,
-    )) |matched_id| {
+        visibility,
+    ).bindable()) |matched_id| {
         if (node_pattern.name) |name| try merged_vars.put(name, matched_id);
         return matched_id;
     }
@@ -3555,11 +3729,12 @@ fn mergeRelationshipHop(
     m: ast.MergeStatement,
     context: ExecutionContext,
     merged_vars: *std.StringHashMap(u64),
+    visibility: *MergeVisibility,
 ) !void {
     const rel_types = hop.rel.types;
 
-    const source_id = try resolveMergeEndpoint(allocator, store, read_store, target_graph, filter_tenant, hop.left, context, merged_vars);
-    const target_id = try resolveMergeEndpoint(allocator, store, read_store, target_graph, filter_tenant, hop.right, context, merged_vars);
+    const source_id = try resolveMergeEndpoint(allocator, store, read_store, target_graph, filter_tenant, hop.left, context, merged_vars, visibility);
+    const target_id = try resolveMergeEndpoint(allocator, store, read_store, target_graph, filter_tenant, hop.right, context, merged_vars, visibility);
 
     const edge_type = if (rel_types.len > 0) rel_types[0] else "";
     const existing_edge = findExistingEdgeId(
@@ -3612,6 +3787,15 @@ fn mergeRelationshipHop(
 // CANARY: REQ=REQ-PERF-LABEL-INDEX-004; FEATURE="LabelBasedIndex"; ASPECT=MergeOptimization; STATUS=IMPL; OWNER=perf; UPDATED=2026-01-28
 // Issue #391: Optimized MERGE using label index instead of O(n) full table scan
 pub fn executeMerge(allocator: std.mem.Allocator, m: ast.MergeStatement, current_graph: ?[]const u8, context: ExecutionContext) !ExecutionResult {
+    // SONNY-2686: run the statement under its own context. Row-level security
+    // reads the ACTIVE context (`passesRLSFilter`), while the tenant filter
+    // below comes from `context`; `executeStatementWithContext` installs the
+    // context only when it carries a session, so without this a MERGE could
+    // match with no RLS identity at all. `executeQueryWithContext` does the
+    // same for every query (and so for DELETE / SET target resolution).
+    const prev_active_ctx = execution.pushActiveContext(&context);
+    defer execution.popActiveContext(prev_active_ctx);
+
     // Cluster write routing: in cluster mode the MERGE is ordered through Raft on
     // the leader and never applied to a single node's local store. A follower
     // fails closed (error.ClusterNotLeader — clients retry the leader); the leader
@@ -3681,6 +3865,13 @@ pub fn executeMerge(allocator: std.mem.Allocator, m: ast.MergeStatement, current
         try write_precheck.checkSetClausesWritable(allocator, m.on_match, precheck_env, null, &.{});
     }
 
+    // SONNY-2686: every node MERGE matches must be one the session may see; a
+    // pattern only hidden nodes match refuses the statement, and it is refused
+    // before any chain writes.
+    var visibility = MergeVisibility.init(allocator, filter_tenant);
+    defer visibility.deinit();
+    try refuseHiddenMergeMatches(allocator, read_store, target_graph, filter_tenant, m, context, &visibility);
+
     // MERGE is like a CREATE but checks if the pattern already exists.
     // ENG-3903: EVERY chain of the pattern runs, in clause order, and the node
     // variables an earlier chain bound are visible to the later ones — that is
@@ -3704,6 +3895,7 @@ pub fn executeMerge(allocator: std.mem.Allocator, m: ast.MergeStatement, current
                 node_pattern,
                 m,
                 context,
+                &visibility,
             );
             if (node_pattern.name) |var_name| try merged_vars.put(var_name, binding.node_id);
             try merged_nodes.append(allocator, binding);
@@ -3723,6 +3915,7 @@ pub fn executeMerge(allocator: std.mem.Allocator, m: ast.MergeStatement, current
                     m,
                     context,
                     &merged_vars,
+                    &visibility,
                 );
             }
         }
