@@ -418,3 +418,10 @@ fn checkUnknownNames(s: *Session, f: *Failures) !void {
 test "SONNY-2675: a HAVING name that is no column, binding or parameter is refused" {
     try inEveryMode("unknown names", checkUnknownNames);
 }
+
+test "SONNY-2675: a grouping error reaches the client as SQLSTATE 42803" {
+    // A mixed RETURN without a GROUP BY, like every other grouping refusal.
+    try testing.expectEqualStrings("42803", geode.proto_util.mapError(error.GroupingError).code);
+    try testing.expectEqualStrings("42803", geode.proto_util.mapError(error.NestedAggregate).code);
+    try testing.expectEqualStrings("42803", geode.proto_util.mapError(error.UngroupedHavingReference).code);
+}

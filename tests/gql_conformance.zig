@@ -433,7 +433,8 @@ test "T19: GROUP BY legality (error)" {
     var result = try runQuery(allocator, query);
     defer result.deinit(allocator);
 
-    try expectError(&result, "42000", "grouping error: non-aggregated expression not in GROUP BY", &.{});
+    // grouping_error, as for every other grouping refusal (SONNY-2675).
+    try expectError(&result, "42803", "grouping error: non-aggregated expression not in GROUP BY", &.{});
 }
 
 test "T20: FOR over a parameter-bound list iterates every element" {
