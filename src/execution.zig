@@ -2680,10 +2680,20 @@ pub const VariableLengthPath = struct {
 /// edge walked, and the node it leads to). Type-erased so this module does not
 /// depend on `match_operations`, whose RLS predicate needs the `rls` module
 /// that not every build of this file provides; `match_operations.HopScope`
-/// supplies it through `pathStepFilter()`.
+/// supplies it through `pathStepFilter()`. The context is mutable: the scope
+/// caches each node's verdict for the traversal.
 pub const PathStepFilter = struct {
-    ctx: *const anyopaque,
-    allowFn: *const fn (ctx: *const anyopaque, store: *graph_store.GraphStore, edge: *const graph_store.Edge, next_node_id: u64) bool,
+    ctx: *anyopaque,
+    allowFn: *const fn (ctx: *anyopaque, store: *graph_store.GraphStore, edge: *const graph_store.Edge, next_node_id: u64) bool,
+
+    /// Admits every step. Only for a caller with no session to apply (unit
+    /// tests and benchmarks); every query traversal passes its HopScope.
+    pub const unrestricted: PathStepFilter = .{ .ctx = &unrestricted_ctx, .allowFn = allowEveryStep };
+    var unrestricted_ctx: u8 = 0;
+
+    fn allowEveryStep(_: *anyopaque, _: *graph_store.GraphStore, _: *const graph_store.Edge, _: u64) bool {
+        return true;
+    }
 
     pub fn allows(self: PathStepFilter, store: *graph_store.GraphStore, edge: *const graph_store.Edge, next_node_id: u64) bool {
         return self.allowFn(self.ctx, store, edge, next_node_id);
@@ -2726,9 +2736,10 @@ pub const PathIterator = struct {
     // BFS walks, and every node it steps onto, must pass it, so a path never
     // contains, ends at or runs through a node the session may not see. A step
     // is refused BEFORE it is expanded, so a denied node also never claims a
-    // `visited_states` slot another route to the same node would need. Null
-    // only for a caller with no session to apply (unit tests, benchmarks).
-    scope: ?PathStepFilter,
+    // `visited_states` slot another route to the same node would need.
+    // Required: a caller with no session to apply (a unit test, a benchmark)
+    // passes `PathStepFilter.unrestricted` explicitly.
+    scope: PathStepFilter,
 
     const max_iterations: u64 = 10_000;
     const max_queue_size: usize = 5000;
@@ -2742,7 +2753,7 @@ pub const PathIterator = struct {
         rel_type: ?[]const u8,
         rel_direction: u8,
         path_mode: ast.PathMode,
-        scope: ?PathStepFilter,
+        scope: PathStepFilter,
     ) !PathIterator {
         var queue = try std.ArrayList(QueueItem).initCapacity(allocator, 16);
         errdefer {
@@ -2779,8 +2790,7 @@ pub const PathIterator = struct {
 
     /// SONNY-2679: may the BFS take `edge` onto `next_node_id`?
     fn stepVisible(self: *const PathIterator, edge: *const graph_store.Edge, next_node_id: u64) bool {
-        const scope = self.scope orelse return true;
-        return scope.allows(self.store, edge, next_node_id);
+        return self.scope.allows(self.store, edge, next_node_id);
     }
 
     pub fn deinit(self: *PathIterator) void {
@@ -4249,7 +4259,7 @@ test "GAP-0525: PathIterator streaming with early termination" {
         "NEXT",
         'r',
         .acyclic,
-        null, // no session scope in this unit test
+        PathStepFilter.unrestricted, // no session scope in this unit test
     );
     defer iter.deinit();
 

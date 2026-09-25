@@ -299,20 +299,36 @@ pub fn passesEdgeRLSFilter(reusable_row: *std.StringHashMap(rls.Value), edge: *c
 ///
 /// `rls_row` is the caller's reusable RLS scratch row; checks never nest, so
 /// sharing it with the caller's own start-node checks is safe.
+///
+/// A node a variable-length walk steps onto is read through a transient copy
+/// (`GraphStore.decideOnTransientNode`) that is freed at once, and its verdict
+/// is cached for the traversal, so each node is evaluated once and the walk
+/// retains no node copies (it used `getNodePtrForScan`, which keeps a copy per
+/// call until the next checkpoint). The cached verdicts are a statement-level
+/// snapshot: a node a SET changes later in the same statement keeps the
+/// verdict it had when the walk first reached it.
 pub const HopScope = struct {
+    allocator: std.mem.Allocator,
     filter_graph: []const u8,
     filter_tenant: ?[]const u8,
     rls_row: *std.StringHashMap(rls.Value),
     /// `rlsMayDenyForSession()`, decided once when the scope is made.
     rls_may_deny: bool,
+    /// Node id -> visible, for the nodes this traversal has decided.
+    verdicts: std.AutoHashMapUnmanaged(u64, bool) = .empty,
 
-    pub fn init(filter_graph: []const u8, filter_tenant: ?[]const u8, rls_row: *std.StringHashMap(rls.Value)) HopScope {
+    pub fn init(allocator: std.mem.Allocator, filter_graph: []const u8, filter_tenant: ?[]const u8, rls_row: *std.StringHashMap(rls.Value)) HopScope {
         return .{
+            .allocator = allocator,
             .filter_graph = filter_graph,
             .filter_tenant = filter_tenant,
             .rls_row = rls_row,
             .rls_may_deny = rlsMayDenyForSession(),
         };
+    }
+
+    pub fn deinit(self: *HopScope) void {
+        self.verdicts.deinit(self.allocator);
     }
 
     /// Does the scope hide any node beyond other graphs' (a tenant scope, or an
@@ -353,23 +369,45 @@ pub const HopScope = struct {
         return passesEdgeRLSFilter(self.rls_row, edge);
     }
 
+    /// `nodeVisible` for a node in hand, deciding each node once per
+    /// traversal. For the end node of a variable-length path, whose every
+    /// step `stepAllowed` has already decided.
+    pub fn nodeVisibleCached(self: *HopScope, node: *const graph_store.Node) bool {
+        if (self.verdicts.get(node.id)) |visible| return visible;
+        const visible = self.nodeVisible(node);
+        // The cache only saves work: a failed insert re-decides next time.
+        self.verdicts.put(self.allocator, node.id, visible) catch {};
+        return visible;
+    }
+
     /// `PathIterator`'s gate: may a path be extended by `edge` onto the node
-    /// `next_node_id`? A node that resolves nowhere is not visible.
-    pub fn stepAllowed(self: *const HopScope, store: *graph_store.GraphStore, edge: *const graph_store.Edge, next_node_id: u64) bool {
+    /// `next_node_id`? A node that resolves nowhere is not visible. The node
+    /// is read through a transient copy and its verdict cached; nothing is
+    /// retained in the store.
+    pub fn stepAllowed(self: *HopScope, store: *graph_store.GraphStore, edge: *const graph_store.Edge, next_node_id: u64) bool {
         if (!self.edgeVisible(edge)) return false;
         if (!self.restrictsNodes()) return true;
-        const node = store.getNodePtrForScan(next_node_id) orelse return false;
+        if (self.verdicts.get(next_node_id)) |visible| return visible;
+        const visible = store.decideOnTransientNode(next_node_id, self, decideTransientNode) orelse false;
+        self.verdicts.put(self.allocator, next_node_id, visible) catch {};
+        return visible;
+    }
+
+    fn decideTransientNode(self: *HopScope, node: *const graph_store.Node) bool {
+        // The RLS row borrows the transient node's properties: empty it
+        // before the node is freed.
+        defer self.rls_row.clearRetainingCapacity();
         return self.nodeVisible(node);
     }
 
     /// This scope as `PathIterator`'s step gate. The scope must outlive the
     /// iterator (both are locals of the traversing function).
-    pub fn pathStepFilter(self: *const HopScope) execution.PathStepFilter {
+    pub fn pathStepFilter(self: *HopScope) execution.PathStepFilter {
         return .{ .ctx = self, .allowFn = stepAllowedErased };
     }
 
-    fn stepAllowedErased(ctx: *const anyopaque, store: *graph_store.GraphStore, edge: *const graph_store.Edge, next_node_id: u64) bool {
-        const self: *const HopScope = @ptrCast(@alignCast(ctx));
+    fn stepAllowedErased(ctx: *anyopaque, store: *graph_store.GraphStore, edge: *const graph_store.Edge, next_node_id: u64) bool {
+        const self: *HopScope = @ptrCast(@alignCast(ctx));
         return self.stepAllowed(store, edge, next_node_id);
     }
 };
@@ -526,14 +564,18 @@ pub fn activeRlsPoliciesConfigured() bool {
 // CANARY: REQ=REQ-PERF-RLS-DISPATCH-001; FEATURE="RLSAwareDispatch"; ASPECT=PointReadReclassify; STATUS=TESTED; TEST=tests/test_rls_expr_engine_wiring.zig; OWNER=performance; UPDATED=2026-05-29
 // CANARY: REQ=REQ-QUIC-HC-158; FEATURE="QUIC High-Concurrency Reads"; ASPECT=EmptyRlsEngineFastPath; STATUS=TESTED; TEST=tests/test_rls_expr_engine_wiring.zig; OWNER=performance; UPDATED=2026-05-29
 /// Returns true if an RLS engine has installed policies AND the active
-/// session has an authenticated user. The server initializes empty RLS
+/// session has an identity RLS is evaluated under (a forwarded principal's
+/// username or the connection user). The server initializes empty RLS
 /// engines at startup so policy procedures can populate them later; empty
 /// engines are default-allow and must not force hot authenticated reads onto
 /// the snapshot path.
+///
+/// SONNY-2679: the same decision `passesRLSFilter` makes. This tested
+/// `ctx.user` alone, so a session carrying only a principal username would
+/// have been sent to the RLS-blind fast paths and planned read while the
+/// legacy executor would have filtered it.
 pub fn wouldEvaluateRLS() bool {
-    const ctx = execution.getActiveContext() orelse return false;
-    if (ctx.user == null) return false;
-    return activeRlsPoliciesConfigured();
+    return rlsMayDenyForSession();
 }
 
 /// Resolve a LIMIT or OFFSET value from either a literal or a $param reference.
@@ -725,16 +767,13 @@ fn analyzeCountFastPath(q: ast.Query) ?CountFastPathPlan {
 }
 
 fn countFastPathRlsAllowed() bool {
-    // RLS check: if an RLS engine has policies AND a user is authenticated,
-    // per-row policies could change the answer. Bail to the regular path so
-    // `passesRLSFilter` runs for every node. Empty engines are registered at
-    // server startup and preserve the default-allow contract.
-    if (execution.getActiveContext()) |ctx| {
-        if (ctx.user != null) {
-            if (activeRlsPoliciesConfigured()) return false;
-        }
-    }
-    return true;
+    // RLS check: if an RLS engine has policies AND the session has an
+    // identity RLS is evaluated under, per-row policies could change the
+    // answer. Bail to the regular path so `passesRLSFilter` runs for every
+    // node. Empty engines are registered at server startup and preserve the
+    // default-allow contract. SONNY-2679: the same predicate as
+    // `passesRLSFilter` (a forwarded principal counts, not only `ctx.user`).
+    return !rlsMayDenyForSession();
 }
 
 fn buildCountFastPathResult(allocator: std.mem.Allocator, column_name_src: []const u8, n: usize) !ExecutionResult {
@@ -5146,7 +5185,7 @@ const VarLenTarget = struct {
 fn expandVarLengthHop(
     allocator: std.mem.Allocator,
     store: *graph_store.GraphStore,
-    scope: *const HopScope,
+    scope: *HopScope,
     start_node: *graph_store.Node,
     hop: ast.Hop,
     prop_env: Env,
@@ -5174,7 +5213,7 @@ fn expandVarLengthHop(
         const end_node = store.getNodePtrForScan(end_id) orelse continue;
         // Graph scoping + tenant + RLS on the endpoint, same as every other
         // seeding site in this executor.
-        if (!scope.nodeVisible(end_node)) continue;
+        if (!scope.nodeVisibleCached(end_node)) continue;
         if (!matchesLabels(end_node, hop.right.labels)) continue;
         if (!nodeMatchesProps(allocator, end_node, hop.right.props, prop_env)) continue;
 
@@ -5223,7 +5262,8 @@ fn executeMultiChainRelationshipMatch(allocator: std.mem.Allocator, q: ast.Query
     const filter_tenant = try getSessionTenantFilter();
     // SONNY-2679: the scope every hop applies to the edge it walks (its graph,
     // tenant and RLS), and a quantified hop's walk to every step.
-    const hop_scope = HopScope.init(filter_graph, filter_tenant, &rls_row_local);
+    var hop_scope = HopScope.init(allocator, filter_graph, filter_tenant, &rls_row_local);
+    defer hop_scope.deinit();
 
     // CANARY: REQ=REQ-BUG731-MATCH-SCOPING; FEATURE="MultiChainRelationshipMatch"; ASPECT=InlineNodeProps; STATUS=TESTED; TEST=tests/test_bug731_match_scoping.zig:201; OWNER=execution; UPDATED=2026-07-31
     // Env used to evaluate inline node-property predicates (`{k: <expr>}`).
@@ -6181,7 +6221,8 @@ fn executeMatchWithOptionalPatterns(allocator: std.mem.Allocator, q: ast.Query, 
     // SONNY-2679: every edge a chain walks, and every node it reaches, passes
     // the session's graph, tenant and RLS scope (the OPTIONAL hop and a
     // required chain after it used to check neither).
-    const hop_scope = HopScope.init(filter_graph, filter_tenant, &rls_row_local);
+    var hop_scope = HopScope.init(allocator, filter_graph, filter_tenant, &rls_row_local);
+    defer hop_scope.deinit();
 
     // CANARY: REQ=REQ-GQL-OPTIONAL-MATCH-HOP-002; FEATURE="OptionalMatchWithHops"; ASPECT=FirstChainExecution; STATUS=TESTED; TEST=geodetestlab/specs/gql_pattern_matching_comprehensive.yml; OWNER=execution; UPDATED=2026-01-29
     // Step 1: Execute required chain (first chain) to get base bindings
@@ -7841,7 +7882,7 @@ const RelEnvLayout = struct {
 fn executeVariableLengthPathTraversal(
     allocator: std.mem.Allocator,
     store: *graph_store.GraphStore,
-    scope: *const HopScope,
+    scope: *HopScope,
     left_node: *graph_store.Node,
     rows: *std.ArrayList([]Value),
     var_len_min: ?u32,
@@ -7889,7 +7930,7 @@ fn executeVariableLengthPathTraversal(
         const right_node_ptr = store.getNodePtrForScan(right_node_id) orelse continue;
         // SONNY-2679: the end node passes the session's graph, tenant and RLS
         // scope (every earlier step already did, in the PathIterator).
-        if (!scope.nodeVisible(right_node_ptr)) continue;
+        if (!scope.nodeVisibleCached(right_node_ptr)) continue;
 
         // CANARY: REQ=REQ-GAP-0912-VARLEN-ENDPOINT-UNIFY; FEATURE="VariableLengthPaths"; ASPECT=EndpointUnification; STATUS=TESTED; TEST=tests/test_gap0912_0913_varlen_semantics.zig; OWNER=execution; UPDATED=2026-07-10
         // GAP-0912: reusing one variable at both pattern endpoints constrains
@@ -8424,348 +8465,6 @@ fn executeSingleHopEdgeTraversal(
     }
 }
 
-/// Execute multi-hop pattern matching with GROUP BY aggregation.
-/// Handles patterns like (a)-[:R1]->(b)-[:R2]->(c) with GROUP BY.
-/// Returns null if the chain has only a single hop (falls through to single-hop handler).
-fn executeMultiHopGroupBy(
-    allocator: std.mem.Allocator,
-    store: *graph_store.GraphStore,
-    chain: ast.Chain,
-    group_by: ast.GroupBy,
-    items: []const ast.ReturnItem,
-    columns: [][]const u8,
-    param_names: []const []const u8,
-    param_values: []const Value,
-    filter_graph: []const u8,
-    filter_tenant: ?[]const u8,
-    where_clause: ?ast.Expr,
-    order_by: ?ast.OrderBy,
-    distinct: bool,
-) !?ExecutionResult {
-    if (chain.hops.len <= 1) return null;
-
-    // Per-function reusable RLS row buffer. Shared across every
-    // passesRLSFilter call site in this function; nodePropertiesToRLSRowInto
-    // (Tasks 1-2 of the H5a fix) clears + refills the buffer per call so
-    // the per-node init/deinit pair is amortized away.
-    var rls_row_local = std.StringHashMap(rls.Value).init(allocator);
-    defer rls_row_local.deinit();
-    // SONNY-2679: every hop's edge and target pass the session's scope.
-    const hop_scope = HopScope.init(filter_graph, filter_tenant, &rls_row_local);
-
-    // Arena allocator for all intermediate binding arrays (env_names, env_values,
-    // group keys, copy arrays). These are bulk-freed when the arena is torn down
-    // at function exit, eliminating O(B^H) individual alloc/free calls.
-    var arena_state = std.heap.ArenaAllocator.init(allocator);
-    defer arena_state.deinit();
-    const arena = arena_state.allocator();
-
-    // Multi-hop pattern with GROUP BY handling
-    // env_names points to a shared name schema per hop depth (all bindings at
-    // the same depth share the same names array).  Only env_values is unique
-    // per binding.
-    const MultiHopBinding = struct {
-        env_names: []const []const u8, // shared schema – one alloc per hop depth
-        env_values: []Value,
-    };
-
-    var binding_groups_mh = std.StringHashMap(std.ArrayList(MultiHopBinding)).init(arena);
-    // #552: Pre-size multi-hop GROUP BY map
-    try binding_groups_mh.ensureTotalCapacity(16);
-    // GAP-0220 FIX: Use try for proper error propagation
-    var group_keys_list_mh = try std.ArrayList([]const u8).initCapacity(arena, 16);
-    defer {
-        var giter_mh = binding_groups_mh.iterator();
-        while (giter_mh.next()) |entry| {
-            entry.value_ptr.deinit(arena);
-        }
-        binding_groups_mh.deinit();
-        group_keys_list_mh.deinit(arena);
-    }
-
-    // Initialize with first hop's left nodes
-    // GAP-0220 FIX: Use try for proper error propagation
-    var current_bindings_mh = try std.ArrayList(MultiHopBinding).initCapacity(arena, 0);
-    defer {
-        current_bindings_mh.deinit(arena);
-    }
-
-    // CANARY: REQ=REQ-AUTO-INDEX-SCAN-003; FEATURE="AutoIdIndex"; ASPECT=MultiHopGroupByLabelIndex; STATUS=TESTED; TEST=geodetestlab/specs/geode_graph_algorithms.yml; OWNER=engine; UPDATED=2026-06-11
-    const first_hop = chain.hops[0];
-
-    // Build the shared name schema for hop depth 0 (just the left node variable).
-    var current_schema: []const []const u8 = blk: {
-        var s = try arena.alloc([]const u8, 1);
-        s[0] = first_hop.left.name orelse "_anon_left_0";
-        break :blk s;
-    };
-
-    // Collect candidate left nodes - use label_index when labels are present
-    const NodeCollector = struct {
-        fn addBinding(arena_alloc: std.mem.Allocator, eval_alloc: std.mem.Allocator, node: *graph_store.Node, hop_left: ast.NodePattern, p_names: []const []const u8, p_values: []const Value, bindings_list: *std.ArrayList(MultiHopBinding), schema: []const []const u8) !void {
-            // Filter by left node properties
-            if (hop_left.props) |props| {
-                for (props) |prop| {
-                    if (node.properties.get(prop.key)) |node_prop_val| {
-                        const node_val = propertyValueToValue(node_prop_val);
-                        const prop_env = eval.Env{
-                            .names = &.{},
-                            .values = &.{},
-                            .param_names = p_names,
-                            .param_values = p_values,
-                            .allocator = eval_alloc,
-                        };
-                        const prop_val = eval.evalExpr(eval_alloc, prop.value.*, prop_env) catch return;
-                        if (!valuesEqual(node_val, prop_val)) return;
-                    } else return;
-                }
-            }
-
-            // Only allocate env_values per binding; env_names is the shared schema.
-            var init_env_values_mh = try arena_alloc.alloc(Value, 1);
-            init_env_values_mh[0] = Value{ .Node = node };
-            try bindings_list.append(arena_alloc, MultiHopBinding{
-                .env_names = schema,
-                .env_values = init_env_values_mh,
-            });
-        }
-    };
-
-    if (first_hop.left.labels.len > 0) {
-        var label_node_ids = try store.getNodesByLabels(allocator, filter_graph, first_hop.left.labels, storageTenantFilter(filter_tenant));
-        defer label_node_ids.deinit(allocator);
-
-        for (label_node_ids.items) |node_id| {
-            const node = store.getNodePtrForScan(node_id) orelse continue;
-            // GAP-0846 follow-up: per-row hierarchy-aware tenant compensator for the
-            // relaxed storageTenantFilter() label scan; also restores the RLS
-            // denied-labels check missing on this multi-hop init fast path.
-            if (!passesTenantFilter(node.*, filter_tenant)) continue;
-            if (!passesRLSFilter(&rls_row_local, node.*)) continue;
-            try NodeCollector.addBinding(arena, allocator, node, first_hop.left, param_names, param_values, &current_bindings_mh, current_schema);
-        }
-    } else {
-        // PERF-B (issue #811): graph-scoped multi-hop initial bindings.
-        var init_iter_mh = store.iterateNodesInGraph(filter_graph);
-        while (init_iter_mh.next()) |node| {
-            if (!passesTenantFilter(node.*, filter_tenant)) continue;
-            if (!passesRLSFilter(&rls_row_local, node.*)) continue;
-            try NodeCollector.addBinding(arena, allocator, node, first_hop.left, param_names, param_values, &current_bindings_mh, current_schema);
-        }
-    }
-
-    // Process each hop
-    for (chain.hops, 0..) |hop, hop_idx| {
-        // Build the shared name schema for this hop depth ONCE (not per binding).
-        {
-            var new_var_count: usize = 1; // right node always
-            if (hop.rel.name != null) new_var_count += 1;
-            var new_schema = try arena.alloc([]const u8, current_schema.len + new_var_count);
-            @memcpy(new_schema[0..current_schema.len], current_schema);
-            var schema_idx = current_schema.len;
-            if (hop.rel.name) |rel_name| {
-                new_schema[schema_idx] = rel_name;
-                schema_idx += 1;
-            }
-            new_schema[schema_idx] = hop.right.name orelse "_anon_right";
-            current_schema = new_schema;
-        }
-
-        // GAP-0220 FIX: Use try for proper error propagation
-        var next_bindings_mh = try std.ArrayList(MultiHopBinding).initCapacity(arena, 0);
-
-        for (current_bindings_mh.items) |binding| {
-            // GAP-0521: O(1) positional node lookup replaces O(schema_len) string scan.
-            // Schema layout: [left_node, rel0?, right0, rel1?, right1, ...].
-            // For hop 0 the current node is left at index 0; for hop N>0 the
-            // current node is right of hop N-1 at the last position of the
-            // binding's env_values (which was built from the previous schema).
-            const current_node_idx: usize = if (hop_idx == 0) 0 else binding.env_values.len - 1;
-            const current_node: ?*const graph_store.Node = if (binding.env_values[current_node_idx] == .Node)
-                binding.env_values[current_node_idx].Node
-            else
-                null;
-
-            if (current_node == null) continue;
-            const curr_node = current_node.?;
-
-            const hop_direction: u8 = switch (hop.rel.dir) {
-                .right => 'r',
-                .left => 'l',
-                .undirected => 'u',
-            };
-
-            const edge_ids = if (hop_direction == 'l')
-                (store.getIncomingEdgeIds(curr_node.id) orelse &[_]u64{})
-            else
-                (store.getOutgoingEdgeIds(curr_node.id) orelse &[_]u64{});
-
-            for (edge_ids) |edge_id| {
-                const edge = store.getEdgePtrHydrated(edge_id) orelse continue;
-                if (hop.rel.types.len > 0) {
-                    var matches_type = false;
-                    for (hop.rel.types) |rel_type_pattern| {
-                        if (std.mem.eql(u8, edge.label, rel_type_pattern)) {
-                            matches_type = true;
-                            break;
-                        }
-                    }
-                    if (!matches_type) continue;
-                }
-                // GAP-0509 / SONNY-2679: the edge's graph and tenant.
-                if (!hop_scope.edgeVisible(edge)) continue;
-
-                const right_node_id = if (hop_direction == 'l') edge.from_id else edge.to_id;
-                const right_node_ptr = store.getNodePtrForScan(right_node_id) orelse continue;
-                // SONNY-2679: the hop target's graph, tenant and RLS (none were
-                // checked, so a denied or foreign node joined a group).
-                if (!hop_scope.nodeVisible(right_node_ptr)) continue;
-
-                // Filter right node by labels
-                if (hop.right.labels.len > 0) {
-                    var has_all_labels = true;
-                    for (hop.right.labels) |required_label| {
-                        var found = false;
-                        for (right_node_ptr.labels) |node_label| {
-                            if (std.mem.eql(u8, required_label, node_label)) {
-                                found = true;
-                                break;
-                            }
-                        }
-                        if (!found) {
-                            has_all_labels = false;
-                            break;
-                        }
-                    }
-                    if (!has_all_labels) continue;
-                }
-
-                // CANARY: REQ=REQ-GQL-MULTIHOP-ANON-002; FEATURE="MultiHopAnonymous"; ASPECT=GroupByPatterns; STATUS=TESTED; TEST=geodetestlab/specs/gql_pattern_matching_comprehensive.yml; OWNER=engine; UPDATED=2025-12-23
-                // Only allocate env_values per binding; env_names uses shared current_schema.
-                var new_env_values_mh = try arena.alloc(Value, current_schema.len);
-                @memcpy(new_env_values_mh[0..binding.env_values.len], binding.env_values);
-
-                var new_idx: usize = binding.env_values.len;
-                if (hop.rel.name != null) {
-                    const edge_ptr = store.getEdgePtrHydrated(edge.id);
-                    new_env_values_mh[new_idx] = if (edge_ptr) |ep| Value{ .Edge = ep } else Value{ .Null = {} };
-                    new_idx += 1;
-                }
-                // Always add right node (even anonymous) with synthetic name "_anon_right" for traversal
-                new_env_values_mh[new_idx] = Value{ .Node = right_node_ptr };
-
-                try next_bindings_mh.append(arena, MultiHopBinding{
-                    .env_names = current_schema,
-                    .env_values = new_env_values_mh,
-                });
-            }
-        }
-
-        // Arena free is a no-op; old binding arrays are bulk-freed at function exit.
-        current_bindings_mh.deinit(arena);
-        current_bindings_mh = next_bindings_mh;
-    }
-
-    // Apply WHERE filter and group bindings by GROUP BY key
-    for (current_bindings_mh.items) |binding| {
-        const env = Env{
-            .names = binding.env_names,
-            .values = binding.env_values,
-            .param_names = param_names,
-            .param_values = param_values,
-            .allocator = allocator,
-        };
-
-        // Evaluate WHERE clause
-        if (where_clause) |where_expr| {
-            const where_result = eval.evalExpr(allocator, where_expr, env) catch continue;
-            const passes_where = switch (where_result) {
-                .Bool => |b| b,
-                .Null => false,
-                .Int => |i| i != 0,
-                else => false,
-            };
-            if (!passes_where) continue;
-        }
-
-        // Compute group key from GROUP BY expressions
-        var key_aw: std.Io.Writer.Allocating = try std.Io.Writer.Allocating.initCapacity(arena, 64);
-        errdefer key_aw.deinit();
-        const writer = &key_aw.writer;
-
-        for (group_by.keys, 0..) |key_expr, key_idx| {
-            if (key_idx > 0) try writer.writeAll("|");
-            const key_val = eval.evalExpr(allocator, key_expr, env) catch Value{ .Null = {} };
-            switch (key_val) {
-                .Null => try writer.writeAll("<null>"),
-                .Int => |n| try writer.print("{}", .{n}),
-                .Str => |s| try writer.writeAll(s),
-                .Bool => |b| try writer.print("{}", .{b}),
-                else => try writer.writeAll("<val>"),
-            }
-        }
-
-        var key_buf = key_aw.toArrayList();
-        const group_key = try key_buf.toOwnedSlice(arena);
-
-        // No copy needed: env_names is a shared schema pointer and env_values
-        // is arena-allocated and stable until function exit.
-        if (binding_groups_mh.getPtr(group_key)) |grp| {
-            try grp.append(arena, binding);
-        } else {
-            try group_keys_list_mh.append(arena, group_key);
-            // GAP-0220 FIX: Use try for proper error propagation
-            var new_group = try std.ArrayList(MultiHopBinding).initCapacity(arena, 0);
-            try new_group.append(arena, binding);
-            try binding_groups_mh.put(group_key, new_group);
-        }
-    }
-
-    // Generate result rows from groups
-    // GAP-0220 FIX: Use try for proper error propagation
-    var rows_mh = std.ArrayList([]Value).empty;
-    var group_iter_mh = binding_groups_mh.iterator();
-    while (group_iter_mh.next()) |group_entry| {
-        const group_bindings = group_entry.value_ptr.*;
-
-        var row = try allocator.alloc(Value, items.len);
-        for (items, 0..) |item, i| {
-            if (isAggregationExpr(item.expr)) {
-                row[i] = computeBindingGroupAggregation(allocator, item.expr, group_bindings.items) catch Value{ .Null = {} };
-            } else {
-                if (group_bindings.items.len > 0) {
-                    const first_binding = group_bindings.items[0];
-                    const first_env = Env{
-                        .names = first_binding.env_names,
-                        .values = first_binding.env_values,
-                        .allocator = allocator,
-                    };
-                    row[i] = eval.evalExpr(allocator, item.expr, first_env) catch Value{ .Null = {} };
-                } else {
-                    row[i] = Value{ .Null = {} };
-                }
-            }
-        }
-        try rows_mh.append(allocator, row);
-    }
-
-    var result = ExecutionResult{
-        .columns = columns,
-        .rows = try rows_mh.toOwnedSlice(allocator),
-        .flags = std.ArrayList([]const u8).empty,
-    };
-
-    if (order_by) |order| {
-        try sortRows(allocator, &result, order);
-    }
-
-    if (distinct) {
-        try applyDistinct(allocator, &result);
-    }
-
-    return result;
-}
-
 /// SONNY-2674: whether a plain read's RETURN goes through the shared projection
 /// (`executeWithClauseWithGroupByAndParams`), the one the planned read and
 /// every WITH stage use: a RETURN-level GROUP BY (a GROUP BY after a WITH
@@ -8905,7 +8604,8 @@ pub fn executeMatchQueryImpl(allocator: std.mem.Allocator, q: ast.Query, param_n
     // SONNY-2679: the graph, tenant and RLS scope every traversal below applies
     // to each edge it walks and each node it reaches, not only to the start
     // node it scans.
-    const hop_scope = HopScope.init(filter_graph, filter_tenant, &rls_row_local);
+    var hop_scope = HopScope.init(allocator, filter_graph, filter_tenant, &rls_row_local);
+    defer hop_scope.deinit();
 
     // GAP (write-path OOM, 2026-07-04): route the covered single-node indexed-
     // equality point-write shapes ENGINE-DIRECT (exact-index seek + durable
@@ -8969,6 +8669,24 @@ pub fn executeMatchQueryImpl(allocator: std.mem.Allocator, q: ast.Query, param_n
         .continue_processing => {},
     }
 
+    // CANARY: REQ=REQ-GQL-MULTIHOP-GROUPBY-001; FEATURE="MultiHopGroupBy"; ASPECT=Execution; STATUS=TESTED; TEST=geodetestlab/specs/gql_pattern_matching_comprehensive.yml; OWNER=engine; UPDATED=2025-12-23
+    // CANARY: REQ=REQ-GQL-MULTIHOP-001; FEATURE="MultiHopPatterns"; ASPECT=Execution; STATUS=TESTED; TEST=geodetestlab/specs/gql_pattern_matching_comprehensive.yml; OWNER=engine; UPDATED=2025-12-23
+    // CANARY: REQ=REQ-AUTO-INDEX-SCAN-004; FEATURE="AutoIdIndex"; ASPECT=MultiHopLabelIndex; STATUS=TESTED; TEST=geodetestlab/specs/gql_undirected_multi_hop.yml; OWNER=engine; UPDATED=2026-06-11
+    // CANARY: REQ=REQ-GQL-MULTIHOP-ANON-001; FEATURE="MultiHopAnonymousNodes"; ASPECT=BindingCreation; STATUS=TESTED; TEST=geodetestlab/specs/gql_pattern_matching_comprehensive.yml; OWNER=engine; UPDATED=2025-12-23
+    // CANARY: REQ=REQ-AUTO-INDEX-SCAN-003; FEATURE="AutoIdIndex"; ASPECT=MultiHopGroupByLabelIndex; STATUS=TESTED; TEST=geodetestlab/specs/geode_graph_algorithms.yml; OWNER=engine; UPDATED=2026-06-11
+    // CANARY: REQ=REQ-GQL-MULTIHOP-ANON-002; FEATURE="MultiHopAnonymous"; ASPECT=GroupByPatterns; STATUS=TESTED; TEST=geodetestlab/specs/gql_pattern_matching_comprehensive.yml; OWNER=engine; UPDATED=2025-12-23
+    // Multi-hop patterns (including GROUP BY over them, anonymous intermediate
+    // nodes and a label-indexed first hop) are served by
+    // executeMultiChainRelationshipMatch: dispatchToMultiChainHandler
+    // (pattern_helpers.zig) sends it every single-chain pattern with more than
+    // one hop and every multi-chain pattern, and it gates every hop (SONNY-2679).
+    // What follows reads one hop at most. SONNY-2679 deleted the two multi-hop
+    // copies that sat below (executeMultiHopGroupBy and a non-aggregate block):
+    // they were unreachable, and neither checked the nodes it reached. Fail
+    // closed if the dispatch ever changes, rather than read one hop of a
+    // longer pattern.
+    if (q.match.chains.len > 0 and q.match.chains[0].hops.len > 1) return error.MultiHopPatternNotDispatched;
+
     // COUNT_PUSHDOWN: short-circuit unlabeled `MATCH (n) RETURN count(n)` /
     // `count(*)` to `store.countNodesForGraph` before entering the
     // iterator-heavy aggregation path below. See `countNodesFastPath` for
@@ -9027,13 +8745,6 @@ pub fn executeMatchQueryImpl(allocator: std.mem.Allocator, q: ast.Query, param_n
             // CANARY: REQ=REQ-GQL-GROUPBY-REL-001; FEATURE="GroupByRelationshipPattern"; ASPECT=Execution; STATUS=TESTED; TEST=geodetestlab/specs/gql_query_comprehensive.yml; OWNER=execution; UPDATED=2025-12-23
             // GROUP BY with relationship patterns - need to collect bindings first, then group them
             if (has_relationship) {
-                // CANARY: REQ=REQ-GQL-MULTIHOP-GROUPBY-001; FEATURE="MultiHopGroupBy"; ASPECT=Execution; STATUS=TESTED; TEST=geodetestlab/specs/gql_pattern_matching_comprehensive.yml; OWNER=engine; UPDATED=2025-12-23
-                // Check for multi-hop patterns with GROUP BY (e.g., products ordered together)
-                const chain = q.match.chains[0];
-                if (try executeMultiHopGroupBy(allocator, store, chain, group_by, items, columns, param_names, param_values, filter_graph, filter_tenant, q.where_clause, q.order_by, q.ret.distinct)) |result| {
-                    return result;
-                }
-
                 // Single-hop GROUP BY with relationship pattern (existing code below)
                 // Collect all matching relationship bindings and group them
                 const BindingRow = struct {
@@ -10087,7 +9798,7 @@ pub fn executeMatchQueryImpl(allocator: std.mem.Allocator, q: ast.Query, param_n
                         // (nothing on this path was checked, so `count(h)`
                         // counted, and `collect(h)` returned, every node
                         // reachable through a denied one).
-                        if (!hop_scope.nodeVisible(target_node_ptr)) continue;
+                        if (!hop_scope.nodeVisibleCached(target_node_ptr)) continue;
 
                         // Filter by right node labels (e.g., :Category in MATCH (a)-[*]->(b:Category {name: 'X'}))
                         if (right_labels.len > 0) {
@@ -10600,500 +10311,6 @@ pub fn executeMatchQueryImpl(allocator: std.mem.Allocator, q: ast.Query, param_n
         var rows = std.ArrayList([]Value).empty;
 
         if (has_relationship) {
-            // CANARY: REQ=REQ-GQL-MULTIHOP-001; FEATURE="MultiHopPatterns"; ASPECT=Execution; STATUS=TESTED; TEST=geodetestlab/specs/gql_pattern_matching_comprehensive.yml; OWNER=engine; UPDATED=2025-12-23
-            // Check for multi-hop patterns (e.g., (a)-[:R1]->(b)-[:R2]->(c))
-            const chain = q.match.chains[0];
-            if (chain.hops.len > 1) {
-                // Multi-hop pattern handling
-                // Build bindings by recursively expanding each hop
-                const MultiHopBinding = struct {
-                    env_names: [][]const u8,
-                    env_values: []Value,
-                };
-
-                // GAP-0220 FIX: Use try for proper error propagation
-                var current_bindings = std.ArrayList(MultiHopBinding).empty;
-                defer {
-                    for (current_bindings.items) |binding| {
-                        allocator.free(binding.env_names);
-                        allocator.free(binding.env_values);
-                    }
-                    current_bindings.deinit(allocator);
-                }
-
-                // CANARY: REQ=REQ-AUTO-INDEX-SCAN-004; FEATURE="AutoIdIndex"; ASPECT=MultiHopLabelIndex; STATUS=TESTED; TEST=geodetestlab/specs/gql_undirected_multi_hop.yml; OWNER=engine; UPDATED=2026-06-11
-                // Initialize with first hop's left nodes - use label_index when labels present
-                const first_hop = chain.hops[0];
-
-                const NodeCollector2 = struct {
-                    fn addBinding(alloc: std.mem.Allocator, node: *graph_store.Node, hop_left: ast.NodePattern, p_names: []const []const u8, p_values: []const Value, bindings_list: *std.ArrayList(MultiHopBinding)) !void {
-                        if (hop_left.props) |props| {
-                            for (props) |prop| {
-                                if (node.properties.get(prop.key)) |node_prop_val| {
-                                    const node_val = propertyValueToValue(node_prop_val);
-                                    const prop_env = eval.Env{
-                                        .names = &.{},
-                                        .values = &.{},
-                                        .param_names = p_names,
-                                        .param_values = p_values,
-                                        .allocator = alloc,
-                                    };
-                                    const prop_val = eval.evalExpr(alloc, prop.value.*, prop_env) catch return;
-                                    if (!valuesEqual(node_val, prop_val)) return;
-                                } else return;
-                            }
-                        }
-
-                        var init_env_names = try alloc.alloc([]const u8, 1);
-                        var init_env_values = try alloc.alloc(Value, 1);
-                        if (hop_left.name) |var_name| {
-                            init_env_names[0] = var_name;
-                            init_env_values[0] = Value{ .Node = node };
-                        } else {
-                            init_env_names[0] = "_anon_left_0";
-                            init_env_values[0] = Value{ .Node = node };
-                        }
-                        try bindings_list.append(alloc, MultiHopBinding{
-                            .env_names = init_env_names,
-                            .env_values = init_env_values,
-                        });
-                    }
-                };
-
-                // LIMIT pushdown for no-label full scan (only when no ORDER BY)
-                const mh_scan_limit: ?usize = if (q.order_by == null)
-                    resolveLimitParam(q.limit, q.limit_param, param_names, param_values)
-                else
-                    null;
-                const mh_scan_offset = if (q.order_by == null)
-                    resolveLimitParam(q.offset, q.offset_param, param_names, param_values)
-                else
-                    null;
-                const mh_scan_cap: ?usize = if (mh_scan_limit) |lim| lim + (mh_scan_offset orelse 0) else null;
-
-                if (first_hop.left.labels.len > 0) {
-                    var label_node_ids = try store.getNodesByLabels(allocator, filter_graph, first_hop.left.labels, storageTenantFilter(filter_tenant));
-                    defer label_node_ids.deinit(allocator);
-
-                    for (label_node_ids.items) |node_id| {
-                        const node = store.getNodePtrForScan(node_id) orelse continue;
-                        // GAP-0846 follow-up: per-row hierarchy-aware tenant compensator
-                        // for the relaxed storageTenantFilter() label scan; also restores
-                        // the RLS denied-labels check missing on this fast path.
-                        if (!passesTenantFilter(node.*, filter_tenant)) continue;
-                        if (!passesRLSFilter(&rls_row_local, node.*)) continue;
-                        try NodeCollector2.addBinding(allocator, node, first_hop.left, param_names, param_values, &current_bindings);
-                    }
-                } else {
-                    // GAP-0522: Diagnostic warning for full-scan multi-hop initialization
-                    _ = g_full_scan_count.fetchAdd(1, .monotonic);
-                    match_log.warn("multi-hop MATCH full node scan: no labels on first-hop left node", .{});
-                    // GAP-ENT-0023 P3 (review I1): graph-scoped engine-backed
-                    // scan — resident-only iteration dropped cold rows.
-                    var init_iter = store.iterateNodesInGraph(filter_graph);
-                    while (init_iter.next()) |node| {
-                        if (!std.mem.eql(u8, node.graph_name, filter_graph)) continue;
-                        if (!passesTenantFilter(node.*, filter_tenant)) continue;
-                        if (!passesRLSFilter(&rls_row_local, node.*)) continue;
-                        try NodeCollector2.addBinding(allocator, node, first_hop.left, param_names, param_values, &current_bindings);
-                        // LIMIT pushdown: stop full scan once we have enough initial bindings
-                        if (mh_scan_cap) |cap| {
-                            if (current_bindings.items.len >= cap) break;
-                        }
-                    }
-                }
-
-                // GAP-0425: Pre-generate unique anonymous node names for each hop
-                // to prevent naming collisions when multiple hops have anonymous right nodes.
-                var anon_right_names: [32][]const u8 = undefined;
-                for (0..@min(chain.hops.len, 32)) |hi| {
-                    anon_right_names[hi] = switch (hi) {
-                        0 => "_anon_right_0",
-                        1 => "_anon_right_1",
-                        2 => "_anon_right_2",
-                        3 => "_anon_right_3",
-                        4 => "_anon_right_4",
-                        5 => "_anon_right_5",
-                        6 => "_anon_right_6",
-                        7 => "_anon_right_7",
-                        else => "_anon_right",
-                    };
-                }
-
-                // Process each hop
-                for (chain.hops, 0..) |hop, hop_idx| {
-                    // GAP-0220 FIX: Use try for proper error propagation
-                    var next_bindings = std.ArrayList(MultiHopBinding).empty;
-
-                    for (current_bindings.items) |binding| {
-                        // Find the current node from the binding
-                        // For hop 0, it's the left node; for subsequent hops, it's the right node of previous hop
-                        // GAP-0425: Use per-hop unique names for anonymous nodes to prevent naming collisions
-                        const current_node_var = if (hop_idx == 0)
-                            hop.left.name orelse "_anon_left_0"
-                        else
-                            chain.hops[hop_idx - 1].right.name orelse anon_right_names[@min(hop_idx - 1, 31)];
-
-                        var current_node: ?*const graph_store.Node = null;
-                        for (binding.env_names, 0..) |name, i| {
-                            if (std.mem.eql(u8, name, current_node_var)) {
-                                if (binding.env_values[i] == .Node) {
-                                    current_node = binding.env_values[i].Node;
-                                }
-                                break;
-                            }
-                        }
-
-                        if (current_node == null) continue;
-                        const curr_node = current_node.?;
-
-                        // Get hop direction
-                        const hop_direction: u8 = switch (hop.rel.dir) {
-                            .right => 'r',
-                            .left => 'l',
-                            .undirected => 'u',
-                        };
-
-                        // GAP-0425 FIX: Iterate edges directly from the graph store's edge
-                        // index instead of calling getEdgesFrom/getEdgesTo which allocate
-                        // arena-backed slices that are never freed. This prevents unbounded
-                        // arena growth during multi-hop traversal with many bindings.
-                        // PHASE 0: hydrate-on-miss adjacency read (bounded cache).
-                        const edge_ids = (if (hop_direction == 'l')
-                            store.getIncomingEdgeIds(curr_node.id)
-                        else
-                            store.getOutgoingEdgeIds(curr_node.id)) orelse &[_]u64{};
-
-                        for (edge_ids) |edge_id| {
-                            const edge = store.getEdgeHydrated(edge_id) orelse continue;
-                            // Filter by relationship type
-                            if (hop.rel.types.len > 0) {
-                                var matches_type = false;
-                                for (hop.rel.types) |rel_type_pattern| {
-                                    if (std.mem.eql(u8, edge.label, rel_type_pattern)) {
-                                        matches_type = true;
-                                        break;
-                                    }
-                                }
-                                if (!matches_type) continue;
-                            }
-
-                            // SONNY-2679: this block checked neither the edge
-                            // (not even its tenant) nor the node it leads to;
-                            // both now pass the session's graph, tenant and
-                            // RLS scope, so a denied middle node breaks the path.
-                            if (!hop_scope.edgeVisible(&edge)) continue;
-
-                            // Get the target node based on direction
-                            const right_node_id = if (hop_direction == 'l') edge.from_id else edge.to_id;
-                            const right_node_ptr = store.getNodePtrForScan(right_node_id) orelse continue;
-                            if (!hop_scope.nodeVisible(right_node_ptr)) continue;
-
-                            // Filter right node by labels
-                            if (hop.right.labels.len > 0) {
-                                var has_all_labels = true;
-                                for (hop.right.labels) |required_label| {
-                                    var found = false;
-                                    for (right_node_ptr.labels) |node_label| {
-                                        if (std.mem.eql(u8, required_label, node_label)) {
-                                            found = true;
-                                            break;
-                                        }
-                                    }
-                                    if (!found) {
-                                        has_all_labels = false;
-                                        break;
-                                    }
-                                }
-                                if (!has_all_labels) continue;
-                            }
-
-                            // Filter right node by properties
-                            if (hop.right.props) |props| {
-                                var passes_props = true;
-                                for (props) |prop| {
-                                    if (right_node_ptr.properties.get(prop.key)) |node_prop_val| {
-                                        const node_val = propertyValueToValue(node_prop_val);
-                                        const prop_env = eval.Env{
-                                            .names = &.{},
-                                            .values = &.{},
-                                            .param_names = param_names,
-                                            .param_values = param_values,
-                                            .allocator = allocator,
-                                        };
-                                        const prop_val = eval.evalExpr(allocator, prop.value.*, prop_env) catch {
-                                            passes_props = false;
-                                            break;
-                                        };
-                                        if (!valuesEqual(node_val, prop_val)) {
-                                            passes_props = false;
-                                            break;
-                                        }
-                                    } else {
-                                        passes_props = false;
-                                        break;
-                                    }
-                                }
-                                if (!passes_props) continue;
-                            }
-
-                            // CANARY: REQ=REQ-GQL-MULTIHOP-ANON-001; FEATURE="MultiHopAnonymousNodes"; ASPECT=BindingCreation; STATUS=TESTED; TEST=geodetestlab/specs/gql_pattern_matching_comprehensive.yml; OWNER=engine; UPDATED=2025-12-23
-                            // Count new variables needed - ALWAYS add right node (even anonymous)
-                            // This is needed so subsequent hops can traverse from anonymous intermediate nodes
-                            var new_var_count: usize = 1; // Always include right node
-                            if (hop.rel.name != null) new_var_count += 1;
-
-                            // Create new binding with existing vars + relationship + right node
-                            var new_env_names = try allocator.alloc([]const u8, binding.env_names.len + new_var_count);
-                            var new_env_values = try allocator.alloc(Value, binding.env_values.len + new_var_count);
-
-                            // Copy existing bindings
-                            for (binding.env_names, 0..) |name, i| {
-                                new_env_names[i] = name;
-                                new_env_values[i] = binding.env_values[i];
-                            }
-
-                            // Add new bindings
-                            var new_idx: usize = binding.env_names.len;
-                            if (hop.rel.name) |rel_name| {
-                                new_env_names[new_idx] = rel_name;
-                                const edge_ptr = store.getEdgePtrHydrated(edge_id);
-                                new_env_values[new_idx] = if (edge_ptr) |ep| Value{ .Edge = ep } else Value{ .Null = {} };
-                                new_idx += 1;
-                            }
-                            // GAP-0425: Always add right node with per-hop unique name for anonymous nodes
-                            new_env_names[new_idx] = hop.right.name orelse anon_right_names[@min(hop_idx, 31)];
-                            new_env_values[new_idx] = Value{ .Node = right_node_ptr };
-
-                            try next_bindings.append(allocator, MultiHopBinding{
-                                .env_names = new_env_names,
-                                .env_values = new_env_values,
-                            });
-                        }
-                    }
-
-                    // Free old bindings and replace with new
-                    for (current_bindings.items) |binding| {
-                        allocator.free(binding.env_names);
-                        allocator.free(binding.env_values);
-                    }
-                    current_bindings.deinit(allocator);
-                    current_bindings = next_bindings;
-                }
-
-                // Convert final bindings to rows
-                for (current_bindings.items) |binding| {
-                    const env = Env{
-                        .names = binding.env_names,
-                        .values = binding.env_values,
-                        .param_names = param_names,
-                        .param_values = param_values,
-                        .allocator = allocator,
-                    };
-
-                    // Evaluate WHERE clause if present
-                    if (q.where_clause) |where_expr| {
-                        const where_result = eval.evalExpr(allocator, where_expr, env) catch continue;
-                        const passes_where = switch (where_result) {
-                            .Bool => |b| b,
-                            .Null => false,
-                            .Int => |i| i != 0,
-                            else => false,
-                        };
-                        if (!passes_where) continue;
-                    }
-
-                    // Evaluate FILTER clause if present
-                    if (q.filter_clause) |filter_expr| {
-                        const filter_result = eval.evalExpr(allocator, filter_expr, env) catch continue;
-                        const passes_filter = switch (filter_result) {
-                            .Bool => |b| b,
-                            .Null => false,
-                            .Int => |i| i != 0,
-                            else => false,
-                        };
-                        if (!passes_filter) continue;
-                    }
-
-                    // Build result row
-                    var row: []Value = undefined;
-                    if (has_with) {
-                        row = try allocator.alloc(Value, binding.env_values.len);
-                        for (binding.env_values, 0..) |val, i| {
-                            row[i] = val;
-                        }
-                    } else {
-                        row = try allocator.alloc(Value, items.len);
-                        for (items, 0..) |item, i| {
-                            row[i] = eval.evalExpr(allocator, item.expr, env) catch Value{ .Null = {} };
-                        }
-                    }
-
-                    try rows.append(allocator, row);
-                }
-
-                // Multi-hop processing done - skip single-hop handling below
-                // Handle WITH clause if present
-                if (has_with) {
-                    if (q.with_clause) |with_clause| {
-                        // Get env names from first binding if available
-                        var with_columns: [][]const u8 = undefined;
-                        if (current_bindings.items.len > 0) {
-                            with_columns = try allocator.alloc([]const u8, current_bindings.items[0].env_names.len);
-                            for (current_bindings.items[0].env_names, 0..) |name, i| {
-                                with_columns[i] = try allocator.dupe(u8, name);
-                            }
-                        } else {
-                            with_columns = try allocator.alloc([]const u8, 0);
-                        }
-
-                        const intermediate_result = ExecutionResult{
-                            .columns = with_columns,
-                            .rows = try rows.toOwnedSlice(allocator),
-                            .flags = std.ArrayList([]const u8).empty,
-                        };
-
-                        const with_result = try execution.executeWithClauseWithGroupBy(allocator, intermediate_result, with_clause, q.group_by, execution.withStageHaving(q));
-
-                        // Clean up intermediate result
-                        for (intermediate_result.columns) |col| {
-                            allocator.free(col);
-                        }
-                        allocator.free(intermediate_result.columns);
-                        for (intermediate_result.rows) |r| {
-                            allocator.free(r);
-                        }
-                        allocator.free(intermediate_result.rows);
-
-                        // CANARY: REQ=REQ-GQL-CHAIN-FIX-001; FEATURE="QueryChainingWithLimitFix"; ASPECT=NoReturnClause; STATUS=TESTED; TEST=geodetestlab/specs/gql_query_comprehensive.yml; OWNER=execution; UPDATED=2025-12-24
-                        // If there's no RETURN clause, or if ret.items shares pointer with with_clause.items (query chaining),
-                        // return WITH result directly to preserve bindings for the next query in the chain
-                        var result: ExecutionResult = undefined;
-                        const same_items_mh = q.ret.items.ptr == with_clause.items.ptr and q.ret.items.len == with_clause.items.len;
-                        if (q.ret.items.len == 0 or same_items_mh) {
-                            result = with_result;
-                        } else {
-                            // Evaluate RETURN expressions using WITH result
-                            const return_columns = try generateUniqueColumnNames(allocator, q.ret.items);
-                            var return_rows = try allocator.alloc([]Value, with_result.rows.len);
-                            for (with_result.rows, 0..) |with_row, row_idx| {
-                                var return_row = try allocator.alloc(Value, q.ret.items.len);
-                                const return_env = Env{
-                                    .names = with_result.columns,
-                                    .values = with_row,
-                                    .param_names = param_names,
-                                    .param_values = param_values,
-                                    .allocator = allocator,
-                                };
-                                for (q.ret.items, 0..) |item, i| {
-                                    return_row[i] = eval.evalExpr(allocator, item.expr, return_env) catch Value{ .Null = {} };
-                                }
-                                return_rows[row_idx] = return_row;
-                            }
-
-                            // Clean up WITH result
-                            for (with_result.columns) |col| {
-                                allocator.free(col);
-                            }
-                            allocator.free(with_result.columns);
-                            for (with_result.rows) |r| {
-                                allocator.free(r);
-                            }
-                            allocator.free(with_result.rows);
-
-                            result = ExecutionResult{
-                                .columns = return_columns,
-                                .rows = return_rows,
-                                .flags = with_result.flags,
-                            };
-                        }
-
-                        // Apply ORDER BY if present
-                        if (q.order_by) |order| {
-                            try sortRows(allocator, &result, order);
-                        }
-
-                        // Apply LIMIT and OFFSET (supports $param)
-                        {
-                            const rl = resolveLimitParam(q.limit, q.limit_param, param_names, param_values);
-                            const ro = resolveLimitParam(q.offset, q.offset_param, param_names, param_values);
-                            if (rl != null or ro != null) {
-                                const offset_count = ro orelse 0;
-                                const limit_count = rl orelse result.rows.len;
-                                const actual_limit = @min(limit_count, if (result.rows.len > offset_count) result.rows.len - offset_count else 0);
-                                if (offset_count > 0 or actual_limit < result.rows.len) {
-                                    var limited_rows = try allocator.alloc([]Value, actual_limit);
-                                    for (0..actual_limit) |i| {
-                                        limited_rows[i] = result.rows[offset_count + i];
-                                    }
-                                    // Free skipped and excess rows
-                                    for (0..offset_count) |i| {
-                                        allocator.free(result.rows[i]);
-                                    }
-                                    for (offset_count + actual_limit..result.rows.len) |i| {
-                                        allocator.free(result.rows[i]);
-                                    }
-                                    allocator.free(result.rows);
-                                    result.rows = limited_rows;
-                                }
-                            }
-                        }
-
-                        // Apply DISTINCT
-                        if (q.ret.distinct) {
-                            try applyDistinct(allocator, &result);
-                        }
-
-                        return result;
-                    }
-                }
-
-                // No WITH clause - return result directly
-                var result = ExecutionResult{
-                    .columns = columns,
-                    .rows = try rows.toOwnedSlice(allocator),
-                    .flags = std.ArrayList([]const u8).empty,
-                };
-
-                // Apply ORDER BY if present
-                if (q.order_by) |order| {
-                    try sortRows(allocator, &result, order);
-                }
-
-                // Apply LIMIT and OFFSET (supports $param)
-                {
-                    const rl = resolveLimitParam(q.limit, q.limit_param, param_names, param_values);
-                    const ro = resolveLimitParam(q.offset, q.offset_param, param_names, param_values);
-                    if (rl != null or ro != null) {
-                        const offset_count = ro orelse 0;
-                        const limit_count = rl orelse result.rows.len;
-                        const actual_limit = @min(limit_count, if (result.rows.len > offset_count) result.rows.len - offset_count else 0);
-                        if (offset_count > 0 or actual_limit < result.rows.len) {
-                            var limited_rows = try allocator.alloc([]Value, actual_limit);
-                            for (0..actual_limit) |i| {
-                                limited_rows[i] = result.rows[offset_count + i];
-                            }
-                            // Free skipped and excess rows
-                            for (0..offset_count) |i| {
-                                allocator.free(result.rows[i]);
-                            }
-                            for (offset_count + actual_limit..result.rows.len) |i| {
-                                allocator.free(result.rows[i]);
-                            }
-                            allocator.free(result.rows);
-                            result.rows = limited_rows;
-                        }
-                    }
-                }
-
-                // Apply DISTINCT
-                if (q.ret.distinct) {
-                    try applyDistinct(allocator, &result);
-                }
-
-                return result;
-            }
-
             // Single-hop relationship patterns (existing code continues below)
             // Handle relationship patterns
 

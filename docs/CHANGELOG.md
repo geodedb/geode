@@ -34,6 +34,32 @@
   generates a self-signed certificate at startup when none exists (in its data
   or certificate directory, or `/tmp` when that is not writable), in every
   posture.
+- **Traversals apply RLS and tenant scope to every hop (SONNY-2679):** a
+  relationship pattern now applies the session's graph, tenant scope and RLS
+  policies to every node it reaches and every edge it walks, not only to the
+  start node. This covers:
+  - single hop, variable length, `count`/`collect` and GROUP BY over hop
+    targets;
+  - OPTIONAL MATCH and multi-hop patterns;
+  - pattern comprehensions, `COUNT {}`, `EXISTS {}` and `shortestPath()`.
+
+  Before, an RLS-denied or other-tenant hop target could be read, and so could
+  every node and path reached only through it. A label-deny policy on a
+  relationship type, and an expression policy on one, now hide those edges on
+  every traversal.
+
+  **Behaviour change:** tenant-scoped variable-length, aggregation, grouping
+  and OPTIONAL MATCH paths now require the edge's own tenant tag, as the single
+  hop already did. Legacy edges tagged `default` between a tenant's own nodes
+  (GAP-0891) are no longer followed there. Operators should backfill legacy
+  `default` edge tags from their endpoints.
+- **Expression RLS policies apply to every label on a node (SONNY-2690):** a
+  policy was looked up for a node's first label only, so a node whose policed
+  label came second escaped it.
+- **Expression-path graph scoping and nested post-filtering (SONNY-2687):**
+  pattern comprehensions, `COUNT {}`, `EXISTS {}` and `shortestPath()` now read
+  only the session's graph. The transport RLS post-filter now also finds a
+  denied node or edge inside a list or a map, such as `collect(h)`.
 
 ---
 

@@ -148,7 +148,10 @@ pub fn dispatchToMultiChainHandler(q: ast.Query, all_simple_nodes: bool) Dispatc
     }
 
     // Handle single chain with multiple hops (e.g., (a)-[:E]->(b)-[:E]->(c)-[:E]->(a))
-    // Route through multi-chain handler which now supports multi-hop chains
+    // Route through multi-chain handler which now supports multi-hop chains.
+    // SONNY-2679: executeMatchQueryImpl relies on this: after
+    // `.continue_processing` it reads one hop at most, and refuses a longer
+    // chain (error.MultiHopPatternNotDispatched) rather than read part of it.
     if (q.match.chains.len == 1 and q.match.chains[0].hops.len > 1) {
         return .multi_chain_relationship_match;
     }

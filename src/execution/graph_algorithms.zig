@@ -115,15 +115,20 @@ fn sessionGraph() []const u8 {
 /// - the tenant scope (SONNY-1326), hierarchy-aware and fail-closed;
 /// - the RLS policies (SONNY-2679).
 const ExprScope = struct {
+    allocator: std.mem.Allocator,
     graph: []const u8,
     tenant: ?[]const u8,
     rls: RowRls,
+    /// Node id -> visible, for the nodes a walk has stepped onto (SONNY-2679:
+    /// each node is decided once, on a transient copy).
+    verdicts: std.AutoHashMapUnmanaged(u64, bool) = .empty,
 
     fn init(allocator: std.mem.Allocator) tenant_visibility.TenancyError!ExprScope {
-        return .{ .graph = sessionGraph(), .tenant = try sessionScope(), .rls = RowRls.init(allocator) };
+        return .{ .allocator = allocator, .graph = sessionGraph(), .tenant = try sessionScope(), .rls = RowRls.init(allocator) };
     }
 
     fn deinit(self: *ExprScope) void {
+        self.verdicts.deinit(self.allocator);
         self.rls.deinit();
     }
 
@@ -145,14 +150,27 @@ const ExprScope = struct {
     }
 
     /// May a walk take `edge` onto the node `next_id`? The edge check, and,
-    /// when a policy may deny a row, the node's own visibility (resolved on
-    /// demand; a node that resolves nowhere is not visible). Without a policy
-    /// the edge check suffices: its graph check keeps the walk in the graph
-    /// and `edgeTraversable` already checked both endpoints' tenants.
+    /// when a policy may deny a row, the node's own visibility (a node that
+    /// resolves nowhere is not visible). Without a policy the edge check
+    /// suffices: its graph check keeps the walk in the graph and
+    /// `edgeTraversable` already checked both endpoints' tenants. The node is
+    /// read through a transient copy, freed at once, and decided once per
+    /// evaluation; the walk neither retains node copies nor fills the bounded
+    /// node cache.
     fn stepVisible(self: *ExprScope, store: *graph_store.GraphStore, edge: graph_store.Edge, next_id: u64) bool {
         if (!self.edgeWalkable(store, edge)) return false;
         if (!self.rls.may_deny) return true;
-        const node = (store.nodes.getOrHydratePtr(next_id) catch null) orelse return false;
+        if (self.verdicts.get(next_id)) |visible| return visible;
+        const visible = store.decideOnTransientNode(next_id, self, decideTransientNode) orelse false;
+        // The cache only saves work: a failed insert re-decides next time.
+        self.verdicts.put(self.allocator, next_id, visible) catch {};
+        return visible;
+    }
+
+    fn decideTransientNode(self: *ExprScope, node: *const graph_store.Node) bool {
+        // The RLS row borrows the transient node's properties: empty it
+        // before the node is freed.
+        defer self.rls.row.clearRetainingCapacity();
         return self.nodeVisible(node);
     }
 };

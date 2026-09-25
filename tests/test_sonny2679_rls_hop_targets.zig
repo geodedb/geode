@@ -601,3 +601,78 @@ test "SONNY-2679: a tenant-scoped session does not follow an edge into another t
 test "SONNY-2679: a parent tenant reads its child's rows through a hop, and not its sibling's" {
     try checkMode(.tenant_hierarchy);
 }
+
+/// Detached node copies the store retains until the per-graph checkpoint
+/// (`getNodePtrForScan` boxes every node it hands out).
+fn retainedNodeCopies() usize {
+    return graph_store.getGlobalStore(testing.allocator).scan_hydrated_nodes.items.len;
+}
+
+/// Run `query` and return how many node copies it left retained, and the
+/// first cell of its first row.
+fn retainedBy(s: *Session, query: []const u8) !struct { copies: usize, first: []const u8 } {
+    const aa = s.arena.allocator();
+    const before = retainedNodeCopies();
+    var result = try s.run(query);
+    defer result.deinit(aa);
+    const copies = retainedNodeCopies() - before;
+    const first = if (result.rows.len > 0 and result.rows[0].len > 0) try render(aa, result.rows[0][0]) else "";
+    return .{ .copies = copies, .first = first };
+}
+
+// The gate fadaedd1 put on every PathIterator step read the node it steps
+// onto through getNodePtrForScan, which boxes a copy of the node and keeps it
+// until the graph's next checkpoint, charged to no read budget: the mechanism
+// of the recorded OOM incident. A restricted walk over N nodes retained N
+// extra copies. The gate now decides on a transient copy it frees at once, and
+// caches each node's verdict for the traversal. Proxy: the store's retained
+// copies after the same walk, restricted and not.
+test "SONNY-2679: a restricted variable-length walk retains no node copies beyond an unrestricted one" {
+    harness.silenceEngineLogs();
+    const chain_len = 40;
+    // In memory, so every session is served by the legacy executor.
+    var s = try Session.init(.no_policy);
+    defer s.deinit();
+    const aa = s.arena.allocator();
+    try s.execAs("tenant_a", "CREATE (:G {s: 'm0'})");
+    for (1..chain_len + 1) |i| {
+        try s.execAs("tenant_a", try std.fmt.allocPrint(aa, "CREATE (:Doc {{s: 'm{d}', cls: 'public'}})", .{i}));
+        _ = try s.edge(try std.fmt.allocPrint(aa, "m{d}", .{i - 1}), try std.fmt.allocPrint(aa, "m{d}", .{i}), "R", "tenant_a");
+    }
+    const queries = [_][]const u8{
+        "MATCH (g:G)-[:R*1..40]->(h) RETURN count(h)",
+        "MATCH (g:G)-[:R*1..40]->(h) RETURN h.s",
+        "MATCH (g:G)-[:R*1..40]-(h) RETURN count(h)",
+    };
+
+    var f: Failures = .{};
+    for (queries) |q| {
+        // Unrestricted.
+        const open = try retainedBy(&s, q);
+        // Tenant-scoped (every node is the tenant's own).
+        s.ctx.tenant_id = "tenant_a";
+        const scoped = try retainedBy(&s, q);
+        s.ctx.tenant_id = null;
+        // An expression policy that denies none of these rows.
+        const engine = try s.createExprEngine();
+        try engine.createPolicy(policy(2681, "doc_not_secret", "Doc", "cls <> 'secret'", &s.doc_compiled));
+        s.ctx.user = session_user;
+        const policed = try retainedBy(&s, q);
+        s.ctx.user = null;
+        rls_types.setGlobalExprRLSEngine(null);
+        engine.deinit();
+        testing.allocator.destroy(engine);
+        s.expr_engine = null;
+
+        if (!std.mem.eql(u8, scoped.first, open.first) or !std.mem.eql(u8, policed.first, open.first)) {
+            try f.add(aa, "{s}: answers differ: open {s}, tenant {s}, policy {s}", .{ q, open.first, scoped.first, policed.first });
+        }
+        if (scoped.copies > open.copies) try f.add(aa, "{s}: tenant-scoped walk retained {d} node copies, unrestricted {d}", .{ q, scoped.copies, open.copies });
+        if (policed.copies > open.copies) try f.add(aa, "{s}: RLS walk retained {d} node copies, unrestricted {d}", .{ q, policed.copies, open.copies });
+    }
+    if (f.items.items.len != 0) {
+        std.debug.print("\n{d} failed check(s):\n", .{f.items.items.len});
+        for (f.items.items) |msg| std.debug.print("  {s}\n", .{msg});
+        return error.GateRetainedNodeCopies;
+    }
+}

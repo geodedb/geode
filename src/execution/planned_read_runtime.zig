@@ -199,6 +199,21 @@ const PathEdge = struct {
     prop_head: u64,
 };
 
+/// Does the session resolve to a concrete tenant scope? A strict-tenancy
+/// refusal counts as concrete: the legacy path re-resolves and surfaces it.
+fn sessionTenantConcrete(context: ExecutionContext) bool {
+    const resolved = tenancy.resolveTenantFilter(context.tenant_id) catch return true;
+    return resolved != null;
+}
+
+/// SONNY-2679: may this session's rows be hidden from it (a concrete tenant
+/// scope, or an RLS policy that may deny a row)? The storage-native runtime
+/// enforces neither, so `buildPlanIfSupported` demotes such a session to the
+/// legacy executor, and the ungated walks here refuse to run for one.
+fn sessionIsRestricted(context: ExecutionContext) bool {
+    return sessionTenantConcrete(context) or execution.wouldEvaluateRLS();
+}
+
 pub fn buildPlanIfSupported(allocator: std.mem.Allocator, q: *const ast.Query, context: ExecutionContext) !?Plan {
     var binding_names = std.ArrayList([]const u8).empty;
     errdefer {
@@ -227,10 +242,7 @@ pub fn buildPlanIfSupported(allocator: std.mem.Allocator, q: *const ast.Query, c
     // mode; we ignore that error here and let the legacy path re-resolve and
     // surface it (so this guard never changes error behaviour).
     if (execution_mode == .storage_native and q.match.chains.len > 0) {
-        const concrete = blk: {
-            const resolved = tenancy.resolveTenantFilter(context.tenant_id) catch break :blk true;
-            break :blk resolved != null;
-        };
+        const concrete = sessionTenantConcrete(context);
         // REQ-PROFILE-RLS-TENANT-001: the storage-native runtime also has NO
         // RLS enforcement of its own — passesRLSFilter/passesRLSExprFilter
         // live in match_operations (the legacy executor). Normal
@@ -1407,7 +1419,15 @@ const VarLenExec = struct {
 
     /// Faithful engine-direct port of PathIterator.next() drained to
     /// completion, emitting endpoint rows for one seed.
+    ///
+    /// SONNY-2679: this BFS applies NO tenant, RLS or per-edge visibility
+    /// check to the nodes and edges it walks (PathIterator's HopScope gate has
+    /// no counterpart here). It is safe only because `buildPlanIfSupported`
+    /// never builds a storage-native plan for a restricted session (a concrete
+    /// tenant scope, strict tenancy, or an RLS policy that may deny a row), so
+    /// such a session never gets here. Fail closed if that ever changes.
     fn runSeed(self: *VarLenExec, seed_slot: u64) !void {
+        if (sessionIsRestricted(self.context)) return error.RestrictedSessionOnPlannedRead;
         const seed_node = try materializeNode(self.allocator, self.graph_name, seed_slot);
         try self.owned_entities.trackNode(seed_node);
 

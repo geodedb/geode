@@ -2815,6 +2815,30 @@ pub const GraphStore = struct {
         return box;
     }
 
+    // CANARY: REQ=REQ-SONNY-2679-GATE-MEMORY; FEATURE="TraversalRowVisibility"; ASPECT=TransientNodeRead; STATUS=TESTED; TEST=tests/test_sonny2679_rls_hop_targets.zig; OWNER=security; UPDATED=2026-09-25
+    /// SONNY-2679: decide something about node `node_id` from a TRANSIENT copy
+    /// and retain nothing. `getNodePtrForScan` boxes every node it hands out
+    /// into `scan_hydrated_nodes`, which is freed only at the graph's next
+    /// checkpoint and is charged to no read budget, so a traversal gate that
+    /// looked at every node it stepped onto through it grew the store by one
+    /// node copy per step. Here the copy (a snapshot of the resident node, taken
+    /// under the shard's SHARED map lock, or an engine rebuild on a miss) is
+    /// freed before this returns, and `decide` runs outside every store lock.
+    /// Null when the node exists in neither the cache nor the engine. Like
+    /// `getNodePtrForScan`, it never mutates the bounded cache.
+    pub fn decideOnTransientNode(
+        self: *const GraphStore,
+        node_id: u64,
+        ctx: anytype,
+        comptime decide: fn (@TypeOf(ctx), *const Node) bool,
+    ) ?bool {
+        const mut: *GraphStore = @constCast(self);
+        var node: Node = mut.snapshotResidentNodeForScan(node_id) orelse
+            ((hydrateNodeCb(@ptrCast(mut), mut.allocator, node_id) catch return null) orelse return null);
+        defer freeNodeValue(mut.allocator, &node);
+        return decide(ctx, &node);
+    }
+
     /// SONNY-1979: deep-copy the RESIDENT node body for `node_id` into a caller-
     /// owned `Node`, or null when it is not resident (→ caller falls back to the
     /// engine rebuild). Taken under the shard's SHARED `map_lock` so a concurrent
