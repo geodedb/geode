@@ -2041,6 +2041,31 @@ fn predicateAllocator(scratch: *std.heap.ArenaAllocator, allocator: std.mem.Allo
 fn materializeNode(allocator: std.mem.Allocator, graph_name: []const u8, slot_id: u64) !*graph_store.Node {
     _ = g_nodes_materialized_total.fetchAdd(1, .monotonic);
     const adapter = graph_store.getGlobalAdapter() orelse return error.Unsupported;
+    const node = try newNode(allocator, adapter, graph_name, slot_id);
+    // SONNY-2463: the node owns everything put into it from here on, so a
+    // failure part way frees all of it (see "Node ownership" at `destroyNode`).
+    errdefer destroyNode(allocator, node);
+
+    var props = try adapter.getAllNodeProperties(graph_name, slot_id, allocator);
+    defer freeStoragePropertyMap(allocator, &props);
+
+    var iter = props.iterator();
+    while (iter.next()) |entry| {
+        try putProperty(allocator, node, entry.key_ptr.*, entry.value_ptr.*);
+    }
+
+    return node;
+}
+
+/// The node for `slot_id` with its id, labels and graph name, and no
+/// properties yet. It owns what it holds, so `destroyNode` frees it whatever
+/// is later put into it. On failure, nothing is left allocated.
+fn newNode(
+    allocator: std.mem.Allocator,
+    adapter: *graph_storage_adapter.StorageAdapter,
+    graph_name: []const u8,
+    slot_id: u64,
+) !*graph_store.Node {
     const store = graph_store.getGlobalStore(allocator);
     const external_id = try resolveExternalNodeId(allocator, adapter, store, graph_name, slot_id);
 
@@ -2049,31 +2074,45 @@ fn materializeNode(allocator: std.mem.Allocator, graph_name: []const u8, slot_id
         for (labels) |label| allocator.free(label);
         allocator.free(labels);
     }
+    const owned_graph_name = try allocator.dupe(u8, graph_name);
+    errdefer allocator.free(owned_graph_name);
 
     const node = try allocator.create(graph_store.Node);
-    errdefer allocator.destroy(node);
     node.* = .{
         .id = external_id,
         .labels = labels,
         .properties = graph_store.CompactPropertyMap.init(allocator),
-        .graph_name = try allocator.dupe(u8, graph_name),
+        .graph_name = owned_graph_name,
     };
-    errdefer {
-        node.properties.deinit();
-        allocator.free(node.graph_name);
-    }
-
-    var props = try adapter.getAllNodeProperties(graph_name, slot_id, allocator);
-    defer freeStoragePropertyMap(allocator, &props);
-
-    var iter = props.iterator();
-    while (iter.next()) |entry| {
-        const key = try allocator.dupe(u8, entry.key_ptr.*);
-        const value = try graph_storage_adapter.fromStorageProperty(allocator, entry.value_ptr.*);
-        try node.properties.put(key, value);
-    }
-
     return node;
+}
+
+// CANARY: REQ=REQ-SONNY-2463-MATERIALIZE-OOM; FEATURE="EngineDirectNodeOwnership"; ASPECT=PartialNodeFreed; STATUS=TESTED; TEST=tests/test_sonny2463_materialize_oom.zig; OWNER=engine; UPDATED=2026-09-25
+/// Put a copy of `key` = `value` (a storage read) into `node`. `node` owns the
+/// copies once the put succeeds. If a copy or the put itself fails, the copies
+/// made so far are freed here, and the node is unchanged (a failed put leaves
+/// the map as it was).
+fn putProperty(allocator: std.mem.Allocator, node: *graph_store.Node, key: []const u8, value: gs.PropertyValue) !void {
+    const owned_key = try allocator.dupe(u8, key);
+    errdefer allocator.free(owned_key);
+    const decoded = try graph_storage_adapter.fromStorageProperty(allocator, value);
+    errdefer property_value_codec.freePropertyValue(allocator, decoded);
+    try node.properties.put(owned_key, decoded);
+}
+
+/// Test-only (SONNY-2463): build the node for `slot_id` exactly as the scan
+/// does, from `needed_keys` when given (`materializeNodeProjected`), else in
+/// full (`materializeNode`), so a test can drive it under a failing
+/// allocator. Free the result with `destroyNodeForTest`.
+pub fn materializeNodeForTest(allocator: std.mem.Allocator, graph_name: []const u8, slot_id: u64, needed_keys: ?[]const []const u8) !*graph_store.Node {
+    if (needed_keys) |keys| return materializeNodeProjected(allocator, graph_name, slot_id, keys);
+    return materializeNode(allocator, graph_name, slot_id);
+}
+
+/// Test-only (SONNY-2463): `destroyNode`, for a node `materializeNodeForTest`
+/// built.
+pub fn destroyNodeForTest(allocator: std.mem.Allocator, node: *graph_store.Node) void {
+    destroyNode(allocator, node);
 }
 
 /// GAP-0902 (selective scan): materialize a node reading ONLY `needed_keys` —
@@ -2094,27 +2133,10 @@ fn materializeNodeProjected(
 ) !*graph_store.Node {
     _ = g_nodes_materialized_total.fetchAdd(1, .monotonic);
     const adapter = graph_store.getGlobalAdapter() orelse return error.Unsupported;
-    const store = graph_store.getGlobalStore(allocator);
-    const external_id = try resolveExternalNodeId(allocator, adapter, store, graph_name, slot_id);
-
-    const labels = try adapter.getNodeLabels(graph_name, slot_id, allocator);
-    errdefer {
-        for (labels) |label| allocator.free(label);
-        allocator.free(labels);
-    }
-
-    const node = try allocator.create(graph_store.Node);
-    errdefer allocator.destroy(node);
-    node.* = .{
-        .id = external_id,
-        .labels = labels,
-        .properties = graph_store.CompactPropertyMap.init(allocator),
-        .graph_name = try allocator.dupe(u8, graph_name),
-    };
-    errdefer {
-        node.properties.deinit();
-        allocator.free(node.graph_name);
-    }
+    const node = try newNode(allocator, adapter, graph_name, slot_id);
+    // SONNY-2463: as in `materializeNode`, a failure part way (an allocation,
+    // or a later key's read finding the node deleted) frees all of it.
+    errdefer destroyNode(allocator, node);
 
     for (needed_keys) |key| {
         const maybe_val = adapter.getNodeProperty(graph_name, slot_id, key, allocator) catch |err| switch (err) {
@@ -2123,11 +2145,9 @@ fn materializeNodeProjected(
         };
         const val = maybe_val orelse continue;
         defer freeStoragePropertyValue(allocator, val);
-        const decoded = try graph_storage_adapter.fromStorageProperty(allocator, val);
-        const owned_key = try allocator.dupe(u8, key);
         // `needed_keys` is deduplicated by `addKeyUnique`, so no key repeats —
         // a plain put is correct (no duplicate to reconcile).
-        try node.properties.put(owned_key, decoded);
+        try putProperty(allocator, node, key, val);
     }
 
     return node;
