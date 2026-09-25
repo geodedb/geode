@@ -2,6 +2,7 @@ const std = @import("std");
 const value_types = @import("../value_types.zig");
 const graph_store = @import("../graph_store.zig");
 const property_codec = @import("../property_value_codec.zig");
+const narrowing = @import("../types/narrowing.zig");
 
 const Value = value_types.Value;
 
@@ -235,11 +236,13 @@ fn writeInt(w: *std.Io.Writer, n: i64) std.Io.Writer.Error!void {
 }
 
 /// Integral floats share the integer key space so `10` and `10.0` are one value.
+///
+/// SONNY-2739: the range check compared with `@floatFromInt(maxInt(i64))`,
+/// which rounds up to 2^63, so 2^63 passed it and `@intFromFloat` aborted the
+/// process: `count(DISTINCT 9223372036854775808.0)`, or a GROUP BY over that
+/// value (a decimal key arrives here as its f64). The bounds are exact now.
 fn writeFloat(w: *std.Io.Writer, f: f64) std.Io.Writer.Error!void {
-    if (std.math.isFinite(f) and @floor(f) == f and
-        f >= @as(f64, @floatFromInt(std.math.minInt(i64))) and
-        f <= @as(f64, @floatFromInt(std.math.maxInt(i64))))
-    {
+    if (@trunc(f) == f and narrowing.floatFits(i64, f)) {
         return writeInt(w, @intFromFloat(f));
     }
     try w.writeByte('F');

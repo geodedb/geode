@@ -324,6 +324,38 @@ inline fn isAscii(s: []const u8) bool {
 /// the hot path outside tests.
 pub var nfc_fallback_count: usize = 0;
 
+const narrowing = @import("types/narrowing.zig");
+
+// CANARY: REQ=REQ-SONNY-2739-POWER-OVERFLOW; FEATURE="PowerOperator"; ASPECT=CheckedResult; STATUS=TESTED; TEST=tests/test_sonny2739_float_narrowing.zig; OWNER=eval; UPDATED=2026-09-25
+/// `base ^ exp` over integers. A non-negative exponent is computed exactly:
+/// an Int when the power fits one, else a scale-6 Decimal while that fits (a
+/// power below 10^32). A negative exponent is `floatPower`'s.
+///
+/// SONNY-2739: the power went through f64, then `@intFromFloat` behind the
+/// guard `result <= @floatFromInt(maxInt(i64))`, which admits 2^63, and then
+/// `@intFromFloat` into the Decimal with no guard at all: `2 ^ 63`, `10 ^ 40`,
+/// `10 ^ 400` and `0 ^ -1` aborted the server. A power that does not fit is now
+/// DecimalOverflow (22003), zero to a negative power is a division by zero
+/// (22012), and a power past 2^53 is exact (`3 ^ 39`).
+fn intPower(base: i64, exp: i64) EvalError!Value {
+    if (exp < 0) return floatPower(@floatFromInt(base), exp);
+    const p = std.math.powi(i128, base, exp) catch return EvalError.DecimalOverflow;
+    if (std.math.cast(i64, p)) |i| return .{ .Int = i };
+    const coeff = std.math.mul(i128, p, float_to_decimal_scale) catch return EvalError.DecimalOverflow;
+    if (@abs(coeff) >= @import("types/decimal128.zig").Decimal128.MAX_COEFF) return EvalError.DecimalOverflow;
+    return .{ .Decimal = .{ .coeff = coeff, .scale = 6 } };
+}
+
+/// `base ^ exp` through f64: an Int when the power is an integer that fits
+/// one, else a scale-6 Decimal (truncated), or DecimalOverflow (22003) when
+/// that does not fit. Zero to a negative power is a division by zero.
+fn floatPower(base: f64, exp: i64) EvalError!Value {
+    if (base == 0 and exp < 0) return EvalError.DivisionByZero;
+    const result = std.math.pow(f64, base, @floatFromInt(exp));
+    if (@trunc(result) == result and narrowing.floatFits(i64, result)) return .{ .Int = @intFromFloat(result) };
+    return decimalFromF64(result);
+}
+
 pub fn evalBinary(alloc: std.mem.Allocator, op: ast.BinOp, l: Value, r: Value) EvalError!Value {
     return switch (op) {
         .And => and3(l, r),
@@ -574,28 +606,11 @@ pub fn evalBinary(alloc: std.mem.Allocator, op: ast.BinOp, l: Value, r: Value) E
             // NULL ^ anything = NULL (GQL/SQL semantics)
             if (l == .Null or r == .Null) break :blk_pow .{ .Null = {} };
             // Integer exponentiation: x ^ n where n is integer
-            if (l == .Int and r == .Int) {
-                const base: f64 = @floatFromInt(l.Int);
-                const exp: f64 = @floatFromInt(r.Int);
-                const result = std.math.pow(f64, base, exp);
-                // If result is an exact integer, return Int
-                if (@floor(result) == result and result >= @as(f64, @floatFromInt(std.math.minInt(i64))) and result <= @as(f64, @floatFromInt(std.math.maxInt(i64)))) {
-                    break :blk_pow .{ .Int = @intFromFloat(result) };
-                }
-                // Convert to Decimal for non-integer results (6 decimal places precision)
-                const scaled_result: i128 = @intFromFloat(result * 1_000_000);
-                break :blk_pow .{ .Decimal = .{ .coeff = scaled_result, .scale = 6 } };
-            }
+            if (l == .Int and r == .Int) break :blk_pow try intPower(l.Int, r.Int);
             // Decimal base with integer exponent
             if (l == .Decimal and r == .Int) {
                 const base: f64 = @as(f64, @floatFromInt(l.Decimal.coeff)) / std.math.pow(f64, 10.0, @floatFromInt(l.Decimal.scale));
-                const exp: f64 = @floatFromInt(r.Int);
-                const result = std.math.pow(f64, base, exp);
-                if (@floor(result) == result and result >= @as(f64, @floatFromInt(std.math.minInt(i64))) and result <= @as(f64, @floatFromInt(std.math.maxInt(i64)))) {
-                    break :blk_pow .{ .Int = @intFromFloat(result) };
-                }
-                const scaled_result: i128 = @intFromFloat(result * 1_000_000);
-                break :blk_pow .{ .Decimal = .{ .coeff = scaled_result, .scale = 6 } };
+                break :blk_pow try floatPower(base, r.Int);
             }
             return EvalError.TypeMismatch;
         },

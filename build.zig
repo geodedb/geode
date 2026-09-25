@@ -8525,6 +8525,20 @@ pub fn build(b: *std.Build) void {
     const sonny2675_agg_step = b.step("test-sonny2675-aggregate-semantics", "Run SONNY-2675 follow-up regression (parameters inside aggregates, typed min/max, typed group keys: in-memory, RLS-policy, tenant-scoped and persisted sessions)");
     sonny2675_agg_step.dependOn(&run_sonny2675_agg_tests.step);
 
+    // SONNY-2739: a float or decimal narrowed to an integer (a group or
+    // DISTINCT key at 2^63, the power operator, casts, rounding functions,
+    // geometry, decoders) no longer aborts the server; a value that does not
+    // fit is a typed error (22003).
+    const sonny2739_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny2739_float_narrowing.zig"), .target = target, .optimize = optimize });
+    sonny2739_test_mod.addImport("geode", root_mod);
+    sonny2739_test_mod.addImport("logging", logging_mod);
+    sonny2739_test_mod.addImport("rls_types", rls_types_mod);
+    const sonny2739_tests = b.addTest(.{ .root_module = sonny2739_test_mod });
+    const run_sonny2739_tests = b.addRunArtifact(sonny2739_tests);
+    shardDep(test_step, &run_sonny2739_tests.step, 1, test_shard_loads, test_shard_index);
+    const sonny2739_step = b.step("test-sonny2739-float-narrowing", "Run SONNY-2739 regression (every float or decimal narrowed to an integer is checked: group and DISTINCT keys at +-2^63, the power operator, casts, rounding, geometry and decoders refuse a value that does not fit instead of aborting)");
+    sonny2739_step.dependOn(&run_sonny2739_tests.step);
+
     const sonny2675_walker_mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny2675_having_walker.zig"), .target = target, .optimize = optimize });
     sonny2675_walker_mod.addImport("geode", root_mod);
     const sonny2675_walker_tests = b.addTest(.{ .root_module = sonny2675_walker_mod });
