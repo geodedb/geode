@@ -114,6 +114,17 @@ pub fn seedMany(h: *Harness) !void {
     }
 }
 
+/// `many` `:W` nodes, each with two string properties, an integer and a list of
+/// strings (an extended value): s = 's00'..'s24', t = 't00'..'t24',
+/// i = 0..24, l = ['l00', 'm00']..['l24', 'm24'].
+pub fn seedWide(h: *Harness) !void {
+    const aa = h.arena.allocator();
+    for (0..many) |i| {
+        var r = try h.run(try std.fmt.allocPrint(aa, "CREATE (:W {{s: 's{d:0>2}', t: 't{d:0>2}', i: {d}, l: ['l{d:0>2}', 'm{d:0>2}']}})", .{ i, i, i, i, i }));
+        r.deinit(aa);
+    }
+}
+
 pub fn parseQuery(arena: *std.heap.ArenaAllocator, src: []const u8) !*const geode.gql.ast.Query {
     var lx = geode.gql.lexer.Lexer{ .src = src };
     var p = geode.gql.parser.Parser{ .lx = &lx, .arena = arena, .cur = lx.next() };

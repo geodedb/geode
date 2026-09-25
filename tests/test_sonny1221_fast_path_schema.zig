@@ -329,8 +329,15 @@ test "SONNY-1221: a stream dropped or rewound with prefetched rows pending leaks
     // Rewound after one page: the same rows as a stream that was never
     // rewound, in the same order, each once. Without a WHERE the OFFSET is
     // where the cursor STARTS (slot collection is bounded by OFFSET+LIMIT), so
-    // a rewind must go back there, not to slot 0.
-    for ([_][]const u8{ many_query, "MATCH (n:M) RETURN n.s, n.i SKIP 5 LIMIT 3" }) |query| {
+    // a rewind must go back there, not to slot 0. With a WHERE the OFFSET is
+    // counted over matched rows, so a rewind must reset that count; that case
+    // also frees the nodes the WHERE rejects and the OFFSET skips
+    // (SONNY-2464).
+    for ([_][]const u8{
+        many_query,
+        "MATCH (n:M) RETURN n.s, n.i SKIP 5 LIMIT 3",
+        "MATCH (n:M) WHERE n.i >= 3 RETURN n.s, n.i SKIP 2 LIMIT 3",
+    }) |query| {
         var plain = try openStream(&h, allocator, &qa, query);
         defer plain.deinit();
         const want = try drainColumn0(&plain, allocator, 0);

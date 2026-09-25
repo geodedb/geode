@@ -467,9 +467,11 @@ pub const NodeScanStream = struct {
                 var produced_node_value = false;
                 for (self.ret_items, 0..) |item, i| {
                     const value = try eval.evalExpr(allocator, item.expr, env);
-                    // SONNY-2472: set the cell before `produced` counts it, so
-                    // the errdefer never frees a string an earlier cell holds.
-                    row[i] = try copyIfShared(allocator, row[0..i], value);
+                    // SONNY-2472 / SONNY-2464: the cell never shares memory
+                    // with the node (see "Node ownership" at `destroyNode`).
+                    // It is set before `produced` counts it, so the errdefer
+                    // frees only cells that own what they hold.
+                    row[i] = try detachFromNode(allocator, node, value);
                     produced = i + 1;
                     if (row[i] == .Node) produced_node_value = true;
                 }
@@ -479,7 +481,8 @@ pub const NodeScanStream = struct {
                     try owned_entities.trackNode(node);
                     node_tracked.* = true;
                 } else {
-                    // No reference to the node escapes the row; free it now.
+                    // No reference to the node escapes the row, and no cell
+                    // points into it: free all of it now.
                     destroyNode(allocator, node);
                     node_tracked.* = true;
                 }
@@ -502,9 +505,11 @@ pub const NodeScanStream = struct {
             .columns = columns,
             .rows = try rows_mut.toOwnedSlice(allocator),
             .flags = std.ArrayList([]const u8).empty,
-            // Projection rows own their scalar values (strings duplicated by
-            // evalExpr); freeValue is a no-op for .Node, which is owned by
-            // owned_graph_entities — so no double free for mixed rows.
+            // A projection cell owns what it holds: `detachFromNode` copies
+            // any string that still points into its node, so freeing every
+            // cell here never frees node memory (SONNY-2472, SONNY-2464).
+            // freeValue is a no-op for .Node, which is owned by
+            // owned_graph_entities, so a mixed row is freed once too.
             .owns_value_memory = self.mode == .projection,
             .owned_graph_entities = if (owned) owned_entities else null,
         };
@@ -736,37 +741,76 @@ pub const NodeScanStream = struct {
     }
 };
 
-// CANARY: REQ=REQ-SONNY-2472-DUPLICATE-PROJECTION; FEATURE="EngineDirectProjectionOwnership"; ASPECT=DuplicateCellCopy; STATUS=TESTED; TEST=tests/test_sonny2472_duplicate_projection.zig; OWNER=engine; UPDATED=2026-09-25
-/// SONNY-2472: `value`, or a copy of it when its string is already held by one
-/// of `earlier`, the cells before it in the same projection row. `.Member`
-/// evaluation hands a cell the node's own string, not a copy, and the page
-/// frees every cell (`owns_value_memory`), so `RETURN n.s, n.s AS t` used to
-/// put one allocation in two cells and free it twice. The first cell keeps the
-/// node's string; every later cell that repeats it gets its own copy. Only a
-/// `.Str` can be shared this way: every other value `.Member` or
-/// `.PropertyAccess` yields is either a fresh copy or holds no memory.
-fn copyIfShared(allocator: std.mem.Allocator, earlier: []const Value, value: Value) !Value {
+// Node ownership on the engine-direct scan (SONNY-2472, SONNY-2464).
+//
+// Every node this file materializes (`materializeNode`,
+// `materializeNodeProjected`) owns ALL of its memory, on the allocator it was
+// built with: the struct, the label slice and each label, the graph name, every
+// property key and value, and the property map's entry slice. Two rules make
+// every one of those allocations, and every row cell, freed exactly once:
+//
+//   1. A row never shares memory with a node. `.Member` evaluation hands a cell
+//      the node's own string, not a copy; `detachFromNode` replaces such a cell
+//      with a copy before the row keeps it. So a cell owns exactly what it
+//      holds, and the page frees it (`owns_value_memory`), however many cells
+//      read the same property (SONNY-2472).
+//   2. A node has exactly one owner, which frees all of it once with
+//      `destroyNode`. That is the code that materialized it, straight after
+//      use, whenever no row returns the node itself: a WHERE miss, an OFFSET
+//      skip, a filtered count's tally, `slotMatchesPredicate`'s check, and a
+//      projection row that only reads properties. So a value is freed whether
+//      or not a row read it (SONNY-2464). A node that a row returns (`RETURN
+//      n`) is kept alive by the page's `OwnedGraphEntities` instead.
+//
+// No arena is involved, so nothing is released in bulk and no cell can be left
+// pointing at memory released under it.
+
+// CANARY: REQ=REQ-SONNY-2472-DUPLICATE-PROJECTION; FEATURE="EngineDirectProjectionOwnership"; ASPECT=CellOwnsItsString; STATUS=TESTED; TEST=tests/test_sonny2472_duplicate_projection.zig; OWNER=engine; UPDATED=2026-09-25
+/// Rule 1 of "Node ownership": `value`, made independent of `node`. A string
+/// that points into one of the node's string values is replaced by a copy.
+/// Only a `.Str` can point into the node: every other value `.Member` or
+/// `.PropertyAccess` yields is a fresh allocation (a `.PropertyAccess` string,
+/// a projected list or extended value, a decrypted field) or holds no memory
+/// (a scalar, or `.Node`, which is the node itself and belongs to its owner).
+/// If the copy cannot be made, `value` still belongs to the node, so the caller
+/// has nothing of its own to free.
+fn detachFromNode(allocator: std.mem.Allocator, node: *const graph_store.Node, value: Value) !Value {
     const s = switch (value) {
         .Str => |s| s,
         else => return value,
     };
-    if (s.len == 0) return value;
-    for (earlier) |cell| {
-        const held = switch (cell) {
-            .Str => |t| t,
-            else => continue,
-        };
-        if (held.ptr == s.ptr) return .{ .Str = try allocator.dupe(u8, s) };
-    }
-    return value;
+    // An empty slice owns no memory, so freeing it is a no-op either way.
+    if (s.len == 0 or !nodeHoldsBytes(node, s)) return value;
+    return .{ .Str = try allocator.dupe(u8, s) };
 }
 
+/// True when `bytes` starts inside one of `node`'s string property values.
+fn nodeHoldsBytes(node: *const graph_store.Node, bytes: []const u8) bool {
+    const at = @intFromPtr(bytes.ptr);
+    var props = node.properties.iterator();
+    while (props.next()) |entry| {
+        const owned = switch (entry.value_ptr.*) {
+            .String => |owned| owned,
+            else => continue,
+        };
+        const start = @intFromPtr(owned.ptr);
+        if (at >= start and at < start + owned.len) return true;
+    }
+    return false;
+}
+
+// CANARY: REQ=REQ-SONNY-2464-STRING-VALUE-LEAKS; FEATURE="EngineDirectNodeOwnership"; ASPECT=DeepNodeDestroy; STATUS=TESTED; TEST=tests/test_sonny2464_string_value_leaks.zig; OWNER=engine; UPDATED=2026-09-25
+/// Rule 2 of "Node ownership": free everything `node` owns, then the node.
+/// Safe whatever the rows hold, because no row cell points into a node (rule
+/// 1). Frees exactly what `materializeNode` / `materializeNodeProjected`
+/// allocate; `graph_store.freeNodeValue` would also free `tenant_id`, which
+/// these nodes leave at its static default.
 fn destroyNode(allocator: std.mem.Allocator, node: *graph_store.Node) void {
-    // Keys only. Nothing references a key. Values must NOT be freed here:
-    // .Member evaluation hands the row the node's own string, and the row
-    // frees it.
-    var keys = node.properties.iterator();
-    while (keys.next()) |entry| allocator.free(entry.key_ptr.*);
+    var props = node.properties.iterator();
+    while (props.next()) |entry| {
+        allocator.free(entry.key_ptr.*);
+        property_value_codec.freePropertyValue(allocator, entry.value_ptr.*);
+    }
     node.properties.deinit();
     allocator.free(node.graph_name);
     for (node.labels) |label| allocator.free(label);
@@ -2027,10 +2071,7 @@ fn materializeNodeProjected(
             else => return err,
         };
         const val = maybe_val orelse continue;
-        defer switch (val) {
-            .string => |s| allocator.free(s),
-            else => {},
-        };
+        defer freeStoragePropertyValue(allocator, val);
         const decoded = try graph_storage_adapter.fromStorageProperty(allocator, val);
         const owned_key = try allocator.dupe(u8, key);
         // `needed_keys` is deduplicated by `addKeyUnique`, so no key repeats —
@@ -2118,10 +2159,7 @@ fn resolveExternalNodeId(
 
     // Slow path: read the persisted public ID property from the adapter.
     if (adapter.getNodeProperty(graph_name, slot_id, graph_store.INTERNAL_NODE_ID_PROPERTY_KEY, allocator) catch null) |stored_prop| {
-        defer switch (stored_prop) {
-            .string => |text| allocator.free(text),
-            else => {},
-        };
+        defer freeStoragePropertyValue(allocator, stored_prop);
         const public_id: ?u64 = switch (stored_prop) {
             .string => |text| graph_store.parsePersistedPublicId(text),
             .int => |n| if (n >= 0) @as(u64, @intCast(n)) else null,
@@ -2143,9 +2181,14 @@ fn resolveExternalNodeId(
     return slot_id;
 }
 
+/// Free a value the storage adapter read for this file (`getNodeProperty`,
+/// `getAllNodeProperties`). The engine's decode copies both a string and an
+/// extended value's bytes onto the caller's allocator (SONNY-2464: the
+/// extended value's bytes used to leak on every read).
 fn freeStoragePropertyValue(allocator: std.mem.Allocator, value: gs.PropertyValue) void {
     switch (value) {
         .string => |text| allocator.free(text),
+        .ext => |ext| allocator.free(ext.data),
         else => {},
     }
 }

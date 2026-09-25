@@ -8388,6 +8388,19 @@ pub fn build(b: *std.Build) void {
     const sonny2472_step = b.step("test-sonny2472-duplicate-projection", "Run SONNY-2472 regression (a string property projected twice by the node-scan fast path is two allocations, each freed once)");
     sonny2472_step.dependOn(&run_sonny2472_tests.step);
 
+    // SONNY-2464: the node-scan fast path leaked every property value that no
+    // row took over: a WHERE-only key, a WHERE miss, an OFFSET skip, a
+    // filtered count's tally, and the WHERE ... LIMIT slot collection. One
+    // leak-checked test per path.
+    const sonny2464_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny2464_string_value_leaks.zig"), .target = target, .optimize = optimize });
+    sonny2464_test_mod.addImport("geode", root_mod);
+    sonny2464_test_mod.addImport("logging", logging_mod);
+    const sonny2464_tests = b.addTest(.{ .root_module = sonny2464_test_mod });
+    const run_sonny2464_tests = b.addRunArtifact(sonny2464_tests);
+    shardDep(test_step, &run_sonny2464_tests.step, 1, test_shard_loads, test_shard_index);
+    const sonny2464_step = b.step("test-sonny2464-string-value-leaks", "Run SONNY-2464 regression (the node-scan fast path frees every property value no row takes over: WHERE-only keys, WHERE misses, OFFSET skips, filtered counts, WHERE ... LIMIT slot collection)");
+    sonny2464_step.dependOn(&run_sonny2464_tests.step);
+
     // KNOWN RED: an intentionally red TDD reproduction
     // (docs/KNOWN_TEST_ISSUES.md). It is a named step but deliberately NOT
     // passed to shardDep, so the aggregate `test` step (the pre-push hook and
