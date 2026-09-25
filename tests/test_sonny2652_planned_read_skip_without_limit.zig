@@ -24,7 +24,13 @@
 // The same cap ignored a FILTER, which removes rows after materialization just
 // as a WHERE does: `MATCH (n:M) FILTER n.i >= 10 RETURN n.s LIMIT 5`
 // materialized 5 rows and returned the 2 of them that passed. The FILTER tests
-// pin that a FILTER turns the cap off too, at both sites.
+// pin that a FILTER turns the cap off too, at both sites (SONNY-2672).
+//
+// It ignored a GROUP BY with no aggregate as well (SONNY-2673), which merges
+// rows after materialization: `MATCH (n:N {k: 1}) RETURN n.g GROUP BY n.g
+// LIMIT 2` materialized 2 rows, both in group 'a', and returned 1 group of the
+// 2. The GROUP BY tests pin that a GROUP BY turns the cap off at both sites. (A
+// HAVING turns it off too; the SONNY-2667 tests exercise that.)
 //
 // CANARY: REQ=REQ-SONNY-2652-PLANNED-READ-SKIP; FEATURE="PlannedReadRowWindow"; ASPECT=Regression; STATUS=TESTED; TEST=tests/test_sonny2652_planned_read_skip_without_limit.zig; OWNER=engine; UPDATED=2026-09-25
 
@@ -308,4 +314,74 @@ test "SONNY-2652: a FILTER is applied before the LIMIT on a planned multi-chain 
     const all = try expectBase(&h, base, want.items, n);
     try expectWindowUncapped(&h, base, all, 0, 2, n);
     try expectWindowUncapped(&h, base, all, 1, 2, n);
+}
+
+/// 25 `:N` nodes (i = 0..24, k = 1 on each, g = 'a' for the first 10 and 'b'
+/// for the other 15), 2 `:X` nodes, and 25 `(:NA {i, g})-[:R]->(:NB)` pairs
+/// with the same g.
+fn seedGroups(h: *harness.Harness) !void {
+    const aa = h.arena.allocator();
+    for (0..many) |i| {
+        const g: []const u8 = if (i < 10) "a" else "b";
+        var r = try h.run(try std.fmt.allocPrint(aa, "CREATE (:N {{i: {d}, k: 1, g: '{s}'}})", .{ i, g }));
+        r.deinit(aa);
+        var p = try h.run(try std.fmt.allocPrint(aa, "CREATE (:NA {{i: {d}, g: '{s}'}})-[:R]->(:NB {{i: {d}}})", .{ i, g, i }));
+        p.deinit(aa);
+    }
+    for (0..2) |i| {
+        var r = try h.run(try std.fmt.allocPrint(aa, "CREATE (:X {{s: 'x{d}'}})", .{i}));
+        r.deinit(aa);
+    }
+}
+
+/// `query` returns exactly `want`, in any order. When `want_materialized` is
+/// given, the planned read served it and materialized that many rows (every
+/// row: the cap must be off).
+fn expectRowSet(h: *harness.Harness, query: []const u8, want: []const []const u8, want_materialized: ?u64) !void {
+    const got = try executor(h, query);
+    const sorted = try h.arena.allocator().dupe([]const u8, got.rows);
+    std.mem.sort([]const u8, sorted, {}, lessThan);
+    if (sorted.len != want.len) {
+        std.debug.print("{s}: expected {d} rows, found {d} ({d} materialized)\n", .{ query, want.len, sorted.len, got.materialized });
+        return error.TestExpectedEqual;
+    }
+    for (want, sorted) |w, g| try testing.expectEqualStrings(w, g);
+    if (want_materialized) |n| try testing.expectEqual(n, got.materialized);
+}
+
+test "SONNY-2673: a GROUP BY is applied before the LIMIT on a planned node scan" {
+    harness.silenceEngineLogs();
+    var h = try harness.Harness.init(testing.allocator);
+    defer h.deinit();
+    try seedGroups(&h);
+
+    // The streaming GROUP BY fast path serves a bare label scan (the planned
+    // read never runs: nothing is materialized there). It is right either way.
+    try expectRowSet(&h, "MATCH (n:N) RETURN n.g GROUP BY n.g LIMIT 2", &.{ "a", "b" }, 0);
+    // An inline property sends the same grouping to the planned read.
+    try expectRowSet(&h, "MATCH (n:N {k: 1}) RETURN n.g GROUP BY n.g", &.{ "a", "b" }, many);
+    try expectRowSet(&h, "MATCH (n:N {k: 1}) RETURN n.g GROUP BY n.g LIMIT 2", &.{ "a", "b" }, many);
+    // Groups come back in no defined order: the window takes the second group
+    // of the same query's unwindowed answer.
+    const all = (try executor(&h, "MATCH (n:N {k: 1}) RETURN n.g GROUP BY n.g")).rows;
+    try testing.expectEqual(@as(usize, 2), all.len);
+    try expectRowSet(&h, "MATCH (n:N {k: 1}) RETURN n.g GROUP BY n.g SKIP 1 LIMIT 1", all[1..2], many);
+}
+
+test "SONNY-2673: a GROUP BY is applied before the LIMIT on a planned path query" {
+    harness.silenceEngineLogs();
+    var h = try harness.Harness.init(testing.allocator);
+    defer h.deinit();
+    try seedGroups(&h);
+
+    try expectRowSet(&h, "MATCH (a:NA)-[:R]->(b:NB) RETURN a.g GROUP BY a.g LIMIT 2", &.{ "a", "b" }, many);
+}
+
+test "SONNY-2673: a GROUP BY is applied before the LIMIT on a planned multi-chain query" {
+    harness.silenceEngineLogs();
+    var h = try harness.Harness.init(testing.allocator);
+    defer h.deinit();
+    try seedGroups(&h);
+
+    try expectRowSet(&h, "MATCH (n:N), (x:X) RETURN n.g GROUP BY n.g LIMIT 2", &.{ "a", "b" }, many * 2);
 }

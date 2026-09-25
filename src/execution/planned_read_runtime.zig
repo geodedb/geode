@@ -758,10 +758,14 @@ fn executePatternQuery(
     // materialize all (unchanged); the window is applied post-hoc.
     // SONNY-2652: the bound is `materializeWindowEnd` (null without a LIMIT),
     // not the start-slot threshold, which answers offset+1 for an OFFSET alone.
-    // A FILTER removes rows after materialization exactly as a WHERE does.
+    // A FILTER removes rows after materialization exactly as a WHERE does. A
+    // GROUP BY merges rows (with or without an aggregate) and a HAVING removes
+    // them, both after materialization too.
     const materialize_cap: ?usize = blk: {
         if (q.where_clause != null) break :blk null;
         if (q.filter_clause != null) break :blk null;
+        if (q.group_by != null) break :blk null;
+        if (q.having != null) break :blk null;
         if (q.order_by != null) break :blk null;
         if (q.with_clause != null) break :blk null;
         if (q.ret.distinct) break :blk null;
@@ -1822,10 +1826,14 @@ fn executeMultiChainHashJoin(
     // cap applies only to the pure-cartesian loops.
     // SONNY-2652: the bound is `materializeWindowEnd` (null without a LIMIT);
     // an OFFSET alone used to cap the loops at offset+1 rows. A FILTER removes
-    // rows after materialization exactly as a WHERE does.
+    // rows after materialization exactly as a WHERE does. A GROUP BY merges
+    // rows (with or without an aggregate) and a HAVING removes them, both
+    // after materialization too.
     const materialize_cap: ?usize = blk: {
         if (q.where_clause != null) break :blk null;
         if (q.filter_clause != null) break :blk null;
+        if (q.group_by != null) break :blk null;
+        if (q.having != null) break :blk null;
         if (q.order_by != null) break :blk null;
         if (q.with_clause != null) break :blk null;
         if (q.ret.distinct) break :blk null;
