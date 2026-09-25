@@ -660,15 +660,37 @@ pub const UserStorageBackend = struct {
             const policy_id: u64 = @intCast(id_val);
 
             var record = blankPolicyRecord(policy_id);
-            record.name_len = copyIntoField(&record.name, getStringProp(self.store, node_id, "name", ""));
+            const stored_name = getStringProp(self.store, node_id, "name", "");
+            const stored_graph = getStringProp(self.store, node_id, "graph", "");
+            const stored_using = getStringProp(self.store, node_id, "using_clause", "");
+            const stored_check = getStringProp(self.store, node_id, "check_clause", "");
+            record.name_len = copyIntoField(&record.name, stored_name);
             record.description_len = copyIntoField(&record.description, getStringProp(self.store, node_id, "description", ""));
-            record.graph_len = copyIntoField(&record.graph, getStringProp(self.store, node_id, "graph", ""));
+            record.graph_len = copyIntoField(&record.graph, stored_graph);
             record.table_len = copyIntoField(&record.table, getStringProp(self.store, node_id, "table", ""));
             record.operation = @intCast(@max(0, getIntProp(self.store, node_id, "operation", 0)));
             record.permissive = getBoolProp(self.store, node_id, "permissive", false);
             record.enabled = getBoolProp(self.store, node_id, "enabled", true);
-            record.using_clause_len = copyIntoField(&record.using_clause, getStringProp(self.store, node_id, "using_clause", ""));
-            record.check_clause_len = copyIntoField(&record.check_clause, getStringProp(self.store, node_id, "check_clause", ""));
+            // CANARY: REQ=REQ-SONNY-2731-POLICY-TEXT-LIMITS; FEATURE="GPS Policy Persistence"; ASPECT=OverlongStoredPolicy; STATUS=TESTED; TEST=tests/test_gps_policy_persistence.zig; OWNER=security; UPDATED=2026-09-25
+            // SONNY-2731: a stored name, graph or clause longer than its field
+            // (persistPolicy never writes one; an older or foreign writer
+            // could) used to be cut to fit, and the cut policy text compiled
+            // at startup as a different policy. Such a policy is now loaded
+            // with a USING text that never compiles, so the catalog keeps it
+            // fail-closed (it grants nothing, and lists as invalid).
+            const overlong = stored_name.len > record.name.len or stored_graph.len > record.graph.len or
+                stored_using.len > record.using_clause.len or stored_check.len > record.check_clause.len;
+            if (overlong) {
+                log.warn("stored policy has a field longer than its record; loaded fail-closed", &.{
+                    Attr.uint("policy_id", policy_id),
+                    Attr.uint("using_len", @intCast(stored_using.len)),
+                });
+                record.using_clause_len = copyIntoField(&record.using_clause, overlong_policy_text);
+                record.check_clause_len = 0;
+            } else {
+                record.using_clause_len = copyIntoField(&record.using_clause, stored_using);
+                record.check_clause_len = copyIntoField(&record.check_clause, stored_check);
+            }
             record.audit_level = @intCast(@max(0, getIntProp(self.store, node_id, "audit_level", 0)));
             record.created_at = getIntProp(self.store, node_id, "created_at", compat_milliTimestamp());
             record.updated_at = getIntProp(self.store, node_id, "updated_at", record.created_at);
@@ -1398,6 +1420,11 @@ pub const UserStorageBackend = struct {
         try self.store.setNodeProperty(node_id, "granted_at", .{ .Int = record.granted_at });
         try self.store.setNodeProperty(node_id, "granted_by", .{ .Int = safeI64(record.granted_by) });
     }
+
+    /// SONNY-2731: the USING text a policy is loaded with when a stored field
+    /// is longer than its record. No policy compiler accepts it, so the
+    /// policy is kept fail-closed.
+    pub const overlong_policy_text = "<stored policy text longer than the record holds>";
 
     pub fn copyIntoField(dest: []u8, src: []const u8) u16 {
         const max_len = dest.len;

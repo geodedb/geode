@@ -2458,14 +2458,19 @@ fn executeStatementWithContextInner(allocator: std.mem.Allocator, stmt: ast.Stat
             // CANARY: REQ=REQ-GPS-CATALOG-002; FEATURE="GPS Policy Persistence"; ASPECT=CreatePolicyWriteThrough; STATUS=TESTED; TEST=tests/test_gps_policy_persistence.zig; OWNER=security; UPDATED=2026-05-20
             // Write-through to __geode_security via hooks installed at server startup.
             // In CLI / test contexts hooks are null and the policy is in-memory only.
+            // SONNY-2731: a policy that cannot be persisted is taken out again
+            // and the statement fails. It used to stay in memory only, with a
+            // warning, and vanish at the next restart.
             if (policy_catalog_mod.getWriteThroughHooks()) |hooks| {
                 hooks.persist(hooks.ctx, new_policy_spec) catch |err| {
                     const logging_mod = @import("logging");
                     const log_ex = logging_mod.scoped("execution");
-                    log_ex.warn("GPS CREATE POLICY persistence to __geode_security failed — policy is in-memory only", &.{
+                    log_ex.warn("GPS CREATE POLICY persistence to __geode_security failed — the policy was not created", &.{
                         logging_mod.Attr.string("name", cp_stmt.name),
                         logging_mod.Attr.string("error", @errorName(err)),
                     });
+                    pol_cat.removePolicy(cp_stmt.name) catch {};
+                    return err;
                 };
             }
 

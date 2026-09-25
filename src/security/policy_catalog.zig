@@ -62,6 +62,18 @@ pub const PolicySpec = struct {
     enabled: bool,
 };
 
+// CANARY: REQ=REQ-SONNY-2731-POLICY-TEXT-LIMITS; FEATURE="GPS Policy Persistence"; ASPECT=PersistableLengths; STATUS=TESTED; TEST=tests/test_gps_policy_persistence.zig; OWNER=security; UPDATED=2026-09-25
+/// SONNY-2731: the longest name, scope graph and USING expression that
+/// `__geode_security` can store (`UserStorageBackend.persistPolicy` refuses
+/// longer ones; its record fields are one byte larger). DDL refuses a longer
+/// policy up front: CREATE POLICY used to accept it, keep it in memory only
+/// when the write-through failed, and lose it at the next restart, and the
+/// startup loader cut a stored text to its field size and compiled the cut
+/// text. tests/test_gps_policy_persistence.zig pins these to the record.
+pub const max_policy_name_len: usize = 63;
+pub const max_policy_scope_len: usize = 63;
+pub const max_policy_expression_len: usize = 511;
+
 pub const PolicyCatalog = struct {
     allocator: std.mem.Allocator,
     // Use ArrayList which in Zig 0.16 is the unmanaged form: allocator passed
@@ -130,6 +142,19 @@ pub const PolicyCatalog = struct {
     }
 
     pub fn addPolicyWithMode(self: *PolicyCatalog, args: PolicySpec, on_compile_failure: CompileFailureMode) !void {
+        // SONNY-2731: DDL refuses what the store cannot hold.
+        if (on_compile_failure == .reject) {
+            if (args.name.len > max_policy_name_len or
+                args.scope_graph.len > max_policy_scope_len or
+                args.expression_source.len > max_policy_expression_len)
+            {
+                std.log.scoped(.gps).warn(
+                    "refusing policy '{s}': a field is longer than __geode_security stores (name {d}/{d}, graph {d}/{d}, USING {d}/{d} bytes)",
+                    .{ args.name[0..@min(args.name.len, max_policy_name_len)], args.name.len, max_policy_name_len, args.scope_graph.len, max_policy_scope_len, args.expression_source.len, max_policy_expression_len },
+                );
+                return error.PolicyFieldTooLong;
+            }
+        }
         // CANARY: REQ=REQ-GAP-0923-ABAC-POLICY-VALIDATION; FEATURE="ABAC"; ASPECT=DuplicateNameReject; STATUS=TESTED; TEST=tests/test_gap0923_abac_policy_validation.zig; OWNER=security; UPDATED=2026-07-10
         // GAP-0923(b): reject a duplicate policy name. Two same-named rows used
         // to coexist — SHOW POLICIES listed both and a single DROP POLICY
@@ -249,6 +274,10 @@ pub const PolicyCatalog = struct {
     /// existing policy name.
     /// Bumps the policy version and invalidates the decision cache after any mutation.
     pub fn alterPolicy(self: *PolicyCatalog, name: []const u8, set_enabled: ?bool, rename_to: ?[]const u8) !void {
+        // SONNY-2731: a name the store cannot hold.
+        if (rename_to) |new_name| {
+            if (new_name.len > max_policy_name_len) return error.PolicyFieldTooLong;
+        }
         // Reject a rename that would collide with a different existing policy.
         if (rename_to) |new_name| {
             if (!std.mem.eql(u8, new_name, name)) {

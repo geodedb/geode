@@ -11,6 +11,32 @@
 - **Write-through hooks** — Installed in `main.zig`; every add/remove operation syncs to persistent storage.
 - **`decide()` policy evaluation** — Consults the catalog after builtin-role and graph-grant evaluation. When a policy with `expression_source = "true"` matches a query binding, returns `.allow` with reason `policy_match`.
 
+## Stored lengths and validity (SONNY-2731, SONNY-2732)
+
+`__geode_security` keeps each policy in a fixed-size record:
+
+| Field | Longest value stored |
+|---|---|
+| name | 63 bytes |
+| scope graph | 63 bytes |
+| USING expression | 511 bytes |
+
+`CREATE POLICY` and `ALTER POLICY … RENAME TO` refuse anything longer, with
+`PolicyFieldTooLong`, and change nothing. Before SONNY-2731 such a policy was
+accepted and kept in memory only, and it disappeared at the next restart. A
+`CREATE POLICY` whose durable write fails for any reason is now rolled back,
+and the statement fails.
+
+At startup, a stored value longer than its field could only have come from
+an older or foreign writer. It used to be cut to fit, and the cut text was
+compiled as a different policy. Now it is loaded fail-closed: the policy is
+kept, grants nothing, and lists as invalid.
+
+`SHOW POLICIES` (fifth column) and `CALL geode.auth.policy_list()` (third
+column) show `valid`. It is false for a stored policy whose USING expression
+no longer compiles, which is kept fail-closed until it is rewritten. Startup
+logs how many stored policies are invalid.
+
 ## What did NOT change
 
 - **Real expression compilation** — Phase 4 only supports the literal `"true"` predicate. Phase 5+ compiles real expressions through the RLS VM.

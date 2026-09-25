@@ -80,6 +80,19 @@
   post-filter's label-deny snapshot, and the traversal's, now hold their own
   copy of each denied label. If a deny policy was removed while a query's
   post-filter ran, the post-filter could read freed memory.
+- **Policy text no longer changes meaning across a restart (SONNY-2731):**
+  `__geode_security` stores a policy's name and scope graph in 64-byte
+  fields and its USING text in a 512-byte field. `CREATE POLICY` accepted
+  longer values; the durable write then failed with only a warning, so the
+  policy lived in memory until the next restart. The startup loader also
+  cut any stored value longer than its field and compiled the cut text as a
+  different policy. Now:
+  - CREATE and ALTER POLICY refuse a name or graph longer than 63 bytes,
+    or a USING text longer than 511, with `PolicyFieldTooLong`;
+  - a CREATE whose durable write fails is rolled back and the statement
+    fails;
+  - a stored value that does not fit is loaded fail-closed. The policy
+    grants nothing and lists with `valid = false`; it is no longer cut.
 - **Strict RLS expression policies (SONNY-2732):**
   - Only a boolean TRUE admits a row. A policy that evaluated to a
     non-empty string or a non-zero number used to admit it. So `row.flag`
