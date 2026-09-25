@@ -442,6 +442,38 @@ inline fn isAscii(s: []const u8) bool {
 /// the hot path outside tests.
 pub var nfc_fallback_count: usize = 0;
 
+const narrowing = @import("types/narrowing.zig");
+
+// CANARY: REQ=REQ-SONNY-2739-POWER-OVERFLOW; FEATURE="PowerOperator"; ASPECT=CheckedResult; STATUS=TESTED; TEST=tests/test_sonny2739_float_narrowing.zig; OWNER=eval; UPDATED=2026-09-25
+/// `base ^ exp` over integers. A non-negative exponent is computed exactly:
+/// an Int when the power fits one, else a scale-6 Decimal while that fits (a
+/// power below 10^32). A negative exponent is `floatPower`'s.
+///
+/// SONNY-2739: the power went through f64, then `@intFromFloat` behind the
+/// guard `result <= @floatFromInt(maxInt(i64))`, which admits 2^63, and then
+/// `@intFromFloat` into the Decimal with no guard at all: `2 ^ 63`, `10 ^ 40`,
+/// `10 ^ 400` and `0 ^ -1` aborted the server. A power that does not fit is now
+/// DecimalOverflow (22003), zero to a negative power is a division by zero
+/// (22012), and a power past 2^53 is exact (`3 ^ 39`).
+fn intPower(base: i64, exp: i64) EvalError!Value {
+    if (exp < 0) return floatPower(@floatFromInt(base), exp);
+    const p = std.math.powi(i128, base, exp) catch return EvalError.DecimalOverflow;
+    if (std.math.cast(i64, p)) |i| return .{ .Int = i };
+    const coeff = std.math.mul(i128, p, float_to_decimal_scale) catch return EvalError.DecimalOverflow;
+    if (@abs(coeff) >= @import("types/decimal128.zig").Decimal128.MAX_COEFF) return EvalError.DecimalOverflow;
+    return .{ .Decimal = .{ .coeff = coeff, .scale = 6 } };
+}
+
+/// `base ^ exp` through f64: an Int when the power is an integer that fits
+/// one, else a scale-6 Decimal (truncated), or DecimalOverflow (22003) when
+/// that does not fit. Zero to a negative power is a division by zero.
+fn floatPower(base: f64, exp: i64) EvalError!Value {
+    if (base == 0 and exp < 0) return EvalError.DivisionByZero;
+    const result = std.math.pow(f64, base, @floatFromInt(exp));
+    if (@trunc(result) == result and narrowing.floatFits(i64, result)) return .{ .Int = @intFromFloat(result) };
+    return decimalFromF64(result);
+}
+
 pub fn evalBinary(alloc: std.mem.Allocator, op: ast.BinOp, l: Value, r: Value) EvalError!Value {
     return switch (op) {
         .And => and3(l, r),
@@ -692,28 +724,11 @@ pub fn evalBinary(alloc: std.mem.Allocator, op: ast.BinOp, l: Value, r: Value) E
             // NULL ^ anything = NULL (GQL/SQL semantics)
             if (l == .Null or r == .Null) break :blk_pow .{ .Null = {} };
             // Integer exponentiation: x ^ n where n is integer
-            if (l == .Int and r == .Int) {
-                const base: f64 = @floatFromInt(l.Int);
-                const exp: f64 = @floatFromInt(r.Int);
-                const result = std.math.pow(f64, base, exp);
-                // If result is an exact integer, return Int
-                if (@floor(result) == result and result >= @as(f64, @floatFromInt(std.math.minInt(i64))) and result <= @as(f64, @floatFromInt(std.math.maxInt(i64)))) {
-                    break :blk_pow .{ .Int = @intFromFloat(result) };
-                }
-                // Convert to Decimal for non-integer results (6 decimal places precision)
-                const scaled_result: i128 = @intFromFloat(result * 1_000_000);
-                break :blk_pow .{ .Decimal = .{ .coeff = scaled_result, .scale = 6 } };
-            }
+            if (l == .Int and r == .Int) break :blk_pow try intPower(l.Int, r.Int);
             // Decimal base with integer exponent
             if (l == .Decimal and r == .Int) {
                 const base: f64 = @as(f64, @floatFromInt(l.Decimal.coeff)) / std.math.pow(f64, 10.0, @floatFromInt(l.Decimal.scale));
-                const exp: f64 = @floatFromInt(r.Int);
-                const result = std.math.pow(f64, base, exp);
-                if (@floor(result) == result and result >= @as(f64, @floatFromInt(std.math.minInt(i64))) and result <= @as(f64, @floatFromInt(std.math.maxInt(i64)))) {
-                    break :blk_pow .{ .Int = @intFromFloat(result) };
-                }
-                const scaled_result: i128 = @intFromFloat(result * 1_000_000);
-                break :blk_pow .{ .Decimal = .{ .coeff = scaled_result, .scale = 6 } };
+                break :blk_pow try floatPower(base, r.Int);
             }
             return EvalError.TypeMismatch;
         },
@@ -1289,6 +1304,10 @@ pub fn evalExpr(allocator: std.mem.Allocator, e: ast.Expr, env: Env) EvalError!V
                         return EvalError.DivisionByZero;
                     } else if (std.mem.eql(u8, err_name, "DecimalOverflow")) {
                         return EvalError.DecimalOverflow;
+                    } else if (std.mem.eql(u8, err_name, "IntegerOverflow")) {
+                        // SONNY-2739: a geo or geometry result past its
+                        // integer type (22003).
+                        return EvalError.IntegerOverflow;
                     } else if (std.mem.eql(u8, err_name, "VectorTooLarge")) {
                         // CANARY: REQ=REQ-ENG-3922-VECTOR-DIM-GUARD; FEATURE="VectorF32"; ASPECT=OverCapErrorIdentity; STATUS=TESTED; TEST=tests/test_eng3922_dim_guard.zig; OWNER=eval; UPDATED=2026-08-29
                         // ENG-3922(b): keep the over-cap identity instead of
@@ -2072,17 +2091,23 @@ pub fn evalExpr(allocator: std.mem.Allocator, e: ast.Expr, env: Env) EvalError!V
 // CANARY: REQ=REQ-MAP-PROP-004; FEATURE="MapProperties"; ASPECT=JsonFieldExtraction; STATUS=TESTED; TEST=geodetestlab/specs/gql_expressions_comprehensive.yml; OWNER=eval; UPDATED=2026-01-09
 /// Extract a field from a JSON string and return it as a Value
 /// Supports nested JSON object access by returning the nested JSON as ExtValue.Json
+// CANARY: REQ=REQ-SONNY-2739-CHECKED-NARROWING; FEATURE="NumericNarrowing"; ASPECT=JsonNumbers; STATUS=TESTED; TEST=tests/test_sonny2739_float_narrowing.zig; OWNER=eval; UPDATED=2026-09-25
+/// A JSON number with a fraction or an exponent: a scale-6 Decimal (truncated),
+/// or the double itself when that does not fit the decimal. SONNY-2739: it was
+/// always narrowed with a bare `@intFromFloat`, so `json('{"a": 1e300}').a`
+/// aborted the server.
+fn jsonFloatValue(f: f64) Value {
+    const coeff = @import("types/decimal128.zig").checkedScaledCoeff(f, float_to_decimal_scale_f64) catch
+        return .{ .Double = f };
+    return .{ .Decimal = .{ .coeff = coeff, .scale = 6, .orig_scale = 6, .orig_repr = null } };
+}
+
 fn jsonStdValueToValue(allocator: std.mem.Allocator, value: std.json.Value) !Value {
     return switch (value) {
         .null => .{ .Null = {} },
         .bool => |b| .{ .Bool = b },
         .integer => |i| .{ .Int = @intCast(i) },
-        .float => |f| .{ .Decimal = .{
-            .coeff = @intFromFloat(f * 1_000_000.0),
-            .scale = 6,
-            .orig_scale = 6,
-            .orig_repr = null,
-        } },
+        .float => |f| jsonFloatValue(f),
         .string => |s| .{ .Str = try allocator.dupe(u8, s) },
         .array => |arr| blk: {
             const values = try allocator.alloc(Value, arr.items.len);
@@ -2286,7 +2311,7 @@ fn parseJsonValue(allocator: std.mem.Allocator, json_str: []const u8, i: *usize)
         const num_str = json_str[num_start..i.*];
         if (is_float) {
             const float_val = std.fmt.parseFloat(f64, num_str) catch return Value{ .Null = {} };
-            return Value{ .Decimal = .{ .coeff = @intFromFloat(float_val * float_to_decimal_scale_f64), .scale = 6, .orig_scale = 6, .orig_repr = null } };
+            return jsonFloatValue(float_val);
         } else {
             const int_val = std.fmt.parseInt(i64, num_str, 10) catch return Value{ .Null = {} };
             return Value{ .Int = int_val };
@@ -4545,7 +4570,8 @@ fn tryBasicFunction(allocator: std.mem.Allocator, function_name: []const u8, arg
             .Decimal => |d| return Value{ .Decimal = d },
             .Str => |s| {
                 const f = std.fmt.parseFloat(f64, s) catch return Value{ .Null = {} };
-                const scaled: i128 = @intFromFloat(@round(f * float_to_decimal_scale_f64));
+                // SONNY-2739: 'nan', 'inf' or past the decimal is 22003.
+                const scaled = try @import("types/decimal128.zig").checkedScaledCoeff(@round(f * float_to_decimal_scale_f64), 1.0);
                 return Value{ .Decimal = .{ .coeff = scaled, .scale = float_scale } };
             },
             else => return Value{ .Null = {} },
@@ -4554,7 +4580,8 @@ fn tryBasicFunction(allocator: std.mem.Allocator, function_name: []const u8, arg
         // Convert to integer
         switch (first_arg) {
             .Int => |i| return Value{ .Int = i },
-            .Decimal => |d| return Value{ .Int = @intCast(@divFloor(d.coeff, std.math.pow(i128, 10, d.scale))) },
+            // SONNY-2739: exact and checked; the floor, as before.
+            .Decimal => |d| return Value{ .Int = try narrowing.decimalToInt(d.coeff, d.scale, .floor) },
             .Bool => |b| return Value{ .Int = if (b) 1 else 0 },
             .Str => |s| {
                 const i = std.fmt.parseInt(i64, s, 10) catch return Value{ .Null = {} };

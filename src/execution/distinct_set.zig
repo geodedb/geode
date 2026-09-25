@@ -2,6 +2,7 @@ const std = @import("std");
 const value_types = @import("../value_types.zig");
 const graph_store = @import("../graph_store.zig");
 const property_codec = @import("../property_value_codec.zig");
+const value_order = @import("value_order.zig");
 
 const Value = value_types.Value;
 
@@ -14,15 +15,30 @@ const Value = value_types.Value;
 //
 // Identity rules (ISO/IEC 39075:2024 <set quantifier>):
 //   * Node / Edge          -> by entity id, never by pointer.
-//   * integral numerics    -> by the i64 value, so 10, 10.0 and DECIMAL '10.00'
-//                             are the SAME value.
-//   * fractional numerics  -> by the IEEE-754 bit pattern of the f64.
+//   * numbers              -> by their exact value, the comparator's
+//                             (value_order.zig): 10, 10.0 and DECIMAL '10.00'
+//                             are the SAME value, so are DECIMAL 0.5 and
+//                             DOUBLE 0.5, and every NaN; DECIMAL 0.1 and
+//                             DOUBLE 0.1 are not. (SONNY-2675: a decimal was
+//                             keyed through f64, so decimals past ~16
+//                             significant digits merged, and each NaN bit
+//                             pattern was a value of its own.)
 //   * strings              -> by bytes (Str / Text / Char / Varchar alias).
 //   * Bool                 -> by the boolean.
-//   * everything else      -> by a tag-qualified rendering of the value.
+//   * intervals            -> by months and day-to-second length (a month is
+//                             not 30 days; a day is 24 hours); a time with a
+//                             time zone by its UTC time: the comparator's.
+//   * everything else      -> by its type and value: dates and times by
+//                             their fields, lists element by
+//                             element, maps entry by entry (sorted by key),
+//                             extended values by their binary encoding.
+//                             (SONNY-2675: they were by a rendering into 64
+//                             bytes, which had none for lists, maps, enums or
+//                             bit strings, so those were one bucket per type.)
 //   * NULL                 -> never a member; `add` reports it as "not new" so
 //                             callers skip the row (aggregates other than
-//                             COUNT(*) ignore null inputs).
+//                             COUNT(*) ignore null inputs). In a group key
+//                             (`writeGroupKeyPart`) NULL is a key of its own.
 
 /// Set of already-seen aggregate input values.
 ///
@@ -31,12 +47,15 @@ const Value = value_types.Value;
 pub const DistinctSet = struct {
     arena: std.heap.ArenaAllocator,
     seen: std.StringHashMapUnmanaged(void) = .empty,
+    /// The key of the value being tested, reused across calls.
+    key: std.Io.Writer.Allocating,
 
     pub fn init(allocator: std.mem.Allocator) DistinctSet {
-        return .{ .arena = std.heap.ArenaAllocator.init(allocator) };
+        return .{ .arena = std.heap.ArenaAllocator.init(allocator), .key = .init(allocator) };
     }
 
     pub fn deinit(self: *DistinctSet) void {
+        self.key.deinit();
         self.arena.deinit();
     }
 
@@ -44,9 +63,12 @@ pub const DistinctSet = struct {
     /// time. Returns false for NULL and for repeats.
     pub fn add(self: *DistinctSet, value: Value) !bool {
         const a = self.arena.allocator();
-        const key = (try encodeKey(a, value)) orelse return false;
-        const gop = try self.seen.getOrPut(a, key);
-        return !gop.found_existing;
+        self.key.clearRetainingCapacity();
+        if (!try writeKey(&self.key.writer, a, value)) return false;
+        const gop = try self.seen.getOrPut(a, self.key.written());
+        if (gop.found_existing) return false;
+        gop.key_ptr.* = try a.dupe(u8, self.key.written());
+        return true;
     }
 
     /// Number of distinct non-NULL values observed.
@@ -61,54 +83,170 @@ pub fn addProperty(set: *DistinctSet, prop: graph_store.PropertyValue) !bool {
     return set.add(property_codec.propertyValueToValue(prop));
 }
 
-/// Canonical hash key for a value, or null when the value is SQL NULL.
-fn encodeKey(a: std.mem.Allocator, value: Value) !?[]const u8 {
-    return switch (value) {
-        .Null => null,
-        .Node => |n| try std.fmt.allocPrint(a, "N:{d}", .{n.id}),
-        .Edge => |e| try std.fmt.allocPrint(a, "E:{d}", .{e.id}),
-        .Bool => |b| if (b) "B:1" else "B:0",
-        .Int => |n| try encodeInt(a, n),
-        .SmallInt => |n| try encodeInt(a, n),
-        .BigInt => |n| try encodeInt(a, n),
-        .Real => |f| try encodeFloat(a, @floatCast(f)),
-        .Double => |f| try encodeFloat(a, f),
-        .Decimal => |d| blk: {
-            const divisor = std.math.pow(f64, 10.0, @floatFromInt(d.scale));
-            break :blk try encodeFloat(a, @as(f64, @floatFromInt(d.coeff)) / divisor);
-        },
-        .Str => |s| try std.fmt.allocPrint(a, "S:{s}", .{s}),
-        .Text => |s| try std.fmt.allocPrint(a, "S:{s}", .{s}),
-        .Char => |c| try std.fmt.allocPrint(a, "S:{s}", .{c.data}),
-        .Varchar => |v| try std.fmt.allocPrint(a, "S:{s}", .{v.data}),
-        .Bytea => |b| try std.fmt.allocPrint(a, "X:{x}", .{b}),
-        .Json => |s| try std.fmt.allocPrint(a, "J:{s}", .{s}),
-        .UUID => |u| try std.fmt.allocPrint(a, "U:{x}", .{u.bytes}),
-        else => blk: {
-            // Fall back to the shared stringifier so structurally equal values
-            // of the same tag collapse into one bucket. Values it cannot render
-            // (EvalError.Unsupported) degrade to one bucket per tag — an
-            // under-count that is still better than the previous behaviour of
-            // ignoring the value entirely.
-            var buf: [64]u8 = undefined;
-            const rendered = value_types.stringify(value, &buf) catch
-                break :blk try std.fmt.allocPrint(a, "?{s}", .{@tagName(value)});
-            break :blk try std.fmt.allocPrint(a, "{s}:{s}", .{ @tagName(value), rendered });
-        },
-    };
+// CANARY: REQ=REQ-SONNY-2675-TYPED-GROUP-KEYS; FEATURE="GroupedAggregates"; ASPECT=CanonicalKeyEncoding; STATUS=TESTED; TEST=tests/test_sonny2675_aggregate_semantics.zig; OWNER=execution; UPDATED=2026-09-25
+/// One GROUP BY key of a row, appended to the row's group key. NULL is a key
+/// of its own (every NULL groups together). Every key is self-delimiting (a
+/// type byte, then fixed-width numbers or length-prefixed bytes), so the keys
+/// of a multi-key GROUP BY cannot run into each other.
+///
+/// SONNY-2675: each grouping site serialized keys itself: integers and
+/// strings as text, NULL as "null", anything else as "?", joined with "|". So
+/// 1 and '1' were one group, 'null' and NULL were one group, every double,
+/// date, decimal or text key was one group, and ('a|b', 'c') was the group of
+/// ('a', 'b|c').
+pub fn writeGroupKeyPart(w: *std.Io.Writer, scratch: std.mem.Allocator, value: Value) WriteKeyError!void {
+    if (!try writeKey(w, scratch, value)) try w.writeByte(tag_null);
 }
 
-fn encodeInt(a: std.mem.Allocator, n: i64) ![]const u8 {
-    return try std.fmt.allocPrint(a, "I:{d}", .{n});
-}
+pub const WriteKeyError = std.Io.Writer.Error || error{OutOfMemory};
 
-/// Integral floats share the integer key space so `10` and `10.0` are one value.
-fn encodeFloat(a: std.mem.Allocator, f: f64) ![]const u8 {
-    if (std.math.isFinite(f) and @floor(f) == f and
-        f >= @as(f64, @floatFromInt(std.math.minInt(i64))) and
-        f <= @as(f64, @floatFromInt(std.math.maxInt(i64))))
-    {
-        return encodeInt(a, @intFromFloat(f));
+// The type byte of each key. NULL has one only inside a group key or a list.
+const tag_null = '0';
+
+/// Writes the canonical key of `value` to `w` (the identity rules above) and
+/// returns true; writes nothing and returns false for NULL. `scratch` holds
+/// temporary allocations (a map's sorted keys, an extended value's encoding).
+pub fn writeKey(w: *std.Io.Writer, scratch: std.mem.Allocator, value: Value) WriteKeyError!bool {
+    switch (value) {
+        .Null => return false,
+        .Node => |n| {
+            try w.writeByte('N');
+            try w.writeInt(u64, n.id, .little);
+        },
+        .Edge => |e| {
+            try w.writeByte('E');
+            try w.writeInt(u64, e.id, .little);
+        },
+        .Path => |path| {
+            try w.writeByte('H');
+            try w.writeInt(u32, @intCast(path.nodes.len), .little);
+            for (path.nodes) |n| try w.writeInt(u64, n.id, .little);
+            try w.writeInt(u32, @intCast(path.edges.len), .little);
+            for (path.edges) |e| try w.writeInt(u64, e.id, .little);
+        },
+        .Bool => |b| try w.writeAll(if (b) "B1" else "B0"),
+        .Int, .SmallInt, .BigInt, .Real, .Double, .Decimal => try value_order.writeNumberKey(w, value_order.numberOf(value).?),
+        .Str => |t| try writeBytes(w, 'S', t),
+        .Text => |t| try writeBytes(w, 'S', t),
+        .Char => |c| try writeBytes(w, 'S', c.data),
+        .Varchar => |c| try writeBytes(w, 'S', c.data),
+        .Bytea => |b| try writeBytes(w, 'X', b),
+        .Json => |j| try writeBytes(w, 'J', j),
+        .Jsonb => |j| try writeBytes(w, 'j', j.data),
+        .Xml => |x| try writeBytes(w, 'x', x.data),
+        .UUID => |u| {
+            try w.writeByte('U');
+            try w.writeAll(&u.bytes);
+        },
+        .Date => |d| {
+            try w.writeByte('D');
+            try w.writeInt(i32, d.days_since_epoch, .little);
+        },
+        .Time => |t| {
+            try w.writeByte('T');
+            try w.writeInt(i64, t.micros_since_midnight, .little);
+        },
+        .TimeTZ => |t| {
+            try w.writeByte('t');
+            try w.writeInt(i64, value_order.timeTzUtcMicros(t), .little);
+        },
+        .Timestamp => |t| {
+            try w.writeByte('P');
+            try w.writeInt(i64, t.micros_since_epoch, .little);
+        },
+        .TimestampTZ => |t| {
+            try w.writeByte('Z');
+            try w.writeInt(i64, t.micros_since_epoch_utc, .little);
+        },
+        .Interval => |iv| try value_order.writeIntervalKey(w, iv),
+        .Url => |u| {
+            try w.writeByte('W');
+            try writeBytes(w, 'S', u.scheme);
+            try writeBytes(w, 'S', u.host);
+            if (u.port) |port| {
+                try w.writeByte(1);
+                try w.writeInt(u16, port, .little);
+            } else try w.writeByte(0);
+            try writeBytes(w, 'S', u.path);
+            try writeOptionalBytes(w, u.query);
+            try writeOptionalBytes(w, u.fragment);
+        },
+        .Domain => |d| {
+            try w.writeByte('O');
+            try w.writeInt(u32, @intCast(d.labels.len), .little);
+            for (d.labels) |label| try writeBytes(w, 'S', label);
+        },
+        .Enum => |e| {
+            try w.writeByte('Q');
+            try w.writeInt(u32, e.type_id, .little);
+            try w.writeInt(u32, e.value_ordinal, .little);
+        },
+        .BitString => |b| try writeBits(w, 'b', b.bit_length, b.bytes),
+        .VarBit => |b| try writeBits(w, 'v', b.bit_length, b.bytes),
+        .IntRange => |r| {
+            try w.writeByte('R');
+            try writeOptionalI32(w, r.lower);
+            try writeOptionalI32(w, r.upper);
+            try w.writeByte(@intFromEnum(r.bounds));
+        },
+        .List => |items| {
+            try w.writeByte('L');
+            try w.writeInt(u32, @intCast(items.len), .little);
+            for (items) |item| try writeGroupKeyPart(w, scratch, item);
+        },
+        .Map => |map| {
+            // Sorted by key: equal maps iterate in different orders.
+            const keys = try scratch.alloc([]const u8, map.count());
+            defer scratch.free(keys);
+            var it = map.keyIterator();
+            var i: usize = 0;
+            while (it.next()) |k| : (i += 1) keys[i] = k.*;
+            std.mem.sort([]const u8, keys, {}, lessThanBytes);
+            try w.writeByte('M');
+            try w.writeInt(u32, @intCast(keys.len), .little);
+            for (keys) |k| {
+                try writeBytes(w, 'S', k);
+                try writeGroupKeyPart(w, scratch, map.get(k).?);
+            }
+        },
+        .ExtValue => |ext| {
+            // An extended value by its binary encoding; one that cannot be
+            // encoded keys by its type alone.
+            if (property_codec.encodeExtValueBinary(scratch, ext)) |bytes| {
+                defer scratch.free(bytes);
+                try writeBytes(w, 'e', bytes);
+            } else |err| {
+                if (@as(anyerror, err) == error.OutOfMemory) return error.OutOfMemory;
+                try writeBytes(w, '?', @tagName(ext));
+            }
+        },
     }
-    return try std.fmt.allocPrint(a, "F:{x}", .{@as(u64, @bitCast(f))});
+    return true;
+}
+
+fn writeBytes(w: *std.Io.Writer, tag: u8, bytes: []const u8) std.Io.Writer.Error!void {
+    try w.writeByte(tag);
+    try w.writeInt(u32, @intCast(bytes.len), .little);
+    try w.writeAll(bytes);
+}
+
+fn writeOptionalBytes(w: *std.Io.Writer, bytes: ?[]const u8) std.Io.Writer.Error!void {
+    if (bytes) |b| try writeBytes(w, 'S', b) else try w.writeByte(tag_null);
+}
+
+fn writeOptionalI32(w: *std.Io.Writer, n: ?i32) std.Io.Writer.Error!void {
+    if (n) |v| {
+        try w.writeByte(1);
+        try w.writeInt(i32, v, .little);
+    } else try w.writeByte(0);
+}
+
+fn writeBits(w: *std.Io.Writer, tag: u8, bit_length: u32, bytes: []const u8) std.Io.Writer.Error!void {
+    try w.writeByte(tag);
+    try w.writeInt(u32, bit_length, .little);
+    try writeBytes(w, 'X', bytes);
+}
+
+fn lessThanBytes(_: void, a: []const u8, b: []const u8) bool {
+    return std.mem.lessThan(u8, a, b);
 }

@@ -876,9 +876,11 @@ fn encodeDecimalArrayData(allocator: std.mem.Allocator, items: []const std.json.
     errdefer allocator.free(data);
     var offset: usize = 0;
     for (items) |item| {
+        // SONNY-2739: a float past the 38-digit decimal (or an integer past
+        // i64 / 10^6) aborted the server; it is DecimalOverflow (22003).
         const coeff: i128 = switch (item) {
-            .float => |value| @intFromFloat(value * 1_000_000.0),
-            .integer => |value| value * 1_000_000,
+            .float => |value| try @import("types/decimal128.zig").checkedScaledCoeff(value, 1_000_000.0),
+            .integer => |value| @as(i128, value) * 1_000_000,
             else => return error.InvalidParams,
         };
         std.mem.writeInt(i128, data[offset .. offset + 16][0..16], coeff, .little);

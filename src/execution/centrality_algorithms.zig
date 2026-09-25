@@ -40,10 +40,14 @@ pub fn safeU64ToValue(id: u64) Value {
 
 /// DRY helper: Convert an f64 score to a Decimal Value with scale 6.
 /// Replaces 14+ inline `Value{ .Decimal = .{ .coeff = @intFromFloat(score * 1000000), .scale = 6, ...} }` patterns.
+/// SONNY-2739: a score the decimal cannot hold (NaN, an infinity or a
+/// magnitude past 38 digits, from degenerate weights) is returned as the
+/// double itself; the bare `@intFromFloat` aborted the server.
 fn scoreToDecimal(score: f64) Value {
     const SCALE: u8 = 6;
     const FACTOR: i128 = 1_000_000;
-    return Value{ .Decimal = .{ .coeff = @intFromFloat(score * @as(f64, @floatFromInt(FACTOR))), .scale = SCALE, .orig_scale = SCALE, .orig_repr = null } };
+    const coeff = @import("../types/decimal128.zig").checkedScaledCoeff(score, @floatFromInt(FACTOR)) catch return .{ .Double = score };
+    return Value{ .Decimal = .{ .coeff = coeff, .scale = SCALE, .orig_scale = SCALE, .orig_repr = null } };
 }
 
 /// DRY helper: Collect all node IDs from the store into an ArrayList.

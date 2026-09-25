@@ -8672,6 +8672,65 @@ pub fn build(b: *std.Build) void {
     const sonny2692_step = b.step("test-sonny2692-knn-rls", "Run SONNY-2692 regression (knn()/vector_knn() filter every candidate through the row-visibility filter before ranking and truncating to k, on the scan path and the vector-index path, under label and expression policies)");
     sonny2692_step.dependOn(&run_sonny2692_tests.step);
 
+    // SONNY-2675: an aggregate named in a grouped HAVING is computed for each
+    // group; an ungrouped input column there is refused (42803).
+    const sonny2675_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny2675_grouped_having.zig"), .target = target, .optimize = optimize });
+    sonny2675_test_mod.addImport("geode", root_mod);
+    sonny2675_test_mod.addImport("logging", logging_mod);
+    sonny2675_test_mod.addImport("rls_types", rls_types_mod);
+    const sonny2675_tests = b.addTest(.{ .root_module = sonny2675_test_mod });
+    const run_sonny2675_tests = b.addRunArtifact(sonny2675_tests);
+    shardDep(test_step, &run_sonny2675_tests.step, 1, test_shard_loads, test_shard_index);
+    const sonny2675_step = b.step("test-sonny2675-grouped-having", "Run SONNY-2675 regression (a grouped HAVING computes the aggregates it names per group and refuses an ungrouped input column: in-memory, RLS-policy and tenant-scoped sessions, and the planned read)");
+    sonny2675_step.dependOn(&run_sonny2675_tests.step);
+
+    // SONNY-2675 follow-up: parameters inside aggregates, typed min/max and
+    // typed group keys in the shared aggregate code.
+    const sonny2675_agg_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny2675_aggregate_semantics.zig"), .target = target, .optimize = optimize });
+    sonny2675_agg_test_mod.addImport("geode", root_mod);
+    sonny2675_agg_test_mod.addImport("logging", logging_mod);
+    sonny2675_agg_test_mod.addImport("rls_types", rls_types_mod);
+    const sonny2675_agg_tests = b.addTest(.{ .root_module = sonny2675_agg_test_mod });
+    const run_sonny2675_agg_tests = b.addRunArtifact(sonny2675_agg_tests);
+    shardDep(test_step, &run_sonny2675_agg_tests.step, 1, test_shard_loads, test_shard_index);
+    const sonny2675_agg_step = b.step("test-sonny2675-aggregate-semantics", "Run SONNY-2675 follow-up regression (parameters inside aggregates, typed min/max, typed group keys: in-memory, RLS-policy, tenant-scoped and persisted sessions)");
+    sonny2675_agg_step.dependOn(&run_sonny2675_agg_tests.step);
+
+    // SONNY-2739: a float or decimal narrowed to an integer (a group or
+    // DISTINCT key at 2^63, the power operator, casts, rounding functions,
+    // geometry, decoders) no longer aborts the server; a value that does not
+    // fit is a typed error (22003).
+    const sonny2739_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny2739_float_narrowing.zig"), .target = target, .optimize = optimize });
+    sonny2739_test_mod.addImport("geode", root_mod);
+    sonny2739_test_mod.addImport("logging", logging_mod);
+    sonny2739_test_mod.addImport("rls_types", rls_types_mod);
+    const sonny2739_tests = b.addTest(.{ .root_module = sonny2739_test_mod });
+    const run_sonny2739_tests = b.addRunArtifact(sonny2739_tests);
+    shardDep(test_step, &run_sonny2739_tests.step, 1, test_shard_loads, test_shard_index);
+    const sonny2739_step = b.step("test-sonny2739-float-narrowing", "Run SONNY-2739 regression (every float or decimal narrowed to an integer is checked: group and DISTINCT keys at +-2^63, the power operator, casts, rounding, geometry and decoders refuse a value that does not fit instead of aborting)");
+    sonny2739_step.dependOn(&run_sonny2739_tests.step);
+
+    const sonny2675_walker_mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny2675_having_walker.zig"), .target = target, .optimize = optimize });
+    sonny2675_walker_mod.addImport("geode", root_mod);
+    const sonny2675_walker_tests = b.addTest(.{ .root_module = sonny2675_walker_mod });
+    const run_sonny2675_walker_tests = b.addRunArtifact(sonny2675_walker_tests);
+    shardDep(test_step, &run_sonny2675_walker_tests.step, 1, test_shard_loads, test_shard_index);
+    const sonny2675_walker_step = b.step("test-sonny2675-having-walker", "Run SONNY-2675 walker test (every expression variant is checked, rewritten and compared by the grouped HAVING walkers)");
+    sonny2675_walker_step.dependOn(&run_sonny2675_walker_tests.step);
+
+    // SONNY-2683: a RETURN that groups or filters after a CTE, SET or REMOVE
+    // goes through the shared projection; after CREATE, MERGE or a procedure
+    // CALL it is refused (0A000); a FOR's RETURN refuses it at parse time.
+    const sonny2683_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny2683_return_shapes.zig"), .target = target, .optimize = optimize });
+    sonny2683_test_mod.addImport("geode", root_mod);
+    sonny2683_test_mod.addImport("logging", logging_mod);
+    sonny2683_test_mod.addImport("rls_types", rls_types_mod);
+    const sonny2683_tests = b.addTest(.{ .root_module = sonny2683_test_mod });
+    const run_sonny2683_tests = b.addRunArtifact(sonny2683_tests);
+    shardDep(test_step, &run_sonny2683_tests.step, 1, test_shard_loads, test_shard_index);
+    const sonny2683_step = b.step("test-sonny2683-return-shapes", "Run SONNY-2683 regression (a grouped or filtered RETURN after a CTE, SET or REMOVE is projected by the shared projection; after CREATE, MERGE or a procedure CALL it is refused: in-memory, RLS-policy, tenant-scoped and persisted sessions)");
+    sonny2683_step.dependOn(&run_sonny2683_tests.step);
+
     // SONNY-2656: the node-scan fast path leaked the clone of every typed
     // extended value (Text, Json, Bytea, Char, Varchar, Url, ...) it projected
     // (page teardown freed only strings, lists and maps) or filtered on (IS

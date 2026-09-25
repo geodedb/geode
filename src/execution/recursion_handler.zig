@@ -10,6 +10,7 @@ const ast = @import("../gql/ast.zig");
 const eval = @import("../eval.zig");
 const graph_store = @import("../graph_store.zig");
 const value_types = @import("../value_types.zig");
+const decimal128 = @import("../types/decimal128.zig");
 
 // Import from parent execution module
 const execution = @import("../execution.zig");
@@ -427,7 +428,9 @@ pub fn executeDijkstra(allocator: std.mem.Allocator, store: *graph_store.GraphSt
         row[0] = Value{ .List = path_values };
 
         // Distance column - convert to Decimal
-        const distance_int: i128 = @intFromFloat(result_distance * 100.0);
+        // SONNY-2739: a path cost past the decimal (weights from stored
+        // properties) is 22003, not an abort.
+        const distance_int = try decimal128.checkedScaledCoeff(result_distance, 100.0);
         row[1] = Value{ .Decimal = .{ .coeff = distance_int, .scale = 2 } };
 
         rows[0] = row;
@@ -516,7 +519,7 @@ pub fn executeDijkstra(allocator: std.mem.Allocator, store: *graph_store.GraphSt
                 path_values[idx] = Value{ .Int = @intCast(best_path[idx]) };
             }
             row[0] = Value{ .List = path_values };
-            const distance_int: i128 = @intFromFloat(bc * 100.0);
+            const distance_int = try decimal128.checkedScaledCoeff(bc, 100.0);
             row[1] = Value{ .Decimal = .{ .coeff = distance_int, .scale = 2 } };
             rows[0] = row;
             return ExecutionResult{

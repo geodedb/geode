@@ -10,8 +10,9 @@
 //
 // The other GAP-0926 sub-items (WHERE unbound variable, MERGE null/unbound key,
 // missing named param, CREATE INDEX on a nonexistent label/property,
-// non-grouped column, HAVING on an unknown alias) are INTENTIONALLY RETAINED as
-// silent-accept: they are non-corrupting (the gap notes "no data corruption"),
+// non-grouped column) are INTENTIONALLY RETAINED as silent-accept (HAVING on an
+// unknown alias no longer is: SONNY-2675 refuses it with 42703, see
+// tests/test_sonny2675_aggregate_semantics.zig): they are non-corrupting (the gap notes "no data corruption"),
 // and forcing rejection risks breaking legitimate queries / the existing test
 // suite — the same lesson learned when over-strict policy validation broke 14
 // GPS tests (GAP-0923a). See docs/ENTERPRISE_GAPS.md for the per-item rationale.

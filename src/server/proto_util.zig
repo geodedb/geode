@@ -117,7 +117,10 @@ fn freeParamValue(allocator: std.mem.Allocator, value: value_types.Value) void {
 
 pub fn mapError(err: anyerror) ErrorInfo {
     return switch (err) {
-        error.GroupingError => .{ .code = "42000", .message = "grouping error: non-aggregated expression not in GROUP BY" },
+        // SONNY-2675: grouping_error (42803), the class every other grouping
+        // refusal uses (a nested aggregate, an ungrouped HAVING reference, an
+        // aggregate in a per-row filter); it was the generic 42000.
+        error.GroupingError => .{ .code = "42803", .message = "grouping error: non-aggregated expression not in GROUP BY" },
         // GAP-0914: a GROUP BY key that resolves to no alias, variable, or
         // binding is rejected instead of collapsing rows into one null group.
         error.UnknownGroupKey => .{ .code = "42703", .message = "GROUP BY key does not resolve to any RETURN alias, variable, or binding" },
@@ -212,6 +215,20 @@ pub fn mapError(err: anyerror) ErrorInfo {
         error.MissingParameter => .{ .code = "22023", .message = "Positional parameter out of range (referenced a parameter that was not supplied)" },
         // GAP-0926: nested aggregate (sum(avg(...))) is invalid.
         error.NestedAggregate => .{ .code = "42803", .message = "Aggregate functions cannot be nested" },
+        // SONNY-2675: a HAVING over groups reads each group's keys, projected
+        // columns and aggregates; any other input column has no single value
+        // for the group. The same grouping_error class as a nested aggregate.
+        // CANARY: REQ=REQ-SONNY-2675-GROUPED-HAVING; FEATURE="GroupedHaving"; ASPECT=SqlstateMapping; STATUS=TESTED; TEST=tests/test_sonny2675_grouped_having.zig; OWNER=engine; UPDATED=2026-09-25
+        error.UngroupedHavingReference => .{ .code = "42803", .message = "Grouping error: a HAVING (or a WHERE after an aggregating RETURN) may reference only grouping keys, projected columns and aggregates" },
+        error.AggregateInRowFilter => .{ .code = "42803", .message = "Aggregate functions are not allowed in a WHERE after a RETURN that does not aggregate" },
+        error.UnsupportedGroupedHavingPredicate => .{ .code = "0A000", .message = "A pattern or subquery predicate, or an aggregate of a list comprehension variable, is not supported in a grouped HAVING" },
+        // SONNY-2675: a HAVING (or WHERE after RETURN) name that is no column,
+        // binding or parameter; it used to evaluate to NULL (GAP-0926).
+        error.UnknownHavingReference => .{ .code = "42703", .message = "A HAVING (or a WHERE after RETURN) names something that is no column, binding or parameter" },
+        // SONNY-2683: the executors of these shapes ignored a GROUP BY, HAVING
+        // or WHERE after RETURN; refuse it rather than return other rows.
+        // CANARY: REQ=REQ-SONNY-2683-RETURN-SHAPES; FEATURE="LegacyReturnProjection"; ASPECT=SqlstateMapping; STATUS=TESTED; TEST=tests/test_sonny2683_return_shapes.zig; OWNER=engine; UPDATED=2026-09-25
+        error.UnsupportedGroupedReturn => .{ .code = "0A000", .message = "GROUP BY, HAVING and a WHERE after RETURN are not supported on a RETURN after CREATE, MERGE, DELETE or a procedure CALL" },
         error.StringDataRightTruncation => .{ .code = "22001", .message = "String data right truncation" },
         error.InvalidKeyProvider => .{ .code = "42704", .message = "Invalid TDE key provider" },
         error.InvalidGuardrailConfiguration => .{ .code = "42704", .message = "Invalid CDC guardrail configuration" },

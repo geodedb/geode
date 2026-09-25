@@ -195,6 +195,7 @@ pub const types = struct {
     pub const evaluator_functions = @import("types/evaluator_functions.zig");
     pub const network = @import("types/network.zig");
     pub const decimal128 = @import("types/decimal128.zig");
+    pub const narrowing = @import("types/narrowing.zig");
     pub const datetime = @import("types/datetime.zig");
     pub const jsonb = @import("types/jsonb.zig");
     pub const xml = @import("types/xml.zig");
@@ -801,6 +802,8 @@ pub fn parseGqlCached(
 
 // Re-export execution and graph_store for integration tests
 pub const execution = @import("execution.zig");
+/// The exact order and keys of numbers, durations and zoned times (SONNY-2675).
+pub const value_order = @import("execution/value_order.zig");
 pub const graph_store = @import("graph_store.zig");
 // GAP (write-path OOM, 2026-07-04): legacy write-executor working-set budget —
 // re-exported so tests can install tiny budgets via setBudgetBytesForTest.

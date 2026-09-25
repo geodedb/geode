@@ -1,5 +1,6 @@
 const std = @import("std");
 const ext = @import("extended.zig");
+const decimal128 = @import("decimal128.zig");
 const cb = @import("crypto_backend");
 // DATE-PART-EXACT: date_part must use the SAME calendar conversion that member access
 // (`date(...).month`) uses, so it shares datetime.Date rather than
@@ -107,7 +108,8 @@ fn fn_polygon_area(allocator: std.mem.Allocator, args: []const BuiltinValue) !Bu
     try expectArgs(1, args);
     if (args[0] != .GeoPolygon) return error.TypeMismatch;
     const area = ext.polygonArea(.{ .points = args[0].GeoPolygon.points });
-    return .{ .Decimal = .{ .coeff = @intFromFloat(area * 1_000_000), .scale = 6 } };
+    // SONNY-2739: checked (22003) instead of a bare `@intFromFloat`.
+    return .{ .Decimal = .{ .coeff = try decimal128.checkedScaledCoeff(area, 1_000_000.0), .scale = 6 } };
 }
 
 // vector_cosine(VectorF64, VectorF64) -> Decimal scale 6 (mirrors existing VectorF32 cosine semantics)
@@ -116,7 +118,7 @@ fn fn_vector_cosine(allocator: std.mem.Allocator, args: []const BuiltinValue) !B
     try expectArgs(2, args);
     if (args[0] != .VectorF64 or args[1] != .VectorF64) return .{ .Null = {} };
     const sim = try ext.vectorCosine(args[0].VectorF64, args[1].VectorF64);
-    return .{ .Decimal = .{ .coeff = @intFromFloat(sim * 1_000_000), .scale = 6 } };
+    return .{ .Decimal = .{ .coeff = try decimal128.checkedScaledCoeff(sim, 1_000_000.0), .scale = 6 } };
 }
 
 // CANARY: REQ=REQ-DATE-PART-EXACT-CALENDAR; FEATURE="ExtendedBuiltins"; ASPECT=FUNCTION_DATE_PART; STATUS=TESTED; TEST=tests/test_date_part_exact.zig; OWNER=engine; UPDATED=2026-08-25

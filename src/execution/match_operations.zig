@@ -89,6 +89,17 @@ pub fn resetLegacyWriteScanTotal() void {
     g_legacy_write_scan_total.store(0, .monotonic);
 }
 
+// SONNY-2674: routing counter for a legacy RETURN that groups or filters
+// through the shared projection (`executeReturnOverBindings`) rather than a
+// GROUP BY fast path. Tests assert it alongside the fast paths' own signals.
+var g_return_over_bindings_total: std.atomic.Value(u64) = std.atomic.Value(u64).init(0);
+pub fn getReturnOverBindingsTotal() u64 {
+    return g_return_over_bindings_total.load(.monotonic);
+}
+pub fn resetReturnOverBindingsTotal() void {
+    g_return_over_bindings_total.store(0, .monotonic);
+}
+
 const match_log = std.log.scoped(.match_ops);
 // GAP (write-path OOM, 2026-07-04): working-set budget for write-carrying
 // legacy scans. `write_budget.check()` is a no-op unless the dispatcher
@@ -103,6 +114,7 @@ const property_mutation = @import("property_mutation.zig");
 const write_precheck = @import("write_precheck.zig");
 const value_types = @import("../value_types.zig");
 const distinct_set = @import("distinct_set.zig");
+const return_and_sorting = @import("return_and_sorting.zig");
 const property_value_codec = @import("../property_value_codec.zig");
 const graph_storage_adapter = @import("../storage/graph_storage_adapter.zig");
 // Engine-storage PropertyValue (lower-case variants: .int/.float/.string/…),
@@ -769,6 +781,16 @@ const CountFastPathPlan = struct {
     column_name: []const u8,
 };
 
+// CANARY: REQ=REQ-SONNY-2683-FAST-PATH-WRITES; FEATURE="ReadFastPaths"; ASPECT=DeclineWrites; STATUS=TESTED; TEST=tests/test_sonny2683_return_shapes.zig; OWNER=engine; UPDATED=2026-09-25
+/// SONNY-2683: a read fast path declines a query that sets or removes
+/// properties on the rows it matches. The fast paths answer by reading and
+/// apply no write. They declined a SET but not a REMOVE, so the streaming
+/// GROUP BY / DISTINCT path answered `MATCH (n:G) REMOVE n.t RETURN DISTINCT
+/// n.g`, and a grouped RETURN after a REMOVE, without removing anything.
+fn readFastPathDeclinesWrite(q: ast.Query) bool {
+    return q.set_clauses.len != 0 or q.remove_clauses.len != 0;
+}
+
 fn analyzeCountFastPath(q: ast.Query) ?CountFastPathPlan {
     // Shape: single chain, single simple node pattern, no relationship.
     if (q.match.chains.len != 1) return null;
@@ -796,7 +818,7 @@ fn analyzeCountFastPath(q: ast.Query) ?CountFastPathPlan {
     if (q.group_by != null) return null;
     if (q.having != null) return null;
     if (q.order_by != null) return null;
-    if (q.set_clauses.len != 0) return null;
+    if (readFastPathDeclinesWrite(q)) return null;
     // LIMIT 0 would require an empty result (not a single-row count); any
     // other LIMIT value yields the same single-row count regardless, so we
     // accept it. LIMIT literal == 0 bails to the regular path.
@@ -1030,7 +1052,7 @@ fn analyzeEdgeCountFastPath(q: ast.Query) ?EdgeCountFastPathPlan {
     if (q.group_by != null) return null;
     if (q.having != null) return null;
     if (q.order_by != null) return null;
-    if (q.set_clauses.len != 0) return null;
+    if (readFastPathDeclinesWrite(q)) return null;
     if (q.limit) |lim| {
         if (lim == 0) return null;
     }
@@ -1134,13 +1156,19 @@ const AggAcc = struct {
     sum_float: f64 = 0,
     has_float: bool = false,
     count: u64 = 0,
-    min_int: ?i64 = null,
-    max_int: ?i64 = null,
-    min_float: ?f64 = null,
-    max_float: ?f64 = null,
+    /// SONNY-2675: the smallest and largest value folded, the value itself
+    /// (an Int stays an Int, a decimal a decimal), in the value order ORDER
+    /// BY and the shared projection's min and max use: numbers by their exact
+    /// value with NaN after every number, then dates, times, timestamps and
+    /// intervals. They were an f64 view and an optional integer, so a decimal
+    /// could not be folded (the path declined, and on a tenant-scoped
+    /// session the legacy fallback answered NULL), and a NaN folded first
+    /// stayed the minimum.
+    min: ?Value = null,
+    max: ?Value = null,
 
-    /// Fold one numeric value. `maybe_int` is set iff the value was integer
-    /// typed; `f` is always the f64 view (used for min/max + float sum).
+    /// Fold one numeric value into sum and avg. `maybe_int` is set iff the
+    /// value was integer typed; `f` is always the f64 view.
     fn update(self: *AggAcc, maybe_int: ?i64, f: f64) void {
         self.count += 1;
         if (maybe_int) |iv| {
@@ -1155,8 +1183,6 @@ const AggAcc = struct {
             } else {
                 self.sum_float += @as(f64, @floatFromInt(iv));
             }
-            if (self.min_int == null or iv < self.min_int.?) self.min_int = iv;
-            if (self.max_int == null or iv > self.max_int.?) self.max_int = iv;
         } else {
             if (!self.has_float) {
                 self.has_float = true;
@@ -1164,8 +1190,22 @@ const AggAcc = struct {
             }
             self.sum_float += f;
         }
-        if (self.min_float == null or f < self.min_float.?) self.min_float = f;
-        if (self.max_float == null or f > self.max_float.?) self.max_float = f;
+    }
+
+    /// Fold one value (from `minMaxValue`) into min and max; the first of
+    /// equal values stays.
+    fn fold(self: *AggAcc, v: Value) void {
+        self.count += 1;
+        if (self.min == null or return_and_sorting.compareValuesWithNullsPolicy(v, self.min.?, .default) < 0) self.min = v;
+        if (self.max == null or return_and_sorting.compareValuesWithNullsPolicy(v, self.max.?, .default) > 0) self.max = v;
+    }
+
+    fn minValue(self: AggAcc) Value {
+        return self.min orelse .{ .Null = {} };
+    }
+
+    fn maxValue(self: AggAcc) Value {
+        return self.max orelse .{ .Null = {} };
     }
 };
 
@@ -1399,7 +1439,12 @@ fn propToF64(pv: graph_store.PropertyValue) ?f64 {
         // GAP-0916: numeric ExtValues participate in aggregation like the
         // grouped slow path (aggregation_evaluation) already does.
         .ExtValue => |ev| switch (ev) {
-            .Int => |i| @as(f64, @floatFromInt(i)),
+            .Int, .BigInt => |i| @as(f64, @floatFromInt(i)),
+            .SmallInt => |i| @as(f64, @floatFromInt(i)),
+            .Real => |f| @as(f64, f),
+            // SONNY-2675: a double sent as a parameter is stored as an
+            // extended Double; it was skipped as not a number.
+            .Double => |f| f,
             .Decimal => |d| @as(f64, @floatFromInt(d.coeff)) / std.math.pow(f64, 10, @as(f64, @floatFromInt(d.scale))),
             else => null,
         },
@@ -1412,10 +1457,61 @@ fn propToI64(pv: graph_store.PropertyValue) ?i64 {
     return switch (pv) {
         .Int => |i| i,
         .ExtValue => |ev| switch (ev) {
-            .Int => |i| i,
+            .Int, .BigInt => |i| i,
+            .SmallInt => |i| i,
             else => null,
         },
         else => null,
+    };
+}
+
+/// The value min or max folds for the non-NULL `pv`: a number of any kind (a
+/// decimal exactly), a date, time, timestamp or interval, a boolean or a
+/// UUID, returned by copy. Null for anything else (a string the path would
+/// have to own, an enum or a document the value order does not order): the
+/// path declines, and the shared projection computes it (SONNY-2675).
+fn minMaxValue(pv: graph_store.PropertyValue) ?Value {
+    const v = fastPathKeyValue(pv) orelse return null;
+    return switch (v) {
+        .Int, .SmallInt, .BigInt, .Real, .Double, .Decimal, .Bool => v,
+        .Date, .Time, .TimeTZ, .Timestamp, .TimestampTZ, .Interval, .UUID => v,
+        else => null,
+    };
+}
+
+/// A GROUP BY key read by the streaming fast path, as the value it returns:
+/// an integer, float, boolean or NULL, a string (borrowed: the caller copies
+/// it), a decimal, or an extended number, date, time, timestamp, interval,
+/// UUID or enum (plain values, returned by copy). Null for anything else (an
+/// extended string, a list, a document, ...), whose value the path would have
+/// to own: the path declines, and the shared projection groups it.
+fn fastPathKeyValue(pv: graph_store.PropertyValue) ?Value {
+    return switch (pv) {
+        .String => |str| .{ .Str = str },
+        .Int => |i| .{ .Int = i },
+        .Float => |f| .{ .Double = f },
+        .Bool => |b| .{ .Bool = b },
+        .Null => .{ .Null = {} },
+        .Decimal => |d| .{ .Decimal = .{ .coeff = d.coeff, .scale = d.scale, .orig_scale = d.scale, .orig_repr = null } },
+        .ExtValue => |ev| switch (ev) {
+            .Int, .SmallInt, .BigInt, .Real, .Double, .Bool, .Decimal => property_value_codec.extValueToValue(ev),
+            .Date, .Time, .TimeTZ, .Timestamp, .TimestampTZ, .Interval, .UUID, .Enum => property_value_codec.extValueToValue(ev),
+            else => null,
+        },
+    };
+}
+
+/// A storage (engine) value as a geode property value. An extended value is
+/// decoded into `scratch`, which the caller resets; null if it cannot be.
+fn storageToGraphPv(scratch: std.mem.Allocator, pv: gs.PropertyValue) ?graph_store.PropertyValue {
+    return switch (pv) {
+        .string => |s| .{ .String = s },
+        .int => |i| .{ .Int = i },
+        .float => |f| .{ .Float = f },
+        .bool => |b| .{ .Bool = b },
+        .null => .Null,
+        .decimal => |d| .{ .Decimal = .{ .coeff = d.coeff, .scale = d.scale } },
+        .ext => graph_storage_adapter.fromStorageProperty(scratch, pv) catch null,
     };
 }
 
@@ -1484,22 +1580,6 @@ fn comparePvLit(pv: graph_store.PropertyValue, op: Cmp, lit: LitValue) bool {
 // comparison helpers above, for the engine-direct fast-path reads. The engine
 // PropertyValue uses lower-case variants (.int/.float/.string/.decimal); the
 // in-memory cache one uses .Int/.Float/.String. Semantics are identical.
-fn storagePropToF64(pv: gs.PropertyValue) ?f64 {
-    return switch (pv) {
-        .int => |i| @as(f64, @floatFromInt(i)),
-        .float => |f| f,
-        .decimal => |d| @as(f64, @floatFromInt(d.coeff)) / std.math.pow(f64, 10, @as(f64, @floatFromInt(d.scale))),
-        else => null,
-    };
-}
-
-fn storagePropToI64(pv: gs.PropertyValue) ?i64 {
-    return switch (pv) {
-        .int => |i| i,
-        else => null,
-    };
-}
-
 /// Storage-side (engine `gs.PropertyValue`) variant of `comparePvLit`.
 ///
 /// Convert the engine value to a geode `graph_store.PropertyValue` (string data
@@ -1577,7 +1657,7 @@ pub fn propertyAggregateFastPath(
     if (q.group_by != null) return null;
     if (q.having != null) return null;
     if (q.order_by != null) return null;
-    if (q.set_clauses.len != 0) return null;
+    if (readFastPathDeclinesWrite(q)) return null;
     if (q.limit) |lim| {
         if (lim == 0) return null;
     }
@@ -1633,6 +1713,10 @@ pub fn propertyAggregateFastPath(
     var acc = AggAcc{};
     const tenant_active = filter_tenant != null;
     const writable_store = graph_store.getGlobalStore(allocator);
+    const min_or_max = kind == .min or kind == .max;
+    // Decoded extended values, reset after each node.
+    var ext_scratch = std.heap.ArenaAllocator.init(allocator);
+    defer ext_scratch.deinit();
 
     if (writable_store.nodes.effectiveCap() == 0) {
         // Unbounded: in-memory posting (public ids) + resident reads.
@@ -1651,11 +1735,16 @@ pub fn propertyAggregateFastPath(
                     if (!comparePvLit(w_val, p.op, p.lit)) continue;
                 }
                 const t_val = prop_store.getNodeProperty(node_id, target_key) orelse continue;
+                // SONNY-2675: min and max fold the value itself, in the value
+                // order; one they cannot (a string) declines.
+                if (min_or_max) {
+                    if (t_val != .Null) acc.fold(minMaxValue(t_val) orelse return null);
+                    continue;
+                }
                 const maybe_f = propToF64(t_val) orelse {
                     // GAP-0916: a present non-numeric value is a type error for
                     // sum/avg (the silent skip made sum return 0 and avg NULL).
-                    // Nulls are skipped per standard semantics; min/max keep
-                    // the historical skip (different comparison semantics).
+                    // Nulls are skipped per standard semantics.
                     if ((kind == .sum or kind == .avg) and t_val != .Null) return error.TypeMismatch;
                     continue;
                 };
@@ -1688,17 +1777,26 @@ pub fn propertyAggregateFastPath(
                 };
                 if (!compareStoragePvLit(w_val, p.op, p.lit)) continue;
             }
-            const t_val = (adapter.getNodeProperty(filter_graph, slot_id, target_key, allocator) catch continue) orelse continue;
-            defer switch (t_val) {
+            const t_raw = (adapter.getNodeProperty(filter_graph, slot_id, target_key, allocator) catch continue) orelse continue;
+            defer switch (t_raw) {
                 .string => |s| allocator.free(s),
+                .ext => |e| allocator.free(e.data),
                 else => {},
             };
-            const maybe_f = storagePropToF64(t_val) orelse {
+            defer _ = ext_scratch.reset(.retain_capacity);
+            const t_val = storageToGraphPv(ext_scratch.allocator(), t_raw) orelse return null;
+            // SONNY-2675: see the resident branch above. The folded value is
+            // a copy, so resetting the scratch does not free it.
+            if (min_or_max) {
+                if (t_val != .Null) acc.fold(minMaxValue(t_val) orelse return null);
+                continue;
+            }
+            const maybe_f = propToF64(t_val) orelse {
                 // GAP-0916: see the resident branch above.
-                if ((kind == .sum or kind == .avg) and t_val != .null) return error.TypeMismatch;
+                if ((kind == .sum or kind == .avg) and t_val != .Null) return error.TypeMismatch;
                 continue;
             };
-            acc.update(storagePropToI64(t_val), maybe_f);
+            acc.update(propToI64(t_val), maybe_f);
         }
     }
 
@@ -1713,16 +1811,8 @@ pub fn propertyAggregateFastPath(
             const total: f64 = if (acc.has_float) acc.sum_float else @as(f64, @floatFromInt(acc.sum_int));
             break :blk Value{ .Double = total / @as(f64, @floatFromInt(acc.count)) };
         },
-        .min => blk: {
-            if (acc.count == 0) break :blk Value{ .Null = {} };
-            if (acc.has_float) break :blk Value{ .Double = acc.min_float.? };
-            break :blk Value{ .Int = acc.min_int.? };
-        },
-        .max => blk: {
-            if (acc.count == 0) break :blk Value{ .Null = {} };
-            if (acc.has_float) break :blk Value{ .Double = acc.max_float.? };
-            break :blk Value{ .Int = acc.max_int.? };
-        },
+        .min => acc.minValue(),
+        .max => acc.maxValue(),
     };
 
     // --- Column name: prefer explicit alias, else synthesize `<agg>(var.key)` ---
@@ -2099,7 +2189,7 @@ pub fn countFilteredFastPath(
     if (q.group_by != null) return null;
     if (q.having != null) return null;
     if (q.order_by != null) return null;
-    if (q.set_clauses.len != 0) return null;
+    if (readFastPathDeclinesWrite(q)) return null;
     if (q.limit) |lim| {
         if (lim == 0) return null;
     }
@@ -2353,7 +2443,7 @@ pub fn indexServedGroupByFastPath(
     if (q.with_clause != null) return null;
     if (q.having != null) return null;
     if (q.order_by != null) return null;
-    if (q.set_clauses.len != 0) return null;
+    if (readFastPathDeclinesWrite(q)) return null;
     if (q.limit) |lim| if (lim == 0) return null;
 
     // ---- Classify RETURN items: single group key + count-only aggregates ----
@@ -2447,17 +2537,15 @@ pub fn indexServedGroupByFastPath(
     // ---- Recover each distinct value: ONE single-property read per posting ----
     // (arena-owned; a decline mid-way just drops the arena.)
     //
-    // MERGE step (legacy parity): the legacy GROUP BY (execution.zig ~3095) and
-    // the streaming fast path both group on the SERIALIZED key — Int "{d}",
-    // Str raw bytes, Bool "true"/"false", any other type (incl. Double) "?" —
-    // so int 5 and string "5" land in ONE group, and all float-valued keys
-    // collapse into the "?" group (first-seen value wins). The index keeps
-    // those as SEPARATE postings (distinct encoded bytes), so we re-serialize
-    // each recovered value with the SAME rules and merge posting counts that
-    // collide, keeping the first-seen value — byte-parity by construction.
+    // MERGE step: every grouping site groups on the key's typed canonical
+    // encoding (`distinct_set.writeGroupKeyPart`, SONNY-2675), under which
+    // 10 and 10.0 are one value while 5 and '5' are two. The index keeps a
+    // posting per encoded value, so postings whose values are one value merge
+    // (first-seen value wins).
     var merged_vals = try std.ArrayList(Value).initCapacity(sa, summaries.len);
     var merged_counts = try std.ArrayList(u64).initCapacity(sa, summaries.len);
     var merged_index = std.StringHashMap(usize).init(sa);
+    var merge_key: std.Io.Writer.Allocating = .init(sa);
     for (summaries) |s| {
         try read_budget.check(); // T5: budget/cancel poll (O(distinct) loop, but distinct can be large)
         const pv = (adapter.getNodeProperty(filter_graph, s.representative_slot, key_prop, sa) catch return null) orelse return null;
@@ -2471,13 +2559,9 @@ pub fn indexServedGroupByFastPath(
             // diverge from the legacy result tags → decline, streaming path.
             else => return null,
         };
-        const ser: []const u8 = switch (val) {
-            .Int => |iv| try std.fmt.allocPrint(sa, "{d}", .{iv}),
-            .Str => |sv| sv,
-            .Bool => |bv| if (bv) "true" else "false",
-            else => "?", // Double (legacy `else` arm)
-        };
-        const gop = try merged_index.getOrPut(ser);
+        merge_key.clearRetainingCapacity();
+        try distinct_set.writeGroupKeyPart(&merge_key.writer, sa, val);
+        const gop = try merged_index.getOrPut(try sa.dupe(u8, merge_key.written()));
         if (gop.found_existing) {
             merged_counts.items[gop.value_ptr.*] += s.count;
         } else {
@@ -2630,7 +2714,7 @@ pub fn groupByAggregateFastPath(
     if (q.with_clause != null) return null;
     if (q.having != null) return null;
     if (q.order_by != null) return null;
-    if (q.set_clauses.len != 0) return null;
+    if (readFastPathDeclinesWrite(q)) return null;
     if (q.limit) |lim| if (lim == 0) return null;
 
     // Must be GROUP BY or RETURN DISTINCT (at least one)
@@ -2759,6 +2843,9 @@ pub fn groupByAggregateFastPath(
 
     const writable_store = graph_store.getGlobalStore(allocator);
     const tenant_active = filter_tenant != null;
+    // Decoded extended values, reset after each read.
+    var ext_scratch = std.heap.ArenaAllocator.init(allocator);
+    defer ext_scratch.deinit();
 
     if (writable_store.nodes.effectiveCap() == 0) {
         // ---- Unbounded: in-memory posting + resident reads ----
@@ -2789,37 +2876,17 @@ pub fn groupByAggregateFastPath(
                     if (!comparePvLit(w_val, p.op, p.lit)) continue;
                 }
 
-                // I2: Group-key serialization — must stay in sync with the legacy
-                // GROUP BY serialization in execution.zig (computeGroupAggregation /
-                // evaluateGroupAggregation). Types handled: Int ("{d}"), String (raw
-                // bytes), Bool ("true"/"false"), Null ("null"); Node/Edge/other falls
-                // to "?" (safe: shape gate rejects non-property RETURN exprs earlier).
+                // SONNY-2675: each key by its typed canonical encoding, the
+                // one every grouping site uses (`writeGroupKeyPart`). A key
+                // this path cannot return without an owned copy declines.
                 var key_val_captures: [MAX_KEYS]Value = undefined;
                 var key_aw: std.Io.Writer.Allocating = try std.Io.Writer.Allocating.initCapacity(ga, 64);
                 const key_w = &key_aw.writer;
                 for (gb_key_props[0..n_gb_keys], 0..) |kprop, ki| {
-                    if (ki > 0) try key_w.writeAll("|");
-                    const pv_opt = prop_store.getNodeProperty(node_id, kprop);
-                    if (pv_opt) |pv| {
-                        switch (pv) {
-                            .Int => |iv| try key_w.print("{d}", .{iv}),
-                            .String => |s| try key_w.writeAll(s),
-                            .Bool => |bv| try key_w.writeAll(if (bv) "true" else "false"),
-                            .Null => try key_w.writeAll("null"),
-                            else => try key_w.writeAll("?"),
-                        }
-                        key_val_captures[ki] = switch (pv) {
-                            .Int => |iv| Value{ .Int = iv },
-                            .String => |s| Value{ .Str = try ga.dupe(u8, s) },
-                            .Bool => |bv| Value{ .Bool = bv },
-                            .Float => |fv| Value{ .Double = fv },
-                            .Null => Value{ .Null = {} },
-                            else => Value{ .Null = {} },
-                        };
-                    } else {
-                        try key_w.writeAll("null");
-                        key_val_captures[ki] = Value{ .Null = {} };
-                    }
+                    const pv: graph_store.PropertyValue = prop_store.getNodeProperty(node_id, kprop) orelse .Null;
+                    const key_val = fastPathKeyValue(pv) orelse return null;
+                    try distinct_set.writeGroupKeyPart(key_w, ga, key_val);
+                    key_val_captures[ki] = if (key_val == .Str) Value{ .Str = try ga.dupe(u8, key_val.Str) } else key_val;
                 }
                 var key_list = key_aw.toArrayList();
                 const group_key = try key_list.toOwnedSlice(ga);
@@ -2847,7 +2914,16 @@ pub fn groupByAggregateFastPath(
                         },
                         .sum, .avg, .min, .max => {
                             const t_val = prop_store.getNodeProperty(node_id, item_agg_prop[i].?) orelse continue;
-                            const maybe_f = propToF64(t_val) orelse continue;
+                            if (t_val == .Null) continue;
+                            // SONNY-2675: min and max fold the value itself, in
+                            // the value order. A value this path cannot fold
+                            // (a string; a date for sum or avg) was skipped;
+                            // the shared projection computes it.
+                            if (item_kinds[i] == .min or item_kinds[i] == .max) {
+                                group.accs[item_acc_idx[i]].fold(minMaxValue(t_val) orelse return null);
+                                continue;
+                            }
+                            const maybe_f = propToF64(t_val) orelse return null;
                             group.accs[item_acc_idx[i]].update(propToI64(t_val), maybe_f);
                         },
                     }
@@ -2898,43 +2974,24 @@ pub fn groupByAggregateFastPath(
                 if (!compareStoragePvLit(w_val, p.op, p.lit)) continue;
             }
 
-            // I2: Group-key serialization (bounded path) — must stay in sync with
-            // the legacy GROUP BY serialization in execution.zig. Types: int ("{d}"),
-            // string (raw bytes), bool ("true"/"false"), null ("null"); other → "?"
-            // (safe: shape gate rejects non-property RETURN exprs before reaching here).
+            // SONNY-2675: see the resident branch above.
             var key_val_captures: [MAX_KEYS]Value = undefined;
             var key_aw: std.Io.Writer.Allocating = try std.Io.Writer.Allocating.initCapacity(ga, 64);
             const key_w = &key_aw.writer;
             for (gb_key_props[0..n_gb_keys], 0..) |kprop, ki| {
-                if (ki > 0) try key_w.writeAll("|");
-                const pv = readScanNodeProp(adapter, filter_graph, slot_id, prop_head, kprop, allocator);
-                if (pv) |pval| {
-                    // m1: defer frees the engine-owned string when this block exits
-                    // (success or error), so a ga.dupe OOM below cannot leak it.
-                    defer switch (pval) {
-                        .string => |s| allocator.free(s),
-                        else => {},
-                    };
-                    switch (pval) {
-                        .int => |iv| try key_w.print("{d}", .{iv}),
-                        .string => |s| try key_w.writeAll(s),
-                        .bool => |bv| try key_w.writeAll(if (bv) "true" else "false"),
-                        .null => try key_w.writeAll("null"),
-                        else => try key_w.writeAll("?"),
-                    }
-                    // Capture: dupe strings to ga before pval is freed by defer above.
-                    key_val_captures[ki] = switch (pval) {
-                        .int => |iv| Value{ .Int = iv },
-                        .string => |s| Value{ .Str = try ga.dupe(u8, s) },
-                        .bool => |bv| Value{ .Bool = bv },
-                        .float => |fv| Value{ .Double = fv },
-                        .null => Value{ .Null = {} },
-                        else => Value{ .Null = {} },
-                    };
-                } else {
-                    try key_w.writeAll("null");
-                    key_val_captures[ki] = Value{ .Null = {} };
-                }
+                const raw = readScanNodeProp(adapter, filter_graph, slot_id, prop_head, kprop, allocator);
+                // m1: the engine-owned bytes are freed when this block exits
+                // (success or error), after the capture below copied them.
+                defer if (raw) |r| switch (r) {
+                    .string => |str| allocator.free(str),
+                    .ext => |e| allocator.free(e.data),
+                    else => {},
+                };
+                defer _ = ext_scratch.reset(.retain_capacity);
+                const pv: graph_store.PropertyValue = if (raw) |r| (storageToGraphPv(ext_scratch.allocator(), r) orelse return null) else .Null;
+                const key_val = fastPathKeyValue(pv) orelse return null;
+                try distinct_set.writeGroupKeyPart(key_w, ga, key_val);
+                key_val_captures[ki] = if (key_val == .Str) Value{ .Str = try ga.dupe(u8, key_val.Str) } else key_val;
             }
             var key_list = key_aw.toArrayList();
             const group_key = try key_list.toOwnedSlice(ga);
@@ -2966,13 +3023,22 @@ pub fn groupByAggregateFastPath(
                         }
                     },
                     .sum, .avg, .min, .max => {
-                        const t_val = readScanNodeProp(adapter, filter_graph, slot_id, prop_head, item_agg_prop[i].?, allocator) orelse continue;
-                        defer switch (t_val) {
+                        const t_raw = readScanNodeProp(adapter, filter_graph, slot_id, prop_head, item_agg_prop[i].?, allocator) orelse continue;
+                        defer switch (t_raw) {
                             .string => |s| allocator.free(s),
+                            .ext => |e| allocator.free(e.data),
                             else => {},
                         };
-                        const maybe_f = storagePropToF64(t_val) orelse continue;
-                        group.accs[item_acc_idx[i]].update(storagePropToI64(t_val), maybe_f);
+                        defer _ = ext_scratch.reset(.retain_capacity);
+                        const t_val = storageToGraphPv(ext_scratch.allocator(), t_raw) orelse return null;
+                        if (t_val == .Null) continue;
+                        // SONNY-2675: see the resident branch above.
+                        if (item_kinds[i] == .min or item_kinds[i] == .max) {
+                            group.accs[item_acc_idx[i]].fold(minMaxValue(t_val) orelse return null);
+                            continue;
+                        }
+                        const maybe_f = propToF64(t_val) orelse return null;
+                        group.accs[item_acc_idx[i]].update(propToI64(t_val), maybe_f);
                     },
                 }
             }
@@ -3058,16 +3124,8 @@ pub fn groupByAggregateFastPath(
                     const total: f64 = if (a.has_float) a.sum_float else @as(f64, @floatFromInt(a.sum_int));
                     break :blk Value{ .Double = total / @as(f64, @floatFromInt(a.count)) };
                 },
-                .min => blk: {
-                    const a = group.accs[item_acc_idx[i]];
-                    if (a.count == 0) break :blk Value{ .Null = {} };
-                    break :blk if (a.has_float) Value{ .Double = a.min_float.? } else Value{ .Int = a.min_int.? };
-                },
-                .max => blk: {
-                    const a = group.accs[item_acc_idx[i]];
-                    if (a.count == 0) break :blk Value{ .Null = {} };
-                    break :blk if (a.has_float) Value{ .Double = a.max_float.? } else Value{ .Int = a.max_int.? };
-                },
+                .min => group.accs[item_acc_idx[i]].minValue(),
+                .max => group.accs[item_acc_idx[i]].maxValue(),
             };
             n_vals_filled += 1;
         }
@@ -3247,7 +3305,7 @@ pub fn topKOrderedFastPath(
     if (q.with_clause != null) return null;
     if (q.group_by != null) return null;
     if (q.having != null) return null;
-    if (q.set_clauses.len != 0) return null;
+    if (readFastPathDeclinesWrite(q)) return null;
 
     // --- LIMIT must be a positive literal, bounded ---
     const k_raw = q.limit orelse return null;
@@ -3495,7 +3553,7 @@ pub fn orderedScanFastPath(
     if (q.with_clause != null) return null;
     if (q.group_by != null) return null;
     if (q.having != null) return null;
-    if (q.set_clauses.len != 0) return null;
+    if (readFastPathDeclinesWrite(q)) return null;
 
     // --- LIMIT must be a positive literal, bounded ---
     const k_raw = q.limit orelse return null;
@@ -4150,6 +4208,8 @@ pub fn executeMatchCreateQuery(allocator: std.mem.Allocator, q: ast.Query, param
 // Execute MATCH + CALL pattern with node binding
 // CANARY: REQ=REQ-MULTI-GRAPH-010; FEATURE="MultiGraphIsolation"; ASPECT=MatchCallFiltering; STATUS=TESTED; TEST=geodetestlab/specs/multi_graph.yml; OWNER=engine; UPDATED=2025-12-22
 pub fn executeMatchCallQuery(allocator: std.mem.Allocator, q: ast.Query, context: ExecutionContext) !ExecutionResult {
+    // SONNY-2683: this executor neither groups nor filters the RETURN.
+    try validateGroupedReturnShape(q);
     // Per-function reusable RLS row buffer. Shared across every
     // passesRLSFilter call site in this function; nodePropertiesToRLSRowInto
     // (Tasks 1-2 of the H5a fix) clears + refills the buffer per call so
@@ -5033,17 +5093,10 @@ pub fn executeMultiNodeMatch(allocator: std.mem.Allocator, q: ast.Query, param_n
                         var key_aw: std.Io.Writer.Allocating = try std.Io.Writer.Allocating.initCapacity(self.allocator, 128);
                         errdefer key_aw.deinit();
                         const key_writer = &key_aw.writer;
-                        for (self.group_by.keys, 0..) |key_expr, k| {
-                            if (k > 0) try key_writer.writeAll("|");
+                        for (self.group_by.keys) |key_expr| {
                             const key_val = eval.evalExpr(self.allocator, key_expr, env) catch Value{ .Null = {} };
-                            switch (key_val) {
-                                .Int => |i| try key_writer.print("{d}", .{i}),
-                                .Str => |s| try key_writer.writeAll(s),
-                                .Bool => |b| try key_writer.writeAll(if (b) "true" else "false"),
-                                .Null => try key_writer.writeAll("null"),
-                                .Node => |n| try key_writer.print("node:{d}", .{n.id}),
-                                else => try key_writer.writeAll("?"),
-                            }
+                            // SONNY-2675: the key's typed canonical encoding.
+                            try distinct_set.writeGroupKeyPart(key_writer, self.allocator, key_val);
                         }
                         var key_list = key_aw.toArrayList();
                         const group_key = try key_list.toOwnedSlice(self.allocator);
@@ -7627,19 +7680,10 @@ fn executeMatchWithOptionalPatterns(allocator: std.mem.Allocator, q: ast.Query, 
             var key_aw: std.Io.Writer.Allocating = try std.Io.Writer.Allocating.initCapacity(allocator, 128);
             errdefer key_aw.deinit();
             const key_writer = &key_aw.writer;
-            for (group_by.keys, 0..) |key_expr, k| {
-                if (k > 0) try key_writer.writeAll("|");
+            for (group_by.keys) |key_expr| {
                 const key_val = eval.evalExpr(allocator, key_expr, env) catch Value{ .Null = {} };
-                // Serialize key value to string
-                switch (key_val) {
-                    .Int => |i| try key_writer.print("{d}", .{i}),
-                    .Str => |s| try key_writer.writeAll(s),
-                    .Bool => |b| try key_writer.writeAll(if (b) "true" else "false"),
-                    .Null => try key_writer.writeAll("null"),
-                    .Node => |n| try key_writer.print("node:{d}", .{n.id}),
-                    .Edge => |e| try key_writer.print("edge:{d}", .{e.id}),
-                    else => try key_writer.writeAll("?"),
-                }
+                // SONNY-2675: the key's typed canonical encoding.
+                try distinct_set.writeGroupKeyPart(key_writer, allocator, key_val);
             }
             var key_buf = key_aw.toArrayList();
             const group_key = try key_buf.toOwnedSlice(allocator);
@@ -7683,7 +7727,7 @@ fn executeMatchWithOptionalPatterns(allocator: std.mem.Allocator, q: ast.Query, 
                 // Check if this is an aggregation expression
                 if (isAggregationExpr(item.expr)) {
                     // Compute aggregation over all rows in the group
-                    new_row[i] = try execution.computeGroupAggregation(allocator, item.expr, group_rows, intermediate_result.columns);
+                    new_row[i] = try execution.computeGroupAggregation(allocator, item.expr, group_rows, intermediate_result.columns, param_names, param_values);
                 } else {
                     // Non-aggregation expression: evaluate with first row
                     new_row[i] = eval.evalExpr(allocator, item.expr, base_env) catch Value{ .Null = {} };
@@ -8540,26 +8584,52 @@ fn executeSingleHopEdgeTraversal(
     }
 }
 
-/// SONNY-2674: whether a plain read's RETURN goes through the shared projection
-/// (`executeWithClauseWithGroupByAndParams`), the one the planned read and
-/// every WITH stage use: a RETURN-level GROUP BY (a GROUP BY after a WITH
-/// belongs to the WITH, which already uses it), or a WHERE after RETURN (the
-/// parser's HAVING without a GROUP BY). The legacy executor's own grouping,
-/// one copy per pattern shape, ignored a WHERE after RETURN, did not group
-/// without an aggregate, and replaced HAVING with "the group has at least two
-/// rows" or evaluated it over the output row alone.
-fn returnUsesSharedProjection(q: ast.Query) bool {
+/// Whether the RETURN groups or filters: a RETURN-level GROUP BY (a GROUP BY
+/// after a WITH belongs to the WITH, which groups in the shared projection
+/// already), or a WHERE after RETURN (the parser's HAVING without a GROUP BY).
+fn returnGroupsOrFilters(q: ast.Query) bool {
     const return_group_by = q.group_by != null and q.with_clause == null;
     const return_where = q.having != null and q.group_by == null;
-    if (!return_group_by and !return_where) return false;
-    if (q.ret.items.len == 0) return false;
-    // Only a plain read: nothing else produces or rewrites the rows.
-    if (q.set_clauses.len != 0 or q.remove_clauses.len != 0 or q.delete_items.len != 0) return false;
+    return return_group_by or return_where;
+}
+
+/// SONNY-2674: whether the RETURN goes through the shared projection
+/// (`executeWithClauseWithGroupByAndParams`), the one the planned read and
+/// every WITH stage use: when it groups or filters. The legacy executor's own
+/// grouping, one copy per pattern shape, ignored a WHERE after RETURN, did
+/// not group without an aggregate, and replaced HAVING with "the group has at
+/// least two rows" or evaluated it over the output row alone.
+fn returnUsesSharedProjection(q: ast.Query) bool {
+    return returnGroupsOrFilters(q) and q.ret.items.len != 0 and sharedProjectionServes(q);
+}
+
+// CANARY: REQ=REQ-SONNY-2683-RETURN-SHAPES; FEATURE="LegacyReturnProjection"; ASPECT=ExcludedShapes; STATUS=TESTED; TEST=tests/test_sonny2683_return_shapes.zig; OWNER=engine; UPDATED=2026-09-25
+/// Whether the shared projection can serve a query's RETURN: the RETURN is
+/// computed from the rows the pattern binds. That holds for a read, with or
+/// without a CTE (its results are already parameters when the read runs),
+/// and for a SET or REMOVE (SONNY-2683): reading the bindings applies it to
+/// every matched row, and the RETURN is computed after. The grouping code
+/// these shapes fell to kept the "at least two rows" HAVING stand-in, and a
+/// grouped RETURN after a SET or REMOVE never applied the write.
+///
+/// Not served: a DELETE, CREATE or MERGE (the rows the RETURN sees are not
+/// the bindings), a procedure CALL (its own executor), and the chained
+/// shapes (UNWIND, CALL { }, NEXT, FOR), which the parser does not let
+/// group or filter.
+fn sharedProjectionServes(q: ast.Query) bool {
+    if (q.delete_items.len != 0) return false;
     if (q.create_pattern != null or q.merge_statement != null) return false;
     if (q.call_clause != null or q.unwind_clause != null or q.initial_call_subquery != null) return false;
     if (q.next_query != null or q.for_statement != null) return false;
-    if (q.cte_list != null or q.has_recursive_cte) return false;
     return true;
+}
+
+/// SONNY-2683: refuse a RETURN that groups or filters where the shared
+/// projection cannot serve it, before any write. The executors of those
+/// shapes ignored the GROUP BY, HAVING or WHERE after RETURN, or returned
+/// rows unrelated to the matched ones.
+pub fn validateGroupedReturnShape(q: ast.Query) error{UnsupportedGroupedReturn}!void {
+    if (returnGroupsOrFilters(q) and !sharedProjectionServes(q)) return error.UnsupportedGroupedReturn;
 }
 
 fn appendNameOnce(allocator: std.mem.Allocator, names: *std.ArrayList([]const u8), name: []const u8) !void {
@@ -8587,6 +8657,7 @@ fn executeReturnOverBindings(
     current_graph: ?[]const u8,
 ) anyerror!ExecutionResult {
     // (An explicit error set: this and executeMatchQueryImpl call each other.)
+    _ = g_return_over_bindings_total.fetchAdd(1, .monotonic);
     var names: std.ArrayList([]const u8) = .empty;
     defer names.deinit(allocator);
     if (q.with_clause) |with_clause| {
@@ -8645,9 +8716,30 @@ fn executeReturnOverBindings(
 // Execute MATCH query with graph isolation - only matches nodes in the specified graph
 // CANARY: REQ=REQ-REFACTOR-MATCH-007; FEATURE="MatchOperationsRefactor"; ASPECT=RefactoredFunction; STATUS=TESTED; TEST=geodetestlab/specs/grpc_rapid_sequential_writes_479.yml; OWNER=engine; UPDATED=2026-06-11
 pub fn executeMatchQueryImpl(allocator: std.mem.Allocator, q: ast.Query, param_names: []const []const u8, param_values: []const Value, inline_let_bindings: []ast.LetBinding, current_graph: ?[]const u8) !ExecutionResult {
+    // SONNY-2683: a CREATE or MERGE after the MATCH reads its bindings here
+    // first; refuse its grouped or filtered RETURN before anything is written.
+    try validateGroupedReturnShape(q);
+    // The graph and tenant every read and write below is scoped to, derived
+    // once, here: the session's graph (else "default") and its tenant filter
+    // (GAP-0279).
+    const filter_graph = current_graph orelse "default";
+    const filter_tenant = try getSessionTenantFilter();
     // SONNY-2674: a RETURN-level GROUP BY, and a WHERE after RETURN, go through
     // the shared projection, before any of the shape-specific grouping below.
     if (returnUsesSharedProjection(q)) {
+        // First the two GROUP BY fast paths the code below would try. They
+        // serve a grouped RETURN over one label with the shared projection's
+        // results, and decline a HAVING, a WITH, a WHERE after RETURN (the
+        // parser's HAVING), a SET and a REMOVE. The query executor tries them
+        // before its planned read; the callers that reach this executor
+        // directly (executeQueryWithBindingsImpl, VALUES ... MATCH) have only
+        // these.
+        if (try indexServedGroupByFastPath(allocator, q, filter_graph, filter_tenant)) |fast_result| {
+            return fast_result;
+        }
+        if (try groupByAggregateFastPath(allocator, q, filter_graph, filter_tenant)) |fast_result| {
+            return fast_result;
+        }
         return executeReturnOverBindings(allocator, q, param_names, param_values, inline_let_bindings, current_graph);
     }
 
@@ -8672,10 +8764,6 @@ pub fn executeMatchQueryImpl(allocator: std.mem.Allocator, q: ast.Query, param_n
     defer read_view.deinit();
 
     const store = read_view.getReadStore();
-    // Graph to filter by - use "default" if no graph specified
-    const filter_graph = current_graph orelse "default";
-    // GAP-0279: Get tenant filter from session context
-    const filter_tenant = try getSessionTenantFilter();
     // SONNY-2679: the graph, tenant and RLS scope every traversal below applies
     // to each edge it walks and each node it reaches, not only to the start
     // node it scans.
@@ -9039,18 +9127,10 @@ pub fn executeMatchQueryImpl(allocator: std.mem.Allocator, q: ast.Query, param_n
                         var key_aw: std.Io.Writer.Allocating = try std.Io.Writer.Allocating.initCapacity(allocator, 128);
                         errdefer key_aw.deinit();
                         const key_writer = &key_aw.writer;
-                        for (group_by.keys, 0..) |key_expr, k| {
-                            if (k > 0) try key_writer.writeAll("|");
+                        for (group_by.keys) |key_expr| {
                             const key_val = eval.evalExpr(allocator, key_expr, env) catch Value{ .Null = {} };
-                            switch (key_val) {
-                                .Int => |i| try key_writer.print("{d}", .{i}),
-                                .Str => |s| try key_writer.writeAll(s),
-                                .Bool => |b| try key_writer.writeAll(if (b) "true" else "false"),
-                                .Null => try key_writer.writeAll("null"),
-                                .Node => |n| try key_writer.print("node:{d}", .{n.id}),
-                                .Edge => |e| try key_writer.print("edge:{d}", .{e.id}),
-                                else => try key_writer.writeAll("?"),
-                            }
+                            // SONNY-2675: the key's typed canonical encoding.
+                            try distinct_set.writeGroupKeyPart(key_writer, allocator, key_val);
                         }
                         var key_buf = key_aw.toArrayList();
                         const group_key = try key_buf.toOwnedSlice(allocator);
@@ -9188,18 +9268,10 @@ pub fn executeMatchQueryImpl(allocator: std.mem.Allocator, q: ast.Query, param_n
                         var key_aw: std.Io.Writer.Allocating = try std.Io.Writer.Allocating.initCapacity(allocator, 128);
                         errdefer key_aw.deinit();
                         const key_writer = &key_aw.writer;
-                        for (group_by.keys, 0..) |key_expr, k| {
-                            if (k > 0) try key_writer.writeAll("|");
+                        for (group_by.keys) |key_expr| {
                             const key_val = eval.evalExpr(allocator, key_expr, env) catch Value{ .Null = {} };
-                            switch (key_val) {
-                                .Int => |i| try key_writer.print("{d}", .{i}),
-                                .Str => |s| try key_writer.writeAll(s),
-                                .Bool => |b| try key_writer.writeAll(if (b) "true" else "false"),
-                                .Null => try key_writer.writeAll("null"),
-                                .Node => |n| try key_writer.print("node:{d}", .{n.id}),
-                                .Edge => |e| try key_writer.print("edge:{d}", .{e.id}),
-                                else => try key_writer.writeAll("?"),
-                            }
+                            // SONNY-2675: the key's typed canonical encoding.
+                            try distinct_set.writeGroupKeyPart(key_writer, allocator, key_val);
                         }
                         var key_buf = key_aw.toArrayList();
                         const group_key = try key_buf.toOwnedSlice(allocator);
@@ -10270,7 +10342,7 @@ pub fn executeMatchQueryImpl(allocator: std.mem.Allocator, q: ast.Query, param_n
             if (q.with_clause) |with_clause| {
                 // Apply WITH clause to transform matched variables
                 // CANARY: REQ=REQ-GQL-WITH-GROUPBY-003; FEATURE="WithGroupByAggregation"; ASPECT=CallSite; STATUS=TESTED; TEST=geodetestlab/specs/gql_query_comprehensive.yml; OWNER=execution; UPDATED=2025-12-22
-                var with_result = try execution.executeWithClauseWithGroupBy(allocator, result, with_clause, q.group_by, execution.withStageHaving(q));
+                var with_result = try execution.executeWithClauseWithGroupByAndParams(allocator, result, with_clause, q.group_by, execution.withStageHaving(q), param_names, param_values);
 
                 // Clean up original result since it's been transformed by WITH
                 for (result.columns) |col| {
@@ -10990,7 +11062,7 @@ pub fn executeMatchQueryImpl(allocator: std.mem.Allocator, q: ast.Query, param_n
         if (q.with_clause) |with_clause| {
             // Apply WITH clause to transform matched variables
             // CANARY: REQ=REQ-GQL-WITH-GROUPBY-003; FEATURE="WithGroupByAggregation"; ASPECT=CallSite; STATUS=TESTED; TEST=geodetestlab/specs/gql_query_comprehensive.yml; OWNER=execution; UPDATED=2025-12-22
-            var with_result = try execution.executeWithClauseWithGroupBy(allocator, result, with_clause, q.group_by, execution.withStageHaving(q));
+            var with_result = try execution.executeWithClauseWithGroupByAndParams(allocator, result, with_clause, q.group_by, execution.withStageHaving(q), param_names, param_values);
 
             // Clean up original result since it's been transformed by WITH
             for (result.columns) |col| {

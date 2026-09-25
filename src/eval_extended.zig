@@ -5,6 +5,8 @@ const patricia = @import("index/patricia.zig");
 const rtree = @import("rtree_lib");
 const hnsw = @import("hnsw_lib");
 const extf = @import("types/extended_functions.zig");
+const dec128 = @import("types/decimal128.zig");
+const narrowing = @import("types/narrowing.zig");
 const network = @import("types/network.zig");
 const datetime = @import("types/datetime.zig");
 const uuid = @import("uuid");
@@ -465,8 +467,9 @@ fn constructLatLon(allocator: std.mem.Allocator, args: []const ExtValue) !ExtVal
         const lat = try std.fmt.parseFloat(f64, lat_str);
         const lon = try std.fmt.parseFloat(f64, lon_str);
 
-        if (lat < -90 or lat > 90) return error.InvalidLatitude;
-        if (lon < -180 or lon > 180) return error.InvalidLongitude;
+        // SONNY-2739: NaN failed both comparisons and was accepted.
+        if (!(lat >= -90 and lat <= 90)) return error.InvalidLatitude;
+        if (!(lon >= -180 and lon <= 180)) return error.InvalidLongitude;
 
         return .{ .LatLon = .{ .lat = lat, .lon = lon } };
     }
@@ -486,8 +489,8 @@ fn constructLatLon(allocator: std.mem.Allocator, args: []const ExtValue) !ExtVal
         else => return error.TypeMismatch,
     };
 
-    if (lat < -90 or lat > 90) return error.InvalidLatitude;
-    if (lon < -180 or lon > 180) return error.InvalidLongitude;
+    if (!(lat >= -90 and lat <= 90)) return error.InvalidLatitude;
+    if (!(lon >= -180 and lon <= 180)) return error.InvalidLongitude;
 
     return .{ .LatLon = .{ .lat = lat, .lon = lon } };
 }
@@ -519,8 +522,11 @@ fn constructLatLonAlt(allocator: std.mem.Allocator, args: []const ExtValue) !Ext
         else
             .ellipsoid; // Default
 
-        if (lat < -90 or lat > 90) return error.InvalidLatitude;
-        if (lon < -180 or lon > 180) return error.InvalidLongitude;
+        // SONNY-2739: NaN failed both comparisons and was accepted, and an
+        // altitude could be NaN or infinite.
+        if (!(lat >= -90 and lat <= 90)) return error.InvalidLatitude;
+        if (!(lon >= -180 and lon <= 180)) return error.InvalidLongitude;
+        if (!std.math.isFinite(alt)) return error.InvalidFormat;
 
         return .{ .LatLonAlt = .{ .lat = lat, .lon = lon, .alt = alt, .ref = ref } };
     }
@@ -569,8 +575,8 @@ fn constructLatLonAlt(allocator: std.mem.Allocator, args: []const ExtValue) !Ext
         }
     } else .ellipsoid; // Default
 
-    if (lat < -90 or lat > 90) return error.InvalidLatitude;
-    if (lon < -180 or lon > 180) return error.InvalidLongitude;
+    if (!(lat >= -90 and lat <= 90)) return error.InvalidLatitude;
+    if (!(lon >= -180 and lon <= 180)) return error.InvalidLongitude;
 
     return .{ .LatLonAlt = .{ .lat = lat, .lon = lon, .alt = alt, .ref = ref } };
 }
@@ -1249,7 +1255,8 @@ fn distanceHaversine(allocator: std.mem.Allocator, args: []const ExtValue) !ExtV
     const c = 2 * std.math.atan2(std.math.sqrt(a), std.math.sqrt(1 - a));
 
     const distance = R * c;
-    return .{ .Int = @intFromFloat(@round(distance)) };
+    // SONNY-2739: a stored NaN coordinate made this a garbage Int.
+    return .{ .Int = try narrowing.floatToInt(i64, @round(distance)) };
 }
 
 fn getLatitude(allocator: std.mem.Allocator, args: []const ExtValue) !ExtValue {
@@ -1262,7 +1269,7 @@ fn getLatitude(allocator: std.mem.Allocator, args: []const ExtValue) !ExtValue {
         else => return error.TypeMismatch,
     };
 
-    return .{ .Decimal = .{ .coeff = @intFromFloat(lat * 1000000), .scale = 6 } };
+    return .{ .Decimal = .{ .coeff = try dec128.checkedScaledCoeff(lat, 1_000_000.0), .scale = 6 } };
 }
 
 fn getLongitude(allocator: std.mem.Allocator, args: []const ExtValue) !ExtValue {
@@ -1275,7 +1282,7 @@ fn getLongitude(allocator: std.mem.Allocator, args: []const ExtValue) !ExtValue 
         else => return error.TypeMismatch,
     };
 
-    return .{ .Decimal = .{ .coeff = @intFromFloat(lon * 1000000), .scale = 6 } };
+    return .{ .Decimal = .{ .coeff = try dec128.checkedScaledCoeff(lon, 1_000_000.0), .scale = 6 } };
 }
 
 fn getAltitude(allocator: std.mem.Allocator, args: []const ExtValue) !ExtValue {
@@ -1283,7 +1290,8 @@ fn getAltitude(allocator: std.mem.Allocator, args: []const ExtValue) !ExtValue {
     if (args.len != 1) return error.InvalidArgs;
 
     switch (args[0]) {
-        .LatLonAlt => |lla| return .{ .Decimal = .{ .coeff = @intFromFloat(lla.alt * 1000), .scale = 3 } },
+        // SONNY-2739: `altitude(latlonalt('0,0,1e300'))` aborted the server.
+        .LatLonAlt => |lla| return .{ .Decimal = .{ .coeff = try dec128.checkedScaledCoeff(lla.alt, 1000.0), .scale = 3 } },
         else => return .{ .Null = {} },
     }
 }
@@ -1354,7 +1362,7 @@ fn geoBearing(allocator: std.mem.Allocator, args: []const ExtValue) !ExtValue {
         bearing += 360.0;
     }
 
-    return .{ .Decimal = .{ .coeff = @intFromFloat(bearing * 1000000), .scale = 6 } };
+    return .{ .Decimal = .{ .coeff = try dec128.checkedScaledCoeff(bearing, 1_000_000.0), .scale = 6 } };
 }
 
 fn geoLat(allocator: std.mem.Allocator, args: []const ExtValue) !ExtValue {
@@ -1367,7 +1375,7 @@ fn geoLat(allocator: std.mem.Allocator, args: []const ExtValue) !ExtValue {
         else => return error.TypeMismatch,
     };
 
-    return .{ .Decimal = .{ .coeff = @intFromFloat(lat * 1000000), .scale = 6 } };
+    return .{ .Decimal = .{ .coeff = try dec128.checkedScaledCoeff(lat, 1_000_000.0), .scale = 6 } };
 }
 
 fn geoLon(allocator: std.mem.Allocator, args: []const ExtValue) !ExtValue {
@@ -1380,7 +1388,7 @@ fn geoLon(allocator: std.mem.Allocator, args: []const ExtValue) !ExtValue {
         else => return error.TypeMismatch,
     };
 
-    return .{ .Decimal = .{ .coeff = @intFromFloat(lon * 1000000), .scale = 6 } };
+    return .{ .Decimal = .{ .coeff = try dec128.checkedScaledCoeff(lon, 1_000_000.0), .scale = 6 } };
 }
 
 // Geometry functions
@@ -1852,8 +1860,9 @@ fn stX(_: std.mem.Allocator, args: []const ExtValue) !ExtValue {
     const geom = args[0].Geometry;
     const point = try parseWkbPoint(geom.wkb);
 
-    // Convert to Decimal with 6 decimal places
-    const x_scaled: i128 = @intFromFloat(point[0] * 1000000);
+    // Convert to Decimal with 6 decimal places. SONNY-2739: a coordinate past
+    // the decimal (`st_x(st_point(1e35, 0))`) aborted the server; 22003 now.
+    const x_scaled = try dec128.checkedScaledCoeff(point[0], 1_000_000.0);
     return .{ .Decimal = .{ .coeff = x_scaled, .scale = 6 } };
 }
 
@@ -1866,8 +1875,8 @@ fn stY(_: std.mem.Allocator, args: []const ExtValue) !ExtValue {
     const geom = args[0].Geometry;
     const point = try parseWkbPoint(geom.wkb);
 
-    // Convert to Decimal with 6 decimal places
-    const y_scaled: i128 = @intFromFloat(point[1] * 1000000);
+    // Convert to Decimal with 6 decimal places (SONNY-2739: see ST_X).
+    const y_scaled = try dec128.checkedScaledCoeff(point[1], 1_000_000.0);
     return .{ .Decimal = .{ .coeff = y_scaled, .scale = 6 } };
 }
 
@@ -1892,8 +1901,8 @@ fn stDistance(_: std.mem.Allocator, args: []const ExtValue) !ExtValue {
         const dy = p2[1] - p1[1];
         const distance = @sqrt(dx * dx + dy * dy);
 
-        // Convert to Decimal with 6 decimal places
-        const dist_scaled: i128 = @intFromFloat(distance * 1000000);
+        // Convert to Decimal with 6 decimal places (SONNY-2739: see ST_X).
+        const dist_scaled = try dec128.checkedScaledCoeff(distance, 1_000_000.0);
         return .{ .Decimal = .{ .coeff = dist_scaled, .scale = 6 } };
     }
 
@@ -1933,8 +1942,8 @@ fn stArea(allocator: std.mem.Allocator, args: []const ExtValue) !ExtValue {
     }
     const area = @abs(sum) / 2.0;
 
-    // Convert to Decimal with 6 decimal places
-    const area_scaled: i128 = @intFromFloat(area * 1000000);
+    // Convert to Decimal with 6 decimal places (SONNY-2739: see ST_X).
+    const area_scaled = try dec128.checkedScaledCoeff(area, 1_000_000.0);
     return .{ .Decimal = .{ .coeff = area_scaled, .scale = 6 } };
 }
 

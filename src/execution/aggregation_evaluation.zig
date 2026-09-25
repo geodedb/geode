@@ -5,6 +5,7 @@ const graph_store = @import("../graph_store.zig");
 const property_codec = @import("../property_value_codec.zig");
 const value_types = @import("../value_types.zig");
 const distinct_set = @import("distinct_set.zig");
+const decimal128 = @import("../types/decimal128.zig");
 
 // Import from parent execution module
 const execution = @import("../execution.zig");
@@ -465,7 +466,8 @@ pub fn evaluateGroupAggregation(allocator: std.mem.Allocator, expr: ast.Expr, no
                                 const stddev = @sqrt(variance);
 
                                 // Return as Decimal with 6 decimal places
-                                return Value{ .Decimal = .{ .coeff = @intFromFloat(stddev * 1000000), .scale = 6, .orig_scale = 6, .orig_repr = null } };
+                                // SONNY-2739: checked (22003) instead of a bare `@intFromFloat`.
+                                return Value{ .Decimal = .{ .coeff = try decimal128.checkedScaledCoeff(stddev, 1_000_000.0), .scale = 6, .orig_scale = 6, .orig_repr = null } };
                             }
                             return Value{ .Null = {} };
                         }
@@ -528,7 +530,7 @@ pub fn evaluateGroupAggregation(allocator: std.mem.Allocator, expr: ast.Expr, no
                                 const variance = sum_squared_dev / count;
 
                                 // Return as Decimal with 6 decimal places
-                                return Value{ .Decimal = .{ .coeff = @intFromFloat(variance * 1000000), .scale = 6, .orig_scale = 6, .orig_repr = null } };
+                                return Value{ .Decimal = .{ .coeff = try decimal128.checkedScaledCoeff(variance, 1_000_000.0), .scale = 6, .orig_scale = 6, .orig_repr = null } };
                             }
                             return Value{ .Null = {} };
                         }
@@ -566,7 +568,8 @@ pub fn evaluateNodeExpression(allocator: std.mem.Allocator, expr: ast.Expr, node
                 switch (val) {
                     .String => |s| return Value{ .Str = s },
                     .Int => |n| return Value{ .Int = n },
-                    .Float => |f| return Value{ .Decimal = .{ .coeff = @intFromFloat(f * 100), .scale = 2 } },
+                    // SONNY-2739: checked (22003) instead of a bare `@intFromFloat`.
+                    .Float => |f| return Value{ .Decimal = .{ .coeff = try decimal128.checkedScaledCoeff(f, 100.0), .scale = 2 } },
                     .Bool => |b| return Value{ .Bool = b },
                     .Null => return Value{ .Null = {} },
                     .ExtValue => |ext| return Value{ .ExtValue = ext },
@@ -582,7 +585,8 @@ pub fn evaluateNodeExpression(allocator: std.mem.Allocator, expr: ast.Expr, node
                 switch (val) {
                     .String => |s| return Value{ .Str = s },
                     .Int => |n| return Value{ .Int = n },
-                    .Float => |f| return Value{ .Decimal = .{ .coeff = @intFromFloat(f * 100), .scale = 2 } },
+                    // SONNY-2739: checked (22003) instead of a bare `@intFromFloat`.
+                    .Float => |f| return Value{ .Decimal = .{ .coeff = try decimal128.checkedScaledCoeff(f, 100.0), .scale = 2 } },
                     .Bool => |b| return Value{ .Bool = b },
                     .Null => return Value{ .Null = {} },
                     .ExtValue => |ext| return Value{ .ExtValue = ext },

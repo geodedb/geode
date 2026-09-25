@@ -1628,6 +1628,10 @@ pub fn executeQueryWithContext(allocator: std.mem.Allocator, q: ast.Query, conte
         // GAP-0926: reject nested aggregates (sum(avg(...))) — always invalid,
         // previously silently NULL.
         try execution.validateNoNestedAggregate(q.ret);
+        // SONNY-2683: refuse a RETURN that groups or filters after a CREATE,
+        // MERGE, DELETE or procedure CALL, before a read fast path answers it
+        // and before anything is written.
+        try match_operations.validateGroupedReturnShape(q);
     }
 
     // COUNT_PUSHDOWN: short-circuit unlabeled `MATCH (n) RETURN count(n)` /
@@ -2016,7 +2020,7 @@ pub fn executeLegacyQueryWithResolvedParams(
         // If there's a WITH clause, apply it to the CALL results
         if (q.with_clause) |with_clause| {
             // CANARY: REQ=REQ-GQL-WITH-GROUPBY-003; FEATURE="WithGroupByAggregation"; ASPECT=CallSite; STATUS=TESTED; TEST=geodetestlab/specs/gql_query_comprehensive.yml; OWNER=execution; UPDATED=2025-12-22
-            const with_result = try execution.executeWithClauseWithGroupBy(allocator, call_result, with_clause, q.group_by, execution.withStageHaving(q));
+            const with_result = try execution.executeWithClauseWithGroupByAndParams(allocator, call_result, with_clause, q.group_by, execution.withStageHaving(q), param_names.items, param_values.items);
 
             // Apply WHERE filter if present
             const filtered_result = if (q.where_clause) |where_expr| blk: {
@@ -2217,7 +2221,7 @@ pub fn executeLegacyQueryWithResolvedParams(
 
         // Apply WITH clause to transform the empty row into WITH variables
         // CANARY: REQ=REQ-GQL-WITH-GROUPBY-003; FEATURE="WithGroupByAggregation"; ASPECT=CallSite; STATUS=TESTED; TEST=geodetestlab/specs/gql_query_comprehensive.yml; OWNER=execution; UPDATED=2025-12-22
-        const with_result = try execution.executeWithClauseWithGroupBy(allocator, initial_result, with_clause, q.group_by, execution.withStageHaving(q));
+        const with_result = try execution.executeWithClauseWithGroupByAndParams(allocator, initial_result, with_clause, q.group_by, execution.withStageHaving(q), param_names.items, param_values.items);
 
         // Check if there's a FOR statement to execute with WITH bindings
         if (q.for_statement) |for_stmt| {
