@@ -319,6 +319,20 @@ pub fn decide(allocator: std.mem.Allocator, req: *const DecisionRequest) !Policy
         });
     }
 
+    // CANARY: REQ=REQ-SONNY-2744-GPS-DENY-OVERRIDES; FEATURE="GPS Policy Evaluation"; ASPECT=DenyOverridesAllow; STATUS=TESTED; TEST=tests/test_sonny2744_gps_deny.zig; OWNER=security; UPDATED=2026-09-25
+    // SONNY-2744: a matching deny-effect policy refuses the request, whatever
+    // would allow it below: a builtin role, an Admin shortcut (decrypt_field,
+    // unwrap_key) or an allow policy. The policy catalog below used to skip
+    // deny policies, so a deny never denied. Only actions a policy can name
+    // (`policyMatchesAction`) can be denied; --insecure-allow-all, above,
+    // still overrides everything.
+    if (denyPolicyApplies(allocator, req)) {
+        return cacheAndReturn(cache_key, PolicyDecision{
+            .kind = .deny,
+            .reason_code = "policy_deny",
+        });
+    }
+
     // CANARY: REQ=REQ-GPS-METADATA-000; FEATURE="GPS Metadata Isolation"; ASPECT=DecideShowMetadata; STATUS=TESTED; TEST=tests/test_gps_show_metadata.zig; OWNER=security; UPDATED=2026-05-20
     // show_metadata is always allowed at the decision layer for authenticated
     // principals. The actual metadata handlers filter rows by tenant and
@@ -486,76 +500,19 @@ pub fn decide(allocator: std.mem.Allocator, req: *const DecisionRequest) !Policy
     // Phase 5 (Task 5-4): attribute-based expression predicates are now
     // evaluated via the compiled CompiledExpression stored on each Policy.
     const pc = @import("policy_catalog.zig");
-    const policy_expression = @import("policy_expression.zig");
     if (pc.getGlobalCatalog()) |cat| {
         for (cat.listPolicies()) |*policy| {
+            // SONNY-2744: deny policies were applied above.
+            if (policy.effect != .allow) continue;
             if (!policy.enabled) continue;
             if (!policyMatchesAction(policy.*, req.action)) continue;
             if (!policyMatchesResource(policy.*, req.resource)) continue;
-
-            // CANARY: REQ=REQ-GPS-ABAC-001; FEATURE="GPS ABAC Predicates"; ASPECT=DecidePopulateAttributes; STATUS=TESTED; TEST=tests/test_gps_abac_predicates.zig; OWNER=security; UPDATED=2026-05-22
-            // Build an evaluation context from the current request.
-            // Phase 6 (Task 6-2): principal_attributes is populated from the
-            // caller's AttributeMap so that eq_principal_attr predicates can
-            // match ABAC key/value pairs without any additional allocation.
-            //
-            // GAP-0284 (2026-05-22): the principal carried by every transport
-            // (QUIC, gRPC, MCP, distributed) is currently constructed with
-            // attributes=emptySentinel() because derivePrincipal() runs without
-            // an allocator. To make ABAC predicates actually fire, fall back
-            // to the security/user_attribute_store snapshot keyed by the
-            // authenticated username when the principal's own attribute slice
-            // is empty.
-            comptime std.debug.assert(@sizeOf(principal_mod.AttributeMap.Entry) == @sizeOf(policy_expression.AttributeEntry));
-            const raw_entries = req.principal.attributes.entries;
-            var owned_snapshot: ?[]policy_expression.AttributeEntry = null;
-            defer if (owned_snapshot) |s| {
-                for (s) |e| {
-                    allocator.free(e.key);
-                    allocator.free(e.value);
-                }
-                allocator.free(s);
-            };
-            const attr_entries: []const policy_expression.AttributeEntry = if (raw_entries.len > 0) blk: {
-                break :blk @as(
-                    [*]const policy_expression.AttributeEntry,
-                    @ptrCast(raw_entries.ptr),
-                )[0..raw_entries.len];
-            } else if (req.principal.username) |uname| blk: {
-                const snap = @import("user_attr_store").snapshotEntries(
-                    allocator,
-                    uname,
-                    policy_expression.AttributeEntry,
-                ) catch try allocator.alloc(policy_expression.AttributeEntry, 0);
-                if (snap.len > 0) owned_snapshot = snap;
-                break :blk snap;
-            } else &[_]policy_expression.AttributeEntry{};
-            const ctx = policy_expression.PolicyEvalContext{
-                .current_user = req.principal.username,
-                .current_tenant = req.principal.tenant_id,
-                .current_graph = req.principal.active_graph,
-                .resource_label = switch (req.resource) {
-                    // For node resources, use the first label as resource_label.
-                    // Phase 5: a richer label-set predicate can land in Phase 6.
-                    else => null,
-                },
-                .principal_attributes = attr_entries,
-            };
-
-            // Evaluate the expression: compiled expression takes priority;
-            // the trivial "true" string is the fast-path fallback.
-            const expr_result = if (policy.compiled) |*cexpr|
-                policy_expression.evaluate(cexpr, ctx)
-            else
-                std.mem.eql(u8, policy.expression_source, "true");
-
-            if (expr_result and policy.effect == .allow) {
+            if (policyExpressionHolds(allocator, policy, req)) {
                 return cacheAndReturn(cache_key, PolicyDecision{
                     .kind = .allow,
                     .reason_code = "policy_match",
                 });
             }
-            // deny-effect or expression evaluated to false: continue scan.
         }
     }
 
@@ -563,6 +520,93 @@ pub fn decide(allocator: std.mem.Allocator, req: *const DecisionRequest) !Policy
         .kind = .unauthorized,
         .reason_code = "no_evidence",
     });
+}
+
+/// SONNY-2744: is there an enabled deny-effect policy that matches `req`
+/// (action, resource and USING expression)? Resources match as for allow
+/// policies (`policyMatchesResource`): a policy scoped to one graph matches
+/// that graph, and also every database-, tenant-, node-, edge-, procedure- and
+/// metadata-scoped request, so a deny covers at least what the same allow
+/// would have granted.
+fn denyPolicyApplies(allocator: std.mem.Allocator, req: *const DecisionRequest) bool {
+    const pc = @import("policy_catalog.zig");
+    const cat = pc.getGlobalCatalog() orelse return false;
+    for (cat.listPolicies()) |*policy| {
+        if (policy.effect != .deny) continue;
+        if (!policy.enabled) continue;
+        if (!policyMatchesAction(policy.*, req.action)) continue;
+        if (!policyMatchesResource(policy.*, req.resource)) continue;
+        if (policyExpressionHolds(allocator, policy, req)) return true;
+    }
+    return false;
+}
+
+/// Does `policy`'s USING expression hold for `req`? The trivial "true" holds.
+/// A policy whose expression failed to compile when it was loaded
+/// (`PolicyCatalog.policyIsValid` false) is kept fail-closed: as an allow it
+/// never holds (it grants nothing), and, SONNY-2744, as a deny it always holds
+/// (it keeps refusing) until an operator rewrites it.
+fn policyExpressionHolds(allocator: std.mem.Allocator, policy: *const @import("policy_catalog.zig").Policy, req: *const DecisionRequest) bool {
+    const policy_expression = @import("policy_expression.zig");
+    const cexpr = if (policy.compiled) |*compiled| compiled else {
+        if (std.mem.eql(u8, policy.expression_source, "true")) return true;
+        return policy.effect == .deny;
+    };
+
+    // CANARY: REQ=REQ-GPS-ABAC-001; FEATURE="GPS ABAC Predicates"; ASPECT=DecidePopulateAttributes; STATUS=TESTED; TEST=tests/test_gps_abac_predicates.zig; OWNER=security; UPDATED=2026-05-22
+    // Build an evaluation context from the current request.
+    // Phase 6 (Task 6-2): principal_attributes is populated from the
+    // caller's AttributeMap so that eq_principal_attr predicates can
+    // match ABAC key/value pairs without any additional allocation.
+    //
+    // GAP-0284 (2026-05-22): the principal carried by every transport
+    // (QUIC, gRPC, MCP, distributed) is currently constructed with
+    // attributes=emptySentinel() because derivePrincipal() runs without
+    // an allocator. To make ABAC predicates actually fire, fall back
+    // to the security/user_attribute_store snapshot keyed by the
+    // authenticated username when the principal's own attribute slice
+    // is empty.
+    comptime std.debug.assert(@sizeOf(principal_mod.AttributeMap.Entry) == @sizeOf(policy_expression.AttributeEntry));
+    const raw_entries = req.principal.attributes.entries;
+    var owned_snapshot: ?[]policy_expression.AttributeEntry = null;
+    defer if (owned_snapshot) |snap| {
+        for (snap) |e| {
+            allocator.free(e.key);
+            allocator.free(e.value);
+        }
+        allocator.free(snap);
+    };
+    const attr_entries: []const policy_expression.AttributeEntry = if (raw_entries.len > 0) blk: {
+        break :blk @as(
+            [*]const policy_expression.AttributeEntry,
+            @ptrCast(raw_entries.ptr),
+        )[0..raw_entries.len];
+    } else if (req.principal.username) |uname| blk: {
+        const snap = @import("user_attr_store").snapshotEntries(
+            allocator,
+            uname,
+            policy_expression.AttributeEntry,
+        ) catch {
+            // The principal's attributes cannot be read. Fail closed: a deny
+            // holds, and an allow sees no attributes (so grants on none).
+            if (policy.effect == .deny) return true;
+            break :blk &[_]policy_expression.AttributeEntry{};
+        };
+        if (snap.len > 0) owned_snapshot = snap;
+        break :blk snap;
+    } else &[_]policy_expression.AttributeEntry{};
+    const ctx = policy_expression.PolicyEvalContext{
+        .current_user = req.principal.username,
+        .current_tenant = req.principal.tenant_id,
+        .current_graph = req.principal.active_graph,
+        .resource_label = switch (req.resource) {
+            // For node resources, use the first label as resource_label.
+            // Phase 5: a richer label-set predicate can land in Phase 6.
+            else => null,
+        },
+        .principal_attributes = attr_entries,
+    };
+    return policy_expression.evaluate(cexpr, ctx);
 }
 
 // CANARY: REQ=REQ-SONNY-2743-WHOLE-PROGRAM-GATE; FEATURE="StatementAuthorization"; ASPECT=WriteGate; STATUS=TESTED; TEST=tests/test_sonny2743_whole_program_gate.zig; OWNER=security; UPDATED=2026-09-25

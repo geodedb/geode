@@ -365,3 +365,65 @@ test "SONNY-2731: a stored policy text longer than its record loads fail-closed 
     try testing.expect(!grants(p, "mallory"));
     try testing.expect(!grants(p, "alice"));
 }
+
+// ---------------------------------------------------------------------------
+// SONNY-2744: a deny stored in __geode_security is honoured after a restart.
+// ---------------------------------------------------------------------------
+
+test "SONNY-2744: a deny-effect policy stored in __geode_security denies after a restart" {
+    const allocator = testing.allocator;
+    var store = try graph_store.GraphStore.init(allocator);
+    defer store.deinit();
+
+    const write_actions = [_]policy_catalog_mod.Action{.write};
+    {
+        var mgr = try AuthGraphManager.init(allocator, &store);
+        defer mgr.deinit();
+        // Stored as permissive = false, which hydration reads back as effect
+        // deny (CREATE POLICY itself only writes allow policies).
+        try policy_persistence.persistPolicy(&mgr, &HMAC_KEY, .{
+            .name = "deny-writes",
+            .scope_graph = "*",
+            .actions = &write_actions,
+            .effect = .deny,
+            .expression_source = "true",
+            .enabled = true,
+        });
+    }
+
+    var mgr = try AuthGraphManager.init(allocator, &store);
+    defer mgr.deinit();
+    var cat = PolicyCatalog.init(allocator);
+    defer cat.deinit();
+    try policy_persistence.hydrateCatalog(allocator, &mgr, &cat);
+    try testing.expectEqual(@as(usize, 1), cat.listPolicies().len);
+    try testing.expectEqual(policy_catalog_mod.Effect.deny, cat.listPolicies()[0].effect);
+
+    policy_catalog_mod.setGlobalCatalog(&cat);
+    defer policy_catalog_mod.clearGlobalCatalog();
+    const gps = geode.security.gps;
+    const principal_mod = geode.security.principal;
+    const roles = [_][]const u8{"ReadWrite"};
+    const writer = principal_mod.Principal{
+        .user_id = 1,
+        .username = "writer",
+        .session_id = null,
+        .tenant_id = null,
+        .active_graph = null,
+        .roles = &roles,
+        .custom_roles = &.{},
+        .auth_method = .password,
+        .auth_version = 0,
+        .mfa_state = .none,
+        .elevation_until = null,
+        .api_key_id = null,
+        .certificate_subject = null,
+        .risk_context = principal_mod.RiskContext.unknown,
+        .attributes = principal_mod.AttributeMap.emptySentinel(),
+        .source = .test_harness,
+    };
+    // The writer's builtin WRITE no longer outranks the stored deny.
+    try testing.expect(!gps.writePermitted(allocator, &writer));
+    const req = gps.DecisionRequest{ .principal = &writer, .action = .write, .resource = .{ .graph = "hr" } };
+    try testing.expectEqual(gps.PolicyDecisionKind.deny, (try gps.decide(allocator, &req)).kind);
+}

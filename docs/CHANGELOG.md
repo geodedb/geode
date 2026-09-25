@@ -80,6 +80,14 @@
   post-filter's label-deny snapshot, and the traversal's, now hold their own
   copy of each denied label. If a deny policy was removed while a query's
   post-filter ran, the post-filter could read freed memory.
+- **GPS deny policies deny (SONNY-2744):** `decide()` skipped deny-effect
+  policies, and the builtin-role check ran before the policy catalog, so a
+  deny never denied. A matching deny now wins over a builtin role, an Admin
+  shortcut and any allow policy, for every action a policy can name.
+  `CREATE POLICY` still creates allow policies only; a deny comes from a
+  stored policy with `permissive = false` in `__geode_security`, or from the
+  policy catalog API. A deny whose expression does not compile keeps denying.
+  See `docs/security/gps-decide.md`.
 - **A read-only principal can no longer write through a multi-statement
   request (SONNY-2743):** the QUIC handler decided the lock and the
   write-permission check from a request's last query alone. If that query

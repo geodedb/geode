@@ -8603,6 +8603,16 @@ pub fn build(b: *std.Build) void {
     const sonny2743_step = b.step("test-sonny2743-whole-program-gate", "Run SONNY-2743 regression (a program that changes the store is write-gated and write-locked whatever its last query; store-free and point-read paths only for programs that do nothing else; read-only gRPC sessions are refused and the store is unchanged)");
     sonny2743_step.dependOn(&run_sonny2743_tests.step);
 
+    // SONNY-2744: a matching deny-effect GPS policy refuses what a builtin role,
+    // an Admin shortcut or an allow policy would allow (gps.decide).
+    const sonny2744_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny2744_gps_deny.zig"), .target = target, .optimize = optimize });
+    sonny2744_test_mod.addImport("geode", root_mod);
+    const sonny2744_tests = b.addTest(.{ .root_module = sonny2744_test_mod });
+    const run_sonny2744_tests = b.addRunArtifact(sonny2744_tests);
+    shardDep(test_step, &run_sonny2744_tests.step, 0, test_shard_loads, test_shard_index);
+    const sonny2744_step = b.step("test-sonny2744-gps-deny", "Run SONNY-2744 regression (a matching deny-effect GPS policy overrides allow for every action decide() lets a policy name; an unrelated or disabled deny changes nothing; a deny that does not compile keeps denying)");
+    sonny2744_step.dependOn(&run_sonny2744_tests.step);
+
     // SONNY-2709: the RLS expression VM's range operators treated a null or a
     // mistyped value as equal, so `<=`/`>=` policies passed rows with a missing
     // or mistyped value, and every row against a principal attribute (always a
