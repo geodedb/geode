@@ -238,6 +238,11 @@ pub fn mapError(err: anyerror) ErrorInfo {
         // concrete tenant scope (unset/empty/"default"). Surface as a
         // permission-denied class error rather than the generic internal fallback.
         error.TenantScopeRequired => .{ .code = "42501", .message = "Tenant scope required: strict tenancy is enabled and this session has no concrete tenant scope" },
+        // SONNY-2686: a MERGE whose pattern only nodes the session's row-level
+        // security hides match is refused (nothing bound, updated or created)
+        // rather than binding the hidden node or creating a duplicate of it.
+        // CANARY: REQ=REQ-SONNY-2686-MERGE-ROW-VISIBILITY; FEATURE="MergeRowVisibility"; ASPECT=SqlstateMapping; STATUS=TESTED; TEST=tests/test_sonny2686_merge_rls.zig; OWNER=security; UPDATED=2026-09-25
+        error.MergeMatchNotVisible => .{ .code = "42501", .message = "MergeMatchNotVisible: the MERGE pattern matches an existing node that row-level security hides from this session; the statement was refused, and nothing was bound, updated or created" },
         error.SearchNotPermitted => .{ .code = "42501", .message = "Access denied: READ_PLAINTEXT privilege required for encrypted searchable field" },
         error.InvalidIpAddress => .{ .code = "22P02", .message = "Invalid IP address format" },
         error.InvalidMac, error.InvalidMacFormat, error.InvalidMacTag => .{ .code = "22P02", .message = "Invalid MAC address format" },

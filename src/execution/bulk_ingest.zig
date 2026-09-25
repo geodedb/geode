@@ -16,10 +16,15 @@
 // The detector is a pure AST predicate — it does NOT allocate, mutate, or
 // take any locks.  Callers (`src/server/quic_connection_handler.zig`) invoke
 // it after parse, before the write-lock branch, to decide whether to route
-// the statement through the fast path or the regular executor.
+// the statement through the fast path or the regular executor.  Whether the
+// SESSION may take a key-resolved fast path is a separate question, answered
+// by `sessionAllowsKeyResolvedWrites` (SONNY-2686).
 
 const std = @import("std");
 const ast = @import("../gql/ast.zig");
+// SONNY-2686: the session gate below (`sessionAllowsKeyResolvedWrites`).
+const execution = @import("../execution.zig");
+const tenancy = @import("tenancy.zig");
 
 // ----------------------------------------------------------------------
 // Bulk-ingest opt-in gate.
@@ -58,6 +63,41 @@ pub fn setEnabled(enabled: bool) void {
 /// True when the bulk-ingest fast path is enabled for this process.
 pub fn isEnabled() bool {
     return g_bulk_mode.load(.acquire);
+}
+
+// ----------------------------------------------------------------------
+// Session gate (SONNY-2686).
+//
+// The shapes below are decided from the AST alone, but whether a fast path
+// may serve a statement also depends on who runs it. The fast paths that
+// find EXISTING nodes — the MERGE shapes (`simple_node_merge`,
+// `match_merge_edge`, the `/*+BATCH*/` batch, the graph-selector MERGE) and
+// the MATCH … CREATE edge (`match_create_edge`) — look them up by merge key
+// alone (`lookupNodeByMergeKey` / `bulkMergeNode*`): no tenant check and no
+// row-level security. The general executor applies both. So a session that a
+// tenant scope or an RLS policy restricts must take the general executor, or a
+// key lookup binds, updates or attaches an edge to a row the session may not
+// see. `simple_node_create` finds nothing and is not gated.
+// ----------------------------------------------------------------------
+
+/// SONNY-2686: may the key-resolved write fast paths serve a request that runs
+/// under `ctx`? Only when nothing restricts which rows the session sees:
+///   * no tenant scope, and no strict tenancy (which refuses an unscoped
+///     request in the general executor, so the fast path must not serve it);
+///   * no RLS policy that could apply: none installed, or no user for one to
+///     apply to (the identity `passesRLSFilter` evaluates under).
+/// The QUIC handler also checks its own server-side label engine.
+pub fn sessionAllowsKeyResolvedWrites(ctx: *const execution.ExecutionContext) bool {
+    if (tenancy.isStrictTenancy()) return false;
+    const tenant = tenancy.resolveTenantFilter(ctx.tenant_id) catch return false;
+    if (tenant != null) return false;
+    const has_user = blk: {
+        if (ctx.principal) |p| {
+            if (p.username != null) break :blk true;
+        }
+        break :blk ctx.user != null;
+    };
+    return !(has_user and execution.activeRlsPoliciesConfigured());
 }
 
 /// The set of bulk-ingest shapes we know how to fast-path.  `none` means

@@ -8519,6 +8519,21 @@ pub fn build(b: *std.Build) void {
     const sonny2679_step = b.step("test-sonny2679-rls-hop-targets", "Run SONNY-2679 regression (every traversal applies the session's RLS policies and tenant scope to each hop target and every node a path passes through: single hop, count/collect, grouping, OPTIONAL MATCH, variable length, multi-hop, and the expression path)");
     sonny2679_step.dependOn(&run_sonny2679_tests.step);
 
+    // SONNY-2686: MERGE's match phase checked graph, tenant, labels and
+    // properties only, so a MERGE bound a node an RLS policy hides: it returned
+    // the node's properties, rewrote it through ON MATCH SET / SET, and attached
+    // relationships to it.
+    const sonny2686_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny2686_merge_rls.zig"), .target = target, .optimize = optimize });
+    sonny2686_test_mod.addImport("geode", root_mod);
+    sonny2686_test_mod.addImport("logging", logging_mod);
+    sonny2686_test_mod.addImport("rls", rls_mod);
+    sonny2686_test_mod.addImport("rls_types", rls_types_mod);
+    const sonny2686_tests = b.addTest(.{ .root_module = sonny2686_test_mod });
+    const run_sonny2686_tests = b.addRunArtifact(sonny2686_tests);
+    shardDep(test_step, &run_sonny2686_tests.step, 1, test_shard_loads, test_shard_index);
+    const sonny2686_step = b.step("test-sonny2686-merge-rls", "Run SONNY-2686 regression (a MERGE whose only match an RLS policy hides is refused with MergeMatchNotVisible and never reads, rewrites or attaches to it, under label and expression policies; unscoped sessions and tenant/graph scoping unchanged; the key-resolved write fast paths decline a row-scoped session)");
+    sonny2686_step.dependOn(&run_sonny2686_tests.step);
+
     // SONNY-2656: the node-scan fast path leaked the clone of every typed
     // extended value (Text, Json, Bytea, Char, Varchar, Url, ...) it projected
     // (page teardown freed only strings, lists and maps) or filtered on (IS
