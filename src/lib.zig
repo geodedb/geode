@@ -897,3 +897,11 @@ test "#733 hot-path inline test roots" {
     _ = @import("execution.zig");
     _ = @import("execution/match_operations.zig");
 }
+
+// SONNY-2689: the same kind of root for src/execution/tenant_visibility.zig's
+// inline tests, run by `zig build test-tenant-visibility` and the aggregate.
+// Its name carries that step's "tenant_visibility:" filter prefix, so the
+// filter keeps it analyzed and the import below enters test discovery.
+test "tenant_visibility: inline test root" {
+    _ = @import("execution/tenant_visibility.zig");
+}

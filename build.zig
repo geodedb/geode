@@ -1637,6 +1637,17 @@ pub fn build(b: *std.Build) void {
     const quality733_step = b.step("test-quality733", "Run quality #733 hot-path inline tests (parser deep nesting, passesTenantFilter, validateGroupBy)");
     quality733_step.dependOn(&run_quality733_tests.step);
 
+    // SONNY-2689: src/execution/tenant_visibility.zig's inline tests, which
+    // no artifact reached (their Node literal had not compiled since it was
+    // written). Same shape as #733: the file cannot root a module (its `../`
+    // imports), so root_mod is filtered to "tenant_visibility:", and
+    // src/lib.zig's reference block of that prefix pulls the file in. The run
+    // joins the aggregate below, after `test_step` exists.
+    const tenant_visibility_tests = b.addTest(.{ .root_module = root_mod, .filters = &.{"tenant_visibility:"} });
+    const run_tenant_visibility_tests = b.addRunArtifact(tenant_visibility_tests);
+    const tenant_visibility_step = b.step("test-tenant-visibility", "Run src/execution/tenant_visibility.zig inline unit tests (SONNY-2689)");
+    tenant_visibility_step.dependOn(&run_tenant_visibility_tests.step);
+
     const custom_tests = b.addTest(.{ .root_module = b.createModule(.{ .root_source_file = b.path("tests/all_tests.zig"), .target = target, .optimize = optimize }) });
     custom_tests.root_module.addImport("geode", root_mod);
     custom_tests.root_module.addImport("auth_lib", auth_ext_mod);
@@ -3722,6 +3733,9 @@ pub fn build(b: *std.Build) void {
     // root, so this dedicated artifact (rooted at fle_integration.zig) is the
     // path that actually runs the GAP-0844 test under `zig build test` / CI.
     shardDep(test_step, &run_gap0844_tests.step, 1, test_shard_loads, test_shard_index);
+    // SONNY-2689: tenant_visibility.zig's inline tests (declared near the
+    // #733 runner above).
+    shardDep(test_step, &run_tenant_visibility_tests.step, 1, test_shard_loads, test_shard_index);
     shardDep(test_step, &run_gql_unit_tests.step, 1, test_shard_loads, test_shard_index);
     shardDep(test_step, &run_conformance_patch_tests.step, 1, test_shard_loads, test_shard_index);
     shardDep(test_step, &run_iso_conformance_tests.step, 6, test_shard_loads, test_shard_index);
