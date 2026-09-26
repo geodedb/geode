@@ -241,3 +241,93 @@ test "SONNY-2686: the key-resolved write fast paths serve only a session no tena
 
     try f.finish("fast-path gate");
 }
+
+// CANARY: REQ=REQ-SONNY-2686-MERGE-EDGE-RLS; FEATURE="MergeRowVisibility"; ASPECT=RelationshipMatchEdgeRls; STATUS=TESTED; TEST=tests/test_sonny2686_merge_rls.zig; OWNER=security; UPDATED=2026-09-26
+/// P12 (the SONNY-2686 security review): a relationship MERGE between two
+/// visible nodes matched an existing edge on its graph, tenant and type only
+/// (`findExistingEdgeId` / `edgeMatchesScopeAndType`), never on the RLS
+/// policies of the edge's type, so `MERGE (a)-[r:SECRET]->(b) ON MATCH SET
+/// r.v = 'pwned'` rewrote an edge every MATCH hides (the review's probe turned
+/// `orig` into `pwned`). An edge the session may not see now counts like a
+/// hidden node: when only hidden edges match, the statement is refused
+/// (`MergeMatchNotVisible`), before anything is written.
+///
+/// Fixture: `pub -SECRET {x: 'topsecret', v: 'orig'}-> pub2`, denied by the
+/// label-deny policy on the SECRET type and by the expression policy
+/// `x <> 'topsecret'` on it; `pub -R {w: 1}-> pub2`, visible to everyone.
+fn checkEdgeMerge(mode: h.Mode) !void {
+    var s = try h.Session.init(mode);
+    defer s.deinit();
+    const aa = s.arena.allocator();
+    var f: h.Failures = .{};
+    const open = mode == .no_policy;
+
+    try s.execAs(null, "CREATE (:Doc {s: 'pub', cls: 'public'})");
+    try s.execAs(null, "CREATE (:Doc {s: 'pub2', cls: 'public'})");
+    try s.execAs(null, "MATCH (a:Doc {s: 'pub'}), (b:Doc {s: 'pub2'}) CREATE (a)-[:SECRET {x: 'topsecret', v: 'orig'}]->(b)");
+    try s.execAs(null, "MATCH (a:Doc {s: 'pub'}), (b:Doc {s: 'pub2'}) CREATE (a)-[:R {w: 1}]->(b)");
+    const pub_id = try s.idOf("pub");
+    const pub2 = try s.idOf("pub2");
+    const secret = (try h.edgeIds(aa, pub_id, pub2, "SECRET"))[0];
+    const r_edge = (try h.edgeIds(aa, pub_id, pub2, "R"))[0];
+    try s.restrict("Hidden");
+    try s.restrictEdgeType("SECRET");
+    const nodes_before = h.nodeCount();
+
+    // Every statement below matches only the hidden SECRET edge between two
+    // visible, existing endpoints.
+    const hidden_only = [_][]const u8{
+        "MERGE (a:Doc {s: 'pub'})-[r:SECRET]->(b:Doc {s: 'pub2'}) ON MATCH SET r.v = 'pwned'",
+        "MERGE (a:Doc {s: 'pub'})-[r:SECRET]->(b:Doc {s: 'pub2'}) ON CREATE SET r.y = 1 ON MATCH SET r.y = 2",
+        "MERGE (a:Doc {s: 'pub'})-[r:SECRET]->(b:Doc {s: 'pub2'}) SET r.v = 'pwned'",
+        "MERGE (a:Doc {s: 'pub'})-[:SECRET]->(b:Doc {s: 'pub2'})",
+        // MATCH-bound endpoints.
+        "MATCH (a:Doc {s: 'pub'}), (b:Doc {s: 'pub2'}) MERGE (a)-[r:SECRET]->(b) ON MATCH SET r.v = 'pwned'",
+        // An earlier chain that would create a node: the refusal comes first.
+        "MERGE (n:Doc {s: 'fresh'}) MERGE (a:Doc {s: 'pub'})-[r:SECRET]->(b:Doc {s: 'pub2'}) ON MATCH SET r.v = 'pwned'",
+    };
+    if (open) {
+        try h.expectRows(&s, &f, hidden_only[0], &.{});
+        if (!std.mem.eql(u8, h.storedEdgeString(secret, "v") orelse "", "pwned")) try f.add(aa, "[no_policy] ON MATCH SET did not update the SECRET edge", .{});
+    } else {
+        for (hidden_only) |stmt| try h.expectError(&s, &f, stmt, error.MergeMatchNotVisible);
+        // Read by the owner (unscoped, straight from the store): unchanged.
+        const v = h.storedEdgeString(secret, "v") orelse "(none)";
+        if (!std.mem.eql(u8, v, "orig")) try f.add(aa, "[{s}] a refused MERGE rewrote the hidden edge: v = {s}", .{ @tagName(mode), v });
+        // A refused statement writes nothing at all: no node, no edge, no property.
+        if (h.nodeCount() != nodes_before) try f.add(aa, "[{s}] a refused MERGE created {d} node(s)", .{ @tagName(mode), h.nodeCount() -| nodes_before });
+        if (h.countWithS("fresh") != 0) try f.add(aa, "[{s}] a refused MERGE left the node its earlier chain created", .{@tagName(mode)});
+        if (h.incidentEdges(pub_id) != 2) try f.add(aa, "[{s}] expected pub's 2 edges, got {d} (a refused MERGE created an edge)", .{ @tagName(mode), h.incidentEdges(pub_id) });
+        if (h.anyIncidentEdgeHas(pub_id, "y")) try f.add(aa, "[{s}] a refused MERGE set a property on an edge", .{@tagName(mode)});
+    }
+
+    // A visible match still updates, and creates nothing.
+    try h.expectRows(&s, &f, "MERGE (a:Doc {s: 'pub'})-[r:R]->(b:Doc {s: 'pub2'}) ON MATCH SET r.w = 2", &.{});
+    try h.expectRows(&s, &f, "MATCH (a:Doc {s: 'pub'})-[r:R]->(b:Doc {s: 'pub2'}) RETURN r.w", &.{"2"});
+    if ((try h.edgeIds(aa, pub_id, pub2, "R")).len != 1) try f.add(aa, "[{s}] the visible edge was duplicated", .{@tagName(mode)});
+    _ = r_edge;
+
+    if (mode == .expr_policy) {
+        // A visible SECRET edge beside the hidden one: MERGE binds the one the
+        // session may see, and the hidden one stays as it was.
+        try s.execAs(null, "MATCH (a:Doc {s: 'pub'}), (b:Doc {s: 'pub2'}) CREATE (a)-[:SECRET {x: 'shared', v: 'vis'}]->(b)");
+        try h.expectRows(&s, &f, "MERGE (a:Doc {s: 'pub'})-[r:SECRET]->(b:Doc {s: 'pub2'}) ON MATCH SET r.v = 'set'", &.{});
+        try h.expectRows(&s, &f, "MATCH (a:Doc {s: 'pub'})-[r:SECRET]->(b) RETURN r.v", &.{"set"});
+        const v = h.storedEdgeString(secret, "v") orelse "(none)";
+        if (!std.mem.eql(u8, v, "orig")) try f.add(aa, "[expr_policy] MERGE rewrote the hidden edge beside a visible one: v = {s}", .{v});
+    }
+
+    try f.finish(@tagName(mode));
+}
+
+test "SONNY-2686 (P12): with no policy, a relationship MERGE matches and updates every edge (unchanged)" {
+    try checkEdgeMerge(.no_policy);
+}
+
+test "SONNY-2686 (P12): under a label-deny policy on an edge type, a relationship MERGE whose only match is a hidden edge is refused and writes nothing" {
+    try checkEdgeMerge(.label_policy);
+}
+
+test "SONNY-2686 (P12): under an expression policy on an edge's properties, a relationship MERGE whose only match is a hidden edge is refused and writes nothing" {
+    try checkEdgeMerge(.expr_policy);
+}

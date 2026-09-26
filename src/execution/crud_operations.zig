@@ -278,6 +278,16 @@ const MergeVisibility = struct {
         if (!self.rls_may_deny) return true;
         return match_operations.passesRowVisibilityFilters(&self.rls_row, node.*, self.filter_tenant);
     }
+
+    /// P12: may MERGE bind `edge`, an edge that already matches its
+    /// relationship pattern (graph, tenant tag and type)? The RLS policies of
+    /// its type: the label-deny policy on the type and the expression policies
+    /// over the edge's own properties (`passesEdgeRLSFilter`, the check every
+    /// traversal applies to an edge it walks).
+    fn allowsEdge(self: *MergeVisibility, edge: *const graph_store.Edge) bool {
+        if (!self.rls_may_deny) return true;
+        return match_operations.passesEdgeRLSFilter(&self.rls_row, edge);
+    }
 };
 
 /// SONNY-2686: what MERGE's match phase found for one node pattern.
@@ -480,106 +490,53 @@ fn edgeMatchesScopeAndType(
     return false;
 }
 
-fn nodeIdMatchesPattern(
-    read_store: *graph_store.GraphStore,
-    node_id: u64,
-    graph_name: []const u8,
-    tenant_id: ?[]const u8,
-    labels: []const []const u8,
-    props: ?[]const EvaluatedPatternProp,
-) bool {
-    const node = (read_store.nodes.getOrHydratePtr(node_id) catch null) orelse return false;
-    return nodeMatchesPattern(node, graph_name, tenant_id, labels, props);
-}
+// CANARY: REQ=REQ-SONNY-2686-MERGE-EDGE-RLS; FEATURE="MergeRowVisibility"; ASPECT=RelationshipMatchEdgeRls; STATUS=TESTED; TEST=tests/test_sonny2686_merge_rls.zig; OWNER=security; UPDATED=2026-09-26
+/// P12 (the SONNY-2686 security review): the edge a relationship MERGE binds
+/// between two resolved endpoints. It matched on the edge's graph, tenant tag
+/// and type only, never on the RLS policies of its type, so `MERGE
+/// (a)-[r:SECRET]->(b) ON MATCH SET r.v = ..` rewrote an edge every MATCH
+/// hides. An edge the session may not see is treated like a hidden node
+/// (`MergeMatch`): a visible match wins wherever it sits, and when only
+/// hidden edges match the statement is refused.
+const EdgeMatch = union(enum) {
+    /// No edge of the pattern's type joins the endpoints.
+    none,
+    /// An edge the session may see (the first one found).
+    visible: u64,
+    /// Edges match, and the session may see none of them.
+    hidden,
 
-fn findExistingEdgeId(
+    /// The edge MERGE binds, or null when it creates one; refuses with
+    /// `error.MergeMatchNotVisible` when only hidden edges match (see
+    /// `MergeMatch.bindable` for why neither binding nor duplicating is right).
+    fn bindable(self: EdgeMatch) error{MergeMatchNotVisible}!?u64 {
+        return switch (self) {
+            .none => null,
+            .visible => |id| id,
+            .hidden => error.MergeMatchNotVisible,
+        };
+    }
+};
+
+fn findExistingEdge(
     read_store: *graph_store.GraphStore,
     graph_name: []const u8,
     tenant_id: ?[]const u8,
     source_id: u64,
     target_id: u64,
     rel_types: []const []const u8,
-) ?u64 {
-    const outgoing_ids = read_store.getOutgoingEdgeIds(source_id) orelse return null;
+    visibility: *MergeVisibility,
+) EdgeMatch {
+    const outgoing_ids = read_store.getOutgoingEdgeIds(source_id) orelse return .none;
+    var saw_hidden = false;
     for (outgoing_ids) |edge_id| {
         const edge = read_store.getEdgePtrHydrated(edge_id) orelse continue;
         if (edge.to_id != target_id) continue;
         if (!edgeMatchesScopeAndType(edge, graph_name, tenant_id, rel_types)) continue;
-        return edge_id;
+        if (visibility.allowsEdge(edge)) return .{ .visible = edge_id };
+        saw_hidden = true;
     }
-    return null;
-}
-
-fn collectMatchingEdgeIds(
-    allocator: std.mem.Allocator,
-    read_store: *graph_store.GraphStore,
-    graph_name: []const u8,
-    tenant_id: ?[]const u8,
-    left_labels: []const []const u8,
-    left_props: ?[]const EvaluatedPatternProp,
-    rel_types: []const []const u8,
-    right_labels: []const []const u8,
-    right_props: ?[]const EvaluatedPatternProp,
-) ![]u64 {
-    const left_constrained = left_labels.len > 0 or left_props != null;
-    const right_constrained = right_labels.len > 0 or right_props != null;
-
-    var matches = std.ArrayList(u64).empty;
-    errdefer matches.deinit(allocator);
-
-    if (left_constrained) {
-        const candidate_left_ids = try collectCandidateNodeIds(allocator, read_store, graph_name, tenant_id, left_labels, left_props);
-        defer allocator.free(candidate_left_ids);
-
-        for (candidate_left_ids) |source_id| {
-            if (!nodeIdMatchesPattern(read_store, source_id, graph_name, tenant_id, left_labels, left_props)) continue;
-            const outgoing_ids = read_store.getOutgoingEdgeIds(source_id) orelse continue;
-            for (outgoing_ids) |edge_id| {
-                const edge = read_store.getEdgePtrHydrated(edge_id) orelse continue;
-                if (!edgeMatchesScopeAndType(edge, graph_name, tenant_id, rel_types)) continue;
-                if (edge.from_id != source_id) continue;
-                if (!nodeIdMatchesPattern(read_store, edge.to_id, graph_name, tenant_id, right_labels, right_props)) continue;
-                try matches.append(allocator, edge_id);
-            }
-        }
-
-        return try matches.toOwnedSlice(allocator);
-    }
-
-    if (right_constrained) {
-        const candidate_right_ids = try collectCandidateNodeIds(allocator, read_store, graph_name, tenant_id, right_labels, right_props);
-        defer allocator.free(candidate_right_ids);
-
-        for (candidate_right_ids) |target_id| {
-            if (!nodeIdMatchesPattern(read_store, target_id, graph_name, tenant_id, right_labels, right_props)) continue;
-            const incoming_ids = read_store.getIncomingEdgeIds(target_id) orelse continue;
-            for (incoming_ids) |edge_id| {
-                const edge = read_store.getEdgePtrHydrated(edge_id) orelse continue;
-                if (!edgeMatchesScopeAndType(edge, graph_name, tenant_id, rel_types)) continue;
-                if (edge.to_id != target_id) continue;
-                if (!nodeIdMatchesPattern(read_store, edge.from_id, graph_name, tenant_id, left_labels, left_props)) continue;
-                try matches.append(allocator, edge_id);
-            }
-        }
-
-        return try matches.toOwnedSlice(allocator);
-    }
-
-    // PHASE 1 (edge-engine-direct): enumerate the COMPLETE edge id set
-    // (bounded-cache-safe) and resolve each body via hydrate-on-miss. The old
-    // `read_store.edges.iterator()` saw only resident edges under a bounded
-    // cache, so a DELETE could silently miss evicted edges.
-    const all_ids = try read_store.allEdgeIds(allocator);
-    defer allocator.free(all_ids);
-    for (all_ids) |eid| {
-        const edge = read_store.getEdgePtrHydrated(eid) orelse continue;
-        if (!edgeMatchesScopeAndType(edge, graph_name, tenant_id, rel_types)) continue;
-        if (!nodeIdMatchesPattern(read_store, edge.from_id, graph_name, tenant_id, left_labels, left_props)) continue;
-        if (!nodeIdMatchesPattern(read_store, edge.to_id, graph_name, tenant_id, right_labels, right_props)) continue;
-        try matches.append(allocator, eid);
-    }
-
-    return try matches.toOwnedSlice(allocator);
+    return if (saw_hidden) .hidden else .none;
 }
 
 /// ENG-3913: the deduplicated entity sets a `MATCH … DELETE …` statement targets.
@@ -3589,15 +3546,17 @@ fn endpointBoundByCaller(context: ExecutionContext, name: []const u8) ?u64 {
 
 /// SONNY-2686: refuse a MERGE, BEFORE it writes anything, when any node
 /// pattern it would match inline (a chain's node, or a relationship endpoint
-/// its caller did not bind) is matched only by nodes the session may not see.
+/// its caller did not bind) is matched only by nodes the session may not see,
+/// or (P12) when a relationship between two endpoints that already exist is
+/// matched only by edges the session may not see.
 ///
 /// The chains run in order, and an endpoint that does not exist is created
 /// before the next one is matched, so the inline refusal alone could leave the
 /// first half of a pattern behind a refused statement: an aborted statement's
 /// engine txn discards what it wrote, but the in-memory store keeps it. The
-/// inline check stays, for the answer this pre-pass cannot give (a pattern an
+/// inline checks stay, for the answer this pre-pass cannot give (a pattern an
 /// earlier chain's CREATE makes match a visible node); this pass can only be
-/// stricter than it, never looser.
+/// stricter than they are, never looser.
 fn refuseHiddenMergeMatches(
     allocator: std.mem.Allocator,
     read_store: *graph_store.GraphStore,
@@ -3609,26 +3568,33 @@ fn refuseHiddenMergeMatches(
 ) !void {
     // Nothing can be hidden from this session.
     if (!visibility.rls_may_deny) return;
+    // The variables this pass has resolved, as the statement will bind them:
+    // the existing node a pattern matches, or null when the statement creates
+    // it (no edge can join a node that does not exist yet).
+    var known = std.StringHashMap(?u64).init(allocator);
+    defer known.deinit();
     for (m.pattern.chains) |chain| {
         // A chain's node is always matched (`mergeNodeChain`).
         if (chain.head) |node_pattern| {
-            try refuseIfOnlyHiddenMatches(allocator, read_store, target_graph, filter_tenant, node_pattern, context, visibility);
+            const id = try preResolveMergeNode(allocator, read_store, target_graph, filter_tenant, node_pattern, context, visibility);
+            if (node_pattern.name) |name| try known.put(name, id);
         }
-        // An endpoint is matched only when it carries a label or a property
-        // and its caller did not bind it (`resolveMergeEndpoint`).
         for (chain.hops) |hop| {
-            for ([_]ast.NodePattern{ hop.left, hop.right }) |endpoint| {
-                if (endpoint.labels.len == 0 and endpoint.props == null) continue;
-                if (endpoint.name) |name| {
-                    if (endpointBoundByCaller(context, name) != null) continue;
-                }
-                try refuseIfOnlyHiddenMatches(allocator, read_store, target_graph, filter_tenant, endpoint, context, visibility);
+            const source = try preResolveMergeEndpoint(allocator, read_store, target_graph, filter_tenant, hop.left, context, visibility, &known);
+            const target = try preResolveMergeEndpoint(allocator, read_store, target_graph, filter_tenant, hop.right, context, visibility, &known);
+            // P12: both endpoints exist, so the edge `mergeRelationshipHop`
+            // would bind exists already: refuse now when only hidden edges
+            // match, before an earlier chain writes anything.
+            if (source != null and target != null) {
+                _ = try findExistingEdge(read_store, target_graph, filter_tenant, source.?, target.?, hop.rel.types, visibility).bindable();
             }
         }
     }
 }
 
-fn refuseIfOnlyHiddenMatches(
+/// The existing node a MERGE node pattern binds, or null when it creates one;
+/// a pattern only hidden nodes match refuses the statement.
+fn preResolveMergeNode(
     allocator: std.mem.Allocator,
     read_store: *graph_store.GraphStore,
     target_graph: []const u8,
@@ -3636,11 +3602,37 @@ fn refuseIfOnlyHiddenMatches(
     node_pattern: ast.NodePattern,
     context: ExecutionContext,
     visibility: *MergeVisibility,
-) !void {
+) !?u64 {
     var prop_arena = std.heap.ArenaAllocator.init(allocator);
     defer prop_arena.deinit();
     const evaluated_props = try evaluatePatternProps(prop_arena.allocator(), node_pattern.props, context);
-    _ = try findMergeMatch(read_store, target_graph, filter_tenant, node_pattern.labels, evaluated_props, visibility).bindable();
+    return try findMergeMatch(read_store, target_graph, filter_tenant, node_pattern.labels, evaluated_props, visibility).bindable();
+}
+
+/// `resolveMergeEndpoint`'s answer, without creating anything: a variable an
+/// earlier pattern of this statement bound, then one the caller bound (not
+/// re-checked: the clause that bound it applied the session's visibility),
+/// then an inline match of a node the session may see. Null when the
+/// statement would create the endpoint, or refuse it as an unbound variable.
+fn preResolveMergeEndpoint(
+    allocator: std.mem.Allocator,
+    read_store: *graph_store.GraphStore,
+    target_graph: []const u8,
+    filter_tenant: ?[]const u8,
+    endpoint: ast.NodePattern,
+    context: ExecutionContext,
+    visibility: *MergeVisibility,
+    known: *std.StringHashMap(?u64),
+) !?u64 {
+    if (endpoint.name) |name| {
+        if (known.get(name)) |id| return id;
+        if (endpointBoundByCaller(context, name)) |nid| return nid;
+    }
+    // Nothing to match on (`resolveMergeEndpoint` refuses it).
+    if (endpoint.labels.len == 0 and endpoint.props == null) return null;
+    const id = try preResolveMergeNode(allocator, read_store, target_graph, filter_tenant, endpoint, context, visibility);
+    if (endpoint.name) |name| try known.put(name, id);
+    return id;
 }
 
 /// Resolve ONE endpoint of a MERGE relationship pattern to a concrete node id.
@@ -3737,14 +3729,18 @@ fn mergeRelationshipHop(
     const target_id = try resolveMergeEndpoint(allocator, store, read_store, target_graph, filter_tenant, hop.right, context, merged_vars, visibility);
 
     const edge_type = if (rel_types.len > 0) rel_types[0] else "";
-    const existing_edge = findExistingEdgeId(
+    // P12: an edge the session may not see is never bound; when only hidden
+    // edges match, the statement is refused (`refuseHiddenMergeMatches`
+    // already refused it before any write when both endpoints existed).
+    const existing_edge = try findExistingEdge(
         read_store,
         target_graph,
         filter_tenant,
         source_id,
         target_id,
         rel_types,
-    );
+        visibility,
+    ).bindable();
 
     // Pick the edge_id we will operate on: existing one (ON MATCH path)
     // or a freshly created one (ON CREATE path). Either way we then

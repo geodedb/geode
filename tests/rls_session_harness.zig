@@ -49,6 +49,9 @@ pub const session_user = "bob";
 // (load_row 0; push_const 1; neq; ret), the same program SONNY-2679 pins.
 const expr_constants = [_]rls.Value{ .{ .string = "cls" }, .{ .string = "secret" } };
 const expr_bytecode = [_]u8{ 0x10, 0x00, 0x01, 0x01, 0x21, 0xFF };
+// An edge type's expression policy (`restrictEdgeType`): `row.x <> 'topsecret'`
+// over the edge's own properties, the program SONNY-2679 pins for SECRET.
+const edge_expr_constants = [_]rls.Value{ .{ .string = "x" }, .{ .string = "topsecret" } };
 
 pub const Session = struct {
     mode: Mode,
@@ -59,6 +62,7 @@ pub const Session = struct {
     label_engine: ?*rls_types.RLSFilterEngine = null,
     expr_engine: ?*rls.RLSEngine = null,
     compiled: rls.RLSEngine.CompiledExpression = .{ .bytecode = &expr_bytecode, .constants = &expr_constants, .jump_table = &.{} },
+    edge_compiled: rls.RLSEngine.CompiledExpression = .{ .bytecode = &expr_bytecode, .constants = &edge_expr_constants, .jump_table = &.{} },
 
     pub fn init(mode: Mode) !Session {
         const allocator = testing.allocator;
@@ -191,7 +195,80 @@ pub const Session = struct {
             .tenant_scoped => self.ctx.tenant_id = tenant_a,
         }
     }
+
+    /// Also restrict the edge type `edge_type`, after `restrict`: the
+    /// label-deny policy denies the type itself; the expression policy
+    /// admits an edge of that type iff its own `x <> 'topsecret'`. The
+    /// other modes are unchanged.
+    pub fn restrictEdgeType(self: *Session, edge_type: []const u8) !void {
+        switch (self.mode) {
+            .label_policy => try self.label_engine.?.addDenyPolicy(graph_store.DEFAULT_GRAPH_NAME, edge_type, session_user),
+            .expr_policy => try self.expr_engine.?.createPolicy(.{
+                .id = 26862,
+                .name = "edge_not_topsecret",
+                .description = "an edge of this type is visible iff x <> 'topsecret'",
+                .graph = graph_store.DEFAULT_GRAPH_NAME,
+                .table = edge_type,
+                .operation = .all,
+                .permissive = false,
+                .roles = &.{},
+                .using_expr = .{ .raw = "x <> 'topsecret'", .parsed = null, .compiled = &self.edge_compiled, .parameters = &.{} },
+                .check_expr = null,
+                .enabled = true,
+                .created_at = 0,
+                .updated_at = 0,
+                .created_by = 0,
+                .temporal = null,
+                .data_classification = null,
+                .audit_level = .none,
+            }),
+            .no_policy, .tenant_scoped => {},
+        }
+    }
 };
+
+/// A property of an edge, read unscoped straight from the store.
+pub fn storedEdgeString(edge_id: u64, key: []const u8) ?[]const u8 {
+    const store = graph_store.getGlobalStore(testing.allocator);
+    const edge = store.getEdgeHydrated(edge_id) orelse return null;
+    const pv = edge.properties.get(key) orelse return null;
+    return if (pv == .String) pv.String else null;
+}
+
+/// The ids of the `label` edges from `from` to `to`, in adjacency order
+/// (every graph and tenant, straight from the store).
+pub fn edgeIds(aa: std.mem.Allocator, from: u64, to: u64, label: []const u8) ![]u64 {
+    const store = graph_store.getGlobalStore(testing.allocator);
+    var out: std.ArrayList(u64) = .empty;
+    const ids = store.getOutgoingEdgeIds(from) orelse return out.toOwnedSlice(aa);
+    for (ids) |eid| {
+        const e = store.getEdgeHydrated(eid) orelse continue;
+        if (e.to_id == to and std.mem.eql(u8, e.label, label)) try out.append(aa, eid);
+    }
+    return out.toOwnedSlice(aa);
+}
+
+/// Does any edge incident to `id` carry the property `key`?
+pub fn anyIncidentEdgeHas(id: u64, key: []const u8) bool {
+    const store = graph_store.getGlobalStore(testing.allocator);
+    for ([_]?[]const u64{ store.getOutgoingEdgeIds(id), store.getIncomingEdgeIds(id) }) |maybe_ids| {
+        const ids = maybe_ids orelse continue;
+        for (ids) |eid| {
+            const e = store.getEdgeHydrated(eid) orelse continue;
+            if (e.properties.get(key) != null) return true;
+        }
+    }
+    return false;
+}
+
+/// How many nodes the store holds (every graph and tenant).
+pub fn nodeCount() usize {
+    const store = graph_store.getGlobalStore(testing.allocator);
+    var n: usize = 0;
+    var it = store.nodes.iterator();
+    while (it.next()) |_| n += 1;
+    return n;
+}
 
 /// A string property of a node, read unscoped straight from the store.
 pub fn storedString(id: u64, key: []const u8) ?[]const u8 {
