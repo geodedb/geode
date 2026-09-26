@@ -63,6 +63,9 @@ fn isPropagatableEvalError(err: EvalError) bool {
         EvalError.UnknownFunction,
         // GAP-0840: a strict-tenancy refusal must never degrade to NULL.
         EvalError.TenantScopeRequired,
+        // Item 5 of the SONNY-2686 review: neither may a refusal to answer
+        // without the session's row visibility.
+        EvalError.EvaluatorNotInitialized,
         // GAP-ENT-0044/0045: a read-budget / cancel abort must reach the client,
         // never be swallowed into a NULL that looks like a successful answer.
         EvalError.ReadQueryBudgetExceeded,
@@ -160,13 +163,35 @@ pub const Env = value_types.Env;
 // The callbacks are set at runtime by execution.zig during initialization
 var execution_callbacks: ?evaluator_adapter.ExecutionCallbacks = null;
 
+/// SONNY-2691 / SONNY-2692 (item 5 of the SONNY-2686 review): whether the
+/// callbacks and the row scope are published: 0 not yet, 1 being written,
+/// 2 published. They are written once per process, by the first
+/// `setExecutionCallbacks`; every later call (each QUIC connection, the gRPC
+/// server and the CLI call `execution.initEvaluator`, and the server calls it
+/// at startup) only reads this. They used to be rewritten, unsynchronized,
+/// from every connection thread while other threads read them.
+var callbacks_state = std.atomic.Value(u8).init(0);
+
 /// Set execution callbacks for this module
-/// Called by execution.zig during initialization to provide callback functions
+/// Called by execution.zig during initialization to provide callback functions.
+/// The first call publishes them, with the row scope; later calls change
+/// nothing, and return once they are published.
 pub fn setExecutionCallbacks(callbacks: evaluator_adapter.ExecutionCallbacks) void {
-    execution_callbacks = callbacks;
-    // SONNY-2691 / SONNY-2692: the execution layer's row visibility arrives
-    // with the other execution callbacks (see `RowScope`).
-    begin_row_scope = beginHopRowScope;
+    if (callbacks_state.cmpxchgStrong(0, 1, .acquire, .acquire) == null) {
+        execution_callbacks = callbacks;
+        // SONNY-2691 / SONNY-2692: the execution layer's row visibility
+        // arrives with the other execution callbacks (see `RowScope`).
+        begin_row_scope = beginHopRowScope;
+        callbacks_state.store(2, .release);
+        return;
+    }
+    while (callbacks_state.load(.acquire) != 2) std.atomic.spinLoopHint();
+}
+
+/// The published execution callbacks, or null before `setExecutionCallbacks`.
+fn installedCallbacks() ?evaluator_adapter.ExecutionCallbacks {
+    if (callbacks_state.load(.acquire) != 2) return null;
+    return execution_callbacks;
 }
 
 // CANARY: REQ=REQ-SONNY-2691-DEGREE-VISIBILITY; FEATURE="NodeDegreeFunctions"; ASPECT=RowScopeInterface; STATUS=TESTED; TEST=tests/test_sonny2691_degree_visibility.zig; OWNER=security; UPDATED=2026-09-25
@@ -251,11 +276,31 @@ const BeginRowScopeFn = *const fn (allocator: std.mem.Allocator, graph: []const 
 /// Installed by `setExecutionCallbacks`; null before the evaluator is set up.
 var begin_row_scope: ?BeginRowScopeFn = null;
 
-/// The session's row scope for `graph` / `tenant`, or null when the execution
-/// layer has not installed one. The caller deinits it.
+// CANARY: REQ=REQ-SONNY-2691-ROW-SCOPE-FAIL-CLOSED; FEATURE="NodeDegreeFunctions"; ASPECT=RowScopeFailsClosed; STATUS=TESTED; TEST=tests/test_sonny2691_row_scope_fail_closed.zig; OWNER=security; UPDATED=2026-09-26
+/// The session's row scope for `graph` / `tenant`. The caller deinits it.
+///
+/// Null only when no scope is installed (the execution layer's
+/// `initEvaluator` never ran) AND the active context carries no user and no
+/// principal, so no RLS policy can apply to the session and the caller's
+/// graph and tenant checks are the whole answer. With a user or a principal
+/// the statement is refused (`EvaluatorNotInitialized`, item 5 of the
+/// SONNY-2686 review): it used to get null there too, so degree and knn()
+/// answered without RLS.
 fn beginRowScope(allocator: std.mem.Allocator, graph: []const u8, tenant: ?[]const u8) EvalError!?RowScope {
+    if (callbacks_state.load(.acquire) != 2) {
+        if (activeContextHasIdentity()) return error.EvaluatorNotInitialized;
+        return null;
+    }
     const begin = begin_row_scope orelse return null;
     return try begin(allocator, graph, tenant);
+}
+
+/// Does the active context carry a user or a principal (an identity an RLS
+/// policy can apply to)?
+fn activeContextHasIdentity() bool {
+    const execution = @import("execution.zig");
+    const ctx = execution.getActiveContext() orelse return false;
+    return ctx.user != null or ctx.principal != null;
 }
 
 /// The execution layer's `RowScope`: a `HopScope` and the RLS scratch row it
@@ -326,11 +371,12 @@ fn beginHopRowScope(allocator: std.mem.Allocator, graph: []const u8, tenant: ?[]
 }
 
 /// Get execution callbacks (internal use only)
-fn getExecutionCallbacks() evaluator_adapter.ExecutionCallbacks {
-    return execution_callbacks orelse {
-        // This should never happen in production - callbacks must be set before eval.evalExpr is called
-        @panic("Execution callbacks not initialized! Call eval.setExecutionCallbacks() first.");
-    };
+/// Item 5 of the SONNY-2686 review: a pattern predicate, a subquery or
+/// shortestPath() needs the execution layer, which `execution.initEvaluator`
+/// installs. Without it the statement is refused (`EvaluatorNotInitialized`);
+/// it used to panic, aborting the process.
+fn getExecutionCallbacks() EvalError!evaluator_adapter.ExecutionCallbacks {
+    return installedCallbacks() orelse error.EvaluatorNotInitialized;
 }
 
 // GAP-0280: Global timeseries store pointer for server execution path.
@@ -1413,6 +1459,10 @@ pub fn evalExpr(allocator: std.mem.Allocator, e: ast.Expr, env: Env) EvalError!V
                     // degree functions resolve their node under the session's
                     // tenant scope) must never degrade to NULL.
                     return EvalError.TenantScopeRequired;
+                } else if (std.mem.eql(u8, err_name, "EvaluatorNotInitialized")) {
+                    // Item 5 of the SONNY-2686 review: neither may a degree
+                    // refused for want of the session's row visibility.
+                    return EvalError.EvaluatorNotInitialized;
                 }
                 // For other errors, fall back to null
                 break :blk_call .{ .Null = {} };
@@ -1484,7 +1534,7 @@ pub fn evalExpr(allocator: std.mem.Allocator, e: ast.Expr, env: Env) EvalError!V
             if (isNull(v)) return Value{ .Null = {} };
 
             // Execute the subquery using the caller-provided execution context
-            var result = getExecutionCallbacks().executeQueryWithEnv(allocator, isq.subquery.*, env) catch |err| {
+            var result = (try getExecutionCallbacks()).executeQueryWithEnv(allocator, isq.subquery.*, env) catch |err| {
                 return switch (err) {
                     error.OutOfMemory => error.OutOfMemory,
                     else => error.Unsupported,
@@ -1524,7 +1574,7 @@ pub fn evalExpr(allocator: std.mem.Allocator, e: ast.Expr, env: Env) EvalError!V
             if (isNull(v)) return Value{ .Null = {} };
 
             // Execute the subquery using the caller-provided execution context
-            var result = getExecutionCallbacks().executeQueryWithEnv(allocator, nisq.subquery.*, env) catch |err| {
+            var result = (try getExecutionCallbacks()).executeQueryWithEnv(allocator, nisq.subquery.*, env) catch |err| {
                 return switch (err) {
                     error.OutOfMemory => error.OutOfMemory,
                     else => error.Unsupported,
@@ -2043,7 +2093,7 @@ pub fn evalExpr(allocator: std.mem.Allocator, e: ast.Expr, env: Env) EvalError!V
             // SONNY-1326: a strict-tenancy refusal must reach the client as
             // 42501, never degrade to NULL (same contract as
             // `currentKnnScanScope` and `isPropagatableEvalError`).
-            const path_value = getExecutionCallbacks().findShortestPath(allocator, sp.pattern.*, sp.all, env) catch |err| {
+            const path_value = (try getExecutionCallbacks()).findShortestPath(allocator, sp.pattern.*, sp.all, env) catch |err| {
                 if (err == error.TenantScopeRequired) return error.TenantScopeRequired;
                 break :blk_shortest Value{ .Null = {} };
             };
@@ -2054,7 +2104,7 @@ pub fn evalExpr(allocator: std.mem.Allocator, e: ast.Expr, env: Env) EvalError!V
             // C02 Fix: Pattern comprehension count with optional WHERE clause
             // Call the execution layer to count pattern matches (pass env for correlated patterns)
             // SONNY-1326: a strict-tenancy refusal must not degrade to 0.
-            const count = getExecutionCallbacks().countPatternMatches(allocator, pc.pattern.*, pc.where, env) catch |err| {
+            const count = (try getExecutionCallbacks()).countPatternMatches(allocator, pc.pattern.*, pc.where, env) catch |err| {
                 if (err == error.TenantScopeRequired) return error.TenantScopeRequired;
                 break :blk_count Value{ .Int = 0 };
             };
@@ -2067,7 +2117,7 @@ pub fn evalExpr(allocator: std.mem.Allocator, e: ast.Expr, env: Env) EvalError!V
             // Call the execution layer to count pattern matches (pass env for correlated subqueries)
             // Pass the optional WHERE clause for EXISTS { MATCH ... WHERE ... } patterns
             // SONNY-1326: a strict-tenancy refusal must not degrade to false.
-            const count = getExecutionCallbacks().countPatternMatches(allocator, ex.pattern.*, ex.where, env) catch |err| {
+            const count = (try getExecutionCallbacks()).countPatternMatches(allocator, ex.pattern.*, ex.where, env) catch |err| {
                 if (err == error.TenantScopeRequired) return error.TenantScopeRequired;
                 break :blk_exists Value{ .Bool = false };
             };
@@ -2118,7 +2168,7 @@ pub fn evalExpr(allocator: std.mem.Allocator, e: ast.Expr, env: Env) EvalError!V
             // Shorthand: [(a)--()]  means  [(a)--(x) | x]
             // Execute the pattern and collect results based on the map expression
             // SONNY-1326: a strict-tenancy refusal must not degrade to [].
-            const result_list = getExecutionCallbacks().executePatternComprehension(allocator, pc.pattern.*, pc.where, pc.map.*, env) catch |err| {
+            const result_list = (try getExecutionCallbacks()).executePatternComprehension(allocator, pc.pattern.*, pc.where, pc.map.*, env) catch |err| {
                 if (err == error.TenantScopeRequired) return error.TenantScopeRequired;
                 break :blk_patterncomp Value{ .List = &.{} };
             };

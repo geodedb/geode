@@ -65,12 +65,21 @@ pub const Session = struct {
     edge_compiled: rls.RLSEngine.CompiledExpression = .{ .bytecode = &expr_bytecode, .constants = &edge_expr_constants, .jump_table = &.{} },
 
     pub fn init(mode: Mode) !Session {
-        const allocator = testing.allocator;
-        silenceEngineLogs();
         // Pattern comprehensions, COUNT {} and EXISTS {} reach
         // graph_algorithms.zig through the evaluator callbacks the server
-        // installs at startup.
+        // installs at startup, and indegree()/outdegree()/knn() reach the
+        // session's row visibility the same way.
         execution.initEvaluator();
+        return initWithoutEvaluator(mode);
+    }
+
+    /// `init` without installing the evaluator's callbacks, for a test that
+    /// pins what a statement does before `execution.initEvaluator` runs. The
+    /// callbacks are published once per process and never removed, so a test
+    /// binary that uses this must never call `init`.
+    pub fn initWithoutEvaluator(mode: Mode) !Session {
+        const allocator = testing.allocator;
+        silenceEngineLogs();
         execution.cleanupCatalogInstance();
         // The advanced (vector) index registry is process-global and survives
         // the catalog and store teardown.

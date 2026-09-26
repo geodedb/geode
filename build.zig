@@ -8787,6 +8787,23 @@ pub fn build(b: *std.Build) void {
     const sonny2691_step = b.step("test-sonny2691-degree-visibility", "Run SONNY-2691 regression (indegree()/outdegree() of a negative or unknown id is 0 instead of a panic; a hidden, foreign-tenant or other-graph node behaves as absent; a degree counts only visible neighbours)");
     sonny2691_step.dependOn(&run_sonny2691_tests.step);
 
+    // SONNY-2691 / SONNY-2692 (item 5 of the SONNY-2686 review): with no row
+    // scope installed (execution.initEvaluator never ran), a statement whose
+    // context carries a user or principal is refused instead of answered
+    // without RLS, and pattern predicates are refused instead of panicking.
+    // Its own binary: the callbacks are published once per process, so no
+    // test in it may call initEvaluator.
+    const sonny2691_fc_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny2691_row_scope_fail_closed.zig"), .target = target, .optimize = optimize });
+    sonny2691_fc_test_mod.addImport("geode", root_mod);
+    sonny2691_fc_test_mod.addImport("logging", logging_mod);
+    sonny2691_fc_test_mod.addImport("rls", rls_mod);
+    sonny2691_fc_test_mod.addImport("rls_types", rls_types_mod);
+    const sonny2691_fc_tests = b.addTest(.{ .root_module = sonny2691_fc_test_mod });
+    const run_sonny2691_fc_tests = b.addRunArtifact(sonny2691_fc_tests);
+    shardDep(test_step, &run_sonny2691_fc_tests.step, 1, test_shard_loads, test_shard_index);
+    const sonny2691_fc_step = b.step("test-sonny2691-row-scope-fail-closed", "Run SONNY-2691 item-5 regression (with no evaluator row scope installed, a statement whose context carries a user or principal is refused with EvaluatorNotInitialized instead of answered without RLS; pattern predicates are refused instead of panicking; a context with no identity keeps graph and tenant scoping)");
+    sonny2691_fc_step.dependOn(&run_sonny2691_fc_tests.step);
+
     // SONNY-2692: knn()/vector_knn() scoped candidates by graph and tenant
     // only, so they returned the ids of RLS-hidden rows ranked against the
     // caller's vector, on the scan path and the vector-index path.

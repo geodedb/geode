@@ -395,8 +395,10 @@ pub fn tearDownGlobalCatalogForTest() void {
 
 // CANARY: REQ=REQ-M5.3-EXECUTION-INIT-001; FEATURE="Circular Dependency Resolution"; ASPECT=CallbacksInitialization; STATUS=EXEMPT; OWNER=execution; UPDATED=2025-11-13
 /// Initialize evaluator with execution callbacks
-/// This must be called once during module initialization to provide eval.zig
+/// This must be called during module initialization to provide eval.zig
 /// with callback functions for executing queries, finding paths, etc.
+/// Only the first call in a process writes them (SONNY-2691 item 5): the
+/// server calls it at startup, and each connection's call only reads.
 ///
 /// This breaks the circular dependency by using dependency injection:
 /// Instead of eval.zig importing execution.zig, it receives function pointers at runtime.
@@ -3294,6 +3296,9 @@ pub fn isQueryLevelEvalError(err: anyerror) bool {
         error.SearchNotPermitted,
         error.WriteQueryBudgetExceeded,
         error.WriteQueryCancelled,
+        // Item 5 of the SONNY-2686 review: the evaluator's row visibility is
+        // not installed; no row may be answered without it.
+        error.EvaluatorNotInitialized,
         error.OutOfMemory,
         => true,
         else => false,

@@ -267,6 +267,10 @@ pub fn mapError(err: anyerror) ErrorInfo {
         // rather than binding the hidden node or creating a duplicate of it.
         // CANARY: REQ=REQ-SONNY-2686-MERGE-ROW-VISIBILITY; FEATURE="MergeRowVisibility"; ASPECT=SqlstateMapping; STATUS=TESTED; TEST=tests/test_sonny2686_merge_rls.zig; OWNER=security; UPDATED=2026-09-25
         error.MergeMatchNotVisible => .{ .code = "42501", .message = "MergeMatchNotVisible: the MERGE pattern matches an existing node that row-level security hides from this session; the statement was refused, and nothing was bound, updated or created" },
+        // SONNY-2691 item 5: the evaluator's row visibility was never
+        // installed in this process; the statement is refused rather than
+        // answered without the session's RLS policies.
+        error.EvaluatorNotInitialized => .{ .code = "XX000", .message = "EvaluatorNotInitialized: the query evaluator's execution layer and row-level security are not initialized in this process; the statement was refused" },
         error.SearchNotPermitted => .{ .code = "42501", .message = "Access denied: READ_PLAINTEXT privilege required for encrypted searchable field" },
         error.InvalidIpAddress => .{ .code = "22P02", .message = "Invalid IP address format" },
         error.InvalidMac, error.InvalidMacFormat, error.InvalidMacTag => .{ .code = "22P02", .message = "Invalid MAC address format" },

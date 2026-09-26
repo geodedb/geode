@@ -103,6 +103,12 @@ pub const EvalError = error{
     // mapped to GQLSTATE 53200 / 57014 in proto_util.
     ReadQueryBudgetExceeded,
     ReadQueryCancelled,
+    // Item 5 of the SONNY-2686 review: the evaluator's execution callbacks and
+    // row visibility were never installed (`execution.initEvaluator`), and
+    // the statement needs them: a pattern predicate or subquery, or a degree /
+    // knn() read for a session a policy could restrict. Refused instead of
+    // answered without RLS, or a panic. Mapped to XX000 in proto_util.
+    EvaluatorNotInitialized,
     OutOfMemory,
 };
 
