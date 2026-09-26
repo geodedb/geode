@@ -310,3 +310,66 @@ test "SONNY-2692 (P13): edge vectors, tenant scope: an edge to another tenant's 
 
     try f.finish("tenant_scoped");
 }
+
+// CANARY: REQ=REQ-SONNY-2692-KNN-INDEX-SCOPE; FEATURE="VectorKnn"; ASPECT=IndexResultsScoped; STATUS=TESTED; TEST=tests/test_sonny2692_knn_rls.zig; OWNER=security; UPDATED=2026-09-26
+/// Item 6 (the SONNY-2686 security review, `knnFromVectorIndex`): the vector
+/// index answers a label-unscoped knn() only when, by the store's per-graph
+/// and per-tenant refcounts, its label is the sole carrier of the property in
+/// the session's graph and tenant (`labelSolelyCarriesProperty`). That check
+/// runs before the index query, and it counts carriers, not the rows the
+/// index holds; the index's answers were then filtered only when an RLS
+/// policy could deny. So a row the index holds that the check did not see (a
+/// write landing between the check and the query, or a row outside the
+/// refcounts) came back to a tenant-scoped session, or to any session from
+/// another graph. Every index answer is now filtered by the session's graph,
+/// tenant and RLS before ranking; the check only decides whether the index
+/// is complete.
+///
+/// The race is reproduced deterministically: the index is made to hold
+/// tenant_b's row and another graph's row, nearest to the query, while no
+/// refcount says either carries the property.
+fn checkIndexScope(mode: h.Mode) !void {
+    var s = try h.Session.init(mode);
+    defer s.deinit();
+    const aa = s.arena.allocator();
+    var f: h.Failures = .{};
+    const owner: ?[]const u8 = if (mode == .tenant_scoped) h.tenant_a else null;
+
+    try s.execAs(owner, "CREATE (:Doc {s: 'mine', cls: 'public', emb: vectorf32([1.0, 0.0])})");
+    try s.execAs(owner, "CREATE (:Doc {s: 'mine2', cls: 'public', emb: vectorf32([-1.0, -0.5])})");
+    try s.execAs(null, "CREATE INDEX doc_emb ON Doc (emb) USING vector");
+    try s.execAs(h.tenant_b, "CREATE (:Other {s: 'foreign'})");
+    const store = geode.graph_store.getGlobalStore(testing.allocator);
+    const other_graph = try store.createNodeWithGraph(&[_][]const u8{"Other"}, "g2");
+    const foreign = try s.idOf("foreign");
+    const mine = try s.idOf("mine");
+    const mine2 = try s.idOf("mine2");
+    const manager = geode.index_manager.getGlobalIndexManager() orelse return error.NoIndexManager;
+    const near = [_]f32{ 0.0, 1.0 };
+    try manager.insertIntoAdvancedVectorIndex("doc_emb", geode.types.vector.VectorF32.fromSlice(&near), foreign);
+    try manager.insertIntoAdvancedVectorIndex("doc_emb", geode.types.vector.VectorF32.fromSlice(&near), other_graph);
+    try s.restrict("Hidden");
+
+    // Ranked by distance to [0, 1]: the two planted rows 0, mine 1.41,
+    // mine2 1.80. The g2 row is foreign to every session on the default
+    // graph; tenant_b's row is foreign to a tenant_a session (an unscoped
+    // session may see it, and the index's answer for it stands).
+    const tenant_ranked = [_]u64{ mine, mine2 };
+    const open_ranked = [_]u64{ foreign, mine, mine2 };
+    const ranked: []const u64 = if (mode == .tenant_scoped) &tenant_ranked else &open_ranked;
+    eval.resetKnnScanInvocations();
+    try h.expectRows(&s, &f, "RETURN knn('emb', vectorf32([0.0, 1.0]), 5, 'l2') AS ids", &.{try idList(aa, ranked)});
+    try h.expectRows(&s, &f, "RETURN knn('emb', vectorf32([0.0, 1.0]), 1, 'l2') AS ids", &.{try idList(aa, ranked[0..1])});
+    try h.expectRows(&s, &f, "RETURN vector_knn('emb', vectorf32([0.0, 1.0]), 2, 'l2') AS ids", &.{try idList(aa, ranked[0..2])});
+    if (eval.knnScanInvocationCount() != 0) try f.add(aa, "[{s}] the scan ran {d} time(s): the index path was not exercised", .{ @tagName(mode), eval.knnScanInvocationCount() });
+
+    try f.finish(@tagName(mode));
+}
+
+test "SONNY-2692 (item 6): a tenant-scoped session never gets another tenant's or graph's row from the vector index" {
+    try checkIndexScope(.tenant_scoped);
+}
+
+test "SONNY-2692 (item 6): an unscoped session never gets another graph's row from the vector index" {
+    try checkIndexScope(.no_policy);
+}

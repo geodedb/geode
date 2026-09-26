@@ -2751,6 +2751,15 @@ const KnnScanScope = struct {
         return self.admits(node.graph_name, node.tenant_id);
     }
 
+    /// `admits` and then `nodeVisible`, for a transient copy the caller frees
+    /// as soon as this returns (`knnNodeIdVisible`).
+    fn visibleOnCopy(self: KnnScanScope, node: *const graph_store.Node) bool {
+        if (!self.admits(node.graph_name, node.tenant_id)) return false;
+        if (!self.rls_may_deny) return true;
+        const row = self.row orelse return true;
+        return row.nodeVisibleOnCopy(node);
+    }
+
     /// `admits` for the node `id`, decided on a transient copy that is freed
     /// before this returns (nothing retained, the cache untouched). False
     /// when no node has the id.
@@ -2805,14 +2814,13 @@ fn currentKnnRowScope(allocator: std.mem.Allocator) EvalError!KnnScanScope {
 }
 
 /// SONNY-2692: may the session see the node `id` (a vector index's answer, or
-/// an edge's endpoint)? The scan's own test, under the scan's shard
-/// discipline: hydrate outside the guard, read the entry inside it.
+/// an edge's endpoint)? The scan's own test (`admits`, then the row scope
+/// when a policy may deny), decided on a transient copy of the node that is
+/// freed before this returns: nothing is retained, and the node cache is not
+/// touched (it used to hydrate the node into it, which a read-only scope
+/// declines). False when no node has the id.
 fn knnNodeIdVisible(store: *graph_store.GraphStore, scope: KnnScanScope, id: u64) bool {
-    _ = store.nodes.getOrHydratePtr(id) catch null;
-    store.nodes.lockShardShared(id);
-    defer store.nodes.unlockShardShared(id);
-    const node = store.nodes.getPtrUnlocked(id) orelse return false;
-    return scope.admits(node.graph_name, node.tenant_id) and scope.nodeVisible(node);
+    return store.decideOnTransientNode(id, scope, KnnScanScope.visibleOnCopy) orelse false;
 }
 
 /// SONNY-2692: an edge that carries the knn() property, recorded by the edge
@@ -3213,11 +3221,21 @@ fn evalVectorKnn(allocator: std.mem.Allocator, args: []*ast.Expr, env: Env) Eval
 /// when the index holds nothing (the scan answers then, geode#877 (b)).
 ///
 /// SONNY-2692: the index ranks every row it holds, the rows the session may
-/// not see included. Each row it returns passes the scan's row-visibility test
-/// BEFORE the ranking is cut to k, so a hidden row can never take one of the k
-/// slots: while fewer than k visible rows came back and the index returned all
-/// it was asked for, it is asked again for twice as many. When no policy can
-/// deny the session a row, this is the single query it always was.
+/// not see included. Each row it returns passes the scan's own test (the
+/// session's graph and tenant, then its RLS policies) BEFORE the ranking is
+/// cut to k, so a hidden or foreign row can never take one of the k slots:
+/// while fewer than k visible rows came back and the index returned all it
+/// was asked for, it is asked again for twice as many.
+///
+/// Item 6 of the SONNY-2686 review: the graph and tenant test used to apply
+/// only when an RLS policy could deny, because the caller asks the index only
+/// when, by the store's refcounts, its label is the sole carrier of the
+/// property in the session's graph and tenant (`labelSolelyCarriesProperty`).
+/// That check runs before this query and counts carriers, not the rows the
+/// index holds, so a row it did not see (a write landing between the two, or
+/// a row outside the refcounts) came back to a tenant-scoped session, or from
+/// another graph. The check now only decides whether the index is complete;
+/// every answer is filtered here.
 fn knnFromVectorIndex(
     allocator: std.mem.Allocator,
     manager: *index_manager.IndexManager,
@@ -3255,7 +3273,7 @@ fn knnFromVectorIndex(
 
         candidates.clearRetainingCapacity();
         for (results) |result| {
-            if (scope.rls_may_deny and !knnNodeIdVisible(store, scope, result.node_id)) continue;
+            if (!knnNodeIdVisible(store, scope, result.node_id)) continue;
             try candidates.append(allocator, .{ .id = result.node_id, .score = result.distance });
         }
         // Enough visible rows, or nothing more to ask the index for.
