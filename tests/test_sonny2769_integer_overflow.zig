@@ -390,3 +390,80 @@ test "SONNY-2769: a zoned time at the i64 edge orders and keys without overflow"
     try testing.expect(try set.add(other));
     try testing.expect(!try set.add(edge));
 }
+
+// ---------------------------------------------------------------------------
+// Functions: user integers as arguments, CAST to DECIMAL
+// ---------------------------------------------------------------------------
+
+const scale200 = "0." ++ "0" ** 199 ++ "1";
+
+fn checkFunctions(s: *Session, f: *Failures) !void {
+    // abs() and mod() at minInt.
+    try expectFail(s, f, "RETURN abs(" ++ min_int ++ ") AS x", &.{}, error.IntegerOverflow);
+    try expectValue(s, f, "RETURN abs(-5) AS x", "5");
+    try expectValue(s, f, "RETURN abs(-1.5) AS x", "1.5m");
+    try expectValue(s, f, "RETURN mod(" ++ min_int ++ ", -1) AS x", "0");
+    try expectValue(s, f, "RETURN mod(-7, 3) AS x", "-1");
+    // range() with a span or a step at the edge of i64.
+    try expectFail(s, f, "RETURN range(" ++ min_int ++ ", 9223372036854775807) AS x", &.{}, error.RangeTooLarge);
+    try expectValue(s, f, "RETURN range(0, -10, " ++ min_int ++ ") AS x", "[0]");
+    try expectValue(s, f, "RETURN range(9223372036854775806, 9223372036854775807, 9223372036854775807) AS x", "[9223372036854775806]");
+    try expectValue(s, f, "RETURN range(1, 7, 2) AS x", "[1, 3, 5]");
+    // CAST to DECIMAL: every rescale checked; fraction digits past the
+    // target scale truncated before they can overflow.
+    try expectFail(s, f, "RETURN CAST(9223372036854775807 AS DECIMAL(38, 30)) AS x", &.{}, error.DecimalOverflow);
+    try expectFail(s, f, "RETURN CAST(1 AS DECIMAL(38, 255)) AS x", &.{}, error.DecimalOverflow);
+    try expectFail(s, f, "RETURN CAST(1.5 AS DECIMAL(38, 200)) AS x", &.{}, error.DecimalOverflow);
+    try expectFail(s, f, "RETURN CAST('1.5' AS DECIMAL(38, 255)) AS x", &.{}, error.DecimalOverflow);
+    try expectValue(s, f, "RETURN CAST('1." ++ "0" ** 40 ++ "' AS DECIMAL) AS x", "1m");
+    try expectValue(s, f, "RETURN CAST('1." ++ "9" ** 300 ++ "' AS DECIMAL(10, 2)) AS x", "1.99m");
+    try expectValue(s, f, "RETURN CAST(0 AS DECIMAL(38, 255)) = 0 AS x", "true");
+    try expectValue(s, f, "RETURN CAST('12.345' AS DECIMAL(10, 2)) AS x", "12.34m");
+    // The sign applies to the fraction ("-1.5" was -0.5, "-0.5" was 0.5).
+    try expectValue(s, f, "RETURN CAST('-1.5' AS DECIMAL(10, 1)) AS x", "-1.5m");
+    try expectValue(s, f, "RETURN CAST('-0.5' AS DECIMAL(10, 1)) AS x", "-0.5m");
+    // char(), varchar() and decimal() arguments.
+    try expectFail(s, f, "RETURN char('abc', -1) AS x", &.{}, error.InvalidArgs);
+    try expectFail(s, f, "RETURN varchar('abc', 100000) AS x", &.{}, error.InvalidArgs);
+    try expectRows(s, f, "RETURN varchar('abc', 5) AS x", &.{}, &.{"<Varchar>"});
+    try expectFail(s, f, "RETURN decimal('1.5', 40000) AS x", &.{}, error.DecimalOverflow);
+    try expectFail(s, f, "RETURN decimal('15', -1) AS x", &.{}, error.DecimalOverflow);
+    try expectFail(s, f, "RETURN decimal('1.5', 300) AS x", &.{}, error.DecimalOverflow);
+    try expectFail(s, f, "RETURN decimal('200000000000000000000000000000000000000') AS x", &.{}, error.DecimalOverflow);
+    try expectFail(s, f, "RETURN decimal('0." ++ "0" ** 40000 ++ "1') AS x", &.{}, error.DecimalOverflow);
+    try expectValue(s, f, "RETURN decimal('1.25', 1) AS x", "1.2m");
+    try expectFail(s, f, "RETURN decimal_mul(" ++ scale200 ++ ", " ++ scale200 ++ ") AS x", &.{}, error.DecimalOverflow);
+    try expectValue(s, f, "RETURN decimal_mul(1.5, 2.0) AS x", "3.00m");
+    // Vectors, ranges, networks, time series, degrees.
+    try expectFail(s, f, "RETURN vectori32([3000000000]) AS x", &.{}, error.IntegerOverflow);
+    try expectFail(s, f, "RETURN intrange(3000000000, 4000000000, true, false) AS x", &.{}, error.IntegerOverflow);
+    try expectValue(s, f, "RETURN range_contains(intrange(1, 5, true, false), 3000000000) AS x", "false");
+    try expectValue(s, f, "RETURN range_contains(intrange(1, 5, true, false), 3) AS x", "true");
+    try expectFail(s, f, "RETURN ip_netmask(ipaddr('10.0.0.1'), 300) AS x", &.{}, error.InvalidArgs);
+    try expectFail(s, f, "RETURN timeseries.dtw([1.0, 2.0], [1.0, 2.0], -1) AS x", &.{}, error.InvalidArgs);
+    try expectFail(s, f, "RETURN timeseries.dtw_derivative([1.0, 2.0], [1.0, 2.0], -1) AS x", &.{}, error.InvalidArgs);
+    try expectFail(s, f, "RETURN timeseries.dtw_shape([1.0, 2.0], [1.0, 2.0], -1) AS x", &.{}, error.InvalidArgs);
+    try expectValue(s, f, "RETURN indegree(-1) AS x", "0");
+    try expectValue(s, f, "RETURN outdegree(-1) AS x", "0");
+}
+
+test "SONNY-2769: functions refuse an integer argument that does not fit" {
+    try inModes("functions", &eval_modes, checkFunctions);
+}
+
+test "SONNY-2769: the heap decimal and abs functions refuse what does not fit" {
+    const ef = geode.types.evaluator_functions;
+    const D = geode.types.decimal128.Decimal128;
+    try testing.expectError(error.Overflow, ef.abs_val(.{ .Int = std.math.minInt(i64) }));
+    try testing.expectError(error.Overflow, ef.abs_val(.{ .SmallInt = std.math.minInt(i16) }));
+    try testing.expectError(error.Overflow, ef.abs_val(.{ .Decimal128 = D{ .coeff = std.math.minInt(i128), .scale = 0 } }));
+    try testing.expectEqual(@as(i64, 5), (try ef.abs_val(.{ .Int = -5 })).Int);
+    // Decimal128: the 39-digit bound, the fraction-digit count, the scale sums.
+    try testing.expectError(error.Overflow, D.fromStr("200000000000000000000000000000000000000"));
+    try testing.expectEqual(@as(i128, std.math.maxInt(i128)), (try D.fromStr("170141183460469231731687303715884105727")).coeff);
+    const big_scale = D{ .coeff = 1, .scale = std.math.maxInt(i16) };
+    try testing.expectError(error.Overflow, big_scale.mul(big_scale));
+    try testing.expectError(error.Overflow, (D{ .coeff = 15, .scale = std.math.maxInt(i16) }).roundHalfEven(std.math.minInt(i16)));
+    const min_d = D{ .coeff = std.math.minInt(i128), .scale = 0 };
+    try testing.expectError(error.Overflow, min_d.div(D{ .coeff = -1, .scale = 18 }));
+}

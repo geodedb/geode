@@ -3212,6 +3212,8 @@ fn tryBasicFunction(allocator: std.mem.Allocator, function_name: []const u8, arg
                 return Value{ .Int = @intCast(ids.len) };
             },
             .Int => |node_id| {
+                // SONNY-2769: a negative id is no node (the cast aborted).
+                if (node_id < 0) return Value{ .Int = 0 };
                 const store = graph_store.getGlobalStore(allocator);
                 const ids = store.getIncomingEdgeIds(@as(u64, @intCast(node_id))) orelse return Value{ .Int = 0 };
                 return Value{ .Int = @intCast(ids.len) };
@@ -3234,6 +3236,8 @@ fn tryBasicFunction(allocator: std.mem.Allocator, function_name: []const u8, arg
                 return Value{ .Int = @intCast(store.getOutDegree(n.id)) };
             },
             .Int => |node_id| {
+                // SONNY-2769: see indegree().
+                if (node_id < 0) return Value{ .Int = 0 };
                 const store = graph_store.getGlobalStore(allocator);
                 return Value{ .Int = @intCast(store.getOutDegree(@as(u64, @intCast(node_id)))) };
             },
@@ -3478,11 +3482,11 @@ fn tryBasicFunction(allocator: std.mem.Allocator, function_name: []const u8, arg
                     }
                     return Value{ .Double = sum };
                 } else {
-                    // Sum as integer
+                    // Sum as integer (SONNY-2769: checked; `+=` aborted)
                     var sum: i64 = 0;
                     for (list) |item| {
                         switch (item) {
-                            .Int => |n| sum += n,
+                            .Int => |n| sum = std.math.add(i64, sum, n) catch return EvalError.IntegerOverflow,
                             else => {},
                         }
                     }
@@ -3545,7 +3549,8 @@ fn tryBasicFunction(allocator: std.mem.Allocator, function_name: []const u8, arg
                     for (list) |item| {
                         switch (item) {
                             .Int => |n| {
-                                sum += n;
+                                // SONNY-2769: checked; `+=` aborted the server.
+                                sum = std.math.add(i64, sum, n) catch return EvalError.IntegerOverflow;
                                 count += 1;
                             },
                             else => {},
@@ -4093,7 +4098,7 @@ fn tryBasicFunction(allocator: std.mem.Allocator, function_name: []const u8, arg
             return switch (err) {
                 evaluator_functions.EvaluatorError.InvalidFormat => EvalError.TypeMismatch,
                 evaluator_functions.EvaluatorError.TypeMismatch => EvalError.TypeMismatch,
-                evaluator_functions.EvaluatorError.Overflow => EvalError.Unsupported,
+                evaluator_functions.EvaluatorError.Overflow => EvalError.IntegerOverflow,
                 else => EvalError.TypeMismatch,
             };
         };
@@ -4103,7 +4108,7 @@ fn tryBasicFunction(allocator: std.mem.Allocator, function_name: []const u8, arg
             return switch (err) {
                 evaluator_functions.EvaluatorError.InvalidFormat => EvalError.TypeMismatch,
                 evaluator_functions.EvaluatorError.TypeMismatch => EvalError.TypeMismatch,
-                evaluator_functions.EvaluatorError.Overflow => EvalError.Unsupported,
+                evaluator_functions.EvaluatorError.Overflow => EvalError.IntegerOverflow,
                 else => EvalError.TypeMismatch,
             };
         };
@@ -4358,14 +4363,15 @@ fn tryBasicFunction(allocator: std.mem.Allocator, function_name: []const u8, arg
         if (step == 0) return Value{ .Null = {} };
 
         // Calculate the number of elements in the range
-        const count: i64 = if (step > 0) blk: {
+        // SONNY-2769: in i128, so a span or a step at the edge of i64
+        // (`range(minInt, maxInt)`, a step of minInt) no longer overflows
+        // and aborts the server; every element still fits i64.
+        const count: i128 = if (step > 0) blk: {
             if (stop <= start) break :blk 0;
-            const diff = stop - start;
-            break :blk @divFloor(diff + step - 1, step);
+            break :blk @divFloor(@as(i128, stop) - start + step - 1, step);
         } else blk: {
             if (stop >= start) break :blk 0;
-            const diff = start - stop;
-            break :blk @divFloor(diff - step - 1, -step);
+            break :blk @divFloor(@as(i128, start) - stop - step - 1, -@as(i128, step));
         };
 
         // Allocate result array
@@ -4382,10 +4388,10 @@ fn tryBasicFunction(allocator: std.mem.Allocator, function_name: []const u8, arg
         const ucount = @as(usize, @intCast(count));
         var result = try allocator.alloc(Value, ucount);
 
-        // Generate range values
-        var current = start;
+        // Generate range values (i128: the step past the last one may leave i64)
+        var current: i128 = start;
         for (0..ucount) |i| {
-            result[i] = Value{ .Int = current };
+            result[i] = Value{ .Int = @intCast(current) };
             current += step;
         }
 

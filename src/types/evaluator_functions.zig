@@ -405,8 +405,15 @@ pub fn Double(val: Value) EvaluatorError!Value {
 
 pub fn Decimal(allocator: std.mem.Allocator, value_str: []const u8, scale_val: ?i16) EvaluatorError!Value {
     _ = allocator;
-    const dec = decimal128.Decimal128.fromStr(value_str) catch return EvaluatorError.InvalidFormat;
+    const dec = decimal128.Decimal128.fromStr(value_str) catch |err| return switch (err) {
+        error.Overflow => EvaluatorError.DecimalOverflow,
+        else => EvaluatorError.InvalidFormat,
+    };
     const final_scale = scale_val orelse dec.scale;
+    // SONNY-2769: a query's decimal has a scale of 0..255; a negative or
+    // larger one aborted the server when the value was converted (`@intCast`
+    // to u8).
+    if (final_scale < 0 or final_scale > std.math.maxInt(u8)) return EvaluatorError.DecimalOverflow;
     const rounded = dec.roundHalfEven(final_scale) catch return EvaluatorError.DecimalOverflow;
     return Value{ .Decimal128 = rounded };
 }
@@ -532,14 +539,16 @@ pub fn RangeValue(allocator: std.mem.Allocator, base_type: []const u8, lower_arg
 
     const bounds = range.IntRange.Bounds.fromString(bounds_str) orelse return EvaluatorError.RangeBoundsError;
 
+    // SONNY-2769: an int4 range bound past i32 is Overflow (22003); the cast
+    // aborted the server.
     const lower_val = if (lower_arg) |l| switch (l) {
-        .Int => |i| @as(i32, @intCast(i)),
+        .Int => |i| std.math.cast(i32, i) orelse return EvaluatorError.Overflow,
         .SmallInt => |i| @as(i32, i),
         else => return EvaluatorError.TypeMismatch,
     } else null;
 
     const upper_val = if (upper_arg) |u| switch (u) {
-        .Int => |i| @as(i32, @intCast(i)),
+        .Int => |i| std.math.cast(i32, i) orelse return EvaluatorError.Overflow,
         .SmallInt => |i| @as(i32, i),
         else => return EvaluatorError.TypeMismatch,
     } else null;
@@ -903,8 +912,9 @@ pub fn range_contains(range_val: Value, element: Value) EvaluatorError!Value {
         else => return EvaluatorError.TypeMismatch,
     };
 
+    // SONNY-2769: an int4 range holds no value past i32 (the cast aborted).
     const val = switch (element) {
-        .Int => |i| @as(i32, @intCast(i)),
+        .Int => |i| std.math.cast(i32, i) orelse return Value{ .Bool = false },
         .SmallInt => |i| @as(i32, i),
         else => return EvaluatorError.TypeMismatch,
     };
@@ -1037,12 +1047,13 @@ pub fn replace(allocator: std.mem.Allocator, text: Value, search: Value, replace
 pub fn abs_val(val: Value) EvaluatorError!Value {
     return switch (val) {
         .Null => Value{ .Null = {} },
-        .Int => |i| Value{ .Int = @intCast(@abs(i)) },
-        .SmallInt => |i| Value{ .SmallInt = @intCast(@abs(i)) },
-        .BigInt => |i| Value{ .BigInt = @intCast(@abs(i)) },
+        // SONNY-2769: abs(minInt) does not fit its type; the cast aborted.
+        .Int => |i| Value{ .Int = std.math.cast(i64, @abs(i)) orelse return EvaluatorError.Overflow },
+        .SmallInt => |i| Value{ .SmallInt = std.math.cast(i16, @abs(i)) orelse return EvaluatorError.Overflow },
+        .BigInt => |i| Value{ .BigInt = std.math.cast(i64, @abs(i)) orelse return EvaluatorError.Overflow },
         .Real => |f| Value{ .Real = @abs(f) },
         .Double => |d| Value{ .Double = @abs(d) },
-        .Decimal128 => |d| Value{ .Decimal128 = .{ .coeff = @intCast(@abs(d.coeff)), .scale = d.scale } },
+        .Decimal128 => |d| Value{ .Decimal128 = .{ .coeff = std.math.cast(i128, @abs(d.coeff)) orelse return EvaluatorError.Overflow, .scale = d.scale } },
         else => EvaluatorError.TypeMismatch,
     };
 }

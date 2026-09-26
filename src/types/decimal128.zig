@@ -44,13 +44,16 @@ pub const Decimal128 = struct {
             }
         }
 
-        const scale: i16 = if (dot_pos) |dp| @intCast(str.len - dp - 1) else 0;
+        // SONNY-2769: more than 32767 fraction digits aborted the server in
+        // the cast, and the digit check compared with maxInt(u128), so a
+        // 39-digit coefficient overflowed i128 (and aborted) at `coeff * 10`.
+        const scale: i16 = if (dot_pos) |dp| std.math.cast(i16, str.len - dp - 1) orelse return Error.Overflow else 0;
 
         var coeff: i128 = 0;
         for (str[start..]) |c| {
             if (c == '.') continue;
             const digit = c - '0';
-            if (coeff > (@as(u128, std.math.maxInt(u128)) - digit) / 10) return Error.Overflow;
+            if (coeff > @divTrunc(@as(i128, std.math.maxInt(i128)) - digit, 10)) return Error.Overflow;
             coeff = coeff * 10 + digit;
         }
 
@@ -81,8 +84,8 @@ pub const Decimal128 = struct {
 
     pub fn mul(self: Decimal128, other: Decimal128) Error!Decimal128 {
         const result_coeff = std.math.mul(i128, self.coeff, other.coeff) catch return Error.Overflow;
-        const result_scale = self.scale + other.scale;
-        if (result_scale > std.math.maxInt(i16)) return Error.Overflow;
+        // SONNY-2769: the i16 sum itself overflowed before this check.
+        const result_scale = std.math.add(i16, self.scale, other.scale) catch return Error.Overflow;
         try checkPrecision(result_coeff); // GAP-0925
         return Decimal128{ .coeff = result_coeff, .scale = result_scale };
     }
@@ -90,17 +93,20 @@ pub const Decimal128 = struct {
     pub fn div(self: Decimal128, other: Decimal128) Error!Decimal128 {
         if (other.coeff == 0) return Error.DivisionByZero;
 
-        const scale_diff = self.scale - other.scale + 18;
+        // SONNY-2769: the scale difference in i32 (it overflowed i16), and
+        // minInt / -1 checked.
+        const scale_diff = @as(i32, self.scale) - other.scale + 18;
         const scale_factor = std.math.powi(i128, 10, scale_diff) catch return Error.Overflow;
         const scaled_dividend = std.math.mul(i128, self.coeff, scale_factor) catch return Error.Overflow;
-        const result_coeff = @divTrunc(scaled_dividend, other.coeff);
+        const result_coeff = std.math.divTrunc(i128, scaled_dividend, other.coeff) catch return Error.Overflow;
 
         return Decimal128{ .coeff = result_coeff, .scale = 18 };
     }
 
     fn rescale(self: Decimal128, new_scale: i16) Error!Decimal128 {
         if (new_scale < self.scale) return Error.Overflow;
-        const scale_diff = new_scale - self.scale;
+        // SONNY-2769: in i32 (the i16 difference overflowed).
+        const scale_diff = @as(i32, new_scale) - self.scale;
         const scale_factor = std.math.powi(i128, 10, scale_diff) catch return Error.Overflow;
         const new_coeff = std.math.mul(i128, self.coeff, scale_factor) catch return Error.Overflow;
         return Decimal128{ .coeff = new_coeff, .scale = new_scale };
@@ -109,7 +115,8 @@ pub const Decimal128 = struct {
     pub fn roundHalfEven(self: Decimal128, target_scale: i16) Error!Decimal128 {
         if (target_scale >= self.scale) return self;
 
-        const scale_diff = self.scale - target_scale;
+        // SONNY-2769: in i32 (the i16 difference overflowed).
+        const scale_diff = @as(i32, self.scale) - target_scale;
         const divisor = std.math.powi(i128, 10, scale_diff) catch return Error.Overflow;
         const quotient = @divTrunc(self.coeff, divisor);
         const remainder = @rem(self.coeff, divisor);
@@ -136,11 +143,13 @@ pub const Decimal128 = struct {
         }
 
         const abs_coeff = @abs(self.coeff);
-        const scale_power = std.math.powi(u128, 10, @as(u128, @intCast(self.scale))) catch unreachable;
+        // SONNY-2769: a negative scale or one past 10^38 is refused; the cast
+        // and `catch unreachable` aborted.
+        const scale_width = std.math.cast(usize, self.scale) orelse return Error.Overflow;
+        const scale_power = std.math.powi(u128, 10, scale_width) catch return Error.Overflow;
         const int_part = @divTrunc(abs_coeff, scale_power);
         const frac_part = @rem(abs_coeff, scale_power);
 
-        const scale_width = @as(usize, @intCast(self.scale));
         return std.fmt.allocPrint(allocator, "{s}{d}.{d:0>[3]}", .{
             if (self.coeff < 0) "-" else "",
             int_part,
