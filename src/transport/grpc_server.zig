@@ -302,10 +302,9 @@ pub const SessionStore = struct {
         // CANARY: REQ=REQ-DSN-GRAPH-BIND-004; FEATURE="DSNGraphBinding"; ASPECT=GrpcSessionGraph; STATUS=IMPL; OWNER=transport; UPDATED=2026-03-25
         if (graph) |g| {
             if (g.len > 0) {
-                if (state.exec_session) |*sess| {
-                    if (sess.graph) |old| self.allocator.free(old);
-                    sess.graph = try self.allocator.dupe(u8, g);
-                }
+                // SONNY-2775: stored the one way (the session's allocator);
+                // HELLO checked the bind before it got here.
+                if (state.exec_session) |*sess| try execution.session_graph.set(sess, g);
                 state.graph_bound = true;
             }
         }
@@ -1959,6 +1958,19 @@ fn handleHandshake(request_bytes: []const u8, trans: *GrpcTransport, allocator: 
         var resolved_graph: ?[]const u8 = null;
         if (req.graph) |requested_graph| {
             if (requested_graph.len > 0) {
+                // SONNY-2775: the bind check is `execution.session_graph.mayBind`,
+                // the one every session graph change uses.
+                const role_names_hello = [_][]const u8{@tagName(auth_result.role)};
+                const hello_principal = geode.security.principal_derive.derivePrincipal(.{
+                    .username = req.username,
+                    .role_names = &role_names_hello,
+                    .tenant_id = req.tenant_id,
+                    // active_graph = requested_graph so graph_grant_check_fn can widen access.
+                    .active_graph = requested_graph,
+                    .auth_version = auth_result.auth_version,
+                    .auth_method = .password,
+                    .source = .grpc_handler,
+                });
                 // Validate graph name: max 128 chars, alphanumeric + underscore only
                 if (requested_graph.len > 128) {
                     const resp = schema.HelloResponse{
@@ -1994,33 +2006,11 @@ fn handleHandshake(request_bytes: []const u8, trans: *GrpcTransport, allocator: 
                     // from auth_result so this site routes through gps.decide() for PDP uniformity.
                     // Phase 3 will rewire enforcement so principal threading is uniform across handlers.
                     // CANARY: REQ=REQ-GPS-PDP-005; FEATURE="GPS Decision Engine"; ASPECT=GrpcHandshakeEnforcement; STATUS=TESTED; TEST=tests/test_gps_decide.zig; OWNER=security; UPDATED=2026-05-20
-                    const rbac_allowed = rbac_blk: {
-                        // Compatibility invariant (#861): any authenticated user may always bind
-                        // the default graph by name — parity with the QUIC HELLO handler.
-                        // Auth-off is already handled: this entire block is nested under
-                        // `if (user_mgmt.isAuthEnabled())` above, so we only need the
-                        // default-graph short-circuit here.
-                        if (std.mem.eql(u8, requested_graph, graph_store.DEFAULT_GRAPH_NAME)) break :rbac_blk true;
-                        const gps = geode.security.gps;
-                        const role_names_hello = [_][]const u8{@tagName(auth_result.role)};
-                        const hello_principal = geode.security.principal_derive.derivePrincipal(.{
-                            .username = req.username,
-                            .role_names = &role_names_hello,
-                            .tenant_id = req.tenant_id,
-                            // active_graph = requested_graph so graph_grant_check_fn can widen access.
-                            .active_graph = requested_graph,
-                            .auth_version = auth_result.auth_version,
-                            .auth_method = .password,
-                            .source = .grpc_handler,
-                        });
-                        const gps_req = gps.DecisionRequest{
-                            .principal = &hello_principal,
-                            .action = .bind_graph,
-                            .resource = .{ .graph = requested_graph },
-                        };
-                        const decision = try gps.decide(std.heap.smp_allocator, &gps_req);
-                        break :rbac_blk (decision.kind == .allow);
-                    };
+                    // Compatibility invariant (#861, kept in mayBind): any authenticated
+                    // user may always bind the default graph by name — parity with the
+                    // QUIC HELLO handler. This block is nested under
+                    // `if (user_mgmt.isAuthEnabled())` above, so there is a principal.
+                    const rbac_allowed = execution.session_graph.mayBind(&hello_principal, requested_graph);
                     if (!rbac_allowed) {
                         const resp = schema.HelloResponse{
                             .success = false,
@@ -2050,6 +2040,17 @@ fn handleHandshake(request_bytes: []const u8, trans: *GrpcTransport, allocator: 
                                     Attr.string("graph", requested_graph),
                                     Attr.string("error", @errorName(err)),
                                 });
+                                // SONNY-2775: someone else created it; the bind check
+                                // applies, as on QUIC (it was missing here).
+                                if (!execution.session_graph.mayBind(&hello_principal, requested_graph)) {
+                                    const resp = schema.HelloResponse{
+                                        .success = false,
+                                        .session_id = "",
+                                        .error_message = "Access denied: insufficient permissions for graph",
+                                        .capabilities = caps,
+                                    };
+                                    return encodeMessage(allocator, resp);
+                                }
                                 resolved_graph = requested_graph;
                             } else {
                                 log.err("Graph auto-creation failed", &.{
@@ -2271,6 +2272,12 @@ fn readWillStreamEngineSide(state: *const server_state.ServerState, analysis: *c
 fn sessionGraphName(state: *const server_state.ServerState) []const u8 {
     if (state.exec_session) |*sess| return sess.graph orelse graph_store.DEFAULT_GRAPH_NAME;
     return state.current_graph orelse graph_store.DEFAULT_GRAPH_NAME;
+}
+
+/// SONNY-2775: where SESSION RESET and SESSION CLOSE take the session: the
+/// graph HELLO bound it to (`graph_bound`), or the default graph.
+fn homeGraphName(state: *const server_state.ServerState) []const u8 {
+    return if (state.graph_bound) sessionGraphName(state) else graph_store.DEFAULT_GRAPH_NAME;
 }
 
 fn readServedEngineDirect(state: *const server_state.ServerState, analysis: *const query_traits.ProgramAnalysis) bool {
@@ -2676,7 +2683,7 @@ pub fn handleExecute(request_bytes: []const u8, allocator: std.mem.Allocator, ep
             // in the program frees the session's string.
             const query_graph_name = try allocator.dupe(u8, sessionGraphName(state));
             defer allocator.free(query_graph_name);
-            const stmt_plan = query_traits.statementPlan(&parse_result.program, &analysis, query_graph_name, graph_store.DEFAULT_GRAPH_NAME, .grpc);
+            const stmt_plan = query_traits.statementPlan(&parse_result.program, &analysis, query_graph_name, homeGraphName(state), .grpc);
             // CANARY: REQ=REQ-SONNY-2749-PROGRAM-GRAPH-LOCK; FEATURE="StatementAuthorization"; ASPECT=GrpcHandler; STATUS=TESTED; TEST=tests/test_sonny2749_program_graph_lock.zig; OWNER=security; UPDATED=2026-09-25
             // SONNY-2749: every lock below is on the graph the program's
             // statements run on, which a USE GRAPH in it moves.

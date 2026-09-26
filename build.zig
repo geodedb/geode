@@ -4281,6 +4281,9 @@ pub fn build(b: *std.Build) void {
     cpa_accept_step.dependOn(&run_cpa_accept.step);
 
     const run_gql_conformance_tests = b.addRunArtifact(gql_conformance_tests);
+    // The suite spawns ./zig-out/bin/geode: install the server it tests
+    // (SONNY-2775: it ran whatever binary was last installed).
+    run_gql_conformance_tests.step.dependOn(&install_geode_exe.step);
     test_e2e_step.dependOn(&run_gql_conformance_tests.step);
     // GAP-0892: named step so the conformance suite (incl. the T11/T12/T14
     // count-pushdown regressions) can run without the rest of test-e2e.
@@ -8632,6 +8635,23 @@ pub fn build(b: *std.Build) void {
     shardDep(test_step, &run_sonny2755_tests.step, 0, test_shard_loads, test_shard_index);
     const sonny2755_step = b.step("test-sonny2755-yield-duplicate-columns", "Run SONNY-2755 regression (a YIELD that names a column twice is refused before the procedure runs, for every procedure that honours YIELD; the YIELD filter frees what it drops and keeps the result's value ownership; no double free, no leak)");
     sonny2755_step.dependOn(&run_sonny2755_tests.step);
+
+    // SONNY-2775: every change of a session's graph (USE GRAPH, SESSION SET
+    // [PROPERTY] GRAPH, SESSION RESET/CLOSE, HELLO) goes through one gate:
+    // bind_graph, existence (3F000), and a DSN-bound session keeps its graph.
+    // In process and over the real gRPC Execute handler (SONNY-1560 shim).
+    const sonny2775_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny2775_session_graph_gate.zig"), .target = target, .optimize = optimize });
+    sonny2775_test_mod.link_libc = true;
+    sonny2775_test_mod.addImport("geode", root_mod);
+    sonny2775_test_mod.addImport("schema", schema_mod);
+    sonny2775_test_mod.addImport("protobuf", protobuf_mod);
+    sonny2775_test_mod.addImport("grpc_impl", sonny1560_shim_mod);
+    sonny2775_test_mod.addImport("logging", logging_mod);
+    const sonny2775_tests = b.addTest(.{ .root_module = sonny2775_test_mod });
+    const run_sonny2775_tests = b.addRunArtifact(sonny2775_tests);
+    shardDep(test_step, &run_sonny2775_tests.step, 1, test_shard_loads, test_shard_index);
+    const sonny2775_step = b.step("test-sonny2775-session-graph-gate", "Run SONNY-2775 regression (no statement switches a session to a graph it may not bind or that does not exist; a DSN-bound session keeps its graph; no G1/G2 test graphs; the session owns what SESSION SET stores)");
+    sonny2775_step.dependOn(&run_sonny2775_tests.step);
 
     // SONNY-2744: a matching deny-effect GPS policy refuses what a builtin role,
     // an Admin shortcut or an allow policy would allow (gps.decide).

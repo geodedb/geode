@@ -6225,9 +6225,11 @@ fn auditQueryExecution(state: *const ServerState, query_text: []const u8, is_mut
 /// the session has been switched to a different graph.
 fn syncGraphFromSession(state: *ServerState) void {
     // Graph-authorization invariant (NEW-1 #861): sess.graph is ONLY ever set
-    // after a gps.decide(.bind_graph) authorization succeeds — at the QUIC HELLO
-    // bind path, the race-recovery bind path (both guarded in this file), and the
-    // mid-session USE GRAPH path (gated in execution.zig). Therefore current_graph,
+    // after a bind_graph authorization succeeds — at the QUIC HELLO bind path,
+    // the race-recovery bind path (both guarded in this file), and the
+    // mid-session USE GRAPH / SESSION SET [PROPERTY] GRAPH / SESSION RESET path.
+    // SONNY-2775: all of them go through `execution.session_graph` (`mayBind`,
+    // `set`, `change`); SESSION SET used to skip the check. Therefore current_graph,
     // copied from sess.graph below, is always an already-authorized graph. We do
     // NOT re-check RBAC here: there is no principal in scope at sync time, and a
     // re-check would only duplicate the gate that already ran at bind time.
@@ -6664,6 +6666,12 @@ fn sessionGraphName(state: *const ServerState) []const u8 {
     return state.current_graph orelse graph_store.DEFAULT_GRAPH_NAME;
 }
 
+/// SONNY-2775: where SESSION RESET and SESSION CLOSE take the session: the
+/// graph HELLO bound it to (`graph_bound`), or the default graph.
+fn homeGraphName(state: *const ServerState) []const u8 {
+    return if (state.graph_bound) sessionGraphName(state) else graph_store.DEFAULT_GRAPH_NAME;
+}
+
 fn readWillStreamEngineSide(
     state: *const ServerState,
     analysis: *const query_traits.ProgramAnalysis,
@@ -6965,6 +6973,23 @@ fn handleClientMessage(
             var resolved_graph: ?[]const u8 = null;
             if (hello_req.graph) |requested_graph| {
                 if (requested_graph.len > 0) {
+                    // SONNY-2775: the bind check is `execution.session_graph.mayBind`,
+                    // the one every session graph change uses; with authentication
+                    // off there is no principal to check.
+                    const hello_role_names: []const []const u8 = if (state.authenticated_role) |r|
+                        &[_][]const u8{@tagName(@as(user_mgmt.Role, @enumFromInt(r)))}
+                    else
+                        &.{};
+                    const hello_principal = geode.security.principal_derive.derivePrincipal(.{
+                        .username = state.authenticated_user,
+                        .role_names = hello_role_names,
+                        .tenant_id = if (state.session_config) |cfg| cfg.tenant_id else null,
+                        .active_graph = requested_graph,
+                        .auth_version = state.authenticated_auth_version,
+                        .auth_method = .password,
+                        .source = .quic_handler,
+                    });
+                    const bind_principal: ?*const geode.security.principal.Principal = if (user_mgmt.isAuthEnabled()) &hello_principal else null;
                     // Validate graph name: max 128 chars, alphanumeric + underscore only
                     if (requested_graph.len > 128) {
                         const resp = schema.QuicServerMessage{ .hello = .{
@@ -7001,34 +7026,9 @@ fn handleClientMessage(
                         // USE GRAPH and (post-Task-4) the gRPC HELLO handler. Deletes the
                         // Wyhash(username) uid derivation (closing NEW-11; GPS resolves uid via
                         // agm.findUserIdByName inside graphGrantCheck). Fail-closed on GPS error.
-                        const rbac_allowed = blk: {
-                            if (!user_mgmt.isAuthEnabled()) break :blk true; // auth-off = allow
-                            // Compatibility invariant: any authenticated user may always bind the
-                            // default graph by name (belt-and-suspenders; preserves single-graph
-                            // deployments that never issue per-graph grants).
-                            if (std.mem.eql(u8, requested_graph, graph_store.DEFAULT_GRAPH_NAME)) break :blk true;
-                            const gps_mod = geode.security.gps;
-                            const role_names_hello: []const []const u8 = if (state.authenticated_role) |r|
-                                &[_][]const u8{@tagName(@as(user_mgmt.Role, @enumFromInt(r)))}
-                            else
-                                &.{};
-                            const hello_principal = geode.security.principal_derive.derivePrincipal(.{
-                                .username = state.authenticated_user,
-                                .role_names = role_names_hello,
-                                .tenant_id = if (state.session_config) |cfg| cfg.tenant_id else null,
-                                .active_graph = requested_graph,
-                                .auth_version = state.authenticated_auth_version,
-                                .auth_method = .password,
-                                .source = .quic_handler,
-                            });
-                            const gps_req = gps_mod.DecisionRequest{
-                                .principal = &hello_principal,
-                                .action = .bind_graph,
-                                .resource = .{ .graph = requested_graph },
-                            };
-                            const decision = gps_mod.decide(gpa, &gps_req) catch break :blk false;
-                            break :blk (decision.kind == .allow);
-                        };
+                        // Compatibility invariant (kept in mayBind): any authenticated user
+                        // may always bind the default graph by name.
+                        const rbac_allowed = execution.session_graph.mayBind(bind_principal, requested_graph);
 
                         if (!rbac_allowed) {
                             const resp = schema.QuicServerMessage{ .hello = .{
@@ -7042,10 +7042,7 @@ fn handleClientMessage(
                         }
 
                         // Graph exists — bind session to it
-                        if (state.exec_session) |*sess| {
-                            if (sess.graph) |old| gpa.free(old);
-                            sess.graph = try gpa.dupe(u8, requested_graph);
-                        }
+                        if (state.exec_session) |*sess| try execution.session_graph.set(sess, requested_graph);
                         state.graph_bound = true;
                         resolved_graph = requested_graph;
                     } else {
@@ -7080,31 +7077,7 @@ fn handleClientMessage(
                                     // exists (concurrent create). Before binding, apply the SAME GPS gate as
                                     // the existing-graph path to prevent a ReadWrite user from binding a graph
                                     // they don't hold a per-graph grant for.
-                                    const race_rbac_allowed = blk: {
-                                        if (!user_mgmt.isAuthEnabled()) break :blk true;
-                                        if (std.mem.eql(u8, requested_graph, graph_store.DEFAULT_GRAPH_NAME)) break :blk true;
-                                        const gps_mod = geode.security.gps;
-                                        const role_names_race: []const []const u8 = if (state.authenticated_role) |r|
-                                            &[_][]const u8{@tagName(@as(user_mgmt.Role, @enumFromInt(r)))}
-                                        else
-                                            &.{};
-                                        const race_principal = geode.security.principal_derive.derivePrincipal(.{
-                                            .username = state.authenticated_user,
-                                            .role_names = role_names_race,
-                                            .tenant_id = if (state.session_config) |cfg| cfg.tenant_id else null,
-                                            .active_graph = requested_graph,
-                                            .auth_version = state.authenticated_auth_version,
-                                            .auth_method = .password,
-                                            .source = .quic_handler,
-                                        });
-                                        const gps_req_race = gps_mod.DecisionRequest{
-                                            .principal = &race_principal,
-                                            .action = .bind_graph,
-                                            .resource = .{ .graph = requested_graph },
-                                        };
-                                        const decision = gps_mod.decide(gpa, &gps_req_race) catch break :blk false;
-                                        break :blk (decision.kind == .allow);
-                                    };
+                                    const race_rbac_allowed = execution.session_graph.mayBind(bind_principal, requested_graph);
                                     if (!race_rbac_allowed) {
                                         const resp = schema.QuicServerMessage{ .hello = .{
                                             .success = false,
@@ -7115,10 +7088,7 @@ fn handleClientMessage(
                                         try sendQuicMessage(gpa, stream, resp);
                                         return;
                                     }
-                                    if (state.exec_session) |*sess| {
-                                        if (sess.graph) |old| gpa.free(old);
-                                        sess.graph = try gpa.dupe(u8, requested_graph);
-                                    }
+                                    if (state.exec_session) |*sess| try execution.session_graph.set(sess, requested_graph);
                                     state.graph_bound = true;
                                     resolved_graph = requested_graph;
                                     break :auto_create_done;
@@ -7175,10 +7145,9 @@ fn handleClientMessage(
                                 },
                             };
 
-                            if (state.exec_session) |*sess| {
-                                if (sess.graph) |old| gpa.free(old);
-                                sess.graph = try gpa.dupe(u8, requested_graph);
-                            }
+                            // SONNY-2775: the session binds the graph it just created
+                            // (a role that may create graphs); no bind check.
+                            if (state.exec_session) |*sess| try execution.session_graph.set(sess, requested_graph);
                             state.graph_bound = true;
                             resolved_graph = requested_graph;
                         } else {
@@ -7392,7 +7361,7 @@ fn handleClientMessage(
             // SONNY-2743: the lock, and whether the write gate applies, come
             // from the whole program (`statementPlan`), never from its last
             // query alone.
-            const stmt_plan = query_traits.statementPlan(&parse_result.program, &analysis, query_graph_name, graph_store.DEFAULT_GRAPH_NAME, .quic);
+            const stmt_plan = query_traits.statementPlan(&parse_result.program, &analysis, query_graph_name, homeGraphName(state), .quic);
             const program_is_mutating = stmt_plan.is_mutation;
             // CANARY: REQ=REQ-SONNY-2749-PROGRAM-GRAPH-LOCK; FEATURE="StatementAuthorization"; ASPECT=QuicHandler; STATUS=TESTED; TEST=tests/test_sonny2749_program_graph_lock.zig; OWNER=security; UPDATED=2026-09-25
             // SONNY-2749: every lock below is on the graph the program's

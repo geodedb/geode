@@ -2,6 +2,34 @@
 
 This document describes the session management features in Geode, including session parameters and transaction handling.
 
+## The session graph
+
+A session's graph is the graph its statements read and write. Every session
+starts on the graph its connection names, or on `default`. These statements
+move it, and they all go through the same checks (SONNY-2775):
+
+```gql
+USE GRAPH hr
+SESSION SET GRAPH hr
+SESSION SET PROPERTY GRAPH hr
+SESSION RESET              -- also SESSION RESET GRAPH, SESSION RESET ALL CHARACTERISTICS
+SESSION CLOSE
+```
+
+- **Permission:** the user must be allowed to bind the graph (`bind_graph`:
+  Admin, a grant on the graph, or ReadWrite in a single-tenant deployment).
+  Anyone may bind `default`. A refusal is `42501`.
+- **Existence:** the graph must exist, or the statement fails with `3F000`.
+  A statement never creates a graph.
+- **A connection bound to a graph** (the graph in its connection string) stays
+  on it: naming another graph fails, and `SESSION RESET` and `SESSION CLOSE`
+  keep it.
+- `CURRENT_GRAPH` and `CURRENT_PROPERTY_GRAPH` name the session's graph (no
+  change). `HOME_GRAPH` and `HOME_PROPERTY_GRAPH` name where `SESSION RESET`
+  goes: the connection's graph, or `default`.
+
+A statement that fails changes nothing, and the session keeps its graph.
+
 ## Session Parameters
 
 Session parameters allow you to store named values that persist across queries within a session. Geode supports three types of session parameters:

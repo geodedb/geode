@@ -413,7 +413,9 @@ pub const spans_graphs_message = "A request that changes data must run all its s
 
 /// SONNY-2743: decide the `StatementPlan` for `program` (analysed as
 /// `analysis`) in a session whose graph is `session_graph` (the executor
-/// session's; `default_graph` when it has none).
+/// session's; `default` when it has none). `home_graph` is where SESSION
+/// RESET and SESSION CLOSE take it (SONNY-2775): the session's DSN-bound graph,
+/// or `default`.
 ///
 /// `ProgramAnalysis.kind`, `.target`, `.is_store_free` and `.is_point_read`
 /// describe the program's LAST query only, and they used to decide alone. QUIC
@@ -436,7 +438,7 @@ pub fn statementPlan(
     program: *const ast.Program,
     analysis: *const ProgramAnalysis,
     session_graph: []const u8,
-    default_graph: []const u8,
+    home_graph: []const u8,
     transport: HandlerTransport,
 ) StatementPlan {
     const self_locking = isSelfLockingProgram(program);
@@ -444,7 +446,7 @@ pub fn statementPlan(
     const rest_is_noop = restOfProgramIsNoop(analysis, session_graph);
     const store_free = transport == .quic and analysis.kind == .rows and analysis.is_store_free and rest_is_noop;
     const needs_store_lock = !self_locking and analysis.kind != .explain and !store_free;
-    const program_graph = programGraph(program, session_graph, default_graph);
+    const program_graph = programGraph(program, session_graph, home_graph);
     return .{
         .is_mutation = is_mutation,
         .needs_store_lock = needs_store_lock,
@@ -456,34 +458,67 @@ pub fn statementPlan(
 }
 
 // CANARY: REQ=REQ-SONNY-2749-PROGRAM-GRAPH-LOCK; FEATURE="StatementAuthorization"; ASPECT=ProgramGraph; STATUS=TESTED; TEST=tests/test_sonny2749_program_graph_lock.zig; OWNER=security; UPDATED=2026-09-25
+/// SONNY-2775: what a USE GRAPH or SESSION SET [PROPERTY] GRAPH names, as
+/// the executor (`execution.session_graph.change`) and `programGraph` both
+/// read it.
+pub const GraphTarget = union(enum) {
+    /// A graph, by name.
+    named: []const u8,
+    /// CURRENT_GRAPH or CURRENT_PROPERTY_GRAPH: the session's graph.
+    current,
+    /// HOME_GRAPH or HOME_PROPERTY_GRAPH, and where SESSION RESET and SESSION
+    /// CLOSE go: the session's DSN-bound graph, or the default graph.
+    home,
+};
+
+/// SONNY-2775: the target a graph name in USE GRAPH or SESSION SET [PROPERTY]
+/// GRAPH stands for. The ISO GQL current-graph and home-graph names are
+/// matched case-insensitively; they used to be taken as graph names.
+pub fn graphTarget(name: []const u8) GraphTarget {
+    const eql = std.ascii.eqlIgnoreCase;
+    if (eql(name, "CURRENT_GRAPH") or eql(name, "CURRENT_PROPERTY_GRAPH")) return .current;
+    if (eql(name, "HOME_GRAPH") or eql(name, "HOME_PROPERTY_GRAPH")) return .home;
+    return .{ .named = name };
+}
+
+fn moveTo(current: []const u8, target: GraphTarget, home_graph: []const u8) []const u8 {
+    return switch (target) {
+        .named => |name| name,
+        .current => current,
+        .home => home_graph,
+    };
+}
+
 /// SONNY-2749: the graph every statement of `program` that touches graph data
 /// runs on, following the executor. The program starts on `start_graph` (the
 /// session's graph). `USE GRAPH g` and `SESSION SET PROPERTY GRAPH g` move it
-/// to `g`, taking the name exactly as the executor stores it. `SESSION RESET`
-/// (with no argument, ALL CHARACTERISTICS or [PROPERTY] GRAPH) and `SESSION
-/// CLOSE` move it back to `default_graph`. Every other statement runs on the
-/// graph current at that point, except transaction control (a START
-/// TRANSACTION with a body runs its body there) and EXPLAIN, which only plans.
-/// Returns null when those statements run on more than one graph, and
-/// `start_graph` when there are none.
+/// to `g`, taking the name exactly as the executor stores it (SONNY-2775:
+/// CURRENT_GRAPH stays, HOME_GRAPH goes home). `SESSION RESET` (with no
+/// argument, ALL CHARACTERISTICS or [PROPERTY] GRAPH) and `SESSION CLOSE`
+/// move it back to `home_graph`: the session's DSN-bound graph, or the
+/// default graph. Every other statement runs on the graph current at that
+/// point, except transaction control (a START TRANSACTION with a body runs
+/// its body there) and EXPLAIN, which only plans. Returns null when those
+/// statements run on more than one graph, and `start_graph` when there are
+/// none.
 ///
 /// The handlers used to lock the session graph whatever the program selected,
 /// so `USE GRAPH g2; MERGE (:K {id: 1})` wrote g2 holding another graph's
 /// write lock, beside g2's own writers.
-pub fn programGraph(program: *const ast.Program, start_graph: []const u8, default_graph: []const u8) ?[]const u8 {
+pub fn programGraph(program: *const ast.Program, start_graph: []const u8, home_graph: []const u8) ?[]const u8 {
     var current = start_graph;
     var runs_on: ?[]const u8 = null;
     for (program.statements) |*stmt| {
         switch (stmt.*) {
-            .UseGraph => |ug| current = ug.graph_name,
+            .UseGraph => |ug| current = moveTo(current, graphTarget(ug.graph_name), home_graph),
             .SessionSet => |ss| switch (ss.clause_type) {
-                .Graph => |g| current = g.expression,
+                .Graph => |g| current = moveTo(current, graphTarget(g.expression), home_graph),
                 else => {},
             },
             .SessionReset => |sr| {
-                if (sessionResetClearsGraph(sr)) current = default_graph;
+                if (sessionResetClearsGraph(sr)) current = home_graph;
             },
-            .SessionClose => current = default_graph,
+            .SessionClose => current = home_graph,
             .Commit, .Rollback, .Explain => {},
             .StartTransaction => |txn| {
                 if (txn.body != null and !noteGraph(&runs_on, current)) return null;
@@ -494,9 +529,9 @@ pub fn programGraph(program: *const ast.Program, start_graph: []const u8, defaul
     return runs_on orelse start_graph;
 }
 
-/// Does `SESSION RESET ...` clear the session graph? As the executor runs it:
-/// no argument and ALL CHARACTERISTICS reset the whole session.
-fn sessionResetClearsGraph(sr: ast.SessionResetStatement) bool {
+/// Does `SESSION RESET ...` send the session graph home? As the executor runs
+/// it: no argument and ALL CHARACTERISTICS reset the whole session.
+pub fn sessionResetClearsGraph(sr: ast.SessionResetStatement) bool {
     const reset_args = sr.arguments orelse return true;
     return switch (reset_args) {
         .All => |all| all == .Characteristics,

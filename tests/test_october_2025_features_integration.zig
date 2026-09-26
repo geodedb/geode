@@ -272,6 +272,9 @@ test "Integration: Session management graph switching" {
     var session_state = execution.SessionState.init(allocator);
     defer session_state.deinit();
 
+    // SONNY-2775: SESSION SET GRAPH checks that the graph exists.
+    try env.store.createGraph("test_graph");
+
     // Set graph
     const set_query = "SESSION SET GRAPH test_graph";
     var set_result = try geode.parseGql(set_query, allocator);
@@ -339,6 +342,9 @@ test "Integration: Combined features - social network analysis" {
     // Create session
     var session_state = execution.SessionState.init(allocator);
     defer session_state.deinit();
+
+    // SONNY-2775: SESSION SET GRAPH checks that the graph exists.
+    try store.createGraph("social_network");
 
     // Set up session
     const session_query = "SESSION SET GRAPH social_network";

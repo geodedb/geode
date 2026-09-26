@@ -29,15 +29,33 @@ fn deinitExpectedValue(allocator: std.mem.Allocator, val: ExpectedValue) void {
     }
 }
 
-// ENG-3921 follow-up: each test spawns its own server, and the G1/G2 session
-// seed helpers (`createTestGraphG1`) clear only RESIDENT nodes — a fresh server
-// lazily hydrates the previous test's persisted seed afterwards, so a shared
-// per-process data dir accumulates G1 rows across tests (count 3 → 6 → 9 …).
-// Give every spawn its own data dir; these tests are single-server and need no
-// cross-spawn durability.
+// ENG-3921 follow-up: each test spawns its own server. Give every spawn its
+// own data dir; these tests are single-server and need no cross-spawn
+// durability.
 var run_query_serial = std.atomic.Value(u32).init(0);
 
+// SONNY-2775: `SESSION SET PROPERTY GRAPH G1` used to create the test graphs G1
+// and G2 in the server itself. The tests that switch to them now create them,
+// in requests of their own on the same connection, and go back to the
+// session's home graph before the query under test runs.
+const seed_g1 = [_][]const u8{
+    "CREATE GRAPH G1",
+    "USE GRAPH G1; CREATE (a:T {label: 'A', v: 1}), (b:T {label: 'A', v: 2}), (c:T {label: 'B'})",
+    "SESSION RESET GRAPH",
+};
+const seed_g2 = [_][]const u8{
+    "CREATE GRAPH G2",
+    "USE GRAPH G2; CREATE (a:Node {v: 1}), (b:Node {v: 1})",
+    "SESSION RESET GRAPH",
+};
+
 fn runQuery(allocator: std.mem.Allocator, query: []const u8) !util.ExecResult {
+    return runQuerySeeded(allocator, &.{}, query);
+}
+
+/// `query` on a fresh server, after the `seeds` (each a request of its own on
+/// the same connection, each required to succeed).
+fn runQuerySeeded(allocator: std.mem.Allocator, seeds: []const []const u8, query: []const u8) !util.ExecResult {
     const addr = "127.0.0.1:3181";
     const serial = run_query_serial.fetchAdd(1, .monotonic);
     const pid = if (comptime @import("builtin").os.tag == .linux)
@@ -69,6 +87,15 @@ fn runQuery(allocator: std.mem.Allocator, query: []const u8) !util.ExecResult {
 
     var hello = try client.hello(allocator, util.defaultUsername(), util.defaultPassword());
     hello.deinit(allocator);
+
+    for (seeds) |seed| {
+        var seeded = try client.executeAndCollect(allocator, seed, util.emptyParams(), 1024);
+        defer seeded.deinit(allocator);
+        if (seeded.error_code) |code| {
+            std.debug.print("seed '{s}' failed: {s} {s}\n", .{ seed, code, seeded.error_message orelse "" });
+            return error.SeedFailed;
+        }
+    }
 
     const params = util.emptyParams();
     return client.executeAndCollect(allocator, query, params, 1024);
@@ -318,7 +345,7 @@ test "T11: Session graph switch applies" {
     const query =
         "SESSION SET PROPERTY GRAPH \"G1\";\n" ++
         "MATCH (n) RETURN count(*) AS c";
-    var result = try runQuery(allocator, query);
+    var result = try runQuerySeeded(allocator, &seed_g1, query);
     defer result.deinit(allocator);
 
     const expected_rows = [_][]const ExpectedValue{
@@ -332,7 +359,7 @@ test "T12: Switch to another graph" {
     const query =
         "SESSION SET PROPERTY GRAPH G2;\n" ++
         "MATCH (n) RETURN count(*) AS c";
-    var result = try runQuery(allocator, query);
+    var result = try runQuerySeeded(allocator, &seed_g2, query);
     defer result.deinit(allocator);
 
     const expected_rows = [_][]const ExpectedValue{
@@ -341,7 +368,9 @@ test "T12: Switch to another graph" {
     try expectSuccess(allocator, &result, &.{"c"}, &expected_rows, &.{});
 }
 
-test "T13: Non-existent graph auto-create (empty)" {
+test "T13: Non-existent graph is refused (3F000)" {
+    // SONNY-2775: SESSION SET PROPERTY GRAPH checks that the graph exists, as
+    // USE GRAPH does; it used to switch to any name (here, an empty graph).
     const allocator = testing.allocator;
     const query =
         "SESSION SET PROPERTY GRAPH \"NewG\";\n" ++
@@ -349,10 +378,7 @@ test "T13: Non-existent graph auto-create (empty)" {
     var result = try runQuery(allocator, query);
     defer result.deinit(allocator);
 
-    const expected_rows = [_][]const ExpectedValue{
-        &[_]ExpectedValue{.{ .Int = 0 }},
-    };
-    try expectSuccess(allocator, &result, &.{"c"}, &expected_rows, &.{});
+    try expectError(&result, "3F000", "Graph does not exist", &.{});
 }
 
 test "T14: COUNT(*) over matches" {
@@ -360,7 +386,7 @@ test "T14: COUNT(*) over matches" {
     const query =
         "SESSION SET PROPERTY GRAPH G1;\n" ++
         "MATCH (n) RETURN count(*) AS c";
-    var result = try runQuery(allocator, query);
+    var result = try runQuerySeeded(allocator, &seed_g1, query);
     defer result.deinit(allocator);
 
     const expected_rows = [_][]const ExpectedValue{
@@ -374,7 +400,7 @@ test "T15: GROUP BY property with HAVING" {
     const query =
         "SESSION SET PROPERTY GRAPH G1;\n" ++
         "MATCH (n) RETURN n.label AS L, count(*) AS c GROUP BY n.label HAVING c >= 2 ORDER BY L";
-    var result = try runQuery(allocator, query);
+    var result = try runQuerySeeded(allocator, &seed_g1, query);
     defer result.deinit(allocator);
 
     const expected_rows = [_][]const ExpectedValue{
@@ -388,7 +414,7 @@ test "T16: SUM/AVG with NULLs skipped" {
     const query =
         "SESSION SET PROPERTY GRAPH G1;\n" ++
         "MATCH (n) RETURN sum(n.v) AS s, avg(n.v) AS a";
-    var result = try runQuery(allocator, query);
+    var result = try runQuerySeeded(allocator, &seed_g1, query);
     defer result.deinit(allocator);
 
     const expected_rows = [_][]const ExpectedValue{
@@ -402,7 +428,7 @@ test "T17: COUNT(expr) vs COUNT(*)" {
     const query =
         "SESSION SET PROPERTY GRAPH G1;\n" ++
         "MATCH (n) RETURN count(n.v) AS cnv, count(*) AS cstar";
-    var result = try runQuery(allocator, query);
+    var result = try runQuerySeeded(allocator, &seed_g1, query);
     defer result.deinit(allocator);
 
     const expected_rows = [_][]const ExpectedValue{
@@ -416,7 +442,7 @@ test "T18: COUNT(DISTINCT …)" {
     const query =
         "SESSION SET PROPERTY GRAPH G2;\n" ++
         "MATCH (n) RETURN count(DISTINCT n.v) AS d";
-    var result = try runQuery(allocator, query);
+    var result = try runQuerySeeded(allocator, &seed_g2, query);
     defer result.deinit(allocator);
 
     const expected_rows = [_][]const ExpectedValue{
@@ -430,7 +456,7 @@ test "T19: GROUP BY legality (error)" {
     const query =
         "SESSION SET PROPERTY GRAPH G1;\n" ++
         "MATCH (n) RETURN n.label, sum(n.v)";
-    var result = try runQuery(allocator, query);
+    var result = try runQuerySeeded(allocator, &seed_g1, query);
     defer result.deinit(allocator);
 
     try expectError(&result, "42000", "grouping error: non-aggregated expression not in GROUP BY", &.{});

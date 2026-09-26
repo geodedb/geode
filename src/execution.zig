@@ -51,6 +51,9 @@ const call_operations = @import("execution/call_operations.zig");
 const execution_helpers = @import("execution/execution_helpers.zig");
 const match_operations = @import("execution/match_operations.zig");
 const statement_handlers = @import("execution/statement_handlers.zig");
+// SONNY-2775: the one gate for a change of a session's graph.
+pub const session_graph = @import("execution/session_graph.zig");
+const query_traits = @import("query/query_traits.zig");
 const aggregation_evaluation = @import("execution/aggregation_evaluation.zig");
 pub const distinct_set = @import("execution/distinct_set.zig");
 const return_and_sorting = @import("execution/return_and_sorting.zig");
@@ -486,25 +489,77 @@ pub const SessionState = struct {
     }
 
     pub fn reset(self: *SessionState) void {
-        if (self.schema) |s| {
-            self.allocator.free(s);
-            self.schema = null;
-        }
         if (self.graph) |g| {
             self.allocator.free(g);
             self.graph = null;
+        }
+        self.resetCharacteristics();
+    }
+
+    /// SONNY-2775: reset everything but the graph: the schema, the time
+    /// zone and the parameters. SESSION RESET and SESSION CLOSE move the
+    /// graph through `session_graph.change`, which a DSN-bound session's
+    /// graph survives.
+    pub fn resetCharacteristics(self: *SessionState) void {
+        if (self.schema) |s| {
+            self.allocator.free(s);
+            self.schema = null;
         }
         if (self.timezone) |tz| {
             self.allocator.free(tz);
             self.timezone = null;
         }
+        self.clearParameters();
+    }
 
+    pub fn clearParameters(self: *SessionState) void {
         var iter = self.parameters.iterator();
         while (iter.next()) |entry| {
             self.allocator.free(entry.key_ptr.*);
             self.allocator.free(entry.value_ptr.*);
         }
         self.parameters.clearRetainingCapacity();
+    }
+
+    /// SONNY-2775: replace an owned optional string field with a copy of
+    /// `value` in the session's allocator (the session frees it). The
+    /// executor used to store these with the request's allocator.
+    fn replaceField(self: *SessionState, field: *?[]const u8, value: ?[]const u8) std.mem.Allocator.Error!void {
+        const copy: ?[]const u8 = if (value) |v| try self.allocator.dupe(u8, v) else null;
+        if (field.*) |old| self.allocator.free(old);
+        field.* = copy;
+    }
+
+    pub fn setSchema(self: *SessionState, schema_name: ?[]const u8) std.mem.Allocator.Error!void {
+        try self.replaceField(&self.schema, schema_name);
+    }
+
+    pub fn setTimeZone(self: *SessionState, tz: ?[]const u8) std.mem.Allocator.Error!void {
+        try self.replaceField(&self.timezone, tz);
+    }
+
+    /// Set session parameter `name` to `value`; both are copied into the
+    /// session's allocator. Setting it again replaces the value and keeps
+    /// the key (a plain `put` leaked the old key and value).
+    pub fn setParameter(self: *SessionState, name: []const u8, value: []const u8) std.mem.Allocator.Error!void {
+        if (self.parameters.getPtr(name)) |value_ptr| {
+            const value_copy = try self.allocator.dupe(u8, value);
+            self.allocator.free(value_ptr.*);
+            value_ptr.* = value_copy;
+            return;
+        }
+        const key_copy = try self.allocator.dupe(u8, name);
+        errdefer self.allocator.free(key_copy);
+        const value_copy = try self.allocator.dupe(u8, value);
+        errdefer self.allocator.free(value_copy);
+        try self.parameters.put(key_copy, value_copy);
+    }
+
+    pub fn removeParameter(self: *SessionState, name: []const u8) void {
+        if (self.parameters.fetchRemove(name)) |entry| {
+            self.allocator.free(entry.key);
+            self.allocator.free(entry.value);
+        }
     }
 };
 
@@ -1559,73 +1614,41 @@ fn executeStatementWithContextInner(allocator: std.mem.Allocator, stmt: ast.Stat
         },
         .SessionSet => |ss| {
             // CANARY: REQ=REQ-GQL-081; FEATURE="SessionManagement"; ASPECT=SessionSet; STATUS=TESTED; OWNER=engine; UPDATED=2025-10-09
-            // Update session state if available
-            if (context.session_state) |session| {
-                switch (ss.clause_type) {
-                    .Graph => |graph| {
-                        // Set the current graph in session
-                        if (session.graph) |old_graph| {
-                            allocator.free(old_graph);
-                        }
-                        session.graph = try allocator.dupe(u8, graph.expression);
+            // CANARY: REQ=REQ-SONNY-2775-SESSION-GRAPH-GATE; FEATURE="GraphRBACEnforcement"; ASPECT=SessionSetGraph; STATUS=TESTED; TEST=tests/test_sonny2775_session_graph_gate.zig; OWNER=security; UPDATED=2026-09-26
+            // SONNY-2775: SESSION SET [PROPERTY] GRAPH goes through the gate
+            // USE GRAPH takes: bind_graph, then existence (3F000), and a
+            // DSN-bound session stays on its graph. It used to store any name
+            // with no check (so a user refused USE GRAPH hr could read hr),
+            // with the request's allocator, and it created test graphs G1 and
+            // G2. Every session field is now owned by the session's allocator.
+            switch (ss.clause_type) {
+                .Graph => |graph| try session_graph.change(context, query_traits.graphTarget(graph.expression)),
+                .TimeZone => |tz| if (context.session_state) |session| try session.setTimeZone(tz.value),
+                .Schema => |schema| if (context.session_state) |session| try session.setSchema(schema.name),
+                .Parameter => |param| if (context.session_state) |session| {
+                    const param_name = switch (param) {
+                        .GraphParam => |gp| gp.parameter_name.specification,
+                        .BindingTableParam => |btp| btp.parameter_name.specification,
+                        .ValueParam => |vp| vp.parameter_name.specification,
+                    };
 
-                        // Create test data for known test graphs
-                        // Support both quoted and unquoted graph names
-                        const graph_name = graph.expression;
-                        if (std.mem.eql(u8, graph_name, "G1")) {
-                            try createTestGraphG1(allocator);
-                        } else if (std.mem.eql(u8, graph_name, "G2")) {
-                            try createTestGraphG2(allocator);
-                        }
-                        // For other graphs (including "NewG"), just set the session graph
-                        // MATCH will filter by graph_name, so an empty graph returns 0 results naturally
-                    },
-                    .TimeZone => |tz| {
-                        // Set timezone in session state
-                        if (session.timezone) |old_tz| {
-                            allocator.free(old_tz);
-                        }
-                        session.timezone = try allocator.dupe(u8, tz.value);
-                    },
-                    .Schema => |schema| {
-                        // Set current schema in session state
-                        if (session.schema) |old_schema| {
-                            allocator.free(old_schema);
-                        }
-                        session.schema = try allocator.dupe(u8, schema.name);
-                    },
-                    .Parameter => |param| {
-                        // Store parameter in session state
-                        const param_name = switch (param) {
-                            .GraphParam => |gp| gp.parameter_name.specification,
-                            .BindingTableParam => |btp| btp.parameter_name.specification,
-                            .ValueParam => |vp| vp.parameter_name.specification,
-                        };
+                    const param_value = switch (param) {
+                        .GraphParam => |gp| gp.initializer orelse "null",
+                        .BindingTableParam => |btp| btp.initializer orelse "null",
+                        .ValueParam => |vp| vp.initializer orelse "null",
+                    };
 
-                        const param_value = switch (param) {
-                            .GraphParam => |gp| gp.initializer orelse "null",
-                            .BindingTableParam => |btp| btp.initializer orelse "null",
-                            .ValueParam => |vp| vp.initializer orelse "null",
-                        };
+                    const if_not_exists = switch (param) {
+                        .GraphParam => |gp| gp.parameter_name.if_not_exists,
+                        .BindingTableParam => |btp| btp.parameter_name.if_not_exists,
+                        .ValueParam => |vp| vp.parameter_name.if_not_exists,
+                    };
 
-                        // Check IF NOT EXISTS flag
-                        const if_not_exists = switch (param) {
-                            .GraphParam => |gp| gp.parameter_name.if_not_exists,
-                            .BindingTableParam => |btp| btp.parameter_name.if_not_exists,
-                            .ValueParam => |vp| vp.parameter_name.if_not_exists,
-                        };
-
-                        if (if_not_exists and session.parameters.contains(param_name)) {
-                            // Parameter already exists and IF NOT EXISTS is set, skip
-                        } else {
-                            // Store or update parameter
-                            try session.parameters.put(
-                                try allocator.dupe(u8, param_name),
-                                try allocator.dupe(u8, param_value),
-                            );
-                        }
-                    },
-                }
+                    // IF NOT EXISTS keeps a parameter that is already set.
+                    if (!(if_not_exists and session.parameters.contains(param_name))) {
+                        try session.setParameter(param_name, param_value);
+                    }
+                },
             }
 
             const columns = try allocator.alloc([]const u8, 1);
@@ -2231,67 +2254,12 @@ fn executeStatementWithContextInner(allocator: std.mem.Allocator, stmt: ast.Stat
         },
         .UseGraph => |ug| {
             // CANARY: REQ=REQ-DSN-GRAPH-BIND-002; FEATURE="DSNGraphBinding"; ASPECT=UseGraphRejection; STATUS=TESTED; TEST=geodetestlab-cli/specs/dsn_graph_binding.yml; OWNER=engine; UPDATED=2026-06-11
-            // When session is bound via DSN, allow USE GRAPH if it matches the
-            // bound graph (idempotent no-op). Reject only if switching to a
-            // different graph.
-            if (context.graph_bound) {
-                if (context.session_state) |session| {
-                    if (session.graph) |bound| {
-                        if (std.mem.eql(u8, bound, ug.graph_name)) {
-                            // Same graph — no-op, return empty success result
-                            return ExecutionResult{
-                                .columns = try allocator.alloc([]const u8, 0),
-                                .rows = try allocator.alloc([]value_types.Value, 0),
-                                .flags = std.ArrayList([]const u8).empty,
-                            };
-                        }
-                    }
-                }
-                return error.GraphBound;
-            }
             // CANARY: REQ=REQ-GPS-BIND-002; FEATURE="GPS BindGraph Action"; ASPECT=UseGraphAuthorization; STATUS=TESTED; TEST=tests/test_gps_bind_graph.zig; OWNER=security; UPDATED=2026-05-20
-            // Phase 3: gate USE GRAPH on gps.decide(.bind_graph). When the
-            // execution context carries a Principal, the decision determines
-            // whether the switch is permitted. Legacy paths without a
-            // principal (tests, internal callers) bypass this check —
-            // Phase 3+ will narrow that exemption.
-            if (context.principal) |princ| {
-                const gps_mod = @import("security/gps.zig");
-                const req_bind = gps_mod.DecisionRequest{
-                    .principal = princ,
-                    .action = .bind_graph,
-                    .resource = .{ .graph = ug.graph_name },
-                };
-                const decision_bind = try gps_mod.decide(std.heap.smp_allocator, &req_bind);
-                if (decision_bind.kind != .allow) {
-                    return error.Unauthorized;
-                }
-            }
             // CANARY: REQ=REQ-MULTI-GRAPH-032; FEATURE="MultiGraphIsolation"; ASPECT=UseGraphValidation; STATUS=TESTED; TEST=geodetestlab/specs/multi_graph.yml; OWNER=engine; UPDATED=2025-12-27
-            // USE GRAPH implementation - switch active graph context
-            // Must validate graph exists before switching
-            const graph_name = ug.graph_name;
-
-            // Check if graph exists in catalog or storage
-            const cat = getCatalog(allocator, context);
-            const in_catalog = cat.hasGraph(graph_name);
-
-            const in_storage = graph_store.getGlobalStore(allocator).graphExists(graph_name);
-
-            if (!in_catalog and !in_storage) {
-                return error.GraphNotFound;
-            }
-
-            // Update session state with new graph
-            if (context.session_state) |session| {
-                // Free old graph name if present
-                if (session.graph) |old_graph| {
-                    session.allocator.free(old_graph);
-                }
-                // Set new graph
-                session.graph = try session.allocator.dupe(u8, graph_name);
-            }
-
+            // SONNY-2775: through the one gate every session graph change
+            // takes (a DSN-bound session stays on its graph; bind_graph is
+            // checked, then existence). USE GRAPH of the bound graph is a no-op.
+            try session_graph.change(context, query_traits.graphTarget(ug.graph_name));
             return ExecutionResult{
                 .columns = try allocator.alloc([]const u8, 0),
                 .rows = try allocator.alloc([]Value, 0),
@@ -2300,56 +2268,28 @@ fn executeStatementWithContextInner(allocator: std.mem.Allocator, stmt: ast.Stat
         },
         .SessionReset => |sr| {
             // CANARY: REQ=REQ-GQL-081; FEATURE="SessionManagement"; ASPECT=SessionReset; STATUS=TESTED; OWNER=engine; UPDATED=2025-10-09
-            // Reset session state based on arguments
+            // SONNY-2775: a reset that covers the graph (no arguments, ALL
+            // CHARACTERISTICS, [PROPERTY] GRAPH) moves it home through the
+            // gate first, so a refusal changes nothing. Home is the DSN-bound
+            // graph for a bound session (it stays bound), else the default.
+            // Everything the session owns is freed with its allocator.
+            if (query_traits.sessionResetClearsGraph(sr)) {
+                try session_graph.change(context, .home);
+            }
             if (context.session_state) |session| {
                 if (sr.arguments) |args| {
                     switch (args) {
-                        .All => |all_type| {
-                            switch (all_type) {
-                                .Parameters => {
-                                    // Reset all parameters
-                                    var iter = session.parameters.iterator();
-                                    while (iter.next()) |entry| {
-                                        allocator.free(entry.key_ptr.*);
-                                        allocator.free(entry.value_ptr.*);
-                                    }
-                                    session.parameters.clearRetainingCapacity();
-                                },
-                                .Characteristics => {
-                                    // Reset all session characteristics
-                                    session.reset();
-                                },
-                            }
+                        .All => |all_type| switch (all_type) {
+                            .Parameters => session.clearParameters(),
+                            .Characteristics => session.resetCharacteristics(),
                         },
-                        .Schema => {
-                            if (session.schema) |s| {
-                                allocator.free(s);
-                                session.schema = null;
-                            }
-                        },
-                        .Graph => {
-                            if (session.graph) |g| {
-                                allocator.free(g);
-                                session.graph = null;
-                            }
-                        },
-                        .TimeZone => {
-                            if (session.timezone) |tz| {
-                                allocator.free(tz);
-                                session.timezone = null;
-                            }
-                        },
-                        .Parameter => |param| {
-                            // Remove specific parameter
-                            if (session.parameters.fetchRemove(param)) |entry| {
-                                allocator.free(entry.key);
-                                allocator.free(entry.value);
-                            }
-                        },
+                        .Schema => try session.setSchema(null),
+                        .Graph => {},
+                        .TimeZone => try session.setTimeZone(null),
+                        .Parameter => |param| session.removeParameter(param),
                     }
                 } else {
-                    // No arguments - reset everything
-                    session.reset();
+                    session.resetCharacteristics();
                 }
             }
 
@@ -2369,9 +2309,11 @@ fn executeStatementWithContextInner(allocator: std.mem.Allocator, stmt: ast.Stat
         },
         .SessionClose => {
             // CANARY: REQ=REQ-GQL-081; FEATURE="SessionManagement"; ASPECT=SessionClose; STATUS=TESTED; OWNER=engine; UPDATED=2025-10-09
-            // Close session - clean up all session state
+            // Close session - clean up all session state. SONNY-2775: the
+            // graph goes home through the gate, as for SESSION RESET.
+            try session_graph.change(context, .home);
             if (context.session_state) |session| {
-                session.reset();
+                session.resetCharacteristics();
             }
 
             const columns = try allocator.alloc([]const u8, 1);
@@ -3042,55 +2984,6 @@ pub const PathIterator = struct {
 // GAP-0520: Removed expandVariableLengthPaths and expandVariableLengthPathsWithMode
 // materializing wrappers — all call sites now use PathIterator.init() directly
 // for streaming path consumption. CANARY markers relocated to PathIterator definition.
-
-pub fn createTestGraphG1(allocator: std.mem.Allocator) !void {
-    const store = graph_store.getGlobalStore(allocator);
-
-    // Clear only G1 nodes before recreating test data
-    store.clearNodesForGraph("G1");
-
-    // Create test nodes for G1
-    // Based on test T15, we have nodes with labels "A", "A", and "B"
-    // Node 1: label="A", v=1
-    const node1_labels = try allocator.alloc([]const u8, 0);
-    defer allocator.free(node1_labels);
-    const node1_id = try store.createNodeWithGraph(node1_labels, "G1");
-    try store.setNodeProperty(node1_id, "label", .{ .String = "A" });
-    try store.setNodeProperty(node1_id, "v", .{ .Int = 1 });
-
-    // Node 2: label="A", v=2  (another A node for count(*) = 2 in T15)
-    const node2_labels = try allocator.alloc([]const u8, 0);
-    defer allocator.free(node2_labels);
-    const node2_id = try store.createNodeWithGraph(node2_labels, "G1");
-    try store.setNodeProperty(node2_id, "label", .{ .String = "A" });
-    try store.setNodeProperty(node2_id, "v", .{ .Int = 2 });
-
-    // Node 3: label="B", v=null (no v property, for testing AVG/SUM null handling)
-    const node3_labels = try allocator.alloc([]const u8, 0);
-    defer allocator.free(node3_labels);
-    const node3_id = try store.createNodeWithGraph(node3_labels, "G1");
-    try store.setNodeProperty(node3_id, "label", .{ .String = "B" });
-    // No v property for this node (null)
-}
-
-pub fn createTestGraphG2(allocator: std.mem.Allocator) !void {
-    const store = graph_store.getGlobalStore(allocator);
-
-    // Clear only G2 nodes before recreating test data
-    store.clearNodesForGraph("G2");
-
-    // Create test nodes for G2 - only 2 nodes for T12 test
-    var i: u8 = 0;
-    while (i < 2) : (i += 1) {
-        const labels = try allocator.alloc([]const u8, 1);
-        defer allocator.free(labels);
-        labels[0] = try allocator.dupe(u8, "Node");
-        defer allocator.free(labels[0]);
-        const node_id = try store.createNodeWithGraph(labels, "G2");
-        // All nodes have v=1 for testing COUNT DISTINCT
-        try store.setNodeProperty(node_id, "v", .{ .Int = 1 });
-    }
-}
 
 pub fn validateGroupBy(ret: ast.ReturnClause, group_by: ?ast.GroupBy) !void {
     const items = ret.items;

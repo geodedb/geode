@@ -126,6 +126,30 @@
   A request that changes a graph that does not exist is refused with 3F000,
   and the graph is not created. The CLI's `-g` flag, which sends a
   `USE GRAPH` of the current graph before the query, works as before.
+- **SESSION SET GRAPH checks the graph permission and that the graph exists
+  (SONNY-2775):** `SESSION SET [PROPERTY] GRAPH` took any name as given.
+  - A user that `USE GRAPH` refused could switch with it and read or write
+    the graph.
+  - It did not check that the graph exists.
+  - It let a connection bound to a graph leave it.
+  - It created the test graphs `G1` and `G2` in the server.
+  - On gRPC it stored the name with memory freed after the request.
+
+  Every change of a session's graph now goes through one gate: `USE GRAPH`,
+  `SESSION SET [PROPERTY] GRAPH`, `SESSION RESET`, `SESSION CLOSE`, and the
+  graph a QUIC or gRPC HELLO binds. The gate checks:
+  - the `bind_graph` permission (42501). Anyone may bind `default`;
+  - that the graph exists (3F000);
+  - that a connection bound to a graph stays on it. `SESSION RESET` and
+    `SESSION CLOSE` keep that graph.
+
+  `CURRENT_GRAPH` and `HOME_GRAPH` (and the `PROPERTY` forms) now mean the
+  session's graph and its home graph; they were taken as graph names.
+  The gRPC HELLO also checks the permission when it binds a graph that
+  another session created at the same moment. The session's graph, time
+  zone, schema and parameters are owned by the session.
+  Scripts that switched to a graph before creating it must create it first.
+  See `docs/SESSION_MANAGEMENT.md`.
 - **Which GPS denies are enforced (SONNY-2781):** the SONNY-2744 note
   listed every action a policy can name as deniable. But enforcement asks
   `decide()` only for:
