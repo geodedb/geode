@@ -14139,7 +14139,10 @@ fn acquireExistingGraphWriteLock(graph_name: []const u8, deadline_mono_ns: u64) 
 /// building a graph whose load was deferred. `error.Deadline` when the lock
 /// does not come by `deadline_mono_ns`.
 pub fn acquireProgramWriteLockCancelable(lock_graph: []const u8, session_graph: []const u8, deadline_mono_ns: u64) !GraphLockHandle {
-    if (std.mem.eql(u8, lock_graph, session_graph)) return acquireGraphWriteLockCancelable(lock_graph, deadline_mono_ns);
+    // SONNY-2790: the default graph always exists (every session starts on
+    // it), and the fulltext statements lock it from any session.
+    if (std.mem.eql(u8, lock_graph, session_graph) or std.mem.eql(u8, lock_graph, DEFAULT_GRAPH_NAME))
+        return acquireGraphWriteLockCancelable(lock_graph, deadline_mono_ns);
     if (getCurrentGlobalStore()) |store| store.ensureGraphHydrated(lock_graph);
     return (try acquireExistingGraphWriteLock(lock_graph, deadline_mono_ns)) orelse error.GraphNotFound;
 }

@@ -102,25 +102,9 @@ pub fn cmdPolicy(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize)
                 i += 1;
             }
         }
-        const policy_id = mgr.next_user_id;
-        mgr.next_user_id += 1;
-
-        try mgr.storage.persistPolicy(.{
-            .policy_id = policy_id,
-            .name = name,
-            .description = "",
-            .graph = "",
-            .table = table,
-            .operation = 0,
-            .permissive = false,
-            .enabled = true,
-            .using_clause = condition,
-            .check_clause = null,
-            .audit_level = 0,
-            .created_by = 0,
-            // SONNY-2750: an RLS record, which GPS never loads.
-            .kind = .rls,
-        });
+        // SONNY-2777: a new id from the policy id sequence; it used to be the
+        // next user id, which could overwrite a GPS policy's record.
+        _ = try cli_auth.createRlsPolicyRecord(&mgr, name, table, condition);
         printOut("RLS policy '{s}' created for table '{s}'\n", .{ name, table });
         return;
     } else if (std.mem.eql(u8, subcmd, "list")) {

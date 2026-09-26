@@ -1052,7 +1052,7 @@ test "store-free scalar reads bypass graph snapshot locks" {
     try testing.expect(std.mem.indexOf(u8, handler, "REQ=REQ-QUIC-HC-110") != null);
     // SONNY-2743: the decision moved to `query_traits.statementPlan`, which
     // bypasses the lock only when the rest of the program does nothing.
-    try testing.expect(std.mem.indexOf(u8, handler, "query_traits.statementPlan(&parse_result.program, &analysis, query_graph_name, graph_store.DEFAULT_GRAPH_NAME, .quic)") != null);
+    try testing.expect(std.mem.indexOf(u8, handler, "query_traits.statementPlan(&parse_result.program, &analysis, query_graph_name, homeGraphName(state), .quic)") != null);
     try testing.expect(std.mem.indexOf(u8, traits, "analysis.kind == .rows and analysis.is_store_free and rest_is_noop") != null);
     // SONNY-2749: reads snapshot the graph the program reads (`lock_graph`).
     try testing.expect(std.mem.indexOf(u8, handler, "snapshotUnderReadLock(gpa, lock_graph)") != null);

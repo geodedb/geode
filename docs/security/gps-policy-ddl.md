@@ -88,6 +88,34 @@ to start until an operator runs `geode auth reseal` (or sets
 `GEODE_AUTH_RESEAL_CHAIN=1`). The reseal signs every record as it is, RLS
 records included. The `kind` check is what keeps those records out of GPS.
 
+**Seals and records without a kind (SONNY-2791).** No seal signs a policy
+record that has no `kind` and whose HMAC does not verify: not the recovery
+reseal (`geode auth reseal`, or `GEODE_AUTH_RESEAL_CHAIN=1` at startup), and
+not the seal after every auth change.
+
+- Such a record claims to predate record kinds, but this key never signed
+  it. It may have been planted in the pre-kind GPS shape: with no USING text,
+  GPS would load it as an unconditional allow.
+- An auth change seals the chain after it. An offline command such as
+  `geode user reset-password` loads the security graph as it is, so its seal
+  used to sign a planted record. On a store holding one, the change now
+  fails at its seal.
+- The recovery reseal logs each such record's id and name, and signs
+  nothing. Check each record, then decide it by id:
+  - drop it (delete it): `geode auth reseal --drop-legacy-policy <id>`, or
+    `GEODE_AUTH_RESEAL_DROP_LEGACY=<id>,<id>` for the startup reseal;
+  - accept it (sign it): `geode auth reseal --accept-legacy-policy <id>`, or
+    `GEODE_AUTH_RESEAL_ACCEPT_LEGACY=<id>,<id>`.
+
+  Each flag can be repeated. An id given both decisions is refused.
+- An accepted record is stored with its kind and, for GPS, its USING text
+  (`true` when it had none), so nothing loads "true by absence".
+- A record without a kind whose HMAC verifies was signed before the upgrade.
+  Seals keep it as it is.
+
+Statements cannot write the security graph directly: no statement or HELLO
+selects, creates or drops a `__geode_*` graph (SONNY-2791).
+
 ## What did NOT change
 
 - **Real expression compilation** — Phase 4 only supports the literal `"true"` predicate. Phase 5+ compiles real expressions through the RLS VM.

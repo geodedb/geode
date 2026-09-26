@@ -8,6 +8,24 @@ fn getEnvVarOwned(allocator: std.mem.Allocator, name: []const u8) error{ Environ
     return allocator.dupe(u8, std.mem.span(ptr));
 }
 
+/// SONNY-2791: the policy record ids `env_name` lists (comma-separated):
+/// GEODE_AUTH_RESEAL_ACCEPT_LEGACY, the records the startup reseal may sign
+/// although they have no kind and their HMAC does not verify, and
+/// GEODE_AUTH_RESEAL_DROP_LEGACY, the ones it deletes. At most `buf.len`; a
+/// malformed entry is skipped (so it is not decided).
+fn parseLegacyPolicyIds(allocator: std.mem.Allocator, env_name: []const u8, buf: []u64) []const u64 {
+    const raw = getEnvVarOwned(allocator, env_name) catch return buf[0..0];
+    defer allocator.free(raw);
+    var n: usize = 0;
+    var it = std.mem.tokenizeAny(u8, raw, ", ");
+    while (it.next()) |tok| {
+        if (n == buf.len) break;
+        buf[n] = std.fmt.parseInt(u64, tok, 10) catch continue;
+        n += 1;
+    }
+    return buf[0..n];
+}
+
 const geode = @import("geode");
 const server_flags = geode.server_flags;
 // CANARY: REQ=REQ-BINARY-PERSIST-001; FEATURE="BinaryPersistence"; ASPECT=ServerInit; STATUS=TESTED; TEST=geodetestlab/specs/geode_auth_ddl_persistence.yml; OWNER=server; UPDATED=2026-06-11
@@ -432,10 +450,23 @@ pub fn initialize(
                                 Attr.string("verify_error", @errorName(err)),
                                 Attr.string("key_source", kr.key_id),
                             });
-                            agm.sealChain(&kr.key) catch |seal_err| {
+                            // SONNY-2791: refuses to sign a policy record without a
+                            // kind whose HMAC does not verify, unless its id is in
+                            // GEODE_AUTH_RESEAL_ACCEPT_LEGACY (signed) or
+                            // GEODE_AUTH_RESEAL_DROP_LEGACY (deleted).
+                            var accept_buf: [64]u64 = undefined;
+                            var drop_buf: [64]u64 = undefined;
+                            const decisions: auth_graph_manager.AuthGraphManager.LegacyPolicyDecisions = .{
+                                .accept = parseLegacyPolicyIds(allocator, "GEODE_AUTH_RESEAL_ACCEPT_LEGACY", &accept_buf),
+                                .drop = parseLegacyPolicyIds(allocator, "GEODE_AUTH_RESEAL_DROP_LEGACY", &drop_buf),
+                            };
+                            agm.resealChain(&kr.key, decisions) catch |seal_err| {
                                 log.err("AUTH CHAIN RESEAL FAILED", &.{
                                     Attr.string("error", @errorName(seal_err)),
                                 });
+                                if (seal_err == error.UnsignedLegacyPolicyRecord) {
+                                    std.debug.print("[startup] AUTH CHAIN RESEAL REFUSED: policy records without a kind do not verify (see the log for their ids). After checking each one, list its id in GEODE_AUTH_RESEAL_DROP_LEGACY (delete it) or GEODE_AUTH_RESEAL_ACCEPT_LEGACY (sign it).\n", .{});
+                                }
                                 agm.deinit();
                                 return error.AuthChainTampered;
                             };

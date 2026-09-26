@@ -302,10 +302,9 @@ pub const SessionStore = struct {
         // CANARY: REQ=REQ-DSN-GRAPH-BIND-004; FEATURE="DSNGraphBinding"; ASPECT=GrpcSessionGraph; STATUS=IMPL; OWNER=transport; UPDATED=2026-03-25
         if (graph) |g| {
             if (g.len > 0) {
-                if (state.exec_session) |*sess| {
-                    if (sess.graph) |old| self.allocator.free(old);
-                    sess.graph = try self.allocator.dupe(u8, g);
-                }
+                // SONNY-2775: stored the one way (the session's allocator);
+                // HELLO checked the bind before it got here.
+                if (state.exec_session) |*sess| try execution.session_graph.set(sess, g);
                 state.graph_bound = true;
             }
         }
@@ -427,6 +426,7 @@ fn deinitServerState(state: *server_state.ServerState) void {
     audit_mod.setCurrentAuditTenantId(null);
 
     state.resetResult();
+    state.clearTxnGraph(); // SONNY-2776
     if (state.exec_session) |*sess| sess.deinit();
     // GAP-0289: Release per-tenant connection quota before freeing session config.
     if (state.session_config) |cfg| {
@@ -460,7 +460,9 @@ fn deinitServerState(state: *server_state.ServerState) void {
 fn invalidateAuthenticatedSession(allocator: std.mem.Allocator, state: *server_state.ServerState) void {
     state.resetResult();
     if (state.in_txn) {
-        const graph_name = state.current_graph orelse graph_store.DEFAULT_GRAPH_NAME;
+        // SONNY-2776: the graph the transaction changed; `current_graph` is
+        // never set on gRPC, so this used to lock `default` whatever it was.
+        const graph_name = state.txnLockGraph(state.sessionGraph());
         const lock_handle = graph_store.acquireGraphWriteLock(graph_name);
         defer graph_store.releaseGraphLock(lock_handle);
         const store_ptr = graph_store.getGlobalStore(allocator);
@@ -468,8 +470,7 @@ fn invalidateAuthenticatedSession(allocator: std.mem.Allocator, state: *server_s
             log.warn("Failed to rollback invalidated session transaction", &.{Attr.string("error", @errorName(err))});
         };
     }
-    state.in_txn = false;
-    state.txn_id = 0;
+    state.endTransaction();
     state.current_user_id = null;
     if (state.authenticated_user) |u| {
         allocator.free(u);
@@ -653,7 +654,10 @@ fn buildOrderKeys(
     return keys;
 }
 
-fn updateTxnStateFromProgram(state: *server_state.ServerState, program: *const gql_ast.Program) void {
+/// Track the session's transaction after `program` ran. SONNY-2776:
+/// `write_graph` is the graph the program changed (null if it changed none);
+/// the first graph an open transaction changes becomes its graph.
+fn updateTxnStateFromProgram(state: *server_state.ServerState, program: *const gql_ast.Program, write_graph: ?[]const u8) void {
     var has_start: bool = false;
     var has_commit: bool = false;
     var has_rollback: bool = false;
@@ -670,16 +674,21 @@ fn updateTxnStateFromProgram(state: *server_state.ServerState, program: *const g
     }
 
     if (has_commit or has_rollback) {
-        state.in_txn = false;
-        state.txn_id = 0;
+        state.endTransaction();
         return;
     }
 
     if (has_start) {
+        if (!state.in_txn) state.clearTxnGraph();
         state.in_txn = true;
         if (state.txn_id == 0) {
             state.txn_id = @intCast(compat_milliTimestamp());
         }
+    }
+    if (state.in_txn) {
+        // A failed allocation leaves the transaction without a graph; its end
+        // then locks the session's graph, as before SONNY-2776.
+        if (write_graph) |g| state.noteTxnWrite(g) catch {};
     }
 }
 
@@ -1959,6 +1968,19 @@ fn handleHandshake(request_bytes: []const u8, trans: *GrpcTransport, allocator: 
         var resolved_graph: ?[]const u8 = null;
         if (req.graph) |requested_graph| {
             if (requested_graph.len > 0) {
+                // SONNY-2775: the bind check is `execution.session_graph.mayBind`,
+                // the one every session graph change uses.
+                const role_names_hello = [_][]const u8{@tagName(auth_result.role)};
+                const hello_principal = geode.security.principal_derive.derivePrincipal(.{
+                    .username = req.username,
+                    .role_names = &role_names_hello,
+                    .tenant_id = req.tenant_id,
+                    // active_graph = requested_graph so graph_grant_check_fn can widen access.
+                    .active_graph = requested_graph,
+                    .auth_version = auth_result.auth_version,
+                    .auth_method = .password,
+                    .source = .grpc_handler,
+                });
                 // Validate graph name: max 128 chars, alphanumeric + underscore only
                 if (requested_graph.len > 128) {
                     const resp = schema.HelloResponse{
@@ -1980,6 +2002,17 @@ fn handleHandshake(request_bytes: []const u8, trans: *GrpcTransport, allocator: 
                         return encodeMessage(allocator, resp);
                     }
                 }
+                // SONNY-2791: the __geode_* graphs are the engine's own; no
+                // session binds (or auto-creates) one.
+                if (graph_store.isInternalGraphName(requested_graph)) {
+                    const resp = schema.HelloResponse{
+                        .success = false,
+                        .session_id = "",
+                        .error_message = "Invalid graph name: the __geode_* graphs are internal",
+                        .capabilities = caps,
+                    };
+                    return encodeMessage(allocator, resp);
+                }
                 const gstore = graph_store.getGlobalStore(allocator);
                 const cat = try execution.ensureCatalogInstance(allocator);
 
@@ -1994,33 +2027,11 @@ fn handleHandshake(request_bytes: []const u8, trans: *GrpcTransport, allocator: 
                     // from auth_result so this site routes through gps.decide() for PDP uniformity.
                     // Phase 3 will rewire enforcement so principal threading is uniform across handlers.
                     // CANARY: REQ=REQ-GPS-PDP-005; FEATURE="GPS Decision Engine"; ASPECT=GrpcHandshakeEnforcement; STATUS=TESTED; TEST=tests/test_gps_decide.zig; OWNER=security; UPDATED=2026-05-20
-                    const rbac_allowed = rbac_blk: {
-                        // Compatibility invariant (#861): any authenticated user may always bind
-                        // the default graph by name — parity with the QUIC HELLO handler.
-                        // Auth-off is already handled: this entire block is nested under
-                        // `if (user_mgmt.isAuthEnabled())` above, so we only need the
-                        // default-graph short-circuit here.
-                        if (std.mem.eql(u8, requested_graph, graph_store.DEFAULT_GRAPH_NAME)) break :rbac_blk true;
-                        const gps = geode.security.gps;
-                        const role_names_hello = [_][]const u8{@tagName(auth_result.role)};
-                        const hello_principal = geode.security.principal_derive.derivePrincipal(.{
-                            .username = req.username,
-                            .role_names = &role_names_hello,
-                            .tenant_id = req.tenant_id,
-                            // active_graph = requested_graph so graph_grant_check_fn can widen access.
-                            .active_graph = requested_graph,
-                            .auth_version = auth_result.auth_version,
-                            .auth_method = .password,
-                            .source = .grpc_handler,
-                        });
-                        const gps_req = gps.DecisionRequest{
-                            .principal = &hello_principal,
-                            .action = .bind_graph,
-                            .resource = .{ .graph = requested_graph },
-                        };
-                        const decision = try gps.decide(std.heap.smp_allocator, &gps_req);
-                        break :rbac_blk (decision.kind == .allow);
-                    };
+                    // Compatibility invariant (#861, kept in mayBind): any authenticated
+                    // user may always bind the default graph by name — parity with the
+                    // QUIC HELLO handler. This block is nested under
+                    // `if (user_mgmt.isAuthEnabled())` above, so there is a principal.
+                    const rbac_allowed = execution.session_graph.mayBind(&hello_principal, requested_graph);
                     if (!rbac_allowed) {
                         const resp = schema.HelloResponse{
                             .success = false,
@@ -2050,6 +2061,17 @@ fn handleHandshake(request_bytes: []const u8, trans: *GrpcTransport, allocator: 
                                     Attr.string("graph", requested_graph),
                                     Attr.string("error", @errorName(err)),
                                 });
+                                // SONNY-2775: someone else created it; the bind check
+                                // applies, as on QUIC (it was missing here).
+                                if (!execution.session_graph.mayBind(&hello_principal, requested_graph)) {
+                                    const resp = schema.HelloResponse{
+                                        .success = false,
+                                        .session_id = "",
+                                        .error_message = "Access denied: insufficient permissions for graph",
+                                        .capabilities = caps,
+                                    };
+                                    return encodeMessage(allocator, resp);
+                                }
                                 resolved_graph = requested_graph;
                             } else {
                                 log.err("Graph auto-creation failed", &.{
@@ -2171,6 +2193,16 @@ fn handleHandshake(request_bytes: []const u8, trans: *GrpcTransport, allocator: 
                     return encodeMessage(allocator, resp);
                 }
             }
+            // SONNY-2791: the __geode_* graphs are the engine's own.
+            if (graph_store.isInternalGraphName(requested_graph)) {
+                const resp = schema.HelloResponse{
+                    .success = false,
+                    .session_id = "",
+                    .error_message = "Invalid graph name: the __geode_* graphs are internal",
+                    .capabilities = caps,
+                };
+                return encodeMessage(allocator, resp);
+            }
             const gstore = graph_store.getGlobalStore(allocator);
             const cat = try execution.ensureCatalogInstance(allocator);
 
@@ -2271,6 +2303,12 @@ fn readWillStreamEngineSide(state: *const server_state.ServerState, analysis: *c
 fn sessionGraphName(state: *const server_state.ServerState) []const u8 {
     if (state.exec_session) |*sess| return sess.graph orelse graph_store.DEFAULT_GRAPH_NAME;
     return state.current_graph orelse graph_store.DEFAULT_GRAPH_NAME;
+}
+
+/// SONNY-2775: where SESSION RESET and SESSION CLOSE take the session: the
+/// graph HELLO bound it to (`graph_bound`), or the default graph.
+fn homeGraphName(state: *const server_state.ServerState) []const u8 {
+    return if (state.graph_bound) sessionGraphName(state) else graph_store.DEFAULT_GRAPH_NAME;
 }
 
 fn readServedEngineDirect(state: *const server_state.ServerState, analysis: *const query_traits.ProgramAnalysis) bool {
@@ -2676,7 +2714,7 @@ pub fn handleExecute(request_bytes: []const u8, allocator: std.mem.Allocator, ep
             // in the program frees the session's string.
             const query_graph_name = try allocator.dupe(u8, sessionGraphName(state));
             defer allocator.free(query_graph_name);
-            const stmt_plan = query_traits.statementPlan(&parse_result.program, &analysis, query_graph_name, graph_store.DEFAULT_GRAPH_NAME, .grpc);
+            const stmt_plan = query_traits.statementPlan(&parse_result.program, &analysis, query_graph_name, homeGraphName(state), .grpc);
             // CANARY: REQ=REQ-SONNY-2749-PROGRAM-GRAPH-LOCK; FEATURE="StatementAuthorization"; ASPECT=GrpcHandler; STATUS=TESTED; TEST=tests/test_sonny2749_program_graph_lock.zig; OWNER=security; UPDATED=2026-09-25
             // SONNY-2749: every lock below is on the graph the program's
             // statements run on, which a USE GRAPH in it moves.
@@ -2717,6 +2755,14 @@ pub fn handleExecute(request_bytes: []const u8, allocator: std.mem.Allocator, ep
             // changes data on several, and a handler never holds two.
             if (stmt_plan.spans_graphs) {
                 var resp = try buildErrorResponse(allocator, "0A000", query_traits.spans_graphs_message, &.{}, &.{});
+                defer resp.deinit(allocator);
+                return encodeMessage(allocator, resp);
+            }
+            // CANARY: REQ=REQ-SONNY-2776-TXN-ONE-GRAPH; FEATURE="StatementAuthorization"; ASPECT=GrpcHandler; STATUS=TESTED; TEST=tests/test_sonny2776_session_graph_uses.zig; OWNER=security; UPDATED=2026-09-26
+            // SONNY-2776: an open transaction changes one graph (its end takes
+            // that graph's write lock); a change of another is refused.
+            if (stmt_plan.is_mutation and state.txnWouldSpanGraphs(lock_graph)) {
+                var resp = try buildErrorResponse(allocator, "0A000", query_traits.txn_spans_graphs_message, &.{}, &.{});
                 defer resp.deinit(allocator);
                 return encodeMessage(allocator, resp);
             }
@@ -2943,7 +2989,7 @@ pub fn handleExecute(request_bytes: []const u8, allocator: std.mem.Allocator, ep
 
                             if (rls_filter.getGlobalRLSFilterEngine()) |rls_engine| {
                                 if (state.authenticated_user) |auth_user| {
-                                    const rls_graph = state.current_graph orelse graph_store.DEFAULT_GRAPH_NAME;
+                                    const rls_graph = state.sessionGraph(); // SONNY-2776: the graph the rows came from
                                     _ = rls_filter.applyRLSFilter(allocator, &owned_planned.result, rls_engine, auth_user, rls_graph);
                                 }
                             }
@@ -2984,7 +3030,7 @@ pub fn handleExecute(request_bytes: []const u8, allocator: std.mem.Allocator, ep
                     const store_ptr = graph_store.getGlobalStore(allocator);
                     if (rls_filter.getGlobalRLSFilterEngine()) |rls_engine| {
                         if (state.authenticated_user) |auth_user| {
-                            const rls_graph = state.current_graph orelse graph_store.DEFAULT_GRAPH_NAME;
+                            const rls_graph = state.sessionGraph(); // SONNY-2776: the graph the rows came from
                             _ = rls_filter.applyAlgorithmRLSFilter(allocator, &exec_result, rls_engine, store_ptr, auth_user, rls_graph);
                         }
                     }
@@ -3006,7 +3052,7 @@ pub fn handleExecute(request_bytes: []const u8, allocator: std.mem.Allocator, ep
                     // S1: Apply RLS filter on gRPC PROFILE path (parity with QUIC handler).
                     if (rls_filter.getGlobalRLSFilterEngine()) |rls_engine| {
                         if (state.authenticated_user) |auth_user| {
-                            const rls_graph = state.current_graph orelse graph_store.DEFAULT_GRAPH_NAME;
+                            const rls_graph = state.sessionGraph(); // SONNY-2776: the graph the rows came from
                             _ = rls_filter.applyRLSFilter(allocator, &exec_result, rls_engine, auth_user, rls_graph);
                         }
                     }
@@ -3091,7 +3137,7 @@ pub fn handleExecute(request_bytes: []const u8, allocator: std.mem.Allocator, ep
                                     state.result_ordered = false;
                                     state.result_order_keys = &.{};
 
-                                    updateTxnStateFromProgram(state, &parse_result.program);
+                                    updateTxnStateFromProgram(state, &parse_result.program, if (stmt_plan.is_mutation) lock_graph else null);
                                     return encodeMessage(allocator, schema_resp);
                                 }
                             }
@@ -3115,7 +3161,7 @@ pub fn handleExecute(request_bytes: []const u8, allocator: std.mem.Allocator, ep
                         const algo_store = graph_store.getGlobalStore(allocator);
                         if (rls_filter.getGlobalRLSFilterEngine()) |rls_engine| {
                             if (state.authenticated_user) |auth_user| {
-                                const rls_graph = state.current_graph orelse graph_store.DEFAULT_GRAPH_NAME;
+                                const rls_graph = state.sessionGraph(); // SONNY-2776: the graph the rows came from
                                 _ = rls_filter.applyAlgorithmRLSFilter(allocator, &exec_result, rls_engine, algo_store, auth_user, rls_graph);
                             }
                         }
@@ -3138,7 +3184,7 @@ pub fn handleExecute(request_bytes: []const u8, allocator: std.mem.Allocator, ep
                     // S1: Apply RLS filter on gRPC rows path (parity with QUIC handler).
                     if (rls_filter.getGlobalRLSFilterEngine()) |rls_engine| {
                         if (state.authenticated_user) |auth_user| {
-                            const rls_graph = state.current_graph orelse graph_store.DEFAULT_GRAPH_NAME;
+                            const rls_graph = state.sessionGraph(); // SONNY-2776: the graph the rows came from
                             _ = rls_filter.applyRLSFilter(allocator, &exec_result, rls_engine, auth_user, rls_graph);
                         }
                     }
@@ -3173,7 +3219,7 @@ pub fn handleExecute(request_bytes: []const u8, allocator: std.mem.Allocator, ep
                     state.result_ordered = ordered;
                     state.result_order_keys = order_keys;
 
-                    updateTxnStateFromProgram(state, &parse_result.program);
+                    updateTxnStateFromProgram(state, &parse_result.program, if (stmt_plan.is_mutation) lock_graph else null);
                     return encodeMessage(allocator, schema_resp);
                 },
             }
@@ -3292,7 +3338,9 @@ pub fn handlePull(request_bytes: []const u8, allocator: std.mem.Allocator) ![]u8
     return encoded;
 }
 
-fn handleBegin(request_bytes: []const u8, allocator: std.mem.Allocator) ![]u8 {
+/// `pub` as a SONNY-2776 test seam only; production dispatch goes through
+/// `handlePacket`.
+pub fn handleBegin(request_bytes: []const u8, allocator: std.mem.Allocator) ![]u8 {
     var reader: std.Io.Reader = .fixed(request_bytes);
     var req = protobuf.decode(schema.BeginRequest, &reader, allocator) catch {
         const resp = schema.BeginResponse{ .session_id = "", .tx_id = "" };
@@ -3333,6 +3381,7 @@ fn handleBegin(request_bytes: []const u8, allocator: std.mem.Allocator) ![]u8 {
         return encodeMessage(allocator, resp);
     }
 
+    state.clearTxnGraph();
     state.in_txn = true;
     state.txn_id = @intCast(compat_milliTimestamp());
     state.session_snapshot_ts = state.global_commit_ts;
@@ -3346,7 +3395,9 @@ fn handleBegin(request_bytes: []const u8, allocator: std.mem.Allocator) ![]u8 {
     return encodeMessage(allocator, resp);
 }
 
-fn handleCommit(request_bytes: []const u8, allocator: std.mem.Allocator) ![]u8 {
+/// `pub` as a SONNY-2776 test seam only; production dispatch goes through
+/// `handlePacket`.
+pub fn handleCommit(request_bytes: []const u8, allocator: std.mem.Allocator) ![]u8 {
     var reader: std.Io.Reader = .fixed(request_bytes);
     var req = protobuf.decode(schema.CommitRequest, &reader, allocator) catch {
         const resp = schema.CommitResponse{ .success = false };
@@ -3382,7 +3433,9 @@ fn handleCommit(request_bytes: []const u8, allocator: std.mem.Allocator) ![]u8 {
     }
 
     if (state.in_txn) {
-        const commit_graph = state.current_graph orelse graph_store.DEFAULT_GRAPH_NAME;
+        // SONNY-2776: the graph the transaction changed (it used to be
+        // `current_graph`, never set on gRPC: always `default`).
+        const commit_graph = state.txnLockGraph(state.sessionGraph());
         const commit_lock = graph_store.acquireGraphWriteLock(commit_graph);
         defer graph_store.releaseGraphLock(commit_lock);
 
@@ -3390,8 +3443,7 @@ fn handleCommit(request_bytes: []const u8, allocator: std.mem.Allocator) ![]u8 {
         txn_undo_log.getGlobalUndoLog(allocator).commit(store_ptr);
 
         state.global_commit_ts += 1;
-        state.in_txn = false;
-        state.txn_id = 0;
+        state.endTransaction();
         const resp = schema.CommitResponse{ .success = true };
         return encodeMessage(allocator, resp);
     }
@@ -3400,7 +3452,9 @@ fn handleCommit(request_bytes: []const u8, allocator: std.mem.Allocator) ![]u8 {
     return encodeMessage(allocator, resp);
 }
 
-fn handleRollback(request_bytes: []const u8, allocator: std.mem.Allocator) ![]u8 {
+/// `pub` as a SONNY-2776 test seam only; production dispatch goes through
+/// `handlePacket`.
+pub fn handleRollback(request_bytes: []const u8, allocator: std.mem.Allocator) ![]u8 {
     var reader: std.Io.Reader = .fixed(request_bytes);
     var req = protobuf.decode(schema.RollbackRequest, &reader, allocator) catch {
         const resp = schema.RollbackResponse{ .success = false };
@@ -3436,12 +3490,15 @@ fn handleRollback(request_bytes: []const u8, allocator: std.mem.Allocator) ![]u8
     }
 
     if (state.in_txn) {
+        // SONNY-2776: the rollback changes the store back; it took no lock.
+        // It now holds the write lock of the graph the transaction changed.
+        const rb_lock = graph_store.acquireGraphWriteLock(state.txnLockGraph(state.sessionGraph()));
+        defer graph_store.releaseGraphLock(rb_lock);
         const store_ptr = graph_store.getGlobalStore(allocator);
         txn_undo_log.getGlobalUndoLog(allocator).rollback(store_ptr) catch |err| {
             log.err("Rollback failed", &.{Attr.string("error", @errorName(err))});
         };
-        state.in_txn = false;
-        state.txn_id = 0;
+        state.endTransaction();
         const resp = schema.RollbackResponse{ .success = true };
         return encodeMessage(allocator, resp);
     }
@@ -3546,6 +3603,10 @@ fn handleRollbackTo(request_bytes: []const u8, allocator: std.mem.Allocator) ![]
         return encodeMessage(allocator, resp);
     }
 
+    // SONNY-2776: the partial rollback changes the store back; it took no
+    // lock. It holds the write lock of the graph the transaction changed.
+    const rts_lock = graph_store.acquireGraphWriteLock(state.txnLockGraph(state.sessionGraph()));
+    defer graph_store.releaseGraphLock(rts_lock);
     const store_ptr = graph_store.getGlobalStore(allocator);
     const undo = txn_undo_log.getGlobalUndoLog(allocator);
     undo.rollbackToSavepoint(req.name, store_ptr) catch {

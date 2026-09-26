@@ -126,6 +126,107 @@
   A request that changes a graph that does not exist is refused with 3F000,
   and the graph is not created. The CLI's `-g` flag, which sends a
   `USE GRAPH` of the current graph before the query, works as before.
+- **Fulltext DDL and `geode.fts.*` lock the default graph (SONNY-2790):**
+  fulltext search works on the default graph only, by design. This covers
+  `CREATE INDEX ... USING fulltext`, `DROP INDEX` and
+  `geode.fts.search`/`phrase`/`proximity`/`rebuild`.
+
+  Since SONNY-2749 the server locks the graph a request's statements run on,
+  and it counted these as running on the session's graph. From a session on
+  another graph they therefore read and rewrote the default graph's nodes
+  and fulltext engine while holding only the other graph's lock. They now
+  take the default graph's lock from any session. A request that runs one of
+  them and also changes another graph is refused (0A000), as for any request
+  that changes two graphs.
+- **The internal `__geode_*` graphs are off limits to statements, and the
+  recovery reseal no longer signs a planted policy record (SONNY-2791):**
+  - No statement or HELLO selects, creates or drops a `__geode_*` graph,
+    Admin included. This covers `USE GRAPH`, `SESSION SET [PROPERTY] GRAPH`,
+    `CREATE GRAPH`, `DROP GRAPH` and a HELLO's graph; the refusal is 42501.
+    An Admin could write `:Policy` nodes into `__geode_security` directly,
+    and any user allowed to write could `DROP GRAPH __geode_security`.
+  - No seal signs a policy record that has no kind and whose HMAC does not
+    verify. Such a record was written before record kinds existed, and GPS
+    loads it by its shape (with no USING text, unconditionally). A record
+    planted in that shape broke the chain, and it was signed by
+    `geode auth reseal`, by `GEODE_AUTH_RESEAL_CHAIN=1`, and by the seal
+    after any auth change, such as an offline `geode user reset-password`.
+    - An auth change on a store holding such a record now fails at its seal.
+    - The recovery reseal refuses, and signs nothing, until the operator
+      decides each such record by id: drop it (delete) or accept it (sign
+      it):
+      - `geode auth reseal --drop-legacy-policy <id>` or
+        `--accept-legacy-policy <id>`, repeated for each record;
+      - `GEODE_AUTH_RESEAL_DROP_LEGACY=<id>,<id>` and
+        `GEODE_AUTH_RESEAL_ACCEPT_LEGACY=<id>,<id>` for the startup reseal.
+
+    An accepted record is then stored with its kind and USING text. Records
+    that verify are signed as before.
+- **`geode auth policy create` no longer overwrites a GPS policy
+  (SONNY-2777):** the command took its policy id from the next *user* id, so
+  it could reuse the id of an existing GPS policy and overwrite that record.
+  The `geode-auth` tool used the current millisecond, so two policies
+  created in the same millisecond shared one record. Every policy writer now
+  takes its id from one sequence (one more than any policy record's). A new
+  policy record never overwrites an existing one, and an update keeps the
+  record's kind (GPS or RLS).
+- **gRPC uses the session's graph, and a transaction changes one graph
+  (SONNY-2776):** the gRPC handler never set its copy of the session's graph
+  (`current_graph`), so every use of it meant `default`:
+  - the RLS post-filter applied `default`'s label policies to rows read from
+    another graph. `USE GRAPH g1; MATCH (n:Secret) RETURN n` returned rows that
+    g1's policy hides;
+  - COMMIT took `default`'s write lock while committing a transaction on
+    another graph;
+  - the rollback of an invalidated session locked `default`;
+  - ROLLBACK and ROLLBACK TO SAVEPOINT took no lock at all.
+
+  QUIC used a copy that trails the session within a request, with the same
+  effects after a `USE GRAPH`. Now:
+  - the RLS post-filter uses the graph the rows came from;
+  - a transaction changes one graph. A request in an open transaction that
+    changes a second graph is refused with 0A000. Commit or roll back first,
+    as for a request that changes two graphs (SONNY-2749);
+  - COMMIT, ROLLBACK, ROLLBACK TO SAVEPOINT, the rollback of an invalidated
+    session and the stream-close teardown take the write lock of the graph
+    the transaction changed.
+- **SESSION SET GRAPH checks the graph permission and that the graph exists
+  (SONNY-2775):** `SESSION SET [PROPERTY] GRAPH` took any name as given.
+  - A user that `USE GRAPH` refused could switch with it and read or write
+    the graph.
+  - It did not check that the graph exists.
+  - It let a connection bound to a graph leave it.
+  - It created the test graphs `G1` and `G2` in the server.
+  - On gRPC it stored the name with memory freed after the request.
+
+  Every change of a session's graph now goes through one gate: `USE GRAPH`,
+  `SESSION SET [PROPERTY] GRAPH`, `SESSION RESET`, `SESSION CLOSE`, and the
+  graph a QUIC or gRPC HELLO binds. The gate checks:
+  - the `bind_graph` permission (42501). Anyone may bind `default`;
+  - that the graph exists (3F000);
+  - that a connection bound to a graph stays on it. `SESSION RESET` and
+    `SESSION CLOSE` keep that graph.
+
+  `CURRENT_GRAPH` and `HOME_GRAPH` (and the `PROPERTY` forms) now mean the
+  session's graph and its home graph; they were taken as graph names.
+  The gRPC HELLO also checks the permission when it binds a graph that
+  another session created at the same moment. The session's graph, time
+  zone, schema and parameters are owned by the session.
+  Scripts that switched to a graph before creating it must create it first.
+  See `docs/SESSION_MANAGEMENT.md`.
+- **Which GPS denies are enforced (SONNY-2781):** the SONNY-2744 note
+  listed every action a policy can name as deniable. But enforcement asks
+  `decide()` only for:
+  - write: the change gate for all DML and the graph, graph type, schema,
+    index and constraint DDL. The security DDL has its own Admin check
+    (SONNY-2751);
+  - read or write on `CALL` procedures;
+  - decrypt_field.
+
+  A deny on any other action is accepted but has no effect. DENY READ does
+  not stop a plain MATCH, and DENY MATCH, CREATE, UPDATE, DELETE, SCHEMA and
+  UNWRAP_KEY stop nothing. `docs/security/gps-decide.md` lists what is
+  enforced; SONNY-2781 tracks wiring the rest.
 - **GPS deny policies deny (SONNY-2744):** `decide()` skipped deny-effect
   policies, and the builtin-role check ran before the policy catalog, so a
   deny never denied. A matching deny now wins over a builtin role, an Admin

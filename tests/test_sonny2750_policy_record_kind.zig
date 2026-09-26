@@ -191,6 +191,7 @@ fn hydratedAfter(allocator: std.mem.Allocator, spec: policy_catalog.PolicySpec, 
     }
     var agm = try AuthGraphManager.init(allocator, &store);
     defer agm.deinit();
+    try signAsBeforeKinds(&agm, &store);
     try agm.sealChain(&HMAC_KEY);
     var cat = PolicyCatalog.init(allocator);
     defer cat.deinit();
@@ -342,6 +343,18 @@ fn preKindPolicyHmac(record: *const user_storage.UserStorageBackend.PolicyRecord
     return auth_hmac.hmacToHex(&h);
 }
 
+/// Store on each policy record without a kind the HMAC v0.8.22 computed for
+/// it: the older writer signed what it wrote. Since SONNY-2791 no seal signs
+/// a record without a kind whose HMAC does not verify.
+fn signAsBeforeKinds(agm: *AuthGraphManager, store: *graph_store.GraphStore) !void {
+    var it = agm.storage.policyIterator();
+    while (it.next()) |record| {
+        if (record.kind != .legacy) continue;
+        const hex = try preKindPolicyHmac(record);
+        try store.setNodeProperty(agm.storage.policy_nodes.get(record.id).?, "hmac", .{ .String = &hex });
+    }
+}
+
 test "SONNY-2750: a GPS record stored before records had a kind is hashed as before and still loads" {
     const allocator = testing.allocator;
     var store = try graph_store.GraphStore.init(allocator);
@@ -359,15 +372,17 @@ test "SONNY-2750: a GPS record stored before records had a kind is hashed as bef
     }
     var agm = try AuthGraphManager.init(allocator, &store);
     defer agm.deinit();
-    try agm.sealChain(&HMAC_KEY);
     var it = agm.storage.policyIterator();
     const record = it.next().?;
     const node = agm.storage.policy_nodes.get(record.id).?;
     try testing.expectEqual(PolicyKind.legacy, record.kind);
     try testing.expectEqual(PolicyKind.gps, record.effectiveKind());
-    // The HMAC stored for it is the one v0.8.22 computed, so a chain sealed
-    // before the upgrade still verifies after it.
+    // v0.8.22 stored this HMAC for it. The seal verifies it (SONNY-2791: no
+    // seal signs a record without a kind that does not verify) and stores the
+    // same one, so a chain sealed before the upgrade still verifies after it.
     const expected = try preKindPolicyHmac(record);
+    try store.setNodeProperty(node, "hmac", .{ .String = &expected });
+    try agm.sealChain(&HMAC_KEY);
     try testing.expectEqualStrings(&expected, store.getNodeProperty(node, "hmac").?.String);
     try agm.verifyChain(&HMAC_KEY);
 
