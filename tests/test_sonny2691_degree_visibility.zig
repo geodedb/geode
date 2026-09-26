@@ -166,6 +166,80 @@ test "SONNY-2691 (P11): 2,000 degree calls in a tenant-scoped session retain no 
     try checkRetainsNothing(.tenant_scoped);
 }
 
+// CANARY: REQ=REQ-SONNY-2691-ROW-SCOPE-TEARDOWN; FEATURE="NodeDegreeFunctions"; ASPECT=RowScopeFreesHopScope; STATUS=TESTED; TEST=tests/test_sonny2691_degree_visibility.zig; OWNER=security; UPDATED=2026-09-26
+/// Item 4 (the SONNY-2686 review): `beginHopRowScope` builds the evaluator's
+/// row scope on the main line's `HopScope.init(allocator, ..)`, whose verdict
+/// cache and label-deny snapshot live on the evaluation's allocator, and whose
+/// snapshot is made current on the thread until `deinit`. The row scope's own
+/// teardown must call `hop.deinit()`; without it every degree or knn() call
+/// in a restricted session leaked them and left the snapshot installed. The
+/// executor evaluates on a per-query arena, which hides such a leak, so here
+/// the evaluator runs directly on the testing allocator.
+fn evalOnTestingAllocator(s: *h.Session, expr_src: []const u8, param_names: []const []const u8, param_values: []const h.Value) !h.Value {
+    const aa = s.arena.allocator();
+    var parsed = try geode.parseGql(try std.fmt.allocPrint(aa, "RETURN {s}", .{expr_src}), aa);
+    defer parsed.deinit();
+    const item_expr = parsed.program.statements[0].Query.ret.items[0].expr;
+    const prev = geode.execution.pushActiveContext(&s.ctx);
+    defer geode.execution.popActiveContext(prev);
+    const env = geode.eval.Env{ .names = &.{}, .values = &.{}, .param_names = param_names, .param_values = param_values, .allocator = testing.allocator };
+    return geode.eval.evalExpr(testing.allocator, item_expr, env);
+}
+
+fn checkRowScopeTeardown(mode: h.Mode) !void {
+    var s = try h.Session.init(mode);
+    defer s.deinit();
+    const aa = s.arena.allocator();
+    var f: h.Failures = .{};
+    const owner: ?[]const u8 = if (mode == .tenant_scoped) h.tenant_a else null;
+    try s.execAs(owner, "CREATE (:G {s: 'g1'})");
+    try s.execAs(owner, "CREATE (:Doc {s: 'ok', cls: 'public', emb: vectorf32([1.0, 0.0])})");
+    switch (mode) {
+        .label_policy => try s.execAs(null, "CREATE (:Hidden {s: 'leak', cls: 'secret', emb: vectorf32([0.0, 1.0])})"),
+        .expr_policy => try s.execAs(null, "CREATE (:Doc {s: 'leak', cls: 'secret', emb: vectorf32([0.0, 1.0])})"),
+        .tenant_scoped => try s.execAs(h.tenant_b, "CREATE (:Doc {s: 'leak', cls: 'secret', emb: vectorf32([0.0, 1.0])})"),
+        .no_policy => unreachable,
+    }
+    const store = graph_store.getGlobalStore(testing.allocator);
+    const g1 = try s.idOf("g1");
+    const ok = try s.idOf("ok");
+    const edge_tenant = if (mode == .tenant_scoped) h.tenant_a else graph_store.DEFAULT_TENANT_ID;
+    _ = try store.createEdgeWithGraphAndTenant(g1, ok, "R", graph_store.DEFAULT_GRAPH_NAME, edge_tenant);
+    _ = try store.createEdgeWithGraphAndTenant(g1, try s.idOf("leak"), "R", graph_store.DEFAULT_GRAPH_NAME, edge_tenant);
+    try s.restrict("Hidden");
+
+    // The degree: the hidden neighbour does not count (a verdict is cached
+    // for it, and under the label policy the snapshot is taken).
+    for (0..3) |_| {
+        const degree = try evalOnTestingAllocator(&s, try std.fmt.allocPrint(aa, "outdegree({d})", .{g1}), &.{}, &.{});
+        if (degree != .Int or degree.Int != 1) try f.add(aa, "[{s}] outdegree(g1) = {s}, expected 1", .{ @tagName(mode), try h.render(aa, degree) });
+    }
+    // knn(): the hidden row is never a candidate.
+    var q_items = [_]h.Value{ .{ .Double = 0.0 }, .{ .Double = 1.0 } };
+    const q_names = [_][]const u8{"q"};
+    const q_values = [_]h.Value{.{ .List = &q_items }};
+    for (0..3) |_| {
+        const ids = try evalOnTestingAllocator(&s, "knn('emb', $q, 5, 'l2')", &q_names, &q_values);
+        defer if (ids == .List) testing.allocator.free(ids.List);
+        const want = try std.fmt.allocPrint(aa, "[{d}]", .{ok});
+        const got = try h.render(aa, ids);
+        if (!std.mem.eql(u8, got, want)) try f.add(aa, "[{s}] knn = {s}, expected {s}", .{ @tagName(mode), got, want });
+    }
+    try f.finish(@tagName(mode));
+}
+
+test "SONNY-2691 (item 4): a degree and a knn() call in a label-deny session free their row scope, leak-checked" {
+    try checkRowScopeTeardown(.label_policy);
+}
+
+test "SONNY-2691 (item 4): a degree and a knn() call in an expression-policy session free their row scope, leak-checked" {
+    try checkRowScopeTeardown(.expr_policy);
+}
+
+test "SONNY-2691 (item 4): a degree and a knn() call in a tenant-scoped session free their row scope, leak-checked" {
+    try checkRowScopeTeardown(.tenant_scoped);
+}
+
 // LAST on purpose: before the fix a negative id PANICS (safety-checked
 // illegal behaviour), which aborts the test binary as it aborted the server.
 test "SONNY-2691: a negative id is not a node: its degree is 0, in every session" {
