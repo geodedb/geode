@@ -8684,6 +8684,25 @@ pub fn build(b: *std.Build) void {
     const sonny2776_quic_step = b.step("test-sonny2776-quic-graph-uses", "Run SONNY-2776 QUIC e2e regression (spawns a server: the label-deny post-filter after USE GRAPH applies the switched-to graph's policies; a transaction that changes a second graph is refused)");
     sonny2776_quic_step.dependOn(&run_sonny2776_quic_tests.step);
 
+    // SONNY-2802 / SONNY-2752: EXPLAIN and PROFILE run alone (a program that
+    // carries one with other statements is refused, 0A000), and a PROFILE'd
+    // change is recorded in the session's transaction. The decision, the real
+    // gRPC handler in process (SONNY-1560 shim), and QUIC against a spawned
+    // server.
+    const sonny2802_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny2802_profile_regime.zig"), .target = target, .optimize = optimize });
+    sonny2802_test_mod.link_libc = true;
+    sonny2802_test_mod.addImport("geode", root_mod);
+    sonny2802_test_mod.addImport("schema", schema_mod);
+    sonny2802_test_mod.addImport("protobuf", protobuf_mod);
+    sonny2802_test_mod.addImport("grpc_impl", sonny1560_shim_mod);
+    sonny2802_test_mod.addImport("logging", logging_mod);
+    sonny2802_test_mod.addImport("transport/quic", transport_quic_mod);
+    const sonny2802_tests = b.addTest(.{ .root_module = sonny2802_test_mod });
+    const run_sonny2802_tests = b.addRunArtifact(sonny2802_tests);
+    run_sonny2802_tests.step.dependOn(&install_geode_exe.step);
+    const sonny2802_step = b.step("test-sonny2802-profile-regime", "Run SONNY-2802/SONNY-2752 regression (an EXPLAIN or PROFILE sent with other statements is refused, 0A000, rather than run in part under the whole program's lock; a PROFILE'd change is recorded in the transaction; gRPC in process and QUIC against a spawned server)");
+    sonny2802_step.dependOn(&run_sonny2802_tests.step);
+
     // SONNY-2790: the fulltext statements (CREATE/DROP INDEX, geode.fts.*)
     // run on the default graph, so the handlers lock `default` for them from
     // any session. Classifier, and the real gRPC handler (SONNY-1560 shim).

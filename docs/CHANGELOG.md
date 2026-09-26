@@ -126,6 +126,23 @@
   A request that changes a graph that does not exist is refused with 3F000,
   and the graph is not created. The CLI's `-g` flag, which sends a
   `USE GRAPH` of the current graph before the query, works as before.
+- **EXPLAIN and PROFILE run alone (SONNY-2802, SONNY-2752):** both
+  handlers take a request's lock, write gate and transaction bookkeeping from
+  the whole program. But they only plan an EXPLAIN'd statement and only run
+  a PROFILE'd one, and every other statement in the request was dropped
+  without a word. So `USE GRAPH g1; PROFILE CREATE (:X)` took g1's write lock
+  and wrote to the session's graph beside that graph's writers, and
+  `CREATE (:X); EXPLAIN ...` was permission-checked and never ran.
+  - A request that carries an EXPLAIN or PROFILE with any other statement,
+    transaction control included, is now refused (0A000). Send the other
+    statements, and any USE GRAPH, in a request of their own.
+  - The exception is a re-selection of the graph the session is already on,
+    which changes nothing. So `geode query -g g1 "PROFILE ..."` runs when the
+    session is on g1 (a DSN that names g1), and is refused on a session on
+    another graph; select g1 first.
+  - A PROFILE'd change is recorded in the session's transaction like any
+    other. A change of a second graph is then refused, and ROLLBACK takes
+    the write lock of the graph the transaction changed.
 - **The generated admin password file is created safely, in the data
   directory only (SONNY-2778):** the first boot of `geode serve`,
   `geode auth init` and the legacy `SecurityManager` write a generated admin

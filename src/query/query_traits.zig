@@ -584,6 +584,37 @@ pub fn restOfProgramIsNoop(analysis: *const ProgramAnalysis, session_graph: []co
     return std.mem.eql(u8, selector, session_graph);
 }
 
+// CANARY: REQ=REQ-SONNY-2802-PROFILE-REGIME; FEATURE="StatementAuthorization"; ASPECT=ExplainProfileAlone; STATUS=TESTED; TEST=tests/test_sonny2802_profile_regime.zig; OWNER=security; UPDATED=2026-09-26
+/// SONNY-2802 / SONNY-2752: what the handlers answer (SQLSTATE 0A000) to an
+/// EXPLAIN or PROFILE sent with other statements.
+pub const explain_profile_alone_message = "EXPLAIN and PROFILE run alone: send the other statements of the request, and any USE GRAPH, in a request of their own";
+
+/// SONNY-2802 / SONNY-2752: does `program` carry its EXPLAIN or PROFILE
+/// together with a statement the handlers would not run? The handlers' EXPLAIN
+/// arm only plans the EXPLAIN'd statement, and their PROFILE arm runs only the
+/// PROFILE'd one; every other statement was dropped without a word. Yet the
+/// program's lock, write gate and transaction bookkeeping come from the whole
+/// program (`statementPlan`): `USE GRAPH g1; PROFILE CREATE (:X)` took g1's
+/// write lock and wrote to the session's graph, and `CREATE (:X); EXPLAIN ...`
+/// was permission-checked and never ran. The handlers refuse such a program
+/// (0A000). One exception: a re-selection of `session_graph` (`USE GRAPH g;`
+/// or `SESSION SET PROPERTY GRAPH g;` naming the graph the session is already
+/// on, as the CLI's `-g` flag and pooled drivers send) changes nothing
+/// (`restOfProgramIsNoop`). Transaction control is not an exception: the
+/// arms never run it.
+pub fn explainOrProfileHasCompany(program: *const ast.Program, analysis: *const ProgramAnalysis, session_graph: []const u8) bool {
+    if (analysis.kind == .rows) return false;
+    var wrappers: usize = 0;
+    for (program.statements) |*stmt| switch (stmt.*) {
+        .Explain, .Profile => wrappers += 1,
+        else => {
+            const selected = preambleGraphSelectorName(stmt) orelse return true;
+            if (!std.mem.eql(u8, selected, session_graph)) return true;
+        },
+    };
+    return wrappers != 1;
+}
+
 // CANARY: REQ=REQ-SONNY-2733-BACKFILL-LOCKING; FEATURE="PerTenantIsolation"; ASPECT=HandlerLockBypass; STATUS=TESTED; TEST=tests/test_sonny2733_backfill_locking.zig; OWNER=security; UPDATED=2026-09-25
 /// SONNY-2733: is `program` a single CALL of a procedure that takes each
 /// graph's lock itself (`procedure_access.isSelfLockingProcedure`, i.e.

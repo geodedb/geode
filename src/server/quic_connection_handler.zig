@@ -7677,6 +7677,14 @@ fn handleClientMessage(
                 }
             }
 
+            // CANARY: REQ=REQ-SONNY-2802-PROFILE-REGIME; FEATURE="StatementAuthorization"; ASPECT=QuicHandler; STATUS=TESTED; TEST=tests/test_sonny2802_profile_regime.zig; OWNER=security; UPDATED=2026-09-26
+            // SONNY-2802 / SONNY-2752: the .explain and .profile arms plan or
+            // run one statement. A program with anything else in it is
+            // refused rather than run in part under the whole program's lock.
+            if (query_traits.explainOrProfileHasCompany(&parse_result.program, &analysis, query_graph_name)) {
+                try sendExecuteError(gpa, stream, "0A000", query_traits.explain_profile_alone_message, &.{}, &.{});
+                return;
+            }
             // SONNY-2749: one graph's write lock cannot cover a program that
             // changes data on several, and a handler never holds two.
             if (stmt_plan.spans_graphs) {
@@ -8268,6 +8276,10 @@ fn handleClientMessage(
                             var owned_planned = planned;
                             defer owned_planned.deinitMetadata(gpa);
                             defer owned_planned.result.deinit(gpa);
+                            // CANARY: REQ=REQ-SONNY-2802-PROFILE-REGIME; FEATURE="StatementAuthorization"; ASPECT=QuicProfileTxn; STATUS=TESTED; TEST=tests/test_sonny2802_profile_regime.zig; OWNER=security; UPDATED=2026-09-26
+                            // SONNY-2802: a PROFILE'd change is its transaction's,
+                            // recorded as soon as it ran, as the .rows arm does.
+                            updateTxnStateFromProgram(state, &parse_result.program, if (stmt_plan.is_mutation) lock_graph else null);
 
                             for (flags.items) |flag| {
                                 try appendFlagToResult(gpa, &owned_planned.result, flag);
@@ -8325,6 +8337,8 @@ fn handleClientMessage(
                         return;
                     };
                     defer exec_result.deinit(gpa);
+                    // SONNY-2802: see the planned path above.
+                    updateTxnStateFromProgram(state, &parse_result.program, if (stmt_plan.is_mutation) lock_graph else null);
 
                     for (flags.items) |flag| {
                         try appendFlagToResult(gpa, &exec_result, flag);
