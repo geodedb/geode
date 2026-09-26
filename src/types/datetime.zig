@@ -154,6 +154,12 @@ pub const TimeTZ = struct {
     time: Time,
     offset_seconds: i32,
 
+    /// The UTC time of day in microseconds, which two zoned times compare by
+    /// (i128: a decoded time of day may be any i64).
+    pub fn utcMicros(self: TimeTZ) i128 {
+        return @as(i128, self.time.micros_since_midnight) - @as(i128, self.offset_seconds) * std.time.us_per_s;
+    }
+
     pub fn fromStr(str: []const u8) Date.Error!TimeTZ {
         if (str.len == 0) return Date.Error.ParseError;
 
@@ -285,6 +291,36 @@ pub const Interval = struct {
     months: i32,
     days: i32,
     micros: i64,
+
+    // CANARY: REQ=REQ-SONNY-2675-INTERVAL-COMPARISON; FEATURE="IntervalComparison"; ASPECT=YearMonthVsDayTime; STATUS=TESTED; TEST=tests/test_sonny2675_aggregate_semantics.zig; OWNER=datetime; UPDATED=2026-09-26
+    /// The day-to-second length in microseconds (a day is 24 hours).
+    pub fn dayTimeMicros(self: Interval) i128 {
+        return @as(i128, self.days) * std.time.us_per_day + self.micros;
+    }
+
+    /// Two durations are equal when their year-to-month parts (months) and
+    /// their day-to-second lengths are: P1D = PT24H, but 1 month is not
+    /// 30 days (ISO/IEC 39075 keeps the two kinds of duration apart).
+    pub fn eql(a: Interval, b: Interval) bool {
+        return a.months == b.months and a.dayTimeMicros() == b.dayTimeMicros();
+    }
+
+    /// The total order ORDER BY, GROUP BY and DISTINCT use: by months, then
+    /// by the day-to-second length. -1, 0 or 1.
+    pub fn order(a: Interval, b: Interval) i8 {
+        if (a.months != b.months) return if (a.months < b.months) -1 else 1;
+        const da = a.dayTimeMicros();
+        const db = b.dayTimeMicros();
+        return if (da < db) -1 else if (da > db) 1 else 0;
+    }
+
+    /// Whether `<`, `<=`, `>` and `>=` are defined for the pair: when one
+    /// part is the same on both sides, the other decides, whatever a month's
+    /// length. A year-to-month duration against a day-to-second one (1 month
+    /// against 30 days) is not comparable.
+    pub fn comparable(a: Interval, b: Interval) bool {
+        return a.months == b.months or a.dayTimeMicros() == b.dayTimeMicros();
+    }
 
     pub fn fromStr(str: []const u8) Date.Error!Interval {
         if (str.len == 0 or str[0] != 'P') return Date.Error.ParseError;

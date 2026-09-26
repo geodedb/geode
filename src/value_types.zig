@@ -75,6 +75,10 @@ pub const EvalError = error{
     // the 58000 system-error class.
     // CANARY: REQ=REQ-ENG-3910-IN-PREDICATE-TYPE-SAFETY; FEATURE="InOperator"; ASPECT=NonListRightHandSide; STATUS=TESTED; TEST=tests/test_eng3910_in_type_safety.zig; OWNER=eval; UPDATED=2026-08-24
     InListRequiresList,
+    // Round 4 (I1'): an ordering comparison (<, <=, >, >=) of two values
+    // that have no order between them: a year-to-month duration against a
+    // day-to-second one (1 month against 30 days). GQLSTATE 22G04.
+    ValuesNotComparable,
     // Spec geode-vectorization-and-reranking: knn()'s query metric does not
     // match the metric the target HNSW index was built with. Distinct from
     // InvalidArgs so it can carry its own GQLSTATE (42704) in proto_util.
@@ -393,10 +397,13 @@ pub fn eqVals(a: Value, b: Value) bool {
         .Text => |at| b == .Text and std.mem.eql(u8, at, b.Text),
         .Date => |ad| b == .Date and ad.days_since_epoch == b.Date.days_since_epoch,
         .Time => |at| b == .Time and at.micros_since_midnight == b.Time.micros_since_midnight,
-        .TimeTZ => |at| b == .TimeTZ and at.time.micros_since_midnight == b.TimeTZ.time.micros_since_midnight and at.offset_seconds == b.TimeTZ.offset_seconds,
+        // Round 4 (I1'): a zoned time by its UTC time and a duration by its
+        // months and day-to-second length, as GROUP BY, DISTINCT and ORDER BY
+        // compare them; both were compared field by field.
+        .TimeTZ => |at| b == .TimeTZ and at.utcMicros() == b.TimeTZ.utcMicros(),
         .Timestamp => |at| b == .Timestamp and at.micros_since_epoch == b.Timestamp.micros_since_epoch,
         .TimestampTZ => |at| b == .TimestampTZ and at.micros_since_epoch_utc == b.TimestampTZ.micros_since_epoch_utc,
-        .Interval => |ai| b == .Interval and ai.months == b.Interval.months and ai.days == b.Interval.days and ai.micros == b.Interval.micros,
+        .Interval => |ai| b == .Interval and ai.eql(b.Interval),
         .Bytea => |ab| b == .Bytea and std.mem.eql(u8, ab, b.Bytea),
         .Json => |aj| b == .Json and std.mem.eql(u8, aj, b.Json),
         .Jsonb => |aj| b == .Jsonb and std.mem.eql(u8, aj.data, b.Jsonb.data), // Compare canonical data
@@ -501,10 +508,10 @@ pub fn eqExtValues(a: @import("eval_extended.zig").ExtValue, b: @import("eval_ex
         .VectorI32 => |v| std.mem.eql(i32, v.data, b.VectorI32.data),
         .Date => |v| v.days_since_epoch == b.Date.days_since_epoch,
         .Time => |v| v.micros_since_midnight == b.Time.micros_since_midnight,
-        .TimeTZ => |v| v.time.micros_since_midnight == b.TimeTZ.time.micros_since_midnight and v.offset_seconds == b.TimeTZ.offset_seconds,
+        .TimeTZ => |v| v.utcMicros() == b.TimeTZ.utcMicros(),
         .Timestamp => |v| v.micros_since_epoch == b.Timestamp.micros_since_epoch,
         .TimestampTZ => |v| v.micros_since_epoch_utc == b.TimestampTZ.micros_since_epoch_utc,
-        .Interval => |v| v.months == b.Interval.months and v.days == b.Interval.days and v.micros == b.Interval.micros,
+        .Interval => |v| v.eql(b.Interval),
         .UUID => |v| std.mem.eql(u8, &v.bytes, &b.UUID.bytes),
         .Url => |v| std.mem.eql(u8, v.scheme, b.Url.scheme) and std.mem.eql(u8, v.host, b.Url.host) and v.port == b.Url.port,
         .Domain => |v| blk: {

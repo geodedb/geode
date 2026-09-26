@@ -195,6 +195,7 @@ pub fn mapError(err: anyerror) ErrorInfo {
         // it is now refused as a data exception (class 22) so a mis-bound
         // parameter can never silently widen a predicate.
         // CANARY: REQ=REQ-ENG-3910-IN-PREDICATE-TYPE-SAFETY; FEATURE="InOperator"; ASPECT=NonListRightHandSide; STATUS=TESTED; TEST=tests/test_eng3910_in_type_safety.zig; OWNER=eval; UPDATED=2026-08-24
+        error.ValuesNotComparable => .{ .code = "22G04", .message = "values not comparable: an ordering comparison of a year-to-month duration and a day-to-second duration (1 month is not a number of days)" },
         error.InListRequiresList => .{ .code = "22000", .message = "The right-hand side of IN / NOT IN must be a list (or NULL); a scalar value is not a list. Bind a list parameter, e.g. --param p '[1,2,3]'" },
         error.InvalidTypeConversion => .{ .code = "22003", .message = "Invalid type conversion" },
         // GAP-0905/GAP-0907: checked numeric narrowing (CAST, MakeInterval, ...)

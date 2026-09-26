@@ -237,13 +237,13 @@ fn writeFloatKey(w: *std.Io.Writer, f: f64) std.Io.Writer.Error!void {
 /// The day-to-second length of an interval in microseconds (a day is 24
 /// hours).
 pub fn intervalDayTime(iv: Interval) i128 {
-    return @as(i128, iv.days) * std.time.us_per_day + iv.micros;
+    return iv.dayTimeMicros();
 }
 
-/// Intervals by months, then by their day-to-second length.
+/// Intervals by months, then by their day-to-second length
+/// (datetime.Interval.order, which eval's comparisons share).
 pub fn compareIntervals(a: Interval, b: Interval) i8 {
-    if (a.months != b.months) return cmp(i32, a.months, b.months);
-    return cmp(i128, intervalDayTime(a), intervalDayTime(b));
+    return a.order(b);
 }
 
 pub fn writeIntervalKey(w: *std.Io.Writer, iv: Interval) std.Io.Writer.Error!void {
@@ -256,5 +256,5 @@ pub fn writeIntervalKey(w: *std.Io.Writer, iv: Interval) std.Io.Writer.Error!voi
 /// a decoded value's time of day is any i64, and subtracting the offset in
 /// i64 could overflow (round 4 audit of the round-3 helpers).
 pub fn timeTzUtcMicros(t: TimeTZ) i128 {
-    return @as(i128, t.time.micros_since_midnight) - @as(i128, t.offset_seconds) * std.time.us_per_s;
+    return t.utcMicros();
 }

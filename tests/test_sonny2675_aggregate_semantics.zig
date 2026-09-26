@@ -683,3 +683,34 @@ fn checkSumTypes(s: *Session, f: *Failures) !void {
 test "SONNY-2675: sum and avg refuse every non-numeric input" {
     try inEveryMode("sum types", checkSumTypes);
 }
+
+fn checkIntervalComparison(s: *Session, f: *Failures) !void {
+    // Round 4 (I1'): WHERE and HAVING compare durations as GROUP BY, DISTINCT
+    // and ORDER BY do. `=` counted a month as 30 days, so P1M = P30D was true
+    // while the two were two groups.
+    try expectRows(s, f, "RETURN duration('P1M') = duration('P30D') AS x", &.{}, &.{"false"});
+    try expectRows(s, f, "RETURN duration('P1M') <> duration('P30D') AS x", &.{}, &.{"true"});
+    try expectRows(s, f, "RETURN duration('P1D') = duration('PT24H') AS x", &.{}, &.{"true"});
+    try expectRows(s, f, "RETURN duration('P1D') IN [duration('PT24H')] AS x", &.{}, &.{"true"});
+    // WHERE agrees with the groups: P1D and PT24H are one value, P30D and
+    // P1M are two.
+    try expectRows(s, f, "MATCH (n:D) WHERE duration(n.t) = duration('P1D') RETURN count(*) AS c", &.{}, &.{"2"});
+    try expectRows(s, f, "MATCH (n:D) WHERE duration(n.t) = duration('P30D') RETURN count(*) AS c", &.{}, &.{"1"});
+    try expectRows(s, f, "MATCH (n:D) RETURN n.g AS g GROUP BY n.g HAVING min(duration(n.t)) = duration('PT24H')", &.{}, &.{"'d'"});
+    // Ordering: defined when the months or the day-to-second lengths are
+    // equal; a year-to-month duration against a day-to-second one is not
+    // comparable (22G04).
+    try expectRows(s, f, "RETURN duration('P1M') < duration('P2M') AS x", &.{}, &.{"true"});
+    try expectRows(s, f, "RETURN duration('P1D') < duration('PT25H') AS x", &.{}, &.{"true"});
+    try expectRows(s, f, "RETURN duration('PT0S') < duration('P1M') AS x", &.{}, &.{"true"});
+    try expectRows(s, f, "RETURN duration('P1M1D') < duration('P1M2D') AS x", &.{}, &.{"true"});
+    try expectFail(s, f, "RETURN duration('P1M') < duration('P30D') AS x", &.{}, error.ValuesNotComparable);
+    try expectFail(s, f, "RETURN duration('P1M') >= duration('P40D') AS x", &.{}, error.ValuesNotComparable);
+    // A time with a time zone is equal by its UTC time (as it groups).
+    try expectRows(s, f, "RETURN timetz('10:00:00+01:00') = timetz('09:00:00+00:00') AS x", &.{}, &.{"true"});
+    try expectRows(s, f, "MATCH (n:Z) WHERE timetz(n.t) = timetz('09:00:00+00:00') RETURN count(*) AS c", &.{}, &.{"2"});
+}
+
+test "SONNY-2675: WHERE compares durations and zoned times as GROUP BY does" {
+    try inEveryMode("interval comparison", checkIntervalComparison);
+}

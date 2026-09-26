@@ -677,20 +677,23 @@ pub fn evalBinary(alloc: std.mem.Allocator, op: ast.BinOp, l: Value, r: Value) E
                     .gt => 1,
                 }) };
             }
-            // Interval
+            // Interval. Round 4 (I1'): a month counted as 30 days here, so
+            // WHERE and HAVING disagreed with GROUP BY, DISTINCT and ORDER BY
+            // (value_order): `P1M = P30D` was true, yet the two were two groups.
+            // ISO/IEC 39075 keeps year-to-month and day-to-second durations
+            // apart. `=` and `<>` compare the months and the day-to-second
+            // length (P1D = PT24H; P1M <> P30D). `<`, `<=`, `>` and `>=` are
+            // defined when one part is the same on both sides; otherwise
+            // (P1M against P30D) the values are not comparable: 22G04.
             if (l == .Interval and r == .Interval) {
-                // Compare total microseconds? Roughly.
-                // This is simplistic (ignores month/day length variance), but consistent for ordering.
-                // Convert to rough micros: months*30*24*3600*1e6 + days*24*3600*1e6 + micros
-                // Just implementation detail for now.
-                const l_micros = @as(i128, l.Interval.months) * 30 * 86400 * micros_per_second + @as(i128, l.Interval.days) * 86400 * micros_per_second + l.Interval.micros;
-                const r_micros = @as(i128, r.Interval.months) * 30 * 86400 * micros_per_second + @as(i128, r.Interval.days) * 86400 * micros_per_second + r.Interval.micros;
-                const ord = std.math.order(l_micros, r_micros);
-                return .{ .Bool = cmpToBool(op, switch (ord) {
-                    .lt => -1,
-                    .eq => 0,
-                    .gt => 1,
-                }) };
+                const a = l.Interval;
+                const b = r.Interval;
+                if (op == .Eq or op == .Ne) {
+                    const eq = a.eql(b);
+                    return .{ .Bool = if (op == .Eq) eq else !eq };
+                }
+                if (!a.comparable(b)) return EvalError.ValuesNotComparable;
+                return .{ .Bool = cmpToBool(op, @intCast(a.order(b))) };
             }
 
             // CANARY: REQ=REQ-GQL-NULL-SEMANTICS-002; FEATURE="ThreeValuedLogic"; ASPECT=NullComparison; STATUS=TESTED; TEST=geodetestlab/specs/gql_expressions_comprehensive.yml; OWNER=eval; UPDATED=2026-01-09
@@ -4479,6 +4482,10 @@ fn inList(value: Value, set: []*ast.Expr, allocator: std.mem.Allocator, env: Env
             const es = try stringify(ev, &bufE);
             if (std.mem.eql(u8, vs, es)) return .{ .Bool = true };
         }
+        // Round 4 (I1'): any other value is in the list when an item of its
+        // type equals it as `=` says (a duration, a zoned time, a date, ...);
+        // only integers and strings could match a literal list.
+        if (std.meta.activeTag(value) == std.meta.activeTag(ev) and eqVals(value, ev)) return .{ .Bool = true };
     }
     if (saw_null) return Value{ .Null = {} };
     return .{ .Bool = false };
