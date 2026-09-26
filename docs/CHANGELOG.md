@@ -126,6 +126,14 @@
   A request that changes a graph that does not exist is refused with 3F000,
   and the graph is not created. The CLI's `-g` flag, which sends a
   `USE GRAPH` of the current graph before the query, works as before.
+- **`geode auth policy create` no longer overwrites a GPS policy
+  (SONNY-2777):** the command took its policy id from the next *user* id, so
+  it could reuse the id of an existing GPS policy and overwrite that record.
+  The `geode-auth` tool used the current millisecond, so two policies
+  created in the same millisecond shared one record. Every policy writer now
+  takes its id from one sequence (one more than any policy record's). A new
+  policy record never overwrites an existing one, and an update keeps the
+  record's kind (GPS or RLS).
 - **gRPC uses the session's graph, and a transaction changes one graph
   (SONNY-2776):** the gRPC handler never set its copy of the session's graph
   (`current_graph`), so every use of it meant `default`:

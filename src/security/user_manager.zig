@@ -469,7 +469,10 @@ pub const UserManager = struct {
             }
         }
 
-        const policy_id = @as(u64, @intCast(compat_milliTimestamp()));
+        // SONNY-2777: the policy id sequence every policy writer shares. It
+        // was the wall-clock millisecond: two policies created in one
+        // millisecond shared an id, and a GPS policy could hold it.
+        const policy_id = self.user_storage.nextPolicyId();
 
         const policy = rls.RLSEngine.Policy{
             .id = policy_id,
@@ -506,7 +509,7 @@ pub const UserManager = struct {
         // a policy that cannot be persisted is taken out again, so the engine
         // and the store never disagree.
         try self.rls_engine.createPolicy(policy);
-        self.persistPolicy(policy) catch |err| {
+        self.persistPolicy(policy, .create) catch |err| {
             self.rls_engine.deletePolicy(policy_id) catch {};
             return err;
         };
@@ -569,7 +572,7 @@ pub const UserManager = struct {
         }
 
         try self.rls_engine.updatePolicy(policy_id, policy);
-        try self.persistPolicy(policy);
+        try self.persistPolicy(policy, .replace);
     }
 
     pub fn deletePolicy(self: *Self, policy_id: u64) !void {
@@ -711,7 +714,7 @@ pub const UserManager = struct {
         );
     }
 
-    fn persistPolicy(self: *Self, policy: rls.RLSEngine.Policy) !void {
+    fn persistPolicy(self: *Self, policy: rls.RLSEngine.Policy, mode: user_storage.UserStorageBackend.PersistMode) !void {
         const operation_byte: u8 = switch (policy.operation) {
             .select => 0,
             .insert => 1,
@@ -747,6 +750,7 @@ pub const UserManager = struct {
             .created_by = policy.created_by,
             // SONNY-2750: an RLS record, which GPS never loads.
             .kind = .rls,
+            .mode = mode,
         });
     }
 

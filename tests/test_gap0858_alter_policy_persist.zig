@@ -285,6 +285,7 @@ test "ALTER preserves created_at across enable/disable + rename (no clobber)" {
         .created_by = 0,
         .created_at = SENTINEL_CREATED_AT,
         .kind = .gps,
+        .mode = .create,
     });
     // The seed node carries no HMAC yet; the first alterPolicy below recomputes
     // the policy HMAC and reseals the whole chain, so verifyChain is asserted

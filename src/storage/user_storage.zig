@@ -1323,13 +1323,44 @@ pub const UserStorageBackend = struct {
         /// SONNY-2750: which system the record belongs to: `.gps` or `.rls`.
         /// Required, with no default, so no writer can leave it out.
         kind: PolicyKind,
+        /// SONNY-2777: whether the record is new or replaces one. Required,
+        /// with no default.
+        mode: PersistMode,
     };
+
+    /// SONNY-2777: `.create` writes a record whose id no record has
+    /// (`error.PolicyIdInUse` otherwise). `.replace` rewrites an existing
+    /// record of the same kind (`error.PolicyNotFound`,
+    /// `error.PolicyKindMismatch`). A create used to reuse the node of any
+    /// record with its id: `geode auth policy create` took its id from the
+    /// next *user* id, and overwrote a GPS policy that had it.
+    pub const PersistMode = enum { create, replace };
+
+    // CANARY: REQ=REQ-SONNY-2777-POLICY-IDS; FEATURE="GPS Policy Persistence"; ASPECT=PolicyIdSequence; STATUS=TESTED; TEST=tests/test_sonny2777_policy_ids.zig; OWNER=security; UPDATED=2026-09-26
+    /// SONNY-2777: the id for a new policy record: one more than any policy
+    /// record's, loaded or not. Every policy writer takes its id here (GPS,
+    /// `geode auth policy create`, the geode-auth tool), so no two share one.
+    pub fn nextPolicyId(self: *Self) u64 {
+        var max_id: u64 = 0;
+        var cached = self.policy_cache.keyIterator();
+        while (cached.next()) |id| max_id = @max(max_id, id.*);
+        var nodes = self.policy_nodes.keyIterator();
+        while (nodes.next()) |id| max_id = @max(max_id, id.*);
+        return max_id + 1;
+    }
 
     pub fn persistPolicy(self: *Self, opts: PolicyPersistOptions) !void {
         if (opts.name.len > 63 or opts.description.len > 255 or opts.graph.len > 63 or opts.table.len > 63) {
             return error.FieldTooLong;
         }
         if (opts.kind.property() == null) return error.InvalidPolicyKind;
+        switch (opts.mode) {
+            .create => if (self.policy_cache.contains(opts.policy_id) or self.policy_nodes.contains(opts.policy_id)) return error.PolicyIdInUse,
+            .replace => {
+                const existing = self.policy_cache.get(opts.policy_id) orelse return error.PolicyNotFound;
+                if (existing.effectiveKind() != opts.kind) return error.PolicyKindMismatch;
+            },
+        }
 
         var record = blankPolicyRecord(opts.policy_id);
         record.name_len = copyIntoField(&record.name, opts.name);

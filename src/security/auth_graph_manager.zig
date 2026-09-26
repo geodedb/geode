@@ -1268,13 +1268,8 @@ pub const AuthGraphManager = struct {
     ) !u64 {
         if (self.findPolicyIdByName(name)) |existing_id| return existing_id;
 
-        // Derive next policy id: max across the cache + 1.
-        var max_id: u64 = 0;
-        var it = self.storage.policy_cache.keyIterator();
-        while (it.next()) |key| {
-            if (key.* > max_id) max_id = key.*;
-        }
-        const policy_id = max_id + 1;
+        // SONNY-2777: the policy id sequence every policy writer shares.
+        const policy_id = self.storage.nextPolicyId();
 
         try self.storage.persistPolicy(.{
             .policy_id = policy_id,
@@ -1290,6 +1285,7 @@ pub const AuthGraphManager = struct {
             .audit_level = 0,
             .created_by = 0,
             .kind = .gps,
+            .mode = .create,
         });
         try self.recomputeAndStorePolicyHmac(policy_id, hmac_key);
         try self.sealChain(hmac_key);
@@ -1368,6 +1364,7 @@ pub const AuthGraphManager = struct {
             // SONNY-2750: `findPolicyIdByName` found a GPS record (a legacy one
             // included), which this re-persist records as such.
             .kind = .gps,
+            .mode = .replace,
         });
         try self.recomputeAndStorePolicyHmac(policy_id, hmac_key);
         try self.sealChain(hmac_key);

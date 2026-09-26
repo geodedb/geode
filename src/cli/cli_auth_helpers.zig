@@ -35,6 +35,34 @@ const auth_graph_manager = @import("auth_graph_manager");
 const data_dir_lock = @import("data_dir_lock");
 pub const AuthGraphManager = auth_graph_manager.AuthGraphManager;
 
+// CANARY: REQ=REQ-SONNY-2777-POLICY-IDS; FEATURE="GPS Policy Persistence"; ASPECT=CliRlsPolicyCreate; STATUS=TESTED; TEST=tests/test_sonny2777_policy_ids.zig; OWNER=security; UPDATED=2026-09-26
+/// SONNY-2777: the record `geode auth policy create <name> --table <t>
+/// --condition <c>` writes: an RLS policy (`kind = rls`) under a new id from
+/// the policy id sequence. It took `next_user_id` (the next *user* id), so it
+/// could reuse a GPS policy's id and overwrite that record. The write refuses
+/// an id in use (`PolicyIdInUse`). Returns the new id.
+pub fn createRlsPolicyRecord(mgr: *AuthGraphManager, name: []const u8, table: []const u8, condition: []const u8) !u64 {
+    const policy_id = mgr.storage.nextPolicyId();
+    try mgr.storage.persistPolicy(.{
+        .policy_id = policy_id,
+        .name = name,
+        .description = "",
+        .graph = "",
+        .table = table,
+        .operation = 0,
+        .permissive = false,
+        .enabled = true,
+        .using_clause = condition,
+        .check_clause = null,
+        .audit_level = 0,
+        .created_by = 0,
+        // SONNY-2750: an RLS record, which GPS never loads.
+        .kind = .rls,
+        .mode = .create,
+    });
+    return policy_id;
+}
+
 // -- State Path Resolution (for non-auth flat files) --
 
 const STATE_DIR_ENV = "GEODE_STATE_DIR";
