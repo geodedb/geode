@@ -126,6 +126,19 @@
   A request that changes a graph that does not exist is refused with 3F000,
   and the graph is not created. The CLI's `-g` flag, which sends a
   `USE GRAPH` of the current graph before the query, works as before.
+- **Permissive and restrictive RLS policies combine as PostgreSQL's do
+  (SONNY-2710):** the expression engine combined a table's policies as
+  "any permissive passes OR every restrictive passes". A table with only
+  permissive policies never denied a row, and one passing permissive policy
+  overrode a failing restrictive one. Now, for each table (a node label or
+  an edge type), a row is visible when (a permissive policy passes, or no
+  permissive policy applies and the default allows) AND every restrictive
+  policy passes. A node is visible only if every one of its labels allows
+  it. The label-deny engines' entries join the same combination: a deny
+  entry is a restrictive policy that fails, an allow entry (new
+  `addAllowPolicy`) a permissive one that passes. An allow entry never
+  hides a row and cannot undo a deny; `removeDenyPolicy` now removes deny
+  entries only.
 - **The RLS post-filter fails closed (SONNY-2729):** the transport's
   label post-filter (every QUIC and gRPC result, and algorithm results) used
   to return the rows unfiltered when it could not allocate its snapshot of

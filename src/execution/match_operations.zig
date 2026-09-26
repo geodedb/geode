@@ -281,7 +281,8 @@ pub const LabelDenySnapshot = struct {
     allocator: std.mem.Allocator,
     graph: []const u8,
     username: []const u8,
-    labels: std.StringHashMap(void),
+    /// SONNY-2710: the deny and the allow entries (see `rls_types.LabelPolicy`).
+    policies: rls_types.RLSFilterEngine.LabelPolicySnapshot,
     previous: ?*const LabelDenySnapshot,
 
     /// Take a snapshot for `username` in `graph` and make it current on this
@@ -291,11 +292,11 @@ pub const LabelDenySnapshot = struct {
     pub fn begin(allocator: std.mem.Allocator, graph: []const u8, username: []const u8) ?*LabelDenySnapshot {
         const engine = rls_types.getGlobalRLSFilterEngine() orelse return null;
         const snapshot = allocator.create(LabelDenySnapshot) catch return null;
-        const labels = engine.snapshotDeniedLabels(allocator, graph, username) catch {
+        const policies = engine.snapshotLabelPolicies(allocator, graph, username) catch {
             allocator.destroy(snapshot);
             return null;
         };
-        snapshot.* = .{ .allocator = allocator, .graph = graph, .username = username, .labels = labels, .previous = t_label_deny };
+        snapshot.* = .{ .allocator = allocator, .graph = graph, .username = username, .policies = policies, .previous = t_label_deny };
         t_label_deny = snapshot;
         return snapshot;
     }
@@ -303,7 +304,7 @@ pub const LabelDenySnapshot = struct {
     /// Restore the snapshot `begin` replaced, and free this one.
     pub fn end(self: *LabelDenySnapshot) void {
         t_label_deny = self.previous;
-        rls_types.RLSFilterEngine.freeDeniedLabels(&self.labels);
+        self.policies.deinit();
         self.allocator.destroy(self);
     }
 };
@@ -311,15 +312,32 @@ pub const LabelDenySnapshot = struct {
 /// The label-deny snapshot of the traversal running on this thread, if any.
 threadlocal var t_label_deny: ?*const LabelDenySnapshot = null;
 
-/// Is `label` denied to `username` in `graph`? From the current traversal's
-/// snapshot when it covers this graph and user, else from the engine.
-fn labelDenied(filter_engine: *rls_types.RLSFilterEngine, graph: []const u8, label: []const u8, username: []const u8) bool {
+/// SONNY-2710: the label policies that apply to `username` on `label` in
+/// `graph`. From the current traversal's snapshot when it covers this graph
+/// and user, else from the engine.
+fn labelEntries(filter_engine: *rls_types.RLSFilterEngine, graph: []const u8, label: []const u8, username: []const u8) rls_types.LabelEntries {
     if (t_label_deny) |snapshot| {
         if (std.mem.eql(u8, snapshot.graph, graph) and std.mem.eql(u8, snapshot.username, username)) {
-            return snapshot.labels.contains(label);
+            return snapshot.policies.entries(label);
         }
     }
-    return filter_engine.isLabelDenied(graph, label, username);
+    return filter_engine.labelEntries(graph, label, username);
+}
+
+// CANARY: REQ=REQ-SONNY-2710-PG-POLICY-COMBINATION; FEATURE="RLS Expression Wiring"; ASPECT=ExecutorPerTableVerdict; STATUS=TESTED; TEST=tests/test_sonny2710_policy_combination.zig; OWNER=security; UPDATED=2026-09-26
+/// SONNY-2710: the label-deny engine's entries for one table (a node label or
+/// an edge type), as the start of the table's `rls.PolicyVerdict`: a deny
+/// entry is a restrictive policy that fails, an allow entry a permissive one
+/// that passes. `is_label` false (an unlabeled node's "default" table) has
+/// no label entries.
+fn labelSeed(filter_engine: ?*rls_types.RLSFilterEngine, graph: []const u8, table: []const u8, is_label: bool, username: []const u8) rls.PolicyVerdict {
+    var seed: rls.PolicyVerdict = .{};
+    if (!is_label) return seed;
+    const engine = filter_engine orelse return seed;
+    const entries = labelEntries(engine, graph, table, username);
+    if (entries.allowed) seed.add(true, true);
+    if (entries.denied) seed.add(false, false);
+    return seed;
 }
 
 /// A traversal's label-deny snapshot for `graph`: taken when an RLS policy may
@@ -344,11 +362,8 @@ pub fn beginTraversalLabelDeny(allocator: std.mem.Allocator, graph: []const u8, 
 pub fn passesEdgeRLSFilter(reusable_row: *std.StringHashMap(rls.Value), edge: *const graph_store.Edge) bool {
     const ctx = execution.getActiveContext() orelse return true;
     const username = rlsUsername(ctx) orelse return true;
-    if (rls_types.getGlobalRLSFilterEngine()) |filter_engine| {
-        if (labelDenied(filter_engine, edge.graph_name, edge.label, username)) return false;
-    }
     const tables = [_][]const u8{edge.label};
-    return exprPoliciesAllow(reusable_row, &edge.properties, edge.graph_name, &tables, username);
+    return rowPoliciesAllow(reusable_row, &edge.properties, edge.graph_name, &tables, true, username);
 }
 
 // CANARY: REQ=REQ-SONNY-2679-HOP-VISIBILITY; FEATURE="TraversalRowVisibility"; ASPECT=HopScope; STATUS=TESTED; TEST=tests/test_sonny2679_rls_hop_targets.zig; OWNER=security; UPDATED=2026-09-25
@@ -506,17 +521,14 @@ fn passesRLSFilter(
     // principal is attached (direct, non-forwarded requests).
     const username = rlsUsername(ctx) orelse return true;
 
-    // Layer 1: Label-deny check
-    const filter_engine = rls_types.getGlobalRLSFilterEngine() orelse {
-        // No label-deny engine — skip to expression check
-        return passesRLSExprFilter(reusable_row, node, username);
-    };
-    for (node.labels) |label| {
-        if (labelDenied(filter_engine, node.graph_name, label, username)) return false;
-    }
-
-    // Layer 2: Expression-based property check
-    return passesRLSExprFilter(reusable_row, node, username);
+    // SONNY-2690: the policies of EVERY label on the node apply, and the node
+    // is visible only if none of them denies it. The lookup used `labels[0]`
+    // alone, and a label with no policy allows the row, so `(:Other:Doc)`
+    // escaped a `:Doc` policy. A node with no label is looked up as table
+    // "default" (no label entries apply to it), as before.
+    const unlabeled = [_][]const u8{"default"};
+    const tables: []const []const u8 = if (node.labels.len > 0) node.labels else &unlabeled;
+    return rowPoliciesAllow(reusable_row, &node.properties, node.graph_name, tables, node.labels.len > 0, username);
 }
 
 // GAP-0510 D2: Evaluate expression-based RLS policies against a node's properties.
@@ -524,33 +536,28 @@ fn passesRLSFilter(
 // expression engine grants access. Fails closed on evaluation errors (GAP-0524).
 // CANARY: REQ=REQ-SEC-RLS-WIRE-015; FEATURE="RLS Expression Wiring"; ASPECT=MatchExprEval; STATUS=TESTED; TEST=tests/test_rls_expr_engine_wiring.zig; OWNER=security; UPDATED=2026-06-11
 // CANARY: REQ=REQ-SONNY-2690-ALL-LABELS; FEATURE="RLS Expression Wiring"; ASPECT=EveryLabelPolicy; STATUS=TESTED; TEST=tests/test_sonny2690_multi_label_expr_policy.zig; OWNER=security; UPDATED=2026-09-25
-// SONNY-2690: the policies of EVERY label on the node apply, and the node is
-// visible only if none of them denies it. The lookup used `labels[0]` alone,
-// and a label with no policy allows the row, so `(:Other:Doc)` escaped a
-// `:Doc` policy. A node with no label is looked up as table "default", as
-// before.
-fn passesRLSExprFilter(
-    reusable_row: *std.StringHashMap(rls.Value),
-    node: graph_store.Node,
-    username: []const u8,
-) bool {
-    const unlabeled = [_][]const u8{"default"};
-    const tables: []const []const u8 = if (node.labels.len > 0) node.labels else &unlabeled;
-    return exprPoliciesAllow(reusable_row, &node.properties, node.graph_name, tables, username);
-}
-
-/// Evaluate the expression RLS policies of every table in `tables` (a node's
-/// labels, or an edge's type) against one row's `properties`. True (allow)
-/// when no expression engine is configured, for an admin session, or when no
-/// policy of any table denies the row; a table with no policy allows it.
-/// Fails closed on a conversion or evaluation error (GAP-0524).
-fn exprPoliciesAllow(
+/// Decide one row (a node, or an edge) against the RLS policies of every
+/// table in `tables` (a node's labels, or an edge's type), evaluated on the
+/// row's `properties`. SONNY-2710: each table's label entries and expression
+/// policies combine as PostgreSQL's do (`rls.PolicyVerdict`), and the row is
+/// visible only if every table allows it (SONNY-2690). A deny entry hides
+/// the row for everyone, admin sessions included; an admin session bypasses
+/// the expression policies. With no expression engine the label entries
+/// decide. Fails closed on a conversion or evaluation error (GAP-0524).
+fn rowPoliciesAllow(
     reusable_row: *std.StringHashMap(rls.Value),
     properties: *const graph_store.CompactPropertyMap,
     graph_name: []const u8,
     tables: []const []const u8,
+    tables_are_labels: bool,
     username: []const u8,
 ) bool {
+    const filter_engine = rls_types.getGlobalRLSFilterEngine();
+    // A restrictive label entry needs no row: it hides the row at once.
+    for (tables) |table| {
+        if (labelSeed(filter_engine, graph_name, table, tables_are_labels, username).restrictive_fails) return false;
+    }
+
     const expr_engine_ptr = rls_types.getGlobalExprRLSEngine() orelse return true;
     const expr_engine: *rls.RLSEngine = @ptrCast(@alignCast(expr_engine_ptr));
 
@@ -597,12 +604,14 @@ fn exprPoliciesAllow(
     const otel_lib = @import("otel");
     const t0 = otel_lib.internal.clock.unixNanoNow();
     const allowed = for (tables) |table| {
-        const table_allows = expr_engine.checkRowAccessByUsername(
+        const seed = labelSeed(filter_engine, graph_name, table, tables_are_labels, username);
+        const table_allows = expr_engine.checkRowAccessByUsernameSeeded(
             reusable_row,
             .select,
             username,
             graph_name,
             table,
+            seed,
         ) catch false;
         if (!table_allows) break false;
     } else true;

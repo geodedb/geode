@@ -8699,6 +8699,23 @@ pub fn build(b: *std.Build) void {
     const sonny2729_step = b.step("test-sonny2729-postfilter-fail-closed", "Run SONNY-2729 part (1) regression (the transport RLS post-filter withholds every row and errs when it cannot allocate; both handlers answer with the error)");
     sonny2729_step.dependOn(&run_sonny2729_tests.step);
 
+    // SONNY-2710: RLS policies combine as PostgreSQL's do (permissive OR,
+    // restrictive AND), in the expression engine and with both label-deny
+    // engines' entries, for node rows and edge rows.
+    const sonny2710_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny2710_policy_combination.zig"), .target = target, .optimize = optimize });
+    sonny2710_test_mod.link_libc = true;
+    sonny2710_test_mod.addImport("geode", root_mod);
+    sonny2710_test_mod.addImport("logging", logging_mod);
+    sonny2710_test_mod.addImport("rls", rls_mod);
+    sonny2710_test_mod.addImport("rls_types", rls_types_mod);
+    sonny2710_test_mod.addImport("geode_auth", auth_mod);
+    sonny2710_test_mod.addImport("grpc_impl", sonny1560_shim_mod);
+    const sonny2710_tests = b.addTest(.{ .root_module = sonny2710_test_mod });
+    const run_sonny2710_tests = b.addRunArtifact(sonny2710_tests);
+    shardDep(test_step, &run_sonny2710_tests.step, 1, test_shard_loads, test_shard_index);
+    const sonny2710_step = b.step("test-sonny2710-policy-combination", "Run SONNY-2710 regression (RLS permissive and restrictive policies combine as PostgreSQL's do, in the expression engine and with the label engines' entries, for node and edge rows)");
+    sonny2710_step.dependOn(&run_sonny2710_tests.step);
+
     const sonny2790_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny2790_fts_graph_lock.zig"), .target = target, .optimize = optimize });
     sonny2790_test_mod.link_libc = true;
     sonny2790_test_mod.addImport("geode", root_mod);

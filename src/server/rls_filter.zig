@@ -18,6 +18,14 @@ const Attr = logging.Attr;
 /// A label-level RLS policy binding: "user U must not see rows containing label L in graph G".
 /// This is the minimum enforcement granularity — expression-level evaluation is deferred to a
 /// later phase once the value-type bridge between execution Values and RLS Values is complete.
+///
+/// SONNY-2710: each label (a node label, or an edge type) is a table, and its
+/// policies combine as PostgreSQL's do (`rls_core.PolicyVerdict`; the
+/// executor's engine, `rls_types.LabelPolicy`, says the same). A deny entry
+/// is a restrictive policy that fails for the user: it hides every row that
+/// carries the label. An allow entry is a permissive policy that passes: it
+/// never hides a row, and cannot undo a deny. This filter sees no expression
+/// policies, so here only deny entries decide.
 pub const LabelPolicy = struct {
     graph: []const u8,
     label: []const u8,
@@ -69,15 +77,41 @@ pub const RLSFilterEngine = struct {
         try self.policies.append(self.allocator, policy);
     }
 
-    /// Remove all policies matching graph+label+username exactly.
+    /// SONNY-2710: register an allow entry (a permissive policy that passes
+    /// for `username`; see `LabelPolicy`). It hides no row.
+    pub fn addAllowPolicy(self: *Self, graph: []const u8, label: []const u8, username: []const u8) !void {
+        self.mu.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
+        defer self.mu.unlock(std.Io.Threaded.global_single_threaded.io());
+
+        const g = try self.allocator.dupe(u8, graph);
+        errdefer self.allocator.free(g);
+        const l = try self.allocator.dupe(u8, label);
+        errdefer self.allocator.free(l);
+        const u: []const u8 = if (username.len > 0) try self.allocator.dupe(u8, username) else "";
+        errdefer if (u.len > 0) self.allocator.free(u);
+        try self.policies.append(self.allocator, .{ .graph = g, .label = l, .deny = false, .username = u });
+    }
+
+    /// Remove all deny policies matching graph+label+username exactly.
+    /// SONNY-2710: allow entries are left alone (`removeAllowPolicy`).
     pub fn removeDenyPolicy(self: *Self, graph: []const u8, label: []const u8, username: []const u8) void {
+        self.removeEntries(graph, label, username, true);
+    }
+
+    /// SONNY-2710: remove all allow policies matching graph+label+username.
+    pub fn removeAllowPolicy(self: *Self, graph: []const u8, label: []const u8, username: []const u8) void {
+        self.removeEntries(graph, label, username, false);
+    }
+
+    fn removeEntries(self: *Self, graph: []const u8, label: []const u8, username: []const u8, deny: bool) void {
         self.mu.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
         defer self.mu.unlock(std.Io.Threaded.global_single_threaded.io());
 
         var i: usize = 0;
         while (i < self.policies.items.len) {
             const p = self.policies.items[i];
-            if (std.mem.eql(u8, p.graph, graph) and
+            if (p.deny == deny and
+                std.mem.eql(u8, p.graph, graph) and
                 std.mem.eql(u8, p.label, label) and
                 std.mem.eql(u8, p.username, username))
             {
