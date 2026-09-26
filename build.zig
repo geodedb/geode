@@ -8565,6 +8565,19 @@ pub fn build(b: *std.Build) void {
     const sonny2809_step = b.step("test-sonny2809-duplicate-constraint", "Run SONNY-2809 regression (a second identical CREATE CONSTRAINT is refused with 42710 and frees the catalog key once; it double-freed and aborted the server)");
     sonny2809_step.dependOn(&run_sonny2809_tests.step);
 
+    // SONNY-2806: an inline property map matches a stored property by its
+    // exact value on the planned read, the streaming node scan and MERGE's
+    // property index, as the legacy executor does.
+    const sonny2806_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny2806_exact_property_matching.zig"), .target = target, .optimize = optimize });
+    sonny2806_test_mod.addImport("geode", root_mod);
+    sonny2806_test_mod.addImport("logging", logging_mod);
+    sonny2806_test_mod.addImport("rls_types", rls_types_mod);
+    const sonny2806_tests = b.addTest(.{ .root_module = sonny2806_test_mod });
+    const run_sonny2806_tests = b.addRunArtifact(sonny2806_tests);
+    shardDep(test_step, &run_sonny2806_tests.step, 1, test_shard_loads, test_shard_index);
+    const sonny2806_step = b.step("test-sonny2806-exact-property-matching", "Run SONNY-2806 regression (an inline property map and MERGE compare a stored number, duration or zoned time by its value on every session and path: the planned read, the streaming node scan, the exact index seek, MERGE's property index)");
+    sonny2806_step.dependOn(&run_sonny2806_tests.step);
+
     const sonny2675_walker_mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny2675_having_walker.zig"), .target = target, .optimize = optimize });
     sonny2675_walker_mod.addImport("geode", root_mod);
     const sonny2675_walker_tests = b.addTest(.{ .root_module = sonny2675_walker_mod });

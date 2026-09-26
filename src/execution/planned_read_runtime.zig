@@ -7,6 +7,7 @@ const result_utils = @import("result_utils.zig");
 const value_utilities = @import("value_utilities.zig");
 const graph_store = @import("../graph_store.zig");
 const graph_storage_adapter = @import("../storage/graph_storage_adapter.zig");
+const stored_property_equality = @import("stored_property_equality.zig");
 const value_types = @import("../value_types.zig");
 const query_arena = @import("../server/query_arena.zig");
 const pattern_helpers = @import("pattern_helpers.zig");
@@ -2867,7 +2868,9 @@ fn propsMatch(
             .exec_context = @constCast(&context),
         }) catch return false;
         const actual = actual_props.get(prop.key) orelse return false;
-        if (!storagePropertyMatches(expected, actual)) {
+        // SONNY-2806: by value, as the legacy executor compares (a decimal by
+        // representation, a DOUBLE and every extended value never).
+        if (!stored_property_equality.matches(allocator, expected, actual)) {
             return false;
         }
     }
@@ -3298,42 +3301,6 @@ fn truthyPredicate(value: Value) bool {
         .Int => |integer| integer != 0,
         else => false,
     };
-}
-
-fn storagePropertyMatches(expected: Value, actual: gs.PropertyValue) bool {
-    return switch (actual) {
-        .string => |text| switch (expected) {
-            .Str => |expected_text| std.mem.eql(u8, expected_text, text),
-            else => false,
-        },
-        .int => |number| switch (expected) {
-            .Int => |expected_number| expected_number == number,
-            else => false,
-        },
-        .bool => |boolean| switch (expected) {
-            .Bool => |expected_boolean| expected_boolean == boolean,
-            else => false,
-        },
-        .null => expected == .Null,
-        .decimal => |decimal| switch (expected) {
-            .Decimal => |expected_decimal| expected_decimal.coeff == decimal.coeff and expected_decimal.scale == decimal.scale,
-            else => false,
-        },
-        .float => |float_value| switch (expected) {
-            .Decimal => |decimal| decimalToFloat(decimal.coeff, decimal.scale) == float_value,
-            else => false,
-        },
-        .ext => false,
-    };
-}
-
-fn decimalToFloat(coeff: i128, scale: u8) f64 {
-    var divisor: f64 = 1;
-    var i: u8 = 0;
-    while (i < scale) : (i += 1) {
-        divisor *= 10;
-    }
-    return @as(f64, @floatFromInt(coeff)) / divisor;
 }
 
 fn labelsContainAll(actual: []const []const u8, required: []const []const u8) bool {

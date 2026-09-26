@@ -1,4 +1,5 @@
 const std = @import("std");
+const value_order = @import("execution/value_order.zig");
 const schema = @import("schema");
 
 const eval_extended = @import("eval_extended.zig");
@@ -595,6 +596,30 @@ pub fn heapValueToPropertyValue(value: heap.Value) graph_store.PropertyValue {
         .Decimal128 => |d| if (heapDecimalAsU8Scale(d)) |q| .{ .Decimal = .{ .coeff = q.coeff, .scale = q.scale } } else .Null,
         else => .{ .ExtValue = heapValueToExtValue(value) },
     };
+}
+
+/// The number a stored extended value holds, or null (SONNY-2806: the exact
+/// node-property index hashes numbers by value). `type_tag` and `data` are the
+/// storage engine's ext value as `graph_storage_adapter.toStorageProperty`
+/// writes it: the property tag, then [u32 length][heap encoding]; the heap
+/// encoding starts with its tag (storage/heap.zig: 0x02 INT, 0x20 SMALLINT,
+/// 0x21 BIGINT, 0x22 REAL, 0x23 DOUBLE, 0x24 DECIMAL). A decimal whose scale
+/// is outside 0..255 is left to its bytes.
+pub fn extPayloadNumber(type_tag: u16, data: []const u8) ?value_order.Number {
+    if (type_tag != property_tag_ext or data.len < 5) return null;
+    const h = data[4..];
+    switch (h[0]) {
+        0x02, 0x21 => if (h.len >= 9) return .{ .exact = .{ .coeff = std.mem.readInt(i64, h[1..9], .little), .scale = 0 } },
+        0x20 => if (h.len >= 3) return .{ .exact = .{ .coeff = std.mem.readInt(i16, h[1..3], .little), .scale = 0 } },
+        0x22 => if (h.len >= 5) return .{ .float = @as(f32, @bitCast(std.mem.readInt(u32, h[1..5], .little))) },
+        0x23 => if (h.len >= 9) return .{ .float = @bitCast(std.mem.readInt(u64, h[1..9], .little)) },
+        0x24 => if (h.len >= 19) {
+            const scale = std.mem.readInt(i16, h[17..19], .little);
+            if (scale >= 0 and scale <= 255) return .{ .exact = .{ .coeff = std.mem.readInt(i128, h[1..17], .little), .scale = @intCast(scale) } };
+        },
+        else => {},
+    }
+    return null;
 }
 
 pub fn encodeExtValueBinary(allocator: std.mem.Allocator, ext: ExtValue) ![]u8 {

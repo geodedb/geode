@@ -117,6 +117,33 @@
 
 ### Fixed
 
+- **An inline property map and MERGE match a stored value by its value on
+  every path (SONNY-2806):** `MATCH (n:T {x: v})` and `MERGE` compare the
+  stored property with `v` by value on the planned read and the streaming
+  node scan of a persisted session, as the legacy executor does:
+  - numbers by their exact value, as GROUP BY keys them: `{x: 1.50}`
+    matches a stored 1.5, `{x: 1.0}` a stored 1, `{x: 1}` a stored 1.0,
+    and `{x: $d}` a node created from the same DOUBLE `$d`. None of these
+    matched on a persisted session; a DOUBLE and every extended value never
+    matched there, and relationships (`[r:R {w: 1.0}]`) likewise;
+  - durations by their months and day-to-second length (`{v: PT24H}`
+    matches a stored P1D), and zoned times by their UTC time of day. The
+    legacy executor compared both by representation, so MERGE also created
+    a second node for them.
+  - **Behaviour change (fixes a round-5 regression):** MERGE's property
+    index keys a number by its exact value. `MERGE (n:U {x: 1})` created a
+    second node beside a stored 1.0 on every session, while
+    `MERGE (n:T {x: 1.0})` matched a stored 1.
+
+  A DOUBLE and a decimal are equal only when their values are exactly
+  equal (`{x: 0.1}` does not match a stored DOUBLE 0.1), which is how
+  GROUP BY treats them. `=` compares them in a double instead (SONNY-2807).
+
+  **Upgrade note:** the adapter's exact node-property index (`prop_exact.idx`
+  and `prop_rev.idx`) and the merge-index hydration snapshot hash a number
+  by its value now. A file written by an earlier version is stale, and the
+  first open of each graph after the upgrade rebuilds the index with a scan.
+
 - **Grouped queries report their errors (SONNY-2675):**
   - **Behaviour change:** a HAVING name that is no column, binding or
     parameter is refused with 42703; it was NULL.

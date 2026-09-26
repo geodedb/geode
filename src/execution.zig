@@ -4204,10 +4204,14 @@ pub fn valuesEqual(a: Value, b: Value) bool {
     // Temporal and identifier types
     if (a == .Date and b == .Date) return std.meta.eql(a.Date, b.Date);
     if (a == .Time and b == .Time) return std.meta.eql(a.Time, b.Time);
-    if (a == .TimeTZ and b == .TimeTZ) return std.meta.eql(a.TimeTZ, b.TimeTZ);
+    // SONNY-2675 (round 6): a zoned time by its UTC time of day and a
+    // duration by its months and day-to-second length, as `=` and GROUP BY
+    // compare them (`{v: duration('PT24H')}` missed a stored P1D, and MERGE
+    // duplicated it). A zoned datetime is its UTC instant already.
+    if (a == .TimeTZ and b == .TimeTZ) return a.TimeTZ.utcMicros() == b.TimeTZ.utcMicros();
     if (a == .Timestamp and b == .Timestamp) return std.meta.eql(a.Timestamp, b.Timestamp);
     if (a == .TimestampTZ and b == .TimestampTZ) return std.meta.eql(a.TimestampTZ, b.TimestampTZ);
-    if (a == .Interval and b == .Interval) return std.meta.eql(a.Interval, b.Interval);
+    if (a == .Interval and b == .Interval) return a.Interval.eql(b.Interval);
     if (a == .UUID and b == .UUID) return std.meta.eql(a.UUID, b.UUID);
     if (a == .Enum and b == .Enum) return std.meta.eql(a.Enum, b.Enum);
     if (a == .IntRange and b == .IntRange) return std.meta.eql(a.IntRange, b.IntRange);

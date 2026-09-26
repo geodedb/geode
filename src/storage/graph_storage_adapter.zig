@@ -15,6 +15,7 @@ const uuid = @import("uuid");
 const graph_store = @import("../graph_store.zig");
 const fle_integration = @import("../fle_integration.zig");
 const property_codec = @import("../property_value_codec.zig");
+const value_order = @import("../execution/value_order.zig");
 const audit = @import("../security/audit.zig");
 const ts_mod = @import("../timeseries/timeseries.zig");
 const fulltext = @import("../index/fulltext.zig");
@@ -308,7 +309,8 @@ pub const exact_node_property_index_shard_count: usize = 64;
 /// node's OLD postings on a crash-reopen reconcile. Magic-bumped + stamped with
 /// the SAME (checkpoint_epoch, covered_lsn) as `prop_exact.idx`.
 const prop_rev_index_file_name = "prop_rev.idx";
-const prop_rev_index_magic = "GENRVIX1";
+// GENRVIX2 (SONNY-2806): numbers hash by value; a GENRVIX1 file is stale.
+const prop_rev_index_magic = "GENRVIX2";
 
 const graph_store_file_names = [_][]const u8{
     "nodes.store",
@@ -959,9 +961,11 @@ const NodePropertyExactIndex = struct {
         const writer = &idx_fw.interface;
 
         // 8-byte magic header (v3 = checkpoint-epoch + covered-lsn stamped, the
-        // WAL-aware Path B contract). GENPIDX2 (counter-stamped) and GENPIDX1
-        // (unstamped) are treated as stale on load → rebuild (never mis-served).
-        try writer.writeAll("GENPIDX3");
+        // WAL-aware Path B contract; v4 = SONNY-2806, a number's value hash is
+        // its exact value). GENPIDX3 (bytes-hashed numbers), GENPIDX2
+        // (counter-stamped) and GENPIDX1 (unstamped) are treated as stale on
+        // load → rebuild (never mis-served).
+        try writer.writeAll("GENPIDX4");
         // WAL-aware staleness stamp: the gs checkpoint_epoch (derived-index
         // generation) and the durable-frontier LSN this index covers.
         try writer.writeInt(u64, checkpoint_epoch, .little);
@@ -1130,12 +1134,13 @@ const NodePropertyExactIndex = struct {
         var file_reader = file.reader(gsa_io, &reader_buffer);
         const reader = &file_reader.interface;
 
-        // Validate magic header — only the v3 (epoch + covered-lsn stamped) format
-        // loads; a legacy GENPIDX1 (unstamped) or GENPIDX2 (counter-stamped) file
+        // Validate magic header — only the v4 (epoch + covered-lsn stamped,
+        // numbers hashed by value) format loads; a GENPIDX3 (numbers hashed by
+        // their bytes), GENPIDX2 (counter-stamped) or GENPIDX1 (unstamped) file
         // is a present-but-stale snapshot -> rebuild.
         var magic: [8]u8 = undefined;
         reader.readSliceAll(&magic) catch return .stale;
-        if (!std.mem.eql(u8, &magic, "GENPIDX3")) return .stale;
+        if (!std.mem.eql(u8, &magic, "GENPIDX4")) return .stale;
 
         // WAL-aware staleness gate (Path B): reject unless BOTH the derived-index
         // generation matches (no checkpoint since persist) AND the covered LSN is
@@ -1199,7 +1204,7 @@ const ExactIndexLoadOutcome = enum { loaded, stale, absent };
 
 /// Phase E2: the `(checkpoint_epoch, covered_lsn)` stamp of an on-disk
 /// `prop_exact.idx`, read from its header alone (no postings). `null` when the
-/// file is absent, torn, or not the GENPIDX3 (WAL-aware) format. Used by the
+/// file is absent, torn, or not the GENPIDX4 (WAL-aware) format. Used by the
 /// crash-reopen reconcile gate to compare the snapshot's covered_lsn against the
 /// pre-recovery frontier BEFORE deciding to reconcile vs full-rebuild.
 const ExactIndexStamp = struct { epoch: u64, covered_lsn: u64 };
@@ -1218,7 +1223,7 @@ fn readExactIndexStamp(allocator: Allocator, graph_dir_path: []const u8) ?ExactI
 
     var magic: [8]u8 = undefined;
     reader.readSliceAll(&magic) catch return null;
-    if (!std.mem.eql(u8, &magic, "GENPIDX3")) return null;
+    if (!std.mem.eql(u8, &magic, "GENPIDX4")) return null;
     const epoch = reader.takeInt(u64, .little) catch return null;
     const covered = reader.takeInt(u64, .little) catch return null;
     return .{ .epoch = epoch, .covered_lsn = covered };
@@ -1566,7 +1571,35 @@ fn putDecodedProperty(allocator: Allocator, map: *std.StringHashMap(gs.PropertyV
     try map.put(owned_key, decoded.value);
 }
 
+// CANARY: REQ=REQ-SONNY-2806-EXACT-INDEX-NUMBER-HASH; FEATURE="InlinePropertyMatch"; ASPECT=ExactNumberHash; STATUS=TESTED; TEST=tests/test_sonny2806_exact_property_matching.zig; OWNER=storage; UPDATED=2026-09-26
+/// SONNY-2806: the exact node-property index hashes a number by its exact
+/// value (`value_order.writeNumberKey`, the key GROUP BY uses), whatever its
+/// representation: INT 1, DECIMAL 1.0 and 1.00, a DOUBLE 1.0 and a SMALLINT 1
+/// hash alike. It hashed the encoded bytes, so an inline-property seek for
+/// `{x: 1}` found no stored 1.0, and the planned read and the streaming scan
+/// take an empty seek as the answer. Every other value hashes its encoded
+/// bytes, as before. Format edition: prop_exact.idx GENPIDX4 and
+/// prop_rev.idx GENRVIX2 (an older file is stale, and the index is rebuilt).
+fn storedNumber(value: gs.PropertyValue) ?value_order.Number {
+    return switch (value) {
+        .int => |i| .{ .exact = .{ .coeff = i, .scale = 0 } },
+        .float => |f| .{ .float = f },
+        .decimal => |d| .{ .exact = .{ .coeff = d.coeff, .scale = d.scale } },
+        .ext => |e| property_codec.extPayloadNumber(e.type_tag, e.data),
+        else => null,
+    };
+}
+
+fn numberHash(n: value_order.Number) u64 {
+    // The longest key is 18 bytes ('C', the i128 coefficient, the scale).
+    var buf: [32]u8 = undefined;
+    var w: std.Io.Writer = .fixed(&buf);
+    value_order.writeNumberKey(&w, n) catch unreachable;
+    return std.hash.Wyhash.hash(0x2806, w.buffered());
+}
+
 fn hashStorageProperty(allocator: Allocator, value: gs.PropertyValue) !u64 {
+    if (storedNumber(value)) |n| return numberHash(n);
     var stack_buf: [64]u8 = undefined;
     const encoded_len = gs.property.encodedSize(value);
     if (encoded_len <= stack_buf.len) {
@@ -1581,7 +1614,11 @@ fn hashStorageProperty(allocator: Allocator, value: gs.PropertyValue) !u64 {
 
 /// Hash pre-encoded property bytes directly — zero-copy, no allocation.
 /// The encoded bytes must be in the canonical format produced by `gs.property.encode`.
+/// A number hashes by its exact value, as in `hashStorageProperty` (SONNY-2806).
 fn hashEncodedPropertyBytes(encoded_value: []const u8) u64 {
+    if (gs.property.decodeView(encoded_value)) |decoded| {
+        if (storedNumber(decoded.value)) |n| return numberHash(n);
+    } else |_| {}
     return std.hash.Wyhash.hash(0, encoded_value);
 }
 

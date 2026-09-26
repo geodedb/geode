@@ -26,6 +26,7 @@ const fle_integration = @import("fle_integration.zig");
 const write_budget = @import("write_budget.zig");
 const id_map_mod = @import("storage/id_map.zig");
 const hydration_snapshot = @import("storage/hydration_snapshot.zig");
+const value_order = @import("execution/value_order.zig");
 const uuid = @import("uuid");
 const sharded_store = @import("graph_storage").sharded_store;
 // SONNY-1330: PUBLIC so `execution/set_operations.zig` can open/close the
@@ -5323,17 +5324,48 @@ pub const GraphStore = struct {
         }
     }
 
+    // CANARY: REQ=REQ-SONNY-2769-MERGE-INDEX-NUMBER-KEY; FEATURE="MergeIdempotency"; ASPECT=ExactNumberKey; STATUS=TESTED; TEST=tests/test_sonny2806_exact_property_matching.zig; OWNER=storage; UPDATED=2026-09-26
     /// Serialize a PropertyValue to bytes for merge property index keys.
     /// Returns the number of bytes written, or null if the type is not indexable.
+    ///
+    /// SONNY-2769 (round 6): a number keys by its exact value
+    /// (`value_order.writeNumberKey`, the key GROUP BY uses), whatever its
+    /// representation: INT 1, DECIMAL 1.0 and 1.00, a SMALLINT 1 and a DOUBLE
+    /// 1.0 share one entry. An integer keyed by its decimal text and a decimal
+    /// or a double was not indexed, so `MERGE (n:U {x: 1})` trusted a miss and
+    /// duplicated a stored 1.0, while `MERGE {x: 1.0}` matched a stored 1
+    /// (the scan compares by value). Format edition: HYDRATION_SNAP_VERSION 3.
     fn serializePropValueForIndex(buf: []u8, value: PropertyValue) ?usize {
         var writer: std.Io.Writer = .fixed(buf);
+        if (numberOfProperty(value)) |n| {
+            value_order.writeNumberKey(&writer, n) catch return null;
+            return writer.end;
+        }
         switch (value) {
             .String => |s| writer.writeAll(s) catch return null,
-            .Int => |i| writer.print("{d}", .{i}) catch return null,
             .Bool => |b| writer.writeAll(if (b) "true" else "false") catch return null,
             else => return null,
         }
         return writer.end;
+    }
+
+    /// A stored property as a number, whatever its representation, or null.
+    fn numberOfProperty(value: PropertyValue) ?value_order.Number {
+        return switch (value) {
+            .Int => |i| .{ .exact = .{ .coeff = i, .scale = 0 } },
+            .Float => |f| .{ .float = f },
+            .Decimal => |d| .{ .exact = .{ .coeff = d.coeff, .scale = d.scale } },
+            .ExtValue => |ext| switch (ext) {
+                .Int => |i| .{ .exact = .{ .coeff = i, .scale = 0 } },
+                .SmallInt => |i| .{ .exact = .{ .coeff = i, .scale = 0 } },
+                .BigInt => |i| .{ .exact = .{ .coeff = i, .scale = 0 } },
+                .Real => |f| .{ .float = f },
+                .Double => |f| .{ .float = f },
+                .Decimal => |d| .{ .exact = .{ .coeff = d.coeff, .scale = d.scale } },
+                else => null,
+            },
+            else => null,
+        };
     }
 
     /// Build a merge property index key into a stack buffer.
@@ -9810,7 +9842,10 @@ pub const GraphStore = struct {
     // v2 = GAP-0064 FIX B: (checkpoint_epoch, covered_lsn) stamp replaced the
     // manifest.counter stamp. The bump makes an old v1 counter-stamped file load
     // as null on a new binary (rebuild) and vice-versa — never a mis-parse.
-    const HYDRATION_SNAP_VERSION: u32 = 2;
+    // v3 = SONNY-2769 round 6: a merge-index key's number is its exact-value
+    // key (serializePropValueForIndex); a v2 file's integer keys are text and
+    // hold no decimal or double, so it loads as null and the index is rebuilt.
+    const HYDRATION_SNAP_VERSION: u32 = 3;
     const HYDRATION_COUNTERS_MAGIC: [8]u8 = "GHYDCNT1".*;
     const HYDRATION_COUNTERS_FILE = "hydration_counters.snap";
     const HYDRATION_COUNTERS_TMP = "hydration_counters.snap.tmp";
