@@ -191,6 +191,7 @@ const RowScope = struct {
         rlsMayDeny: *const fn (ptr: *anyopaque) bool,
         restrictsNodes: *const fn (ptr: *anyopaque) bool,
         nodeVisible: *const fn (ptr: *anyopaque, node: *const graph_store.Node) bool,
+        nodeVisibleOnCopy: *const fn (ptr: *anyopaque, node: *const graph_store.Node) bool,
         stepAllowed: *const fn (ptr: *anyopaque, store: *graph_store.GraphStore, edge: *const graph_store.Edge, next_node_id: u64) bool,
         deinit: *const fn (ptr: *anyopaque) void,
     };
@@ -210,6 +211,20 @@ const RowScope = struct {
     /// `HopScope.nodeVisible`: may the session see `node`?
     fn nodeVisible(self: RowScope, node: *const graph_store.Node) bool {
         return self.vtable.nodeVisible(self.ptr, node);
+    }
+
+    /// `nodeVisible` for a transient copy the caller frees as soon as this
+    /// returns (`GraphStore.decideOnTransientNode`): the RLS scratch row,
+    /// which borrows the node's properties, is emptied before it returns.
+    fn nodeVisibleOnCopy(self: RowScope, node: *const graph_store.Node) bool {
+        return self.vtable.nodeVisibleOnCopy(self.ptr, node);
+    }
+
+    /// May the session see the node `id`? Decided on a transient copy of it
+    /// that is freed before this returns and never enters the node cache, so
+    /// the call retains nothing. False when no node has the id.
+    fn nodeIdVisible(self: RowScope, store: *graph_store.GraphStore, id: u64) bool {
+        return store.decideOnTransientNode(id, self, nodeVisibleOnCopy) orelse false;
     }
 
     /// `HopScope.stepAllowed`: may a traversal walk `edge` onto `next_node_id`?
@@ -257,6 +272,13 @@ fn beginHopRowScope(allocator: std.mem.Allocator, graph: []const u8, tenant: ?[]
         fn nodeVisible(ptr: *anyopaque, node: *const graph_store.Node) bool {
             return from(ptr).hop.nodeVisible(node);
         }
+        fn nodeVisibleOnCopy(ptr: *anyopaque, node: *const graph_store.Node) bool {
+            const self = from(ptr);
+            // The RLS row borrows the copy's properties: empty it before the
+            // caller frees the copy (as `HopScope.stepAllowed` does).
+            defer self.rls_row.clearRetainingCapacity();
+            return self.hop.nodeVisible(node);
+        }
         fn stepAllowed(ptr: *anyopaque, store: *graph_store.GraphStore, edge: *const graph_store.Edge, next_node_id: u64) bool {
             return from(ptr).hop.stepAllowed(store, edge, next_node_id);
         }
@@ -273,6 +295,7 @@ fn beginHopRowScope(allocator: std.mem.Allocator, graph: []const u8, tenant: ?[]
             .rlsMayDeny = rlsMayDeny,
             .restrictsNodes = restrictsNodes,
             .nodeVisible = nodeVisible,
+            .nodeVisibleOnCopy = nodeVisibleOnCopy,
             .stepAllowed = stepAllowed,
             .deinit = deinit,
         };
@@ -2648,6 +2671,17 @@ const KnnScanScope = struct {
         return std.mem.eql(u8, entry_tenant, tid);
     }
 
+    fn admitsNode(self: KnnScanScope, node: *const graph_store.Node) bool {
+        return self.admits(node.graph_name, node.tenant_id);
+    }
+
+    /// `admits` for the node `id`, decided on a transient copy that is freed
+    /// before this returns (nothing retained, the cache untouched). False
+    /// when no node has the id.
+    fn nodeIdAdmitted(self: KnnScanScope, store: *graph_store.GraphStore, id: u64) bool {
+        return store.decideOnTransientNode(id, self, admitsNode) orelse false;
+    }
+
     // CANARY: REQ=REQ-SONNY-2692-KNN-ROW-VISIBILITY; FEATURE="VectorKnn"; ASPECT=CandidateRowVisibility; STATUS=TESTED; TEST=tests/test_sonny2692_knn_rls.zig; OWNER=security; UPDATED=2026-09-25
     /// SONNY-2692: may the session see `node`, a row `admits` let in? The
     /// row-visibility filter the MATCH read paths apply (`HopScope.nodeVisible`:
@@ -3182,31 +3216,50 @@ const DegreeDirection = enum { incoming, outgoing };
 ///   no longer counts the neighbours a policy hides (the degree half of
 ///   SONNY-2685). A session that no tenant scope or policy restricts keeps
 ///   the O(1) adjacency length.
+/// * A raw id is decided on a transient copy of its node, freed before the
+///   call returns, and the adjacency is then counted by id, so a call retains
+///   nothing (P11, the SONNY-2686 review). It used `getNodePtrForScan`, which
+///   boxes a copy into the store on every call and frees it only at the
+///   graph's next checkpoint, charged to no read budget: one read such as
+///   `size([x IN range(0, N) | outdegree($id)])` grew the store by N copies.
+///   A neighbour is decided the same way (`HopScope.stepAllowed`).
 /// Both checks are the session's `RowScope`. Before the evaluator is set up
 /// there is none, and the node gets the graph and exact-tenant check the knn()
 /// scan applies, with every edge counted.
 fn visibleNodeDegree(allocator: std.mem.Allocator, arg: Value, direction: DegreeDirection) EvalError!Value {
     const absent = Value{ .Int = 0 };
-    const store = graph_store.getGlobalStore(allocator);
-    const node: *const graph_store.Node = switch (arg) {
-        .Node => |n| n,
-        .Int => |raw_id| blk: {
-            const id = std.math.cast(u64, raw_id) orelse return absent;
-            // A grace-stable copy: it outlives a concurrent shard rehash.
-            break :blk store.getNodePtrForScan(id) orelse return absent;
-        },
+    // Not a node, or an id that does not fit u64: names no node.
+    switch (arg) {
+        .Node => {},
+        .Int => |raw_id| if (std.math.cast(u64, raw_id) == null) return absent,
         else => return absent,
-    };
-
+    }
+    const store = graph_store.getGlobalStore(allocator);
     const scope = try currentKnnScanScope();
     const row = try beginRowScope(allocator, scope.graph, scope.tenant);
     defer if (row) |r| r.deinit();
-    const visible = if (row) |r| r.nodeVisible(node) else scope.admits(node.graph_name, node.tenant_id);
-    if (!visible) return absent;
+    const node_id: u64 = switch (arg) {
+        .Node => |n| blk: {
+            const visible = if (row) |r| r.nodeVisible(n) else scope.admits(n.graph_name, n.tenant_id);
+            if (!visible) return absent;
+            break :blk n.id;
+        },
+        .Int => |raw_id| blk: {
+            // P11: decided on a transient copy (`nodeIdVisible`), freed before
+            // this returns. `getNodePtrForScan` boxed a copy per call into the
+            // store until the next checkpoint, charged to no budget.
+            const id = std.math.cast(u64, raw_id).?;
+            const visible = if (row) |r| r.nodeIdVisible(store, id) else scope.nodeIdAdmitted(store, id);
+            if (!visible) return absent;
+            break :blk id;
+        },
+        else => unreachable,
+    };
 
+    // Counted by id: the node itself is not read again.
     const edge_ids = switch (direction) {
-        .incoming => store.getIncomingEdgeIds(node.id),
-        .outgoing => store.getOutgoingEdgeIds(node.id),
+        .incoming => store.getIncomingEdgeIds(node_id),
+        .outgoing => store.getOutgoingEdgeIds(node_id),
     } orelse return absent;
     const hop = row orelse return .{ .Int = @intCast(edge_ids.len) };
     if (!hop.restrictsNodes()) return .{ .Int = @intCast(edge_ids.len) };

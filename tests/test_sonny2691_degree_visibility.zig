@@ -109,6 +109,63 @@ test "SONNY-2691: a node in another graph behaves as absent to the raw-id form" 
     try f.finish("other graph");
 }
 
+// CANARY: REQ=REQ-SONNY-2691-DEGREE-RETAINS-NOTHING; FEATURE="NodeDegreeFunctions"; ASPECT=NoRetainedNodeCopies; STATUS=TESTED; TEST=tests/test_sonny2691_degree_visibility.zig; OWNER=security; UPDATED=2026-09-26
+/// P11 (the SONNY-2686 security review): the raw-id form resolved its node
+/// with `getNodePtrForScan`, which boxes a copy of the node into the store's
+/// `scan_hydrated_nodes` on EVERY call, frees it only at the graph's next
+/// checkpoint, and charges it to no read budget. So one read such as
+/// `size([x IN range(1, N) | outdegree($id)])` grew the store by N node
+/// copies (the review measured 1,999 for 2,000 calls, 3,998 in a tenant
+/// session, where the traversal gate then copied every neighbour too), and
+/// a large enough N exhausted memory; before SONNY-2691 the same call
+/// allocated nothing. The node is now decided on a transient copy freed
+/// before the call returns, and its adjacency is counted by id.
+fn checkRetainsNothing(mode: h.Mode) !void {
+    var s = try h.Session.init(mode);
+    defer s.deinit();
+    try seed(&s);
+    const aa = s.arena.allocator();
+    var f: h.Failures = .{};
+    const store = graph_store.getGlobalStore(testing.allocator);
+    const g1 = try s.idOf("g1");
+    const leak = try s.idOf("leak");
+    const open = mode == .no_policy;
+
+    const cases = [_]struct { func: []const u8, id: u64, want: []const u8 }{
+        .{ .func = "outdegree", .id = g1, .want = if (open) "2" else "1" },
+        .{ .func = "indegree", .id = g1, .want = if (open) "2" else "1" },
+        // The node the session may not see: decided, then refused, 2,000 times.
+        .{ .func = "outdegree", .id = leak, .want = if (open) "1" else "0" },
+    };
+    for (cases) |c| {
+        const before = store.scan_hydrated_nodes.items.len;
+        // 2,000 calls in one read: each list element evaluates the WHERE.
+        const q = try std.fmt.allocPrint(aa, "RETURN size([x IN range(0, 2000) WHERE {s}({d}) = {s} | x]) AS n", .{ c.func, c.id, c.want });
+        try h.expectRows(&s, &f, q, &.{"2000"});
+        const after = store.scan_hydrated_nodes.items.len;
+        if (after != before) {
+            try f.add(aa, "[{s}] 2,000 calls of {s}({d}) left {d} node copies retained in the store (scan_hydrated_nodes {d} -> {d})", .{ @tagName(mode), c.func, c.id, after -| before, before, after });
+        }
+    }
+    try f.finish(@tagName(mode));
+}
+
+test "SONNY-2691 (P11): 2,000 degree calls with no policy retain no node copy" {
+    try checkRetainsNothing(.no_policy);
+}
+
+test "SONNY-2691 (P11): 2,000 degree calls under a label-deny policy retain no node copy" {
+    try checkRetainsNothing(.label_policy);
+}
+
+test "SONNY-2691 (P11): 2,000 degree calls under an expression policy retain no node copy" {
+    try checkRetainsNothing(.expr_policy);
+}
+
+test "SONNY-2691 (P11): 2,000 degree calls in a tenant-scoped session retain no node copy" {
+    try checkRetainsNothing(.tenant_scoped);
+}
+
 // LAST on purpose: before the fix a negative id PANICS (safety-checked
 // illegal behaviour), which aborts the test binary as it aborted the server.
 test "SONNY-2691: a negative id is not a node: its degree is 0, in every session" {

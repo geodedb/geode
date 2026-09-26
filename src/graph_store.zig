@@ -15884,6 +15884,14 @@ fn deinitGlobalStoreEx(clean: bool) void {
 
 const testing = std.testing;
 
+// write_budget's own tests run with the store's. Nothing else in this test
+// root is sure to reach the module: its one use here is inside
+// `getNodePtrForScan`, which Zig analyses only when a caller in the closure
+// uses it, and eval.zig's degree functions no longer do (P11, SONNY-2691).
+test {
+    _ = write_budget;
+}
+
 test "TestLabelIndexBasic" {
     // Issue #391: Test that label index is maintained during node creation
     var store = try GraphStore.init(testing.allocator);
