@@ -8734,6 +8734,32 @@ pub fn build(b: *std.Build) void {
     const sonny2804_step = b.step("test-sonny2804-storage-procs-gate", "Run SONNY-2804 regression (geode.storage.stats/integrity refuse __geode_* graphs, then graphs the caller may not bind, before whether the graph exists)");
     sonny2804_step.dependOn(&run_sonny2804_tests.step);
 
+    // SONNY-2805 + SONNY-2799: a session's transaction is the session's,
+    // whichever thread serves it: program-order transaction control, a failed
+    // statement rolls back its own transaction under its graph's write lock,
+    // per-transaction undo entries and savepoints, no match-all rollback. The
+    // real gRPC handler in process (SONNY-1560 shim), the undo log, and QUIC
+    // against a spawned server.
+    const sonny2805_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny2805_txn_sessions.zig"), .target = target, .optimize = optimize });
+    sonny2805_test_mod.link_libc = true;
+    sonny2805_test_mod.addImport("geode", root_mod);
+    sonny2805_test_mod.addImport("schema", schema_mod);
+    sonny2805_test_mod.addImport("protobuf", protobuf_mod);
+    sonny2805_test_mod.addImport("grpc_impl", sonny1560_shim_mod);
+    sonny2805_test_mod.addImport("logging", logging_mod);
+    sonny2805_test_mod.addImport("transport/quic", transport_quic_mod);
+    const sonny2805_tests = b.addTest(.{ .root_module = sonny2805_test_mod });
+    const run_sonny2805_tests = b.addRunArtifact(sonny2805_tests);
+    run_sonny2805_tests.step.dependOn(&install_geode_exe.step);
+    const sonny2805_step = b.step("test-sonny2805-txn-sessions", "Run SONNY-2805/SONNY-2799 regression (transaction control in program order; a failed statement rolls back only its own transaction, under its graph's write lock; the undo log keys changes and savepoints by transaction and never matches all; gRPC keeps the transaction per session across threads; QUIC e2e)");
+    sonny2805_step.dependOn(&run_sonny2805_tests.step);
+    // The undo log's inline tests (src/txn_undo_log.zig, and the store's undo
+    // tests) through the geode lib module, filtered, as test-quality733 does.
+    const txn_undo_inline_tests = b.addTest(.{ .root_module = root_mod, .filters = &.{ "undo log", "savepoint" } });
+    const run_txn_undo_inline_tests = b.addRunArtifact(txn_undo_inline_tests);
+    const txn_undo_inline_step = b.step("test-txn-undo-log-inline", "Run the undo log's inline tests (undo log, savepoints) from the geode lib module, filtered");
+    txn_undo_inline_step.dependOn(&run_txn_undo_inline_tests.step);
+
     // SONNY-2790: the fulltext statements (CREATE/DROP INDEX, geode.fts.*)
     // run on the default graph, so the handlers lock `default` for them from
     // any session. Classifier, and the real gRPC handler (SONNY-1560 shim).

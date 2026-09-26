@@ -669,7 +669,7 @@ fn executeBulkSimpleCreate(
 
     // Keep txn / audit / session state tracking consistent with the
     // regular mutation path so downstream handlers don't observe drift.
-    auditQueryExecution(state, "bulk_simple_create", true);
+    auditQueryExecution(query_graph_name, "bulk_simple_create", true);
     // Auto-index the node label(s) — mirrors the regular-executor hook at
     // `src/execution/crud_operations.zig:696` and the edge fast-path at
     // `executeBulkMatchCreateEdge` above.  The bulk fast path bypasses
@@ -816,10 +816,10 @@ fn executeBulkMatchCreateEdge(
         try sendBulkEdgeSuccessResponse(gpa, stream);
         if (result_id == 0) {
             mut_sample.record("bulk_match_create_edge_skipped");
-            auditQueryExecution(state, "bulk_match_create_edge_skipped", true);
+            auditQueryExecution(query_graph_name, "bulk_match_create_edge_skipped", true);
         } else {
             mut_sample.record("bulk_match_create_edge");
-            auditQueryExecution(state, "bulk_match_create_edge", true);
+            auditQueryExecution(query_graph_name, "bulk_match_create_edge", true);
             // Auto-index the edge type — mirrors the regular-executor
             // hook at `src/execution/crud_operations.zig:690`.  The bulk
             // fast path bypasses `executeProgramWithContext`, so without
@@ -863,7 +863,7 @@ fn executeBulkMatchCreateEdge(
     if (resolved == null) {
         try sendBulkEdgeSuccessResponse(gpa, stream);
         mut_sample.record("bulk_match_create_edge_skipped");
-        auditQueryExecution(state, "bulk_match_create_edge_skipped", true);
+        auditQueryExecution(query_graph_name, "bulk_match_create_edge_skipped", true);
         syncGraphFromSession(state);
         updateTxnStateFromProgram(state, program, query_graph_name);
         return;
@@ -906,7 +906,7 @@ fn executeBulkMatchCreateEdge(
                 error.SourceNodeNotFound, error.TargetNodeNotFound => {
                     try sendBulkEdgeSuccessResponse(gpa, stream);
                     mut_sample.record("bulk_match_create_edge_skipped_race");
-                    auditQueryExecution(state, "bulk_match_create_edge_skipped_race", true);
+                    auditQueryExecution(query_graph_name, "bulk_match_create_edge_skipped_race", true);
                     syncGraphFromSession(state);
                     updateTxnStateFromProgram(state, program, query_graph_name);
                     return;
@@ -931,7 +931,7 @@ fn executeBulkMatchCreateEdge(
 
     mut_sample.record("bulk_match_create_edge");
 
-    auditQueryExecution(state, "bulk_match_create_edge", true);
+    auditQueryExecution(query_graph_name, "bulk_match_create_edge", true);
     // Auto-index the edge type — non-coordinator path counterpart of the
     // call above.  See note in coordinator-path branch.
     execution.ensureAutoIndexes(gpa, &.{spec.rel_type});
@@ -1042,7 +1042,7 @@ fn executeBulkMatchMergeEdge(
     if (resolved == null) {
         try sendBulkEdgeSuccessResponse(gpa, stream);
         mut_sample.record("bulk_match_merge_edge_skipped");
-        auditQueryExecution(state, "bulk_match_merge_edge_skipped", true);
+        auditQueryExecution(query_graph_name, "bulk_match_merge_edge_skipped", true);
         syncGraphFromSession(state);
         updateTxnStateFromProgram(state, program, query_graph_name);
         return;
@@ -1081,7 +1081,7 @@ fn executeBulkMatchMergeEdge(
             error.SourceNodeNotFound, error.TargetNodeNotFound => {
                 try sendBulkEdgeSuccessResponse(gpa, stream);
                 mut_sample.record("bulk_match_merge_edge_skipped_race");
-                auditQueryExecution(state, "bulk_match_merge_edge_skipped_race", true);
+                auditQueryExecution(query_graph_name, "bulk_match_merge_edge_skipped_race", true);
                 syncGraphFromSession(state);
                 updateTxnStateFromProgram(state, program, query_graph_name);
                 return;
@@ -1098,7 +1098,7 @@ fn executeBulkMatchMergeEdge(
 
     try sendBulkEdgeSuccessResponse(gpa, stream);
     mut_sample.record("bulk_match_merge_edge");
-    auditQueryExecution(state, "bulk_match_merge_edge", true);
+    auditQueryExecution(query_graph_name, "bulk_match_merge_edge", true);
     execution.ensureAutoIndexes(gpa, &.{spec.rel_type});
     syncGraphFromSession(state);
     updateTxnStateFromProgram(state, program, query_graph_name);
@@ -1471,7 +1471,7 @@ fn executeBulkSimpleMerge(
 
     mut_sample.record("bulk_simple_merge");
 
-    auditQueryExecution(state, "bulk_simple_merge", true);
+    auditQueryExecution(query_graph_name, "bulk_simple_merge", true);
     // Auto-index the merge label — mirrors the regular-executor MERGE hook at
     // `src/execution/crud_operations.zig:2293`, which runs unconditionally
     // regardless of create-vs-match (`ensureAutoIndexes` is idempotent).  The
@@ -1728,7 +1728,7 @@ fn executeBatchSimpleMerge(
     try sendEmptySuccessResult(gpa, stream);
 
     mut_sample.record("batch_simple_merge");
-    auditQueryExecution(state, "batch_simple_merge", true);
+    auditQueryExecution(query_graph_name, "batch_simple_merge", true);
     syncGraphFromSession(state);
     updateTxnStateFromProgram(state, program, query_graph_name);
     return true;
@@ -6201,8 +6201,10 @@ pub fn handleQuicConnection(
 /// aligns audit with the other per-graph security features (FLE, TDE,
 /// KMS) and drops a measurable write-path overhead on the msft-graph
 /// hot path.
-fn resolveAuditLogger(state: *const ServerState) ?*audit_mod.AuditLogger {
-    const graph_name = state.current_graph orelse graph_store.DEFAULT_GRAPH_NAME;
+/// SONNY-2799: `graph_name` is the graph the request ran on (its lock graph,
+/// or the fast path's graph). It was `state.current_graph`, the copy synced
+/// after a request: the graph of the request before.
+fn resolveAuditLogger(graph_name: []const u8) ?*audit_mod.AuditLogger {
     const adapter = graph_store.getGlobalAdapter() orelse return null;
     return adapter.getAuditLogger(graph_name);
 }
@@ -6216,8 +6218,8 @@ fn resolveAuditLogger(state: *const ServerState) ?*audit_mod.AuditLogger {
 /// The per-thread tenant_id is already set earlier in the request flow
 /// via `audit_mod.setCurrentAuditTenantId`, so we do not pass it
 /// explicitly here.
-fn auditQueryExecution(state: *const ServerState, query_text: []const u8, is_mutation: bool) void {
-    const logger = resolveAuditLogger(state) orelse return;
+fn auditQueryExecution(graph_name: []const u8, query_text: []const u8, is_mutation: bool) void {
+    const logger = resolveAuditLogger(graph_name) orelse return;
     const event_type: audit_mod.AuditEventType = if (is_mutation) .data_modification else .data_access;
     logger.logEvent(.{
         .event_type = event_type,
@@ -6260,41 +6262,50 @@ fn syncGraphFromSession(state: *ServerState) void {
         null;
 }
 
+// CANARY: REQ=REQ-SONNY-2805-TXN-PROGRAM-ORDER; FEATURE="TransactionManagement"; ASPECT=QuicHandler; STATUS=TESTED; TEST=tests/test_sonny2805_txn_sessions.zig; OWNER=engine; UPDATED=2026-09-26
 /// Track the session's transaction after `program` ran. SONNY-2776:
 /// `write_graph` is the graph the program changed (null if it changed none);
 /// the first graph an open transaction changes becomes its graph.
+///
+/// SONNY-2805: the statements are followed in program order, as the executor
+/// ran them. A COMMIT or ROLLBACK used to end the transaction whatever came
+/// after it: after `COMMIT; START TRANSACTION; ...` the handler had no
+/// transaction and the executor had begun one. The transaction's id is the
+/// undo log's (`ServerState.leaveUndoTxn`). A transaction the handler holds
+/// and the undo log does not is begun, so its changes are recorded.
 fn updateTxnStateFromProgram(state: *ServerState, program: *const gql_ast.Program, write_graph: ?[]const u8) void {
-    var has_start: bool = false;
-    var has_commit: bool = false;
-    var has_rollback: bool = false;
+    for (program.statements) |*stmt| switch (stmt.*) {
+        .StartTransaction => |st| {
+            if (st.body == null and !state.in_txn) {
+                state.clearTxnGraph();
+                state.in_txn = true;
+            }
+        },
+        .Commit, .Rollback => state.endTransaction(),
+        else => if (state.in_txn and query_traits.isMutatingStatement(stmt)) {
+            // A failed allocation leaves the transaction without a graph; its
+            // end then locks the session's graph, as before SONNY-2776.
+            if (write_graph) |g| state.noteTxnWrite(g) catch {};
+        },
+    };
+    if (state.in_txn and txn_undo_log.currentThreadTxnId() == 0) txn_undo_log.getGlobalUndoLog(state.allocator).begin();
+}
 
-    for (program.statements) |stmt| {
-        switch (stmt) {
-            .StartTransaction => |st| {
-                if (st.body == null) has_start = true;
-            },
-            .Commit => has_commit = true,
-            .Rollback => has_rollback = true,
-            else => {},
-        }
-    }
-
-    if (has_commit or has_rollback) {
+// CANARY: REQ=REQ-SONNY-2799-FAILED-TXN-ROLLBACK; FEATURE="TransactionManagement"; ASPECT=QuicHandler; STATUS=TESTED; TEST=tests/test_sonny2805_txn_sessions.zig; OWNER=engine; UPDATED=2026-09-26
+/// SONNY-2799: after a request whose execution failed. If the undo log's
+/// transaction is still open on this thread, the executor failed it
+/// (GAP-0917) and left the undo to the handler (`defer_failed_txn_rollback`):
+/// roll it back as ROLLBACK does (the session engine transaction first),
+/// under the write lock of the graph it changed (or `request_graph`, the
+/// graph the request ran on). The request's own lock is released by now. If
+/// the handler thought a transaction open that the executor ended, end it.
+fn abortFailedTransaction(state: *ServerState, request_graph: []const u8) void {
+    const open = txn_undo_log.currentThreadTxnId();
+    if (open != 0) {
+        state.txn_id = open;
+        state.rollBackTransaction(request_graph, true);
+    } else if (state.in_txn) {
         state.endTransaction();
-        return;
-    }
-
-    if (has_start) {
-        if (!state.in_txn) state.clearTxnGraph();
-        state.in_txn = true;
-        if (state.txn_id == 0) {
-            state.txn_id = @intCast(compat_milliTimestamp());
-        }
-    }
-    if (state.in_txn) {
-        // A failed allocation leaves the transaction without a graph; its end
-        // then locks the session's graph, as before SONNY-2776.
-        if (write_graph) |g| state.noteTxnWrite(g) catch {};
     }
 }
 
@@ -6817,6 +6828,11 @@ fn handleClientMessage(
             return;
         }
     }
+    // CANARY: REQ=REQ-SONNY-2799-SESSION-UNDO-TXN; FEATURE="TransactionUndoLog"; ASPECT=QuicPerMessage; STATUS=TESTED; TEST=tests/test_sonny2805_txn_sessions.zig; OWNER=engine; UPDATED=2026-09-26
+    // SONNY-2799: the session's undo-log transaction is this thread's for the
+    // message, and the thread holds none between messages.
+    state.enterUndoTxn();
+    defer state.leaveUndoTxn();
     switch (msg) {
         .hello => |hello_req| {
             // SONNY-1835: record that this stream received its own HELLO, so a
@@ -7373,7 +7389,9 @@ fn handleClientMessage(
                 return;
             }
 
-            const analysis = query_traits.analyzeProgram(&parse_result.program);
+            // SONNY-2805: `analyzeRequest` keeps a program with transaction
+            // control off the fast paths that run only its last query.
+            const analysis = query_traits.analyzeRequest(&parse_result.program);
             var traits = analysis.traits;
             const ordered = traits.ordered;
             const distinct = traits.distinct;
@@ -7390,10 +7408,24 @@ fn handleClientMessage(
             // query alone.
             const stmt_plan = query_traits.statementPlan(&parse_result.program, &analysis, query_graph_name, homeGraphName(state), .quic);
             const program_is_mutating = stmt_plan.is_mutation;
+            // CANARY: REQ=REQ-SONNY-2799-TXN-END-LOCK; FEATURE="TransactionManagement"; ASPECT=QuicHandler; STATUS=TESTED; TEST=tests/test_sonny2805_txn_sessions.zig; OWNER=engine; UPDATED=2026-09-26
+            // SONNY-2799: a COMMIT or ROLLBACK in the program ends the
+            // session's transaction, which changed `state.txn_graph`. The
+            // program runs under that graph's write lock (a ROLLBACK changes
+            // it back) and touches no other graph's data (a handler holds one
+            // lock). It ran under the request's own lock: for a ROLLBACK a
+            // read lock, a read snapshot the undo went into, or none. Copied:
+            // the COMMIT frees the session's copy.
+            const txn_end_graph: ?[]const u8 = blk: {
+                if (!state.in_txn or !query_traits.transactionControl(&parse_result.program).ends) break :blk null;
+                const g = state.txn_graph orelse break :blk null;
+                break :blk try gpa.dupe(u8, g);
+            };
+            defer if (txn_end_graph) |g| gpa.free(g);
             // CANARY: REQ=REQ-SONNY-2749-PROGRAM-GRAPH-LOCK; FEATURE="StatementAuthorization"; ASPECT=QuicHandler; STATUS=TESTED; TEST=tests/test_sonny2749_program_graph_lock.zig; OWNER=security; UPDATED=2026-09-25
             // SONNY-2749: every lock below is on the graph the program's
             // statements run on, which a USE GRAPH in it moves.
-            const lock_graph = stmt_plan.lock_graph;
+            const lock_graph = txn_end_graph orelse stmt_plan.lock_graph;
 
             // Spec geode-vectorization-and-reranking: per-request hard read-only
             // floor, independent of the principal's role ("authorization must be
@@ -7583,6 +7615,8 @@ fn handleClientMessage(
                 // CANARY: REQ=REQ-SEC-RLS-WIRE-013; FEATURE="RLS Expression Wiring"; ASPECT=ExecContextWiring; STATUS=TESTED; TEST=tests/test_rls_expr_engine_wiring.zig; OWNER=security; UPDATED=2026-06-11
                 .rls_engine = @import("rls_types").getGlobalExprRLSEngine(),
                 .pending_index_rebuilds = null,
+                // SONNY-2799: see `abortFailedTransaction`.
+                .defer_failed_txn_rollback = true,
                 // RC-3 (2026-06-12): thread the optional client idempotency key
                 // (ExecuteRequest field 5) into the context so a clustered create
                 // dedups a client retry at apply time. Null when the client did
@@ -7657,8 +7691,10 @@ fn handleClientMessage(
             // last query (`CREATE (:X); RETURN 1 AS c`) no longer drops the
             // lock, and a mutation anywhere in the program is gated.
             const self_locking = stmt_plan.self_locking;
-            const needs_store_lock = stmt_plan.needs_store_lock;
+            const needs_store_lock = stmt_plan.needs_store_lock or txn_end_graph != null;
             const is_mutation = stmt_plan.is_mutation;
+            // The write lock: for a change, or for the end of a transaction.
+            const write_locked = is_mutation or txn_end_graph != null;
 
             // CANARY: REQ=REQ-GPS-PDP-010; FEATURE="GPS Phase 2/4 Enforcement"; ASPECT=MutationGateViaDecide; STATUS=TESTED; TEST=geode-test-harness/geodetestlab-cli/specs/gps_phase6_abac_migration.yml; OWNER=security; UPDATED=2026-05-21
             // GAP-0526 was originally enforced by a direct `user_mgmt.hasPermission` call
@@ -7698,6 +7734,18 @@ fn handleClientMessage(
                 try sendExecuteError(gpa, stream, "0A000", query_traits.txn_spans_graphs_message, &.{}, &.{});
                 return;
             }
+            if (txn_end_graph) |g| {
+                if (!query_traits.programDataOnlyOn(&parse_result.program, query_graph_name, homeGraphName(state), g)) {
+                    try sendExecuteError(gpa, stream, "0A000", query_traits.txn_end_graph_message, &.{}, &.{});
+                    return;
+                }
+            }
+
+            // SONNY-2799: a failed statement's transaction is rolled back
+            // after the request's lock is released: this defer is registered
+            // before the lock's, so it runs after it.
+            var failed_in_txn = false;
+            defer if (failed_in_txn) abortFailedTransaction(state, lock_graph);
 
             quic_response_metrics.recordFirstStreamQueryPrepare(monoNsFromHandler() -| first_stream_prepare_start_ns);
 
@@ -7738,7 +7786,7 @@ fn handleClientMessage(
             // `MATCH (n:Label) RETURN count(n)` requests queue behind snapshots
             // and writers. Execute that shape under a brief shared read lock,
             // then release the lock before protobuf serialization.
-            if (needs_store_lock and !is_mutation) count_fast_path_blk: {
+            if (needs_store_lock and !write_locked) count_fast_path_blk: {
                 const target = analysis.target orelse break :count_fast_path_blk;
                 if (target.* != .Query) break :count_fast_path_blk;
                 // GAP-0892: a multi-statement program (e.g. `SESSION SET
@@ -7787,7 +7835,7 @@ fn handleClientMessage(
                         }
 
                         try sendSinglePageExecutionResultBatched(gpa, stream, &exec_result);
-                        auditQueryExecution(state, query_text, is_mutation);
+                        auditQueryExecution(lock_graph, query_text, is_mutation);
                         syncGraphFromSession(state);
                         updateTxnStateFromProgram(state, &parse_result.program, if (stmt_plan.is_mutation) lock_graph else null);
                         return;
@@ -7828,7 +7876,7 @@ fn handleClientMessage(
                     // do not double stream write pressure.
                     try sendSinglePageExecutionResultBatched(gpa, stream, &exec_result);
 
-                    auditQueryExecution(state, query_text, is_mutation);
+                    auditQueryExecution(lock_graph, query_text, is_mutation);
                     syncGraphFromSession(state);
                     updateTxnStateFromProgram(state, &parse_result.program, if (stmt_plan.is_mutation) lock_graph else null);
                     return;
@@ -7848,7 +7896,7 @@ fn handleClientMessage(
                     }
 
                     try sendSinglePageExecutionResultBatched(gpa, stream, &exec_result);
-                    auditQueryExecution(state, query_text, is_mutation);
+                    auditQueryExecution(lock_graph, query_text, is_mutation);
                     syncGraphFromSession(state);
                     updateTxnStateFromProgram(state, &parse_result.program, if (stmt_plan.is_mutation) lock_graph else null);
                     return;
@@ -7875,7 +7923,7 @@ fn handleClientMessage(
                     }
 
                     try sendSinglePageExecutionResultBatched(gpa, stream, &exec_result);
-                    auditQueryExecution(state, query_text, is_mutation);
+                    auditQueryExecution(lock_graph, query_text, is_mutation);
                     syncGraphFromSession(state);
                     updateTxnStateFromProgram(state, &parse_result.program, if (stmt_plan.is_mutation) lock_graph else null);
                     return;
@@ -8035,7 +8083,7 @@ fn handleClientMessage(
             // mutation path.
             var mut_sample: ?mutation_timing.Sample = null;
             if (needs_store_lock) {
-                if (is_mutation) {
+                if (write_locked) {
                     mut_sample = mutation_timing.begin();
                     // Mutations: exclusive writer lock held across execute to
                     // prevent HashMap rehash races (GAP-0001, CWE-362/CWE-416).
@@ -8265,14 +8313,19 @@ fn handleClientMessage(
 
                     if (target_stmt.* == .Query) {
                         var planned_query = target_stmt.Query;
-                        if (try planned_read_runtime.executeProfiledIfSupported(
+                        if (planned_read_runtime.executeProfiledIfSupported(
                             gpa,
                             &planned_query,
                             exec_context,
                             bindings.names,
                             bindings.values,
                             true,
-                        )) |planned| {
+                        ) catch |err| {
+                            failed_in_txn = true;
+                            const info = proto_util.mapError(err);
+                            try sendExecuteError(gpa, stream, info.code, info.message, &.{}, &.{});
+                            return;
+                        }) |planned| {
                             var owned_planned = planned;
                             defer owned_planned.deinitMetadata(gpa);
                             defer owned_planned.result.deinit(gpa);
@@ -8326,12 +8379,13 @@ fn handleClientMessage(
                             };
                             try sendQuicMessage(gpa, stream, .{ .execute = resp });
                             // Route audit event to per-graph logger (falls back to global).
-                            auditQueryExecution(state, query_text, is_mutation);
+                            auditQueryExecution(lock_graph, query_text, is_mutation);
                             return;
                         }
                     }
 
                     var exec_result = execution.executeStatementWithContext(gpa, target_stmt.*, exec_context) catch |err| {
+                        failed_in_txn = true;
                         const info = proto_util.mapError(err);
                         try sendExecuteError(gpa, stream, info.code, info.message, &.{}, &.{});
                         return;
@@ -8399,7 +8453,7 @@ fn handleClientMessage(
                     try sendQuicMessage(gpa, stream, .{ .execute = resp });
 
                     // Route audit event to per-graph logger (falls back to global).
-                    auditQueryExecution(state, query_text, is_mutation);
+                    auditQueryExecution(lock_graph, query_text, is_mutation);
 
                     // GAP-0260: Non-txn saves deferred to background persistence thread
                 },
@@ -8551,7 +8605,7 @@ fn handleClientMessage(
                                     }
 
                                     // Route audit event to per-graph logger (falls back to global).
-                                    auditQueryExecution(state, query_text, is_mutation);
+                                    auditQueryExecution(lock_graph, query_text, is_mutation);
 
                                     syncGraphFromSession(state);
                                     updateTxnStateFromProgram(state, &parse_result.program, if (stmt_plan.is_mutation) lock_graph else null);
@@ -8563,6 +8617,7 @@ fn handleClientMessage(
 
                     const first_stream_execute_start_ns = monoNsFromHandler();
                     var exec_result = execution.executeProgramWithContext(gpa, &parse_result.program, exec_context) catch |err| {
+                        failed_in_txn = true;
                         const info = proto_util.mapError(err);
                         try sendExecuteError(gpa, stream, info.code, info.message, &.{}, &.{});
                         return;
@@ -8689,7 +8744,7 @@ fn handleClientMessage(
                     }
 
                     // Route audit event to per-graph logger (falls back to global).
-                    auditQueryExecution(state, query_text, is_mutation);
+                    auditQueryExecution(lock_graph, query_text, is_mutation);
 
                     syncGraphFromSession(state);
                     updateTxnStateFromProgram(state, &parse_result.program, if (stmt_plan.is_mutation) lock_graph else null);
@@ -8874,9 +8929,11 @@ fn handleClientMessage(
 
             state.clearTxnGraph();
             state.in_txn = true;
-            state.txn_id = @intCast(compat_milliTimestamp());
             state.session_snapshot_ts = state.global_commit_ts;
+            // SONNY-2799: the transaction's id is its undo-log transaction's,
+            // which the session keeps across messages (`leaveUndoTxn`).
             txn_undo_log.getGlobalUndoLog(gpa).begin();
+            state.txn_id = txn_undo_log.currentThreadTxnId();
 
             // R9 (2026-04-22, updated): do NOT open a session engine txn
             // eagerly here.  Under the msft-graph DSN graph-binding flow

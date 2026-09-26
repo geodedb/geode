@@ -2467,7 +2467,8 @@ test "quic count fast path batches schema and page responses" {
 
     const fast_path_start = std.mem.indexOf(u8, content, "execution.countNodesFastPath") orelse return error.MissingCountFastPath;
     const fast_path_rest = content[fast_path_start..];
-    const audit_idx = std.mem.indexOf(u8, fast_path_rest, "auditQueryExecution(state, query_text, is_mutation)") orelse return error.MissingCountFastPathAudit;
+    // SONNY-2799: the audit takes the graph the request ran on (lock_graph).
+    const audit_idx = std.mem.indexOf(u8, fast_path_rest, "auditQueryExecution(lock_graph, query_text, is_mutation)") orelse return error.MissingCountFastPathAudit;
     const fast_path_body = fast_path_rest[0..audit_idx];
 
     try testing.expect(std.mem.indexOf(u8, fast_path_body, "try sendSinglePageExecutionResultBatched(gpa, stream, &exec_result)") != null);

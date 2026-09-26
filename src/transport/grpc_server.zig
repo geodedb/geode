@@ -459,17 +459,10 @@ fn deinitServerState(state: *server_state.ServerState) void {
 
 fn invalidateAuthenticatedSession(allocator: std.mem.Allocator, state: *server_state.ServerState) void {
     state.resetResult();
-    if (state.in_txn) {
-        // SONNY-2776: the graph the transaction changed; `current_graph` is
-        // never set on gRPC, so this used to lock `default` whatever it was.
-        const graph_name = state.txnLockGraph(state.sessionGraph());
-        const lock_handle = graph_store.acquireGraphWriteLock(graph_name);
-        defer graph_store.releaseGraphLock(lock_handle);
-        const store_ptr = graph_store.getGlobalStore(allocator);
-        txn_undo_log.getGlobalUndoLog(allocator).rollback(store_ptr) catch |err| {
-            log.warn("Failed to rollback invalidated session transaction", &.{Attr.string("error", @errorName(err))});
-        };
-    }
+    // SONNY-2776: under the write lock of the graph the transaction changed
+    // (`current_graph` is never set on gRPC, so this used to lock `default`).
+    // SONNY-2799: the session's own undo transaction, whatever this thread's.
+    if (state.in_txn) state.rollBackTransaction(state.sessionGraph(), false);
     state.endTransaction();
     state.current_user_id = null;
     if (state.authenticated_user) |u| {
@@ -510,6 +503,10 @@ fn authorizeAdminSession(session_id: []const u8, allocator: std.mem.Allocator) !
     entry.mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
     defer entry.mutex.unlock(std.Io.Threaded.global_single_threaded.io());
     const state = entry.state;
+    // SONNY-2799: the session's undo-log transaction is this thread's for the
+    // request, whichever worker thread serves it.
+    state.enterUndoTxn();
+    defer state.leaveUndoTxn();
 
     switch (try validateSessionAuth(allocator, state)) {
         .ok => {},
@@ -663,41 +660,52 @@ fn buildOrderKeys(
     return keys;
 }
 
+// CANARY: REQ=REQ-SONNY-2805-TXN-PROGRAM-ORDER; FEATURE="TransactionManagement"; ASPECT=GrpcHandler; STATUS=TESTED; TEST=tests/test_sonny2805_txn_sessions.zig; OWNER=engine; UPDATED=2026-09-26
 /// Track the session's transaction after `program` ran. SONNY-2776:
 /// `write_graph` is the graph the program changed (null if it changed none);
 /// the first graph an open transaction changes becomes its graph.
+///
+/// SONNY-2805: the statements are followed in program order, as the executor
+/// ran them. A COMMIT or ROLLBACK used to end the transaction whatever came
+/// after it: after `COMMIT; START TRANSACTION; ...` the handler had no
+/// transaction and the executor had begun one, so the next change of another
+/// graph escaped the one-graph rule, and the client's ROLLBACK did nothing.
+/// The transaction's id is the undo log's (`ServerState.leaveUndoTxn`). A
+/// transaction the handler holds and the undo log does not is begun, so its
+/// changes are recorded.
 fn updateTxnStateFromProgram(state: *server_state.ServerState, program: *const gql_ast.Program, write_graph: ?[]const u8) void {
-    var has_start: bool = false;
-    var has_commit: bool = false;
-    var has_rollback: bool = false;
+    for (program.statements) |*stmt| switch (stmt.*) {
+        .StartTransaction => |st| {
+            if (st.body == null and !state.in_txn) {
+                state.clearTxnGraph();
+                state.in_txn = true;
+            }
+        },
+        .Commit, .Rollback => state.endTransaction(),
+        else => if (state.in_txn and query_traits.isMutatingStatement(stmt)) {
+            // A failed allocation leaves the transaction without a graph; its
+            // end then locks the session's graph, as before SONNY-2776.
+            if (write_graph) |g| state.noteTxnWrite(g) catch {};
+        },
+    };
+    if (state.in_txn and txn_undo_log.currentThreadTxnId() == 0) txn_undo_log.getGlobalUndoLog(state.allocator).begin();
+}
 
-    for (program.statements) |stmt| {
-        switch (stmt) {
-            .StartTransaction => |st| {
-                if (st.body == null) has_start = true;
-            },
-            .Commit => has_commit = true,
-            .Rollback => has_rollback = true,
-            else => {},
-        }
-    }
-
-    if (has_commit or has_rollback) {
+// CANARY: REQ=REQ-SONNY-2799-FAILED-TXN-ROLLBACK; FEATURE="TransactionManagement"; ASPECT=GrpcHandler; STATUS=TESTED; TEST=tests/test_sonny2805_txn_sessions.zig; OWNER=engine; UPDATED=2026-09-26
+/// SONNY-2799: after a request whose execution failed. If the undo log's
+/// transaction is still open on this thread, the executor failed it
+/// (GAP-0917) and left the undo to the handler (`defer_failed_txn_rollback`):
+/// roll it back, under the write lock of the graph it changed (or
+/// `request_graph`, the graph the request ran on). The request's own lock is
+/// released by now. If the handler thought a transaction open that the
+/// executor ended (a ROLLBACK before the failure), end it.
+fn abortFailedTransaction(state: *server_state.ServerState, request_graph: []const u8) void {
+    const open = txn_undo_log.currentThreadTxnId();
+    if (open != 0) {
+        state.txn_id = open;
+        state.rollBackTransaction(request_graph, false);
+    } else if (state.in_txn) {
         state.endTransaction();
-        return;
-    }
-
-    if (has_start) {
-        if (!state.in_txn) state.clearTxnGraph();
-        state.in_txn = true;
-        if (state.txn_id == 0) {
-            state.txn_id = @intCast(compat_milliTimestamp());
-        }
-    }
-    if (state.in_txn) {
-        // A failed allocation leaves the transaction without a graph; its end
-        // then locks the session's graph, as before SONNY-2776.
-        if (write_graph) |g| state.noteTxnWrite(g) catch {};
     }
 }
 
@@ -974,6 +982,10 @@ fn buildStreamDataPage(session_id: []const u8, allocator: std.mem.Allocator) !Pa
     entry.mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
     defer entry.mutex.unlock(std.Io.Threaded.global_single_threaded.io());
     const state = entry.state;
+    // SONNY-2799: the session's undo-log transaction is this thread's for the
+    // request, whichever worker thread serves it.
+    state.enterUndoTxn();
+    defer state.leaveUndoTxn();
 
     const result_ptr = if (state.active_result_values) |*res| res else {
         var resp = try buildErrorResponse(allocator, "02000", "No active result set", &.{}, &.{});
@@ -2373,6 +2385,10 @@ pub fn handleExecute(request_bytes: []const u8, allocator: std.mem.Allocator, ep
     entry.mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
     defer entry.mutex.unlock(std.Io.Threaded.global_single_threaded.io());
     const state = entry.state;
+    // SONNY-2799: the session's undo-log transaction is this thread's for the
+    // request, whichever worker thread serves it.
+    state.enterUndoTxn();
+    defer state.leaveUndoTxn();
 
     state.resetResult();
     // SONNY-1560: a new statement invalidates any in-flight pushed stream on
@@ -2533,7 +2549,9 @@ pub fn handleExecute(request_bytes: []const u8, allocator: std.mem.Allocator, ep
                 return encodeMessage(allocator, resp);
             }
 
-            const analysis = query_traits.analyzeProgram(&parse_result.program);
+            // SONNY-2805: `analyzeRequest` keeps a program with transaction
+            // control off the fast paths that run only its last query.
+            const analysis = query_traits.analyzeRequest(&parse_result.program);
             var traits = analysis.traits;
             const ordered = traits.ordered;
             const distinct = traits.distinct;
@@ -2654,6 +2672,8 @@ pub fn handleExecute(request_bytes: []const u8, allocator: std.mem.Allocator, ep
                 .fle_role = state.fle_user_role,
                 .principal = &principal_for_request,
                 .pending_index_rebuilds = null,
+                // SONNY-2799: see `abortFailedTransaction`.
+                .defer_failed_txn_rollback = true,
             };
 
             var pending_index_rebuilds = std.StringHashMap(void).init(allocator);
@@ -2724,14 +2744,30 @@ pub fn handleExecute(request_bytes: []const u8, allocator: std.mem.Allocator, ep
             const query_graph_name = try allocator.dupe(u8, sessionGraphName(state));
             defer allocator.free(query_graph_name);
             const stmt_plan = query_traits.statementPlan(&parse_result.program, &analysis, query_graph_name, homeGraphName(state), .grpc);
+            // CANARY: REQ=REQ-SONNY-2799-TXN-END-LOCK; FEATURE="TransactionManagement"; ASPECT=GrpcHandler; STATUS=TESTED; TEST=tests/test_sonny2805_txn_sessions.zig; OWNER=engine; UPDATED=2026-09-26
+            // SONNY-2799: a COMMIT or ROLLBACK in the program ends the
+            // session's transaction, which changed `state.txn_graph`. The
+            // program runs under that graph's write lock (a ROLLBACK changes
+            // it back) and touches no other graph's data (a handler holds one
+            // lock). It ran under the request's own lock: for a ROLLBACK a
+            // read lock, or a read snapshot the undo went into. Copied: the
+            // COMMIT frees the session's copy.
+            const txn_end_graph: ?[]const u8 = blk: {
+                if (!state.in_txn or !query_traits.transactionControl(&parse_result.program).ends) break :blk null;
+                const g = state.txn_graph orelse break :blk null;
+                break :blk try allocator.dupe(u8, g);
+            };
+            defer if (txn_end_graph) |g| allocator.free(g);
             // CANARY: REQ=REQ-SONNY-2749-PROGRAM-GRAPH-LOCK; FEATURE="StatementAuthorization"; ASPECT=GrpcHandler; STATUS=TESTED; TEST=tests/test_sonny2749_program_graph_lock.zig; OWNER=security; UPDATED=2026-09-25
             // SONNY-2749: every lock below is on the graph the program's
             // statements run on, which a USE GRAPH in it moves.
-            const lock_graph = stmt_plan.lock_graph;
+            const lock_graph = txn_end_graph orelse stmt_plan.lock_graph;
             const self_locking = stmt_plan.self_locking;
-            const needs_store_lock = stmt_plan.needs_store_lock;
+            const needs_store_lock = stmt_plan.needs_store_lock or txn_end_graph != null;
             const program_is_mutating = stmt_plan.is_mutation;
             const is_mutation = stmt_plan.is_mutation;
+            // The write lock: for a change, or for the end of a transaction.
+            const write_locked = is_mutation or txn_end_graph != null;
 
             // Spec geode-vectorization-and-reranking: per-request hard read-only
             // floor, independent of the principal's role ("authorization must be
@@ -2784,6 +2820,19 @@ pub fn handleExecute(request_bytes: []const u8, allocator: std.mem.Allocator, ep
                 defer resp.deinit(allocator);
                 return encodeMessage(allocator, resp);
             }
+            if (txn_end_graph) |g| {
+                if (!query_traits.programDataOnlyOn(&parse_result.program, query_graph_name, homeGraphName(state), g)) {
+                    var resp = try buildErrorResponse(allocator, "0A000", query_traits.txn_end_graph_message, &.{}, &.{});
+                    defer resp.deinit(allocator);
+                    return encodeMessage(allocator, resp);
+                }
+            }
+
+            // SONNY-2799: a failed statement's transaction is rolled back
+            // after the request's lock is released: this defer is registered
+            // before the lock's, so it runs after it.
+            var failed_in_txn = false;
+            defer if (failed_in_txn) abortFailedTransaction(state, lock_graph);
 
             var graph_lock_handle: ?graph_store.GraphLockHandle = null;
             // GAP-0753: Read path takes the shared graph lock only long
@@ -2801,10 +2850,11 @@ pub fn handleExecute(request_bytes: []const u8, allocator: std.mem.Allocator, ep
             var point_read_view: ?graph_store.PointReadView = null;
             var prev_active_read_store: ?*graph_store.GraphStore = null;
             if (needs_store_lock) {
-                if (is_mutation) {
+                if (write_locked) {
                     // Mutations: exclusive writer lock held across execute to
                     // prevent HashMap rehash races (GAP-0001, CWE-362/CWE-416).
                     // SONNY-2749: the graph the program writes; no deadline.
+                    // SONNY-2799: or the graph whose transaction it ends.
                     graph_lock_handle = graph_store.acquireProgramWriteLockCancelable(lock_graph, query_graph_name, std.math.maxInt(u64)) catch |err| {
                         const info = proto_util.mapError(err);
                         var resp = try buildErrorResponse(allocator, info.code, info.message, &.{}, &.{});
@@ -2975,14 +3025,20 @@ pub fn handleExecute(request_bytes: []const u8, allocator: std.mem.Allocator, ep
 
                     if (target_stmt.* == .Query) {
                         var planned_query = target_stmt.Query;
-                        if (try planned_read_runtime.executeProfiledIfSupported(
+                        if (planned_read_runtime.executeProfiledIfSupported(
                             allocator,
                             &planned_query,
                             exec_context,
                             bindings.names,
                             bindings.values,
                             true,
-                        )) |planned| {
+                        ) catch |err| {
+                            failed_in_txn = true;
+                            const info = proto_util.mapError(err);
+                            var resp = try buildErrorResponse(allocator, info.code, info.message, &.{}, &.{});
+                            defer resp.deinit(allocator);
+                            return encodeMessage(allocator, resp);
+                        }) |planned| {
                             var owned_planned = planned;
                             defer owned_planned.deinitMetadata(allocator);
                             defer owned_planned.result.deinit(allocator);
@@ -3042,6 +3098,7 @@ pub fn handleExecute(request_bytes: []const u8, allocator: std.mem.Allocator, ep
                     }
 
                     var exec_result = execution.executeStatementWithContext(allocator, target_stmt.*, exec_context) catch |err| {
+                        failed_in_txn = true;
                         const info = proto_util.mapError(err);
                         var resp = try buildErrorResponse(allocator, info.code, info.message, &.{}, &.{});
                         defer resp.deinit(allocator);
@@ -3171,6 +3228,7 @@ pub fn handleExecute(request_bytes: []const u8, allocator: std.mem.Allocator, ep
                     }
 
                     var exec_result = execution.executeProgramWithContext(allocator, &parse_result.program, exec_context) catch |err| {
+                        failed_in_txn = true;
                         const info = proto_util.mapError(err);
                         var resp = try buildErrorResponse(allocator, info.code, info.message, &.{}, &.{});
                         defer resp.deinit(allocator);
@@ -3291,6 +3349,10 @@ pub fn handlePull(request_bytes: []const u8, allocator: std.mem.Allocator) ![]u8
     entry.mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
     defer entry.mutex.unlock(std.Io.Threaded.global_single_threaded.io());
     const state = entry.state;
+    // SONNY-2799: the session's undo-log transaction is this thread's for the
+    // request, whichever worker thread serves it.
+    state.enterUndoTxn();
+    defer state.leaveUndoTxn();
 
     switch (try validateSessionAuth(allocator, state)) {
         .ok => {},
@@ -3393,6 +3455,10 @@ pub fn handleBegin(request_bytes: []const u8, allocator: std.mem.Allocator) ![]u
     entry.mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
     defer entry.mutex.unlock(std.Io.Threaded.global_single_threaded.io());
     const state = entry.state;
+    // SONNY-2799: the session's undo-log transaction is this thread's for the
+    // request, whichever worker thread serves it.
+    state.enterUndoTxn();
+    defer state.leaveUndoTxn();
 
     switch (try validateSessionAuth(allocator, state)) {
         .ok => {},
@@ -3409,9 +3475,11 @@ pub fn handleBegin(request_bytes: []const u8, allocator: std.mem.Allocator) ![]u
 
     state.clearTxnGraph();
     state.in_txn = true;
-    state.txn_id = @intCast(compat_milliTimestamp());
     state.session_snapshot_ts = state.global_commit_ts;
+    // SONNY-2799: the transaction's id is its undo-log transaction's, which
+    // the session keeps across requests (`leaveUndoTxn`).
     txn_undo_log.getGlobalUndoLog(allocator).begin();
+    state.txn_id = txn_undo_log.currentThreadTxnId();
 
     const tx_id_str = try std.fmt.allocPrint(allocator, "{d}", .{state.txn_id});
     const resp = schema.BeginResponse{
@@ -3449,6 +3517,10 @@ pub fn handleCommit(request_bytes: []const u8, allocator: std.mem.Allocator) ![]
     entry.mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
     defer entry.mutex.unlock(std.Io.Threaded.global_single_threaded.io());
     const state = entry.state;
+    // SONNY-2799: the session's undo-log transaction is this thread's for the
+    // request, whichever worker thread serves it.
+    state.enterUndoTxn();
+    defer state.leaveUndoTxn();
 
     switch (try validateSessionAuth(allocator, state)) {
         .ok => {},
@@ -3506,6 +3578,10 @@ pub fn handleRollback(request_bytes: []const u8, allocator: std.mem.Allocator) !
     entry.mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
     defer entry.mutex.unlock(std.Io.Threaded.global_single_threaded.io());
     const state = entry.state;
+    // SONNY-2799: the session's undo-log transaction is this thread's for the
+    // request, whichever worker thread serves it.
+    state.enterUndoTxn();
+    defer state.leaveUndoTxn();
 
     switch (try validateSessionAuth(allocator, state)) {
         .ok => {},
@@ -3565,6 +3641,10 @@ fn handleSavepoint(request_bytes: []const u8, allocator: std.mem.Allocator) ![]u
     entry.mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
     defer entry.mutex.unlock(std.Io.Threaded.global_single_threaded.io());
     const state = entry.state;
+    // SONNY-2799: the session's undo-log transaction is this thread's for the
+    // request, whichever worker thread serves it.
+    state.enterUndoTxn();
+    defer state.leaveUndoTxn();
 
     switch (try validateSessionAuth(allocator, state)) {
         .ok => {},
@@ -3615,6 +3695,10 @@ fn handleRollbackTo(request_bytes: []const u8, allocator: std.mem.Allocator) ![]
     entry.mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
     defer entry.mutex.unlock(std.Io.Threaded.global_single_threaded.io());
     const state = entry.state;
+    // SONNY-2799: the session's undo-log transaction is this thread's for the
+    // request, whichever worker thread serves it.
+    state.enterUndoTxn();
+    defer state.leaveUndoTxn();
 
     switch (try validateSessionAuth(allocator, state)) {
         .ok => {},

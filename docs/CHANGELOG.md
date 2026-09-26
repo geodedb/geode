@@ -126,6 +126,43 @@
   A request that changes a graph that does not exist is refused with 3F000,
   and the graph is not created. The CLI's `-g` flag, which sends a
   `USE GRAPH` of the current graph before the query, works as before.
+- **A session's transaction is its own (SONNY-2799, SONNY-2805):**
+  - **A failed statement rolls back its own transaction.** A statement that
+    fails inside a transaction fails it (GAP-0917). The executor rolled it
+    back on the spot, under the request's lock (a read lock, or a read
+    snapshot the undo went into, or another graph's lock), while the handler
+    still thought it open. The session's ROLLBACK then ran with no
+    transaction, and the undo log took transaction 0 to mean every entry:
+    it undid other sessions' uncommitted changes, which those sessions then
+    "committed". Now the handler rolls a failed transaction back itself,
+    under the write lock of the graph it changed, once the request's lock
+    is released. The transaction is then over, and a ROLLBACK finds none.
+  - **The undo log never matches every entry.** Changes are recorded only
+    for a thread in a transaction, and a thread with none rolls back
+    nothing. Savepoints belong to their transaction: ROLLBACK TO undoes that
+    transaction's later changes only, and another transaction's BEGIN or
+    COMMIT no longer drops them.
+  - **A transaction follows its session.** The handlers put the session's
+    transaction on whichever thread serves a request, and take it back
+    after. gRPC served a session's requests on any worker thread, so a
+    change could be recorded under another session's transaction, or none,
+    and one session's ROLLBACK could undo another session's autocommit
+    write. The transaction id BEGIN returns is the undo log's.
+  - **Transaction control runs in program order.** After
+    `COMMIT; START TRANSACTION; ...` in one request, the handler had no
+    transaction and the executor had begun one. A change of another graph
+    then escaped the one-graph rule, the client's ROLLBACK did nothing,
+    and the undo entries stayed. The fast paths that run only a request's
+    last query no longer take a request with transaction control.
+  - **COMMIT and ROLLBACK run on the transaction's graph.** A request that
+    ends a transaction runs under the write lock of the graph the
+    transaction changed. A ROLLBACK statement ran under the request's lock:
+    a read lock, or a read snapshot. A request that also touches another
+    graph's data is refused (0A000): send it on its own.
+  - **`START TRANSACTION { ... }` commits or rolls back its body.** Its undo
+    transaction was never ended.
+  - QUIC's per-graph audit logger now takes the graph a request ran on. It
+    used the session's graph as of the previous request.
 - **Graph DDL needs the schema permission on its graph (SONNY-2803):** the
   only gate for CREATE GRAPH, DROP GRAPH and index and constraint DDL was the
   database-level write permission. So a ReadWrite user refused

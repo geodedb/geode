@@ -1,4 +1,5 @@
 const std = @import("std");
+const txn_undo_log = @import("../txn_undo_log.zig");
 
 // CANARY: REQ=REQ-SERVER-REFACTOR-001; FEATURE="ServerRefactoring"; ASPECT=SERVER_STATE; STATUS=EXEMPT; OWNER=refactor; UPDATED=2026-01-09
 // Phase 3 M3.1 - Server State Management Module (Complete)
@@ -429,6 +430,51 @@ pub const ServerState = struct {
         self.clearTxnGraph();
     }
 
+    // CANARY: REQ=REQ-SONNY-2799-SESSION-UNDO-TXN; FEATURE="TransactionUndoLog"; ASPECT=PerSession; STATUS=TESTED; TEST=tests/test_sonny2805_txn_sessions.zig; OWNER=engine; UPDATED=2026-09-26
+    /// SONNY-2799: make the session's transaction the undo log's transaction
+    /// on this thread, for one request; `leaveUndoTxn` takes it back.
+    /// `txn_id` is the undo log's id for the session's open transaction (0 for
+    /// none). The undo log records each change under the calling thread's
+    /// transaction, and a session's requests run on any worker thread (gRPC's
+    /// do). A change was recorded under whatever the thread last held (another
+    /// session's transaction, or none), and COMMIT and ROLLBACK found another
+    /// set of entries than the transaction's own.
+    pub fn enterUndoTxn(self: *ServerState) void {
+        txn_undo_log.setThreadTxnId(self.txn_id);
+    }
+
+    /// SONNY-2799: after a request, the session's transaction is whatever
+    /// the undo log's transaction on this thread is now (a START TRANSACTION,
+    /// COMMIT or ROLLBACK in the request moves it); the thread is left with
+    /// none, for the next session it serves.
+    pub fn leaveUndoTxn(self: *ServerState) void {
+        self.txn_id = txn_undo_log.currentThreadTxnId();
+        txn_undo_log.setThreadTxnId(0);
+    }
+
+    /// SONNY-2799: undo the session's transaction (`txn_id`) and end it,
+    /// under the write lock of the graph it changed (`fallback_graph` when it
+    /// changed none). The caller holds no graph lock. With
+    /// `abort_engine_txn`, the storage adapter's session engine transaction
+    /// on this thread is aborted first, as QUIC's ROLLBACK does (R9; only
+    /// QUIC serves a session on one thread).
+    pub fn rollBackTransaction(self: *ServerState, fallback_graph: []const u8, abort_engine_txn: bool) void {
+        const graph_store_mod = @import("../graph_store.zig");
+        if (self.txn_id != 0) {
+            const lock = graph_store_mod.acquireGraphWriteLock(self.txnLockGraph(fallback_graph));
+            defer graph_store_mod.releaseGraphLock(lock);
+            if (abort_engine_txn) {
+                if (graph_store_mod.getGlobalAdapter()) |ad| ad.abortSessionTxn();
+            }
+            txn_undo_log.setThreadTxnId(self.txn_id);
+            txn_undo_log.getGlobalUndoLog(self.allocator).rollback(graph_store_mod.getWritableGlobalStore(self.allocator)) catch |err| {
+                std.log.warn("transaction rollback failed: {s}", .{@errorName(err)});
+            };
+            txn_undo_log.setThreadTxnId(0);
+        }
+        self.endTransaction();
+    }
+
     /// SONNY-2776: the session's graph: the executor session's, or
     /// `current_graph` (the copy QUIC syncs; gRPC never sets it).
     pub fn sessionGraph(self: *const ServerState) []const u8 {
@@ -488,7 +534,6 @@ pub const ServerState = struct {
         store: ?*@import("../graph_store.zig").GraphStore,
     ) !void {
         const graph_store_mod = @import("../graph_store.zig");
-        const txn_undo_log = @import("../txn_undo_log.zig");
 
         if (!self.in_txn) return;
 
@@ -520,16 +565,9 @@ pub const ServerState = struct {
             // No store — just purge the undo entries that belong to the
             // orphaned transaction so they don't leak or get picked up
             // by a peer transaction's rollback.
-            txn_undo_log.setThreadTxnId(orphan_txn_id);
-            defer txn_undo_log.setThreadTxnId(0);
-            const undo = txn_undo_log.getGlobalUndoLog(self.allocator);
-            // `rollback(store)` requires a store; without one we fall
-            // back to clearing just this txn's entries.  `clear()` wipes
-            // the whole log, which is the correct behaviour when no
-            // other transactions are in flight (the only way we reach
-            // this branch).
-            undo.active = false;
-            undo.clear();
+            // SONNY-2799: this transaction's entries only (`txn_id` is its
+            // undo-log id); `clear()` wiped every session's.
+            txn_undo_log.getGlobalUndoLog(self.allocator).discardTxn(orphan_txn_id);
         }
 
         std.log.warn("orphan-txn rolled back on stream close (txn_id={d}, graph={s})", .{

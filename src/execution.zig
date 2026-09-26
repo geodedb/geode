@@ -596,6 +596,14 @@ pub const ExecutionContext = struct {
     session_state: ?*SessionState = null,
     // Transaction state for START TRANSACTION/COMMIT/ROLLBACK
     transaction_state: TransactionState = .None,
+    // CANARY: REQ=REQ-SONNY-2799-FAILED-TXN-ROLLBACK; FEATURE="TransactionManagement"; ASPECT=DeferToHandler; STATUS=TESTED; TEST=tests/test_sonny2805_txn_sessions.zig; OWNER=engine; UPDATED=2026-09-26
+    /// SONNY-2799: the caller, a transport handler, rolls a failed
+    /// transaction back itself (`executeProgramWithContext` fails it,
+    /// GAP-0917, and returns the error with its changes still recorded). The
+    /// handler holds the request's lock, which may be another graph's or a
+    /// read lock; it undoes the transaction after releasing that lock, under
+    /// the write lock of the graph the transaction changed.
+    defer_failed_txn_rollback: bool = false,
     // Input parameter bindings provided by client (query-level parameters)
     query_param_names: []const []const u8 = &.{},
     query_param_values: []const value_types.Value = &.{},
@@ -1197,8 +1205,10 @@ pub fn executeProgramWithContext(allocator: std.mem.Allocator, program: *const a
                 .Commit => {
                     if (last_result) |*result| result.deinit(allocator);
                     if (last_data_result) |*result| result.deinit(allocator);
-                    var rb = executeStatementWithContext(allocator, .Rollback, current_context) catch null;
-                    if (rb) |*r| r.deinit(allocator);
+                    if (!context.defer_failed_txn_rollback) {
+                        var rb = executeStatementWithContext(allocator, .Rollback, current_context) catch null;
+                        if (rb) |*r| r.deinit(allocator);
+                    }
                     return txn_failure orelse error.TransactionAborted;
                 },
                 else => continue, // rejected: never executed
@@ -1278,8 +1288,11 @@ pub fn executeProgramWithContext(allocator: std.mem.Allocator, program: *const a
     if (current_context.transaction_state == .Failed) {
         if (last_result) |*result| result.deinit(allocator);
         if (last_data_result) |*result| result.deinit(allocator);
-        var rb = executeStatementWithContext(allocator, .Rollback, current_context) catch null;
-        if (rb) |*r| r.deinit(allocator);
+        // SONNY-2799: a transport handler undoes it (`defer_failed_txn_rollback`).
+        if (!context.defer_failed_txn_rollback) {
+            var rb = executeStatementWithContext(allocator, .Rollback, current_context) catch null;
+            if (rb) |*r| r.deinit(allocator);
+        }
         return txn_failure orelse error.TransactionAborted;
     }
 
@@ -1495,6 +1508,12 @@ fn executeStatementWithContextInner(allocator: std.mem.Allocator, stmt: ast.Stat
 
             // If transaction has a body, execute statements and auto-commit
             if (txn.body) |body| {
+                // SONNY-2805: the body is a transaction of its own: committed
+                // after its last statement, rolled back on an error. Neither
+                // happened: its undo transaction stayed open on the thread,
+                // with its entries, and the thread's next changes were
+                // recorded in it.
+                const body_store = graph_store.getWritableGlobalStore(allocator);
                 var last_result: ?ExecutionResult = null;
 
                 // Execute all statements in the transaction body
@@ -1514,14 +1533,19 @@ fn executeStatementWithContextInner(allocator: std.mem.Allocator, stmt: ast.Stat
                         .Rollback => return error.RollbackInTransactionBody,
                         else => return error.UnsupportedStatementInTransactionBody,
                     }) catch |err| {
-                        // On error, rollback (just reset state for now)
                         mut_context.transaction_state = .None;
+                        undo_log.rollback(body_store) catch |rb_err| {
+                            log.err("Failed to roll back a transaction body", &.{
+                                Attr.string("error", @errorName(rb_err)),
+                            });
+                        };
                         return err;
                     };
                 }
 
                 // Auto-commit: reset transaction state
                 mut_context.transaction_state = .None;
+                undo_log.commit(body_store);
 
                 // Return result from last statement
                 if (last_result) |result| {
@@ -1591,7 +1615,10 @@ fn executeStatementWithContextInner(allocator: std.mem.Allocator, stmt: ast.Stat
 
                 // CANARY: REQ=REQ-TXN-UNDO-007; FEATURE="TransactionUndoLog"; ASPECT=RollbackTransaction; STATUS=TESTED; TEST=geodetestlab/specs/transaction_state_basic.yml; OWNER=engine; UPDATED=2025-12-23
                 // Rollback using the undo log - undoes all changes in reverse order
-                const store = graph_store.getGlobalStore(allocator);
+                // SONNY-2799: on the live store. `getGlobalStore` is a read
+                // snapshot's store while one is installed on the thread, and
+                // the undo went into the snapshot.
+                const store = graph_store.getWritableGlobalStore(allocator);
                 const undo_log = txn_undo_log.getGlobalUndoLog(allocator);
                 undo_log.rollback(store) catch |err| {
                     log.err("Failed to rollback transaction", &.{
