@@ -15,12 +15,17 @@
 //     wire u32 length to a small constant in u32 arithmetic, so a length near
 //     4 GiB overflowed; the list decoder recursed once per nesting level with
 //     no bound and allocated a client-chosen item count before reading it.
+//   * On the distributed path, a 2PC participant converts the property values
+//     a peer node sends with value_convert.protoValueToPropertyValue, which
+//     narrowed a decimal's u32 scale to u8 unchecked, and leaked what it had
+//     converted when a nested list was refused or a map repeated a key.
 //
 // Every such value is now refused (error.InvalidParams where a value does not
 // fit, the decoder's own error for a malformed binary value), which both
-// transports send as SQLSTATE 22023, and the process survives. Each case runs
-// on the testing allocator, so a refused parameter must also leave nothing
-// allocated.
+// transports send as SQLSTATE 22023, and the process survives; a peer's
+// malformed decimal is the converter's own error.InvalidDecimal. Each case
+// runs on the testing allocator, so a refused parameter must also leave
+// nothing allocated.
 //
 // CANARY: REQ=REQ-SONNY-2727-PARAM-DECODER-NARROWING; FEATURE="WireParameters"; ASPECT=CheckedNarrowing; STATUS=TESTED; TEST=tests/test_sonny2727_param_decoder_narrowing.zig; OWNER=security; UPDATED=2026-09-26
 
@@ -229,4 +234,71 @@ test "SONNY-2727: the response encoder writes a decimal of any coefficient and s
         const out = try proto_util.valueToProto(arena.allocator(), v);
         try testing.expect(out.kind.?.decimal_val.orig_repr.len > 0);
     }
+}
+
+// ---- The distributed path ------------------------------------------------
+//
+// A 2PC participant applies the property values a peer node sends
+// (twophase_participant.applyOperation -> value_convert.applyMapEntriesToNode)
+// through value_convert.protoValueToPropertyValue, which narrowed a decimal's
+// wire u32 scale to u8 with `@intCast`: a peer's scale past 255 aborted the
+// node. A malformed peer decimal is refused with the converter's own
+// error.InvalidDecimal (a coefficient that does not parse already was).
+
+const value_convert = geode.distributed.value_convert;
+
+fn peerDecimal(coeff: []const u8, scale: u32) schema.Value {
+    return .{ .kind = .{ .decimal_val = .{ .coeff = coeff, .scale = scale, .orig_scale = scale } } };
+}
+
+test "SONNY-2727: a peer node's DECIMAL whose scale is not a u8, or whose coefficient is the smallest i128, is refused" {
+    try testing.expectError(error.InvalidDecimal, value_convert.protoValueToPropertyValue(testing.allocator, peerDecimal("-170141183460469231731687303715884105728", 1), 0));
+    for ([_]u32{ 256, std.math.maxInt(u32) }) |scale| {
+        try testing.expectError(error.InvalidDecimal, value_convert.protoValueToPropertyValue(testing.allocator, peerDecimal("12345", scale), 0));
+    }
+    const pv = try value_convert.protoValueToPropertyValue(testing.allocator, peerDecimal("-12345", 255), 0);
+    try testing.expectEqual(@as(i128, -12345), pv.Decimal.coeff);
+    try testing.expectEqual(@as(u8, 255), pv.Decimal.scale);
+}
+
+test "SONNY-2727: a peer node's list nested past the limit is refused, and what it converted is freed" {
+    // ['kept', [[[ ... ]]]], the inner lists nested 70 deep: the JSON
+    // conversion refuses past depth 64 and must free the items it converted
+    // before it got there.
+    const levels = 70;
+    var lists: [levels]std.ArrayList(schema.Value) = undefined;
+    for (&lists) |*l| l.* = .empty;
+    defer for (&lists) |*l| l.deinit(testing.allocator);
+    // lists[levels - 1] is the innermost, empty list; each outer list holds
+    // the (complete) list inside it.
+    var i: usize = levels - 1;
+    while (i > 0) : (i -= 1) {
+        try lists[i - 1].append(testing.allocator, .{ .kind = .{ .list_val = .{ .values = lists[i] } } });
+    }
+    var top = std.ArrayList(schema.Value).empty;
+    defer top.deinit(testing.allocator);
+    try top.append(testing.allocator, .{ .kind = .{ .string_val = .{ .value = "kept", .kind = .TEXT } } });
+    try top.append(testing.allocator, .{ .kind = .{ .list_val = .{ .values = lists[0] } } });
+    try testing.expectError(error.ParamsTooDeep, value_convert.protoValueToPropertyValue(testing.allocator, .{ .kind = .{ .list_val = .{ .values = top } } }, 0));
+
+    // The same value nested within the limit converts, and frees cleanly.
+    var shallow = std.ArrayList(schema.Value).empty;
+    defer shallow.deinit(testing.allocator);
+    try shallow.append(testing.allocator, .{ .kind = .{ .string_val = .{ .value = "kept", .kind = .TEXT } } });
+    try shallow.append(testing.allocator, .{ .kind = .{ .list_val = .{ .values = lists[levels - 10] } } });
+    const ok = try value_convert.protoValueToPropertyValue(testing.allocator, .{ .kind = .{ .list_val = .{ .values = shallow } } }, 0);
+    defer value_convert.freePropertyValue(testing.allocator, ok);
+    try testing.expect(ok.ExtValue == .Json);
+}
+
+test "SONNY-2727: a peer node's map that repeats a key converts without leaking the replaced entry" {
+    // The last value wins, as before; the duplicate key and the value it
+    // replaces are freed.
+    var entries = std.ArrayList(schema.MapEntry).empty;
+    defer entries.deinit(testing.allocator);
+    try entries.append(testing.allocator, .{ .key = "a", .value = .{ .kind = .{ .string_val = .{ .value = "first", .kind = .TEXT } } } });
+    try entries.append(testing.allocator, .{ .key = "a", .value = .{ .kind = .{ .string_val = .{ .value = "second", .kind = .TEXT } } } });
+    const pv = try value_convert.protoValueToPropertyValue(testing.allocator, .{ .kind = .{ .map_val = .{ .entries = entries } } }, 0);
+    defer value_convert.freePropertyValue(testing.allocator, pv);
+    try testing.expectEqualStrings("{\"a\":\"second\"}", pv.ExtValue.Json);
 }

@@ -450,7 +450,10 @@
   f32 range is refused instead of becoming infinity, a binary list that
   claims more items than it holds is refused before it sizes an
   allocation, and a refused parameter frees what the parameters before it
-  decoded.
+  decoded. A distributed transaction's participant likewise refuses a
+  decimal from a peer node whose scale is past 255 (it aborted the node),
+  and frees what it converted from a refused nested list or a map that
+  repeats a key.
 
 ### Fixed
 
