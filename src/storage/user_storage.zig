@@ -405,7 +405,8 @@ pub const UserStorageBackend = struct {
         record.is_superuser = getBoolProp(store, node_id, "is_superuser", false);
         record.mfa_enabled = getBoolProp(store, node_id, "mfa_enabled", false);
         record.mfa_secret_len = copyIntoField(&record.mfa_secret, getStringProp(store, node_id, "mfa_secret", ""));
-        record.failed_login_attempts = @intCast(@max(0, getIntProp(store, node_id, "failed_login_attempts", 0)));
+        // SONNY-2757 (P29): out of range, the record is tampered: not loaded.
+        record.failed_login_attempts = storedInt(u16, getIntProp(store, node_id, "failed_login_attempts", 0), "failed_login_attempts", user_id) orelse return null;
         record.lockout_until = getIntProp(store, node_id, "lockout_until", 0);
         record.last_login = getIntProp(store, node_id, "last_login", 0);
         record.created_at = getIntProp(store, node_id, "created_at", compat_milliTimestamp());
@@ -518,7 +519,8 @@ pub const UserStorageBackend = struct {
         record.is_superuser = edGetBool(allocator, adapter, slot, "is_superuser", false);
         record.mfa_enabled = edGetBool(allocator, adapter, slot, "mfa_enabled", false);
         record.mfa_secret_len = edCopyStr(allocator, adapter, slot, "mfa_secret", &record.mfa_secret);
-        record.failed_login_attempts = @intCast(@max(0, edGetInt(allocator, adapter, slot, "failed_login_attempts", 0)));
+        // SONNY-2757 (P29): out of range, the record is tampered: not loaded.
+        record.failed_login_attempts = storedInt(u16, edGetInt(allocator, adapter, slot, "failed_login_attempts", 0), "failed_login_attempts", user_id) orelse return null;
         record.lockout_until = edGetInt(allocator, adapter, slot, "lockout_until", 0);
         record.last_login = edGetInt(allocator, adapter, slot, "last_login", 0);
         record.created_at = edGetInt(allocator, adapter, slot, "created_at", compat_milliTimestamp());
@@ -667,7 +669,8 @@ pub const UserStorageBackend = struct {
             record.name_len = copyIntoField(&record.name, getStringProp(self.store, node_id, "name", ""));
             record.description_len = copyIntoField(&record.description, getStringProp(self.store, node_id, "description", ""));
             record.parent_role = @intCast(@max(0, getIntProp(self.store, node_id, "parent_role", 0)));
-            record.priority = @intCast(@max(0, getIntProp(self.store, node_id, "priority", 0)));
+            // SONNY-2757 (P29): out of range, the record is tampered: not loaded.
+            record.priority = storedInt(u32, getIntProp(self.store, node_id, "priority", 0), "priority", role_id) orelse continue;
             record.is_system = getBoolProp(self.store, node_id, "is_system", false);
             record.created_at = getIntProp(self.store, node_id, "created_at", compat_milliTimestamp());
             record.updated_at = getIntProp(self.store, node_id, "updated_at", record.created_at);
@@ -694,7 +697,8 @@ pub const UserStorageBackend = struct {
             var record = blankPermissionRecord(perm_id);
             record.name_len = copyIntoField(&record.name, getStringProp(self.store, node_id, "name", ""));
             record.resource_len = copyIntoField(&record.resource, getStringProp(self.store, node_id, "resource", ""));
-            record.action = @intCast(@max(0, getIntProp(self.store, node_id, "action", 0)));
+            // SONNY-2757 (P29): out of range, the record is tampered: not loaded.
+            record.action = storedInt(u8, getIntProp(self.store, node_id, "action", 0), "action", perm_id) orelse continue;
             record.conditions_len = copyIntoField(&record.conditions, getStringProp(self.store, node_id, "conditions", ""));
             record.created_at = getIntProp(self.store, node_id, "created_at", compat_milliTimestamp());
 
@@ -726,7 +730,12 @@ pub const UserStorageBackend = struct {
             record.description_len = copyIntoField(&record.description, getStringProp(self.store, node_id, "description", ""));
             record.graph_len = copyIntoField(&record.graph, stored_graph);
             record.table_len = copyIntoField(&record.table, getStringProp(self.store, node_id, "table", ""));
-            record.operation = @intCast(@max(0, getIntProp(self.store, node_id, "operation", 0)));
+            // SONNY-2757 (P29): an operation or audit level out of range makes
+            // the record malformed (below): it loads nowhere, and its HMAC no
+            // longer verifies. It used to abort a safe build here, at
+            // startup, before the chain was checked.
+            const stored_operation = storedInt(u8, getIntProp(self.store, node_id, "operation", 0), "operation", policy_id);
+            record.operation = stored_operation orelse 0;
             record.permissive = getBoolProp(self.store, node_id, "permissive", false);
             record.enabled = getBoolProp(self.store, node_id, "enabled", true);
             // SONNY-2750: the kind, decoded strictly, and whether a property
@@ -763,7 +772,9 @@ pub const UserStorageBackend = struct {
                 record.using_clause_len = copyIntoField(&record.using_clause, stored_using);
                 record.check_clause_len = copyIntoField(&record.check_clause, stored_check);
             }
-            record.audit_level = @intCast(@max(0, getIntProp(self.store, node_id, "audit_level", 0)));
+            const stored_audit_level = storedInt(u8, getIntProp(self.store, node_id, "audit_level", 0), "audit_level", policy_id);
+            record.audit_level = stored_audit_level orelse 0;
+            if (stored_operation == null or stored_audit_level == null) record.malformed = true;
             record.created_at = getIntProp(self.store, node_id, "created_at", compat_milliTimestamp());
             record.updated_at = getIntProp(self.store, node_id, "updated_at", record.created_at);
             record.created_by = @intCast(@max(0, getIntProp(self.store, node_id, "created_by", 0)));
@@ -827,7 +838,8 @@ pub const UserStorageBackend = struct {
             const stored_user_id: u64 = @intCast(uid_val);
             if (stored_user_id != user_id) continue;
 
-            const stored_action: u8 = @intCast(@max(0, getIntProp(self.store, node_id, "action", -1)));
+            // SONNY-2757 (P29): an action out of range matches nothing.
+            const stored_action = storedInt(u8, getIntProp(self.store, node_id, "action", -1), "action", grant_id) orelse continue;
             if (stored_action != action) continue;
 
             const stored_graph = getStringProp(self.store, node_id, "graph_name", "");
@@ -864,7 +876,8 @@ pub const UserStorageBackend = struct {
             const uid_val = getIntProp(self.store, node_id, "user_id", 0);
             record.user_id = if (uid_val >= 0) @intCast(uid_val) else 0;
             record.graph_name_len = copyIntoField(&record.graph_name, getStringProp(self.store, node_id, "graph_name", ""));
-            record.action = @intCast(@max(0, getIntProp(self.store, node_id, "action", 0)));
+            // SONNY-2757 (P29): out of range, the record is tampered: not listed.
+            record.action = storedInt(u8, getIntProp(self.store, node_id, "action", 0), "action", grant_id) orelse continue;
             record.granted_at = getIntProp(self.store, node_id, "granted_at", compat_timestamp());
             const gb_val = getIntProp(self.store, node_id, "granted_by", 0);
             record.granted_by = if (gb_val >= 0) @intCast(gb_val) else 0;
@@ -1556,6 +1569,23 @@ pub const UserStorageBackend = struct {
             if (val == .String) return val.String;
         }
         return default;
+    }
+
+    // CANARY: REQ=REQ-SONNY-2757-STORED-INT-CAST; FEATURE="AuthDDLPersistence"; ASPECT=CheckedStoredCasts; STATUS=TESTED; TEST=tests/test_sonny2757_policy_hygiene.zig; OWNER=security; UPDATED=2026-09-26
+    /// SONNY-2757 (P29): a stored integer read into a narrower field. Such values
+    /// were `@intCast` (negatives clamped to 0 first), which aborts a safe build
+    /// on a value out of range while the security graph loads, before any
+    /// signature check. Null (logged) when the value does not fit: the caller
+    /// treats the record as tampered.
+    fn storedInt(comptime T: type, value: i64, field: []const u8, record_id: u64) ?T {
+        return std.math.cast(T, value) orelse {
+            log.warn("security record has an out-of-range value; treated as tampered", &.{
+                Attr.uint("record_id", record_id),
+                Attr.string("field", field),
+                Attr.int("value", value),
+            });
+            return null;
+        };
     }
 
     fn getIntProp(store: *graph_store.GraphStore, node_id: u64, key: []const u8, default: i64) i64 {

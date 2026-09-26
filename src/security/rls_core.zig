@@ -837,6 +837,9 @@ pub const RLSEngine = struct {
             pos: usize = 0,
             /// SONNY-2730: current depth of `(` and `NOT` nesting.
             depth: usize = 0,
+            /// SONNY-2757 (P21): the VM's stack depth once the bytecode
+            /// emitted so far has run.
+            sp: usize = 0,
             bc: *std.ArrayList(u8),
             ks: *std.ArrayList(Value),
 
@@ -844,7 +847,28 @@ pub const RLSEngine = struct {
                 while (c.pos < c.src.len and (c.src[c.pos] == ' ' or c.src[c.pos] == '\t' or c.src[c.pos] == '\n' or c.src[c.pos] == '\r')) : (c.pos += 1) {}
             }
             fn emit(c: *@This(), op: Opcode) !void {
+                try c.track(op);
                 try c.bc.append(c.self.allocator, @intFromEnum(op));
+            }
+            // CANARY: REQ=REQ-SONNY-2757-RLS-STACK-BOUND; FEATURE="RLSExpressionCompilation"; ASPECT=CompileTimeStackBound; STATUS=TESTED; TEST=tests/test_sonny2757_policy_hygiene.zig; OWNER=security; UPDATED=2026-09-26
+            /// SONNY-2757 (P21): simulate the VM stack as `op` is emitted,
+            /// and refuse an expression whose evaluation needs more than
+            /// `RLS_STACK_DEPTH` slots. The nesting limit (SONNY-2730) bounds
+            /// parentheses, not the stack: every pending left operand of a
+            /// right-nested operator holds a slot, so a right-nested OR
+            /// 63-64 levels deep, or `x OR row.b = (...)` from 32 levels,
+            /// compiled and then overflowed the VM on every row, which the
+            /// VM reports as an error and the caller as a deny.
+            fn track(c: *@This(), op: Opcode) !void {
+                switch (op) {
+                    .push_const, .push_true, .push_false, .push_null, .load_row, .load_user, .load_session, .load_attr => {
+                        c.sp += 1;
+                        if (c.sp > RLS_STACK_DEPTH) return error.InvalidRlsExpression;
+                    },
+                    // Pop two, push one; or pop one.
+                    .eq, .neq, .lt, .gt, .lte, .gte, .op_and, .op_or, .pop, .jump_if_false, .jump_if_true => c.sp -|= 1,
+                    .op_not, .is_null, .nop, .jump, .ret => {},
+                }
             }
             fn emitArg(c: *@This(), a: u8) !void {
                 try c.bc.append(c.self.allocator, a);

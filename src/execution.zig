@@ -234,6 +234,8 @@ pub const wouldEvaluateRLS = match_operations.wouldEvaluateRLS;
 // SONNY-2679 (review): a traversal's label-deny snapshot, and the edge RLS
 // check that reads it, so a test can pin that the snapshot is what answers.
 pub const LabelDenySnapshot = match_operations.LabelDenySnapshot;
+// SONNY-2757: the durable GPS policy changes (DDL and geode.auth.policy_*).
+pub const policy_ddl = @import("execution/policy_ddl.zig");
 // SONNY-2685: the row visibility of one `CALL algo.*` call.
 pub const AlgoScope = @import("execution/algo_scope.zig").AlgoScope;
 pub const passesEdgeRLSFilter = match_operations.passesEdgeRLSFilter;
@@ -2401,26 +2403,13 @@ fn executeStatementWithContextInner(allocator: std.mem.Allocator, stmt: ast.Stat
             // told "Policy created" and got a policy that denies everything.
             // Hydration (policy_persistence.hydrateCatalog) keeps the tolerant
             // addPolicy so an already-persisted record cannot brick startup.
-            try pol_cat.addPolicyStrict(new_policy_spec);
-
             // CANARY: REQ=REQ-GPS-CATALOG-002; FEATURE="GPS Policy Persistence"; ASPECT=CreatePolicyWriteThrough; STATUS=TESTED; TEST=tests/test_gps_policy_persistence.zig; OWNER=security; UPDATED=2026-05-20
             // Write-through to __geode_security via hooks installed at server startup.
             // In CLI / test contexts hooks are null and the policy is in-memory only.
             // SONNY-2731: a policy that cannot be persisted is taken out again
-            // and the statement fails. It used to stay in memory only, with a
-            // warning, and vanish at the next restart.
-            if (policy_catalog_mod.getWriteThroughHooks()) |hooks| {
-                hooks.persist(hooks.ctx, new_policy_spec) catch |err| {
-                    const logging_mod = @import("logging");
-                    const log_ex = logging_mod.scoped("execution");
-                    log_ex.warn("GPS CREATE POLICY persistence to __geode_security failed — the policy was not created", &.{
-                        logging_mod.Attr.string("name", cp_stmt.name),
-                        logging_mod.Attr.string("error", @errorName(err)),
-                    });
-                    pol_cat.removePolicy(cp_stmt.name) catch {};
-                    return err;
-                };
-            }
+            // and the statement fails. SONNY-2757: shared with
+            // geode.auth.policy_create (`policy_ddl.create`).
+            try policy_ddl.create(pol_cat, new_policy_spec);
 
             // CANARY: REQ=REQ-GPS-AUDIT-001; FEATURE="GPS Policy DDL Audit"; ASPECT=CreatePolicyAuditEmission; STATUS=TESTED; TEST=geode-test-harness/geodetestlab-cli/specs/gps_persistence_policy_audit.yml; OWNER=security; UPDATED=2026-05-21
             {
@@ -2460,34 +2449,15 @@ fn executeStatementWithContextInner(allocator: std.mem.Allocator, stmt: ast.Stat
             const policy_catalog_mod = @import("security/policy_catalog.zig");
             const pol_cat = policy_catalog_mod.getGlobalCatalog() orelse return error.PolicyCatalogNotInitialized;
 
-            const remove_outcome: enum { removed, not_found } = blk: {
-                pol_cat.removePolicy(dp_stmt.name) catch |err| {
-                    if (err != error.PolicyNotFound or !dp_stmt.if_exists) return err;
-                    // IF EXISTS: swallow error.PolicyNotFound but record it.
-                    break :blk .not_found;
-                };
-                break :blk .removed;
-            };
-
             // CANARY: REQ=REQ-GPS-CATALOG-002; FEATURE="GPS Policy Persistence"; ASPECT=DropPolicyWriteThrough; STATUS=TESTED; TEST=tests/test_gps_policy_persistence.zig; OWNER=security; UPDATED=2026-05-20
             // Write-through to __geode_security via hooks installed at server startup.
             // In CLI / test contexts hooks are null and the policy is in-memory only.
-            {
-                const drop_name = dp_stmt.name;
-                const drop_if_exists = dp_stmt.if_exists;
-                if (policy_catalog_mod.getWriteThroughHooks()) |hooks| {
-                    hooks.drop(hooks.ctx, drop_name) catch |err| {
-                        if (err != error.PolicyNotFound or !drop_if_exists) {
-                            const logging_mod = @import("logging");
-                            const log_ex = logging_mod.scoped("execution");
-                            log_ex.warn("GPS DROP POLICY persistence to __geode_security failed", &.{
-                                logging_mod.Attr.string("name", drop_name),
-                                logging_mod.Attr.string("error", @errorName(err)),
-                            });
-                        }
-                    };
-                }
-            }
+            // SONNY-2757 (P25): the stored record is deleted first and the
+            // catalog entry only after that; a failed write-through fails the
+            // statement and drops nothing. It used to drop the policy from the
+            // catalog and only log the failure, so the revocation was undone
+            // at the next restart.
+            const remove_outcome = try policy_ddl.drop(pol_cat, dp_stmt.name, dp_stmt.if_exists);
 
             // CANARY: REQ=REQ-GPS-AUDIT-002; FEATURE="GPS Policy DDL Audit"; ASPECT=DropPolicyAuditEmission; STATUS=TESTED; TEST=geode-test-harness/geodetestlab-cli/specs/gps_persistence_policy_audit.yml; OWNER=security; UPDATED=2026-05-21
             // Only emit audit when a policy was actually removed.  IF EXISTS no-ops
@@ -2529,24 +2499,16 @@ fn executeStatementWithContextInner(allocator: std.mem.Allocator, stmt: ast.Stat
             const policy_catalog_mod = @import("security/policy_catalog.zig");
             const pol_cat = policy_catalog_mod.getGlobalCatalog() orelse return error.PolicyCatalogNotInitialized;
 
-            try pol_cat.alterPolicy(ap_stmt.name, ap_stmt.set_enabled, ap_stmt.rename_to);
-
             // CANARY: REQ=REQ-GPS-CATALOG-002; FEATURE="GPS Policy Persistence"; ASPECT=AlterPolicyWriteThrough; STATUS=TESTED; TEST=tests/test_gap0858_alter_policy_persist.zig; OWNER=security; UPDATED=2026-06-09
             // GAP-0858: durable ALTER POLICY write-through to __geode_security via
             // hooks installed at server startup. In CLI / test contexts hooks are
             // null and the in-memory catalog update is authoritative for the
             // running process only. The hook is called with the CURRENT (pre-rename)
             // name so the durable record can be located before the rename applies.
-            if (policy_catalog_mod.getWriteThroughHooks()) |hooks| {
-                hooks.alter(hooks.ctx, ap_stmt.name, ap_stmt.set_enabled, ap_stmt.rename_to) catch |err| {
-                    const logging_mod = @import("logging");
-                    const log_ex = logging_mod.scoped("execution");
-                    log_ex.warn("GPS ALTER POLICY persistence to __geode_security failed — change is in-memory only", &.{
-                        logging_mod.Attr.string("name", ap_stmt.name),
-                        logging_mod.Attr.string("error", @errorName(err)),
-                    });
-                };
-            }
+            // SONNY-2757 (P25): a failed write-through fails the statement and
+            // puts the catalog back. It used to leave the change in memory
+            // only, so a DISABLE of an allow was undone at the next restart.
+            try policy_ddl.alter(pol_cat, ap_stmt.name, ap_stmt.set_enabled, ap_stmt.rename_to);
 
             // CANARY: REQ=REQ-GPS-AUDIT-003; FEATURE="GPS Policy DDL Audit"; ASPECT=AlterPolicyAuditEmission; STATUS=TESTED; TEST=geode-test-harness/geodetestlab-cli/specs/gps_persistence_policy_audit.yml; OWNER=security; UPDATED=2026-06-09
             {

@@ -1276,18 +1276,22 @@ fn handlePolicyCreate(allocator: std.mem.Allocator, _: []const u8, call_stmt: as
         }
     }
 
+    // SONNY-2757 (P26): the checks and the write-through of CREATE POLICY
+    // (`policy_ddl.create`). This used the tolerant `addPolicy`: no length
+    // limits, a condition that does not compile installed fail-closed, and
+    // nothing persisted, so the policy was gone at the next restart. With no
+    // catalog it reported success and created nothing.
     const policy_catalog_mod = @import("../security/policy_catalog.zig");
-    if (policy_catalog_mod.getGlobalCatalog()) |pol_cat| {
-        const actions = [_]policy_catalog_mod.Action{.read};
-        try pol_cat.addPolicy(.{
-            .name = name,
-            .scope_graph = table,
-            .actions = &actions,
-            .effect = .allow,
-            .expression_source = condition,
-            .enabled = true,
-        });
-    }
+    const pol_cat = policy_catalog_mod.getGlobalCatalog() orelse return error.PolicyCatalogNotInitialized;
+    const actions = [_]policy_catalog_mod.Action{.read};
+    try execution.policy_ddl.create(pol_cat, .{
+        .name = name,
+        .scope_graph = table,
+        .actions = &actions,
+        .effect = .allow,
+        .expression_source = condition,
+        .enabled = true,
+    });
     const columns = try allocator.alloc([]const u8, 1);
     columns[0] = try allocator.dupe(u8, "status");
     const row = try allocator.alloc(Value, 1);
@@ -1329,10 +1333,11 @@ fn handlePolicyDelete(allocator: std.mem.Allocator, _: []const u8, call_stmt: as
     }
     const policy_catalog_mod = @import("../security/policy_catalog.zig");
     if (policy_catalog_mod.getGlobalCatalog()) |pol_cat| {
-        // Swallow PolicyNotFound — procedure interface is idempotent.
-        pol_cat.removePolicy(name) catch |err| {
-            if (err != error.PolicyNotFound) return err;
-        };
+        // Idempotent: a missing policy is not an error. SONNY-2757: the stored
+        // record goes first, as for DROP POLICY (`policy_ddl.drop`); the
+        // procedure used to drop the policy from the catalog only, and it came
+        // back at the next restart.
+        _ = try execution.policy_ddl.drop(pol_cat, name, true);
     }
     const columns = try allocator.alloc([]const u8, 1);
     columns[0] = try allocator.dupe(u8, "status");

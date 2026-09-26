@@ -10528,6 +10528,21 @@ pub fn build(b: *std.Build) void {
 
     // SONNY-2750: an RLS policy record (the geode-auth CLI, `geode auth policy
     // create`) is never loaded as a GPS policy; records carry a kind.
+    // SONNY-2757: RLS/GPS policy hygiene (the compiler bounds the VM stack,
+    // policy DDL and the policy procedures are durable, the security loaders
+    // survive an out-of-range stored value).
+    const sonny2757_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny2757_policy_hygiene.zig"), .target = target, .optimize = optimize });
+    sonny2757_test_mod.link_libc = true;
+    sonny2757_test_mod.addImport("geode", root_mod);
+    sonny2757_test_mod.addImport("rls", rls_mod);
+    sonny2757_test_mod.addImport("auth_graph_manager", auth_graph_manager_mod);
+    sonny2757_test_mod.addImport("policy_persistence", policy_persistence_mod);
+    const sonny2757_tests = b.addTest(.{ .root_module = sonny2757_test_mod });
+    const run_sonny2757_tests = b.addRunArtifact(sonny2757_tests);
+    shardDep(test_step, &run_sonny2757_tests.step, 1, test_shard_loads, test_shard_index);
+    const sonny2757_step = b.step("test-sonny2757-policy-hygiene", "Run SONNY-2757 regression (the RLS compiler refuses an expression that would overflow the VM stack; ALTER/DROP POLICY and geode.auth.policy_create/delete fail and change nothing when the write-through fails; an out-of-range stored value marks a security record tampered)");
+    sonny2757_step.dependOn(&run_sonny2757_tests.step);
+
     const sonny2750_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny2750_policy_record_kind.zig"), .target = target, .optimize = optimize });
     sonny2750_test_mod.link_libc = true;
     sonny2750_test_mod.addImport("geode", root_mod);

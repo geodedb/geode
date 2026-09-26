@@ -126,6 +126,25 @@
   A request that changes a graph that does not exist is refused with 3F000,
   and the graph is not created. The CLI's `-g` flag, which sends a
   `USE GRAPH` of the current graph before the query, works as before.
+- **Policy DDL is durable or fails; the RLS compiler bounds the VM stack;
+  the security loaders survive out-of-range values (SONNY-2757):**
+  - ALTER POLICY and DROP POLICY used to change the in-memory catalog and
+    only log a failed write to `__geode_security`, so a revocation (a DROP,
+    or disabling an allow) came back at the next restart. Now the statement
+    fails and the catalog is left as it was: DROP deletes the stored record
+    first, and ALTER is undone.
+  - `geode.auth.policy_create` makes CREATE POLICY's checks (field lengths,
+    a USING expression that compiles, a unique name) and persists the
+    policy, failing like CREATE POLICY. It accepted anything and persisted
+    nothing. `geode.auth.policy_delete` persists its drop.
+  - The RLS expression compiler refuses an expression whose evaluation would
+    need more than the VM's 64 stack slots, for example a right-nested OR 63
+    levels deep. Such an expression compiled and then overflowed on every
+    row, denying every row silently.
+  - A stored operation, audit level, action, role priority or failed-login
+    count that does not fit its field marks the record tampered, and it is
+    not loaded (a policy loads as malformed). It used to abort a safe build
+    at startup, before the signature check.
 - **`CALL algo.*` applies RLS, and reads the session's graph only
   (SONNY-2685):** the graph procedures (BFS, DFS, Dijkstra, degree, every
   centrality, community and component procedure, and the graph statistics)

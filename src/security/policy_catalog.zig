@@ -335,11 +335,14 @@ pub fn getGlobalCatalog() ?*PolicyCatalog {
 
 // CANARY: REQ=REQ-GPS-CATALOG-002; FEATURE="GPS Policy Persistence"; ASPECT=WriteThroughHooks; STATUS=TESTED; TEST=tests/test_gps_policy_persistence.zig; OWNER=security; UPDATED=2026-05-20
 
-/// Called with the same PolicySpec passed to addPolicy.  Errors are non-fatal
-/// and logged by the server; execution continues with the in-memory update.
+/// Called with the same PolicySpec passed to addPolicy. An error fails the
+/// statement and the policy is taken out of the catalog again (SONNY-2731,
+/// SONNY-2757: `execution/policy_ddl.zig`).
 pub const PersistFn = *const fn (ctx: *anyopaque, spec: PolicySpec) anyerror!void;
 
-/// Called with the policy name before removePolicy. Errors are non-fatal.
+/// Called with the policy name before removePolicy. An error (other than
+/// PolicyNotFound: no stored record) fails the statement and the policy stays
+/// (SONNY-2757).
 pub const DropFn = *const fn (ctx: *anyopaque, name: []const u8) anyerror!void;
 
 // CANARY: REQ=REQ-GPS-CATALOG-002; FEATURE="GPS Policy Persistence"; ASPECT=AlterWriteThroughHook; STATUS=TESTED; TEST=tests/test_gap0858_alter_policy_persist.zig; OWNER=security; UPDATED=2026-06-09
@@ -347,7 +350,7 @@ pub const DropFn = *const fn (ctx: *anyopaque, name: []const u8) anyerror!void;
 /// enable/disable + rename change is written through to __geode_security.
 /// `name` is the CURRENT (pre-rename) policy name used to locate the durable
 /// record; `set_enabled` and `rename_to` mirror the alterPolicy arguments.
-/// Errors are non-fatal and logged by the server.
+/// An error fails the statement and the catalog change is undone (SONNY-2757).
 pub const AlterFn = *const fn (ctx: *anyopaque, name: []const u8, set_enabled: ?bool, rename_to: ?[]const u8) anyerror!void;
 
 pub const WriteThroughHooks = struct {
