@@ -8818,6 +8818,20 @@ pub fn build(b: *std.Build) void {
     const sonny2692_step = b.step("test-sonny2692-knn-rls", "Run SONNY-2692 regression (knn()/vector_knn() filter every candidate through the row-visibility filter before ranking and truncating to k, on the scan path and the vector-index path, under label and expression policies)");
     sonny2692_step.dependOn(&run_sonny2692_tests.step);
 
+    // SONNY-2727: the wire parameter decoder narrowed a SMALLINT, a REAL, a
+    // CHAR / VARCHAR length and a decimal scale without a range check, and
+    // its binary extended-value decoder overflowed a u32 length and recursed
+    // without a bound: one parameter from any authenticated client aborted a
+    // ReleaseSafe server.
+    const sonny2727_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny2727_param_decoder_narrowing.zig"), .target = target, .optimize = optimize });
+    sonny2727_test_mod.addImport("geode", root_mod);
+    sonny2727_test_mod.addImport("schema", schema_mod);
+    const sonny2727_tests = b.addTest(.{ .root_module = sonny2727_test_mod });
+    const run_sonny2727_tests = b.addRunArtifact(sonny2727_tests);
+    shardDep(test_step, &run_sonny2727_tests.step, 1, test_shard_loads, test_shard_index);
+    const sonny2727_step = b.step("test-sonny2727-param-decoder-narrowing", "Run SONNY-2727 regression (every narrowing in the wire parameter decoders is checked: an out-of-range SMALLINT, REAL, CHAR/VARCHAR length, decimal scale or binary length is refused with 22023 and frees what it decoded, and the process survives)");
+    sonny2727_step.dependOn(&run_sonny2727_tests.step);
+
     // SONNY-2675: an aggregate named in a grouped HAVING is computed for each
     // group; an ungrouped input column there is refused (42803).
     const sonny2675_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny2675_grouped_having.zig"), .target = target, .optimize = optimize });

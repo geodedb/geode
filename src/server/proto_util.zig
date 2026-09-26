@@ -29,14 +29,20 @@ pub fn parseParams(allocator: std.mem.Allocator, params: []const schema.Param) !
     errdefer allocator.free(names);
     var values = try allocator.alloc(value_types.Value, params.len);
     errdefer allocator.free(values);
+    // SONNY-2727: a refused parameter frees what the ones before it decoded
+    // (the refusals the checked narrowing adds reach this path on purpose).
+    var decoded: usize = 0;
+    errdefer for (names[0..decoded], values[0..decoded]) |name, value| {
+        allocator.free(name);
+        freeParamValue(allocator, value);
+    };
 
     for (params, 0..) |param, i| {
-        names[i] = try allocator.dupe(u8, param.name);
-        if (param.value) |val| {
-            values[i] = try protoValueToValue(allocator, val, 0);
-        } else {
-            values[i] = .Null;
-        }
+        const name = try allocator.dupe(u8, param.name);
+        errdefer allocator.free(name);
+        values[i] = if (param.value) |val| try protoValueToValue(allocator, val, 0) else .Null;
+        names[i] = name;
+        decoded = i + 1;
     }
 
     return .{ .names = names, .values = values };
@@ -49,6 +55,15 @@ pub fn freeParamBindings(allocator: std.mem.Allocator, bindings: ParamBindings) 
     allocator.free(bindings.values);
 }
 
+// CANARY: REQ=REQ-SONNY-2727-PARAM-DECODER-NARROWING; FEATURE="WireParameters"; ASPECT=CheckedNarrowing; STATUS=TESTED; TEST=tests/test_sonny2727_param_decoder_narrowing.zig; OWNER=security; UPDATED=2026-09-26
+/// A client's parameter as an engine value.
+///
+/// SONNY-2727: every narrowing is checked. A SMALLINT outside i16, a finite
+/// REAL outside f32, a CHAR or VARCHAR longer than 65535 bytes, a decimal
+/// `scale` or `orig_scale` outside u8, and a decimal coefficient of the
+/// smallest i128 (which has no negation, and is outside every DECIMAL) are
+/// refused with `error.InvalidParams`, which the transports send as 22023.
+/// Each was an unchecked cast: one parameter aborted a ReleaseSafe server.
 pub fn protoValueToValue(allocator: std.mem.Allocator, value: schema.Value, depth: usize) !value_types.Value {
     if (depth > 64) return error.ParamsTooDeep;
     const kind = value.kind orelse return .Null;
@@ -57,51 +72,71 @@ pub fn protoValueToValue(allocator: std.mem.Allocator, value: schema.Value, dept
         .bool_val => |b| .{ .Bool = b },
         .int_val => |iv| switch (iv.kind) {
             .INT => .{ .Int = iv.value },
-            .SMALLINT => .{ .SmallInt = @intCast(iv.value) },
+            .SMALLINT => .{ .SmallInt = std.math.cast(i16, iv.value) orelse return error.InvalidParams },
             .BIGINT => .{ .BigInt = iv.value },
             else => .{ .Int = iv.value },
         },
         .double_val => |dv| switch (dv.kind) {
-            .REAL => .{ .Real = @floatCast(dv.value) },
+            .REAL => .{ .Real = try checkedReal(dv.value) },
             .DOUBLE => .{ .Double = dv.value },
             else => .{ .Double = dv.value },
         },
         .string_val => |sv| switch (sv.kind) {
-            .CHAR => .{ .Char = .{ .data = try allocator.dupe(u8, sv.value), .n = @intCast(sv.value.len) } },
-            .VARCHAR => .{ .Varchar = .{ .data = try allocator.dupe(u8, sv.value), .n = @intCast(sv.value.len) } },
+            .CHAR => .{ .Char = .{ .n = try checkedCharLen(sv.value.len), .data = try allocator.dupe(u8, sv.value) } },
+            .VARCHAR => .{ .Varchar = .{ .n = try checkedCharLen(sv.value.len), .data = try allocator.dupe(u8, sv.value) } },
             .TEXT => .{ .Text = try allocator.dupe(u8, sv.value) },
             else => .{ .Str = try allocator.dupe(u8, sv.value) },
         },
         .decimal_val => |dec| blk: {
             const coeff = std.fmt.parseInt(i128, dec.coeff, 10) catch return error.InvalidParams;
+            if (coeff == std.math.minInt(i128)) return error.InvalidParams;
+            const scale = std.math.cast(u8, dec.scale) orelse return error.InvalidParams;
+            const orig_scale = std.math.cast(u8, dec.orig_scale) orelse return error.InvalidParams;
             const orig_repr = if (dec.orig_repr.len > 0)
                 try allocator.dupe(u8, dec.orig_repr)
             else
                 null;
             break :blk .{ .Decimal = .{
                 .coeff = coeff,
-                .scale = @intCast(dec.scale),
-                .orig_scale = @intCast(dec.orig_scale),
+                .scale = scale,
+                .orig_scale = orig_scale,
                 .orig_repr = orig_repr,
             } };
         },
         .bytes_val => |bv| .{ .Bytea = try allocator.dupe(u8, bv.value) },
         .list_val => |lv| blk: {
             const list = try allocator.alloc(value_types.Value, lv.values.items.len);
+            // SONNY-2727: a refused item frees the list and the items before it.
+            var decoded: usize = 0;
+            errdefer {
+                for (list[0..decoded]) |item| freeParamValue(allocator, item);
+                allocator.free(list);
+            }
             for (lv.values.items, 0..) |item, idx| {
                 list[idx] = try protoValueToValue(allocator, item, depth + 1);
+                decoded = idx + 1;
             }
             break :blk .{ .List = list };
         },
         .map_val => |mv| blk: {
             var map = std.StringHashMap(value_types.Value).init(allocator);
-            errdefer map.deinit();
+            // SONNY-2727: a refused entry frees the entries before it.
+            errdefer {
+                var it = map.iterator();
+                while (it.next()) |e| {
+                    allocator.free(e.key_ptr.*);
+                    freeParamValue(allocator, e.value_ptr.*);
+                }
+                map.deinit();
+            }
             for (mv.entries.items) |entry| {
                 const key = try allocator.dupe(u8, entry.key);
+                errdefer allocator.free(key);
                 const val = if (entry.value) |v|
                     try protoValueToValue(allocator, v, depth + 1)
                 else
                     value_types.Value.Null;
+                errdefer freeParamValue(allocator, val);
                 try map.put(key, val);
             }
             break :blk .{ .Map = map };
@@ -113,6 +148,18 @@ pub fn protoValueToValue(allocator: std.mem.Allocator, value: schema.Value, dept
 
 fn freeParamValue(allocator: std.mem.Allocator, value: value_types.Value) void {
     property_codec.freeValue(allocator, value);
+}
+
+/// SONNY-2727: a REAL parameter as f32. A finite value outside f32 is
+/// refused; infinities and NaN are f32 values and pass.
+fn checkedReal(v: f64) error{InvalidParams}!f32 {
+    if (std.math.isFinite(v) and @abs(v) > std.math.floatMax(f32)) return error.InvalidParams;
+    return @floatCast(v);
+}
+
+/// SONNY-2727: a CHAR or VARCHAR length as the type's u16.
+fn checkedCharLen(len: usize) error{InvalidParams}!u16 {
+    return std.math.cast(u16, len) orelse error.InvalidParams;
 }
 
 pub fn mapError(err: anyerror) ErrorInfo {
@@ -620,7 +667,9 @@ fn propertyValueToProto(allocator: std.mem.Allocator, value: graph_store.Propert
 /// e.g., coeff=1999, scale=2 → "19.99"; coeff=5, scale=2 → "0.05"
 fn reconstructDecimalRepr(allocator: std.mem.Allocator, coeff: i128, scale: u8) ![]const u8 {
     const is_negative = coeff < 0;
-    const abs_coeff: u128 = if (is_negative) @intCast(-coeff) else @intCast(coeff);
+    // SONNY-2727: `@abs` has a u128 result, so the smallest i128 has a
+    // magnitude too; `-coeff` overflowed for it.
+    const abs_coeff: u128 = @abs(coeff);
     const digits = try std.fmt.allocPrint(allocator, "{d}", .{abs_coeff});
     defer allocator.free(digits);
 

@@ -610,13 +610,26 @@ pub fn encodeExtValueBinary(allocator: std.mem.Allocator, ext: ExtValue) ![]u8 {
     };
 }
 
+/// SONNY-2727: how deep a binary extended list may nest. Each level is a
+/// stack frame of the decoder, and a client chooses the bytes.
+const max_ext_list_depth = 64;
+
 pub fn decodeExtValueBinary(allocator: std.mem.Allocator, bytes: []const u8) !ExtValue {
+    return decodeExtValueBinaryAt(allocator, bytes, 0);
+}
+
+fn decodeExtValueBinaryAt(allocator: std.mem.Allocator, bytes: []const u8, depth: usize) !ExtValue {
     if (bytes.len == 0) return error.InvalidParams;
 
     if (bytes[0] == ext_tag_list) {
         if (bytes.len < 5) return error.InvalidParams;
+        // SONNY-2727: the decoder recursed once per level with no bound.
+        if (depth >= max_ext_list_depth) return error.InvalidParams;
 
         const item_count = std.mem.readInt(u32, bytes[1..5][0..4], .little);
+        // SONNY-2727: every item takes at least its 4-byte length, so a count
+        // the bytes cannot hold is refused before it sizes an allocation.
+        if (item_count > (bytes.len - 5) / 4) return error.InvalidParams;
         const list = try allocator.alloc(ExtValue, item_count);
         var initialized: usize = 0;
         errdefer {
@@ -634,7 +647,7 @@ pub fn decodeExtValueBinary(allocator: std.mem.Allocator, bytes: []const u8) !Ex
             offset += 4;
             const item_len_usize: usize = @intCast(item_len);
             if (offset + item_len_usize > bytes.len) return error.InvalidParams;
-            list[idx] = try decodeExtValueBinary(allocator, bytes[offset .. offset + item_len_usize]);
+            list[idx] = try decodeExtValueBinaryAt(allocator, bytes[offset .. offset + item_len_usize], depth + 1);
             initialized += 1;
             offset += item_len_usize;
         }
@@ -642,7 +655,21 @@ pub fn decodeExtValueBinary(allocator: std.mem.Allocator, bytes: []const u8) !Ex
         return .{ .List = list };
     }
 
-    return heapValueToExtValue(try heap.decodeValue(allocator, bytes));
+    return checkedHeapValueToExtValue(try heap.decodeValue(allocator, bytes));
+}
+
+/// SONNY-2727: `heapValueToExtValue` for a value decoded from a client's
+/// bytes. A binary Decimal128 carries an i16 scale, and the engine's decimal
+/// scale is a u8, so one outside it is refused (`heapValueToExtValue` narrowed
+/// it unchecked); so is the smallest i128 coefficient, which has no negation.
+fn checkedHeapValueToExtValue(value: heap.Value) error{InvalidParams}!ExtValue {
+    switch (value) {
+        .Decimal128 => |d| {
+            if (std.math.cast(u8, d.scale) == null or d.coeff == std.math.minInt(i128)) return error.InvalidParams;
+        },
+        else => {},
+    }
+    return heapValueToExtValue(value);
 }
 
 pub fn encodePropertyValue(allocator: std.mem.Allocator, value: graph_store.PropertyValue) ![]u8 {
@@ -1015,7 +1042,10 @@ pub fn protoExtendedToHeapValue(allocator: std.mem.Allocator, ext: schema.Extend
                         },
                         else => extValueToHeapValue(decoded),
                     };
-                } else |_| {
+                } else |err| {
+                    // SONNY-2727: a list tag is no heap value; the list
+                    // decoder's refusal stands.
+                    if (bytes.len > 0 and bytes[0] == ext_tag_list) return err;
                     return heap.decodeValue(allocator, bytes);
                 }
             }
@@ -1031,13 +1061,14 @@ pub fn protoExtendedToHeapValue(allocator: std.mem.Allocator, ext: schema.Extend
         };
     }
     if (std.ascii.eqlIgnoreCase(type_name, "INTEGER") or std.ascii.eqlIgnoreCase(type_name, "INT")) return .{ .Int = try expectInt(ext.data) };
-    if (std.ascii.eqlIgnoreCase(type_name, "SMALLINT")) return .{ .SmallInt = @intCast(try expectInt(ext.data)) };
+    // SONNY-2727: the narrowings below are checked (they were bare casts).
+    if (std.ascii.eqlIgnoreCase(type_name, "SMALLINT")) return .{ .SmallInt = std.math.cast(i16, try expectInt(ext.data)) orelse return error.InvalidParams };
     if (std.ascii.eqlIgnoreCase(type_name, "BIGINT")) return .{ .BigInt = try expectInt(ext.data) };
-    if (std.ascii.eqlIgnoreCase(type_name, "REAL")) return .{ .Real = @floatCast(try expectDouble(ext.data)) };
+    if (std.ascii.eqlIgnoreCase(type_name, "REAL")) return .{ .Real = try checkedReal(try expectDouble(ext.data)) };
     if (std.ascii.eqlIgnoreCase(type_name, "DOUBLE")) return .{ .Double = try expectDouble(ext.data) };
     if (std.ascii.eqlIgnoreCase(type_name, "TEXT")) return .{ .Text = try allocator.dupe(u8, try expectText(ext.data)) };
-    if (std.ascii.eqlIgnoreCase(type_name, "CHAR")) return eval_funcs.Char(allocator, try expectText(ext.data), @intCast((try expectText(ext.data)).len));
-    if (std.ascii.eqlIgnoreCase(type_name, "VARCHAR")) return eval_funcs.Varchar(allocator, try expectText(ext.data), @intCast((try expectText(ext.data)).len));
+    if (std.ascii.eqlIgnoreCase(type_name, "CHAR")) return eval_funcs.Char(allocator, try expectText(ext.data), try checkedCharLen((try expectText(ext.data)).len));
+    if (std.ascii.eqlIgnoreCase(type_name, "VARCHAR")) return eval_funcs.Varchar(allocator, try expectText(ext.data), try checkedCharLen((try expectText(ext.data)).len));
     if (std.ascii.eqlIgnoreCase(type_name, "DATE")) return eval_funcs.Date(try expectText(ext.data));
     if (std.ascii.eqlIgnoreCase(type_name, "TIME")) return .{ .Time = try datetime.Time.fromStr(try expectText(ext.data)) };
     if (std.ascii.eqlIgnoreCase(type_name, "TIMETZ")) return .{ .TimeTZ = try datetime.TimeTZ.fromStr(try expectText(ext.data)) };
@@ -1122,12 +1153,27 @@ pub fn protoExtendedToExtValue(allocator: std.mem.Allocator, ext: schema.Extende
             if (!std.ascii.eqlIgnoreCase(type_name, "BYTEA") and !std.ascii.eqlIgnoreCase(type_name, "GEOMETRY")) {
                 if (decodeExtValueBinary(allocator, bytes)) |decoded| {
                     return decoded;
-                } else |_| {}
+                } else |err| {
+                    // SONNY-2727: a list tag is no heap value; the list
+                    // decoder's refusal stands.
+                    if (bytes.len > 0 and bytes[0] == ext_tag_list) return err;
+                }
             }
         },
         else => {},
     };
-    return heapValueToExtValue(try protoExtendedToHeapValue(allocator, ext));
+    return checkedHeapValueToExtValue(try protoExtendedToHeapValue(allocator, ext));
+}
+
+/// SONNY-2727: a REAL as f32; a finite value outside f32 is refused.
+fn checkedReal(v: f64) error{InvalidParams}!f32 {
+    if (std.math.isFinite(v) and @abs(v) > std.math.floatMax(f32)) return error.InvalidParams;
+    return @floatCast(v);
+}
+
+/// SONNY-2727: a CHAR or VARCHAR length as the type's u16.
+fn checkedCharLen(len: usize) error{InvalidParams}!u16 {
+    return std.math.cast(u16, len) orelse error.InvalidParams;
 }
 
 fn expectPropertyValueEqual(expected: graph_store.PropertyValue, actual: graph_store.PropertyValue) !void {
