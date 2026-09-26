@@ -126,6 +126,23 @@
   A request that changes a graph that does not exist is refused with 3F000,
   and the graph is not created. The CLI's `-g` flag, which sends a
   `USE GRAPH` of the current graph before the query, works as before.
+- **`CALL algo.*` applies RLS, and reads the session's graph only
+  (SONNY-2685):** the graph procedures (BFS, DFS, Dijkstra, degree, every
+  centrality, community and component procedure, and the graph statistics)
+  applied the session's tenant scope but not its RLS policies. A node or
+  edge a label or expression policy hides took part in every path,
+  distance, degree and score. They also walked every graph's nodes, so
+  nodes of another graph, the security graph included, could be scored and
+  returned. Each call now applies the traversal scope of MATCH (SONNY-2679):
+  - a node is visible when it is in the session's graph, passes the tenant
+    scope, and passes the RLS policies of every one of its labels;
+  - an edge is traversable when it is in the graph, passes the policies on
+    its type, and both of its endpoints are visible.
+
+  A hidden node or edge is neither visited nor returned. Dijkstra no longer
+  takes a hop's weight from a hidden parallel edge. A start node the session
+  cannot see gives no rows, as for another tenant's node. The graph
+  statistics count the session's graph only.
 - **Permissive and restrictive RLS policies combine as PostgreSQL's do
   (SONNY-2710):** the expression engine combined a table's policies as
   "any permissive passes OR every restrictive passes". A table with only

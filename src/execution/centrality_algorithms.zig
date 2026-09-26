@@ -13,13 +13,18 @@ const ExecutionResult = execution.ExecutionResult;
 // with no tenant term at all, so `CALL algo.pagerank.stream` scored (and
 // returned the node ids of) every tenant in the deployment.
 //
-// EVERY public entry point in this file therefore takes `tenant_filter` as a
-// REQUIRED trailing parameter — the session's resolved scope from
-// `tenancy.resolveTenantFilter(ctx.tenant_id)`, `null` meaning all-tenants
-// (the legacy single-tenant / non-strict behaviour, unchanged). Required
-// rather than ambient so a new algorithm that forgets tenancy is a compile
-// error instead of a silent leak.
+// EVERY public entry point in this file therefore takes the call's scope as a
+// REQUIRED trailing parameter. SONNY-1318 made it the session's resolved
+// tenant scope; SONNY-2685 made it an `AlgoScope`, which adds the session's
+// graph and RLS policies. Required rather than ambient so a new algorithm
+// that forgets it is a compile error instead of a silent leak.
 const tenant_visibility = @import("tenant_visibility.zig");
+
+// SONNY-2685: every algorithm below takes the call's `AlgoScope` (the
+// session's graph, tenant scope and RLS policies) as a REQUIRED parameter in
+// place of the bare tenant scope SONNY-1318 threaded through. See
+// `algo_scope.zig`.
+const AlgoScope = @import("algo_scope.zig").AlgoScope;
 
 // GAP-0273: Thread-pool-backed parallelism for graph algorithm hot paths.
 const parallel_wrapper = @import("parallel/thread_pool_parallel");
@@ -49,66 +54,75 @@ fn scoreToDecimal(score: f64) Value {
 /// DRY helper: Collect all node IDs from the store into an ArrayList.
 /// Replaces 24+ inline `var node_list = ...; var node_iter = store.nodes.iterator(); while ...` patterns.
 /// Caller owns the returned ArrayList and must call `node_list.deinit(allocator)`.
-fn collectNodeIds(store: *graph_store.GraphStore, allocator: std.mem.Allocator, tenant_filter: ?[]const u8) !std.ArrayList(u64) {
+fn collectNodeIds(store: *graph_store.GraphStore, allocator: std.mem.Allocator, scope: *AlgoScope) !std.ArrayList(u64) {
     var node_list = try std.ArrayList(u64).initCapacity(allocator, store.nodes.count());
     var node_iter = store.nodes.iterator();
     while (node_iter.next()) |entry| {
-        // SONNY-1318: this is the node UNIVERSE every algorithm in this file
-        // scores and returns. Filtering here is what keeps another tenant's
-        // node ids out of the result set.
-        if (!tenant_visibility.passesTenantFilterSlice(entry.value_ptr.*.tenant_id, tenant_filter)) continue;
+        // SONNY-1318 / SONNY-2685: this is the node UNIVERSE every algorithm
+        // in this file scores and returns. Filtering here keeps other graphs'
+        // nodes, other tenants' nodes and RLS-hidden nodes out of the result
+        // set; `store.nodes` holds every graph's nodes.
+        if (!scope.nodeVisible(entry.value_ptr)) continue;
         try node_list.append(allocator, entry.key_ptr.*);
     }
     return node_list;
 }
 
-/// SONNY-1318: count a node's incident edges that the session's tenant scope
-/// may actually traverse. Replaces the raw `getOutgoingEdgeIds(..).len` degree
-/// reads, which counted edges into other tenants' subgraphs.
-fn visibleDegree(store: *graph_store.GraphStore, node_id: u64, tenant_filter: ?[]const u8) struct { out: u64, in: u64 } {
+const Degree = struct { out: u64, in: u64 };
+
+/// A node's raw adjacency lengths: every incident edge, all in the node's
+/// graph. Allocation-free and predicate-free, so a parallel worker may call
+/// it; only for a scope that restricts nothing (`AlgoScope.restricts`).
+fn rawDegree(store: *graph_store.GraphStore, node_id: u64) Degree {
+    return .{
+        .out = if (store.getOutgoingEdgeIds(node_id)) |ids| ids.len else 0,
+        .in = if (store.getIncomingEdgeIds(node_id)) |ids| ids.len else 0,
+    };
+}
+
+/// SONNY-1318 / SONNY-2685: count a node's incident edges that the scope
+/// may traverse (the edge's tag and RLS policies, and both endpoints).
+/// Replaces the raw `getOutgoingEdgeIds(..).len` degree reads, which counted
+/// edges into other tenants' subgraphs and edges RLS hides. Calling thread
+/// only.
+fn visibleDegree(store: *graph_store.GraphStore, node_id: u64, scope: *AlgoScope) Degree {
+    if (!scope.restricts()) return rawDegree(store, node_id);
     var out_deg: u64 = 0;
     var in_deg: u64 = 0;
     if (store.getOutgoingEdgeIds(node_id)) |ids| {
-        if (tenant_filter == null) {
-            out_deg = ids.len;
-        } else {
-            for (ids) |eid| {
-                if (tenant_visibility.edgeIdTraversable(store, eid, tenant_filter)) out_deg += 1;
-            }
+        for (ids) |eid| {
+            if (scope.edgeIdTraversable(store, eid)) out_deg += 1;
         }
     }
     if (store.getIncomingEdgeIds(node_id)) |ids| {
-        if (tenant_filter == null) {
-            in_deg = ids.len;
-        } else {
-            for (ids) |eid| {
-                if (tenant_visibility.edgeIdTraversable(store, eid, tenant_filter)) in_deg += 1;
-            }
+        for (ids) |eid| {
+            if (scope.edgeIdTraversable(store, eid)) in_deg += 1;
         }
     }
     return .{ .out = out_deg, .in = in_deg };
 }
 
-/// SONNY-1318: total number of edges the session's tenant scope may traverse.
-/// Replaces `store.edges.count()` in the graph-statistics procedures.
-fn visibleEdgeCount(store: *graph_store.GraphStore, allocator: std.mem.Allocator, tenant_filter: ?[]const u8) !usize {
-    if (tenant_filter == null) return store.edges.count();
+/// SONNY-1318 / SONNY-2685: total number of edges the scope may traverse.
+/// Replaces `store.edges.count()` in the graph-statistics procedures, which
+/// counted every graph's resident edges.
+fn visibleEdgeCount(store: *graph_store.GraphStore, allocator: std.mem.Allocator, scope: *AlgoScope) !usize {
+    if (!scope.restricts()) return store.countEdgesForGraph(scope.graph());
     const ids = try store.allEdgeIds(allocator);
     defer allocator.free(ids);
     var n: usize = 0;
     for (ids) |eid| {
-        if (tenant_visibility.edgeIdTraversable(store, eid, tenant_filter)) n += 1;
+        if (scope.edgeIdTraversable(store, eid)) n += 1;
     }
     return n;
 }
 
-/// SONNY-1318: number of nodes visible to the session's tenant scope.
-fn visibleNodeCount(store: *graph_store.GraphStore, tenant_filter: ?[]const u8) usize {
-    if (tenant_filter == null) return store.nodes.count();
+/// SONNY-1318 / SONNY-2685: number of nodes visible to the scope.
+fn visibleNodeCount(store: *graph_store.GraphStore, scope: *AlgoScope) usize {
+    if (!scope.restricts()) return store.countNodesForGraph(scope.graph(), null);
     var n: usize = 0;
     var it = store.nodes.iterator();
     while (it.next()) |entry| {
-        if (tenant_visibility.passesTenantFilterSlice(entry.value_ptr.*.tenant_id, tenant_filter)) n += 1;
+        if (scope.nodeVisible(entry.value_ptr)) n += 1;
     }
     return n;
 }
@@ -160,7 +174,7 @@ fn getParallelPool() *ParallelPool {
 
 /// Get neighbors of a node using adjacency indexes (O(degree) instead of O(E)).
 /// Returns a caller-owned slice of neighbor node IDs.
-pub fn getNeighbors(store: *graph_store.GraphStore, node_id: u64, allocator: std.mem.Allocator, tenant_filter: ?[]const u8) ![]u64 {
+pub fn getNeighbors(store: *graph_store.GraphStore, node_id: u64, allocator: std.mem.Allocator, scope: *AlgoScope) ![]u64 {
     var neighbors = std.ArrayList(u64).empty;
 
     // Use adjacency indexes for O(degree) lookup instead of full edge scan.
@@ -170,7 +184,7 @@ pub fn getNeighbors(store: *graph_store.GraphStore, node_id: u64, allocator: std
     if (store.getOutgoingEdgeIds(node_id)) |out_edge_ids| {
         for (out_edge_ids) |edge_id| {
             if (store.getEdgeHydrated(edge_id)) |edge| {
-                if (!tenant_visibility.edgeTraversable(store, edge, tenant_filter)) continue;
+                if (!scope.edgeTraversable(store, edge)) continue;
                 try neighbors.append(allocator, edge.to_id);
             }
         }
@@ -178,7 +192,7 @@ pub fn getNeighbors(store: *graph_store.GraphStore, node_id: u64, allocator: std
     if (store.getIncomingEdgeIds(node_id)) |in_edge_ids| {
         for (in_edge_ids) |edge_id| {
             if (store.getEdgeHydrated(edge_id)) |edge| {
-                if (!tenant_visibility.edgeTraversable(store, edge, tenant_filter)) continue;
+                if (!scope.edgeTraversable(store, edge)) continue;
                 try neighbors.append(allocator, edge.from_id);
             }
         }
@@ -189,7 +203,7 @@ pub fn getNeighbors(store: *graph_store.GraphStore, node_id: u64, allocator: std
 /// Precompute adjacency lists for all nodes once (O(V+E) total).
 /// Returns a map from node_id -> owned slice of neighbor IDs.
 /// Caller must call `deinitAdjacency` to free resources.
-pub fn precomputeAdjacency(store: *graph_store.GraphStore, node_list: []const u64, allocator: std.mem.Allocator, tenant_filter: ?[]const u8) !std.AutoHashMap(u64, []const u64) {
+pub fn precomputeAdjacency(store: *graph_store.GraphStore, node_list: []const u64, allocator: std.mem.Allocator, scope: *AlgoScope) !std.AutoHashMap(u64, []const u64) {
     var adj = std.AutoHashMap(u64, []const u64).init(allocator);
     errdefer {
         var val_iter = adj.valueIterator();
@@ -197,7 +211,7 @@ pub fn precomputeAdjacency(store: *graph_store.GraphStore, node_list: []const u6
         adj.deinit();
     }
     for (node_list) |node_id| {
-        const neighbors = try getNeighbors(store, node_id, allocator, tenant_filter);
+        const neighbors = try getNeighbors(store, node_id, allocator, scope);
         try adj.put(node_id, neighbors);
     }
     return adj;
@@ -215,7 +229,7 @@ pub const NeighborSet = std.AutoHashMap(u64, void);
 
 /// Build a map from node ID to a HashSet of its neighbor IDs for O(1) adjacency
 /// checks. Caller must call `deinitNeighborSets` to free resources.
-pub fn buildNeighborSets(node_list: []const u64, store: *graph_store.GraphStore, allocator: std.mem.Allocator, tenant_filter: ?[]const u8) !std.AutoHashMap(u64, NeighborSet) {
+pub fn buildNeighborSets(node_list: []const u64, store: *graph_store.GraphStore, allocator: std.mem.Allocator, scope: *AlgoScope) !std.AutoHashMap(u64, NeighborSet) {
     var sets = std.AutoHashMap(u64, NeighborSet).init(allocator);
     errdefer {
         var it = sets.valueIterator();
@@ -228,7 +242,7 @@ pub fn buildNeighborSets(node_list: []const u64, store: *graph_store.GraphStore,
             for (out_edge_ids) |edge_id| {
                 if (store.getEdgeHydrated(edge_id)) |edge| {
                     // SONNY-1318: same visibility rule as getNeighbors.
-                    if (!tenant_visibility.edgeTraversable(store, edge, tenant_filter)) continue;
+                    if (!scope.edgeTraversable(store, edge)) continue;
                     try set.put(edge.to_id, {});
                 }
             }
@@ -236,7 +250,7 @@ pub fn buildNeighborSets(node_list: []const u64, store: *graph_store.GraphStore,
         if (store.getIncomingEdgeIds(node)) |in_edge_ids| {
             for (in_edge_ids) |edge_id| {
                 if (store.getEdgeHydrated(edge_id)) |edge| {
-                    if (!tenant_visibility.edgeTraversable(store, edge, tenant_filter)) continue;
+                    if (!scope.edgeTraversable(store, edge)) continue;
                     try set.put(edge.from_id, {});
                 }
             }
@@ -255,8 +269,8 @@ pub fn deinitNeighborSets(sets: *std.AutoHashMap(u64, NeighborSet)) void {
 
 /// Degree Centrality - count edges for each node
 /// GAP-0273: Uses the shared parallel wrapper for concurrent degree computation on large graphs.
-pub fn executeDegreeCentrality(allocator: std.mem.Allocator, store: *graph_store.GraphStore, columns: [][]const u8, tenant_filter: ?[]const u8) !ExecutionResult {
-    var node_list = try collectNodeIds(store, allocator, tenant_filter);
+pub fn executeDegreeCentrality(allocator: std.mem.Allocator, store: *graph_store.GraphStore, columns: [][]const u8, scope: *AlgoScope) !ExecutionResult {
+    var node_list = try collectNodeIds(store, allocator, scope);
     defer node_list.deinit(allocator);
 
     const n = node_list.items.len;
@@ -269,7 +283,7 @@ pub fn executeDegreeCentrality(allocator: std.mem.Allocator, store: *graph_store
     // SONNY-1318 review R1: the SCOPED degree is computed HERE, on the calling
     // thread, and the workers only read the result.
     //
-    // `visibleDegree(.., tenant_filter != null)` calls `edgeIdTraversable` ->
+    // `visibleDegree` with a tenant scope calls `edgeIdTraversable` ->
     // `edgeTraversable` -> `nodeIdVisible`, whose bounded-cache-miss arm takes
     // `store.dupeNodeTenantForRead(store.allocator, ..)` — the SHARED store
     // allocator — and can reach the storage adapter for an evicted node. Both
@@ -282,14 +296,20 @@ pub fn executeDegreeCentrality(allocator: std.mem.Allocator, store: *graph_store
     // caller, and the parallel section still runs (it fills the rows), so the
     // >32-node threshold and its worker fan-out are unchanged.
     //
-    // `tenant_filter == null` needs none of this: `visibleDegree` short-circuits
+    // A scope that restricts nothing needs none of this: `visibleDegree` short-circuits
     // to the raw adjacency lengths with no predicate call at all, so the legacy
     // all-tenants path keeps its full parallel degree computation byte for byte.
-    const scoped_degrees: ?[]u64 = if (tenant_filter == null) null else blk: {
+    //
+    // SONNY-2685: likewise for the RLS checks, which read the active execution
+    // context and the traversal's label snapshot, both thread-local: on a
+    // worker they would see neither and allow every edge. Whenever the scope
+    // restricts anything (a tenant scope, or an RLS policy that may deny),
+    // every degree is computed here.
+    const scoped_degrees: ?[]u64 = if (!scope.restricts()) null else blk: {
         const degs = try allocator.alloc(u64, n);
         errdefer allocator.free(degs);
         for (node_list.items, 0..) |node_id, i| {
-            const deg = visibleDegree(store, node_id, tenant_filter);
+            const deg = visibleDegree(store, node_id, scope);
             degs[i] = deg.out + deg.in;
         }
         break :blk degs;
@@ -324,8 +344,8 @@ pub fn executeDegreeCentrality(allocator: std.mem.Allocator, store: *graph_store
             fn compute(_: *parallel_wrapper.Task, idx: usize, c: DegreeCtx) void {
                 const node_id = c.nodes[idx];
                 const total: u64 = if (c.scoped_degrees) |degs| degs[idx] else total_blk: {
-                    // Unscoped: raw adjacency lengths, allocation-free.
-                    const deg = visibleDegree(c.store_ptr, node_id, null);
+                    // Unrestricted: raw adjacency lengths, allocation-free.
+                    const deg = rawDegree(c.store_ptr, node_id);
                     break :total_blk deg.out + deg.in;
                 };
                 c.rows[idx][0] = safeU64ToValue(node_id);
@@ -344,12 +364,12 @@ pub fn executeDegreeCentrality(allocator: std.mem.Allocator, store: *graph_store
 
 /// Betweenness Centrality - Brandes algorithm
 /// Uses precomputed adjacency to avoid per-call getNeighbors allocation in inner loops.
-pub fn executeBetweennessCentrality(allocator: std.mem.Allocator, store: *graph_store.GraphStore, columns: [][]const u8, tenant_filter: ?[]const u8) !ExecutionResult {
-    var node_list = try collectNodeIds(store, allocator, tenant_filter);
+pub fn executeBetweennessCentrality(allocator: std.mem.Allocator, store: *graph_store.GraphStore, columns: [][]const u8, scope: *AlgoScope) !ExecutionResult {
+    var node_list = try collectNodeIds(store, allocator, scope);
     defer node_list.deinit(allocator);
 
     // Precompute adjacency once: O(V+E) total instead of O(V*(V+E)) repeated getNeighbors calls
-    var adj = try precomputeAdjacency(store, node_list.items, allocator, tenant_filter);
+    var adj = try precomputeAdjacency(store, node_list.items, allocator, scope);
     defer deinitAdjacency(&adj, allocator);
 
     var centrality = std.AutoHashMap(u64, f64).init(allocator);
@@ -453,12 +473,12 @@ pub fn executeBetweennessCentrality(allocator: std.mem.Allocator, store: *graph_
 
 /// Closeness Centrality - BFS-based
 /// Uses precomputed adjacency to avoid per-call getNeighbors allocation in BFS inner loop.
-pub fn executeClosenessCentrality(allocator: std.mem.Allocator, store: *graph_store.GraphStore, columns: [][]const u8, tenant_filter: ?[]const u8) !ExecutionResult {
-    var node_list = try collectNodeIds(store, allocator, tenant_filter);
+pub fn executeClosenessCentrality(allocator: std.mem.Allocator, store: *graph_store.GraphStore, columns: [][]const u8, scope: *AlgoScope) !ExecutionResult {
+    var node_list = try collectNodeIds(store, allocator, scope);
     defer node_list.deinit(allocator);
 
     // Precompute adjacency once: O(V+E) total instead of O(V^2 * avg_degree) repeated getNeighbors calls
-    var adj = try precomputeAdjacency(store, node_list.items, allocator, tenant_filter);
+    var adj = try precomputeAdjacency(store, node_list.items, allocator, scope);
     defer deinitAdjacency(&adj, allocator);
 
     var rows = try allocator.alloc([]Value, node_list.items.len);
@@ -515,8 +535,8 @@ pub fn executeClosenessCentrality(allocator: std.mem.Allocator, store: *graph_st
 /// Eigenvector Centrality - Power iteration
 /// Uses double-buffered flat arrays and precomputed adjacency for O(1) index lookups
 /// instead of HashMap per-iteration allocation.
-pub fn executeEigenvectorCentrality(allocator: std.mem.Allocator, store: *graph_store.GraphStore, columns: [][]const u8, tenant_filter: ?[]const u8) !ExecutionResult {
-    var node_list = try collectNodeIds(store, allocator, tenant_filter);
+pub fn executeEigenvectorCentrality(allocator: std.mem.Allocator, store: *graph_store.GraphStore, columns: [][]const u8, scope: *AlgoScope) !ExecutionResult {
+    var node_list = try collectNodeIds(store, allocator, scope);
     defer node_list.deinit(allocator);
 
     const n = node_list.items.len;
@@ -537,7 +557,7 @@ pub fn executeEigenvectorCentrality(allocator: std.mem.Allocator, store: *graph_
     }
 
     // Precompute adjacency once
-    var adj = try precomputeAdjacency(store, node_list.items, allocator, tenant_filter);
+    var adj = try precomputeAdjacency(store, node_list.items, allocator, scope);
     defer deinitAdjacency(&adj, allocator);
 
     // Double-buffered flat arrays for scores
@@ -610,8 +630,8 @@ pub fn executeEigenvectorCentrality(allocator: std.mem.Allocator, store: *graph_
 
 /// PageRank Algorithm
 /// Uses double-buffered flat arrays for O(1) rank lookups instead of HashMap per iteration.
-pub fn executePageRank(allocator: std.mem.Allocator, store: *graph_store.GraphStore, columns: [][]const u8, params: ?std.json.Value, tenant_filter: ?[]const u8) !ExecutionResult {
-    var node_list = try collectNodeIds(store, allocator, tenant_filter);
+pub fn executePageRank(allocator: std.mem.Allocator, store: *graph_store.GraphStore, columns: [][]const u8, params: ?std.json.Value, scope: *AlgoScope) !ExecutionResult {
+    var node_list = try collectNodeIds(store, allocator, scope);
     defer node_list.deinit(allocator);
 
     const n = node_list.items.len;
@@ -657,7 +677,7 @@ pub fn executePageRank(allocator: std.mem.Allocator, store: *graph_store.GraphSt
     for (node_list.items, 0..) |node, idx| {
         // SONNY-1318: out-degree over VISIBLE edges only, or a node's rank
         // would be diluted by links into tenants the session cannot see.
-        const out_degree_count = visibleDegree(store, node, tenant_filter).out;
+        const out_degree_count = visibleDegree(store, node, scope).out;
         out_degrees[idx] = @as(f64, @floatFromInt(out_degree_count));
     }
 
@@ -686,7 +706,7 @@ pub fn executePageRank(allocator: std.mem.Allocator, store: *graph_store.GraphSt
                     if (store.getEdgeHydrated(edge_id)) |edge| {
                         // SONNY-1318: never accumulate rank across an edge (or
                         // from a predecessor) the session's scope cannot see.
-                        if (!tenant_visibility.edgeTraversable(store, edge, tenant_filter)) continue;
+                        if (!scope.edgeTraversable(store, edge)) continue;
                         const linking_node = edge.from_id;
                         const li = node_id_to_index.get(linking_node) orelse continue;
                         const out_degree = out_degrees[li];
@@ -734,8 +754,8 @@ pub fn executePageRank(allocator: std.mem.Allocator, store: *graph_store.GraphSt
 /// Implements the Louvain method: iteratively moves nodes to the neighboring
 /// community that yields the maximum modularity gain, until convergence or
 /// max_iterations is reached.
-pub fn executeLouvainCommunities(allocator: std.mem.Allocator, store: *graph_store.GraphStore, columns: [][]const u8, tenant_filter: ?[]const u8) !ExecutionResult {
-    var node_list = try collectNodeIds(store, allocator, tenant_filter);
+pub fn executeLouvainCommunities(allocator: std.mem.Allocator, store: *graph_store.GraphStore, columns: [][]const u8, scope: *AlgoScope) !ExecutionResult {
+    var node_list = try collectNodeIds(store, allocator, scope);
     defer node_list.deinit(allocator);
 
     if (node_list.items.len == 0) {
@@ -760,7 +780,7 @@ pub fn executeLouvainCommunities(allocator: std.mem.Allocator, store: *graph_sto
     // m = number of edges (we treat each stored edge as contributing 1 to m,
     // representing one undirected link with weight 1).
     // SONNY-1318: m is the total edge weight of the graph the session can SEE.
-    const edge_count = try visibleEdgeCount(store, allocator, tenant_filter);
+    const edge_count = try visibleEdgeCount(store, allocator, scope);
     if (edge_count == 0) {
         // No edges: every node stays in its own community
         var rows = try allocator.alloc([]Value, node_list.items.len);
@@ -784,7 +804,7 @@ pub fn executeLouvainCommunities(allocator: std.mem.Allocator, store: *graph_sto
     var node_degree = std.AutoHashMap(u64, f64).init(allocator);
     defer node_degree.deinit();
     for (node_list.items) |node| {
-        const deg = visibleDegree(store, node, tenant_filter);
+        const deg = visibleDegree(store, node, scope);
         try node_degree.put(node, @floatFromInt(deg.out + deg.in));
     }
 
@@ -801,7 +821,7 @@ pub fn executeLouvainCommunities(allocator: std.mem.Allocator, store: *graph_sto
             const k_i = node_degree.get(node).?;
 
             // Gather neighbor communities and the weight of edges to each community
-            const neighbors = try getNeighbors(store, node, allocator, tenant_filter);
+            const neighbors = try getNeighbors(store, node, allocator, scope);
             defer allocator.free(neighbors);
 
             // k_i_in for each candidate community: sum of edge weights from node
@@ -914,8 +934,8 @@ pub fn executeLouvainCommunities(allocator: std.mem.Allocator, store: *graph_sto
 }
 
 /// Label Propagation community detection
-pub fn executeLabelPropagation(allocator: std.mem.Allocator, store: *graph_store.GraphStore, columns: [][]const u8, tenant_filter: ?[]const u8) !ExecutionResult {
-    var node_list = try collectNodeIds(store, allocator, tenant_filter);
+pub fn executeLabelPropagation(allocator: std.mem.Allocator, store: *graph_store.GraphStore, columns: [][]const u8, scope: *AlgoScope) !ExecutionResult {
+    var node_list = try collectNodeIds(store, allocator, scope);
     defer node_list.deinit(allocator);
 
     var labels = std.AutoHashMap(u64, u64).init(allocator);
@@ -933,7 +953,7 @@ pub fn executeLabelPropagation(allocator: std.mem.Allocator, store: *graph_store
         changed = false;
 
         for (node_list.items) |node| {
-            const neighbors = try getNeighbors(store, node, allocator, tenant_filter);
+            const neighbors = try getNeighbors(store, node, allocator, scope);
             defer allocator.free(neighbors);
 
             if (neighbors.len == 0) continue;
@@ -981,8 +1001,8 @@ pub fn executeLabelPropagation(allocator: std.mem.Allocator, store: *graph_store
 }
 
 /// Union-Find (Connected Components) with path compression and union-by-rank
-pub fn executeUnionFind(allocator: std.mem.Allocator, store: *graph_store.GraphStore, columns: [][]const u8, tenant_filter: ?[]const u8) !ExecutionResult {
-    var node_list = try collectNodeIds(store, allocator, tenant_filter);
+pub fn executeUnionFind(allocator: std.mem.Allocator, store: *graph_store.GraphStore, columns: [][]const u8, scope: *AlgoScope) !ExecutionResult {
+    var node_list = try collectNodeIds(store, allocator, scope);
     defer node_list.deinit(allocator);
 
     var parent = std.AutoHashMap(u64, u64).init(allocator);
@@ -1042,7 +1062,7 @@ pub fn executeUnionFind(allocator: std.mem.Allocator, store: *graph_store.GraphS
         // SONNY-1318: an invisible edge must not union two components, or a
         // cross-tenant bridge would merge another tenant's nodes into this
         // tenant's component AND introduce that tenant's ids into the result.
-        if (!tenant_visibility.edgeTraversable(store, edge, tenant_filter)) continue;
+        if (!scope.edgeTraversable(store, edge)) continue;
 
         // Ensure edge endpoints exist in parent map
         if (!parent.contains(edge.from_id)) {
@@ -1105,8 +1125,8 @@ pub fn executeUnionFind(allocator: std.mem.Allocator, store: *graph_store.GraphS
 /// Strongly Connected Components (Tarjan's algorithm)
 /// Uses only OUTGOING edges (directed) to correctly identify SCCs.
 /// Iterative implementation to avoid stack overflow on large graphs.
-pub fn executeSCC(allocator: std.mem.Allocator, store: *graph_store.GraphStore, columns: [][]const u8, tenant_filter: ?[]const u8) !ExecutionResult {
-    var node_list = try collectNodeIds(store, allocator, tenant_filter);
+pub fn executeSCC(allocator: std.mem.Allocator, store: *graph_store.GraphStore, columns: [][]const u8, scope: *AlgoScope) !ExecutionResult {
+    var node_list = try collectNodeIds(store, allocator, scope);
     defer node_list.deinit(allocator);
 
     // Tarjan's state
@@ -1128,13 +1148,13 @@ pub fn executeSCC(allocator: std.mem.Allocator, store: *graph_store.GraphStore, 
 
     // Helper to get OUTGOING neighbors only (directed edges)
     const getOutNeighbors = struct {
-        fn get(s: *graph_store.GraphStore, node_id: u64, alloc: std.mem.Allocator, filter: ?[]const u8) ![]u64 {
+        fn get(s: *graph_store.GraphStore, node_id: u64, alloc: std.mem.Allocator, filter: *AlgoScope) ![]u64 {
             var out = try std.ArrayList(u64).initCapacity(alloc, 0);
             if (s.getOutgoingEdgeIds(node_id)) |out_edge_ids| {
                 for (out_edge_ids) |edge_id| {
                     if (s.edges.get(edge_id)) |edge| {
-                        // SONNY-1318: same visibility rule as getNeighbors.
-                        if (!tenant_visibility.edgeTraversable(s, edge, filter)) continue;
+                        // SONNY-1318 / SONNY-2685: same visibility rule as getNeighbors.
+                        if (!filter.edgeTraversable(s, edge)) continue;
                         try out.append(alloc, edge.to_id);
                     }
                 }
@@ -1165,7 +1185,7 @@ pub fn executeSCC(allocator: std.mem.Allocator, store: *graph_store.GraphStore, 
         try tarjan_stack.append(allocator, start_node);
         try on_stack.put(start_node, true);
 
-        const start_neighbors = try getOutNeighbors(store, start_node, allocator, tenant_filter);
+        const start_neighbors = try getOutNeighbors(store, start_node, allocator, scope);
         try call_stack.append(allocator, .{
             .node = start_node,
             .neighbors = start_neighbors,
@@ -1187,7 +1207,7 @@ pub fn executeSCC(allocator: std.mem.Allocator, store: *graph_store.GraphStore, 
                     try tarjan_stack.append(allocator, w);
                     try on_stack.put(w, true);
 
-                    const w_neighbors = try getOutNeighbors(store, w, allocator, tenant_filter);
+                    const w_neighbors = try getOutNeighbors(store, w, allocator, scope);
                     try call_stack.append(allocator, .{
                         .node = w,
                         .neighbors = w_neighbors,
@@ -1247,8 +1267,8 @@ pub fn executeSCC(allocator: std.mem.Allocator, store: *graph_store.GraphStore, 
 
 // CANARY: REQ=REQ-GQL-HARMONIC-001; FEATURE="HarmonicCentrality"; ASPECT=Centrality; STATUS=TESTED; TEST=geodetestlab/specs/geode_graph_algorithms.yml; OWNER=graph; UPDATED=2026-01-03
 /// Harmonic Centrality - sum of reciprocal distances (handles disconnected graphs better than closeness)
-pub fn executeHarmonicCentrality(allocator: std.mem.Allocator, store: *graph_store.GraphStore, columns: [][]const u8, tenant_filter: ?[]const u8) !ExecutionResult {
-    var node_list = try collectNodeIds(store, allocator, tenant_filter);
+pub fn executeHarmonicCentrality(allocator: std.mem.Allocator, store: *graph_store.GraphStore, columns: [][]const u8, scope: *AlgoScope) !ExecutionResult {
+    var node_list = try collectNodeIds(store, allocator, scope);
     defer node_list.deinit(allocator);
 
     var rows = try allocator.alloc([]Value, node_list.items.len);
@@ -1267,7 +1287,7 @@ pub fn executeHarmonicCentrality(allocator: std.mem.Allocator, store: *graph_sto
             const current = queue.items[front];
             const current_dist = distances.get(current).?;
 
-            const neighbors = try getNeighbors(store, current, allocator, tenant_filter);
+            const neighbors = try getNeighbors(store, current, allocator, scope);
             defer allocator.free(neighbors);
 
             for (neighbors) |neighbor| {
@@ -1302,15 +1322,15 @@ pub fn executeHarmonicCentrality(allocator: std.mem.Allocator, store: *graph_sto
 
 // CANARY: REQ=REQ-GQL-BRIDGE-LEV-001; FEATURE="BridgeLeverageCentrality"; ASPECT=Centrality; STATUS=EXEMPT; OWNER=graph; UPDATED=2026-01-03
 /// Bridge/Leverage Centrality - measures how much removing a node would disconnect the graph
-pub fn executeBridgeLeverageCentrality(allocator: std.mem.Allocator, store: *graph_store.GraphStore, columns: [][]const u8, tenant_filter: ?[]const u8) !ExecutionResult {
-    var node_list = try collectNodeIds(store, allocator, tenant_filter);
+pub fn executeBridgeLeverageCentrality(allocator: std.mem.Allocator, store: *graph_store.GraphStore, columns: [][]const u8, scope: *AlgoScope) !ExecutionResult {
+    var node_list = try collectNodeIds(store, allocator, scope);
     defer node_list.deinit(allocator);
 
     var rows = try allocator.alloc([]Value, node_list.items.len);
     for (node_list.items, 0..) |node_id, i| {
         // Count components with the node vs without
         // Get neighbors of this node
-        const neighbors = try getNeighbors(store, node_id, allocator, tenant_filter);
+        const neighbors = try getNeighbors(store, node_id, allocator, scope);
         defer allocator.free(neighbors);
 
         // Bridge leverage = neighbors * (1 / degree) - measures local bridging
@@ -1335,8 +1355,8 @@ pub fn executeBridgeLeverageCentrality(allocator: std.mem.Allocator, store: *gra
 
 // CANARY: REQ=REQ-GQL-GREY-CARDINAL-001; FEATURE="GreyCardinalComposite"; ASPECT=Centrality; STATUS=EXEMPT; OWNER=graph; UPDATED=2026-01-03
 /// Grey Cardinal Composite - combines multiple centrality metrics
-pub fn executeGreyCardinalComposite(allocator: std.mem.Allocator, store: *graph_store.GraphStore, columns: [][]const u8, tenant_filter: ?[]const u8) !ExecutionResult {
-    var node_list = try collectNodeIds(store, allocator, tenant_filter);
+pub fn executeGreyCardinalComposite(allocator: std.mem.Allocator, store: *graph_store.GraphStore, columns: [][]const u8, scope: *AlgoScope) !ExecutionResult {
+    var node_list = try collectNodeIds(store, allocator, scope);
     defer node_list.deinit(allocator);
 
     // Compute degree centrality
@@ -1349,7 +1369,7 @@ pub fn executeGreyCardinalComposite(allocator: std.mem.Allocator, store: *graph_
 
     for (node_list.items) |node_id| {
         // Degree
-        const neighbors = try getNeighbors(store, node_id, allocator, tenant_filter);
+        const neighbors = try getNeighbors(store, node_id, allocator, scope);
         defer allocator.free(neighbors);
         try degree_map.put(node_id, @as(f64, @floatFromInt(neighbors.len)));
 
@@ -1367,7 +1387,7 @@ pub fn executeGreyCardinalComposite(allocator: std.mem.Allocator, store: *graph_
             const current = queue.items[front];
             const current_dist = distances.get(current).?;
 
-            const current_neighbors = try getNeighbors(store, current, allocator, tenant_filter);
+            const current_neighbors = try getNeighbors(store, current, allocator, scope);
             defer allocator.free(current_neighbors);
 
             for (current_neighbors) |neighbor| {
@@ -1421,8 +1441,8 @@ pub fn executeGreyCardinalComposite(allocator: std.mem.Allocator, store: *graph_
 
 // CANARY: REQ=REQ-GQL-LEIDEN-001; FEATURE="LeidenCommunityDetection"; ASPECT=Community; STATUS=TESTED; TEST=geodetestlab/specs/geode_graph_algorithms.yml; OWNER=graph; UPDATED=2026-01-03
 /// Leiden Algorithm - improved community detection (similar to Louvain but with refinement)
-pub fn executeLeidenCommunities(allocator: std.mem.Allocator, store: *graph_store.GraphStore, columns: [][]const u8, tenant_filter: ?[]const u8) !ExecutionResult {
-    var node_list = try collectNodeIds(store, allocator, tenant_filter);
+pub fn executeLeidenCommunities(allocator: std.mem.Allocator, store: *graph_store.GraphStore, columns: [][]const u8, scope: *AlgoScope) !ExecutionResult {
+    var node_list = try collectNodeIds(store, allocator, scope);
     defer node_list.deinit(allocator);
 
     var communities = std.AutoHashMap(u64, u64).init(allocator);
@@ -1443,7 +1463,7 @@ pub fn executeLeidenCommunities(allocator: std.mem.Allocator, store: *graph_stor
 
         // Local moving phase
         for (node_list.items) |node| {
-            const neighbors = try getNeighbors(store, node, allocator, tenant_filter);
+            const neighbors = try getNeighbors(store, node, allocator, scope);
             defer allocator.free(neighbors);
 
             if (neighbors.len == 0) continue;
@@ -1479,7 +1499,7 @@ pub fn executeLeidenCommunities(allocator: std.mem.Allocator, store: *graph_stor
         // Refinement phase: singleton communities move to best neighbor community
         if (iteration % 5 == 0) {
             for (node_list.items) |node| {
-                const neighbors = try getNeighbors(store, node, allocator, tenant_filter);
+                const neighbors = try getNeighbors(store, node, allocator, scope);
                 defer allocator.free(neighbors);
 
                 if (neighbors.len > 0) {
@@ -1517,8 +1537,8 @@ pub fn executeLeidenCommunities(allocator: std.mem.Allocator, store: *graph_stor
 
 // CANARY: REQ=REQ-GQL-ARTICULATION-001; FEATURE="ArticulationPoints"; ASPECT=Connectivity; STATUS=TESTED; TEST=geodetestlab/specs/geode_graph_algorithms.yml; OWNER=graph; UPDATED=2026-01-03
 /// Find Articulation Points (cut vertices) - nodes whose removal disconnects the graph
-pub fn executeArticulationPoints(allocator: std.mem.Allocator, store: *graph_store.GraphStore, columns: [][]const u8, tenant_filter: ?[]const u8) !ExecutionResult {
-    var node_list = try collectNodeIds(store, allocator, tenant_filter);
+pub fn executeArticulationPoints(allocator: std.mem.Allocator, store: *graph_store.GraphStore, columns: [][]const u8, scope: *AlgoScope) !ExecutionResult {
+    var node_list = try collectNodeIds(store, allocator, scope);
     defer node_list.deinit(allocator);
 
     // Tarjan's algorithm for articulation points
@@ -1554,7 +1574,7 @@ pub fn executeArticulationPoints(allocator: std.mem.Allocator, store: *graph_sto
 
         while (stack.items.len > 0) {
             var current = &stack.items[stack.items.len - 1];
-            const neighbors = try getNeighbors(store, current.node, allocator, tenant_filter);
+            const neighbors = try getNeighbors(store, current.node, allocator, scope);
             defer allocator.free(neighbors);
 
             if (current.neighbor_idx < neighbors.len) {
@@ -1625,8 +1645,8 @@ pub fn executeArticulationPoints(allocator: std.mem.Allocator, store: *graph_sto
 
 // CANARY: REQ=REQ-GQL-BRIDGES-001; FEATURE="BridgeEdges"; ASPECT=Connectivity; STATUS=TESTED; TEST=geodetestlab/specs/geode_graph_algorithms.yml; OWNER=graph; UPDATED=2026-01-03
 /// Find Bridge Edges (cut edges) - edges whose removal disconnects the graph
-pub fn executeBridges(allocator: std.mem.Allocator, store: *graph_store.GraphStore, columns: [][]const u8, tenant_filter: ?[]const u8) !ExecutionResult {
-    var node_list = try collectNodeIds(store, allocator, tenant_filter);
+pub fn executeBridges(allocator: std.mem.Allocator, store: *graph_store.GraphStore, columns: [][]const u8, scope: *AlgoScope) !ExecutionResult {
+    var node_list = try collectNodeIds(store, allocator, scope);
     defer node_list.deinit(allocator);
 
     var disc = std.AutoHashMap(u64, i32).init(allocator);
@@ -1660,7 +1680,7 @@ pub fn executeBridges(allocator: std.mem.Allocator, store: *graph_store.GraphSto
 
         while (stack.items.len > 0) {
             var current = &stack.items[stack.items.len - 1];
-            const neighbors = try getNeighbors(store, current.node, allocator, tenant_filter);
+            const neighbors = try getNeighbors(store, current.node, allocator, scope);
             defer allocator.free(neighbors);
 
             if (current.neighbor_idx < neighbors.len) {
@@ -1719,9 +1739,9 @@ pub fn executeBridges(allocator: std.mem.Allocator, store: *graph_store.GraphSto
 /// via DFS discovery/low arrays and an edge stack. Each node is assigned the
 /// lowest-numbered biconnected component it belongs to (articulation points
 /// participate in multiple components but are reported once with their lowest).
-pub fn executeBiconnectedComponents(allocator: std.mem.Allocator, store: *graph_store.GraphStore, columns: [][]const u8, tenant_filter: ?[]const u8) !ExecutionResult {
+pub fn executeBiconnectedComponents(allocator: std.mem.Allocator, store: *graph_store.GraphStore, columns: [][]const u8, scope: *AlgoScope) !ExecutionResult {
     // Collect all node IDs
-    var node_list = try collectNodeIds(store, allocator, tenant_filter);
+    var node_list = try collectNodeIds(store, allocator, scope);
     defer node_list.deinit(allocator);
 
     const n = node_list.items.len;
@@ -1789,7 +1809,7 @@ pub fn executeBiconnectedComponents(allocator: std.mem.Allocator, store: *graph_
         try low.put(start_node, timer);
         timer += 1;
 
-        const start_neighbors = try getNeighbors(store, start_node, allocator, tenant_filter);
+        const start_neighbors = try getNeighbors(store, start_node, allocator, scope);
         try dfs_stack.append(allocator, .{
             .node = start_node,
             .neighbor_idx = 0,
@@ -1826,7 +1846,7 @@ pub fn executeBiconnectedComponents(allocator: std.mem.Allocator, store: *graph_
                     try edge_stack.append(allocator, .{ .u = u, .v = v });
 
                     // Push new DFS frame for v
-                    const v_neighbors = try getNeighbors(store, v, allocator, tenant_filter);
+                    const v_neighbors = try getNeighbors(store, v, allocator, scope);
                     try dfs_stack.append(allocator, .{
                         .node = v,
                         .neighbor_idx = 0,
@@ -1942,10 +1962,10 @@ pub fn executeBiconnectedComponents(allocator: std.mem.Allocator, store: *graph_
 // CANARY: REQ=REQ-GQL-GRAPH-DENSITY-001; FEATURE="GraphDensity"; ASPECT=Statistics; STATUS=TESTED; TEST=geodetestlab/specs/geode_graph_algorithms.yml; OWNER=graph; UPDATED=2026-01-03
 /// Graph Density - ratio of actual edges to maximum possible edges
 /// For undirected: 2E / (N * (N-1)), for directed: E / (N * (N-1))
-pub fn executeGraphDensity(allocator: std.mem.Allocator, store: *graph_store.GraphStore, columns: [][]const u8, tenant_filter: ?[]const u8) !ExecutionResult {
+pub fn executeGraphDensity(allocator: std.mem.Allocator, store: *graph_store.GraphStore, columns: [][]const u8, scope: *AlgoScope) !ExecutionResult {
     // SONNY-1318: density of the graph the session's tenant scope can see.
-    const node_count = visibleNodeCount(store, tenant_filter);
-    const edge_count = try visibleEdgeCount(store, allocator, tenant_filter);
+    const node_count = visibleNodeCount(store, scope);
+    const edge_count = try visibleEdgeCount(store, allocator, scope);
 
     const density: f64 = if (node_count > 1)
         @as(f64, @floatFromInt(edge_count)) / @as(f64, @floatFromInt(node_count * (node_count - 1)))
@@ -1966,8 +1986,8 @@ pub fn executeGraphDensity(allocator: std.mem.Allocator, store: *graph_store.Gra
 
 // CANARY: REQ=REQ-GQL-GRAPH-DIAMETER-001; FEATURE="GraphDiameter"; ASPECT=Statistics; STATUS=TESTED; TEST=geodetestlab/specs/geode_graph_algorithms.yml; OWNER=graph; UPDATED=2026-01-03
 /// Graph Diameter - the longest shortest path between any two nodes
-pub fn executeGraphDiameter(allocator: std.mem.Allocator, store: *graph_store.GraphStore, columns: [][]const u8, tenant_filter: ?[]const u8) !ExecutionResult {
-    var node_list = try collectNodeIds(store, allocator, tenant_filter);
+pub fn executeGraphDiameter(allocator: std.mem.Allocator, store: *graph_store.GraphStore, columns: [][]const u8, scope: *AlgoScope) !ExecutionResult {
+    var node_list = try collectNodeIds(store, allocator, scope);
     defer node_list.deinit(allocator);
 
     var max_distance: u32 = 0;
@@ -1988,7 +2008,7 @@ pub fn executeGraphDiameter(allocator: std.mem.Allocator, store: *graph_store.Gr
             const current = queue.items[front];
             const current_dist = distances.get(current).?;
 
-            const neighbors = try getNeighbors(store, current, allocator, tenant_filter);
+            const neighbors = try getNeighbors(store, current, allocator, scope);
             defer allocator.free(neighbors);
 
             for (neighbors) |neighbor| {
@@ -2018,8 +2038,8 @@ pub fn executeGraphDiameter(allocator: std.mem.Allocator, store: *graph_store.Gr
 
 // CANARY: REQ=REQ-GQL-MEAN-DISTANCE-001; FEATURE="MeanDistance"; ASPECT=Statistics; STATUS=EXEMPT; OWNER=graph; UPDATED=2026-01-03
 /// Mean Distance (Average Path Length) - average shortest path length between all pairs
-pub fn executeMeanDistance(allocator: std.mem.Allocator, store: *graph_store.GraphStore, columns: [][]const u8, tenant_filter: ?[]const u8) !ExecutionResult {
-    var node_list = try collectNodeIds(store, allocator, tenant_filter);
+pub fn executeMeanDistance(allocator: std.mem.Allocator, store: *graph_store.GraphStore, columns: [][]const u8, scope: *AlgoScope) !ExecutionResult {
+    var node_list = try collectNodeIds(store, allocator, scope);
     defer node_list.deinit(allocator);
 
     var total_distance: f64 = 0.0;
@@ -2041,7 +2061,7 @@ pub fn executeMeanDistance(allocator: std.mem.Allocator, store: *graph_store.Gra
             const current = queue.items[front];
             const current_dist = distances.get(current).?;
 
-            const neighbors = try getNeighbors(store, current, allocator, tenant_filter);
+            const neighbors = try getNeighbors(store, current, allocator, scope);
             defer allocator.free(neighbors);
 
             for (neighbors) |neighbor| {
@@ -2078,20 +2098,20 @@ pub fn executeMeanDistance(allocator: std.mem.Allocator, store: *graph_store.Gra
 
 // CANARY: REQ=REQ-GQL-GLOBAL-CLUSTERING-001; FEATURE="GlobalClusteringCoefficient"; ASPECT=Statistics; STATUS=TESTED; TEST=geodetestlab/specs/geode_graph_algorithms.yml; OWNER=graph; UPDATED=2026-01-03
 /// Global Clustering Coefficient - ratio of closed triplets to all triplets
-pub fn executeGlobalClusteringCoefficient(allocator: std.mem.Allocator, store: *graph_store.GraphStore, columns: [][]const u8, tenant_filter: ?[]const u8) !ExecutionResult {
-    var node_list = try collectNodeIds(store, allocator, tenant_filter);
+pub fn executeGlobalClusteringCoefficient(allocator: std.mem.Allocator, store: *graph_store.GraphStore, columns: [][]const u8, scope: *AlgoScope) !ExecutionResult {
+    var node_list = try collectNodeIds(store, allocator, scope);
     defer node_list.deinit(allocator);
 
     // Precompute neighbor sets for O(1) adjacency checks instead of
     // O(degree) getNeighbors + linear scan per pair.
-    var neighbor_sets = try buildNeighborSets(node_list.items, store, allocator, tenant_filter);
+    var neighbor_sets = try buildNeighborSets(node_list.items, store, allocator, scope);
     defer deinitNeighborSets(&neighbor_sets);
 
     var closed_triplets: u64 = 0;
     var total_triplets: u64 = 0;
 
     for (node_list.items) |node| {
-        const neighbors = try getNeighbors(store, node, allocator, tenant_filter);
+        const neighbors = try getNeighbors(store, node, allocator, scope);
         defer allocator.free(neighbors);
 
         const degree = neighbors.len;
@@ -2136,8 +2156,8 @@ pub fn executeGlobalClusteringCoefficient(allocator: std.mem.Allocator, store: *
 /// Katz Centrality - weighted sum of paths with attenuation factor alpha
 /// Katz(i) = sum_k(alpha^k * A^k * 1) where A is adjacency matrix
 /// Uses double-buffered flat arrays and precomputed adjacency for O(1) index lookups.
-pub fn executeKatzCentrality(allocator: std.mem.Allocator, store: *graph_store.GraphStore, columns: [][]const u8, params: ?std.json.Value, tenant_filter: ?[]const u8) !ExecutionResult {
-    var node_list = try collectNodeIds(store, allocator, tenant_filter);
+pub fn executeKatzCentrality(allocator: std.mem.Allocator, store: *graph_store.GraphStore, columns: [][]const u8, params: ?std.json.Value, scope: *AlgoScope) !ExecutionResult {
+    var node_list = try collectNodeIds(store, allocator, scope);
     defer node_list.deinit(allocator);
 
     const n = node_list.items.len;
@@ -2183,7 +2203,7 @@ pub fn executeKatzCentrality(allocator: std.mem.Allocator, store: *graph_store.G
     }
 
     // Precompute adjacency once
-    var adj = try precomputeAdjacency(store, node_list.items, allocator, tenant_filter);
+    var adj = try precomputeAdjacency(store, node_list.items, allocator, scope);
     defer deinitAdjacency(&adj, allocator);
 
     // Double-buffered flat arrays for Katz scores
@@ -2244,8 +2264,8 @@ pub fn executeKatzCentrality(allocator: std.mem.Allocator, store: *graph_store.G
 // CANARY: REQ=REQ-GQL-HITS-001; FEATURE="HITSAlgorithm"; ASPECT=Centrality; STATUS=TESTED; TEST=geodetestlab/specs/geode_graph_algorithms.yml; OWNER=graph; UPDATED=2026-01-03
 /// HITS (Hyperlink-Induced Topic Search) - Kleinberg's algorithm
 /// Returns hub and authority scores for each node
-pub fn executeHITS(allocator: std.mem.Allocator, store: *graph_store.GraphStore, columns: [][]const u8, params: ?std.json.Value, tenant_filter: ?[]const u8) !ExecutionResult {
-    var node_list = try collectNodeIds(store, allocator, tenant_filter);
+pub fn executeHITS(allocator: std.mem.Allocator, store: *graph_store.GraphStore, columns: [][]const u8, params: ?std.json.Value, scope: *AlgoScope) !ExecutionResult {
+    var node_list = try collectNodeIds(store, allocator, scope);
     defer node_list.deinit(allocator);
 
     if (node_list.items.len == 0) {
@@ -2309,7 +2329,7 @@ pub fn executeHITS(allocator: std.mem.Allocator, store: *graph_store.GraphStore,
             for (edge_ids) |eid| {
                 if (store.getEdgeHydrated(eid)) |edge| {
                     // SONNY-1318: same visibility rule as getNeighbors.
-                    if (!tenant_visibility.edgeTraversable(store, edge, tenant_filter)) continue;
+                    if (!scope.edgeTraversable(store, edge)) continue;
                     try out_tmp.append(allocator, edge.to_id);
                 }
             }
@@ -2320,7 +2340,7 @@ pub fn executeHITS(allocator: std.mem.Allocator, store: *graph_store.GraphStore,
         if (store.getIncomingEdgeIds(node)) |edge_ids| {
             for (edge_ids) |eid| {
                 if (store.getEdgeHydrated(eid)) |edge| {
-                    if (!tenant_visibility.edgeTraversable(store, edge, tenant_filter)) continue;
+                    if (!scope.edgeTraversable(store, edge)) continue;
                     try in_tmp.append(allocator, edge.from_id);
                 }
             }
@@ -2414,19 +2434,19 @@ pub fn executeHITS(allocator: std.mem.Allocator, store: *graph_store.GraphStore,
 
 // CANARY: REQ=REQ-GQL-TRIANGLE-COUNT-001; FEATURE="TriangleCounting"; ASPECT=Statistics; STATUS=TESTED; TEST=geodetestlab/specs/geode_graph_algorithms.yml; OWNER=graph; UPDATED=2026-01-03
 /// Triangle Counting - count the number of triangles in the graph
-pub fn executeTriangleCounting(allocator: std.mem.Allocator, store: *graph_store.GraphStore, columns: [][]const u8, tenant_filter: ?[]const u8) !ExecutionResult {
-    var node_list = try collectNodeIds(store, allocator, tenant_filter);
+pub fn executeTriangleCounting(allocator: std.mem.Allocator, store: *graph_store.GraphStore, columns: [][]const u8, scope: *AlgoScope) !ExecutionResult {
+    var node_list = try collectNodeIds(store, allocator, scope);
     defer node_list.deinit(allocator);
 
     // Precompute neighbor sets for O(1) adjacency checks
-    var neighbor_sets = try buildNeighborSets(node_list.items, store, allocator, tenant_filter);
+    var neighbor_sets = try buildNeighborSets(node_list.items, store, allocator, scope);
     defer deinitNeighborSets(&neighbor_sets);
 
     var triangle_count: u64 = 0;
 
     // For each node, check pairs of neighbors using O(1) set lookup
     for (node_list.items) |node| {
-        const neighbors = try getNeighbors(store, node, allocator, tenant_filter);
+        const neighbors = try getNeighbors(store, node, allocator, scope);
         defer allocator.free(neighbors);
 
         for (neighbors, 0..) |n1, i| {
@@ -2458,17 +2478,17 @@ pub fn executeTriangleCounting(allocator: std.mem.Allocator, store: *graph_store
 
 // CANARY: REQ=REQ-GQL-LOCAL-CLUSTERING-001; FEATURE="LocalClusteringCoefficient"; ASPECT=Statistics; STATUS=TESTED; TEST=geodetestlab/specs/geode_graph_algorithms.yml; OWNER=graph; UPDATED=2026-01-03
 /// Local Clustering Coefficient - for each node, ratio of triangles to possible triangles
-pub fn executeLocalClusteringCoefficient(allocator: std.mem.Allocator, store: *graph_store.GraphStore, columns: [][]const u8, tenant_filter: ?[]const u8) !ExecutionResult {
-    var node_list = try collectNodeIds(store, allocator, tenant_filter);
+pub fn executeLocalClusteringCoefficient(allocator: std.mem.Allocator, store: *graph_store.GraphStore, columns: [][]const u8, scope: *AlgoScope) !ExecutionResult {
+    var node_list = try collectNodeIds(store, allocator, scope);
     defer node_list.deinit(allocator);
 
     // Precompute neighbor sets for O(1) adjacency checks
-    var neighbor_sets = try buildNeighborSets(node_list.items, store, allocator, tenant_filter);
+    var neighbor_sets = try buildNeighborSets(node_list.items, store, allocator, scope);
     defer deinitNeighborSets(&neighbor_sets);
 
     var rows = try allocator.alloc([]Value, node_list.items.len);
     for (node_list.items, 0..) |node, idx| {
-        const neighbors = try getNeighbors(store, node, allocator, tenant_filter);
+        const neighbors = try getNeighbors(store, node, allocator, scope);
         defer allocator.free(neighbors);
 
         const degree = neighbors.len;
@@ -2513,8 +2533,8 @@ pub fn executeLocalClusteringCoefficient(allocator: std.mem.Allocator, store: *g
 /// Processes nodes in order of increasing degree using bucket sort. Each node
 /// and edge is processed exactly once, replacing the previous O(V * max_degree * V)
 /// nested-loop approach.
-pub fn executeKCore(allocator: std.mem.Allocator, store: *graph_store.GraphStore, columns: [][]const u8, tenant_filter: ?[]const u8) !ExecutionResult {
-    var node_list = try collectNodeIds(store, allocator, tenant_filter);
+pub fn executeKCore(allocator: std.mem.Allocator, store: *graph_store.GraphStore, columns: [][]const u8, scope: *AlgoScope) !ExecutionResult {
+    var node_list = try collectNodeIds(store, allocator, scope);
     defer node_list.deinit(allocator);
 
     const n = node_list.items.len;
@@ -2528,7 +2548,7 @@ pub fn executeKCore(allocator: std.mem.Allocator, store: *graph_store.GraphStore
     }
 
     // Precompute adjacency once
-    var adj = try precomputeAdjacency(store, node_list.items, allocator, tenant_filter);
+    var adj = try precomputeAdjacency(store, node_list.items, allocator, scope);
     defer deinitAdjacency(&adj, allocator);
 
     // Build dense index mapping
@@ -2638,8 +2658,8 @@ pub fn executeKCore(allocator: std.mem.Allocator, store: *graph_store.GraphStore
 // CANARY: REQ=REQ-GQL-KSHELL-001; FEATURE="KShellDecomposition"; ASPECT=Community; STATUS=TESTED; TEST=geodetestlab/specs/geode_graph_algorithms.yml; OWNER=graph; UPDATED=2026-01-03
 /// K-Shell Decomposition - nodes are assigned to the shell where they are removed
 /// Shell k contains nodes with coreness exactly k (not in k+1 core but in k-core)
-pub fn executeKShell(allocator: std.mem.Allocator, store: *graph_store.GraphStore, columns: [][]const u8, tenant_filter: ?[]const u8) !ExecutionResult {
+pub fn executeKShell(allocator: std.mem.Allocator, store: *graph_store.GraphStore, columns: [][]const u8, scope: *AlgoScope) !ExecutionResult {
     // K-Shell is essentially the same as K-Core but returns shell assignment
     // A node's shell is its coreness value
-    return executeKCore(allocator, store, columns, tenant_filter);
+    return executeKCore(allocator, store, columns, scope);
 }

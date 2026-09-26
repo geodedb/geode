@@ -8716,6 +8716,20 @@ pub fn build(b: *std.Build) void {
     const sonny2710_step = b.step("test-sonny2710-policy-combination", "Run SONNY-2710 regression (RLS permissive and restrictive policies combine as PostgreSQL's do, in the expression engine and with the label engines' entries, for node and edge rows)");
     sonny2710_step.dependOn(&run_sonny2710_tests.step);
 
+    // SONNY-2685: CALL algo.* applies the session's graph, tenant scope and
+    // RLS policies to every node and edge it visits (AlgoScope).
+    const sonny2685_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny2685_algo_rls.zig"), .target = target, .optimize = optimize });
+    sonny2685_test_mod.link_libc = true;
+    sonny2685_test_mod.addImport("geode", root_mod);
+    sonny2685_test_mod.addImport("logging", logging_mod);
+    sonny2685_test_mod.addImport("rls", rls_mod);
+    sonny2685_test_mod.addImport("rls_types", rls_types_mod);
+    const sonny2685_tests = b.addTest(.{ .root_module = sonny2685_test_mod });
+    const run_sonny2685_tests = b.addRunArtifact(sonny2685_tests);
+    shardDep(test_step, &run_sonny2685_tests.step, 1, test_shard_loads, test_shard_index);
+    const sonny2685_step = b.step("test-sonny2685-algo-rls", "Run SONNY-2685 regression (every CALL algo.* returns under RLS what it returns with the hidden rows deleted; hidden start nodes give no rows; another graph's nodes never appear)");
+    sonny2685_step.dependOn(&run_sonny2685_tests.step);
+
     const sonny2790_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny2790_fts_graph_lock.zig"), .target = target, .optimize = optimize });
     sonny2790_test_mod.link_libc = true;
     sonny2790_test_mod.addImport("geode", root_mod);

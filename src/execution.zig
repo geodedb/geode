@@ -234,6 +234,8 @@ pub const wouldEvaluateRLS = match_operations.wouldEvaluateRLS;
 // SONNY-2679 (review): a traversal's label-deny snapshot, and the edge RLS
 // check that reads it, so a test can pin that the snapshot is what answers.
 pub const LabelDenySnapshot = match_operations.LabelDenySnapshot;
+// SONNY-2685: the row visibility of one `CALL algo.*` call.
+pub const AlgoScope = @import("execution/algo_scope.zig").AlgoScope;
 pub const passesEdgeRLSFilter = match_operations.passesEdgeRLSFilter;
 pub const activeRlsPoliciesConfigured = match_operations.activeRlsPoliciesConfigured;
 // H3-P3: planner ordered-scan fast-path hit counter (test path signal).
