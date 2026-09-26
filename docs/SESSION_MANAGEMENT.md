@@ -30,6 +30,10 @@ SESSION CLOSE
 
 A statement that fails changes nothing, and the session keeps its graph.
 
+A transaction changes one graph (SONNY-2776). Once it has changed a graph, a
+request in it that changes another is refused with `0A000`. Reading other
+graphs is fine. Commit or roll back before changing another graph.
+
 ## Session Parameters
 
 Session parameters allow you to store named values that persist across queries within a session. Geode supports three types of session parameters:

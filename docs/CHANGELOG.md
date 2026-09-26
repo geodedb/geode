@@ -126,6 +126,26 @@
   A request that changes a graph that does not exist is refused with 3F000,
   and the graph is not created. The CLI's `-g` flag, which sends a
   `USE GRAPH` of the current graph before the query, works as before.
+- **gRPC uses the session's graph, and a transaction changes one graph
+  (SONNY-2776):** the gRPC handler never set its copy of the session's graph
+  (`current_graph`), so every use of it meant `default`:
+  - the RLS post-filter applied `default`'s label policies to rows read from
+    another graph. `USE GRAPH g1; MATCH (n:Secret) RETURN n` returned rows that
+    g1's policy hides;
+  - COMMIT took `default`'s write lock while committing a transaction on
+    another graph;
+  - the rollback of an invalidated session locked `default`;
+  - ROLLBACK and ROLLBACK TO SAVEPOINT took no lock at all.
+
+  QUIC used a copy that trails the session within a request, with the same
+  effects after a `USE GRAPH`. Now:
+  - the RLS post-filter uses the graph the rows came from;
+  - a transaction changes one graph. A request in an open transaction that
+    changes a second graph is refused with 0A000. Commit or roll back first,
+    as for a request that changes two graphs (SONNY-2749);
+  - COMMIT, ROLLBACK, ROLLBACK TO SAVEPOINT, the rollback of an invalidated
+    session and the stream-close teardown take the write lock of the graph
+    the transaction changed.
 - **SESSION SET GRAPH checks the graph permission and that the graph exists
   (SONNY-2775):** `SESSION SET [PROPERTY] GRAPH` took any name as given.
   - A user that `USE GRAPH` refused could switch with it and read or write

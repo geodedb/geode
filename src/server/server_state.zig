@@ -279,6 +279,14 @@ pub const ServerState = struct {
     // Transaction session state: single active txn baseline
     in_txn: bool = false,
     txn_id: u64 = 0,
+    // CANARY: REQ=REQ-SONNY-2776-TXN-ONE-GRAPH; FEATURE="StatementAuthorization"; ASPECT=TxnGraph; STATUS=TESTED; TEST=tests/test_sonny2776_session_graph_uses.zig; OWNER=security; UPDATED=2026-09-26
+    // SONNY-2776: the graph the open transaction changes, owned by
+    // `allocator`; null until its first change. A transaction changes one
+    // graph: the handlers refuse a change of another (0A000), and COMMIT,
+    // ROLLBACK, ROLLBACK TO SAVEPOINT and the teardown take this graph's
+    // write lock. They used to take `current_graph`'s, which gRPC never
+    // set (so always `default`'s) and QUIC set to the session's latest graph.
+    txn_graph: ?[]const u8 = null,
     // R9 (2026-04-22): per-connection storage for the session-scoped
     // engine transaction opened on Geode BEGIN TX.  Lives on the
     // ServerState because the adapter's thread-local holds a pointer
@@ -388,6 +396,47 @@ pub const ServerState = struct {
     // When true, this session was bound to a graph via DSN/HELLO and USE GRAPH is rejected
     graph_bound: bool = false,
 
+    /// SONNY-2776: note that the open transaction changes `graph`; its first
+    /// change fixes the transaction's graph.
+    pub fn noteTxnWrite(self: *ServerState, graph: []const u8) std.mem.Allocator.Error!void {
+        if (self.txn_graph != null) return;
+        self.txn_graph = try self.allocator.dupe(u8, graph);
+    }
+
+    /// SONNY-2776: would a change of `graph` make the open transaction change
+    /// a second graph?
+    pub fn txnWouldSpanGraphs(self: *const ServerState, graph: []const u8) bool {
+        if (!self.in_txn) return false;
+        const txn_graph = self.txn_graph orelse return false;
+        return !std.mem.eql(u8, txn_graph, graph);
+    }
+
+    /// SONNY-2776: the graph whose write lock ends the transaction: the graph
+    /// it changed, or `fallback` (the session's graph) when it changed none.
+    pub fn txnLockGraph(self: *const ServerState, fallback: []const u8) []const u8 {
+        return self.txn_graph orelse fallback;
+    }
+
+    pub fn clearTxnGraph(self: *ServerState) void {
+        if (self.txn_graph) |g| self.allocator.free(g);
+        self.txn_graph = null;
+    }
+
+    /// SONNY-2776: the transaction is over: no transaction id, no graph.
+    pub fn endTransaction(self: *ServerState) void {
+        self.in_txn = false;
+        self.txn_id = 0;
+        self.clearTxnGraph();
+    }
+
+    /// SONNY-2776: the session's graph: the executor session's, or
+    /// `current_graph` (the copy QUIC syncs; gRPC never sets it).
+    pub fn sessionGraph(self: *const ServerState) []const u8 {
+        const graph_store_mod = @import("../graph_store.zig");
+        if (self.exec_session) |*sess| return sess.graph orelse graph_store_mod.DEFAULT_GRAPH_NAME;
+        return self.current_graph orelse graph_store_mod.DEFAULT_GRAPH_NAME;
+    }
+
     pub fn resetResult(self: *ServerState) void {
         if (self.active_result_values) |*res| {
             res.deinit(self.allocator);
@@ -444,7 +493,8 @@ pub const ServerState = struct {
         if (!self.in_txn) return;
 
         const orphan_txn_id = self.txn_id;
-        const graph_name = self.current_graph orelse graph_store_mod.DEFAULT_GRAPH_NAME;
+        // SONNY-2776: the graph the transaction changed.
+        const graph_name = self.txnLockGraph(self.sessionGraph());
 
         if (store) |s| {
             // Lock tier 1 (store_mutex / per-graph rwlock) BEFORE touching
@@ -487,8 +537,7 @@ pub const ServerState = struct {
             graph_name,
         });
 
-        self.in_txn = false;
-        self.txn_id = 0;
+        self.endTransaction();
     }
 };
 

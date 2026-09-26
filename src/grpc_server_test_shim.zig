@@ -25,3 +25,7 @@ comptime {
 /// suite imports this shim as a named module and reaches the implementation
 /// through `impl`.
 pub const impl = _impl;
+
+/// SONNY-2776: the transport RLS post-filter engine the gRPC handler consults
+/// (the same file, so the same global), for tests that install a policy.
+pub const rls_filter = @import("server/rls_filter.zig");

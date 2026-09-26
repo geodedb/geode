@@ -678,7 +678,7 @@ fn executeBulkSimpleCreate(
     // `CREATE (n:L {...})` never lists `auto_idx_<label>_id` in SHOW INDEXES.
     execution.ensureAutoIndexes(gpa, node_pattern.labels);
     syncGraphFromSession(state);
-    updateTxnStateFromProgram(state, program);
+    updateTxnStateFromProgram(state, program, query_graph_name);
 }
 
 /// Shared helper: send the "0 rows affected, success" wire response that
@@ -828,7 +828,7 @@ fn executeBulkMatchCreateEdge(
             execution.ensureAutoIndexes(gpa, &.{spec.rel_type});
         }
         syncGraphFromSession(state);
-        updateTxnStateFromProgram(state, program);
+        updateTxnStateFromProgram(state, program, query_graph_name);
         return;
     }
 
@@ -865,7 +865,7 @@ fn executeBulkMatchCreateEdge(
         mut_sample.record("bulk_match_create_edge_skipped");
         auditQueryExecution(state, "bulk_match_create_edge_skipped", true);
         syncGraphFromSession(state);
-        updateTxnStateFromProgram(state, program);
+        updateTxnStateFromProgram(state, program, query_graph_name);
         return;
     }
     const source_id: u64 = resolved.?.src;
@@ -908,7 +908,7 @@ fn executeBulkMatchCreateEdge(
                     mut_sample.record("bulk_match_create_edge_skipped_race");
                     auditQueryExecution(state, "bulk_match_create_edge_skipped_race", true);
                     syncGraphFromSession(state);
-                    updateTxnStateFromProgram(state, program);
+                    updateTxnStateFromProgram(state, program, query_graph_name);
                     return;
                 },
                 else => {
@@ -936,7 +936,7 @@ fn executeBulkMatchCreateEdge(
     // call above.  See note in coordinator-path branch.
     execution.ensureAutoIndexes(gpa, &.{spec.rel_type});
     syncGraphFromSession(state);
-    updateTxnStateFromProgram(state, program);
+    updateTxnStateFromProgram(state, program, query_graph_name);
 }
 
 /// FIX #3 (edge-phase 40001): fast-path dispatcher for the relationship-MERGE
@@ -1044,7 +1044,7 @@ fn executeBulkMatchMergeEdge(
         mut_sample.record("bulk_match_merge_edge_skipped");
         auditQueryExecution(state, "bulk_match_merge_edge_skipped", true);
         syncGraphFromSession(state);
-        updateTxnStateFromProgram(state, program);
+        updateTxnStateFromProgram(state, program, query_graph_name);
         return;
     }
     const source_id = resolved.?.src;
@@ -1083,7 +1083,7 @@ fn executeBulkMatchMergeEdge(
                 mut_sample.record("bulk_match_merge_edge_skipped_race");
                 auditQueryExecution(state, "bulk_match_merge_edge_skipped_race", true);
                 syncGraphFromSession(state);
-                updateTxnStateFromProgram(state, program);
+                updateTxnStateFromProgram(state, program, query_graph_name);
                 return;
             },
             else => {
@@ -1101,7 +1101,7 @@ fn executeBulkMatchMergeEdge(
     auditQueryExecution(state, "bulk_match_merge_edge", true);
     execution.ensureAutoIndexes(gpa, &.{spec.rel_type});
     syncGraphFromSession(state);
-    updateTxnStateFromProgram(state, program);
+    updateTxnStateFromProgram(state, program, query_graph_name);
 }
 
 // CANARY: REQ=REQ-ENG-3922-VECTOR-DIM-GUARD; FEATURE="VectorIndex"; ASPECT=BulkMergeDimensionGuard; STATUS=TESTED; TEST=tests/test_eng3922_dim_guard.zig; OWNER=index; UPDATED=2026-08-29
@@ -1480,7 +1480,7 @@ fn executeBulkSimpleMerge(
     // INDEXES never lists `auto_idx_<label>_id`.
     execution.ensureAutoIndexes(gpa, &.{spec.label});
     syncGraphFromSession(state);
-    updateTxnStateFromProgram(state, program);
+    updateTxnStateFromProgram(state, program, query_graph_name);
 }
 
 /// GAP-0900 lever (c): concurrent batch-write fast path.
@@ -1730,7 +1730,7 @@ fn executeBatchSimpleMerge(
     mut_sample.record("batch_simple_merge");
     auditQueryExecution(state, "batch_simple_merge", true);
     syncGraphFromSession(state);
-    updateTxnStateFromProgram(state, program);
+    updateTxnStateFromProgram(state, program, query_graph_name);
     return true;
 }
 
@@ -2924,6 +2924,7 @@ fn deinitQuicServerState(gpa: std.mem.Allocator, state: *ServerState, context: [
         });
     };
     state.resetResult();
+    state.clearTxnGraph(); // SONNY-2776
     if (state.current_graph) |g| {
         gpa.free(g);
         state.current_graph = null;
@@ -6252,7 +6253,10 @@ fn syncGraphFromSession(state: *ServerState) void {
         null;
 }
 
-fn updateTxnStateFromProgram(state: *ServerState, program: *const gql_ast.Program) void {
+/// Track the session's transaction after `program` ran. SONNY-2776:
+/// `write_graph` is the graph the program changed (null if it changed none);
+/// the first graph an open transaction changes becomes its graph.
+fn updateTxnStateFromProgram(state: *ServerState, program: *const gql_ast.Program, write_graph: ?[]const u8) void {
     var has_start: bool = false;
     var has_commit: bool = false;
     var has_rollback: bool = false;
@@ -6269,16 +6273,21 @@ fn updateTxnStateFromProgram(state: *ServerState, program: *const gql_ast.Progra
     }
 
     if (has_commit or has_rollback) {
-        state.in_txn = false;
-        state.txn_id = 0;
+        state.endTransaction();
         return;
     }
 
     if (has_start) {
+        if (!state.in_txn) state.clearTxnGraph();
         state.in_txn = true;
         if (state.txn_id == 0) {
             state.txn_id = @intCast(compat_milliTimestamp());
         }
+    }
+    if (state.in_txn) {
+        // A failed allocation leaves the transaction without a graph; its end
+        // then locks the session's graph, as before SONNY-2776.
+        if (write_graph) |g| state.noteTxnWrite(g) catch {};
     }
 }
 
@@ -6482,8 +6491,7 @@ fn invalidateAuthenticatedSession(gpa: std.mem.Allocator, state: *ServerState) v
         log.warn("Failed to rollback invalidated session transaction", &.{Attr.string("error", @errorName(err))});
         // Safety: ensure the flags are cleared even if the hook errored
         // out partway through.
-        state.in_txn = false;
-        state.txn_id = 0;
+        state.endTransaction();
     };
     state.current_user_id = null;
     if (state.authenticated_user) |user| {
@@ -7656,6 +7664,13 @@ fn handleClientMessage(
                 try sendExecuteError(gpa, stream, "0A000", query_traits.spans_graphs_message, &.{}, &.{});
                 return;
             }
+            // CANARY: REQ=REQ-SONNY-2776-TXN-ONE-GRAPH; FEATURE="StatementAuthorization"; ASPECT=QuicHandler; STATUS=TESTED; TEST=tests/test_sonny2776_session_graph_uses.zig; OWNER=security; UPDATED=2026-09-26
+            // SONNY-2776: an open transaction changes one graph (its end takes
+            // that graph's write lock); a change of another is refused.
+            if (stmt_plan.is_mutation and state.txnWouldSpanGraphs(lock_graph)) {
+                try sendExecuteError(gpa, stream, "0A000", query_traits.txn_spans_graphs_message, &.{}, &.{});
+                return;
+            }
 
             quic_response_metrics.recordFirstStreamQueryPrepare(monoNsFromHandler() -| first_stream_prepare_start_ns);
 
@@ -7747,7 +7762,7 @@ fn handleClientMessage(
                         try sendSinglePageExecutionResultBatched(gpa, stream, &exec_result);
                         auditQueryExecution(state, query_text, is_mutation);
                         syncGraphFromSession(state);
-                        updateTxnStateFromProgram(state, &parse_result.program);
+                        updateTxnStateFromProgram(state, &parse_result.program, if (stmt_plan.is_mutation) lock_graph else null);
                         return;
                     }
                 }
@@ -7788,7 +7803,7 @@ fn handleClientMessage(
 
                     auditQueryExecution(state, query_text, is_mutation);
                     syncGraphFromSession(state);
-                    updateTxnStateFromProgram(state, &parse_result.program);
+                    updateTxnStateFromProgram(state, &parse_result.program, if (stmt_plan.is_mutation) lock_graph else null);
                     return;
                 }
 
@@ -7808,7 +7823,7 @@ fn handleClientMessage(
                     try sendSinglePageExecutionResultBatched(gpa, stream, &exec_result);
                     auditQueryExecution(state, query_text, is_mutation);
                     syncGraphFromSession(state);
-                    updateTxnStateFromProgram(state, &parse_result.program);
+                    updateTxnStateFromProgram(state, &parse_result.program, if (stmt_plan.is_mutation) lock_graph else null);
                     return;
                 }
 
@@ -7835,7 +7850,7 @@ fn handleClientMessage(
                     try sendSinglePageExecutionResultBatched(gpa, stream, &exec_result);
                     auditQueryExecution(state, query_text, is_mutation);
                     syncGraphFromSession(state);
-                    updateTxnStateFromProgram(state, &parse_result.program);
+                    updateTxnStateFromProgram(state, &parse_result.program, if (stmt_plan.is_mutation) lock_graph else null);
                     return;
                 }
             }
@@ -8255,7 +8270,7 @@ fn handleClientMessage(
 
                             if (rls_filter.getGlobalRLSFilterEngine()) |rls_engine| {
                                 if (state.authenticated_user) |auth_user| {
-                                    const rls_graph = state.current_graph orelse graph_store.DEFAULT_GRAPH_NAME;
+                                    const rls_graph = state.sessionGraph(); // SONNY-2776: the graph the rows came from
                                     _ = rls_filter.applyRLSFilter(gpa, &owned_planned.result, rls_engine, auth_user, rls_graph);
                                 }
                             }
@@ -8306,7 +8321,7 @@ fn handleClientMessage(
                     // Algorithm RLS filter on PROFILE path — requires store lock.
                     if (rls_filter.getGlobalRLSFilterEngine()) |rls_engine| {
                         if (state.authenticated_user) |auth_user| {
-                            const rls_graph = state.current_graph orelse graph_store.DEFAULT_GRAPH_NAME;
+                            const rls_graph = state.sessionGraph(); // SONNY-2776: the graph the rows came from
                             _ = rls_filter.applyAlgorithmRLSFilter(gpa, &exec_result, rls_engine, store, auth_user, rls_graph);
                         }
                     }
@@ -8325,7 +8340,7 @@ fn handleClientMessage(
                     // S1: RLS filter on PROFILE path (same logic as .rows path).
                     if (rls_filter.getGlobalRLSFilterEngine()) |rls_engine| {
                         if (state.authenticated_user) |auth_user| {
-                            const rls_graph = state.current_graph orelse graph_store.DEFAULT_GRAPH_NAME;
+                            const rls_graph = state.sessionGraph(); // SONNY-2776: the graph the rows came from
                             _ = rls_filter.applyRLSFilter(gpa, &exec_result, rls_engine, auth_user, rls_graph);
                         }
                     }
@@ -8506,7 +8521,7 @@ fn handleClientMessage(
                                     auditQueryExecution(state, query_text, is_mutation);
 
                                     syncGraphFromSession(state);
-                                    updateTxnStateFromProgram(state, &parse_result.program);
+                                    updateTxnStateFromProgram(state, &parse_result.program, if (stmt_plan.is_mutation) lock_graph else null);
                                     return;
                                 }
                             }
@@ -8539,7 +8554,7 @@ fn handleClientMessage(
                     if (!self_locking) {
                         if (rls_filter.getGlobalRLSFilterEngine()) |rls_engine| {
                             if (state.authenticated_user) |auth_user| {
-                                const rls_graph = state.current_graph orelse graph_store.DEFAULT_GRAPH_NAME;
+                                const rls_graph = state.sessionGraph(); // SONNY-2776: the graph the rows came from
                                 _ = rls_filter.applyAlgorithmRLSFilter(gpa, &exec_result, rls_engine, store, auth_user, rls_graph);
                             }
                         }
@@ -8569,7 +8584,7 @@ fn handleClientMessage(
                     // CANARY: REQ=REQ-SEC-RLS-WIRE-003; FEATURE="RLS Query Enforcement"; ASPECT=PostResultFilter; STATUS=TESTED; OWNER=security; UPDATED=2026-04-01
                     if (rls_filter.getGlobalRLSFilterEngine()) |rls_engine| {
                         if (state.authenticated_user) |auth_user| {
-                            const rls_graph = state.current_graph orelse graph_store.DEFAULT_GRAPH_NAME;
+                            const rls_graph = state.sessionGraph(); // SONNY-2776: the graph the rows came from
                             _ = rls_filter.applyRLSFilter(gpa, &exec_result, rls_engine, auth_user, rls_graph);
                         }
                     }
@@ -8644,7 +8659,7 @@ fn handleClientMessage(
                     auditQueryExecution(state, query_text, is_mutation);
 
                     syncGraphFromSession(state);
-                    updateTxnStateFromProgram(state, &parse_result.program);
+                    updateTxnStateFromProgram(state, &parse_result.program, if (stmt_plan.is_mutation) lock_graph else null);
                 },
             }
         },
@@ -8824,6 +8839,7 @@ fn handleClientMessage(
                 return;
             }
 
+            state.clearTxnGraph();
             state.in_txn = true;
             state.txn_id = @intCast(compat_milliTimestamp());
             state.session_snapshot_ts = state.global_commit_ts;
@@ -8862,7 +8878,9 @@ fn handleClientMessage(
                 // GAP-0511: COMMIT acquires the write lock for state cleanup only.
                 // Index rebuilds are deferred to after lock release to prevent
                 // the O(N) populateAdvancedIndex scan from blocking other connections.
-                const commit_graph = state.current_graph orelse graph_store.DEFAULT_GRAPH_NAME;
+                // SONNY-2776: the graph the transaction changed (it used to be
+                // the session's latest graph).
+                const commit_graph = state.txnLockGraph(state.sessionGraph());
                 const undo = txn_undo_log.getGlobalUndoLog(gpa);
                 {
                     const commit_lock = graph_store.acquireGraphWriteLock(commit_graph);
@@ -8886,8 +8904,7 @@ fn handleClientMessage(
                 undo.flushPendingRebuilds(store);
 
                 state.global_commit_ts += 1;
-                state.in_txn = false;
-                state.txn_id = 0;
+                state.endTransaction();
                 try sendQuicMessage(gpa, stream, .{ .commit = .{ .success = true } });
             } else {
                 try sendQuicMessage(gpa, stream, .{ .commit = .{ .success = false } });
@@ -8904,7 +8921,7 @@ fn handleClientMessage(
             if (state.in_txn) {
                 // GAP-0001: Rollback reverses mutations on the store — needs exclusive lock
                 // P1: Per-graph write lock scoped to the session's current graph.
-                const rb_graph = state.current_graph orelse graph_store.DEFAULT_GRAPH_NAME;
+                const rb_graph = state.txnLockGraph(state.sessionGraph()); // SONNY-2776
                 const rb_lock = graph_store.acquireGraphWriteLock(rb_graph);
                 defer graph_store.releaseGraphLock(rb_lock);
 
@@ -8919,8 +8936,7 @@ fn handleClientMessage(
                 txn_undo_log.getGlobalUndoLog(gpa).rollback(store) catch |err| {
                     log.err("Rollback failed", &.{Attr.string("error", @errorName(err))});
                 };
-                state.in_txn = false;
-                state.txn_id = 0;
+                state.endTransaction();
                 try sendQuicMessage(gpa, stream, .{ .rollback = .{ .success = true } });
             } else {
                 try sendQuicMessage(gpa, stream, .{ .rollback = .{ .success = false } });
@@ -8959,7 +8975,7 @@ fn handleClientMessage(
                 try sendQuicMessage(gpa, stream, .{ .rollback_to = .{ .success = false } });
             } else {
                 // P1: Per-graph write lock for rollback-to-savepoint.
-                const rts_graph = state.current_graph orelse graph_store.DEFAULT_GRAPH_NAME;
+                const rts_graph = state.txnLockGraph(state.sessionGraph()); // SONNY-2776
                 const rts_lock = graph_store.acquireGraphWriteLock(rts_graph);
                 defer graph_store.releaseGraphLock(rts_lock);
                 const store = graph_store.getGlobalStore(gpa);

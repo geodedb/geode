@@ -8653,6 +8653,37 @@ pub fn build(b: *std.Build) void {
     const sonny2775_step = b.step("test-sonny2775-session-graph-gate", "Run SONNY-2775 regression (no statement switches a session to a graph it may not bind or that does not exist; a DSN-bound session keeps its graph; no G1/G2 test graphs; the session owns what SESSION SET stores)");
     sonny2775_step.dependOn(&run_sonny2775_tests.step);
 
+    // SONNY-2776: the session's graph for the RLS post-filter, COMMIT,
+    // ROLLBACK and the invalidated-session rollback; a transaction changes
+    // one graph. Over the real gRPC handler (SONNY-1560 shim) and QUIC's
+    // stream-close teardown.
+    const sonny2776_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny2776_session_graph_uses.zig"), .target = target, .optimize = optimize });
+    sonny2776_test_mod.link_libc = true;
+    sonny2776_test_mod.addImport("geode", root_mod);
+    sonny2776_test_mod.addImport("schema", schema_mod);
+    sonny2776_test_mod.addImport("protobuf", protobuf_mod);
+    sonny2776_test_mod.addImport("grpc_impl", sonny1560_shim_mod);
+    sonny2776_test_mod.addImport("logging", logging_mod);
+    const sonny2776_tests = b.addTest(.{ .root_module = sonny2776_test_mod });
+    const run_sonny2776_tests = b.addRunArtifact(sonny2776_tests);
+    shardDep(test_step, &run_sonny2776_tests.step, 1, test_shard_loads, test_shard_index);
+    const sonny2776_step = b.step("test-sonny2776-session-graph-uses", "Run SONNY-2776 regression (gRPC's RLS post-filter, COMMIT, ROLLBACK and invalidated-session rollback use the session's and the transaction's graph, not the never-set current_graph; a transaction that changes a second graph is refused)");
+    sonny2776_step.dependOn(&run_sonny2776_tests.step);
+
+    // SONNY-2776 (review P39): QUIC's label-deny post-filter after a graph
+    // switch, and one graph per transaction, against a spawned server.
+    const sonny2776_quic_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny2776_quic_graph_uses.zig"), .target = target, .optimize = optimize });
+    sonny2776_quic_test_mod.addImport("geode", root_mod);
+    sonny2776_quic_test_mod.addImport("protobuf", protobuf_mod);
+    sonny2776_quic_test_mod.addImport("schema", schema_mod);
+    sonny2776_quic_test_mod.addImport("transport/quic", transport_quic_mod);
+    sonny2776_quic_test_mod.link_libc = true;
+    const sonny2776_quic_tests = b.addTest(.{ .root_module = sonny2776_quic_test_mod });
+    const run_sonny2776_quic_tests = b.addRunArtifact(sonny2776_quic_tests);
+    run_sonny2776_quic_tests.step.dependOn(&install_geode_exe.step);
+    const sonny2776_quic_step = b.step("test-sonny2776-quic-graph-uses", "Run SONNY-2776 QUIC e2e regression (spawns a server: the label-deny post-filter after USE GRAPH applies the switched-to graph's policies; a transaction that changes a second graph is refused)");
+    sonny2776_quic_step.dependOn(&run_sonny2776_quic_tests.step);
+
     // SONNY-2744: a matching deny-effect GPS policy refuses what a builtin role,
     // an Admin shortcut or an allow policy would allow (gps.decide).
     const sonny2744_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny2744_gps_deny.zig"), .target = target, .optimize = optimize });

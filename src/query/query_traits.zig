@@ -411,6 +411,10 @@ pub const StatementPlan = struct {
 /// `StatementPlan.spans_graphs` is set.
 pub const spans_graphs_message = "A request that changes data must run all its statements on one graph; send the statements for each graph in a request of its own";
 
+/// SONNY-2776: what the handlers answer (SQLSTATE 0A000) to a change of a
+/// graph other than the one an open transaction already changed.
+pub const txn_spans_graphs_message = "A transaction must change one graph: commit or roll back before changing another graph";
+
 /// SONNY-2743: decide the `StatementPlan` for `program` (analysed as
 /// `analysis`) in a session whose graph is `session_graph` (the executor
 /// session's; `default` when it has none). `home_graph` is where SESSION
