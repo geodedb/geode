@@ -145,15 +145,20 @@
     `CREATE GRAPH`, `DROP GRAPH` and a HELLO's graph; the refusal is 42501.
     An Admin could write `:Policy` nodes into `__geode_security` directly,
     and any user allowed to write could `DROP GRAPH __geode_security`.
-  - `geode auth reseal` and `GEODE_AUTH_RESEAL_CHAIN=1` refuse to sign a
-    policy record that has no kind and whose HMAC does not verify. Such a
-    record was written before record kinds existed, and GPS loads it by its
-    shape (with no USING text, unconditionally). A record planted in that
-    shape broke the chain, and the reseal signed it. The operator must
-    delete such a record, or accept it by id:
-    - `geode auth reseal --accept-legacy-policy <id>`, repeated for each
-      record;
-    - `GEODE_AUTH_RESEAL_ACCEPT_LEGACY=<id>,<id>` for the startup reseal.
+  - No seal signs a policy record that has no kind and whose HMAC does not
+    verify. Such a record was written before record kinds existed, and GPS
+    loads it by its shape (with no USING text, unconditionally). A record
+    planted in that shape broke the chain, and it was signed by
+    `geode auth reseal`, by `GEODE_AUTH_RESEAL_CHAIN=1`, and by the seal
+    after any auth change, such as an offline `geode user reset-password`.
+    - An auth change on a store holding such a record now fails at its seal.
+    - The recovery reseal refuses, and signs nothing, until the operator
+      decides each such record by id: drop it (delete) or accept it (sign
+      it):
+      - `geode auth reseal --drop-legacy-policy <id>` or
+        `--accept-legacy-policy <id>`, repeated for each record;
+      - `GEODE_AUTH_RESEAL_DROP_LEGACY=<id>,<id>` and
+        `GEODE_AUTH_RESEAL_ACCEPT_LEGACY=<id>,<id>` for the startup reseal.
 
     An accepted record is then stored with its kind and USING text. Records
     that verify are signed as before.

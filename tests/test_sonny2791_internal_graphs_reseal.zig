@@ -9,10 +9,12 @@
 // (b) The recovery reseal (`geode auth reseal`, GEODE_AUTH_RESEAL_CHAIN=1)
 // signed every record as it stood. A policy record planted in the pre-kind
 // GPS shape with no USING text (probe R7-K2) broke the chain; the reseal
-// signed it, and GPS then loaded it as "allow write, for everyone". The
-// reseal now refuses a record without a kind whose HMAC does not verify,
-// unless the operator accepts its id; an accepted one is stored with its kind
-// and USING text, so nothing is "true by absence".
+// signed it, and GPS then loaded it as "allow write, for everyone". So did
+// the seal after every auth change, e.g. an offline `geode user
+// reset-password`, which loads the security graph as it is. No seal now signs
+// a record without a kind whose HMAC does not verify. Only the recovery
+// reseal does, on the operator's decision for its id: drop it, or accept it,
+// which stores its kind and USING text, so nothing is "true by absence".
 //
 // CANARY: REQ=REQ-SONNY-2791-INTERNAL-GRAPHS; FEATURE="GraphRBACEnforcement"; ASPECT=Regression; STATUS=TESTED; TEST=tests/test_sonny2791_internal_graphs_reseal.zig; OWNER=security; UPDATED=2026-09-26
 
@@ -277,14 +279,14 @@ test "SONNY-2791: the recovery reseal refuses a planted legacy record (probe R7-
     if (agm.verifyChain(&HMAC_KEY)) |_| return error.PlantVerified else |_| {}
 
     // The recovery reseal refuses, and signs nothing: the chain still fails.
-    try testing.expectError(error.UnsignedLegacyPolicyRecord, agm.resealChain(&HMAC_KEY, &.{}));
+    try testing.expectError(error.UnsignedLegacyPolicyRecord, agm.resealChain(&HMAC_KEY, .{}));
     if (agm.verifyChain(&HMAC_KEY)) |_| return error.ResealSignedThePlant else |_| {}
     // Accepting another id does not accept the plant.
-    try testing.expectError(error.UnsignedLegacyPolicyRecord, agm.resealChain(&HMAC_KEY, &.{legacy_id}));
+    try testing.expectError(error.UnsignedLegacyPolicyRecord, agm.resealChain(&HMAC_KEY, .{ .accept = &.{legacy_id} }));
 
     // The operator checked the record and accepts it by id: it is stored as
     // what it is now, explicitly, and then signed.
-    try agm.resealChain(&HMAC_KEY, &.{987654321});
+    try agm.resealChain(&HMAC_KEY, .{ .accept = &.{987654321} });
     try agm.verifyChain(&HMAC_KEY);
     const accepted = agm.storage.getPolicy(987654321).?;
     try testing.expectEqual(PolicyKind.gps, accepted.kind);
@@ -292,6 +294,79 @@ test "SONNY-2791: the recovery reseal refuses a planted legacy record (probe R7-
     // The authentic legacy record verified; it is kept as it was.
     try testing.expectEqual(PolicyKind.legacy, agm.storage.getPolicy(legacy_id).?.kind);
     try testing.expectEqual(@as(usize, 3), try hydrated(&agm));
+}
+
+test "SONNY-2791: no seal signs a planted record without a kind: probe R7-K2's sealChain, and the seal after an auth change" {
+    const allocator = testing.allocator;
+    var store = try graph_store.GraphStore.init(allocator);
+    defer store.deinit();
+    {
+        var agm = try AuthGraphManager.init(allocator, &store);
+        defer agm.deinit();
+        try policy_persistence.persistPolicy(&agm, &HMAC_KEY, hr_readers);
+    }
+    const plant = try plantLegacyAllowWrite(&store, 987654321, "evil-legacy-true");
+
+    // An offline CLI command, or the server at startup, loads the security
+    // graph as it is.
+    var agm = try AuthGraphManager.init(allocator, &store);
+    defer agm.deinit();
+    // Probe R7-K2's step, sealChain: it refuses and signs nothing.
+    try testing.expectError(error.UnsignedLegacyPolicyRecord, agm.sealChain(&HMAC_KEY));
+    try testing.expect(store.getNodeProperty(plant, "hmac") == null);
+    if (agm.verifyChain(&HMAC_KEY)) |_| return error.SealSignedThePlant else |_| {}
+
+    // Every auth change seals after it. CREATE POLICY, and a new user (as
+    // `geode user create` or `geode user reset-password` would seal), fail
+    // there, and the plant stays unsigned: the next start refuses the chain
+    // until the operator decides the plant's id.
+    var spec = hr_readers;
+    spec.name = "hr-readers-2";
+    try testing.expectError(error.UnsignedLegacyPolicyRecord, policy_persistence.persistPolicy(&agm, &HMAC_KEY, spec));
+    try testing.expectError(error.UnsignedLegacyPolicyRecord, agm.createUser(&HMAC_KEY, "carol", "carol@example.com", "$argon2id$v=19$m=65536,t=3,p=4$c2FsdA$aGFzaA", false));
+    try testing.expect(store.getNodeProperty(plant, "hmac") == null);
+    if (agm.verifyChain(&HMAC_KEY)) |_| return error.SealSignedThePlant else |_| {}
+}
+
+test "SONNY-2791: the recovery reseal deletes a refused record the operator drops, and refuses an id both accepted and dropped" {
+    const allocator = testing.allocator;
+    var store = try graph_store.GraphStore.init(allocator);
+    defer store.deinit();
+    {
+        var agm = try AuthGraphManager.init(allocator, &store);
+        defer agm.deinit();
+        try policy_persistence.persistPolicy(&agm, &HMAC_KEY, hr_readers);
+    }
+    _ = try plantLegacyAllowWrite(&store, 987654321, "evil-legacy-true");
+    {
+        var agm = try AuthGraphManager.init(allocator, &store);
+        defer agm.deinit();
+        try testing.expectError(error.ConflictingLegacyPolicyDecision, agm.resealChain(&HMAC_KEY, .{
+            .accept = &.{987654321},
+            .drop = &.{987654321},
+        }));
+        try testing.expect(agm.storage.getPolicy(987654321) != null);
+        if (agm.verifyChain(&HMAC_KEY)) |_| return error.ResealSignedThePlant else |_| {}
+
+        try agm.resealChain(&HMAC_KEY, .{ .drop = &.{987654321} });
+        try testing.expect(agm.storage.getPolicy(987654321) == null);
+        try agm.verifyChain(&HMAC_KEY);
+    }
+
+    // After a restart the chain verifies, GPS loads only the signed policy,
+    // and nobody may write.
+    var agm = try AuthGraphManager.init(allocator, &store);
+    defer agm.deinit();
+    try agm.verifyChain(&HMAC_KEY);
+    var cat = PolicyCatalog.init(allocator);
+    defer cat.deinit();
+    try policy_persistence.hydrateCatalog(allocator, &agm, &cat);
+    try testing.expectEqual(@as(usize, 1), cat.listPolicies().len);
+    try testing.expectEqualStrings("hr-readers", cat.listPolicies()[0].name);
+    policy_catalog.setGlobalCatalog(&cat);
+    defer policy_catalog.clearGlobalCatalog();
+    const nobody = principal("nobody", &.{});
+    try testing.expect(!gps.writePermitted(allocator, &nobody));
 }
 
 test "SONNY-2791: without a plant, the recovery reseal signs what verifies, as before" {
@@ -328,7 +403,7 @@ test "SONNY-2791: without a plant, the recovery reseal signs what verifies, as b
     var agm = try AuthGraphManager.init(allocator, &store);
     defer agm.deinit();
     if (agm.verifyChain(&HMAC_KEY)) |_| return error.ChainAcceptedUnsignedRecord else |_| {}
-    try agm.resealChain(&HMAC_KEY, &.{});
+    try agm.resealChain(&HMAC_KEY, .{});
     try agm.verifyChain(&HMAC_KEY);
     try testing.expectEqual(@as(usize, 1), try hydrated(&agm));
 }
