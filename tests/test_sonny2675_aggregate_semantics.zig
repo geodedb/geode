@@ -714,3 +714,81 @@ fn checkIntervalComparison(s: *Session, f: *Failures) !void {
 test "SONNY-2675: WHERE compares durations and zoned times as GROUP BY does" {
     try inEveryMode("interval comparison", checkIntervalComparison);
 }
+
+fn checkInIsEquality(s: *Session, f: *Failures) !void {
+    // Round 5 (I2): `x IN (a, b)` is `x = a OR x = b`, in both spellings. The
+    // literal list matched integers and strings across types and any other
+    // value only within its type, and `IN <list expression>` was never NULL.
+    const d15: Param = .{ .name = "d", .value = .{ .Double = 1.5 } };
+    const s7: Param = .{ .name = "s", .value = .{ .SmallInt = 7 } };
+    const b5: Param = .{ .name = "b", .value = .{ .BigInt = 5 } };
+    var l15_items = [_]Value{.{ .Decimal = .{ .coeff = 15, .scale = 1 } }};
+    const l15: Param = .{ .name = "l", .value = .{ .List = &l15_items } };
+    var l1n_items = [_]Value{ .{ .Int = 1 }, .{ .Null = {} } };
+    const l1n: Param = .{ .name = "l", .value = .{ .List = &l1n_items } };
+    var l75_items = [_]Value{ .{ .Int = 7 }, .{ .Int = 5 } };
+    const l75: Param = .{ .name = "l", .value = .{ .List = &l75_items } };
+    var no_items = [_]Value{};
+    const empty: Param = .{ .name = "l", .value = .{ .List = &no_items } };
+    // Typed: an item `=` calls equal is in the list, whatever its type.
+    try expectRows(s, f, "RETURN 1.50 IN [1.5] AS x", &.{}, &.{"true"});
+    try expectRows(s, f, "RETURN 1 IN [1.0] AS x", &.{}, &.{"true"});
+    try expectRows(s, f, "RETURN 1.5 IN [1, 2] AS x", &.{}, &.{"false"});
+    try expectRows(s, f, "RETURN $d IN [1.5] AS x", &.{d15}, &.{"true"});
+    try expectRows(s, f, "RETURN 1.50 IN $l AS x", &.{l15}, &.{"true"});
+    try expectRows(s, f, "RETURN $d IN $l AS x", &.{ d15, l15 }, &.{"true"});
+    try expectRows(s, f, "RETURN $s IN [7] AS x", &.{s7}, &.{"true"});
+    try expectRows(s, f, "RETURN $b IN $l AS x", &.{ b5, l75 }, &.{"true"});
+    // Three-valued: NULL when no item is equal and some comparison is NULL.
+    try expectRows(s, f, "RETURN 2 IN [1, NULL] AS x", &.{}, &.{"null"});
+    try expectRows(s, f, "RETURN 2 IN $l AS x", &.{l1n}, &.{"null"});
+    try expectRows(s, f, "RETURN 2 NOT IN $l AS x", &.{l1n}, &.{"null"});
+    try expectRows(s, f, "RETURN 1 IN $l AS x", &.{l1n}, &.{"true"});
+    try expectRows(s, f, "RETURN 1 NOT IN $l AS x", &.{l1n}, &.{"false"});
+    try expectRows(s, f, "RETURN NULL IN $l AS x", &.{l15}, &.{"null"});
+    try expectRows(s, f, "RETURN NULL IN $l AS x", &.{empty}, &.{"false"});
+    try expectRows(s, f, "RETURN 2 NOT IN $l AS x", &.{empty}, &.{"true"});
+    // An item `=` cannot compare with the value raises what `=` raises.
+    try expectFail(s, f, "RETURN 'a' = 1.5 AS x", &.{}, error.TypeMismatch);
+    try expectFail(s, f, "RETURN 'a' IN [1.5] AS x", &.{}, error.TypeMismatch);
+    // `=` compares exact numbers at any scale and across INT, SMALLINT,
+    // BIGINT and DECIMAL (a scale-40 decimal was 0A000, a SMALLINT against an
+    // INT a type mismatch).
+    try expectRows(s, f, "RETURN 1 = 0.0000000000000000000000000000000000000001 AS x", &.{}, &.{"false"});
+    try expectRows(s, f, "RETURN 0.0000000000000000000000000000000000000015 < 1 AS x", &.{}, &.{"true"});
+    try expectRows(s, f, "RETURN $s = 7 AS x", &.{s7}, &.{"true"});
+    try expectRows(s, f, "RETURN $s < 7.5 AS x", &.{s7}, &.{"true"});
+    try expectRows(s, f, "RETURN $b = 5.0 AS x", &.{b5}, &.{"true"});
+    // WHERE: IN agrees with `=`, and with the groups.
+    try expectRows(s, f, "MATCH (n:N) WHERE n.v IN [0.50] RETURN count(*) AS c", &.{}, &.{"2"});
+    try expectRows(s, f, "MATCH (n:N) WHERE n.v = 0.50 RETURN count(*) AS c", &.{}, &.{"2"});
+    try expectRows(s, f, "MATCH (n:O) WHERE n.x IN [7, 5] RETURN count(*) AS c", &.{}, &.{"2"});
+    try expectRows(s, f, "MATCH (n:O) WHERE n.x IN $l RETURN count(*) AS c", &.{l75}, &.{"2"});
+    try expectRows(s, f, "MATCH (n:O) WHERE n.x = 7 OR n.x = 5 RETURN count(*) AS c", &.{}, &.{"2"});
+}
+
+test "SONNY-2675: IN is `=` for each item, with three-valued logic" {
+    try inEveryMode("IN is equality", checkInIsEquality);
+}
+
+fn checkZonedTimes(s: *Session, f: *Failures) !void {
+    // Round 5 (M1): `<` and `>` order zoned times by their UTC time of day,
+    // as ORDER BY and GROUP BY do (they were a type mismatch), and the UTC
+    // time is a time of day: 01:00+14:00 is 11:00 UTC.
+    try expectRows(s, f, "RETURN timetz('09:00:00+00:00') < timetz('10:30:00+01:00') AS x", &.{}, &.{"true"});
+    try expectRows(s, f, "RETURN timetz('12:00:00+01:00') > timetz('10:30:00+00:00') AS x", &.{}, &.{"true"});
+    try expectRows(s, f, "RETURN timetz('10:00:00+01:00') <= timetz('09:00:00+00:00') AS x", &.{}, &.{"true"});
+    try expectRows(s, f, "RETURN timetz('01:00:00+14:00') = timetz('11:00:00+00:00') AS x", &.{}, &.{"true"});
+    try expectRows(s, f, "RETURN timetz('23:00:00-02:00') < timetz('02:00:00+00:00') AS x", &.{}, &.{"true"});
+    try expectRows(s, f, "MATCH (n:Z) WHERE timetz(n.t) < timetz('10:00:00+00:00') RETURN count(*) AS c", &.{}, &.{"2"});
+    try expectRows(s, f, "MATCH (n:Z) WHERE timetz(n.t) >= timetz('10:30:00+00:00') RETURN count(*) AS c", &.{}, &.{"1"});
+    // A zoned datetime orders by its UTC instant.
+    try expectRows(s, f, "RETURN timestamptz('2020-01-01T10:00:00+01:00') < timestamptz('2020-01-01T09:30:00Z') AS x", &.{}, &.{"true"});
+    // Round 5 (M2): the duration rule is conservative. P1M1D < P2M holds for
+    // any month length, but both parts differ, so it is not comparable.
+    try expectFail(s, f, "RETURN duration('P1M1D') < duration('P2M') AS x", &.{}, error.ValuesNotComparable);
+}
+
+test "SONNY-2675: zoned times order by their UTC time of day" {
+    try inEveryMode("zoned times", checkZonedTimes);
+}

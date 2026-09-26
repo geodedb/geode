@@ -120,7 +120,7 @@
   streaming fast path declined (with ORDER BY, say). Keys now agree with the
   value order: numbers by their exact value (DECIMAL 0.5 equals DOUBLE 0.5,
   DECIMAL 0.1 does not equal DOUBLE 0.1), every NaN is one value, and a time
-  with a time zone keys by its UTC time.
+  with a time zone keys by its UTC time of day.
 
   **Behaviour change:** durations follow the standard's two kinds
   (ISO/IEC 39075 keeps year-to-month and day-to-second durations apart):
@@ -133,11 +133,25 @@
     or the day-to-second lengths of the two sides are equal
     (`P1M < P2M`, `P1D < PT25H`); a year-to-month duration against a
     day-to-second one (`P1M < P30D`) raises 22G04 (values not comparable).
-    They used to count a month as 30 days.
-  - `=` on a time with a time zone compares its UTC time
-    (`10:00+01:00 = 09:00+00:00`), as the groups do; it compared the local
-    time and the offset. IN over a literal list matches a value of any type
-    that `=` calls equal (it matched only integers and strings).
+    They used to count a month as 30 days. The rule is conservative: it asks
+    for one equal part, so `P1M1D < P2M` raises 22G04 although it holds for
+    any month length.
+  - A time with a time zone compares by its UTC time of day, the UTC time
+    modulo 24 hours, in `=`, `<`, `>`, ORDER BY and the groups:
+    `10:00+01:00 = 09:00+00:00`, and `01:00+14:00 = 11:00+00:00` (it was
+    -13:00 UTC and sorted first). `=` compared the local time and the
+    offset, and `<` and `>` were a type mismatch; a zoned datetime's `<` and
+    `>` compare its UTC instant, as ORDER BY does.
+  - **Behaviour change:** `x IN (a, b)` is `x = a OR x = b`, for a literal
+    list and a list expression alike: an item is in the list when `=` calls
+    it equal, whatever its type (`1.50 IN [1.5]`, `1 IN [1.0]` and a DOUBLE
+    1.5 in `[1.5]` are true; they were false), an item `=` cannot compare
+    with the value raises the error `=` raises, and the result is NULL when
+    no item is equal and some comparison is NULL (`2 IN $list` with
+    `$list = [1, NULL]` was false). `=`, `<` and `>` compare INT, SMALLINT,
+    BIGINT and DECIMAL values by their exact value at any scale:
+    `1 = <a scale-40 decimal>` is false (it failed with 0A000), and a
+    SMALLINT or BIGINT parameter compares with an INT (a type mismatch).
 - **min, max and ORDER BY order every value type (SONNY-2675):** min and max
   compared only integers and strings, so over doubles, decimals, dates or
   mixed numbers the first value won, and ORDER BY ranked doubles, temporal

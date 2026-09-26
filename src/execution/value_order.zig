@@ -20,7 +20,8 @@
 //! compared the three fields, so 1 month and 30 days sorted as equal but
 //! grouped apart, and P1D and PT24H did too.)
 //!
-//! A time with a time zone compares, and is keyed, by its UTC time.
+//! A time with a time zone compares, and is keyed, by its UTC time of day
+//! (the UTC time modulo 24 hours: 01:00+14:00 and 11:00+00:00 are equal).
 
 // CANARY: REQ=REQ-SONNY-2675-EXACT-VALUE-ORDER; FEATURE="ValueOrdering"; ASPECT=ExactNumbersDurationsKeys; STATUS=TESTED; TEST=tests/test_sonny2675_aggregate_semantics.zig; OWNER=execution; UPDATED=2026-09-25
 

@@ -214,6 +214,7 @@ const truthy = value_types.truthy;
 // CANARY: REQ=REQ-M6.1-EVAL-REFACTOR-001; FEATURE="Phase 6 Modularization"; ASPECT=TypePromotionImport; STATUS=EXEMPT; OWNER=eval; UPDATED=2025-11-13
 // Phase 6 M6.1: Import type promotion module for type conversion and validation utilities
 const type_promotion = @import("eval/type_promotion.zig");
+const value_order = @import("execution/value_order.zig");
 
 // CANARY: REQ=REQ-EVAL-REFACTOR-001; FEATURE="EvalExpr Refactoring"; ASPECT=CallHandlersImport; STATUS=TESTED; OWNER=eval; UPDATED=2026-01-30
 // Import call handlers module for function call evaluation helpers
@@ -545,28 +546,14 @@ pub fn evalBinary(alloc: std.mem.Allocator, op: ast.BinOp, l: Value, r: Value) E
         },
         .Eq, .Ne, .Lt, .Le, .Gt, .Ge => blk5: {
             if (l == .Int and r == .Int) break :blk5 cmpIntsOp(op, l.Int, r.Int);
-            // Decimal comparisons (no arithmetic yet)
-            if (l == .Decimal and r == .Int) {
-                const rhs = scaleTo(@as(i128, r.Int), 0, l.Decimal.scale) catch return EvalError.Unsupported;
-                const ord = cmpI128(l.Decimal.coeff, rhs);
-                break :blk5 .{ .Bool = cmpToBool(op, ord) };
-            }
-            if (l == .Int and r == .Decimal) {
-                const lhs = scaleTo(@as(i128, l.Int), 0, r.Decimal.scale) catch return EvalError.Unsupported;
-                const ord = cmpI128(lhs, r.Decimal.coeff);
-                break :blk5 .{ .Bool = cmpToBool(op, ord) };
-            }
-            if (l == .Decimal and r == .Decimal) {
-                // align scales
-                if (l.Decimal.scale == r.Decimal.scale) {
-                    const ord = cmpI128(l.Decimal.coeff, r.Decimal.coeff);
-                    break :blk5 .{ .Bool = cmpToBool(op, ord) };
-                }
-                const maxs = @max(l.Decimal.scale, r.Decimal.scale);
-                const lc = scaleTo(l.Decimal.coeff, l.Decimal.scale, maxs) catch return EvalError.Unsupported;
-                const rc = scaleTo(r.Decimal.coeff, r.Decimal.scale, maxs) catch return EvalError.Unsupported;
-                const ord = cmpI128(lc, rc);
-                break :blk5 .{ .Bool = cmpToBool(op, ord) };
+            // Exact numbers (INT, SMALLINT, BIGINT, DECIMAL) compare by their
+            // exact value at any scale, as ORDER BY, GROUP BY and DISTINCT do
+            // (value_order). The decimal arms aligned the scales with a
+            // checked rescale that failed with 0A000 past 10^38
+            // (`1 = <a scale-40 decimal>`), and a SMALLINT or a BIGINT
+            // against any other number was a type mismatch (SONNY-2675).
+            if (exactNumber(l)) |a| {
+                if (exactNumber(r)) |b| break :blk5 .{ .Bool = cmpToBool(op, @intCast(value_order.compareNumbers(a, b))) };
             }
             // Float-promoted numeric comparison. The arm set above covers the
             // EXACT integer/decimal pairings; there was no float branch at all,
@@ -662,6 +649,26 @@ pub fn evalBinary(alloc: std.mem.Allocator, op: ast.BinOp, l: Value, r: Value) E
             // Timestamp
             if (l == .Timestamp and r == .Timestamp) {
                 const ord = std.math.order(l.Timestamp.micros_since_epoch, r.Timestamp.micros_since_epoch);
+                return .{ .Bool = cmpToBool(op, switch (ord) {
+                    .lt => -1,
+                    .eq => 0,
+                    .gt => 1,
+                }) };
+            }
+            // A time with a time zone orders by its UTC time of day, and a
+            // zoned datetime by its UTC instant, as ORDER BY, GROUP BY and
+            // DISTINCT order and key them (SONNY-2675): `<` and `>` were a
+            // type mismatch.
+            if (l == .TimeTZ and r == .TimeTZ) {
+                const ord = std.math.order(l.TimeTZ.utcMicros(), r.TimeTZ.utcMicros());
+                return .{ .Bool = cmpToBool(op, switch (ord) {
+                    .lt => -1,
+                    .eq => 0,
+                    .gt => 1,
+                }) };
+            }
+            if (l == .TimestampTZ and r == .TimestampTZ) {
+                const ord = std.math.order(l.TimestampTZ.micros_since_epoch_utc, r.TimestampTZ.micros_since_epoch_utc);
                 return .{ .Bool = cmpToBool(op, switch (ord) {
                     .lt => -1,
                     .eq => 0,
@@ -1227,11 +1234,7 @@ pub fn evalExpr(allocator: std.mem.Allocator, e: ast.Expr, env: Env) EvalError!V
             const list_val = try evalExpr(allocator, ile.list_expr.*, env);
             if (list_val == .Null) return Value{ .Null = {} };
             if (list_val != .List) return raiseInListTypeError();
-            // Check if v is in the list
-            for (list_val.List) |item| {
-                if (eqVals(v, item)) return Value{ .Bool = true };
-            }
-            return Value{ .Bool = false };
+            return inValues(allocator, v, list_val.List);
         },
         // CANARY: REQ=REQ-GQL-IN-EXPR-004; FEATURE="NotInOperator"; ASPECT=EvalSupport; STATUS=TESTED; TEST=geodetestlab/specs/gql_expressions_comprehensive.yml; OWNER=eval; UPDATED=2025-12-27
         // value NOT IN list_expr
@@ -1242,11 +1245,10 @@ pub fn evalExpr(allocator: std.mem.Allocator, e: ast.Expr, env: Env) EvalError!V
             const list_val = try evalExpr(allocator, nile.list_expr.*, env);
             if (list_val == .Null) return Value{ .Null = {} };
             if (list_val != .List) return raiseInListTypeError();
-            // Check if v is NOT in the list
-            for (list_val.List) |item| {
-                if (eqVals(v, item)) return Value{ .Bool = false };
-            }
-            return Value{ .Bool = true };
+            return switch (try inValues(allocator, v, list_val.List)) {
+                .Bool => |b| .{ .Bool = !b },
+                else => .{ .Null = {} },
+            };
         },
         .InSubquery => |isq| {
             // Evaluate the left-hand value
@@ -4470,31 +4472,47 @@ fn parseDurationString(str: []const u8) !i64 {
     return seconds;
 }
 
-fn inList(value: Value, set: []*ast.Expr, allocator: std.mem.Allocator, env: Env) EvalError!Value {
-    if (isNull(value)) return Value{ .Null = {} };
-    var saw_null = false;
-    for (set) |p| {
-        const ev = try evalExpr(allocator, p.*, env);
-        if (isNull(ev)) {
-            saw_null = true;
-            continue;
-        }
-        if (value == .Int and ev == .Int and value.Int == ev.Int) return .{ .Bool = true };
-        if (value == .Str and ev == .Str and std.mem.eql(u8, value.Str, ev.Str)) return .{ .Bool = true };
-        if ((value == .Str and ev == .Int) or (value == .Int and ev == .Str)) {
-            var bufV: [64]u8 = undefined;
-            var bufE: [64]u8 = undefined;
-            const vs = try stringify(value, &bufV);
-            const es = try stringify(ev, &bufE);
-            if (std.mem.eql(u8, vs, es)) return .{ .Bool = true };
-        }
-        // Round 4 (I1'): any other value is in the list when an item of its
-        // type equals it as `=` says (a duration, a zoned time, a date, ...);
-        // only integers and strings could match a literal list.
-        if (std.meta.activeTag(value) == std.meta.activeTag(ev) and eqVals(value, ev)) return .{ .Bool = true };
+// CANARY: REQ=REQ-SONNY-2675-IN-IS-EQUALITY; FEATURE="InOperator"; ASPECT=EqualityPerItem; STATUS=TESTED; TEST=tests/test_sonny2675_aggregate_semantics.zig; OWNER=eval; UPDATED=2026-09-26
+/// `value IN (a, b, ...)` is `value = a OR value = b OR ...`, evaluated as
+/// the engine evaluates that OR, left to right (SONNY-2675): TRUE at the first
+/// item `=` calls equal, the error `=` raises for an item it cannot compare
+/// with the value, otherwise NULL when some comparison was NULL (UNKNOWN), and
+/// FALSE when none was (an empty list included). Both spellings used their
+/// own equality, the literal list one that matched integers and strings
+/// across types and every other value only within its type, and the list
+/// expression one that was never NULL: `1.50 IN [1.5]` and `1 IN [1.0]` were
+/// false while `=` called them equal, and `2 IN $list` with `$list = [1,
+/// NULL]` was false, not NULL.
+fn inStep(allocator: std.mem.Allocator, value: Value, item: Value, unknown: *bool) EvalError!bool {
+    switch (try evalBinary(allocator, .Eq, value, item)) {
+        .Bool => |b| return b,
+        else => {
+            unknown.* = true;
+            return false;
+        },
     }
-    if (saw_null) return Value{ .Null = {} };
-    return .{ .Bool = false };
+}
+
+fn inList(value: Value, set: []*ast.Expr, allocator: std.mem.Allocator, env: Env) EvalError!Value {
+    var unknown = false;
+    for (set) |p| {
+        if (try inStep(allocator, value, try evalExpr(allocator, p.*, env), &unknown)) return .{ .Bool = true };
+    }
+    return if (unknown) .{ .Null = {} } else .{ .Bool = false };
+}
+
+fn inValues(allocator: std.mem.Allocator, value: Value, items: []const Value) EvalError!Value {
+    var unknown = false;
+    for (items) |item| {
+        if (try inStep(allocator, value, item, &unknown)) return .{ .Bool = true };
+    }
+    return if (unknown) .{ .Null = {} } else .{ .Bool = false };
+}
+
+/// An INT, SMALLINT, BIGINT or DECIMAL as an exact number, else null.
+fn exactNumber(v: Value) ?value_order.Number {
+    const n = value_order.numberOf(v) orelse return null;
+    return if (n == .exact) n else null;
 }
 
 // ---------------------------------------------------------------------------

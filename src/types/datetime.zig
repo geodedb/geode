@@ -154,10 +154,14 @@ pub const TimeTZ = struct {
     time: Time,
     offset_seconds: i32,
 
-    /// The UTC time of day in microseconds, which two zoned times compare by
-    /// (i128: a decoded time of day may be any i64).
+    /// The UTC time of day in microseconds, in [0, 24 h): two zoned times
+    /// compare, and group, by it. ISO/IEC 9075-2 compares TIME WITH TIME
+    /// ZONE values by their UTC component, which is a time of day: 01:00+14:00
+    /// is 11:00 UTC, as 11:00+00:00 is (SONNY-2675; it was -13:00 and sorted
+    /// first). i128: a decoded time of day may be any i64.
     pub fn utcMicros(self: TimeTZ) i128 {
-        return @as(i128, self.time.micros_since_midnight) - @as(i128, self.offset_seconds) * std.time.us_per_s;
+        const utc = @as(i128, self.time.micros_since_midnight) - @as(i128, self.offset_seconds) * std.time.us_per_s;
+        return @mod(utc, @as(i128, std.time.us_per_day));
     }
 
     pub fn fromStr(str: []const u8) Date.Error!TimeTZ {
@@ -317,7 +321,10 @@ pub const Interval = struct {
     /// Whether `<`, `<=`, `>` and `>=` are defined for the pair: when one
     /// part is the same on both sides, the other decides, whatever a month's
     /// length. A year-to-month duration against a day-to-second one (1 month
-    /// against 30 days) is not comparable.
+    /// against 30 days) is not comparable. The rule is conservative: it asks
+    /// for one equal part, so a pair whose order holds for every month length
+    /// but whose parts both differ (P1M1D < P2M: a month is at least 28 days)
+    /// is not comparable either, and raises 22G04.
     pub fn comparable(a: Interval, b: Interval) bool {
         return a.months == b.months or a.dayTimeMicros() == b.dayTimeMicros();
     }
