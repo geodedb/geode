@@ -226,6 +226,30 @@ test "SONNY-2686: the key-resolved write fast paths serve only a session no tena
             // An installed policy applies to no session without a user.
             s.ctx.user = null;
             if (!geode.bulk_ingest.sessionAllowsKeyResolvedWrites(&s.ctx)) try f.add(aa, "[label_policy, no user] fast paths declined a session no policy applies to", .{});
+            // SONNY-2724: a GPS principal alone is an identity a policy applies
+            // to (RLS evaluates under its username).
+            const principal_mod = geode.security.principal;
+            const principal = principal_mod.Principal{
+                .user_id = 2724,
+                .username = h.session_user,
+                .session_id = null,
+                .tenant_id = null,
+                .active_graph = null,
+                .roles = &.{},
+                .custom_roles = &.{},
+                .auth_method = .password,
+                .auth_version = 1,
+                .mfa_state = .none,
+                .elevation_until = null,
+                .api_key_id = null,
+                .certificate_subject = null,
+                .risk_context = principal_mod.RiskContext.unknown,
+                .attributes = principal_mod.AttributeMap.emptySentinel(),
+                .source = .test_harness,
+            };
+            s.ctx.principal = &principal;
+            if (geode.bulk_ingest.sessionAllowsKeyResolvedWrites(&s.ctx)) try f.add(aa, "[label_policy, principal only] fast paths serve a session a policy applies to", .{});
+            s.ctx.principal = null;
         }
     }
 

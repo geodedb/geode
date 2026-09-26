@@ -1266,10 +1266,24 @@ pub const QuicProtoClient = struct {
         password: []const u8,
         graph: ?[]const u8,
     ) !HelloResult {
+        return self.helloWith(allocator, username, password, graph, null);
+    }
+
+    /// HELLO binding a graph and a tenant scope (null: the server's default
+    /// graph, an unscoped session). SONNY-2724 drives tenant-scoped QUIC
+    /// sessions through it.
+    pub fn helloWith(
+        self: *QuicProtoClient,
+        allocator: std.mem.Allocator,
+        username: []const u8,
+        password: []const u8,
+        graph: ?[]const u8,
+        tenant: ?[]const u8,
+    ) !HelloResult {
         const req = schema.HelloRequest{
             .username = username,
             .password = password,
-            .tenant_id = null,
+            .tenant_id = tenant,
             .client_name = "geode-test",
             .client_version = "0.0.0",
             .wanted_conformance = "min",

@@ -8899,6 +8899,24 @@ pub fn build(b: *std.Build) void {
     const sonny2727_step = b.step("test-sonny2727-param-decoder-narrowing", "Run SONNY-2727 regression (every narrowing in the wire parameter decoders is checked: an out-of-range SMALLINT, REAL, CHAR/VARCHAR length, decimal scale or binary length is refused with 22023 and frees what it decoded, and the process survives)");
     sonny2727_step.dependOn(&run_sonny2727_tests.step);
 
+    // SONNY-2724: over the real QUIC handler, the key-resolved write fast
+    // paths (node, graph-selector and /*+BATCH*/ MERGE, relationship MERGE,
+    // MATCH ... CREATE edge) serve no session that a tenant scope, strict
+    // tenancy or an installed RLS policy restricts; each takes the executor
+    // and gives its correct answer. Spawns the installed server binary.
+    const sonny2724_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny2724_quic_fast_path_gate.zig"), .target = target, .optimize = optimize });
+    sonny2724_test_mod.link_libc = true;
+    sonny2724_test_mod.addImport("geode", root_mod);
+    sonny2724_test_mod.addImport("schema", schema_mod);
+    sonny2724_test_mod.addImport("protobuf", protobuf_mod);
+    sonny2724_test_mod.addImport("transport/quic", transport_quic_mod);
+    const sonny2724_tests = b.addTest(.{ .root_module = sonny2724_test_mod });
+    const run_sonny2724_tests = b.addRunArtifact(sonny2724_tests);
+    run_sonny2724_tests.step.dependOn(&install_geode_exe.step);
+    shardDep(test_step, &run_sonny2724_tests.step, 1, test_shard_loads, test_shard_index);
+    const sonny2724_step = b.step("test-sonny2724-quic-fast-path-gate", "Run SONNY-2724 regression (over QUIC, the key-resolved write fast paths never serve a tenant-scoped session, an unscoped session under strict tenancy, or a user while an RLS policy is installed; each takes the executor and gives its correct answer)");
+    sonny2724_step.dependOn(&run_sonny2724_tests.step);
+
     // SONNY-2675: an aggregate named in a grouped HAVING is computed for each
     // group; an ungrouped input column there is refused (42803).
     const sonny2675_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny2675_grouped_having.zig"), .target = target, .optimize = optimize });
