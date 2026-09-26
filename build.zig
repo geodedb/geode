@@ -8554,6 +8554,17 @@ pub fn build(b: *std.Build) void {
     const sonny2769_step = b.step("test-sonny2769-integer-overflow", "Run SONNY-2769 regression (integer overflow and narrowing: decimal arithmetic, minInt negation and division, date arithmetic, pre-1970 timestamps, CAST to DECIMAL, function and procedure argument casts and parameter decoders refuse a value that does not fit instead of aborting)");
     sonny2769_step.dependOn(&run_sonny2769_tests.step);
 
+    // SONNY-2809: a second identical CREATE CONSTRAINT freed the catalog key
+    // twice and aborted the server; it is refused with 42710 now.
+    const sonny2809_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny2809_duplicate_constraint.zig"), .target = target, .optimize = optimize });
+    sonny2809_test_mod.addImport("geode", root_mod);
+    sonny2809_test_mod.addImport("logging", logging_mod);
+    const sonny2809_tests = b.addTest(.{ .root_module = sonny2809_test_mod });
+    const run_sonny2809_tests = b.addRunArtifact(sonny2809_tests);
+    shardDep(test_step, &run_sonny2809_tests.step, 1, test_shard_loads, test_shard_index);
+    const sonny2809_step = b.step("test-sonny2809-duplicate-constraint", "Run SONNY-2809 regression (a second identical CREATE CONSTRAINT is refused with 42710 and frees the catalog key once; it double-freed and aborted the server)");
+    sonny2809_step.dependOn(&run_sonny2809_tests.step);
+
     const sonny2675_walker_mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny2675_having_walker.zig"), .target = target, .optimize = optimize });
     sonny2675_walker_mod.addImport("geode", root_mod);
     const sonny2675_walker_tests = b.addTest(.{ .root_module = sonny2675_walker_mod });

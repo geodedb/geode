@@ -553,11 +553,11 @@ pub const Catalog = struct {
         const scoped_key = try std.fmt.allocPrint(self.allocator, "{s}:{s}", .{ info.label, info.name });
         errdefer self.allocator.free(scoped_key);
 
-        // Check if constraint already exists
-        if (self.constraints.contains(scoped_key)) {
-            self.allocator.free(scoped_key);
-            return error.ConstraintAlreadyExists;
-        }
+        // SONNY-2809: no explicit free here — the errdefer above frees
+        // scoped_key on this error return. The explicit free made every
+        // duplicate CREATE CONSTRAINT free the key twice, which corrupted the
+        // allocator and aborted the server (the bug GAP-0903 fixed in addIndex).
+        if (self.constraints.contains(scoped_key)) return error.ConstraintAlreadyExists;
 
         // Duplicate strings for catalog ownership
         const owned_name = try self.allocator.dupe(u8, info.name);
@@ -567,10 +567,15 @@ pub const Catalog = struct {
         errdefer self.allocator.free(owned_label);
 
         const owned_props = try self.allocator.alloc([]const u8, info.properties.len);
-        errdefer self.allocator.free(owned_props);
+        var props_filled: usize = 0;
+        errdefer {
+            for (owned_props[0..props_filled]) |prop| self.allocator.free(prop);
+            self.allocator.free(owned_props);
+        }
 
         for (info.properties, 0..) |prop, idx| {
             owned_props[idx] = try self.allocator.dupe(u8, prop);
+            props_filled = idx + 1;
         }
 
         const owned_info = ConstraintInfo{
@@ -582,7 +587,13 @@ pub const Catalog = struct {
         };
 
         try self.constraints.put(scoped_key, owned_info);
-        try self.save();
+        self.save() catch |err| {
+            // SONNY-2809 (GAP-0903 sibling hazard): the entry now belongs to
+            // the map. Remove it before re-raising so the errdefers above free
+            // exactly the memory still owned; the map kept dangling pointers.
+            _ = self.constraints.remove(scoped_key);
+            return err;
+        };
     }
 
     /// Remove a constraint from the catalog
@@ -649,7 +660,12 @@ pub const Catalog = struct {
         errdefer self.allocator.free(owned_name);
 
         try self.schemas.put(owned_name, {});
-        try self.save();
+        // SONNY-2809: as in addConstraint, a failed save must not leave the
+        // map holding the key the errdefer frees.
+        self.save() catch |err| {
+            _ = self.schemas.remove(owned_name);
+            return err;
+        };
     }
 
     /// Remove a schema from the catalog and persist
@@ -701,7 +717,11 @@ pub const Catalog = struct {
         errdefer self.allocator.free(owned_name);
 
         try self.graphs.put(owned_name, uuid);
-        try self.save();
+        // SONNY-2809: as in addConstraint.
+        self.save() catch |err| {
+            _ = self.graphs.remove(owned_name);
+            return err;
+        };
     }
 
     /// Update the stored UUID for a graph after the storage adapter has
@@ -776,7 +796,11 @@ pub const Catalog = struct {
     /// Uses IF NOT EXISTS semantics - safe to call repeatedly.
     pub fn ensureAutoIdIndex(self: *Catalog, label: []const u8) !void {
         const index_name = try std.fmt.allocPrint(self.allocator, "auto_idx_{s}_id", .{label});
+        // SONNY-2809 audit: on an allocation failure below, these (and the
+        // "id" column) were leaked.
+        errdefer self.allocator.free(index_name);
         const scoped_key = try getScopedIndexKey(self.allocator, label, index_name);
+        errdefer self.allocator.free(scoped_key);
 
         self.rwlock.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
         defer self.rwlock.unlock(std.Io.Threaded.global_single_threaded.io());
@@ -795,6 +819,7 @@ pub const Catalog = struct {
         const cols = try self.allocator.alloc([]const u8, 1);
         errdefer self.allocator.free(cols);
         cols[0] = try self.allocator.dupe(u8, "id");
+        errdefer self.allocator.free(cols[0]);
 
         const info = IndexInfo{
             .name = index_name,

@@ -1876,17 +1876,17 @@ fn executeStatementWithContextInner(allocator: std.mem.Allocator, stmt: ast.Stat
                 }
             }
 
-            // Add constraint to catalog
+            // Add constraint to catalog. SONNY-2809: a duplicate name is
+            // refused with ConstraintAlreadyExists (42710). It returned a
+            // result whose one column and one row were uninitialized memory;
+            // under IF NOT EXISTS (a concurrent CREATE won the race) it is a
+            // no-op, as the check above is.
             cat.addConstraint(constraint_info) catch |err| {
-                if (err == error.ConstraintAlreadyExists and !cc.if_not_exists) {
+                if (err == error.ConstraintAlreadyExists and cc.if_not_exists) {
                     return ExecutionResult{
-                        .columns = try allocator.alloc([]const u8, 1),
-                        .rows = try allocator.alloc([]Value, 1),
-                        .flags = blk: {
-                            var list = try std.ArrayList([]const u8).initCapacity(allocator, 1);
-                            try list.append(allocator, "error");
-                            break :blk list;
-                        },
+                        .columns = try allocator.alloc([]const u8, 0),
+                        .rows = try allocator.alloc([]Value, 0),
+                        .flags = std.ArrayList([]const u8).empty,
                     };
                 }
                 return err;

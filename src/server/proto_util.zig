@@ -148,6 +148,8 @@ pub fn mapError(err: anyerror) ErrorInfo {
         error.DuplicateSchema => .{ .code = "42P07", .message = "Duplicate schema name" },
         error.SchemaNotFound => .{ .code = "3F000", .message = "Schema does not exist" },
         error.DuplicateIndex => .{ .code = "42P07", .message = "Duplicate index name" },
+        // SONNY-2809: a second CREATE CONSTRAINT with the same name.
+        error.ConstraintAlreadyExists => .{ .code = "42710", .message = "Duplicate constraint name" },
         // GAP-0923: ABAC policy DDL validation (duplicate name rejected).
         error.PolicyAlreadyExists => .{ .code = "42710", .message = "Duplicate policy name" },
         error.IncompatibleIndexDataType => .{ .code = "42804", .message = "Incompatible index data type" },

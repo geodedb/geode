@@ -60,6 +60,15 @@
   measurements. `round()` at an effective scale of 38
   (`round(0.99999999999999999999999999999999999999)`) no longer aborts
   either (a regression in the first fix).
+- **A duplicate CREATE CONSTRAINT no longer aborts the server
+  (SONNY-2809):** creating a constraint whose name already exists freed the
+  catalog's key for it twice, which corrupted the allocator and aborted the
+  server (a segfault in a release build) for any user allowed to run DDL. A
+  duplicate name is now refused with 42710 (duplicate object), and
+  `CREATE CONSTRAINT IF NOT EXISTS` is a no-op; the refusal used to return a
+  result whose one column and one row were uninitialized memory. When saving
+  the catalog fails, CREATE CONSTRAINT, CREATE SCHEMA and a new graph no
+  longer leave the map holding a name already freed.
 - **Integer overflow and narrowing no longer abort the server
   (SONNY-2769):** integer overflow, a narrowing cast that does not fit, and
   minInt divided by -1 abort a Debug or ReleaseSafe server. A read-only query
