@@ -13,6 +13,7 @@
 
 const std = @import("std");
 const datetime = @import("types/datetime.zig");
+const decimal_text = @import("types/decimal_text.zig");
 const decimal128 = @import("types/decimal128.zig");
 const jsonb = @import("types/jsonb.zig");
 const xml = @import("types/xml.zig");
@@ -442,15 +443,6 @@ pub fn eqVals(a: Value, b: Value) bool {
     };
 }
 
-// CANARY: REQ=REQ-M5.2-VALUE-TYPES-010; FEATURE="Decimal Helpers"; ASPECT=Power10; STATUS=TESTED; TEST=geodetestlab/specs/gql_type_system_comprehensive.yml; OWNER=value_types; UPDATED=2025-11-13
-/// Calculate 10^scale for decimal arithmetic
-fn pow10(scale: u8) i128 {
-    var p: i128 = 1;
-    var i: u8 = 0;
-    while (i < scale) : (i += 1) p *= 10;
-    return p;
-}
-
 // CANARY: REQ=REQ-VALUE-EQUALITY-002; FEATURE="ExtValueEquality"; ASPECT=Helper; STATUS=TESTED; TEST=geodetestlab/specs/gql_expressions_comprehensive.yml; OWNER=value_types; UPDATED=2026-01-10
 /// Compare two ExtValue instances for equality
 pub fn eqExtValues(a: @import("eval_extended.zig").ExtValue, b: @import("eval_extended.zig").ExtValue) bool {
@@ -559,38 +551,12 @@ pub fn stringify(v: Value, buf: *[64]u8) EvalError![]const u8 {
         },
         .Bool => |b| if (b) "true" else "false",
         .Null => "null",
-        .Decimal => |d| blk2: {
-            // render with scale decimal point
-            const abs = if (d.coeff < 0) -d.coeff else d.coeff;
-            const scale_p = pow10(d.scale);
-            const whole = @divTrunc(abs, scale_p);
-            const frac = @mod(abs, scale_p);
-            var tmp: [64]u8 = undefined;
-            const w = std.fmt.bufPrint(&tmp, "{d}", .{whole}) catch return EvalError.Unsupported;
-            if (d.scale == 0) {
-                const s = if (d.coeff < 0) std.fmt.bufPrint(buf[0..], "-{s}", .{w}) catch return EvalError.Unsupported else std.fmt.bufPrint(buf[0..], "{s}", .{w}) catch return EvalError.Unsupported;
-                break :blk2 s;
-            }
-            // format fractional part with leading zeros to scale width
-            var frac_buf: [32]u8 = undefined;
-            const fb = std.fmt.bufPrint(&frac_buf, "{d}", .{frac}) catch return EvalError.Unsupported;
-            // pad leading zeros
-            if (fb.len < d.scale) {
-                const pad = d.scale - @as(u8, @intCast(fb.len));
-                var padbuf: [32]u8 = undefined;
-                @memset(padbuf[0..pad], '0');
-                const s = if (d.coeff < 0)
-                    std.fmt.bufPrint(buf[0..], "-{s}.{s}{s}", .{ w, padbuf[0..pad], fb }) catch return EvalError.Unsupported
-                else
-                    std.fmt.bufPrint(buf[0..], "{s}.{s}{s}", .{ w, padbuf[0..pad], fb }) catch return EvalError.Unsupported;
-                break :blk2 s;
-            }
-            const s = if (d.coeff < 0)
-                std.fmt.bufPrint(buf[0..], "-{s}.{s}", .{ w, fb }) catch return EvalError.Unsupported
-            else
-                std.fmt.bufPrint(buf[0..], "{s}.{s}", .{ w, fb }) catch return EvalError.Unsupported;
-            break :blk2 s;
-        },
+        // SONNY-2769: at any scale. `pow10` overflowed past scale 38 and
+        // aborted the server (`'a' || <a scale-40 decimal>`), a scale-33 to
+        // scale-38 fraction overran its 32-byte padding buffer, and
+        // minInt(i128) overflowed `-coeff`. A text past the 64-byte buffer is
+        // Unsupported, as for every other type.
+        .Decimal => |d| decimal_text.bufPrint(buf[0..], d.coeff, d.scale) catch return EvalError.Unsupported,
         // Extended types stringify
         .SmallInt => |n| std.fmt.bufPrint(buf[0..], "{d}", .{n}) catch return EvalError.Unsupported,
         .BigInt => |n| std.fmt.bufPrint(buf[0..], "{d}", .{n}) catch return EvalError.Unsupported,

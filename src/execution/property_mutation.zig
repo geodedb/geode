@@ -3,6 +3,7 @@ const graph_store = @import("../graph_store.zig");
 const index_manager = @import("../index/index_manager.zig");
 const property_codec = @import("../property_value_codec.zig");
 const value_types = @import("../value_types.zig");
+const decimal_text = @import("../types/decimal_text.zig");
 const fle_hooks = @import("fle_hooks.zig");
 // A4b: fulltext write-maintenance hook (delete-then-index on SET).
 const fts_index_ops = @import("fts_index_ops.zig");
@@ -15,30 +16,11 @@ const jsonb = @import("../types/jsonb.zig");
 
 const Value = value_types.Value;
 
+/// SONNY-2769: at any scale. `pow *= 10` overflowed past scale 38 and aborted
+/// the server (`SET n.m = {a: <a scale-40 decimal>}`), and a value between -1
+/// and 0 was stored without its sign (-0.5 as 0.5).
 fn formatDecimalForJson(allocator: std.mem.Allocator, coeff: i128, scale: u8) ![]const u8 {
-    if (scale == 0) {
-        return std.fmt.allocPrint(allocator, "{d}", .{coeff});
-    }
-
-    var pow: i128 = 1;
-    var i: u8 = 0;
-    while (i < scale) : (i += 1) pow *= 10;
-
-    const whole: i128 = @divTrunc(coeff, pow);
-    const abs_coeff: i128 = if (coeff < 0) -coeff else coeff;
-    const frac: i128 = @mod(abs_coeff, pow);
-
-    var fracbuf: [64]u8 = undefined;
-    const ftmp = std.fmt.bufPrint(&fracbuf, "{d}", .{frac}) catch return error.OutOfMemory;
-
-    if (ftmp.len < scale) {
-        const missing = scale - @as(u8, @intCast(ftmp.len));
-        var pad: [64]u8 = undefined;
-        @memset(pad[0..missing], '0');
-        return std.fmt.allocPrint(allocator, "{d}.{s}{s}", .{ whole, pad[0..missing], ftmp });
-    }
-
-    return std.fmt.allocPrint(allocator, "{d}.{s}", .{ whole, ftmp });
+    return decimal_text.alloc(allocator, coeff, scale);
 }
 
 fn encodeExtValueToStream(allocator: std.mem.Allocator, ext: property_codec.ExtValue, encoder: anytype) !void {

@@ -261,43 +261,6 @@ const cmpI128 = type_promotion.cmpI128;
 const cmpToBool = type_promotion.cmpToBool;
 const cmpIntsOp = type_promotion.cmpIntsOp;
 
-// CANARY: REQ=REQ-NESTING-REFACTOR-021; FEATURE="NestingReduction"; ASPECT=DecimalParsing; STATUS=TESTED; OWNER=refactor; UPDATED=2026-01-30
-// Helper function to parse a decimal string into coefficient and scale
-fn parseDecimalString(s: []const u8) ?struct { coeff: i128, scale: u8 } {
-    if (std.mem.indexOf(u8, s, ".")) |dot_idx| {
-        const int_part = s[0..dot_idx];
-        const frac_part = s[dot_idx + 1 ..];
-        const int_val = std.fmt.parseInt(i128, int_part, 10) catch return null;
-        const frac_val = std.fmt.parseInt(i128, frac_part, 10) catch return null;
-        var coeff = int_val;
-        const frac_len = frac_part.len;
-        var mult: i128 = 1;
-        var k: usize = 0;
-        while (k < frac_len) : (k += 1) {
-            mult *= 10;
-        }
-        coeff = coeff * mult + frac_val;
-        return .{ .coeff = coeff, .scale = @intCast(frac_len) };
-    } else {
-        const int_val = std.fmt.parseInt(i128, s, 10) catch return null;
-        return .{ .coeff = int_val, .scale = 0 };
-    }
-}
-
-// CANARY: REQ=REQ-NESTING-REFACTOR-022; FEATURE="NestingReduction"; ASPECT=ScaleAdjust; STATUS=TESTED; OWNER=refactor; UPDATED=2026-01-30
-// Helper to adjust decimal scale to target scale
-fn adjustDecimalScale(coeff: i128, current_scale: u8, target_scale: u8) struct { coeff: i128, scale: u8 } {
-    var result_coeff = coeff;
-    var scale = current_scale;
-    while (scale < target_scale) : (scale += 1) {
-        result_coeff *= 10;
-    }
-    while (scale > target_scale) : (scale -= 1) {
-        result_coeff = @divTrunc(result_coeff, 10);
-    }
-    return .{ .coeff = result_coeff, .scale = target_scale };
-}
-
 // CANARY: REQ=REQ-M5.2-EVAL-REFACTOR-009; FEATURE="Circular Dependency Resolution"; ASPECT=ValueEquality; STATUS=EXEMPT; OWNER=eval; UPDATED=2025-11-13
 // Phase 5 M5.2: Use eqVals from value_types module
 const eqVals = value_types.eqVals;
@@ -767,10 +730,6 @@ pub fn evalBinary(alloc: std.mem.Allocator, op: ast.BinOp, l: Value, r: Value) E
         },
     };
 }
-
-// CANARY: REQ=REQ-M5.2-EVAL-REFACTOR-010; FEATURE="Circular Dependency Resolution"; ASPECT=Pow10; STATUS=EXEMPT; OWNER=eval; UPDATED=2025-11-13
-// Phase 5 M5.2: Use pow10 from value_types module
-const pow10 = value_types.pow10;
 
 // CANARY: REQ=REQ-M6.1-EVAL-REFACTOR-004; FEATURE="Phase 6 Modularization"; ASPECT=ComparisonHelpers; STATUS=EXEMPT; OWNER=eval; UPDATED=2025-11-13
 // Phase 6 M6.1: Comparison helper functions moved to eval/type_promotion.zig

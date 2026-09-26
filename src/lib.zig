@@ -195,6 +195,7 @@ pub const types = struct {
     pub const evaluator_functions = @import("types/evaluator_functions.zig");
     pub const network = @import("types/network.zig");
     pub const decimal128 = @import("types/decimal128.zig");
+    pub const decimal_text = @import("types/decimal_text.zig");
     pub const narrowing = @import("types/narrowing.zig");
     pub const datetime = @import("types/datetime.zig");
     pub const jsonb = @import("types/jsonb.zig");

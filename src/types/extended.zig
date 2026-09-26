@@ -1,5 +1,6 @@
 const std = @import("std");
 const uuid_lib = @import("uuid");
+const decimal_text = @import("decimal_text.zig");
 
 // CANARY: REQ=REQ-GQL-083; FEATURE="ExtendedDecimalFormatting"; ASPECT=FORMATTER; STATUS=TESTED; TEST=extended.decimal parse/format; OWNER=engine; UPDATED=2025-09-26
 
@@ -94,81 +95,19 @@ pub fn decimalFromString(text: []const u8) !Decimal {
             continue;
         }
         if (c < '0' or c > '9') return error.InvalidDecimal;
-        coeff = coeff * 10 + @as(i128, c - '0');
-        if (seen_dot) scale += 1;
+        // SONNY-2769: past i128, or past 255 fraction digits, is Overflow
+        // (`coeff * 10` and `scale += 1` aborted).
+        coeff = std.math.add(i128, std.math.mul(i128, coeff, 10) catch return error.Overflow, c - '0') catch return error.Overflow;
+        if (seen_dot) scale = std.math.add(u8, scale, 1) catch return error.Overflow;
     }
     if (negative) coeff = -coeff;
     return .{ .coeff = coeff, .scale = scale };
 }
 
+/// SONNY-2769: the shared formatter (`-value` overflowed for minInt(i128)).
+/// The fraction is exactly `scale` digits (SONNY-2394: 0.01, not 0.1).
 pub fn decimalToString(dec: Decimal, allocator: std.mem.Allocator) ![]u8 {
-    // Convert coefficient to absolute digits (forward order) then insert decimal point
-    var value = dec.coeff;
-    const negative = value < 0;
-    if (negative) value = -value;
-    var rev: [128]u8 = undefined; // store reversed digits
-    var rlen: usize = 0;
-    if (value == 0) {
-        rev[0] = '0';
-        rlen = 1;
-    }
-    while (value > 0) : (value = @divTrunc(value, 10)) {
-        const digit = @as(u8, @intCast(@mod(value, 10)));
-        rev[rlen] = '0' + digit;
-        rlen += 1;
-    }
-    // Now reverse into forward buffer
-    var digits: [128]u8 = undefined;
-    var dlen: usize = 0;
-    var i: isize = @as(isize, @intCast(rlen)) - 1;
-    while (i >= 0) : (i -= 1) {
-        digits[dlen] = rev[@intCast(i)];
-        dlen += 1;
-    }
-    // SONNY-2394: the fraction is always exactly `scale` digits. When the
-    // coefficient has fewer digits than the scale (e.g. coeff=1, scale=2 for
-    // 0.01) the missing leading fractional zeros must be emitted -- the old
-    // code emitted only the available digits, so 0.01 rendered as "0.1" (a
-    // 10x value change) and -0.01 as "-0.1".
-    const scale: usize = dec.scale;
-    const int_len = if (dlen > scale) dlen - scale else 0;
-    const frac_len = scale;
-    const frac_digits = @min(scale, dlen); // taken from the coefficient; the rest are leading zeros
-    var needed: usize = (if (int_len == 0) 1 else int_len) + frac_len;
-    if (frac_len > 0) needed += 1; // dot
-    if (negative) needed += 1;
-    var out = try allocator.alloc(u8, needed);
-    var o: usize = 0;
-    if (negative) {
-        out[o] = '-';
-        o += 1;
-    }
-    // integer part ("0" when every coefficient digit is fractional)
-    if (int_len == 0) {
-        out[o] = '0';
-        o += 1;
-    }
-    var k: usize = 0;
-    while (k < int_len) : (k += 1) {
-        out[o] = digits[k];
-        o += 1;
-    }
-    if (frac_len > 0) {
-        out[o] = '.';
-        o += 1;
-        var z: usize = frac_digits;
-        while (z < frac_len) : (z += 1) {
-            out[o] = '0';
-            o += 1;
-        }
-        var fstart = dlen - frac_digits;
-        while (fstart < dlen) : (fstart += 1) {
-            out[o] = digits[fstart];
-            o += 1;
-        }
-    }
-    std.debug.assert(o == needed);
-    return out;
+    return decimal_text.alloc(allocator, dec.coeff, dec.scale);
 }
 
 pub fn geoboxContains(b: GeoBox, p: Point) bool {

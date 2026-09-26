@@ -27,6 +27,7 @@ const diagnostics = @import("diagnostics.zig");
 // CANARY: REQ=REQ-M5.2-EXECUTION-REFACTOR-001; FEATURE="Circular Dependency Resolution"; ASPECT=ValueTypesImport; STATUS=EXEMPT; OWNER=execution; UPDATED=2025-11-13
 // Phase 5 M5.2: Import shared value types from value_types.zig module
 const value_types = @import("value_types.zig");
+const value_order = @import("execution/value_order.zig");
 
 // CANARY: REQ=REQ-M5.2-EXECUTION-REFACTOR-002; FEATURE="Circular Dependency Resolution"; ASPECT=TypeAliases; STATUS=EXEMPT; OWNER=execution; UPDATED=2025-11-13
 // Phase 5 M5.2: Create local aliases for value types (minimizes code changes)
@@ -4093,21 +4094,13 @@ pub fn executeWithClauseWithGroupByAndParams(allocator: std.mem.Allocator, input
                             if (val_a.Bool == val_b.Bool) break :blk 0;
                             break :blk if (val_a.Bool) 1 else -1;
                         }
-                        if (val_a == .Decimal and val_b == .Decimal) {
-                            // Compare decimals by normalizing to same scale
-                            const dec_a = val_a.Decimal;
-                            const dec_b = val_b.Decimal;
-                            // To compare a/10^sa vs b/10^sb, normalize by cross-multiplying
-                            // a * 10^sb vs b * 10^sa
-                            var pow_a: i128 = 1;
-                            var pow_b: i128 = 1;
-                            for (0..dec_b.scale) |_| pow_a *= 10;
-                            for (0..dec_a.scale) |_| pow_b *= 10;
-                            const norm_a = dec_a.coeff * pow_a;
-                            const norm_b = dec_b.coeff * pow_b;
-                            if (norm_a < norm_b) break :blk -1;
-                            if (norm_a > norm_b) break :blk 1;
-                            break :blk 0;
+                        // SONNY-2769 (round 5): numbers by exact value, as
+                        // RETURN ... ORDER BY orders them. The decimal arm
+                        // cross-multiplied by 10^scale in i128, which
+                        // overflowed and aborted the server; doubles and mixed
+                        // numbers compared as equal.
+                        if (value_order.numberOf(val_a)) |na| {
+                            if (value_order.numberOf(val_b)) |nb| break :blk value_order.compareNumbers(na, nb);
                         }
                         // For other types, treat as equal
                         break :blk 0;
@@ -4176,25 +4169,14 @@ pub fn valuesEqual(a: Value, b: Value) bool {
     if (a == .Bool and b == .Bool) return a.Bool == b.Bool;
     if (a == .Str and b == .Str) return std.mem.eql(u8, a.Str, b.Str);
 
-    // Decimal comparison
-    if (a == .Decimal and b == .Decimal) {
-        const a_dec = a.Decimal;
-        const b_dec = b.Decimal;
-        if (a_dec.scale == b_dec.scale) {
-            return a_dec.coeff == b_dec.coeff;
-        }
-        // Normalize scales for comparison
-        if (a_dec.scale < b_dec.scale) {
-            const scale_diff = b_dec.scale - a_dec.scale;
-            var multiplier: i128 = 1;
-            for (0..scale_diff) |_| multiplier *= 10;
-            return a_dec.coeff * multiplier == b_dec.coeff;
-        } else {
-            const scale_diff = a_dec.scale - b_dec.scale;
-            var multiplier: i128 = 1;
-            for (0..scale_diff) |_| multiplier *= 10;
-            return a_dec.coeff == b_dec.coeff * multiplier;
-        }
+    // SONNY-2769 (round 5): two numbers are equal when their exact values
+    // are (value_order, the identity GROUP BY and DISTINCT key them by): 1.5
+    // equals 1.50, and 1 equals 1.0. The decimal arm aligned the scales in
+    // i128 (`multiplier *= 10`, `coeff * multiplier`), which overflowed and
+    // aborted the server past 10^38: an inline property map
+    // (`MATCH (n:T {x: <a scale-40 decimal>})`) and MERGE reached it.
+    if (value_order.numberOf(a)) |na| {
+        if (value_order.numberOf(b)) |nb| return value_order.compareNumbers(na, nb) == 0;
     }
 
     // Node and Edge comparison by pointer
@@ -4209,12 +4191,6 @@ pub fn valuesEqual(a: Value, b: Value) bool {
         }
         return true;
     }
-
-    // Advanced numeric types
-    if (a == .SmallInt and b == .SmallInt) return a.SmallInt == b.SmallInt;
-    if (a == .BigInt and b == .BigInt) return a.BigInt == b.BigInt;
-    if (a == .Real and b == .Real) return a.Real == b.Real;
-    if (a == .Double and b == .Double) return a.Double == b.Double;
 
     // String types
     if (a == .Char and b == .Char) return std.mem.eql(u8, a.Char.data, b.Char.data);

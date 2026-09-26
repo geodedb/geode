@@ -79,14 +79,26 @@
   - procedure arguments (`tde.configure_mock_kms`, `tde.configure_rotation`,
     `audit.configure`, `algo.bfs.stream` depth), a SMALLINT parameter, a
     typed DECIMAL parameter's scale, and a TIME literal with 256 fraction
-    digits.
+    digits;
+  - a decimal past scale 38, wherever 10^scale was computed in i128: CAST
+    to STRING, VARCHAR or TEXT, string concatenation (`'a' || <it>`), an
+    inline property map (`MATCH (n:T {x: <it>})` on the legacy executor,
+    MERGE on every session), the legacy `WITH ... ORDER BY`, a map
+    property's stored JSONB text, and the ORDER BY keys the server prints
+    for a paged result (`ORDER BY x + <it>`).
 
   A value that does not fit is refused with 22003 (a procedure argument
   with InvalidArgs), or kept exactly where the answer is defined: `x % -1` is
   0, a pre-1970 timestamp and a negative year are formatted, a CAST string's
   fraction digits past the target scale are truncated, and a `knn()` k past
   u32 is clamped (more neighbours than the index holds is all of them).
-  `CAST('-1.5' AS DECIMAL)` keeps its sign (it was -0.5).
+  `CAST('-1.5' AS DECIMAL)` keeps its sign (it was -0.5). A decimal's text
+  is exact at any scale: `CAST(-0.5 AS STRING)` is '-0.5' (it was '0.5'),
+  a map property of -0.5 is stored as -0.5 (it was 0.5), and a decimal of
+  more than 32 digits casts to its text (it was NULL). **Behaviour
+  change:** an inline property map and MERGE compare two numbers by their
+  exact value, as `=` and GROUP BY do: `MERGE (n:T {x: 1.0})` matches a
+  node whose x is the integer 1 (it created a second node).
 
 ### Fixed
 

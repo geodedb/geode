@@ -11,6 +11,13 @@
 // build before the fix (the round-4 report has the probe runs); a value that
 // does not fit is refused with a typed error (22003) now.
 //
+// Round 5: every hand-rolled 10^scale over a decimal scale (`*= 10` per
+// digit, then `coeff *` it) overflowed past scale 38: CAST to a string type,
+// string concatenation, an inline property map and MERGE, the legacy WITH
+// ... ORDER BY, a map property's JSONB text and the server's ORDER BY keys.
+// Decimals are now formatted digit by digit (types/decimal_text.zig) and
+// compared by exact value (value_order).
+//
 // CANARY: REQ=REQ-SONNY-2769-INTEGER-OVERFLOW; FEATURE="IntegerOverflow"; ASPECT=Regression; STATUS=TESTED; TEST=tests/test_sonny2769_integer_overflow.zig; OWNER=engine; UPDATED=2026-09-25
 
 const std = @import("std");
@@ -558,4 +565,139 @@ test "SONNY-2769: the JSON result writer formats a decimal at any scale" {
     const json = try r.toJson(testing.allocator);
     defer testing.allocator.free(json);
     try testing.expect(std.mem.indexOf(u8, json, "0.0000000000000000005") != null);
+}
+
+// ---------------------------------------------------------------------------
+// Round 5: decimals at any scale, formatted and compared
+// ---------------------------------------------------------------------------
+
+/// 1 at scale 36, 40 and 255, 15 at scale 40, and 38 digits at scale 20.
+const s36 = "0." ++ "0" ** 35 ++ "1";
+const s40 = "0." ++ "0" ** 39 ++ "1";
+const s255 = "0." ++ "0" ** 254 ++ "1";
+const s40_15 = "0." ++ "0" ** 38 ++ "15";
+const big38 = "123456789012345678.90123456789012345678";
+
+fn checkDecimalText(s: *Session, f: *Failures) !void {
+    // CAST to a string type computed 10^scale in i128 (C2), wrote the
+    // fraction into 32 bytes (NULL past 32 digits) and lost the sign of a
+    // value between -1 and 0.
+    try expectValue(s, f, "RETURN CAST(" ++ s40 ++ " AS STRING) AS x", "'" ++ s40 ++ "'");
+    try expectValue(s, f, "RETURN CAST(" ++ s40 ++ " AS VARCHAR) AS x", "'" ++ s40 ++ "'");
+    try expectValue(s, f, "RETURN CAST(" ++ s255 ++ " AS TEXT) AS x", "'" ++ s255 ++ "'");
+    try expectValue(s, f, "RETURN CAST(-0.5 AS STRING) AS x", "'-0.5'");
+    try expectValue(s, f, "RETURN CAST(12345678901234567890123456789012345.678 AS STRING) AS x", "'12345678901234567890123456789012345.678'");
+    // String concatenation: a scale-36 fraction overran a 32-byte padding
+    // buffer, a scale-40 one overflowed; past the 64-byte text buffer it is
+    // refused, as for every other type.
+    try expectValue(s, f, "RETURN 'a' || " ++ s36 ++ " AS x", "'a" ++ s36 ++ "'");
+    try expectValue(s, f, "RETURN 'a' || " ++ s40 ++ " AS x", "'a" ++ s40 ++ "'");
+    try expectValue(s, f, "RETURN 'a' || -0.5 AS x", "'a-0.5'");
+    try expectFail(s, f, "RETURN 'a' || " ++ s255 ++ " AS x", &.{}, error.Unsupported);
+    // A map property is stored as JSONB text: `pow *= 10` overflowed, and
+    // -0.5 was stored as 0.5.
+    try s.exec("CREATE (:DM {m: {a: " ++ s40 ++ ", b: -0.5}})", &.{});
+    try expectValue(s, f, "MATCH (n:DM) RETURN n.m.b AS b", "-0.500000m");
+    try s.exec("MATCH (n:DM) SET n.m = {a: -0.25, b: " ++ s255 ++ "}", &.{});
+    try expectValue(s, f, "MATCH (n:DM) RETURN n.m.a AS a", "-0.250000m");
+}
+
+test "SONNY-2769: a decimal is formatted at any scale" {
+    try inModes("decimal text", &modes, checkDecimalText);
+}
+
+fn checkDecimalEquality(s: *Session, f: *Failures) !void {
+    // The session is the active context, as a transport handler makes it: a
+    // node MERGE creates takes the session's tenant from it.
+    const prev = execution.pushActiveContext(&s.ctx);
+    defer execution.popActiveContext(prev);
+    try s.exec("CREATE (:DQ {x: 1.5})", &.{});
+    try s.exec("CREATE (:DQ {x: 100000000000000000000000000000.0})", &.{});
+    // C3: an inline property map aligned the scales in i128 (legacy
+    // sessions), and MERGE does on every session.
+    try expectValue(s, f, "MATCH (n:DQ {x: " ++ s40_15 ++ "}) RETURN count(n) AS c", "0");
+    try expectValue(s, f, "MATCH (n:DQ {x: 1.00000000000}) RETURN count(n) AS c", "0");
+    try expectValue(s, f, "MERGE (n:DQ {x: " ++ s40_15 ++ "}) RETURN n.x AS x", s40_15 ++ "m");
+    try expectValue(s, f, "MERGE (n:DQ {x: 1.00000000000}) RETURN n.x AS x", "1.00000000000m");
+    // A number equal by value is the same property value: MERGE matches it.
+    try expectValue(s, f, "MERGE (n:DQ {x: 1.50}) RETURN n.x AS x", "1.5m");
+    try expectValue(s, f, "MATCH (n:DQ) RETURN count(n) AS c", "4");
+    try s.exec("CREATE (:DQI {x: 1})", &.{});
+    try expectValue(s, f, "MERGE (n:DQI {x: 1.0}) RETURN n.x AS x", "1");
+    try expectValue(s, f, "MATCH (n:DQI) RETURN count(n) AS c", "1");
+}
+
+test "SONNY-2769: an inline property map and MERGE compare decimals at any scale" {
+    try inModes("decimal equality", &modes, checkDecimalEquality);
+}
+
+fn checkWithOrder(s: *Session, f: *Failures) !void {
+    try s.exec("CREATE (:DW {x: " ++ big38 ++ "})", &.{});
+    try s.exec("CREATE (:DW {x: 0.25})", &.{});
+    try s.exec("CREATE (:DW {x: " ++ s40 ++ "})", &.{});
+    // The legacy WITH ... ORDER BY cross-multiplied by 10^scale in i128.
+    try expectValue(s, f, "MATCH (n:DW) WITH n.x AS x ORDER BY x LIMIT 1 RETURN x", s40 ++ "m");
+    try expectValue(s, f, "MATCH (n:DW) WITH n.x AS x ORDER BY x DESC LIMIT 1 RETURN x", big38 ++ "m");
+}
+
+test "SONNY-2769: WITH ... ORDER BY orders decimals at any scale" {
+    try inModes("with order", &modes, checkWithOrder);
+}
+
+fn checkNodeJson(s: *Session, f: *Failures) !void {
+    // ExecutionResult.toJson writes a node's properties through its own
+    // formatter: `divisor *= 10` overflowed, and -0.5 lost its sign.
+    const aa = s.arena.allocator();
+    try s.exec("CREATE (:DJ {x: -0.5, y: " ++ s40 ++ "})", &.{});
+    var r = try s.run("MATCH (n:DJ) RETURN n", &.{});
+    defer r.deinit(aa);
+    const json = try r.toJson(aa);
+    for ([_][]const u8{ "\"x\":-0.5", "\"y\":" ++ s40 }) |want| {
+        if (std.mem.indexOf(u8, json, want) == null) try f.add("[{s}] node JSON: expected {s} in {s}", .{ @tagName(s.mode), want, json });
+    }
+}
+
+test "SONNY-2769: the JSON writer formats a node's decimal properties at any scale" {
+    try inModes("node JSON", &eval_modes, checkNodeJson);
+}
+
+test "SONNY-2769: the server's ORDER BY keys print a decimal at any scale" {
+    // buildOrderKeys prints every ORDER BY key; `p *= 10` overflowed.
+    var arena = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena.deinit();
+    const aa = arena.allocator();
+    var parsed = try geode.parseGqlOptions("RETURN 1 AS x ORDER BY x + " ++ s40 ++ ", " ++ s255, aa, .{});
+    defer parsed.deinit();
+    const keys = parsed.program.statements[0].Query.order_by.?.keys;
+    try testing.expectEqualStrings("x + " ++ s40, try geode.printer.stringifyExprAlloc(aa, keys[0].expr, .{}));
+    try testing.expectEqualStrings(s255, try geode.printer.stringifyExprAlloc(aa, keys[1].expr, .{}));
+}
+
+test "SONNY-2769: the decimal text, the JSON writer and the library helpers at any scale" {
+    const text = geode.types.decimal_text;
+    const a = testing.allocator;
+    const cases = [_]struct { coeff: i128, scale: u8, want: []const u8 }{
+        .{ .coeff = 150, .scale = 2, .want = "1.50" },
+        .{ .coeff = -5, .scale = 1, .want = "-0.5" },
+        .{ .coeff = 1, .scale = 40, .want = s40 },
+        .{ .coeff = std.math.minInt(i128), .scale = 39, .want = "-0.170141183460469231731687303715884105728" },
+        .{ .coeff = std.math.maxInt(i128), .scale = 0, .want = "170141183460469231731687303715884105727" },
+    };
+    for (cases) |c| {
+        const got = try text.alloc(a, c.coeff, c.scale);
+        defer a.free(got);
+        try testing.expectEqualStrings(c.want, got);
+    }
+    const long = try text.alloc(a, 1, 255);
+    defer a.free(long);
+    try testing.expectEqualStrings(s255, long);
+    // Library helpers with no server caller, hardened the same way.
+    const conv = geode.types.numeric_promotion.ValueConverter;
+    try testing.expectError(error.Overflow, conv.intToDecimal(std.math.maxInt(i64), 20));
+    try testing.expectEqual(@as(i128, 12300), (try conv.intToDecimal(123, 2)).coeff);
+    try testing.expectError(error.Overflow, geode.ext_types.decimalFromString("1" ** 40));
+    try testing.expectError(error.Overflow, geode.ext_types.decimalFromString("0." ++ "0" ** 255 ++ "1"));
+    const min_text = try geode.ext_types.decimalToString(.{ .coeff = std.math.minInt(i128), .scale = 2 }, a);
+    defer a.free(min_text);
+    try testing.expectEqualStrings("-1701411834604692317316873037158841057.28", min_text);
 }

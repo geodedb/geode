@@ -23,6 +23,7 @@ const public_suffix = @import("../types/public_suffix.zig");
 const type_promotion = @import("type_promotion.zig");
 const decimal128 = @import("../types/decimal128.zig");
 const narrowing = @import("../types/narrowing.zig");
+const decimal_text = @import("../types/decimal_text.zig");
 
 pub const Value = value_types.Value;
 pub const EvalError = value_types.EvalError;
@@ -1040,36 +1041,12 @@ pub fn evalTypeCastFunction(
                     return Value{ .Str = str };
                 },
                 .Decimal => |d| {
-                    if (d.scale == 0) {
-                        const str = try std.fmt.allocPrint(allocator, "{d}", .{d.coeff});
-                        return Value{ .Str = str };
-                    } else {
-                        var divisor: i128 = 1;
-                        var sc = d.scale;
-                        while (sc > 0) : (sc -= 1) {
-                            divisor *= 10;
-                        }
-                        const int_part = @divTrunc(d.coeff, divisor);
-                        const frac_part_signed = @rem(d.coeff, divisor);
-                        const frac_part = if (frac_part_signed < 0) -frac_part_signed else frac_part_signed;
-                        var frac_buf: [32]u8 = undefined;
-                        const frac_str = std.fmt.bufPrint(&frac_buf, "{d}", .{frac_part}) catch return Value{ .Null = {} };
-                        const frac_len = frac_str.len;
-                        const zeros_needed: usize = if (d.scale > frac_len) d.scale - @as(u8, @intCast(frac_len)) else 0;
-                        var int_buf: [32]u8 = undefined;
-                        const int_str = std.fmt.bufPrint(&int_buf, "{d}", .{int_part}) catch return Value{ .Null = {} };
-                        const total_len = int_str.len + 1 + zeros_needed + frac_len;
-                        const result = allocator.alloc(u8, total_len) catch return Value{ .Null = {} };
-                        var pos: usize = 0;
-                        @memcpy(result[pos..][0..int_str.len], int_str);
-                        pos += int_str.len;
-                        result[pos] = '.';
-                        pos += 1;
-                        @memset(result[pos..][0..zeros_needed], '0');
-                        pos += zeros_needed;
-                        @memcpy(result[pos..][0..frac_len], frac_str);
-                        return Value{ .Str = result };
-                    }
+                    // SONNY-2769: the text of a decimal at any scale. The
+                    // hand-rolled `divisor *= 10` overflowed past scale 38 and
+                    // aborted the server; past 32 digits the text came out
+                    // NULL, and a value between -1 and 0 lost its sign
+                    // (-0.5 was '0.5').
+                    return Value{ .Str = try decimal_text.alloc(allocator, d.coeff, d.scale) };
                 },
                 .Bool => |b| return Value{ .Str = if (b) "true" else "false" },
                 .Str => |s| return Value{ .Str = s },

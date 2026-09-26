@@ -14,6 +14,7 @@ const fle_integration = @import("../fle_integration.zig");
 const property_codec = @import("../property_value_codec.zig");
 const execution = @import("../execution.zig");
 const value_types = @import("../value_types.zig");
+const decimal_text = @import("../types/decimal_text.zig");
 
 // CANARY: REQ=REQ-LIB-MIGRATION-JSON-019; FEATURE="JSON Library Migration"; ASPECT=ValueUtilities; STATUS=TESTED; OWNER=execution; UPDATED=2026-01-24
 const json_lib = @import("json");
@@ -376,32 +377,9 @@ pub fn writeValue(allocator: std.mem.Allocator, writer: anytype, value: Value) !
                         },
                         .Int => |i| try writer.print("{d}", .{i}),
                         .Float => |f| try writer.print("{d}", .{f}),
-                        .Decimal => |d| {
-                            // Format decimal with exact precision
-                            if (d.scale == 0) {
-                                try writer.print("{d}", .{d.coeff});
-                            } else {
-                                var divisor: i128 = 1;
-                                var sc = d.scale;
-                                while (sc > 0) : (sc -= 1) {
-                                    divisor *= 10;
-                                }
-                                const int_part = @divTrunc(d.coeff, divisor);
-                                const frac_part_signed = @rem(d.coeff, divisor);
-                                const frac_part = if (frac_part_signed < 0) -frac_part_signed else frac_part_signed;
-                                // Format with leading zeros for fractional part
-                                var frac_buf: [32]u8 = undefined;
-                                const frac_str = std.fmt.bufPrint(&frac_buf, "{d}", .{frac_part}) catch "0";
-                                try writer.print("{d}.", .{int_part});
-                                // Add leading zeros
-                                const zeros_needed: usize = if (d.scale > frac_str.len) d.scale - @as(u8, @intCast(frac_str.len)) else 0;
-                                var z: usize = 0;
-                                while (z < zeros_needed) : (z += 1) {
-                                    try writer.writeByte('0');
-                                }
-                                try writer.writeAll(frac_str);
-                            }
-                        },
+                        // SONNY-2769: at any scale (`divisor *= 10` overflowed
+                        // past 38; a value between -1 and 0 lost its sign).
+                        .Decimal => |d| try decimal_text.write(writer, d.coeff, d.scale),
                         .Bool => |b| try writer.writeAll(if (b) "true" else "false"),
                         .Null => try writer.writeAll("null"),
                         .ExtValue => {
@@ -472,32 +450,9 @@ pub fn writeValue(allocator: std.mem.Allocator, writer: anytype, value: Value) !
                         },
                         .Int => |i| try writer.print("{d}", .{i}),
                         .Float => |f| try writer.print("{d}", .{f}),
-                        .Decimal => |d| {
-                            // Format decimal with exact precision
-                            if (d.scale == 0) {
-                                try writer.print("{d}", .{d.coeff});
-                            } else {
-                                var divisor: i128 = 1;
-                                var sc = d.scale;
-                                while (sc > 0) : (sc -= 1) {
-                                    divisor *= 10;
-                                }
-                                const int_part = @divTrunc(d.coeff, divisor);
-                                const frac_part_signed = @rem(d.coeff, divisor);
-                                const frac_part = if (frac_part_signed < 0) -frac_part_signed else frac_part_signed;
-                                // Format with leading zeros for fractional part
-                                var frac_buf: [32]u8 = undefined;
-                                const frac_str = std.fmt.bufPrint(&frac_buf, "{d}", .{frac_part}) catch "0";
-                                try writer.print("{d}.", .{int_part});
-                                // Add leading zeros
-                                const zeros_needed: usize = if (d.scale > frac_str.len) d.scale - @as(u8, @intCast(frac_str.len)) else 0;
-                                var z: usize = 0;
-                                while (z < zeros_needed) : (z += 1) {
-                                    try writer.writeByte('0');
-                                }
-                                try writer.writeAll(frac_str);
-                            }
-                        },
+                        // SONNY-2769: at any scale (`divisor *= 10` overflowed
+                        // past 38; a value between -1 and 0 lost its sign).
+                        .Decimal => |d| try decimal_text.write(writer, d.coeff, d.scale),
                         .Bool => |b| try writer.writeAll(if (b) "true" else "false"),
                         .Null => try writer.writeAll("null"),
                         .ExtValue => {
