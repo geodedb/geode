@@ -126,6 +126,19 @@
   A request that changes a graph that does not exist is refused with 3F000,
   and the graph is not created. The CLI's `-g` flag, which sends a
   `USE GRAPH` of the current graph before the query, works as before.
+- **Offline auth commands verify the security graph before they change it
+  (SONNY-2798):** offline commands (`geode user ...`, `geode role create|delete`,
+  `geode policy create|delete`, `geode grant`, `geode revoke`,
+  `geode apikey create|revoke|revoke-all`, `geode auth init`) loaded
+  `__geode_security` as it was on disk. Some of them then re-signed the whole
+  HMAC chain without checking it first. So a record written at rest without
+  the key, such as an allow-write GPS policy, a superuser user or a graph
+  grant, was signed by the next offline change and took effect at the next
+  server start. Each of these commands now verifies the chain before it
+  changes anything, and refuses a store that does not verify. It changes
+  nothing and points to `geode auth verify` and `geode auth reseal`. A
+  change made on a verified store is sealed, so a sequence of offline
+  changes, and the next server start, verify without a manual reseal.
 - **Policy DDL is durable or fails; the RLS compiler bounds the VM stack;
   the security loaders survive out-of-range values (SONNY-2757):**
   - ALTER POLICY and DROP POLICY used to change the in-memory catalog and

@@ -10543,6 +10543,20 @@ pub fn build(b: *std.Build) void {
     const sonny2757_step = b.step("test-sonny2757-policy-hygiene", "Run SONNY-2757 regression (the RLS compiler refuses an expression that would overflow the VM stack; ALTER/DROP POLICY and geode.auth.policy_create/delete fail and change nothing when the write-through fails; an out-of-range stored value marks a security record tampered)");
     sonny2757_step.dependOn(&run_sonny2757_tests.step);
 
+    // SONNY-2798: offline auth commands verify the __geode_security chain
+    // before any change (spawns the installed CLI against planted stores).
+    const sonny2798_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny2798_offline_verify.zig"), .target = target, .optimize = optimize });
+    sonny2798_test_mod.link_libc = true;
+    sonny2798_test_mod.addImport("geode", root_mod);
+    sonny2798_test_mod.addImport("auth_graph_manager", auth_graph_manager_mod);
+    sonny2798_test_mod.addImport("cli_auth_helpers", cli_auth_helpers_mod);
+    const sonny2798_tests = b.addTest(.{ .root_module = sonny2798_test_mod });
+    const run_sonny2798_tests = b.addRunArtifact(sonny2798_tests);
+    run_sonny2798_tests.step.dependOn(&install_geode_exe.step);
+    shardDep(test_step, &run_sonny2798_tests.step, 1, test_shard_loads, test_shard_index);
+    const sonny2798_step = b.step("test-sonny2798-offline-verify", "Run SONNY-2798 regression (every offline auth command refuses a store whose chain a planted record broke, signs nothing, and seals a verified change)");
+    sonny2798_step.dependOn(&run_sonny2798_tests.step);
+
     const sonny2750_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny2750_policy_record_kind.zig"), .target = target, .optimize = optimize });
     sonny2750_test_mod.link_libc = true;
     sonny2750_test_mod.addImport("geode", root_mod);

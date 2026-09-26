@@ -87,6 +87,9 @@ pub fn cmdAuthInit(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usiz
         std.process.exit(@intFromEnum(ExitCode.general_error));
     };
     defer cli_auth.deinitAndSaveCliAuth(allocator, &mgr);
+    // SONNY-2798: a store that already has records must verify (the
+    // bootstrap below refuses it anyway; this says why when it is tampered).
+    cli_auth.requireIntactChain(allocator, &mgr, "auth", "init");
 
     // Resolve HMAC key
     const kr = auth_graph_manager.AuthGraphManager.resolveHmacKey(allocator, data_dir) catch |err| {
