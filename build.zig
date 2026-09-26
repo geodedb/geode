@@ -10557,6 +10557,23 @@ pub fn build(b: *std.Build) void {
     const sonny2798_step = b.step("test-sonny2798-offline-verify", "Run SONNY-2798 regression (every offline auth command refuses a store whose chain a planted record broke, signs nothing, and seals a verified change)");
     sonny2798_step.dependOn(&run_sonny2798_tests.step);
 
+    // SONNY-2778: the generated admin password file (O_CREAT|O_EXCL|
+    // O_NOFOLLOW, 0600, never in the cwd, never over a planted file or link),
+    // and UserManager's policy strings (spawns the installed CLI and server).
+    const sonny2778_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny2778_admin_password_file.zig"), .target = target, .optimize = optimize });
+    sonny2778_test_mod.link_libc = true;
+    sonny2778_test_mod.addImport("geode", root_mod);
+    sonny2778_test_mod.addImport("geode_auth", auth_mod);
+    sonny2778_test_mod.addImport("rls", rls_mod);
+    sonny2778_test_mod.addImport("user_manager", user_manager_mod);
+    sonny2778_test_mod.addImport("user_storage", user_storage_mod);
+    const sonny2778_tests = b.addTest(.{ .root_module = sonny2778_test_mod });
+    const run_sonny2778_tests = b.addRunArtifact(sonny2778_tests);
+    run_sonny2778_tests.step.dependOn(&install_geode_exe.step);
+    shardDep(test_step, &run_sonny2778_tests.step, 1, test_shard_loads, test_shard_index);
+    const sonny2778_step = b.step("test-sonny2778-admin-password-file", "Run SONNY-2778 regression (the generated admin password file is created O_EXCL|O_NOFOLLOW 0600 under the data dir only, never over a planted file or link, by SecurityManager, the server and geode auth init; UserManager frees its policy strings)");
+    sonny2778_step.dependOn(&run_sonny2778_tests.step);
+
     const sonny2750_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny2750_policy_record_kind.zig"), .target = target, .optimize = optimize });
     sonny2750_test_mod.link_libc = true;
     sonny2750_test_mod.addImport("geode", root_mod);

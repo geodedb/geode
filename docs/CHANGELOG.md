@@ -126,6 +126,26 @@
   A request that changes a graph that does not exist is refused with 3F000,
   and the graph is not created. The CLI's `-g` flag, which sends a
   `USE GRAPH` of the current graph before the query, works as before.
+- **The generated admin password file is created safely, in the data
+  directory only (SONNY-2778):** the first boot of `geode serve`,
+  `geode auth init` and the legacy `SecurityManager` write a generated admin
+  password to `<data-dir>/.geode_admin_password`. They opened it with
+  O_CREAT | O_TRUNC. A file already at the path kept its mode and owner, so
+  a world-readable file created there in advance received the password, and
+  a symbolic link there was followed. With no data directory, the server and
+  `SecurityManager` wrote the file into the current working directory. Now:
+  - the file is created with O_CREAT | O_EXCL | O_NOFOLLOW and mode 0600,
+    set again after the open whatever the umask, in the data directory only;
+  - nothing is written when anything is already at the path, a file or a
+    symbolic link. `geode auth init` refuses before it creates the admin;
+    the server logs `[startup] generated initial admin password NOT
+    written …`, and the password is then set with
+    `geode user reset-password`;
+  - with no data directory, nothing is written.
+
+  Retrieval and rotation are in docs/USER_AUTH.md ("The generated admin
+  password"), which no longer gives `geodesic` as a default password. The
+  `geode-auth` tool no longer leaks the RLS policy strings it copies.
 - **Offline auth commands verify the security graph before they change it
   (SONNY-2798):** offline commands (`geode user ...`, `geode role create|delete`,
   `geode policy create|delete`, `geode grant`, `geode revoke`,

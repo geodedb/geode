@@ -130,7 +130,7 @@ REQ-ABAC-WIRE-006,ABAC Enforcement,InitContext,TESTED,,,security,2026-01-15,src/
 REQ-ABAC-WIRE-007,ABAC Enforcement,Cleanup,TESTED,,,security,2026-01-15,src/server/server_init.zig,183
 REQ-ABAC-WIRE-008,ABAC Enforcement,EnvVar,TESTED,,,security,2026-01-15,src/server/server_init.zig,300
 REQ-ABAC-WIRE-009,ABAC Enforcement,SecurityInit,TESTED,,,security,2026-01-15,src/server/server_init.zig,309
-REQ-ABAC-WIRE-010,ABAC Enforcement,ServerStartup,TESTED,,,security,2026-01-15,src/server/server_init.zig,656
+REQ-ABAC-WIRE-010,ABAC Enforcement,ServerStartup,TESTED,,,security,2026-01-15,src/server/server_init.zig,651
 REQ-ABAC-WIRE-012,ABAC Enforcement,QUICImport,TESTED,,,security,2026-01-15,src/server/quic_connection_handler.zig,103
 REQ-ABAC-WIRE-013,ABAC Enforcement,QUICHandler,TESTED,,,security,2026-01-15,src/server/quic_connection_handler.zig,5612
 REQ-ABAC-WIRE-014,ABAC Enforcement,QUICState,TESTED,,,security,2026-01-15,src/server/quic_connection_handler.zig,5729
@@ -268,7 +268,7 @@ REQ-AUTH-CONFIG-001,AuthConfig,PasswordPolicy,TESTED,,,security,2026-01-16,tests
 REQ-AUTH-CONFIG-001,Configurable Password Policy,Security,TESTED,,,security,2025-09-30,src/security/geode_auth_lib.zig,349
 REQ-AUTH-CONFIG-001,UserAuthPolicy,ConfigurablePolicy,TESTED,,,security,2026-01-15,tests/test_gap_analysis_january_2026.zig,320
 REQ-AUTH-DEFAULT-001,AuthDefault,UserCreation,TESTED,,,security,2026-01-16,tests/test_gap_0193_batch2_security.zig,57
-REQ-AUTH-DEFAULT-001,Default User Creation,Security,TESTED,,,security,2025-09-30,src/security/geode_auth_lib.zig,1466
+REQ-AUTH-DEFAULT-001,Default User Creation,Security,TESTED,,,security,2025-09-30,src/security/geode_auth_lib.zig,1521
 REQ-AUTH-ENFORCE-003,AuthEnforcement,UnitTests,TESTED,,,security,2026-01-28,src/security/test_auth_enforcement.zig,1
 REQ-AUTH-ENFORCE-004,AuthEnforcement,BuildIntegration,TESTED,,,security,2026-01-28,build.zig,6042
 REQ-AUTH-ENFORCE-025,AuthEnforcement,AuthorizationTests,TESTED,,,security,2026-01-28,src/security/test_auth_enforcement.zig,210
@@ -285,16 +285,16 @@ REQ-AUTH-GRANT-PERSIST-029,GQL Auth DDL Persistence,UserEnableDisable,TESTED,,,s
 REQ-AUTH-GRAPH-GLOBAL-001,AuthGraphManagerGlobal,GlobalAccessor,TESTED,,,security,2026-06-11,src/security/auth_graph_manager.zig,214
 REQ-AUTH-GRAPH-MGR-001,AuthGraphManager,Orchestration,TESTED,,,security,2026-02-24,src/security/auth_graph_manager.zig,1
 REQ-AUTH-GRAPH-MGR-002,AuthGraphManagerTests,ChainIntegrity,TESTED,,,security,2026-02-24,src/security/auth_graph_manager.zig,2238
-REQ-AUTH-GRAPH-PERSIST-001,Runtime Auth Graph Persistence,UserCreate,TESTED,,,security,2026-06-11,src/security/geode_auth_lib.zig,1375
-REQ-AUTH-GRAPH-PERSIST-002,Runtime Auth Graph Persistence,LoginState,TESTED,,,security,2026-06-11,src/security/geode_auth_lib.zig,1722
-REQ-AUTH-GRAPH-PERSIST-003,Runtime Auth Graph Persistence,FailedLogin,TESTED,,,security,2026-06-11,src/security/geode_auth_lib.zig,1744
-REQ-AUTH-GRAPH-PERSIST-004,Runtime Auth Graph Persistence,SuccessfulLogin,TESTED,,,security,2026-06-11,src/security/geode_auth_lib.zig,1772
-REQ-AUTH-GRAPH-PERSIST-005,Runtime Auth Graph Persistence,PasswordChange,TESTED,,,security,2026-06-11,src/security/geode_auth_lib.zig,1650
-REQ-AUTH-GRAPH-PERSIST-005,Runtime Auth Graph Persistence,SingleDurableWriter,TESTED,,,security,2026-07-31,src/security/geode_auth_lib.zig,549
+REQ-AUTH-GRAPH-PERSIST-001,Runtime Auth Graph Persistence,UserCreate,TESTED,,,security,2026-06-11,src/security/geode_auth_lib.zig,1430
+REQ-AUTH-GRAPH-PERSIST-002,Runtime Auth Graph Persistence,LoginState,TESTED,,,security,2026-06-11,src/security/geode_auth_lib.zig,1772
+REQ-AUTH-GRAPH-PERSIST-003,Runtime Auth Graph Persistence,FailedLogin,TESTED,,,security,2026-06-11,src/security/geode_auth_lib.zig,1794
+REQ-AUTH-GRAPH-PERSIST-004,Runtime Auth Graph Persistence,SuccessfulLogin,TESTED,,,security,2026-06-11,src/security/geode_auth_lib.zig,1822
+REQ-AUTH-GRAPH-PERSIST-005,Runtime Auth Graph Persistence,PasswordChange,TESTED,,,security,2026-06-11,src/security/geode_auth_lib.zig,1700
+REQ-AUTH-GRAPH-PERSIST-005,Runtime Auth Graph Persistence,SingleDurableWriter,TESTED,,,security,2026-07-31,src/security/geode_auth_lib.zig,604
 REQ-AUTH-GRAPH-PERSIST-006,Runtime Auth Graph Persistence,LoginState,TESTED,,,security,2026-06-11,src/security/auth_graph_manager.zig,1228
 REQ-AUTH-GRAPH-PERSIST-007,Runtime Auth Graph Persistence,PasswordChange,TESTED,,,security,2026-07-31,src/security/auth_graph_manager.zig,1242
 REQ-AUTH-GRAPH-PERSIST-008,Runtime Auth Graph Persistence,WireCallbacks,TESTED,,,security,2026-06-11,src/server/server_init.zig,151
-REQ-AUTH-GRAPH-PERSIST-009,Runtime Auth Graph Persistence,Callbacks,TESTED,,,security,2026-06-11,src/server/server_init.zig,803
+REQ-AUTH-GRAPH-PERSIST-009,Runtime Auth Graph Persistence,Callbacks,TESTED,,,security,2026-06-11,src/server/server_init.zig,798
 REQ-AUTH-GRAPH-PERSIST-010,AuthDDLPersistence,RemoveUser,TESTED,,,security,2026-06-11,src/security/auth_graph_manager.zig,1275
 REQ-AUTH-GRAPH-PERSIST-011,AuthDDLPersistence,SetUserActive,TESTED,,,security,2026-06-11,src/security/auth_graph_manager.zig,1284
 REQ-AUTH-GRAPH-PERSIST-012,AuthDDLPersistence,FindRoleIdByName,TESTED,,,security,2026-06-11,src/security/auth_graph_manager.zig,1321
@@ -318,35 +318,35 @@ REQ-AUTH-GRAPH-PERSIST-025,AuthDDLPersistence,LoadGraphGrants,TESTED,,,security,
 REQ-AUTH-GRAPH-PERSIST-026,AuthDDLPersistence,GrantPersistCallbacks,IMPL,,,security,2026-05-11,src/execution/auth_dispatch.zig,159
 REQ-AUTH-GRAPH-PERSIST-027,AuthDDLPersistence,HandleGrantRevoke,IMPL,,,security,2026-05-11,src/execution/auth_dispatch.zig,1351
 REQ-AUTH-GRAPH-PERSIST-030,AuthDDLPersistence,LibExport,IMPL,,,security,2026-05-12,src/lib.zig,811
-REQ-AUTH-GRAPH-PERSIST-031,AuthDDLPersistence,UserWriterCallbacks,TESTED,,,security,2026-06-11,src/server/server_init.zig,874
-REQ-AUTH-GRAPH-PERSIST-032,AuthDDLPersistence,RoleCallbacks,TESTED,,,security,2026-06-11,src/server/server_init.zig,939
-REQ-AUTH-GRAPH-PERSIST-033,AuthDDLPersistence,GrantCallbacks,TESTED,,,security,2026-06-11,src/server/server_init.zig,971
-REQ-AUTH-GRAPH-PERSIST-034,AuthDDLPersistence,GrantCheck,TESTED,,,security,2026-06-11,src/server/server_init.zig,997
-REQ-AUTH-GRAPH-PERSIST-035,AuthDDLPersistence,StartupWiring,TESTED,,,security,2026-06-11,src/server/server_init.zig,1007
+REQ-AUTH-GRAPH-PERSIST-031,AuthDDLPersistence,UserWriterCallbacks,TESTED,,,security,2026-06-11,src/server/server_init.zig,869
+REQ-AUTH-GRAPH-PERSIST-032,AuthDDLPersistence,RoleCallbacks,TESTED,,,security,2026-06-11,src/server/server_init.zig,934
+REQ-AUTH-GRAPH-PERSIST-033,AuthDDLPersistence,GrantCallbacks,TESTED,,,security,2026-06-11,src/server/server_init.zig,966
+REQ-AUTH-GRAPH-PERSIST-034,AuthDDLPersistence,GrantCheck,TESTED,,,security,2026-06-11,src/server/server_init.zig,992
+REQ-AUTH-GRAPH-PERSIST-035,AuthDDLPersistence,StartupWiring,TESTED,,,security,2026-06-11,src/server/server_init.zig,1002
 REQ-AUTH-GRAPH-PERSIST-036,AuthDDLPersistence,StartupWiring,TESTED,,,security,2026-06-11,src/server/main.zig,1569
 REQ-AUTH-GRAPH-PERSIST-037,AuthDDLPersistence,GraphGrantKey,IMPL,,,security,2026-05-12,src/security/multi_graph_security.zig,83
 REQ-AUTH-GRAPH-PERSIST-038,AuthDDLPersistence,GraphUserGrantsField,IMPL,,,security,2026-05-12,src/security/multi_graph_security.zig,124
 REQ-AUTH-GRAPH-PERSIST-039,AuthDDLPersistence,GrantGraphPermission,IMPL,,,security,2026-05-12,src/security/multi_graph_security.zig,315
 REQ-AUTH-GRAPH-PERSIST-040,AuthDDLPersistence,RevokeGraphPermission,IMPL,,,security,2026-05-12,src/security/multi_graph_security.zig,323
 REQ-AUTH-GRAPH-PERSIST-041,AuthDDLPersistence,HasGraphGrant,IMPL,,,security,2026-05-12,src/security/multi_graph_security.zig,331
-REQ-AUTH-GRAPH-WIRE-001,AuthGraphManager Integration,SecurityManager,TESTED,,,security,2026-06-11,src/security/geode_auth_lib.zig,604
-REQ-AUTH-GRAPH-WIRE-002,AuthGraphManager Integration,InitEmpty,TESTED,,,security,2026-06-11,src/security/geode_auth_lib.zig,656
-REQ-AUTH-GRAPH-WIRE-003,AuthGraphManager Integration,HydrateUser,TESTED,,,security,2026-06-11,src/security/geode_auth_lib.zig,676
+REQ-AUTH-GRAPH-WIRE-001,AuthGraphManager Integration,SecurityManager,TESTED,,,security,2026-06-11,src/security/geode_auth_lib.zig,659
+REQ-AUTH-GRAPH-WIRE-002,AuthGraphManager Integration,InitEmpty,TESTED,,,security,2026-06-11,src/security/geode_auth_lib.zig,711
+REQ-AUTH-GRAPH-WIRE-003,AuthGraphManager Integration,HydrateUser,TESTED,,,security,2026-06-11,src/security/geode_auth_lib.zig,731
 REQ-AUTH-GRAPH-WIRE-004,AuthGraphManager Integration,ServerInit,TESTED,,,security,2026-06-11,src/server/server_init.zig,39
 REQ-AUTH-GRAPH-WIRE-005,AuthGraphManager Integration,InitContext,TESTED,,,security,2026-06-11,src/server/server_init.zig,125
 REQ-AUTH-GRAPH-WIRE-006,AuthGraphManager Integration,Cleanup,TESTED,,,security,2026-06-11,src/server/server_init.zig,194
 REQ-AUTH-GRAPH-WIRE-007,AuthGraphManager Integration,ServerStartup,TESTED,,,security,2026-06-11,src/server/server_init.zig,381
-REQ-AUTH-GRAPH-WIRE-008,AuthGraphManager Integration,SecurityManagerInit,TESTED,,,security,2026-06-11,src/server/server_init.zig,685
-REQ-AUTH-GRAPH-WIRE-009,AuthGraphManager Integration,Hydration,TESTED,,,security,2026-06-11,src/server/server_init.zig,717
-REQ-AUTH-HASH-001,Argon2id Password Hashing,PostQuantumSecurity,TESTED,,,security,2025-10-16,src/security/geode_auth_lib.zig,1243
+REQ-AUTH-GRAPH-WIRE-008,AuthGraphManager Integration,SecurityManagerInit,TESTED,,,security,2026-06-11,src/server/server_init.zig,680
+REQ-AUTH-GRAPH-WIRE-009,AuthGraphManager Integration,Hydration,TESTED,,,security,2026-06-11,src/server/server_init.zig,712
+REQ-AUTH-HASH-001,Argon2id Password Hashing,PostQuantumSecurity,TESTED,,,security,2025-10-16,src/security/geode_auth_lib.zig,1298
 REQ-AUTH-HASH-002,Argon2id_Password_Hashing,Core,TESTED,,,security,2026-01-25,src/security/test_argon2id_hashing.zig,2
-REQ-AUTH-HASH-002,Canonical Argon2id Hashing,Security,TESTED,,,security,2026-02-24,src/security/geode_auth_lib.zig,1901
+REQ-AUTH-HASH-002,Canonical Argon2id Hashing,Security,TESTED,,,security,2026-02-24,src/security/geode_auth_lib.zig,1951
 REQ-AUTH-HMAC-002,UserStorageHmac,Integration,TESTED,,,security,2026-02-24,src/storage/user_storage.zig,1965
 REQ-AUTH-HMAC-KEYGEN-001,HmacKeyAutoGeneration,KeyFile,TESTED,,,security,2026-02-24,src/security/auth_graph_manager.zig,1656
 REQ-AUTH-HMAC-PERIODIC-001,PeriodicHmacVerification,BackgroundThread,TESTED,,,security,2026-06-11,src/security/auth_graph_manager.zig,196
 REQ-AUTH-HMAC-PERIODIC-002,PeriodicHmacVerification,BackgroundThread,TESTED,,,security,2026-06-11,src/security/auth_graph_manager.zig,250
 REQ-AUTH-HMAC-PERIODIC-003,PeriodicHmacVerification,ServerStartup,TESTED,,,security,2026-06-11,src/server/server_init.zig,165
-REQ-AUTH-HMAC-PERIODIC-003,PeriodicHmacVerification,ServerStartup,TESTED,,,security,2026-06-11,src/server/server_init.zig,607
+REQ-AUTH-HMAC-PERIODIC-003,PeriodicHmacVerification,ServerStartup,TESTED,,,security,2026-06-11,src/server/server_init.zig,602
 REQ-AUTH-HMAC-PERIODIC-004,PeriodicHmacVerification,Shutdown,TESTED,,,security,2026-06-11,src/server/server_init.zig,195
 REQ-AUTH-HMAC-PERIODIC-DEADLOCK-001,PeriodicHmacVerification,ReadWriteDeadlock,TESTED,,,security,2026-06-19,tests/test_auth_verify_checkpoint_deadlock.zig,49
 REQ-AUTH-INIT-CLI-001,AuthInitCLI,OfflineAuthManagement,TESTED,,,cli,2026-06-11,src/cli/auth_init_cli.zig,1
@@ -372,24 +372,24 @@ REQ-AUTH-POLICY-002,AuthPolicy,EnhancedPolicy,TESTED,,,security,2026-01-16,tests
 REQ-AUTH-POLICY-002,Enhanced Password Policy,Security,TESTED,,,security,2025-09-30,src/security/geode_auth_lib.zig,328
 REQ-AUTH-POLICY-002,UserAuthPolicy,PassphrasePolicy,TESTED,,,security,2026-02-24,tests/test_gap_analysis_january_2026.zig,314
 REQ-AUTH-POLICY-003,AuthPolicy,PasswordValidation,TESTED,,,security,2026-01-16,tests/test_gap_0193_batch2_security.zig,79
-REQ-AUTH-POLICY-003,Enhanced Password Validation,Security,TESTED,,,security,2025-09-30,src/security/geode_auth_lib.zig,1385
+REQ-AUTH-POLICY-003,Enhanced Password Validation,Security,TESTED,,,security,2025-09-30,src/security/geode_auth_lib.zig,1440
 REQ-AUTH-POLICY-004,AuthPolicy,UnifiedPolicy,TESTED,,,security,2026-01-16,tests/test_gap_0193_batch2_security.zig,86
 REQ-AUTH-POLICY-004,Unified Password Policy,Security,TESTED,,,security,2025-09-30,src/security/geode_auth_lib.zig,343
 REQ-AUTH-POLICY-005,AuthPolicy,PreHashValidation,TESTED,,,security,2026-01-16,tests/test_gap_0193_batch2_security.zig,93
-REQ-AUTH-POLICY-005,Password Policy Validation Before Hashing,Security,TESTED,,,security,2025-09-30,src/security/geode_auth_lib.zig,1672
+REQ-AUTH-POLICY-005,Password Policy Validation Before Hashing,Security,TESTED,,,security,2025-09-30,src/security/geode_auth_lib.zig,1722
 REQ-AUTH-POLICY-005,Unified Password Policy Validation,Security,TESTED,,,security,2026-07-31,src/security/auth_graph_manager.zig,1037
 REQ-AUTH-POLICY-005,Unified Password Policy Validation,Security,TESTED,,,security,2026-07-31,src/security/geode_auth_lib.zig,380
 REQ-AUTH-POLICY-006,AuthPolicy,PostAuthCheck,TESTED,,,security,2026-01-16,tests/test_gap_0193_batch2_security.zig,100
-REQ-AUTH-POLICY-006,Post-Authentication Policy Check,Security,TESTED,,,security,2025-09-30,src/security/geode_auth_lib.zig,1679
+REQ-AUTH-POLICY-006,Post-Authentication Policy Check,Security,TESTED,,,security,2025-09-30,src/security/geode_auth_lib.zig,1729
 REQ-AUTH-POLICY-007,AuthPolicy,MandatoryEnforcement,TESTED,,,security,2026-01-16,tests/test_gap_0193_batch2_security.zig,107
-REQ-AUTH-POLICY-007,Mandatory Password Policy Enforcement,Security,TESTED,,,security,2025-09-30,src/security/geode_auth_lib.zig,1775
+REQ-AUTH-POLICY-007,Mandatory Password Policy Enforcement,Security,TESTED,,,security,2025-09-30,src/security/geode_auth_lib.zig,1825
 REQ-AUTH-POLICY-008,AuthPolicy,PreHashValidation2,TESTED,,,security,2026-01-16,tests/test_gap_0193_batch2_security.zig,114
-REQ-AUTH-POLICY-008,Pre-Hash Password Validation,Security,TESTED,,,security,2025-09-30,src/security/geode_auth_lib.zig,1246
+REQ-AUTH-POLICY-008,Pre-Hash Password Validation,Security,TESTED,,,security,2025-09-30,src/security/geode_auth_lib.zig,1301
 REQ-AUTH-POLICY-009,AuthPolicy,UpdateValidation,TESTED,,,security,2026-01-16,tests/test_gap_0193_batch2_security.zig,121
-REQ-AUTH-POLICY-009,Password Update Policy Validation,Security,TESTED,,,security,2025-09-30,src/security/geode_auth_lib.zig,1632
+REQ-AUTH-POLICY-009,Password Update Policy Validation,Security,TESTED,,,security,2025-09-30,src/security/geode_auth_lib.zig,1682
 REQ-AUTH-RATE-ENV-001,AuthRateLimiterEnvConfig,LockoutOverride,TESTED,,,security,2026-05-22,src/server/auth_rate_limiter.zig,90
-REQ-AUTH-RISKSCORE-001,FailSecureRiskScore,SECURITY,TESTED,,,security,2026-01-13,src/security/geode_auth_lib.zig,954
-REQ-AUTH-RISKSCORE-001,FailSecureRiskScore,TEST,TESTED,,,security,2026-01-13,src/security/geode_auth_lib.zig,2062
+REQ-AUTH-RISKSCORE-001,FailSecureRiskScore,SECURITY,TESTED,,,security,2026-01-13,src/security/geode_auth_lib.zig,1009
+REQ-AUTH-RISKSCORE-001,FailSecureRiskScore,TEST,TESTED,,,security,2026-01-13,src/security/geode_auth_lib.zig,2112
 REQ-AUTH-ROLE-001,RoleAssignment,ErrorHandling,TESTED,,,security,2026-05-11,src/security/user_management.zig,1815
 REQ-AUTH-ROLE-001,RoleAssignment,Idempotent,TESTED,,,security,2026-05-11,src/security/user_management.zig,1797
 REQ-AUTH-ROLE-001,RoleAssignment,Mutation,TESTED,,,security,2026-05-11,src/security/user_management.zig,987
@@ -658,11 +658,11 @@ REQ-CLI-MIGRATE-STATUS-001,CLIMigrateStatus,MigrationModule,TESTED,,,cli,2026-01
 REQ-CLI-MOD-001,CLI Modularization,SubcommandParsing,TESTED,,,cli,2026-01-15,tests/test_gap_0193_impl_verification.zig,415
 REQ-CLI-OFFLINE-AUTH-LOCK-001,OfflineAuthStoreSafety,LiveServerDetection,IMPL,,,cli,2026-07-31,src/cli/user_mgmt_cli.zig,216
 REQ-CLI-PASSWORD-PROMPT-001,PasswordPrompt,QueryCommand,IMPL,,,cli,2026-01-28,src/cli/main.zig,1174
-REQ-CLI-POLICY-CMD-001,Policy CLI Commands,PolicyManagement,TESTED,,,security,2026-01-15,src/security/user_manager.zig,1087
+REQ-CLI-POLICY-CMD-001,Policy CLI Commands,PolicyManagement,TESTED,,,security,2026-01-15,src/security/user_manager.zig,1162
 REQ-CLI-PORTABLE-ARGV-001,PortableProcessArgv,CrossPlatform,TESTED,,,cli,2026-06-12,src/server/process_args.zig,17
 REQ-CLI-PORTABLE-ARGV-001,PortableProcessArgv,CrossPlatform,TESTED,,,cli,2026-06-12,tests/test_process_args.zig,15
 REQ-CLI-REFACTOR-001,CLI Library Migration,FlagParsing,TESTED,,,cli,2026-06-10,src/cli/main.zig,85
-REQ-CLI-ROLE-CMD-001,Role CLI Commands,RoleManagement,TESTED,,,security,2026-01-15,src/security/user_manager.zig,986
+REQ-CLI-ROLE-CMD-001,Role CLI Commands,RoleManagement,TESTED,,,security,2026-01-15,src/security/user_manager.zig,1061
 REQ-CLI-ROUTE-001,Query Option Auto-routing,CommandDispatch,TESTED,,,cli,2025-10-04,tests/query_option_autorouting_regression_test.sh,3
 REQ-CLI-SESSION-001,CLISession,Management,TESTED,,,cli,2026-02-04,src/cli/session_cli.zig,59
 REQ-CLI-SESSION-001,CLISession,Security,TESTED,,,cli,2026-06-10,src/cli/session_cli.zig,465
@@ -700,7 +700,7 @@ REQ-CLI-TIMEOUT-EXIT-CODE-002,QueryTimeoutClassification,GrpcTransportTimeout,TE
 REQ-CLI-TIMEOUT-EXIT-CODE-002,QueryTimeoutClassification,GrpcTransportTimeout,TESTED,,,cli,2026-09-01,tests/test_cli_timeout_exit_code.zig,710
 REQ-CLI-TIMEOUT-NO-RESUBMIT-001,QueryTimeoutClassification,NoSilentResubmission,TESTED,,,cli,2026-09-01,src/cli/main.zig,2032
 REQ-CLI-TIMEOUT-NO-RESUBMIT-001,QueryTimeoutClassification,NoSilentResubmission,TESTED,,,cli,2026-09-01,tests/test_cli_timeout_exit_code.zig,711
-REQ-CLI-USER-CMD-001,User CLI Commands,UserManagement,TESTED,,,security,2026-01-15,src/security/user_manager.zig,874
+REQ-CLI-USER-CMD-001,User CLI Commands,UserManagement,TESTED,,,security,2026-01-15,src/security/user_manager.zig,949
 REQ-CLI-WD-001,CLI Working Directory Handling,TestInfrastructure,TESTED,,,cli,2025-10-04,tests/cli_working_directory_regression_test.sh,3
 REQ-CLIENT-ENV-001,ClientEnvironmentVariables,IntegrationTests,TESTED,,,clients,2025-10-04,tests/test_environment_variables_integration.zig,4
 REQ-CLIENT-INTEGRATION-001,RustClientIntegration,QUICTransport,TESTED,,,clients,2026-01-15,tests/test_gap_analysis_january_2026.zig,145
@@ -782,7 +782,7 @@ REQ-DATETIME-002,DateTimeFunctions,Date,TESTED,,,eval,2026-01-15,tests/test_gap_
 REQ-DATETIME-003,DateTimeFunctions,DateTime,TESTED,,,eval,2026-01-15,tests/test_gap_0193_impl_verification.zig,252
 REQ-DECIMAL-OVERFLOW-001,Decimal Overflow Guard,DataIntegrity,TESTED,,,core,2026-01-25,src/exec.zig,1614
 REQ-DECIMAL-OVERFLOW-002,Decimal Avg Overflow Guard,DataIntegrity,TESTED,,,core,2026-01-25,src/exec.zig,1663
-REQ-DEFAULT-PASSWORD-001,Secure Default Password,Security,TESTED,,,security,2026-01-13,src/security/geode_auth_lib.zig,1481
+REQ-DEFAULT-PASSWORD-001,Secure Default Password,Security,TESTED,,,security,2026-01-13,src/security/geode_auth_lib.zig,1536
 REQ-DELETE-COLD-STORE-EDGES-001,RelationshipDelete,ColdStoreResolution,TESTED,,,execution,2026-08-30,tests/test_eng3983_cold_delete_edges.zig,26
 REQ-DELETE-MATCH-SET-RESOLUTION,DeleteWhereEvaluation,MatchSetResolution,TESTED,,,crud_operations,2026-08-25,src/execution/crud_operations.zig,505
 REQ-DELETE-MATCH-SET-RESOLUTION,DeleteWhereEvaluation,Regression,TESTED,,,crud_operations,2026-08-25,tests/test_eng3913_where_delete.zig,1
@@ -1022,9 +1022,9 @@ REQ-DISTRIBUTED-QUERY-009,Distributed Transaction Coordination,TransactionCoordi
 REQ-DISTRIBUTED-QUERY-PLANNER-001,Distributed Query Planning,BasicPlanGeneration,TESTED,,,distributed,2026-04-05,tests/test_distributed_query_planner.zig,8
 REQ-DISTRIBUTED-QUERY-PLANNER-002,Distributed Query Planning,FederationIntegration,TESTED,,,distributed,2026-04-05,tests/test_distributed_query_planner.zig,9
 REQ-DISTRIBUTED-QUERY-PLANNER-003,Distributed Query Planning,CostOptimization,TESTED,,,distributed,2026-04-05,tests/test_distributed_query_planner.zig,10
-REQ-DOC-AUTH-LOCKOUT-CONFIG,AuthRateLimiting,Documentation,EXEMPT,,,security,2026-08-29,docs/USER_AUTH.md,640
+REQ-DOC-AUTH-LOCKOUT-CONFIG,AuthRateLimiting,Documentation,EXEMPT,,,security,2026-08-29,docs/USER_AUTH.md,689
 REQ-DOC-MCP-LSP-BRIDGE,MCPLSPBridgeDoc,Documentation,EXEMPT,,,mcp,2026-05-06,docs/MCP_LSP_BRIDGE.md,188
-REQ-DOC-MCP-LSP-BRIDGE,MCPLSPBridgeDoc,Documentation,EXEMPT,,,mcp,2026-05-06,docs/USER_AUTH.md,566
+REQ-DOC-MCP-LSP-BRIDGE,MCPLSPBridgeDoc,Documentation,EXEMPT,,,mcp,2026-05-06,docs/USER_AUTH.md,615
 REQ-DOC-MCP-SERVER-SUBSET,MCPServerSubsetDoc,Documentation,EXEMPT,,,mcp,2026-06-10,docs/MCP_SERVER.md,135
 REQ-DOCS-001,Docs,Documentation,TESTED,,,docs,2026-01-15,tests/test_gap_0193_final_batch.zig,545
 REQ-DOCS-API-001,Docs,APIDocumentation,TESTED,,,docs,2026-01-16,tests/test_gap_0193_batch4_comprehensive.zig,652
@@ -1686,7 +1686,7 @@ REQ-GPS-CATALOG-002,GPS Policy Persistence,MultiPolicy,TESTED,,,security,2026-05
 REQ-GPS-CATALOG-002,GPS Policy Persistence,PersistPolicy,TESTED,,,security,2026-05-20,src/security/policy_persistence.zig,95
 REQ-GPS-CATALOG-002,GPS Policy Persistence,RoundTrip,TESTED,,,security,2026-05-20,tests/test_gps_policy_persistence.zig,25
 REQ-GPS-CATALOG-002,GPS Policy Persistence,StartupHydration,TESTED,,,security,2026-05-20,src/server/main.zig,1575
-REQ-GPS-CATALOG-002,GPS Policy Persistence,StartupWiring,TESTED,,,security,2026-05-20,src/server/server_init.zig,1090
+REQ-GPS-CATALOG-002,GPS Policy Persistence,StartupWiring,TESTED,,,security,2026-05-20,src/server/server_init.zig,1085
 REQ-GPS-CATALOG-002,GPS Policy Persistence,WriteThroughHooks,TESTED,,,security,2026-05-20,src/security/policy_catalog.zig,336
 REQ-GPS-DDL-001,GPS Policy DDL,ASTAction,TESTED,,,security,2026-05-20,src/gql/ast.zig,770
 REQ-GPS-DDL-001,GPS Policy DDL,AuthDispatchPolicyCreate,TESTED,,,security,2026-05-20,src/execution/auth_dispatch.zig,1238
@@ -1789,7 +1789,7 @@ REQ-GPS-DIST-002,GPS Distributed Envelope,TruncatedBuffer,TESTED,,,security,2026
 REQ-GPS-DIST-002,GPS Distributed Envelope,UnsupportedVersion,TESTED,,,security,2026-05-20,tests/test_gps_distributed_envelope.zig,257
 REQ-GPS-EXPLAIN-001,GPS EXPLAIN POLICY,ASTType,TESTED,,,security,2026-05-21,src/gql/ast.zig,820
 REQ-GPS-EXPLAIN-001,GPS EXPLAIN POLICY,ASTVariant,TESTED,,,security,2026-05-21,src/gql/ast.zig,60
-REQ-GPS-EXPLAIN-001,GPS EXPLAIN POLICY,BuildStep,TESTED,,,security,2026-05-21,build.zig,11570
+REQ-GPS-EXPLAIN-001,GPS EXPLAIN POLICY,BuildStep,TESTED,,,security,2026-05-21,build.zig,11587
 REQ-GPS-EXPLAIN-001,GPS EXPLAIN POLICY,CreateClassifiedAsCreate,TESTED,,,security,2026-05-21,tests/test_gps_explain_policy.zig,197
 REQ-GPS-EXPLAIN-001,GPS EXPLAIN POLICY,DispatchArm,TESTED,,,security,2026-05-21,src/execution.zig,1678
 REQ-GPS-EXPLAIN-001,GPS EXPLAIN POLICY,ExecutorFunction,TESTED,,,security,2026-05-21,src/execution/statement_handlers.zig,1477
@@ -1888,7 +1888,7 @@ REQ-GPS-MIGRATE-001,GPS Grant Migration,Module,TESTED,,,security,2026-05-20,src/
 REQ-GPS-MIGRATE-001,GPS Grant Migration,MultipleGrantsUnique,TESTED,,,security,2026-05-20,tests/test_gps_grant_migration.zig,122
 REQ-GPS-MIGRATE-001,GPS Grant Migration,PolicyPersisted,TESTED,,,security,2026-05-20,tests/test_gps_grant_migration.zig,180
 REQ-GPS-MIGRATE-001,GPS Grant Migration,SingleGrantMigrated,TESTED,,,security,2026-05-20,tests/test_gps_grant_migration.zig,29
-REQ-GPS-MIGRATE-001,GPS Grant Migration,StartupWiring,TESTED,,,security,2026-05-20,src/server/server_init.zig,1152
+REQ-GPS-MIGRATE-001,GPS Grant Migration,StartupWiring,TESTED,,,security,2026-05-20,src/server/server_init.zig,1147
 REQ-GPS-PDP-001,GPS Decision Engine,DecisionTypes,TESTED,,,security,2026-05-20,tests/test_gps_decide.zig,8
 REQ-GPS-PDP-001,GPS Decision Engine,DefaultDeny,TESTED,,,security,2026-05-20,tests/test_gps_decide.zig,14
 REQ-GPS-PDP-001,GPS Decision Engine,TypeDefinition,TESTED,,,security,2026-05-20,src/security/gps.zig,1
@@ -1946,7 +1946,7 @@ REQ-GPS-PROC-001,GPS Procedure Enforcement,ReadWriteAllowsMutating,TESTED,,,secu
 REQ-GPS-PROC-001,GPS Procedure Enforcement,UnauthenticatedDenied,TESTED,,,security,2026-05-20,tests/test_gps_procedure_enforcement.zig,168
 REQ-GPS-PROC-003,GPS Phase 5 Procedure,MetadataReadOnly,TESTED,,,security,2026-05-21,src/execution/procedure_access.zig,114
 REQ-GPS-WIRE-001,GPS Wire Principal Forwarding,BeginQuery,IMPL,,,security,2026-05-21,src/client/quic_query_runner.zig,106
-REQ-GPS-WIRE-001,GPS Wire Principal Forwarding,BuildStep,TESTED,,,security,2026-05-21,build.zig,11579
+REQ-GPS-WIRE-001,GPS Wire Principal Forwarding,BuildStep,TESTED,,,security,2026-05-21,build.zig,11596
 REQ-GPS-WIRE-001,GPS Wire Principal Forwarding,CliEnvelopeBuild,TESTED,,,security,2026-06-11,src/cli/main.zig,1681
 REQ-GPS-WIRE-001,GPS Wire Principal Forwarding,CliForwardPrincipal,TESTED,,,security,2026-06-11,src/cli/main.zig,1923
 REQ-GPS-WIRE-001,GPS Wire Principal Forwarding,CliForwardPrincipalFlag,TESTED,,,security,2026-06-11,src/cli/main.zig,1035
@@ -1959,7 +1959,7 @@ REQ-GPS-WIRE-001,GPS Wire Principal Forwarding,SchemaField,TESTED,,,security,202
 REQ-GPS-WIRE-001,GPS Wire Principal Forwarding,ServerUnpack,TESTED,,,security,2026-06-10,src/server/quic_connection_handler.zig,7494
 REQ-GPS-WIRE-002,GPS Distributed Wire,BackwardCompat,TESTED,,,security,2026-05-21,tests/test_gps_distributed_wire.zig,167
 REQ-GPS-WIRE-002,GPS Distributed Wire,BatchQueries,EXEMPT,,,security,2026-06-11,src/distributed/query_transport.zig,179
-REQ-GPS-WIRE-002,GPS Distributed Wire,BuildStep,TESTED,,,security,2026-05-21,build.zig,11591
+REQ-GPS-WIRE-002,GPS Distributed Wire,BuildStep,TESTED,,,security,2026-05-21,build.zig,11608
 REQ-GPS-WIRE-002,GPS Distributed Wire,ConnectionExecuteQuery,EXEMPT,,,security,2026-06-11,src/distributed/query_transport.zig,395
 REQ-GPS-WIRE-002,GPS Distributed Wire,ExecutePlan,IMPL,,,security,2026-05-21,src/distributed/enhanced_query_coordinator.zig,250
 REQ-GPS-WIRE-002,GPS Distributed Wire,ExecuteRemoteQuery,EXEMPT,,,security,2026-06-11,src/distributed/query_transport.zig,141
@@ -2753,12 +2753,12 @@ REQ-GQL-ALGO-PERF-002,AlgoPerf,Betweenness,TESTED,,,graph,2026-01-16,tests/test_
 REQ-GQL-ALGO-PERF-003,AlgoPerf,Closeness,TESTED,,,graph,2026-01-16,tests/test_gap_0193_batch2_testing.zig,237
 REQ-GQL-ALGO-PERF-004,AlgoPerf,Eigenvector,TESTED,,,graph,2026-01-16,tests/test_gap_0193_batch2_testing.zig,244
 REQ-GQL-ARTICULATION-001,ArticulationPoints,Connectivity,TESTED,,,graph,2026-01-03,src/execution/centrality_algorithms.zig,1538
-REQ-GQL-AUTH-001,User creation,SECURITY,TESTED,,,security,2025-09-26,src/security/geode_auth_lib.zig,1350
-REQ-GQL-AUTH-002,Password authentication,SECURITY,TESTED,,,security,2025-09-26,src/security/geode_auth_lib.zig,1690
+REQ-GQL-AUTH-001,User creation,SECURITY,TESTED,,,security,2025-09-26,src/security/geode_auth_lib.zig,1405
+REQ-GQL-AUTH-002,Password authentication,SECURITY,TESTED,,,security,2025-09-26,src/security/geode_auth_lib.zig,1740
 REQ-GQL-AUTH-002,Password authentication,SECURITY,TESTED,,,security,2025-09-26,tests/test_auth_mfa_flows.zig,5
-REQ-GQL-AUTH-003,MFA authentication,SECURITY,TESTED,,,security,2025-09-26,src/security/geode_auth_lib.zig,1805
+REQ-GQL-AUTH-003,MFA authentication,SECURITY,TESTED,,,security,2025-09-26,src/security/geode_auth_lib.zig,1855
 REQ-GQL-AUTH-003,MFA authentication,SECURITY,TESTED,,,security,2025-09-26,tests/test_auth_mfa_flows.zig,6
-REQ-GQL-AUTH-004,MFA recovery code,SECURITY,TESTED,,,security,2025-09-26,src/security/geode_auth_lib.zig,1808
+REQ-GQL-AUTH-004,MFA recovery code,SECURITY,TESTED,,,security,2025-09-26,src/security/geode_auth_lib.zig,1858
 REQ-GQL-AUTH-DDL-001,GQL Auth DDL,Execution,TESTED,,,parser,2026-05-11,src/execution/admin_ddl.zig,7
 REQ-GQL-AUTH-DDL-002,GQL Auth DDL,Parser,TESTED,,,parser,2026-05-11,src/gql/parser.zig,6704
 REQ-GQL-AUTH-DDL-002,GQL Auth DDL,Parser,TESTED,,,parser,2026-05-11,tests/test_auth_ddl_parser.zig,7
@@ -3024,9 +3024,9 @@ REQ-GQL-MFA-006,MFA challenge failure,SECURITY,TESTED,,,security,2025-09-26,src/
 REQ-GQL-MFA-006,MFA challenge failure,SECURITY,TESTED,,,security,2025-09-26,tests/test_auth_mfa_flows.zig,9
 REQ-GQL-MFA-007,MFA recovery code used,SECURITY,TESTED,,,security,2025-09-26,src/security/geode_auth_lib.zig,540
 REQ-GQL-MFA-007,Session step-up metadata,SECURITY,TESTED,,,security,2025-09-26,src/security/geode_auth_lib.zig,326
-REQ-GQL-MFA-008,Session step-up requirement,SECURITY,TESTED,,,security,2026-06-10,src/security/geode_auth_lib.zig,1133
+REQ-GQL-MFA-008,Session step-up requirement,SECURITY,TESTED,,,security,2026-06-10,src/security/geode_auth_lib.zig,1188
 REQ-GQL-MFA-008,Session step-up requirement,SECURITY,TESTED,,,security,2025-09-26,tests/test_session_step_up.zig,4
-REQ-GQL-MFA-009,Session step-up mark,SECURITY,TESTED,,,security,2025-09-26,src/security/geode_auth_lib.zig,1150
+REQ-GQL-MFA-009,Session step-up mark,SECURITY,TESTED,,,security,2025-09-26,src/security/geode_auth_lib.zig,1205
 REQ-GQL-MFA-009,Session step-up mark,SECURITY,TESTED,,,security,2025-09-26,tests/test_session_step_up.zig,5
 REQ-GQL-MFA-010,ConfigurableElevationTTL,TEST,TESTED,,,security,2025-09-26,tests/test_session_elevation_policy.zig,4
 REQ-GQL-MFA-AUDIT-001,MfaAuditLogging,SECURITY,TESTED,,,security,2025-09-26,docs/SECURITY_PROGRESS.md,42
@@ -3048,7 +3048,7 @@ REQ-GQL-MFA-CORE-001,MfaRiskStepUpDecision,DecisionLogic,TESTED,,,security,2025-
 REQ-GQL-MFA-CORE-001,MfaRiskStepUpDecision,LatencyVarianceEnvelope,BENCHED,,,security,2025-09-27,benchmarks/benchmark_mfa_stepup_latency.zig,17
 REQ-GQL-MFA-PERF-001,MfaPolicyEvaluation,VarianceEnvelope,BENCHED,,,security,2025-09-26,benchmarks/benchmark_mfa_policy_evaluation_variance.zig,13
 REQ-GQL-MFA-POLICY-001,MfaPolicyEngine,SECURITY,TESTED,,,security,2025-09-26,docs/SECURITY_PROGRESS.md,43
-REQ-GQL-MFA-POLICY-001,MfaPolicyEngine,SECURITY,TESTED,,,security,2025-09-26,src/security/geode_auth_lib.zig,883
+REQ-GQL-MFA-POLICY-001,MfaPolicyEngine,SECURITY,TESTED,,,security,2025-09-26,src/security/geode_auth_lib.zig,938
 REQ-GQL-MFA-POLICY-001,MfaPolicyEngine,SECURITY,TESTED,,,security,2025-09-26,tests/test_mfa_policies.zig,46
 REQ-GQL-MFA-STEPUP-001,MfaStepUpVerification,SecurityEnforcement,EXEMPT,,,security,2026-01-10,src/security/mfa_risk.zig,69
 REQ-GQL-MULTI-CHAIN-REL-001,MultiChainRel,Match,TESTED,,,engine,2026-01-16,tests/test_gap_0193_batch2_engine.zig,104
@@ -5271,6 +5271,8 @@ REQ-SONNY-2776-TXN-ONE-GRAPH,StatementAuthorization,TxnGraph,TESTED,,,security,2
 REQ-SONNY-2777-POLICY-IDS,GPS Policy Persistence,CliRlsPolicyCreate,TESTED,,,security,2026-09-26,src/cli/cli_auth_helpers.zig,38
 REQ-SONNY-2777-POLICY-IDS,GPS Policy Persistence,PolicyIdSequence,TESTED,,,security,2026-09-26,src/storage/user_storage.zig,1352
 REQ-SONNY-2777-POLICY-IDS,GPS Policy Persistence,Regression,TESTED,,,security,2026-09-26,tests/test_sonny2777_policy_ids.zig,12
+REQ-SONNY-2778-ADMIN-PASSWORD-FILE,Secure Default Password,ExclusiveNoFollow0600,TESTED,,,security,2026-09-26,src/security/geode_auth_lib.zig,547
+REQ-SONNY-2778-ADMIN-PASSWORD-FILE,Secure Default Password,Regression,TESTED,,,security,2026-09-26,tests/test_sonny2778_admin_password_file.zig,21
 REQ-SONNY-2790-FTS-DEFAULT-GRAPH,FullText,DefaultGraphProcedures,TESTED,,,index,2026-09-26,src/execution/procedure_access.zig,157
 REQ-SONNY-2790-FTS-DEFAULT-GRAPH,FullText,Regression,TESTED,,,index,2026-09-26,tests/test_sonny2790_fts_graph_lock.zig,15
 REQ-SONNY-2791-INTERNAL-GRAPHS,GraphRBACEnforcement,RefuseInternal,TESTED,,,security,2026-09-26,src/execution/session_graph.zig,27
@@ -5743,7 +5745,7 @@ REQ-UNSUPPORTED-AGGREGATE-REJECTION,AggregateSetQuantifier,UnsupportedAggregateR
 REQ-UNSUPPORTED-AGGREGATE-REJECTION,AggregateSetQuantifier,UnsupportedAggregateReject,TESTED,,,parser,2026-08-25,tests/test_unsupported_aggregates.zig,42
 REQ-UNSUPPORTED-AGGREGATE-REJECTION,SHOW FUNCTIONS,UnimplementedAggregatesUnadvertised,TESTED,,,execution,2026-08-25,src/execution/statement_handlers.zig,387
 REQ-USER-CREATE-PASSWORD-001,CLI Password Security,Security,TESTED,,,cli,2026-02-24,src/cli/user_mgmt_cli.zig,48
-REQ-USER-METADATA-001,User Metadata Handling,DataIntegrity,EXEMPT,,,security,2026-01-13,src/security/user_manager.zig,145
+REQ-USER-METADATA-001,User Metadata Handling,DataIntegrity,EXEMPT,,,security,2026-01-13,src/security/user_manager.zig,176
 REQ-VALID-001,Validation,InputValidation,TESTED,,,core,2026-01-16,tests/test_gap_0193_batch3_comprehensive.zig,504
 REQ-VALIDATION-INPUT-001,Validation,InputValidation,TESTED,,,core,2026-01-16,tests/test_gap_0193_batch4_comprehensive.zig,575
 REQ-VALUE-EQUALITY-001,MapEquality,DeepCompare,TESTED,,,value_types,2026-01-10,src/value_types.zig,355
