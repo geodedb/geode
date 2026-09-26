@@ -380,6 +380,77 @@
   past the decimal comes back as a double, `latlon()` refuses a NaN
   coordinate, and the TDE and audit benchmark procedures saturate their
   measurements.
+- **MERGE never binds, rewrites or attaches to a row the session may not
+  see (SONNY-2686, SONNY-2728):** MERGE matched existing nodes, and a
+  relationship MERGE matched existing edges, on graph, tenant, labels and
+  properties only, never on the session's RLS policies. It returned a
+  hidden node's properties, rewrote a hidden node or edge through ON MATCH
+  SET or SET (under an expression policy, possibly into view), and
+  attached relationships to hidden nodes. A visible match is now used
+  wherever it sits. When only rows the policies hide match (a node, or an
+  edge whose type a label-deny policy denies or whose own properties an
+  expression policy denies), the statement is refused with
+  `MergeMatchNotVisible` (SQLSTATE 42501) before its first write, and
+  nothing is bound, updated or created. The refusal tells the session that
+  some hidden row equals the pattern, the same class of covert channel as
+  PostgreSQL's `ON CONFLICT` error on a row the UPDATE policy hides, but
+  over any property the pattern names; binding the row, or treating it as
+  absent and creating a duplicate, is worse (see
+  `docs/kb/RLS_IMPLEMENTATION.md`). Every refusal writes an `access_denied`
+  audit record (action `MERGE_MATCH_NOT_VISIBLE`) with the user, the
+  graph, the pattern's labels or relationship types and its property keys,
+  never the values. There is no per-session rate limit on refusals yet.
+- **The QUIC key-resolved write fast paths serve only unrestricted sessions
+  (SONNY-2686, SONNY-2724):** the single-node MERGE, graph-selector MERGE,
+  `/*+BATCH*/` MERGE, relationship MERGE and MATCH … CREATE edge fast paths
+  find existing nodes by merge key alone, with no tenant check and no RLS.
+  They now serve a request only when no tenant scope, strict tenancy or
+  installed RLS policy restricts the session; every other request takes
+  the general executor. **Behaviour change:** bulk ingest from
+  tenant-scoped sessions, and from any authenticated session while an RLS
+  policy is installed, runs on the executor and is slower.
+- **indegree() and outdegree() count only what the session may see
+  (SONNY-2691):** `indegree(-1)` panicked and aborted the server; it is 0
+  now, like every id that names no node. The raw-id form read the degree
+  of any node in any tenant or graph and under any policy, and both forms
+  counted neighbours the policies hide. A node the session may not see now
+  has degree 0, and a degree counts only the edges a traversal from the
+  node may take. The raw-id form decides the node on a transient copy and
+  retains nothing: before, each call kept a copy of the node in memory
+  until the graph's next checkpoint, so one read that called it N times
+  grew the store by N copies (P11). **Behaviour change:** in a restricted
+  session, legacy edges tagged `default` and other tenants' edges no
+  longer count.
+- **knn() and vector_knn() rank only rows and edges the session may see
+  (SONNY-2692):** both the brute-force scan and the vector-index path
+  returned, ranked by distance to the caller's vector, the ids of rows the
+  RLS policies hide. Every candidate now passes the session's row
+  visibility before ranking and before it is cut to k (the index path asks
+  the index for more when rows drop out). An edge's vector counts only
+  when the RLS policies on its type allow it and both its endpoints are
+  visible (under a tenant scope too, the single edge-tenant rule). Every
+  vector-index answer is filtered by the session's graph and tenant, not
+  only under RLS, so a row the index holds that the label authority check
+  did not see never comes back.
+- **The evaluator refuses to answer without row visibility (SONNY-2691):**
+  in a process that never ran `execution.initEvaluator` (embedded use,
+  tests), degree and knn() answered without the session's RLS policies,
+  and pattern predicates, subqueries and shortestPath() panicked. A
+  statement whose session carries a user or a principal is now refused
+  with `EvaluatorNotInitialized` (XX000), and pattern predicates are
+  refused instead of panicking. The server installs the evaluator once at
+  startup; the connection handlers no longer rewrite it.
+- **A malformed wire parameter no longer aborts the server
+  (SONNY-2727):** any authenticated client could crash a ReleaseSafe server
+  with one parameter: a SMALLINT outside i16, a CHAR or VARCHAR longer than
+  65535 bytes, a decimal scale or original scale past 255, the same
+  narrowings in a typed extended value, a binary decimal scale outside
+  0..255, a binary length near 4 GiB, or a binary list nested thousands of
+  levels deep. Each is now refused with SQLSTATE 22023. A REAL outside the
+  f32 range is refused instead of becoming infinity, a binary list that
+  claims more items than it holds is refused before it sizes an
+  allocation, and a refused parameter frees what the parameters before it
+  decoded.
 
 ### Fixed
 
