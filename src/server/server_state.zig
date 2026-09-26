@@ -450,6 +450,17 @@ pub const ServerState = struct {
     pub fn leaveUndoTxn(self: *ServerState) void {
         self.txn_id = txn_undo_log.currentThreadTxnId();
         txn_undo_log.setThreadTxnId(0);
+        // The handler's transaction and the undo log's agree after every
+        // request. A transaction the undo log no longer has is over. One the
+        // handler never took up (a request that failed after its START
+        // TRANSACTION ran) is not the session's: its changes stand, as
+        // autocommit changes, and its entries go.
+        if (self.in_txn and self.txn_id == 0) {
+            self.endTransaction();
+        } else if (!self.in_txn and self.txn_id != 0) {
+            txn_undo_log.getGlobalUndoLog(self.allocator).discardTxn(self.txn_id);
+            self.txn_id = 0;
+        }
     }
 
     /// SONNY-2799: undo the session's transaction (`txn_id`) and end it,

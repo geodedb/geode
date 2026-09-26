@@ -541,6 +541,40 @@ test "SONNY-2799: the undo log keeps each transaction's changes and savepoints t
     try testing.expectEqual(@as(u64, 0), txn_undo_log.currentThreadTxnId());
 }
 
+test "SONNY-2805: after every request the handler's transaction and the undo log's agree" {
+    var f: Fixture = undefined;
+    try f.init();
+    defer f.deinit();
+    const ServerState = geode.server_state.ServerState;
+    const log = txn_undo_log.getGlobalUndoLog(testing.allocator);
+    var labels = [_][]const u8{"Z1"};
+    const id = try f.st.createNodeWithGraph(&labels, "default");
+
+    // A transaction the undo log no longer has is over.
+    {
+        var state = ServerState{ .allocator = testing.allocator };
+        state.in_txn = true;
+        state.enterUndoTxn();
+        state.leaveUndoTxn();
+        try testing.expect(!state.in_txn);
+        try testing.expectEqual(@as(u64, 0), state.txn_id);
+    }
+    // One the undo log holds and the handler never took up is not the
+    // session's: its entries go, and its change stands.
+    {
+        var state = ServerState{ .allocator = testing.allocator };
+        state.enterUndoTxn();
+        log.begin();
+        try log.logCreateNode(id, "default");
+        state.leaveUndoTxn();
+        try testing.expect(!state.in_txn);
+        try testing.expectEqual(@as(u64, 0), state.txn_id);
+        try testing.expectEqual(@as(u64, 0), txn_undo_log.currentThreadTxnId());
+        try testing.expectEqual(@as(usize, 0), undoEntries());
+        try testing.expectEqual(@as(usize, 1), countLabel(f.st, "default", "Z1"));
+    }
+}
+
 // ---------------------------------------------------------------------------
 // QUIC, against a spawned server.
 // ---------------------------------------------------------------------------

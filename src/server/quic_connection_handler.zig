@@ -8631,6 +8631,10 @@ fn handleClientMessage(
                     // Task 1: mark execute phase complete (before lock release).
                     if (mut_sample) |*s| s.markExecuteDone();
                     defer exec_result.deinit(gpa);
+                    // SONNY-2805: the session's transaction as the program left
+                    // it, recorded before anything below (the post-filter, the
+                    // response) can fail the request.
+                    updateTxnStateFromProgram(state, &parse_result.program, if (stmt_plan.is_mutation) lock_graph else null);
                     const store = graph_store.getGlobalStore(gpa);
 
                     // CANARY: REQ=REQ-SEC-RLS-ALGO-001; FEATURE="RLS Algorithm Filtering"; ASPECT=QUICWire; STATUS=IMPL; OWNER=security; UPDATED=2026-04-01
@@ -8747,7 +8751,6 @@ fn handleClientMessage(
                     auditQueryExecution(lock_graph, query_text, is_mutation);
 
                     syncGraphFromSession(state);
-                    updateTxnStateFromProgram(state, &parse_result.program, if (stmt_plan.is_mutation) lock_graph else null);
                 },
             }
         },

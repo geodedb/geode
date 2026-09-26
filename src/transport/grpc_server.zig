@@ -3236,6 +3236,10 @@ pub fn handleExecute(request_bytes: []const u8, allocator: std.mem.Allocator, ep
                     };
                     var store_result = false;
                     defer if (!store_result) exec_result.deinit(allocator);
+                    // SONNY-2805: the session's transaction as the program left
+                    // it, recorded before anything below (the post-filter, the
+                    // response) can fail the request.
+                    updateTxnStateFromProgram(state, &parse_result.program, if (stmt_plan.is_mutation) lock_graph else null);
 
                     // CANARY: REQ=REQ-SEC-RLS-ALGO-001; FEATURE="RLS Algorithm Filtering"; ASPECT=gRPCRowsWire; STATUS=IMPL; OWNER=security; UPDATED=2026-04-01
                     // Algorithm RLS filter BEFORE lock release — requires store access.
@@ -3303,7 +3307,6 @@ pub fn handleExecute(request_bytes: []const u8, allocator: std.mem.Allocator, ep
                     state.result_ordered = ordered;
                     state.result_order_keys = order_keys;
 
-                    updateTxnStateFromProgram(state, &parse_result.program, if (stmt_plan.is_mutation) lock_graph else null);
                     return encodeMessage(allocator, schema_resp);
                 },
             }
