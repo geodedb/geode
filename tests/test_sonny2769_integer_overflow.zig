@@ -575,6 +575,7 @@ test "SONNY-2769: the JSON result writer formats a decimal at any scale" {
 const s36 = "0." ++ "0" ** 35 ++ "1";
 const s40 = "0." ++ "0" ** 39 ++ "1";
 const s255 = "0." ++ "0" ** 254 ++ "1";
+const s70 = "0." ++ "0" ** 69 ++ "1";
 const s40_15 = "0." ++ "0" ** 38 ++ "15";
 const big38 = "123456789012345678.90123456789012345678";
 
@@ -593,7 +594,15 @@ fn checkDecimalText(s: *Session, f: *Failures) !void {
     try expectValue(s, f, "RETURN 'a' || " ++ s36 ++ " AS x", "'a" ++ s36 ++ "'");
     try expectValue(s, f, "RETURN 'a' || " ++ s40 ++ " AS x", "'a" ++ s40 ++ "'");
     try expectValue(s, f, "RETURN 'a' || -0.5 AS x", "'a-0.5'");
-    try expectFail(s, f, "RETURN 'a' || " ++ s255 ++ " AS x", &.{}, error.Unsupported);
+    // Round 6: at any length (a text past 64 bytes was 0A000).
+    try expectValue(s, f, "RETURN 'a' || " ++ s70 ++ " AS x", "'a" ++ s70 ++ "'");
+    try expectValue(s, f, "RETURN 'a' || " ++ s255 ++ " AS x", "'a" ++ s255 ++ "'");
+    try expectValue(s, f, "RETURN " ++ s255 ++ " || 'b' AS x", "'" ++ s255 ++ "b'");
+    // toString is exact, as CAST is (it went through f64).
+    try expectValue(s, f, "RETURN toString(1701411834604692317316873037158841057.27) AS x", "'1701411834604692317316873037158841057.27'");
+    try expectValue(s, f, "RETURN toString(1.50) AS x", "'1.50'");
+    try expectValue(s, f, "RETURN toString(-0.5) AS x", "'-0.5'");
+    try expectValue(s, f, "RETURN toString(" ++ s40 ++ ") AS x", "'" ++ s40 ++ "'");
     // A map property is stored as JSONB text: `pow *= 10` overflowed, and
     // -0.5 was stored as 0.5.
     try s.exec("CREATE (:DM {m: {a: " ++ s40 ++ ", b: -0.5}})", &.{});
@@ -700,4 +709,15 @@ test "SONNY-2769: the decimal text, the JSON writer and the library helpers at a
     const min_text = try geode.ext_types.decimalToString(.{ .coeff = std.math.minInt(i128), .scale = 2 }, a);
     defer a.free(min_text);
     try testing.expectEqualStrings("-1701411834604692317316873037158841057.28", min_text);
+    // Round 6: the heap toString is exact at any scale, a negative one too.
+    const fns = geode.types.evaluator_functions;
+    const big = try fns.toString_val(a, .{ .Decimal128 = .{ .coeff = 170141183460469231731687303715884105727, .scale = 2 } });
+    defer a.free(big.Text);
+    try testing.expectEqualStrings("1701411834604692317316873037158841057.27", big.Text);
+    const neg_scale = try fns.toString_val(a, .{ .Decimal128 = .{ .coeff = -15, .scale = -3 } });
+    defer a.free(neg_scale.Text);
+    try testing.expectEqualStrings("-15000", neg_scale.Text);
+    const wide = try fns.toString_val(a, .{ .Decimal128 = .{ .coeff = 1, .scale = 300 } });
+    defer a.free(wide.Text);
+    try testing.expectEqual(@as(usize, 302), wide.Text.len);
 }

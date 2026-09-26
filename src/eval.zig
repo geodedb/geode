@@ -215,6 +215,7 @@ const truthy = value_types.truthy;
 // Phase 6 M6.1: Import type promotion module for type conversion and validation utilities
 const type_promotion = @import("eval/type_promotion.zig");
 const value_order = @import("execution/value_order.zig");
+const decimal_text = @import("types/decimal_text.zig");
 
 // CANARY: REQ=REQ-EVAL-REFACTOR-001; FEATURE="EvalExpr Refactoring"; ASPECT=CallHandlersImport; STATUS=TESTED; OWNER=eval; UPDATED=2026-01-30
 // Import call handlers module for function call evaluation helpers
@@ -700,8 +701,10 @@ pub fn evalBinary(alloc: std.mem.Allocator, op: ast.BinOp, l: Value, r: Value) E
             // Convert both operands to strings if needed
             var buf_l: [64]u8 = undefined;
             var buf_r: [64]u8 = undefined;
-            const str_l = if (l == .Str) l.Str else try stringify(l, &buf_l);
-            const str_r = if (r == .Str) r.Str else try stringify(r, &buf_r);
+            const str_l = try concatOperand(alloc, l, &buf_l);
+            defer if (l == .Decimal) alloc.free(str_l);
+            const str_r = try concatOperand(alloc, r, &buf_r);
+            defer if (r == .Decimal) alloc.free(str_r);
 
             // Allocate result string with combined length
             const result = alloc.alloc(u8, str_l.len + str_r.len) catch return EvalError.OutOfMemory;
@@ -1209,12 +1212,14 @@ pub fn evalExpr(allocator: std.mem.Allocator, e: ast.Expr, env: Env) EvalError!V
                 else => .{ .Null = {} },
             };
         },
+        // SONNY-2675 (round 6): `x IN (subquery)` compares x with each value of
+        // the subquery's first column as `x IN [list]` does (inStep: `=`, left
+        // to right, three-valued). It used its own equality, integers and
+        // strings only (`1.5 IN (MATCH ... RETURN 1.5)` was false, and NOT IN
+        // kept rows it should drop), and a NULL value was NULL even for an
+        // empty result, where `NULL IN []` is FALSE.
         .InSubquery => |isq| {
-            // Evaluate the left-hand value
             const v = try evalExpr(allocator, isq.value.*, env);
-            if (isNull(v)) return Value{ .Null = {} };
-
-            // Execute the subquery using the caller-provided execution context
             var result = getExecutionCallbacks().executeQueryWithEnv(allocator, isq.subquery.*, env) catch |err| {
                 return switch (err) {
                     error.OutOfMemory => error.OutOfMemory,
@@ -1222,39 +1227,10 @@ pub fn evalExpr(allocator: std.mem.Allocator, e: ast.Expr, env: Env) EvalError!V
                 };
             };
             defer result.deinit(allocator);
-
-            // Check if value is in the first column of results
-            var saw_null = false;
-            for (result.rows) |row| {
-                if (row.len == 0) continue;
-                const cell = row[0];
-
-                if (isNull(cell)) {
-                    saw_null = true;
-                    continue;
-                }
-
-                // Compare value with cell
-                if (v == .Int and cell == .Int and v.Int == cell.Int) return .{ .Bool = true };
-                if (v == .Str and cell == .Str and std.mem.eql(u8, v.Str, cell.Str)) return .{ .Bool = true };
-                if ((v == .Str and cell == .Int) or (v == .Int and cell == .Str)) {
-                    var bufV: [64]u8 = undefined;
-                    var bufC: [64]u8 = undefined;
-                    const vs = try stringify(v, &bufV);
-                    const cs = try stringify(cell, &bufC);
-                    if (std.mem.eql(u8, vs, cs)) return .{ .Bool = true };
-                }
-            }
-
-            if (saw_null) return Value{ .Null = {} };
-            return .{ .Bool = false };
+            return inRows(allocator, v, result.rows);
         },
         .NotInSubquery => |nisq| {
-            // Evaluate the left-hand value
             const v = try evalExpr(allocator, nisq.value.*, env);
-            if (isNull(v)) return Value{ .Null = {} };
-
-            // Execute the subquery using the caller-provided execution context
             var result = getExecutionCallbacks().executeQueryWithEnv(allocator, nisq.subquery.*, env) catch |err| {
                 return switch (err) {
                     error.OutOfMemory => error.OutOfMemory,
@@ -1262,32 +1238,10 @@ pub fn evalExpr(allocator: std.mem.Allocator, e: ast.Expr, env: Env) EvalError!V
                 };
             };
             defer result.deinit(allocator);
-
-            // Check if value is NOT in the first column of results
-            var saw_null = false;
-            for (result.rows) |row| {
-                if (row.len == 0) continue;
-                const cell = row[0];
-
-                if (isNull(cell)) {
-                    saw_null = true;
-                    continue;
-                }
-
-                // Compare value with cell
-                if (v == .Int and cell == .Int and v.Int == cell.Int) return .{ .Bool = false };
-                if (v == .Str and cell == .Str and std.mem.eql(u8, v.Str, cell.Str)) return .{ .Bool = false };
-                if ((v == .Str and cell == .Int) or (v == .Int and cell == .Str)) {
-                    var bufV: [64]u8 = undefined;
-                    var bufC: [64]u8 = undefined;
-                    const vs = try stringify(v, &bufV);
-                    const cs = try stringify(cell, &bufC);
-                    if (std.mem.eql(u8, vs, cs)) return .{ .Bool = false };
-                }
-            }
-
-            if (saw_null) return Value{ .Null = {} };
-            return .{ .Bool = true };
+            return switch (try inRows(allocator, v, result.rows)) {
+                .Bool => |b| .{ .Bool = !b },
+                else => .{ .Null = {} },
+            };
         },
         .IsNull => |nz| blk_isnull: {
             const v = try evalExpr(allocator, nz.target.*, env);
@@ -4144,10 +4098,10 @@ fn tryBasicFunction(allocator: std.mem.Allocator, function_name: []const u8, arg
                 const str = std.fmt.bufPrint(&buf, "{d}", .{i}) catch return Value{ .Str = "" };
                 return Value{ .Str = try allocator.dupe(u8, str) };
             },
+            // SONNY-2769 (round 6): exact, as CAST does. Through f64 the text
+            // lost every digit past the 17th and the scale's trailing zeros.
             .Decimal => |d| {
-                const float_val = @as(f64, @floatFromInt(d.coeff)) / std.math.pow(f64, 10.0, @floatFromInt(d.scale));
-                const str = std.fmt.allocPrint(allocator, "{d}", .{float_val}) catch return Value{ .Str = "" };
-                return Value{ .Str = str };
+                return Value{ .Str = try decimal_text.alloc(allocator, d.coeff, d.scale) };
             },
             .Str => |s| return Value{ .Str = s },
             .Bool => |b| return Value{ .Str = if (b) "true" else "false" },
@@ -4466,6 +4420,28 @@ fn inValues(allocator: std.mem.Allocator, value: Value, items: []const Value) Ev
         if (try inStep(allocator, value, item, &unknown)) return .{ .Bool = true };
     }
     return if (unknown) .{ .Null = {} } else .{ .Bool = false };
+}
+
+/// `value IN (subquery)`: the first value of each row, as `inValues` does
+/// for a list. No rows is FALSE.
+fn inRows(allocator: std.mem.Allocator, value: Value, rows: []const []Value) EvalError!Value {
+    var unknown = false;
+    for (rows) |row| {
+        if (row.len == 0) continue;
+        if (try inStep(allocator, value, row[0], &unknown)) return .{ .Bool = true };
+    }
+    return if (unknown) .{ .Null = {} } else .{ .Bool = false };
+}
+
+/// The text `||` concatenates: a decimal's exact text at any length
+/// (SONNY-2769 round 6: stringify's 64-byte buffer refused a longer one with
+/// 0A000), allocated with `alloc`; any other value as stringify writes it.
+fn concatOperand(alloc: std.mem.Allocator, v: Value, buf: *[64]u8) EvalError![]const u8 {
+    return switch (v) {
+        .Str => |s| s,
+        .Decimal => |d| decimal_text.alloc(alloc, d.coeff, d.scale) catch return EvalError.OutOfMemory,
+        else => stringify(v, buf),
+    };
 }
 
 /// An INT, SMALLINT, BIGINT or DECIMAL as an exact number, else null.

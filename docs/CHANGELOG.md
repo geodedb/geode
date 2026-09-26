@@ -104,10 +104,16 @@
   `CAST('-1.5' AS DECIMAL)` keeps its sign (it was -0.5). A decimal's text
   is exact at any scale: `CAST(-0.5 AS STRING)` is '-0.5' (it was '0.5'),
   a map property of -0.5 is stored as -0.5 (it was 0.5), and a decimal of
-  more than 32 digits casts to its text (it was NULL). **Behaviour
+  more than 32 digits casts to its text (it was NULL). `toString()` of a
+  decimal is exact too (it went through a double: `toString(1.50)` was
+  '1.5', and 38 digits kept 17), and `'a' || <decimal>` takes its text at
+  any length (past 64 characters it failed with 0A000). **Behaviour
   change:** an inline property map and MERGE compare two numbers by their
-  exact value, as `=` and GROUP BY do: `MERGE (n:T {x: 1.0})` matches a
-  node whose x is the integer 1 (it created a second node).
+  exact value, as GROUP BY does: `MERGE (n:T {x: 1.0})` matches a node
+  whose x is the integer 1 (it created a second node). `=` does not always
+  agree: it compares a DOUBLE with an exact number approximately, in a
+  double, so `DOUBLE 0.1 = 0.1` is true while `{x: 0.1}` does not match a
+  stored DOUBLE 0.1 (SONNY-2807).
 
 ### Fixed
 
@@ -163,16 +169,30 @@
     -13:00 UTC and sorted first). `=` compared the local time and the
     offset, and `<` and `>` were a type mismatch; a zoned datetime's `<` and
     `>` compare its UTC instant, as ORDER BY does.
-  - **Behaviour change:** `x IN (a, b)` is `x = a OR x = b`, for a literal
-    list and a list expression alike: an item is in the list when `=` calls
-    it equal, whatever its type (`1.50 IN [1.5]`, `1 IN [1.0]` and a DOUBLE
-    1.5 in `[1.5]` are true; they were false), an item `=` cannot compare
-    with the value raises the error `=` raises, and the result is NULL when
-    no item is equal and some comparison is NULL (`2 IN $list` with
-    `$list = [1, NULL]` was false). `=`, `<` and `>` compare INT, SMALLINT,
-    BIGINT and DECIMAL values by their exact value at any scale:
+  - **Behaviour change:** `x IN [a, b]` is `x = a OR x = b`, for a literal
+    list, a list expression (`x IN $list`) and a subquery
+    (`x IN (MATCH ... RETURN v)`, its first column) alike. (Geode reads
+    parentheses after IN as a subquery; a list is written in brackets.) An
+    item is in the list when `=` calls it equal, whatever its type
+    (`1.50 IN [1.5]`, `1 IN [1.0]` and a DOUBLE 1.5 in `[1.5]` are true;
+    they were false, and `1.5 IN (<a subquery returning 1.5>)` was false
+    too, so NOT IN kept that row). The result is NULL when no item is equal
+    and some comparison is NULL (`2 IN $list` with `$list = [1, NULL]` was
+    false), and FALSE for an empty list or subquery, even for a NULL value
+    (`NULL IN (<no rows>)` was NULL). `=`, `<` and `>` compare INT,
+    SMALLINT, BIGINT and DECIMAL values by their exact value at any scale:
     `1 = <a scale-40 decimal>` is false (it failed with 0A000), and a
     SMALLINT or BIGINT parameter compares with an INT (a type mismatch).
+  - IN evaluates `x = item` left to right and stops at the first item that
+    is equal, as the OR it stands for does. An item `=` cannot compare with
+    the value raises the error `=` raises, but only if IN reaches it:
+    `'a' IN ['a', 1.5]` is true, while `'a' IN [1.5, 'a']` is a type
+    mismatch, as `'a' = 1.5` is. (It was false.)
+  - **Known divergence:** a WHERE predicate that raises for some rows, such
+    as a property holding a string on one node and a number on another
+    against `IN [1.5]`, fails the query on a legacy session (in memory,
+    RLS or tenant-scoped), while the planned read of a persisted session
+    counts an error as no match and returns the other rows (SONNY-2811).
 - **min, max and ORDER BY order every value type (SONNY-2675):** min and max
   compared only integers and strings, so over doubles, decimals, dates or
   mixed numbers the first value won, and ORDER BY ranked doubles, temporal

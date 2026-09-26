@@ -1221,11 +1221,9 @@ pub fn evalTypeCastFunction(
                 const str = std.fmt.bufPrint(&buf, "{d}", .{i}) catch return Value{ .Str = "" };
                 return Value{ .Str = try allocator.dupe(u8, str) };
             },
-            .Decimal => |d| {
-                const float_val = @as(f64, @floatFromInt(d.coeff)) / std.math.pow(f64, 10.0, @floatFromInt(d.scale));
-                const str = std.fmt.allocPrint(allocator, "{d}", .{float_val}) catch return Value{ .Str = "" };
-                return Value{ .Str = str };
-            },
+            // SONNY-2769 (round 6): exact, as CAST does. Through f64 the text
+            // lost every digit past the 17th and the scale's trailing zeros.
+            .Decimal => |d| return Value{ .Str = try decimal_text.alloc(allocator, d.coeff, d.scale) },
             .Str => |s| return Value{ .Str = s },
             .Bool => |b| return Value{ .Str = if (b) "true" else "false" },
             // CANARY: REQ=REQ-ENG-3916-TOSTRING-NULL-PROPAGATION; FEATURE="StringFunctions"; ASPECT=ToStringNullPropagation; STATUS=TESTED; TEST=tests/test_eng3916_edge_id_projection.zig; OWNER=eval; UPDATED=2026-08-25

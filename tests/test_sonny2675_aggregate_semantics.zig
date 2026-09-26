@@ -792,3 +792,44 @@ fn checkZonedTimes(s: *Session, f: *Failures) !void {
 test "SONNY-2675: zoned times order by their UTC time of day" {
     try inEveryMode("zoned times", checkZonedTimes);
 }
+
+fn checkInSubquery(s: *Session, f: *Failures) !void {
+    // Round 6 (I2): `x IN (subquery)` compares x with each value of the
+    // first column as `x IN [list]` does. It matched integers and strings
+    // only: 1.5 was not in a column holding 1.5, and NOT IN kept that row.
+    try s.exec("CREATE (:SQ {x: 1.5})", &.{});
+    try s.exec("CREATE (:SQ {x: 1})", &.{});
+    try s.exec("CREATE (:SU {y: 1.5})", &.{});
+    try s.exec("CREATE (:SU {y: 2.5})", &.{});
+    try expectRows(s, f, "RETURN 1.5 IN (MATCH (s:SQ) RETURN s.x) AS x", &.{}, &.{"true"});
+    try expectRows(s, f, "RETURN 1.50 IN (MATCH (s:SQ) RETURN s.x) AS x", &.{}, &.{"true"});
+    try expectRows(s, f, "RETURN 1.0 IN (MATCH (s:SQ) RETURN s.x) AS x", &.{}, &.{"true"});
+    try expectRows(s, f, "RETURN 2 IN (MATCH (s:SQ) RETURN s.x) AS x", &.{}, &.{"false"});
+    try expectRows(s, f, "RETURN 1.5 NOT IN (MATCH (s:SQ) RETURN s.x) AS x", &.{}, &.{"false"});
+    try expectRows(s, f, "MATCH (u:SU) WHERE u.y IN (MATCH (s:SQ) RETURN s.x) RETURN count(u) AS c", &.{}, &.{"1"});
+    try expectRows(s, f, "MATCH (u:SU) WHERE u.y NOT IN (MATCH (s:SQ) RETURN s.x) RETURN count(u) AS c", &.{}, &.{"1"});
+    // Three-valued, as for a list: no rows is FALSE (`NULL IN []` is
+    // FALSE; this was NULL), a NULL against rows or a NULL value is NULL.
+    try expectRows(s, f, "RETURN NULL IN (MATCH (n:Nope) RETURN n.x) AS x", &.{}, &.{"false"});
+    try expectRows(s, f, "RETURN NULL NOT IN (MATCH (n:Nope) RETURN n.x) AS x", &.{}, &.{"true"});
+    try expectRows(s, f, "RETURN NULL IN (MATCH (s:SQ) RETURN s.x) AS x", &.{}, &.{"null"});
+    try expectRows(s, f, "RETURN 2 IN (MATCH (s:SQ) RETURN s.nope) AS x", &.{}, &.{"null"});
+    try expectRows(s, f, "RETURN 2 NOT IN (MATCH (s:SQ) RETURN s.nope) AS x", &.{}, &.{"null"});
+}
+
+test "SONNY-2675: IN (subquery) is `=` for each value of the first column" {
+    execution.initEvaluator();
+    // Not on a tenant-scoped session: a subquery there reads none of the
+    // session's own nodes, before and after this change (a separate bug,
+    // reported with round 6).
+    harness.silenceEngineLogs();
+    var f: Failures = .{};
+    defer f.deinit();
+    for ([_]Mode{ .in_memory, .rls_policy, .persisted, .unbounded_cache }) |mode| {
+        var s = try Session.init(mode);
+        defer s.deinit();
+        try s.seed();
+        try checkInSubquery(&s, &f);
+    }
+    try f.check("IN subquery");
+}

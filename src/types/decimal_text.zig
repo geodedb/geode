@@ -1,5 +1,6 @@
 //! The exact text of a decimal, coeff * 10^-scale, for every i128
-//! coefficient and every u8 scale (SONNY-2769).
+//! coefficient and every scale up to u16 (a query decimal's is u8, a heap
+//! decimal's up to 32767) (SONNY-2769).
 //!
 //! The formatters this replaces each computed 10^scale in i128, one
 //! `*= 10` per digit. Past scale 38 that overflows, which aborts a Debug or
@@ -31,7 +32,7 @@ fn magnitude(buf: *[max_digits]u8, coeff: i128) []const u8 {
 
 /// The length of the text: a '-' when negative, the integer digits (at
 /// least one), and for a nonzero scale a '.' and exactly `scale` digits.
-pub fn len(coeff: i128, scale: u8) usize {
+pub fn len(coeff: i128, scale: u16) usize {
     var buf: [max_digits]u8 = undefined;
     const digits = magnitude(&buf, coeff);
     const sign: usize = @intFromBool(coeff < 0);
@@ -43,7 +44,7 @@ pub fn len(coeff: i128, scale: u8) usize {
 /// Writes the text of coeff * 10^-scale to `w` (anything with `writeAll`):
 /// 150 at scale 2 is "1.50", -5 at scale 1 "-0.5", 1 at scale 40
 /// "0.0000000000000000000000000000000000000001".
-pub fn write(w: anytype, coeff: i128, scale: u8) !void {
+pub fn write(w: anytype, coeff: i128, scale: u16) !void {
     var buf: [max_digits]u8 = undefined;
     const digits = magnitude(&buf, coeff);
     if (coeff < 0) try w.writeAll("-");
@@ -66,14 +67,14 @@ pub fn write(w: anytype, coeff: i128, scale: u8) !void {
 }
 
 /// The text in `buf`, or NoSpaceLeft when it is longer.
-pub fn bufPrint(buf: []u8, coeff: i128, scale: u8) error{NoSpaceLeft}![]u8 {
+pub fn bufPrint(buf: []u8, coeff: i128, scale: u16) error{NoSpaceLeft}![]u8 {
     var w: std.Io.Writer = .fixed(buf);
     write(&w, coeff, scale) catch return error.NoSpaceLeft;
     return w.buffered();
 }
 
 /// The text in a new allocation.
-pub fn alloc(allocator: std.mem.Allocator, coeff: i128, scale: u8) std.mem.Allocator.Error![]u8 {
+pub fn alloc(allocator: std.mem.Allocator, coeff: i128, scale: u16) std.mem.Allocator.Error![]u8 {
     var aw: std.Io.Writer.Allocating = .init(allocator);
     errdefer aw.deinit();
     // The allocating writer fails only when it cannot grow.
@@ -82,7 +83,7 @@ pub fn alloc(allocator: std.mem.Allocator, coeff: i128, scale: u8) std.mem.Alloc
 }
 
 test "decimal text at every scale and sign" {
-    const cases = [_]struct { coeff: i128, scale: u8, text: []const u8 }{
+    const cases = [_]struct { coeff: i128, scale: u16, text: []const u8 }{
         .{ .coeff = 0, .scale = 0, .text = "0" },
         .{ .coeff = 0, .scale = 2, .text = "0.00" },
         .{ .coeff = 150, .scale = 2, .text = "1.50" },

@@ -1,4 +1,5 @@
 const std = @import("std");
+const decimal_text = @import("decimal_text.zig");
 
 const builtin = @import("builtin");
 const heap = @import("../storage/heap.zig");
@@ -1365,11 +1366,16 @@ pub fn toString_val(allocator: std.mem.Allocator, val: Value) EvaluatorError!Val
             const result = std.fmt.allocPrint(allocator, "{d}", .{d}) catch return EvaluatorError.OutOfMemory;
             break :blk result;
         },
+        // SONNY-2769 (round 6): exact (through f64 the text lost every digit
+        // past the 17th). A negative scale multiplies by 10^-scale.
         .Decimal128 => |dec| blk: {
-            // Convert Decimal128 to string representation
-            const float_val = @as(f64, @floatFromInt(dec.coeff)) / std.math.pow(f64, 10.0, @floatFromInt(dec.scale));
-            const result = std.fmt.allocPrint(allocator, "{d}", .{float_val}) catch return EvaluatorError.OutOfMemory;
-            break :blk result;
+            if (dec.scale >= 0) break :blk decimal_text.alloc(allocator, dec.coeff, @intCast(dec.scale)) catch return EvaluatorError.OutOfMemory;
+            if (dec.coeff == 0) break :blk "0";
+            var aw: std.Io.Writer.Allocating = .init(allocator);
+            errdefer aw.deinit();
+            aw.writer.print("{d}", .{dec.coeff}) catch return EvaluatorError.OutOfMemory;
+            aw.writer.splatByteAll('0', @intCast(-@as(i32, dec.scale))) catch return EvaluatorError.OutOfMemory;
+            break :blk aw.toOwnedSlice() catch return EvaluatorError.OutOfMemory;
         },
         .Str => |s| s,
         .Text => |s| s,
