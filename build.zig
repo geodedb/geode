@@ -8719,6 +8719,21 @@ pub fn build(b: *std.Build) void {
     const sonny2803_step = b.step("test-sonny2803-graph-ddl-gate", "Run SONNY-2803 regression (CREATE/DROP GRAPH and index and constraint DDL need decide(schema) and bind_graph on the target graph, checked before existence: a ReadWrite user refused a graph cannot drop it)");
     sonny2803_step.dependOn(&run_sonny2803_tests.step);
 
+    // SONNY-2804: geode.storage.stats/integrity refuse an internal graph,
+    // then a graph the caller may not bind, and only then a missing one.
+    const sonny2804_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny2804_storage_procs_gate.zig"), .target = target, .optimize = optimize });
+    sonny2804_test_mod.link_libc = true;
+    sonny2804_test_mod.addImport("geode", root_mod);
+    sonny2804_test_mod.addImport("schema", schema_mod);
+    sonny2804_test_mod.addImport("protobuf", protobuf_mod);
+    sonny2804_test_mod.addImport("grpc_impl", sonny1560_shim_mod);
+    sonny2804_test_mod.addImport("logging", logging_mod);
+    const sonny2804_tests = b.addTest(.{ .root_module = sonny2804_test_mod });
+    const run_sonny2804_tests = b.addRunArtifact(sonny2804_tests);
+    shardDep(test_step, &run_sonny2804_tests.step, 1, test_shard_loads, test_shard_index);
+    const sonny2804_step = b.step("test-sonny2804-storage-procs-gate", "Run SONNY-2804 regression (geode.storage.stats/integrity refuse __geode_* graphs, then graphs the caller may not bind, before whether the graph exists)");
+    sonny2804_step.dependOn(&run_sonny2804_tests.step);
+
     // SONNY-2790: the fulltext statements (CREATE/DROP INDEX, geode.fts.*)
     // run on the default graph, so the handlers lock `default` for them from
     // any session. Classifier, and the real gRPC handler (SONNY-1560 shim).

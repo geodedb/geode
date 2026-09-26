@@ -144,6 +144,17 @@
     graph (or on `*`) grants it there.
   - ReadWrite users can no longer run these statements without such a
     policy.
+- **`geode.storage.stats` and `geode.storage.integrity` take the graph gate
+  (SONNY-2804):** both read the graph named by their argument with no
+  check.
+  - A user refused a graph read its node, edge and page counts and its WAL
+    position.
+  - A graph that did not exist answered 42883, an existence oracle.
+  - `__geode_*` graphs answered too.
+
+  Now an internal graph is refused (42501, Admin included). Then the caller
+  must be allowed to bind the graph (42501), and only then must the graph
+  exist (3F000).
 - **EXPLAIN and PROFILE run alone (SONNY-2802, SONNY-2752):** both
   handlers take a request's lock, write gate and transaction bookkeeping from
   the whole program. But they only plan an EXPLAIN'd statement and only run

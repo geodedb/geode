@@ -196,7 +196,7 @@ pub fn executeCallProcedure(allocator: std.mem.Allocator, call_stmt: ast.CallPro
 
     // ---- geode.storage.* procedures (storage inspection) ----
     if (std.mem.startsWith(u8, proc_name, "geode.storage.")) {
-        if (try storage_dispatch.executeStorage(allocator, proc_name, call_stmt)) |result| {
+        if (try storage_dispatch.executeStorage(allocator, proc_name, call_stmt, context)) |result| {
             return result;
         }
     }
