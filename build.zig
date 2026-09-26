@@ -8976,6 +8976,19 @@ pub fn build(b: *std.Build) void {
     const sonny2683_step = b.step("test-sonny2683-return-shapes", "Run SONNY-2683 regression (a grouped or filtered RETURN after a CTE, SET or REMOVE is projected by the shared projection; after CREATE, MERGE or a procedure CALL it is refused: in-memory, RLS-policy, tenant-scoped and persisted sessions)");
     sonny2683_step.dependOn(&run_sonny2683_tests.step);
 
+    // SONNY-2694: a write (CREATE, MERGE, SET, REMOVE, DELETE) behind an
+    // aggregating or DISTINCT RETURN is applied to every matched row and the
+    // RETURN computed over those rows; no read fast path answers a statement
+    // that writes. In-memory, tenant-scoped and persisted sessions.
+    const sonny2694_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny2694_write_behind_aggregate.zig"), .target = target, .optimize = optimize });
+    sonny2694_test_mod.addImport("geode", root_mod);
+    sonny2694_test_mod.addImport("logging", logging_mod);
+    const sonny2694_tests = b.addTest(.{ .root_module = sonny2694_test_mod });
+    const run_sonny2694_tests = b.addRunArtifact(sonny2694_tests);
+    shardDep(test_step, &run_sonny2694_tests.step, 1, test_shard_loads, test_shard_index);
+    const sonny2694_step = b.step("test-sonny2694-write-behind-aggregate", "Run SONNY-2694 regression (CREATE, MERGE, SET, REMOVE and DELETE behind count(*), sum, min, max, DISTINCT or a counted WHERE write every matched row and return the aggregate over them; no read fast path answers a write: in-memory, tenant-scoped and persisted sessions)");
+    sonny2694_step.dependOn(&run_sonny2694_tests.step);
+
     // SONNY-2746: a failing-allocator sweep over every allocation of
     // `CALL geode.rls.add_attribute_policy`, in the request and the engine.
     const sonny2746_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny2746_rls_attribute_policy_oom.zig"), .target = target, .optimize = optimize });

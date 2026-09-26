@@ -781,14 +781,70 @@ const CountFastPathPlan = struct {
     column_name: []const u8,
 };
 
-// CANARY: REQ=REQ-SONNY-2683-FAST-PATH-WRITES; FEATURE="ReadFastPaths"; ASPECT=DeclineWrites; STATUS=TESTED; TEST=tests/test_sonny2683_return_shapes.zig; OWNER=engine; UPDATED=2026-09-25
-/// SONNY-2683: a read fast path declines a query that sets or removes
-/// properties on the rows it matches. The fast paths answer by reading and
-/// apply no write. They declined a SET but not a REMOVE, so the streaming
-/// GROUP BY / DISTINCT path answered `MATCH (n:G) REMOVE n.t RETURN DISTINCT
-/// n.g`, and a grouped RETURN after a REMOVE, without removing anything.
-fn readFastPathDeclinesWrite(q: ast.Query) bool {
-    return q.set_clauses.len != 0 or q.remove_clauses.len != 0;
+/// What a clause of `ast.Query` is to a read fast path.
+const FastPathClause = enum {
+    /// The fast path can answer with the clause present, or checks its shape
+    /// itself (a WHERE, a RETURN, a WITH it declines, a CTE whose results are
+    /// parameters by the time the read runs).
+    read,
+    /// The clause writes, or runs a stage the fast path does not (a procedure
+    /// CALL, a CALL { } subquery, a chained or FOR query, an UNWIND). The fast
+    /// path answers by reading one pattern, so it would drop the clause.
+    declines,
+};
+
+/// SONNY-2694: every field of `ast.Query`, classified for the read fast
+/// paths. A new clause fails to compile until it is classified here, so no
+/// fast path can answer a write it was never taught to decline.
+fn fastPathClause(comptime field: []const u8) FastPathClause {
+    @setEvalBranchQuota(20_000);
+    const declines = [_][]const u8{
+        "create_pattern", "merge_statement",       "set_clauses", "remove_clauses", "delete_items",
+        "call_clause",    "initial_call_subquery", "next_query",  "for_statement",  "unwind_clause",
+    };
+    const reads = [_][]const u8{
+        "let_bindings",  "inline_let_bindings", "optional_match",    "match",           "where_clause",
+        "filter_clause", "with_clause",         "cte_list",          "group_by",        "having",
+        "ret",           "order_by",            "limit",             "offset",          "limit_param",
+        "offset_param",  "path_variable",       "has_recursive_cte", "is_initial_with",
+    };
+    inline for (declines) |name| {
+        if (comptime std.mem.eql(u8, name, field)) return .declines;
+    }
+    inline for (reads) |name| {
+        if (comptime std.mem.eql(u8, name, field)) return .read;
+    }
+    @compileError("SONNY-2694: classify ast.Query." ++ field ++ " for the read fast paths (fastPathClause, match_operations.zig)");
+}
+
+/// Whether a declining clause is present: an optional that is set, a
+/// non-empty slice.
+fn fastPathClausePresent(value: anytype) bool {
+    return switch (@typeInfo(@TypeOf(value))) {
+        .optional => value != null,
+        .pointer => |ptr| if (ptr.size == .slice) value.len != 0 else true,
+        else => @compileError("SONNY-2694: a declining clause must be an optional or a slice"),
+    };
+}
+
+// CANARY: REQ=REQ-SONNY-2694-FAST-PATH-WRITES; FEATURE="ReadFastPaths"; ASPECT=StructuralWriteGuard; STATUS=TESTED; TEST=tests/test_sonny2694_write_behind_aggregate.zig; OWNER=engine; UPDATED=2026-09-26
+/// SONNY-2694 (after SONNY-2683): every read fast path declines a statement
+/// that writes. The fast paths answer by reading, and the query executor
+/// tries them before its write dispatch, so a write behind a RETURN they could
+/// answer (count(*), sum/avg/min/max, DISTINCT or GROUP BY, a count behind a
+/// WHERE, a top-K) was silently dropped: `MATCH (n:G) CREATE (n)-[:T]->(:Z)
+/// RETURN count(*)` returned the count and created nothing. They declined a
+/// SET and a REMOVE but not a CREATE, a MERGE or a DELETE. This is the one
+/// guard all of them call (directly, or through the count analyses), and it
+/// checks the statement's clauses structurally: every field of the query is
+/// classified by `fastPathClause`.
+pub fn readFastPathDeclinesWrite(q: ast.Query) bool {
+    inline for (@typeInfo(ast.Query).@"struct".fields) |field| {
+        if (comptime fastPathClause(field.name) == .declines) {
+            if (fastPathClausePresent(@field(q, field.name))) return true;
+        }
+    }
+    return false;
 }
 
 fn analyzeCountFastPath(q: ast.Query) ?CountFastPathPlan {
