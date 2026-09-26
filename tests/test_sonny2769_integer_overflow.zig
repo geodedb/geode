@@ -21,6 +21,7 @@ const harness = @import("node_scan_stream_harness.zig");
 
 const execution = geode.execution;
 const graph_store = geode.graph_store;
+const index_manager = geode.index_manager;
 const Value = geode.value_types.Value;
 
 const min_int = "(-9223372036854775807 - 1)";
@@ -63,24 +64,33 @@ const Session = struct {
             if (setenv("GEODE_NODE_CACHE_ENTRIES", "0", 1) != 0) return error.SetEnvFailed;
         }
         errdefer _ = unsetenv("GEODE_NODE_CACHE_ENTRIES");
+        // The index manager is process-global and a CREATE INDEX creates it
+        // with the session's arena, so it is released here and in deinit,
+        // before the arena: the catalog cleanup clears its dimension registry.
+        // Same discipline as tests/test_vector_knn_silent_failures.zig.
         execution.cleanupCatalogInstance();
+        index_manager.cleanupGlobalIndexManager();
         graph_store.deinitGlobalStore();
-        graph_store.setDataDirOverride(allocator, null);
-        var tmp: ?std.testing.TmpDir = null;
+        var tmp: ?std.testing.TmpDir = std.testing.tmpDir(.{});
         var data_dir: ?[]u8 = null;
         errdefer {
             if (data_dir) |d| allocator.free(d);
             if (tmp) |*t| t.cleanup();
         }
+        data_dir = try harness.tmpDirRealpathAlloc(allocator, &tmp.?.sub_path);
+        // The catalog is kept in the temporary directory in every mode. With
+        // no data directory it falls back to /tmp and persists there, shared
+        // by every run: a second run failed its CREATE INDEX with
+        // DuplicateIndex. Same two steps as
+        // tests/test_count_nodes_pushdown_perf.zig: create the catalog, then
+        // clear the override for an in-memory store.
+        graph_store.setDataDirOverride(allocator, data_dir.?);
+        const catalog = try execution.ensureCatalogInstance(allocator);
+        errdefer execution.cleanupCatalogInstance();
         const persisted = mode != .in_memory;
-        if (persisted) {
-            tmp = std.testing.tmpDir(.{});
-            data_dir = try harness.tmpDirRealpathAlloc(allocator, &tmp.?.sub_path);
-            graph_store.setDataDirOverride(allocator, data_dir.?);
-        }
+        if (!persisted) graph_store.setDataDirOverride(allocator, null);
         _ = graph_store.getGlobalStore(allocator);
         if (persisted != (graph_store.getGlobalAdapter() != null)) return error.WrongDeployment;
-        const catalog = try execution.ensureCatalogInstance(allocator);
         var ctx: execution.ExecutionContext = .{ .catalog = catalog };
         if (mode == .tenant_scoped) ctx.tenant_id = "tenant_a";
         return .{ .mode = mode, .arena = std.heap.ArenaAllocator.init(allocator), .tmp = tmp, .data_dir = data_dir, .ctx = ctx };
@@ -92,9 +102,10 @@ const Session = struct {
             engine.deinit();
             testing.allocator.destroy(engine);
         }
-        self.arena.deinit();
         execution.cleanupCatalogInstance();
+        index_manager.cleanupGlobalIndexManager();
         graph_store.deinitGlobalStore();
+        self.arena.deinit();
         graph_store.setDataDirOverride(testing.allocator, null);
         if (self.data_dir) |d| testing.allocator.free(d);
         if (self.tmp) |*t| t.cleanup();
@@ -466,4 +477,85 @@ test "SONNY-2769: the heap decimal and abs functions refuse what does not fit" {
     try testing.expectError(error.Overflow, (D{ .coeff = 15, .scale = std.math.maxInt(i16) }).roundHalfEven(std.math.minInt(i16)));
     const min_d = D{ .coeff = std.math.minInt(i128), .scale = 0 };
     try testing.expectError(error.Overflow, min_d.div(D{ .coeff = -1, .scale = 18 }));
+}
+
+// ---------------------------------------------------------------------------
+// Procedure arguments, parameter decoders, helpers
+// ---------------------------------------------------------------------------
+
+/// `query` succeeds (its rows are not checked).
+fn expectOk(s: *Session, f: *Failures, query: []const u8) !void {
+    const aa = s.arena.allocator();
+    var result = s.run(query, &.{}) catch |err| {
+        try f.add("[{s}] {s}: error {s}", .{ @tagName(s.mode), query, @errorName(err) });
+        return;
+    };
+    result.deinit(aa);
+}
+
+fn checkProcedures(s: *Session, f: *Failures) !void {
+    // An integer argument outside its type is InvalidArgs; the casts aborted
+    // the server. (A negative literal is not an integer literal here, so only
+    // the large ones reach the casts.)
+    try expectFail(s, f, "CALL tde.configure_mock_kms(70000)", &.{}, error.InvalidArgs);
+    try expectFail(s, f, "CALL tde.configure_mock_kms(9999, false, false, 5000000000)", &.{}, error.InvalidArgs);
+    try expectFail(s, f, "CALL tde.configure_rotation('x', 5000000000)", &.{}, error.InvalidArgs);
+    try expectFail(s, f, "CALL audit.configure('info', 'json', 4611686018427387904)", &.{}, error.InvalidArgs);
+    // A BFS depth past u32 is clamped (it aborted the server).
+    try expectOk(s, f, "CALL algo.bfs.stream(1, {maxDepth: 5000000000})");
+    // knn() through a vector index with a k past u32 (the index takes a u32).
+    try s.exec("CREATE (:VDoc {embedding: vectorf32([1.0, 0.0])})", &.{});
+    try s.exec("CREATE INDEX vdoc_vec ON VDoc (embedding) USING vector", &.{});
+    try expectValue(s, f, "RETURN size(knn('embedding', vectorf32([1.0, 0.0]), 5000000000, 'l2')) AS x", "1");
+    // interval_contains() over month counts past i64 microseconds.
+    try expectValue(s, f, "RETURN interval_contains(duration('P2147483647M'), duration('P1D')) AS x", "true");
+}
+
+test "SONNY-2769: procedure arguments outside their type are refused" {
+    try inModes("procedures", &.{.in_memory}, checkProcedures);
+}
+
+test "SONNY-2769: parameter decoders refuse or fold what does not fit" {
+    var arena = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const codec = geode.property_value_codec;
+    // A SMALLINT parameter past i16.
+    try testing.expectError(error.InvalidParams, codec.protoExtendedToHeapValue(a, .{ .type_name = "SMALLINT", .data = .{ .int_val = 100000 } }));
+    try testing.expectEqual(@as(i16, -7), (try codec.protoExtendedToHeapValue(a, .{ .type_name = "SMALLINT", .data = .{ .int_val = -7 } })).SmallInt);
+    // A typed DECIMAL parameter's bytes (tag 0x24, i128 coefficient, i16
+    // scale) with a scale outside 0..255: folded or truncated, not aborted.
+    var bytes: [19]u8 = undefined;
+    bytes[0] = 0x24;
+    std.mem.writeInt(i128, bytes[1..17], 15, .little);
+    std.mem.writeInt(i16, bytes[17..19], -1, .little);
+    const neg = try codec.protoExtendedToHeapValue(a, .{ .type_name = "DECIMAL", .data = .{ .bytes = &bytes } });
+    const neg_v = codec.heapValueToValue(neg);
+    try testing.expectEqual(@as(i128, 150), neg_v.Decimal.coeff);
+    try testing.expectEqual(@as(u8, 0), neg_v.Decimal.scale);
+    std.mem.writeInt(i16, bytes[17..19], 1000, .little);
+    const deep = try codec.protoExtendedToHeapValue(a, .{ .type_name = "DECIMAL", .data = .{ .bytes = &bytes } });
+    const deep_v = codec.heapValueToValue(deep);
+    try testing.expectEqual(@as(u8, 255), deep_v.Decimal.scale);
+    try testing.expectEqual(@as(i128, 0), deep_v.Decimal.coeff);
+    std.mem.writeInt(i128, bytes[1..17], std.math.maxInt(i128), .little);
+    std.mem.writeInt(i16, bytes[17..19], -30, .little);
+    const huge = try codec.protoExtendedToHeapValue(a, .{ .type_name = "DECIMAL", .data = .{ .bytes = &bytes } });
+    try testing.expect(codec.heapValueToValue(huge) == .Null);
+    // A decimal array element's i16 scale past 255.
+    var data: [18]u8 = undefined;
+    std.mem.writeInt(i128, data[0..16], 1, .little);
+    std.mem.writeInt(i16, data[16..18], 1000, .little);
+    const ext = geode.eval_ext.ExtValue{ .Array = .{ .elem_type = .decimal, .data = &data, .allocator = a } };
+    try testing.expectError(error.InvalidParams, codec.extValueToProjectedValue(a, ext));
+}
+
+test "SONNY-2769: the JSON result writer formats a decimal at any scale" {
+    var cols = [_][]const u8{"x"};
+    var row = [_]Value{.{ .Decimal = .{ .coeff = 5, .scale = 19 } }};
+    var rows = [_][]Value{&row};
+    const r = execution.ExecutionResult{ .columns = &cols, .rows = &rows, .flags = .empty };
+    const json = try r.toJson(testing.allocator);
+    defer testing.allocator.free(json);
+    try testing.expect(std.mem.indexOf(u8, json, "0.0000000000000000005") != null);
 }

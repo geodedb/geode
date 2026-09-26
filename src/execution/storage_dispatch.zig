@@ -681,8 +681,10 @@ fn handleTdeConfigureMockKms(allocator: std.mem.Allocator, call_stmt: ast.CallPr
 
     if (args.len > 0) {
         // Parse first argument as port
+        // SONNY-2769: an argument outside its type aborted the server in
+        // the casts below; it is InvalidArgs.
         if (args[0].* == .Int) {
-            port = @intCast(args[0].Int);
+            port = std.math.cast(u16, args[0].Int) orelse return error.InvalidArgs;
         }
 
         // Parse second argument as auth flag
@@ -697,12 +699,12 @@ fn handleTdeConfigureMockKms(allocator: std.mem.Allocator, call_stmt: ast.CallPr
 
         // Parse fourth argument as latency in ms
         if (args.len > 3 and args[3].* == .Int) {
-            latency_ms = @intCast(args[3].Int);
+            latency_ms = std.math.cast(u32, args[3].Int) orelse return error.InvalidArgs;
         }
 
         // Parse fifth argument as key count
         if (args.len > 4 and args[4].* == .Int) {
-            key_count = @intCast(args[4].Int);
+            key_count = std.math.cast(u32, args[4].Int) orelse return error.InvalidArgs;
         }
     }
 
@@ -1502,7 +1504,7 @@ fn handleTdeConfigureRotation(allocator: std.mem.Allocator, call_stmt: ast.CallP
             else => Value{ .Null = {} },
         };
         break :blk switch (arg_val) {
-            .Int => |i| @intCast(i),
+            .Int => |i| std.math.cast(u32, i) orelse return error.InvalidArgs, // SONNY-2769
             else => 168,
         };
     } else 168;
@@ -1774,7 +1776,7 @@ fn handleTdeSimulateOltpWorkload(allocator: std.mem.Allocator, call_stmt: ast.Ca
             else => Value{ .Null = {} },
         };
         break :blk switch (arg_val) {
-            .Int => |i| @as(u32, @intCast(i)),
+            .Int => |i| std.math.cast(u32, i) orelse return error.InvalidArgs, // SONNY-2769
             else => 10,
         };
     } else 10;
@@ -1786,7 +1788,7 @@ fn handleTdeSimulateOltpWorkload(allocator: std.mem.Allocator, call_stmt: ast.Ca
             else => Value{ .Null = {} },
         };
         break :blk switch (arg_val) {
-            .Int => |i| @as(u32, @intCast(i)),
+            .Int => |i| std.math.cast(u32, i) orelse return error.InvalidArgs, // SONNY-2769
             else => 10,
         };
     } else 10;

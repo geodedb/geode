@@ -2758,7 +2758,11 @@ fn evalVectorKnn(allocator: std.mem.Allocator, args: []*ast.Expr, env: Env) Eval
             index_consulted = true;
             if (advancedVectorIndexIsAuthoritative(allocator, manager, index_name, property_name)) {
                 const no_results: []advanced_types_index.VectorSearchResult = &.{};
-                const results = manager.queryAdvancedVectorIndexWithMetric(index_name, query_vec.vector, @intCast(k), metric) catch |err| switch (err) {
+                // SONNY-2769: the index takes a u32 k; a larger k aborted the
+                // server in the cast. More neighbours than the index holds is
+                // all of them, so k is clamped.
+                const index_k = std.math.cast(u32, k) orelse std.math.maxInt(u32);
+                const results = manager.queryAdvancedVectorIndexWithMetric(index_name, query_vec.vector, index_k, metric) catch |err| switch (err) {
                     error.OutOfMemory => return error.OutOfMemory,
                     // An index the manager no longer holds is treated exactly
                     // like an EMPTY one: fall through to the scan below.
@@ -3863,12 +3867,14 @@ fn tryBasicFunction(allocator: std.mem.Allocator, function_name: []const u8, arg
         // This is the same convention `compareIntervals` uses elsewhere in the
         // codebase and is the only sensible total order on unanchored
         // intervals.
-        const micros_per_day: i64 = 86_400 * std.time.us_per_s;
-        const a_total: i64 = @as(i64, a_iv.months) * 30 * micros_per_day +
-            @as(i64, a_iv.days) * micros_per_day +
+        // SONNY-2769: i128; a month count past about 3.5 million overflowed
+        // i64 and aborted the server.
+        const micros_per_day: i128 = 86_400 * std.time.us_per_s;
+        const a_total: i128 = @as(i128, a_iv.months) * 30 * micros_per_day +
+            @as(i128, a_iv.days) * micros_per_day +
             a_iv.micros;
-        const b_total: i64 = @as(i64, b_iv.months) * 30 * micros_per_day +
-            @as(i64, b_iv.days) * micros_per_day +
+        const b_total: i128 = @as(i128, b_iv.months) * 30 * micros_per_day +
+            @as(i128, b_iv.days) * micros_per_day +
             b_iv.micros;
 
         if (std.ascii.eqlIgnoreCase(function_name, "interval_overlaps")) {

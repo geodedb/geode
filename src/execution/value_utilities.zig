@@ -287,14 +287,15 @@ pub fn writeValue(allocator: std.mem.Allocator, writer: anytype, value: Value) !
             if (d.scale == 0) {
                 try writer.print("{d}", .{d.coeff});
             } else {
-                const divisor = std.math.pow(i64, 10, d.scale);
-                const whole = @divTrunc(d.coeff, divisor);
-                const frac = @rem(d.coeff, divisor);
-                if (frac == 0) {
-                    try writer.print("{d}", .{whole});
+                // SONNY-2769: `std.math.pow(i64, 10, scale)` panicked past
+                // scale 18; an exact whole value is checked with the i128
+                // power (the value is fractional past 10^38).
+                const divisor = @import("../types/narrowing.zig").pow10(d.scale);
+                if (divisor != null and @rem(d.coeff, divisor.?) == 0) {
+                    try writer.print("{d}", .{@divTrunc(d.coeff, divisor.?)});
                 } else {
                     // Format with decimal point
-                    const f: f64 = @as(f64, @floatFromInt(d.coeff)) / @as(f64, @floatFromInt(divisor));
+                    const f: f64 = @as(f64, @floatFromInt(d.coeff)) / std.math.pow(f64, 10.0, @floatFromInt(d.scale));
                     try writer.print("{d}", .{f});
                 }
             }
@@ -540,8 +541,8 @@ pub fn writeValue(allocator: std.mem.Allocator, writer: anytype, value: Value) !
                     if (d.scale == 0) {
                         try writer.print("{d}", .{d.coeff});
                     } else {
-                        const divisor = std.math.pow(i64, 10, d.scale);
-                        const f: f64 = @as(f64, @floatFromInt(d.coeff)) / @as(f64, @floatFromInt(divisor));
+                        // SONNY-2769: see above (f64, not a panicking i64 power).
+                        const f: f64 = @as(f64, @floatFromInt(d.coeff)) / std.math.pow(f64, 10.0, @floatFromInt(d.scale));
                         try writer.print("{d}", .{f});
                     }
                 },

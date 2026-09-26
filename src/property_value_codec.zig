@@ -17,6 +17,7 @@ const uuid = @import("uuid");
 const vector = @import("types/vector.zig");
 const xml = @import("types/xml.zig");
 const eval_funcs = @import("types/evaluator_functions.zig");
+const narrowing = @import("types/narrowing.zig");
 
 pub const ExtValue = eval_extended.ExtValue;
 pub const Value = value_types.Value;
@@ -476,6 +477,20 @@ pub fn evalValueToHeapValue(value: Value) heap.Value {
     };
 }
 
+// CANARY: REQ=REQ-SONNY-2769-DECIMAL-SCALE; FEATURE="IntegerOverflow"; ASPECT=HeapDecimalScale; STATUS=TESTED; TEST=tests/test_sonny2769_integer_overflow.zig; OWNER=codec; UPDATED=2026-09-26
+/// A heap decimal (i16 scale) as a query decimal (u8 scale): a negative scale
+/// is folded into the coefficient (exactly, while it fits), a scale past 255
+/// is truncated to 255. Null when the value does not fit a query decimal.
+/// SONNY-2769: the scale was `@intCast` to u8, which aborted the server for a
+/// decimal() with a negative scale or a typed decimal parameter's bytes with
+/// any scale outside 0..255.
+fn heapDecimalAsU8Scale(d: @FieldType(heap.Value, "Decimal128")) ?struct { coeff: i128, scale: u8 } {
+    if (std.math.cast(u8, d.scale)) |s| return .{ .coeff = d.coeff, .scale = s };
+    if (d.scale > 0) return .{ .coeff = narrowing.decimalRound(d.coeff, @intCast(d.scale - 255), .trunc), .scale = 255 };
+    const factor = narrowing.pow10(@intCast(-@as(i32, d.scale))) orelse return if (d.coeff == 0) .{ .coeff = 0, .scale = 0 } else null;
+    return .{ .coeff = std.math.mul(i128, d.coeff, factor) catch return null, .scale = 0 };
+}
+
 pub fn heapValueToExtValue(value: heap.Value) ExtValue {
     return switch (value) {
         .Null => .{ .Null = {} },
@@ -499,7 +514,7 @@ pub fn heapValueToExtValue(value: heap.Value) ExtValue {
         .BigInt => |v| .{ .BigInt = v },
         .Real => |v| .{ .Real = v },
         .Double => |v| .{ .Double = v },
-        .Decimal128 => |v| .{ .Decimal = .{ .coeff = v.coeff, .scale = @intCast(v.scale) } },
+        .Decimal128 => |v| if (heapDecimalAsU8Scale(v)) |d| .{ .Decimal = .{ .coeff = d.coeff, .scale = d.scale } } else .{ .Null = {} },
         .Char => |v| .{ .Char = .{ .data = v.data, .n = v.n } },
         .Varchar => |v| .{ .Varchar = .{ .data = v.data, .n = v.n } },
         .Text => |v| .{ .Text = v },
@@ -533,7 +548,7 @@ pub fn heapValueToValue(value: heap.Value) Value {
         .Text => |s| .{ .Text = s },
         .Real => |f| .{ .Real = f },
         .Double => |d| .{ .Double = d },
-        .Decimal128 => |d| .{ .Decimal = .{ .coeff = d.coeff, .scale = @intCast(d.scale), .orig_scale = @intCast(d.scale), .orig_repr = null } },
+        .Decimal128 => |d| if (heapDecimalAsU8Scale(d)) |q| .{ .Decimal = .{ .coeff = q.coeff, .scale = q.scale, .orig_scale = q.scale, .orig_repr = null } } else .{ .Null = {} },
         .SmallInt => |i| .{ .SmallInt = i },
         .BigInt => |i| .{ .BigInt = i },
         .Char => |c| .{ .Char = .{ .data = c.data, .n = c.n } },
@@ -577,7 +592,7 @@ pub fn heapValueToPropertyValue(value: heap.Value) graph_store.PropertyValue {
         .Bool => |b| .{ .Bool = b },
         .Int => |i| .{ .Int = i },
         .Str => |s| .{ .String = s },
-        .Decimal128 => |d| .{ .Decimal = .{ .coeff = d.coeff, .scale = @intCast(d.scale) } },
+        .Decimal128 => |d| if (heapDecimalAsU8Scale(d)) |q| .{ .Decimal = .{ .coeff = q.coeff, .scale = q.scale } } else .Null,
         else => .{ .ExtValue = heapValueToExtValue(value) },
     };
 }
@@ -826,7 +841,8 @@ fn dynamicArrayToProjectedValue(allocator: std.mem.Allocator, arr: arrays.Dynami
                 offset += 16;
                 const raw_scale = std.mem.readInt(i16, arr.data[offset .. offset + 2][0..2], .little);
                 offset += 2;
-                const scale: u8 = @intCast(if (raw_scale < 0) 0 else raw_scale);
+                // SONNY-2769: a scale past 255 aborted the server in the cast.
+                const scale: u8 = std.math.cast(u8, if (raw_scale < 0) 0 else raw_scale) orelse return error.InvalidParams;
                 values[i] = .{ .Decimal = .{
                     .coeff = coeff,
                     .scale = scale,
@@ -1031,7 +1047,8 @@ pub fn protoExtendedToHeapValue(allocator: std.mem.Allocator, ext: schema.Extend
         };
     }
     if (std.ascii.eqlIgnoreCase(type_name, "INTEGER") or std.ascii.eqlIgnoreCase(type_name, "INT")) return .{ .Int = try expectInt(ext.data) };
-    if (std.ascii.eqlIgnoreCase(type_name, "SMALLINT")) return .{ .SmallInt = @intCast(try expectInt(ext.data)) };
+    // SONNY-2769: a SMALLINT parameter past i16 aborted the server in the cast.
+    if (std.ascii.eqlIgnoreCase(type_name, "SMALLINT")) return .{ .SmallInt = std.math.cast(i16, try expectInt(ext.data)) orelse return error.InvalidParams };
     if (std.ascii.eqlIgnoreCase(type_name, "BIGINT")) return .{ .BigInt = try expectInt(ext.data) };
     if (std.ascii.eqlIgnoreCase(type_name, "REAL")) return .{ .Real = @floatCast(try expectDouble(ext.data)) };
     if (std.ascii.eqlIgnoreCase(type_name, "DOUBLE")) return .{ .Double = try expectDouble(ext.data) };

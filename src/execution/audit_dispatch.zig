@@ -192,9 +192,12 @@ fn handleAuditConfigure(allocator: std.mem.Allocator, call_stmt: ast.CallProcedu
         }
 
         // Parse third argument as max file size
+        // SONNY-2769: a size outside usize, or one whose MiB count passes
+        // u32 below, aborted the server in the casts; it is InvalidArgs.
         if (args.len > 2 and args[2].* == .Int) {
-            max_file_size = @intCast(args[2].Int);
+            max_file_size = std.math.cast(usize, args[2].Int) orelse return error.InvalidArgs;
         }
+        if (std.math.cast(u32, max_file_size / (1024 * 1024)) == null) return error.InvalidArgs;
 
         // Parse fourth argument as compression flag
         if (args.len > 3 and args[3].* == .Bool) {
@@ -415,7 +418,7 @@ fn handleAuditGetRecentEvents(allocator: std.mem.Allocator, call_stmt: ast.CallP
         else => &[_]*ast.Expr{},
     };
 
-    const limit = if (args.len > 0 and args[0].* == .Int) @as(usize, @intCast(args[0].Int)) else 10;
+    const limit = if (args.len > 0 and args[0].* == .Int) std.math.cast(usize, args[0].Int) orelse return error.InvalidArgs else 10; // SONNY-2769
 
     const columns = try allocator.alloc([]const u8, 5);
     columns[0] = try allocator.dupe(u8, "event_id");

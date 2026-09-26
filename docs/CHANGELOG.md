@@ -57,7 +57,36 @@
   power is 22012. An integer power is now exact (`3 ^ 39`), a JSON number
   past the decimal comes back as a double, `latlon()` refuses a NaN
   coordinate, and the TDE and audit benchmark procedures saturate their
-  measurements.
+  measurements. `round()` at an effective scale of 38
+  (`round(0.99999999999999999999999999999999999999)`) no longer aborts
+  either (a regression in the first fix).
+- **Integer overflow and narrowing no longer abort the server
+  (SONNY-2769):** integer overflow, a narrowing cast that does not fit, and
+  minInt divided by -1 abort a Debug or ReleaseSafe server. A read-only query
+  reached them through:
+  - decimal `*` (the coefficient and the scale), `/`, `+` and `-`, and
+    `CAST(... AS DECIMAL(p, s))`;
+  - `-minInt`, `abs(minInt)`, `minInt / -1`, `minInt % -1` and
+    `mod(minInt, -1)` (the last two a hardware division trap), and
+    `true + maxInt`;
+  - date +/- interval past the day range (`+ duration('P2147483647D')`);
+  - any timestamp before 1970 and any date before year 0 in a result (the
+    response encoder);
+  - `range()` at the edge of i64, `char()`/`varchar()` lengths, `decimal()`
+    scales and 39-digit strings, `vectori32` elements, int4 range bounds,
+    `ip_netmask` prefixes, DTW windows, `indegree(-1)`, `interval_contains`,
+    and `knn()` with a k past u32 over a vector index;
+  - procedure arguments (`tde.configure_mock_kms`, `tde.configure_rotation`,
+    `audit.configure`, `algo.bfs.stream` depth), a SMALLINT parameter, a
+    typed DECIMAL parameter's scale, and a TIME literal with 256 fraction
+    digits.
+
+  A value that does not fit is refused with 22003 (a procedure argument
+  with InvalidArgs), or kept exactly where the answer is defined: `x % -1` is
+  0, a pre-1970 timestamp and a negative year are formatted, a CAST string's
+  fraction digits past the target scale are truncated, and a `knn()` k past
+  u32 is clamped (more neighbours than the index holds is all of them).
+  `CAST('-1.5' AS DECIMAL)` keeps its sign (it was -0.5).
 
 ### Fixed
 
@@ -76,6 +105,12 @@
     they skipped a date, a list or an interval. A SmallInt or a BigInt is
     summed (it was skipped), and an integer sum past i64 continues as a
     double.
+
+    **Known deviation:** ISO/IEC 39075 (following SQL's exact-numeric rules)
+    implies an integer SUM past i64 should raise 22003. The shared
+    projection continues it as a double (the value's magnitude is kept, its
+    last digits are not), matching the GROUP BY fast path, until both paths
+    converge on 22003.
 - **Group and DISTINCT keys keep their type (SONNY-2675, SONNY-2735):** a
   GROUP BY, `count(DISTINCT)`, RETURN DISTINCT and WITH DISTINCT key keeps
   its type and value. Doubles, dates, decimals, texts, UUIDs and lists group
@@ -87,10 +122,22 @@
   DECIMAL 0.1 does not equal DOUBLE 0.1), every NaN is one value, and a time
   with a time zone keys by its UTC time.
 
-  **Behaviour change:** durations follow the standard's two kinds. A month
-  is not 30 days: 1 month and 30 days are two groups and no longer sort as
-  equal. A day is 24 hours: P1D and PT24H are one group. Intervals order by
-  months, then by their day-to-second length.
+  **Behaviour change:** durations follow the standard's two kinds
+  (ISO/IEC 39075 keeps year-to-month and day-to-second durations apart):
+  - a month is not 30 days: 1 month and 30 days are two groups, and
+    `duration('P1M') = duration('P30D')` is false (it was true);
+  - a day is 24 hours: P1D and PT24H are one group, and equal;
+  - ORDER BY, min and max order intervals by months, then by their
+    day-to-second length;
+  - `<`, `<=`, `>` and `>=` in WHERE and HAVING are defined when the months
+    or the day-to-second lengths of the two sides are equal
+    (`P1M < P2M`, `P1D < PT25H`); a year-to-month duration against a
+    day-to-second one (`P1M < P30D`) raises 22G04 (values not comparable).
+    They used to count a month as 30 days.
+  - `=` on a time with a time zone compares its UTC time
+    (`10:00+01:00 = 09:00+00:00`), as the groups do; it compared the local
+    time and the offset. IN over a literal list matches a value of any type
+    that `=` calls equal (it matched only integers and strings).
 - **min, max and ORDER BY order every value type (SONNY-2675):** min and max
   compared only integers and strings, so over doubles, decimals, dates or
   mixed numbers the first value won, and ORDER BY ranked doubles, temporal

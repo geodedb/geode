@@ -640,7 +640,8 @@ pub fn executePageRank(allocator: std.mem.Allocator, store: *graph_store.GraphSt
                 if (df == .integer) damping_factor = @floatFromInt(df.integer);
             }
             if (p.object.get("maxIterations")) |mi| {
-                if (mi == .integer) max_iterations = @intCast(mi.integer);
+                // SONNY-2769: outside u32 the cast aborted the server.
+                if (mi == .integer) max_iterations = std.math.cast(u32, mi.integer) orelse return error.InvalidArgs;
             }
             if (p.object.get("tolerance")) |tol| {
                 if (tol == .float) tolerance = tol.float;
@@ -2171,7 +2172,8 @@ pub fn executeKatzCentrality(allocator: std.mem.Allocator, store: *graph_store.G
                 if (b == .integer) beta = @floatFromInt(b.integer);
             }
             if (p.object.get("maxIterations")) |mi| {
-                if (mi == .integer) max_iterations = @intCast(mi.integer);
+                // SONNY-2769: outside u32 the cast aborted the server.
+                if (mi == .integer) max_iterations = std.math.cast(u32, mi.integer) orelse return error.InvalidArgs;
             }
             if (p.object.get("tolerance")) |tol| {
                 if (tol == .float) tolerance = tol.float;
@@ -2266,7 +2268,8 @@ pub fn executeHITS(allocator: std.mem.Allocator, store: *graph_store.GraphStore,
     if (params) |p| {
         if (p == .object) {
             if (p.object.get("maxIterations")) |mi| {
-                if (mi == .integer) max_iterations = @intCast(mi.integer);
+                // SONNY-2769: outside u32 the cast aborted the server.
+                if (mi == .integer) max_iterations = std.math.cast(u32, mi.integer) orelse return error.InvalidArgs;
             }
             if (p.object.get("tolerance")) |tol| {
                 if (tol == .float) tolerance = tol.float;
