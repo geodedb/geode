@@ -126,6 +126,13 @@
   A request that changes a graph that does not exist is refused with 3F000,
   and the graph is not created. The CLI's `-g` flag, which sends a
   `USE GRAPH` of the current graph before the query, works as before.
+- **The RLS post-filter fails closed (SONNY-2729):** the transport's
+  label post-filter (every QUIC and gRPC result, and algorithm results) used
+  to return the rows unfiltered when it could not allocate its snapshot of
+  the session's denied labels. A filter that cannot run now withholds every
+  row, and the request fails with 53200 (out of memory). The federation
+  post-merge filter, and its callback, fail the query the same way. The rows
+  a filter keeps now keep their order.
 - **Fulltext DDL and `geode.fts.*` lock the default graph (SONNY-2790):**
   fulltext search works on the default graph only, by design. This covers
   `CREATE INDEX ... USING fulltext`, `DROP INDEX` and

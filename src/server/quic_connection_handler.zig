@@ -2278,6 +2278,13 @@ fn sendSinglePageExecutionResultBatched(
     try sendQuicMessagesBatched(ra, stream, &batched);
 }
 
+/// SONNY-2729: the RLS post-filter could not run and withheld every row;
+/// the request is answered with its error instead of the rows.
+fn sendPostFilterError(allocator: std.mem.Allocator, stream: *quic_transport.QuicStream, err: anyerror) !void {
+    const info = proto_util.mapError(err);
+    try sendExecuteError(allocator, stream, info.code, info.message, &.{}, &.{});
+}
+
 fn sendExecuteError(
     allocator: std.mem.Allocator,
     stream: *quic_transport.QuicStream,
@@ -8283,7 +8290,7 @@ fn handleClientMessage(
                             if (rls_filter.getGlobalRLSFilterEngine()) |rls_engine| {
                                 if (state.authenticated_user) |auth_user| {
                                     const rls_graph = state.sessionGraph(); // SONNY-2776: the graph the rows came from
-                                    _ = rls_filter.applyRLSFilter(gpa, &owned_planned.result, rls_engine, auth_user, rls_graph);
+                                    _ = rls_filter.applyRLSFilter(gpa, &owned_planned.result, rls_engine, auth_user, rls_graph) catch |err| return sendPostFilterError(gpa, stream, err);
                                 }
                             }
 
@@ -8334,7 +8341,7 @@ fn handleClientMessage(
                     if (rls_filter.getGlobalRLSFilterEngine()) |rls_engine| {
                         if (state.authenticated_user) |auth_user| {
                             const rls_graph = state.sessionGraph(); // SONNY-2776: the graph the rows came from
-                            _ = rls_filter.applyAlgorithmRLSFilter(gpa, &exec_result, rls_engine, store, auth_user, rls_graph);
+                            _ = rls_filter.applyAlgorithmRLSFilter(gpa, &exec_result, rls_engine, store, auth_user, rls_graph) catch |err| return sendPostFilterError(gpa, stream, err);
                         }
                     }
 
@@ -8353,7 +8360,7 @@ fn handleClientMessage(
                     if (rls_filter.getGlobalRLSFilterEngine()) |rls_engine| {
                         if (state.authenticated_user) |auth_user| {
                             const rls_graph = state.sessionGraph(); // SONNY-2776: the graph the rows came from
-                            _ = rls_filter.applyRLSFilter(gpa, &exec_result, rls_engine, auth_user, rls_graph);
+                            _ = rls_filter.applyRLSFilter(gpa, &exec_result, rls_engine, auth_user, rls_graph) catch |err| return sendPostFilterError(gpa, stream, err);
                         }
                     }
 
@@ -8567,7 +8574,7 @@ fn handleClientMessage(
                         if (rls_filter.getGlobalRLSFilterEngine()) |rls_engine| {
                             if (state.authenticated_user) |auth_user| {
                                 const rls_graph = state.sessionGraph(); // SONNY-2776: the graph the rows came from
-                                _ = rls_filter.applyAlgorithmRLSFilter(gpa, &exec_result, rls_engine, store, auth_user, rls_graph);
+                                _ = rls_filter.applyAlgorithmRLSFilter(gpa, &exec_result, rls_engine, store, auth_user, rls_graph) catch |err| return sendPostFilterError(gpa, stream, err);
                             }
                         }
                     }
@@ -8597,7 +8604,7 @@ fn handleClientMessage(
                     if (rls_filter.getGlobalRLSFilterEngine()) |rls_engine| {
                         if (state.authenticated_user) |auth_user| {
                             const rls_graph = state.sessionGraph(); // SONNY-2776: the graph the rows came from
-                            _ = rls_filter.applyRLSFilter(gpa, &exec_result, rls_engine, auth_user, rls_graph);
+                            _ = rls_filter.applyRLSFilter(gpa, &exec_result, rls_engine, auth_user, rls_graph) catch |err| return sendPostFilterError(gpa, stream, err);
                         }
                     }
 

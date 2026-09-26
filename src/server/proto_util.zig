@@ -131,6 +131,9 @@ pub fn mapError(err: anyerror) ErrorInfo {
         // SONNY-2755: `YIELD path, path` used to free that column twice.
         error.DuplicateYieldColumn => .{ .code = "42702", .message = "YIELD names the same column more than once; name each column once" },
         // SONNY-2791: the __geode_* graphs are the engine's own.
+        // SONNY-2729: the RLS post-filter could not allocate what it needs;
+        // it withheld the rows rather than return them unchecked.
+        error.RowSecurityFilterUnavailable => .{ .code = "53200", .message = "Out of memory: the row-level security filter could not run, so no rows were returned" },
         error.InternalGraph => .{ .code = "42501", .message = "The __geode_* graphs are internal: a statement cannot select, create or drop one" },
         error.DuplicateGraph => .{ .code = "42P07", .message = "Duplicate graph name" },
         error.GraphNotFound => .{ .code = "3F000", .message = "Graph does not exist" },

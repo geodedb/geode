@@ -675,17 +675,24 @@ pub const FederationManager = struct {
         // CANARY: REQ=SEC-D007; FEATURE="Federation RLS Filter"; ASPECT=PostMergeEnforcement; STATUS=TESTED; OWNER=security; UPDATED=2026-04-10
         // Priority 1: Use the caller-supplied RLS callback if configured.
         // Priority 2: Fall back to the global RLS engine (rls_filter.zig).
+        // SONNY-2729: a filter that cannot run withholds every row: the merged
+        // result is freed and the query fails. A failed callback used to
+        // return the rows unfiltered.
         if (self.config.rls_filter_fn) |filter_fn| {
-            merged_results.rows = filter_fn(merged_results.rows, allocator) catch |err| blk: {
-                log.err("SEC-D007: rls_filter_fn callback failed", &.{Attr.string("error", @errorName(err))});
-                break :blk merged_results.rows;
+            merged_results.rows = filter_fn(merged_results.rows, allocator) catch |err| {
+                log.err("SEC-D007: rls_filter_fn callback failed; the rows are withheld", &.{Attr.string("error", @errorName(err))});
+                merged_results.deinit(allocator);
+                return err;
             };
         } else {
             const rls_filter = @import("../server/rls_filter.zig");
             if (rls_filter.getGlobalRLSFilterEngine()) |engine| {
                 const username = query.username orelse "anonymous";
                 const graph = query.target_graph orelse "default";
-                _ = rls_filter.applyRLSToFederatedResults(allocator, &merged_results, engine, username, graph);
+                _ = rls_filter.applyRLSToFederatedResults(allocator, &merged_results, engine, username, graph) catch |err| {
+                    merged_results.deinit(allocator);
+                    return err;
+                };
             }
         }
 

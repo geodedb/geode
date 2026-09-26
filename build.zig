@@ -8687,6 +8687,18 @@ pub fn build(b: *std.Build) void {
     // SONNY-2790: the fulltext statements (CREATE/DROP INDEX, geode.fts.*)
     // run on the default graph, so the handlers lock `default` for them from
     // any session. Classifier, and the real gRPC handler (SONNY-1560 shim).
+    // SONNY-2729 part (1): the transport RLS post-filter fails closed (a
+    // filter that cannot allocate withholds every row and errs).
+    const sonny2729_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny2729_postfilter_fail_closed.zig"), .target = target, .optimize = optimize });
+    sonny2729_test_mod.link_libc = true;
+    sonny2729_test_mod.addImport("geode", root_mod);
+    sonny2729_test_mod.addImport("grpc_impl", sonny1560_shim_mod);
+    const sonny2729_tests = b.addTest(.{ .root_module = sonny2729_test_mod });
+    const run_sonny2729_tests = b.addRunArtifact(sonny2729_tests);
+    shardDep(test_step, &run_sonny2729_tests.step, 1, test_shard_loads, test_shard_index);
+    const sonny2729_step = b.step("test-sonny2729-postfilter-fail-closed", "Run SONNY-2729 part (1) regression (the transport RLS post-filter withholds every row and errs when it cannot allocate; both handlers answer with the error)");
+    sonny2729_step.dependOn(&run_sonny2729_tests.step);
+
     const sonny2790_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny2790_fts_graph_lock.zig"), .target = target, .optimize = optimize });
     sonny2790_test_mod.link_libc = true;
     sonny2790_test_mod.addImport("geode", root_mod);
