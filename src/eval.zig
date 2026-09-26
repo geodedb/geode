@@ -193,6 +193,7 @@ const RowScope = struct {
         nodeVisible: *const fn (ptr: *anyopaque, node: *const graph_store.Node) bool,
         nodeVisibleOnCopy: *const fn (ptr: *anyopaque, node: *const graph_store.Node) bool,
         stepAllowed: *const fn (ptr: *anyopaque, store: *graph_store.GraphStore, edge: *const graph_store.Edge, next_node_id: u64) bool,
+        edgeVisible: *const fn (ptr: *anyopaque, edge: *const graph_store.Edge) bool,
         deinit: *const fn (ptr: *anyopaque) void,
     };
 
@@ -230,6 +231,14 @@ const RowScope = struct {
     /// `HopScope.stepAllowed`: may a traversal walk `edge` onto `next_node_id`?
     fn stepAllowed(self: RowScope, store: *graph_store.GraphStore, edge: *const graph_store.Edge, next_node_id: u64) bool {
         return self.vtable.stepAllowed(self.ptr, store, edge, next_node_id);
+    }
+
+    /// `HopScope.edgeVisible`: may the session see `edge` itself? Its graph,
+    /// its tenant tag and the RLS policies on its type (the label-deny policy
+    /// on the type, and expression policies over the edge's properties). Its
+    /// endpoints are the caller's to check.
+    fn edgeVisible(self: RowScope, edge: *const graph_store.Edge) bool {
+        return self.vtable.edgeVisible(self.ptr, edge);
     }
 
     fn deinit(self: RowScope) void {
@@ -282,6 +291,14 @@ fn beginHopRowScope(allocator: std.mem.Allocator, graph: []const u8, tenant: ?[]
         fn stepAllowed(ptr: *anyopaque, store: *graph_store.GraphStore, edge: *const graph_store.Edge, next_node_id: u64) bool {
             return from(ptr).hop.stepAllowed(store, edge, next_node_id);
         }
+        fn edgeVisible(ptr: *anyopaque, edge: *const graph_store.Edge) bool {
+            const self = from(ptr);
+            // The RLS row borrows the edge's properties: empty it before the
+            // caller lets the edge go (the knn scan reads it under its shard
+            // guard only).
+            defer self.rls_row.clearRetainingCapacity();
+            return self.hop.edgeVisible(edge);
+        }
         fn deinit(ptr: *anyopaque) void {
             const self = from(ptr);
             // The scope's teardown first: it frees the verdict cache and ends
@@ -297,6 +314,7 @@ fn beginHopRowScope(allocator: std.mem.Allocator, graph: []const u8, tenant: ?[]
             .nodeVisible = nodeVisible,
             .nodeVisibleOnCopy = nodeVisibleOnCopy,
             .stepAllowed = stepAllowed,
+            .edgeVisible = edgeVisible,
             .deinit = deinit,
         };
     };
@@ -2620,6 +2638,14 @@ fn scanVectorKnnBatched(
         if (comptime Cache == graph_store.NodeCache) {
             if (!scope.nodeVisible(entry)) continue;
         }
+        // P13: nor may an edge the RLS policies on its type hide. Like a
+        // hidden node, it is dropped before it can be ranked or make the
+        // property known, and it is decided inside the shard guard, where the
+        // edge's properties are stable (the same lock analysis as the node
+        // check above).
+        if (comptime Cache == graph_store.EdgeCache) {
+            if (!scope.edgeVisible(entry)) continue;
+        }
         const prop = entry.properties.get(property_name) orelse continue;
         if (comptime Cache == graph_store.EdgeCache) {
             if (edge_carriers) |carriers| {
@@ -2692,6 +2718,26 @@ const KnnScanScope = struct {
         if (!self.rls_may_deny) return true;
         const row = self.row orelse return true;
         return row.nodeVisible(node);
+    }
+
+    // CANARY: REQ=REQ-SONNY-2692-KNN-EDGE-RLS; FEATURE="VectorKnn"; ASPECT=EdgeCandidateRls; STATUS=TESTED; TEST=tests/test_sonny2692_knn_rls.zig; OWNER=security; UPDATED=2026-09-26
+    /// P13 (the SONNY-2686 security review): may the session see `edge`, an
+    /// edge `admits` let in? The RLS policies on its type, as a traversal
+    /// applies them (`HopScope.edgeVisible`). knn() checked only an edge's
+    /// endpoints, so it ranked, and returned the id of, an edge every MATCH
+    /// hides.
+    fn edgeVisible(self: KnnScanScope, edge: *const graph_store.Edge) bool {
+        if (!self.rls_may_deny) return true;
+        const row = self.row orelse return true;
+        return row.edgeVisible(edge);
+    }
+
+    /// May the scope hide a node inside the graph (a tenant scope, or an RLS
+    /// policy that may deny the session a row)? Then an edge counts only
+    /// between two nodes the session may see (SONNY-2693: the edge's own tag
+    /// AND both endpoints).
+    fn restrictsNodes(self: KnnScanScope) bool {
+        return self.tenant != null or self.rls_may_deny;
     }
 
     fn deinit(self: KnnScanScope) void {
@@ -2889,11 +2935,14 @@ fn scanVectorKnn(
     // a future enhancement tracked alongside the node-side scan, not a Phase-1
     // regression (the node side already had this behavior).
     //
-    // SONNY-2692: under an RLS policy that may hide a row, the session sees an
-    // edge's vector only where a traversal could return the edge: between two
-    // nodes it may see (SONNY-2679). The edge scan records every edge in scope
-    // that carries the property; its endpoints are checked here, one node
-    // shard at a time, before the edge is ranked or makes the property known.
+    // SONNY-2692: when the scope may hide a node (an RLS policy that may deny
+    // a row, or a tenant scope), the session sees an edge's vector only where
+    // a traversal could return the edge: between two nodes it may see
+    // (SONNY-2679, and SONNY-2693's single rule for a tenant: the edge's own
+    // tag AND both endpoints). The edge scan records every edge in scope that
+    // carries the property (its own RLS already applied, P13); its endpoints
+    // are checked here, one node shard at a time, before the edge is ranked
+    // or makes the property known.
     var edge_carriers = std.ArrayList(KnnEdgeCarrier).empty;
     defer edge_carriers.deinit(allocator);
     const edge_ids = store.edges.snapshotKeys(allocator) catch return error.OutOfMemory;
@@ -2910,7 +2959,7 @@ fn scanVectorKnn(
         scope,
         &candidates,
         &property_seen,
-        if (scope.rls_may_deny) &edge_carriers else null,
+        if (scope.restrictsNodes()) &edge_carriers else null,
     );
     for (edge_carriers.items) |carrier| {
         if (!knnNodeIdVisible(store, scope, carrier.from_id)) continue;
