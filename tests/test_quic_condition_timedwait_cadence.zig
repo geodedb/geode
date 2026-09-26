@@ -2405,13 +2405,24 @@ test "quic non-transactional simple mutations use default fast paths" {
     // clause (skip the single-node fast path when clustered). Match the prefix
     // (drop the trailing `)`) so this audit survives that and future clauses.
     const block_start = std.mem.indexOf(u8, content, "if (is_mutation and !state.in_txn and !geode.bulk_ingest.isEnabled() and graph_store.getGlobalAdapter() != null") orelse return error.MissingDefaultFastPathBlock;
-    const block = content[block_start..@min(content.len, block_start + 1800)];
+    // The whole block, up to the GAP-0894 graph-selector section that follows
+    // it. A fixed-size window broke as soon as the guards grew: SONNY-2686's
+    // session gate pushed `executeBulkSimpleMerge` past the 1800th byte.
+    const block_end = std.mem.indexOfPos(u8, content, block_start, "// GAP-0894: a `<graph-selector>") orelse return error.MissingGraphSelectorSection;
+    const block = content[block_start..block_end];
     try testing.expect(std.mem.indexOf(u8, block, "bulk_shape == .simple_node_create") != null);
     try testing.expect(std.mem.indexOf(u8, block, "executeBulkSimpleCreate") != null);
     try testing.expect(std.mem.indexOf(u8, block, "bulk_shape == .match_create_edge") != null);
     try testing.expect(std.mem.indexOf(u8, block, "executeBulkMatchCreateEdge") != null);
     try testing.expect(std.mem.indexOf(u8, block, "bulk_shape == .simple_node_merge") != null);
     try testing.expect(std.mem.indexOf(u8, block, "executeBulkSimpleMerge") != null);
+    // SONNY-2686: the shapes that find existing nodes by merge key alone (no
+    // tenant check, no RLS) serve only a session nothing restricts; a CREATE
+    // of a new node finds nothing and is not gated. This pins the wiring only;
+    // the SONNY-2724 regression pins the behaviour over QUIC.
+    try testing.expect(std.mem.indexOf(u8, block, "bulk_shape == .match_create_edge and key_resolved_writes_ok") != null);
+    try testing.expect(std.mem.indexOf(u8, block, "bulk_shape == .match_merge_edge and key_resolved_writes_ok") != null);
+    try testing.expect(std.mem.indexOf(u8, block, "bulk_shape == .simple_node_merge and key_resolved_writes_ok") != null);
 }
 
 test "quic session auth validation uses epoch fast path" {
