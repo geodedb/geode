@@ -1,6 +1,7 @@
 const std = @import("std");
 const ast = @import("../gql/ast.zig");
 const procedure_access = @import("../execution/procedure_access.zig");
+const graph_store = @import("../graph_store.zig");
 
 pub const QueryKind = enum { rows, explain, profile };
 pub const UnionMode = enum { none, all, distinct, intersect, except };
@@ -506,6 +507,14 @@ fn moveTo(current: []const u8, target: GraphTarget, home_graph: []const u8) []co
 /// statements run on more than one graph, and `start_graph` when there are
 /// none.
 ///
+/// SONNY-2790: fulltext search is default-graph-only by design
+/// (docs/FULLTEXT_SEARCH.md, "Graph scope"). CREATE INDEX ... USING fulltext,
+/// DROP INDEX (the index may be a fulltext one, whose engine lives in the
+/// default graph) and CALL geode.fts.* run on `default` whatever the current
+/// graph, and so count as statements on `default`: the handlers lock
+/// `default` for them. They used to lock the session's graph while reading
+/// and writing the default graph's nodes and fulltext engine.
+///
 /// The handlers used to lock the session graph whatever the program selected,
 /// so `USE GRAPH g2; MERGE (:K {id: 1})` wrote g2 holding another graph's
 /// write lock, beside g2's own writers.
@@ -526,6 +535,18 @@ pub fn programGraph(program: *const ast.Program, start_graph: []const u8, home_g
             .Commit, .Rollback, .Explain => {},
             .StartTransaction => |txn| {
                 if (txn.body != null and !noteGraph(&runs_on, current)) return null;
+            },
+            .CreateIndex => |ci| {
+                const on = if (ci.index_type == .fulltext) graph_store.DEFAULT_GRAPH_NAME else current;
+                if (!noteGraph(&runs_on, on)) return null;
+            },
+            .DropIndex => if (!noteGraph(&runs_on, graph_store.DEFAULT_GRAPH_NAME)) return null,
+            .Call => |call| {
+                const on = switch (call) {
+                    .Procedure => |proc| if (procedure_access.isDefaultGraphProcedure(proc)) graph_store.DEFAULT_GRAPH_NAME else current,
+                    .Subquery => current,
+                };
+                if (!noteGraph(&runs_on, on)) return null;
             },
             else => if (!noteGraph(&runs_on, current)) return null,
         }

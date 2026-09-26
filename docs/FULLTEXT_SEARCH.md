@@ -201,6 +201,11 @@ After an index exists, ordinary write paths keep it current automatically:
 > bulk-MERGE'd into a non-default graph is maintained into *that* graph's own
 > fulltext index, which `geode.fts.search`/`phrase`/`proximity`/`rebuild`
 > cannot currently query.
+>
+> By design, `CREATE INDEX ... USING fulltext`, `DROP INDEX` and every
+> `CALL geode.fts.*` run on the default graph, whatever the session's graph
+> (SONNY-2790). The server takes the default graph's lock for them. A request
+> that also changes another graph is refused (0A000); send it on its own.
 
 ### Recovery: `CALL geode.fts.rebuild`
 

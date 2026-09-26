@@ -126,6 +126,18 @@
   A request that changes a graph that does not exist is refused with 3F000,
   and the graph is not created. The CLI's `-g` flag, which sends a
   `USE GRAPH` of the current graph before the query, works as before.
+- **Fulltext DDL and `geode.fts.*` lock the default graph (SONNY-2790):**
+  fulltext search works on the default graph only, by design. This covers
+  `CREATE INDEX ... USING fulltext`, `DROP INDEX` and
+  `geode.fts.search`/`phrase`/`proximity`/`rebuild`.
+
+  Since SONNY-2749 the server locks the graph a request's statements run on,
+  and it counted these as running on the session's graph. From a session on
+  another graph they therefore read and rewrote the default graph's nodes
+  and fulltext engine while holding only the other graph's lock. They now
+  take the default graph's lock from any session. A request that runs one of
+  them and also changes another graph is refused (0A000), as for any request
+  that changes two graphs.
 - **The internal `__geode_*` graphs are off limits to statements, and the
   recovery reseal no longer signs a planted policy record (SONNY-2791):**
   - No statement or HELLO selects, creates or drops a `__geode_*` graph,

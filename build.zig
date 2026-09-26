@@ -8684,6 +8684,22 @@ pub fn build(b: *std.Build) void {
     const sonny2776_quic_step = b.step("test-sonny2776-quic-graph-uses", "Run SONNY-2776 QUIC e2e regression (spawns a server: the label-deny post-filter after USE GRAPH applies the switched-to graph's policies; a transaction that changes a second graph is refused)");
     sonny2776_quic_step.dependOn(&run_sonny2776_quic_tests.step);
 
+    // SONNY-2790: the fulltext statements (CREATE/DROP INDEX, geode.fts.*)
+    // run on the default graph, so the handlers lock `default` for them from
+    // any session. Classifier, and the real gRPC handler (SONNY-1560 shim).
+    const sonny2790_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny2790_fts_graph_lock.zig"), .target = target, .optimize = optimize });
+    sonny2790_test_mod.link_libc = true;
+    sonny2790_test_mod.addImport("geode", root_mod);
+    sonny2790_test_mod.addImport("schema", schema_mod);
+    sonny2790_test_mod.addImport("protobuf", protobuf_mod);
+    sonny2790_test_mod.addImport("grpc_impl", sonny1560_shim_mod);
+    sonny2790_test_mod.addImport("logging", logging_mod);
+    const sonny2790_tests = b.addTest(.{ .root_module = sonny2790_test_mod });
+    const run_sonny2790_tests = b.addRunArtifact(sonny2790_tests);
+    shardDep(test_step, &run_sonny2790_tests.step, 1, test_shard_loads, test_shard_index);
+    const sonny2790_step = b.step("test-sonny2790-fts-graph-lock", "Run SONNY-2790 regression (CREATE/DROP INDEX USING fulltext and geode.fts.* take the default graph's lock from any session; a request that also changes another graph is refused)");
+    sonny2790_step.dependOn(&run_sonny2790_tests.step);
+
     // SONNY-2744: a matching deny-effect GPS policy refuses what a builtin role,
     // an Admin shortcut or an allow policy would allow (gps.decide).
     const sonny2744_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny2744_gps_deny.zig"), .target = target, .optimize = optimize });
