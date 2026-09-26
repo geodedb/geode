@@ -126,6 +126,19 @@
   A request that changes a graph that does not exist is refused with 3F000,
   and the graph is not created. The CLI's `-g` flag, which sends a
   `USE GRAPH` of the current graph before the query, works as before.
+- **Which GPS denies are enforced (SONNY-2781):** the SONNY-2744 note
+  listed every action a policy can name as deniable. But enforcement asks
+  `decide()` only for:
+  - write: the change gate for all DML and the graph, graph type, schema,
+    index and constraint DDL. The security DDL has its own Admin check
+    (SONNY-2751);
+  - read or write on `CALL` procedures;
+  - decrypt_field.
+
+  A deny on any other action is accepted but has no effect. DENY READ does
+  not stop a plain MATCH, and DENY MATCH, CREATE, UPDATE, DELETE, SCHEMA and
+  UNWRAP_KEY stop nothing. `docs/security/gps-decide.md` lists what is
+  enforced; SONNY-2781 tracks wiring the rest.
 - **GPS deny policies deny (SONNY-2744):** `decide()` skipped deny-effect
   policies, and the builtin-role check ran before the policy catalog, so a
   deny never denied. A matching deny now wins over a builtin role, an Admin
