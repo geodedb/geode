@@ -11674,8 +11674,8 @@ pub fn build(b: *std.Build) void {
     const sonny2394_varlen_step = b.step("test-sonny2394-varlen-rel-list", "Run SONNY-2394 regression (variable-length MATCH frees accepted rows' rel-var list/path arrays unless the row projects them)");
     sonny2394_varlen_step.dependOn(&run_sonny2394_varlen_tests.step);
 
-    // SONNY-2394: self-tests of the shared perf-claim gate (enforced with CI
-    // unset, reported-only under CI, selftest violation hook).
+    // SONNY-2439: self-tests of the shared perf-claim gate (enforced only under
+    // GEODE_PERF_GATES=enforce, reported by default, selftest violation hook).
     const perf_gate_tests = b.addTest(.{ .root_module = perf_gate_mod });
     const run_perf_gate_tests = b.addRunArtifact(perf_gate_tests);
     shardDep(test_step, &run_perf_gate_tests.step, 1, test_shard_loads, test_shard_index);
