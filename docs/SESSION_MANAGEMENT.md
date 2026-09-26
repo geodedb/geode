@@ -21,6 +21,9 @@ SESSION CLOSE
   Anyone may bind `default`. A refusal is `42501`.
 - **Existence:** the graph must exist, or the statement fails with `3F000`.
   A statement never creates a graph.
+- **Internal graphs:** the engine's own graphs (`__geode_security` and every
+  `__geode_*` name) cannot be selected, created or dropped, by anyone
+  (`42501`), and a HELLO cannot bind one (SONNY-2791).
 - **A connection bound to a graph** (the graph in its connection string) stays
   on it: naming another graph fails, and `SESSION RESET` and `SESSION CLOSE`
   keep it.

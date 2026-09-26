@@ -630,6 +630,85 @@ pub const AuthGraphManager = struct {
 
     /// Recompute all per-record HMACs and chain hash.
     /// Used after mutations or by `geode auth reseal`.
+    /// SONNY-2791: does the HMAC stored on `record`'s node match the one
+    /// `hmac_key` gives it?
+    fn policyHmacVerifies(self: *Self, hmac_key: *const [32]u8, record: *const UserStorageBackend.PolicyRecord) bool {
+        const node_id = self.storage.policy_nodes.get(record.id) orelse return false;
+        const stored = self.storage.store.getNodeProperty(node_id, "hmac") orelse return false;
+        if (stored != .String) return false;
+        const computed = computePolicyHmac(hmac_key, record);
+        const computed_hex = auth_hmac.hmacToHex(&computed);
+        return std.mem.eql(u8, &computed_hex, stored.String);
+    }
+
+    // CANARY: REQ=REQ-SONNY-2791-RESEAL-LEGACY; FEATURE="AuthDDLPersistence"; ASPECT=ResealRefusesUnsignedLegacy; STATUS=TESTED; TEST=tests/test_sonny2791_internal_graphs_reseal.zig; OWNER=security; UPDATED=2026-09-26
+    /// SONNY-2791: the recovery reseal (`geode auth reseal`, and
+    /// GEODE_AUTH_RESEAL_CHAIN=1 at startup). It is `sealChain`, but it first
+    /// refuses to sign a policy record written without a kind (before
+    /// SONNY-2750) whose HMAC does not verify, unless the operator names its
+    /// id in `accept_legacy` (error.UnsignedLegacyPolicyRecord; each record is
+    /// logged). GPS loads a record without a kind by its shape, and one with
+    /// no USING text grants unconditionally. A record planted in that shape
+    /// breaks the chain, and the reseal used to sign it, so it then loaded as,
+    /// for example, "allow write, for everyone". A legacy record whose HMAC
+    /// verifies was signed by this key before the upgrade and is kept as it
+    /// is. An accepted record is rewritten as what it now is, explicitly: its
+    /// kind and, for GPS, its USING text are stored ("true" when it had none),
+    /// so nothing is "true by absence". A malformed one is signed as it is
+    /// and still loads nowhere.
+    pub fn resealChain(self: *Self, hmac_key: *const [32]u8, accept_legacy: []const u64) !void {
+        // Collected first: the rewrite below changes the cache.
+        var unverified: std.ArrayList(u64) = .empty;
+        defer unverified.deinit(self.allocator);
+        var it = self.storage.policyIterator();
+        while (it.next()) |record| {
+            if (record.kind != .legacy) continue;
+            if (self.policyHmacVerifies(hmac_key, record)) continue;
+            try unverified.append(self.allocator, record.id);
+        }
+        var refused: usize = 0;
+        for (unverified.items) |id| {
+            if (std.mem.indexOfScalar(u64, accept_legacy, id) != null) continue;
+            const record = self.storage.getPolicy(id) orelse continue;
+            log.err("reseal refused: a policy record without a kind whose HMAC does not verify (it may have been planted); delete it, or accept its id explicitly", &.{
+                Attr.uint("policy_id", id),
+                Attr.string("name", record.getName()),
+                Attr.string("shape", @tagName(record.effectiveKind())),
+            });
+            refused += 1;
+        }
+        if (refused > 0) return error.UnsignedLegacyPolicyRecord;
+
+        for (unverified.items) |id| {
+            const record = self.storage.getPolicy(id) orelse continue;
+            const kind = record.effectiveKind();
+            if (record.malformed or (kind != .gps and kind != .rls)) continue;
+            log.warn("reseal: the operator accepted a policy record without a kind; storing its kind and USING text", &.{
+                Attr.uint("policy_id", id),
+                Attr.string("name", record.getName()),
+                Attr.string("kind", @tagName(kind)),
+            });
+            try self.storage.persistPolicy(.{
+                .policy_id = id,
+                .name = record.getName(),
+                .description = record.getDescription(),
+                .graph = record.getGraph(),
+                .table = record.getTable(),
+                .operation = record.operation,
+                .permissive = record.permissive,
+                .enabled = record.enabled,
+                .using_clause = if (kind == .gps) (record.getUsingClause() orelse "true") else record.getUsingClause(),
+                .check_clause = record.getCheckClause(),
+                .audit_level = record.audit_level,
+                .created_by = record.created_by,
+                .created_at = record.created_at,
+                .kind = kind,
+                .mode = .replace,
+            });
+        }
+        try self.sealChain(hmac_key);
+    }
+
     pub fn sealChain(self: *Self, hmac_key: *const [32]u8) !void {
         // #834: hold seal_mutex across the entire compute-and-persist window
         // so concurrent ALTER USER calls don't interleave their hmac_list

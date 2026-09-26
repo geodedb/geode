@@ -24,6 +24,18 @@ const principal_mod = @import("../security/principal.zig");
 
 pub const GraphTarget = query_traits.GraphTarget;
 
+// CANARY: REQ=REQ-SONNY-2791-INTERNAL-GRAPHS; FEATURE="GraphRBACEnforcement"; ASPECT=RefuseInternal; STATUS=TESTED; TEST=tests/test_sonny2791_internal_graphs_reseal.zig; OWNER=security; UPDATED=2026-09-26
+/// SONNY-2791: the engine's own graphs (`__geode_security`, and every
+/// `__geode_*` name) are never a session's graph, and no statement creates or
+/// drops one: `error.InternalGraph` (42501), for every user, Admin included.
+/// They are written only through their owners (the auth and policy DDL, the
+/// security manager). `USE GRAPH __geode_security; CREATE (:Policy ...)`
+/// planted records, and `DROP GRAPH __geode_security` removed the security
+/// graph.
+pub fn refuseInternal(graph: []const u8) error{InternalGraph}!void {
+    if (graph_store.isInternalGraphName(graph)) return error.InternalGraph;
+}
+
 /// Does `graph` exist? The default graph always does: every session starts
 /// on it, whether or not anything has been stored in it yet.
 pub fn exists(catalog: *catalog_mod.Catalog, graph: []const u8) bool {
@@ -90,7 +102,10 @@ pub fn change(context: execution.ExecutionContext, target: GraphTarget) !void {
     const wanted: ?[]const u8 = switch (target) {
         .current => return,
         .home => if (context.graph_bound) now else null,
-        .named => |name| name,
+        .named => |name| blk: {
+            try refuseInternal(name);
+            break :blk name;
+        },
     };
     if (context.graph_bound) {
         if (std.mem.eql(u8, wanted orelse graph_store.DEFAULT_GRAPH_NAME, now)) return;

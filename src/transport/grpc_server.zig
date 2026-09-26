@@ -2002,6 +2002,17 @@ fn handleHandshake(request_bytes: []const u8, trans: *GrpcTransport, allocator: 
                         return encodeMessage(allocator, resp);
                     }
                 }
+                // SONNY-2791: the __geode_* graphs are the engine's own; no
+                // session binds (or auto-creates) one.
+                if (graph_store.isInternalGraphName(requested_graph)) {
+                    const resp = schema.HelloResponse{
+                        .success = false,
+                        .session_id = "",
+                        .error_message = "Invalid graph name: the __geode_* graphs are internal",
+                        .capabilities = caps,
+                    };
+                    return encodeMessage(allocator, resp);
+                }
                 const gstore = graph_store.getGlobalStore(allocator);
                 const cat = try execution.ensureCatalogInstance(allocator);
 
@@ -2181,6 +2192,16 @@ fn handleHandshake(request_bytes: []const u8, trans: *GrpcTransport, allocator: 
                     };
                     return encodeMessage(allocator, resp);
                 }
+            }
+            // SONNY-2791: the __geode_* graphs are the engine's own.
+            if (graph_store.isInternalGraphName(requested_graph)) {
+                const resp = schema.HelloResponse{
+                    .success = false,
+                    .session_id = "",
+                    .error_message = "Invalid graph name: the __geode_* graphs are internal",
+                    .capabilities = caps,
+                };
+                return encodeMessage(allocator, resp);
             }
             const gstore = graph_store.getGlobalStore(allocator);
             const cat = try execution.ensureCatalogInstance(allocator);

@@ -10504,6 +10504,28 @@ pub fn build(b: *std.Build) void {
     const sonny2777_step = b.step("test-sonny2777-policy-ids", "Run SONNY-2777 regression (a GPS policy and a `geode auth policy create` RLS policy both survive; policy ids come from one sequence; a new record never overwrites one)");
     sonny2777_step.dependOn(&run_sonny2777_tests.step);
 
+    // SONNY-2791: no statement or HELLO selects, creates or drops an internal
+    // __geode_* graph; the recovery reseal refuses an unsigned policy record
+    // without a kind (probe R7-K2) unless the operator accepts its id. In
+    // process, over the real gRPC handler, and against a spawned server.
+    const sonny2791_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny2791_internal_graphs_reseal.zig"), .target = target, .optimize = optimize });
+    sonny2791_test_mod.link_libc = true;
+    sonny2791_test_mod.addImport("geode", root_mod);
+    sonny2791_test_mod.addImport("schema", schema_mod);
+    sonny2791_test_mod.addImport("protobuf", protobuf_mod);
+    sonny2791_test_mod.addImport("grpc_impl", sonny1560_shim_mod);
+    sonny2791_test_mod.addImport("logging", logging_mod);
+    sonny2791_test_mod.addImport("transport/quic", transport_quic_mod);
+    sonny2791_test_mod.addImport("auth_lib", auth_ext_mod);
+    sonny2791_test_mod.addImport("auth_graph_manager", auth_graph_manager_mod);
+    sonny2791_test_mod.addImport("policy_persistence", policy_persistence_mod);
+    sonny2791_test_mod.addImport("user_storage", user_storage_mod);
+    const sonny2791_tests = b.addTest(.{ .root_module = sonny2791_test_mod });
+    const run_sonny2791_tests = b.addRunArtifact(sonny2791_tests);
+    run_sonny2791_tests.step.dependOn(&install_geode_exe.step);
+    const sonny2791_step = b.step("test-sonny2791-internal-graphs-reseal", "Run SONNY-2791 regression (no statement or HELLO selects, creates or drops an internal __geode_* graph; the recovery reseal refuses an unsigned policy record without a kind unless its id is accepted; spawns a server)");
+    sonny2791_step.dependOn(&run_sonny2791_tests.step);
+
     // GAP-0514 Phase 6 P2: AuthGraphManager unit tests (global accessor,
     // periodic HMAC verification thread lifecycle, login-state persistence,
     // coarse LSP graph-visibility gate).

@@ -126,6 +126,25 @@
   A request that changes a graph that does not exist is refused with 3F000,
   and the graph is not created. The CLI's `-g` flag, which sends a
   `USE GRAPH` of the current graph before the query, works as before.
+- **The internal `__geode_*` graphs are off limits to statements, and the
+  recovery reseal no longer signs a planted policy record (SONNY-2791):**
+  - No statement or HELLO selects, creates or drops a `__geode_*` graph,
+    Admin included. This covers `USE GRAPH`, `SESSION SET [PROPERTY] GRAPH`,
+    `CREATE GRAPH`, `DROP GRAPH` and a HELLO's graph; the refusal is 42501.
+    An Admin could write `:Policy` nodes into `__geode_security` directly,
+    and any user allowed to write could `DROP GRAPH __geode_security`.
+  - `geode auth reseal` and `GEODE_AUTH_RESEAL_CHAIN=1` refuse to sign a
+    policy record that has no kind and whose HMAC does not verify. Such a
+    record was written before record kinds existed, and GPS loads it by its
+    shape (with no USING text, unconditionally). A record planted in that
+    shape broke the chain, and the reseal signed it. The operator must
+    delete such a record, or accept it by id:
+    - `geode auth reseal --accept-legacy-policy <id>`, repeated for each
+      record;
+    - `GEODE_AUTH_RESEAL_ACCEPT_LEGACY=<id>,<id>` for the startup reseal.
+
+    An accepted record is then stored with its kind and USING text. Records
+    that verify are signed as before.
 - **`geode auth policy create` no longer overwrites a GPS policy
   (SONNY-2777):** the command took its policy id from the next *user* id, so
   it could reuse the id of an existing GPS policy and overwrite that record.

@@ -2066,6 +2066,8 @@ fn executeStatementWithContextInner(allocator: std.mem.Allocator, stmt: ast.Stat
             // explicit DDL is refused pending a real schema-change slice.
             // CANARY: REQ=REQ-DIST-CLUSTER-FAILCLOSED-UNREPLICATED; FEATURE="DistributedCluster"; ASPECT=GateGraphDDL; STATUS=TESTED; TEST=tests/test_cluster_replicable_mutations.zig; OWNER=distributed; UPDATED=2026-06-10
             try cluster_mod.gateUnreplicatedWrite();
+            // SONNY-2791: the __geode_* names are the engine's own.
+            try session_graph.refuseInternal(cg.name);
             // CREATE GRAPH implementation with duplicate detection (Catalog instance)
             const graph_name = cg.name;
             const cat = context.catalog;
@@ -2140,6 +2142,8 @@ fn executeStatementWithContextInner(allocator: std.mem.Allocator, stmt: ast.Stat
             // Cluster fail-closed: see .CreateGraph (GateGraphDDL) — same
             // auto-create note applies; only the explicit DDL is refused.
             try cluster_mod.gateUnreplicatedWrite();
+            // SONNY-2791: DROP GRAPH __geode_security removed the security graph.
+            try session_graph.refuseInternal(dg.name);
             // DROP GRAPH implementation with existence check (Catalog instance)
             const graph_name = dg.name;
             const cat = context.catalog;

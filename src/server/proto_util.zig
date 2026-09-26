@@ -130,6 +130,8 @@ pub fn mapError(err: anyerror) ErrorInfo {
         error.UnionColumnCountMismatch => .{ .code = "42601", .message = "UNION column count mismatch" },
         // SONNY-2755: `YIELD path, path` used to free that column twice.
         error.DuplicateYieldColumn => .{ .code = "42702", .message = "YIELD names the same column more than once; name each column once" },
+        // SONNY-2791: the __geode_* graphs are the engine's own.
+        error.InternalGraph => .{ .code = "42501", .message = "The __geode_* graphs are internal: a statement cannot select, create or drop one" },
         error.DuplicateGraph => .{ .code = "42P07", .message = "Duplicate graph name" },
         error.GraphNotFound => .{ .code = "3F000", .message = "Graph does not exist" },
         // ENG-3903: a MERGE relationship endpoint that is neither bound by a

@@ -7021,6 +7021,18 @@ fn handleClientMessage(
                             return;
                         }
                     }
+                    // SONNY-2791: the __geode_* graphs are the engine's own; no
+                    // session binds (or auto-creates) one.
+                    if (graph_store.isInternalGraphName(requested_graph)) {
+                        const resp = schema.QuicServerMessage{ .hello = .{
+                            .success = false,
+                            .session_id = try gpa.dupe(u8, ""),
+                            .error_message = try gpa.dupe(u8, "Invalid graph name: the __geode_* graphs are internal"),
+                            .capabilities = caps,
+                        } };
+                        try sendQuicMessage(gpa, stream, resp);
+                        return;
+                    }
                     const store = graph_store.getGlobalStore(gpa);
                     const cat = try execution.ensureCatalogInstance(gpa);
 

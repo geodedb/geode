@@ -219,10 +219,16 @@ fn printAuthResealUsage() void {
             "\n" ++
             "Options:\n" ++
             "  --data-dir <path>    Data directory (default: GEODE_DATA_DIR env or ./data)\n" ++
+            "  --accept-legacy-policy <id>\n" ++
+            "                       Sign this policy record although it has no kind and\n" ++
+            "                       its HMAC does not verify (repeat for each record)\n" ++
             "  -h, --help           Show this help\n" ++
             "\n" ++
             "Recomputes all per-record HMACs and the chain root hash.\n" ++
             "Use after legitimate manual intervention (e.g. direct graph edits).\n" ++
+            "A policy record written before record kinds existed, whose HMAC does not\n" ++
+            "verify, is refused: it may have been planted, and GPS would load it by its\n" ++
+            "shape. Delete it, or accept its id after checking it.\n" ++
             "\n" ++
             "Examples:\n" ++
             "  geode auth reseal --data-dir /var/lib/geode\n" ++
@@ -253,9 +259,29 @@ pub fn cmdAuthReseal(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: us
         std.process.exit(@intFromEnum(ExitCode.general_error));
     };
 
-    // Seal chain
-    mgr.sealChain(&kr.key) catch |err| {
-        std.debug.print("Error: Failed to reseal chain: {s}\n", .{@errorName(err)});
+    // SONNY-2791: the policy records the operator accepts although they have
+    // no kind and their HMAC does not verify.
+    var accept: std.ArrayList(u64) = .empty;
+    defer accept.deinit(allocator);
+    var ai = start_idx;
+    while (ai < argv.len) : (ai += 1) {
+        if (std.mem.eql(u8, argv[ai], "--accept-legacy-policy") and ai + 1 < argv.len) {
+            const id = std.fmt.parseInt(u64, argv[ai + 1], 10) catch {
+                std.debug.print("Error: --accept-legacy-policy takes a policy record id, not '{s}'\n", .{argv[ai + 1]});
+                std.process.exit(@intFromEnum(ExitCode.usage_error));
+            };
+            try accept.append(allocator, id);
+            ai += 1;
+        }
+    }
+
+    // Seal chain (SONNY-2791: refusing unsigned legacy policy records)
+    mgr.resealChain(&kr.key, accept.items) catch |err| {
+        if (err == error.UnsignedLegacyPolicyRecord) {
+            std.debug.print("Error: refusing to reseal: policy records without a kind do not verify and may have been planted (their ids are in the log). Delete them, or re-run with --accept-legacy-policy <id> for each one you have checked.\n", .{});
+        } else {
+            std.debug.print("Error: Failed to reseal chain: {s}\n", .{@errorName(err)});
+        }
         std.process.exit(@intFromEnum(ExitCode.general_error));
     };
 
