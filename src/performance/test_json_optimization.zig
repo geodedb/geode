@@ -221,9 +221,9 @@ test "JSON processing performance benchmark" {
     std.debug.print("  Serialize time: {d}ns\n", .{results.serialize_ns});
 
     // Performance expectations (should be significantly better than baseline 630μs)
-    // Perf claims go through the shared gate (SONNY-2394): enforced only when
-    // `CI` is unset -- repo convention, see tests/perf_gate.zig. Correctness
-    // assertions in this file are not gated.
+    // Perf claims go through the shared gate (SONNY-2394): reported unless
+    // GEODE_PERF_GATES=enforce (SONNY-2439) -- see tests/perf_gate.zig.
+    // Correctness assertions in this file are not gated.
     try perf_gate.check("JSON parse < 100us", results.parse_ns < 100_000, "parse_ns={d}", .{results.parse_ns});
     try perf_gate.check("JSON serialize < 150us", results.serialize_ns < 150_000, "serialize_ns={d}", .{results.serialize_ns});
 }

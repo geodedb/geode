@@ -236,6 +236,84 @@ fn shardDep(
     if (min_idx == index) test_step.dependOn(dep);
 }
 
+/// SONNY-2746: `test-compile` also compiles every executable target of this
+/// build, so a change cannot break one unseen (the `geode-auth` user_auth CLI
+/// was reached only by the default install step; most benchmark and tool
+/// executables only by steps no gate runs). Runs once, when build() returns,
+/// and walks the dependency graph of every top-level step instead of keeping
+/// a list, so an executable added later joins as soon as any step uses it.
+/// Two kinds stay out, each built by its own step:
+///   * an executable for another target: the `cross-clients` builds;
+///   * an executable that links Vulkan: the GPU benchmarks (`bench-gpu`).
+///     test-compile, like the aggregate, must not require the Vulkan SDK.
+/// And the executables in `rotted_executables` stay out until they compile.
+fn addExecutablesToTestCompile(b: *std.Build, target: std.Build.ResolvedTarget) void {
+    const compile_all = g_test_compile_step orelse return;
+    var seen: std.AutoHashMapUnmanaged(*std.Build.Step, void) = .empty;
+    defer seen.deinit(b.allocator);
+    var pending: std.ArrayList(*std.Build.Step) = .empty;
+    defer pending.deinit(b.allocator);
+    var exes: std.ArrayList(*std.Build.Step) = .empty;
+    defer exes.deinit(b.allocator);
+    var rotted_found = [_]bool{false} ** rotted_executables.len;
+    for (b.top_level_steps.values()) |tls| pending.append(b.allocator, &tls.step) catch @panic("OOM");
+    walk: while (pending.pop()) |step| {
+        const gop = seen.getOrPut(b.allocator, step) catch @panic("OOM");
+        if (gop.found_existing) continue;
+        pending.appendSlice(b.allocator, step.dependencies.items) catch @panic("OOM");
+        const compile = step.cast(std.Build.Step.Compile) orelse continue;
+        if (compile.kind != .exe or step.owner != b) continue;
+        const exe_target = compile.root_module.resolved_target orelse continue;
+        if (!exe_target.query.eql(target.query)) continue;
+        if (linksSystemLibrary(compile, "vulkan")) continue;
+        for (rotted_executables, 0..) |name, i| {
+            if (std.mem.eql(u8, compile.name, name)) {
+                rotted_found[i] = true;
+                continue :walk;
+            }
+        }
+        exes.append(b.allocator, step) catch @panic("OOM");
+    }
+    for (rotted_executables, rotted_found) |name, found| {
+        if (!found) std.debug.panic("SONNY-2746: rotted_executables names '{s}', which is no executable of this build; remove it from the list", .{name});
+    }
+    for (exes.items) |step| compile_all.dependOn(step);
+}
+
+/// SONNY-2746: executables that did not compile when test-compile first took
+/// in every executable (2026-09-25). No step that a gate runs compiled them,
+/// so they rotted unseen: Zig 0.16 removed std.process.argsAlloc and
+/// argsWithAllocator, std.time.nanoTimestamp, heap.GeneralPurposeAllocator,
+/// Io.fixedBufferStream and File.read, and the engine APIs two benchmarks
+/// call have moved. canary_main also reaches AdvancedIndexManager
+/// persistAll/loadAll and src/index/interval_persist.zig, engine code that no
+/// longer compiles and that nothing calls. Each stays out of test-compile
+/// until it is migrated (then delete its line) or deleted. A name that
+/// matches no executable fails every build, so the list cannot go stale.
+const rotted_executables = [_][]const u8{
+    "bench_extract", // src/tools/bench_extract.zig: File.read
+    "bench_regress", // src/tools/bench_regress.zig: process.argsAlloc
+    "bench_remote_kms_unwrap_concurrency", // RemoteKmsServer.init now returns an error union
+    "benchmark_rls_row_skip", // expects a CompactPropertyMap, passes a StringHashMap
+    "canary_main", // tools/canary_main.zig -> src/index/interval_persist.zig: Io.fixedBufferStream
+    "fed_latency_aggregate", // Io.fixedBufferStream; std.c without libc
+    "fed_latency_governance", // process.argsWithAllocator
+    "fed_latency_streak", // process.argsWithAllocator
+    "fed_latency_validate", // process.argsWithAllocator
+    "gen_fuzz", // tools/gen_fuzz.zig: process.argsAlloc
+    "generate_fuzz_dict", // scripts/generate_fuzz_dict.zig: heap.GeneralPurposeAllocator
+    "impl_reality_delta", // src/tools/implementation_reality_delta.zig: process.argsAlloc
+    "run_variance_benches", // src/tools/run_variance_benches.zig: time.nanoTimestamp
+};
+
+fn linksSystemLibrary(compile: *std.Build.Step.Compile, name: []const u8) bool {
+    for (compile.root_module.link_objects.items) |link_object| switch (link_object) {
+        .system_lib => |lib| if (std.mem.eql(u8, lib.name, name)) return true,
+        else => {},
+    };
+    return false;
+}
+
 /// Get version string from git tags.
 /// Returns git tag if on a tag, or tag+offset+hash if ahead of tag.
 /// Falls back to commit hash or "unknown" if git is unavailable.
@@ -1636,6 +1714,17 @@ pub fn build(b: *std.Build) void {
     const run_quality733_tests = b.addRunArtifact(quality733_tests);
     const quality733_step = b.step("test-quality733", "Run quality #733 hot-path inline tests (parser deep nesting, passesTenantFilter, validateGroupBy)");
     quality733_step.dependOn(&run_quality733_tests.step);
+
+    // SONNY-2689: src/execution/tenant_visibility.zig's inline tests, which
+    // no artifact reached (their Node literal had not compiled since it was
+    // written). Same shape as #733: the file cannot root a module (its `../`
+    // imports), so root_mod is filtered to "tenant_visibility:", and
+    // src/lib.zig's reference block of that prefix pulls the file in. The run
+    // joins the aggregate below, after `test_step` exists.
+    const tenant_visibility_tests = b.addTest(.{ .root_module = root_mod, .filters = &.{"tenant_visibility:"} });
+    const run_tenant_visibility_tests = b.addRunArtifact(tenant_visibility_tests);
+    const tenant_visibility_step = b.step("test-tenant-visibility", "Run src/execution/tenant_visibility.zig inline unit tests (SONNY-2689)");
+    tenant_visibility_step.dependOn(&run_tenant_visibility_tests.step);
 
     const custom_tests = b.addTest(.{ .root_module = b.createModule(.{ .root_source_file = b.path("tests/all_tests.zig"), .target = target, .optimize = optimize }) });
     custom_tests.root_module.addImport("geode", root_mod);
@@ -3703,7 +3792,9 @@ pub fn build(b: *std.Build) void {
     @memset(test_shard_loads, 0);
 
     const test_step = b.step("test", "Run unit tests");
-    g_test_compile_step = b.step("test-compile", "Compile every artifact the aggregate `test` step runs, in all shards, without running them (SONNY-2394)");
+    g_test_compile_step = b.step("test-compile", "Compile every artifact the aggregate `test` step runs, in all shards, and every executable target, without running any of them (SONNY-2394, SONNY-2746)");
+    // SONNY-2746: deferred so it runs once every step of build() exists.
+    defer addExecutablesToTestCompile(b, target);
     shardDep(test_step, &run_show_capabilities_tests.step, 1, test_shard_loads, test_shard_index);
     shardDep(test_step, &run_sonny_capability_profile_tests.step, 1, test_shard_loads, test_shard_index);
     shardDep(test_step, &run_capability_gate_tests.step, 1, test_shard_loads, test_shard_index);
@@ -3722,6 +3813,9 @@ pub fn build(b: *std.Build) void {
     // root, so this dedicated artifact (rooted at fle_integration.zig) is the
     // path that actually runs the GAP-0844 test under `zig build test` / CI.
     shardDep(test_step, &run_gap0844_tests.step, 1, test_shard_loads, test_shard_index);
+    // SONNY-2689: tenant_visibility.zig's inline tests (declared near the
+    // #733 runner above).
+    shardDep(test_step, &run_tenant_visibility_tests.step, 1, test_shard_loads, test_shard_index);
     shardDep(test_step, &run_gql_unit_tests.step, 1, test_shard_loads, test_shard_index);
     shardDep(test_step, &run_conformance_patch_tests.step, 1, test_shard_loads, test_shard_index);
     shardDep(test_step, &run_iso_conformance_tests.step, 6, test_shard_loads, test_shard_index);
@@ -4414,7 +4508,8 @@ pub fn build(b: *std.Build) void {
     }
 
     // SONNY-2394: shared gate for perf / variance claims in unit tests --
-    // enforced only when CI is unset (repo convention; see tests/perf_gate.zig).
+    // reported by default and enforced only under GEODE_PERF_GATES=enforce
+    // (SONNY-2439; see tests/perf_gate.zig).
     const perf_gate_mod = b.createModule(.{ .root_source_file = b.path("tests/perf_gate.zig"), .target = target, .optimize = optimize, .link_libc = true });
 
     // Attach physiological redo canary tests after test_step defined
@@ -6341,6 +6436,10 @@ pub fn build(b: *std.Build) void {
     gap0891_test_mod.addImport("geode", root_mod);
     const gap0891_tests = b.addTest(.{ .root_module = gap0891_test_mod });
     const run_gap0891_tests = b.addRunArtifact(gap0891_tests);
+    // SONNY-2689: in the aggregate (and so in test-compile). Out of both, its
+    // RC-2 case went red after Phase 1b and the file later stopped compiling,
+    // and nothing noticed.
+    shardDep(test_step, &run_gap0891_tests.step, 1, test_shard_loads, test_shard_index);
     const gap0891_step = b.step("test-gap0891-repro", "GAP-0891 regression (native-tenant write tenant tagging + edge reads)");
     gap0891_step.dependOn(&run_gap0891_tests.step);
 
@@ -8730,6 +8829,18 @@ pub fn build(b: *std.Build) void {
     shardDep(test_step, &run_sonny2683_tests.step, 1, test_shard_loads, test_shard_index);
     const sonny2683_step = b.step("test-sonny2683-return-shapes", "Run SONNY-2683 regression (a grouped or filtered RETURN after a CTE, SET or REMOVE is projected by the shared projection; after CREATE, MERGE or a procedure CALL it is refused: in-memory, RLS-policy, tenant-scoped and persisted sessions)");
     sonny2683_step.dependOn(&run_sonny2683_tests.step);
+
+    // SONNY-2746: a failing-allocator sweep over every allocation of
+    // `CALL geode.rls.add_attribute_policy`, in the request and the engine.
+    const sonny2746_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny2746_rls_attribute_policy_oom.zig"), .target = target, .optimize = optimize });
+    sonny2746_test_mod.addImport("geode", root_mod);
+    sonny2746_test_mod.addImport("rls", rls_mod);
+    sonny2746_test_mod.addImport("rls_types", rls_types_mod);
+    const sonny2746_tests = b.addTest(.{ .root_module = sonny2746_test_mod });
+    const run_sonny2746_tests = b.addRunArtifact(sonny2746_tests);
+    shardDep(test_step, &run_sonny2746_tests.step, 1, test_shard_loads, test_shard_index);
+    const sonny2746_step = b.step("test-sonny2746-rls-attribute-policy-oom", "Run SONNY-2746 regression (add_attribute_policy frees every allocation, in the request and the engine, when any one fails; a failed call leaves the engine unchanged)");
+    sonny2746_step.dependOn(&run_sonny2746_tests.step);
 
     // SONNY-2656: the node-scan fast path leaked the clone of every typed
     // extended value (Text, Json, Bytea, Char, Varchar, Url, ...) it projected
@@ -11568,7 +11679,7 @@ pub fn build(b: *std.Build) void {
     const perf_gate_tests = b.addTest(.{ .root_module = perf_gate_mod });
     const run_perf_gate_tests = b.addRunArtifact(perf_gate_tests);
     shardDep(test_step, &run_perf_gate_tests.step, 1, test_shard_loads, test_shard_index);
-    const perf_gate_step = b.step("test-perf-gate", "Run the shared perf-claim gate self-tests (SONNY-2394: perf claims enforced only when CI is unset)");
+    const perf_gate_step = b.step("test-perf-gate", "Run the shared perf-claim gate self-tests (SONNY-2439: perf claims are reported unless GEODE_PERF_GATES=enforce)");
     perf_gate_step.dependOn(&run_perf_gate_tests.step);
 
     // SONNY-2394: root cause of the test-remote-kms-hardening ConcurrencyStress

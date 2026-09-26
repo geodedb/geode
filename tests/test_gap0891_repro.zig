@@ -180,17 +180,27 @@ test "GAP-0891 RC-3: internal-id create paths honor the active tenant" {
 // Pre-fix: loadOneGraphFromAdapter rebuilds every node/edge with
 // DEFAULT_TENANT_ID (graph_store.zig:6074, :6186) AND the adapter has no
 // tenant_id property to round-trip -> tags "default" (RED).
+//
+// SONNY-2689: since Phase 1b (a31800da, 7ae4bc0a) a reload only REGISTERS each
+// graph for lazy hydration, and nothing is resident until the first read or
+// write of the graph runs the `ensureGraphHydrated` chokepoint. `nodes.get` and
+// `edges.get` read the resident cache only, without hydrating, so this test
+// failed with NodeNotFoundAfterReload although the tags were durable. It now
+// reaches the reloaded rows the way every read path does.
 test "GAP-0891 RC-2: restart hydration preserves tenant tags" {
     const allocator = testing.allocator;
 
     graph_store.deinitGlobalStore();
-    defer graph_store.deinitGlobalStore();
 
     var tmp = testing.tmpDir(.{});
     defer tmp.cleanup();
 
     const dir_path = try tmpDirRealpathAlloc(allocator, &tmp.sub_path);
     defer allocator.free(dir_path);
+
+    // Registered after the directory's cleanup, so it runs first: the store's
+    // final persist still finds its directory.
+    defer graph_store.deinitGlobalStore();
 
     const store = try graph_store.initGlobalStore(allocator, dir_path);
 
@@ -210,8 +220,15 @@ test "GAP-0891 RC-2: restart hydration preserves tenant tags" {
     const adapter = graph_store.getGlobalAdapter() orelse return error.AdapterNotInitialized;
     try adapter.checkpointAll();
 
-    // Reload from the adapter (clears the in-memory cache, re-hydrates).
+    // Reload from the adapter: clears the in-memory cache and registers the
+    // graph for lazy hydration.
     try store.loadFromFile();
+
+    // What a t_DEMO reader counts after the reload. It is the first read of
+    // the graph, so it hydrates it; the explicit chokepoint call below keeps
+    // the resident reads that follow independent of how the count is served.
+    try testing.expectEqual(@as(usize, 2), store.countNodesForGraph(GRAPH, T_DEMO));
+    store.ensureGraphHydrated(GRAPH);
 
     const reloaded_node = store.nodes.get(a1) orelse return error.NodeNotFoundAfterReload;
     const reloaded_edge = store.edges.get(edge_id) orelse return error.EdgeNotFoundAfterReload;
@@ -219,6 +236,50 @@ test "GAP-0891 RC-2: restart hydration preserves tenant tags" {
     // DESIRED: durable tenant tags survive restart.
     try testing.expectEqualStrings(T_DEMO, reloaded_node.tenant_id);
     try testing.expectEqualStrings(T_DEMO, reloaded_edge.tenant_id);
+}
+
+// SONNY-2689: the same tags across a real clean restart. `deinitGlobalStore`
+// writes the IdMap snapshot, so the reopened store resolves an id without
+// hydrating the graph, and a by-id read rebuilds the node or the edge alone
+// from the engine (the node cache's `materializeNodeFromEngine`, the edge
+// cache's hydrate hook). Each of those recovers the tenant on its own, apart
+// from the full-graph build the test above goes through.
+test "GAP-0891 RC-2: a clean restart keeps tenant tags on by-id reads" {
+    const allocator = testing.allocator;
+
+    graph_store.deinitGlobalStore();
+
+    var tmp = testing.tmpDir(.{});
+    defer tmp.cleanup();
+
+    const dir_path = try tmpDirRealpathAlloc(allocator, &tmp.sub_path);
+    defer allocator.free(dir_path);
+
+    defer graph_store.deinitGlobalStore();
+
+    var a1: u64 = undefined;
+    var edge_id: u64 = undefined;
+    {
+        const store = try graph_store.initGlobalStore(allocator, dir_path);
+        fle.setCurrentTenantId(T_DEMO);
+        defer fle.clearCurrentThreadState();
+        const asset_labels = [_][]const u8{"Asset"};
+        a1 = try store.createNodeWithGraph(&asset_labels, GRAPH);
+        const a2 = try store.createNodeWithGraph(&asset_labels, GRAPH);
+        edge_id = try store.createEdgeWithGraph(a1, a2, "HAS_ASSET", GRAPH);
+    }
+    // Clean shutdown, then reopen: no per-thread tenant is in effect.
+    graph_store.deinitGlobalStore();
+    graph_store.resetLazyHydrateCounters();
+    const store = try graph_store.initGlobalStore(allocator, dir_path);
+    // The reopen took the snapshot route this test is about.
+    try testing.expect(graph_store.idMapFromSnapshotCount() >= 1);
+
+    const node = store.getNodePtrHydrated(a1) orelse return error.NodeNotFoundAfterRestart;
+    try testing.expectEqualStrings(T_DEMO, node.tenant_id);
+    const edge = store.getEdgeHydrated(edge_id) orelse return error.EdgeNotFoundAfterRestart;
+    try testing.expectEqualStrings(T_DEMO, edge.tenant_id);
+    try testing.expectEqual(@as(usize, 2), store.countNodesForGraph(GRAPH, T_DEMO));
 }
 
 // SONNY-2693 (supersedes the GAP-0891 defense-in-depth bridge): an edge whose
@@ -260,7 +321,7 @@ test "GAP-0891 / SONNY-2693: a legacy default-tagged edge between t_DEMO nodes i
     try testing.expectEqual(@as(usize, 1), report.len);
     try testing.expectEqual(graph_store.GraphStore.EdgeTagBackfillAction.retagged, report[0].action);
     try testing.expectEqual(legacy_edge_id, report[0].edge_id);
-    try testing.expectEqualStrings(graph_store.DEFAULT_TENANT_ID, report[0].edge_tenant);
+    try testing.expectEqualStrings(graph_store.DEFAULT_TENANT_ID, report[0].edge_tenant orelse return error.MissingEdgeTenant);
 
     const retagged = store.getEdgeHydrated(legacy_edge_id) orelse return error.EdgeNotFound;
     try testing.expectEqualStrings(T_DEMO, retagged.tenant_id);

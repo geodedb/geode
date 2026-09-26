@@ -136,8 +136,8 @@ test "BenchmarkCANARY_REQ_GQL_024_PlanEnumerationVarianceEnvelope" {
     const p95_mean = p95 / mean;
 
     // Thresholds: CV≤0.22, p95/mean≤2.55
-    // Perf claims go through the shared gate (SONNY-2394): enforced only when
-    // `CI` is unset -- repo convention, see tests/perf_gate.zig. Correctness
-    // assertions in this file are not gated.
+    // Perf claims go through the shared gate (SONNY-2394): reported unless
+    // GEODE_PERF_GATES=enforce (SONNY-2439) -- see tests/perf_gate.zig.
+    // Correctness assertions in this file are not gated.
     try perf_gate.envelope("plan enumeration", cv, p95_mean, 0.22, 2.55);
 }

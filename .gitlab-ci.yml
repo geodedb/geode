@@ -1159,13 +1159,14 @@ test-zig-release-safe:
 
 # =============================================================================
 # Test Stage - Enforced perf gates (SCHEDULED pipelines only)
-# SONNY-2394: tests/perf_gate.zig only REPORTS perf-ratio / variance-envelope /
-# latency claims whenever CI is set -- i.e. in every pre-push run and every
-# pipeline -- so on their own they are never enforced by any automation.
-# GEODE_PERF_GATES=enforce overrides that; this job runs every gated step with
-# the override, in ReleaseFast (the claims are release-build claims), on
-# scheduled pipelines only. The schedule itself is a GitLab project setting
-# (CI/CD > Schedules) and is NOT created by this file.
+# SONNY-2394 / SONNY-2439: tests/perf_gate.zig only REPORTS perf-ratio /
+# variance-envelope / latency claims unless GEODE_PERF_GATES=enforce is set,
+# with or without CI, so on their own they are never enforced by any
+# automation or local run. This job runs every gated step with the override,
+# in ReleaseFast (the claims are release-build claims), on scheduled pipelines
+# only. The schedule itself is a GitLab project setting (CI/CD > Schedules)
+# and is NOT created by this file; SONNY-2439 creates it once the claims
+# measure the product.
 # =============================================================================
 
 test-perf-gates-enforced:

@@ -1,24 +1,25 @@
 //! Shared gate for performance / timing claims in unit tests (SONNY-2394).
 //!
-//! Repo convention -- codified in the `zig-test` pre-push hook comment in
-//! .pre-commit-config.yaml ("Each of those tests already self-skips when
-//! CI=true, treating that as 'the environment is too contended for perf-ratio
-//! claims to be meaningful'") and applied by tests/test_fts_latency.zig and
-//! tests/test_ts_latency.zig: perf-ratio, variance-envelope and latency-bound
-//! claims are ENFORCED only when `CI` is unset. The sharded pre-push hook
-//! exports CI=1 and GitLab CI sets CI=true -- oversubscribed Debug-build
-//! environments where such claims are not meaningful.
+//! Perf-ratio, variance-envelope and latency-bound claims are REPORTED by
+//! default and ENFORCED only under `GEODE_PERF_GATES=enforce`, whether or not
+//! `CI` is set (SONNY-2439). The SONNY-2394 review found that 8 of the 12
+//! gated sites measure benchmark artifacts rather than product performance: a
+//! test-local loop the optimizer may drop, a microsecond-scale sample on
+//! CLOCK_REALTIME, a DebugAllocator path, a loaded host. A violated claim is
+//! therefore no evidence of a product regression until SONNY-2439 fixes the
+//! methodology. Enforcing them whenever `CI` was unset (the rule until then)
+//! made local runs of the gated named steps fail on noise alone, with no
+//! product change (test-canary-path-varlen-predicate: CV 0.30-0.51 against
+//! a 0.22 bound).
+//!
+//! The scheduled-pipeline job `test-perf-gates-enforced` (.gitlab-ci.yml) runs
+//! every gated step with the override, so the claims can still be enforced on
+//! purpose.
 //!
 //! Correctness assertions must NEVER go through this gate: they always run.
 //! Every perf claim is still measured and evaluated in both modes; a claim that
 //! does not hold is reported on stderr either way and fails the test only when
 //! enforced.
-//!
-//! Explicit override (SONNY-2394 review): `GEODE_PERF_GATES=enforce` enforces
-//! every claim even when `CI` is set. Without it the claims would never bite in
-//! any automated run (the pre-push hook and every GitLab pipeline set CI); the
-//! scheduled-pipeline job `test-perf-gates-enforced` (.gitlab-ci.yml) runs the
-//! gated steps with the override.
 //!
 //! Self-test hook: `GEODE_PERF_GATE_SELFTEST=violate` makes every claim count
 //! as violated, so any call site can be shown to route through the gate (the
@@ -29,28 +30,33 @@ const std = @import("std");
 pub const Error = error{PerfClaimViolated};
 
 pub const Mode = enum {
-    /// `CI` unset, or `GEODE_PERF_GATES=enforce`: a violated claim fails the test.
+    /// `GEODE_PERF_GATES=enforce`: a violated claim fails the test.
     enforced,
-    /// `CI` set (no override): a violated claim is reported only.
+    /// The default, with or without `CI`: a violated claim is reported only.
     reported,
 };
 
-/// Explicit override variable; the value `enforce` enforces even under CI.
+/// Override variable; only the exact value `enforce` enforces the claims.
 pub const override_env = "GEODE_PERF_GATES";
 
-/// Pure mode resolution (reads no environment): the override wins, otherwise
-/// claims are enforced exactly when `CI` is unset.
-pub fn modeFor(ci_set: bool, override: ?[]const u8) Mode {
+/// Pure mode resolution (reads no environment). SONNY-2439: `CI` no longer
+/// takes part; only the override does.
+///
+///   | GEODE_PERF_GATES       | CI unset | CI set   |
+///   |------------------------|----------|----------|
+///   | `enforce`              | enforced | enforced |
+///   | unset, or any other    | reported | reported |
+pub fn modeFor(override: ?[]const u8) Mode {
     if (override) |v| {
         if (std.mem.eql(u8, v, "enforce")) return .enforced;
     }
-    return if (ci_set) .reported else .enforced;
+    return .reported;
 }
 
-/// The gate mode for this process, from `CI` and `GEODE_PERF_GATES`.
+/// The gate mode for this process, from `GEODE_PERF_GATES` alone.
 pub fn currentMode() Mode {
     const override: ?[]const u8 = if (std.c.getenv(override_env)) |p| std.mem.span(p) else null;
-    return modeFor(std.c.getenv("CI") != null, override);
+    return modeFor(override);
 }
 
 fn selftestForcesViolation() bool {
@@ -82,7 +88,7 @@ pub fn checkIn(mode: Mode, force_violation: bool, claim: []const u8, holds: bool
             return error.PerfClaimViolated;
         },
         .reported => {
-            std.debug.print("PERF_CLAIM_NOT_ENFORCED(CI) [{s}] ", .{claim});
+            std.debug.print("PERF_CLAIM_NOT_ENFORCED [{s}] ", .{claim});
             std.debug.print(fmt ++ "\n", args);
         },
     }
@@ -97,25 +103,25 @@ pub fn envelopeIn(mode: Mode, force_violation: bool, name: []const u8, cv: anyty
 
 // -- Self tests (no environment mutation: see `checkIn`) ---------------------
 
-test "perf_gate: currentMode follows CI and the GEODE_PERF_GATES override" {
-    const ci_set = std.c.getenv("CI") != null;
+// Run with CI unset, with CI set, and with the override: the expectation is
+// the same table in every environment.
+test "perf_gate: currentMode follows only the GEODE_PERF_GATES override, whether or not CI is set" {
     const override: ?[]const u8 = if (std.c.getenv(override_env)) |p| std.mem.span(p) else null;
     const forced = if (override) |v| std.mem.eql(u8, v, "enforce") else false;
-    try std.testing.expectEqual(if (forced or !ci_set) Mode.enforced else Mode.reported, currentMode());
+    try std.testing.expectEqual(if (forced) Mode.enforced else Mode.reported, currentMode());
 }
 
-test "perf_gate: modeFor -- the enforce override wins over CI" {
-    try std.testing.expectEqual(Mode.enforced, modeFor(false, null));
-    try std.testing.expectEqual(Mode.reported, modeFor(true, null));
-    try std.testing.expectEqual(Mode.enforced, modeFor(true, "enforce"));
-    try std.testing.expectEqual(Mode.enforced, modeFor(false, "enforce"));
+test "perf_gate: modeFor -- claims are reported unless the override is exactly enforce" {
+    try std.testing.expectEqual(Mode.reported, modeFor(null));
+    try std.testing.expectEqual(Mode.enforced, modeFor("enforce"));
     // Any other value is not an override.
-    try std.testing.expectEqual(Mode.reported, modeFor(true, "1"));
-    try std.testing.expectEqual(Mode.reported, modeFor(true, "ENFORCE "));
-    try std.testing.expectEqual(Mode.enforced, modeFor(false, "report"));
+    try std.testing.expectEqual(Mode.reported, modeFor("1"));
+    try std.testing.expectEqual(Mode.reported, modeFor("ENFORCE "));
+    try std.testing.expectEqual(Mode.reported, modeFor("report"));
+    try std.testing.expectEqual(Mode.reported, modeFor(""));
 }
 
-test "perf_gate: a clearly-violating claim FAILS when enforced (CI unset)" {
+test "perf_gate: a clearly-violating claim FAILS when enforced (GEODE_PERF_GATES=enforce)" {
     // Synthetic values: a 10x ratio against a 1.05 bound; cv 5.0 against 0.22;
     // p95/mean 9.0 against 2.55.
     try std.testing.expectError(error.PerfClaimViolated, checkIn(.enforced, false, "synthetic ratio", 10.0 <= 1.05, "ratio={d:.2}", .{10.0}));
@@ -126,7 +132,7 @@ test "perf_gate: a clearly-violating claim FAILS when enforced (CI unset)" {
     try envelopeIn(.enforced, false, "synthetic ok", @as(f64, 0.1), @as(f64, 1.2), 0.22, 2.55);
 }
 
-test "perf_gate: a violated claim is reported but NOT enforced under CI" {
+test "perf_gate: a violated claim is reported but NOT enforced by default" {
     try checkIn(.reported, false, "synthetic ratio", 10.0 <= 1.05, "ratio={d:.2}", .{10.0});
     try envelopeIn(.reported, false, "synthetic envelope", @as(f64, 5.0), @as(f64, 9.0), 0.22, 2.55);
 }

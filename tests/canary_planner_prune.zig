@@ -126,9 +126,9 @@ test "BenchmarkCANARY_REQ_GQL_024_PlanEnumerationCostPruneVarianceEnvelope" {
     // stats helper (top-level definitions below)
     const sp = stats(samples_prune);
     const sf = stats(samples_full);
-    // Perf claims go through the shared gate (SONNY-2394): enforced only when
-    // `CI` is unset -- repo convention, see tests/perf_gate.zig. Correctness
-    // assertions in this file are not gated.
+    // Perf claims go through the shared gate (SONNY-2394): reported unless
+    // GEODE_PERF_GATES=enforce (SONNY-2439) -- see tests/perf_gate.zig.
+    // Correctness assertions in this file are not gated.
     try perf_gate.envelope("pruned enumeration", sp.cv, sp.p95_mean, 0.22, 2.55);
     try perf_gate.envelope("full enumeration", sf.cv, sf.p95_mean, 0.22, 2.55);
     // Expect pruning mean to be no worse than 1.15x full enumeration

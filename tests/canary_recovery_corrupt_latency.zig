@@ -219,8 +219,8 @@ test "BenchmarkCANARY_REQ_GQL_028_CorruptPageRecoveryLatencyVarianceEnvelope" {
     std.sort.block(f64, &samples, {}, comptime std.sort.asc(f64));
     const p95 = samples[(iters * 95) / 100 - 1];
     std.debug.print("CORRUPT_RECOVERY_DETECT mean_ns={d:.0} cv={d:.4} p95/mean={d:.2}\n", .{ mean, cv, p95 / mean });
-    // Perf claims go through the shared gate (SONNY-2394): enforced only when
-    // `CI` is unset -- repo convention, see tests/perf_gate.zig.
+    // Perf claims go through the shared gate (SONNY-2394): reported unless
+    // GEODE_PERF_GATES=enforce (SONNY-2439) -- see tests/perf_gate.zig.
     try perf_gate.envelope("corrupt-page reopen-to-detection", cv, p95 / mean, 0.22, 2.55);
 }
 

@@ -406,9 +406,15 @@ pub fn edgeIdTraversable(
 
 const testing = std.testing;
 
+// SONNY-2689: these run under `zig build test-tenant-visibility` (and the
+// aggregate). No artifact reached this file's tests before, so the Node
+// literal below, which lacked `labels` and `properties`, never compiled.
 test "tenant_visibility: null filter admits everything (legacy all-tenants path)" {
     try testing.expect(passesTenantFilterSlice("anything", null));
-    const n = graph_store.Node{ .id = 1, .tenant_id = "tenant-b" };
+    var props = graph_store.CompactPropertyMap.init(testing.allocator);
+    defer props.deinit();
+    var no_labels = [_][]const u8{};
+    const n = graph_store.Node{ .id = 1, .labels = no_labels[0..], .properties = props, .tenant_id = "tenant-b" };
     try testing.expect(passesTenantFilter(n, null));
 }
 
