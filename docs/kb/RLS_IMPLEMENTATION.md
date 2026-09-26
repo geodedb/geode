@@ -183,6 +183,49 @@ This document describes the comprehensive Row-Level Security (RLS) implementatio
   3 for a clearance of `"3"`. Only a principal attribute is converted: a
   row's string field is never read as a number.
 
+- **MERGE and rows a policy hides (SONNY-2686, SONNY-2728)**
+
+  MERGE matches its pattern against existing rows before it creates one.
+  When the only rows that match are rows the session's RLS policies hide (a
+  node, or an edge whose type a label-deny policy denies or whose own
+  properties an expression policy denies), the statement is refused with
+  `MergeMatchNotVisible`, SQLSTATE 42501. Nothing is bound, updated or
+  created: a pre-pass refuses the statement before its first write. A
+  visible match is used wherever it sits, even when hidden rows match too.
+  A row in another tenant or another graph is simply absent, as before, and
+  MERGE creates the session's own.
+
+  **The refusal is a covert channel.** It tells the session that some row
+  it may not see equals the pattern. Because MERGE can match on any
+  property, it works as an equality oracle over any property value:
+  `MERGE (x:Employee {name: 'Ann', salary: 250000})` is refused when Ann's
+  hidden row has that salary, and a wrong guess creates a new node.
+  PostgreSQL has the same channel in a narrower form: when the row an
+  `INSERT … ON CONFLICT DO UPDATE` conflicts with fails the UPDATE policy's
+  USING clause, the update "will never be silently avoided; an error will be
+  thrown instead", and its documentation lists unique-key and foreign-key
+  checks among the accepted covert channels. There the channel reaches only
+  the conflict key; in Geode it reaches every property a MERGE pattern
+  names.
+
+  **Why the hidden row is not treated as absent.** Treating it as absent is
+  worse. MERGE promises one row per pattern, and the merge index keeps one id
+  per key, so a duplicate breaks every later MERGE on that key, which can
+  bind either copy. An attacker could plant a visible duplicate of a hidden
+  row, and the owner's next `MERGE … ON MATCH SET` could then update the
+  attacker's copy instead of the real row, while the owner sees both.
+  Binding the hidden row is the leak itself: RETURN reads it, and ON MATCH
+  SET rewrites it (under an expression policy, possibly into view).
+
+  **Every refusal is audited.** Each `MergeMatchNotVisible` writes an
+  `access_denied` record to the security audit log, with action
+  `MERGE_MATCH_NOT_VISIBLE`, result `failure`, the user, and the statement's
+  graph. Its details give the pattern's labels (or relationship types) and
+  its property keys. Property values are never recorded, because they are
+  the secret being guessed. A burst of these records from one user is the
+  signature of enumeration. The engine has no per-session rate limit for
+  refusals yet.
+
 ### 5. User Management CLI (`src/tools/user_auth.zig`)
 
 - **User Commands**

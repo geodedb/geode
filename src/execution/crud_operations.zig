@@ -256,17 +256,88 @@ fn valueToPropertyValueForIndex(val: Value) ?graph_store.PropertyValue {
 /// none can (no policy is installed, or the session has no user) the check is
 /// skipped, and MERGE behaves exactly as it did.
 const MergeVisibility = struct {
+    allocator: std.mem.Allocator,
     filter_tenant: ?[]const u8,
     rls_may_deny: bool,
     rls_row: std.StringHashMap(rls.Value),
+    /// SONNY-2728: the statement's graph and the session's identity, for the
+    /// audit record of a refusal.
+    graph: []const u8,
+    username: []const u8,
+    user_id: u64,
 
     /// Call with the statement's context active: the RLS half reads it.
-    fn init(allocator: std.mem.Allocator, filter_tenant: ?[]const u8) MergeVisibility {
+    fn init(allocator: std.mem.Allocator, filter_tenant: ?[]const u8, graph: []const u8, context: ExecutionContext) MergeVisibility {
+        const principal_name: ?[]const u8 = if (context.principal) |p| p.username else null;
         return .{
+            .allocator = allocator,
             .filter_tenant = filter_tenant,
             .rls_may_deny = match_operations.rlsMayDenyForSession(),
             .rls_row = std.StringHashMap(rls.Value).init(allocator),
+            .graph = graph,
+            .username = principal_name orelse (context.user orelse ""),
+            .user_id = if (context.principal) |p| (p.user_id orelse 0) else 0,
         };
+    }
+
+    // CANARY: REQ=REQ-SONNY-2728-MERGE-REFUSAL-AUDIT; FEATURE="MergeRowVisibility"; ASPECT=RefusalAudit; STATUS=TESTED; TEST=tests/test_sonny2686_merge_rls.zig; OWNER=security; UPDATED=2026-09-26
+    /// SONNY-2728: the node MERGE binds for `match` (`MergeMatch.bindable`),
+    /// auditing a refusal. The refusal is a covert channel: it tells the
+    /// session that some row it may not see equals the pattern (see
+    /// docs/kb/RLS_IMPLEMENTATION.md), so every one is recorded with the
+    /// user, the graph, the labels and the property KEYS, never the values
+    /// (the values are the secret being guessed).
+    fn bindNode(self: *MergeVisibility, match: MergeMatch, labels: []const []const u8, props: ?[]const EvaluatedPatternProp) error{MergeMatchNotVisible}!?u64 {
+        return match.bindable() catch |err| {
+            var keys: [16][]const u8 = undefined;
+            var n: usize = 0;
+            if (props) |ps| for (ps) |p| {
+                if (n == keys.len) break;
+                keys[n] = p.key;
+                n += 1;
+            };
+            self.auditRefusal("node", labels, keys[0..n]);
+            return err;
+        };
+    }
+
+    /// SONNY-2728: `bindNode` for the edge of a relationship pattern: its
+    /// types and the keys of its inline properties.
+    fn bindEdge(self: *MergeVisibility, match: EdgeMatch, rel: ast.RelPattern) error{MergeMatchNotVisible}!?u64 {
+        return match.bindable() catch |err| {
+            var keys: [16][]const u8 = undefined;
+            var n: usize = 0;
+            if (rel.props) |ps| for (ps) |p| {
+                if (n == keys.len) break;
+                keys[n] = p.key;
+                n += 1;
+            };
+            self.auditRefusal("relationship", rel.types, keys[0..n]);
+            return err;
+        };
+    }
+
+    fn auditRefusal(self: *MergeVisibility, pattern: []const u8, labels: []const []const u8, keys: []const []const u8) void {
+        const audit_mod = @import("../security/audit.zig");
+        const joined_labels = std.mem.join(self.allocator, ",", labels) catch return;
+        defer self.allocator.free(joined_labels);
+        const joined_keys = std.mem.join(self.allocator, ",", keys) catch return;
+        defer self.allocator.free(joined_keys);
+        const details = std.fmt.allocPrint(
+            self.allocator,
+            "MERGE refused (MergeMatchNotVisible, 42501): only rows row-level security hides from the session match the {s} pattern; graph={s} labels=[{s}] keys=[{s}] (values withheld)",
+            .{ pattern, self.graph, joined_labels, joined_keys },
+        ) catch return;
+        defer self.allocator.free(details);
+        audit_mod.logSecurityGraphEvent(self.allocator, .{
+            .event_type = .access_denied,
+            .action = "MERGE_MATCH_NOT_VISIBLE",
+            .user_id = self.user_id,
+            .username = self.username,
+            .details = details,
+            .result_failure = true,
+            .resource_graph = self.graph,
+        });
     }
 
     fn deinit(self: *MergeVisibility) void {
@@ -3275,16 +3346,16 @@ fn clusterReplicateMerge(
 
     // SONNY-2686: including the session's row visibility, so the leader never
     // proposes an ON MATCH SET for a node the session may not see.
-    var visibility = MergeVisibility.init(allocator, filter_tenant);
+    var visibility = MergeVisibility.init(allocator, filter_tenant, target_graph, context);
     defer visibility.deinit();
-    const matched_id = try findMergeMatch(
+    const matched_id = try visibility.bindNode(findMergeMatch(
         read_store,
         target_graph,
         filter_tenant,
         node_pattern.labels,
         evaluated_props,
         &visibility,
-    ).bindable();
+    ), node_pattern.labels, evaluated_props);
 
     const empty_result = ExecutionResult{
         .columns = try allocator.alloc([]const u8, 0),
@@ -3418,14 +3489,14 @@ fn mergeNodeChain(
     // SONNY-2686: a node the session may not see is never bound, so none of
     // the ON MATCH clauses below can reach it; a pattern that only such a node
     // matches refuses the statement here, before anything is written.
-    if (try findMergeMatch(
+    if (try visibility.bindNode(findMergeMatch(
         read_store,
         target_graph,
         filter_tenant,
         node_pattern.labels,
         evaluated_props,
         visibility,
-    ).bindable()) |found_id| {
+    ), node_pattern.labels, evaluated_props)) |found_id| {
         found_node = (read_store.nodes.getOrHydratePtr(found_id) catch null);
     }
 
@@ -3586,7 +3657,7 @@ fn refuseHiddenMergeMatches(
             // would bind exists already: refuse now when only hidden edges
             // match, before an earlier chain writes anything.
             if (source != null and target != null) {
-                _ = try findExistingEdge(read_store, target_graph, filter_tenant, source.?, target.?, hop.rel.types, visibility).bindable();
+                _ = try visibility.bindEdge(findExistingEdge(read_store, target_graph, filter_tenant, source.?, target.?, hop.rel.types, visibility), hop.rel);
             }
         }
     }
@@ -3606,7 +3677,7 @@ fn preResolveMergeNode(
     var prop_arena = std.heap.ArenaAllocator.init(allocator);
     defer prop_arena.deinit();
     const evaluated_props = try evaluatePatternProps(prop_arena.allocator(), node_pattern.props, context);
-    return try findMergeMatch(read_store, target_graph, filter_tenant, node_pattern.labels, evaluated_props, visibility).bindable();
+    return try visibility.bindNode(findMergeMatch(read_store, target_graph, filter_tenant, node_pattern.labels, evaluated_props, visibility), node_pattern.labels, evaluated_props);
 }
 
 /// `resolveMergeEndpoint`'s answer, without creating anything: a variable an
@@ -3681,14 +3752,14 @@ fn resolveMergeEndpoint(
     defer prop_arena.deinit();
     const evaluated_props = try evaluatePatternProps(prop_arena.allocator(), node_pattern.props, context);
 
-    if (try findMergeMatch(
+    if (try visibility.bindNode(findMergeMatch(
         read_store,
         target_graph,
         filter_tenant,
         node_pattern.labels,
         evaluated_props,
         visibility,
-    ).bindable()) |matched_id| {
+    ), node_pattern.labels, evaluated_props)) |matched_id| {
         if (node_pattern.name) |name| try merged_vars.put(name, matched_id);
         return matched_id;
     }
@@ -3732,7 +3803,7 @@ fn mergeRelationshipHop(
     // P12: an edge the session may not see is never bound; when only hidden
     // edges match, the statement is refused (`refuseHiddenMergeMatches`
     // already refused it before any write when both endpoints existed).
-    const existing_edge = try findExistingEdge(
+    const existing_edge = try visibility.bindEdge(findExistingEdge(
         read_store,
         target_graph,
         filter_tenant,
@@ -3740,7 +3811,7 @@ fn mergeRelationshipHop(
         target_id,
         rel_types,
         visibility,
-    ).bindable();
+    ), hop.rel);
 
     // Pick the edge_id we will operate on: existing one (ON MATCH path)
     // or a freshly created one (ON CREATE path). Either way we then
@@ -3864,7 +3935,7 @@ pub fn executeMerge(allocator: std.mem.Allocator, m: ast.MergeStatement, current
     // SONNY-2686: every node MERGE matches must be one the session may see; a
     // pattern only hidden nodes match refuses the statement, and it is refused
     // before any chain writes.
-    var visibility = MergeVisibility.init(allocator, filter_tenant);
+    var visibility = MergeVisibility.init(allocator, filter_tenant, target_graph, context);
     defer visibility.deinit();
     try refuseHiddenMergeMatches(allocator, read_store, target_graph, filter_tenant, m, context, &visibility);
 

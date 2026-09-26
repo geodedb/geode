@@ -111,6 +111,9 @@ pub const SecurityGraphEvent = struct {
     // GAP-0919: denials are audited too — a failure result raises severity to
     // warning and records result=failure instead of the success default.
     result_failure: bool = false,
+    // SONNY-2728: the graph the event is about, when it is a user graph (a
+    // statement refused on it) rather than the security graph.
+    resource_graph: ?[]const u8 = null,
 };
 
 pub var global_audit_logger: ?*AuditLogger = null;
@@ -181,9 +184,9 @@ pub fn logSecurityGraphEvent(allocator: Allocator, event: SecurityGraphEvent) vo
         .session_id = "",
         .resource = .{
             .type = "graph",
-            .id = "__geode_security",
-            .name = "__geode_security",
-            .graph = "__geode_security",
+            .id = event.resource_graph orelse "__geode_security",
+            .name = event.resource_graph orelse "__geode_security",
+            .graph = event.resource_graph orelse "__geode_security",
             .table = null,
         },
         .action = event.action,

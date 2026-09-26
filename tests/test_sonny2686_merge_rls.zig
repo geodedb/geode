@@ -331,3 +331,66 @@ test "SONNY-2686 (P12): under a label-deny policy on an edge type, a relationshi
 test "SONNY-2686 (P12): under an expression policy on an edge's properties, a relationship MERGE whose only match is a hidden edge is refused and writes nothing" {
     try checkEdgeMerge(.expr_policy);
 }
+
+// CANARY: REQ=REQ-SONNY-2728-MERGE-REFUSAL-AUDIT; FEATURE="MergeRowVisibility"; ASPECT=RefusalAudit; STATUS=TESTED; TEST=tests/test_sonny2686_merge_rls.zig; OWNER=security; UPDATED=2026-09-26
+// SONNY-2728: a MergeMatchNotVisible refusal tells the session that some row
+// it may not see equals the MERGE pattern, so it works as an equality oracle
+// over any property value (the SONNY-2686 review's probe P14: guessing
+// `salary: 250000` is refused, a wrong guess creates a node). It stays (see
+// docs/kb/RLS_IMPLEMENTATION.md for why binding or hiding the row is worse),
+// and every refusal is audited: the user, the graph, the labels or
+// relationship types and the property KEYS, never the values, which are the
+// secret being guessed. An allowed MERGE is not audited as a refusal.
+test "SONNY-2728: every MERGE refused for a hidden match is audited with the user, graph, labels and keys, never the values" {
+    var s = try h.Session.init(.label_policy);
+    defer s.deinit();
+    const aa = s.arena.allocator();
+    var f: h.Failures = .{};
+    const audit = geode.security.audit;
+
+    try s.execAs(null, "CREATE (:Hidden {s: 'leak', salary: 250000})");
+    try s.execAs(null, "CREATE (:Doc {s: 'pub', cls: 'public'})");
+    try s.execAs(null, "CREATE (:Doc {s: 'pub2', cls: 'public'})");
+    try s.execAs(null, "MATCH (a:Doc {s: 'pub'}), (b:Doc {s: 'pub2'}) CREATE (a)-[:SECRET {x: 'topsecret'}]->(b)");
+    try s.restrict("Hidden");
+    try s.restrictEdgeType("SECRET");
+
+    const sink_path = try std.fmt.allocPrint(aa, "{s}/audit.jsonl", .{s.data_dir});
+    const logger = try audit.AuditLogger.createHeap(testing.allocator, .{ .enabled = true, .file_path = sink_path });
+    defer {
+        audit.setGlobalAuditLogger(null);
+        logger.deinit();
+        testing.allocator.destroy(logger);
+    }
+    audit.setGlobalAuditLogger(logger);
+
+    // Two refusals: a node guess (the probe's equality oracle) and an edge.
+    try h.expectError(&s, &f, "MERGE (x:Hidden {s: 'leak', salary: 250000}) RETURN x.s", error.MergeMatchNotVisible);
+    try h.expectError(&s, &f, "MERGE (a:Doc {s: 'pub'})-[r:SECRET {tag: 'kval9'}]->(b:Doc {s: 'pub2'})", error.MergeMatchNotVisible);
+    // Not refusals: a wrong guess creates its node, a visible row is bound.
+    try h.expectRows(&s, &f, "MERGE (x:Hidden {s: 'leak', salary: 1}) RETURN x.salary", &.{"1"});
+    try h.expectRows(&s, &f, "MERGE (x:Doc {s: 'pub'}) RETURN x.s", &.{"pub"});
+
+    const io = std.Io.Threaded.global_single_threaded.io();
+    const sink = std.Io.Dir.cwd().readFileAlloc(io, sink_path, aa, .limited(1 << 20)) catch |err| blk: {
+        try f.add(aa, "audit sink unreadable: {s}", .{@errorName(err)});
+        break :blk "";
+    };
+    // The refusal records alone (one JSON line each).
+    var records: std.ArrayList([]const u8) = .empty;
+    var lines = std.mem.splitScalar(u8, sink, '\n');
+    while (lines.next()) |line| {
+        if (std.mem.indexOf(u8, line, "MERGE_MATCH_NOT_VISIBLE") != null) try records.append(aa, line);
+    }
+    if (records.items.len != 2) try f.add(aa, "expected 2 MERGE_MATCH_NOT_VISIBLE audit records, found {d}", .{records.items.len});
+    const all = try std.mem.join(aa, "\n", records.items);
+    for ([_][]const u8{ h.session_user, "access_denied", "failure", "graph=default", "labels=[Hidden]", "keys=[s,salary]", "labels=[SECRET]", "keys=[tag]" }) |want| {
+        if (std.mem.indexOf(u8, all, want) == null) try f.add(aa, "the refusal records lack `{s}`", .{want});
+    }
+    // Never a value from the patterns.
+    for ([_][]const u8{ "leak", "250000", "kval9", "pub2" }) |secret| {
+        if (std.mem.indexOf(u8, all, secret) != null) try f.add(aa, "a refusal record carries the value `{s}`", .{secret});
+    }
+
+    try f.finish("SONNY-2728 audit");
+}
