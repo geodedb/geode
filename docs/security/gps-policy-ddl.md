@@ -37,6 +37,57 @@ column) show `valid`. It is false for a stored policy whose USING expression
 no longer compiles, which is kept fail-closed until it is rewritten. Startup
 logs how many stored policies are invalid.
 
+## Record kinds (SONNY-2750)
+
+GPS policies and RLS policies are stored as the same `:Policy` records in
+`__geode_security`. GPS policies come from `CREATE POLICY`, `ALTER POLICY`
+and the grant migration. RLS policies come from the `geode-auth` tool
+(`geode-auth policy create`) and from `geode auth policy create`. The two
+systems give some properties different meanings. For example, `operation`
+is a set of GPS actions in a GPS record, but the number of one RLS
+operation in an RLS record.
+
+Before SONNY-2750, GPS loaded every record at startup as a GPS policy.
+`geode-auth policy create p orders update` therefore came back after a
+restart as "allow write on `default`, for everyone". The RLS `update` (2)
+was read as the GPS action write, and the missing USING text as `true`.
+That policy also passed the database-level write check.
+
+Each record now has a `kind` property, `"gps"` or `"rls"`, and every writer
+must set it. The record HMAC covers it. At startup, GPS loads only records
+of kind `gps`. It refuses these records and grants nothing through them:
+
+- a record of any other kind, including a `kind` that is not exactly
+  `"gps"` or `"rls"`;
+- a record with a missing or mistyped property the policy needs: `name`,
+  `graph`, `operation`, `permissive`, `enabled`, and, for a `gps` record,
+  its USING text, which is now stored even when it is `true`.
+
+It never reads a refused record as something else. For each refusal it logs
+a warning and writes a `REFUSE_POLICY_RECORD` audit event. `ALTER POLICY`
+does not rewrite a GPS record that was refused for a missing property, and
+`DROP POLICY IF EXISTS` removes it.
+
+Records written before SONNY-2750 have no `kind`. GPS still loads one if it
+has the properties GPS wrote: a scope graph, an empty description and table,
+no CHECK clause, and a zero audit level and creator. Such a record stored no
+USING text for `true`. The RLS writers always stored a description or a
+table, and `geode auth policy create` also stored an empty graph. A record
+without a `kind` that has any other shape, or that is missing a property
+this check reads, is not loaded. The HMAC of a record without a `kind` is
+computed as before, so a chain sealed before the upgrade still verifies. The
+next `ALTER POLICY` on such a record stores its kind and USING text.
+
+The `geode auth policy list`, `show` and `delete` commands see RLS records
+only. `CREATE`, `ALTER` and `DROP POLICY` see GPS records only, so an RLS
+policy with the same name as a GPS policy is left alone.
+
+The chain check at startup does not tell the two kinds apart. The RLS tools
+write their records without an HMAC and do not reseal, so the server refuses
+to start until an operator runs `geode auth reseal` (or sets
+`GEODE_AUTH_RESEAL_CHAIN=1`). The reseal signs every record as it is, RLS
+records included. The `kind` check is what keeps those records out of GPS.
+
 ## What did NOT change
 
 - **Real expression compilation** — Phase 4 only supports the literal `"true"` predicate. Phase 5+ compiles real expressions through the RLS VM.

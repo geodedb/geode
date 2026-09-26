@@ -378,8 +378,8 @@ pub fn isMutatingCallStatement(call_stmt: *const ast.CallStatement) bool {
 pub const HandlerTransport = enum { quic, grpc };
 
 /// SONNY-2743: how the QUIC or gRPC handler runs a parsed program. Both
-/// handlers take these four facts from `statementPlan` and from nowhere else,
-/// so a test of `statementPlan` covers their decision.
+/// handlers take these facts from `statementPlan` and from nowhere else, so a
+/// test of `statementPlan` covers their decision.
 pub const StatementPlan = struct {
     /// Some statement in the program changes the store (`isMutatingProgram`,
     /// the whole program). The handler applies its write-permission gate
@@ -395,10 +395,25 @@ pub const StatementPlan = struct {
     /// (GAP-0805): its target is a simple point read, and the rest of the
     /// program does nothing (`restOfProgramIsNoop`).
     point_read: bool,
+    /// SONNY-2749: the graph whose lock the handler takes (write or read): the
+    /// graph the program's statements run on (`programGraph`: a USE GRAPH or
+    /// SESSION SET PROPERTY GRAPH in the program moves it off the session
+    /// graph), or the session graph when a program that only reads runs on
+    /// several. It points into the program or at `session_graph`.
+    lock_graph: []const u8,
+    /// SONNY-2749: the program changes the store and its statements run on
+    /// more than one graph. The handler refuses it (0A000): one graph's write
+    /// lock cannot cover the others, and it never holds two.
+    spans_graphs: bool,
 };
 
+/// SONNY-2749: what the handlers answer (SQLSTATE 0A000) to a program whose
+/// `StatementPlan.spans_graphs` is set.
+pub const spans_graphs_message = "A request that changes data must run all its statements on one graph; send the statements for each graph in a request of its own";
+
 /// SONNY-2743: decide the `StatementPlan` for `program` (analysed as
-/// `analysis`) in a session whose graph is `session_graph`.
+/// `analysis`) in a session whose graph is `session_graph` (the executor
+/// session's; `default_graph` when it has none).
 ///
 /// `ProgramAnalysis.kind`, `.target`, `.is_store_free` and `.is_point_read`
 /// describe the program's LAST query only, and they used to decide alone. QUIC
@@ -413,11 +428,15 @@ pub const StatementPlan = struct {
 ///     program to do nothing but, at most, re-select `session_graph`;
 ///   * a program whose last query is EXPLAIN still takes no lock (the handlers
 ///     only plan the EXPLAIN and run nothing), but it goes through the gate
-///     if any statement in it changes the store.
+///     if any statement in it changes the store;
+///   * SONNY-2749: the lock is on the graph the statements run on
+///     (`programGraph`), not the session's, and a program that changes the
+///     store on more than one graph is refused (`spans_graphs`).
 pub fn statementPlan(
     program: *const ast.Program,
     analysis: *const ProgramAnalysis,
     session_graph: []const u8,
+    default_graph: []const u8,
     transport: HandlerTransport,
 ) StatementPlan {
     const self_locking = isSelfLockingProgram(program);
@@ -425,12 +444,73 @@ pub fn statementPlan(
     const rest_is_noop = restOfProgramIsNoop(analysis, session_graph);
     const store_free = transport == .quic and analysis.kind == .rows and analysis.is_store_free and rest_is_noop;
     const needs_store_lock = !self_locking and analysis.kind != .explain and !store_free;
+    const program_graph = programGraph(program, session_graph, default_graph);
     return .{
         .is_mutation = is_mutation,
         .needs_store_lock = needs_store_lock,
         .self_locking = self_locking,
         .point_read = needs_store_lock and !is_mutation and analysis.is_point_read and rest_is_noop,
+        .lock_graph = program_graph orelse session_graph,
+        .spans_graphs = is_mutation and needs_store_lock and program_graph == null,
     };
+}
+
+// CANARY: REQ=REQ-SONNY-2749-PROGRAM-GRAPH-LOCK; FEATURE="StatementAuthorization"; ASPECT=ProgramGraph; STATUS=TESTED; TEST=tests/test_sonny2749_program_graph_lock.zig; OWNER=security; UPDATED=2026-09-25
+/// SONNY-2749: the graph every statement of `program` that touches graph data
+/// runs on, following the executor. The program starts on `start_graph` (the
+/// session's graph). `USE GRAPH g` and `SESSION SET PROPERTY GRAPH g` move it
+/// to `g`, taking the name exactly as the executor stores it. `SESSION RESET`
+/// (with no argument, ALL CHARACTERISTICS or [PROPERTY] GRAPH) and `SESSION
+/// CLOSE` move it back to `default_graph`. Every other statement runs on the
+/// graph current at that point, except transaction control (a START
+/// TRANSACTION with a body runs its body there) and EXPLAIN, which only plans.
+/// Returns null when those statements run on more than one graph, and
+/// `start_graph` when there are none.
+///
+/// The handlers used to lock the session graph whatever the program selected,
+/// so `USE GRAPH g2; MERGE (:K {id: 1})` wrote g2 holding another graph's
+/// write lock, beside g2's own writers.
+pub fn programGraph(program: *const ast.Program, start_graph: []const u8, default_graph: []const u8) ?[]const u8 {
+    var current = start_graph;
+    var runs_on: ?[]const u8 = null;
+    for (program.statements) |*stmt| {
+        switch (stmt.*) {
+            .UseGraph => |ug| current = ug.graph_name,
+            .SessionSet => |ss| switch (ss.clause_type) {
+                .Graph => |g| current = g.expression,
+                else => {},
+            },
+            .SessionReset => |sr| {
+                if (sessionResetClearsGraph(sr)) current = default_graph;
+            },
+            .SessionClose => current = default_graph,
+            .Commit, .Rollback, .Explain => {},
+            .StartTransaction => |txn| {
+                if (txn.body != null and !noteGraph(&runs_on, current)) return null;
+            },
+            else => if (!noteGraph(&runs_on, current)) return null,
+        }
+    }
+    return runs_on orelse start_graph;
+}
+
+/// Does `SESSION RESET ...` clear the session graph? As the executor runs it:
+/// no argument and ALL CHARACTERISTICS reset the whole session.
+fn sessionResetClearsGraph(sr: ast.SessionResetStatement) bool {
+    const reset_args = sr.arguments orelse return true;
+    return switch (reset_args) {
+        .All => |all| all == .Characteristics,
+        .Graph => true,
+        .Schema, .TimeZone, .Parameter => false,
+    };
+}
+
+/// Record that a statement runs on `current`. False when an earlier one ran
+/// on another graph.
+fn noteGraph(runs_on: *?[]const u8, current: []const u8) bool {
+    if (runs_on.*) |g| return std.mem.eql(u8, g, current);
+    runs_on.* = current;
+    return true;
 }
 
 /// SONNY-2743: does the program do nothing besides its target query and bare
@@ -453,11 +533,20 @@ pub fn restOfProgramIsNoop(analysis: *const ProgramAnalysis, session_graph: []co
 /// exactly one statement, so nothing else in the request runs unlocked. In
 /// any other program the handler takes its usual lock, and the procedure,
 /// finding a lock held, refuses to run (`error.GraphLockHeld`).
+///
+/// The CALL must have no RETURN and no ORDER BY. The executor evaluates an
+/// ORDER BY after the procedure returns, and its expressions reach the live
+/// store (`ORDER BY COUNT { MATCH (n) }`, EXISTS, a pattern
+/// comprehension), which would run with no lock at all. Such a CALL takes the
+/// handler's lock like any other, and the procedure refuses a RETURN or ORDER
+/// BY itself (`error.BackfillProjection`). YIELD only picks columns by name,
+/// and LIMIT and OFFSET are numbers.
 pub fn isSelfLockingProgram(program: *const ast.Program) bool {
     if (program.statements.len != 1) return false;
     return switch (program.statements[0]) {
         .Call => |call_stmt| switch (call_stmt) {
-            .Procedure => |proc| procedure_access.isSelfLockingProcedure(proc),
+            .Procedure => |proc| proc.return_clause == null and proc.order_by == null and
+                procedure_access.isSelfLockingProcedure(proc),
             .Subquery => false,
         },
         else => false,

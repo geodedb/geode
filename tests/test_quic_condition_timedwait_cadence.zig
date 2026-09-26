@@ -1052,9 +1052,10 @@ test "store-free scalar reads bypass graph snapshot locks" {
     try testing.expect(std.mem.indexOf(u8, handler, "REQ=REQ-QUIC-HC-110") != null);
     // SONNY-2743: the decision moved to `query_traits.statementPlan`, which
     // bypasses the lock only when the rest of the program does nothing.
-    try testing.expect(std.mem.indexOf(u8, handler, "query_traits.statementPlan(&parse_result.program, &analysis, query_graph_name, .quic)") != null);
+    try testing.expect(std.mem.indexOf(u8, handler, "query_traits.statementPlan(&parse_result.program, &analysis, query_graph_name, graph_store.DEFAULT_GRAPH_NAME, .quic)") != null);
     try testing.expect(std.mem.indexOf(u8, traits, "analysis.kind == .rows and analysis.is_store_free and rest_is_noop") != null);
-    try testing.expect(std.mem.indexOf(u8, handler, "snapshotUnderReadLock(gpa, query_graph_name)") != null);
+    // SONNY-2749: reads snapshot the graph the program reads (`lock_graph`).
+    try testing.expect(std.mem.indexOf(u8, handler, "snapshotUnderReadLock(gpa, lock_graph)") != null);
 }
 
 test "password auth coalesces concurrent identical verifies" {
@@ -2448,7 +2449,7 @@ test "quic count-only reads bypass query snapshot clone" {
     const point_read_lock = std.mem.indexOf(u8, content, "graph_store.acquireGraphReadLockTagged(query_graph_name, .point_read)") orelse return error.MissingPointReadLock;
     try testing.expect(direct_count < point_read_lock);
     const fast_path = std.mem.indexOf(u8, content, "execution.countNodesFastPath") orelse return error.MissingCountFastPath;
-    const snapshot_path = std.mem.indexOf(u8, content, "graph_store.snapshotUnderReadLock(gpa, query_graph_name)") orelse return error.MissingSnapshotPath;
+    const snapshot_path = std.mem.indexOf(u8, content, "graph_store.snapshotUnderReadLock(gpa, lock_graph)") orelse return error.MissingSnapshotPath;
     try testing.expect(fast_path < snapshot_path);
     try testing.expect(std.mem.indexOf(u8, content, "graph_store.acquireGraphReadLockTagged(query_graph_name, .point_read)") != null);
 }

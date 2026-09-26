@@ -745,6 +745,8 @@ pub const UserManager = struct {
             .check_clause = check_clause,
             .audit_level = audit_level_byte,
             .created_by = policy.created_by,
+            // SONNY-2750: an RLS record, which GPS never loads.
+            .kind = .rls,
         });
     }
 

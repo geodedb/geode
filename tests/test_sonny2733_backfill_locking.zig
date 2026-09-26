@@ -358,6 +358,12 @@ test "SONNY-2733: only a lone CALL of the backfill runs without the handler's st
         .{ .query = "CALL geode.tenant.backfill_edge_tags()", .self_locking = true },
         .{ .query = "CALL geode.tenant.backfill_edge_tags(true) YIELD edge_id, action", .self_locking = true },
         .{ .query = "CALL GEODE.Tenant.Backfill_Edge_Tags()", .self_locking = true },
+        .{ .query = "CALL geode.tenant.backfill_edge_tags() YIELD edge_id LIMIT 5 OFFSET 1", .self_locking = true },
+        // The executor evaluates a RETURN's ORDER BY after the procedure,
+        // against the store: that needs the handler's lock (review P20).
+        .{ .query = "CALL geode.tenant.backfill_edge_tags() YIELD edge_id RETURN edge_id", .self_locking = false },
+        .{ .query = "CALL geode.tenant.backfill_edge_tags() YIELD edge_id RETURN edge_id ORDER BY COUNT { MATCH (m) }", .self_locking = false },
+        .{ .query = "CALL geode.tenant.backfill_edge_tags() YIELD edge_id RETURN edge_id ORDER BY EXISTS { MATCH (m) }", .self_locking = false },
         // Anything beside it would run unlocked too: the handler locks, and
         // the procedure refuses.
         .{ .query = "USE GRAPH g; CALL geode.tenant.backfill_edge_tags()", .self_locking = false },
@@ -374,6 +380,32 @@ test "SONNY-2733: only a lone CALL of the backfill runs without the handler's st
             return error.TestUnexpectedResult;
         }
     }
+}
+
+test "SONNY-2733: the backfill refuses a RETURN or ORDER BY, which the executor evaluates against the store after it" {
+    harness.silenceEngineLogs();
+    var h = try harness.Harness.init(testing.allocator);
+    defer h.deinit();
+    const st = graph_store.getGlobalStore(testing.allocator);
+    const legacy = try legacyEdge(st, graph_store.DEFAULT_GRAPH_NAME, 1);
+    const auth_was_enabled = user_mgmt.isAuthEnabled();
+    user_mgmt.setAuthEnabled(false);
+    defer user_mgmt.setAuthEnabled(auth_was_enabled);
+
+    // In process no statement lock is held either: the ORDER BY's COUNT {}
+    // would walk the store unlocked. The procedure refuses before it changes
+    // anything.
+    const refused = [_][]const u8{
+        "CALL geode.tenant.backfill_edge_tags() YIELD edge_id RETURN edge_id",
+        "CALL geode.tenant.backfill_edge_tags() YIELD edge_id RETURN edge_id ORDER BY COUNT { MATCH (m) }",
+        "CALL geode.tenant.backfill_edge_tags(true) YIELD edge_id RETURN edge_id ORDER BY EXISTS { MATCH (m) }",
+    };
+    for (refused) |query| try testing.expectError(error.BackfillProjection, h.run(query));
+    try testing.expectEqualStrings(default_tenant, try tagOf(st, legacy));
+
+    // YIELD, LIMIT and OFFSET only pick and count rows: it runs.
+    _ = try h.run("CALL geode.tenant.backfill_edge_tags() YIELD edge_id, action LIMIT 5");
+    try testing.expectEqualStrings(tenant_a, try tagOf(st, legacy));
 }
 
 fn encodeProto(allocator: std.mem.Allocator, msg: anytype) ![]u8 {
@@ -434,6 +466,20 @@ test "SONNY-2733: over gRPC a lone CALL runs, holding no statement lock; beside 
         };
         try testing.expectEqualStrings("0A000", err.code);
         try testing.expect(std.mem.indexOf(u8, err.message, "only statement") != null);
+        try testing.expectEqualStrings(default_tenant, try tagOf(st, legacy));
+    }
+
+    // With a RETURN and an ORDER BY that reads the store, the handler takes
+    // its lock (it is not a lone self-locking CALL), and the procedure
+    // refuses before it changes anything.
+    {
+        const resp = try grpcExecute(ga, session_id, "CALL geode.tenant.backfill_edge_tags() YIELD edge_id RETURN edge_id ORDER BY COUNT { MATCH (m) }");
+        const err = switch (resp.payload orelse return error.MissingPayload) {
+            .@"error" => |e| e,
+            else => return error.ExpectedRefusal,
+        };
+        try testing.expectEqualStrings("0A000", err.code);
+        try testing.expect(std.mem.indexOf(u8, err.message, "RETURN or ORDER BY") != null);
         try testing.expectEqualStrings(default_tenant, try tagOf(st, legacy));
     }
 

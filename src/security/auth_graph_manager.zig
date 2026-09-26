@@ -1234,10 +1234,22 @@ pub const AuthGraphManager = struct {
     }
 
     // CANARY: REQ=REQ-GPS-CATALOG-002; FEATURE="GPS Policy Persistence"; ASPECT=FindPolicyIdByName; STATUS=TESTED; TEST=tests/test_gps_policy_persistence.zig; OWNER=security; UPDATED=2026-05-20
-    /// Look up a policy id by name. Returns null if not found.
+    /// Look up a GPS policy's id by name. Returns null if not found.
+    /// SONNY-2750: GPS records only; an RLS record of the same name (the
+    /// geode-auth CLI writes the same record type) is not a GPS policy, and
+    /// CREATE, ALTER and DROP POLICY must not reach it.
     pub fn findPolicyIdByName(self: *Self, name: []const u8) ?u64 {
-        const record = self.storage.getPolicyByName(name) orelse return null;
-        return record.id;
+        var it = self.storage.policyIterator();
+        while (it.next()) |record| {
+            if (record.effectiveKind() == .gps and std.mem.eql(u8, record.getName(), name)) return record.id;
+        }
+        return null;
+    }
+
+    /// SONNY-2750: audit a :Policy record that GPS hydration refused to load
+    /// (it is not a GPS policy, or it is malformed). `reason` says why.
+    pub fn auditRefusedPolicyRecord(self: *Self, record: *const UserStorageBackend.PolicyRecord, reason: []const u8) void {
+        self.logSecurityGraphMutation(.policy_violation, "REFUSE_POLICY_RECORD", record.id, record.getName(), reason);
     }
 
     // CANARY: REQ=REQ-GPS-CATALOG-002; FEATURE="GPS Policy Persistence"; ASPECT=CreatePolicy; STATUS=TESTED; TEST=tests/test_gps_policy_persistence.zig; OWNER=security; UPDATED=2026-05-20
@@ -1277,6 +1289,7 @@ pub const AuthGraphManager = struct {
             .check_clause = null,
             .audit_level = 0,
             .created_by = 0,
+            .kind = .gps,
         });
         try self.recomputeAndStorePolicyHmac(policy_id, hmac_key);
         try self.sealChain(hmac_key);
@@ -1310,6 +1323,10 @@ pub const AuthGraphManager = struct {
     ) !void {
         const policy_id = self.findPolicyIdByName(name) orelse return error.PolicyNotFound;
         const existing = self.storage.getPolicy(policy_id) orelse return error.PolicyNotFound;
+        // SONNY-2750: a record with a missing or mistyped property was not
+        // loaded, and is not rewritten either: the rewrite would store the
+        // defaults that stood in for what is missing as its values.
+        if (existing.malformed) return error.PolicyNotFound;
 
         // GAP-0858 (follow-up): durable rename-collision guard. If the rename
         // target is already held by a DIFFERENT policy id, reject — otherwise
@@ -1340,11 +1357,17 @@ pub const AuthGraphManager = struct {
             .operation = existing.operation,
             .permissive = existing.permissive,
             .enabled = new_enabled,
-            .using_clause = existing.getUsingClause(),
+            // SONNY-2750: a legacy GPS record stored no USING text for "true"
+            // (a well-formed `kind = gps` record always has one); the rewrite
+            // stores it, as a GPS record without one is malformed.
+            .using_clause = existing.getUsingClause() orelse "true",
             .check_clause = existing.getCheckClause(),
             .audit_level = existing.audit_level,
             .created_by = existing.created_by,
             .created_at = existing.created_at,
+            // SONNY-2750: `findPolicyIdByName` found a GPS record (a legacy one
+            // included), which this re-persist records as such.
+            .kind = .gps,
         });
         try self.recomputeAndStorePolicyHmac(policy_id, hmac_key);
         try self.sealChain(hmac_key);
@@ -1631,6 +1654,9 @@ fn computePermissionHmac(hmac_key: *const [32]u8, record: *const UserStorageBack
     return computeRecordHmacChecked(hmac_key, &props);
 }
 
+/// SONNY-2750: the kind is covered once a record has one. A legacy record
+/// (no `kind` property) is hashed exactly as before, so its stored HMAC still
+/// verifies.
 fn computePolicyHmac(hmac_key: *const [32]u8, record: *const UserStorageBackend.PolicyRecord) [32]u8 {
     var id_buf: [20]u8 = undefined;
     const id_str = std.fmt.bufPrint(&id_buf, "{d}", .{record.id}) catch "0";
@@ -1665,7 +1691,18 @@ fn computePolicyHmac(hmac_key: *const [32]u8, record: *const UserStorageBackend.
         .{ .key = "using_clause", .value = using_clause },
     };
 
-    return computeRecordHmacChecked(hmac_key, &props);
+    const kind_value: ?[]const u8 = switch (record.kind) {
+        .legacy => null,
+        .gps, .rls => record.kind.property().?,
+        // Not a value any writer stores: it can only match a record signed
+        // with it, and no loader uses an `.invalid` record anyway.
+        .invalid => "<invalid>",
+    };
+    const kv = kind_value orelse return computeRecordHmacChecked(hmac_key, &props);
+    var with_kind: [props.len + 1]auth_hmac.KeyValue = undefined;
+    @memcpy(with_kind[0..props.len], &props);
+    with_kind[props.len] = .{ .key = "kind", .value = kv };
+    return computeRecordHmacChecked(hmac_key, &with_kind);
 }
 
 /// Sort HMACs by their byte representation for deterministic chain hash ordering.

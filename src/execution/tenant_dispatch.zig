@@ -243,43 +243,14 @@ fn literalU64(expr: *const ast.Expr) !u64 {
 /// built with `owns_value_memory = true` and freed value-by-value by
 /// `ExecutionResult.deinit`.
 ///
-/// `filterYieldColumns` (the shared helper) shallow-copies the kept columns but
-/// (a) does NOT free the DROPPED columns' values and (b) returns a result with
-/// `owns_value_memory = false`. Both would leak our owned `.Str` values, so we
-/// free the dropped values here and re-assert ownership on the filtered result.
+/// SONNY-2755: `filterYieldColumns` keeps that ownership and frees the
+/// dropped columns' names and values itself. This used to free the dropped
+/// values here and mark the filtered result as owning its values, so for
+/// `YIELD tenant_id, tenant_id` each kept value, and the column's name, was
+/// freed twice.
 fn maybeYield(allocator: std.mem.Allocator, result: ExecutionResult, call_stmt: ast.CallProcedure) !ExecutionResult {
     const yield_items = call_stmt.yield_items orelse return result;
-
-    // Which original column indices survive the YIELD (by name, case-sensitive —
-    // the dispatcher emits canonical lowercase column names)?
-    var keep = try allocator.alloc(bool, result.columns.len);
-    defer allocator.free(keep);
-    @memset(keep, false);
-    for (yield_items) |item| {
-        const col_name = item.alias orelse switch (item.expr) {
-            .Ident => |ident| ident.orig,
-            .Member => |member| member.field,
-            else => "column",
-        };
-        for (result.columns, 0..) |res_col, idx| {
-            if (std.mem.eql(u8, col_name, res_col)) {
-                keep[idx] = true;
-                break;
-            }
-        }
-    }
-
-    // Free the values in dropped columns before filterYieldColumns discards
-    // them (it frees the row backing array but never the Values themselves).
-    for (result.rows) |row| {
-        for (row, 0..) |val, idx| {
-            if (!keep[idx]) freeValue(allocator, val);
-        }
-    }
-
-    var r = try filterYieldColumns(allocator, result, yield_items);
-    r.owns_value_memory = true; // kept Str values are still owned by us
-    return r;
+    return filterYieldColumns(allocator, result, yield_items);
 }
 
 /// Free a single Value's owned heap memory (only `.Str` carries an allocation in
@@ -687,7 +658,13 @@ fn handleSetQuota(allocator: std.mem.Allocator, call_stmt: ast.CallProcedure) !E
 /// and it is not part of a transaction (ROLLBACK could not undo its re-tags),
 /// so it is refused inside one (`BackfillInTransaction`). A dry run is allowed
 /// in both.
+///
+/// It takes no RETURN or ORDER BY (`BackfillProjection`): the executor would
+/// evaluate them after this returns, against the store, and the handlers hold
+/// no lock for a lone CALL of it (`query_traits.isSelfLockingProgram`). YIELD,
+/// LIMIT and OFFSET are fine.
 fn handleBackfillEdgeTags(allocator: std.mem.Allocator, call_stmt: ast.CallProcedure, context: ExecutionContext) !ExecutionResult {
+    if (call_stmt.return_clause != null or call_stmt.order_by != null) return error.BackfillProjection;
     if (context.tenant_id) |tid| {
         if (tenancy.isConcreteScope(tid)) return error.TenantScopedSession;
     }

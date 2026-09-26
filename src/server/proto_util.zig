@@ -131,6 +131,8 @@ pub fn mapError(err: anyerror) ErrorInfo {
         error.TransactionAborted => .{ .code = "25P02", .message = "Current transaction is aborted; statements are rejected until ROLLBACK" },
         error.NoActiveTransaction => .{ .code = "25000", .message = "No active transaction" },
         error.UnionColumnCountMismatch => .{ .code = "42601", .message = "UNION column count mismatch" },
+        // SONNY-2755: `YIELD path, path` used to free that column twice.
+        error.DuplicateYieldColumn => .{ .code = "42702", .message = "YIELD names the same column more than once; name each column once" },
         error.DuplicateGraph => .{ .code = "42P07", .message = "Duplicate graph name" },
         error.GraphNotFound => .{ .code = "3F000", .message = "Graph does not exist" },
         // ENG-3903: a MERGE relationship endpoint that is neither bound by a
@@ -259,6 +261,7 @@ pub fn mapError(err: anyerror) ErrorInfo {
         error.TenantScopedSession => .{ .code = "42501", .message = "geode.tenant.backfill_edge_tags changes every tenant's edges; run it in a session with no tenant scope" },
         error.GraphLockHeld => .{ .code = "0A000", .message = "geode.tenant.backfill_edge_tags takes each graph's lock itself; send it as the only statement in its request" },
         error.BackfillInTransaction => .{ .code = "25000", .message = "geode.tenant.backfill_edge_tags cannot run inside a transaction: ROLLBACK would not undo its re-tags (a dry run can)" },
+        error.BackfillProjection => .{ .code = "0A000", .message = "geode.tenant.backfill_edge_tags takes no RETURN or ORDER BY: it runs with no statement lock, and they would read the store; YIELD its columns instead" },
         // SONNY-2686: a MERGE whose pattern only nodes the session's row-level
         // security hides match is refused (nothing bound, updated or created)
         // rather than binding the hidden node or creating a duplicate of it.

@@ -80,6 +80,52 @@
   post-filter's label-deny snapshot, and the traversal's, now hold their own
   copy of each denied label. If a deny policy was removed while a query's
   post-filter ran, the post-filter could read freed memory.
+- **A YIELD that names a column twice no longer crashes the server
+  (SONNY-2755):** the YIELD filter of the procedures that honour YIELD
+  (`algo.bfs.stream`, `algo.dfs.stream`, `algo.dijkstra.stream`,
+  `geode.fts.*`, `geode.ts.*` and `geode.tenant.*`) put that column's name,
+  and its values, in two columns. The result then freed them twice. A
+  release build aborts on that double free, so any user allowed to call one
+  of these procedures could stop the server, for example with
+  `CALL algo.bfs.stream(1) YIELD path, path`.
+  Such a YIELD is now refused with 42702 before the procedure runs, for
+  every procedure. The filter also stopped leaking memory:
+  - it frees the columns a YIELD drops;
+  - it keeps the result's ownership of its values;
+  - BFS, DFS and Dijkstra free their paths, and `geode.fts.rebuild` frees
+    its index name, with or without a YIELD. These used to leak on every
+    call.
+- **An RLS policy from `geode-auth` no longer loads as a GPS policy
+  (SONNY-2750):** GPS policies (`CREATE POLICY`) and RLS policies
+  (`geode-auth policy create`, `geode auth policy create`) are stored as the
+  same `:Policy` records in `__geode_security`. GPS loaded every record at
+  startup as a GPS policy. An RLS `update` policy on any table therefore came
+  back after a restart as "allow write on `default`, for everyone", which
+  also passed the database-level write check.
+  Policy records now carry a `kind` (`gps` or `rls`), covered by the record
+  HMAC. GPS loads only GPS records. It refuses any other record, and any GPS
+  record with a missing or mistyped property. For each refusal it logs a
+  warning and writes a `REFUSE_POLICY_RECORD` audit event.
+  A record written before this release has no kind. GPS loads one only if it
+  has the properties GPS wrote. Its HMAC is unchanged, so an existing chain
+  still verifies.
+  `geode auth policy list`, `show` and `delete` see only RLS records. See
+  `docs/security/gps-policy-ddl.md`.
+- **Writes after `USE GRAPH` lock the graph they write (SONNY-2749):** the
+  QUIC and gRPC handlers took the write lock of the session's graph as it
+  was before the request. A request such as `USE GRAPH g2; MERGE (:K {id: 1})`
+  therefore wrote `g2` while holding the other graph's lock. Two such
+  requests at once could create the node twice, or corrupt `g2`'s label
+  dictionary. gRPC always locked `default`, because it did not track the
+  session's graph.
+  The lock is now taken on the graph that the request's statements run on,
+  after the request's own `USE GRAPH`, `SESSION SET GRAPH` or `SESSION RESET`.
+  A request that changes data on more than one graph is refused with 0A000;
+  send one request per graph. This includes `CREATE GRAPH g; USE GRAPH g;
+  CREATE …`, which must now be two requests.
+  A request that changes a graph that does not exist is refused with 3F000,
+  and the graph is not created. The CLI's `-g` flag, which sends a
+  `USE GRAPH` of the current graph before the query, works as before.
 - **GPS deny policies deny (SONNY-2744):** `decide()` skipped deny-effect
   policies, and the builtin-role check ran before the policy catalog, so a
   deny never denied. A matching deny now wins over a builtin role, an Admin
@@ -112,6 +158,11 @@
     without the session graph's statement lock. Beside any other statement,
     including the `USE GRAPH` the CLI's `-g` flag prepends, it fails with
     `GraphLockHeld` and changes nothing;
+  - it takes no `RETURN` or `ORDER BY` (`BackfillProjection`, 0A000), and
+    changes nothing when it is given one. The server evaluates an
+    `ORDER BY` after the procedure returns, and an expression such as
+    `COUNT { MATCH … }` reads the store. With no statement lock held, that
+    read ran unlocked. `YIELD`, `LIMIT` and `OFFSET` still work;
   - it skips the engine's own graphs (`__geode_security` and any other
     `__geode_…` graph);
   - an edge it cannot re-tag or read is listed with the new action `failed`,

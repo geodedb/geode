@@ -54,7 +54,7 @@ fn planOf(query: []const u8, transport: Transport) !query_traits.StatementPlan {
     var parsed = try geode.parseGql(query, testing.allocator);
     defer parsed.deinit();
     const analysis = query_traits.analyzeProgram(&parsed.program);
-    return query_traits.statementPlan(&parsed.program, &analysis, session_graph, transport);
+    return query_traits.statementPlan(&parsed.program, &analysis, session_graph, graph_store.DEFAULT_GRAPH_NAME, transport);
 }
 
 const Expect = struct {

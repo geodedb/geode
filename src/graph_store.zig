@@ -14127,6 +14127,23 @@ fn acquireExistingGraphWriteLock(graph_name: []const u8, deadline_mono_ns: u64) 
     };
 }
 
+// CANARY: REQ=REQ-SONNY-2749-PROGRAM-GRAPH-LOCK; FEATURE="StatementAuthorization"; ASPECT=ProgramWriteLock; STATUS=TESTED; TEST=tests/test_sonny2749_program_graph_lock.zig; OWNER=security; UPDATED=2026-09-25
+/// SONNY-2749: the write lock a transport handler takes for a program that
+/// changes the store: the lock of `lock_graph`, the graph its statements run on
+/// (`query_traits.StatementPlan.lock_graph`). When that is the session graph
+/// (`session_graph`), this is `acquireGraphWriteLockCancelable`, which may
+/// create a graph the engine does not know yet, as every write did before. When
+/// the program's own USE GRAPH or SESSION SET PROPERTY GRAPH moved it to
+/// another graph, it never creates that graph: `error.GraphNotFound` when it
+/// does not exist (the program's USE GRAPH would fail the same way), after
+/// building a graph whose load was deferred. `error.Deadline` when the lock
+/// does not come by `deadline_mono_ns`.
+pub fn acquireProgramWriteLockCancelable(lock_graph: []const u8, session_graph: []const u8, deadline_mono_ns: u64) !GraphLockHandle {
+    if (std.mem.eql(u8, lock_graph, session_graph)) return acquireGraphWriteLockCancelable(lock_graph, deadline_mono_ns);
+    if (getCurrentGlobalStore()) |store| store.ensureGraphHydrated(lock_graph);
+    return (try acquireExistingGraphWriteLock(lock_graph, deadline_mono_ns)) orelse error.GraphNotFound;
+}
+
 /// ENG-3914 (RC-3), cross-path MERGE duplication in the GRAPH-CREATION window.
 ///
 /// The two MERGE implementations must exclude each other on the SAME lock:

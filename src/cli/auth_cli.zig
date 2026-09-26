@@ -118,6 +118,8 @@ pub fn cmdPolicy(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize)
             .check_clause = null,
             .audit_level = 0,
             .created_by = 0,
+            // SONNY-2750: an RLS record, which GPS never loads.
+            .kind = .rls,
         });
         printOut("RLS policy '{s}' created for table '{s}'\n", .{ name, table });
         return;
@@ -126,21 +128,16 @@ pub fn cmdPolicy(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize)
             printPolicyUsage();
             return;
         }
+        // SONNY-2750: RLS records only; GPS policies share the record type.
         var found = false;
         var it = mgr.storage.policyIterator();
-        while (it.next()) |_| {
+        while (it.next()) |record| {
+            if (record.effectiveKind() != .rls) continue;
+            if (!found) printOut("Policies:\n", .{});
             found = true;
-            break;
+            printOut("- {s} on {s}\n", .{ record.getName(), record.getTable() });
         }
-        if (!found) {
-            printOut("No policies configured (RLS list)\n", .{});
-        } else {
-            printOut("Policies:\n", .{});
-            var it2 = mgr.storage.policyIterator();
-            while (it2.next()) |record| {
-                printOut("- {s} on {s}\n", .{ record.getName(), record.getTable() });
-            }
-        }
+        if (!found) printOut("No policies configured (RLS list)\n", .{});
         return;
     } else if (std.mem.eql(u8, subcmd, "show")) {
         if (subcmd_idx + 1 >= argv.len) {
@@ -152,6 +149,8 @@ pub fn cmdPolicy(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize)
         var found = false;
         var it = mgr.storage.policyIterator();
         while (it.next()) |record| {
+            // SONNY-2750: RLS records only.
+            if (record.effectiveKind() != .rls) continue;
             if (std.mem.eql(u8, record.getName(), name)) {
                 const using = record.getUsingClause() orelse "";
                 printOut("Policy: {s}\nTable: {s}\nCondition: {s}\n", .{ record.getName(), record.getTable(), using });
@@ -172,6 +171,8 @@ pub fn cmdPolicy(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize)
         // Find and remove policy by name
         var it = mgr.storage.policy_cache.iterator();
         while (it.next()) |entry| {
+            // SONNY-2750: never a GPS policy of the same name.
+            if (entry.value_ptr.effectiveKind() != .rls) continue;
             if (std.mem.eql(u8, entry.value_ptr.getName(), name)) {
                 mgr.storage.removePolicy(entry.key_ptr.*) catch {};
                 break;
