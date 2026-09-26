@@ -8703,6 +8703,22 @@ pub fn build(b: *std.Build) void {
     const sonny2802_step = b.step("test-sonny2802-profile-regime", "Run SONNY-2802/SONNY-2752 regression (an EXPLAIN or PROFILE sent with other statements is refused, 0A000, rather than run in part under the whole program's lock; a PROFILE'd change is recorded in the transaction; gRPC in process and QUIC against a spawned server)");
     sonny2802_step.dependOn(&run_sonny2802_tests.step);
 
+    // SONNY-2803: graph, index and constraint DDL need decide(schema) and
+    // bind_graph on the graph they change, checked before existence. The
+    // real gRPC handler in process (SONNY-1560 shim), authorization on.
+    const sonny2803_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny2803_graph_ddl_gate.zig"), .target = target, .optimize = optimize });
+    sonny2803_test_mod.link_libc = true;
+    sonny2803_test_mod.addImport("geode", root_mod);
+    sonny2803_test_mod.addImport("schema", schema_mod);
+    sonny2803_test_mod.addImport("protobuf", protobuf_mod);
+    sonny2803_test_mod.addImport("grpc_impl", sonny1560_shim_mod);
+    sonny2803_test_mod.addImport("logging", logging_mod);
+    const sonny2803_tests = b.addTest(.{ .root_module = sonny2803_test_mod });
+    const run_sonny2803_tests = b.addRunArtifact(sonny2803_tests);
+    shardDep(test_step, &run_sonny2803_tests.step, 1, test_shard_loads, test_shard_index);
+    const sonny2803_step = b.step("test-sonny2803-graph-ddl-gate", "Run SONNY-2803 regression (CREATE/DROP GRAPH and index and constraint DDL need decide(schema) and bind_graph on the target graph, checked before existence: a ReadWrite user refused a graph cannot drop it)");
+    sonny2803_step.dependOn(&run_sonny2803_tests.step);
+
     // SONNY-2790: the fulltext statements (CREATE/DROP INDEX, geode.fts.*)
     // run on the default graph, so the handlers lock `default` for them from
     // any session. Classifier, and the real gRPC handler (SONNY-1560 shim).

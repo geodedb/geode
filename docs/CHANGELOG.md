@@ -126,6 +126,24 @@
   A request that changes a graph that does not exist is refused with 3F000,
   and the graph is not created. The CLI's `-g` flag, which sends a
   `USE GRAPH` of the current graph before the query, works as before.
+- **Graph DDL needs the schema permission on its graph (SONNY-2803):** the
+  only gate for CREATE GRAPH, DROP GRAPH and index and constraint DDL was the
+  database-level write permission. So a ReadWrite user refused
+  `USE GRAPH g1` (strict tenancy) could `DROP GRAPH g1`, and ReadWrite, which
+  has no Schema permission, could create and drop any graph, index or
+  constraint.
+  - Each of these statements now needs `decide(schema)` and bind_graph on
+    the graph it changes:
+    - CREATE GRAPH and DROP GRAPH: the named graph;
+    - CREATE INDEX and CREATE or DROP CONSTRAINT: the session's graph;
+    - a fulltext CREATE INDEX, and every DROP INDEX: the default graph, the
+      graph they lock (SONNY-2790).
+  - The permission is checked before existence, so a caller refused gets
+    42501 whether or not the graph or index exists.
+  - Schema is Admin's builtin permission. A GPS policy `FOR SCHEMA` on a
+    graph (or on `*`) grants it there.
+  - ReadWrite users can no longer run these statements without such a
+    policy.
 - **EXPLAIN and PROFILE run alone (SONNY-2802, SONNY-2752):** both
   handlers take a request's lock, write gate and transaction bookkeeping from
   the whole program. But they only plan an EXPLAIN'd statement and only run

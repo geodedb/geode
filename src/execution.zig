@@ -1688,6 +1688,11 @@ fn executeStatementWithContextInner(allocator: std.mem.Allocator, stmt: ast.Stat
             // an ungated CREATE INDEX exists on ONE node and silently diverges.
             // CANARY: REQ=REQ-DIST-CLUSTER-FAILCLOSED-UNREPLICATED; FEATURE="DistributedCluster"; ASPECT=GateIndexDDL; STATUS=TESTED; TEST=tests/test_cluster_replicable_mutations.zig; OWNER=distributed; UPDATED=2026-06-10
             try cluster_mod.gateUnreplicatedWrite();
+            // CANARY: REQ=REQ-SONNY-2803-GRAPH-DDL-GATE; FEATURE="GraphRBACEnforcement"; ASPECT=IndexDDL; STATUS=TESTED; TEST=tests/test_sonny2803_graph_ddl_gate.zig; OWNER=security; UPDATED=2026-09-26
+            // SONNY-2803: schema on the graph the index DDL runs on (the
+            // session's; a fulltext index lives in the default graph,
+            // SONNY-2790), before the IF NOT EXISTS lookup.
+            try session_graph.authorizeSchemaChange(context, if (ci.index_type == .fulltext) graph_store.DEFAULT_GRAPH_NAME else session_graph.current(context));
             const cat = context.catalog;
             const index_name = ci.name orelse blk: {
                 var parts = try std.ArrayList(u8).initCapacity(allocator, 64);
@@ -1866,6 +1871,9 @@ fn executeStatementWithContextInner(allocator: std.mem.Allocator, stmt: ast.Stat
             // node only and silently diverges.
             // CANARY: REQ=REQ-DIST-CLUSTER-FAILCLOSED-UNREPLICATED; FEATURE="DistributedCluster"; ASPECT=GateConstraintDDL; STATUS=TESTED; TEST=tests/test_cluster_replicable_mutations.zig; OWNER=distributed; UPDATED=2026-06-10
             try cluster_mod.gateUnreplicatedWrite();
+            // SONNY-2803: schema on the session's graph, before the IF NOT
+            // EXISTS lookup.
+            try session_graph.authorizeSchemaChange(context, session_graph.current(context));
             // CANARY: REQ=REQ-CONSTRAINT-EXEC-001; FEATURE="ConstraintExecution"; ASPECT=CREATE; STATUS=EXEMPT; OWNER=engine; UPDATED=2026-01-09
             // CREATE CONSTRAINT implementation - store in catalog and enforce
 
@@ -1933,6 +1941,10 @@ fn executeStatementWithContextInner(allocator: std.mem.Allocator, stmt: ast.Stat
         .DropIndex => |di| {
             // Cluster fail-closed: see .CreateIndex (GateIndexDDL).
             try cluster_mod.gateUnreplicatedWrite();
+            // SONNY-2803: schema on the default graph, the graph DROP INDEX
+            // runs on (SONNY-2790: the index may be a fulltext one), before
+            // the index is looked up.
+            try session_graph.authorizeSchemaChange(context, graph_store.DEFAULT_GRAPH_NAME);
             const cat = context.catalog;
             const index_name = di.name;
 
@@ -2006,6 +2018,8 @@ fn executeStatementWithContextInner(allocator: std.mem.Allocator, stmt: ast.Stat
             // (Currently a stub no-op, but the surface claims to mutate — keep
             // the fail-closed contract so a future real implementation stays gated.)
             try cluster_mod.gateUnreplicatedWrite();
+            // SONNY-2803: as CREATE CONSTRAINT.
+            try session_graph.authorizeSchemaChange(context, session_graph.current(context));
             // DROP CONSTRAINT implementation
             _ = dc;
             return ExecutionResult{
@@ -2072,6 +2086,10 @@ fn executeStatementWithContextInner(allocator: std.mem.Allocator, stmt: ast.Stat
             try cluster_mod.gateUnreplicatedWrite();
             // SONNY-2791: the __geode_* names are the engine's own.
             try session_graph.refuseInternal(cg.name);
+            // CANARY: REQ=REQ-SONNY-2803-GRAPH-DDL-GATE; FEATURE="GraphRBACEnforcement"; ASPECT=GraphDDL; STATUS=TESTED; TEST=tests/test_sonny2803_graph_ddl_gate.zig; OWNER=security; UPDATED=2026-09-26
+            // SONNY-2803: schema and bind_graph on the graph to create, before
+            // whether it exists.
+            try session_graph.authorizeSchemaChange(context, cg.name);
             // CREATE GRAPH implementation with duplicate detection (Catalog instance)
             const graph_name = cg.name;
             const cat = context.catalog;
@@ -2148,6 +2166,10 @@ fn executeStatementWithContextInner(allocator: std.mem.Allocator, stmt: ast.Stat
             try cluster_mod.gateUnreplicatedWrite();
             // SONNY-2791: DROP GRAPH __geode_security removed the security graph.
             try session_graph.refuseInternal(dg.name);
+            // SONNY-2803: schema and bind_graph on the graph to drop, before
+            // whether it exists. A ReadWrite user refused `USE GRAPH g1`
+            // dropped g1.
+            try session_graph.authorizeSchemaChange(context, dg.name);
             // DROP GRAPH implementation with existence check (Catalog instance)
             const graph_name = dg.name;
             const cat = context.catalog;
