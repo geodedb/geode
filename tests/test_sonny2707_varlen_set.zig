@@ -25,7 +25,8 @@
 // no upper bound), a multi-hop pattern ending in a variable-length hop, and a
 // SET that reads what it writes (`SET b.c = coalesce(b.c, 0) + 1`), which
 // must run once per path, so each node's c is the number of paths that reach
-// it, at the end of the pattern and at its start.
+// it, at the end of the pattern and at its start. A write on the relationship
+// list or the path of a multi-hop pattern is refused too (SONNY-3045).
 //
 // Parts (2) and (3) of the ticket (COUNT {} over an unbound relationship, and
 // a variable-length COUNT {} that ignores the pattern's direction) are v0.8.24.
@@ -484,6 +485,12 @@ test "SONNY-2707: a SET or REMOVE on a variable-length relationship or its path 
         "MATCH (a:V {k: 0})-[r*1..2]->(b) SET r.x = 1",
         "MATCH (a:V {k: 0})-[r*1..2]->(b) REMOVE r.x",
         "MATCH p = (a:V {k: 0})-[*1..2]->(b) SET p.x = 1",
+        // SONNY-3045: in a multi-hop pattern too (it was ignored there).
+        "MATCH (a:V {k: 7})-[:R]->(m)-[r:R*1..2]->(b) SET r.x = 1",
+        "MATCH (a:V {k: 7})-[:R]->(m)-[r:R*1..2]->(b) REMOVE r.x RETURN count(*)",
+        "MATCH p = (a:V {k: 7})-[:R]->(m)-[:R*1..2]->(b) SET p.x = 1",
+        // And after a WITH (the write step).
+        "MATCH (a:V {k: 0})-[r*1..2]->(b) WITH r SET r.x = 1",
     };
     for (refused) |stmt| {
         if (s.run(stmt)) |r| {
@@ -495,6 +502,7 @@ test "SONNY-2707: a SET or REMOVE on a variable-length relationship or its path 
     }
     // Nothing was written before the refusal.
     try testing.expectEqual(@as(usize, 0), (try rowsAs(&s, null, "MATCH (n:V) WHERE n.x = 1 RETURN n.k")).len);
+    try testing.expectEqual(@as(usize, 0), (try rowsAs(&s, null, "MATCH ()-[r]->() WHERE r.x = 1 RETURN r.x")).len);
 }
 
 test "SONNY-2707: a program that writes through a variable-length pattern, or behind an aggregate, on two graphs is refused" {

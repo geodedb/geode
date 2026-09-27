@@ -5389,6 +5389,22 @@ fn executeMultiChainRelationshipMatch(allocator: std.mem.Allocator, q: ast.Query
     // SONNY-3041: this executor applies a SET and a REMOVE to each binding;
     // refuse any other write it is handed.
     try refuseUnappliedWrites(q, .{ .set = true, .remove = true });
+    // CANARY: REQ=REQ-SONNY-3045-MULTIHOP-VARLEN-WRITE; FEATURE="VariableLengthPaths"; ASPECT=MultiHopRefusal; STATUS=TESTED; TEST=tests/test_sonny2707_varlen_set.zig; OWNER=engine; UPDATED=2026-09-27
+    // SONNY-3045: a variable-length relationship variable binds the list of
+    // its edges (`rel_list_vars`) and a path variable the path; neither has
+    // properties or labels to write. The SET and REMOVE below looked such a
+    // target up among the node and edge variables only, found nothing and
+    // ignored it. Refuse it before any pattern is walked, as the
+    // single-chain traversal does (SONNY-2707).
+    for (q.match.chains) |chain| {
+        if (chain.name) |path_var| if (writesVariable(q.set_clauses, q.remove_clauses, path_var)) return error.VariableLengthPathWrite;
+        for (chain.hops) |hop| {
+            const quantified = hop.rel.min_len != null or hop.rel.max_len != null;
+            if (!quantified) continue;
+            if (hop.rel.name) |rel_var| if (writesVariable(q.set_clauses, q.remove_clauses, rel_var)) return error.VariableLengthPathWrite;
+        }
+    }
+    if (q.path_variable) |path_var| if (writesVariable(q.set_clauses, q.remove_clauses, path_var)) return error.VariableLengthPathWrite;
     // Per-function reusable RLS row buffer. Shared across every
     // passesRLSFilter call site in this function; nodePropertiesToRLSRowInto
     // (Tasks 1-2 of the H5a fix) clears + refills the buffer per call so

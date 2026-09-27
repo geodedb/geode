@@ -163,7 +163,6 @@ pub const executeKCore = centrality_algorithms.executeKCore;
 pub const executeKShell = centrality_algorithms.executeKShell;
 
 // Re-export CRUD operation functions for backward compatibility (M1 Phase 4 extraction)
-pub const executeCreateForBatch = crud_operations.executeCreateForBatch;
 // SONNY-3045: the audit text of a MERGE refusal's labels and keys.
 pub const joinAuditText = crud_operations.joinAuditText;
 
