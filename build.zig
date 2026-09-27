@@ -11132,6 +11132,22 @@ pub fn build(b: *std.Build) void {
     const sonny2798_step = b.step("test-sonny2798-offline-verify", "Run SONNY-2798 regression (every offline auth command refuses a store whose chain a planted record broke, signs nothing, and seals a verified change)");
     sonny2798_step.dependOn(&run_sonny2798_tests.step);
 
+    // SONNY-3035: offline auth commands verify against the chain root
+    // whenever one exists (zero records too), and write nothing, not even a
+    // .geode_hmac_key, before verification passes. In process and through
+    // the installed CLI.
+    const sonny3035_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny3035_offline_chain_root.zig"), .target = target, .optimize = optimize });
+    sonny3035_test_mod.link_libc = true;
+    sonny3035_test_mod.addImport("geode", root_mod);
+    sonny3035_test_mod.addImport("auth_graph_manager", auth_graph_manager_mod);
+    sonny3035_test_mod.addImport("cli_auth_helpers", cli_auth_helpers_mod);
+    const sonny3035_tests = b.addTest(.{ .root_module = sonny3035_test_mod });
+    const run_sonny3035_tests = b.addRunArtifact(sonny3035_tests);
+    run_sonny3035_tests.step.dependOn(&install_geode_exe.step);
+    shardDep(test_step, &run_sonny3035_tests.step, 1, test_shard_loads, test_shard_index);
+    const sonny3035_step = b.step("test-sonny3035-offline-chain-root", "Run SONNY-3035 regression (a store emptied at rest keeps its chain root and does not verify, so auth init and user changes are refused; verification with no key available writes no .geode_hmac_key)");
+    sonny3035_step.dependOn(&run_sonny3035_tests.step);
+
     // SONNY-2778: the generated admin password file (O_CREAT|O_EXCL|
     // O_NOFOLLOW, 0600, never in the cwd, never over a planted file or link),
     // and UserManager's policy strings (spawns the installed CLI and server).

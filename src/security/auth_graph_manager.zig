@@ -397,6 +397,20 @@ pub const AuthGraphManager = struct {
     /// 4. Auto-generate random 256-bit key -> write to `.geode_hmac_key` (0o600)
     /// 5. error.NoHmacKeyAvailable (only if no data_dir provided)
     pub fn resolveHmacKey(allocator: Allocator, data_dir: ?[]const u8) !HmacKeyResult {
+        return resolveHmacKeyEx(allocator, data_dir, true);
+    }
+
+    // CANARY: REQ=REQ-SONNY-3035-OFFLINE-CHAIN-ROOT; FEATURE="OfflineAuthStoreSafety"; ASPECT=NoKeyBeforeVerify; STATUS=TESTED; TEST=tests/test_sonny3035_offline_chain_root.zig; OWNER=security; UPDATED=2026-09-27
+    /// SONNY-3035: `resolveHmacKey` that writes nothing: with no key in the
+    /// environment and no `.geode_hmac_key` file, `NoHmacKeyAvailable`, where
+    /// `resolveHmacKey` generates the file. For verifying an existing chain:
+    /// a key made up now cannot verify it, and generating it wrote key
+    /// material into a store the command then refused to change.
+    pub fn resolveExistingHmacKey(allocator: Allocator, data_dir: ?[]const u8) !HmacKeyResult {
+        return resolveHmacKeyEx(allocator, data_dir, false);
+    }
+
+    fn resolveHmacKeyEx(allocator: Allocator, data_dir: ?[]const u8, create_missing: bool) !HmacKeyResult {
         // 1. Try GEODE_AUTH_HMAC_KEY env var
         if (getEnvVarOwned(allocator, "GEODE_AUTH_HMAC_KEY")) |env_val| {
             defer allocator.free(env_val);
@@ -438,6 +452,7 @@ pub const AuthGraphManager = struct {
                 switch (err) {
                     error.FileNotFound => {
                         // 4. Auto-generate a random 256-bit HMAC key and write to file
+                        if (!create_missing) return error.NoHmacKeyAvailable;
                         return autoGenerateHmacKeyFile(path);
                     },
                     else => {
