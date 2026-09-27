@@ -280,6 +280,9 @@ pub fn mapError(err: anyerror) ErrorInfo {
         // or WHERE after RETURN; refuse it rather than return other rows.
         // CANARY: REQ=REQ-SONNY-2683-RETURN-SHAPES; FEATURE="LegacyReturnProjection"; ASPECT=SqlstateMapping; STATUS=TESTED; TEST=tests/test_sonny2683_return_shapes.zig; OWNER=engine; UPDATED=2026-09-25
         error.UnsupportedGroupedReturn => .{ .code = "0A000", .message = "GROUP BY, HAVING and a WHERE after RETURN are not supported on a RETURN after CREATE, MERGE, DELETE or a procedure CALL" },
+        // SONNY-2694: a statement that deletes returns its RETURN after the
+        // DELETE frees what it deleted.
+        error.DeleteReturnsDeletedElement => .{ .code = "0A000", .message = "A RETURN after DELETE cannot return an element the statement deletes (a node, an edge or a path through one), or a JSONB, XML, URL, DOMAIN, bit string or extended value; return its properties or an aggregate" },
         error.StringDataRightTruncation => .{ .code = "22001", .message = "String data right truncation" },
         error.InvalidKeyProvider => .{ .code = "42704", .message = "Invalid TDE key provider" },
         error.InvalidGuardrailConfiguration => .{ .code = "42704", .message = "Invalid CDC guardrail configuration" },

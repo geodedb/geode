@@ -16,7 +16,10 @@
 //     loop, and the relationship and variable-length aggregate branches
 //     applied neither;
 //   * a DELETE's RETURN returned the number of deleted nodes whatever it
-//     asked for.
+//     asked for, and a DELETE after a SET (a DELETE the parser keeps in the
+//     query) was never applied;
+//   * the CREATE pattern's property values were evaluated without the
+//     matched row, so `MATCH (n) CREATE (:Z {k: n.i})` wrote null.
 //
 // Every write clause (CREATE, MERGE, SET, REMOVE, DELETE) runs behind each
 // RETURN shape a fast path answered: count(*), sum, min, max, DISTINCT and a
@@ -333,6 +336,101 @@ const remove_cases = [_]Case{
 
 test "SONNY-2694: MATCH ... REMOVE behind an aggregating or DISTINCT RETURN removes from every matched row" {
     try runCases("REMOVE", &remove_cases);
+}
+
+// ---------------------------------------------------------------------------
+// CREATE
+
+const z10 = [_]Check{
+    .{ .query = "MATCH (z:Z) RETURN count(*) AS c", .want = &.{"10"} },
+    .{ .query = "MATCH (:G)-[:T]->(:Z) RETURN count(*) AS c", .want = &.{"10"} },
+};
+
+const create_cases = [_]Case{
+    .{ .write = "MATCH (n:G) CREATE (n)-[:T]->(:Z) RETURN count(*) AS c", .want = &.{"10"}, .checks = &z10 },
+    .{ .write = "MATCH (n:G) CREATE (n)-[:T]->(:Z) RETURN sum(n.i) AS s", .want = &.{"45"}, .checks = &z10 },
+    .{ .write = "MATCH (n:G) CREATE (n)-[:T]->(:Z) RETURN min(n.i) AS lo", .want = &.{"0"}, .checks = &z10 },
+    .{ .write = "MATCH (n:G) CREATE (n)-[:T]->(:Z) RETURN max(n.i) AS hi", .want = &.{"9"}, .checks = &z10 },
+    .{ .write = "MATCH (n:G) CREATE (n)-[:T]->(:Z) RETURN DISTINCT n.g", .want = &.{ "a", "b" }, .checks = &z10 },
+    .{ .write = "MATCH (n:G) WHERE n.i >= 7 CREATE (n)-[:T]->(:Z) RETURN count(*) AS c", .want = &.{"3"}, .checks = &.{
+        .{ .query = "MATCH (z:Z) RETURN count(*) AS c", .want = &.{"3"} },
+        .{ .query = "MATCH (n:G)-[:T]->(:Z) RETURN n.i", .want = &.{ "7", "8", "9" } },
+    } },
+    // An aggregate over the created variable: one created node per row.
+    .{ .write = "MATCH (n:G) CREATE (z:Z {k: n.i}) RETURN count(z) AS c, sum(z.k) AS s", .want = &.{"10|45"}, .checks = &.{
+        .{ .query = "MATCH (z:Z) RETURN count(*) AS c, sum(z.k) AS s", .want = &.{"10|45"} },
+    } },
+    // Through a relationship pattern.
+    .{ .write = "MATCH (n:G)-[:R]->(x:X) CREATE (x)-[:T]->(:Z) RETURN count(*) AS c", .want = &.{"10"}, .checks = &.{
+        .{ .query = "MATCH (:X)-[:T]->(:Z) RETURN count(*) AS c", .want = &.{"10"} },
+    } },
+    .{ .write = "MATCH (n:G)-[:R]->(x:X) CREATE (x)-[:T]->(:Z) RETURN DISTINCT n.g", .want = &.{ "a", "b" }, .checks = &.{
+        .{ .query = "MATCH (:X)-[:T]->(:Z) RETURN count(*) AS c", .want = &.{"10"} },
+    } },
+};
+
+test "SONNY-2694: MATCH ... CREATE behind an aggregating or DISTINCT RETURN creates for every matched row and aggregates over them" {
+    try runCases("CREATE", &create_cases);
+}
+
+// ---------------------------------------------------------------------------
+// MERGE: once per matched row. A second run binds what the first created.
+
+const m_ab = [_]Check{.{ .query = "MATCH (m:M) RETURN m.g", .want = &.{ "a", "b" } }};
+
+const merge_cases = [_]Case{
+    .{ .write = "MATCH (n:G) MERGE (m:M {g: n.g}) RETURN count(*) AS c", .want = &.{"10"}, .checks = &m_ab, .twice = true },
+    .{ .write = "MATCH (n:G) MERGE (m:M {g: n.g}) RETURN sum(n.i) AS s", .want = &.{"45"}, .checks = &m_ab, .twice = true },
+    .{ .write = "MATCH (n:G) MERGE (m:M {g: n.g}) RETURN min(n.i) AS lo", .want = &.{"0"}, .checks = &m_ab },
+    .{ .write = "MATCH (n:G) MERGE (m:M {g: n.g}) RETURN max(n.i) AS hi", .want = &.{"9"}, .checks = &m_ab },
+    .{ .write = "MATCH (n:G) MERGE (m:M {g: n.g}) RETURN DISTINCT n.g", .want = &.{ "a", "b" }, .checks = &m_ab, .twice = true },
+    .{ .write = "MATCH (n:G) WHERE n.i >= 7 MERGE (m:M {g: n.g}) RETURN count(*) AS c", .want = &.{"3"}, .checks = &.{
+        .{ .query = "MATCH (m:M) RETURN m.g", .want = &.{"b"} },
+    } },
+    // An aggregate over the merged variable.
+    .{ .write = "MATCH (n:G) MERGE (m:M {g: n.g}) RETURN count(m) AS c, count(DISTINCT m.g) AS d", .want = &.{"10|2"}, .checks = &m_ab, .twice = true },
+    .{ .write = "MATCH (n:G) MERGE (m:M {g: n.g}) RETURN DISTINCT m.g", .want = &.{ "a", "b" }, .checks = &m_ab },
+    // A relationship MERGE, once per matched row.
+    .{ .write = "MATCH (n:G) WHERE n.i >= 7 MERGE (n)-[:T]->(:Z) RETURN count(*) AS c", .want = &.{"3"}, .checks = &.{
+        .{ .query = "MATCH (n:G)-[:T]->(:Z) RETURN n.i", .want = &.{ "7", "8", "9" } },
+    } },
+    // Through a relationship pattern.
+    .{ .write = "MATCH (n:G)-[:R]->(x:X) MERGE (m:M {g: n.g}) RETURN count(*) AS c", .want = &.{"10"}, .checks = &m_ab },
+};
+
+test "SONNY-2694: MATCH ... MERGE behind an aggregating or DISTINCT RETURN merges once per matched row and aggregates over them" {
+    try runCases("MERGE", &merge_cases);
+}
+
+// ---------------------------------------------------------------------------
+// DELETE: the RETURN is computed over the rows the statement matched.
+
+const q0 = [_]Check{.{ .query = "MATCH (q:Q) RETURN count(*) AS c", .want = &.{"0"} }};
+
+const delete_cases = [_]Case{
+    .{ .write = "MATCH (q:Q) DELETE q RETURN count(*) AS c", .want = &.{"4"}, .checks = &q0 },
+    .{ .write = "MATCH (q:Q) DELETE q RETURN sum(q.i) AS s", .want = &.{"6"}, .checks = &q0 },
+    .{ .write = "MATCH (q:Q) DELETE q RETURN min(q.i) AS lo", .want = &.{"0"}, .checks = &q0 },
+    .{ .write = "MATCH (q:Q) DELETE q RETURN max(q.i) AS hi", .want = &.{"3"}, .checks = &q0 },
+    .{ .write = "MATCH (n:G) DETACH DELETE n RETURN DISTINCT n.g", .want = &.{ "a", "b" }, .checks = &.{
+        .{ .query = "MATCH (n:G) RETURN count(*) AS c", .want = &.{"0"} },
+        .{ .query = "MATCH (x:X) RETURN count(*) AS c", .want = &.{"10"} },
+        .{ .query = "MATCH ()-[r:R]->() RETURN count(*) AS c", .want = &.{"0"} },
+    } },
+    .{ .write = "MATCH (q:Q) WHERE q.i >= 2 DELETE q RETURN count(*) AS c", .want = &.{"2"}, .checks = &.{
+        .{ .query = "MATCH (q:Q) RETURN q.i", .want = &.{ "0", "1" } },
+    } },
+    // A relationship.
+    .{ .write = "MATCH (n:G)-[r:R]->(x:X) DELETE r RETURN count(*) AS c", .want = &.{"10"}, .checks = &.{
+        .{ .query = "MATCH (:G)-[r:R]->(:X) RETURN count(*) AS c", .want = &.{"0"} },
+        .{ .query = "MATCH (n:G) RETURN count(*) AS c", .want = &.{"10"} },
+    } },
+    // A DELETE after a SET is a query, not a DELETE statement.
+    .{ .write = "MATCH (q:Q) SET q.x = 1 DELETE q RETURN count(*) AS c", .want = &.{"4"}, .checks = &q0 },
+};
+
+test "SONNY-2694: MATCH ... DELETE behind an aggregating or DISTINCT RETURN deletes every matched row and returns the aggregate over them" {
+    try runCases("DELETE", &delete_cases);
 }
 
 // ---------------------------------------------------------------------------

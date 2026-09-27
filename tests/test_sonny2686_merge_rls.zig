@@ -76,6 +76,10 @@ const refused_statements = [_][]const u8{
     "MERGE (a:{L} {s: 'leak'})-[:R]->(b:Doc {s: 'pub'})",
     "MERGE (a:Doc {s: 'pub'})-[r:R]->(b:{L} {s: 'leak'}) ON CREATE SET r.w = 1",
     "MATCH (a:Doc {s: 'pub'}) MERGE (a)-[:R]->(b:{L} {s: 'leak'})",
+    // SONNY-2694: a MATCH ... MERGE behind an aggregating RETURN merges once
+    // per matched row, over the row's bindings; each MERGE still refuses.
+    "MATCH (a:Doc {s: 'pub'}) MERGE (x:{L} {s: 'leak'}) RETURN count(*)",
+    "MATCH (a:Doc {s: 'pub'}) MERGE (a)-[:R]->(b:{L} {s: 'leak'}) RETURN count(*)",
     // A refusal is atomic: the endpoint (or chain) that comes first and would
     // be created is not left behind.
     "MERGE (a:Doc {s: 'fresh'})-[:R]->(b:{L} {s: 'leak'})",

@@ -1934,15 +1934,51 @@ pub fn executeLegacyQueryWithResolvedParams(
         const merge_graph = if (context.session_state) |session| session.graph else null;
         const crud = @import("crud_operations.zig");
 
-        // If MATCH is present, execute MATCH first and pass bindings to MERGE context
+        // CANARY: REQ=REQ-SONNY-2694-MATCH-MERGE; FEATURE="WriteBehindAggregate"; ASPECT=MergeOncePerMatchedRow; STATUS=TESTED; TEST=tests/test_sonny2694_write_behind_aggregate.zig; OWNER=engine; UPDATED=2026-09-27
+        // MATCH ... MERGE: the MERGE runs once per matched row, with that
+        // row's bindings as parameters. SONNY-2694: the bindings are the
+        // pattern's own (`readPatternBindings`); they were the RETURN's
+        // projection, so behind an aggregating RETURN (one row, no variables)
+        // the MERGE ran once with nothing bound: `MATCH (n:G) MERGE (m:M {g:
+        // n.g}) RETURN count(*)` merged one (:M {g: null}) and returned 1. A
+        // RETURN that aggregates or is DISTINCT is computed by the shared
+        // projection over the matched rows, each extended with the nodes its
+        // MERGE bound; any other RETURN is the last MERGE's, as before.
         if (q.match.chains.len > 0) {
-            const match_result = try executeMatchQueryWithParams(allocator, q, param_names.items, param_values.items, q.inline_let_bindings, merge_graph);
-            defer {
-                for (match_result.columns) |col| allocator.free(col);
-                allocator.free(match_result.columns);
-                for (match_result.rows) |row| allocator.free(row);
-                allocator.free(match_result.rows);
+            // SONNY-2683: refuse a grouped or filtered RETURN before anything
+            // is written.
+            try match_operations.validateGroupedReturnShape(q);
+            const project_rows = match_operations.returnProjectsMatchedRows(q);
+
+            var bindings = try match_operations.readPatternBindings(allocator, q, param_names.items, param_values.items, q.inline_let_bindings, merge_graph);
+            defer bindings.deinit(allocator);
+            const match_result = &bindings.rows;
+            // A MERGE that creates moves the store's map entries the rows
+            // point to.
+            try match_operations.stabilizeBindings(allocator, match_result);
+
+            // The node variables the MERGE binds that the MATCH does not, and
+            // `created`, as its own RETURN names them (`executeMerge`).
+            var merged_names = std.ArrayList([]const u8).empty;
+            defer merged_names.deinit(allocator);
+            if (project_rows) {
+                const add = struct {
+                    fn name(alloc: std.mem.Allocator, list: *std.ArrayList([]const u8), bound: []const []const u8, n: []const u8) !void {
+                        for (bound) |col| if (std.mem.eql(u8, col, n)) return;
+                        for (list.items) |seen| if (std.mem.eql(u8, seen, n)) return;
+                        try list.append(alloc, n);
+                    }
+                };
+                for (merge_stmt.pattern.chains) |chain| {
+                    if (chain.head) |head| if (head.name) |n| try add.name(allocator, &merged_names, match_result.columns, n);
+                }
+                try add.name(allocator, &merged_names, match_result.columns, "created");
             }
+            const merged_items = try allocator.alloc(ast.ReturnItem, merged_names.items.len);
+            defer allocator.free(merged_items);
+            for (merged_names.items, merged_items) |name, *item| item.* = .{ .expr = .{ .Ident = .{ .orig = name, .cnf = name } }, .alias = null };
+            var row_merge = merge_stmt.*;
+            if (project_rows) row_merge.return_clause = if (merged_items.len != 0) .{ .items = merged_items, .distinct = false } else null;
 
             // Build enriched context with MATCH bindings as params
             var merge_param_names = try std.ArrayList([]const u8).initCapacity(allocator, param_names.items.len + match_result.columns.len);
@@ -1953,8 +1989,15 @@ pub fn executeLegacyQueryWithResolvedParams(
             for (param_names.items) |pn| try merge_param_names.append(allocator, pn);
             for (param_values.items) |pv| try merge_param_values.append(allocator, pv);
 
+            var out_rows = std.ArrayList([]Value).empty;
+            defer {
+                for (out_rows.items) |row| allocator.free(row);
+                out_rows.deinit(allocator);
+            }
+
             // Execute MERGE for each MATCH row
             var last_result: ?ExecutionResult = null;
+            errdefer if (last_result) |*r| r.deinit(allocator);
             for (match_result.rows) |row| {
                 // Reset bindings to base params
                 merge_param_names.shrinkRetainingCapacity(param_names.items.len);
@@ -1971,7 +2014,38 @@ pub fn executeLegacyQueryWithResolvedParams(
                 var merge_ctx = context;
                 merge_ctx.query_param_names = merge_param_names.items;
                 merge_ctx.query_param_values = merge_param_values.items;
-                last_result = try crud.executeMerge(allocator, merge_stmt.*, merge_graph, merge_ctx);
+                var merged = try crud.executeMerge(allocator, row_merge, merge_graph, merge_ctx);
+                if (!project_rows) {
+                    if (last_result) |*prev| prev.deinit(allocator);
+                    last_result = merged;
+                    continue;
+                }
+                defer merged.deinit(allocator);
+                const out_row = try allocator.alloc(Value, row.len + merged_names.items.len);
+                errdefer allocator.free(out_row);
+                @memcpy(out_row[0..row.len], row);
+                for (out_row[row.len..], 0..) |*cell, i| {
+                    cell.* = if (merged.rows.len != 0 and i < merged.rows[0].len) merged.rows[0][i] else .Null;
+                    // Before the next row's MERGE moves the map entry.
+                    try match_operations.stabilizeValue(allocator, match_result, cell);
+                }
+                try out_rows.append(allocator, out_row);
+            }
+
+            if (project_rows) {
+                const columns = try allocator.alloc([]const u8, match_result.columns.len + merged_names.items.len);
+                defer allocator.free(columns);
+                @memcpy(columns[0..match_result.columns.len], match_result.columns);
+                @memcpy(columns[match_result.columns.len..], merged_names.items);
+                var rows_result = ExecutionResult{
+                    .columns = columns,
+                    .rows = out_rows.items,
+                    .flags = std.ArrayList([]const u8).empty,
+                    .owned_graph_entities = match_result.owned_graph_entities,
+                };
+                match_result.owned_graph_entities = null;
+                defer if (rows_result.owned_graph_entities) |entities| entities.deinit();
+                return match_operations.projectReturnOverRows(allocator, q, &rows_result, param_names.items, param_values.items);
             }
             return last_result orelse ExecutionResult{
                 .columns = try allocator.alloc([]const u8, 0),
@@ -1982,6 +2056,15 @@ pub fn executeLegacyQueryWithResolvedParams(
 
         const merge_result = try crud.executeMerge(allocator, merge_stmt.*, merge_graph, context);
         return merge_result;
+    }
+
+    // SONNY-2694: a DELETE after a SET or REMOVE stays in the query (a MATCH
+    // ... DELETE without one is a DELETE statement); the match executor below
+    // would apply the SET and drop the DELETE.
+    if (q.match.chains.len > 0 and q.delete_items.len > 0 and q.call_clause == null) {
+        const crud = @import("crud_operations.zig");
+        const delete_graph = if (context.session_state) |session| session.graph else null;
+        return crud.executeMatchDeleteQuery(allocator, q, param_names.items, param_values.items, delete_graph);
     }
 
     // Check if there's a MATCH + CALL pattern

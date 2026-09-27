@@ -3871,36 +3871,38 @@ fn nodeMatchesProps(
 
 // CANARY: REQ=REQ-MULTI-GRAPH-013; FEATURE="MultiGraphIsolation"; ASPECT=MatchCreate; STATUS=TESTED; TEST=geodetestlab/specs/multi_graph.yml; OWNER=engine; UPDATED=2025-12-22
 // CANARY: REQ=REQ-GAP-0336-UMH-BINDING; FEATURE="MatchCreateBindingFix"; ASPECT=PatternVarResolution; STATUS=TESTED; TEST=geodetestlab/specs/gql_undirected_multi_hop.yml; OWNER=engine; UPDATED=2026-06-11
-// GAP-0336 fix: MATCH ... CREATE ... previously extracted variable→node
-// bindings from `match_result.columns` (i.e. RETURN projections).  When the
-// RETURN list does not include the matched node variables — e.g.
-// `RETURN 'e2' AS edge` — those bindings were empty and the CREATE pattern
-// silently created brand-new anonymous nodes instead of wiring up the
-// matched ones.  Fix: when every MATCH chain is a simple node pattern,
-// build bindings by walking q.match.chains directly and resolving each
-// named pattern node against the store (graph + tenant + label + prop
-// filters, same RLS check as the MATCH path).  Chains with hops keep the
-// legacy projection-based behaviour because those bindings carry through
-// match_result rows via the Node-typed columns the executor already emits.
+// CANARY: REQ=REQ-SONNY-2694-MATCH-CREATE; FEATURE="WriteBehindAggregate"; ASPECT=MatchCreateRows; STATUS=TESTED; TEST=tests/test_sonny2694_write_behind_aggregate.zig; OWNER=engine; UPDATED=2026-09-27
+/// MATCH ... CREATE: the CREATE runs once per matched row, with that row's
+/// bindings.
+///
+/// GAP-0336, SONNY-2694: the bindings are the pattern's own
+/// (`readPatternBindings`: every named variable, the session's tenant scope,
+/// RLS and the WHERE applied, a SET or REMOVE applied as the rows are read).
+/// They used to be the RETURN's projection. When the RETURN did not project
+/// the matched variables (`RETURN 'e2' AS edge`, an aggregate) the CREATE
+/// created new anonymous endpoints, or, through a relationship pattern,
+/// nothing. GAP-0336 re-walked a node-only pattern to recover them, but an
+/// aggregating RETURN still created one row's worth and returned a count of 1:
+/// `MATCH (n:G) CREATE (n)-[:T]->(:Z) RETURN count(*)` returned 1.
+///
+/// A RETURN that aggregates or is DISTINCT (`returnProjectsMatchedRows`) is
+/// computed by the shared projection over the matched rows, each extended with
+/// the variables its CREATE created, and before a DELETE the statement also
+/// carries. Any other RETURN is evaluated once over the created entities, as
+/// before; without a RETURN the statement returns its creation counts.
 pub fn executeMatchCreateQuery(allocator: std.mem.Allocator, q: ast.Query, param_names_arg: []const []const u8, param_values_arg: []const Value, current_graph: ?[]const u8) !ExecutionResult {
-    // First execute MATCH to get bindings - use full MATCH path to handle all cases (multi-node, etc)
-    const match_result = try executeMatchQueryWithParams(allocator, q, param_names_arg, param_values_arg, q.inline_let_bindings, current_graph);
-    defer {
-        // Clean up match_result to prevent memory leak
-        for (match_result.columns) |col| {
-            allocator.free(col);
-        }
-        allocator.free(match_result.columns);
-        for (match_result.rows) |row| {
-            allocator.free(row);
-        }
-        allocator.free(match_result.rows);
-    }
-
+    // SONNY-2683: refuse a grouped or filtered RETURN before anything is written.
+    try validateGroupedReturnShape(q);
     const create_pattern = q.create_pattern.?;
+    const project_rows = returnProjectsMatchedRows(q);
 
-    // If no matches, return empty result
-    if (match_result.rows.len == 0) {
+    var bindings = try readPatternBindings(allocator, q, param_names_arg, param_values_arg, q.inline_let_bindings, current_graph);
+    defer bindings.deinit(allocator);
+    const match_result = &bindings.rows;
+    try stabilizeBindings(allocator, match_result);
+
+    // No match, and nothing computed over the rows: an empty result.
+    if (match_result.rows.len == 0 and !project_rows) {
         return ExecutionResult{
             .columns = &.{},
             .rows = &.{},
@@ -3908,15 +3910,41 @@ pub fn executeMatchCreateQuery(allocator: std.mem.Allocator, q: ast.Query, param
         };
     }
 
-    // GAP-0336: detect whether every MATCH chain is a simple node pattern
-    // (no hops, only a head).  In that case we cannot trust
-    // match_result.columns to carry the matched-node bindings — we re-walk
-    // the chains and resolve each named node against the store ourselves.
-    var all_simple_node_chains = true;
+    // Node-variable names appearing in the MATCH pattern. Lets the CREATE
+    // batch distinguish a MATCH variable that failed to bind (skip the hop --
+    // the GAP-0336 anonymous-node footgun) from a NEW variable introduced by
+    // the CREATE pattern (must be created).
+    var match_var_names = std.ArrayList([]const u8).empty;
+    defer match_var_names.deinit(allocator);
     for (q.match.chains) |chain| {
-        if (chain.hops.len > 0 or chain.head == null) {
-            all_simple_node_chains = false;
-            break;
+        if (chain.head) |head| {
+            if (head.name) |n| try match_var_names.append(allocator, n);
+        }
+        for (chain.hops) |hop| {
+            if (hop.left.name) |n| try match_var_names.append(allocator, n);
+            if (hop.right.name) |n| try match_var_names.append(allocator, n);
+        }
+    }
+
+    // The variables the CREATE pattern introduces, which a projected RETURN
+    // can see beside the matched ones.
+    var created_names = std.ArrayList([]const u8).empty;
+    defer created_names.deinit(allocator);
+    if (project_rows) {
+        for (create_pattern.chains) |chain| {
+            if (chain.head) |head| if (head.name) |n| try appendNameOnce(allocator, &created_names, n);
+            for (chain.hops) |hop| {
+                if (hop.left.name) |n| try appendNameOnce(allocator, &created_names, n);
+                if (hop.rel.name) |n| try appendNameOnce(allocator, &created_names, n);
+                if (hop.right.name) |n| try appendNameOnce(allocator, &created_names, n);
+            }
+        }
+        var i: usize = 0;
+        while (i < created_names.items.len) {
+            const bound = for (match_result.columns) |col| {
+                if (std.mem.eql(u8, col, created_names.items[i])) break true;
+            } else false;
+            if (bound) _ = created_names.orderedRemove(i) else i += 1;
         }
     }
 
@@ -3931,273 +3959,136 @@ pub fn executeMatchCreateQuery(allocator: std.mem.Allocator, q: ast.Query, param
     var total_created_nodes: i64 = 0;
     var total_created_relationships: i64 = 0;
 
-    // Node-variable names appearing in the MATCH pattern. Lets the CREATE
-    // batch distinguish a MATCH variable that failed to bind (skip the hop —
-    // GAP-0336 anonymous-node footgun) from a NEW variable introduced by the
-    // CREATE pattern (must be created).
-    var match_var_names = std.ArrayList([]const u8).empty;
-    defer match_var_names.deinit(allocator);
-    for (q.match.chains) |chain| {
-        if (chain.head) |head| {
-            if (head.name) |n| try match_var_names.append(allocator, n);
-        }
-        for (chain.hops) |hop| {
-            if (hop.left.name) |n| try match_var_names.append(allocator, n);
-            if (hop.right.name) |n| try match_var_names.append(allocator, n);
-        }
+    // The rows a projected RETURN is computed over: each matched row, then
+    // what its CREATE created.
+    var out_rows = std.ArrayList([]Value).empty;
+    defer {
+        for (out_rows.items) |row| allocator.free(row);
+        out_rows.deinit(allocator);
     }
+    const store = graph_store.getGlobalStore(allocator);
 
-    if (all_simple_node_chains) {
-        // GAP-0336: Build per-chain candidate lists by re-scanning the store
-        // for each chain's NodePattern.  Then iterate the Cartesian product
-        // and dispatch a CREATE per combination with proper bindings.
-        var rls_row_local = std.StringHashMap(rls.Value).init(allocator);
-        defer rls_row_local.deinit();
-        const store = graph_store.getGlobalStore(allocator);
-        const filter_graph = current_graph orelse "default";
-        const filter_tenant = try getSessionTenantFilter();
+    for (match_result.rows) |row| {
+        var row_bindings = std.StringHashMap(u64).init(allocator);
+        defer row_bindings.deinit();
+        for (match_result.columns, 0..) |col_name, i| {
+            if (i < row.len and row[i] == .Node) {
+                try row_bindings.put(col_name, row[i].Node.id);
+                try all_created_nodes.put(col_name, row[i].Node.id);
+            }
+        }
 
-        var chain_matches = std.ArrayList(std.ArrayList(u64)).empty;
+        // The CREATE's property values see the row and the parameters.
+        const row_env = Env{
+            .names = match_result.columns,
+            .values = row,
+            .param_names = param_names_arg,
+            .param_values = param_values_arg,
+            .allocator = allocator,
+        };
+        var result = try executeCreateForBatchWithTracking(allocator, create_pattern, row_bindings, match_var_names.items, current_graph, row_env);
         defer {
-            for (chain_matches.items) |*matches| {
-                matches.deinit(allocator);
-            }
-            chain_matches.deinit(allocator);
+            result.created_nodes.deinit();
+            result.created_relationships.deinit();
+        }
+        total_created_nodes += result.created_nodes_count;
+        total_created_relationships += result.created_relationships_count;
+
+        var node_iter = result.created_nodes.iterator();
+        while (node_iter.next()) |entry| {
+            try all_created_nodes.put(entry.key_ptr.*, entry.value_ptr.*);
+        }
+        var rel_iter = result.created_relationships.iterator();
+        while (rel_iter.next()) |entry| {
+            try all_created_relationships.put(entry.key_ptr.*, entry.value_ptr.*);
         }
 
-        // For each chain, resolve the head NodePattern to a list of node ids.
-        var any_chain_empty = false;
-        for (q.match.chains) |chain| {
-            const node_pattern = chain.head.?;
-            var matches = std.ArrayList(u64).empty;
-
-            const prop_env = Env{
-                .names = &.{},
-                .values = &.{},
-                .param_names = param_names_arg,
-                .param_values = param_values_arg,
-                .allocator = allocator,
-            };
-
-            if (node_pattern.labels.len > 0) {
-                var label_node_ids = try store.getNodesByLabels(allocator, filter_graph, node_pattern.labels, storageTenantFilter(filter_tenant));
-                defer label_node_ids.deinit(allocator);
-
-                for (label_node_ids.items) |node_id| {
-                    const node = store.getNodePtrForScan(node_id) orelse continue;
-                    // GAP-0846 follow-up: storageTenantFilter() relaxes to a full-tenant
-                    // scan under an active hierarchy; the per-row hierarchy-aware check
-                    // is the fail-closed compensator so siblings/ancestors cannot leak.
-                    if (!passesTenantFilter(node.*, filter_tenant)) continue;
-                    if (!passesRLSFilter(&rls_row_local, node.*)) continue;
-                    if (!nodeMatchesProps(allocator, node, node_pattern.props, prop_env)) continue;
-                    try matches.append(allocator, node_id);
-                }
-            } else {
-                // Unlabeled pattern: graph-scoped scan.
-                var node_iter = store.iterateNodesInGraph(filter_graph);
-                while (node_iter.next()) |node| {
-                    if (!passesTenantFilter(node.*, filter_tenant)) continue;
-                    if (!passesRLSFilter(&rls_row_local, node.*)) continue;
-                    if (!nodeMatchesProps(allocator, node, node_pattern.props, prop_env)) continue;
-                    try matches.append(allocator, node.id);
-                }
+        if (project_rows) {
+            const out_row = try allocator.alloc(Value, row.len + created_names.items.len);
+            errdefer allocator.free(out_row);
+            @memcpy(out_row[0..row.len], row);
+            // Held as `stabilizeBindings` holds the matched ones: the next
+            // row's CREATE moves the map entries.
+            for (created_names.items, out_row[row.len..]) |name, *cell| {
+                cell.* = if (result.created_nodes.get(name)) |id|
+                    Value{ .Node = store.getNodePtrForScan(id) orelse return error.NodeNotFound }
+                else if (result.created_relationships.get(name)) |rel|
+                    rel
+                else
+                    .Null;
+                if (cell.* == .Edge) try stabilizeValue(allocator, match_result, cell);
             }
-
-            if (matches.items.len == 0) {
-                any_chain_empty = true;
-            }
-            try chain_matches.append(allocator, matches);
-        }
-
-        if (!any_chain_empty) {
-            // Honor WHERE clause and DISTINCT/ORDER semantics from MATCH:
-            // The MATCH executor already produced `match_result.rows.len`
-            // surviving combinations.  Our Cartesian product gives the same
-            // shape (since each chain is independent and we re-applied the
-            // same filters).  Iterate the product and dispatch CREATE.
-            var indices = try allocator.alloc(usize, chain_matches.items.len);
-            defer allocator.free(indices);
-            for (indices) |*idx| idx.* = 0;
-
-            while (true) {
-                // Build bindings for this combination.
-                var bindings = std.StringHashMap(u64).init(allocator);
-                defer bindings.deinit();
-                for (q.match.chains, 0..) |chain, ci| {
-                    const node_pattern = chain.head.?;
-                    if (node_pattern.name) |var_name| {
-                        const node_id = chain_matches.items[ci].items[indices[ci]];
-                        try bindings.put(var_name, node_id);
-                        try all_created_nodes.put(var_name, node_id);
-                    }
-                }
-
-                // GAP-0336: Honor WHERE clause when re-walking chains.
-                // Build env for evaluation.
-                var should_create = true;
-                if (q.where_clause) |where_expr| {
-                    var env_names = try allocator.alloc([]const u8, q.match.chains.len);
-                    defer allocator.free(env_names);
-                    var env_values = try allocator.alloc(Value, q.match.chains.len);
-                    defer allocator.free(env_values);
-
-                    for (q.match.chains, 0..) |chain, ci| {
-                        const node_pattern = chain.head.?;
-                        env_names[ci] = node_pattern.name orelse "";
-                        const node_id = chain_matches.items[ci].items[indices[ci]];
-                        const node_ptr = store.getNodePtrForScan(node_id) orelse continue;
-                        env_values[ci] = Value{ .Node = node_ptr };
-                    }
-
-                    const env = Env{
-                        .names = env_names,
-                        .values = env_values,
-                        .param_names = param_names_arg,
-                        .param_values = param_values_arg,
-                        .allocator = allocator,
-                    };
-                    const where_result = eval.evalExpr(allocator, where_expr, env) catch Value{ .Null = {} };
-                    should_create = switch (where_result) {
-                        .Bool => |b| b,
-                        .Null => false,
-                        .Int => |i| i != 0,
-                        else => false,
-                    };
-                }
-
-                if (should_create) {
-                    var result = try executeCreateForBatchWithTracking(allocator, create_pattern, bindings, match_var_names.items, current_graph);
-                    defer {
-                        result.created_nodes.deinit();
-                        result.created_relationships.deinit();
-                    }
-                    total_created_nodes += result.created_nodes_count;
-                    total_created_relationships += result.created_relationships_count;
-
-                    var node_iter = result.created_nodes.iterator();
-                    while (node_iter.next()) |entry| {
-                        try all_created_nodes.put(entry.key_ptr.*, entry.value_ptr.*);
-                    }
-                    var rel_iter = result.created_relationships.iterator();
-                    while (rel_iter.next()) |entry| {
-                        try all_created_relationships.put(entry.key_ptr.*, entry.value_ptr.*);
-                    }
-                }
-
-                // Advance indices (lexicographic increment).
-                var carry: usize = 1;
-                var i: usize = indices.len;
-                while (i > 0 and carry > 0) {
-                    i -= 1;
-                    indices[i] += carry;
-                    if (indices[i] >= chain_matches.items[i].items.len) {
-                        indices[i] = 0;
-                        carry = 1;
-                    } else {
-                        carry = 0;
-                    }
-                }
-                if (carry > 0) break; // Wrapped around — done.
-            }
-        }
-    } else {
-        // Legacy path: chains contain hops.  Extract node bindings from the
-        // MATCH result columns (works when the RETURN projection includes
-        // Node-typed values for the matched variables).
-        for (match_result.rows) |row| {
-            var bindings = std.StringHashMap(u64).init(allocator);
-            defer bindings.deinit();
-
-            for (match_result.columns, 0..) |col_name, i| {
-                if (i < row.len) {
-                    if (row[i] == .Node) {
-                        try bindings.put(col_name, row[i].Node.id);
-                        try all_created_nodes.put(col_name, row[i].Node.id);
-                    }
-                }
-            }
-
-            var result = try executeCreateForBatchWithTracking(allocator, create_pattern, bindings, match_var_names.items, current_graph);
-            defer {
-                result.created_nodes.deinit();
-                result.created_relationships.deinit();
-            }
-            total_created_nodes += result.created_nodes_count;
-            total_created_relationships += result.created_relationships_count;
-
-            var node_iter = result.created_nodes.iterator();
-            while (node_iter.next()) |entry| {
-                try all_created_nodes.put(entry.key_ptr.*, entry.value_ptr.*);
-            }
-
-            var rel_iter = result.created_relationships.iterator();
-            while (rel_iter.next()) |entry| {
-                try all_created_relationships.put(entry.key_ptr.*, entry.value_ptr.*);
-            }
+            try out_rows.append(allocator, out_row);
         }
     }
 
-    // Handle DELETE items (MATCH ... CREATE ... DELETE p)
+    // SONNY-2694: a RETURN over the rows is computed before a DELETE the
+    // statement carries removes what the rows bind.
+    var projected: ?ExecutionResult = null;
+    errdefer if (projected) |*p| p.deinit(allocator);
+    if (project_rows) {
+        const columns = try allocator.alloc([]const u8, match_result.columns.len + created_names.items.len);
+        defer allocator.free(columns);
+        @memcpy(columns[0..match_result.columns.len], match_result.columns);
+        @memcpy(columns[match_result.columns.len..], created_names.items);
+        var rows_result = ExecutionResult{
+            .columns = columns,
+            .rows = out_rows.items,
+            .flags = std.ArrayList([]const u8).empty,
+            .owned_graph_entities = match_result.owned_graph_entities,
+        };
+        match_result.owned_graph_entities = null;
+        defer if (rows_result.owned_graph_entities) |entities| entities.deinit();
+        projected = try projectReturnOverRows(allocator, q, &rows_result, param_names_arg, param_values_arg);
+        if (q.delete_items.len > 0) {
+            // The DELETE below removes each node with its edges.
+            var deleted = try DeletedElements.fromBindings(allocator, q.delete_items, match_result.*, true);
+            defer deleted.deinit(allocator);
+            try ownReturnBeforeDelete(allocator, &projected.?, deleted);
+        }
+    }
+
+    // Handle DELETE items (MATCH ... CREATE ... DELETE p), over the matched rows.
     if (q.delete_items.len > 0) {
-        const store = graph_store.getWritableGlobalStore(allocator);
+        const writable = graph_store.getWritableGlobalStore(allocator);
         for (q.delete_items) |item| {
-            switch (item) {
-                .Variable => |var_name| {
-                    // Look up the node ID from the match bindings
-                    for (match_result.columns, 0..) |col_name, ci| {
-                        if (std.mem.eql(u8, col_name, var_name)) {
-                            for (match_result.rows) |row| {
-                                if (ci < row.len and row[ci] == .Node) {
-                                    const node_id = row[ci].Node.id;
-                                    // Detach delete: remove edges first, then node
-                                    store.deleteNode(node_id);
-                                }
-                            }
-                            break;
-                        }
+            const var_name = switch (item) {
+                .Variable => |n| n,
+                .Node => |n| n,
+                .Relationship => continue,
+            };
+            for (match_result.columns, 0..) |col_name, ci| {
+                if (!std.mem.eql(u8, col_name, var_name)) continue;
+                for (match_result.rows) |row| {
+                    if (ci < row.len and row[ci] == .Node) {
+                        // Detach delete: remove edges first, then node
+                        writable.deleteNode(row[ci].Node.id);
                     }
-                },
-                .Node => |var_name| {
-                    for (match_result.columns, 0..) |col_name, ci| {
-                        if (std.mem.eql(u8, col_name, var_name)) {
-                            for (match_result.rows) |row| {
-                                if (ci < row.len and row[ci] == .Node) {
-                                    const node_id = row[ci].Node.id;
-                                    store.deleteNode(node_id);
-                                }
-                            }
-                            break;
-                        }
-                    }
-                },
-                .Relationship => {},
+                }
+                break;
             }
         }
     }
 
-    // Handle REMOVE clauses (MATCH ... CREATE ... REMOVE o.prop)
+    // Handle REMOVE clauses (MATCH ... CREATE ... REMOVE o.prop): applied as
+    // the bindings were read; again here for a node the CREATE touched.
     if (q.remove_clauses.len > 0) {
-        const store = graph_store.getWritableGlobalStore(allocator);
+        const writable = graph_store.getWritableGlobalStore(allocator);
         for (q.remove_clauses) |clause| {
             switch (clause) {
                 .Property => |prop| {
                     for (match_result.columns, 0..) |col_name, ci| {
-                        if (std.mem.eql(u8, col_name, prop.object)) {
-                            for (match_result.rows) |row| {
-                                if (ci < row.len and row[ci] == .Node) {
-                                    const node_id = row[ci].Node.id;
-                                    // C3 (review-0023): id-based store call — durable
-                                    // (adapter + WAL + merge/label index maintenance)
-                                    // and hydrates a cold node instead of silently
-                                    // skipping it. The old resident-only fetchRemove
-                                    // was in-memory-only AND leaked the removed
-                                    // key/value allocations.
-                                    store.removeNodeProperty(node_id, prop.property);
-                                }
+                        if (!std.mem.eql(u8, col_name, prop.object)) continue;
+                        for (match_result.rows) |row| {
+                            if (ci < row.len and row[ci] == .Node) {
+                                // C3 (review-0023): id-based store call -- durable
+                                // (adapter + WAL + merge/label index maintenance)
+                                // and hydrates a cold node instead of silently
+                                // skipping it.
+                                writable.removeNodeProperty(row[ci].Node.id, prop.property);
                             }
-                            break;
                         }
+                        break;
                     }
                 },
                 .Labels => {},
@@ -4205,42 +4096,16 @@ pub fn executeMatchCreateQuery(allocator: std.mem.Allocator, q: ast.Query, param
         }
     }
 
-    // Handle RETURN clause
+    if (projected) |p| return p;
+
+    // A RETURN that neither aggregates nor is DISTINCT: evaluated with all
+    // created entities.
     if (q.ret.items.len > 0) {
-        // Check if RETURN uses count() aggregation — handles count(*) and count(variable)
-        if (q.ret.items.len == 1 and q.ret.items[0].expr == .Call) {
-            const call = q.ret.items[0].expr.Call;
-            const is_count = call.callee.* == .Ident and
-                (std.mem.eql(u8, call.callee.Ident.orig, "count") or
-                    std.mem.eql(u8, call.callee.Ident.orig, "COUNT")) and
-                call.args.len == 1;
-            if (is_count) {
-                // GQL semantics: count() in MATCH...CREATE context counts output
-                // rows, not total created elements. Each matched row produces
-                // exactly one output row, so count(var) == number of matched rows.
-                const count_value: i64 = @intCast(match_result.rows.len);
-                var columns = try allocator.alloc([]const u8, 1);
-                columns[0] = try allocator.dupe(u8, q.ret.items[0].alias orelse "count");
-
-                var rows = try allocator.alloc([]Value, 1);
-                var ret_row = try allocator.alloc(Value, 1);
-                ret_row[0] = Value{ .Int = count_value };
-                rows[0] = ret_row;
-
-                return ExecutionResult{
-                    .columns = columns,
-                    .rows = rows,
-                    .flags = std.ArrayList([]const u8).empty,
-                };
-            }
-        }
-
-        // For non-aggregation RETURN, evaluate with all created entities
         return executeReturnClauseWithNodes(allocator, q.ret, all_created_nodes, all_created_relationships);
     }
 
     // Default: return summary row showing how many entities were created.
-    // Nodes and relationships are reported in SEPARATE columns — collapsing
+    // Nodes and relationships are reported in SEPARATE columns -- collapsing
     // them under `nodes_created` mislabeled a pure edge create as a node
     // create (2026-06-04 bug doc, "Secondary anomaly").
     // CANARY: REQ=REQ-GQL-MATCH-CREATE-COUNTERS; FEATURE="MatchCreateCounters"; ASPECT=SummaryColumns; STATUS=TESTED; TEST=tests/test_match_create_counters.zig; OWNER=execution; UPDATED=2026-06-10
@@ -8763,12 +8628,12 @@ fn appendNameOnce(allocator: std.mem.Allocator, names: *std.ArrayList([]const u8
 // CANARY: REQ=REQ-SONNY-2674-LEGACY-RETURN; FEATURE="LegacyReturnProjection"; ASPECT=SharedProjection; STATUS=TESTED; TEST=tests/test_sonny2674_legacy_return.zig; OWNER=engine; UPDATED=2026-09-25
 /// SONNY-2674: a read whose RETURN groups or has a WHERE after RETURN, done as
 /// the planned read does it. The legacy executor itself reads the bindings the
-/// RETURN can see (the pattern's named variables, a path variable and LET
-/// bindings, or a WITH's output columns), with this session's tenant scope,
+/// RETURN can see (`readPatternBindings`), with this session's tenant scope,
 /// RLS policies and WHERE applied as for any other read. The shared projection
 /// then groups, applies the HAVING (a key or an alias resolves as it does on
-/// the planned read) and projects; DISTINCT and ORDER BY follow. The SKIP /
-/// LIMIT window is left to the caller, as for a planned read.
+/// the planned read) and projects; DISTINCT and ORDER BY follow
+/// (`projectReturnOverRows`). The SKIP / LIMIT window is left to the caller, as
+/// for a planned read.
 fn executeReturnOverBindings(
     allocator: std.mem.Allocator,
     q: ast.Query,
@@ -8779,6 +8644,42 @@ fn executeReturnOverBindings(
 ) anyerror!ExecutionResult {
     // (An explicit error set: this and executeMatchQueryImpl call each other.)
     _ = g_return_over_bindings_total.fetchAdd(1, .monotonic);
+    var bindings = try readPatternBindings(allocator, q, param_names, param_values, inline_let_bindings, current_graph);
+    defer bindings.deinit(allocator);
+    return projectReturnOverRows(allocator, q, &bindings.rows, param_names, param_values);
+}
+
+/// The rows `readPatternBindings` read: one per match. `items` is the RETURN
+/// the read projected, which the rows' columns were named from.
+pub const PatternBindings = struct {
+    rows: ExecutionResult,
+    items: []ast.ReturnItem,
+
+    pub fn deinit(self: *PatternBindings, allocator: std.mem.Allocator) void {
+        self.rows.deinit(allocator);
+        allocator.free(self.items);
+    }
+};
+
+// CANARY: REQ=REQ-SONNY-2694-PATTERN-BINDINGS; FEATURE="WriteBehindAggregate"; ASPECT=PatternBindings; STATUS=TESTED; TEST=tests/test_sonny2694_write_behind_aggregate.zig; OWNER=engine; UPDATED=2026-09-27
+/// SONNY-2674, SONNY-2694: the rows a statement's pattern binds, one per
+/// match, each with every variable the RETURN can see (the pattern's named
+/// variables, a path variable and LET bindings, or a WITH's output columns),
+/// read as any read is: the session's tenant scope and RLS policies and the
+/// WHERE apply. The statement's SET and REMOVE are applied to every row as it
+/// is read. Its CREATE, MERGE and DELETE are not: the caller runs them once
+/// per row, over these bindings, and computes the RETURN after
+/// (`projectReturnOverRows`). They used to read their bindings from the
+/// RETURN's own projection, so an aggregating RETURN (one row, no variables)
+/// wrote once, or not at all.
+pub fn readPatternBindings(
+    allocator: std.mem.Allocator,
+    q: ast.Query,
+    param_names: []const []const u8,
+    param_values: []const Value,
+    inline_let_bindings: []ast.LetBinding,
+    current_graph: ?[]const u8,
+) anyerror!PatternBindings {
     var names: std.ArrayList([]const u8) = .empty;
     defer names.deinit(allocator);
     if (q.with_clause) |with_clause| {
@@ -8800,7 +8701,7 @@ fn executeReturnOverBindings(
     // One row per binding: each name as it is, or a constant when the pattern
     // names nothing (a count over it still needs the rows).
     const items = try allocator.alloc(ast.ReturnItem, @max(names.items.len, 1));
-    defer allocator.free(items);
+    errdefer allocator.free(items);
     if (names.items.len == 0) {
         items[0] = .{ .expr = .{ .Int = 1 }, .alias = "__row" };
     } else {
@@ -8815,22 +8716,191 @@ fn executeReturnOverBindings(
     bindings_query.offset = null;
     bindings_query.limit_param = null;
     bindings_query.offset_param = null;
+    // The writes the caller runs over the rows.
+    bindings_query.create_pattern = null;
+    bindings_query.merge_statement = null;
+    bindings_query.delete_items = &.{};
 
-    var bindings = try executeMatchQueryImpl(allocator, bindings_query, param_names, param_values, inline_let_bindings, current_graph);
-    defer bindings.deinit(allocator);
+    const rows = try executeMatchQueryImpl(allocator, bindings_query, param_names, param_values, inline_let_bindings, current_graph);
+    return .{ .rows = rows, .items = items };
+}
 
+// CANARY: REQ=REQ-SONNY-2694-STABLE-BINDINGS; FEATURE="WriteBehindAggregate"; ASPECT=StableBindings; STATUS=TESTED; TEST=tests/test_sonny2694_write_behind_aggregate.zig; OWNER=engine; UPDATED=2026-09-27
+/// SONNY-2694: make the rows `readPatternBindings` read survive the writes a
+/// caller runs over them. A CREATE or MERGE inserts into the store's node and
+/// edge maps, and an insert that grows a shard moves every entry in it
+/// (SONNY-1979), so a row's `*Node` or `*Edge` into the map dangles after the
+/// first write. Each node becomes a detached box (`getNodePtrForScan`, freed
+/// at the graph's next grace boundary) and each edge a copy the rows own
+/// (`stabilizeValue`); lists, maps and paths are walked. Call it before the
+/// first write.
+pub fn stabilizeBindings(allocator: std.mem.Allocator, rows: *ExecutionResult) !void {
+    for (rows.rows) |row| {
+        for (row) |*cell| try stabilizeValue(allocator, rows, cell);
+    }
+}
+
+/// `stabilizeBindings` for one value. The edge copies are tracked in `rows`'s
+/// owned graph entities.
+pub fn stabilizeValue(allocator: std.mem.Allocator, rows: *ExecutionResult, value: *Value) !void {
+    const store = graph_store.getGlobalStore(allocator);
+    switch (value.*) {
+        .Node => |node| value.* = .{ .Node = store.getNodePtrForScan(node.id) orelse return error.NodeNotFound },
+        .Edge => |edge| value.* = .{ .Edge = try boxEdge(allocator, rows, edge) },
+        .List => |items| for (items) |*item| try stabilizeValue(allocator, rows, item),
+        .Map => |map| {
+            var it = map.valueIterator();
+            while (it.next()) |item| try stabilizeValue(allocator, rows, item);
+        },
+        .Path => |path| {
+            // The executors allocate a path's arrays for the row.
+            for (@constCast(path.nodes)) |*node| node.* = store.getNodePtrForScan(node.*.id) orelse return error.NodeNotFound;
+            for (@constCast(path.edges)) |*edge| edge.* = try boxEdge(allocator, rows, edge.*);
+        },
+        else => {},
+    }
+}
+
+/// A copy of `edge` that `rows` owns. Its label and properties stay the edge
+/// cache's, which frees them at the graph's grace boundary.
+fn boxEdge(allocator: std.mem.Allocator, rows: *ExecutionResult, edge: *const graph_store.Edge) !*const graph_store.Edge {
+    const entities = rows.owned_graph_entities orelse blk: {
+        const created = try execution.OwnedGraphEntities.init(allocator);
+        rows.owned_graph_entities = created;
+        break :blk created;
+    };
+    const box = try entities.allocator.create(graph_store.Edge);
+    errdefer entities.allocator.destroy(box);
+    box.* = edge.*;
+    try entities.trackEdge(box);
+    return box;
+}
+
+/// SONNY-2694: whether a RETURN after a CREATE, MERGE or DELETE is computed
+/// over the matched rows: it aggregates, or it is DISTINCT. Such a RETURN is
+/// one row per group, not one per match, so it cannot also be the rows the
+/// write binds.
+pub fn returnProjectsMatchedRows(q: ast.Query) bool {
+    if (q.ret.items.len == 0) return false;
+    return q.ret.distinct or returnItemsHaveAggregation(q.ret.items);
+}
+
+/// SONNY-2674, SONNY-2694: `q`'s RETURN over `rows` (one row per match), by the
+/// shared projection: the GROUP BY and HAVING of the RETURN, the aggregates,
+/// DISTINCT and ORDER BY. The result owns its values, as the planned read's
+/// does (GAP-0535), and takes over any node or edge `rows` owns. The SKIP /
+/// LIMIT window is left to the caller.
+pub fn projectReturnOverRows(
+    allocator: std.mem.Allocator,
+    q: ast.Query,
+    rows: *ExecutionResult,
+    param_names: []const []const u8,
+    param_values: []const Value,
+) anyerror!ExecutionResult {
     const return_group_by = if (q.with_clause == null) q.group_by else null;
-    var projected = try execution.executeWithClauseWithGroupByAndParams(allocator, bindings, .{ .items = q.ret.items }, return_group_by, q.having, param_names, param_values);
+    var projected = try execution.executeWithClauseWithGroupByAndParams(allocator, rows.*, .{ .items = q.ret.items }, return_group_by, q.having, param_names, param_values);
     errdefer projected.deinit(allocator);
-    // The result owns its values, as the planned read's does (GAP-0535), and
-    // keeps alive any node or edge the bindings own.
     try value_utilities.adoptProjectionRowValues(allocator, &projected, q.ret.items);
-    projected.owned_graph_entities = bindings.owned_graph_entities;
-    bindings.owned_graph_entities = null;
+    projected.owned_graph_entities = rows.owned_graph_entities;
+    rows.owned_graph_entities = null;
 
     if (q.ret.distinct) try applyDistinct(allocator, &projected);
     if (q.order_by) |order| try sortRowsEx(allocator, &projected, order, q.ret.items);
     return projected;
+}
+
+/// SONNY-2694: the nodes and edges a statement deletes, for
+/// `ownReturnBeforeDelete`.
+pub const DeletedElements = struct {
+    node_ids: []const u64 = &.{},
+    edge_ids: []const u64 = &.{},
+    /// Every edge of a deleted node is deleted with it.
+    detach: bool,
+    /// Whether `node_ids` and `edge_ids` are this value's (`fromBindings`).
+    owned: bool = false,
+
+    /// The nodes and edges `items` name in `rows`, the rows a statement binds.
+    pub fn fromBindings(allocator: std.mem.Allocator, items: []const ast.DeleteItem, rows: ExecutionResult, detach: bool) !DeletedElements {
+        var nodes: std.ArrayList(u64) = .empty;
+        defer nodes.deinit(allocator);
+        var edges: std.ArrayList(u64) = .empty;
+        defer edges.deinit(allocator);
+        for (items) |item| {
+            const name = switch (item) {
+                .Variable, .Node, .Relationship => |n| n,
+            };
+            for (rows.columns, 0..) |col, ci| {
+                if (!std.mem.eql(u8, col, name)) continue;
+                for (rows.rows) |row| {
+                    if (ci >= row.len) continue;
+                    switch (row[ci]) {
+                        .Node => |node| if (std.mem.indexOfScalar(u64, nodes.items, node.id) == null) try nodes.append(allocator, node.id),
+                        .Edge => |edge| if (std.mem.indexOfScalar(u64, edges.items, edge.id) == null) try edges.append(allocator, edge.id),
+                        else => {},
+                    }
+                }
+                break;
+            }
+        }
+        const node_ids = try nodes.toOwnedSlice(allocator);
+        errdefer allocator.free(node_ids);
+        return .{ .node_ids = node_ids, .edge_ids = try edges.toOwnedSlice(allocator), .detach = detach, .owned = true };
+    }
+
+    pub fn deinit(self: *DeletedElements, allocator: std.mem.Allocator) void {
+        if (!self.owned) return;
+        allocator.free(self.node_ids);
+        allocator.free(self.edge_ids);
+    }
+
+    fn nodeDeleted(self: DeletedElements, id: u64) bool {
+        return std.mem.indexOfScalar(u64, self.node_ids, id) != null;
+    }
+
+    fn edgeDeleted(self: DeletedElements, edge: *const graph_store.Edge) bool {
+        if (std.mem.indexOfScalar(u64, self.edge_ids, edge.id) != null) return true;
+        return self.detach and (self.nodeDeleted(edge.from_id) or self.nodeDeleted(edge.to_id));
+    }
+};
+
+// CANARY: REQ=REQ-SONNY-2694-RETURN-BEFORE-DELETE; FEATURE="WriteBehindAggregate"; ASPECT=ReturnOwnedBeforeDelete; STATUS=TESTED; TEST=tests/test_sonny2694_write_behind_aggregate.zig; OWNER=engine; UPDATED=2026-09-27
+/// SONNY-2694: a statement that deletes computes its RETURN before the DELETE
+/// and returns it after, and a DELETE frees the labels and properties of what
+/// it deletes at once (`GraphStore.deleteNodeNoSave`). The projected rows own
+/// their strings, lists and maps (`adoptProjectionRowValues`); this also
+/// copies the typed strings (TEXT, CHAR, VARCHAR, BYTEA, JSON). It refuses,
+/// before anything is deleted, a row holding an element the statement deletes
+/// (the node, the edge, or a path through one), which would point at freed
+/// memory, and a typed value it cannot copy (JSONB, XML, URL, DOMAIN, a bit
+/// string or an extended value), which may. Return the element's properties,
+/// or an aggregate over it, instead.
+pub fn ownReturnBeforeDelete(allocator: std.mem.Allocator, result: *ExecutionResult, deleted: DeletedElements) !void {
+    for (result.rows) |row| {
+        for (row) |*cell| try ownValueBeforeDelete(allocator, cell, deleted);
+    }
+}
+
+fn ownValueBeforeDelete(allocator: std.mem.Allocator, value: *Value, deleted: DeletedElements) !void {
+    switch (value.*) {
+        .Node => |node| if (deleted.nodeDeleted(node.id)) return error.DeleteReturnsDeletedElement,
+        .Edge => |edge| if (deleted.edgeDeleted(edge)) return error.DeleteReturnsDeletedElement,
+        .Path => |path| {
+            for (path.nodes) |node| if (deleted.nodeDeleted(node.id)) return error.DeleteReturnsDeletedElement;
+            for (path.edges) |edge| if (deleted.edgeDeleted(edge)) return error.DeleteReturnsDeletedElement;
+        },
+        .Text => |s| value.* = .{ .Text = try allocator.dupe(u8, s) },
+        .Bytea => |s| value.* = .{ .Bytea = try allocator.dupe(u8, s) },
+        .Json => |s| value.* = .{ .Json = try allocator.dupe(u8, s) },
+        .Char => |c| value.* = .{ .Char = .{ .data = try allocator.dupe(u8, c.data), .n = c.n } },
+        .Varchar => |c| value.* = .{ .Varchar = .{ .data = try allocator.dupe(u8, c.data), .n = c.n } },
+        .List => |items| for (items) |*item| try ownValueBeforeDelete(allocator, item, deleted),
+        .Map => |map| {
+            var it = map.valueIterator();
+            while (it.next()) |item| try ownValueBeforeDelete(allocator, item, deleted);
+        },
+        .Jsonb, .Xml, .Url, .Domain, .BitString, .VarBit, .ExtValue => return error.DeleteReturnsDeletedElement,
+        else => {},
+    }
 }
 
 // CANARY: REQ=REQ-MULTI-GRAPH-006; FEATURE="MultiGraphIsolation"; ASPECT=MatchFiltering; STATUS=TESTED; TEST=geodetestlab/specs/multi_graph.yml; OWNER=engine; UPDATED=2025-12-22

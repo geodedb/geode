@@ -1006,11 +1006,8 @@ pub fn executeCreateForBatch(allocator: std.mem.Allocator, create_pattern: ast.G
     // Statement-atomicity pre-pass — see `executeCreate`. Same empty env the
     // apply loops below use.
     // CANARY: REQ=REQ-PROPERTY-WRITE-ATOMICITY; FEATURE="PropertyStorage"; ASPECT=CreatePrePass; STATUS=TESTED; TEST=tests/test_property_write_atomicity.zig; OWNER=engine; UPDATED=2026-08-25
-    try write_precheck.checkPatternWritable(
-        allocator,
-        create_pattern,
-        Env{ .allocator = allocator, .names = &.{}, .values = &.{} },
-    );
+    const row_env = Env{ .allocator = allocator, .names = &.{}, .values = &.{} };
+    try write_precheck.checkPatternWritable(allocator, create_pattern, row_env);
 
     // Process CREATE pattern
     for (create_pattern.chains) |chain| {
@@ -1047,10 +1044,8 @@ pub fn executeCreateForBatch(allocator: std.mem.Allocator, create_pattern: ast.G
 
             // Set properties if present
             if (node_pattern.props) |props| {
-                const env = Env{ .allocator = allocator, .names = &.{}, .values = &.{} };
-
                 for (props) |prop| {
-                    const value = try eval.evalExpr(allocator, prop.value.*, env);
+                    const value = try eval.evalExpr(allocator, prop.value.*, row_env);
                     try property_mutation.setNodePropertyFromValue(allocator, store, node_pattern.labels, node_id, prop.key, value);
                 }
             }
@@ -1124,14 +1119,8 @@ pub fn executeCreateForBatch(allocator: std.mem.Allocator, create_pattern: ast.G
 
             // Set relationship properties if present
             if (hop.rel.props) |props| {
-                const env = Env{
-                    .allocator = allocator,
-                    .names = &.{},
-                    .values = &.{},
-                };
-
                 for (props) |prop| {
-                    const value = try eval.evalExpr(allocator, prop.value.*, env);
+                    const value = try eval.evalExpr(allocator, prop.value.*, row_env);
                     try property_mutation.setEdgePropertyFromValue(allocator, store, edge_label, edge_id, prop.key, value);
                 }
             }
@@ -1170,9 +1159,9 @@ fn applyEndpointProps(
     store: *graph_store.GraphStore,
     node_pattern: ast.NodePattern,
     node_id: u64,
+    env: Env,
 ) !void {
     const props = node_pattern.props orelse return;
-    const env = Env{ .allocator = allocator, .names = &.{}, .values = &.{} };
     for (props) |prop| {
         const value = try eval.evalExpr(allocator, prop.value.*, env);
         try property_mutation.setNodePropertyFromValue(allocator, store, node_pattern.labels, node_id, prop.key, value);
@@ -1204,7 +1193,12 @@ fn hopEndpointSkips(
 // conservatively skipped (the GAP-0336 anonymous-node footgun). A name that is
 // NOT a MATCH variable is a NEW variable introduced by the CREATE pattern
 // (e.g. `MATCH (a) CREATE (a)-[:R]->(new:Label)`) and MUST be created.
-pub fn executeCreateForBatchWithTracking(allocator: std.mem.Allocator, create_pattern: ast.GraphPattern, matched_bindings: std.StringHashMap(u64), match_var_names: []const []const u8, current_graph: ?[]const u8) !CreateBatchResult {
+//
+// SONNY-2694: `row_env` is the matched row (its variables and the statement's
+// parameters), which the CREATE pattern's property values are evaluated in.
+// They were evaluated in an empty environment, so `MATCH (n) CREATE (:Z {k:
+// n.i})` and a `$parameter` wrote null.
+pub fn executeCreateForBatchWithTracking(allocator: std.mem.Allocator, create_pattern: ast.GraphPattern, matched_bindings: std.StringHashMap(u64), match_var_names: []const []const u8, current_graph: ?[]const u8, row_env: Env) !CreateBatchResult {
     const store = graph_store.getGlobalStore(allocator);
     const target_graph = current_graph orelse "default";
     var created_relationships_count: i64 = 0;
@@ -1252,11 +1246,7 @@ pub fn executeCreateForBatchWithTracking(allocator: std.mem.Allocator, create_pa
 
     // Statement-atomicity pre-pass — see `executeCreate`.
     // CANARY: REQ=REQ-PROPERTY-WRITE-ATOMICITY; FEATURE="PropertyStorage"; ASPECT=CreatePrePass; STATUS=TESTED; TEST=tests/test_property_write_atomicity.zig; OWNER=engine; UPDATED=2026-08-25
-    try write_precheck.checkPatternWritable(
-        allocator,
-        create_pattern,
-        Env{ .allocator = allocator, .names = &.{}, .values = &.{} },
-    );
+    try write_precheck.checkPatternWritable(allocator, create_pattern, row_env);
 
     // Process CREATE pattern
     for (create_pattern.chains) |chain| {
@@ -1282,10 +1272,8 @@ pub fn executeCreateForBatchWithTracking(allocator: std.mem.Allocator, create_pa
 
             // Set properties if present
             if (node_pattern.props) |props| {
-                const env = Env{ .allocator = allocator, .names = &.{}, .values = &.{} };
-
                 for (props) |prop| {
-                    const value = try eval.evalExpr(allocator, prop.value.*, env);
+                    const value = try eval.evalExpr(allocator, prop.value.*, row_env);
                     try property_mutation.setNodePropertyFromValue(allocator, store, node_pattern.labels, node_id, prop.key, value);
                 }
             }
@@ -1315,14 +1303,14 @@ pub fn executeCreateForBatchWithTracking(allocator: std.mem.Allocator, create_pa
                     try created_nodes.put(var_name, new_id);
                     created_nodes_count += 1;
                     ensureAutoIndexes(allocator, hop.left.labels);
-                    try applyEndpointProps(allocator, store, hop.left, new_id);
+                    try applyEndpointProps(allocator, store, hop.left, new_id, row_env);
                     break :blk new_id;
                 }
             } else blk: {
                 const new_id = try store.createNodeWithGraph(hop.left.labels, target_graph);
                 created_nodes_count += 1;
                 ensureAutoIndexes(allocator, hop.left.labels);
-                try applyEndpointProps(allocator, store, hop.left, new_id);
+                try applyEndpointProps(allocator, store, hop.left, new_id, row_env);
                 break :blk new_id;
             };
 
@@ -1334,14 +1322,14 @@ pub fn executeCreateForBatchWithTracking(allocator: std.mem.Allocator, create_pa
                     try created_nodes.put(var_name, new_id);
                     created_nodes_count += 1;
                     ensureAutoIndexes(allocator, hop.right.labels);
-                    try applyEndpointProps(allocator, store, hop.right, new_id);
+                    try applyEndpointProps(allocator, store, hop.right, new_id, row_env);
                     break :blk new_id;
                 }
             } else blk: {
                 const new_id = try store.createNodeWithGraph(hop.right.labels, target_graph);
                 created_nodes_count += 1;
                 ensureAutoIndexes(allocator, hop.right.labels);
-                try applyEndpointProps(allocator, store, hop.right, new_id);
+                try applyEndpointProps(allocator, store, hop.right, new_id, row_env);
                 break :blk new_id;
             };
 
@@ -1360,14 +1348,8 @@ pub fn executeCreateForBatchWithTracking(allocator: std.mem.Allocator, create_pa
 
             // Set relationship properties if present
             if (hop.rel.props) |props| {
-                const env = Env{
-                    .allocator = allocator,
-                    .names = &.{},
-                    .values = &.{},
-                };
-
                 for (props) |prop| {
-                    const value = try eval.evalExpr(allocator, prop.value.*, env);
+                    const value = try eval.evalExpr(allocator, prop.value.*, row_env);
                     try property_mutation.setEdgePropertyFromValue(allocator, store, edge_label, edge_id, prop.key, value);
                 }
             }
@@ -4692,6 +4674,183 @@ pub fn executeClusterMatchCreateIfNeeded(
     }
 }
 
+/// SONNY-2694: delete one statement's resolved nodes, then its resolved edges,
+/// and return how many were deleted (`executeDelete`, and a DELETE after a SET
+/// or REMOVE, `executeMatchDeleteQuery`). A node that still has an edge refuses
+/// the whole statement, before anything is deleted, unless `detach`, which
+/// deletes its edges with it. Called with the graph's write lock held.
+pub fn deleteElements(allocator: std.mem.Allocator, node_ids: []const u64, edge_ids: []const u64, detach: bool, current_graph: ?[]const u8) !usize {
+    const store = graph_store.getWritableGlobalStore(allocator);
+    // GAP-0511: DELETE stages IDs before mutating, so cloning a QueryReadSession
+    // adds O(total graph size) overhead without improving correctness under the
+    // graph write lock.
+    const read_store: *graph_store.GraphStore = store;
+    var deleted_count: usize = 0;
+
+    if (!detach) {
+        for (node_ids) |node_id| {
+            // ENG-3983: the CHECKED readers — an unreadable adjacency must
+            // NOT be mistaken for "this node has no edges" and let a plain
+            // DELETE through the GQL edge guard.
+            const has_outgoing = (try read_store.getOutgoingEdgeIdsChecked(node_id)).len > 0;
+            const has_incoming = (try read_store.getIncomingEdgeIdsChecked(node_id)).len > 0;
+            if (has_outgoing or has_incoming) {
+                return error.NodeHasEdges;
+            }
+        }
+    }
+
+    // ENG-3983: edge ids removed as incident edges of a DETACH'd node in THIS
+    // statement. The relationship loop below needs them to tell "already
+    // deleted here" (fine) apart from "resolved by the MATCH but its body
+    // cannot be read back" (a silent no-op — fail closed instead).
+    var detached_edge_ids = std.ArrayList(u64).empty;
+    defer detached_edge_ids.deinit(allocator);
+
+    // Delete the resolved nodes
+    for (node_ids) |node_id| {
+        // SONNY-1841: poll cancellation BETWEEN node deletes — an abandoned
+        // DETACH DELETE over a large match set must release the write lock
+        // promptly, not run to the deadline (no-op without a write scope).
+        try write_budget.check();
+        // A4b: drop the node's fulltext postings BEFORE the store delete,
+        // while its labels are still readable (covering-index lookup is
+        // keyed by label). Runs on the executor/connection thread
+        // (executeDelete is never invoked from bulkMergeNode / worker
+        // threads — verified). Cheap-exits when no FTS index covers the
+        // labels. Graph passed explicitly from current_graph.
+        if ((read_store.nodes.getOrHydratePtr(node_id) catch null)) |node_ptr| {
+            fts_index_ops.maintainFulltextOnWrite(allocator, current_graph, node_id, node_ptr.labels, .delete) catch |err| {
+                log.warn("fts maintain (DELETE) failed", &.{
+                    Attr.uint("node_id", node_id),
+                    Attr.string("error", @errorName(err)),
+                });
+            };
+        }
+
+        if (detach) {
+            // P8: Use adjacency indexes instead of full edge scan.
+            // Collect edge IDs first since deleteEdgeNoSave mutates the
+            // adjacency lists whose slices we are reading.
+            var edges_to_delete = std.ArrayList(u64).empty;
+            defer edges_to_delete.deinit(allocator);
+            // ENG-3983: CHECKED reads — an adjacency the engine cannot serve
+            // must abort the DETACH, never be read as "no incident edges"
+            // (which deletes the node and orphans every one of them).
+            for (try read_store.getOutgoingEdgeIdsChecked(node_id)) |eid| {
+                try edges_to_delete.append(allocator, eid);
+            }
+            for (try read_store.getIncomingEdgeIdsChecked(node_id)) |eid| {
+                // Avoid duplicating self-loop edges already collected above
+                var already = false;
+                for (edges_to_delete.items) |existing| {
+                    if (existing == eid) {
+                        already = true;
+                        break;
+                    }
+                }
+                if (!already) {
+                    try edges_to_delete.append(allocator, eid);
+                }
+            }
+            for (edges_to_delete.items) |edge_id| {
+                // SONNY-1841: a high-degree DETACH can spin here for a long
+                // time — poll cancellation between incident-edge deletes.
+                try write_budget.check();
+                // ENG-3983: an incident edge whose body cannot be resolved
+                // cannot be durably deleted (`deleteEdge` needs its endpoint
+                // + edge slots), so proceeding would leave it DANGLING once
+                // the node goes. Refuse the whole DETACH instead.
+                if (store.getEdgePtr(edge_id) == null) return error.IncidentEdgeUnresolvable;
+                store.deleteEdge(edge_id);
+                try detached_edge_ids.append(allocator, edge_id);
+            }
+        }
+        store.deleteNode(node_id);
+        if (store.getNodePtr(node_id) == null) {
+            deleted_count += 1;
+        }
+    }
+
+    // GAP #56: relationship-targeted DELETE. The ids come from the same
+    // resolved match set, so a WHERE over the relationship variable is
+    // honoured here exactly as it is for nodes.
+    for (edge_ids) |edge_id| {
+        // SONNY-1841: poll cancellation between edge deletes too.
+        try write_budget.check();
+        if (store.getEdgePtr(edge_id) == null) {
+            // Already gone (removed as an incident edge of a DETACH'd node
+            // above) — do not double-count it.
+            var already_detached = false;
+            for (detached_edge_ids.items) |done| {
+                if (done == edge_id) {
+                    already_detached = true;
+                    break;
+                }
+            }
+            if (already_detached) continue;
+            // ENG-3983: the MATCH resolved this edge id, so the row is NOT
+            // an honestly-empty match — the body simply cannot be read back,
+            // and `deleteEdge` would be a silent no-op. Fail closed rather
+            // than report success for a delete that did not happen. (An
+            // empty match resolves zero edge ids and never reaches here, so
+            // `MATCH … DELETE r` over no rows stays a successful 00000.)
+            return error.EdgeBodyUnresolvable;
+        }
+        store.deleteEdge(edge_id);
+        if (store.getEdgePtr(edge_id) == null) {
+            deleted_count += 1;
+        }
+    }
+
+    return deleted_count;
+}
+
+// CANARY: REQ=REQ-SONNY-2694-MATCH-SET-DELETE; FEATURE="WriteBehindAggregate"; ASPECT=QueryDelete; STATUS=TESTED; TEST=tests/test_sonny2694_write_behind_aggregate.zig; OWNER=engine; UPDATED=2026-09-27
+/// SONNY-2694: a DELETE the parser keeps in a query, `MATCH ... SET ...
+/// DELETE n [RETURN ...]` (a DELETE after a SET or REMOVE; a MATCH ... DELETE
+/// without one is a DELETE statement, `executeDelete`). The match executor
+/// applied the SET or REMOVE and never the DELETE, so the statement returned
+/// its rows and deleted nothing.
+///
+/// The bindings are read (`readPatternBindings`), which applies the SET and
+/// REMOVE to every matched row; the RETURN is computed over them before the
+/// DELETE, owning its values (`ownReturnBeforeDelete`); then the nodes and
+/// edges the DELETE names in the rows are deleted as a DELETE statement
+/// deletes them (`deleteElements`: a node that still has an edge refuses the
+/// statement). In a cluster the shape is not replicable and fails closed.
+pub fn executeMatchDeleteQuery(
+    allocator: std.mem.Allocator,
+    q: ast.Query,
+    param_names: []const []const u8,
+    param_values: []const Value,
+    current_graph: ?[]const u8,
+) !ExecutionResult {
+    // SONNY-2683: refuse a grouped or filtered RETURN before anything is written.
+    try match_operations.validateGroupedReturnShape(q);
+    switch (try clusterWriteRole()) {
+        .standalone => {},
+        .leader => return error.ClusterWriteNotReplicable,
+    }
+
+    var bindings = try match_operations.readPatternBindings(allocator, q, param_names, param_values, q.inline_let_bindings, current_graph);
+    defer bindings.deinit(allocator);
+    var deleted = try match_operations.DeletedElements.fromBindings(allocator, q.delete_items, bindings.rows, false);
+    defer deleted.deinit(allocator);
+
+    var returned: ?ExecutionResult = null;
+    errdefer if (returned) |*r| r.deinit(allocator);
+    if (q.ret.items.len != 0) {
+        returned = try match_operations.projectReturnOverRows(allocator, q, &bindings.rows, param_names, param_values);
+        try match_operations.ownReturnBeforeDelete(allocator, &returned.?, deleted);
+    }
+
+    _ = try deleteElements(allocator, deleted.node_ids, deleted.edge_ids, false, current_graph);
+
+    if (returned) |r| return r;
+    return emptyExecutionResult(allocator);
+}
+
 // CANARY: REQ=REQ-MULTI-GRAPH-DELETE-001; FEATURE="MultiGraphIsolation"; ASPECT=DeleteGraphFilter; STATUS=TESTED; TEST=geodetestlab/specs/multi_graph.yml; OWNER=engine; UPDATED=2025-12-24
 pub fn executeDelete(allocator: std.mem.Allocator, d: ast.DeleteStatement, current_graph: ?[]const u8, context: ExecutionContext) !ExecutionResult {
     // Cluster write routing: in cluster mode the DELETE is ordered through Raft on
@@ -4718,6 +4877,10 @@ pub fn executeDelete(allocator: std.mem.Allocator, d: ast.DeleteStatement, curre
 
     // Track deleted node count
     var deleted_count: usize = 0;
+    // SONNY-2694: the RETURN of a MATCH ... DELETE, computed over the rows the
+    // statement matches before it deletes them.
+    var returned: ?ExecutionResult = null;
+    errdefer if (returned) |*r| r.deinit(allocator);
 
     // If there's a MATCH clause, delete matching nodes/edges
     if (d.match_clause) |match_pattern| {
@@ -4730,121 +4893,28 @@ pub fn executeDelete(allocator: std.mem.Allocator, d: ast.DeleteStatement, curre
         const targets = try resolveDeleteTargets(allocator, d, match_pattern, context);
         defer targets.deinit(allocator);
 
-        if (!d.detach) {
-            for (targets.node_ids) |node_id| {
-                // ENG-3983: the CHECKED readers — an unreadable adjacency must
-                // NOT be mistaken for "this node has no edges" and let a plain
-                // DELETE through the GQL edge guard.
-                const has_outgoing = (try read_store.getOutgoingEdgeIdsChecked(node_id)).len > 0;
-                const has_incoming = (try read_store.getIncomingEdgeIdsChecked(node_id)).len > 0;
-                if (has_outgoing or has_incoming) {
-                    return error.NodeHasEdges;
-                }
-            }
-        }
+        // CANARY: REQ=REQ-SONNY-2694-DELETE-RETURN; FEATURE="WriteBehindAggregate"; ASPECT=DeleteReturn; STATUS=TESTED; TEST=tests/test_sonny2694_write_behind_aggregate.zig; OWNER=engine; UPDATED=2026-09-27
+        // SONNY-2694: the RETURN is the statement's own, over the rows it
+        // matches (the same read `resolveDeleteTargets` runs), computed before
+        // they are deleted. It returned the number of deleted elements, as
+        // `deleted_count`, whatever it asked for: `MATCH (q:Q) DELETE q RETURN
+        // sum(q.i)` returned the count. The RETURN owns its values, and one
+        // that would hold a deleted element is refused before any delete.
+        if (d.return_clause) |rc| if (rc.items.len != 0) {
+            returned = try execution.executeQueryWithContext(allocator, .{
+                .optional_match = false,
+                .match = match_pattern,
+                .where_clause = d.where_clause,
+                .with_clause = null,
+                .ret = rc,
+                .order_by = null,
+                .limit = null,
+                .offset = null,
+            }, context);
+            try match_operations.ownReturnBeforeDelete(allocator, &returned.?, .{ .node_ids = targets.node_ids, .edge_ids = targets.edge_ids, .detach = d.detach });
+        };
 
-        // ENG-3983: edge ids removed as incident edges of a DETACH'd node in THIS
-        // statement. The relationship loop below needs them to tell "already
-        // deleted here" (fine) apart from "resolved by the MATCH but its body
-        // cannot be read back" (a silent no-op — fail closed instead).
-        var detached_edge_ids = std.ArrayList(u64).empty;
-        defer detached_edge_ids.deinit(allocator);
-
-        // Delete the resolved nodes
-        for (targets.node_ids) |node_id| {
-            // SONNY-1841: poll cancellation BETWEEN node deletes — an abandoned
-            // DETACH DELETE over a large match set must release the write lock
-            // promptly, not run to the deadline (no-op without a write scope).
-            try write_budget.check();
-            // A4b: drop the node's fulltext postings BEFORE the store delete,
-            // while its labels are still readable (covering-index lookup is
-            // keyed by label). Runs on the executor/connection thread
-            // (executeDelete is never invoked from bulkMergeNode / worker
-            // threads — verified). Cheap-exits when no FTS index covers the
-            // labels. Graph passed explicitly from current_graph.
-            if ((read_store.nodes.getOrHydratePtr(node_id) catch null)) |node_ptr| {
-                fts_index_ops.maintainFulltextOnWrite(allocator, current_graph, node_id, node_ptr.labels, .delete) catch |err| {
-                    log.warn("fts maintain (DELETE) failed", &.{
-                        Attr.uint("node_id", node_id),
-                        Attr.string("error", @errorName(err)),
-                    });
-                };
-            }
-
-            if (d.detach) {
-                // P8: Use adjacency indexes instead of full edge scan.
-                // Collect edge IDs first since deleteEdgeNoSave mutates the
-                // adjacency lists whose slices we are reading.
-                var edges_to_delete = std.ArrayList(u64).empty;
-                defer edges_to_delete.deinit(allocator);
-                // ENG-3983: CHECKED reads — an adjacency the engine cannot serve
-                // must abort the DETACH, never be read as "no incident edges"
-                // (which deletes the node and orphans every one of them).
-                for (try read_store.getOutgoingEdgeIdsChecked(node_id)) |eid| {
-                    try edges_to_delete.append(allocator, eid);
-                }
-                for (try read_store.getIncomingEdgeIdsChecked(node_id)) |eid| {
-                    // Avoid duplicating self-loop edges already collected above
-                    var already = false;
-                    for (edges_to_delete.items) |existing| {
-                        if (existing == eid) {
-                            already = true;
-                            break;
-                        }
-                    }
-                    if (!already) {
-                        try edges_to_delete.append(allocator, eid);
-                    }
-                }
-                for (edges_to_delete.items) |edge_id| {
-                    // SONNY-1841: a high-degree DETACH can spin here for a long
-                    // time — poll cancellation between incident-edge deletes.
-                    try write_budget.check();
-                    // ENG-3983: an incident edge whose body cannot be resolved
-                    // cannot be durably deleted (`deleteEdge` needs its endpoint
-                    // + edge slots), so proceeding would leave it DANGLING once
-                    // the node goes. Refuse the whole DETACH instead.
-                    if (store.getEdgePtr(edge_id) == null) return error.IncidentEdgeUnresolvable;
-                    store.deleteEdge(edge_id);
-                    try detached_edge_ids.append(allocator, edge_id);
-                }
-            }
-            store.deleteNode(node_id);
-            if (store.getNodePtr(node_id) == null) {
-                deleted_count += 1;
-            }
-        }
-
-        // GAP #56: relationship-targeted DELETE. The ids come from the same
-        // resolved match set, so a WHERE over the relationship variable is
-        // honoured here exactly as it is for nodes.
-        for (targets.edge_ids) |edge_id| {
-            // SONNY-1841: poll cancellation between edge deletes too.
-            try write_budget.check();
-            if (store.getEdgePtr(edge_id) == null) {
-                // Already gone (removed as an incident edge of a DETACH'd node
-                // above) — do not double-count it.
-                var already_detached = false;
-                for (detached_edge_ids.items) |done| {
-                    if (done == edge_id) {
-                        already_detached = true;
-                        break;
-                    }
-                }
-                if (already_detached) continue;
-                // ENG-3983: the MATCH resolved this edge id, so the row is NOT
-                // an honestly-empty match — the body simply cannot be read back,
-                // and `deleteEdge` would be a silent no-op. Fail closed rather
-                // than report success for a delete that did not happen. (An
-                // empty match resolves zero edge ids and never reaches here, so
-                // `MATCH … DELETE r` over no rows stays a successful 00000.)
-                return error.EdgeBodyUnresolvable;
-            }
-            store.deleteEdge(edge_id);
-            if (store.getEdgePtr(edge_id) == null) {
-                deleted_count += 1;
-            }
-        }
+        deleted_count = try deleteElements(allocator, targets.node_ids, targets.edge_ids, d.detach, current_graph);
 
         // Persistence is handled by the background persistence loop (graph_store.zig)
         // which saves dirty graphs every second. No synchronous save needed here.
@@ -4937,9 +5007,11 @@ pub fn executeDelete(allocator: std.mem.Allocator, d: ast.DeleteStatement, curre
 
     // Note: The global store persists changes automatically
 
-    // Handle RETURN clause if present
+    if (returned) |r| return r;
+
+    // Handle RETURN clause if present (a DELETE without a MATCH: the count of
+    // the elements it deleted)
     if (d.return_clause) |_| {
-        // For now, return the count of deleted nodes
         var columns = try allocator.alloc([]const u8, 1);
         columns[0] = try allocator.dupe(u8, "deleted_count");
 
