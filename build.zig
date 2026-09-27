@@ -9116,6 +9116,24 @@ pub fn build(b: *std.Build) void {
     const sonny3133_step = b.step("test-sonny3133-parser-nesting", "Run SONNY-3133 regression (no nesting of PROFILE/EXPLAIN, a START TRANSACTION body, a parenthesized statement, VALUES, WITH, CALL { }, FOR, NOT, unary minus/plus, shortestPath or an expression overflows a 16 MiB stack: clean parse error; ordinary nesting parses; gRPC X11 bomb gets 42000; run in Debug and ReleaseSafe)");
     sonny3133_step.dependOn(&run_sonny3133_tests.step);
 
+    // SONNY-3134: DROP GRAPH and CREATE OR REPLACE GRAPH of a graph any
+    // session's open transaction changed are refused (55006). gRPC in process
+    // and QUIC against a spawned server.
+    const sonny3134_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny3134_drop_graph_other_txn.zig"), .target = target, .optimize = optimize });
+    sonny3134_test_mod.link_libc = true;
+    sonny3134_test_mod.addImport("geode", root_mod);
+    sonny3134_test_mod.addImport("schema", schema_mod);
+    sonny3134_test_mod.addImport("protobuf", protobuf_mod);
+    sonny3134_test_mod.addImport("grpc_impl", sonny1560_shim_mod);
+    sonny3134_test_mod.addImport("logging", logging_mod);
+    sonny3134_test_mod.addImport("transport/quic", transport_quic_mod);
+    const sonny3134_tests = b.addTest(.{ .root_module = sonny3134_test_mod });
+    const run_sonny3134_tests = b.addRunArtifact(sonny3134_tests);
+    run_sonny3134_tests.step.dependOn(&install_geode_exe.step);
+    shardDep(test_step, &run_sonny3134_tests.step, 1, test_shard_loads, test_shard_index);
+    const sonny3134_step = b.step("test-sonny3134-drop-graph-other-txn", "Run SONNY-3134 regression (DROP GRAPH and CREATE OR REPLACE GRAPH of a graph another session's open transaction changed are refused, 55006; its COMMIT keeps and its ROLLBACK undoes the change; the graph drops once the transaction ends or its client disconnects; gRPC in process and QUIC)");
+    sonny3134_step.dependOn(&run_sonny3134_tests.step);
+
     // SONNY-2790: the fulltext statements (CREATE/DROP INDEX, geode.fts.*)
     // run on the default graph, so the handlers lock `default` for them from
     // any session. Classifier, and the real gRPC handler (SONNY-1560 shim).

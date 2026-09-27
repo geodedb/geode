@@ -203,7 +203,8 @@ pub fn mapError(err: anyerror) ErrorInfo {
         // SONNY-3038: geode.auth.revoke could not save the revoke.
         error.RevokeNotPersisted => .{ .code = "58030", .message = "The revoke could not be saved to the security graph; the privilege may return at the next start. Retry it" },
         // SONNY-3028: DROP GRAPH of the graph the session's transaction changed.
-        error.ObjectInUse => .{ .code = "55006", .message = "Object in use: the graph is in use by this session's transaction; commit or roll back before dropping it" },
+        // SONNY-3134: or another session's open transaction.
+        error.ObjectInUse => .{ .code = "55006", .message = "Object in use: an open transaction (this session's or another's) changed the graph; it can be dropped or replaced once that transaction commits or rolls back" },
         // SONNY-3132: DROP GRAPH default, CREATE OR REPLACE GRAPH default.
         error.CannotDropDefaultGraph => .{ .code = "0A000", .message = "The default graph cannot be dropped or replaced" },
         // ENG-3903: a MERGE relationship endpoint that is neither bound by a

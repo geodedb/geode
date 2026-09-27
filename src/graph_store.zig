@@ -3896,6 +3896,13 @@ pub const GraphStore = struct {
         if (std.mem.eql(u8, graph_name, DEFAULT_GRAPH_NAME)) {
             return error.CannotDropDefaultGraph;
         }
+        // CANARY: REQ=REQ-SONNY-3134-DROP-GRAPH-OTHER-TXN; FEATURE="MultiGraphIsolation"; ASPECT=DropRefusedWhileTxnHolds; STATUS=TESTED; TEST=tests/test_sonny3134_drop_graph_other_txn.zig; OWNER=storage; UPDATED=2026-09-27
+        // SONNY-3134: nor a graph an open session transaction changed, any
+        // session's (`graphHeldByTxn`). Only the calling thread's was refused
+        // (SONNY-3028): another session's COMMIT then reported success for
+        // changes dropped with the graph, and its COMMIT or ROLLBACK created
+        // the graph again through the transaction graph's write lock.
+        if (graphHeldByTxn(graph_name)) return error.ObjectInUse;
         self.graphs_mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
         defer self.graphs_mutex.unlock(std.Io.Threaded.global_single_threaded.io());
 
@@ -14097,6 +14104,61 @@ pub fn acquireGraphWriteLock(graph_name: []const u8) GraphLockHandle {
         .holds_global_store_lock = true,
         .global_lock_is_exclusive = true,
     };
+}
+
+// CANARY: REQ=REQ-SONNY-3134-DROP-GRAPH-OTHER-TXN; FEATURE="MultiGraphIsolation"; ASPECT=TxnGraphHolds; STATUS=TESTED; TEST=tests/test_sonny3134_drop_graph_other_txn.zig; OWNER=storage; UPDATED=2026-09-27
+/// SONNY-3134: the graphs an open session transaction has changed, each with
+/// the number of such transactions. A session's transaction graph
+/// (SONNY-2776) holds its graph from the transaction's first change until the
+/// transaction ends: `ServerState.noteTxnWrite` calls `holdGraphForTxn` and
+/// `ServerState.clearTxnGraph` calls `releaseGraphForTxn`, and every end of a
+/// transaction (COMMIT, ROLLBACK, a failed request's rollback, the session's
+/// teardown) clears it. The first change is recorded while the request still
+/// holds the graph's write lock, and DROP GRAPH takes that lock too, so a
+/// DROP either sees the hold or runs before the change. `GraphStore.dropGraph`
+/// refuses a held graph (`ObjectInUse`, 55006). Keys are owned here.
+const TxnGraphHolds = struct {
+    mutex: std.Io.Mutex = std.Io.Mutex.init,
+    counts: std.StringHashMapUnmanaged(u32) = .{},
+};
+var txn_graph_holds: TxnGraphHolds = .{};
+
+/// SONNY-3134: an open session transaction has changed `graph`.
+pub fn holdGraphForTxn(graph: []const u8) std.mem.Allocator.Error!void {
+    const io = std.Io.Threaded.global_single_threaded.io();
+    txn_graph_holds.mutex.lockUncancelable(io);
+    defer txn_graph_holds.mutex.unlock(io);
+    const gop = try txn_graph_holds.counts.getOrPut(std.heap.smp_allocator, graph);
+    if (!gop.found_existing) {
+        gop.key_ptr.* = std.heap.smp_allocator.dupe(u8, graph) catch |err| {
+            txn_graph_holds.counts.removeByPtr(gop.key_ptr);
+            return err;
+        };
+        gop.value_ptr.* = 0;
+    }
+    gop.value_ptr.* += 1;
+}
+
+/// SONNY-3134: a transaction that held `graph` (`holdGraphForTxn`) ended.
+pub fn releaseGraphForTxn(graph: []const u8) void {
+    const io = std.Io.Threaded.global_single_threaded.io();
+    txn_graph_holds.mutex.lockUncancelable(io);
+    defer txn_graph_holds.mutex.unlock(io);
+    const entry = txn_graph_holds.counts.getEntry(graph) orelse return;
+    entry.value_ptr.* -= 1;
+    if (entry.value_ptr.* == 0) {
+        const key = entry.key_ptr.*;
+        txn_graph_holds.counts.removeByPtr(entry.key_ptr);
+        std.heap.smp_allocator.free(key);
+    }
+}
+
+/// SONNY-3134: has any open session transaction changed `graph`?
+pub fn graphHeldByTxn(graph: []const u8) bool {
+    const io = std.Io.Threaded.global_single_threaded.io();
+    txn_graph_holds.mutex.lockUncancelable(io);
+    defer txn_graph_holds.mutex.unlock(io);
+    return txn_graph_holds.counts.contains(graph);
 }
 
 /// SONNY-2733: how long `GraphStore.backfillEdgeTenantTags` waits for each

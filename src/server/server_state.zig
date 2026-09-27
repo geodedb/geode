@@ -400,9 +400,18 @@ pub const ServerState = struct {
 
     /// SONNY-2776: note that the open transaction changes `graph`; its first
     /// change fixes the transaction's graph.
+    ///
+    /// SONNY-3134: the transaction graph is held (`holdGraphForTxn`) until
+    /// `clearTxnGraph`: DROP GRAPH of it is refused (55006), from any
+    /// session. The handlers call this while the request holds the graph's
+    /// write lock.
     pub fn noteTxnWrite(self: *ServerState, graph: []const u8) std.mem.Allocator.Error!void {
         if (self.txn_graph != null) return;
-        self.txn_graph = try self.allocator.dupe(u8, graph);
+        const graph_store_mod = @import("../graph_store.zig");
+        const owned = try self.allocator.dupe(u8, graph);
+        errdefer self.allocator.free(owned);
+        try graph_store_mod.holdGraphForTxn(owned);
+        self.txn_graph = owned;
     }
 
     /// SONNY-2776: would a change of `graph` make the open transaction change
@@ -420,7 +429,11 @@ pub const ServerState = struct {
     }
 
     pub fn clearTxnGraph(self: *ServerState) void {
-        if (self.txn_graph) |g| self.allocator.free(g);
+        if (self.txn_graph) |g| {
+            // SONNY-3134: the transaction no longer holds its graph.
+            @import("../graph_store.zig").releaseGraphForTxn(g);
+            self.allocator.free(g);
+        }
         self.txn_graph = null;
     }
 
