@@ -669,6 +669,114 @@
   decimal from a peer node whose scale is past 255 (it aborted the node),
   and frees what it converted from a refused nested list or a map that
   repeats a key.
+- **EXPLAIN and PROFILE of transaction control are refused (SONNY-3026):**
+  `PROFILE <statement>` parses for any statement, and the handlers' PROFILE
+  arm ran the inner one with nothing looking inside. PROFILE ROLLBACK undid
+  the transaction under a read lock (or none) and the handler kept the
+  transaction open, so the client's next autocommit change joined a
+  transaction that was rolled back at disconnect; PROFILE START TRANSACTION
+  began a transaction the handler threw away; PROFILE COMMIT committed one
+  the handler still held open. An EXPLAIN or PROFILE of START TRANSACTION,
+  COMMIT, ROLLBACK, a SESSION statement, USE GRAPH or another EXPLAIN or
+  PROFILE is now refused (0A000) on QUIC and gRPC, and the program traits
+  (transaction control, the program's graph, the handlers' transaction
+  bookkeeping) look inside PROFILE and EXPLAIN.
+
+  **Behaviour change:** `PROFILE ROLLBACK`, `EXPLAIN USE GRAPH g` and the
+  like answer 0A000.
+- **A PROFILE'd change commits under its write lock (SONNY-3027):** a
+  PROFILE'd query that writes in a transaction (`PROFILE MATCH (a:X) MERGE
+  (:Y {k: 1})`) opened the session's engine transaction without passing an
+  executor entry point, and only the end-of-request backstop committed it,
+  after the PROFILE arm had released the graph's write lock: an engine
+  transaction open while another thread held the lock (SONNY-2978's
+  overlap). The profiled path is now an executor entry point, both handlers
+  commit the engine transaction before they release a write lock, and the
+  backstop aborts a transaction still open and rolls the session's
+  transaction back instead of committing outside the lock.
+- **DROP GRAPH frees a graph only when no thread holds it (SONNY-3028):**
+  DROP GRAPH counted as a statement on the session's graph, so `DROP GRAPH
+  g` from a session on `default` locked `default` and freed g under the
+  threads that held or waited for g's lock and under engine transactions
+  open on g: a use-after-free any holder of the schema permission could
+  trigger (`START TRANSACTION; CREATE (:X); DROP GRAPH g; CREATE (:Y)`
+  crashed the server). CREATE and DROP GRAPH now run on (and lock) the graph
+  they name, so DROP GRAPH waits for the graph's requests; a graph is freed
+  by the last of its lock's holders, waiters, group-commit batches and
+  checkpoints, and a waiter that gets a dropped graph's lock is told the
+  graph is gone; the session engine transaction's graph is checked and used
+  under one pin.
+
+  **Behaviour change:** DROP GRAPH (or CREATE OR REPLACE GRAPH) of the graph
+  the session's transaction changed is refused with 55006 ("object in
+  use"), and a program that changes data and also creates or drops another
+  graph is refused as spanning graphs (0A000).
+- **Group commit keeps no engine transaction open under the write lock
+  (SONNY-3029):** a group-commit batch (on by default) kept its statement
+  transaction open across ops that each took the graph's lock SHARED only
+  while they ran, so the graph's write lock could be taken in between and
+  the writer's engine transactions overlapped the batch's (a review probe
+  saw open transactions in 15,314 of 864,308 samples), the SONNY-2978
+  overlap that can lose committed writes on crash recovery. A batch now
+  opens its transaction only while no thread holds or waits for the graph's
+  write lock, and a writer takes the lock only once every open batch has
+  committed. The 16 shard workers' batches stay concurrent:
+  `bench-group-commit` (16-way with the coordinator) measured 8,471 / 9,145
+  / 9,201 ops/s before and 9,351 / 9,243 / 8,989 after. Taking the graph's
+  exclusive lock for each batch instead cost about 72%.
+- **Index and constraint DDL need the schema permission on the database
+  (SONNY-3030):** indexes and constraints are catalogued database-wide, but
+  SONNY-2803 checked the schema permission on one graph, so a user with a
+  `FOR SCHEMA` grant on one graph added constraints that bound every graph
+  and dropped indexes an Admin created from another. CREATE and DROP INDEX
+  (fulltext included) and CREATE and DROP CONSTRAINT now also need
+  `decide(schema)` on the whole database.
+
+  **Behaviour change:** these statements need Admin, or a GPS `FOR SCHEMA`
+  policy on `*`; a `FOR SCHEMA` policy on single graphs no longer grants
+  them.
+- **A failed commit of a transaction's engine transaction fails the
+  transaction (SONNY-3031):** it was only logged, so the request and the
+  later COMMIT reported success for changes never committed to storage, and
+  the engine transaction stayed in its shard's list of open transactions for
+  good. The failed engine transaction is now aborted, the request fails
+  (40000), and the transaction is rolled back, so its COMMIT reports the
+  failure. The COMMIT statement, a START TRANSACTION body and the COMMIT
+  RPC and message commit the engine transaction before the undo log.
+- **A `/*+BATCH*/` never recreates a dropped graph (SONNY-3033):** the QUIC
+  batch route ran before the graph-existence check, and the group-commit
+  coordinator created whatever graph it was given, so a session left on a
+  graph another session dropped recreated it with its next batch, without
+  the schema permission. The route now applies the session-graph gate
+  (internal, bind, existence), and the coordinator creates no graph but the
+  default one.
+- **Offline auth commands verify against the chain root (SONNY-3035):** a
+  store whose security records were all removed at rest kept its chain root
+  and skipped verification, so `geode auth init` bootstrapped a new admin
+  into it and sealed it. And verification wrote a new `.geode_hmac_key`
+  when there was none, then refused. A store now counts as empty only with
+  no records and no chain root, and verification (and `geode auth verify`)
+  looks the key up without generating one.
+- **Deleting an RLS policy leaves no dangling map key (SONNY-3036):** the RLS
+  engine's policy map borrowed its keys from the first policy of each graph
+  and table, and kept them after `UserManager.deletePolicy` freed that
+  policy's strings (a library caller could read freed memory). The map now
+  owns its keys, and an emptied graph and table lose their entry.
+- **`geode revoke --from` revokes that principal's grant (SONNY-3037):** it
+  removed the first permission record with the permission's name, which
+  could belong to another principal, and reported success when nothing
+  matched; and `geode grant` reused one record id, so each grant replaced
+  the previous one. Revoke now removes the named principal's grants (on the
+  named resource, when given) and fails, changing nothing, when there is
+  none; grant takes an id of its own.
+- **`geode.auth.revoke` fails when the revoke cannot be saved, and schema DDL
+  is gated (SONNY-3038):** a revoke whose durable write failed was logged
+  and reported "Revoked", and the privilege came back at the next start; it
+  now fails with 58030. CREATE and DROP SCHEMA were ungated; they now need
+  the schema permission on the database, as index DDL does.
+
+  **Behaviour change:** CREATE/DROP SCHEMA need Admin or a GPS `FOR SCHEMA`
+  policy on `*`.
 
 ### Fixed
 
@@ -754,15 +862,15 @@
   the operations run so far applied, and nothing rolls them back at
   restart.
 - **Index DDL runs on the default graph, and indexes are database-wide
-  (SONNY-2803):** DROP INDEX and a fulltext CREATE INDEX need the schema
-  permission on `default`, whatever the session's graph, because they run
-  on it (SONNY-2790). Indexes and constraints are catalogued for the whole
-  database, but the permission is checked on one graph, so a user with
-  `FOR SCHEMA` on `default` can drop an index created from another graph
-  (SONNY-3030).
-- **Offline auth commands need the HMAC key (SONNY-2798):** on a store that
-  holds any security record, an offline command refuses, and changes
-  nothing, when no HMAC key is available to verify the chain with. Set
+  (SONNY-2803, SONNY-3030):** DROP INDEX and a fulltext CREATE INDEX need
+  the schema permission on `default`, whatever the session's graph, because
+  they run on it (SONNY-2790). Indexes and constraints are catalogued for
+  the whole database, so every index and constraint statement also needs
+  the schema permission on the database (Admin, or `FOR SCHEMA` on `*`).
+- **Offline auth commands need the HMAC key (SONNY-2798, SONNY-3035):** on
+  a store that holds any security record or a chain root, an offline
+  command refuses, and changes nothing, when no HMAC key is available to
+  verify the chain with. Set
   `GEODE_AUTH_HMAC_KEY` or `GEODE_TDE_KEY` as the server does, or keep
   `.geode_hmac_key` in the data directory.
 - **`CALL algo.*` is slower under RLS or a tenant scope (SONNY-2685):** a
