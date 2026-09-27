@@ -209,6 +209,17 @@ const group_cases = [_]Case{
     .{ .write = "MATCH (n:G) WITH n GROUP BY n HAVING n.i > 7 REMOVE n.t", .checks = &.{
         .{ .query = "MATCH (n:G) WHERE n.t IS NULL RETURN n.i", .want = &.{ "8", "9" } },
     } },
+    // With the SONNY-2675 merge (strict grouped HAVING): the WITH's HAVING is
+    // evaluated once, by the WITH stage. The RETURN after the write has no
+    // column c, so a second evaluation there would fail with 42703.
+    .{ .write = "MATCH (n:G) WITH n, count(*) AS c GROUP BY n HAVING c = 1 SET n.x = 1 RETURN count(*) AS k", .want = &.{"10"}, .checks = &gx(&.{ "0", "1", "2", "3", "4", "5", "6", "7", "8", "9" }) },
+    // An aggregate named only in the HAVING is computed for each group, over
+    // the rows the session may see: tenant_b's :G rows and the hidden one
+    // (i >= 100) match the WHERE too, and stay unwritten.
+    .{ .write = "MATCH (n:G) WHERE n.i >= 8 WITH n GROUP BY n HAVING count(*) = 1 SET n.x = 1", .checks = &gx(&.{ "8", "9" }) },
+    // A HAVING name that is no column is refused (42703) before anything is
+    // written.
+    .{ .write = "MATCH (n:G) WITH n GROUP BY n HAVING nope > 1 SET n.x = 1", .refused = error.UnknownHavingReference, .checks = &unchanged },
 };
 
 test "SONNY-3142 (C4): a WITH's GROUP BY and HAVING decide the rows a write sees" {
