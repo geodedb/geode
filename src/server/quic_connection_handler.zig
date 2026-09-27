@@ -8136,11 +8136,15 @@ fn handleClientMessage(
                             return;
                         }
                         if (err == error.GraphNotFound) {
-                            const info = proto_util.mapError(err);
-                            try sendExecuteError(gpa, stream, info.code, info.message, &.{}, &.{});
-                            return;
-                        }
-                        return err;
+                            // SONNY-3028: CREATE GRAPH of a new graph, or
+                            // DROP GRAPH IF EXISTS of a missing one: no lock
+                            // to take.
+                            if (!stmt_plan.lock_graph_may_be_missing) {
+                                const info = proto_util.mapError(err);
+                                try sendExecuteError(gpa, stream, info.code, info.message, &.{}, &.{});
+                                return;
+                            }
+                        } else return err;
                     }
                 } else if (stmt_plan.point_read and !execution.wouldEvaluateRLS()) {
                     // GAP-0805: hold the shared read lock across the brief

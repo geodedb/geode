@@ -8946,6 +8946,24 @@ pub fn build(b: *std.Build) void {
     const sonny3027_step = b.step("test-sonny3027-profile-engine-txn", "Run SONNY-3027 regression (a PROFILE'd MERGE or CREATE in a transaction leaves no engine transaction open once its write lock is released; the backstop aborts and fails the transaction, never commits outside the lock; executor, gRPC in process, QUIC e2e)");
     sonny3027_step.dependOn(&run_sonny3027_tests.step);
 
+    // SONNY-3028: DROP GRAPH frees a graph only when no thread holds it:
+    // CREATE and DROP GRAPH lock the graph they name, the holders and waiters
+    // of a graph's lock pin it, and DROP GRAPH of the graph the session's
+    // transaction changed is refused (55006). The real gRPC handler in
+    // process (SONNY-1560 shim) under the testing allocator.
+    const sonny3028_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny3028_drop_graph_in_use.zig"), .target = target, .optimize = optimize });
+    sonny3028_test_mod.link_libc = true;
+    sonny3028_test_mod.addImport("geode", root_mod);
+    sonny3028_test_mod.addImport("schema", schema_mod);
+    sonny3028_test_mod.addImport("protobuf", protobuf_mod);
+    sonny3028_test_mod.addImport("grpc_impl", sonny1560_shim_mod);
+    sonny3028_test_mod.addImport("logging", logging_mod);
+    const sonny3028_tests = b.addTest(.{ .root_module = sonny3028_test_mod });
+    const run_sonny3028_tests = b.addRunArtifact(sonny3028_tests);
+    shardDep(test_step, &run_sonny3028_tests.step, 1, test_shard_loads, test_shard_index);
+    const sonny3028_step = b.step("test-sonny3028-drop-graph-in-use", "Run SONNY-3028 regression (DROP GRAPH from another graph's session waits for the graph's lock holders; a waiter is told the graph is gone; nothing is freed under a holder; DROP GRAPH of the transaction's graph is refused, 55006; gRPC in process)");
+    sonny3028_step.dependOn(&run_sonny3028_tests.step);
+
     // SONNY-2790: the fulltext statements (CREATE/DROP INDEX, geode.fts.*)
     // run on the default graph, so the handlers lock `default` for them from
     // any session. Classifier, and the real gRPC handler (SONNY-1560 shim).

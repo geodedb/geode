@@ -616,6 +616,11 @@ fn applySchemaChange(allocator: Allocator, store_opt: ?*GraphStore, sc: SchemaCh
                 error.CannotDropDefaultGraph => {
                     log.warn("raft apply: attempted to drop default graph, ignoring", &.{});
                 },
+                // SONNY-3028: the apply thread has no engine transaction open
+                // on the graph; kept for the error set.
+                error.ObjectInUse => {
+                    log.warn("raft apply: graph in use by this thread's transaction, not dropped", &.{});
+                },
             };
             log.info("raft apply: dropped graph via schema_change", &.{
                 Attr.string("graph", sc.graph),

@@ -3892,8 +3892,9 @@ pub const GraphStore = struct {
         defer self.graphs_mutex.unlock(std.Io.Threaded.global_single_threaded.io());
 
         // Dual-write: drop from adapter, then fall through to local cleanup
+        // SONNY-3028: a refusal (`ObjectInUse`) leaves the graph as it is.
         if (global_vtable) |vt| {
-            vt.dropGraphFn(vt.ctx, graph_name);
+            try vt.dropGraphFn(vt.ctx, graph_name);
         }
         if (std.mem.eql(u8, graph_name, "default")) {
             return error.CannotDropDefaultGraph;
@@ -13938,7 +13939,9 @@ const AdapterVTable = struct {
     ctx: *anyopaque,
     graphExistsFn: *const fn (*anyopaque, []const u8) bool,
     getOrCreateGraphFn: *const fn (*anyopaque, []const u8) anyerror!*anyopaque,
-    dropGraphFn: *const fn (*anyopaque, []const u8) void,
+    // SONNY-3028: refuses (`ObjectInUse`) a graph the calling thread has an
+    // engine transaction open on.
+    dropGraphFn: *const fn (*anyopaque, []const u8) error{ObjectInUse}!void,
     createNodeFn: *const fn (*anyopaque, []const u8, []const []const u8) anyerror!u64,
     // GAP-ENT-0024: the trailing u64 is the geode-minted PUBLIC edge id,
     // stored INLINE in the durable adjacency records (v2 blocks) so a
@@ -14451,8 +14454,8 @@ pub fn initGlobalAdapter(allocator: std.mem.Allocator, data_dir: []const u8) !*g
             const mg = try castAdapter(ctx).getOrCreateGraph(name);
             return @ptrCast(mg);
         }
-        fn dropGraph(ctx: *anyopaque, name: []const u8) void {
-            castAdapter(ctx).dropGraph(name);
+        fn dropGraph(ctx: *anyopaque, name: []const u8) error{ObjectInUse}!void {
+            try castAdapter(ctx).dropGraph(name);
         }
         fn createNode(ctx: *anyopaque, graph_name: []const u8, labels: []const []const u8) anyerror!u64 {
             return castAdapter(ctx).createNode(graph_name, labels);

@@ -436,6 +436,18 @@ pub const UndoLog = struct {
         if (self.entries.items.len == 0) self.active = false;
     }
 
+    /// SONNY-3028: has the calling thread's transaction recorded any change?
+    pub fn threadTxnHasEntries(self: *UndoLog) bool {
+        const txn = threadTxn();
+        if (txn == 0) return false;
+        self.list_mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
+        defer self.list_mutex.unlock(std.Io.Threaded.global_single_threaded.io());
+        for (self.entry_txns.items) |t| {
+            if (t == txn) return true;
+        }
+        return false;
+    }
+
     /// SONNY-2799: forget transaction `txn_id` without undoing it: its
     /// entries and its savepoints. For a transaction that committed, or one
     /// whose session went away with no store to undo it on. 0 is none.

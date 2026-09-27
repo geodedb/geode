@@ -63,7 +63,10 @@ test "SONNY-2749: the lock is on the graph the program's statements run on" {
         // Writes on more than one graph are refused; reads fall back.
         .{ .query = "CREATE (:X); USE GRAPH g2; CREATE (:Y)", .session = "default", .lock = "default", .spans = true },
         .{ .query = "USE GRAPH g2; MATCH (n) RETURN n; USE GRAPH g3; CREATE (:X)", .session = "default", .lock = "default", .spans = true },
-        .{ .query = "CREATE GRAPH g9; USE GRAPH g9; CREATE (:X)", .session = "default", .lock = "default", .spans = true },
+        // SONNY-3028: CREATE and DROP GRAPH run on the graph they name.
+        .{ .query = "CREATE GRAPH g9; USE GRAPH g9; CREATE (:X)", .session = "default", .lock = "g9" },
+        .{ .query = "DROP GRAPH g2", .session = "default", .lock = "g2" },
+        .{ .query = "CREATE (:X); DROP GRAPH g2", .session = "default", .lock = "default", .spans = true },
         .{ .query = "MATCH (n) RETURN n; USE GRAPH g2; MATCH (m) RETURN m", .session = "default", .lock = "default" },
     };
     var failures: usize = 0;

@@ -1704,6 +1704,20 @@ pub const ManagedGraph = struct {
     /// Per-graph RwLock for concurrent read access. Queries acquire shared;
     /// mutations and persistence acquire exclusive. Part of P1 lock migration.
     rwlock: std.Io.RwLock = std.Io.RwLock.init,
+    // CANARY: REQ=REQ-SONNY-3028-DROP-GRAPH-PINS; FEATURE="MultiGraphIsolation"; ASPECT=Pins; STATUS=TESTED; TEST=tests/test_sonny3028_drop_graph_in_use.zig; OWNER=storage; UPDATED=2026-09-27
+    /// SONNY-3028: the threads that hold this graph through the adapter while
+    /// it may be dropped (low bits), and whether it was (`dropped_bit`). A pin
+    /// is taken under the adapter's `mutex` while the graph is in `engines`:
+    /// by the graph lock API for every holder and waiter of `rwlock`
+    /// (`acquireGraphReadLock`, `acquireGraphWriteLock*`, until the matching
+    /// release), a group-commit batch, a checkpoint, and a session engine
+    /// transaction's commit or abort. `dropGraph` takes the graph out of
+    /// `engines` under the same mutex, so it sees every pin: with none it
+    /// frees the graph, and otherwise the last `unpinGraph` does. A waiter that
+    /// gets the lock of a dropped graph lets it go (`GraphNotFound`).
+    /// `dropGraph` freed the graph under its lock's holders and waiters, whose
+    /// release was then a use-after-free.
+    pins: std.atomic.Value(u32) = .init(0),
 
     /// Explicit writer-preference counter for ALL EXCLUSIVE acquirers of
     /// `rwlock` (the periodic checkpoint AND the edge-phase schema/MERGE ops).
@@ -1837,6 +1851,14 @@ pub const ManagedGraph = struct {
     rwlock_shared_hold_bulk_merge_ns_total: std.atomic.Value(u64) = std.atomic.Value(u64).init(0),
     rwlock_shared_hold_bulk_edge_ns_total: std.atomic.Value(u64) = std.atomic.Value(u64).init(0),
     rwlock_shared_hold_fallback_ns_total: std.atomic.Value(u64) = std.atomic.Value(u64).init(0),
+
+    pub const dropped_bit: u32 = 1 << 31;
+
+    /// SONNY-3028: was this graph dropped (it is out of `engines`, and its
+    /// last pin frees it)?
+    pub fn isDropped(self: *const ManagedGraph) bool {
+        return self.pins.load(.acquire) & dropped_bit != 0;
+    }
 
     /// Obtain the vtable-based `GraphStorage` interface for direct low-level
     /// access to the engine.
@@ -2917,6 +2939,11 @@ pub fn settleAtWriteRelease() void {
 /// (and out of its slot), or null for none. Null too when its graph was
 /// dropped: the transaction went with the graph's engine, and `txn.mg`,
 /// freed, is not read.
+///
+/// SONNY-3028: the graph comes back pinned (`ManagedGraph.pins`), so a
+/// `dropGraph` on another thread cannot free it between the check and the
+/// commit or abort; the caller unpins it (`unpinTaken`). The check and the use
+/// were two steps, with the adapter's mutex released between them.
 fn takeThreadSessionTxn() ?*StatementTxn {
     const txn = t_session_engine_txn orelse return null;
     t_session_engine_txn = null;
@@ -2924,17 +2951,26 @@ fn takeThreadSessionTxn() ?*StatementTxn {
     if (&slot.txn != txn) return txn;
     slot.open = false;
     const ad = graph_store.getGlobalAdapter() orelse return null;
-    if (!ad.engineIsOpen(slot.txn.mg, slot.graph_uuid)) {
+    if (!ad.pinIfOpen(slot.txn.mg, slot.graph_uuid)) {
         log.warn("the graph of a session engine txn was dropped; the txn went with it", .{});
         return null;
     }
     return txn;
 }
 
+/// SONNY-3028: the pin `takeThreadSessionTxn` took on `txn`'s graph.
+fn unpinTaken(txn: *StatementTxn) void {
+    const slot = t_session_engine_slot orelse return;
+    if (&slot.txn != txn) return;
+    const ad = graph_store.getGlobalAdapter() orelse return;
+    ad.unpinGraph(txn.mg);
+}
+
 /// SONNY-2823: commit this thread's session engine transaction, if it has
 /// one: ONE WAL fsync for its writes on its shard.
 pub fn commitThreadSessionTxn() !void {
     const txn = takeThreadSessionTxn() orelse return;
+    defer unpinTaken(txn);
     try txn.mg.engine.commitTxn(txn.txn_id);
 }
 
@@ -2943,9 +2979,18 @@ pub fn commitThreadSessionTxn() !void {
 /// changes commit on their own and do not join the aborted transaction.
 pub fn abortThreadSessionTxn() void {
     const txn = takeThreadSessionTxn() orelse return;
+    defer unpinTaken(txn);
     // error-policy: A — best-effort session rollback; WAL recovery
     // supersedes a failed abort.
     txn.mg.engine.abortTxn(txn.txn_id) catch {};
+}
+
+/// SONNY-3028: does this thread have an engine transaction open on `mg` (its
+/// session's, or a statement's)? `dropGraph` refuses to drop that graph.
+fn threadTxnOn(mg: *const ManagedGraph) bool {
+    if (t_session_engine_txn) |t| if (t.mg == mg) return true;
+    if (t_current_statement_txn) |t| if (t.mg == mg) return true;
+    return false;
 }
 
 /// Return the thread-local statement txn if it targets `graph_name`; else null.
@@ -3449,10 +3494,23 @@ pub const StorageAdapter = struct {
         return self.engines.contains(name) or self.findRegistryEntryLocked(name) != null;
     }
 
+    // CANARY: REQ=REQ-SONNY-3028-DROP-GRAPH-PINS; FEATURE="MultiGraphIsolation"; ASPECT=DropGraph; STATUS=TESTED; TEST=tests/test_sonny3028_drop_graph_in_use.zig; OWNER=storage; UPDATED=2026-09-27
     /// Close and remove the graph identified by `name`.
-    pub fn dropGraph(self: *StorageAdapter, name: []const u8) void {
+    ///
+    /// SONNY-3028: the graph leaves `engines` and the registry now, and is
+    /// freed when no thread holds it (`ManagedGraph.pins`): at once, or by the
+    /// last of its lock's holders and waiters, its group-commit batch or its
+    /// checkpoint to let go. A waiter that gets the lock of a dropped graph
+    /// lets it go (`GraphNotFound`). It was freed under them. `ObjectInUse`
+    /// when this thread has an engine transaction open on it (a program that
+    /// changed the graph in its transaction, then drops it): the graph stays.
+    pub fn dropGraph(self: *StorageAdapter, name: []const u8) error{ObjectInUse}!void {
         self.mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
         defer self.mutex.unlock(std.Io.Threaded.global_single_threaded.io());
+
+        if (self.engines.get(name)) |mg| {
+            if (threadTxnOn(mg)) return error.ObjectInUse;
+        }
 
         var dropped_uuid: ?[16]u8 = null;
         if (self.engines.fetchRemove(name)) |kv| {
@@ -3464,7 +3522,9 @@ pub const StorageAdapter = struct {
             }
 
             dropped_uuid = mg.uuid;
-            mg.deinit(self.allocator, false);
+            // SONNY-3028: pinned graphs are freed by their last unpin.
+            const prev = mg.pins.fetchOr(ManagedGraph.dropped_bit, .acq_rel);
+            if (prev == 0) mg.deinit(self.allocator, false);
         } else if (self.findRegistryEntryLocked(name)) |entry| {
             dropped_uuid = entry.uuid;
         }
@@ -8175,11 +8235,15 @@ pub const StorageAdapter = struct {
             var it = self.engines.valueIterator();
             while (it.next()) |mg| {
                 if (graph_count < graphs_buf.len) {
+                    // SONNY-3028: pinned while this checkpoint uses it, so a
+                    // concurrent `dropGraph` cannot free it under the pointer.
+                    _ = mg.*.pins.fetchAdd(1, .acq_rel);
                     graphs_buf[graph_count] = mg.*;
                     graph_count += 1;
                 }
             }
         }
+        defer for (graphs_buf[0..graph_count]) |mg| self.unpinGraph(mg);
 
         // Checkpoint each graph WITHOUT holding the adapter mutex.
         // The ManagedGraph pointers remain valid because graphs are only
@@ -8262,7 +8326,7 @@ pub const StorageAdapter = struct {
         // the rwlock acquire eliminates the recurring reader entirely, which
         // alone unblocks the edge phase; FIX #2 (exclusive_waiting writer
         // preference) hardens the remaining SHARED read paths.
-        var counts_buf: [64]struct { name: []const u8, uuid: [16]u8, node_count: u64, edge_count: u64 } = undefined;
+        var counts_buf: [64]struct { mg: *ManagedGraph, node_count: u64, edge_count: u64 } = undefined;
         for (graphs_buf[0..graph_count], 0..) |mg, i| {
             var nc: u64 = 0;
             var ec: u64 = 0;
@@ -8271,8 +8335,7 @@ pub const StorageAdapter = struct {
                 ec += @atomicLoad(u64, &shard.manifest.edge_count, .monotonic);
             }
             counts_buf[i] = .{
-                .name = mg.name,
-                .uuid = mg.uuid,
+                .mg = mg,
                 .node_count = nc,
                 .edge_count = ec,
             };
@@ -8281,7 +8344,10 @@ pub const StorageAdapter = struct {
             self.mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
             defer self.mutex.unlock(std.Io.Threaded.global_single_threaded.io());
             for (counts_buf[0..graph_count]) |c| {
-                self.upsertRegistryEntryLocked(c.name, c.uuid, c.node_count, c.edge_count);
+                // SONNY-3028: a graph dropped during this checkpoint left the
+                // registry; it is not written back.
+                if (c.mg.isDropped()) continue;
+                self.upsertRegistryEntryLocked(c.mg.name, c.mg.uuid, c.node_count, c.edge_count);
             }
             self.saveRegistryLocked() catch |err| {
                 log.warn("failed to persist graph registry: {}", .{err});
@@ -8475,6 +8541,12 @@ pub const StorageAdapter = struct {
             }
         }
         _ = mg.rwlock_exclusive_wait_ns_total.fetchAdd(monoNanosNow() -| _t_start, .monotonic);
+        // SONNY-3028: dropped while this checkpoint waited for its lock (the
+        // caller pinned it): there is nothing left to save.
+        if (mg.isDropped()) {
+            mg.rwlock.unlock(io_cp);
+            return .ok;
+        }
         // GAP-0900 L2: the periodic load-driven trigger runs the LIGHT engine
         // checkpoint (O(dirty)); the shutdown / explicit path runs the FULL
         // checkpoint so a restart loads the derived indexes without a rebuild.
@@ -8989,8 +9061,12 @@ pub const StorageAdapter = struct {
         const mg = blk: {
             self.mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
             defer self.mutex.unlock(std.Io.Threaded.global_single_threaded.io());
-            break :blk try self.requireExistingGraphLocked(graph_name);
+            const found = try self.requireExistingGraphLocked(graph_name);
+            // SONNY-3028: pinned while this checkpoint uses it.
+            _ = found.pins.fetchAdd(1, .acq_rel);
+            break :blk found;
         };
+        defer self.unpinGraph(mg);
         switch (self.checkpointOneGraph(mg, false, true, 5 * std.time.ns_per_s, exact_out)) {
             .ok => {},
             .skipped_busy => return error.CheckpointLockBusy,
@@ -10361,12 +10437,7 @@ pub const StorageAdapter = struct {
         self: *StorageAdapter,
         graph_name: []const u8,
     ) !ReadLockAcquisition {
-        self.mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
-        const mg = self.engines.get(graph_name) orelse {
-            self.mutex.unlock(std.Io.Threaded.global_single_threaded.io());
-            return error.GraphNotFound;
-        };
-        self.mutex.unlock(std.Io.Threaded.global_single_threaded.io());
+        const mg = self.pinGraph(graph_name) orelse return error.GraphNotFound;
         const _t_start = monoNanosNow();
         // EDGE-PHASE 40001 FIX #2 (2026-06-22): yield to a pending EXCLUSIVE
         // acquirer (checkpoint or edge schema/MERGE) before taking SHARED, so
@@ -10380,11 +10451,19 @@ pub const StorageAdapter = struct {
         mg.rwlock.lockSharedUncancelable(std.Io.Threaded.global_single_threaded.io());
         _ = mg.rwlock_shared_wait_ns_total.fetchAdd(monoNanosNow() -| _t_start, .monotonic);
         _ = mg.rwlock_shared_acquired_total.fetchAdd(1, .monotonic);
+        // SONNY-3028: dropped while this thread waited for its lock.
+        if (mg.isDropped()) {
+            mg.rwlock.unlockShared(std.Io.Threaded.global_single_threaded.io());
+            self.unpinGraph(mg);
+            return error.GraphNotFound;
+        }
         const hold_start_ns = monoNanosNow();
         return .{ .mg = mg, .hold_start_ns = hold_start_ns };
     }
 
-    pub fn releaseGraphReadLock(_: *StorageAdapter, mg: *ManagedGraph, hold_start_ns: u64, site_tag: graph_store.LockSiteTag) void {
+    pub fn releaseGraphReadLock(self: *StorageAdapter, mg: *ManagedGraph, hold_start_ns: u64, site_tag: graph_store.LockSiteTag) void {
+        // SONNY-3028: the pin `acquireGraphReadLock` took goes with the lock.
+        defer self.unpinGraph(mg);
         const _hold_ns = monoNanosNow() -| hold_start_ns;
         _ = mg.rwlock_shared_hold_ns_total.fetchAdd(_hold_ns, .monotonic);
         const _cur_max = mg.rwlock_shared_max_hold_ns_observed.load(.monotonic);
@@ -10414,12 +10493,9 @@ pub const StorageAdapter = struct {
     /// Acquire an exclusive (write) lock on the named graph.
     /// Caller MUST call releaseGraphWriteLock when done.
     pub fn acquireGraphWriteLock(self: *StorageAdapter, graph_name: []const u8) !*ManagedGraph {
-        self.mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
-        const mg = self.engines.get(graph_name) orelse {
-            self.mutex.unlock(std.Io.Threaded.global_single_threaded.io());
-            return error.GraphNotFound;
-        };
-        self.mutex.unlock(std.Io.Threaded.global_single_threaded.io());
+        // SONNY-3028: pinned until `releaseGraphWriteLock`.
+        const mg = self.pinGraph(graph_name) orelse return error.GraphNotFound;
+        errdefer self.unpinGraph(mg);
         // HANG FIX (2026-05-22): re-probe via `tryLock` instead of parking
         // unboundedly on `mg.rwlock.lockUncancelable`.  See the detailed
         // rationale in `acquireGraphWriteLockCancelable` below — the
@@ -10432,7 +10508,7 @@ pub const StorageAdapter = struct {
         const _t_start = monoNanosNow();
         if (mg.rwlock.tryLock(io)) {
             _ = mg.rwlock_exclusive_wait_ns_total.fetchAdd(monoNanosNow() -| _t_start, .monotonic);
-            return mg;
+            return lockedUnlessDropped(mg);
         }
         var sleep_ns: u64 = 100 * std.time.ns_per_us;
         const max_sleep_ns: u64 = 2 * std.time.ns_per_ms;
@@ -10445,10 +10521,21 @@ pub const StorageAdapter = struct {
             _ = std.os.linux.nanosleep(&req, &rem);
             if (mg.rwlock.tryLock(io)) {
                 _ = mg.rwlock_exclusive_wait_ns_total.fetchAdd(monoNanosNow() -| _t_start, .monotonic);
-                return mg;
+                return lockedUnlessDropped(mg);
             }
             sleep_ns = @min(sleep_ns * 2, max_sleep_ns);
         }
+    }
+
+    /// SONNY-3028: `mg`, whose write lock this thread just took, or
+    /// `GraphNotFound` (the lock let go again) when it was dropped while the
+    /// thread waited. The caller's errdefer unpins it.
+    fn lockedUnlessDropped(mg: *ManagedGraph) !*ManagedGraph {
+        if (mg.isDropped()) {
+            mg.rwlock.unlock(std.Io.Threaded.global_single_threaded.io());
+            return error.GraphNotFound;
+        }
+        return mg;
     }
 
     /// Deadline-aware variant of `acquireGraphWriteLock`.
@@ -10498,12 +10585,9 @@ pub const StorageAdapter = struct {
         graph_name: []const u8,
         deadline_mono_ns: u64,
     ) !*ManagedGraph {
-        self.mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
-        const mg = self.engines.get(graph_name) orelse {
-            self.mutex.unlock(std.Io.Threaded.global_single_threaded.io());
-            return error.GraphNotFound;
-        };
-        self.mutex.unlock(std.Io.Threaded.global_single_threaded.io());
+        // SONNY-3028: pinned until `releaseGraphWriteLock`.
+        const mg = self.pinGraph(graph_name) orelse return error.GraphNotFound;
+        errdefer self.unpinGraph(mg);
 
         const io = std.Io.Threaded.global_single_threaded.io();
         const _t_start = monoNanosNow();
@@ -10536,7 +10620,7 @@ pub const StorageAdapter = struct {
         // Fast path: uncontended acquire in one call.
         if (mg.rwlock.tryLock(io)) {
             _ = mg.rwlock_exclusive_wait_ns_total.fetchAdd(monoNanosNow() -| _t_start, .monotonic);
-            return mg;
+            return lockedUnlessDropped(mg);
         }
 
         // Contended slow path: bounded, re-probing `tryLock` spin.
@@ -10585,14 +10669,18 @@ pub const StorageAdapter = struct {
             }
             if (mg.rwlock.tryLock(io)) {
                 _ = mg.rwlock_exclusive_wait_ns_total.fetchAdd(monoNanosNow() -| _t_start, .monotonic);
-                return mg;
+                return lockedUnlessDropped(mg);
             }
             sleep_ns = @min(sleep_ns * 2, max_sleep_ns);
         }
     }
 
-    pub fn releaseGraphWriteLock(_: *StorageAdapter, mg: *ManagedGraph) void {
+    pub fn releaseGraphWriteLock(self: *StorageAdapter, mg: *ManagedGraph) void {
         mg.rwlock.unlock(std.Io.Threaded.global_single_threaded.io());
+        // SONNY-3028: and the pin the acquire took. A graph this thread
+        // dropped while it held the lock is freed here, when no other thread
+        // holds or waits for it.
+        self.unpinGraph(mg);
     }
 
     /// R8 (2026-04-22): begin a per-statement engine transaction on `graph_name`.
@@ -10743,6 +10831,42 @@ pub const StorageAdapter = struct {
     /// only once it is found in the map: it may have been freed with a
     /// dropped graph. The UUID tells a graph created again at the freed
     /// address from the one the transaction was opened on.
+    /// SONNY-3028: `engineIsOpen`, and when it is, a pin on `mg`
+    /// (`ManagedGraph.pins`) under the same hold of the adapter's mutex. The
+    /// caller unpins it (`unpinGraph`).
+    pub fn pinIfOpen(self: *StorageAdapter, mg: *ManagedGraph, graph_uuid: [16]u8) bool {
+        self.mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
+        defer self.mutex.unlock(std.Io.Threaded.global_single_threaded.io());
+        var it = self.engines.valueIterator();
+        while (it.next()) |v| {
+            if (v.* == mg) {
+                if (!std.mem.eql(u8, &mg.uuid, &graph_uuid)) return false;
+                _ = mg.pins.fetchAdd(1, .acq_rel);
+                return true;
+            }
+        }
+        return false;
+    }
+
+    /// SONNY-3028: pin `graph_name`'s graph (`ManagedGraph.pins`) for a caller
+    /// that uses it outside the adapter's mutex, or null when it is not open.
+    /// The caller unpins it (`unpinGraph`).
+    pub fn pinGraph(self: *StorageAdapter, graph_name: []const u8) ?*ManagedGraph {
+        self.mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
+        defer self.mutex.unlock(std.Io.Threaded.global_single_threaded.io());
+        const mg = self.engines.get(graph_name) orelse return null;
+        _ = mg.pins.fetchAdd(1, .acq_rel);
+        return mg;
+    }
+
+    /// SONNY-3028: drop a pin on `mg`. The last pin of a dropped graph frees
+    /// it; `dropGraph` already took it out of `engines`, deleted its files and
+    /// its registry entry, so nothing is checkpointed.
+    pub fn unpinGraph(self: *StorageAdapter, mg: *ManagedGraph) void {
+        const prev = mg.pins.fetchSub(1, .acq_rel);
+        if (prev == (ManagedGraph.dropped_bit | 1)) mg.deinit(self.allocator, true);
+    }
+
     pub fn engineIsOpen(self: *StorageAdapter, mg: *const ManagedGraph, graph_uuid: [16]u8) bool {
         self.mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
         defer self.mutex.unlock(std.Io.Threaded.global_single_threaded.io());
@@ -11598,7 +11722,7 @@ test "StorageAdapter: drop graph" {
     _ = try adapter.getOrCreateGraph("drop_me");
     try std.testing.expect(adapter.graphExists("drop_me"));
 
-    adapter.dropGraph("drop_me");
+    try adapter.dropGraph("drop_me");
     try std.testing.expect(!adapter.graphExists("drop_me"));
 }
 
@@ -12063,7 +12187,7 @@ test "StorageAdapter: dropGraph removes graph directory and subsystem data" {
     }
 
     // Drop the graph — this should deinit subsystems and delete the directory.
-    adapter.dropGraph("__geode_security");
+    try adapter.dropGraph("__geode_security");
 
     // Verify graph directory is removed.
     const dir_result = std.Io.Dir.cwd().openDir(std.Io.Threaded.global_single_threaded.io(), graph_dir, .{});

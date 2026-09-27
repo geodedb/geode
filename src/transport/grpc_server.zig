@@ -2866,7 +2866,10 @@ pub fn handleExecute(request_bytes: []const u8, allocator: std.mem.Allocator, ep
                     // prevent HashMap rehash races (GAP-0001, CWE-362/CWE-416).
                     // SONNY-2749: the graph the program writes; no deadline.
                     // SONNY-2799: or the graph whose transaction it ends.
-                    graph_lock_handle = graph_store.acquireProgramWriteLockCancelable(lock_graph, query_graph_name, std.math.maxInt(u64)) catch |err| {
+                    graph_lock_handle = graph_store.acquireProgramWriteLockCancelable(lock_graph, query_graph_name, std.math.maxInt(u64)) catch |err| blk: {
+                        // SONNY-3028: CREATE GRAPH of a new graph, or DROP
+                        // GRAPH IF EXISTS of a missing one: no lock to take.
+                        if (err == error.GraphNotFound and stmt_plan.lock_graph_may_be_missing) break :blk null;
                         const info = proto_util.mapError(err);
                         var resp = try buildErrorResponse(allocator, info.code, info.message, &.{}, &.{});
                         defer resp.deinit(allocator);

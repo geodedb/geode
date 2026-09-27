@@ -459,6 +459,11 @@ pub const StatementPlan = struct {
     /// more than one graph. The handler refuses it (0A000): one graph's write
     /// lock cannot cover the others, and it never holds two.
     spans_graphs: bool,
+    /// SONNY-3028: every statement on `lock_graph` is CREATE or DROP GRAPH of
+    /// it. When that graph does not exist there is no lock to take, and none
+    /// is needed: the handler runs the program without one (CREATE GRAPH of a
+    /// new graph, DROP GRAPH IF EXISTS of a missing one).
+    lock_graph_may_be_missing: bool = false,
 };
 
 /// SONNY-2749: what the handlers answer (SQLSTATE 0A000) to a program whose
@@ -518,6 +523,7 @@ pub fn statementPlan(
         .point_read = needs_store_lock and !is_mutation and analysis.is_point_read and rest_is_noop,
         .lock_graph = program_graph orelse session_graph,
         .spans_graphs = is_mutation and needs_store_lock and program_graph == null,
+        .lock_graph_may_be_missing = programOnlyGraphDdl(program, session_graph, home_graph),
     };
 }
 
@@ -605,6 +611,16 @@ pub fn programDataGraph(program: *const ast.Program, start_graph: []const u8, ho
     return if (walk.runs_on) |g| .{ .one = g } else .none;
 }
 
+/// SONNY-3028: do the program's statements on graph data run on one graph,
+/// and is every one of them a CREATE or DROP GRAPH of that graph?
+pub fn programOnlyGraphDdl(program: *const ast.Program, start_graph: []const u8, home_graph: []const u8) bool {
+    var walk: DataGraphWalk = .{ .current = start_graph, .home_graph = home_graph };
+    for (program.statements) |*stmt| {
+        if (!walk.statement(stmt)) return false;
+    }
+    return walk.runs_on != null and walk.only_graph_ddl;
+}
+
 /// `programDataGraph`'s walk over a program's statements, in order.
 const DataGraphWalk = struct {
     /// The graph the program is on at this point.
@@ -612,6 +628,13 @@ const DataGraphWalk = struct {
     home_graph: []const u8,
     /// The graph the statements so far that touch graph data run on.
     runs_on: ?[]const u8 = null,
+    /// SONNY-3028: every such statement so far is a CREATE or DROP GRAPH.
+    only_graph_ddl: bool = true,
+
+    fn note(self: *DataGraphWalk, graph: []const u8) bool {
+        self.only_graph_ddl = false;
+        return noteGraph(&self.runs_on, graph);
+    }
 
     /// Follow one statement. False when it touches another graph's data than
     /// an earlier one did.
@@ -632,21 +655,29 @@ const DataGraphWalk = struct {
             // the session to g with no statement counted at all.
             .Profile => |p| return self.statement(p.query),
             .StartTransaction => |txn| {
-                if (txn.body != null) return noteGraph(&self.runs_on, self.current);
+                if (txn.body != null) return self.note(self.current);
             },
+            // CANARY: REQ=REQ-SONNY-3028-DROP-GRAPH-PINS; FEATURE="MultiGraphIsolation"; ASPECT=NamedGraphLock; STATUS=TESTED; TEST=tests/test_sonny3028_drop_graph_in_use.zig; OWNER=storage; UPDATED=2026-09-27
+            // SONNY-3028: CREATE and DROP GRAPH run on the graph they name:
+            // the handler takes that graph's write lock, so DROP GRAPH waits
+            // for the graph's other requests. They counted as statements on
+            // the session's graph, so `DROP GRAPH g` from a session on
+            // `default` locked `default` and freed g under its lock holders.
+            .CreateGraph => |cg| return noteGraph(&self.runs_on, cg.name),
+            .DropGraph => |dg| return noteGraph(&self.runs_on, dg.name),
             .CreateIndex => |ci| {
                 const on = if (ci.index_type == .fulltext) graph_store.DEFAULT_GRAPH_NAME else self.current;
-                return noteGraph(&self.runs_on, on);
+                return self.note(on);
             },
-            .DropIndex => return noteGraph(&self.runs_on, graph_store.DEFAULT_GRAPH_NAME),
+            .DropIndex => return self.note(graph_store.DEFAULT_GRAPH_NAME),
             .Call => |call| {
                 const on = switch (call) {
                     .Procedure => |proc| if (procedure_access.isDefaultGraphProcedure(proc)) graph_store.DEFAULT_GRAPH_NAME else self.current,
                     .Subquery => self.current,
                 };
-                return noteGraph(&self.runs_on, on);
+                return self.note(on);
             },
-            else => return noteGraph(&self.runs_on, self.current),
+            else => return self.note(self.current),
         }
         return true;
     }

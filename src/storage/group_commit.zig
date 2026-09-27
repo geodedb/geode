@@ -774,6 +774,11 @@ pub const ShardedCoordinator = struct {
         // statement-txn open below and every per-op bulk helper report the
         // real error through each op's res.err.
         _ = self.adapter.getOrCreateGraph(self.graph_name) catch {};
+        // CANARY: REQ=REQ-SONNY-3028-DROP-GRAPH-PINS; FEATURE="MultiGraphIsolation"; ASPECT=GroupCommitPin; STATUS=TESTED; TEST=tests/test_sonny3028_drop_graph_in_use.zig; OWNER=storage; UPDATED=2026-09-27
+        // SONNY-3028: the batch's statement transaction points into the
+        // graph; a DROP GRAPH during the batch frees it only after the batch.
+        const pinned_graph = self.adapter.pinGraph(self.graph_name);
+        defer if (pinned_graph) |mg| self.adapter.unpinGraph(mg);
 
         // Task 7 (ShardedGraphEngine migration): open a statement txn pinned
         // to this worker's shard.  Each shard has its own independent

@@ -1166,6 +1166,18 @@ fn requirePolicyDdlAdmin(allocator: std.mem.Allocator, action: []const u8, conte
     om.recordAuthzCheck(.allow, .rbac, d);
 }
 
+/// SONNY-3028: DROP GRAPH (and CREATE OR REPLACE GRAPH) in a transaction
+/// that has changed data is refused (`ObjectInUse`, 55006). A transaction
+/// changes one graph (SONNY-2776), and the handlers run a DROP GRAPH under the
+/// dropped graph's write lock, so the graph such a transaction changed is the
+/// one being dropped: its undo would replay into a dropped graph, and its
+/// engine transaction pointed into the freed graph. `START TRANSACTION;
+/// CREATE (:X); DROP GRAPH g; CREATE (:Y)` used the freed graph.
+fn refuseDropInTransaction(context: ExecutionContext) error{ObjectInUse}!void {
+    if (context.transaction_state != .Active) return;
+    if (txn_undo_log.getGlobalUndoLog(std.heap.smp_allocator).threadTxnHasEntries()) return error.ObjectInUse;
+}
+
 /// SONNY-2823: commit this thread's session engine transaction (R9), where
 /// its undo transaction commits, or where the program that opened it ends. A
 /// failed commit is logged: the undo transaction is committed already, as
@@ -2192,10 +2204,16 @@ fn executeStatementWithContextInner(allocator: std.mem.Allocator, stmt: ast.Stat
             const in_store = store.graphExists(graph_name);
 
             if (cg.or_replace) {
+                // SONNY-3028: the graph a transaction changed is not replaced
+                // under it, and a refusal leaves the catalog as it was.
+                try refuseDropInTransaction(context);
+                store.dropGraph(graph_name) catch |err| switch (err) {
+                    error.ObjectInUse => return err,
+                    else => {},
+                };
                 cat.removeGraph(graph_name) catch |err| {
                     if (err != error.GraphNotFound) return err;
                 };
-                store.dropGraph(graph_name) catch {};
             } else if (in_catalog or in_store) {
                 if (cg.if_not_exists) {
                     return ExecutionResult{
@@ -2275,18 +2293,25 @@ fn executeStatementWithContextInner(allocator: std.mem.Allocator, stmt: ast.Stat
                 return error.GraphNotFound;
             }
 
+            // CANARY: REQ=REQ-SONNY-3028-DROP-GRAPH-PINS; FEATURE="MultiGraphIsolation"; ASPECT=DropInTransaction; STATUS=TESTED; TEST=tests/test_sonny3028_drop_graph_in_use.zig; OWNER=storage; UPDATED=2026-09-27
+            // SONNY-3028: a transaction's graph is not dropped under it (its
+            // undo, and its engine transaction, point into the graph), and
+            // the store goes first, so a refusal (ObjectInUse, 55006) leaves
+            // the catalog as it was.
+            try refuseDropInTransaction(context);
+            store.dropGraph(graph_name) catch |err| switch (err) {
+                error.ObjectInUse => return err,
+                else => log.warn("dropGraphStore failed", &.{
+                    Attr.string("graph_name", graph_name),
+                    Attr.string("error", @errorName(err)),
+                }),
+            };
+
             if (in_catalog) {
                 cat.removeGraph(graph_name) catch |err| {
                     if (err != error.GraphNotFound) return err;
                 };
             }
-
-            store.dropGraph(graph_name) catch |err| {
-                log.warn("dropGraphStore failed", &.{
-                    Attr.string("graph_name", graph_name),
-                    Attr.string("error", @errorName(err)),
-                });
-            };
 
             // CANARY: REQ=REQ-ENG-3922-VECTOR-DIM-GUARD; FEATURE="VectorIndex"; ASPECT=UnindexedDimGraphDrop; STATUS=TESTED; TEST=tests/test_eng3922_dim_guard.zig; OWNER=index; UPDATED=2026-08-29
             // ENG-3922(a): the per-graph vector-dimension pins describe THIS
