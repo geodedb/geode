@@ -1974,7 +1974,8 @@ fn nodeMatchesPattern(
         const actual = props.get(prop.key) orelse return false;
         // SONNY-2806: by value, as the executor compares (a decimal by
         // representation and every extended value never, a DOUBLE included).
-        if (!stored_property_equality.matches(allocator, expected, actual)) {
+        // A stored value that cannot be decoded fails the read.
+        if (!try stored_property_equality.matches(allocator, expected, actual)) {
             return false;
         }
     }

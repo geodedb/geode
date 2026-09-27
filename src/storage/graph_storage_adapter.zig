@@ -16,6 +16,7 @@ const graph_store = @import("../graph_store.zig");
 const fle_integration = @import("../fle_integration.zig");
 const property_codec = @import("../property_value_codec.zig");
 const value_order = @import("../execution/value_order.zig");
+const execution = @import("../execution.zig");
 const audit = @import("../security/audit.zig");
 const ts_mod = @import("../timeseries/timeseries.zig");
 const fulltext = @import("../index/fulltext.zig");
@@ -1011,7 +1012,7 @@ const NodePropertyExactIndex = struct {
     /// map — by STREAMING the inversion of the forward postings (no transient
     /// in-memory map at save time). Caller must already hold every shard mutex
     /// (invoked from `saveToFile`). Format:
-    ///   magic "GENRVIX1" | epoch u64 | covered_lsn u64 | pair_count u64
+    ///   magic "GENRVIX2" | epoch u64 | covered_lsn u64 | pair_count u64
     ///   then pair_count × { node_id u64, key_len u32, encoded_key bytes }
     /// where `encoded_key` is the forward posting key
     /// `[label_id u32][key_len u32][key][value_hash u64]`. The value is
@@ -4544,28 +4545,23 @@ pub const StorageAdapter = struct {
             }
         }
 
-        var probe_id: u64 = 0;
-        switch (store.lookupMergeCandidate(graph_name, label, merge_key, merge_value, &probe_id)) {
-            .found => {
-                if (apply_on_match) {
-                    try store.setNodeProperty(probe_id, merge_key, merge_value);
-                    for (on_create_props) |kv| {
-                        if (std.mem.eql(u8, kv.key, merge_key)) continue;
-                        try store.setNodeProperty(probe_id, kv.key, kv.value);
-                    }
-                    // GAP-0900: the on-match upsert writes to the engine WAL
-                    // too — count it toward the checkpoint cadence. (The
-                    // create branch is counted by the delegated bulkInsert.)
-                    _ = self.pending_bulk_ops.fetchAdd(1, .monotonic);
+        if (try self.findMergeNode(store, graph_name, label, merge_key, merge_value)) |probe_id| {
+            if (apply_on_match) {
+                try store.setNodeProperty(probe_id, merge_key, merge_value);
+                for (on_create_props) |kv| {
+                    if (std.mem.eql(u8, kv.key, merge_key)) continue;
+                    try store.setNodeProperty(probe_id, kv.key, kv.value);
                 }
-                // Task 4 review Finding 1: `wrote` is true only when the
-                // on-match SET clauses actually ran above. A plain hit with
-                // no `apply_on_match` changed nothing — callers must not
-                // re-append it into an append-only FTS index.
-                return .{ .id = probe_id, .wrote = apply_on_match };
-            },
-            .not_indexable => return error.MergeValueNotIndexable,
-            .not_found => {},
+                // GAP-0900: the on-match upsert writes to the engine WAL
+                // too — count it toward the checkpoint cadence. (The
+                // create branch is counted by the delegated bulkInsert.)
+                _ = self.pending_bulk_ops.fetchAdd(1, .monotonic);
+            }
+            // Task 4 review Finding 1: `wrote` is true only when the
+            // on-match SET clauses actually ran above. A plain hit with
+            // no `apply_on_match` changed nothing — callers must not
+            // re-append it into an append-only FTS index.
+            return .{ .id = probe_id, .wrote = apply_on_match };
         }
 
         // Insert phase: delegate to the shard-aligned bulk insert helper —
@@ -5027,6 +5023,51 @@ pub const StorageAdapter = struct {
         return edge_id;
     }
 
+    // CANARY: REQ=REQ-SONNY-2806-MERGE-EQUAL-HOLDERS; FEATURE="MergeIdempotency"; ASPECT=BulkMergeResolution; STATUS=TESTED; TEST=tests/test_sonny2806_merge_equal_holders.zig; OWNER=storage; UPDATED=2026-09-27
+    /// The node a single-property MERGE matches, as the executor finds it:
+    /// the LOWEST node id among the nodes of `label` whose `key` equals
+    /// `value`, or null.
+    ///
+    /// MERGE's property index (graph_store) answers an integer, a string or
+    /// a boolean. SONNY-2806 (round 7): it keeps no other number, so a
+    /// DOUBLE or DECIMAL key such as 1.5 is resolved here through the exact
+    /// node-property index, which holds every value (`findNodeMatchingMergeProps`;
+    /// the executor scans the label). Such a key failed the server's MERGE
+    /// with MergeValueNotIndexable before round 6, and was indexed at the
+    /// cost of one entry per such property per node in round 6. The graph
+    /// lock the caller holds is no obstacle to the build below: the
+    /// group-commit caller built the index before taking it, and the
+    /// executor's unique-constraint check seeks it under the EXCLUSIVE lock
+    /// as the direct path does.
+    fn findMergeNode(
+        self: *StorageAdapter,
+        store: *graph_store.GraphStore,
+        graph_name: []const u8,
+        label: []const u8,
+        key: []const u8,
+        value: graph_store.PropertyValue,
+    ) !?u64 {
+        var id: u64 = 0;
+        switch (store.lookupMergeCandidate(graph_name, label, key, value, &id)) {
+            .found => return id,
+            .not_found => return null,
+            // Any other value the index cannot key (a null, a list, a key
+            // past 1024 bytes) is refused, as before.
+            .not_indexable => if (!graph_store.GraphStore.isNumberProperty(value)) return error.MergeValueNotIndexable,
+        }
+        const mg = blk: {
+            self.mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
+            defer self.mutex.unlock(std.Io.Threaded.global_single_threaded.io());
+            break :blk self.requireExistingGraphLocked(graph_name) catch |err| switch (err) {
+                error.GraphNotFound => return null,
+                else => return err,
+            };
+        };
+        try ensureExactNodePropertyIndexBuilt(self, mg);
+        const props = [_]PropKV{.{ .key = key, .value = value }};
+        return findNodeMatchingMergeProps(self, self.allocator, mg, store, graph_name, label, &props);
+    }
+
     /// Bulk-ingest MERGE fast path for simple single-label, single-merge-key
     /// MERGE statements — counterpart to `bulkInsertNode` for the
     /// msft-graph nodes_*.jsonl hot path (677/677 node-phase statements
@@ -5107,14 +5148,11 @@ pub const StorageAdapter = struct {
         // skip the lock-free Phase-1 fast return so the SET clauses
         // commit inside the statement txn (single WAL fsync) along with
         // the merge-prop index update.
-        var existing_id: u64 = undefined;
         if (!apply_on_match) {
-            switch (store.lookupMergeCandidate(graph_name, label, merge_key, merge_value, &existing_id)) {
-                // Task 4 review Finding 1: this early return only runs when
-                // `!apply_on_match`, so it is always a pure hit with no write.
-                .found => return .{ .id = existing_id, .wrote = false },
-                .not_found => {},
-                .not_indexable => return error.MergeValueNotIndexable,
+            // Task 4 review Finding 1: this early return only runs when
+            // `!apply_on_match`, so it is always a pure hit with no write.
+            if (try self.findMergeNode(store, graph_name, label, merge_key, merge_value)) |existing_id| {
+                return .{ .id = existing_id, .wrote = false };
             }
         }
 
@@ -5148,24 +5186,21 @@ pub const StorageAdapter = struct {
         // apply_on_match callers this is the only probe (Phase 1 was
         // skipped) and on hit we apply the SET clauses to the existing
         // node before returning (true upsert semantics).
-        switch (store.lookupMergeCandidate(graph_name, label, merge_key, merge_value, &existing_id)) {
-            .found => {
-                if (apply_on_match) {
-                    try store.setNodeProperty(existing_id, merge_key, merge_value);
-                    for (on_create_props) |kv| {
-                        if (std.mem.eql(u8, kv.key, merge_key)) continue;
-                        try store.setNodeProperty(existing_id, kv.key, kv.value);
-                    }
-                    if (stmt_txn_open) try stmt_txn.commit();
-                    return .{ .id = existing_id, .wrote = true };
+        if (try self.findMergeNode(store, graph_name, label, merge_key, merge_value)) |existing_id| {
+            if (apply_on_match) {
+                try store.setNodeProperty(existing_id, merge_key, merge_value);
+                for (on_create_props) |kv| {
+                    if (std.mem.eql(u8, kv.key, merge_key)) continue;
+                    try store.setNodeProperty(existing_id, kv.key, kv.value);
                 }
-                if (stmt_txn_open) stmt_txn.abort();
-                // Task 4 review Finding 1: a concurrent writer won the race
-                // between our Phase-1 miss and this re-probe — still a pure
-                // hit with no write from THIS call's perspective.
-                return .{ .id = existing_id, .wrote = false };
-            },
-            .not_found, .not_indexable => {},
+                if (stmt_txn_open) try stmt_txn.commit();
+                return .{ .id = existing_id, .wrote = true };
+            }
+            if (stmt_txn_open) stmt_txn.abort();
+            // Task 4 review Finding 1: a concurrent writer won the race
+            // between our Phase-1 miss and this re-probe — still a pure
+            // hit with no write from THIS call's perspective.
+            return .{ .id = existing_id, .wrote = false };
         }
 
         const labels = [_][]const u8{label};
@@ -10741,16 +10776,15 @@ fn hashPropertyValue(seed: u64, value: graph_store.PropertyValue) u64 {
     return h;
 }
 
+/// Whether two stored properties are equal, as the executor's
+/// `execution.valuesEqual` decides: numbers by exact value (1 and 1.0), a
+/// duration by its length, and every extended value (a DOUBLE, a SMALLINT, a
+/// date, ...) decoded first. SONNY-2806 (round 7): this compared by
+/// representation and an extended value never, so the multi-property MERGE
+/// fallback created a node on every `MERGE (:T {a: 1, d: date(...)})`, and
+/// `{a: 1}` did not find a stored 1.0.
 fn propertyValuesEqual(a: graph_store.PropertyValue, b: graph_store.PropertyValue) bool {
-    return switch (a) {
-        .String => |s| b == .String and std.mem.eql(u8, s, b.String),
-        .Int => |i| b == .Int and i == b.Int,
-        .Float => |f| b == .Float and f == b.Float,
-        .Bool => |v| b == .Bool and v == b.Bool,
-        .Null => b == .Null,
-        .Decimal => |d| b == .Decimal and d.coeff == b.Decimal.coeff and d.scale == b.Decimal.scale,
-        .ExtValue => false,
-    };
+    return execution.valuesEqual(property_codec.propertyValueToValue(a), property_codec.propertyValueToValue(b));
 }
 
 const candidate_shard_mask_int = if (sharded_store.SHARD_COUNT <= 64) u64 else @compileError("candidate shard mask assumes <=64 shards");
@@ -10954,15 +10988,20 @@ fn findNodeMatchingMergeProps(
     const candidate_mask = lockCandidateShardReads(mg, candidates);
     defer unlockCandidateShardReads(mg, candidate_mask);
 
+    // SONNY-2806 (round 7): the LOWEST matching node id, the node the merge
+    // index and the executor's label scan answer with, whatever the posting
+    // order.
+    var lowest: ?u64 = null;
     for (candidates) |slot_id| {
         const public_id = @as(u64, @truncate(id_map.nodeUuid(slot_id) orelse continue));
+        if (lowest) |l| if (public_id >= l) continue;
         // GAP-0046: hydrate-on-miss. Under a bounded node cache (or right after a
         // deferred reopen) the matching node need not be resident; a plain
         // `getPtr` would miss it and the MERGE would wrongly create a duplicate.
         const node = (store.nodes.getOrHydratePtr(public_id) catch null) orelse continue;
-        if (nodeMatchesMergeProps(node, graph_name, label, props)) return public_id;
+        if (nodeMatchesMergeProps(node, graph_name, label, props)) lowest = public_id;
     }
-    return null;
+    return lowest;
 }
 
 /// Result of `StorageAdapter.acquireGraphReadLock` — a locked `ManagedGraph`

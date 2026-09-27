@@ -25,9 +25,18 @@ const execution = @import("../execution.zig");
 const Value = value_types.Value;
 
 /// Whether the stored property `actual` equals `expected`, as
-/// `execution.valuesEqual` decides for the same two values. `allocator`
-/// decodes an extended value; nothing is kept.
-pub fn matches(allocator: std.mem.Allocator, expected: Value, actual: gs.PropertyValue) bool {
+/// `execution.valuesEqual` decides for the same two values, with one
+/// exception: a stored string also equals a TEXT, VARCHAR or CHAR value with
+/// the same characters. The executor reads a stored string as a plain string
+/// (`Str`), and `valuesEqual` finds no string of another type equal to one,
+/// so the legacy executor's `{s: TEXT 'a'}` misses a stored 'a'; the
+/// streaming node scan matched it before SONNY-2806, and still does, and the
+/// planned read now does too.
+///
+/// `allocator` decodes an extended value; nothing is kept. A decode failure
+/// (out of memory, or a stored value the codec rejects) is returned, not
+/// taken for a mismatch, which silently dropped the row.
+pub fn matches(allocator: std.mem.Allocator, expected: Value, actual: gs.PropertyValue) !bool {
     return switch (actual) {
         .int => |n| numberEquals(expected, .{ .exact = .{ .coeff = n, .scale = 0 } }),
         .float => |f| numberEquals(expected, .{ .float = f }),
@@ -43,9 +52,9 @@ pub fn matches(allocator: std.mem.Allocator, expected: Value, actual: gs.Propert
         .null => expected == .Null,
         // An extended value (a DOUBLE, a SMALLINT, a duration, a zoned
         // time, ...): decoded as the executor reads it, then compared as the
-        // executor compares it. A value that does not decode matches nothing.
+        // executor compares it.
         .ext => blk: {
-            const decoded = graph_storage_adapter.fromStorageProperty(allocator, actual) catch break :blk false;
+            const decoded = try graph_storage_adapter.fromStorageProperty(allocator, actual);
             defer property_codec.freePropertyValue(allocator, decoded);
             break :blk execution.valuesEqual(property_codec.propertyValueToValue(decoded), expected);
         },

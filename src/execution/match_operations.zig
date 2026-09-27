@@ -11100,7 +11100,10 @@ pub fn executeMatchQueryImpl(allocator: std.mem.Allocator, q: ast.Query, param_n
                     };
                     if (pv_opt) |pv| {
                         var out_id: u64 = undefined;
-                        switch (store.lookupMergeCandidate(filter_graph, match_labels[0], prop.key, pv, &out_id)) {
+                        // SONNY-2806 (round 7): the only holder of the key, or
+                        // the scan. The entry names one node, and a MATCH
+                        // wants every node holding the key (1 and 1.0 share it).
+                        switch (store.lookupOnlyMergeHolder(filter_graph, match_labels[0], prop.key, pv, &out_id)) {
                             .found => {
                                 fastpath_hit = out_id;
                                 fastpath_authoritative = true;

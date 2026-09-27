@@ -2857,7 +2857,7 @@ fn propsMatch(
     param_names: []const []const u8,
     param_values: []const Value,
     context: ExecutionContext,
-) bool {
+) !bool {
     for (props) |prop| {
         const expected = eval.evalExpr(allocator, prop.value.*, Env{
             .names = &.{},
@@ -2869,8 +2869,9 @@ fn propsMatch(
         }) catch return false;
         const actual = actual_props.get(prop.key) orelse return false;
         // SONNY-2806: by value, as the legacy executor compares (a decimal by
-        // representation, a DOUBLE and every extended value never).
-        if (!stored_property_equality.matches(allocator, expected, actual)) {
+        // representation, a DOUBLE and every extended value never). A stored
+        // value that cannot be decoded fails the read.
+        if (!try stored_property_equality.matches(allocator, expected, actual)) {
             return false;
         }
     }

@@ -224,10 +224,12 @@ fn nodeMatchesPattern(
 }
 
 /// Convert an eval Value to a GraphStore PropertyValue for merge index lookup.
-/// Only handles simple scalar types that the index supports. SONNY-2769
-/// (round 6): every number probes the index. Its key is the number's exact
-/// value, so any representation finds a stored one equal to it, and a miss
-/// is still authoritative (a stored 1.0 is found by `{x: 1}`).
+/// Only handles simple scalar types that the index supports. SONNY-2806
+/// (round 6): every number probes the index. An integer's key is its value,
+/// so any representation finds a stored one equal to it, and a miss is still
+/// authoritative (a stored 1.0 is found by `{x: 1}`). Round 7: a number that
+/// is not an integer (1.5) is not indexed and probes `.not_indexable`, so the
+/// label scan below answers it, as before round 6.
 fn valueToPropertyValueForIndex(val: Value) ?graph_store.PropertyValue {
     return switch (val) {
         .Str => |s| graph_store.PropertyValue{ .String = s },

@@ -8578,6 +8578,19 @@ pub fn build(b: *std.Build) void {
     const sonny2806_step = b.step("test-sonny2806-exact-property-matching", "Run SONNY-2806 regression (an inline property map and MERGE compare a stored number, duration or zoned time by its value on every session and path: the planned read, the streaming node scan, the exact index seek, MERGE's property index)");
     sonny2806_step.dependOn(&run_sonny2806_tests.step);
 
+    // SONNY-2806 (round 7): MERGE matches the lowest node id among the nodes
+    // holding a merge key, after a delete or a SET, on the server's bulk MERGE
+    // and on a reopened store; MERGE's index keeps no number that is not an
+    // integer; the multi-property MERGE fallback compares by value.
+    const sonny2806_holders_mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny2806_merge_equal_holders.zig"), .target = target, .optimize = optimize });
+    sonny2806_holders_mod.addImport("geode", root_mod);
+    sonny2806_holders_mod.addImport("logging", logging_mod);
+    const sonny2806_holders_tests = b.addTest(.{ .root_module = sonny2806_holders_mod });
+    const run_sonny2806_holders_tests = b.addRunArtifact(sonny2806_holders_tests);
+    shardDep(test_step, &run_sonny2806_holders_tests.step, 1, test_shard_loads, test_shard_index);
+    const sonny2806_holders_step = b.step("test-sonny2806-merge-equal-holders", "Run SONNY-2806 round-7 regression (MERGE matches the lowest node id among the nodes holding a key after a delete or a SET, on the executor, the server's bulk MERGE and a reopened store; MERGE's index keeps no number that is not an integer; the multi-property MERGE fallback compares by value)");
+    sonny2806_holders_step.dependOn(&run_sonny2806_holders_tests.step);
+
     const sonny2675_walker_mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny2675_having_walker.zig"), .target = target, .optimize = optimize });
     sonny2675_walker_mod.addImport("geode", root_mod);
     const sonny2675_walker_tests = b.addTest(.{ .root_module = sonny2675_walker_mod });

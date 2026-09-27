@@ -131,18 +131,61 @@
     legacy executor compared both by representation, so MERGE also created
     a second node for them.
   - **Behaviour change (fixes a round-5 regression):** MERGE's property
-    index keys a number by its exact value. `MERGE (n:U {x: 1})` created a
-    second node beside a stored 1.0 on every session, while
-    `MERGE (n:T {x: 1.0})` matched a stored 1.
+    index keys an integer by its value, whatever its representation:
+    `MERGE (n:U {x: 1})` created a second node beside a stored 1.0 on every
+    session, while `MERGE (n:T {x: 1.0})` matched a stored 1. A number that
+    is not an integer (1.5, a DOUBLE 0.25) stays out of that index, as in
+    v0.8.22. The executor finds it by its label scan, and the server's bulk
+    MERGE (`bulkMergeNode*`) through the exact node-property index. So MERGE
+    on the server fast path now works for a DECIMAL or DOUBLE key: it failed
+    with MergeValueNotIndexable, or, with ON MATCH SET, created a node on
+    every run.
+  - **Behaviour change:** when two nodes hold one MERGE key (1 and 1.0, or
+    two nodes CREATE wrote with one value), MERGE matches the one with the
+    lowest node id, on the executor, the server's bulk MERGE and a reopened
+    store. The index kept the node written last, so after a restart MERGE
+    could match the other node, and deleting either node, or a SET that
+    moved it off the key, dropped the entry: the next MERGE created a third
+    node. The entry now goes only with the key's last holder. When the
+    lowest holder goes, the next MERGE of that key scans the label once for
+    the next one.
+  - `MATCH (n:T {x: 1})` on the legacy executor (a session in memory, with
+    an RLS policy or tenant-scoped) returned one node when two held the
+    value (1 and 1.0, or two nodes CREATE wrote with 1): it read the node
+    from MERGE's index. It uses the index only for a key's only holder now.
+  - The server's multi-property MERGE compares a stored value as the
+    executor does: `MERGE (:T {a: 1, d: date('2020-01-01')})` created a node
+    on every run (a stored date, duration or DOUBLE never matched), and
+    `{a: 1}` did not find a stored 1.0.
+  - A stored value that cannot be decoded fails the planned read or the
+    streaming node scan; it was taken as a mismatch, and the row was
+    dropped.
 
   A DOUBLE and a decimal are equal only when their values are exactly
   equal (`{x: 0.1}` does not match a stored DOUBLE 0.1), which is how
   GROUP BY treats them. `=` compares them in a double instead (SONNY-2807).
 
   **Upgrade note:** the adapter's exact node-property index (`prop_exact.idx`
-  and `prop_rev.idx`) and the merge-index hydration snapshot hash a number
-  by its value now. A file written by an earlier version is stale, and the
-  first open of each graph after the upgrade rebuilds the index with a scan.
+  and `prop_rev.idx`) hashes a number by its value now, and each entry of
+  MERGE's index records whether other nodes hold its key.
+  - A file written by an earlier version is stale. The first open of each
+    graph after the upgrade rebuilds the exact index in the background, and
+    a read the index serves waits for that rebuild (the code estimates about
+    14 minutes at 14.27M nodes).
+  - All three hydration snapshots (`hydration_counters.snap`,
+    `hydration_labels.snap` and `hydration_merge.snap`, format 4) are
+    invalidated, so the first open of each graph does a full hydration scan.
+  - A rollback rebuilds too: v0.8.22 finds these files stale and rebuilds
+    from a scan the same way.
+  - Memory: MERGE's index (by default it holds every property; lean mode
+    holds the MERGE keys only) now also holds a DOUBLE or DECIMAL property
+    whose value is an integer, and an integer's key is 9 bytes (v0.8.22
+    stored its text). Measured against v0.8.22, 2000 nodes with an INT, a
+    DOUBLE and a DECIMAL property: 2000 entries in both (15b9aa0e: 6000),
+    139 KB in memory against 128 KB, and `hydration_merge.snap` 92 KB
+    against 81 KB. 25,000 nodes of a mixed schema (ids, strings, prices,
+    ratings, coordinates): 55,767 entries against 55,502 (15b9aa0e: 90,543),
+    4.7 MB against 4.6 MB, and a 2.8 MB snapshot against 2.7 MB.
 
 - **Grouped queries report their errors (SONNY-2675):**
   - **Behaviour change:** a HAVING name that is no column, binding or
