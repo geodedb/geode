@@ -9067,6 +9067,22 @@ pub fn build(b: *std.Build) void {
     const sonny3130_step = b.step("test-sonny3130-graph-ddl-alone", "Run SONNY-3130 regression (a program that creates, replaces or drops a graph and has a statement on graph data is refused, 0A000, and changes nothing; graph DDL with graph selection runs; gRPC in process and QUIC against a spawned server)");
     sonny3130_step.dependOn(&run_sonny3130_tests.step);
 
+    // SONNY-3131: a graph-scoped checkpoint of a graph dropped while it waited
+    // leaves the registry alone, and a registry entry whose files are gone
+    // does not stop the registry from being saved (restarts included).
+    const sonny3131_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny3131_checkpoint_dropped_graph.zig"), .target = target, .optimize = optimize });
+    sonny3131_test_mod.link_libc = true;
+    sonny3131_test_mod.addImport("geode", root_mod);
+    sonny3131_test_mod.addImport("schema", schema_mod);
+    sonny3131_test_mod.addImport("protobuf", protobuf_mod);
+    sonny3131_test_mod.addImport("grpc_impl", sonny1560_shim_mod);
+    sonny3131_test_mod.addImport("logging", logging_mod);
+    const sonny3131_tests = b.addTest(.{ .root_module = sonny3131_test_mod });
+    const run_sonny3131_tests = b.addRunArtifact(sonny3131_tests);
+    shardDep(test_step, &run_sonny3131_tests.step, 1, test_shard_loads, test_shard_index);
+    const sonny3131_step = b.step("test-sonny3131-checkpoint-dropped-graph", "Run SONNY-3131 regression (a checkpoint racing DROP GRAPH does not write the graph back into the registry; a registry entry whose files are gone does not stop later graphs from persisting across a restart)");
+    sonny3131_step.dependOn(&run_sonny3131_tests.step);
+
     // SONNY-2790: the fulltext statements (CREATE/DROP INDEX, geode.fts.*)
     // run on the default graph, so the handlers lock `default` for them from
     // any session. Classifier, and the real gRPC handler (SONNY-1560 shim).

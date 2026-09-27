@@ -9156,6 +9156,14 @@ pub const StorageAdapter = struct {
         {
             self.mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
             defer self.mutex.unlock(std.Io.Threaded.global_single_threaded.io());
+            // CANARY: REQ=REQ-SONNY-3131-CHECKPOINT-DROPPED-GRAPH; FEATURE="MultiGraphIsolation"; ASPECT=GraphCheckpointRegistry; STATUS=TESTED; TEST=tests/test_sonny3131_checkpoint_dropped_graph.zig; OWNER=storage; UPDATED=2026-09-27
+            // SONNY-3131: a graph dropped while this checkpoint waited (it
+            // returned `.ok` with nothing saved) left the registry; it is not
+            // written back, as `checkpointAllEx` does not. The upsert put the
+            // dropped graph back, whose files are gone: CREATE GRAPH of the
+            // name answered 42P07, and every later registry save failed. The
+            // dropped bit is set under this mutex, so the check is exact.
+            if (mg.isDropped()) return;
             self.upsertRegistryEntryLocked(mg.name, mg.uuid, nc, ec);
             self.saveRegistryLocked() catch |err| {
                 log.warn("failed to persist graph registry: {}", .{err});
@@ -10348,7 +10356,17 @@ pub const StorageAdapter = struct {
         return buf;
     }
 
-    fn refreshRegistryHeaderNextIdsLocked(self: *StorageAdapter) !void {
+    // CANARY: REQ=REQ-SONNY-3131-CHECKPOINT-DROPPED-GRAPH; FEATURE="MultiGraphIsolation"; ASPECT=RegistryHeaderSkipsLostEntry; STATUS=TESTED; TEST=tests/test_sonny3131_checkpoint_dropped_graph.zig; OWNER=storage; UPDATED=2026-09-27
+    /// The registry header's next node and edge ids: the largest of every
+    /// entry's, read from the engine of a loaded graph and from the manifest
+    /// on disk of one that is not.
+    ///
+    /// SONNY-3131: an entry whose manifest cannot be read (its files are gone)
+    /// is skipped and logged at error level, and the header's current ids are
+    /// kept as a floor, so the skipped entry cannot lower them. Its error failed
+    /// the whole save, on every save that followed: graphs created later were
+    /// never written to the registry, and were gone after a restart.
+    fn refreshRegistryHeaderNextIdsLocked(self: *StorageAdapter) void {
         var next_node_id: u64 = 1;
         var next_edge_id: u64 = 1;
 
@@ -10361,7 +10379,15 @@ pub const StorageAdapter = struct {
                 continue;
             }
 
-            const manifest = try self.loadPersistedManifestLocked(entry.uuid);
+            const manifest = self.loadPersistedManifestLocked(entry.uuid) catch |err| {
+                slog.err("graph registry entry has no readable manifest; it is skipped in the registry header's next ids", &.{
+                    SAttr.string("graph", entry.name),
+                    SAttr.err("error", err),
+                });
+                next_node_id = @max(next_node_id, self.registry.next_node_id);
+                next_edge_id = @max(next_edge_id, self.registry.next_edge_id);
+                continue;
+            };
             next_node_id = @max(next_node_id, manifest.next_node_id);
             next_edge_id = @max(next_edge_id, manifest.next_edge_id);
         }
@@ -10371,7 +10397,7 @@ pub const StorageAdapter = struct {
     }
 
     fn saveRegistryLocked(self: *StorageAdapter) !void {
-        try self.refreshRegistryHeaderNextIdsLocked();
+        self.refreshRegistryHeaderNextIdsLocked();
         try self.registry.saveToFile(self.registry_path);
     }
 

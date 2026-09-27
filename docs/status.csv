@@ -1789,7 +1789,7 @@ REQ-GPS-DIST-002,GPS Distributed Envelope,TruncatedBuffer,TESTED,,,security,2026
 REQ-GPS-DIST-002,GPS Distributed Envelope,UnsupportedVersion,TESTED,,,security,2026-05-20,tests/test_gps_distributed_envelope.zig,257
 REQ-GPS-EXPLAIN-001,GPS EXPLAIN POLICY,ASTType,TESTED,,,security,2026-05-21,src/gql/ast.zig,820
 REQ-GPS-EXPLAIN-001,GPS EXPLAIN POLICY,ASTVariant,TESTED,,,security,2026-05-21,src/gql/ast.zig,60
-REQ-GPS-EXPLAIN-001,GPS EXPLAIN POLICY,BuildStep,TESTED,,,security,2026-05-21,build.zig,12246
+REQ-GPS-EXPLAIN-001,GPS EXPLAIN POLICY,BuildStep,TESTED,,,security,2026-05-21,build.zig,12262
 REQ-GPS-EXPLAIN-001,GPS EXPLAIN POLICY,CreateClassifiedAsCreate,TESTED,,,security,2026-05-21,tests/test_gps_explain_policy.zig,197
 REQ-GPS-EXPLAIN-001,GPS EXPLAIN POLICY,DispatchArm,TESTED,,,security,2026-05-21,src/execution.zig,1808
 REQ-GPS-EXPLAIN-001,GPS EXPLAIN POLICY,ExecutorFunction,TESTED,,,security,2026-05-21,src/execution/statement_handlers.zig,1477
@@ -1946,7 +1946,7 @@ REQ-GPS-PROC-001,GPS Procedure Enforcement,ReadWriteAllowsMutating,TESTED,,,secu
 REQ-GPS-PROC-001,GPS Procedure Enforcement,UnauthenticatedDenied,TESTED,,,security,2026-05-20,tests/test_gps_procedure_enforcement.zig,168
 REQ-GPS-PROC-003,GPS Phase 5 Procedure,MetadataReadOnly,TESTED,,,security,2026-05-21,src/execution/procedure_access.zig,114
 REQ-GPS-WIRE-001,GPS Wire Principal Forwarding,BeginQuery,IMPL,,,security,2026-05-21,src/client/quic_query_runner.zig,106
-REQ-GPS-WIRE-001,GPS Wire Principal Forwarding,BuildStep,TESTED,,,security,2026-05-21,build.zig,12255
+REQ-GPS-WIRE-001,GPS Wire Principal Forwarding,BuildStep,TESTED,,,security,2026-05-21,build.zig,12271
 REQ-GPS-WIRE-001,GPS Wire Principal Forwarding,CliEnvelopeBuild,TESTED,,,security,2026-06-11,src/cli/main.zig,1681
 REQ-GPS-WIRE-001,GPS Wire Principal Forwarding,CliForwardPrincipal,TESTED,,,security,2026-06-11,src/cli/main.zig,1923
 REQ-GPS-WIRE-001,GPS Wire Principal Forwarding,CliForwardPrincipalFlag,TESTED,,,security,2026-06-11,src/cli/main.zig,1035
@@ -1959,7 +1959,7 @@ REQ-GPS-WIRE-001,GPS Wire Principal Forwarding,SchemaField,TESTED,,,security,202
 REQ-GPS-WIRE-001,GPS Wire Principal Forwarding,ServerUnpack,TESTED,,,security,2026-06-10,src/server/quic_connection_handler.zig,7536
 REQ-GPS-WIRE-002,GPS Distributed Wire,BackwardCompat,TESTED,,,security,2026-05-21,tests/test_gps_distributed_wire.zig,167
 REQ-GPS-WIRE-002,GPS Distributed Wire,BatchQueries,EXEMPT,,,security,2026-06-11,src/distributed/query_transport.zig,179
-REQ-GPS-WIRE-002,GPS Distributed Wire,BuildStep,TESTED,,,security,2026-05-21,build.zig,12267
+REQ-GPS-WIRE-002,GPS Distributed Wire,BuildStep,TESTED,,,security,2026-05-21,build.zig,12283
 REQ-GPS-WIRE-002,GPS Distributed Wire,ConnectionExecuteQuery,EXEMPT,,,security,2026-06-11,src/distributed/query_transport.zig,395
 REQ-GPS-WIRE-002,GPS Distributed Wire,ExecutePlan,IMPL,,,security,2026-05-21,src/distributed/enhanced_query_coordinator.zig,250
 REQ-GPS-WIRE-002,GPS Distributed Wire,ExecuteRemoteQuery,EXEMPT,,,security,2026-06-11,src/distributed/query_transport.zig,141
@@ -4718,14 +4718,14 @@ REQ-QUIC-HC-109,High-Concurrency Mutations,MultiPropertyMergeFastPath,IMPL,,,sto
 REQ-QUIC-HC-109,High-Concurrency Mutations,MultiPropertyMergeTupleLocks,IMPL,,,storage,2026-05-27,src/storage/graph_storage_adapter.zig,1797
 REQ-QUIC-HC-110,High-Concurrency Store-Free Reads,LockBypassClassifier,TESTED,,,transport,2026-05-27,src/query/query_traits.zig,874
 REQ-QUIC-HC-110,High-Concurrency Store-Free Reads,QUICLockBypass,TESTED,,,transport,2026-05-27,src/server/quic_connection_handler.zig,7692
-REQ-QUIC-HC-111,High-Concurrency Mutations,MultiPropertyMergeIndexedProbe,TESTED,,,storage,2026-05-27,src/storage/graph_storage_adapter.zig,11273
+REQ-QUIC-HC-111,High-Concurrency Mutations,MultiPropertyMergeIndexedProbe,TESTED,,,storage,2026-05-27,src/storage/graph_storage_adapter.zig,11299
 REQ-QUIC-HC-114,High-Concurrency Setup,ConfigurableHelloReadTimeout,TESTED,,,transport,2026-06-10,src/server/server_init.zig,91
 REQ-QUIC-HC-118,High-Concurrency Test Harness,BoundedDriverThreadStacks,TESTED,,,transport,2026-06-11,tests/e2e_quic_high_concurrency.zig,63
 REQ-QUIC-HC-119,QUIC High-Concurrency Reads,BatchedCountFastPathResponse,TESTED,,,transport,2026-05-27,src/server/quic_connection_handler.zig,7922
 REQ-QUIC-HC-120,High-Concurrency Label Counts,LabelCountRefcountRead,TESTED,,,storage,2026-05-28,src/graph_store.zig,7387
 REQ-QUIC-HC-120,High-Concurrency Label Counts,LabelCountRefcounts,TESTED,,,storage,2026-05-28,src/graph_store.zig,1821
 REQ-QUIC-HC-120,High-Concurrency Test Client,PostReadAckFlush,IMPL,,,transport,2026-05-27,tests/proto_test_util.zig,1042
-REQ-QUIC-HC-121,High-Concurrency Mutations,CandidateShardReadLocks,TESTED,,,storage,2026-05-28,src/storage/graph_storage_adapter.zig,11344
+REQ-QUIC-HC-121,High-Concurrency Mutations,CandidateShardReadLocks,TESTED,,,storage,2026-05-28,src/storage/graph_storage_adapter.zig,11370
 REQ-QUIC-HC-122,HighConcurrencyMutations,ExactPropertyIndexSharding,TESTED,,,storage,2026-05-28,src/storage/graph_storage_adapter.zig,303
 REQ-QUIC-HC-124,High-Concurrency Test Harness,ConnectionWorkerHeadroom,TESTED,,,transport,2026-06-11,tests/e2e_quic_high_concurrency.zig,1305
 REQ-QUIC-HC-125,ParallelUnionArms,ThreadSafeArmAllocator,TESTED,,,execution,2026-05-28,src/execution/set_operations.zig,1309
@@ -4765,7 +4765,7 @@ REQ-QUIC-HC-158,QUIC High-Concurrency Reads,EmptyRlsEngineFastPath,TESTED,,,perf
 REQ-QUIC-HC-159,QUIC High-Concurrency Mutations,PermitGatedMutationRetry,TESTED,,,transport,2026-05-29,src/server/quic_connection_handler.zig,4860
 REQ-QUIC-HC-160,QUIC High-Concurrency Mutations,ShardParallelMutationAdmission,TESTED,,,transport,2026-05-29,src/server/quic_connection_handler.zig,5318
 REQ-QUIC-HC-161,High-Concurrency Diagnostics,ShortHeaderTimingHarness,TESTED,,,transport,2026-06-11,tests/e2e_quic_high_concurrency.zig,1231
-REQ-QUIC-HC-162,High-Concurrency Mutations,SmallestPostingPreselect,IMPL,,,storage,2026-05-29,src/storage/graph_storage_adapter.zig,11209
+REQ-QUIC-HC-162,High-Concurrency Mutations,SmallestPostingPreselect,IMPL,,,storage,2026-05-29,src/storage/graph_storage_adapter.zig,11235
 REQ-QUIC-HC-163,High-Concurrency Label Counts,AtomicLabelCountRefcounts,TESTED,,,storage,2026-06-11,src/graph_store.zig,1920
 REQ-QUIC-HC-164,High-Concurrency Query Cache,SharedAstConcurrentHits,IMPL,,,engine,2026-05-29,src/server/query_ast_cache.zig,242
 REQ-QUIC-HC-165,High-Concurrency Query Cache,SharedPlanConcurrentHits,IMPL,,,engine,2026-05-29,src/server/query_plan_cache.zig,451
@@ -5430,6 +5430,9 @@ REQ-SONNY-3130-GRAPH-DDL-ALONE,MultiGraphIsolation,GraphDdlAlone,TESTED,,,storag
 REQ-SONNY-3130-GRAPH-DDL-ALONE,MultiGraphIsolation,GrpcHandler,TESTED,,,storage,2026-09-27,src/transport/grpc_server.zig,2826
 REQ-SONNY-3130-GRAPH-DDL-ALONE,MultiGraphIsolation,QuicHandler,TESTED,,,storage,2026-09-27,src/server/quic_connection_handler.zig,7748
 REQ-SONNY-3130-GRAPH-DDL-ALONE,MultiGraphIsolation,Regression,TESTED,,,storage,2026-09-27,tests/test_sonny3130_graph_ddl_alone.zig,22
+REQ-SONNY-3131-CHECKPOINT-DROPPED-GRAPH,MultiGraphIsolation,GraphCheckpointRegistry,TESTED,,,storage,2026-09-27,src/storage/graph_storage_adapter.zig,9159
+REQ-SONNY-3131-CHECKPOINT-DROPPED-GRAPH,MultiGraphIsolation,RegistryHeaderSkipsLostEntry,TESTED,,,storage,2026-09-27,src/storage/graph_storage_adapter.zig,10359
+REQ-SONNY-3131-CHECKPOINT-DROPPED-GRAPH,MultiGraphIsolation,Regression,TESTED,,,storage,2026-09-27,tests/test_sonny3131_checkpoint_dropped_graph.zig,22
 REQ-SONNY-CAPABILITY-PROFILE-001,SonnyCapabilityProfile,DiscoveryRows,TESTED,,,execution,2026-09-08,src/execution/admin_ddl.zig,219
 REQ-SONNY-CAPABILITY-PROFILE-001,SonnyCapabilityProfile,PublicationContract,TESTED,,,execution,2026-09-08,tests/test_sonny_capability_profile.zig,1
 REQ-SONNY-CAPABILITY-PROFILE-002,SonnyCapabilityProfile,Config,IMPL,,,server,2026-09-08,src/server/cli_args.zig,59
