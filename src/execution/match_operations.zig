@@ -7958,11 +7958,33 @@ fn executeVariableLengthPathTraversal(
     param_values: []const Value,
     where_clause: ?ast.Expr,
     filter_clause: ?ast.Expr,
+    set_clauses: []const ast.SetClause,
+    remove_clauses: []const ast.RemoveClause,
     has_with: bool,
     items: []const ast.ReturnItem,
     limit: ?usize,
     path_mode: ast.PathMode,
 ) !void {
+    // SONNY-2707: the relationship variable of a variable-length pattern is
+    // the list of its edges, and the path variable the path: neither has
+    // properties or labels to write. Refuse the statement before any path is
+    // walked (so before anything is written), rather than ignore the write.
+    for (set_clauses) |sc| {
+        const target = switch (sc) {
+            .Property => |prop| prop.target.object,
+            .Labels => |ls| ls.node,
+            .AllProperties => |ap| ap.node,
+        };
+        if (namesVariable(target, rel_var) or namesVariable(target, chain_path_var)) return error.VariableLengthPathWrite;
+    }
+    for (remove_clauses) |rc| {
+        const target = switch (rc) {
+            .Property => |prop| prop.object,
+            .Labels => |lr| lr.node,
+        };
+        if (namesVariable(target, rel_var) or namesVariable(target, chain_path_var)) return error.VariableLengthPathWrite;
+    }
+
     // CANARY: REQ=REQ-GQL-080; FEATURE="VariableLengthPaths"; ASPECT=Execution; STATUS=TESTED; OWNER=engine; UPDATED=2025-10-09
     // Stream paths via PathIterator instead of materializing all paths upfront
     const min_len = var_len_min orelse 0;
@@ -8168,6 +8190,19 @@ fn executeVariableLengthPathTraversal(
             }
         }
 
+        // CANARY: REQ=REQ-SONNY-2707-VARLEN-WRITE; FEATURE="VariableLengthPaths"; ASPECT=PathEndWrites; STATUS=TESTED; TEST=tests/test_sonny2707_varlen_set.zig; OWNER=engine; UPDATED=2026-09-27
+        // SONNY-2707: the statement's SET and REMOVE, on this path's end
+        // nodes. They were never applied, so `MATCH (a)-[*1..2]->(b) SET b.x
+        // = 1` matched and wrote nothing. Both ends passed the session's
+        // scope (the start node its scan, every later node the PathIterator's
+        // step filter and the end node `nodeVisibleCached` above), so no
+        // write reaches a node the session cannot read.
+        if (set_clauses.len != 0 or remove_clauses.len != 0) {
+            // Statement-atomicity pre-pass -- see `executeCreate`.
+            try write_precheck.checkSetClausesWritable(allocator, set_clauses, env, null, &.{});
+            try applyPathEndWrites(allocator, store, set_clauses, remove_clauses, env, left_node, right_node_ptr, left_node_var, right_node_var);
+        }
+
         // CANARY: REQ=REQ-GQL-WITH-GROUPBY-005; FEATURE="WithGroupByAggregation"; ASPECT=VarLenRowBuilding; STATUS=TESTED; TEST=geodetestlab/specs/gql_query_comprehensive.yml; OWNER=execution; UPDATED=2025-12-22
         // When WITH clause is present, build rows containing matched node values
         // Values are copied into heap-allocated row since stack buffers are reused each iteration
@@ -8204,6 +8239,60 @@ fn executeVariableLengthPathTraversal(
         }
 
         try rows.append(allocator, row);
+    }
+}
+
+fn namesVariable(target: []const u8, variable: ?[]const u8) bool {
+    const v = variable orelse return false;
+    return std.mem.eql(u8, target, v);
+}
+
+/// SONNY-2707: the end node of a variable-length path a SET or REMOVE names:
+/// the start (`left_var`) or the end (`right_var`).
+fn pathEnd(target: []const u8, left: *graph_store.Node, right: *graph_store.Node, left_var: ?[]const u8, right_var: ?[]const u8) ?*graph_store.Node {
+    if (namesVariable(target, left_var)) return left;
+    if (namesVariable(target, right_var)) return right;
+    return null;
+}
+
+/// SONNY-2707: apply a statement's SET and REMOVE clauses to the end nodes of
+/// one variable-length path, through the durable, id-keyed store writes the
+/// single-hop traversal uses.
+fn applyPathEndWrites(
+    allocator: std.mem.Allocator,
+    store: *graph_store.GraphStore,
+    set_clauses: []const ast.SetClause,
+    remove_clauses: []const ast.RemoveClause,
+    env: Env,
+    left: *graph_store.Node,
+    right: *graph_store.Node,
+    left_var: ?[]const u8,
+    right_var: ?[]const u8,
+) !void {
+    for (set_clauses) |sc| {
+        switch (sc) {
+            .Property => |prop| if (pathEnd(prop.target.object, left, right, left_var, right_var)) |node| {
+                const value = try eval.evalExpr(allocator, prop.value, env);
+                try property_mutation.setNodePropertyFromValue(allocator, store, node.labels, node.id, prop.target.property, value);
+            },
+            .Labels => |ls| if (pathEnd(ls.node, left, right, left_var, right_var)) |node| {
+                for (ls.labels) |label| try store.addNodeLabel(node.id, label);
+            },
+            .AllProperties => |ap| if (pathEnd(ap.node, left, right, left_var, right_var)) |node| {
+                const props_value = try eval.evalExpr(allocator, ap.properties, env);
+                try property_mutation.replaceNodeProperties(allocator, store, node, props_value);
+            },
+        }
+    }
+    for (remove_clauses) |rc| {
+        switch (rc) {
+            .Property => |prop| if (pathEnd(prop.object, left, right, left_var, right_var)) |node| {
+                property_mutation.removeNodeProperty(store, node, prop.property);
+            },
+            .Labels => |lr| if (pathEnd(lr.node, left, right, left_var, right_var)) |node| {
+                for (lr.labels) |label| try store.removeNodeLabel(node.id, label);
+            },
+        }
     }
 }
 
@@ -10798,11 +10887,14 @@ pub fn executeMatchQueryImpl(allocator: std.mem.Allocator, q: ast.Query, param_n
                 if (var_len_min != null or var_len_max != null) {
                     // Variable-length path traversal — delegated to helper
                     // LIMIT hint for early termination (only when no ORDER BY will reorder)
-                    const limit_hint: ?usize = if (q.order_by == null)
+                    // SONNY-2707: not when the statement writes: its SET or
+                    // REMOVE reaches every path, and the LIMIT is the RETURN's.
+                    const writes = q.set_clauses.len != 0 or q.remove_clauses.len != 0;
+                    const limit_hint: ?usize = if (q.order_by == null and !writes)
                         resolveLimitParam(q.limit, q.limit_param, param_names, param_values)
                     else
                         null;
-                    try executeVariableLengthPathTraversal(allocator, store, &hop_scope, left_node, &rows, var_len_min, var_len_max, rel_type, rel_direction, right_labels, right_props, left_node_var, right_node_var, rel_var, chain_path_var, param_names, param_values, traversal_where, q.filter_clause, has_with, items, limit_hint, effectivePathMode(q));
+                    try executeVariableLengthPathTraversal(allocator, store, &hop_scope, left_node, &rows, var_len_min, var_len_max, rel_type, rel_direction, right_labels, right_props, left_node_var, right_node_var, rel_var, chain_path_var, param_names, param_values, traversal_where, q.filter_clause, q.set_clauses, q.remove_clauses, has_with, items, limit_hint, effectivePathMode(q));
                 } else {
                     // Standard single-hop edge traversal — delegated to helper
                     try executeSingleHopEdgeTraversal(allocator, store, &hop_scope, left_node, &rows, rel_direction, rel_type, rel_props_filter, right_labels, right_props, left_node_var, rel_var, right_node_var, chain_path_var, param_names, param_values, traversal_where, q.filter_clause, q.set_clauses, q.remove_clauses, has_with, items);

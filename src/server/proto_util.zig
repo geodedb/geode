@@ -282,6 +282,9 @@ pub fn mapError(err: anyerror) ErrorInfo {
         error.UnsupportedGroupedReturn => .{ .code = "0A000", .message = "GROUP BY, HAVING and a WHERE after RETURN are not supported on a RETURN after CREATE, MERGE, DELETE or a procedure CALL" },
         // SONNY-2694: a statement that deletes returns its RETURN after the
         // DELETE frees what it deleted.
+        // SONNY-2707: `SET r.x` on a variable-length relationship (a list of
+        // edges) or on a path variable.
+        error.VariableLengthPathWrite => .{ .code = "0A000", .message = "A SET or REMOVE cannot target a variable-length relationship variable (the list of its edges) or a path variable; target the path's nodes" },
         error.DeleteReturnsDeletedElement => .{ .code = "0A000", .message = "A RETURN after DELETE cannot return an element the statement deletes (a node, an edge or a path through one), or a JSONB, XML, URL, DOMAIN, bit string or extended value; return its properties or an aggregate" },
         error.StringDataRightTruncation => .{ .code = "22001", .message = "String data right truncation" },
         error.InvalidKeyProvider => .{ .code = "42704", .message = "Invalid TDE key provider" },
