@@ -7795,6 +7795,25 @@ fn handleClientMessage(
                 graph_store.getGlobalAdapter() != null and
                 geode.distributed.cluster.getGlobalClusterCoordinator() == null)
             {
+                // CANARY: REQ=REQ-SONNY-3033-BATCH-GRAPH-GATE; FEATURE="MultiGraphIsolation"; ASPECT=QuicBatchRoute; STATUS=TESTED; TEST=tests/test_sonny3033_batch_graph_gate.zig; OWNER=security; UPDATED=2026-09-27
+                // SONNY-3033: the session's graph passes the session-graph
+                // gate (internal, bind, existence) first. The route ran before
+                // any existence check, and the coordinator created whatever
+                // graph it was given: a batch recreated a dropped graph for a
+                // principal without the schema permission. The coordinator
+                // now creates none (it fails the ops of a graph that is gone),
+                // and a DROP GRAPH waits for a batch's open transactions
+                // (SONNY-3029), so the route takes no graph lock itself: its
+                // ops take the graph's lock SHARED, and a writer waits for
+                // them, so holding the write lock across them would deadlock.
+                // No principal with authentication off, as the write gate
+                // above and the HELLO do.
+                const batch_principal: ?*const @TypeOf(principal_for_request) = if (state.authenticated_role != null) &principal_for_request else null;
+                execution.session_graph.requireWritable(batch_principal, catalog, query_graph_name) catch |err| {
+                    const info = proto_util.mapError(err);
+                    try sendExecuteError(gpa, stream, info.code, info.message, &.{}, &.{});
+                    return;
+                };
                 if (try executeBatchSimpleMerge(gpa, stream, state, &parse_result.program, query_graph_name, exec_context)) {
                     return;
                 }

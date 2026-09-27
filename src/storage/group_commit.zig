@@ -773,7 +773,18 @@ pub const ShardedCoordinator = struct {
         // error-policy: A — graph-handle warm-up only; if it fails, the
         // statement-txn open below and every per-op bulk helper report the
         // real error through each op's res.err.
-        _ = self.adapter.getOrCreateGraph(self.graph_name) catch {};
+        // CANARY: REQ=REQ-SONNY-3033-BATCH-GRAPH-GATE; FEATURE="MultiGraphIsolation"; ASPECT=NoAutoCreate; STATUS=TESTED; TEST=tests/test_sonny3033_batch_graph_gate.zig; OWNER=storage; UPDATED=2026-09-27
+        // SONNY-3033: the coordinator creates no graph but the default one,
+        // which every session starts on: it opens one that exists (a
+        // registry graph not loaded yet included). It created any graph it
+        // was given, so its ops recreated a graph dropped since they were
+        // submitted, for a principal without the schema permission.
+        const is_default_graph = std.mem.eql(u8, self.graph_name, graph_store.DEFAULT_GRAPH_NAME);
+        if (is_default_graph) {
+            _ = self.adapter.getOrCreateGraph(self.graph_name) catch {};
+        } else {
+            _ = self.adapter.openExistingGraph(self.graph_name) catch {};
+        }
         // CANARY: REQ=REQ-SONNY-3028-DROP-GRAPH-PINS; FEATURE="MultiGraphIsolation"; ASPECT=GroupCommitPin; STATUS=TESTED; TEST=tests/test_sonny3028_drop_graph_in_use.zig; OWNER=storage; UPDATED=2026-09-27
         // SONNY-3028: the batch's statement transaction points into the
         // graph; a DROP GRAPH during the batch frees it only after the batch.
@@ -789,6 +800,14 @@ pub const ShardedCoordinator = struct {
         if (pinned_graph) |mg| self.adapter.enterBatchTxn(mg);
         var in_batch_txn = pinned_graph != null;
         defer if (in_batch_txn) self.adapter.leaveBatchTxn(pinned_graph.?);
+        // SONNY-3033: the graph is gone (never there, or dropped while this
+        // batch waited): every op fails, and nothing is applied, since the
+        // ops' own lookups would create it again. Inside the gate no DROP
+        // GRAPH can complete until the batch is over.
+        const graph_gone = if (pinned_graph) |mg| mg.isDropped() else !is_default_graph;
+        if (graph_gone) {
+            for (batch) |op| op.resultPtr().err = error.GraphNotFound;
+        }
 
         // Task 7 (ShardedGraphEngine migration): open a statement txn pinned
         // to this worker's shard.  Each shard has its own independent
@@ -801,7 +820,7 @@ pub const ShardedCoordinator = struct {
         var stmt_txn: graph_storage_adapter.StatementTxn = undefined;
         var have_txn = false;
         const begin_txn_start_ns = if (collect_phase_metrics) monoNanosNow() else 0;
-        if (self.adapter.beginStatementTxnForShard(self.graph_name, shard_idx, &stmt_txn)) |_| {
+        if (graph_gone) {} else if (self.adapter.beginStatementTxnForShard(self.graph_name, shard_idx, &stmt_txn)) |_| {
             have_txn = true;
             if (batch_txn_opened_hook) |hook| hook(self.graph_name);
         } else |_| {}
@@ -838,7 +857,7 @@ pub const ShardedCoordinator = struct {
                 else => {},
             }
         }
-        if (merge_edge_n > 0) {
+        if (merge_edge_n > 0 and !graph_gone) {
             if (self.adapter.bulkMergeEdgesBatchShardLocked(self.graph_name, merge_edge_buf[0..merge_edge_n])) |_| {
                 for (merge_edge_ops[0..merge_edge_n], merge_edge_buf[0..merge_edge_n]) |op, entry| {
                     const res = op.resultPtr();
@@ -857,7 +876,7 @@ pub const ShardedCoordinator = struct {
         }
 
         const ops_loop_start_ns = if (collect_phase_metrics) monoNanosNow() else 0;
-        for (batch) |op| {
+        for (if (graph_gone) batch[0..0] else batch) |op| {
             const res = op.resultPtr();
             switch (op.*) {
                 // PHASE 4: applied above in the batched merge-edge pass.

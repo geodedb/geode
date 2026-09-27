@@ -122,6 +122,18 @@ pub fn authorizeCatalogSchemaChange(context: execution.ExecutionContext, graph: 
     if (!maySchemaDatabase(context.principal)) return error.Unauthorized;
 }
 
+// CANARY: REQ=REQ-SONNY-3033-BATCH-GRAPH-GATE; FEATURE="MultiGraphIsolation"; ASPECT=SessionGraphGate; STATUS=TESTED; TEST=tests/test_sonny3033_batch_graph_gate.zig; OWNER=security; UPDATED=2026-09-27
+/// SONNY-3033: the session-graph gate for a path that writes the session's
+/// graph without the executor (the `/*+BATCH*/` route), in the order every
+/// session graph change takes: internal (`InternalGraph`), then permission
+/// (`mayBind`, `Unauthorized`), then existence (`GraphNotFound`). The graph is
+/// never created here: that needs CREATE GRAPH and the schema permission.
+pub fn requireWritable(principal: ?*const principal_mod.Principal, catalog: *catalog_mod.Catalog, graph: []const u8) error{ InternalGraph, Unauthorized, GraphNotFound }!void {
+    try refuseInternal(graph);
+    if (!mayBind(principal, graph)) return error.Unauthorized;
+    if (!exists(catalog, graph)) return error.GraphNotFound;
+}
+
 /// SONNY-2824: what a HELLO does with the graph a connection names.
 pub const HelloGraph = enum {
     /// Refused: an internal graph, or one the principal may not bind. The

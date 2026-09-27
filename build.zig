@@ -9013,6 +9013,24 @@ pub fn build(b: *std.Build) void {
     const sonny3031_step = b.step("test-sonny3031-session-commit-failure", "Run SONNY-3031 regression (an injected failure of a session engine commit at a program's end, a COMMIT statement or START..COMMIT fails the request with 40000, aborts the engine transaction and rolls the transaction back; its COMMIT fails)");
     sonny3031_step.dependOn(&run_sonny3031_tests.step);
 
+    // SONNY-3033: the QUIC /*+BATCH*/ route applies the session-graph gate
+    // and the group-commit coordinator creates no graph but the default one:
+    // a batch against a dropped graph is refused and does not recreate it.
+    // Against a spawned server.
+    const sonny3033_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny3033_batch_graph_gate.zig"), .target = target, .optimize = optimize });
+    sonny3033_test_mod.link_libc = true;
+    sonny3033_test_mod.addImport("geode", root_mod);
+    sonny3033_test_mod.addImport("schema", schema_mod);
+    sonny3033_test_mod.addImport("protobuf", protobuf_mod);
+    sonny3033_test_mod.addImport("logging", logging_mod);
+    sonny3033_test_mod.addImport("transport/quic", transport_quic_mod);
+    const sonny3033_tests = b.addTest(.{ .root_module = sonny3033_test_mod });
+    const run_sonny3033_tests = b.addRunArtifact(sonny3033_tests);
+    run_sonny3033_tests.step.dependOn(&install_geode_exe.step);
+    shardDep(test_step, &run_sonny3033_tests.step, 1, test_shard_loads, test_shard_index);
+    const sonny3033_step = b.step("test-sonny3033-batch-graph-gate", "Run SONNY-3033 regression (spawns a server: a /*+BATCH*/ against a graph another session dropped is refused, 3F000, and does not recreate it, for a ReadWrite user and an Admin)");
+    sonny3033_step.dependOn(&run_sonny3033_tests.step);
+
     // SONNY-2790: the fulltext statements (CREATE/DROP INDEX, geode.fts.*)
     // run on the default graph, so the handlers lock `default` for them from
     // any session. Classifier, and the real gRPC handler (SONNY-1560 shim).

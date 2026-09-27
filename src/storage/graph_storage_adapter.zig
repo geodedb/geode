@@ -10979,6 +10979,14 @@ pub const StorageAdapter = struct {
         return false;
     }
 
+    /// SONNY-3033: open `graph_name`'s graph when it exists (loaded, or in
+    /// the registry), without creating it: `GraphNotFound` otherwise.
+    pub fn openExistingGraph(self: *StorageAdapter, graph_name: []const u8) !*ManagedGraph {
+        self.mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
+        defer self.mutex.unlock(std.Io.Threaded.global_single_threaded.io());
+        return self.requireExistingGraphLocked(graph_name);
+    }
+
     /// SONNY-3028: pin `graph_name`'s graph (`ManagedGraph.pins`) for a caller
     /// that uses it outside the adapter's mutex, or null when it is not open.
     /// The caller unpins it (`unpinGraph`).
