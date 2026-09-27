@@ -669,6 +669,34 @@
   decimal from a peer node whose scale is past 255 (it aborted the node),
   and frees what it converted from a refused nested list or a map that
   repeats a key.
+- **A client parameter map that repeats a key no longer leaks
+  (SONNY-2818):** the client parameter decoder kept the first copy of a
+  repeated map key and never freed the second, or the value it replaced.
+  QUIC decodes with the process allocator, so any authenticated client could
+  grow the server's memory by about the size of each request. The decoder
+  now frees the duplicate key and the replaced value (the last value still
+  wins), as the peer path already did.
+- **The audit log cannot be forged through a MERGE refusal (SONNY-2819):**
+  the audit log's canonical JSON Lines writer printed every string
+  unescaped. A MERGE refused for a hidden match (SONNY-2728) records the
+  pattern's property keys, and a key can be a string literal holding a quote
+  and a newline, so a restricted user could split the record and write a
+  second, well-formed record of their choosing. Every string the writer
+  prints is now JSON-escaped (quotes, backslashes, control characters,
+  U+2028 and U+2029, and a byte that is not UTF-8 as U+FFFD), and the
+  refusal's labels and keys hex-encode their control characters.
+
+  **Behaviour change:** the record's timestamp prints as
+  `YYYY-MM-DDTHH:MM:SS.mmmZ`; it printed signed fields
+  (`2026-09-26T+15:+31:+58.+780Z`). Records written before the change still
+  verify.
+- **Audit text a client controls is unambiguous (SONNY-3045):** a MERGE
+  refusal's labels and keys also hex-encode a comma and a backslash, so the
+  text reads back as exactly its items. The Windows Event Log (XML), syslog
+  and JSON audit exporters escape every string: XML text as entities and
+  character references, syslog values quoted with `"`, `\` and `]` escaped
+  and control characters hex-encoded, JSON strings JSON-escaped. They also
+  compile against the audit event again (nothing called them).
 
 ### Fixed
 
@@ -731,6 +759,81 @@
   rolling upgrade, a mixed-version cluster can merge distributed results out
   of order, because nodes still on the old order rank doubles, temporal
   values and ids as equal.
+- **Writes behind an aggregating or DISTINCT RETURN are applied to every
+  matched row (SONNY-2694):** the read fast paths answered a CREATE, MERGE
+  or DELETE behind `count(*)`, sum, min, max, DISTINCT or a counted WHERE by
+  reading, and wrote nothing; behind them MATCH ... CREATE and MATCH ...
+  MERGE wrote once per RETURN row (once, for an aggregate), and a SET or
+  REMOVE through a relationship or variable-length pattern was dropped. No
+  read fast path answers a statement that writes; every write runs once per
+  matched row, and the RETURN is computed over those rows.
+  - **Behaviour change:** a CREATE's property values see the matched row
+    and the parameters (`MATCH (n) CREATE (:Z {k: n.i})` wrote null).
+  - **Behaviour change:** a DELETE's RETURN returns what it asks for,
+    computed over the rows the statement deletes before it deletes them; it
+    returned `deleted_count` whatever it asked for.
+  - **Behaviour change:** `MATCH ... SET ... DELETE` (and REMOVE) deletes; the
+    DELETE was dropped.
+  - **Behaviour change:** a RETURN after DELETE that would return an element
+    the statement deletes (the node, the edge, a path through one), or a
+    JSONB, XML, URL, DOMAIN, bit string or extended value, is refused with
+    0A000 before anything is written; return the element's properties or an
+    aggregate instead.
+  - A DELETE's RETURN of a relationship's property, `type(r)`, `keys(r)` or
+    `collect(r.w)` returned freed memory on in-memory, tenant-scoped and RLS
+    sessions; it now owns every value it returns, and frees the typed
+    strings it copies (they leaked, SONNY-3045).
+- **A SET or REMOVE through a variable-length pattern writes the path's ends
+  (SONNY-2707 part 1):** `MATCH (a)-[*1..2]->(b) SET b.x = 1` matched and
+  wrote nothing. It writes the start or end node of every path, once per
+  path, through nodes the session may read; a LIMIT is no longer pushed into
+  a traversal that writes.
+  - **Behaviour change:** a SET or REMOVE on the variable-length relationship
+    variable (the list of its edges) or on a path variable is refused with
+    0A000; it was ignored. In a multi-hop pattern too (SONNY-3045).
+- **A SET or REMOVE after a WITH writes only the rows the WITH keeps
+  (SONNY-3039):** the traversals wrote as they read, before the WITH, the
+  WHERE after it (and one before it, which the parser merges and the
+  executor defers), and its ORDER BY and LIMIT dropped rows: `MATCH (n:G)
+  WITH n WHERE n.i >= 7 SET n.x = 1 RETURN count(*)` returned 3 and wrote
+  every :G. A SET or REMOVE after a WITH now runs in one write step over the
+  rows the WITH keeps, once per row, and a RETURN after it sees what was
+  written.
+- **A write after a WITH that starts a new query part is applied or refused
+  (SONNY-3040):** the chain executor never applied a CREATE, MERGE, SET,
+  REMOVE or DELETE in a part after the first: `MATCH (n:G) WITH n CREATE
+  (n)-[:T]->(:Z)` created nothing, and `MATCH (q:Q) WITH q MATCH (q) DELETE
+  q` deleted nothing. `MATCH ... WITH ... CREATE` and `MATCH ... WITH ...
+  MERGE` now run as MATCH ... CREATE or MERGE over the WITH's rows; any other
+  chained write is refused (0A000, SONNY-3111) before any part runs.
+- **A SET or REMOVE on a comma pattern or after an OPTIONAL MATCH writes
+  every matched row (SONNY-3041):** those executors never read the SET and
+  REMOVE clauses, so the statement returned its rows and wrote nothing. They
+  run in the one write step; a variable an OPTIONAL MATCH did not bind is
+  skipped on that row. Every executor that reads a pattern now declares the
+  write clauses it applies and refuses (0A000) one it does not, so a write
+  clause can no longer be dropped silently.
+- **A statement refused for its DELETE writes nothing (SONNY-3042):** the
+  DELETE's checks ran after the writes before it, so `MATCH (q:Q) SET q.x =
+  1 DELETE q RETURN q` was refused with every q.x set, and `MATCH (x:X)<-[:R]-()
+  SET x.x = 1 DELETE x` refused NodeHasEdges with x.x set. A node the DELETE
+  removes must have no edge (none now, and none a CREATE in the statement
+  attaches), and the RETURN must hold nothing it deletes, before any SET,
+  REMOVE or CREATE.
+- **MATCH ... CREATE applies its SET, REMOVE and DELETE (SONNY-3043):** a SET
+  on a variable the CREATE made was dropped (`CREATE (z:Z) SET z.k = 5` left
+  z.k null), a DELETE of a matched relationship was skipped, and a MERGE
+  beside a CREATE or a DELETE was dropped. The CREATE, SET and REMOVE, RETURN
+  and DELETE now run in order over the matched rows.
+  - **Behaviour change:** a DELETE (without DETACH) of a node that has an
+    edge after a CREATE refuses the statement with NodeHasEdges, as any
+    DELETE does; it silently removed the node's edges.
+  - **Behaviour change:** MERGE with CREATE, MERGE with DELETE, and a DELETE
+    of a variable the CREATE introduces are refused with 0A000 (SONNY-3111).
+- **A cluster DELETE returns its RETURN (SONNY-3044):** a cluster leader
+  answered a `DELETE ... RETURN` with `deleted_count` whatever it asked for,
+  so a cluster answered differently from a standalone server. It computes
+  the RETURN over the deleted rows before it proposes the delete.
 
 ### Changed
 
@@ -776,6 +879,33 @@
   `geode.rls.add_attribute_policy` add, and their removal, are lost at a
   restart and are not replicated in a cluster. Policy DDL (CREATE, ALTER
   and DROP POLICY) is durable.
+- **Write shapes refused with 0A000 (SONNY-3111):** every write clause now
+  runs, or the statement is refused before anything is written. Refused in
+  this release (each was silently dropped before):
+  - a write in a query part after a WITH, other than one CREATE or one MERGE
+    after MATCH ... WITH: a chained MATCH that writes (`MATCH (q:Q) WITH q
+    MATCH (q) DELETE q`), a write after a second WITH or after a FOR, and a
+    write after a WITH that follows a CREATE or MERGE (`CREATE (a) WITH a
+    CREATE (b)`);
+  - MERGE with CREATE, and MERGE with DELETE, in one statement;
+  - a DELETE of a variable the statement's CREATE introduces;
+  - a SET or REMOVE on a variable the statement does not bind to a node or a
+    relationship (one a WITH dropped, a label on a relationship), a write
+    with VALUES ... MATCH, and a write with a shortestPath() assignment;
+  - a SET or REMOVE on a variable-length relationship variable or a path
+    variable (SONNY-2707), and a RETURN after DELETE that would hold an
+    element the statement deletes, or a JSONB, XML, URL, DOMAIN, bit string
+    or extended value (SONNY-2694).
+
+  Split such a statement in two.
+- **A chained MATCH does not join on the WITH's variables (SONNY-3046):**
+  `MATCH (q:Q) WITH q MATCH (q) RETURN count(*)` counts every node for each
+  q. v0.8.24; a chained MATCH that writes is refused until then.
+- **A plain RETURN after MATCH ... CREATE is one row (SONNY-3025):** a RETURN
+  that neither aggregates nor is DISTINCT is evaluated once, over the last
+  row's created and matched elements; the CREATE itself runs once per
+  matched row. Aggregate the RETURN, or make it DISTINCT, to see every row.
+  v0.8.24.
 
 ---
 
