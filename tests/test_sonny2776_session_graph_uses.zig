@@ -364,8 +364,10 @@ test "SONNY-2776: the QUIC handler makes the same graph choices (source text; th
     try testing.expect(std.mem.indexOf(u8, src, "const commit_graph = state.txnLockGraph(state.sessionGraph());") != null);
     try testing.expect(std.mem.indexOf(u8, src, "const rb_graph = state.txnLockGraph(state.sessionGraph());") != null);
     try testing.expect(std.mem.indexOf(u8, src, "const rts_graph = state.txnLockGraph(state.sessionGraph());") != null);
-    // One graph per transaction, and every executor path records it.
+    // One graph per transaction, and every executor path records it: the
+    // four count fast paths, node-scan streaming, the executor, and (since
+    // SONNY-2802) the two PROFILE paths.
     try testing.expect(std.mem.indexOf(u8, src, "if (stmt_plan.is_mutation and state.txnWouldSpanGraphs(lock_graph)) {") != null);
-    try testing.expectEqual(@as(usize, 6), std.mem.count(u8, src, "updateTxnStateFromProgram(state, &parse_result.program, if (stmt_plan.is_mutation) lock_graph else null);"));
+    try testing.expectEqual(@as(usize, 8), std.mem.count(u8, src, "updateTxnStateFromProgram(state, &parse_result.program, if (stmt_plan.is_mutation) lock_graph else null);"));
     try testing.expectEqual(@as(usize, 0), std.mem.count(u8, src, "updateTxnStateFromProgram(state, &parse_result.program);"));
 }

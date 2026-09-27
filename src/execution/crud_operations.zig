@@ -2734,14 +2734,18 @@ pub fn executeCreate(allocator: std.mem.Allocator, c: ast.CreateStatement, curre
             session_txn_covers_us = std.mem.eql(u8, g, target_graph);
         } else if (context.transaction_state == .Active) {
             // R9 lazy open: Geode txn is active but no session engine
-            // txn is open yet — pin it to `target_graph`.  Backing
-            // storage is the adapter's own thread-local slot (one QUIC
-            // stream = one pool thread; the storage is automatically
-            // per-session).  Failure falls through to per-statement R8.
+            // txn is open yet — pin it to `target_graph`.  SONNY-2823:
+            // it is opened into the slot of the session whose request
+            // runs on this thread (`ServerState.session_engine_txn`), not
+            // a thread-local one, and committed when this program ends
+            // (`execution.leaveEntryPoint`), not at the Geode txn's
+            // COMMIT.  Failure falls through to per-statement R8.
             if (ad.beginSessionTxnLazy(target_graph)) |_| {
                 session_txn_covers_us = true;
             } else |err| switch (err) {
-                error.GraphNotFound, error.NestedSessionTxn, error.NestedStatementTxn => {},
+                // SONNY-2823: no session slot on the thread (an embedded
+                // caller, not a transport request): per-statement txns.
+                error.GraphNotFound, error.NestedSessionTxn, error.NestedStatementTxn, error.NoSessionEngineTxnSlot => {},
                 else => return err,
             }
         }
@@ -3911,7 +3915,9 @@ pub fn executeMerge(allocator: std.mem.Allocator, m: ast.MergeStatement, current
             if (ad.beginSessionTxnLazy(target_graph)) |_| {
                 session_txn_covers_us = true;
             } else |err| switch (err) {
-                error.GraphNotFound, error.NestedSessionTxn, error.NestedStatementTxn => {},
+                // SONNY-2823: no session slot on the thread (an embedded
+                // caller, not a transport request): per-statement txns.
+                error.GraphNotFound, error.NestedSessionTxn, error.NestedStatementTxn, error.NoSessionEngineTxnSlot => {},
                 else => return err,
             }
         }

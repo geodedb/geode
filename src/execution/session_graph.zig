@@ -67,6 +67,70 @@ pub fn mayBind(principal: ?*const principal_mod.Principal, graph: []const u8) bo
     return decision.kind == .allow;
 }
 
+// CANARY: REQ=REQ-SONNY-2803-GRAPH-DDL-GATE; FEATURE="GraphRBACEnforcement"; ASPECT=MaySchema; STATUS=TESTED; TEST=tests/test_sonny2803_graph_ddl_gate.zig; OWNER=security; UPDATED=2026-09-26
+/// SONNY-2803: may `principal` change `graph`'s schema: CREATE or DROP GRAPH
+/// on it, or index or constraint DDL on it? `gps.decide(schema, graph)` must
+/// allow, and so must binding it (`mayBind`), the permission USE GRAPH needs.
+/// Schema is Admin's builtin permission, or a GPS policy's (`FOR SCHEMA` on
+/// the graph or on `*`). No principal: yes, as for `mayBind` (an in-process
+/// caller).
+///
+/// The handlers' only gate for DDL was `gps.writePermitted`, write on the
+/// database, so a ReadWrite user refused `USE GRAPH g1` could `DROP GRAPH g1`,
+/// and ReadWrite, which has no Schema permission, could create and drop any
+/// graph, index or constraint.
+pub fn maySchema(principal: ?*const principal_mod.Principal, graph: []const u8) bool {
+    const p = principal orelse return true;
+    const req = gps.DecisionRequest{
+        .principal = p,
+        .action = .schema,
+        .resource = .{ .graph = graph },
+    };
+    // smp_allocator: the governance-approved global allocator in src/.
+    const decision = gps.decide(std.heap.smp_allocator, &req) catch return false;
+    if (decision.kind != .allow) return false;
+    return mayBind(p, graph);
+}
+
+/// SONNY-2824: what a HELLO does with the graph a connection names.
+pub const HelloGraph = enum {
+    /// Refused: an internal graph, or one the principal may not bind. The
+    /// same answer whether or not the graph exists.
+    refused,
+    /// It exists: bind it.
+    bind,
+    /// It does not exist, and the principal may change its schema: create
+    /// it, then bind it.
+    create,
+    /// It does not exist, and the principal may not create it.
+    missing,
+};
+
+// CANARY: REQ=REQ-SONNY-2824-HELLO-GRAPH-GATE; FEATURE="GraphRBACEnforcement"; ASPECT=HelloGate; STATUS=TESTED; TEST=tests/test_sonny2824_hello_graph_gate.zig; OWNER=security; UPDATED=2026-09-27
+/// SONNY-2824: the gate for the graph a QUIC or gRPC HELLO names, in the
+/// order every session graph change takes: internal, then permission
+/// (`mayBind`), then existence. A graph that does not exist is created only
+/// for a principal that may change its schema (`maySchema`, what CREATE GRAPH
+/// needs). Both HELLOs created it for any Admin or ReadWrite role, so a
+/// ReadWrite user, which has no schema permission, created any graph it named
+/// at connect time. No principal (authentication off): every graph is bound
+/// or created, as before.
+pub fn helloGraph(principal: ?*const principal_mod.Principal, catalog: *catalog_mod.Catalog, graph: []const u8) HelloGraph {
+    refuseInternal(graph) catch return .refused;
+    if (!mayBind(principal, graph)) return .refused;
+    if (exists(catalog, graph)) return .bind;
+    if (!maySchema(principal, graph)) return .missing;
+    return .create;
+}
+
+/// SONNY-2803: refuse DDL on `graph` (`Unauthorized`, 42501) unless
+/// `maySchema`. The DDL arms call it before they look at whether the graph,
+/// index or constraint exists, so a caller refused learns nothing about what
+/// exists.
+pub fn authorizeSchemaChange(context: execution.ExecutionContext, graph: []const u8) error{Unauthorized}!void {
+    if (!maySchema(context.principal, graph)) return error.Unauthorized;
+}
+
 /// Store `graph` as `session`'s graph: null is the default graph. The name is
 /// owned by the session's allocator, as `SessionState.deinit` and `reset`
 /// expect. On an allocation failure the session keeps its graph.

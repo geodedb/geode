@@ -79,6 +79,10 @@ pub fn cmdPolicy(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize)
         std.process.exit(@intFromEnum(ExitCode.general_error));
     };
     defer cli_auth.deinitAndSaveCliAuth(allocator, &mgr);
+    // SONNY-2798: verify the chain before a change, and seal the change.
+    if (std.mem.eql(u8, subcmd, "create") or std.mem.eql(u8, subcmd, "delete")) {
+        cli_auth.requireIntactChain(allocator, &mgr, "policy", subcmd);
+    }
 
     if (std.mem.eql(u8, subcmd, "create")) {
         if (hasHelpFlag(argv, subcmd_idx + 1)) {
@@ -240,11 +244,16 @@ pub fn cmdGrant(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) 
         std.process.exit(@intFromEnum(ExitCode.general_error));
     }
 
+    // SONNY-2798: verify the chain before the change.
+    cli_auth.requireIntactChain(allocator, &mgr, "grant", permission);
+
     // Persist the permission grant in the graph store
     const perm_id = mgr.next_user_id;
     mgr.next_user_id += 1;
     try mgr.storage.persistPermission(perm_id, permission, resource, 0, target);
     printOut("Granted permission '{s}' to '{s}'{s}{s}\n", .{ permission, target.?, if (resource.len > 0) " on resource " else "", if (resource.len > 0) resource else "" });
+    // SONNY-2798: exit skips the deferred save; seal and save first.
+    cli_auth.deinitAndSaveCliAuth(allocator, &mgr);
     std.process.exit(@intFromEnum(ExitCode.success));
 }
 
@@ -309,6 +318,9 @@ pub fn cmdRevoke(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize)
         std.process.exit(@intFromEnum(ExitCode.usage_error));
     }
 
+    // SONNY-2798: verify the chain before the change.
+    cli_auth.requireIntactChain(allocator, &mgr, "revoke", permission);
+
     // Find and remove matching permission from graph store
     var it = mgr.storage.permission_cache.iterator();
     while (it.next()) |entry| {
@@ -318,6 +330,8 @@ pub fn cmdRevoke(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize)
         }
     }
     printOut("Revoked permission '{s}' from '{s}'{s}{s}\n", .{ permission, target.?, if (resource.len > 0) " on resource " else "", if (resource.len > 0) resource else "" });
+    // SONNY-2798: exit skips the deferred save; seal and save first.
+    cli_auth.deinitAndSaveCliAuth(allocator, &mgr);
     std.process.exit(@intFromEnum(ExitCode.success));
 }
 

@@ -86,6 +86,56 @@ pub const Value = union(ValueType) {
 };
 
 // Enhanced Row-Level Security Engine with fine-grained access control
+// CANARY: REQ=REQ-SONNY-2710-PG-POLICY-COMBINATION; FEATURE="RLS Expression Wiring"; ASPECT=PermissiveRestrictive; STATUS=TESTED; TEST=tests/test_sonny2710_policy_combination.zig; OWNER=security; UPDATED=2026-09-26
+/// SONNY-2710: how the RLS policies that apply to one row of one table (a
+/// node label or an edge type) combine, as in PostgreSQL:
+///
+///     visible  iff  (a permissive policy passes, or none applies and the
+///                    default allows)
+///                   AND every restrictive policy passes.
+///
+/// The engine's default allows (a table with no policy is visible), so a
+/// table with restrictive policies only is visible iff all of them pass, as
+/// before. What changed: a table with permissive policies only denies a row
+/// that none of them passes, and a passing permissive policy no longer
+/// overrides a failing restrictive one. The combination was
+/// `any_permissive_allows or all_restrictive_allow`.
+///
+/// A policy "applies" when it is enabled, covers the operation, is in its
+/// time window, has an expression for the operation, and (for
+/// `checkRowAccess`) names one of the session's roles. The executor also
+/// feeds in the label-deny engine's entries for the table
+/// (`checkRowAccessByUsernameSeeded`): a deny entry is a restrictive policy
+/// that fails, an allow entry a permissive one that passes.
+pub const PolicyVerdict = struct {
+    permissive_applies: bool = false,
+    permissive_passes: bool = false,
+    restrictive_fails: bool = false,
+
+    /// Record one applicable policy's result.
+    pub fn add(self: *PolicyVerdict, permissive: bool, passed: bool) void {
+        if (permissive) {
+            self.permissive_applies = true;
+            if (passed) self.permissive_passes = true;
+        } else if (!passed) {
+            self.restrictive_fails = true;
+        }
+    }
+
+    /// May the row be seen? `default_allows` is the answer when no
+    /// permissive policy applies.
+    pub fn allows(self: PolicyVerdict, default_allows: bool) bool {
+        if (self.restrictive_fails) return false;
+        if (self.permissive_applies) return self.permissive_passes;
+        return default_allows;
+    }
+};
+
+/// SONNY-2710: the default of `PolicyVerdict.allows` for the engine: a table
+/// no permissive policy applies to is visible (GPS Phase 0: no policy, no
+/// restriction).
+pub const no_permissive_policy_allows = true;
+
 pub const RLSEngine = struct {
     allocator: Allocator,
     /// Guarded by `policies_lock`.
@@ -654,8 +704,8 @@ pub const RLSEngine = struct {
 
         const policies = self.policies.get(key) orelse return true; // No policies
 
-        var any_permissive_allows = false;
-        var all_restrictive_allow = true;
+        // SONNY-2710: PostgreSQL's combination (see `PolicyVerdict`).
+        var verdict: PolicyVerdict = .{};
 
         for (policies.items) |policy| {
             if (!policy.enabled) continue;
@@ -687,16 +737,11 @@ pub const RLSEngine = struct {
 
             if (expr) |e| {
                 const result = try self.evaluateExpression(e, row, context);
-
-                if (policy.permissive) {
-                    if (result) any_permissive_allows = true;
-                } else {
-                    if (!result) all_restrictive_allow = false;
-                }
+                verdict.add(policy.permissive, result);
             }
         }
 
-        const allowed = any_permissive_allows or all_restrictive_allow;
+        const allowed = verdict.allows(no_permissive_policy_allows);
 
         // Cache the result
         try self.policy_cache.put(key, context.user.id, operation, allowed);
@@ -797,6 +842,9 @@ pub const RLSEngine = struct {
             pos: usize = 0,
             /// SONNY-2730: current depth of `(` and `NOT` nesting.
             depth: usize = 0,
+            /// SONNY-2757 (P21): the VM's stack depth once the bytecode
+            /// emitted so far has run.
+            sp: usize = 0,
             bc: *std.ArrayList(u8),
             ks: *std.ArrayList(Value),
 
@@ -804,7 +852,28 @@ pub const RLSEngine = struct {
                 while (c.pos < c.src.len and (c.src[c.pos] == ' ' or c.src[c.pos] == '\t' or c.src[c.pos] == '\n' or c.src[c.pos] == '\r')) : (c.pos += 1) {}
             }
             fn emit(c: *@This(), op: Opcode) !void {
+                try c.track(op);
                 try c.bc.append(c.self.allocator, @intFromEnum(op));
+            }
+            // CANARY: REQ=REQ-SONNY-2757-RLS-STACK-BOUND; FEATURE="RLSExpressionCompilation"; ASPECT=CompileTimeStackBound; STATUS=TESTED; TEST=tests/test_sonny2757_policy_hygiene.zig; OWNER=security; UPDATED=2026-09-26
+            /// SONNY-2757 (P21): simulate the VM stack as `op` is emitted,
+            /// and refuse an expression whose evaluation needs more than
+            /// `RLS_STACK_DEPTH` slots. The nesting limit (SONNY-2730) bounds
+            /// parentheses, not the stack: every pending left operand of a
+            /// right-nested operator holds a slot, so a right-nested OR
+            /// 63-64 levels deep, or `x OR row.b = (...)` from 32 levels,
+            /// compiled and then overflowed the VM on every row, which the
+            /// VM reports as an error and the caller as a deny.
+            fn track(c: *@This(), op: Opcode) !void {
+                switch (op) {
+                    .push_const, .push_true, .push_false, .push_null, .load_row, .load_user, .load_session, .load_attr => {
+                        c.sp += 1;
+                        if (c.sp > RLS_STACK_DEPTH) return error.InvalidRlsExpression;
+                    },
+                    // Pop two, push one; or pop one.
+                    .eq, .neq, .lt, .gt, .lte, .gte, .op_and, .op_or, .pop, .jump_if_false, .jump_if_true => c.sp -|= 1,
+                    .op_not, .is_null, .nop, .jump, .ret => {},
+                }
             }
             fn emitArg(c: *@This(), a: u8) !void {
                 try c.bc.append(c.self.allocator, a);
@@ -1716,6 +1785,25 @@ pub const RLSEngine = struct {
         graph: []const u8,
         table: []const u8,
     ) !bool {
+        return self.checkRowAccessByUsernameSeeded(row, operation, username, graph, table, .{});
+    }
+
+    // CANARY: REQ=REQ-SONNY-2710-PG-POLICY-COMBINATION; FEATURE="RLS Expression Wiring"; ASPECT=SeededVerdict; STATUS=TESTED; TEST=tests/test_sonny2710_policy_combination.zig; OWNER=security; UPDATED=2026-09-26
+    /// SONNY-2710: `checkRowAccessByUsername`, with the table's other policies
+    /// already recorded in `seed` (the executor passes the label-deny
+    /// engine's entries for the table). The expression policies are added,
+    /// and the whole set combines as `PolicyVerdict` says. A seed that
+    /// already fails a restrictive policy denies without evaluating anything.
+    pub fn checkRowAccessByUsernameSeeded(
+        self: *Self,
+        row: *const std.StringHashMap(Value),
+        operation: Operation,
+        username: []const u8,
+        graph: []const u8,
+        table: []const u8,
+        seed: PolicyVerdict,
+    ) !bool {
+        if (seed.restrictive_fails) return false;
         const key = PolicyKey{ .graph = graph, .table = table };
 
         // GAP-0284: the policy_cache is keyed on (graph, table, user_id,
@@ -1735,10 +1823,11 @@ pub const RLSEngine = struct {
         // policy list; the VM calls nothing that takes this lock again.
         self.lockPoliciesShared();
         defer self.unlockPoliciesShared();
-        const policies = self.policies.get(key) orelse return true; // No policies
+        // No expression policy: the seed decides.
+        const policies = self.policies.get(key) orelse return seed.allows(no_permissive_policy_allows);
 
-        var any_permissive_allows = false;
-        var all_restrictive_allow = true;
+        // SONNY-2710: PostgreSQL's combination (see `PolicyVerdict`).
+        var verdict = seed;
 
         for (policies.items) |policy| {
             if (!policy.enabled) continue;
@@ -1769,16 +1858,11 @@ pub const RLSEngine = struct {
                 // the match loop's `catch false` at match_operations.zig
                 // turn it into a user-visible deny.
                 const result = try self.evaluateExpressionWithUsername(e, row, username);
-
-                if (policy.permissive) {
-                    if (result) any_permissive_allows = true;
-                } else {
-                    if (!result) all_restrictive_allow = false;
-                }
+                verdict.add(policy.permissive, result);
             }
         }
 
-        const allowed = any_permissive_allows or all_restrictive_allow;
+        const allowed = verdict.allows(no_permissive_policy_allows);
 
         // GAP-0284: deliberately NOT cached — see the note at the top of this
         // function. The verdict is per-row; policy_cache has no row identity.

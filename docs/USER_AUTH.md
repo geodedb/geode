@@ -30,9 +30,58 @@ For enterprise SSO requirements today, use mTLS certificate-based authentication
 ### Basic Setup
 
 - **Default Username**: `geode` (configurable)
-- **Default Password**: `geodesic` (configurable)  
+- **Default Password**: generated (16 random bytes, 32 hex characters) unless
+  `GEODE_ADMIN_PASSWORD` or `GEODE_DEFAULT_PASSWORD` is set. There is no
+  fixed default password.
 - **Privileges**: Full superuser access
 - **Auto-Creation**: Created automatically on first system initialization
+
+### The generated admin password (SONNY-2778)
+
+When the first boot (`geode serve`, or `geode auth init`) generates the admin
+password, it is written once to a file in the data directory:
+
+```
+<data-dir>/.geode_admin_password
+```
+
+`<data-dir>` is the directory the command runs on: `geode serve
+--data-dir`, `geode auth init --data-dir`, or `GEODE_DATA_DIR`. `geode auth
+init` defaults to `/var/lib/geode`.
+
+- The file is created with `O_CREAT | O_EXCL | O_NOFOLLOW` and mode 0600, set
+  again after the open, so the umask cannot widen it.
+- It is never written through a symbolic link, never over an existing file,
+  and never into the current working directory.
+- If anything is already at that path (a file left from an earlier
+  bootstrap, or a symbolic link), nothing is written:
+  - `geode auth init` refuses before it creates the admin. Read and remove
+    the file (or set `GEODE_ADMIN_PASSWORD`), then run it again.
+  - A first-booting server creates the admin but does not write its
+    password, and logs `[startup] generated initial admin password NOT
+    written …`. Set the admin password with `geode user reset-password`.
+- With no data directory, no file is written. For a server started without
+  one, set `GEODE_ADMIN_PASSWORD` or `GEODE_DEFAULT_PASSWORD`; for the legacy
+  in-memory security manager without `GEODE_DATA_DIR`, set
+  `GEODE_DEFAULT_PASSWORD`.
+- The server data directory itself is kept at mode 0700 or stricter before
+  the file is written (issue #819).
+
+**Retrieve** the password once, as the user that runs the server, then delete
+the file:
+
+```bash
+cat /var/lib/geode/.geode_admin_password && rm /var/lib/geode/.geode_admin_password
+```
+
+**Rotate** it right after the first login. Either:
+
+- over the wire, as the admin: `ALTER USER geode SET PASSWORD '...'`; or
+- offline, with the server stopped:
+  `geode user reset-password geode --new-password '...' --data-dir <data-dir>`.
+  This verifies the security graph's HMAC chain first (SONNY-2798).
+
+The file is not read again after bootstrap; deleting it changes nothing.
 
 ### Environment Configuration
 

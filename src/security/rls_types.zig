@@ -48,6 +48,14 @@ pub const PropertyPolicy = struct {
 };
 
 /// A label-level RLS policy binding: "user U must not see rows containing label L in graph G".
+///
+/// SONNY-2710: each label (a node label, or an edge type) is a table, as in
+/// the expression engine, and its policies combine as PostgreSQL's do
+/// (`rls_core.PolicyVerdict`). A deny entry is a RESTRICTIVE policy that
+/// fails for the user: it hides the row whatever else applies. An allow
+/// entry is a PERMISSIVE policy that passes for the user: it can never hide
+/// a row, and it admits one that only failing permissive expression
+/// policies on the same table would hide.
 pub const LabelPolicy = struct {
     graph: []const u8,
     label: []const u8,
@@ -55,6 +63,15 @@ pub const LabelPolicy = struct {
     deny: bool = true,
     /// Applicable username (empty = all users).
     username: []const u8 = "",
+};
+
+/// SONNY-2710: the label policies that apply to one user on one label (one
+/// table) in one graph.
+pub const LabelEntries = struct {
+    /// A deny entry applies: a restrictive policy that fails.
+    denied: bool = false,
+    /// An allow entry applies: a permissive policy that passes.
+    allowed: bool = false,
 };
 
 /// Thread-safe, server-lifetime collection of label-level and property-level RLS policies.
@@ -114,15 +131,43 @@ pub const RLSFilterEngine = struct {
         try self.policies.append(self.allocator, policy);
     }
 
-    /// Remove all policies matching graph+label+username exactly.
+    /// SONNY-2710: register an allow entry: a permissive policy on `label`
+    /// in `graph` that passes for `username` (empty = all users). See
+    /// `LabelPolicy`: it never hides a row.
+    pub fn addAllowPolicy(self: *Self, graph: []const u8, label: []const u8, username: []const u8) !void {
+        self.mu.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
+        defer self.mu.unlock(std.Io.Threaded.global_single_threaded.io());
+
+        const g = try self.allocator.dupe(u8, graph);
+        errdefer self.allocator.free(g);
+        const l = try self.allocator.dupe(u8, label);
+        errdefer self.allocator.free(l);
+        const u: []const u8 = if (username.len > 0) try self.allocator.dupe(u8, username) else "";
+        errdefer if (u.len > 0) self.allocator.free(u);
+        try self.policies.append(self.allocator, .{ .graph = g, .label = l, .deny = false, .username = u });
+    }
+
+    /// Remove all deny policies matching graph+label+username exactly.
+    /// SONNY-2710: allow entries are left alone (`removeAllowPolicy`).
     pub fn removeDenyPolicy(self: *Self, graph: []const u8, label: []const u8, username: []const u8) void {
+        self.removeEntries(graph, label, username, true);
+    }
+
+    /// SONNY-2710: remove all allow policies matching graph+label+username
+    /// exactly.
+    pub fn removeAllowPolicy(self: *Self, graph: []const u8, label: []const u8, username: []const u8) void {
+        self.removeEntries(graph, label, username, false);
+    }
+
+    fn removeEntries(self: *Self, graph: []const u8, label: []const u8, username: []const u8, deny: bool) void {
         self.mu.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
         defer self.mu.unlock(std.Io.Threaded.global_single_threaded.io());
 
         var i: usize = 0;
         while (i < self.policies.items.len) {
             const p = self.policies.items[i];
-            if (std.mem.eql(u8, p.graph, graph) and
+            if (p.deny == deny and
+                std.mem.eql(u8, p.graph, graph) and
                 std.mem.eql(u8, p.label, label) and
                 std.mem.eql(u8, p.username, username))
             {
@@ -138,18 +183,64 @@ pub const RLSFilterEngine = struct {
 
     /// Returns true if the given label is denied for user+graph.
     pub fn isLabelDenied(self: *Self, graph: []const u8, label: []const u8, username: []const u8) bool {
+        return self.labelEntries(graph, label, username).denied;
+    }
+
+    // CANARY: REQ=REQ-SONNY-2710-PG-POLICY-COMBINATION; FEATURE="RLS Expression Wiring"; ASPECT=LabelEntries; STATUS=TESTED; TEST=tests/test_sonny2710_policy_combination.zig; OWNER=security; UPDATED=2026-09-26
+    /// SONNY-2710: which label policies apply to `username` on `label` in
+    /// `graph` (an entry for all users applies to everyone).
+    pub fn labelEntries(self: *Self, graph: []const u8, label: []const u8, username: []const u8) LabelEntries {
         self.mu.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
         defer self.mu.unlock(std.Io.Threaded.global_single_threaded.io());
 
+        var entries: LabelEntries = .{};
         for (self.policies.items) |p| {
-            if (!p.deny) continue;
             if (!std.mem.eql(u8, p.graph, graph)) continue;
             if (!std.mem.eql(u8, p.label, label)) continue;
-            if (p.username.len == 0 or std.mem.eql(u8, p.username, username)) {
-                return true;
-            }
+            if (p.username.len != 0 and !std.mem.eql(u8, p.username, username)) continue;
+            if (p.deny) entries.denied = true else entries.allowed = true;
         }
-        return false;
+        return entries;
+    }
+
+    /// SONNY-2710: the label policies that apply to one user in one graph,
+    /// each label copied (see `snapshotDeniedLabels`). Free with `deinit`.
+    pub const LabelPolicySnapshot = struct {
+        denied: std.StringHashMap(void),
+        allowed: std.StringHashMap(void),
+
+        /// The entries that apply on `label`.
+        pub fn entries(self: *const LabelPolicySnapshot, label: []const u8) LabelEntries {
+            return .{ .denied = self.denied.contains(label), .allowed = self.allowed.contains(label) };
+        }
+
+        pub fn deinit(self: *LabelPolicySnapshot) void {
+            freeDeniedLabels(&self.denied);
+            freeDeniedLabels(&self.allowed);
+        }
+    };
+
+    /// SONNY-2710: `snapshotDeniedLabels` for both kinds of entry, taken under
+    /// one lock.
+    pub fn snapshotLabelPolicies(self: *Self, allocator: std.mem.Allocator, graph: []const u8, username: []const u8) !LabelPolicySnapshot {
+        self.mu.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
+        defer self.mu.unlock(std.Io.Threaded.global_single_threaded.io());
+
+        var snapshot: LabelPolicySnapshot = .{
+            .denied = std.StringHashMap(void).init(allocator),
+            .allowed = std.StringHashMap(void).init(allocator),
+        };
+        errdefer snapshot.deinit();
+        for (self.policies.items) |p| {
+            if (!std.mem.eql(u8, p.graph, graph)) continue;
+            if (p.username.len != 0 and !std.mem.eql(u8, p.username, username)) continue;
+            const set = if (p.deny) &snapshot.denied else &snapshot.allowed;
+            if (set.contains(p.label)) continue;
+            const label = try allocator.dupe(u8, p.label);
+            errdefer allocator.free(label);
+            try set.put(label, {});
+        }
+        return snapshot;
     }
 
     // CANARY: REQ=REQ-SONNY-2679-LABEL-SNAPSHOT-OWNED; FEATURE="RLS Query Enforcement"; ASPECT=SnapshotOwnsLabels; STATUS=TESTED; TEST=tests/test_sonny2679_rls_hop_targets.zig; OWNER=security; UPDATED=2026-09-25

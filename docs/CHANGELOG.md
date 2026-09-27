@@ -126,6 +126,178 @@
   A request that changes a graph that does not exist is refused with 3F000,
   and the graph is not created. The CLI's `-g` flag, which sends a
   `USE GRAPH` of the current graph before the query, works as before.
+- **A session's transaction is its own (SONNY-2799, SONNY-2805):**
+  - **A failed statement rolls back its own transaction.** A statement that
+    fails inside a transaction fails it (GAP-0917). The executor rolled it
+    back on the spot, under the request's lock (a read lock, or a read
+    snapshot the undo went into, or another graph's lock), while the handler
+    still thought it open. The session's ROLLBACK then ran with no
+    transaction, and the undo log took transaction 0 to mean every entry:
+    it undid other sessions' uncommitted changes, which those sessions then
+    "committed". Now the handler rolls a failed transaction back itself,
+    under the write lock of the graph it changed, once the request's lock
+    is released. The transaction is then over, and a ROLLBACK finds none.
+  - **The undo log never matches every entry.** Changes are recorded only
+    for a thread in a transaction, and a thread with none rolls back
+    nothing. Savepoints belong to their transaction: ROLLBACK TO undoes that
+    transaction's later changes only, and another transaction's BEGIN or
+    COMMIT no longer drops them.
+  - **A transaction follows its session.** The handlers put the session's
+    transaction on whichever thread serves a request, and take it back
+    after. gRPC served a session's requests on any worker thread, so a
+    change could be recorded under another session's transaction, or none,
+    and one session's ROLLBACK could undo another session's autocommit
+    write. The transaction id BEGIN returns is the undo log's.
+  - **Transaction control runs in program order.** After
+    `COMMIT; START TRANSACTION; ...` in one request, the handler had no
+    transaction and the executor had begun one. A change of another graph
+    then escaped the one-graph rule, the client's ROLLBACK did nothing,
+    and the undo entries stayed. The fast paths that run only a request's
+    last query no longer take a request with transaction control.
+  - **COMMIT and ROLLBACK run on the transaction's graph.** A request that
+    ends a transaction runs under the write lock of the graph the
+    transaction changed. A ROLLBACK statement ran under the request's lock:
+    a read lock, or a read snapshot. A request that also touches another
+    graph's data is refused (0A000): send it on its own.
+  - **`START TRANSACTION { ... }` commits or rolls back its body.** Its undo
+    transaction was never ended.
+  - QUIC's per-graph audit logger now takes the graph a request ran on. It
+    used the session's graph as of the previous request.
+- **Graph DDL needs the schema permission on its graph (SONNY-2803):** the
+  only gate for CREATE GRAPH, DROP GRAPH and index and constraint DDL was the
+  database-level write permission. So a ReadWrite user refused
+  `USE GRAPH g1` (strict tenancy) could `DROP GRAPH g1`, and ReadWrite, which
+  has no Schema permission, could create and drop any graph, index or
+  constraint.
+  - Each of these statements now needs `decide(schema)` and bind_graph on
+    the graph it changes:
+    - CREATE GRAPH and DROP GRAPH: the named graph;
+    - CREATE INDEX and CREATE or DROP CONSTRAINT: the session's graph;
+    - a fulltext CREATE INDEX, and every DROP INDEX: the default graph, the
+      graph they lock (SONNY-2790).
+  - The permission is checked before existence, so a caller refused gets
+    42501 whether or not the graph or index exists.
+  - Schema is Admin's builtin permission. A GPS policy `FOR SCHEMA` on a
+    graph (or on `*`) grants it there.
+  - ReadWrite users can no longer run these statements without such a
+    policy.
+- **`geode.storage.stats` and `geode.storage.integrity` take the graph gate
+  (SONNY-2804):** both read the graph named by their argument with no
+  check.
+  - A user refused a graph read its node, edge and page counts and its WAL
+    position.
+  - A graph that did not exist answered 42883, an existence oracle.
+  - `__geode_*` graphs answered too.
+
+  Now an internal graph is refused (42501, Admin included). Then the caller
+  must be allowed to bind the graph (42501), and only then must the graph
+  exist (3F000).
+- **EXPLAIN and PROFILE run alone (SONNY-2802, SONNY-2752):** both
+  handlers take a request's lock, write gate and transaction bookkeeping from
+  the whole program. But they only plan an EXPLAIN'd statement and only run
+  a PROFILE'd one, and every other statement in the request was dropped
+  without a word. So `USE GRAPH g1; PROFILE CREATE (:X)` took g1's write lock
+  and wrote to the session's graph beside that graph's writers, and
+  `CREATE (:X); EXPLAIN ...` was permission-checked and never ran.
+  - A request that carries an EXPLAIN or PROFILE with any other statement,
+    transaction control included, is now refused (0A000). Send the other
+    statements, and any USE GRAPH, in a request of their own.
+  - The exception is a re-selection of the graph the session is already on,
+    which changes nothing. So `geode query -g g1 "PROFILE ..."` runs when the
+    session is on g1 (a DSN that names g1), and is refused on a session on
+    another graph; select g1 first.
+  - A PROFILE'd change is recorded in the session's transaction like any
+    other. A change of a second graph is then refused, and ROLLBACK takes
+    the write lock of the graph the transaction changed.
+- **The generated admin password file is created safely, in the data
+  directory only (SONNY-2778):** the first boot of `geode serve`,
+  `geode auth init` and the legacy `SecurityManager` write a generated admin
+  password to `<data-dir>/.geode_admin_password`. They opened it with
+  O_CREAT | O_TRUNC. A file already at the path kept its mode and owner, so
+  a world-readable file created there in advance received the password, and
+  a symbolic link there was followed. With no data directory, the server and
+  `SecurityManager` wrote the file into the current working directory. Now:
+  - the file is created with O_CREAT | O_EXCL | O_NOFOLLOW and mode 0600,
+    set again after the open whatever the umask, in the data directory only;
+  - nothing is written when anything is already at the path, a file or a
+    symbolic link. `geode auth init` refuses before it creates the admin;
+    the server logs `[startup] generated initial admin password NOT
+    written …`, and the password is then set with
+    `geode user reset-password`;
+  - with no data directory, nothing is written.
+
+  Retrieval and rotation are in docs/USER_AUTH.md ("The generated admin
+  password"), which no longer gives `geodesic` as a default password. The
+  `geode-auth` tool no longer leaks the RLS policy strings it copies.
+- **Offline auth commands verify the security graph before they change it
+  (SONNY-2798):** offline commands (`geode user ...`, `geode role create|delete`,
+  `geode policy create|delete`, `geode grant`, `geode revoke`,
+  `geode apikey create|revoke|revoke-all`, `geode auth init`) loaded
+  `__geode_security` as it was on disk. Some of them then re-signed the whole
+  HMAC chain without checking it first. So a record written at rest without
+  the key, such as an allow-write GPS policy, a superuser user or a graph
+  grant, was signed by the next offline change and took effect at the next
+  server start. Each of these commands now verifies the chain before it
+  changes anything, and refuses a store that does not verify. It changes
+  nothing and points to `geode auth verify` and `geode auth reseal`. A
+  change made on a verified store is sealed, so a sequence of offline
+  changes, and the next server start, verify without a manual reseal.
+- **Policy DDL is durable or fails; the RLS compiler bounds the VM stack;
+  the security loaders survive out-of-range values (SONNY-2757):**
+  - ALTER POLICY and DROP POLICY used to change the in-memory catalog and
+    only log a failed write to `__geode_security`, so a revocation (a DROP,
+    or disabling an allow) came back at the next restart. Now the statement
+    fails and the catalog is left as it was: DROP deletes the stored record
+    first, and ALTER is undone.
+  - `geode.auth.policy_create` makes CREATE POLICY's checks (field lengths,
+    a USING expression that compiles, a unique name) and persists the
+    policy, failing like CREATE POLICY. It accepted anything and persisted
+    nothing. `geode.auth.policy_delete` persists its drop.
+  - The RLS expression compiler refuses an expression whose evaluation would
+    need more than the VM's 64 stack slots, for example a right-nested OR 63
+    levels deep. Such an expression compiled and then overflowed on every
+    row, denying every row silently.
+  - A stored operation, audit level, action, role priority or failed-login
+    count that does not fit its field marks the record tampered, and it is
+    not loaded (a policy loads as malformed). It used to abort a safe build
+    at startup, before the signature check.
+- **`CALL algo.*` applies RLS, and reads the session's graph only
+  (SONNY-2685):** the graph procedures (BFS, DFS, Dijkstra, degree, every
+  centrality, community and component procedure, and the graph statistics)
+  applied the session's tenant scope but not its RLS policies. A node or
+  edge a label or expression policy hides took part in every path,
+  distance, degree and score. They also walked every graph's nodes, so
+  nodes of another graph, the security graph included, could be scored and
+  returned. Each call now applies the traversal scope of MATCH (SONNY-2679):
+  - a node is visible when it is in the session's graph, passes the tenant
+    scope, and passes the RLS policies of every one of its labels;
+  - an edge is traversable when it is in the graph, passes the policies on
+    its type, and both of its endpoints are visible.
+
+  A hidden node or edge is neither visited nor returned. Dijkstra no longer
+  takes a hop's weight from a hidden parallel edge. A start node the session
+  cannot see gives no rows, as for another tenant's node. The graph
+  statistics count the session's graph only.
+- **Permissive and restrictive RLS policies combine as PostgreSQL's do
+  (SONNY-2710):** the expression engine combined a table's policies as
+  "any permissive passes OR every restrictive passes". A table with only
+  permissive policies never denied a row, and one passing permissive policy
+  overrode a failing restrictive one. Now, for each table (a node label or
+  an edge type), a row is visible when (a permissive policy passes, or no
+  permissive policy applies and the default allows) AND every restrictive
+  policy passes. A node is visible only if every one of its labels allows
+  it. The label-deny engines' entries join the same combination: a deny
+  entry is a restrictive policy that fails, an allow entry (new
+  `addAllowPolicy`) a permissive one that passes. An allow entry never
+  hides a row and cannot undo a deny; `removeDenyPolicy` now removes deny
+  entries only.
+- **The RLS post-filter fails closed (SONNY-2729):** the transport's
+  label post-filter (every QUIC and gRPC result, and algorithm results) used
+  to return the rows unfiltered when it could not allocate its snapshot of
+  the session's denied labels. A filter that cannot run now withholds every
+  row, and the request fails with 53200 (out of memory). The federation
+  post-merge filter, and its callback, fail the query the same way. The rows
+  a filter keeps now keep their order.
 - **Fulltext DDL and `geode.fts.*` lock the default graph (SONNY-2790):**
   fulltext search works on the default graph only, by design. This covers
   `CREATE INDEX ... USING fulltext`, `DROP INDEX` and

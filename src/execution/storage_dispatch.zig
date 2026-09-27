@@ -3099,7 +3099,7 @@ fn handleGeodeFleListencryptedfields(allocator: std.mem.Allocator, call_stmt: as
 // ---------------------------------------------------------------------------
 // Storage dispatch table
 // ---------------------------------------------------------------------------
-const StorageHandler = *const fn (std.mem.Allocator, ast.CallProcedure) anyerror!ExecutionResult;
+const StorageHandler = *const fn (std.mem.Allocator, ast.CallProcedure, execution.ExecutionContext) anyerror!ExecutionResult;
 
 const storage_table = std.StaticStringMap(StorageHandler).initComptime(.{
     .{ "geode.storage.stats", handleGeodeStorageStats },
@@ -3111,23 +3111,42 @@ pub fn executeStorage(
     allocator: std.mem.Allocator,
     proc_name: []const u8,
     call_stmt: ast.CallProcedure,
+    context: execution.ExecutionContext,
 ) !?ExecutionResult {
     if (storage_table.get(proc_name)) |handler| {
-        return try handler(allocator, call_stmt);
+        return try handler(allocator, call_stmt, context);
     }
     return null;
 }
 
-fn handleGeodeStorageStats(allocator: std.mem.Allocator, call_stmt: ast.CallProcedure) anyerror!ExecutionResult {
-    // geode.storage.stats([graph_name]) -> node_count, edge_count, ...
-    // Reads storage-level statistics from the graph-storage engine.
-    const adapter = graph_store.getGlobalAdapter() orelse return ExecutionError.UnknownProcedure;
-
-    var graph_name: []const u8 = "default";
+// CANARY: REQ=REQ-SONNY-2804-STORAGE-PROC-GATE; FEATURE="GraphRBACEnforcement"; ASPECT=StorageProcedures; STATUS=TESTED; TEST=tests/test_sonny2804_storage_procs_gate.zig; OWNER=security; UPDATED=2026-09-26
+/// SONNY-2804: the graph a geode.storage.* call names (its first argument, a
+/// string; `default` without one), once it has passed the gate every other
+/// way of reaching a graph takes: an internal graph is refused
+/// (`InternalGraph`, 42501, for every user), then the caller must be allowed
+/// to bind it (`session_graph.mayBind`: `Unauthorized`, 42501), and only then
+/// must it exist (`GraphNotFound`, 3F000). The procedures took any name as
+/// given: a user refused a graph read its node, edge and page counts and WAL
+/// position, a graph that did not exist answered 42883 (an existence oracle),
+/// and `__geode_*` graphs answered too.
+fn storageGraph(call_stmt: ast.CallProcedure, context: execution.ExecutionContext) ![]const u8 {
+    var graph_name: []const u8 = graph_store.DEFAULT_GRAPH_NAME;
     if (call_stmt.procedure == .Call) {
         const args = call_stmt.procedure.Call.args;
         if (args.len >= 1 and args[0].* == .String) graph_name = args[0].String;
     }
+    try execution.session_graph.refuseInternal(graph_name);
+    if (!execution.session_graph.mayBind(context.principal, graph_name)) return error.Unauthorized;
+    if (!execution.session_graph.exists(context.catalog, graph_name)) return error.GraphNotFound;
+    return graph_name;
+}
+
+fn handleGeodeStorageStats(allocator: std.mem.Allocator, call_stmt: ast.CallProcedure, context: execution.ExecutionContext) anyerror!ExecutionResult {
+    // geode.storage.stats([graph_name]) -> node_count, edge_count, ...
+    // Reads storage-level statistics from the graph-storage engine.
+    const adapter = graph_store.getGlobalAdapter() orelse return ExecutionError.UnknownProcedure;
+
+    const graph_name = try storageGraph(call_stmt, context);
 
     const stats = adapter.getStorageStats(graph_name) catch |err| {
         log.warn("geode.storage.stats failed", &.{Attr.string("error", @errorName(err))});
@@ -3167,16 +3186,12 @@ fn handleGeodeStorageStats(allocator: std.mem.Allocator, call_stmt: ast.CallProc
     return .{ .columns = columns, .rows = rows, .flags = std.ArrayList([]const u8).empty };
 }
 
-fn handleGeodeStorageIntegrity(allocator: std.mem.Allocator, call_stmt: ast.CallProcedure) anyerror!ExecutionResult {
+fn handleGeodeStorageIntegrity(allocator: std.mem.Allocator, call_stmt: ast.CallProcedure, context: execution.ExecutionContext) anyerror!ExecutionResult {
     // geode.storage.integrity([graph_name]) -> node_count_consistent, edge_count_consistent, ...
     // Runs an integrity check on the graph-storage engine.
     const adapter = graph_store.getGlobalAdapter() orelse return ExecutionError.UnknownProcedure;
 
-    var graph_name: []const u8 = "default";
-    if (call_stmt.procedure == .Call) {
-        const args = call_stmt.procedure.Call.args;
-        if (args.len >= 1 and args[0].* == .String) graph_name = args[0].String;
-    }
+    const graph_name = try storageGraph(call_stmt, context);
 
     const report = adapter.checkIntegrity(graph_name) catch |err| {
         log.warn("geode.storage.integrity failed", &.{Attr.string("error", @errorName(err))});

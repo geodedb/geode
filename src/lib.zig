@@ -908,3 +908,10 @@ test "#733 hot-path inline test roots" {
 test "tenant_visibility: inline test root" {
     _ = @import("execution/tenant_visibility.zig");
 }
+
+// SONNY-2799: the undo log's inline tests (src/txn_undo_log.zig) entered no
+// test binary. Named so `zig build test-txn-undo-log-inline` (filters "undo
+// log", "savepoint") keeps this block, and with it the file, in discovery.
+test "SONNY-2799 undo log inline test roots" {
+    _ = @import("txn_undo_log.zig");
+}

@@ -39,6 +39,7 @@ const eval = @import("eval.zig");
 // Phase 5 M5.3: Import evaluator_adapter to provide callbacks to eval module
 const evaluator_adapter = @import("execution/evaluator_adapter.zig");
 const graph_store = @import("graph_store.zig");
+const storage_adapter = @import("storage/graph_storage_adapter.zig");
 const index_manager = @import("index/index_manager.zig");
 const catalog_mod = @import("schema/catalog.zig");
 const fle_hooks_mod = @import("execution/fle_hooks.zig");
@@ -236,6 +237,10 @@ pub const wouldEvaluateRLS = match_operations.wouldEvaluateRLS;
 // SONNY-2679 (review): a traversal's label-deny snapshot, and the edge RLS
 // check that reads it, so a test can pin that the snapshot is what answers.
 pub const LabelDenySnapshot = match_operations.LabelDenySnapshot;
+// SONNY-2757: the durable GPS policy changes (DDL and geode.auth.policy_*).
+pub const policy_ddl = @import("execution/policy_ddl.zig");
+// SONNY-2685: the row visibility of one `CALL algo.*` call.
+pub const AlgoScope = @import("execution/algo_scope.zig").AlgoScope;
 pub const passesEdgeRLSFilter = match_operations.passesEdgeRLSFilter;
 pub const activeRlsPoliciesConfigured = match_operations.activeRlsPoliciesConfigured;
 // H3-P3: planner ordered-scan fast-path hit counter (test path signal).
@@ -600,6 +605,14 @@ pub const ExecutionContext = struct {
     session_state: ?*SessionState = null,
     // Transaction state for START TRANSACTION/COMMIT/ROLLBACK
     transaction_state: TransactionState = .None,
+    // CANARY: REQ=REQ-SONNY-2799-FAILED-TXN-ROLLBACK; FEATURE="TransactionManagement"; ASPECT=DeferToHandler; STATUS=TESTED; TEST=tests/test_sonny2805_txn_sessions.zig; OWNER=engine; UPDATED=2026-09-26
+    /// SONNY-2799: the caller, a transport handler, rolls a failed
+    /// transaction back itself (`executeProgramWithContext` fails it,
+    /// GAP-0917, and returns the error with its changes still recorded). The
+    /// handler holds the request's lock, which may be another graph's or a
+    /// read lock; it undoes the transaction after releasing that lock, under
+    /// the write lock of the graph the transaction changed.
+    defer_failed_txn_rollback: bool = false,
     // Input parameter bindings provided by client (query-level parameters)
     query_param_names: []const []const u8 = &.{},
     query_param_values: []const value_types.Value = &.{},
@@ -1153,7 +1166,43 @@ fn requirePolicyDdlAdmin(allocator: std.mem.Allocator, action: []const u8, conte
     om.recordAuthzCheck(.allow, .rbac, d);
 }
 
+/// SONNY-2823: commit this thread's session engine transaction (R9), where
+/// its undo transaction commits, or where the program that opened it ends. A
+/// failed commit is logged: the undo transaction is committed already, as
+/// QUIC's COMMIT message does.
+fn commitSessionEngineTxn() void {
+    storage_adapter.commitThreadSessionTxn() catch |err| {
+        log.err("Failed to commit the session engine transaction", &.{
+            Attr.string("error", @errorName(err)),
+        });
+    };
+}
+
+// CANARY: REQ=REQ-SONNY-2823-SESSION-ENGINE-TXN; FEATURE="TransactionManagement"; ASPECT=ProgramEnd; STATUS=TESTED; TEST=tests/test_sonny2823_session_engine_txn.zig; OWNER=storage; UPDATED=2026-09-27
+/// SONNY-2823: the executor entry points running on this thread
+/// (`executeProgramWithContext`, `executeStatementWithContext`). When the
+/// outermost returns, the program is over, and the session engine
+/// transaction it opened is committed, while the transport still holds the
+/// request's graph lock. An engine transaction open across requests had its
+/// page images appended to the WAL at its commit, after newer ones other
+/// sessions committed meanwhile, and recovery replayed the older image over
+/// theirs (see `graph_storage_adapter.SessionEngineTxn`). The Geode
+/// transaction goes on: the undo log undoes a committed change as well.
+threadlocal var t_entry_depth: u32 = 0;
+
+fn enterEntryPoint() void {
+    t_entry_depth += 1;
+}
+
+fn leaveEntryPoint() void {
+    t_entry_depth -= 1;
+    if (t_entry_depth == 0) commitSessionEngineTxn();
+}
+
 pub fn executeProgramWithContext(allocator: std.mem.Allocator, program: *const ast.Program, context: ExecutionContext) !ExecutionResult {
+    // SONNY-2823: the program's session engine transaction ends with it.
+    enterEntryPoint();
+    defer leaveEntryPoint();
     const prev_ctx = pushActiveContext(&context);
     defer popActiveContext(prev_ctx);
     if (program.statements.len == 0) {
@@ -1201,8 +1250,10 @@ pub fn executeProgramWithContext(allocator: std.mem.Allocator, program: *const a
                 .Commit => {
                     if (last_result) |*result| result.deinit(allocator);
                     if (last_data_result) |*result| result.deinit(allocator);
-                    var rb = executeStatementWithContext(allocator, .Rollback, current_context) catch null;
-                    if (rb) |*r| r.deinit(allocator);
+                    if (!context.defer_failed_txn_rollback) {
+                        var rb = executeStatementWithContext(allocator, .Rollback, current_context) catch null;
+                        if (rb) |*r| r.deinit(allocator);
+                    }
                     return txn_failure orelse error.TransactionAborted;
                 },
                 else => continue, // rejected: never executed
@@ -1282,8 +1333,11 @@ pub fn executeProgramWithContext(allocator: std.mem.Allocator, program: *const a
     if (current_context.transaction_state == .Failed) {
         if (last_result) |*result| result.deinit(allocator);
         if (last_data_result) |*result| result.deinit(allocator);
-        var rb = executeStatementWithContext(allocator, .Rollback, current_context) catch null;
-        if (rb) |*r| r.deinit(allocator);
+        // SONNY-2799: a transport handler undoes it (`defer_failed_txn_rollback`).
+        if (!context.defer_failed_txn_rollback) {
+            var rb = executeStatementWithContext(allocator, .Rollback, current_context) catch null;
+            if (rb) |*r| r.deinit(allocator);
+        }
         return txn_failure orelse error.TransactionAborted;
     }
 
@@ -1339,6 +1393,10 @@ fn executeStatement(allocator: std.mem.Allocator, stmt: ast.Statement) !Executio
 // statements (subqueries) open their own inner scope that cannot clear the
 // enclosing statement's flag.
 pub fn executeStatementWithContext(allocator: std.mem.Allocator, stmt: ast.Statement, context: ExecutionContext) !ExecutionResult {
+    // SONNY-2823: a statement run on its own (the PROFILE paths) is a
+    // program; its session engine transaction ends with it.
+    enterEntryPoint();
+    defer leaveEntryPoint();
     // CANARY: REQ=REQ-ENG-3922-VECTOR-DIM-GUARD; FEATURE="VectorIndex"; ASPECT=PrePassGraphScope; STATUS=TESTED; TEST=tests/test_eng3922_dim_guard.zig; OWNER=execution; UPDATED=2026-08-29
     // ENG-3922(a): the write pre-pass needs to know which GRAPH the statement
     // writes to (the unindexed vector-dimension pin is per-graph), and the only
@@ -1499,6 +1557,12 @@ fn executeStatementWithContextInner(allocator: std.mem.Allocator, stmt: ast.Stat
 
             // If transaction has a body, execute statements and auto-commit
             if (txn.body) |body| {
+                // SONNY-2805: the body is a transaction of its own: committed
+                // after its last statement, rolled back on an error. Neither
+                // happened: its undo transaction stayed open on the thread,
+                // with its entries, and the thread's next changes were
+                // recorded in it.
+                const body_store = graph_store.getWritableGlobalStore(allocator);
                 var last_result: ?ExecutionResult = null;
 
                 // Execute all statements in the transaction body
@@ -1518,14 +1582,23 @@ fn executeStatementWithContextInner(allocator: std.mem.Allocator, stmt: ast.Stat
                         .Rollback => return error.RollbackInTransactionBody,
                         else => return error.UnsupportedStatementInTransactionBody,
                     }) catch |err| {
-                        // On error, rollback (just reset state for now)
                         mut_context.transaction_state = .None;
+                        // SONNY-2823: the engine transaction first, so the
+                        // undo's own changes commit on their own.
+                        storage_adapter.abortThreadSessionTxn();
+                        undo_log.rollback(body_store) catch |rb_err| {
+                            log.err("Failed to roll back a transaction body", &.{
+                                Attr.string("error", @errorName(rb_err)),
+                            });
+                        };
                         return err;
                     };
                 }
 
                 // Auto-commit: reset transaction state
                 mut_context.transaction_state = .None;
+                undo_log.commit(body_store);
+                commitSessionEngineTxn();
 
                 // Return result from last statement
                 if (last_result) |result| {
@@ -1561,6 +1634,13 @@ fn executeStatementWithContextInner(allocator: std.mem.Allocator, stmt: ast.Stat
                 const undo_log = txn_undo_log.getGlobalUndoLog(allocator);
                 const commit_store = graph_store.getWritableGlobalStore(allocator);
                 undo_log.commit(commit_store);
+                // CANARY: REQ=REQ-SONNY-2823-SESSION-ENGINE-TXN; FEATURE="TransactionManagement"; ASPECT=CommitStatement; STATUS=TESTED; TEST=tests/test_sonny2823_session_engine_txn.zig; OWNER=storage; UPDATED=2026-09-26
+                // SONNY-2823: and the session's engine transaction (R9),
+                // which a COMMIT statement never committed, on either
+                // transport: the transaction's writes on its shard had no
+                // COMMIT record, and the thread kept the transaction for the
+                // next session it served.
+                commitSessionEngineTxn();
 
                 break :blk "transaction committed";
             } else "no transaction active";
@@ -1595,8 +1675,15 @@ fn executeStatementWithContextInner(allocator: std.mem.Allocator, stmt: ast.Stat
 
                 // CANARY: REQ=REQ-TXN-UNDO-007; FEATURE="TransactionUndoLog"; ASPECT=RollbackTransaction; STATUS=TESTED; TEST=geodetestlab/specs/transaction_state_basic.yml; OWNER=engine; UPDATED=2025-12-23
                 // Rollback using the undo log - undoes all changes in reverse order
-                const store = graph_store.getGlobalStore(allocator);
+                // SONNY-2799: on the live store. `getGlobalStore` is a read
+                // snapshot's store while one is installed on the thread, and
+                // the undo went into the snapshot.
+                const store = graph_store.getWritableGlobalStore(allocator);
                 const undo_log = txn_undo_log.getGlobalUndoLog(allocator);
+                // SONNY-2823: the session's engine transaction first (as
+                // QUIC's ROLLBACK message does), so the undo's own changes
+                // commit on their own. A ROLLBACK statement never aborted it.
+                storage_adapter.abortThreadSessionTxn();
                 undo_log.rollback(store) catch |err| {
                     log.err("Failed to rollback transaction", &.{
                         Attr.string("error", @errorName(err)),
@@ -1692,6 +1779,11 @@ fn executeStatementWithContextInner(allocator: std.mem.Allocator, stmt: ast.Stat
             // an ungated CREATE INDEX exists on ONE node and silently diverges.
             // CANARY: REQ=REQ-DIST-CLUSTER-FAILCLOSED-UNREPLICATED; FEATURE="DistributedCluster"; ASPECT=GateIndexDDL; STATUS=TESTED; TEST=tests/test_cluster_replicable_mutations.zig; OWNER=distributed; UPDATED=2026-06-10
             try cluster_mod.gateUnreplicatedWrite();
+            // CANARY: REQ=REQ-SONNY-2803-GRAPH-DDL-GATE; FEATURE="GraphRBACEnforcement"; ASPECT=IndexDDL; STATUS=TESTED; TEST=tests/test_sonny2803_graph_ddl_gate.zig; OWNER=security; UPDATED=2026-09-26
+            // SONNY-2803: schema on the graph the index DDL runs on (the
+            // session's; a fulltext index lives in the default graph,
+            // SONNY-2790), before the IF NOT EXISTS lookup.
+            try session_graph.authorizeSchemaChange(context, if (ci.index_type == .fulltext) graph_store.DEFAULT_GRAPH_NAME else session_graph.current(context));
             const cat = context.catalog;
             const index_name = ci.name orelse blk: {
                 var parts = try std.ArrayList(u8).initCapacity(allocator, 64);
@@ -1870,6 +1962,9 @@ fn executeStatementWithContextInner(allocator: std.mem.Allocator, stmt: ast.Stat
             // node only and silently diverges.
             // CANARY: REQ=REQ-DIST-CLUSTER-FAILCLOSED-UNREPLICATED; FEATURE="DistributedCluster"; ASPECT=GateConstraintDDL; STATUS=TESTED; TEST=tests/test_cluster_replicable_mutations.zig; OWNER=distributed; UPDATED=2026-06-10
             try cluster_mod.gateUnreplicatedWrite();
+            // SONNY-2803: schema on the session's graph, before the IF NOT
+            // EXISTS lookup.
+            try session_graph.authorizeSchemaChange(context, session_graph.current(context));
             // CANARY: REQ=REQ-CONSTRAINT-EXEC-001; FEATURE="ConstraintExecution"; ASPECT=CREATE; STATUS=EXEMPT; OWNER=engine; UPDATED=2026-01-09
             // CREATE CONSTRAINT implementation - store in catalog and enforce
 
@@ -1937,6 +2032,10 @@ fn executeStatementWithContextInner(allocator: std.mem.Allocator, stmt: ast.Stat
         .DropIndex => |di| {
             // Cluster fail-closed: see .CreateIndex (GateIndexDDL).
             try cluster_mod.gateUnreplicatedWrite();
+            // SONNY-2803: schema on the default graph, the graph DROP INDEX
+            // runs on (SONNY-2790: the index may be a fulltext one), before
+            // the index is looked up.
+            try session_graph.authorizeSchemaChange(context, graph_store.DEFAULT_GRAPH_NAME);
             const cat = context.catalog;
             const index_name = di.name;
 
@@ -2010,6 +2109,8 @@ fn executeStatementWithContextInner(allocator: std.mem.Allocator, stmt: ast.Stat
             // (Currently a stub no-op, but the surface claims to mutate — keep
             // the fail-closed contract so a future real implementation stays gated.)
             try cluster_mod.gateUnreplicatedWrite();
+            // SONNY-2803: as CREATE CONSTRAINT.
+            try session_graph.authorizeSchemaChange(context, session_graph.current(context));
             // DROP CONSTRAINT implementation
             _ = dc;
             return ExecutionResult{
@@ -2076,6 +2177,10 @@ fn executeStatementWithContextInner(allocator: std.mem.Allocator, stmt: ast.Stat
             try cluster_mod.gateUnreplicatedWrite();
             // SONNY-2791: the __geode_* names are the engine's own.
             try session_graph.refuseInternal(cg.name);
+            // CANARY: REQ=REQ-SONNY-2803-GRAPH-DDL-GATE; FEATURE="GraphRBACEnforcement"; ASPECT=GraphDDL; STATUS=TESTED; TEST=tests/test_sonny2803_graph_ddl_gate.zig; OWNER=security; UPDATED=2026-09-26
+            // SONNY-2803: schema and bind_graph on the graph to create, before
+            // whether it exists.
+            try session_graph.authorizeSchemaChange(context, cg.name);
             // CREATE GRAPH implementation with duplicate detection (Catalog instance)
             const graph_name = cg.name;
             const cat = context.catalog;
@@ -2152,6 +2257,10 @@ fn executeStatementWithContextInner(allocator: std.mem.Allocator, stmt: ast.Stat
             try cluster_mod.gateUnreplicatedWrite();
             // SONNY-2791: DROP GRAPH __geode_security removed the security graph.
             try session_graph.refuseInternal(dg.name);
+            // SONNY-2803: schema and bind_graph on the graph to drop, before
+            // whether it exists. A ReadWrite user refused `USE GRAPH g1`
+            // dropped g1.
+            try session_graph.authorizeSchemaChange(context, dg.name);
             // DROP GRAPH implementation with existence check (Catalog instance)
             const graph_name = dg.name;
             const cat = context.catalog;
@@ -2407,26 +2516,13 @@ fn executeStatementWithContextInner(allocator: std.mem.Allocator, stmt: ast.Stat
             // told "Policy created" and got a policy that denies everything.
             // Hydration (policy_persistence.hydrateCatalog) keeps the tolerant
             // addPolicy so an already-persisted record cannot brick startup.
-            try pol_cat.addPolicyStrict(new_policy_spec);
-
             // CANARY: REQ=REQ-GPS-CATALOG-002; FEATURE="GPS Policy Persistence"; ASPECT=CreatePolicyWriteThrough; STATUS=TESTED; TEST=tests/test_gps_policy_persistence.zig; OWNER=security; UPDATED=2026-05-20
             // Write-through to __geode_security via hooks installed at server startup.
             // In CLI / test contexts hooks are null and the policy is in-memory only.
             // SONNY-2731: a policy that cannot be persisted is taken out again
-            // and the statement fails. It used to stay in memory only, with a
-            // warning, and vanish at the next restart.
-            if (policy_catalog_mod.getWriteThroughHooks()) |hooks| {
-                hooks.persist(hooks.ctx, new_policy_spec) catch |err| {
-                    const logging_mod = @import("logging");
-                    const log_ex = logging_mod.scoped("execution");
-                    log_ex.warn("GPS CREATE POLICY persistence to __geode_security failed — the policy was not created", &.{
-                        logging_mod.Attr.string("name", cp_stmt.name),
-                        logging_mod.Attr.string("error", @errorName(err)),
-                    });
-                    pol_cat.removePolicy(cp_stmt.name) catch {};
-                    return err;
-                };
-            }
+            // and the statement fails. SONNY-2757: shared with
+            // geode.auth.policy_create (`policy_ddl.create`).
+            try policy_ddl.create(pol_cat, new_policy_spec);
 
             // CANARY: REQ=REQ-GPS-AUDIT-001; FEATURE="GPS Policy DDL Audit"; ASPECT=CreatePolicyAuditEmission; STATUS=TESTED; TEST=geode-test-harness/geodetestlab-cli/specs/gps_persistence_policy_audit.yml; OWNER=security; UPDATED=2026-05-21
             {
@@ -2466,34 +2562,15 @@ fn executeStatementWithContextInner(allocator: std.mem.Allocator, stmt: ast.Stat
             const policy_catalog_mod = @import("security/policy_catalog.zig");
             const pol_cat = policy_catalog_mod.getGlobalCatalog() orelse return error.PolicyCatalogNotInitialized;
 
-            const remove_outcome: enum { removed, not_found } = blk: {
-                pol_cat.removePolicy(dp_stmt.name) catch |err| {
-                    if (err != error.PolicyNotFound or !dp_stmt.if_exists) return err;
-                    // IF EXISTS: swallow error.PolicyNotFound but record it.
-                    break :blk .not_found;
-                };
-                break :blk .removed;
-            };
-
             // CANARY: REQ=REQ-GPS-CATALOG-002; FEATURE="GPS Policy Persistence"; ASPECT=DropPolicyWriteThrough; STATUS=TESTED; TEST=tests/test_gps_policy_persistence.zig; OWNER=security; UPDATED=2026-05-20
             // Write-through to __geode_security via hooks installed at server startup.
             // In CLI / test contexts hooks are null and the policy is in-memory only.
-            {
-                const drop_name = dp_stmt.name;
-                const drop_if_exists = dp_stmt.if_exists;
-                if (policy_catalog_mod.getWriteThroughHooks()) |hooks| {
-                    hooks.drop(hooks.ctx, drop_name) catch |err| {
-                        if (err != error.PolicyNotFound or !drop_if_exists) {
-                            const logging_mod = @import("logging");
-                            const log_ex = logging_mod.scoped("execution");
-                            log_ex.warn("GPS DROP POLICY persistence to __geode_security failed", &.{
-                                logging_mod.Attr.string("name", drop_name),
-                                logging_mod.Attr.string("error", @errorName(err)),
-                            });
-                        }
-                    };
-                }
-            }
+            // SONNY-2757 (P25): the stored record is deleted first and the
+            // catalog entry only after that; a failed write-through fails the
+            // statement and drops nothing. It used to drop the policy from the
+            // catalog and only log the failure, so the revocation was undone
+            // at the next restart.
+            const remove_outcome = try policy_ddl.drop(pol_cat, dp_stmt.name, dp_stmt.if_exists);
 
             // CANARY: REQ=REQ-GPS-AUDIT-002; FEATURE="GPS Policy DDL Audit"; ASPECT=DropPolicyAuditEmission; STATUS=TESTED; TEST=geode-test-harness/geodetestlab-cli/specs/gps_persistence_policy_audit.yml; OWNER=security; UPDATED=2026-05-21
             // Only emit audit when a policy was actually removed.  IF EXISTS no-ops
@@ -2535,24 +2612,16 @@ fn executeStatementWithContextInner(allocator: std.mem.Allocator, stmt: ast.Stat
             const policy_catalog_mod = @import("security/policy_catalog.zig");
             const pol_cat = policy_catalog_mod.getGlobalCatalog() orelse return error.PolicyCatalogNotInitialized;
 
-            try pol_cat.alterPolicy(ap_stmt.name, ap_stmt.set_enabled, ap_stmt.rename_to);
-
             // CANARY: REQ=REQ-GPS-CATALOG-002; FEATURE="GPS Policy Persistence"; ASPECT=AlterPolicyWriteThrough; STATUS=TESTED; TEST=tests/test_gap0858_alter_policy_persist.zig; OWNER=security; UPDATED=2026-06-09
             // GAP-0858: durable ALTER POLICY write-through to __geode_security via
             // hooks installed at server startup. In CLI / test contexts hooks are
             // null and the in-memory catalog update is authoritative for the
             // running process only. The hook is called with the CURRENT (pre-rename)
             // name so the durable record can be located before the rename applies.
-            if (policy_catalog_mod.getWriteThroughHooks()) |hooks| {
-                hooks.alter(hooks.ctx, ap_stmt.name, ap_stmt.set_enabled, ap_stmt.rename_to) catch |err| {
-                    const logging_mod = @import("logging");
-                    const log_ex = logging_mod.scoped("execution");
-                    log_ex.warn("GPS ALTER POLICY persistence to __geode_security failed — change is in-memory only", &.{
-                        logging_mod.Attr.string("name", ap_stmt.name),
-                        logging_mod.Attr.string("error", @errorName(err)),
-                    });
-                };
-            }
+            // SONNY-2757 (P25): a failed write-through fails the statement and
+            // puts the catalog back. It used to leave the change in memory
+            // only, so a DISABLE of an allow was undone at the next restart.
+            try policy_ddl.alter(pol_cat, ap_stmt.name, ap_stmt.set_enabled, ap_stmt.rename_to);
 
             // CANARY: REQ=REQ-GPS-AUDIT-003; FEATURE="GPS Policy DDL Audit"; ASPECT=AlterPolicyAuditEmission; STATUS=TESTED; TEST=geode-test-harness/geodetestlab-cli/specs/gps_persistence_policy_audit.yml; OWNER=security; UPDATED=2026-06-09
             {

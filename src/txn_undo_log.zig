@@ -146,12 +146,19 @@ pub const UndoEntry = union(UndoOpType) {
 };
 
 // CANARY: REQ=REQ-TXN-SAVEPOINT-001; FEATURE="TransactionSavepoints"; ASPECT=UndoLogSavepoint; STATUS=IMPL; OWNER=engine; UPDATED=2026-04-01
-/// A savepoint records a named position in the undo log so that
-/// rollbackToSavepoint can partially undo entries back to that point
-/// without aborting the entire transaction.
+/// A savepoint records a named position in one transaction's changes so that
+/// rollbackToSavepoint can undo the transaction's later changes without
+/// aborting it.
+///
+/// SONNY-2799: a savepoint belongs to its transaction (`txn_id`), and its
+/// position counts that transaction's changes only (`own_count`). It recorded
+/// an index into the list every transaction shares: rolling back to it undid,
+/// and freed, every later change of every transaction, and any transaction's
+/// BEGIN or COMMIT dropped every savepoint.
 pub const Savepoint = struct {
     name: []const u8,
-    entry_index: usize,
+    txn_id: u64,
+    own_count: usize,
 };
 
 // ---------------------------------------------------------------------------
@@ -203,6 +210,16 @@ pub fn setThreadTxnId(txn_id: u64) void {
 /// Peek at the current thread's undo-log txn_id (0 = none).
 pub fn currentThreadTxnId() u64 {
     return t_txn_state.txn_id;
+}
+
+// CANARY: REQ=REQ-SONNY-2799-UNDO-PER-TXN; FEATURE="TransactionUndoLog"; ASPECT=ThreadTxn; STATUS=TESTED; TEST=tests/test_sonny2805_txn_sessions.zig; OWNER=engine; UPDATED=2026-09-26
+/// SONNY-2799: the transaction open on the calling thread, or 0 for none. A
+/// transport handler puts its session's transaction on the thread for one
+/// request (`setThreadTxnId`, `ServerState.enterSessionTxn`); `begin` opens one.
+/// Every change is recorded under it, and COMMIT and ROLLBACK end it. There
+/// is no transaction 0: a thread with none records nothing and undoes nothing.
+fn threadTxn() u64 {
+    return if (t_txn_state.active) t_txn_state.txn_id else 0;
 }
 
 /// Transaction undo log that persists across CLI invocations
@@ -369,15 +386,15 @@ pub const UndoLog = struct {
 
     /// Begin a transaction.  Each caller thread gets its own `txn_id` so
     /// concurrent `BEGIN`s from different sessions no longer wipe each
-    /// other's entries (R1).  Call sites must drive `commit()`/`rollback()`
-    /// on the SAME thread that called `begin()`.
+    /// other's entries (R1).  A transport handler puts a session's
+    /// transaction on whichever thread serves its request (SONNY-2799);
+    /// every other caller drives `commit()`/`rollback()` on the thread that
+    /// called `begin()`.
     pub fn begin(self: *UndoLog) void {
         // If this thread still claims an active txn, drop it silently —
         // the old contract was "begin wipes previous state"; we honour
         // that for this thread's own state only.
-        if (t_txn_state.active and t_txn_state.txn_id != 0) {
-            self.purgeEntriesForTxn(t_txn_state.txn_id);
-        }
+        self.discardTxn(threadTxn());
 
         t_txn_state.txn_id = allocTxnId();
         t_txn_state.active = true;
@@ -385,16 +402,10 @@ pub const UndoLog = struct {
         self.list_mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
         defer self.list_mutex.unlock(std.Io.Threaded.global_single_threaded.io());
         self.active = true;
-        self.clearPendingRebuildsLocked();
-        // Savepoints are keyed by name (not txn_id).  Begin wipes them to
-        // preserve the pre-R1 contract: a fresh transaction starts with
-        // no savepoints.  Under concurrent BEGINs this is still safe in
-        // practice because savepoints are per-session and the other
-        // thread's session owns its own ServerState; the only place two
-        // threads can race on savepoints is when they both intentionally
-        // share the global undo log (tests), and those tests drive
-        // begin/commit sequentially.
-        self.clearSavepointsLocked();
+        // SONNY-2799: other transactions' savepoints and queued index
+        // rebuilds are not this BEGIN's to drop. It cleared both, so a
+        // session's BEGIN took another session's savepoints, and the index
+        // rebuilds that session's COMMIT was to run.
     }
 
     pub fn commit(self: *UndoLog, store: ?*graph_store.GraphStore) void {
@@ -404,16 +415,12 @@ pub const UndoLog = struct {
             self.clearPendingRebuilds();
         }
 
-        const txn_id = t_txn_state.txn_id;
-        if (txn_id != 0) {
-            self.purgeEntriesForTxn(txn_id);
-        }
+        // This thread's transaction only: its entries and its savepoints.
+        self.discardTxn(threadTxn());
 
         self.list_mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
         defer self.list_mutex.unlock(std.Io.Threaded.global_single_threaded.io());
-        self.clearSavepointsLocked();
-        t_txn_state.active = false;
-        t_txn_state.txn_id = 0;
+        t_txn_state = .{};
         if (self.entries.items.len == 0) self.active = false;
     }
 
@@ -422,16 +429,80 @@ pub const UndoLog = struct {
     /// flushPendingRebuilds separately -- typically after releasing the write lock
     /// to avoid blocking other connections during the O(N) index population scan.
     pub fn commitDeferRebuilds(self: *UndoLog) void {
-        const txn_id = t_txn_state.txn_id;
-        if (txn_id != 0) {
-            self.purgeEntriesForTxn(txn_id);
-        }
+        self.discardTxn(threadTxn());
         self.list_mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
         defer self.list_mutex.unlock(std.Io.Threaded.global_single_threaded.io());
-        self.clearSavepointsLocked();
-        t_txn_state.active = false;
-        t_txn_state.txn_id = 0;
+        t_txn_state = .{};
         if (self.entries.items.len == 0) self.active = false;
+    }
+
+    /// SONNY-2799: forget transaction `txn_id` without undoing it: its
+    /// entries and its savepoints. For a transaction that committed, or one
+    /// whose session went away with no store to undo it on. 0 is none.
+    pub fn discardTxn(self: *UndoLog, txn_id: u64) void {
+        if (txn_id == 0) return;
+        self.purgeEntriesForTxn(txn_id);
+        self.list_mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
+        defer self.list_mutex.unlock(std.Io.Threaded.global_single_threaded.io());
+        self.dropSavepointsLocked(txn_id, 0);
+    }
+
+    /// Drop transaction `txn_id`'s savepoints from position `from` on in
+    /// `savepoints`. Caller MUST hold `list_mutex`.
+    fn dropSavepointsLocked(self: *UndoLog, txn_id: u64, from: usize) void {
+        var j: usize = self.savepoints.items.len;
+        while (j > from) {
+            j -= 1;
+            if (self.savepoints.items[j].txn_id != txn_id) continue;
+            self.allocator.free(self.savepoints.items[j].name);
+            _ = self.savepoints.orderedRemove(j);
+        }
+    }
+
+    /// How many entries transaction `txn_id` has. Caller MUST hold
+    /// `list_mutex`.
+    fn countOwnLocked(self: *const UndoLog, txn_id: u64) usize {
+        var n: usize = 0;
+        for (self.entry_txns.items) |t| {
+            if (t == txn_id) n += 1;
+        }
+        return n;
+    }
+
+    /// Take transaction `txn_id`'s newest `count` entries out of the list,
+    /// newest first. Caller MUST hold `list_mutex`; the caller owns the
+    /// entries returned (undo, then free them). On OutOfMemory nothing is
+    /// taken.
+    fn takeNewestOwnLocked(self: *UndoLog, txn_id: u64, count: usize) !std.ArrayListUnmanaged(UndoEntry) {
+        var taken: std.ArrayListUnmanaged(UndoEntry) = .empty;
+        try taken.ensureTotalCapacity(self.allocator, count);
+        var remaining = count;
+        var i: usize = self.entries.items.len;
+        while (remaining > 0 and i > 0) {
+            i -= 1;
+            if (self.entry_txns.items[i] != txn_id) continue;
+            taken.appendAssumeCapacity(self.entries.items[i]);
+            _ = self.entries.orderedRemove(i);
+            _ = self.entry_txns.orderedRemove(i);
+            remaining -= 1;
+        }
+        return taken;
+    }
+
+    /// Undo `entries` in order, freeing each. On an error the entries not
+    /// undone are freed too, and the error returned.
+    fn undoAndFree(self: *UndoLog, store: *graph_store.GraphStore, entries: []const UndoEntry) !void {
+        for (entries, 0..) |entry, k| {
+            self.undoEntry(store, entry) catch |err| {
+                self.list_mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
+                defer self.list_mutex.unlock(std.Io.Threaded.global_single_threaded.io());
+                for (entries[k..]) |rest| self.freeEntry(rest);
+                return err;
+            };
+            self.list_mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
+            self.freeEntry(entry);
+            self.list_mutex.unlock(std.Io.Threaded.global_single_threaded.io());
+        }
     }
 
     /// Remove (and free) all entries whose tag matches `txn_id`.  Caller
@@ -451,145 +522,72 @@ pub const UndoLog = struct {
     }
 
     // CANARY: REQ=REQ-TXN-SAVEPOINT-002; FEATURE="TransactionSavepoints"; ASPECT=CreateSavepoint; STATUS=IMPL; OWNER=engine; UPDATED=2026-04-01
-    /// Create a named savepoint at the current position in the undo log.
-    /// If a savepoint with the same name already exists, it is replaced.
+    /// Create a named savepoint in the calling thread's transaction, after
+    /// its changes so far. A savepoint of the same transaction with the same
+    /// name is moved there.
     pub fn createSavepoint(self: *UndoLog, name: []const u8) !void {
-        if (!t_txn_state.active) {
-            if (!self.active) return error.NoActiveTransaction;
-        }
+        // SONNY-2799: a savepoint is its transaction's.
+        const txn_id = threadTxn();
+        if (txn_id == 0) return error.NoActiveTransaction;
 
         self.list_mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
         defer self.list_mutex.unlock(std.Io.Threaded.global_single_threaded.io());
 
-        // Replace existing savepoint with same name
+        const own = self.countOwnLocked(txn_id);
         for (self.savepoints.items) |*sp| {
-            if (std.mem.eql(u8, sp.name, name)) {
-                sp.entry_index = self.entries.items.len;
+            if (sp.txn_id == txn_id and std.mem.eql(u8, sp.name, name)) {
+                sp.own_count = own;
                 return;
             }
         }
 
         const name_copy = try self.allocator.dupe(u8, name);
+        errdefer self.allocator.free(name_copy);
         try self.savepoints.append(self.allocator, .{
             .name = name_copy,
-            .entry_index = self.entries.items.len,
+            .txn_id = txn_id,
+            .own_count = own,
         });
     }
 
     // CANARY: REQ=REQ-TXN-SAVEPOINT-003; FEATURE="TransactionSavepoints"; ASPECT=RollbackToSavepoint; STATUS=IMPL; OWNER=engine; UPDATED=2026-04-01
-    /// Roll back all undo entries recorded after the named savepoint,
-    /// undoing their effects on the store. The savepoint itself is kept
-    /// (SQL semantics: ROLLBACK TO does not release the savepoint).
-    /// Any savepoints created after this one are discarded.
+    /// Undo the calling thread's transaction's changes made after the named
+    /// savepoint, newest first. The savepoint itself is kept (SQL semantics:
+    /// ROLLBACK TO does not release the savepoint); the transaction's
+    /// savepoints created after it are discarded.
+    ///
+    /// SONNY-2799: only this transaction's changes and savepoints. It undid
+    /// every entry after the savepoint's index into the shared list, other
+    /// sessions' included, and then cut the list there: an entry appended by
+    /// another session while it undid was dropped unfreed.
     pub fn rollbackToSavepoint(self: *UndoLog, name: []const u8, store: *graph_store.GraphStore) !void {
-        if (!t_txn_state.active) {
-            if (!self.active) return error.NoActiveTransaction;
-        }
+        const txn_id = threadTxn();
+        if (txn_id == 0) return error.NoActiveTransaction;
 
-        // Snapshot savepoint target under the lock, then perform undo
-        // (which calls back into the store) without holding it.
+        // Take the changes to undo out of the list under the lock, then undo
+        // them (which calls back into the store) without it.
         self.list_mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
         var sp_idx: ?usize = null;
         for (self.savepoints.items, 0..) |sp, idx| {
-            if (std.mem.eql(u8, sp.name, name)) {
+            if (sp.txn_id == txn_id and std.mem.eql(u8, sp.name, name)) {
                 sp_idx = idx;
                 break;
             }
         }
-        if (sp_idx == null) {
+        const idx = sp_idx orelse {
             self.list_mutex.unlock(std.Io.Threaded.global_single_threaded.io());
             return error.SavepointNotFound;
-        }
-        const idx = sp_idx.?;
-        const target_entry_index = self.savepoints.items[idx].entry_index;
+        };
+        const later = self.countOwnLocked(txn_id) -| self.savepoints.items[idx].own_count;
+        var undo_now = self.takeNewestOwnLocked(txn_id, later) catch |err| {
+            self.list_mutex.unlock(std.Io.Threaded.global_single_threaded.io());
+            return err;
+        };
+        defer undo_now.deinit(self.allocator);
+        self.dropSavepointsLocked(txn_id, idx + 1);
         self.list_mutex.unlock(std.Io.Threaded.global_single_threaded.io());
 
-        // Undo entries in reverse order from current end back to the savepoint position
-        var i: usize = self.entries.items.len;
-        while (i > target_entry_index) {
-            i -= 1;
-            const entry = self.entries.items[i];
-            try self.undoEntry(store, entry);
-        }
-
-        self.list_mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
-        defer self.list_mutex.unlock(std.Io.Threaded.global_single_threaded.io());
-        // Free memory for undone entries and shrink the list
-        self.freeEntriesFromLocked(target_entry_index);
-        self.entries.shrinkRetainingCapacity(target_entry_index);
-        self.entry_txns.shrinkRetainingCapacity(target_entry_index);
-
-        // Remove savepoints created after this one
-        var j: usize = self.savepoints.items.len;
-        while (j > idx + 1) {
-            j -= 1;
-            self.allocator.free(self.savepoints.items[j].name);
-        }
-        self.savepoints.shrinkRetainingCapacity(idx + 1);
-    }
-
-    /// Free allocated memory in entries from index `from` to end.
-    /// Caller MUST hold `list_mutex`.
-    fn freeEntriesFromLocked(self: *UndoLog, from: usize) void {
-        for (self.entries.items[from..]) |entry| {
-            switch (entry) {
-                .SetNodeProperty => |e| {
-                    self.allocator.free(e.key);
-                    if (e.old_value.string_value) |s| self.allocator.free(s);
-                    if (e.old_value.binary_value) |b| self.allocator.free(b);
-                    self.allocator.free(e.old_value.key);
-                },
-                .RemoveNodeProperty => |e| {
-                    if (e.old_value.string_value) |s| self.allocator.free(s);
-                    if (e.old_value.binary_value) |b| self.allocator.free(b);
-                    self.allocator.free(e.old_value.key);
-                },
-                .SetEdgeProperty => |e| {
-                    self.allocator.free(e.key);
-                    if (e.old_value.string_value) |s| self.allocator.free(s);
-                    if (e.old_value.binary_value) |b| self.allocator.free(b);
-                    self.allocator.free(e.old_value.key);
-                },
-                .RemoveEdgeProperty => |e| {
-                    if (e.old_value.string_value) |s| self.allocator.free(s);
-                    if (e.old_value.binary_value) |b| self.allocator.free(b);
-                    self.allocator.free(e.old_value.key);
-                },
-                .DeleteNode => |e| {
-                    for (e.labels) |label| self.allocator.free(label);
-                    self.allocator.free(e.labels);
-                    for (e.properties) |prop| {
-                        self.allocator.free(prop.key);
-                        if (prop.string_value) |s| self.allocator.free(s);
-                        if (prop.binary_value) |b| self.allocator.free(b);
-                    }
-                    self.allocator.free(e.properties);
-                    self.allocator.free(e.graph_name);
-                },
-                .DeleteEdge => |e| {
-                    self.allocator.free(e.label);
-                    for (e.properties) |prop| {
-                        self.allocator.free(prop.key);
-                        if (prop.string_value) |s| self.allocator.free(s);
-                        if (prop.binary_value) |b| self.allocator.free(b);
-                    }
-                    self.allocator.free(e.properties);
-                    self.allocator.free(e.graph_name);
-                },
-                .AddNodeLabel => |e| {
-                    self.allocator.free(e.label);
-                },
-                .RemoveNodeLabel => |e| {
-                    self.allocator.free(e.label);
-                },
-                .CreateNode => |e| {
-                    self.allocator.free(e.graph_name);
-                },
-                .CreateEdge => |e| {
-                    self.allocator.free(e.graph_name);
-                },
-            }
-        }
+        try self.undoAndFree(store, undo_now.items);
     }
 
     /// Append an already-constructed undo entry under the list mutex and
@@ -608,7 +606,7 @@ pub const UndoLog = struct {
 
     /// Log creation of a node (undo = delete it)
     pub fn logCreateNode(self: *UndoLog, node_id: u64, graph_name: ?[]const u8) !void {
-        if (!self.active) return;
+        if (threadTxn() == 0) return; // SONNY-2799: only inside a transaction
         const gname = graph_name orelse "default";
         const entry: UndoEntry = .{ .CreateNode = .{
             .node_id = node_id,
@@ -619,7 +617,7 @@ pub const UndoLog = struct {
 
     /// Log creation of an edge (undo = delete it)
     pub fn logCreateEdge(self: *UndoLog, edge_id: u64, graph_name: ?[]const u8) !void {
-        if (!self.active) return;
+        if (threadTxn() == 0) return; // SONNY-2799: only inside a transaction
         const gname = graph_name orelse "default";
         const entry: UndoEntry = .{ .CreateEdge = .{
             .edge_id = edge_id,
@@ -630,7 +628,7 @@ pub const UndoLog = struct {
 
     /// Log setting a node property (undo = restore old value or remove)
     pub fn logSetNodeProperty(self: *UndoLog, node_id: u64, key: []const u8, old_value: ?graph_store.PropertyValue) !void {
-        if (!self.active) return;
+        if (threadTxn() == 0) return; // SONNY-2799: only inside a transaction
         const key_copy = try self.allocator.dupe(u8, key);
         const serialized = if (old_value) |ov|
             try SerializedProperty.fromPropertyValue(self.allocator, key, ov)
@@ -648,7 +646,7 @@ pub const UndoLog = struct {
 
     /// Log removing a node property (undo = restore it)
     pub fn logRemoveNodeProperty(self: *UndoLog, node_id: u64, old_value: graph_store.PropertyValue, key: []const u8) !void {
-        if (!self.active) return;
+        if (threadTxn() == 0) return; // SONNY-2799: only inside a transaction
         const sp = try SerializedProperty.fromPropertyValue(self.allocator, key, old_value);
         const entry: UndoEntry = .{ .RemoveNodeProperty = .{
             .node_id = node_id,
@@ -659,7 +657,7 @@ pub const UndoLog = struct {
 
     /// Log deletion of a node (undo = recreate it)
     pub fn logDeleteNode(self: *UndoLog, node: graph_store.Node) !void {
-        if (!self.active) return;
+        if (threadTxn() == 0) return; // SONNY-2799: only inside a transaction
 
         // Copy labels
         const labels = try self.allocator.alloc([]const u8, node.labels.len);
@@ -686,7 +684,7 @@ pub const UndoLog = struct {
 
     /// Log deletion of an edge (undo = recreate it)
     pub fn logDeleteEdge(self: *UndoLog, edge: graph_store.Edge) !void {
-        if (!self.active) return;
+        if (threadTxn() == 0) return; // SONNY-2799: only inside a transaction
 
         // Copy properties
         var props: std.ArrayListUnmanaged(SerializedProperty) = .{};
@@ -709,7 +707,7 @@ pub const UndoLog = struct {
 
     /// Log adding a label to a node (undo = remove it)
     pub fn logAddNodeLabel(self: *UndoLog, node_id: u64, label: []const u8) !void {
-        if (!self.active) return;
+        if (threadTxn() == 0) return; // SONNY-2799: only inside a transaction
         const entry: UndoEntry = .{ .AddNodeLabel = .{
             .node_id = node_id,
             .label = try self.allocator.dupe(u8, label),
@@ -719,7 +717,7 @@ pub const UndoLog = struct {
 
     /// Log removing a label from a node (undo = add it back)
     pub fn logRemoveNodeLabel(self: *UndoLog, node_id: u64, label: []const u8) !void {
-        if (!self.active) return;
+        if (threadTxn() == 0) return; // SONNY-2799: only inside a transaction
         const entry: UndoEntry = .{ .RemoveNodeLabel = .{
             .node_id = node_id,
             .label = try self.allocator.dupe(u8, label),
@@ -727,51 +725,39 @@ pub const UndoLog = struct {
         try self.appendEntryLocked(entry);
     }
 
+    // CANARY: REQ=REQ-SONNY-2799-UNDO-PER-TXN; FEATURE="TransactionUndoLog"; ASPECT=NoMatchAll; STATUS=TESTED; TEST=tests/test_sonny2805_txn_sessions.zig; OWNER=engine; UPDATED=2026-09-26
     /// Rollback all changes belonging to the CALLING THREAD's transaction
     /// by replaying undo entries in reverse order.  Entries owned by other
     /// in-flight transactions are left untouched (R1).
+    ///
+    /// SONNY-2799: a thread with no transaction rolls back nothing. A
+    /// txn_id of 0 used to match every entry of every session: a session
+    /// whose transaction the executor had already ended (GAP-0917) undid
+    /// another session's uncommitted changes with its ROLLBACK (review probe
+    /// R8-C).
     pub fn rollback(self: *UndoLog, store: *graph_store.GraphStore) !void {
-        const txn_id = t_txn_state.txn_id;
-        if (!t_txn_state.active and txn_id == 0) {
-            // No active transaction on this thread; for legacy CLI callers
-            // who drove a single-threaded transaction and then invoked
-            // rollback from a helper, fall back to rolling back everything
-            // if nothing is tagged.
-            if (!self.active) return;
-        }
+        const txn_id = threadTxn();
+        if (txn_id == 0) return;
 
         graph_store.setMutationNotifyInhibit(true);
         defer graph_store.setMutationNotifyInhibit(false);
 
-        // Snapshot the entries we own under the lock, then drop the lock
-        // before calling back into the store.
+        // Take the entries we own out of the list under the lock (newest
+        // first, the replay order), then drop the lock before calling back
+        // into the store.
         self.list_mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
-        var owned_entries: std.ArrayListUnmanaged(UndoEntry) = .empty;
+        var owned_entries = self.takeNewestOwnLocked(txn_id, self.countOwnLocked(txn_id)) catch |err| {
+            self.list_mutex.unlock(std.Io.Threaded.global_single_threaded.io());
+            return err;
+        };
         defer owned_entries.deinit(self.allocator);
-        // Gather in reverse so replay order is last-to-first.
-        var i: usize = self.entries.items.len;
-        while (i > 0) {
-            i -= 1;
-            const tag_matches = (txn_id == 0) or (self.entry_txns.items[i] == txn_id);
-            if (tag_matches) {
-                owned_entries.append(self.allocator, self.entries.items[i]) catch {};
-                _ = self.entries.orderedRemove(i);
-                _ = self.entry_txns.orderedRemove(i);
-            }
-        }
+        self.dropSavepointsLocked(txn_id, 0);
         if (self.entries.items.len == 0) self.active = false;
         self.list_mutex.unlock(std.Io.Threaded.global_single_threaded.io());
 
-        for (owned_entries.items) |entry| {
-            try self.undoEntry(store, entry);
-            // Free owned memory even if undo succeeded — the entry is done.
-            self.list_mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
-            self.freeEntry(entry);
-            self.list_mutex.unlock(std.Io.Threaded.global_single_threaded.io());
-        }
+        try self.undoAndFree(store, owned_entries.items);
 
-        t_txn_state.active = false;
-        t_txn_state.txn_id = 0;
+        t_txn_state = .{};
     }
 
     // CANARY: REQ=REQ-TXN-UNDO-SERVER-015; FEATURE="TransactionUndoLog"; ASPECT=RollbackGraphStore; STATUS=TESTED; TEST=geodetestlab/specs/transaction_state_basic.yml; OWNER=engine; UPDATED=2025-12-23
@@ -779,26 +765,20 @@ pub const UndoLog = struct {
     /// The storage parameter is kept for API compatibility but each entry looks up its own graph
     pub fn rollbackGraphStore(self: *UndoLog, storage: *graph_common.GraphStore) void {
         _ = storage; // Kept for API compatibility, but we look up per-entry graph
-        const txn_id = t_txn_state.txn_id;
-        if (!t_txn_state.active and txn_id == 0) {
-            if (!self.active) return;
-        }
+        // SONNY-2799: as `rollback`: this thread's transaction, and none for 0.
+        const txn_id = threadTxn();
+        if (txn_id == 0) return;
         graph_store.setMutationNotifyInhibit(true);
         defer graph_store.setMutationNotifyInhibit(false);
 
         self.list_mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
-        var owned_entries: std.ArrayListUnmanaged(UndoEntry) = .empty;
+        var owned_entries = self.takeNewestOwnLocked(txn_id, self.countOwnLocked(txn_id)) catch {
+            self.list_mutex.unlock(std.Io.Threaded.global_single_threaded.io());
+            std.log.err("rollbackGraphStore: out of memory; the transaction is left as it was", .{});
+            return;
+        };
         defer owned_entries.deinit(self.allocator);
-        var i: usize = self.entries.items.len;
-        while (i > 0) {
-            i -= 1;
-            const tag_matches = (txn_id == 0) or (self.entry_txns.items[i] == txn_id);
-            if (tag_matches) {
-                owned_entries.append(self.allocator, self.entries.items[i]) catch {};
-                _ = self.entries.orderedRemove(i);
-                _ = self.entry_txns.orderedRemove(i);
-            }
-        }
+        self.dropSavepointsLocked(txn_id, 0);
         if (self.entries.items.len == 0) self.active = false;
         self.list_mutex.unlock(std.Io.Threaded.global_single_threaded.io());
 
@@ -809,8 +789,7 @@ pub const UndoLog = struct {
             self.list_mutex.unlock(std.Io.Threaded.global_single_threaded.io());
         }
 
-        t_txn_state.active = false;
-        t_txn_state.txn_id = 0;
+        t_txn_state = .{};
     }
 
     fn undoEntryGraphStore(self: *UndoLog, entry: UndoEntry) void {
@@ -1469,7 +1448,7 @@ test "savepoint create and rollback to savepoint" {
 
     try undo.createSavepoint("sp1");
     try std.testing.expectEqual(@as(usize, 1), undo.savepoints.items.len);
-    try std.testing.expectEqual(@as(usize, 2), undo.savepoints.items[0].entry_index);
+    try std.testing.expectEqual(@as(usize, 2), undo.savepoints.items[0].own_count);
 
     // Log two more operations after the savepoint
     try undo.logCreateNode(3, null);
@@ -1482,13 +1461,13 @@ test "savepoint create and rollback to savepoint" {
     // we test the entry/savepoint bookkeeping by using a second savepoint.
     try undo.createSavepoint("sp2");
     try std.testing.expectEqual(@as(usize, 2), undo.savepoints.items.len);
-    try std.testing.expectEqual(@as(usize, 4), undo.savepoints.items[1].entry_index);
+    try std.testing.expectEqual(@as(usize, 4), undo.savepoints.items[1].own_count);
 
     // Replacing an existing savepoint updates its index
     try undo.logCreateNode(5, null);
     try undo.createSavepoint("sp2");
     try std.testing.expectEqual(@as(usize, 2), undo.savepoints.items.len);
-    try std.testing.expectEqual(@as(usize, 5), undo.savepoints.items[1].entry_index);
+    try std.testing.expectEqual(@as(usize, 5), undo.savepoints.items[1].own_count);
 
     // Commit clears savepoints
     undo.commit(null);

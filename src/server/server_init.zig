@@ -556,44 +556,39 @@ pub fn initialize(
                     if (perm_check == .refuse) {
                         log.err("Bootstrap password NOT written: parent data directory permissions could not be secured; rotate via 'geode user reset-password' after hardening the directory", &.{});
                     } else {
-                        const pw_dir: []const u8 = data_dir orelse ".";
-                        const pw_path = std.fmt.allocPrint(allocator, "{s}/.geode_admin_password", .{pw_dir}) catch null;
-                        if (pw_path) |path| {
-                            defer allocator.free(path);
-                            const io_pw = std.Io.Threaded.global_single_threaded.io();
-                            if (std.Io.Dir.cwd().createFile(io_pw, path, .{ .truncate = true, .permissions = std.Io.File.Permissions.fromMode(0o600) })) |file| {
-                                defer file.close(io_pw);
-                                if (file.writeStreamingAll(io_pw, result.password)) |_| {
-                                    // Discoverable, SECRET-FREE breadcrumb on stdout/stderr,
-                                    // visible at ALL log levels via std.debug.print (like the
-                                    // other `[startup]` lines), so operators watching container
-                                    // logs and log-scraping harnesses can find the first-boot
-                                    // credential. The GAP-0104/S3 fix correctly stopped logging
-                                    // the secret but left no pointer, silently breaking every
-                                    // consumer that scraped the old password line — see
-                                    // docs/bugs/2026-06-06-admin-password-only-in-data-dir-file-not-startup-logs.md.
-                                    // NEVER print result.password here.
-                                    std.debug.print(
-                                        "[startup] generated initial admin password written to {s} (mode 0600) — read it there or set GEODE_ADMIN_PASSWORD; change on first login\n",
-                                        .{path},
-                                    );
-                                    log.warn("Auto-generated admin password written to file (set GEODE_ADMIN_PASSWORD or GEODE_DEFAULT_PASSWORD for production)", &.{
-                                        Attr.string("path", path),
-                                    });
-                                } else |err| {
-                                    log.warn("Failed to write generated admin password file", &.{
-                                        Attr.string("path", path),
-                                        Attr.string("error", @errorName(err)),
-                                    });
-                                }
+                        // SONNY-2778: O_CREAT|O_EXCL|O_NOFOLLOW, mode 0600, never
+                        // over an existing file or through a symlink, and never
+                        // into the current working directory
+                        // (`geode_auth.writeAdminPasswordFile`).
+                        if (data_dir) |dir| {
+                            if (geode_auth.writeAdminPasswordFile(allocator, dir, result.password)) |path| {
+                                defer allocator.free(path);
+                                // Discoverable, SECRET-FREE breadcrumb on stdout/stderr,
+                                // visible at ALL log levels via std.debug.print (like the
+                                // other `[startup]` lines), so operators watching container
+                                // logs and log-scraping harnesses can find the first-boot
+                                // credential. The GAP-0104/S3 fix correctly stopped logging
+                                // the secret but left no pointer, silently breaking every
+                                // consumer that scraped the old password line — see
+                                // docs/bugs/2026-06-06-admin-password-only-in-data-dir-file-not-startup-logs.md.
+                                // NEVER print result.password here.
+                                std.debug.print(
+                                    "[startup] generated initial admin password written to {s} (mode 0600) — read it there or set GEODE_ADMIN_PASSWORD; change on first login\n",
+                                    .{path},
+                                );
+                                log.warn("Auto-generated admin password written to file (set GEODE_ADMIN_PASSWORD or GEODE_DEFAULT_PASSWORD for production)", &.{
+                                    Attr.string("path", path),
+                                });
                             } else |err| {
                                 log.err("Failed to create generated admin password file (operator must rotate via reset-password)", &.{
-                                    Attr.string("path", path),
+                                    Attr.string("data_dir", dir),
                                     Attr.string("error", @errorName(err)),
                                 });
+                                std.debug.print("[startup] generated initial admin password NOT written to {s}/.geode_admin_password ({s}); an existing file is never overwritten. Rotate via 'geode user reset-password'\n", .{ dir, @errorName(err) });
                             }
                         } else {
-                            log.err("Failed to allocate path for generated admin password file (operator must rotate via reset-password)", &.{});
+                            log.err("Generated admin password NOT written: no data directory; rotate via 'geode user reset-password' or set GEODE_ADMIN_PASSWORD", &.{});
+                            std.debug.print("[startup] generated initial admin password NOT written: there is no data directory; set GEODE_ADMIN_PASSWORD, or rotate via 'geode user reset-password'\n", .{});
                         }
                     }
                 }

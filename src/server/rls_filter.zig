@@ -18,6 +18,14 @@ const Attr = logging.Attr;
 /// A label-level RLS policy binding: "user U must not see rows containing label L in graph G".
 /// This is the minimum enforcement granularity — expression-level evaluation is deferred to a
 /// later phase once the value-type bridge between execution Values and RLS Values is complete.
+///
+/// SONNY-2710: each label (a node label, or an edge type) is a table, and its
+/// policies combine as PostgreSQL's do (`rls_core.PolicyVerdict`; the
+/// executor's engine, `rls_types.LabelPolicy`, says the same). A deny entry
+/// is a restrictive policy that fails for the user: it hides every row that
+/// carries the label. An allow entry is a permissive policy that passes: it
+/// never hides a row, and cannot undo a deny. This filter sees no expression
+/// policies, so here only deny entries decide.
 pub const LabelPolicy = struct {
     graph: []const u8,
     label: []const u8,
@@ -69,15 +77,41 @@ pub const RLSFilterEngine = struct {
         try self.policies.append(self.allocator, policy);
     }
 
-    /// Remove all policies matching graph+label+username exactly.
+    /// SONNY-2710: register an allow entry (a permissive policy that passes
+    /// for `username`; see `LabelPolicy`). It hides no row.
+    pub fn addAllowPolicy(self: *Self, graph: []const u8, label: []const u8, username: []const u8) !void {
+        self.mu.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
+        defer self.mu.unlock(std.Io.Threaded.global_single_threaded.io());
+
+        const g = try self.allocator.dupe(u8, graph);
+        errdefer self.allocator.free(g);
+        const l = try self.allocator.dupe(u8, label);
+        errdefer self.allocator.free(l);
+        const u: []const u8 = if (username.len > 0) try self.allocator.dupe(u8, username) else "";
+        errdefer if (u.len > 0) self.allocator.free(u);
+        try self.policies.append(self.allocator, .{ .graph = g, .label = l, .deny = false, .username = u });
+    }
+
+    /// Remove all deny policies matching graph+label+username exactly.
+    /// SONNY-2710: allow entries are left alone (`removeAllowPolicy`).
     pub fn removeDenyPolicy(self: *Self, graph: []const u8, label: []const u8, username: []const u8) void {
+        self.removeEntries(graph, label, username, true);
+    }
+
+    /// SONNY-2710: remove all allow policies matching graph+label+username.
+    pub fn removeAllowPolicy(self: *Self, graph: []const u8, label: []const u8, username: []const u8) void {
+        self.removeEntries(graph, label, username, false);
+    }
+
+    fn removeEntries(self: *Self, graph: []const u8, label: []const u8, username: []const u8, deny: bool) void {
         self.mu.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
         defer self.mu.unlock(std.Io.Threaded.global_single_threaded.io());
 
         var i: usize = 0;
         while (i < self.policies.items.len) {
             const p = self.policies.items[i];
-            if (std.mem.eql(u8, p.graph, graph) and
+            if (p.deny == deny and
+                std.mem.eql(u8, p.graph, graph) and
                 std.mem.eql(u8, p.label, label) and
                 std.mem.eql(u8, p.username, username))
             {
@@ -180,6 +214,71 @@ pub fn getGlobalRLSFilterEngine() ?*RLSFilterEngine {
     return g_rls_filter_engine;
 }
 
+// CANARY: REQ=REQ-SONNY-2729-POSTFILTER-FAIL-CLOSED; FEATURE="RLS Query Enforcement"; ASPECT=FailClosed; STATUS=TESTED; TEST=tests/test_sonny2729_postfilter_fail_closed.zig; OWNER=security; UPDATED=2026-09-26
+/// SONNY-2729: a post-filter could not run: it could not allocate its policy
+/// snapshot, or the result's shorter row list. It has withheld every row of
+/// the result, so no row it did not check is returned, and the caller
+/// answers with this error (`proto_util.mapError`: 53200). The filters used
+/// to return the rows unfiltered when the snapshot failed.
+pub const FilterError = error{RowSecurityFilterUnavailable};
+
+/// Free every row of `result` and leave it with none (SONNY-2729).
+fn withholdAllRows(allocator: std.mem.Allocator, result: *execution.ExecutionResult) FilterError {
+    const rows = result.rows;
+    result.rows = rows[0..0];
+    for (rows) |row| freeResultRow(allocator, result, row);
+    allocator.free(rows);
+    return error.RowSecurityFilterUnavailable;
+}
+
+/// Free one row of `result`: its values when the result owns them (with the
+/// result's own free function, as `ExecutionResult.deinit` does), then the row.
+fn freeResultRow(allocator: std.mem.Allocator, result: *const execution.ExecutionResult, row: []Value) void {
+    if (result.owns_value_memory) {
+        const free_value = result.free_value orelse &execution.freeValue;
+        for (row) |val| free_value(allocator, val);
+    }
+    allocator.free(row);
+}
+
+/// Keep the rows of `result` that `check.keeps(row)` accepts, in their order,
+/// and free the rest. The row list is reallocated to the rows kept: it used
+/// to be shortened in place (a swap-remove that also reordered the rows), so
+/// `ExecutionResult.deinit` freed it with the wrong length. If that
+/// reallocation fails, every row is withheld (SONNY-2729). Returns the
+/// number of rows removed.
+fn retainRows(allocator: std.mem.Allocator, result: *execution.ExecutionResult, check: anytype) FilterError!usize {
+    const rows = result.rows;
+    var kept: usize = 0;
+    for (rows) |row| {
+        if (check.keeps(row)) {
+            rows[kept] = row;
+            kept += 1;
+        } else {
+            freeResultRow(allocator, result, row);
+        }
+    }
+    const removed = rows.len - kept;
+    if (removed == 0) return 0;
+    result.rows = allocator.realloc(rows, kept) catch {
+        // SONNY-2729: withhold the rows kept too, and free the full list.
+        for (rows[0..kept]) |row| freeResultRow(allocator, result, row);
+        allocator.free(rows);
+        result.rows = rows[0..0];
+        return error.RowSecurityFilterUnavailable;
+    };
+    return removed;
+}
+
+/// The row check of `applyRLSFilter`.
+const LabelRowCheck = struct {
+    denied: *const std.StringHashMap(void),
+
+    fn keeps(self: LabelRowCheck, row: []const Value) bool {
+        return !rowContainsDeniedLabel(self.denied, row);
+    }
+};
+
 /// Apply label-based RLS filtering to an execution result in place.
 /// Rows that contain Node or Edge values whose labels are denied for the given user+graph
 /// are removed from `result.rows`.  The row memory is freed via `allocator`.
@@ -187,14 +286,15 @@ pub fn getGlobalRLSFilterEngine() ?*RLSFilterEngine {
 /// This is a post-execution filter — it runs AFTER the store lock has been released and
 /// does NOT require any store access.
 ///
-/// Returns the number of rows removed.
+/// Returns the number of rows removed. SONNY-2729: when it cannot run, it
+/// withholds every row and returns `error.RowSecurityFilterUnavailable`.
 pub fn applyRLSFilter(
     allocator: std.mem.Allocator,
     result: *execution.ExecutionResult,
     engine: *RLSFilterEngine,
     username: []const u8,
     graph_name: []const u8,
-) usize {
+) FilterError!usize {
     // Fast path: no rows → nothing to filter, even if policies exist.
     if (result.rows.len == 0) return 0;
 
@@ -209,40 +309,15 @@ pub fn applyRLSFilter(
 
     // Snapshot denied labels once (single lock acquisition) instead of
     // acquiring the mutex per-label per-row — O(1) lock instead of O(R*L).
-    var denied = engine.snapshotDeniedLabels(allocator, graph_name, username) catch return 0;
+    // SONNY-2729: without the snapshot no row is checked, so none is returned.
+    var denied = engine.snapshotDeniedLabels(allocator, graph_name, username) catch
+        return withholdAllRows(allocator, result);
     defer RLSFilterEngine.freeDeniedLabels(&denied);
 
     // If no labels are denied for this user+graph, skip the row scan.
     if (denied.count() == 0) return 0;
 
-    var removed: usize = 0;
-    var i: usize = 0;
-    while (i < result.rows.len) {
-        if (rowContainsDeniedLabel(&denied, result.rows[i])) {
-            // Free the row's value memory if owned.
-            if (result.owns_value_memory) {
-                for (result.rows[i]) |val| {
-                    execution.freeValue(allocator, val);
-                }
-            }
-            allocator.free(result.rows[i]);
-
-            // Swap-remove: replace with last element.
-            const last = result.rows.len - 1;
-            if (i < last) {
-                // Need to modify the rows slice in place.  ExecutionResult.rows is `[][]Value`
-                // (a fat pointer); we can shrink it by adjusting the len field via a mutable
-                // pointer.  We do NOT reallocate — the underlying allocation stays the same.
-                @constCast(&result.rows[i]).* = result.rows[last];
-            }
-            // Shrink the slice length by 1.
-            result.rows = result.rows[0..last];
-            removed += 1;
-            // Don't increment i — re-check the swapped-in element.
-        } else {
-            i += 1;
-        }
-    }
+    const removed = try retainRows(allocator, result, LabelRowCheck{ .denied = &denied });
 
     if (removed > 0) {
         log.info("rls_filter", &.{
@@ -263,6 +338,31 @@ pub fn applyRLSFilter(
 // bridge results) are inspected — graph-level aggregates (density, diameter, etc.) pass
 // through unchanged because they carry no per-node information.
 
+/// The row check of `applyAlgorithmRLSFilter`: the row's node-id columns
+/// must name no node that carries a denied label.
+const AlgorithmRowCheck = struct {
+    denied: *const std.StringHashMap(void),
+    store: *graph_store.GraphStore,
+    node_id_cols: []const usize,
+
+    fn keeps(self: AlgorithmRowCheck, row: []const Value) bool {
+        for (self.node_id_cols) |col_idx| {
+            if (col_idx >= row.len) continue;
+            const node_id: u64 = switch (row[col_idx]) {
+                .Int => |v| std.math.cast(u64, v) orelse continue,
+                else => continue,
+            };
+            // If node not found in store, it may have been deleted — keep the
+            // row since there is no label to deny.
+            const node = self.store.getNodePtr(node_id) orelse continue;
+            for (node.labels) |label| {
+                if (self.denied.contains(label)) return false;
+            }
+        }
+        return true;
+    }
+};
+
 /// Apply RLS filtering to algorithm results that contain integer nodeIds instead of
 /// full Node/Edge values.  This complements `applyRLSFilter` which handles structured
 /// Node/Edge/Path values.
@@ -275,7 +375,8 @@ pub fn applyRLSFilter(
 /// `CALL algo.pagerank.stream()` and see centrality scores for ALL nodes — including
 /// nodes whose labels are denied by RLS policy.
 ///
-/// Returns the number of rows removed.
+/// Returns the number of rows removed. SONNY-2729: when it cannot run, it
+/// withholds every row and returns `error.RowSecurityFilterUnavailable`.
 pub fn applyAlgorithmRLSFilter(
     allocator: std.mem.Allocator,
     result: *execution.ExecutionResult,
@@ -283,7 +384,7 @@ pub fn applyAlgorithmRLSFilter(
     store: *graph_store.GraphStore,
     username: []const u8,
     graph_name: []const u8,
-) usize {
+) FilterError!usize {
     // Fast path: no policies, nothing to filter.
     if (engine.policyCount() == 0) return 0;
 
@@ -316,60 +417,19 @@ pub fn applyAlgorithmRLSFilter(
     // If no nodeId columns found, this is a graph-level aggregate — nothing to filter.
     if (node_id_col_count == 0) return 0;
 
-    // Snapshot denied labels (single lock acquisition).
-    var denied = engine.snapshotDeniedLabels(allocator, graph_name, username) catch return 0;
+    // Snapshot denied labels (single lock acquisition). SONNY-2729: without
+    // it no row is checked, so none is returned.
+    var denied = engine.snapshotDeniedLabels(allocator, graph_name, username) catch
+        return withholdAllRows(allocator, result);
     defer RLSFilterEngine.freeDeniedLabels(&denied);
 
     if (denied.count() == 0) return 0;
 
-    var removed: usize = 0;
-    var i: usize = 0;
-    while (i < result.rows.len) {
-        var should_remove = false;
-
-        for (node_id_col_indices[0..node_id_col_count]) |col_idx| {
-            if (col_idx >= result.rows[i].len) continue;
-
-            const val = result.rows[i][col_idx];
-            const node_id: ?u64 = switch (val) {
-                .Int => |v| if (v >= 0) @intCast(v) else null,
-                else => null,
-            };
-
-            if (node_id) |nid| {
-                if (store.getNodePtr(nid)) |node| {
-                    for (node.labels) |label| {
-                        if (denied.contains(label)) {
-                            should_remove = true;
-                            break;
-                        }
-                    }
-                }
-                // If node not found in store, it may have been deleted — keep the row
-                // since there is no label to deny.
-            }
-            if (should_remove) break;
-        }
-
-        if (should_remove) {
-            // Free row memory (same logic as applyRLSFilter).
-            if (result.owns_value_memory) {
-                for (result.rows[i]) |v| {
-                    execution.freeValue(allocator, v);
-                }
-            }
-            allocator.free(result.rows[i]);
-
-            const last = result.rows.len - 1;
-            if (i < last) {
-                @constCast(&result.rows[i]).* = result.rows[last];
-            }
-            result.rows = result.rows[0..last];
-            removed += 1;
-        } else {
-            i += 1;
-        }
-    }
+    const removed = try retainRows(allocator, result, AlgorithmRowCheck{
+        .denied = &denied,
+        .store = store,
+        .node_id_cols = node_id_col_indices[0..node_id_col_count],
+    });
 
     if (removed > 0) {
         log.info("rls_algo_filter", &.{
@@ -463,14 +523,19 @@ fn valueContainsDeniedLabelAt(denied_labels: *const std.StringHashMap(void), val
 /// Apply label-based RLS filtering to any result set that exposes `.rows` containing
 /// BindingRow-compatible elements (each having `.cols: []const Value`).
 /// Designed for federation QueryResults but works generically.
-/// Returns the number of rows removed.
+/// Returns the number of rows removed. The rows kept keep their order.
+/// SONNY-2729: when it cannot run, it returns
+/// `error.RowSecurityFilterUnavailable` and leaves the rows as they are: they
+/// are the caller's to free (this function cannot free a caller's row type),
+/// and the caller must withhold them all (federation.zig frees the merged
+/// result and returns the error).
 pub fn applyRLSToFederatedResults(
     allocator: std.mem.Allocator,
     results: anytype,
     engine: *RLSFilterEngine,
     username: []const u8,
     graph_name: []const u8,
-) usize {
+) FilterError!usize {
     // Fast path: no policies configured.
     if (engine.policyCount() == 0) return 0;
 
@@ -479,26 +544,20 @@ pub fn applyRLSToFederatedResults(
     if (!engine.hasPoliciesForGraph(graph_name)) return 0;
 
     // Snapshot denied labels once (single lock acquisition).
-    var denied = engine.snapshotDeniedLabels(allocator, graph_name, username) catch return 0;
+    var denied = engine.snapshotDeniedLabels(allocator, graph_name, username) catch
+        return error.RowSecurityFilterUnavailable;
     defer RLSFilterEngine.freeDeniedLabels(&denied);
 
     if (denied.count() == 0) return 0;
 
-    var removed: usize = 0;
-    var i: usize = 0;
-    while (i < results.rows.len) {
-        if (rowContainsDeniedLabel(&denied, results.rows[i].cols)) {
-            // Swap-remove: replace current with last element.
-            const last = results.rows.len - 1;
-            if (i < last) {
-                @constCast(&results.rows[i]).* = results.rows[last];
-            }
-            results.rows = results.rows[0..last];
-            removed += 1;
-        } else {
-            i += 1;
-        }
+    var kept: usize = 0;
+    for (results.rows) |row| {
+        if (rowContainsDeniedLabel(&denied, row.cols)) continue;
+        @constCast(&results.rows[kept]).* = row;
+        kept += 1;
     }
+    const removed = results.rows.len - kept;
+    results.rows = results.rows[0..kept];
 
     if (removed > 0) {
         log.info("rls_federation_filter", &.{
@@ -795,20 +854,20 @@ test "SONNY-2687: applyRLSFilter drops a row whose collected list carries a deni
     defer allocator.free(columns);
     columns[0] = "hs";
     const rows = try allocator.alloc([]Value, 2);
-    const rows_orig = rows;
     rows[0] = try allocator.alloc(Value, 1);
     rows[0][0] = .{ .List = &leaked };
     rows[1] = try allocator.alloc(Value, 1);
     rows[1][0] = .{ .List = &kept };
     var result = execution.ExecutionResult{ .columns = columns, .rows = rows, .flags = std.ArrayList([]const u8).empty };
 
-    const removed = applyRLSFilter(allocator, &result, &engine, "alice", "default");
+    const removed = try applyRLSFilter(allocator, &result, &engine, "alice", "default");
     try std.testing.expectEqual(@as(usize, 1), removed);
     try std.testing.expectEqual(@as(usize, 1), result.rows.len);
     try std.testing.expectEqual(@as(usize, 1), result.rows[0][0].List.len);
 
+    // SONNY-2729: the filter reallocates the row list to the rows it keeps.
     for (result.rows) |row| allocator.free(row);
-    allocator.free(rows_orig);
+    allocator.free(result.rows);
 }
 
 // ---- Algorithm RLS filter tests ----
@@ -834,7 +893,7 @@ test "applyAlgorithmRLSFilter: no policies returns 0" {
         .flags = std.ArrayList([]const u8).empty,
     };
 
-    const removed = applyAlgorithmRLSFilter(allocator, &result, &engine, &store, "alice", "default");
+    const removed = try applyAlgorithmRLSFilter(allocator, &result, &engine, &store, "alice", "default");
     try std.testing.expectEqual(@as(usize, 0), removed);
 }
 
@@ -864,11 +923,9 @@ test "applyAlgorithmRLSFilter: filters rows with denied node labels" {
     columns[0] = try allocator.dupe(u8, "nodeId");
     columns[1] = try allocator.dupe(u8, "score");
 
-    // Allocate rows — the filter will swap-remove and shrink the slice.
-    // We must keep the original pointer to free the full allocation.
+    // SONNY-2729: the filter keeps the rows' order and reallocates the row
+    // list to the rows it keeps.
     const rows = try allocator.alloc([]Value, 2);
-    const rows_orig_ptr = rows.ptr;
-    const rows_orig_len = rows.len;
     rows[0] = try allocator.alloc(Value, 2);
     rows[0][0] = Value{ .Int = @intCast(node1_id) }; // Secret node
     rows[0][1] = Value{ .Int = 42 };
@@ -882,15 +939,14 @@ test "applyAlgorithmRLSFilter: filters rows with denied node labels" {
         .flags = std.ArrayList([]const u8).empty,
     };
 
-    const removed = applyAlgorithmRLSFilter(allocator, &result, &engine, &store, "alice", "default");
+    const removed = try applyAlgorithmRLSFilter(allocator, &result, &engine, &store, "alice", "default");
     try std.testing.expectEqual(@as(usize, 1), removed);
     try std.testing.expectEqual(@as(usize, 1), result.rows.len);
     // Remaining row should be the Public node
     try std.testing.expectEqual(@as(i64, @intCast(node2_id)), result.rows[0][0].Int);
 
-    // Clean up: free remaining rows, then free the original allocation with correct size
     for (result.rows) |row| allocator.free(row);
-    allocator.free(rows_orig_ptr[0..rows_orig_len]);
+    allocator.free(result.rows);
     allocator.free(columns[0]);
     allocator.free(columns[1]);
     allocator.free(columns);
@@ -920,7 +976,7 @@ test "applyAlgorithmRLSFilter: skips non-nodeId columns" {
     };
     defer result.deinit(allocator);
 
-    const removed = applyAlgorithmRLSFilter(allocator, &result, &engine, &store, "alice", "default");
+    const removed = try applyAlgorithmRLSFilter(allocator, &result, &engine, &store, "alice", "default");
     try std.testing.expectEqual(@as(usize, 0), removed);
     try std.testing.expectEqual(@as(usize, 1), result.rows.len);
 }
@@ -956,8 +1012,6 @@ test "applyAlgorithmRLSFilter: filters bridge results with sourceId/targetId" {
     columns[1] = try allocator.dupe(u8, "targetId");
 
     const rows = try allocator.alloc([]Value, 2);
-    const rows_orig_ptr = rows.ptr;
-    const rows_orig_len = rows.len;
     // Row 0: bridge between Secret and Public — should be filtered
     rows[0] = try allocator.alloc(Value, 2);
     rows[0][0] = Value{ .Int = @intCast(node1_id) };
@@ -973,13 +1027,12 @@ test "applyAlgorithmRLSFilter: filters bridge results with sourceId/targetId" {
         .flags = std.ArrayList([]const u8).empty,
     };
 
-    const removed = applyAlgorithmRLSFilter(allocator, &result, &engine, &store, "alice", "default");
+    const removed = try applyAlgorithmRLSFilter(allocator, &result, &engine, &store, "alice", "default");
     try std.testing.expectEqual(@as(usize, 1), removed);
     try std.testing.expectEqual(@as(usize, 1), result.rows.len);
 
-    // Clean up with original allocation size
     for (result.rows) |row| allocator.free(row);
-    allocator.free(rows_orig_ptr[0..rows_orig_len]);
+    allocator.free(result.rows);
     allocator.free(columns[0]);
     allocator.free(columns[1]);
     allocator.free(columns);
@@ -1017,7 +1070,7 @@ test "applyAlgorithmRLSFilter: bob not affected by alice-specific policy" {
     defer result.deinit(allocator);
 
     // bob should NOT be filtered
-    const removed = applyAlgorithmRLSFilter(allocator, &result, &engine, &store, "bob", "default");
+    const removed = try applyAlgorithmRLSFilter(allocator, &result, &engine, &store, "bob", "default");
     try std.testing.expectEqual(@as(usize, 0), removed);
     try std.testing.expectEqual(@as(usize, 1), result.rows.len);
 }
@@ -1048,7 +1101,7 @@ test "applyAlgorithmRLSFilter: deleted node passes through" {
     };
     defer result.deinit(allocator);
 
-    const removed = applyAlgorithmRLSFilter(allocator, &result, &engine, &store, "alice", "default");
+    const removed = try applyAlgorithmRLSFilter(allocator, &result, &engine, &store, "alice", "default");
     try std.testing.expectEqual(@as(usize, 0), removed);
     try std.testing.expectEqual(@as(usize, 1), result.rows.len);
 }
@@ -1096,7 +1149,7 @@ test "applyRLSToFederatedResults: filters federation rows with denied labels" {
         .rows = rows_buf,
     };
 
-    const removed_count = applyRLSToFederatedResults(allocator, &results, &engine, "alice", "default");
+    const removed_count = try applyRLSToFederatedResults(allocator, &results, &engine, "alice", "default");
     try std.testing.expectEqual(@as(usize, 1), removed_count);
     try std.testing.expectEqual(@as(usize, 1), results.rows.len);
 
@@ -1116,6 +1169,6 @@ test "applyRLSToFederatedResults: no policies returns 0" {
         .rows = &.{},
     };
 
-    const removed_count = applyRLSToFederatedResults(allocator, &results, &engine, "alice", "default");
+    const removed_count = try applyRLSToFederatedResults(allocator, &results, &engine, "alice", "default");
     try std.testing.expectEqual(@as(usize, 0), removed_count);
 }

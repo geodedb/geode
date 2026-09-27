@@ -544,6 +544,61 @@ pub const AuditLog = struct {
 };
 
 // ---- Security Context ----
+// CANARY: REQ=REQ-SONNY-2778-ADMIN-PASSWORD-FILE; FEATURE="Secure Default Password"; ASPECT=ExclusiveNoFollow0600; STATUS=TESTED; TEST=tests/test_sonny2778_admin_password_file.zig; OWNER=security; UPDATED=2026-09-26
+/// SONNY-2778: the file a generated admin password is written to, in the data
+/// directory (docs/USER_AUTH.md, "The generated admin password").
+pub const admin_password_file_name = ".geode_admin_password";
+
+/// SONNY-2778: write a generated admin password to
+/// `<data_dir>/.geode_admin_password`, the one documented place for it. Every
+/// writer (`SecurityManager.init`, the server's first boot, `geode auth init`)
+/// goes through here.
+///
+/// The file is opened with O_CREAT | O_EXCL | O_NOFOLLOW and mode 0600, and
+/// its mode is set to 0600 again once open, so no umask changes it. Nothing is
+/// written when anything is already at the path: a file, or a symbolic link,
+/// dangling or not (error.AdminPasswordFileExists). The writers used
+/// O_CREAT | O_TRUNC without O_EXCL: an existing file kept its mode and owner,
+/// so a world-readable file planted there received the password, and a
+/// symbolic link planted there was followed. `SecurityManager.init` also wrote
+/// into the current working directory when no data directory was set. A file
+/// that cannot be completed is removed. Returns the path; the caller frees it.
+pub fn writeAdminPasswordFile(allocator: std.mem.Allocator, data_dir: []const u8, password: []const u8) ![]u8 {
+    const path = try std.fmt.allocPrint(allocator, "{s}/" ++ admin_password_file_name, .{data_dir});
+    errdefer allocator.free(path);
+    const fd = std.posix.openat(std.posix.AT.FDCWD, path, .{
+        .ACCMODE = .WRONLY,
+        .CREAT = true,
+        .EXCL = true,
+        .NOFOLLOW = true,
+        .CLOEXEC = true,
+    }, 0o600) catch |err| switch (err) {
+        error.PathAlreadyExists => return error.AdminPasswordFileExists,
+        else => return err,
+    };
+    const io = std.Io.Threaded.global_single_threaded.io();
+    const file = std.Io.File{ .handle = fd, .flags = .{ .nonblocking = false } };
+    defer file.close(io);
+    errdefer std.Io.Dir.cwd().deleteFile(io, path) catch {};
+    try file.setPermissions(io, std.Io.File.Permissions.fromMode(0o600));
+    try file.writeStreamingAll(io, password);
+    return path;
+}
+
+/// SONNY-2778: whether anything is at `<data_dir>/.geode_admin_password`: a
+/// file, a directory, or a symbolic link, dangling or not. A writer that can
+/// look before it creates the admin (`geode auth init`) refuses then and
+/// changes nothing, rather than creating an admin whose password it cannot
+/// record. `writeAdminPasswordFile` stays the guard; this is only the early
+/// answer.
+pub fn adminPasswordFilePresent(data_dir: []const u8) bool {
+    var buf: [std.fs.max_path_bytes]u8 = undefined;
+    const path = std.fmt.bufPrint(&buf, "{s}/" ++ admin_password_file_name, .{data_dir}) catch return false;
+    const io = std.Io.Threaded.global_single_threaded.io();
+    _ = std.Io.Dir.cwd().statFile(io, path, .{ .follow_symlinks = false }) catch return false;
+    return true;
+}
+
 pub const SecurityContext = struct { user: *User, roles: []const Role, session_attributes: std.StringHashMap([]const u8), request_attributes: std.StringHashMap([]const u8), environment: EnvironmentInfo };
 
 // CANARY: REQ=REQ-AUTH-GRAPH-PERSIST-005; FEATURE="Runtime Auth Graph Persistence"; ASPECT=SingleDurableWriter; STATUS=TESTED; TEST=tests/test_bug731_password_reset.zig; OWNER=security; UPDATED=2026-07-31
@@ -1496,34 +1551,29 @@ pub const SecurityManager = struct {
 
             // SEC-05: Write generated password to a file instead of stderr.
             // This prevents password leakage into log aggregators or terminal scrollback.
+            // SONNY-2778: only under an explicit data directory
+            // (GEODE_DATA_DIR), with `writeAdminPasswordFile`. It was written
+            // to the current working directory when none was set: a test run
+            // left one in a source worktree.
             const data_dir = getEnvVarOwned(self.allocator, "GEODE_DATA_DIR") catch null;
             defer if (data_dir) |d| self.allocator.free(d);
-            const pw_dir = data_dir orelse ".";
-            const pw_path = std.fmt.allocPrint(self.allocator, "{s}/.geode_admin_password", .{pw_dir}) catch {
-                // If we cannot even format the path, log a warning but continue.
-                log.warn("Failed to allocate password file path", &.{});
-                break :blk generated_password_hex[0..64];
-            };
-            defer self.allocator.free(pw_path);
-
-            const io_pw = std.Io.Threaded.global_single_threaded.io();
-            if (std.Io.Dir.cwd().createFile(io_pw, pw_path, .{ .permissions = std.Io.File.Permissions.fromMode(0o600) })) |file| {
-                defer file.close(io_pw);
-                file.writeStreamingAll(io_pw, generated_password_hex[0..64]) catch |err| {
-                    log.warn("Failed to write admin password file", &.{
+            if (data_dir) |dir| {
+                if (writeAdminPasswordFile(self.allocator, dir, generated_password_hex[0..64])) |pw_path| {
+                    defer self.allocator.free(pw_path);
+                    std.debug.print("\n[GEODE SECURITY] WARNING: Auto-generated admin password written to disk: {s} (mode 0600)\n" ++
+                        "[GEODE SECURITY] WARNING: Set GEODE_DEFAULT_PASSWORD env var for production.\n\n", .{pw_path});
+                } else |err| {
+                    log.warn("Failed to create admin password file", &.{
+                        Attr.string("data_dir", dir),
                         Attr.string("error", @errorName(err)),
                     });
-                };
-                std.debug.print("\n[GEODE SECURITY] WARNING: Auto-generated admin password written to disk: {s}\n" ++
-                    "[GEODE SECURITY] WARNING: Set GEODE_DEFAULT_PASSWORD env var for production.\n\n", .{pw_path});
-            } else |err| {
-                log.warn("Failed to create admin password file", &.{
-                    Attr.string("path", pw_path),
-                    Attr.string("error", @errorName(err)),
-                });
-                // Fallback: print location hint only (no password) so operator knows something went wrong
-                std.debug.print("\n[GEODE SECURITY] Could not write admin password file to {s}: {s}\n" ++
-                    "[GEODE SECURITY] Set GEODE_DEFAULT_PASSWORD env var to configure the admin password.\n\n", .{ pw_path, @errorName(err) });
+                    // Fallback: print location hint only (no password) so operator knows something went wrong
+                    std.debug.print("\n[GEODE SECURITY] Could not write the admin password file in {s}: {s}\n" ++
+                        "[GEODE SECURITY] An existing file is never overwritten. Set GEODE_DEFAULT_PASSWORD env var to configure the admin password.\n\n", .{ dir, @errorName(err) });
+                }
+            } else {
+                std.debug.print("\n[GEODE SECURITY] No data directory (GEODE_DATA_DIR) is set, so the generated admin password was not written anywhere.\n" ++
+                    "[GEODE SECURITY] Set GEODE_DEFAULT_PASSWORD env var to configure the admin password.\n\n", .{});
             }
 
             log.warn("Generated random admin password — see password file in data directory", &.{

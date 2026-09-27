@@ -178,6 +178,48 @@ pub fn analyzeProgram(program: *const ast.Program) ProgramAnalysis {
     return analysis;
 }
 
+// CANARY: REQ=REQ-SONNY-2805-TXN-PROGRAM-ORDER; FEATURE="TransactionManagement"; ASPECT=TxnControl; STATUS=TESTED; TEST=tests/test_sonny2805_txn_sessions.zig; OWNER=engine; UPDATED=2026-09-26
+/// SONNY-2805: the transaction control a program carries.
+pub const TxnControl = struct {
+    /// A START TRANSACTION without a body (one with a body is a whole
+    /// transaction of its own).
+    starts: bool = false,
+    /// A COMMIT or ROLLBACK.
+    ends: bool = false,
+
+    pub fn any(self: TxnControl) bool {
+        return self.starts or self.ends;
+    }
+};
+
+pub fn transactionControl(program: *const ast.Program) TxnControl {
+    var ctl: TxnControl = .{};
+    for (program.statements) |*stmt| switch (stmt.*) {
+        .StartTransaction => |st| {
+            if (st.body == null) ctl.starts = true;
+        },
+        .Commit, .Rollback => ctl.ends = true,
+        else => {},
+    };
+    return ctl;
+}
+
+/// SONNY-2805: `analyzeProgram` for a transport handler. Transaction control
+/// counts as an effectful preamble here, so no fast path that runs only
+/// `target` (node-scan streaming, the count pushdowns, the engine-direct read
+/// that skips the snapshot) takes a program that carries it. Such a path
+/// skipped the START TRANSACTION, COMMIT or ROLLBACK, and the handler then
+/// followed a transaction the undo log never began or never ended.
+/// `analyzeProgram` keeps GAP-0892's view for its other callers.
+pub fn analyzeRequest(program: *const ast.Program) ProgramAnalysis {
+    var analysis = analyzeProgram(program);
+    if (transactionControl(program).any()) {
+        analysis.has_effectful_preamble = true;
+        analysis.preamble_graph_selector = null;
+    }
+    return analysis;
+}
+
 /// GAP-0900: extract the plain graph name from a leading graph-selector
 /// statement (`USE GRAPH g` / `SESSION SET PROPERTY GRAPH g`), or null for any
 /// other statement or a non-plain reference. Conservative: a null means the
@@ -416,6 +458,12 @@ pub const spans_graphs_message = "A request that changes data must run all its s
 /// graph other than the one an open transaction already changed.
 pub const txn_spans_graphs_message = "A transaction must change one graph: commit or roll back before changing another graph";
 
+/// SONNY-2799: what the handlers answer (SQLSTATE 0A000) to a program that
+/// ends the session's transaction (COMMIT or ROLLBACK) and touches another
+/// graph's data: it runs under the write lock of the graph the transaction
+/// changed, and a handler holds one lock.
+pub const txn_end_graph_message = "A request that commits or rolls back a transaction runs on the transaction's graph: send the statements for another graph in a request of their own";
+
 /// SONNY-2743: decide the `StatementPlan` for `program` (analysed as
 /// `analysis`) in a session whose graph is `session_graph` (the executor
 /// session's; `default` when it has none). `home_graph` is where SESSION
@@ -519,6 +567,26 @@ fn moveTo(current: []const u8, target: GraphTarget, home_graph: []const u8) []co
 /// so `USE GRAPH g2; MERGE (:K {id: 1})` wrote g2 holding another graph's
 /// write lock, beside g2's own writers.
 pub fn programGraph(program: *const ast.Program, start_graph: []const u8, home_graph: []const u8) ?[]const u8 {
+    return switch (programDataGraph(program, start_graph, home_graph)) {
+        .none => start_graph,
+        .one => |g| g,
+        .several => null,
+    };
+}
+
+/// SONNY-2805: where a program's statements that touch graph data run, by
+/// `programGraph`'s rules, telling "none" apart from "the start graph".
+pub const DataGraph = union(enum) {
+    /// No statement touches graph data: graph selection, transaction control
+    /// and EXPLAIN only.
+    none,
+    /// Every statement that does runs on this graph.
+    one: []const u8,
+    /// They run on more than one graph.
+    several,
+};
+
+pub fn programDataGraph(program: *const ast.Program, start_graph: []const u8, home_graph: []const u8) DataGraph {
     var current = start_graph;
     var runs_on: ?[]const u8 = null;
     for (program.statements) |*stmt| {
@@ -534,24 +602,35 @@ pub fn programGraph(program: *const ast.Program, start_graph: []const u8, home_g
             .SessionClose => current = home_graph,
             .Commit, .Rollback, .Explain => {},
             .StartTransaction => |txn| {
-                if (txn.body != null and !noteGraph(&runs_on, current)) return null;
+                if (txn.body != null and !noteGraph(&runs_on, current)) return .several;
             },
             .CreateIndex => |ci| {
                 const on = if (ci.index_type == .fulltext) graph_store.DEFAULT_GRAPH_NAME else current;
-                if (!noteGraph(&runs_on, on)) return null;
+                if (!noteGraph(&runs_on, on)) return .several;
             },
-            .DropIndex => if (!noteGraph(&runs_on, graph_store.DEFAULT_GRAPH_NAME)) return null,
+            .DropIndex => if (!noteGraph(&runs_on, graph_store.DEFAULT_GRAPH_NAME)) return .several,
             .Call => |call| {
                 const on = switch (call) {
                     .Procedure => |proc| if (procedure_access.isDefaultGraphProcedure(proc)) graph_store.DEFAULT_GRAPH_NAME else current,
                     .Subquery => current,
                 };
-                if (!noteGraph(&runs_on, on)) return null;
+                if (!noteGraph(&runs_on, on)) return .several;
             },
-            else => if (!noteGraph(&runs_on, current)) return null,
+            else => if (!noteGraph(&runs_on, current)) return .several,
         }
     }
-    return runs_on orelse start_graph;
+    return if (runs_on) |g| .{ .one = g } else .none;
+}
+
+/// SONNY-2799: does every statement of `program` that touches graph data run
+/// on `graph` (or does none)? A program that ends the session's transaction
+/// must, as it runs under that graph's write lock.
+pub fn programDataOnlyOn(program: *const ast.Program, start_graph: []const u8, home_graph: []const u8, graph: []const u8) bool {
+    return switch (programDataGraph(program, start_graph, home_graph)) {
+        .none => true,
+        .one => |g| std.mem.eql(u8, g, graph),
+        .several => false,
+    };
 }
 
 /// Does `SESSION RESET ...` send the session graph home? As the executor runs
@@ -582,6 +661,37 @@ pub fn restOfProgramIsNoop(analysis: *const ProgramAnalysis, session_graph: []co
     if (!analysis.has_effectful_preamble) return true;
     const selector = analysis.preamble_graph_selector orelse return false;
     return std.mem.eql(u8, selector, session_graph);
+}
+
+// CANARY: REQ=REQ-SONNY-2802-PROFILE-REGIME; FEATURE="StatementAuthorization"; ASPECT=ExplainProfileAlone; STATUS=TESTED; TEST=tests/test_sonny2802_profile_regime.zig; OWNER=security; UPDATED=2026-09-26
+/// SONNY-2802 / SONNY-2752: what the handlers answer (SQLSTATE 0A000) to an
+/// EXPLAIN or PROFILE sent with other statements.
+pub const explain_profile_alone_message = "EXPLAIN and PROFILE run alone: send the other statements of the request, and any USE GRAPH, in a request of their own";
+
+/// SONNY-2802 / SONNY-2752: does `program` carry its EXPLAIN or PROFILE
+/// together with a statement the handlers would not run? The handlers' EXPLAIN
+/// arm only plans the EXPLAIN'd statement, and their PROFILE arm runs only the
+/// PROFILE'd one; every other statement was dropped without a word. Yet the
+/// program's lock, write gate and transaction bookkeeping come from the whole
+/// program (`statementPlan`): `USE GRAPH g1; PROFILE CREATE (:X)` took g1's
+/// write lock and wrote to the session's graph, and `CREATE (:X); EXPLAIN ...`
+/// was permission-checked and never ran. The handlers refuse such a program
+/// (0A000). One exception: a re-selection of `session_graph` (`USE GRAPH g;`
+/// or `SESSION SET PROPERTY GRAPH g;` naming the graph the session is already
+/// on, as the CLI's `-g` flag and pooled drivers send) changes nothing
+/// (`restOfProgramIsNoop`). Transaction control is not an exception: the
+/// arms never run it.
+pub fn explainOrProfileHasCompany(program: *const ast.Program, analysis: *const ProgramAnalysis, session_graph: []const u8) bool {
+    if (analysis.kind == .rows) return false;
+    var wrappers: usize = 0;
+    for (program.statements) |*stmt| switch (stmt.*) {
+        .Explain, .Profile => wrappers += 1,
+        else => {
+            const selected = preambleGraphSelectorName(stmt) orelse return true;
+            if (!std.mem.eql(u8, selected, session_graph)) return true;
+        },
+    };
+    return wrappers != 1;
 }
 
 // CANARY: REQ=REQ-SONNY-2733-BACKFILL-LOCKING; FEATURE="PerTenantIsolation"; ASPECT=HandlerLockBypass; STATUS=TESTED; TEST=tests/test_sonny2733_backfill_locking.zig; OWNER=security; UPDATED=2026-09-25
