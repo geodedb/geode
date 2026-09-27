@@ -12,7 +12,8 @@
 // store: MERGE matches the LOWEST node id among the nodes holding the key.
 // Removing a node drops the entry only when the node was its only holder;
 // removing the lowest of several leaves the entry unresolved, and the next
-// lookup finds the lowest remaining holder by a label scan.
+// lookup finds the lowest remaining holder (round 8: through the exact
+// node-property index; tests/test_sonny2806_merge_resolve.zig).
 //
 // Also here:
 //   * a number that is not an integer is not in MERGE's index (round 7,

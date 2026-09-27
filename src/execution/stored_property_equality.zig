@@ -10,7 +10,9 @@
 //! DOUBLE parameter never (the planned read had no DOUBLE arm, and a stored
 //! DOUBLE is an extended value, which never matched), and no extended value
 //! at all (a SMALLINT, a duration, a zoned time...). Both now call `matches`,
-//! which gives the answer `valuesEqual` gives, for nodes and relationships.
+//! which gives the answer `valuesEqual` gives, for nodes and relationships,
+//! with one exception: a stored string also equals a TEXT, VARCHAR or CHAR
+//! value with the same characters (see `matches`).
 
 // CANARY: REQ=REQ-SONNY-2806-STORED-PROPERTY-EQUALITY; FEATURE="InlinePropertyMatch"; ASPECT=ExactValueOnPersistedPaths; STATUS=TESTED; TEST=tests/test_sonny2806_exact_property_matching.zig; OWNER=execution; UPDATED=2026-09-26
 

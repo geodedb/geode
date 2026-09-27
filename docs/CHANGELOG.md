@@ -137,10 +137,14 @@
     session, while `MERGE (n:T {x: 1.0})` matched a stored 1. A number that
     is not an integer (1.5, a DOUBLE 0.25) stays out of that index, as in
     v0.8.22. The executor finds it by its label scan, and the server's bulk
-    MERGE (`bulkMergeNode*`) through the exact node-property index. So MERGE
-    on the server fast path now works for a DECIMAL or DOUBLE key: it failed
+    MERGE (`bulkMergeNode*`) through the exact node-property index (by a
+    label scan in lean mode, where that index holds no value of a key
+    registered after its nodes were written). So MERGE on the server fast
+    path now works for a DECIMAL or DOUBLE key, in lean mode too: it failed
     with MergeValueNotIndexable, or, with ON MATCH SET, created a node on
-    every run.
+    every run. Two concurrent bulk MERGEs of one value in two forms (INT 7
+    and DECIMAL 7.0; DOUBLE 7.5 and DECIMAL 7.50) create one node: they now
+    take one per-tuple lock, which was chosen by the value's representation.
   - **Behaviour change:** when two nodes hold one MERGE key (1 and 1.0, or
     two nodes CREATE wrote with one value), MERGE matches the one with the
     lowest node id, on the executor, the server's bulk MERGE and a reopened
@@ -148,8 +152,21 @@
     could match the other node, and deleting either node, or a SET that
     moved it off the key, dropped the entry: the next MERGE created a third
     node. The entry now goes only with the key's last holder. When the
-    lowest holder goes, the next MERGE of that key scans the label once for
-    the next one.
+    lowest holder goes, the next lookup of that key finds the next one
+    through the exact node-property index, at a cost proportional to the
+    key's holders, under the graph lock the lookup holds (EXCLUSIVE for the
+    executor's MERGE, SHARED for the server's bulk MERGE and edge lookups).
+    Measured with 200,040 nodes of one label: the first MERGE of such a key
+    took 30 µs on average (84 µs at most), against 83 ms (108 ms) when it
+    scanned the label, which is about 6 s at 14.27M nodes. It scans the
+    label only in lean mode, in a store without an adapter, and while the
+    exact index is deferred or being rebuilt after a reopen; it does not
+    wait for that rebuild. A lookup that found the holders while a writer inserted one
+    could drop the new holder's entry (the next MERGE then created a second
+    node); it now leaves the entry for the next lookup.
+  - A string no longer shares MERGE's key with a boolean or an integer:
+    the server's bulk MERGE of `true` matched a stored `'true'` (and v0.8.22's
+    of `1` a stored `'1'`).
   - `MATCH (n:T {x: 1})` on the legacy executor (a session in memory, with
     an RLS policy or tenant-scoped) returned one node when two held the
     value (1 and 1.0, or two nodes CREATE wrote with 1): it read the node
@@ -174,11 +191,16 @@
   and `prop_rev.idx`) hashes a number by its value now, and each entry of
   MERGE's index records whether other nodes hold its key.
   - A file written by an earlier version is stale. The first open of each
-    graph after the upgrade rebuilds the exact index in the background, and
-    a read the index serves waits for that rebuild (the code estimates about
-    14 minutes at 14.27M nodes).
+    graph after the upgrade rebuilds the exact index in the background.
+    Until that rebuild ends (the code estimates about 14 minutes at 14.27M
+    nodes), writes wait for it, not only the reads the index serves: every
+    write that updates the index (CREATE of a node with properties, SET,
+    REMOVE, DELETE, and the server's bulk CREATE and MERGE, which waits
+    before it takes its locks whether it then matches or creates). A lookup
+    that must find the holders of a MERGE key does not wait: it scans the
+    label instead.
   - All three hydration snapshots (`hydration_counters.snap`,
-    `hydration_labels.snap` and `hydration_merge.snap`, format 4) are
+    `hydration_labels.snap` and `hydration_merge.snap`, format 5) are
     invalidated, so the first open of each graph does a full hydration scan.
   - A rollback rebuilds too: v0.8.22 finds these files stale and rebuilds
     from a scan the same way.
@@ -190,7 +212,8 @@
     139 KB in memory against 128 KB, and `hydration_merge.snap` 92 KB
     against 81 KB. 25,000 nodes of a mixed schema (ids, strings, prices,
     ratings, coordinates): 55,767 entries against 55,502 (15b9aa0e: 90,543),
-    4.7 MB against 4.6 MB, and a 2.8 MB snapshot against 2.7 MB.
+    4.7 MB against 4.6 MB, and a 2.9 MB snapshot against 2.7 MB. (A string
+    or boolean key carries a one-byte tag: 30 KB of the 25,000 nodes' keys.)
 
 - **MERGE sees a label that SET added and forgets one REMOVE took
   (SONNY-3109):** MERGE's property index is keyed by label, and `SET n:L` and

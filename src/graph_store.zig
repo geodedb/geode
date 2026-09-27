@@ -1356,8 +1356,23 @@ fn encodePersistedPublicId(buf: *[16]u8, public_id: u64) []const u8 {
     return std.fmt.bufPrint(buf, "{x:0>16}", .{public_id}) catch unreachable;
 }
 
+/// A persisted public id (hex, or decimal in older files), or null.
+///
+/// SONNY-2806 (round 8): a public id never has bit 63 set. Ids are a 48-bit
+/// millisecond clock shifted left by 16 (`encodeTimeBasedNodeId`), and
+/// MERGE's index keeps a flag in that bit (`merge_entry_shared`), so a node
+/// id with it set would read there as a flagged entry. A persisted id with
+/// the bit set is corrupt: it is refused, with an error in the log, and the
+/// caller skips the record as it skips any id it cannot parse.
 pub fn parsePersistedPublicId(text: []const u8) ?u64 {
-    return std.fmt.parseUnsigned(u64, text, 16) catch std.fmt.parseUnsigned(u64, text, 10) catch null;
+    const id = std.fmt.parseUnsigned(u64, text, 16) catch std.fmt.parseUnsigned(u64, text, 10) catch return null;
+    if (id & merge_entry_shared != 0) {
+        log.err("refusing a persisted public id with bit 63 set: no id has it, and MERGE's index flags entries with it", &.{
+            Attr.string("id", text),
+        });
+        return null;
+    }
+    return id;
 }
 
 /// Check whether a byte slice looks like a serialized FLE EnvelopeV1.
@@ -1622,27 +1637,65 @@ const merge_property_index_shard_count: usize = 256;
 ///     is the lowest of them;
 ///   * `merge_entry_shared` alone (node ids start at 1): the lowest holder
 ///     no longer holds the key and others may. The entry is unresolved, and
-///     the next lookup scans the label's postings, in ascending id order, for
-///     the lowest holder (`GraphStore.resolveMergeHolder`).
+///     the next lookup finds the lowest holder and settles the entry
+///     (`GraphStore.resolveMergeHolder`): through the exact node-property
+///     index, which lists every node holding the value, or, when that index
+///     cannot answer, by scanning the label's postings in ascending id order.
 /// The rule is: MERGE matches the lowest node id among the nodes holding the
 /// key, on every path (the executor, the server's bulk MERGE, a reopened
 /// store) and whatever the order the nodes were written or hydrated in. A
 /// miss (no entry) stays authoritative: every holder writes the entry, and
 /// the entry goes only when its only holder does.
+///
+/// Round 8: a node id never has this bit set (`parsePersistedPublicId`).
 const merge_entry_shared: u64 = @as(u64, 1) << 63;
 
 /// The entry after `node_id` is recorded as a holder of its key.
 fn mergeEntryWithHolder(entry: u64, node_id: u64) u64 {
+    std.debug.assert(node_id & merge_entry_shared == 0);
     if (entry == node_id) return entry;
     // Unresolved: a lower holder than `node_id` may exist; the next lookup
-    // resolves it.
+    // resolves it. The put still bumps the shard's generation, so a lookup
+    // settling the entry meanwhile does not drop it (`MergePropertyIndex.settle`).
     if (entry == merge_entry_shared) return entry;
     return merge_entry_shared | @min(entry & ~merge_entry_shared, node_id);
+}
+
+/// What a lookup found when it settled an entry: the lowest node holding the
+/// key, or null for none, and whether that node is the only holder. `sole`
+/// is known only when the lookup read every holder (through the exact
+/// index); a label scan stops at the first holder and leaves it false.
+const MergeHolders = struct {
+    lowest: ?u64 = null,
+    sole: bool = false,
+};
+
+/// SONNY-2806 (round 8): how lookups found the holders of an entry they
+/// settled (`GraphStore.findMergeHolders`): through the exact node-property
+/// index, or by a label scan.
+var g_merge_resolve_exact = std.atomic.Value(u64).init(0);
+var g_merge_resolve_scan = std.atomic.Value(u64).init(0);
+
+pub const MergeResolveCounts = struct { exact: u64, scan: u64 };
+
+pub fn mergeResolveCounts() MergeResolveCounts {
+    return .{ .exact = g_merge_resolve_exact.load(.monotonic), .scan = g_merge_resolve_scan.load(.monotonic) };
+}
+
+pub fn resetMergeResolveCounts() void {
+    g_merge_resolve_exact.store(0, .monotonic);
+    g_merge_resolve_scan.store(0, .monotonic);
 }
 
 const MergePropertyIndexShard = struct {
     map: std.StringHashMap(u64),
     mutex: std.Io.Mutex = std.Io.Mutex.init,
+    /// SONNY-2806 (round 8): bumped, under `mutex`, by every call that
+    /// writes the shard (a put, a remove, a snapshot entry, a settle), even
+    /// one that leaves the entry as it was. A lookup notes it with the entry
+    /// it reads, and settles that entry only if it is unchanged
+    /// (`MergePropertyIndex.settle`).
+    generation: u64 = 0,
 
     fn init(allocator: std.mem.Allocator) MergePropertyIndexShard {
         return .{ .map = std.StringHashMap(u64).init(allocator) };
@@ -1684,9 +1737,20 @@ pub const MergePropertyIndex = struct {
     }
 
     pub fn reset(self: *MergePropertyIndex) void {
+        // Keep each shard's generation moving forward, so a lookup that read
+        // an entry before the reset cannot settle one written after it.
+        var generations: [merge_property_index_shard_count]u64 = undefined;
+        for (&self.shards, &generations) |*shard, *g| g.* = shard.generation +% 1;
         self.deinit();
         self.* = MergePropertyIndex.init(self.allocator);
+        for (&self.shards, generations) |*shard, g| shard.generation = g;
     }
+
+    /// An entry as a lookup read it, with its shard's generation then.
+    const Seen = struct {
+        entry: u64,
+        generation: u64,
+    };
 
     pub fn count(self: *MergePropertyIndex) u32 {
         const io = std.Io.Threaded.global_single_threaded.io();
@@ -1728,6 +1792,7 @@ pub const MergePropertyIndex = struct {
         const shard = &self.shards[shardForKey(key)];
         shard.mutex.lockUncancelable(io);
         defer shard.mutex.unlock(io);
+        shard.generation +%= 1;
 
         if (shard.map.getPtr(key)) |existing| {
             existing.* = mergeEntryWithHolder(existing.*, node_id);
@@ -1745,6 +1810,7 @@ pub const MergePropertyIndex = struct {
         const shard = &self.shards[shardForKey(key)];
         shard.mutex.lockUncancelable(io);
         defer shard.mutex.unlock(io);
+        shard.generation +%= 1;
 
         if (shard.map.getPtr(key)) |existing| {
             existing.* = entry;
@@ -1758,8 +1824,9 @@ pub const MergePropertyIndex = struct {
     /// `node_id` no longer holds `key`. The entry is dropped only when it
     /// names that node as the key's only holder. When it names it as the
     /// lowest of several, it becomes unresolved: the other holders are not
-    /// recorded, so the next lookup finds the lowest one by a label scan. An
-    /// entry naming another node is kept. (The removal was unconditional
+    /// recorded, so the next lookup finds the lowest one
+    /// (`GraphStore.resolveMergeHolder`). An entry naming another node is
+    /// kept. (The removal was unconditional
     /// before round 7: deleting either of two equal nodes dropped the entry,
     /// and a later MERGE trusted the miss and created a third node.)
     fn remove(self: *MergePropertyIndex, key: []const u8, node_id: u64) void {
@@ -1767,6 +1834,7 @@ pub const MergePropertyIndex = struct {
         const shard = &self.shards[shardForKey(key)];
         shard.mutex.lockUncancelable(io);
         defer shard.mutex.unlock(io);
+        shard.generation +%= 1;
 
         const entry = shard.map.getPtr(key) orelse return;
         if (entry.* == node_id) {
@@ -1777,23 +1845,51 @@ pub const MergePropertyIndex = struct {
     }
 
     /// Settle an entry a lookup could not trust (unresolved, or naming a
-    /// node that no longer exists), from the label scan's answer: its lowest
-    /// holder, or null for none, which drops the entry. Nothing changes when
-    /// a writer changed the entry after the lookup read it (`seen`).
-    fn settle(self: *MergePropertyIndex, key: []const u8, seen: u64, holder: ?u64) void {
+    /// node that no longer exists) from what the lookup found (`found`):
+    /// the key's lowest holder, recorded alone when it is the only one, or
+    /// none, which drops the entry. Returns whether it applied.
+    ///
+    /// SONNY-2806 (round 8): it applies only when nothing wrote the shard
+    /// since the lookup read the entry (`seen`: the entry and the shard's
+    /// generation). Comparing the entry alone was not enough: a holder
+    /// written while the lookup searched leaves an unresolved entry as it is
+    /// (`mergeEntryWithHolder`), so a lookup that had not seen the new holder
+    /// dropped its entry, and the next MERGE created a second node. Lookups
+    /// run under SHARED graph locks (the QUIC edge fast path, the
+    /// group-commit workers), beside such writers. A holder the lookup's
+    /// search can see is written to the exact index and the label index
+    /// before its entry, so a holder it missed wrote the entry after the
+    /// lookup read it and moved the generation. A refused settle leaves the
+    /// entry for the next lookup. The generation is per shard, so a write to
+    /// another key of the shard also refuses it; that costs only a repeat of
+    /// the search.
+    fn settle(self: *MergePropertyIndex, key: []const u8, seen: Seen, found: MergeHolders) bool {
         const io = std.Io.Threaded.global_single_threaded.io();
         const shard = &self.shards[shardForKey(key)];
         shard.mutex.lockUncancelable(io);
         defer shard.mutex.unlock(io);
 
-        const entry = shard.map.getPtr(key) orelse return;
-        if (entry.* != seen) return;
-        if (holder) |id| {
-            // Other holders may remain: the scan stopped at the first.
-            entry.* = merge_entry_shared | id;
+        if (shard.generation != seen.generation) return false;
+        const entry = shard.map.getPtr(key) orelse return false;
+        if (entry.* != seen.entry) return false;
+        shard.generation +%= 1;
+        if (found.lowest) |id| {
+            entry.* = if (found.sole) id else merge_entry_shared | id;
         } else if (shard.map.fetchRemove(key)) |kv| {
             self.allocator.free(kv.key);
         }
+        return true;
+    }
+
+    /// The entry for `key`, with its shard's generation, for a lookup that
+    /// may settle it.
+    fn getSeen(self: *MergePropertyIndex, key: []const u8) ?Seen {
+        const io = std.Io.Threaded.global_single_threaded.io();
+        const shard = &self.shards[shardForKey(key)];
+        shard.mutex.lockUncancelable(io);
+        defer shard.mutex.unlock(io);
+        const entry = shard.map.get(key) orelse return null;
+        return .{ .entry = entry, .generation = shard.generation };
     }
 
     fn get(self: *MergePropertyIndex, key: []const u8) ?u64 {
@@ -5419,17 +5515,44 @@ pub const GraphStore = struct {
     /// server's bulk MERGE). Indexing it tripled the index for 2000 nodes with
     /// an INT, a DOUBLE and a DECIMAL property (2000 -> 6000 entries). Format
     /// edition: HYDRATION_SNAP_VERSION 4.
+    ///
+    /// Round 8: the value is tagged by its kind (`writeMergeValue`), so a
+    /// string no longer shares a key with a boolean ('true' and true) or an
+    /// integer (a 9-byte string whose bytes are an integer's key). A shared
+    /// key made the server's bulk MERGE, which takes the entry's node as the
+    /// match, match a node of the other kind, and a lookup that settles an
+    /// entry through the exact node-property index (keyed by kind) would
+    /// miss the other kind's holders. Format edition:
+    /// HYDRATION_SNAP_VERSION 5.
     fn serializePropValueForIndex(buf: []u8, value: PropertyValue) ?usize {
+        const len = writeMergeValue(buf, value) orelse return null;
+        // Round 7: a number is kept only when it is an integer ('I').
+        if (numberOfProperty(value) != null and buf[0] != 'I') return null;
+        return len;
+    }
+
+    /// A value's bytes in a merge key, tagged by kind, so that two values
+    /// write the same bytes exactly when MERGE calls them equal (as
+    /// `execution.valuesEqual` does for these kinds):
+    ///   * a number, of any representation: `value_order.writeNumberKey`
+    ///     ('I' for an integer, 'F', 'C' or 'n' for any other number);
+    ///   * a string: 's' and its bytes;
+    ///   * a boolean: 'b' and 1 or 0.
+    /// Null for any other value, or when `buf` is too small. MERGE's index
+    /// keeps the integers, strings and booleans (`serializePropValueForIndex`);
+    /// a lookup of any number compares by these bytes (`findMergeHolders`).
+    fn writeMergeValue(buf: []u8, value: PropertyValue) ?usize {
         var writer: std.Io.Writer = .fixed(buf);
         if (numberOfProperty(value)) |n| {
             value_order.writeNumberKey(&writer, n) catch return null;
-            // An integer's key is 'I' and its i64 (value_order.writeIntKey).
-            if (writer.end == 0 or buf[0] != 'I') return null;
             return writer.end;
         }
         switch (value) {
-            .String => |s| writer.writeAll(s) catch return null,
-            .Bool => |b| writer.writeAll(if (b) "true" else "false") catch return null,
+            .String => |s| {
+                writer.writeByte('s') catch return null;
+                writer.writeAll(s) catch return null;
+            },
+            .Bool => |b| writer.writeAll(if (b) "b\x01" else "b\x00") catch return null,
             else => return null,
         }
         return writer.end;
@@ -5441,7 +5564,7 @@ pub const GraphStore = struct {
     }
 
     /// A stored property as a number, whatever its representation, or null.
-    fn numberOfProperty(value: PropertyValue) ?value_order.Number {
+    pub fn numberOfProperty(value: PropertyValue) ?value_order.Number {
         return switch (value) {
             .Int => |i| .{ .exact = .{ .coeff = i, .scale = 0 } },
             .Float => |f| .{ .float = f },
@@ -5546,7 +5669,7 @@ pub const GraphStore = struct {
     /// in its place: where it keys the same (1 over 1.0, or the same value
     /// again, as an ON MATCH SET of the merge key writes), the entry is kept,
     /// since removing the lowest of several holders would leave it unresolved
-    /// and cost the next MERGE a label scan.
+    /// and cost the next MERGE a search for its holders.
     fn removeFromMergePropertyIndex(self: *GraphStore, graph_name: []const u8, labels: []const []const u8, prop_key: []const u8, prop_value: PropertyValue, node_id: u64, replacement: ?PropertyValue) void {
         var buf: [1024]u8 = undefined;
         var replacement_buf: [1024]u8 = undefined;
@@ -5598,20 +5721,23 @@ pub const GraphStore = struct {
     ///
     /// SONNY-2806 (round 7): `.found` names the LOWEST node id among the
     /// nodes holding the key (`merge_entry_shared`). An unresolved entry, or
-    /// one naming a node that no longer exists, is settled here by a label
-    /// scan, so every caller (the executor, the server's bulk MERGE, edge
-    /// endpoint resolution) gets the same authoritative answer.
+    /// one naming a node that no longer exists, is settled here
+    /// (`resolveMergeHolder`), so every caller (the executor, the server's
+    /// bulk MERGE, edge endpoint resolution) gets the same authoritative
+    /// answer.
     pub fn lookupMergeCandidate(self: *GraphStore, graph_name: []const u8, label: []const u8, prop_key: []const u8, prop_value: PropertyValue, out_node_id: *u64) MergeLookupResult {
         self.ensureGraphHydrated(graph_name); // PHASE 1b chokepoint (merge-MISS authority)
         var buf: [1024]u8 = undefined;
         const probe = buildMergeIndexKey(&buf, graph_name, label, prop_key, prop_value) orelse return .not_indexable;
 
-        const entry = self.merge_prop_index.get(probe) orelse return .not_found;
-        if (self.liveMergeHolder(entry, graph_name)) |node_id| {
+        const seen = self.merge_prop_index.getSeen(probe) orelse return .not_found;
+        if (self.liveMergeHolder(seen.entry, graph_name)) |node_id| {
             out_node_id.* = node_id;
             return .found;
         }
-        return self.resolveMergeHolder(graph_name, label, probe, entry, .{ .property = prop_key }, out_node_id);
+        // The value's bytes end the key (`buildMergeIndexKey`).
+        const value_key = probe[graph_name.len + label.len + prop_key.len + 3 ..];
+        return self.resolveMergeHolder(graph_name, label, probe, seen, .{ .property = .{ .key = prop_key, .value = prop_value, .value_key = value_key } }, out_node_id);
     }
 
     /// The node holding a merge key when it is the key's ONLY holder (the
@@ -5620,6 +5746,8 @@ pub const GraphStore = struct {
     /// (`MATCH (n:T {x: 1})`) took the entry as the whole answer, so with
     /// 1 and 1.0 (or two CREATEd 1s) it returned one row. A key two nodes
     /// have held answers `.not_indexable`, and the caller scans the label.
+    /// (Round 8: a settle that finds a single holder records it alone again,
+    /// so such a key answers here once more.)
     pub fn lookupOnlyMergeHolder(self: *GraphStore, graph_name: []const u8, label: []const u8, prop_key: []const u8, prop_value: PropertyValue, out_node_id: *u64) MergeLookupResult {
         self.ensureGraphHydrated(graph_name); // PHASE 1b chokepoint
         var buf: [1024]u8 = undefined;
@@ -5655,61 +5783,166 @@ pub const GraphStore = struct {
     /// What a merge key is built from: one property, or a registered
     /// composite key's properties.
     const MergeKeySource = union(enum) {
-        property: []const u8,
-        composite: *const CompositeKeySpec,
+        /// `value_key`: the value's `writeMergeValue` bytes.
+        property: struct { key: []const u8, value: PropertyValue, value_key: []const u8 },
+        /// `values` in the spec's (sorted) property order; `probe`: the key.
+        composite: struct { spec: *const CompositeKeySpec, values: []const PropertyValue, probe: []const u8 },
     };
 
+    // CANARY: REQ=REQ-SONNY-2806-MERGE-RESOLVE-EXACT; FEATURE="MergeIdempotency"; ASPECT=SettleThroughExactIndex; STATUS=TESTED; TEST=tests/test_sonny2806_merge_resolve.zig; OWNER=storage; UPDATED=2026-09-27
     /// SONNY-2806 (round 7): settle an entry `lookupMergeCandidate` cannot
     /// trust: unresolved (its lowest holder was removed while others may
-    /// remain) or naming a node that no longer exists. Scans the label's
-    /// postings in ascending id order for the first node whose key equals
-    /// `probe` (the lowest holder, the node the executor's own scan finds),
-    /// records it, or drops the entry when no node holds the key. The scan
-    /// costs O(label) once per such entry. The label postings are kept with
-    /// the merge index by the same writes; the exact node-property index may
-    /// be deferred or rebuilding, and building it here would run under the
-    /// graph lock this lookup is called with.
+    /// remain) or naming a node that no longer exists. Finds the key's lowest
+    /// holder (`findMergeHolders`), records it (alone when it is the only
+    /// one), or drops the entry when no node holds the key. The settle
+    /// applies only if the shard is unchanged since `seen` was read
+    /// (round 8, `MergePropertyIndex.settle`); either way the answer is what
+    /// the search found.
     fn resolveMergeHolder(
         self: *GraphStore,
         graph_name: []const u8,
         label: []const u8,
         probe: []const u8,
-        seen: u64,
+        seen: MergePropertyIndex.Seen,
         source: MergeKeySource,
         out_node_id: *u64,
     ) MergeLookupResult {
         // A failed read leaves the entry as it is: the index cannot answer,
         // and the caller falls back as for a value it cannot key.
-        const holder = self.lowestMergeHolder(graph_name, label, probe, source) catch return .not_indexable;
-        self.merge_prop_index.settle(probe, seen, holder);
-        out_node_id.* = holder orelse return .not_found;
+        const found = self.findMergeHolders(graph_name, label, source) catch return .not_indexable;
+        _ = self.merge_prop_index.settle(probe, seen, found);
+        out_node_id.* = found.lowest orelse return .not_found;
         return .found;
     }
 
-    fn lowestMergeHolder(self: *GraphStore, graph_name: []const u8, label: []const u8, probe: []const u8, source: MergeKeySource) !?u64 {
-        // A copy: under the bulk MERGE's SHARED graph lock other writers may
-        // append to the posting.
-        const ids = (try self.snapshotNodesByLabel(self.allocator, graph_name, label)) orelse return null;
-        defer self.allocator.free(ids);
+    /// SONNY-2806 (round 8): the lowest node of `label` in `graph_name`
+    /// holding `key` = `value`, compared by value (`writeMergeValue`: 1 and
+    /// 1.0, 1.5 and 1.50), for a value MERGE's index does not keep: a number
+    /// that is not an integer. The server's bulk MERGE resolves such a key
+    /// here (`StorageAdapter.findMergeNode`), through the exact node-property
+    /// index when it can answer and otherwise by a label scan (lean mode, or
+    /// the index deferred or rebuilding; `findMergeHolders`).
+    pub fn lowestMergeHolderByValue(self: *GraphStore, graph_name: []const u8, label: []const u8, key: []const u8, value: PropertyValue) !?u64 {
+        self.ensureGraphHydrated(graph_name); // PHASE 1b chokepoint
         var buf: [1024]u8 = undefined;
-        for (ids) |id| {
-            const node = (try self.nodes.getOrHydratePtr(id)) orelse continue;
-            const key = switch (source) {
-                .property => |prop_key| blk: {
-                    const value = node.properties.get(prop_key) orelse continue;
-                    break :blk buildMergeIndexKey(&buf, graph_name, label, prop_key, value) orelse continue;
+        const len = writeMergeValue(&buf, value) orelse return error.MergeValueNotIndexable;
+        const found = try self.findMergeHolders(graph_name, label, .{ .property = .{ .key = key, .value = value, .value_key = buf[0..len] } });
+        return found.lowest;
+    }
+
+    /// SONNY-2806 (round 8): the nodes of `label` holding the key `source`
+    /// describes: the lowest, and whether it is the only one.
+    ///
+    /// Through the exact node-property index when it can answer
+    /// (`StorageAdapter.exactIndexMergeCandidates`): it lists every node of
+    /// the label holding each value, so the cost is the key's holders (the
+    /// smallest posting of a composite key's values), and every holder is
+    /// read, so `sole` is known. Round 7 scanned the label for every such
+    /// entry, under the graph lock: 72 ms per key at 200,000 nodes, about 5 s
+    /// per key at 14.27M.
+    ///
+    /// By a scan of the label's postings, in ascending id order, stopping at
+    /// the first holder, when the exact index cannot answer: in lean mode
+    /// (GEODE_INDEX_MERGE_KEYS_ONLY), where it holds no value of a key
+    /// registered after its nodes were written, and while it is deferred or
+    /// being rebuilt after a reopen, which can take minutes (about 14 at 14M
+    /// nodes). The scan does not wait for that build: building or waiting
+    /// here would hold the caller's graph lock, and so stall the graph's
+    /// writers, for the whole build. Also without a storage adapter (the
+    /// in-memory store).
+    fn findMergeHolders(self: *GraphStore, graph_name: []const u8, label: []const u8, source: MergeKeySource) !MergeHolders {
+        if (self.exactIndexAdapter()) |adapter| {
+            const PropKV = graph_storage_adapter.StorageAdapter.PropKV;
+            var props_buf: [composite_index_max_props]PropKV = undefined;
+            const props: []const PropKV = switch (source) {
+                .property => |p| blk: {
+                    props_buf[0] = .{ .key = p.key, .value = p.value };
+                    break :blk props_buf[0..1];
                 },
-                .composite => |spec| blk: {
-                    var values: [composite_index_max_props]PropertyValue = undefined;
-                    for (values[0..spec.prop_count], 0..) |*v, i| {
-                        v.* = node.properties.get(spec.prop_bufs[i][0..spec.prop_lens[i]]) orelse break;
-                    } else break :blk buildCompositeMergeIndexKey(&buf, graph_name, label, spec, values[0..spec.prop_count]) orelse continue;
-                    continue;
+                .composite => |c| blk: {
+                    for (c.values, 0..) |v, i| props_buf[i] = .{ .key = c.spec.prop_bufs[i][0..c.spec.prop_lens[i]], .value = v };
+                    break :blk props_buf[0..c.values.len];
                 },
             };
-            if (std.mem.eql(u8, key, probe)) return id;
+            if (try adapter.exactIndexMergeCandidates(self, self.allocator, graph_name, label, props)) |ids| {
+                defer self.allocator.free(ids);
+                _ = g_merge_resolve_exact.fetchAdd(1, .monotonic);
+                var found: MergeHolders = .{};
+                var holders: usize = 0;
+                for (ids) |id| {
+                    if (!try self.holdsMergeKey(id, graph_name, label, source)) continue;
+                    holders += 1;
+                    if (found.lowest == null or id < found.lowest.?) found.lowest = id;
+                }
+                found.sole = holders == 1;
+                return found;
+            }
         }
-        return null;
+        _ = g_merge_resolve_scan.fetchAdd(1, .monotonic);
+        // A copy: under the bulk MERGE's SHARED graph lock other writers may
+        // append to the posting.
+        const ids = (try self.snapshotNodesByLabel(self.allocator, graph_name, label)) orelse return .{};
+        defer self.allocator.free(ids);
+        for (ids) |id| {
+            if (try self.holdsMergeKey(id, graph_name, label, source)) return .{ .lowest = id };
+        }
+        return .{};
+    }
+
+    /// The storage adapter whose exact node-property index describes this
+    /// store's nodes: the global adapter, when this is the global store.
+    fn exactIndexAdapter(self: *GraphStore) ?*graph_storage_adapter.StorageAdapter {
+        const adapter = global_adapter orelse return null;
+        const current = getCurrentGlobalStore() orelse return null;
+        return if (current == self) adapter else null;
+    }
+
+    /// Whether node `id` of `graph_name` holds the key `source` describes.
+    fn holdsMergeKey(self: *GraphStore, id: u64, graph_name: []const u8, label: []const u8, source: MergeKeySource) !bool {
+        const Check = struct {
+            graph_name: []const u8,
+            label: []const u8,
+            source: MergeKeySource,
+
+            fn holds(c: @This(), node: *const Node) bool {
+                if (!std.mem.eql(u8, node.graph_name, c.graph_name)) return false;
+                var buf: [1024]u8 = undefined;
+                switch (c.source) {
+                    .property => |p| {
+                        const value = node.properties.get(p.key) orelse return false;
+                        const len = writeMergeValue(&buf, value) orelse return false;
+                        return std.mem.eql(u8, buf[0..len], p.value_key);
+                    },
+                    .composite => |comp| {
+                        var values: [composite_index_max_props]PropertyValue = undefined;
+                        for (values[0..comp.spec.prop_count], 0..) |*v, i| {
+                            v.* = node.properties.get(comp.spec.prop_bufs[i][0..comp.spec.prop_lens[i]]) orelse return false;
+                        }
+                        const key = buildCompositeMergeIndexKey(&buf, c.graph_name, c.label, comp.spec, values[0..comp.spec.prop_count]) orelse return false;
+                        return std.mem.eql(u8, key, comp.probe);
+                    },
+                }
+            }
+        };
+        return self.residentNodeSatisfies(id, Check{ .graph_name = graph_name, .label = label, .source = source }, Check.holds);
+    }
+
+    /// Whether `pred(context, node)` holds for node `id`, or false when no
+    /// such node exists. The node is hydrated if it is not resident, then
+    /// read under its cache shard's SHARED lock: under a SHARED graph lock a
+    /// writer may realloc the node's property map (ENG-3954), and `pred` must
+    /// not call back into the cache. Retries when the node is evicted between
+    /// the hydration and the lock.
+    pub fn residentNodeSatisfies(self: *GraphStore, id: u64, context: anytype, comptime pred: fn (@TypeOf(context), *const Node) bool) !bool {
+        var attempts: usize = 0;
+        while (attempts < 4) : (attempts += 1) {
+            _ = (try self.nodes.getOrHydratePtr(id)) orelse return false;
+            self.nodes.lockShardShared(id);
+            defer self.nodes.unlockShardShared(id);
+            const node = self.nodes.getPtrUnlocked(id) orelse continue;
+            return pred(context, node);
+        }
+        return error.NodeEvictedWhileRead;
     }
 
     /// Build a COMPOSITE merge-index key into `buf` from a registered composite
@@ -5801,16 +6034,16 @@ pub const GraphStore = struct {
 
         var buf: [1024]u8 = undefined;
         const probe = buildCompositeMergeIndexKey(&buf, graph_name, label, spec, values[0..spec.prop_count]) orelse return .not_indexable;
-        const entry = self.merge_prop_index.get(probe) orelse return .not_found;
+        const seen = self.merge_prop_index.getSeen(probe) orelse return .not_found;
 
         // Eviction-independent existence + graph validation (mirrors
         // lookupMergeCandidate); no node-page read. SONNY-2806 (round 7): an
-        // unresolved or dangling entry is settled by the same label scan.
-        if (self.liveMergeHolder(entry, graph_name)) |node_id| {
+        // unresolved or dangling entry is settled as a single key's is.
+        if (self.liveMergeHolder(seen.entry, graph_name)) |node_id| {
             out_node_id.* = node_id;
             return .found;
         }
-        return self.resolveMergeHolder(graph_name, label, probe, entry, .{ .composite = spec }, out_node_id);
+        return self.resolveMergeHolder(graph_name, label, probe, seen, .{ .composite = .{ .spec = spec, .values = values[0..spec.prop_count], .probe = probe } }, out_node_id);
     }
 
     fn findFilterValue(filters: []const graph_storage_adapter.StorageAdapter.PropKV, key: []const u8) ?PropertyValue {
@@ -10080,7 +10313,11 @@ pub const GraphStore = struct {
     // (the lowest of several holders, or unresolved), and a number that is not
     // an integer is not indexed. A v3 entry does not say whether other nodes
     // hold its key, so a v3 file loads as null and the index is rebuilt.
-    const HYDRATION_SNAP_VERSION: u32 = 4;
+    // v5 = SONNY-2806 round 8: a merge-index key's string or boolean is
+    // tagged by its kind ('s', 'b'; `writeMergeValue`). A v4 file's untagged
+    // strings and booleans would all miss, so it loads as null and the index
+    // is rebuilt.
+    const HYDRATION_SNAP_VERSION: u32 = 5;
     const HYDRATION_COUNTERS_MAGIC: [8]u8 = "GHYDCNT1".*;
     const HYDRATION_COUNTERS_FILE = "hydration_counters.snap";
     const HYDRATION_COUNTERS_TMP = "hydration_counters.snap.tmp";

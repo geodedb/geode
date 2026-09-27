@@ -263,10 +263,12 @@ fn findFirstMatchingNodeId(
                 // ENG-3914 — DETERMINISTIC (not concurrent) MERGE duplication.
                 //
                 // `merge_prop_index` holds exactly ONE node id per
-                // (graph, label, key, value): `putOrUpdate` OVERWRITES. So for
-                // a multi-property MERGE key whose FIRST property value is
-                // SHARED across rows, the bucket's occupant is whichever row
-                // was written last.
+                // (graph, label, key, value): since SONNY-2806 (round 7) the
+                // LOWEST id among the nodes holding it (before, `putOrUpdate`
+                // overwrote, and the occupant was the row written last). So
+                // for a multi-property MERGE key whose FIRST property value is
+                // SHARED across rows, the bucket's occupant need not be the
+                // row the other properties select.
                 //
                 // The old code probed `evaluated_props[0]` only, and when the
                 // returned candidate failed full verification it fell through

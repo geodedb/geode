@@ -8591,6 +8591,20 @@ pub fn build(b: *std.Build) void {
     const sonny2806_holders_step = b.step("test-sonny2806-merge-equal-holders", "Run SONNY-2806 round-7 regression (MERGE matches the lowest node id among the nodes holding a key after a delete or a SET, on the executor, the server's bulk MERGE and a reopened store; MERGE's index keeps no number that is not an integer; the multi-property MERGE fallback compares by value)");
     sonny2806_holders_step.dependOn(&run_sonny2806_holders_tests.step);
 
+    // SONNY-2806 (round 8): the duplicate paths of the round-7 re-review. A
+    // lookup's settle does not drop the entry of a holder inserted while it
+    // resolves; equal values in two forms take one MERGE tuple lock; lean
+    // mode finds a number that is not an integer; a string shares no merge
+    // key with a boolean or an integer.
+    const sonny2806_races_mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny2806_merge_races.zig"), .target = target, .optimize = optimize });
+    sonny2806_races_mod.addImport("geode", root_mod);
+    sonny2806_races_mod.addImport("logging", logging_mod);
+    const sonny2806_races_tests = b.addTest(.{ .root_module = sonny2806_races_mod });
+    const run_sonny2806_races_tests = b.addRunArtifact(sonny2806_races_tests);
+    shardDep(test_step, &run_sonny2806_races_tests.step, 1, test_shard_loads, test_shard_index);
+    const sonny2806_races_step = b.step("test-sonny2806-merge-races", "Run SONNY-2806 round-8 regression (a lookup's settle keeps the entry of a holder inserted while it resolves; equal values in two forms take one MERGE tuple lock; lean mode finds a non-integer number; a string shares no merge key with a boolean or an integer)");
+    sonny2806_races_step.dependOn(&run_sonny2806_races_tests.step);
+
     // SONNY-3109: SET n:L and REMOVE n:L keep MERGE's property index (and a
     // registered composite key's entries) in step with the node's labels.
     const sonny3109_mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny3109_merge_label_change.zig"), .target = target, .optimize = optimize });
@@ -8601,6 +8615,19 @@ pub fn build(b: *std.Build) void {
     shardDep(test_step, &run_sonny3109_tests.step, 1, test_shard_loads, test_shard_index);
     const sonny3109_step = b.step("test-sonny3109-merge-label-change", "Run SONNY-3109 regression (SET n:L makes the node a holder of MERGE's keys under L; REMOVE n:L removes it; the executor and the server's bulk MERGE)");
     sonny3109_step.dependOn(&run_sonny3109_tests.step);
+
+    // SONNY-2806 (round 8): an unresolved MERGE index entry is settled
+    // through the exact node-property index (O(holders)), by a label scan in
+    // lean mode or while that index is rebuilt (without waiting for the
+    // build); a persisted public id with bit 63 set is refused.
+    const sonny2806_resolve_mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny2806_merge_resolve.zig"), .target = target, .optimize = optimize });
+    sonny2806_resolve_mod.addImport("geode", root_mod);
+    sonny2806_resolve_mod.addImport("logging", logging_mod);
+    const sonny2806_resolve_tests = b.addTest(.{ .root_module = sonny2806_resolve_mod });
+    const run_sonny2806_resolve_tests = b.addRunArtifact(sonny2806_resolve_tests);
+    shardDep(test_step, &run_sonny2806_resolve_tests.step, 1, test_shard_loads, test_shard_index);
+    const sonny2806_resolve_step = b.step("test-sonny2806-merge-resolve", "Run SONNY-2806 round-8 regression (an unresolved MERGE index entry is settled through the exact node-property index, not a label scan; by a scan in lean mode or while that index is rebuilt, without waiting for the build; a persisted public id with bit 63 set is refused)");
+    sonny2806_resolve_step.dependOn(&run_sonny2806_resolve_tests.step);
 
     const sonny2675_walker_mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny2675_having_walker.zig"), .target = target, .optimize = optimize });
     sonny2675_walker_mod.addImport("geode", root_mod);
