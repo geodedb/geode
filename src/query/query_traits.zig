@@ -194,14 +194,25 @@ pub const TxnControl = struct {
 
 pub fn transactionControl(program: *const ast.Program) TxnControl {
     var ctl: TxnControl = .{};
-    for (program.statements) |*stmt| switch (stmt.*) {
+    for (program.statements) |*stmt| noteTxnControl(stmt, &ctl);
+    return ctl;
+}
+
+/// SONNY-3026: a PROFILE runs the statement it wraps, and an EXPLAIN names
+/// one; both are looked inside. `PROFILE ROLLBACK` counted as no transaction
+/// control at all, so it ran under a read lock and the handler kept the
+/// transaction it ended. The handlers refuse such a program
+/// (`explainOrProfileTargetRefused`); this keeps every trait honest anyway.
+fn noteTxnControl(stmt: *const ast.Statement, ctl: *TxnControl) void {
+    switch (stmt.*) {
         .StartTransaction => |st| {
             if (st.body == null) ctl.starts = true;
         },
         .Commit, .Rollback => ctl.ends = true,
+        .Profile => |p| noteTxnControl(p.query, ctl),
+        .Explain => |e| noteTxnControl(e.query, ctl),
         else => {},
-    };
-    return ctl;
+    }
 }
 
 /// SONNY-2805: `analyzeProgram` for a transport handler. Transaction control
@@ -587,40 +598,59 @@ pub const DataGraph = union(enum) {
 };
 
 pub fn programDataGraph(program: *const ast.Program, start_graph: []const u8, home_graph: []const u8) DataGraph {
-    var current = start_graph;
-    var runs_on: ?[]const u8 = null;
+    var walk: DataGraphWalk = .{ .current = start_graph, .home_graph = home_graph };
     for (program.statements) |*stmt| {
+        if (!walk.statement(stmt)) return .several;
+    }
+    return if (walk.runs_on) |g| .{ .one = g } else .none;
+}
+
+/// `programDataGraph`'s walk over a program's statements, in order.
+const DataGraphWalk = struct {
+    /// The graph the program is on at this point.
+    current: []const u8,
+    home_graph: []const u8,
+    /// The graph the statements so far that touch graph data run on.
+    runs_on: ?[]const u8 = null,
+
+    /// Follow one statement. False when it touches another graph's data than
+    /// an earlier one did.
+    fn statement(self: *DataGraphWalk, stmt: *const ast.Statement) bool {
         switch (stmt.*) {
-            .UseGraph => |ug| current = moveTo(current, graphTarget(ug.graph_name), home_graph),
+            .UseGraph => |ug| self.current = moveTo(self.current, graphTarget(ug.graph_name), self.home_graph),
             .SessionSet => |ss| switch (ss.clause_type) {
-                .Graph => |g| current = moveTo(current, graphTarget(g.expression), home_graph),
+                .Graph => |g| self.current = moveTo(self.current, graphTarget(g.expression), self.home_graph),
                 else => {},
             },
             .SessionReset => |sr| {
-                if (sessionResetClearsGraph(sr)) current = home_graph;
+                if (sessionResetClearsGraph(sr)) self.current = self.home_graph;
             },
-            .SessionClose => current = home_graph,
+            .SessionClose => self.current = self.home_graph,
             .Commit, .Rollback, .Explain => {},
+            // SONNY-3026: a PROFILE runs the statement it wraps: that
+            // statement's graph is the program's. `PROFILE USE GRAPH g` moved
+            // the session to g with no statement counted at all.
+            .Profile => |p| return self.statement(p.query),
             .StartTransaction => |txn| {
-                if (txn.body != null and !noteGraph(&runs_on, current)) return .several;
+                if (txn.body != null) return noteGraph(&self.runs_on, self.current);
             },
             .CreateIndex => |ci| {
-                const on = if (ci.index_type == .fulltext) graph_store.DEFAULT_GRAPH_NAME else current;
-                if (!noteGraph(&runs_on, on)) return .several;
+                const on = if (ci.index_type == .fulltext) graph_store.DEFAULT_GRAPH_NAME else self.current;
+                return noteGraph(&self.runs_on, on);
             },
-            .DropIndex => if (!noteGraph(&runs_on, graph_store.DEFAULT_GRAPH_NAME)) return .several,
+            .DropIndex => return noteGraph(&self.runs_on, graph_store.DEFAULT_GRAPH_NAME),
             .Call => |call| {
                 const on = switch (call) {
-                    .Procedure => |proc| if (procedure_access.isDefaultGraphProcedure(proc)) graph_store.DEFAULT_GRAPH_NAME else current,
-                    .Subquery => current,
+                    .Procedure => |proc| if (procedure_access.isDefaultGraphProcedure(proc)) graph_store.DEFAULT_GRAPH_NAME else self.current,
+                    .Subquery => self.current,
                 };
-                if (!noteGraph(&runs_on, on)) return .several;
+                return noteGraph(&self.runs_on, on);
             },
-            else => if (!noteGraph(&runs_on, current)) return .several,
+            else => return noteGraph(&self.runs_on, self.current),
         }
+        return true;
     }
-    return if (runs_on) |g| .{ .one = g } else .none;
-}
+};
 
 /// SONNY-2799: does every statement of `program` that touches graph data run
 /// on `graph` (or does none)? A program that ends the session's transaction
@@ -692,6 +722,47 @@ pub fn explainOrProfileHasCompany(program: *const ast.Program, analysis: *const 
         },
     };
     return wrappers != 1;
+}
+
+// CANARY: REQ=REQ-SONNY-3026-PROFILE-TXN-CONTROL; FEATURE="StatementAuthorization"; ASPECT=ExplainProfileTarget; STATUS=TESTED; TEST=tests/test_sonny3026_profile_txn_control.zig; OWNER=security; UPDATED=2026-09-27
+/// SONNY-3026: what the handlers answer (SQLSTATE 0A000) to an EXPLAIN or
+/// PROFILE of a statement that is not a query or a data change.
+pub const explain_profile_target_message = "EXPLAIN and PROFILE take a query or a data change: not START TRANSACTION, COMMIT, ROLLBACK, a SESSION statement, USE GRAPH, or another EXPLAIN or PROFILE";
+
+/// SONNY-3026: does `program` EXPLAIN or PROFILE transaction control (START
+/// TRANSACTION, COMMIT, ROLLBACK), a session statement (SESSION SET, RESET,
+/// CLOSE), graph selection (USE GRAPH), or another EXPLAIN or PROFILE? The
+/// handlers refuse it (0A000). Their PROFILE arm runs the wrapped statement
+/// under a lock and with transaction bookkeeping made for a query: `PROFILE
+/// ROLLBACK` undid the transaction's changes under a read lock (or none) and
+/// the handler kept the transaction open, so the client's next autocommit
+/// change joined a transaction that was rolled back at disconnect; `PROFILE
+/// START TRANSACTION` began an undo transaction the handler threw away. There
+/// is nothing to plan or profile in such a statement.
+pub fn explainOrProfileTargetRefused(program: *const ast.Program) bool {
+    for (program.statements) |*stmt| switch (stmt.*) {
+        .Explain => |e| if (!explainableTarget(e.query)) return true,
+        .Profile => |p| if (!explainableTarget(p.query)) return true,
+        else => {},
+    };
+    return false;
+}
+
+fn explainableTarget(stmt: *const ast.Statement) bool {
+    return switch (stmt.*) {
+        .StartTransaction,
+        .Commit,
+        .Rollback,
+        .SessionSet,
+        .SessionReset,
+        .SessionClose,
+        .UseGraph,
+        .Explain,
+        .Profile,
+        .ExplainPolicy,
+        => false,
+        else => true,
+    };
 }
 
 // CANARY: REQ=REQ-SONNY-2733-BACKFILL-LOCKING; FEATURE="PerTenantIsolation"; ASPECT=HandlerLockBypass; STATUS=TESTED; TEST=tests/test_sonny2733_backfill_locking.zig; OWNER=security; UPDATED=2026-09-25

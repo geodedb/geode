@@ -681,7 +681,12 @@ fn buildOrderKeys(
 /// transaction the handler holds and the undo log does not is begun, so its
 /// changes are recorded.
 fn updateTxnStateFromProgram(state: *server_state.ServerState, program: *const gql_ast.Program, write_graph: ?[]const u8) void {
-    for (program.statements) |*stmt| switch (stmt.*) {
+    for (program.statements) |*stmt| noteTxnStatement(state, stmt, write_graph);
+    if (state.in_txn and txn_undo_log.currentThreadTxnId() == 0) txn_undo_log.getGlobalUndoLog(state.allocator).begin();
+}
+
+fn noteTxnStatement(state: *server_state.ServerState, stmt: *const gql_ast.Statement, write_graph: ?[]const u8) void {
+    switch (stmt.*) {
         .StartTransaction => |st| {
             if (st.body == null and !state.in_txn) {
                 state.clearTxnGraph();
@@ -689,13 +694,17 @@ fn updateTxnStateFromProgram(state: *server_state.ServerState, program: *const g
             }
         },
         .Commit, .Rollback => state.endTransaction(),
+        // SONNY-3026: a PROFILE ran the statement it wraps (the handler
+        // refuses one of transaction control; this keeps the bookkeeping
+        // honest anyway). An EXPLAIN ran nothing.
+        .Profile => |p| noteTxnStatement(state, p.query, write_graph),
+        .Explain => {},
         else => if (state.in_txn and query_traits.isMutatingStatement(stmt)) {
             // A failed allocation leaves the transaction without a graph; its
             // end then locks the session's graph, as before SONNY-2776.
             if (write_graph) |g| state.noteTxnWrite(g) catch {};
         },
-    };
-    if (state.in_txn and txn_undo_log.currentThreadTxnId() == 0) txn_undo_log.getGlobalUndoLog(state.allocator).begin();
+    }
 }
 
 // CANARY: REQ=REQ-SONNY-2799-FAILED-TXN-ROLLBACK; FEATURE="TransactionManagement"; ASPECT=GrpcHandler; STATUS=TESTED; TEST=tests/test_sonny2805_txn_sessions.zig; OWNER=engine; UPDATED=2026-09-26
@@ -2795,6 +2804,15 @@ pub fn handleExecute(request_bytes: []const u8, allocator: std.mem.Allocator, ep
             // refused rather than run in part under the whole program's lock.
             if (query_traits.explainOrProfileHasCompany(&parse_result.program, &analysis, query_graph_name)) {
                 var resp = try buildErrorResponse(allocator, "0A000", query_traits.explain_profile_alone_message, &.{}, &.{});
+                defer resp.deinit(allocator);
+                return encodeMessage(allocator, resp);
+            }
+            // CANARY: REQ=REQ-SONNY-3026-PROFILE-TXN-CONTROL; FEATURE="StatementAuthorization"; ASPECT=GrpcHandler; STATUS=TESTED; TEST=tests/test_sonny3026_profile_txn_control.zig; OWNER=security; UPDATED=2026-09-27
+            // SONNY-3026: nor an EXPLAIN or PROFILE of transaction control, a
+            // session statement or graph selection. `PROFILE ROLLBACK` undid
+            // the transaction under a read lock and the transaction stayed open.
+            if (query_traits.explainOrProfileTargetRefused(&parse_result.program)) {
+                var resp = try buildErrorResponse(allocator, "0A000", query_traits.explain_profile_target_message, &.{}, &.{});
                 defer resp.deinit(allocator);
                 return encodeMessage(allocator, resp);
             }

@@ -8906,6 +8906,25 @@ pub fn build(b: *std.Build) void {
     const sonny2824_step = b.step("test-sonny2824-hello-graph-gate", "Run SONNY-2824 regression (spawns a server: a QUIC or gRPC HELLO naming a missing graph creates it only for a principal with the schema permission on it; a ReadWrite user is refused and nothing is created; a GPS FOR SCHEMA policy grants it)");
     sonny2824_step.dependOn(&run_sonny2824_tests.step);
 
+    // SONNY-3026: an EXPLAIN or PROFILE of transaction control, a session
+    // statement or graph selection is refused (0A000), and the program traits
+    // look inside PROFILE and EXPLAIN. The real gRPC handler in process
+    // (SONNY-1560 shim) and QUIC against a spawned server.
+    const sonny3026_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny3026_profile_txn_control.zig"), .target = target, .optimize = optimize });
+    sonny3026_test_mod.link_libc = true;
+    sonny3026_test_mod.addImport("geode", root_mod);
+    sonny3026_test_mod.addImport("schema", schema_mod);
+    sonny3026_test_mod.addImport("protobuf", protobuf_mod);
+    sonny3026_test_mod.addImport("grpc_impl", sonny1560_shim_mod);
+    sonny3026_test_mod.addImport("logging", logging_mod);
+    sonny3026_test_mod.addImport("transport/quic", transport_quic_mod);
+    const sonny3026_tests = b.addTest(.{ .root_module = sonny3026_test_mod });
+    const run_sonny3026_tests = b.addRunArtifact(sonny3026_tests);
+    run_sonny3026_tests.step.dependOn(&install_geode_exe.step);
+    shardDep(test_step, &run_sonny3026_tests.step, 1, test_shard_loads, test_shard_index);
+    const sonny3026_step = b.step("test-sonny3026-profile-txn-control", "Run SONNY-3026 regression (EXPLAIN and PROFILE of START TRANSACTION, COMMIT, ROLLBACK, a session statement or graph selection are refused, 0A000, and leave the session's transaction and graph as they were; gRPC in process and QUIC against a spawned server)");
+    sonny3026_step.dependOn(&run_sonny3026_tests.step);
+
     // SONNY-2790: the fulltext statements (CREATE/DROP INDEX, geode.fts.*)
     // run on the default graph, so the handlers lock `default` for them from
     // any session. Classifier, and the real gRPC handler (SONNY-1560 shim).
