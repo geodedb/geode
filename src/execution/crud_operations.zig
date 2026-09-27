@@ -4147,6 +4147,19 @@ fn clusterReplicateDelete(
     const targets = try resolveDeleteTargets(allocator, d, match_pattern, context);
     defer targets.deinit(allocator);
 
+    // CANARY: REQ=REQ-SONNY-3044-CLUSTER-DELETE-RETURN; FEATURE="DistributedCluster"; ASPECT=DeleteReturnBeforePropose; STATUS=TESTED; TEST=tests/test_cluster_replicable_mutations.zig; OWNER=distributed; UPDATED=2026-09-27
+    // SONNY-3044: the RETURN, computed over the rows the statement matches
+    // before anything is proposed, exactly as a standalone server computes
+    // it (`deleteStatementReturn`). The leader returned `deleted_count`
+    // whatever the RETURN asked for, so a cluster answered differently from
+    // a standalone server; a RETURN it refuses (a deleted element) is refused
+    // before the delete is proposed.
+    var returned: ?ExecutionResult = null;
+    errdefer if (returned) |*r| r.deinit(allocator);
+    if (d.return_clause) |rc| if (rc.items.len != 0) {
+        returned = try deleteStatementReturn(allocator, d, match_pattern, rc, current_graph, context, targets);
+    };
+
     // Resolved, deduplicated id sets to encode into the GDEL payload.
     var node_ids = std.ArrayList(u64).empty;
     defer node_ids.deinit(allocator);
@@ -4179,8 +4192,6 @@ fn clusterReplicateDelete(
         edge_ids.items.len > cluster_replication.MAX_DELETE_IDS)
         return error.ClusterWriteNotReplicable;
 
-    const deleted_count = node_ids.items.len + edge_ids.items.len;
-
     const payload = cluster_replication.serializeDelete(
         allocator,
         filter_graph,
@@ -4209,20 +4220,7 @@ fn clusterReplicateDelete(
     // budget — never for a committed-but-apply-lagged entry.
     try coord.waitForCommittedThenApplied(idx, 5000);
 
-    // RETURN clause: mirror the local path's "deleted_count" projection.
-    if (d.return_clause) |_| {
-        var columns = try allocator.alloc([]const u8, 1);
-        columns[0] = try allocator.dupe(u8, "deleted_count");
-        var rows = try allocator.alloc([]Value, 1);
-        var row = try allocator.alloc(Value, 1);
-        row[0] = Value{ .Int = @intCast(deleted_count) };
-        rows[0] = row;
-        return ExecutionResult{
-            .columns = columns,
-            .rows = rows,
-            .flags = std.ArrayList([]const u8).empty,
-        };
-    }
+    if (returned) |r| return r;
 
     return ExecutionResult{
         .columns = try allocator.alloc([]const u8, 0),
