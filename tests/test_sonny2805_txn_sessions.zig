@@ -24,8 +24,8 @@
 // Now the undo log records a change only for a thread in a transaction,
 // rolls back nothing for a thread with none, and keeps savepoints per
 // transaction. The handlers put the session's transaction on the thread for
-// each request and take it back after (`ServerState.enterUndoTxn`,
-// `leaveUndoTxn`). They follow transaction control in program order, run a
+// each request and take it back after (`ServerState.enterSessionTxn`,
+// `leaveSessionTxn`). They follow transaction control in program order, run a
 // program that ends a transaction under that transaction's graph's write
 // lock, and roll a failed transaction back themselves, under that lock,
 // after the request's own lock is released.
@@ -554,8 +554,8 @@ test "SONNY-2805: after every request the handler's transaction and the undo log
     {
         var state = ServerState{ .allocator = testing.allocator };
         state.in_txn = true;
-        state.enterUndoTxn();
-        state.leaveUndoTxn();
+        const scope = state.enterSessionTxn();
+        state.leaveSessionTxn(scope);
         try testing.expect(!state.in_txn);
         try testing.expectEqual(@as(u64, 0), state.txn_id);
     }
@@ -563,10 +563,10 @@ test "SONNY-2805: after every request the handler's transaction and the undo log
     // session's: its entries go, and its change stands.
     {
         var state = ServerState{ .allocator = testing.allocator };
-        state.enterUndoTxn();
+        const scope = state.enterSessionTxn();
         log.begin();
         try log.logCreateNode(id, "default");
-        state.leaveUndoTxn();
+        state.leaveSessionTxn(scope);
         try testing.expect(!state.in_txn);
         try testing.expectEqual(@as(u64, 0), state.txn_id);
         try testing.expectEqual(@as(u64, 0), txn_undo_log.currentThreadTxnId());
@@ -674,7 +674,7 @@ fn readSource(allocator: std.mem.Allocator, path: []const u8) ![]u8 {
 test "SONNY-2799: the QUIC handler serves each message in its session's transaction, and audits the graph a request ran on (source text)" {
     const src = try readSource(testing.allocator, "src/server/quic_connection_handler.zig");
     defer testing.allocator.free(src);
-    try testing.expect(std.mem.indexOf(u8, src, "state.enterUndoTxn();\n    defer state.leaveUndoTxn();") != null);
+    try testing.expect(std.mem.indexOf(u8, src, "const txn_scope = state.enterSessionTxn();\n    defer state.leaveSessionTxn(txn_scope);") != null);
     // The audit logger was picked by `state.current_graph`, the copy synced
     // after a request: the graph of the request before.
     try testing.expectEqual(@as(usize, 0), std.mem.count(u8, src, "auditQueryExecution(state,"));

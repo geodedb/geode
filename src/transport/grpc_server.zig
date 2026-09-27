@@ -425,6 +425,12 @@ fn deinitServerState(state: *server_state.ServerState) void {
     // GAP-0285: Also clear per-thread audit tenant_id.
     audit_mod.setCurrentAuditTenantId(null);
 
+    // CANARY: REQ=REQ-SONNY-2823-SESSION-ENGINE-TXN; FEATURE="TransactionManagement"; ASPECT=GrpcTeardown; STATUS=TESTED; TEST=tests/test_sonny2823_session_engine_txn.zig; OWNER=storage; UPDATED=2026-09-26
+    // SONNY-2823: a session that ends with a transaction open rolls it back,
+    // and aborts its engine transaction, as QUIC's stream close does. Its
+    // undo entries stayed in the log, and its engine transaction on a
+    // worker thread.
+    if (state.in_txn or state.session_engine_txn.open) state.rollBackTransaction(state.sessionGraph());
     state.resetResult();
     state.clearTxnGraph(); // SONNY-2776
     if (state.exec_session) |*sess| sess.deinit();
@@ -462,7 +468,8 @@ fn invalidateAuthenticatedSession(allocator: std.mem.Allocator, state: *server_s
     // SONNY-2776: under the write lock of the graph the transaction changed
     // (`current_graph` is never set on gRPC, so this used to lock `default`).
     // SONNY-2799: the session's own undo transaction, whatever this thread's.
-    if (state.in_txn) state.rollBackTransaction(state.sessionGraph(), false);
+    // SONNY-2823: and its engine transaction.
+    if (state.in_txn or state.session_engine_txn.open) state.rollBackTransaction(state.sessionGraph());
     state.endTransaction();
     state.current_user_id = null;
     if (state.authenticated_user) |u| {
@@ -503,10 +510,10 @@ fn authorizeAdminSession(session_id: []const u8, allocator: std.mem.Allocator) !
     entry.mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
     defer entry.mutex.unlock(std.Io.Threaded.global_single_threaded.io());
     const state = entry.state;
-    // SONNY-2799: the session's undo-log transaction is this thread's for the
-    // request, whichever worker thread serves it.
-    state.enterUndoTxn();
-    defer state.leaveUndoTxn();
+    // SONNY-2799, SONNY-2823: the session's undo-log and engine transactions
+    // are this thread's for the request, whichever worker thread serves it.
+    const txn_scope = state.enterSessionTxn();
+    defer state.leaveSessionTxn(txn_scope);
 
     switch (try validateSessionAuth(allocator, state)) {
         .ok => {},
@@ -670,7 +677,7 @@ fn buildOrderKeys(
 /// after it: after `COMMIT; START TRANSACTION; ...` the handler had no
 /// transaction and the executor had begun one, so the next change of another
 /// graph escaped the one-graph rule, and the client's ROLLBACK did nothing.
-/// The transaction's id is the undo log's (`ServerState.leaveUndoTxn`). A
+/// The transaction's id is the undo log's (`ServerState.leaveSessionTxn`). A
 /// transaction the handler holds and the undo log does not is begun, so its
 /// changes are recorded.
 fn updateTxnStateFromProgram(state: *server_state.ServerState, program: *const gql_ast.Program, write_graph: ?[]const u8) void {
@@ -703,7 +710,7 @@ fn abortFailedTransaction(state: *server_state.ServerState, request_graph: []con
     const open = txn_undo_log.currentThreadTxnId();
     if (open != 0) {
         state.txn_id = open;
-        state.rollBackTransaction(request_graph, false);
+        state.rollBackTransaction(request_graph);
     } else if (state.in_txn) {
         state.endTransaction();
     }
@@ -982,10 +989,10 @@ fn buildStreamDataPage(session_id: []const u8, allocator: std.mem.Allocator) !Pa
     entry.mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
     defer entry.mutex.unlock(std.Io.Threaded.global_single_threaded.io());
     const state = entry.state;
-    // SONNY-2799: the session's undo-log transaction is this thread's for the
-    // request, whichever worker thread serves it.
-    state.enterUndoTxn();
-    defer state.leaveUndoTxn();
+    // SONNY-2799, SONNY-2823: the session's undo-log and engine transactions
+    // are this thread's for the request, whichever worker thread serves it.
+    const txn_scope = state.enterSessionTxn();
+    defer state.leaveSessionTxn(txn_scope);
 
     const result_ptr = if (state.active_result_values) |*res| res else {
         var resp = try buildErrorResponse(allocator, "02000", "No active result set", &.{}, &.{});
@@ -2385,10 +2392,10 @@ pub fn handleExecute(request_bytes: []const u8, allocator: std.mem.Allocator, ep
     entry.mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
     defer entry.mutex.unlock(std.Io.Threaded.global_single_threaded.io());
     const state = entry.state;
-    // SONNY-2799: the session's undo-log transaction is this thread's for the
-    // request, whichever worker thread serves it.
-    state.enterUndoTxn();
-    defer state.leaveUndoTxn();
+    // SONNY-2799, SONNY-2823: the session's undo-log and engine transactions
+    // are this thread's for the request, whichever worker thread serves it.
+    const txn_scope = state.enterSessionTxn();
+    defer state.leaveSessionTxn(txn_scope);
 
     state.resetResult();
     // SONNY-1560: a new statement invalidates any in-flight pushed stream on
@@ -3352,10 +3359,10 @@ pub fn handlePull(request_bytes: []const u8, allocator: std.mem.Allocator) ![]u8
     entry.mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
     defer entry.mutex.unlock(std.Io.Threaded.global_single_threaded.io());
     const state = entry.state;
-    // SONNY-2799: the session's undo-log transaction is this thread's for the
-    // request, whichever worker thread serves it.
-    state.enterUndoTxn();
-    defer state.leaveUndoTxn();
+    // SONNY-2799, SONNY-2823: the session's undo-log and engine transactions
+    // are this thread's for the request, whichever worker thread serves it.
+    const txn_scope = state.enterSessionTxn();
+    defer state.leaveSessionTxn(txn_scope);
 
     switch (try validateSessionAuth(allocator, state)) {
         .ok => {},
@@ -3458,10 +3465,10 @@ pub fn handleBegin(request_bytes: []const u8, allocator: std.mem.Allocator) ![]u
     entry.mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
     defer entry.mutex.unlock(std.Io.Threaded.global_single_threaded.io());
     const state = entry.state;
-    // SONNY-2799: the session's undo-log transaction is this thread's for the
-    // request, whichever worker thread serves it.
-    state.enterUndoTxn();
-    defer state.leaveUndoTxn();
+    // SONNY-2799, SONNY-2823: the session's undo-log and engine transactions
+    // are this thread's for the request, whichever worker thread serves it.
+    const txn_scope = state.enterSessionTxn();
+    defer state.leaveSessionTxn(txn_scope);
 
     switch (try validateSessionAuth(allocator, state)) {
         .ok => {},
@@ -3480,7 +3487,7 @@ pub fn handleBegin(request_bytes: []const u8, allocator: std.mem.Allocator) ![]u
     state.in_txn = true;
     state.session_snapshot_ts = state.global_commit_ts;
     // SONNY-2799: the transaction's id is its undo-log transaction's, which
-    // the session keeps across requests (`leaveUndoTxn`).
+    // the session keeps across requests (`leaveSessionTxn`).
     txn_undo_log.getGlobalUndoLog(allocator).begin();
     state.txn_id = txn_undo_log.currentThreadTxnId();
 
@@ -3520,10 +3527,10 @@ pub fn handleCommit(request_bytes: []const u8, allocator: std.mem.Allocator) ![]
     entry.mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
     defer entry.mutex.unlock(std.Io.Threaded.global_single_threaded.io());
     const state = entry.state;
-    // SONNY-2799: the session's undo-log transaction is this thread's for the
-    // request, whichever worker thread serves it.
-    state.enterUndoTxn();
-    defer state.leaveUndoTxn();
+    // SONNY-2799, SONNY-2823: the session's undo-log and engine transactions
+    // are this thread's for the request, whichever worker thread serves it.
+    const txn_scope = state.enterSessionTxn();
+    defer state.leaveSessionTxn(txn_scope);
 
     switch (try validateSessionAuth(allocator, state)) {
         .ok => {},
@@ -3542,6 +3549,11 @@ pub fn handleCommit(request_bytes: []const u8, allocator: std.mem.Allocator) ![]
 
         const store_ptr = graph_store.getGlobalStore(allocator);
         txn_undo_log.getGlobalUndoLog(allocator).commit(store_ptr);
+        // CANARY: REQ=REQ-SONNY-2823-SESSION-ENGINE-TXN; FEATURE="TransactionManagement"; ASPECT=GrpcCommit; STATUS=TESTED; TEST=tests/test_sonny2823_session_engine_txn.zig; OWNER=storage; UPDATED=2026-09-26
+        // SONNY-2823: and the session's engine transaction. gRPC never
+        // committed it: the transaction's writes on its shard had no COMMIT
+        // record, and were gone after a crash.
+        state.commitEngineTxn();
 
         state.global_commit_ts += 1;
         state.endTransaction();
@@ -3581,10 +3593,10 @@ pub fn handleRollback(request_bytes: []const u8, allocator: std.mem.Allocator) !
     entry.mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
     defer entry.mutex.unlock(std.Io.Threaded.global_single_threaded.io());
     const state = entry.state;
-    // SONNY-2799: the session's undo-log transaction is this thread's for the
-    // request, whichever worker thread serves it.
-    state.enterUndoTxn();
-    defer state.leaveUndoTxn();
+    // SONNY-2799, SONNY-2823: the session's undo-log and engine transactions
+    // are this thread's for the request, whichever worker thread serves it.
+    const txn_scope = state.enterSessionTxn();
+    defer state.leaveSessionTxn(txn_scope);
 
     switch (try validateSessionAuth(allocator, state)) {
         .ok => {},
@@ -3597,13 +3609,9 @@ pub fn handleRollback(request_bytes: []const u8, allocator: std.mem.Allocator) !
     if (state.in_txn) {
         // SONNY-2776: the rollback changes the store back; it took no lock.
         // It now holds the write lock of the graph the transaction changed.
-        const rb_lock = graph_store.acquireGraphWriteLock(state.txnLockGraph(state.sessionGraph()));
-        defer graph_store.releaseGraphLock(rb_lock);
-        const store_ptr = graph_store.getGlobalStore(allocator);
-        txn_undo_log.getGlobalUndoLog(allocator).rollback(store_ptr) catch |err| {
-            log.err("Rollback failed", &.{Attr.string("error", @errorName(err))});
-        };
-        state.endTransaction();
+        // SONNY-2823: `rollBackTransaction` aborts the session's engine
+        // transaction first, which gRPC never did.
+        state.rollBackTransaction(state.sessionGraph());
         const resp = schema.RollbackResponse{ .success = true };
         return encodeMessage(allocator, resp);
     }
@@ -3644,10 +3652,10 @@ fn handleSavepoint(request_bytes: []const u8, allocator: std.mem.Allocator) ![]u
     entry.mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
     defer entry.mutex.unlock(std.Io.Threaded.global_single_threaded.io());
     const state = entry.state;
-    // SONNY-2799: the session's undo-log transaction is this thread's for the
-    // request, whichever worker thread serves it.
-    state.enterUndoTxn();
-    defer state.leaveUndoTxn();
+    // SONNY-2799, SONNY-2823: the session's undo-log and engine transactions
+    // are this thread's for the request, whichever worker thread serves it.
+    const txn_scope = state.enterSessionTxn();
+    defer state.leaveSessionTxn(txn_scope);
 
     switch (try validateSessionAuth(allocator, state)) {
         .ok => {},
@@ -3698,10 +3706,10 @@ fn handleRollbackTo(request_bytes: []const u8, allocator: std.mem.Allocator) ![]
     entry.mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
     defer entry.mutex.unlock(std.Io.Threaded.global_single_threaded.io());
     const state = entry.state;
-    // SONNY-2799: the session's undo-log transaction is this thread's for the
-    // request, whichever worker thread serves it.
-    state.enterUndoTxn();
-    defer state.leaveUndoTxn();
+    // SONNY-2799, SONNY-2823: the session's undo-log and engine transactions
+    // are this thread's for the request, whichever worker thread serves it.
+    const txn_scope = state.enterSessionTxn();
+    defer state.leaveSessionTxn(txn_scope);
 
     switch (try validateSessionAuth(allocator, state)) {
         .ok => {},

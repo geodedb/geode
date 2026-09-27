@@ -1,5 +1,6 @@
 const std = @import("std");
 const txn_undo_log = @import("../txn_undo_log.zig");
+const gsa = @import("../storage/graph_storage_adapter.zig");
 
 // CANARY: REQ=REQ-SERVER-REFACTOR-001; FEATURE="ServerRefactoring"; ASPECT=SERVER_STATE; STATUS=EXEMPT; OWNER=refactor; UPDATED=2026-01-09
 // Phase 3 M3.1 - Server State Management Module (Complete)
@@ -288,15 +289,15 @@ pub const ServerState = struct {
     // write lock. They used to take `current_graph`'s, which gRPC never
     // set (so always `default`'s) and QUIC set to the session's latest graph.
     txn_graph: ?[]const u8 = null,
-    // R9 (2026-04-22): per-connection storage for the session-scoped
-    // engine transaction opened on Geode BEGIN TX.  Lives on the
-    // ServerState because the adapter's thread-local holds a pointer
-    // into this struct (which must outlive every statement in the
-    // Geode txn).  The field is populated in the BEGIN TX handler and
-    // cleared on COMMIT / ROLLBACK; holding a spare copy when no txn
-    // is active is harmless — the adapter checks `t_session_engine_txn`
-    // (not this field) to decide whether a session txn is open.
-    session_engine_txn_storage: @import("../storage/graph_storage_adapter.zig").StatementTxn = undefined,
+    // CANARY: REQ=REQ-SONNY-2823-SESSION-ENGINE-TXN; FEATURE="TransactionManagement"; ASPECT=SessionState; STATUS=TESTED; TEST=tests/test_sonny2823_session_engine_txn.zig; OWNER=storage; UPDATED=2026-09-26
+    // SONNY-2823: the session's engine transaction (R9), opened by the
+    // executor on the transaction's first change in a program and committed
+    // when that program returns (a ROLLBACK aborts it first). On a thread
+    // only while a request of the session runs there (`enterSessionTxn`). It
+    // lived in a thread-local until the Geode transaction's COMMIT, which on
+    // gRPC and as a statement never ended it, and the next session on the
+    // thread joined it. See `graph_storage_adapter.SessionEngineTxn`.
+    session_engine_txn: gsa.SessionEngineTxn = .{},
     allocator: std.mem.Allocator,
     // Storage corruption state flags captured at startup (e.g. checksum mismatch on persisted page load).
     storage_checksum_error: bool = false,
@@ -430,58 +431,97 @@ pub const ServerState = struct {
         self.clearTxnGraph();
     }
 
+    /// SONNY-2799, SONNY-2823: what `enterSessionTxn` changed on the thread.
+    pub const SessionTxnScope = struct {
+        engine: gsa.SessionEngineTxnScope,
+        /// The thread's undo-log transaction before (0 for none; another
+        /// session's when this one's teardown runs inside that session's
+        /// request). `leaveSessionTxn` puts it back.
+        prev_undo_txn: u64 = 0,
+    };
+
     // CANARY: REQ=REQ-SONNY-2799-SESSION-UNDO-TXN; FEATURE="TransactionUndoLog"; ASPECT=PerSession; STATUS=TESTED; TEST=tests/test_sonny2805_txn_sessions.zig; OWNER=engine; UPDATED=2026-09-26
-    /// SONNY-2799: make the session's transaction the undo log's transaction
-    /// on this thread, for one request; `leaveUndoTxn` takes it back.
-    /// `txn_id` is the undo log's id for the session's open transaction (0 for
-    /// none). The undo log records each change under the calling thread's
-    /// transaction, and a session's requests run on any worker thread (gRPC's
-    /// do). A change was recorded under whatever the thread last held (another
-    /// session's transaction, or none), and COMMIT and ROLLBACK found another
-    /// set of entries than the transaction's own.
-    pub fn enterUndoTxn(self: *ServerState) void {
+    // CANARY: REQ=REQ-SONNY-2823-SESSION-ENGINE-TXN; FEATURE="TransactionManagement"; ASPECT=PerRequestInstall; STATUS=TESTED; TEST=tests/test_sonny2823_session_engine_txn.zig; OWNER=storage; UPDATED=2026-09-26
+    /// Make the session's transactions this thread's for one request:
+    /// - SONNY-2799: its undo-log transaction (`txn_id`, 0 for none). The
+    ///   undo log records each change under the calling thread's
+    ///   transaction, and a session's requests run on any worker thread.
+    /// - SONNY-2823: its engine transaction (`session_engine_txn`), which
+    ///   the executor opens on the transaction's first change in a program
+    ///   and commits when that program returns, under the request's lock.
+    /// `leaveSessionTxn` takes them back, and gives the thread back what it
+    /// held before. Entering again inside the session's own request (a
+    /// rollback there) changes nothing.
+    pub fn enterSessionTxn(self: *ServerState) SessionTxnScope {
+        const engine = gsa.enterSessionEngineTxn(&self.session_engine_txn);
+        if (engine.nested) return .{ .engine = engine };
+        const prev_undo_txn = txn_undo_log.currentThreadTxnId();
         txn_undo_log.setThreadTxnId(self.txn_id);
+        return .{ .engine = engine, .prev_undo_txn = prev_undo_txn };
     }
 
-    /// SONNY-2799: after a request, the session's transaction is whatever
-    /// the undo log's transaction on this thread is now (a START TRANSACTION,
-    /// COMMIT or ROLLBACK in the request moves it); the thread is left with
-    /// none, for the next session it serves.
-    pub fn leaveUndoTxn(self: *ServerState) void {
+    /// After a request, the session's transaction is whatever the undo log's
+    /// transaction on this thread is now (a START TRANSACTION, COMMIT or
+    /// ROLLBACK in the request moves it); the thread is left with neither of
+    /// the session's transactions, for the next session it serves.
+    pub fn leaveSessionTxn(self: *ServerState, scope: SessionTxnScope) void {
         self.txn_id = txn_undo_log.currentThreadTxnId();
-        txn_undo_log.setThreadTxnId(0);
-        // The handler's transaction and the undo log's agree after every
-        // request. A transaction the undo log no longer has is over. One the
-        // handler never took up (a request that failed after its START
-        // TRANSACTION ran) is not the session's: its changes stand, as
-        // autocommit changes, and its entries go.
-        if (self.in_txn and self.txn_id == 0) {
-            self.endTransaction();
-        } else if (!self.in_txn and self.txn_id != 0) {
-            txn_undo_log.getGlobalUndoLog(self.allocator).discardTxn(self.txn_id);
-            self.txn_id = 0;
+        if (!scope.engine.nested) {
+            txn_undo_log.setThreadTxnId(scope.prev_undo_txn);
+            // The handler's transaction and the undo log's agree after every
+            // request. A transaction the undo log no longer has is over. One
+            // the handler never took up (a request that failed after its
+            // START TRANSACTION ran) is not the session's: its changes stand,
+            // as autocommit changes, and its entries go.
+            if (self.in_txn and self.txn_id == 0) {
+                self.endTransaction();
+            } else if (!self.in_txn and self.txn_id != 0) {
+                txn_undo_log.getGlobalUndoLog(self.allocator).discardTxn(self.txn_id);
+                self.txn_id = 0;
+            }
         }
+        // SONNY-2823: and no engine transaction outlives the request (one
+        // left open is committed there).
+        gsa.leaveSessionEngineTxn(&self.session_engine_txn, scope.engine);
     }
 
+    /// SONNY-2823: commit the session's engine transaction, where its undo
+    /// transaction commits (the COMMIT RPC). The program that opened it
+    /// committed it already; this is the backstop. Called inside the
+    /// session's request. A failed commit is logged: the undo transaction is
+    /// committed already.
+    pub fn commitEngineTxn(self: *ServerState) void {
+        _ = self;
+        gsa.commitThreadSessionTxn() catch |err| {
+            std.log.err("session engine transaction commit failed: {s}", .{@errorName(err)});
+        };
+    }
+
+    // CANARY: REQ=REQ-SONNY-2823-SESSION-ENGINE-TXN; FEATURE="TransactionManagement"; ASPECT=RollBack; STATUS=TESTED; TEST=tests/test_sonny2823_session_engine_txn.zig; OWNER=storage; UPDATED=2026-09-26
     /// SONNY-2799: undo the session's transaction (`txn_id`) and end it,
     /// under the write lock of the graph it changed (`fallback_graph` when it
-    /// changed none). The caller holds no graph lock. With
-    /// `abort_engine_txn`, the storage adapter's session engine transaction
-    /// on this thread is aborted first, as QUIC's ROLLBACK does (R9; only
-    /// QUIC serves a session on one thread).
-    pub fn rollBackTransaction(self: *ServerState, fallback_graph: []const u8, abort_engine_txn: bool) void {
+    /// changed none). The caller holds no graph lock.
+    ///
+    /// SONNY-2823: the session's engine transaction is aborted first, from
+    /// any thread and outside a request too (a session's teardown). It was
+    /// the thread's, so gRPC could not abort it at all. With no store left
+    /// (a teardown after the store's), the transaction is forgotten.
+    pub fn rollBackTransaction(self: *ServerState, fallback_graph: []const u8) void {
         const graph_store_mod = @import("../graph_store.zig");
-        if (self.txn_id != 0) {
-            const lock = graph_store_mod.acquireGraphWriteLock(self.txnLockGraph(fallback_graph));
-            defer graph_store_mod.releaseGraphLock(lock);
-            if (abort_engine_txn) {
-                if (graph_store_mod.getGlobalAdapter()) |ad| ad.abortSessionTxn();
+        if (self.txn_id != 0 or self.session_engine_txn.open) {
+            if (graph_store_mod.getCurrentGlobalStore() != null) {
+                const lock = graph_store_mod.acquireGraphWriteLock(self.txnLockGraph(fallback_graph));
+                defer graph_store_mod.releaseGraphLock(lock);
+                const scope = self.enterSessionTxn();
+                defer self.leaveSessionTxn(scope);
+                gsa.abortThreadSessionTxn();
+                txn_undo_log.getGlobalUndoLog(self.allocator).rollback(graph_store_mod.getWritableGlobalStore(self.allocator)) catch |err| {
+                    std.log.warn("transaction rollback failed: {s}", .{@errorName(err)});
+                };
+            } else {
+                txn_undo_log.getGlobalUndoLog(self.allocator).discardTxn(self.txn_id);
+                self.session_engine_txn.open = false;
             }
-            txn_undo_log.setThreadTxnId(self.txn_id);
-            txn_undo_log.getGlobalUndoLog(self.allocator).rollback(graph_store_mod.getWritableGlobalStore(self.allocator)) catch |err| {
-                std.log.warn("transaction rollback failed: {s}", .{@errorName(err)});
-            };
-            txn_undo_log.setThreadTxnId(0);
         }
         self.endTransaction();
     }
@@ -544,49 +584,31 @@ pub const ServerState = struct {
         self: *ServerState,
         store: ?*@import("../graph_store.zig").GraphStore,
     ) !void {
-        const graph_store_mod = @import("../graph_store.zig");
-
-        if (!self.in_txn) return;
+        if (!self.in_txn and !self.session_engine_txn.open) return;
 
         const orphan_txn_id = self.txn_id;
         // SONNY-2776: the graph the transaction changed.
-        const graph_name = self.txnLockGraph(self.sessionGraph());
+        std.log.warn("orphan-txn rolled back on stream close (txn_id={d}, graph={s})", .{
+            orphan_txn_id,
+            self.txnLockGraph(self.sessionGraph()),
+        });
 
-        if (store) |s| {
-            // Lock tier 1 (store_mutex / per-graph rwlock) BEFORE touching
-            // the undo log (tier order preserved).  Caller paths that
-            // already hold a per-graph write lock must either not call
-            // this hook, or call it before dropping their lock (none of
-            // the current call sites hold one).
-            const lock_handle = graph_store_mod.acquireGraphWriteLock(graph_name);
-            defer graph_store_mod.releaseGraphLock(lock_handle);
-
-            // Stamp this thread so the per-txn rollback filter finds the
-            // entries that were recorded by the (potentially different)
-            // stream worker thread.  Without this step the R1 per-txn
-            // filter would skip them as belonging to another thread's
-            // transaction.
-            txn_undo_log.setThreadTxnId(orphan_txn_id);
-            defer txn_undo_log.setThreadTxnId(0);
-
-            txn_undo_log.getGlobalUndoLog(self.allocator).rollback(s) catch |err| {
-                std.log.warn("orphan-txn rollback on stream close failed: {s}", .{@errorName(err)});
-            };
-        } else {
+        if (store == null) {
             // No store — just purge the undo entries that belong to the
             // orphaned transaction so they don't leak or get picked up
             // by a peer transaction's rollback.
             // SONNY-2799: this transaction's entries only (`txn_id` is its
             // undo-log id); `clear()` wiped every session's.
             txn_undo_log.getGlobalUndoLog(self.allocator).discardTxn(orphan_txn_id);
+            self.session_engine_txn.open = false;
+            self.endTransaction();
+            return;
         }
-
-        std.log.warn("orphan-txn rolled back on stream close (txn_id={d}, graph={s})", .{
-            orphan_txn_id,
-            graph_name,
-        });
-
-        self.endTransaction();
+        // SONNY-2823: through `rollBackTransaction`, which also aborts the
+        // session's engine transaction (the teardown left it open on the
+        // stream's pooled thread) and takes the transaction graph's write
+        // lock (lock tier 1 before the undo log).
+        self.rollBackTransaction(self.sessionGraph());
     }
 };
 

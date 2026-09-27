@@ -2781,14 +2781,125 @@ threadlocal var t_current_statement_txn: ?*StatementTxn = null;
 // per-statement slot first, then falls back to the session slot.
 threadlocal var t_session_engine_txn: ?*StatementTxn = null;
 
-// R9 (2026-04-22, lazy variant): backing storage for the session
-// engine txn when the executor opens it lazily (on the first mutation
-// inside a Geode txn) and therefore has no `ServerState.session_engine_txn_storage`
-// pointer in scope.  Lives in thread-local so the backing slot is
-// automatically per-session (one QUIC stream = one thread).  Populated
-// by `beginSessionTxnLazy`; cleared by `commitSessionTxn` /
-// `abortSessionTxn`.
-threadlocal var t_session_engine_txn_storage_lazy: StatementTxn = undefined;
+// CANARY: REQ=REQ-SONNY-2823-SESSION-ENGINE-TXN; FEATURE="TransactionManagement"; ASPECT=SessionSlot; STATUS=TESTED; TEST=tests/test_sonny2823_session_engine_txn.zig; OWNER=storage; UPDATED=2026-09-27
+/// SONNY-2823: a session's engine transaction (R9). It lives in the session
+/// (`ServerState.session_engine_txn`), is on a thread only while one of the
+/// session's requests runs there (`enterSessionEngineTxn` /
+/// `leaveSessionEngineTxn`), and never outlives the program that opened it:
+/// the executor commits it when its outermost entry point returns, under the
+/// request's graph lock, unless a ROLLBACK aborted it first.
+///
+/// R9 opened the transaction into a thread-local slot and kept it open until
+/// the Geode transaction's COMMIT, as if one thread served one session. gRPC
+/// serves a session's requests on any worker thread, and QUIC's cooperative
+/// scheduler and mutation offload pool serve many sessions on one thread.
+/// And only QUIC's COMMIT and ROLLBACK messages ended it. So it stayed open
+/// on the thread: a committed transaction's writes on its shard had no
+/// COMMIT record, and every later write on that thread, from any session,
+/// joined it and was lost with it.
+///
+/// It does not span requests either. An engine transaction holds its shard
+/// WAL's record batch from `begin` to commit (GAP-0900), so the page images
+/// it logged are appended at commit, after the images other transactions
+/// logged and committed in between. Recovery replays in log order, so its
+/// older image of a shared page overwrote their newer one, and a crash lost
+/// their committed writes. Inside one program the request's graph write lock
+/// keeps every other writer off the graph.
+pub const SessionEngineTxn = struct {
+    txn: StatementTxn = undefined,
+    /// The UUID of the graph `txn` was opened on: DROP GRAPH frees the
+    /// graph's `ManagedGraph` (`txn.mg`) whatever is open on it, and a graph
+    /// created again may reuse the address, never the UUID.
+    graph_uuid: [16]u8 = undefined,
+    /// `txn` is an open engine transaction. Kept by `beginSessionTxnLazy`
+    /// and the commit and abort functions.
+    open: bool = false,
+};
+
+/// SONNY-2823: the session slot installed on this thread, or null. With none,
+/// no session engine transaction is opened (`beginSessionTxnLazy`), and a
+/// transaction's statements use per-statement engine transactions (R8).
+threadlocal var t_session_engine_slot: ?*SessionEngineTxn = null;
+
+/// SONNY-2823: what `enterSessionEngineTxn` changed on the thread.
+pub const SessionEngineTxnScope = struct {
+    prev: ?*SessionEngineTxn = null,
+    /// The slot was already installed (a rollback or teardown inside the
+    /// session's own request): the matching leave changes nothing.
+    nested: bool = false,
+};
+
+/// SONNY-2823: install `slot` on this thread for one request of its session.
+pub fn enterSessionEngineTxn(slot: *SessionEngineTxn) SessionEngineTxnScope {
+    if (t_session_engine_slot == slot) return .{ .prev = slot, .nested = true };
+    const prev = t_session_engine_slot;
+    t_session_engine_slot = slot;
+    t_session_engine_txn = if (slot.open) &slot.txn else null;
+    return .{ .prev = prev };
+}
+
+/// SONNY-2823: the request is over. The thread keeps no session engine
+/// transaction, and no per-statement one either: neither may outlive the
+/// request on a pooled thread, where the next request's writes, from any
+/// session, would join it.
+pub fn leaveSessionEngineTxn(slot: *SessionEngineTxn, scope: SessionEngineTxnScope) void {
+    if (scope.nested) return;
+    if (slot.open and t_session_engine_txn == &slot.txn) {
+        // The executor commits it when the program that opened it returns;
+        // one still open is a bug. Its changes stand in memory, as an undo
+        // transaction's do until it is undone, so it is committed.
+        log.err("a session engine txn outlived its request; committing it", .{});
+        commitThreadSessionTxn() catch |err| {
+            log.err("session engine txn commit failed: {s}", .{@errorName(err)});
+        };
+    }
+    slot.open = false;
+    t_session_engine_slot = scope.prev;
+    t_session_engine_txn = if (scope.prev) |p| (if (p.open) &p.txn else null) else null;
+    if (scope.prev == null and t_current_statement_txn != null) {
+        // A statement opens its per-statement transaction in its own frame
+        // and ends it there, so one still set here is a bug, and its handle
+        // lives in a frame that has returned: it is not read. The thread
+        // forgets it; WAL recovery rolls back a transaction never committed.
+        log.err("a statement engine txn was left open at the end of a request; the thread forgets it", .{});
+        t_current_statement_txn = null;
+    }
+}
+
+/// SONNY-2823: take this thread's session engine transaction off the thread
+/// (and out of its slot), or null for none. Null too when its graph was
+/// dropped: the transaction went with the graph's engine, and `txn.mg`,
+/// freed, is not read.
+fn takeThreadSessionTxn() ?*StatementTxn {
+    const txn = t_session_engine_txn orelse return null;
+    t_session_engine_txn = null;
+    const slot = t_session_engine_slot orelse return txn;
+    if (&slot.txn != txn) return txn;
+    slot.open = false;
+    const ad = graph_store.getGlobalAdapter() orelse return null;
+    if (!ad.engineIsOpen(slot.txn.mg, slot.graph_uuid)) {
+        log.warn("the graph of a session engine txn was dropped; the txn went with it", .{});
+        return null;
+    }
+    return txn;
+}
+
+/// SONNY-2823: commit this thread's session engine transaction, if it has
+/// one: ONE WAL fsync for its writes on its shard.
+pub fn commitThreadSessionTxn() !void {
+    const txn = takeThreadSessionTxn() orelse return;
+    try txn.mg.engine.commitTxn(txn.txn_id);
+}
+
+/// SONNY-2823: abort this thread's session engine transaction, if it has
+/// one. Callers abort BEFORE the undo log replays, so the replay's own
+/// changes commit on their own and do not join the aborted transaction.
+pub fn abortThreadSessionTxn() void {
+    const txn = takeThreadSessionTxn() orelse return;
+    // error-policy: A — best-effort session rollback; WAL recovery
+    // supersedes a failed abort.
+    txn.mg.engine.abortTxn(txn.txn_id) catch {};
+}
 
 /// Return the thread-local statement txn if it targets `graph_name`; else null.
 /// Adapter mutation methods consult this to decide whether to batch into an
@@ -10553,32 +10664,46 @@ pub const StorageAdapter = struct {
     }
 
     /// R9: commit the session-scoped engine txn → ONE WAL fsync.
+    /// SONNY-2823: `commitThreadSessionTxn`, reporting a missing one.
     pub fn commitSessionTxn(self: *StorageAdapter) !void {
         _ = self;
-        const txn = t_session_engine_txn orelse return error.NoActiveSessionTxn;
-        t_session_engine_txn = null;
-        try txn.mg.engine.commitTxn(txn.txn_id);
+        if (t_session_engine_txn == null) return error.NoActiveSessionTxn;
+        try commitThreadSessionTxn();
     }
 
     /// R9: abort the session-scoped engine txn (no data-durability fsync).
     pub fn abortSessionTxn(self: *StorageAdapter) void {
         _ = self;
-        const txn = t_session_engine_txn orelse return;
-        t_session_engine_txn = null;
-        // error-policy: A — best-effort session rollback; WAL recovery
-        // supersedes a failed abort.
-        txn.mg.engine.abortTxn(txn.txn_id) catch {};
+        abortThreadSessionTxn();
     }
 
-    /// R9 (2026-04-22, lazy): open a session-scoped engine txn using the
-    /// thread-local `t_session_engine_txn_storage_lazy` backing slot.
-    /// Used by the executor when it encounters the first mutation in a
-    /// Geode BEGIN TX … COMMIT batch and has no direct pointer into
-    /// `ServerState.session_engine_txn_storage`.  The slot is
-    /// thread-local so it's naturally per-session (one QUIC stream handler
-    /// runs on one pool thread).
+    /// R9 (2026-04-22, lazy): open a session-scoped engine txn, for the
+    /// executor's first mutation in a Geode BEGIN TX … COMMIT.
+    ///
+    /// SONNY-2823: into the slot of the session whose request runs on this
+    /// thread; with no slot installed, `error.NoSessionEngineTxnSlot` (the
+    /// caller uses a per-statement transaction). It used a thread-local slot,
+    /// which outlived the request on a pooled thread.
     pub fn beginSessionTxnLazy(self: *StorageAdapter, graph_name: []const u8) !void {
-        try self.beginSessionTxn(graph_name, &t_session_engine_txn_storage_lazy);
+        const slot = t_session_engine_slot orelse return error.NoSessionEngineTxnSlot;
+        try self.beginSessionTxn(graph_name, &slot.txn);
+        slot.graph_uuid = slot.txn.mg.uuid;
+        slot.open = true;
+    }
+
+    /// SONNY-2823: is `mg`, of the graph with UUID `graph_uuid`, one of this
+    /// adapter's open graphs? `mg` is compared as a pointer first, and read
+    /// only once it is found in the map: it may have been freed with a
+    /// dropped graph. The UUID tells a graph created again at the freed
+    /// address from the one the transaction was opened on.
+    pub fn engineIsOpen(self: *StorageAdapter, mg: *const ManagedGraph, graph_uuid: [16]u8) bool {
+        self.mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
+        defer self.mutex.unlock(std.Io.Threaded.global_single_threaded.io());
+        var it = self.engines.valueIterator();
+        while (it.next()) |v| {
+            if (v.* == mg) return std.mem.eql(u8, &mg.uuid, &graph_uuid);
+        }
+        return false;
     }
 
     /// Acquire shared (read) locks on multiple named graphs simultaneously.

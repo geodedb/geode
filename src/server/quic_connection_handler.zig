@@ -6271,7 +6271,7 @@ fn syncGraphFromSession(state: *ServerState) void {
 /// ran them. A COMMIT or ROLLBACK used to end the transaction whatever came
 /// after it: after `COMMIT; START TRANSACTION; ...` the handler had no
 /// transaction and the executor had begun one. The transaction's id is the
-/// undo log's (`ServerState.leaveUndoTxn`). A transaction the handler holds
+/// undo log's (`ServerState.leaveSessionTxn`). A transaction the handler holds
 /// and the undo log does not is begun, so its changes are recorded.
 fn updateTxnStateFromProgram(state: *ServerState, program: *const gql_ast.Program, write_graph: ?[]const u8) void {
     for (program.statements) |*stmt| switch (stmt.*) {
@@ -6303,7 +6303,7 @@ fn abortFailedTransaction(state: *ServerState, request_graph: []const u8) void {
     const open = txn_undo_log.currentThreadTxnId();
     if (open != 0) {
         state.txn_id = open;
-        state.rollBackTransaction(request_graph, true);
+        state.rollBackTransaction(request_graph);
     } else if (state.in_txn) {
         state.endTransaction();
     }
@@ -6829,10 +6829,13 @@ fn handleClientMessage(
         }
     }
     // CANARY: REQ=REQ-SONNY-2799-SESSION-UNDO-TXN; FEATURE="TransactionUndoLog"; ASPECT=QuicPerMessage; STATUS=TESTED; TEST=tests/test_sonny2805_txn_sessions.zig; OWNER=engine; UPDATED=2026-09-26
-    // SONNY-2799: the session's undo-log transaction is this thread's for the
-    // message, and the thread holds none between messages.
-    state.enterUndoTxn();
-    defer state.leaveUndoTxn();
+    // CANARY: REQ=REQ-SONNY-2823-SESSION-ENGINE-TXN; FEATURE="TransactionManagement"; ASPECT=QuicPerMessage; STATUS=TESTED; TEST=tests/test_sonny2823_session_engine_txn.zig; OWNER=storage; UPDATED=2026-09-26
+    // SONNY-2799, SONNY-2823: the session's undo-log and engine transactions
+    // are this thread's for the message, and the thread holds neither between
+    // messages. The cooperative scheduler and the mutation offload pool serve
+    // many streams on one thread, and one stream on several.
+    const txn_scope = state.enterSessionTxn();
+    defer state.leaveSessionTxn(txn_scope);
     switch (msg) {
         .hello => |hello_req| {
             // SONNY-1835: record that this stream received its own HELLO, so a
@@ -8934,7 +8937,7 @@ fn handleClientMessage(
             state.in_txn = true;
             state.session_snapshot_ts = state.global_commit_ts;
             // SONNY-2799: the transaction's id is its undo-log transaction's,
-            // which the session keeps across messages (`leaveUndoTxn`).
+            // which the session keeps across messages (`leaveSessionTxn`).
             txn_undo_log.getGlobalUndoLog(gpa).begin();
             state.txn_id = txn_undo_log.currentThreadTxnId();
 
@@ -8983,6 +8986,8 @@ fn handleClientMessage(
                     // R9 (2026-04-22): commit the session-scoped engine
                     // txn that R8's per-statement shortcut joined during
                     // this batch — ONE fsync for the whole Geode txn.
+                    // SONNY-2823: the program that opened it committed it
+                    // when it returned; none spans messages. A backstop.
                     if (graph_store.getGlobalAdapter()) |ad| {
                         ad.commitSessionTxn() catch |err| switch (err) {
                             error.NoActiveSessionTxn => {},
@@ -9021,6 +9026,8 @@ fn handleClientMessage(
                 // R9 (2026-04-22): abort the session-scoped engine txn
                 // first so any pending WAL page records are discarded
                 // before the undo-log replay re-mutates the store.
+                // SONNY-2823: none spans messages (the program that opened
+                // it committed it); a backstop.
                 if (graph_store.getGlobalAdapter()) |ad| {
                     ad.abortSessionTxn();
                 }

@@ -8760,6 +8760,29 @@ pub fn build(b: *std.Build) void {
     const txn_undo_inline_step = b.step("test-txn-undo-log-inline", "Run the undo log's inline tests (undo log, savepoints) from the geode lib module, filtered");
     txn_undo_inline_step.dependOn(&run_txn_undo_inline_tests.step);
 
+    // SONNY-2823: the storage adapter's session engine transaction (R9) is
+    // the session's, on a thread only while one of its requests runs there,
+    // and never outlives the program that opened it. COMMIT and ROLLBACK
+    // (RPCs, messages, statements), a failed statement and teardown end the
+    // transaction. gRPC sessions interleaved on one worker thread in process
+    // (SONNY-1560 shim), a crash and reopen, an embedded caller, and QUIC
+    // with one cooperative worker against a spawned server, killed and
+    // restarted.
+    const sonny2823_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny2823_session_engine_txn.zig"), .target = target, .optimize = optimize });
+    sonny2823_test_mod.link_libc = true;
+    sonny2823_test_mod.addImport("geode", root_mod);
+    sonny2823_test_mod.addImport("schema", schema_mod);
+    sonny2823_test_mod.addImport("protobuf", protobuf_mod);
+    sonny2823_test_mod.addImport("grpc_impl", sonny1560_shim_mod);
+    sonny2823_test_mod.addImport("logging", logging_mod);
+    sonny2823_test_mod.addImport("transport/quic", transport_quic_mod);
+    const sonny2823_tests = b.addTest(.{ .root_module = sonny2823_test_mod });
+    const run_sonny2823_tests = b.addRunArtifact(sonny2823_tests);
+    run_sonny2823_tests.step.dependOn(&install_geode_exe.step);
+    shardDep(test_step, &run_sonny2823_tests.step, 1, test_shard_loads, test_shard_index);
+    const sonny2823_step = b.step("test-sonny2823-session-engine-txn", "Run SONNY-2823 regression (no engine transaction outlives the request that opened it or stays on a worker thread: gRPC sessions interleaved on one worker; COMMIT, ROLLBACK, a failed statement and teardown; a committed transaction, and other sessions' writes around it, survive a crash; QUIC with one worker, killed and restarted)");
+    sonny2823_step.dependOn(&run_sonny2823_tests.step);
+
     // SONNY-2790: the fulltext statements (CREATE/DROP INDEX, geode.fts.*)
     // run on the default graph, so the handlers lock `default` for them from
     // any session. Classifier, and the real gRPC handler (SONNY-1560 shim).

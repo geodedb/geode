@@ -215,7 +215,7 @@ pub fn currentThreadTxnId() u64 {
 // CANARY: REQ=REQ-SONNY-2799-UNDO-PER-TXN; FEATURE="TransactionUndoLog"; ASPECT=ThreadTxn; STATUS=TESTED; TEST=tests/test_sonny2805_txn_sessions.zig; OWNER=engine; UPDATED=2026-09-26
 /// SONNY-2799: the transaction open on the calling thread, or 0 for none. A
 /// transport handler puts its session's transaction on the thread for one
-/// request (`setThreadTxnId`, `ServerState.enterUndoTxn`); `begin` opens one.
+/// request (`setThreadTxnId`, `ServerState.enterSessionTxn`); `begin` opens one.
 /// Every change is recorded under it, and COMMIT and ROLLBACK end it. There
 /// is no transaction 0: a thread with none records nothing and undoes nothing.
 fn threadTxn() u64 {

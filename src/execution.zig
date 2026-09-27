@@ -39,6 +39,7 @@ const eval = @import("eval.zig");
 // Phase 5 M5.3: Import evaluator_adapter to provide callbacks to eval module
 const evaluator_adapter = @import("execution/evaluator_adapter.zig");
 const graph_store = @import("graph_store.zig");
+const storage_adapter = @import("storage/graph_storage_adapter.zig");
 const index_manager = @import("index/index_manager.zig");
 const catalog_mod = @import("schema/catalog.zig");
 const fle_hooks_mod = @import("execution/fle_hooks.zig");
@@ -1157,7 +1158,43 @@ fn requirePolicyDdlAdmin(allocator: std.mem.Allocator, action: []const u8, conte
     om.recordAuthzCheck(.allow, .rbac, d);
 }
 
+/// SONNY-2823: commit this thread's session engine transaction (R9), where
+/// its undo transaction commits, or where the program that opened it ends. A
+/// failed commit is logged: the undo transaction is committed already, as
+/// QUIC's COMMIT message does.
+fn commitSessionEngineTxn() void {
+    storage_adapter.commitThreadSessionTxn() catch |err| {
+        log.err("Failed to commit the session engine transaction", &.{
+            Attr.string("error", @errorName(err)),
+        });
+    };
+}
+
+// CANARY: REQ=REQ-SONNY-2823-SESSION-ENGINE-TXN; FEATURE="TransactionManagement"; ASPECT=ProgramEnd; STATUS=TESTED; TEST=tests/test_sonny2823_session_engine_txn.zig; OWNER=storage; UPDATED=2026-09-27
+/// SONNY-2823: the executor entry points running on this thread
+/// (`executeProgramWithContext`, `executeStatementWithContext`). When the
+/// outermost returns, the program is over, and the session engine
+/// transaction it opened is committed, while the transport still holds the
+/// request's graph lock. An engine transaction open across requests had its
+/// page images appended to the WAL at its commit, after newer ones other
+/// sessions committed meanwhile, and recovery replayed the older image over
+/// theirs (see `graph_storage_adapter.SessionEngineTxn`). The Geode
+/// transaction goes on: the undo log undoes a committed change as well.
+threadlocal var t_entry_depth: u32 = 0;
+
+fn enterEntryPoint() void {
+    t_entry_depth += 1;
+}
+
+fn leaveEntryPoint() void {
+    t_entry_depth -= 1;
+    if (t_entry_depth == 0) commitSessionEngineTxn();
+}
+
 pub fn executeProgramWithContext(allocator: std.mem.Allocator, program: *const ast.Program, context: ExecutionContext) !ExecutionResult {
+    // SONNY-2823: the program's session engine transaction ends with it.
+    enterEntryPoint();
+    defer leaveEntryPoint();
     const prev_ctx = pushActiveContext(&context);
     defer popActiveContext(prev_ctx);
     if (program.statements.len == 0) {
@@ -1348,6 +1385,10 @@ fn executeStatement(allocator: std.mem.Allocator, stmt: ast.Statement) !Executio
 // statements (subqueries) open their own inner scope that cannot clear the
 // enclosing statement's flag.
 pub fn executeStatementWithContext(allocator: std.mem.Allocator, stmt: ast.Statement, context: ExecutionContext) !ExecutionResult {
+    // SONNY-2823: a statement run on its own (the PROFILE paths) is a
+    // program; its session engine transaction ends with it.
+    enterEntryPoint();
+    defer leaveEntryPoint();
     // CANARY: REQ=REQ-ENG-3922-VECTOR-DIM-GUARD; FEATURE="VectorIndex"; ASPECT=PrePassGraphScope; STATUS=TESTED; TEST=tests/test_eng3922_dim_guard.zig; OWNER=execution; UPDATED=2026-08-29
     // ENG-3922(a): the write pre-pass needs to know which GRAPH the statement
     // writes to (the unindexed vector-dimension pin is per-graph), and the only
@@ -1534,6 +1575,9 @@ fn executeStatementWithContextInner(allocator: std.mem.Allocator, stmt: ast.Stat
                         else => return error.UnsupportedStatementInTransactionBody,
                     }) catch |err| {
                         mut_context.transaction_state = .None;
+                        // SONNY-2823: the engine transaction first, so the
+                        // undo's own changes commit on their own.
+                        storage_adapter.abortThreadSessionTxn();
                         undo_log.rollback(body_store) catch |rb_err| {
                             log.err("Failed to roll back a transaction body", &.{
                                 Attr.string("error", @errorName(rb_err)),
@@ -1546,6 +1590,7 @@ fn executeStatementWithContextInner(allocator: std.mem.Allocator, stmt: ast.Stat
                 // Auto-commit: reset transaction state
                 mut_context.transaction_state = .None;
                 undo_log.commit(body_store);
+                commitSessionEngineTxn();
 
                 // Return result from last statement
                 if (last_result) |result| {
@@ -1581,6 +1626,13 @@ fn executeStatementWithContextInner(allocator: std.mem.Allocator, stmt: ast.Stat
                 const undo_log = txn_undo_log.getGlobalUndoLog(allocator);
                 const commit_store = graph_store.getWritableGlobalStore(allocator);
                 undo_log.commit(commit_store);
+                // CANARY: REQ=REQ-SONNY-2823-SESSION-ENGINE-TXN; FEATURE="TransactionManagement"; ASPECT=CommitStatement; STATUS=TESTED; TEST=tests/test_sonny2823_session_engine_txn.zig; OWNER=storage; UPDATED=2026-09-26
+                // SONNY-2823: and the session's engine transaction (R9),
+                // which a COMMIT statement never committed, on either
+                // transport: the transaction's writes on its shard had no
+                // COMMIT record, and the thread kept the transaction for the
+                // next session it served.
+                commitSessionEngineTxn();
 
                 break :blk "transaction committed";
             } else "no transaction active";
@@ -1620,6 +1672,10 @@ fn executeStatementWithContextInner(allocator: std.mem.Allocator, stmt: ast.Stat
                 // the undo went into the snapshot.
                 const store = graph_store.getWritableGlobalStore(allocator);
                 const undo_log = txn_undo_log.getGlobalUndoLog(allocator);
+                // SONNY-2823: the session's engine transaction first (as
+                // QUIC's ROLLBACK message does), so the undo's own changes
+                // commit on their own. A ROLLBACK statement never aborted it.
+                storage_adapter.abortThreadSessionTxn();
                 undo_log.rollback(store) catch |err| {
                     log.err("Failed to rollback transaction", &.{
                         Attr.string("error", @errorName(err)),
