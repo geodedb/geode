@@ -493,13 +493,12 @@ pub const ServerState = struct {
     /// SONNY-2823: commit the session's engine transaction, where its undo
     /// transaction commits (the COMMIT RPC). The program that opened it
     /// committed it already; this is the backstop. Called inside the
-    /// session's request. A failed commit is logged: the undo transaction is
-    /// committed already.
-    pub fn commitEngineTxn(self: *ServerState) void {
+    /// session's request. SONNY-3031: before the undo transaction commits,
+    /// and a failure, or one an earlier request's program left unreported,
+    /// fails the COMMIT (`settleThreadSessionTxn`).
+    pub fn commitEngineTxn(self: *ServerState) error{SessionCommitFailed}!void {
         _ = self;
-        gsa.commitThreadSessionTxn() catch |err| {
-            std.log.err("session engine transaction commit failed: {s}", .{@errorName(err)});
-        };
+        try gsa.settleThreadSessionTxn();
     }
 
     // CANARY: REQ=REQ-SONNY-2823-SESSION-ENGINE-TXN; FEATURE="TransactionManagement"; ASPECT=RollBack; STATUS=TESTED; TEST=tests/test_sonny2823_session_engine_txn.zig; OWNER=storage; UPDATED=2026-09-26

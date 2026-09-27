@@ -9034,21 +9034,25 @@ fn handleClientMessage(
                 {
                     const commit_lock = graph_store.acquireGraphWriteLock(commit_graph);
                     defer graph_store.releaseGraphLock(commit_lock);
-                    undo.commitDeferRebuilds();
 
                     // R9 (2026-04-22): commit the session-scoped engine
                     // txn that R8's per-statement shortcut joined during
                     // this batch — ONE fsync for the whole Geode txn.
                     // SONNY-2823: the program that opened it committed it
                     // when it returned; none spans messages. A backstop.
-                    if (graph_store.getGlobalAdapter()) |ad| {
-                        ad.commitSessionTxn() catch |err| switch (err) {
-                            error.NoActiveSessionTxn => {},
-                            else => log.warn("session engine txn commit failed", &.{
-                                Attr.string("error", @errorName(err)),
-                            }),
+                    // CANARY: REQ=REQ-SONNY-3031-SESSION-COMMIT-FAILURE; FEATURE="TransactionManagement"; ASPECT=QuicCommit; STATUS=TESTED; TEST=tests/test_sonny3031_session_commit_failure.zig; OWNER=storage; UPDATED=2026-09-27
+                    // SONNY-3031: first, and a failure rolls the transaction
+                    // back and fails the COMMIT (it was logged, and the
+                    // COMMIT reported success).
+                    geode.graph_storage_adapter.settleThreadSessionTxn() catch {
+                        undo.rollback(graph_store.getWritableGlobalStore(gpa)) catch |err| {
+                            log.warn("transaction rollback after a failed commit failed", &.{Attr.string("error", @errorName(err))});
                         };
-                    }
+                        state.endTransaction();
+                        try sendQuicMessage(gpa, stream, .{ .commit = .{ .success = false } });
+                        return;
+                    };
+                    undo.commitDeferRebuilds();
                 }
                 // Flush deferred index rebuilds outside the write lock.
                 const store = graph_store.getGlobalStore(gpa);

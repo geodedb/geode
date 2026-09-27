@@ -8996,6 +8996,23 @@ pub fn build(b: *std.Build) void {
     const sonny3030_step = b.step("test-sonny3030-catalog-ddl-gate", "Run SONNY-3030 regression (CREATE/DROP INDEX, fulltext included, and CREATE/DROP CONSTRAINT need the schema permission on the database: a FOR SCHEMA grant on some graphs is refused, one on * is not)");
     sonny3030_step.dependOn(&run_sonny3030_tests.step);
 
+    // SONNY-3031: a failed commit of a session engine transaction aborts it,
+    // fails the request (40000) and rolls the transaction back, so its COMMIT
+    // fails. The engine's failure is injected. The real gRPC handler in
+    // process.
+    const sonny3031_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny3031_session_commit_failure.zig"), .target = target, .optimize = optimize });
+    sonny3031_test_mod.link_libc = true;
+    sonny3031_test_mod.addImport("geode", root_mod);
+    sonny3031_test_mod.addImport("schema", schema_mod);
+    sonny3031_test_mod.addImport("protobuf", protobuf_mod);
+    sonny3031_test_mod.addImport("grpc_impl", sonny1560_shim_mod);
+    sonny3031_test_mod.addImport("logging", logging_mod);
+    const sonny3031_tests = b.addTest(.{ .root_module = sonny3031_test_mod });
+    const run_sonny3031_tests = b.addRunArtifact(sonny3031_tests);
+    shardDep(test_step, &run_sonny3031_tests.step, 1, test_shard_loads, test_shard_index);
+    const sonny3031_step = b.step("test-sonny3031-session-commit-failure", "Run SONNY-3031 regression (an injected failure of a session engine commit at a program's end, a COMMIT statement or START..COMMIT fails the request with 40000, aborts the engine transaction and rolls the transaction back; its COMMIT fails)");
+    sonny3031_step.dependOn(&run_sonny3031_tests.step);
+
     // SONNY-2790: the fulltext statements (CREATE/DROP INDEX, geode.fts.*)
     // run on the default graph, so the handlers lock `default` for them from
     // any session. Classifier, and the real gRPC handler (SONNY-1560 shim).

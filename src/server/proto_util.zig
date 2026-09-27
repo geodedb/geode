@@ -186,6 +186,9 @@ pub fn mapError(err: anyerror) ErrorInfo {
         // GAP-0917: statement failed mid-transaction; everything until
         // ROLLBACK is rejected and COMMIT aborts. 25P02 = in_failed_sql_transaction.
         error.TransactionAborted => .{ .code = "25P02", .message = "Current transaction is aborted; statements are rejected until ROLLBACK" },
+        // SONNY-3031: the storage engine could not commit the transaction's
+        // changes; the transaction is rolled back.
+        error.SessionCommitFailed => .{ .code = "40000", .message = "The transaction's changes could not be committed to storage; the transaction was rolled back" },
         error.NoActiveTransaction => .{ .code = "25000", .message = "No active transaction" },
         error.UnionColumnCountMismatch => .{ .code = "42601", .message = "UNION column count mismatch" },
         // SONNY-2755: `YIELD path, path` used to free that column twice.

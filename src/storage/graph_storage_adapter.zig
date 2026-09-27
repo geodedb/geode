@@ -2908,6 +2908,13 @@ pub fn leaveSessionEngineTxn(slot: *SessionEngineTxn, scope: SessionEngineTxnSco
         abortThreadSessionTxn();
         backstop = true;
     }
+    if (t_session_commit_failure) |err| {
+        // SONNY-3031: a commit of the session's engine transaction failed in
+        // this request, and no handler reported it: its transaction failed.
+        log.warn("a session engine txn commit failed and was not reported; failing its transaction: {s}", .{@errorName(err)});
+        t_session_commit_failure = null;
+        backstop = true;
+    }
     slot.open = false;
     t_session_engine_slot = scope.prev;
     t_session_engine_txn = if (scope.prev) |p| (if (p.open) &p.txn else null) else null;
@@ -2930,8 +2937,48 @@ pub fn leaveSessionEngineTxn(slot: *SessionEngineTxn, scope: SessionEngineTxnSco
 /// ran a change without passing one (the PROFILE arm) left it open, and only
 /// the backstop committed it, after the lock was released. An error fails the
 /// request, and the handler rolls back the session's transaction.
-pub fn settleThreadSessionTxn() !void {
-    try commitThreadSessionTxn();
+///
+/// SONNY-3031: it also reports a commit that failed earlier in the request
+/// where no error could be returned (`noteSessionCommitFailure`, the end of
+/// the executor's program). Either failure is `error.SessionCommitFailed`
+/// (40000): the transaction's changes are not durable, so the request fails
+/// and the handler rolls the transaction back.
+pub fn settleThreadSessionTxn() error{SessionCommitFailed}!void {
+    if (t_session_commit_failure) |err| {
+        t_session_commit_failure = null;
+        log.warn("session engine txn commit failed: {s}", .{@errorName(err)});
+        abortThreadSessionTxn();
+        return error.SessionCommitFailed;
+    }
+    commitThreadSessionTxn() catch |err| {
+        log.warn("session engine txn commit failed: {s}", .{@errorName(err)});
+        return error.SessionCommitFailed;
+    };
+}
+
+// CANARY: REQ=REQ-SONNY-3031-SESSION-COMMIT-FAILURE; FEATURE="TransactionManagement"; ASPECT=NotedFailure; STATUS=TESTED; TEST=tests/test_sonny3031_session_commit_failure.zig; OWNER=storage; UPDATED=2026-09-27
+/// SONNY-3031: a session engine commit that failed where its error could
+/// not be returned (the executor's program end, `graph_store.releaseGraphLock`),
+/// kept for the request's handler (`settleThreadSessionTxn`) or, failing that,
+/// the backstop (`leaveSessionEngineTxn`). It was only logged: the request
+/// and the transaction's COMMIT reported success.
+threadlocal var t_session_commit_failure: ?anyerror = null;
+
+pub fn noteSessionCommitFailure(err: anyerror) void {
+    if (t_session_commit_failure == null) t_session_commit_failure = err;
+}
+
+/// SONNY-3031 fault injection for tests: the next N commits of a session
+/// engine transaction fail (`error.InjectedSessionCommitFailure`) before
+/// they reach the engine, as a failed WAL append or fsync would.
+pub var session_commit_fault_injections: std.atomic.Value(u32) = .init(0);
+
+fn takeInjectedCommitFault() bool {
+    var n = session_commit_fault_injections.load(.monotonic);
+    while (n > 0) {
+        n = session_commit_fault_injections.cmpxchgWeak(n, n - 1, .monotonic, .monotonic) orelse return true;
+    }
+    return false;
 }
 
 /// SONNY-3027: `graph_store.releaseGraphLock` of a write lock, before it lets
@@ -2944,9 +2991,7 @@ pub fn settleAtWriteRelease() void {
     if (t_session_engine_txn == null) return;
     _ = session_txn_open_at_write_release_total.fetchAdd(1, .monotonic);
     log.err("a graph write lock was released with a session engine txn open; committing it under the lock", .{});
-    commitThreadSessionTxn() catch |err| {
-        log.err("session engine txn commit failed: {s}", .{@errorName(err)});
-    };
+    commitThreadSessionTxn() catch |err| noteSessionCommitFailure(err);
 }
 
 /// SONNY-2823: take this thread's session engine transaction off the thread
@@ -2982,10 +3027,22 @@ fn unpinTaken(txn: *StatementTxn) void {
 
 /// SONNY-2823: commit this thread's session engine transaction, if it has
 /// one: ONE WAL fsync for its writes on its shard.
+///
+/// SONNY-3031: a commit that fails aborts the transaction, so the engine
+/// forgets it: it stayed in the shard's `active_txns` forever.
 pub fn commitThreadSessionTxn() !void {
     const txn = takeThreadSessionTxn() orelse return;
     defer unpinTaken(txn);
-    try txn.mg.engine.commitTxn(txn.txn_id);
+    const result = if (takeInjectedCommitFault())
+        error.InjectedSessionCommitFailure
+    else
+        txn.mg.engine.commitTxn(txn.txn_id);
+    result catch |err| {
+        txn.mg.engine.abortTxn(txn.txn_id) catch |abort_err| {
+            log.err("session engine txn abort after a failed commit failed: {s}", .{@errorName(abort_err)});
+        };
+        return err;
+    };
 }
 
 /// SONNY-2823: abort this thread's session engine transaction, if it has

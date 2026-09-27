@@ -3580,13 +3580,21 @@ pub fn handleCommit(request_bytes: []const u8, allocator: std.mem.Allocator) ![]
         const commit_lock = graph_store.acquireGraphWriteLock(commit_graph);
         defer graph_store.releaseGraphLock(commit_lock);
 
-        const store_ptr = graph_store.getGlobalStore(allocator);
-        txn_undo_log.getGlobalUndoLog(allocator).commit(store_ptr);
         // CANARY: REQ=REQ-SONNY-2823-SESSION-ENGINE-TXN; FEATURE="TransactionManagement"; ASPECT=GrpcCommit; STATUS=TESTED; TEST=tests/test_sonny2823_session_engine_txn.zig; OWNER=storage; UPDATED=2026-09-26
         // SONNY-2823: and the session's engine transaction. gRPC never
         // committed it: the transaction's writes on its shard had no COMMIT
-        // record, and were gone after a crash.
-        state.commitEngineTxn();
+        // record, and were gone after a crash. SONNY-3031: first; if it
+        // cannot commit, the transaction is rolled back and COMMIT fails.
+        state.commitEngineTxn() catch {
+            txn_undo_log.getGlobalUndoLog(allocator).rollback(graph_store.getWritableGlobalStore(allocator)) catch |err| {
+                log.warn("transaction rollback after a failed commit failed", &.{Attr.string("error", @errorName(err))});
+            };
+            state.endTransaction();
+            const resp = schema.CommitResponse{ .success = false };
+            return encodeMessage(allocator, resp);
+        };
+        const store_ptr = graph_store.getGlobalStore(allocator);
+        txn_undo_log.getGlobalUndoLog(allocator).commit(store_ptr);
 
         state.global_commit_ts += 1;
         state.endTransaction();

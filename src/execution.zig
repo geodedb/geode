@@ -1178,15 +1178,21 @@ fn refuseDropInTransaction(context: ExecutionContext) error{ObjectInUse}!void {
     if (txn_undo_log.getGlobalUndoLog(std.heap.smp_allocator).threadTxnHasEntries()) return error.ObjectInUse;
 }
 
-/// SONNY-2823: commit this thread's session engine transaction (R9), where
-/// its undo transaction commits, or where the program that opened it ends. A
-/// failed commit is logged: the undo transaction is committed already, as
-/// QUIC's COMMIT message does.
+// CANARY: REQ=REQ-SONNY-3031-SESSION-COMMIT-FAILURE; FEATURE="TransactionManagement"; ASPECT=ProgramEndCommit; STATUS=TESTED; TEST=tests/test_sonny3031_session_commit_failure.zig; OWNER=storage; UPDATED=2026-09-27
+/// SONNY-2823: commit this thread's session engine transaction (R9) where the
+/// program that opened it ends.
+///
+/// SONNY-3031: a failed commit (the transaction is aborted) is kept for the
+/// request's handler (`storage_adapter.noteSessionCommitFailure`), which fails
+/// the request and rolls the transaction back, so its COMMIT reports the
+/// failure. It was only logged, and the request and the COMMIT reported
+/// success for changes that were never committed to storage.
 fn commitSessionEngineTxn() void {
     storage_adapter.commitThreadSessionTxn() catch |err| {
-        log.err("Failed to commit the session engine transaction", &.{
+        log.warn("Failed to commit the session engine transaction", &.{
             Attr.string("error", @errorName(err)),
         });
+        storage_adapter.noteSessionCommitFailure(err);
     };
 }
 
@@ -1611,8 +1617,20 @@ fn executeStatementWithContextInner(allocator: std.mem.Allocator, stmt: ast.Stat
 
                 // Auto-commit: reset transaction state
                 mut_context.transaction_state = .None;
+                // SONNY-3031: the engine transaction first; if it cannot
+                // commit, the body is rolled back and fails.
+                storage_adapter.commitThreadSessionTxn() catch |err| {
+                    log.warn("Failed to commit a transaction body's engine transaction; rolling the body back", &.{
+                        Attr.string("error", @errorName(err)),
+                    });
+                    undo_log.rollback(body_store) catch |rb_err| {
+                        log.err("Failed to roll back a transaction body", &.{
+                            Attr.string("error", @errorName(rb_err)),
+                        });
+                    };
+                    return error.SessionCommitFailed;
+                };
                 undo_log.commit(body_store);
-                commitSessionEngineTxn();
 
                 // Return result from last statement
                 if (last_result) |result| {
@@ -1643,18 +1661,25 @@ fn executeStatementWithContextInner(allocator: std.mem.Allocator, stmt: ast.Stat
                 var mut_context = context;
                 mut_context.transaction_state = .Committed;
 
+                // CANARY: REQ=REQ-SONNY-2823-SESSION-ENGINE-TXN; FEATURE="TransactionManagement"; ASPECT=CommitStatement; STATUS=TESTED; TEST=tests/test_sonny2823_session_engine_txn.zig; OWNER=storage; UPDATED=2026-09-26
+                // SONNY-2823: the session's engine transaction (R9), which a
+                // COMMIT statement never committed, on either transport: the
+                // transaction's writes on its shard had no COMMIT record, and
+                // the thread kept the transaction for the next session it
+                // served. SONNY-3031: first, and a failure fails the COMMIT
+                // (the transaction is then rolled back, GAP-0917): it was
+                // logged, and the undo log committed as if it had not failed.
+                storage_adapter.commitThreadSessionTxn() catch |err| {
+                    log.warn("Failed to commit the session engine transaction at COMMIT", &.{
+                        Attr.string("error", @errorName(err)),
+                    });
+                    return error.SessionCommitFailed;
+                };
                 // CANARY: REQ=REQ-TXN-UNDO-006; FEATURE="TransactionUndoLog"; ASPECT=CommitTransaction; STATUS=TESTED; TEST=geodetestlab/specs/transaction_state_basic.yml; OWNER=engine; UPDATED=2025-12-23
                 // Commit the undo log - clears the log and keeps changes
                 const undo_log = txn_undo_log.getGlobalUndoLog(allocator);
                 const commit_store = graph_store.getWritableGlobalStore(allocator);
                 undo_log.commit(commit_store);
-                // CANARY: REQ=REQ-SONNY-2823-SESSION-ENGINE-TXN; FEATURE="TransactionManagement"; ASPECT=CommitStatement; STATUS=TESTED; TEST=tests/test_sonny2823_session_engine_txn.zig; OWNER=storage; UPDATED=2026-09-26
-                // SONNY-2823: and the session's engine transaction (R9),
-                // which a COMMIT statement never committed, on either
-                // transport: the transaction's writes on its shard had no
-                // COMMIT record, and the thread kept the transaction for the
-                // next session it served.
-                commitSessionEngineTxn();
 
                 break :blk "transaction committed";
             } else "no transaction active";
