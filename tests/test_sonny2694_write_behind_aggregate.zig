@@ -31,12 +31,22 @@
 // from the engine. The tenant-scoped session also checks that another
 // tenant's rows were neither written nor counted.
 //
-// CANARY: REQ=REQ-SONNY-2694-WRITE-BEHIND-AGGREGATE; FEATURE="ReadFastPaths"; ASPECT=Regression; STATUS=TESTED; TEST=tests/test_sonny2694_write_behind_aggregate.zig; OWNER=engine; UPDATED=2026-09-26
+// The SONNY-738 Task W fix round widened the matrix: a session with an RLS
+// policy (hidden rows beside the seed, neither written nor counted), and the
+// shapes the review found writes lost in: a WITH (and a WHERE after it), a
+// RETURN with ORDER BY and LIMIT, a comma pattern and an OPTIONAL MATCH. It
+// also checks that a DELETE's RETURN returns what it read, on the testing
+// allocator: `DELETE r RETURN r.w`, type(r), keys(r) and collect(r.w)
+// returned freed memory (a use after free; Debug fills it with 0xAA), and the
+// typed strings it copied leaked.
+//
+// CANARY: REQ=REQ-SONNY-2694-WRITE-BEHIND-AGGREGATE; FEATURE="ReadFastPaths"; ASPECT=Regression; STATUS=TESTED; TEST=tests/test_sonny2694_write_behind_aggregate.zig; OWNER=engine; UPDATED=2026-09-27
 
 const std = @import("std");
 const testing = std.testing;
 const linux = std.os.linux;
 const geode = @import("geode");
+const rls_types = @import("rls_types");
 const harness = @import("node_scan_stream_harness.zig");
 
 const execution = geode.execution;
@@ -52,6 +62,10 @@ const Mode = enum {
     /// Persisted, no tenant scope and no policy: the deployment the planned
     /// read and every fast path serve.
     persisted,
+    /// Persisted; the session's user `bob` may not read `:Hidden`, and hidden
+    /// rows sit beside the seed that the session must neither write nor
+    /// count.
+    rls_policy,
 };
 
 const tenant_a = "tenant_a";
@@ -63,6 +77,7 @@ const Session = struct {
     tmp: ?std.testing.TmpDir,
     data_dir: ?[]u8,
     ctx: execution.ExecutionContext,
+    rls: ?*rls_types.RLSFilterEngine = null,
 
     fn init(mode: Mode) !Session {
         const allocator = testing.allocator;
@@ -89,6 +104,11 @@ const Session = struct {
     }
 
     fn deinit(self: *Session) void {
+        if (self.rls) |engine| {
+            rls_types.setGlobalRLSFilterEngine(null);
+            engine.deinit();
+            testing.allocator.destroy(engine);
+        }
         self.arena.deinit();
         execution.cleanupCatalogInstance();
         graph_store.deinitGlobalStore();
@@ -100,10 +120,15 @@ const Session = struct {
     /// Run one statement, without installing the context as the active one:
     /// the statement must scope itself.
     fn run(self: *Session, query: []const u8) !execution.ExecutionResult {
-        const aa = self.arena.allocator();
-        var parsed = try geode.parseGql(query, aa);
+        return self.runOn(self.arena.allocator(), query);
+    }
+
+    /// `run`, with the result (and every allocation the statement makes)
+    /// on `allocator`.
+    fn runOn(self: *Session, allocator: std.mem.Allocator, query: []const u8) !execution.ExecutionResult {
+        var parsed = try geode.parseGql(query, self.arena.allocator());
         defer parsed.deinit();
-        return execution.executeStatementWithContext(aa, parsed.program.statements[0], self.ctx);
+        return execution.executeStatementWithContext(allocator, parsed.program.statements[0], self.ctx);
     }
 
     /// Run one statement as the server does: with the context installed.
@@ -115,31 +140,50 @@ const Session = struct {
 
     fn execAs(self: *Session, tenant: ?[]const u8, query: []const u8) !void {
         const saved = self.ctx.tenant_id;
-        defer self.ctx.tenant_id = saved;
+        const saved_user = self.ctx.user;
+        defer {
+            self.ctx.tenant_id = saved;
+            self.ctx.user = saved_user;
+        }
         self.ctx.tenant_id = tenant;
+        self.ctx.user = null;
         var r = try self.runInstalled(query);
         r.deinit(self.arena.allocator());
     }
 
-    /// 10 `(:G {i, g, t: 1})-[:R]->(:X {j, u: 1})` pairs, i = 0..9, g = 'a'
-    /// for i < 5 and 'b' after (count 10, sum(i) 45, min 0, max 9, 3 rows
-    /// with i >= 7), and 4 edge-free `(:Q {i})`. A tenant-scoped session's
-    /// data belongs to `tenant_a`, and `tenant_b` holds 3 more G-R-X pairs,
-    /// an `(:M {g: 'a'})` (which a MERGE on M must not bind) and 2 `:Q`.
+    /// 10 `(:G {i, g, t: 1})-[:R {w}]->(:X {j, u: 1})` pairs, i = 0..9, g =
+    /// 'a' for i < 5 and 'b' after (count 10, sum(i) 45, min 0, max 9, 3 rows
+    /// with i >= 7), and 4 edge-free `(:Q {i, name})`. A tenant-scoped
+    /// session's data belongs to `tenant_a`, and `tenant_b` holds 3 more G-R-X
+    /// pairs, an `(:M {g: 'a'})` (which a MERGE on M must not bind) and 2
+    /// `:Q`. The RLS session's user may not read `:Hidden`: a hidden G-R-X
+    /// pair and a hidden `:Q` sit beside its data.
     fn seed(self: *Session) !void {
         const aa = self.arena.allocator();
         const own: ?[]const u8 = if (self.mode == .tenant_scoped) tenant_a else null;
         if (self.mode == .tenant_scoped) {
-            for (0..3) |j| try self.execAs(tenant_b, try std.fmt.allocPrint(aa, "CREATE (:G {{i: {d}, g: 'a', t: 1}})-[:R]->(:X {{j: {d}, u: 1}})", .{ 100 + j, 100 + j }));
+            for (0..3) |j| try self.execAs(tenant_b, try std.fmt.allocPrint(aa, "CREATE (:G {{i: {d}, g: 'a', t: 1}})-[:R {{w: 'other'}}]->(:X {{j: {d}, u: 1}})", .{ 100 + j, 100 + j }));
             try self.execAs(tenant_b, "CREATE (:M {g: 'a'})");
-            for (0..2) |j| try self.execAs(tenant_b, try std.fmt.allocPrint(aa, "CREATE (:Q {{i: {d}}})", .{100 + j}));
+            for (0..2) |j| try self.execAs(tenant_b, try std.fmt.allocPrint(aa, "CREATE (:Q {{i: {d}, name: 'other'}})", .{100 + j}));
+        }
+        if (self.mode == .rls_policy) {
+            try self.execAs(null, "CREATE (:G:Hidden {i: 100, g: 'a', t: 1})-[:R {w: 'hidden'}]->(:X:Hidden {j: 100, u: 1})");
+            try self.execAs(null, "CREATE (:Q:Hidden {i: 100, name: 'hidden'})");
         }
         for (0..10) |i| {
             const g: []const u8 = if (i < 5) "a" else "b";
-            try self.execAs(own, try std.fmt.allocPrint(aa, "CREATE (:G {{i: {d}, g: '{s}', t: 1}})-[:R]->(:X {{j: {d}, u: 1}})", .{ i, g, i }));
+            try self.execAs(own, try std.fmt.allocPrint(aa, "CREATE (:G {{i: {d}, g: '{s}', t: 1}})-[:R {{w: 'edge-w-{d}-padpadpadpad'}}]->(:X {{j: {d}, u: 1}})", .{ i, g, i, i }));
         }
-        for (0..4) |k| try self.execAs(own, try std.fmt.allocPrint(aa, "CREATE (:Q {{i: {d}}})", .{k}));
+        for (0..4) |k| try self.execAs(own, try std.fmt.allocPrint(aa, "CREATE (:Q {{i: {d}, name: 'q-name-{d}-padpadpadpad'}})", .{ k, k }));
         self.ctx.tenant_id = own;
+        if (self.mode == .rls_policy) {
+            const engine = try testing.allocator.create(rls_types.RLSFilterEngine);
+            engine.* = rls_types.RLSFilterEngine.init(testing.allocator);
+            self.rls = engine;
+            try engine.addDenyPolicy(graph_store.DEFAULT_GRAPH_NAME, "Hidden", "bob");
+            rls_types.setGlobalRLSFilterEngine(engine);
+            self.ctx.user = "bob";
+        }
     }
 
     /// Drop the in-memory graph and reload it from the engine (persisted
@@ -158,11 +202,26 @@ fn lessThan(_: void, a: []const u8, b: []const u8) bool {
 
 fn render(aa: std.mem.Allocator, v: Value) ![]const u8 {
     return switch (v) {
-        .Str, .Text => |s| s,
+        // Copied: the value may be freed with its result before it is compared.
+        .Str, .Text => |s| try aa.dupe(u8, s),
         .Int => |n| try std.fmt.allocPrint(aa, "{d}", .{n}),
         .Double => |d| try std.fmt.allocPrint(aa, "{d}", .{d}),
         .Bool => |b| if (b) "true" else "false",
         .Null => "null",
+        // A list's items and a map's entries, sorted.
+        .List => |items| blk: {
+            const parts = try aa.alloc([]const u8, items.len);
+            for (items, parts) |item, *p| p.* = try render(aa, item);
+            std.mem.sort([]const u8, parts, {}, lessThan);
+            break :blk try std.fmt.allocPrint(aa, "[{s}]", .{try std.mem.join(aa, ";", parts)});
+        },
+        .Map => |m| blk: {
+            var parts: std.ArrayList([]const u8) = .empty;
+            var it = m.iterator();
+            while (it.next()) |e| try parts.append(aa, try std.fmt.allocPrint(aa, "{s}:{s}", .{ e.key_ptr.*, try render(aa, e.value_ptr.*) }));
+            std.mem.sort([]const u8, parts.items, {}, lessThan);
+            break :blk try std.fmt.allocPrint(aa, "{{{s}}}", .{try std.mem.join(aa, ";", parts.items)});
+        },
         else => try std.fmt.allocPrint(aa, "<{s}>", .{@tagName(v)}),
     };
 }
@@ -256,6 +315,25 @@ fn checkOtherTenant(s: *Session, f: *Failures, case: []const u8, stage: []const 
     for (other_tenant_untouched) |chk| try expectRows(s, f, stage, case, false, chk.query, chk.want);
 }
 
+/// The hidden rows after any case, read as no user: not written, not
+/// deleted, not joined.
+const hidden_untouched = [_]Check{
+    .{ .query = "MATCH (n:Hidden) RETURN count(*) AS c", .want = &.{"3"} },
+    .{ .query = "MATCH (n:Hidden) WHERE n.x IS NULL AND n.y IS NULL RETURN count(*) AS c", .want = &.{"3"} },
+    .{ .query = "MATCH (n:Hidden) WHERE n.t = 1 RETURN n.i", .want = &.{"100"} },
+    .{ .query = "MATCH (n:Hidden) WHERE n.u = 1 RETURN n.j", .want = &.{"100"} },
+    .{ .query = "MATCH (:Hidden)-[r:R]->(:Hidden) RETURN r.w", .want = &.{"hidden"} },
+    .{ .query = "MATCH (:Hidden)-[r:T]->() RETURN count(*) AS c", .want = &.{"0"} },
+    .{ .query = "MATCH (q:Hidden) WHERE q.name = 'hidden' RETURN q.i", .want = &.{"100"} },
+};
+
+fn checkHidden(s: *Session, f: *Failures, case: []const u8, stage: []const u8) !void {
+    const saved = s.ctx.user;
+    defer s.ctx.user = saved;
+    s.ctx.user = null;
+    for (hidden_untouched) |chk| try expectRows(s, f, stage, case, false, chk.query, chk.want);
+}
+
 fn runCase(mode: Mode, c: Case, f: *Failures) !void {
     var s = try Session.init(mode);
     defer s.deinit();
@@ -264,6 +342,7 @@ fn runCase(mode: Mode, c: Case, f: *Failures) !void {
     for (0..runs) |r| try expectRows(&s, f, if (r == 0) "returns" else "returns (second run)", c.write, true, c.write, c.want);
     for (c.checks) |chk| try expectRows(&s, f, "effect", c.write, false, chk.query, chk.want);
     if (mode == .tenant_scoped) try checkOtherTenant(&s, f, c.write, "other tenant");
+    if (mode == .rls_policy) try checkHidden(&s, f, c.write, "hidden rows");
     if (mode != .in_memory) {
         s.reopen() catch |err| {
             try f.add("[{s}] {s}: reload failed: {s}", .{ @tagName(mode), c.write, @errorName(err) });
@@ -271,6 +350,7 @@ fn runCase(mode: Mode, c: Case, f: *Failures) !void {
         };
         for (c.checks) |chk| try expectRows(&s, f, "effect after reload", c.write, false, chk.query, chk.want);
         if (mode == .tenant_scoped) try checkOtherTenant(&s, f, c.write, "other tenant after reload");
+        if (mode == .rls_policy) try checkHidden(&s, f, c.write, "hidden rows after reload");
     }
 }
 
@@ -278,7 +358,7 @@ fn runCases(title: []const u8, cases: []const Case) !void {
     var arena = std.heap.ArenaAllocator.init(testing.allocator);
     defer arena.deinit();
     var f: Failures = .{ .arena = arena.allocator() };
-    for ([_]Mode{ .in_memory, .tenant_scoped, .persisted }) |mode| {
+    for ([_]Mode{ .in_memory, .tenant_scoped, .persisted, .rls_policy }) |mode| {
         for (cases) |c| runCase(mode, c, &f) catch |err| {
             try f.add("[{s}] {s}: the case aborted: {s}", .{ @tagName(mode), c.write, @errorName(err) });
         };
@@ -431,6 +511,140 @@ const delete_cases = [_]Case{
 
 test "SONNY-2694: MATCH ... DELETE behind an aggregating or DISTINCT RETURN deletes every matched row and returns the aggregate over them" {
     try runCases("DELETE", &delete_cases);
+}
+
+// ---------------------------------------------------------------------------
+// The shapes the Task W review found writes lost in (SONNY-3039, SONNY-3040,
+// SONNY-3041): a WITH, a RETURN with ORDER BY and LIMIT, a comma pattern and
+// an OPTIONAL MATCH, behind every write clause.
+
+const q01 = [_]Check{.{ .query = "MATCH (q:Q) RETURN q.i", .want = &.{ "0", "1" } }};
+
+const with_cases = [_]Case{
+    .{ .write = "MATCH (n:G) WITH n SET n.x = 1 RETURN count(*) AS c", .want = &.{"10"}, .checks = &x10 },
+    .{ .write = "MATCH (n:G) WITH n WHERE n.i >= 7 REMOVE n.t RETURN count(*) AS c", .want = &.{"3"}, .checks = &.{
+        .{ .query = "MATCH (n:G) WHERE n.t IS NULL RETURN n.i", .want = &.{ "7", "8", "9" } },
+    } },
+    .{ .write = "MATCH (n:G) WITH n CREATE (n)-[:T]->(:Z) RETURN count(*) AS c", .want = &.{"10"}, .checks = &z10 },
+    .{ .write = "MATCH (n:G) WITH n MERGE (m:M {g: n.g}) RETURN count(*) AS c", .want = &.{"10"}, .checks = &m_ab },
+    .{ .write = "MATCH (q:Q) WITH q DELETE q RETURN count(*) AS c", .want = &.{"4"}, .checks = &q0 },
+    .{ .write = "MATCH (q:Q) WITH q WHERE q.i >= 2 SET q.x = 1 DELETE q RETURN count(*) AS c", .want = &.{"2"}, .checks = &q01 },
+};
+
+test "SONNY-2694: every write clause after a WITH writes the rows the WITH keeps" {
+    try runCases("WITH", &with_cases);
+}
+
+const order_limit_cases = [_]Case{
+    .{ .write = "MATCH (n:G) SET n.x = 1 RETURN n.i AS i ORDER BY i LIMIT 2", .want = &.{ "0", "1" }, .checks = &x10 },
+    .{ .write = "MATCH (n:G) REMOVE n.t RETURN n.i AS i ORDER BY i DESC LIMIT 1", .want = &.{"9"}, .checks = &t0 },
+    .{ .write = "MATCH (n:G)-[:R]->(x:X) SET x.x = 1 RETURN x.j AS j ORDER BY j LIMIT 2", .want = &.{ "0", "1" }, .checks = &.{
+        .{ .query = "MATCH (x:X) WHERE x.x = 1 RETURN count(*) AS c", .want = &.{"10"} },
+    } },
+    .{ .write = "MATCH (n:G) CREATE (n)-[:T]->(:Z) RETURN DISTINCT n.g AS g ORDER BY g LIMIT 1", .want = &.{"a"}, .checks = &z10 },
+    .{ .write = "MATCH (q:Q) SET q.x = 1 DELETE q RETURN q.i AS i ORDER BY i LIMIT 1", .want = &.{"0"}, .checks = &q0 },
+};
+
+test "SONNY-2694: a RETURN with ORDER BY and LIMIT does not limit the write" {
+    try runCases("ORDER BY / LIMIT", &order_limit_cases);
+}
+
+const comma_cases = [_]Case{
+    .{ .write = "MATCH (a:G), (q:Q) WHERE a.i = 5 AND q.i = 0 SET a.x = 1 RETURN count(*) AS c", .want = &.{"1"}, .checks = &.{
+        .{ .query = "MATCH (n:G) WHERE n.x = 1 RETURN n.i", .want = &.{"5"} },
+    } },
+    .{ .write = "MATCH (a:G), (q:Q) WHERE a.i = 5 REMOVE a.t RETURN count(*) AS c", .want = &.{"4"}, .checks = &.{
+        .{ .query = "MATCH (n:G) WHERE n.t IS NULL RETURN n.i", .want = &.{"5"} },
+    } },
+    .{ .write = "MATCH (a:G), (b:G) WHERE a.i = 5 AND b.i = 6 CREATE (a)-[:T]->(b) RETURN count(*) AS c", .want = &.{"1"}, .checks = &.{
+        .{ .query = "MATCH (a:G)-[:T]->(b:G) RETURN a.i, b.i", .want = &.{"5|6"} },
+    } },
+    .{ .write = "MATCH (a:G), (q:Q) WHERE a.i = 5 AND q.i = 0 MERGE (m:M {g: a.g}) RETURN count(*) AS c", .want = &.{"1"}, .checks = &.{
+        .{ .query = "MATCH (m:M) RETURN m.g", .want = &.{"b"} },
+    } },
+    .{ .write = "MATCH (a:G), (q:Q) WHERE a.i = 5 SET q.x = 1 DELETE q RETURN count(*) AS c", .want = &.{"4"}, .checks = &q0 },
+};
+
+test "SONNY-2694: every write clause on a comma pattern writes every matched row" {
+    try runCases("comma pattern", &comma_cases);
+}
+
+const optional_cases = [_]Case{
+    .{ .write = "MATCH (n:G) OPTIONAL MATCH (n)-[:R]->(x:X) SET n.y = 1 RETURN count(*) AS c", .want = &.{"10"}, .checks = &.{
+        .{ .query = "MATCH (n:G) WHERE n.y = 1 RETURN count(*) AS c", .want = &.{"10"} },
+    } },
+    .{ .write = "MATCH (n:G) OPTIONAL MATCH (n)-[:NOPE]->(y) CREATE (n)-[:T]->(:Z) RETURN count(*) AS c", .want = &.{"10"}, .checks = &z10 },
+    .{ .write = "MATCH (n:G) OPTIONAL MATCH (n)-[:R]->(x:X) MERGE (m:M {g: n.g}) RETURN count(*) AS c", .want = &.{"10"}, .checks = &m_ab },
+    .{ .write = "MATCH (q:Q) OPTIONAL MATCH (q)-[:NOPE]->(y) SET q.x = 1 DELETE q RETURN count(*) AS c", .want = &.{"4"}, .checks = &q0 },
+};
+
+test "SONNY-2694: every write clause after an OPTIONAL MATCH writes every matched row" {
+    try runCases("OPTIONAL MATCH", &optional_cases);
+}
+
+// ---------------------------------------------------------------------------
+// A DELETE's RETURN returns what it read, on the testing allocator (the
+// statement's every allocation too, so a leak fails the test).
+
+const DeleteReturn = struct { write: []const u8, want: []const []const u8 };
+
+const w_all = "[edge-w-0-padpadpadpad;edge-w-1-padpadpadpad;edge-w-2-padpadpadpad;edge-w-3-padpadpadpad;edge-w-4-padpadpadpad;edge-w-5-padpadpadpad;edge-w-6-padpadpadpad;edge-w-7-padpadpadpad;edge-w-8-padpadpadpad;edge-w-9-padpadpadpad]";
+
+const delete_returns = [_]DeleteReturn{
+    // A relationship's properties, type and keys.
+    .{ .write = "MATCH (n:G)-[r:R]->(x:X) WHERE n.i = 5 DELETE r RETURN r.w AS w, type(r) AS t, keys(r) AS k", .want = &.{"edge-w-5-padpadpadpad|R|[w]"} },
+    .{ .write = "MATCH (n:G)-[r:R]->(x:X) WHERE n.i = 5 DELETE r RETURN properties(r) AS p", .want = &.{"{w:edge-w-5-padpadpadpad}"} },
+    .{ .write = "MATCH (n:G)-[r:R]->(x:X) DELETE r RETURN collect(r.w) AS c", .want = &.{w_all} },
+    .{ .write = "MATCH (n:G)-[r:R]->(x:X) WHERE n.i = 5 SET r.z = 1 DELETE r RETURN r.w, r.z", .want = &.{"edge-w-5-padpadpadpad|1"} },
+    // A node's.
+    .{ .write = "MATCH (q:Q) DELETE q RETURN q.name AS n", .want = &.{ "q-name-0-padpadpadpad", "q-name-1-padpadpadpad", "q-name-2-padpadpadpad", "q-name-3-padpadpadpad" } },
+    .{ .write = "MATCH (q:Q) WHERE q.i = 1 DELETE q RETURN q.name, labels(q) AS l, keys(q) AS k, toUpper(q.name) AS u", .want = &.{"q-name-1-padpadpadpad|[Q]|[i;name]|Q-NAME-1-PADPADPADPAD"} },
+    .{ .write = "MATCH (q:Q) SET q.x = 1 DELETE q RETURN collect(q.name) AS c", .want = &.{"[q-name-0-padpadpadpad;q-name-1-padpadpadpad;q-name-2-padpadpadpad;q-name-3-padpadpadpad]"} },
+    .{ .write = "MATCH (n:G)-[r:R]->(x:X) WHERE n.i = 5 DETACH DELETE n RETURN n.g, r.w, x.j", .want = &.{"b|edge-w-5-padpadpadpad|5"} },
+};
+
+test "SONNY-2694: a DELETE's RETURN returns the values it read, not freed memory, and frees what it copied" {
+    var arena = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena.deinit();
+    var f: Failures = .{ .arena = arena.allocator() };
+    for ([_]Mode{ .in_memory, .tenant_scoped, .rls_policy }) |mode| {
+        for (delete_returns) |c| {
+            var s = try Session.init(mode);
+            defer s.deinit();
+            try s.seed();
+            const aa = s.arena.allocator();
+            const prev = execution.pushActiveContext(&s.ctx);
+            defer execution.popActiveContext(prev);
+            var result = s.runOn(testing.allocator, c.write) catch |err| {
+                try f.add("[{s}] {s}: error {s}", .{ @tagName(mode), c.write, @errorName(err) });
+                continue;
+            };
+            // Rendered (copied into the session arena) before the result is
+            // freed; a use after free reads the 0xAA fill.
+            const got = try renderRows(aa, result);
+            result.deinit(testing.allocator);
+            if (!try sameRows(aa, got, c.want)) {
+                try f.add("[{s}] {s}: expected {{{s}}}, got {{{s}}}", .{ @tagName(mode), c.write, try std.mem.join(aa, ",", c.want), try std.mem.join(aa, ",", got) });
+            }
+        }
+    }
+    try f.finish("DELETE RETURN values");
+}
+
+test "SONNY-2694: a DELETE's RETURN of a typed string frees its copy" {
+    // TEXT, CHAR, VARCHAR, BYTEA and JSON values are copied before the DELETE
+    // frees the node; the copies were never freed. The result is on the
+    // testing allocator, so a leak fails the test.
+    var s = try Session.init(.in_memory);
+    defer s.deinit();
+    try s.seed();
+    try s.execAs(null, "CREATE (:K {t: Text('hello'), c: Char('ab', 5), v: Varchar('ab', 5), b: Bytea('\\\\x0102ff'), j: Json('{\"a\": 1}')})");
+    const prev = execution.pushActiveContext(&s.ctx);
+    defer execution.popActiveContext(prev);
+    var result = try s.runOn(testing.allocator, "MATCH (k:K) DELETE k RETURN k.t, k.c, k.v, k.b, k.j, [k.t] AS l");
+    defer result.deinit(testing.allocator);
+    try testing.expectEqual(@as(usize, 1), result.rows.len);
+    try testing.expectEqualStrings("hello", result.rows[0][0].Text);
 }
 
 // ---------------------------------------------------------------------------

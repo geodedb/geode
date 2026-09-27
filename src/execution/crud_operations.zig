@@ -4934,6 +4934,47 @@ pub fn executeMatchDeleteQuery(
     return emptyExecutionResult(allocator);
 }
 
+// CANARY: REQ=REQ-SONNY-2694-DELETE-RETURN; FEATURE="WriteBehindAggregate"; ASPECT=DeleteReturn; STATUS=TESTED; TEST=tests/test_sonny2694_write_behind_aggregate.zig; OWNER=engine; UPDATED=2026-09-27
+/// SONNY-2694: a DELETE statement's RETURN, over the rows it matches,
+/// computed before anything is deleted. It returned the number of deleted
+/// elements, as `deleted_count`, whatever it asked for.
+///
+/// The rows are read as any read reads them (`readPatternBindings`, with the
+/// statement's context active, so its tenant scope and RLS policies apply)
+/// and the RETURN projected over them by the shared projection, owning every
+/// value it holds (`projectReturnBeforeDelete`, which also refuses a RETURN
+/// that holds an element the statement deletes). The RETURN used to be a
+/// read of its own, whose rows point into the store when the legacy executor
+/// answers it (in-memory, tenant-scoped and RLS sessions): `DELETE r RETURN
+/// r.w`, type(r), keys(r) and collect(r.w) returned the edge's freed memory.
+/// SONNY-3044: a cluster leader computes it the same way, before it proposes
+/// the delete.
+fn deleteStatementReturn(
+    allocator: std.mem.Allocator,
+    d: ast.DeleteStatement,
+    match_pattern: ast.GraphPattern,
+    rc: ast.ReturnClause,
+    current_graph: ?[]const u8,
+    context: ExecutionContext,
+    targets: DeleteTargets,
+) !ExecutionResult {
+    const q = ast.Query{
+        .optional_match = false,
+        .match = match_pattern,
+        .where_clause = d.where_clause,
+        .with_clause = null,
+        .ret = rc,
+        .order_by = null,
+        .limit = null,
+        .offset = null,
+    };
+    const prev = execution.pushActiveContext(&context);
+    defer execution.popActiveContext(prev);
+    var bindings = try match_operations.readPatternBindings(allocator, q, context.query_param_names, context.query_param_values, &.{}, current_graph);
+    defer bindings.deinit(allocator);
+    return match_operations.projectReturnBeforeDelete(allocator, q, &bindings.rows, context.query_param_names, context.query_param_values, .{ .node_ids = targets.node_ids, .edge_ids = targets.edge_ids, .detach = d.detach });
+}
+
 // CANARY: REQ=REQ-MULTI-GRAPH-DELETE-001; FEATURE="MultiGraphIsolation"; ASPECT=DeleteGraphFilter; STATUS=TESTED; TEST=geodetestlab/specs/multi_graph.yml; OWNER=engine; UPDATED=2025-12-24
 pub fn executeDelete(allocator: std.mem.Allocator, d: ast.DeleteStatement, current_graph: ?[]const u8, context: ExecutionContext) !ExecutionResult {
     // Cluster write routing: in cluster mode the DELETE is ordered through Raft on
@@ -4976,25 +5017,10 @@ pub fn executeDelete(allocator: std.mem.Allocator, d: ast.DeleteStatement, curre
         const targets = try resolveDeleteTargets(allocator, d, match_pattern, context);
         defer targets.deinit(allocator);
 
-        // CANARY: REQ=REQ-SONNY-2694-DELETE-RETURN; FEATURE="WriteBehindAggregate"; ASPECT=DeleteReturn; STATUS=TESTED; TEST=tests/test_sonny2694_write_behind_aggregate.zig; OWNER=engine; UPDATED=2026-09-27
         // SONNY-2694: the RETURN is the statement's own, over the rows it
-        // matches (the same read `resolveDeleteTargets` runs), computed before
-        // they are deleted. It returned the number of deleted elements, as
-        // `deleted_count`, whatever it asked for: `MATCH (q:Q) DELETE q RETURN
-        // sum(q.i)` returned the count. The RETURN owns its values, and one
-        // that would hold a deleted element is refused before any delete.
+        // matches, computed before they are deleted (`deleteStatementReturn`).
         if (d.return_clause) |rc| if (rc.items.len != 0) {
-            returned = try execution.executeQueryWithContext(allocator, .{
-                .optional_match = false,
-                .match = match_pattern,
-                .where_clause = d.where_clause,
-                .with_clause = null,
-                .ret = rc,
-                .order_by = null,
-                .limit = null,
-                .offset = null,
-            }, context);
-            try match_operations.ownReturnBeforeDelete(allocator, &returned.?, .{ .node_ids = targets.node_ids, .edge_ids = targets.edge_ids, .detach = d.detach });
+            returned = try deleteStatementReturn(allocator, d, match_pattern, rc, current_graph, context, targets);
         };
 
         deleted_count = try deleteElements(allocator, targets.node_ids, targets.edge_ids, d.detach, current_graph);

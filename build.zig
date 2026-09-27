@@ -9187,10 +9187,11 @@ pub fn build(b: *std.Build) void {
     const sonny2694_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny2694_write_behind_aggregate.zig"), .target = target, .optimize = optimize });
     sonny2694_test_mod.addImport("geode", root_mod);
     sonny2694_test_mod.addImport("logging", logging_mod);
+    sonny2694_test_mod.addImport("rls_types", rls_types_mod);
     const sonny2694_tests = b.addTest(.{ .root_module = sonny2694_test_mod });
     const run_sonny2694_tests = b.addRunArtifact(sonny2694_tests);
     shardDep(test_step, &run_sonny2694_tests.step, 1, test_shard_loads, test_shard_index);
-    const sonny2694_step = b.step("test-sonny2694-write-behind-aggregate", "Run SONNY-2694 regression (CREATE, MERGE, SET, REMOVE and DELETE behind count(*), sum, min, max, DISTINCT or a counted WHERE write every matched row and return the aggregate over them; no read fast path answers a write: in-memory, tenant-scoped and persisted sessions)");
+    const sonny2694_step = b.step("test-sonny2694-write-behind-aggregate", "Run SONNY-2694 regression (CREATE, MERGE, SET, REMOVE and DELETE behind count(*), sum, min, max, DISTINCT or a counted WHERE write every matched row and return the aggregate over them, after a WITH, behind ORDER BY and LIMIT, on comma and OPTIONAL MATCH patterns; no read fast path answers a write; a DELETE's RETURN returns what it read and frees what it copied: in-memory, tenant-scoped, persisted and RLS-policy sessions)");
     sonny2694_step.dependOn(&run_sonny2694_tests.step);
 
     // SONNY-2707 part (1): a SET or REMOVE through a variable-length pattern

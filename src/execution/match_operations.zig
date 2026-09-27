@@ -9293,7 +9293,7 @@ pub fn projectReturnOverRows(
 }
 
 /// SONNY-2694: the nodes and edges a statement deletes, for
-/// `ownReturnBeforeDelete`.
+/// `projectReturnBeforeDelete`.
 pub const DeletedElements = struct {
     node_ids: []const u64 = &.{},
     edge_ids: []const u64 = &.{},
@@ -9503,45 +9503,6 @@ fn copyDeleteReturnValue(allocator: std.mem.Allocator, value: Value) !Value {
         .Jsonb, .Xml, .Url, .Domain, .BitString, .VarBit, .ExtValue => error.DeleteReturnsDeletedElement,
         else => value,
     };
-}
-
-/// SONNY-2694: a statement that deletes computes its RETURN before the DELETE
-/// and returns it after, and a DELETE frees the labels and properties of what
-/// it deletes at once (`GraphStore.deleteNodeNoSave`). The projected rows own
-/// their strings, lists and maps (`adoptProjectionRowValues`); this also
-/// copies the typed strings (TEXT, CHAR, VARCHAR, BYTEA, JSON). It refuses,
-/// before anything is deleted, a row holding an element the statement deletes
-/// (the node, the edge, or a path through one), which would point at freed
-/// memory, and a typed value it cannot copy (JSONB, XML, URL, DOMAIN, a bit
-/// string or an extended value), which may. Return the element's properties,
-/// or an aggregate over it, instead.
-pub fn ownReturnBeforeDelete(allocator: std.mem.Allocator, result: *ExecutionResult, deleted: DeletedElements) !void {
-    for (result.rows) |row| {
-        for (row) |*cell| try ownValueBeforeDelete(allocator, cell, deleted);
-    }
-}
-
-fn ownValueBeforeDelete(allocator: std.mem.Allocator, value: *Value, deleted: DeletedElements) !void {
-    switch (value.*) {
-        .Node => |node| if (deleted.nodeDeleted(node.id)) return error.DeleteReturnsDeletedElement,
-        .Edge => |edge| if (deleted.edgeDeleted(edge)) return error.DeleteReturnsDeletedElement,
-        .Path => |path| {
-            for (path.nodes) |node| if (deleted.nodeDeleted(node.id)) return error.DeleteReturnsDeletedElement;
-            for (path.edges) |edge| if (deleted.edgeDeleted(edge)) return error.DeleteReturnsDeletedElement;
-        },
-        .Text => |s| value.* = .{ .Text = try allocator.dupe(u8, s) },
-        .Bytea => |s| value.* = .{ .Bytea = try allocator.dupe(u8, s) },
-        .Json => |s| value.* = .{ .Json = try allocator.dupe(u8, s) },
-        .Char => |c| value.* = .{ .Char = .{ .data = try allocator.dupe(u8, c.data), .n = c.n } },
-        .Varchar => |c| value.* = .{ .Varchar = .{ .data = try allocator.dupe(u8, c.data), .n = c.n } },
-        .List => |items| for (items) |*item| try ownValueBeforeDelete(allocator, item, deleted),
-        .Map => |map| {
-            var it = map.valueIterator();
-            while (it.next()) |item| try ownValueBeforeDelete(allocator, item, deleted);
-        },
-        .Jsonb, .Xml, .Url, .Domain, .BitString, .VarBit, .ExtValue => return error.DeleteReturnsDeletedElement,
-        else => {},
-    }
 }
 
 /// SONNY-2694, SONNY-3042: refuse (0A000) a RETURN that holds an element a
