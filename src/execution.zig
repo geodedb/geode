@@ -2369,6 +2369,11 @@ fn executeStatementWithContextInner(allocator: std.mem.Allocator, stmt: ast.Stat
             };
         },
         .CreateSchema => |cs| {
+            // CANARY: REQ=REQ-SONNY-3038-SCHEMA-DDL-GATE; FEATURE="GraphRBACEnforcement"; ASPECT=SchemaDDL; STATUS=TESTED; TEST=tests/test_sonny3038_revoke_and_schema_ddl.zig; OWNER=security; UPDATED=2026-09-27
+            // SONNY-3038: the schema permission on the database (schemas are
+            // catalogued database-wide), before whether the schema exists.
+            // CREATE and DROP SCHEMA were ungated.
+            if (!session_graph.maySchemaDatabase(context.principal)) return error.Unauthorized;
             // CREATE SCHEMA implementation with duplicate detection (Catalog instance)
             const schema_name = cs.name;
             const cat = context.catalog;
@@ -2402,6 +2407,8 @@ fn executeStatementWithContextInner(allocator: std.mem.Allocator, stmt: ast.Stat
             };
         },
         .DropSchema => |ds| {
+            // SONNY-3038: as CREATE SCHEMA.
+            if (!session_graph.maySchemaDatabase(context.principal)) return error.Unauthorized;
             // DROP SCHEMA implementation with existence check (Catalog instance)
             const schema_name = ds.name;
             const cat = context.catalog;

@@ -200,6 +200,8 @@ pub fn mapError(err: anyerror) ErrorInfo {
         error.InternalGraph => .{ .code = "42501", .message = "The __geode_* graphs are internal: a statement cannot select, create or drop one" },
         error.DuplicateGraph => .{ .code = "42P07", .message = "Duplicate graph name" },
         error.GraphNotFound => .{ .code = "3F000", .message = "Graph does not exist" },
+        // SONNY-3038: geode.auth.revoke could not save the revoke.
+        error.RevokeNotPersisted => .{ .code = "58030", .message = "The revoke could not be saved to the security graph; the privilege may return at the next start. Retry it" },
         // SONNY-3028: DROP GRAPH of the graph the session's transaction changed.
         error.ObjectInUse => .{ .code = "55006", .message = "Object in use: the graph is in use by this session's transaction; commit or roll back before dropping it" },
         // ENG-3903: a MERGE relationship endpoint that is neither bound by a

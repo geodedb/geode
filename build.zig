@@ -9013,6 +9013,23 @@ pub fn build(b: *std.Build) void {
     const sonny3031_step = b.step("test-sonny3031-session-commit-failure", "Run SONNY-3031 regression (an injected failure of a session engine commit at a program's end, a COMMIT statement or START..COMMIT fails the request with 40000, aborts the engine transaction and rolls the transaction back; its COMMIT fails)");
     sonny3031_step.dependOn(&run_sonny3031_tests.step);
 
+    // SONNY-3038 (the v0.8.23 part): geode.auth.revoke fails when the revoke
+    // cannot be saved (injected through the grant persistence callbacks), and
+    // CREATE/DROP SCHEMA need the schema permission on the database. The real
+    // gRPC handler in process.
+    const sonny3038_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny3038_revoke_and_schema_ddl.zig"), .target = target, .optimize = optimize });
+    sonny3038_test_mod.link_libc = true;
+    sonny3038_test_mod.addImport("geode", root_mod);
+    sonny3038_test_mod.addImport("schema", schema_mod);
+    sonny3038_test_mod.addImport("protobuf", protobuf_mod);
+    sonny3038_test_mod.addImport("grpc_impl", sonny1560_shim_mod);
+    sonny3038_test_mod.addImport("logging", logging_mod);
+    const sonny3038_tests = b.addTest(.{ .root_module = sonny3038_test_mod });
+    const run_sonny3038_tests = b.addRunArtifact(sonny3038_tests);
+    shardDep(test_step, &run_sonny3038_tests.step, 1, test_shard_loads, test_shard_index);
+    const sonny3038_step = b.step("test-sonny3038-revoke-schema-ddl", "Run SONNY-3038 (v0.8.23 part) regression (geode.auth.revoke fails with 58030 when the revoke cannot be saved; CREATE/DROP SCHEMA need the schema permission on the database)");
+    sonny3038_step.dependOn(&run_sonny3038_tests.step);
+
     // SONNY-3033: the QUIC /*+BATCH*/ route applies the session-graph gate
     // and the group-commit coordinator creates no graph but the default one:
     // a batch against a dropped graph is refused and does not recreate it.
