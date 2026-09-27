@@ -14327,6 +14327,9 @@ pub fn snapshotUnderReadLock(allocator: std.mem.Allocator, graph_name: []const u
 /// Release a lock previously acquired via `acquireGraphReadLock` or
 /// `acquireGraphWriteLock`.
 pub fn releaseGraphLock(handle: GraphLockHandle) void {
+    // SONNY-3027: no session engine transaction outlives the write lock it
+    // ran under.
+    if (handle.is_write) graph_storage_adapter.settleAtWriteRelease();
     if (handle.managed_graph) |mg| {
         if (global_adapter) |adapter| {
             if (handle.is_write) {

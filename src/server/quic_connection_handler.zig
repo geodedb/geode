@@ -8355,6 +8355,16 @@ fn handleClientMessage(
                             var owned_planned = planned;
                             defer owned_planned.deinitMetadata(gpa);
                             defer owned_planned.result.deinit(gpa);
+                            // CANARY: REQ=REQ-SONNY-3027-PROFILE-ENGINE-TXN; FEATURE="TransactionManagement"; ASPECT=QuicProfileSettle; STATUS=TESTED; TEST=tests/test_sonny3027_profile_engine_txn.zig; OWNER=storage; UPDATED=2026-09-27
+                            // SONNY-3027: the session engine transaction the
+                            // program's changes opened commits here, while the
+                            // request still holds its write lock.
+                            geode.graph_storage_adapter.settleThreadSessionTxn() catch |err| {
+                                failed_in_txn = true;
+                                const info = proto_util.mapError(err);
+                                try sendExecuteError(gpa, stream, info.code, info.message, &.{}, &.{});
+                                return;
+                            };
                             // CANARY: REQ=REQ-SONNY-2802-PROFILE-REGIME; FEATURE="StatementAuthorization"; ASPECT=QuicProfileTxn; STATUS=TESTED; TEST=tests/test_sonny2802_profile_regime.zig; OWNER=security; UPDATED=2026-09-26
                             // SONNY-2802: a PROFILE'd change is its transaction's,
                             // recorded as soon as it ran, as the .rows arm does.
@@ -8417,6 +8427,12 @@ fn handleClientMessage(
                         return;
                     };
                     defer exec_result.deinit(gpa);
+                    geode.graph_storage_adapter.settleThreadSessionTxn() catch |err| {
+                        failed_in_txn = true;
+                        const info = proto_util.mapError(err);
+                        try sendExecuteError(gpa, stream, info.code, info.message, &.{}, &.{});
+                        return;
+                    };
                     // SONNY-2802: see the planned path above.
                     updateTxnStateFromProgram(state, &parse_result.program, if (stmt_plan.is_mutation) lock_graph else null);
 
@@ -8657,6 +8673,13 @@ fn handleClientMessage(
                     // Task 1: mark execute phase complete (before lock release).
                     if (mut_sample) |*s| s.markExecuteDone();
                     defer exec_result.deinit(gpa);
+                    // SONNY-3027: see the .profile arm.
+                    geode.graph_storage_adapter.settleThreadSessionTxn() catch |err| {
+                        failed_in_txn = true;
+                        const info = proto_util.mapError(err);
+                        try sendExecuteError(gpa, stream, info.code, info.message, &.{}, &.{});
+                        return;
+                    };
                     // SONNY-2805: the session's transaction as the program left
                     // it, recorded before anything below (the post-filter, the
                     // response) can fail the request.

@@ -472,6 +472,14 @@ pub fn executeProfiledIfSupported(
     // CANARY: REQ=REQ-PROFILE-RLS-TENANT-001; FEATURE="PROFILE"; ASPECT=ActiveContextPush; STATUS=TESTED; TEST=tests/test_profile_rls_tenant.zig; OWNER=security; UPDATED=2026-08-29
     const prev_ctx = execution.pushActiveContext(&context);
     defer execution.popActiveContext(prev_ctx);
+    // CANARY: REQ=REQ-SONNY-3027-PROFILE-ENGINE-TXN; FEATURE="TransactionManagement"; ASPECT=ProfiledEntryPoint; STATUS=TESTED; TEST=tests/test_sonny3027_profile_engine_txn.zig; OWNER=storage; UPDATED=2026-09-27
+    // SONNY-3027: a profiled query is a program of its own, like one run
+    // through `executeProgramWithContext`: the session engine transaction a
+    // change in it opened (`executeMerge`, `executeCreate`) is committed when
+    // it returns, while the handler still holds the request's write lock. It
+    // stayed open, and the backstop committed it after the lock was released.
+    execution.enterEntryPoint();
+    defer execution.leaveEntryPoint();
 
     var plan = (try buildPlanIfSupported(allocator, q, context)) orelse return null;
     errdefer plan.deinit(allocator);

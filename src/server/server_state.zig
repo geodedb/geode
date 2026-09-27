@@ -480,9 +480,14 @@ pub const ServerState = struct {
                 self.txn_id = 0;
             }
         }
-        // SONNY-2823: and no engine transaction outlives the request (one
-        // left open is committed there).
-        gsa.leaveSessionEngineTxn(&self.session_engine_txn, scope.engine);
+        // SONNY-2823: and no engine transaction outlives the request.
+        // SONNY-3027: one still open here outlived the request's write lock:
+        // it is aborted, and the transaction it belongs to failed. It is
+        // rolled back (under its graph's write lock), so its COMMIT reports
+        // the failure rather than keeping changes that were never committed.
+        if (gsa.leaveSessionEngineTxn(&self.session_engine_txn, scope.engine) and self.in_txn) {
+            self.rollBackTransaction(self.sessionGraph());
+        }
     }
 
     /// SONNY-2823: commit the session's engine transaction, where its undo

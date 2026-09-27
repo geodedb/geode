@@ -2838,20 +2838,39 @@ pub fn enterSessionEngineTxn(slot: *SessionEngineTxn) SessionEngineTxnScope {
     return .{ .prev = prev };
 }
 
+// CANARY: REQ=REQ-SONNY-3027-PROFILE-ENGINE-TXN; FEATURE="TransactionManagement"; ASPECT=Instrumentation; STATUS=TESTED; TEST=tests/test_sonny3027_profile_engine_txn.zig; OWNER=storage; UPDATED=2026-09-27
+/// SONNY-3027: releases of a graph's write lock that found a session engine
+/// transaction still open on the releasing thread (`settleAtWriteRelease`).
+/// The request's handler commits it before it lets go; each one counted here
+/// is a path that did not. Zero in a correct server.
+pub var session_txn_open_at_write_release_total: std.atomic.Value(u64) = .init(0);
+/// SONNY-3027: requests that ended with their session engine transaction
+/// still open (`leaveSessionEngineTxn`'s backstop), which aborts it. Zero in a
+/// correct server.
+pub var session_txn_backstop_total: std.atomic.Value(u64) = .init(0);
+
 /// SONNY-2823: the request is over. The thread keeps no session engine
 /// transaction, and no per-statement one either: neither may outlive the
 /// request on a pooled thread, where the next request's writes, from any
 /// session, would join it.
-pub fn leaveSessionEngineTxn(slot: *SessionEngineTxn, scope: SessionEngineTxnScope) void {
-    if (scope.nested) return;
+///
+/// SONNY-3027: true when the backstop ran: the session's engine transaction
+/// was still open. The request's write lock is released by now, so it is
+/// aborted, never committed (a commit here, outside the lock, overlapped the
+/// transactions of the graph's next writer: the SONNY-2978 class), and the
+/// caller fails the session's transaction.
+pub fn leaveSessionEngineTxn(slot: *SessionEngineTxn, scope: SessionEngineTxnScope) bool {
+    if (scope.nested) return false;
+    var backstop = false;
     if (slot.open and t_session_engine_txn == &slot.txn) {
-        // The executor commits it when the program that opened it returns;
-        // one still open is a bug. Its changes stand in memory, as an undo
-        // transaction's do until it is undone, so it is committed.
-        log.err("a session engine txn outlived its request; committing it", .{});
-        commitThreadSessionTxn() catch |err| {
-            log.err("session engine txn commit failed: {s}", .{@errorName(err)});
-        };
+        // The executor commits it when the program that opened it returns,
+        // and the handler before it releases the program's write lock; one
+        // still open is a bug. A warning: the failure is handled, and the
+        // client sees it (its transaction fails); the counter tells.
+        log.warn("a session engine txn outlived its request's write lock; aborting it and failing its transaction", .{});
+        _ = session_txn_backstop_total.fetchAdd(1, .monotonic);
+        abortThreadSessionTxn();
+        backstop = true;
     }
     slot.open = false;
     t_session_engine_slot = scope.prev;
@@ -2864,6 +2883,34 @@ pub fn leaveSessionEngineTxn(slot: *SessionEngineTxn, scope: SessionEngineTxnSco
         log.err("a statement engine txn was left open at the end of a request; the thread forgets it", .{});
         t_current_statement_txn = null;
     }
+    return backstop;
+}
+
+// CANARY: REQ=REQ-SONNY-3027-PROFILE-ENGINE-TXN; FEATURE="TransactionManagement"; ASPECT=CommitBeforeRelease; STATUS=TESTED; TEST=tests/test_sonny3027_profile_engine_txn.zig; OWNER=storage; UPDATED=2026-09-27
+/// SONNY-3027: the transport handlers call this while they still hold the
+/// request's graph write lock, before they release it: the session engine
+/// transaction the request left on this thread is committed under the lock.
+/// The executor's entry points commit it when the program ends; a path that
+/// ran a change without passing one (the PROFILE arm) left it open, and only
+/// the backstop committed it, after the lock was released. An error fails the
+/// request, and the handler rolls back the session's transaction.
+pub fn settleThreadSessionTxn() !void {
+    try commitThreadSessionTxn();
+}
+
+/// SONNY-3027: `graph_store.releaseGraphLock` of a write lock, before it lets
+/// go. A session engine transaction still open on this thread is committed
+/// now, under the lock, rather than after it (by then another writer may hold
+/// the lock and have transactions of its own open on the graph). Its handler
+/// should have committed it first (`settleThreadSessionTxn`), so it is
+/// counted and logged.
+pub fn settleAtWriteRelease() void {
+    if (t_session_engine_txn == null) return;
+    _ = session_txn_open_at_write_release_total.fetchAdd(1, .monotonic);
+    log.err("a graph write lock was released with a session engine txn open; committing it under the lock", .{});
+    commitThreadSessionTxn() catch |err| {
+        log.err("session engine txn commit failed: {s}", .{@errorName(err)});
+    };
 }
 
 /// SONNY-2823: take this thread's session engine transaction off the thread

@@ -1190,11 +1190,13 @@ fn commitSessionEngineTxn() void {
 /// transaction goes on: the undo log undoes a committed change as well.
 threadlocal var t_entry_depth: u32 = 0;
 
-fn enterEntryPoint() void {
+/// SONNY-3027: `pub` for the executor's other entry points, the profiled
+/// execution in `planned_read_runtime`.
+pub fn enterEntryPoint() void {
     t_entry_depth += 1;
 }
 
-fn leaveEntryPoint() void {
+pub fn leaveEntryPoint() void {
     t_entry_depth -= 1;
     if (t_entry_depth == 0) commitSessionEngineTxn();
 }

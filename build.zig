@@ -8925,6 +8925,27 @@ pub fn build(b: *std.Build) void {
     const sonny3026_step = b.step("test-sonny3026-profile-txn-control", "Run SONNY-3026 regression (EXPLAIN and PROFILE of START TRANSACTION, COMMIT, ROLLBACK, a session statement or graph selection are refused, 0A000, and leave the session's transaction and graph as they were; gRPC in process and QUIC against a spawned server)");
     sonny3026_step.dependOn(&run_sonny3026_tests.step);
 
+    // SONNY-3027: a PROFILE'd change in a transaction commits its session
+    // engine transaction under the graph's write lock (the profiled entry
+    // point is an executor entry point, and both handlers commit before they
+    // release a write lock); the backstop aborts and fails the transaction.
+    // The executor directly, the real gRPC handler in process (SONNY-1560
+    // shim), and QUIC against a spawned server.
+    const sonny3027_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny3027_profile_engine_txn.zig"), .target = target, .optimize = optimize });
+    sonny3027_test_mod.link_libc = true;
+    sonny3027_test_mod.addImport("geode", root_mod);
+    sonny3027_test_mod.addImport("schema", schema_mod);
+    sonny3027_test_mod.addImport("protobuf", protobuf_mod);
+    sonny3027_test_mod.addImport("grpc_impl", sonny1560_shim_mod);
+    sonny3027_test_mod.addImport("logging", logging_mod);
+    sonny3027_test_mod.addImport("transport/quic", transport_quic_mod);
+    const sonny3027_tests = b.addTest(.{ .root_module = sonny3027_test_mod });
+    const run_sonny3027_tests = b.addRunArtifact(sonny3027_tests);
+    run_sonny3027_tests.step.dependOn(&install_geode_exe.step);
+    shardDep(test_step, &run_sonny3027_tests.step, 1, test_shard_loads, test_shard_index);
+    const sonny3027_step = b.step("test-sonny3027-profile-engine-txn", "Run SONNY-3027 regression (a PROFILE'd MERGE or CREATE in a transaction leaves no engine transaction open once its write lock is released; the backstop aborts and fails the transaction, never commits outside the lock; executor, gRPC in process, QUIC e2e)");
+    sonny3027_step.dependOn(&run_sonny3027_tests.step);
+
     // SONNY-2790: the fulltext statements (CREATE/DROP INDEX, geode.fts.*)
     // run on the default graph, so the handlers lock `default` for them from
     // any session. Classifier, and the real gRPC handler (SONNY-1560 shim).
