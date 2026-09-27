@@ -68,7 +68,8 @@
   `CREATE CONSTRAINT IF NOT EXISTS` is a no-op; the refusal used to return a
   result whose one column and one row were uninitialized memory. When saving
   the catalog fails, CREATE CONSTRAINT, CREATE SCHEMA and a new graph no
-  longer leave the map holding a name already freed.
+  longer leave the map holding a name already freed, and a catalog whose
+  load fails at open no longer leaks what it had read.
 - **Integer overflow and narrowing no longer abort the server
   (SONNY-2769):** integer overflow, a narrowing cast that does not fit, and
   minInt divided by -1 abort a Debug or ReleaseSafe server. A read-only query

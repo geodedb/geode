@@ -130,3 +130,102 @@ test "SONNY-2809: the catalog's add functions free a refused name once" {
     try cat.ensureAutoIdIndex("L");
     try cat.ensureAutoIdIndex("L");
 }
+
+// ---------------------------------------------------------------------------
+// Round 7: the error paths. Each add function must free exactly what it still
+// owns when an allocation or the save fails, and leave the catalog as it was.
+// ---------------------------------------------------------------------------
+
+const nonzero_uuid: [16]u8 = .{ 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16 };
+
+/// A catalog in a fresh directory, and one of each add. Run by
+/// checkAllAllocationFailures once per allocation, failing that allocation:
+/// every run must return OutOfMemory and free every byte. ensureAutoIdIndex
+/// is not here: it keeps an index whose save failed, by design (IF NOT
+/// EXISTS semantics; it logs the failure).
+fn addEachWith(allocator: std.mem.Allocator) !void {
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const dir = try harness.tmpDirRealpathAlloc(testing.allocator, &tmp.sub_path);
+    defer testing.allocator.free(dir);
+    const cat = try catalog_mod.Catalog.init(allocator, dir);
+    defer {
+        cat.deinit();
+        allocator.destroy(cat);
+    }
+    var props = [_][]const u8{ "id", "email" };
+    try cat.addConstraint(.{ .name = "u", .constraint_type = .unique, .label = "L", .properties = &props, .is_enforced = true });
+    try cat.addSchema("s");
+    try cat.addGraphWithUuid("g", nonzero_uuid);
+    var cols = [_][]const u8{ "id", "name" };
+    try cat.addIndex(.{ .name = "i", .index_type = "btree", .table_name = "L", .columns = &cols, .metric = "cosine" });
+}
+
+test "SONNY-2809: the catalog's add functions free what they own when an allocation fails" {
+    try testing.checkAllAllocationFailures(testing.allocator, addEachWith, .{});
+}
+
+extern "c" fn chmod(path: [*:0]const u8, mode: c_uint) c_int;
+
+fn expectFailure(result: anyerror!void) !void {
+    if (result) |_| return error.SaveDidNotFail else |err| switch (err) {
+        else => {},
+    }
+}
+
+fn setMode(buf: []u8, comptime fmt: []const u8, args: anytype, mode: c_uint) !void {
+    const path = try std.fmt.bufPrint(buf, fmt, args);
+    buf[path.len] = 0;
+    if (chmod(buf[0..path.len :0], mode) != 0) return error.ChmodFailed;
+}
+
+test "SONNY-2809: a failed catalog save leaves the catalog as it was" {
+    // Root writes through a read-only mode: nothing to test.
+    if (std.os.linux.geteuid() == 0) return error.SkipZigTest;
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const dir = try harness.tmpDirRealpathAlloc(testing.allocator, &tmp.sub_path);
+    defer testing.allocator.free(dir);
+    const cat = try catalog_mod.Catalog.init(testing.allocator, dir);
+    defer {
+        cat.deinit();
+        testing.allocator.destroy(cat);
+    }
+    try cat.addSchema("kept");
+
+    // The catalog file and its directory read-only: every save fails.
+    var buf: [std.fs.max_path_bytes + 1]u8 = undefined;
+    try setMode(&buf, "{s}/geode_catalog.dat", .{dir}, 0o400);
+    try setMode(&buf, "{s}", .{dir}, 0o500);
+    var restored = false;
+    defer if (!restored) {
+        setMode(&buf, "{s}", .{dir}, 0o700) catch {};
+        setMode(&buf, "{s}/geode_catalog.dat", .{dir}, 0o600) catch {};
+    };
+
+    var props = [_][]const u8{ "id", "email" };
+    const constraint: catalog_mod.ConstraintInfo = .{ .name = "u", .constraint_type = .unique, .label = "L", .properties = &props, .is_enforced = true };
+    var cols = [_][]const u8{ "id", "name" };
+    const index: catalog_mod.IndexInfo = .{ .name = "i", .index_type = "btree", .table_name = "L", .columns = &cols };
+    try expectFailure(cat.addConstraint(constraint));
+    try expectFailure(cat.addSchema("s"));
+    try expectFailure(cat.addGraphWithUuid("g", nonzero_uuid));
+    try expectFailure(cat.addIndex(index));
+    // Nothing was added, and each refused entry was freed once (the testing
+    // allocator reports a double free or a leak).
+    try testing.expectEqual(@as(u32, 0), cat.constraints.count());
+    try testing.expectEqual(@as(u32, 1), cat.schemas.count());
+    try testing.expectEqual(@as(u32, 0), cat.graphs.count());
+    try testing.expectEqual(@as(u32, 0), cat.indexes.count());
+
+    // Writable again: the same adds succeed, and nothing is a duplicate.
+    try setMode(&buf, "{s}", .{dir}, 0o700);
+    try setMode(&buf, "{s}/geode_catalog.dat", .{dir}, 0o600);
+    restored = true;
+    try cat.addConstraint(constraint);
+    try cat.addSchema("s");
+    try cat.addGraphWithUuid("g", nonzero_uuid);
+    try cat.addIndex(index);
+    try testing.expectEqual(@as(u32, 1), cat.constraints.count());
+    try testing.expectEqual(@as(u32, 2), cat.schemas.count());
+}

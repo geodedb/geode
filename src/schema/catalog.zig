@@ -120,6 +120,10 @@ pub const Catalog = struct {
             .constraints = std.StringHashMap(ConstraintInfo).init(allocator),
             .data_dir = try allocator.dupe(u8, data_dir),
         };
+        // SONNY-2809 (round 7): a failed load leaked the data directory's
+        // copy and every entry it had read (found by the allocation-failure
+        // test in tests/test_sonny2809_duplicate_constraint.zig).
+        errdefer self.deinit();
 
         try self.load();
 

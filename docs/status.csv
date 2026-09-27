@@ -415,8 +415,8 @@ REQ-AUTH-UNIFIED-002,AuthenticationChain,SECURITY,TESTED,,,security,2026-01-29,s
 REQ-AUTH-USER-IMPORT-001,AdminUserImport,PrecomputedHashImport,TESTED,,,security,2026-05-22,src/cli/user_mgmt_cli.zig,470
 REQ-AUTH-USER-IMPORT-002,AdminUserImport,WireProcedure,TESTED,,,security,2026-08-30,src/execution/auth_dispatch.zig,553
 REQ-AUTH-VERIFY-001,SecurePasswordVerify,Security,EXEMPT,,,security,2026-02-24,src/security/user_management.zig,507
-REQ-AUTO-INDEX-001,AutoIdIndex,CatalogMethod,TESTED,,,schema,2026-02-07,src/schema/catalog.zig,794
-REQ-AUTO-INDEX-001,AutoIdIndex,CatalogTests,TESTED,,,schema,2026-02-07,src/schema/catalog.zig,1111
+REQ-AUTO-INDEX-001,AutoIdIndex,CatalogMethod,TESTED,,,schema,2026-02-07,src/schema/catalog.zig,798
+REQ-AUTO-INDEX-001,AutoIdIndex,CatalogTests,TESTED,,,schema,2026-02-07,src/schema/catalog.zig,1115
 REQ-AUTO-INDEX-002,AutoIdIndex,Detection,TESTED,,,schema,2026-02-07,src/schema/catalog.zig,84
 REQ-AUTO-INDEX-003,AutoIdIndex,CrudAutoIndex,TESTED,,,crud_operations,2026-04-30,src/execution/crud_operations.zig,657
 REQ-AUTO-INDEX-EXPLAIN-001,AutoIdIndex,ExplainWhereClause,IMPL,,,engine,2026-02-07,src/execution/statement_handlers.zig,1250
@@ -752,7 +752,7 @@ REQ-CONCURRENCY-WHERE-SCAN-WRITER-PROGRESS,WhereScanWriterProgress,Regression,TE
 REQ-CONN-001,Connectivity,PathConnectivity,TESTED,,,graph,2026-01-16,tests/test_gap_0193_batch3_comprehensive.zig,460
 REQ-CONN-PATH-001,Connectivity,PathConnectivity,TESTED,,,algo,2026-01-16,tests/test_gap_0193_batch4_comprehensive.zig,542
 REQ-CONSTRAINT-001,ConstraintManagement,Catalog,TESTED,,,schema,2026-01-09,src/schema/catalog.zig,60
-REQ-CONSTRAINT-002,ConstraintManagement,CatalogMethods,TESTED,,,schema,2026-01-09,src/schema/catalog.zig,546
+REQ-CONSTRAINT-002,ConstraintManagement,CatalogMethods,TESTED,,,schema,2026-01-09,src/schema/catalog.zig,550
 REQ-CONSTRAINT-ENFORCE-001,ConstraintEnforcement,CatalogImport,TESTED,,,engine,2026-01-09,src/execution/crud_operations.zig,21
 REQ-CONSTRAINT-ENFORCE-002,ConstraintEnforcement,Validation,TESTED,,,engine,2026-01-09,src/execution/crud_operations.zig,677
 REQ-CONSTRAINT-EXEC-001,ConstraintExecution,CREATE,EXEMPT,,,engine,2026-01-09,src/execution.zig,1840
@@ -3451,10 +3451,10 @@ REQ-GRAPH-LOUVAIN-001,LouvainCommunityDetection,CallProcedureE2E,TESTED,,,graph,
 REQ-GRAPH-LOUVAIN-001,LouvainCommunityDetection,E2ECommunityDetection,TESTED,,,graph,2026-06-10,tests/e2e_graph_algos_new.zig,10
 REQ-GRAPH-LOUVAIN-001,LouvainCommunityDetection,GraphAnalytics,TESTED,,,graph,2026-01-25,src/graph/community_louvain.zig,4
 REQ-GRAPH-LOUVAIN-002,ModularityScore,GraphAnalytics,TESTED,,,graph,2026-01-25,src/graph/community_louvain.zig,124
-REQ-GRAPH-META-001,GraphMetadataPersistence,AddGraph,EXEMPT,,,catalog,2026-03-29,src/schema/catalog.zig,689
-REQ-GRAPH-META-002,GraphMetadataPersistence,RemoveGraph,EXEMPT,,,catalog,2026-01-09,src/schema/catalog.zig,743
-REQ-GRAPH-META-003,GraphMetadataPersistence,GraphExists,EXEMPT,,,catalog,2026-01-09,src/schema/catalog.zig,757
-REQ-GRAPH-PERSIST-005,NamedGraphPersistence,CatalogTests,TESTED,,,schema,2026-01-29,src/schema/catalog.zig,978
+REQ-GRAPH-META-001,GraphMetadataPersistence,AddGraph,EXEMPT,,,catalog,2026-03-29,src/schema/catalog.zig,693
+REQ-GRAPH-META-002,GraphMetadataPersistence,RemoveGraph,EXEMPT,,,catalog,2026-01-09,src/schema/catalog.zig,747
+REQ-GRAPH-META-003,GraphMetadataPersistence,GraphExists,EXEMPT,,,catalog,2026-01-09,src/schema/catalog.zig,761
+REQ-GRAPH-PERSIST-005,NamedGraphPersistence,CatalogTests,TESTED,,,schema,2026-01-29,src/schema/catalog.zig,982
 REQ-GRAPH-STORAGE-CALL-001,ProcedureAccessClassification,Execution,IMPL,,,execution,2026-04-01,src/execution/procedure_access.zig,19
 REQ-GRAPH-TRAVERSE-001,Graph,GraphTraversal,TESTED,,,engine,2026-01-16,tests/test_gap_0193_batch4_comprehensive.zig,617
 REQ-GRAPH-TYPE-REGISTRY-001,GraphTypeRegistry,TypeDefinition,EXEMPT,,,catalog,2026-01-10,src/server/server_state.zig,35
@@ -5126,15 +5126,15 @@ REQ-SHELL-TXN-ERROR-002,TransactionErrorDetails,CommitWithRetry,TESTED,,,cli,202
 REQ-SHELL-TXN-ERROR-003,TransactionErrorDetails,RollbackWithRetry,TESTED,,,cli,2026-06-11,src/client/repl/repl_dispatch.zig,1564
 REQ-SHELL-WOULDBLOCK-001,SuppressWouldBlock,ReplLoopError,IMPL,,,cli,2026-01-28,src/client/repl/repl_loop.zig,938
 REQ-SHELL-WOULDBLOCK-002,SuppressWouldBlock,RunGqlError,IMPL,,,cli,2026-01-28,src/client/repl/repl_dispatch.zig,2622
-REQ-SHOW-CONSTRAINTS-001,SHOW CONSTRAINTS,CatalogList,TESTED,,,catalog,2026-01-13,src/schema/catalog.zig,930
+REQ-SHOW-CONSTRAINTS-001,SHOW CONSTRAINTS,CatalogList,TESTED,,,catalog,2026-01-13,src/schema/catalog.zig,934
 REQ-SHOW-CONSTRAINTS-002,SHOW CONSTRAINTS,StatementHandler,TESTED,,,execution,2026-01-13,src/execution/statement_handlers.zig,180
 REQ-SHOW-CONSTRAINTS-002,StatementHandler,ShowConstraints,TESTED,,,execution,2026-01-16,tests/test_gap_0193_batch2_misc.zig,162
 REQ-SHOW-FUNCTIONS-001,SHOW FUNCTIONS,StatementHandler,TESTED,,,execution,2026-01-13,src/execution/statement_handlers.zig,330
 REQ-SHOW-FUNCTIONS-001,StatementHandler,ShowFunctions,TESTED,,,execution,2026-01-16,tests/test_gap_0193_batch2_misc.zig,169
-REQ-SHOW-INDEXES-001,SHOW INDEXES,CatalogList,TESTED,,,catalog,2026-01-13,src/schema/catalog.zig,911
+REQ-SHOW-INDEXES-001,SHOW INDEXES,CatalogList,TESTED,,,catalog,2026-01-13,src/schema/catalog.zig,915
 REQ-SHOW-PROCEDURES-001,SHOW PROCEDURES,StatementHandler,TESTED,,,execution,2026-01-13,src/execution/statement_handlers.zig,259
 REQ-SHOW-PROCEDURES-001,StatementHandler,ShowProcedures,TESTED,,,execution,2026-01-16,tests/test_gap_0193_batch2_misc.zig,176
-REQ-SHOW-SCHEMAS-001,SHOW SCHEMAS,CatalogList,TESTED,,,catalog,2026-01-13,src/schema/catalog.zig,949
+REQ-SHOW-SCHEMAS-001,SHOW SCHEMAS,CatalogList,TESTED,,,catalog,2026-01-13,src/schema/catalog.zig,953
 REQ-SHOW-TABLES-001,SHOW TABLES,StatementHandler,TESTED,,,execution,2026-01-13,src/execution/statement_handlers.zig,233
 REQ-SHOW-TABLES-001,StatementHandler,ShowTables,TESTED,,,execution,2026-01-16,tests/test_gap_0193_batch2_misc.zig,183
 REQ-SNAPSHOT-001,SnapshotInstallation,SnapshotCreate,TESTED,,,backup,2026-01-15,tests/test_gap_0193_remaining_categories.zig,266
