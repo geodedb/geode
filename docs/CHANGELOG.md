@@ -164,6 +164,10 @@
   A DOUBLE and a decimal are equal only when their values are exactly
   equal (`{x: 0.1}` does not match a stored DOUBLE 0.1), which is how
   GROUP BY treats them. `=` compares them in a double instead (SONNY-2807).
+  The planned read's WHERE seek (`WHERE n.x = <integer>`) agrees with `=`
+  past 2^53: `n.x = 9007199254740993` returned no row for a stored DOUBLE
+  2^53, while `count(n)` returned 1. For an integer no double holds, the
+  seek now also asks for the double nearest it.
 
   **Upgrade note:** the adapter's exact node-property index (`prop_exact.idx`
   and `prop_rev.idx`) hashes a number by its value now, and each entry of

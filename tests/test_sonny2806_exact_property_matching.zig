@@ -464,3 +464,31 @@ test "SONNY-2806: the streaming node scan matches a stored number by value" {
     try testing.expectEqual(@as(usize, 1), try streamRows(&h, "MATCH (n:SV {v: $iv}) RETURN n.v", &iv_names, &pt24h));
     try testing.expectEqual(@as(usize, 0), try streamRows(&h, "MATCH (n:ST {x: 1.5}) RETURN n.x", &.{}, &.{}));
 }
+
+// ---------------------------------------------------------------------------
+// SONNY-2807: the planned read's WHERE seek agrees with `=` past 2^53
+// ---------------------------------------------------------------------------
+
+fn checkWhereSeekPast2p53(s: *Session, f: *Failures) !void {
+    const prev = execution.pushActiveContext(&s.ctx);
+    defer execution.popActiveContext(prev);
+    try s.double("CREATE (:B53 {x: $v})", 9007199254740992.0);
+    try s.exec("CREATE (:B53 {x: 9007199254740992})", &.{});
+    // `=` compares a DOUBLE with an integer in a double: 2^53 + 1 rounds to
+    // 2^53. An integer with an integer compares exactly. The count agreed;
+    // the rows came from an exact-index seek for the integer 2^53 + 1, which
+    // found no node.
+    try expectRows(s, f, "MATCH (n:B53) RETURN n.x = 9007199254740993 AS eq", &.{}, &.{ "true", "false" });
+    try expectValue(s, f, "MATCH (n:B53) WHERE n.x = 9007199254740993 RETURN count(n) AS c", "1");
+    try expectRows(s, f, "MATCH (n:B53) WHERE n.x = 9007199254740993 RETURN n.x AS x", &.{}, &.{"9007199254740992d"});
+    try expectRows(s, f, "MATCH (n:B53) WHERE 9007199254740993 = n.x RETURN n.x AS x", &.{}, &.{"9007199254740992d"});
+    try expectRows(s, f, "MATCH (n:B53) WHERE n.x = 9007199254740992 RETURN n.x AS x", &.{}, &.{ "9007199254740992", "9007199254740992d" });
+    try expectRows(s, f, "MATCH (n:B53) WHERE n.x = 9007199254740994 RETURN n.x AS x", &.{}, &.{});
+    // An inline map compares exactly, as GROUP BY does.
+    try expectRows(s, f, "MATCH (n:B53 {x: 9007199254740993}) RETURN n.x AS x", &.{}, &.{});
+    try expectRows(s, f, "MATCH (n:B53 {x: 9007199254740992}) RETURN n.x AS x", &.{}, &.{ "9007199254740992", "9007199254740992d" });
+}
+
+test "SONNY-2807: a WHERE equality seek agrees with = past 2^53" {
+    try inModes("where seek past 2^53", &eval_modes, checkWhereSeekPast2p53);
+}

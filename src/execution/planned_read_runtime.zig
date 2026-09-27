@@ -2483,6 +2483,14 @@ fn propertyAccessMatches(expr: ast.Expr, pattern_name: []const u8) ?[]const u8 {
     };
 }
 
+/// Whether the double nearest `i` is `i` itself (always within 2^53).
+fn doubleHoldsExactly(i: i64) bool {
+    const f: f64 = @floatFromInt(i);
+    // maxInt(i64) rounds up to 2^63, which no i64 holds.
+    if (f >= 0x1p63) return false;
+    return @as(i64, @intFromFloat(f)) == i;
+}
+
 fn tryExtractPatternEqPredicate(
     pattern_name: ?[]const u8,
     where: ast.Expr,
@@ -2568,6 +2576,9 @@ fn collectStartSlots(
         // Seed key+value are set atomically so neither is ever valid without
         // the other — eliminates the `undefined` field and the dead `orelse`.
         var seed: ?struct { key: []const u8, pv: graph_store.PropertyValue } = null;
+        // SONNY-2807: the WHERE arm's second seek, for an integer no double
+        // holds (see below).
+        var nearest_double: ?graph_store.PropertyValue = null;
 
         if (pattern.props) |props| {
             if (props.len == 0) break :fp;
@@ -2617,7 +2628,18 @@ fn collectStartSlots(
             const expected_val = eval.evalExpr(allocator, extracted.value.*, prop_env) catch break :fp;
             const seed_pv: graph_store.PropertyValue = switch (expected_val) {
                 .Str => |s| graph_store.PropertyValue{ .String = s },
-                .Int => |i| graph_store.PropertyValue{ .Int = i },
+                .Int => |i| blk: {
+                    // SONNY-2807: `=` compares a stored DOUBLE with an
+                    // integer in a double, and the seek finds the nodes whose
+                    // value is exactly the integer. Past 2^53 a double may
+                    // not hold the integer: `n.x = 9007199254740993` is true
+                    // for a stored DOUBLE 2^53, which the seek missed. Seek
+                    // the nearest double too; the WHERE filter that follows
+                    // drops what `=` does not keep.
+                    const nearest: f64 = @floatFromInt(i);
+                    if (!doubleHoldsExactly(i)) nearest_double = .{ .Float = nearest };
+                    break :blk graph_store.PropertyValue{ .Int = i };
+                },
                 .Bool => |b| graph_store.PropertyValue{ .Bool = b },
                 else => break :fp,
             };
@@ -2627,7 +2649,20 @@ fn collectStartSlots(
         }
 
         const s = seed orelse break :fp;
-        const candidates = adapter.getCandidateNodesByLabelAndProperty(graph_name, pattern.labels[0], s.key, s.pv, allocator) catch break :fp;
+        const exact = adapter.getCandidateNodesByLabelAndProperty(graph_name, pattern.labels[0], s.key, s.pv, allocator) catch break :fp;
+        const candidates = if (nearest_double) |d| blk: {
+            defer allocator.free(exact);
+            const near = adapter.getCandidateNodesByLabelAndProperty(graph_name, pattern.labels[0], s.key, d, allocator) catch break :fp;
+            defer allocator.free(near);
+            // Two values, two postings: disjoint but for a hash collision.
+            var both = try std.ArrayList(u64).initCapacity(allocator, exact.len + near.len);
+            errdefer both.deinit(allocator);
+            both.appendSliceAssumeCapacity(exact);
+            for (near) |slot| {
+                if (std.mem.indexOfScalar(u64, exact, slot) == null) both.appendAssumeCapacity(slot);
+            }
+            break :blk try both.toOwnedSlice(allocator);
+        } else exact;
         defer allocator.free(candidates);
 
         var verified = try std.ArrayList(u64).initCapacity(allocator, candidates.len);
