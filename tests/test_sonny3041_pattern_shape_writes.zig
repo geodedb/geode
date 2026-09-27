@@ -161,4 +161,14 @@ test "SONNY-3041: every executor that reads a pattern refuses a write clause it 
             return error.ExecutorUnguarded;
         }
     }
+    // And so do the chain's executors, for the parts after a WITH.
+    const chain = try readFile(allocator, "src/execution/query_execution.zig");
+    defer allocator.free(chain);
+    for ([_][]const u8{ "executeQueryWithBindingsImpl", "executeQueryChain" }) |name| {
+        const body = fnBody(chain, name) orelse return error.ExecutorMissing;
+        if (std.mem.indexOf(u8, body, "refuseUnappliedWrites(") == null and std.mem.indexOf(u8, body, "refuseChainedWrites(") == null) {
+            std.debug.print("chain executor {s} does not call the write guard\n", .{name});
+            return error.ExecutorUnguarded;
+        }
+    }
 }

@@ -45,6 +45,8 @@ const planned_read_runtime = @import("planned_read_runtime.zig");
 const return_and_sorting = @import("return_and_sorting.zig");
 // GAP-0840: shared strict-tenancy decision (opt-in rejection of unscoped reads).
 const tenancy = @import("tenancy.zig");
+// SONNY-3040: whether a chained part writes.
+const query_traits = @import("../query/query_traits.zig");
 const generateUniqueColumnNames = match_operations.generateUniqueColumnNames;
 
 // Local type aliases
@@ -76,10 +78,69 @@ fn resolveLimitParam(literal: ?usize, param_name: ?[]const u8, param_names: []co
     return null;
 }
 
+// CANARY: REQ=REQ-SONNY-3040-CHAINED-WRITES; FEATURE="WriteStep"; ASPECT=ChainedWriteRefusal; STATUS=TESTED; TEST=tests/test_sonny3040_chained_writes.zig; OWNER=engine; UPDATED=2026-09-27
+/// SONNY-3040: refuse (0A000) a chain whose parts after the first write: a
+/// CREATE, MERGE, SET, REMOVE or DELETE (or a mutating procedure CALL, or a
+/// FOR whose body writes) after a WITH that starts a new part. The chain
+/// executor evaluates each part's MATCH, WITH, WHERE and RETURN and never its
+/// writes, so `MATCH (n:G) WITH n CREATE (n)-[:T]->(:Z)` returned its rows
+/// and created nothing, and `MATCH (q:Q) WITH q MATCH (q) DELETE q` deleted
+/// nothing. Checked before any part runs, so a refused chain changes nothing.
+fn refuseChainedWrites(q: ast.Query) error{WriteClauseNotApplied}!void {
+    var part = q.next_query;
+    while (part) |p| : (part = p.next_query) {
+        var alone = p.*;
+        alone.next_query = null;
+        if (query_traits.isQueryMutating(&alone)) return error.WriteClauseNotApplied;
+    }
+}
+
+/// SONNY-3040: `MATCH ... WITH ... CREATE` or `... WITH ... MERGE` as the one
+/// query it is: MATCH ... CREATE or MATCH ... MERGE over the WITH's rows
+/// (`readPatternBindings` reads a WITH's rows, after its WHERE, ORDER BY and
+/// LIMIT), with the last part's RETURN, ORDER BY, SKIP and LIMIT. Null for
+/// any other chain: the first part must only read one MATCH through a WITH,
+/// and the second must be the last and hold only the CREATE or the MERGE.
+fn chainedWriteAsOneQuery(q: ast.Query) ?ast.Query {
+    const next = q.next_query orelse return null;
+    // The first part: a MATCH, then a WITH, and no write, grouping or
+    // other stage of its own.
+    if (q.match.chains.len == 0 or q.with_clause == null or q.is_initial_with) return null;
+    var first = q;
+    first.next_query = null;
+    if (query_traits.isQueryMutating(&first)) return null;
+    if (q.group_by != null or q.having != null or q.unwind_clause != null or q.call_clause != null or
+        q.initial_call_subquery != null or q.for_statement != null) return null;
+    // The second part: the last, a CREATE or a MERGE and nothing else.
+    if (next.next_query != null or next.match.chains.len != 0 or next.with_clause != null) return null;
+    if (next.where_clause != null or next.filter_clause != null or next.unwind_clause != null or
+        next.call_clause != null or next.initial_call_subquery != null or next.for_statement != null or
+        next.cte_list != null or next.let_bindings.len != 0 or next.inline_let_bindings.len != 0) return null;
+    if (next.set_clauses.len != 0 or next.remove_clauses.len != 0 or next.delete_items.len != 0) return null;
+    if ((next.create_pattern != null) == (next.merge_statement != null)) return null;
+    var one = q;
+    one.next_query = null;
+    one.create_pattern = next.create_pattern;
+    one.merge_statement = next.merge_statement;
+    one.ret = next.ret;
+    one.group_by = next.group_by;
+    one.having = next.having;
+    one.order_by = next.order_by;
+    one.limit = next.limit;
+    one.offset = next.offset;
+    one.limit_param = next.limit_param;
+    one.offset_param = next.offset_param;
+    return one;
+}
+
 // CANARY: REQ=REQ-EXEC-REFACTOR-011; FEATURE="FileModularization"; ASPECT=QueryExecution; STATUS=EXEMPT; OWNER=refactoring; UPDATED=2025-10-17
 // CANARY: REQ=REQ-0003; FEATURE="Engine Contract Requirements"; ASPECT=Execution; STATUS=TESTED; TEST=tests/e2e_protocol.zig; OWNER=execution; UPDATED=2026-01-15
 pub fn executeQueryChain(allocator: std.mem.Allocator, current_query: ast.Query, next_query_ptr: *ast.Query, context: ExecutionContext) anyerror!ExecutionResult {
     const exec_ctx: *ExecutionContext = @constCast(&context);
+    // SONNY-3040: no part after the first writes (the dispatcher refused or
+    // rewrote such a chain before it got here); this chain executor would
+    // drop the write.
+    try refuseChainedWrites(current_query);
     // Execute the current query (without the next_query link to avoid infinite recursion)
     var current_query_standalone = current_query;
     current_query_standalone.next_query = null;
@@ -1250,6 +1311,9 @@ pub fn executeQueryWithBindingsImpl(allocator: std.mem.Allocator, q: ast.Query, 
     // If there's no MATCH clause, just evaluate RETURN with bindings
     // CANARY: REQ=REQ-GQL-WITH-WHERE-001; FEATURE="ChainedWITHWithWHERE"; ASPECT=WhereEvaluation; STATUS=TESTED; TEST=geodetestlab/specs/gql_query_comprehensive.yml; OWNER=execution; UPDATED=2025-12-24
     if (q.match.chains.len == 0 and binding_names.len > 0) {
+        // SONNY-3040: this evaluates the part's WITH, WHERE and RETURN only;
+        // a CREATE, MERGE, SET, REMOVE or DELETE here was dropped.
+        try match_operations.refuseUnappliedWrites(q, .{});
         const combined = try combineBindingParams(allocator, context, binding_names, binding_values);
         defer if (combined.owns) {
             allocator.free(combined.names);
@@ -1343,6 +1407,8 @@ pub fn executeQueryWithBindingsImpl(allocator: std.mem.Allocator, q: ast.Query, 
     // If all MATCH variables are bound, we can skip matching and just evaluate RETURN
     // CANARY: REQ=REQ-GQL-WITH-WHERE-002; FEATURE="BoundVarsWithWHERE"; ASPECT=WhereEvaluation; STATUS=TESTED; TEST=geodetestlab/specs/gql_query_comprehensive.yml; OWNER=execution; UPDATED=2025-12-24
     if (all_vars_bound and bound_var_env_names.items.len > 0) {
+        // SONNY-3040: as above, this applies no write.
+        try match_operations.refuseUnappliedWrites(q, .{});
         const items = q.ret.items;
         const columns = try generateUniqueColumnNames(allocator, items);
 
@@ -1679,8 +1745,11 @@ pub fn executeQueryWithContext(allocator: std.mem.Allocator, q: ast.Query, conte
     // "non-write", not "has a MATCH": every write-carrying shape (with or
     // without a MATCH) still keeps the GAP-ENT-0040 write budget below, so the
     // two scopes still never coexist.
+    // SONNY-3040: a chained part's CREATE or MERGE runs as MATCH ... CREATE
+    // or MERGE (`chainedWriteAsOneQuery`): a write too.
+    const chain_writes = q.next_query != null and query_traits.isQueryMutating(&q);
     const write_carrying = q.set_clauses.len > 0 or q.remove_clauses.len > 0 or
-        q.delete_items.len > 0 or q.create_pattern != null or q.merge_statement != null;
+        q.delete_items.len > 0 or q.create_pattern != null or q.merge_statement != null or chain_writes;
     var read_scope = read_budget.Scope.init();
     const read_scope_active = !write_carrying and
         (read_scope.budget_bytes != read_budget.unlimited or
@@ -1804,7 +1873,7 @@ pub fn executeQueryWithContext(allocator: std.mem.Allocator, q: ast.Query, conte
     // executeMatchQueryImpl (pointWriteFastPath) and stay far below any budget.
     const budget_write_carrying = q.match.chains.len > 0 and
         (q.set_clauses.len > 0 or q.remove_clauses.len > 0 or q.delete_items.len > 0 or
-            q.create_pattern != null or q.merge_statement != null);
+            q.create_pattern != null or q.merge_statement != null or chain_writes);
     if (budget_write_carrying) {
         var budget_scope = write_budget.Scope.init();
         const meter = budget_scope.budget_bytes != write_budget.unlimited;
@@ -1900,6 +1969,25 @@ pub fn executeLegacyQueryWithResolvedParams(
     const param_values = struct { items: []const Value }{ .items = resolved_param_values };
 
     if (q.next_query) |next_query_ptr| {
+        // CANARY: REQ=REQ-SONNY-3040-CHAINED-WRITES; FEATURE="WriteStep"; ASPECT=ChainDispatch; STATUS=TESTED; TEST=tests/test_sonny3040_chained_writes.zig; OWNER=engine; UPDATED=2026-09-27
+        // SONNY-3040: MATCH ... WITH ... CREATE or MERGE is MATCH ... CREATE
+        // or MERGE over the WITH's rows; it runs as that. Any other chain
+        // whose later part writes is refused before any part runs: the chain
+        // executor never applied the write.
+        if (chainedWriteAsOneQuery(q)) |one| {
+            var result = try executeLegacyQueryWithResolvedParams(allocator, one, context, resolved_param_names, resolved_param_values);
+            errdefer result.deinit(allocator);
+            // The statement's SKIP and LIMIT are the last part's, which the
+            // statement dispatcher (reading the first part) does not see.
+            const start = resolveLimitParam(one.offset, one.offset_param, resolved_param_names, resolved_param_values) orelse 0;
+            var end = result.rows.len;
+            if (resolveLimitParam(one.limit, one.limit_param, resolved_param_names, resolved_param_values)) |lim| {
+                end = @min(end, std.math.add(usize, start, lim) catch std.math.maxInt(usize));
+            }
+            if (start != 0 or end != result.rows.len) try execution.applyRowWindow(allocator, &result, start, end);
+            return result;
+        }
+        try refuseChainedWrites(q);
         return executeQueryChain(allocator, q, next_query_ptr, context);
     }
 
