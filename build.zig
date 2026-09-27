@@ -11148,6 +11148,21 @@ pub fn build(b: *std.Build) void {
     const sonny3035_step = b.step("test-sonny3035-offline-chain-root", "Run SONNY-3035 regression (a store emptied at rest keeps its chain root and does not verify, so auth init and user changes are refused; verification with no key available writes no .geode_hmac_key)");
     sonny3035_step.dependOn(&run_sonny3035_tests.step);
 
+    // SONNY-3037: `geode revoke <permission> --from <principal>` revokes that
+    // principal's grant only, and fails, changing nothing, when it holds
+    // none. Through the installed CLI.
+    const sonny3037_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny3037_revoke_principal.zig"), .target = target, .optimize = optimize });
+    sonny3037_test_mod.link_libc = true;
+    sonny3037_test_mod.addImport("geode", root_mod);
+    sonny3037_test_mod.addImport("auth_graph_manager", auth_graph_manager_mod);
+    sonny3037_test_mod.addImport("cli_auth_helpers", cli_auth_helpers_mod);
+    const sonny3037_tests = b.addTest(.{ .root_module = sonny3037_test_mod });
+    const run_sonny3037_tests = b.addRunArtifact(sonny3037_tests);
+    run_sonny3037_tests.step.dependOn(&install_geode_exe.step);
+    shardDep(test_step, &run_sonny3037_tests.step, 1, test_shard_loads, test_shard_index);
+    const sonny3037_step = b.step("test-sonny3037-revoke-principal", "Run SONNY-3037 regression (geode revoke --from revokes the named principal's grant and no other principal's; a principal with no such grant is refused and nothing changes)");
+    sonny3037_step.dependOn(&run_sonny3037_tests.step);
+
     // SONNY-2778: the generated admin password file (O_CREAT|O_EXCL|
     // O_NOFOLLOW, 0600, never in the cwd, never over a planted file or link),
     // and UserManager's policy strings (spawns the installed CLI and server).
