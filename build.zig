@@ -9326,6 +9326,24 @@ pub fn build(b: *std.Build) void {
         step.dependOn(&run_tests.step);
     }
 
+    // SONNY-2977: MATCH (x {k: v}) [WHERE ...] SET changes every node holding
+    // the key (the ticket's probe matrix): in-memory, persisted, tenant-scoped
+    // and RLS-policy sessions, and over QUIC against ./zig-out/bin/geode.
+    const sonny2977_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny2977_inline_map_set.zig"), .target = target, .optimize = optimize });
+    sonny2977_test_mod.link_libc = true;
+    sonny2977_test_mod.addImport("geode", root_mod);
+    sonny2977_test_mod.addImport("logging", logging_mod);
+    sonny2977_test_mod.addImport("rls_types", rls_types_mod);
+    sonny2977_test_mod.addImport("schema", schema_mod);
+    sonny2977_test_mod.addImport("protobuf", protobuf_mod);
+    sonny2977_test_mod.addImport("transport/quic", transport_quic_mod);
+    const sonny2977_tests = b.addTest(.{ .root_module = sonny2977_test_mod });
+    const run_sonny2977_tests = b.addRunArtifact(sonny2977_tests);
+    run_sonny2977_tests.step.dependOn(&install_geode_exe.step);
+    shardDep(test_step, &run_sonny2977_tests.step, 1, test_shard_loads, test_shard_index);
+    const sonny2977_step = b.step("test-sonny2977-inline-map-set", "Run SONNY-2977 regression (MATCH (x {k: v}) with a one- or two-property map, a literal or a parameter, WHERE, a per-row or aggregate RETURN, or none, and MATCH (x) WHERE x.k = v, SET every node holding the key: in-memory, persisted, tenant-scoped and RLS-policy sessions and over QUIC; a key whose only holder the session may not see is written by none)");
+    sonny2977_step.dependOn(&run_sonny2977_tests.step);
+
     // SONNY-2746: a failing-allocator sweep over every allocation of
     // `CALL geode.rls.add_attribute_policy`, in the request and the engine.
     const sonny2746_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny2746_rls_attribute_policy_oom.zig"), .target = target, .optimize = optimize });
