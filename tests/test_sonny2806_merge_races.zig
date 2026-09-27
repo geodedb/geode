@@ -10,7 +10,10 @@
 //     MERGE created a second node. Lookups run under SHARED graph locks (the
 //     QUIC edge fast path's `lookupNodeByMergeKey`, the group-commit
 //     workers), so an insert can land inside the scan. 40 of 40 trials lost
-//     the entry.
+//     the entry. The lookup and the insert start at a spin barrier, the
+//     insert after a few microseconds of spinning (the round-8 re-review's
+//     race3): through the exact index the lookup takes ~80 us, and a writer
+//     that slept its delay started after the lookup had ended.
 //   * race1: two bulk MERGEs of one value in two forms (INT 7 and
 //     DECIMAL 7.0; DOUBLE 7.5 and DECIMAL 7.5) took different per-tuple
 //     locks, since the lock was chosen by the value's representation, and
@@ -159,13 +162,6 @@ const Failures = struct {
     }
 };
 
-fn sleepNs(ns: u64) void {
-    if (ns == 0) return;
-    const req = std.os.linux.timespec{ .sec = @intCast(ns / std.time.ns_per_s), .nsec = @intCast(ns % std.time.ns_per_s) };
-    var rem: std.os.linux.timespec = undefined;
-    _ = std.os.linux.nanosleep(&req, &rem);
-}
-
 // ---------------------------------------------------------------------------
 // race1: one value, two forms, two concurrent bulk MERGEs
 // ---------------------------------------------------------------------------
@@ -263,35 +259,65 @@ const Race2 = struct {
     adapter: *gsa.StorageAdapter,
     v: i64,
     delay_ns: u64,
-    go: std.atomic.Value(u32) = std.atomic.Value(u32).init(0),
+    /// The spin barrier: both threads arrive, then start together.
+    arrive: std.atomic.Value(u32) = std.atomic.Value(u32).init(0),
     insert_err: ?anyerror = null,
+    /// When the lookup and the insert ran (monotonic ns), to count the
+    /// trials whose insert overlapped the lookup.
+    lookup_start: u64 = 0,
+    lookup_end: u64 = 0,
+    insert_start: u64 = 0,
+    insert_end: u64 = 0,
+
+    fn arriveAndWait(c: *Race2) void {
+        _ = c.arrive.fetchAdd(1, .acq_rel);
+        while (c.arrive.load(.acquire) < 2) std.atomic.spinLoopHint();
+    }
 
     fn reader(c: *Race2) void {
+        c.arriveAndWait();
         const h = graph_store.acquireGraphReadLockTagged(G, .bulk_merge);
         defer graph_store.releaseGraphLock(h);
-        c.go.store(1, .release);
+        c.lookup_start = monoNs();
         _ = c.adapter.lookupNodeByMergeKey(G, "SR", "x", .{ .Int = c.v }, error.MergeCandidateMissing) catch {};
-        c.go.store(2, .release);
+        c.lookup_end = monoNs();
     }
 
     fn writer(c: *Race2) void {
-        while (c.go.load(.acquire) == 0) std.atomic.spinLoopHint();
-        sleepNs(c.delay_ns);
+        c.arriveAndWait();
+        // Microsecond jitter by spinning: a sleep's wake-up latency (tens of
+        // microseconds or more) exceeds the lookup (~80 us through the exact
+        // index), so a sleeping writer inserted after the lookup had ended.
+        const t0 = monoNs();
+        while (monoNs() - t0 < c.delay_ns) std.atomic.spinLoopHint();
         const props = [_]PropKV{ .{ .key = "x", .value = .{ .Int = c.v } }, .{ .key = "t", .value = .{ .String = "c" } } };
+        c.insert_start = monoNs();
         _ = c.adapter.bulkInsertNodeWithReservedId(G, store().reserveNodeId(), &[_][]const u8{"SR"}, &props) catch |e| {
             c.insert_err = e;
         };
+        c.insert_end = monoNs();
+    }
+
+    fn overlapped(c: *const Race2) bool {
+        return c.insert_start < c.lookup_end and c.insert_end > c.lookup_start;
     }
 };
+
+fn monoNs() u64 {
+    var ts: std.os.linux.timespec = undefined;
+    _ = std.os.linux.clock_gettime(.MONOTONIC, &ts);
+    return @as(u64, @intCast(ts.sec)) * std.time.ns_per_s + @as(u64, @intCast(ts.nsec));
+}
 
 /// Nodes of :SR holding `v` (the `+ 0` keeps the query off every index).
 fn holders(s: *Session, v: i64) !i64 {
     return s.int("MATCH (n:SR) WHERE n.x + 0 = $v RETURN count(n) AS c", &.{.{ .name = "v", .value = .{ .Int = v } }});
 }
 
-fn race2(s: *Session, f: *Failures, tag: []const u8, filler: i64, trials: usize) !void {
+fn race2(s: *Session, f: *Failures, tag: []const u8, filler: i64, trials: usize, step_ns: u64) !void {
     const adapter = try adapterOrFail();
     if (filler > 0) try s.exec("FOR i IN range(1, $n) CREATE (:SR {f: i})", &.{.{ .name = "n", .value = .{ .Int = filler } }});
+    var overlapping: usize = 0;
     var j: usize = 0;
     while (j < trials) : (j += 1) {
         const v: i64 = 1_000_000 + @as(i64, @intCast(j));
@@ -305,7 +331,8 @@ fn race2(s: *Session, f: *Failures, tag: []const u8, filler: i64, trials: usize)
         try s.exec("MATCH (n:SR {t: 'b'}) WHERE n.x + 0 = $v DELETE n", &pv);
         // A lookup under a SHARED lock settles the entry while a writer
         // inserts a new holder.
-        var c = Race2{ .adapter = adapter, .v = v, .delay_ns = (@as(u64, @intCast(j)) % 6) * 500 * std.time.ns_per_us };
+        // The writer starts 0, 1, 2, ... steps after the lookup does.
+        var c = Race2{ .adapter = adapter, .v = v, .delay_ns = @as(u64, @intCast(j)) * step_ns };
         const tr = try std.Thread.spawn(.{}, Race2.reader, .{&c});
         const tw = try std.Thread.spawn(.{}, Race2.writer, .{&c});
         tr.join();
@@ -314,6 +341,7 @@ fn race2(s: *Session, f: *Failures, tag: []const u8, filler: i64, trials: usize)
             try f.add("[{s}] trial {d}: insert failed: {s}", .{ tag, j, @errorName(e) });
             continue;
         }
+        if (c.overlapped()) overlapping += 1;
         var id: u64 = 0;
         const after = store().lookupMergeCandidate(G, "SR", "x", .{ .Int = v }, &id);
         if (after != .found or !std.mem.eql(u8, tOf(id), "c")) try f.add("[{s}] trial {d}: MERGE's index lost the new holder ({s})", .{ tag, j, @tagName(after) });
@@ -321,6 +349,10 @@ fn race2(s: *Session, f: *Failures, tag: []const u8, filler: i64, trials: usize)
         const n = try holders(s, v);
         if (n != 1) try f.add("[{s}] trial {d}: MERGE after the race left {d} holders", .{ tag, j, n });
     }
+    // The race was run: some insert overlapped its lookup. Not claimed on a
+    // contended CI runner (CI set), where the threads' timing is not the
+    // test's to decide.
+    if (overlapping == 0 and std.c.getenv("CI") == null) try f.add("[{s}] no insert overlapped its lookup in {d} trials", .{ tag, trials });
 }
 
 test "SONNY-2806: a lookup does not drop the entry of a holder inserted while it settles" {
@@ -334,13 +366,15 @@ test "SONNY-2806: a lookup does not drop the entry of a holder inserted while it
         graph_store.setLeanIndexingForTest(true);
         defer graph_store.setLeanIndexingForTest(false);
         graph_store.registerMergeIndexKey("x");
-        try race2(&s, &f, "lean", 20_000, 12);
+        // A label scan of 20,000 nodes: steps of 500 us.
+        try race2(&s, &f, "lean", 20_000, 12, 500 * std.time.ns_per_us);
     }
     {
         // The default: the settle reads the exact node-property index.
         var s = try Session.init();
         defer s.deinit();
-        try race2(&s, &f, "default", 0, 12);
+        // The exact index answers in ~80 us: steps of 4 us.
+        try race2(&s, &f, "default", 0, 12, 4 * std.time.ns_per_us);
     }
     try f.check("race2");
 }
