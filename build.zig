@@ -9048,6 +9048,25 @@ pub fn build(b: *std.Build) void {
     const sonny3033_step = b.step("test-sonny3033-batch-graph-gate", "Run SONNY-3033 regression (spawns a server: a /*+BATCH*/ against a graph another session dropped is refused, 3F000, and does not recreate it, for a ReadWrite user and an Admin)");
     sonny3033_step.dependOn(&run_sonny3033_tests.step);
 
+    // SONNY-3130: a program that creates, replaces or drops a graph carries no
+    // statement on graph data (0A000): the handler held the old graph's lock
+    // while the program wrote the new one. gRPC in process (SONNY-1560 shim)
+    // and QUIC against a spawned server.
+    const sonny3130_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny3130_graph_ddl_alone.zig"), .target = target, .optimize = optimize });
+    sonny3130_test_mod.link_libc = true;
+    sonny3130_test_mod.addImport("geode", root_mod);
+    sonny3130_test_mod.addImport("schema", schema_mod);
+    sonny3130_test_mod.addImport("protobuf", protobuf_mod);
+    sonny3130_test_mod.addImport("grpc_impl", sonny1560_shim_mod);
+    sonny3130_test_mod.addImport("logging", logging_mod);
+    sonny3130_test_mod.addImport("transport/quic", transport_quic_mod);
+    const sonny3130_tests = b.addTest(.{ .root_module = sonny3130_test_mod });
+    const run_sonny3130_tests = b.addRunArtifact(sonny3130_tests);
+    run_sonny3130_tests.step.dependOn(&install_geode_exe.step);
+    shardDep(test_step, &run_sonny3130_tests.step, 1, test_shard_loads, test_shard_index);
+    const sonny3130_step = b.step("test-sonny3130-graph-ddl-alone", "Run SONNY-3130 regression (a program that creates, replaces or drops a graph and has a statement on graph data is refused, 0A000, and changes nothing; graph DDL with graph selection runs; gRPC in process and QUIC against a spawned server)");
+    sonny3130_step.dependOn(&run_sonny3130_tests.step);
+
     // SONNY-2790: the fulltext statements (CREATE/DROP INDEX, geode.fts.*)
     // run on the default graph, so the handlers lock `default` for them from
     // any session. Classifier, and the real gRPC handler (SONNY-1560 shim).

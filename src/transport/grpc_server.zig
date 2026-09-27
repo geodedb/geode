@@ -2823,6 +2823,16 @@ pub fn handleExecute(request_bytes: []const u8, allocator: std.mem.Allocator, ep
                 defer resp.deinit(allocator);
                 return encodeMessage(allocator, resp);
             }
+            // CANARY: REQ=REQ-SONNY-3130-GRAPH-DDL-ALONE; FEATURE="MultiGraphIsolation"; ASPECT=GrpcHandler; STATUS=TESTED; TEST=tests/test_sonny3130_graph_ddl_alone.zig; OWNER=storage; UPDATED=2026-09-27
+            // SONNY-3130: nor graph DDL with a statement on graph data. The
+            // lock taken below is the old graph's; a CREATE OR REPLACE (or a
+            // DROP then CREATE) puts a new graph, with its own lock, under the
+            // name, and the program's writes landed there without it.
+            if (stmt_plan.graph_ddl_has_company) {
+                var resp = try buildErrorResponse(allocator, "0A000", query_traits.graph_ddl_alone_message, &.{}, &.{});
+                defer resp.deinit(allocator);
+                return encodeMessage(allocator, resp);
+            }
             // CANARY: REQ=REQ-SONNY-2776-TXN-ONE-GRAPH; FEATURE="StatementAuthorization"; ASPECT=GrpcHandler; STATUS=TESTED; TEST=tests/test_sonny2776_session_graph_uses.zig; OWNER=security; UPDATED=2026-09-26
             // SONNY-2776: an open transaction changes one graph (its end takes
             // that graph's write lock); a change of another is refused.

@@ -464,6 +464,10 @@ pub const StatementPlan = struct {
     /// is needed: the handler runs the program without one (CREATE GRAPH of a
     /// new graph, DROP GRAPH IF EXISTS of a missing one).
     lock_graph_may_be_missing: bool = false,
+    /// SONNY-3130: the program creates, replaces or drops a graph and also
+    /// has a statement on graph data (`programMixesGraphDdl`). The handler
+    /// refuses it (0A000).
+    graph_ddl_has_company: bool = false,
 };
 
 /// SONNY-2749: what the handlers answer (SQLSTATE 0A000) to a program whose
@@ -524,8 +528,50 @@ pub fn statementPlan(
         .lock_graph = program_graph orelse session_graph,
         .spans_graphs = is_mutation and needs_store_lock and program_graph == null,
         .lock_graph_may_be_missing = programOnlyGraphDdl(program, session_graph, home_graph),
+        .graph_ddl_has_company = programMixesGraphDdl(program),
     };
 }
+
+// CANARY: REQ=REQ-SONNY-3130-GRAPH-DDL-ALONE; FEATURE="MultiGraphIsolation"; ASPECT=GraphDdlAlone; STATUS=TESTED; TEST=tests/test_sonny3130_graph_ddl_alone.zig; OWNER=storage; UPDATED=2026-09-27
+/// SONNY-3130: what the handlers answer (SQLSTATE 0A000) to a program whose
+/// `StatementPlan.graph_ddl_has_company` is set.
+pub const graph_ddl_alone_message = "CREATE GRAPH, CREATE OR REPLACE GRAPH and DROP GRAPH run without statements on graph data: send the statements that read or change a graph in a request of their own";
+
+/// SONNY-3130: does `program` create, replace or drop a graph and also have a
+/// statement on graph data, on any graph, before or after the graph DDL? The
+/// handlers refuse such a program (0A000). They take the lock of the graph a
+/// program runs on before it runs, and a CREATE OR REPLACE GRAPH, or a DROP
+/// GRAPH then CREATE GRAPH, puts a new graph with a lock of its own under the
+/// name: `CREATE OR REPLACE GRAPH g; USE GRAPH g; CREATE (:R)` held the old
+/// graph's write lock and wrote the new graph without its lock, beside that
+/// graph's own writers, and from a session on g `DROP GRAPH g; CREATE (:R)`
+/// re-created g. Graph DDL runs with other graph DDL, graph selection,
+/// session statements and transaction control only, so `DROP GRAPH IF EXISTS
+/// g; CREATE GRAPH g` still runs. A START TRANSACTION body, and the statement
+/// a PROFILE or EXPLAIN wraps, are looked into.
+pub fn programMixesGraphDdl(program: *const ast.Program) bool {
+    var seen: GraphDdlSeen = .{};
+    for (program.statements) |*stmt| seen.statement(stmt);
+    return seen.graph_ddl and seen.data;
+}
+
+const GraphDdlSeen = struct {
+    graph_ddl: bool = false,
+    data: bool = false,
+
+    fn statement(self: *GraphDdlSeen, stmt: *const ast.Statement) void {
+        switch (stmt.*) {
+            .CreateGraph, .DropGraph => self.graph_ddl = true,
+            .UseGraph, .SessionSet, .SessionReset, .SessionClose, .Commit, .Rollback => {},
+            .StartTransaction => |txn| if (txn.body) |body| {
+                for (body) |*s| self.statement(s);
+            },
+            .Explain => |e| self.statement(e.query),
+            .Profile => |p| self.statement(p.query),
+            else => self.data = true,
+        }
+    }
+};
 
 // CANARY: REQ=REQ-SONNY-2749-PROGRAM-GRAPH-LOCK; FEATURE="StatementAuthorization"; ASPECT=ProgramGraph; STATUS=TESTED; TEST=tests/test_sonny2749_program_graph_lock.zig; OWNER=security; UPDATED=2026-09-25
 /// SONNY-2775: what a USE GRAPH or SESSION SET [PROPERTY] GRAPH names, as

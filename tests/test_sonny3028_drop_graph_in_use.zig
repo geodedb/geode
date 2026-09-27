@@ -209,7 +209,10 @@ test "SONNY-3028: over gRPC DROP GRAPH of the graph the session's transaction ch
     try testing.expect(!f.st.graphExists("g1"));
 }
 
-test "SONNY-3028: over gRPC `START TRANSACTION; CREATE; DROP GRAPH g; CREATE` in one program is refused (55006): the graph stays, the change is rolled back, no engine transaction is left on it" {
+// SONNY-3130: such a program mixes graph DDL with statements on graph data,
+// and the handler refuses it (0A000) before it runs; it reached the
+// executor's refusal (55006) before.
+test "SONNY-3028: over gRPC `START TRANSACTION; CREATE; DROP GRAPH g; CREATE` in one program is refused (0A000 since SONNY-3130): the graph stays, nothing is changed, no engine transaction is left on it" {
     var f: fx.Fixture = undefined;
     try f.init();
     defer f.deinit();
@@ -217,7 +220,7 @@ test "SONNY-3028: over gRPC `START TRANSACTION; CREATE; DROP GRAPH g; CREATE` in
     const s = try f.session("inprog");
     const entry = f.sessions.getEntry(s) orelse return error.SessionMissing;
     try fx.expectRuns(ga, s, "USE GRAPH g1");
-    _ = try fx.expectRefused(ga, s, "START TRANSACTION; CREATE (:X {v: 1}); DROP GRAPH g1; CREATE (:Y {v: 2})", "55006");
+    _ = try fx.expectRefused(ga, s, "START TRANSACTION; CREATE (:X {v: 1}); DROP GRAPH g1; CREATE (:Y {v: 2})", "0A000");
     try testing.expect(f.st.graphExists("g1"));
     try testing.expect(!entry.state.in_txn);
     try testing.expectEqual(@as(usize, 0), fx.countLabel(f.st, "g1", "X"));
