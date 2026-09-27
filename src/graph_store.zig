@@ -1659,8 +1659,9 @@ const merge_property_index_shard_count: usize = 256;
 const merge_entry_shared: u64 = @as(u64, 1) << 63;
 
 /// The entry after `node_id` is recorded as a holder of its key.
+/// `node_id` never has bit 63 set: `MergePropertyIndex.putOrUpdate` refuses
+/// one.
 fn mergeEntryWithHolder(entry: u64, node_id: u64) u64 {
-    std.debug.assert(node_id & merge_entry_shared == 0);
     if (entry == node_id) return entry;
     // Unresolved: a lower holder than `node_id` may exist; the next lookup
     // resolves it. The put still bumps the shard's generation, so a lookup
@@ -1795,7 +1796,19 @@ pub const MergePropertyIndex = struct {
     /// Record that `node_id` holds `key`. The entry keeps the LOWEST holder
     /// (see `merge_entry_shared`), so the node a MERGE matches does not depend
     /// on the order nodes were written or hydrated in.
+    ///
+    /// An id with bit 63 set is refused (`error.MergeHolderIdFlagged`): the
+    /// bit flags an entry, so such an id stored as a first holder would read
+    /// as "shared, lowest holder <the id without bit 63>", another node. The
+    /// round-8 re-review (M5): this was a `std.debug.assert`, which a
+    /// ReleaseFast build strips, and it covered an existing entry only.
     fn putOrUpdate(self: *MergePropertyIndex, key: []const u8, node_id: u64) !void {
+        if (node_id & merge_entry_shared != 0) {
+            log.err("refusing a MERGE index holder whose id has bit 63 set: the bit flags an entry", &.{
+                Attr.uint("node_id", node_id),
+            });
+            return error.MergeHolderIdFlagged;
+        }
         const io = std.Io.Threaded.global_single_threaded.io();
         const shard = &self.shards[shardForKey(key)];
         shard.mutex.lockUncancelable(io);

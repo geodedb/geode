@@ -313,3 +313,34 @@ test "SONNY-2806: a persisted public id with bit 63 set is refused" {
     try testing.expectEqual(@as(?u64, null), graph_store.parsePersistedPublicId("ffffffffffffffff"));
     try testing.expectEqual(@as(?u64, null), graph_store.parsePersistedPublicId("not an id"));
 }
+
+test "SONNY-2806: MERGE's index refuses a holder whose id has bit 63 set, in every build mode" {
+    // The round-8 re-review (M5): the index flags an entry with bit 63, and
+    // a holder id with that bit was stopped only by a `std.debug.assert`,
+    // which a ReleaseFast build strips: a first holder's id was then stored
+    // as is, which reads as "shared, lowest holder <the id without bit 63>",
+    // naming another node. The refusal is now a runtime check. No node gets
+    // such an id (`parsePersistedPublicId`, time-based ids); a reserved id
+    // is the only way in.
+    const allocator = testing.allocator;
+    var gs = try graph_store.GraphStore.init(allocator);
+    defer gs.deinit();
+    try gs.createGraph("g");
+    const flag: u64 = @as(u64, 1) << 63;
+
+    // A second holder with the flag bit: the entry keeps the first.
+    const low = try gs.createNodeWithGraph(&[_][]const u8{"B63"}, "g");
+    try gs.setNodeProperty(low, "x", .{ .Int = 7 });
+    try gs.createNodeWithReservedIdAndGraph(flag | 5, &[_][]const u8{"B63"}, "g");
+    try gs.setNodeProperty(flag | 5, "x", .{ .Int = 7 });
+    var id: u64 = 0;
+    try testing.expectEqual(graph_store.GraphStore.MergeLookupResult.found, gs.lookupMergeCandidate("g", "B63", "x", .{ .Int = 7 }, &id));
+    try testing.expectEqual(low, id);
+    try testing.expectEqual(graph_store.GraphStore.MergeLookupResult.found, gs.lookupOnlyMergeHolder("g", "B63", "x", .{ .Int = 7 }, &id));
+    try testing.expectEqual(low, id);
+
+    // A first holder with the flag bit: no entry is written for it.
+    try gs.createNodeWithReservedIdAndGraph(flag | 9, &[_][]const u8{"B64"}, "g");
+    try gs.setNodeProperty(flag | 9, "x", .{ .Int = 8 });
+    try testing.expectEqual(graph_store.GraphStore.MergeLookupResult.not_found, gs.lookupOnlyMergeHolder("g", "B64", "x", .{ .Int = 8 }, &id));
+}
