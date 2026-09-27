@@ -22,7 +22,7 @@ const graph_storage_adapter = @import("../storage/graph_storage_adapter.zig");
 const property_codec = @import("../property_value_codec.zig");
 const value_types = @import("../value_types.zig");
 const value_order = @import("value_order.zig");
-const execution = @import("../execution.zig");
+const value_equality = @import("value_equality.zig");
 
 const Value = value_types.Value;
 
@@ -58,7 +58,7 @@ pub fn matches(allocator: std.mem.Allocator, expected: Value, actual: gs.Propert
         .ext => blk: {
             const decoded = try graph_storage_adapter.fromStorageProperty(allocator, actual);
             defer property_codec.freePropertyValue(allocator, decoded);
-            break :blk execution.valuesEqual(property_codec.propertyValueToValue(decoded), expected);
+            break :blk value_equality.valuesEqual(property_codec.propertyValueToValue(decoded), expected);
         },
     };
 }

@@ -16,7 +16,8 @@ const graph_store = @import("../graph_store.zig");
 const fle_integration = @import("../fle_integration.zig");
 const property_codec = @import("../property_value_codec.zig");
 const value_order = @import("../execution/value_order.zig");
-const execution = @import("../execution.zig");
+// SONNY-2806 (round 8): value equality without importing the executor.
+const value_equality = @import("../execution/value_equality.zig");
 const audit = @import("../security/audit.zig");
 const ts_mod = @import("../timeseries/timeseries.zig");
 const fulltext = @import("../index/fulltext.zig");
@@ -10840,7 +10841,7 @@ fn hashPropertyValue(seed: u64, value: graph_store.PropertyValue) u64 {
 /// fallback created a node on every `MERGE (:T {a: 1, d: date(...)})`, and
 /// `{a: 1}` did not find a stored 1.0.
 fn propertyValuesEqual(a: graph_store.PropertyValue, b: graph_store.PropertyValue) bool {
-    return execution.valuesEqual(property_codec.propertyValueToValue(a), property_codec.propertyValueToValue(b));
+    return value_equality.valuesEqual(property_codec.propertyValueToValue(a), property_codec.propertyValueToValue(b));
 }
 
 const candidate_shard_mask_int = if (sharded_store.SHARD_COUNT <= 64) u64 else @compileError("candidate shard mask assumes <=64 shards");
