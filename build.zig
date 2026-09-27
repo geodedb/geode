@@ -9221,6 +9221,8 @@ pub fn build(b: *std.Build) void {
         .{ .name = "test-sonny3042-refuse-before-write", .path = "tests/test_sonny3042_refuse_before_write.zig", .desc = "Run SONNY-3042 regression (a statement refused for its DELETE, NodeHasEdges or a RETURN of a deleted element, writes nothing before the refusal)" },
         .{ .name = "test-sonny3043-mixed-write-clauses", .path = "tests/test_sonny3043_mixed_write_clauses.zig", .desc = "Run SONNY-3043 regression (MATCH ... CREATE applies its SET, REMOVE and DELETE, a relationship included, and refuses a non-DETACH DELETE of a node with an edge; MERGE with CREATE or DELETE is refused before anything is written)" },
         .{ .name = "test-sonny3045-audit-text-escaping", .path = "tests/test_sonny3045_audit_text_escaping.zig", .desc = "Run SONNY-3045 regression (joinAuditText encodes a comma and a backslash; the Windows Event Log, syslog and JSON audit exporters escape every string)" },
+        // SONNY-738 Task W fix round 2: the pre-dispatch write-shape validator.
+        .{ .name = "test-sonny3139-write-shapes", .path = "tests/test_sonny3139_write_shapes.zig", .desc = "Run SONNY-3139..3146 regression (an initial WITH, a WHERE before a WITH, WITH DISTINCT, a WITH's GROUP BY and HAVING, UNWIND and a DELETE of a path or variable-length relationship write the rows they name; a WITH after MATCH ... CREATE, a write an executor does not apply, an unbound target and a split CREATE are refused with 0A000 before any part of the statement writes)" },
     };
     for (sonny738_steps) |spec| {
         const mod = b.createModule(.{ .root_source_file = b.path(spec.path), .target = target, .optimize = optimize });

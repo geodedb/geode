@@ -47,6 +47,12 @@ const return_and_sorting = @import("return_and_sorting.zig");
 const tenancy = @import("tenancy.zig");
 // SONNY-3040: whether a chained part writes.
 const query_traits = @import("../query/query_traits.zig");
+// SONNY-3139: the executor each part goes to, which the write-shape validator
+// checked before the statement ran.
+const write_shape = @import("write_shape.zig");
+// SONNY-3144: an UNWIND before a write runs its part once per element, as a
+// FOR body does.
+const statement_handlers = @import("statement_handlers.zig");
 const generateUniqueColumnNames = match_operations.generateUniqueColumnNames;
 
 // Local type aliases
@@ -93,44 +99,6 @@ fn refuseChainedWrites(q: ast.Query) error{WriteClauseNotApplied}!void {
         alone.next_query = null;
         if (query_traits.isQueryMutating(&alone)) return error.WriteClauseNotApplied;
     }
-}
-
-/// SONNY-3040: `MATCH ... WITH ... CREATE` or `... WITH ... MERGE` as the one
-/// query it is: MATCH ... CREATE or MATCH ... MERGE over the WITH's rows
-/// (`readPatternBindings` reads a WITH's rows, after its WHERE, ORDER BY and
-/// LIMIT), with the last part's RETURN, ORDER BY, SKIP and LIMIT. Null for
-/// any other chain: the first part must only read one MATCH through a WITH,
-/// and the second must be the last and hold only the CREATE or the MERGE.
-fn chainedWriteAsOneQuery(q: ast.Query) ?ast.Query {
-    const next = q.next_query orelse return null;
-    // The first part: a MATCH, then a WITH, and no write, grouping or
-    // other stage of its own.
-    if (q.match.chains.len == 0 or q.with_clause == null or q.is_initial_with) return null;
-    var first = q;
-    first.next_query = null;
-    if (query_traits.isQueryMutating(&first)) return null;
-    if (q.group_by != null or q.having != null or q.unwind_clause != null or q.call_clause != null or
-        q.initial_call_subquery != null or q.for_statement != null) return null;
-    // The second part: the last, a CREATE or a MERGE and nothing else.
-    if (next.next_query != null or next.match.chains.len != 0 or next.with_clause != null) return null;
-    if (next.where_clause != null or next.filter_clause != null or next.unwind_clause != null or
-        next.call_clause != null or next.initial_call_subquery != null or next.for_statement != null or
-        next.cte_list != null or next.let_bindings.len != 0 or next.inline_let_bindings.len != 0) return null;
-    if (next.set_clauses.len != 0 or next.remove_clauses.len != 0 or next.delete_items.len != 0) return null;
-    if ((next.create_pattern != null) == (next.merge_statement != null)) return null;
-    var one = q;
-    one.next_query = null;
-    one.create_pattern = next.create_pattern;
-    one.merge_statement = next.merge_statement;
-    one.ret = next.ret;
-    one.group_by = next.group_by;
-    one.having = next.having;
-    one.order_by = next.order_by;
-    one.limit = next.limit;
-    one.offset = next.offset;
-    one.limit_param = next.limit_param;
-    one.offset_param = next.offset_param;
-    return one;
 }
 
 // CANARY: REQ=REQ-EXEC-REFACTOR-011; FEATURE="FileModularization"; ASPECT=QueryExecution; STATUS=EXEMPT; OWNER=refactoring; UPDATED=2025-10-17
@@ -1681,6 +1649,13 @@ pub fn executeQueryWithContext(allocator: std.mem.Allocator, q: ast.Query, conte
         }
     }
 
+    // SONNY-3139 (C1): a read that starts with a WITH before its MATCH runs
+    // with the WITH's values bound as parameters, as a write does (the query
+    // dispatcher binds a write's, under PROFILE too). The WITH was run as a
+    // projection of the matched rows, so the MATCH's WHERE and RETURN could
+    // not see its values, and a WITH after the MATCH replaced it.
+    if (write_shape.bindsInitialWithRead(q)) return executeWithInitialWith(allocator, q, context, param_names.items, param_values.items, .query);
+
     // Check for GROUP BY validation first
     // CANARY: REQ=REQ-GQL-CHAIN-FIX-003; FEATURE="QueryChainingGroupByFix"; ASPECT=SkipValidation; STATUS=TESTED; TEST=geodetestlab/specs/gql_query_comprehensive.yml; OWNER=execution; UPDATED=2025-12-26
     // Skip validateGroupBy when ret.items is the same as with_clause.items (query chaining mode).
@@ -1974,7 +1949,7 @@ pub fn executeLegacyQueryWithResolvedParams(
         // or MERGE over the WITH's rows; it runs as that. Any other chain
         // whose later part writes is refused before any part runs: the chain
         // executor never applied the write.
-        if (chainedWriteAsOneQuery(q)) |one| {
+        if (write_shape.chainedWriteAsOneQuery(q)) |one| {
             var result = try executeLegacyQueryWithResolvedParams(allocator, one, context, resolved_param_names, resolved_param_values);
             errdefer result.deinit(allocator);
             // The statement's SKIP and LIMIT are the last part's, which the
@@ -1991,219 +1966,275 @@ pub fn executeLegacyQueryWithResolvedParams(
         return executeQueryChain(allocator, q, next_query_ptr, context);
     }
 
-    // Check if there's BOTH a MATCH and CREATE pattern (MATCH ... CREATE)
-    if (q.match.chains.len > 0 and q.create_pattern != null) {
-        const create_graph = if (context.session_state) |session| session.graph else null;
-        // Cluster write routing for MATCH…CREATE (edge attach between matched
-        // nodes). At HEAD this reached createEdgeWithGraph with NO gate on every
-        // node → permanent silent divergence (2026-06-04 bug doc). Follower →
-        // error.ClusterNotLeader; leader resolves endpoints to stable ids and
-        // replicates a zero-node GNC2; non-replicable shapes fail closed; the
-        // ungated DELETE/REMOVE sub-paths of executeMatchCreateQuery are
-        // unreachable in cluster mode (the slice rejects those clauses).
-        // CANARY: REQ=REQ-DIST-CLUSTER-REPLICATE-MATCH-CREATE; FEATURE="DistributedCluster"; ASPECT=DispatchRouteMatchCreate; STATUS=TESTED; TEST=tests/test_cluster_replicable_mutations.zig; OWNER=distributed; UPDATED=2026-06-10
-        {
+    // CANARY: REQ=REQ-SONNY-3139-WRITE-SHAPES; FEATURE="WriteShapeValidator"; ASPECT=InitialWithBinding; STATUS=TESTED; TEST=tests/test_sonny3139_write_shapes.zig; OWNER=engine; UPDATED=2026-09-27
+    // SONNY-3139 (C1): a part that writes after an initial WITH runs with the
+    // WITH's values bound as parameters. The WITH was a projection applied
+    // after the traversal had written every matched row (and its WHERE, which
+    // was deferred past the WITH, dropped none of them).
+    if (write_shape.bindsInitialWith(q)) return executeWithInitialWith(allocator, q, context, resolved_param_names, resolved_param_values, .legacy);
+    // SONNY-3144: a part that writes after an UNWIND runs once per element.
+    if (write_shape.unwindsEach(q)) return executeUnwindEach(allocator, q, context, resolved_param_names, resolved_param_values);
+
+    // SONNY-3139: the executor the write-shape validator checked this part
+    // against (`write_shape.table`).
+    switch (write_shape.queryExecutor(q)) {
+        // Check if there's BOTH a MATCH and CREATE pattern (MATCH ... CREATE)
+        .match_create => {
+            const create_graph = if (context.session_state) |session| session.graph else null;
+            // Cluster write routing for MATCH…CREATE (edge attach between matched
+            // nodes). At HEAD this reached createEdgeWithGraph with NO gate on every
+            // node → permanent silent divergence (2026-06-04 bug doc). Follower →
+            // error.ClusterNotLeader; leader resolves endpoints to stable ids and
+            // replicates a zero-node GNC2; non-replicable shapes fail closed; the
+            // ungated DELETE/REMOVE sub-paths of executeMatchCreateQuery are
+            // unreachable in cluster mode (the slice rejects those clauses).
+            // CANARY: REQ=REQ-DIST-CLUSTER-REPLICATE-MATCH-CREATE; FEATURE="DistributedCluster"; ASPECT=DispatchRouteMatchCreate; STATUS=TESTED; TEST=tests/test_cluster_replicable_mutations.zig; OWNER=distributed; UPDATED=2026-06-10
+            {
+                const crud = @import("crud_operations.zig");
+                if (try crud.executeClusterMatchCreateIfNeeded(allocator, q, create_graph, context)) |cluster_result| {
+                    return cluster_result;
+                }
+            }
+            return executeMatchCreateQuery(allocator, q, param_names.items, param_values.items, create_graph);
+        },
+
+        // Check if there's a CREATE pattern (CREATE ... WITH ... SET ... RETURN)
+        .create => {
+            const create_pattern = q.create_pattern.?;
+            const create_graph = if (context.session_state) |session| session.graph else null;
+            return executeCreateQuery(allocator, q, create_pattern, null, param_names.items, param_values.items, create_graph);
+        },
+
+        // GAP #57: Check if there's a MERGE statement in the query chain
+        .match_merge, .merge => {
+            const merge_stmt = q.merge_statement.?;
+            const merge_graph = if (context.session_state) |session| session.graph else null;
             const crud = @import("crud_operations.zig");
-            if (try crud.executeClusterMatchCreateIfNeeded(allocator, q, create_graph, context)) |cluster_result| {
-                return cluster_result;
-            }
-        }
-        return executeMatchCreateQuery(allocator, q, param_names.items, param_values.items, create_graph);
-    }
 
-    // Check if there's a CREATE pattern (CREATE ... WITH ... SET ... RETURN)
-    if (q.create_pattern) |create_pattern| {
-        const create_graph = if (context.session_state) |session| session.graph else null;
-        return executeCreateQuery(allocator, q, create_pattern, null, param_names.items, param_values.items, create_graph);
-    }
+            // CANARY: REQ=REQ-SONNY-2694-MATCH-MERGE; FEATURE="WriteBehindAggregate"; ASPECT=MergeOncePerMatchedRow; STATUS=TESTED; TEST=tests/test_sonny2694_write_behind_aggregate.zig; OWNER=engine; UPDATED=2026-09-27
+            // MATCH ... MERGE: the MERGE runs once per matched row, with that
+            // row's bindings as parameters. SONNY-2694: the bindings are the
+            // pattern's own (`readPatternBindings`); they were the RETURN's
+            // projection, so behind an aggregating RETURN (one row, no variables)
+            // the MERGE ran once with nothing bound: `MATCH (n:G) MERGE (m:M {g:
+            // n.g}) RETURN count(*)` merged one (:M {g: null}) and returned 1. A
+            // RETURN that aggregates or is DISTINCT is computed by the shared
+            // projection over the matched rows, each extended with the nodes its
+            // MERGE bound; any other RETURN is the last MERGE's, as before.
+            if (q.match.chains.len > 0) {
+                // SONNY-2683: refuse a grouped or filtered RETURN before anything
+                // is written.
+                try match_operations.validateGroupedReturnShape(q);
+                // SONNY-3043: this runs the MERGE; a DELETE beside it was
+                // dropped. SONNY-3144: a SET or REMOVE after it ran on the
+                // matched rows as they were read, before the MERGE, and one on a
+                // variable the MERGE binds was dropped (`write_shape.table`).
+                try match_operations.refuseUnappliedWrites(q, .{ .merge = true });
+                const project_rows = match_operations.returnProjectsMatchedRows(q);
 
-    // GAP #57: Check if there's a MERGE statement in the query chain
-    if (q.merge_statement) |merge_stmt| {
-        const merge_graph = if (context.session_state) |session| session.graph else null;
-        const crud = @import("crud_operations.zig");
+                var bindings = try match_operations.readPatternBindings(allocator, q, param_names.items, param_values.items, q.inline_let_bindings, merge_graph);
+                defer bindings.deinit(allocator);
+                const match_result = &bindings.rows;
+                // A MERGE that creates moves the store's map entries the rows
+                // point to.
+                try match_operations.stabilizeBindings(allocator, match_result);
 
-        // CANARY: REQ=REQ-SONNY-2694-MATCH-MERGE; FEATURE="WriteBehindAggregate"; ASPECT=MergeOncePerMatchedRow; STATUS=TESTED; TEST=tests/test_sonny2694_write_behind_aggregate.zig; OWNER=engine; UPDATED=2026-09-27
-        // MATCH ... MERGE: the MERGE runs once per matched row, with that
-        // row's bindings as parameters. SONNY-2694: the bindings are the
-        // pattern's own (`readPatternBindings`); they were the RETURN's
-        // projection, so behind an aggregating RETURN (one row, no variables)
-        // the MERGE ran once with nothing bound: `MATCH (n:G) MERGE (m:M {g:
-        // n.g}) RETURN count(*)` merged one (:M {g: null}) and returned 1. A
-        // RETURN that aggregates or is DISTINCT is computed by the shared
-        // projection over the matched rows, each extended with the nodes its
-        // MERGE bound; any other RETURN is the last MERGE's, as before.
-        if (q.match.chains.len > 0) {
-            // SONNY-2683: refuse a grouped or filtered RETURN before anything
-            // is written.
-            try match_operations.validateGroupedReturnShape(q);
-            // SONNY-3043: this runs the MERGE (and a SET or REMOVE, as the
-            // rows are read); a DELETE beside it was dropped.
-            try match_operations.refuseUnappliedWrites(q, .{ .set = true, .remove = true, .merge = true });
-            const project_rows = match_operations.returnProjectsMatchedRows(q);
-
-            var bindings = try match_operations.readPatternBindings(allocator, q, param_names.items, param_values.items, q.inline_let_bindings, merge_graph);
-            defer bindings.deinit(allocator);
-            const match_result = &bindings.rows;
-            // A MERGE that creates moves the store's map entries the rows
-            // point to.
-            try match_operations.stabilizeBindings(allocator, match_result);
-
-            // The node variables the MERGE binds that the MATCH does not, and
-            // `created`, as its own RETURN names them (`executeMerge`).
-            var merged_names = std.ArrayList([]const u8).empty;
-            defer merged_names.deinit(allocator);
-            if (project_rows) {
-                const add = struct {
-                    fn name(alloc: std.mem.Allocator, list: *std.ArrayList([]const u8), bound: []const []const u8, n: []const u8) !void {
-                        for (bound) |col| if (std.mem.eql(u8, col, n)) return;
-                        for (list.items) |seen| if (std.mem.eql(u8, seen, n)) return;
-                        try list.append(alloc, n);
+                // The node variables the MERGE binds that the MATCH does not, and
+                // `created`, as its own RETURN names them (`executeMerge`).
+                var merged_names = std.ArrayList([]const u8).empty;
+                defer merged_names.deinit(allocator);
+                if (project_rows) {
+                    const add = struct {
+                        fn name(alloc: std.mem.Allocator, list: *std.ArrayList([]const u8), bound: []const []const u8, n: []const u8) !void {
+                            for (bound) |col| if (std.mem.eql(u8, col, n)) return;
+                            for (list.items) |seen| if (std.mem.eql(u8, seen, n)) return;
+                            try list.append(alloc, n);
+                        }
+                    };
+                    for (merge_stmt.pattern.chains) |chain| {
+                        if (chain.head) |head| if (head.name) |n| try add.name(allocator, &merged_names, match_result.columns, n);
                     }
-                };
-                for (merge_stmt.pattern.chains) |chain| {
-                    if (chain.head) |head| if (head.name) |n| try add.name(allocator, &merged_names, match_result.columns, n);
+                    try add.name(allocator, &merged_names, match_result.columns, "created");
                 }
-                try add.name(allocator, &merged_names, match_result.columns, "created");
-            }
-            const merged_items = try allocator.alloc(ast.ReturnItem, merged_names.items.len);
-            defer allocator.free(merged_items);
-            for (merged_names.items, merged_items) |name, *item| item.* = .{ .expr = .{ .Ident = .{ .orig = name, .cnf = name } }, .alias = null };
-            var row_merge = merge_stmt.*;
-            if (project_rows) row_merge.return_clause = if (merged_items.len != 0) .{ .items = merged_items, .distinct = false } else null;
+                const merged_items = try allocator.alloc(ast.ReturnItem, merged_names.items.len);
+                defer allocator.free(merged_items);
+                for (merged_names.items, merged_items) |name, *item| item.* = .{ .expr = .{ .Ident = .{ .orig = name, .cnf = name } }, .alias = null };
+                var row_merge = merge_stmt.*;
+                if (project_rows) row_merge.return_clause = if (merged_items.len != 0) .{ .items = merged_items, .distinct = false } else null;
 
-            // Build enriched context with MATCH bindings as params
-            var merge_param_names = try std.ArrayList([]const u8).initCapacity(allocator, param_names.items.len + match_result.columns.len);
-            defer merge_param_names.deinit(allocator);
-            var merge_param_values = try std.ArrayList(Value).initCapacity(allocator, param_values.items.len + match_result.columns.len);
-            defer merge_param_values.deinit(allocator);
+                // Build enriched context with MATCH bindings as params
+                var merge_param_names = try std.ArrayList([]const u8).initCapacity(allocator, param_names.items.len + match_result.columns.len);
+                defer merge_param_names.deinit(allocator);
+                var merge_param_values = try std.ArrayList(Value).initCapacity(allocator, param_values.items.len + match_result.columns.len);
+                defer merge_param_values.deinit(allocator);
 
-            for (param_names.items) |pn| try merge_param_names.append(allocator, pn);
-            for (param_values.items) |pv| try merge_param_values.append(allocator, pv);
+                for (param_names.items) |pn| try merge_param_names.append(allocator, pn);
+                for (param_values.items) |pv| try merge_param_values.append(allocator, pv);
 
-            var out_rows = std.ArrayList([]Value).empty;
-            defer {
-                for (out_rows.items) |row| allocator.free(row);
-                out_rows.deinit(allocator);
-            }
+                var out_rows = std.ArrayList([]Value).empty;
+                defer {
+                    for (out_rows.items) |row| allocator.free(row);
+                    out_rows.deinit(allocator);
+                }
 
-            // Execute MERGE for each MATCH row
-            var last_result: ?ExecutionResult = null;
-            errdefer if (last_result) |*r| r.deinit(allocator);
-            for (match_result.rows) |row| {
-                // Reset bindings to base params
-                merge_param_names.shrinkRetainingCapacity(param_names.items.len);
-                merge_param_values.shrinkRetainingCapacity(param_values.items.len);
+                // Execute MERGE for each MATCH row
+                var last_result: ?ExecutionResult = null;
+                errdefer if (last_result) |*r| r.deinit(allocator);
+                for (match_result.rows) |row| {
+                    // Reset bindings to base params
+                    merge_param_names.shrinkRetainingCapacity(param_names.items.len);
+                    merge_param_values.shrinkRetainingCapacity(param_values.items.len);
 
-                // Add this row's MATCH bindings
-                for (match_result.columns, 0..) |col, i| {
-                    if (i < row.len) {
-                        try merge_param_names.append(allocator, col);
-                        try merge_param_values.append(allocator, row[i]);
+                    // Add this row's MATCH bindings
+                    for (match_result.columns, 0..) |col, i| {
+                        if (i < row.len) {
+                            try merge_param_names.append(allocator, col);
+                            try merge_param_values.append(allocator, row[i]);
+                        }
                     }
+
+                    var merge_ctx = context;
+                    merge_ctx.query_param_names = merge_param_names.items;
+                    merge_ctx.query_param_values = merge_param_values.items;
+                    var merged = try crud.executeMerge(allocator, row_merge, merge_graph, merge_ctx);
+                    if (!project_rows) {
+                        if (last_result) |*prev| prev.deinit(allocator);
+                        last_result = merged;
+                        continue;
+                    }
+                    defer merged.deinit(allocator);
+                    const out_row = try allocator.alloc(Value, row.len + merged_names.items.len);
+                    errdefer allocator.free(out_row);
+                    @memcpy(out_row[0..row.len], row);
+                    for (out_row[row.len..], 0..) |*cell, i| {
+                        cell.* = if (merged.rows.len != 0 and i < merged.rows[0].len) merged.rows[0][i] else .Null;
+                        // Before the next row's MERGE moves the map entry.
+                        try match_operations.stabilizeValue(allocator, match_result, cell);
+                    }
+                    try out_rows.append(allocator, out_row);
                 }
 
-                var merge_ctx = context;
-                merge_ctx.query_param_names = merge_param_names.items;
-                merge_ctx.query_param_values = merge_param_values.items;
-                var merged = try crud.executeMerge(allocator, row_merge, merge_graph, merge_ctx);
-                if (!project_rows) {
-                    if (last_result) |*prev| prev.deinit(allocator);
-                    last_result = merged;
-                    continue;
+                if (project_rows) {
+                    const columns = try allocator.alloc([]const u8, match_result.columns.len + merged_names.items.len);
+                    defer allocator.free(columns);
+                    @memcpy(columns[0..match_result.columns.len], match_result.columns);
+                    @memcpy(columns[match_result.columns.len..], merged_names.items);
+                    var rows_result = ExecutionResult{
+                        .columns = columns,
+                        .rows = out_rows.items,
+                        .flags = std.ArrayList([]const u8).empty,
+                        .owned_graph_entities = match_result.owned_graph_entities,
+                    };
+                    match_result.owned_graph_entities = null;
+                    defer if (rows_result.owned_graph_entities) |entities| entities.deinit();
+                    return match_operations.projectReturnOverRows(allocator, q, &rows_result, param_names.items, param_values.items);
                 }
-                defer merged.deinit(allocator);
-                const out_row = try allocator.alloc(Value, row.len + merged_names.items.len);
-                errdefer allocator.free(out_row);
-                @memcpy(out_row[0..row.len], row);
-                for (out_row[row.len..], 0..) |*cell, i| {
-                    cell.* = if (merged.rows.len != 0 and i < merged.rows[0].len) merged.rows[0][i] else .Null;
-                    // Before the next row's MERGE moves the map entry.
-                    try match_operations.stabilizeValue(allocator, match_result, cell);
-                }
-                try out_rows.append(allocator, out_row);
-            }
-
-            if (project_rows) {
-                const columns = try allocator.alloc([]const u8, match_result.columns.len + merged_names.items.len);
-                defer allocator.free(columns);
-                @memcpy(columns[0..match_result.columns.len], match_result.columns);
-                @memcpy(columns[match_result.columns.len..], merged_names.items);
-                var rows_result = ExecutionResult{
-                    .columns = columns,
-                    .rows = out_rows.items,
+                return last_result orelse ExecutionResult{
+                    .columns = try allocator.alloc([]const u8, 0),
+                    .rows = try allocator.alloc([]Value, 0),
                     .flags = std.ArrayList([]const u8).empty,
-                    .owned_graph_entities = match_result.owned_graph_entities,
                 };
-                match_result.owned_graph_entities = null;
-                defer if (rows_result.owned_graph_entities) |entities| entities.deinit();
-                return match_operations.projectReturnOverRows(allocator, q, &rows_result, param_names.items, param_values.items);
             }
-            return last_result orelse ExecutionResult{
-                .columns = try allocator.alloc([]const u8, 0),
-                .rows = try allocator.alloc([]Value, 0),
-                .flags = std.ArrayList([]const u8).empty,
-            };
-        }
 
-        const merge_result = try crud.executeMerge(allocator, merge_stmt.*, merge_graph, context);
-        return merge_result;
-    }
+            // SONNY-3139: the parameters it evaluates are the resolved ones (an
+            // initial WITH's values among them); the context carried the
+            // client's only.
+            var merge_ctx = context;
+            merge_ctx.query_param_names = param_names.items;
+            merge_ctx.query_param_values = param_values.items;
+            const merge_result = try crud.executeMerge(allocator, merge_stmt.*, merge_graph, merge_ctx);
+            return merge_result;
+        },
 
-    // SONNY-2694: a DELETE after a SET or REMOVE stays in the query (a MATCH
-    // ... DELETE without one is a DELETE statement); the match executor below
-    // would apply the SET and drop the DELETE.
-    if (q.match.chains.len > 0 and q.delete_items.len > 0 and q.call_clause == null) {
-        const crud = @import("crud_operations.zig");
-        const delete_graph = if (context.session_state) |session| session.graph else null;
-        return crud.executeMatchDeleteQuery(allocator, q, param_names.items, param_values.items, delete_graph);
-    }
-
-    // Check if there's a MATCH + CALL pattern
-    if (q.match.chains.len > 0 and q.call_clause != null) {
-        return executeMatchCallQuery(allocator, q, context);
-    }
-
-    // Check if there's a MATCH pattern
-    if (q.match.chains.len > 0) {
-        const match_graph = if (context.session_state) |session| session.graph else null;
-
-        // Cluster write routing for a bare `MATCH … SET/REMOVE` (no CREATE/MERGE/
-        // DELETE keyword). At HEAD this fell straight through to the local MATCH
-        // path, so a leader SET mutated ONLY the leader's store (SILENT
-        // DIVERGENCE) and a follower wrote locally too. The gate makes both fail
-        // closed: a follower rejects (error.ClusterNotLeader), the leader resolves
-        // stable ids + concrete values and replicates a GUPD through Raft. In
-        // standalone mode the helper returns null and the unchanged local path
-        // runs. A non-replicable shape fails closed (error.ClusterWriteNotReplicable).
-        // CANARY: REQ=REQ-DIST-CLUSTER-REPLICATE-MATCH-SET; FEATURE="DistributedCluster"; ASPECT=DispatchRouteUpdate; STATUS=TESTED; TEST=tests/test_cluster_replicable_mutations.zig; OWNER=distributed; UPDATED=2026-06-09
-        if (q.set_clauses.len > 0 or q.remove_clauses.len > 0) {
+        // SONNY-2694: a DELETE after a SET or REMOVE stays in the query (a MATCH
+        // ... DELETE without one is a DELETE statement); the match executor below
+        // would apply the SET and drop the DELETE.
+        .match_delete => {
             const crud = @import("crud_operations.zig");
-            if (try crud.executeClusterMatchUpdateIfNeeded(allocator, q, match_graph, context)) |cluster_result| {
-                return cluster_result;
+            const delete_graph = if (context.session_state) |session| session.graph else null;
+            return crud.executeMatchDeleteQuery(allocator, q, param_names.items, param_values.items, delete_graph);
+        },
+
+        // Check if there's a MATCH + CALL pattern
+        .match_call => return executeMatchCallQuery(allocator, q, context),
+
+        // Check if there's a MATCH pattern
+        .match => {
+            const match_graph = if (context.session_state) |session| session.graph else null;
+
+            // Cluster write routing for a bare `MATCH … SET/REMOVE` (no CREATE/MERGE/
+            // DELETE keyword). At HEAD this fell straight through to the local MATCH
+            // path, so a leader SET mutated ONLY the leader's store (SILENT
+            // DIVERGENCE) and a follower wrote locally too. The gate makes both fail
+            // closed: a follower rejects (error.ClusterNotLeader), the leader resolves
+            // stable ids + concrete values and replicates a GUPD through Raft. In
+            // standalone mode the helper returns null and the unchanged local path
+            // runs. A non-replicable shape fails closed (error.ClusterWriteNotReplicable).
+            // CANARY: REQ=REQ-DIST-CLUSTER-REPLICATE-MATCH-SET; FEATURE="DistributedCluster"; ASPECT=DispatchRouteUpdate; STATUS=TESTED; TEST=tests/test_cluster_replicable_mutations.zig; OWNER=distributed; UPDATED=2026-06-09
+            if (q.set_clauses.len > 0 or q.remove_clauses.len > 0) {
+                const crud = @import("crud_operations.zig");
+                if (try crud.executeClusterMatchUpdateIfNeeded(allocator, q, match_graph, context)) |cluster_result| {
+                    return cluster_result;
+                }
             }
-        }
 
-        return executeMatchQueryWithParams(allocator, q, param_names.items, param_values.items, q.inline_let_bindings, match_graph);
-    }
+            return executeMatchQueryWithParams(allocator, q, param_names.items, param_values.items, q.inline_let_bindings, match_graph);
+        },
 
-    // Handle initial CALL subquery (e.g., CALL { MATCH (n) RETURN n } WITH ... RETURN ...)
-    if (q.initial_call_subquery) |call_subq| {
-        // Execute the CALL subquery to get initial results
-        const call_result = try executeQueryWithContext(allocator, call_subq.*, context);
+        // Handle initial CALL subquery (e.g., CALL { MATCH (n) RETURN n } WITH ... RETURN ...)
+        .call_subquery => {
+            const call_subq = q.initial_call_subquery.?;
+            // Execute the CALL subquery to get initial results
+            const call_result = try executeQueryWithContext(allocator, call_subq.*, context);
 
-        // If there's a WITH clause, apply it to the CALL results
-        if (q.with_clause) |with_clause| {
-            // CANARY: REQ=REQ-GQL-WITH-GROUPBY-003; FEATURE="WithGroupByAggregation"; ASPECT=CallSite; STATUS=TESTED; TEST=geodetestlab/specs/gql_query_comprehensive.yml; OWNER=execution; UPDATED=2025-12-22
-            const with_result = try execution.executeWithClauseWithGroupByAndParams(allocator, call_result, with_clause, q.group_by, execution.withStageHaving(q), param_names.items, param_values.items);
+            // If there's a WITH clause, apply it to the CALL results
+            if (q.with_clause) |with_clause| {
+                // CANARY: REQ=REQ-GQL-WITH-GROUPBY-003; FEATURE="WithGroupByAggregation"; ASPECT=CallSite; STATUS=TESTED; TEST=geodetestlab/specs/gql_query_comprehensive.yml; OWNER=execution; UPDATED=2025-12-22
+                const with_result = try execution.executeWithClauseWithGroupByAndParams(allocator, call_result, with_clause, q.group_by, execution.withStageHaving(q), param_names.items, param_values.items);
 
-            // Apply WHERE filter if present
-            const filtered_result = if (q.where_clause) |where_expr| blk: {
+                // Apply WHERE filter if present
+                const filtered_result = if (q.where_clause) |where_expr| blk: {
+                    // GAP-0220 FIX: Use try for proper error propagation
+                    var filtered_rows = try std.ArrayList([]Value).initCapacity(allocator, with_result.rows.len);
+
+                    for (with_result.rows) |row| {
+                        const env = Env{
+                            .names = with_result.columns,
+                            .values = row,
+                            .param_names = param_names.items,
+                            .param_values = param_values.items,
+                            .allocator = allocator,
+                            .exec_context = exec_ctx,
+                        };
+
+                        const matches = try eval.evalExpr(allocator, where_expr, env);
+                        const passes_where = switch (matches) {
+                            .Bool => |b| b,
+                            .Null => false,
+                            .Int => |i| i != 0,
+                            else => false,
+                        };
+                        if (passes_where) {
+                            try filtered_rows.append(allocator, row);
+                        }
+                    }
+
+                    break :blk ExecutionResult{
+                        .columns = with_result.columns,
+                        .rows = try filtered_rows.toOwnedSlice(allocator),
+                        .flags = with_result.flags,
+                    };
+                } else with_result;
+
+                // Apply RETURN clause to transform results
                 // GAP-0220 FIX: Use try for proper error propagation
-                var filtered_rows = try std.ArrayList([]Value).initCapacity(allocator, with_result.rows.len);
+                var final_rows = try std.ArrayList([]Value).initCapacity(allocator, filtered_result.rows.len);
 
-                for (with_result.rows) |row| {
+                for (filtered_result.rows) |row| {
+                    var return_row = try allocator.alloc(Value, q.ret.items.len);
+
                     const env = Env{
-                        .names = with_result.columns,
+                        .names = filtered_result.columns,
                         .values = row,
                         .param_names = param_names.items,
                         .param_values = param_values.items,
@@ -2211,90 +2242,89 @@ pub fn executeLegacyQueryWithResolvedParams(
                         .exec_context = exec_ctx,
                     };
 
-                    const matches = try eval.evalExpr(allocator, where_expr, env);
-                    const passes_where = switch (matches) {
-                        .Bool => |b| b,
-                        .Null => false,
-                        .Int => |i| i != 0,
-                        else => false,
+                    for (q.ret.items, 0..) |item, i| {
+                        return_row[i] = try eval.evalExpr(allocator, item.expr, env);
+                    }
+
+                    try final_rows.append(allocator, return_row);
+                }
+
+                // Phase 5.1.1 optimization: batch allocate column strings
+                var col_name_strings = try std.ArrayList([]const u8).initCapacity(allocator, q.ret.items.len);
+                defer col_name_strings.deinit(allocator);
+
+                for (q.ret.items) |item| {
+                    const col_name = item.alias orelse switch (item.expr) {
+                        .Ident => |ident| ident.orig,
+                        else => "column",
                     };
-                    if (passes_where) {
+                    try col_name_strings.append(allocator, col_name);
+                }
+
+                const col_result = try allocateColumnStrings(allocator, col_name_strings.items);
+
+                var result = ExecutionResult{
+                    .columns = col_result.columns,
+                    .rows = try final_rows.toOwnedSlice(allocator),
+                    .flags = filtered_result.flags,
+                    .column_buffer = col_result.buffer,
+                };
+
+                // Apply ORDER BY if present
+                if (q.order_by) |order| {
+                    try sortRows(allocator, &result, order);
+                }
+
+                // Apply LIMIT if present (supports both literal and $param)
+                if (resolveLimitParam(q.limit, q.limit_param, param_names.items, param_values.items)) |lim| {
+                    const end = @min(result.rows.len, lim);
+                    if (end != result.rows.len) {
+                        try execution.applyRowWindow(allocator, &result, 0, end);
+                    }
+                }
+
+                return result;
+            } else {
+                // No WITH clause, just apply WHERE/RETURN to CALL results
+                // GAP-0220 FIX: Use try for proper error propagation
+                var filtered_rows = try std.ArrayList([]Value).initCapacity(allocator, call_result.rows.len);
+
+                if (q.where_clause) |where_expr| {
+                    for (call_result.rows) |row| {
+                        const env = Env{
+                            .names = call_result.columns,
+                            .values = row,
+                            .param_names = param_names.items,
+                            .param_values = param_values.items,
+                            .allocator = allocator,
+                            .exec_context = exec_ctx,
+                        };
+
+                        const matches = try eval.evalExpr(allocator, where_expr, env);
+                        const passes_where = switch (matches) {
+                            .Bool => |b| b,
+                            .Null => false,
+                            .Int => |i| i != 0,
+                            else => false,
+                        };
+                        if (passes_where) {
+                            try filtered_rows.append(allocator, row);
+                        }
+                    }
+                } else {
+                    // No WHERE clause, use all rows
+                    for (call_result.rows) |row| {
                         try filtered_rows.append(allocator, row);
                     }
                 }
 
-                break :blk ExecutionResult{
-                    .columns = with_result.columns,
-                    .rows = try filtered_rows.toOwnedSlice(allocator),
-                    .flags = with_result.flags,
-                };
-            } else with_result;
+                // Apply RETURN clause
+                // GAP-0220 FIX: Use try for proper error propagation
+                var final_rows = try std.ArrayList([]Value).initCapacity(allocator, filtered_rows.items.len);
 
-            // Apply RETURN clause to transform results
-            // GAP-0220 FIX: Use try for proper error propagation
-            var final_rows = try std.ArrayList([]Value).initCapacity(allocator, filtered_result.rows.len);
+                for (filtered_rows.items) |row| {
+                    var return_row = try allocator.alloc(Value, q.ret.items.len);
 
-            for (filtered_result.rows) |row| {
-                var return_row = try allocator.alloc(Value, q.ret.items.len);
-
-                const env = Env{
-                    .names = filtered_result.columns,
-                    .values = row,
-                    .param_names = param_names.items,
-                    .param_values = param_values.items,
-                    .allocator = allocator,
-                    .exec_context = exec_ctx,
-                };
-
-                for (q.ret.items, 0..) |item, i| {
-                    return_row[i] = try eval.evalExpr(allocator, item.expr, env);
-                }
-
-                try final_rows.append(allocator, return_row);
-            }
-
-            // Phase 5.1.1 optimization: batch allocate column strings
-            var col_name_strings = try std.ArrayList([]const u8).initCapacity(allocator, q.ret.items.len);
-            defer col_name_strings.deinit(allocator);
-
-            for (q.ret.items) |item| {
-                const col_name = item.alias orelse switch (item.expr) {
-                    .Ident => |ident| ident.orig,
-                    else => "column",
-                };
-                try col_name_strings.append(allocator, col_name);
-            }
-
-            const col_result = try allocateColumnStrings(allocator, col_name_strings.items);
-
-            var result = ExecutionResult{
-                .columns = col_result.columns,
-                .rows = try final_rows.toOwnedSlice(allocator),
-                .flags = filtered_result.flags,
-                .column_buffer = col_result.buffer,
-            };
-
-            // Apply ORDER BY if present
-            if (q.order_by) |order| {
-                try sortRows(allocator, &result, order);
-            }
-
-            // Apply LIMIT if present (supports both literal and $param)
-            if (resolveLimitParam(q.limit, q.limit_param, param_names.items, param_values.items)) |lim| {
-                const end = @min(result.rows.len, lim);
-                if (end != result.rows.len) {
-                    try execution.applyRowWindow(allocator, &result, 0, end);
-                }
-            }
-
-            return result;
-        } else {
-            // No WITH clause, just apply WHERE/RETURN to CALL results
-            // GAP-0220 FIX: Use try for proper error propagation
-            var filtered_rows = try std.ArrayList([]Value).initCapacity(allocator, call_result.rows.len);
-
-            if (q.where_clause) |where_expr| {
-                for (call_result.rows) |row| {
                     const env = Env{
                         .names = call_result.columns,
                         .values = row,
@@ -2304,34 +2334,82 @@ pub fn executeLegacyQueryWithResolvedParams(
                         .exec_context = exec_ctx,
                     };
 
-                    const matches = try eval.evalExpr(allocator, where_expr, env);
-                    const passes_where = switch (matches) {
-                        .Bool => |b| b,
-                        .Null => false,
-                        .Int => |i| i != 0,
-                        else => false,
+                    for (q.ret.items, 0..) |item, i| {
+                        return_row[i] = try eval.evalExpr(allocator, item.expr, env);
+                    }
+
+                    try final_rows.append(allocator, return_row);
+                }
+
+                // Phase 5.1.1 optimization: batch allocate column strings
+                var col_name_strings = try std.ArrayList([]const u8).initCapacity(allocator, q.ret.items.len);
+                defer col_name_strings.deinit(allocator);
+
+                for (q.ret.items) |item| {
+                    const col_name = item.alias orelse switch (item.expr) {
+                        .Ident => |ident| ident.orig,
+                        else => "column",
                     };
-                    if (passes_where) {
-                        try filtered_rows.append(allocator, row);
+                    try col_name_strings.append(allocator, col_name);
+                }
+
+                const col_result = try allocateColumnStrings(allocator, col_name_strings.items);
+
+                var result = ExecutionResult{
+                    .columns = col_result.columns,
+                    .rows = try final_rows.toOwnedSlice(allocator),
+                    .flags = call_result.flags,
+                    .column_buffer = col_result.buffer,
+                };
+
+                // Apply ORDER BY if present
+                if (q.order_by) |order| {
+                    try sortRows(allocator, &result, order);
+                }
+
+                // Apply LIMIT if present (supports both literal and $param)
+                if (resolveLimitParam(q.limit, q.limit_param, param_names.items, param_values.items)) |lim| {
+                    const end = @min(result.rows.len, lim);
+                    if (end != result.rows.len) {
+                        try execution.applyRowWindow(allocator, &result, 0, end);
                     }
                 }
-            } else {
-                // No WHERE clause, use all rows
-                for (call_result.rows) |row| {
-                    try filtered_rows.append(allocator, row);
-                }
+
+                return result;
+            }
+        },
+
+        // Handle standalone WITH clause (e.g., WITH 5 AS x RETURN x)
+        .with => {
+            const with_clause = q.with_clause.?;
+            // Create initial empty result with one row
+            var initial_result = ExecutionResult{
+                .columns = try allocator.alloc([]const u8, 0),
+                .rows = try allocator.alloc([]Value, 1),
+                .flags = std.ArrayList([]const u8).empty,
+            };
+            initial_result.rows[0] = try allocator.alloc(Value, 0);
+
+            // Apply WITH clause to transform the empty row into WITH variables
+            // CANARY: REQ=REQ-GQL-WITH-GROUPBY-003; FEATURE="WithGroupByAggregation"; ASPECT=CallSite; STATUS=TESTED; TEST=geodetestlab/specs/gql_query_comprehensive.yml; OWNER=execution; UPDATED=2025-12-22
+            const with_result = try execution.executeWithClauseWithGroupByAndParams(allocator, initial_result, with_clause, q.group_by, execution.withStageHaving(q), param_names.items, param_values.items);
+
+            // Check if there's a FOR statement to execute with WITH bindings
+            if (q.for_statement) |for_stmt| {
+                return executeForWithBindings(allocator, for_stmt.*, with_result, context);
             }
 
-            // Apply RETURN clause
+            // Now evaluate RETURN using the WITH results as environment
             // GAP-0220 FIX: Use try for proper error propagation
-            var final_rows = try std.ArrayList([]Value).initCapacity(allocator, filtered_rows.items.len);
+            var final_rows = try std.ArrayList([]Value).initCapacity(allocator, with_result.rows.len);
 
-            for (filtered_rows.items) |row| {
+            for (with_result.rows) |with_row| {
                 var return_row = try allocator.alloc(Value, q.ret.items.len);
 
+                // Create environment from WITH results + LET binding parameters
                 const env = Env{
-                    .names = call_result.columns,
-                    .values = row,
+                    .names = with_result.columns,
+                    .values = with_row,
                     .param_names = param_names.items,
                     .param_values = param_values.items,
                     .allocator = allocator,
@@ -2345,7 +2423,7 @@ pub fn executeLegacyQueryWithResolvedParams(
                 try final_rows.append(allocator, return_row);
             }
 
-            // Phase 5.1.1 optimization: batch allocate column strings
+            // Get column names from RETURN clause (Phase 5.1.1 optimization: batch allocation)
             var col_name_strings = try std.ArrayList([]const u8).initCapacity(allocator, q.ret.items.len);
             defer col_name_strings.deinit(allocator);
 
@@ -2362,7 +2440,115 @@ pub fn executeLegacyQueryWithResolvedParams(
             var result = ExecutionResult{
                 .columns = col_result.columns,
                 .rows = try final_rows.toOwnedSlice(allocator),
-                .flags = call_result.flags,
+                .flags = with_result.flags,
+                .column_buffer = col_result.buffer,
+            };
+
+            // Clean up with_result (we took ownership of flags, but need to free columns/rows)
+            for (with_result.columns) |col| {
+                allocator.free(col);
+            }
+            allocator.free(with_result.columns);
+            for (with_result.rows) |row| {
+                allocator.free(row);
+            }
+            allocator.free(with_result.rows);
+
+            // Apply ORDER BY if present
+            if (q.order_by) |order| {
+                try sortRows(allocator, &result, order);
+            }
+
+            return result;
+        },
+
+        // CANARY: REQ=REQ-GQL-UNWIND-001; FEATURE="UNWIND Clause"; ASPECT=Execution; STATUS=TESTED; TEST=geodetestlab/specs/gql_query_comprehensive.yml; OWNER=execution; UPDATED=2026-01-25
+        // Handle UNWIND clause: transforms a list into multiple rows
+        // UNWIND [1, 2, 3] AS x RETURN x  =>  rows with x=1, x=2, x=3
+        .unwind => {
+            const unwind = q.unwind_clause.?;
+            // Evaluate the list expression in an empty environment
+            const empty_env = Env{
+                .names = &.{},
+                .values = &.{},
+                .param_names = param_names.items,
+                .param_values = param_values.items,
+                .allocator = allocator,
+                .exec_context = exec_ctx,
+            };
+
+            const list_value = try eval.evalExpr(allocator, unwind.list_expr, empty_env);
+
+            // Extract list elements
+            const elements: []const Value = switch (list_value) {
+                .List => |l| l,
+                else => return error.UnwindRequiresList,
+            };
+
+            // Create result rows - one row per list element
+            var final_rows = try std.ArrayList([]Value).initCapacity(allocator, elements.len);
+            defer final_rows.deinit(allocator);
+
+            for (elements) |elem| {
+                // Create environment with the unwound variable
+                const unwind_names = [_][]const u8{unwind.variable};
+                const unwind_values = [_]Value{elem};
+                const unwind_env = Env{
+                    .names = &unwind_names,
+                    .values = &unwind_values,
+                    .param_names = param_names.items,
+                    .param_values = param_values.items,
+                    .allocator = allocator,
+                    .exec_context = exec_ctx,
+                };
+
+                // GAP-0859: apply the per-row WHERE filter BEFORE projecting RETURN
+                // items. Previously the UNWIND path ignored `q.where_clause`
+                // entirely, so a filtered UNWIND (e.g. the WHERE-bounded recursive
+                // term of a `WITH RECURSIVE` CTE) emitted every element and never
+                // terminated by predicate — it could only stop at the recursion
+                // iteration cap. The predicate is evaluated in the same environment
+                // the RETURN items see (the unwound variable bound). The truthiness
+                // coercion here (a non-zero Int counts as true) matches the CALL-path
+                // WHERE coercion sites, NOT the bare-RETURN WHERE site above — that
+                // one treats any Int as false (`else => false`).
+                if (q.where_clause) |where_expr| {
+                    const where_result = try eval.evalExpr(allocator, where_expr, unwind_env);
+                    const passes_filter = switch (where_result) {
+                        .Bool => |b| b,
+                        .Null => false,
+                        .Int => |iv| iv != 0,
+                        else => false,
+                    };
+                    if (!passes_filter) continue;
+                }
+
+                // Evaluate RETURN items for this row
+                var return_row = try allocator.alloc(Value, q.ret.items.len);
+                for (q.ret.items, 0..) |item, i| {
+                    return_row[i] = try eval.evalExpr(allocator, item.expr, unwind_env);
+                }
+                try final_rows.append(allocator, return_row);
+            }
+
+            // Get column names from RETURN clause
+            var col_name_strings = try std.ArrayList([]const u8).initCapacity(allocator, q.ret.items.len);
+            defer col_name_strings.deinit(allocator);
+
+            for (q.ret.items) |item| {
+                const col_name = item.alias orelse switch (item.expr) {
+                    .Ident => |ident| ident.orig,
+                    else => "column",
+                };
+                try col_name_strings.append(allocator, col_name);
+            }
+
+            const col_result = try allocateColumnStrings(allocator, col_name_strings.items);
+
+            var result = ExecutionResult{
+                .columns = col_result.columns,
+                .rows = try final_rows.toOwnedSlice(allocator),
+                .flags = std.ArrayList([]const u8).empty,
                 .column_buffer = col_result.buffer,
             };
 
@@ -2380,203 +2566,149 @@ pub fn executeLegacyQueryWithResolvedParams(
             }
 
             return result;
-        }
+        },
+
+        // Otherwise just execute the return clause
+        .return_only => {
+            var result = try executeReturnClauseWithParams(allocator, q.ret, context, param_names.items, param_values.items);
+
+            // Apply ORDER BY if present
+            if (q.order_by) |order| {
+                try sortRows(allocator, &result, order);
+            }
+
+            return result;
+        },
+
+        // A chain is dispatched above; the rest run no query part here.
+        .chain, .read_part, .values_match, .values_return, .create_statement, .insert_statement, .merge_statement, .delete_statement => unreachable,
+    }
+}
+
+/// Whether a predicate's value lets a row through.
+fn truthy(value: Value) bool {
+    return switch (value) {
+        .Bool => |b| b,
+        .Int => |i| i != 0,
+        else => false,
+    };
+}
+
+// CANARY: REQ=REQ-SONNY-3139-WRITE-SHAPES; FEATURE="WriteShapeValidator"; ASPECT=InitialWithBinding; STATUS=TESTED; TEST=tests/test_sonny3139_write_shapes.zig; OWNER=engine; UPDATED=2026-09-27
+/// SONNY-3139 (C1): a part that writes after an initial WITH
+/// (`write_shape.bindsInitialWith`). The WITH is evaluated once, over one
+/// empty row, and its values bound as parameters (ahead of the others, so
+/// they shadow one of the same name) for the rest of the part: its MATCH, its
+/// WHERE and its writes see them. Its WHERE, SKIP and LIMIT decide whether
+/// the part runs at all. The write-shape validator refused an aggregate item,
+/// an unnamed one, and a WITH that may drop its row before an aggregating
+/// RETURN.
+fn executeWithInitialWith(
+    allocator: std.mem.Allocator,
+    q: ast.Query,
+    context: ExecutionContext,
+    resolved_param_names: []const []const u8,
+    resolved_param_values: []const Value,
+    comptime via: enum { legacy, query },
+) anyerror!ExecutionResult {
+    const exec_ctx: *ExecutionContext = @constCast(&context);
+    const wc = q.initial_with.?;
+    const n = wc.items.len;
+    const names = try allocator.alloc([]const u8, n + resolved_param_names.len);
+    defer allocator.free(names);
+    const values = try allocator.alloc(Value, n + resolved_param_values.len);
+    defer allocator.free(values);
+    const outer_env = Env{
+        .names = &.{},
+        .values = &.{},
+        .param_names = resolved_param_names,
+        .param_values = resolved_param_values,
+        .allocator = allocator,
+        .exec_context = exec_ctx,
+    };
+    for (wc.items, names[0..n], values[0..n]) |item, *name, *value| {
+        name.* = item.alias orelse switch (item.expr) {
+            .Ident => |id| id.orig,
+            else => return error.WriteClauseNotApplied,
+        };
+        value.* = try eval.evalExpr(allocator, item.expr, outer_env);
+    }
+    @memcpy(names[n..], resolved_param_names);
+    @memcpy(values[n..], resolved_param_values);
+
+    var runs = true;
+    if (q.initial_where) |where_expr| {
+        const env = Env{ .names = &.{}, .values = &.{}, .param_names = names, .param_values = values, .allocator = allocator, .exec_context = exec_ctx };
+        runs = truthy(try eval.evalExpr(allocator, where_expr, env));
+    }
+    const offset_lit: ?usize = if (wc.offset) |o| @intCast(o) else null;
+    const limit_lit: ?usize = if (wc.limit) |l| @intCast(l) else null;
+    if ((resolveLimitParam(offset_lit, wc.offset_param, resolved_param_names, resolved_param_values) orelse 0) > 0) runs = false;
+    if (resolveLimitParam(limit_lit, wc.limit_param, resolved_param_names, resolved_param_values)) |lim| {
+        if (lim == 0) runs = false;
     }
 
-    // Handle standalone WITH clause (e.g., WITH 5 AS x RETURN x)
-    if (q.with_clause) |with_clause| {
-        // Create initial empty result with one row
-        var initial_result = ExecutionResult{
-            .columns = try allocator.alloc([]const u8, 0),
-            .rows = try allocator.alloc([]Value, 1),
+    var part = write_shape.withoutInitialWith(q);
+    if (!runs) {
+        // No row: nothing runs, and the RETURN has no row to project.
+        return ExecutionResult{
+            .columns = try generateUniqueColumnNames(allocator, part.ret.items),
+            .rows = try allocator.alloc([]Value, 0),
             .flags = std.ArrayList([]const u8).empty,
         };
-        initial_result.rows[0] = try allocator.alloc(Value, 0);
-
-        // Apply WITH clause to transform the empty row into WITH variables
-        // CANARY: REQ=REQ-GQL-WITH-GROUPBY-003; FEATURE="WithGroupByAggregation"; ASPECT=CallSite; STATUS=TESTED; TEST=geodetestlab/specs/gql_query_comprehensive.yml; OWNER=execution; UPDATED=2025-12-22
-        const with_result = try execution.executeWithClauseWithGroupByAndParams(allocator, initial_result, with_clause, q.group_by, execution.withStageHaving(q), param_names.items, param_values.items);
-
-        // Check if there's a FOR statement to execute with WITH bindings
-        if (q.for_statement) |for_stmt| {
-            return executeForWithBindings(allocator, for_stmt.*, with_result, context);
-        }
-
-        // Now evaluate RETURN using the WITH results as environment
-        // GAP-0220 FIX: Use try for proper error propagation
-        var final_rows = try std.ArrayList([]Value).initCapacity(allocator, with_result.rows.len);
-
-        for (with_result.rows) |with_row| {
-            var return_row = try allocator.alloc(Value, q.ret.items.len);
-
-            // Create environment from WITH results + LET binding parameters
-            const env = Env{
-                .names = with_result.columns,
-                .values = with_row,
-                .param_names = param_names.items,
-                .param_values = param_values.items,
-                .allocator = allocator,
-                .exec_context = exec_ctx,
-            };
-
-            for (q.ret.items, 0..) |item, i| {
-                return_row[i] = try eval.evalExpr(allocator, item.expr, env);
-            }
-
-            try final_rows.append(allocator, return_row);
-        }
-
-        // Get column names from RETURN clause (Phase 5.1.1 optimization: batch allocation)
-        var col_name_strings = try std.ArrayList([]const u8).initCapacity(allocator, q.ret.items.len);
-        defer col_name_strings.deinit(allocator);
-
-        for (q.ret.items) |item| {
-            const col_name = item.alias orelse switch (item.expr) {
-                .Ident => |ident| ident.orig,
-                else => "column",
-            };
-            try col_name_strings.append(allocator, col_name);
-        }
-
-        const col_result = try allocateColumnStrings(allocator, col_name_strings.items);
-
-        var result = ExecutionResult{
-            .columns = col_result.columns,
-            .rows = try final_rows.toOwnedSlice(allocator),
-            .flags = with_result.flags,
-            .column_buffer = col_result.buffer,
-        };
-
-        // Clean up with_result (we took ownership of flags, but need to free columns/rows)
-        for (with_result.columns) |col| {
-            allocator.free(col);
-        }
-        allocator.free(with_result.columns);
-        for (with_result.rows) |row| {
-            allocator.free(row);
-        }
-        allocator.free(with_result.rows);
-
-        // Apply ORDER BY if present
-        if (q.order_by) |order| {
-            try sortRows(allocator, &result, order);
-        }
-
-        return result;
     }
-
-    // CANARY: REQ=REQ-GQL-UNWIND-001; FEATURE="UNWIND Clause"; ASPECT=Execution; STATUS=TESTED; TEST=geodetestlab/specs/gql_query_comprehensive.yml; OWNER=execution; UPDATED=2026-01-25
-    // Handle UNWIND clause: transforms a list into multiple rows
-    // UNWIND [1, 2, 3] AS x RETURN x  =>  rows with x=1, x=2, x=3
-    if (q.unwind_clause) |unwind| {
-        // Evaluate the list expression in an empty environment
-        const empty_env = Env{
-            .names = &.{},
-            .values = &.{},
-            .param_names = param_names.items,
-            .param_values = param_values.items,
-            .allocator = allocator,
-            .exec_context = exec_ctx,
-        };
-
-        const list_value = try eval.evalExpr(allocator, unwind.list_expr, empty_env);
-
-        // Extract list elements
-        const elements: []const Value = switch (list_value) {
-            .List => |l| l,
-            else => return error.UnwindRequiresList,
-        };
-
-        // Create result rows - one row per list element
-        var final_rows = try std.ArrayList([]Value).initCapacity(allocator, elements.len);
-        defer final_rows.deinit(allocator);
-
-        for (elements) |elem| {
-            // Create environment with the unwound variable
-            const unwind_names = [_][]const u8{unwind.variable};
-            const unwind_values = [_]Value{elem};
-            const unwind_env = Env{
-                .names = &unwind_names,
-                .values = &unwind_values,
-                .param_names = param_names.items,
-                .param_values = param_values.items,
-                .allocator = allocator,
-                .exec_context = exec_ctx,
-            };
-
-            // GAP-0859: apply the per-row WHERE filter BEFORE projecting RETURN
-            // items. Previously the UNWIND path ignored `q.where_clause`
-            // entirely, so a filtered UNWIND (e.g. the WHERE-bounded recursive
-            // term of a `WITH RECURSIVE` CTE) emitted every element and never
-            // terminated by predicate — it could only stop at the recursion
-            // iteration cap. The predicate is evaluated in the same environment
-            // the RETURN items see (the unwound variable bound). The truthiness
-            // coercion here (a non-zero Int counts as true) matches the CALL-path
-            // WHERE coercion sites, NOT the bare-RETURN WHERE site above — that
-            // one treats any Int as false (`else => false`).
-            if (q.where_clause) |where_expr| {
-                const where_result = try eval.evalExpr(allocator, where_expr, unwind_env);
-                const passes_filter = switch (where_result) {
-                    .Bool => |b| b,
-                    .Null => false,
-                    .Int => |iv| iv != 0,
-                    else => false,
-                };
-                if (!passes_filter) continue;
-            }
-
-            // Evaluate RETURN items for this row
-            var return_row = try allocator.alloc(Value, q.ret.items.len);
-            for (q.ret.items, 0..) |item, i| {
-                return_row[i] = try eval.evalExpr(allocator, item.expr, unwind_env);
-            }
-            try final_rows.append(allocator, return_row);
-        }
-
-        // Get column names from RETURN clause
-        var col_name_strings = try std.ArrayList([]const u8).initCapacity(allocator, q.ret.items.len);
-        defer col_name_strings.deinit(allocator);
-
-        for (q.ret.items) |item| {
-            const col_name = item.alias orelse switch (item.expr) {
-                .Ident => |ident| ident.orig,
-                else => "column",
-            };
-            try col_name_strings.append(allocator, col_name);
-        }
-
-        const col_result = try allocateColumnStrings(allocator, col_name_strings.items);
-
-        var result = ExecutionResult{
-            .columns = col_result.columns,
-            .rows = try final_rows.toOwnedSlice(allocator),
-            .flags = std.ArrayList([]const u8).empty,
-            .column_buffer = col_result.buffer,
-        };
-
-        // Apply ORDER BY if present
-        if (q.order_by) |order| {
-            try sortRows(allocator, &result, order);
-        }
-
-        // Apply LIMIT if present (supports both literal and $param)
-        if (resolveLimitParam(q.limit, q.limit_param, param_names.items, param_values.items)) |lim| {
-            const end = @min(result.rows.len, lim);
-            if (end != result.rows.len) {
-                try execution.applyRowWindow(allocator, &result, 0, end);
-            }
-        }
-
-        return result;
+    var part_ctx = context;
+    part_ctx.query_param_names = names;
+    part_ctx.query_param_values = values;
+    switch (via) {
+        .legacy => return executeLegacyQueryWithResolvedParams(allocator, part, part_ctx, names, values),
+        .query => {
+            // Its LET and CTE are among the parameters already.
+            part.let_bindings = &.{};
+            part.cte_list = null;
+            return executeQueryWithContext(allocator, part, part_ctx);
+        },
     }
+}
 
-    // Otherwise just execute the return clause
-    var result = try executeReturnClauseWithParams(allocator, q.ret, context, param_names.items, param_values.items);
-
-    // Apply ORDER BY if present
-    if (q.order_by) |order| {
-        try sortRows(allocator, &result, order);
-    }
-
-    return result;
+// CANARY: REQ=REQ-SONNY-3144-UNWIND-WRITES; FEATURE="WriteShapeValidator"; ASPECT=UnwindEach; STATUS=TESTED; TEST=tests/test_sonny3139_write_shapes.zig; OWNER=engine; UPDATED=2026-09-27
+/// SONNY-3144: a part that writes after an UNWIND (`write_shape.unwindsEach`)
+/// runs once per element, the element bound as a parameter, as a FOR body
+/// does. No executor honoured the UNWIND: `UNWIND [1, 2, 3] AS u CREATE (:U
+/// {u: u})` created one node with u null, and `... UNWIND l AS u MATCH (n)
+/// WHERE n.i = u SET ...` read u as null. The validator refused a RETURN that
+/// aggregates, is DISTINCT, or orders or windows the rows of all elements. A
+/// null list has no element.
+fn executeUnwindEach(
+    allocator: std.mem.Allocator,
+    q: ast.Query,
+    context: ExecutionContext,
+    resolved_param_names: []const []const u8,
+    resolved_param_values: []const Value,
+) anyerror!ExecutionResult {
+    const exec_ctx: *ExecutionContext = @constCast(&context);
+    const unwind = q.unwind_clause.?;
+    const env = Env{
+        .names = &.{},
+        .values = &.{},
+        .param_names = resolved_param_names,
+        .param_values = resolved_param_values,
+        .allocator = allocator,
+        .exec_context = exec_ctx,
+    };
+    const list_value = try eval.evalExpr(allocator, unwind.list_expr, env);
+    const elements: []const Value = switch (list_value) {
+        .List => |l| l,
+        .Null => &.{},
+        else => return error.UnwindRequiresList,
+    };
+    var body = q;
+    body.unwind_clause = null;
+    // Already evaluated into the resolved parameters.
+    body.let_bindings = &.{};
+    body.cte_list = null;
+    var body_ctx = context;
+    body_ctx.query_param_names = resolved_param_names;
+    body_ctx.query_param_values = resolved_param_values;
+    return statement_handlers.executeQueryPerElement(allocator, unwind.variable, elements, &body, body_ctx);
 }

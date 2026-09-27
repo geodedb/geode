@@ -776,15 +776,11 @@ fn resolveDeleteTargets(
     defer result.deinit(allocator);
 
     for (result.rows) |row| {
-        for (row) |value| {
-            switch (value) {
-                .Node => |node| try appendUniqueId(allocator, &node_ids, node.id),
-                .Edge => |edge| try appendUniqueId(allocator, &edge_ids, edge.id),
-                // An unbound / non-entity projection (e.g. a DELETE item naming a
-                // variable the pattern never binds) targets nothing.
-                else => {},
-            }
-        }
+        // SONNY-3146 (I4): a path deletes its nodes and edges, a
+        // variable-length relationship (the list of its edges) every edge;
+        // they were skipped. The write-shape validator refuses a DELETE item
+        // the pattern does not bind to an element.
+        for (row) |value| try match_operations.appendDeleteTargets(allocator, &node_ids, &edge_ids, value);
     }
 
     return .{

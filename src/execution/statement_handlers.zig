@@ -686,6 +686,20 @@ fn executeForBody(
     return acc.finish(allocator);
 }
 
+/// SONNY-3144: `body` once per element of `items`, with `variable` bound to
+/// the element as a parameter (ahead of the context's), as a FOR body runs;
+/// the results appended in order. An UNWIND before a write runs this way.
+pub fn executeQueryPerElement(
+    allocator: std.mem.Allocator,
+    variable: []const u8,
+    items: []const Value,
+    body: *const ast.Query,
+    context: ExecutionContext,
+) anyerror!ExecutionResult {
+    const for_stmt = ast.ForStatement{ .variable = variable, .collection = .Null, .body = @constCast(body) };
+    return executeForBody(allocator, for_stmt, body, items, &.{}, &.{}, context);
+}
+
 pub fn executeForWithBindings(allocator: std.mem.Allocator, for_stmt: ast.ForStatement, with_result: ExecutionResult, context: ExecutionContext) !ExecutionResult {
     // We expect only one row from WITH clause, use it as the environment
     if (with_result.rows.len == 0) {

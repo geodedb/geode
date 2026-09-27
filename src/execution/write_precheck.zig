@@ -330,3 +330,29 @@ pub fn checkSetClausesWritableExcluding(
         }
     }
 }
+
+// CANARY: REQ=REQ-SONNY-3145-SET-BEFORE-CREATE; FEATURE="PropertyStorage"; ASPECT=StorableValues; STATUS=TESTED; TEST=tests/test_sonny3139_write_shapes.zig; OWNER=engine; UPDATED=2026-09-27
+/// SONNY-3145 (I2): every value a SET list would write is one a property can
+/// hold. `checkPropertyWritable` asks the storage adapter, and without one
+/// (an in-memory store) checks nothing, so a value no property can hold (a
+/// node, an edge, a path) was refused only when it was written, after
+/// whatever the statement had written before it. The value is coerced as the
+/// write coerces it, on `scratch` (discarded); a value that fails to evaluate
+/// is skipped, as in the rest of this pre-pass.
+pub fn checkSetValuesStorable(scratch: std.mem.Allocator, set_clauses: []const ast.SetClause, env: Env) !void {
+    for (set_clauses) |set_clause| {
+        switch (set_clause) {
+            .Property => |prop| {
+                const value = eval.evalExpr(scratch, prop.value, env) catch continue;
+                _ = try property_mutation.coercePropertyValue(scratch, value);
+            },
+            .AllProperties => |all_props| {
+                const props_value = eval.evalExpr(scratch, all_props.properties, env) catch continue;
+                if (props_value != .Map) continue;
+                var iter = props_value.Map.iterator();
+                while (iter.next()) |entry| _ = try property_mutation.coercePropertyValue(scratch, entry.value_ptr.*);
+            },
+            .Labels => {},
+        }
+    }
+}

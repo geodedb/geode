@@ -65,6 +65,8 @@ const statement_dispatcher = @import("execution/statement_dispatcher.zig");
 // through geode.execution.fts_index_ops.
 pub const fts_index_ops = @import("execution/fts_index_ops.zig");
 const query_execution = @import("execution/query_execution.zig");
+// SONNY-3139: the pre-dispatch write-shape validator and its executor table.
+pub const write_shape = @import("execution/write_shape.zig");
 const value_utilities = @import("execution/value_utilities.zig");
 pub const procedure_registry = @import("execution/procedure_registry.zig");
 // REQ-RLS-DDL-001: rls_dispatch is exported so server/main.zig can install
@@ -1496,6 +1498,13 @@ fn executeStatementWithContextInner(allocator: std.mem.Allocator, stmt: ast.Stat
         if (rows_returned) |rc| om.recordQueryRowsReturned(op_name, op_name, rc);
         if (exec_outcome == .error_) qspan.setErrorName("execution_error") else qspan.setOk();
     }
+    // CANARY: REQ=REQ-SONNY-3139-WRITE-SHAPES; FEATURE="WriteShapeValidator"; ASPECT=DispatcherCall; STATUS=TESTED; TEST=tests/test_sonny3139_write_shapes.zig; OWNER=engine; UPDATED=2026-09-27
+    // SONNY-3139 .. SONNY-3146: every part of the statement (UNION parts,
+    // chained parts, FOR bodies, the statement a PROFILE wraps) is checked
+    // against the executor that will run it, before any of them runs: a
+    // write clause, target or WITH feature that executor does not apply is
+    // refused (0A000) with nothing written.
+    try write_shape.validateStatement(stmt);
     switch (stmt) {
         .Query => |q| {
             // Validate: OFFSET requires ORDER BY (US001) - only if strict validation enabled

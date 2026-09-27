@@ -112,6 +112,8 @@ const write_budget = @import("../write_budget.zig");
 const read_budget = @import("../read_budget.zig");
 const property_mutation = @import("property_mutation.zig");
 const write_precheck = @import("write_precheck.zig");
+// SONNY-3139: the one classification of `ast.Query`'s fields.
+const write_shape = @import("write_shape.zig");
 // SONNY-3042, SONNY-3043: MATCH ... CREATE deletes as a DELETE statement does.
 const crud_operations = @import("crud_operations.zig");
 const value_types = @import("../value_types.zig");
@@ -872,39 +874,22 @@ pub const AppliedWrites = struct {
     delete: bool = false,
 };
 
-/// SONNY-3041: every field of `ast.Query`, classified for the write guard: the
-/// write clause it is (a field of `AppliedWrites`), or null. A new clause
-/// fails to compile until it is classified here, so no executor can be handed
-/// a write it was never taught to refuse.
+/// SONNY-3041: the `AppliedWrites` field a write clause of `ast.Query` is,
+/// or null for any other field. SONNY-3139: which fields are write clauses is
+/// the write-shape validator's one classification of every field
+/// (`write_shape.fieldRole`); a new field fails to compile there until it is
+/// classified, so no executor can be handed a write it was never taught to
+/// refuse.
 fn writeClause(comptime field: []const u8) ?[]const u8 {
-    @setEvalBranchQuota(20_000);
+    if (comptime write_shape.fieldRole(field) != .write) return null;
     const writes = [_][2][]const u8{
         .{ "set_clauses", "set" },       .{ "remove_clauses", "remove" }, .{ "create_pattern", "create" },
         .{ "merge_statement", "merge" }, .{ "delete_items", "delete" },
     };
-    // Not a write of the query part an executor reads: its pattern, filters
-    // and projection; a CTE or a LET (parameters by the time it runs); a
-    // procedure CALL or a CALL { } subquery (their own executors, before any
-    // pattern executor); the parts after a WITH (`next_query`, whose writes
-    // the chain refuses before any part runs: `refuseChainedWrites`); a FOR
-    // (run only after a standalone WITH).
-    const others = [_][]const u8{
-        "let_bindings",  "inline_let_bindings", "optional_match", "match",                 "unwind_clause",
-        "where_clause",  "filter_clause",       "with_clause",    "cte_list",              "group_by",
-        "having",        "ret",                 "order_by",       "limit",                 "offset",
-        "limit_param",   "offset_param",        "path_variable",  "has_recursive_cte",     "is_initial_with",
-        "call_clause",   "next_query",          "for_statement",  "initial_call_subquery",
-        // SONNY-3139: what the parser records for the write-shape validator.
-        "initial_with",
-        "initial_where", "pre_with_where",      "with_where",     "chained_write",         "split_create",
-    };
     inline for (writes) |w| {
         if (comptime std.mem.eql(u8, w[0], field)) return w[1];
     }
-    inline for (others) |name| {
-        if (comptime std.mem.eql(u8, name, field)) return null;
-    }
-    @compileError("SONNY-3041: classify ast.Query." ++ field ++ " for the write guard (writeClause, match_operations.zig)");
+    @compileError("SONNY-3041: map the write clause ast.Query." ++ field ++ " to AppliedWrites (writeClause, match_operations.zig)");
 }
 
 // CANARY: REQ=REQ-SONNY-3041-WRITE-GUARD; FEATURE="WriteStep"; ASPECT=StructuralWriteGuard; STATUS=TESTED; TEST=tests/test_sonny3041_pattern_shape_writes.zig; OWNER=engine; UPDATED=2026-09-27
@@ -4023,11 +4008,28 @@ pub fn executeMatchCreateQuery(allocator: std.mem.Allocator, q: ast.Query, param
         };
     }
 
-    // The variables the rows bind. Lets the CREATE batch distinguish a bound
-    // variable that failed to bind on a row (skip the hop -- the GAP-0336
-    // anonymous-node footgun) from a NEW variable introduced by the CREATE
-    // pattern (must be created).
-    const match_var_names = match_result.columns;
+    // The variables the MATCH binds. Lets the CREATE batch distinguish a
+    // bound variable that failed to bind on a row (skip the hop -- the
+    // GAP-0336 anonymous-node footgun) from a NEW variable introduced by the
+    // CREATE pattern (must be created). SONNY-3143: they are the MATCH
+    // pattern's node variables, or the WITH's items for MATCH ... WITH ...
+    // CREATE (the chained rewrite; a WITH after the CREATE is refused before
+    // the statement runs). d79a65c7 took the rows' columns, which for a WITH
+    // after the CREATE were that WITH's items: a MATCH variable the WITH
+    // dropped was created again as a new node, and one it kept was never
+    // bound, so the CREATE skipped its hop.
+    var pattern_names = std.ArrayList([]const u8).empty;
+    defer pattern_names.deinit(allocator);
+    const match_var_names: []const []const u8 = if (q.with_clause != null) match_result.columns else blk: {
+        for (q.match.chains) |chain| {
+            if (chain.head) |head| if (head.name) |n| try pattern_names.append(allocator, n);
+            for (chain.hops) |hop| {
+                if (hop.left.name) |n| try pattern_names.append(allocator, n);
+                if (hop.right.name) |n| try pattern_names.append(allocator, n);
+            }
+        }
+        break :blk pattern_names.items;
+    };
 
     // The variables the CREATE pattern introduces, which a projected RETURN
     // and a SET or REMOVE can see beside the matched ones.
@@ -4054,6 +4056,24 @@ pub fn executeMatchCreateQuery(allocator: std.mem.Allocator, q: ast.Query, param
     defer allocator.free(columns);
     @memcpy(columns[0..match_result.columns.len], match_result.columns);
     @memcpy(columns[match_result.columns.len..], created_names.items);
+
+    // SONNY-3145 (I2): every SET value storable before the CREATE runs, the
+    // created variables null (nothing is created yet). The write step checks
+    // them again before it writes, which came after the CREATE, and left what
+    // it created behind when it refused a value (`CREATE (z:Z) SET z.k = n`).
+    if (q.set_clauses.len != 0) {
+        const dry_row = try allocator.alloc(Value, columns.len);
+        defer allocator.free(dry_row);
+        var scratch = std.heap.ArenaAllocator.init(allocator);
+        defer scratch.deinit();
+        for (match_result.rows) |row| {
+            @memcpy(dry_row[0..row.len], row);
+            @memset(dry_row[row.len..], .Null);
+            const env = Env{ .names = columns, .values = dry_row, .param_names = param_names_arg, .param_values = param_values_arg, .allocator = allocator };
+            try write_precheck.checkSetClausesWritable(allocator, q.set_clauses, env, null, &.{});
+            try write_precheck.checkSetValuesStorable(scratch.allocator(), q.set_clauses, env);
+        }
+    }
 
     // SONNY-3042: a RETURN that would hold an element the DELETE removes is
     // refused before anything is written. The created variables are null
@@ -6386,6 +6406,38 @@ fn executeMultiChainRelationshipMatch(allocator: std.mem.Allocator, q: ast.Query
     return result;
 }
 
+/// SONNY-3144: whether `where_expr` names a variable a chain after `first`
+/// binds and `first` does not. The OPTIONAL MATCH executor filtered the first
+/// chain's rows with a WHERE that named none of the first optional chain's
+/// hop variables, so a WHERE on a disconnected OPTIONAL MATCH's node (`MATCH
+/// (q:Q) OPTIONAL MATCH (n:G) WHERE n.i = q.i`) was evaluated with n unbound
+/// and dropped every row: the statement returned nothing and its SET wrote
+/// nothing. Such a WHERE is applied after the optional matching.
+fn whereReferencesLaterChains(where_expr: ast.Expr, first: ast.Chain, later: []const ast.Chain) bool {
+    for (later) |chain| {
+        if (chain.name) |n| if (whereNamesUnboundBy(where_expr, first, n)) return true;
+        if (chain.head) |head| if (head.name) |n| if (whereNamesUnboundBy(where_expr, first, n)) return true;
+        for (chain.hops) |hop| {
+            for ([_]?[]const u8{ hop.left.name, hop.rel.name, hop.right.name }) |maybe| {
+                if (maybe) |n| if (whereNamesUnboundBy(where_expr, first, n)) return true;
+            }
+        }
+    }
+    return false;
+}
+
+fn whereNamesUnboundBy(where_expr: ast.Expr, first: ast.Chain, name: []const u8) bool {
+    if (!whereExprReferencesVar(where_expr, name)) return false;
+    if (first.name) |n| if (std.mem.eql(u8, n, name)) return false;
+    if (first.head) |head| if (head.name) |n| if (std.mem.eql(u8, n, name)) return false;
+    for (first.hops) |hop| {
+        for ([_]?[]const u8{ hop.left.name, hop.rel.name, hop.right.name }) |maybe| {
+            if (maybe) |n| if (std.mem.eql(u8, n, name)) return false;
+        }
+    }
+    return true;
+}
+
 // CANARY: REQ=REQ-GQL-OPTIONAL-MATCH-004; FEATURE="OptionalMatchExecution"; ASPECT=LeftOuterJoinImpl; STATUS=TESTED; TEST=geodetestlab/specs/gql_pattern_matching_comprehensive.yml; OWNER=execution; UPDATED=2025-12-22
 // CANARY: REQ=REQ-MULTI-GRAPH-009; FEATURE="MultiGraphIsolation"; ASPECT=OptionalMatchFiltering; STATUS=TESTED; TEST=geodetestlab/specs/multi_graph.yml; OWNER=engine; UPDATED=2025-12-22
 // Execute MATCH + OPTIONAL MATCH patterns as left outer join with graph isolation
@@ -6488,24 +6540,9 @@ fn executeMatchWithOptionalPatterns(allocator: std.mem.Allocator, q: ast.Query, 
         if (!first_chain_has_hops and q.where_clause != null) {
             const where_expr = q.where_clause.?;
             // Check if WHERE references any optional match variables
-            var where_uses_optional = false;
-            for (q.match.chains[1..]) |chain| {
-                if (chain.is_optional and chain.hops.len > 0) {
-                    const hop = chain.hops[0];
-                    if (hop.rel.name) |rel_var| {
-                        if (whereExprReferencesVar(where_expr, rel_var)) {
-                            where_uses_optional = true;
-                            break;
-                        }
-                    }
-                    if (hop.right.name) |right_var| {
-                        if (whereExprReferencesVar(where_expr, right_var)) {
-                            where_uses_optional = true;
-                            break;
-                        }
-                    }
-                }
-            }
+            // (SONNY-3144: any variable a later chain binds and the first
+            // does not).
+            const where_uses_optional = whereReferencesLaterChains(where_expr, q.match.chains[0], q.match.chains[1..]);
 
             // Only apply pre-filter if WHERE doesn't use optional vars
             if (!where_uses_optional) {
@@ -6857,24 +6894,9 @@ fn executeMatchWithOptionalPatterns(allocator: std.mem.Allocator, q: ast.Query, 
         const where_expr = q.where_clause.?;
 
         // Check if WHERE references any optional match variables
-        var where_uses_optional = false;
-        for (q.match.chains[1..]) |chain| {
-            if (chain.is_optional and chain.hops.len > 0) {
-                const hop = chain.hops[0];
-                if (hop.rel.name) |rel_var| {
-                    if (whereExprReferencesVar(where_expr, rel_var)) {
-                        where_uses_optional = true;
-                        break;
-                    }
-                }
-                if (hop.right.name) |right_var| {
-                    if (whereExprReferencesVar(where_expr, right_var)) {
-                        where_uses_optional = true;
-                        break;
-                    }
-                }
-            }
-        }
+        // (SONNY-3144: any variable a later chain binds and the first
+        // does not).
+        const where_uses_optional = whereReferencesLaterChains(where_expr, q.match.chains[0], q.match.chains[1..]);
 
         // Only apply WHERE filter if it doesn't use optional vars
         if (!where_uses_optional) {
@@ -9446,6 +9468,28 @@ pub fn projectReturnOverRows(
     return projected;
 }
 
+// CANARY: REQ=REQ-SONNY-3146-DELETE-PATHS; FEATURE="DeleteStatement"; ASPECT=ExpandPathsAndLists; STATUS=TESTED; TEST=tests/test_sonny3139_write_shapes.zig; OWNER=engine; UPDATED=2026-09-27
+/// SONNY-3146 (I4): what a DELETE of `value` deletes: a node, an edge, every
+/// node and edge of a path, every element of a list (a variable-length
+/// relationship binds the list of its edges); nothing for a null (an
+/// OPTIONAL MATCH that did not bind). A path and a list were skipped, so
+/// `MATCH p = (n)-[:R]->(x) DETACH DELETE p` and `DELETE r` on `[r:R*1..1]`
+/// deleted nothing. Any other value is no element: the write-shape validator
+/// refuses a DELETE of a variable that is not bound to one.
+pub fn appendDeleteTargets(allocator: std.mem.Allocator, nodes: *std.ArrayList(u64), edges: *std.ArrayList(u64), value: Value) !void {
+    switch (value) {
+        .Node => |node| if (std.mem.indexOfScalar(u64, nodes.items, node.id) == null) try nodes.append(allocator, node.id),
+        .Edge => |edge| if (std.mem.indexOfScalar(u64, edges.items, edge.id) == null) try edges.append(allocator, edge.id),
+        .Path => |path| {
+            for (path.nodes) |node| if (std.mem.indexOfScalar(u64, nodes.items, node.id) == null) try nodes.append(allocator, node.id);
+            for (path.edges) |edge| if (std.mem.indexOfScalar(u64, edges.items, edge.id) == null) try edges.append(allocator, edge.id);
+        },
+        .List => |items| for (items) |item| try appendDeleteTargets(allocator, nodes, edges, item),
+        .Null => {},
+        else => return error.WriteClauseNotApplied,
+    }
+}
+
 /// SONNY-2694: the nodes and edges a statement deletes, for
 /// `projectReturnBeforeDelete`.
 pub const DeletedElements = struct {
@@ -9470,11 +9514,7 @@ pub const DeletedElements = struct {
                 if (!std.mem.eql(u8, col, name)) continue;
                 for (rows.rows) |row| {
                     if (ci >= row.len) continue;
-                    switch (row[ci]) {
-                        .Node => |node| if (std.mem.indexOfScalar(u64, nodes.items, node.id) == null) try nodes.append(allocator, node.id),
-                        .Edge => |edge| if (std.mem.indexOfScalar(u64, edges.items, edge.id) == null) try edges.append(allocator, edge.id),
-                        else => {},
-                    }
+                    try appendDeleteTargets(allocator, &nodes, &edges, row[ci]);
                 }
                 break;
             }
