@@ -856,6 +856,62 @@ pub fn readFastPathDeclinesWrite(q: ast.Query) bool {
     return false;
 }
 
+/// The write clauses of `ast.Query`, for `refuseUnappliedWrites`.
+pub const AppliedWrites = struct {
+    set: bool = false,
+    remove: bool = false,
+    create: bool = false,
+    merge: bool = false,
+    delete: bool = false,
+};
+
+/// SONNY-3041: every field of `ast.Query`, classified for the write guard: the
+/// write clause it is (a field of `AppliedWrites`), or null. A new clause
+/// fails to compile until it is classified here, so no executor can be handed
+/// a write it was never taught to refuse.
+fn writeClause(comptime field: []const u8) ?[]const u8 {
+    @setEvalBranchQuota(20_000);
+    const writes = [_][2][]const u8{
+        .{ "set_clauses", "set" },       .{ "remove_clauses", "remove" }, .{ "create_pattern", "create" },
+        .{ "merge_statement", "merge" }, .{ "delete_items", "delete" },
+    };
+    // Not a write of the query part an executor reads: its pattern, filters
+    // and projection; a CTE or a LET (parameters by the time it runs); a
+    // procedure CALL or a CALL { } subquery (their own executors, before any
+    // pattern executor); the parts after a WITH (`next_query`, whose writes
+    // the chain refuses before any part runs: `refuseChainedWrites`); a FOR
+    // (run only after a standalone WITH).
+    const others = [_][]const u8{
+        "let_bindings", "inline_let_bindings", "optional_match", "match",                 "unwind_clause",
+        "where_clause", "filter_clause",       "with_clause",    "cte_list",              "group_by",
+        "having",       "ret",                 "order_by",       "limit",                 "offset",
+        "limit_param",  "offset_param",        "path_variable",  "has_recursive_cte",     "is_initial_with",
+        "call_clause",  "next_query",          "for_statement",  "initial_call_subquery",
+    };
+    inline for (writes) |w| {
+        if (comptime std.mem.eql(u8, w[0], field)) return w[1];
+    }
+    inline for (others) |name| {
+        if (comptime std.mem.eql(u8, name, field)) return null;
+    }
+    @compileError("SONNY-3041: classify ast.Query." ++ field ++ " for the write guard (writeClause, match_operations.zig)");
+}
+
+// CANARY: REQ=REQ-SONNY-3041-WRITE-GUARD; FEATURE="WriteStep"; ASPECT=StructuralWriteGuard; STATUS=TESTED; TEST=tests/test_sonny3041_pattern_shape_writes.zig; OWNER=engine; UPDATED=2026-09-27
+/// SONNY-3041: refuse (0A000) a statement that carries a write clause the
+/// calling executor does not apply. Each executor that reads a pattern calls
+/// it with the clauses it applies; a clause it was handed and does not apply
+/// used to be dropped silently (a SET on a comma pattern, a CREATE after a
+/// WITH, a MERGE beside a CREATE). Checked structurally over every field of
+/// the query (`writeClause`), before the executor reads or writes anything.
+pub fn refuseUnappliedWrites(q: ast.Query, comptime applied: AppliedWrites) error{WriteClauseNotApplied}!void {
+    inline for (@typeInfo(ast.Query).@"struct".fields) |field| {
+        if (comptime writeClause(field.name)) |kind| {
+            if (!@field(applied, kind) and fastPathClausePresent(@field(q, field.name))) return error.WriteClauseNotApplied;
+        }
+    }
+}
+
 fn analyzeCountFastPath(q: ast.Query) ?CountFastPathPlan {
     // Shape: single chain, single simple node pattern, no relationship.
     if (q.match.chains.len != 1) return null;
@@ -3767,6 +3823,9 @@ pub fn handleShortestPathAssignment(
             if (chain.name) |chain_name| {
                 // Only use shortestPath handling if the chain is explicitly marked as a shortest path pattern
                 if (chain.is_shortest and std.mem.eql(u8, chain_name, path_var) and chain.hops.len > 0) {
+                    // SONNY-3041: this answers with the path and applies no
+                    // write; a SET or REMOVE here was dropped.
+                    try refuseUnappliedWrites(q, .{});
                     // This is a shortestPath pattern assignment
                     // Build environment from inline_let_bindings (which come from WITH clause)
                     const env = Env{
@@ -4553,6 +4612,10 @@ fn seekMultiNodeCandidate(
 // Handle comma-separated node patterns by creating Cartesian product with graph isolation
 pub fn executeMultiNodeMatch(allocator: std.mem.Allocator, q: ast.Query, param_names: []const []const u8, param_values: []const Value, inline_let_bindings: []ast.LetBinding, current_graph: ?[]const u8) !ExecutionResult {
     _ = inline_let_bindings;
+    // SONNY-3041: this executor applies no write. A SET or REMOVE on a comma
+    // pattern goes through the write step (executeMatchQueryImpl), and it
+    // wrote nothing here: refuse anything else it is handed.
+    try refuseUnappliedWrites(q, .{});
     // Per-function reusable RLS row buffer. Cleared and refilled inside
     // passesRLSExprFilter via nodePropertiesToRLSRowInto (Tasks 1-2).
     // Eliminates the 0->16->32->... per-node rehash chain visible in
@@ -5306,6 +5369,9 @@ fn expandVarLengthHop(
 // e.g., MATCH (p:Person)-[:WORKS_FOR]->(c:Company), (p)-[:PURCHASED]->(pr:Product)
 // This function joins chains on shared variables
 fn executeMultiChainRelationshipMatch(allocator: std.mem.Allocator, q: ast.Query, param_names: []const []const u8, param_values: []const Value, current_graph: ?[]const u8) !ExecutionResult {
+    // SONNY-3041: this executor applies a SET and a REMOVE to each binding;
+    // refuse any other write it is handed.
+    try refuseUnappliedWrites(q, .{ .set = true, .remove = true });
     // Per-function reusable RLS row buffer. Shared across every
     // passesRLSFilter call site in this function; nodePropertiesToRLSRowInto
     // (Tasks 1-2 of the H5a fix) clears + refills the buffer per call so
@@ -6285,6 +6351,10 @@ fn executeMultiChainRelationshipMatch(allocator: std.mem.Allocator, q: ast.Query
 // e.g., MATCH (p:Person) OPTIONAL MATCH (p)-[:WORKS_FOR]->(c:Company) RETURN p.name, c.name
 fn executeMatchWithOptionalPatterns(allocator: std.mem.Allocator, q: ast.Query, param_names: []const []const u8, param_values: []const Value, inline_let_bindings: []ast.LetBinding, current_graph: ?[]const u8) !ExecutionResult {
     _ = inline_let_bindings;
+    // SONNY-3041: this executor applies no write. A SET or REMOVE after an
+    // OPTIONAL MATCH goes through the write step (executeMatchQueryImpl), and
+    // it wrote nothing here: refuse anything else it is handed.
+    try refuseUnappliedWrites(q, .{});
     // Per-function reusable RLS row buffer. Shared across every
     // passesRLSFilter call site in this function; nodePropertiesToRLSRowInto
     // (Tasks 1-2 of the H5a fix) clears + refills the buffer per call so
@@ -8256,6 +8326,30 @@ fn namesVariable(target: []const u8, variable: ?[]const u8) bool {
     return std.mem.eql(u8, target, v);
 }
 
+/// The variable a SET clause writes.
+fn setTarget(sc: ast.SetClause) []const u8 {
+    return switch (sc) {
+        .Property => |prop| prop.target.object,
+        .Labels => |ls| ls.node,
+        .AllProperties => |ap| ap.node,
+    };
+}
+
+/// The variable a REMOVE clause writes.
+fn removeTarget(rc: ast.RemoveClause) []const u8 {
+    return switch (rc) {
+        .Property => |prop| prop.object,
+        .Labels => |lr| lr.node,
+    };
+}
+
+/// Whether a SET or REMOVE clause writes `variable`.
+fn writesVariable(set_clauses: []const ast.SetClause, remove_clauses: []const ast.RemoveClause, variable: []const u8) bool {
+    for (set_clauses) |sc| if (std.mem.eql(u8, setTarget(sc), variable)) return true;
+    for (remove_clauses) |rc| if (std.mem.eql(u8, removeTarget(rc), variable)) return true;
+    return false;
+}
+
 /// SONNY-2707: the end node of a variable-length path a SET or REMOVE names:
 /// the start (`left_var`) or the end (`right_var`).
 fn pathEnd(target: []const u8, left: *graph_store.Node, right: *graph_store.Node, left_var: ?[]const u8, right_var: ?[]const u8) ?*graph_store.Node {
@@ -8273,22 +8367,40 @@ fn applyPathEndWrites(
     set_clauses: []const ast.SetClause,
     remove_clauses: []const ast.RemoveClause,
     env: Env,
-    left: *graph_store.Node,
-    right: *graph_store.Node,
+    scan_left: *graph_store.Node,
+    scan_right: *graph_store.Node,
     left_var: ?[]const u8,
     right_var: ?[]const u8,
 ) !void {
+    // SONNY-2707 (the Task W round's multiplicity check): a SET that reads
+    // what it writes (`SET b.c = coalesce(b.c, 0) + 1`) runs once per path,
+    // so each path must read what the paths before it wrote. The start node
+    // is the scan's copy, reused for every path from it, so a write to it
+    // counted one path: read both ends again, and evaluate on them.
+    const left = store.getNodePtrForScan(scan_left.id) orelse scan_left;
+    const right = if (scan_right.id == scan_left.id) left else (store.getNodePtrForScan(scan_right.id) orelse scan_right);
+    // The traversal's env is at most start, relationship, end and path.
+    var fresh_values: [4]Value = undefined;
+    std.debug.assert(env.values.len <= fresh_values.len);
+    for (env.values, fresh_values[0..env.values.len]) |v, *fresh| {
+        fresh.* = switch (v) {
+            .Node => |n| if (n.id == left.id) Value{ .Node = left } else if (n.id == right.id) Value{ .Node = right } else v,
+            else => v,
+        };
+    }
+    var fresh_env = env;
+    fresh_env.values = fresh_values[0..env.values.len];
     for (set_clauses) |sc| {
         switch (sc) {
             .Property => |prop| if (pathEnd(prop.target.object, left, right, left_var, right_var)) |node| {
-                const value = try eval.evalExpr(allocator, prop.value, env);
+                const value = try eval.evalExpr(allocator, prop.value, fresh_env);
                 try property_mutation.setNodePropertyFromValue(allocator, store, node.labels, node.id, prop.target.property, value);
             },
             .Labels => |ls| if (pathEnd(ls.node, left, right, left_var, right_var)) |node| {
                 for (ls.labels) |label| try store.addNodeLabel(node.id, label);
             },
             .AllProperties => |ap| if (pathEnd(ap.node, left, right, left_var, right_var)) |node| {
-                const props_value = try eval.evalExpr(allocator, ap.properties, env);
+                const props_value = try eval.evalExpr(allocator, ap.properties, fresh_env);
                 try property_mutation.replaceNodeProperties(allocator, store, node, props_value);
             },
         }
@@ -8778,6 +8890,33 @@ pub fn readPatternBindings(
     inline_let_bindings: []ast.LetBinding,
     current_graph: ?[]const u8,
 ) anyerror!PatternBindings {
+    return readBindings(allocator, q, param_names, param_values, inline_let_bindings, current_graph, .apply_set_remove);
+}
+
+/// SONNY-3039, SONNY-3041: `readPatternBindings` without the statement's SET
+/// and REMOVE: the rows only, after the WHERE, the WITH and its WHERE, ORDER
+/// BY and LIMIT. The write step applies the SET and REMOVE to them after
+/// (`applySetRemoveOverRows`).
+pub fn readPatternRows(
+    allocator: std.mem.Allocator,
+    q: ast.Query,
+    param_names: []const []const u8,
+    param_values: []const Value,
+    inline_let_bindings: []ast.LetBinding,
+    current_graph: ?[]const u8,
+) anyerror!PatternBindings {
+    return readBindings(allocator, q, param_names, param_values, inline_let_bindings, current_graph, .rows_only);
+}
+
+fn readBindings(
+    allocator: std.mem.Allocator,
+    q: ast.Query,
+    param_names: []const []const u8,
+    param_values: []const Value,
+    inline_let_bindings: []ast.LetBinding,
+    current_graph: ?[]const u8,
+    comptime mode: enum { apply_set_remove, rows_only },
+) anyerror!PatternBindings {
     var names: std.ArrayList([]const u8) = .empty;
     defer names.deinit(allocator);
     if (q.with_clause) |with_clause| {
@@ -8818,10 +8957,239 @@ pub fn readPatternBindings(
     bindings_query.create_pattern = null;
     bindings_query.merge_statement = null;
     bindings_query.delete_items = &.{};
+    if (mode == .rows_only) {
+        bindings_query.set_clauses = &.{};
+        bindings_query.remove_clauses = &.{};
+    }
 
     const rows = try executeMatchQueryImpl(allocator, bindings_query, param_names, param_values, inline_let_bindings, current_graph);
     return .{ .rows = rows, .items = items };
 }
+
+// CANARY: REQ=REQ-SONNY-3039-WRITE-STEP; FEATURE="WriteStep"; ASPECT=SetRemoveShapes; STATUS=TESTED; TEST=tests/test_sonny3039_with_where_writes.zig; OWNER=engine; UPDATED=2026-09-27
+/// SONNY-3039, SONNY-3041: whether a SET or REMOVE goes through the write
+/// step. The traversals apply a SET or REMOVE as they read a single-node,
+/// single-hop, variable-length or multi-hop pattern, which is right while each
+/// row they read is a row of the statement. After a WITH it is not: the WITH,
+/// the WHERE after it (and one before it, which the parser merges and the
+/// executor defers), its ORDER BY and LIMIT drop rows after the traversal
+/// wrote them, so `MATCH (n:G) WITH n WHERE n.i >= 7 SET n.x = 1` wrote every
+/// :G. The comma-pattern and OPTIONAL MATCH executors never applied them at
+/// all. An initial WITH (before the MATCH) is not a projection of the rows.
+fn setRemoveNeedsWriteStep(q: ast.Query) bool {
+    if (q.set_clauses.len == 0 and q.remove_clauses.len == 0) return false;
+    if (q.with_clause != null and !q.is_initial_with) return true;
+    return switch (dispatchToMultiChainHandler(q, checkAllSimpleNodes(q.match.chains))) {
+        .multi_node_match, .match_with_optional_patterns => true,
+        .multi_chain_relationship_match, .continue_processing => false,
+    };
+}
+
+/// SONNY-3039, SONNY-3041: the write step for a SET or REMOVE. The rows are
+/// read as any read reads them, without the SET and REMOVE
+/// (`readPatternRows`), and the SET and REMOVE applied to the elements each
+/// row binds (`applySetRemoveOverRows`). The RETURN is computed after, over
+/// the same rows, so it sees what was written; with no RETURN the rows are the
+/// result, as the executors' were. The SKIP / LIMIT window is the caller's.
+fn executeSetRemoveStep(
+    allocator: std.mem.Allocator,
+    q: ast.Query,
+    param_names: []const []const u8,
+    param_values: []const Value,
+    inline_let_bindings: []ast.LetBinding,
+    current_graph: ?[]const u8,
+) anyerror!ExecutionResult {
+    var bindings = try readPatternRows(allocator, q, param_names, param_values, inline_let_bindings, current_graph);
+    defer bindings.deinit(allocator);
+    try stabilizeBindings(allocator, &bindings.rows);
+    try applySetRemoveOverRows(allocator, q.set_clauses, q.remove_clauses, &bindings.rows, param_names, param_values);
+    if (q.ret.items.len != 0) return projectReturnOverRows(allocator, q, &bindings.rows, param_names, param_values);
+    const rows = bindings.rows;
+    bindings.rows = .{ .columns = &.{}, .rows = &.{}, .flags = .empty };
+    return rows;
+}
+
+/// The column of `rows` named `name`.
+fn columnIndex(columns: []const []const u8, name: []const u8) ?usize {
+    for (columns, 0..) |col, i| if (std.mem.eql(u8, col, name)) return i;
+    return null;
+}
+
+/// SONNY-3039: what a SET or REMOVE may write through a row's cell: a node
+/// or an edge; nothing for a null (an OPTIONAL MATCH that did not bind). A
+/// variable-length relationship (a list) or a path has nothing to write
+/// (SONNY-2707), and any other value is no element.
+fn checkWriteTarget(rows: ExecutionResult, target: []const u8, labels: bool) !usize {
+    // A variable the rows do not bind (a WITH dropped it) is not in scope.
+    const ci = columnIndex(rows.columns, target) orelse return error.WriteClauseNotApplied;
+    for (rows.rows) |row| {
+        switch (row[ci]) {
+            .Node, .Null => {},
+            // A relationship has a type, not labels.
+            .Edge => if (labels) return error.WriteClauseNotApplied,
+            .List, .Path => return error.VariableLengthPathWrite,
+            else => return error.WriteClauseNotApplied,
+        }
+    }
+    return ci;
+}
+
+// CANARY: REQ=REQ-SONNY-3039-WRITE-STEP; FEATURE="WriteStep"; ASPECT=ApplyOverRows; STATUS=TESTED; TEST=tests/test_sonny3041_pattern_shape_writes.zig; OWNER=engine; UPDATED=2026-09-27
+/// SONNY-3039, SONNY-3041, SONNY-3043: the one write step for SET and
+/// REMOVE. Each clause is applied to the element its target names in each
+/// row of `rows` (the rows a statement's pattern binds, after its WHERE and
+/// WITH, and for MATCH ... CREATE what each row created), by id, through the
+/// durable store writes the traversals use. `rows` must be stable
+/// (`stabilizeBindings`): a write can move the store's map entries.
+///
+/// Before anything is written, every target is checked (`checkWriteTarget`)
+/// and every value by the statement-atomicity pre-pass (`write_precheck`).
+/// An element an earlier row or clause wrote is read again before a row reads
+/// it, so a SET that reads what it writes (`SET n.c = n.c + 1`) runs once per
+/// row, on the value the rows before it left; after the last row, every
+/// element written is read again, so a RETURN computed over the rows sees
+/// what was written.
+pub fn applySetRemoveOverRows(
+    allocator: std.mem.Allocator,
+    set_clauses: []const ast.SetClause,
+    remove_clauses: []const ast.RemoveClause,
+    rows: *ExecutionResult,
+    param_names: []const []const u8,
+    param_values: []const Value,
+) !void {
+    if (set_clauses.len == 0 and remove_clauses.len == 0) return;
+    for (set_clauses) |sc| _ = try checkWriteTarget(rows.*, setTarget(sc), sc == .Labels);
+    for (remove_clauses) |rc| _ = try checkWriteTarget(rows.*, removeTarget(rc), rc == .Labels);
+
+    // Statement-atomicity pre-pass: every value storable, before any write.
+    for (rows.rows) |row| {
+        const env = Env{ .names = rows.columns, .values = row, .param_names = param_names, .param_values = param_values, .allocator = allocator };
+        try write_precheck.checkSetClausesWritable(allocator, set_clauses, env, null, &.{});
+    }
+
+    var written: WrittenElements = .{};
+    defer written.deinit(allocator);
+    const store = graph_store.getWritableGlobalStore(allocator);
+    for (rows.rows) |row| {
+        try write_budget.check();
+        // What the rows before this one wrote.
+        for (row) |*cell| try written.refresh(allocator, rows, cell);
+        const env = Env{ .names = rows.columns, .values = row, .param_names = param_names, .param_values = param_values, .allocator = allocator };
+        for (set_clauses) |sc| {
+            const cell = &row[columnIndex(rows.columns, setTarget(sc)).?];
+            switch (cell.*) {
+                .Node => |node| switch (sc) {
+                    .Property => |prop| {
+                        const value = try eval.evalExpr(allocator, prop.value, env);
+                        try property_mutation.setNodePropertyFromValue(allocator, store, node.labels, node.id, prop.target.property, value);
+                    },
+                    .Labels => |ls| for (ls.labels) |label| try store.addNodeLabel(node.id, label),
+                    .AllProperties => |ap| {
+                        const props_value = try eval.evalExpr(allocator, ap.properties, env);
+                        const node_ptr = (store.nodes.getOrHydratePtr(node.id) catch null) orelse return error.NodeNotFound;
+                        try property_mutation.replaceNodeProperties(allocator, store, node_ptr, props_value);
+                    },
+                },
+                .Edge => |edge| switch (sc) {
+                    .Property => |prop| {
+                        const value = try eval.evalExpr(allocator, prop.value, env);
+                        try property_mutation.setEdgePropertyFromValue(allocator, store, edge.label, edge.id, prop.target.property, value);
+                    },
+                    .Labels => unreachable, // refused by checkWriteTarget
+                    .AllProperties => |ap| {
+                        const props_value = try eval.evalExpr(allocator, ap.properties, env);
+                        const edge_ptr = store.getEdgePtrHydrated(edge.id) orelse return error.EdgeBodyUnresolvable;
+                        try property_mutation.replaceEdgeProperties(allocator, store, edge_ptr, props_value);
+                    },
+                },
+                else => continue, // null: nothing bound on this row
+            }
+            // The next clause reads what this one wrote.
+            try written.add(allocator, cell.*);
+            for (row) |*other| try written.refresh(allocator, rows, other);
+        }
+        for (remove_clauses) |rc| {
+            const cell = &row[columnIndex(rows.columns, removeTarget(rc)).?];
+            switch (cell.*) {
+                .Node => |node| switch (rc) {
+                    .Property => |prop| {
+                        const node_ptr = (store.nodes.getOrHydratePtr(node.id) catch null) orelse return error.NodeNotFound;
+                        property_mutation.removeNodeProperty(store, node_ptr, prop.property);
+                    },
+                    .Labels => |lr| for (lr.labels) |label| try store.removeNodeLabel(node.id, label),
+                },
+                .Edge => |edge| switch (rc) {
+                    .Property => |prop| {
+                        const edge_ptr = store.getEdgePtrHydrated(edge.id) orelse return error.EdgeBodyUnresolvable;
+                        property_mutation.removeEdgeProperty(store, edge_ptr, prop.property);
+                    },
+                    .Labels => unreachable, // refused by checkWriteTarget
+                },
+                else => continue,
+            }
+            try written.add(allocator, cell.*);
+            for (row) |*other| try written.refresh(allocator, rows, other);
+        }
+    }
+    // What the RETURN reads.
+    for (rows.rows) |row| {
+        for (row) |*cell| try written.refresh(allocator, rows, cell);
+    }
+}
+
+/// SONNY-3039: the nodes and edges the write step has written, so the rows
+/// that bind one read it again (and only those).
+const WrittenElements = struct {
+    nodes: std.AutoHashMapUnmanaged(u64, void) = .empty,
+    edges: std.AutoHashMapUnmanaged(u64, void) = .empty,
+
+    fn deinit(self: *WrittenElements, allocator: std.mem.Allocator) void {
+        self.nodes.deinit(allocator);
+        self.edges.deinit(allocator);
+    }
+
+    fn add(self: *WrittenElements, allocator: std.mem.Allocator, value: Value) !void {
+        switch (value) {
+            .Node => |node| try self.nodes.put(allocator, node.id, {}),
+            .Edge => |edge| try self.edges.put(allocator, edge.id, {}),
+            else => {},
+        }
+    }
+
+    /// `value` with each written node a fresh detached box
+    /// (`getNodePtrForScan`) and each written edge a fresh copy `rows` owns;
+    /// lists, maps and paths are walked.
+    fn refresh(self: *const WrittenElements, allocator: std.mem.Allocator, rows: *ExecutionResult, value: *Value) !void {
+        if (self.nodes.count() == 0 and self.edges.count() == 0) return;
+        const store = graph_store.getWritableGlobalStore(allocator);
+        switch (value.*) {
+            .Node => |node| if (self.nodes.contains(node.id)) {
+                value.* = .{ .Node = store.getNodePtrForScan(node.id) orelse return error.NodeNotFound };
+            },
+            .Edge => |edge| if (self.edges.contains(edge.id)) {
+                const fresh = store.getEdgePtrHydrated(edge.id) orelse return error.EdgeBodyUnresolvable;
+                value.* = .{ .Edge = try boxEdge(allocator, rows, fresh) };
+            },
+            .List => |items| for (items) |*item| try self.refresh(allocator, rows, item),
+            .Map => |map| {
+                var it = map.valueIterator();
+                while (it.next()) |item| try self.refresh(allocator, rows, item);
+            },
+            .Path => |path| {
+                for (@constCast(path.nodes)) |*node| {
+                    if (self.nodes.contains(node.*.id)) node.* = store.getNodePtrForScan(node.*.id) orelse return error.NodeNotFound;
+                }
+                for (@constCast(path.edges)) |*edge| {
+                    if (self.edges.contains(edge.*.id)) {
+                        const fresh = store.getEdgePtrHydrated(edge.*.id) orelse return error.EdgeBodyUnresolvable;
+                        edge.* = try boxEdge(allocator, rows, fresh);
+                    }
+                }
+            },
+            else => {},
+        }
+    }
+};
 
 // CANARY: REQ=REQ-SONNY-2694-STABLE-BINDINGS; FEATURE="WriteBehindAggregate"; ASPECT=StableBindings; STATUS=TESTED; TEST=tests/test_sonny2694_write_behind_aggregate.zig; OWNER=engine; UPDATED=2026-09-27
 /// SONNY-2694: make the rows `readPatternBindings` read survive the writes a
@@ -9008,6 +9376,20 @@ pub fn executeMatchQueryImpl(allocator: std.mem.Allocator, q: ast.Query, param_n
     // SONNY-2683: a CREATE or MERGE after the MATCH reads its bindings here
     // first; refuse its grouped or filtered RETURN before anything is written.
     try validateGroupedReturnShape(q);
+    // SONNY-3041: this executor applies a SET and a REMOVE (below, or through
+    // the write step). A CREATE, MERGE or DELETE reaches it only stripped by
+    // the executor that runs it over the rows read here (`readPatternBindings`):
+    // one handed to it otherwise (a chained part, VALUES ... MATCH) was
+    // dropped, so it is refused.
+    try refuseUnappliedWrites(q, .{ .set = true, .remove = true });
+    // SONNY-3039, SONNY-3041: a SET or REMOVE that the traversals cannot
+    // apply as they read (after a WITH, on a comma pattern, after an
+    // OPTIONAL MATCH) goes through the write step, which reads its rows
+    // through the legacy executor (routing-table test signal, as below).
+    if (setRemoveNeedsWriteStep(q)) {
+        _ = g_legacy_write_scan_total.fetchAdd(1, .monotonic);
+        return executeSetRemoveStep(allocator, q, param_names, param_values, inline_let_bindings, current_graph);
+    }
     // The graph and tenant every read and write below is scoped to, derived
     // once, here: the session's graph (else "default") and its tenant filter
     // (GAP-0279).

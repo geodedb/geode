@@ -19,6 +19,14 @@
 // On a persisted store the effect is also read back after a checkpoint and a
 // reload from the engine.
 //
+// The SONNY-738 Task W fix round widened the oracle: a WHERE on the end node
+// with and without a WITH (SONNY-3039: a WITH made the traversal write every
+// path), an undirected pattern, `*0..` (a zero-length path ends at its start;
+// no upper bound), a multi-hop pattern ending in a variable-length hop, and a
+// SET that reads what it writes (`SET b.c = coalesce(b.c, 0) + 1`), which
+// must run once per path, so each node's c is the number of paths that reach
+// it, at the end of the pattern and at its start.
+//
 // Parts (2) and (3) of the ticket (COUNT {} over an unbound relationship, and
 // a variable-length COUNT {} that ignores the pattern's direction) are v0.8.24.
 //
@@ -53,7 +61,10 @@ const edges = [_]Edge{
     .{ .from = 9, .to = 8 }, .{ .from = 8, .to = 9 },
 };
 
-const Direction = enum { out, in };
+const Direction = enum { out, in, both };
+
+/// A walk with no upper bound (`*k..`).
+const unbounded: u8 = std.math.maxInt(u8);
 
 const Walk = struct {
     /// The start nodes (null: every node).
@@ -63,11 +74,15 @@ const Walk = struct {
     dir: Direction = .out,
     /// Only edges of this type (null: any).
     rel: ?[]const u8 = null,
+    /// Only paths whose end node's k is at least this (a WHERE on the end).
+    end_min_k: u8 = 0,
 };
 
 const Oracle = struct {
     /// The nodes some path ends at.
     ends: [node_count]bool = @splat(false),
+    /// How many paths end at each node.
+    per_end: [node_count]usize = @splat(0),
     /// How many paths there are.
     paths: usize = 0,
 };
@@ -88,21 +103,28 @@ fn oracle(w: Walk, visible: [node_count]bool) Oracle {
 }
 
 fn walkFrom(w: Walk, visible: [node_count]bool, on_path: *[node_count]bool, at: u8, depth: u8, o: *Oracle) void {
-    if (depth >= w.min and depth >= 1) {
+    // A zero-length path (`*0..`) ends at its start.
+    if (depth >= w.min and at >= w.end_min_k) {
         o.ends[at] = true;
+        o.per_end[at] += 1;
         o.paths += 1;
     }
     if (depth == w.max) return;
     for (edges) |e| {
         if (w.rel) |rel| if (!std.mem.eql(u8, rel, e.rel)) continue;
-        const from, const to = switch (w.dir) {
-            .out => .{ e.from, e.to },
-            .in => .{ e.to, e.from },
-        };
-        if (from != at or !visible[to] or on_path[to]) continue;
-        on_path[to] = true;
-        walkFrom(w, visible, on_path, to, depth + 1, o);
-        on_path[to] = false;
+        // Each edge once per direction it may be walked in: an undirected
+        // pattern walks every edge either way.
+        for ([_]Direction{ .out, .in }) |way| {
+            if (w.dir != .both and w.dir != way) continue;
+            const from, const to = switch (way) {
+                .out => .{ e.from, e.to },
+                .in, .both => .{ e.to, e.from },
+            };
+            if (from != at or !visible[to] or on_path[to]) continue;
+            on_path[to] = true;
+            walkFrom(w, visible, on_path, to, depth + 1, o);
+            on_path[to] = false;
+        }
     }
 }
 
@@ -250,7 +272,8 @@ fn lessThan(_: void, a: []const u8, b: []const u8) bool {
 
 fn render(aa: std.mem.Allocator, v: Value) ![]const u8 {
     return switch (v) {
-        .Str, .Text => |s| s,
+        // Copied: the value may be freed with its result before it is compared.
+        .Str, .Text => |s| try aa.dupe(u8, s),
         .Int => |n| try std.fmt.allocPrint(aa, "{d}", .{n}),
         .Null => "null",
         else => try std.fmt.allocPrint(aa, "<{s}>", .{@tagName(v)}),
@@ -319,6 +342,9 @@ const Effect = enum {
     remove_t,
     /// `SET x:Hit`: the written nodes have the label.
     set_label,
+    /// `SET x.c = coalesce(x.c, 0) + 1`: once per path, so each written node's
+    /// c is the number of paths that reach it.
+    count_c,
 };
 
 const Case = struct {
@@ -339,7 +365,17 @@ fn effectQuery(effect: Effect) []const u8 {
         .set_x => "MATCH (n:V) WHERE n.x = 1 RETURN n.k",
         .remove_t => "MATCH (n:V) WHERE n.t IS NULL RETURN n.k",
         .set_label => "MATCH (n:Hit) RETURN n.k",
+        .count_c => "MATCH (n:V) WHERE n.c IS NOT NULL RETURN toString(n.k) + ':' + toString(n.c)",
     };
+}
+
+/// The effect the oracle predicts: the written nodes' keys, or for `count_c`
+/// each one's `k:paths`.
+fn expectedEffect(aa: std.mem.Allocator, effect: Effect, o: Oracle) ![]const []const u8 {
+    if (effect != .count_c) return keysOf(aa, o.ends);
+    var out: std.ArrayList([]const u8) = .empty;
+    for (o.per_end, 0..) |n, k| if (n != 0) try out.append(aa, try std.fmt.allocPrint(aa, "{d}:{d}", .{ k, n }));
+    return out.toOwnedSlice(aa);
 }
 
 fn runCase(mode: Mode, c: Case, f: *Failures) !void {
@@ -350,6 +386,7 @@ fn runCase(mode: Mode, c: Case, f: *Failures) !void {
 
     const o = oracle(c.walk, s.visible());
     const written = try keysOf(aa, o.ends);
+    const effect = try expectedEffect(aa, c.effect, o);
 
     // The write itself, as the session.
     var result = s.run(c.write) catch |err| {
@@ -373,14 +410,14 @@ fn runCase(mode: Mode, c: Case, f: *Failures) !void {
     }
 
     const own = s.ctx.tenant_id;
-    try expectSet(&s, f, "effect", c.write, own, effectQuery(c.effect), written);
+    try expectSet(&s, f, "effect", c.write, own, effectQuery(c.effect), effect);
     if (mode == .tenant_scoped) try expectSet(&s, f, "other tenant", c.write, "tenant_b", effectQuery(c.effect), &.{});
     if (mode != .in_memory) {
         s.reopen() catch |err| {
             try f.add("[{s}] {s}: reload failed: {s}", .{ @tagName(mode), c.write, @errorName(err) });
             return;
         };
-        try expectSet(&s, f, "effect after reload", c.write, own, effectQuery(c.effect), written);
+        try expectSet(&s, f, "effect after reload", c.write, own, effectQuery(c.effect), effect);
         if (mode == .tenant_scoped) try expectSet(&s, f, "other tenant after reload", c.write, "tenant_b", effectQuery(c.effect), &.{});
     }
 }
@@ -403,6 +440,28 @@ const cases = [_]Case{
     .{ .write = "MATCH (a:V {k: 0})-[*1..2]->(b) SET b.x = 1 RETURN count(*) AS c", .walk = .{ .start = 0, .min = 1, .max = 2 }, .returns = .path_count },
     .{ .write = "MATCH (a:V {k: 0})-[*1..2]->(b) SET b.x = 1 RETURN DISTINCT b.k", .walk = .{ .start = 0, .min = 1, .max = 2 }, .returns = .written_keys },
     .{ .write = "MATCH (a:V {k: 0})-[*1..2]->(b) SET b.x = 1 RETURN b.k", .walk = .{ .start = 0, .min = 1, .max = 2 }, .returns = .written_keys },
+    // SONNY-3039: a WHERE on the end, with and without a WITH (a WITH defers
+    // the WHERE past the traversal, which wrote every path).
+    .{ .write = "MATCH (a:V {k: 0})-[*1..3]->(b) WHERE b.k >= 3 SET b.x = 1", .walk = .{ .start = 0, .min = 1, .max = 3, .end_min_k = 3 } },
+    .{ .write = "MATCH (a:V {k: 0})-[*1..3]->(b) WITH b WHERE b.k >= 3 SET b.x = 1", .walk = .{ .start = 0, .min = 1, .max = 3, .end_min_k = 3 } },
+    .{ .write = "MATCH (a:V {k: 0})-[*1..3]->(b) WHERE b.k >= 3 WITH b SET b.x = 1 RETURN count(*) AS c", .walk = .{ .start = 0, .min = 1, .max = 3, .end_min_k = 3 }, .returns = .path_count },
+    // Undirected.
+    .{ .write = "MATCH (a:V {k: 0})-[*1..2]-(b) SET b.x = 1", .walk = .{ .start = 0, .min = 1, .max = 2, .dir = .both } },
+    .{ .write = "MATCH (a:V {k: 8})-[*1..3]-(b) SET b.x = 1", .walk = .{ .start = 8, .min = 1, .max = 3, .dir = .both } },
+    // A zero-length path ends at its start; `*0..` has no upper bound.
+    .{ .write = "MATCH (a:V {k: 0})-[*0..2]->(b) SET b.x = 1", .walk = .{ .start = 0, .min = 0, .max = 2 } },
+    .{ .write = "MATCH (a:V {k: 0})-[*0..]->(b) SET b.x = 1", .walk = .{ .start = 0, .min = 0, .max = unbounded } },
+    .{ .write = "MATCH (a:V {k: 1})-[:R*0..]->(b) SET b.x = 1 RETURN count(*) AS c", .walk = .{ .start = 1, .min = 0, .max = unbounded, .rel = "R" }, .returns = .path_count },
+    // Multi-hop: a fixed hop then a variable-length one. 7's one R edge
+    // reaches 0, so the ends are the typed walk from 0.
+    .{ .write = "MATCH (a:V {k: 7})-[:R]->(m)-[:R*1..2]->(b) SET b.x = 1", .walk = .{ .start = 0, .min = 1, .max = 2, .rel = "R" } },
+    .{ .write = "MATCH (a:V {k: 7})-[:R]->(m)-[:R*1..2]->(b) SET b.x = 1 RETURN count(*) AS c", .walk = .{ .start = 0, .min = 1, .max = 2, .rel = "R" }, .returns = .path_count },
+    // Once per path: a SET that reads what it writes counts the paths that
+    // reach each node (2 reaches from 0 through 1 and through 5-6), at the
+    // end and at the start.
+    .{ .write = "MATCH (a:V {k: 0})-[*1..3]->(b) SET b.c = coalesce(b.c, 0) + 1", .walk = .{ .start = 0, .min = 1, .max = 3 }, .effect = .count_c },
+    .{ .write = "MATCH (a:V)-[*1..3]->(b:V {k: 2}) SET a.c = coalesce(a.c, 0) + 1", .walk = .{ .start = 2, .min = 1, .max = 3, .dir = .in }, .effect = .count_c },
+    .{ .write = "MATCH (a:V {k: 0})-[*1..3]-(b) SET b.c = coalesce(b.c, 0) + 1", .walk = .{ .start = 0, .min = 1, .max = 3, .dir = .both }, .effect = .count_c },
 };
 
 test "SONNY-2707: a SET or REMOVE through a variable-length pattern writes every node the oracle reaches, and none the session cannot read" {

@@ -299,6 +299,10 @@ pub fn mapError(err: anyerror) ErrorInfo {
         // edges) or on a path variable.
         error.VariableLengthPathWrite => .{ .code = "0A000", .message = "A SET or REMOVE cannot target a variable-length relationship variable (the list of its edges) or a path variable; target the path's nodes" },
         error.DeleteReturnsDeletedElement => .{ .code = "0A000", .message = "A RETURN after DELETE cannot return an element the statement deletes (a node, an edge or a path through one), or a JSONB, XML, URL, DOMAIN, bit string or extended value; return its properties or an aggregate" },
+        // SONNY-3040, SONNY-3041, SONNY-3043: a write clause the statement's
+        // shape does not apply is refused, before anything is written, rather
+        // than dropped.
+        error.WriteClauseNotApplied => .{ .code = "0A000", .message = "This combination of write clauses is not supported: a write in a query part after a WITH (other than one CREATE or MERGE after MATCH ... WITH), MERGE with CREATE or DELETE, a DELETE of a variable the CREATE introduces, or a SET or REMOVE on a variable the statement does not bind to a node or relationship. Split the statement" },
         error.StringDataRightTruncation => .{ .code = "22001", .message = "String data right truncation" },
         error.InvalidKeyProvider => .{ .code = "42704", .message = "Invalid TDE key provider" },
         error.InvalidGuardrailConfiguration => .{ .code = "42704", .message = "Invalid CDC guardrail configuration" },

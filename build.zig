@@ -9214,6 +9214,8 @@ pub fn build(b: *std.Build) void {
     // sessions (tests/sonny738_write_harness.zig).
     const Sonny738Step = struct { name: []const u8, path: []const u8, desc: []const u8 };
     const sonny738_steps = [_]Sonny738Step{
+        .{ .name = "test-sonny3039-with-where-writes", .path = "tests/test_sonny3039_with_where_writes.zig", .desc = "Run SONNY-3039 regression (a SET or REMOVE after a WITH writes only the rows the WITH, its WHERE, ORDER BY and LIMIT keep, in single-node, hop, variable-length, multi-hop and comma patterns; the RETURN sees the write; once per row)" },
+        .{ .name = "test-sonny3041-pattern-shape-writes", .path = "tests/test_sonny3041_pattern_shape_writes.zig", .desc = "Run SONNY-3041 regression (a SET or REMOVE on a comma pattern or after an OPTIONAL MATCH writes every matched row; every executor refuses a write clause it does not apply)" },
         .{ .name = "test-sonny3045-audit-text-escaping", .path = "tests/test_sonny3045_audit_text_escaping.zig", .desc = "Run SONNY-3045 regression (joinAuditText encodes a comma and a backslash; the Windows Event Log, syslog and JSON audit exporters escape every string)" },
     };
     for (sonny738_steps) |spec| {
