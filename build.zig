@@ -9099,6 +9099,23 @@ pub fn build(b: *std.Build) void {
     const sonny3132_step = b.step("test-sonny3132-drop-default-graph", "Run SONNY-3132 regression (DROP GRAPH default, DROP GRAPH IF EXISTS default and CREATE OR REPLACE GRAPH default are refused, for an Admin and a ReadWrite user with FOR SCHEMA on default; GraphStore and the storage adapter refuse it; the engine, its data and its files stay)");
     sonny3132_step.dependOn(&run_sonny3132_tests.step);
 
+    // SONNY-3133: every recursive entry of the GQL parser has a depth guard:
+    // nested wrappers, statements, queries, expressions and patterns get a
+    // clean parse error on a 16 MiB worker stack. Run it in Debug and in
+    // ReleaseSafe (-Doptimize=ReleaseSafe).
+    const sonny3133_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny3133_parser_nesting.zig"), .target = target, .optimize = optimize });
+    sonny3133_test_mod.link_libc = true;
+    sonny3133_test_mod.addImport("geode", root_mod);
+    sonny3133_test_mod.addImport("schema", schema_mod);
+    sonny3133_test_mod.addImport("protobuf", protobuf_mod);
+    sonny3133_test_mod.addImport("grpc_impl", sonny1560_shim_mod);
+    sonny3133_test_mod.addImport("logging", logging_mod);
+    const sonny3133_tests = b.addTest(.{ .root_module = sonny3133_test_mod });
+    const run_sonny3133_tests = b.addRunArtifact(sonny3133_tests);
+    shardDep(test_step, &run_sonny3133_tests.step, 1, test_shard_loads, test_shard_index);
+    const sonny3133_step = b.step("test-sonny3133-parser-nesting", "Run SONNY-3133 regression (no nesting of PROFILE/EXPLAIN, a START TRANSACTION body, a parenthesized statement, VALUES, WITH, CALL { }, FOR, NOT, unary minus/plus, shortestPath or an expression overflows a 16 MiB stack: clean parse error; ordinary nesting parses; gRPC X11 bomb gets 42000; run in Debug and ReleaseSafe)");
+    sonny3133_step.dependOn(&run_sonny3133_tests.step);
+
     // SONNY-2790: the fulltext statements (CREATE/DROP INDEX, geode.fts.*)
     // run on the default graph, so the handlers lock `default` for them from
     // any session. Classifier, and the real gRPC handler (SONNY-1560 shim).

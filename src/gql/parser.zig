@@ -5,10 +5,71 @@
 // CANARY: REQ=REQ-GQL-008; FEATURE="ORDER/LIMIT/OFFSET Parsing"; ASPECT=Parser; STATUS=TESTED; TEST=tests/e2e_protocol.zig; OWNER=parser; UPDATED=2025-09-20
 
 const std = @import("std");
+const builtin = @import("builtin");
 const tok = @import("gql_lib").token;
 const ast = @import("ast.zig");
 const temporal = @import("../temporal.zig");
 const Lexer = @import("lexer.zig").Lexer;
+
+// CANARY: REQ=REQ-SONNY-3133-PARSER-NESTING; FEATURE="GQLParser"; ASPECT=StackGuard; STATUS=TESTED; TEST=tests/test_sonny3133_parser_nesting.zig; OWNER=parser; UPDATED=2026-09-27
+/// SONNY-3133: how much of the calling thread's stack must be left for the
+/// parser to go one nesting level deeper: the frames it can descend between
+/// two `enterRecursion` calls (a statement and the query it holds, about
+/// 0.7 MiB in a Debug build), with room to spare. The nesting limits below
+/// hold on the server's 16 MiB QUIC workers (GAP-0333); the gRPC connection
+/// threads have 8 MiB, and other callers (the CLI's main thread, a library
+/// user's) whatever they have. Measured, a limit cannot overflow any of them.
+const stack_reserve_bytes: usize = if (builtin.mode == .Debug) 2 * 1024 * 1024 else 512 * 1024;
+
+/// SONNY-3133: the calling thread's stack bounds, looked up once per thread.
+const ThreadStack = struct {
+    low: usize = 0,
+    high: usize = 0,
+    known: bool = false,
+    looked: bool = false,
+};
+
+threadlocal var t_thread_stack: ThreadStack = .{};
+
+/// glibc and musl both have these; std.c does not declare them.
+const pthread_stack = struct {
+    extern "c" fn pthread_getattr_np(thread: std.c.pthread_t, attr: *std.c.pthread_attr_t) c_int;
+    extern "c" fn pthread_attr_getstack(attr: *const std.c.pthread_attr_t, stackaddr: *?*anyopaque, stacksize: *usize) c_int;
+};
+
+fn threadStack() ThreadStack {
+    if (t_thread_stack.looked) return t_thread_stack;
+    t_thread_stack.looked = true;
+    if (comptime builtin.link_libc and builtin.os.tag == .linux) {
+        var attr: std.c.pthread_attr_t = undefined;
+        if (pthread_stack.pthread_getattr_np(std.c.pthread_self(), &attr) != 0) return t_thread_stack;
+        defer _ = std.c.pthread_attr_destroy(&attr);
+        var addr: ?*anyopaque = null;
+        var size: usize = 0;
+        if (pthread_stack.pthread_attr_getstack(&attr, &addr, &size) != 0) return t_thread_stack;
+        const low = @intFromPtr(addr orelse return t_thread_stack);
+        t_thread_stack = .{ .low = low, .high = low + size, .known = true, .looked = true };
+    }
+    return t_thread_stack;
+}
+
+/// SONNY-3133: is more than `stack_reserve_bytes` of the calling thread's
+/// stack left below this frame? True when the bounds are unknown, or when
+/// this frame is not on the thread's stack (a fiber's).
+fn stackHasRoom() bool {
+    const st = threadStack();
+    if (!st.known) return true;
+    const here = @frameAddress();
+    if (here < st.low or here >= st.high) return true;
+    return here - st.low > stack_reserve_bytes;
+}
+
+/// SONNY-3133: statements nested in statements (EXPLAIN, EXPLAIN POLICY FOR,
+/// PROFILE, a START TRANSACTION body, a parenthesized statement, a VALUES
+/// continuation). A statement's frames are the parser's largest, about
+/// 0.3 MiB each in a Debug build: 64 of them overflowed a 16 MiB worker stack
+/// (review probe R12-X11).
+const max_statement_nesting: u16 = 8;
 
 pub const Parser = struct {
     lx: *Lexer,
@@ -38,20 +99,57 @@ pub const Parser = struct {
     pattern_comp_depth: u32 = 0,
     // Track expression recursion depth to prevent stack overflow from deeply nested input
     recursion_depth: u16 = 0,
+    // SONNY-3133: statements nested in the one being parsed.
+    statement_depth: u16 = 0,
 
     // GAP-0333: The hard limit is 128 user-visible nested parens.  The internal
     // counter includes the outer parseOrExpr frame invoked by RETURN/MATCH, so
     // 128 parens drives recursion_depth to 129. Allow a small headroom so the
     // user-visible 128-deep input parses successfully; 129+ still errors out.
+    //
+    // CANARY: REQ=REQ-SONNY-3133-PARSER-NESTING; FEATURE="GQLParser"; ASPECT=DepthGuard; STATUS=TESTED; TEST=tests/test_sonny3133_parser_nesting.zig; OWNER=parser; UPDATED=2026-09-27
+    // SONNY-3133: every recursive entry of the parser passes here, not only
+    // the expression grammar's: the statements a PROFILE, EXPLAIN, START
+    // TRANSACTION body, parenthesized statement or VALUES holds
+    // (`parseNestedStatement`), the queries a WITH chain, CALL { } or FOR
+    // holds (`parseNestedQuery`), NOT, unary minus and plus, and
+    // shortestPath(). And a level is refused when the thread's stack is
+    // nearly used up (`stackHasRoom`), whatever the count: the frames differ
+    // several-fold between the recursions and between build modes.
     fn enterRecursion(self: *Parser) ParserError!void {
         self.recursion_depth += 1;
+        errdefer self.recursion_depth -= 1;
         if (self.recursion_depth > 129) {
-            return self.unexpected("expression nesting depth exceeds maximum (128)");
+            return self.unexpected("nesting depth exceeds maximum (128)");
+        }
+        if (!stackHasRoom()) {
+            return self.unexpected("nesting too deep for the parser's stack");
         }
     }
 
     fn leaveRecursion(self: *Parser) void {
         self.recursion_depth -= 1;
+    }
+
+    /// SONNY-3133: a statement nested in the one being parsed. At most
+    /// `max_statement_nesting` deep, and a level of `enterRecursion`.
+    fn parseNestedStatement(self: *Parser) ParserError!ast.Statement {
+        try self.enterRecursion();
+        defer self.leaveRecursion();
+        self.statement_depth += 1;
+        defer self.statement_depth -= 1;
+        if (self.statement_depth > max_statement_nesting) {
+            return self.unexpected("statement nesting depth exceeds maximum (8)");
+        }
+        return self.parseStatement();
+    }
+
+    /// SONNY-3133: a query nested in the one being parsed: the next part of a
+    /// WITH chain, a CALL { } subquery, a FOR body.
+    fn parseNestedQuery(self: *Parser) ParserError!ast.Query {
+        try self.enterRecursion();
+        defer self.leaveRecursion();
+        return self.parseQuery();
     }
 
     fn advance(self: *Parser) void {
@@ -1192,7 +1290,8 @@ pub const Parser = struct {
                         // Parse statements until we hit }
                         var statements = try std.ArrayList(ast.Statement).initCapacity(self.arena.allocator(), 4);
                         while (self.cur.kind != .r_brace and self.cur.kind != .eof) {
-                            const stmt = try self.parseStatement();
+                            // SONNY-3133: a nested statement.
+                            const stmt = try self.parseNestedStatement();
                             try statements.append(self.arena.allocator(), stmt);
 
                             // Consume optional semicolon between statements
@@ -1464,7 +1563,8 @@ pub const Parser = struct {
                 // CANARY: REQ=REQ-GQL-085; FEATURE="ParenthesizedSetOperations"; ASPECT=ParserSupport; STATUS=TESTED; OWNER=parser; UPDATED=2025-10-14
                 // Parse parenthesized statement: (MATCH ... UNION ...) INTERSECT ...
                 self.advance(); // consume (
-                const inner_stmt = try self.parseStatement();
+                // SONNY-3133: a nested statement.
+                const inner_stmt = try self.parseNestedStatement();
                 _ = try self.expect(.r_paren);
 
                 // Check if this is followed by set operations
@@ -1771,7 +1871,7 @@ pub const Parser = struct {
             // e.g., WITH 'Alice' AS n WITH n AS n2 RETURN n2
             if (self.cur.kind == .WITH) {
                 // Parse the continuation as a new query
-                const next_query = try self.parseQuery();
+                const next_query = try self.parseNestedQuery();
                 // Allocate on arena and store pointer
                 const next_ptr = try self.arena.allocator().create(ast.Query);
                 next_ptr.* = next_query;
@@ -1872,7 +1972,7 @@ pub const Parser = struct {
                 self.advance(); // consume {
 
                 // Parse the inner query
-                const inner_query = try self.parseQuery();
+                const inner_query = try self.parseNestedQuery();
 
                 // Consume closing brace
                 _ = try self.expect(.r_brace);
@@ -2335,7 +2435,7 @@ pub const Parser = struct {
                     next_query_ptr = next_ptr;
                 } else {
                     // Parse the continuation as a new query
-                    const next_query = try self.parseQuery();
+                    const next_query = try self.parseNestedQuery();
                     // Allocate on arena and store pointer
                     const next_ptr = try self.arena.allocator().create(ast.Query);
                     next_ptr.* = next_query;
@@ -2674,6 +2774,10 @@ pub const Parser = struct {
                         // This is a path function - create a special chain with shortestPath marker
                         self.advance(); // consume function name
                         _ = try self.expect(.l_paren);
+                        // SONNY-3133: `p = shortestPath(p = shortestPath(...))`
+                        // recursed with no limit.
+                        try self.enterRecursion();
+                        defer self.leaveRecursion();
                         const inner_pattern = try self.parseGraphPattern();
                         _ = try self.expect(.r_paren);
 
@@ -3084,6 +3188,9 @@ pub const Parser = struct {
             }
 
             self.advance();
+            // SONNY-3133: `NOT NOT ... x` recursed with no limit.
+            try self.enterRecursion();
+            defer self.leaveRecursion();
             const e = try self.parseNotExpr();
             const a = self.arena.allocator();
             const ep = try a.create(ast.Expr);
@@ -3386,6 +3493,9 @@ pub const Parser = struct {
         }
         if (self.cur.kind == .minus) {
             self.advance();
+            // SONNY-3133: `- - ... 1` recursed with no limit.
+            try self.enterRecursion();
+            defer self.leaveRecursion();
             const e = try self.parseUnaryExpr();
             const a = self.arena.allocator();
             const ep = try a.create(ast.Expr);
@@ -3394,6 +3504,9 @@ pub const Parser = struct {
         }
         if (self.cur.kind == .plus) {
             self.advance();
+            // SONNY-3133: as unary minus.
+            try self.enterRecursion();
+            defer self.leaveRecursion();
             const e = try self.parseUnaryExpr();
             const a = self.arena.allocator();
             const ep = try a.create(ast.Expr);
@@ -4145,52 +4258,57 @@ pub const Parser = struct {
     }
 
     fn isSimpleOrderPtr(self: *Parser, e: ast.Expr) bool {
-        return switch (e) {
-            .Ident => true,
-            .Member => |m| self.isSimpleOrderPtr(m.target.*),
-            else => false,
-        };
+        _ = self;
+        // SONNY-3133: a member chain (`a.b.c`) is built by a loop and is as
+        // deep as the input is long: it is followed in a loop.
+        var cur = e;
+        while (true) {
+            switch (cur) {
+                .Ident => return true,
+                .Member => |m| cur = m.target.*,
+                else => return false,
+            }
+        }
     }
 
     pub fn containsCall(self: *Parser, e: ast.Expr) bool {
-        return switch (e) {
-            .Call => true,
-            .Member => |m| self.containsCall(m.target.*),
-            .Unary => |u| self.containsCall(u.expr.*),
-            .Binary => |b| self.containsCall(b.left.*) or self.containsCall(b.right.*),
-            .List => |items| blk: {
-                for (items) |it| if (self.containsCall(it.*)) break :blk true;
-                break :blk false;
-            },
-            .In => |x| blk2: {
-                if (self.containsCall(x.value.*)) break :blk2 true;
-                for (x.set) |it| if (self.containsCall(it.*)) break :blk2 true;
-                break :blk2 false;
-            },
-            .IsNull => |z| self.containsCall(z.target.*),
-            else => false,
-        };
+        _ = self;
+        return containsCallStatic(e);
     }
 
     // Static variant for post-parse validation (no Parser instance state needed)
+    //
+    // SONNY-3133: an operator chain (`1 + 1 + ... + 1`) and a member chain
+    // (`a.b.c`) are built by loops and are as deep as the input is long. The
+    // left operand, the member target, the unary operand, the IS NULL target
+    // and the IN value are followed in a loop; only a right operand, list
+    // items and IN set items recurse, and their nesting is bounded by
+    // `enterRecursion`. It recursed on each, and the server parses ORDER BY
+    // keys with `forbid_orderby_calls` set: `ORDER BY 1 + 1 + ... + 1`
+    // recursed once per operator.
     pub fn containsCallStatic(e: ast.Expr) bool {
-        return switch (e) {
-            .Call => true,
-            .Member => |m| containsCallStatic(m.target.*),
-            .Unary => |u| containsCallStatic(u.expr.*),
-            .Binary => |b| containsCallStatic(b.left.*) or containsCallStatic(b.right.*),
-            .List => |items| blk: {
-                for (items) |it| if (containsCallStatic(it.*)) break :blk true;
-                break :blk false;
-            },
-            .In => |x| blk2: {
-                if (containsCallStatic(x.value.*)) break :blk2 true;
-                for (x.set) |it| if (containsCallStatic(it.*)) break :blk2 true;
-                break :blk2 false;
-            },
-            .IsNull => |z| containsCallStatic(z.target.*),
-            else => false,
-        };
+        var cur = e;
+        while (true) {
+            switch (cur) {
+                .Call => return true,
+                .Member => |m| cur = m.target.*,
+                .Unary => |u| cur = u.expr.*,
+                .IsNull => |z| cur = z.target.*,
+                .Binary => |b| {
+                    if (containsCallStatic(b.right.*)) return true;
+                    cur = b.left.*;
+                },
+                .List => |items| {
+                    for (items) |it| if (containsCallStatic(it.*)) return true;
+                    return false;
+                },
+                .In => |x| {
+                    for (x.set) |it| if (containsCallStatic(it.*)) return true;
+                    cur = x.value.*;
+                },
+                else => return false,
+            }
+        }
     }
 
     fn argIsPropertyLike(e: ast.Expr) bool {
@@ -5764,7 +5882,8 @@ pub const Parser = struct {
         var next_stmt: ?*ast.Statement = null;
         if (self.cur.kind != .eof and self.cur.kind != .semicolon) {
             const stmt_ptr = try self.arena.allocator().create(ast.Statement);
-            stmt_ptr.* = try self.parseStatement();
+            // SONNY-3133: a nested statement.
+            stmt_ptr.* = try self.parseNestedStatement();
             next_stmt = stmt_ptr;
         }
 
@@ -5844,7 +5963,7 @@ pub const Parser = struct {
                     .merge_statement = merge_ptr,
                 };
             } else {
-                body_ptr.* = try self.parseQuery();
+                body_ptr.* = try self.parseNestedQuery();
             }
 
             return .{ .For = .{
@@ -5952,13 +6071,16 @@ pub const Parser = struct {
             self.advance(); // consume FOR
             // Parse the inner statement.
             const inner_ptr = try self.arena.allocator().create(ast.Statement);
-            inner_ptr.* = try self.parseStatement();
+            // SONNY-3133: a nested statement.
+            inner_ptr.* = try self.parseNestedStatement();
             return .{ .ExplainPolicy = .{ .inner = inner_ptr } };
         }
 
         // Parse the query to explain
+        // SONNY-3133: a nested statement; `PROFILE EXPLAIN PROFILE ...` recursed
+        // with no limit, and overflowed a worker's stack at depth 50.
         const query_stmt_ptr = try self.arena.allocator().create(ast.Statement);
-        query_stmt_ptr.* = try self.parseStatement();
+        query_stmt_ptr.* = try self.parseNestedStatement();
 
         return .{ .Explain = .{ .query = query_stmt_ptr } };
     }
@@ -5967,8 +6089,9 @@ pub const Parser = struct {
         _ = try self.expect(.PROFILE);
 
         // Parse the query to profile
+        // SONNY-3133: a nested statement (see parseExplainStatement).
         const query_stmt_ptr = try self.arena.allocator().create(ast.Statement);
-        query_stmt_ptr.* = try self.parseStatement();
+        query_stmt_ptr.* = try self.parseNestedStatement();
 
         return .{ .Profile = .{ .query = query_stmt_ptr } };
     }
