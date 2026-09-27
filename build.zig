@@ -6351,6 +6351,13 @@ pub fn build(b: *std.Build) void {
     const audit_verify_roundtrip_tests = b.addTest(.{ .root_module = audit_verify_roundtrip_test_mod });
     const run_audit_verify_roundtrip_tests = b.addRunArtifact(audit_verify_roundtrip_tests);
     shardDep(test_step, &run_audit_verify_roundtrip_tests.step, 5, test_shard_loads, test_shard_index);
+    // SONNY-2819: the tests of the audit writer (the chain, the tenant
+    // enrichment and the writer/verifier round-trip) had no named step, so a
+    // change to the writer could be checked only through the whole aggregate.
+    const audit_writer_step = b.step("test-audit-writer", "Run the audit writer's chain, tenant-enrichment and writer/verifier round-trip tests");
+    audit_writer_step.dependOn(&run_audit_chain_tests.step);
+    audit_writer_step.dependOn(&run_audit_tenant_tests.step);
+    audit_writer_step.dependOn(&run_audit_verify_roundtrip_tests.step);
 
     // GAP-0737 / SEC-INFRA-01 regression: GEODE_CLUSTER_INSECURE is
     // refused in release builds and a metrics counter is exposed.
@@ -8839,6 +8846,20 @@ pub fn build(b: *std.Build) void {
     shardDep(test_step, &run_sonny2686_tests.step, 1, test_shard_loads, test_shard_index);
     const sonny2686_step = b.step("test-sonny2686-merge-rls", "Run SONNY-2686 regression (a MERGE whose only match an RLS policy hides is refused with MergeMatchNotVisible and never reads, rewrites or attaches to it, under label and expression policies; unscoped sessions and tenant/graph scoping unchanged; the key-resolved write fast paths decline a row-scoped session)");
     sonny2686_step.dependOn(&run_sonny2686_tests.step);
+
+    // SONNY-2819: every string the audit log's canonical JSON writer prints is
+    // escaped, so a MERGE refusal's property key cannot forge a record; the
+    // timestamp prints without signs.
+    const sonny2819_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny2819_audit_log_injection.zig"), .target = target, .optimize = optimize });
+    sonny2819_test_mod.addImport("geode", root_mod);
+    sonny2819_test_mod.addImport("logging", logging_mod);
+    sonny2819_test_mod.addImport("rls", rls_mod);
+    sonny2819_test_mod.addImport("rls_types", rls_types_mod);
+    const sonny2819_tests = b.addTest(.{ .root_module = sonny2819_test_mod });
+    const run_sonny2819_tests = b.addRunArtifact(sonny2819_tests);
+    shardDep(test_step, &run_sonny2819_tests.step, 1, test_shard_loads, test_shard_index);
+    const sonny2819_step = b.step("test-sonny2819-audit-log-injection", "Run SONNY-2819 regression (the audit writer JSON-escapes every string it prints, so a MERGE refusal whose property key carries a quote, a newline and a record writes one record, escaped, with the key's control characters hex-encoded; every audit line parses as exactly one JSON object; the timestamp prints without signs)");
+    sonny2819_step.dependOn(&run_sonny2819_tests.step);
 
     // SONNY-2691: indegree()/outdegree() panicked on a negative id (a server
     // abort) and read the degree of any node in any tenant, counting the

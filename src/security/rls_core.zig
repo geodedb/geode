@@ -3146,10 +3146,59 @@ pub const AuditLogger = struct {
             error_,
         };
 
+        // CANARY: REQ=REQ-SONNY-2819-AUDIT-JSON-ESCAPE; FEATURE="AuditDurability"; ASPECT=JsonStringEscape; STATUS=TESTED; TEST=tests/test_sonny2819_audit_log_injection.zig; OWNER=security; UPDATED=2026-09-27
+        /// SONNY-2819: `s` as a JSON string. The audit log is one JSON object
+        /// per line, and every string in a record can carry text a client
+        /// chose (a MERGE refusal's property keys, a tenant, an action). The
+        /// writer printed them with `{s}`, so a quote closed the string and a
+        /// newline began a record of the client's choosing. A quote and a
+        /// backslash are escaped, every control character (and DEL) is
+        /// `\uXXXX` or its short form, U+2028 and U+2029 (line breaks to a
+        /// JavaScript consumer) are escaped, and a byte that is not UTF-8 is
+        /// U+FFFD, so the record is valid JSON on one line whatever `s` holds.
+        pub fn writeJsonString(writer: anytype, s: []const u8) !void {
+            try writer.writeAll("\"");
+            var i: usize = 0;
+            while (i < s.len) {
+                const c = s[i];
+                switch (c) {
+                    '"' => try writer.writeAll("\\\""),
+                    '\\' => try writer.writeAll("\\\\"),
+                    '\n' => try writer.writeAll("\\n"),
+                    '\r' => try writer.writeAll("\\r"),
+                    '\t' => try writer.writeAll("\\t"),
+                    0x08 => try writer.writeAll("\\b"),
+                    0x0C => try writer.writeAll("\\f"),
+                    0x00...0x07, 0x0B, 0x0E...0x1F, 0x7F => try writer.print("\\u{x:0>4}", .{c}),
+                    0x20...0x21, 0x23...0x5B, 0x5D...0x7E => try writer.writeByte(c),
+                    0x80...0xFF => {
+                        const len = std.unicode.utf8ByteSequenceLength(c) catch 0;
+                        const cp: ?u21 = if (len == 0 or i + len > s.len) null else std.unicode.utf8Decode(s[i..][0..len]) catch null;
+                        if (cp) |code_point| {
+                            if (code_point == 0x2028 or code_point == 0x2029) {
+                                try writer.print("\\u{x:0>4}", .{code_point});
+                            } else {
+                                try writer.writeAll(s[i..][0..len]);
+                            }
+                            i += len;
+                        } else {
+                            try writer.writeAll("\\ufffd");
+                            i += 1;
+                        }
+                        continue;
+                    },
+                }
+                i += 1;
+            }
+            try writer.writeAll("\"");
+        }
+
         pub fn writeCanonicalJson(writer: anytype, stream: []const u8, ev: *const AuditEvent) !void {
             try writer.writeAll("{");
             // 1. stream
-            try writer.print("\"stream\":\"{s}\",", .{stream});
+            try writer.writeAll("\"stream\":");
+            try writeJsonString(writer, stream);
+            try writer.writeAll(",");
             // 2. seq_no
             // 2. seq_no
             try writer.print("\"seq_no\":{d},", .{ev.seq_no});
@@ -3179,7 +3228,6 @@ pub const AuditLogger = struct {
 
             // Helper for timestamp formatting (simplified, assumes UTC)
             // const epoch_seconds = @divFloor(ev.timestamp, 1000);
-            const ms = @mod(ev.timestamp, 1000);
             // We can use std.time.epoch.EpochSeconds... but let's just use the int for now to avoid massive diff,
             // OR checks generic stringify.
             // WAIT, `writeCanonicalJson` in the input file ALREADY existed (lines 1067-1098).
@@ -3193,16 +3241,25 @@ pub const AuditLogger = struct {
             // Implementation detail: I will use a placeholder or keep it as int if I can't easily convert.
             // Use standard ISO-8601 format relative to UNIX epoch.
             // Converting timestamp (i64 millis) to ISO8601 string:
-            const s_int = @divFloor(ev.timestamp, 1000);
-            const epoch = std.time.epoch.EpochSeconds{ .secs = @intCast(s_int) };
-            const dys = epoch.getEpochDay();
-            const year_day = dys.calculateYearDay();
+            // SONNY-2819: every field unsigned. The hour, minute, second and
+            // millisecond were i64 (`@mod` of the signed timestamp), and a
+            // signed integer printed with a width takes a '+':
+            // `2026-09-26T+15:+31:+58.+780Z`. A timestamp before the epoch
+            // (a clock that cannot be read) prints the epoch.
+            const ts_ms: u64 = std.math.cast(u64, ev.timestamp) orelse 0;
+            const epoch = std.time.epoch.EpochSeconds{ .secs = ts_ms / 1000 };
+            const year_day = epoch.getEpochDay().calculateYearDay();
             const month_day = year_day.calculateMonthDay();
-            const day_secs_val = @mod(s_int, 86400);
-            const hours = @divFloor(day_secs_val, 3600);
-            const minutes = @divFloor(@mod(day_secs_val, 3600), 60);
-            const seconds = @mod(day_secs_val, 60);
-            try writer.print("\"timestamp\":\"{d:0>4}-{d:0>2}-{d:0>2}T{d:0>2}:{d:0>2}:{d:0>2}.{d:0>3}Z\",", .{ year_day.year, month_day.month.numeric(), month_day.day_index + 1, hours, minutes, seconds, ms });
+            const day_seconds = epoch.getDaySeconds();
+            try writer.print("\"timestamp\":\"{d:0>4}-{d:0>2}-{d:0>2}T{d:0>2}:{d:0>2}:{d:0>2}.{d:0>3}Z\",", .{
+                year_day.year,
+                month_day.month.numeric(),
+                @as(u32, month_day.day_index) + 1,
+                day_seconds.getHoursIntoDay(),
+                day_seconds.getMinutesIntoHour(),
+                day_seconds.getSecondsIntoMinute(),
+                ts_ms % 1000,
+            });
 
             // 4. event_type
             try writer.writeAll("\"event_type\":");
@@ -3210,7 +3267,9 @@ pub const AuditLogger = struct {
 
             // 4.5 tenant_id
             if (ev.tenant_id) |tid| {
-                try writer.print("\"tenant\":\"{s}\",", .{tid});
+                try writer.writeAll("\"tenant\":");
+                try writeJsonString(writer, tid);
+                try writer.writeAll(",");
             }
 
             // 5. actor
@@ -3241,12 +3300,16 @@ pub const AuditLogger = struct {
 
             if (ev.event_type != .DIGEST) {
                 try writer.writeAll("\"resource\":{");
-                try writer.print("\"type\":\"{s}\",\"id\":\"{s}\"", .{ ev.resource.type, ev.resource.id });
+                try writer.writeAll("\"type\":");
+                try writeJsonString(writer, ev.resource.type);
+                try writer.writeAll(",\"id\":");
+                try writeJsonString(writer, ev.resource.id);
                 try writer.writeAll("},");
 
                 // 8. action
                 try writer.writeAll("\"action\":");
-                try writer.print("\"{s}\",", .{ev.action});
+                try writeJsonString(writer, ev.action);
+                try writer.writeAll(",");
 
                 // 9. result
                 try writer.writeAll("\"result\":");
@@ -3254,10 +3317,22 @@ pub const AuditLogger = struct {
             }
 
             // Extra fields
-            if (ev.session_id) |v| try writer.print("\"session\":\"{s}\",", .{v});
-            if (ev.reason) |v| try writer.print("\"reason\":\"{s}\",", .{v});
+            if (ev.session_id) |v| {
+                try writer.writeAll("\"session\":");
+                try writeJsonString(writer, v);
+                try writer.writeAll(",");
+            }
+            if (ev.reason) |v| {
+                try writer.writeAll("\"reason\":");
+                try writeJsonString(writer, v);
+                try writer.writeAll(",");
+            }
             if (ev.policy_id) |v| try writer.print("\"policy_id\":{d},", .{v});
-            if (ev.ip_address) |v| try writer.print("\"ip_address\":\"{s}\",", .{v});
+            if (ev.ip_address) |v| {
+                try writer.writeAll("\"ip_address\":");
+                try writeJsonString(writer, v);
+                try writer.writeAll(",");
+            }
             if (ev.query_hash) |v| try writer.print("\"query_hash\":{d},", .{v});
 
             // 10. details
@@ -3319,10 +3394,11 @@ pub const AuditLogger = struct {
 
                 for (keys, 0..) |key, i| {
                     if (i > 0) try writer.writeAll(",");
-                    try writer.print("\"{s}\":", .{key});
+                    try writeJsonString(writer, key);
+                    try writer.writeAll(":");
                     // Value is []const u8
                     if (map.get(key)) |val| {
-                        try writer.print("\"{s}\"", .{val});
+                        try writeJsonString(writer, val);
                     } else {
                         try writer.writeAll("null");
                     }

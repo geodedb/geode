@@ -238,6 +238,29 @@ fn valueToPropertyValueForIndex(val: Value) ?graph_store.PropertyValue {
     };
 }
 
+// CANARY: REQ=REQ-SONNY-2819-AUDIT-JSON-ESCAPE; FEATURE="AuditDurability"; ASPECT=RefusalKeysHexEncoded; STATUS=TESTED; TEST=tests/test_sonny2819_audit_log_injection.zig; OWNER=security; UPDATED=2026-09-27
+/// SONNY-2819: `items` joined with ',' for an audit record's details, each
+/// control character (and DEL) hex-encoded as `\xHH`. A MERGE pattern's
+/// property keys are the client's: a string-literal key can carry a quote and
+/// a newline, which the audit writer printed unescaped, so a restricted user
+/// could forge a second record. The writer now escapes every string; this is
+/// the defence in depth, so the text never holds a line break at all.
+fn joinAuditText(allocator: std.mem.Allocator, items: []const []const u8) ![]u8 {
+    var out: std.ArrayList(u8) = .empty;
+    errdefer out.deinit(allocator);
+    for (items, 0..) |item, i| {
+        if (i > 0) try out.append(allocator, ',');
+        for (item) |c| {
+            if (c < 0x20 or c == 0x7f) {
+                try out.print(allocator, "\\x{x:0>2}", .{c});
+            } else {
+                try out.append(allocator, c);
+            }
+        }
+    }
+    return out.toOwnedSlice(allocator);
+}
+
 // CANARY: REQ=REQ-SONNY-2686-MERGE-ROW-VISIBILITY; FEATURE="MergeRowVisibility"; ASPECT=MatchPhaseVisibility; STATUS=TESTED; TEST=tests/test_sonny2686_merge_rls.zig; OWNER=security; UPDATED=2026-09-25
 /// SONNY-2686: the row visibility MERGE's match phase applies to every node it
 /// finds, for a node chain and for each relationship endpoint alike.
@@ -319,9 +342,12 @@ const MergeVisibility = struct {
 
     fn auditRefusal(self: *MergeVisibility, pattern: []const u8, labels: []const []const u8, keys: []const []const u8) void {
         const audit_mod = @import("../security/audit.zig");
-        const joined_labels = std.mem.join(self.allocator, ",", labels) catch return;
+        // SONNY-2819: the labels and keys are the client's text; their
+        // control characters are hex-encoded here, and the audit writer
+        // escapes the whole record as well.
+        const joined_labels = joinAuditText(self.allocator, labels) catch return;
         defer self.allocator.free(joined_labels);
-        const joined_keys = std.mem.join(self.allocator, ",", keys) catch return;
+        const joined_keys = joinAuditText(self.allocator, keys) catch return;
         defer self.allocator.free(joined_keys);
         const details = std.fmt.allocPrint(
             self.allocator,
