@@ -402,7 +402,7 @@ pub fn buildPlanIfSupported(allocator: std.mem.Allocator, q: *const ast.Query, c
             if (with_clause.limit != null or with_clause.offset != null or with_clause.limit_param != null or with_clause.offset_param != null) {
                 try ops.append(allocator, .{ .kind = .Limit });
             }
-            if (q.where_clause != null) {
+            if (withStageWhere(q) != null) {
                 try ops.append(allocator, .{ .kind = .Filter });
             }
         }
@@ -503,7 +503,7 @@ pub fn executeProfiledIfSupported(
         try applyResultFilters(
             allocator,
             &result,
-            if (q.with_clause == null) q.where_clause else null,
+            if (q.with_clause == null) q.where_clause else preWithWhere(q),
             q.filter_clause,
             context,
             param_names,
@@ -557,12 +557,12 @@ pub fn executeProfiledIfSupported(
                 &trace.ops[op_index],
             );
         }
-        if (q.where_clause != null) {
+        if (withStageWhere(q) != null) {
             const op_index = nextOpIndex(trace.ops, .Filter, &filter_occurrence) orelse unreachable;
             try applyResultFilters(
                 allocator,
                 &result,
-                q.where_clause,
+                withStageWhere(q),
                 null,
                 context,
                 param_names,
@@ -3598,7 +3598,23 @@ fn staleLabelIndexThreshold(
 }
 
 fn hasPreProjectionFilter(q: *const ast.Query) bool {
-    return q.filter_clause != null or (q.with_clause == null and q.where_clause != null);
+    return q.filter_clause != null or (q.with_clause == null and q.where_clause != null) or preWithWhere(q) != null;
+}
+
+/// SONNY-3140: with a WITH after the MATCH, the WHERE before it filters the
+/// pattern's rows. The parser joins it to the WHERE after the WITH in
+/// `where_clause`, which was evaluated over the WITH's rows, where a variable
+/// the WITH renamed or dropped no longer exists.
+fn preWithWhere(q: *const ast.Query) ?ast.Expr {
+    if (q.with_clause == null or q.is_initial_with) return null;
+    return q.pre_with_where;
+}
+
+/// The WHERE over a WITH's rows: the one after it (or, for a query the
+/// parser did not split, the joined one, as before).
+fn withStageWhere(q: *const ast.Query) ?ast.Expr {
+    if (q.with_clause != null and !q.is_initial_with and (q.pre_with_where != null or q.with_where != null)) return q.with_where;
+    return q.where_clause;
 }
 
 fn hasAggregationItems(items: []const ast.ReturnItem) bool {
@@ -3732,7 +3748,7 @@ fn appendLegacyPlanOps(
         if (with_clause.limit != null or with_clause.offset != null or with_clause.limit_param != null or with_clause.offset_param != null) {
             try ops.append(allocator, .{ .kind = .Limit });
         }
-        if (q.where_clause != null) {
+        if (withStageWhere(q) != null) {
             try ops.append(allocator, .{ .kind = .Filter });
         }
     }

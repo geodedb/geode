@@ -8958,6 +8958,19 @@ fn readBindings(
     current_graph: ?[]const u8,
     comptime mode: enum { apply_set_remove, rows_only },
 ) anyerror!PatternBindings {
+    // SONNY-3140, SONNY-3141, SONNY-3142: a WITH after the MATCH is applied
+    // in one place, over the pattern's rows (`readWithStageRows`).
+    if (q.with_clause) |with_clause| {
+        if (!q.is_initial_with) {
+            var bindings = try readWithStageRows(allocator, q, with_clause, param_names, param_values, inline_let_bindings, current_graph);
+            errdefer bindings.deinit(allocator);
+            if (mode == .apply_set_remove and (q.set_clauses.len != 0 or q.remove_clauses.len != 0)) {
+                try stabilizeBindings(allocator, &bindings.rows);
+                try applySetRemoveOverRows(allocator, q.set_clauses, q.remove_clauses, &bindings.rows, param_names, param_values);
+            }
+            return bindings;
+        }
+    }
     var names: std.ArrayList([]const u8) = .empty;
     defer names.deinit(allocator);
     if (q.with_clause) |with_clause| {
@@ -9004,6 +9017,119 @@ fn readBindings(
     }
 
     const rows = try executeMatchQueryImpl(allocator, bindings_query, param_names, param_values, inline_let_bindings, current_graph);
+    return .{ .rows = rows, .items = items };
+}
+
+// CANARY: REQ=REQ-SONNY-3140-WITH-STAGE; FEATURE="WriteStep"; ASPECT=WithStageRows; STATUS=TESTED; TEST=tests/test_sonny3139_write_shapes.zig; OWNER=engine; UPDATED=2026-09-27
+/// SONNY-3140, SONNY-3141, SONNY-3142: the rows a WITH after the MATCH
+/// keeps, for a write after it. The write executors read them here, and each
+/// pattern executor applied a different part of the WITH: the WHERE before
+/// the WITH (which the parser joins to the one after it) was evaluated over
+/// the WITH's rows, where a variable the WITH renamed or dropped no longer
+/// exists, so `MATCH (n:G) WHERE n.i >= 7 WITH n AS m SET m.x = 1` wrote
+/// nothing; WITH DISTINCT was ignored (`WITH DISTINCT n.g AS g CREATE ...`
+/// created one node per match); a WITH's GROUP BY and HAVING were dropped
+/// (every row written); and a comma pattern ignored its ORDER BY and LIMIT.
+///
+/// Now as the planned read runs a WITH: the pattern's rows, every variable,
+/// after the WHERE before the WITH (`pre_with_where`); the projection with
+/// the WITH's GROUP BY and HAVING; DISTINCT; ORDER BY; SKIP and LIMIT (a
+/// literal or a parameter); then the WHERE after the WITH (`with_where`).
+fn readWithStageRows(
+    allocator: std.mem.Allocator,
+    q: ast.Query,
+    with_clause: ast.WithClause,
+    param_names: []const []const u8,
+    param_values: []const Value,
+    inline_let_bindings: []ast.LetBinding,
+    current_graph: ?[]const u8,
+) anyerror!PatternBindings {
+    // The WHERE before the WITH and the one after it. A query the parser did
+    // not build (no split recorded) keeps the joined WHERE after the WITH, as
+    // before.
+    const split = q.pre_with_where != null or q.with_where != null;
+    const pattern_where: ?ast.Expr = if (split) q.pre_with_where else null;
+    const stage_where: ?ast.Expr = if (split) q.with_where else q.where_clause;
+
+    var pattern_q = q;
+    pattern_q.with_clause = null;
+    pattern_q.is_initial_with = false;
+    pattern_q.group_by = null;
+    pattern_q.having = null;
+    pattern_q.where_clause = pattern_where;
+    pattern_q.pre_with_where = null;
+    pattern_q.with_where = null;
+    pattern_q.set_clauses = &.{};
+    pattern_q.remove_clauses = &.{};
+    var pattern = try readBindings(allocator, pattern_q, param_names, param_values, inline_let_bindings, current_graph, .rows_only);
+    defer pattern.deinit(allocator);
+
+    // The projection, its GROUP BY and HAVING, its ORDER BY and a literal
+    // SKIP / LIMIT, as every WITH stage computes them. DISTINCT comes before
+    // ORDER BY, SKIP and LIMIT, and a SKIP or LIMIT may be a parameter, so
+    // those are applied below.
+    const own_window = with_clause.distinct or with_clause.limit_param != null or with_clause.offset_param != null;
+    var stage = with_clause;
+    stage.distinct = false;
+    if (own_window) {
+        stage.limit = null;
+        stage.offset = null;
+        stage.limit_param = null;
+        stage.offset_param = null;
+    }
+    if (with_clause.distinct) stage.order_by = null;
+    var rows = try execution.executeWithClauseWithGroupByAndParams(allocator, pattern.rows, stage, q.group_by, execution.withStageHaving(q), param_names, param_values);
+    errdefer rows.deinit(allocator);
+    // The rows point at the nodes and edges the pattern's rows hold.
+    rows.owned_graph_entities = pattern.rows.owned_graph_entities;
+    pattern.rows.owned_graph_entities = null;
+    if (pattern.rows.owns_value_memory) try value_utilities.adoptProjectionRowValues(allocator, &rows, with_clause.items);
+
+    if (with_clause.distinct) {
+        try applyDistinct(allocator, &rows);
+        if (with_clause.order_by) |order| try sortRowsEx(allocator, &rows, order.*, with_clause.items);
+    }
+    if (own_window) {
+        const offset_lit: ?usize = if (with_clause.offset) |o| @intCast(o) else null;
+        const limit_lit: ?usize = if (with_clause.limit) |l| @intCast(l) else null;
+        const start = @min(resolveLimitParam(offset_lit, with_clause.offset_param, param_names, param_values) orelse 0, rows.rows.len);
+        var end = rows.rows.len;
+        if (resolveLimitParam(limit_lit, with_clause.limit_param, param_names, param_values)) |lim| {
+            end = @min(end, std.math.add(usize, start, lim) catch std.math.maxInt(usize));
+        }
+        if (start != 0 or end != rows.rows.len) try execution.applyRowWindow(allocator, &rows, start, end);
+    }
+
+    // The WHERE after the WITH, over the WITH's rows.
+    if (stage_where) |where_expr| {
+        const keep = try allocator.alloc(bool, rows.rows.len);
+        defer allocator.free(keep);
+        var kept: usize = 0;
+        for (rows.rows, keep) |row, *k| {
+            const env = Env{ .names = rows.columns, .values = row, .param_names = param_names, .param_values = param_values, .allocator = allocator };
+            k.* = switch (try eval.evalExpr(allocator, where_expr, env)) {
+                .Bool => |b| b,
+                .Int => |i| i != 0,
+                else => false,
+            };
+            if (k.*) kept += 1;
+        }
+        const out = try allocator.alloc([]Value, kept);
+        var at: usize = 0;
+        for (rows.rows, keep) |row, k| {
+            if (k) {
+                out[at] = row;
+                at += 1;
+            } else {
+                if (rows.owns_value_memory) for (row) |val| value_utilities.freeValue(allocator, val);
+                allocator.free(row);
+            }
+        }
+        allocator.free(rows.rows);
+        rows.rows = out;
+    }
+
+    const items = try allocator.dupe(ast.ReturnItem, with_clause.items);
     return .{ .rows = rows, .items = items };
 }
 
@@ -9305,7 +9431,11 @@ pub fn projectReturnOverRows(
     param_values: []const Value,
 ) anyerror!ExecutionResult {
     const return_group_by = if (q.with_clause == null) q.group_by else null;
-    var projected = try execution.executeWithClauseWithGroupByAndParams(allocator, rows.*, .{ .items = q.ret.items }, return_group_by, q.having, param_names, param_values);
+    // SONNY-3142: after a WITH, a HAVING with a GROUP BY is the WITH's
+    // (`readWithStageRows` applied it); a HAVING without one is a WHERE after
+    // RETURN (SONNY-2667), as on the planned read.
+    const return_having = if (q.with_clause == null or q.group_by == null) q.having else null;
+    var projected = try execution.executeWithClauseWithGroupByAndParams(allocator, rows.*, .{ .items = q.ret.items }, return_group_by, return_having, param_names, param_values);
     errdefer projected.deinit(allocator);
     try value_utilities.adoptProjectionRowValues(allocator, &projected, q.ret.items);
     projected.owned_graph_entities = rows.owned_graph_entities;
