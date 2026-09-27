@@ -783,7 +783,8 @@ fn constructVectorI32(allocator: std.mem.Allocator, args: []const ExtValue) !Ext
 
         for (list, 0..) |item, i| {
             data[i] = switch (item) {
-                .Int => |iv| @intCast(iv),
+                // SONNY-2769: an element past i32 is 22003 (the cast aborted).
+                .Int => |iv| std.math.cast(i32, iv) orelse return error.IntegerOverflow,
                 else => return error.TypeMismatch,
             };
         }
@@ -1004,7 +1005,8 @@ fn ipNetmask(allocator: std.mem.Allocator, args: []const ExtValue) !ExtValue {
     };
 
     const prefix_len = switch (args[1]) {
-        .Int => |i| @as(u8, @intCast(i)),
+        // SONNY-2769: out of 0..255 aborted the server in the cast.
+        .Int => |i| std.math.cast(u8, i) orelse return error.InvalidArgs,
         else => return error.TypeMismatch,
     };
 
@@ -2227,10 +2229,11 @@ fn constructDecimal(_: std.mem.Allocator, args: []const ExtValue) !ExtValue {
     // Import the decimal module
     const decimal128 = @import("types/decimal128.zig");
     const dec = decimal128.Decimal128.fromStr(value_str) catch return error.InvalidFormat;
-    const final_scale = @as(i16, @intCast(scale_val));
+    // SONNY-2769: a scale outside 0..255 is 22003 (the casts aborted).
+    const final_scale = std.math.cast(u8, scale_val) orelse return error.DecimalOverflow;
     const rounded = dec.roundHalfEven(final_scale) catch return error.DecimalOverflow;
 
-    return .{ .Decimal = .{ .coeff = rounded.coeff, .scale = @intCast(rounded.scale) } };
+    return .{ .Decimal = .{ .coeff = rounded.coeff, .scale = std.math.cast(u8, rounded.scale) orelse return error.DecimalOverflow } };
 }
 
 // Decimal arithmetic functions
@@ -2243,7 +2246,7 @@ fn decimalAdd(_: std.mem.Allocator, args: []const ExtValue) !ExtValue {
     const db = decimal128.Decimal128{ .coeff = args[1].Decimal.coeff, .scale = args[1].Decimal.scale };
 
     const result = da.add(db) catch return error.DecimalOverflow;
-    return .{ .Decimal = .{ .coeff = result.coeff, .scale = @intCast(result.scale) } };
+    return .{ .Decimal = .{ .coeff = result.coeff, .scale = std.math.cast(u8, result.scale) orelse return error.DecimalOverflow } };
 }
 
 fn decimalSub(_: std.mem.Allocator, args: []const ExtValue) !ExtValue {
@@ -2255,7 +2258,7 @@ fn decimalSub(_: std.mem.Allocator, args: []const ExtValue) !ExtValue {
     const db = decimal128.Decimal128{ .coeff = args[1].Decimal.coeff, .scale = args[1].Decimal.scale };
 
     const result = da.sub(db) catch return error.DecimalOverflow;
-    return .{ .Decimal = .{ .coeff = result.coeff, .scale = @intCast(result.scale) } };
+    return .{ .Decimal = .{ .coeff = result.coeff, .scale = std.math.cast(u8, result.scale) orelse return error.DecimalOverflow } };
 }
 
 fn decimalMul(_: std.mem.Allocator, args: []const ExtValue) !ExtValue {
@@ -2266,8 +2269,9 @@ fn decimalMul(_: std.mem.Allocator, args: []const ExtValue) !ExtValue {
     const da = decimal128.Decimal128{ .coeff = args[0].Decimal.coeff, .scale = args[0].Decimal.scale };
     const db = decimal128.Decimal128{ .coeff = args[1].Decimal.coeff, .scale = args[1].Decimal.scale };
 
+    // SONNY-2769: a product scale past 255 is 22003 (the cast aborted).
     const result = da.mul(db) catch return error.DecimalOverflow;
-    return .{ .Decimal = .{ .coeff = result.coeff, .scale = @intCast(result.scale) } };
+    return .{ .Decimal = .{ .coeff = result.coeff, .scale = std.math.cast(u8, result.scale) orelse return error.DecimalOverflow } };
 }
 
 fn decimalDiv(_: std.mem.Allocator, args: []const ExtValue) !ExtValue {
@@ -2282,7 +2286,7 @@ fn decimalDiv(_: std.mem.Allocator, args: []const ExtValue) !ExtValue {
         decimal128.Decimal128.Error.DivisionByZero => return error.DecimalDivZero,
         else => return error.DecimalOverflow,
     };
-    return .{ .Decimal = .{ .coeff = result.coeff, .scale = @intCast(result.scale) } };
+    return .{ .Decimal = .{ .coeff = result.coeff, .scale = std.math.cast(u8, result.scale) orelse return error.DecimalOverflow } };
 }
 
 // ============================================================================

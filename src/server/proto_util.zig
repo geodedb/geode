@@ -212,6 +212,8 @@ pub fn mapError(err: anyerror) ErrorInfo {
         error.DuplicateSchema => .{ .code = "42P07", .message = "Duplicate schema name" },
         error.SchemaNotFound => .{ .code = "3F000", .message = "Schema does not exist" },
         error.DuplicateIndex => .{ .code = "42P07", .message = "Duplicate index name" },
+        // SONNY-2809: a second CREATE CONSTRAINT with the same name.
+        error.ConstraintAlreadyExists => .{ .code = "42710", .message = "Duplicate constraint name" },
         // GAP-0923: ABAC policy DDL validation (duplicate name rejected).
         error.PolicyAlreadyExists => .{ .code = "42710", .message = "Duplicate policy name" },
         error.IncompatibleIndexDataType => .{ .code = "42804", .message = "Incompatible index data type" },
@@ -259,6 +261,7 @@ pub fn mapError(err: anyerror) ErrorInfo {
         // it is now refused as a data exception (class 22) so a mis-bound
         // parameter can never silently widen a predicate.
         // CANARY: REQ=REQ-ENG-3910-IN-PREDICATE-TYPE-SAFETY; FEATURE="InOperator"; ASPECT=NonListRightHandSide; STATUS=TESTED; TEST=tests/test_eng3910_in_type_safety.zig; OWNER=eval; UPDATED=2026-08-24
+        error.ValuesNotComparable => .{ .code = "22G04", .message = "values not comparable: an ordering comparison of a year-to-month duration and a day-to-second duration (1 month is not a number of days)" },
         error.InListRequiresList => .{ .code = "22000", .message = "The right-hand side of IN / NOT IN must be a list (or NULL); a scalar value is not a list. Bind a list parameter, e.g. --param p '[1,2,3]'" },
         error.InvalidTypeConversion => .{ .code = "22003", .message = "Invalid type conversion" },
         // GAP-0905/GAP-0907: checked numeric narrowing (CAST, MakeInterval, ...)
@@ -692,8 +695,8 @@ fn propertyValueToProto(allocator: std.mem.Allocator, value: graph_store.Propert
 /// e.g., coeff=1999, scale=2 → "19.99"; coeff=5, scale=2 → "0.05"
 fn reconstructDecimalRepr(allocator: std.mem.Allocator, coeff: i128, scale: u8) ![]const u8 {
     const is_negative = coeff < 0;
-    // SONNY-2727: `@abs` has a u128 result, so the smallest i128 has a
-    // magnitude too; `-coeff` overflowed for it.
+    // SONNY-2727, SONNY-2769: `@abs` has a u128 result, so the smallest i128
+    // has a magnitude too; `-coeff` overflowed for minInt(i128).
     const abs_coeff: u128 = @abs(coeff);
     const digits = try std.fmt.allocPrint(allocator, "{d}", .{abs_coeff});
     defer allocator.free(digits);

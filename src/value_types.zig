@@ -13,6 +13,7 @@
 
 const std = @import("std");
 const datetime = @import("types/datetime.zig");
+const decimal_text = @import("types/decimal_text.zig");
 const decimal128 = @import("types/decimal128.zig");
 const jsonb = @import("types/jsonb.zig");
 const xml = @import("types/xml.zig");
@@ -75,6 +76,10 @@ pub const EvalError = error{
     // the 58000 system-error class.
     // CANARY: REQ=REQ-ENG-3910-IN-PREDICATE-TYPE-SAFETY; FEATURE="InOperator"; ASPECT=NonListRightHandSide; STATUS=TESTED; TEST=tests/test_eng3910_in_type_safety.zig; OWNER=eval; UPDATED=2026-08-24
     InListRequiresList,
+    // Round 4 (I1'): an ordering comparison (<, <=, >, >=) of two values
+    // that have no order between them: a year-to-month duration against a
+    // day-to-second one (1 month against 30 days). GQLSTATE 22G04.
+    ValuesNotComparable,
     // Spec geode-vectorization-and-reranking: knn()'s query metric does not
     // match the metric the target HNSW index was built with. Distinct from
     // InvalidArgs so it can carry its own GQLSTATE (42704) in proto_util.
@@ -399,10 +404,13 @@ pub fn eqVals(a: Value, b: Value) bool {
         .Text => |at| b == .Text and std.mem.eql(u8, at, b.Text),
         .Date => |ad| b == .Date and ad.days_since_epoch == b.Date.days_since_epoch,
         .Time => |at| b == .Time and at.micros_since_midnight == b.Time.micros_since_midnight,
-        .TimeTZ => |at| b == .TimeTZ and at.time.micros_since_midnight == b.TimeTZ.time.micros_since_midnight and at.offset_seconds == b.TimeTZ.offset_seconds,
+        // Round 4 (I1'): a zoned time by its UTC time and a duration by its
+        // months and day-to-second length, as GROUP BY, DISTINCT and ORDER BY
+        // compare them; both were compared field by field.
+        .TimeTZ => |at| b == .TimeTZ and at.utcMicros() == b.TimeTZ.utcMicros(),
         .Timestamp => |at| b == .Timestamp and at.micros_since_epoch == b.Timestamp.micros_since_epoch,
         .TimestampTZ => |at| b == .TimestampTZ and at.micros_since_epoch_utc == b.TimestampTZ.micros_since_epoch_utc,
-        .Interval => |ai| b == .Interval and ai.months == b.Interval.months and ai.days == b.Interval.days and ai.micros == b.Interval.micros,
+        .Interval => |ai| b == .Interval and ai.eql(b.Interval),
         .Bytea => |ab| b == .Bytea and std.mem.eql(u8, ab, b.Bytea),
         .Json => |aj| b == .Json and std.mem.eql(u8, aj, b.Json),
         .Jsonb => |aj| b == .Jsonb and std.mem.eql(u8, aj.data, b.Jsonb.data), // Compare canonical data
@@ -439,15 +447,6 @@ pub fn eqVals(a: Value, b: Value) bool {
         .VarBit => |ab| b == .VarBit and ab.bit_length == b.VarBit.bit_length and std.mem.eql(u8, ab.bytes, b.VarBit.bytes),
         .IntRange => |ar| b == .IntRange and ar.bounds == b.IntRange.bounds and ar.lower == b.IntRange.lower and ar.upper == b.IntRange.upper,
     };
-}
-
-// CANARY: REQ=REQ-M5.2-VALUE-TYPES-010; FEATURE="Decimal Helpers"; ASPECT=Power10; STATUS=TESTED; TEST=geodetestlab/specs/gql_type_system_comprehensive.yml; OWNER=value_types; UPDATED=2025-11-13
-/// Calculate 10^scale for decimal arithmetic
-fn pow10(scale: u8) i128 {
-    var p: i128 = 1;
-    var i: u8 = 0;
-    while (i < scale) : (i += 1) p *= 10;
-    return p;
 }
 
 // CANARY: REQ=REQ-VALUE-EQUALITY-002; FEATURE="ExtValueEquality"; ASPECT=Helper; STATUS=TESTED; TEST=geodetestlab/specs/gql_expressions_comprehensive.yml; OWNER=value_types; UPDATED=2026-01-10
@@ -507,10 +506,10 @@ pub fn eqExtValues(a: @import("eval_extended.zig").ExtValue, b: @import("eval_ex
         .VectorI32 => |v| std.mem.eql(i32, v.data, b.VectorI32.data),
         .Date => |v| v.days_since_epoch == b.Date.days_since_epoch,
         .Time => |v| v.micros_since_midnight == b.Time.micros_since_midnight,
-        .TimeTZ => |v| v.time.micros_since_midnight == b.TimeTZ.time.micros_since_midnight and v.offset_seconds == b.TimeTZ.offset_seconds,
+        .TimeTZ => |v| v.utcMicros() == b.TimeTZ.utcMicros(),
         .Timestamp => |v| v.micros_since_epoch == b.Timestamp.micros_since_epoch,
         .TimestampTZ => |v| v.micros_since_epoch_utc == b.TimestampTZ.micros_since_epoch_utc,
-        .Interval => |v| v.months == b.Interval.months and v.days == b.Interval.days and v.micros == b.Interval.micros,
+        .Interval => |v| v.eql(b.Interval),
         .UUID => |v| std.mem.eql(u8, &v.bytes, &b.UUID.bytes),
         .Url => |v| std.mem.eql(u8, v.scheme, b.Url.scheme) and std.mem.eql(u8, v.host, b.Url.host) and v.port == b.Url.port,
         .Domain => |v| blk: {
@@ -558,38 +557,12 @@ pub fn stringify(v: Value, buf: *[64]u8) EvalError![]const u8 {
         },
         .Bool => |b| if (b) "true" else "false",
         .Null => "null",
-        .Decimal => |d| blk2: {
-            // render with scale decimal point
-            const abs = if (d.coeff < 0) -d.coeff else d.coeff;
-            const scale_p = pow10(d.scale);
-            const whole = @divTrunc(abs, scale_p);
-            const frac = @mod(abs, scale_p);
-            var tmp: [64]u8 = undefined;
-            const w = std.fmt.bufPrint(&tmp, "{d}", .{whole}) catch return EvalError.Unsupported;
-            if (d.scale == 0) {
-                const s = if (d.coeff < 0) std.fmt.bufPrint(buf[0..], "-{s}", .{w}) catch return EvalError.Unsupported else std.fmt.bufPrint(buf[0..], "{s}", .{w}) catch return EvalError.Unsupported;
-                break :blk2 s;
-            }
-            // format fractional part with leading zeros to scale width
-            var frac_buf: [32]u8 = undefined;
-            const fb = std.fmt.bufPrint(&frac_buf, "{d}", .{frac}) catch return EvalError.Unsupported;
-            // pad leading zeros
-            if (fb.len < d.scale) {
-                const pad = d.scale - @as(u8, @intCast(fb.len));
-                var padbuf: [32]u8 = undefined;
-                @memset(padbuf[0..pad], '0');
-                const s = if (d.coeff < 0)
-                    std.fmt.bufPrint(buf[0..], "-{s}.{s}{s}", .{ w, padbuf[0..pad], fb }) catch return EvalError.Unsupported
-                else
-                    std.fmt.bufPrint(buf[0..], "{s}.{s}{s}", .{ w, padbuf[0..pad], fb }) catch return EvalError.Unsupported;
-                break :blk2 s;
-            }
-            const s = if (d.coeff < 0)
-                std.fmt.bufPrint(buf[0..], "-{s}.{s}", .{ w, fb }) catch return EvalError.Unsupported
-            else
-                std.fmt.bufPrint(buf[0..], "{s}.{s}", .{ w, fb }) catch return EvalError.Unsupported;
-            break :blk2 s;
-        },
+        // SONNY-2769: at any scale. `pow10` overflowed past scale 38 and
+        // aborted the server (`'a' || <a scale-40 decimal>`), a scale-33 to
+        // scale-38 fraction overran its 32-byte padding buffer, and
+        // minInt(i128) overflowed `-coeff`. A text past the 64-byte buffer is
+        // Unsupported, as for every other type.
+        .Decimal => |d| decimal_text.bufPrint(buf[0..], d.coeff, d.scale) catch return EvalError.Unsupported,
         // Extended types stringify
         .SmallInt => |n| std.fmt.bufPrint(buf[0..], "{d}", .{n}) catch return EvalError.Unsupported,
         .BigInt => |n| std.fmt.bufPrint(buf[0..], "{d}", .{n}) catch return EvalError.Unsupported,

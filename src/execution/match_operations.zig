@@ -5262,7 +5262,8 @@ fn computeMultiNodeAggregation(allocator: std.mem.Allocator, expr: ast.Expr, gro
                     var sum: i64 = 0;
                     for (group_envs) |env| {
                         const val = eval.evalExpr(allocator, call.args[0].*, env) catch continue;
-                        if (val == .Int) sum += val.Int;
+                        // SONNY-2769: checked; `+=` aborted the server past i64.
+                        if (val == .Int) sum = std.math.add(i64, sum, val.Int) catch return error.IntegerOverflow;
                     }
                     return Value{ .Int = sum };
                 } else if (std.ascii.eqlIgnoreCase(func_name, "avg")) {
@@ -5271,7 +5272,7 @@ fn computeMultiNodeAggregation(allocator: std.mem.Allocator, expr: ast.Expr, gro
                     for (group_envs) |env| {
                         const val = eval.evalExpr(allocator, call.args[0].*, env) catch continue;
                         if (val == .Int) {
-                            sum += val.Int;
+                            sum = std.math.add(i64, sum, val.Int) catch return error.IntegerOverflow;
                             count += 1;
                         }
                     }
@@ -11720,7 +11721,10 @@ pub fn executeMatchQueryImpl(allocator: std.mem.Allocator, q: ast.Query, param_n
                     };
                     if (pv_opt) |pv| {
                         var out_id: u64 = undefined;
-                        switch (store.lookupMergeCandidate(filter_graph, match_labels[0], prop.key, pv, &out_id)) {
+                        // SONNY-2806 (round 7): the only holder of the key, or
+                        // the scan. The entry names one node, and a MATCH
+                        // wants every node holding the key (1 and 1.0 share it).
+                        switch (store.lookupOnlyMergeHolder(filter_graph, match_labels[0], prop.key, pv, &out_id)) {
                             .found => {
                                 fastpath_hit = out_id;
                                 fastpath_authoritative = true;

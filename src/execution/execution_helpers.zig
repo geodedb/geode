@@ -20,7 +20,10 @@ pub fn extractU32FromMap(map_props: []ast.Property, key: []const u8, default: u3
     for (map_props) |prop| {
         if (std.mem.eql(u8, prop.key, key)) {
             if (prop.value.* == .Int) {
-                return @intCast(prop.value.Int);
+                // SONNY-2769: past u32 the cast aborted the server; a negative
+                // value is the default, a larger one u32's maximum.
+                const v = prop.value.Int;
+                return std.math.cast(u32, v) orelse if (v < 0) default else std.math.maxInt(u32);
             }
         }
     }
@@ -59,7 +62,8 @@ pub fn extractNodeId(args: []const *ast.Expr, arg_idx: usize, context: Execution
 
     // Handle integer literals
     if (arg.* == .Int) {
-        return @intCast(arg.Int);
+        // SONNY-2769: a negative id is no node (the cast aborted the server).
+        return std.math.cast(u64, arg.Int);
     }
 
     // Handle identifiers - look up in context bindings

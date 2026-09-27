@@ -7,6 +7,7 @@ const result_utils = @import("result_utils.zig");
 const value_utilities = @import("value_utilities.zig");
 const graph_store = @import("../graph_store.zig");
 const graph_storage_adapter = @import("../storage/graph_storage_adapter.zig");
+const stored_property_equality = @import("stored_property_equality.zig");
 const value_types = @import("../value_types.zig");
 const query_arena = @import("../server/query_arena.zig");
 const pattern_helpers = @import("pattern_helpers.zig");
@@ -2502,6 +2503,14 @@ fn propertyAccessMatches(expr: ast.Expr, pattern_name: []const u8) ?[]const u8 {
     };
 }
 
+/// Whether the double nearest `i` is `i` itself (always within 2^53).
+fn doubleHoldsExactly(i: i64) bool {
+    const f: f64 = @floatFromInt(i);
+    // maxInt(i64) rounds up to 2^63, which no i64 holds.
+    if (f >= 0x1p63) return false;
+    return @as(i64, @intFromFloat(f)) == i;
+}
+
 fn tryExtractPatternEqPredicate(
     pattern_name: ?[]const u8,
     where: ast.Expr,
@@ -2587,6 +2596,9 @@ fn collectStartSlots(
         // Seed key+value are set atomically so neither is ever valid without
         // the other — eliminates the `undefined` field and the dead `orelse`.
         var seed: ?struct { key: []const u8, pv: graph_store.PropertyValue } = null;
+        // SONNY-2807: the WHERE arm's second seek, for an integer no double
+        // holds (see below).
+        var nearest_double: ?graph_store.PropertyValue = null;
 
         if (pattern.props) |props| {
             if (props.len == 0) break :fp;
@@ -2636,7 +2648,18 @@ fn collectStartSlots(
             const expected_val = eval.evalExpr(allocator, extracted.value.*, prop_env) catch break :fp;
             const seed_pv: graph_store.PropertyValue = switch (expected_val) {
                 .Str => |s| graph_store.PropertyValue{ .String = s },
-                .Int => |i| graph_store.PropertyValue{ .Int = i },
+                .Int => |i| blk: {
+                    // SONNY-2807: `=` compares a stored DOUBLE with an
+                    // integer in a double, and the seek finds the nodes whose
+                    // value is exactly the integer. Past 2^53 a double may
+                    // not hold the integer: `n.x = 9007199254740993` is true
+                    // for a stored DOUBLE 2^53, which the seek missed. Seek
+                    // the nearest double too; the WHERE filter that follows
+                    // drops what `=` does not keep.
+                    const nearest: f64 = @floatFromInt(i);
+                    if (!doubleHoldsExactly(i)) nearest_double = .{ .Float = nearest };
+                    break :blk graph_store.PropertyValue{ .Int = i };
+                },
                 .Bool => |b| graph_store.PropertyValue{ .Bool = b },
                 else => break :fp,
             };
@@ -2646,7 +2669,20 @@ fn collectStartSlots(
         }
 
         const s = seed orelse break :fp;
-        const candidates = adapter.getCandidateNodesByLabelAndProperty(graph_name, pattern.labels[0], s.key, s.pv, allocator) catch break :fp;
+        const exact = adapter.getCandidateNodesByLabelAndProperty(graph_name, pattern.labels[0], s.key, s.pv, allocator) catch break :fp;
+        const candidates = if (nearest_double) |d| blk: {
+            defer allocator.free(exact);
+            const near = adapter.getCandidateNodesByLabelAndProperty(graph_name, pattern.labels[0], s.key, d, allocator) catch break :fp;
+            defer allocator.free(near);
+            // Two values, two postings: disjoint but for a hash collision.
+            var both = try std.ArrayList(u64).initCapacity(allocator, exact.len + near.len);
+            errdefer both.deinit(allocator);
+            both.appendSliceAssumeCapacity(exact);
+            for (near) |slot| {
+                if (std.mem.indexOfScalar(u64, exact, slot) == null) both.appendAssumeCapacity(slot);
+            }
+            break :blk try both.toOwnedSlice(allocator);
+        } else exact;
         defer allocator.free(candidates);
 
         var verified = try std.ArrayList(u64).initCapacity(allocator, candidates.len);
@@ -2876,7 +2912,7 @@ fn propsMatch(
     param_names: []const []const u8,
     param_values: []const Value,
     context: ExecutionContext,
-) bool {
+) !bool {
     for (props) |prop| {
         const expected = eval.evalExpr(allocator, prop.value.*, Env{
             .names = &.{},
@@ -2887,7 +2923,10 @@ fn propsMatch(
             .exec_context = @constCast(&context),
         }) catch return false;
         const actual = actual_props.get(prop.key) orelse return false;
-        if (!storagePropertyMatches(expected, actual)) {
+        // SONNY-2806: by value, as the legacy executor compares (a decimal by
+        // representation, a DOUBLE and every extended value never). A stored
+        // value that cannot be decoded fails the read.
+        if (!try stored_property_equality.matches(allocator, expected, actual)) {
             return false;
         }
     }
@@ -3318,42 +3357,6 @@ fn truthyPredicate(value: Value) bool {
         .Int => |integer| integer != 0,
         else => false,
     };
-}
-
-fn storagePropertyMatches(expected: Value, actual: gs.PropertyValue) bool {
-    return switch (actual) {
-        .string => |text| switch (expected) {
-            .Str => |expected_text| std.mem.eql(u8, expected_text, text),
-            else => false,
-        },
-        .int => |number| switch (expected) {
-            .Int => |expected_number| expected_number == number,
-            else => false,
-        },
-        .bool => |boolean| switch (expected) {
-            .Bool => |expected_boolean| expected_boolean == boolean,
-            else => false,
-        },
-        .null => expected == .Null,
-        .decimal => |decimal| switch (expected) {
-            .Decimal => |expected_decimal| expected_decimal.coeff == decimal.coeff and expected_decimal.scale == decimal.scale,
-            else => false,
-        },
-        .float => |float_value| switch (expected) {
-            .Decimal => |decimal| decimalToFloat(decimal.coeff, decimal.scale) == float_value,
-            else => false,
-        },
-        .ext => false,
-    };
-}
-
-fn decimalToFloat(coeff: i128, scale: u8) f64 {
-    var divisor: f64 = 1;
-    var i: u8 = 0;
-    while (i < scale) : (i += 1) {
-        divisor *= 10;
-    }
-    return @as(f64, @floatFromInt(coeff)) / divisor;
 }
 
 fn labelsContainAll(actual: []const []const u8, required: []const []const u8) bool {

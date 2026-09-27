@@ -228,11 +228,21 @@ fn nodeMatchesPattern(
 }
 
 /// Convert an eval Value to a GraphStore PropertyValue for merge index lookup.
-/// Only handles simple scalar types that the index supports.
+/// Only handles simple scalar types that the index supports. SONNY-2806
+/// (round 6): every number probes the index. An integer's key is its value,
+/// so any representation finds a stored one equal to it, and a miss is still
+/// authoritative (a stored 1.0 is found by `{x: 1}`). Round 7: a number that
+/// is not an integer (1.5) is not indexed and probes `.not_indexable`, so the
+/// label scan below answers it, as before round 6.
 fn valueToPropertyValueForIndex(val: Value) ?graph_store.PropertyValue {
     return switch (val) {
         .Str => |s| graph_store.PropertyValue{ .String = s },
         .Int => |i| graph_store.PropertyValue{ .Int = i },
+        .SmallInt => |i| graph_store.PropertyValue{ .Int = i },
+        .BigInt => |i| graph_store.PropertyValue{ .Int = i },
+        .Decimal => |d| graph_store.PropertyValue{ .Decimal = .{ .coeff = d.coeff, .scale = d.scale } },
+        .Real => |f| graph_store.PropertyValue{ .Float = f },
+        .Double => |f| graph_store.PropertyValue{ .Float = f },
         .Bool => |b| graph_store.PropertyValue{ .Bool = b },
         else => null,
     };
@@ -450,10 +460,12 @@ fn findMergeMatch(
                 // ENG-3914 — DETERMINISTIC (not concurrent) MERGE duplication.
                 //
                 // `merge_prop_index` holds exactly ONE node id per
-                // (graph, label, key, value): `putOrUpdate` OVERWRITES. So for
-                // a multi-property MERGE key whose FIRST property value is
-                // SHARED across rows, the bucket's occupant is whichever row
-                // was written last.
+                // (graph, label, key, value): since SONNY-2806 (round 7) the
+                // LOWEST id among the nodes holding it (before, `putOrUpdate`
+                // overwrote, and the occupant was the row written last). So
+                // for a multi-property MERGE key whose FIRST property value is
+                // SHARED across rows, the bucket's occupant need not be the
+                // row the other properties select.
                 //
                 // The old code probed `evaluated_props[0]` only, and when the
                 // returned candidate failed full verification it fell through

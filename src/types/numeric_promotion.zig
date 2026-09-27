@@ -1,4 +1,5 @@
 const std = @import("std");
+const narrowing = @import("narrowing.zig");
 
 /// Numeric promotion matrix for type coercion and compatibility checking
 pub const NumericPromotion = struct {
@@ -142,13 +143,11 @@ pub const ValueConverter = struct {
         InvalidFormat,
     };
 
-    /// Convert integer to decimal with specified scale
-    pub fn intToDecimal(value: i64, scale: u8) struct { coeff: i128, scale: u8 } {
-        var coeff: i128 = value;
-        var s: u8 = 0;
-        while (s < scale) : (s += 1) {
-            coeff *= 10;
-        }
+    /// Convert integer to decimal with specified scale. SONNY-2769: Overflow
+    /// past i128 (`coeff *= 10` per digit overflowed and aborted).
+    pub fn intToDecimal(value: i64, scale: u8) ConversionError!struct { coeff: i128, scale: u8 } {
+        const factor = narrowing.pow10(scale) orelse return if (value == 0) .{ .coeff = 0, .scale = scale } else ConversionError.Overflow;
+        const coeff = std.math.mul(i128, value, factor) catch return ConversionError.Overflow;
         return .{ .coeff = coeff, .scale = scale };
     }
 
@@ -223,7 +222,7 @@ test "coercion matrix operations" {
 
 test "value conversion utilities" {
     // Int to decimal
-    const decimal = ValueConverter.intToDecimal(123, 2);
+    const decimal = try ValueConverter.intToDecimal(123, 2);
     try std.testing.expect(decimal.coeff == 12300);
     try std.testing.expect(decimal.scale == 2);
 

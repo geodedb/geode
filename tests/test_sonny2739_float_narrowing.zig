@@ -483,6 +483,37 @@ test "SONNY-2739: casts, conversions and rounding refuse a value that does not f
     try inModes("conversions", &eval_modes, checkConversions);
 }
 
+/// 0.999... with 37 and 38 nines, and 0.0999... (scale 39, 38 nines), and
+/// 9.999... (38 digits, scale 37); a scale-255 decimal, the parser's largest.
+const nines37 = "0." ++ "9" ** 37;
+const nines38 = "0." ++ "9" ** 38;
+const nines38_scale39 = "0.0" ++ "9" ** 38;
+const nine_nines37 = "9." ++ "9" ** 37;
+const scale255 = "0." ++ "0" ** 254 ++ "5";
+
+fn checkRoundAtScale38(s: *Session, f: *Failures) !void {
+    // Round 4 (C1'): rounding at an effective scale of 38 doubled a remainder
+    // near 10^38 and overflowed i128, which aborted the server.
+    try expectValue(s, f, "RETURN round(" ++ nines37 ++ ") AS x", "1");
+    try expectValue(s, f, "RETURN round(" ++ nines38 ++ ") AS x", "1");
+    try expectValue(s, f, "RETURN round(-" ++ nines38 ++ ") AS x", "-1");
+    // precision > 0: 39 - 1 = 38 digits dropped.
+    try expectValue(s, f, "RETURN round(" ++ nines38_scale39 ++ ", 1) AS x", "0.1m");
+    try expectValue(s, f, "RETURN round(" ++ nines38 ++ ", 1) AS x", "1.0m");
+    // precision < 0: scale 37 + 1 = 38.
+    try expectValue(s, f, "RETURN round(" ++ nine_nines37 ++ ", -1) AS x", "10");
+    try expectValue(s, f, "RETURN round(" ++ nines37 ++ ", -1) AS x", "0");
+    // The parser's largest scale.
+    try expectValue(s, f, "RETURN round(" ++ scale255 ++ ") AS x", "0");
+    try expectValue(s, f, "RETURN round(" ++ scale255 ++ ", 1) AS x", "0.0m");
+    try expectValue(s, f, "RETURN round(" ++ scale255 ++ ", -1) AS x", "0");
+    try expectValue(s, f, "RETURN ceil(" ++ scale255 ++ ") AS x", "1");
+}
+
+test "SONNY-2739: round() at an effective scale of 38 does not abort" {
+    try inModes("round at scale 38", &eval_modes, checkRoundAtScale38);
+}
+
 test "SONNY-2739: the heap rounding functions refuse a value past i64" {
     const ef = geode.types.evaluator_functions;
     const D = geode.types.decimal128.Decimal128;

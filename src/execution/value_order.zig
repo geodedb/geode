@@ -20,7 +20,8 @@
 //! compared the three fields, so 1 month and 30 days sorted as equal but
 //! grouped apart, and P1D and PT24H did too.)
 //!
-//! A time with a time zone compares, and is keyed, by its UTC time.
+//! A time with a time zone compares, and is keyed, by its UTC time of day
+//! (the UTC time modulo 24 hours: 01:00+14:00 and 11:00+00:00 are equal).
 
 // CANARY: REQ=REQ-SONNY-2675-EXACT-VALUE-ORDER; FEATURE="ValueOrdering"; ASPECT=ExactNumbersDurationsKeys; STATUS=TESTED; TEST=tests/test_sonny2675_aggregate_semantics.zig; OWNER=execution; UPDATED=2026-09-25
 
@@ -237,13 +238,13 @@ fn writeFloatKey(w: *std.Io.Writer, f: f64) std.Io.Writer.Error!void {
 /// The day-to-second length of an interval in microseconds (a day is 24
 /// hours).
 pub fn intervalDayTime(iv: Interval) i128 {
-    return @as(i128, iv.days) * std.time.us_per_day + iv.micros;
+    return iv.dayTimeMicros();
 }
 
-/// Intervals by months, then by their day-to-second length.
+/// Intervals by months, then by their day-to-second length
+/// (datetime.Interval.order, which eval's comparisons share).
 pub fn compareIntervals(a: Interval, b: Interval) i8 {
-    if (a.months != b.months) return cmp(i32, a.months, b.months);
-    return cmp(i128, intervalDayTime(a), intervalDayTime(b));
+    return a.order(b);
 }
 
 pub fn writeIntervalKey(w: *std.Io.Writer, iv: Interval) std.Io.Writer.Error!void {
@@ -252,7 +253,9 @@ pub fn writeIntervalKey(w: *std.Io.Writer, iv: Interval) std.Io.Writer.Error!voi
     try w.writeInt(i128, intervalDayTime(iv), .little);
 }
 
-/// A time with a time zone as its UTC time of day, in microseconds.
-pub fn timeTzUtcMicros(t: TimeTZ) i64 {
-    return t.time.micros_since_midnight - @as(i64, t.offset_seconds) * std.time.us_per_s;
+/// A time with a time zone as its UTC time of day, in microseconds. i128:
+/// a decoded value's time of day is any i64, and subtracting the offset in
+/// i64 could overflow (round 4 audit of the round-3 helpers).
+pub fn timeTzUtcMicros(t: TimeTZ) i128 {
+    return t.utcMicros();
 }

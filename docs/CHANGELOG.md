@@ -594,7 +594,9 @@
   power is 22012. An integer power is now exact (`3 ^ 39`), a JSON number
   past the decimal comes back as a double, `latlon()` refuses a NaN
   coordinate, and the TDE and audit benchmark procedures saturate their
-  measurements.
+  measurements. `round()` at an effective scale of 38
+  (`round(0.99999999999999999999999999999999999999)`) no longer aborts
+  either (a regression in the first fix).
 - **MERGE never binds, rewrites or attaches to a row the session may not
   see (SONNY-2686, SONNY-2728):** MERGE matched existing nodes, and a
   relationship MERGE matched existing edges, on graph, tenant, labels and
@@ -697,6 +699,61 @@
   character references, syslog values quoted with `"`, `\` and `]` escaped
   and control characters hex-encoded, JSON strings JSON-escaped. They also
   compile against the audit event again (nothing called them).
+- **A duplicate CREATE CONSTRAINT no longer aborts the server
+  (SONNY-2809):** creating a constraint whose name already exists freed the
+  catalog's key for it twice, which corrupted the allocator and aborted the
+  server (a segfault in a release build) for any user allowed to run DDL. A
+  duplicate name is now refused with 42710 (duplicate object), and
+  `CREATE CONSTRAINT IF NOT EXISTS` is a no-op; the refusal used to return a
+  result whose one column and one row were uninitialized memory. When saving
+  the catalog fails, CREATE CONSTRAINT, CREATE SCHEMA and a new graph no
+  longer leave the map holding a name already freed, and a catalog whose
+  load fails at open no longer leaks what it had read.
+- **Integer overflow and narrowing no longer abort the server
+  (SONNY-2769):** integer overflow, a narrowing cast that does not fit, and
+  minInt divided by -1 abort a Debug or ReleaseSafe server. A read-only query
+  reached them through:
+  - decimal `*` (the coefficient and the scale), `/`, `+` and `-`, and
+    `CAST(... AS DECIMAL(p, s))`;
+  - `-minInt`, `abs(minInt)`, `minInt / -1`, `minInt % -1` and
+    `mod(minInt, -1)` (the last two a hardware division trap), and
+    `true + maxInt`;
+  - date +/- interval past the day range (`+ duration('P2147483647D')`);
+  - any timestamp before 1970 and any date before year 0 in a result (the
+    response encoder);
+  - `range()` at the edge of i64, `char()`/`varchar()` lengths, `decimal()`
+    scales and 39-digit strings, `vectori32` elements, int4 range bounds,
+    `ip_netmask` prefixes, DTW windows, `indegree(-1)`, `interval_contains`,
+    and `knn()` with a k past u32 over a vector index;
+  - procedure arguments (`tde.configure_mock_kms`, `tde.configure_rotation`,
+    `audit.configure`, `algo.bfs.stream` depth), a SMALLINT parameter, a
+    typed DECIMAL parameter's scale, and a TIME literal with 256 fraction
+    digits;
+  - a decimal past scale 38, wherever 10^scale was computed in i128: CAST
+    to STRING, VARCHAR or TEXT, string concatenation (`'a' || <it>`), an
+    inline property map (`MATCH (n:T {x: <it>})` on the legacy executor,
+    MERGE on every session), the legacy `WITH ... ORDER BY`, a map
+    property's stored JSONB text, and the ORDER BY keys the server prints
+    for a paged result (`ORDER BY x + <it>`).
+
+  A value that does not fit is refused with 22003 (a procedure argument
+  with InvalidArgs), or kept exactly where the answer is defined: `x % -1` is
+  0, a pre-1970 timestamp and a negative year are formatted, a CAST string's
+  fraction digits past the target scale are truncated, and a `knn()` k past
+  u32 is clamped (more neighbours than the index holds is all of them).
+  `CAST('-1.5' AS DECIMAL)` keeps its sign (it was -0.5). A decimal's text
+  is exact at any scale: `CAST(-0.5 AS STRING)` is '-0.5' (it was '0.5'),
+  a map property of -0.5 is stored as -0.5 (it was 0.5), and a decimal of
+  more than 32 digits casts to its text (it was NULL). `toString()` of a
+  decimal is exact too (it went through a double: `toString(1.50)` was
+  '1.5', and 38 digits kept 17), and `'a' || <decimal>` takes its text at
+  any length (past 64 characters it failed with 0A000). **Behaviour
+  change:** an inline property map and MERGE compare two numbers by their
+  exact value, as GROUP BY does: `MERGE (n:T {x: 1.0})` matches a node
+  whose x is the integer 1 (it created a second node). `=` does not always
+  agree: it compares a DOUBLE with an exact number approximately, in a
+  double, so `DOUBLE 0.1 = 0.1` is true while `{x: 0.1}` does not match a
+  stored DOUBLE 0.1 (SONNY-2807).
 
 ### Fixed
 
@@ -715,6 +772,113 @@
   created. They are now recorded as CREATE's are, and ROLLBACK removes them
   with the properties the MERGE set on them. A change MERGE makes to a node
   or edge it matched is not undone yet.
+- **An inline property map and MERGE match a stored value by its value on
+  every path (SONNY-2806):** `MATCH (n:T {x: v})` and `MERGE` compare the
+  stored property with `v` by value on the planned read and the streaming
+  node scan of a persisted session, as the legacy executor does:
+  - numbers by their exact value, as GROUP BY keys them: `{x: 1.50}`
+    matches a stored 1.5, `{x: 1.0}` a stored 1, `{x: 1}` a stored 1.0,
+    and `{x: $d}` a node created from the same DOUBLE `$d`. None of these
+    matched on a persisted session; a DOUBLE and every extended value never
+    matched there, and relationships (`[r:R {w: 1.0}]`) likewise;
+  - durations by their months and day-to-second length (`{v: PT24H}`
+    matches a stored P1D), and zoned times by their UTC time of day. The
+    legacy executor compared both by representation, so MERGE also created
+    a second node for them.
+  - **Behaviour change (fixes a round-5 regression):** MERGE's property
+    index keys an integer by its value, whatever its representation:
+    `MERGE (n:U {x: 1})` created a second node beside a stored 1.0 on every
+    session, while `MERGE (n:T {x: 1.0})` matched a stored 1. A number that
+    is not an integer (1.5, a DOUBLE 0.25) stays out of that index, as in
+    v0.8.22. The executor finds it by its label scan, and the server's bulk
+    MERGE (`bulkMergeNode*`) through the exact node-property index (by a
+    label scan in lean mode, where that index holds no value of a key
+    registered after its nodes were written). So MERGE on the server fast
+    path now works for a DECIMAL or DOUBLE key, in lean mode too: it failed
+    with MergeValueNotIndexable, or, with ON MATCH SET, created a node on
+    every run. Two concurrent bulk MERGEs of one value in two forms (INT 7
+    and DECIMAL 7.0; DOUBLE 7.5 and DECIMAL 7.50) create one node: they now
+    take one per-tuple lock, which was chosen by the value's representation.
+  - **Behaviour change:** when two nodes hold one MERGE key (1 and 1.0, or
+    two nodes CREATE wrote with one value), MERGE matches the one with the
+    lowest node id, on the executor, the server's bulk MERGE and a reopened
+    store. The index kept the node written last, so after a restart MERGE
+    could match the other node, and deleting either node, or a SET that
+    moved it off the key, dropped the entry: the next MERGE created a third
+    node. The entry now goes only with the key's last holder. When the
+    lowest holder goes, the next lookup of that key finds the next one
+    through the exact node-property index, at a cost proportional to the
+    key's holders, under the graph lock the lookup holds (EXCLUSIVE for the
+    executor's MERGE, SHARED for the server's bulk MERGE and edge lookups).
+    Measured with 200,040 nodes of one label: the first MERGE of such a key
+    took 30 µs on average (84 µs at most), against 83 ms (108 ms) when it
+    scanned the label, which is about 6 s at 14.27M nodes. It scans the
+    label only in lean mode, in a store without an adapter, and while the
+    exact index is deferred or being rebuilt after a reopen; it does not
+    wait for that rebuild. A lookup that found the holders while a writer inserted one
+    could drop the new holder's entry (the next MERGE then created a second
+    node); it now leaves the entry for the next lookup.
+  - A string no longer shares MERGE's key with a boolean or an integer:
+    the server's bulk MERGE of `true` matched a stored `'true'` (and v0.8.22's
+    of `1` a stored `'1'`).
+  - `MATCH (n:T {x: 1})` on the legacy executor (a session in memory, with
+    an RLS policy or tenant-scoped) returned one node when two held the
+    value (1 and 1.0, or two nodes CREATE wrote with 1): it read the node
+    from MERGE's index. It uses the index only for a key's only holder now.
+  - The server's multi-property MERGE compares a stored value as the
+    executor does: `MERGE (:T {a: 1, d: date('2020-01-01')})` created a node
+    on every run (a stored date, duration or DOUBLE never matched), and
+    `{a: 1}` did not find a stored 1.0.
+  - A stored value that cannot be decoded fails the planned read or the
+    streaming node scan; it was taken as a mismatch, and the row was
+    dropped.
+
+  A DOUBLE and a decimal are equal only when their values are exactly
+  equal (`{x: 0.1}` does not match a stored DOUBLE 0.1), which is how
+  GROUP BY treats them. `=` compares them in a double instead (SONNY-2807).
+  The planned read's WHERE seek (`WHERE n.x = <integer>`) agrees with `=`
+  past 2^53: `n.x = 9007199254740993` returned no row for a stored DOUBLE
+  2^53, while `count(n)` returned 1. For an integer no double holds, the
+  seek now also asks for the double nearest it.
+
+  **Upgrade note:** the adapter's exact node-property index (`prop_exact.idx`
+  and `prop_rev.idx`) hashes a number by its value now, and each entry of
+  MERGE's index records whether other nodes hold its key.
+  - A file written by an earlier version is stale. The first open of each
+    graph after the upgrade rebuilds the exact index in the background.
+    Until that rebuild ends (the code estimates about 14 minutes at 14.27M
+    nodes), writes wait for it, not only the reads the index serves: every
+    write that updates the index (CREATE of a node with properties, SET,
+    REMOVE, DELETE, and the server's bulk CREATE and MERGE, which waits
+    before it takes its locks whether it then matches or creates). A lookup
+    that must find the holders of a MERGE key does not wait: it scans the
+    label instead.
+  - All three hydration snapshots (`hydration_counters.snap`,
+    `hydration_labels.snap` and `hydration_merge.snap`, format 5) are
+    invalidated, so the first open of each graph does a full hydration scan.
+  - A rollback rebuilds too: v0.8.22 finds these files stale and rebuilds
+    from a scan the same way.
+  - Memory: MERGE's index (by default it holds every property; lean mode
+    holds the MERGE keys only) now also holds a DOUBLE or DECIMAL property
+    whose value is an integer, and an integer's key is 9 bytes (v0.8.22
+    stored its text). Measured against v0.8.22, 2000 nodes with an INT, a
+    DOUBLE and a DECIMAL property: 2000 entries in both (15b9aa0e: 6000),
+    139 KB in memory against 128 KB, and `hydration_merge.snap` 92 KB
+    against 81 KB. 25,000 nodes of a mixed schema (ids, strings, prices,
+    ratings, coordinates): 55,767 entries against 55,502 (15b9aa0e: 90,543),
+    4.7 MB against 4.6 MB, and a 2.9 MB snapshot against 2.7 MB. (A string
+    or boolean key carries a one-byte tag: 30 KB of the 25,000 nodes' keys.)
+
+- **MERGE sees a label that SET added and forgets one REMOVE took
+  (SONNY-3109):** MERGE's property index is keyed by label, and `SET n:L` and
+  `REMOVE n:L` did not update it. After `SET n:L`, `MERGE (:L {x: 1})` did
+  not find the node and created a second one, on the executor and the
+  server's bulk MERGE. After `REMOVE n:L`, the server's bulk MERGE matched
+  the node that no longer carries L, and the legacy executor's
+  `MATCH (n:L {x: 1})` returned it. A label added or removed now updates the
+  node's entries under that label, and those of a registered composite key,
+  as a node created with the label or deleted does.
+
 - **Grouped queries report their errors (SONNY-2675):**
   - **Behaviour change:** a HAVING name that is no column, binding or
     parameter is refused with 42703; it was NULL.
@@ -730,6 +894,12 @@
     they skipped a date, a list or an interval. A SmallInt or a BigInt is
     summed (it was skipped), and an integer sum past i64 continues as a
     double.
+
+    **Known deviation:** ISO/IEC 39075 (following SQL's exact-numeric rules)
+    implies an integer SUM past i64 should raise 22003. The shared
+    projection continues it as a double (the value's magnitude is kept, its
+    last digits are not), matching the GROUP BY fast path, until both paths
+    converge on 22003.
 - **Group and DISTINCT keys keep their type (SONNY-2675, SONNY-2735):** a
   GROUP BY, `count(DISTINCT)`, RETURN DISTINCT and WITH DISTINCT key keeps
   its type and value. Doubles, dates, decimals, texts, UUIDs and lists group
@@ -739,12 +909,52 @@
   streaming fast path declined (with ORDER BY, say). Keys now agree with the
   value order: numbers by their exact value (DECIMAL 0.5 equals DOUBLE 0.5,
   DECIMAL 0.1 does not equal DOUBLE 0.1), every NaN is one value, and a time
-  with a time zone keys by its UTC time.
+  with a time zone keys by its UTC time of day.
 
-  **Behaviour change:** durations follow the standard's two kinds. A month
-  is not 30 days: 1 month and 30 days are two groups and no longer sort as
-  equal. A day is 24 hours: P1D and PT24H are one group. Intervals order by
-  months, then by their day-to-second length.
+  **Behaviour change:** durations follow the standard's two kinds
+  (ISO/IEC 39075 keeps year-to-month and day-to-second durations apart):
+  - a month is not 30 days: 1 month and 30 days are two groups, and
+    `duration('P1M') = duration('P30D')` is false (it was true);
+  - a day is 24 hours: P1D and PT24H are one group, and equal;
+  - ORDER BY, min and max order intervals by months, then by their
+    day-to-second length;
+  - `<`, `<=`, `>` and `>=` in WHERE and HAVING are defined when the months
+    or the day-to-second lengths of the two sides are equal
+    (`P1M < P2M`, `P1D < PT25H`); a year-to-month duration against a
+    day-to-second one (`P1M < P30D`) raises 22G04 (values not comparable).
+    They used to count a month as 30 days. The rule is conservative: it asks
+    for one equal part, so `P1M1D < P2M` raises 22G04 although it holds for
+    any month length.
+  - A time with a time zone compares by its UTC time of day, the UTC time
+    modulo 24 hours, in `=`, `<`, `>`, ORDER BY and the groups:
+    `10:00+01:00 = 09:00+00:00`, and `01:00+14:00 = 11:00+00:00` (it was
+    -13:00 UTC and sorted first). `=` compared the local time and the
+    offset, and `<` and `>` were a type mismatch; a zoned datetime's `<` and
+    `>` compare its UTC instant, as ORDER BY does.
+  - **Behaviour change:** `x IN [a, b]` is `x = a OR x = b`, for a literal
+    list, a list expression (`x IN $list`) and a subquery
+    (`x IN (MATCH ... RETURN v)`, its first column) alike. (Geode reads
+    parentheses after IN as a subquery; a list is written in brackets.) An
+    item is in the list when `=` calls it equal, whatever its type
+    (`1.50 IN [1.5]`, `1 IN [1.0]` and a DOUBLE 1.5 in `[1.5]` are true;
+    they were false, and `1.5 IN (<a subquery returning 1.5>)` was false
+    too, so NOT IN kept that row). The result is NULL when no item is equal
+    and some comparison is NULL (`2 IN $list` with `$list = [1, NULL]` was
+    false), and FALSE for an empty list or subquery, even for a NULL value
+    (`NULL IN (<no rows>)` was NULL). `=`, `<` and `>` compare INT,
+    SMALLINT, BIGINT and DECIMAL values by their exact value at any scale:
+    `1 = <a scale-40 decimal>` is false (it failed with 0A000), and a
+    SMALLINT or BIGINT parameter compares with an INT (a type mismatch).
+  - IN evaluates `x = item` left to right and stops at the first item that
+    is equal, as the OR it stands for does. An item `=` cannot compare with
+    the value raises the error `=` raises, but only if IN reaches it:
+    `'a' IN ['a', 1.5]` is true, while `'a' IN [1.5, 'a']` is a type
+    mismatch, as `'a' = 1.5` is. (It was false.)
+  - **Known divergence:** a WHERE predicate that raises for some rows, such
+    as a property holding a string on one node and a number on another
+    against `IN [1.5]`, fails the query on a legacy session (in memory,
+    RLS or tenant-scoped), while the planned read of a persisted session
+    counts an error as no match and returns the other rows (SONNY-2811).
 - **min, max and ORDER BY order every value type (SONNY-2675):** min and max
   compared only integers and strings, so over doubles, decimals, dates or
   mixed numbers the first value won, and ORDER BY ranked doubles, temporal

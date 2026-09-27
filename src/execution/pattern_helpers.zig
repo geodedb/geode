@@ -422,7 +422,8 @@ pub fn computeAggregationForGroup(allocator: std.mem.Allocator, expr: ast.Expr, 
             };
             const val = eval.evalExpr(allocator, arg_ptr.?.*, env) catch continue;
             if (val == .Int) {
-                sum += val.Int;
+                // SONNY-2769: checked; `+=` aborted the server past i64.
+                sum = std.math.add(i64, sum, val.Int) catch return error.IntegerOverflow;
                 has_value = true;
             }
         }

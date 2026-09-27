@@ -859,38 +859,9 @@ pub fn main(proc_init: std.process.Init.Minimal) !void {
                                 .Null => try w.print("NULL", .{}),
                                 .Int => |n| try w.print("{d}", .{n}),
                                 .List => try w.print("<list>", .{}),
-                                .Decimal => |d| {
-                                    const abs: i128 = if (d.coeff < 0) -d.coeff else d.coeff;
-                                    var scale_p: i128 = 1;
-                                    var i: u8 = 0;
-                                    while (i < d.scale) : (i += 1) scale_p *= 10;
-                                    const whole = @divTrunc(abs, scale_p);
-                                    const frac = @mod(abs, scale_p);
-                                    if (d.scale == 0) {
-                                        if (d.coeff < 0) try w.print("-{d}", .{whole}) else try w.print("{d}", .{whole});
-                                    } else {
-                                        var fb_buf: [64]u8 = undefined;
-                                        var fbi: usize = 0;
-                                        var tmp = frac;
-                                        // write fractional digits in reverse
-                                        var k: u8 = 0;
-                                        while (k < d.scale) : (k += 1) {
-                                            const digit: u8 = @intCast(@mod(tmp, 10));
-                                            fb_buf[fbi] = digit + '0';
-                                            fbi += 1;
-                                            tmp = @divTrunc(tmp, 10);
-                                        }
-                                        // reverse to correct order
-                                        var j: usize = 0;
-                                        var t: u8 = 0;
-                                        while (j < fbi / 2) : (j += 1) {
-                                            t = fb_buf[j];
-                                            fb_buf[j] = fb_buf[fbi - 1 - j];
-                                            fb_buf[fbi - 1 - j] = t;
-                                        }
-                                        if (d.coeff < 0) try w.print("-{d}.{s}", .{ whole, fb_buf[0..fbi] }) else try w.print("{d}.{s}", .{ whole, fb_buf[0..fbi] });
-                                    }
-                                },
+                                // SONNY-2769: at any scale (`scale_p *= 10` overflowed
+                                // past 38, the fraction buffer past 64 digits).
+                                .Decimal => |d| try gql.types.decimal_text.write(w, d.coeff, d.scale),
                                 .Str => |sval| try w.print("\"{s}\"", .{sval}),
                                 .Bool => |b| try w.print("{s}", .{if (b) "true" else "false"}),
                                 // GAP-0045: Handle complex graph types in aggregate output

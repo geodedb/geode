@@ -6,6 +6,7 @@ const eval = @import("../eval.zig");
 const execution = @import("../execution.zig");
 const graph_store = @import("../graph_store.zig");
 const graph_storage_adapter = @import("../storage/graph_storage_adapter.zig");
+const stored_property_equality = @import("../execution/stored_property_equality.zig");
 const property_value_codec = @import("../property_value_codec.zig");
 const value_types = @import("../value_types.zig");
 const result_utils = @import("../execution/result_utils.zig");
@@ -1884,6 +1885,12 @@ fn seekIndexedCandidates(
         // pure constant fold. A failure or a non-scalar (e.g. NULL / list /
         // node ref) means we cannot seek on this prop — skip it.
         const expected = eval.evalExpr(allocator, prop.value.*, env) catch continue;
+        // SONNY-2806: the index hashes a duration or a zoned time by its
+        // representation, and two equal ones can differ (P1D and PT24H,
+        // 01:00+14:00 and 11:00+00:00), so a seek could miss one. Such a
+        // property is matched by the scan, which compares by value. (A number
+        // hashes by its value; see graph_storage_adapter.hashStorageProperty.)
+        if (expected == .Interval or expected == .TimeTZ) continue;
         const pv = property_value_codec.valueToPropertyValue(allocator, expected) catch continue;
         // NULL inline equality never matches via the index path the same way
         // (`{p: null}` is unusual); leave it to the scan/verify path.
@@ -1965,7 +1972,10 @@ fn nodeMatchesPattern(
     for (pattern.props.?) |prop| {
         const expected = eval.evalExpr(allocator, prop.value.*, env) catch return false;
         const actual = props.get(prop.key) orelse return false;
-        if (!storagePropertyMatches(expected, actual)) {
+        // SONNY-2806: by value, as the executor compares (a decimal by
+        // representation and every extended value never, a DOUBLE included).
+        // A stored value that cannot be decoded fails the read.
+        if (!try stored_property_equality.matches(allocator, expected, actual)) {
             return false;
         }
     }
@@ -2151,49 +2161,6 @@ fn materializeNodeProjected(
     }
 
     return node;
-}
-
-fn storagePropertyMatches(expected: Value, actual: gs.PropertyValue) bool {
-    return switch (actual) {
-        .string => |text| switch (expected) {
-            .Str => |expected_text| std.mem.eql(u8, expected_text, text),
-            .Text => |expected_text| std.mem.eql(u8, expected_text, text),
-            .Varchar => |expected_text| std.mem.eql(u8, expected_text.data, text),
-            .Char => |expected_text| std.mem.eql(u8, expected_text.data, text),
-            else => false,
-        },
-        .int => |number| switch (expected) {
-            .Int => |expected_number| expected_number == number,
-            .SmallInt => |expected_number| expected_number == number,
-            .BigInt => |expected_number| expected_number == number,
-            else => false,
-        },
-        .bool => |boolean| switch (expected) {
-            .Bool => |expected_boolean| expected_boolean == boolean,
-            else => false,
-        },
-        .null => expected == .Null,
-        .decimal => |decimal| switch (expected) {
-            .Decimal => |expected_decimal| expected_decimal.coeff == decimal.coeff and expected_decimal.scale == decimal.scale,
-            else => false,
-        },
-        .float => |float_value| switch (expected) {
-            .Decimal => |decimal| decimalToFloat(decimal.coeff, decimal.scale) == float_value,
-            .Real => |expected_float| expected_float == float_value,
-            .Double => |expected_float| expected_float == float_value,
-            else => false,
-        },
-        .ext => false,
-    };
-}
-
-fn decimalToFloat(coeff: i128, scale: u8) f64 {
-    var divisor: f64 = 1;
-    var i: u8 = 0;
-    while (i < scale) : (i += 1) {
-        divisor *= 10;
-    }
-    return @as(f64, @floatFromInt(coeff)) / divisor;
 }
 
 fn labelsContainAll(actual: []const []const u8, required: []const []const u8) bool {

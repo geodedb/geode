@@ -1132,7 +1132,8 @@ fn computeChainAggregation(allocator: std.mem.Allocator, expr: ast.Expr, envs: [
                     var sum: i64 = 0;
                     for (envs) |env| {
                         const val = eval.evalExpr(allocator, call.args[0].*, env) catch continue;
-                        if (val == .Int) sum += val.Int;
+                        // SONNY-2769: checked; `+=` aborted the server past i64.
+                        if (val == .Int) sum = std.math.add(i64, sum, val.Int) catch return error.IntegerOverflow;
                     }
                     return Value{ .Int = sum };
                 } else if (std.ascii.eqlIgnoreCase(func_name, "avg")) {
@@ -1141,7 +1142,7 @@ fn computeChainAggregation(allocator: std.mem.Allocator, expr: ast.Expr, envs: [
                     for (envs) |env| {
                         const val = eval.evalExpr(allocator, call.args[0].*, env) catch continue;
                         if (val == .Int) {
-                            sum += val.Int;
+                            sum = std.math.add(i64, sum, val.Int) catch return error.IntegerOverflow;
                             count += 1;
                         }
                     }

@@ -371,6 +371,8 @@ fn evalArrayBasedTsFunction(
         const b_arr = try extractF64List(allocator, b_val) orelse return EvalError.TypeMismatch;
         defer allocator.free(b_arr);
         if (w_val != .Int) return EvalError.TypeMismatch;
+        // SONNY-2769: a negative window aborted the server in the cast.
+        if (w_val.Int < 0) return EvalError.InvalidArgs;
         const ts_result = ts_gql.executeDTW(allocator, a_arr, b_arr, @intCast(w_val.Int)) catch return EvalError.OutOfMemory;
         return try tsValueToCanonical(ts_result, allocator);
     } else if (std.ascii.eqlIgnoreCase(suffix, "dtw_derivative")) {
@@ -384,6 +386,7 @@ fn evalArrayBasedTsFunction(
         const b_arr = try extractF64List(allocator, b_val) orelse return EvalError.TypeMismatch;
         defer allocator.free(b_arr);
         if (w_val != .Int) return EvalError.TypeMismatch;
+        if (w_val.Int < 0) return EvalError.InvalidArgs; // SONNY-2769: see dtw
         const ts_result = ts_gql.executeDTWDerivative(allocator, a_arr, b_arr, @intCast(w_val.Int)) catch return EvalError.OutOfMemory;
         return try tsValueToCanonical(ts_result, allocator);
     } else if (std.ascii.eqlIgnoreCase(suffix, "dtw_open_end")) {
@@ -408,6 +411,7 @@ fn evalArrayBasedTsFunction(
         const b_arr = try extractF64List(allocator, b_val) orelse return EvalError.TypeMismatch;
         defer allocator.free(b_arr);
         if (r_val != .Int) return EvalError.TypeMismatch;
+        if (r_val.Int < 0) return EvalError.InvalidArgs; // SONNY-2769: see dtw
         const ts_result = ts_gql.executeDTWShape(allocator, a_arr, b_arr, @intCast(r_val.Int)) catch return EvalError.OutOfMemory;
         return try tsValueToCanonical(ts_result, allocator);
     } else if (std.ascii.eqlIgnoreCase(suffix, "dtw_soft")) {
