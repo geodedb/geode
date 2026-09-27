@@ -815,9 +815,10 @@
     scanned the label, which is about 6 s at 14.27M nodes. It scans the
     label only in lean mode, in a store without an adapter, and while the
     exact index is deferred or being rebuilt after a reopen; it does not
-    wait for that rebuild. A lookup that found the holders while a writer inserted one
-    could drop the new holder's entry (the next MERGE then created a second
-    node); it now leaves the entry for the next lookup.
+    wait for that rebuild (for the cost in lean mode, see Known
+    limitations). A lookup that found the holders while a writer inserted
+    one could drop the new holder's entry (the next MERGE then created a
+    second node); it now leaves the entry for the next lookup.
   - A string no longer shares MERGE's key with a boolean or an integer:
     the server's bulk MERGE of `true` matched a stored `'true'` (and v0.8.22's
     of `1` a stored `'1'`).
@@ -1121,6 +1122,17 @@
 
 ### Known limitations
 
+- **In lean mode, the server's MERGE of a number that is not an integer
+  scans the label (SONNY-3056):** with `GEODE_INDEX_MERGE_KEYS_ONLY=1`, the
+  exact node-property index holds no value of a key registered after its
+  nodes were written, so a bulk MERGE (`bulkMergeNode*`) of a key whose
+  value is a DECIMAL or DOUBLE that is not an integer (1.5) finds the key's
+  holder by scanning the label's nodes, on every call. Measured with
+  100,000 nodes of the label: about 115 ms per MERGE on average (349 ms at
+  most), against 0.2 ms for an integer key, which MERGE's index answers.
+  The cost grows with the label. A lookup that settles an entry whose
+  lowest holder was removed scans the label in lean mode too. The default
+  (lean mode off) reads the exact index instead.
 - **ROLLBACK undoes only what a transaction created.** The undo log
   records the nodes and edges a CREATE or a MERGE creates, and nothing
   else. A SET, a REMOVE, a DELETE, a label change, and a change MERGE makes
