@@ -413,6 +413,7 @@ pub const RLSEngine = struct {
         var it = self.policies.iterator();
         while (it.next()) |entry| {
             entry.value_ptr.deinit(self.allocator);
+            self.freePolicyKey(entry.key_ptr.*);
         }
         self.policies.deinit();
         self.policy_cache.deinit();
@@ -563,14 +564,20 @@ pub const RLSEngine = struct {
         self.lockPoliciesExclusive();
         defer self.unlockPoliciesExclusive();
 
+        // CANARY: REQ=REQ-SONNY-3036-RLS-POLICY-KEYS; FEATURE="RLSExpressionCompilation"; ASPECT=OwnedKeys; STATUS=TESTED; TEST=tests/test_sonny3036_rls_policy_keys.zig; OWNER=security; UPDATED=2026-09-27
+        // SONNY-3036: the map owns copies of its keys. A new entry's key
+        // borrowed `policy.graph` and `policy.table` (SONNY-2746), and kept
+        // pointing at them after the policy was deleted and its owner freed
+        // them (`UserManager.deletePolicy`), so the next lookup read freed
+        // memory. The copies are made before the entry exists.
+        const owned_key: ?PolicyKey = if (self.policies.contains(key)) null else try self.copyPolicyKey(key);
+        errdefer if (owned_key) |k| self.freePolicyKey(k);
         const result = try self.policies.getOrPut(key);
         if (!result.found_existing) {
+            result.key_ptr.* = owned_key.?;
             result.value_ptr.* = std.ArrayList(Policy).empty;
         }
-        // SONNY-2746: a new entry's key borrows `policy.graph` and
-        // `policy.table`, which stay the caller's until this returns and
-        // which the caller frees when it fails. Drop the entry again on
-        // failure, so the map keeps no pointer into them.
+        // SONNY-2746: drop a new entry again on failure.
         errdefer if (!result.found_existing) self.policies.removeByPtr(result.key_ptr);
         // Invalidate the cache before the append: once the policy is in the
         // list nothing may fail, or the errdefer would free the bytecode it
@@ -643,6 +650,9 @@ pub const RLSEngine = struct {
         return error.PolicyNotFound;
     }
 
+    /// SONNY-3036: a graph and table left with no policy loses its entry
+    /// (the list and the key copies are freed), so the map points at nothing
+    /// the deleted policy's owner frees next.
     pub fn deletePolicy(self: *Self, policy_id: u64) !void {
         self.lockPoliciesExclusive();
         defer self.unlockPoliciesExclusive();
@@ -650,13 +660,30 @@ pub const RLSEngine = struct {
         while (it.next()) |entry| {
             for (entry.value_ptr.items, 0..) |policy, i| {
                 if (policy.id == policy_id) {
-                    _ = entry.value_ptr.swapRemove(i);
                     try self.policy_cache.invalidate(entry.key_ptr.*);
+                    _ = entry.value_ptr.swapRemove(i);
+                    if (entry.value_ptr.items.len == 0) {
+                        const owned = entry.key_ptr.*;
+                        entry.value_ptr.deinit(self.allocator);
+                        self.policies.removeByPtr(entry.key_ptr);
+                        self.freePolicyKey(owned);
+                    }
                     return;
                 }
             }
         }
         return error.PolicyNotFound;
+    }
+
+    fn copyPolicyKey(self: *Self, key: PolicyKey) !PolicyKey {
+        const graph = try self.allocator.dupe(u8, key.graph);
+        errdefer self.allocator.free(graph);
+        return .{ .graph = graph, .table = try self.allocator.dupe(u8, key.table) };
+    }
+
+    fn freePolicyKey(self: *Self, key: PolicyKey) void {
+        self.allocator.free(key.graph);
+        self.allocator.free(key.table);
     }
 
     // Query Rewriting

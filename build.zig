@@ -11165,6 +11165,23 @@ pub fn build(b: *std.Build) void {
     const sonny2778_step = b.step("test-sonny2778-admin-password-file", "Run SONNY-2778 regression (the generated admin password file is created O_EXCL|O_NOFOLLOW 0600 under the data dir only, never over a planted file or link, by SecurityManager, the server and geode auth init; UserManager frees its policy strings)");
     sonny2778_step.dependOn(&run_sonny2778_tests.step);
 
+    // SONNY-3036: the RLS engine's policy map owns copies of its keys, and a
+    // graph and table left with no policy lose their entry, so deleting a
+    // policy (UserManager.deletePolicy frees its strings) leaves no key into
+    // freed memory. Leak-checked with the testing allocator.
+    const sonny3036_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny3036_rls_policy_keys.zig"), .target = target, .optimize = optimize });
+    sonny3036_test_mod.link_libc = true;
+    sonny3036_test_mod.addImport("geode", root_mod);
+    sonny3036_test_mod.addImport("geode_auth", auth_mod);
+    sonny3036_test_mod.addImport("rls", rls_mod);
+    sonny3036_test_mod.addImport("user_manager", user_manager_mod);
+    sonny3036_test_mod.addImport("user_storage", user_storage_mod);
+    const sonny3036_tests = b.addTest(.{ .root_module = sonny3036_test_mod });
+    const run_sonny3036_tests = b.addRunArtifact(sonny3036_tests);
+    shardDep(test_step, &run_sonny3036_tests.step, 1, test_shard_loads, test_shard_index);
+    const sonny3036_step = b.step("test-sonny3036-rls-policy-keys", "Run SONNY-3036 regression (deleting an RLS policy through UserManager leaves the engine's policy map no key into its freed strings; an emptied graph and table lose their entry; leak-checked)");
+    sonny3036_step.dependOn(&run_sonny3036_tests.step);
+
     const sonny2750_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny2750_policy_record_kind.zig"), .target = target, .optimize = optimize });
     sonny2750_test_mod.link_libc = true;
     sonny2750_test_mod.addImport("geode", root_mod);
