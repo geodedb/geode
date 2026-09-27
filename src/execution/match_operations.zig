@@ -6324,6 +6324,25 @@ fn executeMultiChainRelationshipMatch(allocator: std.mem.Allocator, q: ast.Query
             }
         }
 
+        // SONNY-2694: this executor applied the SET clauses only, so a REMOVE
+        // through a multi-hop or multi-pattern match was dropped.
+        for (q.remove_clauses) |remove_clause| {
+            switch (remove_clause) {
+                .Property => |prop| {
+                    if (binding.vars.get(prop.object)) |target_node| {
+                        property_mutation.removeNodeProperty(store, target_node, prop.property);
+                    } else if (binding.edge_vars.get(prop.object)) |target_edge| {
+                        property_mutation.removeEdgeProperty(store, target_edge, prop.property);
+                    }
+                },
+                .Labels => |label_removal| {
+                    if (binding.vars.get(label_removal.node)) |target_node| {
+                        for (label_removal.labels) |label| try store.removeNodeLabel(target_node.id, label);
+                    }
+                },
+            }
+        }
+
         // Evaluate items (WITH items if present, RETURN items otherwise)
         var row = try allocator.alloc(Value, eval_items.len);
         for (eval_items, 0..) |item, i| {
@@ -8386,6 +8405,7 @@ fn executeSingleHopEdgeTraversal(
     where_clause: ?ast.Expr,
     filter_clause: ?ast.Expr,
     set_clauses: []const ast.SetClause,
+    remove_clauses: []const ast.RemoveClause,
     has_with: bool,
     items: []const ast.ReturnItem,
 ) !void {
@@ -8616,6 +8636,38 @@ fn executeSingleHopEdgeTraversal(
                 }
             }
 
+            // SONNY-2694: REMOVE through a relationship pattern was dropped:
+            // this traversal applied the SET clauses only.
+            for (remove_clauses) |remove_clause| {
+                switch (remove_clause) {
+                    .Property => |prop| {
+                        if (rel_var != null and std.mem.eql(u8, prop.object, rel_var.?)) {
+                            const edge_ptr = store.getEdgePtrHydrated(edge.id) orelse continue;
+                            property_mutation.removeEdgeProperty(store, edge_ptr, prop.property);
+                        } else if (left_node_var != null and std.mem.eql(u8, prop.object, left_node_var.?)) {
+                            if (store.nodes.getOrHydratePtr(left_node.id) catch null) |node_ptr| {
+                                property_mutation.removeNodeProperty(store, node_ptr, prop.property);
+                            }
+                        } else if (right_node_var != null and std.mem.eql(u8, prop.object, right_node_var.?)) {
+                            if (store.nodes.getOrHydratePtr(right_node_ptr.id) catch null) |node_ptr| {
+                                property_mutation.removeNodeProperty(store, node_ptr, prop.property);
+                            }
+                        }
+                    },
+                    .Labels => |label_removal| {
+                        const target_id: ?u64 = if (left_node_var != null and std.mem.eql(u8, label_removal.node, left_node_var.?))
+                            left_node.id
+                        else if (right_node_var != null and std.mem.eql(u8, label_removal.node, right_node_var.?))
+                            right_node_ptr.id
+                        else
+                            null;
+                        if (target_id) |id| {
+                            for (label_removal.labels) |label| try store.removeNodeLabel(id, label);
+                        }
+                    },
+                }
+            }
+
             // CANARY: REQ=REQ-GQL-WITH-GROUPBY-004; FEATURE="WithGroupByAggregation"; ASPECT=RowBuilding; STATUS=TESTED; TEST=geodetestlab/specs/gql_query_comprehensive.yml; OWNER=execution; UPDATED=2025-12-22
             // When WITH clause is present, build rows containing matched node values
             // When no WITH clause, evaluate RETURN expressions directly
@@ -8656,7 +8708,20 @@ fn returnGroupsOrFilters(q: ast.Query) bool {
 /// not group without an aggregate, and replaced HAVING with "the group has at
 /// least two rows" or evaluated it over the output row alone.
 fn returnUsesSharedProjection(q: ast.Query) bool {
-    return returnGroupsOrFilters(q) and q.ret.items.len != 0 and sharedProjectionServes(q);
+    if (q.ret.items.len == 0 or !sharedProjectionServes(q)) return false;
+    return returnGroupsOrFilters(q) or writeBehindAggregate(q);
+}
+
+/// SONNY-2694: a SET or REMOVE behind an aggregating RETURN. The legacy
+/// executor's aggregate branches wrote in one shape only (a single node
+/// pattern, and there a SET without its REMOVE); the relationship and
+/// variable-length branches aggregated the rows and applied neither, so
+/// `MATCH (n)-[:R]->(x) REMOVE x.u RETURN count(*)` returned the count and
+/// wrote nothing. Reading the bindings applies the write to every matched row
+/// in whichever shape, and the shared projection aggregates over them.
+fn writeBehindAggregate(q: ast.Query) bool {
+    if (q.set_clauses.len == 0 and q.remove_clauses.len == 0) return false;
+    return returnItemsHaveAggregation(q.ret.items);
 }
 
 // CANARY: REQ=REQ-SONNY-2683-RETURN-SHAPES; FEATURE="LegacyReturnProjection"; ASPECT=ExcludedShapes; STATUS=TESTED; TEST=tests/test_sonny2683_return_shapes.zig; OWNER=engine; UPDATED=2026-09-25
@@ -10318,7 +10383,37 @@ pub fn executeMatchQueryImpl(allocator: std.mem.Allocator, q: ast.Query, param_n
                                 }
                             }
                         },
-                        .AllProperties => {},
+                        // SONNY-2694: `SET n = {..}` was ignored here.
+                        .AllProperties => |all_props| {
+                            if (std.mem.eql(u8, all_props.node, match_variable orelse "")) {
+                                const props_value = try eval.evalExpr(allocator, all_props.properties, env);
+                                if (store.nodes.getOrHydratePtr(node.id) catch null) |node_ptr| {
+                                    try property_mutation.replaceNodeProperties(allocator, store, node_ptr, props_value);
+                                }
+                            }
+                        },
+                    }
+                }
+
+                // SONNY-2694 (d): this branch applied a SET but had no REMOVE
+                // loop, so `MATCH (n:G) REMOVE n.t RETURN count(*)` removed
+                // nothing. The same REMOVE the non-aggregate branch applies.
+                for (q.remove_clauses) |remove_clause| {
+                    switch (remove_clause) {
+                        .Property => |prop| {
+                            if (std.mem.eql(u8, prop.object, match_variable orelse "")) {
+                                if (store.nodes.getOrHydratePtr(node.id) catch null) |node_ptr| {
+                                    property_mutation.removeNodeProperty(store, node_ptr, prop.property);
+                                }
+                            }
+                        },
+                        .Labels => |label_removal| {
+                            if (std.mem.eql(u8, label_removal.node, match_variable orelse "")) {
+                                for (label_removal.labels) |label| {
+                                    try store.removeNodeLabel(node.id, label);
+                                }
+                            }
+                        },
                     }
                 }
 
@@ -10640,7 +10735,7 @@ pub fn executeMatchQueryImpl(allocator: std.mem.Allocator, q: ast.Query, param_n
                     try executeVariableLengthPathTraversal(allocator, store, &hop_scope, left_node, &rows, var_len_min, var_len_max, rel_type, rel_direction, right_labels, right_props, left_node_var, right_node_var, rel_var, chain_path_var, param_names, param_values, traversal_where, q.filter_clause, has_with, items, limit_hint, effectivePathMode(q));
                 } else {
                     // Standard single-hop edge traversal — delegated to helper
-                    try executeSingleHopEdgeTraversal(allocator, store, &hop_scope, left_node, &rows, rel_direction, rel_type, rel_props_filter, right_labels, right_props, left_node_var, rel_var, right_node_var, chain_path_var, param_names, param_values, traversal_where, q.filter_clause, q.set_clauses, has_with, items);
+                    try executeSingleHopEdgeTraversal(allocator, store, &hop_scope, left_node, &rows, rel_direction, rel_type, rel_props_filter, right_labels, right_props, left_node_var, rel_var, right_node_var, chain_path_var, param_names, param_values, traversal_where, q.filter_clause, q.set_clauses, q.remove_clauses, has_with, items);
                 }
             }
         } else {

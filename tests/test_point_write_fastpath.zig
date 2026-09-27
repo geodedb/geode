@@ -321,6 +321,12 @@ test "routing table: covered shapes engine-direct; uncovered shapes legacy" {
         .{ .name = "covered: indexed string eq + literal SET", .query = "MATCH (n:PwRoute) WHERE n.source_id = 'pw-5' SET n.a = '1'", .engine_direct = true },
         .{ .name = "covered: indexed string eq + REMOVE", .query = "MATCH (n:PwRoute) WHERE n.source_id = 'pw-5' REMOVE n.tmp_flag", .engine_direct = true },
         .{ .name = "covered: multi literal SET + RETURN", .query = "MATCH (n:PwRoute) WHERE n.source_id = 'pw-6' SET n.a = '1', n.b = '2' RETURN n.a, n.b", .engine_direct = true },
+        // SONNY-2694: a SET behind an aggregating RETURN reads its bindings
+        // (the point write serves them: one row, written) and the shared
+        // projection aggregates over them. It used to be the legacy
+        // executor's aggregate branch, which dropped a REMOVE and every
+        // write through a relationship.
+        .{ .name = "covered: aggregated RETURN (the shared projection over the point write's row)", .query = "MATCH (n:PwRoute) WHERE n.source_id = 'pw-4' SET n.m = '6' RETURN count(n)", .engine_direct = true },
         // -------- uncovered: fall through to the legacy executor --------
         .{ .name = "uncovered: multi-node pattern", .query = "MATCH (a:PwRoute), (b:PwRoute) WHERE a.source_id = 'pw-1' SET a.m = '1'", .engine_direct = false },
         .{ .name = "uncovered: hop pattern", .query = "MATCH (a:PwRoute)-[r:PWREL]->(b:PwRoute) WHERE a.source_id = 'pw-0' SET a.m = '2'", .engine_direct = false },
@@ -331,7 +337,6 @@ test "routing table: covered shapes engine-direct; uncovered shapes legacy" {
         .{ .name = "uncovered: SET label", .query = "MATCH (n:PwRoute) WHERE n.source_id = 'pw-2' SET n:PwExtra", .engine_direct = false },
         .{ .name = "uncovered: SET all-properties", .query = "MATCH (n:PwRoute) WHERE n.source_id = 'pw-3' SET n = {m: '9'}", .engine_direct = false },
         .{ .name = "uncovered: REMOVE label", .query = "MATCH (n:PwRoute) WHERE n.source_id = 'pw-3' REMOVE n:PwRoute", .engine_direct = false },
-        .{ .name = "uncovered: aggregated RETURN", .query = "MATCH (n:PwRoute) WHERE n.source_id = 'pw-4' SET n.m = '6' RETURN count(n)", .engine_direct = false },
         .{ .name = "uncovered: AND conjunction", .query = "MATCH (n:PwRoute) WHERE n.source_id = 'pw-4' AND n.seq = 4 SET n.m = '7'", .engine_direct = false },
         .{ .name = "uncovered: unlabeled pattern", .query = "MATCH (n) WHERE n.source_id = 'pw-8' SET n.m = '8'", .engine_direct = false },
     };

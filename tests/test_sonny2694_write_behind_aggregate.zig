@@ -284,6 +284,58 @@ fn runCases(title: []const u8, cases: []const Case) !void {
 }
 
 // ---------------------------------------------------------------------------
+// SET
+
+const x10 = [_]Check{.{ .query = "MATCH (n:G) WHERE n.x = 1 RETURN count(*) AS c", .want = &.{"10"} }};
+
+const set_cases = [_]Case{
+    .{ .write = "MATCH (n:G) SET n.x = 1 RETURN count(*) AS c", .want = &.{"10"}, .checks = &x10 },
+    .{ .write = "MATCH (n:G) SET n.x = 1 RETURN sum(n.i) AS s", .want = &.{"45"}, .checks = &x10 },
+    .{ .write = "MATCH (n:G) SET n.x = 1 RETURN min(n.i) AS lo", .want = &.{"0"}, .checks = &x10 },
+    .{ .write = "MATCH (n:G) SET n.x = 1 RETURN max(n.i) AS hi", .want = &.{"9"}, .checks = &x10 },
+    .{ .write = "MATCH (n:G) SET n.x = 1 RETURN DISTINCT n.g", .want = &.{ "a", "b" }, .checks = &x10 },
+    .{ .write = "MATCH (n:G) WHERE n.i >= 7 SET n.x = 1 RETURN count(*) AS c", .want = &.{"3"}, .checks = &.{
+        .{ .query = "MATCH (n:G) WHERE n.x = 1 RETURN n.i", .want = &.{ "7", "8", "9" } },
+    } },
+    .{ .write = "MATCH (n:G)-[:R]->(x:X) SET x.x = 1 RETURN count(*) AS c", .want = &.{"10"}, .checks = &.{
+        .{ .query = "MATCH (x:X) WHERE x.x = 1 RETURN count(*) AS c", .want = &.{"10"} },
+    } },
+    .{ .write = "MATCH (n:G)-[:R]->(x:X) SET x.x = 1 RETURN DISTINCT n.g", .want = &.{ "a", "b" }, .checks = &.{
+        .{ .query = "MATCH (x:X) WHERE x.x = 1 RETURN count(*) AS c", .want = &.{"10"} },
+    } },
+};
+
+test "SONNY-2694: MATCH ... SET behind an aggregating or DISTINCT RETURN writes every matched row" {
+    try runCases("SET", &set_cases);
+}
+
+// ---------------------------------------------------------------------------
+// REMOVE
+
+const t0 = [_]Check{.{ .query = "MATCH (n:G) WHERE n.t IS NOT NULL RETURN count(*) AS c", .want = &.{"0"} }};
+
+const remove_cases = [_]Case{
+    .{ .write = "MATCH (n:G) REMOVE n.t RETURN count(*) AS c", .want = &.{"10"}, .checks = &t0 },
+    .{ .write = "MATCH (n:G) REMOVE n.t RETURN sum(n.i) AS s", .want = &.{"45"}, .checks = &t0 },
+    .{ .write = "MATCH (n:G) REMOVE n.t RETURN min(n.i) AS lo", .want = &.{"0"}, .checks = &t0 },
+    .{ .write = "MATCH (n:G) REMOVE n.t RETURN max(n.i) AS hi", .want = &.{"9"}, .checks = &t0 },
+    .{ .write = "MATCH (n:G) REMOVE n.t RETURN DISTINCT n.g", .want = &.{ "a", "b" }, .checks = &t0 },
+    .{ .write = "MATCH (n:G) WHERE n.i >= 7 REMOVE n.t RETURN count(*) AS c", .want = &.{"3"}, .checks = &.{
+        .{ .query = "MATCH (n:G) WHERE n.t IS NULL RETURN n.i", .want = &.{ "7", "8", "9" } },
+    } },
+    .{ .write = "MATCH (n:G)-[:R]->(x:X) REMOVE x.u RETURN count(*) AS c", .want = &.{"10"}, .checks = &.{
+        .{ .query = "MATCH (x:X) WHERE x.u IS NOT NULL RETURN count(*) AS c", .want = &.{"0"} },
+    } },
+    .{ .write = "MATCH (n:G)-[:R]->(x:X) REMOVE x.u RETURN DISTINCT n.g", .want = &.{ "a", "b" }, .checks = &.{
+        .{ .query = "MATCH (x:X) WHERE x.u IS NOT NULL RETURN count(*) AS c", .want = &.{"0"} },
+    } },
+};
+
+test "SONNY-2694: MATCH ... REMOVE behind an aggregating or DISTINCT RETURN removes from every matched row" {
+    try runCases("REMOVE", &remove_cases);
+}
+
+// ---------------------------------------------------------------------------
 // The guard itself: one structural check, every read fast path.
 
 fn readFile(allocator: std.mem.Allocator, path: []const u8) ![]u8 {
