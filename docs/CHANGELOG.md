@@ -826,6 +826,11 @@
     an RLS policy or tenant-scoped) returned one node when two held the
     value (1 and 1.0, or two nodes CREATE wrote with 1): it read the node
     from MERGE's index. It uses the index only for a key's only holder now.
+    A SET after such a MATCH changed that one node, with no error, on every
+    session: `MATCH (p:P {tenant_id: $t}) SET p.state = 'new'` changed one
+    of three nodes, with a literal, a WHERE, or a per-row or aggregate
+    RETURN too (SONNY-2977). A map of two properties, and
+    `WHERE p.tenant_id = $t`, changed all three.
   - The server's multi-property MERGE compares a stored value as the
     executor does: `MERGE (:T {a: 1, d: date('2020-01-01')})` created a node
     on every run (a stored date, duration or DOUBLE never matched), and
