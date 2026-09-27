@@ -8783,6 +8783,23 @@ pub fn build(b: *std.Build) void {
     const sonny2823_step = b.step("test-sonny2823-session-engine-txn", "Run SONNY-2823 regression (no engine transaction outlives the request that opened it or stays on a worker thread: gRPC sessions interleaved on one worker; COMMIT, ROLLBACK, a failed statement and teardown; a committed transaction, and other sessions' writes around it, survive a crash; QUIC with one worker, killed and restarted)");
     sonny2823_step.dependOn(&run_sonny2823_tests.step);
 
+    // SONNY-2824: a QUIC or gRPC HELLO binds the graph it names through the
+    // session-graph gate (internal, permission, existence) and creates a
+    // missing graph only for a principal with the schema permission on it.
+    // Against a spawned server (QUIC and plaintext gRPC listeners).
+    const sonny2824_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny2824_hello_graph_gate.zig"), .target = target, .optimize = optimize });
+    sonny2824_test_mod.link_libc = true;
+    sonny2824_test_mod.addImport("geode", root_mod);
+    sonny2824_test_mod.addImport("schema", schema_mod);
+    sonny2824_test_mod.addImport("protobuf", protobuf_mod);
+    sonny2824_test_mod.addImport("transport/quic", transport_quic_mod);
+    const sonny2824_tests = b.addTest(.{ .root_module = sonny2824_test_mod });
+    const run_sonny2824_tests = b.addRunArtifact(sonny2824_tests);
+    run_sonny2824_tests.step.dependOn(&install_geode_exe.step);
+    shardDep(test_step, &run_sonny2824_tests.step, 1, test_shard_loads, test_shard_index);
+    const sonny2824_step = b.step("test-sonny2824-hello-graph-gate", "Run SONNY-2824 regression (spawns a server: a QUIC or gRPC HELLO naming a missing graph creates it only for a principal with the schema permission on it; a ReadWrite user is refused and nothing is created; a GPS FOR SCHEMA policy grants it)");
+    sonny2824_step.dependOn(&run_sonny2824_tests.step);
+
     // SONNY-2790: the fulltext statements (CREATE/DROP INDEX, geode.fts.*)
     // run on the default graph, so the handlers lock `default` for them from
     // any session. Classifier, and the real gRPC handler (SONNY-1560 shim).

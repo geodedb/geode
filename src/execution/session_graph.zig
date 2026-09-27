@@ -92,6 +92,37 @@ pub fn maySchema(principal: ?*const principal_mod.Principal, graph: []const u8) 
     return mayBind(p, graph);
 }
 
+/// SONNY-2824: what a HELLO does with the graph a connection names.
+pub const HelloGraph = enum {
+    /// Refused: an internal graph, or one the principal may not bind. The
+    /// same answer whether or not the graph exists.
+    refused,
+    /// It exists: bind it.
+    bind,
+    /// It does not exist, and the principal may change its schema: create
+    /// it, then bind it.
+    create,
+    /// It does not exist, and the principal may not create it.
+    missing,
+};
+
+// CANARY: REQ=REQ-SONNY-2824-HELLO-GRAPH-GATE; FEATURE="GraphRBACEnforcement"; ASPECT=HelloGate; STATUS=TESTED; TEST=tests/test_sonny2824_hello_graph_gate.zig; OWNER=security; UPDATED=2026-09-27
+/// SONNY-2824: the gate for the graph a QUIC or gRPC HELLO names, in the
+/// order every session graph change takes: internal, then permission
+/// (`mayBind`), then existence. A graph that does not exist is created only
+/// for a principal that may change its schema (`maySchema`, what CREATE GRAPH
+/// needs). Both HELLOs created it for any Admin or ReadWrite role, so a
+/// ReadWrite user, which has no schema permission, created any graph it named
+/// at connect time. No principal (authentication off): every graph is bound
+/// or created, as before.
+pub fn helloGraph(principal: ?*const principal_mod.Principal, catalog: *catalog_mod.Catalog, graph: []const u8) HelloGraph {
+    refuseInternal(graph) catch return .refused;
+    if (!mayBind(principal, graph)) return .refused;
+    if (exists(catalog, graph)) return .bind;
+    if (!maySchema(principal, graph)) return .missing;
+    return .create;
+}
+
 /// SONNY-2803: refuse DDL on `graph` (`Unauthorized`, 42501) unless
 /// `maySchema`. The DDL arms call it before they look at whether the graph,
 /// index or constraint exists, so a caller refused learns nothing about what

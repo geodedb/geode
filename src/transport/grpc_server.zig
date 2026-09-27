@@ -2044,23 +2044,21 @@ fn handleHandshake(request_bytes: []const u8, trans: *GrpcTransport, allocator: 
                 const gstore = graph_store.getGlobalStore(allocator);
                 const cat = try execution.ensureCatalogInstance(allocator);
 
-                const in_store = gstore.graphExists(requested_graph);
-                const in_catalog = cat.hasGraph(requested_graph);
-
-                if (in_store or in_catalog) {
-                    // GAP-0283: Graph-scoped RBAC authorization check before binding (parity with QUIC handler).
-                    // CANARY: REQ=REQ-MULTI-GRAPH-RBAC-WIRE-003; FEATURE="GraphRBACEnforcement"; ASPECT=GrpcGraphAuth; STATUS=TESTED; TEST=tests/test_gps_decide.zig; OWNER=security; UPDATED=2026-05-20
-                    // Phase 2 transition: principal_for_request is not available in handleHandshake
-                    // (it lives in the per-query execute loop). Construct a transitional principal
-                    // from auth_result so this site routes through gps.decide() for PDP uniformity.
-                    // Phase 3 will rewire enforcement so principal threading is uniform across handlers.
-                    // CANARY: REQ=REQ-GPS-PDP-005; FEATURE="GPS Decision Engine"; ASPECT=GrpcHandshakeEnforcement; STATUS=TESTED; TEST=tests/test_gps_decide.zig; OWNER=security; UPDATED=2026-05-20
-                    // Compatibility invariant (#861, kept in mayBind): any authenticated
-                    // user may always bind the default graph by name — parity with the
-                    // QUIC HELLO handler. This block is nested under
-                    // `if (user_mgmt.isAuthEnabled())` above, so there is a principal.
-                    const rbac_allowed = execution.session_graph.mayBind(&hello_principal, requested_graph);
-                    if (!rbac_allowed) {
+                // CANARY: REQ=REQ-SONNY-2824-HELLO-GRAPH-GATE; FEATURE="GraphRBACEnforcement"; ASPECT=GrpcHello; STATUS=TESTED; TEST=tests/test_sonny2824_hello_graph_gate.zig; OWNER=security; UPDATED=2026-09-27
+                // SONNY-2824: the session-graph gate decides, as on QUIC:
+                // permission (bind_graph), then existence, and a graph that
+                // does not exist is created only for a principal that may
+                // change its schema, as CREATE GRAPH needs (SONNY-2803). HELLO
+                // created it for any Admin or ReadWrite role.
+                switch (execution.session_graph.helloGraph(&hello_principal, cat, requested_graph)) {
+                    .refused => {
+                        // GAP-0283: Graph-scoped RBAC authorization check before binding (parity with QUIC handler).
+                        // CANARY: REQ=REQ-MULTI-GRAPH-RBAC-WIRE-003; FEATURE="GraphRBACEnforcement"; ASPECT=GrpcGraphAuth; STATUS=TESTED; TEST=tests/test_gps_decide.zig; OWNER=security; UPDATED=2026-05-20
+                        // CANARY: REQ=REQ-GPS-PDP-005; FEATURE="GPS Decision Engine"; ASPECT=GrpcHandshakeEnforcement; STATUS=TESTED; TEST=tests/test_gps_decide.zig; OWNER=security; UPDATED=2026-05-20
+                        // Compatibility invariant (#861, kept in mayBind): any authenticated
+                        // user may always bind the default graph by name — parity with the
+                        // QUIC HELLO handler. This block is nested under
+                        // `if (user_mgmt.isAuthEnabled())` above, so there is a principal.
                         const resp = schema.HelloResponse{
                             .success = false,
                             .session_id = "",
@@ -2068,13 +2066,18 @@ fn handleHandshake(request_bytes: []const u8, trans: *GrpcTransport, allocator: 
                             .capabilities = caps,
                         };
                         return encodeMessage(allocator, resp);
-                    }
-                    resolved_graph = requested_graph;
-                } else {
-                    // Graph does not exist — check if user can create it
-                    const can_create = auth_result.role == .Admin or auth_result.role == .ReadWrite;
-
-                    if (can_create) {
+                    },
+                    .missing => {
+                        const resp = schema.HelloResponse{
+                            .success = false,
+                            .session_id = "",
+                            .error_message = "Graph does not exist and user lacks permission to create it",
+                            .capabilities = caps,
+                        };
+                        return encodeMessage(allocator, resp);
+                    },
+                    .bind => resolved_graph = requested_graph,
+                    .create => {
                         var auto_create_succeeded = false;
                         if (gstore.createGraph(requested_graph)) {
                             auto_create_succeeded = true;
@@ -2083,23 +2086,14 @@ fn handleHandshake(request_bytes: []const u8, trans: *GrpcTransport, allocator: 
                             // (2026-05-24): mirror the QUIC handler — if
                             // the post-condition (graph exists) is
                             // satisfied despite createGraph errors, bind
-                            // instead of bouncing the client.
+                            // instead of bouncing the client. The gate's
+                            // bind check (before existence) already allowed
+                            // this graph.
                             if (gstore.graphExists(requested_graph) or cat.hasGraph(requested_graph)) {
                                 log.warn("createGraph errored but graph is present; binding instead", &.{
                                     Attr.string("graph", requested_graph),
                                     Attr.string("error", @errorName(err)),
                                 });
-                                // SONNY-2775: someone else created it; the bind check
-                                // applies, as on QUIC (it was missing here).
-                                if (!execution.session_graph.mayBind(&hello_principal, requested_graph)) {
-                                    const resp = schema.HelloResponse{
-                                        .success = false,
-                                        .session_id = "",
-                                        .error_message = "Access denied: insufficient permissions for graph",
-                                        .capabilities = caps,
-                                    };
-                                    return encodeMessage(allocator, resp);
-                                }
                                 resolved_graph = requested_graph;
                             } else {
                                 log.err("Graph auto-creation failed", &.{
@@ -2145,15 +2139,7 @@ fn handleHandshake(request_bytes: []const u8, trans: *GrpcTransport, allocator: 
                             };
                             resolved_graph = requested_graph;
                         }
-                    } else {
-                        const resp = schema.HelloResponse{
-                            .success = false,
-                            .session_id = "",
-                            .error_message = "Graph does not exist and user lacks permission to create it",
-                            .capabilities = caps,
-                        };
-                        return encodeMessage(allocator, resp);
-                    }
+                    },
                 }
             }
         }

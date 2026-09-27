@@ -7062,21 +7062,22 @@ fn handleClientMessage(
                     const store = graph_store.getGlobalStore(gpa);
                     const cat = try execution.ensureCatalogInstance(gpa);
 
-                    const in_store = store.graphExists(requested_graph);
-                    const in_catalog = cat.hasGraph(requested_graph);
-
-                    if (in_store or in_catalog) {
-                        // CANARY: REQ=REQ-MULTI-GRAPH-RBAC-WIRE-002; FEATURE="GraphRBACEnforcement"; ASPECT=QuicGraphAuth; STATUS=TESTED; TEST=tests/test_new1_cross_graph_bola.zig; OWNER=security; UPDATED=2026-06-27
-                        // NEW-1 (#861) + NEW-11 (#869): route QUIC HELLO graph-bind through
-                        // gps.decide(.bind_graph) — the same fail-closed gate used by mid-session
-                        // USE GRAPH and (post-Task-4) the gRPC HELLO handler. Deletes the
-                        // Wyhash(username) uid derivation (closing NEW-11; GPS resolves uid via
-                        // agm.findUserIdByName inside graphGrantCheck). Fail-closed on GPS error.
-                        // Compatibility invariant (kept in mayBind): any authenticated user
-                        // may always bind the default graph by name.
-                        const rbac_allowed = execution.session_graph.mayBind(bind_principal, requested_graph);
-
-                        if (!rbac_allowed) {
+                    // CANARY: REQ=REQ-SONNY-2824-HELLO-GRAPH-GATE; FEATURE="GraphRBACEnforcement"; ASPECT=QuicHello; STATUS=TESTED; TEST=tests/test_sonny2824_hello_graph_gate.zig; OWNER=security; UPDATED=2026-09-27
+                    // SONNY-2824: the session-graph gate decides: permission
+                    // (bind_graph), then existence, and a graph that does not
+                    // exist is created only for a principal that may change its
+                    // schema, as CREATE GRAPH needs (SONNY-2803). HELLO created
+                    // it for any Admin or ReadWrite role.
+                    switch (execution.session_graph.helloGraph(bind_principal, cat, requested_graph)) {
+                        .refused => {
+                            // CANARY: REQ=REQ-MULTI-GRAPH-RBAC-WIRE-002; FEATURE="GraphRBACEnforcement"; ASPECT=QuicGraphAuth; STATUS=TESTED; TEST=tests/test_new1_cross_graph_bola.zig; OWNER=security; UPDATED=2026-06-27
+                            // NEW-1 (#861) + NEW-11 (#869): route QUIC HELLO graph-bind through
+                            // gps.decide(.bind_graph) — the same fail-closed gate used by mid-session
+                            // USE GRAPH and (post-Task-4) the gRPC HELLO handler. Deletes the
+                            // Wyhash(username) uid derivation (closing NEW-11; GPS resolves uid via
+                            // agm.findUserIdByName inside graphGrantCheck). Fail-closed on GPS error.
+                            // Compatibility invariant (kept in mayBind): any authenticated user
+                            // may always bind the default graph by name.
                             const resp = schema.QuicServerMessage{ .hello = .{
                                 .success = false,
                                 .session_id = try gpa.dupe(u8, ""),
@@ -7085,21 +7086,25 @@ fn handleClientMessage(
                             } };
                             try sendQuicMessage(gpa, stream, resp);
                             return;
-                        }
-
-                        // Graph exists — bind session to it
-                        if (state.exec_session) |*sess| try execution.session_graph.set(sess, requested_graph);
-                        state.graph_bound = true;
-                        resolved_graph = requested_graph;
-                    } else {
-                        // Graph does not exist — check if user can create it
-                        const role_val = state.authenticated_role;
-                        const can_create = if (role_val) |r| blk: {
-                            const role = @as(user_mgmt.Role, @enumFromInt(r));
-                            break :blk role == .Admin or role == .ReadWrite;
-                        } else !user_mgmt.isAuthEnabled(); // No auth = allow
-
-                        if (can_create) auto_create_done: {
+                        },
+                        .missing => {
+                            // User lacks permission to create graph
+                            const resp = schema.QuicServerMessage{ .hello = .{
+                                .success = false,
+                                .session_id = try gpa.dupe(u8, ""),
+                                .error_message = try gpa.dupe(u8, "Graph does not exist and user lacks permission to create it"),
+                                .capabilities = caps,
+                            } };
+                            try sendQuicMessage(gpa, stream, resp);
+                            return;
+                        },
+                        .bind => {
+                            // Graph exists — bind session to it
+                            if (state.exec_session) |*sess| try execution.session_graph.set(sess, requested_graph);
+                            state.graph_bound = true;
+                            resolved_graph = requested_graph;
+                        },
+                        .create => auto_create_done: {
                             _ = store.createGraph(requested_graph) catch |err| {
                                 // dsn_graph_binding.yml defense-in-depth
                                 // (2026-05-24): createGraph errored but the
@@ -7107,33 +7112,21 @@ fn handleClientMessage(
                                 // be satisfied — e.g. a CREATE GRAPH DDL on
                                 // the SAME server registered the graph in
                                 // the catalog between this connection's
-                                // earlier pre-check (line 2911-2912) and
-                                // this auto-create, leaving createGraph to
-                                // race with the adapter's hash put.  When
-                                // the graph is now visible to either store
-                                // or catalog, the user's goal is achieved;
-                                // bind to it instead of bouncing the
-                                // client with "Failed to create graph".
+                                // existence check and this auto-create,
+                                // leaving createGraph to race with the
+                                // adapter's hash put.  When the graph is now
+                                // visible to either store or catalog, the
+                                // user's goal is achieved; bind to it instead
+                                // of bouncing the client with "Failed to
+                                // create graph".
                                 if (store.graphExists(requested_graph) or cat.hasGraph(requested_graph)) {
                                     log.warn("createGraph errored but graph is present; binding instead", &.{
                                         Attr.string("graph", requested_graph),
                                         Attr.string("error", @errorName(err)),
                                     });
-                                    // NEW-1 (#861) race-recovery guard: createGraph errored but graph already
-                                    // exists (concurrent create). Before binding, apply the SAME GPS gate as
-                                    // the existing-graph path to prevent a ReadWrite user from binding a graph
-                                    // they don't hold a per-graph grant for.
-                                    const race_rbac_allowed = execution.session_graph.mayBind(bind_principal, requested_graph);
-                                    if (!race_rbac_allowed) {
-                                        const resp = schema.QuicServerMessage{ .hello = .{
-                                            .success = false,
-                                            .session_id = try gpa.dupe(u8, ""),
-                                            .error_message = try gpa.dupe(u8, "Access denied: insufficient permissions for graph"),
-                                            .capabilities = caps,
-                                        } };
-                                        try sendQuicMessage(gpa, stream, resp);
-                                        return;
-                                    }
+                                    // NEW-1 (#861) race-recovery guard: the
+                                    // gate's bind check (SONNY-2824: before
+                                    // existence) already allowed this graph.
                                     if (state.exec_session) |*sess| try execution.session_graph.set(sess, requested_graph);
                                     state.graph_bound = true;
                                     resolved_graph = requested_graph;
@@ -7166,13 +7159,12 @@ fn handleClientMessage(
                                 // dsn_graph_binding.yml race fix (2026-05-23):
                                 // another connection won the race to register
                                 // this graph in the catalog between our
-                                // `cat.hasGraph` pre-check (line 2912) and
-                                // this add.  The graph IS present — proceed
-                                // to bind.  Pre-fix we'd drop the graph the
-                                // race winner just created, then surface
-                                // "Failed to persist graph metadata" to the
-                                // client and leave the catalog inconsistent
-                                // with the store.
+                                // existence check and this add.  The graph IS
+                                // present — proceed to bind.  Pre-fix we'd
+                                // drop the graph the race winner just
+                                // created, then surface "Failed to persist
+                                // graph metadata" to the client and leave the
+                                // catalog inconsistent with the store.
                                 error.GraphAlreadyExists => {},
                                 else => {
                                     store.dropGraph(requested_graph) catch {};
@@ -7192,21 +7184,11 @@ fn handleClientMessage(
                             };
 
                             // SONNY-2775: the session binds the graph it just created
-                            // (a role that may create graphs); no bind check.
+                            // (the gate allowed binding it).
                             if (state.exec_session) |*sess| try execution.session_graph.set(sess, requested_graph);
                             state.graph_bound = true;
                             resolved_graph = requested_graph;
-                        } else {
-                            // User lacks permission to create graph
-                            const resp = schema.QuicServerMessage{ .hello = .{
-                                .success = false,
-                                .session_id = try gpa.dupe(u8, ""),
-                                .error_message = try gpa.dupe(u8, "Graph does not exist and user lacks permission to create it"),
-                                .capabilities = caps,
-                            } };
-                            try sendQuicMessage(gpa, stream, resp);
-                            return;
-                        }
+                        },
                     }
                 }
             }
