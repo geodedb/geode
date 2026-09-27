@@ -3459,6 +3459,23 @@ const MergedNodeBinding = struct {
     created: bool,
 };
 
+// CANARY: REQ=REQ-TXN-UNDO-MERGE-CREATES; FEATURE="TransactionUndoLog"; ASPECT=MergeCreateUndoLog; STATUS=TESTED; TEST=tests/test_property_write_atomicity.zig; OWNER=engine; UPDATED=2026-09-27
+/// A node or edge that MERGE creates goes into the transaction's undo log, as
+/// CREATE's do (REQ-TXN-UNDO-009), so ROLLBACK removes it, and with it the
+/// properties the MERGE set on it. MERGE logged nothing: `START TRANSACTION;
+/// MERGE (:M {k: 1}); ROLLBACK` kept the node, and so did a MERGE'd edge.
+/// Logged at once, before a property write that can fail. The log records
+/// only for a thread in a transaction (SONNY-2799). A change it cannot record
+/// fails the statement, rather than leave a change ROLLBACK would not undo.
+fn logMergeCreatedNode(allocator: std.mem.Allocator, node_id: u64, target_graph: []const u8) !void {
+    try txn_undo_log.getGlobalUndoLog(allocator).logCreateNode(node_id, target_graph);
+}
+
+/// `logMergeCreatedNode` for an edge.
+fn logMergeCreatedEdge(allocator: std.mem.Allocator, edge_id: u64, target_graph: []const u8) !void {
+    try txn_undo_log.getGlobalUndoLog(allocator).logCreateEdge(edge_id, target_graph);
+}
+
 /// Merge ONE single-node chain (`MERGE (a:Label {props})`): match-or-create the
 /// node, then apply the statement's ON MATCH / ON CREATE SET clauses that target
 /// this chain's variable.
@@ -3558,6 +3575,7 @@ fn mergeNodeChain(
         // Node doesn't exist - create it in target graph and apply ON CREATE clauses
         created = true;
         node_id = try store.createNodeWithGraph(node_pattern.labels, target_graph);
+        try logMergeCreatedNode(allocator, node_id, target_graph);
 
         // Auto-create indexes for node labels
         ensureAutoIndexes(allocator, node_pattern.labels);
@@ -3778,6 +3796,7 @@ fn resolveMergeEndpoint(
 
     // No match — create the endpoint (MERGE creates what it cannot match).
     const node_id = try store.createNodeWithGraph(node_pattern.labels, target_graph);
+    try logMergeCreatedNode(allocator, node_id, target_graph);
     ensureAutoIndexes(allocator, node_pattern.labels);
     if (node_pattern.props) |props| {
         const env = envFromContext(allocator, context);
@@ -3835,6 +3854,7 @@ fn mergeRelationshipHop(
         eid
     else
         try store.createEdgeWithGraph(source_id, target_id, edge_type, target_graph);
+    if (created_new) try logMergeCreatedEdge(allocator, edge_id, target_graph);
 
     // REQ=REQ-MERGE-RELPROPS-001 ASPECT=InlineRelProps (Bug B1):
     // Inline `[:REL {key: val}]` literals are applied only on the

@@ -629,6 +629,13 @@
 
 ### Fixed
 
+- **ROLLBACK removes what MERGE created:** a node or edge that MERGE
+  created inside a transaction was not recorded in the undo log, so
+  ROLLBACK kept it: `START TRANSACTION; MERGE (:M {k: 1}); ROLLBACK` left
+  the node, and a MERGE'd relationship left its edge and any endpoints it
+  created. They are now recorded as CREATE's are, and ROLLBACK removes them
+  with the properties the MERGE set on them. A change MERGE makes to a node
+  or edge it matched is not undone yet.
 - **Grouped queries report their errors (SONNY-2675):**
   - **Behaviour change:** a HAVING name that is no column, binding or
     parameter is refused with 42703; it was NULL.
