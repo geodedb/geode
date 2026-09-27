@@ -1818,6 +1818,10 @@ pub const Parser = struct {
                     .group_by = null,
                     .having = null,
                     .merge_statement = merge_ptr,
+                    // SONNY-3139: `with_clause` is null here; the MERGE sees
+                    // the WITH's items only through these.
+                    .initial_with = initial_with_clause,
+                    .initial_where = initial_where_expr,
                 };
             }
         }
@@ -1944,6 +1948,9 @@ pub const Parser = struct {
         // Initialize where_expr from initial_where_expr (from initial WITH clause if present)
         var where_expr: ?ast.Expr = initial_where_expr;
         var with_clause: ?ast.WithClause = null;
+        // SONNY-3140: the WHEREs either side of a WITH after the MATCH.
+        var pre_with_where: ?ast.Expr = null;
+        var with_where: ?ast.Expr = null;
         var group_by: ?ast.GroupBy = null;
         var having_expr: ?ast.Expr = null;
         var path_variable: ?[]const u8 = null;
@@ -2263,10 +2270,14 @@ pub const Parser = struct {
                 .limit_param = with_limit_param,
                 .offset_param = with_offset_param,
             };
+            // SONNY-3140: the WHERE before the WITH filters the pattern's rows,
+            // the one after it the WITH's rows; `where_clause` joins them.
+            pre_with_where = where_expr;
             // Allow an additional WHERE after WITH to filter the projected bindings
             if (self.cur.kind == .WHERE) {
                 self.advance();
                 const cond2 = try self.parseOrExpr();
+                with_where = cond2;
                 if (where_expr) |cond1| {
                     where_expr = try self.makeBinary(.And, cond1, cond2);
                 } else {
@@ -2371,6 +2382,16 @@ pub const Parser = struct {
         if (self.cur.kind == .SET) {
             self.advance();
             set_clauses = try self.parseSetClauses();
+            // SONNY-3146: consecutive SET clauses are one list, in order
+            // (`SET n.x = 1 SET n.y = 2` was a syntax error).
+            while (self.cur.kind == .SET) {
+                self.advance();
+                const more = try self.parseSetClauses();
+                var all = std.ArrayList(ast.SetClause).empty;
+                try all.appendSlice(self.arena.allocator(), set_clauses);
+                try all.appendSlice(self.arena.allocator(), more);
+                set_clauses = try all.toOwnedSlice(self.arena.allocator());
+            }
         }
 
         // Parse REMOVE clauses if present (before RETURN)
@@ -2378,20 +2399,46 @@ pub const Parser = struct {
         if (self.cur.kind == .REMOVE) {
             self.advance();
             remove_clauses = try self.parseRemoveClauses();
+            // SONNY-3146: consecutive REMOVE clauses are one list. A SET
+            // after a REMOVE stays a syntax error: the executors apply every
+            // SET before every REMOVE.
+            while (self.cur.kind == .REMOVE) {
+                self.advance();
+                const more = try self.parseRemoveClauses();
+                var all = std.ArrayList(ast.RemoveClause).empty;
+                try all.appendSlice(self.arena.allocator(), remove_clauses);
+                try all.appendSlice(self.arena.allocator(), more);
+                remove_clauses = try all.toOwnedSlice(self.arena.allocator());
+            }
         }
 
         // Parse DELETE clause if present (for CREATE ... WITH ... DELETE ... pattern)
         // CANARY: REQ=REQ-GQL-DELETE; FEATURE="DELETE in Query"; ASPECT=Parser; STATUS=TESTED; TEST=no-id-collision-on-delete-create; OWNER=parser; UPDATED=2025-10-14
         var delete_items: []ast.DeleteItem = &.{};
+        var split_create = false;
         if (self.cur.kind == .DELETE) {
             self.advance();
             delete_items = try self.parseDeleteItems();
 
             // After DELETE, we can have another CREATE pattern
             // This allows queries like: CREATE (n) WITH ... DELETE n CREATE (m) RETURN ...
-            if (self.cur.kind == .CREATE) {
+            // SONNY-3146 (I5): a CREATE here REPLACED a CREATE before the
+            // DELETE, which was then never run. Every CREATE clause is kept;
+            // a statement with one on both sides of its DELETE is marked, and
+            // the write-shape validator refuses it (the executors run all of
+            // a statement's CREATE before its DELETE).
+            while (self.cur.kind == .CREATE) {
                 self.advance();
-                create_pattern = try self.parseGraphPattern();
+                const cp = try self.parseGraphPattern();
+                if (create_pattern) |earlier| {
+                    split_create = true;
+                    var all = std.ArrayList(ast.Chain).empty;
+                    try all.appendSlice(self.arena.allocator(), earlier.chains);
+                    try all.appendSlice(self.arena.allocator(), cp.chains);
+                    create_pattern = .{ .chains = try all.toOwnedSlice(self.arena.allocator()) };
+                } else {
+                    create_pattern = cp;
+                }
             }
         }
 
@@ -2580,6 +2627,13 @@ pub const Parser = struct {
             .filter_clause = filter_expr,
             .with_clause = if (with_clause) |wc| wc else initial_with_clause,
             .is_initial_with = with_clause == null and initial_with_clause != null,
+            // SONNY-3139: the initial WITH (not a SELECT) and its WHERE, kept
+            // when a WITH after the MATCH takes `with_clause`.
+            .initial_with = if (select_mode) null else initial_with_clause,
+            .initial_where = if (select_mode) null else initial_where_expr,
+            .pre_with_where = pre_with_where,
+            .with_where = with_where,
+            .split_create = split_create,
             .set_clauses = set_clauses,
             .remove_clauses = remove_clauses,
             .delete_items = delete_items,

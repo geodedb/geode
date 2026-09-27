@@ -119,6 +119,30 @@ pub const Query = struct {
     initial_call_subquery: ?*Query = null,
     // GAP #57: MERGE statement within a query chain (e.g., WITH a MERGE (b:T) RETURN ...)
     merge_statement: ?*MergeStatement = null,
+    // CANARY: REQ=REQ-SONNY-3139-WRITE-SHAPES; FEATURE="WriteShapeValidator"; ASPECT=ParserRecords; STATUS=TESTED; TEST=tests/test_sonny3139_write_shapes.zig; OWNER=parser; UPDATED=2026-09-27
+    // SONNY-3139..3146: what the parser records for the write-shape validator
+    // (execution/write_shape.zig). `with_clause` and `where_clause` keep their
+    // meaning for every other reader; these say what they were built from.
+    //
+    // The WITH that starts the statement, before its MATCH, UNWIND, CREATE or
+    // MERGE. `with_clause` holds it only when no WITH follows the MATCH (and
+    // not at all before a MERGE), so it was lost.
+    initial_with: ?WithClause = null,
+    // The WHERE after that initial WITH (a MATCH's WHERE replaced it in
+    // `where_clause`).
+    initial_where: ?Expr = null,
+    // With a WITH after the MATCH: the WHERE before it (on the pattern) and
+    // the WHERE after it (on the WITH's rows). `where_clause` holds the two
+    // joined by AND, which cannot be evaluated over either row.
+    pre_with_where: ?Expr = null,
+    with_where: ?Expr = null,
+    // Set by `write_shape.chainedWriteAsOneQuery`: this part's WITH comes
+    // BEFORE its CREATE or MERGE (MATCH ... WITH ... CREATE). A part the
+    // parser built with a WITH and a CREATE or MERGE has the WITH after them.
+    chained_write: bool = false,
+    // A CREATE both before and after the DELETE (`... CREATE (a) DELETE q
+    // CREATE (b)`): `create_pattern` holds both, and the validator refuses it.
+    split_create: bool = false,
 };
 
 pub const UnionQuery = struct {

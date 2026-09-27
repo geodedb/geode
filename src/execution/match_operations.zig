@@ -810,14 +810,19 @@ const FastPathClause = enum {
 fn fastPathClause(comptime field: []const u8) FastPathClause {
     @setEvalBranchQuota(20_000);
     const declines = [_][]const u8{
-        "create_pattern", "merge_statement",       "set_clauses", "remove_clauses", "delete_items",
-        "call_clause",    "initial_call_subquery", "next_query",  "for_statement",  "unwind_clause",
+        "create_pattern", "merge_statement",       "set_clauses",    "remove_clauses", "delete_items",
+        "call_clause",    "initial_call_subquery", "next_query",     "for_statement",  "unwind_clause",
+        // SONNY-3139: the parts of an initial WITH and of a WHERE around a WITH.
+        "initial_with",   "initial_where",         "pre_with_where", "with_where",
     };
     const reads = [_][]const u8{
         "let_bindings",  "inline_let_bindings", "optional_match",    "match",           "where_clause",
         "filter_clause", "with_clause",         "cte_list",          "group_by",        "having",
         "ret",           "order_by",            "limit",             "offset",          "limit_param",
         "offset_param",  "path_variable",       "has_recursive_cte", "is_initial_with",
+        // SONNY-3139: markers that come only with a write clause.
+        "chained_write",
+        "split_create",
     };
     inline for (declines) |name| {
         if (comptime std.mem.eql(u8, name, field)) return .declines;
@@ -884,11 +889,14 @@ fn writeClause(comptime field: []const u8) ?[]const u8 {
     // the chain refuses before any part runs: `refuseChainedWrites`); a FOR
     // (run only after a standalone WITH).
     const others = [_][]const u8{
-        "let_bindings", "inline_let_bindings", "optional_match", "match",                 "unwind_clause",
-        "where_clause", "filter_clause",       "with_clause",    "cte_list",              "group_by",
-        "having",       "ret",                 "order_by",       "limit",                 "offset",
-        "limit_param",  "offset_param",        "path_variable",  "has_recursive_cte",     "is_initial_with",
-        "call_clause",  "next_query",          "for_statement",  "initial_call_subquery",
+        "let_bindings",  "inline_let_bindings", "optional_match", "match",                 "unwind_clause",
+        "where_clause",  "filter_clause",       "with_clause",    "cte_list",              "group_by",
+        "having",        "ret",                 "order_by",       "limit",                 "offset",
+        "limit_param",   "offset_param",        "path_variable",  "has_recursive_cte",     "is_initial_with",
+        "call_clause",   "next_query",          "for_statement",  "initial_call_subquery",
+        // SONNY-3139: what the parser records for the write-shape validator.
+        "initial_with",
+        "initial_where", "pre_with_where",      "with_where",     "chained_write",         "split_create",
     };
     inline for (writes) |w| {
         if (comptime std.mem.eql(u8, w[0], field)) return w[1];
