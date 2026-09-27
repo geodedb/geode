@@ -2036,6 +2036,9 @@ pub fn executeLegacyQueryWithResolvedParams(
             // SONNY-2683: refuse a grouped or filtered RETURN before anything
             // is written.
             try match_operations.validateGroupedReturnShape(q);
+            // SONNY-3043: this runs the MERGE (and a SET or REMOVE, as the
+            // rows are read); a DELETE beside it was dropped.
+            try match_operations.refuseUnappliedWrites(q, .{ .set = true, .remove = true, .merge = true });
             const project_rows = match_operations.returnProjectsMatchedRows(q);
 
             var bindings = try match_operations.readPatternBindings(allocator, q, param_names.items, param_values.items, q.inline_let_bindings, merge_graph);

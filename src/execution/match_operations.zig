@@ -112,6 +112,8 @@ const write_budget = @import("../write_budget.zig");
 const read_budget = @import("../read_budget.zig");
 const property_mutation = @import("property_mutation.zig");
 const write_precheck = @import("write_precheck.zig");
+// SONNY-3042, SONNY-3043: MATCH ... CREATE deletes as a DELETE statement does.
+const crud_operations = @import("crud_operations.zig");
 const value_types = @import("../value_types.zig");
 const distinct_set = @import("distinct_set.zig");
 const return_and_sorting = @import("return_and_sorting.zig");
@@ -3944,30 +3946,65 @@ fn nodeMatchesProps(
 /// bindings.
 ///
 /// GAP-0336, SONNY-2694: the bindings are the pattern's own
-/// (`readPatternBindings`: every named variable, the session's tenant scope,
-/// RLS and the WHERE applied, a SET or REMOVE applied as the rows are read).
-/// They used to be the RETURN's projection. When the RETURN did not project
-/// the matched variables (`RETURN 'e2' AS edge`, an aggregate) the CREATE
-/// created new anonymous endpoints, or, through a relationship pattern,
-/// nothing. GAP-0336 re-walked a node-only pattern to recover them, but an
-/// aggregating RETURN still created one row's worth and returned a count of 1:
-/// `MATCH (n:G) CREATE (n)-[:T]->(:Z) RETURN count(*)` returned 1.
+/// (`readPatternRows`: every named variable, the session's tenant scope, RLS
+/// and the WHERE applied; after a WITH, the WITH's rows). They used to be the
+/// RETURN's projection. When the RETURN did not project the matched variables
+/// (`RETURN 'e2' AS edge`, an aggregate) the CREATE created new anonymous
+/// endpoints, or, through a relationship pattern, nothing. GAP-0336 re-walked
+/// a node-only pattern to recover them, but an aggregating RETURN still
+/// created one row's worth and returned a count of 1: `MATCH (n:G) CREATE
+/// (n)-[:T]->(:Z) RETURN count(*)` returned 1.
 ///
-/// A RETURN that aggregates or is DISTINCT (`returnProjectsMatchedRows`) is
-/// computed by the shared projection over the matched rows, each extended with
-/// the variables its CREATE created, and before a DELETE the statement also
-/// carries. Any other RETURN is evaluated once over the created entities, as
-/// before; without a RETURN the statement returns its creation counts.
+/// SONNY-3042, SONNY-3043: the statement's clauses run in order, once per
+/// row: the CREATE; the SET and REMOVE, through the write step
+/// (`applySetRemoveOverRows`), on the matched and the created variables of
+/// each row (they were applied as the rows were read, before the CREATE made
+/// its variables, so `CREATE (z:Z) SET z.k = 5` left z.k null); the RETURN;
+/// the DELETE, of the nodes and relationships it names, as a DELETE deletes
+/// them (a relationship was skipped, and a node deleted with its edges
+/// without DETACH). What the DELETE may do is checked before anything is
+/// written: a node it deletes has no edge now and gets none from the CREATE
+/// (NodeHasEdges), and the RETURN holds nothing it deletes. A DELETE of a
+/// variable the CREATE introduces, and a MERGE beside the CREATE, are refused
+/// with 0A000.
+///
+/// A RETURN that aggregates or is DISTINCT (`returnProjectsMatchedRows`), and
+/// any RETURN of a statement that deletes, is computed by the shared
+/// projection over the matched rows, each extended with the variables its
+/// CREATE created. Any other RETURN is evaluated once over the created
+/// entities, as before (SONNY-3025); without a RETURN the statement returns
+/// its creation counts.
 pub fn executeMatchCreateQuery(allocator: std.mem.Allocator, q: ast.Query, param_names_arg: []const []const u8, param_values_arg: []const Value, current_graph: ?[]const u8) !ExecutionResult {
     // SONNY-2683: refuse a grouped or filtered RETURN before anything is written.
     try validateGroupedReturnShape(q);
+    // SONNY-3043: a MERGE beside the CREATE was dropped.
+    try refuseUnappliedWrites(q, .{ .set = true, .remove = true, .create = true, .delete = true });
     const create_pattern = q.create_pattern.?;
-    const project_rows = returnProjectsMatchedRows(q);
+    const deletes = q.delete_items.len != 0;
+    const project_rows = returnProjectsMatchedRows(q) or (deletes and q.ret.items.len != 0);
+    const writes_rows = q.set_clauses.len != 0 or q.remove_clauses.len != 0;
 
-    var bindings = try readPatternBindings(allocator, q, param_names_arg, param_values_arg, q.inline_let_bindings, current_graph);
+    var bindings = try readPatternRows(allocator, q, param_names_arg, param_values_arg, q.inline_let_bindings, current_graph);
     defer bindings.deinit(allocator);
     const match_result = &bindings.rows;
     try stabilizeBindings(allocator, match_result);
+
+    // SONNY-3043: the DELETE names matched variables; one the CREATE
+    // introduces was never deleted.
+    for (q.delete_items) |item| {
+        const name = switch (item) {
+            .Variable, .Node, .Relationship => |n| n,
+        };
+        if (columnIndex(match_result.columns, name) == null) return error.WriteClauseNotApplied;
+    }
+    var deleted = try DeletedElements.fromBindings(allocator, q.delete_items, match_result.*, false);
+    defer deleted.deinit(allocator);
+    if (deletes) {
+        // SONNY-3042: before anything is written. A node the DELETE removes
+        // has no edge (a DELETE without DETACH), and the CREATE attaches none.
+        try crud_operations.checkDeleteEligible(allocator, deleted.node_ids, false);
+        if (createAttachesEdgeTo(create_pattern, q.delete_items)) return error.NodeHasEdges;
+    }
 
     // No match, and nothing computed over the rows: an empty result.
     if (match_result.rows.len == 0 and !project_rows) {
@@ -3978,42 +4015,55 @@ pub fn executeMatchCreateQuery(allocator: std.mem.Allocator, q: ast.Query, param
         };
     }
 
-    // Node-variable names appearing in the MATCH pattern. Lets the CREATE
-    // batch distinguish a MATCH variable that failed to bind (skip the hop --
-    // the GAP-0336 anonymous-node footgun) from a NEW variable introduced by
-    // the CREATE pattern (must be created).
-    var match_var_names = std.ArrayList([]const u8).empty;
-    defer match_var_names.deinit(allocator);
-    for (q.match.chains) |chain| {
-        if (chain.head) |head| {
-            if (head.name) |n| try match_var_names.append(allocator, n);
-        }
+    // The variables the rows bind. Lets the CREATE batch distinguish a bound
+    // variable that failed to bind on a row (skip the hop -- the GAP-0336
+    // anonymous-node footgun) from a NEW variable introduced by the CREATE
+    // pattern (must be created).
+    const match_var_names = match_result.columns;
+
+    // The variables the CREATE pattern introduces, which a projected RETURN
+    // and a SET or REMOVE can see beside the matched ones.
+    var created_names = std.ArrayList([]const u8).empty;
+    defer created_names.deinit(allocator);
+    for (create_pattern.chains) |chain| {
+        if (chain.head) |head| if (head.name) |n| try appendNameOnce(allocator, &created_names, n);
         for (chain.hops) |hop| {
-            if (hop.left.name) |n| try match_var_names.append(allocator, n);
-            if (hop.right.name) |n| try match_var_names.append(allocator, n);
+            if (hop.left.name) |n| try appendNameOnce(allocator, &created_names, n);
+            if (hop.rel.name) |n| try appendNameOnce(allocator, &created_names, n);
+            if (hop.right.name) |n| try appendNameOnce(allocator, &created_names, n);
+        }
+    }
+    {
+        var i: usize = 0;
+        while (i < created_names.items.len) {
+            if (columnIndex(match_result.columns, created_names.items[i]) != null) _ = created_names.orderedRemove(i) else i += 1;
         }
     }
 
-    // The variables the CREATE pattern introduces, which a projected RETURN
-    // can see beside the matched ones.
-    var created_names = std.ArrayList([]const u8).empty;
-    defer created_names.deinit(allocator);
-    if (project_rows) {
-        for (create_pattern.chains) |chain| {
-            if (chain.head) |head| if (head.name) |n| try appendNameOnce(allocator, &created_names, n);
-            for (chain.hops) |hop| {
-                if (hop.left.name) |n| try appendNameOnce(allocator, &created_names, n);
-                if (hop.rel.name) |n| try appendNameOnce(allocator, &created_names, n);
-                if (hop.right.name) |n| try appendNameOnce(allocator, &created_names, n);
-            }
+    // The rows the SET, REMOVE and RETURN see: each matched row, then what
+    // its CREATE created.
+    const columns = try allocator.alloc([]const u8, match_result.columns.len + created_names.items.len);
+    defer allocator.free(columns);
+    @memcpy(columns[0..match_result.columns.len], match_result.columns);
+    @memcpy(columns[match_result.columns.len..], created_names.items);
+
+    // SONNY-3042: a RETURN that would hold an element the DELETE removes is
+    // refused before anything is written. The created variables are null
+    // here (nothing is created yet), and never deleted.
+    if (deletes and project_rows) {
+        var dry_rows = std.ArrayList([]Value).empty;
+        defer {
+            for (dry_rows.items) |row| allocator.free(row);
+            dry_rows.deinit(allocator);
         }
-        var i: usize = 0;
-        while (i < created_names.items.len) {
-            const bound = for (match_result.columns) |col| {
-                if (std.mem.eql(u8, col, created_names.items[i])) break true;
-            } else false;
-            if (bound) _ = created_names.orderedRemove(i) else i += 1;
+        for (match_result.rows) |row| {
+            const dry_row = try allocator.alloc(Value, columns.len);
+            @memcpy(dry_row[0..row.len], row);
+            @memset(dry_row[row.len..], .Null);
+            try dry_rows.append(allocator, dry_row);
         }
+        var dry_result = ExecutionResult{ .columns = columns, .rows = dry_rows.items, .flags = .empty };
+        try checkReturnBeforeDelete(allocator, q, &dry_result, param_names_arg, param_values_arg, deleted);
     }
 
     // Track all created entities across all matched rows
@@ -4027,8 +4077,6 @@ pub fn executeMatchCreateQuery(allocator: std.mem.Allocator, q: ast.Query, param
     var total_created_nodes: i64 = 0;
     var total_created_relationships: i64 = 0;
 
-    // The rows a projected RETURN is computed over: each matched row, then
-    // what its CREATE created.
     var out_rows = std.ArrayList([]Value).empty;
     defer {
         for (out_rows.items) |row| allocator.free(row);
@@ -4054,7 +4102,7 @@ pub fn executeMatchCreateQuery(allocator: std.mem.Allocator, q: ast.Query, param
             .param_values = param_values_arg,
             .allocator = allocator,
         };
-        var result = try executeCreateForBatchWithTracking(allocator, create_pattern, row_bindings, match_var_names.items, current_graph, row_env);
+        var result = try executeCreateForBatchWithTracking(allocator, create_pattern, row_bindings, match_var_names, current_graph, row_env);
         defer {
             result.created_nodes.deinit();
             result.created_relationships.deinit();
@@ -4071,8 +4119,8 @@ pub fn executeMatchCreateQuery(allocator: std.mem.Allocator, q: ast.Query, param
             try all_created_relationships.put(entry.key_ptr.*, entry.value_ptr.*);
         }
 
-        if (project_rows) {
-            const out_row = try allocator.alloc(Value, row.len + created_names.items.len);
+        if (project_rows or writes_rows) {
+            const out_row = try allocator.alloc(Value, columns.len);
             errdefer allocator.free(out_row);
             @memcpy(out_row[0..row.len], row);
             // Held as `stabilizeBindings` holds the matched ones: the next
@@ -4090,79 +4138,32 @@ pub fn executeMatchCreateQuery(allocator: std.mem.Allocator, q: ast.Query, param
         }
     }
 
+    var rows_result = ExecutionResult{
+        .columns = columns,
+        .rows = out_rows.items,
+        .flags = std.ArrayList([]const u8).empty,
+        .owned_graph_entities = match_result.owned_graph_entities,
+    };
+    match_result.owned_graph_entities = null;
+    defer if (rows_result.owned_graph_entities) |entities| entities.deinit();
+
+    // SONNY-3043: the SET and REMOVE, on the matched and created variables.
+    try applySetRemoveOverRows(allocator, q.set_clauses, q.remove_clauses, &rows_result, param_names_arg, param_values_arg);
+
     // SONNY-2694: a RETURN over the rows is computed before a DELETE the
     // statement carries removes what the rows bind.
     var projected: ?ExecutionResult = null;
     errdefer if (projected) |*p| p.deinit(allocator);
     if (project_rows) {
-        const columns = try allocator.alloc([]const u8, match_result.columns.len + created_names.items.len);
-        defer allocator.free(columns);
-        @memcpy(columns[0..match_result.columns.len], match_result.columns);
-        @memcpy(columns[match_result.columns.len..], created_names.items);
-        var rows_result = ExecutionResult{
-            .columns = columns,
-            .rows = out_rows.items,
-            .flags = std.ArrayList([]const u8).empty,
-            .owned_graph_entities = match_result.owned_graph_entities,
-        };
-        match_result.owned_graph_entities = null;
-        defer if (rows_result.owned_graph_entities) |entities| entities.deinit();
-        projected = try projectReturnOverRows(allocator, q, &rows_result, param_names_arg, param_values_arg);
-        if (q.delete_items.len > 0) {
-            // The DELETE below removes each node with its edges.
-            var deleted = try DeletedElements.fromBindings(allocator, q.delete_items, match_result.*, true);
-            defer deleted.deinit(allocator);
-            try ownReturnBeforeDelete(allocator, &projected.?, deleted);
-        }
+        projected = if (deletes)
+            try projectReturnBeforeDelete(allocator, q, &rows_result, param_names_arg, param_values_arg, deleted)
+        else
+            try projectReturnOverRows(allocator, q, &rows_result, param_names_arg, param_values_arg);
     }
 
-    // Handle DELETE items (MATCH ... CREATE ... DELETE p), over the matched rows.
-    if (q.delete_items.len > 0) {
-        const writable = graph_store.getWritableGlobalStore(allocator);
-        for (q.delete_items) |item| {
-            const var_name = switch (item) {
-                .Variable => |n| n,
-                .Node => |n| n,
-                .Relationship => continue,
-            };
-            for (match_result.columns, 0..) |col_name, ci| {
-                if (!std.mem.eql(u8, col_name, var_name)) continue;
-                for (match_result.rows) |row| {
-                    if (ci < row.len and row[ci] == .Node) {
-                        // Detach delete: remove edges first, then node
-                        writable.deleteNode(row[ci].Node.id);
-                    }
-                }
-                break;
-            }
-        }
-    }
-
-    // Handle REMOVE clauses (MATCH ... CREATE ... REMOVE o.prop): applied as
-    // the bindings were read; again here for a node the CREATE touched.
-    if (q.remove_clauses.len > 0) {
-        const writable = graph_store.getWritableGlobalStore(allocator);
-        for (q.remove_clauses) |clause| {
-            switch (clause) {
-                .Property => |prop| {
-                    for (match_result.columns, 0..) |col_name, ci| {
-                        if (!std.mem.eql(u8, col_name, prop.object)) continue;
-                        for (match_result.rows) |row| {
-                            if (ci < row.len and row[ci] == .Node) {
-                                // C3 (review-0023): id-based store call -- durable
-                                // (adapter + WAL + merge/label index maintenance)
-                                // and hydrates a cold node instead of silently
-                                // skipping it.
-                                writable.removeNodeProperty(row[ci].Node.id, prop.property);
-                            }
-                        }
-                        break;
-                    }
-                },
-                .Labels => {},
-            }
-        }
-    }
+    // SONNY-3043: the DELETE, of the nodes and relationships it names in the
+    // matched rows, without DETACH.
+    if (deletes) _ = try crud_operations.deleteElements(allocator, deleted.node_ids, deleted.edge_ids, false, current_graph);
 
     if (projected) |p| return p;
 
@@ -4177,9 +4178,9 @@ pub fn executeMatchCreateQuery(allocator: std.mem.Allocator, q: ast.Query, param
     // them under `nodes_created` mislabeled a pure edge create as a node
     // create (2026-06-04 bug doc, "Secondary anomaly").
     // CANARY: REQ=REQ-GQL-MATCH-CREATE-COUNTERS; FEATURE="MatchCreateCounters"; ASPECT=SummaryColumns; STATUS=TESTED; TEST=tests/test_match_create_counters.zig; OWNER=execution; UPDATED=2026-06-10
-    var columns = try allocator.alloc([]const u8, 2);
-    columns[0] = try allocator.dupe(u8, "nodes_created");
-    columns[1] = try allocator.dupe(u8, "relationships_created");
+    var summary_columns = try allocator.alloc([]const u8, 2);
+    summary_columns[0] = try allocator.dupe(u8, "nodes_created");
+    summary_columns[1] = try allocator.dupe(u8, "relationships_created");
 
     var rows = try allocator.alloc([]Value, 1);
     var summary_row = try allocator.alloc(Value, 2);
@@ -4188,10 +4189,26 @@ pub fn executeMatchCreateQuery(allocator: std.mem.Allocator, q: ast.Query, param
     rows[0] = summary_row;
 
     return ExecutionResult{
-        .columns = columns,
+        .columns = summary_columns,
         .rows = rows,
         .flags = std.ArrayList([]const u8).empty,
     };
+}
+
+/// SONNY-3042: whether a CREATE pattern attaches a relationship to a node a
+/// DELETE item names (so a DELETE without DETACH must refuse it).
+fn createAttachesEdgeTo(create_pattern: ast.GraphPattern, delete_items: []const ast.DeleteItem) bool {
+    for (create_pattern.chains) |chain| {
+        for (chain.hops) |hop| {
+            for (delete_items) |item| {
+                const name = switch (item) {
+                    .Variable, .Node, .Relationship => |n| n,
+                };
+                if (namesVariable(name, hop.left.name) or namesVariable(name, hop.right.name)) return true;
+            }
+        }
+    }
+    return false;
 }
 
 // Execute MATCH + CALL pattern with node binding
@@ -9330,6 +9347,164 @@ pub const DeletedElements = struct {
 };
 
 // CANARY: REQ=REQ-SONNY-2694-RETURN-BEFORE-DELETE; FEATURE="WriteBehindAggregate"; ASPECT=ReturnOwnedBeforeDelete; STATUS=TESTED; TEST=tests/test_sonny2694_write_behind_aggregate.zig; OWNER=engine; UPDATED=2026-09-27
+/// SONNY-2694: the RETURN of a statement that deletes, over `rows` (the rows
+/// it binds), computed before the DELETE and returned after it. A DELETE
+/// frees the labels and properties of what it deletes at once
+/// (`GraphStore.deleteNodeNoSave`), so the result must hold no pointer into
+/// them: `DELETE r RETURN r.w`, type(r), keys(r) and collect(r.w) returned the
+/// edge's freed memory.
+///
+/// The RETURN is projected by the shared projection on a scratch arena, then
+/// refused (0A000, `checkReturnDeletes`) if it holds an element the statement
+/// deletes (the node, the edge, or a path through one), or a typed value it
+/// does not copy (JSONB, XML, URL, DOMAIN, a bit string or an extended value);
+/// return the element's properties, or an aggregate over it, instead.
+/// Otherwise every value is copied into a result `allocator` owns
+/// (`copyDeleteReturnValue`), which frees them all (`freeDeleteReturnValue`):
+/// the projection's intermediate values (a keys() or collect() list, a list
+/// literal) go with the arena, and the typed strings it copies (TEXT, CHAR,
+/// VARCHAR, BYTEA, JSON) are freed with the result (SONNY-3045: they leaked).
+/// The result takes over the nodes and edges `rows` owns.
+pub fn projectReturnBeforeDelete(
+    allocator: std.mem.Allocator,
+    q: ast.Query,
+    rows: *ExecutionResult,
+    param_names: []const []const u8,
+    param_values: []const Value,
+    deleted: DeletedElements,
+) anyerror!ExecutionResult {
+    var scratch = std.heap.ArenaAllocator.init(allocator);
+    defer scratch.deinit();
+    // Kept for the result: the projection would take them onto the arena's.
+    const owned = rows.owned_graph_entities;
+    rows.owned_graph_entities = null;
+    errdefer rows.owned_graph_entities = owned;
+    const projected = try projectReturnOverRows(scratch.allocator(), q, rows, param_names, param_values);
+    try checkReturnDeletes(projected, deleted);
+
+    const columns = try allocator.alloc([]const u8, projected.columns.len);
+    var columns_done: usize = 0;
+    errdefer {
+        for (columns[0..columns_done]) |col| allocator.free(col);
+        allocator.free(columns);
+    }
+    for (projected.columns, columns) |col, *out| {
+        out.* = try allocator.dupe(u8, col);
+        columns_done += 1;
+    }
+    const out_rows = try allocator.alloc([]Value, projected.rows.len);
+    var rows_done: usize = 0;
+    errdefer {
+        for (out_rows[0..rows_done]) |row| {
+            for (row) |cell| freeDeleteReturnValue(allocator, cell);
+            allocator.free(row);
+        }
+        allocator.free(out_rows);
+    }
+    for (projected.rows, out_rows) |row, *out| {
+        const copy = try allocator.alloc(Value, row.len);
+        var cells_done: usize = 0;
+        errdefer {
+            for (copy[0..cells_done]) |cell| freeDeleteReturnValue(allocator, cell);
+            allocator.free(copy);
+        }
+        for (row, copy) |cell, *dst| {
+            dst.* = try copyDeleteReturnValue(allocator, cell);
+            cells_done += 1;
+        }
+        out.* = copy;
+        rows_done += 1;
+    }
+    return .{
+        .columns = columns,
+        .rows = out_rows,
+        .flags = .empty,
+        .owns_value_memory = true,
+        .free_value = &freeDeleteReturnValue,
+        .owned_graph_entities = owned,
+    };
+}
+
+/// SONNY-3042: `projectReturnBeforeDelete`'s refusal alone, before anything
+/// is written: the RETURN over `rows` as they are (a SET cannot change which
+/// elements it holds), projected on a scratch arena and discarded.
+pub fn checkReturnBeforeDelete(
+    allocator: std.mem.Allocator,
+    q: ast.Query,
+    rows: *ExecutionResult,
+    param_names: []const []const u8,
+    param_values: []const Value,
+    deleted: DeletedElements,
+) anyerror!void {
+    var scratch = std.heap.ArenaAllocator.init(allocator);
+    defer scratch.deinit();
+    const owned = rows.owned_graph_entities;
+    rows.owned_graph_entities = null;
+    defer rows.owned_graph_entities = owned;
+    const projected = try projectReturnOverRows(scratch.allocator(), q, rows, param_names, param_values);
+    try checkReturnDeletes(projected, deleted);
+}
+
+/// A value of a RETURN `projectReturnBeforeDelete` accepted, copied: its
+/// strings, typed strings, lists, maps, a decimal's literal and a path's
+/// arrays. Nodes and edges stay pointers (the rows' boxes, which the result
+/// takes over).
+fn copyDeleteReturnValue(allocator: std.mem.Allocator, value: Value) !Value {
+    return switch (value) {
+        .Str => |s| .{ .Str = try allocator.dupe(u8, s) },
+        .Text => |s| .{ .Text = try allocator.dupe(u8, s) },
+        .Bytea => |s| .{ .Bytea = try allocator.dupe(u8, s) },
+        .Json => |s| .{ .Json = try allocator.dupe(u8, s) },
+        .Char => |c| .{ .Char = .{ .data = try allocator.dupe(u8, c.data), .n = c.n } },
+        .Varchar => |c| .{ .Varchar = .{ .data = try allocator.dupe(u8, c.data), .n = c.n } },
+        .Decimal => |d| blk: {
+            var copy = d;
+            if (d.orig_repr) |repr| copy.orig_repr = try allocator.dupe(u8, repr);
+            break :blk .{ .Decimal = copy };
+        },
+        .List => |items| blk: {
+            const copy = try allocator.alloc(Value, items.len);
+            var done: usize = 0;
+            errdefer {
+                for (copy[0..done]) |item| freeDeleteReturnValue(allocator, item);
+                allocator.free(copy);
+            }
+            for (items, copy) |item, *dst| {
+                dst.* = try copyDeleteReturnValue(allocator, item);
+                done += 1;
+            }
+            break :blk .{ .List = copy };
+        },
+        .Map => |map_const| blk: {
+            var map = map_const;
+            var copy = std.StringHashMap(Value).init(allocator);
+            errdefer freeDeleteReturnValue(allocator, .{ .Map = copy });
+            var it = map.iterator();
+            while (it.next()) |entry| {
+                const key = try allocator.dupe(u8, entry.key_ptr.*);
+                const item = copyDeleteReturnValue(allocator, entry.value_ptr.*) catch |err| {
+                    allocator.free(key);
+                    return err;
+                };
+                copy.put(key, item) catch |err| {
+                    allocator.free(key);
+                    freeDeleteReturnValue(allocator, item);
+                    return err;
+                };
+            }
+            break :blk .{ .Map = copy };
+        },
+        .Path => |path| blk: {
+            const nodes = try allocator.dupe(*const graph_store.Node, path.nodes);
+            errdefer allocator.free(nodes);
+            break :blk .{ .Path = .{ .nodes = nodes, .edges = try allocator.dupe(*const graph_store.Edge, path.edges) } };
+        },
+        // Refused by `checkReturnDeletes` before anything is copied.
+        .Jsonb, .Xml, .Url, .Domain, .BitString, .VarBit, .ExtValue => error.DeleteReturnsDeletedElement,
+        else => value,
+    };
+}
+
 /// SONNY-2694: a statement that deletes computes its RETURN before the DELETE
 /// and returns it after, and a DELETE frees the labels and properties of what
 /// it deletes at once (`GraphStore.deleteNodeNoSave`). The projected rows own
@@ -9366,6 +9541,62 @@ fn ownValueBeforeDelete(allocator: std.mem.Allocator, value: *Value, deleted: De
         },
         .Jsonb, .Xml, .Url, .Domain, .BitString, .VarBit, .ExtValue => return error.DeleteReturnsDeletedElement,
         else => {},
+    }
+}
+
+/// SONNY-2694, SONNY-3042: refuse (0A000) a RETURN that holds an element a
+/// statement deletes, or a typed value that cannot be copied, before anything
+/// is written or deleted. Checks only.
+pub fn checkReturnDeletes(result: ExecutionResult, deleted: DeletedElements) !void {
+    for (result.rows) |row| {
+        for (row) |cell| try checkValueSurvivesDelete(cell, deleted);
+    }
+}
+
+fn checkValueSurvivesDelete(value: Value, deleted: DeletedElements) !void {
+    switch (value) {
+        .Node => |node| if (deleted.nodeDeleted(node.id)) return error.DeleteReturnsDeletedElement,
+        .Edge => |edge| if (deleted.edgeDeleted(edge)) return error.DeleteReturnsDeletedElement,
+        .Path => |path| {
+            for (path.nodes) |node| if (deleted.nodeDeleted(node.id)) return error.DeleteReturnsDeletedElement;
+            for (path.edges) |edge| if (deleted.edgeDeleted(edge)) return error.DeleteReturnsDeletedElement;
+        },
+        .List => |items| for (items) |item| try checkValueSurvivesDelete(item, deleted),
+        .Map => |map| {
+            var it = map.valueIterator();
+            while (it.next()) |item| try checkValueSurvivesDelete(item.*, deleted);
+        },
+        .Jsonb, .Xml, .Url, .Domain, .BitString, .VarBit, .ExtValue => return error.DeleteReturnsDeletedElement,
+        else => {},
+    }
+}
+
+/// SONNY-3045: how a result `projectReturnBeforeDelete` returns frees a
+/// value: everything `copyDeleteReturnValue` copied.
+fn freeDeleteReturnValue(allocator: std.mem.Allocator, value: Value) void {
+    switch (value) {
+        .Text, .Bytea, .Json => |s| allocator.free(s),
+        .Char => |c| allocator.free(c.data),
+        .Varchar => |c| allocator.free(c.data),
+        .Decimal => |d| if (d.orig_repr) |repr| allocator.free(repr),
+        .Path => |path| {
+            allocator.free(path.nodes);
+            allocator.free(path.edges);
+        },
+        .List => |items| {
+            for (items) |item| freeDeleteReturnValue(allocator, item);
+            allocator.free(items);
+        },
+        .Map => |map_const| {
+            var map = map_const;
+            var it = map.iterator();
+            while (it.next()) |entry| {
+                allocator.free(entry.key_ptr.*);
+                freeDeleteReturnValue(allocator, entry.value_ptr.*);
+            }
+            map.deinit();
+        },
+        else => value_utilities.freeValue(allocator, value),
     }
 }
 

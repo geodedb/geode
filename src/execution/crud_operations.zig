@@ -4523,6 +4523,8 @@ fn clusterReplicateMatchCreate(
     if (q.with_clause != null or q.filter_clause != null) return error.ClusterWriteNotReplicable;
     if (q.set_clauses.len > 0 or q.remove_clauses.len > 0) return error.ClusterWriteNotReplicable;
     if (q.delete_items.len > 0) return error.ClusterWriteNotReplicable;
+    // SONNY-3043: a MERGE beside the CREATE would be dropped.
+    if (q.merge_statement != null) return error.ClusterWriteNotReplicable;
     // A MATCH…CREATE without a CREATE pattern is malformed for this slice —
     // fail closed up front (NOT after MATCH resolution, where a zero-match
     // chain would silently no-op instead).
@@ -4735,6 +4737,28 @@ pub fn executeClusterMatchCreateIfNeeded(
 /// or REMOVE, `executeMatchDeleteQuery`). A node that still has an edge refuses
 /// the whole statement, before anything is deleted, unless `detach`, which
 /// deletes its edges with it. Called with the graph's write lock held.
+/// A DELETE without DETACH refuses a node that still has an edge
+/// (NodeHasEdges), before it deletes anything. SONNY-3042: a statement that
+/// writes before it deletes checks this before its first write, so a refused
+/// statement changes nothing.
+pub fn checkDeleteEligible(allocator: std.mem.Allocator, node_ids: []const u64, detach: bool) !void {
+    if (detach) return;
+    // GAP-0511: DELETE stages IDs before mutating, so cloning a QueryReadSession
+    // adds O(total graph size) overhead without improving correctness under the
+    // graph write lock.
+    const read_store: *graph_store.GraphStore = graph_store.getWritableGlobalStore(allocator);
+    for (node_ids) |node_id| {
+        // ENG-3983: the CHECKED readers — an unreadable adjacency must
+        // NOT be mistaken for "this node has no edges" and let a plain
+        // DELETE through the GQL edge guard.
+        const has_outgoing = (try read_store.getOutgoingEdgeIdsChecked(node_id)).len > 0;
+        const has_incoming = (try read_store.getIncomingEdgeIdsChecked(node_id)).len > 0;
+        if (has_outgoing or has_incoming) {
+            return error.NodeHasEdges;
+        }
+    }
+}
+
 pub fn deleteElements(allocator: std.mem.Allocator, node_ids: []const u64, edge_ids: []const u64, detach: bool, current_graph: ?[]const u8) !usize {
     const store = graph_store.getWritableGlobalStore(allocator);
     // GAP-0511: DELETE stages IDs before mutating, so cloning a QueryReadSession
@@ -4743,18 +4767,7 @@ pub fn deleteElements(allocator: std.mem.Allocator, node_ids: []const u64, edge_
     const read_store: *graph_store.GraphStore = store;
     var deleted_count: usize = 0;
 
-    if (!detach) {
-        for (node_ids) |node_id| {
-            // ENG-3983: the CHECKED readers — an unreadable adjacency must
-            // NOT be mistaken for "this node has no edges" and let a plain
-            // DELETE through the GQL edge guard.
-            const has_outgoing = (try read_store.getOutgoingEdgeIdsChecked(node_id)).len > 0;
-            const has_incoming = (try read_store.getIncomingEdgeIdsChecked(node_id)).len > 0;
-            if (has_outgoing or has_incoming) {
-                return error.NodeHasEdges;
-            }
-        }
-    }
+    try checkDeleteEligible(allocator, node_ids, detach);
 
     // ENG-3983: edge ids removed as incident edges of a DETACH'd node in THIS
     // statement. The relationship loop below needs them to tell "already
@@ -4864,17 +4877,21 @@ pub fn deleteElements(allocator: std.mem.Allocator, node_ids: []const u64, edge_
 
 // CANARY: REQ=REQ-SONNY-2694-MATCH-SET-DELETE; FEATURE="WriteBehindAggregate"; ASPECT=QueryDelete; STATUS=TESTED; TEST=tests/test_sonny2694_write_behind_aggregate.zig; OWNER=engine; UPDATED=2026-09-27
 /// SONNY-2694: a DELETE the parser keeps in a query, `MATCH ... SET ...
-/// DELETE n [RETURN ...]` (a DELETE after a SET or REMOVE; a MATCH ... DELETE
-/// without one is a DELETE statement, `executeDelete`). The match executor
-/// applied the SET or REMOVE and never the DELETE, so the statement returned
-/// its rows and deleted nothing.
+/// DELETE n [RETURN ...]` (a DELETE after a SET or REMOVE, or after a WITH; a
+/// MATCH ... DELETE without one is a DELETE statement, `executeDelete`). The
+/// match executor applied the SET or REMOVE and never the DELETE, so the
+/// statement returned its rows and deleted nothing.
 ///
-/// The bindings are read (`readPatternBindings`), which applies the SET and
-/// REMOVE to every matched row; the RETURN is computed over them before the
-/// DELETE, owning its values (`ownReturnBeforeDelete`); then the nodes and
-/// edges the DELETE names in the rows are deleted as a DELETE statement
-/// deletes them (`deleteElements`: a node that still has an edge refuses the
-/// statement). In a cluster the shape is not replicable and fails closed.
+/// The rows are read (`readPatternRows`: after a WITH, the rows it keeps).
+/// SONNY-3042: what the DELETE may do is checked before anything is written:
+/// a node it deletes has no edge (NodeHasEdges), and the RETURN holds nothing
+/// it deletes. It was checked after the SET, which stayed written when the
+/// statement was refused. Then the SET and REMOVE go through the write step
+/// (`applySetRemoveOverRows`), the RETURN is computed over the rows, owning
+/// its values (`projectReturnBeforeDelete`), and the nodes and edges the DELETE
+/// names in the rows are deleted as a DELETE statement deletes them
+/// (`deleteElements`). In a cluster the shape is not replicable and fails
+/// closed.
 pub fn executeMatchDeleteQuery(
     allocator: std.mem.Allocator,
     q: ast.Query,
@@ -4884,21 +4901,31 @@ pub fn executeMatchDeleteQuery(
 ) !ExecutionResult {
     // SONNY-2683: refuse a grouped or filtered RETURN before anything is written.
     try match_operations.validateGroupedReturnShape(q);
+    // SONNY-3041: the dispatcher sends a CREATE or MERGE elsewhere first.
+    try match_operations.refuseUnappliedWrites(q, .{ .set = true, .remove = true, .delete = true });
     switch (try clusterWriteRole()) {
         .standalone => {},
         .leader => return error.ClusterWriteNotReplicable,
     }
 
-    var bindings = try match_operations.readPatternBindings(allocator, q, param_names, param_values, q.inline_let_bindings, current_graph);
+    var bindings = try match_operations.readPatternRows(allocator, q, param_names, param_values, q.inline_let_bindings, current_graph);
     defer bindings.deinit(allocator);
+    try match_operations.stabilizeBindings(allocator, &bindings.rows);
     var deleted = try match_operations.DeletedElements.fromBindings(allocator, q.delete_items, bindings.rows, false);
     defer deleted.deinit(allocator);
+
+    // SONNY-3042: before the SET or REMOVE.
+    try checkDeleteEligible(allocator, deleted.node_ids, false);
+    if (q.ret.items.len != 0 and (q.set_clauses.len != 0 or q.remove_clauses.len != 0)) {
+        try match_operations.checkReturnBeforeDelete(allocator, q, &bindings.rows, param_names, param_values, deleted);
+    }
+
+    try match_operations.applySetRemoveOverRows(allocator, q.set_clauses, q.remove_clauses, &bindings.rows, param_names, param_values);
 
     var returned: ?ExecutionResult = null;
     errdefer if (returned) |*r| r.deinit(allocator);
     if (q.ret.items.len != 0) {
-        returned = try match_operations.projectReturnOverRows(allocator, q, &bindings.rows, param_names, param_values);
-        try match_operations.ownReturnBeforeDelete(allocator, &returned.?, deleted);
+        returned = try match_operations.projectReturnBeforeDelete(allocator, q, &bindings.rows, param_names, param_values, deleted);
     }
 
     _ = try deleteElements(allocator, deleted.node_ids, deleted.edge_ids, false, current_graph);
