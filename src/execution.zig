@@ -1216,13 +1216,35 @@ pub fn enterEntryPoint() void {
 
 pub fn leaveEntryPoint() void {
     t_entry_depth -= 1;
-    if (t_entry_depth == 0) commitSessionEngineTxn();
+    if (t_entry_depth != 0) return;
+    // CANARY: REQ=REQ-SONNY-3135-FAILED-TXN-ABORT; FEATURE="TransactionManagement"; ASPECT=ProgramEndAbort; STATUS=TESTED; TEST=tests/test_sonny3135_profile_allowlist_failed_txn.zig; OWNER=storage; UPDATED=2026-09-27
+    // SONNY-3135 (N7b): a program that failed in its transaction
+    // (`failEntryPoint`) has its session engine transaction aborted: the
+    // transaction is rolled back (GAP-0917, by the executor or the handler),
+    // and a commit here made the failed changes durable until the rollback
+    // undid them (the SONNY-2979 crash window).
+    if (storage_adapter.sessionTxnFailed()) {
+        storage_adapter.abortThreadSessionTxn();
+        return;
+    }
+    commitSessionEngineTxn();
+}
+
+/// SONNY-3135 (N7b): the outermost executor entry point is returning an
+/// error. With a session slot on the thread, the program ran in its session's
+/// transaction, which fails with it: `noteSessionTxnFailed`. Called by the
+/// entry points' `errdefer`, before their `leaveEntryPoint`. An inner entry
+/// point's error may be handled by the program around it, so only the
+/// outermost one's counts.
+pub fn failEntryPoint() void {
+    if (t_entry_depth == 1) storage_adapter.noteSessionTxnFailed();
 }
 
 pub fn executeProgramWithContext(allocator: std.mem.Allocator, program: *const ast.Program, context: ExecutionContext) !ExecutionResult {
     // SONNY-2823: the program's session engine transaction ends with it.
     enterEntryPoint();
     defer leaveEntryPoint();
+    errdefer failEntryPoint();
     const prev_ctx = pushActiveContext(&context);
     defer popActiveContext(prev_ctx);
     if (program.statements.len == 0) {
@@ -1417,6 +1439,7 @@ pub fn executeStatementWithContext(allocator: std.mem.Allocator, stmt: ast.State
     // program; its session engine transaction ends with it.
     enterEntryPoint();
     defer leaveEntryPoint();
+    errdefer failEntryPoint();
     // CANARY: REQ=REQ-ENG-3922-VECTOR-DIM-GUARD; FEATURE="VectorIndex"; ASPECT=PrePassGraphScope; STATUS=TESTED; TEST=tests/test_eng3922_dim_guard.zig; OWNER=execution; UPDATED=2026-08-29
     // ENG-3922(a): the write pre-pass needs to know which GRAPH the statement
     // writes to (the unindexed vector-dimension pin is per-graph), and the only

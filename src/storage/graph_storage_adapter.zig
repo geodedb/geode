@@ -2850,6 +2850,11 @@ pub const SessionEngineTxn = struct {
     /// `txn` is an open engine transaction. Kept by `beginSessionTxnLazy`
     /// and the commit and abort functions.
     open: bool = false,
+    /// SONNY-3135 (N7b): the session's request failed inside its transaction
+    /// (`noteSessionTxnFailed`), which the handler rolls back: its engine
+    /// transaction is aborted, never committed (`settleAtWriteRelease`).
+    /// Cleared when a request of the session starts and ends.
+    failed: bool = false,
 };
 
 /// SONNY-2823: the session slot installed on this thread, or null. With none,
@@ -2868,6 +2873,7 @@ pub const SessionEngineTxnScope = struct {
 /// SONNY-2823: install `slot` on this thread for one request of its session.
 pub fn enterSessionEngineTxn(slot: *SessionEngineTxn) SessionEngineTxnScope {
     if (t_session_engine_slot == slot) return .{ .prev = slot, .nested = true };
+    slot.failed = false;
     const prev = t_session_engine_slot;
     t_session_engine_slot = slot;
     t_session_engine_txn = if (slot.open) &slot.txn else null;
@@ -2916,6 +2922,7 @@ pub fn leaveSessionEngineTxn(slot: *SessionEngineTxn, scope: SessionEngineTxnSco
         backstop = true;
     }
     slot.open = false;
+    slot.failed = false;
     t_session_engine_slot = scope.prev;
     t_session_engine_txn = if (scope.prev) |p| (if (p.open) &p.txn else null) else null;
     if (scope.prev == null and t_current_statement_txn != null) {
@@ -2987,11 +2994,40 @@ fn takeInjectedCommitFault() bool {
 /// the lock and have transactions of its own open on the graph). Its handler
 /// should have committed it first (`settleThreadSessionTxn`), so it is
 /// counted and logged.
+///
+/// CANARY: REQ=REQ-SONNY-3135-FAILED-TXN-ABORT; FEATURE="TransactionManagement"; ASPECT=SettleAtWriteRelease; STATUS=TESTED; TEST=tests/test_sonny3135_profile_allowlist_failed_txn.zig; OWNER=storage; UPDATED=2026-09-27
+/// SONNY-3135 (N7b): the transaction of a request that failed
+/// (`noteSessionTxnFailed`) is aborted instead: the handler rolls it back
+/// once the lock is released, and a commit made the failed changes durable
+/// until then (the SONNY-2979 crash window).
 pub fn settleAtWriteRelease() void {
     if (t_session_engine_txn == null) return;
     _ = session_txn_open_at_write_release_total.fetchAdd(1, .monotonic);
+    if (sessionTxnFailed()) {
+        // The structured logger, at error level: the path is a handled
+        // failure, and std.log's error level fails a test that drives it.
+        slog.err("a graph write lock was released with a failed request's session engine txn open; aborting it under the lock", &.{});
+        abortThreadSessionTxn();
+        return;
+    }
     log.err("a graph write lock was released with a session engine txn open; committing it under the lock", .{});
     commitThreadSessionTxn() catch |err| noteSessionCommitFailure(err);
+}
+
+/// SONNY-3135 (N7b): the request running on this thread failed inside its
+/// session's transaction, which its handler rolls back: the session engine
+/// transaction is aborted, not committed, wherever it is settled
+/// (`settleAtWriteRelease`, the executor's program end). No-op without a
+/// session slot on the thread.
+pub fn noteSessionTxnFailed() void {
+    if (t_session_engine_slot) |slot| slot.failed = true;
+}
+
+/// SONNY-3135 (N7b): did the request running on this thread fail inside its
+/// session's transaction (`noteSessionTxnFailed`)?
+pub fn sessionTxnFailed() bool {
+    const slot = t_session_engine_slot orelse return false;
+    return slot.failed;
 }
 
 /// SONNY-2823: take this thread's session engine transaction off the thread

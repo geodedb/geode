@@ -9134,6 +9134,22 @@ pub fn build(b: *std.Build) void {
     const sonny3134_step = b.step("test-sonny3134-drop-graph-other-txn", "Run SONNY-3134 regression (DROP GRAPH and CREATE OR REPLACE GRAPH of a graph another session's open transaction changed are refused, 55006; its COMMIT keeps and its ROLLBACK undoes the change; the graph drops once the transaction ends or its client disconnects; gRPC in process and QUIC)");
     sonny3134_step.dependOn(&run_sonny3134_tests.step);
 
+    // SONNY-3135 (N7a, N7b): EXPLAIN and PROFILE wrap only a query, a data
+    // change, FOR or a read-only CALL; a request that fails in a transaction
+    // aborts its session engine transaction rather than committing it.
+    const sonny3135_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny3135_profile_allowlist_failed_txn.zig"), .target = target, .optimize = optimize });
+    sonny3135_test_mod.link_libc = true;
+    sonny3135_test_mod.addImport("geode", root_mod);
+    sonny3135_test_mod.addImport("schema", schema_mod);
+    sonny3135_test_mod.addImport("protobuf", protobuf_mod);
+    sonny3135_test_mod.addImport("grpc_impl", sonny1560_shim_mod);
+    sonny3135_test_mod.addImport("logging", logging_mod);
+    const sonny3135_tests = b.addTest(.{ .root_module = sonny3135_test_mod });
+    const run_sonny3135_tests = b.addRunArtifact(sonny3135_tests);
+    shardDep(test_step, &run_sonny3135_tests.step, 1, test_shard_loads, test_shard_index);
+    const sonny3135_step = b.step("test-sonny3135-profile-allowlist-failed-txn", "Run SONNY-3135 (N7a, N7b) regression (EXPLAIN and PROFILE take only a query, a data change, FOR or a read-only CALL, 0A000 otherwise; PROFILE of the self-locking backfill is refused at once; a failed request's session engine transaction is aborted, not committed)");
+    sonny3135_step.dependOn(&run_sonny3135_tests.step);
+
     // SONNY-2790: the fulltext statements (CREATE/DROP INDEX, geode.fts.*)
     // run on the default graph, so the handlers lock `default` for them from
     // any session. Classifier, and the real gRPC handler (SONNY-1560 shim).

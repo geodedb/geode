@@ -804,7 +804,8 @@ pub fn explainOrProfileHasCompany(program: *const ast.Program, analysis: *const 
 // CANARY: REQ=REQ-SONNY-3026-PROFILE-TXN-CONTROL; FEATURE="StatementAuthorization"; ASPECT=ExplainProfileTarget; STATUS=TESTED; TEST=tests/test_sonny3026_profile_txn_control.zig; OWNER=security; UPDATED=2026-09-27
 /// SONNY-3026: what the handlers answer (SQLSTATE 0A000) to an EXPLAIN or
 /// PROFILE of a statement that is not a query or a data change.
-pub const explain_profile_target_message = "EXPLAIN and PROFILE take a query or a data change: not START TRANSACTION, COMMIT, ROLLBACK, a SESSION statement, USE GRAPH, or another EXPLAIN or PROFILE";
+/// SONNY-3135: the statements they take, listed.
+pub const explain_profile_target_message = "EXPLAIN and PROFILE take a query, a data change (INSERT, CREATE, MERGE, DELETE, SET, REMOVE), FOR or a read-only CALL: not transaction control, a SESSION statement, USE GRAPH, DDL, SHOW, another EXPLAIN or PROFILE, or a CALL that changes data";
 
 /// SONNY-3026: does `program` EXPLAIN or PROFILE transaction control (START
 /// TRANSACTION, COMMIT, ROLLBACK), a session statement (SESSION SET, RESET,
@@ -825,20 +826,26 @@ pub fn explainOrProfileTargetRefused(program: *const ast.Program) bool {
     return false;
 }
 
+// CANARY: REQ=REQ-SONNY-3135-PROFILE-ALLOWLIST; FEATURE="StatementAuthorization"; ASPECT=ExplainProfileAllowlist; STATUS=TESTED; TEST=tests/test_sonny3135_profile_allowlist_failed_txn.zig; OWNER=security; UPDATED=2026-09-27
+/// SONNY-3135 (N7a): the statements an EXPLAIN or PROFILE may wrap, listed:
+/// a query (set operations included), a data change (INSERT, CREATE, MERGE,
+/// DELETE, and SET and REMOVE, which are queries), FOR, and a CALL that
+/// changes nothing (a read-only procedure, or a subquery whose statement is
+/// itself one of these and changes nothing). SONNY-3026 refused the ones it
+/// listed and let the rest through: `PROFILE CALL
+/// geode.tenant.backfill_edge_tags()` ran the self-locking procedure under
+/// the handler's lock, where it waited up to 120 s on the lock its own
+/// request held, and DDL, SHOW and auth statements ran through the PROFILE
+/// arm, which is built for queries.
 fn explainableTarget(stmt: *const ast.Statement) bool {
     return switch (stmt.*) {
-        .StartTransaction,
-        .Commit,
-        .Rollback,
-        .SessionSet,
-        .SessionReset,
-        .SessionClose,
-        .UseGraph,
-        .Explain,
-        .Profile,
-        .ExplainPolicy,
-        => false,
-        else => true,
+        .Query, .Union, .Intersect, .Except, .For => true,
+        .Insert, .InsertValue, .Create, .Merge, .Delete => true,
+        .Call => |*call| switch (call.*) {
+            .Procedure => |proc| procedure_access.classifyCallProcedure(proc) == .read_only,
+            .Subquery => |sq| explainableTarget(sq.statement) and !isMutatingStatement(sq.statement),
+        },
+        else => false,
     };
 }
 
@@ -861,12 +868,21 @@ fn explainableTarget(stmt: *const ast.Statement) bool {
 /// and LIMIT and OFFSET are numbers.
 pub fn isSelfLockingProgram(program: *const ast.Program) bool {
     if (program.statements.len != 1) return false;
-    return switch (program.statements[0]) {
+    return isSelfLockingStatement(&program.statements[0]);
+}
+
+/// SONNY-3135 (N7a): a PROFILE runs the statement it wraps, so a PROFILE'd
+/// self-locking CALL is one too (the handlers refuse it anyway, since
+/// `explainableTarget` takes no CALL that changes data). It was not, and ran
+/// under the handler's lock.
+fn isSelfLockingStatement(stmt: *const ast.Statement) bool {
+    return switch (stmt.*) {
         .Call => |call_stmt| switch (call_stmt) {
             .Procedure => |proc| proc.return_clause == null and proc.order_by == null and
                 procedure_access.isSelfLockingProcedure(proc),
             .Subquery => false,
         },
+        .Profile => |p| isSelfLockingStatement(p.query),
         else => false,
     };
 }

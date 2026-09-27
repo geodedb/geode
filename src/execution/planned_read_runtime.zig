@@ -480,6 +480,8 @@ pub fn executeProfiledIfSupported(
     // stayed open, and the backstop committed it after the lock was released.
     execution.enterEntryPoint();
     defer execution.leaveEntryPoint();
+    // SONNY-3135 (N7b): a failed profiled change aborts its engine transaction.
+    errdefer execution.failEntryPoint();
 
     var plan = (try buildPlanIfSupported(allocator, q, context)) orelse return null;
     errdefer plan.deinit(allocator);
