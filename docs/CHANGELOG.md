@@ -777,6 +777,100 @@
 
   **Behaviour change:** CREATE/DROP SCHEMA need Admin or a GPS `FOR SCHEMA`
   policy on `*`.
+- **Graph DDL runs without statements on graph data (SONNY-3130):** the
+  handlers lock the graph a program runs on before it runs, and since
+  SONNY-3028 CREATE and DROP GRAPH count as statements on the graph they
+  name. So `CREATE OR REPLACE GRAPH g; USE GRAPH g; CREATE (:R)` and `DROP
+  GRAPH g; CREATE GRAPH g; USE GRAPH g; CREATE (:R)` held the old graph's
+  write lock while the program wrote the new graph, which has a lock of its
+  own, beside that graph's writers; and from a session on g, `DROP GRAPH g;
+  CREATE (:R)` created g again. A program that creates, replaces or drops a
+  graph and also has a statement on graph data, on any graph, before or
+  after the DDL (a START TRANSACTION body and a PROFILE'd statement
+  included), is now refused on QUIC and gRPC.
+
+  **Behaviour change:** such a program answers 0A000; send the statements
+  that use the graph in a request of their own. Graph DDL still runs with
+  other graph DDL, graph selection, session statements and transaction
+  control, so `DROP GRAPH IF EXISTS g; CREATE GRAPH g` and `CREATE GRAPH g;
+  USE GRAPH g` run. `START TRANSACTION; CREATE (:X); DROP GRAPH g` answers
+  0A000 where it answered 55006.
+- **A checkpoint does not write a dropped graph back (SONNY-3131):** a
+  regression of SONNY-3028 in this release. A graph-scoped checkpoint (the
+  hydration persist, the exact-index persist worker, the ordered-index
+  build, the self-heal flush) of a graph dropped while it waited for the
+  graph's lock put the graph back into the registry, with its files gone.
+  CREATE GRAPH of the name then answered 42P07, and every later registry
+  save failed on the missing files and was only logged, so graphs created
+  afterwards, and their data, were gone after a restart. The checkpoint now
+  leaves the registry alone for a dropped graph, and a registry save skips
+  (and logs at error level) an entry whose files cannot be read instead of
+  failing, without lowering the registry's next ids.
+- **The default graph cannot be dropped or replaced (SONNY-3132):**
+  `GraphStore.dropGraph` dropped the storage engine's graph before it
+  checked for `default`, and DROP GRAPH logged the refusal and answered ok:
+  `DROP GRAPH default` from a user with the schema permission on `default`
+  (a ReadWrite user with a `FOR SCHEMA` grant on it, too) deleted the
+  default graph's engine and its files on disk, while the in-memory store
+  still showed its data. The store and the storage engine now refuse `default`
+  before dropping anything, and the refusal reaches the client; CREATE OR
+  REPLACE GRAPH default is refused before anything is dropped.
+
+  **Behaviour change:** DROP GRAPH default, DROP GRAPH IF EXISTS default and
+  CREATE OR REPLACE GRAPH default answer 0A000, for every principal.
+- **Deep nesting gets a parse error, not a crash (SONNY-3133):** parsing
+  runs before authorization, and only the expression grammar counted its
+  depth, so any authenticated user could overflow the stack of the thread
+  parsing the request: a 408-byte `PROFILE EXPLAIN PROFILE ...` crashed the
+  server at depth 50, and so did deep START TRANSACTION bodies,
+  parenthesized statements, VALUES continuations, WITH chains, CALL { }
+  subqueries, FOR bodies, and long NOT, unary minus or shortestPath()
+  chains; `ORDER BY 1 + 1 + ... + 1` overflowed in the ORDER BY check. Every
+  recursive entry of the parser now counts against the 128-level limit
+  (GAP-0333), statements nest at most 8 deep, and a level is refused when
+  less than 2 MiB (Debug) or 512 KiB of the thread's stack is left, so no
+  nesting overflows the 16 MiB QUIC workers or the 8 MiB gRPC connection
+  threads. The ORDER BY check walks operator and member-access chains in a
+  loop.
+
+  **Behaviour change:** more than 8 nested statements (EXPLAIN, PROFILE,
+  EXPLAIN POLICY FOR, a START TRANSACTION body, a parenthesized statement, a
+  VALUES continuation) answer 42000, and so do more than 128 levels of any
+  nesting, NOT and unary minus chains and WITH chains included. A Debug
+  build refuses somewhat less nesting than a release build, where the
+  thread's stack runs short first.
+- **DROP GRAPH is refused while any session's transaction has changed the
+  graph (SONNY-3134):** SONNY-3028 refused DROP GRAPH of the graph the
+  calling session's transaction changed. Another session's open
+  transaction holds no lock between its requests, so the graph was dropped
+  under it: that session's COMMIT reported success for changes that went
+  with the graph, and its COMMIT or ROLLBACK created the graph again. A
+  session's transaction now holds the graph it changed (its transaction
+  graph, SONNY-2776) from its first change until it commits, rolls back or
+  the session ends, and DROP GRAPH and CREATE OR REPLACE GRAPH of a held
+  graph are refused.
+
+  **Behaviour change:** DROP GRAPH and CREATE OR REPLACE GRAPH of a graph
+  that any session's open transaction has changed answer 55006, until that
+  transaction ends. A transaction that only read the graph does not hold
+  it.
+- **EXPLAIN and PROFILE take a listed set of statements, and a failed
+  request's changes are not committed (SONNY-3135, part):** SONNY-3026
+  refused the statements it listed and let the rest through: `PROFILE CALL
+  geode.tenant.backfill_edge_tags()` ran the self-locking procedure under
+  the handler's lock, where it waited up to 120 s on the lock its own
+  request held, and DDL ran through the PROFILE arm, built for queries.
+  EXPLAIN and PROFILE now take a query (set operations included), a data
+  change (INSERT, CREATE, MERGE, DELETE, SET, REMOVE), FOR or a read-only
+  CALL, and a PROFILE'd self-locking CALL counts as one. And a program that
+  failed inside its transaction committed its engine transaction when it
+  returned (a write lock's release did the same for one left open), so the
+  failed changes were durable until the rollback undid them (the SONNY-2979
+  crash window); the engine transaction is now aborted.
+
+  **Behaviour change:** EXPLAIN or PROFILE of graph, index, constraint,
+  schema, auth or policy DDL, SHOW, VALUES, EXPLAIN POLICY or a CALL that
+  changes data answers 0A000.
 
 ### Fixed
 
