@@ -3888,6 +3888,14 @@ pub const GraphStore = struct {
         // the entry, or vice versa).  `clearNodesForGraph` does not
         // touch `self.graphs` so the leaf-mutex invariant holds — see
         // `graphs_mutex` field doc.
+        // CANARY: REQ=REQ-SONNY-3132-DROP-DEFAULT-GRAPH; FEATURE="MultiGraphIsolation"; ASPECT=GraphStoreRefusesDefault; STATUS=TESTED; TEST=tests/test_sonny3132_drop_default_graph.zig; OWNER=storage; UPDATED=2026-09-27
+        // SONNY-3132: the default graph is refused before anything is
+        // dropped. The check came after the adapter's drop, so the default
+        // graph's engine and its files were deleted and only the in-memory
+        // graph stayed.
+        if (std.mem.eql(u8, graph_name, DEFAULT_GRAPH_NAME)) {
+            return error.CannotDropDefaultGraph;
+        }
         self.graphs_mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
         defer self.graphs_mutex.unlock(std.Io.Threaded.global_single_threaded.io());
 
@@ -3895,9 +3903,6 @@ pub const GraphStore = struct {
         // SONNY-3028: a refusal (`ObjectInUse`) leaves the graph as it is.
         if (global_vtable) |vt| {
             try vt.dropGraphFn(vt.ctx, graph_name);
-        }
-        if (std.mem.eql(u8, graph_name, "default")) {
-            return error.CannotDropDefaultGraph;
         }
         if (!self.graphs.contains(graph_name)) {
             return error.GraphNotFound;
@@ -13940,8 +13945,8 @@ const AdapterVTable = struct {
     graphExistsFn: *const fn (*anyopaque, []const u8) bool,
     getOrCreateGraphFn: *const fn (*anyopaque, []const u8) anyerror!*anyopaque,
     // SONNY-3028: refuses (`ObjectInUse`) a graph the calling thread has an
-    // engine transaction open on.
-    dropGraphFn: *const fn (*anyopaque, []const u8) error{ObjectInUse}!void,
+    // engine transaction open on. SONNY-3132: and the default graph.
+    dropGraphFn: *const fn (*anyopaque, []const u8) error{ ObjectInUse, CannotDropDefaultGraph }!void,
     createNodeFn: *const fn (*anyopaque, []const u8, []const []const u8) anyerror!u64,
     // GAP-ENT-0024: the trailing u64 is the geode-minted PUBLIC edge id,
     // stored INLINE in the durable adjacency records (v2 blocks) so a
@@ -14454,7 +14459,7 @@ pub fn initGlobalAdapter(allocator: std.mem.Allocator, data_dir: []const u8) !*g
             const mg = try castAdapter(ctx).getOrCreateGraph(name);
             return @ptrCast(mg);
         }
-        fn dropGraph(ctx: *anyopaque, name: []const u8) error{ObjectInUse}!void {
+        fn dropGraph(ctx: *anyopaque, name: []const u8) error{ ObjectInUse, CannotDropDefaultGraph }!void {
             try castAdapter(ctx).dropGraph(name);
         }
         fn createNode(ctx: *anyopaque, graph_name: []const u8, labels: []const []const u8) anyerror!u64 {

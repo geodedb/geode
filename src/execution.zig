@@ -2231,11 +2231,15 @@ fn executeStatementWithContextInner(allocator: std.mem.Allocator, stmt: ast.Stat
             const in_store = store.graphExists(graph_name);
 
             if (cg.or_replace) {
+                // CANARY: REQ=REQ-SONNY-3132-DROP-DEFAULT-GRAPH; FEATURE="MultiGraphIsolation"; ASPECT=ReplaceDefaultRefused; STATUS=TESTED; TEST=tests/test_sonny3132_drop_default_graph.zig; OWNER=storage; UPDATED=2026-09-27
+                // SONNY-3132: the default graph is not replaced. Its drop's
+                // refusal was swallowed here, and the graph created again.
+                if (std.mem.eql(u8, graph_name, graph_store.DEFAULT_GRAPH_NAME)) return error.CannotDropDefaultGraph;
                 // SONNY-3028: the graph a transaction changed is not replaced
                 // under it, and a refusal leaves the catalog as it was.
                 try refuseDropInTransaction(context);
                 store.dropGraph(graph_name) catch |err| switch (err) {
-                    error.ObjectInUse => return err,
+                    error.ObjectInUse, error.CannotDropDefaultGraph => return err,
                     else => {},
                 };
                 cat.removeGraph(graph_name) catch |err| {
@@ -2327,7 +2331,9 @@ fn executeStatementWithContextInner(allocator: std.mem.Allocator, stmt: ast.Stat
             // the catalog as it was.
             try refuseDropInTransaction(context);
             store.dropGraph(graph_name) catch |err| switch (err) {
-                error.ObjectInUse => return err,
+                // SONNY-3132: the default graph's refusal was logged, and the
+                // statement answered ok.
+                error.ObjectInUse, error.CannotDropDefaultGraph => return err,
                 else => log.warn("dropGraphStore failed", &.{
                     Attr.string("graph_name", graph_name),
                     Attr.string("error", @errorName(err)),

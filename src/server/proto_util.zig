@@ -204,6 +204,8 @@ pub fn mapError(err: anyerror) ErrorInfo {
         error.RevokeNotPersisted => .{ .code = "58030", .message = "The revoke could not be saved to the security graph; the privilege may return at the next start. Retry it" },
         // SONNY-3028: DROP GRAPH of the graph the session's transaction changed.
         error.ObjectInUse => .{ .code = "55006", .message = "Object in use: the graph is in use by this session's transaction; commit or roll back before dropping it" },
+        // SONNY-3132: DROP GRAPH default, CREATE OR REPLACE GRAPH default.
+        error.CannotDropDefaultGraph => .{ .code = "0A000", .message = "The default graph cannot be dropped or replaced" },
         // ENG-3903: a MERGE relationship endpoint that is neither bound by a
         // preceding clause nor describable by a label/property pattern is
         // rejected instead of committing an empty success (silent write loss).

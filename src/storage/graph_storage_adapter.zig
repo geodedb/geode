@@ -3575,7 +3575,13 @@ pub const StorageAdapter = struct {
     /// lets it go (`GraphNotFound`). It was freed under them. `ObjectInUse`
     /// when this thread has an engine transaction open on it (a program that
     /// changed the graph in its transaction, then drops it): the graph stays.
-    pub fn dropGraph(self: *StorageAdapter, name: []const u8) error{ObjectInUse}!void {
+    ///
+    /// SONNY-3132: the default graph is refused (`CannotDropDefaultGraph`),
+    /// whoever calls. `GraphStore.dropGraph` checked for it only after this
+    /// drop had deleted the default graph's engine and files.
+    pub fn dropGraph(self: *StorageAdapter, name: []const u8) error{ ObjectInUse, CannotDropDefaultGraph }!void {
+        // CANARY: REQ=REQ-SONNY-3132-DROP-DEFAULT-GRAPH; FEATURE="MultiGraphIsolation"; ASPECT=AdapterRefusesDefault; STATUS=TESTED; TEST=tests/test_sonny3132_drop_default_graph.zig; OWNER=storage; UPDATED=2026-09-27
+        if (std.mem.eql(u8, name, graph_store.DEFAULT_GRAPH_NAME)) return error.CannotDropDefaultGraph;
         self.mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
         defer self.mutex.unlock(std.Io.Threaded.global_single_threaded.io());
 
