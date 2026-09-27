@@ -8899,6 +8899,17 @@ pub fn build(b: *std.Build) void {
     const sonny2727_step = b.step("test-sonny2727-param-decoder-narrowing", "Run SONNY-2727 regression (every narrowing in the wire parameter decoders is checked: an out-of-range SMALLINT, REAL, CHAR/VARCHAR length, decimal scale or binary length is refused with 22023 and frees what it decoded, and the process survives)");
     sonny2727_step.dependOn(&run_sonny2727_tests.step);
 
+    // SONNY-2818: a client parameter map that repeats a key frees the
+    // duplicate key and the value it replaces (leak-checked).
+    const sonny2818_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny2818_param_map_dup_keys.zig"), .target = target, .optimize = optimize });
+    sonny2818_test_mod.addImport("geode", root_mod);
+    sonny2818_test_mod.addImport("schema", schema_mod);
+    const sonny2818_tests = b.addTest(.{ .root_module = sonny2818_test_mod });
+    const run_sonny2818_tests = b.addRunArtifact(sonny2818_tests);
+    shardDep(test_step, &run_sonny2818_tests.step, 1, test_shard_loads, test_shard_index);
+    const sonny2818_step = b.step("test-sonny2818-param-map-dup-keys", "Run SONNY-2818 regression (a client parameter map that repeats a key decodes to its last value and frees the duplicate key and the replaced value, nested and on a refusal: leak-checked)");
+    sonny2818_step.dependOn(&run_sonny2818_tests.step);
+
     // SONNY-2724: over the real QUIC handler, the key-resolved write fast
     // paths (node, graph-selector and /*+BATCH*/ MERGE, relationship MERGE,
     // MATCH ... CREATE edge) serve no session that a tenant scope, strict

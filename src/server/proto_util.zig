@@ -129,6 +129,11 @@ pub fn protoValueToValue(allocator: std.mem.Allocator, value: schema.Value, dept
                 }
                 map.deinit();
             }
+            // CANARY: REQ=REQ-SONNY-2818-PARAM-MAP-DUP-KEYS; FEATURE="WireParameters"; ASPECT=DuplicateMapKeys; STATUS=TESTED; TEST=tests/test_sonny2818_param_map_dup_keys.zig; OWNER=security; UPDATED=2026-09-27
+            // SONNY-2818: a repeated key frees the duplicate key and the value
+            // it replaces (the last value still wins). `put` kept the stored
+            // key and dropped both, so a client grew the server's memory by
+            // about the size of each request (the peer path's fix, 076a7ba1).
             for (mv.entries.items) |entry| {
                 const key = try allocator.dupe(u8, entry.key);
                 errdefer allocator.free(key);
@@ -137,7 +142,12 @@ pub fn protoValueToValue(allocator: std.mem.Allocator, value: schema.Value, dept
                 else
                     value_types.Value.Null;
                 errdefer freeParamValue(allocator, val);
-                try map.put(key, val);
+                const slot = try map.getOrPut(key);
+                if (slot.found_existing) {
+                    allocator.free(key);
+                    freeParamValue(allocator, slot.value_ptr.*);
+                }
+                slot.value_ptr.* = val;
             }
             break :blk .{ .Map = map };
         },
