@@ -5931,7 +5931,15 @@ pub const GraphStore = struct {
         return if (current == self) adapter else null;
     }
 
-    /// Whether node `id` of `graph_name` holds the key `source` describes.
+    fn nodeCarriesLabel(node: *const Node, label: []const u8) bool {
+        for (node.labels) |l| {
+            if (std.mem.eql(u8, l, label)) return true;
+        }
+        return false;
+    }
+
+    /// Whether node `id` of `graph_name` carries `label` and holds the key
+    /// `source` describes.
     fn holdsMergeKey(self: *GraphStore, id: u64, graph_name: []const u8, label: []const u8, source: MergeKeySource) !bool {
         const Check = struct {
             graph_name: []const u8,
@@ -5940,6 +5948,11 @@ pub const GraphStore = struct {
 
             fn holds(c: @This(), node: *const Node) bool {
                 if (!std.mem.eql(u8, node.graph_name, c.graph_name)) return false;
+                // The label's postings and the exact index can still list a
+                // node that no longer carries the label (a rolled-back
+                // `SET n:L`, SONNY-3059), and MERGE matches only a node that
+                // carries it.
+                if (!nodeCarriesLabel(node, c.label)) return false;
                 var buf: [1024]u8 = undefined;
                 switch (c.source) {
                     .property => |p| {

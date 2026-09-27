@@ -291,3 +291,93 @@ test "SONNY-3109: rolling back SET n:L or REMOVE n:L restores MERGE's index" {
         try testing.expectEqual(node_id, id);
     }
 }
+
+/// A node of `label` holding x = `x` and t = `t`, written as the server's
+/// bulk ingest writes it.
+fn bulkNode(label: []const u8, t: []const u8, x: PropertyValue) !u64 {
+    const adapter = graph_store.getGlobalAdapter() orelse return error.NoAdapter;
+    const store = graph_store.getGlobalStore(testing.allocator);
+    const props = [_]PropKV{ .{ .key = "x", .value = x }, .{ .key = "t", .value = .{ .String = t } } };
+    return adapter.bulkInsertNodeWithReservedId(G, store.reserveNodeId(), &[_][]const u8{label}, &props);
+}
+
+/// `SET n:label` on `id` rolled back through the undo log, the path a
+/// statement's or a transaction's ROLLBACK takes. The node no longer carries
+/// the label, but the label's postings and the exact node-property index
+/// may still list it (they are not rolled back with it).
+fn addLabelRolledBack(id: u64, label: []const u8) !void {
+    const adapter = graph_store.getGlobalAdapter() orelse return error.NoAdapter;
+    const store = graph_store.getGlobalStore(testing.allocator);
+    // The session's engine transaction slot, as a request of the session
+    // installs it (SONNY-2823).
+    var slot: gsa.SessionEngineTxn = .{};
+    const scope = gsa.enterSessionEngineTxn(&slot);
+    defer gsa.leaveSessionEngineTxn(&slot, scope);
+    var undo = geode.txn_undo_log.UndoLog.init(testing.allocator);
+    defer undo.deinit();
+    undo.begin();
+    try adapter.beginSessionTxnLazy(G);
+    try store.addNodeLabel(id, label);
+    try undo.logAddNodeLabel(id, label);
+    adapter.abortSessionTxn();
+    try undo.rollback(store);
+}
+
+fn carriesLabel(id: u64, label: []const u8) bool {
+    const node = graph_store.getGlobalStore(testing.allocator).nodes.get(id) orelse return false;
+    for (node.labels) |l| if (std.mem.eql(u8, l, label)) return true;
+    return false;
+}
+
+test "SONNY-3109: MERGE's holder search skips a node that no longer carries the label" {
+    // The round-8 re-review's probe (phase rb, case b): z has the lowest id
+    // and holds x = 1 under another label; `SET z:ML` rolled back leaves z
+    // without :ML, yet listed under :ML where MERGE's holder search reads
+    // (the label's postings and the exact index). The search checked the
+    // node's graph and property, not its label, so the server's bulk MERGE
+    // matched z, a node without the label. (That the rollback leaves the
+    // storage's label postings with z, so a persisted MATCH (n:ML) still
+    // returns it, is SONNY-3059: a rollback does not undo a label change.)
+    harness.silenceEngineLogs();
+    var f: Failures = .{};
+    defer f.deinit();
+    var s = try Session.init(.persisted);
+    defer s.deinit();
+    const prev = execution.pushActiveContext(&s.ctx);
+    defer execution.popActiveContext(prev);
+    const adapter = graph_store.getGlobalAdapter() orelse return error.NoAdapter;
+
+    // An integer key (MERGE's index; the settle reads the exact index).
+    const z = try bulkNode("MZ", "z", .{ .Int = 1 });
+    _ = try bulkNode("ML", "a", .{ .Int = 1 });
+    _ = try bulkNode("ML", "b", .{ .Int = 1 });
+    try addLabelRolledBack(z, "ML");
+    if (carriesLabel(z, "ML")) try f.add("the rollback left z with :ML", .{});
+    try expectMatch(&f, "MERGE (:ML {x: 1})", adapter.bulkMergeNode(G, "ML", "x", .{ .Int = 1 }, &.{}, null, false), "a");
+    try expectRows(&s, &f, "MERGE (n:ML {x: 1}) RETURN n.t", &.{"'a'"});
+
+    // A number that is not an integer (not in MERGE's index): the server's
+    // MERGE finds its holders through the exact index.
+    const d: PropertyValue = .{ .Float = 1.5 };
+    const z2 = try bulkNode("MZ2", "z2", d);
+    _ = try bulkNode("MD", "a", d);
+    try addLabelRolledBack(z2, "MD");
+    try expectMatch(&f, "MERGE (:MD {x: 1.5})", adapter.bulkMergeNode(G, "MD", "x", d, &.{}, null, false), "a");
+
+    // In lean mode the settle scans the label's postings.
+    {
+        graph_store.setLeanIndexingForTest(true);
+        defer graph_store.setLeanIndexingForTest(false);
+        graph_store.registerMergeIndexKey("x");
+        const z3 = try bulkNode("MZ3", "z3", .{ .Int = 3 });
+        _ = try bulkNode("MN", "a", .{ .Int = 3 });
+        _ = try bulkNode("MN", "b", .{ .Int = 3 });
+        try addLabelRolledBack(z3, "MN");
+        try expectMatch(&f, "MERGE (:MN {x: 3}) (lean)", adapter.bulkMergeNode(G, "MN", "x", .{ .Int = 3 }, &.{}, null, false), "a");
+        const z4 = try bulkNode("MZ4", "z4", d);
+        _ = try bulkNode("MO", "a", d);
+        try addLabelRolledBack(z4, "MO");
+        try expectMatch(&f, "MERGE (:MO {x: 1.5}) (lean)", adapter.bulkMergeNode(G, "MO", "x", d, &.{}, null, false), "a");
+    }
+    try f.check("label check");
+}
