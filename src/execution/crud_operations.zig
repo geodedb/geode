@@ -239,19 +239,23 @@ fn valueToPropertyValueForIndex(val: Value) ?graph_store.PropertyValue {
 }
 
 // CANARY: REQ=REQ-SONNY-2819-AUDIT-JSON-ESCAPE; FEATURE="AuditDurability"; ASPECT=RefusalKeysHexEncoded; STATUS=TESTED; TEST=tests/test_sonny2819_audit_log_injection.zig; OWNER=security; UPDATED=2026-09-27
+// CANARY: REQ=REQ-SONNY-3045-AUDIT-TEXT-ESCAPING; FEATURE="AuditDurability"; ASPECT=JoinAuditTextUnambiguous; STATUS=TESTED; TEST=tests/test_sonny3045_audit_text_escaping.zig; OWNER=security; UPDATED=2026-09-27
 /// SONNY-2819: `items` joined with ',' for an audit record's details, each
 /// control character (and DEL) hex-encoded as `\xHH`. A MERGE pattern's
 /// property keys are the client's: a string-literal key can carry a quote and
 /// a newline, which the audit writer printed unescaped, so a restricted user
 /// could forge a second record. The writer now escapes every string; this is
 /// the defence in depth, so the text never holds a line break at all.
-fn joinAuditText(allocator: std.mem.Allocator, items: []const []const u8) ![]u8 {
+/// SONNY-3045: a comma and a backslash are hex-encoded too, so the text reads
+/// back as exactly the items it was given: a key holding a comma read as two
+/// keys, and one holding `\x0a` as a newline.
+pub fn joinAuditText(allocator: std.mem.Allocator, items: []const []const u8) ![]u8 {
     var out: std.ArrayList(u8) = .empty;
     errdefer out.deinit(allocator);
     for (items, 0..) |item, i| {
         if (i > 0) try out.append(allocator, ',');
         for (item) |c| {
-            if (c < 0x20 or c == 0x7f) {
+            if (c < 0x20 or c == 0x7f or c == ',' or c == '\\') {
                 try out.print(allocator, "\\x{x:0>2}", .{c});
             } else {
                 try out.append(allocator, c);

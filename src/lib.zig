@@ -498,6 +498,8 @@ pub const security = struct {
     pub const auth = @import("geode_auth");
     pub const multi_graph_security = @import("security/multi_graph_security.zig");
     pub const audit = @import("security/audit.zig");
+    // SONNY-3045: the Windows Event Log, syslog and JSON audit exporters.
+    pub const audit_formatter = @import("security/audit_formatter.zig");
     pub const tenant_quota = @import("security/tenant_quota.zig");
     // GAP-0839: Durable tenant lifecycle registry
     pub const tenant_registry = @import("security/tenant_registry.zig");

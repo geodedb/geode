@@ -9207,6 +9207,27 @@ pub fn build(b: *std.Build) void {
     const sonny2707_step = b.step("test-sonny2707-varlen-set", "Run SONNY-2707 part (1) regression (a SET or REMOVE through a variable-length pattern writes every node an oracle over the seeded edges reaches, through and at nodes the session may read, behind no RETURN, an aggregate or DISTINCT; a write on the relationship list or the path is refused; a program writing two graphs is refused: in-memory, RLS-policy and tenant-scoped sessions)");
     sonny2707_step.dependOn(&run_sonny2707_tests.step);
 
+    // SONNY-738 Task W fix round: the one write step (a SET, REMOVE, CREATE,
+    // MERGE or DELETE applied over the rows the pattern binds, after the WITH
+    // and its WHERE) and the structural guard that refuses a write clause an
+    // executor does not apply. In-memory, tenant-scoped and RLS-policy
+    // sessions (tests/sonny738_write_harness.zig).
+    const Sonny738Step = struct { name: []const u8, path: []const u8, desc: []const u8 };
+    const sonny738_steps = [_]Sonny738Step{
+        .{ .name = "test-sonny3045-audit-text-escaping", .path = "tests/test_sonny3045_audit_text_escaping.zig", .desc = "Run SONNY-3045 regression (joinAuditText encodes a comma and a backslash; the Windows Event Log, syslog and JSON audit exporters escape every string)" },
+    };
+    for (sonny738_steps) |spec| {
+        const mod = b.createModule(.{ .root_source_file = b.path(spec.path), .target = target, .optimize = optimize });
+        mod.addImport("geode", root_mod);
+        mod.addImport("logging", logging_mod);
+        mod.addImport("rls_types", rls_types_mod);
+        const tests = b.addTest(.{ .root_module = mod });
+        const run_tests = b.addRunArtifact(tests);
+        shardDep(test_step, &run_tests.step, 1, test_shard_loads, test_shard_index);
+        const step = b.step(spec.name, spec.desc);
+        step.dependOn(&run_tests.step);
+    }
+
     // SONNY-2746: a failing-allocator sweep over every allocation of
     // `CALL geode.rls.add_attribute_policy`, in the request and the engine.
     const sonny2746_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny2746_rls_attribute_policy_oom.zig"), .target = target, .optimize = optimize });

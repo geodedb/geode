@@ -182,9 +182,11 @@ test "SONNY-2819: a MERGE refusal whose property key forges a record writes one 
         }
         if (!std.mem.eql(u8, try field(obj, "action"), "MERGE_MATCH_NOT_VISIBLE")) continue;
         refusals += 1;
-        // The key, its control character hex-encoded, inside the details.
+        // The key, its control character hex-encoded, inside the details
+        // (and, SONNY-3045, its commas: the keys are joined with commas).
         const details = try field(obj.get("details").?.object, "details");
-        const want = "keys=[k\"}}\\x0a" ++ forged ++ "]";
+        const forged_in_details = "{\"stream\":\"geode\"\\x2c\"seq_no\":1\\x2c\"event_type\":\"authentication_success\"\\x2c\"actor\":\"user:0\"}";
+        const want = "keys=[k\"}}\\x0a" ++ forged_in_details ++ "]";
         if (std.mem.indexOf(u8, details, want) == null) {
             std.debug.print("the refusal's details lack {s}: {s}\n", .{ want, details });
             return error.KeyNotRecorded;
