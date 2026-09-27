@@ -9108,6 +9108,19 @@ pub fn build(b: *std.Build) void {
     const sonny2724_step = b.step("test-sonny2724-quic-fast-path-gate", "Run SONNY-2724 regression (over QUIC, the key-resolved write fast paths never serve a tenant-scoped session, an unscoped session under strict tenancy, or a user while an RLS policy is installed; each takes the executor and gives its correct answer)");
     sonny2724_step.dependOn(&run_sonny2724_tests.step);
 
+    const sonny2816_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny2816_bulk_ingest_txn.zig"), .target = target, .optimize = optimize });
+    sonny2816_test_mod.link_libc = true;
+    sonny2816_test_mod.addImport("geode", root_mod);
+    sonny2816_test_mod.addImport("schema", schema_mod);
+    sonny2816_test_mod.addImport("protobuf", protobuf_mod);
+    sonny2816_test_mod.addImport("transport/quic", transport_quic_mod);
+    const sonny2816_tests = b.addTest(.{ .root_module = sonny2816_test_mod });
+    const run_sonny2816_tests = b.addRunArtifact(sonny2816_tests);
+    run_sonny2816_tests.step.dependOn(&install_geode_exe.step);
+    shardDep(test_step, &run_sonny2816_tests.step, 1, test_shard_loads, test_shard_index);
+    const sonny2816_step = b.step("test-sonny2816-bulk-ingest-txn", "Run SONNY-2816 regression (spawns a GEODE_BULK_INGEST=1 server: over QUIC, a simple CREATE or MERGE and a MATCH ... CREATE or MERGE edge sent inside a transaction take the executor, so ROLLBACK undoes them and COMMIT keeps them)");
+    sonny2816_step.dependOn(&run_sonny2816_tests.step);
+
     // SONNY-2675: an aggregate named in a grouped HAVING is computed for each
     // group; an ungrouped input column there is refused (42803).
     const sonny2675_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny2675_grouped_having.zig"), .target = target, .optimize = optimize });

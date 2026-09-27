@@ -7948,8 +7948,13 @@ fn handleClientMessage(
             // bypassing the Raft propose hook in crud_operations, so skip it
             // whenever a cluster coordinator is active.
             // CANARY: REQ=REQ-DIST-CLUSTER-REPLICATE-CREATE; FEATURE="DistributedCluster"; ASPECT=BulkFastPathClusterBypass; STATUS=TESTED; TEST=tests/test_cluster_3node_steady_state.zig; OWNER=distributed; UPDATED=2026-06-04
+            // CANARY: REQ=REQ-SONNY-2816-BULK-INGEST-TXN; FEATURE="TransactionUndoLog"; ASPECT=BulkIngestFastPathInTxn; STATUS=TESTED; TEST=tests/test_sonny2816_bulk_ingest_txn.zig; OWNER=transport; UPDATED=2026-09-27
+            // SONNY-2816: autocommit only, as the default fast paths below.
+            // These paths skip the undo log, so a change they served inside
+            // an open transaction was written outside it, and its ROLLBACK
+            // did not undo it.
             const cluster_active = geode.distributed.cluster.getGlobalClusterCoordinator() != null;
-            if (is_mutation and geode.bulk_ingest.isEnabled() and !cluster_active) {
+            if (is_mutation and !state.in_txn and geode.bulk_ingest.isEnabled() and !cluster_active) {
                 const bulk_shape = geode.bulk_ingest.matchSingleStatement(&parse_result.program);
                 if (bulk_shape == .simple_node_create) {
                     try executeBulkSimpleCreate(gpa, stream, state, &parse_result.program, query_graph_name, exec_context);

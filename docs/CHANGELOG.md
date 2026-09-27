@@ -629,6 +629,14 @@
 
 ### Fixed
 
+- **Bulk ingest leaves a transaction's changes to the executor
+  (SONNY-2816):** with `GEODE_BULK_INGEST` set, QUIC's bulk-ingest fast
+  paths (a simple CREATE or MERGE, and MATCH ... CREATE or MERGE of an edge)
+  also served a change sent inside an open transaction. They write to
+  storage directly and skip the undo log, so the transaction's ROLLBACK did
+  not undo the change. A change in a transaction now takes the general
+  executor, as it does without `GEODE_BULK_INGEST`; autocommit changes still
+  take the fast paths.
 - **ROLLBACK removes what MERGE created:** a node or edge that MERGE
   created inside a transaction was not recorded in the undo log, so
   ROLLBACK kept it: `START TRANSACTION; MERGE (:M {k: 1}); ROLLBACK` left
