@@ -8980,6 +8980,22 @@ pub fn build(b: *std.Build) void {
     const sonny3029_step = b.step("test-sonny3029-group-commit-txn-gate", "Run SONNY-3029 regression (a group-commit batch's statement transaction is never open on a graph while another thread holds the graph's write lock: a batch held open keeps the writer out; 1600 inserts against a thread that keeps taking the lock see no open transaction)");
     sonny3029_step.dependOn(&run_sonny3029_tests.step);
 
+    // SONNY-3030: index and constraint DDL need the schema permission on the
+    // database (Admin, or a FOR SCHEMA policy on *): the catalog is
+    // database-wide. The real gRPC handler in process, authorization on.
+    const sonny3030_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny3030_catalog_ddl_gate.zig"), .target = target, .optimize = optimize });
+    sonny3030_test_mod.link_libc = true;
+    sonny3030_test_mod.addImport("geode", root_mod);
+    sonny3030_test_mod.addImport("schema", schema_mod);
+    sonny3030_test_mod.addImport("protobuf", protobuf_mod);
+    sonny3030_test_mod.addImport("grpc_impl", sonny1560_shim_mod);
+    sonny3030_test_mod.addImport("logging", logging_mod);
+    const sonny3030_tests = b.addTest(.{ .root_module = sonny3030_test_mod });
+    const run_sonny3030_tests = b.addRunArtifact(sonny3030_tests);
+    shardDep(test_step, &run_sonny3030_tests.step, 1, test_shard_loads, test_shard_index);
+    const sonny3030_step = b.step("test-sonny3030-catalog-ddl-gate", "Run SONNY-3030 regression (CREATE/DROP INDEX, fulltext included, and CREATE/DROP CONSTRAINT need the schema permission on the database: a FOR SCHEMA grant on some graphs is refused, one on * is not)");
+    sonny3030_step.dependOn(&run_sonny3030_tests.step);
+
     // SONNY-2790: the fulltext statements (CREATE/DROP INDEX, geode.fts.*)
     // run on the default graph, so the handlers lock `default` for them from
     // any session. Classifier, and the real gRPC handler (SONNY-1560 shim).

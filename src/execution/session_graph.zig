@@ -92,6 +92,36 @@ pub fn maySchema(principal: ?*const principal_mod.Principal, graph: []const u8) 
     return mayBind(p, graph);
 }
 
+// CANARY: REQ=REQ-SONNY-3030-CATALOG-DDL-GATE; FEATURE="GraphRBACEnforcement"; ASPECT=MaySchemaDatabase; STATUS=TESTED; TEST=tests/test_sonny3030_catalog_ddl_gate.zig; OWNER=security; UPDATED=2026-09-27
+/// SONNY-3030: may `principal` change the schema of the whole database:
+/// every graph at once? `gps.decide(schema, graph "*")`: Admin's builtin
+/// Schema permission, or a GPS policy `FOR SCHEMA` scoped to `*`. A policy
+/// scoped to one graph does not match. No principal: yes (an in-process
+/// caller).
+pub fn maySchemaDatabase(principal: ?*const principal_mod.Principal) bool {
+    const p = principal orelse return true;
+    const req = gps.DecisionRequest{
+        .principal = p,
+        .action = .schema,
+        .resource = .{ .graph = "*" },
+    };
+    // smp_allocator: the governance-approved global allocator in src/.
+    const decision = gps.decide(std.heap.smp_allocator, &req) catch return false;
+    return decision.kind == .allow;
+}
+
+/// SONNY-3030: refuse index and constraint DDL (`Unauthorized`, 42501) unless
+/// `maySchema` on `graph`, the graph the statement runs on, and
+/// `maySchemaDatabase`. Indexes and constraints are catalogued database-wide,
+/// by label, and bind every graph: a `FOR SCHEMA` grant on one graph let its
+/// holder drop an index an Admin created from another graph, or add a
+/// UNIQUE constraint that refused writes there. Checked before the index or
+/// constraint is looked up.
+pub fn authorizeCatalogSchemaChange(context: execution.ExecutionContext, graph: []const u8) error{Unauthorized}!void {
+    try authorizeSchemaChange(context, graph);
+    if (!maySchemaDatabase(context.principal)) return error.Unauthorized;
+}
+
 /// SONNY-2824: what a HELLO does with the graph a connection names.
 pub const HelloGraph = enum {
     /// Refused: an internal graph, or one the principal may not bind. The

@@ -1797,7 +1797,8 @@ fn executeStatementWithContextInner(allocator: std.mem.Allocator, stmt: ast.Stat
             // SONNY-2803: schema on the graph the index DDL runs on (the
             // session's; a fulltext index lives in the default graph,
             // SONNY-2790), before the IF NOT EXISTS lookup.
-            try session_graph.authorizeSchemaChange(context, if (ci.index_type == .fulltext) graph_store.DEFAULT_GRAPH_NAME else session_graph.current(context));
+            // SONNY-3030: and on the database: the catalog is database-wide.
+            try session_graph.authorizeCatalogSchemaChange(context, if (ci.index_type == .fulltext) graph_store.DEFAULT_GRAPH_NAME else session_graph.current(context));
             const cat = context.catalog;
             const index_name = ci.name orelse blk: {
                 var parts = try std.ArrayList(u8).initCapacity(allocator, 64);
@@ -1977,8 +1978,8 @@ fn executeStatementWithContextInner(allocator: std.mem.Allocator, stmt: ast.Stat
             // CANARY: REQ=REQ-DIST-CLUSTER-FAILCLOSED-UNREPLICATED; FEATURE="DistributedCluster"; ASPECT=GateConstraintDDL; STATUS=TESTED; TEST=tests/test_cluster_replicable_mutations.zig; OWNER=distributed; UPDATED=2026-06-10
             try cluster_mod.gateUnreplicatedWrite();
             // SONNY-2803: schema on the session's graph, before the IF NOT
-            // EXISTS lookup.
-            try session_graph.authorizeSchemaChange(context, session_graph.current(context));
+            // EXISTS lookup. SONNY-3030: and on the database.
+            try session_graph.authorizeCatalogSchemaChange(context, session_graph.current(context));
             // CANARY: REQ=REQ-CONSTRAINT-EXEC-001; FEATURE="ConstraintExecution"; ASPECT=CREATE; STATUS=EXEMPT; OWNER=engine; UPDATED=2026-01-09
             // CREATE CONSTRAINT implementation - store in catalog and enforce
 
@@ -2049,7 +2050,8 @@ fn executeStatementWithContextInner(allocator: std.mem.Allocator, stmt: ast.Stat
             // SONNY-2803: schema on the default graph, the graph DROP INDEX
             // runs on (SONNY-2790: the index may be a fulltext one), before
             // the index is looked up.
-            try session_graph.authorizeSchemaChange(context, graph_store.DEFAULT_GRAPH_NAME);
+            // SONNY-3030: and on the database: the catalog is database-wide.
+            try session_graph.authorizeCatalogSchemaChange(context, graph_store.DEFAULT_GRAPH_NAME);
             const cat = context.catalog;
             const index_name = di.name;
 
@@ -2123,8 +2125,8 @@ fn executeStatementWithContextInner(allocator: std.mem.Allocator, stmt: ast.Stat
             // (Currently a stub no-op, but the surface claims to mutate — keep
             // the fail-closed contract so a future real implementation stays gated.)
             try cluster_mod.gateUnreplicatedWrite();
-            // SONNY-2803: as CREATE CONSTRAINT.
-            try session_graph.authorizeSchemaChange(context, session_graph.current(context));
+            // SONNY-2803, SONNY-3030: as CREATE CONSTRAINT.
+            try session_graph.authorizeCatalogSchemaChange(context, session_graph.current(context));
             // DROP CONSTRAINT implementation
             _ = dc;
             return ExecutionResult{
