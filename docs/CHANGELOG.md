@@ -163,6 +163,32 @@
     transaction was never ended.
   - QUIC's per-graph audit logger now takes the graph a request ran on. It
     used the session's graph as of the previous request.
+- **A transaction's engine transaction belongs to its session and ends with
+  its program (SONNY-2823):** a Geode transaction's writes share one storage
+  engine transaction, so its commit costs one WAL fsync on the shard. That
+  engine transaction lived in a thread-local slot until the Geode
+  transaction's COMMIT, as if one thread served one session. gRPC serves a
+  session's requests on any worker thread, QUIC serves many streams on one
+  thread, and only QUIC's COMMIT and ROLLBACK messages ended it. So it stayed
+  open on the worker thread:
+  - a committed transaction's writes on its shard had no COMMIT record, and a
+    crash lost them;
+  - every later write to that graph on that thread, from any session, joined
+    it and was lost with it.
+
+  Now the session holds its engine transaction, and a request puts it on the
+  serving thread and takes it back. It is committed when the program that
+  opened it ends, while the request still holds the graph's write lock. The
+  Geode transaction goes on across requests in the undo log, which undoes a
+  committed change too. The COMMIT and ROLLBACK statements, a failed
+  statement's rollback, gRPC's COMMIT and ROLLBACK RPCs, and a session's
+  teardown end it as well. Stopping the server now rolls back every gRPC
+  session's open transaction; it left the transaction's undo entries in the
+  log.
+
+  **Behaviour change:** a transaction sent as BEGIN and then N execute
+  messages now commits one shard WAL write per message, not one for the
+  whole transaction. A transaction sent as one request still commits once.
 - **Graph DDL needs the schema permission on its graph (SONNY-2803):** the
   only gate for CREATE GRAPH, DROP GRAPH and index and constraint DDL was the
   database-level write permission. So a ReadWrite user refused
@@ -181,6 +207,23 @@
     graph (or on `*`) grants it there.
   - ReadWrite users can no longer run these statements without such a
     policy.
+- **A HELLO creates a missing graph only with the schema permission
+  (SONNY-2824):** a QUIC or gRPC HELLO naming a graph that did not exist
+  created it for any Admin or ReadWrite user and bound the session to it.
+  ReadWrite has no schema permission (SONNY-2803), so a ReadWrite user
+  created any graph it named at connect time. The HELLO now checks in the
+  order every session graph change does:
+  - an internal graph is refused;
+  - then a graph the principal may not bind is refused, whether or not it
+    exists;
+  - an existing graph is bound;
+  - a missing graph is created only for a principal with the schema
+    permission on it: Admin, or a GPS policy `FOR SCHEMA` on the graph.
+
+  **Behaviour change:** a ReadWrite user's HELLO naming a missing graph is
+  refused ("Graph does not exist and user lacks permission to create it"),
+  and nothing is created. An administrator creates the graph, or grants
+  `FOR SCHEMA` on it.
 - **`geode.storage.stats` and `geode.storage.integrity` take the graph gate
   (SONNY-2804):** both read the graph named by their argument with no
   check.
@@ -696,6 +739,43 @@
   or a document, no longer stream on the GROUP BY fast path. The shared
   projection computes them, which materializes every input row and can reach
   the read budget (`GEODE_READ_EXECUTOR_BUDGET_MB`) on a large input.
+
+### Known limitations
+
+- **ROLLBACK undoes only what a transaction created.** The undo log
+  records the nodes and edges a CREATE or a MERGE creates, and nothing
+  else. A SET, a REMOVE, a DELETE, a label change, and a change MERGE makes
+  to a node or edge it matched stay after ROLLBACK, and after a failed
+  statement's rollback. Until that is fixed, do not rely on ROLLBACK to
+  undo changes to existing data.
+- **A transaction is not crash-atomic (SONNY-2979).** 15 of the 16 shards
+  commit each operation on its own, and the undo log lives in memory only.
+  A crash (a kill or a power loss) in the middle of a transaction leaves
+  the operations run so far applied, and nothing rolls them back at
+  restart.
+- **Index DDL runs on the default graph, and indexes are database-wide
+  (SONNY-2803):** DROP INDEX and a fulltext CREATE INDEX need the schema
+  permission on `default`, whatever the session's graph, because they run
+  on it (SONNY-2790). Indexes and constraints are catalogued for the whole
+  database, but the permission is checked on one graph, so a user with
+  `FOR SCHEMA` on `default` can drop an index created from another graph
+  (SONNY-3030).
+- **Offline auth commands need the HMAC key (SONNY-2798):** on a store that
+  holds any security record, an offline command refuses, and changes
+  nothing, when no HMAC key is available to verify the chain with. Set
+  `GEODE_AUTH_HMAC_KEY` or `GEODE_TDE_KEY` as the server does, or keep
+  `.geode_hmac_key` in the data directory.
+- **`CALL algo.*` is slower under RLS or a tenant scope (SONNY-2685):** a
+  call decides every node and edge it visits on the calling thread, and
+  degree centrality computes a restricted session's degrees there rather
+  than on its worker threads. A label-deny entry hides its rows from every
+  session, Admin included, in the graph procedures as in MATCH
+  (SONNY-2710).
+- **`geode.rls.*` restrictions are memory-only (SONNY-2757, SONNY-3034):**
+  the deny and attribute policies that `geode.rls.add_deny_policy` and
+  `geode.rls.add_attribute_policy` add, and their removal, are lost at a
+  restart and are not replicated in a cluster. Policy DDL (CREATE, ALTER
+  and DROP POLICY) is durable.
 
 ---
 
