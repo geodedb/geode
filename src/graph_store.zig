@@ -5827,6 +5827,12 @@ pub const GraphStore = struct {
     /// composite by then). No-op when no composite keys are registered (the
     /// default for non-from-dump workloads), so plain ingest is unchanged.
     fn addNodeCompositeMergeEntries(self: *GraphStore, node: *const Node) void {
+        self.addNodeCompositeMergeEntriesForLabels(node, node.labels);
+    }
+
+    /// `addNodeCompositeMergeEntries` under `labels` only (SONNY-3109: a
+    /// label `SET n:L` adds).
+    fn addNodeCompositeMergeEntriesForLabels(self: *GraphStore, node: *const Node, labels: []const []const u8) void {
         const n_composites = blk: {
             g_lean_index_mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
             defer g_lean_index_mutex.unlock(std.Io.Threaded.global_single_threaded.io());
@@ -5862,7 +5868,7 @@ pub const GraphStore = struct {
             if (!have_all) continue;
 
             var buf: [1024]u8 = undefined;
-            for (node.labels) |label| {
+            for (labels) |label| {
                 const probe = buildCompositeMergeIndexKey(&buf, node.graph_name, label, &spec_copy, values[0..spec_copy.prop_count]) orelse continue;
                 self.merge_prop_index.putOrUpdate(probe, node.id) catch {};
             }
@@ -5873,6 +5879,12 @@ pub const GraphStore = struct {
     /// property-value change of a composite component). Symmetric with
     /// `addNodeCompositeMergeEntries`; no-op when no composite keys registered.
     fn removeNodeCompositeMergeEntries(self: *GraphStore, node: *const Node) void {
+        self.removeNodeCompositeMergeEntriesForLabels(node, node.labels);
+    }
+
+    /// `removeNodeCompositeMergeEntries` under `labels` only (SONNY-3109: a
+    /// label `REMOVE n:L` removes).
+    fn removeNodeCompositeMergeEntriesForLabels(self: *GraphStore, node: *const Node, labels: []const []const u8) void {
         const n_composites = blk: {
             g_lean_index_mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
             defer g_lean_index_mutex.unlock(std.Io.Threaded.global_single_threaded.io());
@@ -5902,7 +5914,7 @@ pub const GraphStore = struct {
             }
             if (!have_all) continue;
             var buf: [1024]u8 = undefined;
-            for (node.labels) |label| {
+            for (labels) |label| {
                 const probe = buildCompositeMergeIndexKey(&buf, node.graph_name, label, &spec_copy, values[0..spec_copy.prop_count]) orelse continue;
                 self.merge_prop_index.remove(probe, node.id);
             }
@@ -6805,6 +6817,16 @@ pub const GraphStore = struct {
                 if (isInternalPersistedPropertyKey(pkey)) continue;
                 try self.bumpLabelPropertyCount(node.graph_name, node.tenant_id, label, pkey);
             }
+            // SONNY-3109: the node now holds each of its keys under `label`,
+            // as a node created with it does: MERGE's index records it, and a
+            // registered composite key's entry too. Without this, `SET n:L`
+            // left the node out of every (L, key, value) entry, and
+            // `MERGE (:L {x: 1})` trusted the miss and created a second node.
+            // After the label index write, so a lookup that settles one of
+            // these entries by a label scan sees the node. (The merge index's
+            // shard mutexes are leaves: no path holding one takes
+            // `labels_rwlock`.)
+            self.addNodeMergeEntriesForLabel(node, label);
 
             // Mark as dirty - persistence happens at query completion
             self.dirty.store(true, .release);
@@ -6873,6 +6895,12 @@ pub const GraphStore = struct {
                 }
                 self.decLabelCount(node.graph_name, node.tenant_id, label);
                 self.allocator.free(removed_label);
+                // SONNY-3109: the node no longer holds its keys under
+                // `label`: it leaves those entries of MERGE's index as a
+                // deleted node does. Without this, the entry still named the
+                // node, and the server's bulk MERGE, which takes the entry's
+                // node as the match, returned a node without the label.
+                self.removeNodeMergeEntriesForLabel(node, label);
 
                 // Mark as dirty - persistence happens at query completion
                 self.dirty.store(true, .release);
@@ -6882,6 +6910,29 @@ pub const GraphStore = struct {
                 notifyMutation(.remove_node_label, node_id, 0, 0, label, null, null, null);
             }
         }
+    }
+
+    /// SONNY-3109: record `node` as a holder, under `label`, of MERGE's key
+    /// for each of its properties and of each registered composite key it
+    /// carries (`addNodeLabel`).
+    fn addNodeMergeEntriesForLabel(self: *GraphStore, node: *const Node, label: []const u8) void {
+        const labels = [_][]const u8{label};
+        var it = node.properties.iterator();
+        while (it.next()) |p| {
+            self.addToMergePropertyIndex(node.graph_name, &labels, p.key_ptr.*, p.value_ptr.*, node.id) catch {};
+        }
+        self.addNodeCompositeMergeEntriesForLabels(node, &labels);
+    }
+
+    /// SONNY-3109: the reverse of `addNodeMergeEntriesForLabel`
+    /// (`removeNodeLabel`).
+    fn removeNodeMergeEntriesForLabel(self: *GraphStore, node: *const Node, label: []const u8) void {
+        const labels = [_][]const u8{label};
+        var it = node.properties.iterator();
+        while (it.next()) |p| {
+            self.removeFromMergePropertyIndex(node.graph_name, &labels, p.key_ptr.*, p.value_ptr.*, node.id, null);
+        }
+        self.removeNodeCompositeMergeEntriesForLabels(node, &labels);
     }
 
     pub fn getAllNodes(self: *const GraphStore, allocator: std.mem.Allocator) ![]u64 {
@@ -13689,6 +13740,8 @@ pub const GraphStore = struct {
                 if (isInternalPersistedPropertyKey(pkey)) continue;
                 try self.bumpLabelPropertyCount(node.graph_name, node.tenant_id, label, pkey);
             }
+            // SONNY-3109: mirror addNodeLabel (the undo of a REMOVE n:L).
+            self.addNodeMergeEntriesForLabel(node, label);
         }
     }
 
@@ -13732,6 +13785,8 @@ pub const GraphStore = struct {
                 }
 
                 self.removeFromLabelIndex(node.graph_name, label, node_id);
+                // SONNY-3109: mirror removeNodeLabel (the undo of a SET n:L).
+                self.removeNodeMergeEntriesForLabel(node, label);
                 // PERF-C (issue #814): mirror removeNodeLabel.
                 var prop_it_nosave_rm = node.properties.iterator();
                 while (prop_it_nosave_rm.next()) |p| {

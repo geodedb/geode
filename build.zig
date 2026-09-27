@@ -8591,6 +8591,17 @@ pub fn build(b: *std.Build) void {
     const sonny2806_holders_step = b.step("test-sonny2806-merge-equal-holders", "Run SONNY-2806 round-7 regression (MERGE matches the lowest node id among the nodes holding a key after a delete or a SET, on the executor, the server's bulk MERGE and a reopened store; MERGE's index keeps no number that is not an integer; the multi-property MERGE fallback compares by value)");
     sonny2806_holders_step.dependOn(&run_sonny2806_holders_tests.step);
 
+    // SONNY-3109: SET n:L and REMOVE n:L keep MERGE's property index (and a
+    // registered composite key's entries) in step with the node's labels.
+    const sonny3109_mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny3109_merge_label_change.zig"), .target = target, .optimize = optimize });
+    sonny3109_mod.addImport("geode", root_mod);
+    sonny3109_mod.addImport("logging", logging_mod);
+    const sonny3109_tests = b.addTest(.{ .root_module = sonny3109_mod });
+    const run_sonny3109_tests = b.addRunArtifact(sonny3109_tests);
+    shardDep(test_step, &run_sonny3109_tests.step, 1, test_shard_loads, test_shard_index);
+    const sonny3109_step = b.step("test-sonny3109-merge-label-change", "Run SONNY-3109 regression (SET n:L makes the node a holder of MERGE's keys under L; REMOVE n:L removes it; the executor and the server's bulk MERGE)");
+    sonny3109_step.dependOn(&run_sonny3109_tests.step);
+
     const sonny2675_walker_mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny2675_having_walker.zig"), .target = target, .optimize = optimize });
     sonny2675_walker_mod.addImport("geode", root_mod);
     const sonny2675_walker_tests = b.addTest(.{ .root_module = sonny2675_walker_mod });

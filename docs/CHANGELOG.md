@@ -192,6 +192,16 @@
     ratings, coordinates): 55,767 entries against 55,502 (15b9aa0e: 90,543),
     4.7 MB against 4.6 MB, and a 2.8 MB snapshot against 2.7 MB.
 
+- **MERGE sees a label that SET added and forgets one REMOVE took
+  (SONNY-3109):** MERGE's property index is keyed by label, and `SET n:L` and
+  `REMOVE n:L` did not update it. After `SET n:L`, `MERGE (:L {x: 1})` did
+  not find the node and created a second one, on the executor and the
+  server's bulk MERGE. After `REMOVE n:L`, the server's bulk MERGE matched
+  the node that no longer carries L, and the legacy executor's
+  `MATCH (n:L {x: 1})` returned it. A label added or removed now updates the
+  node's entries under that label, and those of a registered composite key,
+  as a node created with the label or deleted does.
+
 - **Grouped queries report their errors (SONNY-2675):**
   - **Behaviour change:** a HAVING name that is no column, binding or
     parameter is refused with 42703; it was NULL.
