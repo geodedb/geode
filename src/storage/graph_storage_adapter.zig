@@ -1718,6 +1718,20 @@ pub const ManagedGraph = struct {
     /// `dropGraph` freed the graph under its lock's holders and waiters, whose
     /// release was then a use-after-free.
     pins: std.atomic.Value(u32) = .init(0),
+    // CANARY: REQ=REQ-SONNY-3029-GROUP-COMMIT-TXN-GATE; FEATURE="High-Concurrency Mutations"; ASPECT=TxnGate; STATUS=TESTED; TEST=tests/test_sonny3029_group_commit_txn_gate.zig; OWNER=storage; UPDATED=2026-09-27
+    /// SONNY-3029: group-commit batches with a statement transaction open on
+    /// this graph (`enterBatchTxn`), and threads that hold or wait for its
+    /// write lock (`acquireGraphWriteLock*`, `claimWriteLock`). A batch opens
+    /// its transaction only while no writer is there, and a writer takes the
+    /// lock only once every open batch has committed, so no batch
+    /// transaction is open while another thread holds the graph's write lock.
+    /// A batch keeps its transaction open across the SHARED holds of its ops;
+    /// between two of them the graph's write lock could be taken, and the
+    /// writer's engine transactions then overlapped the batch's (review probe
+    /// P7: 15,314 of 864,308 samples), the SONNY-2978 class that loses
+    /// committed writes on crash recovery.
+    batch_txns_open: std.atomic.Value(u32) = .init(0),
+    write_lock_claims: std.atomic.Value(u32) = .init(0),
 
     /// Explicit writer-preference counter for ALL EXCLUSIVE acquirers of
     /// `rwlock` (the periodic checkpoint AND the edge-phase schema/MERGE ops).
@@ -10496,6 +10510,9 @@ pub const StorageAdapter = struct {
         // SONNY-3028: pinned until `releaseGraphWriteLock`.
         const mg = self.pinGraph(graph_name) orelse return error.GraphNotFound;
         errdefer self.unpinGraph(mg);
+        // SONNY-3029: no group-commit batch transaction stays open under it.
+        claimWriteLock(mg, null) catch unreachable;
+        errdefer unclaimWriteLock(mg);
         // HANG FIX (2026-05-22): re-probe via `tryLock` instead of parking
         // unboundedly on `mg.rwlock.lockUncancelable`.  See the detailed
         // rationale in `acquireGraphWriteLockCancelable` below — the
@@ -10525,6 +10542,59 @@ pub const StorageAdapter = struct {
             }
             sleep_ns = @min(sleep_ns * 2, max_sleep_ns);
         }
+    }
+
+    /// SONNY-3029: open a group-commit batch's statement transaction on `mg`
+    /// (see `ManagedGraph.batch_txns_open`): waits while a thread holds or
+    /// waits for the graph's write lock. The caller holds no graph lock, and
+    /// calls `leaveBatchTxn` once the transaction committed or aborted.
+    pub fn enterBatchTxn(_: *StorageAdapter, mg: *ManagedGraph) void {
+        var nap_ns: u64 = 20 * std.time.ns_per_us;
+        while (true) {
+            if (mg.write_lock_claims.load(.seq_cst) == 0) {
+                _ = mg.batch_txns_open.fetchAdd(1, .seq_cst);
+                if (mg.write_lock_claims.load(.seq_cst) == 0) return;
+                _ = mg.batch_txns_open.fetchSub(1, .seq_cst);
+            }
+            napNs(nap_ns);
+            nap_ns = @min(nap_ns * 2, std.time.ns_per_ms);
+        }
+    }
+
+    pub fn leaveBatchTxn(_: *StorageAdapter, mg: *ManagedGraph) void {
+        _ = mg.batch_txns_open.fetchSub(1, .seq_cst);
+    }
+
+    /// SONNY-3029: announce this thread's claim on `mg`'s write lock, and wait
+    /// until no group-commit batch has a transaction open on it (`Deadline`
+    /// past `deadline_mono_ns`, the claim withdrawn). Batches opening one
+    /// wait meanwhile. `unclaimWriteLock` withdraws it.
+    fn claimWriteLock(mg: *ManagedGraph, deadline_mono_ns: ?u64) error{Deadline}!void {
+        _ = mg.write_lock_claims.fetchAdd(1, .seq_cst);
+        var nap_ns: u64 = 20 * std.time.ns_per_us;
+        while (mg.batch_txns_open.load(.seq_cst) != 0) {
+            if (deadline_mono_ns) |dl| {
+                if (monoNanosNow() >= dl) {
+                    unclaimWriteLock(mg);
+                    return error.Deadline;
+                }
+            }
+            napNs(nap_ns);
+            nap_ns = @min(nap_ns * 2, std.time.ns_per_ms);
+        }
+    }
+
+    fn unclaimWriteLock(mg: *ManagedGraph) void {
+        _ = mg.write_lock_claims.fetchSub(1, .seq_cst);
+    }
+
+    fn napNs(ns: u64) void {
+        const req = std.os.linux.timespec{
+            .sec = @intCast(ns / std.time.ns_per_s),
+            .nsec = @intCast(ns % std.time.ns_per_s),
+        };
+        var rem: std.os.linux.timespec = undefined;
+        _ = std.os.linux.nanosleep(&req, &rem);
     }
 
     /// SONNY-3028: `mg`, whose write lock this thread just took, or
@@ -10588,6 +10658,9 @@ pub const StorageAdapter = struct {
         // SONNY-3028: pinned until `releaseGraphWriteLock`.
         const mg = self.pinGraph(graph_name) orelse return error.GraphNotFound;
         errdefer self.unpinGraph(mg);
+        // SONNY-3029: no group-commit batch transaction stays open under it.
+        try claimWriteLock(mg, deadline_mono_ns);
+        errdefer unclaimWriteLock(mg);
 
         const io = std.Io.Threaded.global_single_threaded.io();
         const _t_start = monoNanosNow();
@@ -10677,6 +10750,7 @@ pub const StorageAdapter = struct {
 
     pub fn releaseGraphWriteLock(self: *StorageAdapter, mg: *ManagedGraph) void {
         mg.rwlock.unlock(std.Io.Threaded.global_single_threaded.io());
+        unclaimWriteLock(mg);
         // SONNY-3028: and the pin the acquire took. A graph this thread
         // dropped while it held the lock is freed here, when no other thread
         // holds or waits for it.

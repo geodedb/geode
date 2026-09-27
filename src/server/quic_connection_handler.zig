@@ -614,6 +614,9 @@ fn executeBulkSimpleCreate(
         // helpers must hold their SHARED across probe+insert, because a
         // general-path `executeMerge` running under the whole-graph EXCLUSIVE
         // is otherwise free to interleave between the two.
+        // SONNY-3029: the batch's statement transaction is open only while no
+        // thread holds or waits for the graph's write lock
+        // (`StorageAdapter.enterBatchTxn`).
         mut_sample.markLockAcquired();
         var op = group_commit.ApplyOp{ .bulk_insert_node = .{
             .labels = node_pattern.labels,

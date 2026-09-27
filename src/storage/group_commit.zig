@@ -779,6 +779,16 @@ pub const ShardedCoordinator = struct {
         // graph; a DROP GRAPH during the batch frees it only after the batch.
         const pinned_graph = self.adapter.pinGraph(self.graph_name);
         defer if (pinned_graph) |mg| self.adapter.unpinGraph(mg);
+        // CANARY: REQ=REQ-SONNY-3029-GROUP-COMMIT-TXN-GATE; FEATURE="High-Concurrency Mutations"; ASPECT=BatchTxnGate; STATUS=TESTED; TEST=tests/test_sonny3029_group_commit_txn_gate.zig; OWNER=storage; UPDATED=2026-09-27
+        // SONNY-3029: the batch's statement transaction stays open across its
+        // ops, each of which holds the graph's lock SHARED only while it runs.
+        // No thread may hold the graph's write lock while it is open
+        // (`StorageAdapter.enterBatchTxn`): the writer's engine transactions
+        // would overlap it, and recovery could lose committed writes
+        // (SONNY-2978). The batches of the 16 shard workers stay concurrent.
+        if (pinned_graph) |mg| self.adapter.enterBatchTxn(mg);
+        var in_batch_txn = pinned_graph != null;
+        defer if (in_batch_txn) self.adapter.leaveBatchTxn(pinned_graph.?);
 
         // Task 7 (ShardedGraphEngine migration): open a statement txn pinned
         // to this worker's shard.  Each shard has its own independent
@@ -793,6 +803,7 @@ pub const ShardedCoordinator = struct {
         const begin_txn_start_ns = if (collect_phase_metrics) monoNanosNow() else 0;
         if (self.adapter.beginStatementTxnForShard(self.graph_name, shard_idx, &stmt_txn)) |_| {
             have_txn = true;
+            if (batch_txn_opened_hook) |hook| hook(self.graph_name);
         } else |_| {}
         if (collect_phase_metrics) {
             recordDuration(&self.apply_begin_txn_ns_total, &self.apply_begin_txn_max_ns, monoNanosNow() -| begin_txn_start_ns);
@@ -963,6 +974,11 @@ pub const ShardedCoordinator = struct {
                 }
             }
         }
+        // SONNY-3029: the transaction is over; writers may take the lock.
+        if (in_batch_txn) {
+            self.adapter.leaveBatchTxn(pinned_graph.?);
+            in_batch_txn = false;
+        }
         if (collect_phase_metrics) {
             recordDuration(&self.apply_commit_ns_total, &self.apply_commit_max_ns, monoNanosNow() -| commit_start_ns);
         }
@@ -1108,6 +1124,12 @@ pub fn shutdownAllCoordinators() void {
         g_registry_allocator = null;
     }
 }
+
+/// SONNY-3029 test instrumentation: called on a shard worker right after its
+/// batch opened its statement transaction (and entered the graph's batch
+/// transaction gate), before it applies the batch's ops. A test holds the
+/// batch there to show that the graph's write lock waits for it.
+pub var batch_txn_opened_hook: ?*const fn (graph_name: []const u8) void = null;
 
 /// Returns true unless `GEODE_GROUP_COMMIT` is explicitly set to a
 /// falsy value (`0`, `false`, `no`, `off`).  The coordinator is the

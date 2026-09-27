@@ -8964,6 +8964,22 @@ pub fn build(b: *std.Build) void {
     const sonny3028_step = b.step("test-sonny3028-drop-graph-in-use", "Run SONNY-3028 regression (DROP GRAPH from another graph's session waits for the graph's lock holders; a waiter is told the graph is gone; nothing is freed under a holder; DROP GRAPH of the transaction's graph is refused, 55006; gRPC in process)");
     sonny3028_step.dependOn(&run_sonny3028_tests.step);
 
+    // SONNY-3029: no group-commit batch has an engine transaction open on a
+    // graph while another thread holds the graph's write lock. A batch held
+    // open by a test hook, and the review's sampling probe.
+    const sonny3029_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny3029_group_commit_txn_gate.zig"), .target = target, .optimize = optimize });
+    sonny3029_test_mod.link_libc = true;
+    sonny3029_test_mod.addImport("geode", root_mod);
+    sonny3029_test_mod.addImport("schema", schema_mod);
+    sonny3029_test_mod.addImport("protobuf", protobuf_mod);
+    sonny3029_test_mod.addImport("grpc_impl", sonny1560_shim_mod);
+    sonny3029_test_mod.addImport("logging", logging_mod);
+    const sonny3029_tests = b.addTest(.{ .root_module = sonny3029_test_mod });
+    const run_sonny3029_tests = b.addRunArtifact(sonny3029_tests);
+    shardDep(test_step, &run_sonny3029_tests.step, 2, test_shard_loads, test_shard_index);
+    const sonny3029_step = b.step("test-sonny3029-group-commit-txn-gate", "Run SONNY-3029 regression (a group-commit batch's statement transaction is never open on a graph while another thread holds the graph's write lock: a batch held open keeps the writer out; 1600 inserts against a thread that keeps taking the lock see no open transaction)");
+    sonny3029_step.dependOn(&run_sonny3029_tests.step);
+
     // SONNY-2790: the fulltext statements (CREATE/DROP INDEX, geode.fts.*)
     // run on the default graph, so the handlers lock `default` for them from
     // any session. Classifier, and the real gRPC handler (SONNY-1560 shim).
