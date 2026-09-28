@@ -564,7 +564,9 @@ pub fn stringifyExprAlloc(allocator: std.mem.Allocator, e: ast.Expr, opts: Print
 /// SONNY-3189: is `e` a link of a chain `printChain` prints with a loop?
 fn isChainLink(e: *const ast.Expr) bool {
     return switch (e.*) {
-        .Binary, .Unary, .Member, .Index, .Slice, .Call => true,
+        // SONNY-3189 (round 15): and a map projection, whose source the
+        // parser chains like a member access (`m{.a}{.a} ...`).
+        .Binary, .Unary, .Member, .Index, .Slice, .Call, .MapProjection => true,
         else => false,
     };
 }
@@ -579,6 +581,7 @@ fn chainChild(e: *const ast.Expr) *const ast.Expr {
         .Index => |ix| ix.target,
         .Slice => |sl| sl.target,
         .Call => |c| c.callee,
+        .MapProjection => |mp| mp.source,
         else => unreachable,
     };
 }
@@ -661,6 +664,14 @@ fn printChain(w: anytype, top: *const ast.Expr, opts: PrintOptions) !void {
                     try printExprWith(w, a.*, 0, opts);
                 }
                 try w.writeByte(')');
+            },
+            .MapProjection => |mp| {
+                try w.print(" {{", .{});
+                for (mp.fields, 0..) |field, j| {
+                    if (j > 0) try w.print(", ", .{});
+                    try w.print(".{s}", .{field});
+                }
+                try w.print("}}", .{});
             },
             else => unreachable,
         }
@@ -979,15 +990,8 @@ pub fn printExprWith(w: anytype, e: ast.Expr, prec: u8, opts: PrintOptions) !voi
             }
             try w.print(" }}", .{});
         },
-        .MapProjection => |mp| {
-            try printExprWith(w, mp.source.*, 0, opts);
-            try w.print(" {{", .{});
-            for (mp.fields, 0..) |field, i| {
-                if (i > 0) try w.print(", ", .{});
-                try w.print(".{s}", .{field});
-            }
-            try w.print("}}", .{});
-        },
+        // A chain link: `printChain`.
+        .MapProjection => unreachable,
         // CANARY: REQ=REQ-GQL-089; FEATURE="ListComprehension"; ASPECT=Printing; STATUS=TESTED; TEST=geodetestlab/specs/gql_expressions_comprehensive.ymlEMENTED; OWNER=print; UPDATED=2025-10-14
         .ListComprehension => |lc| {
             try w.print("{s} IN ", .{lc.variable});

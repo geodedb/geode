@@ -376,13 +376,12 @@ test "SONNY-3181: over gRPC every chain shape is evaluated correctly up to the c
             defer allocator.free(q);
             for (stacks) |stack| {
                 const r = try runOn(stack, ga, s, q);
+                // SONNY-3189 (round 15, F15): no refusal is accepted up to the
+                // cap, in Debug either: the grouped HAVING's walkers follow
+                // chains with loops (tests/test_sonny3189_grouped_having_chains.zig).
                 const ok = if (links <= limit)
-                    (r.code == null and valueMatches(shape.want, reps, r.value) and
-                        (shape.want != .same_as_one_rep or sameValue(one.value, r.value))) or
-                        // The grouped HAVING rewrite recurses per level; a
-                        // Debug build may refuse the longest chains at its
-                        // stack guard (54001) instead of overflowing.
-                        (builtin.mode == .Debug and r.code != null and std.mem.eql(u8, r.code.?, "54001"))
+                    r.code == null and valueMatches(shape.want, reps, r.value) and
+                        (shape.want != .same_as_one_rep or sameValue(one.value, r.value))
                 else
                     r.code != null and std.mem.eql(u8, r.code.?, "42000");
                 const kind = if (r.value) |v| v.kind else null;
@@ -546,7 +545,7 @@ test "SONNY-3181: over QUIC chains are evaluated up to the cap and refused (4200
             };
             defer r.deinit(allocator);
             const ok = if (links <= limit)
-                r.error_code == null or (builtin.mode == .Debug and std.mem.eql(u8, r.error_code.?, "54001"))
+                r.error_code == null
             else
                 r.error_code != null and std.mem.eql(u8, r.error_code.?, "42000");
             const msg: []const u8 = r.error_message orelse "";

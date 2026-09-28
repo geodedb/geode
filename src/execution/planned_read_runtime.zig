@@ -2245,7 +2245,99 @@ fn findBindingIndex(plan: *const Plan, name: []const u8) ?usize {
     return null;
 }
 
+// CANARY: REQ=REQ-SONNY-3189-HAVING-WALKERS; FEATURE="PlannedReadRuntime"; ASPECT=ProjectionWalker; STATUS=TESTED; TEST=tests/test_sonny3189_grouped_having_chains.zig; OWNER=engine; UPDATED=2026-09-28
+/// SONNY-3189 (round 15): the projection analysis walks every RETURN and
+/// WITH item, GROUP BY key, HAVING and ORDER BY key of a planned read with a
+/// hop. Round 14 looped binary and member chains, but an index or slice
+/// link recursed on its target with no stack guard: `RETURN l[0][0] ... [0]`
+/// with 4,000 links is one frame per link. Now every chain the parser builds
+/// as long as its input (a binary link's left operand, a unary operand, and
+/// the target of a member, index or slice link) is followed with a loop; a
+/// link's other children (a right operand, an index, a slice's bounds) are
+/// analysed after the chain's innermost operand, innermost link first: the
+/// order the recursion took. They are nested expressions, bounded by the
+/// parser's 128 levels.
 fn analyzeExprForProjection(
+    allocator: std.mem.Allocator,
+    expr: ast.Expr,
+    plan: *const Plan,
+    projections: []BindingProjection,
+    key_lists: []std.ArrayList([]const u8),
+    failed: *bool,
+) void {
+    if (failed.*) return;
+    var sfa = std.heap.stackFallback(64 * @sizeOf(*const ast.Expr), std.heap.smp_allocator);
+    const la = sfa.get();
+    var links: std.ArrayList(*const ast.Expr) = .empty;
+    defer links.deinit(la);
+    var at: *const ast.Expr = &expr;
+    spine: while (true) {
+        switch (at.*) {
+            .Binary => |bin| {
+                links.append(la, at) catch {
+                    failed.* = true;
+                    return;
+                };
+                at = bin.left;
+            },
+            .Index => |ix| {
+                links.append(la, at) catch {
+                    failed.* = true;
+                    return;
+                };
+                at = ix.target;
+            },
+            .Slice => |sl| {
+                links.append(la, at) catch {
+                    failed.* = true;
+                    return;
+                };
+                at = sl.target;
+            },
+            .Unary => |un| at = un.expr,
+            // p.key → record (p, key). Down a member chain: the link whose
+            // target is not a member access decides.
+            .Member => |top| {
+                var m = top;
+                while (m.target.* == .Member) m = m.target.Member;
+                if (m.target.* == .Ident) {
+                    const target_ident = m.target.Ident;
+                    if (findBindingIndex(plan, target_ident.orig)) |idx| {
+                        if (plan.binding_kinds[idx] == .node) {
+                            recordBindingKey(allocator, idx, m.field, projections, key_lists, failed);
+                        }
+                        break :spine;
+                    }
+                }
+                at = m.target;
+            },
+            else => {
+                analyzeLeafForProjection(allocator, at.*, plan, projections, key_lists, failed);
+                break :spine;
+            },
+        }
+    }
+    var i = links.items.len;
+    while (i > 0) {
+        i -= 1;
+        if (failed.*) return;
+        switch (links.items[i].*) {
+            .Binary => |bin| analyzeExprForProjection(allocator, bin.right.*, plan, projections, key_lists, failed),
+            .Index => |ix| analyzeExprForProjection(allocator, ix.index.*, plan, projections, key_lists, failed),
+            .Slice => |sl| {
+                if (sl.start) |st| {
+                    analyzeExprForProjection(allocator, st.*, plan, projections, key_lists, failed);
+                    if (failed.*) return;
+                }
+                if (sl.end) |en| analyzeExprForProjection(allocator, en.*, plan, projections, key_lists, failed);
+            },
+            else => unreachable,
+        }
+    }
+}
+
+/// `analyzeExprForProjection` for an expression that is no chain link.
+fn analyzeLeafForProjection(
     allocator: std.mem.Allocator,
     expr: ast.Expr,
     plan: *const Plan,
@@ -2266,23 +2358,8 @@ fn analyzeExprForProjection(
                 }
             }
         },
-        // p.key → record (p, key).
-        .Member => |top| {
-            // SONNY-3189: down a member chain with a loop: the link whose
-            // target is not a member access decides, as the recursion did.
-            var m = top;
-            while (m.target.* == .Member) m = m.target.Member;
-            if (m.target.* == .Ident) {
-                const target_ident = m.target.Ident;
-                if (findBindingIndex(plan, target_ident.orig)) |idx| {
-                    if (plan.binding_kinds[idx] == .node) {
-                        recordBindingKey(allocator, idx, m.field, projections, key_lists, failed);
-                    }
-                    return;
-                }
-            }
-            analyzeExprForProjection(allocator, m.target.*, plan, projections, key_lists, failed);
-        },
+        // Chain links: `analyzeExprForProjection`.
+        .Member, .Binary, .Unary, .Index, .Slice => analyzeExprForProjection(allocator, expr, plan, projections, key_lists, failed),
         .PropertyAccess => |pa| {
             if (findBindingIndex(plan, pa.object)) |idx| {
                 if (plan.binding_kinds[idx] == .node) {
@@ -2290,55 +2367,10 @@ fn analyzeExprForProjection(
                 }
             }
         },
-        .Binary => |bin| {
-            // SONNY-3189: a left-deep chain with a loop, not one recursion
-            // per operator; left operands before right ones, as before.
-            var sfa = std.heap.stackFallback(64 * @sizeOf(*const ast.Expr), std.heap.smp_allocator);
-            const la = sfa.get();
-            var rights: std.ArrayList(*const ast.Expr) = .empty;
-            defer rights.deinit(la);
-            rights.append(la, bin.right) catch {
-                failed.* = true;
-                return;
-            };
-            var leaf: *const ast.Expr = bin.left;
-            while (leaf.* == .Binary) : (leaf = leaf.Binary.left) {
-                rights.append(la, leaf.Binary.right) catch {
-                    failed.* = true;
-                    return;
-                };
-            }
-            analyzeExprForProjection(allocator, leaf.*, plan, projections, key_lists, failed);
-            var i = rights.items.len;
-            while (i > 0) {
-                i -= 1;
-                if (failed.*) return;
-                analyzeExprForProjection(allocator, rights.items[i].*, plan, projections, key_lists, failed);
-            }
-        },
-        .Unary => |un| {
-            analyzeExprForProjection(allocator, un.expr.*, plan, projections, key_lists, failed);
-        },
         .Call => |call| {
             for (call.args) |arg| {
                 analyzeExprForProjection(allocator, arg.*, plan, projections, key_lists, failed);
                 if (failed.*) return;
-            }
-        },
-        .Index => |ix| {
-            analyzeExprForProjection(allocator, ix.target.*, plan, projections, key_lists, failed);
-            if (failed.*) return;
-            analyzeExprForProjection(allocator, ix.index.*, plan, projections, key_lists, failed);
-        },
-        .Slice => |sl| {
-            analyzeExprForProjection(allocator, sl.target.*, plan, projections, key_lists, failed);
-            if (failed.*) return;
-            if (sl.start) |s| {
-                analyzeExprForProjection(allocator, s.*, plan, projections, key_lists, failed);
-                if (failed.*) return;
-            }
-            if (sl.end) |e| {
-                analyzeExprForProjection(allocator, e.*, plan, projections, key_lists, failed);
             }
         },
         .List => |items| {
