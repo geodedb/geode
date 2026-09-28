@@ -848,14 +848,19 @@
   session's transaction now holds the graph it changed (its transaction
   graph, SONNY-2776) from its first change until it commits, rolls back or
   the session ends, and DROP GRAPH and CREATE OR REPLACE GRAPH of a held
-  graph are refused.
+  graph are refused. A QUIC session ends with its stream. A gRPC session
+  ends when the server closes it: one idle in an open transaction for
+  `--idle-in-transaction-timeout` (10 minutes) is closed and its
+  transaction rolled back, which releases the hold (SONNY-3032, below).
+  The hold goes as the COMMIT or ROLLBACK statement ends the transaction,
+  so `COMMIT; DROP GRAPH g` runs in one program (SONNY-3191).
 
   **Behaviour change:** DROP GRAPH and CREATE OR REPLACE GRAPH of a graph
   that any session's open transaction has changed answer 55006, until that
   transaction ends. A transaction that only read the graph does not hold
   it.
 - **EXPLAIN and PROFILE take a listed set of statements, and a failed
-  request's changes are not committed (SONNY-3135, part):** SONNY-3026
+  request's engine transaction is aborted (SONNY-3135, part):** SONNY-3026
   refused the statements it listed and let the rest through: `PROFILE CALL
   geode.tenant.backfill_edge_tags()` ran the self-locking procedure under
   the handler's lock, where it waited up to 120 s on the lock its own
@@ -866,11 +871,94 @@
   failed inside its transaction committed its engine transaction when it
   returned (a write lock's release did the same for one left open), so the
   failed changes were durable until the rollback undid them (the SONNY-2979
-  crash window); the engine transaction is now aborted.
+  crash window); the engine transaction is now aborted. What the rollback
+  then undoes is what the undo log records: the nodes and edges a CREATE or
+  a MERGE created. Other writes inside the transaction (SET, REMOVE,
+  DELETE, a label change, and a change MERGE makes to data it matched)
+  persist after its ROLLBACK or its failure (SONNY-3059; see Known
+  limitations).
 
   **Behaviour change:** EXPLAIN or PROFILE of graph, index, constraint,
   schema, auth or policy DDL, SHOW, VALUES, EXPLAIN POLICY or a CALL that
   changes data answers 0A000.
+- **An expression of more than 4096 operators is refused, and long
+  operator chains no longer crash the server (SONNY-3181, SONNY-3189):**
+  the parser builds operator and member-access chains with loops, so
+  `RETURN 1 + 1 + ... + 1` with N terms is an expression N deep, and the
+  code that walks expressions recursed once per operator. Before
+  authorization, the request analysis crashed a server thread on an
+  EXPLAIN RETURN chain of 100,000 terms (400 KB) or an OR chain of 400,000,
+  and a Debug build on 20,000; printing an ORDER BY key crashed on long
+  chains; and evaluation crashed a Debug build on 1,000 terms, and on
+  `RETURN - - ... 1` 120 deep, for any role that can read. The parser now
+  counts the operators of an expression (binary operators, unary prefixes,
+  and member-access, index, slice and call links, over the whole
+  expression and what nests in it) and refuses more than 4096
+  (`max_expr_links`). The evaluator, the request analysis, the printer and
+  the other walks over expressions follow chains with loops, and the
+  evaluator and the grouped HAVING rewrite refuse nesting deeper than the
+  thread's stack holds instead of overflowing it.
+
+  **Behaviour change:** an expression with more than 4096 operators
+  answers 42000 ("expression too long"). An IN list of literals has no
+  operators, and an OR of a few hundred `n.v = k` terms (three each) fits;
+  split a larger predicate into an IN list or parameters. An expression
+  nested (lists, calls, CASE) deeper than the evaluating thread's stack
+  holds answers 54001 where it crashed; a Debug build reaches that sooner.
+  Integer arithmetic on aggregates (`count(n) + ...`) that overflows
+  answers 22003 where it panicked.
+- **Graph id maps are safe to use from sessions on different graphs at once
+  (SONNY-3180):** the map from each graph to its node and edge id map was
+  shared by the whole store with no lock of its own, and each graph's id
+  map was stored inside it. Two sessions writing to different graphs at
+  once corrupted it (a Debug build tripped the hash map's check; a release
+  build had a data race and a use-after-free), and adding a graph moved
+  every other graph's id map from under the threads using it. The map now
+  has its own lock and each graph's id map an address of its own.
+- **Abandoned gRPC transactions and sessions are closed (SONNY-3032):** a
+  gRPC session lived as long as the server, and a client that began a
+  transaction, wrote and went away left the transaction open for good, with
+  its undo entries, its storage transaction and its graph hold, so the
+  graph could never be dropped. A gRPC session idle in an open transaction
+  for `--idle-in-transaction-timeout` is closed and its transaction rolled
+  back (as far as ROLLBACK reaches, see Known limitations); any gRPC
+  session idle for `--grpc-session-idle-timeout` is closed; a session a
+  request is using is never closed. One user holds at most
+  `--grpc-max-sessions-per-principal` gRPC sessions: past it a Handshake
+  closes that user's least recently used idle session, or is refused when
+  all are in use. Each is also a config-file key
+  (`idle_in_transaction_timeout`, `grpc_session_idle_timeout`,
+  `grpc_max_sessions_per_principal`); 0 turns it off.
+
+  **Behaviour change:** a gRPC session idle in an open transaction for 10
+  minutes is closed and its transaction rolled back, and a gRPC session
+  idle for 30 minutes is closed; a closed session's requests answer 28000,
+  and the client handshakes again. A user holding 1024 gRPC sessions has
+  its least recently used idle one closed at the next Handshake.
+- **The rest of the round 13 review (SONNY-3191, SONNY-3122):**
+  - A COMMIT or ROLLBACK statement releases its session's graph hold where
+    it ends the transaction, not after the program, so `COMMIT; DROP GRAPH
+    g` and `ROLLBACK; DROP GRAPH g` run.
+  - Under overload the QUIC connection admission thread serves a
+    connection's first stream itself, on a 1 MiB stack, where a plain MATCH
+    was refused ("nesting too deep") and a Debug build crashed. It now has
+    the 16 MiB stack of the threads that serve requests.
+  - CURRENT_GRAPH, CURRENT_PROPERTY_GRAPH, HOME_GRAPH and HOME_PROPERTY_GRAPH
+    are reserved: `CREATE GRAPH CURRENT_GRAPH` created a graph USE GRAPH
+    could never select, and `DROP GRAPH CURRENT_GRAPH` dropped a graph of
+    that name, not the current graph.
+  - A policy expression with more than 64 nested parentheses or 1024 AND or
+    OR operators is refused: it could overflow the stack of every request
+    the policy applies to.
+  - A read that resolves an edge type's name looks its graph up and pins
+    it; it created the graph when it was missing, so a read racing a DROP
+    GRAPH could create the graph again (SONNY-3122, part).
+
+  **Behaviour change:** CREATE and DROP GRAPH of CURRENT_GRAPH,
+  CURRENT_PROPERTY_GRAPH, HOME_GRAPH and HOME_PROPERTY_GRAPH (any case)
+  answer 42939, and a HELLO cannot create one; a graph that already has
+  such a name can no longer be dropped by it. A policy expression past the
+  bounds above is refused at CREATE or ALTER POLICY.
 
 ### Fixed
 
@@ -950,6 +1038,11 @@
   to a node or edge it matched stay after ROLLBACK, and after a failed
   statement's rollback. Until that is fixed, do not rely on ROLLBACK to
   undo changes to existing data.
+- **A Debug build takes less nesting (SONNY-3191).** A Debug build's
+  stack frames are several times a release build's: on an 8 MiB thread
+  (the gRPC connection threads') it refuses WITH, CALL { } and FOR chains
+  past about 25 levels, and some nesting of lists and calls past about 60,
+  where a release build takes 128. Debug builds are for development.
 - **A transaction is not crash-atomic (SONNY-2979).** 15 of the 16 shards
   commit each operation on its own, and the undo log lives in memory only.
   A crash (a kill or a power loss) in the middle of a transaction leaves
