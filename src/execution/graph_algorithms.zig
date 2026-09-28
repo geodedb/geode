@@ -359,12 +359,22 @@ fn evaluateWhereFilter(
     allocator: std.mem.Allocator,
 ) bool {
     var ext_env = base_env;
+    // SONNY-3250: the extended environment's arrays live until the filter
+    // has been evaluated. They were freed at the end of the `if` below, and
+    // `ext_env` still pointed at them: a WHERE that evaluates a nested EXISTS
+    // or COUNT subquery allocates again, reuses that memory, and the
+    // subquery's own copy of the environment (`@memcpy` from `ext_env`)
+    // aliased its destination ("@memcpy arguments alias"), a use after free.
+    var ext_names: []const []const u8 = &.{};
+    defer if (ext_names.len > 0) allocator.free(ext_names);
+    var ext_values: []Value = &.{};
+    defer if (ext_values.len > 0) allocator.free(ext_values);
 
     if (target_name != null and target_node_ptr != null) {
         const new_names = allocator.alloc([]const u8, base_env.names.len + 1) catch return false;
-        defer allocator.free(new_names);
+        ext_names = new_names;
         const new_values = allocator.alloc(Value, base_env.values.len + 1) catch return false;
-        defer allocator.free(new_values);
+        ext_values = new_values;
         @memcpy(new_names[0..base_env.names.len], base_env.names);
         @memcpy(new_values[0..base_env.values.len], base_env.values);
         new_names[base_env.names.len] = target_name.?;
@@ -666,12 +676,20 @@ pub fn countPatternMatches(allocator: std.mem.Allocator, pattern: ast.GraphPatte
                     if (where_filter) |wf| {
                         // Build environment with this node bound (if pattern has a name)
                         var ext_env = env;
+                        // SONNY-3250: as in `evaluateWhereFilter`, the arrays
+                        // live until the WHERE has been evaluated below; they
+                        // were freed at the end of the `if` while `ext_env`
+                        // still pointed at them.
+                        var ext_names: []const []const u8 = &.{};
+                        defer if (ext_names.len > 0) allocator.free(ext_names);
+                        var ext_values: []Value = &.{};
+                        defer if (ext_values.len > 0) allocator.free(ext_values);
                         if (node_pattern.name) |pattern_name| {
                             // Use entry.value_ptr for the node pointer
                             const new_names = allocator.alloc([]const u8, env.names.len + 1) catch continue;
-                            defer allocator.free(new_names);
+                            ext_names = new_names;
                             const new_values = allocator.alloc(Value, env.values.len + 1) catch continue;
-                            defer allocator.free(new_values);
+                            ext_values = new_values;
                             @memcpy(new_names[0..env.names.len], env.names);
                             @memcpy(new_values[0..env.values.len], env.values);
                             new_names[env.names.len] = pattern_name;
