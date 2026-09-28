@@ -43,6 +43,10 @@ pub const WriteScope = struct {
     values: std.ArrayList(Value) = .empty,
     param_names: []const []const u8,
     param_values: []const Value,
+    /// SONNY-3322: the scope's copies of the relationships it binds, and the
+    /// store they are read again from.
+    edge_boxes: std.ArrayList(*graph_store.Edge) = .empty,
+    edge_store: ?*graph_store.GraphStore = null,
 
     pub fn init(allocator: std.mem.Allocator, param_names: []const []const u8, param_values: []const Value) WriteScope {
         return .{ .allocator = allocator, .param_names = param_names, .param_values = param_values };
@@ -59,6 +63,8 @@ pub const WriteScope = struct {
     }
 
     pub fn deinit(self: *WriteScope) void {
+        for (self.edge_boxes.items) |box| self.allocator.destroy(box);
+        self.edge_boxes.deinit(self.allocator);
         self.names.deinit(self.allocator);
         self.values.deinit(self.allocator);
     }
@@ -66,6 +72,12 @@ pub const WriteScope = struct {
     /// The environment to evaluate in: the bound variables, then the
     /// parameters.
     pub fn env(self: *const WriteScope, allocator: std.mem.Allocator) Env {
+        // SONNY-3322: each relationship copy as the store holds it now (a
+        // copy shares the edge's property storage, which a later edge insert
+        // may have moved).
+        if (self.edge_store) |store| for (self.edge_boxes.items) |box| {
+            if (store.getEdgePtrHydrated(box.id)) |fresh| box.* = fresh.*;
+        };
         return .{
             .allocator = allocator,
             .names = self.names.items,
@@ -101,18 +113,64 @@ pub const WriteScope = struct {
         try self.bind(name, .{ .Node = box });
     }
 
-    /// Bind `name` to relationship `id` (the resident edge).
+    // CANARY: REQ=REQ-SONNY-3322-EDGE-BY-ID; FEATURE="WriteScope"; ASPECT=BoxedEdges; STATUS=TESTED; TEST=tests/test_sonny_write_allowlist_r4b.zig; OWNER=engine; UPDATED=2026-09-28
+    /// Bind `name` to relationship `id`, as a copy the scope owns.
+    ///
+    /// SONNY-3322: it bound the resident edge, and a later chain's edge
+    /// insert can move the store's edges, so the chain after it (and
+    /// `refresh`, which read the id through it) read freed memory. The copy
+    /// shares the edge's label and properties, which the edge cache frees at
+    /// the graph's grace boundary, not on a move; `refresh` copies the edge
+    /// again after a write.
     pub fn bindEdge(self: *WriteScope, store: *graph_store.GraphStore, name: []const u8, id: u64) !void {
         const edge = store.getEdgePtrHydrated(id) orelse return error.EdgeBodyUnresolvable;
-        try self.bind(name, .{ .Edge = edge });
+        self.edge_store = store;
+        try self.bind(name, .{ .Edge = try self.boxEdge(edge) });
+    }
+
+    fn boxEdge(self: *WriteScope, edge: *const graph_store.Edge) !*const graph_store.Edge {
+        try self.edge_boxes.ensureUnusedCapacity(self.allocator, 1);
+        const box = try self.allocator.create(graph_store.Edge);
+        box.* = edge.*;
+        self.edge_boxes.appendAssumeCapacity(box);
+        return box;
+    }
+
+    fn ownsBox(self: *const WriteScope, edge: *const graph_store.Edge) ?*graph_store.Edge {
+        for (self.edge_boxes.items) |box| {
+            if (box == edge) return box;
+        }
+        return null;
+    }
+
+    /// SONNY-3322: `v` with every relationship copy this scope owns replaced
+    /// by the store's edge, for a value that outlives the scope (a RETURN).
+    pub fn residentEdges(self: *const WriteScope, store: *graph_store.GraphStore, v: *Value) !void {
+        switch (v.*) {
+            .Edge => |edge| if (self.ownsBox(edge) != null) {
+                v.* = .{ .Edge = store.getEdgePtrHydrated(edge.id) orelse return error.EdgeBodyUnresolvable };
+            },
+            .List => |items| for (items) |*item| try self.residentEdges(store, item),
+            else => {},
+        }
     }
 
     /// Read every bound node and relationship again, so what was written
-    /// since it was bound is seen.
+    /// since it was bound is seen. A relationship is read by the id of the
+    /// copy the scope holds (SONNY-3322); one the caller bound (a MATCH row's)
+    /// is copied too.
     pub fn refresh(self: *WriteScope, store: *graph_store.GraphStore) !void {
         for (self.values.items) |*v| switch (v.*) {
             .Node => |node| v.* = .{ .Node = store.getNodePtrForScan(node.id) orelse return error.NodeNotFound },
-            .Edge => |edge| v.* = .{ .Edge = store.getEdgePtrHydrated(edge.id) orelse return error.EdgeBodyUnresolvable },
+            .Edge => |edge| {
+                const fresh = store.getEdgePtrHydrated(edge.id) orelse return error.EdgeBodyUnresolvable;
+                if (self.ownsBox(edge)) |box| {
+                    box.* = fresh.*;
+                } else {
+                    self.edge_store = store;
+                    v.* = .{ .Edge = try self.boxEdge(fresh) };
+                }
+            },
             else => {},
         };
     }

@@ -4106,6 +4106,9 @@ pub fn executeMatchCreateQuery(allocator: std.mem.Allocator, q: ast.Query, param
     defer all_created_nodes.deinit();
     var all_created_relationships = std.StringHashMap(Value).init(allocator);
     defer all_created_relationships.deinit();
+    // SONNY-3322: by id; resolved for the RETURN after every row's CREATE.
+    var all_created_edge_ids = std.StringHashMap(u64).init(allocator);
+    defer all_created_edge_ids.deinit();
 
     // Per-kind counters: the summary row reports nodes and relationships
     // SEPARATELY (a pure edge create used to surface as `nodes_created: 1`).
@@ -4151,7 +4154,7 @@ pub fn executeMatchCreateQuery(allocator: std.mem.Allocator, q: ast.Query, param
         }
         var rel_iter = result.created_relationships.iterator();
         while (rel_iter.next()) |entry| {
-            try all_created_relationships.put(entry.key_ptr.*, entry.value_ptr.*);
+            if (entry.value_ptr.* == .Edge) try all_created_edge_ids.put(entry.key_ptr.*, entry.value_ptr.*.Edge.id);
         }
 
         if (project_rows or writes_rows) {
@@ -4205,6 +4208,7 @@ pub fn executeMatchCreateQuery(allocator: std.mem.Allocator, q: ast.Query, param
     // A RETURN that neither aggregates nor is DISTINCT: evaluated with all
     // created entities.
     if (q.ret.items.len > 0) {
+        try crud_operations.resolveCreatedEdges(store, &all_created_edge_ids, &all_created_relationships);
         return executeReturnClauseWithNodes(allocator, q.ret, all_created_nodes, all_created_relationships);
     }
 

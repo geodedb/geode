@@ -350,3 +350,123 @@ const s3320_cases = [_]Case{
 test "SONNY-3320: chained MERGE actions fire as the last MERGE clause created or matched, in every session" {
     try runCases("SONNY-3320", &s3320_cases);
 }
+
+// ---------------------------------------------------------------------------
+// SONNY-3322 (I-5): a relationship variable after many edge inserts. Run in a
+// child process, on a 16 MiB thread, so a crash is reported, not the run's end.
+
+const EdgeJob = struct {
+    s: *h.Session,
+    query: []const u8,
+    /// Read after `query` (null: `query`'s own rows are checked).
+    then: ?[]const u8 = null,
+    want: []const u8,
+    ok: bool = false,
+
+    fn run(self: *EdgeJob) void {
+        var first = runProgram(self.s, stmt_alloc, self.query) catch |err| {
+            std.debug.print("  error {s}\n", .{@errorName(err)});
+            return;
+        };
+        var result = if (self.then) |q| blk: {
+            first.deinit(stmt_alloc);
+            break :blk runProgram(self.s, stmt_alloc, q) catch |err| {
+                std.debug.print("  then: error {s}\n", .{@errorName(err)});
+                return;
+            };
+        } else first;
+        defer result.deinit(stmt_alloc);
+        const rows = h.renderRows(self.s.arena.allocator(), result) catch return;
+        self.ok = rows.len == 1 and std.mem.eql(u8, rows[0], self.want);
+        if (!self.ok) std.debug.print("  answered {d} row(s){s}{s}\n", .{ rows.len, if (rows.len > 0) ": " else "", if (rows.len > 0) rows[0] else "" });
+    }
+
+    fn entry(arg: ?*anyopaque) callconv(.c) ?*anyopaque {
+        const job: *EdgeJob = @ptrCast(@alignCast(arg.?));
+        job.run();
+        return null;
+    }
+};
+
+const ChildOutcome = enum { right, wrong, crashed, failed };
+
+fn runInChild(job: *EdgeJob, stack: usize) ChildOutcome {
+    const pid = std.c.fork();
+    if (pid < 0) return .failed;
+    if (pid == 0) {
+        std.posix.setrlimit(.CORE, .{ .cur = 0, .max = 0 }) catch {};
+        const page = std.heap.page_size_min;
+        const raw = std.c.mmap(null, stack + page, .{ .READ = true, .WRITE = true }, .{ .TYPE = .PRIVATE, .ANONYMOUS = true }, -1, 0);
+        if (raw == std.c.MAP_FAILED) std.c._exit(9);
+        const base: [*]align(std.heap.page_size_min) u8 = @ptrCast(@alignCast(raw));
+        if (std.c.mprotect(@ptrCast(base), page, .{}) != 0) std.c._exit(9);
+        var attr: std.c.pthread_attr_t = undefined;
+        if (std.c.pthread_attr_init(&attr) != .SUCCESS) std.c._exit(9);
+        if (std.c.pthread_attr_setstack(&attr, @ptrCast(base + page), stack) != .SUCCESS) std.c._exit(9);
+        var tid: std.c.pthread_t = undefined;
+        if (std.c.pthread_create(&tid, &attr, EdgeJob.entry, job) != .SUCCESS) std.c._exit(9);
+        _ = std.c.pthread_join(tid, null);
+        std.c._exit(if (job.ok) 0 else 1);
+    }
+    var status: c_int = 0;
+    if (std.c.waitpid(pid, &status, 0) != pid) return .failed;
+    const st: u32 = @bitCast(status);
+    if (std.os.linux.W.IFSIGNALED(st)) return .crashed;
+    return switch (std.os.linux.W.EXITSTATUS(st)) {
+        0 => .right,
+        1 => .wrong,
+        else => .failed,
+    };
+}
+
+/// `<head>` then `chains` more relationship chains, each `<sep>` and
+/// `chain` (its `{k}` the chain's number), then `<tail>`.
+fn manyChains(aa: std.mem.Allocator, head: []const u8, sep: []const u8, chain: []const u8, chains: usize, tail: []const u8) ![]const u8 {
+    var text: std.ArrayList(u8) = .empty;
+    try text.appendSlice(aa, head);
+    for (1..chains + 1) |k| {
+        try text.appendSlice(aa, sep);
+        const number = try std.fmt.allocPrint(aa, "{d}", .{k});
+        try text.appendSlice(aa, try std.mem.replaceOwned(u8, aa, chain, "{k}", number));
+    }
+    try text.appendSlice(aa, tail);
+    return text.toOwnedSlice(aa);
+}
+
+test "SONNY-3322: a relationship variable reads its relationship after 150 and 600 more relationship chains" {
+    const Form = struct { head: []const u8, sep: []const u8, chain: []const u8, tail: []const u8, then: ?[]const u8 = null, want: []const u8, max: usize = 600 };
+    // Anonymous endpoints: the validator scopes at most 64 names.
+    const create_chain = "(:V {k: {k}})-[:T {w: {k}}]->(:V {k: {k}})";
+    const forms = [_]Form{
+        // The review's repro.
+        .{ .head = "CREATE (a0:V {k: 0})-[r:T {w: 3}]->(b0:V {k: 0})", .sep = ", ", .chain = create_chain, .tail = " RETURN r.w, type(r) AS t", .want = "3|T" },
+        // The SET after the CREATE, and a later chain, read r.
+        .{ .head = "CREATE (a0:V {k: 0})-[r:T {w: 3}]->(b0:V {k: 0})", .sep = ", ", .chain = create_chain, .tail = " SET a0.w = r.w RETURN a0.w", .want = "3" },
+        .{ .head = "CREATE (a0:V {k: 0})-[r:T {w: 3}]->(b0:V {k: 0})", .sep = ", ", .chain = create_chain, .tail = ", (z:Z {w: r.w}) RETURN z.w", .want = "3" },
+        .{ .head = "INSERT (a0:V {k: 0})-[r:T {w: 3}]->(b0:V {k: 0})", .sep = ", ", .chain = create_chain, .tail = ", (z:Z {w: r.w})", .then = "MATCH (z:Z) RETURN z.w", .want = "3" },
+        // MERGE: three clauses a chain (at most 1024 clauses a part).
+        // MERGE: each later clause merges one more relationship from a0 to a
+        // node of its own (at most 1024 clauses a part; a relationship MERGE
+        // matches on the endpoints and type, not the properties).
+        .{ .head = "MERGE (a0:V {k: 0}) MERGE (b0:V {k: 0}) MERGE (a0)-[r:T {w: 3}]->(b0)", .sep = " ", .chain = "MERGE (a0)-[:T {w: {k}0}]->(:V {k: {k}})", .tail = " ON CREATE SET a0.w = r.w RETURN a0.w, r.w", .want = "3|3" },
+    };
+    var failures: usize = 0;
+    for ([_]h.Mode{ .in_memory, .persisted }) |mode| {
+        for ([_]usize{ 150, 600 }) |wanted| {
+            for (forms) |form| {
+                const chains = @min(wanted, form.max);
+                var s = try h.Session.init(mode);
+                defer s.deinit();
+                _ = geode.txn_undo_log.getGlobalUndoLog(stmt_alloc);
+                const query = try manyChains(s.arena.allocator(), form.head, form.sep, form.chain, chains, form.tail);
+                var job: EdgeJob = .{ .s = &s, .query = query, .then = form.then, .want = form.want };
+                const got = runInChild(&job, 16 << 20);
+                if (got != .right) {
+                    std.debug.print("[{s}] {s} ... x{d}{s}: {s}\n", .{ @tagName(mode), form.head[0..6], chains, form.tail, @tagName(got) });
+                    failures += 1;
+                }
+            }
+        }
+    }
+    try testing.expectEqual(@as(usize, 0), failures);
+}

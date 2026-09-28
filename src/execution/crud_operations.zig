@@ -1084,6 +1084,11 @@ pub fn executeCreateForBatchWithTracking(allocator: std.mem.Allocator, create_pa
     // Track created relationships by variable name for RETURN clauses
     var created_relationships = std.StringHashMap(Value).init(allocator);
     errdefer created_relationships.deinit();
+    // SONNY-3322: the ids of the relationships the chains create, resolved
+    // into `created_relationships` after the last chain (an edge insert moves
+    // the store's edges, so a pointer taken at creation dangled).
+    var created_edge_ids = std.StringHashMap(u64).init(allocator);
+    defer created_edge_ids.deinit();
 
     // Copy matched bindings to created_nodes
     var iter = matched_bindings.iterator();
@@ -1208,17 +1213,14 @@ pub fn executeCreateForBatchWithTracking(allocator: std.mem.Allocator, create_pa
                 }
             }
 
-            // Track created relationship by variable name
-            if (hop.rel.name) |rel_var_name| {
-                const edge_ptr = store.getEdgePtrHydrated(edge_id) orelse return error.EdgeNotFound;
-                const edge_value = Value{ .Edge = edge_ptr };
-                try created_relationships.put(rel_var_name, edge_value);
-            }
+            // Track created relationship by variable name (SONNY-3322: by id).
+            if (hop.rel.name) |rel_var_name| try created_edge_ids.put(rel_var_name, edge_id);
         }
 
         // SONNY-3240: what the chain created is in scope for the chains after it.
-        if (binds) try bindCreatedChain(store, &scope, chain, &created_nodes, &created_relationships);
+        if (binds) try bindCreatedChain(store, &scope, chain, &created_nodes, &created_edge_ids);
     }
+    try resolveCreatedEdges(store, &created_edge_ids, &created_relationships);
 
     if (batch_stmt_txn_open) try batch_stmt_txn.commit();
     return CreateBatchResult{
@@ -1460,9 +1462,13 @@ fn executeBatchCreateHomogeneous(
 /// the loop it replaced did).
 const CreatedNodeTargets = struct {
     created: *const std.StringHashMap(u64),
+    /// SONNY-3322: the relationships the CREATE made, by variable.
+    created_edges: ?*const std.StringHashMap(u64) = null,
 
     pub fn applies(self: CreatedNodeTargets, name: []const u8) bool {
-        return self.created.contains(name);
+        if (self.created.contains(name)) return true;
+        const edges = self.created_edges orelse return false;
+        return edges.contains(name);
     }
 };
 
@@ -1534,6 +1540,11 @@ pub fn executeCreateQuery(
     // Track created relationships by variable name for RETURN clauses
     var created_relationships = std.StringHashMap(Value).init(allocator);
     defer created_relationships.deinit();
+    // SONNY-3322: the ids of the relationships the chains create, resolved
+    // into `created_relationships` after the last chain (an edge insert moves
+    // the store's edges, so a pointer taken at creation dangled).
+    var created_edge_ids = std.StringHashMap(u64).init(allocator);
+    defer created_edge_ids.deinit();
 
     // Track total created entities for count(*) aggregation
     var total_created_count: i64 = 0;
@@ -1717,20 +1728,14 @@ pub fn executeCreateQuery(
                 try created_nodes.put(var_name, right_id);
             }
 
-            // Track created relationship by variable name
-            if (hop.rel.name) |rel_var_name| {
-                // Get edge from store to create Edge value
-                const edge_ptr = store.getEdgePtrHydrated(edge_id) orelse return error.EdgeNotFound;
-
-                // Create Edge value for the relationship
-                const edge_value = Value{ .Edge = edge_ptr };
-                try created_relationships.put(rel_var_name, edge_value);
-            }
+            // Track created relationship by variable name (SONNY-3322: by id).
+            if (hop.rel.name) |rel_var_name| try created_edge_ids.put(rel_var_name, edge_id);
         }
 
         // SONNY-3240: what the chain created is in scope for the chains after it.
-        if (binds) try bindCreatedChain(store, &scope, chain, &created_nodes, &created_relationships);
+        if (binds) try bindCreatedChain(store, &scope, chain, &created_nodes, &created_edge_ids);
     }
+    try resolveCreatedEdges(store, &created_edge_ids, &created_relationships);
 
     // Apply WITH clause if present
     var result: ExecutionResult = undefined;
@@ -1856,10 +1861,15 @@ pub fn executeCreateQuery(
         } else {
             var iter = created_nodes.iterator();
             while (iter.next()) |entry| try set_scope.bindNode(store, entry.key_ptr.*, entry.value_ptr.*);
+            // SONNY-3322: and the relationships it made (`CREATE (a)-[r:T
+            // {w: 3}]->(b) SET a.w = r.w` read r as null, and `SET r.x`
+            // was dropped).
+            var edge_iter = created_edge_ids.iterator();
+            while (edge_iter.next()) |entry| try set_scope.bindEdge(store, entry.key_ptr.*, entry.value_ptr.*);
         }
         // Detached boxes, read again after each clause.
         try set_scope.refresh(store);
-        try write_scope.applySetGroups(allocator, store, q.set_clauses, q.set_clause_ends, &set_scope, CreatedNodeTargets{ .created = &created_nodes });
+        try write_scope.applySetGroups(allocator, store, q.set_clauses, q.set_clause_ends, &set_scope, CreatedNodeTargets{ .created = &created_nodes, .created_edges = &created_edge_ids });
     }
 
     // Apply REMOVE clauses if present
@@ -2443,15 +2453,30 @@ fn bindCreatedChain(
     scope: *WriteScope,
     chain: ast.Chain,
     created_nodes: *const std.StringHashMap(u64),
-    created_relationships: ?*const std.StringHashMap(Value),
+    created_edge_ids: ?*const std.StringHashMap(u64),
 ) !void {
     if (chain.head) |head| try bindCreatedNode(store, scope, head.name, created_nodes);
     for (chain.hops) |hop| {
         try bindCreatedNode(store, scope, hop.left.name, created_nodes);
         try bindCreatedNode(store, scope, hop.right.name, created_nodes);
         const rel = hop.rel.name orelse continue;
-        const rels = created_relationships orelse continue;
-        if (rels.get(rel)) |edge_value| try scope.bindEdge(store, rel, edge_value.Edge.id);
+        const rels = created_edge_ids orelse continue;
+        if (rels.get(rel)) |edge_id| try scope.bindEdge(store, rel, edge_id);
+    }
+}
+
+// CANARY: REQ=REQ-SONNY-3322-EDGE-BY-ID; FEATURE="CreateRelationship"; ASPECT=ResolveAfterInserts; STATUS=TESTED; TEST=tests/test_sonny_write_allowlist_r4b.zig; OWNER=engine; UPDATED=2026-09-28
+/// SONNY-3322: the relationships a CREATE, INSERT or MERGE made, by
+/// variable, read from the store once every chain has inserted its edges.
+/// Each was held as the pointer `getEdgePtrHydrated` returned right after its
+/// insert; the next insert can move the store's edges, so after 150 more
+/// relationship chains `RETURN r.w` read freed memory (a segfault) and after
+/// 600 read null.
+pub fn resolveCreatedEdges(store: *graph_store.GraphStore, ids: *const std.StringHashMap(u64), out: *std.StringHashMap(Value)) !void {
+    var it = ids.iterator();
+    while (it.next()) |entry| {
+        const edge = store.getEdgePtrHydrated(entry.value_ptr.*) orelse return error.EdgeNotFound;
+        try out.put(entry.key_ptr.*, Value{ .Edge = edge });
     }
 }
 
@@ -2575,6 +2600,11 @@ pub fn executeCreate(allocator: std.mem.Allocator, c: ast.CreateStatement, curre
     // Track created relationships by variable name for RETURN clauses
     var created_relationships = std.StringHashMap(Value).init(allocator);
     defer created_relationships.deinit();
+    // SONNY-3322: the ids of the relationships the chains create, resolved
+    // into `created_relationships` after the last chain (an edge insert moves
+    // the store's edges, so a pointer taken at creation dangled).
+    var created_edge_ids = std.StringHashMap(u64).init(allocator);
+    defer created_edge_ids.deinit();
 
     // SONNY-3240: a chain's property map sees the variables the chains
     // before it created (`CREATE (a:Z {k:1}), (b:Z {k: a.k+1})` gave b.k
@@ -2754,17 +2784,14 @@ pub fn executeCreate(allocator: std.mem.Allocator, c: ast.CreateStatement, curre
                 }
             }
 
-            // Track created relationship by variable name
-            if (hop.rel.name) |rel_var_name| {
-                const edge_ptr = store.getEdgePtrHydrated(edge_id) orelse return error.EdgeNotFound;
-                const edge_value = Value{ .Edge = edge_ptr };
-                try created_relationships.put(rel_var_name, edge_value);
-            }
+            // Track created relationship by variable name (SONNY-3322: by id).
+            if (hop.rel.name) |rel_var_name| try created_edge_ids.put(rel_var_name, edge_id);
         }
 
         // SONNY-3240: what the chain created is in scope for the chains after it.
-        if (binds) try bindCreatedChain(store, &scope, chain, &created_nodes, &created_relationships);
+        if (binds) try bindCreatedChain(store, &scope, chain, &created_nodes, &created_edge_ids);
     }
+    try resolveCreatedEdges(store, &created_edge_ids, &created_relationships);
 
     // Handle RETURN clause if present
     if (c.return_clause) |ret| {
@@ -2882,6 +2909,11 @@ pub fn executeInsert(allocator: std.mem.Allocator, ins: ast.InsertStatement, cur
     // The relationships it created, by variable, for the chains after them.
     var created_relationships = std.StringHashMap(Value).init(allocator);
     defer created_relationships.deinit();
+    // SONNY-3322: the ids of the relationships the chains create, resolved
+    // into `created_relationships` after the last chain (an edge insert moves
+    // the store's edges, so a pointer taken at creation dangled).
+    var created_edge_ids = std.StringHashMap(u64).init(allocator);
+    defer created_edge_ids.deinit();
 
     // Create nodes from pattern
     for (ins.pattern.chains) |chain| {
@@ -3038,15 +3070,13 @@ pub fn executeInsert(allocator: std.mem.Allocator, ins: ast.InsertStatement, cur
                     try property_mutation.setEdgePropertyFromValue(allocator, store, edge_type, edge_id, prop.key, value);
                 }
             }
-            if (binds) if (hop.rel.name) |rel_var_name| {
-                const edge_ptr = store.getEdgePtrHydrated(edge_id) orelse return error.EdgeNotFound;
-                try created_relationships.put(rel_var_name, Value{ .Edge = edge_ptr });
-            };
+            if (binds) if (hop.rel.name) |rel_var_name| try created_edge_ids.put(rel_var_name, edge_id);
         }
 
         // SONNY-3240: what the chain created is in scope for the chains after it.
-        if (binds) try bindCreatedChain(store, &scope, chain, &created_nodes, &created_relationships);
+        if (binds) try bindCreatedChain(store, &scope, chain, &created_nodes, &created_edge_ids);
     }
+    try resolveCreatedEdges(store, &created_edge_ids, &created_relationships);
 
     // Handle RETURN clause if present
     if (ins.return_clause) |ret| {
@@ -3913,6 +3943,8 @@ pub fn executeMerge(allocator: std.mem.Allocator, m: ast.MergeStatement, current
 
             for (ret.items, 0..) |item, i| {
                 row[i] = try eval.evalExpr(allocator, item.expr, env);
+                // SONNY-3322: the scope's copy of a relationship dies with it.
+                try scope.residentEdges(store, &row[i]);
             }
 
             rows[0] = row;

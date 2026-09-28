@@ -1165,6 +1165,14 @@
   `WHERE n.i > 0 FILTER n.i < 3` returned 9 rows, not 2. The stream now
   serves a statement only when every field it does not read is empty,
   checked field by field at compile time, and never a WHERE with a FILTER.
+- **A CREATE's relationship variable is read after every insert
+  (SONNY-3322):** CREATE, INSERT, MATCH ... CREATE and MERGE held each
+  relationship they made as the store's pointer to it, and a later edge
+  insert can move the store's edges: `CREATE (a)-[r:T {w: 3}]->(b), <150
+  more relationship chains> RETURN r.w, type(r)` crashed the server, and at
+  about 600 returned null. They hold the relationship's id, and read it once
+  every chain has inserted; a relationship a later chain or a MERGE action
+  reads is the statement's own copy.
 - **The parser's limits (SONNY-3244):** parsing runs before authorization,
   and 25,000 `MATCH (n:G) SET n.x = 1;` statements (625 KB) took a 741 MB
   parser arena, so a 16 MB request could hold about 19 GB; about 60 chained
