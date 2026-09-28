@@ -4,6 +4,8 @@ const gs = @import("graph_storage");
 const ast = @import("../gql/ast.zig");
 const eval = @import("../eval.zig");
 const execution = @import("../execution.zig");
+// SONNY-3321: the compile-time field allowlist (`onlyFields`).
+const write_shape = @import("../execution/write_shape.zig");
 const graph_store = @import("../graph_store.zig");
 const graph_storage_adapter = @import("../storage/graph_storage_adapter.zig");
 const stored_property_equality = @import("../execution/stored_property_equality.zig");
@@ -1289,7 +1291,25 @@ pub fn isEligible(q: *const ast.Query, session_tenant_id: ?[]const u8) bool {
     return eligibleQuery(q) != null;
 }
 
+// CANARY: REQ=REQ-SONNY-3321-STREAM-ALLOWLIST; FEATURE="NodeScanStream"; ASPECT=FieldAllowlist; STATUS=TESTED; TEST=tests/test_sonny_write_allowlist_r4_transport.zig; OWNER=engine; UPDATED=2026-09-28
+/// SONNY-3321: the `ast.Query` fields the stream reads. Every other field
+/// must hold its empty value (`write_shape.onlyFields`, checked field by
+/// field at compile time), so a field added to the AST, or one this path
+/// does not apply, makes the statement ineligible instead of being dropped.
+/// The hand-written list it replaces missed `let_bindings`: over QUIC and
+/// gRPC `LET $x = 1 IN (... SET ...) MATCH (n:G) RETURN count(*)` was
+/// answered here before the write-shape validator could refuse it, and
+/// `LET $x = 2 MATCH (n:G) WHERE n.i = $x RETURN n` read $x as unbound.
+const stream_fields = [_][]const u8{
+    "match", "where_clause", "filter_clause", "ret",
+    "limit", "offset",       "limit_param",   "offset_param",
+};
+
 fn eligibleQuery(q: *const ast.Query) ?Eligibility {
+    if (!write_shape.onlyFields(q.*, &stream_fields)) return null;
+    // One predicate: a WHERE and a FILTER together are both to hold, and the
+    // stream applies one (`WHERE n.i > 0 FILTER n.i < 3` returned 9 rows).
+    if (q.where_clause != null and q.filter_clause != null) return null;
     if (q.optional_match) return null;
     if (q.with_clause != null or q.group_by != null or q.having != null) return null;
     if (q.order_by != null or q.ret.distinct) return null;

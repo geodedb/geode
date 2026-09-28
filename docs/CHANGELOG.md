@@ -1156,6 +1156,15 @@
   runs when that clause created any part of its pattern, ON MATCH SET when
   it matched it, on whichever variable they name. A single MERGE (go/oidc's
   ClaimJTI and TOTP statements) is unchanged.
+- **The node-scan stream serves only the fields it reads (SONNY-3321):** the
+  QUIC and gRPC engine-direct stream judged a statement by a hand-written
+  list that missed `LET $x = ...` and applied only one of a WHERE and a
+  FILTER, so `LET $x = 1 IN (MATCH (w) SET ... RETURN 1) MATCH (n:G) RETURN
+  count(*)` was answered before the write-shape validator could refuse it,
+  `LET $x = 2 MATCH (n:G) WHERE n.i = $x RETURN n` returned nothing, and
+  `WHERE n.i > 0 FILTER n.i < 3` returned 9 rows, not 2. The stream now
+  serves a statement only when every field it does not read is empty,
+  checked field by field at compile time, and never a WHERE with a FILTER.
 - **The parser's limits (SONNY-3244):** parsing runs before authorization,
   and 25,000 `MATCH (n:G) SET n.x = 1;` statements (625 KB) took a 741 MB
   parser arena, so a 16 MB request could hold about 19 GB; about 60 chained

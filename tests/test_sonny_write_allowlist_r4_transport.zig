@@ -191,6 +191,18 @@ const cases = [_]Case{
         .{ .query = claim_jti, .want = "true" },
         .{ .query = claim_jti, .want = "false" },
     } },
+    // SONNY-3321: the stream path serves only what it reads; the rest runs
+    // (or is refused) as the executor runs it.
+    .{ .name = "3321 stream allowlist", .steps = &.{
+        .{ .query = "LET $x = 1 IN (MATCH (w:LQ) SET w.c = coalesce(w.c, 0) + 1 RETURN 1) MATCH (n:L) RETURN count(*) AS c", .code = "0A000" },
+        .{ .query = "LET $x = 1 IN (MATCH (w:LQ) SET w.c = coalesce(w.c, 0) + 1 RETURN 1) MATCH (n:L) WHERE $x RETURN n.i", .code = "0A000" },
+        .{ .query = "LET $x = size([1 IN (MATCH (w:LQ) SET w.c = coalesce(w.c, 0) + 1 RETURN 1)]) MATCH (n:L) WHERE n.i = $x RETURN n.i", .code = "0A000" },
+        nothing_written_q,
+        .{ .query = "LET $x = 2 MATCH (n:L) WHERE n.i = $x RETURN n.i", .want = "2" },
+        .{ .query = "LET $x = 3 MATCH (n:L) WHERE n.i > $x RETURN count(*) AS c", .want = "6" },
+        .{ .query = "MATCH (n:L) WHERE n.i > 0 FILTER n.i < 3 RETURN n.i", .want = "1;2" },
+        .{ .query = "MATCH (n:L) FILTER n.i < 3 RETURN n.i", .want = "0;1;2" },
+    } },
     // I8.
     .{ .name = "I8 nesting", .steps = &.{
         .{ .query = "WITH 1 AS a WITH 1 AS a WITH 1 AS a WITH 1 AS a WITH 1 AS a WITH 1 AS a WITH 1 AS a WITH 1 AS a WITH 1 AS a WITH 1 AS a WITH 1 AS a WITH 1 AS a WITH 1 AS a WITH 1 AS a WITH 1 AS a WITH 1 AS a WITH 1 AS a WITH 1 AS a WITH 1 AS a WITH 1 AS a WITH 1 AS a WITH 1 AS a WITH 1 AS a WITH 1 AS a WITH 1 AS a RETURN a", .code = "54001" },
