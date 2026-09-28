@@ -3216,23 +3216,29 @@ fn isAggregateCall(expr: ast.Expr) bool {
     return return_and_sorting.isAggregationExpr(expr) and expr == .Call;
 }
 
-fn exprHasNestedAggregate(expr: ast.Expr, inside_aggregate: bool) error{NestedAggregate}!bool {
-    switch (expr) {
-        .Call => |call| {
-            const is_agg = isAggregateCall(expr);
-            if (is_agg and inside_aggregate) return true; // aggregate within an aggregate
-            const now_inside = inside_aggregate or is_agg;
-            for (call.args) |arg| {
-                if (try exprHasNestedAggregate(arg.*, now_inside)) return true;
-            }
-            return false;
-        },
-        .Binary => |bin| {
-            return (try exprHasNestedAggregate(bin.left.*, inside_aggregate)) or
-                (try exprHasNestedAggregate(bin.right.*, inside_aggregate));
-        },
-        .Unary => |un| return exprHasNestedAggregate(un.expr.*, inside_aggregate),
-        else => return false,
+/// SONNY-3189: every RETURN runs this. The left operand of a binary
+/// expression and a unary operand are followed with a loop, not one
+/// recursion (and one copy of the expression) per operator.
+fn exprHasNestedAggregate(root: ast.Expr, inside_aggregate: bool) error{NestedAggregate}!bool {
+    var expr: *const ast.Expr = &root;
+    while (true) {
+        switch (expr.*) {
+            .Call => |call| {
+                const is_agg = isAggregateCall(expr.*);
+                if (is_agg and inside_aggregate) return true; // aggregate within an aggregate
+                const now_inside = inside_aggregate or is_agg;
+                for (call.args) |arg| {
+                    if (try exprHasNestedAggregate(arg.*, now_inside)) return true;
+                }
+                return false;
+            },
+            .Binary => |bin| {
+                if (try exprHasNestedAggregate(bin.right.*, inside_aggregate)) return true;
+                expr = bin.left;
+            },
+            .Unary => |un| expr = un.expr,
+            else => return false,
+        }
     }
 }
 

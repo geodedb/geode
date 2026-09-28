@@ -1146,7 +1146,14 @@ fn extractVarProp(expr: ast.Expr) ?struct { variable: []const u8, property: []co
     return null;
 }
 
-fn whereHasIndexedEquality(where_expr: ast.Expr, var_name: []const u8, label: []const u8, cat: anytype) bool {
+fn whereHasIndexedEquality(root: ast.Expr, var_name: []const u8, label: []const u8, cat: anytype) bool {
+    // SONNY-3189: down an AND chain with a loop, not one recursion per AND.
+    var at: *const ast.Expr = &root;
+    while (at.* == .Binary and at.Binary.op == .And) {
+        if (whereHasIndexedEquality(at.Binary.right.*, var_name, label, cat)) return true;
+        at = at.Binary.left;
+    }
+    const where_expr = at.*;
     switch (where_expr) {
         .Binary => |bin| {
             if (bin.op == .And) {

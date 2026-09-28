@@ -593,7 +593,16 @@ fn extractVarProperty(expr: gql_ast.Expr) ?struct { variable: []const u8, proper
 
 /// Check if a WHERE clause contains an equality predicate on a property
 /// that matches a catalog index for the given label and variable name.
-fn whereHasIndexedEq(where_expr: gql_ast.Expr, var_name: []const u8, label: []const u8, cat: anytype) bool {
+fn whereHasIndexedEq(root: gql_ast.Expr, var_name: []const u8, label: []const u8, cat: anytype) bool {
+    // SONNY-3189: down an AND chain with a loop, not one recursion (and one
+    // copy of the expression) per AND: EXPLAIN reaches this before
+    // authorization.
+    var at: *const gql_ast.Expr = &root;
+    while (at.* == .Binary and at.Binary.op == .And) {
+        if (whereHasIndexedEq(at.Binary.right.*, var_name, label, cat)) return true;
+        at = at.Binary.left;
+    }
+    const where_expr = at.*;
     switch (where_expr) {
         .Binary => |bin| {
             if (bin.op == .And) {

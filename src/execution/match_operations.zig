@@ -710,12 +710,20 @@ fn extractVarProperty(expr: ast.Expr) ?struct { variable: []const u8, property: 
 /// connected by AND. This is an early filter - WHERE is still fully evaluated later.
 fn checkPushedPredicates(
     allocator: std.mem.Allocator,
-    where_expr: ast.Expr,
+    root: ast.Expr,
     var_name: []const u8,
     node: *graph_store.Node,
     param_names: []const []const u8,
     param_values: []const Value,
 ) bool {
+    // SONNY-3189: down an AND chain with a loop, not one recursion per AND;
+    // every conjunct must pass, whatever the order.
+    var at: *const ast.Expr = &root;
+    while (at.* == .Binary and at.Binary.op == .And) {
+        if (!checkPushedPredicates(allocator, at.Binary.right.*, var_name, node, param_names, param_values)) return false;
+        at = at.Binary.left;
+    }
+    const where_expr = at.*;
     switch (where_expr) {
         .Binary => |bin| {
             if (bin.op == .And) {
@@ -5119,6 +5127,25 @@ pub fn executeMultiNodeMatch(allocator: std.mem.Allocator, q: ast.Query, param_n
 }
 
 // CANARY: REQ=REQ-GQL-MULTINODE-AGG-001; FEATURE="MultiNodeAggregation"; ASPECT=Computation; STATUS=TESTED; TEST=geodetestlab/specs/gql_query_comprehensive.yml; OWNER=engine; UPDATED=2025-12-26
+/// SONNY-3189: one integer link of an aggregate expression (`count(n) + 1`):
+/// Int op Int, NULL otherwise, and NULL for a division by zero. An overflow
+/// is `IntegerOverflow`, as the evaluator's; it was a panic.
+fn aggregateArithStep(op: ast.BinOp, left: Value, right: Value) error{IntegerOverflow}!Value {
+    if (left != .Int or right != .Int) return Value{ .Null = {} };
+    return switch (op) {
+        .Sub => Value{ .Int = std.math.sub(i64, left.Int, right.Int) catch return error.IntegerOverflow },
+        .Add => Value{ .Int = std.math.add(i64, left.Int, right.Int) catch return error.IntegerOverflow },
+        .Mul => Value{ .Int = std.math.mul(i64, left.Int, right.Int) catch return error.IntegerOverflow },
+        .Div => if (right.Int == 0)
+            Value{ .Null = {} }
+        else if (left.Int == std.math.minInt(i64) and right.Int == -1)
+            error.IntegerOverflow
+        else
+            Value{ .Int = @divTrunc(left.Int, right.Int) },
+        else => Value{ .Null = {} },
+    };
+}
+
 fn computeMultiNodeAggregation(allocator: std.mem.Allocator, expr: ast.Expr, group_envs: []const Env) !Value {
     switch (expr) {
         .Call => |call| {
@@ -5195,18 +5222,30 @@ fn computeMultiNodeAggregation(allocator: std.mem.Allocator, expr: ast.Expr, gro
         },
         .Binary => |bin| {
             // Handle expressions like d.budget - sum(e.salary)
-            const left = try computeMultiNodeAggregation(allocator, bin.left.*, group_envs);
-            const right = try computeMultiNodeAggregation(allocator, bin.right.*, group_envs);
-            if (left == .Int and right == .Int) {
-                return switch (bin.op) {
-                    .Sub => Value{ .Int = left.Int - right.Int },
-                    .Add => Value{ .Int = left.Int + right.Int },
-                    .Mul => Value{ .Int = left.Int * right.Int },
-                    .Div => if (right.Int != 0) Value{ .Int = @divTrunc(left.Int, right.Int) } else Value{ .Null = {} },
-                    else => Value{ .Null = {} },
-                };
+            // SONNY-3189: a left-deep chain with a loop, not one recursion
+            // per operator: down to its innermost left operand, then each
+            // link on the way back up, left before right as before.
+            // `aggregateArithStep` is the integer arithmetic this arm did,
+            // with overflow refused instead of a panic.
+            const Link = struct { op: ast.BinOp, right: *const ast.Expr };
+            var sfa = std.heap.stackFallback(64 * @sizeOf(Link), std.heap.smp_allocator);
+            const la = sfa.get();
+            var links: std.ArrayList(Link) = .empty;
+            defer links.deinit(la);
+            try links.append(la, .{ .op = bin.op, .right = bin.right });
+            var leaf: *const ast.Expr = bin.left;
+            while (leaf.* == .Binary) : (leaf = leaf.Binary.left) {
+                try links.append(la, .{ .op = leaf.Binary.op, .right = leaf.Binary.right });
             }
-            return Value{ .Null = {} };
+            var acc = try computeMultiNodeAggregation(allocator, leaf.*, group_envs);
+            var i = links.items.len;
+            while (i > 0) {
+                i -= 1;
+                const right = try computeMultiNodeAggregation(allocator, links.items[i].right.*, group_envs);
+                const next = try aggregateArithStep(links.items[i].op, acc, right);
+                acc = next;
+            }
+            return acc;
         },
         else => {
             // For non-aggregation expressions, use first row

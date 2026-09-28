@@ -1640,7 +1640,28 @@ fn propertyAccessVar(expr: ast.Expr) ?struct { obj: []const u8, prop: []const u8
     }
 }
 
-fn extractJoinPredicate(expr: ast.Expr, chain_vars: []const ?[]const u8) ?JoinPredicate {
+fn extractJoinPredicate(root: ast.Expr, chain_vars: []const ?[]const u8) ?JoinPredicate {
+    // SONNY-3189: an AND chain with a loop, not one recursion per AND: its
+    // innermost left conjunct first, then the right ones from the bottom up,
+    // the order the recursion tried them in (the first join predicate wins).
+    if (root == .Binary and root.Binary.op == .And) {
+        var sfa = std.heap.stackFallback(64 * @sizeOf(*const ast.Expr), std.heap.smp_allocator);
+        const la = sfa.get();
+        var rights: std.ArrayList(*const ast.Expr) = .empty;
+        defer rights.deinit(la);
+        var leaf: *const ast.Expr = &root;
+        while (leaf.* == .Binary and leaf.Binary.op == .And) : (leaf = leaf.Binary.left) {
+            rights.append(la, leaf.Binary.right) catch return null;
+        }
+        if (extractJoinPredicate(leaf.*, chain_vars)) |p| return p;
+        var i = rights.items.len;
+        while (i > 0) {
+            i -= 1;
+            if (extractJoinPredicate(rights.items[i].*, chain_vars)) |p| return p;
+        }
+        return null;
+    }
+    const expr = root;
     switch (expr) {
         .Binary => |b| {
             switch (b.op) {
@@ -2246,7 +2267,11 @@ fn analyzeExprForProjection(
             }
         },
         // p.key → record (p, key).
-        .Member => |m| {
+        .Member => |top| {
+            // SONNY-3189: down a member chain with a loop: the link whose
+            // target is not a member access decides, as the recursion did.
+            var m = top;
+            while (m.target.* == .Member) m = m.target.Member;
             if (m.target.* == .Ident) {
                 const target_ident = m.target.Ident;
                 if (findBindingIndex(plan, target_ident.orig)) |idx| {
@@ -2266,9 +2291,30 @@ fn analyzeExprForProjection(
             }
         },
         .Binary => |bin| {
-            analyzeExprForProjection(allocator, bin.left.*, plan, projections, key_lists, failed);
-            if (failed.*) return;
-            analyzeExprForProjection(allocator, bin.right.*, plan, projections, key_lists, failed);
+            // SONNY-3189: a left-deep chain with a loop, not one recursion
+            // per operator; left operands before right ones, as before.
+            var sfa = std.heap.stackFallback(64 * @sizeOf(*const ast.Expr), std.heap.smp_allocator);
+            const la = sfa.get();
+            var rights: std.ArrayList(*const ast.Expr) = .empty;
+            defer rights.deinit(la);
+            rights.append(la, bin.right) catch {
+                failed.* = true;
+                return;
+            };
+            var leaf: *const ast.Expr = bin.left;
+            while (leaf.* == .Binary) : (leaf = leaf.Binary.left) {
+                rights.append(la, leaf.Binary.right) catch {
+                    failed.* = true;
+                    return;
+                };
+            }
+            analyzeExprForProjection(allocator, leaf.*, plan, projections, key_lists, failed);
+            var i = rights.items.len;
+            while (i > 0) {
+                i -= 1;
+                if (failed.*) return;
+                analyzeExprForProjection(allocator, rights.items[i].*, plan, projections, key_lists, failed);
+            }
         },
         .Unary => |un| {
             analyzeExprForProjection(allocator, un.expr.*, plan, projections, key_lists, failed);
@@ -3508,7 +3554,14 @@ fn nodeCanUseIndex(context: ExecutionContext, node: ast.NodePattern, where_claus
     return false;
 }
 
-fn whereClauseHasIndexedEquality(expr: ast.Expr, var_name: []const u8, label: []const u8, context: ExecutionContext) bool {
+fn whereClauseHasIndexedEquality(root: ast.Expr, var_name: []const u8, label: []const u8, context: ExecutionContext) bool {
+    // SONNY-3189: down an AND chain with a loop, not one recursion per AND.
+    var at: *const ast.Expr = &root;
+    while (at.* == .Binary and at.Binary.op == .And) {
+        if (whereClauseHasIndexedEquality(at.Binary.right.*, var_name, label, context)) return true;
+        at = at.Binary.left;
+    }
+    const expr = at.*;
     switch (expr) {
         .Binary => |bin| {
             if (bin.op == .And) {

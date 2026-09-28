@@ -109,6 +109,10 @@ pub const EvalError = error{
     // knn() read for a session a policy could restrict. Refused instead of
     // answered without RLS, or a panic. Mapped to XX000 in proto_util.
     EvaluatorNotInitialized,
+    // SONNY-3181: an expression nested deeper than the evaluating thread's
+    // stack holds (`eval.evalExpr`'s stack guard). Refused instead of a
+    // stack overflow. Mapped to 54001 (statement too complex) in proto_util.
+    ExpressionTooDeep,
     OutOfMemory,
 };
 

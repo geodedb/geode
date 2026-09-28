@@ -1232,7 +1232,10 @@ fn collectExprPropertyKeys(
         .PropertyAccess => |pa| {
             if (std.ascii.eqlIgnoreCase(pa.object, variable_name)) try addKeyUnique(arena, pa.property, out);
         },
-        .Member => |m| {
+        .Member => |top| {
+            // SONNY-3189: down a member chain with a loop.
+            var m = top;
+            while (m.target.* == .Member) m = m.target.Member;
             if (m.target.* == .Ident and
                 (std.ascii.eqlIgnoreCase(m.target.Ident.orig, variable_name) or std.ascii.eqlIgnoreCase(m.target.Ident.cnf, variable_name)))
             {
@@ -1243,8 +1246,18 @@ fn collectExprPropertyKeys(
         },
         .Unary => |u| try collectExprPropertyKeys(arena, u.expr.*, variable_name, out),
         .Binary => |b| {
-            try collectExprPropertyKeys(arena, b.left.*, variable_name, out);
-            try collectExprPropertyKeys(arena, b.right.*, variable_name, out);
+            // SONNY-3189: a left-deep chain with a loop, not one recursion per
+            // operator; keys in the order the recursion found them.
+            var rights: std.ArrayList(*const ast.Expr) = .empty;
+            try rights.append(arena, b.right);
+            var leaf: *const ast.Expr = b.left;
+            while (leaf.* == .Binary) : (leaf = leaf.Binary.left) try rights.append(arena, leaf.Binary.right);
+            try collectExprPropertyKeys(arena, leaf.*, variable_name, out);
+            var i = rights.items.len;
+            while (i > 0) {
+                i -= 1;
+                try collectExprPropertyKeys(arena, rights.items[i].*, variable_name, out);
+            }
         },
         .IsNull => |n| try collectExprPropertyKeys(arena, n.target.*, variable_name, out),
         .Call => |c| {
@@ -1420,7 +1433,26 @@ fn isStreamableProjectionExpr(expr: ast.Expr, variable_name: []const u8) bool {
 /// params. Rejects anything referencing other variables or needing cross-row
 /// context, so the per-node `eval.evalExpr` is guaranteed identical to the
 /// snapshot executor's per-node evaluation.
-fn isStreamablePredicateExpr(expr: ast.Expr) bool {
+fn isStreamablePredicateExpr(root: ast.Expr) bool {
+    // SONNY-3189: down AND/OR/comparison, NOT and member chains with a loop,
+    // not one recursion per link.
+    var at: *const ast.Expr = &root;
+    while (true) switch (at.*) {
+        .Binary => |b| switch (b.op) {
+            .And, .Or, .Eq, .Ne, .Lt, .Le, .Gt, .Ge => {
+                if (!isStreamablePredicateExpr(b.right.*)) return false;
+                at = b.left;
+            },
+            else => return false,
+        },
+        .Unary => |u| {
+            if (u.op != .Not) return false;
+            at = u.expr;
+        },
+        .Member => |m| at = m.target,
+        else => break,
+    };
+    const expr = at.*;
     return switch (expr) {
         .Bool, .Int, .Null, .String, .Decimal, .Param => true,
         .SmallIntLit, .BigIntLit, .RealLit, .DoubleLit, .TextLit => true,
@@ -1439,7 +1471,19 @@ fn isStreamablePredicateExpr(expr: ast.Expr) bool {
 /// Every Ident / property-access target inside the predicate references only
 /// the scanned variable (or a parameter). Guards against `WHERE m.x = 1`
 /// where `m` is some other (unbound here) variable.
-fn predicateOnlyReferences(expr: ast.Expr, variable_name: []const u8) bool {
+fn predicateOnlyReferences(root: ast.Expr, variable_name: []const u8) bool {
+    // SONNY-3189: down binary, unary and member chains with a loop.
+    var at: *const ast.Expr = &root;
+    while (true) switch (at.*) {
+        .Binary => |b| {
+            if (!predicateOnlyReferences(b.right.*, variable_name)) return false;
+            at = b.left;
+        },
+        .Unary => |u| at = u.expr,
+        .Member => |m| at = m.target,
+        else => break,
+    };
+    const expr = at.*;
     return switch (expr) {
         .Bool, .Int, .Null, .String, .Decimal, .Param => true,
         .SmallIntLit, .BigIntLit, .RealLit, .DoubleLit, .TextLit => true,
@@ -1623,8 +1667,18 @@ fn appendSeekableWhereProps(
         else => return,
     };
     if (b.op == .And) {
-        try appendSeekableWhereProps(arena, b.left.*, var_name, out);
-        try appendSeekableWhereProps(arena, b.right.*, var_name, out);
+        // SONNY-3189: an AND chain with a loop, not one recursion per AND;
+        // conjuncts in the order the recursion appended them.
+        var rights: std.ArrayList(*const ast.Expr) = .empty;
+        try rights.append(arena, b.right);
+        var leaf: *const ast.Expr = b.left;
+        while (leaf.* == .Binary and leaf.Binary.op == .And) : (leaf = leaf.Binary.left) try rights.append(arena, leaf.Binary.right);
+        try appendSeekableWhereProps(arena, leaf.*, var_name, out);
+        var i = rights.items.len;
+        while (i > 0) {
+            i -= 1;
+            try appendSeekableWhereProps(arena, rights.items[i].*, var_name, out);
+        }
         return;
     }
     if (b.op != .Eq) return;
@@ -2305,6 +2359,36 @@ fn cloneIdent(arena: std.mem.Allocator, id: ast.IdentRepr) CloneError!ast.IdentR
     return .{ .orig = try arena.dupe(u8, id.orig), .cnf = try arena.dupe(u8, id.cnf) };
 }
 
+/// SONNY-3189: copy a chain of member accesses and binary operators with a
+/// loop: down the member targets and left operands, each copied link's child
+/// slot filled by the next link; right operands and the innermost operand
+/// through `cloneExprPtr`.
+fn cloneChain(arena: std.mem.Allocator, e: ast.Expr) CloneError!ast.Expr {
+    var result: ast.Expr = undefined;
+    var slot: *ast.Expr = &result;
+    var src: *const ast.Expr = &e;
+    while (true) {
+        switch (src.*) {
+            .Member => |m| {
+                const child = try arena.create(ast.Expr);
+                slot.* = .{ .Member = .{ .target = child, .field = try arena.dupe(u8, m.field) } };
+                slot = child;
+                src = m.target;
+            },
+            .Binary => |b| {
+                const child = try arena.create(ast.Expr);
+                slot.* = .{ .Binary = .{ .op = b.op, .left = child, .right = try cloneExprPtr(arena, b.right) } };
+                slot = child;
+                src = b.left;
+            },
+            else => {
+                slot.* = try cloneExpr(arena, src.*);
+                return result;
+            },
+        }
+    }
+}
+
 fn cloneExpr(arena: std.mem.Allocator, e: ast.Expr) CloneError!ast.Expr {
     return switch (e) {
         .Null => .Null,
@@ -2323,18 +2407,12 @@ fn cloneExpr(arena: std.mem.Allocator, e: ast.Expr) CloneError!ast.Expr {
             .object = try arena.dupe(u8, pa.object),
             .property = try arena.dupe(u8, pa.property),
         } },
-        .Member => |m| .{ .Member = .{
-            .target = try cloneExprPtr(arena, m.target),
-            .field = try arena.dupe(u8, m.field),
-        } },
+        // SONNY-3189: member and binary chains are copied with a loop
+        // (`cloneChain`), not one recursion per link.
+        .Member, .Binary => cloneChain(arena, e),
         .Unary => |u| .{ .Unary = .{
             .op = u.op,
             .expr = try cloneExprPtr(arena, u.expr),
-        } },
-        .Binary => |b| .{ .Binary = .{
-            .op = b.op,
-            .left = try cloneExprPtr(arena, b.left),
-            .right = try cloneExprPtr(arena, b.right),
         } },
         .IsNull => |n| .{ .IsNull = .{
             .target = try cloneExprPtr(arena, n.target),

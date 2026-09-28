@@ -13,6 +13,8 @@ const vector_types = @import("types/vector.zig");
 // geode#875 (i): src/eval.zig had ZERO read_budget poll sites, so a brute-force
 // knn scan could not be cancelled mid-scan. Leaf module, no geode locks.
 const read_budget = @import("read_budget.zig");
+// SONNY-3181: the stack guard the parser (SONNY-3133) takes, shared.
+const stack_guard = @import("stack_guard.zig");
 
 // CANARY: REQ=REQ-M5.3-EVAL-REFACTOR-001; FEATURE="Circular Dependency Resolution"; ASPECT=AdapterImport; STATUS=EXEMPT; OWNER=eval; UPDATED=2025-11-13
 // Phase 5 M5.3: Import evaluator_adapter instead of execution.zig to break circular dependency
@@ -63,6 +65,8 @@ fn isPropagatableEvalError(err: EvalError) bool {
         EvalError.UnknownFunction,
         // GAP-0840: a strict-tenancy refusal must never degrade to NULL.
         EvalError.TenantScopeRequired,
+        // SONNY-3181: nor an argument nested past the evaluator's stack.
+        EvalError.ExpressionTooDeep,
         // Item 5 of the SONNY-2686 review: neither may a refusal to answer
         // without the session's row visibility.
         EvalError.EvaluatorNotInitialized,
@@ -1054,7 +1058,167 @@ const pow10 = value_types.pow10;
 // Phase 5 M5.2: Use stringify from value_types module
 const stringify = value_types.stringify;
 
+// CANARY: REQ=REQ-SONNY-3181-EVAL-CHAINS; FEATURE="ExpressionEvaluator"; ASPECT=IterativeChains; STATUS=TESTED; TEST=tests/test_sonny3181_expr_chain_cap.zig; OWNER=eval; UPDATED=2026-09-27
+/// SONNY-3181: how much of the calling thread's stack must be left for the
+/// evaluator to go one level deeper. A level of `evalExprNode` is a large
+/// frame in a Debug build (tens of KiB: `- - ... - 1` 120 deep overflowed
+/// an 8 MiB thread), and a level can call into the function handlers.
+const eval_stack_reserve_bytes: usize = if (builtin.mode == .Debug) 1024 * 1024 else 256 * 1024;
+
+/// Evaluate `e`.
+///
+/// SONNY-3181: operator and member chains are evaluated with a loop. The
+/// parser builds them as deep as they are long (`1 + 1 + ... + 1` is a
+/// left-deep AST; SONNY-3189 caps an expression at `max_expr_links`), and
+/// this function recursed once per link: 1,000 terms crashed a 16 MiB
+/// server thread in a Debug build, from any role that could read.
+/// `evalBinaryChain`, `evalUnaryChain` and `evalMemberChain` walk a chain
+/// down, evaluate its innermost operand once, and apply the links on the
+/// way back up, in the order and with the short-circuits the recursion
+/// had. Every other level of nesting (a list, a call, CASE) still recurses,
+/// and is refused with `ExpressionTooDeep` (54001) when the thread's stack
+/// runs short, instead of overflowing it.
 pub fn evalExpr(allocator: std.mem.Allocator, e: ast.Expr, env: Env) EvalError!Value {
+    if (!stack_guard.hasRoom(eval_stack_reserve_bytes)) return EvalError.ExpressionTooDeep;
+    return switch (e) {
+        .Binary => |b| evalBinaryChain(allocator, b.op, b.left, b.right, env),
+        .Unary => |u| evalUnaryChain(allocator, u.op, u.expr, env),
+        .Member => |m| evalMemberChain(allocator, m.target, m.field, env),
+        else => evalExprNode(allocator, e, env),
+    };
+}
+
+/// SONNY-3181: the links of a chain are kept on the stack up to this many,
+/// a longer chain's on the heap (the process allocator: the evaluator's is
+/// often an arena, which would keep them for every row).
+const chain_stack_links = 64;
+
+/// SONNY-3181: one binary link, given its evaluated left operand: `AND`
+/// and `OR` short-circuit (three-valued), every other operator evaluates
+/// its right operand and applies `evalBinary`.
+fn evalBinaryStep(allocator: std.mem.Allocator, op: ast.BinOp, l: Value, right: *const ast.Expr, env: Env) EvalError!Value {
+    // CANARY: REQ=REQ-GQL-SHORT-CIRCUIT-001; FEATURE="Short-circuit evaluation"; ASPECT=AND_OR; STATUS=EXEMPT; OWNER=eval; UPDATED=2025-12-27
+    // Implement short-circuit evaluation for AND/OR to avoid evaluating RHS when unnecessary
+    // This prevents division-by-zero errors in expressions like: n.value <> 0 AND 100 / n.value > 1
+    switch (op) {
+        .And => {
+            // Short-circuit: If left is definitely false, return false without evaluating right
+            if (l == .Bool and !l.Bool) return Value{ .Bool = false };
+            const r = try evalExpr(allocator, right.*, env);
+            return and3(l, r);
+        },
+        .Or => {
+            // Short-circuit: If left is definitely true, return true without evaluating right
+            if (l == .Bool and l.Bool) return Value{ .Bool = true };
+            const r = try evalExpr(allocator, right.*, env);
+            return or3(l, r);
+        },
+        else => {
+            // Non-boolean operators: evaluate both sides
+            const r = try evalExpr(allocator, right.*, env);
+            return try evalBinary(allocator, op, l, r);
+        },
+    }
+}
+
+/// SONNY-3181: `left op right` and the binary links under its left
+/// operand, with a loop: the left-deep chain `((a op b) op c) ...` is
+/// walked down to `a`, which is evaluated once, and each link is applied
+/// on the way back up (`evalBinaryStep`), as the recursion did.
+fn evalBinaryChain(allocator: std.mem.Allocator, op: ast.BinOp, left: *const ast.Expr, right: *const ast.Expr, env: Env) EvalError!Value {
+    const Link = struct { op: ast.BinOp, right: *const ast.Expr };
+    var sfa = std.heap.stackFallback(chain_stack_links * @sizeOf(Link), std.heap.smp_allocator);
+    const la = sfa.get();
+    var links: std.ArrayList(Link) = .empty;
+    defer links.deinit(la);
+    links.append(la, .{ .op = op, .right = right }) catch return EvalError.OutOfMemory;
+    var leaf = left;
+    while (leaf.* == .Binary) : (leaf = leaf.Binary.left) {
+        links.append(la, .{ .op = leaf.Binary.op, .right = leaf.Binary.right }) catch return EvalError.OutOfMemory;
+    }
+    var acc = try evalExpr(allocator, leaf.*, env);
+    var i = links.items.len;
+    while (i > 0) {
+        i -= 1;
+        const link = links.items[i];
+        // A new value, then `acc`: the result is not written over the
+        // operand it is computed from.
+        const next = try evalBinaryStep(allocator, link.op, acc, link.right, env);
+        acc = next;
+    }
+    return acc;
+}
+
+/// SONNY-3181: one unary operator on its evaluated operand.
+fn applyUnary(op: ast.UnaryOp, v: Value) EvalError!Value {
+    switch (op) {
+        .Not => {
+            // CANARY: REQ=REQ-GQL-NULL-SEMANTICS-001; FEATURE="ThreeValuedLogic"; ASPECT=NotNull; STATUS=TESTED; TEST=geodetestlab/specs/gql_expressions_comprehensive.yml; OWNER=eval; UPDATED=2025-12-27
+            // GQL/SQL three-valued logic: NOT null = null
+            if (v == .Null) return Value{ .Null = {} };
+            return .{ .Bool = !truthy(v) };
+        },
+        .Neg => return switch (v) {
+            .Int => |i| .{ .Int = -i },
+            .Decimal => |d| .{ .Decimal = .{ .coeff = -d.coeff, .scale = d.scale, .orig_scale = d.orig_scale } },
+            else => EvalError.TypeMismatch,
+        },
+        .Pos => return switch (v) {
+            .Int, .Decimal => v,
+            else => EvalError.TypeMismatch,
+        },
+    }
+}
+
+/// SONNY-3181: `op operand` and the unary operators directly under it
+/// (`NOT NOT x`, `- - 1`), with a loop: the innermost operand is evaluated
+/// once and the operators are applied innermost first.
+fn evalUnaryChain(allocator: std.mem.Allocator, op: ast.UnaryOp, operand: *const ast.Expr, env: Env) EvalError!Value {
+    var sfa = std.heap.stackFallback(chain_stack_links * @sizeOf(ast.UnaryOp), std.heap.smp_allocator);
+    const la = sfa.get();
+    var ops: std.ArrayList(ast.UnaryOp) = .empty;
+    defer ops.deinit(la);
+    ops.append(la, op) catch return EvalError.OutOfMemory;
+    var inner = operand;
+    while (inner.* == .Unary) : (inner = inner.Unary.expr) {
+        ops.append(la, inner.Unary.op) catch return EvalError.OutOfMemory;
+    }
+    var v = try evalExpr(allocator, inner.*, env);
+    var i = ops.items.len;
+    while (i > 0) {
+        i -= 1;
+        const next = try applyUnary(ops.items[i], v);
+        v = next;
+    }
+    return v;
+}
+
+/// SONNY-3181: `target.field` and the member accesses under it
+/// (`n.a.b.c`), with a loop: the innermost target is evaluated once and
+/// the fields are applied innermost first (`memberOfValue`).
+fn evalMemberChain(allocator: std.mem.Allocator, target: *const ast.Expr, field: []const u8, env: Env) EvalError!Value {
+    var sfa = std.heap.stackFallback(chain_stack_links * @sizeOf([]const u8), std.heap.smp_allocator);
+    const la = sfa.get();
+    var fields: std.ArrayList([]const u8) = .empty;
+    defer fields.deinit(la);
+    fields.append(la, field) catch return EvalError.OutOfMemory;
+    var inner = target;
+    while (inner.* == .Member) : (inner = inner.Member.target) {
+        fields.append(la, inner.Member.field) catch return EvalError.OutOfMemory;
+    }
+    var v = try evalExpr(allocator, inner.*, env);
+    var i = fields.items.len;
+    while (i > 0) {
+        i -= 1;
+        const next = try memberOfValue(allocator, v, fields.items[i]);
+        v = next;
+    }
+    return v;
+}
+
+/// One level of evaluation. The chains and the stack guard are
+/// `evalExpr`'s, and every recursive evaluation goes through it.
+fn evalExprNode(allocator: std.mem.Allocator, e: ast.Expr, env: Env) EvalError!Value {
     return switch (e) {
         .Null => Value{ .Null = {} },
         .Int => |n| .{ .Int = n },
@@ -1111,59 +1275,9 @@ pub fn evalExpr(allocator: std.mem.Allocator, e: ast.Expr, env: Env) EvalError!V
             if (is_positional) return EvalError.MissingParameter;
             break :blk_param Value{ .Null = {} };
         },
-        .Unary => |u| blk: {
-            const v = try evalExpr(allocator, u.expr.*, env);
-            switch (u.op) {
-                .Not => {
-                    // CANARY: REQ=REQ-GQL-NULL-SEMANTICS-001; FEATURE="ThreeValuedLogic"; ASPECT=NotNull; STATUS=TESTED; TEST=geodetestlab/specs/gql_expressions_comprehensive.yml; OWNER=eval; UPDATED=2025-12-27
-                    // GQL/SQL three-valued logic: NOT null = null
-                    if (v == .Null) break :blk Value{ .Null = {} };
-                    break :blk .{ .Bool = !truthy(v) };
-                },
-                .Neg => switch (v) {
-                    .Int => |i| break :blk .{ .Int = -i },
-                    .Decimal => |d| break :blk .{ .Decimal = .{ .coeff = -d.coeff, .scale = d.scale, .orig_scale = d.orig_scale } },
-                    else => return EvalError.TypeMismatch,
-                },
-                .Pos => switch (v) {
-                    .Int, .Decimal => break :blk v,
-                    else => return EvalError.TypeMismatch,
-                },
-            }
-        },
-        .Binary => |b| blk2: {
-            // CANARY: REQ=REQ-GQL-SHORT-CIRCUIT-001; FEATURE="Short-circuit evaluation"; ASPECT=AND_OR; STATUS=EXEMPT; OWNER=eval; UPDATED=2025-12-27
-            // Implement short-circuit evaluation for AND/OR to avoid evaluating RHS when unnecessary
-            // This prevents division-by-zero errors in expressions like: n.value <> 0 AND 100 / n.value > 1
-            switch (b.op) {
-                .And => {
-                    const l = try evalExpr(allocator, b.left.*, env);
-                    // Short-circuit: If left is definitely false, return false without evaluating right
-                    if (l == .Bool and !l.Bool) {
-                        break :blk2 Value{ .Bool = false };
-                    }
-                    // Evaluate right only if left wasn't definitely false
-                    const r = try evalExpr(allocator, b.right.*, env);
-                    break :blk2 and3(l, r);
-                },
-                .Or => {
-                    const l = try evalExpr(allocator, b.left.*, env);
-                    // Short-circuit: If left is definitely true, return true without evaluating right
-                    if (l == .Bool and l.Bool) {
-                        break :blk2 Value{ .Bool = true };
-                    }
-                    // Evaluate right only if left wasn't definitely true
-                    const r = try evalExpr(allocator, b.right.*, env);
-                    break :blk2 or3(l, r);
-                },
-                else => {
-                    // Non-boolean operators: evaluate both sides
-                    const l = try evalExpr(allocator, b.left.*, env);
-                    const r = try evalExpr(allocator, b.right.*, env);
-                    break :blk2 try evalBinary(allocator, b.op, l, r);
-                },
-            }
-        },
+        // SONNY-3181: `evalExpr` evaluates unary and binary chains itself.
+        .Unary => |u| evalUnaryChain(allocator, u.op, u.expr, env),
+        .Binary => |b| evalBinaryChain(allocator, b.op, b.left, b.right, env),
         .StartsWith => |sp| blk3: {
             const v = try evalExpr(allocator, sp.value.*, env);
             const p = try evalExpr(allocator, sp.prefix.*, env);
@@ -1813,184 +1927,10 @@ pub fn evalExpr(allocator: std.mem.Allocator, e: ast.Expr, env: Env) EvalError!V
         },
         .Member => |member| blk_member: {
             // Handle member access like n.name or r.property (where n/r is already evaluated)
+            // SONNY-3181: `memberOfValue`, which `evalMemberChain` applies
+            // link by link to a chain.
             const target = try evalExpr(allocator, member.target.*, env);
-
-            // If target is a Node, access its properties
-            if (target == .Node) {
-                const node = target.Node;
-                if (node.properties.get(member.field)) |val| {
-                    const result = switch (val) {
-                        .String => |s| blk: {
-                            // For string properties, check FLE permissions
-                            const type_name = if (node.labels.len > 0) node.labels[0] else "Unknown";
-                            const checked_value = fle_integration.checkPropertyAccess(
-                                allocator,
-                                type_name,
-                                member.field,
-                                s,
-                                node.id,
-                            ) catch |err| {
-                                if (err == error.SearchNotPermitted) {
-                                    return EvalError.SearchNotPermitted;
-                                }
-                                // For other errors, fall back to original value
-                                break :blk Value{ .Str = s };
-                            };
-                            break :blk Value{ .Str = checked_value };
-                        },
-                        else => property_codec.propertyValueToProjectedValue(allocator, val) catch Value{ .Null = {} },
-                    };
-                    break :blk_member result;
-                }
-            }
-
-            // If target is an Edge, access its properties
-            if (target == .Edge) {
-                const edge = target.Edge;
-                if (edge.properties.get(member.field)) |val| {
-                    const result = switch (val) {
-                        .String => |s| blk: {
-                            // For string properties, check FLE permissions
-                            const type_name = edge.label;
-                            const checked_value = fle_integration.checkPropertyAccess(
-                                allocator,
-                                type_name,
-                                member.field,
-                                s,
-                                edge.id,
-                            ) catch |err| {
-                                if (err == error.SearchNotPermitted) {
-                                    return EvalError.SearchNotPermitted;
-                                }
-                                // For other errors, fall back to original value
-                                break :blk Value{ .Str = s };
-                            };
-                            break :blk Value{ .Str = checked_value };
-                        },
-                        else => property_codec.propertyValueToProjectedValue(allocator, val) catch Value{ .Null = {} },
-                    };
-                    break :blk_member result;
-                }
-            }
-
-            // If target is a Map, access its keys
-            if (target == .Map) {
-                const map = target.Map;
-                if (map.get(member.field)) |val| {
-                    break :blk_member val;
-                }
-            }
-
-            if (extractStructuredMember(allocator, target, member.field)) |extracted| {
-                break :blk_member extracted;
-            }
-
-            // Handle direct Date value property access (from date() function)
-            if (target == .Date) {
-                const datetime_module = @import("types/datetime.zig");
-                const ymd = datetime_module.Date.dateFromDays(target.Date.days_since_epoch);
-
-                if (std.mem.eql(u8, member.field, "year")) {
-                    break :blk_member Value{ .Int = ymd.year };
-                } else if (std.mem.eql(u8, member.field, "month")) {
-                    break :blk_member Value{ .Int = ymd.month };
-                } else if (std.mem.eql(u8, member.field, "day")) {
-                    break :blk_member Value{ .Int = ymd.day };
-                }
-            }
-
-            // Handle direct Time value property access (from time() function)
-            if (target == .Time) {
-                const hours = @divFloor(target.Time.micros_since_midnight, 3600_000_000);
-                const minutes = @divFloor(@rem(target.Time.micros_since_midnight, 3600_000_000), 60_000_000);
-                const seconds = @divFloor(@rem(target.Time.micros_since_midnight, 60_000_000), 1_000_000);
-
-                if (std.mem.eql(u8, member.field, "hour")) {
-                    break :blk_member Value{ .Int = @intCast(hours) };
-                } else if (std.mem.eql(u8, member.field, "minute")) {
-                    break :blk_member Value{ .Int = @intCast(minutes) };
-                } else if (std.mem.eql(u8, member.field, "second")) {
-                    break :blk_member Value{ .Int = @intCast(seconds) };
-                }
-            }
-
-            // If target is an ExtValue, handle datetime property access
-            if (target == .ExtValue) {
-                const ext = target.ExtValue;
-                switch (ext) {
-                    .TimestampTZ => |ts| {
-                        // Extract date and time components from timestamp
-                        const days = @divFloor(ts.micros_since_epoch_utc, 24 * 3600 * 1_000_000);
-                        const time_micros = @rem(ts.micros_since_epoch_utc, 24 * 3600 * 1_000_000);
-
-                        // Get date components
-                        const datetime_module = @import("types/datetime.zig");
-                        const date = datetime_module.Date{ .days_since_epoch = @intCast(days) };
-                        const ymd = datetime_module.Date.dateFromDays(date.days_since_epoch);
-
-                        // Get time components
-                        const hours = @divFloor(time_micros, 3600_000_000);
-                        const minutes = @divFloor(@rem(time_micros, 3600_000_000), 60_000_000);
-                        const seconds = @divFloor(@rem(time_micros, 60_000_000), 1_000_000);
-
-                        if (std.mem.eql(u8, member.field, "year")) {
-                            break :blk_member Value{ .Int = ymd.year };
-                        } else if (std.mem.eql(u8, member.field, "month")) {
-                            break :blk_member Value{ .Int = ymd.month };
-                        } else if (std.mem.eql(u8, member.field, "day")) {
-                            break :blk_member Value{ .Int = ymd.day };
-                        } else if (std.mem.eql(u8, member.field, "hour")) {
-                            break :blk_member Value{ .Int = @intCast(hours) };
-                        } else if (std.mem.eql(u8, member.field, "minute")) {
-                            break :blk_member Value{ .Int = @intCast(minutes) };
-                        } else if (std.mem.eql(u8, member.field, "second")) {
-                            break :blk_member Value{ .Int = @intCast(seconds) };
-                        }
-                    },
-                    .Date => |d| {
-                        const datetime_module = @import("types/datetime.zig");
-                        const ymd = datetime_module.Date.dateFromDays(d.days_since_epoch);
-
-                        if (std.mem.eql(u8, member.field, "year")) {
-                            break :blk_member Value{ .Int = ymd.year };
-                        } else if (std.mem.eql(u8, member.field, "month")) {
-                            break :blk_member Value{ .Int = ymd.month };
-                        } else if (std.mem.eql(u8, member.field, "day")) {
-                            break :blk_member Value{ .Int = ymd.day };
-                        }
-                    },
-                    .Time => |t| {
-                        const hours = @divFloor(t.micros_since_midnight, 3600_000_000);
-                        const minutes = @divFloor(@rem(t.micros_since_midnight, 3600_000_000), 60_000_000);
-                        const seconds = @divFloor(@rem(t.micros_since_midnight, 60_000_000), 1_000_000);
-
-                        if (std.mem.eql(u8, member.field, "hour")) {
-                            break :blk_member Value{ .Int = @intCast(hours) };
-                        } else if (std.mem.eql(u8, member.field, "minute")) {
-                            break :blk_member Value{ .Int = @intCast(minutes) };
-                        } else if (std.mem.eql(u8, member.field, "second")) {
-                            break :blk_member Value{ .Int = @intCast(seconds) };
-                        }
-                    },
-                    // CANARY: REQ=REQ-MAP-PROP-003; FEATURE="MapProperties"; ASPECT=JsonMemberAccess; STATUS=TESTED; TEST=geodetestlab/specs/gql_expressions_comprehensive.yml; OWNER=eval; UPDATED=2026-01-09
-                    // Handle member access on JSON strings (map properties stored as JSON)
-                    .Json => |json_str| {
-                        // Parse JSON and extract the field value
-                        if (extractJsonField(allocator, json_str, member.field)) |extracted| {
-                            break :blk_member extracted;
-                        }
-                    },
-                    .Jsonb => |doc| {
-                        if (extractJsonField(allocator, doc.data, member.field)) |extracted| {
-                            break :blk_member extracted;
-                        }
-                    },
-                    else => {},
-                }
-            }
-
-            // Otherwise return null
-            break :blk_member Value{ .Null = {} };
+            break :blk_member try memberOfValue(allocator, target, member.field);
         },
         .Index => |idx| blk_index: {
             // Handle array indexing like array[0]
@@ -2177,6 +2117,191 @@ pub fn evalExpr(allocator: std.mem.Allocator, e: ast.Expr, env: Env) EvalError!V
         // Unimplemented in evaluator: treat these as null for now
         else => Value{ .Null = {} },
     };
+}
+
+// CANARY: REQ=REQ-SONNY-3181-EVAL-CHAINS; FEATURE="ExpressionEvaluator"; ASPECT=MemberOfValue; STATUS=TESTED; TEST=tests/test_sonny3181_expr_chain_cap.zig; OWNER=eval; UPDATED=2026-09-27
+/// Member access `.field` on an evaluated `target`: a node's or an edge's
+/// property (FLE-checked), a map entry, a structured (JSON) member, a
+/// temporal component, or NULL. SONNY-3181: the `.Member` arm of
+/// `evalExprNode`, taken out so a member chain is evaluated with a loop
+/// (`evalMemberChain`).
+fn memberOfValue(allocator: std.mem.Allocator, target: Value, field: []const u8) EvalError!Value {
+    // If target is a Node, access its properties
+    if (target == .Node) {
+        const node = target.Node;
+        if (node.properties.get(field)) |val| {
+            const result = switch (val) {
+                .String => |s| blk: {
+                    // For string properties, check FLE permissions
+                    const type_name = if (node.labels.len > 0) node.labels[0] else "Unknown";
+                    const checked_value = fle_integration.checkPropertyAccess(
+                        allocator,
+                        type_name,
+                        field,
+                        s,
+                        node.id,
+                    ) catch |err| {
+                        if (err == error.SearchNotPermitted) {
+                            return EvalError.SearchNotPermitted;
+                        }
+                        // For other errors, fall back to original value
+                        break :blk Value{ .Str = s };
+                    };
+                    break :blk Value{ .Str = checked_value };
+                },
+                else => property_codec.propertyValueToProjectedValue(allocator, val) catch Value{ .Null = {} },
+            };
+            return result;
+        }
+    }
+
+    // If target is an Edge, access its properties
+    if (target == .Edge) {
+        const edge = target.Edge;
+        if (edge.properties.get(field)) |val| {
+            const result = switch (val) {
+                .String => |s| blk: {
+                    // For string properties, check FLE permissions
+                    const type_name = edge.label;
+                    const checked_value = fle_integration.checkPropertyAccess(
+                        allocator,
+                        type_name,
+                        field,
+                        s,
+                        edge.id,
+                    ) catch |err| {
+                        if (err == error.SearchNotPermitted) {
+                            return EvalError.SearchNotPermitted;
+                        }
+                        // For other errors, fall back to original value
+                        break :blk Value{ .Str = s };
+                    };
+                    break :blk Value{ .Str = checked_value };
+                },
+                else => property_codec.propertyValueToProjectedValue(allocator, val) catch Value{ .Null = {} },
+            };
+            return result;
+        }
+    }
+
+    // If target is a Map, access its keys
+    if (target == .Map) {
+        const map = target.Map;
+        if (map.get(field)) |val| {
+            return val;
+        }
+    }
+
+    if (extractStructuredMember(allocator, target, field)) |extracted| {
+        return extracted;
+    }
+
+    // Handle direct Date value property access (from date() function)
+    if (target == .Date) {
+        const datetime_module = @import("types/datetime.zig");
+        const ymd = datetime_module.Date.dateFromDays(target.Date.days_since_epoch);
+
+        if (std.mem.eql(u8, field, "year")) {
+            return Value{ .Int = ymd.year };
+        } else if (std.mem.eql(u8, field, "month")) {
+            return Value{ .Int = ymd.month };
+        } else if (std.mem.eql(u8, field, "day")) {
+            return Value{ .Int = ymd.day };
+        }
+    }
+
+    // Handle direct Time value property access (from time() function)
+    if (target == .Time) {
+        const hours = @divFloor(target.Time.micros_since_midnight, 3600_000_000);
+        const minutes = @divFloor(@rem(target.Time.micros_since_midnight, 3600_000_000), 60_000_000);
+        const seconds = @divFloor(@rem(target.Time.micros_since_midnight, 60_000_000), 1_000_000);
+
+        if (std.mem.eql(u8, field, "hour")) {
+            return Value{ .Int = @intCast(hours) };
+        } else if (std.mem.eql(u8, field, "minute")) {
+            return Value{ .Int = @intCast(minutes) };
+        } else if (std.mem.eql(u8, field, "second")) {
+            return Value{ .Int = @intCast(seconds) };
+        }
+    }
+
+    // If target is an ExtValue, handle datetime property access
+    if (target == .ExtValue) {
+        const ext = target.ExtValue;
+        switch (ext) {
+            .TimestampTZ => |ts| {
+                // Extract date and time components from timestamp
+                const days = @divFloor(ts.micros_since_epoch_utc, 24 * 3600 * 1_000_000);
+                const time_micros = @rem(ts.micros_since_epoch_utc, 24 * 3600 * 1_000_000);
+
+                // Get date components
+                const datetime_module = @import("types/datetime.zig");
+                const date = datetime_module.Date{ .days_since_epoch = @intCast(days) };
+                const ymd = datetime_module.Date.dateFromDays(date.days_since_epoch);
+
+                // Get time components
+                const hours = @divFloor(time_micros, 3600_000_000);
+                const minutes = @divFloor(@rem(time_micros, 3600_000_000), 60_000_000);
+                const seconds = @divFloor(@rem(time_micros, 60_000_000), 1_000_000);
+
+                if (std.mem.eql(u8, field, "year")) {
+                    return Value{ .Int = ymd.year };
+                } else if (std.mem.eql(u8, field, "month")) {
+                    return Value{ .Int = ymd.month };
+                } else if (std.mem.eql(u8, field, "day")) {
+                    return Value{ .Int = ymd.day };
+                } else if (std.mem.eql(u8, field, "hour")) {
+                    return Value{ .Int = @intCast(hours) };
+                } else if (std.mem.eql(u8, field, "minute")) {
+                    return Value{ .Int = @intCast(minutes) };
+                } else if (std.mem.eql(u8, field, "second")) {
+                    return Value{ .Int = @intCast(seconds) };
+                }
+            },
+            .Date => |d| {
+                const datetime_module = @import("types/datetime.zig");
+                const ymd = datetime_module.Date.dateFromDays(d.days_since_epoch);
+
+                if (std.mem.eql(u8, field, "year")) {
+                    return Value{ .Int = ymd.year };
+                } else if (std.mem.eql(u8, field, "month")) {
+                    return Value{ .Int = ymd.month };
+                } else if (std.mem.eql(u8, field, "day")) {
+                    return Value{ .Int = ymd.day };
+                }
+            },
+            .Time => |t| {
+                const hours = @divFloor(t.micros_since_midnight, 3600_000_000);
+                const minutes = @divFloor(@rem(t.micros_since_midnight, 3600_000_000), 60_000_000);
+                const seconds = @divFloor(@rem(t.micros_since_midnight, 60_000_000), 1_000_000);
+
+                if (std.mem.eql(u8, field, "hour")) {
+                    return Value{ .Int = @intCast(hours) };
+                } else if (std.mem.eql(u8, field, "minute")) {
+                    return Value{ .Int = @intCast(minutes) };
+                } else if (std.mem.eql(u8, field, "second")) {
+                    return Value{ .Int = @intCast(seconds) };
+                }
+            },
+            // CANARY: REQ=REQ-MAP-PROP-003; FEATURE="MapProperties"; ASPECT=JsonMemberAccess; STATUS=TESTED; TEST=geodetestlab/specs/gql_expressions_comprehensive.yml; OWNER=eval; UPDATED=2026-01-09
+            // Handle member access on JSON strings (map properties stored as JSON)
+            .Json => |json_str| {
+                // Parse JSON and extract the field value
+                if (extractJsonField(allocator, json_str, field)) |extracted| {
+                    return extracted;
+                }
+            },
+            .Jsonb => |doc| {
+                if (extractJsonField(allocator, doc.data, field)) |extracted| {
+                    return extracted;
+                }
+            },
+            else => {},
+        }
+    }
+
+    // Otherwise return null
+    return Value{ .Null = {} };
 }
 
 // CANARY: REQ=REQ-MAP-PROP-004; FEATURE="MapProperties"; ASPECT=JsonFieldExtraction; STATUS=TESTED; TEST=geodetestlab/specs/gql_expressions_comprehensive.yml; OWNER=eval; UPDATED=2026-01-09

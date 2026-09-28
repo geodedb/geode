@@ -291,7 +291,33 @@ fn patternWhereIsReadOnly(pattern: *ast.GraphPattern, where: ?*ast.Expr) bool {
 ///
 /// The switch is EXHAUSTIVE on purpose: no `else` branch, so adding a variant
 /// to `ast.Expr` fails to compile here instead of silently widening the gate.
-fn exprIsReadOnly(e: ast.Expr) bool {
+fn exprIsReadOnly(root: ast.Expr) bool {
+    // SONNY-3189: down binary, unary and postfix chains with a loop, not one
+    // recursion per link; the other children are checked on the way.
+    var at: *const ast.Expr = &root;
+    while (true) switch (at.*) {
+        .Binary => |b| {
+            if (!exprIsReadOnly(b.right.*)) return false;
+            at = b.left;
+        },
+        .Unary => |u| at = u.expr,
+        .Member => |m| at = m.target,
+        .Index => |i| {
+            if (!exprIsReadOnly(i.index.*)) return false;
+            at = i.target;
+        },
+        .Slice => |sl| {
+            if (sl.start) |st| if (!exprIsReadOnly(st.*)) return false;
+            if (sl.end) |en| if (!exprIsReadOnly(en.*)) return false;
+            at = sl.target;
+        },
+        .Call => |c| {
+            for (c.args) |a| if (!exprIsReadOnly(a.*)) return false;
+            at = c.callee;
+        },
+        else => break,
+    };
+    const e = at.*;
     return switch (e) {
         // --- leaves: no sub-expression, no query ---
         .Ident,

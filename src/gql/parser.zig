@@ -10,6 +10,7 @@ const tok = @import("gql_lib").token;
 const ast = @import("ast.zig");
 const temporal = @import("../temporal.zig");
 const Lexer = @import("lexer.zig").Lexer;
+const stack_guard = @import("../stack_guard.zig");
 
 // CANARY: REQ=REQ-SONNY-3133-PARSER-NESTING; FEATURE="GQLParser"; ASPECT=StackGuard; STATUS=TESTED; TEST=tests/test_sonny3133_parser_nesting.zig; OWNER=parser; UPDATED=2026-09-27
 /// SONNY-3133: how much of the calling thread's stack must be left for the
@@ -21,47 +22,12 @@ const Lexer = @import("lexer.zig").Lexer;
 /// user's) whatever they have. Measured, a limit cannot overflow any of them.
 const stack_reserve_bytes: usize = if (builtin.mode == .Debug) 2 * 1024 * 1024 else 512 * 1024;
 
-/// SONNY-3133: the calling thread's stack bounds, looked up once per thread.
-const ThreadStack = struct {
-    low: usize = 0,
-    high: usize = 0,
-    known: bool = false,
-    looked: bool = false,
-};
-
-threadlocal var t_thread_stack: ThreadStack = .{};
-
-/// glibc and musl both have these; std.c does not declare them.
-const pthread_stack = struct {
-    extern "c" fn pthread_getattr_np(thread: std.c.pthread_t, attr: *std.c.pthread_attr_t) c_int;
-    extern "c" fn pthread_attr_getstack(attr: *const std.c.pthread_attr_t, stackaddr: *?*anyopaque, stacksize: *usize) c_int;
-};
-
-fn threadStack() ThreadStack {
-    if (t_thread_stack.looked) return t_thread_stack;
-    t_thread_stack.looked = true;
-    if (comptime builtin.link_libc and builtin.os.tag == .linux) {
-        var attr: std.c.pthread_attr_t = undefined;
-        if (pthread_stack.pthread_getattr_np(std.c.pthread_self(), &attr) != 0) return t_thread_stack;
-        defer _ = std.c.pthread_attr_destroy(&attr);
-        var addr: ?*anyopaque = null;
-        var size: usize = 0;
-        if (pthread_stack.pthread_attr_getstack(&attr, &addr, &size) != 0) return t_thread_stack;
-        const low = @intFromPtr(addr orelse return t_thread_stack);
-        t_thread_stack = .{ .low = low, .high = low + size, .known = true, .looked = true };
-    }
-    return t_thread_stack;
-}
-
 /// SONNY-3133: is more than `stack_reserve_bytes` of the calling thread's
 /// stack left below this frame? True when the bounds are unknown, or when
-/// this frame is not on the thread's stack (a fiber's).
+/// this frame is not on the thread's stack (a fiber's). SONNY-3181: the
+/// bounds lookup is `stack_guard`'s, which the evaluator shares.
 fn stackHasRoom() bool {
-    const st = threadStack();
-    if (!st.known) return true;
-    const here = @frameAddress();
-    if (here < st.low or here >= st.high) return true;
-    return here - st.low > stack_reserve_bytes;
+    return stack_guard.hasRoomBelow(@frameAddress(), stack_reserve_bytes);
 }
 
 /// SONNY-3133: statements nested in statements (EXPLAIN, EXPLAIN POLICY FOR,
@@ -70,6 +36,31 @@ fn stackHasRoom() bool {
 /// 0.3 MiB each in a Debug build: 64 of them overflowed a 16 MiB worker stack
 /// (review probe R12-X11).
 const max_statement_nesting: u16 = 8;
+
+// CANARY: REQ=REQ-SONNY-3181-EXPR-CHAIN-CAP; FEATURE="GQLParser"; ASPECT=ExprLinkCap; STATUS=TESTED; TEST=tests/test_sonny3181_expr_chain_cap.zig; OWNER=parser; UPDATED=2026-09-27
+/// SONNY-3181, SONNY-3189: the most operator links one expression may hold.
+/// A link is a binary operator (`OR`, `XOR`, `AND`, a comparison, `+`, `-`,
+/// `||`, `*`, `/`, `%`, `^`), a unary prefix (`NOT`, `-`, `+`) or a postfix
+/// link (member access, index, slice, call, map projection). The count runs
+/// over the whole outermost expression, the expressions nested in it
+/// included (list items, arguments, CASE branches, subqueries), and a WHERE
+/// that later MATCH clauses extend with AND counts as one expression.
+///
+/// The loops of the expression grammar build operator and postfix chains as
+/// long as the input: `1 + 1 + ... + 1` with N terms is an AST N deep, and
+/// the analysis, printing and evaluation that walk it recursed once per link
+/// (on the pre-auth request path, too). 100,000 terms, about 400 KB of
+/// query, overflowed an 8 MiB thread in ReleaseSafe, 1,000 terms a Debug
+/// one. With the cap an expression's AST is at most this many links plus
+/// the 128 levels of nesting `enterRecursion` allows, and the walkers that
+/// still recurse stay far inside a thread's stack.
+///
+/// An `IN [...]` list is not a chain: its items are expressions of their
+/// own, and literal items have no links. A WHERE of a few hundred OR terms
+/// (`n.v = 1 OR n.v = 2 ...`, three links a term) fits; a generated query
+/// that needs more splits its predicate into an IN list or parameters.
+/// Past the cap the parser answers 42000.
+pub const max_expr_links: u32 = 4096;
 
 pub const Parser = struct {
     lx: *Lexer,
@@ -101,6 +92,11 @@ pub const Parser = struct {
     recursion_depth: u16 = 0,
     // SONNY-3133: statements nested in the one being parsed.
     statement_depth: u16 = 0,
+    // SONNY-3181: operator links in the outermost expression being parsed
+    // (`max_expr_links`), and how many expressions deep the parser is (0
+    // outside any expression; the count restarts at the next outermost one).
+    expr_links: u32 = 0,
+    expr_nesting: u32 = 0,
 
     // GAP-0333: The hard limit is 128 user-visible nested parens.  The internal
     // counter includes the outer parseOrExpr frame invoked by RETURN/MATCH, so
@@ -150,6 +146,28 @@ pub const Parser = struct {
         try self.enterRecursion();
         defer self.leaveRecursion();
         return self.parseQuery();
+    }
+
+    /// SONNY-3181: an expression starts. The outermost one restarts the
+    /// link count (`max_expr_links`). Pair with `leaveExpr`.
+    fn enterExpr(self: *Parser) void {
+        if (self.expr_nesting == 0) self.expr_links = 0;
+        self.expr_nesting += 1;
+    }
+
+    fn leaveExpr(self: *Parser) void {
+        self.expr_nesting -= 1;
+    }
+
+    /// SONNY-3181: one more operator link in the expression being parsed
+    /// (`max_expr_links`). Links built outside an expression are not
+    /// counted here.
+    fn countExprLink(self: *Parser) ParserError!void {
+        if (self.expr_nesting == 0) return;
+        self.expr_links += 1;
+        if (self.expr_links > max_expr_links) {
+            return self.unexpected("expression too long: more than 4096 operators in one expression (max_expr_links)");
+        }
     }
 
     fn advance(self: *Parser) void {
@@ -2209,6 +2227,11 @@ pub const Parser = struct {
                     try post_where_chains.append(self.arena.allocator(), chain);
                 }
                 // Parse additional MATCH clauses
+                // SONNY-3181: each WHERE below is ANDed onto the WHERE so far,
+                // one link per MATCH: the conditions count as one expression
+                // (`max_expr_links`), whatever the MATCH clauses parse.
+                self.enterExpr();
+                defer self.leaveExpr();
                 while (self.cur.kind == .MATCH) {
                     self.advance(); // consume MATCH
                     const additional_pattern = try self.parseGraphPattern();
@@ -3076,6 +3099,10 @@ pub const Parser = struct {
     fn parseOrExpr(self: *Parser) ParserError!ast.Expr {
         try self.enterRecursion();
         defer self.leaveRecursion();
+        // SONNY-3181: every expression is parsed from here; the outermost
+        // one counts the links of all of them (`max_expr_links`).
+        self.enterExpr();
+        defer self.leaveExpr();
         var left = try self.parseAndExpr();
         while (self.cur.kind == .OR or self.cur.kind == .XOR) {
             const op_kind = self.cur.kind;
@@ -3172,6 +3199,8 @@ pub const Parser = struct {
                 if (looks_like_pattern) {
                     // Parse as NOT followed by a graph pattern
                     self.advance(); // consume NOT
+                    // SONNY-3181: a unary link.
+                    try self.countExprLink();
                     const pattern = try self.parseGraphPattern();
 
                     // Create EXISTS predicate
@@ -3191,6 +3220,8 @@ pub const Parser = struct {
             // SONNY-3133: `NOT NOT ... x` recursed with no limit.
             try self.enterRecursion();
             defer self.leaveRecursion();
+            // SONNY-3181: and it is a link of the expression.
+            try self.countExprLink();
             const e = try self.parseNotExpr();
             const a = self.arena.allocator();
             const ep = try a.create(ast.Expr);
@@ -3496,6 +3527,8 @@ pub const Parser = struct {
             // SONNY-3133: `- - ... 1` recursed with no limit.
             try self.enterRecursion();
             defer self.leaveRecursion();
+            // SONNY-3181: and it is a link of the expression.
+            try self.countExprLink();
             const e = try self.parseUnaryExpr();
             const a = self.arena.allocator();
             const ep = try a.create(ast.Expr);
@@ -3507,6 +3540,7 @@ pub const Parser = struct {
             // SONNY-3133: as unary minus.
             try self.enterRecursion();
             defer self.leaveRecursion();
+            try self.countExprLink();
             const e = try self.parseUnaryExpr();
             const a = self.arena.allocator();
             const ep = try a.create(ast.Expr);
@@ -3518,7 +3552,10 @@ pub const Parser = struct {
 
     fn parsePostfixExpr(self: *Parser) ParserError!ast.Expr {
         var base = try self.parsePrimaryExpr();
-        while (true) {
+        // SONNY-3181: every pass that goes on wrapped `base` in one more
+        // postfix link (member access, call, index, slice, map projection):
+        // `n.a.a.a ...` is as deep as it is long.
+        while (true) : (try self.countExprLink()) {
             if (self.cur.kind == .dot) {
                 self.advance();
                 const field = if (self.cur.kind == .identifier or self.isKeyword(self.cur.kind)) blk: {
@@ -4240,6 +4277,8 @@ pub const Parser = struct {
     }
 
     fn makeBinary(self: *Parser, op: ast.BinOp, left: ast.Expr, right: ast.Expr) ParserError!ast.Expr {
+        // SONNY-3181: a binary link of the expression being parsed.
+        try self.countExprLink();
         const a = self.arena.allocator();
         const lp = try a.create(ast.Expr);
         const rp = try a.create(ast.Expr);

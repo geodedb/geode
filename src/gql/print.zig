@@ -560,8 +560,117 @@ pub fn stringifyExprAlloc(allocator: std.mem.Allocator, e: ast.Expr, opts: Print
     return try al.toOwnedSlice(allocator);
 }
 
+// CANARY: REQ=REQ-SONNY-3189-CHAIN-WALKERS; FEATURE="GQLPrinter"; ASPECT=IterativeChains; STATUS=TESTED; TEST=tests/test_sonny3181_expr_chain_cap.zig; OWNER=parser; UPDATED=2026-09-27
+/// SONNY-3189: is `e` a link of a chain `printChain` prints with a loop?
+fn isChainLink(e: *const ast.Expr) bool {
+    return switch (e.*) {
+        .Binary, .Unary, .Member, .Index, .Slice, .Call => true,
+        else => false,
+    };
+}
+
+/// SONNY-3189: the child a chain goes on through: a binary link's left
+/// operand, a unary link's operand, a postfix link's target or callee.
+fn chainChild(e: *const ast.Expr) *const ast.Expr {
+    return switch (e.*) {
+        .Binary => |b| b.left,
+        .Unary => |u| u.expr,
+        .Member => |m| m.target,
+        .Index => |ix| ix.target,
+        .Slice => |sl| sl.target,
+        .Call => |c| c.callee,
+        else => unreachable,
+    };
+}
+
+fn binOpText(op: ast.BinOp) []const u8 {
+    return switch (op) {
+        .And => " AND ",
+        .Or => " OR ",
+        .Xor => " XOR ",
+        .Eq => " = ",
+        .Ne => " <> ",
+        .Lt => " < ",
+        .Le => " <= ",
+        .Gt => " > ",
+        .Ge => " >= ",
+        .Add => " + ",
+        .Sub => " - ",
+        .Mul => " * ",
+        .Div => " / ",
+        .Mod => " % ",
+        .Power => " ^ ",
+        .Concat => " || ",
+        .RegexMatch => " =~ ",
+        .RegexNotMatch => " !~ ",
+    };
+}
+
+/// SONNY-3189: print a chain of binary, unary and postfix links with a
+/// loop. The server stringifies each ORDER BY key (`buildOrderKeys`), and
+/// this printer recursed once per link: `ORDER BY 1 + 1 + ...` with a
+/// million terms overflowed the server thread. The chain is walked down
+/// once (unary prefixes are printed on the way), its innermost operand is
+/// printed, and the links' infix and postfix parts are printed on the way
+/// back up: the text the recursion printed.
+fn printChain(w: anytype, top: *const ast.Expr, opts: PrintOptions) !void {
+    var sfa = std.heap.stackFallback(64 * @sizeOf(*const ast.Expr), std.heap.smp_allocator);
+    const la = sfa.get();
+    var links: std.ArrayList(*const ast.Expr) = .empty;
+    defer links.deinit(la);
+    var node = top;
+    while (isChainLink(node)) : (node = chainChild(node)) {
+        try links.append(la, node);
+        if (node.* == .Unary) try w.print("{s}", .{switch (node.Unary.op) {
+            .Not => "NOT ",
+            .Neg => "-",
+            .Pos => "+",
+        }});
+    }
+    try printExprWith(w, node.*, 0, opts);
+    var i = links.items.len;
+    while (i > 0) {
+        i -= 1;
+        switch (links.items[i].*) {
+            .Binary => |b| {
+                try w.print("{s}", .{binOpText(b.op)});
+                try printExprWith(w, b.right.*, 0, opts);
+            },
+            .Unary => {},
+            .Member => |m| try w.print(".{s}", .{m.field}),
+            .Index => |idx| {
+                try w.print("[", .{});
+                try printExprWith(w, idx.index.*, 0, opts);
+                try w.print("]", .{});
+            },
+            .Slice => |slice| {
+                try w.print("[", .{});
+                if (slice.start) |start| {
+                    try printExprWith(w, start.*, 0, opts);
+                }
+                try w.print("..", .{});
+                if (slice.end) |end| {
+                    try printExprWith(w, end.*, 0, opts);
+                }
+                try w.print("]", .{});
+            },
+            .Call => |c| {
+                try w.writeByte('(');
+                for (c.args, 0..) |a, j| {
+                    if (j > 0) try w.print(", ", .{});
+                    try printExprWith(w, a.*, 0, opts);
+                }
+                try w.writeByte(')');
+            },
+            else => unreachable,
+        }
+    }
+}
+
 pub fn printExprWith(w: anytype, e: ast.Expr, prec: u8, opts: PrintOptions) !void {
     _ = prec;
+    // SONNY-3189: binary, unary and postfix chains print with a loop.
+    if (isChainLink(&e)) return printChain(w, &e, opts);
     switch (e) {
         .Ident => |id| try w.print("{s}", .{id.orig}),
         .String => |s| try w.print("\"{s}\"", .{s}),

@@ -9150,6 +9150,27 @@ pub fn build(b: *std.Build) void {
     const sonny3135_step = b.step("test-sonny3135-profile-allowlist-failed-txn", "Run SONNY-3135 (N7a, N7b) regression (EXPLAIN and PROFILE take only a query, a data change, FOR or a read-only CALL, 0A000 otherwise; PROFILE of the self-locking backfill is refused at once; a failed request's session engine transaction is aborted, not committed)");
     sonny3135_step.dependOn(&run_sonny3135_tests.step);
 
+    // SONNY-3181, SONNY-3189: an operator chain longer than the parser's cap
+    // (max_expr_links) is refused with 42000; up to it, the query analysis,
+    // the printer and the evaluator walk chains with loops. gRPC in process
+    // on 8 MiB and 16 MiB threads, the parser in child processes, and QUIC
+    // against a spawned server. Run it in Debug and in ReleaseSafe
+    // (-Doptimize=ReleaseSafe).
+    const sonny3181_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny3181_expr_chain_cap.zig"), .target = target, .optimize = optimize });
+    sonny3181_test_mod.link_libc = true;
+    sonny3181_test_mod.addImport("geode", root_mod);
+    sonny3181_test_mod.addImport("schema", schema_mod);
+    sonny3181_test_mod.addImport("protobuf", protobuf_mod);
+    sonny3181_test_mod.addImport("grpc_impl", sonny1560_shim_mod);
+    sonny3181_test_mod.addImport("logging", logging_mod);
+    sonny3181_test_mod.addImport("transport/quic", transport_quic_mod);
+    const sonny3181_tests = b.addTest(.{ .root_module = sonny3181_test_mod });
+    const run_sonny3181_tests = b.addRunArtifact(sonny3181_tests);
+    run_sonny3181_tests.step.dependOn(&install_geode_exe.step);
+    shardDep(test_step, &run_sonny3181_tests.step, 1, test_shard_loads, test_shard_index);
+    const sonny3181_step = b.step("test-sonny3181-expr-chain-cap", "Run SONNY-3181/SONNY-3189 regression (an expression of more than max_expr_links operator links is refused, 42000; chains of +, AND, OR, ||, member access and unary operators in RETURN, WHERE, ORDER BY, a property map, a UNION arm, an aggregate and EXPLAIN evaluate correctly up to the cap; no length to 1,000,000 terms overflows an 8 MiB or 16 MiB thread; gRPC in process, parser, QUIC; run in Debug and ReleaseSafe)");
+    sonny3181_step.dependOn(&run_sonny3181_tests.step);
+
     // SONNY-2790: the fulltext statements (CREATE/DROP INDEX, geode.fts.*)
     // run on the default graph, so the handlers lock `default` for them from
     // any session. Classifier, and the real gRPC handler (SONNY-1560 shim).

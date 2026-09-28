@@ -88,8 +88,24 @@ fn extractNodeVariableFromExpr(expr: ast.Expr) ?[]const u8 {
         },
         .Binary => |binary| {
             // Try left side first, then right
-            if (extractNodeVariableFromExpr(binary.left.*)) |v| return v;
-            if (extractNodeVariableFromExpr(binary.right.*)) |v| return v;
+            // SONNY-3189: a left-deep chain with a loop: its innermost left
+            // operand first, then the right operands from the bottom up, the
+            // order the recursion tried them in.
+            var sfa = std.heap.stackFallback(64 * @sizeOf(*const ast.Expr), std.heap.smp_allocator);
+            const la = sfa.get();
+            var rights: std.ArrayList(*const ast.Expr) = .empty;
+            defer rights.deinit(la);
+            rights.append(la, binary.right) catch return null;
+            var leaf: *const ast.Expr = binary.left;
+            while (leaf.* == .Binary) : (leaf = leaf.Binary.left) {
+                rights.append(la, leaf.Binary.right) catch return null;
+            }
+            if (extractNodeVariableFromExpr(leaf.*)) |v| return v;
+            var i = rights.items.len;
+            while (i > 0) {
+                i -= 1;
+                if (extractNodeVariableFromExpr(rights.items[i].*)) |v| return v;
+            }
         },
         .Case => |case_expr| {
             // Check WHEN conditions and THEN expressions

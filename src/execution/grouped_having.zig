@@ -51,7 +51,16 @@
 //! enumerates the variants and checks each walker descends into each one.
 
 const std = @import("std");
+const builtin = @import("builtin");
 const ast = @import("../gql/ast.zig");
+// SONNY-3181: the thread-stack guard the parser and the evaluator take.
+const stack_guard = @import("../stack_guard.zig");
+
+/// SONNY-3181: how much of the thread's stack a level of `Rewriter.rewrite`
+/// must leave: it recurses once per level of the expression (three frames,
+/// and a copy of the expression, each), and an operator chain is as deep as
+/// it is long (up to the parser's `max_expr_links`).
+const rewrite_stack_reserve_bytes: usize = if (builtin.mode == .Debug) 1024 * 1024 else 256 * 1024;
 const return_and_sorting = @import("return_and_sorting.zig");
 
 pub const Error = error{
@@ -69,6 +78,9 @@ pub const Error = error{
     /// A name that is no column, input binding, comprehension variable or
     /// query parameter.
     UnknownHavingReference,
+    /// SONNY-3181: the HAVING nests deeper than the thread's stack holds
+    /// (54001).
+    ExpressionTooDeep,
     OutOfMemory,
 };
 
@@ -170,6 +182,9 @@ const Rewriter = struct {
     };
 
     fn rewrite(self: *Rewriter, e: ast.Expr) Error!ast.Expr {
+        // SONNY-3181: refused (54001), not overflowed, past the thread's stack.
+        if (!stack_guard.hasRoom(rewrite_stack_reserve_bytes)) return error.ExpressionTooDeep;
+        if (e == .Binary) return self.rewriteBinaryChain(e);
         switch (e) {
             // Literals and parameters read nothing from a row.
             .String, .Int, .Decimal, .Bool, .Null, .Date, .DateTime, .Time, .LocalDateTime => return e,
@@ -209,6 +224,45 @@ const Rewriter = struct {
             if (try self.matchSlot(e)) |slot| return slot;
         }
         return self.rebuild(e);
+    }
+
+    /// SONNY-3181: a binary expression and the binary links under its left
+    /// operand, with a loop, not three frames per operator: `HAVING c + 0 +
+    /// ... + 0` is as deep as it is long. Down the left operands while a link
+    /// is not a projected expression or grouping key (`matchSlot`, as each
+    /// level of the recursion tried it first), the innermost operand
+    /// rewritten, then each link rebuilt on the way back up with its right
+    /// operand rewritten: the order the recursion rewrote them in.
+    fn rewriteBinaryChain(self: *Rewriter, top: ast.Expr) Error!ast.Expr {
+        var links: std.ArrayList(*const ast.Expr) = .empty;
+        var at: *const ast.Expr = &top;
+        var acc: ast.Expr = undefined;
+        while (true) {
+            if (at.* != .Binary) {
+                acc = try self.rewrite(at.*);
+                break;
+            }
+            // A binary expression is no aggregate call.
+            if (self.mode == .grouped) {
+                if (try self.matchSlot(at.*)) |slot| {
+                    acc = slot;
+                    break;
+                }
+            }
+            try links.append(self.arena, at);
+            at = at.Binary.left;
+        }
+        var i = links.items.len;
+        while (i > 0) {
+            i -= 1;
+            const b = links.items[i].Binary;
+            // Into a new value, not `acc` itself: the literal would be
+            // written into `acc` while `boxed` still reads it.
+            const left = try self.boxed(acc);
+            const right = try self.child(b.right);
+            acc = .{ .Binary = .{ .op = b.op, .left = left, .right = right } };
+        }
+        return acc;
     }
 
     /// `e` with each child rewritten.

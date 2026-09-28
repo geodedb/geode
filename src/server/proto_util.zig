@@ -435,6 +435,11 @@ pub fn mapError(err: anyerror) ErrorInfo {
         // 54000 = SQLSTATE program_limit_exceeded (class 54, limit exceeded).
         // CANARY: REQ=REQ-ENG-3922-VECTOR-DIM-GUARD; FEATURE="VectorF32"; ASPECT=OverCapErrorMapping; STATUS=TESTED; TEST=tests/test_eng3922_dim_guard.zig; OWNER=transport; UPDATED=2026-08-29
         error.VectorTooLarge => .{ .code = "54000", .message = "VectorTooLarge: the vector dimension exceeds the maximum of 65535 elements (VectorF32.dim / VectorI32.dim are u16). Reduce the embedding dimension" },
+        // SONNY-3181: an expression nested deeper than the evaluating thread's
+        // stack holds (lists, calls or CASE inside one another; operator and
+        // member chains are evaluated with loops). 54001 = SQLSTATE
+        // statement_too_complex (class 54, program limit exceeded).
+        error.ExpressionTooDeep => .{ .code = "54001", .message = "ExpressionTooDeep: the expression nests too deeply to evaluate on this server thread's stack; flatten it" },
         else => .{ .code = "58000", .message = @errorName(err) },
     };
 }

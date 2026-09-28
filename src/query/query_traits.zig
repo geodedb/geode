@@ -317,38 +317,64 @@ fn hasEqExpr(expr_opt: ?ast.Expr) bool {
     return false;
 }
 
-fn containsEq(expr: *const ast.Expr) bool {
-    return switch (expr.*) {
-        .Binary => |b| if (b.op == .Eq) true else containsEq(b.left) or containsEq(b.right),
-        .Unary => |u| containsEq(u.expr),
-        .In => |in_expr| containsEq(in_expr.value),
-        .InListExpr => |in_expr| containsEq(in_expr.value) or containsEq(in_expr.list_expr),
-        .NotIn => |in_expr| containsEq(in_expr.value),
-        .NotInListExpr => |in_expr| containsEq(in_expr.value) or containsEq(in_expr.list_expr),
-        .IsNull => |v| containsEq(v.target),
-        .IsUnknown => |v| containsEq(v.target),
-        .Call => |call| blk: {
-            if (containsEq(call.callee)) break :blk true;
-            for (call.args) |arg| if (containsEq(arg)) break :blk true;
-            break :blk false;
-        },
-        .Case => |c| blk: {
-            if (c.operand) |op| if (containsEq(op)) break :blk true;
-            for (c.whens) |w| {
-                if (containsEq(w.when) or containsEq(w.then_expr)) break :blk true;
-            }
-            if (c.else_expr) |e| if (containsEq(e)) break :blk true;
-            break :blk false;
-        },
-        .PatternComp => |p| containsEq(p.map) or (if (p.where) |w| containsEq(w) else false),
-        .Exists => |e| if (e.where) |w| containsEq(w) else false,
-        .PatternCount => |p| if (p.where) |w| containsEq(w) else false,
-        .ListComprehension => |lc| (if (lc.filter) |f| containsEq(f) else false) or (if (lc.map) |m| containsEq(m) else false),
-        .Index => |ix| containsEq(ix.target) or containsEq(ix.index),
-        .Member => |m| containsEq(m.target),
-        .Slice => |s| containsEq(s.target) or (if (s.start) |st| containsEq(st) else false) or (if (s.end) |en| containsEq(en) else false),
-        else => false,
-    };
+// CANARY: REQ=REQ-SONNY-3189-CHAIN-WALKERS; FEATURE="QueryAnalysis"; ASPECT=IterativeWalkers; STATUS=TESTED; TEST=tests/test_sonny3181_expr_chain_cap.zig; OWNER=query; UPDATED=2026-09-27
+/// SONNY-3189: `analyzeRequest` runs this on every WHERE before
+/// authorization. It recursed once per operator and member link, and an OR
+/// chain of 400,000 terms overflowed an 8 MiB thread in ReleaseSafe (20,000
+/// in Debug). The left operand of a binary link, the operand of a unary
+/// one and the target of a member, index or slice link are followed with a
+/// loop; only the other children recurse, and nesting bounds them.
+fn containsEq(root: *const ast.Expr) bool {
+    var expr = root;
+    while (true) {
+        switch (expr.*) {
+            .Binary => |b| {
+                if (b.op == .Eq) return true;
+                if (containsEq(b.right)) return true;
+                expr = b.left;
+            },
+            .Unary => |u| expr = u.expr,
+            .Member => |m| expr = m.target,
+            .Index => |ix| {
+                if (containsEq(ix.index)) return true;
+                expr = ix.target;
+            },
+            .Slice => |sl| {
+                if (sl.start) |st| if (containsEq(st)) return true;
+                if (sl.end) |en| if (containsEq(en)) return true;
+                expr = sl.target;
+            },
+            .IsNull => |v| expr = v.target,
+            .IsUnknown => |v| expr = v.target,
+            .In => |in_expr| expr = in_expr.value,
+            .NotIn => |in_expr| expr = in_expr.value,
+            .InListExpr => |in_expr| {
+                if (containsEq(in_expr.list_expr)) return true;
+                expr = in_expr.value;
+            },
+            .NotInListExpr => |in_expr| {
+                if (containsEq(in_expr.list_expr)) return true;
+                expr = in_expr.value;
+            },
+            .Call => |call| {
+                for (call.args) |arg| if (containsEq(arg)) return true;
+                expr = call.callee;
+            },
+            .Case => |c| {
+                if (c.operand) |op| if (containsEq(op)) return true;
+                for (c.whens) |w| {
+                    if (containsEq(w.when) or containsEq(w.then_expr)) return true;
+                }
+                if (c.else_expr) |e| if (containsEq(e)) return true;
+                return false;
+            },
+            .PatternComp => |p| return containsEq(p.map) or (if (p.where) |w| containsEq(w) else false),
+            .Exists => |e| return if (e.where) |w| containsEq(w) else false,
+            .PatternCount => |p| return if (p.where) |w| containsEq(w) else false,
+            .ListComprehension => |lc| return (if (lc.filter) |f| containsEq(f) else false) or (if (lc.map) |m| containsEq(m) else false),
+            else => return false,
+        }
+    }
 }
 
 // #564: Mutation classification — used by both QUIC and gRPC transport handlers
@@ -924,32 +950,42 @@ pub fn isStoreFreeQuery(q: *const ast.Query) bool {
     return true;
 }
 
-fn isStoreFreeScalarExpr(expr: *const ast.Expr) bool {
-    return switch (expr.*) {
-        .Null,
-        .Int,
-        .Bool,
-        .String,
-        .Decimal,
-        .SmallIntLit,
-        .BigIntLit,
-        .RealLit,
-        .DoubleLit,
-        .CharLit,
-        .VarcharLit,
-        .TextLit,
-        .Date,
-        .DateTime,
-        .Time,
-        .LocalDateTime,
-        .Param,
-        => true,
-        .Unary => |u| isStoreFreeScalarExpr(u.expr),
-        .Binary => |b| isStoreFreeScalarExpr(b.left) and isStoreFreeScalarExpr(b.right),
-        .IsNull => |v| isStoreFreeScalarExpr(v.target),
-        .IsUnknown => |v| isStoreFreeScalarExpr(v.target),
-        else => false,
-    };
+/// SONNY-3189: `EXPLAIN RETURN 1 + 1 + ...` reached this before
+/// authorization, one recursion per operator: 100,000 terms overflowed an
+/// 8 MiB thread in ReleaseSafe. The left operand and unary and IS NULL
+/// operands are followed with a loop; right operands recurse.
+fn isStoreFreeScalarExpr(root: *const ast.Expr) bool {
+    var expr = root;
+    while (true) {
+        switch (expr.*) {
+            .Null,
+            .Int,
+            .Bool,
+            .String,
+            .Decimal,
+            .SmallIntLit,
+            .BigIntLit,
+            .RealLit,
+            .DoubleLit,
+            .CharLit,
+            .VarcharLit,
+            .TextLit,
+            .Date,
+            .DateTime,
+            .Time,
+            .LocalDateTime,
+            .Param,
+            => return true,
+            .Unary => |u| expr = u.expr,
+            .Binary => |b| {
+                if (!isStoreFreeScalarExpr(b.right)) return false;
+                expr = b.left;
+            },
+            .IsNull => |v| expr = v.target,
+            .IsUnknown => |v| expr = v.target,
+            else => return false,
+        }
+    }
 }
 
 /// Check if a Query struct contains mutation clauses.
