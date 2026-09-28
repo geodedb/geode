@@ -899,14 +899,23 @@
   evaluator and the grouped HAVING rewrite refuse nesting deeper than the
   thread's stack holds instead of overflowing it.
 
+  Round 15 corrections (SONNY-3189, SONNY-3251): as first shipped, the
+  walkers a grouped HAVING's rewrite calls (`containsAggregate`,
+  `mentionsAnyName`, `exprEql`) still recursed once per link, so `GROUP BY
+  v HAVING sum(n.v + 0 ... + 0) >= 0` near the cap crashed the server
+  thread instead of being refused cleanly; and a 54001 refusal inside a
+  WHERE, a WITH ... WHERE, an EXISTS or a grouped HAVING was silent: the
+  row counted as not matching, and the query answered 0 rows. Both are
+  fixed in round 15 (below). Integer arithmetic on aggregates that
+  overflows answers 22003 on the WITH-chain path; the multi-node aggregate
+  path answers NULL instead (SONNY-2696, open).
+
   **Behaviour change:** an expression with more than 4096 operators
   answers 42000 ("expression too long"). An IN list of literals has no
   operators, and an OR of a few hundred `n.v = k` terms (three each) fits;
   split a larger predicate into an IN list or parameters. An expression
   nested (lists, calls, CASE) deeper than the evaluating thread's stack
   holds answers 54001 where it crashed; a Debug build reaches that sooner.
-  Integer arithmetic on aggregates (`count(n) + ...`) that overflows
-  answers 22003 where it panicked.
 - **Graph id maps are safe to use from sessions on different graphs at once
   (SONNY-3180):** the map from each graph to its node and edge id map was
   shared by the whole store with no lock of its own, and each graph's id
@@ -915,6 +924,12 @@
   build had a data race and a use-after-free), and adding a graph moved
   every other graph's id map from under the threads using it. The map now
   has its own lock and each graph's id map an address of its own.
+
+  Round 15 correction (SONNY-3180): as first shipped, only the map of id
+  maps had a lock; each id map's contents were still read without its own
+  lock by every snapshot read, by `CALL db.propertyKeys()`, the algorithms
+  and the backup, so a read racing a writer of another graph, or a DROP
+  GRAPH, could still crash. Fixed in round 15 (below).
 - **Abandoned gRPC transactions and sessions are closed (SONNY-3032):** a
   gRPC session lived as long as the server, and a client that began a
   transaction, wrote and went away left the transaction open for good, with
@@ -930,11 +945,21 @@
   (`idle_in_transaction_timeout`, `grpc_session_idle_timeout`,
   `grpc_max_sessions_per_principal`); 0 turns it off.
 
+  Round 15 corrections (SONNY-3252): as first shipped, the idle session a
+  Handshake closed at the cap could be one idle inside an open
+  transaction, which was rolled back; and without authentication every
+  client was the same principal, so any client could close any other's
+  session and transaction. Now a session in a transaction is never closed
+  (below). The cap counts sessions per user name, not per tenant: one name
+  in two tenants shares one cap.
+
   **Behaviour change:** a gRPC session idle in an open transaction for 10
   minutes is closed and its transaction rolled back, and a gRPC session
-  idle for 30 minutes is closed; a closed session's requests answer 28000,
-  and the client handshakes again. A user holding 1024 gRPC sessions has
-  its least recently used idle one closed at the next Handshake.
+  idle for 30 minutes is closed; a closed session's Execute and Pull answer
+  28000, and its BEGIN, COMMIT and ROLLBACK answer success=false (no SQLSTATE
+  on those replies); the client handshakes again. A user holding 1024 gRPC
+  sessions has its least recently used idle one closed at the next
+  Handshake.
 - **The rest of the round 13 review (SONNY-3191, SONNY-3122):**
   - A COMMIT or ROLLBACK statement releases its session's graph hold where
     it ends the transaction, not after the program, so `COMMIT; DROP GRAPH
@@ -956,9 +981,66 @@
 
   **Behaviour change:** CREATE and DROP GRAPH of CURRENT_GRAPH,
   CURRENT_PROPERTY_GRAPH, HOME_GRAPH and HOME_PROPERTY_GRAPH (any case)
-  answer 42939, and a HELLO cannot create one; a graph that already has
-  such a name can no longer be dropped by it. A policy expression past the
-  bounds above is refused at CREATE or ALTER POLICY.
+  answer 42939, and a HELLO cannot create one. A policy expression past
+  the bounds above is refused at CREATE or ALTER POLICY. (A graph that
+  already had such a name could not be dropped by it as first shipped;
+  round 15, SONNY-3234, lets DROP GRAPH remove it, below.)
+- **Round 15: the round 14 review's crashes and races (SONNY-3189,
+  SONNY-3180, SONNY-3233, SONNY-3250, SONNY-3251, SONNY-3252, SONNY-3234,
+  SONNY-3253):**
+  - A grouped or implicit HAVING with an operator chain as long as the
+    parser takes (`GROUP BY v HAVING sum(n.v + 0 ... x4090) >= 0`, the
+    item-equality form, `RETURN count(n) AS c WHERE sum(...)`) crashed the
+    server thread: the walkers the HAVING rewrite calls recursed once per
+    link. They follow chains with loops, as does the projection analysis
+    of a planned read with a hop, which recursed on index and slice
+    chains with no stack guard (SONNY-3189).
+  - The contents of each graph's id map are read under that map's own
+    lock, and a snapshot read (every gRPC and QUIC read not served
+    engine-direct) clones only its own graph, under the locks of what it
+    walks. It cloned every graph's id map, nodes and edges with no lock,
+    so reads crashed within a second next to a writer of another graph,
+    and corrupted the heap next to DROP and CREATE GRAPH (SONNY-3180).
+  - The node, edge and adjacency caches' growth, the adjacency and
+    edge-type index of an in-memory (unbounded-cache) store, and the graph
+    registry change under their locks: a batch CREATE on one graph racing
+    a single CREATE on another panicked, and so did two edge writers on
+    two graphs (SONNY-3233).
+  - A nested EXISTS or COUNT subquery read an environment it had freed
+    (`WHERE EXISTS { MATCH (m) WHERE EXISTS { ... } }` panicked, "@memcpy
+    arguments alias"); pre-existing (SONNY-3250).
+  - A resource limit the evaluator runs into (54001, the read budget, a
+    cancel) fails the query in every context; a WHERE, a HAVING, an
+    aggregate or a subquery turned it into a row that did not match.
+    Index, slice, member and map-projection chains evaluate with a loop,
+    so 4096 links is the real limit for them too (SONNY-3251).
+  - At the gRPC per-principal session cap, a session in an open
+    transaction is never closed: when every one of the principal's
+    sessions is in use or in a transaction, the Handshake is refused
+    (resource exhausted). Without authentication a client counts as
+    `anonymous@<peer ip>`, and a federation peer as `federation@<peer
+    ip>` (the name it sends is its own choice). A Handshake that fails
+    closes nothing, and a closed session is torn down on the reaper
+    thread, not the Handshake's (SONNY-3252).
+  - DROP GRAPH drops a graph that already had a reserved name (a
+    CURRENT_GRAPH made before 0.8.23), and the server warns at start for
+    each such graph; CREATE stays refused (SONNY-3234).
+  - A dropped graph's id map is freed when no walk holds it; it was kept
+    until the server stopped (about 0.5 KB per DROP GRAPH). A reload or a
+    Raft snapshot install no longer frees id maps a walk holds. A QUIC
+    admission thread's stack is 8 MiB in a release build (16 MiB in
+    Debug), set by `GEODE_QUIC_ADMISSION_STACK_MB`: the stacks reserve
+    `admission threads x stack` of address space (4096 x 16 MiB was 64
+    GiB), which strict overcommit counts. A thread that cannot be spawned
+    rejects its connection; the server serves on (SONNY-3253).
+
+  **Behaviour change:** a query whose expression runs into a limit
+  answers 54001 (or 53200, 57014) instead of fewer rows. At the gRPC
+  session cap, a Handshake is refused rather than closing a session in a
+  transaction; anonymous clients of one host share a cap. To remove a
+  graph named CURRENT_GRAPH, CURRENT_PROPERTY_GRAPH, HOME_GRAPH or
+  HOME_PROPERTY_GRAPH made before 0.8.23 (the start-up log names each),
+  run `DROP GRAPH <name>` with the name exactly as stored.
 
 ### Fixed
 
@@ -1038,6 +1120,19 @@
   to a node or edge it matched stay after ROLLBACK, and after a failed
   statement's rollback. Until that is fixed, do not rely on ROLLBACK to
   undo changes to existing data.
+- **Large QUIC requests (SONNY-3232, diagnosed in round 15, left for
+  S2).** A release server answered a 1 MiB QUIC request in about 0.1 s in
+  every run, and a 4 MiB one in about 1.4 s in two runs of three (never in
+  the third, on a busy machine); a Debug server never answers either (a
+  256 KiB request in 0.1 s), whatever the client's build, the admission
+  mode or the number of poll workers. The stall depends on how fast the
+  server drains the stream: most likely the QUIC library's stream flow
+  control, not yet confirmed. Keep QUIC requests well under 1 MiB (use
+  parameters). A request past the 16 MiB
+  message cap is refused when its length arrives, but the server ends the
+  stream without a reply, and the client, held by the stream window,
+  fails only at its own timeout (15 to 45 s). The server stays up and
+  serves other connections in both cases.
 - **A Debug build takes less nesting (SONNY-3191).** A Debug build's
   stack frames are several times a release build's: on an 8 MiB thread
   (the gRPC connection threads') it refuses WITH, CALL { } and FOR chains
