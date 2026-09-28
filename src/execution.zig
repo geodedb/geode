@@ -69,6 +69,7 @@ pub const fts_index_ops = @import("execution/fts_index_ops.zig");
 const query_execution = @import("execution/query_execution.zig");
 // SONNY-3139: the pre-dispatch write-shape validator and its executor table.
 pub const write_shape = @import("execution/write_shape.zig");
+pub const write_walk = @import("execution/write_walk.zig");
 const value_utilities = @import("execution/value_utilities.zig");
 pub const procedure_registry = @import("execution/procedure_registry.zig");
 // REQ-RLS-DDL-001: rls_dispatch is exported so server/main.zig can install

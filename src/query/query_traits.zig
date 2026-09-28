@@ -1,7 +1,7 @@
 const std = @import("std");
 const ast = @import("../gql/ast.zig");
 const procedure_access = @import("../execution/procedure_access.zig");
-const set_operations = @import("../execution/set_operations.zig");
+const write_walk = @import("../execution/write_walk.zig");
 const graph_store = @import("../graph_store.zig");
 
 pub const QueryKind = enum { rows, explain, profile };
@@ -356,66 +356,19 @@ pub fn isMutatingProgram(program: *const ast.Program) bool {
 
 /// Check if a single statement is a mutation (DML write, DDL, or a Query
 /// containing inline CREATE/SET/REMOVE/DELETE clauses).
+///
+/// CANARY: REQ=REQ-SONNY-3182-EXPRESSION-WRITES; FEATURE="WriteShapeAllowlist"; ASPECT=MutationClassification; STATUS=TESTED; TEST=tests/test_sonny_write_allowlist_r4.zig; OWNER=query_traits; UPDATED=2026-09-28
+/// SONNY-3182 (round 4): the one write walk (`execution/write_walk.zig`),
+/// which the write-shape validator uses too: every statement kind is
+/// classified there (EXPLAIN runs nothing; CREATE, INSERT, MERGE, DELETE,
+/// INSERT VALUE, schema, catalog, backup and restore write; a CALL writes when
+/// its procedure does; a PROFILE, a transaction body, a VALUES continuation, a
+/// FOR body and set operations by what they hold), and every query and
+/// expression is walked, iteratively, down to a write in an IN / NOT IN
+/// subquery or a CTE body at any depth (a nested query's initial WITH and its
+/// WHERE were skipped: round-3 review C2).
 pub fn isMutatingStatement(stmt: *const ast.Statement) bool {
-    return switch (stmt.*) {
-        // DML mutations
-        .Create, .Insert, .InsertValue, .Merge, .Delete => true,
-        // DDL mutations
-        .CreateIndex, .DropIndex => true,
-        .CreateConstraint, .DropConstraint => true,
-        .CreateSchema, .DropSchema => true,
-        .CreateGraph, .DropGraph => true,
-        .CreateGraphType, .DropGraphType => true,
-        // Backup/restore mutate on-disk state
-        .Backup, .Restore => true,
-        // CALL may invoke mutating procedures / subqueries
-        .Call => |c| isMutatingCallStatement(&c),
-        // PROFILE executes its inner statement — check it
-        .Profile => |prof| isMutatingStatement(prof.query),
-        // EXPLAIN never executes
-        .Explain => false,
-        // START TRANSACTION with a body can contain mutations
-        .StartTransaction => |txn| blk: {
-            if (txn.body) |body| {
-                for (body) |*body_stmt| {
-                    if (isMutatingStatement(body_stmt)) break :blk true;
-                }
-            }
-            break :blk false;
-        },
-        // #564: Query nodes can contain inline mutations (MATCH...CREATE,
-        // MATCH...SET, MATCH...REMOVE, MATCH...DELETE). These must take
-        // the exclusive write lock to prevent concurrent HashMap/ArrayList
-        // corruption under high parallelism.
-        .Query => |q| isQueryMutating(&q),
-        // Union/Intersect/Except contain sub-queries that may mutate
-        .Union => |u| isQueryMutating(&u.first) or blk: {
-            for (u.tails) |*tail| {
-                if (isQueryMutating(&tail.query)) break :blk true;
-            }
-            break :blk false;
-        },
-        .Intersect, .Except => |bs| isQueryMutating(&bs.left) or isQueryMutating(&bs.right),
-        // geode#876: `FOR x IN <list> <data-modifying statement>` writes once
-        // per element. Left in `else => false` it would slip past the
-        // read-only-user gate, take the SHARED read lock while mutating shared
-        // store state, and bypass the cluster unreplicated-write gate. A plain
-        // `FOR ... RETURN` (no body) stays read-only so read loops keep the
-        // shared lock.
-        // CANARY: REQ=REQ-GQL-FOR-WRITE-BODY-876-CLASSIFY; FEATURE="ForStatement"; ASPECT=MutationClassification; STATUS=TESTED; TEST=tests/test_for_write_body.zig; OWNER=query_traits; UPDATED=2026-08-29
-        .For => |f| (if (f.body) |body| isQueryMutating(body) else false) or !set_operations.exprIsReadOnly(f.collection),
-        // SONNY-3182: VALUES ... <statement> runs the statement it wraps.
-        .Values => |v| blk: {
-            for (v.rows) |row| {
-                for (row) |e| {
-                    if (!set_operations.exprIsReadOnly(e)) break :blk true;
-                }
-            }
-            break :blk if (v.next_statement) |next| isMutatingStatement(next) else false;
-        },
-        // Everything else (Show, etc.) is read-only
-        else => false,
-    };
+    return write_walk.statementWrites(stmt, .{});
 }
 
 pub fn isMutatingCallStatement(call_stmt: *const ast.CallStatement) bool {
@@ -822,49 +775,15 @@ fn isStoreFreeScalarExpr(expr: *const ast.Expr) bool {
 /// and `isPointReadQuery` (:501), which already treat any non-null
 /// `next_query` as disqualifying/mutating-unsafe.
 pub fn isQueryMutating(q: *const ast.Query) bool {
-    if (q.create_pattern != null or
-        q.merge_statement != null or
-        q.set_clauses.len > 0 or
-        q.remove_clauses.len > 0 or
-        q.delete_items.len > 0) return true;
-
-    if (q.call_clause) |cc| {
-        // CallClause and CallProcedure share the same `procedure`/
-        // `yield_items` shape; classifyCallProcedure only inspects
-        // `.procedure`, so this adapter is exact, not approximate.
-        const as_call_procedure = ast.CallProcedure{
-            .procedure = cc.procedure,
-            .yield_items = cc.yield_items,
-        };
-        if (procedure_access.classifyCallProcedure(as_call_procedure) == .mutating) return true;
-    }
-
-    if (q.initial_call_subquery) |subq| {
-        if (isQueryMutating(subq)) return true;
-    }
-
-    if (q.next_query) |next| {
-        if (isQueryMutating(next)) return true;
-    }
-
-    // geode#876: `WITH ... FOR x IN <list> <data-modifying statement>` hangs the
-    // loop off the query as `for_statement`; its body carries the mutation.
-    if (q.for_statement) |for_stmt| {
-        if (for_stmt.body) |body| {
-            if (isQueryMutating(body)) return true;
-        }
-        if (!set_operations.exprIsReadOnly(for_stmt.collection)) return true;
-    }
-
-    // CANARY: REQ=REQ-SONNY-3182-EXPRESSION-WRITES; FEATURE="WriteShapeAllowlist"; ASPECT=MutationClassification; STATUS=TESTED; TEST=tests/test_sonny_write_allowlist.zig; OWNER=query_traits; UPDATED=2026-09-27
-    // SONNY-3182: a write inside an expression (an IN / NOT IN subquery that
-    // writes: in a WHERE, a SET value, a RETURN, a pattern's property map) or
-    // in a CTE body. Classified as a read, it took the shared read lock and
-    // passed the read-only and cluster gates. The walk is the write-shape
-    // validator's (`set_operations.queryExpressionsAreReadOnly`).
-    if (!set_operations.queryExpressionsAreReadOnly(q.*)) return true;
-
-    return false;
+    // CANARY: REQ=REQ-SONNY-3182-EXPRESSION-WRITES; FEATURE="WriteShapeAllowlist"; ASPECT=MutationClassification; STATUS=TESTED; TEST=tests/test_sonny_write_allowlist_r4.zig; OWNER=query_traits; UPDATED=2026-09-28
+    // SONNY-3182: the one write walk (`execution/write_walk.zig`): the
+    // query's write clauses, a MATCH ... CALL of a procedure that writes, the
+    // parts it runs (`next_query`, a CALL { }, a FOR body), and a write inside
+    // any expression (an IN / NOT IN subquery: in a WHERE, an initial WITH or
+    // its WHERE, a SET value, a RETURN, a pattern's property map) or in a CTE
+    // body, at any depth. Classified as a read, such a query took the shared
+    // read lock and passed the read-only and cluster gates.
+    return write_walk.queryWrites(q, .{});
 }
 
 /// GAP-0805 / M1.3: Detect whether a Query is a simple point read that can

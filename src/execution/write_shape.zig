@@ -52,7 +52,7 @@
 const std = @import("std");
 const ast = @import("../gql/ast.zig");
 const return_and_sorting = @import("return_and_sorting.zig");
-const set_operations = @import("set_operations.zig");
+const write_walk = @import("write_walk.zig");
 
 /// All 0A000 (proto_util.zig): `error.WriteClauseNotApplied`; a SET or
 /// REMOVE on a variable-length relationship or a path keeps SONNY-2707's
@@ -889,93 +889,16 @@ fn queryWrites(q: ast.Query) bool {
     return false;
 }
 
-// CANARY: REQ=REQ-SONNY-3182-EXPRESSION-WRITES; FEATURE="WriteShapeAllowlist"; ASPECT=ExpressionWalk; STATUS=TESTED; TEST=tests/test_sonny_write_allowlist.zig; OWNER=engine; UPDATED=2026-09-27
+// CANARY: REQ=REQ-SONNY-3182-EXPRESSION-WRITES; FEATURE="WriteShapeAllowlist"; ASPECT=ExpressionWalk; STATUS=TESTED; TEST=tests/test_sonny_write_allowlist_r4.zig; OWNER=engine; UPDATED=2026-09-28
 /// SONNY-3182: whether no expression of `stmt` hides a write (an IN / NOT IN
-/// subquery that writes, anywhere: a WHERE, a SET value, a RETURN, a pattern's
-/// property map, a CTE body). `set_operations.exprIsReadOnly` walks every
-/// expression variant; `isQueryMutating` uses the same walk.
+/// subquery that writes, anywhere: a WHERE, an initial WITH or its WHERE, a
+/// SET value, a RETURN, a pattern's property map, a CTE body, a FOR's list,
+/// at any depth). The one write walk (`write_walk.zig`), with the clauses of
+/// the statement's parts left to the allowlist; `isQueryMutating` uses the
+/// same walk. Round 3's walk skipped a nested query's initial WITH and its
+/// WHERE (round-3 review C2).
 fn statementExpressionsReadOnly(stmt: ast.Statement) bool {
-    return switch (stmt) {
-        .Query => |q| queryTreeExpressionsReadOnly(q),
-        .Union => |u| blk: {
-            if (!queryTreeExpressionsReadOnly(u.first)) break :blk false;
-            for (u.tails) |part| {
-                if (!queryTreeExpressionsReadOnly(part.query)) break :blk false;
-            }
-            break :blk true;
-        },
-        .Intersect, .Except => |b| queryTreeExpressionsReadOnly(b.left) and queryTreeExpressionsReadOnly(b.right),
-        .Create => |c| set_operations.patternExpressionsReadOnly(c.pattern) and returnReadOnly(c.return_clause),
-        .Insert => |i| set_operations.patternExpressionsReadOnly(i.pattern) and returnReadOnly(i.return_clause),
-        .Merge => |m| set_operations.mergeExpressionsReadOnly(m),
-        .Delete => |d| blk: {
-            if (d.match_clause) |pattern| {
-                if (!set_operations.patternExpressionsReadOnly(pattern)) break :blk false;
-            }
-            if (d.where_clause) |w| {
-                if (!set_operations.exprIsReadOnly(w)) break :blk false;
-            }
-            break :blk returnReadOnly(d.return_clause);
-        },
-        .For => |fr| blk: {
-            if (!set_operations.exprIsReadOnly(fr.collection)) break :blk false;
-            if (fr.body) |body| {
-                if (!queryTreeExpressionsReadOnly(body.*)) break :blk false;
-            }
-            break :blk returnReadOnly(fr.return_clause);
-        },
-        .Profile => |p| statementExpressionsReadOnly(p.query.*),
-        .Values => |v| blk: {
-            for (v.rows) |row| {
-                for (row) |e| {
-                    if (!set_operations.exprIsReadOnly(e)) break :blk false;
-                }
-            }
-            if (v.next_statement) |next| break :blk statementExpressionsReadOnly(next.*);
-            break :blk true;
-        },
-        .Call => |c| switch (c) {
-            .Subquery => |s| statementExpressionsReadOnly(s.statement.*) and returnReadOnly(s.return_clause),
-            .Procedure => |proc| blk: {
-                if (!set_operations.exprIsReadOnly(proc.procedure)) break :blk false;
-                if (proc.yield_items) |items| {
-                    for (items) |item| {
-                        if (!set_operations.exprIsReadOnly(item.expr)) break :blk false;
-                    }
-                }
-                break :blk returnReadOnly(proc.return_clause);
-            },
-        },
-        .StartTransaction => |txn| blk: {
-            const body = txn.body orelse break :blk true;
-            for (body) |s| {
-                if (!statementExpressionsReadOnly(s)) break :blk false;
-            }
-            break :blk true;
-        },
-        .InsertValue => |iv| set_operations.exprIsReadOnly(iv.expr),
-        else => true,
-    };
-}
-
-fn returnReadOnly(rc: ?ast.ReturnClause) bool {
-    const r = rc orelse return true;
-    for (r.items) |item| {
-        if (!set_operations.exprIsReadOnly(item.expr)) return false;
-    }
-    return true;
-}
-
-fn queryTreeExpressionsReadOnly(q: ast.Query) bool {
-    if (!set_operations.queryExpressionsAreReadOnly(q)) return false;
-    if (q.next_query) |next| if (!queryTreeExpressionsReadOnly(next.*)) return false;
-    if (q.initial_call_subquery) |sub| if (!queryTreeExpressionsReadOnly(sub.*)) return false;
-    if (q.for_statement) |fr| {
-        if (!set_operations.exprIsReadOnly(fr.collection)) return false;
-        if (fr.body) |body| if (!queryTreeExpressionsReadOnly(body.*)) return false;
-        if (!returnReadOnly(fr.return_clause)) return false;
-    }
-    return true;
+    return !write_walk.statementWrites(&stmt, .{ .root_clauses = false });
 }
 
 // ---------------------------------------------------------------------------
@@ -1563,26 +1486,30 @@ fn setValue(sc: ast.SetClause) ?ast.Expr {
 /// A subquery or a pattern predicate anywhere in `e`.
 fn exprFacts(facts: *Facts, e: ast.Expr) void {
     var walk = ExprWalk{ .facts = facts };
-    walk.visit(e);
+    walk.visit(&e);
 }
 
 /// Whether every variable `e` names is in `scope` (a list comprehension's
 /// own variable too, inside it).
 fn exprBound(e: ast.Expr, scope: *const Names) bool {
     var walk = ExprWalk{ .scope = scope };
-    walk.visit(e);
+    walk.visit(&e);
     return walk.ok;
 }
 
 /// Collect the client parameters `e` names.
 fn exprParams(e: ast.Expr, params: *Names) void {
     var walk = ExprWalk{ .params = params };
-    walk.visit(e);
+    walk.visit(&e);
 }
 
-// CANARY: REQ=REQ-SONNY-3183-SCOPE; FEATURE="WriteShapeAllowlist"; ASPECT=ExpressionWalk; STATUS=TESTED; TEST=tests/test_sonny_write_allowlist.zig; OWNER=engine; UPDATED=2026-09-27
+// CANARY: REQ=REQ-SONNY-3183-SCOPE; FEATURE="WriteShapeAllowlist"; ASPECT=ExpressionWalk; STATUS=TESTED; TEST=tests/test_sonny_write_allowlist_r4.zig; OWNER=engine; UPDATED=2026-09-28
 /// One walk over an expression. EXHAUSTIVE over `ast.Expr` (no `else`): a new
-/// variant fails to compile here.
+/// variant fails to compile here. ITERATIVE (SONNY-3244): it keeps its own
+/// stack of the sub-expressions still to visit, so `n.i = 1 OR ... OR n.i =
+/// 5000` in a statement that writes is walked in a loop, not one recursion
+/// per term. When the stack cannot grow the walk refuses: the scope check
+/// fails, a subquery fact is set and the parameter set overflows.
 const ExprWalk = struct {
     /// Check that every variable named is in scope.
     scope: ?*const Names = null,
@@ -1592,9 +1519,19 @@ const ExprWalk = struct {
     facts: ?*Facts = null,
     ok: bool = true,
 
-    fn name(self: *ExprWalk, n: []const u8) void {
+    /// A list comprehension's variable, bound in its filter and map.
+    const Bound = struct { name: []const u8, up: ?*const Bound };
+    /// A sub-expression still to visit, with the comprehension variables
+    /// bound around it.
+    const Pending = struct { e: *const ast.Expr, bound: ?*const Bound };
+
+    fn name(self: *ExprWalk, bound: ?*const Bound, n: []const u8) void {
         const scope = self.scope orelse return;
         if (std.mem.eql(u8, n, "*")) return;
+        var b = bound;
+        while (b) |it| : (b = it.up) {
+            if (std.mem.eql(u8, it.name, n)) return;
+        }
         if (!scope.has(n)) self.ok = false;
     }
 
@@ -1604,128 +1541,121 @@ const ExprWalk = struct {
         if (self.scope != null) self.ok = false;
     }
 
-    fn list(self: *ExprWalk, items: []const *ast.Expr) void {
-        for (items) |it| self.visit(it.*);
+    /// The stack could not grow: refuse.
+    fn fail(self: *ExprWalk) void {
+        self.ok = false;
+        if (self.facts) |set| set.insert(.expr_pattern);
+        if (self.params) |ps| ps.overflow = true;
     }
 
-    fn visit(self: *ExprWalk, e: ast.Expr) void {
-        switch (e) {
-            .Ident => |id| self.name(id.orig),
-            .PropertyAccess => |pa| self.name(pa.object),
-            .HasLabel => |hl| self.name(hl.node),
-            .Param => |p| if (self.params) |ps| ps.add(p),
-            .String,
-            .Int,
-            .Decimal,
-            .Bool,
-            .Null,
-            .Date,
-            .DateTime,
-            .Time,
-            .LocalDateTime,
-            .SmallIntLit,
-            .BigIntLit,
-            .RealLit,
-            .DoubleLit,
-            .CharLit,
-            .VarcharLit,
-            .TextLit,
-            .ByteaLit,
-            .JsonLit,
-            .JsonbLit,
-            .XmlLit,
-            .UrlLit,
-            .DomainLit,
-            .UuidLit,
-            .EnumLit,
-            .BitLit,
-            .VarBitLit,
-            => {},
-            .List, .ArrayLit => |items| self.list(items),
-            .Map => |props| for (props) |p| self.visit(p.value.*),
-            .Member => |m| self.visit(m.target.*),
-            .Index => |i| {
-                self.visit(i.target.*);
-                self.visit(i.index.*);
-            },
-            .Slice => |s| {
-                self.visit(s.target.*);
-                if (s.start) |st| self.visit(st.*);
-                if (s.end) |en| self.visit(en.*);
-            },
-            // The callee is a function name, not a variable.
-            .Call => |c| self.list(c.args),
-            .Unary => |u| self.visit(u.expr.*),
-            .Binary => |b| {
-                self.visit(b.left.*);
-                self.visit(b.right.*);
-            },
-            .In => |s| {
-                self.visit(s.value.*);
-                self.list(s.set);
-            },
-            .NotIn => |s| {
-                self.visit(s.value.*);
-                self.list(s.set);
-            },
-            .InSubquery => |s| {
-                self.visit(s.value.*);
-                if (self.facts) |set| set.insert(.expr_subquery);
-                if (self.scope != null) self.ok = false;
-            },
-            .NotInSubquery => |s| {
-                self.visit(s.value.*);
-                if (self.facts) |set| set.insert(.expr_subquery);
-                if (self.scope != null) self.ok = false;
-            },
-            .InListExpr => |s| {
-                self.visit(s.value.*);
-                self.visit(s.list_expr.*);
-            },
-            .NotInListExpr => |s| {
-                self.visit(s.value.*);
-                self.visit(s.list_expr.*);
-            },
-            .IsNull => |n| self.visit(n.target.*),
-            .IsUnknown => |n| self.visit(n.target.*),
-            .StartsWith => |s| {
-                self.visit(s.value.*);
-                self.visit(s.prefix.*);
-            },
-            .EndsWith => |s| {
-                self.visit(s.value.*);
-                self.visit(s.suffix.*);
-            },
-            .Contains => |s| {
-                self.visit(s.value.*);
-                self.visit(s.needle.*);
-            },
-            .Case => |c| {
-                if (c.operand) |op| self.visit(op.*);
-                for (c.whens) |w| {
-                    self.visit(w.when.*);
-                    self.visit(w.then_expr.*);
-                }
-                if (c.else_expr) |el| self.visit(el.*);
-            },
-            .PatternComp, .Exists, .ShortestPath, .PatternCount => self.pattern(),
-            .MapProjection => |mp| self.visit(mp.source.*),
-            .ListComprehension => |lc| {
-                self.visit(lc.source.*);
-                // Its variable is bound inside its filter and map only.
-                if (self.scope) |outer| {
-                    var inner = outer.*;
-                    inner.add(lc.variable);
-                    if (inner.overflow) self.ok = false;
-                    var sub = ExprWalk{ .scope = &inner, .params = self.params, .facts = self.facts };
-                    if (lc.filter) |fl| sub.visit(fl.*);
-                    if (lc.map) |mp| sub.visit(mp.*);
-                    if (!sub.ok) self.ok = false;
-                } else {
-                    if (lc.filter) |fl| self.visit(fl.*);
-                    if (lc.map) |mp| self.visit(mp.*);
-                }
-            },
+    fn visit(self: *ExprWalk, root: *const ast.Expr) void {
+        var sfa = std.heap.stackFallback(4096, std.heap.smp_allocator);
+        const alloc = sfa.get();
+        var bounds = std.heap.ArenaAllocator.init(std.heap.smp_allocator);
+        defer bounds.deinit();
+        var stack: std.ArrayList(Pending) = .empty;
+        defer stack.deinit(alloc);
+        stack.append(alloc, .{ .e = root, .bound = null }) catch return self.fail();
+        while (stack.pop()) |p| {
+            const b = p.bound;
+            // The sub-expressions of `p.e` still to visit (at most four).
+            var kids: [4]?*const ast.Expr = .{ null, null, null, null };
+            var many: []const *ast.Expr = &.{};
+            switch (p.e.*) {
+                .Ident => |id| self.name(b, id.orig),
+                .PropertyAccess => |pa| self.name(b, pa.object),
+                .HasLabel => |hl| self.name(b, hl.node),
+                .Param => |prm| if (self.params) |ps| ps.add(prm),
+                .String,
+                .Int,
+                .Decimal,
+                .Bool,
+                .Null,
+                .Date,
+                .DateTime,
+                .Time,
+                .LocalDateTime,
+                .SmallIntLit,
+                .BigIntLit,
+                .RealLit,
+                .DoubleLit,
+                .CharLit,
+                .VarcharLit,
+                .TextLit,
+                .ByteaLit,
+                .JsonLit,
+                .JsonbLit,
+                .XmlLit,
+                .UrlLit,
+                .DomainLit,
+                .UuidLit,
+                .EnumLit,
+                .BitLit,
+                .VarBitLit,
+                => {},
+                .List, .ArrayLit => |items| many = items,
+                .Map => |props| for (props) |prop| {
+                    stack.append(alloc, .{ .e = prop.value, .bound = b }) catch return self.fail();
+                },
+                .Member => |m| kids[0] = m.target,
+                .Index => |i| kids = .{ i.target, i.index, null, null },
+                .Slice => |sl| kids = .{ sl.target, sl.start, sl.end, null },
+                // The callee is a function name, not a variable.
+                .Call => |c| many = c.args,
+                .Unary => |u| kids[0] = u.expr,
+                .Binary => |bin| kids = .{ bin.left, bin.right, null, null },
+                .In => |in| {
+                    kids[0] = in.value;
+                    many = in.set;
+                },
+                .NotIn => |in| {
+                    kids[0] = in.value;
+                    many = in.set;
+                },
+                .InSubquery => |sq| {
+                    kids[0] = sq.value;
+                    if (self.facts) |set| set.insert(.expr_subquery);
+                    if (self.scope != null) self.ok = false;
+                },
+                .NotInSubquery => |sq| {
+                    kids[0] = sq.value;
+                    if (self.facts) |set| set.insert(.expr_subquery);
+                    if (self.scope != null) self.ok = false;
+                },
+                .InListExpr => |in| kids = .{ in.value, in.list_expr, null, null },
+                .NotInListExpr => |in| kids = .{ in.value, in.list_expr, null, null },
+                .IsNull => |n| kids[0] = n.target,
+                .IsUnknown => |n| kids[0] = n.target,
+                .StartsWith => |sw| kids = .{ sw.value, sw.prefix, null, null },
+                .EndsWith => |ew| kids = .{ ew.value, ew.suffix, null, null },
+                .Contains => |ct| kids = .{ ct.value, ct.needle, null, null },
+                .Case => |c| {
+                    kids = .{ c.operand, c.else_expr, null, null };
+                    for (c.whens) |w| {
+                        stack.append(alloc, .{ .e = w.when, .bound = b }) catch return self.fail();
+                        stack.append(alloc, .{ .e = w.then_expr, .bound = b }) catch return self.fail();
+                    }
+                },
+                .PatternComp, .Exists, .ShortestPath, .PatternCount => self.pattern(),
+                .MapProjection => |mp| kids[0] = mp.source,
+                .ListComprehension => |lc| {
+                    kids[0] = lc.source;
+                    // Its variable is bound inside its filter and map only.
+                    const inner = bounds.allocator().create(Bound) catch return self.fail();
+                    inner.* = .{ .name = lc.variable, .up = b };
+                    for ([_]?*ast.Expr{ lc.filter, lc.map }) |maybe| {
+                        const sub = maybe orelse continue;
+                        stack.append(alloc, .{ .e = sub, .bound = inner }) catch return self.fail();
+                    }
+                },
+            }
+            for (kids) |maybe| {
+                const kid = maybe orelse continue;
+                stack.append(alloc, .{ .e = kid, .bound = b }) catch return self.fail();
+            }
+            for (many) |kid| {
+                stack.append(alloc, .{ .e = kid, .bound = b }) catch return self.fail();
+            }
         }
     }
 };
@@ -2014,17 +1944,21 @@ pub fn onlyFieldsOf(comptime T: type, value: T, comptime allowed: []const []cons
     return true;
 }
 
+/// Whether `v` holds its empty value. A struct is empty when every one of its
+/// fields is (round-3 review M5: `ast.ReturnClause` and `ast.GraphPattern`
+/// were judged by name, so a field added to either was not looked at), and a
+/// field of a kind with no empty value fails to compile.
 fn isEmptyField(comptime F: type, v: F) bool {
     return switch (@typeInfo(F)) {
         .optional => v == null,
         .bool => !v,
         .pointer => |ptr| if (ptr.size == .slice) v.len == 0 else @compileError("SONNY-3166: a pointer field for the fast-path shape gate (onlyFields)"),
-        .@"struct" => if (F == ast.ReturnClause)
-            v.items.len == 0 and !v.distinct
-        else if (F == ast.GraphPattern)
-            v.chains.len == 0
-        else
-            @compileError("SONNY-3166: classify a " ++ @typeName(F) ++ " field for the fast-path shape gate (onlyFields)"),
+        .@"struct" => |s| blk: {
+            inline for (s.fields) |field| {
+                if (!isEmptyField(field.type, @field(v, field.name))) break :blk false;
+            }
+            break :blk true;
+        },
         else => @compileError("SONNY-3166: classify a " ++ @typeName(F) ++ " field for the fast-path shape gate (onlyFields)"),
     };
 }
