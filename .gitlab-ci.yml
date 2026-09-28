@@ -112,9 +112,7 @@ stages:
 # Jobs that need docker:dind override with `[company, lab, linux]`.
 default:
   tags:
-    - company
-    - k8s
-    - linux
+    [company, k8s, linux, x86]
   interruptible: true  # Allow auto-cancel of redundant pipelines on push
   # GLOBAL transient-infra retry: the shared kubernetes runners intermittently
   # fail jobs at POD SETUP with `system failure: etcdserver: leader changed`
