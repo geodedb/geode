@@ -1,6 +1,7 @@
 const std = @import("std");
 const ast = @import("../gql/ast.zig");
 const procedure_access = @import("../execution/procedure_access.zig");
+const set_operations = @import("../execution/set_operations.zig");
 const graph_store = @import("../graph_store.zig");
 
 pub const QueryKind = enum { rows, explain, profile };
@@ -402,7 +403,16 @@ pub fn isMutatingStatement(stmt: *const ast.Statement) bool {
         // `FOR ... RETURN` (no body) stays read-only so read loops keep the
         // shared lock.
         // CANARY: REQ=REQ-GQL-FOR-WRITE-BODY-876-CLASSIFY; FEATURE="ForStatement"; ASPECT=MutationClassification; STATUS=TESTED; TEST=tests/test_for_write_body.zig; OWNER=query_traits; UPDATED=2026-08-29
-        .For => |f| if (f.body) |body| isQueryMutating(body) else false,
+        .For => |f| (if (f.body) |body| isQueryMutating(body) else false) or !set_operations.exprIsReadOnly(f.collection),
+        // SONNY-3182: VALUES ... <statement> runs the statement it wraps.
+        .Values => |v| blk: {
+            for (v.rows) |row| {
+                for (row) |e| {
+                    if (!set_operations.exprIsReadOnly(e)) break :blk true;
+                }
+            }
+            break :blk if (v.next_statement) |next| isMutatingStatement(next) else false;
+        },
         // Everything else (Show, etc.) is read-only
         else => false,
     };
@@ -843,7 +853,16 @@ pub fn isQueryMutating(q: *const ast.Query) bool {
         if (for_stmt.body) |body| {
             if (isQueryMutating(body)) return true;
         }
+        if (!set_operations.exprIsReadOnly(for_stmt.collection)) return true;
     }
+
+    // CANARY: REQ=REQ-SONNY-3182-EXPRESSION-WRITES; FEATURE="WriteShapeAllowlist"; ASPECT=MutationClassification; STATUS=TESTED; TEST=tests/test_sonny_write_allowlist.zig; OWNER=query_traits; UPDATED=2026-09-27
+    // SONNY-3182: a write inside an expression (an IN / NOT IN subquery that
+    // writes: in a WHERE, a SET value, a RETURN, a pattern's property map) or
+    // in a CTE body. Classified as a read, it took the shared read lock and
+    // passed the read-only and cluster gates. The walk is the write-shape
+    // validator's (`set_operations.queryExpressionsAreReadOnly`).
+    if (!set_operations.queryExpressionsAreReadOnly(q.*)) return true;
 
     return false;
 }

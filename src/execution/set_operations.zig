@@ -140,7 +140,7 @@ pub var parallel_union_serial_fallbacks: std.atomic.Value(u64) = std.atomic.Valu
 /// `where_clause`). Every expression-bearing field of a query is therefore now
 /// walked by `exprIsReadOnly`, which switches EXHAUSTIVELY over `ast.Expr` so
 /// that a future variant is a compile error rather than a silent gap.
-fn queryIsReadOnly(q: ast.Query) bool {
+pub fn queryIsReadOnly(q: ast.Query) bool {
     if (q.create_pattern != null) return false;
     if (q.merge_statement != null) return false;
     if (q.set_clauses.len != 0) return false;
@@ -213,6 +213,111 @@ fn queryIsReadOnly(q: ast.Query) bool {
         if (!queryIsReadOnly(nq.*)) return false;
     }
     return true;
+}
+
+// CANARY: REQ=REQ-SONNY-3182-EXPRESSION-WRITES; FEATURE="WriteShapeAllowlist"; ASPECT=ExpressionWalk; STATUS=TESTED; TEST=tests/test_sonny_write_allowlist.zig; OWNER=engine; UPDATED=2026-09-27
+/// SONNY-3182: whether every expression `q` itself carries is free of a
+/// write (an IN / NOT IN subquery that writes), and every CTE body it defines
+/// is read-only. Its clauses are not looked at, nor the parts it holds
+/// (`next_query`, a FOR body, a CALL { }): the write-shape validator and
+/// `query_traits.isQueryMutating` walk those. `MATCH (n) WHERE n.i IN (MATCH
+/// (q) SET q.c = q.c + 1 RETURN q.i) RETURN count(*)` ran the SET once per
+/// outer row, past the validator, under the read lock.
+pub fn queryExpressionsAreReadOnly(q: ast.Query) bool {
+    if (!patternIsReadOnly(q.match)) return false;
+    if (q.create_pattern) |cp| {
+        if (!patternIsReadOnly(cp)) return false;
+    }
+    const singles = [_]?ast.Expr{ q.where_clause, q.filter_clause, q.having, q.initial_where, q.pre_with_where, q.with_where };
+    for (singles) |maybe| {
+        if (maybe) |e| {
+            if (!exprIsReadOnly(e)) return false;
+        }
+    }
+    if (q.unwind_clause) |u| {
+        if (!exprIsReadOnly(u.list_expr)) return false;
+    }
+    for (q.let_bindings) |b| {
+        if (!exprIsReadOnly(b.value)) return false;
+    }
+    for (q.inline_let_bindings) |b| {
+        if (!exprIsReadOnly(b.value)) return false;
+    }
+    if (q.group_by) |g| {
+        for (g.keys) |k| {
+            if (!exprIsReadOnly(k)) return false;
+        }
+    }
+    if (q.order_by) |ob| {
+        if (!orderByIsReadOnly(ob)) return false;
+    }
+    for (q.ret.items) |item| {
+        if (!exprIsReadOnly(item.expr)) return false;
+    }
+    for ([_]?ast.WithClause{ q.with_clause, q.initial_with }) |maybe| {
+        const w = maybe orelse continue;
+        for (w.items) |item| {
+            if (!exprIsReadOnly(item.expr)) return false;
+        }
+        if (w.order_by) |ob| {
+            if (!orderByIsReadOnly(ob.*)) return false;
+        }
+    }
+    for (q.set_clauses) |sc| {
+        if (!setClauseIsReadOnly(sc)) return false;
+    }
+    if (q.merge_statement) |m| {
+        if (!mergeExpressionsReadOnly(m.*)) return false;
+    }
+    if (q.call_clause) |cc| {
+        if (!exprIsReadOnly(cc.procedure)) return false;
+        if (cc.yield_items) |items| {
+            for (items) |item| {
+                if (!exprIsReadOnly(item.expr)) return false;
+            }
+        }
+    }
+    if (q.cte_list) |cte_list| {
+        for (cte_list.ctes) |cte| switch (cte.body) {
+            .simple => |body| {
+                if (!queryIsReadOnly(body.*)) return false;
+            },
+            .recursive => |rec| {
+                if (!queryIsReadOnly(rec.anchor.*)) return false;
+                if (!queryIsReadOnly(rec.recursive_term.*)) return false;
+            },
+        };
+    }
+    return true;
+}
+
+/// SONNY-3182: a MERGE's property maps, SET values and RETURN.
+pub fn mergeExpressionsReadOnly(m: ast.MergeStatement) bool {
+    if (!patternIsReadOnly(m.pattern)) return false;
+    for ([_][]const ast.SetClause{ m.on_create, m.on_match }) |actions| {
+        for (actions) |sc| {
+            if (!setClauseIsReadOnly(sc)) return false;
+        }
+    }
+    if (m.return_clause) |r| {
+        for (r.items) |item| {
+            if (!exprIsReadOnly(item.expr)) return false;
+        }
+    }
+    return true;
+}
+
+/// SONNY-3182: a pattern's property maps.
+pub fn patternExpressionsReadOnly(p: ast.GraphPattern) bool {
+    return patternIsReadOnly(p);
+}
+
+fn setClauseIsReadOnly(sc: ast.SetClause) bool {
+    return switch (sc) {
+        .Property => |p| exprIsReadOnly(p.value),
+        .AllProperties => |a| exprIsReadOnly(a.properties),
+        .Labels => true,
+    };
 }
 
 fn orderByIsReadOnly(ob: ast.OrderBy) bool {
@@ -291,7 +396,7 @@ fn patternWhereIsReadOnly(pattern: *ast.GraphPattern, where: ?*ast.Expr) bool {
 ///
 /// The switch is EXHAUSTIVE on purpose: no `else` branch, so adding a variant
 /// to `ast.Expr` fails to compile here instead of silently widening the gate.
-fn exprIsReadOnly(e: ast.Expr) bool {
+pub fn exprIsReadOnly(e: ast.Expr) bool {
     return switch (e) {
         // --- leaves: no sub-expression, no query ---
         .Ident,
