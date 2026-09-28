@@ -1944,6 +1944,13 @@ pub const GraphStore = struct {
     // PERF-P0-001: Edge-type index for O(1) getEdgesByType lookups instead of O(E) full scan
     // Maps "graph_name:edge_type" composite key to sorted list of edge IDs
     edge_type_index: std.StringHashMap(std.ArrayList(u64)),
+    /// SONNY-3233 (round 15, F5): guards `edge_type_index`, which every
+    /// graph's edges share (keys are "graph:type"). It is maintained only
+    /// while the edge cache is unbounded; there, writers of two graphs
+    /// inserted into it (and grew it) with no lock between them, and readers
+    /// of a third probed it during a resize. Writers take it exclusively,
+    /// readers shared. A leaf lock: nothing else is taken under it.
+    edge_type_index_lock: std.Io.RwLock = std.Io.RwLock.init,
     // CANARY: REQ=REQ-PERF-EDGE-ADJ-001; FEATURE="EdgeAdjacencyIndex"; ASPECT=EdgeLookup; STATUS=TESTED; TEST=tests/test_gap0514_graph_store_regression.zig; OWNER=perf; UPDATED=2026-04-11
     // Issue #392: Adjacency lists for fast edge lookups during DELETE DETACH.
     // PHASE 0 (edge-engine-direct): BOUNDED, evict-freely caches over the engine
@@ -1981,6 +1988,16 @@ pub const GraphStore = struct {
     // leaf mutex per CLAUDE.md: never acquired while any higher-tier
     // mutex is held.
     graphs_mutex: std.Io.Mutex = std.Io.Mutex.init,
+    /// SONNY-3233 (round 15, F12): guards the `graphs` map itself. A leaf
+    /// lock, held only across a map operation (a lookup, an insert, a
+    /// removal, a copy of the names), never while taking another lock.
+    /// `graphs_mutex` still serializes CREATE and DROP GRAPH end to end
+    /// (across the adapter), which can take long; a first write to a graph
+    /// (`ensureGraphNoDirty`, every node and edge CREATE) and a reader of the
+    /// map take only this lock, so they do not wait behind another graph's
+    /// DDL. Every access to `graphs` after construction holds it: shared to
+    /// read, exclusively to change.
+    graphs_lock: std.Io.RwLock = std.Io.RwLock.init,
     /// Optional CSR adjacency for fast traversal (if built elsewhere)
     csr: ?*const anyopaque = null,
     // CANARY: REQ=REQ-BINARY-PERSIST-DIRTY-001; FEATURE="BinaryPersistence"; ASPECT=DirtyTracking; STATUS=TESTED; TEST=tests/test_gap0514_graph_store_regression.zig; OWNER=storage; UPDATED=2026-04-11
@@ -2235,15 +2252,20 @@ pub const GraphStore = struct {
         self.next_node_id = 1;
         self.next_edge_id = 1;
 
-        // Reset graph registry to default
-        var graph_iter = self.graphs.iterator();
-        while (graph_iter.next()) |entry| {
-            self.allocator.free(entry.key_ptr.*);
+        // Reset graph registry to default (SONNY-3233: under `graphs_lock`).
+        {
+            const gio = std.Io.Threaded.global_single_threaded.io();
+            self.graphs_lock.lockUncancelable(gio);
+            defer self.graphs_lock.unlock(gio);
+            var graph_iter = self.graphs.iterator();
+            while (graph_iter.next()) |entry| {
+                self.allocator.free(entry.key_ptr.*);
+            }
+            self.graphs.deinit();
+            self.graphs = std.StringHashMap(void).init(self.allocator);
+            const default_name = self.allocator.dupe(u8, "default") catch @panic("OOM: failed to allocate default graph name during clearNodes");
+            self.graphs.put(default_name, {}) catch @panic("OOM: failed to register default graph during clearNodes");
         }
-        self.graphs.deinit();
-        self.graphs = std.StringHashMap(void).init(self.allocator);
-        const default_name = self.allocator.dupe(u8, "default") catch @panic("OOM: failed to allocate default graph name during clearNodes");
-        self.graphs.put(default_name, {}) catch @panic("OOM: failed to register default graph during clearNodes");
 
         // GAP-0839: Reset persistent-UUID map alongside the graph registry and
         // re-seed the default graph so an in-memory store stays able to serve
@@ -2301,14 +2323,19 @@ pub const GraphStore = struct {
 
         self.merge_prop_index.reset();
 
-        // PERF-P0-001: Reset edge-type index
-        var eti_iter = self.edge_type_index.iterator();
-        while (eti_iter.next()) |entry| {
-            self.allocator.free(entry.key_ptr.*);
-            entry.value_ptr.deinit(self.allocator);
+        // PERF-P0-001: Reset edge-type index (SONNY-3233: under its lock).
+        {
+            const eti_io = std.Io.Threaded.global_single_threaded.io();
+            self.edge_type_index_lock.lockUncancelable(eti_io);
+            defer self.edge_type_index_lock.unlock(eti_io);
+            var eti_iter = self.edge_type_index.iterator();
+            while (eti_iter.next()) |entry| {
+                self.allocator.free(entry.key_ptr.*);
+                entry.value_ptr.deinit(self.allocator);
+            }
+            self.edge_type_index.deinit();
+            self.edge_type_index = std.StringHashMap(std.ArrayList(u64)).init(self.allocator);
         }
-        self.edge_type_index.deinit();
-        self.edge_type_index = std.StringHashMap(std.ArrayList(u64)).init(self.allocator);
 
         // Reset adjacency caches. PHASE 0: AdjCache.clearRetainingCapacity frees
         // every resident AND retired AdjList via freeAdjListValue and clears each
@@ -2335,12 +2362,18 @@ pub const GraphStore = struct {
 
     /// Clear the graph registry (removes all graph names, for test isolation)
     pub fn clearGraphRegistry(self: *GraphStore) void {
-        var graph_iter = self.graphs.iterator();
-        while (graph_iter.next()) |entry| {
-            self.allocator.free(entry.key_ptr.*);
+        {
+            // SONNY-3233 (round 15, F12): under `graphs_lock`.
+            const gio = std.Io.Threaded.global_single_threaded.io();
+            self.graphs_lock.lockUncancelable(gio);
+            defer self.graphs_lock.unlock(gio);
+            var graph_iter = self.graphs.iterator();
+            while (graph_iter.next()) |entry| {
+                self.allocator.free(entry.key_ptr.*);
+            }
+            self.graphs.deinit();
+            self.graphs = std.StringHashMap(void).init(self.allocator);
         }
-        self.graphs.deinit();
-        self.graphs = std.StringHashMap(void).init(self.allocator);
 
         // GAP-0839: clear the persistent-UUID map in lockstep.
         var uuid_iter = self.graph_uuids.iterator();
@@ -2354,34 +2387,36 @@ pub const GraphStore = struct {
     // Clear only nodes and edges for a specific graph
     // CANARY: REQ=REQ-MULTI-GRAPH-005; FEATURE="MultiGraphIsolation"; ASPECT=ClearGraphNodes; STATUS=TESTED; TEST=geodetestlab/specs/multi_graph.yml; OWNER=engine; UPDATED=2025-12-23
     pub fn clearNodesForGraph(self: *GraphStore, graph_name: []const u8) void {
-        // Collect node IDs to remove (can't modify while iterating)
-        var nodes_to_remove = std.ArrayList(u64).initCapacity(self.allocator, 0) catch return;
-        defer nodes_to_remove.deinit(self.allocator);
-
-        var node_iter = self.nodes.iterator();
-        while (node_iter.next()) |entry| {
-            if (std.mem.eql(u8, entry.value_ptr.graph_name, graph_name)) {
-                nodes_to_remove.append(self.allocator, entry.key_ptr.*) catch continue;
+        // Collect node IDs to remove (can't modify while iterating).
+        // SONNY-3233 (round 15): each shard under its map lock: the map is
+        // every graph's, and DROP GRAPH holds only this graph's lock while
+        // writers of other graphs insert (and grow the shards).
+        const Collect = struct {
+            allocator: std.mem.Allocator,
+            graph_name: []const u8,
+            ids: std.ArrayList(u64) = .empty,
+            fn node(c: *@This(), id: u64, n: *const Node) !void {
+                if (std.mem.eql(u8, n.graph_name, c.graph_name)) try c.ids.append(c.allocator, id);
             }
-        }
+            fn edge(c: *@This(), id: u64, e: *const Edge) !void {
+                if (std.mem.eql(u8, e.graph_name, c.graph_name)) try c.ids.append(c.allocator, id);
+            }
+        };
+        var nodes_to_remove: Collect = .{ .allocator = self.allocator, .graph_name = graph_name };
+        defer nodes_to_remove.ids.deinit(self.allocator);
+        self.nodes.forEachResident(&nodes_to_remove, Collect.node) catch {};
 
         // Remove and free the nodes
-        for (nodes_to_remove.items) |node_id| {
+        for (nodes_to_remove.ids.items) |node_id| {
             self.deleteNodeNoSave(node_id);
         }
 
         // Remove any remaining edges tagged with this graph (defensive cleanup)
-        var edges_to_remove = std.ArrayList(u64).initCapacity(self.allocator, 0) catch return;
-        defer edges_to_remove.deinit(self.allocator);
+        var edges_to_remove: Collect = .{ .allocator = self.allocator, .graph_name = graph_name };
+        defer edges_to_remove.ids.deinit(self.allocator);
+        self.edges.forEachResident(&edges_to_remove, Collect.edge) catch {};
 
-        var edge_iter = self.edges.iterator();
-        while (edge_iter.next()) |entry| {
-            if (std.mem.eql(u8, entry.value_ptr.graph_name, graph_name)) {
-                edges_to_remove.append(self.allocator, entry.key_ptr.*) catch continue;
-            }
-        }
-
-        for (edges_to_remove.items) |edge_id| {
+        for (edges_to_remove.ids.items) |edge_id| {
             self.deleteEdgeNoSave(edge_id);
         }
     }
@@ -2393,10 +2428,49 @@ pub const GraphStore = struct {
         incrementMutationEpoch();
     }
 
+    // CANARY: REQ=REQ-SONNY-3233-CACHE-LOCKING; FEATURE="GraphRegistry"; ASPECT=GraphsMutex; STATUS=TESTED; TEST=tests/test_sonny3233_cache_graph_locking.zig; OWNER=storage; UPDATED=2026-09-28
+    /// SONNY-3233 (round 15, F12): the check and the insert under
+    /// `graphs_lock` (a shared check, then the insert exclusively, checked
+    /// again). Every first write to a graph (every CREATE of a node or an
+    /// edge) runs this holding only that graph's lock; CREATE and DROP GRAPH
+    /// of other graphs change the same map, and the unlocked `contains` and
+    /// `put` raced them (a lost insert, or a probe of a map being grown).
+    /// Not `graphs_mutex`: DDL holds that across the adapter, and every
+    /// write would wait behind another graph's CREATE.
     fn ensureGraphNoDirty(self: *GraphStore, graph_name: []const u8) !void {
+        if (self.graphsContains(graph_name)) return;
+        const io = std.Io.Threaded.global_single_threaded.io();
+        self.graphs_lock.lockUncancelable(io);
+        defer self.graphs_lock.unlock(io);
         if (self.graphs.contains(graph_name)) return;
         const name_copy = try self.allocator.dupe(u8, graph_name);
+        errdefer self.allocator.free(name_copy);
         try self.graphs.put(name_copy, {});
+    }
+
+    /// SONNY-3233 (round 15, F12): `graphs.contains`, under `graphs_lock`.
+    fn graphsContains(self: *const GraphStore, graph_name: []const u8) bool {
+        const io = std.Io.Threaded.global_single_threaded.io();
+        @constCast(&self.graphs_lock).lockSharedUncancelable(io);
+        defer @constCast(&self.graphs_lock).unlockShared(io);
+        return self.graphs.contains(graph_name);
+    }
+
+    /// SONNY-3233 (round 15, F12): every graph name in `graphs`, copied under
+    /// `graphs_lock`; free with `freeGraphNames`.
+    fn graphNamesCopy(self: *const GraphStore, allocator: std.mem.Allocator) ![][]const u8 {
+        const io = std.Io.Threaded.global_single_threaded.io();
+        @constCast(&self.graphs_lock).lockSharedUncancelable(io);
+        defer @constCast(&self.graphs_lock).unlockShared(io);
+        const out = try allocator.alloc([]const u8, self.graphs.count());
+        var n: usize = 0;
+        errdefer {
+            for (out[0..n]) |name| allocator.free(name);
+            allocator.free(out);
+        }
+        var it = self.graphs.keyIterator();
+        while (it.next()) |k| : (n += 1) out[n] = try allocator.dupe(u8, k.*);
+        return out;
     }
 
     /// Get or create the IdMap for a named graph.
@@ -3451,7 +3525,8 @@ pub const GraphStore = struct {
         if (global_vtable) |vt| {
             if (vt.graphExistsFn(vt.ctx, graph_name)) return true;
         }
-        return self.graphs.contains(graph_name);
+        // SONNY-3233 (round 15, F12): under `graphs_lock`.
+        return self.graphsContains(graph_name);
     }
 
     pub fn listGraphNames(self: *const GraphStore, allocator: std.mem.Allocator) ![]const []const u8 {
@@ -3493,9 +3568,11 @@ pub const GraphStore = struct {
             }
         }
 
-        var it = self.graphs.iterator();
-        while (it.next()) |entry| {
-            const name = entry.key_ptr.*;
+        // SONNY-3233 (round 15, F12): the registry's names copied under
+        // `graphs_lock`.
+        const registry = try self.graphNamesCopy(allocator);
+        defer freeGraphNames(allocator, registry);
+        for (registry) |name| {
             const seen_key = try allocator.dupe(u8, name);
             errdefer allocator.free(seen_key);
             const seen_result = try seen.getOrPut(seen_key);
@@ -3883,7 +3960,7 @@ pub const GraphStore = struct {
         // landed.  Callers that need strict "did I create this graph
         // just now" semantics (none today) would have to gate above
         // this layer.
-        if (self.graphs.contains(graph_name)) {
+        if (self.graphsContains(graph_name)) {
             // GAP-0839: a graph already in the in-memory registry may still
             // lack a recorded UUID (e.g. seeded by an older code path or by
             // loadFromFile); guarantee one exists so getGraphUuid succeeds.
@@ -3893,7 +3970,15 @@ pub const GraphStore = struct {
 
         const name_copy = try self.allocator.dupe(u8, graph_name);
         errdefer self.allocator.free(name_copy);
-        try self.graphs.put(name_copy, {});
+        {
+            // SONNY-3233 (round 15, F12): the insert under `graphs_lock`. A
+            // first write may have registered the name since the check.
+            const gio = std.Io.Threaded.global_single_threaded.io();
+            self.graphs_lock.lockUncancelable(gio);
+            defer self.graphs_lock.unlock(gio);
+            const gop = try self.graphs.getOrPut(name_copy);
+            if (gop.found_existing) self.allocator.free(name_copy);
+        }
 
         // GAP-0839: assign + persist a UUID for the freshly created graph so
         // tenant-bound HELLO sessions (which require a persistent UUID) are
@@ -3939,12 +4024,19 @@ pub const GraphStore = struct {
         // authoritative persistent identity recovered from disk, so it must
         // win over any in-memory placeholder.
         try self.setGraphUuidLocked(graph_name, graph_uuid);
-        if (self.graphs.contains(graph_name)) {
+        if (self.graphsContains(graph_name)) {
             return;
         }
         const name_copy = try self.allocator.dupe(u8, graph_name);
         errdefer self.allocator.free(name_copy);
-        try self.graphs.put(name_copy, {});
+        {
+            // SONNY-3233 (round 15, F12): under `graphs_lock`.
+            const gio = std.Io.Threaded.global_single_threaded.io();
+            self.graphs_lock.lockUncancelable(gio);
+            defer self.graphs_lock.unlock(gio);
+            const gop = try self.graphs.getOrPut(name_copy);
+            if (gop.found_existing) self.allocator.free(name_copy);
+        }
         _ = try self.getOrCreateIdMap(graph_name);
         self.dirty.store(true, .release);
         incrementMutationEpoch();
@@ -4019,13 +4111,19 @@ pub const GraphStore = struct {
         if (global_vtable) |vt| {
             try vt.dropGraphFn(vt.ctx, graph_name);
         }
-        if (!self.graphs.contains(graph_name)) {
+        if (!self.graphsContains(graph_name)) {
             return error.GraphNotFound;
         }
 
         self.clearNodesForGraph(graph_name);
-        if (self.graphs.fetchRemove(graph_name)) |kv| {
-            self.allocator.free(kv.key);
+        {
+            // SONNY-3233 (round 15, F12): under `graphs_lock`.
+            const gio = std.Io.Threaded.global_single_threaded.io();
+            self.graphs_lock.lockUncancelable(gio);
+            defer self.graphs_lock.unlock(gio);
+            if (self.graphs.fetchRemove(graph_name)) |kv| {
+                self.allocator.free(kv.key);
+            }
         }
         // GAP-0839: drop the persistent-UUID entry alongside the graph.
         if (self.graph_uuids.fetchRemove(graph_name)) |kv| {
@@ -6119,14 +6217,19 @@ pub const GraphStore = struct {
 
         self.merge_prop_index.reset();
 
-        // PERF-P0-001: Reset edge-type index
-        var eti_iter = self.edge_type_index.iterator();
-        while (eti_iter.next()) |entry| {
-            self.allocator.free(entry.key_ptr.*);
-            entry.value_ptr.deinit(self.allocator);
+        // PERF-P0-001: Reset edge-type index (SONNY-3233: under its lock).
+        {
+            const eti_io = std.Io.Threaded.global_single_threaded.io();
+            self.edge_type_index_lock.lockUncancelable(eti_io);
+            defer self.edge_type_index_lock.unlock(eti_io);
+            var eti_iter = self.edge_type_index.iterator();
+            while (eti_iter.next()) |entry| {
+                self.allocator.free(entry.key_ptr.*);
+                entry.value_ptr.deinit(self.allocator);
+            }
+            self.edge_type_index.deinit();
+            self.edge_type_index = std.StringHashMap(std.ArrayList(u64)).init(self.allocator);
         }
-        self.edge_type_index.deinit();
-        self.edge_type_index = std.StringHashMap(std.ArrayList(u64)).init(self.allocator);
 
         // Reset adjacency caches. PHASE 0: clearRetainingCapacity frees every
         // resident + retired AdjList and clears the FIFO, while PRESERVING the
@@ -8533,7 +8636,15 @@ pub const GraphStore = struct {
     fn appendAdj(self: *GraphStore, cache: *AdjCache, node: u64, edge_id: u64, graph_name: []const u8) !void {
         if (cache.effectiveCap() == 0) {
             // Unbounded legacy mirror: the cache IS the source of truth.
-            const r = try cache.getOrPut(node);
+            // SONNY-3233 (round 15, F5): under the shard's map lock,
+            // exclusive, as the bounded arm below. The map is every graph's:
+            // two writers of different graphs inserted into one shard, or one
+            // grew it while the other appended to an entry in it (and
+            // retired the old buffer, `appendAdjId`), with no lock between
+            // them; a Debug build faulted in the allocator.
+            cache.lockShardExclusive(node);
+            defer cache.unlockShardExclusive(node);
+            const r = try cache.getOrPutLocked(node);
             if (!r.found_existing) {
                 r.value_ptr.* = .{ .list = .empty, .graph = try self.allocator.dupe(u8, graph_name) };
                 // New entry: record it for (disabled) eviction bookkeeping so the
@@ -8679,35 +8790,37 @@ pub const GraphStore = struct {
         // Only the RESIDENT mirror is edited here; the engine removal is handled
         // by the caller's durable delete path. An evicted entry is simply left to
         // rehydrate (without this edge) on the next read.
-        if (self.outgoing_edges.getPtr(from_id)) |entry| {
-            var i: usize = 0;
-            while (i < entry.list.items.len) {
-                if (entry.list.items[i] == edge_id) {
-                    _ = entry.list.swapRemove(i);
-                    break;
-                }
-                i += 1;
-            }
-            if (entry.list.items.len == 0) {
-                // Retire (do NOT inline-free): a concurrent SHARED reader may hold
-                // a slice into this list; the cache frees it at the grace window.
-                self.outgoing_edges.remove(from_id);
-            }
+        //
+        // SONNY-3233 (round 15, F5): each list edited under its shard's map
+        // lock, exclusive, as `appendAdj` does: the lookup released the lock
+        // before the edit, so a writer of another graph could move the entry
+        // (a resize) under it.
+        {
+            self.outgoing_edges.lockShardExclusive(from_id);
+            defer self.outgoing_edges.unlockShardExclusive(from_id);
+            removeAdjId(&self.outgoing_edges, from_id, edge_id);
         }
+        {
+            self.incoming_edges.lockShardExclusive(to_id);
+            defer self.incoming_edges.unlockShardExclusive(to_id);
+            removeAdjId(&self.incoming_edges, to_id, edge_id);
+        }
+    }
 
-        if (self.incoming_edges.getPtr(to_id)) |entry| {
-            var i: usize = 0;
-            while (i < entry.list.items.len) {
-                if (entry.list.items[i] == edge_id) {
-                    _ = entry.list.swapRemove(i);
-                    break;
-                }
-                i += 1;
+    /// `edge_id` out of `node`'s resident list, with `node`'s shard lock held
+    /// exclusively. An emptied list is retired (a SHARED reader may hold a
+    /// slice into it; the cache frees it at the grace window).
+    fn removeAdjId(cache: *AdjCache, node: u64, edge_id: u64) void {
+        const entry = cache.getPtrUnlocked(node) orelse return;
+        var i: usize = 0;
+        while (i < entry.list.items.len) {
+            if (entry.list.items[i] == edge_id) {
+                _ = entry.list.swapRemove(i);
+                break;
             }
-            if (entry.list.items.len == 0) {
-                self.incoming_edges.remove(to_id);
-            }
+            i += 1;
         }
+        if (entry.list.items.len == 0) cache.removeLocked(node);
     }
 
     // CANARY: REQ=REQ-PERF-EDGE-TYPE-INDEX-002; FEATURE="EdgeTypeIndex"; ASPECT=IndexMaintenance; STATUS=TESTED; TEST=src/graph_store.zig; OWNER=perf; UPDATED=2026-04-10
@@ -8724,6 +8837,9 @@ pub const GraphStore = struct {
         // The posting list is still maintained when UNBOUNDED (no engine / A/B
         // fallback), where it is the complete source of truth.
         if (self.edges.effectiveCap() != 0) return;
+        const eti_io = std.Io.Threaded.global_single_threaded.io();
+        self.edge_type_index_lock.lockUncancelable(eti_io);
+        defer self.edge_type_index_lock.unlock(eti_io);
 
         var buf: [512]u8 = undefined;
         const probe_key = std.fmt.bufPrint(&buf, "{s}:{s}", .{ graph_name, edge_type }) catch {
@@ -8757,6 +8873,10 @@ pub const GraphStore = struct {
     fn removeFromEdgeTypeIndex(self: *GraphStore, graph_name: []const u8, edge_type: []const u8, edge_id: u64) void {
         const key = std.fmt.allocPrint(self.allocator, "{s}:{s}", .{ graph_name, edge_type }) catch return;
         defer self.allocator.free(key);
+        // SONNY-3233 (round 15, F5).
+        const eti_io = std.Io.Threaded.global_single_threaded.io();
+        self.edge_type_index_lock.lockUncancelable(eti_io);
+        defer self.edge_type_index_lock.unlock(eti_io);
 
         if (self.edge_type_index.getPtr(key)) |list| {
             // Binary search for edge_id in sorted posting list
@@ -8791,6 +8911,12 @@ pub const GraphStore = struct {
         var key_buf: [512]u8 = undefined;
         const key = std.fmt.bufPrint(&key_buf, "{s}:{s}", .{ graph_name, edge_type }) catch return null;
 
+        // SONNY-3233 (round 15, F5): the lookup under the index's lock. The
+        // list it returns belongs to `graph_name`, whose writers the caller's
+        // graph lock excludes.
+        const eti_io = std.Io.Threaded.global_single_threaded.io();
+        @constCast(&self.edge_type_index_lock).lockSharedUncancelable(eti_io);
+        defer @constCast(&self.edge_type_index_lock).unlockShared(eti_io);
         if (self.edge_type_index.get(key)) |list| {
             return list.items;
         }
@@ -9194,9 +9320,13 @@ pub const GraphStore = struct {
         if (graph_name) |gn| {
             self.collectEdgesByTypeFromEngine(allocator, &id_list, gn, edge_type, tenant_id) catch return &.{};
         } else {
-            var graph_iter = self.graphs.keyIterator();
-            while (graph_iter.next()) |graph_key| {
-                self.collectEdgesByTypeFromEngine(allocator, &id_list, graph_key.*, edge_type, tenant_id) catch continue;
+            // SONNY-3233 (round 15, F12): the names copied under
+            // `graphs_mutex`, not iterated while CREATE or DROP GRAPH (or a
+            // first write to a graph, `ensureGraphNoDirty`) changes the map.
+            const names = self.graphNamesCopy(allocator) catch return &.{};
+            defer freeGraphNames(allocator, names);
+            for (names) |graph_key| {
+                self.collectEdgesByTypeFromEngine(allocator, &id_list, graph_key, edge_type, tenant_id) catch continue;
             }
         }
         return id_list.toOwnedSlice(allocator) catch &.{};
@@ -9297,17 +9427,25 @@ pub const GraphStore = struct {
         var id_list = std.ArrayList(u64).empty;
         defer id_list.deinit(allocator);
 
+        // SONNY-3233 (round 15, F5, F12): the graph names copied under
+        // `graphs_mutex`, and each posting copied under the index's lock.
+        const eti_io = std.Io.Threaded.global_single_threaded.io();
         if (graph_name) |gn| {
             var key_buf: [512]u8 = undefined;
             const probe = std.fmt.bufPrint(&key_buf, "{s}:{s}", .{ gn, edge_type }) catch return &.{};
+            self.edge_type_index_lock.lockSharedUncancelable(eti_io);
+            defer self.edge_type_index_lock.unlockShared(eti_io);
             if (self.edge_type_index.get(probe)) |posting| {
                 id_list.appendSlice(allocator, posting.items) catch return &.{};
             }
         } else {
-            var graph_iter = self.graphs.keyIterator();
-            while (graph_iter.next()) |graph_key| {
+            const names = self.graphNamesCopy(allocator) catch return &.{};
+            defer freeGraphNames(allocator, names);
+            for (names) |graph_key| {
                 var key_buf: [512]u8 = undefined;
-                const probe = std.fmt.bufPrint(&key_buf, "{s}:{s}", .{ graph_key.*, edge_type }) catch continue;
+                const probe = std.fmt.bufPrint(&key_buf, "{s}:{s}", .{ graph_key, edge_type }) catch continue;
+                self.edge_type_index_lock.lockSharedUncancelable(eti_io);
+                defer self.edge_type_index_lock.unlockShared(eti_io);
                 if (self.edge_type_index.get(probe)) |posting| {
                     id_list.appendSlice(allocator, posting.items) catch continue;
                 }
@@ -10904,10 +11042,10 @@ pub const GraphStore = struct {
     /// Remove obsolete sidecar files after their contents have been migrated
     /// into the graph-storage engine.
     fn cleanupLegacySidecars(self: *GraphStore) void {
-        var it = self.graphs.iterator();
-        while (it.next()) |entry| {
-            self.cleanupLegacySidecarsForGraph(entry.key_ptr.*);
-        }
+        // SONNY-3233 (round 15, F12): the names copied under `graphs_lock`.
+        const names = self.graphNamesCopy(self.allocator) catch return;
+        defer freeGraphNames(self.allocator, names);
+        for (names) |name| self.cleanupLegacySidecarsForGraph(name);
     }
 
     fn cleanupLegacySidecarsForGraph(self: *GraphStore, graph_name: []const u8) void {
@@ -13719,8 +13857,10 @@ pub const GraphStore = struct {
     /// Delete a node and mark store dirty
     pub fn deleteNode(self: *GraphStore, node_id: u64) void {
         self.ensureNodeGraphHydrated(node_id); // PHASE 1b chokepoint (before any cache read)
-        // Capture graph_name before deletion for WAL notification and handle routing
-        const gn = if (self.nodes.get(node_id)) |n| n.graph_name else "";
+        // Capture graph_name before deletion for WAL notification and handle routing.
+        // SONNY-3233 (round 15): a copy: the delete frees the node's own.
+        const gn: []const u8 = if (self.nodes.get(node_id)) |n| (self.allocator.dupe(u8, n.graph_name) catch "") else "";
+        defer if (gn.len > 0) self.allocator.free(gn);
 
         if (global_vtable) |vt| {
             const adapter_gn = if (gn.len > 0) gn else "default";
@@ -13759,10 +13899,19 @@ pub const GraphStore = struct {
         // Capture graph_name before deletion for WAL notification and handle
         // routing. PHASE 1: hydrate-on-miss so an EVICTED edge can still be
         // deleted (its endpoints/graph resolved from the engine).
-        const gn = if (self.getEdgePtrHydrated(edge_id)) |e| e.graph_name else "";
+        //
+        // SONNY-3233 (round 15): a copy of the edge, read under its shard's
+        // lock (`getEdgeHydrated`), not a pointer into the shard: a writer of
+        // another graph that inserts into the same shard grows it and moves
+        // the entry (two edge writers on two graphs crashed here). And the
+        // graph's name copied for the notification below: the delete frees
+        // the edge's own copy first.
+        const edge_copy = self.getEdgeHydrated(edge_id);
+        const gn: []const u8 = if (edge_copy) |e| (self.allocator.dupe(u8, e.graph_name) catch "") else "";
+        defer if (gn.len > 0) self.allocator.free(gn);
 
         if (global_vtable) |vt| {
-            if (self.getEdgePtrHydrated(edge_id)) |edge| {
+            if (edge_copy) |edge| {
                 const slot_from = self.requireNodeSlot(edge.graph_name, edge.from_id) catch |err| {
                     log.err("adapter edge endpoint-slot lookup failed during deleteEdge", &.{
                         Attr.string("error", @errorName(err)),
@@ -15600,9 +15749,11 @@ fn persistSplitPhase(store_ptr: *GraphStore) void {
 
         // Remove any stale sidecar files after the checkpoint lands.
         // Use per-graph read locks so only one graph is locked at a time.
-        var it = store_ptr.graphs.iterator();
-        while (it.next()) |entry| {
-            const gname = entry.key_ptr.*;
+        // SONNY-3233 (round 15, F12): the names copied under `graphs_lock`
+        // first (a leaf lock: never held while a graph lock is taken).
+        const gnames: []const []const u8 = store_ptr.graphNamesCopy(store_ptr.allocator) catch &.{};
+        defer if (gnames.len > 0) GraphStore.freeGraphNames(store_ptr.allocator, gnames);
+        for (gnames) |gname| {
             const lock_handle = acquireGraphReadLockTagged(gname, .misc);
             store_ptr.cleanupLegacySidecarsForGraph(gname);
             releaseGraphLock(lock_handle);

@@ -9261,6 +9261,26 @@ pub fn build(b: *std.Build) void {
     const sonny3250_step = b.step("test-sonny3250-nested-exists", "Run SONNY-3250 regression (nested EXISTS and COUNT subqueries at depth 2 and 3, correlated and not, with and without a hop, answer correctly with no use after free; gRPC in process; run in Debug and ReleaseSafe)");
     sonny3250_step.dependOn(&run_sonny3250_tests.step);
 
+    // SONNY-3233 (round 15, F3, F5, F12): the caches' reservations, the
+    // unbounded adjacency append and removal, the edge-type index and the
+    // graph registry hold their locks: batch vs single CREATE on two graphs,
+    // two edge writers on two graphs with edge-type readers, and CREATE/DROP
+    // GRAPH churn racing first writes, with bounded (production) and
+    // unbounded caches. Loop it.
+    const sonny3233_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny3233_cache_graph_locking.zig"), .target = target, .optimize = optimize });
+    sonny3233_test_mod.link_libc = true;
+    sonny3233_test_mod.addImport("geode", root_mod);
+    sonny3233_test_mod.addImport("schema", schema_mod);
+    sonny3233_test_mod.addImport("protobuf", protobuf_mod);
+    sonny3233_test_mod.addImport("grpc_impl", sonny1560_shim_mod);
+    sonny3233_test_mod.addImport("logging", logging_mod);
+    sonny3233_test_mod.addImport("transport/quic", transport_quic_mod);
+    const sonny3233_tests = b.addTest(.{ .root_module = sonny3233_test_mod });
+    const run_sonny3233_tests = b.addRunArtifact(sonny3233_tests);
+    shardDep(test_step, &run_sonny3233_tests.step, 1, test_shard_loads, test_shard_index);
+    const sonny3233_step = b.step("test-sonny3233-cache-graph-locking", "Run SONNY-3233 regression (cache reservations under each shard's lock, unbounded adjacency append/removal under the shard lock, edge_type_index and the graphs registry locked: batch vs single CREATE on two graphs, two edge writers with edge-type readers, CREATE/DROP GRAPH churn racing first writes; bounded and unbounded caches; bounded time, loop it)");
+    sonny3233_step.dependOn(&run_sonny3233_tests.step);
+
     // SONNY-2790: the fulltext statements (CREATE/DROP INDEX, geode.fts.*)
     // run on the default graph, so the handlers lock `default` for them from
     // any session. Classifier, and the real gRPC handler (SONNY-1560 shim).

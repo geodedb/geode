@@ -140,11 +140,31 @@ pub const Fixture = struct {
     auth_was_enabled: bool,
     allow_all_was: bool,
 
+    /// SONNY-738 round 15: how the store is set up.
+    pub const Options = struct {
+        /// The node, edge and adjacency caches BOUNDED, as `initGlobalStore`
+        /// sets them in production (it installs their hydrate hooks). The
+        /// harness leaves them unbounded by default (the in-memory, or
+        /// GEODE_*_CACHE_ENTRIES=0, mode), which takes other code paths:
+        /// the IdMap walks, the bounded append and reservation paths. The
+        /// round 14 review's races (F2, F3) were found with bounded caches.
+        bounded_caches: bool = false,
+    };
+
     pub fn init(self: *Fixture) !void {
+        return self.initWith(.{});
+    }
+
+    pub fn initWith(self: *Fixture, opts: Options) !void {
         harness.silenceEngineLogs();
         self.h = try harness.Harness.init(testing.allocator);
         errdefer self.h.deinit();
         self.st = graph_store.getGlobalStore(testing.allocator);
+        if (opts.bounded_caches) {
+            self.st.installNodeCacheHydrate();
+            self.st.installAdjCacheHydrate();
+            self.st.installEdgeCacheHydrate();
+        }
         // The undo log is created by its first user, with that user's
         // allocator; BEGIN would create it with the requests' arena.
         _ = geode.txn_undo_log.getGlobalUndoLog(testing.allocator);
