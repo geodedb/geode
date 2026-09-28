@@ -2587,10 +2587,11 @@ pub fn executeLegacyQueryWithResolvedParams(
 }
 
 /// Whether a predicate's value lets a row through.
+/// SONNY-3184: a WHERE holds only when it is true. A non-zero integer was
+/// taken as true, so `WITH 1 AS k WHERE k MATCH ... SET` wrote.
 fn truthy(value: Value) bool {
     return switch (value) {
         .Bool => |b| b,
-        .Int => |i| i != 0,
         else => false,
     };
 }

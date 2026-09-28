@@ -346,6 +346,7 @@ const match_cases = [_]Case{
     .{ .shape = .match_set, .write = "WITH 5 AS k MATCH (n:G {i: k}) SET n.x = 1", .checks = &gx(&.{"5|1"}) },
     .{ .shape = .match_set, .write = "WITH 1 AS k WHERE k > 5 MATCH (n:G) SET n.x = 1", .checks = &.{g_unwritten} },
     .{ .shape = .match_set, .write = "WITH 5 AS k LIMIT 0 MATCH (n:G) WHERE n.i = k SET n.x = 1", .checks = &.{g_unwritten} },
+    .{ .shape = .match_set, .write = "WITH 1 AS k WHERE k MATCH (n:G) SET n.x = 1", .checks = &.{g_unwritten} },
     .{ .shape = .match_set, .write = "WITH [5, 6, 5] AS l UNWIND l AS u MATCH (n:G) WHERE n.i = u SET n.x = coalesce(n.x, 0) + 1", .checks = &gx(&.{ "5|2", "6|1" }) },
     .{ .shape = .match_set, .write = "WITH $rows AS rows UNWIND rows AS r MATCH (n:G) WHERE n.i = r.id SET n.x = r.v RETURN n.i AS i", .params = &.{.{ .name = "rows", .expr = "[{id: 5, v: 'a'}, {id: 6, v: 'b'}]" }}, .want = &.{ "5", "6" }, .checks = &gx(&.{ "5|a", "6|b" }) },
     // MATCH ... [SET] DELETE (the query form).
