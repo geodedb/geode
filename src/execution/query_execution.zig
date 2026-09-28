@@ -2627,12 +2627,19 @@ fn executeWithInitialWith(
         .allocator = allocator,
         .exec_context = exec_ctx,
     };
+    // SONNY-3148: the values are this part's, and were never freed. What the
+    // evaluation allocated (`freeEvaluatedValue`) is freed when the part has
+    // run; a result that still holds any of it is made to own copies first
+    // (`ownIfHoldsEvaluated`).
+    var evaluated: usize = 0;
+    defer for (wc.items[0..evaluated], values[0..evaluated]) |item, value| value_utilities.freeEvaluatedValue(allocator, item.expr, value);
     for (wc.items, names[0..n], values[0..n]) |item, *name, *value| {
         name.* = item.alias orelse switch (item.expr) {
             .Ident => |id| id.orig,
             else => return error.WriteClauseNotApplied,
         };
         value.* = try eval.evalExpr(allocator, item.expr, outer_env);
+        evaluated += 1;
     }
     @memcpy(names[n..], resolved_param_names);
     @memcpy(values[n..], resolved_param_values);
@@ -2661,14 +2668,30 @@ fn executeWithInitialWith(
     var part_ctx = context;
     part_ctx.query_param_names = names;
     part_ctx.query_param_values = values;
-    switch (via) {
-        .legacy => return executeLegacyQueryWithResolvedParams(allocator, part, part_ctx, names, values),
-        .query => {
+    var result = switch (via) {
+        .legacy => try executeLegacyQueryWithResolvedParams(allocator, part, part_ctx, names, values),
+        .query => blk: {
             // Its LET and CTE are among the parameters already.
             part.let_bindings = &.{};
             part.cte_list = null;
-            return executeQueryWithContext(allocator, part, part_ctx);
+            break :blk try executeQueryWithContext(allocator, part, part_ctx);
         },
+    };
+    errdefer result.deinit(allocator);
+    // `RETURN ids` (or `[ids]`, or an UNWIND element of it) returns the
+    // value: the result keeps it past the free above.
+    try ownIfHoldsEvaluated(allocator, &result, wc.items, values[0..n]);
+    return result;
+}
+
+/// SONNY-3148: make `result` own its values when a row holds memory that
+/// `freeEvaluatedValue` frees for one of `values` (each the value of its
+/// item's expression), so the caller can free them. A result that owns its
+/// values holds copies already.
+fn ownIfHoldsEvaluated(allocator: std.mem.Allocator, result: *ExecutionResult, items: []const ast.ReturnItem, values: []const Value) !void {
+    if (result.owns_value_memory) return;
+    for (items, values) |item, value| {
+        if (value_utilities.rowsHoldEvaluated(result.rows, item.expr, value)) return value_utilities.ownResultValues(allocator, result);
     }
 }
 
@@ -2698,6 +2721,10 @@ fn executeUnwindEach(
         .exec_context = exec_ctx,
     };
     const list_value = try eval.evalExpr(allocator, unwind.list_expr, env);
+    // SONNY-3148: a list the evaluation allocated (`UNWIND [5, 6] AS u`) was
+    // never freed. It is freed when every element has run; a result that
+    // still holds it (`RETURN u` of a list element) owns copies first.
+    defer value_utilities.freeEvaluatedValue(allocator, unwind.list_expr, list_value);
     const elements: []const Value = switch (list_value) {
         .List => |l| l,
         .Null => &.{},
@@ -2711,5 +2738,9 @@ fn executeUnwindEach(
     var body_ctx = context;
     body_ctx.query_param_names = resolved_param_names;
     body_ctx.query_param_values = resolved_param_values;
-    return statement_handlers.executeQueryPerElement(allocator, unwind.variable, elements, &body, body_ctx);
+    var result = try statement_handlers.executeQueryPerElement(allocator, unwind.variable, elements, &body, body_ctx);
+    errdefer result.deinit(allocator);
+    const list_item = [_]ast.ReturnItem{.{ .expr = unwind.list_expr, .alias = null }};
+    try ownIfHoldsEvaluated(allocator, &result, &list_item, &.{list_value});
+    return result;
 }

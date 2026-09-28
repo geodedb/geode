@@ -9346,6 +9346,21 @@ pub fn build(b: *std.Build) void {
     const sonny2977_step = b.step("test-sonny2977-inline-map-set", "Run SONNY-2977 regression (MATCH (x {k: v}) with a one- or two-property map, a literal or a parameter, WHERE, a per-row or aggregate RETURN, or none, and MATCH (x) WHERE x.k = v, SET every node holding the key: in-memory, persisted, tenant-scoped and RLS-policy sessions and over QUIC; a key whose only holder the session may not see is written by none)");
     sonny2977_step.dependOn(&run_sonny2977_tests.step);
 
+    // SONNY-3148: a write statement frees what it allocated on the caller's
+    // allocator: an initial WITH's values, an UNWIND's list, a WITH stage's
+    // computed items, a single-hop path's arrays and a variable-length
+    // relationship's edge list. In-memory, tenant-scoped and RLS-policy
+    // sessions (tests/sonny738_write_harness.zig).
+    const sonny3148_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny3148_write_leaks.zig"), .target = target, .optimize = optimize });
+    sonny3148_test_mod.addImport("geode", root_mod);
+    sonny3148_test_mod.addImport("logging", logging_mod);
+    sonny3148_test_mod.addImport("rls_types", rls_types_mod);
+    const sonny3148_tests = b.addTest(.{ .root_module = sonny3148_test_mod });
+    const run_sonny3148_tests = b.addRunArtifact(sonny3148_tests);
+    shardDep(test_step, &run_sonny3148_tests.step, 1, test_shard_loads, test_shard_index);
+    const sonny3148_step = b.step("test-sonny3148-write-leaks", "Run SONNY-3148 regression (an initial WITH, an UNWIND before a write, a WITH stage's computed items, a single-hop path variable and a variable-length relationship variable free what they allocated on the statement's allocator, and a RETURN of any of them returns a live copy: in-memory, tenant-scoped and RLS-policy sessions)");
+    sonny3148_step.dependOn(&run_sonny3148_tests.step);
+
     // SONNY-2746: a failing-allocator sweep over every allocation of
     // `CALL geode.rls.add_attribute_policy`, in the request and the engine.
     const sonny2746_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny2746_rls_attribute_policy_oom.zig"), .target = target, .optimize = optimize });

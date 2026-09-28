@@ -164,7 +164,10 @@ test "SONNY-2394: accepted var-length rows do not leak the bound path arrays" {
 /// free the day the owning API releases them. `inspect` reads every row (a list
 /// the executor had already freed would read back as poisoned memory) and
 /// returns the bytes the projected lists occupy; anything else still allocated
-/// after the release is a leak.
+/// after the release is a leak. SONNY-3148: an edge list a row holds now moves
+/// to the query scratch arena (which `Env` installs, as the transports do), so
+/// it no longer remains here; the list the RETURN projection itself built
+/// around it (`[r]`) still does.
 fn runOnPrivateAllocator(env: *Env, query: []const u8, inspect: *const fn ([]const []geode.eval.Value) anyerror!usize) !void {
     var dbg: std.heap.DebugAllocator(.{ .enable_memory_limit = true }) = .init;
     defer dbg.deinitWithoutLeakChecks();
@@ -205,7 +208,8 @@ fn inspectNestedLists(rows: []const []geode.eval.Value) !usize {
         const inner = row[0].List[0];
         try testing.expect(inner == .List);
         try expectKnowsEdgeList(inner.List);
-        bytes += (row[0].List.len + inner.List.len) * @sizeOf(geode.eval.Value);
+        // The edge list lives in the scratch arena (SONNY-3148).
+        bytes += row[0].List.len * @sizeOf(geode.eval.Value);
     }
     return bytes;
 }

@@ -8364,29 +8364,88 @@ fn executeVariableLengthPathTraversal(
             for (items, 0..) |item, i| {
                 row[i] = try eval.evalExpr(allocator, item.expr, env);
             }
-            // SONNY-2394: release this path's heap-bound env values (the
-            // rel-var edge list / path node+edge arrays) once the projected
-            // row no longer needs them. Rejected paths already free them
-            // above, but every ACCEPTED path leaked them (on the caller's
-            // allocator -- `gpa` in production -- once per result row).
-            // evalExpr(.Ident) returns env values by shallow copy, so a row
-            // that projects `r`/`p` (even nested, e.g. `RETURN [r]`) aliases
-            // the buffer: then ownership passes to the row, as before.
-            for (stack_env_values[0..env_idx]) |bound| {
-                if (rowReferencesEnvBuffer(row, bound)) continue;
-                switch (bound) {
-                    .List => |list| allocator.free(list),
-                    .Path => |p| {
-                        allocator.free(p.nodes);
-                        allocator.free(p.edges);
-                    },
-                    else => {},
-                }
-            }
         }
+        // SONNY-2394, SONNY-3148: release this path's heap-bound env values
+        // (the rel-var edge list / path node+edge arrays) once the row is
+        // built. Rejected paths already free them above, but every ACCEPTED
+        // path leaked them (on the caller's allocator -- `gpa` in production
+        // -- once per result row). SONNY-3148: a WITH's row (the has_with
+        // branch, a write step's bindings) and a DELETE's targets hold them
+        // too; see `releaseEnvBuffers`.
+        releaseEnvBuffers(allocator, row, stack_env_values[0..env_idx]);
 
         try rows.append(allocator, row);
     }
+}
+
+// CANARY: REQ=REQ-SONNY-3148-WRITE-LEAKS; FEATURE="WriteStatementOwnership"; ASPECT=TraversalBuffers; STATUS=TESTED; TEST=tests/test_sonny3148_write_leaks.zig; OWNER=engine; UPDATED=2026-09-27
+/// SONNY-2394, SONNY-3148: release the heap buffers a traversal bound for
+/// one path (a variable-length relationship's edge list, a path's node and
+/// edge arrays) once the path's `row` is built.
+///
+/// A buffer the row does not hold is freed. `evalExpr(.Ident)` returns env
+/// values by shallow copy, so a row that projects `r` or `p` (even nested,
+/// `RETURN [r]`) holds the buffer itself; so does every WITH row (the
+/// has_with branch copies the env) and every row a write step or a DELETE
+/// reads its bindings or targets from. Those rows borrow their values, so
+/// they never freed it: an edge list moves to the query's scratch arena,
+/// which the transports install per request and release after the result is
+/// sent (GAP-0755), and the row is repointed at the copy. A list is copied in
+/// full by every holder that outlives the request (`duplicateValue`). A path
+/// is not (`duplicateValue` and `duplicateResult` copy its arrays by
+/// reference, and the gRPC server keeps a duplicated result past the
+/// request), so a path the row holds stays with the row, unfreed, as before;
+/// so does a list when no scratch arena is installed.
+fn releaseEnvBuffers(allocator: std.mem.Allocator, row: []Value, bound_values: []const Value) void {
+    for (bound_values) |bound| {
+        switch (bound) {
+            .List => |list| {
+                if (!rowReferencesEnvBuffer(row, bound)) {
+                    allocator.free(list);
+                    continue;
+                }
+                const scratch = query_arena.currentScratchAllocator() orelse continue;
+                const moved = scratch.dupe(Value, list) catch continue;
+                for (row) |*value| repointEnvList(value, list, moved);
+                allocator.free(list);
+            },
+            .Path => |p| if (!rowReferencesEnvBuffer(row, bound)) {
+                allocator.free(p.nodes);
+                allocator.free(p.edges);
+            },
+            else => {},
+        }
+    }
+}
+
+/// SONNY-3148: point every list in `value` (walked through its lists and
+/// maps) that lies in `old` at the same elements of `new`, a copy of `old`.
+fn repointEnvList(value: *Value, old: []const Value, new: []Value) void {
+    switch (value.*) {
+        .List => |items| {
+            if (items.len != 0 and bytesWithin(std.mem.sliceAsBytes(items), std.mem.sliceAsBytes(old))) {
+                const offset = (@intFromPtr(items.ptr) - @intFromPtr(old.ptr)) / @sizeOf(Value);
+                value.* = .{ .List = new[offset..][0..items.len] };
+                return;
+            }
+            for (items) |*item| repointEnvList(item, old, new);
+        },
+        .Map => |m| {
+            var it = m.valueIterator();
+            while (it.next()) |item| repointEnvList(item, old, new);
+        },
+        else => {},
+    }
+}
+
+fn bytesWithin(inner: []const u8, outer: []const u8) bool {
+    return @intFromPtr(inner.ptr) >= @intFromPtr(outer.ptr) and
+        @intFromPtr(inner.ptr) + inner.len <= @intFromPtr(outer.ptr) + outer.len;
+}
+
+fn bytesOverlap(a: []const u8, b: []const u8) bool {
+    if (a.len == 0 or b.len == 0) return false;
+    return @intFromPtr(a.ptr) < @intFromPtr(b.ptr) + b.len and @intFromPtr(b.ptr) < @intFromPtr(a.ptr) + a.len;
 }
 
 fn namesVariable(target: []const u8, variable: ?[]const u8) bool {
@@ -8496,16 +8555,18 @@ fn rowReferencesEnvBuffer(row: []const Value, bound: Value) bool {
 }
 
 fn valueReferencesEnvBuffer(v: Value, bound: Value) bool {
+    // SONNY-3148: any overlap, not only the same start, so that a slice of
+    // the buffer is never freed under a row that holds it.
     switch (bound) {
         .List => |bl| {
             if (bl.len == 0) return false;
-            if (v == .List and v.List.ptr == bl.ptr) return true;
+            if (v == .List and bytesOverlap(std.mem.sliceAsBytes(v.List), std.mem.sliceAsBytes(bl))) return true;
         },
         .Path => |bp| {
             if (bp.nodes.len == 0 and bp.edges.len == 0) return false;
             if (v == .Path and
-                ((bp.nodes.len != 0 and v.Path.nodes.ptr == bp.nodes.ptr) or
-                    (bp.edges.len != 0 and v.Path.edges.ptr == bp.edges.ptr))) return true;
+                (bytesOverlap(std.mem.sliceAsBytes(v.Path.nodes), std.mem.sliceAsBytes(bp.nodes)) or
+                    bytesOverlap(std.mem.sliceAsBytes(v.Path.edges), std.mem.sliceAsBytes(bp.edges)))) return true;
         },
         else => return false,
     }
@@ -8649,7 +8710,8 @@ fn executeSingleHopEdgeTraversal(
             var stack_env_values: [4]Value = undefined;
             // GAP-0334-PATH-002: heap-allocated path arrays for fixed-length single-hop
             // path-variable binding. Kept alive for the row; freed below if WHERE/FILTER
-            // skips the row, otherwise transferred via row[i] = val copy below.
+            // skips the row, otherwise released once the row is built
+            // (`releaseEnvBuffers`, SONNY-3148).
             var path_alive: bool = false;
             var path_nodes_buf: []*const graph_store.Node = &.{};
             var path_edges_buf: []*const graph_store.Edge = &.{};
@@ -8829,6 +8891,12 @@ fn executeSingleHopEdgeTraversal(
                     row[i] = try eval.evalExpr(allocator, item.expr, env);
                 }
             }
+            // SONNY-3148: the path's arrays were freed only when the WHERE
+            // or FILTER rejected it; every accepted path leaked them (`RETURN
+            // length(p)`, a SET). Released as the variable-length
+            // traversal's are (`releaseEnvBuffers`): a row that holds the
+            // path (`RETURN p`, a WITH row) keeps them.
+            if (path_alive) releaseEnvBuffers(allocator, row, &.{Value{ .Path = .{ .nodes = path_nodes_buf, .edges = path_edges_buf } }});
 
             try rows.append(allocator, row);
         }
@@ -9110,7 +9178,7 @@ fn readWithStageRows(
     // The rows point at the nodes and edges the pattern's rows hold.
     rows.owned_graph_entities = pattern.rows.owned_graph_entities;
     pattern.rows.owned_graph_entities = null;
-    if (pattern.rows.owns_value_memory) try value_utilities.adoptProjectionRowValues(allocator, &rows, with_clause.items);
+    try ownWithStageValues(allocator, &rows, with_clause.items, pattern.rows.owns_value_memory);
 
     if (with_clause.distinct) {
         try applyDistinct(allocator, &rows);
@@ -9158,6 +9226,48 @@ fn readWithStageRows(
 
     const items = try allocator.dupe(ast.ReturnItem, with_clause.items);
     return .{ .rows = rows, .items = items };
+}
+
+// CANARY: REQ=REQ-SONNY-3148-WRITE-LEAKS; FEATURE="WriteStatementOwnership"; ASPECT=WithStageItems; STATUS=TESTED; TEST=tests/test_sonny3148_write_leaks.zig; OWNER=engine; UPDATED=2026-09-27
+/// SONNY-3148: what a WITH stage's items computed for its rows (`n.g ||
+/// '-x' AS s`, `[n.g, 'y'] AS l`) was never freed: the rows borrow what the
+/// pattern's rows borrow, and so did not free it either.
+///
+/// When the pattern's rows own their values, the stage's rows do too (as
+/// before: `adoptProjectionRowValues`), and what each item computed is freed
+/// once copied (`freeEvaluatedValue`; the copy was a leak's twin). When they
+/// borrow, the rows stay borrowed, since every write step aliases their
+/// values into its own RETURN (a MERGE's or a CREATE's is evaluated with the
+/// row as its parameters), so no free could be timed. What an item computed
+/// then moves to the query's scratch arena, which the transports install per
+/// request and release after the result is sent (GAP-0755); its first copy is
+/// freed. A string, list or map is all that moves (`evaluatesFresh`), which
+/// every holder that outlives the request copies in full (`duplicateValue`).
+/// Without a scratch arena it stays where it is.
+fn ownWithStageValues(allocator: std.mem.Allocator, rows: *ExecutionResult, items: []const ast.ReturnItem, pattern_owned: bool) !void {
+    if (pattern_owned) {
+        for (rows.rows) |row| {
+            for (row, 0..) |*cell, i| {
+                const item = if (i < items.len) items[i] else null;
+                if (item) |it| if (it.expr == .Call and value_utilities.callAlwaysAllocates(it.expr.Call.callee.*)) continue;
+                const computed = cell.*;
+                cell.* = try value_utilities.duplicateValue(allocator, computed);
+                if (item) |it| if (!return_and_sorting.isAggregationExpr(it.expr)) value_utilities.freeEvaluatedValue(allocator, it.expr, computed);
+            }
+        }
+        rows.owns_value_memory = true;
+        return;
+    }
+    const scratch = query_arena.currentScratchAllocator() orelse return;
+    for (rows.rows) |row| {
+        for (row[0..@min(row.len, items.len)], items[0..@min(row.len, items.len)]) |*cell, item| {
+            // An aggregate's value is the group's, not `evalExpr`'s.
+            if (return_and_sorting.isAggregationExpr(item.expr) or !value_utilities.evaluatesFresh(item.expr)) continue;
+            const computed = cell.*;
+            cell.* = try value_utilities.duplicateValue(scratch, computed);
+            value_utilities.freeEvaluatedValue(allocator, item.expr, computed);
+        }
+    }
 }
 
 // CANARY: REQ=REQ-SONNY-3039-WRITE-STEP; FEATURE="WriteStep"; ASPECT=SetRemoveShapes; STATUS=TESTED; TEST=tests/test_sonny3039_with_where_writes.zig; OWNER=engine; UPDATED=2026-09-27

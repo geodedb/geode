@@ -216,6 +216,148 @@ pub fn adoptProjectionRowValues(
     result.owns_value_memory = true;
 }
 
+// CANARY: REQ=REQ-SONNY-3148-WRITE-LEAKS; FEATURE="WriteStatementOwnership"; ASPECT=EvaluatedValueOwnership; STATUS=TESTED; TEST=tests/test_sonny3148_write_leaks.zig; OWNER=engine; UPDATED=2026-09-27
+/// SONNY-3148: whether `eval.evalExpr` allocates the value of `expr` for it:
+/// a list literal's list, a map literal's map, a string concatenation, and a
+/// call that always allocates (`callAlwaysAllocates`). Every other
+/// expression may borrow its value (an identifier or a parameter the
+/// caller's, a string literal the AST's, a property the store's).
+pub fn evaluatesFresh(expr: ast_mod.Expr) bool {
+    return switch (expr) {
+        .ArrayLit, .Map => true,
+        .Binary => |b| b.op == .Concat,
+        .Call => |call| callAlwaysAllocates(call.callee.*),
+        else => false,
+    };
+}
+
+/// SONNY-3148: free what `eval.evalExpr` allocated when it evaluated `expr`
+/// to `value`, and nothing it borrowed. A list literal frees its list and,
+/// per element, what that element's expression allocated; a map literal its
+/// map (its keys are the AST's) and what each value's expression allocated;
+/// a string concatenation or an always-allocating call its string. Any other
+/// expression is left: its value may be borrowed (see `evaluatesFresh`), so
+/// an allocation it made stays a leak rather than becoming an invalid free.
+/// `value` must be the value `evalExpr` returned for `expr`, not a copy, and
+/// nothing may hold it after this returns.
+pub fn freeEvaluatedValue(allocator: std.mem.Allocator, expr: ast_mod.Expr, value: Value) void {
+    switch (expr) {
+        .ArrayLit => |elems| {
+            if (value != .List or value.List.len != elems.len) return;
+            for (elems, value.List) |elem, item| freeEvaluatedValue(allocator, elem.*, item);
+            allocator.free(value.List);
+        },
+        .Map => |props| {
+            if (value != .Map) return;
+            var map = value.Map;
+            for (props, 0..) |prop, i| {
+                // A later property with the same key replaced this one's value.
+                if (propertyKeyRepeats(props[i + 1 ..], prop.key)) continue;
+                if (map.get(prop.key)) |item| freeEvaluatedValue(allocator, prop.value.*, item);
+            }
+            map.deinit();
+        },
+        .Binary => |b| if (b.op == .Concat and value == .Str) allocator.free(value.Str),
+        .Call => |call| if (callAlwaysAllocates(call.callee.*) and value == .Str) allocator.free(value.Str),
+        else => {},
+    }
+}
+
+fn propertyKeyRepeats(props: []const ast_mod.Property, key: []const u8) bool {
+    for (props) |prop| if (std.mem.eql(u8, prop.key, key)) return true;
+    return false;
+}
+
+/// SONNY-3148: whether any value of `rows` (walked through its lists and
+/// maps) holds memory `freeEvaluatedValue(expr, value)` would free.
+pub fn rowsHoldEvaluated(rows: []const []Value, expr: ast_mod.Expr, value: Value) bool {
+    switch (expr) {
+        .ArrayLit => |elems| {
+            if (value != .List or value.List.len != elems.len) return false;
+            if (rowsHoldBytes(rows, std.mem.sliceAsBytes(value.List))) return true;
+            for (elems, value.List) |elem, item| if (rowsHoldEvaluated(rows, elem.*, item)) return true;
+            return false;
+        },
+        .Map => |props| {
+            if (value != .Map) return false;
+            if (rowsHoldMap(rows, value.Map)) return true;
+            for (props, 0..) |prop, i| {
+                if (propertyKeyRepeats(props[i + 1 ..], prop.key)) continue;
+                if (value.Map.get(prop.key)) |item| if (rowsHoldEvaluated(rows, prop.value.*, item)) return true;
+            }
+            return false;
+        },
+        .Binary, .Call => return evaluatesFresh(expr) and value == .Str and rowsHoldBytes(rows, value.Str),
+        else => return false,
+    }
+}
+
+fn rowsHoldBytes(rows: []const []Value, bytes: []const u8) bool {
+    if (bytes.len == 0) return false;
+    for (rows) |row| for (row) |v| if (valueHoldsBytes(v, bytes)) return true;
+    return false;
+}
+
+fn overlaps(a: []const u8, b: []const u8) bool {
+    if (a.len == 0 or b.len == 0) return false;
+    const a_lo = @intFromPtr(a.ptr);
+    const b_lo = @intFromPtr(b.ptr);
+    return a_lo < b_lo + b.len and b_lo < a_lo + a.len;
+}
+
+fn valueHoldsBytes(v: Value, bytes: []const u8) bool {
+    switch (v) {
+        .Str => |s| return overlaps(s, bytes),
+        .List => |items| {
+            if (overlaps(std.mem.sliceAsBytes(items), bytes)) return true;
+            for (items) |item| if (valueHoldsBytes(item, bytes)) return true;
+        },
+        .Map => |m| {
+            var it = m.valueIterator();
+            while (it.next()) |item| if (valueHoldsBytes(item.*, bytes)) return true;
+        },
+        else => {},
+    }
+    return false;
+}
+
+fn rowsHoldMap(rows: []const []Value, map: std.StringHashMap(Value)) bool {
+    const metadata = map.unmanaged.metadata orelse return false;
+    for (rows) |row| for (row) |v| if (valueHoldsMap(v, metadata)) return true;
+    return false;
+}
+
+fn valueHoldsMap(v: Value, metadata: anytype) bool {
+    switch (v) {
+        .List => |items| for (items) |item| if (valueHoldsMap(item, metadata)) return true,
+        .Map => |m| {
+            if (m.unmanaged.metadata) |md| if (md == metadata) return true;
+            var it = m.valueIterator();
+            while (it.next()) |item| if (valueHoldsMap(item.*, metadata)) return true;
+        },
+        else => {},
+    }
+    return false;
+}
+
+/// SONNY-3148: make `result` own its row values (deep copies, and copies of
+/// its flag strings, which `deinit` then frees too), so that memory its rows
+/// borrowed can be freed. An owned result is left as it is: it holds copies.
+/// On an OOM part-way, the copies made so far leak and the rows still borrow
+/// (the flag is set last): the caller must then not free what they borrow.
+pub fn ownResultValues(allocator: std.mem.Allocator, result: *ExecutionResult) !void {
+    if (result.owns_value_memory) return;
+    // A custom free applies to owned values only; a borrowed result with one
+    // is not a shape any producer builds. Copying under it would pair
+    // `duplicateValue` with a free that is not its inverse.
+    if (result.free_value != null) return error.Unsupported;
+    for (result.rows) |row| {
+        for (row) |*val| val.* = try duplicateValue(allocator, val.*);
+    }
+    for (result.flags.items) |*flag| flag.* = try allocator.dupe(u8, flag.*);
+    result.owns_value_memory = true;
+}
+
 /// Re-point the allocator captured INSIDE a result value at `allocator`.
 ///
 /// A `Value.Map` is a managed `std.StringHashMap` that stores the allocator it
