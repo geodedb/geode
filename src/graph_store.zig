@@ -2554,7 +2554,12 @@ pub const GraphStore = struct {
         return self.getIdMap(graph_name) orelse error.IdMapNotLoaded;
     }
 
-    fn cloneIdMapsFrom(self: *GraphStore, source: *const GraphStore) !void {
+    /// Copy the source's IdMaps into this (snapshot) store: every graph's, or
+    /// only `scope`'s. SONNY-3180 (round 15, F2): each map is cloned under
+    /// its own mutex (`IdMap.clone`), which DROP GRAPH's `releaseContents`
+    /// also takes, so a clone never reads contents a writer is growing or a
+    /// drop is freeing.
+    fn cloneIdMapsFrom(self: *GraphStore, source: *const GraphStore, scope: ?[]const u8) !void {
         // SONNY-3180: the source's list, copied under its lock.
         const refs = try @constCast(source).idMapsSnapshot(self.allocator);
         defer self.allocator.free(refs);
@@ -2563,6 +2568,9 @@ pub const GraphStore = struct {
         defer self.id_maps_lock.unlock(io);
         for (refs) |ref| {
             const graph_name = ref.graph_name;
+            if (scope) |g| {
+                if (!std.mem.eql(u8, g, graph_name)) continue;
+            }
             if (self.id_maps.contains(graph_name)) continue;
 
             const key_copy = try self.allocator.dupe(u8, graph_name);
@@ -2625,14 +2633,32 @@ pub const GraphStore = struct {
         }
     }
 
-    /// Clone all nodes and edges from another store. Used by QueryReadSession
-    /// to create a point-in-time snapshot without going through the adapter.
-    fn cloneNodesFrom(self: *GraphStore, source: *const GraphStore) !void {
-        // Clone graphs registry
-        var graph_it = source.graphs.iterator();
-        while (graph_it.next()) |entry| {
-            const key = try self.allocator.dupe(u8, entry.key_ptr.*);
-            try self.graphs.put(key, {});
+    // CANARY: REQ=REQ-SONNY-3180-IDMAP-CONTENTS; FEATURE="QueryReadSession"; ASPECT=ScopedLockedClone; STATUS=TESTED; TEST=tests/test_sonny3180_idmap_contents_race.zig; OWNER=storage; UPDATED=2026-09-28
+    /// Clone the nodes and edges of every graph, or only of `scope`, from
+    /// another store. Used by QueryReadSession to create a point-in-time
+    /// snapshot without going through the adapter.
+    ///
+    /// SONNY-3180 (round 15, F2): a snapshot read holds only its own graph's
+    /// read lock, and this walked every graph's resident nodes and edges, and
+    /// every graph's IdMap, with no lock: two snapshot readers and a writer of
+    /// another graph faulted within a second (the review's F2). Now:
+    ///   - the graph registry is copied under `graphs_mutex`;
+    ///   - a resident map (the node and edge caches hold every graph's) is
+    ///     walked a shard at a time under that shard's map lock, shared
+    ///     (`forEachResident`), which excludes a writer of any graph growing
+    ///     or moving the shard, and an in-place change of an entry;
+    ///   - an IdMap's uuids are copied under the map's mutex
+    ///     (`snapshotNodeUuids`), and each resident node read under its
+    ///     shard's lock;
+    ///   - a snapshot read (`snapshotUnderReadLock`) clones only its own
+    ///     graph (`scope`), the one its read lock covers.
+    fn cloneNodesFrom(self: *GraphStore, source: *const GraphStore, scope: ?[]const u8) !void {
+        // Clone graphs registry, the names copied under its lock (SONNY-3233
+        // F12).
+        {
+            const names = try source.graphNamesCopy(self.allocator);
+            defer self.allocator.free(names);
+            for (names) |key| try self.graphs.put(key, {});
         }
 
         // Clone nodes.
@@ -2648,10 +2674,18 @@ pub const GraphStore = struct {
 
         if (source.nodes.effectiveCap() == 0) {
             // Unbounded source: the resident map is the full set.
-            var node_it = source.nodes.iterator();
-            while (node_it.next()) |entry| {
-                try self.cloneOneNode(entry.value_ptr);
-            }
+            const NodeCopy = struct {
+                dst: *GraphStore,
+                scope: ?[]const u8,
+                fn visit(c: *@This(), _: u64, node: *const Node) !void {
+                    if (c.scope) |g| {
+                        if (!std.mem.eql(u8, g, node.graph_name)) return;
+                    }
+                    try c.dst.cloneOneNode(node);
+                }
+            };
+            var copier: NodeCopy = .{ .dst = self, .scope = scope };
+            try source.nodes.forEachResident(&copier, NodeCopy.visit);
         } else {
             // Bounded source: the resident map is INCOMPLETE. Enumerate every
             // public id from the source's per-graph IdMaps (fully resident) and
@@ -2666,15 +2700,32 @@ pub const GraphStore = struct {
             defer self.allocator.free(refs);
             for (refs) |im_entry| {
                 const graph_name = im_entry.graph_name;
-                var nit = im_entry.map.nodeUuidIterator();
-                while (nit.next()) |nuuid| {
+                if (scope) |g| {
+                    if (!std.mem.eql(u8, g, graph_name)) continue;
+                }
+                const nuuids = try im_entry.map.snapshotNodeUuids(self.allocator);
+                defer self.allocator.free(nuuids);
+                for (nuuids) |nuuid| {
                     const id = @as(u64, @truncate(nuuid));
-                    if (@constCast(source).nodes.get(id)) |resident| {
-                        var n = resident;
-                        try self.cloneOneNode(&n);
-                    } else if (adapter) |ad| {
+                    const src_nodes = &@constCast(source).nodes;
+                    src_nodes.lockShardShared(id);
+                    const copied = blk: {
+                        defer src_nodes.unlockShardShared(id);
+                        const resident = src_nodes.getPtrUnlocked(id) orelse break :blk false;
+                        try self.cloneOneNode(resident);
+                        break :blk true;
+                    };
+                    if (copied) continue;
+                    if (adapter) |ad| {
                         const slot = im_entry.map.nodeSlot(@as(u128, id)) orelse continue;
-                        var materialized = (try materializeNodeFromEngine(ad, self.allocator, graph_name, slot, id)) orelse continue;
+                        var materialized = (materializeNodeFromEngine(ad, self.allocator, graph_name, slot, id) catch |err| switch (err) {
+                            // SONNY-3180 (round 15): the graph was dropped
+                            // after its IdMap was listed; the snapshot is as
+                            // of after the drop (a read of another graph
+                            // failed with 3F000 here).
+                            error.GraphNotFound => break,
+                            else => return err,
+                        }) orelse continue;
                         defer freeNodeValue(self.allocator, &materialized);
                         try self.cloneOneNode(&materialized);
                     }
@@ -2685,36 +2736,44 @@ pub const GraphStore = struct {
         self.next_node_id = source.next_node_id;
         self.next_edge_id = source.next_edge_id;
 
-        // Clone edges
-        var edge_it = source.edges.iterator();
-        while (edge_it.next()) |entry| {
-            const src_edge = entry.value_ptr.*;
-            var props = CompactPropertyMap.init(self.allocator);
-            var prop_it = src_edge.properties.iterator();
-            while (prop_it.next()) |prop| {
-                const key = try self.allocator.dupe(u8, prop.key_ptr.*);
-                // Deep-copy edge property values (same rationale as node properties)
-                try props.put(key, try copyPropertyValue(self, prop.value_ptr.*));
+        // Clone edges, a shard at a time under its map lock.
+        const EdgeCopy = struct {
+            dst: *GraphStore,
+            scope: ?[]const u8,
+            fn visit(c: *@This(), key: u64, src_edge: *const Edge) !void {
+                if (c.scope) |g| {
+                    if (!std.mem.eql(u8, g, src_edge.graph_name)) return;
+                }
+                const dst = c.dst;
+                var props = CompactPropertyMap.init(dst.allocator);
+                var prop_it = src_edge.properties.iterator();
+                while (prop_it.next()) |prop| {
+                    const pkey = try dst.allocator.dupe(u8, prop.key_ptr.*);
+                    // Deep-copy edge property values (same rationale as node properties)
+                    try props.put(pkey, try copyPropertyValue(dst, prop.value_ptr.*));
+                }
+
+                try dst.edges.put(key, .{
+                    .id = src_edge.id,
+                    .from_id = src_edge.from_id,
+                    .to_id = src_edge.to_id,
+                    .label = try dst.allocator.dupe(u8, src_edge.label),
+                    .properties = props,
+                    .graph_name = try dst.allocator.dupe(u8, src_edge.graph_name),
+                    .tenant_id = try dst.allocator.dupe(u8, src_edge.tenant_id),
+                });
+
+                try dst.addToAdjacencyIndex(src_edge.from_id, src_edge.to_id, src_edge.id);
+                // PERF-P0-001: Maintain edge-type index during clone
+                try dst.addToEdgeTypeIndex(src_edge.graph_name, src_edge.label, src_edge.id);
+                // PERF-C (issue #814): tenant-keyed edge-type counter.
+                try dst.bumpEdgeTypeCount(src_edge.graph_name, src_edge.tenant_id, src_edge.label);
+                // Per-(graph,type) exact counter (typed count(r:TYPE) fast path).
+                dst.bumpGraphEdgeTypeCount(src_edge.graph_name, src_edge.label);
             }
-
-            try self.edges.put(entry.key_ptr.*, .{
-                .id = src_edge.id,
-                .from_id = src_edge.from_id,
-                .to_id = src_edge.to_id,
-                .label = try self.allocator.dupe(u8, src_edge.label),
-                .properties = props,
-                .graph_name = try self.allocator.dupe(u8, src_edge.graph_name),
-                .tenant_id = try self.allocator.dupe(u8, src_edge.tenant_id),
-            });
-
-            try self.addToAdjacencyIndex(src_edge.from_id, src_edge.to_id, src_edge.id);
-            // PERF-P0-001: Maintain edge-type index during clone
-            try self.addToEdgeTypeIndex(src_edge.graph_name, src_edge.label, src_edge.id);
-            // PERF-C (issue #814): tenant-keyed edge-type counter.
-            try self.bumpEdgeTypeCount(src_edge.graph_name, src_edge.tenant_id, src_edge.label);
-            // Per-(graph,type) exact counter (typed count(r:TYPE) fast path).
-            self.bumpGraphEdgeTypeCount(src_edge.graph_name, src_edge.label);
-        }
+        };
+        var edge_copier: EdgeCopy = .{ .dst = self, .scope = scope };
+        try source.edges.forEachResident(&edge_copier, EdgeCopy.visit);
     }
 
     fn requireNodeSlot(self: *GraphStore, graph_name: []const u8, node_id: u64) !u64 {
@@ -7048,12 +7107,17 @@ pub const GraphStore = struct {
         if (self.edges.effectiveCap() == 0) {
             var result: std.ArrayList(u64) = .empty;
             errdefer result.deinit(allocator);
-            var iter = self.edges.iterator();
-            while (iter.next()) |entry| {
+            // SONNY-3180 (round 15, F2): the keys copied under each shard's
+            // map lock, then each edge read under it (`get`): the map is
+            // every graph's, and a writer of another graph grows it.
+            const keys = try @constCast(self).edges.snapshotKeys(allocator);
+            defer allocator.free(keys);
+            for (keys) |eid| {
                 if (tenant) |tid| {
-                    if (!std.mem.eql(u8, entry.value_ptr.tenant_id, tid)) continue;
+                    const edge = @constCast(self).edges.get(eid) orelse continue;
+                    if (!std.mem.eql(u8, edge.tenant_id, tid)) continue;
                 }
-                try result.append(allocator, entry.key_ptr.*);
+                try result.append(allocator, eid);
             }
             return result.toOwnedSlice(allocator);
         }
@@ -7071,8 +7135,11 @@ pub const GraphStore = struct {
         const refs = try @constCast(self).idMapsSnapshot(allocator);
         defer allocator.free(refs);
         for (refs) |entry| {
-            var eit = entry.map.edgeUuidIterator();
-            while (eit.next()) |euuid| {
+            // SONNY-3180 (round 15, F2): the uuids copied under the IdMap's
+            // mutex; the walk hydrates, which locks the map again.
+            const euuids = try entry.map.snapshotEdgeUuids(allocator);
+            defer allocator.free(euuids);
+            for (euuids) |euuid| {
                 const eid = @as(u64, @truncate(euuid));
                 if (tenant) |tid| {
                     const edge = self.getEdgeHydrated(eid) orelse continue;
@@ -7277,8 +7344,11 @@ pub const GraphStore = struct {
             // With a storage adapter the graph's IdMap lists every edge of the
             // graph, cached or not, and only the graph's writers change it.
             const id_map = self.getIdMap(graph_name) orelse return ids.toOwnedSlice(allocator);
-            var it = id_map.edgeUuidIterator();
-            while (it.next()) |edge_uuid| try ids.append(allocator, @as(u64, @truncate(edge_uuid)));
+            // SONNY-3180 (round 15, F2): copied under the IdMap's mutex (a
+            // bulk writer of the graph holds its lock shared).
+            const euuids = try id_map.snapshotEdgeUuids(allocator);
+            defer allocator.free(euuids);
+            for (euuids) |edge_uuid| try ids.append(allocator, @as(u64, @truncate(edge_uuid)));
             return ids.toOwnedSlice(allocator);
         }
         // No adapter: the cache holds every edge, and the caller's lock is the
@@ -7563,8 +7633,13 @@ pub const GraphStore = struct {
             // (O(N) `nodeMatchesTenant` property reads).
             _ = g_count_nodes_iter_fallback.fetchAdd(1, .monotonic);
             var count: usize = 0;
-            var nit = id_map.nodeUuidIterator();
-            while (nit.next()) |nuuid| {
+            // SONNY-3180 (round 15, F2): the uuids copied under the IdMap's
+            // mutex (`nodeMatchesTenant` locks the map again), not walked
+            // unlocked while a bulk writer of the graph (which holds its lock
+            // shared) grows the map.
+            const nuuids = @constCast(id_map).snapshotNodeUuids(std.heap.smp_allocator) catch return 0;
+            defer std.heap.smp_allocator.free(nuuids);
+            for (nuuids) |nuuid| {
                 const id = @as(u64, @truncate(nuuid));
                 if (@constCast(self).nodeMatchesTenant(graph_name, id_map, id, tid)) count += 1;
             }
@@ -7573,17 +7648,23 @@ pub const GraphStore = struct {
         // GAP-ENT-0013 path counter: unbounded-cache resident node iteration
         // (tenant-filtered count, or the no-IdMap in-memory fallback above).
         _ = g_count_nodes_iter_fallback.fetchAdd(1, .monotonic);
-        var count: usize = 0;
-        var iter = self.nodes.iterator();
-        while (iter.next()) |entry| {
-            const node = entry.value_ptr;
-            if (!std.mem.eql(u8, node.graph_name, graph_name)) continue;
-            if (tenant) |tid| {
-                if (!std.mem.eql(u8, node.tenant_id, tid)) continue;
+        // SONNY-3180 (round 15, F2): each shard under its map lock; the map
+        // is every graph's, and a writer of another graph grows it.
+        const Count = struct {
+            graph_name: []const u8,
+            tenant: ?[]const u8,
+            n: usize = 0,
+            fn visit(c: *@This(), _: u64, node: *const Node) error{}!void {
+                if (!std.mem.eql(u8, node.graph_name, c.graph_name)) return;
+                if (c.tenant) |tid| {
+                    if (!std.mem.eql(u8, node.tenant_id, tid)) return;
+                }
+                c.n += 1;
             }
-            count += 1;
-        }
-        return count;
+        };
+        var counter: Count = .{ .graph_name = graph_name, .tenant = tenant };
+        self.nodes.forEachResident(&counter, Count.visit) catch {};
+        return counter.n;
     }
 
     // CANARY: REQ=REQ-PERF-QPS-0811; FEATURE="CountFastPath"; ASPECT=LabelIndexCardinality; STATUS=TESTED; TEST=tests/test_gap0811_aggregation_fastpath.zig; OWNER=performance; UPDATED=2026-04-20
@@ -7743,15 +7824,23 @@ pub const GraphStore = struct {
         var result: std.ArrayList(u64) = .empty;
         errdefer result.deinit(allocator);
         if (self.edges.effectiveCap() == 0) {
-            var it = @constCast(self).edges.iterator();
-            while (it.next()) |entry| try result.append(allocator, entry.key_ptr.*);
+            // SONNY-3180 (round 15, F2): the keys copied under each shard's
+            // map lock; the map is every graph's, and a writer of another
+            // graph grows it.
+            const keys = try @constCast(self).edges.snapshotKeys(allocator);
+            defer allocator.free(keys);
+            try result.appendSlice(allocator, keys);
         } else {
             // SONNY-3180: the IdMaps, copied under `id_maps_lock`.
             const refs = try @constCast(self).idMapsSnapshot(allocator);
             defer allocator.free(refs);
             for (refs) |entry| {
-                var eit = entry.map.edgeUuidIterator();
-                while (eit.next()) |euuid| try result.append(allocator, @as(u64, @truncate(euuid)));
+                // SONNY-3180 (round 15, F2): and each map's uuids under its
+                // own mutex. The unlocked iterator faulted when a writer of
+                // that graph grew the map, or DROP GRAPH freed it.
+                const euuids = try entry.map.snapshotEdgeUuids(allocator);
+                defer allocator.free(euuids);
+                for (euuids) |euuid| try result.append(allocator, @as(u64, @truncate(euuid)));
             }
         }
         return result.toOwnedSlice(allocator);
@@ -12843,12 +12932,21 @@ pub const GraphStore = struct {
                 id_map.mode == .mmap_backed and legacy_map == null and
                 self.nodes.effectiveCap() != 0 and skip_edge_scan)
             {
-                var rebuilt: u64 = 0;
-                var nit = id_map.nodeUuidIterator();
-                while (nit.next()) |nuuid| {
-                    try self.addNodeToGraphIndex(graph_name, @as(u64, @truncate(nuuid)));
-                    rebuilt += 1;
-                }
+                // SONNY-3180 (round 15, F2): under the IdMap's mutex (a DROP
+                // GRAPH frees the map's contents under it); the index insert
+                // does not touch the map.
+                const Rebuild = struct {
+                    store: *GraphStore,
+                    graph_name: []const u8,
+                    n: u64 = 0,
+                    fn visit(r: *@This(), nuuid: u128) !void {
+                        try r.store.addNodeToGraphIndex(r.graph_name, @as(u64, @truncate(nuuid)));
+                        r.n += 1;
+                    }
+                };
+                var rebuild: Rebuild = .{ .store = self, .graph_name = graph_name };
+                try id_map.forEachNodeUuid(&rebuild, Rebuild.visit);
+                const rebuilt = rebuild.n;
                 if (rebuilt == snap.node_count) {
                     _ = g_hydration_full_scan_skips.fetchAdd(1, .monotonic);
                     log.info("graph hydration served from loop2 snapshots (engine scan skipped)", &.{
@@ -13403,12 +13501,18 @@ pub const GraphStore = struct {
 
         // Serialize nodes as JSON-lines.
         if (self.nodes.effectiveCap() == 0) {
-            // Unbounded: resident map is the full set.
-            var node_iter = self.nodes.iterator();
-            while (node_iter.next()) |entry| {
-                try appendNodeJson(&buf, allocator, entry.key_ptr.*, entry.value_ptr);
-                try buf.append(allocator, '\n');
-            }
+            // Unbounded: resident map is the full set. SONNY-3180 (round 15,
+            // F2): each shard under its map lock (writers of any graph).
+            const NodeLines = struct {
+                buf: *std.ArrayList(u8),
+                allocator: std.mem.Allocator,
+                fn visit(c: *@This(), id: u64, node: *const Node) !void {
+                    try appendNodeJson(c.buf, c.allocator, id, node);
+                    try c.buf.append(c.allocator, '\n');
+                }
+            };
+            var lines: NodeLines = .{ .buf = &buf, .allocator = allocator };
+            try self.nodes.forEachResident(&lines, NodeLines.visit);
         } else {
             // Bounded: resident map is incomplete — enumerate every id from the
             // resident IdMaps and serialize the resident copy if present, else a
@@ -13421,16 +13525,31 @@ pub const GraphStore = struct {
             defer allocator.free(refs);
             for (refs) |im_entry| {
                 const graph_name = im_entry.graph_name;
-                var nit = im_entry.map.nodeUuidIterator();
-                while (nit.next()) |nuuid| {
+                // SONNY-3180 (round 15, F2): the uuids copied under the
+                // IdMap's mutex (the walk looks the map up again).
+                const nuuids = try im_entry.map.snapshotNodeUuids(allocator);
+                defer allocator.free(nuuids);
+                for (nuuids) |nuuid| {
                     const id = @as(u64, @truncate(nuuid));
-                    if (self.nodes.get(id)) |resident| {
-                        var n = resident;
-                        try appendNodeJson(&buf, allocator, id, &n);
+                    // The resident copy read under its shard's lock, which
+                    // excludes an in-place property write or an eviction.
+                    self.nodes.lockShardShared(id);
+                    const serialized = blk: {
+                        defer self.nodes.unlockShardShared(id);
+                        const resident = self.nodes.getPtrUnlocked(id) orelse break :blk false;
+                        try appendNodeJson(&buf, allocator, id, resident);
                         try buf.append(allocator, '\n');
+                        break :blk true;
+                    };
+                    if (serialized) {
+                        continue;
                     } else if (adapter) |ad| {
                         const slot = im_entry.map.nodeSlot(@as(u128, id)) orelse continue;
-                        var materialized = (try materializeNodeFromEngine(ad, allocator, graph_name, slot, id)) orelse continue;
+                        var materialized = (materializeNodeFromEngine(ad, allocator, graph_name, slot, id) catch |err| switch (err) {
+                            // SONNY-3180 (round 15): dropped since listed.
+                            error.GraphNotFound => break,
+                            else => return err,
+                        }) orelse continue;
                         defer freeNodeValue(allocator, &materialized);
                         try appendNodeJson(&buf, allocator, id, &materialized);
                         try buf.append(allocator, '\n');
@@ -13441,12 +13560,18 @@ pub const GraphStore = struct {
 
         // Serialize edges as JSON-lines.
         if (self.edges.effectiveCap() == 0) {
-            // Unbounded: resident map is the full set.
-            var edge_iter = self.edges.iterator();
-            while (edge_iter.next()) |entry| {
-                try appendEdgeJson(&buf, allocator, entry.key_ptr.*, entry.value_ptr);
-                try buf.append(allocator, '\n');
-            }
+            // Unbounded: resident map is the full set. SONNY-3180 (round 15,
+            // F2): each shard under its map lock.
+            const EdgeLines = struct {
+                buf: *std.ArrayList(u8),
+                allocator: std.mem.Allocator,
+                fn visit(c: *@This(), id: u64, edge: *const Edge) !void {
+                    try appendEdgeJson(c.buf, c.allocator, id, edge);
+                    try c.buf.append(c.allocator, '\n');
+                }
+            };
+            var lines: EdgeLines = .{ .buf = &buf, .allocator = allocator };
+            try self.edges.forEachResident(&lines, EdgeLines.visit);
         } else {
             // PHASE 1: bounded — resident map is incomplete. Enumerate every
             // edge id from the resident IdMaps and serialize the resident copy
@@ -13457,8 +13582,11 @@ pub const GraphStore = struct {
             const refs = try self.idMapsSnapshot(allocator);
             defer allocator.free(refs);
             for (refs) |im_entry| {
-                var eit = im_entry.map.edgeUuidIterator();
-                while (eit.next()) |euuid| {
+                // SONNY-3180 (round 15, F2): the uuids copied under the
+                // IdMap's mutex (hydrating looks the map up again).
+                const euuids = try im_entry.map.snapshotEdgeUuids(allocator);
+                defer allocator.free(euuids);
+                for (euuids) |euuid| {
                     const id = @as(u64, @truncate(euuid));
                     if (self.getEdgePtrHydrated(id)) |edge| {
                         try appendEdgeJson(&buf, allocator, id, edge);
@@ -13724,7 +13852,13 @@ pub const GraphStore = struct {
         // PHASE 1b chokepoint: hydrate before mutating indexes (must run BEFORE
         // the getPtr below — hydration mutates the node cache).
         self.ensureNodeGraphHydrated(node_id);
-        const node_ptr = self.nodes.getPtr(node_id) orelse return;
+        // SONNY-3180 (round 15, F2): a copy of the node, read under its
+        // shard's lock (`get`), not a pointer into the shard: another
+        // graph's insert into the same shard may grow it and move the entry.
+        // The heap the copy points at is this graph's, which the caller's
+        // lock keeps.
+        const node_copy = self.nodes.get(node_id) orelse return;
+        const node_ptr = &node_copy;
 
         // Collect connected edges first
         var edge_ids = std.ArrayList(u64).empty;
@@ -13774,30 +13908,38 @@ pub const GraphStore = struct {
         // ...including the COMPOSITE merge entry (caveat "B").
         self.removeNodeCompositeMergeEntries(node_ptr);
 
+        // SONNY-3180 (round 15, F2): out of the cache first, under the shard's
+        // map lock (`fetchRemove`), then freed from the copy taken out. The
+        // heap was freed while the node was still in the cache, and only then
+        // unlinked: a walk of every graph's resident nodes (a snapshot clone,
+        // a backup, a count), which holds the shard's lock and so cannot see
+        // a node mid-unlink, could still read one whose labels and name were
+        // already freed (a DROP GRAPH of another graph deletes its nodes
+        // here). `fetchRemove` hands the value over without retiring it, as
+        // `unlink` did, so it is freed once, here, as the pre-cache mirror
+        // did on explicit delete.
+        const removed = self.nodes.fetchRemove(node_id) orelse return;
+        var node = removed.value;
         // Free labels
-        for (node_ptr.labels) |label| {
+        for (node.labels) |label| {
             self.allocator.free(label);
         }
-        self.allocator.free(node_ptr.labels);
+        self.allocator.free(node.labels);
         // Free graph_name
-        if (node_ptr.graph_name.len > 0) {
-            self.allocator.free(node_ptr.graph_name);
+        if (node.graph_name.len > 0) {
+            self.allocator.free(node.graph_name);
         }
         // GAP-0279: Free tenant_id
-        if (node_ptr.tenant_id.len > 0) {
-            self.allocator.free(node_ptr.tenant_id);
+        if (node.tenant_id.len > 0) {
+            self.allocator.free(node.tenant_id);
         }
         // Free properties
-        var prop_iter = node_ptr.properties.iterator();
+        var prop_iter = node.properties.iterator();
         while (prop_iter.next()) |prop_entry| {
             self.allocator.free(prop_entry.key_ptr.*);
             freePropertyValue(self, prop_entry.value_ptr.*);
         }
-        node_ptr.properties.deinit();
-        // The node heap was freed inline above (exactly as the pre-cache mirror
-        // did on explicit delete). Use unlink (NOT remove) so the cache does not
-        // ALSO retire+reclaim this value — that would double-free.
-        _ = self.nodes.unlink(node_id);
+        node.properties.deinit();
 
         // Remove any still-resident adjacency lists for this node. PHASE 0: use
         // the cache's retire-based remove (frees the AdjList via freeAdjListValue
@@ -14710,7 +14852,9 @@ pub fn snapshotUnderReadLock(allocator: std.mem.Allocator, graph_name: []const u
     // against concurrent mutations on `graph_name` specifically, which is
     // the only data this read will touch.
     const source = getPrimaryGlobalStore(allocator);
-    if (try QueryReadSession.initIfAvailable(allocator, source)) |session| {
+    // SONNY-3180 (round 15, F2): only `graph_name`'s nodes, edges and IdMap:
+    // this read's lock covers them and nothing else.
+    if (try QueryReadSession.initScoped(allocator, source, graph_name)) |session| {
         return session;
     }
     // initIfAvailable only returns null in paths that we do not expect on
@@ -15791,6 +15935,13 @@ pub const QueryReadSession = struct {
     snapshot: GraphStore,
 
     pub fn initIfAvailable(allocator: std.mem.Allocator, source_store: *GraphStore) !?QueryReadSession {
+        return initScoped(allocator, source_store, null);
+    }
+
+    /// SONNY-3180 (round 15, F2): a snapshot of every graph (`scope` null),
+    /// or of only `scope`'s nodes, edges and IdMap: the one graph whose read
+    /// lock a snapshot read holds (`snapshotUnderReadLock`).
+    pub fn initScoped(allocator: std.mem.Allocator, source_store: *GraphStore, scope: ?[]const u8) !?QueryReadSession {
         // GAP-0523: Removed vestigial global_adapter gate. cloneNodesFrom/cloneIdMapsFrom
         // clone directly from the in-memory store (see line 763 comment: "without going
         // through the adapter"), so no adapter is needed for snapshot creation.
@@ -15799,15 +15950,15 @@ pub const QueryReadSession = struct {
         arena.* = std.heap.ArenaAllocator.init(allocator);
         errdefer arena.deinit();
 
+        // SONNY-3180 (round 15): the arena is freed once on an error, by the
+        // two errdefers above. A third one here freed it again (and
+        // destroyed it twice): any error while cloning crashed the process
+        // in the arena's deinit instead of failing the read.
         var session = QueryReadSession{
             .parent_allocator = allocator,
             .arena = arena,
             .snapshot = undefined,
         };
-        errdefer {
-            session.arena.deinit();
-            session.parent_allocator.destroy(session.arena);
-        }
 
         session.snapshot = try GraphStore.initWithTenant(
             session.arena.allocator(),
@@ -15818,13 +15969,19 @@ pub const QueryReadSession = struct {
 
         // Clone nodes/edges from the global store instead of loading from the
         // shared adapter buffer pool (which races with concurrent writers).
-        // No lock needed: cloneNodesFrom only reads from source_store via
-        // HashMap iterators, which are safe as long as the HashMap is not
-        // resized during iteration. Since CREATE operations on the global
-        // store run on worker threads and HashMap.put only resizes at high
-        // load factors, the brief clone window is acceptably safe.
-        try session.snapshot.cloneIdMapsFrom(source_store);
-        try session.snapshot.cloneNodesFrom(source_store);
+        // SONNY-3180 (round 15, F2): this said "No lock needed", on the
+        // grounds that a hash map resizes only rarely; a writer of another
+        // graph resizing one under the clone crashed a snapshot read within
+        // a second. Every walk of the source now holds the lock of what it
+        // walks (see cloneIdMapsFrom and cloneNodesFrom).
+        session.snapshot.cloneIdMapsFrom(source_store, scope) catch |err| {
+            log.warn("snapshot read: cloning the IdMaps failed", &.{Attr.string("error", @errorName(err))});
+            return err;
+        };
+        session.snapshot.cloneNodesFrom(source_store, scope) catch |err| {
+            log.warn("snapshot read: cloning the nodes and edges failed", &.{Attr.string("error", @errorName(err))});
+            return err;
+        };
         session.snapshot.data_dir = source_store.data_dir;
         _ = g_query_read_session_init_count.fetchAdd(1, .acq_rel);
 

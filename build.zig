@@ -9281,6 +9281,26 @@ pub fn build(b: *std.Build) void {
     const sonny3233_step = b.step("test-sonny3233-cache-graph-locking", "Run SONNY-3233 regression (cache reservations under each shard's lock, unbounded adjacency append/removal under the shard lock, edge_type_index and the graphs registry locked: batch vs single CREATE on two graphs, two edge writers with edge-type readers, CREATE/DROP GRAPH churn racing first writes; bounded and unbounded caches; bounded time, loop it)");
     sonny3233_step.dependOn(&run_sonny3233_tests.step);
 
+    // SONNY-3180 (round 15, F2): the contents of each graph's IdMap, and the
+    // resident maps every graph shares, are read under their own locks:
+    // snapshot reads, store walks and CALL db.propertyKeys() race writers of
+    // other graphs and CREATE/DROP GRAPH churn, and a gRPC read and COMMIT
+    // race DROP/CREATE of the same graph name, with unbounded and bounded
+    // (production) caches. Loop it.
+    const sonny3180c_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny3180_idmap_contents_race.zig"), .target = target, .optimize = optimize });
+    sonny3180c_test_mod.link_libc = true;
+    sonny3180c_test_mod.addImport("geode", root_mod);
+    sonny3180c_test_mod.addImport("schema", schema_mod);
+    sonny3180c_test_mod.addImport("protobuf", protobuf_mod);
+    sonny3180c_test_mod.addImport("grpc_impl", sonny1560_shim_mod);
+    sonny3180c_test_mod.addImport("logging", logging_mod);
+    sonny3180c_test_mod.addImport("transport/quic", transport_quic_mod);
+    const sonny3180c_tests = b.addTest(.{ .root_module = sonny3180c_test_mod });
+    const run_sonny3180c_tests = b.addRunArtifact(sonny3180c_tests);
+    shardDep(test_step, &run_sonny3180c_tests.step, 1, test_shard_loads, test_shard_index);
+    const sonny3180c_step = b.step("test-sonny3180-idmap-contents-race", "Run SONNY-3180 round 15 regression (IdMap contents and the shared resident maps read under their own locks: snapshot reads, allEdgeIds/getAllNodes/counts and CALL db.propertyKeys() race a writer of another graph and CREATE/DROP GRAPH churn; a gRPC read and COMMIT race DROP/CREATE GRAPH of the same name; unbounded and bounded caches; bounded time, loop it)");
+    sonny3180c_step.dependOn(&run_sonny3180c_tests.step);
+
     // SONNY-2790: the fulltext statements (CREATE/DROP INDEX, geode.fts.*)
     // run on the default graph, so the handlers lock `default` for them from
     // any session. Classifier, and the real gRPC handler (SONNY-1560 shim).

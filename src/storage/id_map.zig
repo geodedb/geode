@@ -499,7 +499,18 @@ pub const IdMap = struct {
     // Counts
     // ------------------------------------------------------------------
 
+    /// SONNY-3180 (round 15, F2): under the mutex. `releaseContents` (DROP
+    /// GRAPH) sets `base` to null under it, and an unlocked read of the
+    /// mmap-backed count could find `base` gone.
     pub fn nodeCount(self: *const IdMap) u32 {
+        const m = @constCast(self);
+        m.lockMu();
+        defer m.unlockMu();
+        return self.nodeCountLocked();
+    }
+
+    /// `nodeCount` with the mutex held.
+    fn nodeCountLocked(self: *const IdMap) u32 {
         switch (self.mode) {
             .resident => return self.node_uuid_to_slot.count(),
             .mmap_backed => {
@@ -568,7 +579,27 @@ pub const IdMap = struct {
         return list.toOwnedSlice(allocator);
     }
 
+    /// SONNY-3180 (round 15, F2): under the mutex, as `nodeCount`.
+    /// SONNY-3180 (round 15, F2): visit every live node uuid with the mutex
+    /// held for the whole walk, without copying them (the hydration fast path
+    /// walks maps of millions of nodes). `visit(context, uuid)` must not call
+    /// back into this IdMap: the mutex is not re-entrant.
+    pub fn forEachNodeUuid(self: *IdMap, context: anytype, comptime visit: anytype) !void {
+        self.lockMu();
+        defer self.unlockMu();
+        var it = self.nodeUuidIterator();
+        while (it.next()) |uuid| try visit(context, uuid);
+    }
+
     pub fn edgeCount(self: *const IdMap) u32 {
+        const m = @constCast(self);
+        m.lockMu();
+        defer m.unlockMu();
+        return self.edgeCountLocked();
+    }
+
+    /// `edgeCount` with the mutex held.
+    fn edgeCountLocked(self: *const IdMap) u32 {
         switch (self.mode) {
             .resident => return self.edge_uuid_to_slot.count(),
             .mmap_backed => {
@@ -617,11 +648,36 @@ pub const IdMap = struct {
         };
     }
 
+    // CANARY: REQ=REQ-SONNY-3180-IDMAP-CONTENTS; FEATURE="IdMap"; ASPECT=LockedSnapshots; STATUS=TESTED; TEST=tests/test_sonny3180_idmap_contents_race.zig; OWNER=storage; UPDATED=2026-09-28
+    /// SONNY-3180 (round 15, F2): race-safe snapshot of every live edge uuid
+    /// in this graph, as `snapshotNodeUuids`: under the mutex for the whole
+    /// walk. The unlocked `edgeUuidIterator` walks in `allEdgeIds`,
+    /// `getAllEdgesForTenant` and the backup serializer faulted when a writer
+    /// grew the map, or DROP GRAPH freed it (`releaseContents`), underneath.
+    /// The iterators themselves are for callers that hold the mutex. Caller
+    /// owns the returned slice.
+    pub fn snapshotEdgeUuids(self: *IdMap, allocator: std.mem.Allocator) ![]u128 {
+        self.lockMu();
+        defer self.unlockMu();
+        var list: std.ArrayList(u128) = .empty;
+        errdefer list.deinit(allocator);
+        var it = self.edgeUuidIterator();
+        while (it.next()) |uuid| try list.append(allocator, uuid);
+        return list.toOwnedSlice(allocator);
+    }
+
     /// Deep-copy the mapping tables into a new (`.resident`) IdMap owned by
     /// `allocator`. For `.mmap_backed` this MATERIALIZES the merged live view
     /// (base ⊕ overlay ⊖ tombstone) into a plain resident map — clone is an
     /// inherently O(n) snapshot, so an in-place clone would be meaningless.
+    ///
+    /// SONNY-3180 (round 15, F2): under the mutex. Every snapshot read clones
+    /// the maps, and an unlocked clone racing a writer that grew a map, or
+    /// DROP GRAPH freeing it, faulted (the review's hash-map assertion).
     pub fn clone(self: *const IdMap, allocator: Allocator) !IdMap {
+        const m = @constCast(self);
+        m.lockMu();
+        defer m.unlockMu();
         var copy = IdMap.init(allocator);
         errdefer copy.deinit();
 
@@ -648,10 +704,10 @@ pub const IdMap = struct {
                 }
             },
             .mmap_backed => {
-                try copy.node_uuid_to_slot.ensureTotalCapacity(self.nodeCount());
-                try copy.node_slot_to_uuid.ensureTotalCapacity(self.nodeCount());
-                try copy.edge_uuid_to_slot.ensureTotalCapacity(self.edgeCount());
-                try copy.edge_slot_to_uuid.ensureTotalCapacity(self.edgeCount());
+                try copy.node_uuid_to_slot.ensureTotalCapacity(self.nodeCountLocked());
+                try copy.node_slot_to_uuid.ensureTotalCapacity(self.nodeCountLocked());
+                try copy.edge_uuid_to_slot.ensureTotalCapacity(self.edgeCountLocked());
+                try copy.edge_slot_to_uuid.ensureTotalCapacity(self.edgeCountLocked());
 
                 // Nodes: base live forward, then overlay-only (matches the
                 // forward-iteration normalization the resident arm performs).
@@ -707,6 +763,10 @@ pub const IdMap = struct {
     /// Save the id map to a file atomically (write to temp then rename).
     /// `dir` is the directory containing the graph data.
     pub fn save(self: *const IdMap, dir: std.Io.Dir) !void {
+        // SONNY-3180 (round 15, F2): the walk below under the mutex.
+        const m = @constCast(self);
+        m.lockMu();
+        defer m.unlockMu();
         const io_fs = std.Io.Threaded.global_single_threaded.io();
         const tmp_name = "id_map.dat.tmp";
         const final_name = "id_map.dat";
