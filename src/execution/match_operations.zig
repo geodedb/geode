@@ -9378,9 +9378,26 @@ pub fn applySetRemoveOverRows(
     for (remove_clauses) |rc| _ = try checkWriteTarget(rows.*, removeTarget(rc), rc == .Labels);
 
     // Statement-atomicity pre-pass: every value storable, before any write.
+    // SONNY-3242: every MATCH ... SET runs here now (not only one with a
+    // RETURN), so the pre-pass the traversals ran for a node target runs here
+    // too: each node target's clauses with its labels and id, which checks a
+    // vector index's dimension as well (test-property-write-atomicity (j):
+    // `SET n.tag = 'changed', n.emb = <wrong dimension>` wrote the tag).
     for (rows.rows) |row| {
         const env = Env{ .names = rows.columns, .values = row, .param_names = param_names, .param_values = param_values, .allocator = allocator };
         try write_precheck.checkSetClausesWritable(allocator, set_clauses, env, null, &.{});
+        for (set_clauses, 0..) |sc, i| {
+            const name = setTarget(sc);
+            // Once per target.
+            const seen = for (set_clauses[0..i]) |prev| {
+                if (std.mem.eql(u8, setTarget(prev), name)) break true;
+            } else false;
+            if (seen) continue;
+            switch (row[columnIndex(rows.columns, name).?]) {
+                .Node => |node| try write_precheck.checkSetClausesWritableExcluding(allocator, set_clauses, env, name, node.labels, node.id),
+                else => {},
+            }
+        }
     }
 
     var written: WrittenElements = .{};
