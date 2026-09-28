@@ -2151,6 +2151,10 @@ pub fn main() !void {
             // GAP-0756: Parity with QUIC — gRPC handlers hit the same
             // cross-connection SharedQueryOptimizer plan cache.
             .shared_optimizer = init_ctx.shared_optimizer,
+            // SONNY-3032: session lifetimes (the reaper `start` runs).
+            .idle_in_transaction_timeout_ms = config.grpc_idle_in_transaction_timeout_ms,
+            .session_idle_timeout_ms = config.grpc_session_idle_timeout_ms,
+            .max_sessions_per_principal = config.grpc_max_sessions_per_principal,
         };
 
         const grpc_server = try gpa.create(grpc_transport.GeodeGrpcServer);

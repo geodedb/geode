@@ -118,6 +118,14 @@ pub const GrpcConfig = struct {
     // GAP-0756: Shared query optimizer — plan cache reused across connections.
     // Populated from `server_init.InitContext.shared_optimizer` by `main.zig`.
     shared_optimizer: ?*query_plan_cache.SharedQueryOptimizer = null,
+    // SONNY-3032: session lifetimes (`SessionStore`). `main.zig` sets them
+    // from `--idle-in-transaction-timeout`, `--grpc-session-idle-timeout`
+    // and `--grpc-max-sessions-per-principal` (or the config file's
+    // `idle_in_transaction_timeout`, `grpc_session_idle_timeout` and
+    // `grpc_max_sessions_per_principal`). 0 turns each off.
+    idle_in_transaction_timeout_ms: u64 = default_idle_in_transaction_timeout_ms,
+    session_idle_timeout_ms: u64 = default_session_idle_timeout_ms,
+    max_sessions_per_principal: u32 = default_max_sessions_per_principal,
 };
 
 /// SONNY-1560: made `pub` so the flow-control regression suite can drive
@@ -137,6 +145,14 @@ pub const SessionEntry = struct {
     ///
     /// CANARY: REQ=REQ-TRANSPORT-GRPC-RESULT-EPOCH-001; FEATURE="GrpcSessionSafety"; ASPECT=ResultGeneration; STATUS=TESTED; TEST=tests/test_sonny1560_grpc_flow_control.zig; OWNER=transport; UPDATED=2026-09-14
     result_epoch: u64 = 0,
+    /// SONNY-3032: the user the session was opened for ("" without
+    /// authentication), for `max_sessions_per_principal`. Owned by the store.
+    principal: []const u8 = "",
+    /// SONNY-3032: requests holding the session (`SessionStore.acquire` ..
+    /// `release`); the reaper closes only a session none holds.
+    refs: std.atomic.Value(u32) = .init(0),
+    /// SONNY-3032: when the session's last request ended (`monoMillis`).
+    last_active_ms: std.atomic.Value(i64) = .init(0),
 };
 
 const SessionAuthStatus = enum {
@@ -176,6 +192,20 @@ fn generateSessionId(allocator: std.mem.Allocator) ![]const u8 {
     compat_fillRandom(&entropy);
     const token = std.fmt.bytesToHex(entropy, .lower);
     return std.fmt.allocPrint(allocator, "sess_{s}", .{token});
+}
+
+/// SONNY-3032: a Handshake whose session could not be registered: the
+/// principal holds `max_sessions_per_principal` sessions, all in use. Any
+/// other error is the handler's.
+fn helloSessionRefused(allocator: std.mem.Allocator, caps: std.ArrayList([]const u8), err: anyerror) ![]u8 {
+    if (err != error.TooManySessions) return err;
+    const resp = schema.HelloResponse{
+        .success = false,
+        .session_id = "",
+        .error_message = "Too many sessions for this user: it holds the server's max_sessions_per_principal sessions, all in use. Close sessions, or raise --grpc-max-sessions-per-principal",
+        .capabilities = caps,
+    };
+    return encodeMessage(allocator, resp);
 }
 
 fn throttleInvalidSessionProbe() void {
@@ -222,6 +252,22 @@ fn rebuildPendingIndexes(
     }
 }
 
+/// SONNY-3032: the defaults of the session lifetimes (`GrpcConfig`).
+pub const default_idle_in_transaction_timeout_ms: u64 = 10 * std.time.ms_per_min;
+pub const default_session_idle_timeout_ms: u64 = 30 * std.time.ms_per_min;
+pub const default_max_sessions_per_principal: u32 = 1024;
+
+/// SONNY-3032: milliseconds on the monotonic clock, for session idle times.
+pub fn monoMillis() i64 {
+    var ts: std.posix.timespec = .{ .sec = 0, .nsec = 0 };
+    if (comptime @import("builtin").os.tag == .linux) {
+        if (std.os.linux.clock_gettime(.MONOTONIC, &ts) != 0) return 0;
+    } else {
+        if (std.c.clock_gettime(std.c.CLOCK.MONOTONIC, &ts) != 0) return 0;
+    }
+    return @as(i64, @intCast(ts.sec)) * std.time.ms_per_s + @divTrunc(@as(i64, @intCast(ts.nsec)), std.time.ns_per_ms);
+}
+
 // Issue #453: Use RwLock instead of Mutex to allow concurrent readers
 //
 // SONNY-1221: `pub`, with `setSessionStore`, `handleExecute` and `handlePull`,
@@ -232,11 +278,36 @@ fn rebuildPendingIndexes(
 // frame can only be exercised in process.
 /// `pub` as a SONNY-1221 test seam only; production dispatch must go through
 /// `handlePacket`, and production installs the store in `GeodeGrpcServer.init`.
+///
+/// CANARY: REQ=REQ-SONNY-3032-GRPC-SESSION-EXPIRY; FEATURE="GrpcSessionLifetime"; ASPECT=Reaper; STATUS=TESTED; TEST=tests/test_sonny3032_grpc_session_expiry.zig; OWNER=transport; UPDATED=2026-09-27
+/// SONNY-3032: a gRPC session lives until it is idle too long. It used to
+/// live as long as the server: nothing ever removed one, a Handshake made a
+/// new one each time, and a client that began a transaction, wrote and went
+/// away left the transaction open for good, with its undo entries, its engine
+/// transaction and its graph hold (SONNY-3134: that graph could never be
+/// dropped). QUIC ends a session with its stream; gRPC has no such end.
+/// The reaper (`startReaper`, `reap`) closes, with the teardown every other
+/// end of a session runs (`deinitServerState`: the transaction is rolled
+/// back, the engine transaction aborted, the hold released):
+/// - a session idle in an open transaction for `idle_in_transaction_timeout_ms`
+///   (default 10 minutes): its transaction is rolled back and the session is
+///   closed, as PostgreSQL's idle_in_transaction_session_timeout does; its
+///   next request answers as for an unknown session, and its COMMIT fails;
+/// - any session idle for `session_idle_timeout_ms` (default 30 minutes).
+/// A session a request is using (`acquire` .. `release`) is never closed, and
+/// one principal holds at most `max_sessions_per_principal` sessions (default
+/// 1024): past that a Handshake closes the principal's least recently used
+/// idle session, or is refused when all of them are in use.
 pub const SessionStore = struct {
     allocator: std.mem.Allocator,
     rwlock: std.Io.RwLock = std.Io.RwLock.init,
     sessions: std.StringHashMap(*SessionEntry),
     config: GrpcConfig,
+    /// SONNY-3032: the reaper thread (`startReaper`) and its stop flag.
+    reaper: ?std.Thread = null,
+    reaper_stop: std.atomic.Value(bool) = .init(false),
+    /// SONNY-3032: sessions the reaper closed, for tests and diagnostics.
+    reaped_total: std.atomic.Value(u64) = .init(0),
 
     pub fn init(allocator: std.mem.Allocator, config: GrpcConfig) SessionStore {
         execution.initEvaluator();
@@ -248,16 +319,24 @@ pub const SessionStore = struct {
     }
 
     pub fn deinit(self: *SessionStore) void {
+        self.stopReaper();
         var it = self.sessions.iterator();
         while (it.next()) |entry| {
-            const session_id = entry.key_ptr.*;
-            const session = entry.value_ptr.*;
-            deinitServerState(session.state);
-            self.allocator.destroy(session.state);
-            self.allocator.destroy(session);
-            self.allocator.free(session_id);
+            self.destroyEntry(entry.key_ptr.*, entry.value_ptr.*);
         }
         self.sessions.deinit();
+    }
+
+    /// SONNY-3032: end a session that is out of `sessions` and that no
+    /// request holds: the teardown every end of a session runs
+    /// (`deinitServerState`: an open transaction is rolled back, its engine
+    /// transaction aborted, its graph hold released), then its memory.
+    fn destroyEntry(self: *SessionStore, session_id: []const u8, entry: *SessionEntry) void {
+        deinitServerState(entry.state);
+        self.allocator.destroy(entry.state);
+        self.allocator.free(entry.principal);
+        self.allocator.destroy(entry);
+        self.allocator.free(session_id);
     }
 
     pub fn createSession(
@@ -310,18 +389,187 @@ pub const SessionStore = struct {
         }
 
         const entry = try self.allocator.create(SessionEntry);
-        entry.* = .{ .state = state };
+        entry.* = .{
+            .state = state,
+            .principal = try self.allocator.dupe(u8, username),
+            .last_active_ms = .init(monoMillis()),
+        };
 
-        self.rwlock.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
-        defer self.rwlock.unlock(std.Io.Threaded.global_single_threaded.io());
-        try self.sessions.put(session_id, entry);
+        // SONNY-3032: at most `max_sessions_per_principal` sessions each.
+        var evicted: ?std.StringHashMap(*SessionEntry).KV = null;
+        const registered: error{ TooManySessions, OutOfMemory }!void = blk: {
+            self.rwlock.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
+            defer self.rwlock.unlock(std.Io.Threaded.global_single_threaded.io());
+            if (self.config.max_sessions_per_principal > 0) {
+                const victim = self.principalAtCapLocked(username) catch |err| break :blk err;
+                if (victim) |v| evicted = self.sessions.fetchRemove(v);
+            }
+            break :blk self.sessions.put(session_id, entry);
+        };
+        registered catch |err| {
+            self.destroyEntry(session_id, entry);
+            return err;
+        };
+        if (evicted) |kv| {
+            log.warn("closing a principal's least recently used idle gRPC session: the principal is at max_sessions_per_principal", &.{
+                Attr.uint("max_sessions_per_principal", self.config.max_sessions_per_principal),
+            });
+            self.destroyEntry(kv.key, kv.value);
+            _ = self.reaped_total.fetchAdd(1, .monotonic);
+        }
         return session_id;
     }
 
+    /// SONNY-3032: with the store's lock held exclusively. Null when
+    /// `principal` has room for one more session; the id of its least
+    /// recently used session no request holds (one without an open
+    /// transaction first) when it is at the cap; `TooManySessions` when every
+    /// one of its sessions is in use.
+    fn principalAtCapLocked(self: *SessionStore, principal: []const u8) error{TooManySessions}!?[]const u8 {
+        var count: usize = 0;
+        var victim: ?[]const u8 = null;
+        var victim_rank: u8 = 0;
+        var victim_time: i64 = 0;
+        var it = self.sessions.iterator();
+        while (it.next()) |kv| {
+            const e = kv.value_ptr.*;
+            if (!std.mem.eql(u8, e.principal, principal)) continue;
+            count += 1;
+            if (e.refs.load(.acquire) != 0) continue;
+            // Idle outside a transaction ranks before idle inside one.
+            const rank: u8 = if (e.state.in_txn or e.state.session_engine_txn.open) 1 else 2;
+            const t = e.last_active_ms.load(.acquire);
+            if (victim == null or rank > victim_rank or (rank == victim_rank and t < victim_time)) {
+                victim = kv.key_ptr.*;
+                victim_rank = rank;
+                victim_time = t;
+            }
+        }
+        if (count < self.config.max_sessions_per_principal) return null;
+        return victim orelse error.TooManySessions;
+    }
+
+    /// The session's entry, for a caller that does not keep it (tests).
+    /// Requests use `acquire` and `release`: the reaper may close a session
+    /// no request holds.
     pub fn getEntry(self: *SessionStore, session_id: []const u8) ?*SessionEntry {
         self.rwlock.lockSharedUncancelable(std.Io.Threaded.global_single_threaded.io());
         defer self.rwlock.unlockShared(std.Io.Threaded.global_single_threaded.io());
         return self.sessions.get(session_id);
+    }
+
+    /// SONNY-3032: the session's entry, held for a request until `release`:
+    /// the reaper does not close a held session.
+    pub fn acquire(self: *SessionStore, session_id: []const u8) ?*SessionEntry {
+        self.rwlock.lockSharedUncancelable(std.Io.Threaded.global_single_threaded.io());
+        defer self.rwlock.unlockShared(std.Io.Threaded.global_single_threaded.io());
+        const entry = self.sessions.get(session_id) orelse return null;
+        _ = entry.refs.fetchAdd(1, .acq_rel);
+        return entry;
+    }
+
+    /// SONNY-3032: the request is done with the session; it has been idle
+    /// since now.
+    pub fn release(self: *SessionStore, entry: *SessionEntry) void {
+        _ = self;
+        entry.last_active_ms.store(monoMillis(), .release);
+        _ = entry.refs.fetchSub(1, .acq_rel);
+    }
+
+    /// SONNY-3032: one pass of the reaper at `now_ms` (the monotonic clock of
+    /// `monoMillis`): close every session no request holds that has been
+    /// idle in an open transaction for `idle_in_transaction_timeout_ms`, or
+    /// idle for `session_idle_timeout_ms` (0 turns either off). The sessions
+    /// leave the map under its lock, where no request can take them, and are
+    /// torn down after it. Returns how many it closed.
+    pub fn reap(self: *SessionStore, now_ms: i64) usize {
+        const txn_ms: i64 = @intCast(@min(self.config.idle_in_transaction_timeout_ms, std.math.maxInt(i64)));
+        const idle_ms: i64 = @intCast(@min(self.config.session_idle_timeout_ms, std.math.maxInt(i64)));
+        if (txn_ms == 0 and idle_ms == 0) return 0;
+        var sfa = std.heap.stackFallback(16 * @sizeOf(std.StringHashMap(*SessionEntry).KV), std.heap.smp_allocator);
+        const la = sfa.get();
+        var closed: std.ArrayList(std.StringHashMap(*SessionEntry).KV) = .empty;
+        defer closed.deinit(la);
+        {
+            self.rwlock.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
+            defer self.rwlock.unlock(std.Io.Threaded.global_single_threaded.io());
+            var ids: std.ArrayList([]const u8) = .empty;
+            defer ids.deinit(la);
+            var it = self.sessions.iterator();
+            while (it.next()) |kv| {
+                const e = kv.value_ptr.*;
+                // Held by a request: not idle. Unheld, nothing touches its
+                // state while this lock is held.
+                if (e.refs.load(.acquire) != 0) continue;
+                const idle = now_ms - e.last_active_ms.load(.acquire);
+                const in_txn = e.state.in_txn or e.state.session_engine_txn.open;
+                const expired = (in_txn and txn_ms > 0 and idle >= txn_ms) or (idle_ms > 0 and idle >= idle_ms);
+                if (expired) ids.append(la, kv.key_ptr.*) catch break;
+            }
+            for (ids.items) |id| {
+                const kv = self.sessions.fetchRemove(id) orelse continue;
+                closed.append(la, kv) catch {
+                    // No room to list it: put it back for the next pass.
+                    self.sessions.putAssumeCapacity(kv.key, kv.value);
+                    break;
+                };
+            }
+        }
+        for (closed.items) |kv| {
+            const in_txn = kv.value.state.in_txn or kv.value.state.session_engine_txn.open;
+            log.info("closing an idle gRPC session", &.{
+                Attr.boolean("in_transaction", in_txn),
+                Attr.int("idle_ms", now_ms - kv.value.last_active_ms.load(.acquire)),
+            });
+            self.destroyEntry(kv.key, kv.value);
+        }
+        _ = self.reaped_total.fetchAdd(closed.items.len, .monotonic);
+        return closed.items.len;
+    }
+
+    /// SONNY-3032: how often the reaper runs: a quarter of the shorter
+    /// timeout, between 25 ms and 30 s.
+    fn reaperIntervalMs(self: *const SessionStore) u64 {
+        var shortest: u64 = std.math.maxInt(u64);
+        if (self.config.idle_in_transaction_timeout_ms > 0) shortest = @min(shortest, self.config.idle_in_transaction_timeout_ms);
+        if (self.config.session_idle_timeout_ms > 0) shortest = @min(shortest, self.config.session_idle_timeout_ms);
+        if (shortest == std.math.maxInt(u64)) return 30 * std.time.ms_per_s;
+        return std.math.clamp(shortest / 4, 25, 30 * std.time.ms_per_s);
+    }
+
+    fn reaperMain(self: *SessionStore) void {
+        const interval = self.reaperIntervalMs();
+        while (!self.reaper_stop.load(.acquire)) {
+            var waited: u64 = 0;
+            while (waited < interval and !self.reaper_stop.load(.acquire)) : (waited += 25) {
+                const req = std.os.linux.timespec{ .sec = 0, .nsec = 25 * std.time.ns_per_ms };
+                var rem: std.os.linux.timespec = undefined;
+                _ = std.os.linux.nanosleep(&req, &rem);
+            }
+            if (self.reaper_stop.load(.acquire)) break;
+            // A pass counts as a handler for the shutdown drain
+            // (`waitForGrpcInflightZero`): the teardown touches the store.
+            _ = g_grpc_inflight.fetchAdd(1, .acq_rel);
+            defer _ = g_grpc_inflight.fetchSub(1, .acq_rel);
+            if (g_grpc_shutting_down.load(.acquire)) break;
+            _ = self.reap(monoMillis());
+        }
+    }
+
+    /// SONNY-3032: run the reaper on a thread of its own, until
+    /// `stopReaper` (or `deinit`). Nothing to do when both timeouts are off.
+    pub fn startReaper(self: *SessionStore) !void {
+        if (self.reaper != null) return;
+        if (self.config.idle_in_transaction_timeout_ms == 0 and self.config.session_idle_timeout_ms == 0) return;
+        self.reaper_stop.store(false, .release);
+        self.reaper = try std.Thread.spawn(.{}, reaperMain, .{self});
+    }
+
+    pub fn stopReaper(self: *SessionStore) void {
+        const t = self.reaper orelse return;
+        self.reaper_stop.store(true, .release);
+        t.join();
+        self.reaper = null;
     }
 };
 
@@ -502,10 +750,12 @@ fn authorizeAdminSession(session_id: []const u8, allocator: std.mem.Allocator) !
     if (!user_mgmt.isAuthEnabled()) return .ok;
     if (session_id.len == 0) return .missing;
     const store = getSessionStore() orelse return .missing;
-    const entry = store.getEntry(session_id) orelse {
+    const entry = store.acquire(session_id) orelse {
         throttleInvalidSessionProbe();
         return .missing;
     };
+    // SONNY-3032: held for the request; the reaper closes only an unheld session.
+    defer store.release(entry);
 
     entry.mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
     defer entry.mutex.unlock(std.Io.Threaded.global_single_threaded.io());
@@ -839,6 +1089,10 @@ pub const GeodeGrpcServer = struct {
 
     pub fn start(self: *GeodeGrpcServer) !void {
         log.info("Starting gRPC server", &.{});
+        // SONNY-3032: close sessions idle too long (`SessionStore.reap`).
+        self.session_store.startReaper() catch |err| {
+            log.err("gRPC session reaper failed to start: idle sessions and transactions are not closed", &.{Attr.string("error", @errorName(err))});
+        };
         try self.server.start();
     }
 
@@ -997,12 +1251,14 @@ fn buildStreamDataPage(session_id: []const u8, allocator: std.mem.Allocator) !Pa
         return .{ .bytes = try encodeMessage(allocator, resp), .is_final = true };
     };
 
-    const entry = store.getEntry(session_id) orelse {
+    const entry = store.acquire(session_id) orelse {
         throttleInvalidSessionProbe();
         var resp = try buildErrorResponse(allocator, "28000", "Unknown session", &.{}, &.{});
         defer resp.deinit(allocator);
         return .{ .bytes = try encodeMessage(allocator, resp), .is_final = true };
     };
+    // SONNY-3032: held for the request; the reaper closes only an unheld session.
+    defer store.release(entry);
 
     entry.mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
     defer entry.mutex.unlock(std.Io.Threaded.global_single_threaded.io());
@@ -1489,11 +1745,13 @@ fn handleExecuteStreaming(request_bytes: []const u8, trans: *GrpcTransport, allo
             trans.endStream() catch {};
             return;
         };
-        const entry = store.getEntry(req.session_id) orelse {
+        const entry = store.acquire(req.session_id) orelse {
             throttleInvalidSessionProbe();
             trans.endStream() catch {};
             return;
         };
+        // SONNY-3032: held for the request; the reaper closes only an unheld session.
+        defer store.release(entry);
 
         // SONNY-1560: drain the pages WITHOUT pinning the session mutex across
         // the writes. Issue #514's use-after-free is prevented by the epoch
@@ -1961,7 +2219,7 @@ fn handleHandshake(request_bytes: []const u8, trans: *GrpcTransport, allocator: 
             Attr.string("client", req.client_name),
         });
         // Grant federation-level session with ReadWrite role
-        const session_id = try store.createSession(req.username, "", .ReadWrite, req.tenant_id, null, false, 0);
+        const session_id = store.createSession(req.username, "", .ReadWrite, req.tenant_id, null, false, 0) catch |err| return helloSessionRefused(allocator, caps, err);
         const resp = schema.HelloResponse{
             .success = true,
             .session_id = try allocator.dupe(u8, session_id),
@@ -2187,7 +2445,7 @@ fn handleHandshake(request_bytes: []const u8, trans: *GrpcTransport, allocator: 
             fle_integration.setCurrentUserRole(null);
         }
 
-        const session_id = try store.createSession(req.username, req.password, auth_result.role, req.tenant_id, resolved_graph, auth_result.password_reset_required, auth_result.auth_version);
+        const session_id = store.createSession(req.username, req.password, auth_result.role, req.tenant_id, resolved_graph, auth_result.password_reset_required, auth_result.auth_version) catch |err| return helloSessionRefused(allocator, caps, err);
         const resp = schema.HelloResponse{
             .success = true,
             .session_id = try allocator.dupe(u8, session_id),
@@ -2284,7 +2542,7 @@ fn handleHandshake(request_bytes: []const u8, trans: *GrpcTransport, allocator: 
         }
     }
 
-    const session_id = try store.createSession("", "", null, req.tenant_id, noauth_resolved_graph, false, 0);
+    const session_id = store.createSession("", "", null, req.tenant_id, noauth_resolved_graph, false, 0) catch |err| return helloSessionRefused(allocator, caps, err);
     const resp = schema.HelloResponse{
         .success = true,
         .session_id = try allocator.dupe(u8, session_id),
@@ -2386,12 +2644,14 @@ pub fn handleExecute(request_bytes: []const u8, allocator: std.mem.Allocator, ep
         return encodeMessage(allocator, resp);
     };
 
-    const entry = store.getEntry(req.session_id) orelse {
+    const entry = store.acquire(req.session_id) orelse {
         throttleInvalidSessionProbe();
         var resp = try buildErrorResponse(allocator, "28000", "Unknown session", &.{}, &.{});
         defer resp.deinit(allocator);
         return encodeMessage(allocator, resp);
     };
+    // SONNY-3032: held for the request; the reaper closes only an unheld session.
+    defer store.release(entry);
 
     entry.mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
     defer entry.mutex.unlock(std.Io.Threaded.global_single_threaded.io());
@@ -3400,13 +3660,15 @@ pub fn handlePull(request_bytes: []const u8, allocator: std.mem.Allocator) ![]u8
         return encodeMessage(allocator, pull_resp);
     };
 
-    const entry = store.getEntry(req.session_id) orelse {
+    const entry = store.acquire(req.session_id) orelse {
         throttleInvalidSessionProbe();
         var resp = try buildErrorResponse(allocator, "28000", "Unknown session", &.{}, &.{});
         defer resp.deinit(allocator);
         const pull_resp = schema.PullResponse{ .response = resp };
         return encodeMessage(allocator, pull_resp);
     };
+    // SONNY-3032: held for the request; the reaper closes only an unheld session.
+    defer store.release(entry);
 
     entry.mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
     defer entry.mutex.unlock(std.Io.Threaded.global_single_threaded.io());
@@ -3508,11 +3770,13 @@ pub fn handleBegin(request_bytes: []const u8, allocator: std.mem.Allocator) ![]u
         return encodeMessage(allocator, resp);
     };
 
-    const entry = store.getEntry(req.session_id) orelse {
+    const entry = store.acquire(req.session_id) orelse {
         throttleInvalidSessionProbe();
         const resp = schema.BeginResponse{ .session_id = "", .tx_id = "" };
         return encodeMessage(allocator, resp);
     };
+    // SONNY-3032: held for the request; the reaper closes only an unheld session.
+    defer store.release(entry);
 
     entry.mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
     defer entry.mutex.unlock(std.Io.Threaded.global_single_threaded.io());
@@ -3570,11 +3834,13 @@ pub fn handleCommit(request_bytes: []const u8, allocator: std.mem.Allocator) ![]
         const resp = schema.CommitResponse{ .success = false };
         return encodeMessage(allocator, resp);
     };
-    const entry = store.getEntry(req.session_id) orelse {
+    const entry = store.acquire(req.session_id) orelse {
         throttleInvalidSessionProbe();
         const resp = schema.CommitResponse{ .success = false };
         return encodeMessage(allocator, resp);
     };
+    // SONNY-3032: held for the request; the reaper closes only an unheld session.
+    defer store.release(entry);
 
     entry.mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
     defer entry.mutex.unlock(std.Io.Threaded.global_single_threaded.io());
@@ -3644,11 +3910,13 @@ pub fn handleRollback(request_bytes: []const u8, allocator: std.mem.Allocator) !
         const resp = schema.RollbackResponse{ .success = false };
         return encodeMessage(allocator, resp);
     };
-    const entry = store.getEntry(req.session_id) orelse {
+    const entry = store.acquire(req.session_id) orelse {
         throttleInvalidSessionProbe();
         const resp = schema.RollbackResponse{ .success = false };
         return encodeMessage(allocator, resp);
     };
+    // SONNY-3032: held for the request; the reaper closes only an unheld session.
+    defer store.release(entry);
 
     entry.mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
     defer entry.mutex.unlock(std.Io.Threaded.global_single_threaded.io());
@@ -3703,11 +3971,13 @@ fn handleSavepoint(request_bytes: []const u8, allocator: std.mem.Allocator) ![]u
         const resp = schema.SavepointResponse{ .success = false };
         return encodeMessage(allocator, resp);
     };
-    const entry = sess_store.getEntry(req.session_id) orelse {
+    const entry = sess_store.acquire(req.session_id) orelse {
         throttleInvalidSessionProbe();
         const resp = schema.SavepointResponse{ .success = false };
         return encodeMessage(allocator, resp);
     };
+    // SONNY-3032: held for the request; the reaper closes only an unheld session.
+    defer sess_store.release(entry);
 
     entry.mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
     defer entry.mutex.unlock(std.Io.Threaded.global_single_threaded.io());
@@ -3757,11 +4027,13 @@ fn handleRollbackTo(request_bytes: []const u8, allocator: std.mem.Allocator) ![]
         const resp = schema.RollbackToResponse{ .success = false };
         return encodeMessage(allocator, resp);
     };
-    const entry = sess_store.getEntry(req.session_id) orelse {
+    const entry = sess_store.acquire(req.session_id) orelse {
         throttleInvalidSessionProbe();
         const resp = schema.RollbackToResponse{ .success = false };
         return encodeMessage(allocator, resp);
     };
+    // SONNY-3032: held for the request; the reaper closes only an unheld session.
+    defer sess_store.release(entry);
 
     entry.mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
     defer entry.mutex.unlock(std.Io.Threaded.global_single_threaded.io());
