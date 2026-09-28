@@ -825,6 +825,10 @@ fn fastPathClause(comptime field: []const u8) FastPathClause {
         // SONNY-3139: markers that come only with a write clause.
         "chained_write",
         "split_create",
+        // SONNY-3139 / SONNY-3184: what the part was parsed from (a SELECT, a
+        // WHERE after an OPTIONAL MATCH); the fast paths check a read's shape
+        // themselves.
+         "select_projection",   "optional_where",
     };
     inline for (declines) |name| {
         if (comptime std.mem.eql(u8, name, field)) return .declines;

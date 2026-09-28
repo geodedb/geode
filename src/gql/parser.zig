@@ -288,7 +288,23 @@ pub const Parser = struct {
     // ENG-3906: `UnknownIndexParameter` — a WITH parameter a vector index does
     // not implement. Distinct from `UnexpectedToken` so the diagnostic can say
     // "this knob does not exist" rather than "syntax error".
-    const ParserError = error{ UnexpectedToken, OutOfMemory, Overflow, InvalidCharacter, InvalidIndexType, UnknownIndexParameter, UnknownIndexOption, UnsupportedAggregateFunction };
+    const ParserError = error{ UnexpectedToken, OutOfMemory, Overflow, InvalidCharacter, InvalidIndexType, UnknownIndexParameter, UnknownIndexOption, UnsupportedAggregateFunction, TooManyWriteClauses };
+
+    // CANARY: REQ=REQ-SONNY-3190-CLAUSE-CAP; FEATURE="WriteClauseCap"; ASPECT=Parser; STATUS=TESTED; TEST=tests/test_sonny_write_allowlist.zig; OWNER=parser; UPDATED=2026-09-27
+    /// SONNY-3190: the most SET, REMOVE, CREATE and MERGE clauses one query
+    /// part (or one CREATE or MERGE statement) may carry. Each clause is
+    /// appended to one list, so parsing stays linear; the cap bounds the
+    /// memory a request can make the parser hold before authorization.
+    pub const max_write_clauses_per_part: usize = 1024;
+
+    /// SONNY-3190: count one more write clause of the part being parsed.
+    fn countWriteClause(self: *Parser, count: *usize) ParserError!void {
+        count.* += 1;
+        if (count.* > max_write_clauses_per_part) {
+            self.last_error = "a query part may carry at most 1024 SET, REMOVE, CREATE and MERGE clauses";
+            return error.TooManyWriteClauses;
+        }
+    }
 
     /// Read an object name: an identifier or a quoted identifier.
     fn parseName(self: *Parser) ParserError![]const u8 {
@@ -494,7 +510,7 @@ pub const Parser = struct {
                         q_mut.cte_list = ctes;
                         q_mut.has_recursive_cte = ctes.has_recursive;
                         try list.append(self.arena.allocator(), .{ .Query = q_mut });
-                        if (self.cur.kind == .semicolon) self.advance();
+                        try self.endStatement(.eof);
                         // Clear cte_list after attaching to first query
                         cte_list = null;
                         continue;
@@ -507,7 +523,7 @@ pub const Parser = struct {
                         first_mut.has_recursive_cte = ctes.has_recursive;
                         u_mut.first = first_mut;
                         try list.append(self.arena.allocator(), .{ .Union = u_mut });
-                        if (self.cur.kind == .semicolon) self.advance();
+                        try self.endStatement(.eof);
                         cte_list = null;
                         continue;
                     },
@@ -515,9 +531,51 @@ pub const Parser = struct {
                 }
             }
             try list.append(self.arena.allocator(), st);
-            if (self.cur.kind == .semicolon) self.advance();
+            try self.endStatement(.eof);
         }
         return .{ .statements = try list.toOwnedSlice(self.arena.allocator()) };
+    }
+
+    // CANARY: REQ=REQ-SONNY-3166-STATEMENT-BOUNDARY; FEATURE="StatementBoundary"; ASPECT=Parser; STATUS=TESTED; TEST=tests/test_sonny_write_allowlist.zig; OWNER=parser; UPDATED=2026-09-27
+    /// A CREATE or MERGE that continues a query after a WITH, as a query part.
+    fn parseWriteContinuation(self: *Parser) ParserError!*ast.Query {
+        const next_ptr = try self.arena.allocator().create(ast.Query);
+        if (self.cur.kind == .MERGE) {
+            const merge_stmt = try self.parseMergeStatement();
+            const merge_ptr = try self.arena.allocator().create(ast.MergeStatement);
+            merge_ptr.* = merge_stmt.Merge;
+            next_ptr.* = .{
+                .optional_match = false,
+                .match = .{ .chains = &.{} },
+                .where_clause = null,
+                .with_clause = null,
+                .ret = merge_stmt.Merge.return_clause orelse .{ .items = &.{}, .distinct = false },
+                .order_by = null,
+                .limit = null,
+                .offset = null,
+                .merge_statement = merge_ptr,
+            };
+        } else {
+            next_ptr.* = try self.parseQuery();
+        }
+        return next_ptr;
+    }
+
+    /// SONNY-3166: a statement ends at a `;` or where its enclosing text ends
+    /// (`close`: the end of the request, or the `}` of a transaction body).
+    /// Any other token after a statement is a syntax error. The parser split
+    /// `MATCH (q) SET q.x = 1 DETACH DELETE q` in two where a clause it did not
+    /// take in the first statement began, and ran the rest as a statement of
+    /// its own, with the first one's variables unbound: the DELETE was
+    /// dropped, `... MATCH (q:Q) DELETE q` deleted every :Q, and a trailing
+    /// CREATE created unlinked nodes.
+    fn endStatement(self: *Parser, comptime close: tok.TokenKind) ParserError!void {
+        if (self.cur.kind == .semicolon) {
+            self.advance();
+            return;
+        }
+        if (self.cur.kind == close) return;
+        return self.unexpected("a statement ends at ';' or at the end of the request; this clause cannot follow the one before it");
     }
 
     /// GAP-0082: Parse WITH [RECURSIVE] cte_name [(col1, col2)] AS (query) [, cte_name2 AS (query2)]
@@ -1195,10 +1253,8 @@ pub const Parser = struct {
                             const stmt = try self.parseStatement();
                             try statements.append(self.arena.allocator(), stmt);
 
-                            // Consume optional semicolon between statements
-                            if (self.cur.kind == .semicolon) {
-                                self.advance();
-                            }
+                            // SONNY-3166: statements are separated by ';'.
+                            try self.endStatement(.r_brace);
                         }
 
                         _ = try self.expect(.r_brace);
@@ -1639,6 +1695,8 @@ pub const Parser = struct {
     }
 
     fn parseQuery(self: *Parser) ParserError!ast.Query {
+        // SONNY-3190: the SET, REMOVE and CREATE clauses of this part.
+        var write_clauses: usize = 0;
         // Parse LET bindings first (LET $var = expr, ...)
         var let_bindings = std.ArrayList(ast.LetBinding).empty;
         if (self.cur.kind == .LET) {
@@ -1763,6 +1821,10 @@ pub const Parser = struct {
                     .group_by = null,
                     .having = null,
                     .for_statement = for_ptr,
+                    // SONNY-3183: the WITH's WHERE, which nothing applies
+                    // before a FOR: the write-shape allowlist refuses a FOR
+                    // that writes after one.
+                    .initial_where = initial_where_expr,
                 };
             }
 
@@ -1918,6 +1980,7 @@ pub const Parser = struct {
             have_create = true;
             var create_chains = std.ArrayList(ast.Chain).empty;
             while (self.cur.kind == .CREATE) {
+                try self.countWriteClause(&write_clauses);
                 self.advance();
                 const cp = try self.parseGraphPattern();
                 for (cp.chains) |chain| {
@@ -1951,6 +2014,8 @@ pub const Parser = struct {
         // SONNY-3140: the WHEREs either side of a WITH after the MATCH.
         var pre_with_where: ?ast.Expr = null;
         var with_where: ?ast.Expr = null;
+        // SONNY-3184: a WHERE after an OPTIONAL MATCH.
+        var optional_where = false;
         var group_by: ?ast.GroupBy = null;
         var having_expr: ?ast.Expr = null;
         var path_variable: ?[]const u8 = null;
@@ -2077,6 +2142,11 @@ pub const Parser = struct {
             if (self.cur.kind == .WHERE) {
                 self.advance();
                 where_expr = try self.parseOrExpr();
+                // SONNY-3184: a WHERE after an OPTIONAL MATCH filters the
+                // whole row here, not the optional part.
+                for (combined_gp.chains) |chain| {
+                    if (chain.is_optional) optional_where = true;
+                }
             }
 
             // CANARY: REQ=REQ-GQL-OPTIONAL-MATCH-003; FEATURE="OptionalMatchAfterWhere"; ASPECT=ParserSupport; STATUS=TESTED; TEST=geodetestlab/specs/gql_pattern_matching_comprehensive.yml; OWNER=parser; UPDATED=2025-12-24
@@ -2125,6 +2195,10 @@ pub const Parser = struct {
                     // Check for WHERE clause after this MATCH
                     if (self.cur.kind == .WHERE) {
                         self.advance();
+                        // SONNY-3184: as above.
+                        for (post_where_chains.items) |chain| {
+                            if (chain.is_optional) optional_where = true;
+                        }
                         // Combine with existing where_expr using AND
                         const new_where = try self.parseOrExpr();
                         if (where_expr) |existing_where| {
@@ -2151,6 +2225,7 @@ pub const Parser = struct {
                 have_create = true;
                 var create_chains = std.ArrayList(ast.Chain).empty;
                 while (self.cur.kind == .CREATE) {
+                    try self.countWriteClause(&write_clauses);
                     self.advance();
                     const cp = try self.parseGraphPattern();
                     for (cp.chains) |chain| {
@@ -2375,41 +2450,44 @@ pub const Parser = struct {
                 self.advance();
                 having_expr = try self.parseOrExpr();
             }
+            // A CREATE or MERGE after a WITH's GROUP BY / HAVING is a chained
+            // part of its own, which the write-shape allowlist refuses (0A000);
+            // it was a syntax error (the statement ended at it).
+            if (with_clause != null and next_query_ptr == null and (self.cur.kind == .CREATE or self.cur.kind == .MERGE)) {
+                next_query_ptr = try self.parseWriteContinuation();
+            }
         }
 
         // Parse SET clauses if present (before RETURN)
         var set_clauses: []ast.SetClause = &.{};
         if (self.cur.kind == .SET) {
-            self.advance();
-            set_clauses = try self.parseSetClauses();
             // SONNY-3146: consecutive SET clauses are one list, in order
-            // (`SET n.x = 1 SET n.y = 2` was a syntax error).
+            // (`SET n.x = 1 SET n.y = 2` was a syntax error). SONNY-3190:
+            // appended to ONE list (rebuilding it per clause was quadratic),
+            // at most `max_write_clauses_per_part` clauses.
+            var all = std.ArrayList(ast.SetClause).empty;
             while (self.cur.kind == .SET) {
+                try self.countWriteClause(&write_clauses);
                 self.advance();
-                const more = try self.parseSetClauses();
-                var all = std.ArrayList(ast.SetClause).empty;
-                try all.appendSlice(self.arena.allocator(), set_clauses);
-                try all.appendSlice(self.arena.allocator(), more);
-                set_clauses = try all.toOwnedSlice(self.arena.allocator());
+                try self.appendSetClauses(&all);
             }
+            set_clauses = try all.toOwnedSlice(self.arena.allocator());
         }
 
         // Parse REMOVE clauses if present (before RETURN)
         var remove_clauses: []ast.RemoveClause = &.{};
         if (self.cur.kind == .REMOVE) {
-            self.advance();
-            remove_clauses = try self.parseRemoveClauses();
             // SONNY-3146: consecutive REMOVE clauses are one list. A SET
             // after a REMOVE stays a syntax error: the executors apply every
-            // SET before every REMOVE.
+            // SET before every REMOVE. SONNY-3190: one list, capped.
+            var all = std.ArrayList(ast.RemoveClause).empty;
             while (self.cur.kind == .REMOVE) {
+                try self.countWriteClause(&write_clauses);
                 self.advance();
                 const more = try self.parseRemoveClauses();
-                var all = std.ArrayList(ast.RemoveClause).empty;
-                try all.appendSlice(self.arena.allocator(), remove_clauses);
                 try all.appendSlice(self.arena.allocator(), more);
-                remove_clauses = try all.toOwnedSlice(self.arena.allocator());
             }
+            remove_clauses = try all.toOwnedSlice(self.arena.allocator());
         }
 
         // Parse DELETE clause if present (for CREATE ... WITH ... DELETE ... pattern)
@@ -2427,18 +2505,20 @@ pub const Parser = struct {
             // a statement with one on both sides of its DELETE is marked, and
             // the write-shape validator refuses it (the executors run all of
             // a statement's CREATE before its DELETE).
-            while (self.cur.kind == .CREATE) {
-                self.advance();
-                const cp = try self.parseGraphPattern();
+            // SONNY-3190: one list, capped.
+            if (self.cur.kind == .CREATE) {
+                var all = std.ArrayList(ast.Chain).empty;
                 if (create_pattern) |earlier| {
                     split_create = true;
-                    var all = std.ArrayList(ast.Chain).empty;
                     try all.appendSlice(self.arena.allocator(), earlier.chains);
-                    try all.appendSlice(self.arena.allocator(), cp.chains);
-                    create_pattern = .{ .chains = try all.toOwnedSlice(self.arena.allocator()) };
-                } else {
-                    create_pattern = cp;
                 }
+                while (self.cur.kind == .CREATE) {
+                    try self.countWriteClause(&write_clauses);
+                    self.advance();
+                    const cp = try self.parseGraphPattern();
+                    try all.appendSlice(self.arena.allocator(), cp.chains);
+                }
+                create_pattern = .{ .chains = try all.toOwnedSlice(self.arena.allocator()) };
             }
         }
 
@@ -2631,6 +2711,8 @@ pub const Parser = struct {
             // when a WITH after the MATCH takes `with_clause`.
             .initial_with = if (select_mode) null else initial_with_clause,
             .initial_where = if (select_mode) null else initial_where_expr,
+            .select_projection = select_mode,
+            .optional_where = optional_where,
             .pre_with_where = pre_with_where,
             .with_where = with_where,
             .split_create = split_create,
@@ -4536,7 +4618,10 @@ pub const Parser = struct {
                 try create_chains.append(self.arena.allocator(), chain);
             }
             // Handle additional CREATE patterns
+            // SONNY-3190: at most `max_write_clauses_per_part` clauses.
+            var write_clauses: usize = 1;
             while (self.cur.kind == .CREATE) {
+                try self.countWriteClause(&write_clauses);
                 self.advance();
                 const next_pattern = try self.parseGraphPattern();
                 for (next_pattern.chains) |chain| {
@@ -4832,7 +4917,10 @@ pub const Parser = struct {
             for (first_pattern.chains) |chain| {
                 try merge_chains.append(self.arena.allocator(), chain);
             }
+            // SONNY-3190: at most `max_write_clauses_per_part` clauses.
+            var write_clauses: usize = 1;
             while (self.cur.kind == .MERGE) {
+                try self.countWriteClause(&write_clauses);
                 self.advance();
                 const next_pattern = try self.parseGraphPattern();
                 for (next_pattern.chains) |chain| {
@@ -4906,7 +4994,12 @@ pub const Parser = struct {
     fn parseSetClauses(self: *Parser) ParserError![]ast.SetClause {
         // GAP-0220 FIX: Use try for proper error propagation
         var clauses = try std.ArrayList(ast.SetClause).initCapacity(self.arena.allocator(), 0);
+        try self.appendSetClauses(&clauses);
+        return clauses.toOwnedSlice(self.arena.allocator());
+    }
 
+    /// The items of one SET clause (`a.x = 1, b:L, ...`), appended to `clauses`.
+    fn appendSetClauses(self: *Parser, clauses: *std.ArrayList(ast.SetClause)) ParserError!void {
         // Parse first clause
         const first = try self.parseSetClause();
         try clauses.append(self.arena.allocator(), first);
@@ -4917,8 +5010,6 @@ pub const Parser = struct {
             const clause = try self.parseSetClause();
             try clauses.append(self.arena.allocator(), clause);
         }
-
-        return clauses.toOwnedSlice(self.arena.allocator());
     }
 
     fn parseSetClause(self: *Parser) ParserError!ast.SetClause {

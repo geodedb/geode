@@ -266,9 +266,10 @@ pub fn fieldRole(comptime field: []const u8) FieldRole {
     @setEvalBranchQuota(20_000);
     const writes = [_][]const u8{ "create_pattern", "merge_statement", "set_clauses", "remove_clauses", "delete_items" };
     const shape = [_][]const u8{
-        "optional_match",      "match",         "unwind_clause",  "where_clause",  "filter_clause",   "with_clause",
-        "inline_let_bindings", "group_by",      "having",         "path_variable", "is_initial_with", "call_clause",
-        "initial_with",        "initial_where", "pre_with_where", "with_where",    "chained_write",   "split_create",
+        "optional_match",      "match",          "unwind_clause",  "where_clause",  "filter_clause",   "with_clause",
+        "inline_let_bindings", "group_by",       "having",         "path_variable", "is_initial_with", "call_clause",
+        "initial_with",        "initial_where",  "pre_with_where", "with_where",    "chained_write",   "split_create",
+        "select_projection",   "optional_where",
     };
     const nested = [_][]const u8{ "next_query", "for_statement", "initial_call_subquery", "cte_list" };
     const read = [_][]const u8{

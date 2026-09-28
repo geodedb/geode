@@ -143,6 +143,15 @@ pub const Query = struct {
     // A CREATE both before and after the DELETE (`... CREATE (a) DELETE q
     // CREATE (b)`): `create_pattern` holds both, and the validator refuses it.
     split_create: bool = false,
+    // SONNY-3139 (reopened): the part starts with a SELECT projection
+    // (`[WITH ...] SELECT ... MATCH ...`). `initial_with` does not hold it
+    // (the SELECT replaced any WITH before it), so the write-shape allowlist
+    // refuses a write after one.
+    select_projection: bool = false,
+    // SONNY-3184: a WHERE came after an OPTIONAL MATCH. `where_clause` holds
+    // it joined with the MATCH's and it filters the whole row, not only the
+    // optional part, so the write-shape allowlist refuses a write after one.
+    optional_where: bool = false,
 };
 
 pub const UnionQuery = struct {
