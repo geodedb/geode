@@ -1041,6 +1041,13 @@
   graph named CURRENT_GRAPH, CURRENT_PROPERTY_GRAPH, HOME_GRAPH or
   HOME_PROPERTY_GRAPH made before 0.8.23 (the start-up log names each),
   run `DROP GRAPH <name>` with the name exactly as stored.
+- **Round 16: the round 15 review's findings (SONNY-3312, SONNY-3313,
+  SONNY-3314, SONNY-3315, SONNY-3316, SONNY-3317):**
+  - A read whose statements run on several graphs (`MATCH ...; USE GRAPH
+    g2; MATCH ...`) reads each of them: round 15's snapshot copied only the
+    session's graph, so the other graphs read as empty (a regression in
+    round 15). The read takes each graph's read lock, shared and in name
+    order, and snapshots every graph it reads (SONNY-3312).
 
 ### Fixed
 

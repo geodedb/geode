@@ -494,6 +494,13 @@ pub const StatementPlan = struct {
     /// has a statement on graph data (`programMixesGraphDdl`). The handler
     /// refuses it (0A000).
     graph_ddl_has_company: bool = false,
+    /// SONNY-3312: the program only reads, and its statements run on more
+    /// than one graph (`lock_graph` is then the session graph). The handlers
+    /// snapshot every graph it reads (`programDataGraphList`), each under its
+    /// own read lock taken in name order (`graph_store.snapshotUnderReadLocks`):
+    /// a snapshot of `lock_graph` alone answered `USE GRAPH g2; MATCH ...` from
+    /// an empty copy of g2.
+    reads_several_graphs: bool = false,
 };
 
 /// SONNY-2749: what the handlers answer (SQLSTATE 0A000) to a program whose
@@ -555,6 +562,7 @@ pub fn statementPlan(
         .spans_graphs = is_mutation and needs_store_lock and program_graph == null,
         .lock_graph_may_be_missing = programOnlyGraphDdl(program, session_graph, home_graph),
         .graph_ddl_has_company = programMixesGraphDdl(program),
+        .reads_several_graphs = !is_mutation and needs_store_lock and program_graph == null,
     };
 }
 
@@ -683,6 +691,50 @@ pub fn programDataGraph(program: *const ast.Program, start_graph: []const u8, ho
     return if (walk.runs_on) |g| .{ .one = g } else .none;
 }
 
+// CANARY: REQ=REQ-SONNY-3312-MULTI-GRAPH-READ; FEATURE="MultiGraphIsolation"; ASPECT=ReadGraphList; STATUS=TESTED; TEST=tests/test_sonny3312_multi_graph_read.zig; OWNER=storage; UPDATED=2026-09-28
+/// SONNY-3312: every graph whose data the statements of `program` touch, by
+/// `programDataGraph`'s rules, sorted by name with no repeats: the order a
+/// read of several graphs takes their read locks in
+/// (`graph_store.snapshotUnderReadLocks`). The names point into the program,
+/// `start_graph` or `home_graph`; the caller frees the slice. Empty when no
+/// statement touches graph data.
+pub fn programDataGraphList(allocator: std.mem.Allocator, program: *const ast.Program, start_graph: []const u8, home_graph: []const u8) ![]const []const u8 {
+    var list: GraphList = .{ .allocator = allocator };
+    errdefer list.names.deinit(allocator);
+    var walk: DataGraphWalk = .{ .current = start_graph, .home_graph = home_graph, .collect = &list };
+    for (program.statements) |*stmt| _ = walk.statement(stmt);
+    if (list.oom) return error.OutOfMemory;
+    const names = try list.names.toOwnedSlice(allocator);
+    std.mem.sort([]const u8, names, {}, struct {
+        fn lt(_: void, a: []const u8, b: []const u8) bool {
+            return std.mem.lessThan(u8, a, b);
+        }
+    }.lt);
+    var kept: usize = 0;
+    for (names) |n| {
+        if (kept > 0 and std.mem.eql(u8, names[kept - 1], n)) continue;
+        names[kept] = n;
+        kept += 1;
+    }
+    if (kept == names.len) return names;
+    const out = try allocator.dupe([]const u8, names[0..kept]);
+    allocator.free(names);
+    return out;
+}
+
+/// SONNY-3312: `programDataGraphList`'s collector.
+const GraphList = struct {
+    allocator: std.mem.Allocator,
+    names: std.ArrayList([]const u8) = .empty,
+    oom: bool = false,
+
+    fn add(self: *GraphList, graph: []const u8) void {
+        self.names.append(self.allocator, graph) catch {
+            self.oom = true;
+        };
+    }
+};
+
 /// SONNY-3028: do the program's statements on graph data run on one graph,
 /// and is every one of them a CREATE or DROP GRAPH of that graph?
 pub fn programOnlyGraphDdl(program: *const ast.Program, start_graph: []const u8, home_graph: []const u8) bool {
@@ -702,9 +754,20 @@ const DataGraphWalk = struct {
     runs_on: ?[]const u8 = null,
     /// SONNY-3028: every such statement so far is a CREATE or DROP GRAPH.
     only_graph_ddl: bool = true,
+    /// SONNY-3312: when set, every graph a statement touches is added here,
+    /// and a second graph is not a conflict.
+    collect: ?*GraphList = null,
 
     fn note(self: *DataGraphWalk, graph: []const u8) bool {
         self.only_graph_ddl = false;
+        return self.noteOn(graph);
+    }
+
+    fn noteOn(self: *DataGraphWalk, graph: []const u8) bool {
+        if (self.collect) |list| {
+            list.add(graph);
+            return true;
+        }
         return noteGraph(&self.runs_on, graph);
     }
 
@@ -735,8 +798,8 @@ const DataGraphWalk = struct {
             // for the graph's other requests. They counted as statements on
             // the session's graph, so `DROP GRAPH g` from a session on
             // `default` locked `default` and freed g under its lock holders.
-            .CreateGraph => |cg| return noteGraph(&self.runs_on, cg.name),
-            .DropGraph => |dg| return noteGraph(&self.runs_on, dg.name),
+            .CreateGraph => |cg| return self.noteOn(cg.name),
+            .DropGraph => |dg| return self.noteOn(dg.name),
             .CreateIndex => |ci| {
                 const on = if (ci.index_type == .fulltext) graph_store.DEFAULT_GRAPH_NAME else self.current;
                 return self.note(on);

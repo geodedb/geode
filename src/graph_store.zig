@@ -2616,7 +2616,7 @@ pub const GraphStore = struct {
     /// its own mutex (`IdMap.clone`), which DROP GRAPH's `releaseContents`
     /// also takes, so a clone never reads contents a writer is growing or a
     /// drop is freeing.
-    fn cloneIdMapsFrom(self: *GraphStore, source: *const GraphStore, scope: ?[]const u8) !void {
+    fn cloneIdMapsFrom(self: *GraphStore, source: *const GraphStore, scope: ?[]const []const u8) !void {
         // SONNY-3180: the source's list, copied under its lock.
         const refs = try @constCast(source).idMapsSnapshot(self.allocator);
         defer @constCast(source).releaseIdMaps(self.allocator, refs);
@@ -2625,9 +2625,7 @@ pub const GraphStore = struct {
         defer self.id_maps_lock.unlock(io);
         for (refs) |ref| {
             const graph_name = ref.graph_name;
-            if (scope) |g| {
-                if (!std.mem.eql(u8, g, graph_name)) continue;
-            }
+            if (!inSnapshotScope(scope, graph_name)) continue;
             if (self.id_maps.contains(graph_name)) continue;
 
             const key_copy = try self.allocator.dupe(u8, graph_name);
@@ -2709,7 +2707,7 @@ pub const GraphStore = struct {
     ///     shard's lock;
     ///   - a snapshot read (`snapshotUnderReadLock`) clones only its own
     ///     graph (`scope`), the one its read lock covers.
-    fn cloneNodesFrom(self: *GraphStore, source: *const GraphStore, scope: ?[]const u8) !void {
+    fn cloneNodesFrom(self: *GraphStore, source: *const GraphStore, scope: ?[]const []const u8) !void {
         // Clone graphs registry, the names copied under its lock (SONNY-3233
         // F12).
         {
@@ -2733,11 +2731,9 @@ pub const GraphStore = struct {
             // Unbounded source: the resident map is the full set.
             const NodeCopy = struct {
                 dst: *GraphStore,
-                scope: ?[]const u8,
+                scope: ?[]const []const u8,
                 fn visit(c: *@This(), _: u64, node: *const Node) !void {
-                    if (c.scope) |g| {
-                        if (!std.mem.eql(u8, g, node.graph_name)) return;
-                    }
+                    if (!inSnapshotScope(c.scope, node.graph_name)) return;
                     try c.dst.cloneOneNode(node);
                 }
             };
@@ -2757,9 +2753,7 @@ pub const GraphStore = struct {
             defer @constCast(source).releaseIdMaps(self.allocator, refs);
             for (refs) |im_entry| {
                 const graph_name = im_entry.graph_name;
-                if (scope) |g| {
-                    if (!std.mem.eql(u8, g, graph_name)) continue;
-                }
+                if (!inSnapshotScope(scope, graph_name)) continue;
                 const nuuids = try im_entry.map.snapshotNodeUuids(self.allocator);
                 defer self.allocator.free(nuuids);
                 for (nuuids) |nuuid| {
@@ -2796,11 +2790,9 @@ pub const GraphStore = struct {
         // Clone edges, a shard at a time under its map lock.
         const EdgeCopy = struct {
             dst: *GraphStore,
-            scope: ?[]const u8,
+            scope: ?[]const []const u8,
             fn visit(c: *@This(), key: u64, src_edge: *const Edge) !void {
-                if (c.scope) |g| {
-                    if (!std.mem.eql(u8, g, src_edge.graph_name)) return;
-                }
+                if (!inSnapshotScope(c.scope, src_edge.graph_name)) return;
                 const dst = c.dst;
                 var props = CompactPropertyMap.init(dst.allocator);
                 var prop_it = src_edge.properties.iterator();
@@ -2831,6 +2823,16 @@ pub const GraphStore = struct {
         };
         var edge_copier: EdgeCopy = .{ .dst = self, .scope = scope };
         try source.edges.forEachResident(&edge_copier, EdgeCopy.visit);
+    }
+
+    /// SONNY-3312: is `graph_name` one of the graphs a snapshot copies
+    /// (every graph when `scope` is null)?
+    fn inSnapshotScope(scope: ?[]const []const u8, graph_name: []const u8) bool {
+        const graphs = scope orelse return true;
+        for (graphs) |g| {
+            if (std.mem.eql(u8, g, graph_name)) return true;
+        }
+        return false;
     }
 
     fn requireNodeSlot(self: *GraphStore, graph_name: []const u8, node_id: u64) !u64 {
@@ -14941,12 +14943,63 @@ pub fn snapshotUnderReadLock(allocator: std.mem.Allocator, graph_name: []const u
     const source = getPrimaryGlobalStore(allocator);
     // SONNY-3180 (round 15, F2): only `graph_name`'s nodes, edges and IdMap:
     // this read's lock covers them and nothing else.
-    if (try QueryReadSession.initScoped(allocator, source, graph_name)) |session| {
+    if (try QueryReadSession.initScoped(allocator, source, &.{graph_name})) |session| {
         return session;
     }
     // initIfAvailable only returns null in paths that we do not expect on
     // the handler read path; surface that as an explicit error so callers
     // can fall back to the legacy wide-scope lock.
+    return error.SnapshotUnavailable;
+}
+
+// CANARY: REQ=REQ-SONNY-3312-MULTI-GRAPH-READ; FEATURE="MultiGraphIsolation"; ASPECT=SnapshotEveryGraphRead; STATUS=TESTED; TEST=tests/test_sonny3312_multi_graph_read.zig; OWNER=storage; UPDATED=2026-09-28
+/// SONNY-3312: `snapshotUnderReadLock` for a read program whose statements run
+/// on several graphs (`query_traits.StatementPlan.reads_several_graphs`).
+/// `graph_names` is `query_traits.programDataGraphList`'s: sorted by name, no
+/// repeats. Each graph is hydrated, then the global store lock is taken shared
+/// once and each graph's read lock shared, in name order; the snapshot copies
+/// those graphs, and the locks are released before this returns.
+///
+/// Round 15 (SONNY-3180) scoped the snapshot to the one graph whose lock a
+/// read holds, and a read of several graphs holds the session graph's: `MATCH
+/// (n:C) RETURN count(n) AS c; USE GRAPH g2; MATCH (n:C) RETURN count(n) AS c`
+/// from a session on g1 answered 0 for g2's two nodes.
+///
+/// No deadlock: a writer holds one graph's write lock (a change of several
+/// graphs is refused, `spans_graphs`), every reader of several graphs takes
+/// them in the same (name) order, and the global lock is taken once, so a
+/// queued exclusive holder of it cannot sit between two shared acquisitions
+/// by this thread. A graph that does not exist (or is dropped while this
+/// waits) has no lock to take and nothing to copy; the executor reports it as
+/// it does for a read of one graph.
+pub fn snapshotUnderReadLocks(allocator: std.mem.Allocator, graph_names: []const []const u8) !QueryReadSession {
+    if (graph_names.len == 1) return snapshotUnderReadLock(allocator, graph_names[0]);
+    const source = getPrimaryGlobalStore(allocator);
+    for (graph_names) |g| source.ensureGraphHydrated(g);
+
+    const held = try allocator.alloc(?graph_storage_adapter.ReadLockAcquisition, graph_names.len);
+    defer allocator.free(held);
+    @memset(held, null);
+    acquireStoreLock();
+    defer releaseStoreLock();
+    defer {
+        if (global_adapter) |adapter| {
+            var i = held.len;
+            while (i > 0) {
+                i -= 1;
+                if (held[i]) |acq| adapter.releaseGraphReadLock(acq.mg, acq.hold_start_ns, .snapshot);
+            }
+        }
+    }
+    if (global_adapter) |adapter| {
+        for (graph_names, 0..) |g, i| {
+            held[i] = adapter.acquireGraphReadLock(g) catch null;
+        }
+    }
+
+    if (try QueryReadSession.initScoped(allocator, source, graph_names)) |session| {
+        return session;
+    }
     return error.SnapshotUnavailable;
 }
 
@@ -16026,9 +16079,10 @@ pub const QueryReadSession = struct {
     }
 
     /// SONNY-3180 (round 15, F2): a snapshot of every graph (`scope` null),
-    /// or of only `scope`'s nodes, edges and IdMap: the one graph whose read
-    /// lock a snapshot read holds (`snapshotUnderReadLock`).
-    pub fn initScoped(allocator: std.mem.Allocator, source_store: *GraphStore, scope: ?[]const u8) !?QueryReadSession {
+    /// or of only the nodes, edges and IdMaps of the graphs in `scope`: the
+    /// graphs whose read locks a snapshot read holds (`snapshotUnderReadLock`,
+    /// and SONNY-3312 `snapshotUnderReadLocks`).
+    pub fn initScoped(allocator: std.mem.Allocator, source_store: *GraphStore, scope: ?[]const []const u8) !?QueryReadSession {
         // GAP-0523: Removed vestigial global_adapter gate. cloneNodesFrom/cloneIdMapsFrom
         // clone directly from the in-memory store (see line 763 comment: "without going
         // through the adapter"), so no adapter is needed for snapshot creation.

@@ -3332,6 +3332,26 @@ pub fn handleExecute(request_bytes: []const u8, allocator: std.mem.Allocator, ep
                         defer resp.deinit(allocator);
                         return encodeMessage(allocator, resp);
                     };
+                } else if (stmt_plan.reads_several_graphs) {
+                    // CANARY: REQ=REQ-SONNY-3312-MULTI-GRAPH-READ; FEATURE="MultiGraphIsolation"; ASPECT=GrpcHandler; STATUS=TESTED; TEST=tests/test_sonny3312_multi_graph_read.zig; OWNER=storage; UPDATED=2026-09-28
+                    // SONNY-3312: a read whose statements run on several
+                    // graphs snapshots each of them, under each one's read
+                    // lock taken in name order. A snapshot of `lock_graph`
+                    // (the session graph) alone read the others as empty.
+                    // No live fallback: it would hold one graph's lock.
+                    const read_graphs = try query_traits.programDataGraphList(allocator, &parse_result.program, query_graph_name, homeGraphName(state));
+                    defer allocator.free(read_graphs);
+                    if (graph_store.snapshotUnderReadLocks(allocator, read_graphs)) |session| {
+                        read_session = session;
+                        prev_active_read_store = graph_store.pushActiveQueryReadStore(
+                            read_session.?.store(),
+                        );
+                    } else |err| {
+                        const info = proto_util.mapError(err);
+                        var resp = try buildErrorResponse(allocator, info.code, info.message, &.{}, &.{});
+                        defer resp.deinit(allocator);
+                        return encodeMessage(allocator, resp);
+                    }
                 } else if (stmt_plan.point_read and !execution.wouldEvaluateRLS()) {
                     // GAP-0805: zero-copy point-read view scoped by the
                     // shared read lock (handle kept alive until defer).
