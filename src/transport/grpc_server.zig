@@ -3481,7 +3481,18 @@ pub fn handleExecute(request_bytes: []const u8, allocator: std.mem.Allocator, ep
                         if (analysis.target) |target| {
                             if (target.* == .Query) {
                                 const query_ptr = &target.Query;
-                                if (try node_scan_stream.prepare(allocator, query_ptr, exec_context, bindings.names, bindings.values, flags.items)) |prepared_stream| {
+                                // SONNY-3251 (round 15, F6): a limit the scan's
+                                // WHERE ran into (a count is computed here)
+                                // answers its SQLSTATE, not a Zig error.
+                                const prepared_opt = node_scan_stream.prepare(allocator, query_ptr, exec_context, bindings.names, bindings.values, flags.items) catch |err| {
+                                    if (!geode.eval.isResourceLimitError(err)) return err;
+                                    failed_in_txn = true;
+                                    const info = proto_util.mapError(err);
+                                    var resp = try buildErrorResponse(allocator, info.code, info.message, &.{}, &.{});
+                                    defer resp.deinit(allocator);
+                                    return encodeMessage(allocator, resp);
+                                };
+                                if (prepared_opt) |prepared_stream| {
                                     var active_stream = prepared_stream;
                                     errdefer active_stream.deinit();
 
@@ -3700,7 +3711,17 @@ pub fn handlePull(request_bytes: []const u8, allocator: std.mem.Allocator) ![]u8
     const pa = pull_arena.allocator();
 
     if (state.active_node_scan_stream) |*active_stream| {
-        var page_result = try active_stream.buildNextPage(allocator, req.page_size);
+        // SONNY-3251 (round 15, F6): a limit a page's WHERE ran into ends
+        // the stream with its SQLSTATE.
+        var page_result = active_stream.buildNextPage(allocator, req.page_size) catch |err| {
+            if (!geode.eval.isResourceLimitError(err)) return err;
+            state.resetResult();
+            const info = proto_util.mapError(err);
+            var resp = try buildErrorResponse(allocator, info.code, info.message, &.{}, &.{});
+            defer resp.deinit(allocator);
+            const pull_resp = schema.PullResponse{ .response = resp };
+            return encodeMessage(allocator, pull_resp);
+        };
         defer page_result.result.deinit(allocator);
 
         const page = try proto_util.buildDataPageFromRows(pa, page_result.result.rows, page_result.final, false, &.{});

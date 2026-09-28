@@ -420,7 +420,7 @@ pub const NodeScanStream = struct {
             errdefer if (!node_tracked) destroyNode(allocator, node);
 
             if (self.where_expr) |where_expr| {
-                const passes = self.evalPredicate(&scratch, allocator, where_expr, node);
+                const passes = try self.evalPredicate(&scratch, allocator, where_expr, node);
                 if (!passes) {
                     destroyNode(allocator, node);
                     continue;
@@ -692,7 +692,7 @@ pub const NodeScanStream = struct {
                     else
                         materializeNode(allocator, self.graph_name, slot_id) catch continue;
                     defer destroyNode(allocator, node);
-                    if (self.evalPredicate(&scratch, allocator, where_expr, node)) matched += 1;
+                    if (try self.evalPredicate(&scratch, allocator, where_expr, node)) matched += 1;
                 }
                 // Released already if we bailed at a batch boundary on cancel.
                 if (count_lock_held) graph_store.releaseGraphLock(lock);
@@ -745,12 +745,18 @@ pub const NodeScanStream = struct {
 
     /// Whether `node` passes `where_expr`. The evaluation runs on `scratch`
     /// (see `predicateAllocator`), which is reset before this returns. An
-    /// evaluation error is a miss, as it always was.
-    fn evalPredicate(self: *NodeScanStream, scratch: *std.heap.ArenaAllocator, allocator: std.mem.Allocator, where_expr: ast.Expr, node: *graph_store.Node) bool {
+    /// evaluation error is a miss, as it always was, except a limit
+    /// (SONNY-3251, round 15: 54001, 53200, 57014), which fails the read:
+    /// this stream is served outside the statement chokepoint that fails a
+    /// statement on a limit it swallowed.
+    fn evalPredicate(self: *NodeScanStream, scratch: *std.heap.ArenaAllocator, allocator: std.mem.Allocator, where_expr: ast.Expr, node: *graph_store.Node) !bool {
         defer _ = scratch.reset(.retain_capacity);
         const eval_allocator = predicateAllocator(scratch, allocator);
         const env = self.makeEnv(eval_allocator, node);
-        const where_result = eval.evalExpr(eval_allocator, where_expr, env) catch return false;
+        const where_result = eval.evalExpr(eval_allocator, where_expr, env) catch |err| {
+            if (eval.isResourceLimitError(err)) return err;
+            return false;
+        };
         return predicateHolds(where_result);
     }
 };
@@ -1848,7 +1854,7 @@ fn collectMatchingSlotIds(
                         // predicate. Only predicate-passing slots count toward
                         // `match_cap`; capping on raw slots would under-return.
                         if (!try nodeMatchesPattern(allocator, adapter, graph_name, slot_id, pattern, param_names, param_values, context)) continue;
-                        if (!slotMatchesPredicate(allocator, &scratch, graph_name, slot_id, wp.where_expr, wp.var_name, param_names, param_values, context)) continue;
+                        if (!try slotMatchesPredicate(allocator, &scratch, graph_name, slot_id, wp.where_expr, wp.var_name, param_names, param_values, context)) continue;
                         try result.append(allocator, slot_id);
                         if (result.items.len >= wp.match_cap) break :outer;
                     }
@@ -2044,7 +2050,7 @@ fn slotMatchesPredicate(
     param_names: []const []const u8,
     param_values: []const Value,
     context: ExecutionContext,
-) bool {
+) !bool {
     const node = materializeNode(allocator, graph_name, slot_id) catch return false;
     defer destroyNode(allocator, node);
     // SONNY-2656: as in `evalPredicate`, the evaluation runs on `scratch`,
@@ -2061,7 +2067,12 @@ fn slotMatchesPredicate(
         .allocator = eval_allocator,
         .exec_context = @constCast(&context),
     };
-    const where_result = eval.evalExpr(eval_allocator, where_expr, env) catch return false;
+    // SONNY-3251 (round 15, F6): a limit fails the read; any other error is
+    // a miss.
+    const where_result = eval.evalExpr(eval_allocator, where_expr, env) catch |err| {
+        if (eval.isResourceLimitError(err)) return err;
+        return false;
+    };
     return predicateHolds(where_result);
 }
 

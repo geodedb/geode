@@ -3268,8 +3268,10 @@ fn applyResultFilters(
             .exec_context = @constCast(&context),
         };
 
+        // SONNY-3251 (round 15, F6): a limit (54001, 53200, 57014) is the
+        // query's; any other error is the row's false, as it was.
         const passes_where = if (where_expr) |expr|
-            truthyPredicate(eval.evalExpr(allocator, expr, env) catch Value{ .Bool = false })
+            truthyPredicate(eval.evalExpr(allocator, expr, env) catch |err| if (eval.isResourceLimitError(err)) return err else Value{ .Bool = false })
         else
             true;
         if (!passes_where) {
@@ -3278,7 +3280,7 @@ fn applyResultFilters(
         }
 
         const passes_filter = if (filter_expr) |expr|
-            truthyPredicate(eval.evalExpr(allocator, expr, env) catch Value{ .Bool = false })
+            truthyPredicate(eval.evalExpr(allocator, expr, env) catch |err| if (eval.isResourceLimitError(err)) return err else Value{ .Bool = false })
         else
             true;
         if (!passes_filter) {

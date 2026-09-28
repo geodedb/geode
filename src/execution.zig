@@ -1463,11 +1463,22 @@ pub fn executeStatementWithContext(allocator: std.mem.Allocator, stmt: ast.State
     const owns_in_predicate_scope = eval.enterInPredicateScope();
     var result = executeStatementWithContextInner(allocator, stmt, context) catch |err| {
         _ = eval.exitInPredicateScope(owns_in_predicate_scope);
+        _ = eval.takeDeferredLimitError(owns_in_predicate_scope);
         return err;
     };
+    // CANARY: REQ=REQ-SONNY-3251-LIMIT-ERRORS; FEATURE="Execution"; ASPECT=StatementLimitRelay; STATUS=TESTED; TEST=tests/test_sonny3251_limit_errors.zig; OWNER=execution; UPDATED=2026-09-28
+    // SONNY-3251 (round 15, F6): a limit the evaluator ran into (54001),
+    // which a WHERE, a cell, an aggregate or a subquery turned into false,
+    // NULL, 0 or a skipped row somewhere inside, fails the statement: its
+    // rows are not an answer (`eval.noteLimitError`).
+    const limit_error = eval.takeDeferredLimitError(owns_in_predicate_scope);
     if (eval.exitInPredicateScope(owns_in_predicate_scope)) {
         result.deinit(allocator);
         return error.InListRequiresList;
+    }
+    if (limit_error) |err| {
+        result.deinit(allocator);
+        return err;
     }
     return result;
 }
@@ -3375,6 +3386,10 @@ pub fn isQueryLevelEvalError(err: anyerror) bool {
         // not installed; no row may be answered without it.
         error.EvaluatorNotInitialized,
         error.OutOfMemory,
+        // SONNY-3251 (round 15, F6): the expression nested past the thread's
+        // stack (54001). A grouped HAVING that met it dropped its group, a
+        // key or cell became NULL, an aggregate skipped the row.
+        error.ExpressionTooDeep,
         => true,
         else => false,
     };

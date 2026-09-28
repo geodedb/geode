@@ -102,7 +102,10 @@ threadlocal var in_predicate_scope_depth: u32 = 0;
 /// outermost statement on this thread) and is therefore the one that must
 /// observe the flag.
 pub fn enterInPredicateScope() bool {
-    if (in_predicate_scope_depth == 0) in_predicate_type_error = false;
+    if (in_predicate_scope_depth == 0) {
+        in_predicate_type_error = false;
+        deferred_limit_error = null;
+    }
     in_predicate_scope_depth += 1;
     return in_predicate_scope_depth == 1;
 }
@@ -122,6 +125,77 @@ fn raiseInListTypeError() EvalError {
     in_predicate_type_error = true;
     return EvalError.InListRequiresList;
 }
+
+// CANARY: REQ=REQ-SONNY-3251-LIMIT-ERRORS; FEATURE="ExpressionEvaluator"; ASPECT=LimitErrorRelay; STATUS=TESTED; TEST=tests/test_sonny3251_limit_errors.zig; OWNER=eval; UPDATED=2026-09-28
+/// SONNY-3251 (round 15, F6): whether `err` is a resource limit the
+/// evaluator ran into, not a value it could not compute: the expression
+/// nested past the thread's stack (`ExpressionTooDeep`, 54001), the read
+/// or write budget (53200), a cancel (57014), or memory. A limit belongs to
+/// the query, never to one row: a caller that turns an evaluation error
+/// into NULL, false, 0 or a skipped row (a WHERE, a projection cell, an
+/// aggregate's argument, a subquery) must pass these on instead, or the
+/// query answers as if the rows did not match.
+pub fn isResourceLimitError(err: anyerror) bool {
+    return switch (err) {
+        error.ExpressionTooDeep,
+        error.ReadQueryBudgetExceeded,
+        error.ReadQueryCancelled,
+        error.WriteQueryBudgetExceeded,
+        error.WriteQueryCancelled,
+        error.OutOfMemory,
+        => true,
+        else => false,
+    };
+}
+
+/// SONNY-3251: `err` as the evaluator's own error when it is a limit the
+/// evaluator can raise (the write budget and cancel are the write
+/// executor's), else null.
+pub fn limitAsEvalError(err: anyerror) ?EvalError {
+    return switch (err) {
+        error.ExpressionTooDeep => EvalError.ExpressionTooDeep,
+        error.ReadQueryBudgetExceeded => EvalError.ReadQueryBudgetExceeded,
+        error.ReadQueryCancelled => EvalError.ReadQueryCancelled,
+        error.OutOfMemory => EvalError.OutOfMemory,
+        else => null,
+    };
+}
+
+/// SONNY-3251 (round 15, F6): about 140 call sites across the executor turn
+/// an evaluation error into NULL, false, 0 or a skipped row (the WHERE
+/// filters, the projection cells, the aggregates' arguments, the pattern
+/// predicates, ORDER BY keys). A limit refusal was swallowed there: `WHERE
+/// size([n.v, 1][0..2] ... x4000) = 2` answered 0 rows instead of 54001. The
+/// sites that decide a query's rows pass limit errors on themselves; for
+/// every other one, the evaluator records `ExpressionTooDeep` here when it
+/// raises it, as it does the IN type error (`raiseInListTypeError`), and the
+/// statement chokepoint (`execution.executeStatementWithContext`) fails the
+/// statement with it. (The read budget and cancel stay tripped once hit, and
+/// the next budget check raises them again; memory is left to the sites.)
+threadlocal var deferred_limit_error: ?EvalError = null;
+
+/// SONNY-3251: record the limit refusal `err` for the statement (the first
+/// one wins) and return it.
+pub fn noteLimitError(err: EvalError) EvalError {
+    if (deferred_limit_error == null) deferred_limit_error = err;
+    return err;
+}
+
+/// SONNY-3251: the limit refusal recorded in the statement scope `owns`
+/// opened (`enterInPredicateScope`), cleared; null for a nested scope, or
+/// when none was recorded.
+pub fn takeDeferredLimitError(owns: bool) ?EvalError {
+    if (!owns) return null;
+    const pending = deferred_limit_error;
+    deferred_limit_error = null;
+    return pending;
+}
+
+/// SONNY-3251: a test seam. When set on a thread, `evalExpr` refuses with
+/// `ExpressionTooDeep` as if the stack were spent, so a test can see what
+/// each caller does with the refusal on any expression. Never set outside
+/// tests.
+pub threadlocal var test_force_expression_too_deep: bool = false;
 
 // CANARY: REQ=REQ-M5.2-EVAL-REFACTOR-003; FEATURE="Circular Dependency Resolution"; ASPECT=ValueTypeReexport; STATUS=EXEMPT; OWNER=eval; UPDATED=2025-11-13
 // Phase 5 M5.2: Re-export Value from value_types module for backward compatibility
@@ -1072,18 +1146,21 @@ const eval_stack_reserve_bytes: usize = if (builtin.mode == .Debug) 1024 * 1024 
 /// left-deep AST; SONNY-3189 caps an expression at `max_expr_links`), and
 /// this function recursed once per link: 1,000 terms crashed a 16 MiB
 /// server thread in a Debug build, from any role that could read.
-/// `evalBinaryChain`, `evalUnaryChain` and `evalMemberChain` walk a chain
+/// `evalBinaryChain`, `evalUnaryChain` and `evalPostfixChain` walk a chain
 /// down, evaluate its innermost operand once, and apply the links on the
 /// way back up, in the order and with the short-circuits the recursion
 /// had. Every other level of nesting (a list, a call, CASE) still recurses,
 /// and is refused with `ExpressionTooDeep` (54001) when the thread's stack
 /// runs short, instead of overflowing it.
 pub fn evalExpr(allocator: std.mem.Allocator, e: ast.Expr, env: Env) EvalError!Value {
-    if (!stack_guard.hasRoom(eval_stack_reserve_bytes)) return EvalError.ExpressionTooDeep;
+    // SONNY-3251: recorded for the statement as well (`noteLimitError`).
+    if (!stack_guard.hasRoom(eval_stack_reserve_bytes) or test_force_expression_too_deep) return noteLimitError(EvalError.ExpressionTooDeep);
     return switch (e) {
         .Binary => |b| evalBinaryChain(allocator, b.op, b.left, b.right, env),
         .Unary => |u| evalUnaryChain(allocator, u.op, u.expr, env),
-        .Member => |m| evalMemberChain(allocator, m.target, m.field, env),
+        // SONNY-3251 (round 15, F7): and index, slice and map-projection
+        // links, mixed with member links.
+        .Member, .Index, .Slice, .MapProjection => evalPostfixChain(allocator, &e, env),
         else => evalExprNode(allocator, e, env),
     };
 }
@@ -1193,27 +1270,138 @@ fn evalUnaryChain(allocator: std.mem.Allocator, op: ast.UnaryOp, operand: *const
     return v;
 }
 
+// CANARY: REQ=REQ-SONNY-3251-LIMIT-ERRORS; FEATURE="ExpressionEvaluator"; ASPECT=PostfixChains; STATUS=TESTED; TEST=tests/test_sonny3251_limit_errors.zig; OWNER=eval; UPDATED=2026-09-28
 /// SONNY-3181: `target.field` and the member accesses under it
-/// (`n.a.b.c`), with a loop: the innermost target is evaluated once and
-/// the fields are applied innermost first (`memberOfValue`).
-fn evalMemberChain(allocator: std.mem.Allocator, target: *const ast.Expr, field: []const u8, env: Env) EvalError!Value {
-    var sfa = std.heap.stackFallback(chain_stack_links * @sizeOf([]const u8), std.heap.smp_allocator);
+/// (`n.a.b.c`), with a loop. SONNY-3251 (round 15, F7): every postfix
+/// chain: member, index, slice and map-projection links, mixed. The index
+/// and slice links recursed once per link (guarded, so a 4000-link chain
+/// was refused with 54001 well inside `max_expr_links`). The chain is
+/// walked down to its innermost target, which is evaluated once, and the
+/// links are applied innermost first: a field (`memberOfValue`), an index
+/// evaluated after its target (`indexValue`), a slice whose bounds are
+/// evaluated only when the target is a list (`sliceValue`), a projection
+/// (`projectValue`); the order and the results of the recursion.
+fn evalPostfixChain(allocator: std.mem.Allocator, top: *const ast.Expr, env: Env) EvalError!Value {
+    var sfa = std.heap.stackFallback(chain_stack_links * @sizeOf(*const ast.Expr), std.heap.smp_allocator);
     const la = sfa.get();
-    var fields: std.ArrayList([]const u8) = .empty;
-    defer fields.deinit(la);
-    fields.append(la, field) catch return EvalError.OutOfMemory;
-    var inner = target;
-    while (inner.* == .Member) : (inner = inner.Member.target) {
-        fields.append(la, inner.Member.field) catch return EvalError.OutOfMemory;
+    var links: std.ArrayList(*const ast.Expr) = .empty;
+    defer links.deinit(la);
+    var inner = top;
+    while (true) {
+        const next: *const ast.Expr = switch (inner.*) {
+            .Member => |m| m.target,
+            .Index => |ix| ix.target,
+            .Slice => |sl| sl.target,
+            .MapProjection => |mp| mp.source,
+            else => break,
+        };
+        links.append(la, inner) catch return EvalError.OutOfMemory;
+        inner = next;
     }
     var v = try evalExpr(allocator, inner.*, env);
-    var i = fields.items.len;
+    var i = links.items.len;
     while (i > 0) {
         i -= 1;
-        const next = try memberOfValue(allocator, v, fields.items[i]);
+        // A new value, then `v`: the result is not written over the
+        // operand it is computed from.
+        const next = switch (links.items[i].*) {
+            .Member => |m| try memberOfValue(allocator, v, m.field),
+            .Index => |ix| try indexValue(allocator, v, ix.index, env),
+            .Slice => |sl| try sliceValue(allocator, v, sl.start, sl.end, env),
+            .MapProjection => |mp| try projectValue(allocator, v, mp.fields),
+            else => unreachable,
+        };
         v = next;
     }
     return v;
+}
+
+/// SONNY-3251: `target[index]`, the index evaluated after the target.
+fn indexValue(allocator: std.mem.Allocator, target: Value, index_expr: *const ast.Expr, env: Env) EvalError!Value {
+    const index_val = try evalExpr(allocator, index_expr.*, env);
+
+    // Index must be an integer
+    if (index_val != .Int) return EvalError.TypeMismatch;
+    const index = index_val.Int;
+
+    // Target must be a list
+    if (target == .List) {
+        const list = target.List;
+        // Check bounds
+        if (index < 0 or index >= list.len) return Value{ .Null = {} };
+        return list[@intCast(index)];
+    }
+
+    if (extractStructuredIndex(allocator, target, index)) |extracted| return extracted;
+
+    // Otherwise return null
+    return Value{ .Null = {} };
+}
+
+/// SONNY-3251: `target[start..end]`. The bounds are evaluated only when the
+/// target is a list; anything else slices to NULL.
+fn sliceValue(allocator: std.mem.Allocator, target: Value, start: ?*const ast.Expr, end: ?*const ast.Expr, env: Env) EvalError!Value {
+    // CANARY: REQ=REQ-GQL-SLICE-003; FEATURE="ListSlicing"; ASPECT=Evaluation; STATUS=TESTED; TEST=geodetestlab/specs/gql_expressions_comprehensive.yml; OWNER=eval; UPDATED=2025-12-24
+    // Target must be a list
+    if (target != .List) return Value{ .Null = {} };
+    const list = target.List;
+
+    // Evaluate start index (default 0)
+    var start_idx: usize = 0;
+    if (start) |start_expr| {
+        const start_val = try evalExpr(allocator, start_expr.*, env);
+        if (start_val != .Int) return EvalError.TypeMismatch;
+        if (start_val.Int < 0) return Value{ .List = &[_]Value{} };
+        start_idx = @intCast(start_val.Int);
+    }
+
+    // Evaluate end index (default list.len)
+    var end_idx: usize = list.len;
+    if (end) |end_expr| {
+        const end_val = try evalExpr(allocator, end_expr.*, env);
+        if (end_val != .Int) return EvalError.TypeMismatch;
+        if (end_val.Int < 0) return Value{ .List = &[_]Value{} };
+        end_idx = @intCast(end_val.Int);
+    }
+
+    // Clamp indices to valid range
+    if (start_idx > list.len) start_idx = list.len;
+    if (end_idx > list.len) end_idx = list.len;
+    if (start_idx >= end_idx) return Value{ .List = &[_]Value{} };
+
+    // Create the sliced list
+    const slice_len = end_idx - start_idx;
+    const result_slice = try allocator.alloc(Value, slice_len);
+    @memcpy(result_slice, list[start_idx..end_idx]);
+    return Value{ .List = result_slice };
+}
+
+/// SONNY-3251: the map projection `source {.a, .b}` of an evaluated source.
+fn projectValue(allocator: std.mem.Allocator, source: Value, fields: []const []const u8) EvalError!Value {
+    // Create a map with projected fields
+    var map = std.StringHashMap(Value).init(allocator);
+
+    // Extract fields from the source based on its type
+    for (fields) |field| {
+        const field_value = switch (source) {
+            .Map => |src_map| src_map.get(field) orelse Value{ .Null = {} },
+            .Node => |node| blk_node: {
+                // Try to get the property from the node
+                const val = node.properties.get(field) orelse break :blk_node Value{ .Null = {} };
+                break :blk_node property_codec.propertyValueToProjectedValue(allocator, val) catch Value{ .Null = {} };
+            },
+            .Edge => |edge| blk_edge: {
+                // Try to get the property from the edge
+                const val = edge.properties.get(field) orelse break :blk_edge Value{ .Null = {} };
+                break :blk_edge property_codec.propertyValueToProjectedValue(allocator, val) catch Value{ .Null = {} };
+            },
+            // ExtValue types don't support property access
+            else => Value{ .Null = {} },
+        };
+        try map.put(field, field_value);
+    }
+
+    return Value{ .Map = map };
 }
 
 /// One level of evaluation. The chains and the stack guard are
@@ -1540,6 +1728,15 @@ fn evalExprNode(allocator: std.mem.Allocator, e: ast.Expr, env: Env) EvalError!V
 
             // Try basic built-in functions if not found in extended registry
             const result = tryBasicFunction(allocator, lowercase_name, call.args, env) catch |err| {
+                // SONNY-3251 (round 15, F6): a limit an argument ran into is
+                // the query's; it collapsed the call to NULL.
+                switch (err) {
+                    error.ExpressionTooDeep => return EvalError.ExpressionTooDeep,
+                    error.ReadQueryBudgetExceeded => return EvalError.ReadQueryBudgetExceeded,
+                    error.ReadQueryCancelled => return EvalError.ReadQueryCancelled,
+                    error.OutOfMemory => return EvalError.OutOfMemory,
+                    else => {},
+                }
                 // Propagate validation errors instead of converting to null
                 const err_name = @errorName(err);
                 if (std.mem.eql(u8, err_name, "TypeMismatch")) {
@@ -1651,6 +1848,11 @@ fn evalExprNode(allocator: std.mem.Allocator, e: ast.Expr, env: Env) EvalError!V
             var result = (try getExecutionCallbacks()).executeQueryWithEnv(allocator, isq.subquery.*, env) catch |err| {
                 return switch (err) {
                     error.OutOfMemory => error.OutOfMemory,
+                    // SONNY-3251: a limit keeps its identity (54001, 53200,
+                    // 57014), not 0A000.
+                    error.ExpressionTooDeep => error.ExpressionTooDeep,
+                    error.ReadQueryBudgetExceeded => error.ReadQueryBudgetExceeded,
+                    error.ReadQueryCancelled => error.ReadQueryCancelled,
                     else => error.Unsupported,
                 };
             };
@@ -1691,6 +1893,11 @@ fn evalExprNode(allocator: std.mem.Allocator, e: ast.Expr, env: Env) EvalError!V
             var result = (try getExecutionCallbacks()).executeQueryWithEnv(allocator, nisq.subquery.*, env) catch |err| {
                 return switch (err) {
                     error.OutOfMemory => error.OutOfMemory,
+                    // SONNY-3251: a limit keeps its identity (54001, 53200,
+                    // 57014), not 0A000.
+                    error.ExpressionTooDeep => error.ExpressionTooDeep,
+                    error.ReadQueryBudgetExceeded => error.ReadQueryBudgetExceeded,
+                    error.ReadQueryCancelled => error.ReadQueryCancelled,
                     else => error.Unsupported,
                 };
             };
@@ -1925,83 +2132,8 @@ fn evalExprNode(allocator: std.mem.Allocator, e: ast.Expr, env: Env) EvalError!V
             const parsed = eval_funcs.VarBit(allocator, bit_literal) catch break :blk_varbit Value{ .Null = {} };
             break :blk_varbit heapValueToEvalValue(parsed);
         },
-        .Member => |member| blk_member: {
-            // Handle member access like n.name or r.property (where n/r is already evaluated)
-            // SONNY-3181: `memberOfValue`, which `evalMemberChain` applies
-            // link by link to a chain.
-            const target = try evalExpr(allocator, member.target.*, env);
-            break :blk_member try memberOfValue(allocator, target, member.field);
-        },
-        .Index => |idx| blk_index: {
-            // Handle array indexing like array[0]
-            const target = try evalExpr(allocator, idx.target.*, env);
-            const index_val = try evalExpr(allocator, idx.index.*, env);
-
-            // Index must be an integer
-            if (index_val != .Int) return EvalError.TypeMismatch;
-            const index = index_val.Int;
-
-            // Target must be a list
-            if (target == .List) {
-                const list = target.List;
-                // Check bounds
-                if (index < 0 or index >= list.len) {
-                    break :blk_index Value{ .Null = {} };
-                }
-                break :blk_index list[@intCast(index)];
-            }
-
-            if (extractStructuredIndex(allocator, target, index)) |extracted| {
-                break :blk_index extracted;
-            }
-
-            // Otherwise return null
-            break :blk_index Value{ .Null = {} };
-        },
-        .Slice => |slice| blk_slice: {
-            // CANARY: REQ=REQ-GQL-SLICE-003; FEATURE="ListSlicing"; ASPECT=Evaluation; STATUS=TESTED; TEST=geodetestlab/specs/gql_expressions_comprehensive.yml; OWNER=eval; UPDATED=2025-12-24
-            // Handle list slicing like list[2..4]
-            const target = try evalExpr(allocator, slice.target.*, env);
-
-            // Target must be a list
-            if (target != .List) break :blk_slice Value{ .Null = {} };
-            const list = target.List;
-
-            // Evaluate start index (default 0)
-            var start_idx: usize = 0;
-            if (slice.start) |start_expr| {
-                const start_val = try evalExpr(allocator, start_expr.*, env);
-                if (start_val != .Int) return EvalError.TypeMismatch;
-                if (start_val.Int < 0) {
-                    break :blk_slice Value{ .List = &[_]Value{} };
-                }
-                start_idx = @intCast(start_val.Int);
-            }
-
-            // Evaluate end index (default list.len)
-            var end_idx: usize = list.len;
-            if (slice.end) |end_expr| {
-                const end_val = try evalExpr(allocator, end_expr.*, env);
-                if (end_val != .Int) return EvalError.TypeMismatch;
-                if (end_val.Int < 0) {
-                    break :blk_slice Value{ .List = &[_]Value{} };
-                }
-                end_idx = @intCast(end_val.Int);
-            }
-
-            // Clamp indices to valid range
-            if (start_idx > list.len) start_idx = list.len;
-            if (end_idx > list.len) end_idx = list.len;
-            if (start_idx >= end_idx) {
-                break :blk_slice Value{ .List = &[_]Value{} };
-            }
-
-            // Create the sliced list
-            const slice_len = end_idx - start_idx;
-            const result_slice = try allocator.alloc(Value, slice_len);
-            @memcpy(result_slice, list[start_idx..end_idx]);
-            break :blk_slice Value{ .List = result_slice };
-        },
+        // SONNY-3251: `evalExpr` evaluates postfix chains itself.
+        .Member, .Index, .Slice => evalPostfixChain(allocator, &e, env),
         .Map => |props| blk_map: {
             // Create a map from properties
             var map = std.StringHashMap(Value).init(allocator);
@@ -2035,6 +2167,8 @@ fn evalExprNode(allocator: std.mem.Allocator, e: ast.Expr, env: Env) EvalError!V
             // `currentKnnScanScope` and `isPropagatableEvalError`).
             const path_value = (try getExecutionCallbacks()).findShortestPath(allocator, sp.pattern.*, sp.all, env) catch |err| {
                 if (err == error.TenantScopeRequired) return error.TenantScopeRequired;
+                // SONNY-3251: a limit is the query's, not "no path".
+                if (limitAsEvalError(err)) |limit_err| return limit_err;
                 break :blk_shortest Value{ .Null = {} };
             };
             break :blk_shortest path_value;
@@ -2046,6 +2180,8 @@ fn evalExprNode(allocator: std.mem.Allocator, e: ast.Expr, env: Env) EvalError!V
             // SONNY-1326: a strict-tenancy refusal must not degrade to 0.
             const count = (try getExecutionCallbacks()).countPatternMatches(allocator, pc.pattern.*, pc.where, env) catch |err| {
                 if (err == error.TenantScopeRequired) return error.TenantScopeRequired;
+                // SONNY-3251: a limit is the query's, not a count of 0.
+                if (limitAsEvalError(err)) |limit_err| return limit_err;
                 break :blk_count Value{ .Int = 0 };
             };
             break :blk_count Value{ .Int = count };
@@ -2059,49 +2195,13 @@ fn evalExprNode(allocator: std.mem.Allocator, e: ast.Expr, env: Env) EvalError!V
             // SONNY-1326: a strict-tenancy refusal must not degrade to false.
             const count = (try getExecutionCallbacks()).countPatternMatches(allocator, ex.pattern.*, ex.where, env) catch |err| {
                 if (err == error.TenantScopeRequired) return error.TenantScopeRequired;
+                // SONNY-3251: a limit is the query's, not "does not exist".
+                if (limitAsEvalError(err)) |limit_err| return limit_err;
                 break :blk_exists Value{ .Bool = false };
             };
             break :blk_exists Value{ .Bool = count > 0 };
         },
-        .MapProjection => |mp| blk_projection: {
-            // Map projection: n {.name, .age}
-            // Evaluate the source expression
-            const source = try evalExpr(allocator, mp.source.*, env);
-
-            // Create a map with projected fields
-            var map = std.StringHashMap(Value).init(allocator);
-
-            // Extract fields from the source based on its type
-            for (mp.fields) |field| {
-                const field_value = switch (source) {
-                    .Map => |src_map| blk_field: {
-                        // Try to get the field from the map
-                        const val = src_map.get(field) orelse break :blk_field Value{ .Null = {} };
-                        break :blk_field val;
-                    },
-                    .Node => |node| blk_node: {
-                        // Try to get the property from the node
-                        const val = node.properties.get(field) orelse break :blk_node Value{ .Null = {} };
-                        const converted = property_codec.propertyValueToProjectedValue(allocator, val) catch Value{ .Null = {} };
-                        break :blk_node converted;
-                    },
-                    .Edge => |edge| blk_edge: {
-                        // Try to get the property from the edge
-                        const val = edge.properties.get(field) orelse break :blk_edge Value{ .Null = {} };
-                        const converted = property_codec.propertyValueToProjectedValue(allocator, val) catch Value{ .Null = {} };
-                        break :blk_edge converted;
-                    },
-                    .ExtValue => blk_ext: {
-                        // ExtValue types don't support property access
-                        break :blk_ext Value{ .Null = {} };
-                    },
-                    else => Value{ .Null = {} },
-                };
-                try map.put(field, field_value);
-            }
-
-            break :blk_projection Value{ .Map = map };
-        },
+        .MapProjection => evalPostfixChain(allocator, &e, env),
         .PatternComp => |pc| blk_patterncomp: {
             // CANARY: REQ=REQ-GQL-165; FEATURE="Pattern Comprehension Execution"; ASPECT=Evaluator; STATUS=TESTED; OWNER=eval; UPDATED=2025-10-14
             // Pattern comprehension: [ (pattern) WHERE condition | expression ]
@@ -2110,6 +2210,8 @@ fn evalExprNode(allocator: std.mem.Allocator, e: ast.Expr, env: Env) EvalError!V
             // SONNY-1326: a strict-tenancy refusal must not degrade to [].
             const result_list = (try getExecutionCallbacks()).executePatternComprehension(allocator, pc.pattern.*, pc.where, pc.map.*, env) catch |err| {
                 if (err == error.TenantScopeRequired) return error.TenantScopeRequired;
+                // SONNY-3251: a limit is the query's, not an empty list.
+                if (limitAsEvalError(err)) |limit_err| return limit_err;
                 break :blk_patterncomp Value{ .List = &.{} };
             };
             break :blk_patterncomp result_list;
@@ -2124,7 +2226,7 @@ fn evalExprNode(allocator: std.mem.Allocator, e: ast.Expr, env: Env) EvalError!V
 /// property (FLE-checked), a map entry, a structured (JSON) member, a
 /// temporal component, or NULL. SONNY-3181: the `.Member` arm of
 /// `evalExprNode`, taken out so a member chain is evaluated with a loop
-/// (`evalMemberChain`).
+/// (`evalPostfixChain`).
 fn memberOfValue(allocator: std.mem.Allocator, target: Value, field: []const u8) EvalError!Value {
     // If target is a Node, access its properties
     if (target == .Node) {

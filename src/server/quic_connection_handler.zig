@@ -8569,7 +8569,15 @@ fn handleClientMessage(
                         if (analysis.target) |target| {
                             if (target.* == .Query) {
                                 const query_ptr = &target.Query;
-                                if (try node_scan_stream.prepare(gpa, query_ptr, exec_context, bindings.names, bindings.values, flags.items)) |prepared_stream| {
+                                // SONNY-3251 (round 15, F6): a limit the scan's
+                                // WHERE ran into answers its SQLSTATE.
+                                const prepared_opt = node_scan_stream.prepare(gpa, query_ptr, exec_context, bindings.names, bindings.values, flags.items) catch |err| {
+                                    if (!geode.eval.isResourceLimitError(err)) return err;
+                                    const info = proto_util.mapError(err);
+                                    try sendExecuteError(gpa, stream, info.code, info.message, &.{}, &.{});
+                                    return;
+                                };
+                                if (prepared_opt) |prepared_stream| {
                                     var active_stream = prepared_stream;
                                     errdefer active_stream.deinit();
 
@@ -8924,6 +8932,17 @@ fn handleClientMessage(
                 // O(scanned) WHERE scan (where-scan-writer-progress). No outer
                 // lock here — an outer hold would defeat the chunking.
                 var page_result = active_stream.buildNextPage(gpa, page_size) catch |err| {
+                    // SONNY-3251 (round 15, F6): a limit a page's WHERE ran
+                    // into ends the stream with its SQLSTATE, not a final
+                    // page that reads as a complete answer.
+                    if (geode.eval.isResourceLimitError(err)) {
+                        const info = proto_util.mapError(err);
+                        var lim_resp = try buildErrorResponse(pa, info.code, info.message, &.{}, &.{});
+                        _ = &lim_resp;
+                        try sendQuicMessage(pa, stream, .{ .pull = .{ .response = lim_resp } });
+                        state.resetResult();
+                        return;
+                    }
                     // Node disappeared during concurrent ingest — send empty
                     // final page so the client sees what was collected so far.
                     log.warn("PULL page build failed, closing stream", &.{
