@@ -25,6 +25,7 @@ const ast = @import("../gql/ast.zig");
 // SONNY-2686: the session gate below (`sessionAllowsKeyResolvedWrites`).
 const execution = @import("../execution.zig");
 const tenancy = @import("tenancy.zig");
+const write_shape = @import("write_shape.zig");
 
 // ----------------------------------------------------------------------
 // Bulk-ingest opt-in gate.
@@ -294,6 +295,8 @@ pub fn matchSingleStatement(program: *const ast.Program) BulkPattern {
     // Exactly one statement in the program.
     if (program.statements.len != 1) return .none;
     const stmt = &program.statements[0];
+    // SONNY-3166: a fast path serves only an allowlisted write shape.
+    if (!allowlisted(stmt)) return .none;
 
     switch (stmt.*) {
         .Create => |create_stmt| return classifyCreate(create_stmt),
@@ -321,6 +324,7 @@ pub fn matchSingleStatement(program: *const ast.Program) BulkPattern {
 pub fn matchEdgeSpec(program: *const ast.Program) ?MatchCreateEdgeSpec {
     if (program.statements.len != 1) return null;
     const stmt = &program.statements[0];
+    if (!allowlisted(stmt)) return null;
     return switch (stmt.*) {
         .Query => |query| matchEdgeSpecFromQuery(query),
         else => null,
@@ -332,6 +336,7 @@ pub fn matchEdgeSpec(program: *const ast.Program) ?MatchCreateEdgeSpec {
 pub fn matchMergeEdgeSpec(program: *const ast.Program) ?MatchMergeEdgeSpec {
     if (program.statements.len != 1) return null;
     const stmt = &program.statements[0];
+    if (!allowlisted(stmt)) return null;
     return switch (stmt.*) {
         .Query => |query| matchMergeEdgeSpecFromQuery(query),
         else => null,
@@ -372,6 +377,8 @@ fn setClausesAreScalarRelProps(set_clauses: []const ast.SetClause, rel_var: ?[]c
 fn matchMergeEdgeSpecFromQuery(q: ast.Query) ?MatchMergeEdgeSpec {
     // Must be a MATCH + MERGE(relationship) shape with nothing else attached.
     const merge_stmt = q.merge_statement orelse return null;
+    // SONNY-3166: every other field of the query empty (compile-time field walk).
+    if (!write_shape.onlyFields(q, &.{ "match", "merge_statement" })) return null;
 
     // Disqualify every clause the full executor might mutate/materialize.
     if (q.create_pattern != null) return null;
@@ -513,7 +520,20 @@ pub fn matchSimpleNodeMergeSpecStmt(stmt: *const ast.Statement) ?SimpleNodeMerge
         .Merge => |m| m,
         else => return null,
     };
+    if (!allowlisted(stmt)) return null;
     return buildSimpleNodeMergeSpec(merge_stmt);
+}
+
+// CANARY: REQ=REQ-SONNY-3166-WRITE-ALLOWLIST; FEATURE="WriteShapeAllowlist"; ASPECT=FastPathGate; STATUS=TESTED; TEST=tests/test_sonny_write_allowlist.zig; OWNER=engine; UPDATED=2026-09-27
+/// SONNY-3166: the write fast paths skip the executor, and with it the
+/// statement dispatcher's write-shape validator. Each serves a statement only
+/// when the validator accepts it (an allowlisted shape), and each checks its
+/// own narrower shape with `write_shape.onlyFields`, which iterates the AST's
+/// fields at compile time: a new `ast.Query` or `ast.MergeStatement` field is
+/// refused here until a fast path names it.
+fn allowlisted(stmt: *const ast.Statement) bool {
+    write_shape.validateStatement(stmt.*) catch return false;
+    return true;
 }
 
 /// GAP-0894: a `<graph-selector>; <simple MERGE>` 2-statement program. A
@@ -540,6 +560,7 @@ pub fn matchGraphSelectorThenMerge(program: *const ast.Program) ?GraphSelectorMe
         .Merge => |m| m,
         else => return null,
     };
+    if (!allowlisted(&program.statements[1])) return null;
     const spec = buildSimpleNodeMergeSpec(merge_stmt) orelse return null;
     return .{ .graph_name = graph_name, .merge = spec };
 }
@@ -604,6 +625,8 @@ fn classifyMerge(m: ast.MergeStatement) bool {
 /// caller-owned ParseResult arena and remain stable for its lifetime.
 fn buildSimpleNodeMergeSpec(m: ast.MergeStatement) ?SimpleNodeMergeSpec {
     // No RETURN — RETURN materialisation requires the regular executor.
+    // SONNY-3166: nothing but the pattern and its SETs (compile-time field walk).
+    if (!write_shape.onlyFieldsOf(ast.MergeStatement, m, &.{ "pattern", "on_create", "on_match", "set_is_bare" })) return null;
     if (m.return_clause != null) return null;
 
     // ON MATCH SET handling: the classic fast path is create-or-no-op only,
@@ -768,6 +791,10 @@ fn matchEdgeSpecFromQuery(q: ast.Query) ?MatchCreateEdgeSpec {
 
     // Disqualifying clauses — anything the full executor might mutate or
     // materialize.  We want a bare `MATCH ... CREATE edge` with no extras.
+    // SONNY-3166: every other field of the query empty (compile-time field
+    // walk, so a new field is refused until named here); the checks below
+    // stay as the documented shape.
+    if (!write_shape.onlyFields(q, &.{ "match", "create_pattern" })) return null;
     if (q.where_clause != null) return null;
     if (q.filter_clause != null) return null;
     if (q.with_clause != null) return null;

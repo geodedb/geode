@@ -297,10 +297,12 @@ const bypass_cases = [_]Case{
     .{ .write = "MATCH (n:G) WHERE n.i = 5 MERGE (m:M {g: 'z'}) SET m.k = n.i", .checks = &.{
         .{ .query = "MATCH (m:M) WHERE m.g = 'z' RETURN m.k", .want = &.{"5"} },
     } },
-    // A WHERE on a disconnected OPTIONAL MATCH's node filtered the first
-    // chain's rows with that node unbound: nothing returned, nothing written.
-    .{ .write = "MATCH (q:Q) OPTIONAL MATCH (n:G) WHERE n.i = q.i SET n.x = 1", .checks = &gx(&.{ "0", "1", "2", "3" }) },
-    .{ .write = "MATCH (q:Q) OPTIONAL MATCH (n:G) WHERE n.i = q.i AND q.i < 2 SET n.x = 1 RETURN count(*) AS c", .want = &.{"2"}, .checks = &gx(&.{ "0", "1" }) },
+    // Task W round 3 (SONNY-3184): a WHERE after an OPTIONAL MATCH filters
+    // the whole row, not the optional part (the second statement returned 2
+    // where Cypher returns 4), and an OPTIONAL MATCH that shares no variable
+    // with the MATCH is not the allowlisted form: both refused.
+    .{ .write = "MATCH (q:Q) OPTIONAL MATCH (n:G) WHERE n.i = q.i SET n.x = 1", .refused = error.WriteClauseNotApplied, .checks = &unchanged },
+    .{ .write = "MATCH (q:Q) OPTIONAL MATCH (n:G) WHERE n.i = q.i AND q.i < 2 SET n.x = 1 RETURN count(*) AS c", .refused = error.WriteClauseNotApplied, .checks = &unchanged },
     // A SET or REMOVE on a variable the pattern does not bind.
     .{ .write = "MATCH (n:G) SET m.x = 1 RETURN count(*) AS c", .refused = error.WriteClauseNotApplied, .checks = &unchanged },
     .{ .write = "MATCH (n:G) SET n.x = 1, nn.y = 2", .refused = error.WriteClauseNotApplied, .checks = &unchanged },
@@ -377,12 +379,10 @@ test "SONNY-3145 (I2, I3): a refused SET target or value, or a refused UNION par
 // a second CREATE after a DELETE.
 
 const path_delete_cases = [_]Case{
-    // The ticket's statements.
-    .{ .write = "MATCH p = (n:G)-[:R]->(x:X) WHERE n.i = 5 DETACH DELETE p", .checks = &.{
-        .{ .query = "MATCH (n:G) RETURN count(*) AS c", .want = &.{"9"} },
-        .{ .query = "MATCH (x:X) RETURN count(*) AS c", .want = &.{"9"} },
-        .{ .query = "MATCH (n:G) WHERE n.i = 5 RETURN count(*) AS c", .want = &.{"0"} },
-    } },
+    // The ticket's statements. Task W round 3 (SONNY-3146 reopened): a path
+    // DELETE deleted nothing in a plain persisted session, nor a single-node
+    // path or one in a later comma chain in any session: refused.
+    .{ .write = "MATCH p = (n:G)-[:R]->(x:X) WHERE n.i = 5 DETACH DELETE p", .refused = error.WriteClauseNotApplied, .checks = &unchanged },
     .{ .write = "MATCH (n:G)-[r:R*1..1]->(x:X) WHERE n.i = 5 DELETE r", .checks = &.{
         .{ .query = "MATCH (:G)-[r:R]->(:X) RETURN count(*) AS c", .want = &.{"9"} },
         .{ .query = "MATCH (n:G)-[:R]->(:X) WHERE n.i = 5 RETURN count(*) AS c", .want = &.{"0"} },
@@ -392,10 +392,8 @@ const path_delete_cases = [_]Case{
         .{ .query = "MATCH (:G)-[r:R]->(:X) RETURN count(*) AS c", .want = &.{"9"} },
         .{ .query = "MATCH (n:G) WHERE n.z = 1 RETURN n.i", .want = &.{"5"} },
     } },
-    // Without DETACH, a path's nodes still have its edges: refused, nothing
-    // written.
-    .{ .write = "MATCH p = (n:G)-[r:R]->(x:X) WHERE n.i = 5 SET n.z = 1 DELETE p", .refused = error.NodeHasEdges, .checks = &unchanged },
-    .{ .write = "MATCH p = (n:G)-[:R]->(x:X) WHERE n.i = 5 DELETE p", .refused = error.NodeHasEdges, .checks = &unchanged },
+    .{ .write = "MATCH p = (n:G)-[r:R]->(x:X) WHERE n.i = 5 SET n.z = 1 DELETE p", .refused = error.WriteClauseNotApplied, .checks = &unchanged },
+    .{ .write = "MATCH p = (n:G)-[:R]->(x:X) WHERE n.i = 5 DELETE p", .refused = error.WriteClauseNotApplied, .checks = &unchanged },
     // I5: a CREATE on both sides of a DELETE is refused.
     .{ .write = "MATCH (q:Q) WHERE q.i = 0 CREATE (z:Z) DELETE q CREATE (w:W)", .refused = error.WriteClauseNotApplied, .checks = &unchanged },
     // One CREATE, after the DELETE, is kept.

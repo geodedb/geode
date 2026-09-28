@@ -9313,6 +9313,8 @@ pub fn build(b: *std.Build) void {
         .{ .name = "test-sonny3045-audit-text-escaping", .path = "tests/test_sonny3045_audit_text_escaping.zig", .desc = "Run SONNY-3045 regression (joinAuditText encodes a comma and a backslash; the Windows Event Log, syslog and JSON audit exporters escape every string)" },
         // SONNY-738 Task W fix round 2: the pre-dispatch write-shape validator.
         .{ .name = "test-sonny3139-write-shapes", .path = "tests/test_sonny3139_write_shapes.zig", .desc = "Run SONNY-3139..3146 regression (an initial WITH, a WHERE before a WITH, WITH DISTINCT, a WITH's GROUP BY and HAVING, UNWIND and a DELETE of a path or variable-length relationship write the rows they name; a WITH after MATCH ... CREATE, a write an executor does not apply, an unbound target and a split CREATE are refused with 0A000 before any part of the statement writes)" },
+        // SONNY-738 Task W fix round 3: the write-shape ALLOWLIST.
+        .{ .name = "test-sonny-write-allowlist", .path = "tests/test_sonny_write_allowlist.zig", .desc = "Run the Task W round 3 write-shape allowlist regression (SONNY-3139, 3146, 3166, 3182, 3183, 3184, 3190): every allowlisted write shape writes and returns what it names in the in-memory, plain persisted, tenant-scoped and RLS-policy sessions; every other shape, and every refused case of the round-2 review, is refused with nothing written; a statement boundary needs a ';'; a write inside an expression is refused and classified as a write; a 50,000-clause statement is refused quickly" },
     };
     for (sonny738_steps) |spec| {
         const mod = b.createModule(.{ .root_source_file = b.path(spec.path), .target = target, .optimize = optimize });

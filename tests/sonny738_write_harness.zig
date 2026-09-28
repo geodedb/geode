@@ -4,12 +4,13 @@
 //! `logging` and `rls_types` modules.
 //!
 //! Every case runs the write as the session and then reads its effect back.
-//! Three sessions: an in-memory store; a persisted, tenant-scoped session whose
-//! other tenant holds a copy of the graph; and a persisted session whose user
-//! may not read `:Hidden`, with hidden rows beside the seed. The last two also
-//! check that the rows the session may not see were neither written nor
-//! deleted, and a persisted store is read back again after a checkpoint and a
-//! reload from the engine.
+//! Four sessions: an in-memory store; a plain persisted session (the default
+//! server: no tenant, no row-level security); a persisted, tenant-scoped
+//! session whose other tenant holds a copy of the graph; and a persisted
+//! session whose user may not read `:Hidden`, with hidden rows beside the
+//! seed. The last two also check that the rows the session may not see were
+//! neither written nor deleted, and a persisted store is read back again
+//! after a checkpoint and a reload from the engine.
 
 const std = @import("std");
 const testing = std.testing;
@@ -24,6 +25,9 @@ pub const Value = geode.value_types.Value;
 pub const Mode = enum {
     /// No storage adapter.
     in_memory,
+    /// SONNY-3146 (reopened): persisted, no tenant, no policy: the default
+    /// server. A path DELETE deleted nothing here only.
+    persisted,
     /// Persisted, session tenant `tenant_a`; `tenant_b` holds rows the
     /// session must neither write nor count.
     tenant_scoped,
@@ -32,7 +36,7 @@ pub const Mode = enum {
     rls_policy,
 };
 
-pub const all_modes = [_]Mode{ .in_memory, .tenant_scoped, .rls_policy };
+pub const all_modes = [_]Mode{ .in_memory, .persisted, .tenant_scoped, .rls_policy };
 
 pub const tenant_a = "tenant_a";
 pub const tenant_b = "tenant_b";
@@ -282,7 +286,7 @@ const hidden_untouched = [_]Check{
 
 pub fn checkOthersUntouched(s: *Session, f: *Failures, case: []const u8, stage: []const u8) !void {
     switch (s.mode) {
-        .in_memory => {},
+        .in_memory, .persisted => {},
         .tenant_scoped => {
             const saved = s.ctx.tenant_id;
             defer s.ctx.tenant_id = saved;

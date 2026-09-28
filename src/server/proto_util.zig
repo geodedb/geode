@@ -305,7 +305,7 @@ pub fn mapError(err: anyerror) ErrorInfo {
         // SONNY-3040, SONNY-3041, SONNY-3043: a write clause the statement's
         // shape does not apply is refused, before anything is written, rather
         // than dropped.
-        error.WriteClauseNotApplied => .{ .code = "0A000", .message = "This combination of write clauses is not supported: a write in a query part after a WITH (other than one CREATE or MERGE after MATCH ... WITH), MERGE with CREATE or DELETE, a DELETE of a variable the CREATE introduces, or a SET or REMOVE on a variable the statement does not bind to a node or relationship. Split the statement" },
+        error.WriteClauseNotApplied => .{ .code = "0A000", .message = "This statement writes in a shape that is not supported: a statement that writes is accepted only in the allowlisted shapes (CREATE/INSERT; MERGE; MATCH ... [WHERE] SET/REMOVE/DELETE/CREATE/MERGE; MATCH ... WITH ... SET/REMOVE/DELETE, or one CREATE or MERGE; each after an optional WITH of values or an UNWIND, in a FOR body, under PROFILE, or in a UNION of MATCH ... SET parts), with every variable bound, and no write inside an expression. Split the statement" },
         error.TooManyWriteClauses => .{ .code = "54000", .message = "A query part may carry at most 1024 SET, REMOVE, CREATE and MERGE clauses" },
         error.StringDataRightTruncation => .{ .code = "22001", .message = "String data right truncation" },
         error.InvalidKeyProvider => .{ .code = "42704", .message = "Invalid TDE key provider" },

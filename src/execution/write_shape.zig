@@ -1,52 +1,71 @@
-//! SONNY-3139 .. SONNY-3146: the write-shape validator.
+//! SONNY-3139 .. SONNY-3190: the write-shape ALLOWLIST.
 //!
-//! WHY THIS EXISTS. A statement is split into parts (UNION parts, the parts of
+//! POLICY. A statement that writes (CREATE, MERGE, SET, REMOVE, DELETE,
+//! DETACH DELETE, INSERT, or a write anywhere inside it) is accepted only
+//! when its whole shape is one of the shapes in `shapes` below (and the
+//! statement forms `allowStatement` names), each verified correct in every
+//! session kind the server runs (in-memory, plain persisted, tenant-scoped
+//! and row-level-security sessions; tests/test_sonny_write_allowlist.zig).
+//! Anything else is refused with 0A000 (`error.WriteClauseNotApplied`)
+//! before anything is written. A write inside an expression (an IN / NOT IN
+//! subquery), a RETURN or a CTE body is never accepted, in a read either.
+//!
+//! WHY AN ALLOWLIST. A statement is split into parts (UNION parts, the parts of
 //! a chain after each WITH, a FOR's body, the statement a PROFILE wraps), and
 //! each part is handed to one executor. Every executor applies only some of
-//! the write clauses and WITH features a part can carry, and dropped the rest
-//! silently: an initial WITH made a SET write every matched row, a WHERE before
-//! a renaming WITH wrote nothing, WITH DISTINCT and a WITH's GROUP BY and
-//! HAVING were ignored, a WITH after a CREATE created junk nodes, a CREATE
-//! executor dropped a DELETE and a SET on a relationship, a SET on a variable
-//! the part does not bind wrote nothing, and a refusal inside one executor came
-//! after an earlier UNION part had written.
+//! the clauses and features a part can carry, and silently dropped the rest.
+//! Two rounds refused the shapes known to be broken (a denylist); every review
+//! found more (SONNY-3139, 3146, 3166, 3182, 3183, 3184). The allowlist
+//! inverts that: `partFacts` names EVERY structural fact of a part (a new
+//! `ast.Query` field fails to compile until it is classified there), and a
+//! part is accepted only when an allowlisted shape declares every fact it has.
 //!
-//! WHAT THIS DOES. `validateStatement` runs once, in the statement dispatcher,
-//! before any executor or part runs, over every part of the statement. For
-//! each part that writes it decides the executor that will run it
-//! (`queryExecutor`, which the query dispatcher switches on too, so the two
-//! cannot disagree), and checks against the executor's row in `table` that:
-//!   - the executor applies every write clause of the part: CREATE, MERGE and
-//!     its ON CREATE / ON MATCH SET, SET, REMOVE, DELETE and DETACH DELETE;
+//! WHAT IS CHECKED, for a part that writes:
+//!   - its facts: the pattern (comma chains, hops, variable length, OPTIONAL
+//!     MATCH), the WHERE, an initial WITH, an UNWIND, a WITH after the MATCH
+//!     and what it carries, the write clauses, the RETURN, and what its
+//!     expressions hold (subqueries, pattern predicates), against the shape of
+//!     the executor that will run it (`queryExecutor`, which the query
+//!     dispatcher switches on too, so the two cannot disagree);
 //!   - every SET, REMOVE and DELETE target is bound, in that part, to what the
-//!     executor can write (a node or a relationship; a DELETE also expands a
-//!     path and a variable-length relationship), not to a scalar, a list, a
-//!     path, or a variable a WITH dropped;
-//!   - every WITH feature on the path to the write is one the executor honours:
-//!     an initial WITH, a WHERE before a WITH, WITH DISTINCT, a WITH's GROUP BY
-//!     and HAVING, ORDER BY, SKIP and LIMIT, UNWIND, a WITH after a CREATE.
-//! Anything else is refused with 0A000 (`error.WriteClauseNotApplied`) before
-//! anything is written.
+//!     executor writes (`table`, `checkTargets`);
+//!   - every variable an expression names is bound where it is evaluated, and
+//!     a name the dispatcher binds as a parameter (an initial WITH's, an
+//!     UNWIND's or a FOR's) neither shadows a pattern variable nor collides
+//!     with a client parameter (`checkScope`);
+//!   - inside an explicit transaction, no label is set or removed (a rolled
+//!     back `SET n:L` kept its label postings, SONNY-3059).
+//! A program is validated as a whole before any of its statements runs
+//! (`validateProgram`), and the parser ends a statement only at a `;`
+//! (SONNY-3166), so no trailing clause runs as a statement of its own.
 //!
 //! The query dispatcher runs two steps before any executor, for a part that
-//! writes, and the validator checks what they need:
+//! writes, and the allowlist checks what they need:
 //!   - an initial WITH (and its WHERE) is evaluated once and bound as
 //!     parameters (`initialWithBindable`), so the part's MATCH, WHERE and
 //!     writes see its values;
 //!   - an UNWIND runs the rest of the part once per element, the element bound
 //!     as a parameter (`unwindEachAllowed`), as a FOR body runs.
 //!
-//! CANARY: REQ=REQ-SONNY-3139-WRITE-SHAPES; FEATURE="WriteShapeValidator"; ASPECT=PreDispatchValidator; STATUS=TESTED; TEST=tests/test_sonny3139_write_shapes.zig; OWNER=engine; UPDATED=2026-09-27
+//! CANARY: REQ=REQ-SONNY-3139-WRITE-SHAPES; FEATURE="WriteShapeValidator"; ASPECT=PreDispatchValidator; STATUS=TESTED; TEST=tests/test_sonny_write_allowlist.zig; OWNER=engine; UPDATED=2026-09-27
 
 const std = @import("std");
 const ast = @import("../gql/ast.zig");
 const return_and_sorting = @import("return_and_sorting.zig");
+const set_operations = @import("set_operations.zig");
 
 /// All 0A000 (proto_util.zig): `error.WriteClauseNotApplied`; a SET or
 /// REMOVE on a variable-length relationship or a path keeps SONNY-2707's
 /// `error.VariableLengthPathWrite`, and a grouped RETURN SONNY-2683's
 /// `error.UnsupportedGroupedReturn`.
 pub const Error = error{ WriteClauseNotApplied, VariableLengthPathWrite, UnsupportedGroupedReturn };
+
+/// Where a statement runs.
+pub const Options = struct {
+    /// Inside an explicit transaction (a START TRANSACTION before it, or a
+    /// transaction body): a ROLLBACK must undo what it writes.
+    in_transaction: bool = false,
+};
 
 /// Every executor a part of a statement can be handed to.
 pub const Executor = enum {
@@ -179,7 +198,10 @@ pub const table = [_]Declaration{
         .executor = .match_delete,
         .applies = f(&([_]Feature{ .set, .remove, .delete, .part_where, .inline_let } ++ with_stage ++ dispatched)),
         .set_targets = t(&.{ .node, .rel }),
-        .delete_targets = t(&.{ .node, .rel, .rel_list, .path }),
+        // SONNY-3146 (reopened): no `.path`. A path DELETE deleted nothing in
+        // a plain persisted session, nor a single-node path or one in a later
+        // comma chain in any session: refused.
+        .delete_targets = t(&.{ .node, .rel, .rel_list }),
     },
     .{
         // The WITH features only for MATCH ... WITH ... CREATE (the chained
@@ -187,7 +209,7 @@ pub const table = [_]Declaration{
         .executor = .match_create,
         .applies = f(&([_]Feature{ .create, .set, .remove, .delete, .part_where, .inline_let } ++ with_stage ++ dispatched)),
         .set_targets = t(&.{ .node, .rel, .created_node, .created_rel }),
-        .delete_targets = t(&.{ .node, .rel, .rel_list, .path }),
+        .delete_targets = t(&.{ .node, .rel, .rel_list }),
     },
     .{
         // Its SET and REMOVE find the created node by name, and it ignores a
@@ -224,7 +246,7 @@ pub const table = [_]Declaration{
     .{
         .executor = .delete_statement,
         .applies = f(&.{ .delete, .part_where }),
-        .delete_targets = t(&.{ .node, .rel, .rel_list, .path }),
+        .delete_targets = t(&.{ .node, .rel, .rel_list }),
     },
 };
 
@@ -445,11 +467,1575 @@ fn returnAggregates(q: ast.Query) bool {
 }
 
 // ---------------------------------------------------------------------------
+// The allowlist.
+
+// CANARY: REQ=REQ-SONNY-3166-WRITE-ALLOWLIST; FEATURE="WriteShapeAllowlist"; ASPECT=Facts; STATUS=TESTED; TEST=tests/test_sonny_write_allowlist.zig; OWNER=engine; UPDATED=2026-09-27
+/// A structural fact of a part (or a statement). `partFacts` sets every fact
+/// a part has; a shape lists the facts it may have.
+pub const Fact = enum {
+    // The pattern.
+    /// A MATCH with at least one mandatory chain.
+    match,
+    /// More than one mandatory chain (`MATCH (a), (b)`).
+    match_comma,
+    /// A relationship hop; two or more in one chain; a variable-length hop.
+    match_hop,
+    match_multi_hop,
+    match_var_length,
+    /// A named path (`p = ...`).
+    path_variable,
+    /// shortestPath / allShortestPaths.
+    shortest,
+    /// A path mode keyword (WALK, TRAIL, ACYCLIC, SIMPLE).
+    path_mode,
+    /// One OPTIONAL MATCH chain, after the mandatory chains, sharing a
+    /// variable with them.
+    optional,
+    /// Any other OPTIONAL MATCH: first, several, chained on another optional
+    /// chain, unconnected, or followed by a mandatory MATCH.
+    optional_other,
+    /// A WHERE after an OPTIONAL MATCH (it filtered the whole row).
+    optional_where,
+    // Filters and bindings.
+    where,
+    filter,
+    inline_let,
+    /// LET $x = ... before the query.
+    let_param,
+    /// A CTE (WITH name AS (...)).
+    cte,
+    /// A SELECT projection (it replaced any WITH before it).
+    select,
+    // The initial WITH (bound as parameters by the dispatcher).
+    initial_with,
+    initial_with_where,
+    initial_with_window,
+    /// DISTINCT, ORDER BY, an aggregate, an unnamed item, `*`.
+    initial_with_other,
+    /// UNWIND before the write (the rest runs once per element).
+    unwind,
+    // A WITH after the MATCH, before the write.
+    with,
+    with_pre_where,
+    with_where,
+    with_distinct,
+    with_group,
+    with_having,
+    with_order,
+    with_window,
+    /// An item that is not a variable (renamed or not).
+    with_computed,
+    /// WITH *.
+    with_star,
+    /// A WITH after the part's CREATE or MERGE, before its SET or REMOVE.
+    with_after_write,
+    /// MATCH ... WITH ... CREATE / MERGE (`chainedWriteAsOneQuery`).
+    chained_write,
+    // The write clauses.
+    create,
+    /// The CREATE makes a relationship.
+    create_rel,
+    /// A variable-length hop, a named path or shortestPath in a CREATE.
+    create_other,
+    merge,
+    merge_rel,
+    /// More than one MERGE chain (`MERGE (a) MERGE (b) MERGE (a)-[:T]->(b)`).
+    merge_multi,
+    merge_on_create,
+    merge_on_match,
+    /// A bare SET after the MERGE (both branches).
+    merge_set,
+    /// A label in a MERGE's SET.
+    merge_labels,
+    /// `SET m = {...}` in a MERGE's SET.
+    merge_map,
+    /// A variable-length hop, a named path or shortestPath in a MERGE.
+    merge_other,
+    set_prop,
+    /// `SET n = {...}`.
+    set_map,
+    set_labels,
+    remove_prop,
+    remove_labels,
+    delete,
+    /// DETACH DELETE (the DELETE statement).
+    detach,
+    /// A CREATE on both sides of a DELETE.
+    split_create,
+    // The RETURN.
+    ret,
+    ret_distinct,
+    ret_aggregate,
+    ret_order,
+    ret_window,
+    /// RETURN *.
+    ret_star,
+    /// GROUP BY or HAVING on the RETURN, or a WHERE after it.
+    ret_group,
+    // Nested parts and other clauses.
+    call_clause,
+    call_subquery,
+    for_body,
+    /// A chain of query parts that is not a chained write.
+    chain,
+    // Expressions.
+    /// An IN / NOT IN (subquery).
+    expr_subquery,
+    /// EXISTS { }, COUNT { }, a pattern comprehension, shortestPath().
+    expr_pattern,
+};
+
+pub const Facts = std.EnumSet(Fact);
+
+fn fs(comptime list: []const Fact) Facts {
+    @setEvalBranchQuota(100_000);
+    return Facts.initMany(list);
+}
+
+/// The pattern facts a MATCH ... part may have.
+const pattern_facts = [_]Fact{ .match_comma, .match_hop, .match_multi_hop, .match_var_length, .where };
+/// The RETURN facts a part may have.
+const return_facts = [_]Fact{ .ret, .ret_distinct, .ret_aggregate, .ret_order, .ret_window };
+/// An initial WITH bound as parameters.
+const initial_with_facts = [_]Fact{ .initial_with, .initial_with_where, .initial_with_window };
+/// SET and REMOVE.
+const set_facts = [_]Fact{ .set_prop, .set_map, .set_labels, .remove_prop, .remove_labels };
+/// A WITH between the MATCH and the write.
+const with_facts = [_]Fact{ .with, .with_pre_where, .with_where, .with_distinct, .with_group, .with_having, .with_order, .with_window, .with_computed };
+/// ON CREATE SET, ON MATCH SET, a bare SET after a MERGE.
+const merge_action_facts = [_]Fact{ .merge_on_create, .merge_on_match, .merge_set, .merge_labels };
+
+/// Whether the part's CREATE or MERGE names a variable only its OPTIONAL
+/// MATCH chain binds.
+fn writesNameOptionalVariable(part: ast.Query) bool {
+    var mandatory = Names{};
+    var optional = Names{};
+    for (part.match.chains) |chain| addChainNames(if (chain.is_optional) &optional else &mandatory, chain);
+    var written = Names{};
+    if (part.create_pattern) |cp| addPatternNames(&written, cp);
+    if (part.merge_statement) |m| addPatternNames(&written, m.pattern);
+    if (mandatory.overflow or optional.overflow or written.overflow) return true;
+    for (written.items[0..written.len]) |n| {
+        if (optional.has(n) and !mandatory.has(n)) return true;
+    }
+    return false;
+}
+
+/// The facts that set or remove a label.
+const label_facts = fs(&.{ .set_labels, .remove_labels, .merge_labels });
+
+pub const ShapeId = enum {
+    create_statement,
+    insert_statement,
+    merge_statement,
+    delete_statement,
+    match_set,
+    match_delete,
+    match_create,
+    match_merge,
+    match_with_write,
+    match_with_create,
+    match_with_merge,
+    create_then_set,
+    with_merge,
+};
+
+// CANARY: REQ=REQ-SONNY-3166-WRITE-ALLOWLIST; FEATURE="WriteShapeAllowlist"; ASPECT=ShapeTable; STATUS=TESTED; TEST=tests/test_sonny_write_allowlist.zig; OWNER=engine; UPDATED=2026-09-27
+/// One allowlisted write shape: the executor that runs it, the facts it must
+/// have, and the other facts it may have. Nothing else.
+pub const Shape = struct {
+    id: ShapeId,
+    /// The shape, as the CHANGELOG states it.
+    text: []const u8,
+    executor: Executor,
+    must: Facts,
+    may: Facts,
+    /// May be a UNION part.
+    in_union: bool = false,
+    /// May run under PROFILE.
+    in_profile: bool = true,
+};
+
+fn may(comptime groups: []const []const Fact) Facts {
+    @setEvalBranchQuota(100_000);
+    var set = Facts.initEmpty();
+    for (groups) |g| set.setUnion(Facts.initMany(g));
+    return set;
+}
+
+// CANARY: REQ=REQ-SONNY-3166-WRITE-ALLOWLIST; FEATURE="WriteShapeAllowlist"; ASPECT=ShapeTable; STATUS=TESTED; TEST=tests/test_sonny_write_allowlist.zig; OWNER=engine; UPDATED=2026-09-27
+/// THE allowlist. Statements that write are accepted only in these shapes;
+/// anything else is refused with 0A000 before anything is written. Each is
+/// verified in the in-memory, plain persisted, tenant-scoped and RLS-policy
+/// sessions (tests/test_sonny_write_allowlist.zig).
+pub const shapes = [_]Shape{
+    // The statements.
+    .{
+        .id = .create_statement,
+        .text = "CREATE <nodes and relationships> [RETURN ...]",
+        .executor = .create_statement,
+        .must = fs(&.{.create}),
+        .may = fs(&.{ .create_rel, .ret }),
+    },
+    .{
+        .id = .insert_statement,
+        .text = "INSERT <nodes and relationships> [RETURN ...]",
+        .executor = .insert_statement,
+        .must = fs(&.{.create}),
+        .may = fs(&.{ .create_rel, .ret }),
+    },
+    .{
+        .id = .merge_statement,
+        .text = "MERGE <node or relationship pattern> [MERGE ...] [ON CREATE SET ...] [ON MATCH SET ...] [SET ...] [RETURN ...] (the SETs on a variable the MERGE binds)",
+        .executor = .merge_statement,
+        .must = fs(&.{.merge}),
+        .may = may(&.{ &merge_action_facts, &.{ .merge_rel, .merge_multi, .ret, .ret_aggregate } }),
+    },
+    .{
+        .id = .delete_statement,
+        .text = "MATCH <pattern> [WHERE ...] [DETACH] DELETE <node, relationship or variable-length relationship variables> [RETURN ...]",
+        .executor = .delete_statement,
+        .must = fs(&.{ .match, .delete }),
+        .may = may(&.{ &pattern_facts, &.{ .detach, .ret, .ret_distinct, .ret_aggregate } }),
+    },
+    // The query parts.
+    .{
+        .id = .match_set,
+        .text = "[WITH <values> [WHERE ...] [SKIP/LIMIT] [UNWIND <list> AS x]] MATCH <pattern> [WHERE ...] [OPTIONAL MATCH <one chain from a matched variable>] SET/REMOVE ... [RETURN ...]",
+        .executor = .match,
+        .must = fs(&.{.match}),
+        .may = may(&.{ &pattern_facts, &return_facts, &initial_with_facts, &set_facts, &.{ .optional, .ret_group, .unwind } }),
+        .in_union = true,
+    },
+    .{
+        .id = .match_delete,
+        .text = "[WITH <values> [WHERE ...] [SKIP/LIMIT] [UNWIND <list> AS x]] MATCH <pattern> [WHERE ...] [OPTIONAL MATCH <one chain from a matched variable>] [SET/REMOVE ...] DELETE <node, relationship or variable-length relationship variables> [RETURN ...]",
+        .executor = .match_delete,
+        .must = fs(&.{ .match, .delete }),
+        .may = may(&.{ &pattern_facts, &return_facts, &initial_with_facts, &set_facts, &.{ .optional, .unwind } }),
+        .in_union = true,
+    },
+    .{
+        .id = .match_create,
+        .text = "[WITH <values> [WHERE ...] [SKIP/LIMIT] [UNWIND <list> AS x]] MATCH <pattern> [WHERE ...] [OPTIONAL MATCH <one chain from a matched variable>] CREATE <pattern of matched and new variables> [SET/REMOVE ...] [DELETE <matched variables>] [RETURN ...]",
+        .executor = .match_create,
+        .must = fs(&.{ .match, .create }),
+        .may = may(&.{ &pattern_facts, &return_facts, &initial_with_facts, &set_facts, &.{ .create_rel, .delete, .unwind, .optional } }),
+    },
+    .{
+        .id = .match_merge,
+        .text = "[WITH <values> [WHERE ...] [SKIP/LIMIT]] MATCH <pattern> [WHERE ...] [OPTIONAL MATCH <one chain from a matched variable>] MERGE <pattern of matched and new variables> [ON CREATE SET ...] [ON MATCH SET ...] [SET ...] [RETURN ...] (the SETs on a variable the MERGE binds)",
+        .executor = .match_merge,
+        .must = fs(&.{ .match, .merge }),
+        .may = may(&.{ &pattern_facts, &return_facts, &initial_with_facts, &merge_action_facts, &.{ .merge_rel, .optional } }),
+    },
+    .{
+        .id = .match_with_write,
+        .text = "[WITH <values> [WHERE ...] [SKIP/LIMIT]] MATCH <pattern> [WHERE ...] [OPTIONAL MATCH <one chain from a matched variable>] WITH <variables and values> [WHERE ...] [DISTINCT] [GROUP BY ... [HAVING ...]] [ORDER BY ...] [SKIP/LIMIT] SET/REMOVE/DELETE ... [RETURN ...]",
+        .executor = .match,
+        .must = fs(&.{ .match, .with }),
+        .may = may(&.{ &pattern_facts, &return_facts, &initial_with_facts, &set_facts, &with_facts, &.{.optional} }),
+        .in_union = true,
+    },
+    .{
+        .id = .match_with_write,
+        .text = "(the same, with a DELETE)",
+        .executor = .match_delete,
+        .must = fs(&.{ .match, .with, .delete }),
+        .may = may(&.{ &pattern_facts, &return_facts, &initial_with_facts, &set_facts, &with_facts, &.{.optional} }),
+        .in_union = true,
+    },
+    .{
+        .id = .match_with_create,
+        .text = "[WITH <values> [WHERE ...] [SKIP/LIMIT]] MATCH <pattern> [WHERE ...] WITH <variables and values> [WHERE ...] [DISTINCT] [GROUP BY ... [HAVING ...]] [ORDER BY ...] [SKIP/LIMIT] CREATE <pattern> [RETURN ...]",
+        .executor = .match_create,
+        .must = fs(&.{ .match, .with, .chained_write, .create }),
+        .may = may(&.{ &pattern_facts, &return_facts, &initial_with_facts, &with_facts, &.{.create_rel} }),
+    },
+    .{
+        .id = .match_with_merge,
+        .text = "[WITH <values> [WHERE ...] [SKIP/LIMIT]] MATCH <pattern> [WHERE ...] WITH <variables and values> [WHERE ...] [DISTINCT] [GROUP BY ... [HAVING ...]] [ORDER BY ...] [SKIP/LIMIT] MERGE <pattern> [ON CREATE SET ...] [ON MATCH SET ...] [SET ...] [RETURN ...]",
+        .executor = .match_merge,
+        .must = fs(&.{ .match, .with, .chained_write, .merge }),
+        .may = may(&.{ &pattern_facts, &return_facts, &initial_with_facts, &with_facts, &merge_action_facts, &.{.merge_rel} }),
+    },
+    .{
+        .id = .create_then_set,
+        .text = "[WITH <values> [WHERE ...] [SKIP/LIMIT] [UNWIND <list> AS x]] CREATE <pattern> [WITH <the created variables>] [SET/REMOVE <a created node>] [RETURN ...]",
+        .executor = .create,
+        .must = fs(&.{.create}),
+        .may = may(&.{ &initial_with_facts, &set_facts, &.{ .create_rel, .with_after_write, .ret, .unwind } }),
+    },
+    .{
+        // A MERGE in query form: after an initial WITH, or as a FOR body (the
+        // FOR binds its variable as a parameter, as the WITH does).
+        .id = .with_merge,
+        .text = "WITH <values> [WHERE ...] [SKIP/LIMIT] MERGE <node pattern> [ON CREATE SET ...] [ON MATCH SET ...] [SET ...] [RETURN ...], and the MERGE as a FOR body",
+        .executor = .merge,
+        .must = fs(&.{.merge}),
+        .may = may(&.{ &initial_with_facts, &merge_action_facts, &.{.ret} }),
+    },
+};
+
+comptime {
+    @setEvalBranchQuota(100_000);
+    // No shape may have a fact no executor could serve.
+    const never = fs(&.{ .shortest, .path_mode, .path_variable, .optional_other, .optional_where, .filter, .inline_let, .let_param, .cte, .select, .initial_with_other, .with_star, .create_other, .merge_other, .merge_map, .split_create, .ret_star, .call_clause, .call_subquery, .for_body, .chain, .expr_subquery, .expr_pattern });
+    for (shapes) |shape| {
+        var all = shape.may;
+        all.setUnion(shape.must);
+        if (all.intersectWith(never).count() != 0) @compileError("SONNY-3166: shape ." ++ @tagName(shape.id) ++ " allows a fact no executor serves");
+    }
+}
+
+/// The allowlisted shape `part` (run by `ex`) matches, if any.
+fn findShape(ex: Executor, facts: Facts, ctx: PartCtx) ?Shape {
+    for (shapes) |shape| {
+        if (shape.executor != ex) continue;
+        if (ctx.union_part and !shape.in_union) continue;
+        if (ctx.profile and !shape.in_profile) continue;
+        if (!facts.supersetOf(shape.must)) continue;
+        var all = shape.may;
+        all.setUnion(shape.must);
+        if (!facts.subsetOf(all)) continue;
+        return shape;
+    }
+    return null;
+}
+
+// ---------------------------------------------------------------------------
+// The entry points.
+
+/// SONNY-3139 .. SONNY-3190: refuse (0A000) a statement that writes in any
+/// shape the allowlist does not name, or that writes inside an expression,
+/// before anything runs.
+pub fn validateStatement(stmt: ast.Statement) Error!void {
+    return validateStatementIn(stmt, .{});
+}
+
+// CANARY: REQ=REQ-SONNY-3166-WRITE-ALLOWLIST; FEATURE="WriteShapeAllowlist"; ASPECT=Entry; STATUS=TESTED; TEST=tests/test_sonny_write_allowlist.zig; OWNER=engine; UPDATED=2026-09-27
+pub fn validateStatementIn(stmt: ast.Statement, opts: Options) Error!void {
+    // SONNY-3182: no write inside an expression, a subquery or a CTE body,
+    // in any statement. EXPLAIN runs nothing.
+    switch (stmt) {
+        .Explain, .ExplainPolicy => return,
+        else => {},
+    }
+    if (!statementExpressionsReadOnly(stmt)) return error.WriteClauseNotApplied;
+    if (!statementWrites(stmt)) return;
+    try allowStatement(stmt, opts);
+    try validateExecutors(stmt);
+}
+
+// CANARY: REQ=REQ-SONNY-3166-STATEMENT-BOUNDARY; FEATURE="StatementBoundary"; ASPECT=WholeProgram; STATUS=TESTED; TEST=tests/test_sonny_write_allowlist.zig; OWNER=engine; UPDATED=2026-09-27
+/// SONNY-3166: every statement of a program, before any of them runs, so a
+/// later statement's refusal never comes after an earlier one wrote.
+/// `in_transaction`: the program starts inside an explicit transaction.
+pub fn validateProgram(program: *const ast.Program, in_transaction: bool) Error!void {
+    var in_txn = in_transaction;
+    for (program.statements) |stmt| {
+        try validateStatementIn(stmt, .{ .in_transaction = in_txn });
+        switch (stmt) {
+            .StartTransaction => |txn| if (txn.body == null) {
+                in_txn = true;
+            },
+            .Commit, .Rollback => in_txn = false,
+            else => {},
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Whether a statement writes, and writes only through its clauses.
+
+/// Whether `stmt` carries a write clause anywhere (the statement forms that
+/// write, a query part, a nested part, a FOR or transaction body, the
+/// statement a PROFILE or a VALUES wraps, a CALL { }).
+fn statementWrites(stmt: ast.Statement) bool {
+    return switch (stmt) {
+        .Query => |q| queryWrites(q),
+        .Union => |u| blk: {
+            if (queryWrites(u.first)) break :blk true;
+            for (u.tails) |part| {
+                if (queryWrites(part.query)) break :blk true;
+            }
+            break :blk false;
+        },
+        .Intersect, .Except => |b| queryWrites(b.left) or queryWrites(b.right),
+        .Create, .Insert, .Merge, .Delete => true,
+        .For => |fr| if (fr.body) |body| queryWrites(body.*) else false,
+        .Profile => |p| statementWrites(p.query.*),
+        .Values => |v| if (v.next_statement) |next| statementWrites(next.*) else false,
+        .Call => |c| switch (c) {
+            .Subquery => |s| statementWrites(s.statement.*),
+            .Procedure => false,
+        },
+        .StartTransaction => |txn| blk: {
+            const body = txn.body orelse break :blk false;
+            for (body) |s| {
+                if (statementWrites(s)) break :blk true;
+            }
+            break :blk false;
+        },
+        else => false,
+    };
+}
+
+fn queryWrites(q: ast.Query) bool {
+    if (partWrites(q)) return true;
+    if (q.next_query) |next| if (queryWrites(next.*)) return true;
+    if (q.initial_call_subquery) |sub| if (queryWrites(sub.*)) return true;
+    if (q.for_statement) |fr| if (fr.body) |body| if (queryWrites(body.*)) return true;
+    return false;
+}
+
+// CANARY: REQ=REQ-SONNY-3182-EXPRESSION-WRITES; FEATURE="WriteShapeAllowlist"; ASPECT=ExpressionWalk; STATUS=TESTED; TEST=tests/test_sonny_write_allowlist.zig; OWNER=engine; UPDATED=2026-09-27
+/// SONNY-3182: whether no expression of `stmt` hides a write (an IN / NOT IN
+/// subquery that writes, anywhere: a WHERE, a SET value, a RETURN, a pattern's
+/// property map, a CTE body). `set_operations.exprIsReadOnly` walks every
+/// expression variant; `isQueryMutating` uses the same walk.
+fn statementExpressionsReadOnly(stmt: ast.Statement) bool {
+    return switch (stmt) {
+        .Query => |q| queryTreeExpressionsReadOnly(q),
+        .Union => |u| blk: {
+            if (!queryTreeExpressionsReadOnly(u.first)) break :blk false;
+            for (u.tails) |part| {
+                if (!queryTreeExpressionsReadOnly(part.query)) break :blk false;
+            }
+            break :blk true;
+        },
+        .Intersect, .Except => |b| queryTreeExpressionsReadOnly(b.left) and queryTreeExpressionsReadOnly(b.right),
+        .Create => |c| set_operations.patternExpressionsReadOnly(c.pattern) and returnReadOnly(c.return_clause),
+        .Insert => |i| set_operations.patternExpressionsReadOnly(i.pattern) and returnReadOnly(i.return_clause),
+        .Merge => |m| set_operations.mergeExpressionsReadOnly(m),
+        .Delete => |d| blk: {
+            if (d.match_clause) |pattern| {
+                if (!set_operations.patternExpressionsReadOnly(pattern)) break :blk false;
+            }
+            if (d.where_clause) |w| {
+                if (!set_operations.exprIsReadOnly(w)) break :blk false;
+            }
+            break :blk returnReadOnly(d.return_clause);
+        },
+        .For => |fr| blk: {
+            if (!set_operations.exprIsReadOnly(fr.collection)) break :blk false;
+            if (fr.body) |body| {
+                if (!queryTreeExpressionsReadOnly(body.*)) break :blk false;
+            }
+            break :blk returnReadOnly(fr.return_clause);
+        },
+        .Profile => |p| statementExpressionsReadOnly(p.query.*),
+        .Values => |v| blk: {
+            for (v.rows) |row| {
+                for (row) |e| {
+                    if (!set_operations.exprIsReadOnly(e)) break :blk false;
+                }
+            }
+            if (v.next_statement) |next| break :blk statementExpressionsReadOnly(next.*);
+            break :blk true;
+        },
+        .Call => |c| switch (c) {
+            .Subquery => |s| statementExpressionsReadOnly(s.statement.*) and returnReadOnly(s.return_clause),
+            .Procedure => |proc| blk: {
+                if (!set_operations.exprIsReadOnly(proc.procedure)) break :blk false;
+                if (proc.yield_items) |items| {
+                    for (items) |item| {
+                        if (!set_operations.exprIsReadOnly(item.expr)) break :blk false;
+                    }
+                }
+                break :blk returnReadOnly(proc.return_clause);
+            },
+        },
+        .StartTransaction => |txn| blk: {
+            const body = txn.body orelse break :blk true;
+            for (body) |s| {
+                if (!statementExpressionsReadOnly(s)) break :blk false;
+            }
+            break :blk true;
+        },
+        .InsertValue => |iv| set_operations.exprIsReadOnly(iv.expr),
+        else => true,
+    };
+}
+
+fn returnReadOnly(rc: ?ast.ReturnClause) bool {
+    const r = rc orelse return true;
+    for (r.items) |item| {
+        if (!set_operations.exprIsReadOnly(item.expr)) return false;
+    }
+    return true;
+}
+
+fn queryTreeExpressionsReadOnly(q: ast.Query) bool {
+    if (!set_operations.queryExpressionsAreReadOnly(q)) return false;
+    if (q.next_query) |next| if (!queryTreeExpressionsReadOnly(next.*)) return false;
+    if (q.initial_call_subquery) |sub| if (!queryTreeExpressionsReadOnly(sub.*)) return false;
+    if (q.for_statement) |fr| {
+        if (!set_operations.exprIsReadOnly(fr.collection)) return false;
+        if (fr.body) |body| if (!queryTreeExpressionsReadOnly(body.*)) return false;
+        if (!returnReadOnly(fr.return_clause)) return false;
+    }
+    return true;
+}
+
+// ---------------------------------------------------------------------------
+// The statement forms.
+
+/// What a part runs under.
+const PartCtx = struct {
+    /// Names bound as parameters around the part: a FOR's variables, the
+    /// WITH before a FOR.
+    outer: Names = .{},
+    union_part: bool = false,
+    profile: bool = false,
+    in_transaction: bool = false,
+};
+
+fn allowStatement(stmt: ast.Statement, opts: Options) Error!void {
+    var params = Names{};
+    collectStatementParams(stmt, &params);
+    if (params.overflow) return error.WriteClauseNotApplied;
+    return allowStatementWith(stmt, opts, &params, false);
+}
+
+fn allowStatementWith(stmt: ast.Statement, opts: Options, params: *const Names, profile: bool) Error!void {
+    const base = PartCtx{ .profile = profile, .in_transaction = opts.in_transaction };
+    switch (stmt) {
+        .Query => |q| {
+            // PROFILE ran a query without evaluating its LET and CTE into
+            // parameters (`executeLegacyProfiled`).
+            if (profile and (q.let_bindings.len != 0 or q.cte_list != null)) return error.WriteClauseNotApplied;
+            try allowQuery(q, base, params);
+        },
+        .Profile => |p| try allowStatementWith(p.query.*, opts, params, true),
+        .Union => |u| {
+            // Only UNION / UNION ALL, and only when every part runs through
+            // the query dispatcher (SONNY-3183 I1: the executor runs the tails
+            // over the first part's bindings by the same predicate).
+            if (unionTailsRunOverBindings(u.first)) return error.WriteClauseNotApplied;
+            var ctx = base;
+            ctx.union_part = true;
+            try allowQuery(u.first, ctx, params);
+            for (u.tails) |part| {
+                if (part.operation != .union_op) return error.WriteClauseNotApplied;
+                try allowQuery(part.query, ctx, params);
+            }
+        },
+        .Create => |c| try allowCreateStatement(.create_statement, c.pattern, c.return_clause),
+        .Insert => |i| try allowCreateStatement(.insert_statement, i.pattern, i.return_clause),
+        .Merge => |m| try allowMergeStatement(m, opts),
+        .Delete => |d| try allowDeleteStatement(d),
+        .For => |fr| {
+            const body = fr.body orelse return;
+            var ctx = base;
+            try allowForHeader(fr, &ctx, params);
+            try allowQuery(body.*, ctx, params);
+        },
+        .StartTransaction => |txn| if (txn.body) |body| {
+            for (body) |s| {
+                if (!statementWrites(s)) continue;
+                try allowStatementWith(s, .{ .in_transaction = true }, params, profile);
+            }
+        },
+        // The heap-table prototype (`INSERT VALUE <expr>`): no graph write.
+        .InsertValue => {},
+        // VALUES ..., CALL { }, INTERSECT and EXCEPT that write, and every
+        // other statement that writes: not allowlisted.
+        else => return error.WriteClauseNotApplied,
+    }
+}
+
+/// A FOR's header: its list names only what is bound around it, and its
+/// variables are bound as parameters for its body. Its own ORDER BY, SKIP and
+/// LIMIT go with an inline RETURN, never with a body.
+fn allowForHeader(fr: ast.ForStatement, ctx: *PartCtx, params: *const Names) Error!void {
+    if (fr.return_clause != null or fr.order_by != null or fr.limit != null or fr.offset != null or
+        fr.limit_param != null or fr.offset_param != null) return error.WriteClauseNotApplied;
+    if (!exprBound(fr.collection, &ctx.outer)) return error.WriteClauseNotApplied;
+    const names = [_]?[]const u8{ fr.variable, fr.ordinality_var, fr.offset_var };
+    for (names) |maybe| {
+        const name = maybe orelse continue;
+        if (ctx.outer.has(name) or params.has(name)) return error.WriteClauseNotApplied;
+        ctx.outer.add(name);
+    }
+    if (ctx.outer.overflow) return error.WriteClauseNotApplied;
+}
+
+fn allowQuery(q: ast.Query, ctx: PartCtx, params: *const Names) Error!void {
+    // A part that does not write, beside one that does (a UNION part): any
+    // read, none of whose expressions writes (checked already).
+    if (!queryWrites(q)) return;
+    // `WITH ... FOR x IN ... <body>`: the WITH binds names for the FOR.
+    if (q.for_statement) |fr| {
+        if (ctx.union_part) return error.WriteClauseNotApplied;
+        try allowWithFor(q, fr.*, ctx, params);
+        return;
+    }
+    var part = q;
+    if (q.next_query) |next| {
+        // A GROUP BY or HAVING on the RETURN after a chained CREATE or MERGE
+        // would be read as the WITH's (`chainedWriteAsOneQuery` moves it).
+        if (next.group_by != null or next.having != null) return error.WriteClauseNotApplied;
+        part = chainedWriteAsOneQuery(q) orelse return error.WriteClauseNotApplied;
+    }
+    try allowPart(part, ctx, params);
+}
+
+/// `WITH <values> FOR x IN <list> <body>`: the WITH carries nothing but named
+/// values (no WHERE, DISTINCT, ORDER BY, SKIP or LIMIT, no aggregate), and
+/// the query nothing else.
+fn allowWithFor(q: ast.Query, fr: ast.ForStatement, ctx: PartCtx, params: *const Names) Error!void {
+    const wc = q.with_clause orelse return error.WriteClauseNotApplied;
+    if (partWrites(q) or q.match.chains.len != 0 or q.where_clause != null or q.initial_where != null or
+        q.unwind_clause != null or q.next_query != null or q.initial_call_subquery != null or
+        q.call_clause != null or q.cte_list != null or q.let_bindings.len != 0 or q.group_by != null or
+        q.having != null or q.ret.items.len != 0 or q.order_by != null or q.limit != null or q.offset != null or
+        q.limit_param != null or q.offset_param != null or q.select_projection) return error.WriteClauseNotApplied;
+    if (wc.distinct or wc.order_by != null or wc.limit != null or wc.offset != null or wc.limit_param != null or
+        wc.offset_param != null) return error.WriteClauseNotApplied;
+    var inner = ctx;
+    for (wc.items) |item| {
+        if (return_and_sorting.isAggregationExpr(item.expr)) return error.WriteClauseNotApplied;
+        if (!exprBound(item.expr, &ctx.outer)) return error.WriteClauseNotApplied;
+        const name = itemName(item) orelse return error.WriteClauseNotApplied;
+        const same_param = item.expr == .Param and std.mem.eql(u8, item.expr.Param, name);
+        if (inner.outer.has(name) or (params.has(name) and !same_param)) return error.WriteClauseNotApplied;
+        inner.outer.add(name);
+    }
+    const body = fr.body orelse return error.WriteClauseNotApplied;
+    try allowForHeader(fr, &inner, params);
+    try allowQuery(body.*, inner, params);
+}
+
+/// CREATE and INSERT statements: new nodes and relationships (no
+/// variable-length hop, named path or shortestPath), and a RETURN.
+fn allowCreateStatement(ex: Executor, pattern: ast.GraphPattern, ret: ?ast.ReturnClause) Error!void {
+    var facts = Facts.initOne(.create);
+    createFacts(&facts, pattern);
+    if (ret) |r| returnClauseFacts(&facts, r);
+    patternExprFacts(&facts, pattern);
+    if (ret) |r| for (r.items) |item| exprFacts(&facts, item.expr);
+    _ = findShape(ex, facts, .{}) orelse return error.WriteClauseNotApplied;
+    // Every variable a property or the RETURN names is one the pattern binds.
+    var scope = Names{};
+    addPatternNames(&scope, pattern);
+    if (scope.overflow) return error.WriteClauseNotApplied;
+    if (!patternExprsBound(pattern, &scope)) return error.WriteClauseNotApplied;
+    if (ret) |r| {
+        for (r.items) |item| if (!exprBound(item.expr, &scope)) return error.WriteClauseNotApplied;
+    }
+}
+
+fn allowMergeStatement(m: ast.MergeStatement, opts: Options) Error!void {
+    var facts = Facts.initEmpty();
+    mergeFacts(&facts, m);
+    patternExprFacts(&facts, m.pattern);
+    for ([_][]const ast.SetClause{ m.on_create, m.on_match }) |actions| {
+        for (actions) |sc| setClauseExprFacts(&facts, sc);
+    }
+    if (m.return_clause) |r| for (r.items) |item| exprFacts(&facts, item.expr);
+    if (opts.in_transaction and facts.intersectWith(label_facts).count() != 0) return error.WriteClauseNotApplied;
+    _ = findShape(.merge_statement, facts, .{}) orelse return error.WriteClauseNotApplied;
+    try checkMergeActions(m);
+    var scope = Names{};
+    addPatternNames(&scope, m.pattern);
+    if (scope.overflow) return error.WriteClauseNotApplied;
+    if (!patternExprsBound(m.pattern, &scope)) return error.WriteClauseNotApplied;
+    for ([_][]const ast.SetClause{ m.on_create, m.on_match }) |actions| {
+        for (actions) |sc| if (!setValueBound(sc, &scope)) return error.WriteClauseNotApplied;
+    }
+    if (m.return_clause) |r| {
+        for (r.items) |item| if (!exprBound(item.expr, &scope)) return error.WriteClauseNotApplied;
+    }
+}
+
+fn allowDeleteStatement(d: ast.DeleteStatement) Error!void {
+    // SONNY-3166: a DELETE with no MATCH deleted nothing and reported
+    // success (it was the tail of a statement the parser split).
+    const pattern = d.match_clause orelse return error.WriteClauseNotApplied;
+    var facts = Facts.initOne(.delete);
+    patternFacts(&facts, pattern);
+    if (d.where_clause) |w| {
+        facts.insert(.where);
+        exprFacts(&facts, w);
+    }
+    if (d.detach) facts.insert(.detach);
+    if (d.return_clause) |r| {
+        returnClauseFacts(&facts, r);
+        for (r.items) |item| exprFacts(&facts, item.expr);
+    }
+    patternExprFacts(&facts, pattern);
+    _ = findShape(.delete_statement, facts, .{}) orelse return error.WriteClauseNotApplied;
+    var scope = Names{};
+    addPatternNames(&scope, pattern);
+    if (scope.overflow) return error.WriteClauseNotApplied;
+    if (!patternExprsBound(pattern, &scope)) return error.WriteClauseNotApplied;
+    if (d.where_clause) |w| if (!exprBound(w, &scope)) return error.WriteClauseNotApplied;
+    if (d.return_clause) |r| {
+        for (r.items) |item| if (!exprBound(item.expr, &scope)) return error.WriteClauseNotApplied;
+    }
+}
+
+// ---------------------------------------------------------------------------
+// A query part.
+
+fn allowPart(q: ast.Query, ctx: PartCtx, params: *const Names) Error!void {
+    if (!partWrites(q)) {
+        // A write only in a part it holds (a CALL { } before it).
+        if (queryWrites(q)) return error.WriteClauseNotApplied;
+        return;
+    }
+    // What the dispatcher strips and binds before the executor.
+    var facts = Facts.initEmpty();
+    var part = q;
+    if (part.initial_with) |wc| {
+        initialWithFacts(&facts, wc, part.initial_where);
+        if (!initialWithBindable(part)) return error.WriteClauseNotApplied;
+        part = withoutInitialWith(part);
+    }
+    if (part.unwind_clause != null) {
+        facts.insert(.unwind);
+        if (!unwindEachAllowed(part)) return error.WriteClauseNotApplied;
+        part.unwind_clause = null;
+    }
+    if (ctx.union_part and (facts.contains(.initial_with) or facts.contains(.unwind))) return error.WriteClauseNotApplied;
+    const ex = queryExecutor(part);
+    // The refusals with an error of their own first (all 0A000): SONNY-2683's
+    // grouped RETURN, SONNY-2707's write through a path or a variable-length
+    // relationship, a target the executor does not write.
+    if (returnGroupsOrFilters(part) and !sharedProjectionServes(part)) return error.UnsupportedGroupedReturn;
+    try checkTargets(part, ex, declaration(ex));
+    if (part.merge_statement) |m| try checkMergeActions(m.*);
+
+    partFacts(&facts, part, ex);
+    queryExprFacts(&facts, q);
+    if (ctx.in_transaction and facts.intersectWith(label_facts).count() != 0) return error.WriteClauseNotApplied;
+    _ = findShape(ex, facts, ctx) orelse return error.WriteClauseNotApplied;
+    // A CREATE or MERGE after an OPTIONAL MATCH names only what the MATCH
+    // binds: a variable the optional chain did not bind was null, and the
+    // relationship to it was silently not created.
+    if (facts.contains(.optional) and (part.create_pattern != null or part.merge_statement != null)) {
+        if (writesNameOptionalVariable(part)) return error.WriteClauseNotApplied;
+    }
+    try checkScope(q, part, ex, ctx, params);
+}
+
+// CANARY: REQ=REQ-SONNY-3166-WRITE-ALLOWLIST; FEATURE="WriteShapeAllowlist"; ASPECT=QueryFieldFacts; STATUS=TESTED; TEST=tests/test_sonny_write_allowlist.zig; OWNER=engine; UPDATED=2026-09-27
+/// Every structural fact of `q` (the initial WITH and UNWIND already
+/// stripped), run by `ex`. EXHAUSTIVE over `ast.Query`: a new field fails to
+/// compile here until it is classified, so no clause reaches an allowlisted
+/// executor unchecked.
+fn partFacts(facts: *Facts, q: ast.Query, ex: Executor) void {
+    @setEvalBranchQuota(40_000);
+    const post_with = q.with_clause != null and !q.is_initial_with;
+    inline for (@typeInfo(ast.Query).@"struct".fields) |field| {
+        const v = @field(q, field.name);
+        const name = field.name;
+        if (comptime is(name, "let_bindings")) {
+            if (v.len != 0) facts.insert(.let_param);
+        } else if (comptime is(name, "inline_let_bindings")) {
+            if (v.len != 0) facts.insert(.inline_let);
+        } else if (comptime is(name, "optional_match")) {
+            // The chains say which are optional (`patternFacts`); a flag with
+            // no optional chain is an OPTIONAL { } form.
+            if (v) {
+                var any = false;
+                for (q.match.chains) |chain| any = any or chain.is_optional;
+                if (!any) facts.insert(.optional_other);
+            }
+        } else if (comptime is(name, "match")) {
+            patternFacts(facts, v);
+        } else if (comptime is(name, "unwind_clause")) {
+            if (v != null) facts.insert(.unwind);
+        } else if (comptime is(name, "create_pattern")) {
+            if (v) |cp| {
+                facts.insert(.create);
+                createFacts(facts, cp);
+            }
+        } else if (comptime is(name, "where_clause")) {
+            if (v != null) {
+                if (!post_with) {
+                    facts.insert(.where);
+                } else if (q.pre_with_where == null and q.with_where == null) {
+                    facts.insert(.with_where);
+                }
+            }
+        } else if (comptime is(name, "filter_clause")) {
+            if (v != null) facts.insert(.filter);
+        } else if (comptime is(name, "with_clause")) {
+            if (post_with) withFacts(facts, v.?, ex, q);
+        } else if (comptime is(name, "cte_list")) {
+            if (v != null) facts.insert(.cte);
+        } else if (comptime is(name, "set_clauses")) {
+            for (v) |sc| facts.insert(switch (sc) {
+                .Property => .set_prop,
+                .Labels => .set_labels,
+                .AllProperties => .set_map,
+            });
+        } else if (comptime is(name, "remove_clauses")) {
+            for (v) |rc| facts.insert(switch (rc) {
+                .Property => .remove_prop,
+                .Labels => .remove_labels,
+            });
+        } else if (comptime is(name, "delete_items")) {
+            if (v.len != 0) facts.insert(.delete);
+        } else if (comptime is(name, "group_by")) {
+            if (v != null) facts.insert(if (post_with) .with_group else .ret_group);
+        } else if (comptime is(name, "having")) {
+            if (v != null) facts.insert(if (post_with and q.group_by != null) .with_having else .ret_group);
+        } else if (comptime is(name, "ret")) {
+            returnClauseFacts(facts, v);
+        } else if (comptime is(name, "order_by")) {
+            if (v != null) facts.insert(.ret_order);
+        } else if (comptime is(name, "limit") or is(name, "offset") or is(name, "limit_param") or is(name, "offset_param")) {
+            if (v != null) facts.insert(.ret_window);
+        } else if (comptime is(name, "path_variable")) {
+            if (v != null) facts.insert(.path_variable);
+        } else if (comptime is(name, "has_recursive_cte")) {
+            if (v) facts.insert(.cte);
+        } else if (comptime is(name, "is_initial_with")) {
+            // Decides whether `with_clause` follows the MATCH (above).
+        } else if (comptime is(name, "call_clause")) {
+            if (v != null) facts.insert(.call_clause);
+        } else if (comptime is(name, "next_query")) {
+            if (v != null) facts.insert(.chain);
+        } else if (comptime is(name, "for_statement")) {
+            if (v != null) facts.insert(.for_body);
+        } else if (comptime is(name, "initial_call_subquery")) {
+            if (v != null) facts.insert(.call_subquery);
+        } else if (comptime is(name, "merge_statement")) {
+            if (v) |m| mergeFacts(facts, m.*);
+        } else if (comptime is(name, "initial_with") or is(name, "initial_where")) {
+            // Stripped before this (`withoutInitialWith`); still here means
+            // the dispatcher would not bind it.
+            if (v != null) facts.insert(.initial_with_other);
+        } else if (comptime is(name, "pre_with_where")) {
+            if (v != null) facts.insert(.with_pre_where);
+        } else if (comptime is(name, "with_where")) {
+            if (v != null) facts.insert(.with_where);
+        } else if (comptime is(name, "chained_write")) {
+            if (v) facts.insert(.chained_write);
+        } else if (comptime is(name, "split_create")) {
+            if (v) facts.insert(.split_create);
+        } else if (comptime is(name, "select_projection")) {
+            if (v) facts.insert(.select);
+        } else if (comptime is(name, "optional_where")) {
+            if (v) facts.insert(.optional_where);
+        } else {
+            @compileError("SONNY-3166: classify ast.Query." ++ name ++ " for the write-shape allowlist (partFacts, write_shape.zig)");
+        }
+    }
+}
+
+fn is(comptime a: []const u8, comptime b: []const u8) bool {
+    return std.mem.eql(u8, a, b);
+}
+
+fn initialWithFacts(facts: *Facts, wc: ast.WithClause, where: ?ast.Expr) void {
+    facts.insert(.initial_with);
+    if (where != null) facts.insert(.initial_with_where);
+    if (wc.limit != null or wc.offset != null or wc.limit_param != null or wc.offset_param != null) facts.insert(.initial_with_window);
+    if (wc.distinct or wc.order_by != null) facts.insert(.initial_with_other);
+    for (wc.items) |item| {
+        if (return_and_sorting.isAggregationExpr(item.expr) or itemName(item) == null or isStar(item.expr)) facts.insert(.initial_with_other);
+    }
+}
+
+fn withFacts(facts: *Facts, wc: ast.WithClause, ex: Executor, q: ast.Query) void {
+    const after_write = switch (ex) {
+        .match_create, .match_merge => !q.chained_write,
+        .create => true,
+        else => false,
+    };
+    facts.insert(if (after_write) .with_after_write else .with);
+    if (wc.distinct) facts.insert(.with_distinct);
+    if (wc.order_by != null) facts.insert(.with_order);
+    if (wc.limit != null or wc.offset != null or wc.limit_param != null or wc.offset_param != null) facts.insert(.with_window);
+    for (wc.items) |item| {
+        if (isStar(item.expr)) {
+            facts.insert(.with_star);
+        } else if (item.expr != .Ident) {
+            facts.insert(.with_computed);
+        }
+    }
+}
+
+fn isStar(e: ast.Expr) bool {
+    return e == .Ident and std.mem.eql(u8, e.Ident.orig, "*");
+}
+
+fn returnClauseFacts(facts: *Facts, r: ast.ReturnClause) void {
+    if (r.items.len != 0) facts.insert(.ret);
+    if (r.distinct) facts.insert(.ret_distinct);
+    for (r.items) |item| {
+        if (isStar(item.expr)) facts.insert(.ret_star);
+        if (return_and_sorting.isAggregationExpr(item.expr)) facts.insert(.ret_aggregate);
+    }
+}
+
+/// The pattern facts of a MATCH, and whether its OPTIONAL MATCH is the one
+/// allowlisted form: one optional chain, after every mandatory one, sharing a
+/// variable with them (SONNY-3184: a second optional chain on the first bound
+/// null, and a WHERE after one filtered the whole row).
+fn patternFacts(facts: *Facts, pattern: ast.GraphPattern) void {
+    var mandatory: usize = 0;
+    var optional: usize = 0;
+    var bad_optional = false;
+    var bound = Names{};
+    for (pattern.chains) |chain| {
+        if (chain.is_shortest) facts.insert(.shortest);
+        if (chain.path_mode_explicit) facts.insert(.path_mode);
+        if (chain.name != null) facts.insert(.path_variable);
+        if (chain.hops.len != 0) facts.insert(.match_hop);
+        if (chain.hops.len > 1) facts.insert(.match_multi_hop);
+        for (chain.hops) |hop| {
+            if (hop.rel.min_len != null or hop.rel.max_len != null) facts.insert(.match_var_length);
+        }
+        if (chain.is_optional) {
+            optional += 1;
+            if (mandatory == 0 or !chainSharesName(chain, &bound)) bad_optional = true;
+        } else {
+            if (optional != 0) bad_optional = true;
+            mandatory += 1;
+            addChainNames(&bound, chain);
+        }
+    }
+    if (mandatory != 0) facts.insert(.match);
+    if (mandatory > 1) facts.insert(.match_comma);
+    if (optional == 1 and !bad_optional and !bound.overflow) facts.insert(.optional);
+    if (optional > 1 or (optional == 1 and (bad_optional or bound.overflow))) facts.insert(.optional_other);
+}
+
+fn chainSharesName(chain: ast.Chain, bound: *const Names) bool {
+    if (chain.head) |head| if (head.name) |n| if (bound.has(n)) return true;
+    for (chain.hops) |hop| {
+        if (hop.left.name) |n| if (bound.has(n)) return true;
+        if (hop.right.name) |n| if (bound.has(n)) return true;
+    }
+    return false;
+}
+
+fn createFacts(facts: *Facts, cp: ast.GraphPattern) void {
+    for (cp.chains) |chain| {
+        if (chain.hops.len != 0) facts.insert(.create_rel);
+        if (chain.is_shortest or chain.name != null or chain.is_optional or chain.path_mode_explicit) facts.insert(.create_other);
+        for (chain.hops) |hop| {
+            if (hop.rel.min_len != null or hop.rel.max_len != null) facts.insert(.create_other);
+        }
+    }
+}
+
+fn mergeFacts(facts: *Facts, m: ast.MergeStatement) void {
+    facts.insert(.merge);
+    if (m.pattern.chains.len > 1) facts.insert(.merge_multi);
+    for (m.pattern.chains) |chain| {
+        if (chain.hops.len != 0) facts.insert(.merge_rel);
+        if (chain.hops.len > 1 or chain.is_shortest or chain.name != null or chain.is_optional or chain.path_mode_explicit) facts.insert(.merge_other);
+        for (chain.hops) |hop| {
+            if (hop.rel.min_len != null or hop.rel.max_len != null) facts.insert(.merge_other);
+        }
+    }
+    if (m.set_is_bare) {
+        if (m.on_create.len != 0 or m.on_match.len != 0) facts.insert(.merge_set);
+    } else {
+        if (m.on_create.len != 0) facts.insert(.merge_on_create);
+        if (m.on_match.len != 0) facts.insert(.merge_on_match);
+    }
+    for ([_][]const ast.SetClause{ m.on_create, m.on_match }) |actions| {
+        for (actions) |sc| switch (sc) {
+            .Property => {},
+            .Labels => facts.insert(.merge_labels),
+            .AllProperties => facts.insert(.merge_map),
+        };
+    }
+    if (m.return_clause) |r| returnClauseFacts(facts, r);
+}
+
+// ---------------------------------------------------------------------------
+// What expressions hold.
+
+/// Every expression `q` carries (the stripped initial WITH and UNWIND too):
+/// a subquery or a pattern predicate is a fact no shape allows (SONNY-3182;
+/// SONNY-3184: EXISTS { MATCH ... WHERE <inner variable> } was always false).
+fn queryExprFacts(facts: *Facts, q: ast.Query) void {
+    var it = QueryExprs{ .q = q };
+    while (it.next()) |e| exprFacts(facts, e);
+    patternExprFacts(facts, q.match);
+    if (q.create_pattern) |cp| patternExprFacts(facts, cp);
+    if (q.merge_statement) |m| patternExprFacts(facts, m.pattern);
+}
+
+fn patternExprFacts(facts: *Facts, pattern: ast.GraphPattern) void {
+    for (pattern.chains) |chain| {
+        if (chain.head) |head| nodeExprFacts(facts, head);
+        for (chain.hops) |hop| {
+            nodeExprFacts(facts, hop.left);
+            nodeExprFacts(facts, hop.right);
+            if (hop.rel.props) |props| for (props) |p| exprFacts(facts, p.value.*);
+        }
+    }
+}
+
+fn nodeExprFacts(facts: *Facts, n: ast.NodePattern) void {
+    if (n.props) |props| for (props) |p| exprFacts(facts, p.value.*);
+}
+
+fn setClauseExprFacts(facts: *Facts, sc: ast.SetClause) void {
+    switch (sc) {
+        .Property => |p| exprFacts(facts, p.value),
+        .AllProperties => |a| exprFacts(facts, a.properties),
+        .Labels => {},
+    }
+}
+
+/// The expressions of a query part, one at a time (not its patterns' maps).
+const QueryExprs = struct {
+    q: ast.Query,
+    stage: usize = 0,
+    index: usize = 0,
+
+    fn next(self: *QueryExprs) ?ast.Expr {
+        while (self.stage < 20) {
+            if (self.at()) |e| return e;
+            self.stage += 1;
+            self.index = 0;
+        }
+        return null;
+    }
+
+    /// The next expression of the current stage, or null when it has none left.
+    fn at(self: *QueryExprs) ?ast.Expr {
+        const q = self.q;
+        switch (self.stage) {
+            0 => return self.single(q.where_clause),
+            1 => return self.single(q.filter_clause),
+            2 => return self.single(q.having),
+            3 => return self.single(if (q.unwind_clause) |u| u.list_expr else null),
+            4 => if (self.index < q.let_bindings.len) return self.take(q.let_bindings[self.index].value),
+            5 => if (self.index < q.inline_let_bindings.len) return self.take(q.inline_let_bindings[self.index].value),
+            6 => if (q.group_by) |g| if (self.index < g.keys.len) return self.take(g.keys[self.index]),
+            7 => if (q.order_by) |ob| if (self.index < ob.keys.len) return self.take(ob.keys[self.index].expr),
+            8 => if (self.index < q.ret.items.len) return self.take(q.ret.items[self.index].expr),
+            9 => if (q.with_clause) |w| if (self.index < w.items.len) return self.take(w.items[self.index].expr),
+            10 => if (q.with_clause) |w| if (w.order_by) |ob| if (self.index < ob.keys.len) return self.take(ob.keys[self.index].expr),
+            11 => if (q.initial_with) |w| if (self.index < w.items.len) return self.take(w.items[self.index].expr),
+            12 => if (q.initial_with) |w| if (w.order_by) |ob| if (self.index < ob.keys.len) return self.take(ob.keys[self.index].expr),
+            13 => return self.single(q.initial_where),
+            14 => return self.single(q.pre_with_where),
+            15 => return self.single(q.with_where),
+            16 => while (self.index < q.set_clauses.len) {
+                const sc = q.set_clauses[self.index];
+                self.index += 1;
+                if (setValue(sc)) |e| return e;
+            },
+            17 => if (q.merge_statement) |m| while (self.index < m.on_create.len + m.on_match.len) {
+                const sc = if (self.index < m.on_create.len) m.on_create[self.index] else m.on_match[self.index - m.on_create.len];
+                self.index += 1;
+                if (setValue(sc)) |e| return e;
+            },
+            18 => if (q.merge_statement) |m| if (m.return_clause) |r| if (self.index < r.items.len) return self.take(r.items[self.index].expr),
+            19 => return self.single(if (q.call_clause) |cc| cc.procedure else null),
+            else => {},
+        }
+        return null;
+    }
+
+    fn single(self: *QueryExprs, e: ?ast.Expr) ?ast.Expr {
+        if (self.index != 0) return null;
+        self.index = 1;
+        return e;
+    }
+
+    fn take(self: *QueryExprs, e: ast.Expr) ast.Expr {
+        self.index += 1;
+        return e;
+    }
+};
+
+fn setValue(sc: ast.SetClause) ?ast.Expr {
+    return switch (sc) {
+        .Property => |p| p.value,
+        .AllProperties => |a| a.properties,
+        .Labels => null,
+    };
+}
+
+/// A subquery or a pattern predicate anywhere in `e`.
+fn exprFacts(facts: *Facts, e: ast.Expr) void {
+    var walk = ExprWalk{ .facts = facts };
+    walk.visit(e);
+}
+
+/// Whether every variable `e` names is in `scope` (a list comprehension's
+/// own variable too, inside it).
+fn exprBound(e: ast.Expr, scope: *const Names) bool {
+    var walk = ExprWalk{ .scope = scope };
+    walk.visit(e);
+    return walk.ok;
+}
+
+/// Collect the client parameters `e` names.
+fn exprParams(e: ast.Expr, params: *Names) void {
+    var walk = ExprWalk{ .params = params };
+    walk.visit(e);
+}
+
+// CANARY: REQ=REQ-SONNY-3183-SCOPE; FEATURE="WriteShapeAllowlist"; ASPECT=ExpressionWalk; STATUS=TESTED; TEST=tests/test_sonny_write_allowlist.zig; OWNER=engine; UPDATED=2026-09-27
+/// One walk over an expression. EXHAUSTIVE over `ast.Expr` (no `else`): a new
+/// variant fails to compile here.
+const ExprWalk = struct {
+    /// Check that every variable named is in scope.
+    scope: ?*const Names = null,
+    /// Collect `$param` names.
+    params: ?*Names = null,
+    /// Set `expr_subquery` / `expr_pattern`.
+    facts: ?*Facts = null,
+    ok: bool = true,
+
+    fn name(self: *ExprWalk, n: []const u8) void {
+        const scope = self.scope orelse return;
+        if (std.mem.eql(u8, n, "*")) return;
+        if (!scope.has(n)) self.ok = false;
+    }
+
+    fn pattern(self: *ExprWalk) void {
+        if (self.facts) |set| set.insert(.expr_pattern);
+        // A pattern binds variables of its own: not checked, and refused.
+        if (self.scope != null) self.ok = false;
+    }
+
+    fn list(self: *ExprWalk, items: []const *ast.Expr) void {
+        for (items) |it| self.visit(it.*);
+    }
+
+    fn visit(self: *ExprWalk, e: ast.Expr) void {
+        switch (e) {
+            .Ident => |id| self.name(id.orig),
+            .PropertyAccess => |pa| self.name(pa.object),
+            .HasLabel => |hl| self.name(hl.node),
+            .Param => |p| if (self.params) |ps| ps.add(p),
+            .String,
+            .Int,
+            .Decimal,
+            .Bool,
+            .Null,
+            .Date,
+            .DateTime,
+            .Time,
+            .LocalDateTime,
+            .SmallIntLit,
+            .BigIntLit,
+            .RealLit,
+            .DoubleLit,
+            .CharLit,
+            .VarcharLit,
+            .TextLit,
+            .ByteaLit,
+            .JsonLit,
+            .JsonbLit,
+            .XmlLit,
+            .UrlLit,
+            .DomainLit,
+            .UuidLit,
+            .EnumLit,
+            .BitLit,
+            .VarBitLit,
+            => {},
+            .List, .ArrayLit => |items| self.list(items),
+            .Map => |props| for (props) |p| self.visit(p.value.*),
+            .Member => |m| self.visit(m.target.*),
+            .Index => |i| {
+                self.visit(i.target.*);
+                self.visit(i.index.*);
+            },
+            .Slice => |s| {
+                self.visit(s.target.*);
+                if (s.start) |st| self.visit(st.*);
+                if (s.end) |en| self.visit(en.*);
+            },
+            // The callee is a function name, not a variable.
+            .Call => |c| self.list(c.args),
+            .Unary => |u| self.visit(u.expr.*),
+            .Binary => |b| {
+                self.visit(b.left.*);
+                self.visit(b.right.*);
+            },
+            .In => |s| {
+                self.visit(s.value.*);
+                self.list(s.set);
+            },
+            .NotIn => |s| {
+                self.visit(s.value.*);
+                self.list(s.set);
+            },
+            .InSubquery => |s| {
+                self.visit(s.value.*);
+                if (self.facts) |set| set.insert(.expr_subquery);
+                if (self.scope != null) self.ok = false;
+            },
+            .NotInSubquery => |s| {
+                self.visit(s.value.*);
+                if (self.facts) |set| set.insert(.expr_subquery);
+                if (self.scope != null) self.ok = false;
+            },
+            .InListExpr => |s| {
+                self.visit(s.value.*);
+                self.visit(s.list_expr.*);
+            },
+            .NotInListExpr => |s| {
+                self.visit(s.value.*);
+                self.visit(s.list_expr.*);
+            },
+            .IsNull => |n| self.visit(n.target.*),
+            .IsUnknown => |n| self.visit(n.target.*),
+            .StartsWith => |s| {
+                self.visit(s.value.*);
+                self.visit(s.prefix.*);
+            },
+            .EndsWith => |s| {
+                self.visit(s.value.*);
+                self.visit(s.suffix.*);
+            },
+            .Contains => |s| {
+                self.visit(s.value.*);
+                self.visit(s.needle.*);
+            },
+            .Case => |c| {
+                if (c.operand) |op| self.visit(op.*);
+                for (c.whens) |w| {
+                    self.visit(w.when.*);
+                    self.visit(w.then_expr.*);
+                }
+                if (c.else_expr) |el| self.visit(el.*);
+            },
+            .PatternComp, .Exists, .ShortestPath, .PatternCount => self.pattern(),
+            .MapProjection => |mp| self.visit(mp.source.*),
+            .ListComprehension => |lc| {
+                self.visit(lc.source.*);
+                // Its variable is bound inside its filter and map only.
+                if (self.scope) |outer| {
+                    var inner = outer.*;
+                    inner.add(lc.variable);
+                    if (inner.overflow) self.ok = false;
+                    var sub = ExprWalk{ .scope = &inner, .params = self.params, .facts = self.facts };
+                    if (lc.filter) |fl| sub.visit(fl.*);
+                    if (lc.map) |mp| sub.visit(mp.*);
+                    if (!sub.ok) self.ok = false;
+                } else {
+                    if (lc.filter) |fl| self.visit(fl.*);
+                    if (lc.map) |mp| self.visit(mp.*);
+                }
+            },
+        }
+    }
+};
+
+// ---------------------------------------------------------------------------
+// Variable scope.
+
+/// A small set of names (the variables in scope, the parameters named).
+const Names = struct {
+    const max = 64;
+    items: [max][]const u8 = undefined,
+    len: usize = 0,
+    /// More names than `max`: the caller refuses.
+    overflow: bool = false,
+
+    fn has(self: *const Names, n: []const u8) bool {
+        for (self.items[0..self.len]) |it| {
+            if (std.mem.eql(u8, it, n)) return true;
+        }
+        return false;
+    }
+
+    fn add(self: *Names, n: []const u8) void {
+        if (self.has(n)) return;
+        if (self.len == max) {
+            self.overflow = true;
+            return;
+        }
+        self.items[self.len] = n;
+        self.len += 1;
+    }
+
+    fn addAll(self: *Names, other: *const Names) void {
+        for (other.items[0..other.len]) |n| self.add(n);
+        if (other.overflow) self.overflow = true;
+    }
+};
+
+fn itemName(item: ast.ReturnItem) ?[]const u8 {
+    if (item.alias) |a| return a;
+    return switch (item.expr) {
+        .Ident => |id| id.orig,
+        else => null,
+    };
+}
+
+fn addChainNames(names: *Names, chain: ast.Chain) void {
+    if (chain.name) |n| names.add(n);
+    if (chain.head) |head| if (head.name) |n| names.add(n);
+    for (chain.hops) |hop| {
+        if (hop.left.name) |n| names.add(n);
+        if (hop.rel.name) |n| names.add(n);
+        if (hop.right.name) |n| names.add(n);
+    }
+}
+
+fn addPatternNames(names: *Names, pattern: ast.GraphPattern) void {
+    for (pattern.chains) |chain| addChainNames(names, chain);
+}
+
+fn patternExprsBound(pattern: ast.GraphPattern, scope: *const Names) bool {
+    for (pattern.chains) |chain| {
+        if (chain.head) |head| if (!nodeExprsBound(head, scope)) return false;
+        for (chain.hops) |hop| {
+            if (!nodeExprsBound(hop.left, scope) or !nodeExprsBound(hop.right, scope)) return false;
+            if (hop.rel.props) |props| for (props) |p| if (!exprBound(p.value.*, scope)) return false;
+        }
+    }
+    return true;
+}
+
+fn nodeExprsBound(n: ast.NodePattern, scope: *const Names) bool {
+    if (n.props) |props| for (props) |p| if (!exprBound(p.value.*, scope)) return false;
+    return true;
+}
+
+fn setValueBound(sc: ast.SetClause, scope: *const Names) bool {
+    return switch (sc) {
+        .Property => |p| exprBound(p.value, scope),
+        .AllProperties => |a| exprBound(a.properties, scope),
+        .Labels => true,
+    };
+}
+
+fn collectStatementParams(stmt: ast.Statement, params: *Names) void {
+    switch (stmt) {
+        .Query => |q| collectQueryParams(q, params),
+        .Profile => |p| collectStatementParams(p.query.*, params),
+        .Union => |u| {
+            collectQueryParams(u.first, params);
+            for (u.tails) |part| collectQueryParams(part.query, params);
+        },
+        .For => |fr| {
+            exprParams(fr.collection, params);
+            if (fr.body) |body| collectQueryParams(body.*, params);
+        },
+        .StartTransaction => |txn| if (txn.body) |body| {
+            for (body) |s| collectStatementParams(s, params);
+        },
+        else => {},
+    }
+}
+
+fn collectQueryParams(q: ast.Query, params: *Names) void {
+    var it = QueryExprs{ .q = q };
+    while (it.next()) |e| exprParams(e, params);
+    collectPatternParams(q.match, params);
+    if (q.create_pattern) |cp| collectPatternParams(cp, params);
+    if (q.merge_statement) |m| collectPatternParams(m.pattern, params);
+    if (q.limit_param) |p| params.add(p);
+    if (q.offset_param) |p| params.add(p);
+    if (q.next_query) |next| collectQueryParams(next.*, params);
+    if (q.for_statement) |fr| {
+        exprParams(fr.collection, params);
+        if (fr.body) |body| collectQueryParams(body.*, params);
+    }
+}
+
+fn collectPatternParams(pattern: ast.GraphPattern, params: *Names) void {
+    for (pattern.chains) |chain| {
+        if (chain.head) |head| if (head.props) |props| for (props) |p| exprParams(p.value.*, params);
+        for (chain.hops) |hop| {
+            if (hop.left.props) |props| for (props) |p| exprParams(p.value.*, params);
+            if (hop.right.props) |props| for (props) |p| exprParams(p.value.*, params);
+            if (hop.rel.props) |props| for (props) |p| exprParams(p.value.*, params);
+        }
+    }
+}
+
+// CANARY: REQ=REQ-SONNY-3183-SCOPE; FEATURE="WriteShapeAllowlist"; ASPECT=ScopeCheck; STATUS=TESTED; TEST=tests/test_sonny_write_allowlist.zig; OWNER=engine; UPDATED=2026-09-27
+/// SONNY-3183 (I2, I3), SONNY-3184: every variable an expression of the part
+/// names is bound where it is evaluated (an unbound one, or one a WITH
+/// dropped, was null: `WITH nosuch AS k ... SET` wrote nothing, `SET n.y =
+/// nosuch` stored null), and a name the dispatcher binds as a parameter (an
+/// initial WITH's, an UNWIND's, a FOR's) is not also a pattern variable, a
+/// variable the part creates or merges, or a client parameter (`WITH 5 AS k
+/// ... WHERE n.i = $k` read 5, not the client's value; `UNWIND l AS n MATCH
+/// (n:G) SET` wrote every :G). `q` is the part as written, `part` without
+/// its initial WITH and UNWIND.
+fn checkScope(q: ast.Query, part: ast.Query, ex: Executor, ctx: PartCtx, params: *const Names) Error!void {
+    const refuse = error.WriteClauseNotApplied;
+    // The names bound as parameters.
+    var bound = ctx.outer;
+    if (q.initial_with) |wc| {
+        for (wc.items) |item| if (!exprBound(item.expr, &ctx.outer)) return refuse;
+        for (wc.items) |item| {
+            const n = itemName(item) orelse return refuse;
+            if (bound.has(n)) return refuse;
+            // `WITH $rows AS rows`: the name it shadows is the value it binds.
+            const same_param = item.expr == .Param and std.mem.eql(u8, item.expr.Param, n);
+            if (params.has(n) and !same_param) return refuse;
+            bound.add(n);
+        }
+        if (q.initial_where) |w| if (!exprBound(w, &bound)) return refuse;
+    }
+    if (q.unwind_clause) |u| {
+        if (!exprBound(u.list_expr, &bound)) return refuse;
+        if (bound.has(u.variable) or params.has(u.variable)) return refuse;
+        bound.add(u.variable);
+    }
+    // The pattern's variables, and what the part creates and merges.
+    var pattern_names = Names{};
+    addPatternNames(&pattern_names, part.match);
+    var created = Names{};
+    if (part.create_pattern) |cp| addPatternNames(&created, cp);
+    if (part.merge_statement) |m| addPatternNames(&created, m.pattern);
+    for (bound.items[0..bound.len]) |n| {
+        if (pattern_names.has(n) or created.has(n)) return refuse;
+    }
+    // Before any WITH after the MATCH.
+    var pre = bound;
+    pre.addAll(&pattern_names);
+    for (part.inline_let_bindings) |b| {
+        if (!exprBound(b.value, &pre)) return refuse;
+    }
+    for (part.inline_let_bindings) |b| pre.add(b.variable);
+    if (!patternExprsBound(part.match, &pre)) return refuse;
+    const post_with = part.with_clause != null and !part.is_initial_with;
+    const after_write = post_with and switch (ex) {
+        .match_create, .match_merge => !part.chained_write,
+        .create => true,
+        else => false,
+    };
+    if (post_with and !after_write) {
+        if (part.pre_with_where) |w| if (!exprBound(w, &pre)) return refuse;
+        if (part.pre_with_where == null and part.with_where == null) {
+            // Nothing says which side of the WITH the WHERE was on.
+            if (part.where_clause != null) return refuse;
+        }
+    } else {
+        if (part.where_clause) |w| if (!exprBound(w, &pre)) return refuse;
+    }
+    if (part.filter_clause) |w| if (!exprBound(w, &pre)) return refuse;
+    // The rows the writes see.
+    var write_scope = pre;
+    if (after_write) write_scope.addAll(&created);
+    if (post_with) {
+        const wc = part.with_clause.?;
+        var post = Names{};
+        for (wc.items) |item| {
+            if (!exprBound(item.expr, &write_scope)) return refuse;
+            const n = itemName(item) orelse return refuse;
+            // A name the dispatcher bound, rebound to something else.
+            if (bound.has(n) and !(item.expr == .Ident and std.mem.eql(u8, item.expr.Ident.orig, n))) return refuse;
+            post.add(n);
+        }
+        var both = write_scope;
+        both.addAll(&post);
+        if (part.with_where) |w| if (!exprBound(w, &post)) return refuse;
+        if (part.group_by) |g| for (g.keys) |k| if (!exprBound(k, &both)) return refuse;
+        // A HAVING's references are the grouped HAVING's to check
+        // (UnknownHavingReference, SONNY-2675), before anything runs.
+        if (wc.order_by) |ob| for (ob.keys) |k| if (!exprBound(k.expr, &both)) return refuse;
+        write_scope = post;
+    }
+    // After the WITH (or with none), the CREATE's and MERGE's own variables;
+    // a WITH after the CREATE passed on the ones it keeps.
+    if (!after_write) write_scope.addAll(&created);
+    if (write_scope.overflow or pre.overflow or pattern_names.overflow or created.overflow or bound.overflow) return refuse;
+    if (part.create_pattern) |cp| if (!patternExprsBound(cp, &write_scope)) return refuse;
+    if (part.merge_statement) |m| {
+        if (!patternExprsBound(m.pattern, &write_scope)) return refuse;
+        for ([_][]const ast.SetClause{ m.on_create, m.on_match }) |actions| {
+            for (actions) |sc| if (!setValueBound(sc, &write_scope)) return refuse;
+        }
+        if (m.return_clause) |r| for (r.items) |item| if (!exprBound(item.expr, &write_scope)) return refuse;
+    }
+    for (part.set_clauses) |sc| if (!setValueBound(sc, &write_scope)) return refuse;
+    // The RETURN, and what may order or group it: its own aliases too.
+    var ret_scope = write_scope;
+    for (part.ret.items) |item| {
+        if (!exprBound(item.expr, &write_scope)) return refuse;
+        if (item.alias) |a| ret_scope.add(a);
+    }
+    if (!post_with) {
+        // A GROUP BY, HAVING or WHERE on the RETURN: its aliases too.
+        if (part.group_by) |g| for (g.keys) |k| if (!exprBound(k, &ret_scope)) return refuse;
+    }
+    if (part.order_by) |ob| for (ob.keys) |k| if (!exprBound(k.expr, &ret_scope)) return refuse;
+    if (ret_scope.overflow) return refuse;
+}
+
+// ---------------------------------------------------------------------------
+// Shared with the executors.
+
+// CANARY: REQ=REQ-SONNY-3183-UNION-BINDINGS; FEATURE="WriteShapeAllowlist"; ASPECT=SharedPredicate; STATUS=TESTED; TEST=tests/test_sonny_write_allowlist.zig; OWNER=engine; UPDATED=2026-09-27
+/// SONNY-3183 (I1): whether a UNION's later parts run over the bindings of
+/// its first part (the variables a CREATE made, so a SELECT after it sees
+/// them) instead of through the query dispatcher. The UNION executor
+/// (`set_operations.executeUnionWithContext`) and the validator decide by
+/// this one predicate: they decided by `variable_bindings` and by
+/// `first.create_pattern`, so a FOR body's CREATE in the first part dropped a
+/// later part's write that the validator had accepted.
+pub fn unionTailsRunOverBindings(first: ast.Query) bool {
+    return queryCreates(first);
+}
+
+fn queryCreates(q: ast.Query) bool {
+    if (q.create_pattern != null) return true;
+    if (q.for_statement) |fr| if (fr.body) |body| if (queryCreates(body.*)) return true;
+    if (q.initial_call_subquery) |sub| if (queryCreates(sub.*)) return true;
+    if (q.next_query) |next| if (queryCreates(next.*)) return true;
+    return false;
+}
+
+// CANARY: REQ=REQ-SONNY-3166-WRITE-ALLOWLIST; FEATURE="WriteShapeAllowlist"; ASPECT=FastPathGate; STATUS=TESTED; TEST=tests/test_sonny_write_allowlist.zig; OWNER=engine; UPDATED=2026-09-27
+/// The write fast paths' shape gate (QUIC bulk ingest, the key-resolved MERGE,
+/// `/*+BATCH*/`): true when every field of `q` other than `allowed` holds its
+/// empty value. Iterates `ast.Query`'s fields at compile time, so a new field
+/// is refused by every fast path until one of them names it, and a field of a
+/// kind this cannot judge empty fails to compile.
+pub fn onlyFields(q: ast.Query, comptime allowed: []const []const u8) bool {
+    return onlyFieldsOf(ast.Query, q, allowed);
+}
+
+/// `onlyFields` for any AST struct (the fast paths' MERGE statement).
+pub fn onlyFieldsOf(comptime T: type, value: T, comptime allowed: []const []const u8) bool {
+    @setEvalBranchQuota(40_000);
+    inline for (@typeInfo(T).@"struct".fields) |field| {
+        comptime var listed = false;
+        inline for (allowed) |a| {
+            if (comptime std.mem.eql(u8, a, field.name)) listed = true;
+        }
+        if (!listed and !isEmptyField(field.type, @field(value, field.name))) return false;
+    }
+    return true;
+}
+
+fn isEmptyField(comptime F: type, v: F) bool {
+    return switch (@typeInfo(F)) {
+        .optional => v == null,
+        .bool => !v,
+        .pointer => |ptr| if (ptr.size == .slice) v.len == 0 else @compileError("SONNY-3166: a pointer field for the fast-path shape gate (onlyFields)"),
+        .@"struct" => if (F == ast.ReturnClause)
+            v.items.len == 0 and !v.distinct
+        else if (F == ast.GraphPattern)
+            v.chains.len == 0
+        else
+            @compileError("SONNY-3166: classify a " ++ @typeName(F) ++ " field for the fast-path shape gate (onlyFields)"),
+        else => @compileError("SONNY-3166: classify a " ++ @typeName(F) ++ " field for the fast-path shape gate (onlyFields)"),
+    };
+}
+
+// ---------------------------------------------------------------------------
 // The validator.
 
 /// SONNY-3139 .. SONNY-3146: refuse (0A000) a statement with a part whose
-/// executor does not apply all of its writes, before anything runs.
-pub fn validateStatement(stmt: ast.Statement) Error!void {
+/// executor does not apply all of its writes. The second line behind the
+/// allowlist: it can only refuse more.
+fn validateExecutors(stmt: ast.Statement) Error!void {
     switch (stmt) {
         .Query => |q| try validateQuery(q, .dispatched),
         .Profile => |p| switch (p.query.*) {
@@ -457,17 +2043,18 @@ pub fn validateStatement(stmt: ast.Statement) Error!void {
             // parameters (`executeLegacyProfiled`), so a write after one saw
             // them as null.
             .Query => |q| {
-                if ((q.let_bindings.len != 0 or q.cte_list != null) and statementWrites(q)) return error.WriteClauseNotApplied;
+                if ((q.let_bindings.len != 0 or q.cte_list != null) and queryWrites(q)) return error.WriteClauseNotApplied;
                 try validateQuery(q, .dispatched);
             },
-            else => try validateStatement(p.query.*),
+            else => try validateExecutors(p.query.*),
         },
         .Union => |u| {
             // SONNY-3145 (I3): every part before any part runs. A part after
             // a first part that CREATEs runs over its bindings, which apply
-            // no write.
+            // no write. SONNY-3183 (I1): the executor decides by the same
+            // predicate.
             try validateQuery(u.first, .dispatched);
-            const tails_read: Via = if (u.first.create_pattern != null) .read_part else .dispatched;
+            const tails_read: Via = if (unionTailsRunOverBindings(u.first)) .read_part else .dispatched;
             for (u.tails) |part| try validateQuery(part.query, tails_read);
         },
         .Intersect, .Except => |b| {
@@ -484,7 +2071,7 @@ pub fn validateStatement(stmt: ast.Statement) Error!void {
         },
         .Delete => |d| try validateDeleteStatement(d),
         .Call => |c| switch (c) {
-            .Subquery => |s| try validateStatement(s.statement.*),
+            .Subquery => |s| try validateExecutors(s.statement.*),
             .Procedure => {},
         },
         .For => |fr| if (fr.body) |body| try validateQuery(body.*, .dispatched),
@@ -493,7 +2080,7 @@ pub fn validateStatement(stmt: ast.Statement) Error!void {
             else => {},
         },
         .StartTransaction => |txn| if (txn.body) |body| {
-            for (body) |s| try validateStatement(s);
+            for (body) |s| try validateExecutors(s);
         },
         // EXPLAIN runs nothing.
         else => {},
@@ -794,15 +2381,6 @@ fn checkMergeActions(m: ast.MergeStatement) Error!void {
 /// A statement kind whose clauses are fixed: its row must apply them.
 fn requireApplies(ex: Executor, needs: Features) Error!void {
     if (!declaration(ex).applies.supersetOf(needs)) return error.WriteClauseNotApplied;
-}
-
-/// Whether `q` or any part it holds writes.
-fn statementWrites(q: ast.Query) bool {
-    if (partWrites(q)) return true;
-    if (q.next_query) |next| if (statementWrites(next.*)) return true;
-    if (q.initial_call_subquery) |sub| if (statementWrites(sub.*)) return true;
-    if (q.for_statement) |fr| if (fr.body) |body| if (statementWrites(body.*)) return true;
-    return false;
 }
 
 fn validateDeleteStatement(d: ast.DeleteStatement) Error!void {

@@ -1224,6 +1224,13 @@ pub fn executeProgramWithContext(allocator: std.mem.Allocator, program: *const a
         };
     }
 
+    // CANARY: REQ=REQ-SONNY-3166-STATEMENT-BOUNDARY; FEATURE="StatementBoundary"; ASPECT=WholeProgram; STATUS=TESTED; TEST=tests/test_sonny_write_allowlist.zig; OWNER=engine; UPDATED=2026-09-27
+    // SONNY-3166: every statement of the program is validated before any of
+    // them runs. A later statement refused after an earlier one had written
+    // left the earlier write in place (`... SET n.x = 1; ... WITH n SET n.y =
+    // 2` committed the first SET, then refused).
+    try write_shape.validateProgram(program, context.transaction_state == .Active);
+
     // Execute all statements and return the result of the last data-bearing statement
     // Transaction control statements (START TRANSACTION, COMMIT, ROLLBACK) produce status messages
     // but should not override data results (like RETURN) in multi-statement programs
@@ -1500,13 +1507,13 @@ fn executeStatementWithContextInner(allocator: std.mem.Allocator, stmt: ast.Stat
         if (rows_returned) |rc| om.recordQueryRowsReturned(op_name, op_name, rc);
         if (exec_outcome == .error_) qspan.setErrorName("execution_error") else qspan.setOk();
     }
-    // CANARY: REQ=REQ-SONNY-3139-WRITE-SHAPES; FEATURE="WriteShapeValidator"; ASPECT=DispatcherCall; STATUS=TESTED; TEST=tests/test_sonny3139_write_shapes.zig; OWNER=engine; UPDATED=2026-09-27
-    // SONNY-3139 .. SONNY-3146: every part of the statement (UNION parts,
-    // chained parts, FOR bodies, the statement a PROFILE wraps) is checked
-    // against the executor that will run it, before any of them runs: a
-    // write clause, target or WITH feature that executor does not apply is
-    // refused (0A000) with nothing written.
-    try write_shape.validateStatement(stmt);
+    // CANARY: REQ=REQ-SONNY-3139-WRITE-SHAPES; FEATURE="WriteShapeValidator"; ASPECT=DispatcherCall; STATUS=TESTED; TEST=tests/test_sonny_write_allowlist.zig; OWNER=engine; UPDATED=2026-09-27
+    // SONNY-3139 .. SONNY-3190: a statement that writes runs only in an
+    // allowlisted shape (`write_shape.shapes`), checked over every part of it
+    // (UNION parts, chained parts, FOR bodies, the statement a PROFILE wraps)
+    // before any of them runs; anything else is refused (0A000) with nothing
+    // written. No statement writes inside an expression.
+    try write_shape.validateStatementIn(stmt, .{ .in_transaction = context.transaction_state == .Active });
     switch (stmt) {
         .Query => |q| {
             // Validate: OFFSET requires ORDER BY (US001) - only if strict validation enabled

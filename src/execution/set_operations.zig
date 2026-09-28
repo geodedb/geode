@@ -6,6 +6,7 @@ const graph_store = @import("../graph_store.zig");
 
 // Import from parent execution module
 const execution = @import("../execution.zig");
+const write_shape = @import("write_shape.zig");
 const ExecutionResult = execution.ExecutionResult;
 const ExecutionContext = execution.ExecutionContext;
 const valuesEqual = execution.valuesEqual;
@@ -767,7 +768,11 @@ pub fn executeUnionWithContext(allocator: std.mem.Allocator, union_query: ast.Un
 
     // Extract variable bindings from first query (if any) to pass to subsequent UNION parts
     // This allows SELECT in UNION to access variables from CREATE in first query
-    const shared_bindings = result.variable_bindings;
+    // SONNY-3183 (I1): only when the write-shape validator's predicate says
+    // the later parts run over them; it checked them as parts that run through
+    // the query dispatcher otherwise, and one that writes had its write
+    // dropped here.
+    const shared_bindings = if (write_shape.unionTailsRunOverBindings(union_query.first)) result.variable_bindings else null;
 
     // Execute and append results from tail queries
     for (union_query.tails) |part| {
