@@ -9471,6 +9471,26 @@ pub fn build(b: *std.Build) void {
     const sonny3314_step = b.step("test-sonny3314-idmap-holders", "Run SONNY-3314 regression (a dropped graph's IdMap and name are freed by their last holder: DROP GRAPH racing hydrate-on-miss and pinned resolves reads no torn name; DROP during a first-touch hydration; overlapping snapshot walks during DROP churn keep the retired maps bounded and none after; loop it)");
     sonny3314_step.dependOn(&run_sonny3314_tests.step);
 
+    // SONNY-3317 (round 16, minors): createGraph / openOrCreateGraphWithUuid
+    // under an out of memory at each allocation (M4); the QUIC admission
+    // stack's 8 MiB floor (M5, spawned server); cache readers racing Raft
+    // snapshot installs (M7); a failed tenant Handshake gives its quota back
+    // (M8).
+    const sonny3317_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny3317_round15_minors.zig"), .target = target, .optimize = optimize });
+    sonny3317_test_mod.link_libc = true;
+    sonny3317_test_mod.addImport("geode", root_mod);
+    sonny3317_test_mod.addImport("schema", schema_mod);
+    sonny3317_test_mod.addImport("protobuf", protobuf_mod);
+    sonny3317_test_mod.addImport("grpc_impl", sonny1560_shim_mod);
+    sonny3317_test_mod.addImport("logging", logging_mod);
+    sonny3317_test_mod.addImport("transport/quic", transport_quic_mod);
+    const sonny3317_tests = b.addTest(.{ .root_module = sonny3317_test_mod });
+    const run_sonny3317_tests = b.addRunArtifact(sonny3317_tests);
+    run_sonny3317_tests.step.dependOn(&install_geode_exe.step);
+    shardDep(test_step, &run_sonny3317_tests.step, 1, test_shard_loads, test_shard_index);
+    const sonny3317_step = b.step("test-sonny3317-round15-minors", "Run SONNY-3317 regression (M4: createGraph and openOrCreateGraphWithUuid under an out of memory at each allocation free their name copy once; M5: GEODE_QUIC_ADMISSION_STACK_MB floors at 8 MiB, a server told 1 serves; M7: snapshot reads race Raft snapshot installs; M8: a Handshake with a tenant failing at each allocation gives the quota back; spawned server)");
+    sonny3317_step.dependOn(&run_sonny3317_tests.step);
+
     // SONNY-3232 (round 15, item 10; pre-existing, diagnosed, left for S2):
     // a QUIC request of 256 KiB is answered, one past the 16 MiB maximum
     // message is not, the 1 MiB and 4 MiB outcomes are recorded, and the

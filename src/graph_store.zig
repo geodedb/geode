@@ -2796,7 +2796,8 @@ pub const GraphStore = struct {
     /// read lock, and this walked every graph's resident nodes and edges, and
     /// every graph's IdMap, with no lock: two snapshot readers and a writer of
     /// another graph faulted within a second (the review's F2). Now:
-    ///   - the graph registry is copied under `graphs_mutex`;
+    ///   - the graph registry is copied under `graphs_lock` (SONNY-3233;
+    ///     SONNY-3317 corrected this line, which named `graphs_mutex`);
     ///   - a resident map (the node and edge caches hold every graph's) is
     ///     walked a shard at a time under that shard's map lock, shared
     ///     (`forEachResident`), which excludes a writer of any graph growing
@@ -4214,15 +4215,21 @@ pub const GraphStore = struct {
             return;
         }
 
+        // SONNY-3317 (round 16, M4): the copy is freed on an error only
+        // while this function still owns it. The errdefer stayed armed after
+        // the copy was freed as a duplicate (a later error freed it twice)
+        // or became the map's key (a later error freed a key in use).
         const name_copy = try self.allocator.dupe(u8, graph_name);
-        errdefer self.allocator.free(name_copy);
         {
             // SONNY-3233 (round 15, F12): the insert under `graphs_lock`. A
             // first write may have registered the name since the check.
             const gio = std.Io.Threaded.global_single_threaded.io();
             self.graphs_lock.lockUncancelable(gio);
             defer self.graphs_lock.unlock(gio);
-            const gop = try self.graphs.getOrPut(name_copy);
+            const gop = self.graphs.getOrPut(name_copy) catch |err| {
+                self.allocator.free(name_copy);
+                return err;
+            };
             if (gop.found_existing) self.allocator.free(name_copy);
         }
 
@@ -4273,14 +4280,17 @@ pub const GraphStore = struct {
         if (self.graphsContains(graph_name)) {
             return;
         }
+        // SONNY-3317 (round 16, M4): as in `createGraph`.
         const name_copy = try self.allocator.dupe(u8, graph_name);
-        errdefer self.allocator.free(name_copy);
         {
             // SONNY-3233 (round 15, F12): under `graphs_lock`.
             const gio = std.Io.Threaded.global_single_threaded.io();
             self.graphs_lock.lockUncancelable(gio);
             defer self.graphs_lock.unlock(gio);
-            const gop = try self.graphs.getOrPut(name_copy);
+            const gop = self.graphs.getOrPut(name_copy) catch |err| {
+                self.allocator.free(name_copy);
+                return err;
+            };
             if (gop.found_existing) self.allocator.free(name_copy);
         }
         _ = try self.getOrCreateIdMap(graph_name);
@@ -9630,8 +9640,9 @@ pub const GraphStore = struct {
             self.collectEdgesByTypeFromEngine(allocator, &id_list, gn, edge_type, tenant_id) catch return &.{};
         } else {
             // SONNY-3233 (round 15, F12): the names copied under
-            // `graphs_mutex`, not iterated while CREATE or DROP GRAPH (or a
-            // first write to a graph, `ensureGraphNoDirty`) changes the map.
+            // `graphs_lock` (`graphNamesCopy`), not iterated while CREATE or
+            // DROP GRAPH (or a first write to a graph, `ensureGraphNoDirty`)
+            // changes the map. (SONNY-3317: this said `graphs_mutex`.)
             const names = self.graphNamesCopy(allocator) catch return &.{};
             defer freeGraphNames(allocator, names);
             for (names) |graph_key| {

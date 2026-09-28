@@ -592,6 +592,13 @@ pub fn BoundedNodeCache(comptime K: type, comptime V: type) type {
         /// Clear all resident entries (freeing their values) and every shard's
         /// retire list + FIFO. Used by snapshot-restore / reset paths.
         pub fn clearRetainingCapacity(self: *Self) void {
+            // CANARY: REQ=REQ-SONNY-3317-CACHE-CLEAR-LOCKED; FEATURE="BoundedNodeCache"; ASPECT=ClearUnderShardLocks; STATUS=TESTED; TEST=tests/test_sonny3317_round15_minors.zig; OWNER=storage; UPDATED=2026-09-28
+            // SONNY-3317 (round 16, M7; pre-existing): every shard's map lock,
+            // exclusively, in shard order, across the clear. A reload or a
+            // Raft snapshot install (`GraphStore.clearNodes`) freed every
+            // entry while a reader of any graph could be walking a shard.
+            for (&self.shards) |*sh| sh.map_lock.lockUncancelable(io());
+            defer for (&self.shards) |*sh| sh.map_lock.unlock(io());
             self.reclaimRetired();
             var it = self.store.iterator();
             while (it.next()) |entry| self.free_fn(self.allocator, entry.value_ptr);

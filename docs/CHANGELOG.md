@@ -1085,6 +1085,17 @@
     one NAT gateway, proxy or load balancer share a cap and a bucket; an
     IPv6 host that rotates addresses within its /64 is several peers
     (SONNY-3313).
+  - Smaller fixes (SONNY-3317): CREATE GRAPH that ran out of memory
+    partway could free the graph's name twice; `GEODE_QUIC_ADMISSION_STACK_MB`
+    takes at least 8 (it took 1, on which a plain MATCH was refused); a
+    reload or a Raft snapshot install clears the node, edge and adjacency
+    caches under their locks and the store's (pre-existing: a read racing
+    one could crash); a gRPC Handshake for a tenant that ran out of memory
+    kept one of the tenant's connections counted; a session closed to make
+    room at the cap is logged when the reaper tears it down, too.
+
+  **Behaviour change:** `GEODE_QUIC_ADMISSION_STACK_MB` below 8 is taken
+  as 8.
 
 ### Fixed
 

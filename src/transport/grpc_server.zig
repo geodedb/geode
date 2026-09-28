@@ -501,12 +501,20 @@ pub const SessionStore = struct {
             // GAP-0284: Persist password_reset_required flag so execute handler can enforce it.
             state.password_reset_required = pwd_reset_required;
             if (tenant_id) |tenant| {
+                // SONNY-3317 (round 16, M8): the copy is made before the quota
+                // is taken, and the session's config owns both at once: the
+                // quota is released with the config (`deinitServerState`). A
+                // copy that failed after the quota was taken leaked the quota.
+                const tenant_copy = try self.allocator.dupe(u8, tenant);
                 // GAP-0289: Enforce per-tenant connection quota before registering the session.
                 if (tenant_quota.getGlobalQuotaManager()) |qm| {
-                    qm.acquireConnection(tenant) catch return error.OutOfMemory; // quota exceeded
+                    qm.acquireConnection(tenant) catch {
+                        self.allocator.free(tenant_copy);
+                        return error.OutOfMemory; // quota exceeded
+                    };
                 }
                 state.session_config = server_state.SessionConfiguration.init(self.allocator);
-                state.session_config.?.tenant_id = try self.allocator.dupe(u8, tenant);
+                state.session_config.?.tenant_id = tenant_copy;
             }
 
             // GAP-0281: Set per-thread FLE tenant_id for encryption namespace isolation.
@@ -546,6 +554,7 @@ pub const SessionStore = struct {
         // a failure closes nothing (F9: the victim was taken out, the insert
         // failed, and the victim was never torn down and kept its hold).
         var evicted: ?std.StringHashMap(*SessionEntry).KV = null;
+        var evicted_queued = false;
         const registered: error{ TooManySessions, OutOfMemory }!void = blk: {
             self.rwlock.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
             defer self.rwlock.unlock(std.Io.Threaded.global_single_threaded.io());
@@ -589,6 +598,7 @@ pub const SessionStore = struct {
                     self.pending_teardown.append(self.allocator, kv) catch break :blk {};
                     _ = self.pending_teardown_count.fetchAdd(1, .release);
                     evicted = null;
+                    evicted_queued = true;
                 }
             }
             break :blk {};
@@ -597,6 +607,14 @@ pub const SessionStore = struct {
             self.destroyEntry(session_id, entry);
             return err;
         };
+        // SONNY-3317 (round 16, M8): a session closed to make room is logged
+        // whether it is torn down here or queued for the reaper (the queued
+        // one was not logged).
+        if (evicted_queued) {
+            log.warn("closing a principal's least recently used idle gRPC session: the principal is at max_sessions_per_principal (torn down by the reaper)", &.{
+                Attr.uint("max_sessions_per_principal", self.config.max_sessions_per_principal),
+            });
+        }
         if (evicted) |kv| {
             log.warn("closing a principal's least recently used idle gRPC session: the principal is at max_sessions_per_principal", &.{
                 Attr.uint("max_sessions_per_principal", self.config.max_sessions_per_principal),

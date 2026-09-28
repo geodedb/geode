@@ -302,10 +302,20 @@ const default_quic_connection_admission_threads = if (builtin.mode == .Debug) 64
 // the round 14 and 15 regressions run on 8 MiB threads in ReleaseSafe. A
 // Debug build keeps 16 MiB (its frames are several times larger; 64
 // admission threads, 1 GiB). GEODE_QUIC_ADMISSION_STACK_MB overrides it
-// (1..1048576); lower it, or GEODE_QUIC_CONNECTION_ADMISSION_THREADS, under
-// strict overcommit. A thread that cannot be spawned rejects its connection
+// (8..1048576); lower GEODE_QUIC_CONNECTION_ADMISSION_THREADS under strict
+// overcommit. A thread that cannot be spawned rejects its connection
 // (logged); the server serves on.
+//
+// SONNY-3317 (round 16, M5): the override's floor is 8 MiB
+// (`min_quic_admission_stack_mb`); it took 1 MiB, the stack on which round
+// 13 found a plain MATCH refused, and a Debug build crashed. Two kinds of
+// thread serve QUIC requests: the admission threads, which run a
+// connection's first stream under overload (8 MiB in a release build, 16
+// MiB in Debug, this setting), and the request workers, which serve every
+// other stream on 16 MiB stacks (`stack_guard.request_thread_stack_bytes`).
+// A request's nesting limits hold on the smaller of the two.
 const default_quic_admission_stack_mb: usize = if (builtin.mode == .Debug) 16 else 8;
+const min_quic_admission_stack_mb: usize = 8;
 var g_quic_admission_stack_size: usize = default_quic_admission_stack_mb * 1024 * 1024;
 
 // Process-global AuthProvider used by the embedded LSP TCP listener to
@@ -2709,7 +2719,7 @@ pub fn main() !void {
             gpa,
             "GEODE_QUIC_ADMISSION_STACK_MB",
             default_quic_admission_stack_mb,
-            1,
+            min_quic_admission_stack_mb,
             1024 * 1024,
         ) * 1024 * 1024;
 
