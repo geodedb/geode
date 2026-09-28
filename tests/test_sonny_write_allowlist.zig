@@ -233,6 +233,11 @@ const statement_cases = [_]Case{
     .{ .shape = .merge_statement, .write = "MERGE (t:M {g: 'z'}) ON CREATE SET t.s = 's1', t.v = false ON MATCH SET t.s = CASE WHEN t.v = true THEN t.s ELSE 's2' END RETURN t.v AS v", .times = 2, .want_first = &.{"false"}, .want = &.{"false"}, .checks = &.{
         .{ .query = "MATCH (m:M) RETURN m.s", .want = &.{"s2"} },
     } },
+    // SONNY-3240 (round-3 review C3): verified, the secret is kept. The ON
+    // MATCH SET read `t` as null, so the CASE always overwrote it.
+    .{ .shape = .merge_statement, .setup = &.{"CREATE (:M {g: 'z', s: 's1', v: true})"}, .write = "MERGE (t:M {g: 'z'}) ON CREATE SET t.s = 's1', t.v = false ON MATCH SET t.s = CASE WHEN t.v = true THEN t.s ELSE 's2' END RETURN t.v AS v", .times = 2, .want_first = &.{"true"}, .want = &.{"true"}, .checks = &.{
+        .{ .query = "MATCH (m:M) RETURN m.s, m.v", .want = &.{"s1|true"} },
+    } },
     .{ .shape = .merge_statement, .write = "MERGE (m:M {g: 'z'}) ON CREATE SET m.k = 1 RETURN m.k AS k", .want = &.{"1"}, .checks = &.{
         .{ .query = "MATCH (m:M) RETURN m.k", .want = &.{"1"} },
     } },

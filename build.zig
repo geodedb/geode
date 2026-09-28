@@ -9328,6 +9328,37 @@ pub fn build(b: *std.Build) void {
         step.dependOn(&run_tests.step);
     }
 
+    // SONNY-738 Task W fix round 4a: the round-3 re-review's Critical and
+    // blocking findings (C1, C2, C3, I2, I8, I11), in the four sessions, and
+    // over gRPC (in process) and QUIC (against ./zig-out/bin/geode).
+    {
+        const mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny_write_allowlist_r4.zig"), .target = target, .optimize = optimize });
+        mod.link_libc = true;
+        mod.addImport("geode", root_mod);
+        mod.addImport("logging", logging_mod);
+        mod.addImport("rls_types", rls_types_mod);
+        const tests = b.addTest(.{ .root_module = mod });
+        const run_tests = b.addRunArtifact(tests);
+        shardDep(test_step, &run_tests.step, 1, test_shard_loads, test_shard_index);
+        const step = b.step("test-sonny-write-allowlist-r4", "Run the Task W round 4a regression (SONNY-3139, 3182, 3184, 3240, 3242, 3244, 3247): the planned runtime declines a write and a PROFILE'd write is validated; a write one level down is refused and classified as a write, by one iterative walk; MERGE actions, a trailing SET and later CREATE/INSERT/MERGE chains read the statement's own variables (go/oidc ClaimJTI and TOTP), and the validator's scope is what the executors bind; a SET clause's values are evaluated before its assignments, with or without RETURN; an unsupplied parameter is refused; the parser's statement, memory and nesting limits; in the in-memory, plain persisted, tenant-scoped and RLS-policy sessions");
+        step.dependOn(&run_tests.step);
+    }
+    {
+        const mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny_write_allowlist_r4_transport.zig"), .target = target, .optimize = optimize });
+        mod.link_libc = true;
+        mod.addImport("geode", root_mod);
+        mod.addImport("schema", schema_mod);
+        mod.addImport("protobuf", protobuf_mod);
+        mod.addImport("grpc_impl", sonny1560_shim_mod);
+        mod.addImport("logging", logging_mod);
+        mod.addImport("transport/quic", transport_quic_mod);
+        const tests = b.addTest(.{ .root_module = mod });
+        const run_tests = b.addRunArtifact(tests);
+        run_tests.step.dependOn(&install_geode_exe.step);
+        const step = b.step("test-sonny-write-allowlist-r4-transport", "Run the Task W round 4a regression over gRPC (in process) and QUIC (a spawned server): the round-3 review's PROFILE repros are refused (0A000) with nothing written; MERGE actions and later chains read the statement's variables (go/oidc ClaimJTI replay, TOTP); a SET swap swaps; an unsupplied parameter is refused (42P02) on every path, the QUIC MERGE fast path too; the parser's limits answer 54000 and 54001");
+        step.dependOn(&run_tests.step);
+    }
+
     // SONNY-2977: MATCH (x {k: v}) [WHERE ...] SET changes every node holding
     // the key (the ticket's probe matrix): in-memory, persisted, tenant-scoped
     // and RLS-policy sessions, and over QUIC against ./zig-out/bin/geode.

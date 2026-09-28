@@ -34,7 +34,13 @@
 //!     UNWIND's or a FOR's) neither shadows a pattern variable nor collides
 //!     with a client parameter (`checkScope`);
 //!   - inside an explicit transaction, no label is set or removed (a rolled
-//!     back `SET n:L` kept its label postings, SONNY-3059).
+//!     back `SET n:L` kept its label postings, SONNY-3059). KNOWN LIMITATION
+//!     (SONNY-3059, broadened by the round-3 review, I7): ROLLBACK undoes what
+//!     a transaction CREATEd (and the nodes and relationships a MERGE
+//!     created), and nothing else: a SET, REMOVE, DELETE or MERGE SET inside
+//!     an explicit transaction stays after ROLLBACK, and a rolled-back MATCH
+//!     ... CREATE can leave a node behind. These are still accepted here;
+//!     round 4b decides between undoing and refusing them.
 //! A program is validated as a whole before any of its statements runs
 //! (`validateProgram`), and the parser ends a statement only at a `;`
 //! (SONNY-3166), so no trailing clause runs as a statement of its own.
@@ -63,7 +69,10 @@ pub const Error = error{ WriteClauseNotApplied, VariableLengthPathWrite, Unsuppo
 /// Where a statement runs.
 pub const Options = struct {
     /// Inside an explicit transaction (a START TRANSACTION before it, or a
-    /// transaction body): a ROLLBACK must undo what it writes.
+    /// transaction body). A ROLLBACK undoes only what the transaction created
+    /// (SONNY-3059, see above): a label SET or REMOVE is refused here; a
+    /// property SET, a REMOVE, a DELETE and a MERGE SET are accepted and are
+    /// NOT undone by a ROLLBACK.
     in_transaction: bool = false,
 };
 

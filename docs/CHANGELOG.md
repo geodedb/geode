@@ -1051,6 +1051,103 @@
     (SONNY-3183):** the executor decided by what the first part returned and
     the validator by whether it had a CREATE, so a FOR body's CREATE in the
     first part dropped a later part's write the validator had accepted.
+- **A PROFILE'd statement passes the allowlist on every transport
+  (SONNY-3139, SONNY-3182, SONNY-3184):** the QUIC and gRPC PROFILE arms ran
+  the statement a PROFILE wraps through the planned runtime, which reached
+  the query dispatcher with no write-shape check: `PROFILE WITH 1 AS one
+  SELECT 2 AS two MATCH (n:G) WHERE n.i = 5 SET n.x = 1` wrote every :G,
+  `PROFILE MATCH (n:G) SET n.x = 1, nn.y = 2` wrote every row, a write inside
+  an IN subquery ran once per outer row, and in a cluster these were
+  replicated unvalidated. Both arms now validate the whole program (and its
+  parameters) first, and the planned runtime declines any query that writes,
+  so a write always runs through the validated dispatcher.
+- **One walk decides whether a statement writes, at any depth (SONNY-3182):**
+  the walk that decided whether a nested query writes skipped its initial
+  WITH and that WITH's WHERE, so `MATCH (n:G) WHERE n.i IN (WITH (1 IN (MATCH
+  (w:Q) SET w.hit = 1 RETURN 1)) AS b MATCH (m:G) RETURN m.i) RETURN
+  count(*)` validated, was classified as a read, and wrote once per outer
+  row under the read lock, past a read-only role and the cluster gate; the
+  initial WHERE and a CTE body's initial WITH did the same, and so did a
+  hidden CREATE. The validator, the lock and gate classification
+  (`isQueryMutating`) and a UNION arm's re-run check now share one walk over
+  every field of every statement, query and expression (a new field is
+  walked without being named); it keeps its own stack, so 20,000 `OR` terms
+  no longer overflow the thread (SONNY-3244). A CALL, CALL { } or FOR inside
+  an IN subquery or a CTE body still counts as a write (a read so written is
+  refused; round-3 review M1, SONNY-3248). The fast-path shape check judges a
+  RETURN clause and a pattern by each of their fields, as it does a query,
+  so a field added to either is not taken as empty (round-3 review M5,
+  SONNY-3248).
+- **A write statement reads its own variables (SONNY-3240):** MERGE's ON
+  CREATE SET, ON MATCH SET and a bare SET after it evaluated with no variable
+  bound, so `MERGE (z:Z {k: 1}) ON CREATE SET z.n = 0 ON MATCH SET z.n = z.n +
+  1` left n null, `MERGE ... SET z.n = coalesce(z.n, -1) + 1` wrote 0 every
+  time, and a later chain read an earlier one's variables as null (`CREATE
+  (a:Z {k: 1}), (b:Z {k: a.k + 1})` stored b.k null; the same for INSERT,
+  `MERGE (a) MERGE (b {k: a.k + 1})`, MATCH ... CREATE and MATCH ... MERGE).
+  This was in the released v0.8.20: go/oidc's JTI replay guard (`ON MATCH SET
+  j.first_use = CASE WHEN j.expires_at > $now ...`) answered "first use" to a
+  replay, and a TOTP re-enrollment (`CASE WHEN t.verified = true THEN
+  t.totp_secret_enc ELSE ...`) overwrote a verified secret. Each executor
+  (CREATE, INSERT, MERGE and their per-row forms, the SET after a CREATE,
+  and the cluster leader's MERGE and MATCH ... SET) now binds each variable a
+  chain makes for the chains after it, and every variable of the pattern for
+  the SET clauses and the RETURN.
+  - **Behaviour change:** a MERGE's ON CREATE / ON MATCH / bare SET run after
+    every chain of the pattern (they follow the last MERGE clause), each on
+    the variables that chain created or matched; a chain's property map may
+    name only what the chains before it bind, and a forward reference
+    (`CREATE (a {k: b.k}), (b {k: 5})`) is refused with 0A000 (it stored
+    null). The write-shape validator's scope and the executors' binding are
+    checked against each other (`test-sonny-write-allowlist-r4`).
+- **SET evaluates a clause before it assigns it, with or without RETURN
+  (SONNY-3242):** a RETURN routed MATCH ... SET to the write step and its
+  absence to the traversals, which evaluated differently: `SET q.a = 1, q.b =
+  q.a` stored b = 1 with a RETURN and the old a without; a swap `SET q.a =
+  q.b, q.b = q.a` stored (b, b) with one and swapped without; a relationship
+  read what the clause before had written. Geode had no documented rule, so
+  it follows ISO GQL / openCypher: every right-hand side of one SET clause is
+  evaluated against the bindings as they stood before the clause, then its
+  assignments apply; a later SET clause (`SET q.a = 1 SET q.b = q.a`) reads
+  what the one before wrote. Every SET and REMOVE of a MATCH runs in the one
+  write step (a RETURN after it still shows what was written); MERGE's
+  actions, the SET after a CREATE, and the cluster leader's MATCH ... SET
+  (SONNY-3246's ordering part; its RLS check and WHERE truthiness remain)
+  follow the same rule. The QUIC MERGE fast paths decline a MERGE whose
+  actions hold more than one SET clause (`ON CREATE SET ... SET ...`), which
+  they applied on the wrong branch (round-3 review I1, SONNY-3241; the
+  MATCH ... CREATE edge fast path is not yet fixed).
+  - **Behaviour change:** `SET a.c = coalesce(a.c, 0) + 1, b.c =
+    coalesce(b.c, 0) + 1` with a and b the same node stores 1, not 2, and
+    `SET a.c = b.i, b.c = a.c` stores b's old c. A MATCH ... SET or REMOVE
+    without a RETURN answers the rows it wrote, as written.
+- **The parser's limits (SONNY-3244):** parsing runs before authorization,
+  and 25,000 `MATCH (n:G) SET n.x = 1;` statements (625 KB) took a 741 MB
+  parser arena, so a 16 MB request could hold about 19 GB; about 60 chained
+  WITH, or nested `CALL {` or `IN (`, overflowed the thread in a Debug build.
+  A request may now carry at most 1,024 statements, counting those nested in
+  others, and the parser at most 64 MiB (checked every 1,024 tokens, at every
+  statement and query part, and at the end): past either, 54000 with a
+  message that names the limit. Queries may nest at most 10 deep (WITH chain
+  parts, CALL { }, IN (subquery), FOR bodies, CTE bodies): past it, 54001.
+  Measured on a fresh thread, a Debug build overflows 8 MiB at 16 nested FOR
+  bodies (19 IN subqueries, 22 WITH parts) and 16 MiB at 35; ReleaseSafe
+  overflows 8 MiB at 156, and 1 MiB at 11. A parser limit now answers its
+  class-54 code over QUIC and gRPC (it answered 42000).
+- **An unsupplied parameter is refused (SONNY-3247):** a named parameter the
+  request did not supply read as null, so `SET q.name = $nosuch` erased the
+  property, `LIMIT $nosuch` wrote every row, and a MERGE keyed on one merged
+  on null (the QUIC MERGE fast path too). Every parameter a statement names
+  (an expression, a property map, a SET value, a MERGE key, LIMIT or SKIP, a
+  subquery, a CTE body, a FOR's list) must be supplied by the request or
+  defined by the statement's own `LET $x = ...`; otherwise the statement is
+  refused before anything runs, with 42P02 (undefined_parameter). A variable
+  a WITH, UNWIND or FOR binds is not a parameter: `WITH 5 AS k ... $k` is
+  refused too.
+  - **Behaviour change:** an out-of-range positional parameter (GAP-0926)
+    answers 42P02, not 22023. go/oidc and sonny-upstream supply every
+    parameter they reference (go/oidc's driver writes its `?` values into the
+    text).
 - **A SET or REMOVE after a WITH writes only the rows the WITH keeps
   (SONNY-3039, SONNY-3140, SONNY-3141, SONNY-3142):** the traversals wrote as
   they read, before the WITH, the WHERE after it, and its ORDER BY and LIMIT
@@ -1276,6 +1373,15 @@
   a client parameter (SONNY-3183), a label SET or REMOVE inside an explicit
   transaction (a rolled-back `SET n:L` kept its label postings, SONNY-3059),
   and a write inside an expression (SONNY-3182). Split such a statement.
+  Inside an explicit transaction the other shapes are accepted, but ROLLBACK
+  does not undo a property SET, a REMOVE, a DELETE or a MERGE's SET
+  (SONNY-3059, see above; not only a label), and a rolled-back MATCH ...
+  CREATE can leave a node behind (round-3 review I7, round 4b).
+- **Parser limits (SONNY-3244):** a request carries at most 1,024
+  statements and at most 64 MiB of parsed form (54000); queries nest at most
+  10 deep (54001). A Debug build's QUIC connection admission threads have
+  1 MiB of stack, which a nested query overflows before any limit applies
+  (the round-14 branch gives them 16 MiB, SONNY-3191).
 - **A statement ends at a `;` (SONNY-3166):** the parser used to split two
   statements written without a `;` between them and run each on its own;
   that is now a syntax error (42601). Programs that relied on it (`CREATE
