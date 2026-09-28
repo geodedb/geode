@@ -9322,6 +9322,25 @@ pub fn build(b: *std.Build) void {
     const sonny3312_step = b.step("test-sonny3312-multi-graph-read", "Run SONNY-3312 regression (a read program spanning graphs reads each graph: the review's repro and its mirror, three graphs, a missing graph answers as alone; readers in both orders race writers and CREATE/DROP GRAPH churn with no deadlock; gRPC in process with unbounded and bounded caches, and QUIC; spawned server)");
     sonny3312_step.dependOn(&run_sonny3312_tests.step);
 
+    // SONNY-3315 (round 16, I3; pre-existing): a parallel UNION's result
+    // frees through the caller's allocator, not the arms' LockedAllocator in
+    // tryParallelUnion's dead frame (the review's 60-level nested list hung).
+    // gRPC in process with a watchdog, and the executor under the testing
+    // allocator. Run it in Debug and ReleaseSafe.
+    const sonny3315_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny3315_parallel_union_allocator.zig"), .target = target, .optimize = optimize });
+    sonny3315_test_mod.link_libc = true;
+    sonny3315_test_mod.addImport("geode", root_mod);
+    sonny3315_test_mod.addImport("schema", schema_mod);
+    sonny3315_test_mod.addImport("protobuf", protobuf_mod);
+    sonny3315_test_mod.addImport("grpc_impl", sonny1560_shim_mod);
+    sonny3315_test_mod.addImport("logging", logging_mod);
+    sonny3315_test_mod.addImport("transport/quic", transport_quic_mod);
+    const sonny3315_tests = b.addTest(.{ .root_module = sonny3315_test_mod });
+    const run_sonny3315_tests = b.addRunArtifact(sonny3315_tests);
+    shardDep(test_step, &run_sonny3315_tests.step, 1, test_shard_loads, test_shard_index);
+    const sonny3315_step = b.step("test-sonny3315-parallel-union-allocator", "Run SONNY-3315 regression (a parallel UNION ALL of a nested list 8 to 100 levels deep answers over gRPC on an 8 MiB thread, no hang; parallel UNIONs of nodes and scalars free their results through the caller's allocator under the debug allocator with the stack reused; Debug and ReleaseSafe)");
+    sonny3315_step.dependOn(&run_sonny3315_tests.step);
+
     // SONNY-3251 (round 15, F6, F7): a limit the evaluator runs into (54001)
     // fails the query in every context instead of answering as a row that
     // did not match; index, slice, member and map-projection chains evaluate

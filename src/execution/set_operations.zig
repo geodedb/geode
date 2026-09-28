@@ -1387,6 +1387,13 @@ const LockedAllocator = struct {
     };
 };
 
+/// SONNY-3315: make `res`, built by a parallel UNION arm through the
+/// frame-local `LockedAllocator`, free through `parent` from now on.
+fn reownArmResult(res: *ExecutionResult, parent: std.mem.Allocator) void {
+    if (res.owned_graph_entities) |tracker| tracker.allocator = parent;
+    if (res.variable_bindings) |bindings| bindings.allocator = parent;
+}
+
 /// GAP-0814 Task 5.1: fork-join all union arms, then merge.
 /// Returns `null` if parallelism was elected not to be used (e.g. thread
 /// spawn failure), signalling the caller to take the serial path. Any
@@ -1465,6 +1472,21 @@ fn tryParallelUnion(
     // unwinds through this errdefer and previously crashed the server
     // (panic stack rooted at `set_operations.zig:786 in tryParallelUnion`).
     spawned = 0;
+
+    // CANARY: REQ=REQ-SONNY-3315-UNION-ARM-ALLOCATOR; FEATURE="ParallelUnionArms"; ASPECT=ReownArmResults; STATUS=TESTED; TEST=tests/test_sonny3315_parallel_union_allocator.zig; OWNER=execution; UPDATED=2026-09-28
+    // SONNY-3315 (round 16, I3; pre-existing): the arms allocated through
+    // `locked_allocator`, which lives in this frame, and a result keeps the
+    // allocator it was built with where it frees through it later: its
+    // node/edge tracker (`OwnedGraphEntities`) and its variable bindings.
+    // `ExecutionResult.deinit` ran after this function returned, and locked
+    // a mutex in a dead frame: a UNION ALL of a 60-level nested list hung in
+    // `LockedAllocator.freeFn`, and any other reuse of the stack corrupted it.
+    // Every thread has joined, so nothing allocates concurrently any more:
+    // hand the results the parent allocator the locked one wrapped (the
+    // memory is the parent's either way).
+    for (jobs) |*job| {
+        if (job.result) |*res| reownArmResult(res, allocator);
+    }
 
     // SONNY-1330: did ANY arm get refused a hydrate-on-miss? If so its rows are
     // incomplete (a non-resident node/edge simply did not exist as far as that

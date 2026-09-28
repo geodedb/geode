@@ -1048,6 +1048,10 @@
     session's graph, so the other graphs read as empty (a regression in
     round 15). The read takes each graph's read lock, shared and in name
     order, and snapshots every graph it reads (SONNY-3312).
+  - A parallel UNION's result freed its nodes through an allocator that
+    lived in a function that had returned: `MATCH (n:C) WHERE n.v >= 0
+    RETURN [[...60 levels...]] AS v UNION ALL ...` hung the request thread,
+    and any read could corrupt its stack; pre-existing (SONNY-3315).
 
 ### Fixed
 
