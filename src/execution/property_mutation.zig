@@ -286,7 +286,22 @@ fn queueAdvancedIndexRebuild(
         }
     }
 
+    // SONNY-3319: the names are the index manager's own strings, and a
+    // rebuild that fails drops its index and frees them; the log line below
+    // then read freed memory (the next vector SET after a wrong-dimension one
+    // crashed). Every name is copied before any rebuild runs.
+    for (names.items) |*name| {
+        name.* = store.allocator.dupe(u8, name.*) catch {
+            log.warn("failed to copy advanced index name for rebuild: OutOfMemory", .{});
+            name.* = "";
+            continue;
+        };
+    }
+    defer for (names.items) |name| {
+        if (name.len != 0) store.allocator.free(name);
+    };
     for (names.items) |name| {
+        if (name.len == 0) continue;
         manager.rebuildAdvancedIndex(store, name) catch |err| {
             // error-policy: B — a failed rebuild leaves the advanced index
             // stale (queries may serve stale entries); the mutation itself
@@ -340,7 +355,7 @@ pub fn clearEdgeProperties(store: *graph_store.GraphStore, edge: *graph_store.Ed
 pub fn setNodePropertyFromValue(
     allocator: std.mem.Allocator,
     store: *graph_store.GraphStore,
-    labels: [][]const u8,
+    caller_labels: [][]const u8,
     node_id: u64,
     key: []const u8,
     value: Value,
@@ -349,7 +364,16 @@ pub fn setNodePropertyFromValue(
     // the internal __geode_security graph. Cheap pointer lookup; the security
     // graph must never receive an FLE envelope (its records feed the auth HMAC
     // chain, which is computed over plaintext).
-    const node_graph: ?[]const u8 = if (store.getNodePtr(node_id)) |n| n.graph_name else null;
+    const resident = store.getNodePtr(node_id);
+    const node_graph: ?[]const u8 = if (resident) |n| n.graph_name else null;
+    // CANARY: REQ=REQ-SONNY-3319-CURRENT-LABELS; FEATURE="VectorIndex"; ASPECT=WriteChokepointLabels; STATUS=TESTED; TEST=tests/test_sonny_write_allowlist_r4b.zig; OWNER=engine; UPDATED=2026-09-28
+    // SONNY-3319: the node's labels as they are now, not as the caller read
+    // them: a SET that adds a label earlier in the same clause (`SET n:VD,
+    // n.emb = <2-dim vector>`) passed the labels from before the clause, so
+    // the dimension guard and the FLE hook below did not see `:VD` and a
+    // wrong-dimension vector went into VD's HNSW index. The caller's labels
+    // are used only for a node that is not resident.
+    const labels: [][]const u8 = if (resident) |n| n.labels else caller_labels;
 
     // CANARY: REQ=REQ-GAP-0918-VECTOR-INDEX-VALIDATION; FEATURE="VectorIndex"; ASPECT=WriteChokepoint; STATUS=TESTED; TEST=tests/test_gap0918_vector_validation.zig; OWNER=index; UPDATED=2026-07-10
     // GAP-0918: reject dimension-mismatched vectors before they reach an

@@ -112,6 +112,8 @@ const write_budget = @import("../write_budget.zig");
 const read_budget = @import("../read_budget.zig");
 const property_mutation = @import("property_mutation.zig");
 const write_precheck = @import("write_precheck.zig");
+// SONNY-3319: the labels a SET list gives a node, for the pre-pass.
+const write_scope = @import("write_scope.zig");
 // SONNY-3139: the one classification of `ast.Query`'s fields.
 const write_shape = @import("write_shape.zig");
 // SONNY-3042, SONNY-3043: MATCH ... CREATE deletes as a DELETE statement does.
@@ -9249,7 +9251,13 @@ pub fn applySetRemoveOverRows(
             } else false;
             if (seen) continue;
             switch (row[columnIndex(rows.columns, name).?]) {
-                .Node => |node| try write_precheck.checkSetClausesWritableExcluding(allocator, set_clauses, env, name, node.labels, node.id),
+                // SONNY-3319: with the labels the statement's SET gives the
+                // node (`SET n:VD, n.emb = ...`), not only those it has.
+                .Node => |node| {
+                    const labels = try write_scope.labelsAfterSet(allocator, node.labels, set_clauses, name);
+                    defer allocator.free(labels);
+                    try write_precheck.checkSetClausesWritableExcluding(allocator, set_clauses, env, name, labels, node.id);
+                },
                 else => {},
             }
         }

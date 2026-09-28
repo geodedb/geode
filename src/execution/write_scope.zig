@@ -32,6 +32,7 @@ const eval = @import("../eval.zig");
 const value_types = @import("../value_types.zig");
 const graph_store = @import("../graph_store.zig");
 const property_mutation = @import("property_mutation.zig");
+const write_precheck = @import("write_precheck.zig");
 
 const Value = value_types.Value;
 const Env = value_types.Env;
@@ -126,6 +127,51 @@ pub fn setTarget(sc: ast.SetClause) []const u8 {
     };
 }
 
+// CANARY: REQ=REQ-SONNY-3319-CURRENT-LABELS; FEATURE="VectorIndex"; ASPECT=SetPrePassLabels; STATUS=TESTED; TEST=tests/test_sonny_write_allowlist_r4b.zig; OWNER=engine; UPDATED=2026-09-28
+/// SONNY-3319: the labels a node bound to `name` carries once `clauses` have
+/// applied: `current` and every label a clause of the list sets on `name`.
+/// The statement-atomicity pre-pass checks a value against these, so `SET
+/// n:VD, n.emb = <2-dim vector>` is refused before anything is written when
+/// VD's vector index holds 4 dimensions (the pre-pass used the labels from
+/// before the SET). The caller frees the slice (not the strings).
+pub fn labelsAfterSet(allocator: std.mem.Allocator, current: []const []const u8, clauses: []const ast.SetClause, name: []const u8) ![][]const u8 {
+    var out: std.ArrayList([]const u8) = .empty;
+    errdefer out.deinit(allocator);
+    try out.appendSlice(allocator, current);
+    for (clauses) |sc| switch (sc) {
+        .Labels => |l| if (std.mem.eql(u8, l.node, name)) for (l.labels) |label| {
+            const have = for (out.items) |x| {
+                if (std.mem.eql(u8, x, label)) break true;
+            } else false;
+            if (!have) try out.append(allocator, label);
+        },
+        else => {},
+    };
+    return out.toOwnedSlice(allocator);
+}
+
+/// SONNY-3319: the statement-atomicity pre-pass for `clauses` over the nodes
+/// `scope` binds that `filter` accepts, with each node's labels after the
+/// clauses (`labelsAfterSet`): every value storable, a vector's dimension
+/// included, before any assignment.
+fn precheckNodeTargets(allocator: std.mem.Allocator, clauses: []const ast.SetClause, scope: *const WriteScope, filter: anytype) !void {
+    const env = scope.env(allocator);
+    for (clauses, 0..) |sc, i| {
+        const name = setTarget(sc);
+        const seen = for (clauses[0..i]) |prev| {
+            if (std.mem.eql(u8, setTarget(prev), name)) break true;
+        } else false;
+        if (seen or !filter.applies(name)) continue;
+        const node = switch (scope.get(name) orelse continue) {
+            .Node => |n| n,
+            else => continue,
+        };
+        const labels = try labelsAfterSet(allocator, node.labels, clauses, name);
+        defer allocator.free(labels);
+        try write_precheck.checkSetClausesWritableExcluding(allocator, clauses, env, name, labels, node.id);
+    }
+}
+
 /// Every SET clause's target, when `filter` has no opinion.
 pub const AllTargets = struct {
     pub fn applies(_: AllTargets, _: []const u8) bool {
@@ -151,6 +197,7 @@ pub fn applySetGroups(
     filter: anytype,
 ) !void {
     if (clauses.len == 0) return;
+    try precheckNodeTargets(allocator, clauses, scope, filter);
     var values: std.ArrayList(Value) = .empty;
     defer values.deinit(allocator);
     var groups = ast.SetClauseGroups.init(clauses, ends);

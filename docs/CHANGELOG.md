@@ -1137,6 +1137,16 @@
   count(*)` gave one row per match); an aggregate over such a pattern now
   goes through the shared projection. The bug predates round 4a: it was the
   read's own; round 4a routed every SET through that read.
+- **A label SET beside a vector SET checks the new label's index
+  (SONNY-3319):** round 4a's pre-pass checked a SET's vector against the
+  labels the node had before the statement, and so did each assignment, so
+  `MATCH (n:VO) SET n:VD, n.emb = <2 dimensions>` stored the vector in VD's
+  4-dimension HNSW index (the MERGE and CREATE ... SET forms too), and the
+  next vector SET crashed: the failed index rebuild freed the index's name,
+  which was then logged. The pre-pass and every node property write use the
+  labels the node carries with the SET's own labels, the write is refused
+  before anything is stored (22000), and an index name is copied before a
+  rebuild.
 - **The parser's limits (SONNY-3244):** parsing runs before authorization,
   and 25,000 `MATCH (n:G) SET n.x = 1;` statements (625 KB) took a 741 MB
   parser arena, so a 16 MB request could hold about 19 GB; about 60 chained

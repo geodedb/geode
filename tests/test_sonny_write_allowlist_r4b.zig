@@ -214,3 +214,82 @@ const s3318_cases = [_]Case{
 test "SONNY-3318: a comma pattern binds every chain, read and written, in every session" {
     try runCases("SONNY-3318", &s3318_cases);
 }
+
+// ---------------------------------------------------------------------------
+// SONNY-3319 (I-1): a label and a vector in one SET clause.
+
+const vec_setup = [_][]const u8{
+    "CREATE INDEX vidx ON VD (emb) USING HNSW WITH (metric = 'l2')",
+    "CREATE (:VD {id: 1, emb: vectorf32('[1.0, 0.0, 0.0, 0.0]')})",
+    "CREATE (:VO {id: 2})",
+};
+
+/// Nothing of the refused write stored: VD holds node 1 only, one vector in
+/// the store, and a later SET on VD's vector runs (it crashed: the failed
+/// index rebuild's name was logged after it was freed).
+const vec_unchanged = [_]Check{
+    .{ .query = "MATCH (n:VD) RETURN n.id", .want = &.{"1"} },
+    .{ .query = "MATCH (n) WHERE n.emb IS NOT NULL RETURN count(*) AS c", .want = &.{"1"} },
+    .{ .query = "MATCH (n:VD) WHERE n.id = 1 SET n.emb = vectorf32('[1.0, 1.0, 1.0, 1.0]') RETURN n.id", .want = &.{"1"} },
+    .{ .query = "RETURN 1 AS alive", .want = &.{"1"} },
+};
+
+const s3319_cases = [_]Case{
+    .{ .setup = &vec_setup, .write = "MATCH (n:VO) SET n:VD, n.emb = vectorf32('[9.0, 9.0]')", .refused = error.VectorDimensionMismatch, .checks = &vec_unchanged },
+    .{ .setup = &vec_setup, .write = "MATCH (n:VO) SET n:VD, n.emb = vectorf32('[9.0, 9.0]') RETURN n.id", .refused = error.VectorDimensionMismatch, .checks = &vec_unchanged },
+    .{ .setup = &vec_setup, .write = "MATCH (n:VO) SET n.emb = vectorf32('[9.0, 9.0]'), n:VD", .refused = error.VectorDimensionMismatch, .checks = &vec_unchanged },
+    .{ .setup = &vec_setup, .write = "MATCH (n:VO) SET n:VD SET n.emb = vectorf32('[9.0, 9.0]')", .refused = error.VectorDimensionMismatch, .checks = &vec_unchanged },
+    .{ .setup = &vec_setup, .write = "MERGE (n:VO {id: 2}) SET n:VD, n.emb = vectorf32('[9.0, 9.0]')", .refused = error.VectorDimensionMismatch, .checks = &vec_unchanged },
+    .{ .setup = &vec_setup, .write = "MERGE (n:VO {id: 2}) ON MATCH SET n:VD, n.emb = vectorf32('[9.0, 9.0]')", .refused = error.VectorDimensionMismatch, .checks = &vec_unchanged },
+    .{ .setup = &vec_setup, .write = "CREATE (n:VC {id: 4}) SET n:VD, n.emb = vectorf32('[9.0, 9.0]')", .refused = error.VectorDimensionMismatch, .checks = &vec_unchanged },
+    // The right dimension is stored.
+    .{ .setup = &vec_setup, .write = "MATCH (n:VO) SET n:VD, n.emb = vectorf32('[2.0, 2.0, 2.0, 2.0]')", .checks = &.{
+        .{ .query = "MATCH (n:VD) RETURN n.id", .want = &.{ "1", "2" } },
+        .{ .query = "MATCH (n:VD) WHERE n.id = 2 SET n.emb = vectorf32('[3.0, 3.0, 3.0, 3.0]') RETURN n.id", .want = &.{"2"} },
+    } },
+};
+
+/// `text` with `VD` and `vidx` numbered: the index manager and an in-memory
+/// session's catalog outlive a session (and a run), so each case gets its
+/// own label and index, tagged with this run's clock.
+fn numbered(aa: std.mem.Allocator, text: []const u8, n: usize) ![]const u8 {
+    const vd = try std.fmt.allocPrint(aa, "VD{d}x{d}", .{ n, runTag() });
+    const idx = try std.fmt.allocPrint(aa, "vidx{d}x{d}", .{ n, runTag() });
+    return std.mem.replaceOwned(u8, aa, try std.mem.replaceOwned(u8, aa, text, "VD", vd), "vidx", idx);
+}
+
+var run_tag: u64 = 0;
+
+fn runTag() u64 {
+    if (run_tag == 0) {
+        var ts: std.posix.timespec = .{ .sec = 0, .nsec = 0 };
+        _ = std.os.linux.clock_gettime(.REALTIME, &ts);
+        run_tag = @as(u64, @intCast(ts.sec)) *% 1_000_000_000 +% @as(u64, @intCast(ts.nsec));
+    }
+    return run_tag;
+}
+
+test "SONNY-3319: a vector SET beside a label SET is checked against the new label's index, and a later SET runs" {
+    var arena = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena.deinit();
+    const aa = arena.allocator();
+    var f: h.Failures = .{ .arena = aa };
+    var n: usize = 0;
+    for ([_]h.Mode{ .in_memory, .persisted }) |mode| {
+        for (s3319_cases) |c| {
+            n += 1;
+            const setup = try aa.alloc([]const u8, c.setup.len);
+            for (c.setup, setup) |q, *out| out.* = try numbered(aa, q, n);
+            const checks = try aa.alloc(Check, c.checks.len);
+            for (c.checks, checks) |chk, *out| out.* = .{ .query = try numbered(aa, chk.query, n), .want = chk.want };
+            var nc = c;
+            nc.setup = setup;
+            nc.checks = checks;
+            nc.write = try numbered(aa, c.write, n);
+            runCase(mode, nc, &f) catch |err| {
+                try f.add("[{s}] {s}: the case aborted: {s}", .{ @tagName(mode), nc.write, @errorName(err) });
+            };
+        }
+    }
+    try f.finish("SONNY-3319");
+}
