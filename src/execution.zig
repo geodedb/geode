@@ -1187,6 +1187,18 @@ fn commitSessionEngineTxn() void {
     };
 }
 
+pub const param_check = @import("execution/param_check.zig");
+
+// CANARY: REQ=REQ-SONNY-3247-MISSING-PARAMETER; FEATURE="ParameterBinding"; ASPECT=UnsuppliedParameter; STATUS=TESTED; TEST=tests/test_sonny_write_allowlist_r4.zig; OWNER=engine; UPDATED=2026-09-28
+/// SONNY-3247: every parameter `program` names is one the request supplies
+/// (`names`, the client's parameters) or one a statement defines with LET;
+/// else error.MissingParameter (42P02), before anything runs. The transports
+/// check right after parsing, ahead of their write fast paths; the entry
+/// points below check again for an in-process caller.
+pub fn checkProgramParams(program: *const ast.Program, names: []const []const u8) param_check.Error!void {
+    try param_check.checkProgram(program, names);
+}
+
 // CANARY: REQ=REQ-SONNY-2823-SESSION-ENGINE-TXN; FEATURE="TransactionManagement"; ASPECT=ProgramEnd; STATUS=TESTED; TEST=tests/test_sonny2823_session_engine_txn.zig; OWNER=storage; UPDATED=2026-09-27
 /// SONNY-2823: the executor entry points running on this thread
 /// (`executeProgramWithContext`, `executeStatementWithContext`). When the
@@ -1221,6 +1233,9 @@ pub fn validateProgramShapes(program: *const ast.Program, context: ExecutionCont
 }
 
 pub fn executeProgramWithContext(allocator: std.mem.Allocator, program: *const ast.Program, context: ExecutionContext) !ExecutionResult {
+    // SONNY-3247: at the outermost entry point, the parameters are the
+    // request's (a nested entry's context carries the ones its caller bound).
+    if (t_entry_depth == 0) try param_check.checkProgram(program, context.query_param_names);
     // SONNY-2823: the program's session engine transaction ends with it.
     enterEntryPoint();
     defer leaveEntryPoint();
@@ -1421,6 +1436,8 @@ fn executeStatement(allocator: std.mem.Allocator, stmt: ast.Statement) !Executio
 // statements (subqueries) open their own inner scope that cannot clear the
 // enclosing statement's flag.
 pub fn executeStatementWithContext(allocator: std.mem.Allocator, stmt: ast.Statement, context: ExecutionContext) !ExecutionResult {
+    // SONNY-3247: see `executeProgramWithContext`.
+    if (t_entry_depth == 0) try param_check.checkStatement(&stmt, context.query_param_names);
     // SONNY-2823: a statement run on its own (the PROFILE paths) is a
     // program; its session engine transaction ends with it.
     enterEntryPoint();

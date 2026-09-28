@@ -279,7 +279,11 @@ pub fn mapError(err: anyerror) ErrorInfo {
         error.InvalidCast => .{ .code = "22018", .message = "Invalid character value for cast" },
         error.UnsupportedCastTarget => .{ .code = "0A000", .message = "Unsupported CAST target type" },
         // GAP-0926: out-of-range positional parameter.
-        error.MissingParameter => .{ .code = "22023", .message = "Positional parameter out of range (referenced a parameter that was not supplied)" },
+        // SONNY-3247: a parameter the request does not supply, named or
+        // positional (GAP-0926), refused before anything runs. 42P02 =
+        // undefined_parameter (class 42, syntax error or access rule
+        // violation).
+        error.MissingParameter => .{ .code = "42P02", .message = "Undefined parameter: the statement references a parameter ($name or $n) that the request does not supply" },
         // GAP-0926: nested aggregate (sum(avg(...))) is invalid.
         error.NestedAggregate => .{ .code = "42803", .message = "Aggregate functions cannot be nested" },
         // SONNY-2675: a HAVING over groups reads each group's keys, projected

@@ -2543,6 +2543,15 @@ pub fn handleExecute(request_bytes: []const u8, allocator: std.mem.Allocator, ep
                 return encodeMessage(allocator, resp);
             }
 
+            // SONNY-3247: every parameter the program names is one the request
+            // supplies (42P02 otherwise), checked before any path runs it.
+            execution.checkProgramParams(&parse_result.program, bindings.names) catch |err| {
+                const info = proto_util.mapError(err);
+                var resp = try buildErrorResponse(allocator, info.code, info.message, &.{}, &.{});
+                defer resp.deinit(allocator);
+                return encodeMessage(allocator, resp);
+            };
+
             // SONNY-2805: `analyzeRequest` keeps a program with transaction
             // control off the fast paths that run only its last query.
             const analysis = query_traits.analyzeRequest(&parse_result.program);

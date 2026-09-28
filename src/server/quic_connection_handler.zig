@@ -7346,6 +7346,15 @@ fn handleClientMessage(
                 return;
             }
 
+            // SONNY-3247: every parameter the program names is one the request
+            // supplies (42P02 otherwise), checked before any path runs it: the
+            // write fast paths below evaluated a missing one as null.
+            execution.checkProgramParams(&parse_result.program, bindings.names) catch |err| {
+                const info = proto_util.mapError(err);
+                try sendExecuteError(gpa, stream, info.code, info.message, &.{}, &.{});
+                return;
+            };
+
             // #830: a multi-statement program containing BEGIN/START TRANSACTION
             // followed by mutations followed by ROLLBACK was silently committing
             // the mutations.  The execute path doesn't honor BEGIN/COMMIT/ROLLBACK
