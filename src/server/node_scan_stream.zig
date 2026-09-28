@@ -1943,8 +1943,22 @@ fn seekIndexedCandidates(
         // restricted inline values to streamable literals/params, so this is a
         // pure constant fold. A failure or a non-scalar (e.g. NULL / list /
         // node ref) means we cannot seek on this prop — skip it.
-        const expected = eval.evalExpr(allocator, prop.value.*, env) catch continue;
-        const pv = property_value_codec.valueToPropertyValue(allocator, expected) catch continue;
+        // SONNY-3316 (round 16, I4): a limit (54001, 53200, a budget or a
+        // cancel) fails the read; only a value that cannot be sought skips.
+        const expected = eval.evalExpr(allocator, prop.value.*, env) catch |err| {
+            if (eval.isResourceLimitError(err)) {
+                if (best_pv) |b| property_value_codec.freePropertyValue(allocator, b);
+                return err;
+            }
+            continue;
+        };
+        const pv = property_value_codec.valueToPropertyValue(allocator, expected) catch |err| {
+            if (eval.isResourceLimitError(err)) {
+                if (best_pv) |b| property_value_codec.freePropertyValue(allocator, b);
+                return err;
+            }
+            continue;
+        };
         // NULL inline equality never matches via the index path the same way
         // (`{p: null}` is unusual); leave it to the scan/verify path.
         if (pv == .Null) {
@@ -2023,7 +2037,11 @@ fn nodeMatchesPattern(
     };
 
     for (pattern.props.?) |prop| {
-        const expected = eval.evalExpr(allocator, prop.value.*, env) catch return false;
+        // SONNY-3316 (round 16, I4): a limit fails the read, not the row.
+        const expected = eval.evalExpr(allocator, prop.value.*, env) catch |err| {
+            if (eval.isResourceLimitError(err)) return err;
+            return false;
+        };
         const actual = props.get(prop.key) orelse return false;
         if (!storagePropertyMatches(expected, actual)) {
             return false;

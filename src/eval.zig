@@ -171,7 +171,13 @@ pub fn limitAsEvalError(err: anyerror) ?EvalError {
 /// raises it, as it does the IN type error (`raiseInListTypeError`), and the
 /// statement chokepoint (`execution.executeStatementWithContext`) fails the
 /// statement with it. (The read budget and cancel stay tripped once hit, and
-/// the next budget check raises them again; memory is left to the sites.)
+/// the next budget check raises them again.)
+///
+/// SONNY-3316 (round 16, I4): `evalExpr` records every limit error
+/// (`isResourceLimitError`) that leaves it, out of memory included, not only
+/// the stack guard's. The record is per thread: a parallel UNION arm runs on
+/// a thread of its own and hands its record to the statement
+/// (`set_operations.ArmJob.runnerEntry`).
 threadlocal var deferred_limit_error: ?EvalError = null;
 
 /// SONNY-3251: record the limit refusal `err` for the statement (the first
@@ -1155,6 +1161,29 @@ const eval_stack_reserve_bytes: usize = if (builtin.mode == .Debug) 1024 * 1024 
 pub fn evalExpr(allocator: std.mem.Allocator, e: ast.Expr, env: Env) EvalError!Value {
     // SONNY-3251: recorded for the statement as well (`noteLimitError`).
     if (!stack_guard.hasRoom(eval_stack_reserve_bytes) or test_force_expression_too_deep) return noteLimitError(EvalError.ExpressionTooDeep);
+    // SONNY-3316 (round 16, I4): every resource limit that leaves the
+    // evaluator is recorded for the statement, not only the stack guard's:
+    // memory (53200), the read budget and a cancel. A caller that turns the
+    // error into NULL, false or a skipped row no longer turns an out of
+    // memory into an answer.
+    return evalExprDispatch(allocator, e, env) catch |err| {
+        if (isResourceLimitError(err)) return noteLimitError(err);
+        return err;
+    };
+}
+
+/// SONNY-3316: a test seam. When set on a thread, evaluating the string
+/// literal `test_force_limit_marker` fails with this error, from inside the
+/// evaluation (as an allocation or a budget check would), so a test can put
+/// the failure in one place of a query and see what the caller there and the
+/// statement relay do with it. Never set outside tests.
+pub threadlocal var test_force_limit_error: ?EvalError = null;
+pub const test_force_limit_marker = "__sonny3316_limit__";
+
+inline fn evalExprDispatch(allocator: std.mem.Allocator, e: ast.Expr, env: Env) EvalError!Value {
+    if (test_force_limit_error) |forced| {
+        if (e == .String and std.mem.eql(u8, e.String, test_force_limit_marker)) return forced;
+    }
     return switch (e) {
         .Binary => |b| evalBinaryChain(allocator, b.op, b.left, b.right, env),
         .Unary => |u| evalUnaryChain(allocator, u.op, u.expr, env),

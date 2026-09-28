@@ -165,6 +165,10 @@ const Rewriter = struct {
     /// aggregate, computed once: `matchSlot` asks for every item at every
     /// link of a chain, and an item may be a chain of 4096 links itself.
     item_has_aggregate: ?[]const bool = null,
+    /// SONNY-3316 (round 16, M2): each projection item's and grouping key's
+    /// chain length (`spineLen`), computed once.
+    item_spine: ?[]const usize = null,
+    key_spine: ?[]const usize = null,
 
     const Mode = enum {
         /// A HAVING over groups: what it reads from a group becomes a slot.
@@ -251,6 +255,10 @@ const Rewriter = struct {
         var links: std.ArrayList(*const ast.Expr) = .empty;
         var at: *const ast.Expr = &top;
         var acc: ast.Expr = undefined;
+        // SONNY-3316 (round 16, M2): the length of the chain under each link,
+        // known from the top's, so `matchSlot` compares a link only with the
+        // items and keys of that length.
+        const top_spine = spineLen(top);
         while (true) {
             if (!isChainLink(at.*)) {
                 acc = try self.rewrite(at.*);
@@ -258,7 +266,7 @@ const Rewriter = struct {
             }
             // A chain link is no aggregate call.
             if (self.mode == .grouped) {
-                if (try self.matchSlot(at.*)) |slot| {
+                if (try self.matchSlotSpine(at.*, top_spine -| links.items.len)) |slot| {
                     acc = slot;
                     break;
                 }
@@ -398,18 +406,51 @@ const Rewriter = struct {
     /// only when the item is a plain aggregate call (matched in `aggregate`),
     /// so the HAVING computes the aggregates inside it instead.
     fn matchSlot(self: *Rewriter, e: ast.Expr) Error!?ast.Expr {
+        return self.matchSlotSpine(e, spineLen(e));
+    }
+
+    /// `matchSlot` for `e`, whose chain length (`spineLen`) is `e_spine`.
+    ///
+    /// SONNY-3316 (round 16, M2): `rewriteChain` asks at every link of a
+    /// chain, and `exprEql` walks two chains down together until they differ:
+    /// K items of N links, against a HAVING chain of N links that differs only
+    /// at its bottom, cost O(K*N^2) (K=32, N=4088 took 20 s). Equal
+    /// expressions have equal chain lengths, so only the items and keys of
+    /// `e`'s length are compared: O(K*N) for the chain.
+    fn matchSlotSpine(self: *Rewriter, e: ast.Expr, e_spine: usize) Error!?ast.Expr {
         // An expression over a comprehension's variable means the element,
         // whatever the projection names alike.
         if (self.locals.items.len != 0 and mentionsAnyName(e, self.locals.items)) return null;
         const has_aggregate = try self.itemsWithAggregates();
-        for (self.scope.items, has_aggregate, 0..) |item, agg, i| {
-            if (agg) continue;
+        const item_spine = try self.itemSpines();
+        for (self.scope.items, has_aggregate, item_spine, 0..) |item, agg, len, i| {
+            if (agg or len != e_spine) continue;
             if (exprEql(item.expr, e)) return try self.slotIdent(.{ .column = i });
         }
-        for (self.scope.keys) |key| {
+        const key_spine = try self.keySpines();
+        for (self.scope.keys, key_spine) |key, len| {
+            if (len != e_spine) continue;
             if (exprEql(key, e)) return try self.slotIdent(.{ .key = key });
         }
         return null;
+    }
+
+    /// SONNY-3316: each projection item's chain length (computed once).
+    fn itemSpines(self: *Rewriter) Error![]const usize {
+        if (self.item_spine) |lens| return lens;
+        const lens = try self.arena.alloc(usize, self.scope.items.len);
+        for (self.scope.items, lens) |item, *len| len.* = spineLen(item.expr);
+        self.item_spine = lens;
+        return lens;
+    }
+
+    /// SONNY-3316: each grouping key's chain length (computed once).
+    fn keySpines(self: *Rewriter) Error![]const usize {
+        if (self.key_spine) |lens| return lens;
+        const lens = try self.arena.alloc(usize, self.scope.keys.len);
+        for (self.scope.keys, lens) |key, *len| len.* = spineLen(key);
+        self.key_spine = lens;
+        return lens;
     }
 
     /// What a name the HAVING uses stands for. A comprehension's variable is
@@ -483,6 +524,17 @@ fn isChainLink(e: ast.Expr) bool {
         .Binary, .Unary, .Member, .Index, .Slice, .MapProjection => true,
         else => false,
     };
+}
+
+/// SONNY-3316 (round 16, M2): the number of chain links down `e`'s left
+/// spine, as `exprEql` walks it: a property of a variable (`n.p`, written
+/// either way) is a leaf, as `exprEql` compares it. `exprEql(a, b)` implies
+/// `spineLen(a) == spineLen(b)`.
+fn spineLen(e: ast.Expr) usize {
+    var n: usize = 0;
+    var at: *const ast.Expr = &e;
+    while (isChainLink(at.*) and propertyOf(at.*) == null) : (n += 1) at = chainNext(at.*);
+    return n;
 }
 
 /// The next link down a chain: the left operand, the operand, the target or

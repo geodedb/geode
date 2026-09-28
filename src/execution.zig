@@ -183,6 +183,11 @@ pub fn parallelUnionInvocations() u64 {
     return set_operations.parallel_union_invocations.load(.monotonic);
 }
 
+/// SONNY-3316: the test seam `set_operations.test_force_limit_in_spawned_arms`.
+pub fn setTestForceLimitInSpawnedUnionArms(on: bool) void {
+    set_operations.test_force_limit_in_spawned_arms.store(on, .release);
+}
+
 /// SONNY-1330 regression probe. Monotonic count of UNIONs that started on the
 /// parallel fork-join path and were DISCARDED because an arm needed a
 /// hydrate-on-miss (forbidden on an arm thread: it mutates the shared bounded

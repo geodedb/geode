@@ -1010,8 +1010,12 @@
     (`WHERE EXISTS { MATCH (m) WHERE EXISTS { ... } }` panicked, "@memcpy
     arguments alias"); pre-existing (SONNY-3250).
   - A resource limit the evaluator runs into (54001, the read budget, a
-    cancel) fails the query in every context; a WHERE, a HAVING, an
-    aggregate or a subquery turned it into a row that did not match.
+    cancel) fails the query; a WHERE, a HAVING, an aggregate or a subquery
+    turned it into a row that did not match. (Round 16 correction: as
+    shipped in round 15 this held on the request's own thread and for
+    54001 only; a limit in a parallel UNION arm, an out of memory, and the
+    node scan's inline-property seek could still become an answer. Fixed in
+    round 16, SONNY-3316.)
     Index, slice, member and map-projection chains evaluate with a loop,
     so 4096 links is the real limit for them too (SONNY-3251).
   - At the gRPC per-principal session cap, a session in an open
@@ -1052,6 +1056,14 @@
     lived in a function that had returned: `MATCH (n:C) WHERE n.v >= 0
     RETURN [[...60 levels...]] AS v UNION ALL ...` hung the request thread,
     and any read could corrupt its stack; pre-existing (SONNY-3315).
+  - A limit the evaluator runs into fails the query wherever it happens:
+    in a parallel UNION arm (it runs on a thread of its own, and its record
+    of the limit was lost), and for every resource limit, out of memory
+    included, where a caller had turned it into a value (an EXISTS or
+    COUNT { } subquery's WHERE, an ORDER BY key, the node scan's
+    inline-property seek). A grouped HAVING chain is compared only with
+    projected items and keys of its own length: 32 items of 4088 links took
+    13 s to rewrite, now under 0.1 s (SONNY-3316).
 
 ### Fixed
 
