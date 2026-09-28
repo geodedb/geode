@@ -1105,11 +1105,17 @@
   absence to the traversals, which evaluated differently: `SET q.a = 1, q.b =
   q.a` stored b = 1 with a RETURN and the old a without; a swap `SET q.a =
   q.b, q.b = q.a` stored (b, b) with one and swapped without; a relationship
-  read what the clause before had written. Geode had no documented rule, so
-  it follows ISO GQL / openCypher: every right-hand side of one SET clause is
-  evaluated against the bindings as they stood before the clause, then its
-  assignments apply; a later SET clause (`SET q.a = 1 SET q.b = q.a`) reads
-  what the one before wrote. Every SET and REMOVE of a MATCH runs in the one
+  read what the clause before had written. Geode had no documented rule; it
+  now evaluates every right-hand side of one SET clause against the bindings
+  as they stood before the clause, then applies its assignments, as SQL's
+  UPDATE does; a later SET clause (`SET q.a = 1 SET q.b = q.a`) reads what
+  the one before wrote. (This entry first cited openCypher for the rule:
+  openCypher and Neo4j apply the items of one SET left to right, so a
+  statement ported from Neo4j that reads, later in one SET clause, a
+  property the clause assigns earlier reads the old value here. ISO GQL
+  raises a data exception for multiple assignments to one element property
+  in a SET, which is what an evaluate-then-assign rule needs; SONNY-3248
+  below.) Every SET and REMOVE of a MATCH runs in the one
   write step (a RETURN after it still shows what was written); MERGE's
   actions, the SET after a CREATE, and the cluster leader's MATCH ... SET
   (SONNY-3246's ordering part; its RLS check and WHERE truthiness remain)
@@ -1117,10 +1123,10 @@
   actions hold more than one SET clause (`ON CREATE SET ... SET ...`), which
   they applied on the wrong branch (round-3 review I1, SONNY-3241; the
   MATCH ... CREATE edge fast path is not yet fixed).
-  - **Behaviour change:** `SET a.c = coalesce(a.c, 0) + 1, b.c =
-    coalesce(b.c, 0) + 1` with a and b the same node stores 1, not 2, and
-    `SET a.c = b.i, b.c = a.c` stores b's old c. A MATCH ... SET or REMOVE
-    without a RETURN answers the rows it wrote, as written.
+  - **Behaviour change:** `SET a.c = b.i, b.c = a.c` stores b's old c.
+    `SET a.c = coalesce(a.c, 0) + 1, b.c = coalesce(b.c, 0) + 1` with a and b
+    the same node is refused (22G03, SONNY-3248 below; it stored 1). A MATCH
+    ... SET or REMOVE without a RETURN answers the rows it wrote, as written.
 - **A comma pattern binds every chain (SONNY-3318):** in a MATCH whose
   first chain has a relationship, a later chain of one node was skipped, so
   its variable was null: `MATCH (g:G)-[:R]->(x:X), (q:Q {i: 2}) SET q.c = 1`
@@ -1173,6 +1179,35 @@
   about 600 returned null. They hold the relationship's id, and read it once
   every chain has inserted; a relationship a later chain or a MERGE action
   reads is the statement's own copy.
+- **The round-4a minors (SONNY-3248):**
+  - **SKIP and LIMIT parameters:** a statement's SKIP or LIMIT given as a
+    parameter was read by some executors only, so `MATCH (q:Q) SET q.z = 1
+    RETURN q.i LIMIT $p` and an in-memory `MATCH (n) RETURN n.i ORDER BY i
+    LIMIT $p` returned every row. The statement's window reads the parameter
+    as it reads a literal.
+  - **One assignment per property in a SET clause:** a clause's values are
+    all evaluated before it assigns them, so two assignments to one
+    (element, property) have no order; the second silently won (`SET q.a =
+    1, q.a = 2`, or `SET a.c = 1, b.c = 2` with a and b the same node). Such
+    a clause is refused before anything is written (22G03), as ISO GQL
+    raises a data exception for multiple assignments to one element
+    property; so is `SET n = {map}` beside another assignment to n. Two
+    clauses (`SET q.a = 1 SET q.a = 2`) still apply in order.
+  - **A LET is scoped to its query:** `LET $z` inside a subquery defined $z
+    for the whole statement, so `... IN (LET $z = 1 MATCH ... RETURN k.i)
+    RETURN $z` passed the parameter check and read null. It is refused with
+    42P02. A LET's parameter is defined for its own query, its expressions,
+    and the parts and bodies it chains; a subquery inside an expression sees
+    only its own LETs (the executor read an outer `$y` there as null, so
+    `LET $y = 2 MATCH (q) WHERE q.i IN (MATCH (k) WHERE k.i = $y ...)`
+    returned nothing; it is refused with 42P02).
+  - **SESSION SET VALUE parameters are not readable:** `SESSION SET VALUE $sv
+    = 3` stores a session parameter that no statement reads (it read as null
+    before round 4a); a statement naming `$sv` is refused with 42P02 unless
+    the request supplies it.
+  - **UNIQUE constraints are not enforced on CREATE, MERGE or SET (known
+    limitation):** the constraint check exists but no write path calls it;
+    this is left for a later round.
 - **The parser's limits (SONNY-3244):** parsing runs before authorization,
   and 25,000 `MATCH (n:G) SET n.x = 1;` statements (625 KB) took a 741 MB
   parser arena, so a 16 MB request could hold about 19 GB; about 60 chained

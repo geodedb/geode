@@ -975,6 +975,20 @@ fn freeRowValues(allocator: std.mem.Allocator, result: *ExecutionResult, row: []
     allocator.free(row);
 }
 
+/// SONNY-3248: the value of the SKIP or LIMIT parameter `name` the request
+/// supplies: a non-negative integer, else none (as the executors read it).
+fn windowParam(name: ?[]const u8, context: ExecutionContext) ?usize {
+    const n = name orelse return null;
+    for (context.query_param_names, context.query_param_values) |pn, pv| {
+        if (!std.mem.eql(u8, pn, n)) continue;
+        return switch (pv) {
+            .Int => |i| if (i >= 0) @as(usize, @intCast(i)) else null,
+            else => null,
+        };
+    }
+    return null;
+}
+
 pub fn applyRowWindow(allocator: std.mem.Allocator, result: *ExecutionResult, start: usize, end: usize) !void {
     const total = result.rows.len;
     if (total == 0) return;
@@ -1557,9 +1571,17 @@ fn executeStatementWithContextInner(allocator: std.mem.Allocator, stmt: ast.Stat
 
             try applyMatchGuard(allocator, &result, context, q.match.chains.len > 0);
 
-            const start = q.offset orelse 0;
+            // CANARY: REQ=REQ-SONNY-3248-LIMIT-PARAM; FEATURE="Pagination"; ASPECT=StatementWindow; STATUS=TESTED; TEST=tests/test_sonny_write_allowlist_r4b.zig; OWNER=engine; UPDATED=2026-09-28
+            // SONNY-3248 (round-4a review M-1): a SKIP or LIMIT given as a
+            // parameter windows the statement as a literal does. Only the
+            // literals were read here, so `MATCH ... SET ... RETURN q.i LIMIT
+            // $p` and an in-memory `MATCH (n:G) RETURN n.i LIMIT $p` returned
+            // every row (the executors that read the parameter themselves
+            // apply it first; a LIMIT applied twice is the same window).
+            const start = q.offset orelse windowParam(q.offset_param, context) orelse 0;
             var end = result.rows.len;
-            if (q.limit) |limit_count| {
+            const limit_value: ?usize = q.limit orelse windowParam(q.limit_param, context);
+            if (limit_value) |limit_count| {
                 const end_limit = std.math.add(usize, start, limit_count) catch std.math.maxInt(usize);
                 end = @min(end, end_limit);
             }

@@ -9244,7 +9244,16 @@ pub fn applySetRemoveOverRows(
     // too: each node target's clauses with its labels and id, which checks a
     // vector index's dimension as well (test-property-write-atomicity (j):
     // `SET n.tag = 'changed', n.emb = <wrong dimension>` wrote the tag).
+    // SONNY-3248: no SET clause assigns one property of an element twice.
+    var group_elements: std.ArrayList(?Value) = .empty;
+    defer group_elements.deinit(allocator);
     for (rows.rows) |row| {
+        var clause_groups = ast.SetClauseGroups.init(set_clauses, set_ends);
+        while (clause_groups.next()) |group| {
+            group_elements.clearRetainingCapacity();
+            for (group) |sc| try group_elements.append(allocator, row[columnIndex(rows.columns, setTarget(sc)).?]);
+            try write_scope.refuseRepeatedTargets(group, group_elements.items);
+        }
         const env = Env{ .names = rows.columns, .values = row, .param_names = param_names, .param_values = param_values, .allocator = allocator };
         try write_precheck.checkSetClausesWritable(allocator, set_clauses, env, null, &.{});
         for (set_clauses, 0..) |sc, i| {

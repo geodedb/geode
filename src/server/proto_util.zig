@@ -304,6 +304,9 @@ pub fn mapError(err: anyerror) ErrorInfo {
         // DELETE frees what it deleted.
         // SONNY-2707: `SET r.x` on a variable-length relationship (a list of
         // edges) or on a path variable.
+        // SONNY-3248 (round-4a review M-2): one SET clause assigned one
+        // property of an element twice; the second silently won.
+        error.RepeatedSetTarget => .{ .code = "22G03", .message = "A SET clause assigns one property of an element more than once (or `SET n = {map}` beside another assignment to n); its values are evaluated together, so there is no order to settle them. Split it into two SET clauses" },
         error.VariableLengthPathWrite => .{ .code = "0A000", .message = "A SET or REMOVE cannot target a variable-length relationship variable (the list of its edges) or a path variable; target the path's nodes" },
         error.DeleteReturnsDeletedElement => .{ .code = "0A000", .message = "A RETURN after DELETE cannot return an element the statement deletes (a node, an edge or a path through one), or a JSONB, XML, URL, DOMAIN, bit string or extended value; return its properties or an aggregate" },
         // SONNY-3040, SONNY-3041, SONNY-3043: a write clause the statement's

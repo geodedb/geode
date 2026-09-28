@@ -39,7 +39,13 @@ const gps = geode.security.gps;
 // ---------------------------------------------------------------------------
 // The cases, one label family per case (`L` is replaced by `L<n>`).
 
-const P = struct { name: []const u8, value: []const u8 };
+/// A parameter: a string, or an integer when `int` is set.
+const P = struct { name: []const u8, value: []const u8 = "", int: ?i64 = null };
+
+fn makeParam(allocator: std.mem.Allocator, p: P) !schema.Param {
+    if (p.int) |v| return util.makeIntParam(allocator, p.name, v);
+    return util.makeStringParam(allocator, p.name, p.value);
+}
 
 const Step = struct {
     query: []const u8,
@@ -203,6 +209,29 @@ const cases = [_]Case{
         .{ .query = "MATCH (n:L) WHERE n.i > 0 FILTER n.i < 3 RETURN n.i", .want = "1;2" },
         .{ .query = "MATCH (n:L) FILTER n.i < 3 RETURN n.i", .want = "0;1;2" },
     } },
+    // SONNY-3248 M-1: SKIP / LIMIT parameters.
+    .{ .name = "3248 window params", .steps = &.{
+        .{ .query = "MATCH (n:L) WHERE n.i < 3 RETURN n.g LIMIT $l", .params = &.{.{ .name = "l", .int = 2 }}, .want = "a;a" },
+        .{ .query = "MATCH (n:L) RETURN n.i AS i ORDER BY i LIMIT $l", .params = &.{.{ .name = "l", .int = 2 }}, .want = "0;1" },
+        .{ .query = "MATCH (n:L) RETURN n.i AS i ORDER BY i SKIP $s LIMIT $l", .params = &.{ .{ .name = "s", .int = 8 }, .{ .name = "l", .int = 5 } }, .want = "8;9" },
+        .{ .query = "MATCH (q:LQ) SET q.x = 1 RETURN q.i AS i ORDER BY i LIMIT $l", .params = &.{.{ .name = "l", .int = 2 }}, .want = "0;1" },
+        .{ .query = "MATCH (q:LQ) WHERE q.x = 1 RETURN count(q) AS c", .want = "4" },
+    } },
+    // SONNY-3248 M-2 and M-3.
+    .{
+        .name = "3248 SET target, LET scope",
+        .steps = &.{
+            .{ .query = "MATCH (q:LQ {i: 1}) SET q.c = 1, q.c = 2", .code = "22G03" },
+            .{ .query = "MATCH (a:LQ {i: 1}), (b:LQ {i: 1}) SET a.c = 1, b.c = 2 RETURN a.c", .code = "22G03" },
+            .{ .query = "MATCH (q:LQ) WHERE q.i IN (LET $z = 1 MATCH (k:LQ) WHERE k.i = $z RETURN k.i) RETURN q.i, $z AS z", .code = "42P02" },
+            nothing_written_q,
+            .{ .query = "MATCH (q:LQ) WHERE q.i IN (LET $z = 1 MATCH (k:LQ) WHERE k.i = $z RETURN k.i) RETURN q.i", .want = "1" },
+            // An outer LET is not seen inside an IN subquery (it read null there).
+            .{ .query = "LET $y = 2 MATCH (q:LQ) WHERE q.i IN (MATCH (k:LQ) WHERE k.i = $y RETURN k.i) RETURN q.i", .code = "42P02" },
+            .{ .query = "LET $y = 2 MATCH (q:LQ) WHERE q.i = $y RETURN q.i", .want = "2" },
+            .{ .query = "MATCH (q:LQ {i: 1}) SET q.c = 1 SET q.c = q.c + 1 RETURN q.c", .want = "2" },
+        },
+    },
     // I8.
     .{ .name = "I8 nesting", .steps = &.{
         .{ .query = "WITH 1 AS a WITH 1 AS a WITH 1 AS a WITH 1 AS a WITH 1 AS a WITH 1 AS a WITH 1 AS a WITH 1 AS a WITH 1 AS a WITH 1 AS a WITH 1 AS a WITH 1 AS a WITH 1 AS a WITH 1 AS a WITH 1 AS a WITH 1 AS a WITH 1 AS a WITH 1 AS a WITH 1 AS a WITH 1 AS a WITH 1 AS a WITH 1 AS a WITH 1 AS a WITH 1 AS a WITH 1 AS a RETURN a", .code = "54001" },
@@ -303,7 +332,7 @@ const Fixture = struct {
     fn run(self: *Fixture, session_id: []const u8, query: []const u8, params: []const P) !Answer {
         const ga = self.arena.allocator();
         var ps = util.emptyParams();
-        for (params) |p| try ps.append(ga, try util.makeStringParam(ga, p.name, p.value));
+        for (params) |p| try ps.append(ga, try makeParam(ga, p));
         const req = try encodeProto(ga, schema.ExecuteRequest{ .session_id = session_id, .query = query, .params = ps });
         const resp = try decodeProto(schema.ExecutionResponse, ga, try grpc.handleExecute(req, ga, null));
         var rows: std.ArrayList([]const u8) = .empty;
@@ -463,7 +492,7 @@ test "round 4a over gRPC: the deepest nesting the parser allows runs on an 8 MiB
 fn quicAnswer(aa: std.mem.Allocator, client: *util.QuicProtoClient, query: []const u8, params: []const P) !Answer {
     const gpa = testing.allocator;
     var ps = util.emptyParams();
-    for (params) |p| try ps.append(gpa, try util.makeStringParam(gpa, p.name, p.value));
+    for (params) |p| try ps.append(gpa, try makeParam(gpa, p));
     var res = try client.executeAndCollect(gpa, query, ps, 1000);
     defer res.deinit(gpa);
     if (res.error_code) |code| return .{ .code = try aa.dupe(u8, code), .rows = "" };

@@ -208,11 +208,62 @@ pub fn labelsAfterSet(allocator: std.mem.Allocator, current: []const []const u8,
     return out.toOwnedSlice(allocator);
 }
 
+// CANARY: REQ=REQ-SONNY-3248-REPEATED-SET-TARGET; FEATURE="SetClauseSemantics"; ASPECT=RepeatedTarget; STATUS=TESTED; TEST=tests/test_sonny_write_allowlist_r4b.zig; OWNER=engine; UPDATED=2026-09-28
+/// SONNY-3248 (round-4a review M-2): one SET clause assigns each property of
+/// an element at most once. A clause's values are all evaluated before any
+/// of its assignments (SONNY-3242), so two assignments to one (element,
+/// property) have no order to settle them, and the second silently won
+/// (`SET q.a = 1, q.a = 2`; `SET a.c = 1, b.c = 2` with a and b the same
+/// node). ISO GQL raises a data exception for multiple assignments to a graph
+/// element property; so does Geode now (error.RepeatedSetTarget, 22G03), before
+/// anything is written. `SET n = {map}` assigns every property of n, so it
+/// shares its element with no other assignment of the clause. `elements[i]`
+/// is what `group[i]` targets on this row (null: nothing, or not applied).
+pub fn refuseRepeatedTargets(group: []const ast.SetClause, elements: []const ?Value) !void {
+    for (group, elements, 0..) |a, ea_opt, i| {
+        if (a == .Labels) continue;
+        const ea = ea_opt orelse continue;
+        for (group[i + 1 ..], elements[i + 1 ..]) |b, eb_opt| {
+            if (b == .Labels) continue;
+            const eb = eb_opt orelse continue;
+            if (!sameElement(ea, eb)) continue;
+            const clash = switch (a) {
+                .Property => |pa| switch (b) {
+                    .Property => |pb| std.mem.eql(u8, pa.target.property, pb.target.property),
+                    else => true,
+                },
+                else => true,
+            };
+            if (clash) return error.RepeatedSetTarget;
+        }
+    }
+}
+
+fn sameElement(a: Value, b: Value) bool {
+    return switch (a) {
+        .Node => |n| b == .Node and b.Node.id == n.id,
+        .Edge => |e| b == .Edge and b.Edge.id == e.id,
+        else => false,
+    };
+}
+
 /// SONNY-3319: the statement-atomicity pre-pass for `clauses` over the nodes
 /// `scope` binds that `filter` accepts, with each node's labels after the
 /// clauses (`labelsAfterSet`): every value storable, a vector's dimension
 /// included, before any assignment.
-fn precheckNodeTargets(allocator: std.mem.Allocator, clauses: []const ast.SetClause, scope: *const WriteScope, filter: anytype) !void {
+fn precheckNodeTargets(allocator: std.mem.Allocator, clauses: []const ast.SetClause, ends: []const usize, scope: *const WriteScope, filter: anytype) !void {
+    // SONNY-3248: no clause assigns one property twice.
+    var elements: std.ArrayList(?Value) = .empty;
+    defer elements.deinit(allocator);
+    var groups = ast.SetClauseGroups.init(clauses, ends);
+    while (groups.next()) |group| {
+        elements.clearRetainingCapacity();
+        for (group) |sc| {
+            const name = setTarget(sc);
+            try elements.append(allocator, if (filter.applies(name)) scope.get(name) else null);
+        }
+        try refuseRepeatedTargets(group, elements.items);
+    }
     const env = scope.env(allocator);
     for (clauses, 0..) |sc, i| {
         const name = setTarget(sc);
@@ -255,7 +306,7 @@ pub fn applySetGroups(
     filter: anytype,
 ) !void {
     if (clauses.len == 0) return;
-    try precheckNodeTargets(allocator, clauses, scope, filter);
+    try precheckNodeTargets(allocator, clauses, ends, scope, filter);
     var values: std.ArrayList(Value) = .empty;
     defer values.deinit(allocator);
     var groups = ast.SetClauseGroups.init(clauses, ends);

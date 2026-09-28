@@ -470,3 +470,67 @@ test "SONNY-3322: a relationship variable reads its relationship after 150 and 6
     }
     try testing.expectEqual(@as(usize, 0), failures);
 }
+
+// ---------------------------------------------------------------------------
+// SONNY-3248 (M-1, M-2, M-3).
+
+const s3248_cases = [_]Case{
+    // M-1: a SKIP or LIMIT parameter windows a read and a write's RETURN.
+    .{ .params = &.{.{ .name = "l", .expr = "2" }}, .write = "MATCH (n:G) WHERE n.i < 3 RETURN n.g LIMIT $l", .want = &.{ "a", "a" } },
+    .{ .params = &.{.{ .name = "l", .expr = "2" }}, .write = "MATCH (n:G) RETURN n.i AS i ORDER BY i LIMIT $l", .want = &.{ "0", "1" } },
+    .{ .params = &.{.{ .name = "l", .expr = "8" }}, .write = "MATCH (n:G) RETURN n.i AS i ORDER BY i SKIP $l", .want = &.{ "8", "9" } },
+    .{ .params = &.{ .{ .name = "s", .expr = "1" }, .{ .name = "l", .expr = "2" } }, .write = "MATCH (n:G) RETURN n.i AS i ORDER BY i SKIP $s LIMIT $l", .want = &.{ "1", "2" } },
+    .{
+        .params = &.{.{ .name = "l", .expr = "2" }},
+        .write = "MATCH (q:Q) SET q.z = 1 RETURN q.i AS i ORDER BY i LIMIT $l",
+        .want = &.{ "0", "1" },
+        .checks = &.{
+            // The SET wrote every row; the LIMIT windows what it returns.
+            .{ .query = "MATCH (q:Q) WHERE q.z = 1 RETURN count(*) AS c", .want = &.{"4"} },
+        },
+    },
+    .{ .params = &.{.{ .name = "l", .expr = "2" }}, .write = "MATCH (g:G)-[:R]->(x:X) RETURN x.j AS j ORDER BY j LIMIT $l", .want = &.{ "0", "1" } },
+    .{ .write = "MATCH (n:G) RETURN n.i AS i ORDER BY i SKIP 8", .want = &.{ "8", "9" } },
+    // M-2: one SET clause assigns a property of an element once.
+    .{ .write = "MATCH (q:Q {i: 1}) SET q.a = 1, q.a = 2", .refused = error.RepeatedSetTarget, .checks = &.{
+        .{ .query = "MATCH (q:Q) WHERE q.a IS NOT NULL RETURN count(*) AS c", .want = &.{"0"} },
+    } },
+    .{ .write = "MATCH (a:Q {i: 1}), (b:Q {i: 1}) SET a.c = 1, b.c = 2 RETURN a.c", .refused = error.RepeatedSetTarget, .checks = &.{
+        .{ .query = q_c, .want = &.{} },
+    } },
+    .{ .write = "MATCH (q:Q) SET q.c = q.i, q.c = 9", .refused = error.RepeatedSetTarget, .checks = &.{
+        .{ .query = q_c, .want = &.{} },
+    } },
+    .{ .write = "MATCH (q:Q {i: 1}) SET q = {c: 1}, q.d = 2", .refused = error.RepeatedSetTarget, .checks = &.{
+        .{ .query = q_c, .want = &.{} },
+    } },
+    .{ .write = "MERGE (z:Z {k: 1}) ON CREATE SET z.a = 1, z.a = 2", .refused = error.RepeatedSetTarget },
+    .{ .write = "CREATE (z:Z {k: 1}) SET z.a = 1, z.a = 2", .refused = error.RepeatedSetTarget },
+    // Different properties, different elements, or two clauses: allowed.
+    .{ .write = "MATCH (a:Q {i: 1}), (b:Q {i: 2}) SET a.c = 1, b.c = 2", .checks = &.{
+        .{ .query = q_c, .want = &.{ "1|1", "2|2" } },
+    } },
+    .{ .write = "MATCH (q:Q {i: 1}) SET q.c = 1 SET q.c = q.c + 1", .checks = &.{
+        .{ .query = q_c, .want = &.{"1|2"} },
+    } },
+    .{ .write = "MATCH (q:Q {i: 1}) SET q:Extra, q.c = 5", .checks = &.{
+        .{ .query = q_c, .want = &.{"1|5"} },
+    } },
+    // M-3: a LET defines its parameter for its own query, not the statement.
+    .{ .write = "MATCH (q:Q) WHERE q.i IN (LET $z = 1 MATCH (k:Q) WHERE k.i = $z RETURN k.i) RETURN q.i, $z AS z", .refused = error.MissingParameter },
+    .{ .write = "MATCH (q:Q) WHERE q.i IN (LET $z = 1 MATCH (k:Q) WHERE k.i = $z RETURN k.i) SET q.x = $z", .refused = error.MissingParameter, .checks = &.{
+        .{ .query = "MATCH (q:Q) WHERE q.x IS NOT NULL RETURN count(*) AS c", .want = &.{"0"} },
+    } },
+    // An outer LET is not seen inside an IN subquery (the executor reads it
+    // as null there). (An IN subquery is evaluated by the server's
+    // evaluator; a LET inside one that the subquery reads is in the
+    // transport test.)
+    .{ .write = "LET $y = 2 MATCH (q:Q) WHERE q.i IN (MATCH (k:Q) WHERE k.i = $y RETURN k.i) RETURN q.i", .refused = error.MissingParameter },
+    .{ .write = "LET $y = 2 MATCH (q:Q {i: $y}) RETURN q.i", .want = &.{"2"} },
+    // SESSION SET VALUE stores a session parameter no statement reads.
+    .{ .write = "SESSION SET VALUE $sv = 3; MATCH (q:Q {i: $sv}) RETURN q.i", .refused = error.MissingParameter },
+};
+
+test "SONNY-3248: SKIP / LIMIT parameters, one assignment per property in a SET clause, LET scope, in every session" {
+    try runCases("SONNY-3248", &s3248_cases);
+}
