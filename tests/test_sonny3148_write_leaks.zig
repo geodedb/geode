@@ -279,18 +279,15 @@ test "SONNY-3148: a WITH stage before a write frees the items it computed, and a
 // ---------------------------------------------------------------------------
 // 4. A path variable over a fixed single-hop pattern.
 
+// Task W round 3: a statement that writes with a path variable (a SET beside
+// one, a path DELETE) is not an allowlisted write shape (SONNY-3146), so
+// only reads reach these arrays.
 test "SONNY-3148: a single-hop path variable frees its node and edge arrays unless a row returns the path, which keeps them" {
     try runShapes("single-hop path", &.{
         .{ .query = "MATCH p = (n:G)-[:R]->(x:X) WHERE n.i >= 5 RETURN length(p) AS len", .want = &.{ "1", "1", "1", "1", "1" } },
-        .{ .query = "MATCH p = (n:G)-[:R]->(x:X) WHERE n.i = 5 SET x.x = 1", .checks = &xx(&.{"5"}) },
-        .{ .query = "MATCH p = (n:G)-[:R]->(x:X) WHERE n.i = 5 SET x.x = 1 RETURN length(p) AS len", .want = &.{"1"}, .checks = &xx(&.{"5"}) },
+        .{ .query = "MATCH p = (n:G)-[:R]->(x:X) WHERE n.i = 5 RETURN x.j AS j, length(p) AS len", .want = &.{"5|1"} },
         // The residual: a row that returns the path keeps its arrays.
         .{ .query = "MATCH p = (n:G)-[:R]->(x:X) WHERE n.i = 5 RETURN p, length(p) AS len", .want = &.{"<Path 2:1>|1"}, .residual_bytes = path_bytes },
-        .{ .query = "MATCH p = (n:G)-[:R]->(x:X) WHERE n.i = 5 SET x.x = 1 RETURN p, length(p) AS len", .want = &.{"<Path 2:1>|1"}, .checks = &xx(&.{"5"}), .residual_bytes = path_bytes },
-        .{ .query = "MATCH p = (n:G)-[:R]->(x:X) WHERE n.i = 5 DETACH DELETE p", .checks = &.{
-            .{ .query = "MATCH (n:G) RETURN count(*) AS c", .want = &.{"9"} },
-            .{ .query = "MATCH (x:X) RETURN count(*) AS c", .want = &.{"9"} },
-        }, .residual_bytes = path_bytes },
     });
 }
 
