@@ -5415,6 +5415,158 @@ fn expandVarLengthHop(
     }
 }
 
+/// SONNY-3318: how `executeMultiChainRelationshipMatch` joins a hop, or a
+/// whole chain, to the bindings read so far. `Binding` is that function's
+/// `MatchBinding` (a node map, an edge map, a relationship-list map, and
+/// `clone`/`deinit`).
+///
+/// A chain starts at its first node pattern: a variable an earlier chain
+/// bound must satisfy the pattern's labels and properties again (and the
+/// binding is dropped if it does not); an unbound or anonymous one is every
+/// node the session may see that matches (a Cartesian product with the
+/// bindings so far). Each hop then walks from the node the chain reached
+/// (`tracker`): the relationship's types, direction, properties and scope,
+/// the far node's graph, tenant, RLS, labels and properties, and a far node
+/// or relationship variable already bound must be the one reached.
+const MultiChainJoin = struct {
+    allocator: std.mem.Allocator,
+    store: *graph_store.GraphStore,
+    scope: *HopScope,
+    rls_row: *std.StringHashMap(rls.Value),
+    filter_graph: []const u8,
+    filter_tenant: ?[]const u8,
+    prop_env: Env,
+    path_mode: ast.PathMode,
+
+    /// May the statement bind `node` to `pattern`?
+    fn nodeFits(self: MultiChainJoin, node: *graph_store.Node, pattern: ast.NodePattern) bool {
+        if (!std.mem.eql(u8, node.graph_name, self.filter_graph)) return false;
+        if (!passesTenantFilter(node.*, self.filter_tenant)) return false;
+        if (!passesRLSFilter(self.rls_row, node.*)) return false;
+        if (!matchesLabels(node, pattern.labels)) return false;
+        return nodeMatchesProps(self.allocator, node, pattern.props, self.prop_env);
+    }
+
+    /// Every node the session may see that `pattern` matches.
+    fn candidates(self: MultiChainJoin, pattern: ast.NodePattern, out: *std.ArrayList(*graph_store.Node)) !void {
+        if (pattern.labels.len > 0) {
+            var ids = try self.store.getNodesByLabels(self.allocator, self.filter_graph, pattern.labels, storageTenantFilter(self.filter_tenant));
+            defer ids.deinit(self.allocator);
+            for (ids.items) |id| {
+                const node = self.store.getNodePtrForScan(id) orelse continue;
+                if (self.nodeFits(node, pattern)) try out.append(self.allocator, node);
+            }
+        } else {
+            _ = g_full_scan_count.fetchAdd(1, .monotonic);
+            var it = self.store.iterateNodesInGraph(self.filter_graph);
+            while (it.next()) |node| {
+                if (self.nodeFits(node, pattern)) try out.append(self.allocator, node);
+            }
+        }
+    }
+
+    fn typeFits(types: []const []const u8, label: []const u8) bool {
+        if (types.len == 0) return true;
+        for (types) |t| if (std.mem.eql(u8, t, label)) return true;
+        return false;
+    }
+
+    fn replace(comptime B: type, allocator: std.mem.Allocator, bindings: *std.ArrayList(B), next: *std.ArrayList(B)) void {
+        for (bindings.items) |*b| b.deinit();
+        bindings.deinit(allocator);
+        bindings.* = next.*;
+        next.* = .empty;
+    }
+
+    fn dropAll(comptime B: type, allocator: std.mem.Allocator, list: *std.ArrayList(B)) void {
+        for (list.items) |*b| b.deinit();
+        list.deinit(allocator);
+    }
+
+    /// Join `chain` to `bindings`.
+    fn extendChain(self: MultiChainJoin, comptime B: type, bindings: *std.ArrayList(B), chain: ast.Chain, tracker: []const u8) !void {
+        const start: ast.NodePattern = if (chain.hops.len > 0) chain.hops[0].left else chain.head orelse return;
+        var cands: std.ArrayList(*graph_store.Node) = .empty;
+        defer cands.deinit(self.allocator);
+        var have_cands = false;
+        var next: std.ArrayList(B) = .empty;
+        errdefer dropAll(B, self.allocator, &next);
+        for (bindings.items) |*existing| {
+            if (start.name) |v| if (existing.vars.get(v)) |bound| {
+                if (!self.nodeFits(bound, start)) continue;
+                var nb = try existing.clone();
+                errdefer nb.deinit();
+                try nb.vars.put(tracker, bound);
+                try next.append(self.allocator, nb);
+                continue;
+            };
+            if (!have_cands) {
+                try self.candidates(start, &cands);
+                have_cands = true;
+            }
+            for (cands.items) |node| {
+                var nb = try existing.clone();
+                errdefer nb.deinit();
+                if (start.name) |v| try nb.vars.put(v, node);
+                try nb.vars.put(tracker, node);
+                try next.append(self.allocator, nb);
+            }
+        }
+        replace(B, self.allocator, bindings, &next);
+        for (chain.hops) |hop| try self.extendHop(B, bindings, hop, tracker);
+    }
+
+    /// Walk `hop` from the node each binding's chain reached (`tracker`).
+    fn extendHop(self: MultiChainJoin, comptime B: type, bindings: *std.ArrayList(B), hop: ast.Hop, tracker: []const u8) !void {
+        var next = try std.ArrayList(B).initCapacity(self.allocator, @max(bindings.items.len, 8));
+        errdefer dropAll(B, self.allocator, &next);
+        var targets: std.ArrayList(VarLenTarget) = .empty;
+        defer targets.deinit(self.allocator);
+        for (bindings.items) |*existing| {
+            const left = existing.vars.get(tracker) orelse continue;
+            if (!matchesLabels(left, hop.left.labels)) continue;
+            if (!nodeMatchesProps(self.allocator, left, hop.left.props, self.prop_env)) continue;
+            if (hop.rel.min_len != null or hop.rel.max_len != null) {
+                targets.clearRetainingCapacity();
+                try expandVarLengthHop(self.allocator, self.store, self.scope, left, hop, self.prop_env, self.path_mode, &targets);
+                for (targets.items) |target| {
+                    if (hop.right.name) |rv| if (existing.vars.get(rv)) |bound| if (bound.id != target.node.id) continue;
+                    var nb = try existing.clone();
+                    errdefer nb.deinit();
+                    if (hop.right.name) |rv| try nb.vars.put(rv, target.node);
+                    if (hop.rel.name) |rn| try nb.rel_list_vars.put(rn, target.edges);
+                    try nb.vars.put(tracker, target.node);
+                    try next.append(self.allocator, nb);
+                }
+                continue;
+            }
+            const empty = [_]u64{};
+            const outgoing: []const u64 = if (hop.rel.dir == .right or hop.rel.dir == .undirected) (self.store.getOutgoingEdgeIds(left.id) orelse &empty) else &empty;
+            const incoming: []const u64 = if (hop.rel.dir == .left or hop.rel.dir == .undirected) (self.store.getIncomingEdgeIds(left.id) orelse &empty) else &empty;
+            for ([_][]const u64{ outgoing, incoming }, 0..) |edge_ids, side| {
+                for (edge_ids) |edge_id| {
+                    const edge = self.store.getEdgePtrHydrated(edge_id) orelse continue;
+                    if (!typeFits(hop.rel.types, edge.label)) continue;
+                    if (!self.scope.edgeVisible(edge)) continue;
+                    if (!matchesEdgeProperties(self.allocator, edge.*, hop.rel.props)) continue;
+                    if (hop.rel.name) |rn| if (existing.edge_vars.get(rn)) |bound| if (bound.id != edge.id) continue;
+                    const far_id = if (side == 0) edge.to_id else edge.from_id;
+                    const right = self.store.getNodePtrForScan(far_id) orelse continue;
+                    if (!self.nodeFits(right, hop.right)) continue;
+                    if (hop.right.name) |rv| if (existing.vars.get(rv)) |bound| if (bound.id != right.id) continue;
+                    var nb = try existing.clone();
+                    errdefer nb.deinit();
+                    if (hop.right.name) |rv| try nb.vars.put(rv, right);
+                    if (hop.rel.name) |rn| try nb.edge_vars.put(rn, edge);
+                    try nb.vars.put(tracker, right);
+                    try next.append(self.allocator, nb);
+                }
+            }
+        }
+        replace(B, self.allocator, bindings, &next);
+    }
+};
+
 // CANARY: REQ=REQ-GQL-MULTI-CHAIN-REL-001; FEATURE="MultiChainRelationshipMatch"; ASPECT=Execution; STATUS=TESTED; TEST=geodetestlab/specs/gql_pattern_matching_comprehensive.yml; OWNER=engine; UPDATED=2025-12-23
 // Handle multiple chains with relationships that share variables
 // e.g., MATCH (p:Person)-[:WORKS_FOR]->(c:Company), (p)-[:PURCHASED]->(pr:Product)
@@ -5901,337 +6053,28 @@ fn executeMultiChainRelationshipMatch(allocator: std.mem.Allocator, q: ast.Query
         }
     }
 
-    // Process remaining hops of the first chain (for multi-hop patterns like (a)-[:E]->(b)-[:E]->(c))
+    // CANARY: REQ=REQ-SONNY-3318-MULTI-CHAIN-BINDING; FEATURE="MultiChainRelationshipMatch"; ASPECT=ChainJoin; STATUS=TESTED; TEST=tests/test_sonny_write_allowlist_r4b.zig; OWNER=engine; UPDATED=2026-09-28
+    // SONNY-3318: every hop after the first of the first chain, and every
+    // chain after it, joined to the bindings so far by one routine
+    // (`MultiChainJoin`). A node-only chain (`(q:Q {i: 2})`) was skipped, so
+    // `MATCH (g)-[:R]->(x), (q:Q {i: 2}) SET q.c = 1` bound q to null and
+    // wrote nothing; a later chain read only its first hop, ignored its
+    // relationship's properties, and did not check that a variable an
+    // earlier chain bound is the node it reaches.
+    const join = MultiChainJoin{
+        .allocator = allocator,
+        .store = store,
+        .scope = &hop_scope,
+        .rls_row = &rls_row_local,
+        .filter_graph = filter_graph,
+        .filter_tenant = filter_tenant,
+        .prop_env = prop_env,
+        .path_mode = effectivePathMode(q),
+    };
     if (first_chain.hops.len > 1) {
-        for (first_chain.hops[1..]) |extra_hop| {
-            const extra_left_var = extra_hop.left.name;
-            const extra_rel_type: ?[]const u8 = if (extra_hop.rel.types.len > 0) extra_hop.rel.types[0] else null;
-            const extra_rel_props_m = extra_hop.rel.props;
-            const extra_right_labels = extra_hop.right.labels;
-            const extra_right_var = extra_hop.right.name;
-            const extra_right_props = extra_hop.right.props;
-            const extra_rel_dir = extra_hop.rel.dir;
-            const extra_rel_var = extra_hop.rel.name;
-
-            var new_bindings = try std.ArrayList(MatchBinding).initCapacity(allocator, @max(bindings.items.len, 8));
-
-            for (bindings.items) |*existing| {
-                // Look up the left node by its variable name, or fall back to the
-                // synthetic tracker for anonymous intermediate nodes.
-                const left_node = if (extra_left_var) |lv| existing.vars.get(lv) else existing.vars.get(chain_last_right_key);
-
-                if (left_node) |ln| {
-                    // BUG-731: honor this hop's left inline property predicate
-                    // (normally already enforced as the previous hop's right
-                    // pattern, but a chain may re-state it).
-                    if (!nodeMatchesProps(allocator, ln, extra_hop.left.props, prop_env)) continue;
-
-                    // CANARY: REQ=REQ-BUG731-MATCH-SCOPING; FEATURE="MultiChainRelationshipMatch"; ASPECT=VarLengthExtraHop; STATUS=TESTED; TEST=tests/test_bug731_match_scoping.zig:327; OWNER=execution; UPDATED=2026-07-31
-                    // A quantified hop expands paths, not a single edge.
-                    if (extra_hop.rel.min_len != null or extra_hop.rel.max_len != null) {
-                        var targets: std.ArrayList(VarLenTarget) = .empty;
-                        defer targets.deinit(allocator);
-                        try expandVarLengthHop(allocator, store, &hop_scope, ln, extra_hop, prop_env, effectivePathMode(q), &targets);
-                        for (targets.items) |target| {
-                            // Cyclic constraint: if right_var is already bound, the target must match.
-                            if (extra_right_var) |rv| {
-                                if (existing.vars.get(rv)) |already_bound| {
-                                    if (already_bound.id != target.node.id) continue;
-                                }
-                            }
-                            var new_binding = try existing.clone();
-                            if (extra_right_var) |rv| try new_binding.vars.put(rv, target.node);
-                            if (extra_rel_var) |rn| try new_binding.rel_list_vars.put(rn, target.edges);
-                            try new_binding.vars.put(chain_last_right_key, target.node);
-                            try new_bindings.append(allocator, new_binding);
-                        }
-                        continue;
-                    }
-
-                    const outgoing_edge_ids = if (extra_rel_dir == .right or extra_rel_dir == .undirected) (store.getOutgoingEdgeIds(ln.id) orelse &[_]u64{}) else &[_]u64{};
-                    const incoming_edge_ids = if (extra_rel_dir == .left or extra_rel_dir == .undirected) (store.getIncomingEdgeIds(ln.id) orelse &[_]u64{}) else &[_]u64{};
-
-                    for (outgoing_edge_ids) |edge_id| {
-                        const edge = store.getEdgePtrHydrated(edge_id) orelse continue;
-                        if (extra_rel_type) |rt| {
-                            if (!std.mem.eql(u8, edge.label, rt)) continue;
-                        }
-                        if (!hop_scope.edgeVisible(edge)) continue;
-                        if (!matchesEdgeProperties(allocator, edge.*, extra_rel_props_m)) continue;
-
-                        if (store.getNodePtrForScan(edge.to_id)) |right_node| {
-                            if (!std.mem.eql(u8, right_node.graph_name, filter_graph)) continue;
-                            if (!passesTenantFilter(right_node.*, filter_tenant)) continue;
-                            if (!passesRLSFilter(&rls_row_local, right_node.*)) continue;
-                            if (!matchesLabels(right_node, extra_right_labels)) continue;
-                            // Check right node properties
-                            if (extra_right_props) |rprops| {
-                                var passes = true;
-                                const empty_env = eval.Env{ .names = &.{}, .values = &.{}, .param_names = param_names, .param_values = param_values, .allocator = allocator };
-                                for (rprops) |prop| {
-                                    if (right_node.properties.get(prop.key)) |npv| {
-                                        const nv = propertyValueToValue(npv);
-                                        const pv = eval.evalExpr(allocator, prop.value.*, empty_env) catch {
-                                            passes = false;
-                                            break;
-                                        };
-                                        if (!valuesEqual(nv, pv)) {
-                                            passes = false;
-                                            break;
-                                        }
-                                    } else {
-                                        passes = false;
-                                        break;
-                                    }
-                                }
-                                if (!passes) continue;
-                            }
-                            // Check cyclic constraint: if right_var already bound, the target must match
-                            if (extra_right_var) |rv| {
-                                if (existing.vars.get(rv)) |already_bound| {
-                                    if (already_bound.id != right_node.id) continue;
-                                }
-                            }
-                            var new_binding = try existing.clone();
-                            if (extra_right_var) |rv| try new_binding.vars.put(rv, right_node);
-                            if (extra_rel_var) |rn| try new_binding.edge_vars.put(rn, edge);
-                            try new_binding.vars.put(chain_last_right_key, right_node);
-                            try new_bindings.append(allocator, new_binding);
-                        }
-                    }
-
-                    for (incoming_edge_ids) |edge_id| {
-                        const edge = store.getEdgePtrHydrated(edge_id) orelse continue;
-                        if (extra_rel_type) |rt| {
-                            if (!std.mem.eql(u8, edge.label, rt)) continue;
-                        }
-                        if (!hop_scope.edgeVisible(edge)) continue;
-                        if (!matchesEdgeProperties(allocator, edge.*, extra_rel_props_m)) continue;
-
-                        if (store.getNodePtrForScan(edge.from_id)) |right_node| {
-                            if (!std.mem.eql(u8, right_node.graph_name, filter_graph)) continue;
-                            if (!passesTenantFilter(right_node.*, filter_tenant)) continue;
-                            if (!passesRLSFilter(&rls_row_local, right_node.*)) continue;
-                            if (!matchesLabels(right_node, extra_right_labels)) continue;
-                            if (extra_right_var) |rv| {
-                                if (existing.vars.get(rv)) |already_bound| {
-                                    if (already_bound.id != right_node.id) continue;
-                                }
-                            }
-                            var new_binding = try existing.clone();
-                            if (extra_right_var) |rv| try new_binding.vars.put(rv, right_node);
-                            if (extra_rel_var) |rn| try new_binding.edge_vars.put(rn, edge);
-                            try new_binding.vars.put(chain_last_right_key, right_node);
-                            try new_bindings.append(allocator, new_binding);
-                        }
-                    }
-                }
-            }
-
-            // Replace bindings with extended set
-            for (bindings.items) |*b| b.deinit();
-            bindings.deinit(allocator);
-            bindings = new_bindings;
-        }
+        for (first_chain.hops[1..]) |extra_hop| try join.extendHop(MatchBinding, &bindings, extra_hop, chain_last_right_key);
     }
-
-    // Process subsequent chains - join on shared variables
-    for (q.match.chains[1..]) |chain| {
-        if (chain.hops.len == 0) continue;
-
-        const hop = chain.hops[0];
-        const left_var = hop.left.name;
-        const left_props = hop.left.props;
-        const rel_type: ?[]const u8 = if (hop.rel.types.len > 0) hop.rel.types[0] else null;
-        const right_labels = hop.right.labels;
-        const right_props = hop.right.props;
-        const right_var = hop.right.name;
-        const chain_rel_var = hop.rel.name;
-        // CANARY: REQ=REQ-GQL-UNDIRECTED-PATTERN-001; FEATURE="UndirectedPatternMatch"; ASPECT=SubsequentChains; STATUS=TESTED; TEST=geodetestlab/specs/undirected_pattern_matching.yml; OWNER=engine; UPDATED=2026-01-29
-        const rel_dir = hop.rel.dir;
-
-        // For each existing binding, try to extend with this chain
-        // GAP-0220 FIX: Use try for proper error propagation
-        // #557: Pre-size new_bindings based on current bindings count to reduce allocation churn
-        var new_bindings = try std.ArrayList(MatchBinding).initCapacity(allocator, @max(bindings.items.len, 8));
-
-        for (bindings.items) |*existing| {
-            // Get the node bound to left_var (if it exists in this binding)
-            const left_node = if (left_var) |lv| existing.vars.get(lv) else null;
-
-            if (left_node) |ln| {
-                // BUG-731: honor this chain's left inline property predicate.
-                if (!nodeMatchesProps(allocator, ln, left_props, prop_env)) continue;
-
-                // CANARY: REQ=REQ-BUG731-MATCH-SCOPING; FEATURE="MultiChainRelationshipMatch"; ASPECT=VarLengthSubsequentChain; STATUS=TESTED; TEST=tests/test_bug731_match_scoping.zig:327; OWNER=execution; UPDATED=2026-07-31
-                // A quantified hop expands paths, not a single edge.
-                if (hop.rel.min_len != null or hop.rel.max_len != null) {
-                    var targets: std.ArrayList(VarLenTarget) = .empty;
-                    defer targets.deinit(allocator);
-                    try expandVarLengthHop(allocator, store, &hop_scope, ln, hop, prop_env, effectivePathMode(q), &targets);
-                    for (targets.items) |target| {
-                        if (right_var) |rv| {
-                            if (existing.vars.get(rv)) |already_bound| {
-                                if (already_bound.id != target.node.id) continue;
-                            }
-                        }
-                        var new_binding = try existing.clone();
-                        if (right_var) |rv| try new_binding.vars.put(rv, target.node);
-                        if (chain_rel_var) |rn| try new_binding.rel_list_vars.put(rn, target.edges);
-                        try new_bindings.append(allocator, new_binding);
-                    }
-                    continue;
-                }
-
-                // Find edges from this node matching the relationship type and direction
-                const outgoing_edge_ids = if (rel_dir == .right or rel_dir == .undirected) (store.getOutgoingEdgeIds(ln.id) orelse &[_]u64{}) else &[_]u64{};
-                const incoming_edge_ids = if (rel_dir == .left or rel_dir == .undirected) (store.getIncomingEdgeIds(ln.id) orelse &[_]u64{}) else &[_]u64{};
-
-                // Process outgoing edges
-                for (outgoing_edge_ids) |edge_id| {
-                    const edge = store.getEdgePtrHydrated(edge_id) orelse continue;
-                    if (rel_type) |rt| {
-                        if (!std.mem.eql(u8, edge.label, rt)) continue;
-                    }
-                    if (!hop_scope.edgeVisible(edge)) continue;
-
-                    if (store.getNodePtrForScan(edge.to_id)) |right_node| {
-                        if (!std.mem.eql(u8, right_node.graph_name, filter_graph)) continue;
-                        if (!passesTenantFilter(right_node.*, filter_tenant)) continue;
-                        if (!passesRLSFilter(&rls_row_local, right_node.*)) continue;
-                        if (!matchesLabels(right_node, right_labels)) continue;
-                        // BUG-731: honor the right pattern's inline property predicate.
-                        if (!nodeMatchesProps(allocator, right_node, right_props, prop_env)) continue;
-
-                        // #557: clone() now pre-sizes HashMap to avoid rehash
-                        var new_binding = try existing.clone();
-                        if (right_var) |rv| try new_binding.vars.put(rv, right_node);
-                        if (chain_rel_var) |rn| try new_binding.edge_vars.put(rn, edge);
-                        try new_bindings.append(allocator, new_binding);
-                    }
-                }
-
-                // Process incoming edges
-                for (incoming_edge_ids) |edge_id| {
-                    const edge = store.getEdgePtrHydrated(edge_id) orelse continue;
-                    if (rel_type) |rt| {
-                        if (!std.mem.eql(u8, edge.label, rt)) continue;
-                    }
-                    if (!hop_scope.edgeVisible(edge)) continue;
-
-                    if (store.getNodePtrForScan(edge.from_id)) |right_node| {
-                        if (!std.mem.eql(u8, right_node.graph_name, filter_graph)) continue;
-                        if (!passesTenantFilter(right_node.*, filter_tenant)) continue;
-                        if (!passesRLSFilter(&rls_row_local, right_node.*)) continue;
-                        if (!matchesLabels(right_node, right_labels)) continue;
-                        // BUG-731: honor the right pattern's inline property predicate.
-                        if (!nodeMatchesProps(allocator, right_node, right_props, prop_env)) continue;
-
-                        // #557: clone() now pre-sizes HashMap to avoid rehash
-                        var new_binding = try existing.clone();
-                        if (right_var) |rv| try new_binding.vars.put(rv, right_node);
-                        if (chain_rel_var) |rn| try new_binding.edge_vars.put(rn, edge);
-                        try new_bindings.append(allocator, new_binding);
-                    }
-                }
-            } else {
-                // CANARY: REQ=REQ-GQL-CARTESIAN-PRODUCT-001; FEATURE="CartesianProductMatch"; ASPECT=IndependentChains; STATUS=TESTED; TEST=geodetestlab/specs/gql_pattern_matching_comprehensive.yml; OWNER=engine; UPDATED=2026-01-09
-                // No shared variable - this is a Cartesian product case
-                // Find all matching relationships for this chain and combine with existing binding
-                // PERF-B (issue #811): graph-scoped iterator (still O(N) over
-                // this graph but skips cross-graph nodes for free).
-                const left_labels = hop.left.labels;
-                var node_iter = store.iterateNodesInGraph(filter_graph);
-                // PERF-P1-003: LIMIT pushdown — stop Cartesian product expansion
-                // once we have enough bindings, avoiding full N*M generation.
-                var cart_reached_cap = false;
-                while (node_iter.next()) |new_left_node| {
-                    if (cart_reached_cap) break;
-                    if (!passesTenantFilter(new_left_node.*, filter_tenant)) continue;
-                    if (!passesRLSFilter(&rls_row_local, new_left_node.*)) continue;
-                    if (!matchesLabels(new_left_node, left_labels)) continue;
-                    // BUG-731: honor the left pattern's inline property predicate.
-                    if (!nodeMatchesProps(allocator, new_left_node, left_props, prop_env)) continue;
-
-                    // Find matching edges from this node based on direction
-                    const outgoing_edge_ids = if (rel_dir == .right or rel_dir == .undirected) (store.getOutgoingEdgeIds(new_left_node.id) orelse &[_]u64{}) else &[_]u64{};
-                    const incoming_edge_ids = if (rel_dir == .left or rel_dir == .undirected) (store.getIncomingEdgeIds(new_left_node.id) orelse &[_]u64{}) else &[_]u64{};
-
-                    // Process outgoing edges
-                    for (outgoing_edge_ids) |edge_id| {
-                        const edge = store.getEdgePtrHydrated(edge_id) orelse continue;
-                        if (rel_type) |rt| {
-                            if (!std.mem.eql(u8, edge.label, rt)) continue;
-                        }
-                        if (!hop_scope.edgeVisible(edge)) continue;
-
-                        if (store.getNodePtrForScan(edge.to_id)) |right_node| {
-                            if (!std.mem.eql(u8, right_node.graph_name, filter_graph)) continue;
-                            if (!passesTenantFilter(right_node.*, filter_tenant)) continue;
-                            if (!passesRLSFilter(&rls_row_local, right_node.*)) continue;
-                            if (!matchesLabels(right_node, right_labels)) continue;
-                            // BUG-731: honor the right pattern's inline property predicate.
-                            if (!nodeMatchesProps(allocator, right_node, right_props, prop_env)) continue;
-
-                            // Clone existing binding and add both new variables
-                            var new_binding = try existing.clone();
-                            if (left_var) |lv| try new_binding.vars.put(lv, new_left_node);
-                            if (right_var) |rv| try new_binding.vars.put(rv, right_node);
-                            if (chain_rel_var) |rn| try new_binding.edge_vars.put(rn, edge);
-                            try new_bindings.append(allocator, new_binding);
-                            // PERF-P1-003: LIMIT pushdown for Cartesian products
-                            if (scan_cap) |cap| {
-                                if (new_bindings.items.len >= cap) {
-                                    cart_reached_cap = true;
-                                    break;
-                                }
-                            }
-                        }
-                    }
-
-                    if (cart_reached_cap) continue;
-
-                    // Process incoming edges
-                    for (incoming_edge_ids) |edge_id| {
-                        const edge = store.getEdgePtrHydrated(edge_id) orelse continue;
-                        if (rel_type) |rt| {
-                            if (!std.mem.eql(u8, edge.label, rt)) continue;
-                        }
-                        if (!hop_scope.edgeVisible(edge)) continue;
-
-                        if (store.getNodePtrForScan(edge.from_id)) |right_node| {
-                            if (!std.mem.eql(u8, right_node.graph_name, filter_graph)) continue;
-                            if (!passesTenantFilter(right_node.*, filter_tenant)) continue;
-                            if (!passesRLSFilter(&rls_row_local, right_node.*)) continue;
-                            if (!matchesLabels(right_node, right_labels)) continue;
-                            // BUG-731: honor the right pattern's inline property predicate.
-                            if (!nodeMatchesProps(allocator, right_node, right_props, prop_env)) continue;
-
-                            // Clone existing binding and add both new variables
-                            var new_binding = try existing.clone();
-                            if (left_var) |lv| try new_binding.vars.put(lv, new_left_node);
-                            if (right_var) |rv| try new_binding.vars.put(rv, right_node);
-                            if (chain_rel_var) |rn| try new_binding.edge_vars.put(rn, edge);
-                            try new_bindings.append(allocator, new_binding);
-                            // PERF-P1-003: LIMIT pushdown for Cartesian products
-                            if (scan_cap) |cap| {
-                                if (new_bindings.items.len >= cap) {
-                                    cart_reached_cap = true;
-                                    break;
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-        }
-
-        // Replace old bindings with expanded ones
-        for (bindings.items) |*b| b.deinit();
-        bindings.clearRetainingCapacity();
-        for (new_bindings.items) |b| try bindings.append(allocator, b);
-        new_bindings.deinit(allocator);
-    }
+    for (q.match.chains[1..]) |chain| try join.extendChain(MatchBinding, &bindings, chain, chain_last_right_key);
 
     // Determine which items to evaluate per binding: WITH items if present, else RETURN items
     const eval_items = if (q.with_clause) |wc| wc.items else q.ret.items;
@@ -8904,6 +8747,18 @@ fn executeSingleHopEdgeTraversal(
     }
 }
 
+/// SONNY-3318: whether a multi-chain relationship match aggregates, in its
+/// RETURN or in the items of a WITH after its MATCH, where the shared
+/// projection can compute it.
+fn multiChainAggregates(q: ast.Query) bool {
+    if (q.ret.items.len == 0 or !sharedProjectionServes(q)) return false;
+    if (q.with_clause) |wc| {
+        if (q.is_initial_with) return false;
+        return returnItemsHaveAggregation(wc.items) or returnItemsHaveAggregation(q.ret.items);
+    }
+    return returnItemsHaveAggregation(q.ret.items);
+}
+
 /// Whether the RETURN groups or filters: a RETURN-level GROUP BY (a GROUP BY
 /// after a WITH belongs to the WITH, which groups in the shared projection
 /// already), or a WHERE after RETURN (the parser's HAVING without a GROUP BY).
@@ -10057,7 +9912,15 @@ pub fn executeMatchQueryImpl(allocator: std.mem.Allocator, q: ast.Query, param_n
     // Dispatch to appropriate multi-chain handler using helper function
     switch (dispatchToMultiChainHandler(q, all_simple_nodes)) {
         .multi_node_match => return executeMultiNodeMatch(allocator, q, param_names, param_values, inline_let_bindings, current_graph),
-        .multi_chain_relationship_match => return executeMultiChainRelationshipMatch(allocator, q, param_names, param_values, current_graph),
+        .multi_chain_relationship_match => {
+            // SONNY-3318: this executor evaluates the RETURN (or a WITH's
+            // items) once per binding and never aggregates, so `MATCH
+            // (g)-[:R]->(x), (q:Q) RETURN count(q)` answered one row per
+            // match. An aggregate goes through the shared projection over
+            // the rows this executor binds.
+            if (multiChainAggregates(q)) return executeReturnOverBindings(allocator, q, param_names, param_values, inline_let_bindings, current_graph);
+            return executeMultiChainRelationshipMatch(allocator, q, param_names, param_values, current_graph);
+        },
         .match_with_optional_patterns => return executeMatchWithOptionalPatterns(allocator, q, param_names, param_values, inline_let_bindings, current_graph),
         .continue_processing => {},
     }

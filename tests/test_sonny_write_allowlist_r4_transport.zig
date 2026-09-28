@@ -14,6 +14,12 @@
 //   supply is refused (42P02) before any path runs it, the QUIC MERGE fast
 //   path too.
 // - I8 (SONNY-3244): the parser's limits answer 54000 / 54001.
+// - Round 4b-1 (SONNY-759): a comma pattern binds its node-only chain
+//   (SONNY-3318); chained MERGE actions follow the last MERGE clause
+//   (SONNY-3320); the node-scan stream serves only the fields it reads
+//   (SONNY-3321: a LET, or a WHERE with a FILTER, goes to the executor);
+//   SKIP / LIMIT parameters, a repeated SET target (22G03) and LET scope
+//   (SONNY-3248).
 //
 // CANARY: REQ=REQ-SONNY-3139-WRITE-SHAPES; FEATURE="WriteShapeValidator"; ASPECT=TransportProfile; STATUS=TESTED; TEST=tests/test_sonny_write_allowlist_r4_transport.zig; OWNER=engine; UPDATED=2026-09-28
 
@@ -163,6 +169,18 @@ const cases = [_]Case{
             .{ .query = "MATCH (v:LV) RETURN count(v) AS c", .want = "0" },
         },
     },
+    // Round 4b-1 (SONNY-759).
+    // SONNY-3318: a node-only chain after a relationship chain is bound.
+    .{ .name = "3318 comma chain", .steps = &.{
+        .{ .query = "MATCH (a:L {i: 1}), (b:L {i: 2}) CREATE (a)-[:LR]->(b)" },
+        .{ .query = "MATCH (a:L)-[:LR]->(b:L), (q:LQ {i: 2}) RETURN count(q) AS c, count(*) AS n", .want = "1|1" },
+        .{ .query = "MATCH (a:L)-[:LR]->(b:L), (q:LQ {i: 2}) SET q.c = 1" },
+        .{ .query = "MATCH (a:L)-[:LR]->(b:L), (q:LQ) WHERE q.i = 3 SET q.c = 3 RETURN q.i", .want = "3" },
+        .{ .query = "MATCH (q:LQ) WHERE q.c IS NOT NULL RETURN q.i, q.c", .want = "2|1;3|3" },
+        .{ .query = "MATCH (a:L {i: 1})-[:LR]->(b:L), (c:L)-[:LR]->(b) RETURN c.i", .want = "1" },
+        .{ .query = "MATCH (a:L)-[:LR]->(b:L), (q:LQ {i: 0}) DETACH DELETE q" },
+        .{ .query = "MATCH (q:LQ) RETURN count(q) AS c", .want = "3" },
+    } },
     // I8.
     .{ .name = "I8 nesting", .steps = &.{
         .{ .query = "WITH 1 AS a WITH 1 AS a WITH 1 AS a WITH 1 AS a WITH 1 AS a WITH 1 AS a WITH 1 AS a WITH 1 AS a WITH 1 AS a WITH 1 AS a WITH 1 AS a WITH 1 AS a WITH 1 AS a WITH 1 AS a WITH 1 AS a WITH 1 AS a WITH 1 AS a WITH 1 AS a WITH 1 AS a WITH 1 AS a WITH 1 AS a WITH 1 AS a WITH 1 AS a WITH 1 AS a WITH 1 AS a RETURN a", .code = "54001" },

@@ -1121,6 +1121,22 @@
     coalesce(b.c, 0) + 1` with a and b the same node stores 1, not 2, and
     `SET a.c = b.i, b.c = a.c` stores b's old c. A MATCH ... SET or REMOVE
     without a RETURN answers the rows it wrote, as written.
+- **A comma pattern binds every chain (SONNY-3318):** in a MATCH whose
+  first chain has a relationship, a later chain of one node was skipped, so
+  its variable was null: `MATCH (g:G)-[:R]->(x:X), (q:Q {i: 2}) SET q.c = 1`
+  returned its rows and wrote nothing (a WHERE on q and a DETACH DELETE of q
+  did the same), and the read counted q as 0. A later chain with a
+  relationship read only its first hop, ignored its relationship's
+  properties, and re-bound a variable an earlier chain had bound instead of
+  joining on it (`MATCH (g {i: 1})-[:R]->(x), (a:G)-[:R]->(x)` returned
+  every a). Each chain is now joined to the rows so far by one routine: its
+  first node is an earlier chain's variable (checked against the pattern) or
+  every visible node that matches, and each hop is walked with its types,
+  direction, properties and scope, a bound far node or relationship having
+  to be the one reached. The executor also never aggregated (`RETURN
+  count(*)` gave one row per match); an aggregate over such a pattern now
+  goes through the shared projection. The bug predates round 4a: it was the
+  read's own; round 4a routed every SET through that read.
 - **The parser's limits (SONNY-3244):** parsing runs before authorization,
   and 25,000 `MATCH (n:G) SET n.x = 1;` statements (625 KB) took a 741 MB
   parser arena, so a 16 MB request could hold about 19 GB; about 60 chained

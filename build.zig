@@ -9359,6 +9359,22 @@ pub fn build(b: *std.Build) void {
         step.dependOn(&run_tests.step);
     }
 
+    // SONNY-759 Task W fix round 4b-1: the round-4a re-review's findings
+    // (SONNY-3318, 3319, 3320, 3322, 3248, and SONNY-3244's nesting repros,
+    // off until rounds 14-16 merge), in the four sessions.
+    {
+        const mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny_write_allowlist_r4b.zig"), .target = target, .optimize = optimize });
+        mod.link_libc = true;
+        mod.addImport("geode", root_mod);
+        mod.addImport("logging", logging_mod);
+        mod.addImport("rls_types", rls_types_mod);
+        const tests = b.addTest(.{ .root_module = mod });
+        const run_tests = b.addRunArtifact(tests);
+        shardDep(test_step, &run_tests.step, 1, test_shard_loads, test_shard_index);
+        const step = b.step("test-sonny-write-allowlist-r4b", "Run the Task W round 4b-1 regression (SONNY-3318, 3319, 3320, 3322, 3248, 3244): a comma pattern binds every chain for reads and writes, and aggregates; a label SET beside a vector SET checks the new label's index; chained MERGE actions fire on the last MERGE clause; a relationship variable is read by id after 150 and 600 more edge inserts; SKIP / LIMIT parameters window every read; one SET clause assigns a property once (22G03); a LET is scoped to its query; in the in-memory, plain persisted, tenant-scoped and RLS-policy sessions");
+        step.dependOn(&run_tests.step);
+    }
+
     // SONNY-2977: MATCH (x {k: v}) [WHERE ...] SET changes every node holding
     // the key (the ticket's probe matrix): in-memory, persisted, tenant-scoped
     // and RLS-policy sessions, and over QUIC against ./zig-out/bin/geode.
