@@ -11191,6 +11191,14 @@ pub const GraphStore = struct {
         // of the database remains available.
         var degraded: usize = 0;
         for (graph_names) |graph_name| {
+            // SONNY-3234 (round 15, F10): a graph made under a name reserved
+            // since (SONNY-3191) loads, but no session can use it; DROP GRAPH
+            // by the name as stored removes it.
+            if (isReservedGraphName(graph_name)) {
+                log.warn("a graph has a name reserved for the session's current or home graph (it was made before the name was reserved): no session can use it; DROP GRAPH with the name as stored removes it", &.{
+                    Attr.string("graph", graph_name),
+                });
+            }
             self.loadOneGraphFromAdapter(adapter, graph_name) catch |err| {
                 degraded += 1;
                 log.err("graph load failed; quarantining graph and continuing startup", &.{
@@ -14605,6 +14613,28 @@ pub fn setThreadTxnHoldRelease(release: ?TxnHoldRelease) ?TxnHoldRelease {
 /// transaction: let its graph hold go now, not after the program.
 pub fn releaseThreadTxnHold() void {
     if (t_txn_hold_release) |r| r.release(r.ctx);
+}
+
+/// SONNY-3234 (round 15, F10): the graphs in `store` whose names are
+/// reserved (made before SONNY-3191 reserved them), for the start-up
+/// warning and the operator. The caller frees the names and the slice.
+pub fn reservedNameGraphs(store: *GraphStore, allocator: std.mem.Allocator) ![][]const u8 {
+    const names = try store.graphNamesCopy(allocator);
+    var n: usize = 0;
+    for (names) |name| {
+        if (isReservedGraphName(name)) {
+            names[n] = name;
+            n += 1;
+        } else allocator.free(name);
+    }
+    const out = allocator.alloc([]const u8, n) catch |err| {
+        for (names[0..n]) |name| allocator.free(name);
+        allocator.free(names);
+        return err;
+    };
+    @memcpy(out, names[0..n]);
+    allocator.free(names);
+    return out;
 }
 
 /// SONNY-3191 (N-7): CURRENT_GRAPH, CURRENT_PROPERTY_GRAPH, HOME_GRAPH and

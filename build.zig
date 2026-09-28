@@ -9338,6 +9338,23 @@ pub fn build(b: *std.Build) void {
     const sonny3252_step = b.step("test-sonny3252-grpc-session-cap", "Run SONNY-3252 regression (at max_sessions_per_principal a session in an open transaction is never closed and the Handshake is refused; anonymous clients count per peer and federation peers per peer; the cap is per user name, not tenant; a Handshake failing at any allocation closes and leaks nothing; the cap alone starts the reaper, which tears closed sessions down)");
     sonny3252_step.dependOn(&run_sonny3252_tests.step);
 
+    // SONNY-3234 (round 15, F10): a graph made under a name reserved since
+    // (a legacy CURRENT_GRAPH) can be dropped by that name; the names stay
+    // refused otherwise.
+    const sonny3234_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny3234_legacy_reserved_graph.zig"), .target = target, .optimize = optimize });
+    sonny3234_test_mod.link_libc = true;
+    sonny3234_test_mod.addImport("geode", root_mod);
+    sonny3234_test_mod.addImport("schema", schema_mod);
+    sonny3234_test_mod.addImport("protobuf", protobuf_mod);
+    sonny3234_test_mod.addImport("grpc_impl", sonny1560_shim_mod);
+    sonny3234_test_mod.addImport("logging", logging_mod);
+    sonny3234_test_mod.addImport("transport/quic", transport_quic_mod);
+    const sonny3234_tests = b.addTest(.{ .root_module = sonny3234_test_mod });
+    const run_sonny3234_tests = b.addRunArtifact(sonny3234_tests);
+    shardDep(test_step, &run_sonny3234_tests.step, 1, test_shard_loads, test_shard_index);
+    const sonny3234_step = b.step("test-sonny3234-legacy-reserved-graph", "Run SONNY-3234 regression (a legacy graph named CURRENT_GRAPH or HOME_GRAPH is listed by reservedNameGraphs and dropped by DROP GRAPH; CREATE, and DROP when no such graph exists, stay refused with 42939)");
+    sonny3234_step.dependOn(&run_sonny3234_tests.step);
+
     // SONNY-2790: the fulltext statements (CREATE/DROP INDEX, geode.fts.*)
     // run on the default graph, so the handlers lock `default` for them from
     // any session. Classifier, and the real gRPC handler (SONNY-1560 shim).

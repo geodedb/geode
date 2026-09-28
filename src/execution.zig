@@ -2353,7 +2353,20 @@ fn executeStatementWithContextInner(allocator: std.mem.Allocator, stmt: ast.Stat
             try session_graph.refuseInternal(dg.name);
             // SONNY-3191 (N-7): DROP GRAPH CURRENT_GRAPH dropped a graph named
             // CURRENT_GRAPH, not the current graph.
-            try session_graph.refuseReserved(dg.name);
+            // CANARY: REQ=REQ-SONNY-3234-LEGACY-RESERVED-GRAPH; FEATURE="MultiGraphIsolation"; ASPECT=DropLegacyReservedName; STATUS=TESTED; TEST=tests/test_sonny3234_legacy_reserved_graph.zig; OWNER=storage; UPDATED=2026-09-28
+            // SONNY-3234 (round 15, F10): except that a graph made under such a
+            // name before the names were reserved (a legacy CURRENT_GRAPH,
+            // loaded at start) could then never be dropped, and no session can
+            // use it. When a graph of exactly that name exists, DROP GRAPH
+            // drops it, and says so in the log. CREATE stays refused.
+            if (graph_store.isReservedGraphName(dg.name)) {
+                const legacy_store = graph_store.getGlobalStore(allocator);
+                if (legacy_store.graphExists(dg.name) or context.catalog.hasGraph(dg.name)) {
+                    log.warn("DROP GRAPH of a graph with a reserved name, made before the name was reserved (SONNY-3191); it is dropped", &.{
+                        Attr.string("graph_name", dg.name),
+                    });
+                } else try session_graph.refuseReserved(dg.name);
+            }
             // SONNY-2803: schema and bind_graph on the graph to drop, before
             // whether it exists. A ReadWrite user refused `USE GRAPH g1`
             // dropped g1.
