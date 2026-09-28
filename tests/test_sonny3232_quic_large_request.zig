@@ -9,24 +9,35 @@
 // the server must stay up and serve a small request after each. Run it in
 // Debug and in ReleaseSafe: the answer differs.
 //
-// Round 15 diagnosis: a release server answered 1 MiB in about 0.1 s in
-// every run, and 4 MiB in about 1.4 s in two runs of three; in the third
-// (the machine busy with other builds) it never answered 4 MiB. A Debug
-// server never answers 1 MiB or 4 MiB (256 KiB in 0.1 s), whatever the
-// client's build, with detached admission or not, with 4 or 16 poll
-// workers. So the stall depends on how fast the server drains the stream,
-// not on this repo's framing (a 16 MiB message cap, a 10 MiB stream window):
-// a timing-dependent stall in the receive path, most likely the QUIC
-// library's stream flow control (a window update that never goes out), not
-// yet confirmed.
+// Diagnosis (round 15; corrected in round 16, SONNY-3232): the stall is
+// loss recovery in the vendored QUIC library, quic v0.1.44, not stream flow
+// control (the stream window is 10 MiB and the connection's 100 MiB, so a
+// 1 MiB request never needs a window update). When the server drains its
+// socket slowly (a Debug server, or a release one on a loaded machine) the
+// kernel drops datagrams in bursts. `Recovery.onAckReceived` declares them
+// lost and compacts them out of the sent list, so they read as `.unknown`;
+// `retransmitLostStreamPackets` resends at most 2 lost packets per ACK; and
+// the cumulative-ACK prune in the same call drops every retained STREAM
+// packet below largest_acked - 16 that is `.acked` or `.unknown`, including
+// lost ones never resent. The stream is left with a hole, and the request is
+// never delivered. Whether it is answered therefore depends on timing (does
+// a lost packet fall into the pruned range?), not on the request's size:
+// round 15 saw a release server answer 1 MiB in about 0.1 s and 4 MiB in
+// about 1.4 s, and a Debug server time out on 1 MiB in one run and answer
+// 4 MiB in 14.8 s in another. Any size large enough to see burst loss can
+// stall. The same loss recovery carries QUIC responses and the Raft
+// transport. Filed for S2 against the library.
+//
 // A request past the 16 MiB cap is refused at its length prefix, but the
 // server ends the stream without a reply and without STOP_SENDING (the
-// QUIC library, v0.1.44, cannot send one), so the client, blocked by the
-// stream window, fails only at its own timeout (15 to 45 s). Neither is
-// contained in this repo: both are left for S2 (SONNY-3232). This test
-// holds what is true now: the server survives each request and serves the
-// next connection; 256 KiB is answered; a request past the cap is not
-// answered as if it ran. It records the 1 MiB and 4 MiB outcomes.
+// library cannot send one), so the client, held by the stream window, fails
+// only at its own timeout (34 to 62 s observed). The review's intent was a
+// clean, quick refusal: that is NOT met, and this test does not claim it.
+// It asserts only what holds now: the server survives each request and
+// serves the next connection; 256 KiB is answered; a request past the cap
+// is not answered as if it ran (an observation of how it fails, with its
+// time, is printed). The 1 MiB and 4 MiB outcomes are recorded, not
+// asserted.
 //
 // CANARY: REQ=REQ-SONNY-3232-QUIC-LARGE-REQUEST; FEATURE="QuicTransport"; ASPECT=Diagnosis; STATUS=TESTED; TEST=tests/test_sonny3232_quic_large_request.zig; OWNER=transport; UPDATED=2026-09-28
 
@@ -62,11 +73,13 @@ test "SONNY-3232: a QUIC request of 256 KiB is answered, one past the 16 MiB max
     const Case = struct { bytes: usize, served: ?bool };
     const cases = [_]Case{
         .{ .bytes = 256 * 1024, .served = true },
-        // Recorded, not asserted: a Debug server never answers these, a
-        // release server not always 4 MiB (SONNY-3232, left for S2).
+        // Recorded, not asserted: answered or not depending on timing (burst
+        // loss and the library's loss recovery; SONNY-3232, left for S2).
         .{ .bytes = 1024 * 1024, .served = null },
         .{ .bytes = 4 * 1024 * 1024, .served = null },
         // The framed message (the query plus its envelope) just over 16 MiB.
+        // Asserted: not served. Observed, not asserted: how and how late it
+        // fails (the intended quick, clean refusal is not met; S2).
         .{ .bytes = 16 * 1024 * 1024 + 64, .served = false },
     };
     var failures: usize = 0;
@@ -92,7 +105,7 @@ test "SONNY-3232: a QUIC request of 256 KiB is answered, one past the 16 MiB max
         const alive = util.processAlive(server.child.id.?);
         const served = std.mem.eql(u8, outcome, "served");
         const ok = alive and (c.served == null or served == c.served.?);
-        std.debug.print("QUIC {s}: a {d}-byte request -> {s} in {d} ms; server alive={}{s}\n", .{ @tagName(builtin.mode), c.bytes, outcome, ms, alive, if (ok) "" else "  <-- UNEXPECTED" });
+        std.debug.print("QUIC {s}: a {d}-byte request -> {s} in {d} ms; server alive={}{s}{s}\n", .{ @tagName(builtin.mode), c.bytes, outcome, ms, alive, if (ok) "" else "  <-- UNEXPECTED", if (c.served != null and !c.served.?) " (observation: not a clean, quick refusal; SONNY-3232)" else "" });
         if (!ok) failures += 1;
         // A small request on a new connection is served.
         var sc = try util.QuicProtoClient.connect(allocator, addr);

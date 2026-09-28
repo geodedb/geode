@@ -1175,19 +1175,22 @@
   to a node or edge it matched stay after ROLLBACK, and after a failed
   statement's rollback. Until that is fixed, do not rely on ROLLBACK to
   undo changes to existing data.
-- **Large QUIC requests (SONNY-3232, diagnosed in round 15, left for
-  S2).** A release server answered a 1 MiB QUIC request in about 0.1 s in
-  every run, and a 4 MiB one in about 1.4 s in two runs of three (never in
-  the third, on a busy machine); a Debug server never answers either (a
-  256 KiB request in 0.1 s), whatever the client's build, the admission
-  mode or the number of poll workers. The stall depends on how fast the
-  server drains the stream: most likely the QUIC library's stream flow
-  control, not yet confirmed. Keep QUIC requests well under 1 MiB (use
-  parameters). A request past the 16 MiB
-  message cap is refused when its length arrives, but the server ends the
-  stream without a reply, and the client, held by the stream window,
-  fails only at its own timeout (15 to 45 s). The server stays up and
-  serves other connections in both cases.
+- **Large QUIC requests can stall (SONNY-3232, left for S2).** The cause
+  is loss recovery in the QUIC library (quic v0.1.44): when the receiver
+  drains its socket slowly and the kernel drops datagrams in a burst, the
+  library resends at most two lost packets per acknowledgement and then
+  prunes the rest as if delivered, so the stream keeps a hole and the
+  request is never answered. Whether that happens depends on timing (how
+  loaded the server is, a Debug server more than a release one), not on the
+  request's size: a release server answered 1 MiB in about 0.1 s and 4 MiB
+  in about 1.4 s, and a Debug server stalled on 1 MiB in one run and
+  answered 4 MiB in 15 s in another. The same loss recovery carries QUIC
+  responses and the Raft transport. Keep QUIC requests small (use
+  parameters). A request past the 16 MiB message cap is refused when its
+  length arrives, but the server ends the stream without a reply, and the
+  client, held by the stream window, fails only at its own timeout (34 to
+  62 s observed). The server stays up and serves other connections in both
+  cases.
 - **A Debug build takes less nesting (SONNY-3191).** A Debug build's
   stack frames are several times a release build's: on an 8 MiB thread
   (the gRPC connection threads') it refuses WITH, CALL { } and FOR chains
