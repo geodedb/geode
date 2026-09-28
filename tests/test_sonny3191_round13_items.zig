@@ -7,8 +7,9 @@
 //   the transaction (`graph_store.releaseThreadTxnHold`).
 // - N-5: under overload the QUIC connection admission thread runs a
 //   connection's first stream itself, on a 1 MiB stack, where a plain MATCH
-//   got "nesting too deep" (a segfault in Debug). It now has a request
-//   thread's stack (`stack_guard.request_thread_stack_bytes`, 16 MiB).
+//   got "nesting too deep" (a segfault in Debug). It now has a request-sized
+//   stack: 16 MiB in Debug, 8 MiB in a release build (SONNY-3253, round 15,
+//   `default_quic_admission_stack_mb` in main.zig).
 // - N-6: a Debug build refuses WITH chains past about 25 levels on an 8 MiB
 //   thread (the frames are several times a release build's); documented, and
 //   pinned here: refused cleanly in Debug, parsed in a release build.
@@ -29,8 +30,10 @@ const fx = @import("sonny738_r12_grpc_fixture.zig");
 
 const graph_store = geode.graph_store;
 
-/// The QUIC connection admission thread's stack (main.zig).
-const admission_stack: usize = geode.stack_guard.request_thread_stack_bytes;
+/// The QUIC connection admission thread's default stack
+/// (`default_quic_admission_stack_mb` in main.zig; SONNY-3253 sized a release
+/// build's at 8 MiB).
+const admission_stack: usize = (if (builtin.mode == .Debug) 16 else 8) * 1024 * 1024;
 
 // ---------------------------------------------------------------------------
 // N-4

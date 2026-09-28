@@ -13,12 +13,14 @@ const std = @import("std");
 const builtin = @import("builtin");
 
 /// SONNY-3191 (N-5): the stack a server thread that runs a request gets: the
-/// QUIC workers (GAP-0333), the first-stream owners, and the QUIC connection
+/// QUIC workers (GAP-0333) and the first-stream owners. The QUIC connection
 /// admission threads, which run a connection's first stream themselves when
-/// the stream pool refuses it or no stream reactor is installed. The
-/// admission threads had 1 MiB, where a plain MATCH got "nesting too deep"
-/// from the parser's guard, and overflowed in a Debug build. Reserved, not
-/// committed: a thread touches only the pages it uses.
+/// the stream pool refuses it or no stream reactor is installed, had 1 MiB,
+/// where a plain MATCH got "nesting too deep" from the parser's guard, and
+/// overflowed in a Debug build; they now size their own (16 MiB in Debug,
+/// 8 MiB in a release build: SONNY-3253, `default_quic_admission_stack_mb` in
+/// server/main.zig). Reserved, not committed: a thread touches only the pages
+/// it uses.
 pub const request_thread_stack_bytes: usize = 16 * 1024 * 1024;
 
 /// The calling thread's stack bounds, looked up once per thread.

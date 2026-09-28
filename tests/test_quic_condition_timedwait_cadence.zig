@@ -1525,9 +1525,13 @@ test "quic high fanout defaults avoid setup admission collapse" {
     defer allocator.free(main_content);
     try testing.expect(std.mem.indexOf(u8, main_content, "default_quic_connection_admission_threads = if (builtin.mode == .Debug) 64 else 4096") != null);
     // SONNY-3191 (N-5): an admission thread runs a connection's first stream
-    // itself when the stream pool refuses it, so it has a request thread's
-    // stack (reserved, not committed), not 1 MiB.
-    try testing.expect(std.mem.indexOf(u8, main_content, "quic_connection_admission_stack_size = geode.stack_guard.request_thread_stack_bytes") != null);
+    // itself when the stream pool refuses it, so it has a request-sized stack
+    // (reserved, not committed), not 1 MiB. SONNY-3253 (round 15, F13): 16 MiB
+    // in Debug, 8 MiB in a release build, GEODE_QUIC_ADMISSION_STACK_MB to
+    // override, and every admission thread is spawned with it.
+    try testing.expect(std.mem.indexOf(u8, main_content, "default_quic_admission_stack_mb: usize = if (builtin.mode == .Debug) 16 else 8") != null);
+    try testing.expect(std.mem.indexOf(u8, main_content, "\"GEODE_QUIC_ADMISSION_STACK_MB\"") != null);
+    try testing.expect(std.mem.indexOf(u8, main_content, ".stack_size = g_quic_admission_stack_size") != null);
 
     const maybe_registry = try readFile(allocator, "src/server/active_stream_registry.zig");
     const registry_content = maybe_registry orelse return error.FileNotFound;
