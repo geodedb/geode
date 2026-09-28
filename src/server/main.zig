@@ -284,7 +284,12 @@ const default_quic_cooperative_first_stream_worker_count = if (builtin.mode == .
 const default_quic_poll_worker_count = if (builtin.mode == .Debug) 4 else 16;
 const quic_connection_queue_capacity = 1024;
 const default_quic_connection_admission_threads = if (builtin.mode == .Debug) 64 else 4096;
-const quic_connection_admission_stack_size = 1024 * 1024;
+// SONNY-3191 (N-5): an admission thread runs a connection's first stream
+// itself when the stream pool refuses it or no stream reactor is installed,
+// so it gets a request thread's stack (16 MiB; it had 1 MiB, where a plain
+// MATCH was refused, and overflowed in a Debug build). A thread that cannot
+// be spawned rejects its connection, as before.
+const quic_connection_admission_stack_size = geode.stack_guard.request_thread_stack_bytes;
 
 // Process-global AuthProvider used by the embedded LSP TCP listener to
 // authenticate `initialize` bearer / session tokens.  `null` until the

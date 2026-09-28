@@ -36,6 +36,20 @@ pub fn refuseInternal(graph: []const u8) error{InternalGraph}!void {
     if (graph_store.isInternalGraphName(graph)) return error.InternalGraph;
 }
 
+// CANARY: REQ=REQ-SONNY-3191-RESERVED-GRAPH-NAMES; FEATURE="MultiGraphIsolation"; ASPECT=RefuseReserved; STATUS=TESTED; TEST=tests/test_sonny3191_round13_items.zig; OWNER=storage; UPDATED=2026-09-27
+/// SONNY-3191 (N-7): CURRENT_GRAPH, CURRENT_PROPERTY_GRAPH, HOME_GRAPH and
+/// HOME_PROPERTY_GRAPH (any case) name the session's current and home
+/// graphs (`query_traits.graphTarget`), so no graph may be created or dropped
+/// by them: `error.ReservedGraphName` (42939). `CREATE GRAPH CURRENT_GRAPH`
+/// created a graph USE GRAPH could never select, and `DROP GRAPH
+/// CURRENT_GRAPH` dropped a graph of that name, not the current graph.
+pub fn refuseReserved(graph: []const u8) error{ReservedGraphName}!void {
+    switch (query_traits.graphTarget(graph)) {
+        .named => {},
+        .current, .home => return error.ReservedGraphName,
+    }
+}
+
 /// Does `graph` exist? The default graph always does: every session starts
 /// on it, whether or not anything has been stored in it yet.
 pub fn exists(catalog: *catalog_mod.Catalog, graph: []const u8) bool {

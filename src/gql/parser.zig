@@ -20,6 +20,14 @@ const stack_guard = @import("../stack_guard.zig");
 /// hold on the server's 16 MiB QUIC workers (GAP-0333); the gRPC connection
 /// threads have 8 MiB, and other callers (the CLI's main thread, a library
 /// user's) whatever they have. Measured, a limit cannot overflow any of them.
+///
+/// SONNY-3191 (N-6): a Debug build's frames are several times a release
+/// build's, and a WITH, CALL { } or FOR level costs about 0.2 MiB there: on
+/// the gRPC connection threads' 8 MiB a Debug build refuses (42000) such
+/// chains past about 25 levels, where a release build takes 128. No margin
+/// buys 64 Debug levels on 8 MiB (64 x 0.2 MiB is over 8 MiB), so the limit
+/// is Debug-only and documented, not tuned; the QUIC workers' 16 MiB hold
+/// about twice as many (tests/test_sonny3191_round13_items.zig pins it).
 const stack_reserve_bytes: usize = if (builtin.mode == .Debug) 2 * 1024 * 1024 else 512 * 1024;
 
 /// SONNY-3133: is more than `stack_reserve_bytes` of the calling thread's

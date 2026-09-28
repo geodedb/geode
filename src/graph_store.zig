@@ -3850,6 +3850,9 @@ pub const GraphStore = struct {
     }
 
     pub fn createGraph(self: *GraphStore, graph_name: []const u8) !void {
+        // SONNY-3191 (N-7): nor through a HELLO's graph, or any other caller:
+        // the current- and home-graph names are not graph names.
+        if (isReservedGraphName(graph_name)) return error.ReservedGraphName;
         // dsn_graph_binding.yml race fix (2026-05-23): serialize the
         // (vtable get-or-create + in-memory contains/put) pair so two
         // concurrent CREATE GRAPH / DSN-auto-create paths can't both
@@ -14284,6 +14287,44 @@ pub fn releaseGraphForTxn(graph: []const u8) void {
     }
 }
 
+// CANARY: REQ=REQ-SONNY-3191-HOLD-AT-COMMIT; FEATURE="MultiGraphIsolation"; ASPECT=ReleaseAtStatement; STATUS=TESTED; TEST=tests/test_sonny3191_round13_items.zig; OWNER=storage; UPDATED=2026-09-27
+/// SONNY-3191 (N-4): how the executor lets go of the session transaction's
+/// graph hold (SONNY-3134) where a COMMIT or ROLLBACK statement ends the
+/// transaction. The session's hold lives on its handler state
+/// (`ServerState.txn_graph`), which the executor does not see: the request's
+/// handler installs this for the request (`ServerState.enterSessionTxn`), and
+/// the handler let the hold go only after the whole program, so the program
+/// `COMMIT; DROP GRAPH g` was refused (55006) by its own session's hold.
+pub const TxnHoldRelease = struct {
+    ctx: *anyopaque,
+    release: *const fn (*anyopaque) void,
+};
+
+threadlocal var t_txn_hold_release: ?TxnHoldRelease = null;
+
+/// SONNY-3191 (N-4): install `release` for the request this thread serves;
+/// returns what was installed before, for the request's end to put back.
+pub fn setThreadTxnHoldRelease(release: ?TxnHoldRelease) ?TxnHoldRelease {
+    const prev = t_txn_hold_release;
+    t_txn_hold_release = release;
+    return prev;
+}
+
+/// SONNY-3191 (N-4): a COMMIT or ROLLBACK statement ended the session's
+/// transaction: let its graph hold go now, not after the program.
+pub fn releaseThreadTxnHold() void {
+    if (t_txn_hold_release) |r| r.release(r.ctx);
+}
+
+/// SONNY-3191 (N-7): CURRENT_GRAPH, CURRENT_PROPERTY_GRAPH, HOME_GRAPH and
+/// HOME_PROPERTY_GRAPH, in any case: the ISO GQL names of the session's
+/// current and home graphs, never a graph's.
+pub fn isReservedGraphName(name: []const u8) bool {
+    const eql = std.ascii.eqlIgnoreCase;
+    return eql(name, "CURRENT_GRAPH") or eql(name, "CURRENT_PROPERTY_GRAPH") or
+        eql(name, "HOME_GRAPH") or eql(name, "HOME_PROPERTY_GRAPH");
+}
+
 /// SONNY-3134: has any open session transaction changed `graph`?
 pub fn graphHeldByTxn(graph: []const u8) bool {
     const io = std.Io.Threaded.global_single_threaded.io();
@@ -14382,6 +14423,10 @@ fn materializeGraphForWriteLock(
     adapter: *graph_storage_adapter.StorageAdapter,
     graph_name: []const u8,
 ) bool {
+    // SONNY-3191 (N-7): a statement naming a reserved graph name (CREATE or
+    // DROP GRAPH CURRENT_GRAPH, which the executor refuses) locks the name
+    // first; its lock must not create the graph in the engine.
+    if (isReservedGraphName(graph_name)) return false;
     _ = adapter.getOrCreateGraph(graph_name) catch |err| {
         log.warn("write-lock graph materialization failed; using legacy global-exclusive lock", &.{
             Attr.string("graph", graph_name),

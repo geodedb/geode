@@ -154,10 +154,28 @@ fn evalPredicate(p: *const Predicate, ctx: PolicyEvalContext) bool {
 // Parser (private)
 // ---------------------------------------------------------------------------
 
+// CANARY: REQ=REQ-SONNY-3191-POLICY-EXPR-BOUNDS; FEATURE="GPS Expression Compilation"; ASPECT=NestingAndLinkBounds; STATUS=TESTED; TEST=tests/test_sonny3191_round13_items.zig; OWNER=security; UPDATED=2026-09-27
+/// SONNY-3191: the deepest parenthesis nesting and the most AND/OR links a
+/// policy expression may have. The parser recursed once per parenthesis with
+/// no limit, and `evalPredicate` recurses once per AND/OR link on every
+/// decision the policy takes part in: an Admin could write a policy that
+/// overflowed the stack of every request it applies to. Past either bound
+/// the expression is refused (`InvalidExpression`).
+const max_policy_paren_depth: u16 = 64;
+const max_policy_links: u32 = 1024;
+
 const ExprParser = struct {
     src: []const u8,
     pos: usize,
     allocator: std.mem.Allocator,
+    /// SONNY-3191: parentheses open, and AND/OR links so far.
+    depth: u16 = 0,
+    links: u32 = 0,
+
+    fn countLink(self: *ExprParser) error{InvalidExpression}!void {
+        self.links += 1;
+        if (self.links > max_policy_links) return error.InvalidExpression;
+    }
 
     // --- entry: OR (lowest precedence) ---
 
@@ -166,6 +184,7 @@ const ExprParser = struct {
         while (true) {
             self.skipWs();
             if (!self.consumeKeyword("OR")) break;
+            try self.countLink();
             const right = try self.parseAnd();
             const node = try self.allocator.create(Predicate);
             node.* = .{ .or_ = .{ .left = left, .right = right } };
@@ -181,6 +200,7 @@ const ExprParser = struct {
         while (true) {
             self.skipWs();
             if (!self.consumeKeyword("AND")) break;
+            try self.countLink();
             const right = try self.parseAtom();
             const node = try self.allocator.create(Predicate);
             node.* = .{ .and_ = .{ .left = left, .right = right } };
@@ -198,6 +218,10 @@ const ExprParser = struct {
         // Parenthesised sub-expression.
         if (self.src[self.pos] == '(') {
             self.pos += 1;
+            // SONNY-3191: at most `max_policy_paren_depth` deep.
+            self.depth += 1;
+            defer self.depth -= 1;
+            if (self.depth > max_policy_paren_depth) return error.InvalidExpression;
             const inner = try self.parseOr();
             self.skipWs();
             if (self.pos >= self.src.len or self.src[self.pos] != ')') {

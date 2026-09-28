@@ -132,6 +132,9 @@ pub const recommendations = @import("gql/recommendations.zig");
 
 // Re-export printer module so binaries can import through the geode module
 pub const printer = @import("gql/print.zig");
+// SONNY-3181, SONNY-3191: the thread-stack guard and the server's request
+// thread stack size.
+pub const stack_guard = @import("stack_guard.zig");
 // GAP-0875: exported for the residual-stubs regression suite (test-gap0875)
 pub const constraint_manager = @import("schema/constraint_manager.zig");
 pub const memory_mapped_io = @import("performance/memory_mapped_io.zig");

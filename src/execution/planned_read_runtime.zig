@@ -3458,9 +3458,15 @@ fn freeStoragePropertyMap(allocator: std.mem.Allocator, map: *std.StringHashMap(
     map.deinit();
 }
 
+/// SONNY-3122: a read resolves an edge type's name from the graph it read,
+/// looked up only and pinned while its dictionary is read. It called
+/// `getOrCreateGraph`: on the read path, with no lock of the adapter's, it
+/// could create a graph dropped meanwhile again, and read one that a DROP
+/// was freeing (review of round 13).
 fn edgeTypeName(allocator: std.mem.Allocator, graph_name: []const u8, rel_type: gs.LabelId) ![]const u8 {
     const adapter = graph_store.getGlobalAdapter() orelse return error.Unsupported;
-    const managed_graph = try adapter.getOrCreateGraph(graph_name);
+    const managed_graph = adapter.pinGraph(graph_name) orelse return error.GraphNotFound;
+    defer adapter.unpinGraph(managed_graph);
     return try allocator.dupe(u8, managed_graph.label_dict.getString(rel_type) orelse "UNKNOWN");
 }
 

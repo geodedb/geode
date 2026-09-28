@@ -9205,6 +9205,25 @@ pub fn build(b: *std.Build) void {
     const sonny3032_step = b.step("test-sonny3032-grpc-session-expiry", "Run SONNY-3032 regression (a gRPC session idle in an open transaction past the timeout is closed, its transaction rolled back and its graph hold released, so DROP GRAPH runs; idle sessions are closed, never one a request holds; one user holds at most max_sessions_per_principal sessions; gRPC in process and a spawned server)");
     sonny3032_step.dependOn(&run_sonny3032_tests.step);
 
+    // SONNY-3191 (round 13 review N-4..N-7) and SONNY-3122: COMMIT or
+    // ROLLBACK then DROP GRAPH in one program; the QUIC admission thread's
+    // stack; the Debug WITH-chain limit; reserved graph names; the read
+    // path's edge type lookup. gRPC in process and QUIC.
+    const sonny3191_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny3191_round13_items.zig"), .target = target, .optimize = optimize });
+    sonny3191_test_mod.link_libc = true;
+    sonny3191_test_mod.addImport("geode", root_mod);
+    sonny3191_test_mod.addImport("schema", schema_mod);
+    sonny3191_test_mod.addImport("protobuf", protobuf_mod);
+    sonny3191_test_mod.addImport("grpc_impl", sonny1560_shim_mod);
+    sonny3191_test_mod.addImport("logging", logging_mod);
+    sonny3191_test_mod.addImport("transport/quic", transport_quic_mod);
+    const sonny3191_tests = b.addTest(.{ .root_module = sonny3191_test_mod });
+    const run_sonny3191_tests = b.addRunArtifact(sonny3191_tests);
+    run_sonny3191_tests.step.dependOn(&install_geode_exe.step);
+    shardDep(test_step, &run_sonny3191_tests.step, 1, test_shard_loads, test_shard_index);
+    const sonny3191_step = b.step("test-sonny3191-round13-items", "Run SONNY-3191 (N-4..N-7) and SONNY-3122 regression (COMMIT/ROLLBACK then DROP GRAPH in one program runs; queries run on the QUIC admission thread's stack; WITH chain of 64: parsed in release, refused cleanly in Debug on 8 MiB; CURRENT_GRAPH/HOME_GRAPH reserved, 42939; edge type names read by lookup and pin; gRPC in process and QUIC)");
+    sonny3191_step.dependOn(&run_sonny3191_tests.step);
+
     // SONNY-2790: the fulltext statements (CREATE/DROP INDEX, geode.fts.*)
     // run on the default graph, so the handlers lock `default` for them from
     // any session. Classifier, and the real gRPC handler (SONNY-1560 shim).

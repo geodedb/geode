@@ -1703,6 +1703,10 @@ fn executeStatementWithContextInner(allocator: std.mem.Allocator, stmt: ast.Stat
                 const undo_log = txn_undo_log.getGlobalUndoLog(allocator);
                 const commit_store = graph_store.getWritableGlobalStore(allocator);
                 undo_log.commit(commit_store);
+                // SONNY-3191 (N-4): the transaction is over; its session lets
+                // the graph hold (SONNY-3134) go now, not after the program,
+                // so `COMMIT; DROP GRAPH g` runs.
+                graph_store.releaseThreadTxnHold();
 
                 break :blk "transaction committed";
             } else "no transaction active";
@@ -1751,6 +1755,8 @@ fn executeStatementWithContextInner(allocator: std.mem.Allocator, stmt: ast.Stat
                         Attr.string("error", @errorName(err)),
                     });
                 };
+                // SONNY-3191 (N-4): as at COMMIT.
+                graph_store.releaseThreadTxnHold();
 
                 break :blk "transaction rolled back";
             } else "no transaction active";
@@ -2241,6 +2247,9 @@ fn executeStatementWithContextInner(allocator: std.mem.Allocator, stmt: ast.Stat
             try cluster_mod.gateUnreplicatedWrite();
             // SONNY-2791: the __geode_* names are the engine's own.
             try session_graph.refuseInternal(cg.name);
+            // SONNY-3191 (N-7): the current- and home-graph names are not
+            // graph names.
+            try session_graph.refuseReserved(cg.name);
             // CANARY: REQ=REQ-SONNY-2803-GRAPH-DDL-GATE; FEATURE="GraphRBACEnforcement"; ASPECT=GraphDDL; STATUS=TESTED; TEST=tests/test_sonny2803_graph_ddl_gate.zig; OWNER=security; UPDATED=2026-09-26
             // SONNY-2803: schema and bind_graph on the graph to create, before
             // whether it exists.
@@ -2331,6 +2340,9 @@ fn executeStatementWithContextInner(allocator: std.mem.Allocator, stmt: ast.Stat
             try cluster_mod.gateUnreplicatedWrite();
             // SONNY-2791: DROP GRAPH __geode_security removed the security graph.
             try session_graph.refuseInternal(dg.name);
+            // SONNY-3191 (N-7): DROP GRAPH CURRENT_GRAPH dropped a graph named
+            // CURRENT_GRAPH, not the current graph.
+            try session_graph.refuseReserved(dg.name);
             // SONNY-2803: schema and bind_graph on the graph to drop, before
             // whether it exists. A ReadWrite user refused `USE GRAPH g1`
             // dropped g1.

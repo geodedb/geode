@@ -198,6 +198,8 @@ pub fn mapError(err: anyerror) ErrorInfo {
         // it withheld the rows rather than return them unchecked.
         error.RowSecurityFilterUnavailable => .{ .code = "53200", .message = "Out of memory: the row-level security filter could not run, so no rows were returned" },
         error.InternalGraph => .{ .code = "42501", .message = "The __geode_* graphs are internal: a statement cannot select, create or drop one" },
+        // SONNY-3191 (N-7): CREATE or DROP GRAPH of a current- or home-graph name.
+        error.ReservedGraphName => .{ .code = "42939", .message = "CURRENT_GRAPH, CURRENT_PROPERTY_GRAPH, HOME_GRAPH and HOME_PROPERTY_GRAPH name the session's current and home graphs: no graph can be created or dropped by these names" },
         error.DuplicateGraph => .{ .code = "42P07", .message = "Duplicate graph name" },
         error.GraphNotFound => .{ .code = "3F000", .message = "Graph does not exist" },
         // SONNY-3038: geode.auth.revoke could not save the revoke.

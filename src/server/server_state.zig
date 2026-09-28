@@ -451,7 +451,18 @@ pub const ServerState = struct {
         /// session's when this one's teardown runs inside that session's
         /// request). `leaveSessionTxn` puts it back.
         prev_undo_txn: u64 = 0,
+        /// SONNY-3191 (N-4): the hold release the thread had installed
+        /// before (`graph_store.setThreadTxnHoldRelease`).
+        prev_hold_release: ?@import("../graph_store.zig").TxnHoldRelease = null,
     };
+
+    /// SONNY-3191 (N-4): the executor ended the transaction with a COMMIT or
+    /// ROLLBACK statement (`graph_store.releaseThreadTxnHold`): its graph
+    /// hold goes now, so the rest of the program can drop the graph.
+    fn releaseTxnHoldThunk(ctx: *anyopaque) void {
+        const self: *ServerState = @ptrCast(@alignCast(ctx));
+        self.clearTxnGraph();
+    }
 
     // CANARY: REQ=REQ-SONNY-2799-SESSION-UNDO-TXN; FEATURE="TransactionUndoLog"; ASPECT=PerSession; STATUS=TESTED; TEST=tests/test_sonny2805_txn_sessions.zig; OWNER=engine; UPDATED=2026-09-26
     // CANARY: REQ=REQ-SONNY-2823-SESSION-ENGINE-TXN; FEATURE="TransactionManagement"; ASPECT=PerRequestInstall; STATUS=TESTED; TEST=tests/test_sonny2823_session_engine_txn.zig; OWNER=storage; UPDATED=2026-09-26
@@ -470,7 +481,9 @@ pub const ServerState = struct {
         if (engine.nested) return .{ .engine = engine };
         const prev_undo_txn = txn_undo_log.currentThreadTxnId();
         txn_undo_log.setThreadTxnId(self.txn_id);
-        return .{ .engine = engine, .prev_undo_txn = prev_undo_txn };
+        // SONNY-3191 (N-4): a COMMIT or ROLLBACK statement lets the hold go.
+        const prev_hold_release = @import("../graph_store.zig").setThreadTxnHoldRelease(.{ .ctx = self, .release = releaseTxnHoldThunk });
+        return .{ .engine = engine, .prev_undo_txn = prev_undo_txn, .prev_hold_release = prev_hold_release };
     }
 
     /// After a request, the session's transaction is whatever the undo log's
@@ -481,6 +494,7 @@ pub const ServerState = struct {
         self.txn_id = txn_undo_log.currentThreadTxnId();
         if (!scope.engine.nested) {
             txn_undo_log.setThreadTxnId(scope.prev_undo_txn);
+            _ = @import("../graph_store.zig").setThreadTxnHoldRelease(scope.prev_hold_release);
             // The handler's transaction and the undo log's agree after every
             // request. A transaction the undo log no longer has is over. One
             // the handler never took up (a request that failed after its
