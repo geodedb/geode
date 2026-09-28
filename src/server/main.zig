@@ -286,10 +286,27 @@ const quic_connection_queue_capacity = 1024;
 const default_quic_connection_admission_threads = if (builtin.mode == .Debug) 64 else 4096;
 // SONNY-3191 (N-5): an admission thread runs a connection's first stream
 // itself when the stream pool refuses it or no stream reactor is installed,
-// so it gets a request thread's stack (16 MiB; it had 1 MiB, where a plain
-// MATCH was refused, and overflowed in a Debug build). A thread that cannot
-// be spawned rejects its connection, as before.
-const quic_connection_admission_stack_size = geode.stack_guard.request_thread_stack_bytes;
+// so it gets a request thread's stack (it had 1 MiB, where a plain MATCH was
+// refused, and overflowed in a Debug build). A thread that cannot be spawned
+// rejects its connection, as before.
+//
+// CANARY: REQ=REQ-SONNY-3253-ADMISSION-STACK; FEATURE="QuicAdmission"; ASPECT=StackAndSpawnFailure; STATUS=TESTED; TEST=tests/test_sonny3253_round14_minors.zig; OWNER=transport; UPDATED=2026-09-28
+// SONNY-3253 (round 15, F13): the stacks are reserved address space, not
+// committed memory (a thread touches only the pages it uses), but the
+// reservation is `admission threads x stack`: 4096 x 16 MiB is 64 GiB, which
+// a kernel with strict overcommit (vm.overcommit_memory=2) counts against
+// its commit limit, so spawns fail there long before 4096. A release build
+// now takes 8 MiB (32 GiB at 4096 threads): the gRPC connection threads
+// serve every request on 8 MiB, and the parser and evaluator bound what a
+// request can nest (SONNY-3133, SONNY-3181, SONNY-3189, SONNY-3251), which
+// the round 14 and 15 regressions run on 8 MiB threads in ReleaseSafe. A
+// Debug build keeps 16 MiB (its frames are several times larger; 64
+// admission threads, 1 GiB). GEODE_QUIC_ADMISSION_STACK_MB overrides it
+// (1..1048576); lower it, or GEODE_QUIC_CONNECTION_ADMISSION_THREADS, under
+// strict overcommit. A thread that cannot be spawned rejects its connection
+// (logged); the server serves on.
+const default_quic_admission_stack_mb: usize = if (builtin.mode == .Debug) 16 else 8;
+var g_quic_admission_stack_size: usize = default_quic_admission_stack_mb * 1024 * 1024;
 
 // Process-global AuthProvider used by the embedded LSP TCP listener to
 // authenticate `initialize` bearer / session tokens.  `null` until the
@@ -2687,6 +2704,14 @@ pub fn main() !void {
             connection_admission_cap,
             @as(usize, std.math.maxInt(u32)),
         )));
+        // SONNY-3253 (round 15, F13): see `default_quic_admission_stack_mb`.
+        g_quic_admission_stack_size = envUsize(
+            gpa,
+            "GEODE_QUIC_ADMISSION_STACK_MB",
+            default_quic_admission_stack_mb,
+            1,
+            1024 * 1024,
+        ) * 1024 * 1024;
 
         // CANARY: REQ=REQ-QUIC-HC-020; FEATURE="ConfigurableStreamThrottle"; ASPECT=ServerEnv; STATUS=TESTED; TEST=test_quic_condition_timedwait_cadence; OWNER=transport; UPDATED=2026-05-26
         //
@@ -3383,7 +3408,7 @@ pub fn main() !void {
                 ctx.admission_gate = &g_connection_admission_gate;
 
                 const admission_thread = std.Thread.spawn(
-                    .{ .stack_size = quic_connection_admission_stack_size },
+                    .{ .stack_size = g_quic_admission_stack_size },
                     handleConnectionAsync,
                     .{@as(*anyopaque, @ptrCast(ctx))},
                 ) catch |err| {

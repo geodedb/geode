@@ -1975,6 +1975,15 @@ pub const GraphStore = struct {
     id_maps: std.StringHashMap(*id_map_mod.IdMap) = undefined,
     id_maps_lock: std.Io.RwLock = std.Io.RwLock.init,
     retired_id_maps: std.ArrayList(IdMapRef) = .empty,
+    // CANARY: REQ=REQ-SONNY-3253-RETIRED-IDMAPS; FEATURE="IdMap"; ASPECT=BoundedRetirement; STATUS=TESTED; TEST=tests/test_sonny3253_round14_minors.zig; OWNER=storage; UPDATED=2026-09-28
+    /// SONNY-3253 (round 15, F11): walks holding an `idMapsSnapshot` list
+    /// (the only way to hold another graph's IdMap without that graph's lock;
+    /// a point lookup holds its graph's lock, which DROP GRAPH takes). A
+    /// dropped graph's IdMap is freed at once when none is held, and
+    /// otherwise when the last walk lets its list go (`releaseIdMaps`), so
+    /// `retired_id_maps` is empty whenever no walk runs: it grew by one IdMap
+    /// (about 0.5 KB) per DROP GRAPH until the store went.
+    id_map_walkers: std.atomic.Value(usize) = .init(0),
     // dsn_graph_binding.yml race fix (2026-05-23): serialize CREATE /
     // OPEN-OR-CREATE / DROP graph mutations so the in-memory `graphs`
     // map and the adapter-backed registry can't observe each other in
@@ -2352,9 +2361,21 @@ pub const GraphStore = struct {
         defer self.id_maps_lock.unlock(io);
         var id_map_iter = self.id_maps.iterator();
         while (id_map_iter.next()) |entry| {
-            self.allocator.free(entry.key_ptr.*);
-            entry.value_ptr.*.deinit();
-            self.allocator.destroy(entry.value_ptr.*);
+            // SONNY-3253 (round 15, F11): as DROP GRAPH does. A walk may
+            // hold this IdMap (reload and a Raft snapshot install run
+            // clearNodes while the server serves): its contents go, and the
+            // IdMap itself when no walk holds one. It was freed outright,
+            // which broke the address `idMapsSnapshot` promises.
+            entry.value_ptr.*.releaseContents();
+            if (self.id_map_walkers.load(.acquire) == 0) {
+                self.allocator.free(entry.key_ptr.*);
+                entry.value_ptr.*.deinit();
+                self.allocator.destroy(entry.value_ptr.*);
+            } else self.retired_id_maps.append(self.allocator, .{ .graph_name = entry.key_ptr.*, .map = entry.value_ptr.* }) catch {
+                self.allocator.free(entry.key_ptr.*);
+                entry.value_ptr.*.deinit();
+                self.allocator.destroy(entry.value_ptr.*);
+            };
         }
         self.id_maps.deinit();
         self.id_maps = std.StringHashMap(*id_map_mod.IdMap).init(self.allocator);
@@ -2512,6 +2533,9 @@ pub const GraphStore = struct {
     /// on one thread can wait forever behind a writer that waits for the
     /// first. The names and maps stay valid for the store's life (a dropped
     /// graph's are retired, not freed). The caller frees the slice.
+    ///
+    /// SONNY-3253 (round 15, F11): the caller lets the list go with
+    /// `releaseIdMaps`, not a bare free: until then no IdMap on it is freed.
     fn idMapsSnapshot(self: *GraphStore, allocator: std.mem.Allocator) ![]IdMapRef {
         const io = std.Io.Threaded.global_single_threaded.io();
         self.id_maps_lock.lockSharedUncancelable(io);
@@ -2520,7 +2544,33 @@ pub const GraphStore = struct {
         var it = self.id_maps.iterator();
         var i: usize = 0;
         while (it.next()) |entry| : (i += 1) out[i] = .{ .graph_name = entry.key_ptr.*, .map = entry.value_ptr.* };
+        // Under the lock: a drop, which takes it exclusively, sees the walk.
+        _ = self.id_map_walkers.fetchAdd(1, .acq_rel);
         return out;
+    }
+
+    /// SONNY-3253: a test seam: `idMapsSnapshot`, for a test that holds the
+    /// list across a DROP GRAPH or a `clearNodes`. Let it go with
+    /// `releaseIdMapsForTest`.
+    pub fn idMapsSnapshotForTest(self: *GraphStore, allocator: std.mem.Allocator) ![]IdMapRef {
+        return self.idMapsSnapshot(allocator);
+    }
+
+    pub fn releaseIdMapsForTest(self: *GraphStore, allocator: std.mem.Allocator, refs: []IdMapRef) void {
+        self.releaseIdMaps(allocator, refs);
+    }
+
+    /// SONNY-3253 (round 15, F11): let an `idMapsSnapshot` list go. The last
+    /// walk out frees the IdMaps of graphs dropped meanwhile.
+    fn releaseIdMaps(self: *GraphStore, allocator: std.mem.Allocator, refs: []IdMapRef) void {
+        allocator.free(refs);
+        if (self.id_map_walkers.fetchSub(1, .acq_rel) != 1) return;
+        const io = std.Io.Threaded.global_single_threaded.io();
+        self.id_maps_lock.lockUncancelable(io);
+        defer self.id_maps_lock.unlock(io);
+        // A walk that began since holds the lock's shared side to begin:
+        // under the exclusive side the count is exact.
+        if (self.id_map_walkers.load(.acquire) == 0) self.freeRetiredIdMaps();
     }
 
     /// SONNY-3180: take `graph_name`'s IdMap out of `id_maps` (its graph is
@@ -2533,6 +2583,13 @@ pub const GraphStore = struct {
         defer self.id_maps_lock.unlock(io);
         const kv = self.id_maps.fetchRemove(graph_name) orelse return;
         kv.value.releaseContents();
+        // SONNY-3253 (round 15, F11): no walk holds it: freed now.
+        if (self.id_map_walkers.load(.acquire) == 0) {
+            self.allocator.free(kv.key);
+            kv.value.deinit();
+            self.allocator.destroy(kv.value);
+            return;
+        }
         self.retired_id_maps.append(self.allocator, .{ .graph_name = kv.key, .map = kv.value }) catch {
             // No room to keep it: free it as before SONNY-3180.
             self.allocator.free(kv.key);
@@ -2562,7 +2619,7 @@ pub const GraphStore = struct {
     fn cloneIdMapsFrom(self: *GraphStore, source: *const GraphStore, scope: ?[]const u8) !void {
         // SONNY-3180: the source's list, copied under its lock.
         const refs = try @constCast(source).idMapsSnapshot(self.allocator);
-        defer self.allocator.free(refs);
+        defer @constCast(source).releaseIdMaps(self.allocator, refs);
         const io = std.Io.Threaded.global_single_threaded.io();
         self.id_maps_lock.lockUncancelable(io);
         defer self.id_maps_lock.unlock(io);
@@ -2697,7 +2754,7 @@ pub const GraphStore = struct {
             // SONNY-3180: the source's IdMaps, copied under its lock (the
             // walk hydrates, which looks them up again).
             const refs = try @constCast(source).idMapsSnapshot(self.allocator);
-            defer self.allocator.free(refs);
+            defer @constCast(source).releaseIdMaps(self.allocator, refs);
             for (refs) |im_entry| {
                 const graph_name = im_entry.graph_name;
                 if (scope) |g| {
@@ -7012,7 +7069,7 @@ pub const GraphStore = struct {
         errdefer ids.deinit(allocator);
         // SONNY-3180: the IdMaps, copied under `id_maps_lock`.
         const refs = try @constCast(self).idMapsSnapshot(allocator);
-        defer allocator.free(refs);
+        defer @constCast(self).releaseIdMaps(allocator, refs);
         for (refs) |entry| {
             // geode#875 RC-3: snapshot each graph's node uuids UNDER the IdMap
             // leaf mutex — an unlocked `nodeUuidIterator` walk faults when a
@@ -7054,7 +7111,7 @@ pub const GraphStore = struct {
         // SONNY-3180: the IdMaps, copied under `id_maps_lock` (the walk
         // hydrates, which looks them up again).
         const refs = try @constCast(self).idMapsSnapshot(allocator);
-        defer allocator.free(refs);
+        defer @constCast(self).releaseIdMaps(allocator, refs);
         for (refs) |entry| {
             const graph_name = entry.graph_name;
             // geode#875 RC-3: snapshot uuids under the IdMap leaf mutex (race-safe
@@ -7133,7 +7190,7 @@ pub const GraphStore = struct {
         // SONNY-3180: the IdMaps, copied under `id_maps_lock` (the walk
         // hydrates, which looks them up again).
         const refs = try @constCast(self).idMapsSnapshot(allocator);
-        defer allocator.free(refs);
+        defer @constCast(self).releaseIdMaps(allocator, refs);
         for (refs) |entry| {
             // SONNY-3180 (round 15, F2): the uuids copied under the IdMap's
             // mutex; the walk hydrates, which locks the map again.
@@ -7833,7 +7890,7 @@ pub const GraphStore = struct {
         } else {
             // SONNY-3180: the IdMaps, copied under `id_maps_lock`.
             const refs = try @constCast(self).idMapsSnapshot(allocator);
-            defer allocator.free(refs);
+            defer @constCast(self).releaseIdMaps(allocator, refs);
             for (refs) |entry| {
                 // SONNY-3180 (round 15, F2): and each map's uuids under its
                 // own mutex. The unlocked iterator faulted when a writer of
@@ -10405,7 +10462,7 @@ pub const GraphStore = struct {
     fn saveIdMapSnapshots(self: *GraphStore, adapter: *graph_storage_adapter.StorageAdapter) void {
         // SONNY-3180: the IdMaps, copied under `id_maps_lock`.
         const refs = self.idMapsSnapshot(self.allocator) catch return;
-        defer self.allocator.free(refs);
+        defer self.releaseIdMaps(self.allocator, refs);
         for (refs) |entry| {
             self.saveIdMapSnapshotForGraph(adapter, entry.graph_name, entry.map);
         }
@@ -10681,7 +10738,7 @@ pub const GraphStore = struct {
     fn saveHydrationSnapshots(self: *GraphStore, adapter: *graph_storage_adapter.StorageAdapter) void {
         // SONNY-3180: the IdMaps, copied under `id_maps_lock`.
         const refs = self.idMapsSnapshot(self.allocator) catch return;
-        defer self.allocator.free(refs);
+        defer self.releaseIdMaps(self.allocator, refs);
         for (refs) |entry| {
             self.saveHydrationSnapshotsForOneGraph(adapter, entry.graph_name, entry.map);
         }
@@ -13530,7 +13587,7 @@ pub const GraphStore = struct {
             // SONNY-3180: the IdMaps, copied under `id_maps_lock` (the walk
             // hydrates, which looks them up again).
             const refs = try self.idMapsSnapshot(allocator);
-            defer allocator.free(refs);
+            defer self.releaseIdMaps(allocator, refs);
             for (refs) |im_entry| {
                 const graph_name = im_entry.graph_name;
                 // SONNY-3180 (round 15, F2): the uuids copied under the
@@ -13588,7 +13645,7 @@ pub const GraphStore = struct {
             // above so a snapshot/backup never misses an evicted edge.
             // SONNY-3180: the IdMaps, copied under `id_maps_lock`.
             const refs = try self.idMapsSnapshot(allocator);
-            defer allocator.free(refs);
+            defer self.releaseIdMaps(allocator, refs);
             for (refs) |im_entry| {
                 // SONNY-3180 (round 15, F2): the uuids copied under the
                 // IdMap's mutex (hydrating looks the map up again).
