@@ -1208,6 +1208,18 @@ fn leaveEntryPoint() void {
     if (t_entry_depth == 0) commitSessionEngineTxn();
 }
 
+// CANARY: REQ=REQ-SONNY-3139-WRITE-SHAPES; FEATURE="WriteShapeValidator"; ASPECT=TransportProfile; STATUS=TESTED; TEST=tests/test_sonny_write_allowlist_r4.zig; OWNER=engine; UPDATED=2026-09-28
+/// SONNY-3139, SONNY-3182, SONNY-3184 (round-3 review C1): the whole-program
+/// write-shape validation `executeProgramWithContext` runs first, for a
+/// transport arm that runs a statement of `program` any other way: the QUIC
+/// and gRPC PROFILE arms ran the statement a PROFILE wraps through the planned
+/// runtime (`planned_read_runtime.executeProfiledIfSupported`), which reached
+/// the query dispatcher with no validation, so `PROFILE MATCH (n:G) SET n.x =
+/// 1, nn.y = 2` wrote every row, and in a cluster reached Raft unvalidated.
+pub fn validateProgramShapes(program: *const ast.Program, context: ExecutionContext) write_shape.Error!void {
+    try write_shape.validateProgram(program, context.transaction_state == .Active);
+}
+
 pub fn executeProgramWithContext(allocator: std.mem.Allocator, program: *const ast.Program, context: ExecutionContext) !ExecutionResult {
     // SONNY-2823: the program's session engine transaction ends with it.
     enterEntryPoint();

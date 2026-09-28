@@ -8320,6 +8320,18 @@ fn handleClientMessage(
                         return;
                     };
 
+                    // SONNY-3139, SONNY-3182, SONNY-3184 (round-3 review C1):
+                    // the whole program passes the write-shape allowlist before
+                    // the statement a PROFILE wraps runs by either path below.
+                    // The planned runtime reached the query dispatcher with no
+                    // validation (it also declines a statement that writes now).
+                    execution.validateProgramShapes(&parse_result.program, exec_context) catch |err| {
+                        failed_in_txn = true;
+                        const info = proto_util.mapError(err);
+                        try sendExecuteError(gpa, stream, info.code, info.message, &.{}, &.{});
+                        return;
+                    };
+
                     if (target_stmt.* == .Query) {
                         var planned_query = target_stmt.Query;
                         if (planned_read_runtime.executeProfiledIfSupported(

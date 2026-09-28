@@ -3,6 +3,7 @@ const gs = @import("graph_storage");
 const ast = @import("../gql/ast.zig");
 const eval = @import("../eval.zig");
 const execution = @import("../execution.zig");
+const write_walk = @import("write_walk.zig");
 const result_utils = @import("result_utils.zig");
 const value_utilities = @import("value_utilities.zig");
 const graph_store = @import("../graph_store.zig");
@@ -473,6 +474,15 @@ pub fn executeProfiledIfSupported(
     // CANARY: REQ=REQ-PROFILE-RLS-TENANT-001; FEATURE="PROFILE"; ASPECT=ActiveContextPush; STATUS=TESTED; TEST=tests/test_profile_rls_tenant.zig; OWNER=security; UPDATED=2026-08-29
     const prev_ctx = execution.pushActiveContext(&context);
     defer execution.popActiveContext(prev_ctx);
+
+    // CANARY: REQ=REQ-SONNY-3139-WRITE-SHAPES; FEATURE="WriteShapeValidator"; ASPECT=PlannedRuntimeDeclinesWrites; STATUS=TESTED; TEST=tests/test_sonny_write_allowlist_r4.zig; OWNER=engine; UPDATED=2026-09-28
+    // SONNY-3139, SONNY-3182 (round-3 review C1): the planned runtime is a
+    // read runtime. A query that writes (a write clause, a part that writes,
+    // a write hidden in an expression or a CTE body: the one write walk) is
+    // declined, so it runs through the statement dispatcher, which validates
+    // it against the write-shape allowlist. The QUIC and gRPC PROFILE arms
+    // handed a write straight to `executeLegacyProfiled`, unvalidated.
+    if (write_walk.queryWrites(q, .{})) return null;
 
     var plan = (try buildPlanIfSupported(allocator, q, context)) orelse return null;
     errdefer plan.deinit(allocator);
