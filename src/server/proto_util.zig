@@ -307,6 +307,10 @@ pub fn mapError(err: anyerror) ErrorInfo {
         // than dropped.
         error.WriteClauseNotApplied => .{ .code = "0A000", .message = "This statement writes in a shape that is not supported: a statement that writes is accepted only in the allowlisted shapes (CREATE/INSERT; MERGE; MATCH ... [WHERE] SET/REMOVE/DELETE/CREATE/MERGE; MATCH ... WITH ... SET/REMOVE/DELETE, or one CREATE or MERGE; each after an optional WITH of values or an UNWIND, in a FOR body, under PROFILE, or in a UNION of MATCH ... SET parts), with every variable bound, and no write inside an expression. Split the statement" },
         error.TooManyWriteClauses => .{ .code = "54000", .message = "A query part may carry at most 1024 SET, REMOVE, CREATE and MERGE clauses" },
+        // SONNY-3244: the parser's limits (gql/parser.zig `max_*`).
+        error.TooManyStatements => .{ .code = "54000", .message = "A request may carry at most 1024 statements" },
+        error.ParseMemoryLimit => .{ .code = "54000", .message = "Parsing the request needs more than 64 MiB" },
+        error.QueryNestingTooDeep => .{ .code = "54001", .message = "Queries may nest at most 10 deep (WITH chain parts, CALL { }, IN (subquery), FOR bodies, CTE bodies)" },
         error.StringDataRightTruncation => .{ .code = "22001", .message = "String data right truncation" },
         error.InvalidKeyProvider => .{ .code = "42704", .message = "Invalid TDE key provider" },
         error.InvalidGuardrailConfiguration => .{ .code = "42704", .message = "Invalid CDC guardrail configuration" },

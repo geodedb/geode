@@ -2528,7 +2528,8 @@ pub fn handleExecute(request_bytes: []const u8, allocator: std.mem.Allocator, ep
                 diagnostics.defaultMessage(.GB02CommentDisabled)
             else
                 err_info.msg;
-            var resp = try buildErrorResponse(allocator, "42000", msg, &.{}, &.{});
+            // SONNY-3244: a parser limit answers its class 54 code.
+            var resp = try buildErrorResponse(allocator, if (err_info.has_double_dash_comment) "42000" else err_info.code, msg, &.{}, &.{});
             defer resp.deinit(allocator);
             return encodeMessage(allocator, resp);
         },

@@ -719,6 +719,9 @@ pub const ParseOutcome = union(enum) {
         token: @import("gql_lib").token.TokenKind,
         has_double_dash_comment: bool,
         has_unwind: bool = false,
+        /// SQLSTATE for the refusal (`parseErrorCode`): 42000 for a syntax
+        /// error, 54000 / 54001 for a parser limit (SONNY-3190, SONNY-3244).
+        code: []const u8 = "42000",
         // Outer allocator that owns `msg`. Set when `parseGqlOutcome`
         // duped the message out of the (now-freed) parser arena;
         // null when `msg` is a static literal.
@@ -738,12 +741,27 @@ pub const ParseOutcome = union(enum) {
     }
 };
 
+// CANARY: REQ=REQ-SONNY-3244-PARSE-LIMITS; FEATURE="ParseLimits"; ASPECT=WireCode; STATUS=TESTED; TEST=tests/test_sonny_write_allowlist_r4.zig; OWNER=parser; UPDATED=2026-09-28
+/// SONNY-3244: the SQLSTATE a transport answers a refused parse with. A
+/// parser limit is class 54 (program limit exceeded): too many write clauses
+/// in a part (SONNY-3190), too many statements in a request, or more parser
+/// memory than the request may take are 54000; queries nested too deep are
+/// 54001 (statement too complex). Every other refusal is a syntax error,
+/// 42000. The limits' own messages name them (`Parser.max_*`).
+pub fn parseErrorCode(err: anyerror) []const u8 {
+    return switch (err) {
+        error.TooManyWriteClauses, error.TooManyStatements, error.ParseMemoryLimit => "54000",
+        error.QueryNestingTooDeep => "54001",
+        else => "42000",
+    };
+}
+
 // Parse but capture parser error details instead of throwing; allocation errors still throw.
 pub fn parseGqlOutcome(src: []const u8, allocator: std.mem.Allocator, opts: ParseOptions) !ParseOutcome {
     var arena = std.heap.ArenaAllocator.init(allocator);
     var lx = Lexer{ .src = src };
     var p = Parser{ .lx = &lx, .arena = &arena, .cur = lx.next(), .strict_order_keys = opts.strict_order_keys, .ident_order_only = opts.ident_order_only, .forbid_orderby_calls = opts.forbid_orderby_calls, .forbid_orderby_paths = opts.forbid_orderby_paths, .ts_extensions = opts.ts_extensions };
-    const program = p.parseProgram() catch {
+    const program = p.parseProgram() catch |parse_err| {
         const raw_msg = p.last_error orelse "parse error";
         const loc = p.cur.loc;
         const kind = p.cur.kind;
@@ -769,6 +787,7 @@ pub fn parseGqlOutcome(src: []const u8, allocator: std.mem.Allocator, opts: Pars
             .token = kind,
             .has_double_dash_comment = has_dd,
             .has_unwind = has_uw,
+            .code = parseErrorCode(parse_err),
             .msg_allocator = if (has_dynamic_msg) allocator else null,
         } };
     };

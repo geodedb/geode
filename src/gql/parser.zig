@@ -28,6 +28,12 @@ pub const Parser = struct {
     has_unwind: bool = false,
     // TS extensions (SERIES UDFs) allowed when true
     ts_extensions: bool = false,
+    // SONNY-3244: statements parsed so far (every one, nested ones too), and
+    // how many queries the one being parsed is nested in (`limits`).
+    statement_count: usize = 0,
+    query_depth: u16 = 0,
+    tokens_since_memory_check: u32 = 0,
+    parse_memory_exceeded: bool = false,
     // Last error context message (static or source-backed slice).
     last_error: ?[]const u8 = null,
     // Path alias names collected from the last parsed graph pattern (MATCH or pattern comprehension).
@@ -56,6 +62,15 @@ pub const Parser = struct {
 
     fn advance(self: *Parser) void {
         self.cur = self.lx.next();
+        // SONNY-3244: every 1024 tokens, the parser's memory
+        // (`max_parse_arena_bytes`). Past it, the input ends here: the parse
+        // stops at once, and `parseProgram` answers ParseMemoryLimit.
+        self.tokens_since_memory_check += 1;
+        if (self.tokens_since_memory_check >= 1024) {
+            self.tokens_since_memory_check = 0;
+            if (self.arena.queryCapacity() > max_parse_arena_bytes) self.parse_memory_exceeded = true;
+        }
+        if (self.parse_memory_exceeded) self.cur.kind = .eof;
     }
 
     fn peekToken(self: *Parser) tok.TokenKind {
@@ -288,7 +303,7 @@ pub const Parser = struct {
     // ENG-3906: `UnknownIndexParameter` — a WITH parameter a vector index does
     // not implement. Distinct from `UnexpectedToken` so the diagnostic can say
     // "this knob does not exist" rather than "syntax error".
-    const ParserError = error{ UnexpectedToken, OutOfMemory, Overflow, InvalidCharacter, InvalidIndexType, UnknownIndexParameter, UnknownIndexOption, UnsupportedAggregateFunction, TooManyWriteClauses };
+    const ParserError = error{ UnexpectedToken, OutOfMemory, Overflow, InvalidCharacter, InvalidIndexType, UnknownIndexParameter, UnknownIndexOption, UnsupportedAggregateFunction, TooManyWriteClauses, TooManyStatements, ParseMemoryLimit, QueryNestingTooDeep };
 
     // CANARY: REQ=REQ-SONNY-3190-CLAUSE-CAP; FEATURE="WriteClauseCap"; ASPECT=Parser; STATUS=TESTED; TEST=tests/test_sonny_write_allowlist.zig; OWNER=parser; UPDATED=2026-09-27
     /// SONNY-3190: the most SET, REMOVE, CREATE and MERGE clauses one query
@@ -304,6 +319,74 @@ pub const Parser = struct {
             self.last_error = "a query part may carry at most 1024 SET, REMOVE, CREATE and MERGE clauses";
             return error.TooManyWriteClauses;
         }
+    }
+
+    // CANARY: REQ=REQ-SONNY-3244-PARSE-LIMITS; FEATURE="ParseLimits"; ASPECT=Parser; STATUS=TESTED; TEST=tests/test_sonny_write_allowlist_r4.zig; OWNER=parser; UPDATED=2026-09-28
+    /// SONNY-3244: the most statements one request may carry, counting the
+    /// ones nested in others (a transaction body's, the statement a PROFILE
+    /// wraps). Parsing runs before authorization: 25,000 `MATCH ... SET ...;`
+    /// statements (625 KB) took a 741 MB parser arena, so a 16 MB request
+    /// could hold about 19 GB. 54000 (program limit exceeded).
+    pub const max_statements_per_request: usize = 1024;
+
+    /// SONNY-3244: the most memory the parser may hold for one request (its
+    /// arena's capacity, checked every 1024 tokens, at every statement and
+    /// query part, and at the end). The arena grows by whole blocks, so a
+    /// request refused here held at most about twice this, briefly, mostly
+    /// untouched. 54000 (program limit exceeded).
+    pub const max_parse_arena_bytes: usize = 64 * 1024 * 1024;
+
+    /// SONNY-3244: how deep queries may nest in queries: the parts of a WITH
+    /// chain (each WITH ... MATCH starts a part inside the last), a CALL { }
+    /// subquery, an IN / NOT IN (subquery), a FOR body, a CTE body. Each level
+    /// is a parseQuery frame, the parser's largest: 60 chained WITH overflowed
+    /// a Debug build (round-3 review I8). Past it: 54001 (statement too
+    /// complex). Measured (tests/test_sonny_write_allowlist_r4.zig and the
+    /// round 4a report), a fresh thread overflows at these depths:
+    ///   Debug,       8 MiB:  FOR body 16, IN (subquery) 19, WITH / CALL { } 22;
+    ///   Debug,      16 MiB:  FOR body 35, IN 41, WITH / CALL { } 45;
+    ///   ReleaseSafe, 8 MiB:  FOR body 156, WITH / CALL { } 182 (IN stops at
+    ///                        the expression depth limit, 128, first);
+    ///   ReleaseSafe, 1 MiB:  FOR body 12, IN 11, WITH 15.
+    /// 10 holds on the server's request threads (the QUIC workers' 16 MiB, the
+    /// gRPC connection threads' 8 MiB) in both builds, with room for the
+    /// handler's own frames below the parser. (A 1 MiB QUIC admission thread
+    /// overflows a Debug build on any nesting at all; the round-14 branch
+    /// gives those threads 16 MiB, SONNY-3191.)
+    pub const max_query_nesting: u16 = 10;
+
+    /// SONNY-3244: count one more statement, and check the parser's memory.
+    fn countStatement(self: *Parser) ParserError!void {
+        self.statement_count += 1;
+        if (self.statement_count > max_statements_per_request) {
+            self.last_error = "a request may carry at most 1024 statements";
+            return error.TooManyStatements;
+        }
+        try self.checkParseMemory();
+    }
+
+    /// SONNY-3244: refuse once the parser's arena holds more than
+    /// `max_parse_arena_bytes`.
+    fn checkParseMemory(self: *Parser) ParserError!void {
+        if (self.parse_memory_exceeded or self.arena.queryCapacity() > max_parse_arena_bytes) {
+            self.parse_memory_exceeded = true;
+            self.last_error = "parsing the request needs more than 64 MiB";
+            return error.ParseMemoryLimit;
+        }
+    }
+
+    /// SONNY-3244: enter one more level of query nesting.
+    fn enterQuery(self: *Parser) ParserError!void {
+        self.query_depth += 1;
+        if (self.query_depth > max_query_nesting) {
+            self.query_depth -= 1;
+            self.last_error = "queries may nest at most 10 deep (WITH chain parts, CALL { }, IN (subquery), FOR bodies, CTE bodies)";
+            return error.QueryNestingTooDeep;
+        }
+        self.checkParseMemory() catch |err| {
+            self.query_depth -= 1;
+            return err;
+        };
     }
 
     /// Read an object name: an identifier or a quoted identifier.
@@ -448,6 +531,24 @@ pub const Parser = struct {
     }
 
     pub fn parseProgram(self: *Parser) ParserError!ast.Program {
+        // SONNY-3244: a parse cut short by `max_parse_arena_bytes` (`advance`)
+        // is refused as such, whatever the truncated input parsed as.
+        const program = self.parseProgramInner() catch |err| {
+            if (self.parse_memory_exceeded) {
+                self.last_error = "parsing the request needs more than 64 MiB";
+                return error.ParseMemoryLimit;
+            }
+            return err;
+        };
+        // The last tokens' allocations, too.
+        if (self.parse_memory_exceeded or self.arena.queryCapacity() > max_parse_arena_bytes) {
+            self.last_error = "parsing the request needs more than 64 MiB";
+            return error.ParseMemoryLimit;
+        }
+        return program;
+    }
+
+    fn parseProgramInner(self: *Parser) ParserError!ast.Program {
         // initialize alias set arraylist
         self.path_aliases = std.ArrayList([]const u8).empty;
         var list = std.ArrayList(ast.Statement).empty;
@@ -700,6 +801,8 @@ pub const Parser = struct {
 
     // CANARY: REQ=REQ-GQL-VALUES-MATCH-001; FEATURE="ValuesMatchChaining"; ASPECT=Parser; STATUS=TESTED; TEST=TestValuesMatchBasic|TestValuesMatchWhere|TestValuesMatchMultiRow; OWNER=engine; UPDATED=2026-04-17
     fn parseStatement(self: *Parser) ParserError!ast.Statement {
+        // SONNY-3244: at most `max_statements_per_request` statements.
+        try self.countStatement();
         return switch (self.cur.kind) {
             .VALUES => self.parseValuesStatement(),
             .FOR => self.parseForStatement(),
@@ -1695,6 +1798,9 @@ pub const Parser = struct {
     }
 
     fn parseQuery(self: *Parser) ParserError!ast.Query {
+        // SONNY-3244: queries nest at most `max_query_nesting` deep.
+        try self.enterQuery();
+        defer self.query_depth -= 1;
         // SONNY-3190: the SET, REMOVE and CREATE clauses of this part.
         var write_clauses: usize = 0;
         // Parse LET bindings first (LET $var = expr, ...)

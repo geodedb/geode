@@ -7312,7 +7312,8 @@ fn handleClientMessage(
                                 diagnostics.defaultMessage(.GB02CommentDisabled)
                             else
                                 err_info.msg;
-                            try sendExecuteError(gpa, stream, "42000", err_msg, &.{}, &.{});
+                            // SONNY-3244: a parser limit answers its class 54 code.
+                            try sendExecuteError(gpa, stream, if (err_info.has_double_dash_comment) "42000" else err_info.code, err_msg, &.{}, &.{});
                             return;
                         },
                         .Ok => |handle| {
@@ -7328,7 +7329,8 @@ fn handleClientMessage(
                             diagnostics.defaultMessage(.GB02CommentDisabled)
                         else
                             err_info.msg;
-                        try sendExecuteError(gpa, stream, "42000", err_msg, &.{}, &.{});
+                        // SONNY-3244: a parser limit answers its class 54 code.
+                        try sendExecuteError(gpa, stream, if (err_info.has_double_dash_comment) "42000" else err_info.code, err_msg, &.{}, &.{});
                         return;
                     },
                     .Ok => |pr| {
