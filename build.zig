@@ -9433,6 +9433,25 @@ pub fn build(b: *std.Build) void {
     const sonny3253_step = b.step("test-sonny3253-round14-minors", "Run SONNY-3253 regression (a dropped graph's IdMap is freed when no walk holds it, and when the last walk lets go; clearNodes keeps an IdMap a walk holds; a QUIC admission thread that cannot be spawned rejects its connection quickly and the server serves on; spawned server)");
     sonny3253_step.dependOn(&run_sonny3253_tests.step);
 
+    // SONNY-3314 (round 16, I2, M1): a dropped graph's IdMap and name are
+    // freed only by their last holder (a point resolve, hydrate-on-miss, a
+    // first-touch hydration, a walk), and then: DROP GRAPH racing
+    // hydrate-on-miss, DROP during a first-touch hydration, overlapping walks
+    // during DROP churn; bounded retained memory. Loop it.
+    const sonny3314_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny3314_idmap_holders.zig"), .target = target, .optimize = optimize });
+    sonny3314_test_mod.link_libc = true;
+    sonny3314_test_mod.addImport("geode", root_mod);
+    sonny3314_test_mod.addImport("schema", schema_mod);
+    sonny3314_test_mod.addImport("protobuf", protobuf_mod);
+    sonny3314_test_mod.addImport("grpc_impl", sonny1560_shim_mod);
+    sonny3314_test_mod.addImport("logging", logging_mod);
+    sonny3314_test_mod.addImport("transport/quic", transport_quic_mod);
+    const sonny3314_tests = b.addTest(.{ .root_module = sonny3314_test_mod });
+    const run_sonny3314_tests = b.addRunArtifact(sonny3314_tests);
+    shardDep(test_step, &run_sonny3314_tests.step, 1, test_shard_loads, test_shard_index);
+    const sonny3314_step = b.step("test-sonny3314-idmap-holders", "Run SONNY-3314 regression (a dropped graph's IdMap and name are freed by their last holder: DROP GRAPH racing hydrate-on-miss and pinned resolves reads no torn name; DROP during a first-touch hydration; overlapping snapshot walks during DROP churn keep the retired maps bounded and none after; loop it)");
+    sonny3314_step.dependOn(&run_sonny3314_tests.step);
+
     // SONNY-3232 (round 15, item 10; pre-existing, diagnosed, left for S2):
     // a QUIC request of 256 KiB is answered, one past the 16 MiB maximum
     // message is not, the 1 MiB and 4 MiB outcomes are recorded, and the

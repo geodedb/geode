@@ -1748,6 +1748,11 @@ pub const MergePropertyIndex = struct {
 /// of `pending_hydration`. `done` is atomic so the fast path (already hydrated)
 /// needs no per-graph lock; `mutex` serialises concurrent first-touches on the
 /// SAME graph so they hydrate exactly once and the losers block until done.
+/// SONNY-3314 (round 16, I2): set while this thread runs `dropGraph`: its
+/// node and edge deletes do not hydrate (the graph is going, and the drop
+/// holds `graphs_mutex`, which a hydration build takes after its entry).
+threadlocal var t_dropping_graph: bool = false;
+
 const HydrationEntry = struct {
     mutex: std.Io.Mutex = std.Io.Mutex.init,
     done: std.atomic.Value(bool) = std.atomic.Value(bool).init(false),
@@ -1968,22 +1973,31 @@ pub const GraphStore = struct {
     /// shared or copies the list under it (`idMapsSnapshot`). Each IdMap is
     /// allocated on its own, so an insert that grows the map moves none: the
     /// maps were stored inline, and an insert moved every graph's IdMap, and
-    /// its mutex, from under the threads holding pointers to them. A dropped
-    /// graph's IdMap is emptied and kept, with its name, in
-    /// `retired_id_maps` until the store goes, so a pointer or a name a walk
-    /// took before the drop stays valid.
+    /// its mutex, from under the threads holding pointers to them.
+    ///
+    /// SONNY-3314 (round 16, I2): a user that holds an IdMap, or the name
+    /// `id_maps` keys it by, outside its graph's lock pins it
+    /// (`IdMap.holders`, taken under `id_maps_lock`): a walk over every graph
+    /// (`idMapsSnapshot`), a point resolve of a public id to its graph
+    /// (`resolveNodeGraphSlot`, `resolveEdgeGraphSlot`) and a first-touch
+    /// hydration (`loadOneGraphFromAdapterFull`). A dropped graph's IdMap
+    /// (`retireIdMap`) is emptied, and freed with its name at once when
+    /// nothing pins it, else kept in `retired_id_maps` until its last holder
+    /// lets go (`unpinIdMap`). A map dropped after a user began is never
+    /// pinned by it, so the retired maps are bounded by the maps pinned at
+    /// the time, whatever other users overlap.
     id_maps: std.StringHashMap(*id_map_mod.IdMap) = undefined,
     id_maps_lock: std.Io.RwLock = std.Io.RwLock.init,
     retired_id_maps: std.ArrayList(IdMapRef) = .empty,
     // CANARY: REQ=REQ-SONNY-3253-RETIRED-IDMAPS; FEATURE="IdMap"; ASPECT=BoundedRetirement; STATUS=TESTED; TEST=tests/test_sonny3253_round14_minors.zig; OWNER=storage; UPDATED=2026-09-28
-    /// SONNY-3253 (round 15, F11): walks holding an `idMapsSnapshot` list
-    /// (the only way to hold another graph's IdMap without that graph's lock;
-    /// a point lookup holds its graph's lock, which DROP GRAPH takes). A
-    /// dropped graph's IdMap is freed at once when none is held, and
-    /// otherwise when the last walk lets its list go (`releaseIdMaps`), so
-    /// `retired_id_maps` is empty whenever no walk runs: it grew by one IdMap
-    /// (about 0.5 KB) per DROP GRAPH until the store went.
-    id_map_walkers: std.atomic.Value(usize) = .init(0),
+    /// SONNY-3314 (round 16, I2, M1): how many maps wait in
+    /// `retired_id_maps`, read without the lock by `unpinIdMap` to skip the
+    /// exclusive lock when none does. Round 15 (SONNY-3253) freed the retired
+    /// maps only when no walk at all was running (one store-wide walker
+    /// count), so overlapping walks kept every dropped map forever, and a
+    /// point resolve or a hydration, which it did not count, used a freed
+    /// name and map.
+    retired_id_count: std.atomic.Value(usize) = .init(0),
     // dsn_graph_binding.yml race fix (2026-05-23): serialize CREATE /
     // OPEN-OR-CREATE / DROP graph mutations so the in-memory `graphs`
     // map and the adapter-backed registry can't observe each other in
@@ -2361,21 +2375,12 @@ pub const GraphStore = struct {
         defer self.id_maps_lock.unlock(io);
         var id_map_iter = self.id_maps.iterator();
         while (id_map_iter.next()) |entry| {
-            // SONNY-3253 (round 15, F11): as DROP GRAPH does. A walk may
+            // SONNY-3253 (round 15, F11): as DROP GRAPH does. A user may
             // hold this IdMap (reload and a Raft snapshot install run
             // clearNodes while the server serves): its contents go, and the
-            // IdMap itself when no walk holds one. It was freed outright,
-            // which broke the address `idMapsSnapshot` promises.
-            entry.value_ptr.*.releaseContents();
-            if (self.id_map_walkers.load(.acquire) == 0) {
-                self.allocator.free(entry.key_ptr.*);
-                entry.value_ptr.*.deinit();
-                self.allocator.destroy(entry.value_ptr.*);
-            } else self.retired_id_maps.append(self.allocator, .{ .graph_name = entry.key_ptr.*, .map = entry.value_ptr.* }) catch {
-                self.allocator.free(entry.key_ptr.*);
-                entry.value_ptr.*.deinit();
-                self.allocator.destroy(entry.value_ptr.*);
-            };
+            // IdMap itself when nothing pins it (SONNY-3314). It was freed
+            // outright, which broke the address `idMapsSnapshot` promises.
+            self.retireLocked(entry.key_ptr.*, entry.value_ptr.*);
         }
         self.id_maps.deinit();
         self.id_maps = std.StringHashMap(*id_map_mod.IdMap).init(self.allocator);
@@ -2531,11 +2536,11 @@ pub const GraphStore = struct {
     /// walk that does more than read the maps: it may hydrate from the
     /// engine, which looks the maps up again, and a shared lock taken twice
     /// on one thread can wait forever behind a writer that waits for the
-    /// first. The names and maps stay valid for the store's life (a dropped
-    /// graph's are retired, not freed). The caller frees the slice.
+    /// first.
     ///
-    /// SONNY-3253 (round 15, F11): the caller lets the list go with
-    /// `releaseIdMaps`, not a bare free: until then no IdMap on it is freed.
+    /// SONNY-3253 / SONNY-3314: each map on the list is pinned; the caller
+    /// lets the list go with `releaseIdMaps`, not a bare free: until then no
+    /// IdMap on it, nor its name, is freed.
     fn idMapsSnapshot(self: *GraphStore, allocator: std.mem.Allocator) ![]IdMapRef {
         const io = std.Io.Threaded.global_single_threaded.io();
         self.id_maps_lock.lockSharedUncancelable(io);
@@ -2543,9 +2548,11 @@ pub const GraphStore = struct {
         const out = try allocator.alloc(IdMapRef, self.id_maps.count());
         var it = self.id_maps.iterator();
         var i: usize = 0;
-        while (it.next()) |entry| : (i += 1) out[i] = .{ .graph_name = entry.key_ptr.*, .map = entry.value_ptr.* };
-        // Under the lock: a drop, which takes it exclusively, sees the walk.
-        _ = self.id_map_walkers.fetchAdd(1, .acq_rel);
+        while (it.next()) |entry| : (i += 1) {
+            out[i] = .{ .graph_name = entry.key_ptr.*, .map = entry.value_ptr.* };
+            // Under the lock: a drop, which takes it exclusively, sees it.
+            pinLocked(entry.value_ptr.*);
+        }
         return out;
     }
 
@@ -2560,51 +2567,143 @@ pub const GraphStore = struct {
         self.releaseIdMaps(allocator, refs);
     }
 
-    /// SONNY-3253 (round 15, F11): let an `idMapsSnapshot` list go. The last
-    /// walk out frees the IdMaps of graphs dropped meanwhile.
+    /// SONNY-3314: a test seam: resolve `node_id` to its graph as
+    /// hydrate-on-miss does (pinned), spin `spins` times as a hydration would
+    /// work, then copy the graph's name into `buf` and let the pin go.
+    pub fn resolveNodeGraphNameForTest(self: *GraphStore, node_id: u64, buf: []u8, spins: usize) ?[]const u8 {
+        const gs = self.resolveNodeGraphSlot(node_id) orelse return null;
+        defer self.unpinIdMap(gs.map);
+        var i: usize = 0;
+        while (i < spins) : (i += 1) std.atomic.spinLoopHint();
+        const n = @min(buf.len, gs.graph_name.len);
+        @memcpy(buf[0..n], gs.graph_name[0..n]);
+        return buf[0..n];
+    }
+
+    /// SONNY-3314: a test seam: register `graph_name` for first-touch
+    /// hydration (`ensureGraphHydrated` then rebuilds it), as a start-up with
+    /// no snapshot does.
+    pub fn markPendingHydrationForTest(self: *GraphStore, graph_name: []const u8) !void {
+        return self.markPendingHydration(graph_name);
+    }
+
+    /// SONNY-3253 (round 15, F11): let an `idMapsSnapshot` list go. The
+    /// last holder of a map dropped meanwhile frees it (SONNY-3314).
     fn releaseIdMaps(self: *GraphStore, allocator: std.mem.Allocator, refs: []IdMapRef) void {
+        for (refs) |ref| self.unpinIdMap(ref.map);
         allocator.free(refs);
-        if (self.id_map_walkers.fetchSub(1, .acq_rel) != 1) return;
+    }
+
+    // CANARY: REQ=REQ-SONNY-3314-IDMAP-PINS; FEATURE="IdMap"; ASPECT=PerMapHolders; STATUS=TESTED; TEST=tests/test_sonny3314_idmap_holders.zig; OWNER=storage; UPDATED=2026-09-28
+    /// SONNY-3314: pin `map` for a user outside its graph's lock. The caller
+    /// holds `id_maps_lock` (either side) and found `map` in `id_maps`: a
+    /// retired map is out of `id_maps`, so it never gains a holder.
+    fn pinLocked(map: *id_map_mod.IdMap) void {
+        _ = map.holders.fetchAdd(1, .seq_cst);
+    }
+
+    /// SONNY-3314: let a pin go. The last holder of a retired map frees it.
+    ///
+    /// No lost free: `retireLocked` counts the map as retired before it reads
+    /// `holders`, and this reads that count after taking its holder away
+    /// (both sequentially consistent). Either the retire sees no holder and
+    /// frees the map itself, or this sees the count and sweeps under the
+    /// exclusive lock, which waits for the retire to list the map.
+    pub fn unpinIdMap(self: *GraphStore, map: *id_map_mod.IdMap) void {
+        if (map.holders.fetchSub(1, .seq_cst) != 1) return;
+        if (self.retired_id_count.load(.seq_cst) == 0) return;
         const io = std.Io.Threaded.global_single_threaded.io();
         self.id_maps_lock.lockUncancelable(io);
         defer self.id_maps_lock.unlock(io);
-        // A walk that began since holds the lock's shared side to begin:
-        // under the exclusive side the count is exact.
-        if (self.id_map_walkers.load(.acquire) == 0) self.freeRetiredIdMaps();
+        self.sweepRetiredIdMaps();
+    }
+
+    /// SONNY-3314: free the retired maps nothing pins. Under `id_maps_lock`,
+    /// exclusively.
+    fn sweepRetiredIdMaps(self: *GraphStore) void {
+        var i: usize = 0;
+        while (i < self.retired_id_maps.items.len) {
+            const r = self.retired_id_maps.items[i];
+            if (r.map.holders.load(.seq_cst) != 0) {
+                i += 1;
+                continue;
+            }
+            _ = self.retired_id_maps.swapRemove(i);
+            self.freeIdMapEntry(r.graph_name, r.map);
+            _ = self.retired_id_count.fetchSub(1, .seq_cst);
+        }
+    }
+
+    fn freeIdMapEntry(self: *GraphStore, graph_name: []const u8, map: *id_map_mod.IdMap) void {
+        self.allocator.free(graph_name);
+        map.deinit();
+        self.allocator.destroy(map);
+    }
+
+    /// SONNY-3314: `map`, just taken out of `id_maps` with its key `graph_name`
+    /// (under `id_maps_lock`, exclusively), is retired: its contents are
+    /// freed, and the map and its name when nothing pins it, else when its
+    /// last holder lets go (`unpinIdMap`).
+    fn retireLocked(self: *GraphStore, graph_name: []const u8, map: *id_map_mod.IdMap) void {
+        map.releaseContents();
+        _ = self.retired_id_count.fetchAdd(1, .seq_cst);
+        if (map.holders.load(.seq_cst) == 0) {
+            self.freeIdMapEntry(graph_name, map);
+            _ = self.retired_id_count.fetchSub(1, .seq_cst);
+            return;
+        }
+        self.retired_id_maps.append(self.allocator, .{ .graph_name = graph_name, .map = map }) catch {
+            // No room to list it, and something holds it: it is never freed
+            // under a holder, so it is left (an empty IdMap and a name).
+            _ = self.retired_id_count.fetchSub(1, .seq_cst);
+            log.warn("a dropped graph's id map could not be listed for freeing; it is kept", &.{Attr.string("graph", graph_name)});
+        };
     }
 
     /// SONNY-3180: take `graph_name`'s IdMap out of `id_maps` (its graph is
-    /// dropped). Its contents are freed; the IdMap and its name are kept in
-    /// `retired_id_maps` until the store goes, for the walks that took them
-    /// before.
+    /// dropped) and retire it (`retireLocked`).
     fn retireIdMap(self: *GraphStore, graph_name: []const u8) void {
         const io = std.Io.Threaded.global_single_threaded.io();
         self.id_maps_lock.lockUncancelable(io);
         defer self.id_maps_lock.unlock(io);
         const kv = self.id_maps.fetchRemove(graph_name) orelse return;
-        kv.value.releaseContents();
-        // SONNY-3253 (round 15, F11): no walk holds it: freed now.
-        if (self.id_map_walkers.load(.acquire) == 0) {
-            self.allocator.free(kv.key);
-            kv.value.deinit();
-            self.allocator.destroy(kv.value);
-            return;
-        }
-        self.retired_id_maps.append(self.allocator, .{ .graph_name = kv.key, .map = kv.value }) catch {
-            // No room to keep it: free it as before SONNY-3180.
-            self.allocator.free(kv.key);
-            kv.value.deinit();
-            self.allocator.destroy(kv.value);
-        };
+        self.retireLocked(kv.key, kv.value);
     }
 
+    /// Free every retired map (the store goes).
     fn freeRetiredIdMaps(self: *GraphStore) void {
-        for (self.retired_id_maps.items) |r| {
-            self.allocator.free(r.graph_name);
-            r.map.deinit();
-            self.allocator.destroy(r.map);
-        }
+        for (self.retired_id_maps.items) |r| self.freeIdMapEntry(r.graph_name, r.map);
         self.retired_id_maps.clearRetainingCapacity();
+        self.retired_id_count.store(0, .seq_cst);
+    }
+
+    /// SONNY-3314: `getOrCreateIdMap`, pinned (let it go with `unpinIdMap`),
+    /// for a user that holds it outside its graph's lock: a first-touch
+    /// hydration.
+    fn pinOrCreateIdMap(self: *GraphStore, graph_name: []const u8) !*id_map_mod.IdMap {
+        const io = std.Io.Threaded.global_single_threaded.io();
+        {
+            self.id_maps_lock.lockSharedUncancelable(io);
+            defer self.id_maps_lock.unlockShared(io);
+            if (self.id_maps.get(graph_name)) |im| {
+                pinLocked(im);
+                return im;
+            }
+        }
+        self.id_maps_lock.lockUncancelable(io);
+        defer self.id_maps_lock.unlock(io);
+        if (self.id_maps.get(graph_name)) |im| {
+            pinLocked(im);
+            return im;
+        }
+        const key = try self.allocator.dupe(u8, graph_name);
+        errdefer self.allocator.free(key);
+        const im = try self.allocator.create(id_map_mod.IdMap);
+        errdefer self.allocator.destroy(im);
+        im.* = id_map_mod.IdMap.init(self.allocator);
+        try self.id_maps.put(key, im);
+        pinLocked(im);
+        return im;
     }
 
     fn requireIdMap(self: *GraphStore, graph_name: []const u8) !*id_map_mod.IdMap {
@@ -2846,17 +2945,24 @@ pub const GraphStore = struct {
     /// bulk-ingest case it is O(1). Returns null if no IdMap knows the id (the
     /// node was never persisted to an engine — e.g. a pure in-memory deployment
     /// with no adapter).
-    const GraphSlot = struct { graph_name: []const u8, slot_id: u64 };
+    ///
+    /// SONNY-3314 (round 16, I2): the map found is pinned, and with it the
+    /// name (`id_maps`'s key) returned: the caller lets it go with
+    /// `unpinIdMap(slot.map)`. Round 15 returned the name after the lock was
+    /// let go and freed a dropped graph's name and map when no walk ran, so a
+    /// hydrate-on-miss racing a DROP GRAPH read a freed name.
+    const GraphSlot = struct { graph_name: []const u8, slot_id: u64, map: *id_map_mod.IdMap };
     fn resolveNodeGraphSlot(self: *GraphStore, node_id: u64) ?GraphSlot {
         // SONNY-3180: under `id_maps_lock`, shared; the walk only reads the
-        // IdMaps (their own mutex), and a name stays valid after a drop.
+        // IdMaps (their own mutex).
         const io = std.Io.Threaded.global_single_threaded.io();
         self.id_maps_lock.lockSharedUncancelable(io);
         defer self.id_maps_lock.unlockShared(io);
         var it = self.id_maps.iterator();
         while (it.next()) |entry| {
             if (entry.value_ptr.*.nodeSlot(@as(u128, node_id))) |slot| {
-                return .{ .graph_name = entry.key_ptr.*, .slot_id = slot };
+                pinLocked(entry.value_ptr.*);
+                return .{ .graph_name = entry.key_ptr.*, .slot_id = slot, .map = entry.value_ptr.* };
             }
         }
         return null;
@@ -2879,6 +2985,7 @@ pub const GraphStore = struct {
         const self: *GraphStore = @ptrCast(@alignCast(ctx));
         const adapter = global_adapter orelse return null;
         const gs = self.resolveNodeGraphSlot(node_id) orelse return null;
+        defer self.unpinIdMap(gs.map);
         return materializeNodeFromEngine(adapter, allocator, gs.graph_name, gs.slot_id, node_id);
     }
 
@@ -2900,13 +3007,20 @@ pub const GraphStore = struct {
             error.NodeNotFound => return null,
             else => return err,
         };
-        errdefer {
+        // SONNY-3314 (round 16): the labels and the name copy are freed here
+        // until `node` owns them; from then on `freeNodeValue` frees them. Both
+        // ran on an error after the node was built (a DROP GRAPH racing this
+        // hydrate-on-miss fails the property read): a double free.
+        var parts_owned_here = true;
+        errdefer if (parts_owned_here) {
             for (labels) |l| allocator.free(l);
             allocator.free(labels);
-        }
+        };
 
         const graph_name_copy = try allocator.dupe(u8, graph_name);
-        errdefer allocator.free(graph_name_copy);
+        errdefer if (parts_owned_here) allocator.free(graph_name_copy);
+        const tenant_copy = try allocator.dupe(u8, DEFAULT_TENANT_ID);
+        errdefer if (parts_owned_here) allocator.free(tenant_copy);
 
         // GAP-0901: own the tenant_id. `freeNodeValue` (the node-cache free_fn,
         // run on grace-point reclaim of an evicted node) UNCONDITIONALLY frees
@@ -2922,14 +3036,19 @@ pub const GraphStore = struct {
             .labels = labels,
             .properties = CompactPropertyMap.init(allocator),
             .graph_name = graph_name_copy,
-            .tenant_id = try allocator.dupe(u8, DEFAULT_TENANT_ID),
+            .tenant_id = tenant_copy,
         };
+        parts_owned_here = false;
         errdefer freeNodeValue(allocator, &node);
 
         // Properties (all user-visible properties; internal keys are filtered by
         // the adapter's shouldExposePropertyKey).
         var props = adapter.getAllNodeProperties(graph_name, slot_id, allocator) catch |err| switch (err) {
-            error.NodeNotFound => return null,
+            error.NodeNotFound => {
+                // SONNY-3314: the node built so far is freed (it leaked).
+                freeNodeValue(allocator, &node);
+                return null;
+            },
             else => return err,
         };
         defer {
@@ -3245,6 +3364,7 @@ pub const GraphStore = struct {
         }
         const mut: *GraphStore = @constCast(self);
         const gs_slot = mut.resolveNodeGraphSlot(node_id) orelse return false;
+        defer mut.unpinIdMap(gs_slot.map);
         const tid = tenant orelse return true;
         const adapter = global_adapter orelse return false;
         const tprop = adapter.getNodeProperty(gs_slot.graph_name, gs_slot.slot_id, INTERNAL_TENANT_ID_PROPERTY_KEY, mut.allocator) catch return false;
@@ -3272,6 +3392,7 @@ pub const GraphStore = struct {
         }
         const mut: *GraphStore = @constCast(self);
         const gs_slot = mut.resolveNodeGraphSlot(node_id) orelse return null;
+        defer mut.unpinIdMap(gs_slot.map);
         const adapter = global_adapter orelse return null;
         const tprop = adapter.getNodeProperty(gs_slot.graph_name, gs_slot.slot_id, INTERNAL_TENANT_ID_PROPERTY_KEY, allocator) catch return null;
         if (tprop) |p| {
@@ -3303,6 +3424,7 @@ pub const GraphStore = struct {
         const self: *GraphStore = @ptrCast(@alignCast(ctx));
         const adapter = global_adapter orelse return null;
         const gs_slot = self.resolveNodeGraphSlot(node_id) orelse return null;
+        defer self.unpinIdMap(gs_slot.map);
         return hydrateAdjFromEngine(adapter, allocator, gs_slot.graph_name, gs_slot.slot_id, .outgoing);
     }
 
@@ -3311,6 +3433,7 @@ pub const GraphStore = struct {
         const self: *GraphStore = @ptrCast(@alignCast(ctx));
         const adapter = global_adapter orelse return null;
         const gs_slot = self.resolveNodeGraphSlot(node_id) orelse return null;
+        defer self.unpinIdMap(gs_slot.map);
         return hydrateAdjFromEngine(adapter, allocator, gs_slot.graph_name, gs_slot.slot_id, .incoming);
     }
 
@@ -3411,7 +3534,8 @@ pub const GraphStore = struct {
     // Mirrors the node-cache + Phase-0 adjacency-cache machinery above.
     // ========================================================================
 
-    const EdgeGraphSlot = struct { graph_name: []const u8, edge_slot: u64 };
+    /// SONNY-3314: `map` is pinned, as in `GraphSlot`.
+    const EdgeGraphSlot = struct { graph_name: []const u8, edge_slot: u64, map: *id_map_mod.IdMap };
 
     /// Resolve a PUBLIC edge id to its owning graph + ENGINE edge slot by
     /// scanning the per-graph IdMaps (fully resident, independent of the bounded
@@ -3424,7 +3548,8 @@ pub const GraphStore = struct {
         var it = self.id_maps.iterator();
         while (it.next()) |entry| {
             if (entry.value_ptr.*.edgeSlot(@as(u128, edge_id))) |slot| {
-                return .{ .graph_name = entry.key_ptr.*, .edge_slot = slot };
+                pinLocked(entry.value_ptr.*);
+                return .{ .graph_name = entry.key_ptr.*, .edge_slot = slot, .map = entry.value_ptr.* };
             }
         }
         return null;
@@ -3442,6 +3567,7 @@ pub const GraphStore = struct {
         const self: *GraphStore = @ptrCast(@alignCast(ctx));
         const adapter = global_adapter orelse return null;
         const egs = self.resolveEdgeGraphSlot(edge_id) orelse return null;
+        defer self.unpinIdMap(egs.map);
 
         const rec = (adapter.getEdgeRecordBySlot(egs.graph_name, egs.edge_slot, allocator) catch |err| switch (err) {
             error.GraphNotFound, error.NodeNotFound => return null,
@@ -3450,7 +3576,9 @@ pub const GraphStore = struct {
         // `rec.label` is owned by us from here; free it on any error path.
         errdefer allocator.free(rec.label);
 
-        const id_map = self.requireIdMap(egs.graph_name) catch return null;
+        // SONNY-3314: the map resolved (and pinned) above, not a second
+        // lookup by name.
+        const id_map = egs.map;
         // Map engine endpoint slots back to PUBLIC node ids. A missing mapping
         // (mid-load / mid-delete) means the edge isn't safely reconstructable.
         const from_id = @as(u64, @truncate(id_map.nodeUuid(rec.from_slot) orelse return null));
@@ -4221,6 +4349,35 @@ pub const GraphStore = struct {
         // changes dropped with the graph, and its COMMIT or ROLLBACK created
         // the graph again through the transaction graph's write lock.
         if (graphHeldByTxn(graph_name)) return error.ObjectInUse;
+        // CANARY: REQ=REQ-SONNY-3314-IDMAP-PINS; FEATURE="IdMap"; ASPECT=DropWaitsForHydration; STATUS=TESTED; TEST=tests/test_sonny3314_idmap_holders.zig; OWNER=storage; UPDATED=2026-09-28
+        // SONNY-3314 (round 16, I2): a first-touch hydration of this graph
+        // (which holds no graph lock) runs to its end before the drop, and
+        // none starts during it: the graph's hydration entry is held across
+        // the drop, and marked done when the graph is gone. The build took
+        // the entry, then `graphs_mutex` (`getGraphUuid`'s fallback once the
+        // adapter had dropped the graph), while the drop took `graphs_mutex`,
+        // then the entry (`clearNodesForGraph` -> `deleteNodeNoSave` ->
+        // `ensureNodeGraphHydrated`): the two deadlocked, and the build used
+        // the IdMap the drop freed. The drop's own node deletes skip the
+        // hydration (`t_dropping_graph`): there is nothing to build for a
+        // graph being dropped, and `ensureAllGraphsHydrated` from there took
+        // other graphs' entries under `graphs_mutex`, the same inversion.
+        const io_drop = std.Io.Threaded.global_single_threaded.io();
+        const hydration_entry: ?*HydrationEntry = blk: {
+            self.hydration_mutex.lockUncancelable(io_drop);
+            defer self.hydration_mutex.unlock(io_drop);
+            break :blk self.pending_hydration.get(graph_name);
+        };
+        if (hydration_entry) |e| e.mutex.lockUncancelable(io_drop);
+        defer if (hydration_entry) |e| e.mutex.unlock(io_drop);
+        var dropped = false;
+        // Runs before the unlock above: a first touch waiting for the entry
+        // sees the graph as done, not a build of a graph that is gone.
+        defer if (dropped) {
+            if (hydration_entry) |e| e.done.store(true, .release);
+        };
+        t_dropping_graph = true;
+        defer t_dropping_graph = false;
         self.graphs_mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
         defer self.graphs_mutex.unlock(std.Io.Threaded.global_single_threaded.io());
 
@@ -4248,10 +4405,12 @@ pub const GraphStore = struct {
             self.allocator.free(kv.key);
         }
         // Clean up IdMap for dropped graph
-        // SONNY-3180: under `id_maps_lock`; emptied and kept (`retireIdMap`).
+        // SONNY-3180 / SONNY-3314: under `id_maps_lock`; emptied, and freed
+        // once nothing pins it (`retireIdMap`).
         self.retireIdMap(graph_name);
         self.dirty.store(true, .release);
         incrementMutationEpoch();
+        dropped = true;
     }
 
     // CANARY: REQ=REQ-MULTI-GRAPH-004; FEATURE="MultiGraphIsolation"; ASPECT=CreateNode; STATUS=TESTED; TEST=geodetestlab/specs/multi_graph.yml; OWNER=engine; UPDATED=2025-12-22
@@ -5845,6 +6004,7 @@ pub const GraphStore = struct {
         // fall back to the resident cache when no adapter/IdMap is present
         // (pure in-memory deployments).
         if (self.resolveNodeGraphSlot(node_id)) |gs| {
+            defer self.unpinIdMap(gs.map);
             if (std.mem.eql(u8, gs.graph_name, graph_name)) {
                 out_node_id.* = node_id;
                 return .found;
@@ -5954,6 +6114,7 @@ pub const GraphStore = struct {
         // Eviction-independent existence + graph validation (mirrors
         // lookupMergeCandidate); no node-page read.
         if (self.resolveNodeGraphSlot(node_id)) |gs| {
+            defer self.unpinIdMap(gs.map);
             if (std.mem.eql(u8, gs.graph_name, graph_name)) {
                 out_node_id.* = node_id;
                 return .found;
@@ -11549,7 +11710,10 @@ pub const GraphStore = struct {
     /// IdMaps (no engine read). For by-id mutation entry points that carry no
     /// graph_name. No-op when the id maps to no graph (pure in-memory store).
     fn ensureNodeGraphHydrated(self: *GraphStore, node_id: u64) void {
+        // SONNY-3314: not from inside a DROP GRAPH (see `dropGraph`).
+        if (t_dropping_graph) return;
         if (self.resolveNodeGraphSlot(node_id)) |gs| {
+            defer self.unpinIdMap(gs.map);
             self.ensureGraphHydrated(gs.graph_name);
             return;
         }
@@ -11571,6 +11735,8 @@ pub const GraphStore = struct {
     /// edge cache's `graph_name` field, because hydration mutates the edge cache
     /// and could evict/free that string mid-call.
     fn ensureEdgeGraphHydrated(self: *GraphStore, edge_id: u64) void {
+        // SONNY-3314: not from inside a DROP GRAPH (see `dropGraph`).
+        if (t_dropping_graph) return;
         if (self.edges.get(edge_id)) |e| {
             self.ensureNodeGraphHydrated(e.from_id);
             return;
@@ -12947,7 +13113,11 @@ pub const GraphStore = struct {
             var legacy_map = try self.loadLegacyIdMap(graph_name);
             defer if (legacy_map) |*map| map.deinit();
 
-            const id_map = try self.getOrCreateIdMap(graph_name);
+            // SONNY-3314 (round 16, I2): pinned for the build: a hydration
+            // holds no graph lock, and a DROP GRAPH of this graph during it
+            // freed the map under it.
+            const id_map = try self.pinOrCreateIdMap(graph_name);
+            defer self.unpinIdMap(id_map);
             var backfilled_from_legacy = false;
             var skipped_node_mappings: u64 = 0;
             var skipped_edge_mappings: u64 = 0;

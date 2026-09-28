@@ -82,6 +82,12 @@ pub const IdMap = struct {
     // (Zig HashMap is not safe for concurrent readers + writers).
     mutex: std.Io.Mutex = std.Io.Mutex.init,
 
+    /// SONNY-3314 (round 16, I2): the users of this map that hold it outside
+    /// its graph's lock (a point resolve, a first-touch hydration, a walk
+    /// over every graph), pinned by `GraphStore` under its `id_maps_lock`.
+    /// A dropped graph's map is freed only when this reaches 0.
+    holders: std.atomic.Value(u32) = .init(0),
+
     // Node mappings
     node_uuid_to_slot: std.AutoHashMap(u128, u64),
     node_slot_to_uuid: std.AutoHashMap(u64, u128),
@@ -161,8 +167,7 @@ pub const IdMap = struct {
 
     /// SONNY-3180: free the map's contents, under its mutex, and leave it
     /// empty and usable: its graph was dropped, and the store keeps the
-    /// IdMap itself until it goes, for the walks over every graph that took
-    /// it before the drop.
+    /// IdMap itself while anything holds it (SONNY-3314: `holders`).
     pub fn releaseContents(self: *IdMap) void {
         self.lockMu();
         defer self.unlockMu();

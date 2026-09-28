@@ -1064,6 +1064,15 @@
     inline-property seek). A grouped HAVING chain is compared only with
     projected items and keys of its own length: 32 items of 4088 links took
     13 s to rewrite, now under 0.1 s (SONNY-3316).
+  - A dropped graph's id map and name are freed by their last holder: a
+    lookup of a node or edge by id (the bounded caches' hydrate-on-miss), a
+    first-touch hydration and a walk over every graph each hold the map they
+    use. Round 15 freed them while such a lookup or hydration still used
+    them (a use after free next to DROP GRAPH), and kept every dropped map
+    while any walk ran, which overlapping walks made forever. DROP GRAPH now
+    waits for a first-touch hydration of the graph and none starts during
+    it: the two could deadlock, and a hydrate-on-miss racing the drop freed
+    a node's labels twice (SONNY-3314).
 
 ### Fixed
 

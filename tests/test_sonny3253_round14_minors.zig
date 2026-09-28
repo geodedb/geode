@@ -5,7 +5,8 @@
 // install) freed every IdMap outright, breaking the address
 // `idMapsSnapshot` promises the walks that hold one. Now an IdMap no walk
 // holds is freed at DROP GRAPH; one a walk holds is freed when the last walk
-// lets its list go; `clearNodes` does the same.
+// lets its list go; `clearNodes` does the same. SONNY-3314 (round 16) made
+// the hold per map: a map not on a walk's list is freed at its drop.
 //
 // F13: the QUIC admission threads' stacks reserve `threads x stack` of
 // address space (4096 x 16 MiB = 64 GiB); a release build now takes 8 MiB,
@@ -23,6 +24,7 @@ const util = @import("proto_test_util.zig");
 const fx = @import("sonny738_r12_grpc_fixture.zig");
 
 const graph_store = geode.graph_store;
+const labels_z = [_][]const u8{"Z"};
 
 fn monoMs() u64 {
     var ts: std.os.linux.timespec = undefined;
@@ -51,19 +53,27 @@ test "SONNY-3253 (F11): a dropped graph's IdMap is freed when no walk holds it, 
     try churn(f.st, 200);
     std.debug.print("after 200 drops with no walk: retired={d}\n", .{f.st.retired_id_maps.items.len});
     try testing.expectEqual(@as(usize, 0), f.st.retired_id_maps.items.len);
-    // A walk holds the list across 50 drops: they are kept, then freed when
-    // it lets go.
-    const refs = try f.st.idMapsSnapshotForTest(testing.allocator);
+    // A walk lists 50 graphs, which are then dropped: they are kept, then
+    // freed when it lets go. SONNY-3314 (round 16, M1): a graph made and
+    // dropped after the walk began is not on its list, and is freed at once
+    // (round 15 kept it until no walk at all ran).
     var buf: [32]u8 = undefined;
     var i: usize = 0;
     while (i < 50) : (i += 1) {
         const name = try std.fmt.bufPrint(&buf, "held{d}", .{i});
         try f.st.createGraph(name);
+        _ = try f.st.createNodeWithGraph(&labels_z, name);
+    }
+    const refs = try f.st.idMapsSnapshotForTest(testing.allocator);
+    i = 0;
+    while (i < 50) : (i += 1) {
+        const name = try std.fmt.bufPrint(&buf, "held{d}", .{i});
         try f.st.dropGraph(name);
     }
+    try churn(f.st, 20);
     // The IdMaps the walk listed are still whole (their contents emptied).
     for (refs) |r| _ = r.map.nodeCount();
-    std.debug.print("50 drops while a walk holds the list: retired={d}\n", .{f.st.retired_id_maps.items.len});
+    std.debug.print("50 listed graphs dropped while a walk holds the list, and 20 unlisted ones: retired={d}\n", .{f.st.retired_id_maps.items.len});
     try testing.expectEqual(@as(usize, 50), f.st.retired_id_maps.items.len);
     f.st.releaseIdMapsForTest(testing.allocator, refs);
     try testing.expectEqual(@as(usize, 0), f.st.retired_id_maps.items.len);
