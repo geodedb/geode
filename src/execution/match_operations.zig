@@ -9851,6 +9851,14 @@ pub fn executeMatchQueryImpl(allocator: std.mem.Allocator, q: ast.Query, param_n
         // Fast path declined: this write-carrying query proceeds into the
         // legacy materializing scan (routing-table test signal).
         _ = g_legacy_write_scan_total.fetchAdd(1, .monotonic);
+        // CANARY: REQ=REQ-SONNY-3166-WRITE-ALLOWLIST; FEATURE="WriteStep"; ASPECT=ReturnAfterSet; STATUS=TESTED; TEST=tests/test_sonny_write_allowlist.zig; OWNER=engine; UPDATED=2026-09-27
+        // Task W round 3: a RETURN after a SET or REMOVE sees what was
+        // written. The traversals below evaluate the RETURN over the element
+        // they read before writing it, so `MATCH (u:User {id: $id}) SET
+        // u.gen = CASE ... u.gen + 1 END RETURN u.gen` returned the old value
+        // (go/oidc reads the value it just wrote back this way). The write
+        // step computes the RETURN after the writes, over the rows it wrote.
+        if (q.ret.items.len != 0) return executeSetRemoveStep(allocator, q, param_names, param_values, inline_let_bindings, current_graph);
     }
 
     // Extract pattern information from MATCH using helper function
