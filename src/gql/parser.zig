@@ -2460,18 +2460,24 @@ pub const Parser = struct {
 
         // Parse SET clauses if present (before RETURN)
         var set_clauses: []ast.SetClause = &.{};
+        var set_clause_ends: []const usize = &.{};
         if (self.cur.kind == .SET) {
             // SONNY-3146: consecutive SET clauses are one list, in order
             // (`SET n.x = 1 SET n.y = 2` was a syntax error). SONNY-3190:
             // appended to ONE list (rebuilding it per clause was quadratic),
-            // at most `max_write_clauses_per_part` clauses.
+            // at most `max_write_clauses_per_part` clauses. SONNY-3242: where
+            // each clause ends, when there are several (a later clause reads
+            // what an earlier one wrote).
             var all = std.ArrayList(ast.SetClause).empty;
+            var ends = std.ArrayList(usize).empty;
             while (self.cur.kind == .SET) {
                 try self.countWriteClause(&write_clauses);
                 self.advance();
                 try self.appendSetClauses(&all);
+                try ends.append(self.arena.allocator(), all.items.len);
             }
             set_clauses = try all.toOwnedSlice(self.arena.allocator());
+            if (ends.items.len > 1) set_clause_ends = try ends.toOwnedSlice(self.arena.allocator());
         }
 
         // Parse REMOVE clauses if present (before RETURN)
@@ -2717,6 +2723,7 @@ pub const Parser = struct {
             .with_where = with_where,
             .split_create = split_create,
             .set_clauses = set_clauses,
+            .set_clause_ends = set_clause_ends,
             .remove_clauses = remove_clauses,
             .delete_items = delete_items,
             .group_by = group_by,
@@ -4934,6 +4941,9 @@ pub const Parser = struct {
         // GAP-0220 FIX: Use try for proper error propagation
         var on_create = try std.ArrayList(ast.SetClause).initCapacity(self.arena.allocator(), 0);
         var on_match = try std.ArrayList(ast.SetClause).initCapacity(self.arena.allocator(), 0);
+        // SONNY-3242: where each SET clause of either list ends.
+        var on_create_ends = std.ArrayList(usize).empty;
+        var on_match_ends = std.ArrayList(usize).empty;
 
         while (self.cur.kind == .ON) {
             self.advance();
@@ -4943,11 +4953,13 @@ pub const Parser = struct {
                 _ = try self.expect(.SET);
                 const clauses = try self.parseSetClauses();
                 try on_create.appendSlice(self.arena.allocator(), clauses);
+                try on_create_ends.append(self.arena.allocator(), on_create.items.len);
             } else if (self.cur.kind == .MATCH) {
                 self.advance();
                 _ = try self.expect(.SET);
                 const clauses = try self.parseSetClauses();
                 try on_match.appendSlice(self.arena.allocator(), clauses);
+                try on_match_ends.append(self.arena.allocator(), on_match.items.len);
             } else {
                 return error.UnexpectedToken;
             }
@@ -4963,6 +4975,8 @@ pub const Parser = struct {
             const clauses = try self.parseSetClauses();
             try on_create.appendSlice(self.arena.allocator(), clauses);
             try on_match.appendSlice(self.arena.allocator(), clauses);
+            try on_create_ends.append(self.arena.allocator(), on_create.items.len);
+            try on_match_ends.append(self.arena.allocator(), on_match.items.len);
             set_is_bare = true;
         }
 
@@ -4988,6 +5002,8 @@ pub const Parser = struct {
             .on_match = try on_match.toOwnedSlice(self.arena.allocator()),
             .set_is_bare = set_is_bare,
             .return_clause = return_clause,
+            .on_create_ends = if (on_create_ends.items.len > 1) try on_create_ends.toOwnedSlice(self.arena.allocator()) else &.{},
+            .on_match_ends = if (on_match_ends.items.len > 1) try on_match_ends.toOwnedSlice(self.arena.allocator()) else &.{},
         } };
     }
 

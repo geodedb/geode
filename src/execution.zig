@@ -1564,7 +1564,7 @@ fn executeStatementWithContextInner(allocator: std.mem.Allocator, stmt: ast.Stat
         },
         .Insert => |ins| {
             const insert_graph = if (context.session_state) |session| session.graph else null;
-            return executeInsert(allocator, ins, insert_graph);
+            return executeInsert(allocator, ins, insert_graph, context);
         },
         .Delete => |d| {
             const delete_graph = if (context.session_state) |session| session.graph else null;

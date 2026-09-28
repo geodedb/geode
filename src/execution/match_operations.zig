@@ -828,7 +828,8 @@ fn fastPathClause(comptime field: []const u8) FastPathClause {
         // SONNY-3139 / SONNY-3184: what the part was parsed from (a SELECT, a
         // WHERE after an OPTIONAL MATCH); the fast paths check a read's shape
         // themselves.
-         "select_projection",   "optional_where",
+        // SONNY-3242: where each SET clause ends (comes only with a SET).
+         "select_projection",   "optional_where",    "set_clause_ends",
     };
     inline for (declines) |name| {
         if (comptime std.mem.eql(u8, name, field)) return .declines;
@@ -4180,7 +4181,7 @@ pub fn executeMatchCreateQuery(allocator: std.mem.Allocator, q: ast.Query, param
     defer if (rows_result.owned_graph_entities) |entities| entities.deinit();
 
     // SONNY-3043: the SET and REMOVE, on the matched and created variables.
-    try applySetRemoveOverRows(allocator, q.set_clauses, q.remove_clauses, &rows_result, param_names_arg, param_values_arg);
+    try applySetRemoveOverRows(allocator, q.set_clauses, q.set_clause_ends, q.remove_clauses, &rows_result, param_names_arg, param_values_arg);
 
     // SONNY-2694: a RETURN over the rows is computed before a DELETE the
     // statement carries removes what the rows bind.
@@ -9061,7 +9062,7 @@ fn readBindings(
             errdefer bindings.deinit(allocator);
             if (mode == .apply_set_remove and (q.set_clauses.len != 0 or q.remove_clauses.len != 0)) {
                 try stabilizeBindings(allocator, &bindings.rows);
-                try applySetRemoveOverRows(allocator, q.set_clauses, q.remove_clauses, &bindings.rows, param_names, param_values);
+                try applySetRemoveOverRows(allocator, q.set_clauses, q.set_clause_ends, q.remove_clauses, &bindings.rows, param_names, param_values);
             }
             return bindings;
         }
@@ -9306,7 +9307,7 @@ fn executeSetRemoveStep(
     var bindings = try readPatternRows(allocator, q, param_names, param_values, inline_let_bindings, current_graph);
     defer bindings.deinit(allocator);
     try stabilizeBindings(allocator, &bindings.rows);
-    try applySetRemoveOverRows(allocator, q.set_clauses, q.remove_clauses, &bindings.rows, param_names, param_values);
+    try applySetRemoveOverRows(allocator, q.set_clauses, q.set_clause_ends, q.remove_clauses, &bindings.rows, param_names, param_values);
     if (q.ret.items.len != 0) return projectReturnOverRows(allocator, q, &bindings.rows, param_names, param_values);
     const rows = bindings.rows;
     bindings.rows = .{ .columns = &.{}, .rows = &.{}, .flags = .empty };
@@ -9353,9 +9354,20 @@ fn checkWriteTarget(rows: ExecutionResult, target: []const u8, labels: bool) !us
 /// row, on the value the rows before it left; after the last row, every
 /// element written is read again, so a RETURN computed over the rows sees
 /// what was written.
+///
+/// CANARY: REQ=REQ-SONNY-3242-SET-SEMANTICS; FEATURE="SetClauseSemantics"; ASPECT=WriteStep; STATUS=TESTED; TEST=tests/test_sonny_write_allowlist_r4.zig; OWNER=engine; UPDATED=2026-09-28
+/// SONNY-3242 (round-3 review I2): one SET clause at a time
+/// (`ast.SetClauseGroups`, `set_ends`): every value of the clause is
+/// evaluated against the row as it stood before the clause, then its
+/// assignments apply, so `SET q.a = q.b, q.b = q.a` swaps and `SET q.a = 1,
+/// q.b = q.a` reads the old `a`; a later clause (`SET q.a = 1 SET q.b = q.a`)
+/// reads what the one before wrote. Each assignment used to re-read the row,
+/// so the values depended on the order within the clause, and on whether a
+/// RETURN routed the statement here.
 pub fn applySetRemoveOverRows(
     allocator: std.mem.Allocator,
     set_clauses: []const ast.SetClause,
+    set_ends: []const usize,
     remove_clauses: []const ast.RemoveClause,
     rows: *ExecutionResult,
     param_names: []const []const u8,
@@ -9374,42 +9386,52 @@ pub fn applySetRemoveOverRows(
     var written: WrittenElements = .{};
     defer written.deinit(allocator);
     const store = graph_store.getWritableGlobalStore(allocator);
+    // One clause's values, evaluated before any of its assignments.
+    var values: std.ArrayList(Value) = .empty;
+    defer values.deinit(allocator);
     for (rows.rows) |row| {
         try write_budget.check();
         // What the rows before this one wrote.
         for (row) |*cell| try written.refresh(allocator, rows, cell);
         const env = Env{ .names = rows.columns, .values = row, .param_names = param_names, .param_values = param_values, .allocator = allocator };
-        for (set_clauses) |sc| {
-            const cell = &row[columnIndex(rows.columns, setTarget(sc)).?];
-            switch (cell.*) {
-                .Node => |node| switch (sc) {
-                    .Property => |prop| {
-                        const value = try eval.evalExpr(allocator, prop.value, env);
-                        try property_mutation.setNodePropertyFromValue(allocator, store, node.labels, node.id, prop.target.property, value);
+        var groups = ast.SetClauseGroups.init(set_clauses, set_ends);
+        while (groups.next()) |group| {
+            // Every value against the row as it stands before the clause.
+            values.clearRetainingCapacity();
+            for (group) |sc| {
+                const cell = row[columnIndex(rows.columns, setTarget(sc)).?];
+                const bound = cell == .Node or cell == .Edge;
+                try values.append(allocator, if (!bound) .Null else switch (sc) {
+                    .Property => |prop| try eval.evalExpr(allocator, prop.value, env),
+                    .AllProperties => |ap| try eval.evalExpr(allocator, ap.properties, env),
+                    .Labels => .Null,
+                });
+            }
+            // Then the assignments.
+            for (group, values.items) |sc, value| {
+                const cell = &row[columnIndex(rows.columns, setTarget(sc)).?];
+                switch (cell.*) {
+                    .Node => |node| switch (sc) {
+                        .Property => |prop| try property_mutation.setNodePropertyFromValue(allocator, store, node.labels, node.id, prop.target.property, value),
+                        .Labels => |ls| for (ls.labels) |label| try store.addNodeLabel(node.id, label),
+                        .AllProperties => {
+                            const node_ptr = (store.nodes.getOrHydratePtr(node.id) catch null) orelse return error.NodeNotFound;
+                            try property_mutation.replaceNodeProperties(allocator, store, node_ptr, value);
+                        },
                     },
-                    .Labels => |ls| for (ls.labels) |label| try store.addNodeLabel(node.id, label),
-                    .AllProperties => |ap| {
-                        const props_value = try eval.evalExpr(allocator, ap.properties, env);
-                        const node_ptr = (store.nodes.getOrHydratePtr(node.id) catch null) orelse return error.NodeNotFound;
-                        try property_mutation.replaceNodeProperties(allocator, store, node_ptr, props_value);
+                    .Edge => |edge| switch (sc) {
+                        .Property => |prop| try property_mutation.setEdgePropertyFromValue(allocator, store, edge.label, edge.id, prop.target.property, value),
+                        .Labels => unreachable, // refused by checkWriteTarget
+                        .AllProperties => {
+                            const edge_ptr = store.getEdgePtrHydrated(edge.id) orelse return error.EdgeBodyUnresolvable;
+                            try property_mutation.replaceEdgeProperties(allocator, store, edge_ptr, value);
+                        },
                     },
-                },
-                .Edge => |edge| switch (sc) {
-                    .Property => |prop| {
-                        const value = try eval.evalExpr(allocator, prop.value, env);
-                        try property_mutation.setEdgePropertyFromValue(allocator, store, edge.label, edge.id, prop.target.property, value);
-                    },
-                    .Labels => unreachable, // refused by checkWriteTarget
-                    .AllProperties => |ap| {
-                        const props_value = try eval.evalExpr(allocator, ap.properties, env);
-                        const edge_ptr = store.getEdgePtrHydrated(edge.id) orelse return error.EdgeBodyUnresolvable;
-                        try property_mutation.replaceEdgeProperties(allocator, store, edge_ptr, props_value);
-                    },
-                },
-                else => continue, // null: nothing bound on this row
+                    else => continue, // null: nothing bound on this row
+                }
+                try written.add(allocator, cell.*);
             }
             // The next clause reads what this one wrote.
-            try written.add(allocator, cell.*);
             for (row) |*other| try written.refresh(allocator, rows, other);
         }
         for (remove_clauses) |rc| {
@@ -9968,7 +9990,18 @@ pub fn executeMatchQueryImpl(allocator: std.mem.Allocator, q: ast.Query, param_n
         // u.gen = CASE ... u.gen + 1 END RETURN u.gen` returned the old value
         // (go/oidc reads the value it just wrote back this way). The write
         // step computes the RETURN after the writes, over the rows it wrote.
-        if (q.ret.items.len != 0) return executeSetRemoveStep(allocator, q, param_names, param_values, inline_let_bindings, current_graph);
+        //
+        // CANARY: REQ=REQ-SONNY-3242-SET-SEMANTICS; FEATURE="SetClauseSemantics"; ASPECT=OneSetPath; STATUS=TESTED; TEST=tests/test_sonny_write_allowlist_r4.zig; OWNER=engine; UPDATED=2026-09-28
+        // SONNY-3242 (round-3 review I2): and without a RETURN too. Only a
+        // RETURN routed a SET here, so what `SET q.a = 1, q.b = q.a` or a swap
+        // wrote depended on whether the statement returned anything: the
+        // traversals below evaluated a clause against the element as they read
+        // it (a node) or as the clause before left it (a relationship). Every
+        // SET and REMOVE now runs in the write step, one clause at a time
+        // (`applySetRemoveOverRows`); the traversals' own SET and REMOVE are
+        // no longer reached. The point-write fast path above writes only
+        // literals, which read nothing.
+        return executeSetRemoveStep(allocator, q, param_names, param_values, inline_let_bindings, current_graph);
     }
 
     // Extract pattern information from MATCH using helper function

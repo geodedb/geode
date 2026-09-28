@@ -294,9 +294,9 @@ pub fn fieldRole(comptime field: []const u8) FieldRole {
         "select_projection",   "optional_where",
     };
     const nested = [_][]const u8{ "next_query", "for_statement", "initial_call_subquery", "cte_list" };
-    const read = [_][]const u8{
-        "let_bindings", "ret", "order_by", "limit", "offset", "limit_param", "offset_param", "has_recursive_cte",
-    };
+    // SONNY-3242: `set_clause_ends`, where each SET clause ends, orders the
+    // SET's evaluation only.
+    const read = [_][]const u8{ "let_bindings", "ret", "order_by", "limit", "offset", "limit_param", "offset_param", "has_recursive_cte", "set_clause_ends" };
     inline for (writes) |name| {
         if (comptime std.mem.eql(u8, name, field)) return .write;
     }
@@ -1039,11 +1039,14 @@ fn allowCreateStatement(ex: Executor, pattern: ast.GraphPattern, ret: ?ast.Retur
     patternExprFacts(&facts, pattern);
     if (ret) |r| for (r.items) |item| exprFacts(&facts, item.expr);
     _ = findShape(ex, facts, .{}) orelse return error.WriteClauseNotApplied;
-    // Every variable a property or the RETURN names is one the pattern binds.
+    // SONNY-3240: a chain's property map names only what the chains before it
+    // created (the executor binds each chain's variables after it); the RETURN
+    // names any variable of the pattern.
+    const empty = Names{};
+    if (!patternExprsBoundInOrder(pattern, &empty)) return error.WriteClauseNotApplied;
     var scope = Names{};
     addPatternNames(&scope, pattern);
     if (scope.overflow) return error.WriteClauseNotApplied;
-    if (!patternExprsBound(pattern, &scope)) return error.WriteClauseNotApplied;
     if (ret) |r| {
         for (r.items) |item| if (!exprBound(item.expr, &scope)) return error.WriteClauseNotApplied;
     }
@@ -1060,10 +1063,14 @@ fn allowMergeStatement(m: ast.MergeStatement, opts: Options) Error!void {
     if (opts.in_transaction and facts.intersectWith(label_facts).count() != 0) return error.WriteClauseNotApplied;
     _ = findShape(.merge_statement, facts, .{}) orelse return error.WriteClauseNotApplied;
     try checkMergeActions(m);
+    // SONNY-3240: as a CREATE's (`allowCreateStatement`); the ON CREATE, ON
+    // MATCH and bare SET clauses run after every chain, so they, and the
+    // RETURN, name any variable of the pattern.
+    const empty = Names{};
+    if (!patternExprsBoundInOrder(m.pattern, &empty)) return error.WriteClauseNotApplied;
     var scope = Names{};
     addPatternNames(&scope, m.pattern);
     if (scope.overflow) return error.WriteClauseNotApplied;
-    if (!patternExprsBound(m.pattern, &scope)) return error.WriteClauseNotApplied;
     for ([_][]const ast.SetClause{ m.on_create, m.on_match }) |actions| {
         for (actions) |sc| if (!setValueBound(sc, &scope)) return error.WriteClauseNotApplied;
     }
@@ -1244,6 +1251,9 @@ fn partFacts(facts: *Facts, q: ast.Query, ex: Executor) void {
             if (v) facts.insert(.select);
         } else if (comptime is(name, "optional_where")) {
             if (v) facts.insert(.optional_where);
+        } else if (comptime is(name, "set_clause_ends")) {
+            // Where each SET clause ends: the order the SET's values are
+            // evaluated in (every executor applies it), not a shape.
         } else {
             @compileError("SONNY-3166: classify ast.Query." ++ name ++ " for the write-shape allowlist (partFacts, write_shape.zig)");
         }
@@ -1727,6 +1737,26 @@ fn patternExprsBound(pattern: ast.GraphPattern, scope: *const Names) bool {
     return true;
 }
 
+// CANARY: REQ=REQ-SONNY-3240-WRITE-SCOPE; FEATURE="WriteScope"; ASPECT=ValidatorScope; STATUS=TESTED; TEST=tests/test_sonny_write_allowlist_r4.zig; OWNER=engine; UPDATED=2026-09-28
+/// SONNY-3240: every property map of a CREATE or MERGE pattern names only
+/// what `base` binds and what the chains before it bind: the executors
+/// (`write_scope.WriteScope`) bind a chain's variables once the chain is
+/// done, so a name a later chain introduces, or one of the same chain, is
+/// null there. This checker let every name of the pattern through, and the
+/// executors bound none of them.
+fn patternExprsBoundInOrder(pattern: ast.GraphPattern, base: *const Names) bool {
+    var scope = base.*;
+    for (pattern.chains) |chain| {
+        if (chain.head) |head| if (!nodeExprsBound(head, &scope)) return false;
+        for (chain.hops) |hop| {
+            if (!nodeExprsBound(hop.left, &scope) or !nodeExprsBound(hop.right, &scope)) return false;
+            if (hop.rel.props) |props| for (props) |p| if (!exprBound(p.value.*, &scope)) return false;
+        }
+        addChainNames(&scope, chain);
+    }
+    return !scope.overflow;
+}
+
 fn nodeExprsBound(n: ast.NodePattern, scope: *const Names) bool {
     if (n.props) |props| for (props) |p| if (!exprBound(p.value.*, scope)) return false;
     return true;
@@ -1871,13 +1901,17 @@ fn checkScope(q: ast.Query, part: ast.Query, ex: Executor, ctx: PartCtx, params:
         if (wc.order_by) |ob| for (ob.keys) |k| if (!exprBound(k.expr, &both)) return refuse;
         write_scope = post;
     }
+    // SONNY-3240: the CREATE's or MERGE's property maps are evaluated where the
+    // write stands (after a WITH before it, else over the pattern's rows), one
+    // chain at a time: a chain names what the chains before it created.
+    const pattern_scope: Names = if (post_with and !after_write) write_scope else pre;
+    if (part.create_pattern) |cp| if (!patternExprsBoundInOrder(cp, &pattern_scope)) return refuse;
+    if (part.merge_statement) |m| if (!patternExprsBoundInOrder(m.pattern, &pattern_scope)) return refuse;
     // After the WITH (or with none), the CREATE's and MERGE's own variables;
     // a WITH after the CREATE passed on the ones it keeps.
     if (!after_write) write_scope.addAll(&created);
     if (write_scope.overflow or pre.overflow or pattern_names.overflow or created.overflow or bound.overflow) return refuse;
-    if (part.create_pattern) |cp| if (!patternExprsBound(cp, &write_scope)) return refuse;
     if (part.merge_statement) |m| {
-        if (!patternExprsBound(m.pattern, &write_scope)) return refuse;
         for ([_][]const ast.SetClause{ m.on_create, m.on_match }) |actions| {
             for (actions) |sc| if (!setValueBound(sc, &write_scope)) return refuse;
         }

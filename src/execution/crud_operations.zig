@@ -5,6 +5,9 @@ const graph_store = @import("../graph_store.zig");
 const property_codec = @import("../property_value_codec.zig");
 const property_mutation = @import("property_mutation.zig");
 const write_precheck = @import("write_precheck.zig");
+const write_scope = @import("write_scope.zig");
+const write_walk = @import("write_walk.zig");
+const WriteScope = write_scope.WriteScope;
 // A4b: fulltext write-maintenance hook (delete postings on node DELETE).
 const fts_index_ops = @import("fts_index_ops.zig");
 const value_types = @import("../value_types.zig");
@@ -106,53 +109,6 @@ fn lookupNodeIdInQueryParams(context: ExecutionContext, name: []const u8) ?u64 {
     return null;
 }
 
-/// REQ=REQ-MERGE-RELPROPS-001 ASPECT=OnCreateSet/BareSetOnRelationship
-/// Apply MERGE SET clauses (`m.on_create` for newly created edges or
-/// `m.on_match` for matched edges; bare-SET duplicates both lists by
-/// construction in the parser) whose target binding name matches the
-/// relationship variable on the freshly merged edge.
-///
-/// SET clauses targeting a node variable are intentionally ignored here
-/// (the node MERGE branch above handles those). Only items whose target
-/// equals `rel_var_name` reach the edge property writer.
-fn applySetClausesToEdge(
-    allocator: std.mem.Allocator,
-    store: *graph_store.GraphStore,
-    rel_var_name: ?[]const u8,
-    edge_type: []const u8,
-    edge_id: u64,
-    set_items: []ast.SetClause,
-    context: ExecutionContext,
-) !void {
-    const var_name = rel_var_name orelse return;
-    if (set_items.len == 0) return;
-
-    // Statement-atomicity pre-pass — this clause list is all-or-nothing.
-    // CANARY: REQ=REQ-PROPERTY-WRITE-ATOMICITY; FEATURE="PropertyStorage"; ASPECT=SetPrePass; STATUS=TESTED; TEST=tests/test_property_write_atomicity.zig; OWNER=engine; UPDATED=2026-08-25
-    try write_precheck.checkSetClausesWritable(allocator, set_items, envFromContext(allocator, context), var_name, &.{});
-
-    for (set_items) |set_clause| {
-        switch (set_clause) {
-            .Property => |prop| {
-                if (!std.mem.eql(u8, prop.target.object, var_name)) continue;
-                const value = try eval.evalExpr(allocator, prop.value, envFromContext(allocator, context));
-                try property_mutation.setEdgePropertyFromValue(allocator, store, edge_type, edge_id, prop.target.property, value);
-            },
-            .AllProperties => |all_props| {
-                if (!std.mem.eql(u8, all_props.node, var_name)) continue;
-                const props_value = try eval.evalExpr(allocator, all_props.properties, envFromContext(allocator, context));
-                if (store.getEdgePtrHydrated(edge_id)) |edge_ptr| {
-                    try property_mutation.replaceEdgeProperties(allocator, store, edge_ptr, props_value);
-                }
-            },
-            .Labels => {
-                // Edges do not carry labels in the same shape as nodes; this
-                // form is parsed against node variables. Nothing to do here.
-            },
-        }
-    }
-}
-
 /// Evaluate a MERGE/MATCH pattern's inline properties into comparable `Value`s.
 ///
 /// OWNERSHIP CONTRACT — `arena_allocator` MUST be an arena the caller tears down
@@ -172,11 +128,16 @@ fn applySetClausesToEdge(
 /// correct for all three: owned allocations are reclaimed in one pass, borrowed
 /// and aliased ones are never touched.
 fn evaluatePatternProps(arena_allocator: std.mem.Allocator, props: ?[]ast.Property, context: ExecutionContext) !?[]EvaluatedPatternProp {
+    return evaluatePatternPropsIn(arena_allocator, props, envFromContext(arena_allocator, context));
+}
+
+/// `evaluatePatternProps` in `pattern_env` (SONNY-3240: a MERGE's scope, the
+/// variables its earlier chains bound).
+fn evaluatePatternPropsIn(arena_allocator: std.mem.Allocator, props: ?[]ast.Property, pattern_env: Env) !?[]EvaluatedPatternProp {
     const pattern_props = props orelse return null;
 
     const owned = try arena_allocator.alloc(EvaluatedPatternProp, pattern_props.len);
 
-    const pattern_env = envFromContext(arena_allocator, context);
     for (pattern_props, 0..) |prop, i| {
         owned[i] = .{
             .key = prop.key,
@@ -1134,8 +1095,15 @@ pub fn executeCreateForBatchWithTracking(allocator: std.mem.Allocator, create_pa
     // CANARY: REQ=REQ-PROPERTY-WRITE-ATOMICITY; FEATURE="PropertyStorage"; ASPECT=CreatePrePass; STATUS=TESTED; TEST=tests/test_property_write_atomicity.zig; OWNER=engine; UPDATED=2026-08-25
     try write_precheck.checkPatternWritable(allocator, create_pattern, row_env);
 
+    // SONNY-3240: a chain's property map sees the row and what the chains
+    // before it created (bound only when some property map names a variable).
+    const binds = write_walk.anyExpr(ast.GraphPattern, &create_pattern, write_walk.namesVariable);
+    var scope = if (binds) try WriteScope.initFrom(allocator, row_env) else WriteScope.init(allocator, &.{}, &.{});
+    defer scope.deinit();
+
     // Process CREATE pattern
     for (create_pattern.chains) |chain| {
+        const chain_env = if (binds) scope.env(allocator) else row_env;
         // Handle single node creation
         if (chain.head) |node_pattern| {
             // Check if this node already exists in matched bindings
@@ -1159,7 +1127,7 @@ pub fn executeCreateForBatchWithTracking(allocator: std.mem.Allocator, create_pa
             // Set properties if present
             if (node_pattern.props) |props| {
                 for (props) |prop| {
-                    const value = try eval.evalExpr(allocator, prop.value.*, row_env);
+                    const value = try eval.evalExpr(allocator, prop.value.*, chain_env);
                     try property_mutation.setNodePropertyFromValue(allocator, store, node_pattern.labels, node_id, prop.key, value);
                 }
             }
@@ -1189,14 +1157,14 @@ pub fn executeCreateForBatchWithTracking(allocator: std.mem.Allocator, create_pa
                     try created_nodes.put(var_name, new_id);
                     created_nodes_count += 1;
                     ensureAutoIndexes(allocator, hop.left.labels);
-                    try applyEndpointProps(allocator, store, hop.left, new_id, row_env);
+                    try applyEndpointProps(allocator, store, hop.left, new_id, chain_env);
                     break :blk new_id;
                 }
             } else blk: {
                 const new_id = try store.createNodeWithGraph(hop.left.labels, target_graph);
                 created_nodes_count += 1;
                 ensureAutoIndexes(allocator, hop.left.labels);
-                try applyEndpointProps(allocator, store, hop.left, new_id, row_env);
+                try applyEndpointProps(allocator, store, hop.left, new_id, chain_env);
                 break :blk new_id;
             };
 
@@ -1208,14 +1176,14 @@ pub fn executeCreateForBatchWithTracking(allocator: std.mem.Allocator, create_pa
                     try created_nodes.put(var_name, new_id);
                     created_nodes_count += 1;
                     ensureAutoIndexes(allocator, hop.right.labels);
-                    try applyEndpointProps(allocator, store, hop.right, new_id, row_env);
+                    try applyEndpointProps(allocator, store, hop.right, new_id, chain_env);
                     break :blk new_id;
                 }
             } else blk: {
                 const new_id = try store.createNodeWithGraph(hop.right.labels, target_graph);
                 created_nodes_count += 1;
                 ensureAutoIndexes(allocator, hop.right.labels);
-                try applyEndpointProps(allocator, store, hop.right, new_id, row_env);
+                try applyEndpointProps(allocator, store, hop.right, new_id, chain_env);
                 break :blk new_id;
             };
 
@@ -1235,7 +1203,7 @@ pub fn executeCreateForBatchWithTracking(allocator: std.mem.Allocator, create_pa
             // Set relationship properties if present
             if (hop.rel.props) |props| {
                 for (props) |prop| {
-                    const value = try eval.evalExpr(allocator, prop.value.*, row_env);
+                    const value = try eval.evalExpr(allocator, prop.value.*, chain_env);
                     try property_mutation.setEdgePropertyFromValue(allocator, store, edge_label, edge_id, prop.key, value);
                 }
             }
@@ -1247,6 +1215,9 @@ pub fn executeCreateForBatchWithTracking(allocator: std.mem.Allocator, create_pa
                 try created_relationships.put(rel_var_name, edge_value);
             }
         }
+
+        // SONNY-3240: what the chain created is in scope for the chains after it.
+        if (binds) try bindCreatedChain(store, &scope, chain, &created_nodes, &created_relationships);
     }
 
     if (batch_stmt_txn_open) try batch_stmt_txn.commit();
@@ -1485,6 +1456,16 @@ fn executeBatchCreateHomogeneous(
     };
 }
 
+/// SONNY-3242: a SET after a CREATE writes only a node the CREATE made (as
+/// the loop it replaced did).
+const CreatedNodeTargets = struct {
+    created: *const std.StringHashMap(u64),
+
+    pub fn applies(self: CreatedNodeTargets, name: []const u8) bool {
+        return self.created.contains(name);
+    }
+};
+
 // CANARY: REQ=REQ-MULTI-GRAPH-015; FEATURE="MultiGraphIsolation"; ASPECT=CreateQuery; STATUS=TESTED; TEST=geodetestlab/specs/multi_graph.yml; OWNER=engine; UPDATED=2025-12-22
 pub fn executeCreateQuery(
     allocator: std.mem.Allocator,
@@ -1567,6 +1548,12 @@ pub fn executeCreateQuery(
         .allocator = allocator,
     });
 
+    // SONNY-3240: as `executeCreate`: a chain's property map sees what the
+    // chains before it created.
+    var scope = WriteScope.init(allocator, param_names, param_values);
+    defer scope.deinit();
+    const binds = write_walk.anyExpr(ast.GraphPattern, &create_pattern, write_walk.namesVariable);
+
     // Create nodes from pattern
     for (create_pattern.chains) |chain| {
         // OWNERSHIP for the GAP-0930 pre-evaluation buffers in this chain.
@@ -1593,13 +1580,7 @@ pub fn executeCreateQuery(
             // NULL. Pre-evaluation is self-contained (no undo-log dependency):
             // if any expression errors, we return before the first store write.
             const evaluated_values: []Value = if (node_pattern.props) |props| blk_eval: {
-                const env = Env{
-                    .names = &.{},
-                    .values = &.{},
-                    .param_names = param_names,
-                    .param_values = param_values,
-                    .allocator = ca,
-                };
+                const env = scope.env(ca);
                 const buf = try ca.alloc(Value, props.len);
                 for (props, 0..) |prop, i| {
                     buf[i] = try eval.evalExpr(ca, prop.value.*, env);
@@ -1643,13 +1624,7 @@ pub fn executeCreateQuery(
             // edge, so a mid-property eval error aborts the whole relationship
             // CREATE atomically instead of committing partially-populated
             // endpoints with the failed property defaulted to NULL.
-            const hop_env = Env{
-                .names = &.{},
-                .values = &.{},
-                .param_names = param_names,
-                .param_values = param_values,
-                .allocator = ca,
-            };
+            const hop_env = scope.env(ca);
             const left_values: []Value = if (hop.left.props) |props| blk_lv: {
                 const buf = try ca.alloc(Value, props.len);
                 for (props, 0..) |prop, i| buf[i] = try eval.evalExpr(ca, prop.value.*, hop_env);
@@ -1752,6 +1727,9 @@ pub fn executeCreateQuery(
                 try created_relationships.put(rel_var_name, edge_value);
             }
         }
+
+        // SONNY-3240: what the chain created is in scope for the chains after it.
+        if (binds) try bindCreatedChain(store, &scope, chain, &created_nodes, &created_relationships);
     }
 
     // Apply WITH clause if present
@@ -1862,94 +1840,26 @@ pub fn executeCreateQuery(
         }, null, &.{});
     }
 
-    // Apply SET clauses if present
-    // If WITH clause exists, SET should work on the WITH result environment
-    for (q.set_clauses) |set_clause| {
-        switch (set_clause) {
-            .Property => |prop| {
-                if (created_nodes.get(prop.target.object)) |node_id| {
-                    // Create environment - if WITH is present, use WITH result; otherwise use created_nodes
-                    var names = std.ArrayList([]const u8).empty;
-                    var values = std.ArrayList(Value).empty;
-
-                    if (q.with_clause != null) {
-                        // Use WITH result columns and first row as environment
-                        for (result.columns, 0..) |col_name, idx| {
-                            try names.append(allocator, col_name);
-                            try values.append(allocator, result.rows[0][idx]);
-                        }
-                    } else {
-                        // Use created nodes as environment
-                        var iter = created_nodes.iterator();
-                        while (iter.next()) |entry| {
-                            try names.append(allocator, entry.key_ptr.*);
-                            const entry_node_id = entry.value_ptr.*;
-                            const entry_node = (store.nodes.getOrHydratePtr(entry_node_id) catch null) orelse return error.NodeNotFound;
-                            try values.append(allocator, Value{ .Node = entry_node });
-                        }
-                    }
-
-                    const env = Env{
-                        .names = names.items,
-                        .values = values.items,
-                        .param_names = param_names,
-                        .param_values = param_values,
-                        .allocator = allocator,
-                    };
-
-                    const value = try eval.evalExpr(allocator, prop.value, env);
-                    const node = (store.nodes.getOrHydratePtr(node_id) catch null) orelse return error.NodeNotFound;
-                    try property_mutation.setNodePropertyFromValue(allocator, store, node.labels, node_id, prop.target.property, value);
-                }
-            },
-            .Labels => |label_set| {
-                if (created_nodes.get(label_set.node)) |node_id| {
-                    for (label_set.labels) |label| {
-                        try store.addNodeLabel(node_id, label);
-                    }
-                }
-            },
-            .AllProperties => |all_props| {
-                if (created_nodes.get(all_props.node)) |node_id| {
-                    // Create environment - if WITH is present, use WITH result; otherwise use created_nodes
-                    var names = std.ArrayList([]const u8).empty;
-                    var values = std.ArrayList(Value).empty;
-
-                    if (q.with_clause != null) {
-                        // Use WITH result columns and first row as environment
-                        for (result.columns, 0..) |col_name, idx| {
-                            try names.append(allocator, col_name);
-                            try values.append(allocator, result.rows[0][idx]);
-                        }
-                    } else {
-                        // Use created nodes as environment
-                        var iter = created_nodes.iterator();
-                        while (iter.next()) |entry| {
-                            try names.append(allocator, entry.key_ptr.*);
-                            const entry_node_id = entry.value_ptr.*;
-                            const entry_node = (store.nodes.getOrHydratePtr(entry_node_id) catch null) orelse return error.NodeNotFound;
-                            try values.append(allocator, Value{ .Node = entry_node });
-                        }
-                    }
-
-                    const env = Env{
-                        .names = names.items,
-                        .values = values.items,
-                        .param_names = param_names,
-                        .param_values = param_values,
-                        .allocator = allocator,
-                    };
-
-                    // Evaluate the properties expression (should be a map literal)
-                    const props_value = try eval.evalExpr(allocator, all_props.properties, env);
-
-                    // Clear all existing properties by getting node and manually clearing
-                    if ((store.nodes.getOrHydratePtr(node_id) catch null)) |node| {
-                        try property_mutation.replaceNodeProperties(allocator, store, node, props_value);
-                    }
-                }
-            },
+    // CANARY: REQ=REQ-SONNY-3242-SET-SEMANTICS; FEATURE="SetClauseSemantics"; ASPECT=CreateThenSet; STATUS=TESTED; TEST=tests/test_sonny_write_allowlist_r4.zig; OWNER=engine; UPDATED=2026-09-28
+    // Apply SET clauses if present, on the nodes the CREATE made, in the
+    // environment of the WITH's row when there is one, else of the created
+    // nodes. SONNY-3242: one SET clause at a time (`write_scope.applySetGroups`):
+    // every value of a clause against the nodes as they stood before it. Each
+    // assignment read the live node, so `SET n.a = n.b, n.b = n.a` did not swap.
+    if (q.set_clauses.len > 0) {
+        var set_scope = WriteScope.init(allocator, param_names, param_values);
+        defer set_scope.deinit();
+        if (q.with_clause != null) {
+            if (result.rows.len > 0) {
+                for (result.columns, result.rows[0]) |col_name, value| try set_scope.bind(col_name, value);
+            }
+        } else {
+            var iter = created_nodes.iterator();
+            while (iter.next()) |entry| try set_scope.bindNode(store, entry.key_ptr.*, entry.value_ptr.*);
         }
+        // Detached boxes, read again after each clause.
+        try set_scope.refresh(store);
+        try write_scope.applySetGroups(allocator, store, q.set_clauses, q.set_clause_ends, &set_scope, CreatedNodeTargets{ .created = &created_nodes });
     }
 
     // Apply REMOVE clauses if present
@@ -2525,6 +2435,31 @@ fn clusterReplicateEdgeCreate(
     };
 }
 
+/// SONNY-3240: bind what `chain` of a CREATE or INSERT created (its named
+/// nodes as they are now, its named relationships) in `scope`, for the chains
+/// after it.
+fn bindCreatedChain(
+    store: *graph_store.GraphStore,
+    scope: *WriteScope,
+    chain: ast.Chain,
+    created_nodes: *const std.StringHashMap(u64),
+    created_relationships: ?*const std.StringHashMap(Value),
+) !void {
+    if (chain.head) |head| try bindCreatedNode(store, scope, head.name, created_nodes);
+    for (chain.hops) |hop| {
+        try bindCreatedNode(store, scope, hop.left.name, created_nodes);
+        try bindCreatedNode(store, scope, hop.right.name, created_nodes);
+        const rel = hop.rel.name orelse continue;
+        const rels = created_relationships orelse continue;
+        if (rels.get(rel)) |edge_value| try scope.bindEdge(store, rel, edge_value.Edge.id);
+    }
+}
+
+fn bindCreatedNode(store: *graph_store.GraphStore, scope: *WriteScope, name: ?[]const u8, created_nodes: *const std.StringHashMap(u64)) !void {
+    const n = name orelse return;
+    if (created_nodes.get(n)) |id| try scope.bindNode(store, n, id);
+}
+
 pub fn executeCreate(allocator: std.mem.Allocator, c: ast.CreateStatement, current_graph: ?[]const u8, context: ExecutionContext) !ExecutionResult {
     // Cluster write routing: in cluster mode the write is ordered through Raft
     // on the leader and never written to a single node's local store. A
@@ -2641,6 +2576,13 @@ pub fn executeCreate(allocator: std.mem.Allocator, c: ast.CreateStatement, curre
     var created_relationships = std.StringHashMap(Value).init(allocator);
     defer created_relationships.deinit();
 
+    // SONNY-3240: a chain's property map sees the variables the chains
+    // before it created (`CREATE (a:Z {k:1}), (b:Z {k: a.k+1})` gave b.k
+    // null). Bound only when some property map names a variable.
+    var scope = WriteScope.init(allocator, context.query_param_names, context.query_param_values);
+    defer scope.deinit();
+    const binds = write_walk.anyExpr(ast.GraphPattern, &c.pattern, write_walk.namesVariable);
+
     // Create nodes from pattern
     for (c.pattern.chains) |chain| {
         // OWNERSHIP for the GAP-0930 pre-evaluation buffers in this chain.
@@ -2670,7 +2612,7 @@ pub fn executeCreate(allocator: std.mem.Allocator, c: ast.CreateStatement, curre
             // stmt_txn_open stays false, so no engine txn would roll the node
             // back on error.
             const evaluated_values: []Value = if (node_pattern.props) |props| blk_ev: {
-                const env = envFromContext(ca, context);
+                const env = scope.env(ca);
                 const buf = try ca.alloc(Value, props.len);
                 for (props, 0..) |prop, i| buf[i] = try eval.evalExpr(ca, prop.value.*, env);
                 break :blk_ev buf;
@@ -2708,7 +2650,7 @@ pub fn executeCreate(allocator: std.mem.Allocator, c: ast.CreateStatement, curre
             // edge, so a mid-property eval error aborts the whole relationship
             // CREATE atomically rather than committing partially-populated
             // endpoints. Self-contained (no reliance on stmt_txn/undo-log).
-            const hop_env = envFromContext(ca, context);
+            const hop_env = scope.env(ca);
             const left_values: []Value = if (hop.left.props) |props| blk_lv: {
                 const buf = try ca.alloc(Value, props.len);
                 for (props, 0..) |prop, i| buf[i] = try eval.evalExpr(ca, prop.value.*, hop_env);
@@ -2819,6 +2761,9 @@ pub fn executeCreate(allocator: std.mem.Allocator, c: ast.CreateStatement, curre
                 try created_relationships.put(rel_var_name, edge_value);
             }
         }
+
+        // SONNY-3240: what the chain created is in scope for the chains after it.
+        if (binds) try bindCreatedChain(store, &scope, chain, &created_nodes, &created_relationships);
     }
 
     // Handle RETURN clause if present
@@ -2881,6 +2826,8 @@ pub fn executeCreate(allocator: std.mem.Allocator, c: ast.CreateStatement, curre
             .allocator = allocator,
             .names = names,
             .values = values,
+            .param_names = context.query_param_names,
+            .param_values = context.query_param_values,
         };
 
         // Execute RETURN with the created nodes and relationships in scope
@@ -2901,7 +2848,7 @@ pub fn executeCreate(allocator: std.mem.Allocator, c: ast.CreateStatement, curre
 }
 
 // CANARY: REQ=REQ-MULTI-GRAPH-019; FEATURE="MultiGraphIsolation"; ASPECT=ExecuteInsert; STATUS=TESTED; TEST=geodetestlab/specs/multi_graph.yml; OWNER=engine; UPDATED=2025-12-22
-pub fn executeInsert(allocator: std.mem.Allocator, ins: ast.InsertStatement, current_graph: ?[]const u8) !ExecutionResult {
+pub fn executeInsert(allocator: std.mem.Allocator, ins: ast.InsertStatement, current_graph: ?[]const u8, context: ExecutionContext) !ExecutionResult {
     // Cluster write routing: INSERT is not in the Raft-replicable slice yet, so
     // in cluster mode it must fail closed rather than be written to a single
     // node's local store (follower => ClusterNotLeader; leader => not
@@ -2923,8 +2870,18 @@ pub fn executeInsert(allocator: std.mem.Allocator, ins: ast.InsertStatement, cur
     try write_precheck.checkPatternWritable(
         allocator,
         ins.pattern,
-        Env{ .allocator = allocator, .names = &.{}, .values = &.{} },
+        envFromContext(allocator, context),
     );
+
+    // SONNY-3240: as `executeCreate`: a chain's property map sees what the
+    // chains before it created, and the parameters (INSERT had none: every
+    // `$param` read null).
+    var scope = WriteScope.init(allocator, context.query_param_names, context.query_param_values);
+    defer scope.deinit();
+    const binds = write_walk.anyExpr(ast.GraphPattern, &ins.pattern, write_walk.namesVariable);
+    // The relationships it created, by variable, for the chains after them.
+    var created_relationships = std.StringHashMap(Value).init(allocator);
+    defer created_relationships.deinit();
 
     // Create nodes from pattern
     for (ins.pattern.chains) |chain| {
@@ -2949,7 +2906,7 @@ pub fn executeInsert(allocator: std.mem.Allocator, ins: ast.InsertStatement, cur
             // node so an eval error aborts the INSERT atomically (no orphan node
             // with the failed property defaulted to NULL).
             const evaluated_values: []Value = if (node_pattern.props) |props| blk_ev: {
-                const env = Env{ .allocator = ca, .names = &.{}, .values = &.{} };
+                const env = scope.env(ca);
                 const buf = try ca.alloc(Value, props.len);
                 for (props, 0..) |prop, i| buf[i] = try eval.evalExpr(ca, prop.value.*, env);
                 break :blk_ev buf;
@@ -2978,7 +2935,7 @@ pub fn executeInsert(allocator: std.mem.Allocator, ins: ast.InsertStatement, cur
             // GAP-0930: pre-evaluate all endpoint + relationship property
             // expressions before creating any node/edge so an eval error aborts
             // the INSERT atomically instead of committing partial endpoints.
-            const hop_env = Env{ .allocator = ca, .names = &.{}, .values = &.{} };
+            const hop_env = scope.env(ca);
             const left_values: []Value = if (hop.left.props) |props| blk_lv: {
                 const buf = try ca.alloc(Value, props.len);
                 for (props, 0..) |prop, i| buf[i] = try eval.evalExpr(ca, prop.value.*, hop_env);
@@ -3081,7 +3038,14 @@ pub fn executeInsert(allocator: std.mem.Allocator, ins: ast.InsertStatement, cur
                     try property_mutation.setEdgePropertyFromValue(allocator, store, edge_type, edge_id, prop.key, value);
                 }
             }
+            if (binds) if (hop.rel.name) |rel_var_name| {
+                const edge_ptr = store.getEdgePtrHydrated(edge_id) orelse return error.EdgeNotFound;
+                try created_relationships.put(rel_var_name, Value{ .Edge = edge_ptr });
+            };
         }
+
+        // SONNY-3240: what the chain created is in scope for the chains after it.
+        if (binds) try bindCreatedChain(store, &scope, chain, &created_nodes, &created_relationships);
     }
 
     // Handle RETURN clause if present
@@ -3107,6 +3071,8 @@ pub fn executeInsert(allocator: std.mem.Allocator, ins: ast.InsertStatement, cur
             .allocator = allocator,
             .names = names,
             .values = values,
+            .param_names = context.query_param_names,
+            .param_values = context.query_param_values,
         };
 
         // Execute RETURN with the created nodes in scope
@@ -3132,31 +3098,74 @@ pub fn executeInsert(allocator: std.mem.Allocator, ins: ast.InsertStatement, cur
 fn resolveMergeSetProps(
     allocator: std.mem.Allocator,
     set_items: []const ast.SetClause,
+    set_ends: []const usize,
     var_name: ?[]const u8,
+    node: *graph_store.Node,
     context: ExecutionContext,
     out: *std.ArrayList(cluster_replication.Prop),
 ) !void {
     if (set_items.len == 0) return;
     const target_var = var_name orelse return error.ClusterWriteNotReplicable;
-    for (set_items) |set_clause| {
-        switch (set_clause) {
-            .Property => |prop| {
-                if (!std.mem.eql(u8, prop.target.object, target_var))
-                    return error.ClusterWriteNotReplicable;
-                const value = eval.evalExpr(allocator, prop.value, envFromContext(allocator, context)) catch
-                    return error.ClusterWriteNotReplicable;
-                // Statement-atomicity pre-pass: refuse an unstorable entry
-                // before the leader PROPOSES it, rather than letting every
-                // follower fail half-way through applying it.
-                // CANARY: REQ=REQ-PROPERTY-WRITE-ATOMICITY; FEATURE="PropertyStorage"; ASPECT=ClusterMergePrePass; STATUS=IMPL; OWNER=engine; UPDATED=2026-08-25
-                try write_precheck.checkPropertyWritable(allocator, &.{}, prop.target.property, value);
-                const pv = clusterPropValue(value) orelse return error.ClusterWriteNotReplicable;
-                try out.append(allocator, .{ .key = prop.target.property, .value = pv });
-            },
-            // SET label / SET = {map} are not in the replicable MERGE slice.
-            .Labels, .AllProperties => return error.ClusterWriteNotReplicable,
+    // SONNY-3240: the clauses read the merged node (`node`: the matched node's
+    // properties, or the created node's pattern properties, in an overlay the
+    // leader owns). SONNY-3242: one SET clause at a time: every value of a
+    // clause against the node as it stood before it; the overlay then takes
+    // the clause's values, for the next clause.
+    const names = [_][]const u8{target_var};
+    const values = [_]Value{.{ .Node = node }};
+    const env = Env{ .allocator = allocator, .names = &names, .values = &values, .param_names = context.query_param_names, .param_values = context.query_param_values };
+    var resolved: std.ArrayList(Value) = .empty;
+    defer resolved.deinit(allocator);
+    var groups = ast.SetClauseGroups.init(set_items, set_ends);
+    while (groups.next()) |group| {
+        resolved.clearRetainingCapacity();
+        for (group) |set_clause| {
+            switch (set_clause) {
+                .Property => |prop| {
+                    if (!std.mem.eql(u8, prop.target.object, target_var))
+                        return error.ClusterWriteNotReplicable;
+                    const value = eval.evalExpr(allocator, prop.value, env) catch
+                        return error.ClusterWriteNotReplicable;
+                    try resolved.append(allocator, value);
+                },
+                // SET label / SET = {map} are not in the replicable MERGE slice.
+                .Labels, .AllProperties => return error.ClusterWriteNotReplicable,
+            }
+        }
+        for (group, resolved.items) |set_clause, value| {
+            const prop = set_clause.Property;
+            // Statement-atomicity pre-pass: refuse an unstorable entry
+            // before the leader PROPOSES it, rather than letting every
+            // follower fail half-way through applying it.
+            // CANARY: REQ=REQ-PROPERTY-WRITE-ATOMICITY; FEATURE="PropertyStorage"; ASPECT=ClusterMergePrePass; STATUS=IMPL; OWNER=engine; UPDATED=2026-08-25
+            try write_precheck.checkPropertyWritable(allocator, &.{}, prop.target.property, value);
+            const pv = clusterPropValue(value) orelse return error.ClusterWriteNotReplicable;
+            try out.append(allocator, .{ .key = prop.target.property, .value = pv });
+            try node.properties.put(prop.target.property, property_codec.valueToPropertyValue(allocator, value) catch return error.ClusterWriteNotReplicable);
         }
     }
+}
+
+/// SONNY-3240: the merged node for the cluster MERGE's SET clauses to read:
+/// a copy the leader owns (in `arena`) of `base`'s properties (the node the
+/// MERGE matched), or of the pattern's (the node it creates, which exists
+/// only once the entry applies).
+fn clusterMergeOverlay(
+    arena: std.mem.Allocator,
+    base: ?*const graph_store.Node,
+    labels: [][]const u8,
+    pattern_props: ?[]const EvaluatedPatternProp,
+) !*graph_store.Node {
+    const node = try arena.create(graph_store.Node);
+    node.* = .{ .id = if (base) |b| b.id else 0, .labels = labels, .properties = graph_store.CompactPropertyMap.init(arena) };
+    if (base) |b| {
+        var it = b.properties.iterator();
+        while (it.next()) |entry| try node.properties.put(entry.key_ptr.*, entry.value_ptr.*);
+    }
+    if (pattern_props) |props| for (props) |prop| {
+        try node.properties.put(prop.key, property_codec.valueToPropertyValue(arena, prop.value) catch return error.ClusterWriteNotReplicable);
+    };
+    return node;
 }
 
 /// Replicate an eligible node `MERGE (:Label {props})` through Raft and return
@@ -3245,7 +3254,9 @@ fn clusterReplicateMerge(
         // payload applied idempotently by the leader-resolved stable id.
         var set_props = std.ArrayList(cluster_replication.Prop).empty;
         defer set_props.deinit(allocator);
-        try resolveMergeSetProps(allocator, m.on_match, node_pattern.name, context, &set_props);
+        const matched_node = read_store.getNodePtrForScan(node_id) orelse return error.NodeNotFound;
+        const overlay = try clusterMergeOverlay(prop_arena.allocator(), matched_node, node_pattern.labels, null);
+        try resolveMergeSetProps(prop_arena.allocator(), m.on_match, m.on_match_ends, node_pattern.name, overlay, context, &set_props);
         if (set_props.items.len == 0) return empty_result;
 
         const payload = cluster_replication.serializeMerge(allocator, target_graph, node_id, set_props.items) catch |err| switch (err) {
@@ -3283,7 +3294,8 @@ fn clusterReplicateMerge(
             try props.append(allocator, .{ .key = p.key, .value = pv });
         }
     }
-    try resolveMergeSetProps(allocator, m.on_create, node_pattern.name, context, &props);
+    const created_overlay = try clusterMergeOverlay(prop_arena.allocator(), null, node_pattern.labels, evaluated_props);
+    try resolveMergeSetProps(prop_arena.allocator(), m.on_create, m.on_create_ends, node_pattern.name, created_overlay, context, &props);
 
     const payload = cluster_replication.serializeNodeCreate(allocator, target_graph, node_pattern.labels, props.items) catch |err| switch (err) {
         cluster_replication.CodecError.UnsupportedPropertyType => return error.ClusterWriteNotReplicable,
@@ -3337,8 +3349,9 @@ fn logMergeCreatedEdge(allocator: std.mem.Allocator, edge_id: u64, target_graph:
 }
 
 /// Merge ONE single-node chain (`MERGE (a:Label {props})`): match-or-create the
-/// node, then apply the statement's ON MATCH / ON CREATE SET clauses that target
-/// this chain's variable.
+/// node. SONNY-3240: its property map is evaluated in `scope` (the variables
+/// the chains before it bound); the ON CREATE / ON MATCH / bare SET clauses
+/// run after every chain (`applyMergeActions`), with the merged node bound.
 // CANARY: REQ=REQ-MERGE-RELPROPS-001; FEATURE="MergeRelationship"; ASPECT=ChainedMergeEndpoints; STATUS=TESTED; TEST=tests/test_merge_relationship_bugs.zig; OWNER=execution; UPDATED=2026-08-24
 fn mergeNodeChain(
     allocator: std.mem.Allocator,
@@ -3347,8 +3360,7 @@ fn mergeNodeChain(
     target_graph: []const u8,
     filter_tenant: ?[]const u8,
     node_pattern: ast.NodePattern,
-    m: ast.MergeStatement,
-    context: ExecutionContext,
+    scope: *const WriteScope,
     visibility: *MergeVisibility,
 ) !MergedNodeBinding {
     // GAP-0900 Layer-3 (Fix 2): in lean-index mode the MERGE pattern keys
@@ -3361,22 +3373,18 @@ fn mergeNodeChain(
         for (pp) |prop| graph_store.registerMergeIndexKey(prop.key);
     }
 
-    // Look for existing node matching the pattern (filtered by graph)
-    var found_node: ?*graph_store.Node = null;
-    // Function-scoped evaluation arena. It backs BOTH the match predicate
-    // (`evaluatePatternProps`, see its ownership contract) and every apply-side
-    // `evalExpr` below: the pattern props and the ON CREATE / ON MATCH SET
-    // values are all handed to `setNodePropertyFromValue` /
-    // `replaceNodeProperties`, which DEEP-COPY into the store and never take
+    // Function-scoped evaluation arena. It backs the match predicate
+    // (`evaluatePatternProps`, see its ownership contract) and the create
+    // branch's property writes, which DEEP-COPY into the store and never take
     // ownership. Nothing evaluated here reaches `MergedNodeBinding` (ids and
     // the AST pattern only), so the arena outlives every consumer.
     var prop_arena = std.heap.ArenaAllocator.init(allocator);
     defer prop_arena.deinit();
     const pa = prop_arena.allocator();
-    const evaluated_props = try evaluatePatternProps(pa, node_pattern.props, context);
+    const evaluated_props = try evaluatePatternPropsIn(pa, node_pattern.props, scope.env(pa));
 
     // SONNY-2686: a node the session may not see is never bound, so none of
-    // the ON MATCH clauses below can reach it; a pattern that only such a node
+    // the ON MATCH clauses can reach it; a pattern that only such a node
     // matches refuses the statement here, before anything is written.
     if (try visibility.bindNode(findMergeMatch(
         read_store,
@@ -3386,108 +3394,57 @@ fn mergeNodeChain(
         evaluated_props,
         visibility,
     ), node_pattern.labels, evaluated_props)) |found_id| {
-        found_node = (read_store.nodes.getOrHydratePtr(found_id) catch null);
-    }
-
-    var node_id: u64 = undefined;
-    var created = false;
-
-    if (found_node) |node| {
-        // Node exists - apply ON MATCH clauses
-        node_id = node.id;
-        for (m.on_match) |set_clause| {
-            switch (set_clause) {
-                .Property => |prop| {
-                    if (node_pattern.name) |var_name| {
-                        if (std.mem.eql(u8, prop.target.object, var_name)) {
-                            // Evaluate the property expression
-                            const value = try eval.evalExpr(pa, prop.value, envFromContext(pa, context));
-                            const node_ptr = (store.nodes.getOrHydratePtr(node_id) catch null) orelse return error.NodeNotFound;
-                            try property_mutation.setNodePropertyFromValue(allocator, store, node_ptr.labels, node_id, prop.target.property, value);
-                        }
-                    }
-                },
-                .Labels => |label_set| {
-                    if (node_pattern.name) |var_name| {
-                        if (std.mem.eql(u8, label_set.node, var_name)) {
-                            for (label_set.labels) |label| {
-                                try store.addNodeLabel(node_id, label);
-                            }
-                        }
-                    }
-                },
-                .AllProperties => |all_props| {
-                    if (node_pattern.name) |var_name| {
-                        if (std.mem.eql(u8, all_props.node, var_name)) {
-                            // Evaluate the properties expression (should be a map literal)
-                            const props_value = try eval.evalExpr(pa, all_props.properties, envFromContext(pa, context));
-
-                            // Clear all existing properties by getting node and manually clearing
-                            if ((store.nodes.getOrHydratePtr(node_id) catch null)) |node_ptr| {
-                                try property_mutation.replaceNodeProperties(allocator, store, node_ptr, props_value);
-                            }
-                        }
-                    }
-                },
-            }
-        }
-    } else {
-        // Node doesn't exist - create it in target graph and apply ON CREATE clauses
-        created = true;
-        node_id = try store.createNodeWithGraph(node_pattern.labels, target_graph);
-        try logMergeCreatedNode(allocator, node_id, target_graph);
-
-        // Auto-create indexes for node labels
-        ensureAutoIndexes(allocator, node_pattern.labels);
-
-        // Set properties from pattern
-        if (node_pattern.props) |props| {
-            for (props) |prop| {
-                const value = try eval.evalExpr(pa, prop.value.*, envFromContext(pa, context));
-                try property_mutation.setNodePropertyFromValue(allocator, store, node_pattern.labels, node_id, prop.key, value);
-            }
-        }
-
-        // Apply ON CREATE clauses
-        for (m.on_create) |set_clause| {
-            switch (set_clause) {
-                .Property => |prop| {
-                    if (node_pattern.name) |var_name| {
-                        if (std.mem.eql(u8, prop.target.object, var_name)) {
-                            // Evaluate the property expression
-                            const value = try eval.evalExpr(pa, prop.value, envFromContext(pa, context));
-                            const node_ptr = (store.nodes.getOrHydratePtr(node_id) catch null) orelse return error.NodeNotFound;
-                            try property_mutation.setNodePropertyFromValue(allocator, store, node_ptr.labels, node_id, prop.target.property, value);
-                        }
-                    }
-                },
-                .Labels => |label_set| {
-                    if (node_pattern.name) |var_name| {
-                        if (std.mem.eql(u8, label_set.node, var_name)) {
-                            for (label_set.labels) |label| {
-                                try store.addNodeLabel(node_id, label);
-                            }
-                        }
-                    }
-                },
-                .AllProperties => |all_props| {
-                    if (node_pattern.name) |var_name| {
-                        if (std.mem.eql(u8, all_props.node, var_name)) {
-                            // Evaluate the properties expression (should be a map literal)
-                            const props_value = try eval.evalExpr(pa, all_props.properties, envFromContext(pa, context));
-
-                            // Clear all existing properties by getting node and manually clearing
-                            if ((store.nodes.getOrHydratePtr(node_id) catch null)) |node_ptr| {
-                                try property_mutation.replaceNodeProperties(allocator, store, node_ptr, props_value);
-                            }
-                        }
-                    }
-                },
-            }
+        if ((read_store.nodes.getOrHydratePtr(found_id) catch null) != null) {
+            return .{ .pattern = node_pattern, .node_id = found_id, .created = false };
         }
     }
 
-    return .{ .pattern = node_pattern, .node_id = node_id, .created = created };
+    // Node doesn't exist - create it in the target graph with the pattern's
+    // properties (evaluated above, in the same scope).
+    const node_id = try store.createNodeWithGraph(node_pattern.labels, target_graph);
+    try logMergeCreatedNode(allocator, node_id, target_graph);
+
+    // Auto-create indexes for node labels
+    ensureAutoIndexes(allocator, node_pattern.labels);
+
+    if (evaluated_props) |props| {
+        for (props) |prop| {
+            try property_mutation.setNodePropertyFromValue(allocator, store, node_pattern.labels, node_id, prop.key, prop.value);
+        }
+    }
+
+    return .{ .pattern = node_pattern, .node_id = node_id, .created = true };
+}
+
+/// SONNY-3240: which MERGE variables the statement created, and which it
+/// matched: ON CREATE SET applies to the first, ON MATCH SET to the second.
+const MergeBranch = struct {
+    created: *const std.StringHashMap(bool),
+    want_created: bool,
+
+    pub fn applies(self: MergeBranch, name: []const u8) bool {
+        const created = self.created.get(name) orelse return false;
+        return created == self.want_created;
+    }
+};
+
+// CANARY: REQ=REQ-SONNY-3240-WRITE-SCOPE; FEATURE="WriteScope"; ASPECT=MergeActions; STATUS=TESTED; TEST=tests/test_sonny_write_allowlist_r4.zig; OWNER=engine; UPDATED=2026-09-28
+/// SONNY-3240: a MERGE's ON CREATE SET, ON MATCH SET and bare SET, after every
+/// chain has merged (they follow the last MERGE clause), with every variable
+/// the pattern binds in `scope`: `MERGE (z:Z {k:1}) ON CREATE SET z.n = 0 ON
+/// MATCH SET z.n = z.n + 1` reads z (it read null: the clauses were evaluated
+/// with no variable bound). ON CREATE SET applies to each variable the MERGE
+/// created, ON MATCH SET to each it matched, one SET clause at a time
+/// (SONNY-3242, `write_scope.applySetGroups`).
+fn applyMergeActions(
+    allocator: std.mem.Allocator,
+    store: *graph_store.GraphStore,
+    m: ast.MergeStatement,
+    scope: *WriteScope,
+    created: *const std.StringHashMap(bool),
+) !void {
+    try write_scope.applySetGroups(allocator, store, m.on_create, m.on_create_ends, scope, MergeBranch{ .created = created, .want_created = true });
+    try write_scope.applySetGroups(allocator, store, m.on_match, m.on_match_ends, scope, MergeBranch{ .created = created, .want_created = false });
 }
 
 /// The node the statement's caller bound to the endpoint variable `name`: a
@@ -3534,20 +3491,32 @@ fn refuseHiddenMergeMatches(
     // it (no edge can join a node that does not exist yet).
     var known = std.StringHashMap(?u64).init(allocator);
     defer known.deinit();
+    // SONNY-3240: a chain's property map sees what the chains before it bound,
+    // as `executeMerge` evaluates it: here, the existing nodes they matched (a
+    // reference to one the statement will create reads null, and matches
+    // nothing: the inline check in `mergeNodeChain` answers for it).
+    var scope = WriteScope.init(allocator, context.query_param_names, context.query_param_values);
+    defer scope.deinit();
     for (m.pattern.chains) |chain| {
         // A chain's node is always matched (`mergeNodeChain`).
         if (chain.head) |node_pattern| {
-            const id = try preResolveMergeNode(allocator, read_store, target_graph, filter_tenant, node_pattern, context, visibility);
+            const id = try preResolveMergeNode(allocator, read_store, target_graph, filter_tenant, node_pattern, &scope, visibility);
             if (node_pattern.name) |name| try known.put(name, id);
+            if (node_pattern.name) |name| if (id) |found| try scope.bindNode(read_store, name, found);
         }
         for (chain.hops) |hop| {
-            const source = try preResolveMergeEndpoint(allocator, read_store, target_graph, filter_tenant, hop.left, context, visibility, &known);
-            const target = try preResolveMergeEndpoint(allocator, read_store, target_graph, filter_tenant, hop.right, context, visibility, &known);
+            const source = try preResolveMergeEndpoint(allocator, read_store, target_graph, filter_tenant, hop.left, context, &scope, visibility, &known);
+            const target = try preResolveMergeEndpoint(allocator, read_store, target_graph, filter_tenant, hop.right, context, &scope, visibility, &known);
             // P12: both endpoints exist, so the edge `mergeRelationshipHop`
             // would bind exists already: refuse now when only hidden edges
             // match, before an earlier chain writes anything.
             if (source != null and target != null) {
                 _ = try visibility.bindEdge(findExistingEdge(read_store, target_graph, filter_tenant, source.?, target.?, hop.rel.types, visibility), hop.rel);
+            }
+            for ([_]struct { ?[]const u8, ?u64 }{ .{ hop.left.name, source }, .{ hop.right.name, target } }) |end| {
+                if (end[0]) |name| if (end[1]) |found| {
+                    if (known.contains(name)) try scope.bindNode(read_store, name, found);
+                };
             }
         }
     }
@@ -3561,12 +3530,12 @@ fn preResolveMergeNode(
     target_graph: []const u8,
     filter_tenant: ?[]const u8,
     node_pattern: ast.NodePattern,
-    context: ExecutionContext,
+    scope: *const WriteScope,
     visibility: *MergeVisibility,
 ) !?u64 {
     var prop_arena = std.heap.ArenaAllocator.init(allocator);
     defer prop_arena.deinit();
-    const evaluated_props = try evaluatePatternProps(prop_arena.allocator(), node_pattern.props, context);
+    const evaluated_props = try evaluatePatternPropsIn(prop_arena.allocator(), node_pattern.props, scope.env(prop_arena.allocator()));
     return try visibility.bindNode(findMergeMatch(read_store, target_graph, filter_tenant, node_pattern.labels, evaluated_props, visibility), node_pattern.labels, evaluated_props);
 }
 
@@ -3582,6 +3551,7 @@ fn preResolveMergeEndpoint(
     filter_tenant: ?[]const u8,
     endpoint: ast.NodePattern,
     context: ExecutionContext,
+    scope: *const WriteScope,
     visibility: *MergeVisibility,
     known: *std.StringHashMap(?u64),
 ) !?u64 {
@@ -3591,7 +3561,7 @@ fn preResolveMergeEndpoint(
     }
     // Nothing to match on (`resolveMergeEndpoint` refuses it).
     if (endpoint.labels.len == 0 and endpoint.props == null) return null;
-    const id = try preResolveMergeNode(allocator, read_store, target_graph, filter_tenant, endpoint, context, visibility);
+    const id = try preResolveMergeNode(allocator, read_store, target_graph, filter_tenant, endpoint, scope, visibility);
     if (endpoint.name) |name| try known.put(name, id);
     return id;
 }
@@ -3622,6 +3592,7 @@ fn resolveMergeEndpoint(
     node_pattern: ast.NodePattern,
     context: ExecutionContext,
     merged_vars: *std.StringHashMap(u64),
+    scope: *const WriteScope,
     visibility: *MergeVisibility,
 ) !u64 {
     if (node_pattern.name) |name| {
@@ -3640,7 +3611,8 @@ fn resolveMergeEndpoint(
 
     var prop_arena = std.heap.ArenaAllocator.init(allocator);
     defer prop_arena.deinit();
-    const evaluated_props = try evaluatePatternProps(prop_arena.allocator(), node_pattern.props, context);
+    // SONNY-3240: in the scope of the chains before this one.
+    const evaluated_props = try evaluatePatternPropsIn(prop_arena.allocator(), node_pattern.props, scope.env(prop_arena.allocator()));
 
     if (try visibility.bindNode(findMergeMatch(
         read_store,
@@ -3658,20 +3630,23 @@ fn resolveMergeEndpoint(
     const node_id = try store.createNodeWithGraph(node_pattern.labels, target_graph);
     try logMergeCreatedNode(allocator, node_id, target_graph);
     ensureAutoIndexes(allocator, node_pattern.labels);
-    if (node_pattern.props) |props| {
-        const env = envFromContext(allocator, context);
+    if (evaluated_props) |props| {
         for (props) |prop| {
-            const value = try eval.evalExpr(allocator, prop.value.*, env);
-            try property_mutation.setNodePropertyFromValue(allocator, store, node_pattern.labels, node_id, prop.key, value);
+            try property_mutation.setNodePropertyFromValue(allocator, store, node_pattern.labels, node_id, prop.key, prop.value);
         }
     }
     if (node_pattern.name) |name| try merged_vars.put(name, node_id);
     return node_id;
 }
 
+/// What `mergeRelationshipHop` merged: its endpoints and its relationship.
+const MergedHop = struct { source_id: u64, target_id: u64, edge_id: u64, created: bool };
+
 /// Merge ONE relationship hop of a MERGE pattern: resolve both endpoints, then
-/// match-or-create the edge and persist inline rel props / the SET clauses that
-/// target the relationship variable.
+/// match-or-create the edge and persist its inline properties. SONNY-3240:
+/// the endpoints' and the relationship's property maps are evaluated in
+/// `scope`; the SET clauses on the relationship variable run after every
+/// chain (`applyMergeActions`).
 // CANARY: REQ=REQ-MERGE-RELPROPS-001; FEATURE="MergeRelationship"; ASPECT=MatchBoundEndpoints; STATUS=TESTED; TEST=tests/test_merge_relationship_bugs.zig; OWNER=execution; UPDATED=2026-08-24
 fn mergeRelationshipHop(
     allocator: std.mem.Allocator,
@@ -3680,15 +3655,15 @@ fn mergeRelationshipHop(
     target_graph: []const u8,
     filter_tenant: ?[]const u8,
     hop: ast.Hop,
-    m: ast.MergeStatement,
     context: ExecutionContext,
     merged_vars: *std.StringHashMap(u64),
+    scope: *const WriteScope,
     visibility: *MergeVisibility,
-) !void {
+) !MergedHop {
     const rel_types = hop.rel.types;
 
-    const source_id = try resolveMergeEndpoint(allocator, store, read_store, target_graph, filter_tenant, hop.left, context, merged_vars, visibility);
-    const target_id = try resolveMergeEndpoint(allocator, store, read_store, target_graph, filter_tenant, hop.right, context, merged_vars, visibility);
+    const source_id = try resolveMergeEndpoint(allocator, store, read_store, target_graph, filter_tenant, hop.left, context, merged_vars, scope, visibility);
+    const target_id = try resolveMergeEndpoint(allocator, store, read_store, target_graph, filter_tenant, hop.right, context, merged_vars, scope, visibility);
 
     const edge_type = if (rel_types.len > 0) rel_types[0] else "";
     // P12: an edge the session may not see is never bound; when only hidden
@@ -3705,10 +3680,7 @@ fn mergeRelationshipHop(
     ), hop.rel);
 
     // Pick the edge_id we will operate on: existing one (ON MATCH path)
-    // or a freshly created one (ON CREATE path). Either way we then
-    // apply inline rel props (create-only) plus the appropriate
-    // on_create/on_match SET clauses targeting the relationship
-    // variable.
+    // or a freshly created one (ON CREATE path).
     const created_new = existing_edge == null;
     const edge_id: u64 = if (existing_edge) |eid|
         eid
@@ -3723,7 +3695,7 @@ fn mergeRelationshipHop(
     // 861-873, 1249-1257, 1830-1838, 2058-2070).
     if (created_new) {
         if (hop.rel.props) |props| {
-            const env = envFromContext(allocator, context);
+            const env = scope.env(allocator);
             for (props) |prop| {
                 const value = try eval.evalExpr(allocator, prop.value.*, env);
                 try property_mutation.setEdgePropertyFromValue(allocator, store, edge_type, edge_id, prop.key, value);
@@ -3731,15 +3703,7 @@ fn mergeRelationshipHop(
         }
     }
 
-    // REQ=REQ-MERGE-RELPROPS-001 ASPECT=OnCreateSet/BareSetOnRelationship
-    // (Bugs B2, B3): apply SET items targeting the relationship
-    // variable. Bare SET (parser flag `set_is_bare`) duplicates the
-    // clauses into both on_create and on_match by construction
-    // (parser.zig:4575-4586), so picking the right list per branch
-    // and routing only items whose target binding name matches the
-    // rel variable name is correct for all three SET forms.
-    const rel_set_items: []ast.SetClause = if (created_new) m.on_create else m.on_match;
-    try applySetClausesToEdge(allocator, store, hop.rel.name, edge_type, edge_id, rel_set_items, context);
+    return .{ .source_id = source_id, .target_id = target_id, .edge_id = edge_id, .created = created_new };
 }
 
 // CANARY: REQ=REQ-MULTI-GRAPH-020; FEATURE="MultiGraphIsolation"; ASPECT=ExecuteMerge; STATUS=TESTED; TEST=geodetestlab/specs/multi_graph.yml; OWNER=engine; UPDATED=2025-12-22
@@ -3845,6 +3809,14 @@ pub fn executeMerge(allocator: std.mem.Allocator, m: ast.MergeStatement, current
     var merged_nodes = std.ArrayList(MergedNodeBinding).empty;
     defer merged_nodes.deinit(allocator);
 
+    // SONNY-3240: the variables the chains bind, for the chains after them,
+    // the SET clauses and the RETURN; and whether the MERGE created or matched
+    // each one (ON CREATE SET or ON MATCH SET).
+    var scope = WriteScope.init(allocator, context.query_param_names, context.query_param_values);
+    defer scope.deinit();
+    var created_vars = std.StringHashMap(bool).init(allocator);
+    defer created_vars.deinit();
+
     for (m.pattern.chains) |chain| {
         if (chain.head) |node_pattern| {
             const binding = try mergeNodeChain(
@@ -3854,33 +3826,50 @@ pub fn executeMerge(allocator: std.mem.Allocator, m: ast.MergeStatement, current
                 target_graph,
                 filter_tenant,
                 node_pattern,
-                m,
-                context,
+                &scope,
                 &visibility,
             );
-            if (node_pattern.name) |var_name| try merged_vars.put(var_name, binding.node_id);
+            if (node_pattern.name) |var_name| {
+                try merged_vars.put(var_name, binding.node_id);
+                try created_vars.put(var_name, binding.created);
+                try scope.bindNode(store, var_name, binding.node_id);
+            }
             try merged_nodes.append(allocator, binding);
         } else {
             // GAP #58: edge MERGE patterns (e.g. MATCH (a), (b) MERGE (a)-[:REL]->(b))
             // REQ=REQ-MERGE-RELPROPS-001 — endpoint resolution for MATCH-bound
-            // vars, and persistence of inline rel props / on_create / on_match /
-            // bare SET on the merged relationship variable.
+            // vars, and persistence of inline rel props; the SET clauses on
+            // the merged relationship variable run after every chain.
             for (chain.hops) |hop| {
-                try mergeRelationshipHop(
+                const merged = try mergeRelationshipHop(
                     allocator,
                     store,
                     read_store,
                     target_graph,
                     filter_tenant,
                     hop,
-                    m,
                     context,
                     &merged_vars,
+                    &scope,
                     &visibility,
                 );
+                // The endpoints this MERGE matched or created (not one its
+                // caller bound), and the relationship.
+                for ([_]struct { ?[]const u8, u64 }{ .{ hop.left.name, merged.source_id }, .{ hop.right.name, merged.target_id } }) |end| {
+                    const name = end[0] orelse continue;
+                    if (merged_vars.contains(name)) try scope.bindNode(store, name, end[1]);
+                }
+                if (hop.rel.name) |rel_name| {
+                    try created_vars.put(rel_name, merged.created);
+                    try scope.bindEdge(store, rel_name, merged.edge_id);
+                }
             }
         }
     }
+
+    // SONNY-3240: ON CREATE SET, ON MATCH SET and a bare SET, with every
+    // variable of the pattern bound.
+    try applyMergeActions(allocator, store, m, &scope, &created_vars);
 
     // Return the merged node(s) if there's a RETURN clause
     if (m.return_clause) |ret| {
@@ -3890,10 +3879,12 @@ pub fn executeMerge(allocator: std.mem.Allocator, m: ast.MergeStatement, current
             var rows = try allocator.alloc([]Value, 1);
             var row = try allocator.alloc(Value, ret.items.len);
 
-            // Create environment with the merged node(s) and the 'created' flag.
+            // The environment: the 'created' flag, then every variable the
+            // pattern bound, as written (SONNY-3240), then the parameters.
             // `created` reflects the LAST merged node chain (with the single-chain
             // form — the only shape that reached here before ENG-3903 — this is
             // exactly the previous behaviour).
+            try scope.refresh(store);
             var env_names = std.ArrayList([]const u8).empty;
             defer env_names.deinit(allocator);
             var env_values = std.ArrayList(Value).empty;
@@ -3901,29 +3892,15 @@ pub fn executeMerge(allocator: std.mem.Allocator, m: ast.MergeStatement, current
 
             try env_names.append(allocator, "created");
             try env_values.append(allocator, Value{ .Bool = merged_nodes.items[merged_nodes.items.len - 1].created });
-
-            for (merged_nodes.items, 0..) |binding, bi| {
-                const var_name = binding.pattern.name orelse continue;
-                // A variable merged more than once keeps its LAST binding.
-                var rebound = false;
-                for (merged_nodes.items[bi + 1 ..]) |later| {
-                    if (later.pattern.name) |later_name| {
-                        if (std.mem.eql(u8, later_name, var_name)) {
-                            rebound = true;
-                            break;
-                        }
-                    }
-                }
-                if (rebound) continue;
-                const node = (store.nodes.getOrHydratePtr(binding.node_id) catch null) orelse return error.NodeNotFound;
-                try env_names.append(allocator, var_name);
-                try env_values.append(allocator, Value{ .Node = node });
-            }
+            try env_names.appendSlice(allocator, scope.names.items);
+            try env_values.appendSlice(allocator, scope.values.items);
 
             const env = Env{
                 .allocator = allocator,
                 .names = env_names.items,
                 .values = env_values.items,
+                .param_names = context.query_param_names,
+                .param_values = context.query_param_values,
             };
 
             for (ret.items, 0..) |item, i| {
@@ -4227,21 +4204,48 @@ fn clusterReplicateMatchSet(
         var remove_labels = std.ArrayList([]const u8).empty;
         errdefer remove_labels.deinit(allocator);
 
-        for (q.set_clauses) |sc| {
-            switch (sc) {
-                .Property => |prop| {
-                    const val = eval.evalExpr(allocator, prop.value, env) catch
-                        return error.ClusterWriteNotReplicable;
-                    // Statement-atomicity pre-pass: refuse before PROPOSING.
-                    // CANARY: REQ=REQ-PROPERTY-WRITE-ATOMICITY; FEATURE="PropertyStorage"; ASPECT=ClusterSetPrePass; STATUS=IMPL; OWNER=engine; UPDATED=2026-08-25
-                    try write_precheck.checkPropertyWritable(allocator, &.{}, prop.target.property, val);
-                    const pv = clusterPropValue(val) orelse return error.ClusterWriteNotReplicable;
-                    try set_props.append(allocator, .{ .key = prop.target.property, .value = pv });
-                },
-                .Labels => |ls| {
-                    for (ls.labels) |label| try add_labels.append(allocator, label);
-                },
-                .AllProperties => unreachable, // rejected in the validation pass above
+        // SONNY-3242: one SET clause at a time. Every value of a clause is
+        // evaluated against the node as it stood before the clause (an overlay
+        // the leader owns, which then takes the clause's values for the next
+        // clause), so `SET n.a = n.b, n.b = n.a` swaps and `SET n.a = 1 SET
+        // n.b = n.a` reads the new a, as on a single node.
+        const overlay = try clusterMergeOverlay(match_prop_arena.allocator(), node, node.labels, null);
+        const overlay_names = [_][]const u8{match_var};
+        const overlay_values = [_]Value{Value{ .Node = overlay }};
+        const set_env = Env{
+            .allocator = allocator,
+            .names = &overlay_names,
+            .values = &overlay_values,
+            .param_names = context.query_param_names,
+            .param_values = context.query_param_values,
+        };
+        var group_values: std.ArrayList(Value) = .empty;
+        defer group_values.deinit(allocator);
+        var groups = ast.SetClauseGroups.init(q.set_clauses, q.set_clause_ends);
+        while (groups.next()) |group| {
+            group_values.clearRetainingCapacity();
+            for (group) |sc| {
+                try group_values.append(allocator, switch (sc) {
+                    .Property => |prop| eval.evalExpr(allocator, prop.value, set_env) catch
+                        return error.ClusterWriteNotReplicable,
+                    else => .Null,
+                });
+            }
+            for (group, group_values.items) |sc, val| {
+                switch (sc) {
+                    .Property => |prop| {
+                        // Statement-atomicity pre-pass: refuse before PROPOSING.
+                        // CANARY: REQ=REQ-PROPERTY-WRITE-ATOMICITY; FEATURE="PropertyStorage"; ASPECT=ClusterSetPrePass; STATUS=IMPL; OWNER=engine; UPDATED=2026-08-25
+                        try write_precheck.checkPropertyWritable(allocator, &.{}, prop.target.property, val);
+                        const pv = clusterPropValue(val) orelse return error.ClusterWriteNotReplicable;
+                        try set_props.append(allocator, .{ .key = prop.target.property, .value = pv });
+                        try overlay.properties.put(prop.target.property, property_codec.valueToPropertyValue(match_prop_arena.allocator(), val) catch return error.ClusterWriteNotReplicable);
+                    },
+                    .Labels => |ls| {
+                        for (ls.labels) |label| try add_labels.append(allocator, label);
+                    },
+                    .AllProperties => unreachable, // rejected in the validation pass above
+                }
             }
         }
         for (q.remove_clauses) |rc| {
@@ -4774,7 +4778,7 @@ pub fn executeMatchDeleteQuery(
         try match_operations.checkReturnBeforeDelete(allocator, q, &bindings.rows, param_names, param_values, deleted);
     }
 
-    try match_operations.applySetRemoveOverRows(allocator, q.set_clauses, q.remove_clauses, &bindings.rows, param_names, param_values);
+    try match_operations.applySetRemoveOverRows(allocator, q.set_clauses, q.set_clause_ends, q.remove_clauses, &bindings.rows, param_names, param_values);
 
     var returned: ?ExecutionResult = null;
     errdefer if (returned) |*r| r.deinit(allocator);
