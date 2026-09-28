@@ -293,3 +293,60 @@ test "SONNY-3319: a vector SET beside a label SET is checked against the new lab
     }
     try f.finish("SONNY-3319");
 }
+
+// ---------------------------------------------------------------------------
+// SONNY-3320 (I-2): chained MERGE actions belong to the last MERGE clause.
+
+const w_ref = "MATCH (w:W) RETURN w.k, w.ref";
+const w_m = "MATCH (w:W) RETURN w.k, w.m";
+
+/// go/oidc's statements (origin/main), as test_sonny_write_allowlist_r4.zig.
+const claim_jti = "MERGE (j:JTIClaim {tenant_id: 't1', jti: 'j1'}) ON CREATE SET j.expires_at = '2099-01-01T00:00:00.000000000Z', j.first_use = true ON MATCH SET j.first_use = CASE WHEN j.expires_at > '2026-09-28T00:00:00.000000000Z' THEN false ELSE true END, j.expires_at = '2099-01-01T00:00:00.000000000Z' RETURN j.first_use";
+const totp_enroll = "MERGE (t:TOTPEnrollment {tenant_id: 't1', user_id: 'u1', recovery_generation: 0}) ON CREATE SET t.totp_secret_enc = 'enc-1', t.verified = false, t.created_at = 'c1', t.verified_at = '' ON MATCH SET t.totp_secret_enc = CASE WHEN t.verified = true THEN t.totp_secret_enc ELSE 'enc-2' END, t.created_at = CASE WHEN t.verified = true THEN t.created_at ELSE 'c2' END, t.verified_at = CASE WHEN t.verified = true THEN t.verified_at ELSE '' END RETURN t.verified";
+const totp_mark_verified = "MATCH (t:TOTPEnrollment {tenant_id: 't1', user_id: 'u1', recovery_generation: 0, totp_secret_enc: 'enc-1'}) SET t.verified = true, t.verified_at = 'v1' RETURN t.user_id";
+
+const s3320_cases = [_]Case{
+    // The review's two data states: v0 matched and v1 created, the ON CREATE
+    // fires (it was dropped); v0 created and v1 matched, it does not (it
+    // wrote).
+    .{ .setup = &.{"CREATE (:W {k: 1})"}, .write = "MERGE (v0:W {k: 1}) MERGE (v1:W {k: 2}) ON CREATE SET v0.ref = v1.k + v0.k", .checks = &.{
+        .{ .query = w_ref, .want = &.{ "1|3", "2|null" } },
+    } },
+    .{ .setup = &.{"CREATE (:W {k: 2})"}, .write = "MERGE (v0:W {k: 1}) MERGE (v1:W {k: 2}) ON CREATE SET v0.ref = v1.k + v0.k", .checks = &.{
+        .{ .query = w_ref, .want = &.{ "1|null", "2|null" } },
+    } },
+    // ON MATCH, the same two states.
+    .{ .setup = &.{"CREATE (:W {k: 2})"}, .write = "MERGE (v0:W {k: 1}) MERGE (v1:W {k: 2}) ON MATCH SET v0.m = 1", .checks = &.{
+        .{ .query = w_m, .want = &.{ "1|1", "2|null" } },
+    } },
+    .{ .setup = &.{"CREATE (:W {k: 1})"}, .write = "MERGE (v0:W {k: 1}) MERGE (v1:W {k: 2}) ON MATCH SET v0.m = 1", .checks = &.{
+        .{ .query = w_m, .want = &.{ "1|null", "2|null" } },
+    } },
+    // Both, run twice: created, then matched.
+    .{ .write = "MERGE (v0:W {k: 1}) MERGE (v1:W {k: 2}) ON CREATE SET v1.m = 1 ON MATCH SET v1.m = v1.m + 1 RETURN v1.m", .times = 2, .want_first = &.{"1"}, .want = &.{"2"}, .checks = &.{
+        .{ .query = w_m, .want = &.{ "1|null", "2|2" } },
+    } },
+    // A relationship clause last: its actions follow the relationship.
+    .{ .write = "MERGE (a:W {k: 1}) MERGE (b:W {k: 2}) MERGE (a)-[r:T]->(b) ON CREATE SET a.ref = 1 ON MATCH SET a.ref = a.ref + 1", .times = 2, .checks = &.{
+        .{ .query = w_ref, .want = &.{ "1|2", "2|null" } },
+    } },
+    // go/oidc's single-MERGE statements: ClaimJTI's first claim and replay...
+    .{ .write = claim_jti, .times = 2, .want_first = &.{"true"}, .want = &.{"false"}, .checks = &.{
+        .{ .query = "MATCH (j:JTIClaim) RETURN j.jti, j.first_use, j.expires_at", .want = &.{"j1|false|2099-01-01T00:00:00.000000000Z"} },
+    } },
+    // ... an expired one re-claimed...
+    .{ .setup = &.{"CREATE (:JTIClaim {tenant_id: 't1', jti: 'j1', expires_at: '2000-01-01T00:00:00.000000000Z', first_use: false})"}, .write = claim_jti, .want = &.{"true"}, .checks = &.{
+        .{ .query = "MATCH (j:JTIClaim) RETURN j.first_use, j.expires_at", .want = &.{"true|2099-01-01T00:00:00.000000000Z"} },
+    } },
+    // ... TOTP: an unverified enrollment restarts, a verified one is kept.
+    .{ .write = totp_enroll, .times = 2, .want_first = &.{"false"}, .want = &.{"false"}, .checks = &.{
+        .{ .query = "MATCH (t:TOTPEnrollment) RETURN t.totp_secret_enc, t.verified, t.created_at", .want = &.{"enc-2|false|c2"} },
+    } },
+    .{ .setup = &.{ totp_enroll, totp_mark_verified }, .write = totp_enroll, .times = 2, .want = &.{"true"}, .checks = &.{
+        .{ .query = "MATCH (t:TOTPEnrollment) RETURN t.totp_secret_enc, t.verified, t.created_at, t.verified_at", .want = &.{"enc-1|true|c1|v1"} },
+    } },
+};
+
+test "SONNY-3320: chained MERGE actions fire as the last MERGE clause created or matched, in every session" {
+    try runCases("SONNY-3320", &s3320_cases);
+}

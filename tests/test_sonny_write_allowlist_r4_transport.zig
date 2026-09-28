@@ -181,6 +181,16 @@ const cases = [_]Case{
         .{ .query = "MATCH (a:L)-[:LR]->(b:L), (q:LQ {i: 0}) DETACH DELETE q" },
         .{ .query = "MATCH (q:LQ) RETURN count(q) AS c", .want = "3" },
     } },
+    // SONNY-3320: chained MERGE actions follow the last MERGE clause.
+    .{ .name = "3320 chained MERGE", .steps = &.{
+        .{ .query = "CREATE (:LW {k: 1})" },
+        .{ .query = "MERGE (v0:LW {k: 1}) MERGE (v1:LW {k: 2}) ON CREATE SET v0.ref = v1.k + v0.k ON MATCH SET v0.m = 1" },
+        .{ .query = "MATCH (w:LW) RETURN w.k, w.ref, w.m", .want = "1|3|null;2|null|null" },
+        .{ .query = "MERGE (v0:LW {k: 3}) MERGE (v1:LW {k: 2}) ON CREATE SET v0.ref = 9 ON MATCH SET v0.m = 1" },
+        .{ .query = "MATCH (w:LW {k: 3}) RETURN w.ref, w.m", .want = "null|1" },
+        .{ .query = claim_jti, .want = "true" },
+        .{ .query = claim_jti, .want = "false" },
+    } },
     // I8.
     .{ .name = "I8 nesting", .steps = &.{
         .{ .query = "WITH 1 AS a WITH 1 AS a WITH 1 AS a WITH 1 AS a WITH 1 AS a WITH 1 AS a WITH 1 AS a WITH 1 AS a WITH 1 AS a WITH 1 AS a WITH 1 AS a WITH 1 AS a WITH 1 AS a WITH 1 AS a WITH 1 AS a WITH 1 AS a WITH 1 AS a WITH 1 AS a WITH 1 AS a WITH 1 AS a WITH 1 AS a WITH 1 AS a WITH 1 AS a WITH 1 AS a WITH 1 AS a RETURN a", .code = "54001" },

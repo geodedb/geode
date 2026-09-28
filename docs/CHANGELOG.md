@@ -1147,6 +1147,15 @@
   labels the node carries with the SET's own labels, the write is refused
   before anything is stored (22000), and an index name is copied before a
   rebuild.
+- **Chained MERGE actions fire on the last MERGE clause (SONNY-3320):**
+  round 4a keyed ON CREATE / ON MATCH on each target variable's own state,
+  so `MERGE (v0:W {k: 1}) MERGE (v1:W {k: 2}) ON CREATE SET v0.ref = ...`
+  wrote nothing when v1 was created and v0 matched, and wrote when v0 was
+  created and v1 matched. The actions belong to the last MERGE clause (the
+  parser ends a run of MERGE clauses at the first action): ON CREATE SET
+  runs when that clause created any part of its pattern, ON MATCH SET when
+  it matched it, on whichever variable they name. A single MERGE (go/oidc's
+  ClaimJTI and TOTP statements) is unchanged.
 - **The parser's limits (SONNY-3244):** parsing runs before authorization,
   and 25,000 `MATCH (n:G) SET n.x = 1;` statements (625 KB) took a 741 MB
   parser arena, so a 16 MB request could hold about 19 GB; about 60 chained

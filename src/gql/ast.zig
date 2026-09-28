@@ -482,6 +482,12 @@ pub const MergeStatement = struct {
     // empty for one clause or none (`SetClauseGroups`).
     on_create_ends: []const usize = &.{},
     on_match_ends: []const usize = &.{},
+    // SONNY-3320: the index in `pattern.chains` of the first chain of the
+    // last MERGE clause, when the statement chains more than one
+    // (`MERGE (a) MERGE (b) ON CREATE SET ...`): the ON CREATE / ON MATCH
+    // actions belong to that clause, and fire as it created or matched its
+    // pattern. Null for a single MERGE clause (the whole pattern).
+    last_clause_start: ?usize = null,
 };
 
 pub const CallProcedure = struct {

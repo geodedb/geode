@@ -5024,6 +5024,7 @@ pub const Parser = struct {
         // because those clauses bind to the MERGE that introduced them.
         // CANARY: REQ=REQ-MERGE-RELPROPS-001; FEATURE="MergeRelationship"; ASPECT=ChainedMergeClauses; STATUS=TESTED; TEST=tests/test_merge_relationship_bugs.zig; OWNER=parser; UPDATED=2026-08-24
         var pattern: ast.GraphPattern = undefined;
+        var last_clause_start: ?usize = null;
         {
             var merge_chains = std.ArrayList(ast.Chain).empty;
             const first_pattern = try self.parseGraphPattern();
@@ -5035,6 +5036,8 @@ pub const Parser = struct {
             while (self.cur.kind == .MERGE) {
                 try self.countWriteClause(&write_clauses);
                 self.advance();
+                // SONNY-3320: where the last clause starts (its actions' clause).
+                last_clause_start = merge_chains.items.len;
                 const next_pattern = try self.parseGraphPattern();
                 for (next_pattern.chains) |chain| {
                     try merge_chains.append(self.arena.allocator(), chain);
@@ -5110,6 +5113,7 @@ pub const Parser = struct {
             .return_clause = return_clause,
             .on_create_ends = if (on_create_ends.items.len > 1) try on_create_ends.toOwnedSlice(self.arena.allocator()) else &.{},
             .on_match_ends = if (on_match_ends.items.len > 1) try on_match_ends.toOwnedSlice(self.arena.allocator()) else &.{},
+            .last_clause_start = last_clause_start,
         } };
     }
 

@@ -3416,15 +3416,14 @@ fn mergeNodeChain(
     return .{ .pattern = node_pattern, .node_id = node_id, .created = true };
 }
 
-/// SONNY-3240: which MERGE variables the statement created, and which it
-/// matched: ON CREATE SET applies to the first, ON MATCH SET to the second.
+/// SONNY-3240, SONNY-3320: whether an action list runs: ON CREATE SET when
+/// the MERGE clause the actions belong to created its pattern, ON MATCH SET
+/// when it matched it. It then applies to any variable the statement binds.
 const MergeBranch = struct {
-    created: *const std.StringHashMap(bool),
-    want_created: bool,
+    fires: bool,
 
-    pub fn applies(self: MergeBranch, name: []const u8) bool {
-        const created = self.created.get(name) orelse return false;
-        return created == self.want_created;
+    pub fn applies(self: MergeBranch, _: []const u8) bool {
+        return self.fires;
     }
 };
 
@@ -3433,18 +3432,26 @@ const MergeBranch = struct {
 /// chain has merged (they follow the last MERGE clause), with every variable
 /// the pattern binds in `scope`: `MERGE (z:Z {k:1}) ON CREATE SET z.n = 0 ON
 /// MATCH SET z.n = z.n + 1` reads z (it read null: the clauses were evaluated
-/// with no variable bound). ON CREATE SET applies to each variable the MERGE
-/// created, ON MATCH SET to each it matched, one SET clause at a time
-/// (SONNY-3242, `write_scope.applySetGroups`).
+/// with no variable bound). One SET clause at a time (SONNY-3242,
+/// `write_scope.applySetGroups`).
+///
+/// CANARY: REQ=REQ-SONNY-3320-MERGE-CLAUSE-ACTIONS; FEATURE="WriteScope"; ASPECT=MergeActionsPerClause; STATUS=TESTED; TEST=tests/test_sonny_write_allowlist_r4b.zig; OWNER=engine; UPDATED=2026-09-28
+/// SONNY-3320: the actions belong to the last MERGE clause (the parser ends
+/// a run of MERGE clauses at the first action), so ON CREATE SET runs when
+/// that clause created its pattern (`clause_created`) and ON MATCH SET when
+/// it matched it, on whichever variable they name. They were keyed on each
+/// target variable's own state, so `MERGE (v0:W {k: 1}) MERGE (v1:W {k: 2})
+/// ON CREATE SET v0.ref = ...` wrote nothing when v1 was created and v0
+/// matched, and wrote when v0 was created and v1 matched.
 fn applyMergeActions(
     allocator: std.mem.Allocator,
     store: *graph_store.GraphStore,
     m: ast.MergeStatement,
     scope: *WriteScope,
-    created: *const std.StringHashMap(bool),
+    clause_created: bool,
 ) !void {
-    try write_scope.applySetGroups(allocator, store, m.on_create, m.on_create_ends, scope, MergeBranch{ .created = created, .want_created = true });
-    try write_scope.applySetGroups(allocator, store, m.on_match, m.on_match_ends, scope, MergeBranch{ .created = created, .want_created = false });
+    try write_scope.applySetGroups(allocator, store, m.on_create, m.on_create_ends, scope, MergeBranch{ .fires = clause_created });
+    try write_scope.applySetGroups(allocator, store, m.on_match, m.on_match_ends, scope, MergeBranch{ .fires = !clause_created });
 }
 
 /// The node the statement's caller bound to the endpoint variable `name`: a
@@ -3814,10 +3821,13 @@ pub fn executeMerge(allocator: std.mem.Allocator, m: ast.MergeStatement, current
     // each one (ON CREATE SET or ON MATCH SET).
     var scope = WriteScope.init(allocator, context.query_param_names, context.query_param_values);
     defer scope.deinit();
-    var created_vars = std.StringHashMap(bool).init(allocator);
-    defer created_vars.deinit();
+    // SONNY-3320: whether the last MERGE clause created any part of its
+    // pattern (its actions' branch).
+    const last_clause_start = m.last_clause_start orelse 0;
+    var clause_created = false;
 
-    for (m.pattern.chains) |chain| {
+    for (m.pattern.chains, 0..) |chain, chain_index| {
+        const in_last_clause = chain_index >= last_clause_start;
         if (chain.head) |node_pattern| {
             const binding = try mergeNodeChain(
                 allocator,
@@ -3829,9 +3839,9 @@ pub fn executeMerge(allocator: std.mem.Allocator, m: ast.MergeStatement, current
                 &scope,
                 &visibility,
             );
+            if (in_last_clause and binding.created) clause_created = true;
             if (node_pattern.name) |var_name| {
                 try merged_vars.put(var_name, binding.node_id);
-                try created_vars.put(var_name, binding.created);
                 try scope.bindNode(store, var_name, binding.node_id);
             }
             try merged_nodes.append(allocator, binding);
@@ -3859,17 +3869,15 @@ pub fn executeMerge(allocator: std.mem.Allocator, m: ast.MergeStatement, current
                     const name = end[0] orelse continue;
                     if (merged_vars.contains(name)) try scope.bindNode(store, name, end[1]);
                 }
-                if (hop.rel.name) |rel_name| {
-                    try created_vars.put(rel_name, merged.created);
-                    try scope.bindEdge(store, rel_name, merged.edge_id);
-                }
+                if (in_last_clause and merged.created) clause_created = true;
+                if (hop.rel.name) |rel_name| try scope.bindEdge(store, rel_name, merged.edge_id);
             }
         }
     }
 
     // SONNY-3240: ON CREATE SET, ON MATCH SET and a bare SET, with every
     // variable of the pattern bound.
-    try applyMergeActions(allocator, store, m, &scope, &created_vars);
+    try applyMergeActions(allocator, store, m, &scope, clause_created);
 
     // Return the merged node(s) if there's a RETURN clause
     if (m.return_clause) |ret| {
