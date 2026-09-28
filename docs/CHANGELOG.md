@@ -1007,6 +1007,50 @@
   - **Behaviour change:** a SET or REMOVE on the variable-length relationship
     variable (the list of its edges) or on a path variable is refused with
     0A000; it was ignored. In a multi-hop pattern too (SONNY-3045).
+- **Statements that write are accepted only in allowlisted shapes
+  (SONNY-3139, SONNY-3146, SONNY-3166, SONNY-3182, SONNY-3183, SONNY-3184,
+  SONNY-3190):** the write-shape validator of the fixes below refused the
+  write shapes known to be broken, and each review found more that wrote the
+  wrong rows or dropped a write: a SELECT projection before a write made it
+  write every matched row; a path DELETE deleted nothing in a plain
+  persisted session (the default server); the parser split a statement in
+  two where no `;` was, and ran the tail as a statement of its own with its
+  variables unbound (`... SET q.x = 1 DETACH DELETE q` dropped the DELETE,
+  `... SET ... MATCH (q:Q) DELETE q` deleted every :Q, a trailing CREATE made
+  unlinked nodes); a write inside an IN subquery, a RETURN or a CTE body ran
+  unchecked, once per outer row, under the read lock; `WITH 5 AS k ... WHERE
+  n.i = $k` read 5, not the client's `$k`; `UNWIND l AS n MATCH (n:G) SET`
+  wrote every :G; an unbound variable was read as null (`WITH nosuch AS k
+  ... SET` wrote nothing, `SET n.y = nosuch` stored null); a WHERE after an
+  OPTIONAL MATCH filtered the whole row. The validator is now an ALLOWLIST: a
+  statement that writes is accepted only when its whole shape is one of the
+  shapes listed under Known limitations below, each verified in the
+  in-memory, plain persisted, tenant-scoped and RLS-policy sessions; anything
+  else is refused with 0A000 before anything is written.
+  - **Behaviour change:** a statement ends at a `;` (SONNY-3166). Two
+    statements without one between them are a syntax error, in a program and
+    in a `START TRANSACTION { ... }` body.
+  - **A program is checked whole before any statement runs (SONNY-3166):** a
+    later statement's refusal came after an earlier one had written.
+  - **No write inside an expression (SONNY-3182):** an IN or NOT IN subquery
+    that writes, anywhere (a WHERE, a SET value, a RETURN, a property map),
+    and a CTE body that writes are refused, in a read too, and the lock, the
+    read-only floor and the cluster gate classify such a statement as a
+    write.
+  - **The write fast paths serve only an allowlisted shape (SONNY-3166):**
+    QUIC's bulk-ingest CREATE and MERGE, the key-resolved MERGE and
+    `/*+BATCH*/` skip the executor; each now serves a statement only when the
+    validator accepts it, and checks its own shape by a compile-time walk
+    over every field of the statement.
+  - **A parse is linear in its clauses (SONNY-3190):** consecutive SET,
+    REMOVE and CREATE clauses rebuilt the clause list for each new clause
+    (32,000 SET clauses took 40 s and about 62 GB, before authorization).
+    They are appended to one list, and a query part may carry at most 1024
+    SET, REMOVE, CREATE and MERGE clauses (54000 beyond).
+  - **A UNION's later parts run over the first part's bindings by one rule
+    (SONNY-3183):** the executor decided by what the first part returned and
+    the validator by whether it had a CREATE, so a FOR body's CREATE in the
+    first part dropped a later part's write the validator had accepted.
 - **A SET or REMOVE after a WITH writes only the rows the WITH keeps
   (SONNY-3039, SONNY-3140, SONNY-3141, SONNY-3142):** the traversals wrote as
   they read, before the WITH, the WHERE after it, and its ORDER BY and LIMIT
@@ -1034,7 +1078,9 @@
   every matched row (SONNY-3041):** those executors never read the SET and
   REMOVE clauses, so the statement returned its rows and wrote nothing. They
   run in the one write step; a variable an OPTIONAL MATCH did not bind is
-  skipped on that row.
+  skipped on that row. The OPTIONAL MATCH accepted before a write is one
+  chain, after the MATCH, that shares a variable with it, with no WHERE after
+  it (SONNY-3184).
 - **One validator decides, before a statement runs, whether each part's
   executor applies all of its writes (SONNY-3139 .. SONNY-3146):** the guard
   of the previous fix sat in some executors only, so the executors that did
@@ -1047,8 +1093,8 @@
   one table that the executor applies every write clause (CREATE, MERGE and
   its ON CREATE / ON MATCH SET, SET, REMOVE, DELETE), that every SET, REMOVE
   and DELETE target is bound in that part to a node or a relationship, and
-  that it honours every WITH feature before the write. Anything else is
-  refused with 0A000 before anything is written.
+  that it honours every WITH feature before the write. (It refused only the
+  shapes it modelled; the allowlist above replaces that.)
   - **An initial WITH is bound before the pattern (SONNY-3139):** a SET or
     REMOVE after `WITH ... MATCH` wrote every matched row (the initial WITH
     was applied as a projection after the traversal had written, and the
@@ -1057,7 +1103,8 @@
     replaced by the MATCH's. A statement that writes after an initial WITH
     now evaluates the WITH once and runs with its values bound as parameters;
     its WHERE, SKIP and LIMIT decide whether the statement writes at all,
-    under PROFILE too.
+    under PROFILE too. A SELECT projection is not an initial WITH: a write
+    after one is refused (it wrote every matched row).
   - **UNWIND before a write runs once per element (SONNY-3144):** no executor
     applied an UNWIND before a write: `WITH $rows AS rows UNWIND rows AS r
     CREATE (:U {id: r.id})` created one node with every property null, and
@@ -1067,18 +1114,17 @@
     cannot start with UNWIND (it is not GQL): write `FOR r IN $rows CREATE
     ...`.
   - **A WHERE on a disconnected OPTIONAL MATCH filters after it
-    (SONNY-3144):** `MATCH (q:Q) OPTIONAL MATCH (n:G) WHERE n.i = q.i SET
-    n.x = 1` returned no row and wrote nothing, on reads too: the WHERE was
-    evaluated on the first MATCH's rows, before n was bound, because only the
-    variables of an OPTIONAL MATCH relationship were looked for. A WHERE that
-    names any variable only a later pattern binds is applied after the
-    optional matching.
-  - **A DELETE of a path or a variable-length relationship deletes its
-    elements (SONNY-3146):** `MATCH p = (a)-[:R]->(b) DETACH DELETE p` and
-    `DELETE r` on `-[r:R*1..2]->` deleted nothing (with a SET beside it, the
-    SET ran and the DELETE was dropped). A path deletes its nodes and edges,
-    a variable-length relationship its edges; without DETACH a path whose
-    nodes have edges refuses NodeHasEdges before anything is written.
+    (SONNY-3144):** `MATCH (q:Q) OPTIONAL MATCH (n:G) WHERE n.i = q.i RETURN
+    ...` returned no row: the WHERE was evaluated on the first MATCH's rows,
+    before n was bound. A WHERE that names any variable only a later pattern
+    binds is applied after the optional matching. It still filters the whole
+    row, not the optional part (SONNY-3184), so a write after it is refused.
+  - **A DELETE of a variable-length relationship deletes its edges
+    (SONNY-3146):** `DELETE r` on `-[r:R*1..2]->` deleted nothing (with a SET
+    beside it, the SET ran and the DELETE was dropped). A DELETE of a path
+    (`DETACH DELETE p`) is refused with 0A000: it deleted nothing in a plain
+    persisted session, nor a single-node path or a path in a later comma
+    chain in any session.
   - **No CREATE clause is lost (SONNY-3146):** a CREATE after a DELETE
     replaced a CREATE before it (`... CREATE (z:Z) DELETE q CREATE (w:W)`
     never created z). The parser keeps both, and the statement is refused.
@@ -1172,49 +1218,75 @@
   `geode.rls.add_attribute_policy` add, and their removal, are lost at a
   restart and are not replicated in a cluster. Policy DDL (CREATE, ALTER
   and DROP POLICY) is durable.
-- **Write shapes refused with 0A000 (SONNY-3111):** every write clause of a
-  statement runs, or the statement is refused before any part of it writes
-  (the write-shape validator checks every part before any runs). Refused in
-  this release (each was silently dropped, or wrote the wrong rows, before):
-  - a write in a query part after a WITH, other than one CREATE or one MERGE
-    after MATCH ... WITH: a chained MATCH that writes (`MATCH (q:Q) WITH q
-    MATCH (q) DELETE q`), a write after a second WITH or after a FOR, and a
-    write after a WITH that follows a CREATE or MERGE (`CREATE (a) WITH a
-    CREATE (b)`) (SONNY-3040);
-  - a WITH after the CREATE or MERGE of MATCH ... CREATE or MATCH ... MERGE,
-    whatever follows it (SONNY-3143);
-  - MERGE with CREATE, and MERGE with DELETE, in one statement (SONNY-3043);
-    a SET or REMOVE after a MERGE that follows a MATCH, and an ON CREATE /
-    ON MATCH SET (or a SET after a MERGE) on anything but a node the MERGE
-    binds or its relationship: a MATCH variable, or an endpoint of a MERGE
-    relationship (SONNY-3144);
-  - a DELETE of a variable the statement's CREATE introduces (SONNY-3043),
-    and a DELETE after a CREATE with no MATCH (`CREATE (z) DELETE z`), in a
-    FOR body and under PROFILE too (SONNY-3144);
-  - a SET or REMOVE on a relationship a CREATE with no MATCH creates, or
-    after a WITH that renames what it created (SONNY-3144);
-  - a SET, REMOVE or DELETE on a variable the part does not bind to a node or
-    a relationship: an unbound or misspelt one, one a WITH dropped or
-    computed, a label on a relationship (SONNY-3041, SONNY-3144);
-  - a write before a procedure CALL in one statement (`MATCH ... SET ...
-    CALL algo...`) (SONNY-3144);
-  - a CREATE, MERGE or DELETE with VALUES ... MATCH (its SET and REMOVE are
-    applied), and a write with a shortestPath() assignment (SONNY-3041);
-  - an initial WITH that aggregates before a write, and an initial WITH with
-    a WHERE, SKIP or LIMIT before a write whose RETURN aggregates
-    (SONNY-3139);
-  - UNWIND before a write whose RETURN aggregates, is DISTINCT, or has an
-    ORDER BY, SKIP or LIMIT; an UNWIND followed by a WITH and a write; UNWIND
-    before MERGE is a syntax error (SONNY-3144);
-  - a CREATE both before and after a DELETE in one statement (SONNY-3146);
-  - a write after a LET or a CTE under PROFILE (SONNY-3144);
-  - a write in a UNION part after a first part that CREATEs (SONNY-3145);
-  - a SET or REMOVE on a variable-length relationship variable or a path
-    variable (SONNY-2707), and a RETURN after DELETE that would hold an
-    element the statement deletes, or a JSONB, XML, URL, DOMAIN, bit string
-    or extended value (SONNY-2694).
+- **Statements that write are accepted only in these shapes; anything else
+  is refused with 0A000 before anything is written (SONNY-3111):** each is
+  verified in the in-memory, plain persisted, tenant-scoped and RLS-policy
+  sessions (`zig build test-sonny-write-allowlist`).
+  - `CREATE <nodes and relationships> [RETURN ...]`, and the same with
+    INSERT;
+  - `MERGE <node or relationship pattern> [MERGE ...] [ON CREATE SET ...]
+    [ON MATCH SET ...] [SET ...] [RETURN ...]`, the SETs on a variable the
+    MERGE binds (a node chain's node, a relationship);
+  - `MATCH <pattern> [WHERE ...] [DETACH] DELETE <node, relationship or
+    variable-length relationship variables> [RETURN ...]`;
+  - `MATCH <pattern> [WHERE ...] SET/REMOVE ... [RETURN ...]`, and `... [SET
+    /REMOVE ...] DELETE ... [RETURN ...]`;
+  - `MATCH <pattern> [WHERE ...] CREATE <pattern> [SET/REMOVE ...] [DELETE
+    <matched variables>] [RETURN ...]`;
+  - `MATCH <pattern> [WHERE ...] MERGE <pattern> [ON CREATE SET ...] [ON
+    MATCH SET ...] [SET ...] [RETURN ...]`;
+  - `MATCH <pattern> [WHERE ...] WITH <variables and values> [WHERE ...]
+    [DISTINCT] [GROUP BY ... [HAVING ...]] [ORDER BY ...] [SKIP/LIMIT]`
+    followed by `SET/REMOVE/DELETE ...`, or by one `CREATE` or one `MERGE`,
+    `[RETURN ...]`;
+  - `CREATE <pattern> [WITH <the created variables>] [SET/REMOVE <a created
+    node>] [RETURN ...]`;
+  - `WITH <values> [WHERE ...] [SKIP/LIMIT] MERGE <node pattern> ...`;
+  - any of the MATCH and CREATE shapes after `WITH <named values> [WHERE
+    ...] [SKIP/LIMIT]` (bound once, as parameters), and the MATCH ... SET,
+    DELETE and CREATE shapes and CREATE after such a WITH and `UNWIND <list>
+    AS x` (run once per element; the RETURN may not aggregate, be DISTINCT,
+    order or window);
+  - `FOR x IN <list> <one of these>`, `WITH <named values> FOR x IN <list>
+    <one of these>`, `PROFILE <one of these>`, `UNION [ALL]` of MATCH ...
+    SET/REMOVE/DELETE shapes, and a program of these separated by `;`
+    (inside `START TRANSACTION ... COMMIT` too).
 
-  Split such a statement in two.
+  The pattern may have comma chains, relationship hops, several hops and
+  variable-length hops, and before a SET, REMOVE or DELETE (not a CREATE or
+  MERGE) one OPTIONAL MATCH chain after the MATCH that shares a variable
+  with it. Refused, whatever else the statement holds: a path variable
+  (`p = ...`, so a path DELETE; SONNY-3146), shortestPath(), a path mode, a
+  WHERE after an OPTIONAL MATCH and any other OPTIONAL MATCH (SONNY-3184),
+  EXISTS { }, COUNT { } and pattern comprehensions (SONNY-3184: EXISTS {
+  MATCH ... WHERE <inner variable> } was always false), a SELECT projection,
+  LET, FILTER, a CTE, CALL { } and a procedure CALL, VALUES, INTERSECT and
+  EXCEPT, `WITH *`, `RETURN *`, a second WITH or a MATCH after a WITH (a
+  chained part: SONNY-3040, SONNY-3046), a WITH after a CREATE or MERGE
+  that follows a MATCH (SONNY-3143), a CREATE or MERGE after a WITH's GROUP
+  BY or HAVING, an UNWIND before a WITH or a MERGE, MERGE with CREATE or
+  DELETE (SONNY-3043), a DELETE of a variable the CREATE introduces, a
+  CREATE on both sides of a DELETE (SONNY-3146), a SET or REMOVE on a
+  relationship a CREATE without MATCH creates or on anything the part does
+  not bind to a node or relationship (SONNY-3144), a SET or REMOVE on a
+  variable-length relationship or a path (SONNY-2707), a grouped RETURN
+  after a CREATE, MERGE or DELETE (SONNY-2683), a variable an expression
+  names that is not bound where it is evaluated (SONNY-3183), a name an
+  initial WITH, an UNWIND or a FOR binds that is also a pattern variable or
+  a client parameter (SONNY-3183), a label SET or REMOVE inside an explicit
+  transaction (a rolled-back `SET n:L` kept its label postings, SONNY-3059),
+  and a write inside an expression (SONNY-3182). Split such a statement.
+- **A statement ends at a `;` (SONNY-3166):** the parser used to split two
+  statements written without a `;` between them and run each on its own;
+  that is now a syntax error (42601). Programs that relied on it (`CREATE
+  ... CREATE ...` and `MERGE ... MERGE ...` stay one statement) need a `;`.
+- **Reads that are wrong on the legacy path (SONNY-3167, SONNY-3184):** a
+  read through a hop pattern ignores WITH DISTINCT on the in-memory and RLS
+  paths (X2); `CALL { }` returns the subquery's rows instead of the outer
+  RETURN; EXISTS { MATCH ... WHERE <inner variable> } is always false; an
+  OPTIONAL MATCH chained on another OPTIONAL MATCH binds null; a WHERE after
+  an OPTIONAL MATCH filters the whole row; a WHERE after `WITH ...` before
+  a FOR is not applied. Writes in these shapes are refused. v0.8.24.
 - **A chained MATCH does not join on the WITH's variables (SONNY-3046):**
   `MATCH (q:Q) WITH q MATCH (q) RETURN count(*)` counts every node for each
   q. v0.8.24; a chained MATCH that writes is refused until then.
