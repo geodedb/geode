@@ -534,3 +534,102 @@ const s3248_cases = [_]Case{
 test "SONNY-3248: SKIP / LIMIT parameters, one assignment per property in a SET clause, LET scope, in every session" {
     try runCases("SONNY-3248", &s3248_cases);
 }
+
+// ---------------------------------------------------------------------------
+// SONNY-3244 (round-4a review I-4): statement nesting. The fix is round
+// 14-16's (on fix/sonny-738-r12: max_statement_nesting, stackHasRoom,
+// max_expr_links and the 16 MiB admission thread), so these repros run only
+// once that branch merges into this one.
+//
+// TODO(SONNY-3244): set `i4_nesting_enabled = true` when fix/sonny-738-r12
+// (rounds 14-16) merges into fix/sonny-738-v0823; the merge turns these on.
+const i4_nesting_enabled = false;
+
+const NestJob = struct {
+    s: *h.Session,
+    query: []const u8,
+
+    fn entry(arg: ?*anyopaque) callconv(.c) ?*anyopaque {
+        const job: *NestJob = @ptrCast(@alignCast(arg.?));
+        // Refused or answered: either is fine; only a crash is not.
+        var parsed = geode.parseGql(job.query, job.s.arena.allocator()) catch return null;
+        defer parsed.deinit();
+        const prev = execution.pushActiveContext(&job.s.ctx);
+        defer execution.popActiveContext(prev);
+        var result = execution.executeProgramWithContext(stmt_alloc, &parsed.program, job.s.ctx) catch return null;
+        result.deinit(stmt_alloc);
+        return null;
+    }
+};
+
+fn nestInChild(s: *h.Session, query: []const u8, stack: usize) bool {
+    const pid = std.c.fork();
+    if (pid < 0) return false;
+    if (pid == 0) {
+        std.posix.setrlimit(.CORE, .{ .cur = 0, .max = 0 }) catch {};
+        var job: NestJob = .{ .s = s, .query = query };
+        const page = std.heap.page_size_min;
+        const raw = std.c.mmap(null, stack + page, .{ .READ = true, .WRITE = true }, .{ .TYPE = .PRIVATE, .ANONYMOUS = true }, -1, 0);
+        if (raw == std.c.MAP_FAILED) std.c._exit(9);
+        const base: [*]align(std.heap.page_size_min) u8 = @ptrCast(@alignCast(raw));
+        if (std.c.mprotect(@ptrCast(base), page, .{}) != 0) std.c._exit(9);
+        var attr: std.c.pthread_attr_t = undefined;
+        if (std.c.pthread_attr_init(&attr) != .SUCCESS) std.c._exit(9);
+        if (std.c.pthread_attr_setstack(&attr, @ptrCast(base + page), stack) != .SUCCESS) std.c._exit(9);
+        var tid: std.c.pthread_t = undefined;
+        if (std.c.pthread_create(&tid, &attr, NestJob.entry, &job) != .SUCCESS) std.c._exit(9);
+        _ = std.c.pthread_join(tid, null);
+        std.c._exit(0);
+    }
+    var status: c_int = 0;
+    if (std.c.waitpid(pid, &status, 0) != pid) return false;
+    const st: u32 = @bitCast(status);
+    return !std.os.linux.W.IFSIGNALED(st) and std.os.linux.W.EXITSTATUS(st) == 0;
+}
+
+fn repeat(aa: std.mem.Allocator, prefix: []const u8, unit: []const u8, n: usize, suffix: []const u8) ![]const u8 {
+    var text: std.ArrayList(u8) = .empty;
+    try text.appendSlice(aa, prefix);
+    for (0..n) |_| try text.appendSlice(aa, unit);
+    try text.appendSlice(aa, suffix);
+    return text.toOwnedSlice(aa);
+}
+
+fn nestedIn(aa: std.mem.Allocator, depth: usize, parens: usize) ![]const u8 {
+    var text: std.ArrayList(u8) = .empty;
+    for (0..depth) |_| try text.appendSlice(aa, "MATCH (m) WHERE m.i IN (");
+    try text.appendSlice(aa, "RETURN ");
+    for (0..parens) |_| try text.append(aa, '(');
+    try text.append(aa, '1');
+    for (0..parens) |_| try text.append(aa, ')');
+    for (0..depth) |_| try text.appendSlice(aa, ") RETURN m.i");
+    return text.toOwnedSlice(aa);
+}
+
+test "SONNY-3244 (I-4): nested statements and expressions are refused, never crash a 1 MiB or a 16 MiB thread (on after the round 14-16 merge)" {
+    if (!i4_nesting_enabled) return error.SkipZigTest;
+    var s = try h.Session.init(.in_memory);
+    defer s.deinit();
+    const aa = s.arena.allocator();
+    const repros = [_][]const u8{
+        try repeat(aa, "", "PROFILE ", 200, "RETURN 1 AS x"),
+        try repeat(aa, "", "VALUES (1) AS (a) ", 200, "RETURN 1 AS x"),
+        try repeat(aa, "", "EXPLAIN ", 100, "RETURN 1 AS x"),
+        try repeat(aa, "", "EXPLAIN POLICY ", 100, "RETURN 1 AS x"),
+        try repeat(aa, "", "START TRANSACTION { ", 100, "RETURN 1 AS x"),
+        try repeat(aa, "RETURN ", "- ", 2000, "1 AS x"),
+        try repeat(aa, "RETURN ", "1 + ", 4000, "1 AS x"),
+        try nestedIn(aa, 8, 120),
+        try nestedIn(aa, 10, 120),
+    };
+    var failures: usize = 0;
+    for ([_]usize{ 1 << 20, 8 << 20, 16 << 20 }) |stack| {
+        for (repros) |q| {
+            if (!nestInChild(&s, q, stack)) {
+                std.debug.print("crashed on {d} MiB: {s}...\n", .{ stack >> 20, q[0..@min(q.len, 60)] });
+                failures += 1;
+            }
+        }
+    }
+    try testing.expectEqual(@as(usize, 0), failures);
+}
