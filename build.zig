@@ -9397,6 +9397,25 @@ pub fn build(b: *std.Build) void {
     const sonny3252_step = b.step("test-sonny3252-grpc-session-cap", "Run SONNY-3252 regression (at max_sessions_per_principal a session in an open transaction is never closed and the Handshake is refused; anonymous clients count per peer and federation peers per peer; the cap is per user name, not tenant; a Handshake failing at any allocation closes and leaks nothing; the cap alone starts the reaper, which tears closed sessions down)");
     sonny3252_step.dependOn(&run_sonny3252_tests.step);
 
+    // SONNY-3313 (round 16, I1): the gRPC Handshake keys a client by its real
+    // peer address (getPeerIp was a placeholder answering "unknown"):
+    // formatPeerIp, and the real handler on real accepted sockets from two
+    // loopback addresses (and ::1): one peer at the cap does not refuse
+    // another.
+    const sonny3313_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny3313_grpc_peer_ip.zig"), .target = target, .optimize = optimize });
+    sonny3313_test_mod.link_libc = true;
+    sonny3313_test_mod.addImport("geode", root_mod);
+    sonny3313_test_mod.addImport("schema", schema_mod);
+    sonny3313_test_mod.addImport("protobuf", protobuf_mod);
+    sonny3313_test_mod.addImport("grpc_impl", sonny1560_shim_mod);
+    sonny3313_test_mod.addImport("logging", logging_mod);
+    sonny3313_test_mod.addImport("transport/quic", transport_quic_mod);
+    const sonny3313_tests = b.addTest(.{ .root_module = sonny3313_test_mod });
+    const run_sonny3313_tests = b.addRunArtifact(sonny3313_tests);
+    shardDep(test_step, &run_sonny3313_tests.step, 1, test_shard_loads, test_shard_index);
+    const sonny3313_step = b.step("test-sonny3313-grpc-peer-ip", "Run SONNY-3313 regression (formatPeerIp formats IPv4, IPv6 and IPv4-mapped peers; anonymous Handshakes through the real handler on real accepted sockets from 127.0.0.2, 127.0.0.3 and ::1 count per peer: at max_sessions_per_principal one peer is refused and another served)");
+    sonny3313_step.dependOn(&run_sonny3313_tests.step);
+
     // SONNY-3234 (round 15, F10): a graph made under a name reserved since
     // (a legacy CURRENT_GRAPH) can be dropped by that name; the names stay
     // refused otherwise.

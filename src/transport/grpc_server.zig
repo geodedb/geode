@@ -63,7 +63,9 @@ const schema = @import("schema");
 const protobuf = @import("protobuf");
 const grpc_zig = @import("grpc_server");
 const GrpcServer = grpc_zig.GrpcServer;
-const GrpcTransport = grpc_zig.Transport;
+/// SONNY-3313: `pub` for the regression test, which serves a Handshake on
+/// a real accepted socket.
+pub const GrpcTransport = grpc_zig.Transport;
 const proto_util = geode.proto_util;
 const server_flags = geode.server_flags;
 const diagnostics = geode.diagnostics;
@@ -267,8 +269,21 @@ fn rebuildPendingIndexes(
 ///     was the principal "", so any of them could take the cap's room from
 ///     every other one; now the clients of one host share a cap, and
 ///     clients of different hosts do not touch each other's sessions;
-///   - the federation path (a peer node with the cluster token): the name it
-///     sends is its own choice, so it counts as `federation@<peer ip>`.
+///   - the federation path (a peer node with the cluster token): every peer
+///     node sends the same name (`validateFederationAuth` accepts only
+///     `geode-cluster`), so it counts as `federation@<peer ip>`: one cap per
+///     peer node, not one for the cluster.
+///
+/// SONNY-3313 (round 16, I1): `<peer ip>` is the connection's real peer
+/// address (`getPeerIp`, `formatPeerIp`); it was "unknown" for every client
+/// until round 16, so all anonymous clients shared one cap. What it keys is
+/// the address the server sees:
+///   - clients behind one NAT gateway, proxy or load balancer (one that does
+///     not keep the client's address) are one peer, and share one cap;
+///   - an IPv6 client is keyed by its full address, and a host usually holds
+///     a whole /64: by rotating addresses in it, one host can take the cap's
+///     room many times over. The auth rate limiter's per-IP bucket, which
+///     uses the same address, has the same two limits.
 pub fn principalFor(buf: []u8, kind: enum { user, anonymous, federation }, username: []const u8, peer_ip: []const u8) []const u8 {
     return switch (kind) {
         .user => username,
@@ -2150,20 +2165,75 @@ fn handlePing(_: []const u8, allocator: std.mem.Allocator) ![]u8 {
     return encodeMessage(allocator, response);
 }
 
+// CANARY: REQ=REQ-SONNY-3313-GRPC-PEER-IP; FEATURE="GrpcSessionLifetime"; ASPECT=PeerAddress; STATUS=TESTED; TEST=tests/test_sonny3313_grpc_peer_ip.zig; OWNER=transport; UPDATED=2026-09-28
 /// Extract peer IP address string from a gRPC transport's underlying socket.
 /// Returns a stack-allocated formatted IP string, or "unknown" on failure.
+///
+/// SONNY-3313 (round 16, I1): this was a Zig 0.16 placeholder that answered
+/// "unknown" for every peer, so every anonymous client was
+/// `anonymous@unknown` and every federation peer `federation@unknown` (one
+/// session cap for all of them: one host holding its sessions in open
+/// transactions refused every other host's Handshake), and the auth rate
+/// limiter's per-IP bucket was one bucket for every client (one client's
+/// username-rotating spray locked every client out). It formats the peer's
+/// address now (`formatPeerIp`).
 fn getPeerIp(trans: *GrpcTransport) [45]u8 {
+    return peerIpOfSocket(trans.stream.socket.handle);
+}
+
+/// SONNY-3313: the peer address of the connected socket `handle`, formatted
+/// by `formatPeerIp` into a NUL-padded buffer ("unknown" when the socket has
+/// no peer). `pub` for the regression test's real sockets.
+pub fn peerIpOfSocket(handle: std.posix.socket_t) [45]u8 {
     var buf: [45]u8 = .{0} ** 45;
     var addr: std.posix.sockaddr.storage = undefined;
     var addr_len: std.posix.socklen_t = @sizeOf(std.posix.sockaddr.storage);
-    std.posix.getpeername(trans.stream.socket.handle, @ptrCast(&addr), &addr_len) catch {
+    std.posix.getpeername(handle, @ptrCast(&addr), &addr_len) catch {
         @memcpy(buf[0..7], "unknown");
         return buf;
     };
-    // Zig 0.16 compat: Io.net.IpAddress.initPosix was removed. Placeholder
-    // until the address-formatting helper is reintroduced.
-    @memcpy(buf[0..7], "unknown");
+    _ = formatPeerIp(&buf, &addr, addr_len);
     return buf;
+}
+
+/// SONNY-3313: the IP address in `addr` (`len` bytes of it), as text, into
+/// `buf`: IPv4 dotted (`127.0.0.1`), IPv6 as eight groups of four lowercase
+/// hex digits (`0000:0000:0000:0000:0000:0000:0000:0001`, the QUIC handler's
+/// form, one spelling per address), and an IPv4-mapped IPv6 address
+/// (`::ffff:a.b.c.d`, a dual-stack listener's IPv4 client) as its IPv4 form,
+/// so a client counts as the same peer whichever listener it reached.
+/// "unknown" for any other family. The port is not part of it: one host is
+/// one peer.
+pub fn formatPeerIp(buf: *[45]u8, addr: *const std.posix.sockaddr.storage, len: std.posix.socklen_t) []const u8 {
+    @memset(buf, 0);
+    const fam = addr.family;
+    if (fam == std.posix.AF.INET and len >= @sizeOf(std.posix.sockaddr.in)) {
+        const in4: *const std.posix.sockaddr.in = @ptrCast(@alignCast(addr));
+        const b: [4]u8 = @bitCast(in4.addr);
+        return std.fmt.bufPrint(buf, "{d}.{d}.{d}.{d}", .{ b[0], b[1], b[2], b[3] }) catch unknownPeer(buf);
+    }
+    if (fam == std.posix.AF.INET6 and len >= @sizeOf(std.posix.sockaddr.in6)) {
+        const in6: *const std.posix.sockaddr.in6 = @ptrCast(@alignCast(addr));
+        const a = in6.addr;
+        const mapped_prefix = [_]u8{ 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0xff, 0xff };
+        if (std.mem.eql(u8, a[0..12], &mapped_prefix)) {
+            return std.fmt.bufPrint(buf, "{d}.{d}.{d}.{d}", .{ a[12], a[13], a[14], a[15] }) catch unknownPeer(buf);
+        }
+        var w: std.Io.Writer = .fixed(buf);
+        var g: usize = 0;
+        while (g < 8) : (g += 1) {
+            if (g > 0) w.writeByte(':') catch return unknownPeer(buf);
+            w.print("{x:0>2}{x:0>2}", .{ a[g * 2], a[g * 2 + 1] }) catch return unknownPeer(buf);
+        }
+        return w.buffered();
+    }
+    return unknownPeer(buf);
+}
+
+fn unknownPeer(buf: *[45]u8) []const u8 {
+    @memset(buf, 0);
+    @memcpy(buf[0..7], "unknown");
+    return buf[0..7];
 }
 
 /// Return a slice of the peer IP buffer up to the first null byte.
@@ -2315,7 +2385,9 @@ fn validatePasswordFallback(password: []const u8) ?[]const u8 {
     return null;
 }
 
-fn handleHandshake(request_bytes: []const u8, trans: *GrpcTransport, allocator: std.mem.Allocator) ![]u8 {
+/// `pub` as a SONNY-3313 test seam only (a Handshake on a real accepted
+/// socket); production dispatch goes through `handlePacket`.
+pub fn handleHandshake(request_bytes: []const u8, trans: *GrpcTransport, allocator: std.mem.Allocator) ![]u8 {
     log.debug("gRPC Handshake", &.{Attr.uint("request_bytes_len", request_bytes.len)});
 
     var reader: std.Io.Reader = .fixed(request_bytes);

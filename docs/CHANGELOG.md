@@ -1023,9 +1023,12 @@
     sessions is in use or in a transaction, the Handshake is refused
     (resource exhausted). Without authentication a client counts as
     `anonymous@<peer ip>`, and a federation peer as `federation@<peer
-    ip>` (the name it sends is its own choice). A Handshake that fails
-    closes nothing, and a closed session is torn down on the reaper
-    thread, not the Handshake's (SONNY-3252).
+    ip>` (every peer node sends the one name the cluster token accepts,
+    `geode-cluster`). A Handshake that fails closes nothing, and a closed
+    session is torn down on the reaper thread, not the Handshake's
+    (SONNY-3252). (Round 16 correction: as shipped in round 15 the peer
+    address was "unknown" for every client, so all anonymous clients, and
+    all federation peers, shared one cap; fixed in round 16, SONNY-3313.)
   - DROP GRAPH drops a graph that already had a reserved name (a
     CURRENT_GRAPH made before 0.8.23), and the server warns at start for
     each such graph; CREATE stays refused (SONNY-3234).
@@ -1073,6 +1076,15 @@
     waits for a first-touch hydration of the graph and none starts during
     it: the two could deadlock, and a hydrate-on-miss racing the drop freed
     a node's labels twice (SONNY-3314).
+  - The gRPC Handshake keys a client by its real peer address: it was
+    "unknown" for every client, so every anonymous client counted against
+    one `anonymous@unknown` session cap (one host holding its sessions in
+    transactions refused every other host's Handshake), and the auth rate
+    limiter's per-IP bucket was one bucket for all clients (one client's
+    username-rotating guessing locked every client out). Clients behind
+    one NAT gateway, proxy or load balancer share a cap and a bucket; an
+    IPv6 host that rotates addresses within its /64 is several peers
+    (SONNY-3313).
 
 ### Fixed
 

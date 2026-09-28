@@ -1035,10 +1035,10 @@ REQ-DSN-GRAPH-BIND-001,DSNGraphBinding,ContextFlag,TESTED,,,engine,2026-06-11,sr
 REQ-DSN-GRAPH-BIND-001,DSNGraphBinding,SessionGraphBound,IMPL,,,engine,2026-03-25,src/server/server_state.zig,397
 REQ-DSN-GRAPH-BIND-002,DSNGraphBinding,UseGraphRejection,TESTED,,,engine,2026-06-11,src/execution.zig,2508
 REQ-DSN-GRAPH-BIND-003,DSNGraphBinding,QuicGraphResolution,TESTED,,,transport,2026-06-11,src/server/quic_connection_handler.zig,7039
-REQ-DSN-GRAPH-BIND-004,DSNGraphBinding,GrpcSessionGraph,IMPL,,,transport,2026-03-25,src/transport/grpc_server.zig,502
+REQ-DSN-GRAPH-BIND-004,DSNGraphBinding,GrpcSessionGraph,IMPL,,,transport,2026-03-25,src/transport/grpc_server.zig,517
 REQ-DSN-GRAPH-BIND-005,DSNGraphBinding,GraphBoundError,IMPL,,,transport,2026-03-25,src/server/proto_util.zig,222
-REQ-DSN-GRAPH-BIND-005,DSNGraphBinding,GrpcGraphResolution,IMPL,,,transport,2026-03-25,src/transport/grpc_server.zig,2444
-REQ-DSN-GRAPH-BIND-006,DSNGraphBinding,GrpcNoAuthGraph,IMPL,,,transport,2026-03-25,src/transport/grpc_server.zig,2634
+REQ-DSN-GRAPH-BIND-005,DSNGraphBinding,GrpcGraphResolution,IMPL,,,transport,2026-03-25,src/transport/grpc_server.zig,2516
+REQ-DSN-GRAPH-BIND-006,DSNGraphBinding,GrpcNoAuthGraph,IMPL,,,transport,2026-03-25,src/transport/grpc_server.zig,2706
 REQ-ENG-3904-LIST-LEADING-NEGATIVE,ListValueConstructor,Regression,TESTED,,,parser,2026-08-24,tests/test_eng3904_3905_vector_literals.zig,1
 REQ-ENG-3905-VECTORF32-PARAM,VectorF32,ParameterBinding,TESTED,,,parser,2026-08-24,tests/test_eng3904_3905_vector_literals.zig,2
 REQ-ENG-3906-INDEX-WITH-PARAM-VALIDATION,VectorIndex,WithParameterValidation,TESTED,,,index,2026-08-24,src/gql/parser.zig,5419
@@ -1184,7 +1184,7 @@ REQ-EXEC-READ-ONLY-REQUEST-001,ReadOnlyExecute,CliFlag,TESTED,,,engine,2026-08-2
 REQ-EXEC-READ-ONLY-REQUEST-001,ReadOnlyExecute,CliOption,TESTED,,,engine,2026-08-28,src/cli/main.zig,1929
 REQ-EXEC-READ-ONLY-REQUEST-001,ReadOnlyExecute,CliOption,TESTED,,,engine,2026-08-28,src/cli/main.zig,1952
 REQ-EXEC-READ-ONLY-REQUEST-001,ReadOnlyExecute,CliOption,TESTED,,,engine,2026-08-28,src/client/quic_query_runner.zig,88
-REQ-EXEC-READ-ONLY-REQUEST-001,ReadOnlyExecute,GrpcGate,TESTED,,,engine,2026-08-28,src/transport/grpc_server.zig,3227
+REQ-EXEC-READ-ONLY-REQUEST-001,ReadOnlyExecute,GrpcGate,TESTED,,,engine,2026-08-28,src/transport/grpc_server.zig,3299
 REQ-EXEC-READ-ONLY-REQUEST-001,ReadOnlyExecute,QuicGate,TESTED,,,engine,2026-08-28,src/server/quic_connection_handler.zig,7455
 REQ-EXEC-READ-ONLY-REQUEST-001,ReadOnlyExecute,Test,TESTED,,,engine,2026-08-28,tests/test_read_only_execute.zig,15
 REQ-EXEC-READ-ONLY-REQUEST-001,ReadOnlyExecute,WireField,TESTED,,,engine,2026-08-28,src/proto/schema.zig,116
@@ -1342,7 +1342,7 @@ REQ-FLE-ROLE-ISOLATION-003,FLERoleIsolation,ContextRole,TESTED,,,security,2026-0
 REQ-FLE-ROLE-ISOLATION-003,FLERoleIsolation,NoEnvOverride,TESTED,,,security,2026-06-08,src/fle_integration.zig,908
 REQ-FLE-ROLE-ISOLATION-003,FLERoleIsolation,QUICCleanup,TESTED,,,security,2026-04-05,src/server/quic_connection_handler.zig,5756
 REQ-FLE-ROLE-ISOLATION-004,FLERoleIsolation,ContextRole,TESTED,,,security,2026-06-08,src/execution.zig,654
-REQ-FLE-ROLE-ISOLATION-004,FLERoleIsolation,GrpcCleanup,IMPL,,,security,2026-04-05,src/transport/grpc_server.zig,841
+REQ-FLE-ROLE-ISOLATION-004,FLERoleIsolation,GrpcCleanup,IMPL,,,security,2026-04-05,src/transport/grpc_server.zig,856
 REQ-FLE-ROTATION-001,FLEKeyRotation,Encryption,TESTED,,,security,2026-01-10,src/fle_integration.zig,461
 REQ-FLE-ROTATION-002,FLEKeyRotation,KeyManagement,TESTED,,,security,2026-01-10,src/fle_integration.zig,322
 REQ-FLE-SCHEMA-001,FieldLevelEncryption,SCHEMA,TESTED,,,security,2026-01-15,src/schema/annotations.zig,4
@@ -1450,12 +1450,12 @@ REQ-GAP-0240,TypePromotionUnitTests,ScaleConversion,TESTED,,,eval,2026-01-25,src
 REQ-GAP-0257-ISO-001,ISO Conformance Evidence,Docs,IMPL,,,docs,2026-02-09,docs/gql/GQL_CONFORMANCE_PROFILE.md,4
 REQ-GAP-0258-MTLS-CLI-001,mTLS CLI,CertificateMapping,IMPL,,,cli,2026-02-09,src/cli/mtls_cli.zig,4
 REQ-GAP-0259-RWLOCK-001,AsyncPersistence,RwLockMigration,TESTED,,,storage,2026-06-11,src/graph_store.zig,15707
-REQ-GAP-0284-ALTER-USER-GRPC,PasswordResetEnforcement,GrpcAlterUserParse,IMPL,,,security,2026-04-01,src/transport/grpc_server.zig,2190
-REQ-GAP-0284-ALTER-USER-GRPC-WIRE,PasswordResetEnforcement,GrpcExecuteIntercept,IMPL,,,security,2026-04-01,src/transport/grpc_server.zig,2867
-REQ-GAP-0284-FEDERATION-GRPC-AUTH,FederationAuth,GrpcServerValidation,IMPL,,,security,2026-06-10,src/transport/grpc_server.zig,2180
-REQ-GAP-0284-FEDERATION-GRPC-WIRE,FederationAuth,GrpcHelloCheck,IMPL,,,security,2026-04-01,src/transport/grpc_server.zig,2386
-REQ-GAP-0284-PWD-RESET-BLOCK-GRPC,PasswordResetEnforcement,GrpcExecuteBlock,IMPL,,,security,2026-04-01,src/transport/grpc_server.zig,2953
-REQ-GAP-0284-PWD-VALIDATE-GRPC,PasswordPolicyEnforcement,GrpcFallbackValidation,IMPL,,,security,2026-04-01,src/transport/grpc_server.zig,2255
+REQ-GAP-0284-ALTER-USER-GRPC,PasswordResetEnforcement,GrpcAlterUserParse,IMPL,,,security,2026-04-01,src/transport/grpc_server.zig,2260
+REQ-GAP-0284-ALTER-USER-GRPC-WIRE,PasswordResetEnforcement,GrpcExecuteIntercept,IMPL,,,security,2026-04-01,src/transport/grpc_server.zig,2939
+REQ-GAP-0284-FEDERATION-GRPC-AUTH,FederationAuth,GrpcServerValidation,IMPL,,,security,2026-06-10,src/transport/grpc_server.zig,2250
+REQ-GAP-0284-FEDERATION-GRPC-WIRE,FederationAuth,GrpcHelloCheck,IMPL,,,security,2026-04-01,src/transport/grpc_server.zig,2458
+REQ-GAP-0284-PWD-RESET-BLOCK-GRPC,PasswordResetEnforcement,GrpcExecuteBlock,IMPL,,,security,2026-04-01,src/transport/grpc_server.zig,3025
+REQ-GAP-0284-PWD-VALIDATE-GRPC,PasswordPolicyEnforcement,GrpcFallbackValidation,IMPL,,,security,2026-04-01,src/transport/grpc_server.zig,2325
 REQ-GAP-0305-AUDIT-PREV-HASH,AuditVerifyChainRoundTrip,ChainVerification,TESTED,,,security,2026-05-21,tests/test_audit_verify_chain_roundtrip.zig,1
 REQ-GAP-0336-UMH-BINDING,MatchCreateBindingFix,PatternVarResolution,TESTED,,,engine,2026-06-11,src/execution/match_operations.zig,3890
 REQ-GAP-0481-NO-PASSWORD-HINT-LOG,AuthSecurity,SecurityAudit,TESTED,,,security,2026-02-18,src/security/test_auth_security.zig,3
@@ -1768,7 +1768,7 @@ REQ-GPS-DERIVE-001,GPS Principal Derivation,Builder,TESTED,,,security,2026-05-20
 REQ-GPS-DERIVE-001,GPS Principal Derivation,EmptyArgs,TESTED,,,security,2026-05-20,tests/test_gps_principal_derive.zig,25
 REQ-GPS-DERIVE-001,GPS Principal Derivation,QuicArgs,TESTED,,,security,2026-05-20,tests/test_gps_principal_derive.zig,6
 REQ-GPS-DERIVE-002,GPS Principal Derivation,DistributedCoordinatorWiring,TESTED,,,security,2026-05-20,src/distributed/query_coordinator.zig,354
-REQ-GPS-DERIVE-002,GPS Principal Derivation,GrpcHandlerWiring,TESTED,,,security,2026-05-20,src/transport/grpc_server.zig,3081
+REQ-GPS-DERIVE-002,GPS Principal Derivation,GrpcHandlerWiring,TESTED,,,security,2026-05-20,src/transport/grpc_server.zig,3153
 REQ-GPS-DERIVE-002,GPS Principal Derivation,QuicHandlerWiring,TESTED,,,security,2026-05-20,src/server/quic_connection_handler.zig,7540
 REQ-GPS-DIST-001,GPS PolicyVersion,AtomicCounter,TESTED,,,security,2026-05-20,src/security/policy_version.zig,1
 REQ-GPS-DIST-001,GPS PolicyVersion,AtomicCounter,TESTED,,,security,2026-05-20,tests/test_gps_policy_version.zig,13
@@ -1789,7 +1789,7 @@ REQ-GPS-DIST-002,GPS Distributed Envelope,TruncatedBuffer,TESTED,,,security,2026
 REQ-GPS-DIST-002,GPS Distributed Envelope,UnsupportedVersion,TESTED,,,security,2026-05-20,tests/test_gps_distributed_envelope.zig,257
 REQ-GPS-EXPLAIN-001,GPS EXPLAIN POLICY,ASTType,TESTED,,,security,2026-05-21,src/gql/ast.zig,820
 REQ-GPS-EXPLAIN-001,GPS EXPLAIN POLICY,ASTVariant,TESTED,,,security,2026-05-21,src/gql/ast.zig,60
-REQ-GPS-EXPLAIN-001,GPS EXPLAIN POLICY,BuildStep,TESTED,,,security,2026-05-21,build.zig,12649
+REQ-GPS-EXPLAIN-001,GPS EXPLAIN POLICY,BuildStep,TESTED,,,security,2026-05-21,build.zig,12668
 REQ-GPS-EXPLAIN-001,GPS EXPLAIN POLICY,CreateClassifiedAsCreate,TESTED,,,security,2026-05-21,tests/test_gps_explain_policy.zig,197
 REQ-GPS-EXPLAIN-001,GPS EXPLAIN POLICY,DispatchArm,TESTED,,,security,2026-05-21,src/execution.zig,1853
 REQ-GPS-EXPLAIN-001,GPS EXPLAIN POLICY,ExecutorFunction,TESTED,,,security,2026-05-21,src/execution/statement_handlers.zig,1484
@@ -1896,9 +1896,9 @@ REQ-GPS-PDP-002,GPS Decision Engine,BuiltinRoleGrants,TESTED,,,security,2026-05-
 REQ-GPS-PDP-002,GPS Decision Engine,BuiltinRoleGrants,TESTED,,,security,2026-05-20,tests/test_gps_decide.zig,26
 REQ-GPS-PDP-003,GPS Decision Engine,GraphGrantWidening,TESTED,,,security,2026-05-21,tests/test_gps_decide.zig,88
 REQ-GPS-PDP-004,GPS Decision Engine,CheckPermissionAdapter,TESTED,,,security,2026-05-20,tests/test_gps_decide.zig,249
-REQ-GPS-PDP-005,GPS Decision Engine,GrpcEnforcement,TESTED,,,security,2026-05-20,src/transport/grpc_server.zig,3236
+REQ-GPS-PDP-005,GPS Decision Engine,GrpcEnforcement,TESTED,,,security,2026-05-20,src/transport/grpc_server.zig,3308
 REQ-GPS-PDP-005,GPS Decision Engine,GrpcEnforcement,TESTED,,,security,2026-05-20,tests/test_gps_decide.zig,165
-REQ-GPS-PDP-005,GPS Decision Engine,GrpcHandshakeEnforcement,TESTED,,,security,2026-05-20,src/transport/grpc_server.zig,2507
+REQ-GPS-PDP-005,GPS Decision Engine,GrpcHandshakeEnforcement,TESTED,,,security,2026-05-20,src/transport/grpc_server.zig,2579
 REQ-GPS-PDP-005,GPS Decision Engine,GrpcHandshakeEnforcement,TESTED,,,security,2026-05-20,tests/test_gps_decide.zig,195
 REQ-GPS-PDP-006,GPS Decision Engine,RLSIndeterminatePolicy,TESTED,,,security,2026-05-20,tests/test_rls_indeterminate_policy.zig,1
 REQ-GPS-PDP-006,GPS Decision Engine,RLSIndeterminatePolicy,TESTED,,,security,2026-05-20,tests/test_rls_indeterminate_policy.zig,81
@@ -1946,7 +1946,7 @@ REQ-GPS-PROC-001,GPS Procedure Enforcement,ReadWriteAllowsMutating,TESTED,,,secu
 REQ-GPS-PROC-001,GPS Procedure Enforcement,UnauthenticatedDenied,TESTED,,,security,2026-05-20,tests/test_gps_procedure_enforcement.zig,168
 REQ-GPS-PROC-003,GPS Phase 5 Procedure,MetadataReadOnly,TESTED,,,security,2026-05-21,src/execution/procedure_access.zig,114
 REQ-GPS-WIRE-001,GPS Wire Principal Forwarding,BeginQuery,IMPL,,,security,2026-05-21,src/client/quic_query_runner.zig,106
-REQ-GPS-WIRE-001,GPS Wire Principal Forwarding,BuildStep,TESTED,,,security,2026-05-21,build.zig,12658
+REQ-GPS-WIRE-001,GPS Wire Principal Forwarding,BuildStep,TESTED,,,security,2026-05-21,build.zig,12677
 REQ-GPS-WIRE-001,GPS Wire Principal Forwarding,CliEnvelopeBuild,TESTED,,,security,2026-06-11,src/cli/main.zig,1681
 REQ-GPS-WIRE-001,GPS Wire Principal Forwarding,CliForwardPrincipal,TESTED,,,security,2026-06-11,src/cli/main.zig,1923
 REQ-GPS-WIRE-001,GPS Wire Principal Forwarding,CliForwardPrincipalFlag,TESTED,,,security,2026-06-11,src/cli/main.zig,1035
@@ -1959,7 +1959,7 @@ REQ-GPS-WIRE-001,GPS Wire Principal Forwarding,SchemaField,TESTED,,,security,202
 REQ-GPS-WIRE-001,GPS Wire Principal Forwarding,ServerUnpack,TESTED,,,security,2026-06-10,src/server/quic_connection_handler.zig,7545
 REQ-GPS-WIRE-002,GPS Distributed Wire,BackwardCompat,TESTED,,,security,2026-05-21,tests/test_gps_distributed_wire.zig,167
 REQ-GPS-WIRE-002,GPS Distributed Wire,BatchQueries,EXEMPT,,,security,2026-06-11,src/distributed/query_transport.zig,179
-REQ-GPS-WIRE-002,GPS Distributed Wire,BuildStep,TESTED,,,security,2026-05-21,build.zig,12670
+REQ-GPS-WIRE-002,GPS Distributed Wire,BuildStep,TESTED,,,security,2026-05-21,build.zig,12689
 REQ-GPS-WIRE-002,GPS Distributed Wire,ConnectionExecuteQuery,EXEMPT,,,security,2026-06-11,src/distributed/query_transport.zig,395
 REQ-GPS-WIRE-002,GPS Distributed Wire,ExecutePlan,IMPL,,,security,2026-05-21,src/distributed/enhanced_query_coordinator.zig,250
 REQ-GPS-WIRE-002,GPS Distributed Wire,ExecuteRemoteQuery,EXEMPT,,,security,2026-06-11,src/distributed/query_transport.zig,141
@@ -3464,8 +3464,8 @@ REQ-GRAPHSTORE-QUEUE-001,SnapshotFlushQueueDepth,Metrics,IMPL,,,storage,2026-02-
 REQ-GRAPHSTORE-SNAP-PIPE-001,SnapshotPipeline,Maintenance,IMPL,,,storage,2026-02-04,src/storage/snapshot_pipeline.zig,39
 REQ-GROUPED-UNKNOWN-FUNCTION,GroupedProjection,UnknownFunctionEscapes,TESTED,,,execution,2026-08-25,src/execution.zig,3668
 REQ-GROUPED-UNKNOWN-FUNCTION,GroupedProjection,UnknownFunctionEscapes,TESTED,,,execution,2026-08-25,tests/test_unsupported_aggregates.zig,361
-REQ-GRPC-ATOMIC-SESSION-001,GrpcSessionSafety,AtomicPointer,IMPL,,,transport,2026-02-13,src/transport/grpc_server.zig,747
-REQ-GRPC-FULL-ROUTING-001,GrpcFullMessageRouting,HandlerParity,IMPL,,,transport,2026-02-13,src/transport/grpc_server.zig,4172
+REQ-GRPC-ATOMIC-SESSION-001,GrpcSessionSafety,AtomicPointer,IMPL,,,transport,2026-02-13,src/transport/grpc_server.zig,762
+REQ-GRPC-FULL-ROUTING-001,GrpcFullMessageRouting,HandlerParity,IMPL,,,transport,2026-02-13,src/transport/grpc_server.zig,4244
 REQ-HELPER-001,Helper,Utilities,TESTED,,,core,2026-01-16,tests/test_gap_0193_batch3_comprehensive.zig,438
 REQ-HELPER-COALESCE-001,Helper,Coalesce,TESTED,,,builtins,2026-01-16,tests/test_gap_0193_batch4_comprehensive.zig,520
 REQ-HEX-PARSE-001,Safe Hex Parsing,Security,TESTED,,,security,2026-01-15,src/security/external_kms_client.zig,962
@@ -4112,7 +4112,7 @@ REQ-MULTI-GRAPH-DELETE-002,MultiGraphIsolation,DeleteGraphContext,TESTED,,,engin
 REQ-MULTI-GRAPH-EDGE-ISOLATION,GraphIsolationEdgeScan,GetEdgesByType,TESTED,,,engine,2026-04-11,src/graph_store.zig,9602
 REQ-MULTI-GRAPH-RBAC-WIRE-001,GraphRBACEnforcement,GlobalInstance,TESTED,,,security,2026-06-11,src/server/quic_connection_handler.zig,428
 REQ-MULTI-GRAPH-RBAC-WIRE-002,GraphRBACEnforcement,QuicGraphAuth,TESTED,,,security,2026-06-27,src/server/quic_connection_handler.zig,7107
-REQ-MULTI-GRAPH-RBAC-WIRE-003,GraphRBACEnforcement,GrpcGraphAuth,TESTED,,,security,2026-05-20,src/transport/grpc_server.zig,2506
+REQ-MULTI-GRAPH-RBAC-WIRE-003,GraphRBACEnforcement,GrpcGraphAuth,TESTED,,,security,2026-05-20,src/transport/grpc_server.zig,2578
 REQ-MULTI-GRAPH-RBAC-WIRE-005,GraphRBACEnforcement,GlobalSingleton,IMPL,,,security,2026-04-01,src/security/multi_graph_security.zig,596
 REQ-MULTI-GRAPH-SECURITY-001,MultiGraphSecurity,RBACGraphScope,TESTED,,,security,2025-12-20,src/security/multi_graph_security.zig,1
 REQ-MULTI-GRAPH-SECURITY-TEST,MultiGraphSecurityTests,Security,IMPL,,,testing,2025-12-20,tests/e2e_multi_graph_security.zig,1
@@ -4480,7 +4480,7 @@ REQ-PERF-SHARD-COORD-MVCC-GUARD,ShardedCoordinatorRoutingGuard,MVCCInvariant,TES
 REQ-PERF-SHARD-COORD-ROUTING,ShardedCoordinatorRouting,RoutingCorrectness,TESTED,,,perf,2026-04-25,tests/test_sharded_coordinator_routing.zig,13
 REQ-PERF-SHARED-OPT-001,SharedQueryOptimizer,ConnectionWiring,TESTED,,,engine,2026-02-17,src/server/quic_connection_handler.zig,5775
 REQ-PERF-SHARED-OPT-001,SharedQueryOptimizer,CrossConnectionReuse,TESTED,,,engine,2026-02-17,src/server/query_plan_cache.zig,440
-REQ-PERF-SHARED-OPT-001,SharedQueryOptimizer,GrpcHandlerWire,IMPL,,,engine,2026-04-18,src/transport/grpc_server.zig,3064
+REQ-PERF-SHARED-OPT-001,SharedQueryOptimizer,GrpcHandlerWire,IMPL,,,engine,2026-04-18,src/transport/grpc_server.zig,3136
 REQ-PERF-SHARED-OPT-001,SharedQueryOptimizer,HandlerWireRegression,TESTED,,,engine,2026-04-18,tests/test_plan_cache_hit.zig,6
 REQ-PERF-SHARED-OPT-001,SharedQueryOptimizer,HintExtraction,TESTED,,,engine,2026-02-17,src/server/quic_connection_handler.zig,7514
 REQ-PERF-SHARED-OPT-001,SharedQueryOptimizer,InitContext,TESTED,,,engine,2026-02-17,src/server/server_init.zig,121
@@ -4959,8 +4959,8 @@ REQ-SEC-RBAC-001,Security,RBAC,TESTED,,,security,2026-01-16,tests/test_gap_0193_
 REQ-SEC-RLS-ALGO-001,RLS Algorithm Filtering,PostResultFilter,IMPL,,,security,2026-04-01,src/server/rls_filter.zig,333
 REQ-SEC-RLS-ALGO-001,RLS Algorithm Filtering,QUICProfileWire,IMPL,,,security,2026-04-01,src/server/quic_connection_handler.zig,8512
 REQ-SEC-RLS-ALGO-001,RLS Algorithm Filtering,QUICWire,IMPL,,,security,2026-04-01,src/server/quic_connection_handler.zig,8760
-REQ-SEC-RLS-ALGO-001,RLS Algorithm Filtering,gRPCProfileWire,IMPL,,,security,2026-04-01,src/transport/grpc_server.zig,3620
-REQ-SEC-RLS-ALGO-001,RLS Algorithm Filtering,gRPCRowsWire,IMPL,,,security,2026-04-01,src/transport/grpc_server.zig,3772
+REQ-SEC-RLS-ALGO-001,RLS Algorithm Filtering,gRPCProfileWire,IMPL,,,security,2026-04-01,src/transport/grpc_server.zig,3692
+REQ-SEC-RLS-ALGO-001,RLS Algorithm Filtering,gRPCRowsWire,IMPL,,,security,2026-04-01,src/transport/grpc_server.zig,3844
 REQ-SEC-RLS-CLONE-GATE-0903,RLSCloneGate,Regression,TESTED,,,security,2026-06-26,tests/test_gap0903_rls_clone_gate.zig,46
 REQ-SEC-RLS-FEDERATION-001,RLS Federation Filter,PostMergeFilter,TESTED,,,security,2026-04-05,src/server/rls_filter.zig,516
 REQ-SEC-RLS-POLICY-001,Security,RLSPolicy,TESTED,,,security,2026-01-16,tests/test_gap_0193_batch5_comprehensive.zig,56
@@ -5294,7 +5294,7 @@ REQ-SONNY-2739-CHECKED-NARROWING,NumericNarrowing,JsonNumbers,TESTED,,,eval,2026
 REQ-SONNY-2739-CHECKED-NARROWING,NumericNarrowing,MathAndCastFunctions,TESTED,,,eval,2026-09-25,src/eval/call_handlers.zig,37
 REQ-SONNY-2739-FLOAT-NARROWING,NumericNarrowing,Regression,TESTED,,,engine,2026-09-25,tests/test_sonny2739_float_narrowing.zig,24
 REQ-SONNY-2739-POWER-OVERFLOW,PowerOperator,CheckedResult,TESTED,,,eval,2026-09-25,src/eval.zig,618
-REQ-SONNY-2743-WHOLE-PROGRAM-GATE,StatementAuthorization,GrpcHandler,TESTED,,,security,2026-09-25,src/transport/grpc_server.zig,3183
+REQ-SONNY-2743-WHOLE-PROGRAM-GATE,StatementAuthorization,GrpcHandler,TESTED,,,security,2026-09-25,src/transport/grpc_server.zig,3255
 REQ-SONNY-2743-WHOLE-PROGRAM-GATE,StatementAuthorization,HandlerDecision,TESTED,,,security,2026-09-25,src/query/query_traits.zig,455
 REQ-SONNY-2743-WHOLE-PROGRAM-GATE,StatementAuthorization,QuicHandler,TESTED,,,security,2026-09-25,src/server/quic_connection_handler.zig,7424
 REQ-SONNY-2743-WHOLE-PROGRAM-GATE,StatementAuthorization,Regression,TESTED,,,security,2026-09-25,tests/test_sonny2743_whole_program_gate.zig,17
@@ -5303,7 +5303,7 @@ REQ-SONNY-2744-GPS-DENY-OVERRIDES,GPS Policy Evaluation,DenyOverridesAllow,TESTE
 REQ-SONNY-2744-GPS-DENY-OVERRIDES,GPS Policy Evaluation,Regression,TESTED,,,security,2026-09-25,tests/test_sonny2744_gps_deny.zig,12
 REQ-SONNY-2746-RLS-ATTRIBUTE-POLICY-OOM,RLS deny-policy procedure,AttributePolicyOomCleanup,TESTED,,,security,2026-09-25,src/execution/rls_dispatch.zig,417
 REQ-SONNY-2746-RLS-ATTRIBUTE-POLICY-OOM,RLS deny-policy procedure,Regression,TESTED,,,security,2026-09-25,tests/test_sonny2746_rls_attribute_policy_oom.zig,23
-REQ-SONNY-2749-PROGRAM-GRAPH-LOCK,StatementAuthorization,GrpcHandler,TESTED,,,security,2026-09-25,src/transport/grpc_server.zig,3210
+REQ-SONNY-2749-PROGRAM-GRAPH-LOCK,StatementAuthorization,GrpcHandler,TESTED,,,security,2026-09-25,src/transport/grpc_server.zig,3282
 REQ-SONNY-2749-PROGRAM-GRAPH-LOCK,StatementAuthorization,ProgramGraph,TESTED,,,security,2026-09-25,src/query/query_traits.zig,610
 REQ-SONNY-2749-PROGRAM-GRAPH-LOCK,StatementAuthorization,ProgramWriteLock,TESTED,,,security,2026-09-25,src/graph_store.zig,14922
 REQ-SONNY-2749-PROGRAM-GRAPH-LOCK,StatementAuthorization,QuicHandler,TESTED,,,security,2026-09-25,src/server/quic_connection_handler.zig,7444
@@ -5322,7 +5322,7 @@ REQ-SONNY-2775-SESSION-GRAPH-GATE,GraphRBACEnforcement,Change,TESTED,,,security,
 REQ-SONNY-2775-SESSION-GRAPH-GATE,GraphRBACEnforcement,MayBind,TESTED,,,security,2026-09-26,src/execution/session_graph.zig,62
 REQ-SONNY-2775-SESSION-GRAPH-GATE,GraphRBACEnforcement,Regression,TESTED,,,security,2026-09-26,tests/test_sonny2775_session_graph_gate.zig,17
 REQ-SONNY-2775-SESSION-GRAPH-GATE,GraphRBACEnforcement,SessionSetGraph,TESTED,,,security,2026-09-26,src/execution.zig,1796
-REQ-SONNY-2776-TXN-ONE-GRAPH,StatementAuthorization,GrpcHandler,TESTED,,,security,2026-09-26,src/transport/grpc_server.zig,3283
+REQ-SONNY-2776-TXN-ONE-GRAPH,StatementAuthorization,GrpcHandler,TESTED,,,security,2026-09-26,src/transport/grpc_server.zig,3355
 REQ-SONNY-2776-TXN-ONE-GRAPH,StatementAuthorization,QuicE2E,TESTED,,,security,2026-09-26,tests/test_sonny2776_quic_graph_uses.zig,12
 REQ-SONNY-2776-TXN-ONE-GRAPH,StatementAuthorization,QuicHandler,TESTED,,,security,2026-09-26,src/server/quic_connection_handler.zig,7766
 REQ-SONNY-2776-TXN-ONE-GRAPH,StatementAuthorization,Regression,TESTED,,,security,2026-09-26,tests/test_sonny2776_session_graph_uses.zig,25
@@ -5341,17 +5341,17 @@ REQ-SONNY-2791-RESEAL-LEGACY,AuthDDLPersistence,SealRefusesUnsignedLegacy,TESTED
 REQ-SONNY-2798-OFFLINE-VERIFY-FIRST,OfflineAuthStoreSafety,Regression,TESTED,,,security,2026-09-26,tests/test_sonny2798_offline_verify.zig,22
 REQ-SONNY-2798-OFFLINE-VERIFY-FIRST,OfflineAuthStoreSafety,VerifyBeforeChange,TESTED,,,security,2026-09-26,src/cli/cli_auth_helpers.zig,212
 REQ-SONNY-2799-FAILED-TXN-ROLLBACK,TransactionManagement,DeferToHandler,TESTED,,,engine,2026-09-26,src/execution.zig,613
-REQ-SONNY-2799-FAILED-TXN-ROLLBACK,TransactionManagement,GrpcHandler,TESTED,,,engine,2026-09-26,src/transport/grpc_server.zig,1139
+REQ-SONNY-2799-FAILED-TXN-ROLLBACK,TransactionManagement,GrpcHandler,TESTED,,,engine,2026-09-26,src/transport/grpc_server.zig,1154
 REQ-SONNY-2799-FAILED-TXN-ROLLBACK,TransactionManagement,QuicHandler,TESTED,,,engine,2026-09-26,src/server/quic_connection_handler.zig,6315
 REQ-SONNY-2799-SESSION-UNDO-TXN,TransactionUndoLog,PerSession,TESTED,,,engine,2026-09-26,src/server/server_state.zig,467
 REQ-SONNY-2799-SESSION-UNDO-TXN,TransactionUndoLog,QuicPerMessage,TESTED,,,engine,2026-09-26,src/server/quic_connection_handler.zig,6865
-REQ-SONNY-2799-TXN-END-LOCK,TransactionManagement,GrpcHandler,TESTED,,,engine,2026-09-26,src/transport/grpc_server.zig,3196
+REQ-SONNY-2799-TXN-END-LOCK,TransactionManagement,GrpcHandler,TESTED,,,engine,2026-09-26,src/transport/grpc_server.zig,3268
 REQ-SONNY-2799-TXN-END-LOCK,TransactionManagement,QuicHandler,TESTED,,,engine,2026-09-26,src/server/quic_connection_handler.zig,7430
 REQ-SONNY-2799-UNDO-PER-TXN,TransactionUndoLog,NoMatchAll,TESTED,,,engine,2026-09-26,src/txn_undo_log.zig,740
 REQ-SONNY-2799-UNDO-PER-TXN,TransactionUndoLog,ThreadTxn,TESTED,,,engine,2026-09-26,src/txn_undo_log.zig,215
 REQ-SONNY-2802-PROFILE-REGIME,StatementAuthorization,ExplainProfileAlone,TESTED,,,security,2026-09-26,src/query/query_traits.zig,862
-REQ-SONNY-2802-PROFILE-REGIME,StatementAuthorization,GrpcHandler,TESTED,,,security,2026-09-26,src/transport/grpc_server.zig,3248
-REQ-SONNY-2802-PROFILE-REGIME,StatementAuthorization,GrpcProfileTxn,TESTED,,,security,2026-09-26,src/transport/grpc_server.zig,3547
+REQ-SONNY-2802-PROFILE-REGIME,StatementAuthorization,GrpcHandler,TESTED,,,security,2026-09-26,src/transport/grpc_server.zig,3320
+REQ-SONNY-2802-PROFILE-REGIME,StatementAuthorization,GrpcProfileTxn,TESTED,,,security,2026-09-26,src/transport/grpc_server.zig,3619
 REQ-SONNY-2802-PROFILE-REGIME,StatementAuthorization,QuicHandler,TESTED,,,security,2026-09-26,src/server/quic_connection_handler.zig,7735
 REQ-SONNY-2802-PROFILE-REGIME,StatementAuthorization,QuicProfileTxn,TESTED,,,security,2026-09-26,src/server/quic_connection_handler.zig,8431
 REQ-SONNY-2802-PROFILE-REGIME,StatementAuthorization,Regression,TESTED,,,security,2026-09-26,tests/test_sonny2802_profile_regime.zig,22
@@ -5361,7 +5361,7 @@ REQ-SONNY-2803-GRAPH-DDL-GATE,GraphRBACEnforcement,MaySchema,TESTED,,,security,2
 REQ-SONNY-2803-GRAPH-DDL-GATE,GraphRBACEnforcement,Regression,TESTED,,,security,2026-09-26,tests/test_sonny2803_graph_ddl_gate.zig,18
 REQ-SONNY-2804-STORAGE-PROC-GATE,GraphRBACEnforcement,Regression,TESTED,,,security,2026-09-26,tests/test_sonny2804_storage_procs_gate.zig,18
 REQ-SONNY-2804-STORAGE-PROC-GATE,GraphRBACEnforcement,StorageProcedures,TESTED,,,security,2026-09-26,src/execution/storage_dispatch.zig,3122
-REQ-SONNY-2805-TXN-PROGRAM-ORDER,TransactionManagement,GrpcHandler,TESTED,,,engine,2026-09-26,src/transport/grpc_server.zig,1099
+REQ-SONNY-2805-TXN-PROGRAM-ORDER,TransactionManagement,GrpcHandler,TESTED,,,engine,2026-09-26,src/transport/grpc_server.zig,1114
 REQ-SONNY-2805-TXN-PROGRAM-ORDER,TransactionManagement,QuicHandler,TESTED,,,engine,2026-09-26,src/server/quic_connection_handler.zig,6277
 REQ-SONNY-2805-TXN-PROGRAM-ORDER,TransactionManagement,TxnControl,TESTED,,,engine,2026-09-26,src/query/query_traits.zig,181
 REQ-SONNY-2805-TXN-SESSION,TransactionUndoLog,Regression,TESTED,,,engine,2026-09-26,tests/test_sonny2805_txn_sessions.zig,33
@@ -5373,8 +5373,8 @@ REQ-SONNY-2819-AUDIT-JSON-ESCAPE,AuditDurability,JsonStringEscape,TESTED,,,secur
 REQ-SONNY-2819-AUDIT-JSON-ESCAPE,AuditDurability,RefusalKeysHexEncoded,TESTED,,,security,2026-09-27,src/execution/crud_operations.zig,241
 REQ-SONNY-2819-AUDIT-JSON-ESCAPE,AuditDurability,Regression,TESTED,,,security,2026-09-27,tests/test_sonny2819_audit_log_injection.zig,21
 REQ-SONNY-2823-SESSION-ENGINE-TXN,TransactionManagement,CommitStatement,TESTED,,,storage,2026-09-26,src/execution.zig,1703
-REQ-SONNY-2823-SESSION-ENGINE-TXN,TransactionManagement,GrpcCommit,TESTED,,,storage,2026-09-26,src/transport/grpc_server.zig,4087
-REQ-SONNY-2823-SESSION-ENGINE-TXN,TransactionManagement,GrpcTeardown,TESTED,,,storage,2026-09-26,src/transport/grpc_server.zig,846
+REQ-SONNY-2823-SESSION-ENGINE-TXN,TransactionManagement,GrpcCommit,TESTED,,,storage,2026-09-26,src/transport/grpc_server.zig,4159
+REQ-SONNY-2823-SESSION-ENGINE-TXN,TransactionManagement,GrpcTeardown,TESTED,,,storage,2026-09-26,src/transport/grpc_server.zig,861
 REQ-SONNY-2823-SESSION-ENGINE-TXN,TransactionManagement,PerRequestInstall,TESTED,,,storage,2026-09-26,src/server/server_state.zig,468
 REQ-SONNY-2823-SESSION-ENGINE-TXN,TransactionManagement,ProgramEnd,TESTED,,,storage,2026-09-27,src/execution.zig,1204
 REQ-SONNY-2823-SESSION-ENGINE-TXN,TransactionManagement,QuicPerMessage,TESTED,,,storage,2026-09-26,src/server/quic_connection_handler.zig,6866
@@ -5382,16 +5382,16 @@ REQ-SONNY-2823-SESSION-ENGINE-TXN,TransactionManagement,Regression,TESTED,,,stor
 REQ-SONNY-2823-SESSION-ENGINE-TXN,TransactionManagement,RollBack,TESTED,,,storage,2026-09-26,src/server/server_state.zig,531
 REQ-SONNY-2823-SESSION-ENGINE-TXN,TransactionManagement,SessionSlot,TESTED,,,storage,2026-09-27,src/storage/graph_storage_adapter.zig,2820
 REQ-SONNY-2823-SESSION-ENGINE-TXN,TransactionManagement,SessionState,TESTED,,,storage,2026-09-26,src/server/server_state.zig,292
-REQ-SONNY-2824-HELLO-GRAPH-GATE,GraphRBACEnforcement,GrpcHello,TESTED,,,security,2026-09-27,src/transport/grpc_server.zig,2497
+REQ-SONNY-2824-HELLO-GRAPH-GATE,GraphRBACEnforcement,GrpcHello,TESTED,,,security,2026-09-27,src/transport/grpc_server.zig,2569
 REQ-SONNY-2824-HELLO-GRAPH-GATE,GraphRBACEnforcement,HelloGate,TESTED,,,security,2026-09-27,src/execution/session_graph.zig,165
 REQ-SONNY-2824-HELLO-GRAPH-GATE,GraphRBACEnforcement,QuicHello,TESTED,,,security,2026-09-27,src/server/quic_connection_handler.zig,7099
 REQ-SONNY-2824-HELLO-GRAPH-GATE,GraphRBACEnforcement,Regression,TESTED,,,security,2026-09-27,tests/test_sonny2824_hello_graph_gate.zig,20
 REQ-SONNY-3026-PROFILE-TXN-CONTROL,StatementAuthorization,ExplainProfileTarget,TESTED,,,security,2026-09-27,src/query/query_traits.zig,893
-REQ-SONNY-3026-PROFILE-TXN-CONTROL,StatementAuthorization,GrpcHandler,TESTED,,,security,2026-09-27,src/transport/grpc_server.zig,3257
+REQ-SONNY-3026-PROFILE-TXN-CONTROL,StatementAuthorization,GrpcHandler,TESTED,,,security,2026-09-27,src/transport/grpc_server.zig,3329
 REQ-SONNY-3026-PROFILE-TXN-CONTROL,StatementAuthorization,QuicHandler,TESTED,,,security,2026-09-27,src/server/quic_connection_handler.zig,7743
 REQ-SONNY-3026-PROFILE-TXN-CONTROL,StatementAuthorization,Regression,TESTED,,,security,2026-09-27,tests/test_sonny3026_profile_txn_control.zig,22
 REQ-SONNY-3027-PROFILE-ENGINE-TXN,TransactionManagement,CommitBeforeRelease,TESTED,,,storage,2026-09-27,src/storage/graph_storage_adapter.zig,2939
-REQ-SONNY-3027-PROFILE-ENGINE-TXN,TransactionManagement,GrpcProfileSettle,TESTED,,,storage,2026-09-27,src/transport/grpc_server.zig,3536
+REQ-SONNY-3027-PROFILE-ENGINE-TXN,TransactionManagement,GrpcProfileSettle,TESTED,,,storage,2026-09-27,src/transport/grpc_server.zig,3608
 REQ-SONNY-3027-PROFILE-ENGINE-TXN,TransactionManagement,Instrumentation,TESTED,,,storage,2026-09-27,src/storage/graph_storage_adapter.zig,2883
 REQ-SONNY-3027-PROFILE-ENGINE-TXN,TransactionManagement,ProfiledEntryPoint,TESTED,,,storage,2026-09-27,src/execution/planned_read_runtime.zig,475
 REQ-SONNY-3027-PROFILE-ENGINE-TXN,TransactionManagement,QuicProfileSettle,TESTED,,,storage,2026-09-27,src/server/quic_connection_handler.zig,8421
@@ -5412,7 +5412,7 @@ REQ-SONNY-3031-SESSION-COMMIT-FAILURE,TransactionManagement,ProgramEndCommit,TES
 REQ-SONNY-3031-SESSION-COMMIT-FAILURE,TransactionManagement,QuicCommit,TESTED,,,storage,2026-09-27,src/server/quic_connection_handler.zig,9118
 REQ-SONNY-3031-SESSION-COMMIT-FAILURE,TransactionManagement,Regression,TESTED,,,storage,2026-09-27,tests/test_sonny3031_session_commit_failure.zig,16
 REQ-SONNY-3032-GRPC-SESSION-EXPIRY,GrpcSessionLifetime,Config,TESTED,,,transport,2026-09-27,src/server/cli_args.zig,82
-REQ-SONNY-3032-GRPC-SESSION-EXPIRY,GrpcSessionLifetime,Reaper,TESTED,,,transport,2026-09-27,src/transport/grpc_server.zig,307
+REQ-SONNY-3032-GRPC-SESSION-EXPIRY,GrpcSessionLifetime,Reaper,TESTED,,,transport,2026-09-27,src/transport/grpc_server.zig,322
 REQ-SONNY-3032-GRPC-SESSION-EXPIRY,GrpcSessionLifetime,Regression,TESTED,,,transport,2026-09-27,tests/test_sonny3032_grpc_session_expiry.zig,24
 REQ-SONNY-3033-BATCH-GRAPH-GATE,MultiGraphIsolation,NoAutoCreate,TESTED,,,storage,2026-09-27,src/storage/group_commit.zig,776
 REQ-SONNY-3033-BATCH-GRAPH-GATE,MultiGraphIsolation,QuicBatchRoute,TESTED,,,security,2026-09-27,src/server/quic_connection_handler.zig,7816
@@ -5430,7 +5430,7 @@ REQ-SONNY-3038-REVOKE-DURABLE,GQL Auth DDL Persistence,RevokeFailureReported,TES
 REQ-SONNY-3038-SCHEMA-DDL-GATE,GraphRBACEnforcement,Regression,TESTED,,,security,2026-09-27,tests/test_sonny3038_revoke_and_schema_ddl.zig,13
 REQ-SONNY-3038-SCHEMA-DDL-GATE,GraphRBACEnforcement,SchemaDDL,TESTED,,,security,2026-09-27,src/execution.zig,2442
 REQ-SONNY-3130-GRAPH-DDL-ALONE,MultiGraphIsolation,GraphDdlAlone,TESTED,,,storage,2026-09-27,src/query/query_traits.zig,569
-REQ-SONNY-3130-GRAPH-DDL-ALONE,MultiGraphIsolation,GrpcHandler,TESTED,,,storage,2026-09-27,src/transport/grpc_server.zig,3273
+REQ-SONNY-3130-GRAPH-DDL-ALONE,MultiGraphIsolation,GrpcHandler,TESTED,,,storage,2026-09-27,src/transport/grpc_server.zig,3345
 REQ-SONNY-3130-GRAPH-DDL-ALONE,MultiGraphIsolation,QuicHandler,TESTED,,,storage,2026-09-27,src/server/quic_connection_handler.zig,7757
 REQ-SONNY-3130-GRAPH-DDL-ALONE,MultiGraphIsolation,Regression,TESTED,,,storage,2026-09-27,tests/test_sonny3130_graph_ddl_alone.zig,22
 REQ-SONNY-3131-CHECKPOINT-DROPPED-GRAPH,MultiGraphIsolation,GraphCheckpointRegistry,TESTED,,,storage,2026-09-27,src/storage/graph_storage_adapter.zig,9201
@@ -5482,16 +5482,18 @@ REQ-SONNY-3251-LIMIT-ERRORS,Execution,StatementLimitRelay,TESTED,,,execution,202
 REQ-SONNY-3251-LIMIT-ERRORS,ExpressionEvaluator,LimitErrorRelay,TESTED,,,eval,2026-09-28,src/eval.zig,129
 REQ-SONNY-3251-LIMIT-ERRORS,ExpressionEvaluator,PostfixChains,TESTED,,,eval,2026-09-28,src/eval.zig,1302
 REQ-SONNY-3251-LIMIT-ERRORS,ExpressionEvaluator,Regression,TESTED,,,eval,2026-09-28,tests/test_sonny3251_limit_errors.zig,29
-REQ-SONNY-3252-SESSION-CAP,GrpcSessionLifetime,PrincipalKeys,TESTED,,,transport,2026-09-28,src/transport/grpc_server.zig,261
+REQ-SONNY-3252-SESSION-CAP,GrpcSessionLifetime,PrincipalKeys,TESTED,,,transport,2026-09-28,src/transport/grpc_server.zig,263
 REQ-SONNY-3252-SESSION-CAP,GrpcSessionLifetime,Regression,TESTED,,,transport,2026-09-28,tests/test_sonny3252_grpc_session_cap.zig,24
 REQ-SONNY-3253-ADMISSION-STACK,QuicAdmission,StackAndSpawnFailure,TESTED,,,transport,2026-09-28,src/server/main.zig,293
 REQ-SONNY-3253-RETIRED-IDMAPS,IdMap,BoundedRetirement,TESTED,,,storage,2026-09-28,src/graph_store.zig,1992
 REQ-SONNY-3253-RETIRED-IDMAPS,IdMap,Regression,TESTED,,,storage,2026-09-28,tests/test_sonny3253_round14_minors.zig,17
-REQ-SONNY-3312-MULTI-GRAPH-READ,MultiGraphIsolation,GrpcHandler,TESTED,,,storage,2026-09-28,src/transport/grpc_server.zig,3336
+REQ-SONNY-3312-MULTI-GRAPH-READ,MultiGraphIsolation,GrpcHandler,TESTED,,,storage,2026-09-28,src/transport/grpc_server.zig,3408
 REQ-SONNY-3312-MULTI-GRAPH-READ,MultiGraphIsolation,QuicHandler,TESTED,,,storage,2026-09-28,src/server/quic_connection_handler.zig,8190
 REQ-SONNY-3312-MULTI-GRAPH-READ,MultiGraphIsolation,ReadGraphList,TESTED,,,storage,2026-09-28,src/query/query_traits.zig,694
 REQ-SONNY-3312-MULTI-GRAPH-READ,MultiGraphIsolation,Regression,TESTED,,,storage,2026-09-28,tests/test_sonny3312_multi_graph_read.zig,22
 REQ-SONNY-3312-MULTI-GRAPH-READ,MultiGraphIsolation,SnapshotEveryGraphRead,TESTED,,,storage,2026-09-28,src/graph_store.zig,15125
+REQ-SONNY-3313-GRPC-PEER-IP,GrpcSessionLifetime,PeerAddress,TESTED,,,transport,2026-09-28,src/transport/grpc_server.zig,2168
+REQ-SONNY-3313-GRPC-PEER-IP,GrpcSessionLifetime,Regression,TESTED,,,transport,2026-09-28,tests/test_sonny3313_grpc_peer_ip.zig,19
 REQ-SONNY-3314-IDMAP-PINS,IdMap,DropWaitsForHydration,TESTED,,,storage,2026-09-28,src/graph_store.zig,4352
 REQ-SONNY-3314-IDMAP-PINS,IdMap,PerMapHolders,TESTED,,,storage,2026-09-28,src/graph_store.zig,2597
 REQ-SONNY-3314-IDMAP-PINS,IdMap,Regression,TESTED,,,storage,2026-09-28,tests/test_sonny3314_idmap_holders.zig,26
@@ -5751,8 +5753,8 @@ REQ-TIMESERIES-WIRE-001,TimeseriesServerWiring,GlobalStore,TESTED,,,eval,2026-04
 REQ-TIMESERIES-WIRE-002,TimeseriesServerWiring,ExecutionContext,TESTED,,,engine,2026-04-01,src/execution.zig,642
 REQ-TIMESERIES-WIRE-003,TimeseriesServerWiring,ServerInit,TESTED,,,server,2026-04-01,src/server/main.zig,2326
 REQ-TLS-CERT-002,TLSCertVerification,Core,EXEMPT,,,cli,2026-01-12,src/cli/main.zig,1903
-REQ-TRANSPORT-GRPC-PUSH-UNLOCKED-001,GrpcSessionSafety,PushLoopLockScope,TESTED,,,transport,2026-09-14,src/transport/grpc_server.zig,1710
-REQ-TRANSPORT-GRPC-RESULT-EPOCH-001,GrpcSessionSafety,ResultGeneration,TESTED,,,transport,2026-09-14,src/transport/grpc_server.zig,146
+REQ-TRANSPORT-GRPC-PUSH-UNLOCKED-001,GrpcSessionSafety,PushLoopLockScope,TESTED,,,transport,2026-09-14,src/transport/grpc_server.zig,1725
+REQ-TRANSPORT-GRPC-RESULT-EPOCH-001,GrpcSessionSafety,ResultGeneration,TESTED,,,transport,2026-09-14,src/transport/grpc_server.zig,148
 REQ-TRANSPORT-GRPC-SHUTDOWN-001,GrpcServerLifecycle,InFlightHandlerDrain,TESTED,,,transport,2026-09-01,tests/test_grpc_shutdown_drain.zig,53
 REQ-TRANSPORT-GRPC-SHUTDOWN-002,GrpcServerLifecycle,NoFalseSuccessOnShutdown,TESTED,,,transport,2026-09-01,tests/test_grpc_shutdown_drain.zig,54
 REQ-TRIG-001,TrigonometricFunctions,Sin,TESTED,,,eval,2026-01-15,tests/test_gap_0193_impl_verification.zig,261
@@ -5837,8 +5839,8 @@ REQ-TXN-SAVEPOINT-002,TransactionSavepoints,CreateSavepoint,IMPL,,,engine,2026-0
 REQ-TXN-SAVEPOINT-003,TransactionSavepoints,RollbackToSavepoint,IMPL,,,engine,2026-04-01,src/txn_undo_log.zig,565
 REQ-TXN-SAVEPOINT-004,TransactionSavepoints,QuicSavepoint,TESTED,,,transport,2026-06-11,src/server/quic_connection_handler.zig,9178
 REQ-TXN-SAVEPOINT-005,TransactionSavepoints,QuicRollbackTo,TESTED,,,transport,2026-06-11,src/server/quic_connection_handler.zig,9198
-REQ-TXN-SAVEPOINT-006,TransactionSavepoints,GrpcSavepoint,IMPL,,,transport,2026-04-01,src/transport/grpc_server.zig,4175
-REQ-TXN-SAVEPOINT-007,TransactionSavepoints,GrpcRollbackTo,IMPL,,,transport,2026-04-01,src/transport/grpc_server.zig,4231
+REQ-TXN-SAVEPOINT-006,TransactionSavepoints,GrpcSavepoint,IMPL,,,transport,2026-04-01,src/transport/grpc_server.zig,4247
+REQ-TXN-SAVEPOINT-007,TransactionSavepoints,GrpcRollbackTo,IMPL,,,transport,2026-04-01,src/transport/grpc_server.zig,4303
 REQ-TXN-UNDO-001,TransactionUndoLog,UndoEntry,TESTED,,,engine,2026-01-15,tests/test_gap_0193_impl_verification.zig,70
 REQ-TXN-UNDO-001,TransactionUndoLog,UndoLogCore,TESTED,,,engine,2025-12-23,src/txn_undo_log.zig,7
 REQ-TXN-UNDO-001,TransactionUndoLog,UndoLogCore,TESTED,,,engine,2026-01-15,tests/test_gap_0193_high_priority.zig,165
