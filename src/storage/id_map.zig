@@ -159,6 +159,28 @@ pub const IdMap = struct {
         if (self.base) |*b| b.deinit();
     }
 
+    /// SONNY-3180: free the map's contents, under its mutex, and leave it
+    /// empty and usable: its graph was dropped, and the store keeps the
+    /// IdMap itself until it goes, for the walks over every graph that took
+    /// it before the drop.
+    pub fn releaseContents(self: *IdMap) void {
+        self.lockMu();
+        defer self.unlockMu();
+        self.node_uuid_to_slot.clearAndFree();
+        self.node_slot_to_uuid.clearAndFree();
+        self.edge_uuid_to_slot.clearAndFree();
+        self.edge_slot_to_uuid.clearAndFree();
+        self.removed_node_uuids.clearAndFree();
+        self.removed_node_slots.clearAndFree();
+        self.removed_edge_uuids.clearAndFree();
+        self.removed_edge_slots.clearAndFree();
+        if (self.base) |*b| b.deinit();
+        self.base = null;
+        self.mode = .resident;
+        self.node_live_delta = 0;
+        self.edge_live_delta = 0;
+    }
+
     /// PHASE 4: adopt a loaded snapshot as the immutable BASE and switch to
     /// `.mmap_backed` mode. Takes ownership of `snap` (deinit unmaps it). The
     /// overlay (the four hashmaps) MUST be empty when this is called — this is

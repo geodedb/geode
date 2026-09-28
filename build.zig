@@ -9171,6 +9171,19 @@ pub fn build(b: *std.Build) void {
     const sonny3181_step = b.step("test-sonny3181-expr-chain-cap", "Run SONNY-3181/SONNY-3189 regression (an expression of more than max_expr_links operator links is refused, 42000; chains of +, AND, OR, ||, member access and unary operators in RETURN, WHERE, ORDER BY, a property map, a UNION arm, an aggregate and EXPLAIN evaluate correctly up to the cap; no length to 1,000,000 terms overflows an 8 MiB or 16 MiB thread; gRPC in process, parser, QUIC; run in Debug and ReleaseSafe)");
     sonny3181_step.dependOn(&run_sonny3181_tests.step);
 
+    // SONNY-3180: GraphStore.id_maps under a lock, and each IdMap at an
+    // address of its own: threads creating and using the IdMaps of distinct
+    // graphs, readers and a CREATE/DROP GRAPH loop, all at once, under the
+    // testing allocator.
+    const sonny3180_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny3180_id_maps_race.zig"), .target = target, .optimize = optimize });
+    sonny3180_test_mod.link_libc = true;
+    sonny3180_test_mod.addImport("geode", root_mod);
+    const sonny3180_tests = b.addTest(.{ .root_module = sonny3180_test_mod });
+    const run_sonny3180_tests = b.addRunArtifact(sonny3180_tests);
+    shardDep(test_step, &run_sonny3180_tests.step, 1, test_shard_loads, test_shard_index);
+    const sonny3180_step = b.step("test-sonny3180-id-maps-race", "Run SONNY-3180 regression (GraphStore.id_maps is locked and each IdMap keeps its address: writers of distinct graphs, readers and CREATE/DROP GRAPH at once, no corruption, under the testing allocator)");
+    sonny3180_step.dependOn(&run_sonny3180_tests.step);
+
     // SONNY-2790: the fulltext statements (CREATE/DROP INDEX, geode.fts.*)
     // run on the default graph, so the handlers lock `default` for them from
     // any session. Classifier, and the real gRPC handler (SONNY-1560 shim).

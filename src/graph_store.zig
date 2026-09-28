@@ -25,6 +25,8 @@ const fle_integration = @import("fle_integration.zig");
 // installed a thread-local budget scope (write-carrying MATCH shapes only).
 const write_budget = @import("write_budget.zig");
 const id_map_mod = @import("storage/id_map.zig");
+/// SONNY-3180: the per-graph UUID <-> engine-slot map (`GraphStore.id_maps`).
+pub const IdMap = id_map_mod.IdMap;
 const hydration_snapshot = @import("storage/hydration_snapshot.zig");
 const uuid = @import("uuid");
 const sharded_store = @import("graph_storage").sharded_store;
@@ -1949,7 +1951,23 @@ pub const GraphStore = struct {
     outgoing_edges: AdjCache, // from_node_id -> PUBLIC edge_ids (bounded)
     incoming_edges: AdjCache, // to_node_id -> PUBLIC edge_ids (bounded)
     /// Per-graph IdMaps for UUIDv7 ↔ engine slot_id translation.
-    id_maps: std.StringHashMap(id_map_mod.IdMap) = undefined,
+    ///
+    /// CANARY: REQ=REQ-SONNY-3180-ID-MAPS-LOCK; FEATURE="GraphStore"; ASPECT=IdMapsLock; STATUS=TESTED; TEST=tests/test_sonny3180_id_maps_race.zig; OWNER=storage; UPDATED=2026-09-27
+    /// SONNY-3180: one map for the whole store, used by the writers and
+    /// readers of every graph at once (a graph's own lock serializes only
+    /// its writers), so it is guarded by `id_maps_lock`: lookups share it,
+    /// a graph's first IdMap is created under it exclusively after a shared
+    /// miss (`getOrCreateIdMap`), and a walk over every graph holds it
+    /// shared or copies the list under it (`idMapsSnapshot`). Each IdMap is
+    /// allocated on its own, so an insert that grows the map moves none: the
+    /// maps were stored inline, and an insert moved every graph's IdMap, and
+    /// its mutex, from under the threads holding pointers to them. A dropped
+    /// graph's IdMap is emptied and kept, with its name, in
+    /// `retired_id_maps` until the store goes, so a pointer or a name a walk
+    /// took before the drop stays valid.
+    id_maps: std.StringHashMap(*id_map_mod.IdMap) = undefined,
+    id_maps_lock: std.Io.RwLock = std.Io.RwLock.init,
+    retired_id_maps: std.ArrayList(IdMapRef) = .empty,
     // dsn_graph_binding.yml race fix (2026-05-23): serialize CREATE /
     // OPEN-OR-CREATE / DROP graph mutations so the in-memory `graphs`
     // map and the adapter-backed registry can't observe each other in
@@ -2059,7 +2077,7 @@ pub const GraphStore = struct {
                 .hydrate_fn = null,
                 .hydrate_ctx = null,
             }),
-            .id_maps = std.StringHashMap(id_map_mod.IdMap).init(allocator),
+            .id_maps = std.StringHashMap(*id_map_mod.IdMap).init(allocator),
             // PHASE 1b: per-graph deferred-hydration registry.
             .pending_hydration = std.StringHashMap(*HydrationEntry).init(allocator),
         };
@@ -2180,9 +2198,12 @@ pub const GraphStore = struct {
         var id_map_iter = self.id_maps.iterator();
         while (id_map_iter.next()) |entry| {
             self.allocator.free(entry.key_ptr.*);
-            entry.value_ptr.deinit();
+            entry.value_ptr.*.deinit();
+            self.allocator.destroy(entry.value_ptr.*);
         }
         self.id_maps.deinit();
+        self.freeRetiredIdMaps();
+        self.retired_id_maps.deinit(self.allocator);
 
         // PHASE 1b: free the per-graph deferred-hydration registry (owned key +
         // heap-allocated HydrationEntry).
@@ -2297,13 +2318,19 @@ pub const GraphStore = struct {
         self.incoming_edges.clearRetainingCapacity();
 
         // Reset per-graph IdMaps
+        // SONNY-3180: under the map's lock; a restore runs with no other
+        // user of the store, but the lock costs nothing here.
+        const io = std.Io.Threaded.global_single_threaded.io();
+        self.id_maps_lock.lockUncancelable(io);
+        defer self.id_maps_lock.unlock(io);
         var id_map_iter = self.id_maps.iterator();
         while (id_map_iter.next()) |entry| {
             self.allocator.free(entry.key_ptr.*);
-            entry.value_ptr.deinit();
+            entry.value_ptr.*.deinit();
+            self.allocator.destroy(entry.value_ptr.*);
         }
         self.id_maps.deinit();
-        self.id_maps = std.StringHashMap(id_map_mod.IdMap).init(self.allocator);
+        self.id_maps = std.StringHashMap(*id_map_mod.IdMap).init(self.allocator);
     }
 
     /// Clear the graph registry (removes all graph names, for test isolation)
@@ -2373,18 +2400,80 @@ pub const GraphStore = struct {
     }
 
     /// Get or create the IdMap for a named graph.
+    ///
+    /// SONNY-3180: a shared lookup first; the IdMap is created under the
+    /// lock held exclusively, looked up again there (another thread may have
+    /// created it in between). The IdMap has an address of its own, which no
+    /// later insert moves.
     pub fn getOrCreateIdMap(self: *GraphStore, graph_name: []const u8) !*id_map_mod.IdMap {
-        const result = try self.id_maps.getOrPut(graph_name);
-        if (!result.found_existing) {
-            result.key_ptr.* = try self.allocator.dupe(u8, graph_name);
-            result.value_ptr.* = id_map_mod.IdMap.init(self.allocator);
-        }
-        return result.value_ptr;
+        if (self.getIdMap(graph_name)) |im| return im;
+        const io = std.Io.Threaded.global_single_threaded.io();
+        self.id_maps_lock.lockUncancelable(io);
+        defer self.id_maps_lock.unlock(io);
+        if (self.id_maps.get(graph_name)) |im| return im;
+        const key = try self.allocator.dupe(u8, graph_name);
+        errdefer self.allocator.free(key);
+        const im = try self.allocator.create(id_map_mod.IdMap);
+        errdefer self.allocator.destroy(im);
+        im.* = id_map_mod.IdMap.init(self.allocator);
+        try self.id_maps.put(key, im);
+        return im;
     }
 
     /// Get the IdMap for a named graph (read-only, returns null if not found).
+    /// SONNY-3180: under `id_maps_lock`, shared.
     pub fn getIdMap(self: *GraphStore, graph_name: []const u8) ?*id_map_mod.IdMap {
-        return self.id_maps.getPtr(graph_name);
+        const io = std.Io.Threaded.global_single_threaded.io();
+        self.id_maps_lock.lockSharedUncancelable(io);
+        defer self.id_maps_lock.unlockShared(io);
+        return self.id_maps.get(graph_name);
+    }
+
+    /// SONNY-3180: a graph's IdMap, with the name `id_maps` keys it by.
+    pub const IdMapRef = struct { graph_name: []const u8, map: *id_map_mod.IdMap };
+
+    /// SONNY-3180: every graph's IdMap, copied under `id_maps_lock`, for a
+    /// walk that does more than read the maps: it may hydrate from the
+    /// engine, which looks the maps up again, and a shared lock taken twice
+    /// on one thread can wait forever behind a writer that waits for the
+    /// first. The names and maps stay valid for the store's life (a dropped
+    /// graph's are retired, not freed). The caller frees the slice.
+    fn idMapsSnapshot(self: *GraphStore, allocator: std.mem.Allocator) ![]IdMapRef {
+        const io = std.Io.Threaded.global_single_threaded.io();
+        self.id_maps_lock.lockSharedUncancelable(io);
+        defer self.id_maps_lock.unlockShared(io);
+        const out = try allocator.alloc(IdMapRef, self.id_maps.count());
+        var it = self.id_maps.iterator();
+        var i: usize = 0;
+        while (it.next()) |entry| : (i += 1) out[i] = .{ .graph_name = entry.key_ptr.*, .map = entry.value_ptr.* };
+        return out;
+    }
+
+    /// SONNY-3180: take `graph_name`'s IdMap out of `id_maps` (its graph is
+    /// dropped). Its contents are freed; the IdMap and its name are kept in
+    /// `retired_id_maps` until the store goes, for the walks that took them
+    /// before.
+    fn retireIdMap(self: *GraphStore, graph_name: []const u8) void {
+        const io = std.Io.Threaded.global_single_threaded.io();
+        self.id_maps_lock.lockUncancelable(io);
+        defer self.id_maps_lock.unlock(io);
+        const kv = self.id_maps.fetchRemove(graph_name) orelse return;
+        kv.value.releaseContents();
+        self.retired_id_maps.append(self.allocator, .{ .graph_name = kv.key, .map = kv.value }) catch {
+            // No room to keep it: free it as before SONNY-3180.
+            self.allocator.free(kv.key);
+            kv.value.deinit();
+            self.allocator.destroy(kv.value);
+        };
+    }
+
+    fn freeRetiredIdMaps(self: *GraphStore) void {
+        for (self.retired_id_maps.items) |r| {
+            self.allocator.free(r.graph_name);
+            r.map.deinit();
+            self.allocator.destroy(r.map);
+        }
+        self.retired_id_maps.clearRetainingCapacity();
     }
 
     fn requireIdMap(self: *GraphStore, graph_name: []const u8) !*id_map_mod.IdMap {
@@ -2392,19 +2481,23 @@ pub const GraphStore = struct {
     }
 
     fn cloneIdMapsFrom(self: *GraphStore, source: *const GraphStore) !void {
-        var it = source.id_maps.iterator();
-        while (it.next()) |entry| {
-            const graph_name = entry.key_ptr.*;
+        // SONNY-3180: the source's list, copied under its lock.
+        const refs = try @constCast(source).idMapsSnapshot(self.allocator);
+        defer self.allocator.free(refs);
+        const io = std.Io.Threaded.global_single_threaded.io();
+        self.id_maps_lock.lockUncancelable(io);
+        defer self.id_maps_lock.unlock(io);
+        for (refs) |ref| {
+            const graph_name = ref.graph_name;
             if (self.id_maps.contains(graph_name)) continue;
 
             const key_copy = try self.allocator.dupe(u8, graph_name);
             errdefer self.allocator.free(key_copy);
 
-            const map_copy = try entry.value_ptr.clone(self.allocator);
-            errdefer {
-                var map = map_copy;
-                map.deinit();
-            }
+            const map_copy = try self.allocator.create(id_map_mod.IdMap);
+            errdefer self.allocator.destroy(map_copy);
+            map_copy.* = try ref.map.clone(self.allocator);
+            errdefer map_copy.deinit();
 
             try self.id_maps.put(key_copy, map_copy);
         }
@@ -2493,17 +2586,20 @@ pub const GraphStore = struct {
             // freed after copying (they are NOT inserted into the source cache,
             // so a full snapshot never blows the source's resident bound).
             const adapter = global_adapter;
-            var it = @constCast(source).id_maps.iterator();
-            while (it.next()) |im_entry| {
-                const graph_name = im_entry.key_ptr.*;
-                var nit = im_entry.value_ptr.nodeUuidIterator();
+            // SONNY-3180: the source's IdMaps, copied under its lock (the
+            // walk hydrates, which looks them up again).
+            const refs = try @constCast(source).idMapsSnapshot(self.allocator);
+            defer self.allocator.free(refs);
+            for (refs) |im_entry| {
+                const graph_name = im_entry.graph_name;
+                var nit = im_entry.map.nodeUuidIterator();
                 while (nit.next()) |nuuid| {
                     const id = @as(u64, @truncate(nuuid));
                     if (@constCast(source).nodes.get(id)) |resident| {
                         var n = resident;
                         try self.cloneOneNode(&n);
                     } else if (adapter) |ad| {
-                        const slot = im_entry.value_ptr.nodeSlot(@as(u128, id)) orelse continue;
+                        const slot = im_entry.map.nodeSlot(@as(u128, id)) orelse continue;
                         var materialized = (try materializeNodeFromEngine(ad, self.allocator, graph_name, slot, id)) orelse continue;
                         defer freeNodeValue(self.allocator, &materialized);
                         try self.cloneOneNode(&materialized);
@@ -2560,9 +2656,14 @@ pub const GraphStore = struct {
     /// with no adapter).
     const GraphSlot = struct { graph_name: []const u8, slot_id: u64 };
     fn resolveNodeGraphSlot(self: *GraphStore, node_id: u64) ?GraphSlot {
+        // SONNY-3180: under `id_maps_lock`, shared; the walk only reads the
+        // IdMaps (their own mutex), and a name stays valid after a drop.
+        const io = std.Io.Threaded.global_single_threaded.io();
+        self.id_maps_lock.lockSharedUncancelable(io);
+        defer self.id_maps_lock.unlockShared(io);
         var it = self.id_maps.iterator();
         while (it.next()) |entry| {
-            if (entry.value_ptr.nodeSlot(@as(u128, node_id))) |slot| {
+            if (entry.value_ptr.*.nodeSlot(@as(u128, node_id))) |slot| {
                 return .{ .graph_name = entry.key_ptr.*, .slot_id = slot };
             }
         }
@@ -3124,9 +3225,13 @@ pub const GraphStore = struct {
     /// scanning the per-graph IdMaps (fully resident, independent of the bounded
     /// edge cache). Mirrors `resolveNodeGraphSlot`. Null if no IdMap maps it.
     fn resolveEdgeGraphSlot(self: *GraphStore, edge_id: u64) ?EdgeGraphSlot {
+        // SONNY-3180: as `resolveNodeGraphSlot`.
+        const io = std.Io.Threaded.global_single_threaded.io();
+        self.id_maps_lock.lockSharedUncancelable(io);
+        defer self.id_maps_lock.unlockShared(io);
         var it = self.id_maps.iterator();
         while (it.next()) |entry| {
-            if (entry.value_ptr.edgeSlot(@as(u128, edge_id))) |slot| {
+            if (entry.value_ptr.*.edgeSlot(@as(u128, edge_id))) |slot| {
                 return .{ .graph_name = entry.key_ptr.*, .edge_slot = slot };
             }
         }
@@ -3924,11 +4029,8 @@ pub const GraphStore = struct {
             self.allocator.free(kv.key);
         }
         // Clean up IdMap for dropped graph
-        if (self.id_maps.fetchRemove(graph_name)) |kv| {
-            self.allocator.free(kv.key);
-            var im = kv.value;
-            im.deinit();
-        }
+        // SONNY-3180: under `id_maps_lock`; emptied and kept (`retireIdMap`).
+        self.retireIdMap(graph_name);
         self.dirty.store(true, .release);
         incrementMutationEpoch();
     }
@@ -6743,13 +6845,15 @@ pub const GraphStore = struct {
         }
         var ids: std.ArrayList(u64) = .empty;
         errdefer ids.deinit(allocator);
-        var it = @constCast(self).id_maps.iterator();
-        while (it.next()) |entry| {
+        // SONNY-3180: the IdMaps, copied under `id_maps_lock`.
+        const refs = try @constCast(self).idMapsSnapshot(allocator);
+        defer allocator.free(refs);
+        for (refs) |entry| {
             // geode#875 RC-3: snapshot each graph's node uuids UNDER the IdMap
             // leaf mutex — an unlocked `nodeUuidIterator` walk faults when a
             // concurrent MERGE/insert resizes `node_uuid_to_slot` (the
             // knn-scan-race crash).
-            const uuids = try entry.value_ptr.snapshotNodeUuids(allocator);
+            const uuids = try entry.map.snapshotNodeUuids(allocator);
             defer allocator.free(uuids);
             for (uuids) |nuuid| try ids.append(allocator, @as(u64, @truncate(nuuid)));
         }
@@ -6782,16 +6886,19 @@ pub const GraphStore = struct {
         // (without populating the cache, so a full scan doesn't blow the bound).
         var result: std.ArrayList(u64) = .empty;
         errdefer result.deinit(allocator);
-        var it = @constCast(self).id_maps.iterator();
-        while (it.next()) |entry| {
-            const graph_name = entry.key_ptr.*;
+        // SONNY-3180: the IdMaps, copied under `id_maps_lock` (the walk
+        // hydrates, which looks them up again).
+        const refs = try @constCast(self).idMapsSnapshot(allocator);
+        defer allocator.free(refs);
+        for (refs) |entry| {
+            const graph_name = entry.graph_name;
             // geode#875 RC-3: snapshot uuids under the IdMap leaf mutex (race-safe
             // vs. concurrent insert), then resolve each id's tenant outside it.
-            const uuids = try entry.value_ptr.snapshotNodeUuids(allocator);
+            const uuids = try entry.map.snapshotNodeUuids(allocator);
             defer allocator.free(uuids);
             for (uuids) |nuuid| {
                 const id = @as(u64, @truncate(nuuid));
-                if (@constCast(self).nodeMatchesTenant(graph_name, entry.value_ptr, id, tid)) {
+                if (@constCast(self).nodeMatchesTenant(graph_name, entry.map, id, tid)) {
                     try result.append(allocator, id);
                 }
             }
@@ -6853,9 +6960,12 @@ pub const GraphStore = struct {
         // getAllNodesForTenant's bounded-cache branch.
         var result: std.ArrayList(u64) = .empty;
         errdefer result.deinit(allocator);
-        var it = @constCast(self).id_maps.iterator();
-        while (it.next()) |entry| {
-            var eit = entry.value_ptr.edgeUuidIterator();
+        // SONNY-3180: the IdMaps, copied under `id_maps_lock` (the walk
+        // hydrates, which looks them up again).
+        const refs = try @constCast(self).idMapsSnapshot(allocator);
+        defer allocator.free(refs);
+        for (refs) |entry| {
+            var eit = entry.map.edgeUuidIterator();
             while (eit.next()) |euuid| {
                 const eid = @as(u64, @truncate(euuid));
                 if (tenant) |tid| {
@@ -7280,9 +7390,13 @@ pub const GraphStore = struct {
             return self.nodes.count();
         }
         var total: usize = 0;
+        // SONNY-3180: under `id_maps_lock`, shared.
+        const io = std.Io.Threaded.global_single_threaded.io();
+        self.id_maps_lock.lockSharedUncancelable(io);
+        defer self.id_maps_lock.unlockShared(io);
         var it = self.id_maps.iterator();
         while (it.next()) |entry| {
-            total += entry.value_ptr.nodeCount();
+            total += entry.value_ptr.*.nodeCount();
         }
         return total;
     }
@@ -7449,9 +7563,13 @@ pub const GraphStore = struct {
             return self.edges.count();
         }
         var total: usize = 0;
+        // SONNY-3180: under `id_maps_lock`, shared.
+        const io = std.Io.Threaded.global_single_threaded.io();
+        self.id_maps_lock.lockSharedUncancelable(io);
+        defer self.id_maps_lock.unlockShared(io);
         var it = self.id_maps.iterator();
         while (it.next()) |entry| {
-            total += entry.value_ptr.edgeCount();
+            total += entry.value_ptr.*.edgeCount();
         }
         return total;
     }
@@ -7522,9 +7640,11 @@ pub const GraphStore = struct {
             var it = @constCast(self).edges.iterator();
             while (it.next()) |entry| try result.append(allocator, entry.key_ptr.*);
         } else {
-            var im_it = @constCast(self).id_maps.iterator();
-            while (im_it.next()) |entry| {
-                var eit = entry.value_ptr.edgeUuidIterator();
+            // SONNY-3180: the IdMaps, copied under `id_maps_lock`.
+            const refs = try @constCast(self).idMapsSnapshot(allocator);
+            defer allocator.free(refs);
+            for (refs) |entry| {
+                var eit = entry.map.edgeUuidIterator();
                 while (eit.next()) |euuid| try result.append(allocator, @as(u64, @truncate(euuid)));
             }
         }
@@ -10053,9 +10173,11 @@ pub const GraphStore = struct {
     /// write happened since. Best-effort per graph: a failure to write one
     /// snapshot just means that graph falls back to the scan-rebuild next open.
     fn saveIdMapSnapshots(self: *GraphStore, adapter: *graph_storage_adapter.StorageAdapter) void {
-        var it = self.id_maps.iterator();
-        while (it.next()) |entry| {
-            self.saveIdMapSnapshotForGraph(adapter, entry.key_ptr.*, entry.value_ptr);
+        // SONNY-3180: the IdMaps, copied under `id_maps_lock`.
+        const refs = self.idMapsSnapshot(self.allocator) catch return;
+        defer self.allocator.free(refs);
+        for (refs) |entry| {
+            self.saveIdMapSnapshotForGraph(adapter, entry.graph_name, entry.map);
         }
     }
 
@@ -10327,9 +10449,11 @@ pub const GraphStore = struct {
     ///     preserved files fail the counter gate on the next open and that
     ///     graph pays one scan — safe direction.
     fn saveHydrationSnapshots(self: *GraphStore, adapter: *graph_storage_adapter.StorageAdapter) void {
-        var it = self.id_maps.iterator();
-        while (it.next()) |entry| {
-            self.saveHydrationSnapshotsForOneGraph(adapter, entry.key_ptr.*, entry.value_ptr);
+        // SONNY-3180: the IdMaps, copied under `id_maps_lock`.
+        const refs = self.idMapsSnapshot(self.allocator) catch return;
+        defer self.allocator.free(refs);
+        for (refs) |entry| {
+            self.saveHydrationSnapshotsForOneGraph(adapter, entry.graph_name, entry.map);
         }
     }
 
@@ -13150,10 +13274,13 @@ pub const GraphStore = struct {
             // node rebuilt from the engine (freed after serialize, so a full
             // backup never blows the resident bound).
             const adapter = global_adapter;
-            var it = self.id_maps.iterator();
-            while (it.next()) |im_entry| {
-                const graph_name = im_entry.key_ptr.*;
-                var nit = im_entry.value_ptr.nodeUuidIterator();
+            // SONNY-3180: the IdMaps, copied under `id_maps_lock` (the walk
+            // hydrates, which looks them up again).
+            const refs = try self.idMapsSnapshot(allocator);
+            defer allocator.free(refs);
+            for (refs) |im_entry| {
+                const graph_name = im_entry.graph_name;
+                var nit = im_entry.map.nodeUuidIterator();
                 while (nit.next()) |nuuid| {
                     const id = @as(u64, @truncate(nuuid));
                     if (self.nodes.get(id)) |resident| {
@@ -13161,7 +13288,7 @@ pub const GraphStore = struct {
                         try appendNodeJson(&buf, allocator, id, &n);
                         try buf.append(allocator, '\n');
                     } else if (adapter) |ad| {
-                        const slot = im_entry.value_ptr.nodeSlot(@as(u128, id)) orelse continue;
+                        const slot = im_entry.map.nodeSlot(@as(u128, id)) orelse continue;
                         var materialized = (try materializeNodeFromEngine(ad, allocator, graph_name, slot, id)) orelse continue;
                         defer freeNodeValue(allocator, &materialized);
                         try appendNodeJson(&buf, allocator, id, &materialized);
@@ -13185,9 +13312,11 @@ pub const GraphStore = struct {
             // if present, else an edge rebuilt from the engine via
             // hydrate-on-miss (residency stays bounded). Mirrors the node branch
             // above so a snapshot/backup never misses an evicted edge.
-            var it = self.id_maps.iterator();
-            while (it.next()) |im_entry| {
-                var eit = im_entry.value_ptr.edgeUuidIterator();
+            // SONNY-3180: the IdMaps, copied under `id_maps_lock`.
+            const refs = try self.idMapsSnapshot(allocator);
+            defer allocator.free(refs);
+            for (refs) |im_entry| {
+                var eit = im_entry.map.edgeUuidIterator();
                 while (eit.next()) |euuid| {
                     const id = @as(u64, @truncate(euuid));
                     if (self.getEdgePtrHydrated(id)) |edge| {
@@ -13408,10 +13537,12 @@ pub const GraphStore = struct {
         const adapter = global_adapter orelse return;
         const io = std.Io.Threaded.global_single_threaded.io();
         // Serialize registration against in-flight lazy builds: the open step
-        // mutates store-wide maps (id_maps via getOrCreateIdMap) whose INLINE
-        // values a running build dereferences — a rehash under the build's
-        // feet is the same use-after-move hazard class the reload fix above
-        // closes. Same lock order as the build path (build -> hydration leaf).
+        // mutates store-wide maps (id_maps via getOrCreateIdMap) whose values
+        // a running build dereferences — a rehash under the build's feet is
+        // the same use-after-move hazard class the reload fix above closes
+        // (SONNY-3180 boxed the IdMaps and put `id_maps` under its own lock;
+        // this still serializes the rest). Same lock order as the build path
+        // (build -> hydration leaf).
         self.hydration_build_mutex.lockUncancelable(io);
         defer self.hydration_build_mutex.unlock(io);
         for (graph_names) |graph_name| {
