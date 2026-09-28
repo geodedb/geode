@@ -9320,6 +9320,24 @@ pub fn build(b: *std.Build) void {
     const sonny3251_step = b.step("test-sonny3251-limit-errors", "Run SONNY-3251 regression (the review's slice, index, member and mixed postfix chains evaluate correctly up to max_expr_links in WHERE, RETURN, WITH ... WHERE, EXISTS and HAVING; a forced 54001 fails the query in WHERE, WITH ... WHERE, EXISTS, COUNT, HAVING, aggregates, function arguments, projections and hops; gRPC in process on 8 MiB and 16 MiB threads; run in Debug and ReleaseSafe)");
     sonny3251_step.dependOn(&run_sonny3251_tests.step);
 
+    // SONNY-3252 (round 15, F8, F9): the per-principal gRPC session cap
+    // never closes a session in an open transaction (refuses instead), keys
+    // anonymous clients per peer, loses nothing on a failed insert, and tears
+    // closed sessions down on the reaper.
+    const sonny3252_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny3252_grpc_session_cap.zig"), .target = target, .optimize = optimize });
+    sonny3252_test_mod.link_libc = true;
+    sonny3252_test_mod.addImport("geode", root_mod);
+    sonny3252_test_mod.addImport("schema", schema_mod);
+    sonny3252_test_mod.addImport("protobuf", protobuf_mod);
+    sonny3252_test_mod.addImport("grpc_impl", sonny1560_shim_mod);
+    sonny3252_test_mod.addImport("logging", logging_mod);
+    sonny3252_test_mod.addImport("transport/quic", transport_quic_mod);
+    const sonny3252_tests = b.addTest(.{ .root_module = sonny3252_test_mod });
+    const run_sonny3252_tests = b.addRunArtifact(sonny3252_tests);
+    shardDep(test_step, &run_sonny3252_tests.step, 1, test_shard_loads, test_shard_index);
+    const sonny3252_step = b.step("test-sonny3252-grpc-session-cap", "Run SONNY-3252 regression (at max_sessions_per_principal a session in an open transaction is never closed and the Handshake is refused; anonymous clients count per peer and federation peers per peer; the cap is per user name, not tenant; a Handshake failing at any allocation closes and leaks nothing; the cap alone starts the reaper, which tears closed sessions down)");
+    sonny3252_step.dependOn(&run_sonny3252_tests.step);
+
     // SONNY-2790: the fulltext statements (CREATE/DROP INDEX, geode.fts.*)
     // run on the default graph, so the handlers lock `default` for them from
     // any session. Classifier, and the real gRPC handler (SONNY-1560 shim).

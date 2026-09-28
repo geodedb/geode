@@ -145,8 +145,12 @@ pub const SessionEntry = struct {
     ///
     /// CANARY: REQ=REQ-TRANSPORT-GRPC-RESULT-EPOCH-001; FEATURE="GrpcSessionSafety"; ASPECT=ResultGeneration; STATUS=TESTED; TEST=tests/test_sonny1560_grpc_flow_control.zig; OWNER=transport; UPDATED=2026-09-14
     result_epoch: u64 = 0,
-    /// SONNY-3032: the user the session was opened for ("" without
-    /// authentication), for `max_sessions_per_principal`. Owned by the store.
+    /// SONNY-3032: who the session counts against for
+    /// `max_sessions_per_principal`. SONNY-3252 (round 15): the user name
+    /// the session authenticated as (not the tenant: one user name in two
+    /// tenants is one principal); without authentication
+    /// `anonymous@<peer ip>`, and on the federation path
+    /// `federation@<peer ip>` (`principalFor`). Owned by the store.
     principal: []const u8 = "",
     /// SONNY-3032: requests holding the session (`SessionStore.acquire` ..
     /// `release`); the reaper closes only a session none holds.
@@ -202,7 +206,9 @@ fn helloSessionRefused(allocator: std.mem.Allocator, caps: std.ArrayList([]const
     const resp = schema.HelloResponse{
         .success = false,
         .session_id = "",
-        .error_message = "Too many sessions for this user: it holds the server's max_sessions_per_principal sessions, all in use. Close sessions, or raise --grpc-max-sessions-per-principal",
+        // SONNY-3252 (round 15): resource exhausted. Refused, not made room
+        // for by closing a session in a transaction.
+        .error_message = "RESOURCE_EXHAUSTED: too many sessions for this principal: it holds the server's max_sessions_per_principal sessions, each in use or in an open transaction. Close sessions, or raise --grpc-max-sessions-per-principal",
         .capabilities = caps,
     };
     return encodeMessage(allocator, resp);
@@ -252,6 +258,25 @@ fn rebuildPendingIndexes(
     }
 }
 
+// CANARY: REQ=REQ-SONNY-3252-SESSION-CAP; FEATURE="GrpcSessionLifetime"; ASPECT=PrincipalKeys; STATUS=TESTED; TEST=tests/test_sonny3252_grpc_session_cap.zig; OWNER=transport; UPDATED=2026-09-28
+/// SONNY-3252 (round 15, F8, F9): the principal a Handshake's session counts
+/// against for `max_sessions_per_principal`, written into `buf`:
+///   - an authenticated user: the user name (the cap is per user name, not
+///     per tenant: the same name in two tenants shares one cap);
+///   - without authentication: `anonymous@<peer ip>`. Every anonymous client
+///     was the principal "", so any of them could take the cap's room from
+///     every other one; now the clients of one host share a cap, and
+///     clients of different hosts do not touch each other's sessions;
+///   - the federation path (a peer node with the cluster token): the name it
+///     sends is its own choice, so it counts as `federation@<peer ip>`.
+pub fn principalFor(buf: []u8, kind: enum { user, anonymous, federation }, username: []const u8, peer_ip: []const u8) []const u8 {
+    return switch (kind) {
+        .user => username,
+        .anonymous => std.fmt.bufPrint(buf, "anonymous@{s}", .{peer_ip}) catch "anonymous@",
+        .federation => std.fmt.bufPrint(buf, "federation@{s}", .{peer_ip}) catch "federation@",
+    };
+}
+
 /// SONNY-3032: the defaults of the session lifetimes (`GrpcConfig`).
 pub const default_idle_in_transaction_timeout_ms: u64 = 10 * std.time.ms_per_min;
 pub const default_session_idle_timeout_ms: u64 = 30 * std.time.ms_per_min;
@@ -298,10 +323,27 @@ pub fn monoMillis() i64 {
 /// one principal holds at most `max_sessions_per_principal` sessions (default
 /// 1024): past that a Handshake closes the principal's least recently used
 /// idle session, or is refused when all of them are in use.
+///
+/// SONNY-3252 (round 15, F8, F9): a session in an open transaction is never
+/// closed to make room: when each of the principal's sessions is in use or
+/// in a transaction, the Handshake is refused (resource exhausted). The
+/// principal is keyed per `principalFor`. Each principal's sessions are
+/// listed (`principals`), so the check is O(1) and the search for a session
+/// to close looks at that principal's sessions only. A closed session's
+/// teardown runs on the reaper thread, not the Handshake's (inline only
+/// when no reaper runs). And a Handshake whose insert cannot be made closes
+/// nothing: the room is reserved before a session is taken out.
 pub const SessionStore = struct {
     allocator: std.mem.Allocator,
     rwlock: std.Io.RwLock = std.Io.RwLock.init,
     sessions: std.StringHashMap(*SessionEntry),
+    /// SONNY-3252: each principal's session ids (the keys of `sessions`),
+    /// under `rwlock`. The keys are the store's own copies.
+    principals: std.StringHashMap(std.ArrayList([]const u8)),
+    /// SONNY-3252: sessions the cap closed, for the reaper to tear down
+    /// (under `rwlock`), and how many wait.
+    pending_teardown: std.ArrayList(std.StringHashMap(*SessionEntry).KV) = .empty,
+    pending_teardown_count: std.atomic.Value(usize) = .init(0),
     config: GrpcConfig,
     /// SONNY-3032: the reaper thread (`startReaper`) and its stop flag.
     reaper: ?std.Thread = null,
@@ -314,17 +356,70 @@ pub const SessionStore = struct {
         return .{
             .allocator = allocator,
             .sessions = std.StringHashMap(*SessionEntry).init(allocator),
+            .principals = std.StringHashMap(std.ArrayList([]const u8)).init(allocator),
             .config = config,
         };
     }
 
     pub fn deinit(self: *SessionStore) void {
         self.stopReaper();
+        self.drainTeardown();
         var it = self.sessions.iterator();
         while (it.next()) |entry| {
             self.destroyEntry(entry.key_ptr.*, entry.value_ptr.*);
         }
         self.sessions.deinit();
+        var pit = self.principals.iterator();
+        while (pit.next()) |p| {
+            self.allocator.free(p.key_ptr.*);
+            p.value_ptr.deinit(self.allocator);
+        }
+        self.principals.deinit();
+        self.pending_teardown.deinit(self.allocator);
+    }
+
+    /// SONNY-3252: tear down the sessions the cap closed.
+    fn drainTeardown(self: *SessionStore) void {
+        var batch: std.ArrayList(std.StringHashMap(*SessionEntry).KV) = .empty;
+        {
+            self.rwlock.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
+            defer self.rwlock.unlock(std.Io.Threaded.global_single_threaded.io());
+            batch = self.pending_teardown;
+            self.pending_teardown = .empty;
+            self.pending_teardown_count.store(0, .release);
+        }
+        defer batch.deinit(self.allocator);
+        for (batch.items) |kv| {
+            self.destroyEntry(kv.key, kv.value);
+            _ = self.reaped_total.fetchAdd(1, .monotonic);
+        }
+    }
+
+    /// SONNY-3252: the number of sessions `principal` holds.
+    pub fn principalSessionCount(self: *SessionStore, principal: []const u8) usize {
+        self.rwlock.lockSharedUncancelable(std.Io.Threaded.global_single_threaded.io());
+        defer self.rwlock.unlockShared(std.Io.Threaded.global_single_threaded.io());
+        const list = self.principals.get(principal) orelse return 0;
+        return list.items.len;
+    }
+
+    /// SONNY-3252: `session_id` out of its principal's list, with `rwlock`
+    /// held exclusively; an emptied list goes with its key.
+    fn untrackLocked(self: *SessionStore, principal: []const u8, session_id: []const u8) void {
+        const list = self.principals.getPtr(principal) orelse return;
+        for (list.items, 0..) |id, i| {
+            if (id.ptr == session_id.ptr) {
+                _ = list.swapRemove(i);
+                break;
+            }
+        }
+        if (list.items.len == 0) {
+            if (self.principals.fetchRemove(principal)) |kv| {
+                var l = kv.value;
+                l.deinit(self.allocator);
+                self.allocator.free(kv.key);
+            }
+        }
     }
 
     /// SONNY-3032: end a session that is out of `sessions` and that no
@@ -339,6 +434,8 @@ pub const SessionStore = struct {
         self.allocator.free(session_id);
     }
 
+    /// A session for `username`, counted against the principal of the same
+    /// name (SONNY-3252: see `principalFor`).
     pub fn createSession(
         self: *SessionStore,
         username: []const u8,
@@ -349,62 +446,137 @@ pub const SessionStore = struct {
         pwd_reset_required: bool,
         auth_version: u64,
     ) ![]const u8 {
+        return self.createSessionAs(username, username, password, role, tenant_id, graph, pwd_reset_required, auth_version);
+    }
+
+    /// SONNY-3252: a session for `username`, counted against `principal`.
+    pub fn createSessionAs(
+        self: *SessionStore,
+        principal: []const u8,
+        username: []const u8,
+        password: []const u8,
+        role: ?user_mgmt.Role,
+        tenant_id: ?[]const u8,
+        graph: ?[]const u8,
+        pwd_reset_required: bool,
+        auth_version: u64,
+    ) ![]const u8 {
         const session_id = try generateSessionId(self.allocator);
-        const state = try initServerState(self.allocator, self.config);
-        if (username.len > 0) {
-            state.authenticated_user = try self.allocator.dupe(u8, username);
-        }
-        if (password.len > 0) {
-            state.authenticated_password = try self.allocator.dupe(u8, password);
-        }
-        if (role) |r| {
-            state.authenticated_role = @intFromEnum(r);
-        }
-        state.authenticated_auth_version = auth_version;
-        state.authenticated_auth_validation_epoch = user_mgmt.authInvalidationEpoch();
-        // GAP-0284: Persist password_reset_required flag so execute handler can enforce it.
-        state.password_reset_required = pwd_reset_required;
-        if (tenant_id) |tenant| {
-            // GAP-0289: Enforce per-tenant connection quota before registering the session.
-            if (tenant_quota.getGlobalQuotaManager()) |qm| {
-                qm.acquireConnection(tenant) catch return error.OutOfMemory; // quota exceeded
+        // SONNY-3252 (round 15, F9): a step that fails frees what the steps
+        // before it made (the id, the state, the entry); from the entry on,
+        // `destroyEntry` does.
+        const entry = entry_blk: {
+            errdefer self.allocator.free(session_id);
+            const state = try initServerState(self.allocator, self.config);
+            errdefer {
+                deinitServerState(state);
+                self.allocator.destroy(state);
             }
-            state.session_config = server_state.SessionConfiguration.init(self.allocator);
-            state.session_config.?.tenant_id = try self.allocator.dupe(u8, tenant);
-        }
-
-        // GAP-0281: Set per-thread FLE tenant_id for encryption namespace isolation.
-        fle_integration.setCurrentTenantId(if (state.session_config) |cfg| cfg.tenant_id else null);
-        // GAP-0282: Set per-thread audit tenant_id so all audit events carry tenant context.
-        audit_mod.setCurrentAuditTenantId(if (state.session_config) |cfg| cfg.tenant_id else null);
-
-        // CANARY: REQ=REQ-DSN-GRAPH-BIND-004; FEATURE="DSNGraphBinding"; ASPECT=GrpcSessionGraph; STATUS=IMPL; OWNER=transport; UPDATED=2026-03-25
-        if (graph) |g| {
-            if (g.len > 0) {
-                // SONNY-2775: stored the one way (the session's allocator);
-                // HELLO checked the bind before it got here.
-                if (state.exec_session) |*sess| try execution.session_graph.set(sess, g);
-                state.graph_bound = true;
+            if (username.len > 0) {
+                state.authenticated_user = try self.allocator.dupe(u8, username);
             }
-        }
+            if (password.len > 0) {
+                state.authenticated_password = try self.allocator.dupe(u8, password);
+            }
+            if (role) |r| {
+                state.authenticated_role = @intFromEnum(r);
+            }
+            state.authenticated_auth_version = auth_version;
+            state.authenticated_auth_validation_epoch = user_mgmt.authInvalidationEpoch();
+            // GAP-0284: Persist password_reset_required flag so execute handler can enforce it.
+            state.password_reset_required = pwd_reset_required;
+            if (tenant_id) |tenant| {
+                // GAP-0289: Enforce per-tenant connection quota before registering the session.
+                if (tenant_quota.getGlobalQuotaManager()) |qm| {
+                    qm.acquireConnection(tenant) catch return error.OutOfMemory; // quota exceeded
+                }
+                state.session_config = server_state.SessionConfiguration.init(self.allocator);
+                state.session_config.?.tenant_id = try self.allocator.dupe(u8, tenant);
+            }
 
-        const entry = try self.allocator.create(SessionEntry);
-        entry.* = .{
-            .state = state,
-            .principal = try self.allocator.dupe(u8, username),
-            .last_active_ms = .init(monoMillis()),
+            // GAP-0281: Set per-thread FLE tenant_id for encryption namespace isolation.
+            fle_integration.setCurrentTenantId(if (state.session_config) |cfg| cfg.tenant_id else null);
+            // GAP-0282: Set per-thread audit tenant_id so all audit events carry tenant context.
+            audit_mod.setCurrentAuditTenantId(if (state.session_config) |cfg| cfg.tenant_id else null);
+
+            // CANARY: REQ=REQ-DSN-GRAPH-BIND-004; FEATURE="DSNGraphBinding"; ASPECT=GrpcSessionGraph; STATUS=IMPL; OWNER=transport; UPDATED=2026-03-25
+            if (graph) |g| {
+                if (g.len > 0) {
+                    // SONNY-2775: stored the one way (the session's allocator);
+                    // HELLO checked the bind before it got here.
+                    if (state.exec_session) |*sess| try execution.session_graph.set(sess, g);
+                    state.graph_bound = true;
+                }
+            }
+
+            const e = try self.allocator.create(SessionEntry);
+            errdefer self.allocator.destroy(e);
+            e.* = .{
+                .state = state,
+                .principal = try self.allocator.dupe(u8, principal),
+                .last_active_ms = .init(monoMillis()),
+            };
+            break :entry_blk e;
         };
+        // The principals map's own copy of the name, for a principal with no
+        // list yet; freed below when it is not needed.
+        var principal_key: ?[]u8 = self.allocator.dupe(u8, principal) catch {
+            self.destroyEntry(session_id, entry);
+            return error.OutOfMemory;
+        };
+        defer if (principal_key) |k| self.allocator.free(k);
 
-        // SONNY-3032: at most `max_sessions_per_principal` sessions each.
+        // SONNY-3032, SONNY-3252: at most `max_sessions_per_principal`
+        // sessions each; room is reserved before anything is taken out, so
+        // a failure closes nothing (F9: the victim was taken out, the insert
+        // failed, and the victim was never torn down and kept its hold).
         var evicted: ?std.StringHashMap(*SessionEntry).KV = null;
         const registered: error{ TooManySessions, OutOfMemory }!void = blk: {
             self.rwlock.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
             defer self.rwlock.unlock(std.Io.Threaded.global_single_threaded.io());
-            if (self.config.max_sessions_per_principal > 0) {
-                const victim = self.principalAtCapLocked(username) catch |err| break :blk err;
-                if (victim) |v| evicted = self.sessions.fetchRemove(v);
+            self.sessions.ensureUnusedCapacity(1) catch |err| break :blk err;
+            const gop = self.principals.getOrPut(principal_key.?) catch |err| break :blk err;
+            if (!gop.found_existing) {
+                gop.value_ptr.* = .empty;
+                principal_key = null; // the map's now
             }
-            break :blk self.sessions.put(session_id, entry);
+            const list = gop.value_ptr;
+            list.ensureUnusedCapacity(self.allocator, 1) catch |err| {
+                if (list.items.len == 0) {
+                    const kv = self.principals.fetchRemove(principal).?;
+                    self.allocator.free(kv.key);
+                }
+                break :blk err;
+            };
+            if (self.config.max_sessions_per_principal > 0 and list.items.len >= self.config.max_sessions_per_principal) {
+                const victim = self.victimLocked(list.items) orelse {
+                    if (list.items.len == 0) {
+                        const kv = self.principals.fetchRemove(principal).?;
+                        self.allocator.free(kv.key);
+                    }
+                    break :blk error.TooManySessions;
+                };
+                evicted = self.sessions.fetchRemove(victim);
+                if (evicted) |kv| {
+                    for (list.items, 0..) |id, i| {
+                        if (id.ptr == kv.key.ptr) {
+                            _ = list.swapRemove(i);
+                            break;
+                        }
+                    }
+                }
+            }
+            self.sessions.putAssumeCapacityNoClobber(session_id, entry);
+            list.appendAssumeCapacity(session_id);
+            if (evicted) |kv| {
+                // Torn down by the reaper, off this Handshake's thread.
+                if (self.reaper != null) {
+                    self.pending_teardown.append(self.allocator, kv) catch break :blk {};
+                    _ = self.pending_teardown_count.fetchAdd(1, .release);
+                    evicted = null;
+                }
+            }
+            break :blk {};
         };
         registered catch |err| {
             self.destroyEntry(session_id, entry);
@@ -414,39 +586,32 @@ pub const SessionStore = struct {
             log.warn("closing a principal's least recently used idle gRPC session: the principal is at max_sessions_per_principal", &.{
                 Attr.uint("max_sessions_per_principal", self.config.max_sessions_per_principal),
             });
+            // No reaper runs (or no room to queue it): torn down here.
             self.destroyEntry(kv.key, kv.value);
             _ = self.reaped_total.fetchAdd(1, .monotonic);
         }
         return session_id;
     }
 
-    /// SONNY-3032: with the store's lock held exclusively. Null when
-    /// `principal` has room for one more session; the id of its least
-    /// recently used session no request holds (one without an open
-    /// transaction first) when it is at the cap; `TooManySessions` when every
-    /// one of its sessions is in use.
-    fn principalAtCapLocked(self: *SessionStore, principal: []const u8) error{TooManySessions}!?[]const u8 {
-        var count: usize = 0;
+    /// SONNY-3252: with the store's lock held exclusively: the least recently
+    /// used of `ids` (one principal's sessions) that no request holds and
+    /// that has no open transaction, or null when every one is in use or in
+    /// a transaction (F8: such a session was closed, and its transaction
+    /// rolled back, to make room).
+    fn victimLocked(self: *SessionStore, ids: []const []const u8) ?[]const u8 {
         var victim: ?[]const u8 = null;
-        var victim_rank: u8 = 0;
         var victim_time: i64 = 0;
-        var it = self.sessions.iterator();
-        while (it.next()) |kv| {
-            const e = kv.value_ptr.*;
-            if (!std.mem.eql(u8, e.principal, principal)) continue;
-            count += 1;
+        for (ids) |id| {
+            const e = self.sessions.get(id) orelse continue;
             if (e.refs.load(.acquire) != 0) continue;
-            // Idle outside a transaction ranks before idle inside one.
-            const rank: u8 = if (e.state.in_txn or e.state.session_engine_txn.open) 1 else 2;
+            if (e.state.in_txn or e.state.session_engine_txn.open) continue;
             const t = e.last_active_ms.load(.acquire);
-            if (victim == null or rank > victim_rank or (rank == victim_rank and t < victim_time)) {
-                victim = kv.key_ptr.*;
-                victim_rank = rank;
+            if (victim == null or t < victim_time) {
+                victim = id;
                 victim_time = t;
             }
         }
-        if (count < self.config.max_sessions_per_principal) return null;
-        return victim orelse error.TooManySessions;
+        return victim;
     }
 
     /// The session's entry, for a caller that does not keep it (tests).
@@ -485,6 +650,8 @@ pub const SessionStore = struct {
     pub fn reap(self: *SessionStore, now_ms: i64) usize {
         const txn_ms: i64 = @intCast(@min(self.config.idle_in_transaction_timeout_ms, std.math.maxInt(i64)));
         const idle_ms: i64 = @intCast(@min(self.config.session_idle_timeout_ms, std.math.maxInt(i64)));
+        // SONNY-3252: the sessions the cap closed first.
+        if (self.pending_teardown_count.load(.acquire) > 0) self.drainTeardown();
         if (txn_ms == 0 and idle_ms == 0) return 0;
         var sfa = std.heap.stackFallback(16 * @sizeOf(std.StringHashMap(*SessionEntry).KV), std.heap.smp_allocator);
         const la = sfa.get();
@@ -513,6 +680,8 @@ pub const SessionStore = struct {
                     self.sessions.putAssumeCapacity(kv.key, kv.value);
                     break;
                 };
+                // SONNY-3252: out of its principal's list.
+                self.untrackLocked(kv.value.principal, kv.key);
             }
         }
         for (closed.items) |kv| {
@@ -541,7 +710,7 @@ pub const SessionStore = struct {
         const interval = self.reaperIntervalMs();
         while (!self.reaper_stop.load(.acquire)) {
             var waited: u64 = 0;
-            while (waited < interval and !self.reaper_stop.load(.acquire)) : (waited += 25) {
+            while (waited < interval and !self.reaper_stop.load(.acquire) and self.pending_teardown_count.load(.acquire) == 0) : (waited += 25) {
                 const req = std.os.linux.timespec{ .sec = 0, .nsec = 25 * std.time.ns_per_ms };
                 var rem: std.os.linux.timespec = undefined;
                 _ = std.os.linux.nanosleep(&req, &rem);
@@ -560,7 +729,8 @@ pub const SessionStore = struct {
     /// `stopReaper` (or `deinit`). Nothing to do when both timeouts are off.
     pub fn startReaper(self: *SessionStore) !void {
         if (self.reaper != null) return;
-        if (self.config.idle_in_transaction_timeout_ms == 0 and self.config.session_idle_timeout_ms == 0) return;
+        // SONNY-3252: the cap's teardowns run on the reaper as well.
+        if (self.config.idle_in_transaction_timeout_ms == 0 and self.config.session_idle_timeout_ms == 0 and self.config.max_sessions_per_principal == 0) return;
         self.reaper_stop.store(false, .release);
         self.reaper = try std.Thread.spawn(.{}, reaperMain, .{self});
     }
@@ -2219,7 +2389,11 @@ fn handleHandshake(request_bytes: []const u8, trans: *GrpcTransport, allocator: 
             Attr.string("client", req.client_name),
         });
         // Grant federation-level session with ReadWrite role
-        const session_id = store.createSession(req.username, "", .ReadWrite, req.tenant_id, null, false, 0) catch |err| return helloSessionRefused(allocator, caps, err);
+        // SONNY-3252: the name a federation peer sends is its own choice; its
+        // sessions count against `federation@<peer ip>`.
+        var fed_buf: [96]u8 = undefined;
+        const fed_principal = principalFor(&fed_buf, .federation, req.username, peer_ip);
+        const session_id = store.createSessionAs(fed_principal, req.username, "", .ReadWrite, req.tenant_id, null, false, 0) catch |err| return helloSessionRefused(allocator, caps, err);
         const resp = schema.HelloResponse{
             .success = true,
             .session_id = try allocator.dupe(u8, session_id),
@@ -2542,7 +2716,11 @@ fn handleHandshake(request_bytes: []const u8, trans: *GrpcTransport, allocator: 
         }
     }
 
-    const session_id = store.createSession("", "", null, req.tenant_id, noauth_resolved_graph, false, 0) catch |err| return helloSessionRefused(allocator, caps, err);
+    // SONNY-3252: without authentication, a client's sessions count against
+    // `anonymous@<peer ip>`, not the principal "" every client shared.
+    var anon_buf: [96]u8 = undefined;
+    const anon_principal = principalFor(&anon_buf, .anonymous, "", peer_ip);
+    const session_id = store.createSessionAs(anon_principal, "", "", null, req.tenant_id, noauth_resolved_graph, false, 0) catch |err| return helloSessionRefused(allocator, caps, err);
     const resp = schema.HelloResponse{
         .success = true,
         .session_id = try allocator.dupe(u8, session_id),
