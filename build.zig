@@ -9374,6 +9374,24 @@ pub fn build(b: *std.Build) void {
     const sonny3253_step = b.step("test-sonny3253-round14-minors", "Run SONNY-3253 regression (a dropped graph's IdMap is freed when no walk holds it, and when the last walk lets go; clearNodes keeps an IdMap a walk holds; a QUIC admission thread that cannot be spawned rejects its connection quickly and the server serves on; spawned server)");
     sonny3253_step.dependOn(&run_sonny3253_tests.step);
 
+    // SONNY-3232 (round 15, item 10; pre-existing, diagnosed, left for S2):
+    // a QUIC request of 256 KiB is answered, one past the 16 MiB maximum
+    // message is not, the 1 MiB and 4 MiB outcomes are recorded, and the
+    // server serves on; spawned server. Run it in Debug and ReleaseSafe.
+    const sonny3232_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny3232_quic_large_request.zig"), .target = target, .optimize = optimize });
+    sonny3232_test_mod.link_libc = true;
+    sonny3232_test_mod.addImport("geode", root_mod);
+    sonny3232_test_mod.addImport("schema", schema_mod);
+    sonny3232_test_mod.addImport("protobuf", protobuf_mod);
+    sonny3232_test_mod.addImport("logging", logging_mod);
+    sonny3232_test_mod.addImport("transport/quic", transport_quic_mod);
+    const sonny3232_tests = b.addTest(.{ .root_module = sonny3232_test_mod });
+    const run_sonny3232_tests = b.addRunArtifact(sonny3232_tests);
+    run_sonny3232_tests.step.dependOn(&install_geode_exe.step);
+    shardDep(test_step, &run_sonny3232_tests.step, 1, test_shard_loads, test_shard_index);
+    const sonny3232_step = b.step("test-sonny3232-quic-large-request", "Run SONNY-3232 regression (a QUIC request of 256 KiB is answered, one past the 16 MiB maximum is not, 1 MiB and 4 MiB outcomes are recorded (SONNY-3232, left for S2); the server survives each and serves the next connection; spawned server; Debug and ReleaseSafe)");
+    sonny3232_step.dependOn(&run_sonny3232_tests.step);
+
     // SONNY-2790: the fulltext statements (CREATE/DROP INDEX, geode.fts.*)
     // run on the default graph, so the handlers lock `default` for them from
     // any session. Classifier, and the real gRPC handler (SONNY-1560 shim).
