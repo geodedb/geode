@@ -313,6 +313,7 @@ pub const executeLegacyQueryWithResolvedParams = query_execution.executeLegacyQu
 
 // Re-export value utilities for backward compatibility (M1 Phase 12 extraction)
 pub const duplicateResult = value_utilities.duplicateResult;
+pub const ownGraphEntities = value_utilities.ownGraphEntities;
 pub const duplicateValue = value_utilities.duplicateValue;
 pub const freeValue = value_utilities.freeValue;
 pub const writeValue = value_utilities.writeValue;
@@ -749,6 +750,8 @@ pub const OwnedGraphEntities = struct {
     /// destroy here, so the node is freed in full: the engine-direct node scan
     /// does (SONNY-2463).
     destroy_node: ?*const fn (std.mem.Allocator, *graph_store.Node) void = null,
+    /// As `destroy_node`, for each tracked relationship.
+    destroy_edge: ?*const fn (std.mem.Allocator, *graph_store.Edge) void = null,
 
     pub fn init(allocator: std.mem.Allocator) !*OwnedGraphEntities {
         const self = try allocator.create(OwnedGraphEntities);
@@ -780,7 +783,7 @@ pub const OwnedGraphEntities = struct {
         }
         self.nodes.deinit(allocator);
         for (self.edges.items) |edge| {
-            allocator.destroy(edge);
+            if (self.destroy_edge) |destroy| destroy(allocator, edge) else allocator.destroy(edge);
         }
         self.edges.deinit(allocator);
         allocator.destroy(self);

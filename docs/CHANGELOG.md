@@ -1288,6 +1288,15 @@
   MATCH does not: a.m is not set. Before round 4b-1 each action followed its
   own variable's state, so a.m was set too. This follows the
   MERGE-is-one-pattern rule of the SONNY-3320 entry above.
+- **A node a chained part returns, over gRPC (SONNY-3385):** `MATCH (g:G {i:
+  1}) WITH g MATCH (n:Q) RETURN n` aborted the gRPC server (an integer
+  overflow in `nodeToProto`) on the Pull after the request: the stored
+  result held the nodes the planned read materialized, whose labels and
+  properties live in the request's scratch arena, returned to its pool when
+  the request ended (a release build would have sent freed memory). The
+  stored result owns copies of every node and relationship it holds (in a
+  list, a map or a path too). Confirmed on a real gRPC server; QUIC
+  serializes before the request ends and was not affected.
 - **The parser's limits (SONNY-3244):** parsing runs before authorization,
   and 25,000 `MATCH (n:G) SET n.x = 1;` statements (625 KB) took a 741 MB
   parser arena, so a 16 MB request could hold about 19 GB; about 60 chained

@@ -3314,7 +3314,15 @@ pub fn handleExecute(request_bytes: []const u8, allocator: std.mem.Allocator, ep
 
                     // Deep-copy result to prevent use-after-free when AST is freed
                     // (gRPC streaming builds data pages after handleExecute returns)
-                    const duped = try execution.duplicateResult(allocator, exec_result);
+                    var duped = try execution.duplicateResult(allocator, exec_result);
+                    // SONNY-3385: the stored result outlives this request, and
+                    // the nodes and relationships it holds may live in the
+                    // request's scratch arena (`ownGraphEntities`): it owns
+                    // copies of them.
+                    execution.ownGraphEntities(allocator, &duped) catch |err| {
+                        duped.deinit(allocator);
+                        return err;
+                    };
                     exec_result.deinit(allocator);
                     store_result = true;
                     state.active_result_values = duped;

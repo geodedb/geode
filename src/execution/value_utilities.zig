@@ -121,6 +121,147 @@ pub fn duplicateResult(allocator: std.mem.Allocator, original: ExecutionResult) 
     };
 }
 
+// CANARY: REQ=REQ-SONNY-3385-GRPC-OWNED-ENTITIES; FEATURE="GrpcStreaming"; ASPECT=OwnedGraphEntities; STATUS=TESTED; TEST=tests/test_sonny_write_allowlist_r4_transport.zig; OWNER=transport; UPDATED=2026-09-29
+/// SONNY-3385: make every node and relationship `result`'s rows hold (in a
+/// list, a map or a path too) a copy `result` owns in full: its labels,
+/// properties, graph and tenant. For a result kept past the request that
+/// produced it (the gRPC stored result, pulled page by page): a planned read
+/// materializes a node's interior on the request's scratch arena, which the
+/// transport returns to its pool when the request ends, so the next Pull
+/// read freed memory (`MATCH (g:G {i: 1}) WITH g MATCH (n:Q) RETURN n`
+/// aborted the server with an integer overflow in `nodeToProto`; a release
+/// build would have sent freed memory). One element held twice is copied
+/// once.
+pub fn ownGraphEntities(allocator: std.mem.Allocator, result: *ExecutionResult) !void {
+    const entities = try execution.OwnedGraphEntities.init(allocator);
+    entities.destroy_node = destroyOwnedNode;
+    entities.destroy_edge = destroyOwnedEdge;
+    var copier = EntityCopier{ .allocator = allocator, .entities = entities };
+    defer copier.nodes.deinit(allocator);
+    defer copier.edges.deinit(allocator);
+    errdefer entities.deinit();
+    for (result.rows) |row| for (row) |*value| try copier.own(value);
+    if (entities.nodes.items.len == 0 and entities.edges.items.len == 0) {
+        entities.deinit();
+        return;
+    }
+    // The entities the result tracked before: no row points at them now.
+    if (result.owned_graph_entities) |old| old.deinit();
+    result.owned_graph_entities = entities;
+}
+
+const EntityCopier = struct {
+    allocator: std.mem.Allocator,
+    entities: *execution.OwnedGraphEntities,
+    nodes: std.AutoHashMapUnmanaged(usize, *graph_store.Node) = .empty,
+    edges: std.AutoHashMapUnmanaged(usize, *graph_store.Edge) = .empty,
+
+    fn own(self: *EntityCopier, value: *Value) anyerror!void {
+        switch (value.*) {
+            .Node => |n| value.* = .{ .Node = try self.node(n) },
+            .Edge => |e| value.* = .{ .Edge = try self.edge(e) },
+            .List => |items| for (items) |*item| try self.own(item),
+            .Map => |map| {
+                var it = map.valueIterator();
+                while (it.next()) |item| try self.own(item);
+            },
+            // The executors allocate a path's arrays for the row (as
+            // `match_operations.stabilizeValue` rewrites them).
+            .Path => |path| {
+                for (@constCast(path.nodes)) |*n| n.* = try self.node(n.*);
+                for (@constCast(path.edges)) |*e| e.* = try self.edge(e.*);
+            },
+            else => {},
+        }
+    }
+
+    fn node(self: *EntityCopier, src: *const graph_store.Node) !*graph_store.Node {
+        const gop = try self.nodes.getOrPut(self.allocator, @intFromPtr(src));
+        if (gop.found_existing) return gop.value_ptr.*;
+        errdefer _ = self.nodes.remove(@intFromPtr(src));
+        const labels = try self.allocator.alloc([]const u8, src.labels.len);
+        for (labels) |*l| l.* = "";
+        const copy = self.allocator.create(graph_store.Node) catch |err| {
+            self.allocator.free(labels);
+            return err;
+        };
+        copy.* = .{ .id = src.id, .labels = labels, .properties = graph_store.CompactPropertyMap.init(self.allocator), .graph_name = "", .tenant_id = "" };
+        errdefer destroyOwnedNode(self.allocator, copy);
+        for (src.labels, labels) |label, *out| out.* = try self.allocator.dupe(u8, label);
+        try copyProperties(self.allocator, &src.properties, &copy.properties);
+        copy.graph_name = try self.allocator.dupe(u8, src.graph_name);
+        copy.tenant_id = try self.allocator.dupe(u8, src.tenant_id);
+        try self.entities.trackNode(copy);
+        gop.value_ptr.* = copy;
+        return copy;
+    }
+
+    fn edge(self: *EntityCopier, src: *const graph_store.Edge) !*graph_store.Edge {
+        const gop = try self.edges.getOrPut(self.allocator, @intFromPtr(src));
+        if (gop.found_existing) return gop.value_ptr.*;
+        errdefer _ = self.edges.remove(@intFromPtr(src));
+        const copy = try self.allocator.create(graph_store.Edge);
+        copy.* = .{ .id = src.id, .from_id = src.from_id, .to_id = src.to_id, .label = "", .properties = graph_store.CompactPropertyMap.init(self.allocator), .graph_name = "", .tenant_id = "" };
+        errdefer destroyOwnedEdge(self.allocator, copy);
+        copy.label = try self.allocator.dupe(u8, src.label);
+        try copyProperties(self.allocator, &src.properties, &copy.properties);
+        copy.graph_name = try self.allocator.dupe(u8, src.graph_name);
+        copy.tenant_id = try self.allocator.dupe(u8, src.tenant_id);
+        try self.entities.trackEdge(copy);
+        gop.value_ptr.* = copy;
+        return copy;
+    }
+};
+
+fn copyProperties(allocator: std.mem.Allocator, src: *const graph_store.CompactPropertyMap, dst: *graph_store.CompactPropertyMap) !void {
+    var it = src.iterator();
+    while (it.next()) |entry| {
+        const key = try allocator.dupe(u8, entry.key_ptr.*);
+        errdefer allocator.free(key);
+        const value: graph_store.PropertyValue = switch (entry.value_ptr.*) {
+            .String => |str| .{ .String = try allocator.dupe(u8, str) },
+            .ExtValue => |ext| .{ .ExtValue = try property_codec.cloneExtValue(allocator, ext) },
+            else => entry.value_ptr.*,
+        };
+        errdefer property_codec.freePropertyValue(allocator, value);
+        try dst.put(key, value);
+    }
+}
+
+fn freeProperties(allocator: std.mem.Allocator, props: *graph_store.CompactPropertyMap) void {
+    var it = props.iterator();
+    while (it.next()) |entry| {
+        allocator.free(entry.key_ptr.*);
+        property_codec.freePropertyValue(allocator, entry.value_ptr.*);
+    }
+    props.deinit();
+}
+
+fn freeNodeInterior(allocator: std.mem.Allocator, node: *graph_store.Node) void {
+    freeProperties(allocator, &node.properties);
+    for (node.labels) |label| if (label.len > 0) allocator.free(label);
+    allocator.free(node.labels);
+    if (node.graph_name.len > 0) allocator.free(node.graph_name);
+    if (node.tenant_id.len > 0) allocator.free(node.tenant_id);
+}
+
+fn freeEdgeInterior(allocator: std.mem.Allocator, edge: *graph_store.Edge) void {
+    freeProperties(allocator, &edge.properties);
+    if (edge.label.len > 0) allocator.free(edge.label);
+    if (edge.graph_name.len > 0) allocator.free(edge.graph_name);
+    if (edge.tenant_id.len > 0) allocator.free(edge.tenant_id);
+}
+
+fn destroyOwnedNode(allocator: std.mem.Allocator, node: *graph_store.Node) void {
+    freeNodeInterior(allocator, node);
+    allocator.destroy(node);
+}
+
+fn destroyOwnedEdge(allocator: std.mem.Allocator, edge: *graph_store.Edge) void {
+    freeEdgeInterior(allocator, edge);
+    allocator.destroy(edge);
+}
+
 /// Helper function to duplicate a Value
 pub fn duplicateValue(allocator: std.mem.Allocator, value: Value) !Value {
     return switch (value) {

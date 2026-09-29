@@ -296,6 +296,18 @@ const cases = [_]Case{
         .{ .query = "LET $x = 2 CALL { MATCH (n:L) WHERE n.i = $x RETURN n.i AS k } RETURN k", .want = "2" },
         .{ .query = "LET $a = $b, $b = 1 MATCH (n:L) WHERE n.i = $a RETURN n.i", .code = "42P02" },
     } },
+    // Round 4b-1c (the round 4b-1b re-review).
+    // SONNY-3385: a node or relationship a chained part returns is pulled
+    // page by page after the request that made it; its labels were in the
+    // request's scratch arena, and the Pull aborted the gRPC server.
+    .{ .name = "3385 element after WITH", .steps = &.{
+        .{ .query = "MATCH (a:L {i: 1}), (b:L {i: 2}) CREATE (a)-[:LR]->(b)" },
+        .{ .query = "MATCH (g:L {i: 1}) WITH g MATCH (n:LQ) RETURN n AS nn", .want = "?;?;?;?" },
+        .{ .query = "MATCH (g:L {i: 1}) WITH * MATCH (n:LQ) RETURN n AS nn LIMIT 2", .want = "?;?" },
+        .{ .query = "MATCH (g:L {i: 1}) WITH g MATCH (a:L)-[e:LR]->(b) RETURN e AS ee, b AS bb", .want = "?|?" },
+        .{ .query = "MATCH (g:L {i: 1}) WITH g MATCH p = (a:L)-[:LR]->(b) RETURN p AS pp", .want = "?" },
+        .{ .query = "RETURN 1 AS alive", .want = "1" },
+    } },
     // I8.
     .{ .name = "I8 nesting", .steps = &.{
         .{ .query = "WITH 1 AS a WITH 1 AS a WITH 1 AS a WITH 1 AS a WITH 1 AS a WITH 1 AS a WITH 1 AS a WITH 1 AS a WITH 1 AS a WITH 1 AS a WITH 1 AS a WITH 1 AS a WITH 1 AS a WITH 1 AS a WITH 1 AS a WITH 1 AS a WITH 1 AS a WITH 1 AS a WITH 1 AS a WITH 1 AS a WITH 1 AS a WITH 1 AS a WITH 1 AS a WITH 1 AS a WITH 1 AS a RETURN a", .code = "54001" },
@@ -496,6 +508,58 @@ test "round 4b-1b over gRPC: LIMIT 1 over two 1,500-pair chains answers under a 
     try check(aa, &failures, "grpc", name, .{ .query = "", .code = "53200" }, "the whole product", try f.run(s, cart ++ " RETURN a.i, c.i", &.{}));
     try check(aa, &failures, "grpc", name, .{ .query = "", .want = "1" }, "alive", try f.run(s, "RETURN 1 AS one", &.{}));
     try finish(failures.items, "round 4b-1b read budget (gRPC)");
+}
+
+// CANARY: REQ=REQ-SONNY-3385-GRPC-OWNED-ENTITIES; FEATURE="GrpcStreaming"; ASPECT=RealServer; STATUS=TESTED; TEST=tests/test_sonny_write_allowlist_r4_transport.zig; OWNER=transport; UPDATED=2026-09-29
+test "round 4b-1c over a real gRPC server: a node a chained part returns is pulled, and the server serves on (SONNY-3385)" {
+    const allocator = testing.allocator;
+    var arena = std.heap.ArenaAllocator.init(allocator);
+    defer arena.deinit();
+    const aa = arena.allocator();
+    const quic_port = try util.getRandomPort();
+    const grpc_port = try util.getRandomPort();
+    const io_fs = std.Io.Threaded.global_single_threaded.io();
+    var dir_buf: [96]u8 = undefined;
+    const data_dir = try std.fmt.bufPrint(&dir_buf, "/tmp/geode-wfix4c-grpc-{d}", .{quic_port});
+    std.Io.Dir.cwd().createDirPath(io_fs, data_dir) catch {};
+    defer std.Io.Dir.cwd().deleteTree(io_fs, data_dir) catch {};
+    const quic_addr = try util.formatAddr(allocator, quic_port);
+    defer allocator.free(quic_addr);
+    const grpc_addr = try util.formatAddr(allocator, grpc_port);
+    defer allocator.free(grpc_addr);
+    var server = try util.spawnServer(allocator, &.{ "./zig-out/bin/geode", "serve", "--listen", quic_addr, "--listen-grpc", grpc_addr, "--data-dir", data_dir }, util.TestEnv.grpcPlaintext());
+    defer server.deinit();
+    try util.waitForServerReady(allocator, quic_addr, 30000);
+    const server_pid: std.posix.pid_t = server.child.id orelse return error.NoServerPid;
+
+    var failures: std.ArrayList([]const u8) = .empty;
+    const queries = [_]struct { q: []const u8, rows: usize }{
+        .{ .q = "CREATE (:RG {i: 1})-[:RR]->(:RG {i: 2}), (:RQ {i: 0}), (:RQ {i: 1}), (:RQ {i: 2}), (:RQ {i: 3})", .rows = 0 },
+        .{ .q = "MATCH (g:RG {i: 1}) WITH g MATCH (n:RQ) RETURN n AS nn", .rows = 4 },
+        .{ .q = "MATCH (g:RG {i: 1}) WITH g MATCH (n:RQ) RETURN n AS nn LIMIT 2", .rows = 2 },
+        .{ .q = "MATCH (g:RG {i: 1}) WITH * MATCH (n:RQ) RETURN n AS nn", .rows = 4 },
+        .{ .q = "MATCH (g:RG {i: 1}) WITH g MATCH (a:RG)-[e:RR]->(b) RETURN e AS ee, b AS bb", .rows = 1 },
+        .{ .q = "MATCH (g:RG {i: 1}) WITH g MATCH p = (a:RG)-[:RR]->(b) RETURN p AS pp", .rows = 1 },
+        .{ .q = "RETURN 1 AS alive", .rows = 1 },
+    };
+    for (queries) |item| {
+        var client = util.GrpcProtoClient.connect(allocator, grpc_addr) catch |err| {
+            try failures.append(aa, try std.fmt.allocPrint(aa, "{s}: connect: {s} (the server is gone)", .{ item.q, @errorName(err) }));
+            break;
+        };
+        defer client.deinit();
+        // A page of 1 row: every row but the first is pulled after the
+        // request that made it ended.
+        var res = client.executeAndCollect(allocator, item.q, util.emptyParams(), 1) catch |err| {
+            try failures.append(aa, try std.fmt.allocPrint(aa, "{s}: {s}", .{ item.q, @errorName(err) }));
+            continue;
+        };
+        defer res.deinit(allocator);
+        if (res.error_code) |c| try failures.append(aa, try std.fmt.allocPrint(aa, "{s}: answered {s}", .{ item.q, c }));
+        if (res.rows.len != item.rows) try failures.append(aa, try std.fmt.allocPrint(aa, "{s}: {d} rows, expected {d}", .{ item.q, res.rows.len, item.rows }));
+    }
+    if (!util.processAlive(server_pid)) try failures.append(aa, "the gRPC server exited");
+    try finish(failures.items, "round 4b-1c SONNY-3385 (a real gRPC server)");
 }
 
 /// One request run by the gRPC handler on a thread of its own.
