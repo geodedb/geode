@@ -48,6 +48,8 @@ const write_budget = @import("../write_budget.zig");
 const cluster_mod = @import("../distributed/cluster.zig");
 const raft_consensus = @import("../distributed/raft_consensus.zig");
 const cluster_replication = @import("../distributed/cluster_replication.zig");
+// SONNY-3348 (round 19): a statement's replicated writes, proposed as one entry.
+const statement_proposals = @import("../distributed/statement_proposals.zig");
 
 // Local type aliases
 const Value = value_types.Value;
@@ -2311,7 +2313,7 @@ fn clusterWriteRole() error{ClusterNotLeader}!ClusterWriteRole {
     return .leader;
 }
 
-// CANARY: REQ=REQ-SONNY-3348-LIMIT-ATOMICITY; FEATURE="DistributedCluster"; ASPECT=ProposeFence; STATUS=TESTED; TEST=tests/test_sonny3348_limit_atomicity.zig; OWNER=distributed; UPDATED=2026-09-28
+// CANARY: REQ=REQ-SONNY-3348-LIMIT-ATOMICITY; FEATURE="DistributedCluster"; ASPECT=ProposeFence; STATUS=TESTED; TEST=tests/test_sonny3348_cluster_batch.zig; OWNER=distributed; UPDATED=2026-09-29
 /// SONNY-3348 (round 17): the leader proposes a write to the Raft log only
 /// when its statement is not to fail at the relay (`eval.pendingStatementFailure`,
 /// a limit or an IN type error a caller swallowed). Every node applies a
@@ -2321,6 +2323,35 @@ fn clusterWriteRole() error{ClusterNotLeader}!ClusterWriteRole {
 /// the statement then failed.
 fn fenceClusterWrite() eval.StatementFailure!void {
     if (eval.pendingStatementFailure()) |err| return err;
+}
+
+/// SONNY-3348 (round 19): what a MATCH-driven replicated write reads (its
+/// pattern's labels and inline property keys, relationships, a WHERE), so
+/// the statement's held writes can be checked against it
+/// (`statement_proposals.checkRead`). The lists are `a`'s.
+fn readFootprint(a: std.mem.Allocator, pattern: ast.GraphPattern, has_where: bool) !statement_proposals.ReadFootprint {
+    var labels = std.ArrayList([]const u8).empty;
+    var keys = std.ArrayList([]const u8).empty;
+    var fp: statement_proposals.ReadFootprint = .{ .has_where = has_where };
+    const Add = struct {
+        fn node(al: std.mem.Allocator, np: ast.NodePattern, ls: *std.ArrayList([]const u8), ks: *std.ArrayList([]const u8), f: *statement_proposals.ReadFootprint) !void {
+            if (np.labels.len == 0) f.any_unlabeled = true;
+            try ls.appendSlice(al, np.labels);
+            if (np.props) |ps| for (ps) |p| try ks.append(al, p.key);
+        }
+    };
+    for (pattern.chains) |c| {
+        if (c.head) |h| try Add.node(a, h, &labels, &keys, &fp);
+        if (c.hops.len > 0) fp.has_hops = true;
+        for (c.hops) |hop| {
+            try Add.node(a, hop.left, &labels, &keys, &fp);
+            try Add.node(a, hop.right, &labels, &keys, &fp);
+            if (hop.rel.props) |ps| for (ps) |p| try keys.append(a, p.key);
+        }
+    }
+    fp.labels = labels.items;
+    fp.prop_keys = keys.items;
+    return fp;
 }
 
 /// Map an evaluated GQL Value to a scalar PropertyValue the single-node-create
@@ -2461,25 +2492,9 @@ fn clusterReplicateNodeCreate(
     defer allocator.free(payload); // proposeCommand serializes a copy; safe to free after.
 
     try fenceClusterWrite(); // SONNY-3348: nothing a swallowed limit decided is proposed
-    const cmd = raft_consensus.Command{ .graph_mutation = .{
-        .graph = graph,
-        .mutation_type = .create,
-        .data = payload,
-        .txn_id = null,
-    } };
-    const idx = coord.proposeWrite(cmd) catch |err| switch (err) {
-        // Lost leadership between the role check and the propose — fail closed.
-        error.NotLeader => return error.ClusterNotLeader,
-        else => return err,
-    };
-    // Commit-aware wait (RC-1, 2026-06-12): block until the entry is CONFIRMED
-    // COMMITTED (durably replicated to a quorum) — at which point Raft guarantees
-    // it WILL apply, so this returns success. error.Timeout is surfaced ONLY when
-    // commit itself cannot be confirmed in budget (a genuine unknown), NEVER for a
-    // committed-but-apply-lagged entry. Reporting apply lag as Timeout was the
-    // wrong signal that drove the client to retry an already-committed write,
-    // minting the duplicate row.
-    try coord.waitForCommittedThenApplied(idx, 5000);
+    // SONNY-3348 (round 19): held for the statement's one entry
+    // (`statement_proposals`), proposed once the whole statement evaluated.
+    try statement_proposals.submit(.create, graph, payload, null);
 
     if (ret_result) |r| {
         ret_result = null; // ownership transferred to the caller
@@ -2606,6 +2621,7 @@ fn clusterReplicateEdgeCreate(
     param_values: []const Value,
     current_graph: ?[]const u8,
 ) !ExecutionResult {
+    _ = coord; // the write is proposed with the statement (`statement_proposals`)
     const env = Env{
         .names = &.{},
         .values = &.{},
@@ -2653,20 +2669,9 @@ fn clusterReplicateEdgeCreate(
     defer allocator.free(payload); // proposeCommand serializes a copy; safe to free after.
 
     try fenceClusterWrite(); // SONNY-3348: nothing a swallowed limit decided is proposed
-    const cmd = raft_consensus.Command{ .graph_mutation = .{
-        .graph = graph,
-        .mutation_type = .create,
-        .data = payload,
-        .txn_id = null,
-    } };
-    const idx = coord.proposeWrite(cmd) catch |err| switch (err) {
-        error.NotLeader => return error.ClusterNotLeader,
-        else => return err,
-    };
-    // Commit-aware wait (RC-1, 2026-06-12): success on confirmed COMMIT (apply is
-    // then guaranteed); error.Timeout only when commit cannot be confirmed in
-    // budget — never for a committed-but-apply-lagged entry.
-    try coord.waitForCommittedThenApplied(idx, 5000);
+    // SONNY-3348 (round 19): held for the statement's one entry
+    // (`statement_proposals`), proposed once the whole statement evaluated.
+    try statement_proposals.submit(.create, graph, payload, null);
 
     if (ret_result) |r| {
         ret_result = null; // ownership transferred to the caller
@@ -3345,7 +3350,7 @@ fn clusterReplicateMerge(
     current_graph: ?[]const u8,
     context: ExecutionContext,
 ) !ExecutionResult {
-    const coord = cluster_mod.getGlobalClusterCoordinator() orelse return error.ClusterWriteNotReplicable;
+    _ = cluster_mod.getGlobalClusterCoordinator() orelse return error.ClusterWriteNotReplicable;
 
     // RETURN clause projects the merged node + `created` flag — not determinable
     // pre-commit (the create id is the raft index, unknown until applied). Fail
@@ -3389,6 +3394,33 @@ fn clusterReplicateMerge(
         .flags = std.ArrayList([]const u8).empty,
     };
 
+    // SONNY-3348 (round 19): an earlier row of the statement is not applied
+    // yet (its write is held for the statement's one entry), so the store
+    // cannot answer for it: a held create of this node is a match, and a
+    // held write MERGE's decision depends on refuses the statement.
+    if (statement_proposals.holding()) {
+        var key_props = std.ArrayList(cluster_replication.Prop).empty;
+        defer key_props.deinit(allocator);
+        if (node_pattern.props) |plist| {
+            const env = envFromContext(allocator, context);
+            for (plist) |p| {
+                const val = eval.evalExpr(allocator, p.value.*, env) catch
+                    return error.ClusterWriteNotReplicable;
+                const pv = clusterPropValue(val) orelse return error.ClusterWriteNotReplicable;
+                try key_props.append(allocator, .{ .key = p.key, .value = pv });
+            }
+        }
+        switch (try statement_proposals.mergeMatch(target_graph, node_pattern.labels, key_props.items, matched_id)) {
+            .unaffected => {},
+            .matched_held => {
+                // Matched the statement's own create. Its id is not known
+                // before the entry commits, so no ON MATCH SET can name it.
+                if (m.on_match.len != 0) return error.ClusterWriteNotReplicable;
+                return empty_result;
+            },
+        }
+    }
+
     if (matched_id) |node_id| {
         // MATCHED. With no ON MATCH SET this is a NO-OP — short-circuit without
         // proposing anything (nothing mutates). The second MERGE of the same key
@@ -3409,19 +3441,9 @@ fn clusterReplicateMerge(
         defer allocator.free(payload); // proposeCommand serializes a copy; safe to free after.
 
         try fenceClusterWrite(); // SONNY-3348: nothing a swallowed limit decided is proposed
-        const cmd = raft_consensus.Command{ .graph_mutation = .{
-            .graph = target_graph,
-            .mutation_type = .merge,
-            .data = payload,
-            .txn_id = null,
-        } };
-        const idx = coord.proposeWrite(cmd) catch |err| switch (err) {
-            error.NotLeader => return error.ClusterNotLeader,
-            else => return err,
-        };
-        // Commit-aware wait (RC-1, 2026-06-12): success on confirmed COMMIT; no
-        // spurious Timeout for a committed-but-apply-lagged entry.
-        try coord.waitForCommittedThenApplied(idx, 5000);
+        // SONNY-3348 (round 19): held for the statement's one entry
+        // (`statement_proposals`), proposed once the whole statement evaluated.
+        try statement_proposals.submit(.merge, target_graph, payload, null);
         return empty_result;
     }
 
@@ -3447,19 +3469,9 @@ fn clusterReplicateMerge(
     defer allocator.free(payload); // proposeCommand serializes a copy; safe to free after.
 
     try fenceClusterWrite(); // SONNY-3348: nothing a swallowed limit decided is proposed
-    const cmd = raft_consensus.Command{ .graph_mutation = .{
-        .graph = target_graph,
-        .mutation_type = .create,
-        .data = payload,
-        .txn_id = null,
-    } };
-    const idx = coord.proposeWrite(cmd) catch |err| switch (err) {
-        error.NotLeader => return error.ClusterNotLeader,
-        else => return err,
-    };
-    // Commit-aware wait (RC-1, 2026-06-12): success on confirmed COMMIT; no
-    // spurious Timeout for a committed-but-apply-lagged entry.
-    try coord.waitForCommittedThenApplied(idx, 5000);
+    // SONNY-3348 (round 19): held for the statement's one entry
+    // (`statement_proposals`), proposed once the whole statement evaluated.
+    try statement_proposals.submit(.create, target_graph, payload, null);
     return empty_result;
 }
 
@@ -4136,7 +4148,7 @@ fn clusterReplicateDelete(
     current_graph: ?[]const u8,
     context: ExecutionContext,
 ) !ExecutionResult {
-    const coord = cluster_mod.getGlobalClusterCoordinator() orelse return error.ClusterWriteNotReplicable;
+    _ = cluster_mod.getGlobalClusterCoordinator() orelse return error.ClusterWriteNotReplicable;
 
     // Only a MATCH-clause delete is replicable in this slice. An item-only delete
     // (`DELETE n` resolved from a preceding statement's bindings) cannot be
@@ -4158,6 +4170,13 @@ fn clusterReplicateDelete(
     // replicated an OVER-BROAD delete set to every node in the cluster.
     const targets = try resolveDeleteTargets(allocator, d, match_pattern, context);
     defer targets.deinit(allocator);
+
+    // SONNY-3348 (round 19): the statement's held writes are not applied
+    // yet; refuse when one could change what this MATCH reads.
+    var fp_arena = std.heap.ArenaAllocator.init(allocator);
+    defer fp_arena.deinit();
+    const delete_reads = try readFootprint(fp_arena.allocator(), match_pattern, d.where_clause != null);
+    try statement_proposals.checkPendingRead(filter_graph, delete_reads);
 
     // Resolved, deduplicated id sets to encode into the GDEL payload.
     var node_ids = std.ArrayList(u64).empty;
@@ -4207,20 +4226,9 @@ fn clusterReplicateDelete(
     defer allocator.free(payload); // proposeCommand serializes a copy; safe to free after.
 
     try fenceClusterWrite(); // SONNY-3348: nothing a swallowed limit decided is proposed
-    const cmd = raft_consensus.Command{ .graph_mutation = .{
-        .graph = filter_graph,
-        .mutation_type = .delete,
-        .data = payload,
-        .txn_id = null,
-    } };
-    const idx = coord.proposeWrite(cmd) catch |err| switch (err) {
-        error.NotLeader => return error.ClusterNotLeader,
-        else => return err,
-    };
-    // Commit-aware wait (RC-1, 2026-06-12): success on confirmed COMMIT (apply is
-    // then guaranteed); error.Timeout only when commit cannot be confirmed in
-    // budget — never for a committed-but-apply-lagged entry.
-    try coord.waitForCommittedThenApplied(idx, 5000);
+    // SONNY-3348 (round 19): held for the statement's one entry
+    // (`statement_proposals`), proposed once the whole statement evaluated.
+    try statement_proposals.submit(.delete, filter_graph, payload, delete_reads);
 
     // RETURN clause: mirror the local path's "deleted_count" projection.
     if (d.return_clause) |_| {
@@ -4271,7 +4279,7 @@ fn clusterReplicateMatchSet(
     current_graph: ?[]const u8,
     context: ExecutionContext,
 ) !ExecutionResult {
-    const coord = cluster_mod.getGlobalClusterCoordinator() orelse return error.ClusterWriteNotReplicable;
+    _ = cluster_mod.getGlobalClusterCoordinator() orelse return error.ClusterWriteNotReplicable;
 
     // A RETURN that projects matched data is not resolvable pre-commit (the read
     // races the not-yet-applied write); fail closed for this slice.
@@ -4315,6 +4323,13 @@ fn clusterReplicateMatchSet(
     const read_store = graph_store.getWritableGlobalStore(allocator);
     const filter_graph = current_graph orelse "default";
     const filter_tenant = try tenantFilterFromContext(context);
+
+    // SONNY-3348 (round 19): the statement's held writes are not applied
+    // yet; refuse when one could change what this MATCH reads.
+    var fp_arena = std.heap.ArenaAllocator.init(allocator);
+    defer fp_arena.deinit();
+    const update_reads = try readFootprint(fp_arena.allocator(), q.match, q.where_clause != null);
+    try statement_proposals.checkPendingRead(filter_graph, update_reads);
 
     // Resolve the MATCH set to stable candidate ids (tenant-honored, GAP-0840).
     var match_prop_arena = std.heap.ArenaAllocator.init(allocator);
@@ -4455,20 +4470,9 @@ fn clusterReplicateMatchSet(
     defer allocator.free(payload); // proposeCommand serializes a copy; safe to free after.
 
     try fenceClusterWrite(); // SONNY-3348: nothing a swallowed limit decided is proposed
-    const cmd = raft_consensus.Command{ .graph_mutation = .{
-        .graph = filter_graph,
-        .mutation_type = .update,
-        .data = payload,
-        .txn_id = null,
-    } };
-    const idx = coord.proposeWrite(cmd) catch |err| switch (err) {
-        error.NotLeader => return error.ClusterNotLeader,
-        else => return err,
-    };
-    // Commit-aware wait (RC-1, 2026-06-12): success on confirmed COMMIT (apply is
-    // then guaranteed); error.Timeout only when commit cannot be confirmed in
-    // budget — never for a committed-but-apply-lagged entry.
-    try coord.waitForCommittedThenApplied(idx, 5000);
+    // SONNY-3348 (round 19): held for the statement's one entry
+    // (`statement_proposals`), proposed once the whole statement evaluated.
+    try statement_proposals.submit(.update, filter_graph, payload, update_reads);
 
     return empty_result;
 }
@@ -4530,7 +4534,7 @@ fn clusterReplicateMatchCreate(
     current_graph: ?[]const u8,
     context: ExecutionContext,
 ) !ExecutionResult {
-    const coord = cluster_mod.getGlobalClusterCoordinator() orelse return error.ClusterWriteNotReplicable;
+    _ = cluster_mod.getGlobalClusterCoordinator() orelse return error.ClusterWriteNotReplicable;
 
     // Attached clauses whose semantics this slice does not model → fail closed.
     if (q.ret.items.len > 0) return error.ClusterWriteNotReplicable;
@@ -4545,6 +4549,13 @@ fn clusterReplicateMatchCreate(
     const read_store = graph_store.getWritableGlobalStore(allocator);
     const filter_graph = current_graph orelse "default";
     const filter_tenant = try tenantFilterFromContext(context);
+
+    // SONNY-3348 (round 19): the statement's held writes are not applied
+    // yet; refuse when one could change what this MATCH reads.
+    var fp_arena = std.heap.ArenaAllocator.init(allocator);
+    defer fp_arena.deinit();
+    const create_reads = try readFootprint(fp_arena.allocator(), q.match, q.where_clause != null);
+    try statement_proposals.checkPendingRead(filter_graph, create_reads);
 
     // Resolve every MATCH variable to exactly one stable node id (tenant-honored).
     var var_names = std.ArrayList([]const u8).empty;
@@ -4707,21 +4718,9 @@ fn clusterReplicateMatchCreate(
     defer allocator.free(payload); // proposeCommand serializes a copy; safe to free after.
 
     try fenceClusterWrite(); // SONNY-3348: nothing a swallowed limit decided is proposed
-    const cmd = raft_consensus.Command{ .graph_mutation = .{
-        .graph = filter_graph,
-        .mutation_type = .create,
-        .data = payload,
-        .txn_id = null,
-    } };
-    const idx = coord.proposeWrite(cmd) catch |err| switch (err) {
-        // Lost leadership between the role check and the propose — fail closed.
-        error.NotLeader => return error.ClusterNotLeader,
-        else => return err,
-    };
-    // Commit-aware wait (RC-1, 2026-06-12): success on confirmed COMMIT (apply is
-    // then guaranteed); error.Timeout only when commit cannot be confirmed in
-    // budget — never for a committed-but-apply-lagged entry.
-    try coord.waitForCommittedThenApplied(idx, 5000);
+    // SONNY-3348 (round 19): held for the statement's one entry
+    // (`statement_proposals`), proposed once the whole statement evaluated.
+    try statement_proposals.submit(.create, filter_graph, payload, create_reads);
 
     return try emptyExecutionResult(allocator);
 }

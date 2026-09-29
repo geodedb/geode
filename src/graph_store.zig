@@ -14189,7 +14189,7 @@ pub const GraphStore = struct {
         }
     }
 
-    // CANARY: REQ=REQ-SONNY-3348-LIMIT-ATOMICITY; FEATURE="Execution"; ASPECT=StoreUndoCapture; STATUS=TESTED; TEST=tests/test_sonny3348_limit_atomicity.zig; OWNER=storage; UPDATED=2026-09-28
+    // CANARY: REQ=REQ-SONNY-3348-LIMIT-ATOMICITY; FEATURE="Execution"; ASPECT=StoreUndoCapture; STATUS=TESTED; TEST=tests/test_sonny3348_statement_undo.zig; OWNER=storage; UPDATED=2026-09-29
     // SONNY-3348 (round 18): the statement undo record (`statement_undo`).
     // Each write method below records the state it is about to change, before
     // it changes it, while a statement's record is open on the thread. A
@@ -14364,11 +14364,14 @@ pub const GraphStore = struct {
         const a = statement_undo.allocator;
         var edge_ids: std.ArrayListUnmanaged(u64) = .empty;
         defer edge_ids.deinit(a);
-        if (self.outAdjItems(node_id)) |outgoing| try edge_ids.appendSlice(a, outgoing);
-        if (self.inAdjItems(node_id)) |incoming| {
-            for (incoming) |eid| {
-                if (std.mem.indexOfScalar(u64, edge_ids.items, eid) == null) try edge_ids.append(a, eid);
-            }
+        // SONNY-3348 (round 19, review m7): the CHECKED adjacency readers,
+        // which hydrate an evicted node's adjacency and fail when they
+        // cannot, as the cluster DETACH does (ENG-3983). An unreadable
+        // adjacency read as "no edges" recorded the node without them, and
+        // its undo restored the node alone. Failing here refuses the delete.
+        try edge_ids.appendSlice(a, try self.getOutgoingEdgeIdsChecked(node_id));
+        for (try self.getIncomingEdgeIdsChecked(node_id)) |eid| {
+            if (std.mem.indexOfScalar(u64, edge_ids.items, eid) == null) try edge_ids.append(a, eid);
         }
         for (edge_ids.items) |eid| {
             const edge = self.getEdgeHydrated(eid) orelse continue;

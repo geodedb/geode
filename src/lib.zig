@@ -362,6 +362,8 @@ pub const distributed = struct {
     pub const raft_snapshot_manager = @import("distributed/raft_snapshot_manager.zig");
     pub const raft_apply = @import("distributed/raft_apply.zig");
     pub const cluster_replication = @import("distributed/cluster_replication.zig");
+    /// SONNY-3348 (round 19): a statement's replicated writes, one entry.
+    pub const statement_proposals = @import("distributed/statement_proposals.zig");
     pub const txn_coordinator = @import("distributed/txn_coordinator.zig");
     pub const cluster = @import("distributed/cluster.zig");
     /// SEC-INFRA-03: shared cluster bearer-token validator (dual-token

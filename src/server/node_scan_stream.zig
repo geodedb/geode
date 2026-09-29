@@ -2345,9 +2345,12 @@ fn resolveExternalNodeId(
     // Slow path: read the persisted public ID property from the adapter.
     // SONNY-3348 round 18 (review M1): a resource limit fails the query (it
     // was swallowed, and the slot used as the id: a wrong row).
-    const stored = adapter.getNodeProperty(graph_name, slot_id, graph_store.INTERNAL_NODE_ID_PROPERTY_KEY, allocator) catch |err| {
-        if (@import("../eval.zig").isResourceLimitError(err)) return err;
-        return error.NodeNotFound;
+    // SONNY-3348 round 19 (review m4): only a node or graph that is gone
+    // is skipped; any other read error (an engine I/O error) fails the
+    // query instead of dropping the row silently.
+    const stored = adapter.getNodeProperty(graph_name, slot_id, graph_store.INTERNAL_NODE_ID_PROPERTY_KEY, allocator) catch |err| switch (err) {
+        error.NodeNotFound, error.GraphNotFound => return error.NodeNotFound,
+        else => return err,
     };
     if (stored) |stored_prop| {
         defer freeStoragePropertyValue(allocator, stored_prop);

@@ -498,6 +498,19 @@ pub fn applyMultiCreatePayload(
     data: []const u8,
     raft_index: u64,
 ) !usize {
+    return applyMultiCreatePayloadAt(allocator, store, data, MULTI_ID_BASE + raft_index * MULTI_LANE_STRIDE);
+}
+
+/// `applyMultiCreatePayload` with the entry's lane window given: node `k` is
+/// `lane_base + k`, edge `j` is `lane_base + MAX_MULTI_NODES + j`. A GNC2
+/// entry of its own uses the window of its raft index; one inside a GBAT batch
+/// uses the window of its position in the batch (`batchLaneBase`).
+fn applyMultiCreatePayloadAt(
+    allocator: std.mem.Allocator,
+    store: *GraphStore,
+    data: []const u8,
+    lane_base: u64,
+) !usize {
     if (!isMultiCreatePayload(data)) return CodecError.CorruptPayload;
     var r = Reader{ .data = data, .pos = MAGIC2.len };
 
@@ -515,7 +528,7 @@ pub fn applyMultiCreatePayload(
 
     var k: usize = 0;
     while (k < node_count) : (k += 1) {
-        const node_id = deriveMultiNodeId(raft_index, k);
+        const node_id = lane_base + @as(u64, @intCast(k));
 
         labels.clearRetainingCapacity();
         const nlabels = try r.readU16();
@@ -553,9 +566,9 @@ pub fn applyMultiCreatePayload(
         const edge_type = try r.str16();
         const nprops = try r.readU16();
 
-        const from_id = resolveEndpoint(from_ep, raft_index, node_count) orelse return CodecError.CorruptPayload;
-        const to_id = resolveEndpoint(to_ep, raft_index, node_count) orelse return CodecError.CorruptPayload;
-        const edge_id = deriveMultiEdgeId(raft_index, j);
+        const from_id = resolveEndpointAt(from_ep, lane_base, node_count) orelse return CodecError.CorruptPayload;
+        const to_id = resolveEndpointAt(to_ep, lane_base, node_count) orelse return CodecError.CorruptPayload;
+        const edge_id = lane_base + MAX_MULTI_NODES + @as(u64, @intCast(j));
 
         store.createEdgeWithId(edge_id, from_id, to_id, edge_type, graph) catch |err| switch (err) {
             error.EdgeAlreadyExists => {}, // idempotent re-apply
@@ -574,9 +587,9 @@ pub fn applyMultiCreatePayload(
     return @as(usize, node_count) + @as(usize, edge_count);
 }
 
-fn resolveEndpoint(ep: Endpoint, raft_index: u64, node_count: u16) ?u64 {
+fn resolveEndpointAt(ep: Endpoint, lane_base: u64, node_count: u16) ?u64 {
     return switch (ep) {
-        .position => |p| if (p < node_count) deriveMultiNodeId(raft_index, p) else null,
+        .position => |p| if (p < node_count) lane_base + @as(u64, p) else null,
         .absolute_id => |id| id,
     };
 }
@@ -1265,6 +1278,293 @@ fn skipProps(r: *Reader) bool {
         }
     }
     return true;
+}
+
+// ===========================================================================
+// GBAT — one statement's writes as ONE committed entry (SONNY-3348, round 19)
+// ===========================================================================
+//
+// A statement that writes once per row or per iteration (`FOR … CREATE`,
+// `MATCH … MERGE`, a `CALL { … }` per row) proposed one entry per row, and
+// waited for each to commit: when row 3 then failed (a limit, any error), rows
+// 1 and 2 were committed on every node. The leader now holds a statement's
+// entries (`statement_proposals`) and, once the whole statement evaluated
+// without an error, proposes them as ONE entry: this GBAT batch, or the lone
+// entry unchanged when there is only one. A statement that fails proposes
+// nothing, and nothing proposed is ever undone.
+//
+// Every node applies a batch's entries in order through the same apply
+// functions a lone entry takes. A create in a batch takes its ids from its
+// position in the batch (`batchLaneBase`), not from the raft index alone, so
+// two creates in one entry never share an id; the band is disjoint from the
+// GNC1 (raft index) and GNC2 (`MULTI_ID_BASE`) bands and far below the
+// time-based ids (`BATCH_ID_BASE` = 2^54; index i, position p use
+// [2^54 + (i*4096 + p)*64, +63], below 2^56.7 for i < 3.8e11).
+//
+// VERSIONED, and refused cleanly by a build that does not know it: a batch is
+// proposed as a `.create` mutation whose data starts with its own magic. A
+// build before round 19 has no GBAT arm: its create dispatch sends an unknown
+// magic to the "unknown create payload version — skipping" arm (raft_apply),
+// which logs and applies nothing: no junk data, no partial statement. (A new
+// mutation type would have been worse: the older decoder turns the byte into
+// the enum unchecked.) A build that knows GBAT refuses a version it does not
+// know the same way (`error.UnsupportedBatchVersion`, logged and skipped), and
+// checks every entry of a batch before it applies any.
+//
+// The client's idempotency key rides the batch, not its entries: a retried
+// statement is one no-op, while the entries of one statement (which share the
+// request's key) are never taken for retries of each other.
+//
+// CANARY: REQ=REQ-SONNY-3348-CLUSTER-BATCH; FEATURE="DistributedCluster"; ASPECT=StatementBatchCodec; STATUS=TESTED; TEST=tests/test_sonny3348_cluster_batch.zig; OWNER=distributed; UPDATED=2026-09-29
+
+/// 4-byte magic prefix identifying a GBAT statement batch.
+pub const MAGIC_BATCH = [4]u8{ 'G', 'B', 'A', 'T' };
+
+/// The batch format this build writes and applies.
+pub const BATCH_VERSION: u8 = 1;
+
+/// Most entries one batch carries (the lane windows per raft index).
+pub const MAX_BATCH_ENTRIES: usize = 4096;
+
+/// Most bytes one batch carries: a Raft entry is at most 1 MiB (the raft
+/// library's `max_entry_size`), with room for the command's own header.
+pub const MAX_BATCH_BYTES: usize = 1000 * 1024;
+
+/// Bottom of the batch id band (see above).
+pub const BATCH_ID_BASE: u64 = 1 << 54;
+
+/// The mutation types a batch entry carries, as `raft_consensus.GraphMutation`
+/// numbers them (create, update, delete, merge).
+pub const BatchMutation = enum(u8) { create = 0, update = 1, delete = 2, merge = 3 };
+
+pub const BatchError = error{UnsupportedBatchVersion};
+
+/// The id window of the entry at `position` in the batch committed at
+/// `raft_index`: node `k` of a create is `base + k`, edge `j` is
+/// `base + MAX_MULTI_NODES + j`.
+pub fn batchLaneBase(raft_index: u64, position: usize) u64 {
+    std.debug.assert(position < MAX_BATCH_ENTRIES);
+    return BATCH_ID_BASE + (raft_index * MAX_BATCH_ENTRIES + @as(u64, @intCast(position))) * MULTI_LANE_STRIDE;
+}
+
+pub fn isBatchPayload(data: []const u8) bool {
+    return data.len >= MAGIC_BATCH.len and std.mem.eql(u8, data[0..MAGIC_BATCH.len], &MAGIC_BATCH);
+}
+
+/// One entry of a batch: what a lone proposal would have carried.
+pub const BatchEntry = struct {
+    mutation: BatchMutation,
+    graph: []const u8,
+    data: []const u8,
+};
+
+/// Serialize a statement's entries, in order, into one GBAT payload.
+pub fn serializeBatch(allocator: std.mem.Allocator, idempotency_key: ?[]const u8, entries: []const BatchEntry) ![]u8 {
+    if (entries.len == 0 or entries.len > MAX_BATCH_ENTRIES) return CodecError.UnsupportedPropertyType;
+    var list = std.ArrayList(u8).empty;
+    errdefer list.deinit(allocator);
+    try list.appendSlice(allocator, &MAGIC_BATCH);
+    try list.append(allocator, BATCH_VERSION);
+    try appendKeyHeader(&list, allocator, idempotency_key);
+    try appendU32(&list, allocator, entries.len);
+    for (entries) |e| {
+        try list.append(allocator, @intFromEnum(e.mutation));
+        try appendStr16(&list, allocator, e.graph);
+        try appendU32(&list, allocator, e.data.len);
+        try list.appendSlice(allocator, e.data);
+    }
+    if (list.items.len > MAX_BATCH_BYTES) return CodecError.UnsupportedPropertyType;
+    return list.toOwnedSlice(allocator);
+}
+
+const ParsedBatch = struct {
+    key: ?[]const u8,
+    entries: []BatchEntry,
+};
+
+/// Decode and check a whole batch (borrowing into `data`), before any of it
+/// is applied: its version, its bounds, and that each entry's payload is one
+/// its mutation type applies.
+fn parseBatch(allocator: std.mem.Allocator, data: []const u8) !ParsedBatch {
+    if (!isBatchPayload(data)) return CodecError.CorruptPayload;
+    var r = Reader{ .data = data, .pos = MAGIC_BATCH.len };
+    const version = try r.byte();
+    if (version != BATCH_VERSION) return BatchError.UnsupportedBatchVersion;
+    const present = try r.byte();
+    const key: ?[]const u8 = if (present == 0) null else try r.str16();
+    const count = try r.readU32();
+    if (count == 0 or count > MAX_BATCH_ENTRIES) return CodecError.CorruptPayload;
+    const entries = try allocator.alloc(BatchEntry, count);
+    errdefer allocator.free(entries);
+    for (entries) |*e| {
+        const tag = try r.byte();
+        if (tag > @intFromEnum(BatchMutation.merge)) return CodecError.CorruptPayload;
+        const mutation: BatchMutation = @enumFromInt(tag);
+        const graph = try r.str16();
+        const body = try r.str32();
+        const ok = switch (mutation) {
+            .create => isKeyedPayload(body) or isNodeCreatePayload(body) or isMultiCreatePayload(body),
+            .update => isUpdatePayload(body),
+            .delete => isDeletePayload(body),
+            .merge => isMergePayload(body),
+        };
+        if (!ok) return CodecError.CorruptPayload;
+        e.* = .{ .mutation = mutation, .graph = graph, .data = body };
+    }
+    if (r.pos != data.len) return CodecError.CorruptPayload;
+    return .{ .key = key, .entries = entries };
+}
+
+/// The number of entries a batch carries, or an error when it is not one
+/// this build applies (tests, diagnostics).
+pub fn batchEntryCount(allocator: std.mem.Allocator, data: []const u8) !usize {
+    const parsed = try parseBatch(allocator, data);
+    defer allocator.free(parsed.entries);
+    return parsed.entries.len;
+}
+
+/// Apply a GBAT batch committed at `raft_index`: every entry in order, as a
+/// lone entry of its kind applies. Returns the number of entries applied (0
+/// for a retried statement the idempotency key recognizes). `dedup` is the
+/// cluster's key table (null: keys are not checked).
+pub fn applyBatchPayload(
+    allocator: std.mem.Allocator,
+    store: *GraphStore,
+    data: []const u8,
+    raft_index: u64,
+    dedup: ?*IdempotencyDedup,
+) !usize {
+    const parsed = try parseBatch(allocator, data);
+    defer allocator.free(parsed.entries);
+    if (parsed.key) |key| {
+        if (dedup) |d| {
+            if (d.lookup(key)) |orig_index| {
+                // The same statement, retried: it was applied at `orig_index`.
+                if (orig_index != raft_index) return 0;
+            } else {
+                try d.record(key, raft_index);
+            }
+        }
+    }
+    for (parsed.entries, 0..) |e, position| {
+        switch (e.mutation) {
+            .create => {
+                // The request's key is the batch's; the entry's own is not
+                // checked (the entries of one statement share it).
+                const body = if (isKeyedPayload(e.data)) (try splitKeyed(e.data)).inner else e.data;
+                const base = batchLaneBase(raft_index, position);
+                if (isNodeCreatePayload(body)) {
+                    _ = try applyNodeCreatePayload(allocator, store, body, base);
+                } else if (isMultiCreatePayload(body)) {
+                    _ = try applyMultiCreatePayloadAt(allocator, store, body, base);
+                } else return CodecError.CorruptPayload;
+            },
+            .update => _ = try applyUpdatePayload(allocator, store, e.data),
+            .delete => _ = try applyDeletePayload(allocator, store, e.data),
+            .merge => _ = try applyMergePayload(allocator, store, e.data),
+        }
+    }
+    return parsed.entries.len;
+}
+
+/// A node an entry creates: its labels and properties (borrowed).
+pub const CreatedNode = struct {
+    labels: []const []const u8,
+    props: []const Prop,
+};
+
+/// What an entry does, as the leader needs to know it to decide whether a
+/// later read in the same statement would have seen it (borrowed from the
+/// payload; the lists are `allocator`'s).
+pub const Effect = struct {
+    graph: []const u8 = "",
+    created: []const CreatedNode = &.{},
+    creates_edges: bool = false,
+    deletes_edges: bool = false,
+    /// The existing nodes and edges the entry changes, deletes, or links to.
+    ids: []const u64 = &.{},
+    /// Property keys and labels it sets or removes on existing nodes.
+    written_keys: []const []const u8 = &.{},
+    written_labels: []const []const u8 = &.{},
+};
+
+fn readProps(allocator: std.mem.Allocator, r: *Reader) ![]const Prop {
+    const n = try r.readU16();
+    const props = try allocator.alloc(Prop, n);
+    for (props) |*p| p.* = try readProp(r);
+    return props;
+}
+
+fn readLabels(allocator: std.mem.Allocator, r: *Reader) ![]const []const u8 {
+    const n = try r.readU16();
+    const labels = try allocator.alloc([]const u8, n);
+    for (labels) |*l| l.* = try r.str16();
+    return labels;
+}
+
+/// Decode what the lone-entry payload `data` does. `allocator` should be an
+/// arena: the lists are not freed one by one.
+pub fn effectOf(allocator: std.mem.Allocator, data: []const u8) !Effect {
+    if (isKeyedPayload(data)) return effectOf(allocator, (try splitKeyed(data)).inner);
+    var out: Effect = .{};
+    var ids = std.ArrayList(u64).empty;
+    var keys = std.ArrayList([]const u8).empty;
+    var labels = std.ArrayList([]const u8).empty;
+    if (isNodeCreatePayload(data)) {
+        var r = Reader{ .data = data, .pos = MAGIC.len };
+        out.graph = try r.str16();
+        const created = try allocator.alloc(CreatedNode, 1);
+        created[0] = .{ .labels = try readLabels(allocator, &r), .props = try readProps(allocator, &r) };
+        out.created = created;
+    } else if (isMultiCreatePayload(data)) {
+        var r = Reader{ .data = data, .pos = MAGIC2.len };
+        out.graph = try r.str16();
+        const node_count = try r.readU16();
+        const created = try allocator.alloc(CreatedNode, node_count);
+        for (created) |*c| c.* = .{ .labels = try readLabels(allocator, &r), .props = try readProps(allocator, &r) };
+        out.created = created;
+        const edge_count = try r.readU16();
+        out.creates_edges = edge_count > 0;
+        var j: usize = 0;
+        while (j < edge_count) : (j += 1) {
+            for ([_]Endpoint{ try readEndpoint(&r), try readEndpoint(&r) }) |ep| {
+                if (ep == .absolute_id) try ids.append(allocator, ep.absolute_id);
+            }
+            _ = try r.str16();
+            _ = try readProps(allocator, &r);
+        }
+    } else if (isDeletePayload(data)) {
+        var r = Reader{ .data = data, .pos = MAGIC_DEL.len };
+        out.graph = try r.str16();
+        const edge_count = try r.readU16();
+        out.deletes_edges = edge_count > 0;
+        var i: usize = 0;
+        while (i < edge_count) : (i += 1) try ids.append(allocator, try r.readU64());
+        const node_count = try r.readU16();
+        i = 0;
+        while (i < node_count) : (i += 1) try ids.append(allocator, try r.readU64());
+    } else if (isMergePayload(data)) {
+        var r = Reader{ .data = data, .pos = MAGIC_MERGE.len };
+        out.graph = try r.str16();
+        try ids.append(allocator, try r.readU64());
+        for (try readProps(allocator, &r)) |p| try keys.append(allocator, p.key);
+    } else if (isUpdatePayload(data)) {
+        var r = Reader{ .data = data, .pos = MAGIC_UPDATE.len };
+        out.graph = try r.str16();
+        const count = try r.readU16();
+        var i: usize = 0;
+        while (i < count) : (i += 1) {
+            try ids.append(allocator, try r.readU64());
+            for (try readProps(allocator, &r)) |p| try keys.append(allocator, p.key);
+            for (try readLabels(allocator, &r)) |k| try keys.append(allocator, k);
+            for (try readLabels(allocator, &r)) |l| try labels.append(allocator, l);
+            for (try readLabels(allocator, &r)) |l| try labels.append(allocator, l);
+        }
+    } else return CodecError.CorruptPayload;
+    out.ids = ids.items;
+    out.written_keys = keys.items;
+    out.written_labels = labels.items;
+    return out;
 }
 
 // ---------------------------------------------------------------------------

@@ -198,7 +198,7 @@ pub fn transactionControl(program: *const ast.Program) TxnControl {
     return ctl;
 }
 
-// CANARY: REQ=REQ-SONNY-3348-ABORTED-TXN; FEATURE="TransactionManagement"; ASPECT=AbortedTxnGate; STATUS=TESTED; TEST=tests/test_sonny3348_limit_atomicity.zig; OWNER=engine; UPDATED=2026-09-28
+// CANARY: REQ=REQ-SONNY-3348-ABORTED-TXN; FEATURE="TransactionManagement"; ASPECT=AbortedTxnGate; STATUS=TESTED; TEST=tests/test_sonny3348_statement_undo.zig; OWNER=engine; UPDATED=2026-09-29
 /// SONNY-3348 (round 18, I2): what a request does to a session whose explicit
 /// transaction failed (`ServerState.txn_aborted`). A program that starts with
 /// ROLLBACK ends the aborted transaction and runs; one that starts with

@@ -413,6 +413,30 @@ fn applyGraphMutation(allocator: Allocator, store_opt: ?*GraphStore, gm: GraphMu
         else => return err,
     };
 
+    // CANARY: REQ=REQ-SONNY-3348-CLUSTER-BATCH; FEATURE="DistributedCluster"; ASPECT=ApplyStatementBatch; STATUS=TESTED; TEST=tests/test_sonny3348_cluster_batch.zig; OWNER=distributed; UPDATED=2026-09-29
+    // SONNY-3348 (round 19): one statement's writes, as one entry (GBAT,
+    // proposed as a `.create`). Every entry of the batch is checked before
+    // any is applied. A version this build does not know is logged and
+    // skipped, as a build before round 19 skips the whole batch (its create
+    // arm's unknown-magic branch below).
+    if (cluster_replication.isBatchPayload(gm.data)) {
+        const applied = cluster_replication.applyBatchPayload(allocator, store, gm.data, raft_index, g_idempotency_dedup) catch |err| switch (err) {
+            error.UnsupportedBatchVersion => {
+                log.err("raft apply: statement batch of an unknown version — skipping (nothing applied)", &.{
+                    Attr.string("graph", graph_name),
+                    Attr.uint("raft_index", raft_index),
+                });
+                return allocator.alloc(u8, 0);
+            },
+            else => return err,
+        };
+        log.info("raft apply: replicated statement batch", &.{
+            Attr.uint("entries", applied),
+            Attr.string("graph", graph_name),
+        });
+        return allocator.alloc(u8, 0);
+    }
+
     switch (gm.mutation_type) {
         .create => {
             // RC-3 (2026-06-12): a keyed create wrapper (GN1K / GN2K) carries an

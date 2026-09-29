@@ -15,6 +15,8 @@ const fle_catalog = @import("schema/fle_catalog.zig");
 // CANARY: REQ=REQ-LIB-MIGRATION-SLOG-003; FEATURE="Structured Logging"; ASPECT=Execution; STATUS=EXEMPT; OWNER=execution; UPDATED=2026-01-24
 const logging = @import("logging");
 const statement_undo = @import("statement_undo.zig");
+// SONNY-3348 (round 19): a statement's replicated writes, one entry or none.
+const statement_proposals = @import("distributed/statement_proposals.zig");
 const log = logging.scoped("execution");
 const Attr = logging.Attr;
 
@@ -1467,18 +1469,19 @@ pub fn executeStatementWithContext(allocator: std.mem.Allocator, stmt: ast.State
     defer if (pushed_ctx) popActiveContext(prev_active_ctx);
 
     const owns_in_predicate_scope = eval.enterInPredicateScope();
-    // CANARY: REQ=REQ-SONNY-3348-LIMIT-ATOMICITY; FEATURE="Execution"; ASPECT=StatementUndoReplay; STATUS=TESTED; TEST=tests/test_sonny3348_limit_atomicity.zig; OWNER=execution; UPDATED=2026-09-28
+    // CANARY: REQ=REQ-SONNY-3348-LIMIT-ATOMICITY; FEATURE="Execution"; ASPECT=StatementUndoReplay; STATUS=TESTED; TEST=tests/test_sonny3348_statement_undo.zig; OWNER=execution; UPDATED=2026-09-29
     // SONNY-3348 (round 18): the statement's undo record (`statement_undo`).
     // A statement that fails, here or at the relay below, has its changes
     // undone before its error is returned, on every executor; one that
     // succeeds in an explicit transaction hands its record to the
     // transaction's undo log (SONNY-3059).
-    statement_undo.begin(owns_in_predicate_scope);
+    // SONNY-3348 (round 19): on a cluster leader, its replicated writes
+    // are held and proposed as one entry once it succeeded, or dropped.
+    beginStatementScope(owns_in_predicate_scope);
     var result = executeStatementWithContextInner(allocator, stmt, context) catch |err| {
         _ = eval.exitInPredicateScope(owns_in_predicate_scope);
         _ = eval.takeDeferredLimitError(owns_in_predicate_scope);
-        statement_undo.finishFailed(owns_in_predicate_scope);
-        return err;
+        return endStatementFailed(owns_in_predicate_scope, err);
     };
     // CANARY: REQ=REQ-SONNY-3251-LIMIT-ERRORS; FEATURE="Execution"; ASPECT=StatementLimitRelay; STATUS=TESTED; TEST=tests/test_sonny3251_limit_errors.zig; OWNER=execution; UPDATED=2026-09-28
     // SONNY-3251 (round 15, F6): a limit the evaluator ran into (54001),
@@ -1488,19 +1491,69 @@ pub fn executeStatementWithContext(allocator: std.mem.Allocator, stmt: ast.State
     const limit_error = eval.takeDeferredLimitError(owns_in_predicate_scope);
     if (eval.exitInPredicateScope(owns_in_predicate_scope)) {
         result.deinit(allocator);
-        statement_undo.finishFailed(owns_in_predicate_scope);
-        return error.InListRequiresList;
+        return endStatementFailed(owns_in_predicate_scope, error.InListRequiresList);
     }
     if (limit_error) |err| {
         result.deinit(allocator);
-        statement_undo.finishFailed(owns_in_predicate_scope);
-        return err;
+        return endStatementFailed(owns_in_predicate_scope, err);
     }
-    statement_undo.finishSucceeded(owns_in_predicate_scope) catch |err| {
+    endStatementSucceeded(owns_in_predicate_scope) catch |err| {
         result.deinit(allocator);
         return err;
     };
     return result;
+}
+
+/// SONNY-3348: open a statement's scope (`owns`: the outermost on the
+/// thread): its undo record (`statement_undo`) and, on a cluster leader, its
+/// held replicated writes (`statement_proposals`). `pub` for PROFILE's scope
+/// (`planned_read_runtime.executeProfiledIfSupported`).
+pub fn beginStatementScope(owns: bool) void {
+    statement_undo.begin(owns);
+    statement_proposals.begin(owns);
+}
+
+/// SONNY-3348 (round 19, m1): failed statements of an explicit transaction
+/// whose session engine transaction was aborted before their replay (tests).
+pub var session_txn_aborted_before_replay_total: std.atomic.Value(u64) = .init(0);
+
+/// The errors a failed statement's scope can answer instead of its own.
+pub const StatementScopeError = error{ WriteQueryBudgetExceeded, StatementUndoIncomplete };
+
+// CANARY: REQ=REQ-SONNY-3348-LIMIT-ATOMICITY; FEATURE="Execution"; ASPECT=StatementScopeFailed; STATUS=TESTED; TEST=tests/test_sonny3348_statement_undo.zig; OWNER=execution; UPDATED=2026-09-29
+/// SONNY-3348: the statement that opened the scope `owns` failed with
+/// `err`. Nothing it held for the cluster is proposed; its changes are
+/// undone; and it answers `err`, or (round 19):
+///   * `error.StatementUndoIncomplete` (40003) when a change could not be
+///     undone (m3: it is partly applied, and a blind retry would apply the
+///     rest twice);
+///   * `error.WriteQueryBudgetExceeded` (53200) when a write was refused
+///     because the undo record would not fit the write budget (I2).
+/// Inside an explicit transaction the session's engine transaction is
+/// aborted before the replay (m1, the SONNY-2823 order): the transaction is
+/// rolled back next, and the replay's compensations commit on their own
+/// instead of joining the aborted engine transaction (a stolen page of the
+/// failed write was recovered after a crash, with no redo record for its
+/// compensation).
+pub fn endStatementFailed(owns: bool, err: anytype) (@TypeOf(err) || StatementScopeError) {
+    statement_proposals.finishFailed(owns);
+    if (owns and statement_undo.pendingCount() > 0 and txn_undo_log.threadInTxn()) {
+        if (storage_adapter.hasThreadSessionTxn()) _ = session_txn_aborted_before_replay_total.fetchAdd(1, .monotonic);
+        storage_adapter.abortThreadSessionTxn();
+    }
+    const over_budget = owns and statement_undo.budgetExceeded();
+    if (!statement_undo.finishFailed(owns)) return error.StatementUndoIncomplete;
+    if (over_budget) return error.WriteQueryBudgetExceeded;
+    return err;
+}
+
+/// SONNY-3348: the statement that opened the scope `owns` evaluated without
+/// an error. On a cluster leader its held writes are proposed now, as one
+/// entry (round 19); if that fails, it fails (nothing was applied). Then its
+/// undo record joins its explicit transaction, or is dropped.
+pub fn endStatementSucceeded(owns: bool) (statement_proposals.Error || StatementScopeError)!void {
+    statement_proposals.flush(owns) catch |err| return endStatementFailed(owns, err);
+    try statement_undo.finishSucceeded(owns);
 }
 
 fn executeStatementWithContextInner(allocator: std.mem.Allocator, stmt: ast.Statement, context: ExecutionContext) !ExecutionResult {
@@ -1669,6 +1722,9 @@ fn executeStatementWithContextInner(allocator: std.mem.Allocator, stmt: ast.Stat
                             log.err("Failed to roll back a transaction body", &.{
                                 Attr.string("error", @errorName(rb_err)),
                             });
+                            // SONNY-3348 (round 19, m3): reported, not
+                            // only logged: the body is partly applied.
+                            return error.RollbackIncomplete;
                         };
                         return err;
                     };
@@ -1686,6 +1742,7 @@ fn executeStatementWithContextInner(allocator: std.mem.Allocator, stmt: ast.Stat
                         log.err("Failed to roll back a transaction body", &.{
                             Attr.string("error", @errorName(rb_err)),
                         });
+                        return error.RollbackIncomplete;
                     };
                     return error.SessionCommitFailed;
                 };
@@ -1786,13 +1843,19 @@ fn executeStatementWithContextInner(allocator: std.mem.Allocator, stmt: ast.Stat
                 // QUIC's ROLLBACK message does), so the undo's own changes
                 // commit on their own. A ROLLBACK statement never aborted it.
                 storage_adapter.abortThreadSessionTxn();
+                // SONNY-3348 (round 19, m3): the undo continues past a
+                // change it cannot undo, and ROLLBACK then fails with
+                // 40003: the transaction is over, and partly applied.
+                var rollback_complete = true;
                 undo_log.rollback(store) catch |err| {
                     log.err("Failed to rollback transaction", &.{
                         Attr.string("error", @errorName(err)),
                     });
+                    rollback_complete = false;
                 };
                 // SONNY-3191 (N-4): as at COMMIT.
                 graph_store.releaseThreadTxnHold();
+                if (!rollback_complete) return error.RollbackIncomplete;
 
                 break :blk "transaction rolled back";
             } else "no transaction active";

@@ -185,7 +185,14 @@ pub fn mapError(err: anyerror) ErrorInfo {
         error.TransactionAlreadyActive => .{ .code = "25001", .message = "Transaction already active" },
         // GAP-0917: statement failed mid-transaction; everything until
         // ROLLBACK is rejected and COMMIT aborts. 25P02 = in_failed_sql_transaction.
-        error.TransactionAborted => .{ .code = "25P02", .message = "Current transaction is aborted; statements are rejected until ROLLBACK" },
+        error.TransactionAborted => .{ .code = "25P02", .message = "Current transaction is aborted; statements are rejected until ROLLBACK or COMMIT ends it (COMMIT fails with 40000)" },
+        // SONNY-3348 (round 19, m3): a failed statement's undo could not undo
+        // every change it made: the statement is partly applied. 40003 =
+        // statement_completion_unknown; do not retry it blindly.
+        error.StatementUndoIncomplete => .{ .code = "40003", .message = "The statement failed and its changes could not all be undone; it may be partly applied. Check the data before retrying" },
+        // SONNY-3348 (round 19, m3): ROLLBACK could not undo every change of
+        // the transaction; it is over, and may be partly applied.
+        error.RollbackIncomplete => .{ .code = "40003", .message = "ROLLBACK could not undo every change of the transaction; it ended, and may be partly applied" },
         // SONNY-3031: the storage engine could not commit the transaction's
         // changes; the transaction is rolled back.
         error.SessionCommitFailed => .{ .code = "40000", .message = "The transaction's changes could not be committed to storage; the transaction was rolled back" },
@@ -394,11 +401,14 @@ pub fn mapError(err: anyerror) ErrorInfo {
         error.Timeout => .{ .code = "08006", .message = "Timeout: cluster write outcome unknown — the entry may have committed but local apply could not be confirmed in time; retry ONLY with an idempotency key" },
         error.ClusterNotLeader => .{ .code = "40001", .message = "ClusterNotLeader: cluster write not applied here — this node is not the leader; retry against the current leader" },
         error.ClusterWriteNotReplicable => .{ .code = "40001", .message = "ClusterWriteNotReplicable: cluster write not applied here — the leader could not replicate this write shape; retry against the current leader" },
+        // SONNY-3348 (round 19): the leader could not propose a statement's
+        // entry (nothing was proposed; nothing applied).
+        error.ClusterProposeFailed => .{ .code = "40001", .message = "ClusterProposeFailed: cluster write not applied — the leader could not propose the statement's entry; retry against the current leader" },
         // GAP (write-path OOM, 2026-07-04): the legacy write-carrying MATCH
         // executor aborted because its materialization working set crossed the
         // configured budget — a loud, clean refusal instead of the OOM killer.
         // 53200 = SQLSTATE out_of_memory (class 53, insufficient resources).
-        error.WriteQueryBudgetExceeded => .{ .code = "53200", .message = "WriteQueryBudgetExceeded: this write query's working set exceeded GEODE_WRITE_EXECUTOR_BUDGET_MB (default 8192; 0 disables) and was aborted before exhausting server memory. Aborted BETWEEN row mutations: rows already written remain applied (no statement-level rollback in autocommit). Narrow the MATCH (single-node indexed-equality point writes run engine-direct) or raise the budget" },
+        error.WriteQueryBudgetExceeded => .{ .code = "53200", .message = "WriteQueryBudgetExceeded: this write query's working set exceeded GEODE_WRITE_EXECUTOR_BUDGET_MB (default 8192; 0 disables) and was aborted before exhausting server memory. The statement's changes were undone (its undo record counts against the same budget). Narrow the MATCH (single-node indexed-equality point writes run engine-direct) or raise the budget" },
         // GAP-ENT-0044 (T5, 2026-07-05 live OOM): the read executor's
         // materialization working set crossed the configured budget — a loud,
         // clean refusal instead of the OOM killer taking the server.
@@ -413,11 +423,11 @@ pub fn mapError(err: anyerror) ErrorInfo {
         // SONNY-1841: a per-stream QUIC CANCEL (or connection close / stall
         // watchdog) reached the write executor; the write-carrying mutation
         // aborted at a candidate/apply boundary and RELEASED the per-graph write
-        // lock instead of holding it to the ~120 s deadline. Aborted BETWEEN row
-        // mutations: rows already written remain applied (no statement-level
-        // rollback on the autocommit path), matching the budget-abort semantics.
+        // lock instead of holding it to the ~120 s deadline. SONNY-3348: the
+        // statement's changes are undone (its undo record), as at the budget
+        // abort.
         // 57014 = SQLSTATE query_canceled (class 57, operator intervention).
-        error.WriteQueryCancelled => .{ .code = "57014", .message = "WriteQueryCancelled: the client canceled this write (per-stream CANCEL, disconnect, or stall watchdog); execution aborted at a row-mutation boundary and released the per-graph write lock. Rows already written remain applied (no statement-level rollback in autocommit)" },
+        error.WriteQueryCancelled => .{ .code = "57014", .message = "WriteQueryCancelled: the client canceled this write (per-stream CANCEL, disconnect, or stall watchdog); execution aborted at a row-mutation boundary and released the per-graph write lock. The statement's changes were undone" },
         // ENG-3911: an oversized property VALUE used to reach the client as
         // `PropertyKeyTooLong` under the generic 58000 system-error class — the
         // wrong noun AND a "the server broke" class for a documented resource

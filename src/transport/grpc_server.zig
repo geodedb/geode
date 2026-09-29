@@ -1192,6 +1192,29 @@ fn abortFailedTransaction(state: *server_state.ServerState, request_graph: []con
     }
 }
 
+/// SONNY-3348 (round 19, m5): the error a failed COMMIT or ROLLBACK message
+/// carries: the code the statement form answers.
+fn txnEndError(err: anyerror) schema.Error {
+    const info = proto_util.mapError(err);
+    return .{ .code = info.code, .message = info.message };
+}
+
+/// SONNY-3348 (round 19, m3): ROLLBACK's answer: success, or 40003 when the
+/// rollback could not undo every change.
+fn rollbackResponse(incomplete: bool) schema.RollbackResponse {
+    if (!incomplete) return .{ .success = true };
+    return .{ .success = false, .@"error" = txnEndError(error.RollbackIncomplete) };
+}
+
+/// SONNY-3348 (round 19, m2): a streamed statement that fails at a later
+/// PULL page fails its explicit transaction (aborted until ROLLBACK or
+/// COMMIT), as a failure in its first page does. The stream is gone and
+/// holds no lock.
+fn abortTxnAfterPullFailure(state: *server_state.ServerState) void {
+    if (!state.in_txn) return;
+    abortFailedTransaction(state, state.sessionGraph(), false);
+}
+
 fn encodeMessage(allocator: std.mem.Allocator, msg: anytype) ![]u8 {
     var aw: std.Io.Writer.Allocating = std.Io.Writer.Allocating.initCapacity(allocator, 4096) catch return error.OutOfMemory;
     defer aw.deinit();
@@ -3098,8 +3121,11 @@ pub fn handleExecute(request_bytes: []const u8, allocator: std.mem.Allocator, ep
             if (state.txn_aborted) {
                 const verdict = query_traits.abortedTxnVerdict(&parse_result.program);
                 if (verdict != .refuse) state.txn_aborted = false;
-                if (verdict != .rollback) {
-                    const info = proto_util.mapError(if (verdict == .commit) error.TransactionRolledBack else error.TransactionAborted);
+                // SONNY-3348 (round 19, m3): the ROLLBACK or COMMIT that ends
+                // it reports a rollback that could not undo every change.
+                const incomplete = verdict != .refuse and state.takeRollbackIncomplete();
+                if (verdict != .rollback or incomplete) {
+                    const info = proto_util.mapError(if (incomplete) error.RollbackIncomplete else if (verdict == .commit) error.TransactionRolledBack else error.TransactionAborted);
                     var resp = try buildErrorResponse(allocator, info.code, info.message, &.{}, &.{});
                     defer resp.deinit(allocator);
                     return encodeMessage(allocator, resp);
@@ -3791,8 +3817,10 @@ pub fn handleExecute(request_bytes: []const u8, allocator: std.mem.Allocator, ep
                                 // WHERE ran into (a count is computed here)
                                 // answers its SQLSTATE, not a Zig error.
                                 const prepared_opt = node_scan_stream.prepare(allocator, query_ptr, exec_context, bindings.names, bindings.values, flags.items) catch |err| {
-                                    if (!geode.eval.isResourceLimitError(err)) return err;
+                                    // SONNY-3348 (round 19, m2): any error the
+                                    // scan fails with fails its transaction.
                                     failed_in_txn = true;
+                                    if (!geode.eval.isResourceLimitError(err)) return err;
                                     const info = proto_util.mapError(err);
                                     var resp = try buildErrorResponse(allocator, info.code, info.message, &.{}, &.{});
                                     defer resp.deinit(allocator);
@@ -3827,6 +3855,9 @@ pub fn handleExecute(request_bytes: []const u8, allocator: std.mem.Allocator, ep
                                     // as the executor path does when its rows
                                     // fail.
                                     active_stream.prefetchSchemaSample(allocator) catch |err| {
+                                        // SONNY-3348 (round 19, m2): and it fails
+                                        // its transaction, as the executor's do.
+                                        failed_in_txn = true;
                                         const info = proto_util.mapError(err);
                                         var err_resp = try buildErrorResponse(allocator, info.code, info.message, &.{}, &.{});
                                         defer err_resp.deinit(allocator);
@@ -4022,6 +4053,9 @@ pub fn handlePull(request_bytes: []const u8, allocator: std.mem.Allocator) ![]u8
         var page_result = active_stream.buildNextPage(allocator, req.page_size) catch |err| {
             if (!geode.eval.isResourceLimitError(err)) return err;
             state.resetResult();
+            // SONNY-3348 (round 19, m2): a later page's failure fails the
+            // transaction the statement ran in, as its first page's would.
+            abortTxnAfterPullFailure(state);
             const info = proto_util.mapError(err);
             var resp = try buildErrorResponse(allocator, info.code, info.message, &.{}, &.{});
             defer resp.deinit(allocator);
@@ -4190,7 +4224,9 @@ pub fn handleCommit(request_bytes: []const u8, allocator: std.mem.Allocator) ![]
     // and fails: it was rolled back.
     if (state.txn_aborted) {
         state.txn_aborted = false;
-        const resp = schema.CommitResponse{ .success = false };
+        // SONNY-3348 (round 19, m5): with the code a COMMIT statement answers
+        // (40000), or 40003 when the rollback could not undo every change.
+        const resp = schema.CommitResponse{ .success = false, .@"error" = txnEndError(if (state.takeRollbackIncomplete()) error.RollbackIncomplete else error.TransactionRolledBack) };
         return encodeMessage(allocator, resp);
     }
 
@@ -4211,7 +4247,7 @@ pub fn handleCommit(request_bytes: []const u8, allocator: std.mem.Allocator) ![]
                 log.warn("transaction rollback after a failed commit failed", &.{Attr.string("error", @errorName(err))});
             };
             state.endTransaction();
-            const resp = schema.CommitResponse{ .success = false };
+            const resp = schema.CommitResponse{ .success = false, .@"error" = txnEndError(error.SessionCommitFailed) };
             return encodeMessage(allocator, resp);
         };
         const store_ptr = graph_store.getGlobalStore(allocator);
@@ -4274,7 +4310,9 @@ pub fn handleRollback(request_bytes: []const u8, allocator: std.mem.Allocator) !
     // failed statement's handler already undid it).
     if (state.txn_aborted) {
         state.txn_aborted = false;
-        const resp = schema.RollbackResponse{ .success = true };
+        // SONNY-3348 (round 19, m3): a rollback that could not undo every
+        // change is reported (40003), not answered as a success.
+        const resp = rollbackResponse(state.takeRollbackIncomplete());
         return encodeMessage(allocator, resp);
     }
 
@@ -4284,7 +4322,7 @@ pub fn handleRollback(request_bytes: []const u8, allocator: std.mem.Allocator) !
         // SONNY-2823: `rollBackTransaction` aborts the session's engine
         // transaction first, which gRPC never did.
         state.rollBackTransaction(state.sessionGraph());
-        const resp = schema.RollbackResponse{ .success = true };
+        const resp = rollbackResponse(state.takeRollbackIncomplete());
         return encodeMessage(allocator, resp);
     }
 

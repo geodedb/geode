@@ -3081,6 +3081,12 @@ pub fn commitThreadSessionTxn() !void {
     };
 }
 
+/// SONNY-3348 (round 19): does this thread have a session engine
+/// transaction open?
+pub fn hasThreadSessionTxn() bool {
+    return t_session_engine_txn != null;
+}
+
 /// SONNY-2823: abort this thread's session engine transaction, if it has
 /// one. Callers abort BEFORE the undo log replays, so the replay's own
 /// changes commit on their own and do not join the aborted transaction.

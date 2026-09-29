@@ -498,17 +498,20 @@ pub fn executeProfiledIfSupported(
     // SONNY-3348 (round 18): and its statement undo record: a profiled
     // statement that fails has its changes undone, as any other statement
     // (`execution.executeStatementWithContext`).
-    statement_undo.begin(owns_scope);
+    // SONNY-3348 (round 19): and its held replicated writes (one entry).
+    execution.beginStatementScope(owns_scope);
     var profiled = (executeProfiledInScope(allocator, q, context, param_names, param_values, apply_window) catch |err| {
         _ = eval.exitInPredicateScope(owns_scope);
         _ = eval.takeDeferredLimitError(owns_scope);
-        statement_undo.finishFailed(owns_scope);
-        return err;
+        return execution.endStatementFailed(owns_scope, err);
     }) orelse {
         _ = eval.exitInPredicateScope(owns_scope);
         _ = eval.takeDeferredLimitError(owns_scope);
         // Nothing ran (no plan); the caller runs the statement another way.
-        statement_undo.finishFailed(owns_scope);
+        switch (execution.endStatementFailed(owns_scope, error.NoPlan)) {
+            error.NoPlan => {},
+            else => |e| return e,
+        }
         return null;
     };
     const limit_error = eval.takeDeferredLimitError(owns_scope);
@@ -516,11 +519,10 @@ pub fn executeProfiledIfSupported(
     if (in_type_error or limit_error != null) {
         profiled.result.deinit(allocator);
         profiled.deinitMetadata(allocator);
-        statement_undo.finishFailed(owns_scope);
-        if (in_type_error) return error.InListRequiresList;
-        return limit_error.?;
+        if (in_type_error) return execution.endStatementFailed(owns_scope, error.InListRequiresList);
+        return execution.endStatementFailed(owns_scope, limit_error.?);
     }
-    statement_undo.finishSucceeded(owns_scope) catch |err| {
+    execution.endStatementSucceeded(owns_scope) catch |err| {
         profiled.result.deinit(allocator);
         profiled.deinitMetadata(allocator);
         return err;
@@ -3198,9 +3200,12 @@ fn resolveExternalNodeId(
     // Slow path: read the persisted public ID property from the adapter.
     // SONNY-3348 round 18 (review M1): a resource limit fails the query (it
     // was swallowed, and the slot used as the id: a wrong row).
-    const stored = adapter.getNodeProperty(graph_name, slot_id, graph_store.INTERNAL_NODE_ID_PROPERTY_KEY, allocator) catch |err| {
-        if (@import("../eval.zig").isResourceLimitError(err)) return err;
-        return error.NodeNotFound;
+    // SONNY-3348 round 19 (review m4): only a node or graph that is gone
+    // is skipped; any other read error (an engine I/O error) fails the
+    // query instead of dropping the row silently.
+    const stored = adapter.getNodeProperty(graph_name, slot_id, graph_store.INTERNAL_NODE_ID_PROPERTY_KEY, allocator) catch |err| switch (err) {
+        error.NodeNotFound, error.GraphNotFound => return error.NodeNotFound,
+        else => return err,
     };
     if (stored) |stored_prop| {
         defer freeStoragePropertyValue(allocator, stored_prop);

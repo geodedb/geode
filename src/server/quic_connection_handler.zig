@@ -2175,6 +2175,20 @@ pub fn decodeBufferedMessageForTest(
     return reader.decodeBufferedMessage();
 }
 
+/// SONNY-3348 (round 19, m3/m5): the error a failed COMMIT or ROLLBACK
+/// message carries (the code the statement form answers), owned by
+/// `allocator`: `sendQuicMessage` frees the message it sends.
+fn txnEndErrorOwned(allocator: std.mem.Allocator, err: anyerror) !schema.Error {
+    const info = proto_util.mapError(err);
+    const code = try allocator.dupe(u8, info.code);
+    errdefer allocator.free(code);
+    const message = try allocator.dupe(u8, info.message);
+    errdefer allocator.free(message);
+    const kind = try allocator.dupe(u8, "ERROR");
+    errdefer allocator.free(kind);
+    return .{ .code = code, .message = message, .type = kind, .anchor = try allocator.dupe(u8, "") };
+}
+
 fn sendQuicMessage(allocator: std.mem.Allocator, stream: *quic_transport.QuicStream, msg: schema.QuicServerMessage) !void {
     const first_stream_response_start_ns = monoNsFromHandler();
     defer quic_response_metrics.recordFirstStreamResponseSend(monoNsFromHandler() -| first_stream_response_start_ns);
@@ -7375,8 +7389,11 @@ fn handleClientMessage(
             if (state.txn_aborted) {
                 const verdict = query_traits.abortedTxnVerdict(&parse_result.program);
                 if (verdict != .refuse) state.txn_aborted = false;
-                if (verdict != .rollback) {
-                    const info = proto_util.mapError(if (verdict == .commit) error.TransactionRolledBack else error.TransactionAborted);
+                // SONNY-3348 (round 19, m3): the ROLLBACK or COMMIT that ends
+                // it reports a rollback that could not undo every change.
+                const incomplete = verdict != .refuse and state.takeRollbackIncomplete();
+                if (verdict != .rollback or incomplete) {
+                    const info = proto_util.mapError(if (incomplete) error.RollbackIncomplete else if (verdict == .commit) error.TransactionRolledBack else error.TransactionAborted);
                     try sendExecuteError(gpa, stream, info.code, info.message, &.{}, &.{});
                     return;
                 }
@@ -8608,6 +8625,9 @@ fn handleClientMessage(
                                 // SONNY-3251 (round 15, F6): a limit the scan's
                                 // WHERE ran into answers its SQLSTATE.
                                 const prepared_opt = node_scan_stream.prepare(gpa, query_ptr, exec_context, bindings.names, bindings.values, flags.items) catch |err| {
+                                    // SONNY-3348 (round 19, m2): any error the
+                                    // scan fails with fails its transaction.
+                                    failed_in_txn = true;
                                     if (!geode.eval.isResourceLimitError(err)) return err;
                                     const info = proto_util.mapError(err);
                                     try sendExecuteError(gpa, stream, info.code, info.message, &.{}, &.{});
@@ -8646,6 +8666,9 @@ fn handleClientMessage(
                                     // they cannot be built, answer as the
                                     // executor path does when its rows fail.
                                     active_stream.prefetchSchemaSample(gpa) catch |err| {
+                                        // SONNY-3348 (round 19, m2): and it fails
+                                        // its transaction, as the executor's do.
+                                        failed_in_txn = true;
                                         const info = proto_util.mapError(err);
                                         try sendExecuteError(gpa, stream, info.code, info.message, &.{}, &.{});
                                         active_stream.deinit();
@@ -8975,8 +8998,11 @@ fn handleClientMessage(
                         const info = proto_util.mapError(err);
                         var lim_resp = try buildErrorResponse(pa, info.code, info.message, &.{}, &.{});
                         _ = &lim_resp;
-                        try sendQuicMessage(pa, stream, .{ .pull = .{ .response = lim_resp } });
                         state.resetResult();
+                        // SONNY-3348 (round 19, m2): a later page's failure
+                        // fails the transaction the statement ran in.
+                        if (state.in_txn) abortFailedTransaction(state, state.sessionGraph(), false);
+                        try sendQuicMessage(pa, stream, .{ .pull = .{ .response = lim_resp } });
                         return;
                     }
                     // Node disappeared during concurrent ingest — send empty
@@ -9120,7 +9146,9 @@ fn handleClientMessage(
             // it, and fails: it was rolled back.
             if (state.txn_aborted) {
                 state.txn_aborted = false;
-                try sendQuicMessage(gpa, stream, .{ .commit = .{ .success = false } });
+                // SONNY-3348 (round 19, m5): with the code a COMMIT statement
+                // answers (40000), or 40003 for an incomplete rollback.
+                try sendQuicMessage(gpa, stream, .{ .commit = .{ .success = false, .@"error" = try txnEndErrorOwned(gpa, if (state.takeRollbackIncomplete()) error.RollbackIncomplete else error.TransactionRolledBack) } });
                 return;
             }
             if (state.in_txn) {
@@ -9149,7 +9177,7 @@ fn handleClientMessage(
                             log.warn("transaction rollback after a failed commit failed", &.{Attr.string("error", @errorName(err))});
                         };
                         state.endTransaction();
-                        try sendQuicMessage(gpa, stream, .{ .commit = .{ .success = false } });
+                        try sendQuicMessage(gpa, stream, .{ .commit = .{ .success = false, .@"error" = try txnEndErrorOwned(gpa, error.SessionCommitFailed) } });
                         return;
                     };
                     undo.commitDeferRebuilds();
@@ -9177,6 +9205,12 @@ fn handleClientMessage(
             // (the failed statement's handler already undid it).
             if (state.txn_aborted) {
                 state.txn_aborted = false;
+                // SONNY-3348 (round 19, m3): an incomplete rollback is
+                // reported (40003).
+                if (state.takeRollbackIncomplete()) {
+                    try sendQuicMessage(gpa, stream, .{ .rollback = .{ .success = false, .@"error" = try txnEndErrorOwned(gpa, error.RollbackIncomplete) } });
+                    return;
+                }
                 try sendQuicMessage(gpa, stream, .{ .rollback = .{ .success = true } });
                 return;
             }
@@ -9197,10 +9231,17 @@ fn handleClientMessage(
                 }
 
                 const store = graph_store.getGlobalStore(gpa);
+                var rollback_complete = true;
                 txn_undo_log.getGlobalUndoLog(gpa).rollback(store) catch |err| {
                     log.err("Rollback failed", &.{Attr.string("error", @errorName(err))});
+                    rollback_complete = false;
                 };
                 state.endTransaction();
+                // SONNY-3348 (round 19, m3): reported, not answered as a success.
+                if (!rollback_complete) {
+                    try sendQuicMessage(gpa, stream, .{ .rollback = .{ .success = false, .@"error" = try txnEndErrorOwned(gpa, error.RollbackIncomplete) } });
+                    return;
+                }
                 try sendQuicMessage(gpa, stream, .{ .rollback = .{ .success = true } });
             } else {
                 try sendQuicMessage(gpa, stream, .{ .rollback = .{ .success = false } });

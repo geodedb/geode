@@ -281,13 +281,18 @@ pub const ServerState = struct {
     // Transaction session state: single active txn baseline
     in_txn: bool = false,
     txn_id: u64 = 0,
-    // CANARY: REQ=REQ-SONNY-3348-ABORTED-TXN; FEATURE="TransactionManagement"; ASPECT=SessionState; STATUS=TESTED; TEST=tests/test_sonny3348_limit_atomicity.zig; OWNER=engine; UPDATED=2026-09-28
+    // CANARY: REQ=REQ-SONNY-3348-ABORTED-TXN; FEATURE="TransactionManagement"; ASPECT=SessionState; STATUS=TESTED; TEST=tests/test_sonny3348_statement_undo.zig; OWNER=engine; UPDATED=2026-09-29
     // SONNY-3348 (round 18, I2): a statement failed inside the session's
     // explicit transaction, which was rolled back. Until the client ends it
     // (ROLLBACK, or a COMMIT that fails), every statement is refused (25P02,
     // `query_traits.abortedTxnVerdict`). The session left the transaction
     // silently and ran the client's next statements in autocommit.
     txn_aborted: bool = false,
+    // SONNY-3348 (round 19, m3): the rollback of the session's transaction
+    // could not undo every change (`UndoLog.rollback`'s
+    // `error.RollbackIncomplete`). The client's ROLLBACK or COMMIT that ends
+    // the transaction reports it (40003), then it is cleared.
+    txn_rollback_incomplete: bool = false,
     // CANARY: REQ=REQ-SONNY-2776-TXN-ONE-GRAPH; FEATURE="StatementAuthorization"; ASPECT=TxnGraph; STATUS=TESTED; TEST=tests/test_sonny2776_session_graph_uses.zig; OWNER=security; UPDATED=2026-09-26
     // SONNY-2776: the graph the open transaction changes, owned by
     // `allocator`; null until its first change. A transaction changes one
@@ -445,6 +450,14 @@ pub const ServerState = struct {
     }
 
     /// SONNY-2776: the transaction is over: no transaction id, no graph.
+    /// SONNY-3348 (round 19, m3): was the rollback of the transaction the
+    /// client now ends incomplete? Cleared.
+    pub fn takeRollbackIncomplete(self: *ServerState) bool {
+        const incomplete = self.txn_rollback_incomplete;
+        self.txn_rollback_incomplete = false;
+        return incomplete;
+    }
+
     pub fn endTransaction(self: *ServerState) void {
         self.in_txn = false;
         self.txn_id = 0;
@@ -521,6 +534,10 @@ pub const ServerState = struct {
         // the failure rather than keeping changes that were never committed.
         if (gsa.leaveSessionEngineTxn(&self.session_engine_txn, scope.engine) and self.in_txn) {
             self.rollBackTransaction(self.sessionGraph());
+            // SONNY-3348 (round 19, m2): and the session is in the aborted
+            // transaction until the client ends it; it fell back to
+            // autocommit, silently.
+            self.txn_aborted = true;
         }
     }
 
@@ -554,7 +571,10 @@ pub const ServerState = struct {
                 defer self.leaveSessionTxn(scope);
                 gsa.abortThreadSessionTxn();
                 txn_undo_log.getGlobalUndoLog(self.allocator).rollback(graph_store_mod.getWritableGlobalStore(self.allocator)) catch |err| {
-                    std.log.warn("transaction rollback failed: {s}", .{@errorName(err)});
+                    // SONNY-3348 (round 19, m3): reported to the client at
+                    // its ROLLBACK or COMMIT (`txn_rollback_incomplete`).
+                    @import("logging").scoped("server_state").err("transaction rollback could not undo every change", &.{@import("logging").Attr.string("error", @errorName(err))});
+                    self.txn_rollback_incomplete = true;
                 };
             } else {
                 txn_undo_log.getGlobalUndoLog(self.allocator).discardTxn(self.txn_id);

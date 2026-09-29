@@ -1,4 +1,6 @@
 const std = @import("std");
+const logging = @import("logging");
+const undo_log = logging.scoped("txn_undo_log");
 const graph_store = @import("graph_store.zig");
 const property_codec = @import("property_value_codec.zig");
 const statement_undo = @import("statement_undo.zig");
@@ -463,26 +465,33 @@ pub const UndoLog = struct {
         return taken;
     }
 
-    /// Undo `entries` in order, freeing each. On an error the entries not
-    /// undone are freed too, and the error returned.
-    fn undoAndFree(self: *UndoLog, store: *graph_store.GraphStore, entries: []const UndoEntry) !void {
+    /// Undo `entries` in order, freeing each.
+    ///
+    /// SONNY-3348 (round 19, m3): an entry that cannot be undone is logged,
+    /// counted (`statement_undo.replay_failures_total`) and skipped, and the
+    /// rest are still undone: it stopped at the first, and freed the rest
+    /// undone, silently skipping the rest of the transaction. Afterwards
+    /// `error.RollbackIncomplete` reports that the transaction is partly
+    /// applied.
+    fn undoAndFree(self: *UndoLog, store: *graph_store.GraphStore, entries: []const UndoEntry) error{RollbackIncomplete}!void {
         // SONNY-3348 (round 18, I1): the undo's own writes are neither
         // recorded in a statement's undo record nor refused by the write
         // fence a failed statement raised (a transaction body's rollback runs
         // inside that statement's scope, and the fence made it a no-op).
         statement_undo.suspendCapture();
         defer statement_undo.resumeCapture();
-        for (entries, 0..) |entry, k| {
-            self.undoEntry(store, entry) catch |err| {
-                self.list_mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
-                defer self.list_mutex.unlock(std.Io.Threaded.global_single_threaded.io());
-                for (entries[k..]) |rest| self.freeEntry(rest);
-                return err;
+        var complete = true;
+        for (entries) |entry| {
+            (if (statement_undo.takeTestUndoFailure()) error.InjectedUndoFailure else self.undoEntry(store, entry)) catch |err| {
+                complete = false;
+                _ = statement_undo.replay_failures_total.fetchAdd(1, .monotonic);
+                undo_log.err("transaction undo: an entry could not be undone; the transaction is partly applied", &.{logging.Attr.string("error", @errorName(err))});
             };
             self.list_mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
             self.freeEntry(entry);
             self.list_mutex.unlock(std.Io.Threaded.global_single_threaded.io());
         }
+        if (!complete) return error.RollbackIncomplete;
     }
 
     /// Remove (and free) all entries whose tag matches `txn_id`.  Caller
@@ -737,9 +746,9 @@ pub const UndoLog = struct {
         if (self.entries.items.len == 0) self.active = false;
         self.list_mutex.unlock(std.Io.Threaded.global_single_threaded.io());
 
+        // SONNY-3348 (round 19, m3): the transaction is over either way.
+        defer t_txn_state = .{};
         try self.undoAndFree(store, owned_entries.items);
-
-        t_txn_state = .{};
     }
 
     // CANARY: REQ=REQ-TXN-UNDO-SERVER-015; FEATURE="TransactionUndoLog"; ASPECT=RollbackGraphStore; STATUS=TESTED; TEST=geodetestlab/specs/transaction_state_basic.yml; OWNER=engine; UPDATED=2025-12-23
@@ -787,7 +796,7 @@ pub const UndoLog = struct {
         try undoEntryLogged(store, entry);
     }
 
-    // CANARY: REQ=REQ-SONNY-3059-UNDO-ALL-CHANGES; FEATURE="TransactionUndoLog"; ASPECT=AdoptStatementRecord; STATUS=TESTED; TEST=tests/test_sonny3348_limit_atomicity.zig; OWNER=engine; UPDATED=2026-09-28
+    // CANARY: REQ=REQ-SONNY-3059-UNDO-ALL-CHANGES; FEATURE="TransactionUndoLog"; ASPECT=AdoptStatementRecord; STATUS=TESTED; TEST=tests/test_sonny3348_statement_undo.zig; OWNER=engine; UPDATED=2026-09-29
     /// SONNY-3059 (round 18): append a statement's undo record
     /// (`statement_undo`) to the calling thread's transaction, oldest first,
     /// so ROLLBACK undoes the statement's every change: SET, REMOVE, DELETE,
@@ -962,7 +971,7 @@ pub fn cloneEntry(allocator: std.mem.Allocator, entry: UndoEntry) !UndoEntry {
     }
 }
 
-// CANARY: REQ=REQ-SONNY-3348-LIMIT-ATOMICITY; FEATURE="TransactionUndoLog"; ASPECT=LoggedUndo; STATUS=TESTED; TEST=tests/test_sonny3348_limit_atomicity.zig; OWNER=engine; UPDATED=2026-09-28
+// CANARY: REQ=REQ-SONNY-3348-LIMIT-ATOMICITY; FEATURE="TransactionUndoLog"; ASPECT=LoggedUndo; STATUS=TESTED; TEST=tests/test_sonny3348_statement_undo.zig; OWNER=engine; UPDATED=2026-09-29
 /// SONNY-3348 (round 18): undo one change through the store's normal write
 /// methods, so the storage engine, the WAL mutation stream and the store's
 /// indexes see the compensating change. (The rollback used the `*NoSave`
