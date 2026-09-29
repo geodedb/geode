@@ -576,6 +576,155 @@ test "SONNY-3367 (C-1): a variable named as two kinds of element is refused befo
     try runCases("SONNY-3367", &c1_cases);
 }
 
+// SONNY-3368 (I-1): the comma join streams. The WHERE on a later chain and
+// the window still give the right rows...
+const i1_cases = [_]Case{
+    .{ .write = "MATCH (a:G)-[:R]->(b), (c:G)-[:R]->(d) WHERE c.i = 9 AND a.i = 3 RETURN a.i, c.i LIMIT 1", .want = &.{"3|9"} },
+    .{ .write = "MATCH (a:G)-[:R]->(b), (c:G)-[:R]->(d) WHERE c.i = a.i RETURN count(*) AS n", .want = &.{"10"} },
+    .{ .write = "MATCH (a:G)-[:R]->(b), (c:G)-[:R]->(d) RETURN a.i LIMIT 3", .want = &.{ "0", "0", "0" } },
+    .{ .write = "MATCH (a:G)-[:R]->(b), (c:G)-[:R]->(d) RETURN count(*) AS n", .want = &.{"100"} },
+    .{ .write = "MATCH (a:G)-[:R]->(b), (c:G)-[:R]->(d) RETURN a.i AS i, c.i AS j ORDER BY i, j SKIP 98 LIMIT 5", .want = &.{ "9|8", "9|9" } },
+    .{ .write = "MATCH (a:G {i: 2})-[:R]->(b), (q:Q) WHERE q.i > 1 SET q.c = a.i RETURN q.i", .want = &.{ "2", "3" }, .checks = &.{
+        .{ .query = q_c, .want = &.{ "2|2", "3|2" } },
+    } },
+};
+
+test "SONNY-3368 (I-1): a comma join with a WHERE, a window and a write answers as before, in every session" {
+    try runCases("SONNY-3368", &i1_cases);
+}
+
+/// ... and holds what it keeps, not the product. Run in a child whose data
+/// segment may grow by 2 GiB at most, so a regression fails the case instead
+/// of the machine.
+const CartJob = struct {
+    s: *h.Session,
+    ok: bool = false,
+
+    fn check(self: *CartJob, query: []const u8, want: ?[]const []const u8, want_err: ?anyerror, max_ms: i64) bool {
+        const start = monoMillis();
+        var result = runProgram(self.s, stmt_alloc, query) catch |err| {
+            if (want_err) |w| if (err == w) return true;
+            std.debug.print("  {s}: error {s}\n", .{ query, @errorName(err) });
+            return false;
+        };
+        defer result.deinit(stmt_alloc);
+        const took = monoMillis() - start;
+        if (want_err) |w| {
+            std.debug.print("  {s}: answered {d} row(s); expected {s}\n", .{ query, result.rows.len, @errorName(w) });
+            return false;
+        }
+        const rows = h.renderRows(self.s.arena.allocator(), result) catch return false;
+        const w = want.?;
+        var same = rows.len == w.len;
+        if (same) for (rows, w) |g, e| {
+            if (!std.mem.eql(u8, g, e)) same = false;
+        };
+        if (!same) std.debug.print("  {s}: answered {d} row(s){s}{s}\n", .{ query, rows.len, if (rows.len > 0) ", first " else "", if (rows.len > 0) rows[0] else "" });
+        if (took > max_ms) std.debug.print("  {s}: took {d} ms (at most {d})\n", .{ query, took, max_ms });
+        return same and took <= max_ms;
+    }
+
+    fn run(self: *CartJob) void {
+        const cart = "MATCH (a:P)-[:E]->(b), (c:P)-[:E]->(d)";
+        var ok = true;
+        // `range(1, 1500)`'s pairs, as the store counts them.
+        var counted = runProgram(self.s, stmt_alloc, "MATCH (p:P) RETURN count(*) AS n") catch return;
+        const pairs = (h.renderRows(self.s.arena.allocator(), counted) catch return)[0];
+        counted.deinit(stmt_alloc);
+        // A 64 MiB read budget: the product (2.25 million bindings) is far
+        // past it, what LIMIT 1 and the WHERE keep is far inside.
+        geode.read_budget.setBudgetBytesForTest(64 << 20);
+        defer geode.read_budget.setBudgetBytesForTest(0);
+        ok = self.check(cart ++ " RETURN 1 AS one LIMIT 1", &.{"1"}, null, 10_000) and ok;
+        // The WHERE is applied to each binding as the join completes it (2.25
+        // million evaluated, 1,500 kept).
+        ok = self.check(cart ++ " WHERE c.i = a.i RETURN count(*) AS n", &.{pairs}, null, 300_000) and ok;
+        // The whole product is past the budget: 53200, not an OOM.
+        ok = self.check(cart ++ " RETURN a.i, c.i", null, error.ReadQueryBudgetExceeded, 120_000) and ok;
+        self.ok = ok;
+    }
+};
+
+fn monoMillis() i64 {
+    var ts: std.posix.timespec = .{ .sec = 0, .nsec = 0 };
+    _ = std.os.linux.clock_gettime(.MONOTONIC, &ts);
+    return @as(i64, @intCast(ts.sec)) * 1000 + @divTrunc(@as(i64, @intCast(ts.nsec)), 1_000_000);
+}
+
+/// The data segment the process holds now, in bytes (VmData).
+fn dataSegmentBytes() usize {
+    var buf: [8192]u8 = undefined;
+    const fd = std.c.open("/proc/self/status", .{});
+    if (fd < 0) return 0;
+    defer _ = std.c.close(fd);
+    const got = std.c.read(fd, &buf, buf.len);
+    if (got <= 0) return 0;
+    const n: usize = @intCast(got);
+    var lines = std.mem.tokenizeScalar(u8, buf[0..n], '\n');
+    while (lines.next()) |line| {
+        if (!std.mem.startsWith(u8, line, "VmData:")) continue;
+        var parts = std.mem.tokenizeAny(u8, line[7..], " \tkB");
+        const kb = std.fmt.parseInt(usize, parts.next() orelse return 0, 10) catch return 0;
+        return kb * 1024;
+    }
+    return 0;
+}
+
+test "SONNY-3368 (I-1): LIMIT 1 over two 1,500-pair chains is bounded, a WHERE streams, and the whole product answers the read budget's error" {
+    var s = try openSession(.in_memory);
+    defer s.deinit();
+    var setup = try runProgram(&s, stmt_alloc, "FOR i IN range(1, 1500) CREATE (:P {i: i})-[:E]->(:P2 {i: i})");
+    setup.deinit(stmt_alloc);
+    var job: CartJob = .{ .s = &s };
+    const pid = std.c.fork();
+    try testing.expect(pid >= 0);
+    if (pid == 0) {
+        std.posix.setrlimit(.CORE, .{ .cur = 0, .max = 0 }) catch {};
+        const have = dataSegmentBytes();
+        if (have == 0) std.c._exit(9);
+        const cap = have + (2 << 30);
+        std.posix.setrlimit(.DATA, .{ .cur = cap, .max = cap }) catch std.c._exit(9);
+        job.run();
+        std.c._exit(if (job.ok) 0 else 1);
+    }
+    var status: c_int = 0;
+    try testing.expectEqual(pid, std.c.waitpid(pid, &status, 0));
+    const st: u32 = @bitCast(status);
+    if (std.os.linux.W.IFSIGNALED(st)) {
+        std.debug.print("the join crashed (signal {d})\n", .{std.os.linux.W.TERMSIG(st)});
+        return error.Crashed;
+    }
+    try testing.expectEqual(@as(u32, 0), std.os.linux.W.EXITSTATUS(st));
+}
+
+// SONNY-3318 (I-5): every type of `[:A|B]`, on the first hop too.
+const s_edge = "MATCH (x:X {j: 1}) CREATE (x)-[:S]->(:Q {i: 5})";
+
+const i5_cases = [_]Case{
+    .{ .setup = &.{s_edge}, .write = "MATCH (a)-[:S|R]->(b), (q:Q {i: 0}) RETURN count(*) AS n", .want = &.{"11"} },
+    .{ .setup = &.{s_edge}, .write = "MATCH (q:Q {i: 0}), (a)-[:S|R]->(b) RETURN count(*) AS n", .want = &.{"11"} },
+    .{ .setup = &.{s_edge}, .write = "MATCH (a:X)-[:S|R]->(b), (q:Q {i: 0}) RETURN count(*) AS n", .want = &.{"1"} },
+    .{ .setup = &.{s_edge}, .write = "MATCH (a)-[:S|R]->(b:Q), (q:Q {i: 0}) RETURN b.i", .want = &.{"5"} },
+    .{ .setup = &.{s_edge}, .write = "MATCH (a)-[:R|R]->(b), (q:Q {i: 0}) RETURN count(*) AS n", .want = &.{"10"} },
+    .{ .setup = &.{s_edge}, .write = "MATCH (a)-[:S|R]->(b)-[:S]->(c) RETURN a.i, c.i", .want = &.{"1|5"} },
+    .{ .setup = &.{s_edge}, .write = "MATCH (a:G)-[:S|R]->(b)-[:S|R]->(c) RETURN count(*) AS n", .want = &.{"1"} },
+    .{ .setup = &.{s_edge}, .write = "MATCH (a:G {i: 1})-[:S|R*1..2]->(c), (q:Q {i: 0}) RETURN count(*) AS n", .want = &.{"2"} },
+    .{ .setup = &.{s_edge}, .write = "MATCH (a)-[:S|R]->(b) RETURN count(*) AS n", .want = &.{"11"} },
+    .{ .setup = &.{s_edge}, .write = "MATCH (g:G {i: 1})-[:S|R]->(x) OPTIONAL MATCH (x)-[:S|R]->(q) RETURN q.i", .want = &.{"5"} },
+    // The review's silent write loss: the S target is written too.
+    .{ .setup = &.{s_edge}, .write = "MATCH (a)-[:R|S]->(b), (q:Q {i: 0}) SET b.tt = 1", .checks = &.{
+        .{ .query = "MATCH (b) WHERE b.tt = 1 RETURN count(*) AS c", .want = &.{"11"} },
+        .{ .query = "MATCH (b:Q) WHERE b.tt = 1 RETURN b.i", .want = &.{"5"} },
+    } },
+    .{ .setup = &.{s_edge}, .write = "MATCH (a)-[:R|S]->(b) SET b.tt = 2", .checks = &.{
+        .{ .query = "MATCH (b) WHERE b.tt = 2 RETURN count(*) AS c", .want = &.{"11"} },
+    } },
+};
+
+test "SONNY-3318 (I-5): the first hop of a comma or multi-hop pattern walks every type of an alternation, in every session" {
+    try runCases("SONNY-3318 (I-5)", &i5_cases);
+}
+
 // ---------------------------------------------------------------------------
 // SONNY-3244 (round-4a review I-4): statement nesting. The fix is round
 // 14-16's (on fix/sonny-738-r12: max_statement_nesting, stackHasRoom,

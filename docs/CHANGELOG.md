@@ -1223,6 +1223,28 @@
   transport and fast path; the join also never binds a relationship's name
   to a node. A node variable reused as a relationship (`(a)-[a]->(b)`), which
   joined silently before round 4b-1, is refused the same way.
+- **A comma pattern's join streams (SONNY-3368, round 4b-1 review I-1):**
+  SONNY-3318's join built each chain's product in full before the WHERE and
+  the window saw it, and polled no budget: over 1,500 pairs, `MATCH
+  (a:P)-[:E]->(b), (c:P)-[:E]->(d) RETURN a.i LIMIT 1` held 2.25 million
+  bindings (37 GB, 54 s; 25 MB and 31 ms before round 4b-1). The join now
+  completes one binding at a time, applies the WHERE to it before keeping
+  it, stops at SKIP + LIMIT when nothing after the join needs every binding
+  (no WHERE, FILTER, ORDER BY, DISTINCT, WITH, grouping, aggregate or
+  write), and polls the read and write budgets at every binding, so a
+  product past the read budget answers 53200 instead of exhausting memory.
+  A WHERE that runs into a resource limit fails the query instead of
+  dropping the row. What a comma read holds is the bindings it keeps; round
+  4b-1's per-binding cost (three hash maps copied at every step, about
+  16.7 KB a binding against 9.4 KB before) applies to the kept bindings
+  only.
+- **Every type of an alternation, on the first hop too (SONNY-3318, round
+  4b-1 review I-5):** the first hop of a comma or multi-hop pattern, a
+  variable-length hop, OPTIONAL MATCH's hops and an in-memory one-hop
+  pattern read only the first type of `[:A|B]`: `MATCH (a)-[:S|R]->(b),
+  (q:Q {i: 0}) RETURN count(*)` counted the S edges, and `... SET b.t = 1`
+  wrote only their targets. Every type is walked now (the SONNY-3318 entry
+  above said so of the later hops only).
 - **The parser's limits (SONNY-3244):** parsing runs before authorization,
   and 25,000 `MATCH (n:G) SET n.x = 1;` statements (625 KB) took a 741 MB
   parser arena, so a 16 MB request could hold about 19 GB; about 60 chained

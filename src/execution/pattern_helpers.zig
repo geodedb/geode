@@ -155,6 +155,15 @@ pub fn dispatchToMultiChainHandler(q: ast.Query, all_simple_nodes: bool) Dispatc
     if (q.match.chains.len == 1 and q.match.chains[0].hops.len > 1) {
         return .multi_chain_relationship_match;
     }
+    // SONNY-3318 (round 4b-1 review I-5): the one-hop traversals read the
+    // first type of `[:A|B]` only (`PatternInfo.rel_type`), so an in-memory
+    // `MATCH (a)-[:S|R]->(b) RETURN count(*)` counted the S edges. A hop
+    // with more than one type goes to the multi-chain executor, which walks
+    // every type (a named path, or a shortest path, stays where it was).
+    if (q.match.chains.len == 1 and q.match.chains[0].hops.len == 1 and q.match.chains[0].hops[0].rel.types.len > 1) {
+        const chain = q.match.chains[0];
+        if (!chain.is_optional and !chain.is_shortest and chain.name == null and q.path_variable == null) return .multi_chain_relationship_match;
+    }
 
     // CANARY: REQ=REQ-GQL-MULTI-CHAIN-REL-002; FEATURE="MultiChainRelationshipMatch"; ASPECT=Dispatch; STATUS=TESTED; TEST=geodetestlab/specs/gql_pattern_matching_comprehensive.yml; OWNER=engine; UPDATED=2025-12-23
     // Handle multiple chains with relationships that share variables

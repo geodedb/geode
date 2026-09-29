@@ -5370,7 +5370,10 @@ fn expandVarLengthHop(
 ) !void {
     const min_len = hop.rel.min_len orelse 0;
     const max_len = hop.rel.max_len;
-    const rel_type: ?[]const u8 = if (hop.rel.types.len > 0) hop.rel.types[0] else null;
+    // SONNY-3318 (round 4b-1 review I-5): `[:A|B*1..2]` walks every type;
+    // the walk was given the first only. With more than one, it walks any
+    // type and each step's edge is checked below.
+    const rel_type: ?[]const u8 = if (hop.rel.types.len == 1) hop.rel.types[0] else null;
     const rel_direction: u8 = switch (hop.rel.dir) {
         .right => 'r',
         .left => 'l',
@@ -5406,7 +5409,7 @@ fn expandVarLengthHop(
                 edges_ok = false;
                 break;
             }
-            if (!matchesEdgeProperties(allocator, ep.*, hop.rel.props)) {
+            if (!matchesEdgeProperties(allocator, ep.*, hop.rel.props) or !MultiChainJoin.typeFits(hop.rel.types, ep.label)) {
                 edges_ok = false;
                 break;
             }
@@ -5477,99 +5480,228 @@ const MultiChainJoin = struct {
         return false;
     }
 
-    fn replace(comptime B: type, allocator: std.mem.Allocator, bindings: *std.ArrayList(B), next: *std.ArrayList(B)) void {
-        for (bindings.items) |*b| b.deinit();
-        bindings.deinit(allocator);
-        bindings.* = next.*;
-        next.* = .empty;
+    /// One step of the join: a chain's first node pattern (the chain after
+    /// it walks from there), or a hop from the node the chain reached.
+    const Step = union(enum) { start: ast.NodePattern, hop: ast.Hop };
+
+    /// What a step binds, one way (a node the chain reaches; the
+    /// relationship, or the relationship list, it walked).
+    const Choice = struct {
+        node: *graph_store.Node,
+        edge: ?*graph_store.Edge = null,
+        edges: ?[]Value = null,
+    };
+
+    /// A name a step bound, and what it was bound to before (null: unbound).
+    const Undo = union(enum) {
+        node: struct { key: []const u8, prev: ?*graph_store.Node },
+        edge: struct { key: []const u8, prev: ?*graph_store.Edge },
+        list: struct { key: []const u8, prev: ?[]Value },
+    };
+
+    const Level = struct {
+        choices: std.ArrayList(Choice) = .empty,
+        next: usize = 0,
+        undo: [3]Undo = undefined,
+        undo_len: usize = 0,
+    };
+
+    // CANARY: REQ=REQ-SONNY-3367-VARIABLE-KIND; FEATURE="MultiChainRelationshipMatch"; ASPECT=JoinKind; STATUS=TESTED; TEST=tests/test_sonny_write_allowlist_r4b.zig; OWNER=engine; UPDATED=2026-09-28
+    /// SONNY-3367: whether `name` is bound as a relationship or a
+    /// relationship list, so a node pattern naming it can match nothing.
+    /// The statement check refuses such a pattern before it runs
+    /// (`param_check`, 42000); this keeps the join from ever binding a
+    /// relationship's name to a node (it bound every node of the graph).
+    fn boundAsRelationship(comptime B: type, b: *const B, name: ?[]const u8) bool {
+        const n = name orelse return false;
+        return b.edge_vars.contains(n) or b.rel_list_vars.contains(n);
     }
 
-    fn dropAll(comptime B: type, allocator: std.mem.Allocator, list: *std.ArrayList(B)) void {
-        for (list.items) |*b| b.deinit();
-        list.deinit(allocator);
+    /// The ways `step` extends binding `b`, into `out`. `start_cands` is
+    /// every candidate an unbound start pattern has (the same for every
+    /// binding, so computed once per step).
+    fn choicesFor(self: MultiChainJoin, comptime B: type, b: *const B, step: Step, tracker: []const u8, start_cands: *?std.ArrayList(*graph_store.Node), targets: *std.ArrayList(VarLenTarget), out: *std.ArrayList(Choice)) !void {
+        out.clearRetainingCapacity();
+        switch (step) {
+            .start => |start| {
+                if (boundAsRelationship(B, b, start.name)) return;
+                if (start.name) |v| if (b.vars.get(v)) |bound| {
+                    if (self.nodeFits(bound, start)) try out.append(self.allocator, .{ .node = bound });
+                    return;
+                };
+                if (start_cands.* == null) {
+                    var cands: std.ArrayList(*graph_store.Node) = .empty;
+                    errdefer cands.deinit(self.allocator);
+                    try self.candidates(start, &cands);
+                    start_cands.* = cands;
+                }
+                try out.ensureUnusedCapacity(self.allocator, start_cands.*.?.items.len);
+                for (start_cands.*.?.items) |node| out.appendAssumeCapacity(.{ .node = node });
+            },
+            .hop => |hop| {
+                const left = b.vars.get(tracker) orelse return;
+                if (!matchesLabels(left, hop.left.labels)) return;
+                if (!nodeMatchesProps(self.allocator, left, hop.left.props, self.prop_env)) return;
+                const quantified = hop.rel.min_len != null or hop.rel.max_len != null;
+                // SONNY-3367: a far node named like a relationship, or a
+                // relationship named like a node (or like the other kind of
+                // relationship variable), reaches nothing.
+                if (boundAsRelationship(B, b, hop.right.name)) return;
+                if (hop.rel.name) |rn| {
+                    if (b.vars.contains(rn)) return;
+                    if (quantified and b.edge_vars.contains(rn)) return;
+                    if (!quantified and b.rel_list_vars.contains(rn)) return;
+                }
+                if (quantified) {
+                    targets.clearRetainingCapacity();
+                    try expandVarLengthHop(self.allocator, self.store, self.scope, left, hop, self.prop_env, self.path_mode, targets);
+                    for (targets.items) |target| {
+                        if (hop.right.name) |rv| if (b.vars.get(rv)) |bound| if (bound.id != target.node.id) continue;
+                        try out.append(self.allocator, .{ .node = target.node, .edges = target.edges });
+                    }
+                    return;
+                }
+                const empty = [_]u64{};
+                const outgoing: []const u64 = if (hop.rel.dir == .right or hop.rel.dir == .undirected) (self.store.getOutgoingEdgeIds(left.id) orelse &empty) else &empty;
+                const incoming: []const u64 = if (hop.rel.dir == .left or hop.rel.dir == .undirected) (self.store.getIncomingEdgeIds(left.id) orelse &empty) else &empty;
+                for ([_][]const u64{ outgoing, incoming }, 0..) |edge_ids, side| {
+                    for (edge_ids) |edge_id| {
+                        const edge = self.store.getEdgePtrHydrated(edge_id) orelse continue;
+                        if (!typeFits(hop.rel.types, edge.label)) continue;
+                        if (!self.scope.edgeVisible(edge)) continue;
+                        if (!matchesEdgeProperties(self.allocator, edge.*, hop.rel.props)) continue;
+                        if (hop.rel.name) |rn| if (b.edge_vars.get(rn)) |bound| if (bound.id != edge.id) continue;
+                        const far_id = if (side == 0) edge.to_id else edge.from_id;
+                        const right = self.store.getNodePtrForScan(far_id) orelse continue;
+                        if (!self.nodeFits(right, hop.right)) continue;
+                        if (hop.right.name) |rv| if (b.vars.get(rv)) |bound| if (bound.id != right.id) continue;
+                        try out.append(self.allocator, .{ .node = right, .edge = edge });
+                    }
+                }
+            },
+        }
     }
 
-    /// Join `chain` to `bindings`.
-    fn extendChain(self: MultiChainJoin, comptime B: type, bindings: *std.ArrayList(B), chain: ast.Chain, tracker: []const u8) !void {
-        const start: ast.NodePattern = if (chain.hops.len > 0) chain.hops[0].left else chain.head orelse return;
-        var cands: std.ArrayList(*graph_store.Node) = .empty;
-        defer cands.deinit(self.allocator);
-        var have_cands = false;
-        var next: std.ArrayList(B) = .empty;
-        errdefer dropAll(B, self.allocator, &next);
-        for (bindings.items) |*existing| {
-            if (start.name) |v| if (existing.vars.get(v)) |bound| {
-                if (!self.nodeFits(bound, start)) continue;
-                var nb = try existing.clone();
-                errdefer nb.deinit();
-                try nb.vars.put(tracker, bound);
-                try next.append(self.allocator, nb);
-                continue;
-            };
-            if (!have_cands) {
-                try self.candidates(start, &cands);
-                have_cands = true;
-            }
-            for (cands.items) |node| {
-                var nb = try existing.clone();
-                errdefer nb.deinit();
-                if (start.name) |v| try nb.vars.put(v, node);
-                try nb.vars.put(tracker, node);
-                try next.append(self.allocator, nb);
+    fn bindNode(comptime B: type, b: *B, level: *Level, key: []const u8, node: *graph_store.Node) !void {
+        const prev = try b.vars.fetchPut(key, node);
+        level.undo[level.undo_len] = .{ .node = .{ .key = key, .prev = if (prev) |kv| kv.value else null } };
+        level.undo_len += 1;
+    }
+
+    fn apply(comptime B: type, b: *B, level: *Level, step: Step, tracker: []const u8, choice: Choice) !void {
+        level.undo_len = 0;
+        switch (step) {
+            .start => |start| if (start.name) |v| try bindNode(B, b, level, v, choice.node),
+            .hop => |hop| {
+                if (hop.right.name) |v| try bindNode(B, b, level, v, choice.node);
+                if (hop.rel.name) |rn| {
+                    if (choice.edges) |edges| {
+                        const prev = try b.rel_list_vars.fetchPut(rn, edges);
+                        level.undo[level.undo_len] = .{ .list = .{ .key = rn, .prev = if (prev) |kv| kv.value else null } };
+                        level.undo_len += 1;
+                    } else if (choice.edge) |edge| {
+                        const prev = try b.edge_vars.fetchPut(rn, edge);
+                        level.undo[level.undo_len] = .{ .edge = .{ .key = rn, .prev = if (prev) |kv| kv.value else null } };
+                        level.undo_len += 1;
+                    }
+                }
+            },
+        }
+        try bindNode(B, b, level, tracker, choice.node);
+    }
+
+    /// Put back what `apply` bound, last binding first.
+    fn undoLevel(comptime B: type, b: *B, level: *Level) void {
+        while (level.undo_len > 0) {
+            level.undo_len -= 1;
+            switch (level.undo[level.undo_len]) {
+                .node => |u| if (u.prev) |p| {
+                    b.vars.getPtr(u.key).?.* = p;
+                } else {
+                    _ = b.vars.remove(u.key);
+                },
+                .edge => |u| if (u.prev) |p| {
+                    b.edge_vars.getPtr(u.key).?.* = p;
+                } else {
+                    _ = b.edge_vars.remove(u.key);
+                },
+                .list => |u| if (u.prev) |p| {
+                    b.rel_list_vars.getPtr(u.key).?.* = p;
+                } else {
+                    _ = b.rel_list_vars.remove(u.key);
+                },
             }
         }
-        replace(B, self.allocator, bindings, &next);
-        for (chain.hops) |hop| try self.extendHop(B, bindings, hop, tracker);
     }
 
-    /// Walk `hop` from the node each binding's chain reached (`tracker`).
-    fn extendHop(self: MultiChainJoin, comptime B: type, bindings: *std.ArrayList(B), hop: ast.Hop, tracker: []const u8) !void {
-        var next = try std.ArrayList(B).initCapacity(self.allocator, @max(bindings.items.len, 8));
-        errdefer dropAll(B, self.allocator, &next);
+    // CANARY: REQ=REQ-SONNY-3368-BOUNDED-JOIN; FEATURE="MultiChainRelationshipMatch"; ASPECT=StreamingJoin; STATUS=TESTED; TEST=tests/test_sonny_write_allowlist_r4b.zig; OWNER=engine; UPDATED=2026-09-28
+    /// SONNY-3368 (round 4b-1 review I-1): join `steps` to every binding of
+    /// `seeds`, one complete binding at a time (depth first, each step
+    /// binding and unbinding its names on the one binding it extends), and
+    /// hand each complete binding to `sink.accept`, which keeps it (a copy)
+    /// or drops it and says whether to go on. The join built every chain's
+    /// product in full before the WHERE and the window saw it: over 1,500
+    /// pairs, `MATCH (a:P)-[:E]->(b), (c:P)-[:E]->(d) RETURN a.i LIMIT 1`
+    /// held 2.25 million bindings (37 GB) for one row. Now what the join holds
+    /// is the path it is on and the bindings the sink kept; the read and
+    /// write budgets are polled at every binding it completes.
+    fn stream(self: MultiChainJoin, comptime B: type, seeds: []B, steps: []const Step, tracker: []const u8, sink: anytype) !void {
+        const levels = try self.allocator.alloc(Level, steps.len);
+        for (levels) |*l| l.* = .{};
+        defer {
+            for (levels) |*l| l.choices.deinit(self.allocator);
+            self.allocator.free(levels);
+        }
+        const start_cands = try self.allocator.alloc(?std.ArrayList(*graph_store.Node), steps.len);
+        for (start_cands) |*c| c.* = null;
+        defer {
+            for (start_cands) |*c| if (c.*) |*list| list.deinit(self.allocator);
+            self.allocator.free(start_cands);
+        }
         var targets: std.ArrayList(VarLenTarget) = .empty;
         defer targets.deinit(self.allocator);
-        for (bindings.items) |*existing| {
-            const left = existing.vars.get(tracker) orelse continue;
-            if (!matchesLabels(left, hop.left.labels)) continue;
-            if (!nodeMatchesProps(self.allocator, left, hop.left.props, self.prop_env)) continue;
-            if (hop.rel.min_len != null or hop.rel.max_len != null) {
-                targets.clearRetainingCapacity();
-                try expandVarLengthHop(self.allocator, self.store, self.scope, left, hop, self.prop_env, self.path_mode, &targets);
-                for (targets.items) |target| {
-                    if (hop.right.name) |rv| if (existing.vars.get(rv)) |bound| if (bound.id != target.node.id) continue;
-                    var nb = try existing.clone();
-                    errdefer nb.deinit();
-                    if (hop.right.name) |rv| try nb.vars.put(rv, target.node);
-                    if (hop.rel.name) |rn| try nb.rel_list_vars.put(rn, target.edges);
-                    try nb.vars.put(tracker, target.node);
-                    try next.append(self.allocator, nb);
-                }
-                continue;
+
+        for (seeds) |*seed| {
+            // The step `depth` is choosing for; `depth == steps.len`: complete.
+            var depth: usize = 0;
+            if (steps.len > 0) {
+                try self.choicesFor(B, seed, steps[0], tracker, &start_cands[0], &targets, &levels[0].choices);
+                levels[0].next = 0;
             }
-            const empty = [_]u64{};
-            const outgoing: []const u64 = if (hop.rel.dir == .right or hop.rel.dir == .undirected) (self.store.getOutgoingEdgeIds(left.id) orelse &empty) else &empty;
-            const incoming: []const u64 = if (hop.rel.dir == .left or hop.rel.dir == .undirected) (self.store.getIncomingEdgeIds(left.id) orelse &empty) else &empty;
-            for ([_][]const u64{ outgoing, incoming }, 0..) |edge_ids, side| {
-                for (edge_ids) |edge_id| {
-                    const edge = self.store.getEdgePtrHydrated(edge_id) orelse continue;
-                    if (!typeFits(hop.rel.types, edge.label)) continue;
-                    if (!self.scope.edgeVisible(edge)) continue;
-                    if (!matchesEdgeProperties(self.allocator, edge.*, hop.rel.props)) continue;
-                    if (hop.rel.name) |rn| if (existing.edge_vars.get(rn)) |bound| if (bound.id != edge.id) continue;
-                    const far_id = if (side == 0) edge.to_id else edge.from_id;
-                    const right = self.store.getNodePtrForScan(far_id) orelse continue;
-                    if (!self.nodeFits(right, hop.right)) continue;
-                    if (hop.right.name) |rv| if (existing.vars.get(rv)) |bound| if (bound.id != right.id) continue;
-                    var nb = try existing.clone();
-                    errdefer nb.deinit();
-                    if (hop.right.name) |rv| try nb.vars.put(rv, right);
-                    if (hop.rel.name) |rn| try nb.edge_vars.put(rn, edge);
-                    try nb.vars.put(tracker, right);
-                    try next.append(self.allocator, nb);
+            while (true) {
+                if (depth == steps.len) {
+                    try read_budget.check();
+                    try write_budget.check();
+                    if (!try sink.accept(seed)) {
+                        // Leave the seed as it was.
+                        while (depth > 0) {
+                            depth -= 1;
+                            undoLevel(B, seed, &levels[depth]);
+                        }
+                        return;
+                    }
+                    if (depth == 0) break;
+                    depth -= 1;
+                    undoLevel(B, seed, &levels[depth]);
+                    continue;
+                }
+                const level = &levels[depth];
+                if (level.next >= level.choices.items.len) {
+                    if (depth == 0) break;
+                    depth -= 1;
+                    undoLevel(B, seed, &levels[depth]);
+                    continue;
+                }
+                const choice = level.choices.items[level.next];
+                level.next += 1;
+                try apply(B, seed, level, steps[depth], tracker, choice);
+                depth += 1;
+                if (depth < steps.len) {
+                    try self.choicesFor(B, seed, steps[depth], tracker, &start_cands[depth], &targets, &levels[depth].choices);
+                    levels[depth].next = 0;
                 }
             }
         }
-        replace(B, self.allocator, bindings, &next);
     }
 };
 
@@ -5710,7 +5842,9 @@ fn executeMultiChainRelationshipMatch(allocator: std.mem.Allocator, q: ast.Query
         const hop = first_chain.hops[0];
         const left_labels = hop.left.labels;
         const left_props = hop.left.props;
-        const rel_type: ?[]const u8 = if (hop.rel.types.len > 0) hop.rel.types[0] else null;
+        // SONNY-3318 (round 4b-1 review I-5): every type of `[:A|B]`; the
+        // first hop read only the first one (`types[0]`).
+        const rel_types = hop.rel.types;
         const rel_props = hop.rel.props;
         const right_labels = hop.right.labels;
         const right_props = hop.right.props;
@@ -5786,9 +5920,7 @@ fn executeMultiChainRelationshipMatch(allocator: std.mem.Allocator, q: ast.Query
 
                 for (outgoing_edge_ids) |edge_id| {
                     const edge = store.getEdgePtrHydrated(edge_id) orelse continue;
-                    if (rel_type) |rt| {
-                        if (!std.mem.eql(u8, edge.label, rt)) continue;
-                    }
+                    if (!MultiChainJoin.typeFits(rel_types, edge.label)) continue;
                     // SONNY-2693: the edge's own tag, like every other hop; the
                     // anchor was checked above and the far node is checked below.
                     if (!hop_scope.edgeVisible(edge)) continue;
@@ -5811,9 +5943,7 @@ fn executeMultiChainRelationshipMatch(allocator: std.mem.Allocator, q: ast.Query
 
                 for (incoming_edge_ids) |edge_id| {
                     const edge = store.getEdgePtrHydrated(edge_id) orelse continue;
-                    if (rel_type) |rt| {
-                        if (!std.mem.eql(u8, edge.label, rt)) continue;
-                    }
+                    if (!MultiChainJoin.typeFits(rel_types, edge.label)) continue;
                     // SONNY-2693: the edge's own tag, like every other hop; the
                     // anchor was checked above and the far node is checked below.
                     if (!hop_scope.edgeVisible(edge)) continue;
@@ -5855,9 +5985,7 @@ fn executeMultiChainRelationshipMatch(allocator: std.mem.Allocator, q: ast.Query
 
                 for (incoming_to_right_ids) |edge_id| {
                     const edge = store.getEdgePtrHydrated(edge_id) orelse continue;
-                    if (rel_type) |rt| {
-                        if (!std.mem.eql(u8, edge.label, rt)) continue;
-                    }
+                    if (!MultiChainJoin.typeFits(rel_types, edge.label)) continue;
                     // GAP-0846 hardening: tenant-check the edge OBJECT itself, not
                     // just its endpoints (symmetry with the left-anchor branch at
                     // ~2813/2834). Fail-closed, cheap string compare.
@@ -5880,9 +6008,7 @@ fn executeMultiChainRelationshipMatch(allocator: std.mem.Allocator, q: ast.Query
 
                 for (outgoing_from_right_ids) |edge_id| {
                     const edge = store.getEdgePtrHydrated(edge_id) orelse continue;
-                    if (rel_type) |rt| {
-                        if (!std.mem.eql(u8, edge.label, rt)) continue;
-                    }
+                    if (!MultiChainJoin.typeFits(rel_types, edge.label)) continue;
                     // GAP-0846 hardening: tenant-check the edge OBJECT itself
                     // (symmetry with the left-anchor branch). Fail-closed.
                     if (!hop_scope.edgeVisible(edge)) continue;
@@ -5902,60 +6028,67 @@ fn executeMultiChainRelationshipMatch(allocator: std.mem.Allocator, q: ast.Query
                     }
                 }
             }
-        } else if (rel_type) |rt| {
-            // #558: No labels at all but relationship type present — use edge type scan
-            // PERF-P2-003: getEdgesByType now returns []u64 (edge IDs) to
-            // avoid copying ~96+ byte Edge structs. Use getPtr for read-only access.
-            // GAP-0512: pass filter_graph so the scan is scoped to the
-            // active graph. Previously this returned edges across every
-            // graph and relied on per-edge graph_name comparisons below
-            // to reject cross-graph edges; that works but is wasteful
-            // and any future caller that forgets the post-filter would
-            // leak. The storage layer now enforces isolation directly.
-            const typed_edge_ids = store.getEdgesByType(allocator, rt, storageTenantFilter(filter_tenant), filter_graph);
-            defer if (typed_edge_ids.len > 0) allocator.free(typed_edge_ids);
+        } else if (rel_types.len > 0) {
+            // One scan per type (a type named twice is scanned once).
+            for (rel_types, 0..) |rt, rt_index| {
+                const repeated = for (rel_types[0..rt_index]) |earlier| {
+                    if (std.mem.eql(u8, earlier, rt)) break true;
+                } else false;
+                if (repeated) continue;
+                // #558: No labels at all but relationship type present — use edge type scan
+                // PERF-P2-003: getEdgesByType now returns []u64 (edge IDs) to
+                // avoid copying ~96+ byte Edge structs. Use getPtr for read-only access.
+                // GAP-0512: pass filter_graph so the scan is scoped to the
+                // active graph. Previously this returned edges across every
+                // graph and relied on per-edge graph_name comparisons below
+                // to reject cross-graph edges; that works but is wasteful
+                // and any future caller that forgets the post-filter would
+                // leak. The storage layer now enforces isolation directly.
+                const typed_edge_ids = store.getEdgesByType(allocator, rt, storageTenantFilter(filter_tenant), filter_graph);
+                defer if (typed_edge_ids.len > 0) allocator.free(typed_edge_ids);
 
-            for (typed_edge_ids) |edge_id| {
-                const edge_ptr = store.getEdgePtrHydrated(edge_id) orelse continue;
-                if (!matchesEdgeProperties(allocator, edge_ptr.*, rel_props)) continue;
-                const from_node = store.getNodePtrForScan(edge_ptr.from_id) orelse continue;
-                const to_node = store.getNodePtrForScan(edge_ptr.to_id) orelse continue;
+                for (typed_edge_ids) |edge_id| {
+                    const edge_ptr = store.getEdgePtrHydrated(edge_id) orelse continue;
+                    if (!matchesEdgeProperties(allocator, edge_ptr.*, rel_props)) continue;
+                    const from_node = store.getNodePtrForScan(edge_ptr.from_id) orelse continue;
+                    const to_node = store.getNodePtrForScan(edge_ptr.to_id) orelse continue;
 
-                if (rel_dir == .right or rel_dir == .undirected) {
-                    // rls_row_local aliasing: each passesRLSFilter call
-                    // clears + refills the buffer; left-to-right `and`
-                    // short-circuit ensures the from_node result is
-                    // computed before the buffer is reused for to_node.
-                    // GAP-0846 hardening: also tenant-check the edge OBJECT
-                    // (symmetry with the left/right-anchor label branches);
-                    // fail-closed cheap string compare, short-circuited first.
-                    // BUG-731: the endpoints' inline property predicates are folded
-                    // into the guard (NOT an early `continue`) because an
-                    // undirected pattern evaluates this edge again below with the
-                    // endpoints swapped — skipping the iteration would drop the
-                    // reversed orientation that may well satisfy the predicate.
-                    if (hop_scope.edgeVisible(edge_ptr) and std.mem.eql(u8, from_node.graph_name, filter_graph) and std.mem.eql(u8, to_node.graph_name, filter_graph) and passesTenantFilter(from_node.*, filter_tenant) and passesTenantFilter(to_node.*, filter_tenant) and passesRLSFilter(&rls_row_local, from_node.*) and passesRLSFilter(&rls_row_local, to_node.*) and nodeMatchesProps(allocator, from_node, left_props, prop_env) and nodeMatchesProps(allocator, to_node, right_props, prop_env)) {
-                        var binding = MatchBinding.init(allocator);
-                        if (hop.left.name) |v| try binding.vars.put(v, from_node);
-                        if (hop.right.name) |v| try binding.vars.put(v, to_node);
-                        if (hop.rel.name) |rn| try binding.edge_vars.put(rn, edge_ptr);
-                        if (needs_hop_tracking) try binding.vars.put(chain_last_right_key, to_node);
-                        try bindings.append(allocator, binding);
+                    if (rel_dir == .right or rel_dir == .undirected) {
+                        // rls_row_local aliasing: each passesRLSFilter call
+                        // clears + refills the buffer; left-to-right `and`
+                        // short-circuit ensures the from_node result is
+                        // computed before the buffer is reused for to_node.
+                        // GAP-0846 hardening: also tenant-check the edge OBJECT
+                        // (symmetry with the left/right-anchor label branches);
+                        // fail-closed cheap string compare, short-circuited first.
+                        // BUG-731: the endpoints' inline property predicates are folded
+                        // into the guard (NOT an early `continue`) because an
+                        // undirected pattern evaluates this edge again below with the
+                        // endpoints swapped — skipping the iteration would drop the
+                        // reversed orientation that may well satisfy the predicate.
+                        if (hop_scope.edgeVisible(edge_ptr) and std.mem.eql(u8, from_node.graph_name, filter_graph) and std.mem.eql(u8, to_node.graph_name, filter_graph) and passesTenantFilter(from_node.*, filter_tenant) and passesTenantFilter(to_node.*, filter_tenant) and passesRLSFilter(&rls_row_local, from_node.*) and passesRLSFilter(&rls_row_local, to_node.*) and nodeMatchesProps(allocator, from_node, left_props, prop_env) and nodeMatchesProps(allocator, to_node, right_props, prop_env)) {
+                            var binding = MatchBinding.init(allocator);
+                            if (hop.left.name) |v| try binding.vars.put(v, from_node);
+                            if (hop.right.name) |v| try binding.vars.put(v, to_node);
+                            if (hop.rel.name) |rn| try binding.edge_vars.put(rn, edge_ptr);
+                            if (needs_hop_tracking) try binding.vars.put(chain_last_right_key, to_node);
+                            try bindings.append(allocator, binding);
+                        }
                     }
-                }
-                if (rel_dir == .left or rel_dir == .undirected) {
-                    // rls_row_local aliasing: see note on the parallel
-                    // .right/.undirected branch above.
-                    // GAP-0846 hardening: edge-object tenant check (symmetry).
-                    // BUG-731: endpoints' inline property predicates folded into the
-                    // guard — see the note on the .right/.undirected branch above.
-                    if (hop_scope.edgeVisible(edge_ptr) and std.mem.eql(u8, from_node.graph_name, filter_graph) and std.mem.eql(u8, to_node.graph_name, filter_graph) and passesTenantFilter(from_node.*, filter_tenant) and passesTenantFilter(to_node.*, filter_tenant) and passesRLSFilter(&rls_row_local, from_node.*) and passesRLSFilter(&rls_row_local, to_node.*) and nodeMatchesProps(allocator, to_node, left_props, prop_env) and nodeMatchesProps(allocator, from_node, right_props, prop_env)) {
-                        var binding = MatchBinding.init(allocator);
-                        if (hop.left.name) |v| try binding.vars.put(v, to_node);
-                        if (hop.right.name) |v| try binding.vars.put(v, from_node);
-                        if (hop.rel.name) |rn| try binding.edge_vars.put(rn, edge_ptr);
-                        if (needs_hop_tracking) try binding.vars.put(chain_last_right_key, from_node);
-                        try bindings.append(allocator, binding);
+                    if (rel_dir == .left or rel_dir == .undirected) {
+                        // rls_row_local aliasing: see note on the parallel
+                        // .right/.undirected branch above.
+                        // GAP-0846 hardening: edge-object tenant check (symmetry).
+                        // BUG-731: endpoints' inline property predicates folded into the
+                        // guard — see the note on the .right/.undirected branch above.
+                        if (hop_scope.edgeVisible(edge_ptr) and std.mem.eql(u8, from_node.graph_name, filter_graph) and std.mem.eql(u8, to_node.graph_name, filter_graph) and passesTenantFilter(from_node.*, filter_tenant) and passesTenantFilter(to_node.*, filter_tenant) and passesRLSFilter(&rls_row_local, from_node.*) and passesRLSFilter(&rls_row_local, to_node.*) and nodeMatchesProps(allocator, to_node, left_props, prop_env) and nodeMatchesProps(allocator, from_node, right_props, prop_env)) {
+                            var binding = MatchBinding.init(allocator);
+                            if (hop.left.name) |v| try binding.vars.put(v, to_node);
+                            if (hop.right.name) |v| try binding.vars.put(v, from_node);
+                            if (hop.rel.name) |rn| try binding.edge_vars.put(rn, edge_ptr);
+                            if (needs_hop_tracking) try binding.vars.put(chain_last_right_key, from_node);
+                            try bindings.append(allocator, binding);
+                        }
                     }
                 }
             }
@@ -6077,10 +6210,117 @@ fn executeMultiChainRelationshipMatch(allocator: std.mem.Allocator, q: ast.Query
         .prop_env = prop_env,
         .path_mode = effectivePathMode(q),
     };
+    var steps: std.ArrayList(MultiChainJoin.Step) = .empty;
+    defer steps.deinit(allocator);
     if (first_chain.hops.len > 1) {
-        for (first_chain.hops[1..]) |extra_hop| try join.extendHop(MatchBinding, &bindings, extra_hop, chain_last_right_key);
+        for (first_chain.hops[1..]) |extra_hop| try steps.append(allocator, .{ .hop = extra_hop });
     }
-    for (q.match.chains[1..]) |chain| try join.extendChain(MatchBinding, &bindings, chain, chain_last_right_key);
+    for (q.match.chains[1..]) |chain| {
+        const start: ast.NodePattern = if (chain.hops.len > 0) chain.hops[0].left else chain.head orelse continue;
+        try steps.append(allocator, .{ .start = start });
+        for (chain.hops) |hop| try steps.append(allocator, .{ .hop = hop });
+    }
+
+    // #560: env lists allocated once, reused per binding (the WHERE below and
+    // the projection after).
+    var env_names = try std.ArrayList([]const u8).initCapacity(allocator, 8);
+    defer env_names.deinit(allocator);
+    var env_values = try std.ArrayList(Value).initCapacity(allocator, 8);
+    defer env_values.deinit(allocator);
+    const BindingEnv = struct {
+        fn fill(alloc: std.mem.Allocator, names: *std.ArrayList([]const u8), values: *std.ArrayList(Value), binding: *const MatchBinding) !void {
+            names.clearRetainingCapacity();
+            values.clearRetainingCapacity();
+            var var_iter = binding.vars.iterator();
+            while (var_iter.next()) |entry| {
+                try names.append(alloc, entry.key_ptr.*);
+                try values.append(alloc, Value{ .Node = entry.value_ptr.* });
+            }
+            var edge_iter = binding.edge_vars.iterator();
+            while (edge_iter.next()) |entry| {
+                try names.append(alloc, entry.key_ptr.*);
+                try values.append(alloc, Value{ .Edge = entry.value_ptr.* });
+            }
+            // Quantified relationship variables bind to the relationship LIST.
+            var rel_list_iter = binding.rel_list_vars.iterator();
+            while (rel_list_iter.next()) |entry| {
+                try names.append(alloc, entry.key_ptr.*);
+                try values.append(alloc, Value{ .List = entry.value_ptr.* });
+            }
+        }
+    };
+
+    // SONNY-3368 (round 4b-1 review I-1): the join streams (`MultiChainJoin.
+    // stream`); the WHERE is applied to each binding it completes, before
+    // the binding is kept; and when nothing after the join needs every
+    // binding (no WHERE, FILTER, ORDER BY, DISTINCT, WITH, grouping,
+    // aggregate or write), it stops at SKIP + LIMIT. Round 4b-1 dropped the
+    // old per-chain LIMIT cap, which was applied before the WHERE and cut
+    // the answer short; it also held the whole product, so a LIMIT 1 over
+    // two 1,500-pair chains held 2.25 million bindings.
+    const where_in_join = steps.items.len > 0;
+    if (where_in_join) {
+        const plain_window = q.where_clause == null and q.filter_clause == null and q.order_by == null and !q.ret.distinct and
+            q.with_clause == null and q.group_by == null and q.having == null and
+            q.set_clauses.len == 0 and q.remove_clauses.len == 0 and !returnItemsHaveAggregation(q.ret.items);
+        const join_cap: ?usize = if (plain_window) blk: {
+            const lim = resolveLimitParam(q.limit, q.limit_param, param_names, param_values) orelse break :blk null;
+            break :blk lim +| (resolveLimitParam(q.offset, q.offset_param, param_names, param_values) orelse 0);
+        } else null;
+        const JoinSink = struct {
+            alloc: std.mem.Allocator,
+            out: std.ArrayList(MatchBinding) = .empty,
+            where: ?ast.Expr,
+            names: *std.ArrayList([]const u8),
+            values: *std.ArrayList(Value),
+            param_names: []const []const u8,
+            param_values: []const Value,
+            cap: ?usize,
+
+            fn accept(self: *@This(), binding: *const MatchBinding) !bool {
+                if (self.cap) |c| if (self.out.items.len >= c) return false;
+                if (self.where) |where_expr| {
+                    try BindingEnv.fill(self.alloc, self.names, self.values, binding);
+                    const env = Env{ .names = self.names.items, .values = self.values.items, .param_names = self.param_names, .param_values = self.param_values, .allocator = self.alloc };
+                    // A limit the evaluator ran into (the read budget, a
+                    // cancel, memory) fails the query; any other error is
+                    // this row not matching, as before.
+                    const where_result = eval.evalExpr(self.alloc, where_expr, env) catch |err| {
+                        if (execution.isQueryLevelEvalError(err)) return err;
+                        return true;
+                    };
+                    const passes = switch (where_result) {
+                        .Bool => |b| b,
+                        else => false,
+                    };
+                    if (!passes) return true;
+                }
+                var copy = try binding.clone();
+                errdefer copy.deinit();
+                try self.out.append(self.alloc, copy);
+                if (self.cap) |c| if (self.out.items.len >= c) return false;
+                return true;
+            }
+        };
+        var sink = JoinSink{
+            .alloc = allocator,
+            .where = q.where_clause,
+            .names = &env_names,
+            .values = &env_values,
+            .param_names = param_names,
+            .param_values = param_values,
+            .cap = join_cap,
+        };
+        errdefer {
+            for (sink.out.items) |*b| b.deinit();
+            sink.out.deinit(allocator);
+        }
+        try join.stream(MatchBinding, bindings.items, steps.items, chain_last_right_key, &sink);
+        for (bindings.items) |*b| b.deinit();
+        bindings.deinit(allocator);
+        bindings = sink.out;
+        sink.out = .empty;
+    }
 
     // Determine which items to evaluate per binding: WITH items if present, else RETURN items
     const eval_items = if (q.with_clause) |wc| wc.items else q.ret.items;
@@ -6090,37 +6330,9 @@ fn executeMultiChainRelationshipMatch(allocator: std.mem.Allocator, q: ast.Query
     // #560: Pre-size rows based on bindings count; reuse env ArrayLists across iterations
     var rows = try std.ArrayList([]Value).initCapacity(allocator, bindings.items.len);
 
-    // #560: Allocate env lists once, reuse per binding (avoid per-row alloc/dealloc)
-    const max_vars: u32 = if (bindings.items.len > 0) @intCast(bindings.items[0].vars.count() + bindings.items[0].edge_vars.count() + 4) else 8;
-    var env_names = try std.ArrayList([]const u8).initCapacity(allocator, max_vars);
-    defer env_names.deinit(allocator);
-    var env_values = try std.ArrayList(Value).initCapacity(allocator, max_vars);
-    defer env_values.deinit(allocator);
-
     for (bindings.items) |*binding| {
         // Build environment from binding — reuse pre-allocated lists
-        env_names.clearRetainingCapacity();
-        env_values.clearRetainingCapacity();
-
-        var var_iter = binding.vars.iterator();
-        while (var_iter.next()) |entry| {
-            try env_names.append(allocator, entry.key_ptr.*);
-            try env_values.append(allocator, Value{ .Node = entry.value_ptr.* });
-        }
-
-        // Add edge/relationship variables to the environment
-        var edge_iter = binding.edge_vars.iterator();
-        while (edge_iter.next()) |entry| {
-            try env_names.append(allocator, entry.key_ptr.*);
-            try env_values.append(allocator, Value{ .Edge = entry.value_ptr.* });
-        }
-
-        // Quantified relationship variables bind to the relationship LIST.
-        var rel_list_iter = binding.rel_list_vars.iterator();
-        while (rel_list_iter.next()) |entry| {
-            try env_names.append(allocator, entry.key_ptr.*);
-            try env_values.append(allocator, Value{ .List = entry.value_ptr.* });
-        }
+        try BindingEnv.fill(allocator, &env_names, &env_values, binding);
 
         const env = Env{
             .names = env_names.items,
@@ -6130,15 +6342,18 @@ fn executeMultiChainRelationshipMatch(allocator: std.mem.Allocator, q: ast.Query
             .allocator = allocator,
         };
 
-        // Evaluate WHERE clause
-        if (q.where_clause) |where_expr| {
-            const where_result = eval.evalExpr(allocator, where_expr, env) catch continue;
+        // Evaluate WHERE clause (the join applied it already, SONNY-3368)
+        if (!where_in_join) if (q.where_clause) |where_expr| {
+            const where_result = eval.evalExpr(allocator, where_expr, env) catch |err| {
+                if (execution.isQueryLevelEvalError(err)) return err;
+                continue;
+            };
             const passes = switch (where_result) {
                 .Bool => |b| b,
                 else => false,
             };
             if (!passes) continue;
-        }
+        };
 
         // CANARY: REQ=REQ-BUG731-MATCH-SCOPING; FEATURE="MultiChainRelationshipMatch"; ASPECT=SetClauses; STATUS=TESTED; TEST=tests/test_bug731_match_scoping.zig:248; OWNER=execution; UPDATED=2026-07-31
         // Apply SET clauses. This executor previously DROPPED every SET, so a
@@ -6561,7 +6776,7 @@ fn executeMatchWithOptionalPatterns(allocator: std.mem.Allocator, q: ast.Query, 
 
     if (first_chain_has_hops) {
         const hop = required_chain.hops[0];
-        const rel_type: ?[]const u8 = if (hop.rel.types.len > 0) hop.rel.types[0] else null;
+        const rel_types = hop.rel.types; // SONNY-3318 (4b-1 review I-5): every type of `[:A|B]`
         const right_labels = hop.right.labels;
         const rel_direction = hop.rel.dir;
 
@@ -6573,9 +6788,7 @@ fn executeMatchWithOptionalPatterns(allocator: std.mem.Allocator, q: ast.Query, 
             // Process outgoing edges
             for (outgoing_edge_ids) |edge_id| {
                 const edge = store.getEdgePtrHydrated(edge_id) orelse continue;
-                if (rel_type) |rt| {
-                    if (!std.mem.eql(u8, edge.label, rt)) continue;
-                }
+                if (!MultiChainJoin.typeFits(rel_types, edge.label)) continue;
                 // GAP-0509 / SONNY-2679: the edge's graph and tenant.
                 if (!hop_scope.edgeVisible(edge)) continue;
                 const right_node = store.getNodePtrForScan(edge.to_id) orelse continue;
@@ -6652,9 +6865,7 @@ fn executeMatchWithOptionalPatterns(allocator: std.mem.Allocator, q: ast.Query, 
             // Process incoming edges
             for (incoming_edge_ids) |edge_id| {
                 const edge = store.getEdgePtrHydrated(edge_id) orelse continue;
-                if (rel_type) |rt| {
-                    if (!std.mem.eql(u8, edge.label, rt)) continue;
-                }
+                if (!MultiChainJoin.typeFits(rel_types, edge.label)) continue;
                 // GAP-0509 / SONNY-2679: the edge's graph and tenant.
                 if (!hop_scope.edgeVisible(edge)) continue;
                 const right_node = store.getNodePtrForScan(edge.from_id) orelse continue;
@@ -6922,7 +7133,7 @@ fn executeMatchWithOptionalPatterns(allocator: std.mem.Allocator, q: ast.Query, 
                         continue;
                     }
 
-                    const rel_type: ?[]const u8 = if (hop.rel.types.len > 0) hop.rel.types[0] else null;
+                    const rel_types = hop.rel.types; // SONNY-3318 (4b-1 review I-5): every type of `[:A|B]`
                     const right_labels = hop.right.labels;
                     const rel_direction = hop.rel.dir;
                     const outgoing_edge_ids = if (rel_direction == .right or rel_direction == .undirected) (store.getOutgoingEdgeIds(source_node.?.id) orelse &[_]u64{}) else &[_]u64{};
@@ -6932,9 +7143,7 @@ fn executeMatchWithOptionalPatterns(allocator: std.mem.Allocator, q: ast.Query, 
                     const right_props = hop.right.props;
                     for (outgoing_edge_ids) |edge_id| {
                         const edge = store.getEdgePtrHydrated(edge_id) orelse continue;
-                        if (rel_type) |rt| {
-                            if (!std.mem.eql(u8, edge.label, rt)) continue;
-                        }
+                        if (!MultiChainJoin.typeFits(rel_types, edge.label)) continue;
                         // GAP-0509 / SONNY-2679: the edge's graph and tenant.
                         if (!hop_scope.edgeVisible(edge)) continue;
                         const right_node = store.getNodePtrForScan(edge.to_id) orelse continue;
@@ -7007,9 +7216,7 @@ fn executeMatchWithOptionalPatterns(allocator: std.mem.Allocator, q: ast.Query, 
                     // Process incoming edges
                     for (incoming_edge_ids) |edge_id| {
                         const edge = store.getEdgePtrHydrated(edge_id) orelse continue;
-                        if (rel_type) |rt| {
-                            if (!std.mem.eql(u8, edge.label, rt)) continue;
-                        }
+                        if (!MultiChainJoin.typeFits(rel_types, edge.label)) continue;
                         // GAP-0509 / SONNY-2679: the edge's graph and tenant.
                         if (!hop_scope.edgeVisible(edge)) continue;
                         const right_node = store.getNodePtrForScan(edge.from_id) orelse continue;

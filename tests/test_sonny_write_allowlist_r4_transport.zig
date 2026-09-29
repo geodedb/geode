@@ -247,6 +247,21 @@ const cases = [_]Case{
         nothing_written,
         .{ .query = "RETURN 1 AS alive", .want = "1" },
     } },
+    // SONNY-3368 (I-1): the streamed join, with a WHERE on the later chain.
+    .{ .name = "3368 join", .steps = &.{
+        .{ .query = "MATCH (a:L {i: 1}), (b:L {i: 2}), (c:L {i: 3}), (d:L {i: 4}) CREATE (a)-[:LR]->(b), (c)-[:LR]->(d)" },
+        .{ .query = "MATCH (a:L)-[:LR]->(b), (c:L)-[:LR]->(d) WHERE c.i = 3 AND a.i = 1 RETURN a.i, c.i LIMIT 1", .want = "1|3" },
+        .{ .query = "MATCH (a:L)-[:LR]->(b), (c:L)-[:LR]->(d) RETURN count(*) AS n", .want = "4" },
+        .{ .query = "MATCH (a:L)-[:LR]->(b), (c:L)-[:LR]->(d) RETURN 1 AS one LIMIT 1", .want = "1" },
+    } },
+    // SONNY-3318 (I-5): every type of an alternation on the first hop.
+    .{ .name = "3318 alternation", .steps = &.{
+        .{ .query = "MATCH (a:L {i: 1}), (b:L {i: 2}), (c:L {i: 3}) CREATE (a)-[:XR]->(b), (b)-[:XS]->(c)" },
+        .{ .query = "MATCH (a:L)-[:XS|XR]->(b), (q:LQ {i: 0}) RETURN count(*) AS n", .want = "2" },
+        .{ .query = "MATCH (a:L)-[:XS|XR]->(b)-[:XS]->(c) RETURN a.i, c.i", .want = "1|3" },
+        .{ .query = "MATCH (a:L)-[:XR|XS]->(b), (q:LQ {i: 0}) SET b.c = 1" },
+        .{ .query = "MATCH (b:L) WHERE b.c = 1 RETURN b.i", .want = "2;3" },
+    } },
     // I8.
     .{ .name = "I8 nesting", .steps = &.{
         .{ .query = "WITH 1 AS a WITH 1 AS a WITH 1 AS a WITH 1 AS a WITH 1 AS a WITH 1 AS a WITH 1 AS a WITH 1 AS a WITH 1 AS a WITH 1 AS a WITH 1 AS a WITH 1 AS a WITH 1 AS a WITH 1 AS a WITH 1 AS a WITH 1 AS a WITH 1 AS a WITH 1 AS a WITH 1 AS a WITH 1 AS a WITH 1 AS a WITH 1 AS a WITH 1 AS a WITH 1 AS a WITH 1 AS a RETURN a", .code = "54001" },
@@ -411,6 +426,25 @@ test "round 4a over gRPC: PROFILE repros refused, C3, I2, I11 and I8" {
         }
     }
     try finish(failures.items, "round 4a (gRPC)");
+}
+
+// CANARY: REQ=REQ-SONNY-3368-BOUNDED-JOIN; FEATURE="MultiChainRelationshipMatch"; ASPECT=ReadBudgetOverGrpc; STATUS=TESTED; TEST=tests/test_sonny_write_allowlist_r4_transport.zig; OWNER=engine; UPDATED=2026-09-28
+test "round 4b-1b over gRPC: LIMIT 1 over two 1,500-pair chains answers under a 64 MiB read budget; the whole product answers 53200 (SONNY-3368)" {
+    var f: Fixture = undefined;
+    try f.init();
+    defer f.deinit();
+    const aa = f.h.arena.allocator();
+    var failures: std.ArrayList([]const u8) = .empty;
+    const s = try f.sessions.createSession("writer", "", null, null, null, false, 0);
+    const name = "3368 read budget";
+    try check(aa, &failures, "grpc", name, .{ .query = "" }, "seed", try f.run(s, "FOR i IN range(1, 1500) CREATE (:JP {i: i})-[:JE]->(:JP2 {i: i})", &.{}));
+    geode.read_budget.setBudgetBytesForTest(64 << 20);
+    defer geode.read_budget.setBudgetBytesForTest(0);
+    const cart = "MATCH (a:JP)-[:JE]->(b), (c:JP)-[:JE]->(d)";
+    try check(aa, &failures, "grpc", name, .{ .query = "", .want = "1" }, "LIMIT 1", try f.run(s, cart ++ " RETURN 1 AS one LIMIT 1", &.{}));
+    try check(aa, &failures, "grpc", name, .{ .query = "", .code = "53200" }, "the whole product", try f.run(s, cart ++ " RETURN a.i, c.i", &.{}));
+    try check(aa, &failures, "grpc", name, .{ .query = "", .want = "1" }, "alive", try f.run(s, "RETURN 1 AS one", &.{}));
+    try finish(failures.items, "round 4b-1b read budget (gRPC)");
 }
 
 /// One request run by the gRPC handler on a thread of its own.
