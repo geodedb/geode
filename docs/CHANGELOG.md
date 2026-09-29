@@ -1066,9 +1066,10 @@
     record of the limit was lost). (Round 17 correction: this held for
     statements run through the executor's statement entry point only; a
     PROFILE, and an out of memory materializing a node in the node scan,
-    could still become an answer. Fixed in round 17, SONNY-3349.) A grouped HAVING chain is compared only with
-    projected items and keys of its own length: 32 items of 4088 links took
-    13 s to rewrite, now under 0.1 s (SONNY-3316).
+    could still become an answer. Fixed in round 17, SONNY-3349.) A
+    grouped HAVING chain is compared only with projected items and keys of
+    its own length: 32 items of 4088 links took 13 s to rewrite, now under
+    0.1 s (SONNY-3316).
   - A dropped graph's id map and name are freed by their last holder: a
     lookup of a node or edge by id (the bounded caches' hydrate-on-miss), a
     first-touch hydration and a walk over every graph each hold the map they
@@ -1100,19 +1101,22 @@
   as 8.
 - **Round 17: the round 16 review's findings (SONNY-3348, SONNY-3349,
   SONNY-3350):**
-  - A statement the limit relay fails writes nothing the limit decided.
-    The relay failed the statement only after it had run, so its writes
-    stayed: `MATCH (n:C) SET n.w = EXISTS { ... }`, where the subquery's
-    WHERE ran into 54001, answered 54001 with `n.w` set to false on every
-    row. Once a caller swallows a limit (54001, out of memory, the read
-    budget, a cancel) or an IN type error, the store refuses every further
-    change of the statement, before the engine, the in-memory graph, the
-    WAL and Raft replication see it, and a cluster leader proposes nothing.
-    This holds for every executor (the MATCH, CREATE, MERGE and DELETE
-    executors, the point-write fast path, procedures), in autocommit and in
-    an explicit transaction, which fails with the statement (SONNY-3348).
-    Changes the statement applied before the limit was reached stay, as
-    they do for any statement that fails part way (see Known limitations).
+  - Once a caller swallows a limit (54001, out of memory, the read budget,
+    a cancel) or an IN type error, the store refuses every further change
+    of the statement, before the engine, the in-memory graph, the WAL and
+    Raft replication see it, and a cluster leader proposes nothing. The
+    relay failed the statement only after it had run, so its writes stayed:
+    `MATCH (n:C) SET n.w = EXISTS { ... }`, where the subquery's WHERE ran
+    into 54001, answered 54001 with `n.w` set to false on every row
+    (SONNY-3348). (Round 18 correction: this refused only the changes made
+    after the limit was recorded. Those made before it stayed: earlier
+    rows, a SET before a RETURN or ORDER BY that ran into the limit, a
+    change before a WITH the MATCH executor evaluates late, the point-write
+    fast path's write (its only expression is its RETURN), MERGE, FOR and
+    PROFILE. In an explicit transaction the session then left the
+    transaction and ran its next statements in autocommit, and a
+    `START TRANSACTION { ... }` body's rollback did nothing. Fixed in
+    round 18, below.)
   - The limit relay covers exactly these paths: every statement the
     executor runs (`executeStatementWithContext`: the statements of a gRPC,
     QUIC or embedded program, and EXPLAIN'd or PROFILE'd statements other
@@ -1132,6 +1136,49 @@
     read of several graphs checks the principal's access to each before it
     locks or copies any (it took the read lock of, and copied, a graph the
     principal was then refused).
+- **Round 18: the round 17 review's findings (SONNY-3348, SONNY-3059,
+  SONNY-3349, SONNY-3350):**
+  - A statement that fails changes nothing. While a statement runs, each
+    change the store makes records what it replaces (a property's old
+    value or its absence, a label, a deleted node or edge with its labels,
+    properties and edges, a created node or edge). When the statement
+    fails, for any reason (54001, out of memory, the read budget, an IN
+    type error, a division by zero), the record is undone,
+    newest first, through the store's normal write methods, so the storage
+    engine, the WAL mutation stream and the store's own indexes see the
+    undo, before the error is answered. This covers every executor that
+    changes data through the store (the MATCH executor and its write step,
+    CREATE, MATCH ... CREATE, FOR, MERGE, DELETE, the point-write fast
+    path, PROFILE'd statements), in autocommit and in a transaction. A retry applies the statement once (SONNY-3348).
+  - A failed statement aborts its explicit transaction. The transaction is
+    rolled back at once, and every later statement of the session is
+    refused with 25P02 until the client ends the transaction: ROLLBACK
+    succeeds, and COMMIT fails with 40000 (the transaction was rolled
+    back). A BEGIN is refused too. The session left the transaction
+    silently, so the client's next statements autocommitted, and its
+    ROLLBACK reported that no transaction was open.
+  - ROLLBACK undoes every change a transaction made: SET and REMOVE of
+    properties, labels added and removed, DELETE and DETACH DELETE (the
+    node or edge comes back with its id, labels, properties and edges),
+    MATCH ... CREATE, and the changes MERGE makes to what it matched; so
+    does the rollback of a failed transaction and of a
+    `START TRANSACTION { ... }` body. The undo log recorded only created
+    nodes and edges, and undid through setters that changed the in-memory
+    graph but not the storage engine (SONNY-3059).
+  - A `START TRANSACTION { ... }` body's rollback runs when a limit failed
+    the body; the write fence refused it. A body statement of a kind a body
+    cannot hold (DELETE, for one) now rolls the body back too; it returned
+    with the body's transaction still open on the thread.
+  - Smaller fixes: the engine-direct readers no longer answer an engine
+    slot as a node's id when they cannot read the node's public id; an out
+    of memory there fails the query, and a node whose id is gone is
+    skipped. The id map counts (`count(n)`, `count(r)`), the edge endpoint
+    check and the per-graph edge list read the map pinned, as the other
+    readers do.
+
+  **Behaviour change:** after a statement fails in an explicit
+  transaction, the session refuses every statement but ROLLBACK or COMMIT
+  (25P02); COMMIT then answers 40000.
 
 ### Fixed
 
@@ -1205,20 +1252,32 @@
 
 ### Known limitations
 
-- **ROLLBACK undoes only what a transaction created.** The undo log
-  records the nodes and edges a CREATE or a MERGE creates, and nothing
-  else. A SET, a REMOVE, a DELETE, a label change, and a change MERGE makes
-  to a node or edge it matched stay after ROLLBACK, and after a failed
-  statement's rollback. Until that is fixed, do not rely on ROLLBACK to
-  undo changes to existing data.
-- **A statement that fails part way keeps what it changed before the
-  failure (SONNY-3059, SONNY-3348).** There is no statement-level undo.
-  A statement that runs into a limit refuses every change after it, but
-  keeps the changes it made before: on earlier rows, or before a RETURN,
-  or (in the MATCH executor, which evaluates a WITH's items after its SET
-  and REMOVE) before the WITH that ran into it. The same holds for any
-  other error part way. In a transaction the statement fails the
-  transaction, and ROLLBACK undoes what it created (see above).
+- **What a failed statement's undo and ROLLBACK do not reach
+  (SONNY-3348, SONNY-3059).** They undo what the store changed. They do
+  not revert a vector, full-text or other advanced index the executor
+  updated for a changed property: such an index can keep the undone value
+  until it is rebuilt. A change the storage engine refuses to undo (it
+  runs out of memory mid-undo) is logged and counted
+  (`statement_undo.replay_failures_total`), and the statement still fails
+  with its own error. A statement's record is its own thread's: a
+  change made for it on another thread is not in it. A deleted node comes
+  back with a new storage slot under its old id. The CLI's saved undo log
+  does not keep a deleted node's tenant: after a CLI restart its ROLLBACK
+  restores the node into the default tenant. The bulk-ingest fast paths
+  (autocommit only) write storage directly and are not recorded; they take
+  literals and parameters only and fail on any evaluation error.
+- **A cluster write that fails after its Raft entry commits stays.** The
+  leader evaluates every expression of a replicated write before it
+  proposes it, and proposes nothing once a limit or an IN type error is
+  recorded, so a limit never decides a replicated value. If waiting for
+  the committed entry to apply times out, the statement fails and the
+  write stays applied on every node (the outcome is unknown to the client,
+  as for any timed-out commit).
+- **A Raft `drop_graph` entry can stall the apply loop (SONNY-3350, latent).**
+  Applying it takes the graph's write lock. A leader writer that holds that
+  lock while it waits (up to 5 s) for its own later entry to apply holds
+  the apply loop, and the Raft ticks with it, for that long. Nothing
+  proposes a `drop_graph` entry today.
 - **Large QUIC requests can stall (SONNY-3232, left for S2).** The cause
   is loss recovery in the QUIC library (quic v0.1.44): when the receiver
   drains its socket slowly and the kernel drops datagrams in a burst, the

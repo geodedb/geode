@@ -6318,7 +6318,10 @@ pub const GraphStore = struct {
     /// (pure in-memory deployments with no engine/adapter wired — the cache is
     /// unbounded there, so the resident check is complete and correct).
     pub fn edgeEndpointExists(self: *GraphStore, graph_name: []const u8, node_id: u64) bool {
-        if (self.getIdMap(graph_name)) |id_map| {
+        // SONNY-3348 round 18 (review M3): read with the map pinned
+        // (SONNY-3350), as every IdMap reader outside the graph's write lock.
+        if (self.pinIdMap(graph_name)) |id_map| {
+            defer self.unpinIdMap(id_map);
             return id_map.nodeSlot(@as(u128, node_id)) != null;
         }
         return self.nodes.getPtr(node_id) != null;
@@ -7646,7 +7649,9 @@ pub const GraphStore = struct {
         if (global_vtable != null) {
             // With a storage adapter the graph's IdMap lists every edge of the
             // graph, cached or not, and only the graph's writers change it.
-            const id_map = self.getIdMap(graph_name) orelse return ids.toOwnedSlice(allocator);
+            // SONNY-3348 round 18 (review M3): pinned (SONNY-3350).
+            const id_map = self.pinIdMap(graph_name) orelse return ids.toOwnedSlice(allocator);
+            defer self.unpinIdMap(id_map);
             // SONNY-3180 (round 15, F2): copied under the IdMap's mutex (a
             // bulk writer of the graph holds its lock shared).
             const euuids = try id_map.snapshotEdgeUuids(allocator);
@@ -7914,7 +7919,9 @@ pub const GraphStore = struct {
         // the resident iteration below is exact there.
         if (tenant == null) {
             if (global_vtable != null) {
-                if (@constCast(self).getIdMap(graph_name)) |id_map| {
+                // SONNY-3348 round 18 (review M3): pinned (SONNY-3350).
+                if (@constCast(self).pinIdMap(graph_name)) |id_map| {
+                    defer @constCast(self).unpinIdMap(id_map);
                     // GAP-ENT-0013 path counter: O(1) IdMap total served the count.
                     _ = g_count_nodes_idmap_fast.fetchAdd(1, .monotonic);
                     return id_map.nodeCount();
@@ -7930,7 +7937,9 @@ pub const GraphStore = struct {
             // Bounded cache + tenant filter: the resident map is incomplete —
             // resolve each node's tenant from the IdMap without populating
             // the cache.
-            const id_map = (@constCast(self).getIdMap(graph_name)) orelse return 0;
+            // SONNY-3348 round 18 (review M3): pinned (SONNY-3350).
+            const id_map = (@constCast(self).pinIdMap(graph_name)) orelse return 0;
+            defer @constCast(self).unpinIdMap(id_map);
             const tid = tenant.?;
             // GAP-ENT-0013 path counter: tenant-filtered per-uuid iteration
             // (O(N) `nodeMatchesTenant` property reads).
@@ -8082,7 +8091,9 @@ pub const GraphStore = struct {
         @constCast(self).ensureGraphHydrated(graph_name);
         if (self.edges.effectiveCap() != 0) {
             // Bounded: IdMap is always fully resident.
-            const id_map = (@constCast(self).getIdMap(graph_name)) orelse return 0;
+            // SONNY-3348 round 18 (review M3): pinned (SONNY-3350).
+            const id_map = (@constCast(self).pinIdMap(graph_name)) orelse return 0;
+            defer @constCast(self).unpinIdMap(id_map);
             return id_map.edgeCount();
         }
         // Unbounded: iterate the resident edge map.

@@ -117,8 +117,14 @@ test "SONNY-3350: the IdMap readers pin the map: a DROP GRAPH between the lookup
         const before = drops_done;
         graph_store.test_idmap_lookup_hook = &dropHook;
         const got: ?u64 = switch (reader) {
-            .scan_node => try node_scan_stream.resolveExternalNodeIdForTest(testing.allocator, "gx", node_slot),
-            .planned_node => try planned_read_runtime.resolveExternalNodeIdForTest(testing.allocator, "gx", node_slot),
+            .scan_node => node_scan_stream.resolveExternalNodeIdForTest(testing.allocator, "gx", node_slot) catch |err| switch (err) {
+                error.NodeNotFound => null,
+                else => return err,
+            },
+            .planned_node => planned_read_runtime.resolveExternalNodeIdForTest(testing.allocator, "gx", node_slot) catch |err| switch (err) {
+                error.NodeNotFound => null,
+                else => return err,
+            },
             .store_node => st.idMapNodeId("gx", node_slot),
             .store_edge => st.idMapEdgeId("gx", edge_slot),
         };
@@ -126,6 +132,9 @@ test "SONNY-3350: the IdMap readers pin the map: a DROP GRAPH between the lookup
         std.debug.print("SONNY-3350 IdMap {s}: dropped between lookup and read={}, read={?d} (node {d}, edge {d}); retired after={d}\n", .{ @tagName(reader), drops_done > before, got, a, e, st.retired_id_maps.items.len });
         try testing.expect(drops_done > before);
         try testing.expect(!st.graphExists("gx"));
+        // SONNY-3348 round 18 (review M1): the id read is the entity's, or
+        // none (it is gone); never another number (the engine slot).
+        if (got) |id| try testing.expectEqual(if (reader == .store_edge) e else a, id);
         // The map a reader pinned is freed when it lets go.
         try testing.expectEqual(@as(usize, 0), st.retired_id_maps.items.len);
         try testing.expectEqual(@as(usize, 0), st.retired_id_count.load(.acquire));
@@ -141,6 +150,14 @@ test "SONNY-3350: the IdMap readers pin the map: a DROP GRAPH between the lookup
     try testing.expectEqual(a, try planned_read_runtime.resolveExternalNodeIdForTest(testing.allocator, "gy", node_slot));
     try testing.expectEqual(@as(?u64, a), st.idMapNodeId("gy", node_slot));
     try testing.expectEqual(@as(?u64, e), st.idMapEdgeId("gy", im.edgeSlot(e) orelse return error.NoSlot));
+
+    // SONNY-3348 round 18 (review M1): the slow path (an IdMap miss) that
+    // runs out of memory fails; it answered the engine slot as the id.
+    _ = im.removeNode(@as(u128, a));
+    try testing.expectError(error.OutOfMemory, node_scan_stream.resolveExternalNodeIdForTest(testing.failing_allocator, "gy", node_slot));
+    try testing.expectError(error.OutOfMemory, planned_read_runtime.resolveExternalNodeIdForTest(testing.failing_allocator, "gy", node_slot));
+    // With memory, it reads the persisted id (and back-fills the map).
+    try testing.expectEqual(a, try node_scan_stream.resolveExternalNodeIdForTest(testing.allocator, "gy", node_slot));
 }
 
 fn principal(username: []const u8, roles: []const []const u8) principal_mod.Principal {

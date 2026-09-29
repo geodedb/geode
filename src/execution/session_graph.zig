@@ -196,7 +196,6 @@ pub fn set(session: *execution.SessionState, graph: ?[]const u8) std.mem.Allocat
     session.graph = copy;
 }
 
-/// The graph `context`'s session is on.
 // CANARY: REQ=REQ-SONNY-3350-ROUND16-MINORS; FEATURE="GraphRBACEnforcement"; ASPECT=AuthorizeSnapshotRead; STATUS=TESTED; TEST=tests/test_sonny3350_round16_minors.zig; OWNER=security; UPDATED=2026-09-28
 /// SONNY-3350 (round 17): may the program running in `context` read
 /// `graph`, one of the graphs its statements run on
@@ -212,6 +211,7 @@ pub fn authorizeSnapshotRead(context: execution.ExecutionContext, graph: []const
     if (!mayBind(context.principal, graph)) return error.Unauthorized;
 }
 
+/// The graph `context`'s session is on.
 pub fn current(context: execution.ExecutionContext) []const u8 {
     const session = context.session_state orelse return graph_store.DEFAULT_GRAPH_NAME;
     return session.graph orelse graph_store.DEFAULT_GRAPH_NAME;

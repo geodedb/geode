@@ -2343,7 +2343,13 @@ fn resolveExternalNodeId(
     if (store.idMapNodeId(graph_name, slot_id)) |id| return id;
 
     // Slow path: read the persisted public ID property from the adapter.
-    if (adapter.getNodeProperty(graph_name, slot_id, graph_store.INTERNAL_NODE_ID_PROPERTY_KEY, allocator) catch null) |stored_prop| {
+    // SONNY-3348 round 18 (review M1): a resource limit fails the query (it
+    // was swallowed, and the slot used as the id: a wrong row).
+    const stored = adapter.getNodeProperty(graph_name, slot_id, graph_store.INTERNAL_NODE_ID_PROPERTY_KEY, allocator) catch |err| {
+        if (@import("../eval.zig").isResourceLimitError(err)) return err;
+        return error.NodeNotFound;
+    };
+    if (stored) |stored_prop| {
         defer freeStoragePropertyValue(allocator, stored_prop);
         const public_id: ?u64 = switch (stored_prop) {
             .string => |text| graph_store.parsePersistedPublicId(text),
@@ -2357,12 +2363,11 @@ fn resolveExternalNodeId(
         }
     }
 
-    // Neither the IdMap nor the persisted property had a mapping for this
-    // slot.  This happens for nodes created within the current session whose
-    // graph has no IdMap yet (e.g. freshly-created test graphs).  Fall back
-    // to using the slot_id directly as the external ID so that
-    // materializeNode can still succeed.
-    return slot_id;
+    // Neither the IdMap nor the persisted property has a public id for this
+    // slot: the node is gone (a DROP GRAPH, or a delete, after the scan read
+    // the slot). SONNY-3348 round 18 (review M1): the caller skips it. The
+    // slot was returned as the node's id, a row with an id no node has.
+    return error.NodeNotFound;
 }
 
 /// Free a value the storage adapter read for this file (`getNodeProperty`,
