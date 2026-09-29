@@ -267,10 +267,22 @@ fn findScopedEdgeBetween(
     to_id: u64,
     scope: *ExprScope,
 ) ?*const graph_store.Edge {
+    return findScopedEdgeOfType(store, from_id, to_id, &.{}, scope);
+}
+
+/// `findScopedEdgeBetween`, of one of `types` (`[:A|B]`; empty: any type).
+fn findScopedEdgeOfType(
+    store: *graph_store.GraphStore,
+    from_id: u64,
+    to_id: u64,
+    types: []const []const u8,
+    scope: *ExprScope,
+) ?*const graph_store.Edge {
     if (store.getOutgoingEdgeIds(from_id)) |out_edge_ids| {
         for (out_edge_ids) |edge_id| {
             const edge = store.getEdgeHydrated(edge_id) orelse continue;
             if (edge.to_id != to_id) continue;
+            if (!typeAllowed(types, edge.label)) continue;
             if (!scope.edgeWalkable(store, edge)) continue;
             if (store.getEdgePtrHydrated(edge_id)) |edge_ptr| return edge_ptr;
         }
@@ -279,6 +291,7 @@ fn findScopedEdgeBetween(
         for (out_edge_ids) |edge_id| {
             const edge = store.getEdgeHydrated(edge_id) orelse continue;
             if (edge.to_id != from_id) continue;
+            if (!typeAllowed(types, edge.label)) continue;
             if (!scope.edgeWalkable(store, edge)) continue;
             if (store.getEdgePtrHydrated(edge_id)) |edge_ptr| return edge_ptr;
         }
@@ -331,6 +344,13 @@ fn findFirstMatchingNode(
         }
     }
     return null;
+}
+
+/// Whether node `id` is one the session may see that `pattern` matches.
+fn endMatches(store: *graph_store.GraphStore, id: u64, pattern: ast.NodePattern, env: Env, allocator: std.mem.Allocator, scope: *ExprScope) bool {
+    const node = (store.nodes.getOrHydratePtr(id) catch null) orelse return false;
+    if (!scope.nodeVisible(node)) return false;
+    return nodeMatchesPattern(node.*, pattern, env, allocator);
 }
 
 /// Check if a node matches a full pattern (labels + properties)
@@ -401,13 +421,21 @@ fn evaluateWhereFilter(
     };
 }
 
+/// Whether a relationship of type `label` fits `[:A|B]` (`types`; empty:
+/// any type).
+fn typeAllowed(types: []const []const u8, label: []const u8) bool {
+    if (types.len == 0) return true;
+    for (types) |t| if (std.mem.eql(u8, t, label)) return true;
+    return false;
+}
+
 /// CANARY: REQ=REQ-NESTING-REFACTOR-003; FEATURE="NestingReduction"; ASPECT=VariableLengthPath; STATUS=TESTED; OWNER=refactor; UPDATED=2026-01-30
 /// Count matches for variable-length path patterns using BFS
 fn countVariableLengthPathMatches(
     allocator: std.mem.Allocator,
     bound_node: *const graph_store.Node,
     hop: ast.Hop,
-    rel_type: ?[]const u8,
+    rel_types: []const []const u8,
     where_filter: ?*ast.Expr,
     env: Env,
     store: *graph_store.GraphStore,
@@ -445,7 +473,7 @@ fn countVariableLengthPathMatches(
                 const edge = store.getEdgeHydrated(edge_id) orelse continue;
 
                 // Filter by relationship type if specified
-                if (rel_type != null and !std.mem.eql(u8, edge.label, rel_type.?)) continue;
+                if (!typeAllowed(rel_types, edge.label)) continue;
 
                 const next_depth = current.depth + 1;
                 const next_node_id = edge.to_id;
@@ -507,7 +535,7 @@ fn countSingleHopMatches(
     allocator: std.mem.Allocator,
     bound_node: *const graph_store.Node,
     hop: ast.Hop,
-    rel_type: ?[]const u8,
+    rel_types: []const []const u8,
     where_filter: ?*ast.Expr,
     env: Env,
     store: *graph_store.GraphStore,
@@ -532,7 +560,7 @@ fn countSingleHopMatches(
             if (!scope.edgeWalkable(store, edge)) continue;
 
             // Filter by relationship type if specified
-            if (rel_type != null and !std.mem.eql(u8, edge.label, rel_type.?)) continue;
+            if (!typeAllowed(rel_types, edge.label)) continue;
 
             // If target node is bound, only match edges to that specific node
             if (target_bound_id) |tid| {
@@ -613,17 +641,19 @@ pub fn countPatternMatches(allocator: std.mem.Allocator, pattern: ast.GraphPatte
                 // If bound node matches, now check if the relationship pattern also matches
                 if (chain.hops.len > 0) {
                     const hop = chain.hops[0];
-                    const rel_type = if (hop.rel.types.len > 0) hop.rel.types[0] else null;
+                    // SONNY-3318 (round 4b-1b review I-D): every type of
+                    // `[:A|B]`; the first only was read.
+                    const rel_types = hop.rel.types;
 
                     // CANARY: REQ=REQ-GQL-VAR-LEN-SUBQUERY-001; FEATURE="VariableLengthSubquery"; ASPECT=CountMatches; STATUS=TESTED; TEST=geodetestlab/specs/gql_pattern_matching_comprehensive.yml; OWNER=execution; UPDATED=2025-12-28
                     // C01/C02 Fix: Handle variable-length paths (*1..3)
                     const is_var_length = hop.rel.min_len != null or hop.rel.max_len != null;
                     if (is_var_length) {
-                        return countVariableLengthPathMatches(allocator, bound_node, hop, rel_type, where_filter, env, store, &scope);
+                        return countVariableLengthPathMatches(allocator, bound_node, hop, rel_types, where_filter, env, store, &scope);
                     }
 
                     // Original single-hop handling for non-variable-length patterns
-                    return countSingleHopMatches(allocator, bound_node, hop, rel_type, where_filter, env, store, &scope);
+                    return countSingleHopMatches(allocator, bound_node, hop, rel_types, where_filter, env, store, &scope);
                 }
 
                 // No relationship pattern, just count the bound node if it matched
@@ -695,7 +725,7 @@ pub fn countPatternMatches(allocator: std.mem.Allocator, pattern: ast.GraphPatte
         } else if (chain.hops.len > 0) {
             // Count relationship patterns - optimized to avoid O(N² × E) complexity
             const hop = chain.hops[0];
-            const rel_type = if (hop.rel.types.len > 0) hop.rel.types[0] else null;
+            const rel_types = hop.rel.types;
 
             // PHASE 1 (edge-engine-direct): enumerate the COMPLETE edge id set
             // (bounded-cache-safe) and hydrate each body on miss, instead of
@@ -716,7 +746,7 @@ pub fn countPatternMatches(allocator: std.mem.Allocator, pattern: ast.GraphPatte
                 if (!scope.edgeWalkable(store, edge)) continue;
 
                 // Filter by relationship type if specified
-                if (rel_type != null and !std.mem.eql(u8, edge.label, rel_type.?)) {
+                if (!typeAllowed(rel_types, edge.label)) {
                     continue;
                 }
 
@@ -914,15 +944,20 @@ pub fn findShortestPath(allocator: std.mem.Allocator, pattern: ast.GraphPattern,
         start_id = findFirstMatchingNode(store, hop.left, env, allocator, &scope);
     }
 
-    // CANARY: REQ=REQ-NESTING-REFACTOR-007; FEATURE="NestingReduction"; ASPECT=ShortestPathEnd; STATUS=TESTED; OWNER=refactor; UPDATED=2026-01-30
-    // Use helper for end node matching
-    if (end_id == null) {
-        end_id = findFirstMatchingNode(store, hop.right, env, allocator, &scope);
-    }
-
-    if (start_id == null or end_id == null) {
+    // CANARY: REQ=REQ-SONNY-3318-SHORTEST-PATH; FEATURE="ShortestPath"; ASPECT=EndPatternTypesDirection; STATUS=TESTED; TEST=tests/test_sonny_write_allowlist_r4b.zig; OWNER=engine; UPDATED=2026-09-29
+    // SONNY-3318 (round 4b-1b review I-D): an end the query did not bind is
+    // any node the end pattern matches, the nearest one the walk reaches.
+    // It was the first matching node of the store's hash order, so
+    // `shortestPath((a:G {i: 1})-[:S|R*]->(c:Q))` answered a path or none
+    // depending on which Q came first. The walk keeps to the hop's types
+    // (it walked every type), its direction (`<-` walked `->`) and its
+    // upper bound.
+    if (start_id == null) {
         return Value{ .Null = {} };
     }
+    const end_pattern: ?ast.NodePattern = if (end_id == null) hop.right else null;
+    const min_depth: u32 = hop.rel.min_len orelse 1;
+    const max_depth: ?u32 = hop.rel.max_len;
 
     // Use BFS to find shortest path(s)
     const PathNode = struct {
@@ -950,7 +985,7 @@ pub fn findShortestPath(allocator: std.mem.Allocator, pattern: ast.GraphPattern,
     // resolves NOWHERE, or to a row the scope may not see, yields "no path" —
     // never an error that would confirm the id exists.
     if (!tenant_visibility.nodeIdVisible(store, start_id.?, filter_tenant)) return Value{ .Null = {} };
-    if (!tenant_visibility.nodeIdVisible(store, end_id.?, filter_tenant)) return Value{ .Null = {} };
+    if (end_id) |eid| if (!tenant_visibility.nodeIdVisible(store, eid, filter_tenant)) return Value{ .Null = {} };
 
     // Start BFS from start_id
     const start_path_node = try allocator.create(PathNode);
@@ -975,18 +1010,20 @@ pub fn findShortestPath(allocator: std.mem.Allocator, pattern: ast.GraphPattern,
         }
 
         // Check if we reached the end node
-        if (current.node_id == end_id.?) {
+        const reached = current.depth >= min_depth and if (end_id) |eid| current.node_id == eid else endMatches(store, current.node_id, end_pattern.?, env, allocator, &scope);
+        if (reached) {
             shortest_depth = current.depth;
             try found_paths.append(allocator, current);
             if (!all) break; // If not finding all shortest paths, stop at first
             continue;
         }
+        if (max_depth) |m| if (current.depth >= m) continue;
 
         // Explore neighbors using adjacency indexes (O(degree) instead of O(E))
-        // Always check outgoing edges
-        if (store.getOutgoingEdgeIds(current.node_id)) |out_edge_ids| {
+        if (hop.rel.dir != .left) if (store.getOutgoingEdgeIds(current.node_id)) |out_edge_ids| {
             for (out_edge_ids) |edge_id| {
                 const edge = store.getEdgeHydrated(edge_id) orelse continue;
+                if (!typeAllowed(hop.rel.types, edge.label)) continue;
                 const neighbor_id = edge.to_id;
                 // SONNY-1326 / SONNY-2679 / SONNY-2687: the frontier gate — the
                 // edge (in the session's graph) AND both endpoints must be
@@ -1001,12 +1038,13 @@ pub fn findShortestPath(allocator: std.mem.Allocator, pattern: ast.GraphPattern,
                     try visited.put(neighbor_id, true);
                 }
             }
-        }
-        // For undirected, also check incoming edges
-        if (hop.rel.dir == .undirected) {
+        };
+        // `<-` and undirected: the incoming edges
+        if (hop.rel.dir != .right) {
             if (store.getIncomingEdgeIds(current.node_id)) |in_edge_ids| {
                 for (in_edge_ids) |edge_id| {
                     const edge = store.getEdgeHydrated(edge_id) orelse continue;
+                    if (!typeAllowed(hop.rel.types, edge.label)) continue;
                     const neighbor_id = edge.from_id;
                     if (!scope.stepVisible(store, edge, neighbor_id)) continue;
                     if (!visited.contains(neighbor_id)) {
@@ -1049,7 +1087,7 @@ pub fn findShortestPath(allocator: std.mem.Allocator, pattern: ast.GraphPattern,
         }
         std.mem.reverse(u64, node_ids.items);
 
-        if (try materializePath(allocator, store, node_ids.items, &scope)) |path_value| {
+        if (try materializePath(allocator, store, node_ids.items, hop.rel.types, &scope)) |path_value| {
             try reconstructed.append(allocator, path_value);
         }
     }
@@ -1077,6 +1115,7 @@ fn materializePath(
     allocator: std.mem.Allocator,
     store: *graph_store.GraphStore,
     node_ids: []const u64,
+    types: []const []const u8,
     scope: *ExprScope,
 ) !?Value {
     var path_nodes = std.ArrayList(*const graph_store.Node).empty;
@@ -1103,7 +1142,7 @@ fn materializePath(
         // a parallel edge the session may not traverse is never attached.
         if (idx > 0) {
             const prev_id = node_ids[idx - 1];
-            if (findScopedEdgeBetween(store, prev_id, node_id, scope)) |edge_ptr| {
+            if (findScopedEdgeOfType(store, prev_id, node_id, types, scope)) |edge_ptr| {
                 try path_edges.append(allocator, edge_ptr);
             }
         }

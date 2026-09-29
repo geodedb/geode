@@ -159,10 +159,21 @@ pub fn dispatchToMultiChainHandler(q: ast.Query, all_simple_nodes: bool) Dispatc
     // first type of `[:A|B]` only (`PatternInfo.rel_type`), so an in-memory
     // `MATCH (a)-[:S|R]->(b) RETURN count(*)` counted the S edges. A hop
     // with more than one type goes to the multi-chain executor, which walks
-    // every type (a named path, or a shortest path, stays where it was).
+    // every type. Round 4b-1b (review I-D): a named path too (`MATCH p =
+    // (a)-[:S|R]->(b)` counted the S edges); the multi-chain executor binds
+    // it now. A shortest path, and OPTIONAL, stay where they were.
     if (q.match.chains.len == 1 and q.match.chains[0].hops.len == 1 and q.match.chains[0].hops[0].rel.types.len > 1) {
         const chain = q.match.chains[0];
-        if (!chain.is_optional and !chain.is_shortest and chain.name == null and q.path_variable == null) return .multi_chain_relationship_match;
+        if (!chain.is_optional and !chain.is_shortest) return .multi_chain_relationship_match;
+    }
+    // SONNY-3318 (round 4b-1b review I-D): the one-hop traversals bind a
+    // path variable for the RETURN only, after their WHERE and FILTER: `MATCH
+    // p = (a:G {i: 1})-[:R]->(b) WHERE length(p) = 1` matched nothing. A
+    // named one-hop path with a WHERE or FILTER goes to the multi-chain
+    // executor, which binds the path before either.
+    if (q.match.chains.len == 1 and q.match.chains[0].hops.len == 1 and (q.where_clause != null or q.filter_clause != null)) {
+        const chain = q.match.chains[0];
+        if (!chain.is_optional and !chain.is_shortest and (chain.name != null or q.path_variable != null)) return .multi_chain_relationship_match;
     }
 
     // CANARY: REQ=REQ-GQL-MULTI-CHAIN-REL-002; FEATURE="MultiChainRelationshipMatch"; ASPECT=Dispatch; STATUS=TESTED; TEST=geodetestlab/specs/gql_pattern_matching_comprehensive.yml; OWNER=engine; UPDATED=2025-12-23

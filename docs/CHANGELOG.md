@@ -1234,8 +1234,9 @@
   completes one binding at a time, applies the WHERE to it before keeping
   it, stops at SKIP + LIMIT when nothing after the join needs every binding
   (no WHERE, FILTER, ORDER BY, DISTINCT, WITH, grouping, aggregate or
-  write), and polls the read and write budgets at every binding, so a
-  product past the read budget answers 53200 instead of exhausting memory.
+  write), and polls the read and write budgets (and, since round 4b-1c,
+  at every step, not only at a completed binding), so a product past the
+  read budget answers 53200 instead of exhausting memory.
   A WHERE that runs into a resource limit fails the query instead of
   dropping the row. What a comma read holds is the bindings it keeps; round
   4b-1's per-binding cost (three hash maps copied at every step, about
@@ -1305,6 +1306,48 @@
   relationship (`WITH g MATCH (g)` matches every node, `WITH r MATCH
   (a)-[r]->(b)` every relationship); writes there are refused (0A000), so
   only reads are affected.
+- **A comma join's memory is flat, and it polls at every step (SONNY-3368,
+  round 4b-1b review I-B, I-C):** the join looked up the far node of every
+  relationship it tried with `getNodePtrForScan`, which keeps a copy of the
+  node until the graph's next checkpoint, outside the read budget: a WHERE
+  that kept none of the 2.25 million bindings of two 1,500-pair chains grew
+  the process by about 700 MB (1.4 GB at 2,121 pairs), and never answered
+  53200. The join looks each node up once per statement now, and what it
+  allocates to find a step's candidates, or to evaluate a binding's WHERE,
+  is released when the step or binding is done: the same statement peaks
+  at 40 MB in process (46 MB at 2,121 pairs), and adds less than 128 MiB to
+  the peak of a gRPC or QUIC server (tested). The
+  budgets and the stream's cancel were polled only at a completed binding,
+  so a join whose last chain matched nothing (`MATCH (a:P)-[:E]->(b),
+  (c:P), (d:P), (e:P {i: -1})`, 57 s at 400 pairs, about an hour at 1,500)
+  could be stopped neither by a disconnect nor by the stall watchdog. Each
+  step polls now, and a later chain whose start pattern binds a new
+  variable and matches no node ends the join before it starts (4 ms). The
+  LIMIT pushdown on the first hop's scan is kept for one chain of one hop
+  with nothing after it that needs every binding; over a longer chain it
+  cut `MATCH (a)-[:R]->(b)-[:S]->(c) RETURN c.i LIMIT 1` short.
+  Cost (round 4b-1b review m-d, measured there): a one-hop `[:A|B]`
+  pattern runs on the multi-chain executor since round 4b-1b; at 30,000
+  relationships its time is that of `[:A]` (within 25%), and a WHERE over
+  it peaks at about twice the memory (233 MB against 119 MB), the first
+  chain's bindings being hash maps. A stopped join is stopped when the
+  stream's cancel is set: a client disconnect, or the stall watchdog, which
+  marks an idle QUIC connection's readers after 60 s (tested: an abandoned
+  join over QUIC stops within 100 s).
+- **A named path walks every type, and the multi-chain executor binds it
+  (SONNY-3318, round 4b-1b review I-D):** `MATCH p = (a)-[:S|R]->(b)` read
+  the first type only (1 or 10 of 11), and so did a shortest path's walk,
+  an `EXISTS { }` or `COUNT { }` pattern, and the relationships a path
+  reconstructs. A named path of more than one hop, or in a comma pattern,
+  was never bound (`length(p)` 0, `p` null), and a one-hop path's WHERE
+  (`WHERE length(p) = 1`) matched nothing. Every type is walked, the path
+  is bound (for the WHERE too), and a shortest path keeps to the hop's
+  types, direction and upper bound. Its end, when the query did not bind
+  it, is the nearest node the end pattern matches; it was the first such
+  node in the store's hash order, so `shortestPath((a:G {i: 1})-[:S|R*]->
+  (c:Q))` answered a path or none depending on the session. A path
+  variable on an OPTIONAL MATCH after the first pattern is refused (0A000):
+  no executor binds it (`count(p)` was 0).
 - **LET scoping, EXISTS and IN subqueries (SONNY-3248, round 4b-1b review
   I-E, m-a, m-b, m-e):** an EXISTS body evaluated its WHERE over names
   already freed, so it never matched:
@@ -1331,6 +1374,13 @@
   node, which stayed. Two MERGE node patterns with the same labels and the
   same literal key name one node, and such a SET list is refused before
   anything is created.
+- **A comma join's FILTER and WITH (SONNY-3386):** the multi-chain executor
+  ignored a FILTER (`MATCH (g)-[:R]->(x), (q:Q) FILTER q.i = 3 AND g.i = 9`
+  returned all 40 bindings) and a WITH's ORDER BY, SKIP and LIMIT after the
+  join (`WITH g, q ORDER BY g.i DESC LIMIT 1` returned 40 rows, `WITH g, q
+  SKIP 39` skipped none). The FILTER is applied after the WHERE, as the
+  single-chain executors apply it, and a WITH after a comma join runs as
+  every WITH stage does.
 - **A node a chained part returns, over gRPC (SONNY-3385):** `MATCH (g:G {i:
   1}) WITH g MATCH (n:Q) RETURN n` aborted the gRPC server (an integer
   overflow in `nodeToProto`) on the Pull after the request: the stored

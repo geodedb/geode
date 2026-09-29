@@ -24,6 +24,13 @@
 //   refused SET writes nothing (I-2); a label SET checks the node's vectors
 //   (I-4); LET chains, CALL bodies and window values (I-6, m-2, m-3); a
 //   MERGE's RETURN map holds the store's relationship (m-4).
+// - Round 4b-1c (the round 4b-1b re-review): `WITH *` and FOR carry each
+//   variable's kind (SONNY-3367, I-A); the join's memory is flat and it
+//   polls at every step (SONNY-3368, I-B, I-C); a named path walks every
+//   type and is bound (SONNY-3318, I-D); a LET shadows a request parameter
+//   on every path, windows read it, a CALL body's window applies, and two
+//   MERGEs of one node are one SET target (SONNY-3248, I-E, m-a, m-b, m-c);
+//   a comma join's FILTER and WITH stage (SONNY-3386).
 //
 // CANARY: REQ=REQ-SONNY-3318-MULTI-CHAIN-BINDING; FEATURE="MultiChainRelationshipMatch"; ASPECT=Regression; STATUS=TESTED; TEST=tests/test_sonny_write_allowlist_r4b.zig; OWNER=engine; UPDATED=2026-09-28
 
@@ -898,6 +905,32 @@ test "SONNY-3367 (round 4b-1b I-A): WITH * and FOR carry each variable's kind, i
     try runCases("SONNY-3367 (4b-1c)", &c1c_cases);
 }
 
+// SONNY-3318 (I-D): a path variable walks every type of an alternation,
+// and binds its path in the multi-chain executor (`length(p)` was 0 there).
+const i5c_cases = [_]Case{
+    .{ .setup = &.{s_edge}, .write = "MATCH p = (a)-[:S|R]->(b) RETURN count(*) AS n", .want = &.{"11"} },
+    .{ .setup = &.{s_edge}, .write = "MATCH p = (a)-[:R|S]->(b) RETURN count(*) AS n", .want = &.{"11"} },
+    .{ .setup = &.{s_edge}, .write = "MATCH p = (a)<-[:S|R]-(b) RETURN count(*) AS n", .want = &.{"11"} },
+    .{ .setup = &.{s_edge}, .write = "MATCH p = (a)-[:S|R]-(b) RETURN count(*) AS n", .want = &.{"22"} },
+    .{ .setup = &.{s_edge}, .write = "MATCH p = (a)-[e:S|R]->(b) RETURN type(e) AS t, count(*) AS n GROUP BY t", .want = &.{ "R|10", "S|1" } },
+    .{ .setup = &.{s_edge}, .write = "MATCH p = (a:G {i: 1})-[:S|R*1..2]->(c) RETURN count(*) AS n", .want = &.{"2"} },
+    .{ .setup = &.{s_edge}, .write = "MATCH p = (a:G {i: 1})-[:R|S*1..2]->(c) RETURN length(p) AS l", .want = &.{ "1", "2" } },
+    .{ .setup = &.{s_edge}, .write = "MATCH p = (a)-[:S|R]->(b) WHERE a.i = 1 RETURN length(p) AS l, size(nodes(p)) AS n", .want = &.{"1|2"} },
+    .{ .setup = &.{s_edge}, .write = "MATCH p = (a:G {i: 1})-[:R]->(b)-[:S]->(c) RETURN length(p) AS l, size(nodes(p)) AS n, size(relationships(p)) AS r", .want = &.{"2|3|2"} },
+    .{ .setup = &.{s_edge}, .write = "MATCH p = (a:G {i: 1})-[:R]->(b)-[:S*1..1]->(c) RETURN length(p) AS l", .want = &.{"2"} },
+    .{ .setup = &.{s_edge}, .write = "MATCH p = (a:G {i: 1})-[:R]->(b), (q:Q {i: 0}) RETURN length(p) AS l", .want = &.{"1"} },
+    .{ .setup = &.{s_edge}, .write = "MATCH p = (a:G {i: 1})-[:R]->(b) WHERE length(p) = 1 RETURN count(*) AS n", .want = &.{"1"} },
+    .{ .setup = &.{s_edge}, .write = "MATCH p = shortestPath((a:G {i: 1})-[:S|R*]->(c:Q)) RETURN length(p) AS l", .want = &.{"2"} },
+    .{ .setup = &.{s_edge}, .write = "MATCH p = shortestPath((a:G {i: 1})-[:R|S*]->(c:Q)) RETURN length(p) AS l", .want = &.{"2"} },
+    // No executor binds a path on an OPTIONAL MATCH after the first pattern.
+    .{ .setup = &.{s_edge}, .write = "MATCH (g:G {i: 1}) OPTIONAL MATCH p = (g)-[:S|R]->(x) RETURN count(p) AS n", .refused = error.OptionalPathVariable },
+    .{ .setup = &.{s_edge}, .write = "MATCH (g:G {i: 1}) OPTIONAL MATCH (g)-[:S|R]->(x) RETURN count(x) AS n", .want = &.{"1"} },
+};
+
+test "SONNY-3318 (round 4b-1b I-D): a named path walks every type and binds its path, in every session" {
+    try runCases("SONNY-3318 (4b-1c)", &i5c_cases);
+}
+
 // SONNY-3248 (I-E, m-a, m-b, m-c): a LET shadows a request parameter on
 // every path; a WITH's or a CALL body's window reads it; a chained MERGE's
 // two names for one node.
@@ -931,6 +964,165 @@ const l1c_cases = [_]Case{
 
 test "SONNY-3248 (round 4b-1b I-E, m-a, m-b, m-c): LET shadowing, window values, CALL bodies, MERGE aliases, in every session" {
     try runCases("SONNY-3248 (4b-1c)", &l1c_cases);
+}
+
+// SONNY-3386: a comma join's FILTER, and a WITH's ORDER BY, SKIP and LIMIT
+// after it (FILTER was ignored; the WITH stage kept every binding).
+const f3386_cases = [_]Case{
+    .{ .write = "MATCH (g:G)-[:R]->(x), (q:Q) FILTER q.i = 3 AND g.i = 9 RETURN g.i", .want = &.{"9"} },
+    .{ .write = "MATCH (g:G)-[:R]->(x), (q:Q) FILTER q.i = 3 RETURN count(*) AS c", .want = &.{"10"} },
+    .{ .write = "MATCH (g:G)-[:R]->(x), (q:Q) WHERE g.i > 5 FILTER q.i = 3 RETURN count(*) AS c", .want = &.{"4"} },
+    .{ .write = "MATCH (g:G)-[:R]->(x)-[:NOPE*0..1]->(y) FILTER g.i = 3 RETURN count(*) AS c", .want = &.{"1"} },
+    .{ .write = "MATCH (g:G)-[:R]->(x), (q:Q) WITH g, q ORDER BY g.i DESC LIMIT 1 RETURN g.i", .want = &.{"9"} },
+    .{ .write = "MATCH (g:G)-[:R]->(x), (q:Q) WITH g, q SKIP 39 RETURN count(*) AS c", .want = &.{"1"} },
+    .{ .write = "MATCH (g:G)-[:R]->(x), (q:Q) WITH g.i AS gi, q.i AS qi ORDER BY gi DESC, qi ASC LIMIT 1 RETURN gi, qi", .want = &.{"9|0"} },
+    .{ .write = "MATCH (g:G)-[:R]->(x), (q:Q) WITH g, q ORDER BY g.i SKIP 38 RETURN g.i AS gi, q.i AS qi", .want = &.{ "9|2", "9|3" } },
+    .{ .write = "MATCH (g:G)-[:R]->(x), (q:Q) WITH g, q ORDER BY g.i DESC LIMIT 3 RETURN g.i AS gi ORDER BY gi LIMIT 1", .want = &.{"9"} },
+    .{ .write = "MATCH (g:G)-[:R]->(x), (q:Q) WITH DISTINCT g RETURN count(*) AS c", .want = &.{"10"} },
+    .{ .write = "MATCH (g:G)-[:R]->(x), (q:Q) WITH g, q WHERE q.i = 3 RETURN count(*) AS c", .want = &.{"10"} },
+    // The old per-chain cap: LIMIT 1 over a two-hop chain whose first hop
+    // read one binding only, before its second hop and the WHERE.
+    .{ .setup = &.{s_edge}, .write = "MATCH (a)-[:R]->(b)-[:S]->(c) RETURN c.i LIMIT 1", .want = &.{"5"} },
+    .{ .setup = &.{s_edge}, .write = "MATCH (a)-[:R]->(b), (c:Q) WHERE c.i = 5 AND a.i = 1 RETURN a.i LIMIT 1", .want = &.{"1"} },
+};
+
+test "SONNY-3386: a comma join applies its FILTER and the WITH after it, in every session" {
+    try runCases("SONNY-3386", &f3386_cases);
+}
+
+/// The process's peak resident set, reset (`/proc/self/clear_refs` 5) and
+/// read (VmHWM), in bytes.
+fn resetPeakRss() void {
+    const fd = std.c.open("/proc/self/clear_refs", .{ .ACCMODE = .WRONLY });
+    if (fd < 0) return;
+    defer _ = std.c.close(fd);
+    _ = std.c.write(fd, "5", 1);
+}
+
+fn statusBytes(field: []const u8) usize {
+    var buf: [8192]u8 = undefined;
+    const fd = std.c.open("/proc/self/status", .{});
+    if (fd < 0) return 0;
+    defer _ = std.c.close(fd);
+    const got = std.c.read(fd, &buf, buf.len);
+    if (got <= 0) return 0;
+    const n: usize = @intCast(got);
+    var lines = std.mem.tokenizeScalar(u8, buf[0..n], '\n');
+    while (lines.next()) |line| {
+        if (!std.mem.startsWith(u8, line, field)) continue;
+        var parts = std.mem.tokenizeAny(u8, line[field.len..], " \t:kB");
+        const kb = std.fmt.parseInt(usize, parts.next() orelse return 0, 10) catch return 0;
+        return kb * 1024;
+    }
+    return 0;
+}
+
+/// Round 4b-1c: the join's memory is flat in the product, and every step
+/// polls the budget and the cancel.
+const BoundJob = struct {
+    s: *h.Session,
+    ok: bool = true,
+
+    fn fail(self: *BoundJob, comptime fmt: []const u8, args: anytype) void {
+        std.debug.print("  " ++ fmt ++ "\n", args);
+        self.ok = false;
+    }
+
+    /// I-B: a WHERE that keeps no binding of the 2.25 million the join
+    /// tries holds no memory for them.
+    fn flat(self: *BoundJob) void {
+        geode.read_budget.setBudgetBytesForTest(64 << 20);
+        defer geode.read_budget.setBudgetBytesForTest(0);
+        resetPeakRss();
+        const before = statusBytes("VmRSS");
+        const start = monoMillis();
+        var r = runProgram(self.s, stmt_alloc, "MATCH (a:P)-[:E]->(b), (c:P)-[:E]->(d) WHERE 1 = 2 RETURN a.i") catch |err| {
+            return self.fail("WHERE 1 = 2: error {s}", .{@errorName(err)});
+        };
+        defer r.deinit(stmt_alloc);
+        const took = monoMillis() - start;
+        const grew = statusBytes("VmHWM") -| before;
+        if (r.rows.len != 0) self.fail("WHERE 1 = 2: {d} row(s)", .{r.rows.len});
+        // 1,500 pairs: about 700 MB before the fix.
+        if (grew > 128 << 20) self.fail("WHERE 1 = 2: the peak grew {d} MiB (at most 128)", .{grew >> 20});
+        if (took > 240_000) self.fail("WHERE 1 = 2: took {d} ms", .{took});
+    }
+
+    /// I-C: a join whose last chain matches nothing ends at once; one whose
+    /// last hop never matches is stopped by the stream's cancel.
+    fn polled(self: *BoundJob) void {
+        var start = monoMillis();
+        var r = runProgram(self.s, stmt_alloc, "MATCH (a:P)-[:E]->(b), (c:P), (d:P), (e:P {i: -1}) RETURN count(*) AS n") catch |err| {
+            return self.fail("empty last chain: error {s}", .{@errorName(err)});
+        };
+        const rows = h.renderRows(self.s.arena.allocator(), r) catch &.{};
+        r.deinit(stmt_alloc);
+        if (rows.len != 1 or !std.mem.eql(u8, rows[0], "0")) self.fail("empty last chain: {d} row(s)", .{rows.len});
+        if (monoMillis() - start > 1_000) self.fail("empty last chain: took {d} ms", .{monoMillis() - start});
+
+        var cancel = std.atomic.Value(bool).init(false);
+        geode.read_budget.setStreamCancelSource(&cancel);
+        defer geode.read_budget.setStreamCancelSource(null);
+        const Setter = struct {
+            fn run(flag: *std.atomic.Value(bool)) void {
+                var ts: std.posix.timespec = .{ .sec = 0, .nsec = 200 * std.time.ns_per_ms };
+                _ = std.os.linux.nanosleep(&ts, null);
+                flag.store(true, .release);
+            }
+        };
+        const t = std.Thread.spawn(.{}, Setter.run, .{&cancel}) catch return self.fail("spawn failed", .{});
+        start = monoMillis();
+        if (runProgram(self.s, stmt_alloc, "MATCH (a:P)-[:E]->(b), (c:P), (d:P)-[:NOPE]->(z) RETURN a.i")) |got| {
+            var res = got;
+            res.deinit(stmt_alloc);
+            self.fail("a join no binding completes: ran to the end, not cancelled", .{});
+        } else |err| if (err != error.ReadQueryCancelled) self.fail("a join no binding completes: error {s}", .{@errorName(err)});
+        t.join();
+        // The cancel lands at 200 ms; the join stops at its next step.
+        if (monoMillis() - start > 1_200) self.fail("a join no binding completes: stopped after {d} ms", .{monoMillis() - start});
+    }
+};
+
+fn runBoundInChild(job: *BoundJob, comptime which: fn (*BoundJob) void) !void {
+    const pid = std.c.fork();
+    try testing.expect(pid >= 0);
+    if (pid == 0) {
+        std.posix.setrlimit(.CORE, .{ .cur = 0, .max = 0 }) catch {};
+        const have = dataSegmentBytes();
+        if (have == 0) std.c._exit(9);
+        const cap = have + (1 << 30);
+        std.posix.setrlimit(.DATA, .{ .cur = cap, .max = cap }) catch std.c._exit(9);
+        // A regression that stops polling is killed, not waited for.
+        _ = std.c.alarm(300);
+        which(job);
+        std.c._exit(if (job.ok) 0 else 1);
+    }
+    var status: c_int = 0;
+    try testing.expectEqual(pid, std.c.waitpid(pid, &status, 0));
+    const st: u32 = @bitCast(status);
+    if (std.os.linux.W.IFSIGNALED(st)) {
+        std.debug.print("the join was killed (signal {d})\n", .{std.os.linux.W.TERMSIG(st)});
+        return error.Crashed;
+    }
+    try testing.expectEqual(@as(u32, 0), std.os.linux.W.EXITSTATUS(st));
+}
+
+test "SONNY-3368 (round 4b-1b I-B): a WHERE that keeps nothing over 2.25 million bindings holds flat memory" {
+    var s = try openSession(.in_memory);
+    defer s.deinit();
+    var setup = try runProgram(&s, stmt_alloc, "FOR i IN range(1, 1500) CREATE (:P {i: i})-[:E]->(:P2 {i: i})");
+    setup.deinit(stmt_alloc);
+    var job: BoundJob = .{ .s = &s };
+    try runBoundInChild(&job, BoundJob.flat);
+}
+
+test "SONNY-3368 (round 4b-1b I-C): a join polls at every step: an empty last chain ends at once, a cancel stops one that completes nothing" {
+    var s = try openSession(.in_memory);
+    defer s.deinit();
+    var setup = try runProgram(&s, stmt_alloc, "FOR i IN range(1, 400) CREATE (:P {i: i})-[:E]->(:P2 {i: i})");
+    setup.deinit(stmt_alloc);
+    var job: BoundJob = .{ .s = &s };
+    try runBoundInChild(&job, BoundJob.polled);
 }
 
 // ---------------------------------------------------------------------------

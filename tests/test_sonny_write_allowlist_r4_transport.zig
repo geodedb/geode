@@ -20,6 +20,12 @@
 //   (SONNY-3321: a LET, or a WHERE with a FILTER, goes to the executor);
 //   SKIP / LIMIT parameters, a repeated SET target (22G03) and LET scope
 //   (SONNY-3248).
+// - Round 4b-1c (the round 4b-1b re-review): `WITH *` and FOR carry kinds
+//   (42000); EXISTS and IN subqueries read the statement's LETs, and a LET
+//   shadows a request parameter; a named path walks every type; a comma
+//   join's FILTER and WITH stage (SONNY-3386); a node a chained part returns
+//   is pulled from the gRPC server, in process and a real one (SONNY-3385);
+//   the join's memory and time over gRPC and QUIC (SONNY-3368).
 // - Round 4b-1b (the round 4b-1 review): a variable named as two kinds of
 //   element is refused (42000; returning one aborted the gRPC server), the
 //   streamed comma join and its read budget (53200), every type of an
@@ -341,6 +347,25 @@ const cases = [_]Case{
             .{ .query = "MATCH (n:LW) RETURN count(n) AS c", .want = "0" },
         },
     },
+    // SONNY-3318 (I-D): a named path walks every type; the multi-chain
+    // executor binds it; a shortest path keeps to the hop's types.
+    .{ .name = "3318 named path", .steps = &.{
+        .{ .query = "MATCH (a:L {i: 1}), (b:L {i: 2}), (c:L {i: 3}) CREATE (a)-[:XR]->(b), (b)-[:XS]->(c)" },
+        .{ .query = "MATCH p = (a:L)-[:XS|XR]->(b) RETURN count(*) AS n", .want = "2" },
+        .{ .query = "MATCH p = (a:L)-[:XR|XS]->(b) RETURN count(*) AS n", .want = "2" },
+        .{ .query = "MATCH p = (a:L)-[:XR]->(b)-[:XS]->(c) RETURN length(p) AS l", .want = "2" },
+        .{ .query = "MATCH p = (a:L {i: 1})-[:XS|XR*1..2]->(c) RETURN length(p) AS l", .want = "1;2" },
+        .{ .query = "MATCH p = shortestPath((a:L {i: 1})-[:XS|XR*]->(c:L {i: 3})) RETURN length(p) AS l", .want = "2" },
+        .{ .query = "MATCH (a:L {i: 1}) OPTIONAL MATCH p = (a)-[:XR]->(x) RETURN count(p) AS c", .code = "0A000" },
+    } },
+    // SONNY-3386: a comma join's FILTER, and the WITH after it.
+    .{ .name = "3386 comma FILTER, WITH", .steps = &.{
+        .{ .query = "MATCH (a:L {i: 1}), (b:L {i: 2}), (c:L {i: 3}), (d:L {i: 4}) CREATE (a)-[:LR]->(b), (c)-[:LR]->(d)" },
+        .{ .query = "MATCH (a:L)-[:LR]->(b), (q:LQ) FILTER q.i = 3 AND a.i = 3 RETURN a.i", .want = "3" },
+        .{ .query = "MATCH (a:L)-[:LR]->(b), (q:LQ) FILTER q.i = 3 RETURN count(*) AS c", .want = "2" },
+        .{ .query = "MATCH (a:L)-[:LR]->(b), (q:LQ) WITH a.i AS ai, q.i AS qi ORDER BY ai DESC, qi DESC LIMIT 1 RETURN ai, qi", .want = "3|3" },
+        .{ .query = "MATCH (a:L)-[:LR]->(b), (q:LQ) WITH a, q SKIP 7 RETURN count(*) AS c", .want = "1" },
+    } },
     // SONNY-3385: a node or relationship a chained part returns is pulled
     // page by page after the request that made it; its labels were in the
     // request's scratch arena, and the Pull aborted the gRPC server.
@@ -552,6 +577,240 @@ test "round 4b-1b over gRPC: LIMIT 1 over two 1,500-pair chains answers under a 
     try check(aa, &failures, "grpc", name, .{ .query = "", .code = "53200" }, "the whole product", try f.run(s, cart ++ " RETURN a.i, c.i", &.{}));
     try check(aa, &failures, "grpc", name, .{ .query = "", .want = "1" }, "alive", try f.run(s, "RETURN 1 AS one", &.{}));
     try finish(failures.items, "round 4b-1b read budget (gRPC)");
+}
+
+// ---------------------------------------------------------------------------
+// Round 4b-1c: the join's memory and time over the wire (SONNY-3368, the
+// round 4b-1b re-review I-B / I-C). A WHERE that keeps none of the 2.25
+// million bindings of two 1,500-pair chains held about 700 MB (a node copy
+// per binding, `getNodePtrForScan`), unseen by the read budget.
+
+/// A /proc status field (`VmRSS`, `VmHWM`) of process `pid` (0: this one),
+/// in bytes; 0 when unreadable.
+fn procStatusBytes(pid: std.posix.pid_t, field: []const u8) usize {
+    var path_buf: [64]u8 = undefined;
+    const path = (if (pid == 0) std.fmt.bufPrintZ(&path_buf, "/proc/self/status", .{}) else std.fmt.bufPrintZ(&path_buf, "/proc/{d}/status", .{pid})) catch return 0;
+    var buf: [8192]u8 = undefined;
+    const fd = std.c.open(path, .{});
+    if (fd < 0) return 0;
+    defer _ = std.c.close(fd);
+    const got = std.c.read(fd, &buf, buf.len);
+    if (got <= 0) return 0;
+    const n: usize = @intCast(got);
+    var lines = std.mem.tokenizeScalar(u8, buf[0..n], '\n');
+    while (lines.next()) |line| {
+        if (!std.mem.startsWith(u8, line, field)) continue;
+        var parts = std.mem.tokenizeAny(u8, line[field.len..], " \t:kB");
+        const kb = std.fmt.parseInt(usize, parts.next() orelse return 0, 10) catch return 0;
+        return kb * 1024;
+    }
+    return 0;
+}
+
+/// Reset process `pid`'s peak resident set (`clear_refs` 5, Linux 4.0+).
+fn resetPeak(pid: std.posix.pid_t) void {
+    var path_buf: [64]u8 = undefined;
+    const path = (if (pid == 0) std.fmt.bufPrintZ(&path_buf, "/proc/self/clear_refs", .{}) else std.fmt.bufPrintZ(&path_buf, "/proc/{d}/clear_refs", .{pid})) catch return;
+    const fd = std.c.open(path, .{ .ACCMODE = .WRONLY });
+    if (fd < 0) return;
+    defer _ = std.c.close(fd);
+    _ = std.c.write(fd, "5", 1);
+}
+
+/// Process `pid`'s CPU time so far (user + system), in clock ticks.
+fn procCpuTicks(pid: std.posix.pid_t) u64 {
+    var path_buf: [64]u8 = undefined;
+    const path = std.fmt.bufPrintZ(&path_buf, "/proc/{d}/stat", .{pid}) catch return 0;
+    var buf: [1024]u8 = undefined;
+    const fd = std.c.open(path, .{});
+    if (fd < 0) return 0;
+    defer _ = std.c.close(fd);
+    const got = std.c.read(fd, &buf, buf.len);
+    if (got <= 0) return 0;
+    const text = buf[0..@intCast(got)];
+    // After the command's closing parenthesis: state is field 3, utime 14,
+    // stime 15.
+    const close = std.mem.lastIndexOfScalar(u8, text, ')') orelse return 0;
+    var fields = std.mem.tokenizeScalar(u8, text[close + 1 ..], ' ');
+    var i: usize = 3;
+    var total: u64 = 0;
+    while (fields.next()) |f| : (i += 1) {
+        if (i == 14 or i == 15) total += std.fmt.parseInt(u64, f, 10) catch 0;
+        if (i == 15) break;
+    }
+    return total;
+}
+
+fn nowMillis() i64 {
+    var ts: std.posix.timespec = .{ .sec = 0, .nsec = 0 };
+    _ = std.os.linux.clock_gettime(.MONOTONIC, &ts);
+    return @as(i64, @intCast(ts.sec)) * 1000 + @divTrunc(@as(i64, @intCast(ts.nsec)), 1_000_000);
+}
+
+fn sleepMillis(ms: u64) void {
+    var ts: std.posix.timespec = .{ .sec = @intCast(ms / 1000), .nsec = @intCast((ms % 1000) * std.time.ns_per_ms) };
+    _ = std.os.linux.nanosleep(&ts, null);
+}
+
+const join_cart = "MATCH (a:JP)-[:JE]->(b), (c:JP)-[:JE]->(d)";
+const join_seed = "FOR i IN range(1, 1500) CREATE (:JP {i: i})-[:JE]->(:JP2 {i: i})";
+/// What a WHERE that keeps nothing may add to the peak resident set.
+const join_peak_growth_max: usize = 128 << 20;
+
+const GrpcBoundJob = struct {
+    f: *Fixture,
+    session: []const u8,
+    ok: bool = true,
+
+    fn fail(self: *GrpcBoundJob, comptime fmt: []const u8, args: anytype) void {
+        std.debug.print("  [grpc] " ++ fmt ++ "\n", args);
+        self.ok = false;
+    }
+
+    fn run(self: *GrpcBoundJob) void {
+        geode.read_budget.setBudgetBytesForTest(64 << 20);
+        defer geode.read_budget.setBudgetBytesForTest(0);
+        resetPeak(0);
+        const before = procStatusBytes(0, "VmRSS");
+        const start = nowMillis();
+        const got = self.f.run(self.session, join_cart ++ " WHERE 1 = 2 RETURN a.i", &.{}) catch |err| return self.fail("WHERE 1 = 2: {s}", .{@errorName(err)});
+        const took = nowMillis() - start;
+        const grew = procStatusBytes(0, "VmHWM") -| before;
+        if (got.code) |c| self.fail("WHERE 1 = 2: answered {s}", .{c});
+        if (got.rows.len != 0) self.fail("WHERE 1 = 2: returned {s}", .{got.rows});
+        if (grew > join_peak_growth_max) self.fail("WHERE 1 = 2: the peak grew {d} MiB", .{grew >> 20});
+        if (took > 240_000) self.fail("WHERE 1 = 2: took {d} ms", .{took});
+        const s2 = nowMillis();
+        const one = self.f.run(self.session, join_cart ++ " RETURN 1 AS one LIMIT 1", &.{}) catch |err| return self.fail("LIMIT 1: {s}", .{@errorName(err)});
+        if (one.code != null or !std.mem.eql(u8, one.rows, "1")) self.fail("LIMIT 1: {s}", .{one.rows});
+        if (nowMillis() - s2 > 10_000) self.fail("LIMIT 1: took {d} ms", .{nowMillis() - s2});
+    }
+};
+
+// CANARY: REQ=REQ-SONNY-3368-BOUNDED-JOIN; FEATURE="MultiChainRelationshipMatch"; ASPECT=MemoryOverGrpc; STATUS=TESTED; TEST=tests/test_sonny_write_allowlist_r4_transport.zig; OWNER=engine; UPDATED=2026-09-29
+test "round 4b-1c over gRPC: a WHERE that keeps nothing over two 1,500-pair chains holds flat memory; LIMIT 1 answers at once (SONNY-3368)" {
+    var f: Fixture = undefined;
+    try f.init();
+    defer f.deinit();
+    const s = try f.sessions.createSession("writer", "", null, null, null, false, 0);
+    const seeded = try f.run(s, join_seed, &.{});
+    try testing.expect(seeded.code == null);
+    var job: GrpcBoundJob = .{ .f = &f, .session = s };
+    const pid = std.c.fork();
+    try testing.expect(pid >= 0);
+    if (pid == 0) {
+        std.posix.setrlimit(.CORE, .{ .cur = 0, .max = 0 }) catch {};
+        _ = std.c.alarm(300);
+        job.run();
+        std.c._exit(if (job.ok) 0 else 1);
+    }
+    var status: c_int = 0;
+    try testing.expectEqual(pid, std.c.waitpid(pid, &status, 0));
+    const st: u32 = @bitCast(status);
+    if (std.os.linux.W.IFSIGNALED(st)) {
+        std.debug.print("the gRPC join was killed (signal {d})\n", .{std.os.linux.W.TERMSIG(st)});
+        return error.Crashed;
+    }
+    try testing.expectEqual(@as(u32, 0), std.os.linux.W.EXITSTATUS(st));
+}
+
+// CANARY: REQ=REQ-SONNY-3368-BOUNDED-JOIN; FEATURE="MultiChainRelationshipMatch"; ASPECT=MemoryOverQuic; STATUS=TESTED; TEST=tests/test_sonny_write_allowlist_r4_transport.zig; OWNER=engine; UPDATED=2026-09-29
+test "round 4b-1c over QUIC: flat server memory for a WHERE that keeps nothing, 53200 for the product, and a disconnect stops a join that completes nothing (SONNY-3368)" {
+    const allocator = testing.allocator;
+    var arena = std.heap.ArenaAllocator.init(allocator);
+    defer arena.deinit();
+    const aa = arena.allocator();
+    const port = try util.getRandomPort();
+    const io_fs = std.Io.Threaded.global_single_threaded.io();
+    var dir_buf: [96]u8 = undefined;
+    const data_dir = try std.fmt.bufPrint(&dir_buf, "/tmp/geode-wfix4c-{d}", .{port});
+    std.Io.Dir.cwd().createDirPath(io_fs, data_dir) catch {};
+    defer std.Io.Dir.cwd().deleteTree(io_fs, data_dir) catch {};
+    const addr = try util.formatAddr(allocator, port);
+    defer allocator.free(addr);
+    var server = try util.spawnServer(allocator, &.{ "./zig-out/bin/geode", "serve", "--listen", addr, "--data-dir", data_dir }, &.{"GEODE_READ_EXECUTOR_BUDGET_MB=64"});
+    defer server.deinit();
+    try util.waitForServerReady(allocator, addr, 30000);
+    const server_pid: std.posix.pid_t = server.child.id orelse return error.NoServerPid;
+
+    var failures: std.ArrayList([]const u8) = .empty;
+    {
+        var client = try util.QuicProtoClient.connect(allocator, addr);
+        defer client.deinit();
+        var hello = try client.hello(allocator, util.defaultUsername(), util.defaultPassword());
+        hello.deinit(allocator);
+        const name = "3368 memory (QUIC)";
+        var seeded = try client.executeAndCollectWithTimeout(allocator, join_seed, util.emptyParams(), 1000, 120);
+        const seed_err = seeded.error_code;
+        seeded.deinit(allocator);
+        if (seed_err != null) return error.SeedFailed;
+        var seeded_k = try client.executeAndCollectWithTimeout(allocator, "FOR i IN range(1, 400) CREATE (:KP {i: i})-[:KE]->(:KP2 {i: i})", util.emptyParams(), 1000, 60);
+        const seed_k_err = seeded_k.error_code != null;
+        seeded_k.deinit(allocator);
+        if (seed_k_err) return error.SeedFailed;
+
+        resetPeak(server_pid);
+        const before = procStatusBytes(server_pid, "VmRSS");
+        const start = nowMillis();
+        var none = try client.executeAndCollectWithTimeout(allocator, join_cart ++ " WHERE 1 = 2 RETURN a.i", util.emptyParams(), 1000, 300);
+        const took = nowMillis() - start;
+        const grew = procStatusBytes(server_pid, "VmHWM") -| before;
+        if (none.error_code) |c| try failures.append(aa, try std.fmt.allocPrint(aa, "{s}: WHERE 1 = 2 answered {s}", .{ name, c }));
+        if (none.rows.len != 0) try failures.append(aa, try std.fmt.allocPrint(aa, "{s}: WHERE 1 = 2 returned {d} rows", .{ name, none.rows.len }));
+        none.deinit(allocator);
+        if (before == 0) try failures.append(aa, try std.fmt.allocPrint(aa, "{s}: the server's /proc status is unreadable", .{name}));
+        if (grew > join_peak_growth_max) try failures.append(aa, try std.fmt.allocPrint(aa, "{s}: the server's peak grew {d} MiB (at most {d})", .{ name, grew >> 20, join_peak_growth_max >> 20 }));
+        if (took > 240_000) try failures.append(aa, try std.fmt.allocPrint(aa, "{s}: WHERE 1 = 2 took {d} ms", .{ name, took }));
+
+        const s2 = nowMillis();
+        try check(aa, &failures, "quic", name, .{ .query = "", .want = "1" }, "LIMIT 1", try quicAnswer(aa, &client, join_cart ++ " RETURN 1 AS one LIMIT 1", &.{}));
+        if (nowMillis() - s2 > 10_000) try failures.append(aa, try std.fmt.allocPrint(aa, "{s}: LIMIT 1 took {d} ms", .{ name, nowMillis() - s2 }));
+        var product = try client.executeAndCollectWithTimeout(allocator, join_cart ++ " RETURN a.i, c.i", util.emptyParams(), 1000, 300);
+        try check(aa, &failures, "quic", name, .{ .query = "", .code = "53200" }, "the whole product", .{ .code = if (product.error_code) |c| try aa.dupe(u8, c) else null, .rows = "" });
+        product.deinit(allocator);
+        // An empty last chain ends at once.
+        const s3 = nowMillis();
+        try check(aa, &failures, "quic", name, .{ .query = "", .want = "0" }, "empty last chain", try quicAnswer(aa, &client, "MATCH (a:KP)-[:KE]->(b), (c:KP), (d:KP), (e:KP {i: -1}) RETURN count(*) AS n", &.{}));
+        if (nowMillis() - s3 > 1_000) try failures.append(aa, try std.fmt.allocPrint(aa, "{s}: the empty last chain took {d} ms", .{ name, nowMillis() - s3 }));
+    }
+    {
+        // A join no binding of which completes (64 million steps, about an
+        // hour at 1,500 pairs): the client gives up after 1 s and closes its
+        // connection. The join polls the stream's cancel at every step, so
+        // it stops when the server marks the stream abandoned (its
+        // per-connection stall watchdog does at 60 s idle) instead of
+        // running to the end: within 100 s the server is idle.
+        const name = "3368 abandoned join (QUIC)";
+        var client = try util.QuicProtoClient.connect(allocator, addr);
+        var hello = try client.hello(allocator, util.defaultUsername(), util.defaultPassword());
+        hello.deinit(allocator);
+        const left = nowMillis();
+        if (client.executeAndCollectWithTimeout(allocator, "MATCH (a:KP)-[:KE]->(b), (c:KP), (d:KP)-[:NOPE]->(z) RETURN a.i", util.emptyParams(), 1000, 1)) |r| {
+            var res = r;
+            res.deinit(allocator);
+        } else |_| {}
+        client.deinit();
+        var idle_after: ?i64 = null;
+        var prev = procCpuTicks(server_pid);
+        while (nowMillis() - left < 100_000) {
+            sleepMillis(1_000);
+            const now_t = procCpuTicks(server_pid);
+            // Clock ticks are 1/100 s: a join still running spends about
+            // 100 a second.
+            if (now_t -| prev < 30) {
+                idle_after = nowMillis() - left;
+                break;
+            }
+            prev = now_t;
+        }
+        if (idle_after) |ms| std.debug.print("{s}: the server was idle {d} ms after the client left\n", .{ name, ms }) else try failures.append(aa, try std.fmt.allocPrint(aa, "{s}: the server was still busy 100 s after the client left", .{name}));
+        var alive = try util.QuicProtoClient.connect(allocator, addr);
+        defer alive.deinit();
+        var hello2 = try alive.hello(allocator, util.defaultUsername(), util.defaultPassword());
+        hello2.deinit(allocator);
+        try check(aa, &failures, "quic", name, .{ .query = "", .want = "1" }, "alive", try quicAnswer(aa, &alive, "RETURN 1 AS one", &.{}));
+    }
+    try finish(failures.items, "round 4b-1c join bounds (QUIC)");
 }
 
 // CANARY: REQ=REQ-SONNY-3385-GRPC-OWNED-ENTITIES; FEATURE="GrpcStreaming"; ASPECT=RealServer; STATUS=TESTED; TEST=tests/test_sonny_write_allowlist_r4_transport.zig; OWNER=transport; UPDATED=2026-09-29

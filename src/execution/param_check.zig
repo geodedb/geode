@@ -20,6 +20,9 @@
 //!   one kind of element (`queryKindsConflict`).
 //! - SONNY-3248, repeated SET targets (22G03, `RepeatedSetTarget`): one SET
 //!   clause assigns a property once (`setListRepeatsTarget`).
+//! - SONNY-3318, a path variable on an OPTIONAL MATCH after the first
+//!   pattern (0A000, `OptionalPathVariable`): no executor binds it (`count(p)`
+//!   answered 0 of the paths matched).
 //!
 //! The walk goes over the whole statement like the write walk
 //! (write_walk.zig): iteratively, and by reflection over every AST type, so
@@ -31,14 +34,10 @@ const std = @import("std");
 const ast = @import("../gql/ast.zig");
 const Value = @import("../value_types.zig").Value;
 
-/// `MissingParameter`: 42P02. `VariableKindConflict` (42000) and
-/// `RepeatedSetTarget` (22G03) are shape checks that ride on the same walk
-/// (`queryKindsConflict`, `setListRepeatsTarget`), and
-/// `InvalidWindowParameter` (22G03) checks a SKIP or LIMIT parameter's
-/// value: each needs only the statement and the request, so it is refused
-/// here, before any path (a transport's write fast path included) runs
-/// anything.
-pub const Error = error{ MissingParameter, OutOfMemory, VariableKindConflict, RepeatedSetTarget, InvalidWindowParameter };
+/// What the checks refuse (the module doc has each one): `MissingParameter`
+/// (42P02), `VariableKindConflict` (42000), `RepeatedSetTarget` (22G03),
+/// `InvalidWindowParameter` (22G03) and `OptionalPathVariable` (0A000).
+pub const Error = error{ MissingParameter, OutOfMemory, VariableKindConflict, RepeatedSetTarget, InvalidWindowParameter, OptionalPathVariable };
 
 /// Every statement of `program` names only parameters in `supplied` (or ones
 /// it defines with LET). `values`: the supplied parameters' values (empty:
@@ -85,6 +84,7 @@ pub fn checkStatement(stmt: *const ast.Statement, supplied: []const []const u8, 
     if (c.failed) return error.OutOfMemory;
     if (c.kind_conflict) return error.VariableKindConflict;
     if (c.repeated_set_target) return error.RepeatedSetTarget;
+    if (c.optional_path) return error.OptionalPathVariable;
     for (c.used.items) |u| {
         if (has(supplied, u.name) or c.defines(u.scope, u.name)) continue;
         return error.MissingParameter;
@@ -154,6 +154,8 @@ const Collector = struct {
     kind_conflict: bool = false,
     /// SONNY-3248: a SET clause assigns one property of a variable twice.
     repeated_set_target: bool = false,
+    /// SONNY-3318: an OPTIONAL MATCH after the first pattern names a path.
+    optional_path: bool = false,
 
     fn deinit(c: *Collector) void {
         c.stack.deinit(c.alloc);
@@ -250,6 +252,9 @@ const Collector = struct {
                 if (conflict) c.kind_conflict = true;
             } else |_| c.failed = true;
             if (setListRepeatsTarget(v.set_clauses, v.set_clause_ends)) c.repeated_set_target = true;
+            if (v.match.chains.len > 1) for (v.match.chains[1..]) |chain| {
+                if (chain.is_optional and chain.name != null) c.optional_path = true;
+            };
         }
         inline for (@typeInfo(T).@"struct".fields) |field| {
             // A query's LET values are pushed above, each in its own scope.

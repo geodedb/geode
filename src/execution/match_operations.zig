@@ -5338,6 +5338,31 @@ fn computeMultiNodeAggregation(allocator: std.mem.Allocator, expr: ast.Expr, gro
     return Value{ .Null = {} };
 }
 
+// CANARY: REQ=REQ-SONNY-3368-BOUNDED-JOIN; FEATURE="MultiChainRelationshipMatch"; ASPECT=NodeCache; STATUS=TESTED; TEST=tests/test_sonny_write_allowlist_r4b.zig; OWNER=engine; UPDATED=2026-09-29
+/// SONNY-3368 (round 4b-1b review I-B): the node each id names, looked up
+/// once per statement. `getNodePtrForScan` keeps a copy of the node (its
+/// labels and properties) for every call, until the graph's next checkpoint,
+/// and the read budget never sees it; the join called it for the far end of
+/// every relationship of every binding it tried, so a comma join grew by a
+/// node copy per binding (about 700 MB over 1,500 x 1,500 pairs, with a
+/// WHERE that kept none). Now it grows by one copy per node it reaches.
+const NodeCache = struct {
+    store: *graph_store.GraphStore,
+    allocator: std.mem.Allocator,
+    map: std.AutoHashMapUnmanaged(u64, *graph_store.Node) = .empty,
+
+    fn get(self: *NodeCache, id: u64) !?*graph_store.Node {
+        if (self.map.get(id)) |node| return node;
+        const node = self.store.getNodePtrForScan(id) orelse return null;
+        try self.map.put(self.allocator, id, node);
+        return node;
+    }
+
+    fn deinit(self: *NodeCache) void {
+        self.map.deinit(self.allocator);
+    }
+};
+
 /// One endpoint reachable through a variable-length hop, together with the
 /// relationship list that got there (the ISO GQL binding for a quantified
 /// relationship variable).
@@ -5361,6 +5386,7 @@ const VarLenTarget = struct {
 fn expandVarLengthHop(
     allocator: std.mem.Allocator,
     store: *graph_store.GraphStore,
+    nodes: *NodeCache,
     scope: *HopScope,
     start_node: *graph_store.Node,
     hop: ast.Hop,
@@ -5386,10 +5412,13 @@ fn expandVarLengthHop(
     while (try path_iter.next()) |raw_path| {
         var path = raw_path;
         defer path.deinit(allocator);
+        // SONNY-3368 (round 4b-1b review I-C): a walk that finds many paths
+        // and keeps none is still polled.
+        try MultiChainJoin.poll();
         if (path.nodes.items.len == 0) continue;
 
         const end_id = path.nodes.items[path.nodes.items.len - 1];
-        const end_node = store.getNodePtrForScan(end_id) orelse continue;
+        const end_node = try nodes.get(end_id) orelse continue;
         // Graph scoping + tenant + RLS on the endpoint, same as every other
         // seeding site in this executor.
         if (!scope.nodeVisibleCached(end_node)) continue;
@@ -5424,6 +5453,112 @@ fn expandVarLengthHop(
     }
 }
 
+// CANARY: REQ=REQ-SONNY-3318-PATH-BINDING; FEATURE="MultiChainRelationshipMatch"; ASPECT=PathVariable; STATUS=TESTED; TEST=tests/test_sonny_write_allowlist_r4b.zig; OWNER=engine; UPDATED=2026-09-29
+/// SONNY-3318 (round 4b-1b review I-D): a chain `executeMultiChainRelationshipMatch`
+/// binds a path variable to (`MATCH p = (a)-[:R]->(b)-[:S]->(c)`, `p = (a)-
+/// [:S|R]->(b)`), with a name for each of its elements.
+const PathChain = struct { name: []const u8, chain: ast.Chain };
+
+/// The names `pathChains` gives a path's anonymous elements begin with a
+/// byte no query can write.
+const path_element_prefix = "\x00path:";
+
+fn isPathElementName(name: []const u8) bool {
+    return std.mem.startsWith(u8, name, path_element_prefix);
+}
+
+/// `q` with every anonymous node and relationship of a chain a path variable
+/// names given a name the join binds (so the path can be read back from the
+/// binding, `bindPath`), and each such chain in `out`. `q` itself when no
+/// chain is named. What it allocates is `arena`'s.
+fn pathChains(arena: std.mem.Allocator, q: ast.Query, out: *std.ArrayList(PathChain)) !ast.Query {
+    var any = false;
+    for (q.match.chains, 0..) |chain, ci| {
+        if (chainPathName(q, chain, ci) != null) any = true;
+    }
+    if (!any) return q;
+    var named = q;
+    const chains = try arena.dupe(ast.Chain, q.match.chains);
+    for (chains, 0..) |*chain, ci| {
+        const name = chainPathName(q, chain.*, ci) orelse continue;
+        if (chain.head) |*head| {
+            if (head.name == null) head.name = try elementName(arena, ci, 'n', 0);
+        }
+        if (chain.hops.len > 0) {
+            const hops = try arena.dupe(ast.Hop, chain.hops);
+            for (hops, 0..) |*hop, k| {
+                if (hop.left.name == null) hop.left.name = if (k > 0) hops[k - 1].right.name else try elementName(arena, ci, 'n', 0);
+                if (hop.rel.name == null) hop.rel.name = try elementName(arena, ci, 'r', k);
+                if (hop.right.name == null) hop.right.name = try elementName(arena, ci, 'n', k + 1);
+            }
+            chain.hops = hops;
+        }
+        try out.append(arena, .{ .name = name, .chain = chain.* });
+    }
+    named.match.chains = chains;
+    return named;
+}
+
+fn chainPathName(q: ast.Query, chain: ast.Chain, index: usize) ?[]const u8 {
+    if (chain.name) |n| return n;
+    return if (index == 0) q.path_variable else null;
+}
+
+fn elementName(arena: std.mem.Allocator, chain: usize, kind: u8, index: usize) ![]const u8 {
+    return std.fmt.allocPrint(arena, path_element_prefix ++ "{d}{c}{d}", .{ chain, kind, index });
+}
+
+/// The path `chain` bound in `binding`: its nodes and relationships in the
+/// pattern's order (a quantified hop's relationship list with the nodes
+/// between them). Null when an element is unbound.
+fn bindPath(alloc: std.mem.Allocator, nodes_by_id: *NodeCache, chain: ast.Chain, binding: anytype) !Value {
+    var nodes: std.ArrayList(*const graph_store.Node) = .empty;
+    errdefer nodes.deinit(alloc);
+    var edges: std.ArrayList(*const graph_store.Edge) = .empty;
+    errdefer edges.deinit(alloc);
+    const null_value = Value{ .Null = {} };
+    if (chain.hops.len == 0) {
+        const head = chain.head orelse return null_value;
+        const n = binding.vars.get(head.name orelse return null_value) orelse return null_value;
+        try nodes.append(alloc, n);
+    } else {
+        var cur: *const graph_store.Node = binding.vars.get(chain.hops[0].left.name orelse return null_value) orelse return null_value;
+        try nodes.append(alloc, cur);
+        for (chain.hops) |hop| {
+            const right: *const graph_store.Node = binding.vars.get(hop.right.name orelse return null_value) orelse return null_value;
+            const rn = hop.rel.name orelse return null_value;
+            if (binding.edge_vars.get(rn)) |edge| {
+                try edges.append(alloc, edge);
+                try nodes.append(alloc, right);
+            } else if (binding.rel_list_vars.get(rn)) |list| {
+                for (list, 0..) |v, i| {
+                    const edge = switch (v) {
+                        .Edge => |e| e,
+                        else => return null_value,
+                    };
+                    try edges.append(alloc, edge);
+                    if (i + 1 == list.len) break;
+                    const next_id = if (edge.from_id == cur.id) edge.to_id else edge.from_id;
+                    cur = try nodes_by_id.get(next_id) orelse return null_value;
+                    try nodes.append(alloc, cur);
+                }
+                if (list.len > 0) try nodes.append(alloc, right);
+            } else return null_value;
+            cur = right;
+        }
+    }
+    return .{ .Path = .{ .nodes = try nodes.toOwnedSlice(alloc), .edges = try edges.toOwnedSlice(alloc) } };
+}
+
+/// A FILTER's verdict on a row, as the single-chain executors read it.
+fn filterPasses(v: Value) bool {
+    return switch (v) {
+        .Bool => |b| b,
+        .Int => |i| i != 0,
+        else => false,
+    };
+}
+
 /// SONNY-3318: how `executeMultiChainRelationshipMatch` joins a hop, or a
 /// whole chain, to the bindings read so far. `Binding` is that function's
 /// `MatchBinding` (a node map, an edge map, a relationship-list map, and
@@ -5440,6 +5575,7 @@ fn expandVarLengthHop(
 const MultiChainJoin = struct {
     allocator: std.mem.Allocator,
     store: *graph_store.GraphStore,
+    nodes: *NodeCache,
     scope: *HopScope,
     rls_row: *std.StringHashMap(rls.Value),
     filter_graph: []const u8,
@@ -5447,32 +5583,62 @@ const MultiChainJoin = struct {
     prop_env: Env,
     path_mode: ast.PathMode,
 
-    /// May the statement bind `node` to `pattern`?
-    fn nodeFits(self: MultiChainJoin, node: *graph_store.Node, pattern: ast.NodePattern) bool {
+    /// May the statement bind `node` to `pattern`? `scratch` holds what
+    /// evaluating the pattern's property values allocates.
+    fn nodeFits(self: MultiChainJoin, scratch: std.mem.Allocator, node: *graph_store.Node, pattern: ast.NodePattern) bool {
         if (!std.mem.eql(u8, node.graph_name, self.filter_graph)) return false;
         if (!passesTenantFilter(node.*, self.filter_tenant)) return false;
         if (!passesRLSFilter(self.rls_row, node.*)) return false;
         if (!matchesLabels(node, pattern.labels)) return false;
-        return nodeMatchesProps(self.allocator, node, pattern.props, self.prop_env);
+        return nodeMatchesProps(scratch, node, pattern.props, self.prop_env);
     }
 
     /// Every node the session may see that `pattern` matches.
     fn candidates(self: MultiChainJoin, pattern: ast.NodePattern, out: *std.ArrayList(*graph_store.Node)) !void {
+        var scratch = std.heap.ArenaAllocator.init(self.allocator);
+        defer scratch.deinit();
+        var seen: usize = 0;
         if (pattern.labels.len > 0) {
             var ids = try self.store.getNodesByLabels(self.allocator, self.filter_graph, pattern.labels, storageTenantFilter(self.filter_tenant));
             defer ids.deinit(self.allocator);
             for (ids.items) |id| {
+                seen += 1;
+                if (seen % poll_every == 0) {
+                    try poll();
+                    _ = scratch.reset(.retain_capacity);
+                }
                 const node = self.store.getNodePtrForScan(id) orelse continue;
-                if (self.nodeFits(node, pattern)) try out.append(self.allocator, node);
+                if (self.nodeFits(scratch.allocator(), node, pattern)) try out.append(self.allocator, node);
             }
         } else {
             _ = g_full_scan_count.fetchAdd(1, .monotonic);
             var it = self.store.iterateNodesInGraph(self.filter_graph);
             while (it.next()) |node| {
-                if (self.nodeFits(node, pattern)) try out.append(self.allocator, node);
+                seen += 1;
+                if (seen % poll_every == 0) {
+                    try poll();
+                    _ = scratch.reset(.retain_capacity);
+                }
+                if (self.nodeFits(scratch.allocator(), node, pattern)) try out.append(self.allocator, node);
             }
         }
     }
+
+    // CANARY: REQ=REQ-SONNY-3368-BOUNDED-JOIN; FEATURE="MultiChainRelationshipMatch"; ASPECT=ExpansionPoll; STATUS=TESTED; TEST=tests/test_sonny_write_allowlist_r4b.zig; OWNER=engine; UPDATED=2026-09-29
+    /// SONNY-3368 (round 4b-1b review I-C): the read and write budgets and
+    /// the stream's cancel, polled at every step the join takes (each choice
+    /// it tries, every `poll_every` candidates or edges it scans, each path a
+    /// quantified hop walks), not only at a binding it completes. A join
+    /// whose last step never matched (`MATCH (a:P)-[:E]->(b), (c:P), (d:P)-
+    /// [:NONE]->(z)`) completed no binding, so it ran its whole product (64
+    /// million steps at 400 pairs, about an hour at 1,500) with neither a
+    /// disconnect nor the watchdog able to stop it.
+    fn poll() !void {
+        try read_budget.check();
+        try write_budget.check();
+    }
+
+    const poll_every = 256;
 
     fn typeFits(types: []const []const u8, label: []const u8) bool {
         if (types.len == 0) return true;
@@ -5504,6 +5670,9 @@ const MultiChainJoin = struct {
         next: usize = 0,
         undo: [3]Undo = undefined,
         undo_len: usize = 0,
+        /// What finding `choices` allocated; reset each time they are found
+        /// again, when every deeper level is undone.
+        scratch: std.heap.ArenaAllocator,
     };
 
     // CANARY: REQ=REQ-SONNY-3367-VARIABLE-KIND; FEATURE="MultiChainRelationshipMatch"; ASPECT=JoinKind; STATUS=TESTED; TEST=tests/test_sonny_write_allowlist_r4b.zig; OWNER=engine; UPDATED=2026-09-28
@@ -5520,13 +5689,16 @@ const MultiChainJoin = struct {
     /// The ways `step` extends binding `b`, into `out`. `start_cands` is
     /// every candidate an unbound start pattern has (the same for every
     /// binding, so computed once per step).
-    fn choicesFor(self: MultiChainJoin, comptime B: type, b: *const B, step: Step, tracker: []const u8, start_cands: *?std.ArrayList(*graph_store.Node), targets: *std.ArrayList(VarLenTarget), out: *std.ArrayList(Choice)) !void {
+    /// `scratch`: what finding them allocates (a quantified hop's relationship
+    /// lists, a property value's evaluation), which lives until the step's
+    /// choices are found again (`Level.scratch`).
+    fn choicesFor(self: MultiChainJoin, comptime B: type, b: *const B, step: Step, tracker: []const u8, start_cands: *?std.ArrayList(*graph_store.Node), scratch: std.mem.Allocator, out: *std.ArrayList(Choice)) !void {
         out.clearRetainingCapacity();
         switch (step) {
             .start => |start| {
                 if (boundAsRelationship(B, b, start.name)) return;
                 if (start.name) |v| if (b.vars.get(v)) |bound| {
-                    if (self.nodeFits(bound, start)) try out.append(self.allocator, .{ .node = bound });
+                    if (self.nodeFits(scratch, bound, start)) try out.append(self.allocator, .{ .node = bound });
                     return;
                 };
                 if (start_cands.* == null) {
@@ -5541,7 +5713,7 @@ const MultiChainJoin = struct {
             .hop => |hop| {
                 const left = b.vars.get(tracker) orelse return;
                 if (!matchesLabels(left, hop.left.labels)) return;
-                if (!nodeMatchesProps(self.allocator, left, hop.left.props, self.prop_env)) return;
+                if (!nodeMatchesProps(scratch, left, hop.left.props, self.prop_env)) return;
                 const quantified = hop.rel.min_len != null or hop.rel.max_len != null;
                 // SONNY-3367: a far node named like a relationship, or a
                 // relationship named like a node (or like the other kind of
@@ -5553,8 +5725,8 @@ const MultiChainJoin = struct {
                     if (!quantified and b.rel_list_vars.contains(rn)) return;
                 }
                 if (quantified) {
-                    targets.clearRetainingCapacity();
-                    try expandVarLengthHop(self.allocator, self.store, self.scope, left, hop, self.prop_env, self.path_mode, targets);
+                    var targets: std.ArrayList(VarLenTarget) = .empty;
+                    try expandVarLengthHop(scratch, self.store, self.nodes, self.scope, left, hop, self.prop_env, self.path_mode, &targets);
                     for (targets.items) |target| {
                         if (hop.right.name) |rv| if (b.vars.get(rv)) |bound| if (bound.id != target.node.id) continue;
                         try out.append(self.allocator, .{ .node = target.node, .edges = target.edges });
@@ -5564,16 +5736,19 @@ const MultiChainJoin = struct {
                 const empty = [_]u64{};
                 const outgoing: []const u64 = if (hop.rel.dir == .right or hop.rel.dir == .undirected) (self.store.getOutgoingEdgeIds(left.id) orelse &empty) else &empty;
                 const incoming: []const u64 = if (hop.rel.dir == .left or hop.rel.dir == .undirected) (self.store.getIncomingEdgeIds(left.id) orelse &empty) else &empty;
+                var scanned: usize = 0;
                 for ([_][]const u64{ outgoing, incoming }, 0..) |edge_ids, side| {
                     for (edge_ids) |edge_id| {
+                        scanned += 1;
+                        if (scanned % poll_every == 0) try poll();
                         const edge = self.store.getEdgePtrHydrated(edge_id) orelse continue;
                         if (!typeFits(hop.rel.types, edge.label)) continue;
                         if (!self.scope.edgeVisible(edge)) continue;
-                        if (!matchesEdgeProperties(self.allocator, edge.*, hop.rel.props)) continue;
+                        if (!matchesEdgeProperties(scratch, edge.*, hop.rel.props)) continue;
                         if (hop.rel.name) |rn| if (b.edge_vars.get(rn)) |bound| if (bound.id != edge.id) continue;
                         const far_id = if (side == 0) edge.to_id else edge.from_id;
-                        const right = self.store.getNodePtrForScan(far_id) orelse continue;
-                        if (!self.nodeFits(right, hop.right)) continue;
+                        const right = try self.nodes.get(far_id) orelse continue;
+                        if (!self.nodeFits(scratch, right, hop.right)) continue;
                         if (hop.right.name) |rv| if (b.vars.get(rv)) |bound| if (bound.id != right.id) continue;
                         try out.append(self.allocator, .{ .node = right, .edge = edge });
                     }
@@ -5634,7 +5809,7 @@ const MultiChainJoin = struct {
         }
     }
 
-    // CANARY: REQ=REQ-SONNY-3368-BOUNDED-JOIN; FEATURE="MultiChainRelationshipMatch"; ASPECT=StreamingJoin; STATUS=TESTED; TEST=tests/test_sonny_write_allowlist_r4b.zig; OWNER=engine; UPDATED=2026-09-28
+    // CANARY: REQ=REQ-SONNY-3368-BOUNDED-JOIN; FEATURE="MultiChainRelationshipMatch"; ASPECT=StreamingJoin; STATUS=TESTED; TEST=tests/test_sonny_write_allowlist_r4b.zig; OWNER=engine; UPDATED=2026-09-29
     /// SONNY-3368 (round 4b-1 review I-1): join `steps` to every binding of
     /// `seeds`, one complete binding at a time (depth first, each step
     /// binding and unbinding its names on the one binding it extends), and
@@ -5642,14 +5817,25 @@ const MultiChainJoin = struct {
     /// or drops it and says whether to go on. The join built every chain's
     /// product in full before the WHERE and the window saw it: over 1,500
     /// pairs, `MATCH (a:P)-[:E]->(b), (c:P)-[:E]->(d) RETURN a.i LIMIT 1`
-    /// held 2.25 million bindings (37 GB) for one row. Now what the join holds
-    /// is the path it is on and the bindings the sink kept; the read and
-    /// write budgets are polled at every binding it completes.
+    /// held 2.25 million bindings (37 GB) for one row.
+    ///
+    /// SONNY-3368 (round 4b-1b review I-B, I-C): what the join holds is the
+    /// path it is on, each level's scratch (reset when the level's choices
+    /// are found again) and the bindings the sink kept; it grew with every
+    /// binding it tried, outside the read budget. Every step polls the
+    /// budgets and the cancel (`poll`). A chain whose start pattern binds a
+    /// new variable matches the same nodes for every binding: when it
+    /// matches none the join has no binding, and ends before it starts (it
+    /// walked the whole product of the chains before it).
     fn stream(self: MultiChainJoin, comptime B: type, seeds: []B, steps: []const Step, tracker: []const u8, sink: anytype) !void {
+        if (seeds.len == 0) return;
         const levels = try self.allocator.alloc(Level, steps.len);
-        for (levels) |*l| l.* = .{};
+        for (levels) |*l| l.* = .{ .scratch = std.heap.ArenaAllocator.init(self.allocator) };
         defer {
-            for (levels) |*l| l.choices.deinit(self.allocator);
+            for (levels) |*l| {
+                l.choices.deinit(self.allocator);
+                l.scratch.deinit();
+            }
             self.allocator.free(levels);
         }
         const start_cands = try self.allocator.alloc(?std.ArrayList(*graph_store.Node), steps.len);
@@ -5658,20 +5844,31 @@ const MultiChainJoin = struct {
             for (start_cands) |*c| if (c.*) |*list| list.deinit(self.allocator);
             self.allocator.free(start_cands);
         }
-        var targets: std.ArrayList(VarLenTarget) = .empty;
-        defer targets.deinit(self.allocator);
+        for (steps, 0..) |step, i| {
+            const start = switch (step) {
+                .start => |p| p,
+                .hop => continue,
+            };
+            if (start.name) |name| if (bindsBefore(B, &seeds[0], steps[0..i], name)) continue;
+            var cands: std.ArrayList(*graph_store.Node) = .empty;
+            errdefer cands.deinit(self.allocator);
+            try self.candidates(start, &cands);
+            start_cands[i] = cands;
+            if (cands.items.len == 0) return;
+        }
 
         for (seeds) |*seed| {
+            try poll();
             // The step `depth` is choosing for; `depth == steps.len`: complete.
             var depth: usize = 0;
             if (steps.len > 0) {
-                try self.choicesFor(B, seed, steps[0], tracker, &start_cands[0], &targets, &levels[0].choices);
+                _ = levels[0].scratch.reset(.retain_capacity);
+                try self.choicesFor(B, seed, steps[0], tracker, &start_cands[0], levels[0].scratch.allocator(), &levels[0].choices);
                 levels[0].next = 0;
             }
             while (true) {
                 if (depth == steps.len) {
-                    try read_budget.check();
-                    try write_budget.check();
+                    try poll();
                     if (!try sink.accept(seed)) {
                         // Leave the seed as it was.
                         while (depth > 0) {
@@ -5692,16 +5889,33 @@ const MultiChainJoin = struct {
                     undoLevel(B, seed, &levels[depth]);
                     continue;
                 }
+                try poll();
                 const choice = level.choices.items[level.next];
                 level.next += 1;
                 try apply(B, seed, level, steps[depth], tracker, choice);
                 depth += 1;
                 if (depth < steps.len) {
-                    try self.choicesFor(B, seed, steps[depth], tracker, &start_cands[depth], &targets, &levels[depth].choices);
+                    _ = levels[depth].scratch.reset(.retain_capacity);
+                    try self.choicesFor(B, seed, steps[depth], tracker, &start_cands[depth], levels[depth].scratch.allocator(), &levels[depth].choices);
                     levels[depth].next = 0;
                 }
             }
         }
+    }
+
+    /// Whether `name` is bound before step `steps.len`: by the seeds (the
+    /// first chain binds the same names in every seed) or by a step before.
+    fn bindsBefore(comptime B: type, seed: *const B, steps: []const Step, name: []const u8) bool {
+        if (seed.vars.contains(name) or seed.edge_vars.contains(name) or seed.rel_list_vars.contains(name)) return true;
+        for (steps) |step| switch (step) {
+            .start => |p| if (p.name) |n| if (std.mem.eql(u8, n, name)) return true,
+            .hop => |hop| {
+                for ([_]?[]const u8{ hop.left.name, hop.rel.name, hop.right.name }) |maybe| {
+                    if (maybe) |n| if (std.mem.eql(u8, n, name)) return true;
+                }
+            },
+        };
+        return false;
     }
 };
 
@@ -5709,10 +5923,17 @@ const MultiChainJoin = struct {
 // Handle multiple chains with relationships that share variables
 // e.g., MATCH (p:Person)-[:WORKS_FOR]->(c:Company), (p)-[:PURCHASED]->(pr:Product)
 // This function joins chains on shared variables
-fn executeMultiChainRelationshipMatch(allocator: std.mem.Allocator, q: ast.Query, param_names: []const []const u8, param_values: []const Value, current_graph: ?[]const u8) !ExecutionResult {
+fn executeMultiChainRelationshipMatch(allocator: std.mem.Allocator, q_in: ast.Query, param_names: []const []const u8, param_values: []const Value, current_graph: ?[]const u8) !ExecutionResult {
     // SONNY-3041: this executor applies a SET and a REMOVE to each binding;
     // refuse any other write it is handed.
-    try refuseUnappliedWrites(q, .{ .set = true, .remove = true });
+    try refuseUnappliedWrites(q_in, .{ .set = true, .remove = true });
+    // SONNY-3318 (round 4b-1b review I-D): a path variable binds its chain's
+    // path (`pathChains`); it was never bound here, so `MATCH p = (a)-[:R]->
+    // (b)-[:S]->(c) RETURN length(p)` answered 0, and `p` null.
+    var path_arena = std.heap.ArenaAllocator.init(allocator);
+    defer path_arena.deinit();
+    var path_specs: std.ArrayList(PathChain) = .empty;
+    const q = try pathChains(path_arena.allocator(), q_in, &path_specs);
     // CANARY: REQ=REQ-SONNY-3045-MULTIHOP-VARLEN-WRITE; FEATURE="VariableLengthPaths"; ASPECT=MultiHopRefusal; STATUS=TESTED; TEST=tests/test_sonny2707_varlen_set.zig; OWNER=engine; UPDATED=2026-09-27
     // SONNY-3045: a variable-length relationship variable binds the list of
     // its edges (`rel_list_vars`) and a path variable the path; neither has
@@ -5743,6 +5964,8 @@ fn executeMultiChainRelationshipMatch(allocator: std.mem.Allocator, q: ast.Query
     // tenant and RLS), and a quantified hop's walk to every step.
     var hop_scope = HopScope.init(allocator, filter_graph, filter_tenant, &rls_row_local);
     defer hop_scope.deinit();
+    var node_cache = NodeCache{ .store = store, .allocator = allocator };
+    defer node_cache.deinit();
 
     // CANARY: REQ=REQ-BUG731-MATCH-SCOPING; FEATURE="MultiChainRelationshipMatch"; ASPECT=InlineNodeProps; STATUS=TESTED; TEST=tests/test_bug731_match_scoping.zig:201; OWNER=execution; UPDATED=2026-07-31
     // Env used to evaluate inline node-property predicates (`{k: <expr>}`).
@@ -5813,12 +6036,20 @@ fn executeMultiChainRelationshipMatch(allocator: std.mem.Allocator, q: ast.Query
         bindings.deinit(allocator);
     }
 
-    // LIMIT pushdown for no-label full scans (only when no ORDER BY requires all rows)
-    const scan_limit: ?usize = if (q.order_by == null)
+    // SONNY-3368: nothing after the match needs every binding (no WHERE,
+    // FILTER, ORDER BY, DISTINCT, WITH, grouping, aggregate or write), so
+    // reading may stop at SKIP + LIMIT.
+    const plain_window = q.where_clause == null and q.filter_clause == null and q.order_by == null and !q.ret.distinct and
+        q.with_clause == null and q.group_by == null and q.having == null and
+        q.set_clauses.len == 0 and q.remove_clauses.len == 0 and !returnItemsHaveAggregation(q.ret.items);
+    // LIMIT pushdown for no-label full scans. SONNY-3368 (round 4b-1b): only
+    // for a plain window over one chain of one hop; a cap on the first hop
+    // before a later hop, a WHERE or a FILTER cut the answer short.
+    const scan_limit: ?usize = if (plain_window and q.match.chains.len == 1 and q.match.chains[0].hops.len <= 1)
         resolveLimitParam(q.limit, q.limit_param, param_names, param_values)
     else
         null;
-    const scan_offset = if (q.order_by == null)
+    const scan_offset = if (scan_limit != null)
         resolveLimitParam(q.offset, q.offset_param, param_names, param_values)
     else
         null;
@@ -5886,7 +6117,7 @@ fn executeMultiChainRelationshipMatch(allocator: std.mem.Allocator, q: ast.Query
             defer targets.deinit(allocator);
             for (left_candidates.items) |left_node| {
                 targets.clearRetainingCapacity();
-                try expandVarLengthHop(allocator, store, &hop_scope, left_node, hop, prop_env, effectivePathMode(q), &targets);
+                try expandVarLengthHop(allocator, store, &node_cache, &hop_scope, left_node, hop, prop_env, effectivePathMode(q), &targets);
                 for (targets.items) |target| {
                     var binding = MatchBinding.init(allocator);
                     if (hop.left.name) |v| try binding.vars.put(v, left_node);
@@ -6203,6 +6434,7 @@ fn executeMultiChainRelationshipMatch(allocator: std.mem.Allocator, q: ast.Query
     const join = MultiChainJoin{
         .allocator = allocator,
         .store = store,
+        .nodes = &node_cache,
         .scope = &hop_scope,
         .rls_row = &rls_row_local,
         .filter_graph = filter_graph,
@@ -6228,24 +6460,34 @@ fn executeMultiChainRelationshipMatch(allocator: std.mem.Allocator, q: ast.Query
     var env_values = try std.ArrayList(Value).initCapacity(allocator, 8);
     defer env_values.deinit(allocator);
     const BindingEnv = struct {
-        fn fill(alloc: std.mem.Allocator, names: *std.ArrayList([]const u8), values: *std.ArrayList(Value), binding: *const MatchBinding) !void {
+        /// The environment of `binding`: its variables and the paths of
+        /// `paths` (whose arrays `path_alloc` holds). A name `pathChains`
+        /// gave an anonymous element is not a variable, and not in it.
+        fn fill(alloc: std.mem.Allocator, path_alloc: std.mem.Allocator, st: *NodeCache, paths: []const PathChain, names: *std.ArrayList([]const u8), values: *std.ArrayList(Value), binding: *const MatchBinding) !void {
             names.clearRetainingCapacity();
             values.clearRetainingCapacity();
             var var_iter = binding.vars.iterator();
             while (var_iter.next()) |entry| {
+                if (isPathElementName(entry.key_ptr.*)) continue;
                 try names.append(alloc, entry.key_ptr.*);
                 try values.append(alloc, Value{ .Node = entry.value_ptr.* });
             }
             var edge_iter = binding.edge_vars.iterator();
             while (edge_iter.next()) |entry| {
+                if (isPathElementName(entry.key_ptr.*)) continue;
                 try names.append(alloc, entry.key_ptr.*);
                 try values.append(alloc, Value{ .Edge = entry.value_ptr.* });
             }
             // Quantified relationship variables bind to the relationship LIST.
             var rel_list_iter = binding.rel_list_vars.iterator();
             while (rel_list_iter.next()) |entry| {
+                if (isPathElementName(entry.key_ptr.*)) continue;
                 try names.append(alloc, entry.key_ptr.*);
                 try values.append(alloc, Value{ .List = entry.value_ptr.* });
+            }
+            for (paths) |path| {
+                try names.append(alloc, path.name);
+                try values.append(alloc, try bindPath(path_alloc, st, path.chain, binding));
             }
         }
     };
@@ -6260,9 +6502,6 @@ fn executeMultiChainRelationshipMatch(allocator: std.mem.Allocator, q: ast.Query
     // two 1,500-pair chains held 2.25 million bindings.
     const where_in_join = steps.items.len > 0;
     if (where_in_join) {
-        const plain_window = q.where_clause == null and q.filter_clause == null and q.order_by == null and !q.ret.distinct and
-            q.with_clause == null and q.group_by == null and q.having == null and
-            q.set_clauses.len == 0 and q.remove_clauses.len == 0 and !returnItemsHaveAggregation(q.ret.items);
         const join_cap: ?usize = if (plain_window) blk: {
             const lim = resolveLimitParam(q.limit, q.limit_param, param_names, param_values) orelse break :blk null;
             break :blk lim +| (resolveLimitParam(q.offset, q.offset_param, param_names, param_values) orelse 0);
@@ -6271,32 +6510,59 @@ fn executeMultiChainRelationshipMatch(allocator: std.mem.Allocator, q: ast.Query
             alloc: std.mem.Allocator,
             out: std.ArrayList(MatchBinding) = .empty,
             where: ?ast.Expr,
+            filter: ?ast.Expr,
+            store: *NodeCache,
+            paths: []const PathChain,
             names: *std.ArrayList([]const u8),
             values: *std.ArrayList(Value),
             param_names: []const []const u8,
             param_values: []const Value,
             cap: ?usize,
+            /// SONNY-3368 (round 4b-1b review I-B): what evaluating one
+            /// binding's WHERE and FILTER allocates, reset for the next. It
+            /// was allocated from the statement's allocator and kept to the
+            /// end of the statement (about 310 bytes a binding, freed from
+            /// the read budget's count but not from the arena), so a WHERE
+            /// that rejected every binding of a large product grew without
+            /// bound, unseen by the budget.
+            scratch: std.heap.ArenaAllocator,
 
             fn accept(self: *@This(), binding: *const MatchBinding) !bool {
                 if (self.cap) |c| if (self.out.items.len >= c) return false;
-                if (self.where) |where_expr| {
-                    try BindingEnv.fill(self.alloc, self.names, self.values, binding);
-                    const env = Env{ .names = self.names.items, .values = self.values.items, .param_names = self.param_names, .param_values = self.param_values, .allocator = self.alloc };
-                    // A limit the evaluator ran into (the read budget, a
-                    // cancel, memory) fails the query; any other error is
-                    // this row not matching, as before.
-                    const where_result = eval.evalExpr(self.alloc, where_expr, env) catch |err| {
-                        if (execution.isQueryLevelEvalError(err)) return err;
-                        return true;
-                    };
-                    const passes = switch (where_result) {
-                        .Bool => |b| b,
-                        else => false,
-                    };
-                    if (!passes) return true;
+                if (self.where != null or self.filter != null) {
+                    _ = self.scratch.reset(.retain_capacity);
+                    const sa = self.scratch.allocator();
+                    try BindingEnv.fill(self.alloc, sa, self.store, self.paths, self.names, self.values, binding);
+                    const env = Env{ .names = self.names.items, .values = self.values.items, .param_names = self.param_names, .param_values = self.param_values, .allocator = sa };
+                    if (self.where) |where_expr| {
+                        // A limit the evaluator ran into (the read budget, a
+                        // cancel, memory) fails the query; any other error is
+                        // this row not matching, as every executor's WHERE
+                        // treats it (`execution.isQueryLevelEvalError`).
+                        const where_result = eval.evalExpr(sa, where_expr, env) catch |err| {
+                            if (execution.isQueryLevelEvalError(err)) return err;
+                            return true;
+                        };
+                        const passes = switch (where_result) {
+                            .Bool => |b| b,
+                            else => false,
+                        };
+                        if (!passes) return true;
+                    }
+                    // SONNY-3386: the FILTER, as the single-chain executors
+                    // apply it (after the WHERE; an error fails the query).
+                    // It was ignored, so `MATCH (g)-[:R]->(x), (q:Q) FILTER
+                    // q.i = 3` returned every binding.
+                    if (self.filter) |filter_expr| {
+                        if (!filterPasses(try eval.evalExpr(sa, filter_expr, env))) return true;
+                    }
                 }
                 var copy = try binding.clone();
                 errdefer copy.deinit();
+                // A quantified hop's relationship list lives in the join's
+                // scratch: the binding kept owns a copy.
+                var lists = copy.rel_list_vars.iterator();
+                while (lists.next()) |entry| entry.value_ptr.* = try self.alloc.dupe(Value, entry.value_ptr.*);
                 try self.out.append(self.alloc, copy);
                 if (self.cap) |c| if (self.out.items.len >= c) return false;
                 return true;
@@ -6305,12 +6571,17 @@ fn executeMultiChainRelationshipMatch(allocator: std.mem.Allocator, q: ast.Query
         var sink = JoinSink{
             .alloc = allocator,
             .where = q.where_clause,
+            .filter = q.filter_clause,
+            .store = &node_cache,
+            .paths = path_specs.items,
             .names = &env_names,
             .values = &env_values,
             .param_names = param_names,
             .param_values = param_values,
             .cap = join_cap,
+            .scratch = std.heap.ArenaAllocator.init(allocator),
         };
+        defer sink.scratch.deinit();
         errdefer {
             for (sink.out.items) |*b| b.deinit();
             sink.out.deinit(allocator);
@@ -6332,7 +6603,7 @@ fn executeMultiChainRelationshipMatch(allocator: std.mem.Allocator, q: ast.Query
 
     for (bindings.items) |*binding| {
         // Build environment from binding — reuse pre-allocated lists
-        try BindingEnv.fill(allocator, &env_names, &env_values, binding);
+        try BindingEnv.fill(allocator, allocator, &node_cache, path_specs.items, &env_names, &env_values, binding);
 
         const env = Env{
             .names = env_names.items,
@@ -6353,6 +6624,10 @@ fn executeMultiChainRelationshipMatch(allocator: std.mem.Allocator, q: ast.Query
                 else => false,
             };
             if (!passes) continue;
+        };
+        // SONNY-3386: the FILTER, when the join did not apply it.
+        if (!where_in_join) if (q.filter_clause) |filter_expr| {
+            if (!filterPasses(try eval.evalExpr(allocator, filter_expr, env))) continue;
         };
 
         // CANARY: REQ=REQ-BUG731-MATCH-SCOPING; FEATURE="MultiChainRelationshipMatch"; ASPECT=SetClauses; STATUS=TESTED; TEST=tests/test_bug731_match_scoping.zig:248; OWNER=execution; UPDATED=2026-07-31
@@ -6518,6 +6793,14 @@ fn executeMatchWithOptionalPatterns(allocator: std.mem.Allocator, q: ast.Query, 
     // OPTIONAL MATCH goes through the write step (executeMatchQueryImpl), and
     // it wrote nothing here: refuse anything else it is handed.
     try refuseUnappliedWrites(q, .{});
+    // CANARY: REQ=REQ-SONNY-3318-PATH-BINDING; FEATURE="OptionalMatchExecution"; ASPECT=OptionalPathRefused; STATUS=TESTED; TEST=tests/test_sonny_write_allowlist_r4b.zig; OWNER=engine; UPDATED=2026-09-29
+    // SONNY-3318 (round 4b-1b review I-D): this executor never binds a path
+    // variable, so `MATCH (g) OPTIONAL MATCH p = (g)-[:R]->(x) RETURN
+    // count(p)` counted 0 of the paths it matched. Refused (0A000) until it
+    // does, rather than answered wrong.
+    for (q.match.chains[1..]) |chain| {
+        if (chain.is_optional and chain.name != null) return error.OptionalPathVariable;
+    }
     // Per-function reusable RLS row buffer. Shared across every
     // passesRLSFilter call site in this function; nodePropertiesToRLSRowInto
     // (Tasks 1-2 of the H5a fix) clears + refills the buffer per call so
@@ -8972,6 +9255,19 @@ fn multiChainAggregates(q: ast.Query) bool {
     return returnItemsHaveAggregation(q.ret.items);
 }
 
+// CANARY: REQ=REQ-SONNY-3386-MULTI-CHAIN-WITH; FEATURE="MultiChainRelationshipMatch"; ASPECT=WithStage; STATUS=TESTED; TEST=tests/test_sonny_write_allowlist_r4b.zig; OWNER=engine; UPDATED=2026-09-29
+/// SONNY-3386: whether a multi-chain relationship match has a WITH after its
+/// MATCH, which the shared WITH stage runs (`readWithStageRows`: the WHERE
+/// before and after it, its projection, DISTINCT, ORDER BY, SKIP and LIMIT).
+/// The multi-chain executor projected a WITH's items and applied none of
+/// the rest, so `MATCH (g)-[:R]->(x), (q:Q) WITH g, q ORDER BY g.i DESC
+/// LIMIT 1 RETURN g.i` returned all 40 bindings, and `WITH g, q SKIP 39`
+/// skipped none.
+fn multiChainWithStage(q: ast.Query) bool {
+    if (q.ret.items.len == 0 or !sharedProjectionServes(q)) return false;
+    return q.with_clause != null and !q.is_initial_with;
+}
+
 /// Whether the RETURN groups or filters: a RETURN-level GROUP BY (a GROUP BY
 /// after a WITH belongs to the WITH, which groups in the shared projection
 /// already), or a WHERE after RETURN (the parser's HAVING without a GROUP BY).
@@ -10147,7 +10443,7 @@ pub fn executeMatchQueryImpl(allocator: std.mem.Allocator, q: ast.Query, param_n
             // (g)-[:R]->(x), (q:Q) RETURN count(q)` answered one row per
             // match. An aggregate goes through the shared projection over
             // the rows this executor binds.
-            if (multiChainAggregates(q)) return executeReturnOverBindings(allocator, q, param_names, param_values, inline_let_bindings, current_graph);
+            if (multiChainAggregates(q) or multiChainWithStage(q)) return executeReturnOverBindings(allocator, q, param_names, param_values, inline_let_bindings, current_graph);
             return executeMultiChainRelationshipMatch(allocator, q, param_names, param_values, current_graph);
         },
         .match_with_optional_patterns => return executeMatchWithOptionalPatterns(allocator, q, param_names, param_values, inline_let_bindings, current_graph),
