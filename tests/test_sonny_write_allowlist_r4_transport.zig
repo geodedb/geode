@@ -262,6 +262,21 @@ const cases = [_]Case{
         .{ .query = "MATCH (a:L)-[:XR|XS]->(b), (q:LQ {i: 0}) SET b.c = 1" },
         .{ .query = "MATCH (b:L) WHERE b.c = 1 RETURN b.i", .want = "2;3" },
     } },
+    // SONNY-3248 (I-2, I-3): refused before anything is written, on the QUIC
+    // MERGE fast path too (go/oidc's MERGE shape was last-wins there).
+    .{ .name = "3248 repeated SET target", .steps = &.{
+        .{ .query = "MERGE (t:LT1 {k: 1}) SET t.a = 1, t.a = 2", .code = "22G03" },
+        .{ .query = "MERGE (t:LT2 {k: $k}) ON CREATE SET t.a = $v, t.a = 9", .params = &.{ .{ .name = "k", .int = 5 }, .{ .name = "v", .int = 7 } }, .code = "22G03" },
+        .{ .query = "MERGE (t:LT2 {k: $k}) ON CREATE SET t.a = $v ON MATCH SET t.a = 9, t.a = 10", .params = &.{ .{ .name = "k", .int = 5 }, .{ .name = "v", .int = 7 } }, .code = "22G03" },
+        .{ .query = "CREATE (z:LT3 {k: 1}) SET z.a = 1, z.a = 2", .code = "22G03" },
+        .{ .query = "MATCH (q:LQ {i: 1}) CREATE (z:LT4) SET z.a = 1, z.a = 2", .code = "22G03" },
+        .{ .query = "MATCH (t:LT1) RETURN count(t) AS c", .want = "0" },
+        .{ .query = "MATCH (t:LT2) RETURN count(t) AS c", .want = "0" },
+        .{ .query = "MATCH (t:LT3) RETURN count(t) AS c", .want = "0" },
+        .{ .query = "MATCH (t:LT4) RETURN count(t) AS c", .want = "0" },
+        .{ .query = "MERGE (t:LT2 {k: $k}) ON CREATE SET t.a = $v", .params = &.{ .{ .name = "k", .int = 5 }, .{ .name = "v", .int = 7 } } },
+        .{ .query = "MATCH (t:LT2) RETURN t.k, t.a", .want = "5|7" },
+    } },
     // I8.
     .{ .name = "I8 nesting", .steps = &.{
         .{ .query = "WITH 1 AS a WITH 1 AS a WITH 1 AS a WITH 1 AS a WITH 1 AS a WITH 1 AS a WITH 1 AS a WITH 1 AS a WITH 1 AS a WITH 1 AS a WITH 1 AS a WITH 1 AS a WITH 1 AS a WITH 1 AS a WITH 1 AS a WITH 1 AS a WITH 1 AS a WITH 1 AS a WITH 1 AS a WITH 1 AS a WITH 1 AS a WITH 1 AS a WITH 1 AS a WITH 1 AS a WITH 1 AS a RETURN a", .code = "54001" },

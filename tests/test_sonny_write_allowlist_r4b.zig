@@ -725,6 +725,35 @@ test "SONNY-3318 (I-5): the first hop of a comma or multi-hop pattern walks ever
     try runCases("SONNY-3318 (I-5)", &i5_cases);
 }
 
+// SONNY-3248 (I-2): a refused SET writes nothing.
+const w_count = "MATCH (w:W) RETURN count(*) AS c";
+
+const i2_cases = [_]Case{
+    // Refused before the CREATE or MERGE inserts anything.
+    .{ .write = "CREATE (z:Z {k: 1}) SET z.a = 1, z.a = 2", .refused = error.RepeatedSetTarget, .checks = &.{
+        .{ .query = "MATCH (z:Z) RETURN count(*) AS c", .want = &.{"0"} },
+    } },
+    .{ .write = "MATCH (q:Q {i: 1}) CREATE (z:Z2) SET z.a = 1, z.a = 2", .refused = error.RepeatedSetTarget, .checks = &.{
+        .{ .query = "MATCH (z:Z2) RETURN count(*) AS c", .want = &.{"0"} },
+    } },
+    .{ .write = "MERGE (a:W {k: 1}) ON CREATE SET a.x = 1, a.x = 2", .refused = error.RepeatedSetTarget, .checks = &.{
+        .{ .query = w_count, .want = &.{"0"} },
+    } },
+    .{ .write = "MERGE (a:W {k: 1}) SET a.x = 1, a.x = 2", .refused = error.RepeatedSetTarget, .checks = &.{
+        .{ .query = w_count, .want = &.{"0"} },
+    } },
+    .{ .write = "MERGE (a:W {k: 1}) ON CREATE SET a.x = 1, a.x = 2 RETURN a.x", .refused = error.RepeatedSetTarget, .checks = &.{
+        .{ .query = w_count, .want = &.{"0"} },
+    } },
+    // Two SET clauses, or different properties: accepted.
+    .{ .write = "MERGE (a:W {k: 1}) ON CREATE SET a.x = 1 SET a.x = a.x + 1 RETURN a.x", .want = &.{"2"} },
+    .{ .write = "CREATE (z:Z {k: 1}) SET z.a = 1, z.b = 2 RETURN z.a, z.b", .want = &.{"1|2"} },
+};
+
+test "SONNY-3248 (I-2): a SET clause that assigns a property twice is refused before a CREATE or MERGE writes anything, in every session" {
+    try runCases("SONNY-3248 (I-2)", &i2_cases);
+}
+
 // ---------------------------------------------------------------------------
 // SONNY-3244 (round-4a review I-4): statement nesting. The fix is round
 // 14-16's (on fix/sonny-738-r12: max_statement_nesting, stackHasRoom,

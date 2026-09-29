@@ -21,11 +21,12 @@
 const std = @import("std");
 const ast = @import("../gql/ast.zig");
 
-/// `MissingParameter`: 42P02. `VariableKindConflict` (42000) is a shape
-/// check that rides on the same walk (`queryKindsConflict`): it needs only
-/// the statement, so it is refused here, before any path (a transport's
-/// write fast path included) runs anything.
-pub const Error = error{ MissingParameter, OutOfMemory, VariableKindConflict };
+/// `MissingParameter`: 42P02. `VariableKindConflict` (42000) and
+/// `RepeatedSetTarget` (22G03) are shape checks that ride on the same walk
+/// (`queryKindsConflict`, `setListRepeatsTarget`): each needs only the
+/// statement, so it is refused here, before any path (a transport's write
+/// fast path included) runs anything.
+pub const Error = error{ MissingParameter, OutOfMemory, VariableKindConflict, RepeatedSetTarget };
 
 /// Every statement of `program` names only parameters in `supplied` (or ones
 /// it defines with LET).
@@ -68,6 +69,7 @@ pub fn checkStatement(stmt: *const ast.Statement, supplied: []const []const u8) 
     }
     if (c.failed) return error.OutOfMemory;
     if (c.kind_conflict) return error.VariableKindConflict;
+    if (c.repeated_set_target) return error.RepeatedSetTarget;
     for (c.used.items) |u| {
         if (has(supplied, u.name) or c.defines(u.scope, u.name)) continue;
         return error.MissingParameter;
@@ -112,6 +114,8 @@ const Collector = struct {
     failed: bool = false,
     /// SONNY-3367: a pattern names one variable as two kinds of element.
     kind_conflict: bool = false,
+    /// SONNY-3248: a SET clause assigns one property of a variable twice.
+    repeated_set_target: bool = false,
 
     fn deinit(c: *Collector) void {
         c.stack.deinit(c.alloc);
@@ -149,6 +153,9 @@ const Collector = struct {
             if (patternKindsConflict(c.alloc, &.{v.*}, null, &.{})) |conflict| {
                 if (conflict) c.kind_conflict = true;
             } else |_| c.failed = true;
+        }
+        if (T == ast.MergeStatement) {
+            if (setListRepeatsTarget(v.on_create, v.on_create_ends) or setListRepeatsTarget(v.on_match, v.on_match_ends)) c.repeated_set_target = true;
         }
         if (comptime !holds(T)) return;
         if (T == ast.Expr) return c.push(.expr, v);
@@ -188,6 +195,7 @@ const Collector = struct {
             if (queryKindsConflict(c.alloc, v)) |conflict| {
                 if (conflict) c.kind_conflict = true;
             } else |_| c.failed = true;
+            if (setListRepeatsTarget(v.set_clauses, v.set_clause_ends)) c.repeated_set_target = true;
         }
         inline for (@typeInfo(T).@"struct".fields) |field| {
             const is_param_name = comptime (std.mem.eql(u8, field.name, "limit_param") or std.mem.eql(u8, field.name, "offset_param"));
@@ -326,4 +334,44 @@ fn queryKindsConflict(alloc: std.mem.Allocator, head: *const ast.Query) !bool {
         }
     }
     return false;
+}
+
+// CANARY: REQ=REQ-SONNY-3248-REPEATED-SET-TARGET; FEATURE="SetClauseSemantics"; ASPECT=StaticRefusal; STATUS=TESTED; TEST=tests/test_sonny_write_allowlist_r4b.zig; OWNER=engine; UPDATED=2026-09-28
+/// SONNY-3248 (round 4b-1 review I-2, I-3): whether one SET clause of
+/// `clauses` (ending at `ends`, `ast.SetClauseGroups`) assigns one property
+/// of one variable twice, or `SET n = {map}` beside another assignment to n.
+/// The executors refused it only when they applied the clause: after a
+/// CREATE or MERGE had inserted what it created (so a refused `CREATE (z:Z)
+/// SET z.a = 1, z.a = 2` left z behind), and never on the QUIC MERGE fast
+/// path (last one won). Checked on the statement now, before any path runs
+/// it. Two variables bound to one element are still refused where the
+/// executor binds them (`write_scope.refuseRepeatedTargets`).
+pub fn setListRepeatsTarget(clauses: []const ast.SetClause, ends: []const usize) bool {
+    var groups = ast.SetClauseGroups.init(clauses, ends);
+    while (groups.next()) |group| {
+        for (group, 0..) |a, i| {
+            if (a == .Labels) continue;
+            for (group[i + 1 ..]) |b| {
+                if (b == .Labels) continue;
+                if (!std.mem.eql(u8, targetOf(a), targetOf(b))) continue;
+                const clash = switch (a) {
+                    .Property => |pa| switch (b) {
+                        .Property => |pb| std.mem.eql(u8, pa.target.property, pb.target.property),
+                        else => true,
+                    },
+                    else => true,
+                };
+                if (clash) return true;
+            }
+        }
+    }
+    return false;
+}
+
+fn targetOf(sc: ast.SetClause) []const u8 {
+    return switch (sc) {
+        .Property => |p| p.target.object,
+        .Labels => |l| l.node,
+        .AllProperties => |a| a.node,
+    };
 }

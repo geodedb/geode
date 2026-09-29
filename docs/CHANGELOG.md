@@ -1112,10 +1112,9 @@
   the one before wrote. (This entry first cited openCypher for the rule:
   openCypher and Neo4j apply the items of one SET left to right, so a
   statement ported from Neo4j that reads, later in one SET clause, a
-  property the clause assigns earlier reads the old value here. ISO GQL
-  raises a data exception for multiple assignments to one element property
-  in a SET, which is what an evaluate-then-assign rule needs; SONNY-3248
-  below.) Every SET and REMOVE of a MATCH runs in the one
+  property the clause assigns earlier reads the old value here. An
+  evaluate-then-assign rule leaves two assignments to one element property
+  in one SET with no order, so Geode refuses them; SONNY-3248 below.) Every SET and REMOVE of a MATCH runs in the one
   write step (a RETURN after it still shows what was written); MERGE's
   actions, the SET after a CREATE, and the cluster leader's MATCH ... SET
   (SONNY-3246's ordering part; its RLS check and WHERE truthiness remain)
@@ -1191,10 +1190,13 @@
     all evaluated before it assigns them, so two assignments to one
     (element, property) have no order; the second silently won (`SET q.a =
     1, q.a = 2`, or `SET a.c = 1, b.c = 2` with a and b the same node). Such
-    a clause is refused before anything is written (22G03), as ISO GQL
-    raises a data exception for multiple assignments to one element
-    property; so is `SET n = {map}` beside another assignment to n. Two
-    clauses (`SET q.a = 1 SET q.a = 2`) still apply in order.
+    a clause is refused before anything is written (22G03, Geode's
+    invalid-value code; this entry first said ISO GQL raises it, which the
+    repository's grammar cannot confirm); so is `SET n = {map}` beside
+    another assignment to n. Two clauses (`SET q.a = 1 SET q.a = 2`) still
+    apply in order. Round 4b-1b: the refusal is decided on the statement,
+    before any CREATE or MERGE inserts what it creates and before any
+    transport's fast path runs it (below).
   - **A LET is scoped to its query:** `LET $z` inside a subquery defined $z
     for the whole statement, so `... IN (LET $z = 1 MATCH ... RETURN k.i)
     RETURN $z` passed the parameter check and read null. It is refused with
@@ -1245,6 +1247,15 @@
   (q:Q {i: 0}) RETURN count(*)` counted the S edges, and `... SET b.t = 1`
   wrote only their targets. Every type is walked now (the SONNY-3318 entry
   above said so of the later hops only).
+- **A refused SET writes nothing, on every transport (SONNY-3248, round 4b-1
+  review I-2, I-3):** a SET clause that assigns one property of a variable
+  twice was refused only when the executor applied it: after a CREATE or
+  MERGE had inserted what it created (`CREATE (z:Z) SET z.a = 1, z.a = 2`
+  and `MERGE (a:W {k: 1}) ON CREATE SET a.x = 1, a.x = 2` answered 22G03
+  and left the node), and never on the QUIC MERGE fast path, where the last
+  assignment won (go/oidc's single-node key MERGE shape). It is refused
+  from the statement now, before any path runs it. Two variables bound to
+  one element are still refused where they are bound.
 - **The parser's limits (SONNY-3244):** parsing runs before authorization,
   and 25,000 `MATCH (n:G) SET n.x = 1;` statements (625 KB) took a 741 MB
   parser arena, so a 16 MB request could hold about 19 GB; about 60 chained

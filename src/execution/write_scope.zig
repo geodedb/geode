@@ -214,9 +214,9 @@ pub fn labelsAfterSet(allocator: std.mem.Allocator, current: []const []const u8,
 /// of its assignments (SONNY-3242), so two assignments to one (element,
 /// property) have no order to settle them, and the second silently won
 /// (`SET q.a = 1, q.a = 2`; `SET a.c = 1, b.c = 2` with a and b the same
-/// node). ISO GQL raises a data exception for multiple assignments to a graph
-/// element property; so does Geode now (error.RepeatedSetTarget, 22G03), before
-/// anything is written. `SET n = {map}` assigns every property of n, so it
+/// node). Geode refuses it (error.RepeatedSetTarget, 22G03, its invalid-value
+/// code) before anything is written; one variable assigned twice is refused
+/// from the statement already (`param_check.setListRepeatsTarget`). `SET n = {map}` assigns every property of n, so it
 /// shares its element with no other assignment of the clause. `elements[i]`
 /// is what `group[i]` targets on this row (null: nothing, or not applied).
 pub fn refuseRepeatedTargets(group: []const ast.SetClause, elements: []const ?Value) !void {
