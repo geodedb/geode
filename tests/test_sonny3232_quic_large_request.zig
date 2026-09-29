@@ -26,7 +26,7 @@
 // about 1.4 s, and a Debug server time out on 1 MiB in one run and answer
 // 4 MiB in 14.8 s in another. Any size large enough to see burst loss can
 // stall. The same loss recovery carries QUIC responses and the Raft
-// transport. Filed for S2 against the library.
+// transport. The library bug is SONNY-3351 (quic v0.1.44), left for S2.
 //
 // A request past the 16 MiB cap is refused at its length prefix, but the
 // server ends the stream without a reply and without STOP_SENDING (the
@@ -74,7 +74,7 @@ test "SONNY-3232: a QUIC request of 256 KiB is answered, one past the 16 MiB max
     const cases = [_]Case{
         .{ .bytes = 256 * 1024, .served = true },
         // Recorded, not asserted: answered or not depending on timing (burst
-        // loss and the library's loss recovery; SONNY-3232, left for S2).
+        // loss and the library's loss recovery; SONNY-3351, left for S2).
         .{ .bytes = 1024 * 1024, .served = null },
         .{ .bytes = 4 * 1024 * 1024, .served = null },
         // The framed message (the query plus its envelope) just over 16 MiB.
