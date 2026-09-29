@@ -50,6 +50,7 @@ const raft_consensus = @import("../distributed/raft_consensus.zig");
 const cluster_replication = @import("../distributed/cluster_replication.zig");
 // SONNY-3348 (round 19): a statement's replicated writes, proposed as one entry.
 const statement_proposals = @import("../distributed/statement_proposals.zig");
+const pattern_helpers = @import("pattern_helpers.zig");
 
 // Local type aliases
 const Value = value_types.Value;
@@ -4903,9 +4904,18 @@ pub fn executeMatchDeleteQuery(
         .leader => return error.ClusterWriteNotReplicable,
     }
 
+    // SONNY-3384: every clause runs, or the statement is refused. This
+    // executor reads the rows, answers the RETURN, and deletes: a SET or
+    // REMOVE is not applied here. One on a variable the statement deletes
+    // changes nothing that remains; one on any other variable, or one a
+    // RETURN would read back, is refused before anything is written.
+    try checkSetRemoveBeforeDelete(q);
+
     var bindings = try match_operations.readPatternBindings(allocator, q, param_names, param_values, q.inline_let_bindings, current_graph);
     defer bindings.deinit(allocator);
-    var deleted = try match_operations.DeletedElements.fromBindings(allocator, q.delete_items, bindings.rows, false);
+    // SONNY-3384: a DETACH DELETE takes the nodes' edges with them; a
+    // DELETE refuses a node that has one.
+    var deleted = try match_operations.DeletedElements.fromBindings(allocator, q.delete_items, bindings.rows, q.detach_delete);
     defer deleted.deinit(allocator);
 
     var returned: ?ExecutionResult = null;
@@ -4915,10 +4925,49 @@ pub fn executeMatchDeleteQuery(
         try match_operations.ownReturnBeforeDelete(allocator, &returned.?, deleted);
     }
 
-    _ = try deleteElements(allocator, deleted.node_ids, deleted.edge_ids, false, current_graph);
+    _ = try deleteElements(allocator, deleted.node_ids, deleted.edge_ids, q.detach_delete, current_graph);
 
     if (returned) |r| return r;
     return emptyExecutionResult(allocator);
+}
+
+// CANARY: REQ=REQ-SONNY-3384-SET-DELETE-RETURN; FEATURE="DELETE in Query"; ASPECT=EveryClauseRuns; STATUS=TESTED; TEST=tests/test_sonny3384_set_detach_delete.zig; OWNER=engine; UPDATED=2026-09-29
+/// SONNY-3384: a SET or REMOVE before a DELETE in one query
+/// (`executeMatchDeleteQuery`) is allowed only on a variable the DELETE
+/// deletes (nothing of it remains), and not when the RETURN reads that
+/// variable (it would read the value from before the SET). Anything else was
+/// dropped silently; it is refused (0A000) before anything is written.
+fn checkSetRemoveBeforeDelete(q: ast.Query) error{UnsupportedSetBeforeDelete}!void {
+    if (q.set_clauses.len == 0 and q.remove_clauses.len == 0) return;
+    const Check = struct {
+        fn deleted(query: ast.Query, name: []const u8) bool {
+            for (query.delete_items) |item| {
+                const n = switch (item) {
+                    .Variable, .Node, .Relationship => |v| v,
+                };
+                if (std.mem.eql(u8, n, name)) return true;
+            }
+            return false;
+        }
+        fn target(query: ast.Query, name: []const u8) error{UnsupportedSetBeforeDelete}!void {
+            if (!deleted(query, name)) return error.UnsupportedSetBeforeDelete;
+            for (query.ret.items) |item| {
+                if (pattern_helpers.whereExprReferencesVar(item.expr, name)) return error.UnsupportedSetBeforeDelete;
+            }
+            if (query.order_by) |ob| for (ob.keys) |item| {
+                if (pattern_helpers.whereExprReferencesVar(item.expr, name)) return error.UnsupportedSetBeforeDelete;
+            };
+        }
+    };
+    for (q.set_clauses) |sc| switch (sc) {
+        .Property => |p| try Check.target(q, p.target.object),
+        .Labels => |l| try Check.target(q, l.node),
+        .AllProperties => |a| try Check.target(q, a.node),
+    };
+    for (q.remove_clauses) |rc| switch (rc) {
+        .Property => |p| try Check.target(q, p.object),
+        .Labels => |l| try Check.target(q, l.node),
+    };
 }
 
 // CANARY: REQ=REQ-MULTI-GRAPH-DELETE-001; FEATURE="MultiGraphIsolation"; ASPECT=DeleteGraphFilter; STATUS=TESTED; TEST=geodetestlab/specs/multi_graph.yml; OWNER=engine; UPDATED=2025-12-24

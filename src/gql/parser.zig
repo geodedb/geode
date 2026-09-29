@@ -2514,6 +2514,16 @@ pub const Parser = struct {
         // Parse DELETE clause if present (for CREATE ... WITH ... DELETE ... pattern)
         // CANARY: REQ=REQ-GQL-DELETE; FEATURE="DELETE in Query"; ASPECT=Parser; STATUS=TESTED; TEST=no-id-collision-on-delete-create; OWNER=parser; UPDATED=2025-10-14
         var delete_items: []ast.DeleteItem = &.{};
+        // SONNY-3384: and DETACH DELETE. After a SET or a REMOVE the query
+        // left `DETACH` unparsed, and the rest (`DELETE x RETURN ...`) ran as
+        // a statement of its own: the SET was applied, the delete skipped,
+        // and the RETURN answered one row of 0.
+        var detach_delete = false;
+        if (self.cur.kind == .DETACH) {
+            self.advance();
+            detach_delete = true;
+            if (self.cur.kind != .DELETE) _ = try self.expect(.DELETE);
+        }
         if (self.cur.kind == .DELETE) {
             self.advance();
             delete_items = try self.parseDeleteItems();
@@ -2714,6 +2724,7 @@ pub const Parser = struct {
             .set_clauses = set_clauses,
             .remove_clauses = remove_clauses,
             .delete_items = delete_items,
+            .detach_delete = detach_delete,
             .group_by = group_by,
             .having = having_expr,
             .ret = return_clause,

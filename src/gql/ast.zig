@@ -90,6 +90,8 @@ pub const Query = struct {
     set_clauses: []SetClause = &.{},
     remove_clauses: []RemoveClause = &.{},
     delete_items: []DeleteItem = &.{},
+    /// SONNY-3384: the query's DELETE is a DETACH DELETE.
+    detach_delete: bool = false,
     group_by: ?GroupBy = null,
     having: ?Expr = null,
     ret: ReturnClause,

@@ -824,6 +824,8 @@ fn fastPathClause(comptime field: []const u8) FastPathClause {
         "filter_clause", "with_clause",         "cte_list",          "group_by",        "having",
         "ret",           "order_by",            "limit",             "offset",          "limit_param",
         "offset_param",  "path_variable",       "has_recursive_cte", "is_initial_with",
+        // SONNY-3384: a flag of `delete_items`, which declines on its own.
+        "detach_delete",
     };
     inline for (declines) |name| {
         if (comptime std.mem.eql(u8, name, field)) return .declines;

@@ -1149,7 +1149,11 @@
     undo, before the error is answered. This covers every executor that
     changes data through the store (the MATCH executor and its write step,
     CREATE, MATCH ... CREATE, FOR, MERGE, DELETE, the point-write fast
-    path, PROFILE'd statements), in autocommit and in a transaction. A retry applies the statement once (SONNY-3348).
+    path, PROFILE'd statements), in autocommit and in a transaction. A
+    retry applies the statement once (SONNY-3348). (Round 19 correction:
+    on a cluster leader the statements that write once per row or per
+    iteration proposed each row's write at once, so the rows before the
+    failing one stayed on every node. Fixed in round 19, below.)
   - A failed statement aborts its explicit transaction. The transaction is
     rolled back at once, and every later statement of the session is
     refused with 25P02 until the client ends the transaction: ROLLBACK
@@ -1179,6 +1183,83 @@
   **Behaviour change:** after a statement fails in an explicit
   transaction, the session refuses every statement but ROLLBACK or COMMIT
   (25P02); COMMIT then answers 40000.
+- **Round 19: the round 18 review's findings (SONNY-3348, SONNY-3384):**
+  - On a cluster leader a statement commits all of its writes in one Raft
+    entry, or none. The leader holds each write the statement makes and,
+    once the whole statement has evaluated without an error, proposes them
+    together: one entry as before when there is one, a statement batch
+    (GBAT) when there are more. A statement that fails proposes nothing,
+    and nothing proposed is undone. `FOR i IN [1, 2, 3] CREATE ...` and
+    `MATCH ... MERGE ...` proposed one entry per row and waited for each,
+    so when the third row failed the first two were committed on every
+    node. Every node applies a batch's writes in order; a create in a batch
+    takes ids of its own (`2^54 + (index * 4096 + position) * 64`). A
+    client's idempotency key covers the whole statement: a retried
+    statement is one no-op (the rows of one statement were taken for
+    retries of each other).
+  - A statement's undo record counts against the write budget
+    (`GEODE_WRITE_EXECUTOR_BUDGET_MB`, 8192 MB by default, 0 for none):
+    the record and the write executor's working set together stay under
+    it. A write whose before-image does not fit is not made, and the
+    statement fails with 53200 and undoes what it recorded:
+    `MATCH (n) DETACH DELETE n` over a graph larger than the budget
+    answers 53200 and leaves the graph as it was. The record held the
+    image of every change it made, a whole graph for that statement, in
+    memory no budget saw.
+  - A failed statement whose undo cannot undo every change answers 40003
+    (statement completion unknown), not its own error: it is partly
+    applied, and a blind retry would apply the rest twice. ROLLBACK, and
+    the rollback of a failed transaction, continue past a change they
+    cannot undo (they stopped at the first and dropped the rest undone),
+    and report it: ROLLBACK answers 40003, and so does the ROLLBACK or
+    COMMIT that ends a transaction whose rollback was incomplete. The
+    failures are counted (`statement_undo_replay_failures_total`, with
+    `statement_undo_replayed_statements_total` and
+    `statement_undo_budget_refusals_total`, on the metrics endpoint).
+  - `MATCH ... SET ... DETACH DELETE x RETURN ...` deletes x with its
+    edges and answers its RETURN. The query took DELETE after a SET but
+    not DETACH DELETE: the SET was applied, the delete skipped, and the
+    answer was one row of 0 (SONNY-3384). A SET or REMOVE before a DELETE
+    in one statement is not applied; on a variable the statement deletes
+    it changes nothing that remains, and any other is refused (0A000):
+    one on a variable it does not delete, or one its RETURN or ORDER BY
+    reads back.
+  - Smaller fixes:
+    - A statement that fails in an explicit transaction aborts the
+      session's engine transaction before its undo, which then commits on
+      its own. The undo's changes joined the transaction's engine
+      transaction, which was aborted next: after a crash the failed
+      statement's write could come back.
+    - A statement failing at a later page of its results, a node scan that
+      fails to start with any error, and a request whose engine
+      transaction outlived it all abort the explicit transaction; the last
+      left the transaction silently, into autocommit.
+    - The COMMIT and ROLLBACK messages carry the code of their failure:
+      COMMIT of a failed transaction answers 40000 as the COMMIT statement
+      does (it answered only `success = false`).
+    - A node whose public id the engine-direct readers cannot read is
+      skipped only when it is gone; any other read error fails the query.
+    - The before-image of a deleted node reads its edges through the
+      checked adjacency readers: an adjacency it cannot read refuses the
+      delete (it recorded the node without its edges).
+    - A Raft node freed the result of every entry it applied (a created
+      node's id leaked, 8 bytes per create, on every node).
+
+  **Behaviour change:** on a cluster leader, a statement whose later row
+  reads what an earlier row of it wrote (MERGE of a key an earlier row
+  merged with ON MATCH SET, a MATCH of a node or a label and property an
+  earlier row created or changed) is refused (40001) before anything is
+  proposed: the earlier rows are not applied until the statement's entry
+  commits, so the leader cannot read them. A MERGE of a key an earlier row
+  created, without ON MATCH SET, matches it. A statement of more than 4096
+  writes, or of more than 1000 KiB of them, is refused the same way.
+
+  **Upgrade note:** upgrade every node of a cluster before sending
+  statements that write more than once. A node before round 19 does not
+  know the batch entry: it logs "unknown create payload version —
+  skipping" and applies none of it (no partial statement, no junk data),
+  and falls behind the others. A statement with one write is proposed as
+  before.
 
 ### Fixed
 
@@ -1258,21 +1339,21 @@
   updated for a changed property: such an index can keep the undone value
   until it is rebuilt. A change the storage engine refuses to undo (it
   runs out of memory mid-undo) is logged and counted
-  (`statement_undo.replay_failures_total`), and the statement still fails
-  with its own error. A statement's record is its own thread's: a
+  (`statement_undo_replay_failures_total`), and the statement fails with
+  40003 (round 19). A statement's record is its own thread's: a
   change made for it on another thread is not in it. A deleted node comes
   back with a new storage slot under its old id. The CLI's saved undo log
   does not keep a deleted node's tenant: after a CLI restart its ROLLBACK
   restores the node into the default tenant. The bulk-ingest fast paths
   (autocommit only) write storage directly and are not recorded; they take
   literals and parameters only and fail on any evaluation error.
-- **A cluster write that fails after its Raft entry commits stays.** The
-  leader evaluates every expression of a replicated write before it
-  proposes it, and proposes nothing once a limit or an IN type error is
-  recorded, so a limit never decides a replicated value. If waiting for
-  the committed entry to apply times out, the statement fails and the
-  write stays applied on every node (the outcome is unknown to the client,
-  as for any timed-out commit).
+- **A cluster write that fails after its Raft entry commits stays.** A
+  statement on the leader proposes its writes, as one entry, only after it
+  has evaluated completely without an error (round 19), so a limit or any
+  other error in any row proposes nothing. If the entry then does not
+  commit in time, the statement fails with 08006 and the outcome is
+  unknown to the client, as for any timed-out commit: the entry may still
+  commit, and nothing proposed is undone.
 - **A Raft `drop_graph` entry can stall the apply loop (SONNY-3350, latent).**
   Applying it takes the graph's write lock. A leader writer that holds that
   lock while it waits (up to 5 s) for its own later entry to apply holds
