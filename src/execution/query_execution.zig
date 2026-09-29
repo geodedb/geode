@@ -1626,15 +1626,21 @@ pub fn executeQueryWithContext(allocator: std.mem.Allocator, q: ast.Query, conte
         }
     }
 
-    // Empty environment for evaluating LET binding expressions
-    const let_env = Env{
-        .names = &.{},
-        .values = &.{},
-        .allocator = allocator,
-        .exec_context = exec_ctx,
-    };
-
+    // CANARY: REQ=REQ-SONNY-3248-LET-SCOPE; FEATURE="ParameterBinding"; ASPECT=LetChain; STATUS=TESTED; TEST=tests/test_sonny_write_allowlist_r4b.zig; OWNER=engine; UPDATED=2026-09-28
+    // SONNY-3248 (round 4b-1 review I-6): each LET is evaluated with the
+    // request's parameters and the LETs before it, in order. It was
+    // evaluated with no parameter at all, so `LET $a = 2, $b = $a + 1`
+    // bound $b to null (and `LET $x = $p` read $p as null), while
+    // `param_check` accepted both.
     for (q.let_bindings) |binding| {
+        const let_env = Env{
+            .names = &.{},
+            .values = &.{},
+            .param_names = param_names.items,
+            .param_values = param_values.items,
+            .allocator = allocator,
+            .exec_context = exec_ctx,
+        };
         const value = try eval.evalExpr(allocator, binding.value, let_env);
         try param_names.append(allocator, binding.variable);
         try param_values.append(allocator, value);
@@ -2185,8 +2191,17 @@ pub fn executeLegacyQueryWithResolvedParams(
         // Handle initial CALL subquery (e.g., CALL { MATCH (n) RETURN n } WITH ... RETURN ...)
         .call_subquery => {
             const call_subq = q.initial_call_subquery.?;
+            // SONNY-3248 (round 4b-1 review I-6): the body sees the
+            // statement's parameters as `param_check` resolves them: the
+            // request's, and the LETs (and CTEs) before the CALL. It ran with
+            // the request's only, so `LET $x = 2 CALL { MATCH (n) WHERE n.i =
+            // $x RETURN n.i AS k } RETURN k` read $x as null and answered
+            // nothing.
+            var body_context = context;
+            body_context.query_param_names = param_names.items;
+            body_context.query_param_values = param_values.items;
             // Execute the CALL subquery to get initial results
-            const call_result = try executeQueryWithContext(allocator, call_subq.*, context);
+            const call_result = try executeQueryWithContext(allocator, call_subq.*, body_context);
 
             // If there's a WITH clause, apply it to the CALL results
             if (q.with_clause) |with_clause| {

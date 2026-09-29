@@ -2545,7 +2545,7 @@ pub fn handleExecute(request_bytes: []const u8, allocator: std.mem.Allocator, ep
 
             // SONNY-3247: every parameter the program names is one the request
             // supplies (42P02 otherwise), checked before any path runs it.
-            execution.checkProgramParams(&parse_result.program, bindings.names) catch |err| {
+            execution.checkProgramParams(&parse_result.program, bindings.names, bindings.values) catch |err| {
                 const info = proto_util.mapError(err);
                 var resp = try buildErrorResponse(allocator, info.code, info.message, &.{}, &.{});
                 defer resp.deinit(allocator);

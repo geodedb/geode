@@ -7349,7 +7349,7 @@ fn handleClientMessage(
             // SONNY-3247: every parameter the program names is one the request
             // supplies (42P02 otherwise), checked before any path runs it: the
             // write fast paths below evaluated a missing one as null.
-            execution.checkProgramParams(&parse_result.program, bindings.names) catch |err| {
+            execution.checkProgramParams(&parse_result.program, bindings.names, bindings.values) catch |err| {
                 const info = proto_util.mapError(err);
                 try sendExecuteError(gpa, stream, info.code, info.message, &.{}, &.{});
                 return;

@@ -1264,6 +1264,18 @@
   checked against the indexes of the labels a SET adds (22000), and a
   CREATE's or MERGE's pattern is checked with the labels its SET (or ON
   CREATE) gives it, before the node is created.
+- **LET chains, CALL { } bodies and window values (SONNY-3248, round 4b-1
+  review I-6, m-2, m-3):** a LET was evaluated with no parameter in scope,
+  so `LET $a = 2, $b = $a + 1 ... WHERE n.i = $b` and `LET $x = $p` read
+  null, and `... LIMIT $b` returned every row; each LET now sees the
+  request's parameters and the LETs before it (one naming a later LET is
+  refused, 42P02). A `CALL { }` body sees the LETs before the CALL (`LET $x
+  = 2 CALL { MATCH (n) WHERE n.i = $x RETURN n.i AS k } RETURN k` answered
+  nothing). A SKIP or LIMIT parameter that is not a non-negative integer
+  (`-1`, `2.0`, `'2'`) is refused (22G03) before anything runs; it read as
+  "no window" and returned every row. A WITH's SKIP or LIMIT parameter
+  windows the WITH in every session (an in-memory, tenant or RLS session
+  returned every row).
 - **The parser's limits (SONNY-3244):** parsing runs before authorization,
   and 25,000 `MATCH (n:G) SET n.x = 1;` statements (625 KB) took a 741 MB
   parser arena, so a 16 MB request could hold about 19 GB; about 60 chained

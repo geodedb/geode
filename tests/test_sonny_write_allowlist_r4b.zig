@@ -754,6 +754,36 @@ test "SONNY-3248 (I-2): a SET clause that assigns a property twice is refused be
     try runCases("SONNY-3248 (I-2)", &i2_cases);
 }
 
+// SONNY-3248 (I-6, m-2, m-3): window values; LET chains and CALL { } bodies.
+const r4b1b_3248_cases = [_]Case{
+    // m-2: a SKIP or LIMIT value that is no non-negative integer.
+    .{ .params = &.{.{ .name = "l", .expr = "-1" }}, .write = "MATCH (n:G) RETURN n.i LIMIT $l", .refused = error.InvalidWindowParameter },
+    .{ .params = &.{.{ .name = "l", .expr = "2.0" }}, .write = "MATCH (n:G) RETURN n.i LIMIT $l", .refused = error.InvalidWindowParameter },
+    .{ .params = &.{.{ .name = "l", .expr = "'2'" }}, .write = "MATCH (n:G) RETURN n.i LIMIT $l", .refused = error.InvalidWindowParameter },
+    .{ .params = &.{.{ .name = "s", .expr = "-3" }}, .write = "MATCH (n:G) RETURN n.i SKIP $s", .refused = error.InvalidWindowParameter },
+    .{ .params = &.{.{ .name = "l", .expr = "-1" }}, .write = "MATCH (q:Q) SET q.c = 1 RETURN q.i LIMIT $l", .refused = error.InvalidWindowParameter, .checks = &.{
+        .{ .query = q_c, .want = &.{} },
+    } },
+    .{ .write = "LET $x = -1 MATCH (n:G) RETURN n.i LIMIT $x", .refused = error.InvalidWindowParameter },
+    .{ .write = "LET $x = 'a' MATCH (n:G) RETURN n.i SKIP $x", .refused = error.InvalidWindowParameter },
+    .{ .params = &.{.{ .name = "l", .expr = "0" }}, .write = "MATCH (n:G) RETURN n.i LIMIT $l", .want = &.{} },
+    // m-3: a WITH's LIMIT parameter.
+    .{ .params = &.{.{ .name = "l", .expr = "3" }}, .write = "MATCH (n:G) WHERE n.i < 5 WITH n LIMIT $l RETURN n.g", .want = &.{ "a", "a", "a" } },
+    .{ .params = &.{.{ .name = "l", .expr = "3" }}, .write = "MATCH (n:G) WITH n.i AS i ORDER BY i LIMIT $l RETURN i", .want = &.{ "0", "1", "2" } },
+    // I-6: a LET reads the LETs before it; a CALL { } body reads the LETs
+    // before the CALL.
+    .{ .write = "LET $a = 2, $b = $a + 1 MATCH (n:G) WHERE n.i = $b RETURN n.i", .want = &.{"3"} },
+    .{ .write = "LET $a = 2, $b = $a + 1 MATCH (n:G) RETURN n.i AS i ORDER BY i LIMIT $b", .want = &.{ "0", "1", "2" } },
+    .{ .write = "LET $x = 2 CALL { MATCH (n:G) WHERE n.i = $x RETURN n.i AS k } RETURN k", .want = &.{"2"} },
+    .{ .params = &.{.{ .name = "p", .expr = "4" }}, .write = "LET $x = $p MATCH (n:G) WHERE n.i = $x RETURN n.i", .want = &.{"4"} },
+    // A LET does not see itself or the LETs after it.
+    .{ .write = "LET $a = $b, $b = 1 MATCH (n:G) WHERE n.i = $a RETURN n.i", .refused = error.MissingParameter },
+};
+
+test "SONNY-3248 (round 4b-1 review): window values, LET chains and CALL bodies, in every session" {
+    try runCases("SONNY-3248 (4b-1b)", &r4b1b_3248_cases);
+}
+
 // SONNY-3319 (I-4): a label SET checks the vectors the node already holds.
 const i4_vec_cases = [_]Case{
     .{ .setup = &(vec_setup ++ [_][]const u8{"CREATE (:VO2 {id: 5, emb: vectorf32('[8.0, 8.0]')})"}), .write = "MATCH (n:VO2) SET n:VD", .refused = error.VectorDimensionMismatch, .checks = &.{

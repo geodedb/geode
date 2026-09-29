@@ -277,6 +277,19 @@ const cases = [_]Case{
         .{ .query = "MERGE (t:LT2 {k: $k}) ON CREATE SET t.a = $v", .params = &.{ .{ .name = "k", .int = 5 }, .{ .name = "v", .int = 7 } } },
         .{ .query = "MATCH (t:LT2) RETURN t.k, t.a", .want = "5|7" },
     } },
+    // SONNY-3248 (m-2): a SKIP or LIMIT value that is no non-negative integer.
+    .{ .name = "3248 window values", .steps = &.{
+        .{ .query = "MATCH (n:L) RETURN n.i LIMIT $l", .params = &.{.{ .name = "l", .int = -1 }}, .code = "22G03" },
+        .{ .query = "MATCH (n:L) RETURN n.i LIMIT $l", .params = &.{.{ .name = "l", .value = "2" }}, .code = "22G03" },
+        .{ .query = "MATCH (n:L) RETURN n.i SKIP $s", .params = &.{.{ .name = "s", .int = -2 }}, .code = "22G03" },
+        .{ .query = "MATCH (n:L) WHERE n.i < 3 RETURN n.i LIMIT $l", .params = &.{.{ .name = "l", .int = 0 }}, .want = "" },
+    } },
+    // SONNY-3248 (I-6): LET chains and a CALL { } body read the LETs before them.
+    .{ .name = "3248 LET chain", .steps = &.{
+        .{ .query = "LET $a = 2, $b = $a + 1 MATCH (n:L) WHERE n.i = $b RETURN n.i", .want = "3" },
+        .{ .query = "LET $x = 2 CALL { MATCH (n:L) WHERE n.i = $x RETURN n.i AS k } RETURN k", .want = "2" },
+        .{ .query = "LET $a = $b, $b = 1 MATCH (n:L) WHERE n.i = $a RETURN n.i", .code = "42P02" },
+    } },
     // I8.
     .{ .name = "I8 nesting", .steps = &.{
         .{ .query = "WITH 1 AS a WITH 1 AS a WITH 1 AS a WITH 1 AS a WITH 1 AS a WITH 1 AS a WITH 1 AS a WITH 1 AS a WITH 1 AS a WITH 1 AS a WITH 1 AS a WITH 1 AS a WITH 1 AS a WITH 1 AS a WITH 1 AS a WITH 1 AS a WITH 1 AS a WITH 1 AS a WITH 1 AS a WITH 1 AS a WITH 1 AS a WITH 1 AS a WITH 1 AS a WITH 1 AS a WITH 1 AS a RETURN a", .code = "54001" },

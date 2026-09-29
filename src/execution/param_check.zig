@@ -20,21 +20,25 @@
 
 const std = @import("std");
 const ast = @import("../gql/ast.zig");
+const Value = @import("../value_types.zig").Value;
 
 /// `MissingParameter`: 42P02. `VariableKindConflict` (42000) and
 /// `RepeatedSetTarget` (22G03) are shape checks that ride on the same walk
-/// (`queryKindsConflict`, `setListRepeatsTarget`): each needs only the
-/// statement, so it is refused here, before any path (a transport's write
-/// fast path included) runs anything.
-pub const Error = error{ MissingParameter, OutOfMemory, VariableKindConflict, RepeatedSetTarget };
+/// (`queryKindsConflict`, `setListRepeatsTarget`), and
+/// `InvalidWindowParameter` (22G03) checks a SKIP or LIMIT parameter's
+/// value: each needs only the statement and the request, so it is refused
+/// here, before any path (a transport's write fast path included) runs
+/// anything.
+pub const Error = error{ MissingParameter, OutOfMemory, VariableKindConflict, RepeatedSetTarget, InvalidWindowParameter };
 
 /// Every statement of `program` names only parameters in `supplied` (or ones
-/// it defines with LET).
-pub fn checkProgram(program: *const ast.Program, supplied: []const []const u8) Error!void {
-    for (program.statements) |*stmt| try checkStatement(stmt, supplied);
+/// it defines with LET). `values`: the supplied parameters' values (empty:
+/// not known, and a SKIP or LIMIT parameter's value is not checked).
+pub fn checkProgram(program: *const ast.Program, supplied: []const []const u8, values: []const Value) Error!void {
+    for (program.statements) |*stmt| try checkStatement(stmt, supplied, values);
 }
 
-pub fn checkStatement(stmt: *const ast.Statement, supplied: []const []const u8) Error!void {
+pub fn checkStatement(stmt: *const ast.Statement, supplied: []const []const u8, values: []const Value) Error!void {
     var sfa = std.heap.stackFallback(4096, std.heap.smp_allocator);
     var c = Collector{ .alloc = sfa.get() };
     defer c.deinit();
@@ -74,6 +78,27 @@ pub fn checkStatement(stmt: *const ast.Statement, supplied: []const []const u8) 
         if (has(supplied, u.name) or c.defines(u.scope, u.name)) continue;
         return error.MissingParameter;
     }
+    // CANARY: REQ=REQ-SONNY-3248-LIMIT-PARAM; FEATURE="Pagination"; ASPECT=InvalidWindowValue; STATUS=TESTED; TEST=tests/test_sonny_write_allowlist_r4b.zig; OWNER=engine; UPDATED=2026-09-28
+    // SONNY-3248 (round 4b-1 review m-2): a SKIP or LIMIT parameter the
+    // request supplies is a non-negative integer. Any other value (-1, 2.0,
+    // '2', null) read as "no window", so every row came back. One a LET
+    // defines is checked where the LET is evaluated (`execution.windowParam`).
+    if (values.len == supplied.len) for (c.windows.items) |u| {
+        if (c.defines(u.scope, u.name)) continue;
+        for (supplied, values) |name, value| {
+            if (!std.mem.eql(u8, name, u.name)) continue;
+            if (!validWindowValue(value)) return error.InvalidWindowParameter;
+            break;
+        }
+    };
+}
+
+/// A SKIP or LIMIT value: a non-negative integer.
+pub fn validWindowValue(v: Value) bool {
+    return switch (v) {
+        .Int => |i| i >= 0,
+        else => false,
+    };
 }
 
 fn has(names: []const []const u8, name: []const u8) bool {
@@ -105,6 +130,8 @@ const Collector = struct {
     stack: std.ArrayList(Item) = .empty,
     /// The parameters the statement names, each with the LET scope it is in.
     used: std.ArrayList(struct { name: []const u8, scope: u32 }) = .empty,
+    /// The SKIP and LIMIT parameters among them.
+    windows: std.ArrayList(struct { name: []const u8, scope: u32 }) = .empty,
     /// Every `LET $x = ...`, linked to the LET scope around it.
     lets: std.ArrayList(Let) = .empty,
     /// The LET scope of what is being visited.
@@ -120,6 +147,7 @@ const Collector = struct {
     fn deinit(c: *Collector) void {
         c.stack.deinit(c.alloc);
         c.used.deinit(c.alloc);
+        c.windows.deinit(c.alloc);
         c.lets.deinit(c.alloc);
     }
 
@@ -184,7 +212,12 @@ const Collector = struct {
             // `LET $x = <expr>` before a query defines $x for it and what it
             // holds; an inline `LET x = <expr>` after its MATCH defines a
             // variable, which no `$x` reads.
-            for (v.let_bindings) |binding| {
+            // SONNY-3248 (round 4b-1 review I-6): a LET's value sees the
+            // LETs before it, not itself or the ones after it (the executor
+            // evaluates them in order): `LET $a = $b, $b = 1` names a $b not
+            // yet defined.
+            for (v.let_bindings) |*binding| {
+                c.push(.expr, &binding.value);
                 c.lets.append(c.alloc, .{ .parent = c.scope, .name = binding.variable }) catch {
                     c.failed = true;
                     return;
@@ -198,10 +231,17 @@ const Collector = struct {
             if (setListRepeatsTarget(v.set_clauses, v.set_clause_ends)) c.repeated_set_target = true;
         }
         inline for (@typeInfo(T).@"struct".fields) |field| {
+            // A query's LET values are pushed above, each in its own scope.
+            if (comptime T == ast.Query and std.mem.eql(u8, field.name, "let_bindings")) continue;
             const is_param_name = comptime (std.mem.eql(u8, field.name, "limit_param") or std.mem.eql(u8, field.name, "offset_param"));
             if (is_param_name) {
                 if (field.type != ?[]const u8) @compileError("param_check: " ++ @typeName(T) ++ "." ++ field.name ++ " is not a parameter name");
-                if (@field(v.*, field.name)) |name| c.use(name);
+                if (@field(v.*, field.name)) |name| {
+                    c.use(name);
+                    c.windows.append(c.alloc, .{ .name = name, .scope = c.scope }) catch {
+                        c.failed = true;
+                    };
+                }
             } else {
                 c.visit(field.type, &@field(v.*, field.name));
             }

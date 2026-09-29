@@ -980,27 +980,46 @@ fn freeRowValues(allocator: std.mem.Allocator, result: *ExecutionResult, row: []
 /// parameters), else the one the request supplies; a non-negative integer,
 /// else none (as the executors read it). `LET $x = 3 MATCH ... LIMIT $x`
 /// returned every row.
-fn windowParam(allocator: std.mem.Allocator, name: ?[]const u8, q: ast.Query, context: ExecutionContext) ?usize {
+///
+/// SONNY-3248 (round 4b-1 review I-6, m-2): the LETs are evaluated in order,
+/// each with the request's parameters and the LETs before it, as the query
+/// evaluates them (`LET $a = 2, $b = $a + 1 ... LIMIT $b` read $a as null
+/// and returned every row); and a value that is no non-negative integer is
+/// refused (error.InvalidWindowParameter, 22G03), where it returned every
+/// row. A request parameter's value is checked before the statement runs
+/// (`param_check`).
+fn windowParam(allocator: std.mem.Allocator, name: ?[]const u8, q: ast.Query, context: ExecutionContext) !?usize {
     const n = name orelse return null;
-    var i = q.let_bindings.len;
-    while (i > 0) {
-        i -= 1;
-        const binding = q.let_bindings[i];
-        if (!std.mem.eql(u8, binding.variable, n)) continue;
-        const env = Env{ .names = &.{}, .values = &.{}, .param_names = context.query_param_names, .param_values = context.query_param_values, .allocator = allocator };
-        const v = eval.evalExpr(allocator, binding.value, env) catch return null;
-        return windowValue(v);
+    var last: ?usize = null;
+    for (q.let_bindings, 0..) |binding, i| {
+        if (std.mem.eql(u8, binding.variable, n)) last = i;
+    }
+    if (last) |upto| {
+        var names: std.ArrayList([]const u8) = .empty;
+        defer names.deinit(allocator);
+        var values: std.ArrayList(Value) = .empty;
+        defer values.deinit(allocator);
+        try names.appendSlice(allocator, context.query_param_names);
+        try values.appendSlice(allocator, context.query_param_values);
+        var v: Value = .Null;
+        for (q.let_bindings[0 .. upto + 1]) |binding| {
+            const env = Env{ .names = &.{}, .values = &.{}, .param_names = names.items, .param_values = values.items, .allocator = allocator };
+            v = try eval.evalExpr(allocator, binding.value, env);
+            try names.append(allocator, binding.variable);
+            try values.append(allocator, v);
+        }
+        return try windowValue(v);
     }
     for (context.query_param_names, context.query_param_values) |pn, pv| {
-        if (std.mem.eql(u8, pn, n)) return windowValue(pv);
+        if (std.mem.eql(u8, pn, n)) return try windowValue(pv);
     }
     return null;
 }
 
-fn windowValue(v: Value) ?usize {
+fn windowValue(v: Value) !usize {
     return switch (v) {
-        .Int => |i| if (i >= 0) @as(usize, @intCast(i)) else null,
-        else => null,
+        .Int => |i| if (i >= 0) @as(usize, @intCast(i)) else error.InvalidWindowParameter,
+        else => error.InvalidWindowParameter,
     };
 }
 
@@ -1224,8 +1243,8 @@ pub const param_check = @import("execution/param_check.zig");
 /// else error.MissingParameter (42P02), before anything runs. The transports
 /// check right after parsing, ahead of their write fast paths; the entry
 /// points below check again for an in-process caller.
-pub fn checkProgramParams(program: *const ast.Program, names: []const []const u8) param_check.Error!void {
-    try param_check.checkProgram(program, names);
+pub fn checkProgramParams(program: *const ast.Program, names: []const []const u8, values: []const Value) param_check.Error!void {
+    try param_check.checkProgram(program, names, values);
 }
 
 // CANARY: REQ=REQ-SONNY-2823-SESSION-ENGINE-TXN; FEATURE="TransactionManagement"; ASPECT=ProgramEnd; STATUS=TESTED; TEST=tests/test_sonny2823_session_engine_txn.zig; OWNER=storage; UPDATED=2026-09-27
@@ -1264,7 +1283,7 @@ pub fn validateProgramShapes(program: *const ast.Program, context: ExecutionCont
 pub fn executeProgramWithContext(allocator: std.mem.Allocator, program: *const ast.Program, context: ExecutionContext) !ExecutionResult {
     // SONNY-3247: at the outermost entry point, the parameters are the
     // request's (a nested entry's context carries the ones its caller bound).
-    if (t_entry_depth == 0) try param_check.checkProgram(program, context.query_param_names);
+    if (t_entry_depth == 0) try param_check.checkProgram(program, context.query_param_names, context.query_param_values);
     // SONNY-2823: the program's session engine transaction ends with it.
     enterEntryPoint();
     defer leaveEntryPoint();
@@ -1466,7 +1485,7 @@ fn executeStatement(allocator: std.mem.Allocator, stmt: ast.Statement) !Executio
 // enclosing statement's flag.
 pub fn executeStatementWithContext(allocator: std.mem.Allocator, stmt: ast.Statement, context: ExecutionContext) !ExecutionResult {
     // SONNY-3247: see `executeProgramWithContext`.
-    if (t_entry_depth == 0) try param_check.checkStatement(&stmt, context.query_param_names);
+    if (t_entry_depth == 0) try param_check.checkStatement(&stmt, context.query_param_names, context.query_param_values);
     // SONNY-2823: a statement run on its own (the PROFILE paths) is a
     // program; its session engine transaction ends with it.
     enterEntryPoint();
@@ -1582,6 +1601,10 @@ fn executeStatementWithContextInner(allocator: std.mem.Allocator, stmt: ast.Stat
 
             // Check if query has SKIP or LIMIT
             try validateHopBounds(q.match);
+            // SONNY-3248: the window is resolved (and a bad value refused)
+            // before the statement runs, so a refused one writes nothing.
+            const start = q.offset orelse try windowParam(allocator, q.offset_param, q, context) orelse 0;
+            const limit_value: ?usize = q.limit orelse try windowParam(allocator, q.limit_param, q, context);
             var result = try executeQueryWithContext(allocator, q, context);
 
             try applyMatchGuard(allocator, &result, context, q.match.chains.len > 0);
@@ -1593,9 +1616,7 @@ fn executeStatementWithContextInner(allocator: std.mem.Allocator, stmt: ast.Stat
             // $p` and an in-memory `MATCH (n:G) RETURN n.i LIMIT $p` returned
             // every row (the executors that read the parameter themselves
             // apply it first; a LIMIT applied twice is the same window).
-            const start = q.offset orelse windowParam(allocator, q.offset_param, q, context) orelse 0;
             var end = result.rows.len;
-            const limit_value: ?usize = q.limit orelse windowParam(allocator, q.limit_param, q, context);
             if (limit_value) |limit_count| {
                 const end_limit = std.math.add(usize, start, limit_count) catch std.math.maxInt(usize);
                 end = @min(end, end_limit);
@@ -4233,8 +4254,14 @@ pub fn executeWithClauseWithGroupByAndParams(allocator: std.mem.Allocator, input
         new_rows = std.ArrayList([]Value).fromOwnedSlice(rows_slice);
     }
 
+    // SONNY-3248 (round 4b-1 review m-3): a SKIP or LIMIT parameter on the
+    // WITH windows it as a literal does (`MATCH (n) WITH n LIMIT $l RETURN
+    // n.i` returned every row in an in-memory session).
+    const with_offset: ?u64 = with_clause.offset orelse if (try withWindowParam(with_clause.offset_param, param_names, param_values)) |v| @as(u64, v) else null;
+    const with_limit: ?u64 = with_clause.limit orelse if (try withWindowParam(with_clause.limit_param, param_names, param_values)) |v| @as(u64, v) else null;
+
     // Apply OFFSET if present
-    if (with_clause.offset) |offset_val| {
+    if (with_offset) |offset_val| {
         const offset_usize = @min(offset_val, new_rows.items.len);
         if (offset_usize > 0) {
             // Remove the first offset_usize rows
@@ -4248,7 +4275,7 @@ pub fn executeWithClauseWithGroupByAndParams(allocator: std.mem.Allocator, input
     }
 
     // Apply LIMIT if present
-    if (with_clause.limit) |limit_val| {
+    if (with_limit) |limit_val| {
         const limit_usize = @min(limit_val, new_rows.items.len);
         if (limit_usize < new_rows.items.len) {
             // Keep only the first limit_usize rows
@@ -4272,6 +4299,18 @@ pub fn executeWithClauseWithGroupByAndParams(allocator: std.mem.Allocator, input
         .rows = try new_rows.toOwnedSlice(allocator),
         .flags = new_flags,
     };
+}
+
+/// A WITH's SKIP or LIMIT parameter `name`, from the parameters in scope
+/// (the request's and the statement's LETs): a non-negative integer, else
+/// error.InvalidWindowParameter; null when the WITH names none (or it is
+/// not in scope, as before).
+fn withWindowParam(name: ?[]const u8, param_names: []const []const u8, param_values: []const eval.Value) !?usize {
+    const n = name orelse return null;
+    for (param_names, param_values) |pn, pv| {
+        if (std.mem.eql(u8, pn, n)) return try windowValue(pv);
+    }
+    return null;
 }
 
 /// Whether two values are equal (moved to `execution/value_equality.zig`,
