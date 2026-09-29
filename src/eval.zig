@@ -197,6 +197,34 @@ pub fn takeDeferredLimitError(owns: bool) ?EvalError {
     return pending;
 }
 
+// CANARY: REQ=REQ-SONNY-3348-LIMIT-ATOMICITY; FEATURE="ExpressionEvaluator"; ASPECT=PendingStatementFailure; STATUS=TESTED; TEST=tests/test_sonny3348_limit_atomicity.zig; OWNER=eval; UPDATED=2026-09-28
+/// SONNY-3348 (round 17): the errors a statement's relay fails it with.
+pub const StatementFailure = error{ ExpressionTooDeep, ReadQueryBudgetExceeded, ReadQueryCancelled, OutOfMemory, InListRequiresList };
+
+/// SONNY-3348 (round 17): the error the statement running on this thread
+/// will fail with at its relay (`execution.executeStatementWithContext`),
+/// once a caller has swallowed a limit (`noteLimitError`) or an IN type
+/// error inside it; null outside a statement scope, or when nothing was
+/// recorded. The store refuses every change while it is set
+/// (`graph_store.statementWriteFence`): a value a limit turned into NULL,
+/// false or 0, or a row it skipped, is never written, and neither is
+/// anything after it in the statement. The relay failed the statement only
+/// after it had run, so its writes stayed: `MATCH (n:C) SET n.w = EXISTS {
+/// ... }` answered 54001 and `n.w` was set on every row.
+pub fn pendingStatementFailure() ?StatementFailure {
+    if (in_predicate_scope_depth == 0) return null;
+    if (deferred_limit_error) |err| return switch (err) {
+        error.ExpressionTooDeep => error.ExpressionTooDeep,
+        error.ReadQueryBudgetExceeded => error.ReadQueryBudgetExceeded,
+        error.ReadQueryCancelled => error.ReadQueryCancelled,
+        // Only the limits `isResourceLimitError` names are recorded, and of
+        // those only memory is left.
+        else => error.OutOfMemory,
+    };
+    if (in_predicate_type_error) return error.InListRequiresList;
+    return null;
+}
+
 /// SONNY-3251: a test seam. When set on a thread, `evalExpr` refuses with
 /// `ExpressionTooDeep` as if the stack were spent, so a test can see what
 /// each caller does with the refusal on any expression. Never set outside

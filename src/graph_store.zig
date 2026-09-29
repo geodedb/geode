@@ -4502,6 +4502,7 @@ pub const GraphStore = struct {
         graph_name: []const u8,
         tenant: []const u8,
     ) !void {
+        try statementWriteFence(); // SONNY-3348
         // PHASE 1b chokepoint: build the graph's resident indexes BEFORE this
         // write so loop2 (run on first touch) can't later double-count the
         // node/labels this create is about to insert.
@@ -4549,6 +4550,7 @@ pub const GraphStore = struct {
         graph_name: []const u8,
         tenant: []const u8,
     ) !void {
+        try statementWriteFence(); // SONNY-3348
         self.ensureGraphHydrated(graph_name); // PHASE 1b chokepoint (hydrate before write)
         try self.ensureGraph(graph_name);
         const im = try self.getOrCreateIdMap(graph_name);
@@ -4620,6 +4622,7 @@ pub const GraphStore = struct {
     // CANARY: REQ=REQ-MULTI-TENANT-003; FEATURE="PerTenantIsolation"; ASPECT=NodeCreation; STATUS=TESTED; TEST=src/graph_store.zig; OWNER=enterprise; UPDATED=2026-04-01
     // GAP-0279: Create a node tagged with both graph_name and tenant_id for per-tenant isolation
     pub fn createNodeWithGraphAndTenant(self: *GraphStore, labels: []const []const u8, graph_name: []const u8, tenant: []const u8) !u64 {
+        try statementWriteFence(); // SONNY-3348
         // PHASE 1b chokepoint: build resident indexes BEFORE this write so a
         // later first-touch loop2 can't double-count this node/labels.
         self.ensureGraphHydrated(graph_name);
@@ -4750,6 +4753,7 @@ pub const GraphStore = struct {
         n: usize,
         out_allocator: std.mem.Allocator,
     ) ![]u64 {
+        try statementWriteFence(); // SONNY-3348
         if (n == 0) return try out_allocator.alloc(u64, 0);
         self.ensureGraphHydrated(graph_name); // PHASE 1b chokepoint (hydrate before write)
 
@@ -6580,6 +6584,7 @@ pub const GraphStore = struct {
     }
 
     pub fn setNodeProperty(self: *GraphStore, node_id: u64, key: []const u8, value: PropertyValue) !void {
+        try statementWriteFence(); // SONNY-3348
         self.ensureNodeGraphHydrated(node_id); // PHASE 1b chokepoint (hydrate before write)
         // C3 (review-0023): hydrate the node BODY on miss before the durable
         // write below is gated on residency. P3 snapshot-served warm hydration
@@ -6733,6 +6738,7 @@ pub const GraphStore = struct {
     /// CLI commands (e.g. `geode user mfa-setup`) to hang when the server
     /// was concurrently servicing queries against the same global adapter.
     pub fn setNodePropertiesBatch(self: *GraphStore, node_id: u64, entries: []const BatchPropertyEntry) !void {
+        try statementWriteFence(); // SONNY-3348
         const node_meta = self.nodes.get(node_id) orelse return error.NodeNotFound;
 
         // --- Adapter path: single lock acquisition for all properties ---
@@ -6994,6 +7000,7 @@ pub const GraphStore = struct {
     }
 
     pub fn removeNodeProperty(self: *GraphStore, node_id: u64, key: []const u8) void {
+        if (statementWritesFenced()) return; // SONNY-3348
         self.ensureNodeGraphHydrated(node_id); // PHASE 1b chokepoint (hydrate before write)
         // C3 (review-0023): hydrate the node body on miss — without this the
         // resident-only gates below turn a REMOVE on a cold (post-warm-reopen)
@@ -7080,6 +7087,7 @@ pub const GraphStore = struct {
     }
 
     pub fn addNodeLabel(self: *GraphStore, node_id: u64, label: []const u8) !void {
+        try statementWriteFence(); // SONNY-3348
         self.ensureNodeGraphHydrated(node_id); // PHASE 1b chokepoint (hydrate before write)
         if (global_vtable) |vt| {
             if (vt.addNodeLabelFn) |f| {
@@ -7148,6 +7156,7 @@ pub const GraphStore = struct {
     }
 
     pub fn removeNodeLabel(self: *GraphStore, node_id: u64, label: []const u8) !void {
+        try statementWriteFence(); // SONNY-3348
         self.ensureNodeGraphHydrated(node_id); // PHASE 1b chokepoint (hydrate before write)
         if (global_vtable) |vt| {
             if (vt.removeNodeLabelFn) |f| {
@@ -8680,6 +8689,7 @@ pub const GraphStore = struct {
     // CANARY: REQ=REQ-MULTI-TENANT-003; FEATURE="PerTenantIsolation"; ASPECT=EdgeCreation; STATUS=TESTED; TEST=src/graph_store.zig; OWNER=enterprise; UPDATED=2026-04-01
     // GAP-0279: Create an edge tagged with both graph_name and tenant_id for per-tenant isolation
     pub fn createEdgeWithGraphAndTenant(self: *GraphStore, from_id: u64, to_id: u64, edge_type: []const u8, graph_name: []const u8, tenant: []const u8) !u64 {
+        try statementWriteFence(); // SONNY-3348
         self.ensureGraphHydrated(graph_name); // PHASE 1b chokepoint (hydrate before write)
         // The `geode.graph_store.create_edge` trace span was rolled back
         // (again) here.  History:
@@ -9277,6 +9287,7 @@ pub const GraphStore = struct {
     }
 
     pub fn setEdgeProperty(self: *GraphStore, edge_id: u64, key: []const u8, value: PropertyValue) !void {
+        try statementWriteFence(); // SONNY-3348
         self.ensureEdgeGraphHydrated(edge_id); // PHASE 1b chokepoint (hydrate before write)
         if (isInternalPersistedPropertyKey(key)) return error.ReservedPropertyKey;
         // FLE defense-in-depth: encrypt String values before adapter write and in-memory storage.
@@ -9401,6 +9412,7 @@ pub const GraphStore = struct {
     /// Intended for internal bulk-ingest callers; regular per-property
     /// callers keep using `setEdgeProperty`.
     pub fn setEdgePropertiesBatch(self: *GraphStore, edge_id: u64, entries: []const BatchPropertyEntry) !void {
+        try statementWriteFence(); // SONNY-3348
         self.ensureEdgeGraphHydrated(edge_id); // PHASE 1b chokepoint (hydrate before write)
         const edge = self.getEdgeHydrated(edge_id) orelse return error.EdgeNotFound;
 
@@ -9534,6 +9546,7 @@ pub const GraphStore = struct {
     }
 
     pub fn removeEdgeProperty(self: *GraphStore, edge_id: u64, key: []const u8) void {
+        if (statementWritesFenced()) return; // SONNY-3348
         self.ensureEdgeGraphHydrated(edge_id); // PHASE 1b chokepoint (hydrate before write)
         if (isInternalPersistedPropertyKey(key)) return;
         if (global_vtable) |vt| {
@@ -14246,6 +14259,7 @@ pub const GraphStore = struct {
 
     /// Delete a node and mark store dirty
     pub fn deleteNode(self: *GraphStore, node_id: u64) void {
+        if (statementWritesFenced()) return; // SONNY-3348
         self.ensureNodeGraphHydrated(node_id); // PHASE 1b chokepoint (before any cache read)
         // Capture graph_name before deletion for WAL notification and handle routing.
         // SONNY-3233 (round 15): a copy: the delete frees the node's own.
@@ -14285,6 +14299,7 @@ pub const GraphStore = struct {
 
     /// Delete an edge and mark store dirty
     pub fn deleteEdge(self: *GraphStore, edge_id: u64) void {
+        if (statementWritesFenced()) return; // SONNY-3348
         self.ensureEdgeGraphHydrated(edge_id); // PHASE 1b chokepoint (before any cache read)
         // Capture graph_name before deletion for WAL notification and handle
         // routing. PHASE 1: hydrate-on-miss so an EVICTED edge can still be
@@ -15765,6 +15780,32 @@ pub const MutationOp = enum(u8) {
     add_node_label = 9,
     remove_node_label = 10,
 };
+
+// CANARY: REQ=REQ-SONNY-3348-LIMIT-ATOMICITY; FEATURE="Execution"; ASPECT=StoreWriteFence; STATUS=TESTED; TEST=tests/test_sonny3348_limit_atomicity.zig; OWNER=storage; UPDATED=2026-09-28
+/// SONNY-3348 (round 17): a change on this thread while its statement is to
+/// fail at the relay (`eval.pendingStatementFailure`: a limit, or an IN type
+/// error, a caller swallowed) is refused with that error, before the engine,
+/// the memory or the mutation log (WAL, replication) see it. So a value a
+/// limit turned into NULL, false or 0 is never written, nor is any change
+/// after it, on every executor: they all change data through these methods
+/// (the legacy MATCH, CREATE, MERGE and DELETE executors, the point-write
+/// fast path, procedures). The relay failed such a statement only after it
+/// had run: `MATCH (n:C) SET n.w = EXISTS { ... }` answered 54001 with `n.w`
+/// set on every row.
+///
+/// The methods that return an error refuse with it; `deleteNode`,
+/// `deleteEdge`, `removeNodeProperty` and `removeEdgeProperty` return
+/// nothing, and change nothing (the statement fails at its relay). The
+/// rollback and replay setters (`*NoSave`) are not fenced: a rollback runs
+/// in a scope of its own, after the failed statement's.
+fn statementWriteFence() @import("eval.zig").StatementFailure!void {
+    if (@import("eval.zig").pendingStatementFailure()) |err| return err;
+}
+
+/// SONNY-3348: `statementWriteFence` for the methods that return nothing.
+fn statementWritesFenced() bool {
+    return @import("eval.zig").pendingStatementFailure() != null;
+}
 
 /// Callback signature for mutation notifications.
 /// Parameters: op, id1 (node/edge), id2 (to_id for edges, 0 otherwise),

@@ -1096,6 +1096,20 @@
 
   **Behaviour change:** `GEODE_QUIC_ADMISSION_STACK_MB` below 8 is taken
   as 8.
+- **Round 17: the round 16 review's findings (SONNY-3348):**
+  - A statement the limit relay fails writes nothing the limit decided.
+    The relay failed the statement only after it had run, so its writes
+    stayed: `MATCH (n:C) SET n.w = EXISTS { ... }`, where the subquery's
+    WHERE ran into 54001, answered 54001 with `n.w` set to false on every
+    row. Once a caller swallows a limit (54001, out of memory, the read
+    budget, a cancel) or an IN type error, the store refuses every further
+    change of the statement, before the engine, the in-memory graph, the
+    WAL and Raft replication see it, and a cluster leader proposes nothing.
+    This holds for every executor (the MATCH, CREATE, MERGE and DELETE
+    executors, the point-write fast path, procedures), in autocommit and in
+    an explicit transaction, which fails with the statement (SONNY-3348).
+    Changes the statement applied before the limit was reached stay, as
+    they do for any statement that fails part way (see Known limitations).
 
 ### Fixed
 
@@ -1175,6 +1189,14 @@
   to a node or edge it matched stay after ROLLBACK, and after a failed
   statement's rollback. Until that is fixed, do not rely on ROLLBACK to
   undo changes to existing data.
+- **A statement that fails part way keeps what it changed before the
+  failure (SONNY-3059, SONNY-3348).** There is no statement-level undo.
+  A statement that runs into a limit refuses every change after it, but
+  keeps the changes it made before: on earlier rows, or before a RETURN,
+  or (in the MATCH executor, which evaluates a WITH's items after its SET
+  and REMOVE) before the WITH that ran into it. The same holds for any
+  other error part way. In a transaction the statement fails the
+  transaction, and ROLLBACK undoes what it created (see above).
 - **Large QUIC requests can stall (SONNY-3232, left for S2).** The cause
   is loss recovery in the QUIC library (quic v0.1.44): when the receiver
   drains its socket slowly and the kernel drops datagrams in a burst, the

@@ -2311,6 +2311,18 @@ fn clusterWriteRole() error{ClusterNotLeader}!ClusterWriteRole {
     return .leader;
 }
 
+// CANARY: REQ=REQ-SONNY-3348-LIMIT-ATOMICITY; FEATURE="DistributedCluster"; ASPECT=ProposeFence; STATUS=TESTED; TEST=tests/test_sonny3348_limit_atomicity.zig; OWNER=distributed; UPDATED=2026-09-28
+/// SONNY-3348 (round 17): the leader proposes a write to the Raft log only
+/// when its statement is not to fail at the relay (`eval.pendingStatementFailure`,
+/// a limit or an IN type error a caller swallowed). Every node applies a
+/// committed entry on its apply thread, outside the statement, where the
+/// store's own fence (`graph_store.statementWriteFence`) does not see the
+/// statement: a value a limit decided was applied across the cluster and
+/// the statement then failed.
+fn fenceClusterWrite() eval.StatementFailure!void {
+    if (eval.pendingStatementFailure()) |err| return err;
+}
+
 /// Map an evaluated GQL Value to a scalar PropertyValue the single-node-create
 /// replication codec supports, or null when the type is outside that slice (so
 /// the caller fails closed rather than writing leader-local).
@@ -2448,6 +2460,7 @@ fn clusterReplicateNodeCreate(
     };
     defer allocator.free(payload); // proposeCommand serializes a copy; safe to free after.
 
+    try fenceClusterWrite(); // SONNY-3348: nothing a swallowed limit decided is proposed
     const cmd = raft_consensus.Command{ .graph_mutation = .{
         .graph = graph,
         .mutation_type = .create,
@@ -2639,6 +2652,7 @@ fn clusterReplicateEdgeCreate(
     };
     defer allocator.free(payload); // proposeCommand serializes a copy; safe to free after.
 
+    try fenceClusterWrite(); // SONNY-3348: nothing a swallowed limit decided is proposed
     const cmd = raft_consensus.Command{ .graph_mutation = .{
         .graph = graph,
         .mutation_type = .create,
@@ -3394,6 +3408,7 @@ fn clusterReplicateMerge(
         };
         defer allocator.free(payload); // proposeCommand serializes a copy; safe to free after.
 
+        try fenceClusterWrite(); // SONNY-3348: nothing a swallowed limit decided is proposed
         const cmd = raft_consensus.Command{ .graph_mutation = .{
             .graph = target_graph,
             .mutation_type = .merge,
@@ -3431,6 +3446,7 @@ fn clusterReplicateMerge(
     };
     defer allocator.free(payload); // proposeCommand serializes a copy; safe to free after.
 
+    try fenceClusterWrite(); // SONNY-3348: nothing a swallowed limit decided is proposed
     const cmd = raft_consensus.Command{ .graph_mutation = .{
         .graph = target_graph,
         .mutation_type = .create,
@@ -4190,6 +4206,7 @@ fn clusterReplicateDelete(
     };
     defer allocator.free(payload); // proposeCommand serializes a copy; safe to free after.
 
+    try fenceClusterWrite(); // SONNY-3348: nothing a swallowed limit decided is proposed
     const cmd = raft_consensus.Command{ .graph_mutation = .{
         .graph = filter_graph,
         .mutation_type = .delete,
@@ -4437,6 +4454,7 @@ fn clusterReplicateMatchSet(
     };
     defer allocator.free(payload); // proposeCommand serializes a copy; safe to free after.
 
+    try fenceClusterWrite(); // SONNY-3348: nothing a swallowed limit decided is proposed
     const cmd = raft_consensus.Command{ .graph_mutation = .{
         .graph = filter_graph,
         .mutation_type = .update,
@@ -4688,6 +4706,7 @@ fn clusterReplicateMatchCreate(
     };
     defer allocator.free(payload); // proposeCommand serializes a copy; safe to free after.
 
+    try fenceClusterWrite(); // SONNY-3348: nothing a swallowed limit decided is proposed
     const cmd = raft_consensus.Command{ .graph_mutation = .{
         .graph = filter_graph,
         .mutation_type = .create,
