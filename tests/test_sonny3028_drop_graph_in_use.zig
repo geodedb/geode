@@ -204,7 +204,10 @@ test "SONNY-3028: over gRPC DROP GRAPH of the graph the session's transaction ch
     try testing.expect(!entry.state.in_txn);
     try testing.expectEqual(@as(usize, 0), fx.countLabel(f.st, "g1", "X"));
     try testing.expectEqual(@as(usize, 0), fx.engineActive("g1"));
-    // Outside a transaction the graph drops.
+    // SONNY-3348 round 18: the failed transaction is aborted until the
+    // client ends it; then, outside a transaction, the graph drops.
+    _ = try fx.expectRefused(ga, s, "DROP GRAPH g1", "25P02");
+    try testing.expect(try fx.rollback(ga, s));
     try fx.expectRuns(ga, s, "DROP GRAPH g1");
     try testing.expect(!f.st.graphExists("g1"));
 }

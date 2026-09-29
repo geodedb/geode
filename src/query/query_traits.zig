@@ -198,6 +198,40 @@ pub fn transactionControl(program: *const ast.Program) TxnControl {
     return ctl;
 }
 
+// CANARY: REQ=REQ-SONNY-3348-ABORTED-TXN; FEATURE="TransactionManagement"; ASPECT=AbortedTxnGate; STATUS=TESTED; TEST=tests/test_sonny3348_limit_atomicity.zig; OWNER=engine; UPDATED=2026-09-28
+/// SONNY-3348 (round 18, I2): what a request does to a session whose explicit
+/// transaction failed (`ServerState.txn_aborted`). A program that starts with
+/// ROLLBACK ends the aborted transaction and runs; one that starts with
+/// COMMIT ends it and fails (the transaction was rolled back, not
+/// committed); anything else is refused (25P02) and the session stays
+/// aborted. The session never falls back to autocommit.
+pub const AbortedTxnVerdict = enum { rollback, commit, refuse };
+
+pub fn abortedTxnVerdict(program: *const ast.Program) AbortedTxnVerdict {
+    if (program.statements.len == 0) return .refuse;
+    return switch (program.statements[0]) {
+        .Rollback => .rollback,
+        .Commit => .commit,
+        else => .refuse,
+    };
+}
+
+/// SONNY-3348 (round 18, I2): is the program's last transaction control a
+/// COMMIT or a ROLLBACK? A program that fails after it ended its
+/// transaction (a COMMIT whose storage commit failed, or one run after the
+/// failure, which rolls back) does not leave its session aborted.
+pub fn endsTransactionLast(program: *const ast.Program) bool {
+    var ends = false;
+    for (program.statements) |stmt| switch (stmt) {
+        .StartTransaction => |st| {
+            if (st.body == null) ends = false;
+        },
+        .Commit, .Rollback => ends = true,
+        else => {},
+    };
+    return ends;
+}
+
 /// SONNY-3026: a PROFILE runs the statement it wraps, and an EXPLAIN names
 /// one; both are looked inside. `PROFILE ROLLBACK` counted as no transaction
 /// control at all, so it ran under a read lock and the handler kept the

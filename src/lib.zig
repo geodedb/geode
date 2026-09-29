@@ -234,6 +234,8 @@ pub const enhanced_materialized_views = @import("query/enhanced_materialized_vie
 // CANARY: REQ=REQ-TXN-UNDO-003; FEATURE="TransactionUndoLog"; ASPECT=LibExport; STATUS=TESTED; TEST=geodetestlab/specs/transaction_state_basic.yml; OWNER=engine; UPDATED=2025-12-23
 // Re-export transaction undo log for CLI rollback support
 pub const txn_undo_log = @import("txn_undo_log.zig");
+/// SONNY-3348 (round 18): the statement undo record.
+pub const statement_undo = @import("statement_undo.zig");
 
 // Machine Learning and Analytics
 pub const ml = struct {

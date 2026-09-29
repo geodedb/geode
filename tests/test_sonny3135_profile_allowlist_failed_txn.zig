@@ -158,7 +158,10 @@ test "SONNY-3135 (N7b): over gRPC a program that fails inside a transaction abor
     const b_in_engine: usize = if (ad.getNodesByLabelCapped("g1", "B", null, ga)) |ids| ids.len else |_| 0;
     try testing.expectEqual(@as(usize, 0), b_in_engine);
 
-    // The session goes on: a new transaction commits.
+    // SONNY-3348 round 18: the transaction is aborted until the client ends
+    // it. The session goes on: a new transaction commits.
+    try testing.expect(entry.state.txn_aborted);
+    try testing.expect(try fx.rollback(ga, s));
     try fx.begin(ga, s);
     try fx.expectRuns(ga, s, "CREATE (:C {v: 1})");
     try testing.expect(try fx.commit(ga, s));

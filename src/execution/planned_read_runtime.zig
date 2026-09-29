@@ -2,6 +2,7 @@ const std = @import("std");
 const gs = @import("graph_storage");
 const ast = @import("../gql/ast.zig");
 const eval = @import("../eval.zig");
+const statement_undo = @import("../statement_undo.zig");
 const execution = @import("../execution.zig");
 const result_utils = @import("result_utils.zig");
 const value_utilities = @import("value_utilities.zig");
@@ -494,13 +495,20 @@ pub fn executeProfiledIfSupported(
     // scope (`executeIfSupported`), it does not own the scope, and the
     // statement fails instead.
     const owns_scope = eval.enterInPredicateScope();
+    // SONNY-3348 (round 18): and its statement undo record: a profiled
+    // statement that fails has its changes undone, as any other statement
+    // (`execution.executeStatementWithContext`).
+    statement_undo.begin(owns_scope);
     var profiled = (executeProfiledInScope(allocator, q, context, param_names, param_values, apply_window) catch |err| {
         _ = eval.exitInPredicateScope(owns_scope);
         _ = eval.takeDeferredLimitError(owns_scope);
+        statement_undo.finishFailed(owns_scope);
         return err;
     }) orelse {
         _ = eval.exitInPredicateScope(owns_scope);
         _ = eval.takeDeferredLimitError(owns_scope);
+        // Nothing ran (no plan); the caller runs the statement another way.
+        statement_undo.finishFailed(owns_scope);
         return null;
     };
     const limit_error = eval.takeDeferredLimitError(owns_scope);
@@ -508,9 +516,15 @@ pub fn executeProfiledIfSupported(
     if (in_type_error or limit_error != null) {
         profiled.result.deinit(allocator);
         profiled.deinitMetadata(allocator);
+        statement_undo.finishFailed(owns_scope);
         if (in_type_error) return error.InListRequiresList;
         return limit_error.?;
     }
+    statement_undo.finishSucceeded(owns_scope) catch |err| {
+        profiled.result.deinit(allocator);
+        profiled.deinitMetadata(allocator);
+        return err;
+    };
     return profiled;
 }
 

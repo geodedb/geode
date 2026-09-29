@@ -9510,6 +9510,25 @@ pub fn build(b: *std.Build) void {
     const sonny3348_step = b.step("test-sonny3348-limit-atomicity", "Run SONNY-3348 regression (a statement the limit relay fails writes nothing: SET, label, REMOVE, CREATE, MATCH ... CREATE, MERGE and DETACH DELETE decided by a swallowed 54001, out of memory, read budget or IN type error; autocommit and explicit transaction; a retry applies once; gRPC in process)");
     sonny3348_step.dependOn(&run_sonny3348_tests.step);
 
+    // SONNY-3348 round 18 (and SONNY-3059): a failed statement leaves nothing
+    // (the statement undo record, every executor, the round 17 reviewer's
+    // probe matrix), a transaction body's rollback is not fenced off, a
+    // failed statement aborts its explicit transaction (25P02 until ROLLBACK
+    // or COMMIT), and ROLLBACK undoes every change. gRPC in process.
+    const sonny3348u_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny3348_statement_undo.zig"), .target = target, .optimize = optimize });
+    sonny3348u_test_mod.link_libc = true;
+    sonny3348u_test_mod.addImport("geode", root_mod);
+    sonny3348u_test_mod.addImport("schema", schema_mod);
+    sonny3348u_test_mod.addImport("protobuf", protobuf_mod);
+    sonny3348u_test_mod.addImport("grpc_impl", sonny1560_shim_mod);
+    sonny3348u_test_mod.addImport("logging", logging_mod);
+    sonny3348u_test_mod.addImport("transport/quic", transport_quic_mod);
+    const sonny3348u_tests = b.addTest(.{ .root_module = sonny3348u_test_mod });
+    const run_sonny3348u_tests = b.addRunArtifact(sonny3348u_tests);
+    shardDep(test_step, &run_sonny3348u_tests.step, 1, test_shard_loads, test_shard_index);
+    const sonny3348u_step = b.step("test-sonny3348-statement-undo", "Run SONNY-3348 round 18 regression (a failed statement leaves nothing on every executor: legacy MATCH, CREATE, MATCH ... CREATE, FOR, MERGE, DELETE, point-write fast path, PROFILE; a START TRANSACTION body's rollback is not fenced; a failed statement aborts its explicit transaction until ROLLBACK or COMMIT; SONNY-3059 ROLLBACK undoes SET, REMOVE, labels, DETACH DELETE; gRPC in process)");
+    sonny3348u_step.dependOn(&run_sonny3348u_tests.step);
+
     // SONNY-3349 (round 17): PROFILE opens the limit relay's scope (a
     // swallowed 54001, out of memory, read budget or IN type error answers
     // the error, and a PROFILE'd change writes nothing); an out of memory

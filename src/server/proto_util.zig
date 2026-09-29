@@ -190,6 +190,9 @@ pub fn mapError(err: anyerror) ErrorInfo {
         // changes; the transaction is rolled back.
         error.SessionCommitFailed => .{ .code = "40000", .message = "The transaction's changes could not be committed to storage; the transaction was rolled back" },
         error.NoActiveTransaction => .{ .code = "25000", .message = "No active transaction" },
+        // SONNY-3348 (round 18, I2): COMMIT of a transaction a failed
+        // statement aborted: it was rolled back, and it is over.
+        error.TransactionRolledBack => .{ .code = "40000", .message = "The transaction failed and was rolled back; COMMIT did not commit it" },
         error.UnionColumnCountMismatch => .{ .code = "42601", .message = "UNION column count mismatch" },
         // SONNY-2755: `YIELD path, path` used to free that column twice.
         error.DuplicateYieldColumn => .{ .code = "42702", .message = "YIELD names the same column more than once; name each column once" },

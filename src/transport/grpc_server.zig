@@ -1177,11 +1177,16 @@ fn noteTxnStatement(state: *server_state.ServerState, stmt: *const gql_ast.State
 /// `request_graph`, the graph the request ran on). The request's own lock is
 /// released by now. If the handler thought a transaction open that the
 /// executor ended (a ROLLBACK before the failure), end it.
-fn abortFailedTransaction(state: *server_state.ServerState, request_graph: []const u8) void {
+fn abortFailedTransaction(state: *server_state.ServerState, request_graph: []const u8, ended_txn: bool) void {
     const open = txn_undo_log.currentThreadTxnId();
     if (open != 0) {
         state.txn_id = open;
         state.rollBackTransaction(request_graph);
+        // SONNY-3348 (round 18, I2): and the session stays in the aborted
+        // transaction until the client ends it (`query_traits.abortedTxnVerdict`),
+        // unless the program itself ended it last (`ended_txn`: a COMMIT that
+        // failed, which rolls back).
+        state.txn_aborted = !ended_txn;
     } else if (state.in_txn) {
         state.endTransaction();
     }
@@ -3088,6 +3093,19 @@ pub fn handleExecute(request_bytes: []const u8, allocator: std.mem.Allocator, ep
                 return encodeMessage(allocator, resp);
             }
 
+            // SONNY-3348 (round 18, I2): a session whose transaction a failed
+            // statement aborted runs nothing until it ends the transaction.
+            if (state.txn_aborted) {
+                const verdict = query_traits.abortedTxnVerdict(&parse_result.program);
+                if (verdict != .refuse) state.txn_aborted = false;
+                if (verdict != .rollback) {
+                    const info = proto_util.mapError(if (verdict == .commit) error.TransactionRolledBack else error.TransactionAborted);
+                    var resp = try buildErrorResponse(allocator, info.code, info.message, &.{}, &.{});
+                    defer resp.deinit(allocator);
+                    return encodeMessage(allocator, resp);
+                }
+            }
+
             // SONNY-2805: `analyzeRequest` keeps a program with transaction
             // control off the fast paths that run only its last query.
             const analysis = query_traits.analyzeRequest(&parse_result.program);
@@ -3390,7 +3408,7 @@ pub fn handleExecute(request_bytes: []const u8, allocator: std.mem.Allocator, ep
             // after the request's lock is released: this defer is registered
             // before the lock's, so it runs after it.
             var failed_in_txn = false;
-            defer if (failed_in_txn) abortFailedTransaction(state, lock_graph);
+            defer if (failed_in_txn) abortFailedTransaction(state, lock_graph, query_traits.endsTransactionLast(&parse_result.program));
 
             var graph_lock_handle: ?graph_store.GraphLockHandle = null;
             // GAP-0753: Read path takes the shared graph lock only long
@@ -4103,7 +4121,8 @@ pub fn handleBegin(request_bytes: []const u8, allocator: std.mem.Allocator) ![]u
         },
     }
 
-    if (state.in_txn) {
+    // SONNY-3348 (round 18, I2): nor while its last transaction is aborted.
+    if (state.in_txn or state.txn_aborted) {
         const resp = schema.BeginResponse{ .session_id = "", .tx_id = "" };
         return encodeMessage(allocator, resp);
     }
@@ -4165,6 +4184,14 @@ pub fn handleCommit(request_bytes: []const u8, allocator: std.mem.Allocator) ![]
             const resp = schema.CommitResponse{ .success = false };
             return encodeMessage(allocator, resp);
         },
+    }
+
+    // SONNY-3348 (round 18, I2): COMMIT of an aborted transaction ends it,
+    // and fails: it was rolled back.
+    if (state.txn_aborted) {
+        state.txn_aborted = false;
+        const resp = schema.CommitResponse{ .success = false };
+        return encodeMessage(allocator, resp);
     }
 
     if (state.in_txn) {
@@ -4241,6 +4268,14 @@ pub fn handleRollback(request_bytes: []const u8, allocator: std.mem.Allocator) !
             const resp = schema.RollbackResponse{ .success = false };
             return encodeMessage(allocator, resp);
         },
+    }
+
+    // SONNY-3348 (round 18, I2): ROLLBACK ends an aborted transaction (the
+    // failed statement's handler already undid it).
+    if (state.txn_aborted) {
+        state.txn_aborted = false;
+        const resp = schema.RollbackResponse{ .success = true };
+        return encodeMessage(allocator, resp);
     }
 
     if (state.in_txn) {

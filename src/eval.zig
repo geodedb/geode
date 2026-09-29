@@ -183,8 +183,14 @@ threadlocal var deferred_limit_error: ?EvalError = null;
 /// SONNY-3251: record the limit refusal `err` for the statement (the first
 /// one wins) and return it.
 pub fn noteLimitError(err: EvalError) EvalError {
-    if (deferred_limit_error == null) deferred_limit_error = err;
+    recordLimitError(err);
     return err;
+}
+
+/// SONNY-3348 (round 18): `noteLimitError` for a caller that does not
+/// return the error (a store write that could not record its undo).
+pub fn recordLimitError(err: EvalError) void {
+    if (deferred_limit_error == null) deferred_limit_error = err;
 }
 
 /// SONNY-3251: the limit refusal recorded in the statement scope `owns`

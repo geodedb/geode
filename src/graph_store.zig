@@ -20,6 +20,9 @@ fn tmpDirRealpathAlloc(allocator: std.mem.Allocator, tmp_sub_path: []const u8) !
 }
 
 const fle_integration = @import("fle_integration.zig");
+// SONNY-3348 (round 18): the statement undo record the write methods fill.
+const statement_undo = @import("statement_undo.zig");
+const txn_undo = @import("txn_undo_log.zig");
 // GAP (write-path OOM, 2026-07-04): working-set budget hooks for the legacy
 // write executor. `chargeStoreBytes` is a no-op unless the query dispatcher
 // installed a thread-local budget scope (write-carrying MATCH shapes only).
@@ -4550,6 +4553,7 @@ pub const GraphStore = struct {
         tenant: []const u8,
     ) !void {
         try statementWriteFence(); // SONNY-3348
+        try statement_undo.reserve(1); // SONNY-3348 (round 18): room to record the node
         // PHASE 1b chokepoint: build the graph's resident indexes BEFORE this
         // write so loop2 (run on first touch) can't later double-count the
         // node/labels this create is about to insert.
@@ -4598,6 +4602,7 @@ pub const GraphStore = struct {
         tenant: []const u8,
     ) !void {
         try statementWriteFence(); // SONNY-3348
+        try statement_undo.reserve(1); // SONNY-3348 (round 18): room to record the node
         self.ensureGraphHydrated(graph_name); // PHASE 1b chokepoint (hydrate before write)
         try self.ensureGraph(graph_name);
         const im = try self.getOrCreateIdMap(graph_name);
@@ -4664,12 +4669,14 @@ pub const GraphStore = struct {
         self.dirty.store(true, .release);
         incrementMutationEpoch();
         notifyMutation(.create_node, reserved_id, 0, 0, if (labels.len > 0) labels[0] else null, null, null, graph_name);
+        statement_undo.appendCreated(self, .{ .CreateNode = .{ .node_id = reserved_id, .graph_name = "" } }); // SONNY-3348 (round 18)
     }
 
     // CANARY: REQ=REQ-MULTI-TENANT-003; FEATURE="PerTenantIsolation"; ASPECT=NodeCreation; STATUS=TESTED; TEST=src/graph_store.zig; OWNER=enterprise; UPDATED=2026-04-01
     // GAP-0279: Create a node tagged with both graph_name and tenant_id for per-tenant isolation
     pub fn createNodeWithGraphAndTenant(self: *GraphStore, labels: []const []const u8, graph_name: []const u8, tenant: []const u8) !u64 {
         try statementWriteFence(); // SONNY-3348
+        try statement_undo.reserve(1); // SONNY-3348 (round 18): room to record the node
         // PHASE 1b chokepoint: build resident indexes BEFORE this write so a
         // later first-touch loop2 can't double-count this node/labels.
         self.ensureGraphHydrated(graph_name);
@@ -4748,6 +4755,7 @@ pub const GraphStore = struct {
 
         // WAL notification: CreateNode
         notifyMutation(.create_node, id, 0, 0, if (labels.len > 0) labels[0] else null, null, null, graph_name);
+        statement_undo.appendCreated(self, .{ .CreateNode = .{ .node_id = id, .graph_name = "" } }); // SONNY-3348 (round 18)
 
         return id;
     }
@@ -4802,6 +4810,7 @@ pub const GraphStore = struct {
     ) ![]u64 {
         try statementWriteFence(); // SONNY-3348
         if (n == 0) return try out_allocator.alloc(u64, 0);
+        try statement_undo.reserve(n); // SONNY-3348 (round 18): room to record the nodes
         self.ensureGraphHydrated(graph_name); // PHASE 1b chokepoint (hydrate before write)
 
         // GAP-0891 (RC-1 step 3): context-preferring tenant resolution.
@@ -4921,6 +4930,7 @@ pub const GraphStore = struct {
 
             // WAL / mutation notification per node.
             notifyMutation(.create_node, public_id, 0, 0, if (labels.len > 0) labels[0] else null, null, null, graph_name);
+            statement_undo.appendCreated(self, .{ .CreateNode = .{ .node_id = public_id, .graph_name = "" } }); // SONNY-3348 (round 18)
         }
 
         self.dirty.store(true, .release);
@@ -6646,6 +6656,7 @@ pub const GraphStore = struct {
         // on). A truly-missing id still falls through to error.NodeNotFound.
         _ = self.nodes.getOrHydratePtr(node_id) catch null;
         if (isInternalPersistedPropertyKey(key)) return error.ReservedPropertyKey;
+        try self.undoRecordNodeProperty(node_id, key, false); // SONNY-3348 (round 18)
         // FLE defense-in-depth: encrypt String values before adapter write and in-memory storage.
         // Some callers already encrypt; isLikelyFleEnvelope() prevents double-encryption.
         // `owned_encrypted` tracks the freshly-allocated FLE envelope (if any) so
@@ -6786,6 +6797,8 @@ pub const GraphStore = struct {
     /// was concurrently servicing queries against the same global adapter.
     pub fn setNodePropertiesBatch(self: *GraphStore, node_id: u64, entries: []const BatchPropertyEntry) !void {
         try statementWriteFence(); // SONNY-3348
+        // SONNY-3348 (round 18): each entry's prior state.
+        for (entries) |entry| try self.undoRecordNodeProperty(node_id, entry.key, entry.value == null);
         const node_meta = self.nodes.get(node_id) orelse return error.NodeNotFound;
 
         // --- Adapter path: single lock acquisition for all properties ---
@@ -7055,6 +7068,8 @@ pub const GraphStore = struct {
         // rationale and the write-lock safety argument.
         _ = self.nodes.getOrHydratePtr(node_id) catch null;
         if (isInternalPersistedPropertyKey(key)) return;
+        // SONNY-3348 (round 18): the value it removes.
+        self.undoRecordNodeProperty(node_id, key, true) catch return undoRecordFailed();
         if (global_vtable) |vt| {
             const node = self.nodes.get(node_id) orelse return;
             const slot_id = self.requireNodeSlot(node.graph_name, node_id) catch |err| {
@@ -7136,6 +7151,7 @@ pub const GraphStore = struct {
     pub fn addNodeLabel(self: *GraphStore, node_id: u64, label: []const u8) !void {
         try statementWriteFence(); // SONNY-3348
         self.ensureNodeGraphHydrated(node_id); // PHASE 1b chokepoint (hydrate before write)
+        try self.undoRecordNodeLabel(node_id, label, true); // SONNY-3348 (round 18)
         if (global_vtable) |vt| {
             if (vt.addNodeLabelFn) |f| {
                 const node = self.nodes.get(node_id) orelse return error.NodeNotFound;
@@ -7205,6 +7221,7 @@ pub const GraphStore = struct {
     pub fn removeNodeLabel(self: *GraphStore, node_id: u64, label: []const u8) !void {
         try statementWriteFence(); // SONNY-3348
         self.ensureNodeGraphHydrated(node_id); // PHASE 1b chokepoint (hydrate before write)
+        try self.undoRecordNodeLabel(node_id, label, false); // SONNY-3348 (round 18)
         if (global_vtable) |vt| {
             if (vt.removeNodeLabelFn) |f| {
                 const node = self.nodes.get(node_id) orelse return error.NodeNotFound;
@@ -8737,6 +8754,7 @@ pub const GraphStore = struct {
     // GAP-0279: Create an edge tagged with both graph_name and tenant_id for per-tenant isolation
     pub fn createEdgeWithGraphAndTenant(self: *GraphStore, from_id: u64, to_id: u64, edge_type: []const u8, graph_name: []const u8, tenant: []const u8) !u64 {
         try statementWriteFence(); // SONNY-3348
+        try statement_undo.reserve(1); // SONNY-3348 (round 18): room to record the edge
         self.ensureGraphHydrated(graph_name); // PHASE 1b chokepoint (hydrate before write)
         // The `geode.graph_store.create_edge` trace span was rolled back
         // (again) here.  History:
@@ -8857,6 +8875,7 @@ pub const GraphStore = struct {
 
         // WAL notification: CreateEdge
         notifyMutation(.create_edge, id, from_id, to_id, edge_type, null, null, graph_name);
+        statement_undo.appendCreated(self, .{ .CreateEdge = .{ .edge_id = id, .graph_name = "" } }); // SONNY-3348 (round 18)
 
         return id;
     }
@@ -8870,6 +8889,9 @@ pub const GraphStore = struct {
         graph_name: []const u8,
         mark_dirty: bool,
         persist_adapter: bool,
+        /// SONNY-3348 (round 18): the edge's tenant (an undo restores a
+        /// deleted edge's own); null for the active context's.
+        tenant_override: ?[]const u8,
     ) !void {
         self.ensureGraphHydrated(graph_name); // PHASE 1b chokepoint (hydrate before write)
         // Existence check BEFORE any storage-adapter slot creation, mirroring
@@ -8910,7 +8932,7 @@ pub const GraphStore = struct {
         // GAP-0891 (RC-3): honor the active tenant instead of hardcoding
         // DEFAULT_TENANT_ID, and keep the PERF-C edge-type counter on the same
         // bucket as the tag (see createNodeWithIdInternal).
-        const tenant = fle_integration.tenantPreferringActiveContext();
+        const tenant = tenant_override orelse fle_integration.tenantPreferringActiveContext();
 
         if (adapter_edge) |persisted_edge| {
             // GAP-ENT-0024: the public id is already durable INLINE in the
@@ -8981,7 +9003,7 @@ pub const GraphStore = struct {
         edge_type: []const u8,
         graph_name: []const u8,
     ) !void {
-        return self.createEdgeWithIdInternal(edge_id, from_id, to_id, edge_type, graph_name, true, true);
+        return self.createEdgeWithIdInternal(edge_id, from_id, to_id, edge_type, graph_name, true, true, null);
     }
 
     /// Create an edge with a specified ID without marking dirty (used for rollback).
@@ -8993,7 +9015,7 @@ pub const GraphStore = struct {
         edge_type: []const u8,
         graph_name: []const u8,
     ) !void {
-        return self.createEdgeWithIdInternal(edge_id, from_id, to_id, edge_type, graph_name, false, false);
+        return self.createEdgeWithIdInternal(edge_id, from_id, to_id, edge_type, graph_name, false, false, null);
     }
 
     // Issue #392 / PHASE 0: append `edge_id` to `node`'s adjacency list in
@@ -9337,6 +9359,7 @@ pub const GraphStore = struct {
         try statementWriteFence(); // SONNY-3348
         self.ensureEdgeGraphHydrated(edge_id); // PHASE 1b chokepoint (hydrate before write)
         if (isInternalPersistedPropertyKey(key)) return error.ReservedPropertyKey;
+        try self.undoRecordEdgeProperty(edge_id, key, false); // SONNY-3348 (round 18)
         // FLE defense-in-depth: encrypt String values before adapter write and in-memory storage.
         // `owned_encrypted` tracks the freshly-allocated FLE envelope (if any) so
         // it is released after the adapter write / in-memory copy / WAL
@@ -9462,6 +9485,8 @@ pub const GraphStore = struct {
         try statementWriteFence(); // SONNY-3348
         self.ensureEdgeGraphHydrated(edge_id); // PHASE 1b chokepoint (hydrate before write)
         const edge = self.getEdgeHydrated(edge_id) orelse return error.EdgeNotFound;
+        // SONNY-3348 (round 18): each entry's prior state.
+        for (entries) |entry| try self.undoRecordEdgeProperty(edge_id, entry.key, entry.value == null);
 
         // --- Adapter path: single lock acquisition for all properties ---
         if (global_adapter) |adapter| {
@@ -9596,6 +9621,8 @@ pub const GraphStore = struct {
         if (statementWritesFenced()) return; // SONNY-3348
         self.ensureEdgeGraphHydrated(edge_id); // PHASE 1b chokepoint (hydrate before write)
         if (isInternalPersistedPropertyKey(key)) return;
+        // SONNY-3348 (round 18): the value it removes.
+        self.undoRecordEdgeProperty(edge_id, key, true) catch return undoRecordFailed();
         if (global_vtable) |vt| {
             if (vt.removeEdgePropertyFn) |f| {
                 if (self.getEdgeHydrated(edge_id)) |edge_info| {
@@ -14151,6 +14178,202 @@ pub const GraphStore = struct {
         }
     }
 
+    // CANARY: REQ=REQ-SONNY-3348-LIMIT-ATOMICITY; FEATURE="Execution"; ASPECT=StoreUndoCapture; STATUS=TESTED; TEST=tests/test_sonny3348_limit_atomicity.zig; OWNER=storage; UPDATED=2026-09-28
+    // SONNY-3348 (round 18): the statement undo record (`statement_undo`).
+    // Each write method below records the state it is about to change, before
+    // it changes it, while a statement's record is open on the thread. A
+    // create records the id it made. A failed statement's record is replayed
+    // through these same methods (capture and fence suspended).
+
+    /// Does node `node_id` exist (hydrating it)? For the undo.
+    pub fn nodeExistsForUndo(self: *GraphStore, node_id: u64) bool {
+        self.ensureNodeGraphHydrated(node_id);
+        return self.getNodePtrHydrated(node_id) != null;
+    }
+
+    /// Does edge `edge_id` exist (hydrating it)? For the undo.
+    pub fn edgeExistsForUndo(self: *GraphStore, edge_id: u64) bool {
+        self.ensureEdgeGraphHydrated(edge_id);
+        return self.getEdgeHydrated(edge_id) != null;
+    }
+
+    /// SONNY-3348 (round 18): re-create a deleted edge under its own id,
+    /// through the storage engine, for the undo. The node restore uses
+    /// `createNodeWithReservedIdGraphAndTenant`.
+    pub fn restoreDeletedEdge(self: *GraphStore, edge_id: u64, from_id: u64, to_id: u64, edge_type: []const u8, graph_name: []const u8, tenant: []const u8) !void {
+        try statementWriteFence();
+        try self.createEdgeWithIdInternal(edge_id, from_id, to_id, edge_type, graph_name, true, true, tenant);
+        notifyMutation(.create_edge, edge_id, from_id, to_id, edge_type, null, null, graph_name);
+    }
+
+    /// The node's property `key` before a SET (`removing` false) or a REMOVE.
+    fn undoRecordNodeProperty(self: *GraphStore, node_id: u64, key: []const u8, removing: bool) !void {
+        if (!statement_undo.capturing()) return;
+        if (isInternalPersistedPropertyKey(key)) return;
+        const node = (self.nodes.getOrHydratePtr(node_id) catch null) orelse return;
+        const old = node.properties.get(key);
+        try statement_undo.append(self, try undoPropertyEntry(node_id, key, old, removing, false) orelse return);
+    }
+
+    /// The edge's property `key` before a SET (`removing` false) or a REMOVE.
+    fn undoRecordEdgeProperty(self: *GraphStore, edge_id: u64, key: []const u8, removing: bool) !void {
+        if (!statement_undo.capturing()) return;
+        if (isInternalPersistedPropertyKey(key)) return;
+        const edge = self.getEdgeHydrated(edge_id) orelse return;
+        const old = edge.properties.get(key);
+        try statement_undo.append(self, try undoPropertyEntry(edge_id, key, old, removing, true) orelse return);
+    }
+
+    /// The undo entry for a SET (`removing` false) or REMOVE of property
+    /// `key`, whose value was `old`; null when the change changes nothing.
+    fn undoPropertyEntry(id: u64, key: []const u8, old: ?PropertyValue, removing: bool, is_edge: bool) !?txn_undo.UndoEntry {
+        const a = statement_undo.allocator;
+        if (removing) {
+            // Removing an absent property changes nothing.
+            const ov = old orelse return null;
+            const sp = try txn_undo.SerializedProperty.fromPropertyValue(a, key, ov);
+            return if (is_edge)
+                .{ .RemoveEdgeProperty = .{ .edge_id = id, .old_value = sp } }
+            else
+                .{ .RemoveNodeProperty = .{ .node_id = id, .old_value = sp } };
+        }
+        const key_copy = try a.dupe(u8, key);
+        errdefer a.free(key_copy);
+        const sp = if (old) |ov|
+            try txn_undo.SerializedProperty.fromPropertyValue(a, key, ov)
+        else
+            txn_undo.SerializedProperty{ .key = try a.dupe(u8, key), .value_type = 0 };
+        return if (is_edge)
+            .{ .SetEdgeProperty = .{ .edge_id = id, .key = key_copy, .had_old_value = old != null, .old_value = sp } }
+        else
+            .{ .SetNodeProperty = .{ .node_id = id, .key = key_copy, .had_old_value = old != null, .old_value = sp } };
+    }
+
+    /// The node's label `label` before it is added (`adding`) or removed.
+    /// Adding a label the node has, or removing one it lacks, changes nothing.
+    fn undoRecordNodeLabel(self: *GraphStore, node_id: u64, label: []const u8, adding: bool) !void {
+        if (!statement_undo.capturing()) return;
+        const node = (self.nodes.getOrHydratePtr(node_id) catch null) orelse return;
+        var has = false;
+        for (node.labels) |l| {
+            if (std.mem.eql(u8, l, label)) {
+                has = true;
+                break;
+            }
+        }
+        if (adding == has) return;
+        const label_copy = try statement_undo.allocator.dupe(u8, label);
+        const entry: txn_undo.UndoEntry = if (adding)
+            .{ .AddNodeLabel = .{ .node_id = node_id, .label = label_copy } }
+        else
+            .{ .RemoveNodeLabel = .{ .node_id = node_id, .label = label_copy } };
+        try statement_undo.append(self, entry);
+    }
+
+    /// The user properties of `props` as undo images (internal keys skipped).
+    fn undoPropertyImages(props: *const CompactPropertyMap) ![]const txn_undo.SerializedProperty {
+        const a = statement_undo.allocator;
+        var list: std.ArrayListUnmanaged(txn_undo.SerializedProperty) = .empty;
+        errdefer {
+            for (list.items) |p| p.deinit(a);
+            list.deinit(a);
+        }
+        var it = props.iterator();
+        while (it.next()) |entry| {
+            if (isInternalPersistedPropertyKey(entry.key_ptr.*)) continue;
+            try list.ensureUnusedCapacity(a, 1);
+            list.appendAssumeCapacity(try txn_undo.SerializedProperty.fromPropertyValue(a, entry.key_ptr.*, entry.value_ptr.*));
+        }
+        return list.toOwnedSlice(a);
+    }
+
+    /// The undo image of `edge`, deleted.
+    fn undoEdgeImage(edge: Edge) !txn_undo.UndoEntry {
+        const a = statement_undo.allocator;
+        const label = try a.dupe(u8, edge.label);
+        errdefer a.free(label);
+        const props = try undoPropertyImages(&edge.properties);
+        errdefer {
+            for (props) |p| p.deinit(a);
+            a.free(props);
+        }
+        const graph = try a.dupe(u8, edge.graph_name);
+        errdefer a.free(graph);
+        return .{ .DeleteEdge = .{
+            .edge_id = edge.id,
+            .from_id = edge.from_id,
+            .to_id = edge.to_id,
+            .label = label,
+            .properties = props,
+            .graph_name = graph,
+            .tenant_id = try a.dupe(u8, edge.tenant_id),
+        } };
+    }
+
+    /// The undo image of `node`, deleted.
+    fn undoNodeImage(node: *const Node) !txn_undo.UndoEntry {
+        const a = statement_undo.allocator;
+        const labels = try a.alloc([]const u8, node.labels.len);
+        var n_labels: usize = 0;
+        errdefer {
+            for (labels[0..n_labels]) |l| a.free(l);
+            a.free(labels);
+        }
+        for (node.labels, 0..) |l, i| {
+            labels[i] = try a.dupe(u8, l);
+            n_labels += 1;
+        }
+        const props = try undoPropertyImages(&node.properties);
+        errdefer {
+            for (props) |p| p.deinit(a);
+            a.free(props);
+        }
+        const graph = try a.dupe(u8, node.graph_name);
+        errdefer a.free(graph);
+        return .{ .DeleteNode = .{
+            .node_id = node.id,
+            .labels = labels,
+            .properties = props,
+            .graph_name = graph,
+            .tenant_id = try a.dupe(u8, node.tenant_id),
+        } };
+    }
+
+    /// Edge `edge_id` before it is deleted.
+    fn undoRecordDeleteEdge(self: *GraphStore, edge_id: u64) !void {
+        if (!statement_undo.capturing()) return;
+        const edge = self.getEdgeHydrated(edge_id) orelse return;
+        try statement_undo.append(self, try undoEdgeImage(edge));
+    }
+
+    /// Node `node_id` before it is deleted: its edges first (a delete takes
+    /// them with it), then the node, so the undo restores the node first.
+    fn undoRecordDeleteNode(self: *GraphStore, node_id: u64) !void {
+        if (!statement_undo.capturing()) return;
+        const a = statement_undo.allocator;
+        var edge_ids: std.ArrayListUnmanaged(u64) = .empty;
+        defer edge_ids.deinit(a);
+        if (self.outAdjItems(node_id)) |outgoing| try edge_ids.appendSlice(a, outgoing);
+        if (self.inAdjItems(node_id)) |incoming| {
+            for (incoming) |eid| {
+                if (std.mem.indexOfScalar(u64, edge_ids.items, eid) == null) try edge_ids.append(a, eid);
+            }
+        }
+        for (edge_ids.items) |eid| {
+            const edge = self.getEdgeHydrated(eid) orelse continue;
+            try statement_undo.append(self, try undoEdgeImage(edge));
+        }
+        const node = (self.nodes.getOrHydratePtr(node_id) catch null) orelse return;
+        try statement_undo.append(self, try undoNodeImage(node));
+    }
+
+    /// A void write method's record failed (out of memory): the write is not
+    /// made, and the statement fails with out of memory at its relay, which
+    /// undoes what was recorded.
+    fn undoRecordFailed() void {
+        @import("eval.zig").recordLimitError(error.OutOfMemory);
+    }
+
     // CANARY: REQ=REQ-TXN-UNDO-002; FEATURE="TransactionUndoLog"; ASPECT=NoSaveOperations; STATUS=TESTED; TEST=geodetestlab/specs/transaction_state_basic.yml; OWNER=engine; UPDATED=2025-12-23
     // NoSave versions of mutation methods for transaction undo/redo operations
     // These methods modify the store without triggering auto-save to disk
@@ -14308,6 +14531,8 @@ pub const GraphStore = struct {
     pub fn deleteNode(self: *GraphStore, node_id: u64) void {
         if (statementWritesFenced()) return; // SONNY-3348
         self.ensureNodeGraphHydrated(node_id); // PHASE 1b chokepoint (before any cache read)
+        // SONNY-3348 (round 18): the node, and the edges it takes with it.
+        self.undoRecordDeleteNode(node_id) catch return undoRecordFailed();
         // Capture graph_name before deletion for WAL notification and handle routing.
         // SONNY-3233 (round 15): a copy: the delete frees the node's own.
         const gn: []const u8 = if (self.nodes.get(node_id)) |n| (self.allocator.dupe(u8, n.graph_name) catch "") else "";
@@ -14348,6 +14573,7 @@ pub const GraphStore = struct {
     pub fn deleteEdge(self: *GraphStore, edge_id: u64) void {
         if (statementWritesFenced()) return; // SONNY-3348
         self.ensureEdgeGraphHydrated(edge_id); // PHASE 1b chokepoint (before any cache read)
+        self.undoRecordDeleteEdge(edge_id) catch return undoRecordFailed(); // SONNY-3348 (round 18)
         // Capture graph_name before deletion for WAL notification and handle
         // routing. PHASE 1: hydrate-on-miss so an EVICTED edge can still be
         // deleted (its endpoints/graph resolved from the engine).
@@ -15862,11 +16088,15 @@ pub threadlocal var test_idmap_lookup_hook: ?*const fn ([]const u8) void = null;
 /// rollback and replay setters (`*NoSave`) are not fenced: a rollback runs
 /// in a scope of its own, after the failed statement's.
 fn statementWriteFence() @import("eval.zig").StatementFailure!void {
+    // SONNY-3348 (round 18, I1): a replay of a statement's undo record, or a
+    // transaction's undo, is never refused.
+    if (statement_undo.suspended()) return;
     if (@import("eval.zig").pendingStatementFailure()) |err| return err;
 }
 
 /// SONNY-3348: `statementWriteFence` for the methods that return nothing.
 fn statementWritesFenced() bool {
+    if (statement_undo.suspended()) return false;
     return @import("eval.zig").pendingStatementFailure() != null;
 }
 

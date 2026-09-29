@@ -14,6 +14,7 @@ const fle_catalog = @import("schema/fle_catalog.zig");
 
 // CANARY: REQ=REQ-LIB-MIGRATION-SLOG-003; FEATURE="Structured Logging"; ASPECT=Execution; STATUS=EXEMPT; OWNER=execution; UPDATED=2026-01-24
 const logging = @import("logging");
+const statement_undo = @import("statement_undo.zig");
 const log = logging.scoped("execution");
 const Attr = logging.Attr;
 
@@ -1466,9 +1467,17 @@ pub fn executeStatementWithContext(allocator: std.mem.Allocator, stmt: ast.State
     defer if (pushed_ctx) popActiveContext(prev_active_ctx);
 
     const owns_in_predicate_scope = eval.enterInPredicateScope();
+    // CANARY: REQ=REQ-SONNY-3348-LIMIT-ATOMICITY; FEATURE="Execution"; ASPECT=StatementUndoReplay; STATUS=TESTED; TEST=tests/test_sonny3348_limit_atomicity.zig; OWNER=execution; UPDATED=2026-09-28
+    // SONNY-3348 (round 18): the statement's undo record (`statement_undo`).
+    // A statement that fails, here or at the relay below, has its changes
+    // undone before its error is returned, on every executor; one that
+    // succeeds in an explicit transaction hands its record to the
+    // transaction's undo log (SONNY-3059).
+    statement_undo.begin(owns_in_predicate_scope);
     var result = executeStatementWithContextInner(allocator, stmt, context) catch |err| {
         _ = eval.exitInPredicateScope(owns_in_predicate_scope);
         _ = eval.takeDeferredLimitError(owns_in_predicate_scope);
+        statement_undo.finishFailed(owns_in_predicate_scope);
         return err;
     };
     // CANARY: REQ=REQ-SONNY-3251-LIMIT-ERRORS; FEATURE="Execution"; ASPECT=StatementLimitRelay; STATUS=TESTED; TEST=tests/test_sonny3251_limit_errors.zig; OWNER=execution; UPDATED=2026-09-28
@@ -1479,12 +1488,18 @@ pub fn executeStatementWithContext(allocator: std.mem.Allocator, stmt: ast.State
     const limit_error = eval.takeDeferredLimitError(owns_in_predicate_scope);
     if (eval.exitInPredicateScope(owns_in_predicate_scope)) {
         result.deinit(allocator);
+        statement_undo.finishFailed(owns_in_predicate_scope);
         return error.InListRequiresList;
     }
     if (limit_error) |err| {
         result.deinit(allocator);
+        statement_undo.finishFailed(owns_in_predicate_scope);
         return err;
     }
+    statement_undo.finishSucceeded(owns_in_predicate_scope) catch |err| {
+        result.deinit(allocator);
+        return err;
+    };
     return result;
 }
 
@@ -1636,10 +1651,15 @@ fn executeStatementWithContextInner(allocator: std.mem.Allocator, stmt: ast.Stat
                         },
                         .Create => |create_stmt| executeCreate(allocator, create_stmt, txn_graph, mut_context),
                         .Merge => |m| executeMerge(allocator, m, txn_graph, mut_context),
-                        .StartTransaction => return error.NestedTransactionNotAllowed,
-                        .Commit => return error.CommitInTransactionBody,
-                        .Rollback => return error.RollbackInTransactionBody,
-                        else => return error.UnsupportedStatementInTransactionBody,
+                        // SONNY-3348 (round 18): refusals go through the
+                        // rollback below too. They returned from here with
+                        // the body's undo transaction still open on the
+                        // thread, and the handler took the session for one
+                        // in a failed explicit transaction.
+                        .StartTransaction => error.NestedTransactionNotAllowed,
+                        .Commit => error.CommitInTransactionBody,
+                        .Rollback => error.RollbackInTransactionBody,
+                        else => error.UnsupportedStatementInTransactionBody,
                     }) catch |err| {
                         mut_context.transaction_state = .None;
                         // SONNY-2823: the engine transaction first, so the

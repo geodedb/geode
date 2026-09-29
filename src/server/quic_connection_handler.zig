@@ -6320,11 +6320,16 @@ fn noteTxnStatement(state: *ServerState, stmt: *const gql_ast.Statement, write_g
 /// under the write lock of the graph it changed (or `request_graph`, the
 /// graph the request ran on). The request's own lock is released by now. If
 /// the handler thought a transaction open that the executor ended, end it.
-fn abortFailedTransaction(state: *ServerState, request_graph: []const u8) void {
+fn abortFailedTransaction(state: *ServerState, request_graph: []const u8, ended_txn: bool) void {
     const open = txn_undo_log.currentThreadTxnId();
     if (open != 0) {
         state.txn_id = open;
         state.rollBackTransaction(request_graph);
+        // SONNY-3348 (round 18, I2): and the session stays in the aborted
+        // transaction until the client ends it (`query_traits.abortedTxnVerdict`),
+        // unless the program itself ended it last (`ended_txn`: a COMMIT that
+        // failed, which rolls back).
+        state.txn_aborted = !ended_txn;
     } else if (state.in_txn) {
         state.endTransaction();
     }
@@ -7365,6 +7370,18 @@ fn handleClientMessage(
                 return;
             }
 
+            // SONNY-3348 (round 18, I2): a session whose transaction a failed
+            // statement aborted runs nothing until it ends the transaction.
+            if (state.txn_aborted) {
+                const verdict = query_traits.abortedTxnVerdict(&parse_result.program);
+                if (verdict != .refuse) state.txn_aborted = false;
+                if (verdict != .rollback) {
+                    const info = proto_util.mapError(if (verdict == .commit) error.TransactionRolledBack else error.TransactionAborted);
+                    try sendExecuteError(gpa, stream, info.code, info.message, &.{}, &.{});
+                    return;
+                }
+            }
+
             // #830: a multi-statement program containing BEGIN/START TRANSACTION
             // followed by mutations followed by ROLLBACK was silently committing
             // the mutations.  The execute path doesn't honor BEGIN/COMMIT/ROLLBACK
@@ -7781,7 +7798,7 @@ fn handleClientMessage(
             // after the request's lock is released: this defer is registered
             // before the lock's, so it runs after it.
             var failed_in_txn = false;
-            defer if (failed_in_txn) abortFailedTransaction(state, lock_graph);
+            defer if (failed_in_txn) abortFailedTransaction(state, lock_graph, query_traits.endsTransactionLast(&parse_result.program));
 
             quic_response_metrics.recordFirstStreamQueryPrepare(monoNsFromHandler() -| first_stream_prepare_start_ns);
 
@@ -9056,7 +9073,8 @@ fn handleClientMessage(
                     return;
                 },
             }
-            if (state.in_txn) {
+            // SONNY-3348 (round 18, I2): nor while its last transaction is aborted.
+            if (state.in_txn or state.txn_aborted) {
                 try sendQuicMessage(gpa, stream, .{ .begin = .{ .session_id = try gpa.dupe(u8, ""), .tx_id = try gpa.dupe(u8, "") } });
                 return;
             }
@@ -9097,6 +9115,13 @@ fn handleClientMessage(
                     try sendQuicMessage(gpa, stream, .{ .commit = .{ .success = false } });
                     return;
                 },
+            }
+            // SONNY-3348 (round 18, I2): COMMIT of an aborted transaction ends
+            // it, and fails: it was rolled back.
+            if (state.txn_aborted) {
+                state.txn_aborted = false;
+                try sendQuicMessage(gpa, stream, .{ .commit = .{ .success = false } });
+                return;
             }
             if (state.in_txn) {
                 // GAP-0511: COMMIT acquires the write lock for state cleanup only.
@@ -9147,6 +9172,13 @@ fn handleClientMessage(
                     try sendQuicMessage(gpa, stream, .{ .rollback = .{ .success = false } });
                     return;
                 },
+            }
+            // SONNY-3348 (round 18, I2): ROLLBACK ends an aborted transaction
+            // (the failed statement's handler already undid it).
+            if (state.txn_aborted) {
+                state.txn_aborted = false;
+                try sendQuicMessage(gpa, stream, .{ .rollback = .{ .success = true } });
+                return;
             }
             if (state.in_txn) {
                 // GAP-0001: Rollback reverses mutations on the store — needs exclusive lock

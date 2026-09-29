@@ -102,6 +102,8 @@ test "SONNY-3134: over gRPC a transaction that has not changed the graph, or has
     try fx.expectRuns(ga, a, "CREATE (:Own {v: 1})");
     _ = try fx.expectRefused(ga, a, "DROP GRAPH g1", "55006");
     try testing.expectEqual(@as(usize, 0), fx.countLabel(f.st, "g1", "Own"));
+    // SONNY-3348 round 18: aborted until the client ends it.
+    try testing.expect(try fx.rollback(ga, a));
     try fx.expectRuns(ga, a, "USE GRAPH default");
     try fx.expectRuns(ga, a, "DROP GRAPH g1");
     try testing.expect(!f.st.graphExists("g1"));

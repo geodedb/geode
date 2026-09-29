@@ -281,6 +281,13 @@ pub const ServerState = struct {
     // Transaction session state: single active txn baseline
     in_txn: bool = false,
     txn_id: u64 = 0,
+    // CANARY: REQ=REQ-SONNY-3348-ABORTED-TXN; FEATURE="TransactionManagement"; ASPECT=SessionState; STATUS=TESTED; TEST=tests/test_sonny3348_limit_atomicity.zig; OWNER=engine; UPDATED=2026-09-28
+    // SONNY-3348 (round 18, I2): a statement failed inside the session's
+    // explicit transaction, which was rolled back. Until the client ends it
+    // (ROLLBACK, or a COMMIT that fails), every statement is refused (25P02,
+    // `query_traits.abortedTxnVerdict`). The session left the transaction
+    // silently and ran the client's next statements in autocommit.
+    txn_aborted: bool = false,
     // CANARY: REQ=REQ-SONNY-2776-TXN-ONE-GRAPH; FEATURE="StatementAuthorization"; ASPECT=TxnGraph; STATUS=TESTED; TEST=tests/test_sonny2776_session_graph_uses.zig; OWNER=security; UPDATED=2026-09-26
     // SONNY-2776: the graph the open transaction changes, owned by
     // `allocator`; null until its first change. A transaction changes one
