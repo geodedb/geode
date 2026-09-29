@@ -1276,6 +1276,18 @@
   "no window" and returned every row. A WITH's SKIP or LIMIT parameter
   windows the WITH in every session (an in-memory, tenant or RLS session
   returned every row).
+- **A MERGE's RETURN holds no freed relationship (SONNY-3322, round 4b-1
+  review m-4):** `MERGE ... MERGE (a)-[r:T]->(b) RETURN {rel: r}` returned
+  a map holding the MERGE's own copy of r, which the MERGE freed; a map's
+  (and a path's) relationships are the store's now, as a bare `RETURN r`'s
+  were.
+- **Comma MERGE actions (SONNY-3320, round 4b-1 review m-5):** a MERGE
+  clause with a comma pattern (`MERGE (a:W {k: 1}), (b:W {k: 2}) ON MATCH
+  SET a.m = 1 ON CREATE SET b.c = 1`) counts as created when it created any
+  of its chains, so with a matched and b created, ON CREATE fires and ON
+  MATCH does not: a.m is not set. Before round 4b-1 each action followed its
+  own variable's state, so a.m was set too. This follows the
+  MERGE-is-one-pattern rule of the SONNY-3320 entry above.
 - **The parser's limits (SONNY-3244):** parsing runs before authorization,
   and 25,000 `MATCH (n:G) SET n.x = 1;` statements (625 KB) took a 741 MB
   parser arena, so a 16 MB request could hold about 19 GB; about 60 chained

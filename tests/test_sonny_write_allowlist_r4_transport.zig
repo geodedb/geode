@@ -20,6 +20,12 @@
 //   (SONNY-3321: a LET, or a WHERE with a FILTER, goes to the executor);
 //   SKIP / LIMIT parameters, a repeated SET target (22G03) and LET scope
 //   (SONNY-3248).
+// - Round 4b-1b (the round 4b-1 review): a variable named as two kinds of
+//   element is refused (42000; returning one aborted the gRPC server), the
+//   streamed comma join and its read budget (53200), every type of an
+//   alternation, a repeated SET target refused before anything is written
+//   (the QUIC MERGE fast path too), window values (22G03), LET chains and
+//   CALL bodies, and a label SET's vector check (22000, QUIC).
 //
 // CANARY: REQ=REQ-SONNY-3139-WRITE-SHAPES; FEATURE="WriteShapeValidator"; ASPECT=TransportProfile; STATUS=TESTED; TEST=tests/test_sonny_write_allowlist_r4_transport.zig; OWNER=engine; UPDATED=2026-09-28
 

@@ -18,6 +18,12 @@
 // - SONNY-3248 (M-1, M-2, M-3): SKIP / LIMIT parameters; one SET clause
 //   assigns a property once; a `LET $x` is scoped to its query.
 // - SONNY-3244 (I-4): the nesting repros, off until round 14-16 merges.
+// - Round 4b-1b (the round 4b-1 review): a variable named as two kinds of
+//   element is refused (SONNY-3367, C-1); the comma join streams under the
+//   read budget (SONNY-3368, I-1); every type of an alternation (I-5); a
+//   refused SET writes nothing (I-2); a label SET checks the node's vectors
+//   (I-4); LET chains, CALL bodies and window values (I-6, m-2, m-3); a
+//   MERGE's RETURN map holds the store's relationship (m-4).
 //
 // CANARY: REQ=REQ-SONNY-3318-MULTI-CHAIN-BINDING; FEATURE="MultiChainRelationshipMatch"; ASPECT=Regression; STATUS=TESTED; TEST=tests/test_sonny_write_allowlist_r4b.zig; OWNER=engine; UPDATED=2026-09-28
 
@@ -832,6 +838,29 @@ test "SONNY-3319 (I-4): a label SET checks the node's vectors against the new la
         }
     }
     try f.finish("SONNY-3319 (I-4)");
+}
+
+// SONNY-3322 (m-4): a relationship in a map a MERGE returns is the store's.
+test "SONNY-3322 (m-4): a MERGE's RETURN {rel: r} holds the store's relationship, not the scope's freed copy" {
+    var s = try openSession(.in_memory);
+    defer s.deinit();
+    // An arena: the map a RETURN builds is not freed with the result (a
+    // separate, pre-existing leak), and this test is about the edge in it.
+    var arena = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena.deinit();
+    var merged = try runProgram(&s, arena.allocator(), "MERGE (a:W {k: 1}) MERGE (a)-[r:T]->(b:W {k: 2}) RETURN {rel: r} AS m, r AS r");
+    defer merged.deinit(arena.allocator());
+    try testing.expectEqual(@as(usize, 1), merged.rows.len);
+    const map = merged.rows[0][0];
+    try testing.expect(map == .Map);
+    const in_map = map.Map.get("rel") orelse return error.NoRel;
+    try testing.expect(in_map == .Edge);
+    const direct = merged.rows[0][1];
+    try testing.expect(direct == .Edge);
+    // Both are the store's edge (the RETURN's `r` was made resident by
+    // SONNY-3322; the map's was the scope's copy, freed with the scope).
+    try testing.expectEqual(@intFromPtr(direct.Edge), @intFromPtr(in_map.Edge));
+    try testing.expectEqualStrings("T", in_map.Edge.label);
 }
 
 // ---------------------------------------------------------------------------

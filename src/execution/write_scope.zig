@@ -143,14 +143,36 @@ pub const WriteScope = struct {
         return null;
     }
 
+    // CANARY: REQ=REQ-SONNY-3322-EDGE-BY-ID; FEATURE="WriteScope"; ASPECT=ResidentEdgesNested; STATUS=TESTED; TEST=tests/test_sonny_write_allowlist_r4b.zig; OWNER=engine; UPDATED=2026-09-28
     /// SONNY-3322: `v` with every relationship copy this scope owns replaced
     /// by the store's edge, for a value that outlives the scope (a RETURN).
-    pub fn residentEdges(self: *const WriteScope, store: *graph_store.GraphStore, v: *Value) !void {
+    /// Round 4b-1 review m-4: a copy inside a map (`RETURN {rel: r}`) or a
+    /// path was left in place, and the value held the copy `deinit` frees. A
+    /// path's edge list is replaced by one `allocator` owns (the result's).
+    pub fn residentEdges(self: *const WriteScope, allocator: std.mem.Allocator, store: *graph_store.GraphStore, v: *Value) !void {
         switch (v.*) {
             .Edge => |edge| if (self.ownsBox(edge) != null) {
                 v.* = .{ .Edge = store.getEdgePtrHydrated(edge.id) orelse return error.EdgeBodyUnresolvable };
             },
-            .List => |items| for (items) |*item| try self.residentEdges(store, item),
+            .List => |items| for (items) |*item| try self.residentEdges(allocator, store, item),
+            .Map => |*map| {
+                var it = map.valueIterator();
+                while (it.next()) |item| try self.residentEdges(allocator, store, item);
+            },
+            .Path => |*path| {
+                const owned = for (path.edges) |edge| {
+                    if (self.ownsBox(edge) != null) break true;
+                } else false;
+                if (!owned) return;
+                const edges = try allocator.alloc(*const graph_store.Edge, path.edges.len);
+                for (path.edges, edges) |edge, *out| {
+                    out.* = if (self.ownsBox(edge) != null) store.getEdgePtrHydrated(edge.id) orelse {
+                        allocator.free(edges);
+                        return error.EdgeBodyUnresolvable;
+                    } else edge;
+                }
+                path.edges = edges;
+            },
             else => {},
         }
     }

@@ -3950,7 +3950,7 @@ pub fn executeMerge(allocator: std.mem.Allocator, m: ast.MergeStatement, current
             for (ret.items, 0..) |item, i| {
                 row[i] = try eval.evalExpr(allocator, item.expr, env);
                 // SONNY-3322: the scope's copy of a relationship dies with it.
-                try scope.residentEdges(store, &row[i]);
+                try scope.residentEdges(allocator, store, &row[i]);
             }
 
             rows[0] = row;
