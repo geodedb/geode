@@ -9510,6 +9510,25 @@ pub fn build(b: *std.Build) void {
     const sonny3348_step = b.step("test-sonny3348-limit-atomicity", "Run SONNY-3348 regression (a statement the limit relay fails writes nothing: SET, label, REMOVE, CREATE, MATCH ... CREATE, MERGE and DETACH DELETE decided by a swallowed 54001, out of memory, read budget or IN type error; autocommit and explicit transaction; a retry applies once; gRPC in process)");
     sonny3348_step.dependOn(&run_sonny3348_tests.step);
 
+    // SONNY-3349 (round 17): PROFILE opens the limit relay's scope (a
+    // swallowed 54001, out of memory, read budget or IN type error answers
+    // the error, and a PROFILE'd change writes nothing); an out of memory
+    // materializing a node fails the node scan's paging scan, filtered
+    // count and WHERE + LIMIT enumeration. gRPC and the scan in process.
+    const sonny3349_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny3349_profile_relay.zig"), .target = target, .optimize = optimize });
+    sonny3349_test_mod.link_libc = true;
+    sonny3349_test_mod.addImport("geode", root_mod);
+    sonny3349_test_mod.addImport("schema", schema_mod);
+    sonny3349_test_mod.addImport("protobuf", protobuf_mod);
+    sonny3349_test_mod.addImport("grpc_impl", sonny1560_shim_mod);
+    sonny3349_test_mod.addImport("logging", logging_mod);
+    sonny3349_test_mod.addImport("transport/quic", transport_quic_mod);
+    const sonny3349_tests = b.addTest(.{ .root_module = sonny3349_test_mod });
+    const run_sonny3349_tests = b.addRunArtifact(sonny3349_tests);
+    shardDep(test_step, &run_sonny3349_tests.step, 1, test_shard_loads, test_shard_index);
+    const sonny3349_step = b.step("test-sonny3349-profile-relay", "Run SONNY-3349 regression (PROFILE fails with a limit or IN type error a caller swallowed, and a PROFILE'd change writes nothing; an out of memory materializing a node fails the node scan's paging scan, filtered count and WHERE + LIMIT enumeration; gRPC and the scan in process)");
+    sonny3349_step.dependOn(&run_sonny3349_tests.step);
+
     // SONNY-3232 (round 15, item 10; pre-existing, diagnosed, left for S2):
     // a QUIC request of 256 KiB is answered, one past the 16 MiB maximum
     // message is not, the 1 MiB and 4 MiB outcomes are recorded, and the

@@ -422,7 +422,7 @@ REQ-AUTO-INDEX-003,AutoIdIndex,CrudAutoIndex,TESTED,,,crud_operations,2026-04-30
 REQ-AUTO-INDEX-EXPLAIN-001,AutoIdIndex,ExplainWhereClause,IMPL,,,engine,2026-02-07,src/execution/statement_handlers.zig,1260
 REQ-AUTO-INDEX-EXPLAIN-002,AutoIdIndex,WhereClauseIndexCheck,IMPL,,,engine,2026-02-07,src/execution/statement_handlers.zig,1130
 REQ-AUTO-INDEX-EXPLAIN-003,AutoIdIndex,IndexSeekOpKind,IMPL,,,planner,2026-02-07,src/planner/cost_seed.zig,10
-REQ-AUTO-INDEX-EXPLAIN-004,AutoIdIndex,PlanIndexSeek,IMPL,,,planner,2026-04-02,src/execution/planned_read_runtime.zig,3556
+REQ-AUTO-INDEX-EXPLAIN-004,AutoIdIndex,PlanIndexSeek,IMPL,,,planner,2026-04-02,src/execution/planned_read_runtime.zig,3596
 REQ-AUTO-INDEX-PROFILE-001,AutoIdIndex,ProfileIndexName,IMPL,,,engine,2026-02-07,src/server/profile_payload.zig,18
 REQ-AUTO-INDEX-PUSHDOWN-001,AutoIdIndex,WherePredicatePushdown,TESTED,,,engine,2026-06-11,src/execution/match_operations.zig,707
 REQ-AUTO-INDEX-SCAN-001,AutoIdIndex,LabelIndexScan,TESTED,,,engine,2026-06-11,src/execution/match_operations.zig,4618
@@ -1212,7 +1212,7 @@ REQ-EXEC-REFACTOR-009,FileModularization,ReturnAndSorting,EXEMPT,,,refactoring,2
 REQ-EXEC-REFACTOR-010,ExecutionRefactoring,CallExecution,TESTED,,,execution,2026-01-15,tests/test_gap_0193_impl_batch_promotion.zig,316
 REQ-EXEC-REFACTOR-011,FileModularization,QueryExecution,EXEMPT,,,refactoring,2025-10-17,src/execution/query_execution.zig,79
 REQ-EXEC-REMOVE-001,Execution,RemoveExecution,TESTED,,,exec,2026-01-16,tests/test_gap_0193_batch5_comprehensive.zig,362
-REQ-EXEC-RESULT-OWNERSHIP-001,ExecutionResultOwnership,PlannedFinalProjection,TESTED,,,execution,2026-06-11,src/execution/planned_read_runtime.zig,609
+REQ-EXEC-RESULT-OWNERSHIP-001,ExecutionResultOwnership,PlannedFinalProjection,TESTED,,,execution,2026-06-11,src/execution/planned_read_runtime.zig,649
 REQ-EXEC-RESULT-OWNERSHIP-001,ExecutionResultOwnership,Regression,TESTED,,,execution,2026-06-11,tests/test_gap0535_result_ownership.zig,22
 REQ-EXEC-RESULT-OWNERSHIP-001,ExecutionResultOwnership,ReturnProjection,TESTED,,,execution,2026-06-11,src/execution/return_and_sorting.zig,506
 REQ-EXEC-SET-001,Execution,SetExecution,TESTED,,,exec,2026-01-16,tests/test_gap_0193_batch5_comprehensive.zig,355
@@ -1789,7 +1789,7 @@ REQ-GPS-DIST-002,GPS Distributed Envelope,TruncatedBuffer,TESTED,,,security,2026
 REQ-GPS-DIST-002,GPS Distributed Envelope,UnsupportedVersion,TESTED,,,security,2026-05-20,tests/test_gps_distributed_envelope.zig,257
 REQ-GPS-EXPLAIN-001,GPS EXPLAIN POLICY,ASTType,TESTED,,,security,2026-05-21,src/gql/ast.zig,820
 REQ-GPS-EXPLAIN-001,GPS EXPLAIN POLICY,ASTVariant,TESTED,,,security,2026-05-21,src/gql/ast.zig,60
-REQ-GPS-EXPLAIN-001,GPS EXPLAIN POLICY,BuildStep,TESTED,,,security,2026-05-21,build.zig,12707
+REQ-GPS-EXPLAIN-001,GPS EXPLAIN POLICY,BuildStep,TESTED,,,security,2026-05-21,build.zig,12726
 REQ-GPS-EXPLAIN-001,GPS EXPLAIN POLICY,CreateClassifiedAsCreate,TESTED,,,security,2026-05-21,tests/test_gps_explain_policy.zig,197
 REQ-GPS-EXPLAIN-001,GPS EXPLAIN POLICY,DispatchArm,TESTED,,,security,2026-05-21,src/execution.zig,1853
 REQ-GPS-EXPLAIN-001,GPS EXPLAIN POLICY,ExecutorFunction,TESTED,,,security,2026-05-21,src/execution/statement_handlers.zig,1484
@@ -1946,7 +1946,7 @@ REQ-GPS-PROC-001,GPS Procedure Enforcement,ReadWriteAllowsMutating,TESTED,,,secu
 REQ-GPS-PROC-001,GPS Procedure Enforcement,UnauthenticatedDenied,TESTED,,,security,2026-05-20,tests/test_gps_procedure_enforcement.zig,168
 REQ-GPS-PROC-003,GPS Phase 5 Procedure,MetadataReadOnly,TESTED,,,security,2026-05-21,src/execution/procedure_access.zig,114
 REQ-GPS-WIRE-001,GPS Wire Principal Forwarding,BeginQuery,IMPL,,,security,2026-05-21,src/client/quic_query_runner.zig,106
-REQ-GPS-WIRE-001,GPS Wire Principal Forwarding,BuildStep,TESTED,,,security,2026-05-21,build.zig,12716
+REQ-GPS-WIRE-001,GPS Wire Principal Forwarding,BuildStep,TESTED,,,security,2026-05-21,build.zig,12735
 REQ-GPS-WIRE-001,GPS Wire Principal Forwarding,CliEnvelopeBuild,TESTED,,,security,2026-06-11,src/cli/main.zig,1681
 REQ-GPS-WIRE-001,GPS Wire Principal Forwarding,CliForwardPrincipal,TESTED,,,security,2026-06-11,src/cli/main.zig,1923
 REQ-GPS-WIRE-001,GPS Wire Principal Forwarding,CliForwardPrincipalFlag,TESTED,,,security,2026-06-11,src/cli/main.zig,1035
@@ -1959,7 +1959,7 @@ REQ-GPS-WIRE-001,GPS Wire Principal Forwarding,SchemaField,TESTED,,,security,202
 REQ-GPS-WIRE-001,GPS Wire Principal Forwarding,ServerUnpack,TESTED,,,security,2026-06-10,src/server/quic_connection_handler.zig,7545
 REQ-GPS-WIRE-002,GPS Distributed Wire,BackwardCompat,TESTED,,,security,2026-05-21,tests/test_gps_distributed_wire.zig,167
 REQ-GPS-WIRE-002,GPS Distributed Wire,BatchQueries,EXEMPT,,,security,2026-06-11,src/distributed/query_transport.zig,179
-REQ-GPS-WIRE-002,GPS Distributed Wire,BuildStep,TESTED,,,security,2026-05-21,build.zig,12728
+REQ-GPS-WIRE-002,GPS Distributed Wire,BuildStep,TESTED,,,security,2026-05-21,build.zig,12747
 REQ-GPS-WIRE-002,GPS Distributed Wire,ConnectionExecuteQuery,EXEMPT,,,security,2026-06-11,src/distributed/query_transport.zig,395
 REQ-GPS-WIRE-002,GPS Distributed Wire,ExecutePlan,IMPL,,,security,2026-05-21,src/distributed/enhanced_query_coordinator.zig,250
 REQ-GPS-WIRE-002,GPS Distributed Wire,ExecuteRemoteQuery,EXEMPT,,,security,2026-06-11,src/distributed/query_transport.zig,141
@@ -4509,7 +4509,7 @@ REQ-PERF-TRAVERSAL-COMPOSITE-SEED,TraversalCompositeSeed,Regression,TESTED,,,per
 REQ-PERF-TRAVERSAL-REVERSE-SEED,TraversalReverseSeed,Regression,TESTED,,,performance,2026-06-26,tests/test_traversal_reverse_seed.zig,19
 REQ-PERF-TRAVERSAL-SEED,TraversalSeedPerf,PerfMicrobenchmark,TESTED,,,performance,2026-06-26,tests/test_traversal_seed_perf.zig,22
 REQ-PERF-TYPED-EDGE-ENUM,TypedEdgeIndexScan,NoNodeWalk,TESTED,,,storage,2026-07-02,tests/test_typed_edge_index_scan.zig,36
-REQ-PERF-UNORDERED-STREAM-001,UnorderedNodeScanStreaming,TransportFastPath,IMPL,,,engine,2026-06-19,src/server/node_scan_stream.zig,941
+REQ-PERF-UNORDERED-STREAM-001,UnorderedNodeScanStreaming,TransportFastPath,IMPL,,,engine,2026-06-19,src/server/node_scan_stream.zig,953
 REQ-PERF-WAL-001,WriteAheadLog,DeltaPersistence,TESTED,,,storage,2026-03-31,src/wal.zig,51
 REQ-PERF-WAL-001,WriteAheadLog,UnitTest,TESTED,,,storage,2026-02-17,tests/test_wal.zig,47
 REQ-PERF-WAL-002,WriteAheadLog,MutationCallback,TESTED,,,storage,2026-02-17,src/graph_store.zig,15766
@@ -5145,12 +5145,12 @@ REQ-SNAPSHOT-002,SnapshotInstallation,SnapshotRestore,TESTED,,,backup,2026-01-15
 REQ-SNAPSHOT-003,SnapshotInstallation,IncrementalSnapshot,TESTED,,,backup,2026-01-15,tests/test_gap_0193_remaining_categories.zig,282
 REQ-SNAPSHOT-004,SnapshotInstallation,SnapshotValidation,TESTED,,,backup,2026-01-15,tests/test_gap_0193_remaining_categories.zig,290
 REQ-SNAPSHOT-005,SnapshotInstallation,SnapshotCleanup,TESTED,,,backup,2026-01-15,tests/test_gap_0193_remaining_categories.zig,298
-REQ-SONNY-1218-INMEM-SCAN,EngineDirectNodeScanDecline,AdapterGuard,TESTED,,,engine,2026-09-13,src/server/node_scan_stream.zig,854
+REQ-SONNY-1218-INMEM-SCAN,EngineDirectNodeScanDecline,AdapterGuard,TESTED,,,engine,2026-09-13,src/server/node_scan_stream.zig,866
 REQ-SONNY-1218-INMEM-SCAN,EngineDirectNodeScanDecline,Regression,TESTED,,,engine,2026-09-13,tests/test_sonny1218_in_memory_node_scan.zig,34
 REQ-SONNY-1221-FAST-PATH-SCHEMA,EngineDirectProjectionSchema,Regression,TESTED,,,engine,2026-09-24,tests/test_sonny1221_fast_path_schema.zig,36
 REQ-SONNY-1221-FAST-PATH-SCHEMA,EngineDirectProjectionSchema,SchemaFrameTyping,TESTED,,,engine,2026-09-24,src/server/node_scan_stream.zig,233
 REQ-SONNY-1229-ENGINE-DIRECT-TENANCY,EngineDirectTenantScope,Regression,TESTED,,,security,2026-09-13,tests/test_sonny1229_strict_tenancy_read.zig,40
-REQ-SONNY-1229-ENGINE-DIRECT-TENANCY,EngineDirectTenantScope,TenantGuard,TESTED,,,security,2026-09-13,src/server/node_scan_stream.zig,887
+REQ-SONNY-1229-ENGINE-DIRECT-TENANCY,EngineDirectTenantScope,TenantGuard,TESTED,,,security,2026-09-13,src/server/node_scan_stream.zig,899
 REQ-SONNY-1318-PROCEDURE-TENANCY,GraphProcedureTenantScope,FtsStrictTenancyFailClosed,TESTED,,,security,2026-09-13,tests/test_fts_authorization.zig,463
 REQ-SONNY-1318-PROCEDURE-TENANCY,GraphProcedureTenantScope,Regression,TESTED,,,security,2026-09-13,tests/test_sonny1318_procedure_tenancy.zig,46
 REQ-SONNY-1318-PROCEDURE-TENANCY,GraphProcedureTenantScope,SharedVisibilityPredicate,TESTED,,,security,2026-09-13,src/execution/tenant_visibility.zig,1
@@ -5162,20 +5162,20 @@ REQ-SONNY-1330-PARALLEL-UNION-ARM-SAFETY,ParallelUnionArms,ReadOnlyArmHydration,
 REQ-SONNY-2394-VARLEN-ROW-OWNERSHIP,VariableLengthPathRowOwnership,Regression,TESTED,,,engine,2026-09-23,tests/test_sonny2394_varlen_rel_list_ownership.zig,22
 REQ-SONNY-2463-BARE-NODE-LEAK,EngineDirectNodeOwnership,PageFreesReturnedNode,TESTED,,,engine,2026-09-25,src/server/node_scan_stream.zig,335
 REQ-SONNY-2463-BARE-NODE-LEAK,EngineDirectNodeOwnership,Regression,TESTED,,,engine,2026-09-25,tests/test_sonny2463_bare_node_leak.zig,21
-REQ-SONNY-2463-MATERIALIZE-OOM,EngineDirectNodeOwnership,PartialNodeFreed,TESTED,,,engine,2026-09-25,src/server/node_scan_stream.zig,2173
+REQ-SONNY-2463-MATERIALIZE-OOM,EngineDirectNodeOwnership,PartialNodeFreed,TESTED,,,engine,2026-09-25,src/server/node_scan_stream.zig,2200
 REQ-SONNY-2463-MATERIALIZE-OOM,EngineDirectNodeOwnership,ReadMapPartialFailure,TESTED,,,engine,2026-09-25,src/storage/graph_storage_adapter.zig,1556
 REQ-SONNY-2463-MATERIALIZE-OOM,EngineDirectNodeOwnership,Regression,TESTED,,,engine,2026-09-25,tests/test_sonny2463_materialize_oom.zig,29
-REQ-SONNY-2464-STRING-VALUE-LEAKS,EngineDirectNodeOwnership,DeepNodeDestroy,TESTED,,,engine,2026-09-25,src/server/node_scan_stream.zig,829
+REQ-SONNY-2464-STRING-VALUE-LEAKS,EngineDirectNodeOwnership,DeepNodeDestroy,TESTED,,,engine,2026-09-25,src/server/node_scan_stream.zig,841
 REQ-SONNY-2464-STRING-VALUE-LEAKS,EngineDirectNodeOwnership,Regression,TESTED,,,engine,2026-09-25,tests/test_sonny2464_string_value_leaks.zig,22
-REQ-SONNY-2472-DUPLICATE-PROJECTION,EngineDirectProjectionOwnership,CellOwnsItsString,TESTED,,,engine,2026-09-25,src/server/node_scan_stream.zig,795
+REQ-SONNY-2472-DUPLICATE-PROJECTION,EngineDirectProjectionOwnership,CellOwnsItsString,TESTED,,,engine,2026-09-25,src/server/node_scan_stream.zig,807
 REQ-SONNY-2472-DUPLICATE-PROJECTION,EngineDirectProjectionOwnership,Regression,TESTED,,,engine,2026-09-25,tests/test_sonny2472_duplicate_projection.zig,15
 REQ-SONNY-2473-SKIP-WITHOUT-LIMIT,EngineDirectRowWindow,Regression,TESTED,,,engine,2026-09-25,tests/test_sonny2473_skip_without_limit.zig,21
-REQ-SONNY-2473-SKIP-WITHOUT-LIMIT,EngineDirectRowWindow,UnboundedWithoutLimit,TESTED,,,engine,2026-09-25,src/server/node_scan_stream.zig,1516
-REQ-SONNY-2652-PLANNED-READ-SKIP,PlannedReadRowWindow,MaterializeCapNeedsLimit,TESTED,,,engine,2026-09-25,src/execution/planned_read_runtime.zig,3667
+REQ-SONNY-2473-SKIP-WITHOUT-LIMIT,EngineDirectRowWindow,UnboundedWithoutLimit,TESTED,,,engine,2026-09-25,src/server/node_scan_stream.zig,1528
+REQ-SONNY-2652-PLANNED-READ-SKIP,PlannedReadRowWindow,MaterializeCapNeedsLimit,TESTED,,,engine,2026-09-25,src/execution/planned_read_runtime.zig,3707
 REQ-SONNY-2652-PLANNED-READ-SKIP,PlannedReadRowWindow,Regression,TESTED,,,engine,2026-09-25,tests/test_sonny2652_planned_read_skip_without_limit.zig,35
-REQ-SONNY-2653-PLANNED-READ-EXT-LEAK,PlannedReadStorageReads,FreeExtendedReadCopy,TESTED,,,engine,2026-09-25,src/execution/planned_read_runtime.zig,3472
+REQ-SONNY-2653-PLANNED-READ-EXT-LEAK,PlannedReadStorageReads,FreeExtendedReadCopy,TESTED,,,engine,2026-09-25,src/execution/planned_read_runtime.zig,3512
 REQ-SONNY-2653-PLANNED-READ-EXT-LEAK,PlannedReadStorageReads,Regression,TESTED,,,engine,2026-09-25,tests/test_sonny2653_planned_read_ext_read_leak.zig,24
-REQ-SONNY-2656-EXTENDED-VALUE-LEAKS,EngineDirectExtendedValueOwnership,PredicateScratchArena,TESTED,,,engine,2026-09-25,src/server/node_scan_stream.zig,2109
+REQ-SONNY-2656-EXTENDED-VALUE-LEAKS,EngineDirectExtendedValueOwnership,PredicateScratchArena,TESTED,,,engine,2026-09-25,src/server/node_scan_stream.zig,2124
 REQ-SONNY-2656-EXTENDED-VALUE-LEAKS,EngineDirectExtendedValueOwnership,Regression,TESTED,,,engine,2026-09-25,tests/test_sonny2656_extended_value_leaks.zig,24
 REQ-SONNY-2667-RETURN-WHERE,PlannedReadReturnWhere,PostProjectionFilter,TESTED,,,engine,2026-09-25,src/execution.zig,3699
 REQ-SONNY-2667-RETURN-WHERE,PlannedReadReturnWhere,Regression,TESTED,,,engine,2026-09-25,tests/test_sonny2667_return_where.zig,24
@@ -5466,7 +5466,7 @@ REQ-SONNY-3189-CHAIN-WALKERS,QueryAnalysis,IterativeWalkers,TESTED,,,execution,2
 REQ-SONNY-3189-CHAIN-WALKERS,QueryAnalysis,IterativeWalkers,TESTED,,,query,2026-09-27,src/query/query_traits.zig,320
 REQ-SONNY-3189-HAVING-WALKERS,GroupedHaving,IterativeWalkers,TESTED,,,engine,2026-09-28,src/execution/grouped_having.zig,561
 REQ-SONNY-3189-HAVING-WALKERS,GroupedHaving,Regression,TESTED,,,engine,2026-09-28,tests/test_sonny3189_grouped_having_chains.zig,28
-REQ-SONNY-3189-HAVING-WALKERS,PlannedReadRuntime,ProjectionWalker,TESTED,,,engine,2026-09-28,src/execution/planned_read_runtime.zig,2248
+REQ-SONNY-3189-HAVING-WALKERS,PlannedReadRuntime,ProjectionWalker,TESTED,,,engine,2026-09-28,src/execution/planned_read_runtime.zig,2288
 REQ-SONNY-3191-HOLD-AT-COMMIT,MultiGraphIsolation,ReleaseAtStatement,TESTED,,,storage,2026-09-27,src/graph_store.zig,14844
 REQ-SONNY-3191-POLICY-EXPR-BOUNDS,GPS Expression Compilation,NestingAndLinkBounds,TESTED,,,security,2026-09-27,src/security/policy_expression.zig,157
 REQ-SONNY-3191-RESERVED-GRAPH-NAMES,MultiGraphIsolation,RefuseReserved,TESTED,,,storage,2026-09-27,src/execution/session_graph.zig,39
@@ -5508,6 +5508,9 @@ REQ-SONNY-3348-LIMIT-ATOMICITY,DistributedCluster,ProposeFence,TESTED,,,distribu
 REQ-SONNY-3348-LIMIT-ATOMICITY,Execution,Regression,TESTED,,,execution,2026-09-28,tests/test_sonny3348_limit_atomicity.zig,17
 REQ-SONNY-3348-LIMIT-ATOMICITY,Execution,StoreWriteFence,TESTED,,,storage,2026-09-28,src/graph_store.zig,15784
 REQ-SONNY-3348-LIMIT-ATOMICITY,ExpressionEvaluator,PendingStatementFailure,TESTED,,,eval,2026-09-28,src/eval.zig,200
+REQ-SONNY-3349-PROFILE-RELAY,ExpressionEvaluator,ProfiledRelayScope,TESTED,,,eval,2026-09-28,src/execution/planned_read_runtime.zig,486
+REQ-SONNY-3349-PROFILE-RELAY,ExpressionEvaluator,Regression,TESTED,,,eval,2026-09-28,tests/test_sonny3349_profile_relay.zig,16
+REQ-SONNY-3349-PROFILE-RELAY,NodeScanStream,MaterializeLimitFails,TESTED,,,server,2026-09-28,src/server/node_scan_stream.zig,2139
 REQ-SONNY-CAPABILITY-PROFILE-001,SonnyCapabilityProfile,DiscoveryRows,TESTED,,,execution,2026-09-08,src/execution/admin_ddl.zig,219
 REQ-SONNY-CAPABILITY-PROFILE-001,SonnyCapabilityProfile,PublicationContract,TESTED,,,execution,2026-09-08,tests/test_sonny_capability_profile.zig,1
 REQ-SONNY-CAPABILITY-PROFILE-002,SonnyCapabilityProfile,Config,IMPL,,,server,2026-09-08,src/server/cli_args.zig,59

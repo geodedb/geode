@@ -1059,12 +1059,14 @@
     lived in a function that had returned: `MATCH (n:C) WHERE n.v >= 0
     RETURN [[...60 levels...]] AS v UNION ALL ...` hung the request thread,
     and any read could corrupt its stack; pre-existing (SONNY-3315).
-  - A limit the evaluator runs into fails the query wherever it happens:
-    in a parallel UNION arm (it runs on a thread of its own, and its record
-    of the limit was lost), and for every resource limit, out of memory
-    included, where a caller had turned it into a value (an EXISTS or
-    COUNT { } subquery's WHERE, an ORDER BY key, the node scan's
-    inline-property seek). A grouped HAVING chain is compared only with
+  - A limit the evaluator runs into, out of memory included, fails the
+    query where a caller had turned it into a value (an EXISTS or COUNT { }
+    subquery's WHERE, an ORDER BY key, the node scan's inline-property seek)
+    and in a parallel UNION arm (it runs on a thread of its own, and its
+    record of the limit was lost). (Round 17 correction: this held for
+    statements run through the executor's statement entry point only; a
+    PROFILE, and an out of memory materializing a node in the node scan,
+    could still become an answer. Fixed in round 17, SONNY-3349.) A grouped HAVING chain is compared only with
     projected items and keys of its own length: 32 items of 4088 links took
     13 s to rewrite, now under 0.1 s (SONNY-3316).
   - A dropped graph's id map and name are freed by their last holder: a
@@ -1096,7 +1098,7 @@
 
   **Behaviour change:** `GEODE_QUIC_ADMISSION_STACK_MB` below 8 is taken
   as 8.
-- **Round 17: the round 16 review's findings (SONNY-3348):**
+- **Round 17: the round 16 review's findings (SONNY-3348, SONNY-3349):**
   - A statement the limit relay fails writes nothing the limit decided.
     The relay failed the statement only after it had run, so its writes
     stayed: `MATCH (n:C) SET n.w = EXISTS { ... }`, where the subquery's
@@ -1110,6 +1112,17 @@
     an explicit transaction, which fails with the statement (SONNY-3348).
     Changes the statement applied before the limit was reached stay, as
     they do for any statement that fails part way (see Known limitations).
+  - The limit relay covers exactly these paths: every statement the
+    executor runs (`executeStatementWithContext`: the statements of a gRPC,
+    QUIC or embedded program, and EXPLAIN'd or PROFILE'd statements other
+    than queries); a PROFILE'd query (`executeProfiledIfSupported`, which
+    answered a swallowed 54001 or out of memory as a profile, 00000, and
+    kept a PROFILE'd change's writes); the arms of a parallel UNION; and
+    the engine-direct node scan, whose paging scan, filtered count and
+    WHERE + LIMIT enumeration fail on an out of memory materializing a
+    node, where they skipped the node as if it had been deleted
+    (SONNY-3349). The bulk-ingest fast paths take literals and parameters
+    only, and fail on any evaluation error.
 
 ### Fixed
 

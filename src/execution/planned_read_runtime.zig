@@ -483,6 +483,46 @@ pub fn executeProfiledIfSupported(
     // SONNY-3135 (N7b): a failed profiled change aborts its engine transaction.
     errdefer execution.failEntryPoint();
 
+    // CANARY: REQ=REQ-SONNY-3349-PROFILE-RELAY; FEATURE="ExpressionEvaluator"; ASPECT=ProfiledRelayScope; STATUS=TESTED; TEST=tests/test_sonny3349_profile_relay.zig; OWNER=eval; UPDATED=2026-09-28
+    // SONNY-3349 (round 17): the profiled run is a statement of its own, so
+    // it opens the relay's scope (`execution.executeStatementWithContext`
+    // does for every other statement) and fails with what a caller
+    // swallowed in it: a limit (54001, out of memory, the read budget) or an
+    // IN type error. PROFILE answered those as a profile (00000), and a
+    // PROFILE'd change kept its writes; inside the scope the store's write
+    // fence refuses them too (SONNY-3348). Nested under a statement's own
+    // scope (`executeIfSupported`), it does not own the scope, and the
+    // statement fails instead.
+    const owns_scope = eval.enterInPredicateScope();
+    var profiled = (executeProfiledInScope(allocator, q, context, param_names, param_values, apply_window) catch |err| {
+        _ = eval.exitInPredicateScope(owns_scope);
+        _ = eval.takeDeferredLimitError(owns_scope);
+        return err;
+    }) orelse {
+        _ = eval.exitInPredicateScope(owns_scope);
+        _ = eval.takeDeferredLimitError(owns_scope);
+        return null;
+    };
+    const limit_error = eval.takeDeferredLimitError(owns_scope);
+    const in_type_error = eval.exitInPredicateScope(owns_scope);
+    if (in_type_error or limit_error != null) {
+        profiled.result.deinit(allocator);
+        profiled.deinitMetadata(allocator);
+        if (in_type_error) return error.InListRequiresList;
+        return limit_error.?;
+    }
+    return profiled;
+}
+
+/// SONNY-3349: `executeProfiledIfSupported`'s run, inside its relay scope.
+fn executeProfiledInScope(
+    allocator: std.mem.Allocator,
+    q: *const ast.Query,
+    context: ExecutionContext,
+    param_names: []const []const u8,
+    param_values: []const Value,
+    apply_window: bool,
+) !?ProfiledExecution {
     var plan = (try buildPlanIfSupported(allocator, q, context)) orelse return null;
     errdefer plan.deinit(allocator);
 

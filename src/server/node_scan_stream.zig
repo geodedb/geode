@@ -413,9 +413,15 @@ pub const NodeScanStream = struct {
             // ONLY those keys (cheap per-key directory lookup) instead of
             // decoding+duping every persisted property.
             const node = if (self.needed_keys) |keys|
-                materializeNodeProjected(allocator, self.graph_name, slot_id, keys) catch continue
+                materializeNodeProjected(allocator, self.graph_name, slot_id, keys) catch |err| {
+                    if (eval.isResourceLimitError(err)) return err; // SONNY-3349
+                    continue;
+                }
             else
-                materializeNode(allocator, self.graph_name, slot_id) catch continue;
+                materializeNode(allocator, self.graph_name, slot_id) catch |err| {
+                    if (eval.isResourceLimitError(err)) return err; // SONNY-3349
+                    continue;
+                };
             var node_tracked = false;
             errdefer if (!node_tracked) destroyNode(allocator, node);
 
@@ -688,9 +694,15 @@ pub const NodeScanStream = struct {
                     // GAP-0902: a filtered count needs ONLY the predicate's keys
                     // (no projection, no node escape), so read just those keys.
                     const node = if (self.needed_keys) |keys|
-                        materializeNodeProjected(allocator, self.graph_name, slot_id, keys) catch continue
+                        materializeNodeProjected(allocator, self.graph_name, slot_id, keys) catch |err| {
+                            if (eval.isResourceLimitError(err)) return err; // SONNY-3349
+                            continue;
+                        }
                     else
-                        materializeNode(allocator, self.graph_name, slot_id) catch continue;
+                        materializeNode(allocator, self.graph_name, slot_id) catch |err| {
+                            if (eval.isResourceLimitError(err)) return err; // SONNY-3349
+                            continue;
+                        };
                     defer destroyNode(allocator, node);
                     if (try self.evalPredicate(&scratch, allocator, where_expr, node)) matched += 1;
                 }
@@ -2069,7 +2081,10 @@ fn slotMatchesPredicate(
     param_values: []const Value,
     context: ExecutionContext,
 ) !bool {
-    const node = materializeNode(allocator, graph_name, slot_id) catch return false;
+    const node = materializeNode(allocator, graph_name, slot_id) catch |err| {
+        if (eval.isResourceLimitError(err)) return err; // SONNY-3349
+        return false;
+    };
     defer destroyNode(allocator, node);
     // SONNY-2656: as in `evalPredicate`, the evaluation runs on `scratch`,
     // reset before this returns.
@@ -2121,7 +2136,19 @@ fn predicateAllocator(scratch: *std.heap.ArenaAllocator, allocator: std.mem.Allo
     return scratch.allocator();
 }
 
+// CANARY: REQ=REQ-SONNY-3349-PROFILE-RELAY; FEATURE="NodeScanStream"; ASPECT=MaterializeLimitFails; STATUS=TESTED; TEST=tests/test_sonny3349_profile_relay.zig; OWNER=server; UPDATED=2026-09-28
+/// SONNY-3349 (round 17): a test seam. When set on a thread, `materializeNode`
+/// and `materializeNodeProjected` fail with it, as an allocation or a node
+/// deleted under the scan would. Never set outside tests.
+///
+/// The scan skips a node it cannot materialize, which a concurrent delete
+/// explains; a resource limit (out of memory) is not a missing node, and
+/// fails the query (the paging scan, the filtered count, and the WHERE +
+/// LIMIT enumeration). It became a row the query did not return.
+pub threadlocal var test_materialize_error: ?error{ OutOfMemory, NodeNotFound } = null;
+
 fn materializeNode(allocator: std.mem.Allocator, graph_name: []const u8, slot_id: u64) !*graph_store.Node {
+    if (test_materialize_error) |err| return err;
     _ = g_nodes_materialized_total.fetchAdd(1, .monotonic);
     const adapter = graph_store.getGlobalAdapter() orelse return error.Unsupported;
     const node = try newNode(allocator, adapter, graph_name, slot_id);
@@ -2214,6 +2241,7 @@ fn materializeNodeProjected(
     slot_id: u64,
     needed_keys: []const []const u8,
 ) !*graph_store.Node {
+    if (test_materialize_error) |err| return err; // SONNY-3349
     _ = g_nodes_materialized_total.fetchAdd(1, .monotonic);
     const adapter = graph_store.getGlobalAdapter() orelse return error.Unsupported;
     const node = try newNode(allocator, adapter, graph_name, slot_id);
