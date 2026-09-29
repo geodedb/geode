@@ -197,6 +197,21 @@ pub fn set(session: *execution.SessionState, graph: ?[]const u8) std.mem.Allocat
 }
 
 /// The graph `context`'s session is on.
+// CANARY: REQ=REQ-SONNY-3350-ROUND16-MINORS; FEATURE="GraphRBACEnforcement"; ASPECT=AuthorizeSnapshotRead; STATUS=TESTED; TEST=tests/test_sonny3350_round16_minors.zig; OWNER=security; UPDATED=2026-09-28
+/// SONNY-3350 (round 17): may the program running in `context` read
+/// `graph`, one of the graphs its statements run on
+/// (`graph_store.snapshotUnderReadLocks`)? The checks `change` makes for
+/// the USE GRAPH that moves the program there, in its order, and nothing
+/// else (no existence check: a graph that is not there has nothing to lock
+/// or copy, and the executor reports it). The session's own graph needs
+/// none: it was bound at HELLO or by an earlier USE GRAPH.
+pub fn authorizeSnapshotRead(context: execution.ExecutionContext, graph: []const u8) error{ InternalGraph, GraphBound, Unauthorized }!void {
+    if (std.mem.eql(u8, graph, current(context))) return;
+    try refuseInternal(graph);
+    if (context.graph_bound) return error.GraphBound;
+    if (!mayBind(context.principal, graph)) return error.Unauthorized;
+}
+
 pub fn current(context: execution.ExecutionContext) []const u8 {
     const session = context.session_state orelse return graph_store.DEFAULT_GRAPH_NAME;
     return session.graph orelse graph_store.DEFAULT_GRAPH_NAME;

@@ -2219,6 +2219,12 @@ pub fn materializeNodeForTest(allocator: std.mem.Allocator, graph_name: []const 
     return materializeNode(allocator, graph_name, slot_id);
 }
 
+/// SONNY-3350 (round 17): a test seam: `resolveExternalNodeId`.
+pub fn resolveExternalNodeIdForTest(allocator: std.mem.Allocator, graph_name: []const u8, slot_id: u64) !u64 {
+    const adapter = graph_store.getGlobalAdapter() orelse return error.Unsupported;
+    return resolveExternalNodeId(allocator, adapter, graph_store.getGlobalStore(allocator), graph_name, slot_id);
+}
+
 /// Test-only (SONNY-2463): `destroyNode`, for a node `materializeNodeForTest`
 /// built.
 pub fn destroyNodeForTest(allocator: std.mem.Allocator, node: *graph_store.Node) void {
@@ -2332,12 +2338,9 @@ fn resolveExternalNodeId(
     graph_name: []const u8,
     slot_id: u64,
 ) !u64 {
-    // Fast path: IdMap already has the mapping.
-    if (store.getIdMap(graph_name)) |id_map| {
-        if (id_map.nodeUuid(slot_id)) |uuid_128| {
-            return @as(u64, @truncate(uuid_128));
-        }
-    }
+    // Fast path: IdMap already has the mapping. SONNY-3350: read with the
+    // map pinned (`GraphStore.idMapNodeId`).
+    if (store.idMapNodeId(graph_name, slot_id)) |id| return id;
 
     // Slow path: read the persisted public ID property from the adapter.
     if (adapter.getNodeProperty(graph_name, slot_id, graph_store.INTERNAL_NODE_ID_PROPERTY_KEY, allocator) catch null) |stored_prop| {
@@ -2348,9 +2351,8 @@ fn resolveExternalNodeId(
             else => null,
         };
         if (public_id) |pid| {
-            // Back-fill the IdMap for future lookups.
-            const im = store.getOrCreateIdMap(graph_name) catch return pid;
-            im.insertNodeWithSlot(@as(u128, pid), slot_id) catch {};
+            // Back-fill the IdMap for future lookups (SONNY-3350: pinned).
+            store.idMapBackfillNode(graph_name, pid, slot_id);
             return pid;
         }
     }

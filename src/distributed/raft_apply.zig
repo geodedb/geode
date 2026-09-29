@@ -611,6 +611,21 @@ fn applySchemaChange(allocator: Allocator, store_opt: ?*GraphStore, sc: SchemaCh
         },
 
         .drop_graph => {
+            // CANARY: REQ=REQ-SONNY-3350-ROUND16-MINORS; FEATURE="DistributedCluster"; ASPECT=RaftDropGraphLock; STATUS=TESTED; TEST=tests/test_sonny3350_round16_minors.zig; OWNER=distributed; UPDATED=2026-09-28
+            // SONNY-3350 (round 17): under the graph's write lock, as DROP
+            // GRAPH's handlers run it (SONNY-3028): the drop waits for the
+            // graph's readers and writers, and none starts during it. The
+            // apply thread dropped it with no lock, and freed the graph under
+            // requests holding it. A graph that is not there is not locked
+            // (the lock would create it); the drop is idempotent.
+            if (!store.graphExists(sc.graph)) {
+                log.info("raft apply: drop_graph of a graph that is not there (idempotent)", &.{
+                    Attr.string("graph", sc.graph),
+                });
+                return allocator.alloc(u8, 0);
+            }
+            const lock = graph_store_mod.acquireGraphWriteLock(sc.graph);
+            defer graph_store_mod.releaseGraphLock(lock);
             store.dropGraph(sc.graph) catch |err| switch (err) {
                 error.GraphNotFound => {}, // idempotent
                 error.CannotDropDefaultGraph => {

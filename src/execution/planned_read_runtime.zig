@@ -3130,8 +3130,8 @@ fn materializeEdge(allocator: std.mem.Allocator, graph_name: []const u8, edge_st
 
     const adapter = graph_store.getGlobalAdapter() orelse return error.Unsupported;
     const store = graph_store.getGlobalStore(allocator);
-    const id_map = store.getIdMap(graph_name) orelse return error.IdMapNotLoaded;
-    const edge_id = @as(u64, @truncate(id_map.edgeUuid(edge_step.edge_id) orelse return error.EdgeSlotMappingMissing));
+    // SONNY-3350: read with the IdMap pinned (`GraphStore.idMapEdgeId`).
+    const edge_id = store.idMapEdgeId(graph_name, edge_step.edge_id) orelse return error.EdgeSlotMappingMissing;
     const from_id = try resolveExternalNodeId(allocator, adapter, store, graph_name, edge_step.actual_from_slot);
     const to_id = try resolveExternalNodeId(allocator, adapter, store, graph_name, edge_step.actual_to_slot);
 
@@ -3177,12 +3177,9 @@ fn resolveExternalNodeId(
     graph_name: []const u8,
     slot_id: u64,
 ) !u64 {
-    // Fast path: IdMap already has the mapping.
-    if (store.getIdMap(graph_name)) |id_map| {
-        if (id_map.nodeUuid(slot_id)) |uuid_128| {
-            return @as(u64, @truncate(uuid_128));
-        }
-    }
+    // Fast path: IdMap already has the mapping. SONNY-3350: read with the
+    // map pinned (`GraphStore.idMapNodeId`).
+    if (store.idMapNodeId(graph_name, slot_id)) |id| return id;
 
     // Slow path: read the persisted public ID property from the adapter.
     if (adapter.getNodeProperty(graph_name, slot_id, graph_store.INTERNAL_NODE_ID_PROPERTY_KEY, allocator) catch null) |stored_prop| {
@@ -3193,9 +3190,8 @@ fn resolveExternalNodeId(
             else => null,
         };
         if (public_id) |pid| {
-            // Back-fill the IdMap for future lookups.
-            const im = store.getOrCreateIdMap(graph_name) catch return pid;
-            im.insertNodeWithSlot(@as(u128, pid), slot_id) catch {};
+            // Back-fill the IdMap for future lookups (SONNY-3350: pinned).
+            store.idMapBackfillNode(graph_name, pid, slot_id);
             return pid;
         }
     }
@@ -4262,4 +4258,10 @@ fn containsName(names: []const []const u8, candidate: []const u8) bool {
         if (std.mem.eql(u8, name, candidate)) return true;
     }
     return false;
+}
+
+/// SONNY-3350 (round 17): a test seam: `resolveExternalNodeId`.
+pub fn resolveExternalNodeIdForTest(allocator: std.mem.Allocator, graph_name: []const u8, slot_id: u64) !u64 {
+    const adapter = graph_store.getGlobalAdapter() orelse return error.Unsupported;
+    return resolveExternalNodeId(allocator, adapter, graph_store.getGlobalStore(allocator), graph_name, slot_id);
 }

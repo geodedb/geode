@@ -1098,7 +1098,8 @@
 
   **Behaviour change:** `GEODE_QUIC_ADMISSION_STACK_MB` below 8 is taken
   as 8.
-- **Round 17: the round 16 review's findings (SONNY-3348, SONNY-3349):**
+- **Round 17: the round 16 review's findings (SONNY-3348, SONNY-3349,
+  SONNY-3350):**
   - A statement the limit relay fails writes nothing the limit decided.
     The relay failed the statement only after it had run, so its writes
     stayed: `MATCH (n:C) SET n.w = EXISTS { ... }`, where the subquery's
@@ -1123,6 +1124,14 @@
     node, where they skipped the node as if it had been deleted
     (SONNY-3349). The bulk-ingest fast paths take literals and parameters
     only, and fail on any evaluation error.
+  - Smaller fixes (SONNY-3350): a Raft `drop_graph` entry takes the
+    graph's write lock, as DROP GRAPH does, so it waits for the graph's
+    requests (it freed the graph under them); the engine-direct readers
+    pin a graph's id map while they read it (a reader holding only the
+    global lock did not hold off a DROP GRAPH, which freed the map); and a
+    read of several graphs checks the principal's access to each before it
+    locks or copies any (it took the read lock of, and copied, a graph the
+    principal was then refused).
 
 ### Fixed
 

@@ -2529,6 +2529,53 @@ pub const GraphStore = struct {
         return self.id_maps.get(graph_name);
     }
 
+    // CANARY: REQ=REQ-SONNY-3350-ROUND16-MINORS; FEATURE="IdMap"; ASPECT=PinnedReaderLookups; STATUS=TESTED; TEST=tests/test_sonny3350_round16_minors.zig; OWNER=storage; UPDATED=2026-09-28
+    /// SONNY-3350 (round 17): `getIdMap`, pinned (let it go with
+    /// `unpinIdMap`): no DROP GRAPH frees the map or its name while the
+    /// caller holds it.
+    fn pinIdMap(self: *GraphStore, graph_name: []const u8) ?*id_map_mod.IdMap {
+        const io = std.Io.Threaded.global_single_threaded.io();
+        self.id_maps_lock.lockSharedUncancelable(io);
+        defer self.id_maps_lock.unlockShared(io);
+        const im = self.id_maps.get(graph_name) orelse return null;
+        pinLocked(im);
+        return im;
+    }
+
+    /// SONNY-3350 (round 17): the public node id `graph_name`'s IdMap holds
+    /// for engine slot `slot`, read with the map pinned; null when there is
+    /// none. The engine-direct readers (`planned_read_runtime`,
+    /// `node_scan_stream`, the point-write fast path) used `getIdMap`'s
+    /// pointer with no pin. They relied on the graph's lock, but a reader on
+    /// the global lock alone (`acquireGraphReadLock` falls back to it when the
+    /// graph is missing, as a scan page re-locks after a DROP GRAPH) does not
+    /// hold off a drop, which frees an unpinned map (`retireLocked`).
+    pub fn idMapNodeId(self: *GraphStore, graph_name: []const u8, slot: u64) ?u64 {
+        const im = self.pinIdMap(graph_name) orelse return null;
+        defer self.unpinIdMap(im);
+        if (test_idmap_lookup_hook) |hook| hook(graph_name);
+        const id128 = im.nodeUuid(slot) orelse return null;
+        return @as(u64, @truncate(id128));
+    }
+
+    /// SONNY-3350: `idMapNodeId` for an edge slot.
+    pub fn idMapEdgeId(self: *GraphStore, graph_name: []const u8, slot: u64) ?u64 {
+        const im = self.pinIdMap(graph_name) orelse return null;
+        defer self.unpinIdMap(im);
+        if (test_idmap_lookup_hook) |hook| hook(graph_name);
+        const id128 = im.edgeUuid(slot) orelse return null;
+        return @as(u64, @truncate(id128));
+    }
+
+    /// SONNY-3350: record that engine slot `slot` of `graph_name` is public
+    /// node id `pid` (a reader's back-fill after reading the persisted id),
+    /// in the graph's IdMap, created when missing, held pinned. Best effort.
+    pub fn idMapBackfillNode(self: *GraphStore, graph_name: []const u8, pid: u64, slot: u64) void {
+        const im = self.pinOrCreateIdMap(graph_name) catch return;
+        defer self.unpinIdMap(im);
+        im.insertNodeWithSlot(@as(u128, pid), slot) catch {};
+    }
+
     /// SONNY-3180: a graph's IdMap, with the name `id_maps` keys it by.
     pub const IdMapRef = struct { graph_name: []const u8, map: *id_map_mod.IdMap };
 
@@ -15168,7 +15215,17 @@ pub fn snapshotUnderReadLock(allocator: std.mem.Allocator, graph_name: []const u
 /// by this thread. A graph that does not exist (or is dropped while this
 /// waits) has no lock to take and nothing to copy; the executor reports it as
 /// it does for a read of one graph.
-pub fn snapshotUnderReadLocks(allocator: std.mem.Allocator, graph_names: []const []const u8) !QueryReadSession {
+///
+/// CANARY: REQ=REQ-SONNY-3350-ROUND16-MINORS; FEATURE="GraphRBACEnforcement"; ASPECT=SnapshotAuthorizeFirst; STATUS=TESTED; TEST=tests/test_sonny3350_round16_minors.zig; OWNER=security; UPDATED=2026-09-28
+/// SONNY-3350 (round 17): `context`'s access to each graph is checked
+/// first (`session_graph.authorizeSnapshotRead`, the checks a USE GRAPH of
+/// it makes), before any is hydrated, locked or copied. The executor
+/// refused the USE GRAPH only after this had taken every graph's read
+/// lock and copied it: a principal refused a graph waited on its writers,
+/// and had its data copied into the read's snapshot.
+pub fn snapshotUnderReadLocks(allocator: std.mem.Allocator, graph_names: []const []const u8, context: *const @import("execution.zig").ExecutionContext) !QueryReadSession {
+    const session_graph = @import("execution/session_graph.zig");
+    for (graph_names) |g| try session_graph.authorizeSnapshotRead(context.*, g);
     if (graph_names.len == 1) return snapshotUnderReadLock(allocator, graph_names[0]);
     const source = getPrimaryGlobalStore(allocator);
     for (graph_names) |g| source.ensureGraphHydrated(g);
@@ -15780,6 +15837,12 @@ pub const MutationOp = enum(u8) {
     add_node_label = 9,
     remove_node_label = 10,
 };
+
+/// SONNY-3350 (round 17): a test seam. When set on a thread, the pinned
+/// IdMap readers (`GraphStore.idMapNodeId`, `idMapEdgeId`) call it with the
+/// graph's name between the lookup and the read, so a test can drop the
+/// graph there. Never set outside tests.
+pub threadlocal var test_idmap_lookup_hook: ?*const fn ([]const u8) void = null;
 
 // CANARY: REQ=REQ-SONNY-3348-LIMIT-ATOMICITY; FEATURE="Execution"; ASPECT=StoreWriteFence; STATUS=TESTED; TEST=tests/test_sonny3348_limit_atomicity.zig; OWNER=storage; UPDATED=2026-09-28
 /// SONNY-3348 (round 17): a change on this thread while its statement is to

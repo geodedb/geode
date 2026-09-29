@@ -3431,7 +3431,7 @@ pub fn handleExecute(request_bytes: []const u8, allocator: std.mem.Allocator, ep
                     // No live fallback: it would hold one graph's lock.
                     const read_graphs = try query_traits.programDataGraphList(allocator, &parse_result.program, query_graph_name, homeGraphName(state));
                     defer allocator.free(read_graphs);
-                    if (graph_store.snapshotUnderReadLocks(allocator, read_graphs)) |session| {
+                    if (graph_store.snapshotUnderReadLocks(allocator, read_graphs, &exec_context)) |session| {
                         read_session = session;
                         prev_active_read_store = graph_store.pushActiveQueryReadStore(
                             read_session.?.store(),

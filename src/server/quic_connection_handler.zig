@@ -8195,7 +8195,7 @@ fn handleClientMessage(
                     // No live fallback: it would hold one graph's lock.
                     const read_graphs = try query_traits.programDataGraphList(gpa, &parse_result.program, query_graph_name, homeGraphName(state));
                     defer gpa.free(read_graphs);
-                    if (graph_store.snapshotUnderReadLocks(gpa, read_graphs)) |session| {
+                    if (graph_store.snapshotUnderReadLocks(gpa, read_graphs, &exec_context)) |session| {
                         read_session = session;
                         prev_active_read_store = graph_store.pushActiveQueryReadStore(
                             read_session.?.store(),

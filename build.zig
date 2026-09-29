@@ -9529,6 +9529,24 @@ pub fn build(b: *std.Build) void {
     const sonny3349_step = b.step("test-sonny3349-profile-relay", "Run SONNY-3349 regression (PROFILE fails with a limit or IN type error a caller swallowed, and a PROFILE'd change writes nothing; an out of memory materializing a node fails the node scan's paging scan, filtered count and WHERE + LIMIT enumeration; gRPC and the scan in process)");
     sonny3349_step.dependOn(&run_sonny3349_tests.step);
 
+    // SONNY-3350 (round 17): a Raft drop_graph takes the graph's write lock;
+    // the engine-direct IdMap readers pin the map across a DROP GRAPH; a
+    // read of several graphs checks each graph's access before it locks or
+    // copies any. In process.
+    const sonny3350_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny3350_round16_minors.zig"), .target = target, .optimize = optimize });
+    sonny3350_test_mod.link_libc = true;
+    sonny3350_test_mod.addImport("geode", root_mod);
+    sonny3350_test_mod.addImport("schema", schema_mod);
+    sonny3350_test_mod.addImport("protobuf", protobuf_mod);
+    sonny3350_test_mod.addImport("grpc_impl", sonny1560_shim_mod);
+    sonny3350_test_mod.addImport("logging", logging_mod);
+    sonny3350_test_mod.addImport("transport/quic", transport_quic_mod);
+    const sonny3350_tests = b.addTest(.{ .root_module = sonny3350_test_mod });
+    const run_sonny3350_tests = b.addRunArtifact(sonny3350_tests);
+    shardDep(test_step, &run_sonny3350_tests.step, 1, test_shard_loads, test_shard_index);
+    const sonny3350_step = b.step("test-sonny3350-round16-minors", "Run SONNY-3350 regression (a Raft drop_graph waits for the graph's lock holders; the engine-direct IdMap readers pin the map across a DROP GRAPH; a read of several graphs is refused a graph it may not bind before it locks or copies any; in process)");
+    sonny3350_step.dependOn(&run_sonny3350_tests.step);
+
     // SONNY-3232 (round 15, item 10; pre-existing, diagnosed, left for S2):
     // a QUIC request of 256 KiB is answered, one past the 16 MiB maximum
     // message is not, the 1 MiB and 4 MiB outcomes are recorded, and the

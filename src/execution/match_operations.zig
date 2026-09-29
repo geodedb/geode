@@ -2136,9 +2136,8 @@ pub fn pointWriteFastPath(
     // fallback). Unresolvable -> legacy, BEFORE any write. ---
     const slot = matched_slot.?;
     const node_id: u64 = blk: {
-        if (store.getIdMap(filter_graph)) |im| {
-            if (im.nodeUuid(slot)) |uuid_128| break :blk @as(u64, @truncate(uuid_128));
-        }
+        // SONNY-3350: read with the IdMap pinned (`GraphStore.idMapNodeId`).
+        if (store.idMapNodeId(filter_graph, slot)) |id| break :blk id;
         const stored = adapter.getNodeProperty(filter_graph, slot, graph_store.INTERNAL_NODE_ID_PROPERTY_KEY, allocator) catch null;
         if (stored) |sp| {
             defer switch (sp) {
