@@ -539,6 +539,44 @@ test "SONNY-3248: SKIP / LIMIT parameters, one assignment per property in a SET 
 }
 
 // ---------------------------------------------------------------------------
+// Round 4b-1b (the round 4b-1 review). Each case is the review's repro.
+
+// SONNY-3367 (C-1): a variable is one kind of element. `(r)` after `-[r]->`
+// bound every node of the graph beside the relationship r.
+const every_node = "MATCH (n) RETURN count(*) AS c";
+
+const c1_cases = [_]Case{
+    .{ .write = "MATCH (g:G {i: 1})-[r:R]->(x), (r) SET r.zz = 1", .refused = error.VariableKindConflict, .checks = &.{
+        .{ .query = "MATCH (n) WHERE n.zz = 1 RETURN count(*) AS c", .want = &.{"0"} },
+        .{ .query = "MATCH (g:G)-[e:R]->(x) WHERE e.zz = 1 RETURN count(*) AS c", .want = &.{"0"} },
+    } },
+    .{ .write = "MATCH (g:G {i: 1})-[r:R]->(x), (r) DETACH DELETE r", .refused = error.VariableKindConflict, .checks = &.{
+        .{ .query = every_node, .want = &.{"24"} },
+    } },
+    .{ .write = "MATCH (g:G {i: 1})-[r:R]->(x), (r) RETURN r AS rr LIMIT 2", .refused = error.VariableKindConflict },
+    .{ .write = "MATCH (g:G {i: 1})-[r:R]->(x), (r) SET r.zz = 1 RETURN r AS rr", .refused = error.VariableKindConflict },
+    // A node variable used as a relationship, and the other kinds.
+    .{ .write = "MATCH (a:G {i: 1})-[:R]->(x), (y)-[a]->(z) RETURN count(*) AS c", .refused = error.VariableKindConflict },
+    .{ .write = "MATCH (a:G {i: 1})-[a]->(x) RETURN count(*) AS c", .refused = error.VariableKindConflict },
+    .{ .write = "MATCH (a:G {i: 1})-[r:R*1..1]->(x), (b)-[r]->(c) RETURN count(*) AS c", .refused = error.VariableKindConflict },
+    .{ .write = "MATCH p = (a:G {i: 1})-[:R]->(x), (p) RETURN count(*) AS c", .refused = error.VariableKindConflict },
+    .{ .write = "MATCH (g:G {i: 1})-[r:R]->(x) WITH r MATCH (r) RETURN count(*) AS c", .refused = error.VariableKindConflict },
+    .{ .write = "MATCH (g:G {i: 1})-[r:R]->(x) WITH r AS s MATCH (s)-[:R]->(y) RETURN count(*) AS c", .refused = error.VariableKindConflict },
+    .{ .write = "MATCH (g:G {i: 1})-[r:R]->(x) CREATE (r)-[:T]->(:K)", .refused = error.VariableKindConflict, .checks = &.{
+        .{ .query = every_node, .want = &.{"24"} },
+    } },
+    .{ .write = "CREATE (a:K)-[r:T]->(b:K), (r)", .refused = error.VariableKindConflict, .checks = &.{
+        .{ .query = every_node, .want = &.{"24"} },
+    } },
+    // One relationship variable in two chains is a join, as before.
+    .{ .write = "MATCH (g:G {i: 1})-[r:R]->(x), (y)-[r]->(z) RETURN y.i, z.j", .want = &.{"1|1"} },
+};
+
+test "SONNY-3367 (C-1): a variable named as two kinds of element is refused before anything runs, in every session" {
+    try runCases("SONNY-3367", &c1_cases);
+}
+
+// ---------------------------------------------------------------------------
 // SONNY-3244 (round-4a review I-4): statement nesting. The fix is round
 // 14-16's (on fix/sonny-738-r12: max_statement_nesting, stackHasRoom,
 // max_expr_links and the 16 MiB admission thread), so these repros run only

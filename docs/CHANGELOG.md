@@ -1210,6 +1210,19 @@
   - **UNIQUE constraints are not enforced on CREATE, MERGE or SET (known
     limitation):** the constraint check exists but no write path calls it;
     this is left for a later round.
+- **A variable is one kind of element (SONNY-3367, round 4b-1 review
+  C-1):** SONNY-3318's join read a later chain's first node pattern as
+  unbound when its variable was bound as a relationship, so `MATCH (g)-[r:R]
+  ->(x), (r) DETACH DELETE r` bound r to every node of the graph and deleted
+  the graph, `... SET r.zz = 1` wrote every node, and over gRPC `... RETURN
+  r` read a node as a relationship and aborted the server (integer
+  overflow). A pattern that names one variable as two kinds of element (a
+  node, a relationship, a variable-length relationship list or a path),
+  within a statement part or through a WITH that passes the variable on, is
+  now refused as a syntax error (42000) before anything runs, on every
+  transport and fast path; the join also never binds a relationship's name
+  to a node. A node variable reused as a relationship (`(a)-[a]->(b)`), which
+  joined silently before round 4b-1, is refused the same way.
 - **The parser's limits (SONNY-3244):** parsing runs before authorization,
   and 25,000 `MATCH (n:G) SET n.x = 1;` statements (625 KB) took a 741 MB
   parser arena, so a 16 MB request could hold about 19 GB; about 60 chained

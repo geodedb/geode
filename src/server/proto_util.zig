@@ -283,6 +283,10 @@ pub fn mapError(err: anyerror) ErrorInfo {
         // positional (GAP-0926), refused before anything runs. 42P02 =
         // undefined_parameter (class 42, syntax error or access rule
         // violation).
+        // SONNY-3367: a pattern names one variable as two kinds of element
+        // (a relationship reused as a node pattern bound every node of the
+        // graph). A syntax error, refused before anything runs.
+        error.VariableKindConflict => .{ .code = "42000", .message = "Variable kind conflict: a pattern names one variable as two kinds of element (a node, a relationship, a variable-length relationship list or a path); name each element with a variable of its own" },
         error.MissingParameter => .{ .code = "42P02", .message = "Undefined parameter: the statement references a parameter ($name or $n) that the request does not supply" },
         // GAP-0926: nested aggregate (sum(avg(...))) is invalid.
         error.NestedAggregate => .{ .code = "42803", .message = "Aggregate functions cannot be nested" },

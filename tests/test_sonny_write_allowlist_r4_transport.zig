@@ -233,6 +233,20 @@ const cases = [_]Case{
             .{ .query = "MATCH (q:LQ {i: 1}) SET q.c = 1 SET q.c = q.c + 1 RETURN q.c", .want = "2" },
         },
     },
+    // Round 4b-1b (the round 4b-1 review).
+    // SONNY-3367 (C-1): a relationship variable reused as a node pattern
+    // bound every node; over gRPC, returning it aborted the server.
+    .{ .name = "3367 variable kind", .steps = &.{
+        .{ .query = "MATCH (a:L {i: 1}), (b:L {i: 2}) CREATE (a)-[:LR]->(b)" },
+        .{ .query = "MATCH (a:L {i: 1})-[r:LR]->(b), (r) RETURN r AS rr LIMIT 2", .code = "42000" },
+        .{ .query = "MATCH (a:L {i: 1})-[r:LR]->(b), (r) SET r.x = 1", .code = "42000" },
+        .{ .query = "MATCH (a:L {i: 1})-[r:LR]->(b), (r) DETACH DELETE r", .code = "42000" },
+        .{ .query = "MATCH (a:L {i: 1})-[:LR]->(b), (c)-[a]->(d) RETURN count(*) AS c", .code = "42000" },
+        .{ .query = "MATCH (n:L) RETURN count(n) AS c", .want = "10" },
+        .{ .query = "MATCH (a:L)-[r:LR]->(b) RETURN count(r) AS c", .want = "1" },
+        nothing_written,
+        .{ .query = "RETURN 1 AS alive", .want = "1" },
+    } },
     // I8.
     .{ .name = "I8 nesting", .steps = &.{
         .{ .query = "WITH 1 AS a WITH 1 AS a WITH 1 AS a WITH 1 AS a WITH 1 AS a WITH 1 AS a WITH 1 AS a WITH 1 AS a WITH 1 AS a WITH 1 AS a WITH 1 AS a WITH 1 AS a WITH 1 AS a WITH 1 AS a WITH 1 AS a WITH 1 AS a WITH 1 AS a WITH 1 AS a WITH 1 AS a WITH 1 AS a WITH 1 AS a WITH 1 AS a WITH 1 AS a WITH 1 AS a WITH 1 AS a RETURN a", .code = "54001" },

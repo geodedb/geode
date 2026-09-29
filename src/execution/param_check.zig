@@ -21,7 +21,11 @@
 const std = @import("std");
 const ast = @import("../gql/ast.zig");
 
-pub const Error = error{ MissingParameter, OutOfMemory };
+/// `MissingParameter`: 42P02. `VariableKindConflict` (42000) is a shape
+/// check that rides on the same walk (`queryKindsConflict`): it needs only
+/// the statement, so it is refused here, before any path (a transport's
+/// write fast path included) runs anything.
+pub const Error = error{ MissingParameter, OutOfMemory, VariableKindConflict };
 
 /// Every statement of `program` names only parameters in `supplied` (or ones
 /// it defines with LET).
@@ -63,6 +67,7 @@ pub fn checkStatement(stmt: *const ast.Statement, supplied: []const []const u8) 
         }
     }
     if (c.failed) return error.OutOfMemory;
+    if (c.kind_conflict) return error.VariableKindConflict;
     for (c.used.items) |u| {
         if (has(supplied, u.name) or c.defines(u.scope, u.name)) continue;
         return error.MissingParameter;
@@ -105,6 +110,8 @@ const Collector = struct {
     /// The LET scope a query found while visiting it starts in.
     query_scope: u32 = no_scope,
     failed: bool = false,
+    /// SONNY-3367: a pattern names one variable as two kinds of element.
+    kind_conflict: bool = false,
 
     fn deinit(c: *Collector) void {
         c.stack.deinit(c.alloc);
@@ -136,6 +143,13 @@ const Collector = struct {
     }
 
     fn visit(c: *Collector, comptime T: type, v: *const T) void {
+        if (T == ast.GraphPattern) {
+            // A CREATE, INSERT or MERGE statement's own pattern (a query's
+            // patterns are checked together in `visitFields`).
+            if (patternKindsConflict(c.alloc, &.{v.*}, null, &.{})) |conflict| {
+                if (conflict) c.kind_conflict = true;
+            } else |_| c.failed = true;
+        }
         if (comptime !holds(T)) return;
         if (T == ast.Expr) return c.push(.expr, v);
         if (T == ast.Query) return c.push(.query, v);
@@ -171,6 +185,9 @@ const Collector = struct {
                 c.scope = @intCast(c.lets.items.len - 1);
             }
             c.query_scope = c.scope;
+            if (queryKindsConflict(c.alloc, v)) |conflict| {
+                if (conflict) c.kind_conflict = true;
+            } else |_| c.failed = true;
         }
         inline for (@typeInfo(T).@"struct".fields) |field| {
             const is_param_name = comptime (std.mem.eql(u8, field.name, "limit_param") or std.mem.eql(u8, field.name, "offset_param"));
@@ -214,4 +231,99 @@ fn holds(comptime T: type) bool {
         .int, .float, .bool, .@"enum", .void => false,
         else => @compileError("param_check: a " ++ @typeName(T) ++ " in the AST"),
     };
+}
+
+// ---------------------------------------------------------------------------
+// The shape checks that ride on the walk.
+
+// CANARY: REQ=REQ-SONNY-3367-VARIABLE-KIND; FEATURE="PatternVariables"; ASPECT=KindConflict; STATUS=TESTED; TEST=tests/test_sonny_write_allowlist_r4b.zig; OWNER=engine; UPDATED=2026-09-28
+/// SONNY-3367 (round 4b-1 review C-1): what a pattern variable binds. One
+/// name is one kind of element in a query part: a node, a relationship, the
+/// list of relationships a quantified hop walked, or a path.
+pub const VarKind = enum { node, relationship, relationship_list, path };
+
+const Named = struct { name: []const u8, kind: VarKind };
+
+fn addNamed(alloc: std.mem.Allocator, seen: *std.ArrayList(Named), name: ?[]const u8, kind: VarKind) !bool {
+    const n = name orelse return false;
+    for (seen.items) |s| {
+        if (!std.mem.eql(u8, s.name, n)) continue;
+        return s.kind != kind;
+    }
+    try seen.append(alloc, .{ .name = n, .kind = kind });
+    return false;
+}
+
+/// Whether `patterns` (and `path_var`, and the variables `carried` from a
+/// part before) name one variable as two kinds of element: `MATCH (g)-[r:R]->
+/// (x), (r) DETACH DELETE r` read `(r)` as a node pattern with an unbound
+/// variable, so r was every node of the graph beside the relationship r, and
+/// the DETACH DELETE deleted the graph (over gRPC, returning r read a node
+/// as a relationship and aborted the server). A node variable used as a
+/// relationship (`(a)-[a]->(b)`) was joined the same way. Geode refuses a
+/// variable declared as two kinds of element as a syntax error (42000),
+/// before anything runs.
+fn patternKindsConflict(alloc: std.mem.Allocator, patterns: []const ast.GraphPattern, path_var: ?[]const u8, carried: []const Named) !bool {
+    var seen: std.ArrayList(Named) = .empty;
+    defer seen.deinit(alloc);
+    try seen.appendSlice(alloc, carried);
+    return collectKinds(alloc, &seen, patterns, path_var);
+}
+
+fn collectKinds(alloc: std.mem.Allocator, seen: *std.ArrayList(Named), patterns: []const ast.GraphPattern, path_var: ?[]const u8) !bool {
+    if (try addNamed(alloc, seen, path_var, .path)) return true;
+    for (patterns) |pattern| for (pattern.chains) |chain| {
+        if (try addNamed(alloc, seen, chain.name, .path)) return true;
+        if (chain.head) |head| if (try addNamed(alloc, seen, head.name, .node)) return true;
+        for (chain.hops) |hop| {
+            if (try addNamed(alloc, seen, hop.left.name, .node)) return true;
+            const quantified = hop.rel.min_len != null or hop.rel.max_len != null;
+            if (try addNamed(alloc, seen, hop.rel.name, if (quantified) .relationship_list else .relationship)) return true;
+            if (try addNamed(alloc, seen, hop.right.name, .node)) return true;
+        }
+    };
+    return false;
+}
+
+/// A query part's patterns (its MATCH, its CREATE, its MERGE), and each part
+/// chained after it: a WITH item that passes a variable on (`WITH r`, `WITH r
+/// AS s`) keeps its kind in the next part.
+fn queryKindsConflict(alloc: std.mem.Allocator, head: *const ast.Query) !bool {
+    var carried: std.ArrayList(Named) = .empty;
+    defer carried.deinit(alloc);
+    var seen: std.ArrayList(Named) = .empty;
+    defer seen.deinit(alloc);
+    var part: ?*const ast.Query = head;
+    while (part) |q| : (part = q.next_query) {
+        seen.clearRetainingCapacity();
+        try seen.appendSlice(alloc, carried.items);
+        var patterns: [3]ast.GraphPattern = undefined;
+        var n: usize = 0;
+        patterns[n] = q.match;
+        n += 1;
+        if (q.create_pattern) |cp| {
+            patterns[n] = cp;
+            n += 1;
+        }
+        if (q.merge_statement) |m| {
+            patterns[n] = m.pattern;
+            n += 1;
+        }
+        if (try collectKinds(alloc, &seen, patterns[0..n], q.path_variable)) return true;
+        carried.clearRetainingCapacity();
+        const wc = q.with_clause orelse break;
+        if (q.is_initial_with) break;
+        for (wc.items) |item| {
+            const ident = switch (item.expr) {
+                .Ident => |id| id.orig,
+                else => continue,
+            };
+            for (seen.items) |s| {
+                if (!std.mem.eql(u8, s.name, ident)) continue;
+                try carried.append(alloc, .{ .name = item.alias orelse ident, .kind = s.kind });
+                break;
+            }
+        }
+    }
+    return false;
 }
