@@ -169,11 +169,17 @@ pub fn dispatchToMultiChainHandler(q: ast.Query, all_simple_nodes: bool) Dispatc
     // SONNY-3318 (round 4b-1b review I-D): the one-hop traversals bind a
     // path variable for the RETURN only, after their WHERE and FILTER: `MATCH
     // p = (a:G {i: 1})-[:R]->(b) WHERE length(p) = 1` matched nothing. A
-    // named one-hop path with a WHERE or FILTER goes to the multi-chain
-    // executor, which binds the path before either.
-    if (q.match.chains.len == 1 and q.match.chains[0].hops.len == 1 and (q.where_clause != null or q.filter_clause != null)) {
+    // named one-hop path whose WHERE or FILTER reads the path goes to the
+    // multi-chain executor, which binds the path before either (one that
+    // does not read it stays where its arrays' ownership is kept, SONNY-2394).
+    if (q.match.chains.len == 1 and q.match.chains[0].hops.len == 1) {
         const chain = q.match.chains[0];
-        if (!chain.is_optional and !chain.is_shortest and (chain.name != null or q.path_variable != null)) return .multi_chain_relationship_match;
+        const path_name = chain.name orelse q.path_variable;
+        if (!chain.is_optional and !chain.is_shortest) if (path_name) |pn| {
+            const in_where = if (q.where_clause) |w| whereExprReferencesVar(w, pn) else false;
+            const in_filter = if (q.filter_clause) |f| whereExprReferencesVar(f, pn) else false;
+            if (in_where or in_filter) return .multi_chain_relationship_match;
+        };
     }
 
     // CANARY: REQ=REQ-GQL-MULTI-CHAIN-REL-002; FEATURE="MultiChainRelationshipMatch"; ASPECT=Dispatch; STATUS=TESTED; TEST=geodetestlab/specs/gql_pattern_matching_comprehensive.yml; OWNER=engine; UPDATED=2025-12-23
