@@ -1183,8 +1183,10 @@
   - **SKIP and LIMIT parameters:** a statement's SKIP or LIMIT given as a
     parameter was read by some executors only, so `MATCH (q:Q) SET q.z = 1
     RETURN q.i LIMIT $p` and an in-memory `MATCH (n) RETURN n.i ORDER BY i
-    LIMIT $p` returned every row. The statement's window reads the parameter
-    as it reads a literal.
+    LIMIT $p` returned every row, and so did a LIMIT or SKIP parameter the
+    statement's own `LET $x = ...` defines. The statement's window reads the
+    parameter (the LET's value first, else the request's) as it reads a
+    literal.
   - **One assignment per property in a SET clause:** a clause's values are
     all evaluated before it assigns them, so two assignments to one
     (element, property) have no order; the second silently won (`SET q.a =

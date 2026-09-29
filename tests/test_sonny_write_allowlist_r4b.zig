@@ -491,6 +491,9 @@ const s3248_cases = [_]Case{
     },
     .{ .params = &.{.{ .name = "l", .expr = "2" }}, .write = "MATCH (g:G)-[:R]->(x:X) RETURN x.j AS j ORDER BY j LIMIT $l", .want = &.{ "0", "1" } },
     .{ .write = "MATCH (n:G) RETURN n.i AS i ORDER BY i SKIP 8", .want = &.{ "8", "9" } },
+    // ... and one the statement's own LET defines.
+    .{ .write = "LET $x = 3 MATCH (n:G) RETURN n.i AS i ORDER BY i LIMIT $x", .want = &.{ "0", "1", "2" } },
+    .{ .write = "LET $x = 8 MATCH (n:G) RETURN n.i AS i ORDER BY i SKIP $x", .want = &.{ "8", "9" } },
     // M-2: one SET clause assigns a property of an element once.
     .{ .write = "MATCH (q:Q {i: 1}) SET q.a = 1, q.a = 2", .refused = error.RepeatedSetTarget, .checks = &.{
         .{ .query = "MATCH (q:Q) WHERE q.a IS NOT NULL RETURN count(*) AS c", .want = &.{"0"} },

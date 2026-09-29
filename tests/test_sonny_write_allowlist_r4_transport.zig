@@ -216,6 +216,7 @@ const cases = [_]Case{
         .{ .query = "MATCH (n:L) RETURN n.i AS i ORDER BY i SKIP $s LIMIT $l", .params = &.{ .{ .name = "s", .int = 8 }, .{ .name = "l", .int = 5 } }, .want = "8;9" },
         .{ .query = "MATCH (q:LQ) SET q.x = 1 RETURN q.i AS i ORDER BY i LIMIT $l", .params = &.{.{ .name = "l", .int = 2 }}, .want = "0;1" },
         .{ .query = "MATCH (q:LQ) WHERE q.x = 1 RETURN count(q) AS c", .want = "4" },
+        .{ .query = "LET $x = 3 MATCH (n:L) RETURN n.i AS i ORDER BY i LIMIT $x", .want = "0;1;2" },
     } },
     // SONNY-3248 M-2 and M-3.
     .{

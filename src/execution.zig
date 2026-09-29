@@ -975,18 +975,33 @@ fn freeRowValues(allocator: std.mem.Allocator, result: *ExecutionResult, row: []
     allocator.free(row);
 }
 
-/// SONNY-3248: the value of the SKIP or LIMIT parameter `name` the request
-/// supplies: a non-negative integer, else none (as the executors read it).
-fn windowParam(name: ?[]const u8, context: ExecutionContext) ?usize {
+/// SONNY-3248: the value of the SKIP or LIMIT parameter `name`: the one the
+/// statement's own `LET $name = <expr>` defines (evaluated with the request's
+/// parameters), else the one the request supplies; a non-negative integer,
+/// else none (as the executors read it). `LET $x = 3 MATCH ... LIMIT $x`
+/// returned every row.
+fn windowParam(allocator: std.mem.Allocator, name: ?[]const u8, q: ast.Query, context: ExecutionContext) ?usize {
     const n = name orelse return null;
+    var i = q.let_bindings.len;
+    while (i > 0) {
+        i -= 1;
+        const binding = q.let_bindings[i];
+        if (!std.mem.eql(u8, binding.variable, n)) continue;
+        const env = Env{ .names = &.{}, .values = &.{}, .param_names = context.query_param_names, .param_values = context.query_param_values, .allocator = allocator };
+        const v = eval.evalExpr(allocator, binding.value, env) catch return null;
+        return windowValue(v);
+    }
     for (context.query_param_names, context.query_param_values) |pn, pv| {
-        if (!std.mem.eql(u8, pn, n)) continue;
-        return switch (pv) {
-            .Int => |i| if (i >= 0) @as(usize, @intCast(i)) else null,
-            else => null,
-        };
+        if (std.mem.eql(u8, pn, n)) return windowValue(pv);
     }
     return null;
+}
+
+fn windowValue(v: Value) ?usize {
+    return switch (v) {
+        .Int => |i| if (i >= 0) @as(usize, @intCast(i)) else null,
+        else => null,
+    };
 }
 
 pub fn applyRowWindow(allocator: std.mem.Allocator, result: *ExecutionResult, start: usize, end: usize) !void {
@@ -1578,9 +1593,9 @@ fn executeStatementWithContextInner(allocator: std.mem.Allocator, stmt: ast.Stat
             // $p` and an in-memory `MATCH (n:G) RETURN n.i LIMIT $p` returned
             // every row (the executors that read the parameter themselves
             // apply it first; a LIMIT applied twice is the same window).
-            const start = q.offset orelse windowParam(q.offset_param, context) orelse 0;
+            const start = q.offset orelse windowParam(allocator, q.offset_param, q, context) orelse 0;
             var end = result.rows.len;
-            const limit_value: ?usize = q.limit orelse windowParam(q.limit_param, context);
+            const limit_value: ?usize = q.limit orelse windowParam(allocator, q.limit_param, q, context);
             if (limit_value) |limit_count| {
                 const end_limit = std.math.add(usize, start, limit_count) catch std.math.maxInt(usize);
                 end = @min(end, end_limit);
