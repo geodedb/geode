@@ -1590,6 +1590,37 @@ fn valuesEqual(a: Value, b: Value) bool {
     };
 }
 
+// CANARY: REQ=REQ-SONNY-3248-LET-SCOPE; FEATURE="ParameterBinding"; ASPECT=LetShadowsRequest; STATUS=TESTED; TEST=tests/test_sonny_write_allowlist_r4b.zig; OWNER=engine; UPDATED=2026-09-29
+/// SONNY-3248: bind each `LET $x = <expr>` of `lets` among the parameters
+/// (`names`, `values`), in order, each evaluated with the parameters and the
+/// LETs before it. Round 4b-1b (review I-E): a LET that names a parameter
+/// the request supplies, or an earlier LET, replaces its value. It was
+/// appended after it, and a lookup finds the first: `LET $a = 5 MATCH (n)
+/// WHERE n.i = $a` read the request's $a, while the SKIP / LIMIT resolution
+/// read the LET's, so one statement read two values of $a.
+pub fn bindLetParams(allocator: std.mem.Allocator, lets: []const ast.LetBinding, exec_ctx: ?*ExecutionContext, names: *std.ArrayList([]const u8), values: *std.ArrayList(Value)) !void {
+    for (lets) |binding| {
+        const let_env = Env{
+            .names = &.{},
+            .values = &.{},
+            .param_names = names.items,
+            .param_values = values.items,
+            .allocator = allocator,
+            .exec_context = exec_ctx,
+        };
+        const value = try eval.evalExpr(allocator, binding.value, let_env);
+        for (names.items, 0..) |name, i| {
+            if (std.mem.eql(u8, name, binding.variable)) {
+                values.items[i] = value;
+                break;
+            }
+        } else {
+            try names.append(allocator, binding.variable);
+            try values.append(allocator, value);
+        }
+    }
+}
+
 pub fn executeQueryWithContext(allocator: std.mem.Allocator, q: ast.Query, context: ExecutionContext) !ExecutionResult {
     const exec_ctx: *ExecutionContext = @constCast(&context);
     const prev_ctx = execution.pushActiveContext(&context);
@@ -1632,19 +1663,7 @@ pub fn executeQueryWithContext(allocator: std.mem.Allocator, q: ast.Query, conte
     // evaluated with no parameter at all, so `LET $a = 2, $b = $a + 1`
     // bound $b to null (and `LET $x = $p` read $p as null), while
     // `param_check` accepted both.
-    for (q.let_bindings) |binding| {
-        const let_env = Env{
-            .names = &.{},
-            .values = &.{},
-            .param_names = param_names.items,
-            .param_values = param_values.items,
-            .allocator = allocator,
-            .exec_context = exec_ctx,
-        };
-        const value = try eval.evalExpr(allocator, binding.value, let_env);
-        try param_names.append(allocator, binding.variable);
-        try param_values.append(allocator, value);
-    }
+    try bindLetParams(allocator, q.let_bindings, exec_ctx, &param_names, &param_values);
 
     // CANARY: REQ=REQ-GQL-CTE-004; FEATURE="CTEExecution"; ASPECT=QueryWiring; STATUS=TESTED; TEST=tests/e2e_recursive_queries.zig; OWNER=execution; UPDATED=2026-06-10
     // Evaluate CTEs (WITH [RECURSIVE] name AS (...)) and bind results as parameters
@@ -2201,7 +2220,9 @@ pub fn executeLegacyQueryWithResolvedParams(
             body_context.query_param_names = param_names.items;
             body_context.query_param_values = param_values.items;
             // Execute the CALL subquery to get initial results
-            const call_result = try executeQueryWithContext(allocator, call_subq.*, body_context);
+            const body_window = try execution.queryWindow(call_subq.*, body_context);
+            var call_result = try executeQueryWithContext(allocator, call_subq.*, body_context);
+            try execution.applyQueryWindow(allocator, &call_result, body_window);
 
             // If there's a WITH clause, apply it to the CALL results
             if (q.with_clause) |with_clause| {

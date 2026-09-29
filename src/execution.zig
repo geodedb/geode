@@ -978,45 +978,77 @@ fn freeRowValues(allocator: std.mem.Allocator, result: *ExecutionResult, row: []
     allocator.free(row);
 }
 
-/// SONNY-3248: the value of the SKIP or LIMIT parameter `name`: the one the
-/// statement's own `LET $name = <expr>` defines (evaluated with the request's
-/// parameters), else the one the request supplies; a non-negative integer,
-/// else none (as the executors read it). `LET $x = 3 MATCH ... LIMIT $x`
-/// returned every row.
+/// SONNY-3248: the value of the SKIP or LIMIT parameter `name` among the
+/// statement's parameters (the request's, with the statement's own `LET
+/// $name = <expr>` bound over them, `query_execution.bindLetParams`): a
+/// non-negative integer, else refused (error.InvalidWindowParameter,
+/// 22G03). `LET $x = 3 MATCH ... LIMIT $x` returned every row, as did a
+/// value of -1, 2.0 or '2'.
 ///
-/// SONNY-3248 (round 4b-1 review I-6, m-2): the LETs are evaluated in order,
-/// each with the request's parameters and the LETs before it, as the query
-/// evaluates them (`LET $a = 2, $b = $a + 1 ... LIMIT $b` read $a as null
-/// and returned every row); and a value that is no non-negative integer is
-/// refused (error.InvalidWindowParameter, 22G03), where it returned every
-/// row. A request parameter's value is checked before the statement runs
-/// (`param_check`).
-fn windowParam(allocator: std.mem.Allocator, name: ?[]const u8, q: ast.Query, context: ExecutionContext) !?usize {
+/// Round 4b-1b (review m-e): the LETs are evaluated once, before the
+/// statement runs (`.Query` in `executeStatementWithContext`), and both the
+/// window and the statement read those values. They were evaluated here and
+/// again by the statement, so a `LET $r = rand()` had two values.
+fn windowParam(name: ?[]const u8, context: ExecutionContext) !?usize {
     const n = name orelse return null;
-    var last: ?usize = null;
-    for (q.let_bindings, 0..) |binding, i| {
-        if (std.mem.eql(u8, binding.variable, n)) last = i;
-    }
-    if (last) |upto| {
-        var names: std.ArrayList([]const u8) = .empty;
-        defer names.deinit(allocator);
-        var values: std.ArrayList(Value) = .empty;
-        defer values.deinit(allocator);
-        try names.appendSlice(allocator, context.query_param_names);
-        try values.appendSlice(allocator, context.query_param_values);
-        var v: Value = .Null;
-        for (q.let_bindings[0 .. upto + 1]) |binding| {
-            const env = Env{ .names = &.{}, .values = &.{}, .param_names = names.items, .param_values = values.items, .allocator = allocator };
-            v = try eval.evalExpr(allocator, binding.value, env);
-            try names.append(allocator, binding.variable);
-            try values.append(allocator, v);
-        }
-        return try windowValue(v);
-    }
     for (context.query_param_names, context.query_param_values) |pn, pv| {
         if (std.mem.eql(u8, pn, n)) return try windowValue(pv);
     }
     return null;
+}
+
+/// A query's SKIP and LIMIT, resolved (`windowParam`).
+pub const QueryWindow = struct { start: usize, limit: ?usize };
+
+pub fn queryWindow(q: ast.Query, context: ExecutionContext) !QueryWindow {
+    return .{
+        .start = q.offset orelse try windowParam(q.offset_param, context) orelse 0,
+        .limit = q.limit orelse try windowParam(q.limit_param, context),
+    };
+}
+
+// CANARY: REQ=REQ-SONNY-3248-LIMIT-PARAM; FEATURE="Pagination"; ASPECT=StatementWindow; STATUS=TESTED; TEST=tests/test_sonny_write_allowlist_r4b.zig; OWNER=engine; UPDATED=2026-09-29
+/// SONNY-3248 (round-4a review M-1): a SKIP or LIMIT given as a parameter
+/// windows the statement as a literal does. Only the literals were read, so
+/// `MATCH ... SET ... RETURN q.i LIMIT $p` and an in-memory `MATCH (n:G)
+/// RETURN n.i LIMIT $p` returned every row (the executors that read the
+/// parameter themselves apply it first; a LIMIT applied twice is the same
+/// window). Round 4b-1b (review m-a): a `CALL { }` body's window too
+/// (`query_execution`): `CALL { MATCH (n:G) RETURN n.i AS k LIMIT $l }`
+/// returned every row in memory, and `ORDER BY k SKIP $l LIMIT 1` every row
+/// in every session.
+pub fn applyQueryWindow(allocator: std.mem.Allocator, result: *ExecutionResult, window: QueryWindow) !void {
+    var end = result.rows.len;
+    if (window.limit) |limit_count| {
+        const end_limit = std.math.add(usize, window.start, limit_count) catch std.math.maxInt(usize);
+        end = @min(end, end_limit);
+    }
+    if (window.start != 0 or end != result.rows.len) {
+        try applyRowWindow(allocator, result, window.start, end);
+    }
+}
+
+/// Every SKIP and LIMIT parameter of `q`'s parts (a WITH's, a chained
+/// part's, a CALL { } or FOR body's) that names one of the statement's
+/// parameters, checked (22G03) before anything runs. A LET-defined one was
+/// checked only where one executor's WITH read it (`LET $w = -2 ... WITH n
+/// LIMIT $w` was 22G03 in memory and every row persisted).
+fn checkWindowValues(q: *const ast.Query, context: ExecutionContext) !void {
+    var part: ?*const ast.Query = q;
+    while (part) |p| : (part = p.next_query) {
+        _ = try windowParam(p.limit_param, context);
+        _ = try windowParam(p.offset_param, context);
+        if (p.with_clause) |wc| {
+            _ = try windowParam(wc.limit_param, context);
+            _ = try windowParam(wc.offset_param, context);
+        }
+        if (p.initial_call_subquery) |body| try checkWindowValues(body, context);
+        if (p.for_statement) |f| {
+            _ = try windowParam(f.limit_param, context);
+            _ = try windowParam(f.offset_param, context);
+            if (f.body) |body| try checkWindowValues(body, context);
+        }
+    }
 }
 
 fn windowValue(v: Value) !usize {
@@ -1596,37 +1628,45 @@ fn executeStatementWithContextInner(allocator: std.mem.Allocator, stmt: ast.Stat
     // written. No statement writes inside an expression.
     try write_shape.validateStatementIn(stmt, .{ .in_transaction = context.transaction_state == .Active });
     switch (stmt) {
-        .Query => |q| {
+        .Query => |stmt_q| {
             // Validate: OFFSET requires ORDER BY (US001) - only if strict validation enabled
-            if (context.strict_offset_validation and q.offset != null and q.order_by == null) {
+            if (context.strict_offset_validation and stmt_q.offset != null and stmt_q.order_by == null) {
                 return ExecutionError.UnorderedPagination;
             }
 
             // Check if query has SKIP or LIMIT
-            try validateHopBounds(q.match);
+            try validateHopBounds(stmt_q.match);
+            // CANARY: REQ=REQ-SONNY-3248-LET-SCOPE; FEATURE="ParameterBinding"; ASPECT=LetOnce; STATUS=TESTED; TEST=tests/test_sonny_write_allowlist_r4b.zig; OWNER=engine; UPDATED=2026-09-29
+            // SONNY-3248 (round 4b-1b review I-E, m-b, m-e): the statement's
+            // LETs are bound among its parameters once, here, and every
+            // executor reads them there: a LET that names a request
+            // parameter shadows it everywhere (the WHERE read the request's
+            // value, the window the LET's, and the persisted and transport
+            // executors' own windows the request's again), and a WITH's SKIP
+            // or LIMIT on a LET reads (and checks) the LET's value on every
+            // path.
+            var q = stmt_q;
+            var ctx = context;
+            var let_names: std.ArrayList([]const u8) = .empty;
+            defer let_names.deinit(allocator);
+            var let_values: std.ArrayList(Value) = .empty;
+            defer let_values.deinit(allocator);
+            if (q.let_bindings.len != 0) {
+                try let_names.appendSlice(allocator, context.query_param_names);
+                try let_values.appendSlice(allocator, context.query_param_values);
+                try query_execution.bindLetParams(allocator, q.let_bindings, @constCast(&context), &let_names, &let_values);
+                ctx.query_param_names = let_names.items;
+                ctx.query_param_values = let_values.items;
+                q.let_bindings = &.{};
+                try checkWindowValues(&q, ctx);
+            }
             // SONNY-3248: the window is resolved (and a bad value refused)
             // before the statement runs, so a refused one writes nothing.
-            const start = q.offset orelse try windowParam(allocator, q.offset_param, q, context) orelse 0;
-            const limit_value: ?usize = q.limit orelse try windowParam(allocator, q.limit_param, q, context);
-            var result = try executeQueryWithContext(allocator, q, context);
+            const window = try queryWindow(q, ctx);
+            var result = try executeQueryWithContext(allocator, q, ctx);
 
             try applyMatchGuard(allocator, &result, context, q.match.chains.len > 0);
-
-            // CANARY: REQ=REQ-SONNY-3248-LIMIT-PARAM; FEATURE="Pagination"; ASPECT=StatementWindow; STATUS=TESTED; TEST=tests/test_sonny_write_allowlist_r4b.zig; OWNER=engine; UPDATED=2026-09-28
-            // SONNY-3248 (round-4a review M-1): a SKIP or LIMIT given as a
-            // parameter windows the statement as a literal does. Only the
-            // literals were read here, so `MATCH ... SET ... RETURN q.i LIMIT
-            // $p` and an in-memory `MATCH (n:G) RETURN n.i LIMIT $p` returned
-            // every row (the executors that read the parameter themselves
-            // apply it first; a LIMIT applied twice is the same window).
-            var end = result.rows.len;
-            if (limit_value) |limit_count| {
-                const end_limit = std.math.add(usize, start, limit_count) catch std.math.maxInt(usize);
-                end = @min(end, end_limit);
-            }
-            if (start != 0 or end != result.rows.len) {
-                try applyRowWindow(allocator, &result, start, end);
-            }
+            try applyQueryWindow(allocator, &result, window);
 
             rows_returned = @intCast(result.rows.len);
             return result;

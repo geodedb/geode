@@ -358,13 +358,28 @@ fn evaluateWhereFilter(
     target_node_ptr: ?*graph_store.Node,
     allocator: std.mem.Allocator,
 ) bool {
+    // CANARY: REQ=REQ-SONNY-3248-EXISTS-WHERE; FEATURE="ExistsSubquery"; ASPECT=WhereEnvLifetime; STATUS=TESTED; TEST=tests/test_sonny_write_allowlist_r4_transport.zig; OWNER=execution; UPDATED=2026-09-29
+    // SONNY-3248 (round 4b-1b review I-E): the extended environment's arrays
+    // are freed after the WHERE is evaluated. They were freed at the end of
+    // the block that built them, before it, so the WHERE of every `EXISTS {
+    // ... WHERE ... }` read freed names (null, or garbage) and matched
+    // nothing: `EXISTS { (n)-[:R]->(k:X) WHERE k.j = 2 }` was always false,
+    // with a literal or a parameter alike.
     var ext_env = base_env;
+    var new_names: []([]const u8) = &.{};
+    var new_values: []Value = &.{};
+    defer if (new_names.len > 0) {
+        allocator.free(new_names);
+        allocator.free(new_values);
+    };
 
     if (target_name != null and target_node_ptr != null) {
-        const new_names = allocator.alloc([]const u8, base_env.names.len + 1) catch return false;
-        defer allocator.free(new_names);
-        const new_values = allocator.alloc(Value, base_env.values.len + 1) catch return false;
-        defer allocator.free(new_values);
+        new_names = allocator.alloc([]const u8, base_env.names.len + 1) catch return false;
+        new_values = allocator.alloc(Value, base_env.values.len + 1) catch {
+            allocator.free(new_names);
+            new_names = &.{};
+            return false;
+        };
         @memcpy(new_names[0..base_env.names.len], base_env.names);
         @memcpy(new_values[0..base_env.values.len], base_env.values);
         new_names[base_env.names.len] = target_name.?;
@@ -375,6 +390,7 @@ fn evaluateWhereFilter(
             .allocator = allocator,
             .param_names = base_env.param_names,
             .param_values = base_env.param_values,
+            .exec_context = base_env.exec_context,
         };
     }
 
@@ -664,32 +680,13 @@ pub fn countPatternMatches(allocator: std.mem.Allocator, pattern: ast.GraphPatte
                 if (matches) {
                     // Check WHERE filter if present
                     if (where_filter) |wf| {
-                        // Build environment with this node bound (if pattern has a name)
-                        var ext_env = env;
-                        if (node_pattern.name) |pattern_name| {
-                            // Use entry.value_ptr for the node pointer
-                            const new_names = allocator.alloc([]const u8, env.names.len + 1) catch continue;
-                            defer allocator.free(new_names);
-                            const new_values = allocator.alloc(Value, env.values.len + 1) catch continue;
-                            defer allocator.free(new_values);
-                            @memcpy(new_names[0..env.names.len], env.names);
-                            @memcpy(new_values[0..env.values.len], env.values);
-                            new_names[env.names.len] = pattern_name;
-                            new_values[env.values.len] = Value{ .Node = entry.value_ptr };
-                            ext_env = .{
-                                .names = new_names,
-                                .values = new_values,
-                                .allocator = allocator,
-                                .param_names = env.param_names,
-                                .param_values = env.param_values,
-                            };
-                        }
-                        const where_result = eval.evalExpr(allocator, wf.*, ext_env) catch continue;
-                        const passes = switch (where_result) {
-                            .Bool => |b| b,
-                            else => false,
-                        };
-                        if (passes) count += 1;
+                        // Build environment with this node bound (if pattern
+                        // has a name). SONNY-3248 (round 4b-1b review I-E):
+                        // `evaluateWhereFilter` does it, and frees the
+                        // arrays after the WHERE is evaluated (they were
+                        // freed before it, so `EXISTS { MATCH (k:G) WHERE
+                        // k.i = 2 }` read freed names and matched nothing).
+                        if (evaluateWhereFilter(wf, env, node_pattern.name, entry.value_ptr, allocator)) count += 1;
                     } else {
                         count += 1;
                     }

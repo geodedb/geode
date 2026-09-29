@@ -1220,8 +1220,9 @@
   r` read a node as a relationship and aborted the server (integer
   overflow). A pattern that names one variable as two kinds of element (a
   node, a relationship, a variable-length relationship list or a path),
-  within a statement part or through a WITH that passes the variable on, is
-  now refused as a syntax error (42000) before anything runs, on every
+  within a statement part or through a WITH that passes the variable on
+  (`WITH r`, `WITH r AS s`, and, since round 4b-1c, `WITH *`), is now
+  refused as a syntax error (42000) before anything runs, on every
   transport and fast path; the join also never binds a relationship's name
   to a node. A node variable reused as a relationship (`(a)-[a]->(b)`), which
   joined silently before round 4b-1, is refused the same way.
@@ -1288,6 +1289,48 @@
   MATCH does not: a.m is not set. Before round 4b-1 each action followed its
   own variable's state, so a.m was set too. This follows the
   MERGE-is-one-pattern rule of the SONNY-3320 entry above.
+- **`WITH *`, a value and a FOR variable in a pattern (SONNY-3367, round
+  4b-1b review I-A):** the kind check above carried a variable only through
+  a WITH item naming it, so `MATCH (g:G {i: 1})-[r:R]->(x) WITH * MATCH (r)
+  RETURN count(*)` bound `(r)` to every node (24 in the test graph), and
+  `WITH * MATCH (a)-[g]->(b)` read a node as a relationship. `WITH *`
+  passes every variable on with its kind now. A variable a WITH binds to
+  an expression (`WITH r.w AS r`, `WITH collect(g) AS l`) or a FOR binds
+  holds a value, not an element, and a later pattern naming it is refused
+  the same way (42000); it bound every node (`FOR r IN [1, 2] MATCH (r)`),
+  or none (`FOR n IN collect(g) MATCH (n)-[:R]->(x)`). An UNWIND, or a
+  CALL { } that returns a variable, cannot be followed by a MATCH (the
+  parser refuses both). Known, not changed: a variable passed on is not
+  joined in the next part when the pattern names it alone or as a
+  relationship (`WITH g MATCH (g)` matches every node, `WITH r MATCH
+  (a)-[r]->(b)` every relationship); writes there are refused (0A000), so
+  only reads are affected.
+- **LET scoping, EXISTS and IN subqueries (SONNY-3248, round 4b-1b review
+  I-E, m-a, m-b, m-e):** an EXISTS body evaluated its WHERE over names
+  already freed, so it never matched:
+  `WHERE EXISTS { MATCH (k:G) WHERE k.i = 2 }` answered 0 over every
+  transport, with a literal, a parameter or a LET alike. An IN subquery
+  now reads the statement's LETs as an EXISTS body does (it was refused,
+  42P02, while the EXISTS form was accepted). A LET that names a request
+  parameter shadows it: it was appended after the request's value, so
+  `LET $a = 5 ... WHERE n.i = $a` read the request's $a while `LIMIT $a`
+  read the LET's in memory and the request's in a persisted session. The
+  LETs are evaluated once, before the statement runs, and every path reads
+  them there (`LET $r = rand()` had two values, the window's and the
+  statement's). A WITH's SKIP or LIMIT on a LET is checked on every path:
+  `LET $w = -2 ... WITH n LIMIT $w` was 22G03 in memory and returned every
+  row persisted. A CALL body's SKIP and LIMIT, a parameter's too, window it
+  in every session:
+  `CALL { MATCH (n:G) RETURN n.i AS k ORDER BY k SKIP 2 LIMIT 1 } RETURN k`
+  returned every row. Known, not changed: the RETURN after a
+  statement-level CALL body is not applied (`RETURN count(*)` returns the
+  body's rows).
+- **Two MERGEs of one node (SONNY-3248, round 4b-1b review m-c):** `MERGE
+  (a:W {k: 1}) MERGE (b:W {k: 1}) SET a.x = 1, b.x = 2` answered 22G03 only
+  where the executor bound a and b, after the first MERGE had created the
+  node, which stayed. Two MERGE node patterns with the same labels and the
+  same literal key name one node, and such a SET list is refused before
+  anything is created.
 - **A node a chained part returns, over gRPC (SONNY-3385):** `MATCH (g:G {i:
   1}) WITH g MATCH (n:Q) RETURN n` aborted the gRPC server (an integer
   overflow in `nodeToProto`) on the Pull after the request: the stored

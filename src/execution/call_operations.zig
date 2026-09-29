@@ -42,7 +42,19 @@ pub fn executeCallSubquery(allocator: std.mem.Allocator, call_subq: ast.CallSubq
     // Execute the statement (can be Query, Call, Create, etc.) with context
     // Handle statements directly to avoid circular error set inference
     const subquery_result = switch (call_subq.statement.*) {
-        .Query => |q| try execution.executeQueryWithContext(allocator, q, context),
+        // SONNY-3248 (round 4b-1b review m-a): the body's SKIP and LIMIT, a
+        // parameter's too, as a statement's (`execution.applyQueryWindow`).
+        // Only the executors that read the window themselves applied it, so
+        // `CALL { MATCH (n:G) RETURN n.i AS k LIMIT $l } RETURN k` returned
+        // every row in memory, and `ORDER BY k SKIP 2 LIMIT 1` every row in
+        // every session.
+        .Query => |q| blk: {
+            const window = try execution.queryWindow(q, context);
+            var body = try execution.executeQueryWithContext(allocator, q, context);
+            errdefer body.deinit(allocator);
+            try execution.applyQueryWindow(allocator, &body, window);
+            break :blk body;
+        },
         .Call => |c| try executeCallStatement(allocator, c, context),
         .Create => |c| blk: {
             const create_graph = if (context.session_state) |session| session.graph else null;

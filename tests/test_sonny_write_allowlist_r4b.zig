@@ -530,11 +530,9 @@ const s3248_cases = [_]Case{
     .{ .write = "MATCH (q:Q) WHERE q.i IN (LET $z = 1 MATCH (k:Q) WHERE k.i = $z RETURN k.i) SET q.x = $z", .refused = error.MissingParameter, .checks = &.{
         .{ .query = "MATCH (q:Q) WHERE q.x IS NOT NULL RETURN count(*) AS c", .want = &.{"0"} },
     } },
-    // An outer LET is not seen inside an IN subquery (the executor reads it
-    // as null there). (An IN subquery is evaluated by the server's
-    // evaluator; a LET inside one that the subquery reads is in the
-    // transport test.)
-    .{ .write = "LET $y = 2 MATCH (q:Q) WHERE q.i IN (MATCH (k:Q) WHERE k.i = $y RETURN k.i) RETURN q.i", .refused = error.MissingParameter },
+    // Round 4b-1b (review I-E): an IN subquery reads an outer LET, as an
+    // EXISTS body does. Both are evaluated by the server's evaluator, which
+    // this in-process harness does not install: the transport test has them.
     .{ .write = "LET $y = 2 MATCH (q:Q {i: $y}) RETURN q.i", .want = &.{"2"} },
     // SESSION SET VALUE stores a session parameter no statement reads.
     .{ .write = "SESSION SET VALUE $sv = 3; MATCH (q:Q {i: $sv}) RETURN q.i", .refused = error.MissingParameter },
@@ -861,6 +859,78 @@ test "SONNY-3322 (m-4): a MERGE's RETURN {rel: r} holds the store's relationship
     // SONNY-3322; the map's was the scope's copy, freed with the scope).
     try testing.expectEqual(@intFromPtr(direct.Edge), @intFromPtr(in_map.Edge));
     try testing.expectEqualStrings("T", in_map.Edge.label);
+}
+
+// ---------------------------------------------------------------------------
+// Round 4b-1c (the round 4b-1b re-review). Each case is the re-review's repro.
+
+// SONNY-3367 (I-A): `WITH *` passes every variable on with its kind, and a
+// variable a WITH or FOR binds to a value is no element. `(r)` after `WITH
+// *` bound every node of the graph beside the relationship r.
+const c1c_cases = [_]Case{
+    .{ .write = "MATCH (g:G {i: 1})-[r:R]->(x) WITH * MATCH (r) RETURN count(*) AS n", .refused = error.VariableKindConflict },
+    .{ .write = "MATCH (g:G {i: 1})-[r:R]->(x) WITH * MATCH (r), (q:Q) RETURN count(*) AS n", .refused = error.VariableKindConflict },
+    .{ .write = "MATCH (g:G {i: 1})-[r:R]->(x) WITH * MATCH (a)-[g]->(b) RETURN count(*) AS n", .refused = error.VariableKindConflict },
+    .{ .write = "MATCH p = (g:G {i: 1})-[:R]->(x) WITH * MATCH (p) RETURN count(*) AS n", .refused = error.VariableKindConflict },
+    .{ .write = "MATCH (g:G {i: 1})-[r:R*1..1]->(x) WITH * MATCH (a)-[r]->(b) RETURN count(*) AS n", .refused = error.VariableKindConflict },
+    .{ .write = "MATCH (g:G {i: 1})-[r:R]->(x) WITH * WITH * MATCH (r) RETURN count(*) AS n", .refused = error.VariableKindConflict },
+    .{ .write = "MATCH (g:G {i: 1})-[r:R]->(x) WITH * WITH r MATCH (r) RETURN count(*) AS n", .refused = error.VariableKindConflict },
+    .{ .write = "MATCH (g:G {i: 1})-[r:R]->(x) WITH r AS s WITH * MATCH (s) RETURN count(*) AS n", .refused = error.VariableKindConflict },
+    .{ .write = "MATCH (g:G {i: 1}) OPTIONAL MATCH (g)-[r:R]->(x) WITH * MATCH (r) RETURN count(*) AS n", .refused = error.VariableKindConflict },
+    .{ .write = "FOR k IN [1] MATCH (g:G {i: 1})-[r:R]->(x) WITH * MATCH (r) RETURN count(*) AS n", .refused = error.VariableKindConflict },
+    .{ .write = "MATCH (g:G {i: 2})-[r:R]->(x) WITH * MATCH (r) SET r.zz = 1", .refused = error.VariableKindConflict, .checks = &.{
+        .{ .query = "MATCH (n) WHERE n.zz = 1 RETURN count(*) AS c", .want = &.{"0"} },
+        .{ .query = every_node, .want = &.{"24"} },
+    } },
+    // A value in a pattern: a WITH expression's alias, a FOR variable.
+    .{ .write = "MATCH (g:G {i: 1})-[r:R]->(x) WITH r.w AS r MATCH (r) RETURN count(*) AS n", .refused = error.VariableKindConflict },
+    .{ .write = "MATCH (g:G {i: 1}) WITH 1 AS r MATCH (r) RETURN count(*) AS n", .refused = error.VariableKindConflict },
+    .{ .write = "MATCH (g:G {i: 1}) WITH collect(g) AS l, g MATCH (l) RETURN count(*) AS n", .refused = error.VariableKindConflict },
+    .{ .write = "FOR r IN [1, 2] MATCH (r) RETURN count(*) AS n", .refused = error.VariableKindConflict },
+    .{ .write = "MATCH (g:G) WHERE g.i < 2 WITH collect(g) AS gs FOR n IN gs MATCH (n)-[:R]->(x) RETURN x.j AS j", .refused = error.VariableKindConflict },
+    // Not refused: a node passed on as a node, a FOR value used as a value.
+    .{ .write = "MATCH (g:G {i: 1}) WITH g AS h MATCH (h)-[:R]->(x) RETURN x.j AS j", .want = &.{"1"} },
+    .{ .write = "FOR r IN [1, 2] MATCH (g:G {i: r}) RETURN g.i AS i", .want = &.{ "1", "2" } },
+    .{ .write = "MATCH (g:G {i: 1})-[r:R]->(x) WITH r.w AS w RETURN w", .want = &.{"w-1"} },
+};
+
+test "SONNY-3367 (round 4b-1b I-A): WITH * and FOR carry each variable's kind, in every session" {
+    try runCases("SONNY-3367 (4b-1c)", &c1c_cases);
+}
+
+// SONNY-3248 (I-E, m-a, m-b, m-c): a LET shadows a request parameter on
+// every path; a WITH's or a CALL body's window reads it; a chained MERGE's
+// two names for one node.
+const l1c_cases = [_]Case{
+    .{ .params = &.{.{ .name = "a", .expr = "1" }}, .write = "LET $a = 5 MATCH (n:G) WHERE n.i = $a RETURN n.i", .want = &.{"5"} },
+    .{ .params = &.{.{ .name = "a", .expr = "1" }}, .write = "LET $a = $a + 1 MATCH (n:G) WHERE n.i = $a RETURN n.i", .want = &.{"2"} },
+    .{ .params = &.{.{ .name = "a", .expr = "1" }}, .write = "LET $a = 7 MATCH (n:G {i: $a}) RETURN n.i", .want = &.{"7"} },
+    .{ .params = &.{.{ .name = "a", .expr = "1" }}, .write = "LET $a = 3 MATCH (n:G) RETURN n.i AS i ORDER BY i LIMIT $a", .want = &.{ "0", "1", "2" } },
+    .{ .params = &.{.{ .name = "a", .expr = "1" }}, .write = "LET $a = 3 MATCH (n:G) WITH n.i AS i ORDER BY i LIMIT $a RETURN i", .want = &.{ "0", "1", "2" } },
+    .{ .params = &.{.{ .name = "a", .expr = "1" }}, .write = "LET $a = 8 MATCH (n:G) WITH n.i AS i ORDER BY i SKIP $a RETURN i", .want = &.{ "8", "9" } },
+    // m-b: a LET's window value is checked on every path.
+    .{ .write = "LET $w = -2 MATCH (n:G) WITH n LIMIT $w RETURN n.i", .refused = error.InvalidWindowParameter },
+    .{ .write = "LET $w = -2 MATCH (n:G) WITH n SKIP $w RETURN n.i", .refused = error.InvalidWindowParameter },
+    .{ .write = "LET $w = 'x' MATCH (n:G) WITH n LIMIT $w RETURN n.i", .refused = error.InvalidWindowParameter },
+    // m-a: a CALL { } body's window.
+    .{ .params = &.{.{ .name = "l", .expr = "2" }}, .write = "CALL { MATCH (n:G) RETURN n.i AS k ORDER BY k LIMIT $l } RETURN k", .want = &.{ "0", "1" } },
+    .{ .params = &.{.{ .name = "l", .expr = "2" }}, .write = "CALL { MATCH (n:G) RETURN n.i AS k ORDER BY k SKIP $l LIMIT 1 } RETURN k", .want = &.{"2"} },
+    .{ .write = "CALL { MATCH (n:G) RETURN n.i AS k ORDER BY k SKIP 2 LIMIT 1 } RETURN k", .want = &.{"2"} },
+    .{ .write = "LET $x = 3 CALL { MATCH (n:G) RETURN n.i AS k ORDER BY k LIMIT $x } RETURN k", .want = &.{ "0", "1", "2" } },
+    // m-c: two MERGEs of one node, one property set through both names.
+    .{ .write = "MERGE (a:W1 {k: 1}) MERGE (b:W1 {k: 1}) SET a.x = 1, b.x = 2", .refused = error.RepeatedSetTarget, .checks = &.{
+        .{ .query = "MATCH (n:W1) RETURN count(*) AS c", .want = &.{"0"} },
+    } },
+    .{ .write = "MERGE (a:W1 {k: 1}) MERGE (b:W1 {k: 1}) SET a.x = 1, b.y = 2 RETURN a.x, b.y", .want = &.{"1|2"}, .checks = &.{
+        .{ .query = "MATCH (n:W1) RETURN n.x, n.y", .want = &.{"1|2"} },
+    } },
+    .{ .write = "MERGE (a:W1 {k: 1}) MERGE (b:W1 {k: 2}) SET a.x = 1, b.x = 2", .checks = &.{
+        .{ .query = "MATCH (n:W1) RETURN n.k, n.x", .want = &.{ "1|1", "2|2" } },
+    } },
+};
+
+test "SONNY-3248 (round 4b-1b I-E, m-a, m-b, m-c): LET shadowing, window values, CALL bodies, MERGE aliases, in every session" {
+    try runCases("SONNY-3248 (4b-1c)", &l1c_cases);
 }
 
 // ---------------------------------------------------------------------------

@@ -233,8 +233,9 @@ const cases = [_]Case{
             .{ .query = "MATCH (q:LQ) WHERE q.i IN (LET $z = 1 MATCH (k:LQ) WHERE k.i = $z RETURN k.i) RETURN q.i, $z AS z", .code = "42P02" },
             nothing_written_q,
             .{ .query = "MATCH (q:LQ) WHERE q.i IN (LET $z = 1 MATCH (k:LQ) WHERE k.i = $z RETURN k.i) RETURN q.i", .want = "1" },
-            // An outer LET is not seen inside an IN subquery (it read null there).
-            .{ .query = "LET $y = 2 MATCH (q:LQ) WHERE q.i IN (MATCH (k:LQ) WHERE k.i = $y RETURN k.i) RETURN q.i", .code = "42P02" },
+            // Round 4b-1b (review I-E): an IN subquery reads an outer LET, as
+            // an EXISTS body does (it was refused, 42P02, and read null).
+            .{ .query = "LET $y = 2 MATCH (q:LQ) WHERE q.i IN (MATCH (k:LQ) WHERE k.i = $y RETURN k.i) RETURN q.i", .want = "2" },
             .{ .query = "LET $y = 2 MATCH (q:LQ) WHERE q.i = $y RETURN q.i", .want = "2" },
             .{ .query = "MATCH (q:LQ {i: 1}) SET q.c = 1 SET q.c = q.c + 1 RETURN q.c", .want = "2" },
         },
@@ -297,6 +298,49 @@ const cases = [_]Case{
         .{ .query = "LET $a = $b, $b = 1 MATCH (n:L) WHERE n.i = $a RETURN n.i", .code = "42P02" },
     } },
     // Round 4b-1c (the round 4b-1b re-review).
+    // SONNY-3367 (I-A): `WITH *` carries each variable's kind; a value is no
+    // element (returning `(r)` after `WITH *` read a node as a relationship).
+    .{ .name = "3367 WITH * kinds", .steps = &.{
+        .{ .query = "MATCH (a:L {i: 1}), (b:L {i: 2}) CREATE (a)-[:LR {w: 'w'}]->(b)" },
+        .{ .query = "MATCH (a:L {i: 1})-[r:LR]->(b) WITH * MATCH (r) RETURN count(*) AS c", .code = "42000" },
+        .{ .query = "MATCH (a:L {i: 1})-[r:LR]->(b) WITH * MATCH (r) RETURN r AS rr LIMIT 2", .code = "42000" },
+        .{ .query = "MATCH (a:L {i: 1})-[r:LR]->(b) WITH * MATCH (x)-[a]->(y) RETURN count(*) AS c", .code = "42000" },
+        .{ .query = "MATCH (a:L {i: 1})-[r:LR]->(b) WITH r.w AS r MATCH (r) RETURN count(*) AS c", .code = "42000" },
+        .{ .query = "FOR r IN [1, 2] MATCH (r) RETURN count(*) AS c", .code = "42000" },
+        .{ .query = "MATCH (a:L {i: 1})-[r:LR]->(b) WITH * MATCH (r) SET r.x = 1", .code = "42000" },
+        .{ .query = "MATCH (n:L) RETURN count(n) AS c", .want = "10" },
+        nothing_written,
+        .{ .query = "RETURN 1 AS alive", .want = "1" },
+    } },
+    // SONNY-3248 (I-E): an EXISTS body's WHERE (it read freed names, so it
+    // never matched) and an IN subquery read the statement's LETs; a LET
+    // shadows a request parameter on every path.
+    .{
+        .name = "3248 subquery LET, shadowing",
+        .steps = &.{
+            .{ .query = "MATCH (a:L {i: 1}), (b:L {i: 2}) CREATE (a)-[:LR]->(b)" },
+            .{ .query = "MATCH (n:L) WHERE EXISTS { MATCH (k:L) WHERE k.i = 2 } RETURN count(*) AS c", .want = "10" },
+            .{ .query = "MATCH (n:L) WHERE EXISTS { MATCH (k:L) WHERE k.i = 99 } RETURN count(*) AS c", .want = "0" },
+            .{ .query = "LET $x = 2 MATCH (n:L) WHERE EXISTS { MATCH (k:L) WHERE k.i = $x } RETURN count(*) AS c", .want = "10" },
+            .{ .query = "MATCH (n:L) WHERE EXISTS { (n)-[:LR]->(k:L) WHERE k.i = 2 } RETURN n.i", .want = "1" },
+            .{ .query = "LET $x = 2 MATCH (n:L) WHERE EXISTS { (n)-[:LR]->(k:L) WHERE k.i = $x } RETURN n.i", .want = "1" },
+            .{ .query = "LET $x = 3 MATCH (n:L) WHERE EXISTS { (n)-[:LR]->(k:L) WHERE k.i = $x } RETURN n.i", .want = "" },
+            .{ .query = "LET $x = 2 MATCH (n:L) WHERE n.i IN (MATCH (k:L) WHERE k.i = $x RETURN k.i) RETURN n.i", .want = "2" },
+            .{ .query = "LET $a = 5 MATCH (n:L) WHERE n.i = $a RETURN n.i", .params = &.{.{ .name = "a", .int = 1 }}, .want = "5" },
+            .{ .query = "LET $a = 3 MATCH (n:L) RETURN n.i AS i ORDER BY i LIMIT $a", .params = &.{.{ .name = "a", .int = 1 }}, .want = "0;1;2" },
+            .{ .query = "LET $a = 3 MATCH (n:L) WITH n LIMIT $a RETURN count(*) AS c", .params = &.{.{ .name = "a", .int = 1 }}, .want = "3" },
+            .{ .query = "LET $a = 3 MATCH (n:L) WHERE EXISTS { MATCH (k:L) WHERE k.i = $a } RETURN count(*) AS c", .params = &.{.{ .name = "a", .int = 99 }}, .want = "10" },
+            // m-b: a LET's window value is checked on every path.
+            .{ .query = "LET $w = -2 MATCH (n:L) WITH n LIMIT $w RETURN n.i", .code = "22G03" },
+            .{ .query = "LET $w = 'x' MATCH (n:L) WITH n SKIP $w RETURN n.i", .code = "22G03" },
+            // m-a: a CALL { } body's window.
+            .{ .query = "CALL { MATCH (n:L) RETURN n.i AS k ORDER BY k LIMIT $l } RETURN k", .params = &.{.{ .name = "l", .int = 2 }}, .want = "0;1" },
+            .{ .query = "CALL { MATCH (n:L) RETURN n.i AS k ORDER BY k SKIP $l LIMIT 1 } RETURN k", .params = &.{.{ .name = "l", .int = 2 }}, .want = "2" },
+            // m-c: two MERGEs of one node, one property set through both.
+            .{ .query = "MERGE (a:LW {k: 1}) MERGE (b:LW {k: 1}) SET a.x = 1, b.x = 2", .code = "22G03" },
+            .{ .query = "MATCH (n:LW) RETURN count(n) AS c", .want = "0" },
+        },
+    },
     // SONNY-3385: a node or relationship a chained part returns is pulled
     // page by page after the request that made it; its labels were in the
     // request's scratch arena, and the Pull aborted the gRPC server.
