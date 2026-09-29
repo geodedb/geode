@@ -922,6 +922,10 @@ const i5c_cases = [_]Case{
     .{ .setup = &.{s_edge}, .write = "MATCH p = (a:G {i: 1})-[:R]->(b) WHERE length(p) = 1 RETURN count(*) AS n", .want = &.{"1"} },
     .{ .setup = &.{s_edge}, .write = "MATCH p = shortestPath((a:G {i: 1})-[:S|R*]->(c:Q)) RETURN length(p) AS l", .want = &.{"2"} },
     .{ .setup = &.{s_edge}, .write = "MATCH p = shortestPath((a:G {i: 1})-[:R|S*]->(c:Q)) RETURN length(p) AS l", .want = &.{"2"} },
+    // A path whose ends name one node is a cycle; the multi-chain executor
+    // bound the right end over the left, so every walk from n matched.
+    .{ .setup = &.{s_edge}, .write = "MATCH p = (n:G {i: 1})-[:S|R*]->(n) WHERE length(p) > 0 RETURN count(p) AS c", .want = &.{"0"} },
+    .{ .setup = &.{ s_edge, "MATCH (g:G {i: 3}) CREATE (g)-[:S]->(g)" }, .write = "MATCH p = (n:G)-[:S|R]->(n) WHERE length(p) = 1 RETURN n.i", .want = &.{"3"} },
     // No executor binds a path on an OPTIONAL MATCH after the first pattern.
     .{ .setup = &.{s_edge}, .write = "MATCH (g:G {i: 1}) OPTIONAL MATCH p = (g)-[:S|R]->(x) RETURN count(p) AS n", .refused = error.OptionalPathVariable },
     .{ .setup = &.{s_edge}, .write = "MATCH (g:G {i: 1}) OPTIONAL MATCH (g)-[:S|R]->(x) RETURN count(x) AS n", .want = &.{"1"} },

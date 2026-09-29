@@ -5550,6 +5550,20 @@ fn bindPath(alloc: std.mem.Allocator, nodes_by_id: *NodeCache, chain: ast.Chain,
     return .{ .Path = .{ .nodes = try nodes.toOwnedSlice(alloc), .edges = try edges.toOwnedSlice(alloc) } };
 }
 
+/// A copy of each path `value` holds (in a list or a map too) whose arrays
+/// `allocator` owns: the row keeps it past the binding's scratch.
+fn keepPaths(allocator: std.mem.Allocator, value: *Value) !void {
+    switch (value.*) {
+        .Path => |path| value.* = .{ .Path = .{ .nodes = try allocator.dupe(*const graph_store.Node, path.nodes), .edges = try allocator.dupe(*const graph_store.Edge, path.edges) } },
+        .List => |items| for (items) |*item| try keepPaths(allocator, item),
+        .Map => |map| {
+            var it = map.valueIterator();
+            while (it.next()) |item| try keepPaths(allocator, item);
+        },
+        else => {},
+    }
+}
+
 /// A FILTER's verdict on a row, as the single-chain executors read it.
 fn filterPasses(v: Value) bool {
     return switch (v) {
@@ -6071,6 +6085,10 @@ fn executeMultiChainRelationshipMatch(allocator: std.mem.Allocator, q_in: ast.Qu
     if (first_chain.hops.len > 0) {
         // First chain has relationships
         const hop = first_chain.hops[0];
+        // SONNY-3318 (round 4b-1b review I-D): `(n)-[:R*]->(n)` names one node at
+        // both ends (a cycle): a binding whose ends differ is no match. The
+        // right end overwrote the left one here, so every walk from n matched.
+        const same_ends = if (hop.left.name) |l| (if (hop.right.name) |r| std.mem.eql(u8, l, r) else false) else false;
         const left_labels = hop.left.labels;
         const left_props = hop.left.props;
         // SONNY-3318 (round 4b-1 review I-5): every type of `[:A|B]`; the
@@ -6124,7 +6142,7 @@ fn executeMultiChainRelationshipMatch(allocator: std.mem.Allocator, q_in: ast.Qu
                     if (hop.right.name) |v| try binding.vars.put(v, target.node);
                     if (hop.rel.name) |rn| try binding.rel_list_vars.put(rn, target.edges);
                     if (needs_hop_tracking) try binding.vars.put(chain_last_right_key, target.node);
-                    try bindings.append(allocator, binding);
+                    if (same_ends and left_node.id != target.node.id) binding.deinit() else try bindings.append(allocator, binding);
                 }
             }
         }
@@ -6168,7 +6186,7 @@ fn executeMultiChainRelationshipMatch(allocator: std.mem.Allocator, q_in: ast.Qu
                         if (hop.right.name) |v| try binding.vars.put(v, right_node);
                         if (hop.rel.name) |rn| try binding.edge_vars.put(rn, edge);
                         if (needs_hop_tracking) try binding.vars.put(chain_last_right_key, right_node);
-                        try bindings.append(allocator, binding);
+                        if (same_ends and left_node.id != right_node.id) binding.deinit() else try bindings.append(allocator, binding);
                     }
                 }
 
@@ -6191,7 +6209,7 @@ fn executeMultiChainRelationshipMatch(allocator: std.mem.Allocator, q_in: ast.Qu
                         if (hop.right.name) |v| try binding.vars.put(v, right_node);
                         if (hop.rel.name) |rn| try binding.edge_vars.put(rn, edge);
                         if (needs_hop_tracking) try binding.vars.put(chain_last_right_key, right_node);
-                        try bindings.append(allocator, binding);
+                        if (same_ends and left_node.id != right_node.id) binding.deinit() else try bindings.append(allocator, binding);
                     }
                 }
             }
@@ -6233,7 +6251,7 @@ fn executeMultiChainRelationshipMatch(allocator: std.mem.Allocator, q_in: ast.Qu
                         if (hop.right.name) |v| try binding.vars.put(v, right_node);
                         if (hop.rel.name) |rn| try binding.edge_vars.put(rn, edge);
                         if (needs_hop_tracking) try binding.vars.put(chain_last_right_key, right_node);
-                        try bindings.append(allocator, binding);
+                        if (same_ends and left_node.id != right_node.id) binding.deinit() else try bindings.append(allocator, binding);
                     }
                 }
 
@@ -6255,7 +6273,7 @@ fn executeMultiChainRelationshipMatch(allocator: std.mem.Allocator, q_in: ast.Qu
                         if (hop.right.name) |v| try binding.vars.put(v, right_node);
                         if (hop.rel.name) |rn| try binding.edge_vars.put(rn, edge);
                         if (needs_hop_tracking) try binding.vars.put(chain_last_right_key, right_node);
-                        try bindings.append(allocator, binding);
+                        if (same_ends and left_node.id != right_node.id) binding.deinit() else try bindings.append(allocator, binding);
                     }
                 }
             }
@@ -6303,7 +6321,7 @@ fn executeMultiChainRelationshipMatch(allocator: std.mem.Allocator, q_in: ast.Qu
                             if (hop.right.name) |v| try binding.vars.put(v, to_node);
                             if (hop.rel.name) |rn| try binding.edge_vars.put(rn, edge_ptr);
                             if (needs_hop_tracking) try binding.vars.put(chain_last_right_key, to_node);
-                            try bindings.append(allocator, binding);
+                            if (same_ends and from_node.id != to_node.id) binding.deinit() else try bindings.append(allocator, binding);
                         }
                     }
                     if (rel_dir == .left or rel_dir == .undirected) {
@@ -6318,7 +6336,7 @@ fn executeMultiChainRelationshipMatch(allocator: std.mem.Allocator, q_in: ast.Qu
                             if (hop.right.name) |v| try binding.vars.put(v, from_node);
                             if (hop.rel.name) |rn| try binding.edge_vars.put(rn, edge_ptr);
                             if (needs_hop_tracking) try binding.vars.put(chain_last_right_key, from_node);
-                            try bindings.append(allocator, binding);
+                            if (same_ends and to_node.id != from_node.id) binding.deinit() else try bindings.append(allocator, binding);
                         }
                     }
                 }
@@ -6355,7 +6373,7 @@ fn executeMultiChainRelationshipMatch(allocator: std.mem.Allocator, q_in: ast.Qu
                         if (hop.right.name) |v| try binding.vars.put(v, right_node);
                         if (hop.rel.name) |rn| try binding.edge_vars.put(rn, edge);
                         if (needs_hop_tracking) try binding.vars.put(chain_last_right_key, right_node);
-                        try bindings.append(allocator, binding);
+                        if (same_ends and left_node.id != right_node.id) binding.deinit() else try bindings.append(allocator, binding);
                     }
                 }
 
@@ -6374,7 +6392,7 @@ fn executeMultiChainRelationshipMatch(allocator: std.mem.Allocator, q_in: ast.Qu
                         if (hop.right.name) |v| try binding.vars.put(v, right_node);
                         if (hop.rel.name) |rn| try binding.edge_vars.put(rn, edge);
                         if (needs_hop_tracking) try binding.vars.put(chain_last_right_key, right_node);
-                        try bindings.append(allocator, binding);
+                        if (same_ends and left_node.id != right_node.id) binding.deinit() else try bindings.append(allocator, binding);
                     }
                 }
 
@@ -6600,10 +6618,16 @@ fn executeMultiChainRelationshipMatch(allocator: std.mem.Allocator, q_in: ast.Qu
     // Evaluate expressions for each binding
     // #560: Pre-size rows based on bindings count; reuse env ArrayLists across iterations
     var rows = try std.ArrayList([]Value).initCapacity(allocator, bindings.items.len);
+    // A path variable's arrays, per binding: a row that returns the path
+    // keeps a copy (`keepPaths`), as the single-chain traversals keep theirs
+    // (SONNY-3148); the rest are released with the binding.
+    var path_scratch = std.heap.ArenaAllocator.init(allocator);
+    defer path_scratch.deinit();
 
     for (bindings.items) |*binding| {
+        _ = path_scratch.reset(.retain_capacity);
         // Build environment from binding — reuse pre-allocated lists
-        try BindingEnv.fill(allocator, allocator, &node_cache, path_specs.items, &env_names, &env_values, binding);
+        try BindingEnv.fill(allocator, path_scratch.allocator(), &node_cache, path_specs.items, &env_names, &env_values, binding);
 
         const env = Env{
             .names = env_names.items,
@@ -6693,6 +6717,7 @@ fn executeMultiChainRelationshipMatch(allocator: std.mem.Allocator, q_in: ast.Qu
         var row = try allocator.alloc(Value, eval_items.len);
         for (eval_items, 0..) |item, i| {
             row[i] = eval.evalExpr(allocator, item.expr, env) catch Value{ .Null = {} };
+            if (path_specs.items.len > 0) try keepPaths(allocator, &row[i]);
         }
         try rows.append(allocator, row);
     }
