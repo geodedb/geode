@@ -262,6 +262,57 @@ pub fn checkPatternWritable(
     }
 }
 
+// CANARY: REQ=REQ-SONNY-3319-CURRENT-LABELS; FEATURE="VectorIndex"; ASPECT=CreateSetPrePass; STATUS=TESTED; TEST=tests/test_sonny_write_allowlist_r4b.zig; OWNER=engine; UPDATED=2026-09-28
+/// SONNY-3319 (round 4b-1 review I-2, I-4): `checkPatternWritable` for a
+/// CREATE or MERGE followed by SET lists (`set_lists`, e.g. a CREATE's SET,
+/// a MERGE's ON CREATE and ON MATCH): each named node pattern is checked with
+/// its labels and every label a list sets on its variable, and so is each
+/// value a list assigns to it that can be evaluated before the node exists.
+/// `CREATE (n:VP {emb: <2 dims>}) SET n:VK` (VK's index holding 4) was
+/// refused only after n was created, and n was left behind.
+pub fn checkPatternWritableWithSet(
+    allocator: std.mem.Allocator,
+    pattern: ast.GraphPattern,
+    env: Env,
+    set_lists: []const []const ast.SetClause,
+) !void {
+    var scratch = VectorDimScratch.init(allocator);
+    defer scratch.deinit();
+    for (pattern.chains) |chain| {
+        if (chain.head) |head| try checkNodePatternWithSet(allocator, head, env, set_lists, &scratch);
+        for (chain.hops) |hop| {
+            try checkNodePatternWithSet(allocator, hop.left, env, set_lists, &scratch);
+            try checkNodePatternWithSet(allocator, hop.right, env, set_lists, &scratch);
+            try checkPatternPropsWritableScoped(allocator, &.{}, hop.rel.props, env, &scratch);
+        }
+    }
+}
+
+fn checkNodePatternWithSet(
+    allocator: std.mem.Allocator,
+    np: ast.NodePattern,
+    env: Env,
+    set_lists: []const []const ast.SetClause,
+    scratch: *VectorDimScratch,
+) !void {
+    const name = np.name orelse return checkPatternPropsWritableScoped(allocator, np.labels, np.props, env, scratch);
+    var labels: std.ArrayList([]const u8) = .empty;
+    defer labels.deinit(allocator);
+    try labels.appendSlice(allocator, np.labels);
+    for (set_lists) |list| for (list) |sc| switch (sc) {
+        .Labels => |l| if (std.mem.eql(u8, l.node, name)) for (l.labels) |label| {
+            const have = for (labels.items) |x| {
+                if (std.mem.eql(u8, x, label)) break true;
+            } else false;
+            if (!have) try labels.append(allocator, label);
+        },
+        else => {},
+    };
+    try checkPatternPropsWritableScoped(allocator, labels.items, np.props, env, scratch);
+    if (labels.items.len == np.labels.len) return;
+    for (set_lists) |list| try checkSetClausesWritableExcluding(allocator, list, env, name, labels.items, null);
+}
+
 /// A `SET` clause list, evaluated against `env`, making the list all-or-nothing:
 /// no assignment is applied unless every assignment can be.
 ///
@@ -328,6 +379,46 @@ pub fn checkSetClausesWritableExcluding(
             // SET label carries no property value.
             .Labels => {},
         }
+    }
+}
+
+// CANARY: REQ=REQ-SONNY-3319-CURRENT-LABELS; FEATURE="VectorIndex"; ASPECT=LabelSetExistingVectors; STATUS=TESTED; TEST=tests/test_sonny_write_allowlist_r4b.zig; OWNER=engine; UPDATED=2026-09-28
+/// SONNY-3319 (round 4b-1 review I-4): a SET that gives `node` (bound to
+/// `name`) a label it does not carry puts the vectors it already holds under
+/// that label's vector indexes, so each is checked against them (22000 on a
+/// dimension mismatch). Only a vector a SET assigned in the same list was
+/// checked, against the labels after the SET: `MATCH (n:VO) SET n:VK` with a
+/// 2-dimension `n.emb` and a 4-dimension index on VK was accepted.
+/// `labels_after` is the node's labels once the list applies
+/// (`write_scope.labelsAfterSet`). A vector the list assigns, or that a `SET
+/// n = {map}` replaces, is checked as the value assigned instead.
+pub fn checkLabelSetVectors(
+    allocator: std.mem.Allocator,
+    node: *const graph_store.Node,
+    labels_after: []const []const u8,
+    set_clauses: []const ast.SetClause,
+    name: []const u8,
+) !void {
+    if (labels_after.len == node.labels.len) return; // no label added
+    var replaced = false;
+    for (set_clauses) |sc| switch (sc) {
+        .AllProperties => |a| if (std.mem.eql(u8, a.node, name)) {
+            replaced = true;
+        },
+        else => {},
+    };
+    if (replaced) return;
+    var it = node.properties.iterator();
+    while (it.next()) |entry| {
+        const pv = entry.value_ptr.*;
+        if (pv != .ExtValue or pv.ExtValue != .VectorF32) continue;
+        const key = entry.key_ptr.*;
+        const assigned = for (set_clauses) |sc| switch (sc) {
+            .Property => |p| if (std.mem.eql(u8, p.target.object, name) and std.mem.eql(u8, p.target.property, key)) break true,
+            else => {},
+        } else false;
+        if (assigned) continue;
+        try checkPropertyWritableScoped(allocator, labels_after, key, .{ .ExtValue = pv.ExtValue }, null, node.id);
     }
 }
 

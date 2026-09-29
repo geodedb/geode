@@ -9477,6 +9477,7 @@ pub fn applySetRemoveOverRows(
                     const labels = try write_scope.labelsAfterSet(allocator, node.labels, set_clauses, name);
                     defer allocator.free(labels);
                     try write_precheck.checkSetClausesWritableExcluding(allocator, set_clauses, env, name, labels, node.id);
+                    try write_precheck.checkLabelSetVectors(allocator, node, labels, set_clauses, name);
                 },
                 else => {},
             }

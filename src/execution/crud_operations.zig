@@ -1551,13 +1551,15 @@ pub fn executeCreateQuery(
 
     // Statement-atomicity pre-pass — see `executeCreate`.
     // CANARY: REQ=REQ-PROPERTY-WRITE-ATOMICITY; FEATURE="PropertyStorage"; ASPECT=CreatePrePass; STATUS=TESTED; TEST=tests/test_property_write_atomicity.zig; OWNER=engine; UPDATED=2026-08-25
-    try write_precheck.checkPatternWritable(allocator, create_pattern, Env{
+    // SONNY-3319 (round 4b-1 review I-4): with the labels the SET gives
+    // each created node.
+    try write_precheck.checkPatternWritableWithSet(allocator, create_pattern, Env{
         .names = &.{},
         .values = &.{},
         .param_names = param_names,
         .param_values = param_values,
         .allocator = allocator,
-    });
+    }, &.{q.set_clauses});
 
     // SONNY-3240: as `executeCreate`: a chain's property map sees what the
     // chains before it created.
@@ -3822,7 +3824,11 @@ pub fn executeMerge(allocator: std.mem.Allocator, m: ast.MergeStatement, current
     // CANARY: REQ=REQ-PROPERTY-WRITE-ATOMICITY; FEATURE="PropertyStorage"; ASPECT=MergePrePass; STATUS=TESTED; TEST=tests/test_property_write_atomicity.zig; OWNER=engine; UPDATED=2026-08-25
     {
         const precheck_env = envFromContext(allocator, context);
-        try write_precheck.checkPatternWritable(allocator, m.pattern, precheck_env);
+        // SONNY-3319 (round 4b-1 review I-4): with the labels ON CREATE
+        // (and a bare SET, which the parser copies into both lists) gives a
+        // node the MERGE creates. ON MATCH's labels are checked against the
+        // matched node's vectors where it is bound (`applySetGroups`).
+        try write_precheck.checkPatternWritableWithSet(allocator, m.pattern, precheck_env, &.{m.on_create});
         try write_precheck.checkSetClausesWritable(allocator, m.on_create, precheck_env, null, &.{});
         try write_precheck.checkSetClausesWritable(allocator, m.on_match, precheck_env, null, &.{});
     }

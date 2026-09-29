@@ -1256,6 +1256,14 @@
   assignment won (go/oidc's single-node key MERGE shape). It is refused
   from the statement now, before any path runs it. Two variables bound to
   one element are still refused where they are bound.
+- **A label SET checks the node's vectors (SONNY-3319, round 4b-1 review
+  I-4):** only a vector the same SET list assigned was checked against the
+  labels it adds, so `MATCH (n:VO) SET n:VK` put a 2-dimension vector the
+  node held under VK's 4-dimension HNSW index (and `CREATE (n:VP {emb: <2
+  dimensions>}) SET n:VK` did the same). Each vector the node holds is
+  checked against the indexes of the labels a SET adds (22000), and a
+  CREATE's or MERGE's pattern is checked with the labels its SET (or ON
+  CREATE) gives it, before the node is created.
 - **The parser's limits (SONNY-3244):** parsing runs before authorization,
   and 25,000 `MATCH (n:G) SET n.x = 1;` statements (625 KB) took a 741 MB
   parser arena, so a 16 MB request could hold about 19 GB; about 60 chained

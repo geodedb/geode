@@ -754,6 +754,56 @@ test "SONNY-3248 (I-2): a SET clause that assigns a property twice is refused be
     try runCases("SONNY-3248 (I-2)", &i2_cases);
 }
 
+// SONNY-3319 (I-4): a label SET checks the vectors the node already holds.
+const i4_vec_cases = [_]Case{
+    .{ .setup = &(vec_setup ++ [_][]const u8{"CREATE (:VO2 {id: 5, emb: vectorf32('[8.0, 8.0]')})"}), .write = "MATCH (n:VO2) SET n:VD", .refused = error.VectorDimensionMismatch, .checks = &.{
+        .{ .query = "MATCH (n:VD) RETURN n.id", .want = &.{"1"} },
+    } },
+    .{ .setup = &(vec_setup ++ [_][]const u8{"CREATE (:VO2 {id: 5, emb: vectorf32('[8.0, 8.0]')})"}), .write = "MATCH (n:VO2) SET n:VD RETURN n.id", .refused = error.VectorDimensionMismatch, .checks = &.{
+        .{ .query = "MATCH (n:VD) RETURN n.id", .want = &.{"1"} },
+    } },
+    .{ .setup = &(vec_setup ++ [_][]const u8{"CREATE (:VO2 {id: 5, emb: vectorf32('[8.0, 8.0]')})"}), .write = "MERGE (n:VO2 {id: 5}) ON MATCH SET n:VD", .refused = error.VectorDimensionMismatch, .checks = &.{
+        .{ .query = "MATCH (n:VD) RETURN n.id", .want = &.{"1"} },
+    } },
+    .{ .setup = &vec_setup, .write = "CREATE (n:VP {id: 3, emb: vectorf32('[9.0, 9.0]')}) SET n:VD", .refused = error.VectorDimensionMismatch, .checks = &.{
+        .{ .query = "MATCH (n:VD) RETURN n.id", .want = &.{"1"} },
+        .{ .query = "MATCH (n:VP) RETURN count(*) AS c", .want = &.{"0"} },
+    } },
+    .{ .setup = &vec_setup, .write = "MERGE (n:VP {id: 3}) ON CREATE SET n.emb = vectorf32('[9.0, 9.0]') SET n:VD", .refused = error.VectorDimensionMismatch, .checks = &.{
+        .{ .query = "MATCH (n:VD) RETURN n.id", .want = &.{"1"} },
+        .{ .query = "MATCH (n:VP) RETURN count(*) AS c", .want = &.{"0"} },
+    } },
+    // The right dimension is accepted.
+    .{ .setup = &(vec_setup ++ [_][]const u8{"CREATE (:VO3 {id: 6, emb: vectorf32('[1.0, 2.0, 3.0, 4.0]')})"}), .write = "MATCH (n:VO3) SET n:VD", .checks = &.{
+        .{ .query = "MATCH (n:VD) RETURN n.id", .want = &.{ "1", "6" } },
+    } },
+};
+
+test "SONNY-3319 (I-4): a label SET checks the node's vectors against the new label's index" {
+    var arena = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena.deinit();
+    const aa = arena.allocator();
+    var f: h.Failures = .{ .arena = aa };
+    var n: usize = 1000;
+    for ([_]h.Mode{ .in_memory, .persisted }) |mode| {
+        for (i4_vec_cases) |c| {
+            n += 1;
+            const setup = try aa.alloc([]const u8, c.setup.len);
+            for (c.setup, setup) |q, *out| out.* = try numbered(aa, q, n);
+            const checks = try aa.alloc(Check, c.checks.len);
+            for (c.checks, checks) |chk, *out| out.* = .{ .query = try numbered(aa, chk.query, n), .want = chk.want };
+            var nc = c;
+            nc.setup = setup;
+            nc.checks = checks;
+            nc.write = try numbered(aa, c.write, n);
+            runCase(mode, nc, &f) catch |err| {
+                try f.add("[{s}] {s}: the case aborted: {s}", .{ @tagName(mode), nc.write, @errorName(err) });
+            };
+        }
+    }
+    try f.finish("SONNY-3319 (I-4)");
+}
+
 // ---------------------------------------------------------------------------
 // SONNY-3244 (round-4a review I-4): statement nesting. The fix is round
 // 14-16's (on fix/sonny-738-r12: max_statement_nesting, stackHasRoom,

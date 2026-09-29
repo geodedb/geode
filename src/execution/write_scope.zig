@@ -278,6 +278,7 @@ fn precheckNodeTargets(allocator: std.mem.Allocator, clauses: []const ast.SetCla
         const labels = try labelsAfterSet(allocator, node.labels, clauses, name);
         defer allocator.free(labels);
         try write_precheck.checkSetClausesWritableExcluding(allocator, clauses, env, name, labels, node.id);
+        try write_precheck.checkLabelSetVectors(allocator, node, labels, clauses, name);
     }
 }
 

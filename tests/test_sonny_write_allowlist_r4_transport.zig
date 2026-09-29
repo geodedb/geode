@@ -284,6 +284,23 @@ const cases = [_]Case{
     } },
 };
 
+/// Cases run over QUIC only. SONNY-3319's creates a vector index, and the
+/// in-process gRPC fixture's index manager lives in the fixture's request
+/// arena, which the fixture frees before the catalog it registers into (a
+/// harness limit: the catalog cleanup then reads freed memory).
+const quic_only_cases = [_]Case{
+    // SONNY-3319 (I-4): a label SET checks the vectors the node holds.
+    .{ .name = "3319 label SET vectors", .steps = &.{
+        .{ .query = "CREATE INDEX vk4b_idx ON VK4b (emb) USING HNSW WITH (metric = 'l2')" },
+        .{ .query = "CREATE (:VK4b {id: 1, emb: vectorf32('[1.0, 0.0, 0.0, 0.0]')})" },
+        .{ .query = "CREATE (:VO4b {id: 5, emb: vectorf32('[8.0, 8.0]')})" },
+        .{ .query = "MATCH (n:VO4b) SET n:VK4b", .code = "22000" },
+        .{ .query = "CREATE (n:VP4b {id: 3, emb: vectorf32('[9.0, 9.0]')}) SET n:VK4b", .code = "22000" },
+        .{ .query = "MATCH (n:VK4b) RETURN n.id", .want = "1" },
+        .{ .query = "MATCH (n:VP4b) RETURN count(n) AS c", .want = "0" },
+    } },
+};
+
 fn labeled(aa: std.mem.Allocator, text: []const u8, n: usize) ![]const u8 {
     // `:L` and `(L` begin every label of the cases: `:L` -> `:L<n>`.
     const tag = try std.fmt.allocPrint(aa, ":L{d}", .{n});
@@ -609,6 +626,16 @@ test "round 4a over QUIC: PROFILE repros refused, C3, I2, I11 (the MERGE fast pa
             const query = try labeled(aa, st.query, n);
             const got = try quicAnswer(aa, &client, query, st.params);
             try check(aa, &failures, "quic", c.name, st, query, got);
+        }
+    }
+    for (quic_only_cases, cases.len..) |c, n| {
+        for (seed) |st| {
+            const query = try labeled(aa, st.query, n);
+            try check(aa, &failures, "quic", c.name, st, query, try quicAnswer(aa, &client, query, &.{}));
+        }
+        for (c.steps) |st| {
+            const query = try labeled(aa, st.query, n);
+            try check(aa, &failures, "quic", c.name, st, query, try quicAnswer(aa, &client, query, st.params));
         }
     }
     // I8: more than 1024 statements (54000).
