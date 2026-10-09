@@ -17,7 +17,7 @@
 //   every chain has inserted its edges.
 // - SONNY-3248 (M-1, M-2, M-3): SKIP / LIMIT parameters; one SET clause
 //   assigns a property once; a `LET $x` is scoped to its query.
-// - SONNY-3244 (I-4): the nesting repros, off until round 14-16 merges.
+// - SONNY-3244 (I-4): the nesting repros (round 14-16 fixes, merged from the r12 line).
 // - Round 4b-1b (the round 4b-1 review): a variable named as two kinds of
 //   element is refused (SONNY-3367, C-1); the comma join streams under the
 //   read budget (SONNY-3368, I-1); every type of an alternation (I-5); a
@@ -1131,13 +1131,9 @@ test "SONNY-3368 (round 4b-1b I-C): a join polls at every step: an empty last ch
 
 // ---------------------------------------------------------------------------
 // SONNY-3244 (round-4a review I-4): statement nesting. The fix is round
-// 14-16's (on fix/sonny-738-r12: max_statement_nesting, stackHasRoom,
-// max_expr_links and the 16 MiB admission thread), so these repros run only
-// once that branch merges into this one.
-//
-// TODO(SONNY-3244): set `i4_nesting_enabled = true` when fix/sonny-738-r12
-// (rounds 14-16) merges into fix/sonny-738-v0823; the merge turns these on.
-const i4_nesting_enabled = false;
+// 14-16's (max_statement_nesting, stackHasRoom, max_expr_links and the 16 MiB
+// admission thread), merged from fix/sonny-738-r12 in the v0.8.23
+// reconciliation.
 
 const NestJob = struct {
     s: *h.Session,
@@ -1200,8 +1196,13 @@ fn nestedIn(aa: std.mem.Allocator, depth: usize, parens: usize) ![]const u8 {
     return text.toOwnedSlice(aa);
 }
 
-test "SONNY-3244 (I-4): nested statements and expressions are refused, never crash a 1 MiB or a 16 MiB thread (on after the round 14-16 merge)" {
-    if (!i4_nesting_enabled) return error.SkipZigTest;
+// The thread stacks are the ones a server request runs on since SONNY-3253
+// (round 15): the QUIC admission threads take 8 MiB at least (16 MiB in a
+// Debug build), the workers and gRPC connection threads 8 or 16 MiB. A
+// 1 MiB thread, the admission threads' stack before then, cannot hold a
+// Debug build's statement frames (about 0.3 MiB each) even for `RETURN 1`,
+// so it is not a stack a request runs on any more and is not probed.
+test "SONNY-3244 (I-4): nested statements and expressions are refused, never crash an 8 MiB or a 16 MiB thread" {
     var s = try h.Session.init(.in_memory);
     defer s.deinit();
     const aa = s.arena.allocator();
@@ -1217,7 +1218,7 @@ test "SONNY-3244 (I-4): nested statements and expressions are refused, never cra
         try nestedIn(aa, 10, 120),
     };
     var failures: usize = 0;
-    for ([_]usize{ 1 << 20, 8 << 20, 16 << 20 }) |stack| {
+    for ([_]usize{ 8 << 20, 16 << 20 }) |stack| {
         for (repros) |q| {
             if (!nestInChild(&s, q, stack)) {
                 std.debug.print("crashed on {d} MiB: {s}...\n", .{ stack >> 20, q[0..@min(q.len, 60)] });

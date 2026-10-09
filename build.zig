@@ -10101,8 +10101,8 @@ pub fn build(b: *std.Build) void {
     }
 
     // SONNY-759 Task W fix round 4b-1: the round-4a re-review's findings
-    // (SONNY-3318, 3319, 3320, 3322, 3248, and SONNY-3244's nesting repros,
-    // off until rounds 14-16 merge), in the four sessions.
+    // (SONNY-3318, 3319, 3320, 3322, 3248, and SONNY-3244's nesting repros),
+    // in the four sessions.
     {
         const mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny_write_allowlist_r4b.zig"), .target = target, .optimize = optimize });
         mod.link_libc = true;
