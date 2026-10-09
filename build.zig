@@ -1647,6 +1647,19 @@ pub fn build(b: *std.Build) void {
     const cli_args_step = b.step("test-cli-args", "Run cli_args parse tests (--cluster-port/--peers, ENG-3954 auth-lockout flags)");
     cli_args_step.dependOn(&run_cli_args_cluster_tests.step);
 
+    // Kubernetes manifests commonly express long options as `--name=value`.
+    // Keep the TLS certificate arguments (and the neighboring server options
+    // used by the same container argv) from being silently discarded.
+    const cli_args_tls_equals_tests = b.addTest(.{ .root_module = b.createModule(.{
+        .root_source_file = b.path("tests/test_cli_args_tls_equals.zig"),
+        .target = target,
+        .optimize = optimize,
+    }) });
+    cli_args_tls_equals_tests.root_module.addImport("cli_args", cli_args_mod);
+    const run_cli_args_tls_equals_tests = b.addRunArtifact(cli_args_tls_equals_tests);
+    const cli_args_tls_equals_step = b.step("test-cli-args-tls-equals", "Run --name=value TLS/server CLI regression tests");
+    cli_args_tls_equals_step.dependOn(&run_cli_args_tls_equals_tests.step);
+
     // Portable process-argv holder tests (REQ-CLI-PORTABLE-ARGV-001). Replaces
     // the Linux-only /proc/self/cmdline read so `geode serve` starts on macOS.
     // Reaches the holder through cli_args (which re-exports it) so the test's
@@ -3661,6 +3674,7 @@ pub fn build(b: *std.Build) void {
     shardDep(test_step, &run_math_func_tests.step, 1, test_shard_loads, test_shard_index);
     shardDep(test_step, &run_string_func_tests.step, 1, test_shard_loads, test_shard_index);
     shardDep(test_step, &run_cli_args_cluster_tests.step, 1, test_shard_loads, test_shard_index);
+    shardDep(test_step, &run_cli_args_tls_equals_tests.step, 1, test_shard_loads, test_shard_index);
     shardDep(test_step, &run_cluster_coord_config_tests.step, 1, test_shard_loads, test_shard_index);
     shardDep(test_step, &run_cluster_bootstrap_tests.step, 1, test_shard_loads, test_shard_index);
     shardDep(test_step, &run_raft_command_refactor_tests.step, 1, test_shard_loads, test_shard_index);
