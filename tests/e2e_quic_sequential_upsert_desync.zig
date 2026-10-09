@@ -135,6 +135,19 @@ pub fn main() !void {
     const run_start_ns = monoNs();
     const overall_deadline_ns = run_start_ns +| overall_deadline_secs * std.time.ns_per_s;
 
+    // Deterministic flatness instrumentation. The O(n^2) recovery wedge shows up
+    // as per-op latency that climbs monotonically with op index (op 0 ~17 ms ->
+    // op 100 ~600 ms -> wedge). With the fixed quic the per-op cost is O(1)
+    // amortized, so the average latency of the LAST window must stay within a
+    // small multiple of the EARLY window. We compare windowed sums (not single
+    // ops) to absorb host-load jitter, and only enforce the ratio once we have a
+    // non-trivial early baseline, so the check is robust on loaded CI hosts but
+    // still fails hard on the unbounded-growth signature.
+    const early_window: u32 = @min(@as(u32, 30), op_count / 4);
+    const late_window: u32 = @min(@as(u32, 30), op_count / 4);
+    var early_sum_ns: u64 = 0;
+    var late_sum_ns: u64 = 0;
+
     var i: u32 = 0;
     while (i < op_count) : (i += 1) {
         if (monoNs() > overall_deadline_ns) {
@@ -194,9 +207,39 @@ pub fn main() !void {
         // Track per-op latency: the wedge manifests as per-op latency growing
         // without bound (the per-connection proto_reader idle time climbs as the
         // QUIC recovery/congestion bookkeeping degrades under sustained load).
-        const op_ms = (monoNs() -| op_t0) / std.time.ns_per_ms;
+        const op_ns = monoNs() -| op_t0;
+        const op_ms = op_ns / std.time.ns_per_ms;
+        if (i < early_window) early_sum_ns +|= op_ns;
+        if (i >= op_count - late_window) late_sum_ns +|= op_ns;
         if (i != 0 and i % 50 == 0) {
             std.debug.print("sequential upsert desync: progress {d}/{d} ops ok (last op {d} ms)\n", .{ i, op_count, op_ms });
+        }
+    }
+
+    // Flatness gate: the late-window average per-op latency must not blow up
+    // relative to the early window. Unbounded O(n^2) growth would make the late
+    // average many times the early average; flat O(1) keeps them comparable. The
+    // 25x ratio plus a 50 ms absolute floor (so tiny sub-ms baselines on a fast
+    // host don't trip a spurious ratio) is generous enough to never flake on a
+    // healthy run yet still catches the linear-growth regression decisively.
+    if (early_window > 0 and late_window > 0) {
+        const early_avg_ns = early_sum_ns / early_window;
+        const late_avg_ns = late_sum_ns / late_window;
+        const early_avg_ms = early_avg_ns / std.time.ns_per_ms;
+        const late_avg_ms = late_avg_ns / std.time.ns_per_ms;
+        std.debug.print(
+            "sequential upsert desync: flatness early_avg={d} ms late_avg={d} ms (window={d})\n",
+            .{ early_avg_ms, late_avg_ms, early_window },
+        );
+        const floor_ns: u64 = 50 * std.time.ns_per_ms;
+        const budget_ns: u64 = @max(floor_ns, early_avg_ns *| 25);
+        if (late_avg_ns > budget_ns) {
+            std.debug.print(
+                "sequential upsert desync: WEDGE SIGNATURE — late per-op avg {d} ms exceeds budget {d} ms " ++
+                    "(early avg {d} ms): per-op latency is growing, recovery accumulator not bounded\n",
+                .{ late_avg_ms, budget_ns / std.time.ns_per_ms, early_avg_ms },
+            );
+            return error.SequentialUpsertLatencyGrowth;
         }
     }
 
