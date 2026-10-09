@@ -15,6 +15,9 @@ const uuid = @import("uuid");
 const graph_store = @import("../graph_store.zig");
 const fle_integration = @import("../fle_integration.zig");
 const property_codec = @import("../property_value_codec.zig");
+const value_order = @import("../execution/value_order.zig");
+// SONNY-2806 (round 8): value equality without importing the executor.
+const value_equality = @import("../execution/value_equality.zig");
 const audit = @import("../security/audit.zig");
 const ts_mod = @import("../timeseries/timeseries.zig");
 const fulltext = @import("../index/fulltext.zig");
@@ -308,7 +311,8 @@ pub const exact_node_property_index_shard_count: usize = 64;
 /// node's OLD postings on a crash-reopen reconcile. Magic-bumped + stamped with
 /// the SAME (checkpoint_epoch, covered_lsn) as `prop_exact.idx`.
 const prop_rev_index_file_name = "prop_rev.idx";
-const prop_rev_index_magic = "GENRVIX1";
+// GENRVIX2 (SONNY-2806): numbers hash by value; a GENRVIX1 file is stale.
+const prop_rev_index_magic = "GENRVIX2";
 
 const graph_store_file_names = [_][]const u8{
     "nodes.store",
@@ -959,9 +963,11 @@ const NodePropertyExactIndex = struct {
         const writer = &idx_fw.interface;
 
         // 8-byte magic header (v3 = checkpoint-epoch + covered-lsn stamped, the
-        // WAL-aware Path B contract). GENPIDX2 (counter-stamped) and GENPIDX1
-        // (unstamped) are treated as stale on load → rebuild (never mis-served).
-        try writer.writeAll("GENPIDX3");
+        // WAL-aware Path B contract; v4 = SONNY-2806, a number's value hash is
+        // its exact value). GENPIDX3 (bytes-hashed numbers), GENPIDX2
+        // (counter-stamped) and GENPIDX1 (unstamped) are treated as stale on
+        // load → rebuild (never mis-served).
+        try writer.writeAll("GENPIDX4");
         // WAL-aware staleness stamp: the gs checkpoint_epoch (derived-index
         // generation) and the durable-frontier LSN this index covers.
         try writer.writeInt(u64, checkpoint_epoch, .little);
@@ -1007,7 +1013,7 @@ const NodePropertyExactIndex = struct {
     /// map — by STREAMING the inversion of the forward postings (no transient
     /// in-memory map at save time). Caller must already hold every shard mutex
     /// (invoked from `saveToFile`). Format:
-    ///   magic "GENRVIX1" | epoch u64 | covered_lsn u64 | pair_count u64
+    ///   magic "GENRVIX2" | epoch u64 | covered_lsn u64 | pair_count u64
     ///   then pair_count × { node_id u64, key_len u32, encoded_key bytes }
     /// where `encoded_key` is the forward posting key
     /// `[label_id u32][key_len u32][key][value_hash u64]`. The value is
@@ -1130,12 +1136,13 @@ const NodePropertyExactIndex = struct {
         var file_reader = file.reader(gsa_io, &reader_buffer);
         const reader = &file_reader.interface;
 
-        // Validate magic header — only the v3 (epoch + covered-lsn stamped) format
-        // loads; a legacy GENPIDX1 (unstamped) or GENPIDX2 (counter-stamped) file
+        // Validate magic header — only the v4 (epoch + covered-lsn stamped,
+        // numbers hashed by value) format loads; a GENPIDX3 (numbers hashed by
+        // their bytes), GENPIDX2 (counter-stamped) or GENPIDX1 (unstamped) file
         // is a present-but-stale snapshot -> rebuild.
         var magic: [8]u8 = undefined;
         reader.readSliceAll(&magic) catch return .stale;
-        if (!std.mem.eql(u8, &magic, "GENPIDX3")) return .stale;
+        if (!std.mem.eql(u8, &magic, "GENPIDX4")) return .stale;
 
         // WAL-aware staleness gate (Path B): reject unless BOTH the derived-index
         // generation matches (no checkpoint since persist) AND the covered LSN is
@@ -1199,7 +1206,7 @@ const ExactIndexLoadOutcome = enum { loaded, stale, absent };
 
 /// Phase E2: the `(checkpoint_epoch, covered_lsn)` stamp of an on-disk
 /// `prop_exact.idx`, read from its header alone (no postings). `null` when the
-/// file is absent, torn, or not the GENPIDX3 (WAL-aware) format. Used by the
+/// file is absent, torn, or not the GENPIDX4 (WAL-aware) format. Used by the
 /// crash-reopen reconcile gate to compare the snapshot's covered_lsn against the
 /// pre-recovery frontier BEFORE deciding to reconcile vs full-rebuild.
 const ExactIndexStamp = struct { epoch: u64, covered_lsn: u64 };
@@ -1218,7 +1225,7 @@ fn readExactIndexStamp(allocator: Allocator, graph_dir_path: []const u8) ?ExactI
 
     var magic: [8]u8 = undefined;
     reader.readSliceAll(&magic) catch return null;
-    if (!std.mem.eql(u8, &magic, "GENPIDX3")) return null;
+    if (!std.mem.eql(u8, &magic, "GENPIDX4")) return null;
     const epoch = reader.takeInt(u64, .little) catch return null;
     const covered = reader.takeInt(u64, .little) catch return null;
     return .{ .epoch = epoch, .covered_lsn = covered };
@@ -1542,7 +1549,59 @@ pub fn freeOwnedStorageProperty(allocator: Allocator, val: gs.PropertyValue) voi
     }
 }
 
+/// Free a property map `getAllNodeProperties` / `getAllEdgeProperties` built:
+/// every key and value, then the table.
+fn freeReadPropertyMap(allocator: Allocator, map: *std.StringHashMap(gs.PropertyValue)) void {
+    var it = map.iterator();
+    while (it.next()) |entry| {
+        allocator.free(entry.key_ptr.*);
+        freeOwnedStorageProperty(allocator, entry.value_ptr.*);
+    }
+    map.deinit();
+}
+
+// CANARY: REQ=REQ-SONNY-2463-MATERIALIZE-OOM; FEATURE="EngineDirectNodeOwnership"; ASPECT=ReadMapPartialFailure; STATUS=TESTED; TEST=tests/test_sonny2463_materialize_oom.zig; OWNER=engine; UPDATED=2026-09-25
+/// Decode `encoded` and put it into `map` under a copy of `key`. The map owns
+/// both copies once the put succeeds. If a copy or the put itself fails, the
+/// copies made so far are freed here, and the map is unchanged (SONNY-2463:
+/// they used to leak).
+fn putDecodedProperty(allocator: Allocator, map: *std.StringHashMap(gs.PropertyValue), key: []const u8, encoded: []const u8) !void {
+    const decoded = try gs.property.decode(allocator, encoded);
+    errdefer freeOwnedStorageProperty(allocator, decoded.value);
+    const owned_key = try allocator.dupe(u8, key);
+    errdefer allocator.free(owned_key);
+    try map.put(owned_key, decoded.value);
+}
+
+// CANARY: REQ=REQ-SONNY-2806-EXACT-INDEX-NUMBER-HASH; FEATURE="InlinePropertyMatch"; ASPECT=ExactNumberHash; STATUS=TESTED; TEST=tests/test_sonny2806_exact_property_matching.zig; OWNER=storage; UPDATED=2026-09-26
+/// SONNY-2806: the exact node-property index hashes a number by its exact
+/// value (`value_order.writeNumberKey`, the key GROUP BY uses), whatever its
+/// representation: INT 1, DECIMAL 1.0 and 1.00, a DOUBLE 1.0 and a SMALLINT 1
+/// hash alike. It hashed the encoded bytes, so an inline-property seek for
+/// `{x: 1}` found no stored 1.0, and the planned read and the streaming scan
+/// take an empty seek as the answer. Every other value hashes its encoded
+/// bytes, as before. Format edition: prop_exact.idx GENPIDX4 and
+/// prop_rev.idx GENRVIX2 (an older file is stale, and the index is rebuilt).
+fn storedNumber(value: gs.PropertyValue) ?value_order.Number {
+    return switch (value) {
+        .int => |i| .{ .exact = .{ .coeff = i, .scale = 0 } },
+        .float => |f| .{ .float = f },
+        .decimal => |d| .{ .exact = .{ .coeff = d.coeff, .scale = d.scale } },
+        .ext => |e| property_codec.extPayloadNumber(e.type_tag, e.data),
+        else => null,
+    };
+}
+
+fn numberHash(n: value_order.Number) u64 {
+    // The longest key is 18 bytes ('C', the i128 coefficient, the scale).
+    var buf: [32]u8 = undefined;
+    var w: std.Io.Writer = .fixed(&buf);
+    value_order.writeNumberKey(&w, n) catch unreachable;
+    return std.hash.Wyhash.hash(0x2806, w.buffered());
+}
+
 fn hashStorageProperty(allocator: Allocator, value: gs.PropertyValue) !u64 {
+    if (storedNumber(value)) |n| return numberHash(n);
     var stack_buf: [64]u8 = undefined;
     const encoded_len = gs.property.encodedSize(value);
     if (encoded_len <= stack_buf.len) {
@@ -1557,7 +1616,11 @@ fn hashStorageProperty(allocator: Allocator, value: gs.PropertyValue) !u64 {
 
 /// Hash pre-encoded property bytes directly — zero-copy, no allocation.
 /// The encoded bytes must be in the canonical format produced by `gs.property.encode`.
+/// A number hashes by its exact value, as in `hashStorageProperty` (SONNY-2806).
 fn hashEncodedPropertyBytes(encoded_value: []const u8) u64 {
+    if (gs.property.decodeView(encoded_value)) |decoded| {
+        if (storedNumber(decoded.value)) |n| return numberHash(n);
+    } else |_| {}
     return std.hash.Wyhash.hash(0, encoded_value);
 }
 
@@ -2757,14 +2820,125 @@ threadlocal var t_current_statement_txn: ?*StatementTxn = null;
 // per-statement slot first, then falls back to the session slot.
 threadlocal var t_session_engine_txn: ?*StatementTxn = null;
 
-// R9 (2026-04-22, lazy variant): backing storage for the session
-// engine txn when the executor opens it lazily (on the first mutation
-// inside a Geode txn) and therefore has no `ServerState.session_engine_txn_storage`
-// pointer in scope.  Lives in thread-local so the backing slot is
-// automatically per-session (one QUIC stream = one thread).  Populated
-// by `beginSessionTxnLazy`; cleared by `commitSessionTxn` /
-// `abortSessionTxn`.
-threadlocal var t_session_engine_txn_storage_lazy: StatementTxn = undefined;
+// CANARY: REQ=REQ-SONNY-2823-SESSION-ENGINE-TXN; FEATURE="TransactionManagement"; ASPECT=SessionSlot; STATUS=TESTED; TEST=tests/test_sonny2823_session_engine_txn.zig; OWNER=storage; UPDATED=2026-09-27
+/// SONNY-2823: a session's engine transaction (R9). It lives in the session
+/// (`ServerState.session_engine_txn`), is on a thread only while one of the
+/// session's requests runs there (`enterSessionEngineTxn` /
+/// `leaveSessionEngineTxn`), and never outlives the program that opened it:
+/// the executor commits it when its outermost entry point returns, under the
+/// request's graph lock, unless a ROLLBACK aborted it first.
+///
+/// R9 opened the transaction into a thread-local slot and kept it open until
+/// the Geode transaction's COMMIT, as if one thread served one session. gRPC
+/// serves a session's requests on any worker thread, and QUIC's cooperative
+/// scheduler and mutation offload pool serve many sessions on one thread.
+/// And only QUIC's COMMIT and ROLLBACK messages ended it. So it stayed open
+/// on the thread: a committed transaction's writes on its shard had no
+/// COMMIT record, and every later write on that thread, from any session,
+/// joined it and was lost with it.
+///
+/// It does not span requests either. An engine transaction holds its shard
+/// WAL's record batch from `begin` to commit (GAP-0900), so the page images
+/// it logged are appended at commit, after the images other transactions
+/// logged and committed in between. Recovery replays in log order, so its
+/// older image of a shared page overwrote their newer one, and a crash lost
+/// their committed writes. Inside one program the request's graph write lock
+/// keeps every other writer off the graph.
+pub const SessionEngineTxn = struct {
+    txn: StatementTxn = undefined,
+    /// The UUID of the graph `txn` was opened on: DROP GRAPH frees the
+    /// graph's `ManagedGraph` (`txn.mg`) whatever is open on it, and a graph
+    /// created again may reuse the address, never the UUID.
+    graph_uuid: [16]u8 = undefined,
+    /// `txn` is an open engine transaction. Kept by `beginSessionTxnLazy`
+    /// and the commit and abort functions.
+    open: bool = false,
+};
+
+/// SONNY-2823: the session slot installed on this thread, or null. With none,
+/// no session engine transaction is opened (`beginSessionTxnLazy`), and a
+/// transaction's statements use per-statement engine transactions (R8).
+threadlocal var t_session_engine_slot: ?*SessionEngineTxn = null;
+
+/// SONNY-2823: what `enterSessionEngineTxn` changed on the thread.
+pub const SessionEngineTxnScope = struct {
+    prev: ?*SessionEngineTxn = null,
+    /// The slot was already installed (a rollback or teardown inside the
+    /// session's own request): the matching leave changes nothing.
+    nested: bool = false,
+};
+
+/// SONNY-2823: install `slot` on this thread for one request of its session.
+pub fn enterSessionEngineTxn(slot: *SessionEngineTxn) SessionEngineTxnScope {
+    if (t_session_engine_slot == slot) return .{ .prev = slot, .nested = true };
+    const prev = t_session_engine_slot;
+    t_session_engine_slot = slot;
+    t_session_engine_txn = if (slot.open) &slot.txn else null;
+    return .{ .prev = prev };
+}
+
+/// SONNY-2823: the request is over. The thread keeps no session engine
+/// transaction, and no per-statement one either: neither may outlive the
+/// request on a pooled thread, where the next request's writes, from any
+/// session, would join it.
+pub fn leaveSessionEngineTxn(slot: *SessionEngineTxn, scope: SessionEngineTxnScope) void {
+    if (scope.nested) return;
+    if (slot.open and t_session_engine_txn == &slot.txn) {
+        // The executor commits it when the program that opened it returns;
+        // one still open is a bug. Its changes stand in memory, as an undo
+        // transaction's do until it is undone, so it is committed.
+        log.err("a session engine txn outlived its request; committing it", .{});
+        commitThreadSessionTxn() catch |err| {
+            log.err("session engine txn commit failed: {s}", .{@errorName(err)});
+        };
+    }
+    slot.open = false;
+    t_session_engine_slot = scope.prev;
+    t_session_engine_txn = if (scope.prev) |p| (if (p.open) &p.txn else null) else null;
+    if (scope.prev == null and t_current_statement_txn != null) {
+        // A statement opens its per-statement transaction in its own frame
+        // and ends it there, so one still set here is a bug, and its handle
+        // lives in a frame that has returned: it is not read. The thread
+        // forgets it; WAL recovery rolls back a transaction never committed.
+        log.err("a statement engine txn was left open at the end of a request; the thread forgets it", .{});
+        t_current_statement_txn = null;
+    }
+}
+
+/// SONNY-2823: take this thread's session engine transaction off the thread
+/// (and out of its slot), or null for none. Null too when its graph was
+/// dropped: the transaction went with the graph's engine, and `txn.mg`,
+/// freed, is not read.
+fn takeThreadSessionTxn() ?*StatementTxn {
+    const txn = t_session_engine_txn orelse return null;
+    t_session_engine_txn = null;
+    const slot = t_session_engine_slot orelse return txn;
+    if (&slot.txn != txn) return txn;
+    slot.open = false;
+    const ad = graph_store.getGlobalAdapter() orelse return null;
+    if (!ad.engineIsOpen(slot.txn.mg, slot.graph_uuid)) {
+        log.warn("the graph of a session engine txn was dropped; the txn went with it", .{});
+        return null;
+    }
+    return txn;
+}
+
+/// SONNY-2823: commit this thread's session engine transaction, if it has
+/// one: ONE WAL fsync for its writes on its shard.
+pub fn commitThreadSessionTxn() !void {
+    const txn = takeThreadSessionTxn() orelse return;
+    try txn.mg.engine.commitTxn(txn.txn_id);
+}
+
+/// SONNY-2823: abort this thread's session engine transaction, if it has
+/// one. Callers abort BEFORE the undo log replays, so the replay's own
+/// changes commit on their own and do not join the aborted transaction.
+pub fn abortThreadSessionTxn() void {
+    const txn = takeThreadSessionTxn() orelse return;
+    // error-policy: A — best-effort session rollback; WAL recovery
+    // supersedes a failed abort.
+    txn.mg.engine.abortTxn(txn.txn_id) catch {};
+}
 
 /// Return the thread-local statement txn if it targets `graph_name`; else null.
 /// Adapter mutation methods consult this to decide whether to batch into an
@@ -4483,28 +4657,23 @@ pub const StorageAdapter = struct {
             }
         }
 
-        var probe_id: u64 = 0;
-        switch (store.lookupMergeCandidate(graph_name, label, merge_key, merge_value, &probe_id)) {
-            .found => {
-                if (apply_on_match) {
-                    try store.setNodeProperty(probe_id, merge_key, merge_value);
-                    for (on_create_props) |kv| {
-                        if (std.mem.eql(u8, kv.key, merge_key)) continue;
-                        try store.setNodeProperty(probe_id, kv.key, kv.value);
-                    }
-                    // GAP-0900: the on-match upsert writes to the engine WAL
-                    // too — count it toward the checkpoint cadence. (The
-                    // create branch is counted by the delegated bulkInsert.)
-                    _ = self.pending_bulk_ops.fetchAdd(1, .monotonic);
+        if (try self.findMergeNode(store, graph_name, label, merge_key, merge_value)) |probe_id| {
+            if (apply_on_match) {
+                try store.setNodeProperty(probe_id, merge_key, merge_value);
+                for (on_create_props) |kv| {
+                    if (std.mem.eql(u8, kv.key, merge_key)) continue;
+                    try store.setNodeProperty(probe_id, kv.key, kv.value);
                 }
-                // Task 4 review Finding 1: `wrote` is true only when the
-                // on-match SET clauses actually ran above. A plain hit with
-                // no `apply_on_match` changed nothing — callers must not
-                // re-append it into an append-only FTS index.
-                return .{ .id = probe_id, .wrote = apply_on_match };
-            },
-            .not_indexable => return error.MergeValueNotIndexable,
-            .not_found => {},
+                // GAP-0900: the on-match upsert writes to the engine WAL
+                // too — count it toward the checkpoint cadence. (The
+                // create branch is counted by the delegated bulkInsert.)
+                _ = self.pending_bulk_ops.fetchAdd(1, .monotonic);
+            }
+            // Task 4 review Finding 1: `wrote` is true only when the
+            // on-match SET clauses actually ran above. A plain hit with
+            // no `apply_on_match` changed nothing — callers must not
+            // re-append it into an append-only FTS index.
+            return .{ .id = probe_id, .wrote = apply_on_match };
         }
 
         // Insert phase: delegate to the shard-aligned bulk insert helper —
@@ -4844,10 +5013,16 @@ pub const StorageAdapter = struct {
     /// or `error.TargetNodeNotFound` to keep wire-level error mapping
     /// consistent with `bulkInsertEdge`.
     ///
-    /// This function is a PURE READ: it consults `merge_prop_index.get` +
-    /// `nodes.get` only (see Phase 4 invariants in
-    /// `docs/performance/2026-04-23-enterprise-ingest/phase4-invariants.md`),
-    /// so it is safe to call under `acquireGraphReadLock`.
+    /// It reads the graph, and is safe to call under `acquireGraphReadLock`
+    /// (see Phase 4 invariants in
+    /// `docs/performance/2026-04-23-enterprise-ingest/phase4-invariants.md`).
+    /// It is not a pure read of MERGE's index: SONNY-2806 (round 7) made
+    /// `lookupMergeCandidate` settle an entry it cannot trust (unresolved,
+    /// or naming a deleted node) by finding the key's holders and writing
+    /// the entry. Writers run beside it under the same SHARED lock, so the
+    /// settle writes only if nothing wrote the index shard since the lookup
+    /// read the entry (round 8, `MergePropertyIndex.settle`); a holder
+    /// inserted meanwhile keeps its entry.
     ///
     /// `.not_indexable` results are mapped to `missing_err` for the same
     /// reason as `bulkInsertEdge` — the fast path cannot handle
@@ -4966,6 +5141,95 @@ pub const StorageAdapter = struct {
         return edge_id;
     }
 
+    // CANARY: REQ=REQ-SONNY-2806-MERGE-EQUAL-HOLDERS; FEATURE="MergeIdempotency"; ASPECT=BulkMergeResolution; STATUS=TESTED; TEST=tests/test_sonny2806_merge_equal_holders.zig; OWNER=storage; UPDATED=2026-09-27
+    /// The node a single-property MERGE matches, as the executor finds it:
+    /// the LOWEST node id among the nodes of `label` whose `key` equals
+    /// `value`, or null.
+    ///
+    /// MERGE's property index (graph_store) answers an integer, a string or
+    /// a boolean. SONNY-2806 (round 7): it keeps no other number, so a
+    /// DOUBLE or DECIMAL key such as 1.5 is resolved by value
+    /// (`GraphStore.lowestMergeHolderByValue`; the executor scans the label).
+    /// Such a key failed the server's MERGE with MergeValueNotIndexable
+    /// before round 6, and was indexed at the cost of one entry per such
+    /// property per node in round 6.
+    ///
+    /// Round 8: that search reads the exact node-property index only when
+    /// the index can answer, and otherwise scans the label: in lean mode
+    /// (GEODE_INDEX_MERGE_KEYS_ONLY) the index holds no value of a key
+    /// registered after its nodes were written, so `CREATE (:T {x: 1.5})`
+    /// then the first bulk `MERGE (:T {x: 1.5})` created a second node; and
+    /// while the index is deferred or rebuilding, the search does not build
+    /// it under the caller's graph lock.
+    fn findMergeNode(
+        self: *StorageAdapter,
+        store: *graph_store.GraphStore,
+        graph_name: []const u8,
+        label: []const u8,
+        key: []const u8,
+        value: graph_store.PropertyValue,
+    ) !?u64 {
+        _ = self;
+        var id: u64 = 0;
+        switch (store.lookupMergeCandidate(graph_name, label, key, value, &id)) {
+            .found => return id,
+            .not_found => return null,
+            // Any other value the index cannot key (a null, a list, a key
+            // past 1024 bytes) is refused, as before.
+            .not_indexable => if (!graph_store.GraphStore.isNumberProperty(value)) return error.MergeValueNotIndexable,
+        }
+        return store.lowestMergeHolderByValue(graph_name, label, key, value);
+    }
+
+    // CANARY: REQ=REQ-SONNY-2806-MERGE-RESOLVE-EXACT; FEATURE="MergeIdempotency"; ASPECT=ExactIndexCandidates; STATUS=TESTED; TEST=tests/test_sonny2806_merge_resolve.zig; OWNER=storage; UPDATED=2026-09-27
+    /// SONNY-2806 (round 8): for MERGE's index to find the holders of a key
+    /// in O(holders) (`GraphStore.findMergeHolders`): the public ids of the
+    /// nodes of `label` in `graph_name` that the exact node-property index
+    /// lists under the value of one of `props` (the smallest posting). The
+    /// index keys a value by its hash, so the caller checks each node. Null
+    /// when the index cannot answer, and the caller scans the label instead:
+    ///   * lean mode (GEODE_INDEX_MERGE_KEYS_ONLY): the index holds no value
+    ///     of a key registered after its nodes were written;
+    ///   * the index is deferred or being rebuilt (`exact_index_built`).
+    ///     This never builds it or waits for it: the caller holds the graph
+    ///     lock, and the build can run for minutes (about 14 at 14M nodes);
+    ///   * no such graph.
+    pub fn exactIndexMergeCandidates(
+        self: *StorageAdapter,
+        store: *graph_store.GraphStore,
+        allocator: Allocator,
+        graph_name: []const u8,
+        label: []const u8,
+        props: []const PropKV,
+    ) !?[]u64 {
+        if (graph_store.leanIndexingEnabled()) return null;
+        const io = std.Io.Threaded.global_single_threaded.io();
+        const mg = blk: {
+            self.mutex.lockUncancelable(io);
+            defer self.mutex.unlock(io);
+            break :blk self.requireExistingGraphLocked(graph_name) catch |err| switch (err) {
+                error.GraphNotFound => return null,
+                else => return err,
+            };
+        };
+        if (!mg.exact_index_built.load(.acquire)) return null;
+        const slots = try copySmallestExactCandidates(allocator, mg, label, props);
+        defer allocator.free(slots);
+        const id_map = blk: {
+            mg.string_indexes_mutex.lockUncancelable(io);
+            defer mg.string_indexes_mutex.unlock(io);
+            break :blk store.getIdMap(graph_name);
+        } orelse return try allocator.alloc(u64, 0);
+        var ids: std.ArrayList(u64) = .empty;
+        errdefer ids.deinit(allocator);
+        try ids.ensureTotalCapacity(allocator, slots.len);
+        for (slots) |slot_id| {
+            const public_id = id_map.nodeUuid(slot_id) orelse continue;
+            ids.appendAssumeCapacity(@truncate(public_id));
+        }
+        return try ids.toOwnedSlice(allocator);
+    }
+
     /// Bulk-ingest MERGE fast path for simple single-label, single-merge-key
     /// MERGE statements — counterpart to `bulkInsertNode` for the
     /// msft-graph nodes_*.jsonl hot path (677/677 node-phase statements
@@ -5046,14 +5310,11 @@ pub const StorageAdapter = struct {
         // skip the lock-free Phase-1 fast return so the SET clauses
         // commit inside the statement txn (single WAL fsync) along with
         // the merge-prop index update.
-        var existing_id: u64 = undefined;
         if (!apply_on_match) {
-            switch (store.lookupMergeCandidate(graph_name, label, merge_key, merge_value, &existing_id)) {
-                // Task 4 review Finding 1: this early return only runs when
-                // `!apply_on_match`, so it is always a pure hit with no write.
-                .found => return .{ .id = existing_id, .wrote = false },
-                .not_found => {},
-                .not_indexable => return error.MergeValueNotIndexable,
+            // Task 4 review Finding 1: this early return only runs when
+            // `!apply_on_match`, so it is always a pure hit with no write.
+            if (try self.findMergeNode(store, graph_name, label, merge_key, merge_value)) |existing_id| {
+                return .{ .id = existing_id, .wrote = false };
             }
         }
 
@@ -5087,24 +5348,21 @@ pub const StorageAdapter = struct {
         // apply_on_match callers this is the only probe (Phase 1 was
         // skipped) and on hit we apply the SET clauses to the existing
         // node before returning (true upsert semantics).
-        switch (store.lookupMergeCandidate(graph_name, label, merge_key, merge_value, &existing_id)) {
-            .found => {
-                if (apply_on_match) {
-                    try store.setNodeProperty(existing_id, merge_key, merge_value);
-                    for (on_create_props) |kv| {
-                        if (std.mem.eql(u8, kv.key, merge_key)) continue;
-                        try store.setNodeProperty(existing_id, kv.key, kv.value);
-                    }
-                    if (stmt_txn_open) try stmt_txn.commit();
-                    return .{ .id = existing_id, .wrote = true };
+        if (try self.findMergeNode(store, graph_name, label, merge_key, merge_value)) |existing_id| {
+            if (apply_on_match) {
+                try store.setNodeProperty(existing_id, merge_key, merge_value);
+                for (on_create_props) |kv| {
+                    if (std.mem.eql(u8, kv.key, merge_key)) continue;
+                    try store.setNodeProperty(existing_id, kv.key, kv.value);
                 }
-                if (stmt_txn_open) stmt_txn.abort();
-                // Task 4 review Finding 1: a concurrent writer won the race
-                // between our Phase-1 miss and this re-probe — still a pure
-                // hit with no write from THIS call's perspective.
-                return .{ .id = existing_id, .wrote = false };
-            },
-            .not_found, .not_indexable => {},
+                if (stmt_txn_open) try stmt_txn.commit();
+                return .{ .id = existing_id, .wrote = true };
+            }
+            if (stmt_txn_open) stmt_txn.abort();
+            // Task 4 review Finding 1: a concurrent writer won the race
+            // between our Phase-1 miss and this re-probe — still a pure
+            // hit with no write from THIS call's perspective.
+            return .{ .id = existing_id, .wrote = false };
         }
 
         const labels = [_][]const u8{label};
@@ -5279,7 +5537,10 @@ pub const StorageAdapter = struct {
 
         for (label_ids) |label_id| {
             if (mg.label_dict.getString(label_id)) |name| {
-                try result.append(allocator, try allocator.dupe(u8, name));
+                // SONNY-2463: room first, so a failed append cannot drop the
+                // copy.
+                try result.ensureUnusedCapacity(allocator, 1);
+                result.appendAssumeCapacity(try allocator.dupe(u8, name));
             }
         }
 
@@ -6041,7 +6302,31 @@ pub const StorageAdapter = struct {
                 const rec = std.mem.bytesToValue(NodeRec, data[slot_offset..][0..@sizeOf(NodeRec)]);
 
                 if (node_mod.isDeleted(&rec)) continue;
-                if (node_mod.isEmpty(&rec)) continue;
+                // SONNY-2394 fail-closed: this slot is LISTED in the label
+                // posting list and its page is allocated, yet its record is
+                // all-zero ("empty"). The engine never zeroes a node record
+                // (deleteNode only sets NODE_FLAG_DELETED, handled above), so
+                // this is lost/zeroed page data -- e.g. a torn write the pager
+                // accepts as a fresh all-zero page (it skips the CRC for a
+                // zero header). Skipping it (the old `continue`) silently
+                // dropped every node on the page from label scans while
+                // count() still reported them.
+                //
+                // Scope (SONNY-2394 review): this catches the loss only while
+                // the label posting list still names the slot, i.e. the label
+                // index came from its snapshot. It is NOT a general guarantee:
+                // an unlabeled scan, or a label index REBUILT from the node
+                // store (engine scanNodes skips empty records), no longer
+                // references the lost ids and returns partial rows silently.
+                // The root fix -- the pager must not treat a zeroed page below
+                // the written high-water mark as fresh -- is SONNY-2409.
+                if (node_mod.isEmpty(&rec)) {
+                    // warn, not err: the typed error below is the contract the
+                    // caller surfaces (std.log.err would also fail every test
+                    // that deliberately exercises this path).
+                    log.warn("label scan: indexed node record is empty (lost or zeroed page) -- refusing to serve partial results (shard={d} slot={d} page={d})", .{ shard_idx, nid, page_id });
+                    return error.DataCorruption;
+                }
                 // H1 instrumentation: one live slot enumerated (materialized into
                 // a label-scan result). Bounded by the WHERE+LIMIT fix once the
                 // caller stops requesting shards after `offset+limit` matches.
@@ -7711,7 +7996,9 @@ pub const StorageAdapter = struct {
         const rec = try mg.engine.getNode(node_id) orelse return error.NodeNotFound;
 
         var result = std.StringHashMap(gs.PropertyValue).init(allocator);
-        errdefer result.deinit();
+        // SONNY-2463: a failure part way frees every key and value already
+        // put, not only the table.
+        errdefer freeReadPropertyMap(allocator, &result);
 
         if (rec.prop_head == 0) return result;
 
@@ -7726,9 +8013,7 @@ pub const StorageAdapter = struct {
 
         while (try iter.next()) |entry| {
             if (!shouldExposePropertyKey(entry.key)) continue;
-            const decoded = try gs.property.decode(allocator, entry.encoded_value);
-            const owned_key = try allocator.dupe(u8, entry.key);
-            try result.put(owned_key, decoded.value);
+            try putDecodedProperty(allocator, &result, entry.key, entry.encoded_value);
         }
 
         return result;
@@ -7761,7 +8046,8 @@ pub const StorageAdapter = struct {
         };
 
         var result = std.StringHashMap(gs.PropertyValue).init(allocator);
-        errdefer result.deinit();
+        // SONNY-2463: as in `getAllNodeProperties`.
+        errdefer freeReadPropertyMap(allocator, &result);
 
         if (prop_head == 0) return result;
 
@@ -7774,9 +8060,7 @@ pub const StorageAdapter = struct {
 
         while (try iter.next()) |entry| {
             if (!shouldExposePropertyKey(entry.key)) continue;
-            const decoded = try gs.property.decode(allocator, entry.encoded_value);
-            const owned_key = try allocator.dupe(u8, entry.key);
-            try result.put(owned_key, decoded.value);
+            try putDecodedProperty(allocator, &result, entry.key, entry.encoded_value);
         }
 
         return result;
@@ -10503,32 +10787,46 @@ pub const StorageAdapter = struct {
     }
 
     /// R9: commit the session-scoped engine txn → ONE WAL fsync.
+    /// SONNY-2823: `commitThreadSessionTxn`, reporting a missing one.
     pub fn commitSessionTxn(self: *StorageAdapter) !void {
         _ = self;
-        const txn = t_session_engine_txn orelse return error.NoActiveSessionTxn;
-        t_session_engine_txn = null;
-        try txn.mg.engine.commitTxn(txn.txn_id);
+        if (t_session_engine_txn == null) return error.NoActiveSessionTxn;
+        try commitThreadSessionTxn();
     }
 
     /// R9: abort the session-scoped engine txn (no data-durability fsync).
     pub fn abortSessionTxn(self: *StorageAdapter) void {
         _ = self;
-        const txn = t_session_engine_txn orelse return;
-        t_session_engine_txn = null;
-        // error-policy: A — best-effort session rollback; WAL recovery
-        // supersedes a failed abort.
-        txn.mg.engine.abortTxn(txn.txn_id) catch {};
+        abortThreadSessionTxn();
     }
 
-    /// R9 (2026-04-22, lazy): open a session-scoped engine txn using the
-    /// thread-local `t_session_engine_txn_storage_lazy` backing slot.
-    /// Used by the executor when it encounters the first mutation in a
-    /// Geode BEGIN TX … COMMIT batch and has no direct pointer into
-    /// `ServerState.session_engine_txn_storage`.  The slot is
-    /// thread-local so it's naturally per-session (one QUIC stream handler
-    /// runs on one pool thread).
+    /// R9 (2026-04-22, lazy): open a session-scoped engine txn, for the
+    /// executor's first mutation in a Geode BEGIN TX … COMMIT.
+    ///
+    /// SONNY-2823: into the slot of the session whose request runs on this
+    /// thread; with no slot installed, `error.NoSessionEngineTxnSlot` (the
+    /// caller uses a per-statement transaction). It used a thread-local slot,
+    /// which outlived the request on a pooled thread.
     pub fn beginSessionTxnLazy(self: *StorageAdapter, graph_name: []const u8) !void {
-        try self.beginSessionTxn(graph_name, &t_session_engine_txn_storage_lazy);
+        const slot = t_session_engine_slot orelse return error.NoSessionEngineTxnSlot;
+        try self.beginSessionTxn(graph_name, &slot.txn);
+        slot.graph_uuid = slot.txn.mg.uuid;
+        slot.open = true;
+    }
+
+    /// SONNY-2823: is `mg`, of the graph with UUID `graph_uuid`, one of this
+    /// adapter's open graphs? `mg` is compared as a pointer first, and read
+    /// only once it is found in the map: it may have been freed with a
+    /// dropped graph. The UUID tells a graph created again at the freed
+    /// address from the one the transaction was opened on.
+    pub fn engineIsOpen(self: *StorageAdapter, mg: *const ManagedGraph, graph_uuid: [16]u8) bool {
+        self.mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
+        defer self.mutex.unlock(std.Io.Threaded.global_single_threaded.io());
+        var it = self.engines.valueIterator();
+        while (it.next()) |v| {
+            if (v.* == mg) return std.mem.eql(u8, &mg.uuid, &graph_uuid);
+        }
+        return false;
     }
 
     /// Acquire shared (read) locks on multiple named graphs simultaneously.
@@ -10619,51 +10917,56 @@ fn observeMaxAtomic(max: *std.atomic.Value(u64), value: u64) void {
     }
 }
 
+/// A property value's part of a MERGE tuple lock's hash
+/// (`mergeTupleLockIndex`). Two values MERGE finds equal must hash alike, or
+/// two concurrent MERGEs of the key take different locks and both create a
+/// node.
+///
+/// SONNY-2806 (round 8): a number hashes by its value
+/// (`value_order.writeNumberKey`, the bytes MERGE's index and the exact index
+/// compare), whatever its representation: INT 7, DECIMAL 7.0, a SMALLINT 7
+/// and a DOUBLE 7.0 alike, and DOUBLE 7.5 with DECIMAL 7.50. It hashed its
+/// representation, and every extended value (a DOUBLE, a SMALLINT) one tag,
+/// so two bulk MERGEs of 7 and 7.0 created two nodes (6000 nodes for 3000
+/// keys in the round-7 review's probe). Any other extended value still
+/// hashes by its tag alone: equal ones share a lock, as do unequal ones.
 fn hashPropertyValue(seed: u64, value: graph_store.PropertyValue) u64 {
     var h = seed;
+    if (graph_store.GraphStore.numberOfProperty(value)) |n| {
+        // The longest key is 18 bytes ('C', the i128 coefficient, the scale).
+        var buf: [32]u8 = undefined;
+        var w: std.Io.Writer = .fixed(&buf);
+        value_order.writeNumberKey(&w, n) catch unreachable;
+        h = std.hash.Wyhash.hash(h, "N");
+        return std.hash.Wyhash.hash(h, w.buffered());
+    }
     const tag: u8 = switch (value) {
         .String => 1,
-        .Int => 2,
-        .Float => 3,
         .Bool => 4,
         .Null => 5,
         .ExtValue => 6,
-        .Decimal => 7,
+        // Numbers hash by value above.
+        .Int, .Float, .Decimal => unreachable,
     };
     h = std.hash.Wyhash.hash(h, &[_]u8{tag});
     switch (value) {
         .String => |s| h = std.hash.Wyhash.hash(h, s),
-        .Int => |i| {
-            var v = i;
-            h = std.hash.Wyhash.hash(h, std.mem.asBytes(&v));
-        },
-        .Float => |f| {
-            var bits: u64 = @bitCast(f);
-            h = std.hash.Wyhash.hash(h, std.mem.asBytes(&bits));
-        },
         .Bool => |b| h = std.hash.Wyhash.hash(h, if (b) &[_]u8{1} else &[_]u8{0}),
-        .Null => {},
-        .ExtValue => {},
-        .Decimal => |d| {
-            var coeff = d.coeff;
-            var scale = d.scale;
-            h = std.hash.Wyhash.hash(h, std.mem.asBytes(&coeff));
-            h = std.hash.Wyhash.hash(h, std.mem.asBytes(&scale));
-        },
+        .Null, .ExtValue => {},
+        .Int, .Float, .Decimal => unreachable,
     }
     return h;
 }
 
+/// Whether two stored properties are equal, as the executor's
+/// `execution.valuesEqual` decides: numbers by exact value (1 and 1.0), a
+/// duration by its length, and every extended value (a DOUBLE, a SMALLINT, a
+/// date, ...) decoded first. SONNY-2806 (round 7): this compared by
+/// representation and an extended value never, so the multi-property MERGE
+/// fallback created a node on every `MERGE (:T {a: 1, d: date(...)})`, and
+/// `{a: 1}` did not find a stored 1.0.
 fn propertyValuesEqual(a: graph_store.PropertyValue, b: graph_store.PropertyValue) bool {
-    return switch (a) {
-        .String => |s| b == .String and std.mem.eql(u8, s, b.String),
-        .Int => |i| b == .Int and i == b.Int,
-        .Float => |f| b == .Float and f == b.Float,
-        .Bool => |v| b == .Bool and v == b.Bool,
-        .Null => b == .Null,
-        .Decimal => |d| b == .Decimal and d.coeff == b.Decimal.coeff and d.scale == b.Decimal.scale,
-        .ExtValue => false,
-    };
+    return value_equality.valuesEqual(property_codec.propertyValueToValue(a), property_codec.propertyValueToValue(b));
 }
 
 const candidate_shard_mask_int = if (sharded_store.SHARD_COUNT <= 64) u64 else @compileError("candidate shard mask assumes <=64 shards");
@@ -10714,6 +11017,18 @@ fn copySmallestMergePropCandidates(
     // H4: build the exact index on first access if it was deferred at open
     // (this MERGE-preselect path reads postings for both probes below).
     try ensureExactNodePropertyIndexBuilt(adapter, mg);
+    return copySmallestExactCandidates(allocator, mg, label, props);
+}
+
+/// `copySmallestMergePropCandidates` on an index already built: the slot ids
+/// of the smallest exact-index posting among `props`' values (empty when any
+/// value has no posting).
+fn copySmallestExactCandidates(
+    allocator: Allocator,
+    mg: *ManagedGraph,
+    label: []const u8,
+    props: []const StorageAdapter.PropKV,
+) ![]u64 {
     const io = std.Io.Threaded.global_single_threaded.io();
     const label_id = blk: {
         mg.string_indexes_mutex.lockUncancelable(io);
@@ -10842,6 +11157,13 @@ fn findNodeMatchingMergeProps(
     // ensureGraphHydrated is a lock-free atomic fast-path once built.
     store.ensureGraphHydrated(graph_name);
 
+    // SONNY-2806 (round 8): in lean mode (GEODE_INDEX_MERGE_KEYS_ONLY) the
+    // exact index holds no value of a key registered after its nodes were
+    // written, so the MERGE that registers the key would find none of them
+    // and create a second node (`{a: 1.5, b: 'k'}` after
+    // `CREATE (:T {a: 1.5, b: 'k'})`). Scan the label instead.
+    if (graph_store.leanIndexingEnabled()) return lowestLabelNodeMatchingMergeProps(allocator, store, graph_name, label, props);
+
     // Multi-property MERGE used to scan every node carrying `label` on each
     // miss. Under fan-out this made unique tuple inserts O(label cardinality).
     // Start from the smallest exact-property posting instead, then verify the
@@ -10867,13 +11189,45 @@ fn findNodeMatchingMergeProps(
     const candidate_mask = lockCandidateShardReads(mg, candidates);
     defer unlockCandidateShardReads(mg, candidate_mask);
 
+    // SONNY-2806 (round 7): the LOWEST matching node id, the node the merge
+    // index and the executor's label scan answer with, whatever the posting
+    // order.
+    var lowest: ?u64 = null;
     for (candidates) |slot_id| {
         const public_id = @as(u64, @truncate(id_map.nodeUuid(slot_id) orelse continue));
+        if (lowest) |l| if (public_id >= l) continue;
         // GAP-0046: hydrate-on-miss. Under a bounded node cache (or right after a
         // deferred reopen) the matching node need not be resident; a plain
         // `getPtr` would miss it and the MERGE would wrongly create a duplicate.
         const node = (store.nodes.getOrHydratePtr(public_id) catch null) orelse continue;
-        if (nodeMatchesMergeProps(node, graph_name, label, props)) return public_id;
+        if (nodeMatchesMergeProps(node, graph_name, label, props)) lowest = public_id;
+    }
+    return lowest;
+}
+
+/// The lowest node of `label` matching every `props` value, by a scan of the
+/// label's postings in ascending id order (lean mode; `findNodeMatchingMergeProps`).
+fn lowestLabelNodeMatchingMergeProps(
+    allocator: Allocator,
+    store: *graph_store.GraphStore,
+    graph_name: []const u8,
+    label: []const u8,
+    props: []const StorageAdapter.PropKV,
+) !?u64 {
+    const ids = (try store.snapshotNodesByLabel(allocator, graph_name, label)) orelse return null;
+    defer allocator.free(ids);
+    const Check = struct {
+        graph_name: []const u8,
+        label: []const u8,
+        props: []const StorageAdapter.PropKV,
+
+        fn matches(c: @This(), node: *const graph_store.Node) bool {
+            return nodeMatchesMergeProps(node, c.graph_name, c.label, c.props);
+        }
+    };
+    const check = Check{ .graph_name = graph_name, .label = label, .props = props };
+    for (ids) |id| {
+        if (try store.residentNodeSatisfies(id, check, Check.matches)) return id;
     }
     return null;
 }

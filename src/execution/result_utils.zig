@@ -10,6 +10,7 @@ const Value = value_types.Value;
 const execution = @import("../execution.zig");
 const ExecutionResult = execution.ExecutionResult;
 const value_utilities = @import("value_utilities.zig");
+const distinct_set = @import("distinct_set.zig");
 
 // NOTE: This file uses `catch {}` for stdout/stderr I/O operations.
 // Output write failures are non-critical — the query result is correct
@@ -112,255 +113,75 @@ pub fn generateUniqueColumnNames(allocator: std.mem.Allocator, items: []const as
 }
 
 // ============================================================================
-// Value Hash Helpers for DISTINCT
-// ============================================================================
-
-/// Write a hash representation of a Value (non-error version for applyDistinct)
-fn writeValueHash(writer: anytype, val: Value) void {
-    switch (val) {
-        .Null => writer.writeAll("NULL") catch {},
-        .Bool => |b| writer.print("{}", .{b}) catch {},
-        .Int => |n| writer.print("{}", .{n}) catch {},
-        .Str => |s| writer.writeAll(s) catch {},
-        .Decimal => |d| writer.print("{}.{}", .{ d.coeff, d.scale }) catch {},
-        .Node => |node| writer.print("Node:{}", .{node.id}) catch {},
-        .Edge => |e| writer.print("Edge:{}", .{e.id}) catch {},
-        .List => |list| {
-            writer.writeAll("List[") catch {};
-            for (list, 0..) |elem, j| {
-                if (j > 0) writer.writeAll(",") catch {};
-                writeValueHash(writer, elem);
-            }
-            writer.writeAll("]") catch {};
-        },
-        .Map => |map| {
-            writer.writeAll("Map{") catch {};
-            var map_iter = map.iterator();
-            var first = true;
-            while (map_iter.next()) |entry| {
-                if (!first) writer.writeAll(",") catch {};
-                first = false;
-                writer.writeAll(entry.key_ptr.*) catch {};
-                writer.writeAll(":") catch {};
-                writeValueHash(writer, entry.value_ptr.*);
-            }
-            writer.writeAll("}") catch {};
-        },
-        .Path => |path| {
-            writer.writeAll("Path[") catch {};
-            for (path.nodes, 0..) |node, j| {
-                if (j > 0) writer.writeAll(",") catch {};
-                writer.print("Node:{}", .{node.id}) catch {};
-            }
-            writer.writeAll("]") catch {};
-        },
-        .ExtValue => writer.writeAll("ExtValue") catch {},
-        else => writer.writeAll("Other") catch {},
-    }
-}
-
-/// Write a hash representation of a Value (error-returning version for createRowHashKey)
-fn writeValueHashChecked(writer: anytype, val: Value) !void {
-    switch (val) {
-        .Null => try writer.writeAll("NULL"),
-        .Bool => |b| try writer.print("{}", .{b}),
-        .Int => |n| try writer.print("{}", .{n}),
-        .Str => |s| try writer.writeAll(s),
-        .Decimal => |d| try writer.print("{}.{}", .{ d.coeff, d.scale }),
-        .Node => |node| try writer.print("Node:{}", .{node.id}),
-        .Edge => |e| try writer.print("Edge:{}", .{e.id}),
-        .List => |list| {
-            try writer.writeAll("List[");
-            for (list, 0..) |elem, j| {
-                if (j > 0) try writer.writeAll(",");
-                try writeValueHashChecked(writer, elem);
-            }
-            try writer.writeAll("]");
-        },
-        .Map => |map| {
-            try writer.writeAll("Map{");
-            var map_iter = map.iterator();
-            var first = true;
-            while (map_iter.next()) |entry| {
-                if (!first) try writer.writeAll(",");
-                first = false;
-                try writer.writeAll(entry.key_ptr.*);
-                try writer.writeAll(":");
-                try writeValueHashChecked(writer, entry.value_ptr.*);
-            }
-            try writer.writeAll("}");
-        },
-        .Path => |path| {
-            try writer.writeAll("Path[");
-            for (path.nodes, 0..) |node, j| {
-                if (j > 0) try writer.writeAll(",");
-                try writer.print("Node:{}", .{node.id});
-            }
-            try writer.writeAll("]");
-        },
-        .ExtValue => try writer.writeAll("ExtValue"),
-        else => try writer.writeAll("Other"),
-    }
-}
-
-// ============================================================================
 // DISTINCT Deduplication
 // ============================================================================
 
 // CANARY: REQ=REQ-GQL-DISTINCT-001; FEATURE="DISTINCT"; ASPECT=DEDUPLICATION; STATUS=TESTED; TEST=geodetestlab/specs/gql_query_comprehensive.yml; OWNER=execution; UPDATED=2025-12-22
-/// Apply DISTINCT deduplication to result rows
+/// Apply DISTINCT deduplication to result rows. A row repeats an earlier row
+/// when every cell has the same typed key (`distinct_set.writeGroupKeyPart`),
+/// the identity GROUP BY and count(DISTINCT) use: 5 and '5' differ, 1 and 1.0
+/// do not, NULL equals NULL.
+///
+/// SONNY-2735: the row key was a lossy rendering. Every double, date, time,
+/// text, UUID or other typed value was the word "Other", so DISTINCT over
+/// them returned one row whenever the streaming DISTINCT fast path declined
+/// (with ORDER BY, say, or on the planned read); 5 and '5' were one value;
+/// and a `|` inside a string could move a cell boundary.
 pub fn applyDistinct(allocator: std.mem.Allocator, result: *ExecutionResult) !void {
     if (result.rows.len <= 1) return;
 
-    var seen = std.StringHashMap(void).init(allocator);
-    defer seen.deinit();
-
-    // Track keys for cleanup - StringHashMap doesn't own its keys
-    var keys_to_free = try std.ArrayList([]u8).initCapacity(allocator, result.rows.len);
-    defer {
-        for (keys_to_free.items) |key| {
-            allocator.free(key);
+    // Keys first, so that nothing is freed until nothing can fail.
+    var arena = std.heap.ArenaAllocator.init(allocator);
+    defer arena.deinit();
+    const scratch = arena.allocator();
+    var seen: std.StringHashMapUnmanaged(void) = .empty;
+    var key: std.Io.Writer.Allocating = .init(allocator);
+    defer key.deinit();
+    const keep = try allocator.alloc(bool, result.rows.len);
+    defer allocator.free(keep);
+    var kept: usize = 0;
+    for (result.rows, keep) |row, *k| {
+        key.clearRetainingCapacity();
+        for (row) |val| try distinct_set.writeGroupKeyPart(&key.writer, scratch, val);
+        const gop = try seen.getOrPut(scratch, key.written());
+        k.* = !gop.found_existing;
+        if (k.*) {
+            gop.key_ptr.* = try scratch.dupe(u8, key.written());
+            kept += 1;
         }
-        keys_to_free.deinit(allocator);
     }
+    if (kept == result.rows.len) return;
 
-    var unique_rows = try std.ArrayList([]Value).initCapacity(allocator, result.rows.len);
-    defer unique_rows.deinit(allocator);
-
-    for (result.rows) |row| {
-        // Create a hash key from row values
-        var key_aw: std.Io.Writer.Allocating = std.Io.Writer.Allocating.initCapacity(allocator, 256) catch continue;
-        const writer = &key_aw.writer;
-
-        for (row, 0..) |val, i| {
-            if (i > 0) writer.writeAll("|") catch {};
-            switch (val) {
-                .Null => writer.writeAll("NULL") catch {},
-                .Bool => |b| writer.print("{}", .{b}) catch {},
-                .Int => |n| writer.print("{}", .{n}) catch {},
-                .Str => |s| writer.writeAll(s) catch {},
-                .Decimal => |d| writer.print("{}.{}", .{ d.coeff, d.scale }) catch {},
-                .Node => |node| writer.print("Node:{}", .{node.id}) catch {},
-                .Edge => |e| writer.print("Edge:{}", .{e.id}) catch {},
-                .List => |list| {
-                    writer.writeAll("List[") catch {};
-                    for (list, 0..) |elem, j| {
-                        if (j > 0) writer.writeAll(",") catch {};
-                        writeValueHash(writer, elem);
-                    }
-                    writer.writeAll("]") catch {};
-                },
-                .Map => |map| {
-                    writer.writeAll("Map{") catch {};
-                    var map_iter = map.iterator();
-                    var first = true;
-                    while (map_iter.next()) |entry| {
-                        if (!first) writer.writeAll(",") catch {};
-                        first = false;
-                        writer.writeAll(entry.key_ptr.*) catch {};
-                        writer.writeAll(":") catch {};
-                        writeValueHash(writer, entry.value_ptr.*);
-                    }
-                    writer.writeAll("}") catch {};
-                },
-                .Path => |path| {
-                    writer.writeAll("Path[") catch {};
-                    for (path.nodes, 0..) |node, j| {
-                        if (j > 0) writer.writeAll(",") catch {};
-                        writer.print("Node:{}", .{node.id}) catch {};
-                    }
-                    writer.writeAll("]") catch {};
-                },
-                .ExtValue => writer.writeAll("ExtValue") catch {},
-                else => writer.writeAll("Other") catch {},
-            }
-        }
-
-        var key_buf = key_aw.toArrayList();
-        const key = key_buf.toOwnedSlice(allocator) catch {
-            key_buf.deinit(allocator);
+    const unique_rows = try allocator.alloc([]Value, kept);
+    var i: usize = 0;
+    for (result.rows, keep) |row, k| {
+        if (k) {
+            unique_rows[i] = row;
+            i += 1;
             continue;
-        };
-
-        if (!seen.contains(key)) {
-            seen.put(key, {}) catch {
-                allocator.free(key);
-                continue;
-            };
-            // Track key for cleanup at end of function
-            keys_to_free.append(allocator, key) catch {};
-            try unique_rows.append(allocator, row);
-        } else {
-            // Duplicate - free the key immediately since we don't need it
-            allocator.free(key);
-            // GAP-0535: free the dropped row's values when the result owns them
-            if (result.owns_value_memory) {
-                for (row) |val| {
-                    value_utilities.freeValue(allocator, val);
-                }
-            }
-            allocator.free(row);
         }
+        // GAP-0535: free the dropped row's values when the result owns them
+        if (result.owns_value_memory) {
+            for (row) |val| value_utilities.freeValue(allocator, val);
+        }
+        allocator.free(row);
     }
-
-    // Free the old rows slice and replace with deduplicated rows
     allocator.free(result.rows);
-    result.rows = try unique_rows.toOwnedSlice(allocator);
+    result.rows = unique_rows;
 }
 
 // ============================================================================
 // Row Hashing Utilities
 // ============================================================================
 
-/// Create a hash key string from a row of values for deduplication
+/// A row's DISTINCT key: every cell's typed key (`distinct_set.writeGroupKeyPart`),
+/// as `applyDistinct` compares rows (SONNY-2735: it was the same lossy
+/// rendering). The caller owns the returned bytes.
 pub fn createRowHashKey(allocator: std.mem.Allocator, row: []const Value) ![]u8 {
-    var key_buf = try std.ArrayList(u8).initCapacity(allocator, 256);
-    errdefer key_buf.deinit(allocator);
-    const writer = key_buf.writer(allocator);
-
-    for (row, 0..) |val, i| {
-        if (i > 0) try writer.writeAll("|");
-        switch (val) {
-            .Null => try writer.writeAll("NULL"),
-            .Bool => |b| try writer.print("{}", .{b}),
-            .Int => |n| try writer.print("{}", .{n}),
-            .Str => |s| try writer.writeAll(s),
-            .Decimal => |d| try writer.print("{}.{}", .{ d.coeff, d.scale }),
-            .Node => |node| try writer.print("Node:{}", .{node.id}),
-            .Edge => |e| try writer.print("Edge:{}", .{e.id}),
-            .List => |list| {
-                try writer.writeAll("List[");
-                for (list, 0..) |elem, j| {
-                    if (j > 0) try writer.writeAll(",");
-                    try writeValueHashChecked(writer, elem);
-                }
-                try writer.writeAll("]");
-            },
-            .Map => |map| {
-                try writer.writeAll("Map{");
-                var map_iter = map.iterator();
-                var first = true;
-                while (map_iter.next()) |entry| {
-                    if (!first) try writer.writeAll(",");
-                    first = false;
-                    try writer.writeAll(entry.key_ptr.*);
-                    try writer.writeAll(":");
-                    try writeValueHashChecked(writer, entry.value_ptr.*);
-                }
-                try writer.writeAll("}");
-            },
-            .Path => |path| {
-                try writer.writeAll("Path[");
-                for (path.nodes, 0..) |node, j| {
-                    if (j > 0) try writer.writeAll(",");
-                    try writer.print("Node:{}", .{node.id});
-                }
-                try writer.writeAll("]");
-            },
-            .ExtValue => try writer.writeAll("ExtValue"),
-            else => try writer.writeAll("Other"),
-        }
-    }
-
-    return key_buf.toOwnedSlice(allocator);
+    var arena = std.heap.ArenaAllocator.init(allocator);
+    defer arena.deinit();
+    var key: std.Io.Writer.Allocating = .init(allocator);
+    defer key.deinit();
+    for (row) |val| try distinct_set.writeGroupKeyPart(&key.writer, arena.allocator(), val);
+    return allocator.dupe(u8, key.written());
 }

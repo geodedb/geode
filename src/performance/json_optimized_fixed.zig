@@ -39,72 +39,105 @@ pub const OptimizedJsonProcessor = struct {
     }
 
     /// Streaming JSON writer for large result sets
+    ///
+    /// SONNY-2394: separator state is tracked per open container. The old
+    /// writer had one `first_item` flag that writeFieldName cleared, so the
+    /// value after a key got a leading comma (`{"name":,"Alice"}`), and object
+    /// starts never reset it -- every object with a field produced invalid
+    /// JSON. Now: `after_key` suppresses the separator for a member's value,
+    /// and each container start saves the enclosing container's `first_item`
+    /// (restored at its end).
     pub const StreamingWriter = struct {
         buffer: *std.ArrayList(u8),
         allocator: Allocator,
         arena_allocator: Allocator,
+        /// True until the first element/member of the innermost open container
+        /// (or the top-level value) has been written.
         first_item: bool = true,
+        /// Set by writeFieldName: the next value belongs to that key.
+        after_key: bool = false,
+        /// Saved `first_item` of the enclosing containers.
+        nesting: [max_depth]bool = undefined,
+        depth: usize = 0,
 
-        pub fn writeObjectStart(self: *StreamingWriter) !void {
-            try self.buffer.append(self.allocator, '{');
+        const max_depth = 64;
+
+        /// Separator handling shared by every value (containers included).
+        fn beginValue(self: *StreamingWriter) !void {
+            if (self.after_key) {
+                self.after_key = false;
+                return;
+            }
+            if (!self.first_item) {
+                try self.buffer.append(self.allocator, ',');
+            }
+            self.first_item = false;
         }
 
-        pub fn writeObjectEnd(self: *StreamingWriter) !void {
-            try self.buffer.append(self.allocator, '}');
-        }
-
-        pub fn writeArrayStart(self: *StreamingWriter) !void {
-            try self.buffer.append(self.allocator, '[');
+        fn openContainer(self: *StreamingWriter, open: u8) !void {
+            try self.beginValue();
+            if (self.depth == max_depth) return error.NestingTooDeep;
+            self.nesting[self.depth] = self.first_item;
+            self.depth += 1;
+            try self.buffer.append(self.allocator, open);
             self.first_item = true;
         }
 
+        fn closeContainer(self: *StreamingWriter, close: u8) !void {
+            if (self.depth == 0 or self.after_key) return error.UnbalancedContainer;
+            try self.buffer.append(self.allocator, close);
+            self.depth -= 1;
+            self.first_item = self.nesting[self.depth];
+        }
+
+        pub fn writeObjectStart(self: *StreamingWriter) !void {
+            try self.openContainer('{');
+        }
+
+        pub fn writeObjectEnd(self: *StreamingWriter) !void {
+            try self.closeContainer('}');
+        }
+
+        pub fn writeArrayStart(self: *StreamingWriter) !void {
+            try self.openContainer('[');
+        }
+
         pub fn writeArrayEnd(self: *StreamingWriter) !void {
-            try self.buffer.append(self.allocator, ']');
+            try self.closeContainer(']');
         }
 
         pub fn writeFieldName(self: *StreamingWriter, name: []const u8) !void {
             if (!self.first_item) {
                 try self.buffer.append(self.allocator, ',');
             }
+            self.first_item = false;
             try self.buffer.append(self.allocator, '"');
             try self.writeEscapedString(name);
             try self.buffer.appendSlice(self.allocator, "\":");
-            self.first_item = false;
+            self.after_key = true;
         }
 
         pub fn writeString(self: *StreamingWriter, value: []const u8) !void {
-            if (!self.first_item) {
-                try self.buffer.append(self.allocator, ',');
-            }
+            try self.beginValue();
             try self.buffer.append(self.allocator, '"');
             try self.writeEscapedString(value);
             try self.buffer.append(self.allocator, '"');
-            self.first_item = false;
         }
 
         pub fn writeNumber(self: *StreamingWriter, value: anytype) !void {
-            if (!self.first_item) {
-                try self.buffer.append(self.allocator, ',');
-            }
+            try self.beginValue();
             const formatted = try std.fmt.allocPrint(self.arena_allocator, "{}", .{value});
             try self.buffer.appendSlice(self.allocator, formatted);
-            self.first_item = false;
         }
 
         pub fn writeBool(self: *StreamingWriter, value: bool) !void {
-            if (!self.first_item) {
-                try self.buffer.append(self.allocator, ',');
-            }
+            try self.beginValue();
             try self.buffer.appendSlice(self.allocator, if (value) "true" else "false");
-            self.first_item = false;
         }
 
         pub fn writeNull(self: *StreamingWriter) !void {
-            if (!self.first_item) {
-                try self.buffer.append(self.allocator, ',');
-            }
+            try self.beginValue();
             try self.buffer.appendSlice(self.allocator, "null");
-            self.first_item = false;
         }
 
         fn writeEscapedString(self: *StreamingWriter, input: []const u8) !void {

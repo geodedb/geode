@@ -183,6 +183,11 @@ make status-generate
 make build && make verify-fast
 ```
 
+### Zig Test Conventions
+
+- **Every regression test is a named step.** Write it as `tests/test_<ticket>_<topic>.zig` and register it in `build.zig` as `zig build test-<name>`, with the RUN step passed to `shardDep` as the neighbouring tests do (`const run_x = b.addRunArtifact(x_tests); shardDep(test_step, &run_x.step, 1, test_shard_loads, test_shard_index);`). That is what puts it in the sharded aggregate `zig build test`, which the pre-push hook and the CI shard jobs run. `shardDep` rejects a compile step at configure time, because a compile step is built but never run (SONNY-2394). The one exception is an intentionally red TDD reproduction listed in [KNOWN_TEST_ISSUES.md](docs/KNOWN_TEST_ISSUES.md): it may stay out of `shardDep`, so the aggregate stays green, until the commit that fixes it registers it there, and until then its test artifact is added to `test-compile` directly (`if (g_test_compile_step) |c| c.dependOn(&x_tests.step);`).
+- **Run `zig build test-compile` before claiming the aggregate is green.** It compiles every artifact the aggregate `test` step runs, in all shards, and every executable target, without running any of them. A sweep of named steps cannot see aggregate artifacts that have no named step, so a sweep can pass while the aggregate does not even compile (SONNY-2394). Executables join on their own, so a new one needs no registration; the exceptions are cross-target and Vulkan builds, and the executables that do not compile yet, listed in `build.zig`'s `rotted_executables` (SONNY-2746). It builds several hundred artifacts: run it on its own, not alongside other builds.
+
 ### Load Test Baseline Tracking
 
 Load test results are tracked against baselines in `benchmarks/loadtest/` to detect performance regressions between releases. The system compares QPS and p50 latency at each concurrency level.
@@ -417,7 +422,7 @@ Never hold a higher-tier mutex while acquiring a lower-tier one. Thread-local at
 
 ### Quality Gates
 
-- **Test Coverage**: Keep the local `zig build test-*` baseline green (expected ~175/179 named steps; track the canonical baseline and regressions in [KNOWN_TEST_ISSUES.md](docs/KNOWN_TEST_ISSUES.md))
+- **Test Coverage**: Keep the local `zig build test-*` baseline green (expected ~175/179 named steps; track the canonical baseline and regressions in [KNOWN_TEST_ISSUES.md](docs/KNOWN_TEST_ISSUES.md)), and pass `zig build test-compile` before calling the aggregate `zig build test` green (see Zig Test Conventions above)
 - **Memory Safety**: Zero memory leaks in test runs
 - **Standards Compliance**: Keep the ISO conformance suite green (96/96 in `tests/gql_iso_conformance.zig`, `zig build test-iso-conformance`) and the executed-query `gql_conformance` suite green (20/20, `zig build test-gql-conformance`)
 - **Performance**: No regressions in core operations

@@ -1657,7 +1657,8 @@ pub const VectorKNNOptimizer = struct {
                     // Add the node to vars map
                     try binding.vars.put(var_name orelse "n", .{ .Node = node });
                     // Add similarity score as a special property
-                    const score_decimal = PropertyValue{ .Decimal = .{ .coeff = @intFromFloat(match.score * 1000), .scale = 3 } };
+                    // SONNY-2739: a score from a huge vector is 22003, not an abort.
+                    const score_decimal = PropertyValue{ .Decimal = .{ .coeff = try geode.types.decimal128.checkedScaledCoeff(match.score, 1000.0), .scale = 3 } };
                     try binding.vars.put("_similarity_score", .{ .Value = score_decimal });
 
                     try results.append(self.allocator, binding);
@@ -1771,7 +1772,7 @@ pub const VectorKNNOptimizer = struct {
             binding.name = var_name orelse "n";
             binding.value = .{ .Node = candidate.node };
             try binding.vars.put(var_name orelse "n", .{ .Node = candidate.node });
-            const distance_decimal = PropertyValue{ .Decimal = .{ .coeff = @intFromFloat(candidate.distance * 1000), .scale = 3 } };
+            const distance_decimal = PropertyValue{ .Decimal = .{ .coeff = try geode.types.decimal128.checkedScaledCoeff(candidate.distance, 1000.0), .scale = 3 } };
             try binding.vars.put("_similarity_score", .{ .Value = distance_decimal });
 
             try results.append(self.allocator, binding);

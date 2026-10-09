@@ -28,6 +28,13 @@ Geode maintains comprehensive test coverage across multiple testing frameworks a
 # Run all Zig unit tests
 make test
 
+# Run one named Zig regression step (every regression test has one)
+zig build test-<name>
+
+# Compile every artifact the aggregate `zig build test` runs, in all shards,
+# without running them: run this before claiming the aggregate is green
+zig build test-compile
+
 # Run integration tests with large datasets
 make integration-test
 
@@ -257,7 +264,24 @@ tests:
 
 #### 3. Regression Tests
 
-Add shell scripts to `tests/` directory:
+A Zig regression test is a named build step. Write it as
+`tests/test_<ticket>_<topic>.zig` and register it in `build.zig` as
+`zig build test-<name>`, passing its RUN step to `shardDep` as the neighbouring
+tests do (`const run_x = b.addRunArtifact(x_tests);
+shardDep(test_step, &run_x.step, 1, test_shard_loads, test_shard_index);`), so
+it also runs in the sharded aggregate `zig build test` (the pre-push hook and
+the CI shard jobs). `shardDep` rejects a compile step at configure time, since
+a compile step is built but never run. The one exception is an intentionally
+red TDD reproduction listed in [KNOWN_TEST_ISSUES.md](KNOWN_TEST_ISSUES.md): it
+may stay out of `shardDep`, so the aggregate stays green, until the commit that
+fixes it registers it there, and until then its test artifact is added to
+`test-compile` directly
+(`if (g_test_compile_step) |c| c.dependOn(&x_tests.step);`). Before claiming
+the aggregate is green, run `zig build test-compile`: it compiles every
+aggregate artifact in all shards, including those with no named step, which a
+sweep of named steps cannot see.
+
+Shell-based regression scripts go in the `tests/` directory:
 
 ```bash
 #!/bin/bash

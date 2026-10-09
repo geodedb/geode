@@ -35,6 +35,34 @@ const auth_graph_manager = @import("auth_graph_manager");
 const data_dir_lock = @import("data_dir_lock");
 pub const AuthGraphManager = auth_graph_manager.AuthGraphManager;
 
+// CANARY: REQ=REQ-SONNY-2777-POLICY-IDS; FEATURE="GPS Policy Persistence"; ASPECT=CliRlsPolicyCreate; STATUS=TESTED; TEST=tests/test_sonny2777_policy_ids.zig; OWNER=security; UPDATED=2026-09-26
+/// SONNY-2777: the record `geode auth policy create <name> --table <t>
+/// --condition <c>` writes: an RLS policy (`kind = rls`) under a new id from
+/// the policy id sequence. It took `next_user_id` (the next *user* id), so it
+/// could reuse a GPS policy's id and overwrite that record. The write refuses
+/// an id in use (`PolicyIdInUse`). Returns the new id.
+pub fn createRlsPolicyRecord(mgr: *AuthGraphManager, name: []const u8, table: []const u8, condition: []const u8) !u64 {
+    const policy_id = mgr.storage.nextPolicyId();
+    try mgr.storage.persistPolicy(.{
+        .policy_id = policy_id,
+        .name = name,
+        .description = "",
+        .graph = "",
+        .table = table,
+        .operation = 0,
+        .permissive = false,
+        .enabled = true,
+        .using_clause = condition,
+        .check_clause = null,
+        .audit_level = 0,
+        .created_by = 0,
+        // SONNY-2750: an RLS record, which GPS never loads.
+        .kind = .rls,
+        .mode = .create,
+    });
+    return policy_id;
+}
+
 // -- State Path Resolution (for non-auth flat files) --
 
 const STATE_DIR_ENV = "GEODE_STATE_DIR";
@@ -166,6 +194,68 @@ fn releaseCliDataDirLock() void {
     }
 }
 
+// -- Offline chain verification (SONNY-2798) --
+
+/// The data directory `initCliAuthManager` resolved (flag, GEODE_DATA_DIR, or
+/// the default); the HMAC key file lives there.
+var g_resolved_data_dir: ?[]const u8 = null;
+
+/// The key the chain verified with, set by `verifyChainBeforeChange`;
+/// `deinitAndSaveCliAuth` seals the command's change with it.
+var g_verified_key: ?[32]u8 = null;
+
+/// Why the last `verifyChainBeforeChange` refused (for the message).
+var g_verify_failure: ?anyerror = null;
+
+pub const ChainCheckError = error{ AuthChainTampered, HmacKeyUnavailable };
+
+// CANARY: REQ=REQ-SONNY-2798-OFFLINE-VERIFY-FIRST; FEATURE="OfflineAuthStoreSafety"; ASPECT=VerifyBeforeChange; STATUS=TESTED; TEST=tests/test_sonny2798_offline_verify.zig; OWNER=security; UPDATED=2026-09-26
+/// SONNY-2798: may an offline command change this auth store? Only when its
+/// `__geode_security` HMAC chain verifies. Offline commands re-signed the
+/// whole chain after their change (`sealChain`) without checking it first,
+/// so a record planted at rest (an allow-write GPS policy, a superuser user,
+/// a graph grant) was signed by the next `geode user reset-password` and
+/// took effect at the next server start. Since SONNY-2791 no seal signs a
+/// planted record without a kind; this refuses the planted records that
+/// carry one. An empty store has nothing to verify. On success the key is
+/// kept, and `deinitAndSaveCliAuth` seals the command's change.
+pub fn verifyChainBeforeChange(allocator: std.mem.Allocator, mgr: *AuthGraphManager) ChainCheckError!void {
+    if (mgr.countAuthRecords() == 0) return;
+    const kr = AuthGraphManager.resolveHmacKey(allocator, g_resolved_data_dir) catch |err| {
+        g_verify_failure = err;
+        return error.HmacKeyUnavailable;
+    };
+    mgr.verifyChain(&kr.key) catch |err| {
+        g_verify_failure = err;
+        return error.AuthChainTampered;
+    };
+    g_verified_key = kr.key;
+}
+
+/// `verifyChainBeforeChange` for a CLI command (`command` and `subcommand`
+/// name it in the message): on a refusal it says why and what to do, and
+/// exits without changing anything.
+pub fn requireIntactChain(allocator: std.mem.Allocator, mgr: *AuthGraphManager, command: []const u8, subcommand: []const u8) void {
+    verifyChainBeforeChange(allocator, mgr) catch |err| {
+        const why = if (g_verify_failure) |e| @errorName(e) else "unknown";
+        switch (err) {
+            error.AuthChainTampered => std.debug.print(
+                "Error: refusing to run '{s} {s}': the __geode_security HMAC chain does not verify ({s}); nothing was changed.\n" ++
+                    "A security record was changed or added without the HMAC key, or the key is not the one the chain was sealed with\n" ++
+                    "(set GEODE_AUTH_HMAC_KEY or GEODE_TDE_KEY as the server does). Check the records ('geode auth verify', 'geode user list',\n" ++
+                    "'geode auth policy list'); then accept them with 'geode auth reseal', or restore the data directory from a backup.\n",
+                .{ command, subcommand, why },
+            ),
+            error.HmacKeyUnavailable => std.debug.print(
+                "Error: refusing to run '{s} {s}': there is no HMAC key to verify the __geode_security chain with ({s}); nothing was changed.\n" ++
+                    "Set GEODE_AUTH_HMAC_KEY or GEODE_TDE_KEY, or place .geode_hmac_key in the data directory.\n",
+                .{ command, subcommand, why },
+            ),
+        }
+        std.process.exit(1);
+    };
+}
+
 // -- Offline Auth Manager Initialization --
 
 /// Initialise an AuthGraphManager for CLI offline operations.
@@ -192,6 +282,8 @@ pub fn initCliAuthManager(allocator: std.mem.Allocator, data_dir: ?[]const u8) !
     // offline auth/apikey/tenant command routes through here.
     try acquireCliDataDirLock(allocator, resolved_dir);
     errdefer releaseCliDataDirLock();
+    // SONNY-2798: where `requireIntactChain` finds the HMAC key.
+    g_resolved_data_dir = resolved_dir;
 
     // Use initGlobalStore which initializes the storage adapter so that
     // saveIfDirty actually persists node/edge data to disk.  Without the
@@ -214,6 +306,20 @@ pub fn initCliAuthManager(allocator: std.mem.Allocator, data_dir: ?[]const u8) !
 /// addition to) `mgr.deinit()` from every CLI command that may mutate auth
 /// state.
 pub fn deinitAndSaveCliAuth(allocator: std.mem.Allocator, mgr: *AuthGraphManager) void {
+    // SONNY-2798: the chain verified before this command changed anything
+    // (`requireIntactChain`), so the records it does not sign are the
+    // command's own: seal them, so the next command and the next server start
+    // verify the change. Most offline writers stored their records unsigned,
+    // and the server refused to start until someone ran `geode auth reseal`.
+    if (g_verified_key) |key| {
+        g_verified_key = null;
+        mgr.sealChain(&key) catch |err| {
+            std.debug.print(
+                "Warning: the change was saved but could not be sealed into the __geode_security HMAC chain ({s}); check it with 'geode auth verify'.\n",
+                .{@errorName(err)},
+            );
+        };
+    }
     // Flush any in-memory changes to disk before tearing down.
     graph_store.getGlobalStore(allocator).saveIfDirty();
     mgr.deinit();

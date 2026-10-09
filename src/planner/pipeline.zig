@@ -302,6 +302,17 @@ pub const BestPlanResult = struct {
     best: ?enumerator_mod.CandidatePlan,
     total_candidates: usize,
     pruned: usize,
+    /// SONNY-2394: owns the synthetic logical tree and the enumerated
+    /// candidates that `best.plan` points into. Both used to be allocated
+    /// straight from the caller's allocator and never freed (a leak on every
+    /// call); freeing them before returning would leave `best.plan.children`
+    /// dangling, so the result owns them. Call deinit() when done.
+    arena: std.heap.ArenaAllocator,
+
+    pub fn deinit(self: *BestPlanResult) void {
+        self.arena.deinit();
+        self.* = undefined;
+    }
 };
 
 pub fn buildLogicalTree(q: planner_root.ast.Query, alloc: std.mem.Allocator) !enumerator_mod.LogicalPlan {
@@ -331,13 +342,17 @@ pub fn planQuerySelectBest(
 ) !BestPlanResult {
     // Ensure core legality (ORDER/LIMIT etc.) still validated
     _ = try planner_root.planQuery(allocator, q, .{});
-    const tree = try buildLogicalTree(q, allocator);
+    // The tree, the enumerator's swapped-join children and the candidate list
+    // all live in one arena owned by the returned result (see BestPlanResult).
+    var arena = std.heap.ArenaAllocator.init(allocator);
+    errdefer arena.deinit();
+    const a = arena.allocator();
+    const tree = try buildLogicalTree(q, a);
     // Enumerate all candidates (unmanaged) then apply refined cost model for final selection
-    var pe = enumerator_mod.PlanEnumerator.init(allocator, enum_cfg);
+    var pe = enumerator_mod.PlanEnumerator.init(a, enum_cfg);
     var buf = std.ArrayList(enumerator_mod.CandidatePlan).empty;
-    defer buf.deinit(allocator);
-    try pe.enumerateUnmanaged(tree, allocator, &buf);
-    if (buf.items.len == 0) return .{ .best = null, .total_candidates = 0, .pruned = pe.stats.pruned };
+    try pe.enumerateUnmanaged(tree, a, &buf);
+    if (buf.items.len == 0) return .{ .best = null, .total_candidates = 0, .pruned = pe.stats.pruned, .arena = arena };
     // Apply refined cost model across candidates
     const factors: cost_model.CostFactors = .{};
     // Perform a synthetic calibration pass to adjust relative operator weights.
@@ -355,7 +370,7 @@ pub fn planQuerySelectBest(
     }
     // Overwrite selected candidate.cost with refined cost for visibility
     if (best_cp) |*sel| sel.cost = best_cost;
-    return .{ .best = best_cp, .total_candidates = buf.items.len, .pruned = pe.stats.pruned };
+    return .{ .best = best_cp, .total_candidates = buf.items.len, .pruned = pe.stats.pruned, .arena = arena };
 }
 
 // Expose a canonical minimal empty query for tests/benchmarks so they don't need to import planner_root directly.

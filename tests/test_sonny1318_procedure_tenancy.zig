@@ -610,8 +610,11 @@ test "SONNY-1318: schema introspection labels are tenant-scoped under strict mod
 //      The fixture deliberately contains BOTH edge shapes the predicates
 //      disagree about: cross-tenant edges (one tagged with the READER's own
 //      tenant, so only the endpoint check can stop it) and an intra-tenant edge
-//      mis-tagged "default" (which MUST still count, via the legacy
-//      endpoint-derived bridge). Degrees are asserted EXACTLY, per node.
+//      mis-tagged "default". SONNY-2693 removed the endpoint-derived bridge
+//      that used to count the mis-tagged edge: an edge counts only when its own
+//      tag AND both endpoints are visible, so it no longer counts for tenant A
+//      (`CALL geode.tenant.backfill_edge_tags()` re-tags such edges). Degrees
+//      are asserted EXACTLY, per node.
 // ---------------------------------------------------------------------------
 
 /// Strictly greater than `parallel_wrapper.Thresholds.forEach` (32) so the
@@ -677,10 +680,10 @@ fn seedParallelFixture(h: *Harness, allocator: std.mem.Allocator) !ParallelFixtu
     }
 
     // (2) LEGACY MIS-TAG: an intra-tenant-A edge carrying the "default"
-    //     sentinel. Its own tag fails tenant A's filter, so it counts ONLY via
-    //     the endpoint-derived bridge — the arm that used to allocate inside a
-    //     worker. It MUST still be counted (a fix that simply dropped the
-    //     fallback would make a5/a7 one degree short).
+    //     sentinel. Its own tag fails tenant A's filter. It used to count
+    //     through the endpoint-derived bridge (the arm that used to allocate
+    //     inside a worker); SONNY-2693 removed the bridge, so it must NOT
+    //     count, and a5/a7 keep their plain chain degree.
     const mistagged = try h.store.createEdgeWithGraphAndTenant(f.a[5], f.a[7], "L", graph_store.DEFAULT_GRAPH_NAME, graph_store.DEFAULT_TENANT_ID);
     try expectTag(h, mistagged, graph_store.DEFAULT_TENANT_ID);
 
@@ -709,9 +712,10 @@ test "SONNY-1318: scoped algo.degree.stream over the parallel threshold reports 
     const aa = arena.allocator();
 
     // Exact expected degree per tenant-A node: the chain contributes one
-    // incoming and/or one outgoing edge, the mis-tagged a5->a7 edge contributes
-    // one more at each of its endpoints, and NEITHER cross-tenant edge
-    // contributes anything (a10 and a20 keep their plain chain degree).
+    // incoming and/or one outgoing edge, and NOTHING else counts. The
+    // mis-tagged a5->a7 edge carries "default", which fails tenant A's tag
+    // check (SONNY-2693: no endpoint-derived bridge), and NEITHER cross-tenant
+    // edge contributes anything (a10 and a20 keep their plain chain degree).
     var expected: [parallel_a_nodes]i64 = undefined;
     for (0..parallel_a_nodes) |i| {
         var d: i64 = 0;
@@ -719,8 +723,6 @@ test "SONNY-1318: scoped algo.degree.stream over the parallel threshold reports 
         if (i > 0) d += 1;
         expected[i] = d;
     }
-    expected[5] += 1;
-    expected[7] += 1;
 
     var res = try h.runAs(aa, tenant_a, "CALL algo.degree.stream()");
     defer res.deinit(aa);

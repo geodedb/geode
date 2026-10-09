@@ -3,15 +3,17 @@
 // Regression tests for the SAFE subset of GAP-0926's "silent-accept family":
 //
 //   - Out-of-range POSITIONAL parameter ($2 with one param) → error.MissingParameter
-//     (SQLSTATE 22023) instead of silent NULL. (Missing NAMED params keep NULL —
-//     documented residual; rejecting those risks breaking optional-param queries.)
+//     instead of silent NULL. SONNY-3247: a missing NAMED parameter is refused
+//     the same way (it erased a property, and `LIMIT $nosuch` wrote every row),
+//     before the statement runs, with SQLSTATE 42P02 (undefined_parameter).
 //   - Nested aggregate (sum(avg(...))) → error.NestedAggregate (SQLSTATE 42803)
 //     instead of silent NULL. Nested aggregates are always invalid in GQL/SQL.
 //
 // The other GAP-0926 sub-items (WHERE unbound variable, MERGE null/unbound key,
-// missing named param, CREATE INDEX on a nonexistent label/property,
-// non-grouped column, HAVING on an unknown alias) are INTENTIONALLY RETAINED as
-// silent-accept: they are non-corrupting (the gap notes "no data corruption"),
+// CREATE INDEX on a nonexistent label/property,
+// non-grouped column) are INTENTIONALLY RETAINED as silent-accept (HAVING on an
+// unknown alias no longer is: SONNY-2675 refuses it with 42703, see
+// tests/test_sonny2675_aggregate_semantics.zig): they are non-corrupting (the gap notes "no data corruption"),
 // and forcing rejection risks breaking legitimate queries / the existing test
 // suite — the same lesson learned when over-strict policy validation broke 14
 // GPS tests (GAP-0923a). See docs/ENTERPRISE_GAPS.md for the per-item rationale.
@@ -64,17 +66,16 @@ test "GAP-0926: an out-of-range positional parameter raises MissingParameter" {
     try testing.expectEqual(@as(i64, 10), res.rows[0][0].Int);
 }
 
-test "GAP-0926: a missing NAMED parameter keeps the documented NULL behavior" {
+test "SONNY-3247: a missing NAMED parameter is refused (it resolved to NULL)" {
     var h = try Harness.init(testing.allocator);
     defer h.deinit();
 
-    // No params supplied; a NAMED param resolves to NULL (retained residual).
-    const res = try h.run("RETURN $missing AS x", &.{}, &.{});
-    try testing.expectEqual(@as(usize, 1), res.rows.len);
-    switch (res.rows[0][0]) {
-        .Null => {},
-        else => return error.ExpectedNull,
-    }
+    try testing.expectError(error.MissingParameter, h.run("RETURN $missing AS x", &.{}, &.{}));
+    // Supplied, it resolves.
+    const names = [_][]const u8{"present"};
+    const vals = [_]geode.protocol.Value{.{ .Int = 3 }};
+    const res = try h.run("RETURN $present AS x", &names, &vals);
+    try testing.expectEqual(@as(i64, 3), res.rows[0][0].Int);
 }
 
 test "GAP-0926: a nested aggregate is rejected" {

@@ -1,6 +1,7 @@
 const std = @import("std");
 const ast = @import("ast.zig");
 const temporal = @import("../temporal.zig");
+const decimal_text = @import("../types/decimal_text.zig");
 
 pub const PrintOptions = struct {
     normalize_temporals: bool = false,
@@ -566,31 +567,10 @@ pub fn printExprWith(w: anytype, e: ast.Expr, prec: u8, opts: PrintOptions) !voi
         .Ident => |id| try w.print("{s}", .{id.orig}),
         .String => |s| try w.print("\"{s}\"", .{s}),
         .Int => |n| try w.print("{d}", .{n}),
-        .Decimal => |d| blk_dec: {
-            const neg = d.coeff < 0;
-            const abs: i128 = if (neg) -d.coeff else d.coeff;
-            var whole: i128 = abs;
-            var frac: i128 = 0;
-            if (d.scale > 0) {
-                var i: u8 = 0;
-                var p: i128 = 1;
-                while (i < d.scale) : (i += 1) p *= 10;
-                whole = @divTrunc(abs, p);
-                frac = @mod(abs, p);
-            }
-            try w.print("{s}{d}", .{ if (neg) "-" else "", whole });
-            if (d.scale > 0) {
-                try w.writeByte('.');
-                var buf: [64]u8 = undefined;
-                const s = std.fmt.bufPrint(&buf, "{d}", .{frac}) catch unreachable;
-                if (s.len < d.scale) {
-                    var pad_i: u8 = 0;
-                    while (pad_i < d.scale - s.len) : (pad_i += 1) try w.writeByte('0');
-                }
-                try w.print("{s}", .{s});
-            }
-            break :blk_dec;
-        },
+        // SONNY-2769: at any scale. The server prints every ORDER BY key
+        // (buildOrderKeys); `p *= 10` overflowed past scale 38 and aborted it
+        // (`ORDER BY x + <a scale-40 decimal>`).
+        .Decimal => |d| try decimal_text.write(w, d.coeff, d.scale),
         .Bool => |b| try w.print("{any}", .{b}),
         .Null => try w.print("null", .{}),
         .Date => |d| if (!opts.normalize_temporals) {

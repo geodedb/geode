@@ -81,6 +81,151 @@ This document describes the comprehensive Row-Level Security (RLS) implementatio
   - Context-aware query modification
   - Performance-optimized predicate evaluation
 
+- **Comparisons in policy expressions (SONNY-2709)**
+
+  An expression policy is compiled to bytecode and evaluated for each row.
+  It can use `row.<field>`, `principal.attribute.<key>`, `current_user`,
+  `TRUE`, `FALSE`, `NULL`, string, integer and decimal literals, the
+  operators `=`, `<>` (or `!=`), `<`, `<=`, `>`, `>=`, `IS [NOT] NULL`,
+  `NOT`, `AND` and `OR`, and parentheses. Precedence follows SQL, from
+  loosest: `OR`, `AND`, `NOT`, then the comparisons. So `NOT row.x = 'a'`
+  means `NOT (row.x = 'a')`. The whole expression must parse. If anything is
+  left over, or the expression is otherwise malformed, the policy denies
+  every row and the engine logs a warning. (Before SONNY-2709, a valid
+  prefix was compiled and the rest silently dropped.)
+
+  **Creating a policy is strict (SONNY-2732).** `RLSEngine.createPolicy`
+  and `updatePolicy` (the API, procedure and DDL paths) refuse an expression
+  that does not compile, with `error.InvalidRlsExpression`, and install
+  nothing. The lexer is strict too:
+  - a missing `)`, an unterminated string, and an empty `row.` or
+    `principal.attribute.` name are errors;
+  - a bare name such as `cls` is an error; write `row.cls`.
+
+  Only `RLSEngine.loadPolicy`, for policies read back from storage, keeps a
+  policy that no longer compiles. It installs it denying every row, marks it
+  `invalid`, and logs a warning, so that a grammar change cannot brick
+  startup. The GPS catalog (`CREATE POLICY`) has the same split. SHOW
+  POLICIES and `CALL geode.auth.policy_list()` show a policy kept that way
+  with `valid = false`, and startup logs how many there are.
+  `CALL geode.rls.add_attribute_policy` accepts only identifiers
+  (`[A-Za-z_][A-Za-z0-9_]*`) for its row property and attribute key, because
+  both are pasted into the policy text.
+
+  **The VM refuses malformed bytecode.** A constant, row or jump index past
+  its table, a jump outside the program, or more steps than the program has
+  bytes (a loop) all fail the policy, which denies the row.
+
+  Limits (SONNY-2730): an expression may use at most 256 distinct constants.
+  Every field name, attribute key and literal is a constant, and a repeated
+  one counts once. It may nest `(` and `NOT` at most 64 levels deep. A
+  policy past either limit is refused.
+
+  The engine uses SQL's three-valued logic: a comparison is true, false or
+  UNKNOWN.
+
+  | Comparison | Result |
+  |---|---|
+  | `=`, `<>`, `<`, `<=`, `>`, `>=` on two numbers (integer or float, mixed) | compared as numbers |
+  | the same on two strings | compared by bytes |
+  | the same on two timestamps | compared |
+  | `=`, `<>` on two booleans | compared |
+  | any comparison with a missing field or `NULL`, a NaN, or two values of different kinds (a string and a number, say), and any range comparison of booleans | UNKNOWN |
+  | `principal.attribute.<key>` against a number | the attribute is parsed strictly as that number's type, then compared; UNKNOWN if it does not parse |
+  | `x IS NULL`, `x IS NOT NULL` | true or false, never UNKNOWN |
+
+  **Range comparisons on strings are lexicographic.** `<`, `<=`, `>` and
+  `>=` on two strings compare bytes, so `'10' < '9'` and `'top' > '3'`. A
+  range policy needs numeric row values: a numeric field stored as a string
+  compares as text against a string literal or attribute, and is UNKNOWN
+  (denied) against a number. Store levels, clearances and other ordered
+  values as integers or floats.
+
+  **Only a boolean TRUE admits a row (SONNY-2732).** A policy whose value is
+  not a boolean admits nothing. That includes a bare `row.flag` holding the
+  string `'no'`, a bare `'anything'`, a number, and `NULL`. `NOT`, `AND` and
+  `OR` treat any non-boolean operand as UNKNOWN.
+
+  UNKNOWN never admits a row. `NOT`, `AND` and `OR` follow SQL's
+  three-valued logic:
+  - `NOT` UNKNOWN is UNKNOWN;
+  - `false AND` UNKNOWN is false;
+  - `true OR` UNKNOWN is true;
+  - every other combination with UNKNOWN is UNKNOWN.
+
+  A policy whose result is UNKNOWN denies the row, as PostgreSQL row
+  security does. So `row.level <= 3`, `NOT (row.level > 3)` and
+  `row.cls <> 'secret'` all deny a row whose field is missing or of the
+  wrong kind. A hand-written bytecode branch (`jump_if_false` or
+  `jump_if_true`) on UNKNOWN makes the policy undecided, and the row is
+  denied. The compiler emits no branches today.
+
+  **Behaviour change (SONNY-2709).** `=` and `<>` used to treat a missing
+  value as unequal: `row.cls <> 'secret'` admitted every row without `cls`.
+  Now that comparison is UNKNOWN and the row is hidden. To keep the old
+  behaviour, say so explicitly:
+
+  ```text
+  row.cls IS NULL OR row.cls <> 'secret'
+  ```
+
+  `row.cls = NULL` is UNKNOWN for every row, as in SQL. Use `IS NULL`.
+
+  A principal attribute is stored as a string. Compared with an integer
+  field, it must be an optional `-` followed by ASCII digits, within the
+  64-bit range (`"3"`, `"-1"`). Compared with a float field, it may also have
+  a `.` and at least one fraction digit (`"2.5"`). Anything else is not a
+  number, and the comparison is UNKNOWN: for example `" 3"`, `"+3"`, `"3.0"`
+  (against an integer), `"1e3"`, `"0x3"` or `"inf"`. A user without the
+  attribute gets UNKNOWN too. Compared with a string field, the attribute is
+  compared as a string. The same rules apply to `=` and `<>`, so
+  `row.level = principal.attribute.clearance` matches an integer `level` of
+  3 for a clearance of `"3"`. Only a principal attribute is converted: a
+  row's string field is never read as a number.
+
+- **MERGE and rows a policy hides (SONNY-2686, SONNY-2728)**
+
+  MERGE matches its pattern against existing rows before it creates one.
+  When the only rows that match are rows the session's RLS policies hide (a
+  node, or an edge whose type a label-deny policy denies or whose own
+  properties an expression policy denies), the statement is refused with
+  `MergeMatchNotVisible`, SQLSTATE 42501. Nothing is bound, updated or
+  created: a pre-pass refuses the statement before its first write. A
+  visible match is used wherever it sits, even when hidden rows match too.
+  A row in another tenant or another graph is simply absent, as before, and
+  MERGE creates the session's own.
+
+  **The refusal is a covert channel.** It tells the session that some row
+  it may not see equals the pattern. Because MERGE can match on any
+  property, it works as an equality oracle over any property value:
+  `MERGE (x:Employee {name: 'Ann', salary: 250000})` is refused when Ann's
+  hidden row has that salary, and a wrong guess creates a new node.
+  PostgreSQL has the same channel in a narrower form: when the row an
+  `INSERT … ON CONFLICT DO UPDATE` conflicts with fails the UPDATE policy's
+  USING clause, the update "will never be silently avoided; an error will be
+  thrown instead", and its documentation lists unique-key and foreign-key
+  checks among the accepted covert channels. There the channel reaches only
+  the conflict key; in Geode it reaches every property a MERGE pattern
+  names.
+
+  **Why the hidden row is not treated as absent.** Treating it as absent is
+  worse. MERGE promises one row per pattern, and the merge index keeps one id
+  per key, so a duplicate breaks every later MERGE on that key, which can
+  bind either copy. An attacker could plant a visible duplicate of a hidden
+  row, and the owner's next `MERGE … ON MATCH SET` could then update the
+  attacker's copy instead of the real row, while the owner sees both.
+  Binding the hidden row is the leak itself: RETURN reads it, and ON MATCH
+  SET rewrites it (under an expression policy, possibly into view).
+
+  **Every refusal is audited.** Each `MergeMatchNotVisible` writes an
+  `access_denied` record to the security audit log, with action
+  `MERGE_MATCH_NOT_VISIBLE`, result `failure`, the user, and the statement's
+  graph. Its details give the pattern's labels (or relationship types) and
+  its property keys. Property values are never recorded, because they are
+  the secret being guessed. A burst of these records from one user is the
+  signature of enumeration. The engine has no per-session rate limit for
+  refusals yet.
+
 ### 5. User Management CLI (`src/tools/user_auth.zig`)
 
 - **User Commands**

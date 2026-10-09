@@ -5,6 +5,9 @@ const graph_store = @import("../graph_store.zig");
 const property_codec = @import("../property_value_codec.zig");
 const property_mutation = @import("property_mutation.zig");
 const write_precheck = @import("write_precheck.zig");
+const write_scope = @import("write_scope.zig");
+const write_walk = @import("write_walk.zig");
+const WriteScope = write_scope.WriteScope;
 // A4b: fulltext write-maintenance hook (delete postings on node DELETE).
 const fts_index_ops = @import("fts_index_ops.zig");
 const value_types = @import("../value_types.zig");
@@ -29,6 +32,10 @@ const executeReturnClauseWithEnv = execution.executeReturnClauseWithEnv;
 // Import for unique column name generation
 const match_operations = @import("match_operations.zig");
 const generateUniqueColumnNames = match_operations.generateUniqueColumnNames;
+
+// SONNY-2686: the RLS scratch row MERGE's match phase hands to
+// `match_operations.passesRowVisibilityFilters` holds `rls.Value`s.
+const rls = @import("rls");
 
 // SONNY-1841: poll cancellation in the write apply loops so an abandoned
 // write-carrying mutation (DELETE/DETACH DELETE/leader SET) aborts at a safe
@@ -102,53 +109,6 @@ fn lookupNodeIdInQueryParams(context: ExecutionContext, name: []const u8) ?u64 {
     return null;
 }
 
-/// REQ=REQ-MERGE-RELPROPS-001 ASPECT=OnCreateSet/BareSetOnRelationship
-/// Apply MERGE SET clauses (`m.on_create` for newly created edges or
-/// `m.on_match` for matched edges; bare-SET duplicates both lists by
-/// construction in the parser) whose target binding name matches the
-/// relationship variable on the freshly merged edge.
-///
-/// SET clauses targeting a node variable are intentionally ignored here
-/// (the node MERGE branch above handles those). Only items whose target
-/// equals `rel_var_name` reach the edge property writer.
-fn applySetClausesToEdge(
-    allocator: std.mem.Allocator,
-    store: *graph_store.GraphStore,
-    rel_var_name: ?[]const u8,
-    edge_type: []const u8,
-    edge_id: u64,
-    set_items: []ast.SetClause,
-    context: ExecutionContext,
-) !void {
-    const var_name = rel_var_name orelse return;
-    if (set_items.len == 0) return;
-
-    // Statement-atomicity pre-pass — this clause list is all-or-nothing.
-    // CANARY: REQ=REQ-PROPERTY-WRITE-ATOMICITY; FEATURE="PropertyStorage"; ASPECT=SetPrePass; STATUS=TESTED; TEST=tests/test_property_write_atomicity.zig; OWNER=engine; UPDATED=2026-08-25
-    try write_precheck.checkSetClausesWritable(allocator, set_items, envFromContext(allocator, context), var_name, &.{});
-
-    for (set_items) |set_clause| {
-        switch (set_clause) {
-            .Property => |prop| {
-                if (!std.mem.eql(u8, prop.target.object, var_name)) continue;
-                const value = try eval.evalExpr(allocator, prop.value, envFromContext(allocator, context));
-                try property_mutation.setEdgePropertyFromValue(allocator, store, edge_type, edge_id, prop.target.property, value);
-            },
-            .AllProperties => |all_props| {
-                if (!std.mem.eql(u8, all_props.node, var_name)) continue;
-                const props_value = try eval.evalExpr(allocator, all_props.properties, envFromContext(allocator, context));
-                if (store.getEdgePtrHydrated(edge_id)) |edge_ptr| {
-                    try property_mutation.replaceEdgeProperties(allocator, store, edge_ptr, props_value);
-                }
-            },
-            .Labels => {
-                // Edges do not carry labels in the same shape as nodes; this
-                // form is parsed against node variables. Nothing to do here.
-            },
-        }
-    }
-}
-
 /// Evaluate a MERGE/MATCH pattern's inline properties into comparable `Value`s.
 ///
 /// OWNERSHIP CONTRACT — `arena_allocator` MUST be an arena the caller tears down
@@ -168,11 +128,16 @@ fn applySetClausesToEdge(
 /// correct for all three: owned allocations are reclaimed in one pass, borrowed
 /// and aliased ones are never touched.
 fn evaluatePatternProps(arena_allocator: std.mem.Allocator, props: ?[]ast.Property, context: ExecutionContext) !?[]EvaluatedPatternProp {
+    return evaluatePatternPropsIn(arena_allocator, props, envFromContext(arena_allocator, context));
+}
+
+/// `evaluatePatternProps` in `pattern_env` (SONNY-3240: a MERGE's scope, the
+/// variables its earlier chains bound).
+fn evaluatePatternPropsIn(arena_allocator: std.mem.Allocator, props: ?[]ast.Property, pattern_env: Env) !?[]EvaluatedPatternProp {
     const pattern_props = props orelse return null;
 
     const owned = try arena_allocator.alloc(EvaluatedPatternProp, pattern_props.len);
 
-    const pattern_env = envFromContext(arena_allocator, context);
     for (pattern_props, 0..) |prop, i| {
         owned[i] = .{
             .key = prop.key,
@@ -224,25 +189,228 @@ fn nodeMatchesPattern(
 }
 
 /// Convert an eval Value to a GraphStore PropertyValue for merge index lookup.
-/// Only handles simple scalar types that the index supports.
+/// Only handles simple scalar types that the index supports. SONNY-2806
+/// (round 6): every number probes the index. An integer's key is its value,
+/// so any representation finds a stored one equal to it, and a miss is still
+/// authoritative (a stored 1.0 is found by `{x: 1}`). Round 7: a number that
+/// is not an integer (1.5) is not indexed and probes `.not_indexable`, so the
+/// label scan below answers it, as before round 6.
 fn valueToPropertyValueForIndex(val: Value) ?graph_store.PropertyValue {
     return switch (val) {
         .Str => |s| graph_store.PropertyValue{ .String = s },
         .Int => |i| graph_store.PropertyValue{ .Int = i },
+        .SmallInt => |i| graph_store.PropertyValue{ .Int = i },
+        .BigInt => |i| graph_store.PropertyValue{ .Int = i },
+        .Decimal => |d| graph_store.PropertyValue{ .Decimal = .{ .coeff = d.coeff, .scale = d.scale } },
+        .Real => |f| graph_store.PropertyValue{ .Float = f },
+        .Double => |f| graph_store.PropertyValue{ .Float = f },
         .Bool => |b| graph_store.PropertyValue{ .Bool = b },
         else => null,
     };
 }
 
-fn findFirstMatchingNodeId(
+// CANARY: REQ=REQ-SONNY-2819-AUDIT-JSON-ESCAPE; FEATURE="AuditDurability"; ASPECT=RefusalKeysHexEncoded; STATUS=TESTED; TEST=tests/test_sonny2819_audit_log_injection.zig; OWNER=security; UPDATED=2026-09-27
+// CANARY: REQ=REQ-SONNY-3045-AUDIT-TEXT-ESCAPING; FEATURE="AuditDurability"; ASPECT=JoinAuditTextUnambiguous; STATUS=TESTED; TEST=tests/test_sonny3045_audit_text_escaping.zig; OWNER=security; UPDATED=2026-09-27
+/// SONNY-2819: `items` joined with ',' for an audit record's details, each
+/// control character (and DEL) hex-encoded as `\xHH`. A MERGE pattern's
+/// property keys are the client's: a string-literal key can carry a quote and
+/// a newline, which the audit writer printed unescaped, so a restricted user
+/// could forge a second record. The writer now escapes every string; this is
+/// the defence in depth, so the text never holds a line break at all.
+/// SONNY-3045: a comma and a backslash are hex-encoded too, so the text reads
+/// back as exactly the items it was given: a key holding a comma read as two
+/// keys, and one holding `\x0a` as a newline.
+pub fn joinAuditText(allocator: std.mem.Allocator, items: []const []const u8) ![]u8 {
+    var out: std.ArrayList(u8) = .empty;
+    errdefer out.deinit(allocator);
+    for (items, 0..) |item, i| {
+        if (i > 0) try out.append(allocator, ',');
+        for (item) |c| {
+            if (c < 0x20 or c == 0x7f or c == ',' or c == '\\') {
+                try out.print(allocator, "\\x{x:0>2}", .{c});
+            } else {
+                try out.append(allocator, c);
+            }
+        }
+    }
+    return out.toOwnedSlice(allocator);
+}
+
+// CANARY: REQ=REQ-SONNY-2686-MERGE-ROW-VISIBILITY; FEATURE="MergeRowVisibility"; ASPECT=MatchPhaseVisibility; STATUS=TESTED; TEST=tests/test_sonny2686_merge_rls.zig; OWNER=security; UPDATED=2026-09-25
+/// SONNY-2686: the row visibility MERGE's match phase applies to every node it
+/// finds, for a node chain and for each relationship endpoint alike.
+///
+/// The pattern predicate (`nodeMatchesPattern`) confines a candidate to the
+/// statement's graph and the session's exact tenant, and it matched on labels
+/// and properties only. It never applied the session's RLS policies, so a MERGE
+/// bound a node the session may not read: RETURN projected it, ON MATCH SET and
+/// a bare SET rewrote it, and a relationship MERGE attached an edge to it. Every
+/// node that matches the pattern now also has to pass
+/// `passesRowVisibilityFilters`, the combinator the other engine-direct read
+/// paths use, before MERGE may bind it.
+///
+/// Whether a policy can deny this session anything is decided once per
+/// statement (`rlsMayDenyForSession`, as `HopScope` does per traversal). When
+/// none can (no policy is installed, or the session has no user) the check is
+/// skipped, and MERGE behaves exactly as it did.
+const MergeVisibility = struct {
     allocator: std.mem.Allocator,
+    filter_tenant: ?[]const u8,
+    rls_may_deny: bool,
+    rls_row: std.StringHashMap(rls.Value),
+    /// SONNY-2728: the statement's graph and the session's identity, for the
+    /// audit record of a refusal.
+    graph: []const u8,
+    username: []const u8,
+    user_id: u64,
+
+    /// Call with the statement's context active: the RLS half reads it.
+    fn init(allocator: std.mem.Allocator, filter_tenant: ?[]const u8, graph: []const u8, context: ExecutionContext) MergeVisibility {
+        const principal_name: ?[]const u8 = if (context.principal) |p| p.username else null;
+        return .{
+            .allocator = allocator,
+            .filter_tenant = filter_tenant,
+            .rls_may_deny = match_operations.rlsMayDenyForSession(),
+            .rls_row = std.StringHashMap(rls.Value).init(allocator),
+            .graph = graph,
+            .username = principal_name orelse (context.user orelse ""),
+            .user_id = if (context.principal) |p| (p.user_id orelse 0) else 0,
+        };
+    }
+
+    // CANARY: REQ=REQ-SONNY-2728-MERGE-REFUSAL-AUDIT; FEATURE="MergeRowVisibility"; ASPECT=RefusalAudit; STATUS=TESTED; TEST=tests/test_sonny2686_merge_rls.zig; OWNER=security; UPDATED=2026-09-26
+    /// SONNY-2728: the node MERGE binds for `match` (`MergeMatch.bindable`),
+    /// auditing a refusal. The refusal is a covert channel: it tells the
+    /// session that some row it may not see equals the pattern (see
+    /// docs/kb/RLS_IMPLEMENTATION.md), so every one is recorded with the
+    /// user, the graph, the labels and the property KEYS, never the values
+    /// (the values are the secret being guessed).
+    fn bindNode(self: *MergeVisibility, match: MergeMatch, labels: []const []const u8, props: ?[]const EvaluatedPatternProp) error{MergeMatchNotVisible}!?u64 {
+        return match.bindable() catch |err| {
+            var keys: [16][]const u8 = undefined;
+            var n: usize = 0;
+            if (props) |ps| for (ps) |p| {
+                if (n == keys.len) break;
+                keys[n] = p.key;
+                n += 1;
+            };
+            self.auditRefusal("node", labels, keys[0..n]);
+            return err;
+        };
+    }
+
+    /// SONNY-2728: `bindNode` for the edge of a relationship pattern: its
+    /// types and the keys of its inline properties.
+    fn bindEdge(self: *MergeVisibility, match: EdgeMatch, rel: ast.RelPattern) error{MergeMatchNotVisible}!?u64 {
+        return match.bindable() catch |err| {
+            var keys: [16][]const u8 = undefined;
+            var n: usize = 0;
+            if (rel.props) |ps| for (ps) |p| {
+                if (n == keys.len) break;
+                keys[n] = p.key;
+                n += 1;
+            };
+            self.auditRefusal("relationship", rel.types, keys[0..n]);
+            return err;
+        };
+    }
+
+    fn auditRefusal(self: *MergeVisibility, pattern: []const u8, labels: []const []const u8, keys: []const []const u8) void {
+        const audit_mod = @import("../security/audit.zig");
+        // SONNY-2819: the labels and keys are the client's text; their
+        // control characters are hex-encoded here, and the audit writer
+        // escapes the whole record as well.
+        const joined_labels = joinAuditText(self.allocator, labels) catch return;
+        defer self.allocator.free(joined_labels);
+        const joined_keys = joinAuditText(self.allocator, keys) catch return;
+        defer self.allocator.free(joined_keys);
+        const details = std.fmt.allocPrint(
+            self.allocator,
+            "MERGE refused (MergeMatchNotVisible, 42501): only rows row-level security hides from the session match the {s} pattern; graph={s} labels=[{s}] keys=[{s}] (values withheld)",
+            .{ pattern, self.graph, joined_labels, joined_keys },
+        ) catch return;
+        defer self.allocator.free(details);
+        audit_mod.logSecurityGraphEvent(self.allocator, .{
+            .event_type = .access_denied,
+            .action = "MERGE_MATCH_NOT_VISIBLE",
+            .user_id = self.user_id,
+            .username = self.username,
+            .details = details,
+            .result_failure = true,
+            .resource_graph = self.graph,
+        });
+    }
+
+    fn deinit(self: *MergeVisibility) void {
+        self.rls_row.deinit();
+    }
+
+    /// May MERGE bind `node`, a node that already matches its pattern?
+    fn allows(self: *MergeVisibility, node: *const graph_store.Node) bool {
+        if (!self.rls_may_deny) return true;
+        return match_operations.passesRowVisibilityFilters(&self.rls_row, node.*, self.filter_tenant);
+    }
+
+    /// P12: may MERGE bind `edge`, an edge that already matches its
+    /// relationship pattern (graph, tenant tag and type)? The RLS policies of
+    /// its type: the label-deny policy on the type and the expression policies
+    /// over the edge's own properties (`passesEdgeRLSFilter`, the check every
+    /// traversal applies to an edge it walks).
+    fn allowsEdge(self: *MergeVisibility, edge: *const graph_store.Edge) bool {
+        if (!self.rls_may_deny) return true;
+        return match_operations.passesEdgeRLSFilter(&self.rls_row, edge);
+    }
+};
+
+/// SONNY-2686: what MERGE's match phase found for one node pattern.
+const MergeMatch = union(enum) {
+    /// No node in the statement's graph and the session's tenant matches.
+    none,
+    /// A node the session may see matches (the first one found).
+    visible: u64,
+    /// Nodes match, and the session may see none of them.
+    hidden,
+
+    /// The node MERGE binds, or null when it creates one.
+    ///
+    /// A pattern whose only matches are hidden REFUSES the statement with
+    /// `error.MergeMatchNotVisible` (42501, proto_util.mapError), before
+    /// anything is bound, updated or created. The two other answers are both
+    /// wrong:
+    ///   * binding the hidden node is the leak: RETURN reads it, ON MATCH SET
+    ///     rewrites it (under an expression policy, reclassifying it so that it
+    ///     becomes visible), and a relationship attaches to it;
+    ///   * treating it as absent CREATES A DUPLICATE of an existing row. That
+    ///     breaks the one-node-per-pattern contract MERGE exists for (the merge
+    ///     index keeps one id per key, so later MERGEs bind either copy), and
+    ///     it surfaces as two rows the moment the policy changes.
+    /// The refusal does tell the session that some row it may not see matches
+    /// the pattern, the fact a unique-key violation reveals, but never which
+    /// row, nor anything it holds, and nothing is written.
+    fn bindable(self: MergeMatch) error{MergeMatchNotVisible}!?u64 {
+        return switch (self) {
+            .none => null,
+            .visible => |id| id,
+            .hidden => error.MergeMatchNotVisible,
+        };
+    }
+};
+
+/// Find the node MERGE binds for a pattern: the first node in the graph and
+/// the tenant that carries every label and property of the pattern AND that
+/// the session may see (SONNY-2686). A visible match is preferred over a
+/// hidden one wherever the two sit, so a hidden node found first (for
+/// example, by the merge index) never ends the search.
+fn findMergeMatch(
     read_store: *graph_store.GraphStore,
     graph_name: []const u8,
     tenant_id: ?[]const u8,
     labels: []const []const u8,
     props: ?[]const EvaluatedPatternProp,
-) !?u64 {
-    _ = allocator;
+    visibility: *MergeVisibility,
+) MergeMatch {
+    // A node that matches the pattern but that the session may not see.
+    var saw_hidden = false;
 
     // Fast path: use the merge property index for O(1) lookup when we have
     // at least one label and at least one property.
@@ -253,10 +421,12 @@ fn findFirstMatchingNodeId(
                 // ENG-3914 — DETERMINISTIC (not concurrent) MERGE duplication.
                 //
                 // `merge_prop_index` holds exactly ONE node id per
-                // (graph, label, key, value): `putOrUpdate` OVERWRITES. So for
-                // a multi-property MERGE key whose FIRST property value is
-                // SHARED across rows, the bucket's occupant is whichever row
-                // was written last.
+                // (graph, label, key, value): since SONNY-2806 (round 7) the
+                // LOWEST id among the nodes holding it (before, `putOrUpdate`
+                // overwrote, and the occupant was the row written last). So
+                // for a multi-property MERGE key whose FIRST property value is
+                // SHARED across rows, the bucket's occupant need not be the
+                // row the other properties select.
                 //
                 // The old code probed `evaluated_props[0]` only, and when the
                 // returned candidate failed full verification it fell through
@@ -288,7 +458,13 @@ fn findFirstMatchingNodeId(
                                 // Verify the candidate matches ALL labels, ALL properties, and tenant
                                 if ((read_store.nodes.getOrHydratePtr(out_id) catch null)) |node| {
                                     if (nodeMatchesPattern(node, graph_name, tenant_id, labels, evaluated_props)) {
-                                        return out_id;
+                                        if (visibility.allows(node)) return .{ .visible = out_id };
+                                        // SONNY-2686: the bucket holds a node
+                                        // the session may not see. It holds
+                                        // ONE id per key, so a visible node
+                                        // with the same key can still exist:
+                                        // the fallback scan looks for it.
+                                        saw_hidden = true;
                                     }
                                 }
                                 // The bucket is occupied by a DIFFERENT node,
@@ -306,37 +482,41 @@ fn findFirstMatchingNodeId(
                 // Only when every probe came back as an authoritative MISS can
                 // the node be declared absent and the expensive O(n) label
                 // scan skipped.
-                if (index_authoritative) return null;
+                if (index_authoritative) return .none;
             }
         }
 
         // Fallback: stream through the label index directly (no ArrayList materialization).
         // Uses the first label for O(1) index lookup, then checks remaining labels + props inline.
         // Only reached when the merge property index could not be consulted
-        // (non-indexable value type or key too long for the 1024-byte buffer).
-        const first_label_nodes = read_store.getNodesByLabel(graph_name, labels[0]) orelse return null;
+        // (non-indexable value type or key too long for the 1024-byte buffer),
+        // or when its bucket held a node the session may not see.
+        const first_label_nodes = read_store.getNodesByLabel(graph_name, labels[0]) orelse
+            return if (saw_hidden) .hidden else .none;
         for (first_label_nodes) |node_id| {
             if ((read_store.nodes.getOrHydratePtr(node_id) catch null)) |node| {
                 if (nodeMatchesPattern(node, graph_name, tenant_id, labels, props)) {
-                    return node_id;
+                    if (visibility.allows(node)) return .{ .visible = node_id };
+                    saw_hidden = true;
                 }
             }
         }
-        return null;
+        return if (saw_hidden) .hidden else .none;
     }
 
     // No labels — must scan all nodes (unchanged behavior, but streaming)
     var iter = read_store.nodes.iterator();
     while (iter.next()) |entry| {
         if (nodeMatchesPattern(entry.value_ptr, graph_name, tenant_id, &.{}, props)) {
-            return entry.key_ptr.*;
+            if (visibility.allows(entry.value_ptr)) return .{ .visible = entry.key_ptr.* };
+            saw_hidden = true;
         }
     }
-    return null;
+    return if (saw_hidden) .hidden else .none;
 }
 
 /// Collect ALL candidate node IDs matching labels (used by relationship MERGE and DELETE).
-/// For single-node MERGE, prefer findFirstMatchingNodeId which uses the merge property index.
+/// For single-node MERGE, prefer findMergeMatch which uses the merge property index.
 fn collectCandidateNodeIds(
     allocator: std.mem.Allocator,
     read_store: *graph_store.GraphStore,
@@ -384,106 +564,53 @@ fn edgeMatchesScopeAndType(
     return false;
 }
 
-fn nodeIdMatchesPattern(
-    read_store: *graph_store.GraphStore,
-    node_id: u64,
-    graph_name: []const u8,
-    tenant_id: ?[]const u8,
-    labels: []const []const u8,
-    props: ?[]const EvaluatedPatternProp,
-) bool {
-    const node = (read_store.nodes.getOrHydratePtr(node_id) catch null) orelse return false;
-    return nodeMatchesPattern(node, graph_name, tenant_id, labels, props);
-}
+// CANARY: REQ=REQ-SONNY-2686-MERGE-EDGE-RLS; FEATURE="MergeRowVisibility"; ASPECT=RelationshipMatchEdgeRls; STATUS=TESTED; TEST=tests/test_sonny2686_merge_rls.zig; OWNER=security; UPDATED=2026-09-26
+/// P12 (the SONNY-2686 security review): the edge a relationship MERGE binds
+/// between two resolved endpoints. It matched on the edge's graph, tenant tag
+/// and type only, never on the RLS policies of its type, so `MERGE
+/// (a)-[r:SECRET]->(b) ON MATCH SET r.v = ..` rewrote an edge every MATCH
+/// hides. An edge the session may not see is treated like a hidden node
+/// (`MergeMatch`): a visible match wins wherever it sits, and when only
+/// hidden edges match the statement is refused.
+const EdgeMatch = union(enum) {
+    /// No edge of the pattern's type joins the endpoints.
+    none,
+    /// An edge the session may see (the first one found).
+    visible: u64,
+    /// Edges match, and the session may see none of them.
+    hidden,
 
-fn findExistingEdgeId(
+    /// The edge MERGE binds, or null when it creates one; refuses with
+    /// `error.MergeMatchNotVisible` when only hidden edges match (see
+    /// `MergeMatch.bindable` for why neither binding nor duplicating is right).
+    fn bindable(self: EdgeMatch) error{MergeMatchNotVisible}!?u64 {
+        return switch (self) {
+            .none => null,
+            .visible => |id| id,
+            .hidden => error.MergeMatchNotVisible,
+        };
+    }
+};
+
+fn findExistingEdge(
     read_store: *graph_store.GraphStore,
     graph_name: []const u8,
     tenant_id: ?[]const u8,
     source_id: u64,
     target_id: u64,
     rel_types: []const []const u8,
-) ?u64 {
-    const outgoing_ids = read_store.getOutgoingEdgeIds(source_id) orelse return null;
+    visibility: *MergeVisibility,
+) EdgeMatch {
+    const outgoing_ids = read_store.getOutgoingEdgeIds(source_id) orelse return .none;
+    var saw_hidden = false;
     for (outgoing_ids) |edge_id| {
         const edge = read_store.getEdgePtrHydrated(edge_id) orelse continue;
         if (edge.to_id != target_id) continue;
         if (!edgeMatchesScopeAndType(edge, graph_name, tenant_id, rel_types)) continue;
-        return edge_id;
+        if (visibility.allowsEdge(edge)) return .{ .visible = edge_id };
+        saw_hidden = true;
     }
-    return null;
-}
-
-fn collectMatchingEdgeIds(
-    allocator: std.mem.Allocator,
-    read_store: *graph_store.GraphStore,
-    graph_name: []const u8,
-    tenant_id: ?[]const u8,
-    left_labels: []const []const u8,
-    left_props: ?[]const EvaluatedPatternProp,
-    rel_types: []const []const u8,
-    right_labels: []const []const u8,
-    right_props: ?[]const EvaluatedPatternProp,
-) ![]u64 {
-    const left_constrained = left_labels.len > 0 or left_props != null;
-    const right_constrained = right_labels.len > 0 or right_props != null;
-
-    var matches = std.ArrayList(u64).empty;
-    errdefer matches.deinit(allocator);
-
-    if (left_constrained) {
-        const candidate_left_ids = try collectCandidateNodeIds(allocator, read_store, graph_name, tenant_id, left_labels, left_props);
-        defer allocator.free(candidate_left_ids);
-
-        for (candidate_left_ids) |source_id| {
-            if (!nodeIdMatchesPattern(read_store, source_id, graph_name, tenant_id, left_labels, left_props)) continue;
-            const outgoing_ids = read_store.getOutgoingEdgeIds(source_id) orelse continue;
-            for (outgoing_ids) |edge_id| {
-                const edge = read_store.getEdgePtrHydrated(edge_id) orelse continue;
-                if (!edgeMatchesScopeAndType(edge, graph_name, tenant_id, rel_types)) continue;
-                if (edge.from_id != source_id) continue;
-                if (!nodeIdMatchesPattern(read_store, edge.to_id, graph_name, tenant_id, right_labels, right_props)) continue;
-                try matches.append(allocator, edge_id);
-            }
-        }
-
-        return try matches.toOwnedSlice(allocator);
-    }
-
-    if (right_constrained) {
-        const candidate_right_ids = try collectCandidateNodeIds(allocator, read_store, graph_name, tenant_id, right_labels, right_props);
-        defer allocator.free(candidate_right_ids);
-
-        for (candidate_right_ids) |target_id| {
-            if (!nodeIdMatchesPattern(read_store, target_id, graph_name, tenant_id, right_labels, right_props)) continue;
-            const incoming_ids = read_store.getIncomingEdgeIds(target_id) orelse continue;
-            for (incoming_ids) |edge_id| {
-                const edge = read_store.getEdgePtrHydrated(edge_id) orelse continue;
-                if (!edgeMatchesScopeAndType(edge, graph_name, tenant_id, rel_types)) continue;
-                if (edge.to_id != target_id) continue;
-                if (!nodeIdMatchesPattern(read_store, edge.from_id, graph_name, tenant_id, left_labels, left_props)) continue;
-                try matches.append(allocator, edge_id);
-            }
-        }
-
-        return try matches.toOwnedSlice(allocator);
-    }
-
-    // PHASE 1 (edge-engine-direct): enumerate the COMPLETE edge id set
-    // (bounded-cache-safe) and resolve each body via hydrate-on-miss. The old
-    // `read_store.edges.iterator()` saw only resident edges under a bounded
-    // cache, so a DELETE could silently miss evicted edges.
-    const all_ids = try read_store.allEdgeIds(allocator);
-    defer allocator.free(all_ids);
-    for (all_ids) |eid| {
-        const edge = read_store.getEdgePtrHydrated(eid) orelse continue;
-        if (!edgeMatchesScopeAndType(edge, graph_name, tenant_id, rel_types)) continue;
-        if (!nodeIdMatchesPattern(read_store, edge.from_id, graph_name, tenant_id, left_labels, left_props)) continue;
-        if (!nodeIdMatchesPattern(read_store, edge.to_id, graph_name, tenant_id, right_labels, right_props)) continue;
-        try matches.append(allocator, eid);
-    }
-
-    return try matches.toOwnedSlice(allocator);
+    return if (saw_hidden) .hidden else .none;
 }
 
 /// ENG-3913: the deduplicated entity sets a `MATCH … DELETE …` statement targets.
@@ -622,15 +749,11 @@ fn resolveDeleteTargets(
     defer result.deinit(allocator);
 
     for (result.rows) |row| {
-        for (row) |value| {
-            switch (value) {
-                .Node => |node| try appendUniqueId(allocator, &node_ids, node.id),
-                .Edge => |edge| try appendUniqueId(allocator, &edge_ids, edge.id),
-                // An unbound / non-entity projection (e.g. a DELETE item naming a
-                // variable the pattern never binds) targets nothing.
-                else => {},
-            }
-        }
+        // SONNY-3146 (I4): a path deletes its nodes and edges, a
+        // variable-length relationship (the list of its edges) every edge;
+        // they were skipped. The write-shape validator refuses a DELETE item
+        // the pattern does not bind to an element.
+        for (row) |value| try match_operations.appendDeleteTargets(allocator, &node_ids, &edge_ids, value);
     }
 
     return .{
@@ -854,169 +977,6 @@ fn valuesEqual(prop_val: graph_store.PropertyValue, value: Value) bool {
 // CANARY: REQ=REQ-EXEC-REFACTOR-004; FEATURE="ExecutionRefactoring"; ASPECT=CRUD_OPERATIONS; STATUS=EXEMPT; OWNER=refactor; UPDATED=2025-10-17
 // Extracted CRUD operations (CREATE/INSERT/MERGE/DELETE) from execution.zig for better modularity (M1 Phase 4)
 
-// CANARY: REQ=REQ-MULTI-GRAPH-016; FEATURE="MultiGraphIsolation"; ASPECT=CreateForBatch; STATUS=TESTED; TEST=geodetestlab/specs/multi_graph.yml; OWNER=engine; UPDATED=2025-12-22
-pub fn executeCreateForBatch(allocator: std.mem.Allocator, create_pattern: ast.GraphPattern, matched_bindings: std.StringHashMap(u64), current_graph: ?[]const u8) !i64 {
-    const store = graph_store.getGlobalStore(allocator);
-    const target_graph = current_graph orelse "default";
-    var created_relationships: i64 = 0;
-
-    // Track created nodes by variable name
-    var created_nodes = std.StringHashMap(u64).init(allocator);
-    defer {
-        // Free all duplicated keys (both from matched_bindings and new creates)
-        var key_iter = created_nodes.iterator();
-        while (key_iter.next()) |entry| {
-            allocator.free(entry.key_ptr.*);
-        }
-        created_nodes.deinit();
-    }
-
-    // Copy matched bindings to created_nodes (keys are already duplicated by caller)
-    var iter = matched_bindings.iterator();
-    while (iter.next()) |entry| {
-        // Duplicate the key since we need our own copy for created_nodes
-        const key_copy = try allocator.dupe(u8, entry.key_ptr.*);
-        try created_nodes.put(key_copy, entry.value_ptr.*);
-    }
-
-    // Statement-atomicity pre-pass — see `executeCreate`. Same empty env the
-    // apply loops below use.
-    // CANARY: REQ=REQ-PROPERTY-WRITE-ATOMICITY; FEATURE="PropertyStorage"; ASPECT=CreatePrePass; STATUS=TESTED; TEST=tests/test_property_write_atomicity.zig; OWNER=engine; UPDATED=2026-08-25
-    try write_precheck.checkPatternWritable(
-        allocator,
-        create_pattern,
-        Env{ .allocator = allocator, .names = &.{}, .values = &.{} },
-    );
-
-    // Process CREATE pattern
-    for (create_pattern.chains) |chain| {
-        // Handle single node creation
-        if (chain.head) |node_pattern| {
-            // Check if this node already exists in matched bindings
-            const node_id = if (node_pattern.name) |var_name| blk: {
-                if (created_nodes.get(var_name)) |existing_id| {
-                    // Node already matched from MATCH clause, don't create new
-                    break :blk existing_id;
-                } else {
-                    // Variable not bound, create new node in target graph
-                    const new_id = try store.createNodeWithGraph(node_pattern.labels, target_graph);
-                    // CANARY: REQ=REQ-TXN-UNDO-009; FEATURE="TransactionUndoLog"; ASPECT=LogCreateNode; STATUS=TESTED; TEST=geodetestlab/specs/transaction_state_basic.yml; OWNER=engine; UPDATED=2025-12-23
-                    // Log node creation for rollback support
-                    const undo_log = txn_undo_log.getGlobalUndoLog(allocator);
-                    undo_log.logCreateNode(new_id, current_graph) catch |err| {
-                        log.err("undo log failed", &.{Attr.string("error", @errorName(err))});
-                    };
-                    const var_name_copy = try allocator.dupe(u8, var_name);
-                    try created_nodes.put(var_name_copy, new_id);
-                    break :blk new_id;
-                }
-            } else blk: {
-                // No variable name, always create new node in target graph
-                const new_id = try store.createNodeWithGraph(node_pattern.labels, target_graph);
-                // Log node creation for rollback support
-                const undo_log = txn_undo_log.getGlobalUndoLog(allocator);
-                undo_log.logCreateNode(new_id, current_graph) catch |err| {
-                    log.err("undo log failed", &.{Attr.string("error", @errorName(err))});
-                };
-                break :blk new_id;
-            };
-
-            // Set properties if present
-            if (node_pattern.props) |props| {
-                const env = Env{ .allocator = allocator, .names = &.{}, .values = &.{} };
-
-                for (props) |prop| {
-                    const value = try eval.evalExpr(allocator, prop.value.*, env);
-                    try property_mutation.setNodePropertyFromValue(allocator, store, node_pattern.labels, node_id, prop.key, value);
-                }
-            }
-
-            // Auto-create indexes for node labels
-            ensureAutoIndexes(allocator, node_pattern.labels);
-        }
-
-        // Handle relationship creation
-        for (chain.hops) |hop| {
-            // For batch CREATE from MATCH, nodes must already exist in bindings
-            // Only create new nodes if they're anonymous or not from MATCH
-            const left_id = if (hop.left.name) |var_name| blk: {
-                if (created_nodes.get(var_name)) |node_id| {
-                    // Use existing node from bindings
-                    break :blk node_id;
-                } else if (matched_bindings.count() > 0) {
-                    // In batch mode with matched bindings, skip if node not found
-                    // This shouldn't happen if the query is well-formed
-                    continue;
-                } else {
-                    // Not in batch mode - create new node in target graph
-                    const new_id = try store.createNodeWithGraph(hop.left.labels, target_graph);
-                    const var_name_copy = try allocator.dupe(u8, var_name);
-                    try created_nodes.put(var_name_copy, new_id);
-                    ensureAutoIndexes(allocator, hop.left.labels);
-                    break :blk new_id;
-                }
-            } else blk: {
-                // Anonymous node - always create new in target graph
-                const new_id = try store.createNodeWithGraph(hop.left.labels, target_graph);
-                ensureAutoIndexes(allocator, hop.left.labels);
-                break :blk new_id;
-            };
-
-            const right_id = if (hop.right.name) |var_name| blk: {
-                if (created_nodes.get(var_name)) |node_id| {
-                    // Use existing node from bindings
-                    break :blk node_id;
-                } else if (matched_bindings.count() > 0) {
-                    // In batch mode with matched bindings, skip if node not found
-                    // This shouldn't happen if the query is well-formed
-                    continue;
-                } else {
-                    // Not in batch mode - create new node in target graph
-                    const new_id = try store.createNodeWithGraph(hop.right.labels, target_graph);
-                    const var_name_copy = try allocator.dupe(u8, var_name);
-                    try created_nodes.put(var_name_copy, new_id);
-                    ensureAutoIndexes(allocator, hop.right.labels);
-                    break :blk new_id;
-                }
-            } else blk: {
-                // Anonymous node - always create new in target graph
-                const new_id = try store.createNodeWithGraph(hop.right.labels, target_graph);
-                ensureAutoIndexes(allocator, hop.right.labels);
-                break :blk new_id;
-            };
-
-            // Create the relationship in target graph
-            const edge_label = if (hop.rel.types.len > 0) hop.rel.types[0] else "RELATED";
-            const edge_id = try store.createEdgeWithGraph(left_id, right_id, edge_label, target_graph);
-            // Log edge creation for rollback support
-            const undo_log_edge = txn_undo_log.getGlobalUndoLog(allocator);
-            undo_log_edge.logCreateEdge(edge_id, current_graph) catch |err| {
-                log.err("undo log failed", &.{Attr.string("error", @errorName(err))});
-            };
-            created_relationships += 1;
-
-            // Auto-create index for edge type
-            ensureAutoIndexes(allocator, &.{edge_label});
-
-            // Set relationship properties if present
-            if (hop.rel.props) |props| {
-                const env = Env{
-                    .allocator = allocator,
-                    .names = &.{},
-                    .values = &.{},
-                };
-
-                for (props) |prop| {
-                    const value = try eval.evalExpr(allocator, prop.value.*, env);
-                    try property_mutation.setEdgePropertyFromValue(allocator, store, edge_label, edge_id, prop.key, value);
-                }
-            }
-        }
-    }
-
-    return created_relationships;
-}
-
 // Result struct for tracking created entities
 const CreateBatchResult = struct {
     // Sum of nodes + relationships (kept for compatibility; prefer the
@@ -1046,9 +1006,9 @@ fn applyEndpointProps(
     store: *graph_store.GraphStore,
     node_pattern: ast.NodePattern,
     node_id: u64,
+    env: Env,
 ) !void {
     const props = node_pattern.props orelse return;
-    const env = Env{ .allocator = allocator, .names = &.{}, .values = &.{} };
     for (props) |prop| {
         const value = try eval.evalExpr(allocator, prop.value.*, env);
         try property_mutation.setNodePropertyFromValue(allocator, store, node_pattern.labels, node_id, prop.key, value);
@@ -1072,7 +1032,7 @@ fn hopEndpointSkips(
 }
 
 // CANARY: REQ=REQ-MULTI-GRAPH-017; FEATURE="MultiGraphIsolation"; ASPECT=CreateForBatchWithTracking; STATUS=TESTED; TEST=geodetestlab/specs/multi_graph.yml; OWNER=engine; UPDATED=2025-12-22
-// Enhanced version of executeCreateForBatch that returns created entities for RETURN clause evaluation.
+// The CREATE of MATCH ... CREATE for one matched row; returns the created entities for the RETURN.
 //
 // `match_var_names` is the set of node-variable names that appear in the
 // query's MATCH pattern. A hop endpoint whose name is a MATCH variable but is
@@ -1080,7 +1040,12 @@ fn hopEndpointSkips(
 // conservatively skipped (the GAP-0336 anonymous-node footgun). A name that is
 // NOT a MATCH variable is a NEW variable introduced by the CREATE pattern
 // (e.g. `MATCH (a) CREATE (a)-[:R]->(new:Label)`) and MUST be created.
-pub fn executeCreateForBatchWithTracking(allocator: std.mem.Allocator, create_pattern: ast.GraphPattern, matched_bindings: std.StringHashMap(u64), match_var_names: []const []const u8, current_graph: ?[]const u8) !CreateBatchResult {
+//
+// SONNY-2694: `row_env` is the matched row (its variables and the statement's
+// parameters), which the CREATE pattern's property values are evaluated in.
+// They were evaluated in an empty environment, so `MATCH (n) CREATE (:Z {k:
+// n.i})` and a `$parameter` wrote null.
+pub fn executeCreateForBatchWithTracking(allocator: std.mem.Allocator, create_pattern: ast.GraphPattern, matched_bindings: std.StringHashMap(u64), match_var_names: []const []const u8, current_graph: ?[]const u8, row_env: Env) !CreateBatchResult {
     const store = graph_store.getGlobalStore(allocator);
     const target_graph = current_graph orelse "default";
     var created_relationships_count: i64 = 0;
@@ -1119,6 +1084,11 @@ pub fn executeCreateForBatchWithTracking(allocator: std.mem.Allocator, create_pa
     // Track created relationships by variable name for RETURN clauses
     var created_relationships = std.StringHashMap(Value).init(allocator);
     errdefer created_relationships.deinit();
+    // SONNY-3322: the ids of the relationships the chains create, resolved
+    // into `created_relationships` after the last chain (an edge insert moves
+    // the store's edges, so a pointer taken at creation dangled).
+    var created_edge_ids = std.StringHashMap(u64).init(allocator);
+    defer created_edge_ids.deinit();
 
     // Copy matched bindings to created_nodes
     var iter = matched_bindings.iterator();
@@ -1128,14 +1098,17 @@ pub fn executeCreateForBatchWithTracking(allocator: std.mem.Allocator, create_pa
 
     // Statement-atomicity pre-pass — see `executeCreate`.
     // CANARY: REQ=REQ-PROPERTY-WRITE-ATOMICITY; FEATURE="PropertyStorage"; ASPECT=CreatePrePass; STATUS=TESTED; TEST=tests/test_property_write_atomicity.zig; OWNER=engine; UPDATED=2026-08-25
-    try write_precheck.checkPatternWritable(
-        allocator,
-        create_pattern,
-        Env{ .allocator = allocator, .names = &.{}, .values = &.{} },
-    );
+    try write_precheck.checkPatternWritable(allocator, create_pattern, row_env);
+
+    // SONNY-3240: a chain's property map sees the row and what the chains
+    // before it created (bound only when some property map names a variable).
+    const binds = write_walk.anyExpr(ast.GraphPattern, &create_pattern, write_walk.namesVariable);
+    var scope = if (binds) try WriteScope.initFrom(allocator, row_env) else WriteScope.init(allocator, &.{}, &.{});
+    defer scope.deinit();
 
     // Process CREATE pattern
     for (create_pattern.chains) |chain| {
+        const chain_env = if (binds) scope.env(allocator) else row_env;
         // Handle single node creation
         if (chain.head) |node_pattern| {
             // Check if this node already exists in matched bindings
@@ -1158,10 +1131,8 @@ pub fn executeCreateForBatchWithTracking(allocator: std.mem.Allocator, create_pa
 
             // Set properties if present
             if (node_pattern.props) |props| {
-                const env = Env{ .allocator = allocator, .names = &.{}, .values = &.{} };
-
                 for (props) |prop| {
-                    const value = try eval.evalExpr(allocator, prop.value.*, env);
+                    const value = try eval.evalExpr(allocator, prop.value.*, chain_env);
                     try property_mutation.setNodePropertyFromValue(allocator, store, node_pattern.labels, node_id, prop.key, value);
                 }
             }
@@ -1191,14 +1162,14 @@ pub fn executeCreateForBatchWithTracking(allocator: std.mem.Allocator, create_pa
                     try created_nodes.put(var_name, new_id);
                     created_nodes_count += 1;
                     ensureAutoIndexes(allocator, hop.left.labels);
-                    try applyEndpointProps(allocator, store, hop.left, new_id);
+                    try applyEndpointProps(allocator, store, hop.left, new_id, chain_env);
                     break :blk new_id;
                 }
             } else blk: {
                 const new_id = try store.createNodeWithGraph(hop.left.labels, target_graph);
                 created_nodes_count += 1;
                 ensureAutoIndexes(allocator, hop.left.labels);
-                try applyEndpointProps(allocator, store, hop.left, new_id);
+                try applyEndpointProps(allocator, store, hop.left, new_id, chain_env);
                 break :blk new_id;
             };
 
@@ -1210,14 +1181,14 @@ pub fn executeCreateForBatchWithTracking(allocator: std.mem.Allocator, create_pa
                     try created_nodes.put(var_name, new_id);
                     created_nodes_count += 1;
                     ensureAutoIndexes(allocator, hop.right.labels);
-                    try applyEndpointProps(allocator, store, hop.right, new_id);
+                    try applyEndpointProps(allocator, store, hop.right, new_id, chain_env);
                     break :blk new_id;
                 }
             } else blk: {
                 const new_id = try store.createNodeWithGraph(hop.right.labels, target_graph);
                 created_nodes_count += 1;
                 ensureAutoIndexes(allocator, hop.right.labels);
-                try applyEndpointProps(allocator, store, hop.right, new_id);
+                try applyEndpointProps(allocator, store, hop.right, new_id, chain_env);
                 break :blk new_id;
             };
 
@@ -1236,26 +1207,20 @@ pub fn executeCreateForBatchWithTracking(allocator: std.mem.Allocator, create_pa
 
             // Set relationship properties if present
             if (hop.rel.props) |props| {
-                const env = Env{
-                    .allocator = allocator,
-                    .names = &.{},
-                    .values = &.{},
-                };
-
                 for (props) |prop| {
-                    const value = try eval.evalExpr(allocator, prop.value.*, env);
+                    const value = try eval.evalExpr(allocator, prop.value.*, chain_env);
                     try property_mutation.setEdgePropertyFromValue(allocator, store, edge_label, edge_id, prop.key, value);
                 }
             }
 
-            // Track created relationship by variable name
-            if (hop.rel.name) |rel_var_name| {
-                const edge_ptr = store.getEdgePtrHydrated(edge_id) orelse return error.EdgeNotFound;
-                const edge_value = Value{ .Edge = edge_ptr };
-                try created_relationships.put(rel_var_name, edge_value);
-            }
+            // Track created relationship by variable name (SONNY-3322: by id).
+            if (hop.rel.name) |rel_var_name| try created_edge_ids.put(rel_var_name, edge_id);
         }
+
+        // SONNY-3240: what the chain created is in scope for the chains after it.
+        if (binds) try bindCreatedChain(store, &scope, chain, &created_nodes, &created_edge_ids);
     }
+    try resolveCreatedEdges(store, &created_edge_ids, &created_relationships);
 
     if (batch_stmt_txn_open) try batch_stmt_txn.commit();
     return CreateBatchResult{
@@ -1493,6 +1458,20 @@ fn executeBatchCreateHomogeneous(
     };
 }
 
+/// SONNY-3242: a SET after a CREATE writes only a node the CREATE made (as
+/// the loop it replaced did).
+const CreatedNodeTargets = struct {
+    created: *const std.StringHashMap(u64),
+    /// SONNY-3322: the relationships the CREATE made, by variable.
+    created_edges: ?*const std.StringHashMap(u64) = null,
+
+    pub fn applies(self: CreatedNodeTargets, name: []const u8) bool {
+        if (self.created.contains(name)) return true;
+        const edges = self.created_edges orelse return false;
+        return edges.contains(name);
+    }
+};
+
 // CANARY: REQ=REQ-MULTI-GRAPH-015; FEATURE="MultiGraphIsolation"; ASPECT=CreateQuery; STATUS=TESTED; TEST=geodetestlab/specs/multi_graph.yml; OWNER=engine; UPDATED=2025-12-22
 pub fn executeCreateQuery(
     allocator: std.mem.Allocator,
@@ -1561,19 +1540,32 @@ pub fn executeCreateQuery(
     // Track created relationships by variable name for RETURN clauses
     var created_relationships = std.StringHashMap(Value).init(allocator);
     defer created_relationships.deinit();
+    // SONNY-3322: the ids of the relationships the chains create, resolved
+    // into `created_relationships` after the last chain (an edge insert moves
+    // the store's edges, so a pointer taken at creation dangled).
+    var created_edge_ids = std.StringHashMap(u64).init(allocator);
+    defer created_edge_ids.deinit();
 
     // Track total created entities for count(*) aggregation
     var total_created_count: i64 = 0;
 
     // Statement-atomicity pre-pass — see `executeCreate`.
     // CANARY: REQ=REQ-PROPERTY-WRITE-ATOMICITY; FEATURE="PropertyStorage"; ASPECT=CreatePrePass; STATUS=TESTED; TEST=tests/test_property_write_atomicity.zig; OWNER=engine; UPDATED=2026-08-25
-    try write_precheck.checkPatternWritable(allocator, create_pattern, Env{
+    // SONNY-3319 (round 4b-1 review I-4): with the labels the SET gives
+    // each created node.
+    try write_precheck.checkPatternWritableWithSet(allocator, create_pattern, Env{
         .names = &.{},
         .values = &.{},
         .param_names = param_names,
         .param_values = param_values,
         .allocator = allocator,
-    });
+    }, &.{q.set_clauses});
+
+    // SONNY-3240: as `executeCreate`: a chain's property map sees what the
+    // chains before it created.
+    var scope = WriteScope.init(allocator, param_names, param_values);
+    defer scope.deinit();
+    const binds = write_walk.anyExpr(ast.GraphPattern, &create_pattern, write_walk.namesVariable);
 
     // Create nodes from pattern
     for (create_pattern.chains) |chain| {
@@ -1601,13 +1593,7 @@ pub fn executeCreateQuery(
             // NULL. Pre-evaluation is self-contained (no undo-log dependency):
             // if any expression errors, we return before the first store write.
             const evaluated_values: []Value = if (node_pattern.props) |props| blk_eval: {
-                const env = Env{
-                    .names = &.{},
-                    .values = &.{},
-                    .param_names = param_names,
-                    .param_values = param_values,
-                    .allocator = ca,
-                };
+                const env = scope.env(ca);
                 const buf = try ca.alloc(Value, props.len);
                 for (props, 0..) |prop, i| {
                     buf[i] = try eval.evalExpr(ca, prop.value.*, env);
@@ -1651,13 +1637,7 @@ pub fn executeCreateQuery(
             // edge, so a mid-property eval error aborts the whole relationship
             // CREATE atomically instead of committing partially-populated
             // endpoints with the failed property defaulted to NULL.
-            const hop_env = Env{
-                .names = &.{},
-                .values = &.{},
-                .param_names = param_names,
-                .param_values = param_values,
-                .allocator = ca,
-            };
+            const hop_env = scope.env(ca);
             const left_values: []Value = if (hop.left.props) |props| blk_lv: {
                 const buf = try ca.alloc(Value, props.len);
                 for (props, 0..) |prop, i| buf[i] = try eval.evalExpr(ca, prop.value.*, hop_env);
@@ -1750,17 +1730,14 @@ pub fn executeCreateQuery(
                 try created_nodes.put(var_name, right_id);
             }
 
-            // Track created relationship by variable name
-            if (hop.rel.name) |rel_var_name| {
-                // Get edge from store to create Edge value
-                const edge_ptr = store.getEdgePtrHydrated(edge_id) orelse return error.EdgeNotFound;
-
-                // Create Edge value for the relationship
-                const edge_value = Value{ .Edge = edge_ptr };
-                try created_relationships.put(rel_var_name, edge_value);
-            }
+            // Track created relationship by variable name (SONNY-3322: by id).
+            if (hop.rel.name) |rel_var_name| try created_edge_ids.put(rel_var_name, edge_id);
         }
+
+        // SONNY-3240: what the chain created is in scope for the chains after it.
+        if (binds) try bindCreatedChain(store, &scope, chain, &created_nodes, &created_edge_ids);
     }
+    try resolveCreatedEdges(store, &created_edge_ids, &created_relationships);
 
     // Apply WITH clause if present
     var result: ExecutionResult = undefined;
@@ -1870,94 +1847,31 @@ pub fn executeCreateQuery(
         }, null, &.{});
     }
 
-    // Apply SET clauses if present
-    // If WITH clause exists, SET should work on the WITH result environment
-    for (q.set_clauses) |set_clause| {
-        switch (set_clause) {
-            .Property => |prop| {
-                if (created_nodes.get(prop.target.object)) |node_id| {
-                    // Create environment - if WITH is present, use WITH result; otherwise use created_nodes
-                    var names = std.ArrayList([]const u8).empty;
-                    var values = std.ArrayList(Value).empty;
-
-                    if (q.with_clause != null) {
-                        // Use WITH result columns and first row as environment
-                        for (result.columns, 0..) |col_name, idx| {
-                            try names.append(allocator, col_name);
-                            try values.append(allocator, result.rows[0][idx]);
-                        }
-                    } else {
-                        // Use created nodes as environment
-                        var iter = created_nodes.iterator();
-                        while (iter.next()) |entry| {
-                            try names.append(allocator, entry.key_ptr.*);
-                            const entry_node_id = entry.value_ptr.*;
-                            const entry_node = (store.nodes.getOrHydratePtr(entry_node_id) catch null) orelse return error.NodeNotFound;
-                            try values.append(allocator, Value{ .Node = entry_node });
-                        }
-                    }
-
-                    const env = Env{
-                        .names = names.items,
-                        .values = values.items,
-                        .param_names = param_names,
-                        .param_values = param_values,
-                        .allocator = allocator,
-                    };
-
-                    const value = try eval.evalExpr(allocator, prop.value, env);
-                    const node = (store.nodes.getOrHydratePtr(node_id) catch null) orelse return error.NodeNotFound;
-                    try property_mutation.setNodePropertyFromValue(allocator, store, node.labels, node_id, prop.target.property, value);
-                }
-            },
-            .Labels => |label_set| {
-                if (created_nodes.get(label_set.node)) |node_id| {
-                    for (label_set.labels) |label| {
-                        try store.addNodeLabel(node_id, label);
-                    }
-                }
-            },
-            .AllProperties => |all_props| {
-                if (created_nodes.get(all_props.node)) |node_id| {
-                    // Create environment - if WITH is present, use WITH result; otherwise use created_nodes
-                    var names = std.ArrayList([]const u8).empty;
-                    var values = std.ArrayList(Value).empty;
-
-                    if (q.with_clause != null) {
-                        // Use WITH result columns and first row as environment
-                        for (result.columns, 0..) |col_name, idx| {
-                            try names.append(allocator, col_name);
-                            try values.append(allocator, result.rows[0][idx]);
-                        }
-                    } else {
-                        // Use created nodes as environment
-                        var iter = created_nodes.iterator();
-                        while (iter.next()) |entry| {
-                            try names.append(allocator, entry.key_ptr.*);
-                            const entry_node_id = entry.value_ptr.*;
-                            const entry_node = (store.nodes.getOrHydratePtr(entry_node_id) catch null) orelse return error.NodeNotFound;
-                            try values.append(allocator, Value{ .Node = entry_node });
-                        }
-                    }
-
-                    const env = Env{
-                        .names = names.items,
-                        .values = values.items,
-                        .param_names = param_names,
-                        .param_values = param_values,
-                        .allocator = allocator,
-                    };
-
-                    // Evaluate the properties expression (should be a map literal)
-                    const props_value = try eval.evalExpr(allocator, all_props.properties, env);
-
-                    // Clear all existing properties by getting node and manually clearing
-                    if ((store.nodes.getOrHydratePtr(node_id) catch null)) |node| {
-                        try property_mutation.replaceNodeProperties(allocator, store, node, props_value);
-                    }
-                }
-            },
+    // CANARY: REQ=REQ-SONNY-3242-SET-SEMANTICS; FEATURE="SetClauseSemantics"; ASPECT=CreateThenSet; STATUS=TESTED; TEST=tests/test_sonny_write_allowlist_r4.zig; OWNER=engine; UPDATED=2026-09-28
+    // Apply SET clauses if present, on the nodes the CREATE made, in the
+    // environment of the WITH's row when there is one, else of the created
+    // nodes. SONNY-3242: one SET clause at a time (`write_scope.applySetGroups`):
+    // every value of a clause against the nodes as they stood before it. Each
+    // assignment read the live node, so `SET n.a = n.b, n.b = n.a` did not swap.
+    if (q.set_clauses.len > 0) {
+        var set_scope = WriteScope.init(allocator, param_names, param_values);
+        defer set_scope.deinit();
+        if (q.with_clause != null) {
+            if (result.rows.len > 0) {
+                for (result.columns, result.rows[0]) |col_name, value| try set_scope.bind(col_name, value);
+            }
+        } else {
+            var iter = created_nodes.iterator();
+            while (iter.next()) |entry| try set_scope.bindNode(store, entry.key_ptr.*, entry.value_ptr.*);
+            // SONNY-3322: and the relationships it made (`CREATE (a)-[r:T
+            // {w: 3}]->(b) SET a.w = r.w` read r as null, and `SET r.x`
+            // was dropped).
+            var edge_iter = created_edge_ids.iterator();
+            while (edge_iter.next()) |entry| try set_scope.bindEdge(store, entry.key_ptr.*, entry.value_ptr.*);
         }
+        // Detached boxes, read again after each clause.
+        try set_scope.refresh(store);
+        try write_scope.applySetGroups(allocator, store, q.set_clauses, q.set_clause_ends, &set_scope, CreatedNodeTargets{ .created = &created_nodes, .created_edges = &created_edge_ids });
     }
 
     // Apply REMOVE clauses if present
@@ -2533,6 +2447,46 @@ fn clusterReplicateEdgeCreate(
     };
 }
 
+/// SONNY-3240: bind what `chain` of a CREATE or INSERT created (its named
+/// nodes as they are now, its named relationships) in `scope`, for the chains
+/// after it.
+fn bindCreatedChain(
+    store: *graph_store.GraphStore,
+    scope: *WriteScope,
+    chain: ast.Chain,
+    created_nodes: *const std.StringHashMap(u64),
+    created_edge_ids: ?*const std.StringHashMap(u64),
+) !void {
+    if (chain.head) |head| try bindCreatedNode(store, scope, head.name, created_nodes);
+    for (chain.hops) |hop| {
+        try bindCreatedNode(store, scope, hop.left.name, created_nodes);
+        try bindCreatedNode(store, scope, hop.right.name, created_nodes);
+        const rel = hop.rel.name orelse continue;
+        const rels = created_edge_ids orelse continue;
+        if (rels.get(rel)) |edge_id| try scope.bindEdge(store, rel, edge_id);
+    }
+}
+
+// CANARY: REQ=REQ-SONNY-3322-EDGE-BY-ID; FEATURE="CreateRelationship"; ASPECT=ResolveAfterInserts; STATUS=TESTED; TEST=tests/test_sonny_write_allowlist_r4b.zig; OWNER=engine; UPDATED=2026-09-28
+/// SONNY-3322: the relationships a CREATE, INSERT or MERGE made, by
+/// variable, read from the store once every chain has inserted its edges.
+/// Each was held as the pointer `getEdgePtrHydrated` returned right after its
+/// insert; the next insert can move the store's edges, so after 150 more
+/// relationship chains `RETURN r.w` read freed memory (a segfault) and after
+/// 600 read null.
+pub fn resolveCreatedEdges(store: *graph_store.GraphStore, ids: *const std.StringHashMap(u64), out: *std.StringHashMap(Value)) !void {
+    var it = ids.iterator();
+    while (it.next()) |entry| {
+        const edge = store.getEdgePtrHydrated(entry.value_ptr.*) orelse return error.EdgeNotFound;
+        try out.put(entry.key_ptr.*, Value{ .Edge = edge });
+    }
+}
+
+fn bindCreatedNode(store: *graph_store.GraphStore, scope: *WriteScope, name: ?[]const u8, created_nodes: *const std.StringHashMap(u64)) !void {
+    const n = name orelse return;
+    if (created_nodes.get(n)) |id| try scope.bindNode(store, n, id);
+}
+
 pub fn executeCreate(allocator: std.mem.Allocator, c: ast.CreateStatement, current_graph: ?[]const u8, context: ExecutionContext) !ExecutionResult {
     // Cluster write routing: in cluster mode the write is ordered through Raft
     // on the leader and never written to a single node's local store. A
@@ -2602,14 +2556,18 @@ pub fn executeCreate(allocator: std.mem.Allocator, c: ast.CreateStatement, curre
             session_txn_covers_us = std.mem.eql(u8, g, target_graph);
         } else if (context.transaction_state == .Active) {
             // R9 lazy open: Geode txn is active but no session engine
-            // txn is open yet — pin it to `target_graph`.  Backing
-            // storage is the adapter's own thread-local slot (one QUIC
-            // stream = one pool thread; the storage is automatically
-            // per-session).  Failure falls through to per-statement R8.
+            // txn is open yet — pin it to `target_graph`.  SONNY-2823:
+            // it is opened into the slot of the session whose request
+            // runs on this thread (`ServerState.session_engine_txn`), not
+            // a thread-local one, and committed when this program ends
+            // (`execution.leaveEntryPoint`), not at the Geode txn's
+            // COMMIT.  Failure falls through to per-statement R8.
             if (ad.beginSessionTxnLazy(target_graph)) |_| {
                 session_txn_covers_us = true;
             } else |err| switch (err) {
-                error.GraphNotFound, error.NestedSessionTxn, error.NestedStatementTxn => {},
+                // SONNY-2823: no session slot on the thread (an embedded
+                // caller, not a transport request): per-statement txns.
+                error.GraphNotFound, error.NestedSessionTxn, error.NestedStatementTxn, error.NoSessionEngineTxnSlot => {},
                 else => return err,
             }
         }
@@ -2644,6 +2602,18 @@ pub fn executeCreate(allocator: std.mem.Allocator, c: ast.CreateStatement, curre
     // Track created relationships by variable name for RETURN clauses
     var created_relationships = std.StringHashMap(Value).init(allocator);
     defer created_relationships.deinit();
+    // SONNY-3322: the ids of the relationships the chains create, resolved
+    // into `created_relationships` after the last chain (an edge insert moves
+    // the store's edges, so a pointer taken at creation dangled).
+    var created_edge_ids = std.StringHashMap(u64).init(allocator);
+    defer created_edge_ids.deinit();
+
+    // SONNY-3240: a chain's property map sees the variables the chains
+    // before it created (`CREATE (a:Z {k:1}), (b:Z {k: a.k+1})` gave b.k
+    // null). Bound only when some property map names a variable.
+    var scope = WriteScope.init(allocator, context.query_param_names, context.query_param_values);
+    defer scope.deinit();
+    const binds = write_walk.anyExpr(ast.GraphPattern, &c.pattern, write_walk.namesVariable);
 
     // Create nodes from pattern
     for (c.pattern.chains) |chain| {
@@ -2674,7 +2644,7 @@ pub fn executeCreate(allocator: std.mem.Allocator, c: ast.CreateStatement, curre
             // stmt_txn_open stays false, so no engine txn would roll the node
             // back on error.
             const evaluated_values: []Value = if (node_pattern.props) |props| blk_ev: {
-                const env = envFromContext(ca, context);
+                const env = scope.env(ca);
                 const buf = try ca.alloc(Value, props.len);
                 for (props, 0..) |prop, i| buf[i] = try eval.evalExpr(ca, prop.value.*, env);
                 break :blk_ev buf;
@@ -2712,7 +2682,7 @@ pub fn executeCreate(allocator: std.mem.Allocator, c: ast.CreateStatement, curre
             // edge, so a mid-property eval error aborts the whole relationship
             // CREATE atomically rather than committing partially-populated
             // endpoints. Self-contained (no reliance on stmt_txn/undo-log).
-            const hop_env = envFromContext(ca, context);
+            const hop_env = scope.env(ca);
             const left_values: []Value = if (hop.left.props) |props| blk_lv: {
                 const buf = try ca.alloc(Value, props.len);
                 for (props, 0..) |prop, i| buf[i] = try eval.evalExpr(ca, prop.value.*, hop_env);
@@ -2816,14 +2786,14 @@ pub fn executeCreate(allocator: std.mem.Allocator, c: ast.CreateStatement, curre
                 }
             }
 
-            // Track created relationship by variable name
-            if (hop.rel.name) |rel_var_name| {
-                const edge_ptr = store.getEdgePtrHydrated(edge_id) orelse return error.EdgeNotFound;
-                const edge_value = Value{ .Edge = edge_ptr };
-                try created_relationships.put(rel_var_name, edge_value);
-            }
+            // Track created relationship by variable name (SONNY-3322: by id).
+            if (hop.rel.name) |rel_var_name| try created_edge_ids.put(rel_var_name, edge_id);
         }
+
+        // SONNY-3240: what the chain created is in scope for the chains after it.
+        if (binds) try bindCreatedChain(store, &scope, chain, &created_nodes, &created_edge_ids);
     }
+    try resolveCreatedEdges(store, &created_edge_ids, &created_relationships);
 
     // Handle RETURN clause if present
     if (c.return_clause) |ret| {
@@ -2885,6 +2855,8 @@ pub fn executeCreate(allocator: std.mem.Allocator, c: ast.CreateStatement, curre
             .allocator = allocator,
             .names = names,
             .values = values,
+            .param_names = context.query_param_names,
+            .param_values = context.query_param_values,
         };
 
         // Execute RETURN with the created nodes and relationships in scope
@@ -2905,7 +2877,7 @@ pub fn executeCreate(allocator: std.mem.Allocator, c: ast.CreateStatement, curre
 }
 
 // CANARY: REQ=REQ-MULTI-GRAPH-019; FEATURE="MultiGraphIsolation"; ASPECT=ExecuteInsert; STATUS=TESTED; TEST=geodetestlab/specs/multi_graph.yml; OWNER=engine; UPDATED=2025-12-22
-pub fn executeInsert(allocator: std.mem.Allocator, ins: ast.InsertStatement, current_graph: ?[]const u8) !ExecutionResult {
+pub fn executeInsert(allocator: std.mem.Allocator, ins: ast.InsertStatement, current_graph: ?[]const u8, context: ExecutionContext) !ExecutionResult {
     // Cluster write routing: INSERT is not in the Raft-replicable slice yet, so
     // in cluster mode it must fail closed rather than be written to a single
     // node's local store (follower => ClusterNotLeader; leader => not
@@ -2927,8 +2899,23 @@ pub fn executeInsert(allocator: std.mem.Allocator, ins: ast.InsertStatement, cur
     try write_precheck.checkPatternWritable(
         allocator,
         ins.pattern,
-        Env{ .allocator = allocator, .names = &.{}, .values = &.{} },
+        envFromContext(allocator, context),
     );
+
+    // SONNY-3240: as `executeCreate`: a chain's property map sees what the
+    // chains before it created, and the parameters (INSERT had none: every
+    // `$param` read null).
+    var scope = WriteScope.init(allocator, context.query_param_names, context.query_param_values);
+    defer scope.deinit();
+    const binds = write_walk.anyExpr(ast.GraphPattern, &ins.pattern, write_walk.namesVariable);
+    // The relationships it created, by variable, for the chains after them.
+    var created_relationships = std.StringHashMap(Value).init(allocator);
+    defer created_relationships.deinit();
+    // SONNY-3322: the ids of the relationships the chains create, resolved
+    // into `created_relationships` after the last chain (an edge insert moves
+    // the store's edges, so a pointer taken at creation dangled).
+    var created_edge_ids = std.StringHashMap(u64).init(allocator);
+    defer created_edge_ids.deinit();
 
     // Create nodes from pattern
     for (ins.pattern.chains) |chain| {
@@ -2953,7 +2940,7 @@ pub fn executeInsert(allocator: std.mem.Allocator, ins: ast.InsertStatement, cur
             // node so an eval error aborts the INSERT atomically (no orphan node
             // with the failed property defaulted to NULL).
             const evaluated_values: []Value = if (node_pattern.props) |props| blk_ev: {
-                const env = Env{ .allocator = ca, .names = &.{}, .values = &.{} };
+                const env = scope.env(ca);
                 const buf = try ca.alloc(Value, props.len);
                 for (props, 0..) |prop, i| buf[i] = try eval.evalExpr(ca, prop.value.*, env);
                 break :blk_ev buf;
@@ -2982,7 +2969,7 @@ pub fn executeInsert(allocator: std.mem.Allocator, ins: ast.InsertStatement, cur
             // GAP-0930: pre-evaluate all endpoint + relationship property
             // expressions before creating any node/edge so an eval error aborts
             // the INSERT atomically instead of committing partial endpoints.
-            const hop_env = Env{ .allocator = ca, .names = &.{}, .values = &.{} };
+            const hop_env = scope.env(ca);
             const left_values: []Value = if (hop.left.props) |props| blk_lv: {
                 const buf = try ca.alloc(Value, props.len);
                 for (props, 0..) |prop, i| buf[i] = try eval.evalExpr(ca, prop.value.*, hop_env);
@@ -3085,8 +3072,13 @@ pub fn executeInsert(allocator: std.mem.Allocator, ins: ast.InsertStatement, cur
                     try property_mutation.setEdgePropertyFromValue(allocator, store, edge_type, edge_id, prop.key, value);
                 }
             }
+            if (binds) if (hop.rel.name) |rel_var_name| try created_edge_ids.put(rel_var_name, edge_id);
         }
+
+        // SONNY-3240: what the chain created is in scope for the chains after it.
+        if (binds) try bindCreatedChain(store, &scope, chain, &created_nodes, &created_edge_ids);
     }
+    try resolveCreatedEdges(store, &created_edge_ids, &created_relationships);
 
     // Handle RETURN clause if present
     if (ins.return_clause) |ret| {
@@ -3111,6 +3103,8 @@ pub fn executeInsert(allocator: std.mem.Allocator, ins: ast.InsertStatement, cur
             .allocator = allocator,
             .names = names,
             .values = values,
+            .param_names = context.query_param_names,
+            .param_values = context.query_param_values,
         };
 
         // Execute RETURN with the created nodes in scope
@@ -3136,31 +3130,74 @@ pub fn executeInsert(allocator: std.mem.Allocator, ins: ast.InsertStatement, cur
 fn resolveMergeSetProps(
     allocator: std.mem.Allocator,
     set_items: []const ast.SetClause,
+    set_ends: []const usize,
     var_name: ?[]const u8,
+    node: *graph_store.Node,
     context: ExecutionContext,
     out: *std.ArrayList(cluster_replication.Prop),
 ) !void {
     if (set_items.len == 0) return;
     const target_var = var_name orelse return error.ClusterWriteNotReplicable;
-    for (set_items) |set_clause| {
-        switch (set_clause) {
-            .Property => |prop| {
-                if (!std.mem.eql(u8, prop.target.object, target_var))
-                    return error.ClusterWriteNotReplicable;
-                const value = eval.evalExpr(allocator, prop.value, envFromContext(allocator, context)) catch
-                    return error.ClusterWriteNotReplicable;
-                // Statement-atomicity pre-pass: refuse an unstorable entry
-                // before the leader PROPOSES it, rather than letting every
-                // follower fail half-way through applying it.
-                // CANARY: REQ=REQ-PROPERTY-WRITE-ATOMICITY; FEATURE="PropertyStorage"; ASPECT=ClusterMergePrePass; STATUS=IMPL; OWNER=engine; UPDATED=2026-08-25
-                try write_precheck.checkPropertyWritable(allocator, &.{}, prop.target.property, value);
-                const pv = clusterPropValue(value) orelse return error.ClusterWriteNotReplicable;
-                try out.append(allocator, .{ .key = prop.target.property, .value = pv });
-            },
-            // SET label / SET = {map} are not in the replicable MERGE slice.
-            .Labels, .AllProperties => return error.ClusterWriteNotReplicable,
+    // SONNY-3240: the clauses read the merged node (`node`: the matched node's
+    // properties, or the created node's pattern properties, in an overlay the
+    // leader owns). SONNY-3242: one SET clause at a time: every value of a
+    // clause against the node as it stood before it; the overlay then takes
+    // the clause's values, for the next clause.
+    const names = [_][]const u8{target_var};
+    const values = [_]Value{.{ .Node = node }};
+    const env = Env{ .allocator = allocator, .names = &names, .values = &values, .param_names = context.query_param_names, .param_values = context.query_param_values };
+    var resolved: std.ArrayList(Value) = .empty;
+    defer resolved.deinit(allocator);
+    var groups = ast.SetClauseGroups.init(set_items, set_ends);
+    while (groups.next()) |group| {
+        resolved.clearRetainingCapacity();
+        for (group) |set_clause| {
+            switch (set_clause) {
+                .Property => |prop| {
+                    if (!std.mem.eql(u8, prop.target.object, target_var))
+                        return error.ClusterWriteNotReplicable;
+                    const value = eval.evalExpr(allocator, prop.value, env) catch
+                        return error.ClusterWriteNotReplicable;
+                    try resolved.append(allocator, value);
+                },
+                // SET label / SET = {map} are not in the replicable MERGE slice.
+                .Labels, .AllProperties => return error.ClusterWriteNotReplicable,
+            }
+        }
+        for (group, resolved.items) |set_clause, value| {
+            const prop = set_clause.Property;
+            // Statement-atomicity pre-pass: refuse an unstorable entry
+            // before the leader PROPOSES it, rather than letting every
+            // follower fail half-way through applying it.
+            // CANARY: REQ=REQ-PROPERTY-WRITE-ATOMICITY; FEATURE="PropertyStorage"; ASPECT=ClusterMergePrePass; STATUS=IMPL; OWNER=engine; UPDATED=2026-08-25
+            try write_precheck.checkPropertyWritable(allocator, &.{}, prop.target.property, value);
+            const pv = clusterPropValue(value) orelse return error.ClusterWriteNotReplicable;
+            try out.append(allocator, .{ .key = prop.target.property, .value = pv });
+            try node.properties.put(prop.target.property, property_codec.valueToPropertyValue(allocator, value) catch return error.ClusterWriteNotReplicable);
         }
     }
+}
+
+/// SONNY-3240: the merged node for the cluster MERGE's SET clauses to read:
+/// a copy the leader owns (in `arena`) of `base`'s properties (the node the
+/// MERGE matched), or of the pattern's (the node it creates, which exists
+/// only once the entry applies).
+fn clusterMergeOverlay(
+    arena: std.mem.Allocator,
+    base: ?*const graph_store.Node,
+    labels: [][]const u8,
+    pattern_props: ?[]const EvaluatedPatternProp,
+) !*graph_store.Node {
+    const node = try arena.create(graph_store.Node);
+    node.* = .{ .id = if (base) |b| b.id else 0, .labels = labels, .properties = graph_store.CompactPropertyMap.init(arena) };
+    if (base) |b| {
+        var it = b.properties.iterator();
+        while (it.next()) |entry| try node.properties.put(entry.key_ptr.*, entry.value_ptr.*);
+    }
+    if (pattern_props) |props| for (props) |prop| {
+        try node.properties.put(prop.key, property_codec.valueToPropertyValue(arena, prop.value) catch return error.ClusterWriteNotReplicable);
+    };
+    return node;
 }
 
 /// Replicate an eligible node `MERGE (:Label {props})` through Raft and return
@@ -3220,14 +3257,18 @@ fn clusterReplicateMerge(
     defer prop_arena.deinit();
     const evaluated_props = try evaluatePatternProps(prop_arena.allocator(), node_pattern.props, context);
 
-    const matched_id = try findFirstMatchingNodeId(
-        allocator,
+    // SONNY-2686: including the session's row visibility, so the leader never
+    // proposes an ON MATCH SET for a node the session may not see.
+    var visibility = MergeVisibility.init(allocator, filter_tenant, target_graph, context);
+    defer visibility.deinit();
+    const matched_id = try visibility.bindNode(findMergeMatch(
         read_store,
         target_graph,
         filter_tenant,
         node_pattern.labels,
         evaluated_props,
-    );
+        &visibility,
+    ), node_pattern.labels, evaluated_props);
 
     const empty_result = ExecutionResult{
         .columns = try allocator.alloc([]const u8, 0),
@@ -3245,7 +3286,9 @@ fn clusterReplicateMerge(
         // payload applied idempotently by the leader-resolved stable id.
         var set_props = std.ArrayList(cluster_replication.Prop).empty;
         defer set_props.deinit(allocator);
-        try resolveMergeSetProps(allocator, m.on_match, node_pattern.name, context, &set_props);
+        const matched_node = read_store.getNodePtrForScan(node_id) orelse return error.NodeNotFound;
+        const overlay = try clusterMergeOverlay(prop_arena.allocator(), matched_node, node_pattern.labels, null);
+        try resolveMergeSetProps(prop_arena.allocator(), m.on_match, m.on_match_ends, node_pattern.name, overlay, context, &set_props);
         if (set_props.items.len == 0) return empty_result;
 
         const payload = cluster_replication.serializeMerge(allocator, target_graph, node_id, set_props.items) catch |err| switch (err) {
@@ -3283,7 +3326,8 @@ fn clusterReplicateMerge(
             try props.append(allocator, .{ .key = p.key, .value = pv });
         }
     }
-    try resolveMergeSetProps(allocator, m.on_create, node_pattern.name, context, &props);
+    const created_overlay = try clusterMergeOverlay(prop_arena.allocator(), null, node_pattern.labels, evaluated_props);
+    try resolveMergeSetProps(prop_arena.allocator(), m.on_create, m.on_create_ends, node_pattern.name, created_overlay, context, &props);
 
     const payload = cluster_replication.serializeNodeCreate(allocator, target_graph, node_pattern.labels, props.items) catch |err| switch (err) {
         cluster_replication.CodecError.UnsupportedPropertyType => return error.ClusterWriteNotReplicable,
@@ -3319,9 +3363,27 @@ const MergedNodeBinding = struct {
     created: bool,
 };
 
+// CANARY: REQ=REQ-TXN-UNDO-MERGE-CREATES; FEATURE="TransactionUndoLog"; ASPECT=MergeCreateUndoLog; STATUS=TESTED; TEST=tests/test_property_write_atomicity.zig; OWNER=engine; UPDATED=2026-09-27
+/// A node or edge that MERGE creates goes into the transaction's undo log, as
+/// CREATE's do (REQ-TXN-UNDO-009), so ROLLBACK removes it, and with it the
+/// properties the MERGE set on it. MERGE logged nothing: `START TRANSACTION;
+/// MERGE (:M {k: 1}); ROLLBACK` kept the node, and so did a MERGE'd edge.
+/// Logged at once, before a property write that can fail. The log records
+/// only for a thread in a transaction (SONNY-2799). A change it cannot record
+/// fails the statement, rather than leave a change ROLLBACK would not undo.
+fn logMergeCreatedNode(allocator: std.mem.Allocator, node_id: u64, target_graph: []const u8) !void {
+    try txn_undo_log.getGlobalUndoLog(allocator).logCreateNode(node_id, target_graph);
+}
+
+/// `logMergeCreatedNode` for an edge.
+fn logMergeCreatedEdge(allocator: std.mem.Allocator, edge_id: u64, target_graph: []const u8) !void {
+    try txn_undo_log.getGlobalUndoLog(allocator).logCreateEdge(edge_id, target_graph);
+}
+
 /// Merge ONE single-node chain (`MERGE (a:Label {props})`): match-or-create the
-/// node, then apply the statement's ON MATCH / ON CREATE SET clauses that target
-/// this chain's variable.
+/// node. SONNY-3240: its property map is evaluated in `scope` (the variables
+/// the chains before it bound); the ON CREATE / ON MATCH / bare SET clauses
+/// run after every chain (`applyMergeActions`), with the merged node bound.
 // CANARY: REQ=REQ-MERGE-RELPROPS-001; FEATURE="MergeRelationship"; ASPECT=ChainedMergeEndpoints; STATUS=TESTED; TEST=tests/test_merge_relationship_bugs.zig; OWNER=execution; UPDATED=2026-08-24
 fn mergeNodeChain(
     allocator: std.mem.Allocator,
@@ -3330,8 +3392,8 @@ fn mergeNodeChain(
     target_graph: []const u8,
     filter_tenant: ?[]const u8,
     node_pattern: ast.NodePattern,
-    m: ast.MergeStatement,
-    context: ExecutionContext,
+    scope: *const WriteScope,
+    visibility: *MergeVisibility,
 ) !MergedNodeBinding {
     // GAP-0900 Layer-3 (Fix 2): in lean-index mode the MERGE pattern keys
     // MUST stay indexed in the merge_prop_index, otherwise dedup breaks (a
@@ -3343,129 +3405,204 @@ fn mergeNodeChain(
         for (pp) |prop| graph_store.registerMergeIndexKey(prop.key);
     }
 
-    // Look for existing node matching the pattern (filtered by graph)
-    var found_node: ?*graph_store.Node = null;
-    // Function-scoped evaluation arena. It backs BOTH the match predicate
-    // (`evaluatePatternProps`, see its ownership contract) and every apply-side
-    // `evalExpr` below: the pattern props and the ON CREATE / ON MATCH SET
-    // values are all handed to `setNodePropertyFromValue` /
-    // `replaceNodeProperties`, which DEEP-COPY into the store and never take
+    // Function-scoped evaluation arena. It backs the match predicate
+    // (`evaluatePatternProps`, see its ownership contract) and the create
+    // branch's property writes, which DEEP-COPY into the store and never take
     // ownership. Nothing evaluated here reaches `MergedNodeBinding` (ids and
     // the AST pattern only), so the arena outlives every consumer.
     var prop_arena = std.heap.ArenaAllocator.init(allocator);
     defer prop_arena.deinit();
     const pa = prop_arena.allocator();
-    const evaluated_props = try evaluatePatternProps(pa, node_pattern.props, context);
+    const evaluated_props = try evaluatePatternPropsIn(pa, node_pattern.props, scope.env(pa));
 
-    if (try findFirstMatchingNodeId(
-        allocator,
+    // SONNY-2686: a node the session may not see is never bound, so none of
+    // the ON MATCH clauses can reach it; a pattern that only such a node
+    // matches refuses the statement here, before anything is written.
+    if (try visibility.bindNode(findMergeMatch(
         read_store,
         target_graph,
         filter_tenant,
         node_pattern.labels,
         evaluated_props,
-    )) |found_id| {
-        found_node = (read_store.nodes.getOrHydratePtr(found_id) catch null);
-    }
-
-    var node_id: u64 = undefined;
-    var created = false;
-
-    if (found_node) |node| {
-        // Node exists - apply ON MATCH clauses
-        node_id = node.id;
-        for (m.on_match) |set_clause| {
-            switch (set_clause) {
-                .Property => |prop| {
-                    if (node_pattern.name) |var_name| {
-                        if (std.mem.eql(u8, prop.target.object, var_name)) {
-                            // Evaluate the property expression
-                            const value = try eval.evalExpr(pa, prop.value, envFromContext(pa, context));
-                            const node_ptr = (store.nodes.getOrHydratePtr(node_id) catch null) orelse return error.NodeNotFound;
-                            try property_mutation.setNodePropertyFromValue(allocator, store, node_ptr.labels, node_id, prop.target.property, value);
-                        }
-                    }
-                },
-                .Labels => |label_set| {
-                    if (node_pattern.name) |var_name| {
-                        if (std.mem.eql(u8, label_set.node, var_name)) {
-                            for (label_set.labels) |label| {
-                                try store.addNodeLabel(node_id, label);
-                            }
-                        }
-                    }
-                },
-                .AllProperties => |all_props| {
-                    if (node_pattern.name) |var_name| {
-                        if (std.mem.eql(u8, all_props.node, var_name)) {
-                            // Evaluate the properties expression (should be a map literal)
-                            const props_value = try eval.evalExpr(pa, all_props.properties, envFromContext(pa, context));
-
-                            // Clear all existing properties by getting node and manually clearing
-                            if ((store.nodes.getOrHydratePtr(node_id) catch null)) |node_ptr| {
-                                try property_mutation.replaceNodeProperties(allocator, store, node_ptr, props_value);
-                            }
-                        }
-                    }
-                },
-            }
-        }
-    } else {
-        // Node doesn't exist - create it in target graph and apply ON CREATE clauses
-        created = true;
-        node_id = try store.createNodeWithGraph(node_pattern.labels, target_graph);
-
-        // Auto-create indexes for node labels
-        ensureAutoIndexes(allocator, node_pattern.labels);
-
-        // Set properties from pattern
-        if (node_pattern.props) |props| {
-            for (props) |prop| {
-                const value = try eval.evalExpr(pa, prop.value.*, envFromContext(pa, context));
-                try property_mutation.setNodePropertyFromValue(allocator, store, node_pattern.labels, node_id, prop.key, value);
-            }
-        }
-
-        // Apply ON CREATE clauses
-        for (m.on_create) |set_clause| {
-            switch (set_clause) {
-                .Property => |prop| {
-                    if (node_pattern.name) |var_name| {
-                        if (std.mem.eql(u8, prop.target.object, var_name)) {
-                            // Evaluate the property expression
-                            const value = try eval.evalExpr(pa, prop.value, envFromContext(pa, context));
-                            const node_ptr = (store.nodes.getOrHydratePtr(node_id) catch null) orelse return error.NodeNotFound;
-                            try property_mutation.setNodePropertyFromValue(allocator, store, node_ptr.labels, node_id, prop.target.property, value);
-                        }
-                    }
-                },
-                .Labels => |label_set| {
-                    if (node_pattern.name) |var_name| {
-                        if (std.mem.eql(u8, label_set.node, var_name)) {
-                            for (label_set.labels) |label| {
-                                try store.addNodeLabel(node_id, label);
-                            }
-                        }
-                    }
-                },
-                .AllProperties => |all_props| {
-                    if (node_pattern.name) |var_name| {
-                        if (std.mem.eql(u8, all_props.node, var_name)) {
-                            // Evaluate the properties expression (should be a map literal)
-                            const props_value = try eval.evalExpr(pa, all_props.properties, envFromContext(pa, context));
-
-                            // Clear all existing properties by getting node and manually clearing
-                            if ((store.nodes.getOrHydratePtr(node_id) catch null)) |node_ptr| {
-                                try property_mutation.replaceNodeProperties(allocator, store, node_ptr, props_value);
-                            }
-                        }
-                    }
-                },
-            }
+        visibility,
+    ), node_pattern.labels, evaluated_props)) |found_id| {
+        if ((read_store.nodes.getOrHydratePtr(found_id) catch null) != null) {
+            return .{ .pattern = node_pattern, .node_id = found_id, .created = false };
         }
     }
 
-    return .{ .pattern = node_pattern, .node_id = node_id, .created = created };
+    // Node doesn't exist - create it in the target graph with the pattern's
+    // properties (evaluated above, in the same scope).
+    const node_id = try store.createNodeWithGraph(node_pattern.labels, target_graph);
+    try logMergeCreatedNode(allocator, node_id, target_graph);
+
+    // Auto-create indexes for node labels
+    ensureAutoIndexes(allocator, node_pattern.labels);
+
+    if (evaluated_props) |props| {
+        for (props) |prop| {
+            try property_mutation.setNodePropertyFromValue(allocator, store, node_pattern.labels, node_id, prop.key, prop.value);
+        }
+    }
+
+    return .{ .pattern = node_pattern, .node_id = node_id, .created = true };
+}
+
+/// SONNY-3240, SONNY-3320: whether an action list runs: ON CREATE SET when
+/// the MERGE clause the actions belong to created its pattern, ON MATCH SET
+/// when it matched it. It then applies to any variable the statement binds.
+const MergeBranch = struct {
+    fires: bool,
+
+    pub fn applies(self: MergeBranch, _: []const u8) bool {
+        return self.fires;
+    }
+};
+
+// CANARY: REQ=REQ-SONNY-3240-WRITE-SCOPE; FEATURE="WriteScope"; ASPECT=MergeActions; STATUS=TESTED; TEST=tests/test_sonny_write_allowlist_r4.zig; OWNER=engine; UPDATED=2026-09-28
+/// SONNY-3240: a MERGE's ON CREATE SET, ON MATCH SET and bare SET, after every
+/// chain has merged (they follow the last MERGE clause), with every variable
+/// the pattern binds in `scope`: `MERGE (z:Z {k:1}) ON CREATE SET z.n = 0 ON
+/// MATCH SET z.n = z.n + 1` reads z (it read null: the clauses were evaluated
+/// with no variable bound). One SET clause at a time (SONNY-3242,
+/// `write_scope.applySetGroups`).
+///
+/// CANARY: REQ=REQ-SONNY-3320-MERGE-CLAUSE-ACTIONS; FEATURE="WriteScope"; ASPECT=MergeActionsPerClause; STATUS=TESTED; TEST=tests/test_sonny_write_allowlist_r4b.zig; OWNER=engine; UPDATED=2026-09-28
+/// SONNY-3320: the actions belong to the last MERGE clause (the parser ends
+/// a run of MERGE clauses at the first action), so ON CREATE SET runs when
+/// that clause created its pattern (`clause_created`) and ON MATCH SET when
+/// it matched it, on whichever variable they name. They were keyed on each
+/// target variable's own state, so `MERGE (v0:W {k: 1}) MERGE (v1:W {k: 2})
+/// ON CREATE SET v0.ref = ...` wrote nothing when v1 was created and v0
+/// matched, and wrote when v0 was created and v1 matched.
+fn applyMergeActions(
+    allocator: std.mem.Allocator,
+    store: *graph_store.GraphStore,
+    m: ast.MergeStatement,
+    scope: *WriteScope,
+    clause_created: bool,
+) !void {
+    try write_scope.applySetGroups(allocator, store, m.on_create, m.on_create_ends, scope, MergeBranch{ .fires = clause_created });
+    try write_scope.applySetGroups(allocator, store, m.on_match, m.on_match_ends, scope, MergeBranch{ .fires = !clause_created });
+}
+
+/// The node the statement's caller bound to the endpoint variable `name`: a
+/// procedure binding (`context.bindings`) or the MATCH row the dispatcher
+/// threads through the query parameters. Null when the caller bound nothing.
+fn endpointBoundByCaller(context: ExecutionContext, name: []const u8) ?u64 {
+    if (context.bindings) |bindings| {
+        if (bindings.get(name)) |binding| {
+            switch (binding) {
+                .node_id => |nid| return nid,
+                .edge_id => {},
+            }
+        }
+    }
+    return lookupNodeIdInQueryParams(context, name);
+}
+
+/// SONNY-2686: refuse a MERGE, BEFORE it writes anything, when any node
+/// pattern it would match inline (a chain's node, or a relationship endpoint
+/// its caller did not bind) is matched only by nodes the session may not see,
+/// or (P12) when a relationship between two endpoints that already exist is
+/// matched only by edges the session may not see.
+///
+/// The chains run in order, and an endpoint that does not exist is created
+/// before the next one is matched, so the inline refusal alone could leave the
+/// first half of a pattern behind a refused statement: an aborted statement's
+/// engine txn discards what it wrote, but the in-memory store keeps it. The
+/// inline checks stay, for the answer this pre-pass cannot give (a pattern an
+/// earlier chain's CREATE makes match a visible node); this pass can only be
+/// stricter than they are, never looser.
+fn refuseHiddenMergeMatches(
+    allocator: std.mem.Allocator,
+    read_store: *graph_store.GraphStore,
+    target_graph: []const u8,
+    filter_tenant: ?[]const u8,
+    m: ast.MergeStatement,
+    context: ExecutionContext,
+    visibility: *MergeVisibility,
+) !void {
+    // Nothing can be hidden from this session.
+    if (!visibility.rls_may_deny) return;
+    // The variables this pass has resolved, as the statement will bind them:
+    // the existing node a pattern matches, or null when the statement creates
+    // it (no edge can join a node that does not exist yet).
+    var known = std.StringHashMap(?u64).init(allocator);
+    defer known.deinit();
+    // SONNY-3240: a chain's property map sees what the chains before it bound,
+    // as `executeMerge` evaluates it: here, the existing nodes they matched (a
+    // reference to one the statement will create reads null, and matches
+    // nothing: the inline check in `mergeNodeChain` answers for it).
+    var scope = WriteScope.init(allocator, context.query_param_names, context.query_param_values);
+    defer scope.deinit();
+    for (m.pattern.chains) |chain| {
+        // A chain's node is always matched (`mergeNodeChain`).
+        if (chain.head) |node_pattern| {
+            const id = try preResolveMergeNode(allocator, read_store, target_graph, filter_tenant, node_pattern, &scope, visibility);
+            if (node_pattern.name) |name| try known.put(name, id);
+            if (node_pattern.name) |name| if (id) |found| try scope.bindNode(read_store, name, found);
+        }
+        for (chain.hops) |hop| {
+            const source = try preResolveMergeEndpoint(allocator, read_store, target_graph, filter_tenant, hop.left, context, &scope, visibility, &known);
+            const target = try preResolveMergeEndpoint(allocator, read_store, target_graph, filter_tenant, hop.right, context, &scope, visibility, &known);
+            // P12: both endpoints exist, so the edge `mergeRelationshipHop`
+            // would bind exists already: refuse now when only hidden edges
+            // match, before an earlier chain writes anything.
+            if (source != null and target != null) {
+                _ = try visibility.bindEdge(findExistingEdge(read_store, target_graph, filter_tenant, source.?, target.?, hop.rel.types, visibility), hop.rel);
+            }
+            for ([_]struct { ?[]const u8, ?u64 }{ .{ hop.left.name, source }, .{ hop.right.name, target } }) |end| {
+                if (end[0]) |name| if (end[1]) |found| {
+                    if (known.contains(name)) try scope.bindNode(read_store, name, found);
+                };
+            }
+        }
+    }
+}
+
+/// The existing node a MERGE node pattern binds, or null when it creates one;
+/// a pattern only hidden nodes match refuses the statement.
+fn preResolveMergeNode(
+    allocator: std.mem.Allocator,
+    read_store: *graph_store.GraphStore,
+    target_graph: []const u8,
+    filter_tenant: ?[]const u8,
+    node_pattern: ast.NodePattern,
+    scope: *const WriteScope,
+    visibility: *MergeVisibility,
+) !?u64 {
+    var prop_arena = std.heap.ArenaAllocator.init(allocator);
+    defer prop_arena.deinit();
+    const evaluated_props = try evaluatePatternPropsIn(prop_arena.allocator(), node_pattern.props, scope.env(prop_arena.allocator()));
+    return try visibility.bindNode(findMergeMatch(read_store, target_graph, filter_tenant, node_pattern.labels, evaluated_props, visibility), node_pattern.labels, evaluated_props);
+}
+
+/// `resolveMergeEndpoint`'s answer, without creating anything: a variable an
+/// earlier pattern of this statement bound, then one the caller bound (not
+/// re-checked: the clause that bound it applied the session's visibility),
+/// then an inline match of a node the session may see. Null when the
+/// statement would create the endpoint, or refuse it as an unbound variable.
+fn preResolveMergeEndpoint(
+    allocator: std.mem.Allocator,
+    read_store: *graph_store.GraphStore,
+    target_graph: []const u8,
+    filter_tenant: ?[]const u8,
+    endpoint: ast.NodePattern,
+    context: ExecutionContext,
+    scope: *const WriteScope,
+    visibility: *MergeVisibility,
+    known: *std.StringHashMap(?u64),
+) !?u64 {
+    if (endpoint.name) |name| {
+        if (known.get(name)) |id| return id;
+        if (endpointBoundByCaller(context, name)) |nid| return nid;
+    }
+    // Nothing to match on (`resolveMergeEndpoint` refuses it).
+    if (endpoint.labels.len == 0 and endpoint.props == null) return null;
+    const id = try preResolveMergeNode(allocator, read_store, target_graph, filter_tenant, endpoint, scope, visibility);
+    if (endpoint.name) |name| try known.put(name, id);
+    return id;
 }
 
 /// Resolve ONE endpoint of a MERGE relationship pattern to a concrete node id.
@@ -3473,11 +3610,17 @@ fn mergeNodeChain(
 /// Resolution order: variables bound by an earlier chain of THIS statement,
 /// then `context.bindings`, then the MATCH-row parameters the dispatcher
 /// propagates (query_execution.zig:1911-1920), then an inline label/property
-/// match. An endpoint that still does not resolve but DOES carry a label or
-/// properties is CREATED — that is the match-or-create contract MERGE promises
-/// for the whole pattern. A bare, unbound variable (`(zz)`) carries nothing to
-/// match or create on, so the statement is REJECTED instead of silently
-/// committing an empty success (ENG-3903 silent write loss).
+/// match of a node the session may see (SONNY-2686: a pattern that only hidden
+/// nodes match refuses the statement). An endpoint that still does not resolve
+/// but DOES carry a label or properties is CREATED — that is the
+/// match-or-create contract MERGE promises for the whole pattern. A bare,
+/// unbound variable (`(zz)`) carries nothing to match or create on, so the
+/// statement is REJECTED instead of silently committing an empty success
+/// (ENG-3903 silent write loss).
+///
+/// A bound endpoint is not re-checked for visibility: the clause that bound it
+/// (the MATCH that produced the row, or an earlier chain of this MERGE) already
+/// applied the session's visibility, or created the node itself.
 // CANARY: REQ=REQ-MERGE-RELPROPS-001; FEATURE="MergeRelationship"; ASPECT=UnresolvableEndpointFailsLoud; STATUS=TESTED; TEST=tests/test_merge_relationship_bugs.zig; OWNER=execution; UPDATED=2026-08-24
 fn resolveMergeEndpoint(
     allocator: std.mem.Allocator,
@@ -3488,18 +3631,12 @@ fn resolveMergeEndpoint(
     node_pattern: ast.NodePattern,
     context: ExecutionContext,
     merged_vars: *std.StringHashMap(u64),
+    scope: *const WriteScope,
+    visibility: *MergeVisibility,
 ) !u64 {
     if (node_pattern.name) |name| {
         if (merged_vars.get(name)) |bound_id| return bound_id;
-        if (context.bindings) |bindings| {
-            if (bindings.get(name)) |binding| {
-                switch (binding) {
-                    .node_id => |nid| return nid,
-                    .edge_id => {},
-                }
-            }
-        }
-        if (lookupNodeIdInQueryParams(context, name)) |nid| return nid;
+        if (endpointBoundByCaller(context, name)) |nid| return nid;
     }
 
     // Nothing to match on and nothing bound: the variable is undefined.
@@ -3513,37 +3650,42 @@ fn resolveMergeEndpoint(
 
     var prop_arena = std.heap.ArenaAllocator.init(allocator);
     defer prop_arena.deinit();
-    const evaluated_props = try evaluatePatternProps(prop_arena.allocator(), node_pattern.props, context);
+    // SONNY-3240: in the scope of the chains before this one.
+    const evaluated_props = try evaluatePatternPropsIn(prop_arena.allocator(), node_pattern.props, scope.env(prop_arena.allocator()));
 
-    if (try findFirstMatchingNodeId(
-        allocator,
+    if (try visibility.bindNode(findMergeMatch(
         read_store,
         target_graph,
         filter_tenant,
         node_pattern.labels,
         evaluated_props,
-    )) |matched_id| {
+        visibility,
+    ), node_pattern.labels, evaluated_props)) |matched_id| {
         if (node_pattern.name) |name| try merged_vars.put(name, matched_id);
         return matched_id;
     }
 
     // No match — create the endpoint (MERGE creates what it cannot match).
     const node_id = try store.createNodeWithGraph(node_pattern.labels, target_graph);
+    try logMergeCreatedNode(allocator, node_id, target_graph);
     ensureAutoIndexes(allocator, node_pattern.labels);
-    if (node_pattern.props) |props| {
-        const env = envFromContext(allocator, context);
+    if (evaluated_props) |props| {
         for (props) |prop| {
-            const value = try eval.evalExpr(allocator, prop.value.*, env);
-            try property_mutation.setNodePropertyFromValue(allocator, store, node_pattern.labels, node_id, prop.key, value);
+            try property_mutation.setNodePropertyFromValue(allocator, store, node_pattern.labels, node_id, prop.key, prop.value);
         }
     }
     if (node_pattern.name) |name| try merged_vars.put(name, node_id);
     return node_id;
 }
 
+/// What `mergeRelationshipHop` merged: its endpoints and its relationship.
+const MergedHop = struct { source_id: u64, target_id: u64, edge_id: u64, created: bool };
+
 /// Merge ONE relationship hop of a MERGE pattern: resolve both endpoints, then
-/// match-or-create the edge and persist inline rel props / the SET clauses that
-/// target the relationship variable.
+/// match-or-create the edge and persist its inline properties. SONNY-3240:
+/// the endpoints' and the relationship's property maps are evaluated in
+/// `scope`; the SET clauses on the relationship variable run after every
+/// chain (`applyMergeActions`).
 // CANARY: REQ=REQ-MERGE-RELPROPS-001; FEATURE="MergeRelationship"; ASPECT=MatchBoundEndpoints; STATUS=TESTED; TEST=tests/test_merge_relationship_bugs.zig; OWNER=execution; UPDATED=2026-08-24
 fn mergeRelationshipHop(
     allocator: std.mem.Allocator,
@@ -3552,35 +3694,38 @@ fn mergeRelationshipHop(
     target_graph: []const u8,
     filter_tenant: ?[]const u8,
     hop: ast.Hop,
-    m: ast.MergeStatement,
     context: ExecutionContext,
     merged_vars: *std.StringHashMap(u64),
-) !void {
+    scope: *const WriteScope,
+    visibility: *MergeVisibility,
+) !MergedHop {
     const rel_types = hop.rel.types;
 
-    const source_id = try resolveMergeEndpoint(allocator, store, read_store, target_graph, filter_tenant, hop.left, context, merged_vars);
-    const target_id = try resolveMergeEndpoint(allocator, store, read_store, target_graph, filter_tenant, hop.right, context, merged_vars);
+    const source_id = try resolveMergeEndpoint(allocator, store, read_store, target_graph, filter_tenant, hop.left, context, merged_vars, scope, visibility);
+    const target_id = try resolveMergeEndpoint(allocator, store, read_store, target_graph, filter_tenant, hop.right, context, merged_vars, scope, visibility);
 
     const edge_type = if (rel_types.len > 0) rel_types[0] else "";
-    const existing_edge = findExistingEdgeId(
+    // P12: an edge the session may not see is never bound; when only hidden
+    // edges match, the statement is refused (`refuseHiddenMergeMatches`
+    // already refused it before any write when both endpoints existed).
+    const existing_edge = try visibility.bindEdge(findExistingEdge(
         read_store,
         target_graph,
         filter_tenant,
         source_id,
         target_id,
         rel_types,
-    );
+        visibility,
+    ), hop.rel);
 
     // Pick the edge_id we will operate on: existing one (ON MATCH path)
-    // or a freshly created one (ON CREATE path). Either way we then
-    // apply inline rel props (create-only) plus the appropriate
-    // on_create/on_match SET clauses targeting the relationship
-    // variable.
+    // or a freshly created one (ON CREATE path).
     const created_new = existing_edge == null;
     const edge_id: u64 = if (existing_edge) |eid|
         eid
     else
         try store.createEdgeWithGraph(source_id, target_id, edge_type, target_graph);
+    if (created_new) try logMergeCreatedEdge(allocator, edge_id, target_graph);
 
     // REQ=REQ-MERGE-RELPROPS-001 ASPECT=InlineRelProps (Bug B1):
     // Inline `[:REL {key: val}]` literals are applied only on the
@@ -3589,7 +3734,7 @@ fn mergeRelationshipHop(
     // 861-873, 1249-1257, 1830-1838, 2058-2070).
     if (created_new) {
         if (hop.rel.props) |props| {
-            const env = envFromContext(allocator, context);
+            const env = scope.env(allocator);
             for (props) |prop| {
                 const value = try eval.evalExpr(allocator, prop.value.*, env);
                 try property_mutation.setEdgePropertyFromValue(allocator, store, edge_type, edge_id, prop.key, value);
@@ -3597,21 +3742,22 @@ fn mergeRelationshipHop(
         }
     }
 
-    // REQ=REQ-MERGE-RELPROPS-001 ASPECT=OnCreateSet/BareSetOnRelationship
-    // (Bugs B2, B3): apply SET items targeting the relationship
-    // variable. Bare SET (parser flag `set_is_bare`) duplicates the
-    // clauses into both on_create and on_match by construction
-    // (parser.zig:4575-4586), so picking the right list per branch
-    // and routing only items whose target binding name matches the
-    // rel variable name is correct for all three SET forms.
-    const rel_set_items: []ast.SetClause = if (created_new) m.on_create else m.on_match;
-    try applySetClausesToEdge(allocator, store, hop.rel.name, edge_type, edge_id, rel_set_items, context);
+    return .{ .source_id = source_id, .target_id = target_id, .edge_id = edge_id, .created = created_new };
 }
 
 // CANARY: REQ=REQ-MULTI-GRAPH-020; FEATURE="MultiGraphIsolation"; ASPECT=ExecuteMerge; STATUS=TESTED; TEST=geodetestlab/specs/multi_graph.yml; OWNER=engine; UPDATED=2025-12-22
 // CANARY: REQ=REQ-PERF-LABEL-INDEX-004; FEATURE="LabelBasedIndex"; ASPECT=MergeOptimization; STATUS=IMPL; OWNER=perf; UPDATED=2026-01-28
 // Issue #391: Optimized MERGE using label index instead of O(n) full table scan
 pub fn executeMerge(allocator: std.mem.Allocator, m: ast.MergeStatement, current_graph: ?[]const u8, context: ExecutionContext) !ExecutionResult {
+    // SONNY-2686: run the statement under its own context. Row-level security
+    // reads the ACTIVE context (`passesRLSFilter`), while the tenant filter
+    // below comes from `context`; `executeStatementWithContext` installs the
+    // context only when it carries a session, so without this a MERGE could
+    // match with no RLS identity at all. `executeQueryWithContext` does the
+    // same for every query (and so for DELETE / SET target resolution).
+    const prev_active_ctx = execution.pushActiveContext(&context);
+    defer execution.popActiveContext(prev_active_ctx);
+
     // Cluster write routing: in cluster mode the MERGE is ordered through Raft on
     // the leader and never applied to a single node's local store. A follower
     // fails closed (error.ClusterNotLeader — clients retry the leader); the leader
@@ -3652,7 +3798,9 @@ pub fn executeMerge(allocator: std.mem.Allocator, m: ast.MergeStatement, current
             if (ad.beginSessionTxnLazy(target_graph)) |_| {
                 session_txn_covers_us = true;
             } else |err| switch (err) {
-                error.GraphNotFound, error.NestedSessionTxn, error.NestedStatementTxn => {},
+                // SONNY-2823: no session slot on the thread (an embedded
+                // caller, not a transport request): per-statement txns.
+                error.GraphNotFound, error.NestedSessionTxn, error.NestedStatementTxn, error.NoSessionEngineTxnSlot => {},
                 else => return err,
             }
         }
@@ -3676,10 +3824,21 @@ pub fn executeMerge(allocator: std.mem.Allocator, m: ast.MergeStatement, current
     // CANARY: REQ=REQ-PROPERTY-WRITE-ATOMICITY; FEATURE="PropertyStorage"; ASPECT=MergePrePass; STATUS=TESTED; TEST=tests/test_property_write_atomicity.zig; OWNER=engine; UPDATED=2026-08-25
     {
         const precheck_env = envFromContext(allocator, context);
-        try write_precheck.checkPatternWritable(allocator, m.pattern, precheck_env);
+        // SONNY-3319 (round 4b-1 review I-4): with the labels ON CREATE
+        // (and a bare SET, which the parser copies into both lists) gives a
+        // node the MERGE creates. ON MATCH's labels are checked against the
+        // matched node's vectors where it is bound (`applySetGroups`).
+        try write_precheck.checkPatternWritableWithSet(allocator, m.pattern, precheck_env, &.{m.on_create});
         try write_precheck.checkSetClausesWritable(allocator, m.on_create, precheck_env, null, &.{});
         try write_precheck.checkSetClausesWritable(allocator, m.on_match, precheck_env, null, &.{});
     }
+
+    // SONNY-2686: every node MERGE matches must be one the session may see; a
+    // pattern only hidden nodes match refuses the statement, and it is refused
+    // before any chain writes.
+    var visibility = MergeVisibility.init(allocator, filter_tenant, target_graph, context);
+    defer visibility.deinit();
+    try refuseHiddenMergeMatches(allocator, read_store, target_graph, filter_tenant, m, context, &visibility);
 
     // MERGE is like a CREATE but checks if the pattern already exists.
     // ENG-3903: EVERY chain of the pattern runs, in clause order, and the node
@@ -3693,7 +3852,18 @@ pub fn executeMerge(allocator: std.mem.Allocator, m: ast.MergeStatement, current
     var merged_nodes = std.ArrayList(MergedNodeBinding).empty;
     defer merged_nodes.deinit(allocator);
 
-    for (m.pattern.chains) |chain| {
+    // SONNY-3240: the variables the chains bind, for the chains after them,
+    // the SET clauses and the RETURN; and whether the MERGE created or matched
+    // each one (ON CREATE SET or ON MATCH SET).
+    var scope = WriteScope.init(allocator, context.query_param_names, context.query_param_values);
+    defer scope.deinit();
+    // SONNY-3320: whether the last MERGE clause created any part of its
+    // pattern (its actions' branch).
+    const last_clause_start = m.last_clause_start orelse 0;
+    var clause_created = false;
+
+    for (m.pattern.chains, 0..) |chain, chain_index| {
+        const in_last_clause = chain_index >= last_clause_start;
         if (chain.head) |node_pattern| {
             const binding = try mergeNodeChain(
                 allocator,
@@ -3702,31 +3872,48 @@ pub fn executeMerge(allocator: std.mem.Allocator, m: ast.MergeStatement, current
                 target_graph,
                 filter_tenant,
                 node_pattern,
-                m,
-                context,
+                &scope,
+                &visibility,
             );
-            if (node_pattern.name) |var_name| try merged_vars.put(var_name, binding.node_id);
+            if (in_last_clause and binding.created) clause_created = true;
+            if (node_pattern.name) |var_name| {
+                try merged_vars.put(var_name, binding.node_id);
+                try scope.bindNode(store, var_name, binding.node_id);
+            }
             try merged_nodes.append(allocator, binding);
         } else {
             // GAP #58: edge MERGE patterns (e.g. MATCH (a), (b) MERGE (a)-[:REL]->(b))
             // REQ=REQ-MERGE-RELPROPS-001 — endpoint resolution for MATCH-bound
-            // vars, and persistence of inline rel props / on_create / on_match /
-            // bare SET on the merged relationship variable.
+            // vars, and persistence of inline rel props; the SET clauses on
+            // the merged relationship variable run after every chain.
             for (chain.hops) |hop| {
-                try mergeRelationshipHop(
+                const merged = try mergeRelationshipHop(
                     allocator,
                     store,
                     read_store,
                     target_graph,
                     filter_tenant,
                     hop,
-                    m,
                     context,
                     &merged_vars,
+                    &scope,
+                    &visibility,
                 );
+                // The endpoints this MERGE matched or created (not one its
+                // caller bound), and the relationship.
+                for ([_]struct { ?[]const u8, u64 }{ .{ hop.left.name, merged.source_id }, .{ hop.right.name, merged.target_id } }) |end| {
+                    const name = end[0] orelse continue;
+                    if (merged_vars.contains(name)) try scope.bindNode(store, name, end[1]);
+                }
+                if (in_last_clause and merged.created) clause_created = true;
+                if (hop.rel.name) |rel_name| try scope.bindEdge(store, rel_name, merged.edge_id);
             }
         }
     }
+
+    // SONNY-3240: ON CREATE SET, ON MATCH SET and a bare SET, with every
+    // variable of the pattern bound.
+    try applyMergeActions(allocator, store, m, &scope, clause_created);
 
     // Return the merged node(s) if there's a RETURN clause
     if (m.return_clause) |ret| {
@@ -3736,10 +3923,12 @@ pub fn executeMerge(allocator: std.mem.Allocator, m: ast.MergeStatement, current
             var rows = try allocator.alloc([]Value, 1);
             var row = try allocator.alloc(Value, ret.items.len);
 
-            // Create environment with the merged node(s) and the 'created' flag.
+            // The environment: the 'created' flag, then every variable the
+            // pattern bound, as written (SONNY-3240), then the parameters.
             // `created` reflects the LAST merged node chain (with the single-chain
             // form — the only shape that reached here before ENG-3903 — this is
             // exactly the previous behaviour).
+            try scope.refresh(store);
             var env_names = std.ArrayList([]const u8).empty;
             defer env_names.deinit(allocator);
             var env_values = std.ArrayList(Value).empty;
@@ -3747,33 +3936,21 @@ pub fn executeMerge(allocator: std.mem.Allocator, m: ast.MergeStatement, current
 
             try env_names.append(allocator, "created");
             try env_values.append(allocator, Value{ .Bool = merged_nodes.items[merged_nodes.items.len - 1].created });
-
-            for (merged_nodes.items, 0..) |binding, bi| {
-                const var_name = binding.pattern.name orelse continue;
-                // A variable merged more than once keeps its LAST binding.
-                var rebound = false;
-                for (merged_nodes.items[bi + 1 ..]) |later| {
-                    if (later.pattern.name) |later_name| {
-                        if (std.mem.eql(u8, later_name, var_name)) {
-                            rebound = true;
-                            break;
-                        }
-                    }
-                }
-                if (rebound) continue;
-                const node = (store.nodes.getOrHydratePtr(binding.node_id) catch null) orelse return error.NodeNotFound;
-                try env_names.append(allocator, var_name);
-                try env_values.append(allocator, Value{ .Node = node });
-            }
+            try env_names.appendSlice(allocator, scope.names.items);
+            try env_values.appendSlice(allocator, scope.values.items);
 
             const env = Env{
                 .allocator = allocator,
                 .names = env_names.items,
                 .values = env_values.items,
+                .param_names = context.query_param_names,
+                .param_values = context.query_param_values,
             };
 
             for (ret.items, 0..) |item, i| {
                 row[i] = try eval.evalExpr(allocator, item.expr, env);
+                // SONNY-3322: the scope's copy of a relationship dies with it.
+                try scope.residentEdges(allocator, store, &row[i]);
             }
 
             rows[0] = row;
@@ -3849,6 +4026,19 @@ fn clusterReplicateDelete(
     const targets = try resolveDeleteTargets(allocator, d, match_pattern, context);
     defer targets.deinit(allocator);
 
+    // CANARY: REQ=REQ-SONNY-3044-CLUSTER-DELETE-RETURN; FEATURE="DistributedCluster"; ASPECT=DeleteReturnBeforePropose; STATUS=TESTED; TEST=tests/test_cluster_replicable_mutations.zig; OWNER=distributed; UPDATED=2026-09-27
+    // SONNY-3044: the RETURN, computed over the rows the statement matches
+    // before anything is proposed, exactly as a standalone server computes
+    // it (`deleteStatementReturn`). The leader returned `deleted_count`
+    // whatever the RETURN asked for, so a cluster answered differently from
+    // a standalone server; a RETURN it refuses (a deleted element) is refused
+    // before the delete is proposed.
+    var returned: ?ExecutionResult = null;
+    errdefer if (returned) |*r| r.deinit(allocator);
+    if (d.return_clause) |rc| if (rc.items.len != 0) {
+        returned = try deleteStatementReturn(allocator, d, match_pattern, rc, current_graph, context, targets);
+    };
+
     // Resolved, deduplicated id sets to encode into the GDEL payload.
     var node_ids = std.ArrayList(u64).empty;
     defer node_ids.deinit(allocator);
@@ -3881,8 +4071,6 @@ fn clusterReplicateDelete(
         edge_ids.items.len > cluster_replication.MAX_DELETE_IDS)
         return error.ClusterWriteNotReplicable;
 
-    const deleted_count = node_ids.items.len + edge_ids.items.len;
-
     const payload = cluster_replication.serializeDelete(
         allocator,
         filter_graph,
@@ -3911,20 +4099,7 @@ fn clusterReplicateDelete(
     // budget — never for a committed-but-apply-lagged entry.
     try coord.waitForCommittedThenApplied(idx, 5000);
 
-    // RETURN clause: mirror the local path's "deleted_count" projection.
-    if (d.return_clause) |_| {
-        var columns = try allocator.alloc([]const u8, 1);
-        columns[0] = try allocator.dupe(u8, "deleted_count");
-        var rows = try allocator.alloc([]Value, 1);
-        var row = try allocator.alloc(Value, 1);
-        row[0] = Value{ .Int = @intCast(deleted_count) };
-        rows[0] = row;
-        return ExecutionResult{
-            .columns = columns,
-            .rows = rows,
-            .flags = std.ArrayList([]const u8).empty,
-        };
-    }
+    if (returned) |r| return r;
 
     return ExecutionResult{
         .columns = try allocator.alloc([]const u8, 0),
@@ -4075,21 +4250,48 @@ fn clusterReplicateMatchSet(
         var remove_labels = std.ArrayList([]const u8).empty;
         errdefer remove_labels.deinit(allocator);
 
-        for (q.set_clauses) |sc| {
-            switch (sc) {
-                .Property => |prop| {
-                    const val = eval.evalExpr(allocator, prop.value, env) catch
-                        return error.ClusterWriteNotReplicable;
-                    // Statement-atomicity pre-pass: refuse before PROPOSING.
-                    // CANARY: REQ=REQ-PROPERTY-WRITE-ATOMICITY; FEATURE="PropertyStorage"; ASPECT=ClusterSetPrePass; STATUS=IMPL; OWNER=engine; UPDATED=2026-08-25
-                    try write_precheck.checkPropertyWritable(allocator, &.{}, prop.target.property, val);
-                    const pv = clusterPropValue(val) orelse return error.ClusterWriteNotReplicable;
-                    try set_props.append(allocator, .{ .key = prop.target.property, .value = pv });
-                },
-                .Labels => |ls| {
-                    for (ls.labels) |label| try add_labels.append(allocator, label);
-                },
-                .AllProperties => unreachable, // rejected in the validation pass above
+        // SONNY-3242: one SET clause at a time. Every value of a clause is
+        // evaluated against the node as it stood before the clause (an overlay
+        // the leader owns, which then takes the clause's values for the next
+        // clause), so `SET n.a = n.b, n.b = n.a` swaps and `SET n.a = 1 SET
+        // n.b = n.a` reads the new a, as on a single node.
+        const overlay = try clusterMergeOverlay(match_prop_arena.allocator(), node, node.labels, null);
+        const overlay_names = [_][]const u8{match_var};
+        const overlay_values = [_]Value{Value{ .Node = overlay }};
+        const set_env = Env{
+            .allocator = allocator,
+            .names = &overlay_names,
+            .values = &overlay_values,
+            .param_names = context.query_param_names,
+            .param_values = context.query_param_values,
+        };
+        var group_values: std.ArrayList(Value) = .empty;
+        defer group_values.deinit(allocator);
+        var groups = ast.SetClauseGroups.init(q.set_clauses, q.set_clause_ends);
+        while (groups.next()) |group| {
+            group_values.clearRetainingCapacity();
+            for (group) |sc| {
+                try group_values.append(allocator, switch (sc) {
+                    .Property => |prop| eval.evalExpr(allocator, prop.value, set_env) catch
+                        return error.ClusterWriteNotReplicable,
+                    else => .Null,
+                });
+            }
+            for (group, group_values.items) |sc, val| {
+                switch (sc) {
+                    .Property => |prop| {
+                        // Statement-atomicity pre-pass: refuse before PROPOSING.
+                        // CANARY: REQ=REQ-PROPERTY-WRITE-ATOMICITY; FEATURE="PropertyStorage"; ASPECT=ClusterSetPrePass; STATUS=IMPL; OWNER=engine; UPDATED=2026-08-25
+                        try write_precheck.checkPropertyWritable(allocator, &.{}, prop.target.property, val);
+                        const pv = clusterPropValue(val) orelse return error.ClusterWriteNotReplicable;
+                        try set_props.append(allocator, .{ .key = prop.target.property, .value = pv });
+                        try overlay.properties.put(prop.target.property, property_codec.valueToPropertyValue(match_prop_arena.allocator(), val) catch return error.ClusterWriteNotReplicable);
+                    },
+                    .Labels => |ls| {
+                        for (ls.labels) |label| try add_labels.append(allocator, label);
+                    },
+                    .AllProperties => unreachable, // rejected in the validation pass above
+                }
             }
         }
         for (q.remove_clauses) |rc| {
@@ -4225,6 +4427,8 @@ fn clusterReplicateMatchCreate(
     if (q.with_clause != null or q.filter_clause != null) return error.ClusterWriteNotReplicable;
     if (q.set_clauses.len > 0 or q.remove_clauses.len > 0) return error.ClusterWriteNotReplicable;
     if (q.delete_items.len > 0) return error.ClusterWriteNotReplicable;
+    // SONNY-3043: a MERGE beside the CREATE would be dropped.
+    if (q.merge_statement != null) return error.ClusterWriteNotReplicable;
     // A MATCH…CREATE without a CREATE pattern is malformed for this slice —
     // fail closed up front (NOT after MATCH resolution, where a zero-match
     // chain would silently no-op instead).
@@ -4432,6 +4636,249 @@ pub fn executeClusterMatchCreateIfNeeded(
     }
 }
 
+/// SONNY-2694: delete one statement's resolved nodes, then its resolved edges,
+/// and return how many were deleted (`executeDelete`, and a DELETE after a SET
+/// or REMOVE, `executeMatchDeleteQuery`). A node that still has an edge refuses
+/// the whole statement, before anything is deleted, unless `detach`, which
+/// deletes its edges with it. Called with the graph's write lock held.
+/// A DELETE without DETACH refuses a node that still has an edge
+/// (NodeHasEdges), before it deletes anything. SONNY-3042: a statement that
+/// writes before it deletes checks this before its first write, so a refused
+/// statement changes nothing.
+pub fn checkDeleteEligible(allocator: std.mem.Allocator, node_ids: []const u64, detach: bool) !void {
+    if (detach) return;
+    // GAP-0511: DELETE stages IDs before mutating, so cloning a QueryReadSession
+    // adds O(total graph size) overhead without improving correctness under the
+    // graph write lock.
+    const read_store: *graph_store.GraphStore = graph_store.getWritableGlobalStore(allocator);
+    for (node_ids) |node_id| {
+        // ENG-3983: the CHECKED readers — an unreadable adjacency must
+        // NOT be mistaken for "this node has no edges" and let a plain
+        // DELETE through the GQL edge guard.
+        const has_outgoing = (try read_store.getOutgoingEdgeIdsChecked(node_id)).len > 0;
+        const has_incoming = (try read_store.getIncomingEdgeIdsChecked(node_id)).len > 0;
+        if (has_outgoing or has_incoming) {
+            return error.NodeHasEdges;
+        }
+    }
+}
+
+pub fn deleteElements(allocator: std.mem.Allocator, node_ids: []const u64, edge_ids: []const u64, detach: bool, current_graph: ?[]const u8) !usize {
+    const store = graph_store.getWritableGlobalStore(allocator);
+    // GAP-0511: DELETE stages IDs before mutating, so cloning a QueryReadSession
+    // adds O(total graph size) overhead without improving correctness under the
+    // graph write lock.
+    const read_store: *graph_store.GraphStore = store;
+    var deleted_count: usize = 0;
+
+    try checkDeleteEligible(allocator, node_ids, detach);
+
+    // ENG-3983: edge ids removed as incident edges of a DETACH'd node in THIS
+    // statement. The relationship loop below needs them to tell "already
+    // deleted here" (fine) apart from "resolved by the MATCH but its body
+    // cannot be read back" (a silent no-op — fail closed instead).
+    var detached_edge_ids = std.ArrayList(u64).empty;
+    defer detached_edge_ids.deinit(allocator);
+
+    // Delete the resolved nodes
+    for (node_ids) |node_id| {
+        // SONNY-1841: poll cancellation BETWEEN node deletes — an abandoned
+        // DETACH DELETE over a large match set must release the write lock
+        // promptly, not run to the deadline (no-op without a write scope).
+        try write_budget.check();
+        // A4b: drop the node's fulltext postings BEFORE the store delete,
+        // while its labels are still readable (covering-index lookup is
+        // keyed by label). Runs on the executor/connection thread
+        // (executeDelete is never invoked from bulkMergeNode / worker
+        // threads — verified). Cheap-exits when no FTS index covers the
+        // labels. Graph passed explicitly from current_graph.
+        if ((read_store.nodes.getOrHydratePtr(node_id) catch null)) |node_ptr| {
+            fts_index_ops.maintainFulltextOnWrite(allocator, current_graph, node_id, node_ptr.labels, .delete) catch |err| {
+                log.warn("fts maintain (DELETE) failed", &.{
+                    Attr.uint("node_id", node_id),
+                    Attr.string("error", @errorName(err)),
+                });
+            };
+        }
+
+        if (detach) {
+            // P8: Use adjacency indexes instead of full edge scan.
+            // Collect edge IDs first since deleteEdgeNoSave mutates the
+            // adjacency lists whose slices we are reading.
+            var edges_to_delete = std.ArrayList(u64).empty;
+            defer edges_to_delete.deinit(allocator);
+            // ENG-3983: CHECKED reads — an adjacency the engine cannot serve
+            // must abort the DETACH, never be read as "no incident edges"
+            // (which deletes the node and orphans every one of them).
+            for (try read_store.getOutgoingEdgeIdsChecked(node_id)) |eid| {
+                try edges_to_delete.append(allocator, eid);
+            }
+            for (try read_store.getIncomingEdgeIdsChecked(node_id)) |eid| {
+                // Avoid duplicating self-loop edges already collected above
+                var already = false;
+                for (edges_to_delete.items) |existing| {
+                    if (existing == eid) {
+                        already = true;
+                        break;
+                    }
+                }
+                if (!already) {
+                    try edges_to_delete.append(allocator, eid);
+                }
+            }
+            for (edges_to_delete.items) |edge_id| {
+                // SONNY-1841: a high-degree DETACH can spin here for a long
+                // time — poll cancellation between incident-edge deletes.
+                try write_budget.check();
+                // ENG-3983: an incident edge whose body cannot be resolved
+                // cannot be durably deleted (`deleteEdge` needs its endpoint
+                // + edge slots), so proceeding would leave it DANGLING once
+                // the node goes. Refuse the whole DETACH instead.
+                if (store.getEdgePtr(edge_id) == null) return error.IncidentEdgeUnresolvable;
+                store.deleteEdge(edge_id);
+                try detached_edge_ids.append(allocator, edge_id);
+            }
+        }
+        store.deleteNode(node_id);
+        if (store.getNodePtr(node_id) == null) {
+            deleted_count += 1;
+        }
+    }
+
+    // GAP #56: relationship-targeted DELETE. The ids come from the same
+    // resolved match set, so a WHERE over the relationship variable is
+    // honoured here exactly as it is for nodes.
+    for (edge_ids) |edge_id| {
+        // SONNY-1841: poll cancellation between edge deletes too.
+        try write_budget.check();
+        if (store.getEdgePtr(edge_id) == null) {
+            // Already gone (removed as an incident edge of a DETACH'd node
+            // above) — do not double-count it.
+            var already_detached = false;
+            for (detached_edge_ids.items) |done| {
+                if (done == edge_id) {
+                    already_detached = true;
+                    break;
+                }
+            }
+            if (already_detached) continue;
+            // ENG-3983: the MATCH resolved this edge id, so the row is NOT
+            // an honestly-empty match — the body simply cannot be read back,
+            // and `deleteEdge` would be a silent no-op. Fail closed rather
+            // than report success for a delete that did not happen. (An
+            // empty match resolves zero edge ids and never reaches here, so
+            // `MATCH … DELETE r` over no rows stays a successful 00000.)
+            return error.EdgeBodyUnresolvable;
+        }
+        store.deleteEdge(edge_id);
+        if (store.getEdgePtr(edge_id) == null) {
+            deleted_count += 1;
+        }
+    }
+
+    return deleted_count;
+}
+
+// CANARY: REQ=REQ-SONNY-2694-MATCH-SET-DELETE; FEATURE="WriteBehindAggregate"; ASPECT=QueryDelete; STATUS=TESTED; TEST=tests/test_sonny2694_write_behind_aggregate.zig; OWNER=engine; UPDATED=2026-09-27
+/// SONNY-2694: a DELETE the parser keeps in a query, `MATCH ... SET ...
+/// DELETE n [RETURN ...]` (a DELETE after a SET or REMOVE, or after a WITH; a
+/// MATCH ... DELETE without one is a DELETE statement, `executeDelete`). The
+/// match executor applied the SET or REMOVE and never the DELETE, so the
+/// statement returned its rows and deleted nothing.
+///
+/// The rows are read (`readPatternRows`: after a WITH, the rows it keeps).
+/// SONNY-3042: what the DELETE may do is checked before anything is written:
+/// a node it deletes has no edge (NodeHasEdges), and the RETURN holds nothing
+/// it deletes. It was checked after the SET, which stayed written when the
+/// statement was refused. Then the SET and REMOVE go through the write step
+/// (`applySetRemoveOverRows`), the RETURN is computed over the rows, owning
+/// its values (`projectReturnBeforeDelete`), and the nodes and edges the DELETE
+/// names in the rows are deleted as a DELETE statement deletes them
+/// (`deleteElements`). In a cluster the shape is not replicable and fails
+/// closed.
+pub fn executeMatchDeleteQuery(
+    allocator: std.mem.Allocator,
+    q: ast.Query,
+    param_names: []const []const u8,
+    param_values: []const Value,
+    current_graph: ?[]const u8,
+) !ExecutionResult {
+    // SONNY-2683: refuse a grouped or filtered RETURN before anything is written.
+    try match_operations.validateGroupedReturnShape(q);
+    // SONNY-3041: the dispatcher sends a CREATE or MERGE elsewhere first.
+    try match_operations.refuseUnappliedWrites(q, .{ .set = true, .remove = true, .delete = true });
+    switch (try clusterWriteRole()) {
+        .standalone => {},
+        .leader => return error.ClusterWriteNotReplicable,
+    }
+
+    var bindings = try match_operations.readPatternRows(allocator, q, param_names, param_values, q.inline_let_bindings, current_graph);
+    defer bindings.deinit(allocator);
+    try match_operations.stabilizeBindings(allocator, &bindings.rows);
+    var deleted = try match_operations.DeletedElements.fromBindings(allocator, q.delete_items, bindings.rows, false);
+    defer deleted.deinit(allocator);
+
+    // SONNY-3042: before the SET or REMOVE.
+    try checkDeleteEligible(allocator, deleted.node_ids, false);
+    if (q.ret.items.len != 0 and (q.set_clauses.len != 0 or q.remove_clauses.len != 0)) {
+        try match_operations.checkReturnBeforeDelete(allocator, q, &bindings.rows, param_names, param_values, deleted);
+    }
+
+    try match_operations.applySetRemoveOverRows(allocator, q.set_clauses, q.set_clause_ends, q.remove_clauses, &bindings.rows, param_names, param_values);
+
+    var returned: ?ExecutionResult = null;
+    errdefer if (returned) |*r| r.deinit(allocator);
+    if (q.ret.items.len != 0) {
+        returned = try match_operations.projectReturnBeforeDelete(allocator, q, &bindings.rows, param_names, param_values, deleted);
+    }
+
+    _ = try deleteElements(allocator, deleted.node_ids, deleted.edge_ids, false, current_graph);
+
+    if (returned) |r| return r;
+    return emptyExecutionResult(allocator);
+}
+
+// CANARY: REQ=REQ-SONNY-2694-DELETE-RETURN; FEATURE="WriteBehindAggregate"; ASPECT=DeleteReturn; STATUS=TESTED; TEST=tests/test_sonny2694_write_behind_aggregate.zig; OWNER=engine; UPDATED=2026-09-27
+/// SONNY-2694: a DELETE statement's RETURN, over the rows it matches,
+/// computed before anything is deleted. It returned the number of deleted
+/// elements, as `deleted_count`, whatever it asked for.
+///
+/// The rows are read as any read reads them (`readPatternBindings`, with the
+/// statement's context active, so its tenant scope and RLS policies apply)
+/// and the RETURN projected over them by the shared projection, owning every
+/// value it holds (`projectReturnBeforeDelete`, which also refuses a RETURN
+/// that holds an element the statement deletes). The RETURN used to be a
+/// read of its own, whose rows point into the store when the legacy executor
+/// answers it (in-memory, tenant-scoped and RLS sessions): `DELETE r RETURN
+/// r.w`, type(r), keys(r) and collect(r.w) returned the edge's freed memory.
+/// SONNY-3044: a cluster leader computes it the same way, before it proposes
+/// the delete.
+fn deleteStatementReturn(
+    allocator: std.mem.Allocator,
+    d: ast.DeleteStatement,
+    match_pattern: ast.GraphPattern,
+    rc: ast.ReturnClause,
+    current_graph: ?[]const u8,
+    context: ExecutionContext,
+    targets: DeleteTargets,
+) !ExecutionResult {
+    const q = ast.Query{
+        .optional_match = false,
+        .match = match_pattern,
+        .where_clause = d.where_clause,
+        .with_clause = null,
+        .ret = rc,
+        .order_by = null,
+        .limit = null,
+        .offset = null,
+    };
+    const prev = execution.pushActiveContext(&context);
+    defer execution.popActiveContext(prev);
+    var bindings = try match_operations.readPatternBindings(allocator, q, context.query_param_names, context.query_param_values, &.{}, current_graph);
+    defer bindings.deinit(allocator);
+    return match_operations.projectReturnBeforeDelete(allocator, q, &bindings.rows, context.query_param_names, context.query_param_values, .{ .node_ids = targets.node_ids, .edge_ids = targets.edge_ids, .detach = d.detach });
+}
+
 // CANARY: REQ=REQ-MULTI-GRAPH-DELETE-001; FEATURE="MultiGraphIsolation"; ASPECT=DeleteGraphFilter; STATUS=TESTED; TEST=geodetestlab/specs/multi_graph.yml; OWNER=engine; UPDATED=2025-12-24
 pub fn executeDelete(allocator: std.mem.Allocator, d: ast.DeleteStatement, current_graph: ?[]const u8, context: ExecutionContext) !ExecutionResult {
     // Cluster write routing: in cluster mode the DELETE is ordered through Raft on
@@ -4458,6 +4905,10 @@ pub fn executeDelete(allocator: std.mem.Allocator, d: ast.DeleteStatement, curre
 
     // Track deleted node count
     var deleted_count: usize = 0;
+    // SONNY-2694: the RETURN of a MATCH ... DELETE, computed over the rows the
+    // statement matches before it deletes them.
+    var returned: ?ExecutionResult = null;
+    errdefer if (returned) |*r| r.deinit(allocator);
 
     // If there's a MATCH clause, delete matching nodes/edges
     if (d.match_clause) |match_pattern| {
@@ -4470,121 +4921,13 @@ pub fn executeDelete(allocator: std.mem.Allocator, d: ast.DeleteStatement, curre
         const targets = try resolveDeleteTargets(allocator, d, match_pattern, context);
         defer targets.deinit(allocator);
 
-        if (!d.detach) {
-            for (targets.node_ids) |node_id| {
-                // ENG-3983: the CHECKED readers — an unreadable adjacency must
-                // NOT be mistaken for "this node has no edges" and let a plain
-                // DELETE through the GQL edge guard.
-                const has_outgoing = (try read_store.getOutgoingEdgeIdsChecked(node_id)).len > 0;
-                const has_incoming = (try read_store.getIncomingEdgeIdsChecked(node_id)).len > 0;
-                if (has_outgoing or has_incoming) {
-                    return error.NodeHasEdges;
-                }
-            }
-        }
+        // SONNY-2694: the RETURN is the statement's own, over the rows it
+        // matches, computed before they are deleted (`deleteStatementReturn`).
+        if (d.return_clause) |rc| if (rc.items.len != 0) {
+            returned = try deleteStatementReturn(allocator, d, match_pattern, rc, current_graph, context, targets);
+        };
 
-        // ENG-3983: edge ids removed as incident edges of a DETACH'd node in THIS
-        // statement. The relationship loop below needs them to tell "already
-        // deleted here" (fine) apart from "resolved by the MATCH but its body
-        // cannot be read back" (a silent no-op — fail closed instead).
-        var detached_edge_ids = std.ArrayList(u64).empty;
-        defer detached_edge_ids.deinit(allocator);
-
-        // Delete the resolved nodes
-        for (targets.node_ids) |node_id| {
-            // SONNY-1841: poll cancellation BETWEEN node deletes — an abandoned
-            // DETACH DELETE over a large match set must release the write lock
-            // promptly, not run to the deadline (no-op without a write scope).
-            try write_budget.check();
-            // A4b: drop the node's fulltext postings BEFORE the store delete,
-            // while its labels are still readable (covering-index lookup is
-            // keyed by label). Runs on the executor/connection thread
-            // (executeDelete is never invoked from bulkMergeNode / worker
-            // threads — verified). Cheap-exits when no FTS index covers the
-            // labels. Graph passed explicitly from current_graph.
-            if ((read_store.nodes.getOrHydratePtr(node_id) catch null)) |node_ptr| {
-                fts_index_ops.maintainFulltextOnWrite(allocator, current_graph, node_id, node_ptr.labels, .delete) catch |err| {
-                    log.warn("fts maintain (DELETE) failed", &.{
-                        Attr.uint("node_id", node_id),
-                        Attr.string("error", @errorName(err)),
-                    });
-                };
-            }
-
-            if (d.detach) {
-                // P8: Use adjacency indexes instead of full edge scan.
-                // Collect edge IDs first since deleteEdgeNoSave mutates the
-                // adjacency lists whose slices we are reading.
-                var edges_to_delete = std.ArrayList(u64).empty;
-                defer edges_to_delete.deinit(allocator);
-                // ENG-3983: CHECKED reads — an adjacency the engine cannot serve
-                // must abort the DETACH, never be read as "no incident edges"
-                // (which deletes the node and orphans every one of them).
-                for (try read_store.getOutgoingEdgeIdsChecked(node_id)) |eid| {
-                    try edges_to_delete.append(allocator, eid);
-                }
-                for (try read_store.getIncomingEdgeIdsChecked(node_id)) |eid| {
-                    // Avoid duplicating self-loop edges already collected above
-                    var already = false;
-                    for (edges_to_delete.items) |existing| {
-                        if (existing == eid) {
-                            already = true;
-                            break;
-                        }
-                    }
-                    if (!already) {
-                        try edges_to_delete.append(allocator, eid);
-                    }
-                }
-                for (edges_to_delete.items) |edge_id| {
-                    // SONNY-1841: a high-degree DETACH can spin here for a long
-                    // time — poll cancellation between incident-edge deletes.
-                    try write_budget.check();
-                    // ENG-3983: an incident edge whose body cannot be resolved
-                    // cannot be durably deleted (`deleteEdge` needs its endpoint
-                    // + edge slots), so proceeding would leave it DANGLING once
-                    // the node goes. Refuse the whole DETACH instead.
-                    if (store.getEdgePtr(edge_id) == null) return error.IncidentEdgeUnresolvable;
-                    store.deleteEdge(edge_id);
-                    try detached_edge_ids.append(allocator, edge_id);
-                }
-            }
-            store.deleteNode(node_id);
-            if (store.getNodePtr(node_id) == null) {
-                deleted_count += 1;
-            }
-        }
-
-        // GAP #56: relationship-targeted DELETE. The ids come from the same
-        // resolved match set, so a WHERE over the relationship variable is
-        // honoured here exactly as it is for nodes.
-        for (targets.edge_ids) |edge_id| {
-            // SONNY-1841: poll cancellation between edge deletes too.
-            try write_budget.check();
-            if (store.getEdgePtr(edge_id) == null) {
-                // Already gone (removed as an incident edge of a DETACH'd node
-                // above) — do not double-count it.
-                var already_detached = false;
-                for (detached_edge_ids.items) |done| {
-                    if (done == edge_id) {
-                        already_detached = true;
-                        break;
-                    }
-                }
-                if (already_detached) continue;
-                // ENG-3983: the MATCH resolved this edge id, so the row is NOT
-                // an honestly-empty match — the body simply cannot be read back,
-                // and `deleteEdge` would be a silent no-op. Fail closed rather
-                // than report success for a delete that did not happen. (An
-                // empty match resolves zero edge ids and never reaches here, so
-                // `MATCH … DELETE r` over no rows stays a successful 00000.)
-                return error.EdgeBodyUnresolvable;
-            }
-            store.deleteEdge(edge_id);
-            if (store.getEdgePtr(edge_id) == null) {
-                deleted_count += 1;
-            }
-        }
+        deleted_count = try deleteElements(allocator, targets.node_ids, targets.edge_ids, d.detach, current_graph);
 
         // Persistence is handled by the background persistence loop (graph_store.zig)
         // which saves dirty graphs every second. No synchronous save needed here.
@@ -4677,9 +5020,11 @@ pub fn executeDelete(allocator: std.mem.Allocator, d: ast.DeleteStatement, curre
 
     // Note: The global store persists changes automatically
 
-    // Handle RETURN clause if present
+    if (returned) |r| return r;
+
+    // Handle RETURN clause if present (a DELETE without a MATCH: the count of
+    // the elements it deleted)
     if (d.return_clause) |_| {
-        // For now, return the count of deleted nodes
         var columns = try allocator.alloc([]const u8, 1);
         columns[0] = try allocator.dupe(u8, "deleted_count");
 

@@ -583,12 +583,13 @@ pub const EnhancedQueryCoordinator = struct {
                 for (out_row.cols, 0..) |_, ci| {
                     if (!isKeyColumn(ci, key_cols)) {
                         // Replace with the accumulated sum as an Int if it's a whole number, otherwise Double
+                        // SONNY-2739: the sum was narrowed with `@intFromFloat`
+                        // BEFORE the range check (itself admitting 2^63), so a
+                        // merged sum at or past 2^63, or NaN, aborted the
+                        // coordinator. Check first, against exact bounds.
                         const s = group.col_sums[ci];
-                        const s_int: i64 = @intFromFloat(s);
-                        const as_f: f64 = @floatFromInt(s_int);
-                        if (as_f == s and s >= @as(f64, @floatFromInt(@as(i64, std.math.minInt(i64)))) and
-                            s <= @as(f64, @floatFromInt(@as(i64, std.math.maxInt(i64)))))
-                        {
+                        if (@trunc(s) == s and s >= -0x1p63 and s < 0x1p63) {
+                            const s_int: i64 = @intFromFloat(s);
                             // Whole number -- keep as Int for downstream compatibility
                             @constCast(out_row.cols)[ci] = .{ .Int = s_int };
                         } else {

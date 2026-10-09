@@ -604,6 +604,63 @@ test "cluster: DETACH DELETE replicates to followers" {
     );
 }
 
+/// Run `q` against the current leader, retrying on a leadership move, and
+/// return its output (the caller frees it with `cluster.gpa`).
+fn runOnLeader(cluster: *Cluster, q: []const u8) ![]u8 {
+    var attempt: usize = 0;
+    while (attempt < 12) : (attempt += 1) {
+        const leader_ip = cluster.leaderIp() orelse {
+            sleepMs(500);
+            continue;
+        };
+        const out = runQuery(cluster.gpa, cluster.io, cluster.aa, leader_ip, q) catch {
+            sleepMs(500);
+            continue;
+        };
+        if (std.mem.indexOf(u8, out, "ClusterNotLeader") != null) {
+            cluster.gpa.free(out);
+            sleepMs(700);
+            continue;
+        }
+        return out;
+    }
+    return error.NoStableLeaderForWrite;
+}
+
+// ---------------------------------------------------------------------------
+// Test 2b: a DELETE's RETURN is the RETURN it asked for (SONNY-3044).
+// ---------------------------------------------------------------------------
+// CANARY: REQ=REQ-SONNY-3044-CLUSTER-DELETE-RETURN; FEATURE="DistributedCluster"; ASPECT=Regression; STATUS=TESTED; TEST=tests/test_cluster_replicable_mutations.zig; OWNER=distributed; UPDATED=2026-09-27
+test "cluster: a DELETE's RETURN is computed over the rows it deletes, as a standalone server computes it" {
+    if (skipPreflight()) return error.SkipZigTest;
+    const gpa = std.testing.allocator;
+    var arena = std.heap.ArenaAllocator.init(gpa);
+    defer arena.deinit();
+    const aa = arena.allocator();
+    var threaded = std.Io.Threaded.init(std.heap.smp_allocator, .{});
+    defer threaded.deinit();
+    const io = threaded.io();
+
+    var cluster = startCluster(gpa, aa, io) catch |err| {
+        if (err == error.SkipZigTest) return error.SkipZigTest;
+        return err;
+    };
+    defer cluster.deinit();
+
+    try seedReplicableNode(&cluster, "DelRet", "CREATE (:DelRet {i: 1})");
+    try assertMutationReplicates(&cluster, "DelRet#2", "CREATE (:DelRet {i: 2})", "MATCH (n:DelRet) RETURN count(n) AS c", "\"c\":2");
+
+    // The leader answered `deleted_count` whatever the RETURN asked for.
+    const out = try runOnLeader(&cluster, "MATCH (n:DelRet) DELETE n RETURN sum(n.i) AS s");
+    defer gpa.free(out);
+    if (std.mem.indexOf(u8, out, "\"s\":3") == null or std.mem.indexOf(u8, out, "deleted_count") != null) {
+        std.debug.print("\n[repl] the leader's DELETE ... RETURN sum(n.i) AS s answered: {s}\n", .{out});
+        return error.WrongDeleteReturn;
+    }
+    // And the delete replicated.
+    try assertMutationReplicates(&cluster, "DelRet-deleted", "RETURN 1", "MATCH (n:DelRet) RETURN count(n) AS c", "\"c\":0");
+}
+
 // ---------------------------------------------------------------------------
 // Test 3: MERGE replicates and is idempotent across re-execution.
 // ---------------------------------------------------------------------------

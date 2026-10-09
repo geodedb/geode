@@ -843,7 +843,7 @@ test "GAP-ENT-0048 PRIMARY: deferred graph FULL checkpoint builds+persists so re
 
 // ============================================================================
 // GAP-ENT-0048 Path B — the persisted `prop_exact.idx` is now stamped with the
-// gs `checkpoint_epoch` + the `covered_lsn` it reflects (GENPIDX3), NOT the
+// gs `checkpoint_epoch` + the `covered_lsn` it reflects (GENPIDX4), NOT the
 // manifest counter. On reopen it RELOADS only if BOTH the epoch matches (no
 // checkpoint stranded it) AND covered == the durable frontier (no committed WAL
 // tail beyond it). A snapshot that a later checkpoint STRANDED (its generation
@@ -859,7 +859,7 @@ test "GAP-ENT-0048 PRIMARY: deferred graph FULL checkpoint builds+persists so re
 // LIGHT checkpoint reproduces the SAME stranded-snapshot staleness the epoch gate
 // guards, via the epoch axis):
 //   1. seed X (grp=1) among N multi-shard nodes; FULL checkpointAll persists a
-//      GENPIDX3 snapshot in which X is under grp=1 and node Y does not exist.
+//      GENPIDX4 snapshot in which X is under grp=1 and node Y does not exist.
 //   2. MUTATE past the snapshot (no re-persist): move X to grp=2, add Y (grp=1),
 //      then a LIGHT checkpointAll — which advances the checkpoint_epoch and
 //      flushes the mutations to durable pages but KEEPS the old snapshot on disk.
@@ -912,7 +912,7 @@ test "GAP-ENT-0048 Path B: a checkpoint-stranded prop_exact.idx is rejected on r
         // X = the FIRST grp==1 node (i==1). It is under grp=1 in the snapshot.
         x_id = node_ids[1];
 
-        // FULL checkpoint: persists the GENPIDX3 snapshot (X ∈ grp=1, no Y) at the
+        // FULL checkpoint: persists the GENPIDX4 snapshot (X ∈ grp=1, no Y) at the
         // current (epoch, covered_lsn). NO invalidation — the clean snapshot path.
         try adapter.checkpointAll();
 

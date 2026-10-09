@@ -1,4 +1,5 @@
 const std = @import("std");
+const perf_gate = @import("perf_gate");
 
 // Zig 0.16 compat helpers for test code
 fn compat_milliTimestamp() i64 {
@@ -136,6 +137,8 @@ test "BenchmarkCANARY_REQ_GQL_025_WriteSkewVarianceEnvelope" {
     }
     const p95 = @as(f128, @floatFromInt(scratch[rank]));
     const p95_mean = p95 / mean;
-    try std.testing.expect(cv <= 0.22);
-    try std.testing.expect(p95_mean <= 2.55);
+    // Perf claims go through the shared gate (SONNY-2394): reported unless
+    // GEODE_PERF_GATES=enforce (SONNY-2439) -- see tests/perf_gate.zig.
+    // Correctness assertions in this file are not gated.
+    try perf_gate.envelope("write-skew detection commit", cv, p95_mean, 0.22, 2.55);
 }

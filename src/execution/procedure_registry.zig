@@ -23,6 +23,7 @@ const ExecutionContext = execution.ExecutionContext;
 const ExecutionError = execution.ExecutionError;
 
 const procedure_access = @import("procedure_access.zig");
+const execution_helpers = @import("execution_helpers.zig");
 const gps = @import("../security/gps.zig");
 
 // Import recursion handler for member path building
@@ -99,6 +100,10 @@ pub fn extractNormalizedProcName(
 }
 
 pub fn executeCallProcedure(allocator: std.mem.Allocator, call_stmt: ast.CallProcedure, context: ExecutionContext) !ExecutionResult {
+    // SONNY-2755: a YIELD that names a column twice is refused before the
+    // procedure runs (the YIELD filter would free that column twice, and a
+    // procedure that changes something must not run for a failing statement).
+    if (call_stmt.yield_items) |items| try execution_helpers.requireDistinctYieldNames(items);
 
     // Get the procedure name from the Call expression, normalized to ASCII
     // lowercase for case-insensitive dispatch per ISO/IEC 39075:2024 RQ-0022.
@@ -191,7 +196,7 @@ pub fn executeCallProcedure(allocator: std.mem.Allocator, call_stmt: ast.CallPro
 
     // ---- geode.storage.* procedures (storage inspection) ----
     if (std.mem.startsWith(u8, proc_name, "geode.storage.")) {
-        if (try storage_dispatch.executeStorage(allocator, proc_name, call_stmt)) |result| {
+        if (try storage_dispatch.executeStorage(allocator, proc_name, call_stmt, context)) |result| {
             return result;
         }
     }

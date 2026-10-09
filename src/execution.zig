@@ -27,6 +27,8 @@ const diagnostics = @import("diagnostics.zig");
 // CANARY: REQ=REQ-M5.2-EXECUTION-REFACTOR-001; FEATURE="Circular Dependency Resolution"; ASPECT=ValueTypesImport; STATUS=EXEMPT; OWNER=execution; UPDATED=2025-11-13
 // Phase 5 M5.2: Import shared value types from value_types.zig module
 const value_types = @import("value_types.zig");
+const value_order = @import("execution/value_order.zig");
+const value_equality = @import("execution/value_equality.zig");
 
 // CANARY: REQ=REQ-M5.2-EXECUTION-REFACTOR-002; FEATURE="Circular Dependency Resolution"; ASPECT=TypeAliases; STATUS=EXEMPT; OWNER=execution; UPDATED=2025-11-13
 // Phase 5 M5.2: Create local aliases for value types (minimizes code changes)
@@ -39,6 +41,7 @@ const eval = @import("eval.zig");
 // Phase 5 M5.3: Import evaluator_adapter to provide callbacks to eval module
 const evaluator_adapter = @import("execution/evaluator_adapter.zig");
 const graph_store = @import("graph_store.zig");
+const storage_adapter = @import("storage/graph_storage_adapter.zig");
 const index_manager = @import("index/index_manager.zig");
 const catalog_mod = @import("schema/catalog.zig");
 const fle_hooks_mod = @import("execution/fle_hooks.zig");
@@ -51,8 +54,12 @@ const call_operations = @import("execution/call_operations.zig");
 const execution_helpers = @import("execution/execution_helpers.zig");
 const match_operations = @import("execution/match_operations.zig");
 const statement_handlers = @import("execution/statement_handlers.zig");
+// SONNY-2775: the one gate for a change of a session's graph.
+pub const session_graph = @import("execution/session_graph.zig");
+const query_traits = @import("query/query_traits.zig");
 const aggregation_evaluation = @import("execution/aggregation_evaluation.zig");
 pub const distinct_set = @import("execution/distinct_set.zig");
+pub const grouped_having = @import("execution/grouped_having.zig");
 const return_and_sorting = @import("execution/return_and_sorting.zig");
 const statement_dispatcher = @import("execution/statement_dispatcher.zig");
 // A4a: fulltext CREATE/DROP INDEX glue (named adapter index + backfill).
@@ -60,6 +67,9 @@ const statement_dispatcher = @import("execution/statement_dispatcher.zig");
 // through geode.execution.fts_index_ops.
 pub const fts_index_ops = @import("execution/fts_index_ops.zig");
 const query_execution = @import("execution/query_execution.zig");
+// SONNY-3139: the pre-dispatch write-shape validator and its executor table.
+pub const write_shape = @import("execution/write_shape.zig");
+pub const write_walk = @import("execution/write_walk.zig");
 const value_utilities = @import("execution/value_utilities.zig");
 pub const procedure_registry = @import("execution/procedure_registry.zig");
 // REQ-RLS-DDL-001: rls_dispatch is exported so server/main.zig can install
@@ -122,6 +132,10 @@ pub const findBoundNodeId = graph_algorithms.findBoundNodeId;
 pub const findBoundNode = graph_algorithms.findBoundNode;
 pub const findEdgeBetween = graph_algorithms.findEdgeBetween;
 
+// SONNY-2693: the shared tenant visibility predicates, so a test can pin the
+// one edge rule (`tenant_visibility.edgeTraversable`) directly.
+pub const tenant_visibility = @import("execution/tenant_visibility.zig");
+
 // Re-export centrality algorithm functions for backward compatibility (M1 Phase 3 extraction)
 pub const getNeighbors = centrality_algorithms.getNeighbors;
 pub const executeDegreeCentrality = centrality_algorithms.executeDegreeCentrality;
@@ -154,7 +168,8 @@ pub const executeKCore = centrality_algorithms.executeKCore;
 pub const executeKShell = centrality_algorithms.executeKShell;
 
 // Re-export CRUD operation functions for backward compatibility (M1 Phase 4 extraction)
-pub const executeCreateForBatch = crud_operations.executeCreateForBatch;
+// SONNY-3045: the audit text of a MERGE refusal's labels and keys.
+pub const joinAuditText = crud_operations.joinAuditText;
 
 /// GAP-0815 regression probe. Returns a monotonically-increasing counter
 /// that `executeBatchCreateHomogeneous` increments on entry. Tests read it
@@ -223,7 +238,19 @@ pub const countNodesFastPath = match_operations.countNodesFastPath;
 pub const countNodesLabelRefcountFastPath = match_operations.countNodesLabelRefcountFastPath;
 pub const countEdgesFastPath = match_operations.countEdgesFastPath;
 pub const countFilteredFastPath = match_operations.countFilteredFastPath;
+pub const readFastPathDeclines = match_operations.readFastPathDeclinesWrite;
+// SONNY-3041: the structural write guard every pattern executor calls.
+pub const refuseUnappliedWrites = match_operations.refuseUnappliedWrites;
+pub const AppliedWrites = match_operations.AppliedWrites;
 pub const wouldEvaluateRLS = match_operations.wouldEvaluateRLS;
+// SONNY-2679 (review): a traversal's label-deny snapshot, and the edge RLS
+// check that reads it, so a test can pin that the snapshot is what answers.
+pub const LabelDenySnapshot = match_operations.LabelDenySnapshot;
+// SONNY-2757: the durable GPS policy changes (DDL and geode.auth.policy_*).
+pub const policy_ddl = @import("execution/policy_ddl.zig");
+// SONNY-2685: the row visibility of one `CALL algo.*` call.
+pub const AlgoScope = @import("execution/algo_scope.zig").AlgoScope;
+pub const passesEdgeRLSFilter = match_operations.passesEdgeRLSFilter;
 pub const activeRlsPoliciesConfigured = match_operations.activeRlsPoliciesConfigured;
 // H3-P3: planner ordered-scan fast-path hit counter (test path signal).
 pub const getOrderedScanFastPathHits = match_operations.getOrderedScanFastPathHits;
@@ -234,6 +261,10 @@ pub const getPointWriteFastPathTotal = match_operations.getPointWriteFastPathTot
 pub const resetPointWriteFastPathTotal = match_operations.resetPointWriteFastPathTotal;
 pub const getLegacyWriteScanTotal = match_operations.getLegacyWriteScanTotal;
 pub const resetLegacyWriteScanTotal = match_operations.resetLegacyWriteScanTotal;
+// SONNY-2674: a legacy grouped or filtered RETURN served by the shared
+// projection rather than a GROUP BY fast path (routing-table test signal).
+pub const getReturnOverBindingsTotal = match_operations.getReturnOverBindingsTotal;
+pub const resetReturnOverBindingsTotal = match_operations.resetReturnOverBindingsTotal;
 // GAP-ENT-0043 T1: index-served GROUP BY/DISTINCT/count-by-value fast path
 // (routing-table test signals: index-served == 1 AND rows-materialized == 0).
 pub const indexServedGroupByFastPath = match_operations.indexServedGroupByFastPath;
@@ -282,6 +313,7 @@ pub const executeLegacyQueryWithResolvedParams = query_execution.executeLegacyQu
 
 // Re-export value utilities for backward compatibility (M1 Phase 12 extraction)
 pub const duplicateResult = value_utilities.duplicateResult;
+pub const ownGraphEntities = value_utilities.ownGraphEntities;
 pub const duplicateValue = value_utilities.duplicateValue;
 pub const freeValue = value_utilities.freeValue;
 pub const writeValue = value_utilities.writeValue;
@@ -382,8 +414,10 @@ pub fn tearDownGlobalCatalogForTest() void {
 
 // CANARY: REQ=REQ-M5.3-EXECUTION-INIT-001; FEATURE="Circular Dependency Resolution"; ASPECT=CallbacksInitialization; STATUS=EXEMPT; OWNER=execution; UPDATED=2025-11-13
 /// Initialize evaluator with execution callbacks
-/// This must be called once during module initialization to provide eval.zig
+/// This must be called during module initialization to provide eval.zig
 /// with callback functions for executing queries, finding paths, etc.
+/// Only the first call in a process writes them (SONNY-2691 item 5): the
+/// server calls it at startup, and each connection's call only reads.
 ///
 /// This breaks the circular dependency by using dependency injection:
 /// Instead of eval.zig importing execution.zig, it receives function pointers at runtime.
@@ -478,25 +512,77 @@ pub const SessionState = struct {
     }
 
     pub fn reset(self: *SessionState) void {
-        if (self.schema) |s| {
-            self.allocator.free(s);
-            self.schema = null;
-        }
         if (self.graph) |g| {
             self.allocator.free(g);
             self.graph = null;
+        }
+        self.resetCharacteristics();
+    }
+
+    /// SONNY-2775: reset everything but the graph: the schema, the time
+    /// zone and the parameters. SESSION RESET and SESSION CLOSE move the
+    /// graph through `session_graph.change`, which a DSN-bound session's
+    /// graph survives.
+    pub fn resetCharacteristics(self: *SessionState) void {
+        if (self.schema) |s| {
+            self.allocator.free(s);
+            self.schema = null;
         }
         if (self.timezone) |tz| {
             self.allocator.free(tz);
             self.timezone = null;
         }
+        self.clearParameters();
+    }
 
+    pub fn clearParameters(self: *SessionState) void {
         var iter = self.parameters.iterator();
         while (iter.next()) |entry| {
             self.allocator.free(entry.key_ptr.*);
             self.allocator.free(entry.value_ptr.*);
         }
         self.parameters.clearRetainingCapacity();
+    }
+
+    /// SONNY-2775: replace an owned optional string field with a copy of
+    /// `value` in the session's allocator (the session frees it). The
+    /// executor used to store these with the request's allocator.
+    fn replaceField(self: *SessionState, field: *?[]const u8, value: ?[]const u8) std.mem.Allocator.Error!void {
+        const copy: ?[]const u8 = if (value) |v| try self.allocator.dupe(u8, v) else null;
+        if (field.*) |old| self.allocator.free(old);
+        field.* = copy;
+    }
+
+    pub fn setSchema(self: *SessionState, schema_name: ?[]const u8) std.mem.Allocator.Error!void {
+        try self.replaceField(&self.schema, schema_name);
+    }
+
+    pub fn setTimeZone(self: *SessionState, tz: ?[]const u8) std.mem.Allocator.Error!void {
+        try self.replaceField(&self.timezone, tz);
+    }
+
+    /// Set session parameter `name` to `value`; both are copied into the
+    /// session's allocator. Setting it again replaces the value and keeps
+    /// the key (a plain `put` leaked the old key and value).
+    pub fn setParameter(self: *SessionState, name: []const u8, value: []const u8) std.mem.Allocator.Error!void {
+        if (self.parameters.getPtr(name)) |value_ptr| {
+            const value_copy = try self.allocator.dupe(u8, value);
+            self.allocator.free(value_ptr.*);
+            value_ptr.* = value_copy;
+            return;
+        }
+        const key_copy = try self.allocator.dupe(u8, name);
+        errdefer self.allocator.free(key_copy);
+        const value_copy = try self.allocator.dupe(u8, value);
+        errdefer self.allocator.free(value_copy);
+        try self.parameters.put(key_copy, value_copy);
+    }
+
+    pub fn removeParameter(self: *SessionState, name: []const u8) void {
+        if (self.parameters.fetchRemove(name)) |entry| {
+            self.allocator.free(entry.key);
+            self.allocator.free(entry.value);
+        }
     }
 };
 
@@ -529,6 +615,14 @@ pub const ExecutionContext = struct {
     session_state: ?*SessionState = null,
     // Transaction state for START TRANSACTION/COMMIT/ROLLBACK
     transaction_state: TransactionState = .None,
+    // CANARY: REQ=REQ-SONNY-2799-FAILED-TXN-ROLLBACK; FEATURE="TransactionManagement"; ASPECT=DeferToHandler; STATUS=TESTED; TEST=tests/test_sonny2805_txn_sessions.zig; OWNER=engine; UPDATED=2026-09-26
+    /// SONNY-2799: the caller, a transport handler, rolls a failed
+    /// transaction back itself (`executeProgramWithContext` fails it,
+    /// GAP-0917, and returns the error with its changes still recorded). The
+    /// handler holds the request's lock, which may be another graph's or a
+    /// read lock; it undoes the transaction after releasing that lock, under
+    /// the write lock of the graph the transaction changed.
+    defer_failed_txn_rollback: bool = false,
     // Input parameter bindings provided by client (query-level parameters)
     query_param_names: []const []const u8 = &.{},
     query_param_values: []const value_types.Value = &.{},
@@ -649,6 +743,15 @@ pub const OwnedGraphEntities = struct {
     nodes: std.ArrayList(*graph_store.Node),
     edges: std.ArrayList(*graph_store.Edge),
     allocator: std.mem.Allocator,
+    /// How `deinit` releases each tracked node. null, the default for every
+    /// executor tracker: destroy the Node struct only, because an executor node
+    /// need not own its interior (planned reads keep it in a per-query arena,
+    /// GAP-0806). A producer whose nodes own ALL their memory sets its own
+    /// destroy here, so the node is freed in full: the engine-direct node scan
+    /// does (SONNY-2463).
+    destroy_node: ?*const fn (std.mem.Allocator, *graph_store.Node) void = null,
+    /// As `destroy_node`, for each tracked relationship.
+    destroy_edge: ?*const fn (std.mem.Allocator, *graph_store.Edge) void = null,
 
     pub fn init(allocator: std.mem.Allocator) !*OwnedGraphEntities {
         const self = try allocator.create(OwnedGraphEntities);
@@ -668,15 +771,22 @@ pub const OwnedGraphEntities = struct {
         try self.edges.append(self.allocator, edge);
     }
 
+    /// Release the tracked entities AND the tracker itself (always
+    /// heap-allocated by `init`). SONNY-2394: this used to leave the tracker
+    /// allocated, so every call site that only called deinit() -- each planned
+    /// read's error path, empty-result path and missing-graph path -- leaked it
+    /// once per query on the caller's allocator (gpa in production).
     pub fn deinit(self: *OwnedGraphEntities) void {
+        const allocator = self.allocator;
         for (self.nodes.items) |node| {
-            self.allocator.destroy(node);
+            if (self.destroy_node) |destroy| destroy(allocator, node) else allocator.destroy(node);
         }
-        self.nodes.deinit(self.allocator);
+        self.nodes.deinit(allocator);
         for (self.edges.items) |edge| {
-            self.allocator.destroy(edge);
+            if (self.destroy_edge) |destroy| destroy(allocator, edge) else allocator.destroy(edge);
         }
-        self.edges.deinit(self.allocator);
+        self.edges.deinit(allocator);
+        allocator.destroy(self);
     }
 };
 
@@ -685,6 +795,16 @@ pub const ExecutionResult = struct {
     rows: [][]Value,
     flags: std.ArrayList([]const u8),
     owns_value_memory: bool = false, // Set to true when values were duplicated and need freeing
+    /// How `deinit` and `applyRowWindow` free a row value when
+    /// `owns_value_memory` is set. null, the default, is `freeValue`, which
+    /// frees strings, lists and maps only. That is all most producers may free:
+    /// their rows can hold a typed extended value (Text, Json, Bytea, ...) or a
+    /// decimal's literal that they do not own (`duplicateValue` copies those
+    /// shallowly), so a complete free would free memory twice, or memory that
+    /// is not theirs. A producer whose rows own every value they hold sets a
+    /// complete free here: the engine-direct node scan sets
+    /// `property_value_codec.freeValue` (SONNY-2656).
+    free_value: ?*const fn (std.mem.Allocator, Value) void = null,
     // Variable bindings from CREATE patterns (for passing to UNION parts)
     variable_bindings: ?*std.StringHashMap(u64) = null,
     // PERF: PHASE5_COLUMN_BATCH_ALLOC - Batch column string allocation optimization
@@ -705,11 +825,12 @@ pub const ExecutionResult = struct {
         }
         allocator.free(self.columns);
 
+        const free_value = self.free_value orelse &freeValue;
         for (self.rows) |row| {
             // Only free values if this result owns the memory (was duplicated)
             if (self.owns_value_memory) {
                 for (row) |val| {
-                    freeValue(allocator, val);
+                    free_value(allocator, val);
                 }
             }
             allocator.free(row);
@@ -731,10 +852,9 @@ pub const ExecutionResult = struct {
             allocator.destroy(bindings);
         }
 
-        // Free owned graph entities if present
+        // Free owned graph entities if present (deinit also frees the tracker)
         if (self.owned_graph_entities) |entities| {
             entities.deinit();
-            entities.allocator.destroy(entities);
         }
     }
 
@@ -850,11 +970,92 @@ fn appendFlagIfMissing(allocator: std.mem.Allocator, result: *ExecutionResult, f
 
 fn freeRowValues(allocator: std.mem.Allocator, result: *ExecutionResult, row: []Value) void {
     if (result.owns_value_memory) {
+        const free_value = result.free_value orelse &freeValue;
         for (row) |val| {
-            freeValue(allocator, val);
+            free_value(allocator, val);
         }
     }
     allocator.free(row);
+}
+
+/// SONNY-3248: the value of the SKIP or LIMIT parameter `name` among the
+/// statement's parameters (the request's, with the statement's own `LET
+/// $name = <expr>` bound over them, `query_execution.bindLetParams`): a
+/// non-negative integer, else refused (error.InvalidWindowParameter,
+/// 22G03). `LET $x = 3 MATCH ... LIMIT $x` returned every row, as did a
+/// value of -1, 2.0 or '2'.
+///
+/// Round 4b-1b (review m-e): the LETs are evaluated once, before the
+/// statement runs (`.Query` in `executeStatementWithContext`), and both the
+/// window and the statement read those values. They were evaluated here and
+/// again by the statement, so a `LET $r = rand()` had two values.
+fn windowParam(name: ?[]const u8, context: ExecutionContext) !?usize {
+    const n = name orelse return null;
+    for (context.query_param_names, context.query_param_values) |pn, pv| {
+        if (std.mem.eql(u8, pn, n)) return try windowValue(pv);
+    }
+    return null;
+}
+
+/// A query's SKIP and LIMIT, resolved (`windowParam`).
+pub const QueryWindow = struct { start: usize, limit: ?usize };
+
+pub fn queryWindow(q: ast.Query, context: ExecutionContext) !QueryWindow {
+    return .{
+        .start = q.offset orelse try windowParam(q.offset_param, context) orelse 0,
+        .limit = q.limit orelse try windowParam(q.limit_param, context),
+    };
+}
+
+// CANARY: REQ=REQ-SONNY-3248-LIMIT-PARAM; FEATURE="Pagination"; ASPECT=StatementWindow; STATUS=TESTED; TEST=tests/test_sonny_write_allowlist_r4b.zig; OWNER=engine; UPDATED=2026-09-29
+/// SONNY-3248 (round-4a review M-1): a SKIP or LIMIT given as a parameter
+/// windows the statement as a literal does. Only the literals were read, so
+/// `MATCH ... SET ... RETURN q.i LIMIT $p` and an in-memory `MATCH (n:G)
+/// RETURN n.i LIMIT $p` returned every row (the executors that read the
+/// parameter themselves apply it first; a LIMIT applied twice is the same
+/// window). Round 4b-1b (review m-a): a `CALL { }` body's window too
+/// (`query_execution`): `CALL { MATCH (n:G) RETURN n.i AS k LIMIT $l }`
+/// returned every row in memory, and `ORDER BY k SKIP $l LIMIT 1` every row
+/// in every session.
+pub fn applyQueryWindow(allocator: std.mem.Allocator, result: *ExecutionResult, window: QueryWindow) !void {
+    var end = result.rows.len;
+    if (window.limit) |limit_count| {
+        const end_limit = std.math.add(usize, window.start, limit_count) catch std.math.maxInt(usize);
+        end = @min(end, end_limit);
+    }
+    if (window.start != 0 or end != result.rows.len) {
+        try applyRowWindow(allocator, result, window.start, end);
+    }
+}
+
+/// Every SKIP and LIMIT parameter of `q`'s parts (a WITH's, a chained
+/// part's, a CALL { } or FOR body's) that names one of the statement's
+/// parameters, checked (22G03) before anything runs. A LET-defined one was
+/// checked only where one executor's WITH read it (`LET $w = -2 ... WITH n
+/// LIMIT $w` was 22G03 in memory and every row persisted).
+fn checkWindowValues(q: *const ast.Query, context: ExecutionContext) !void {
+    var part: ?*const ast.Query = q;
+    while (part) |p| : (part = p.next_query) {
+        _ = try windowParam(p.limit_param, context);
+        _ = try windowParam(p.offset_param, context);
+        if (p.with_clause) |wc| {
+            _ = try windowParam(wc.limit_param, context);
+            _ = try windowParam(wc.offset_param, context);
+        }
+        if (p.initial_call_subquery) |body| try checkWindowValues(body, context);
+        if (p.for_statement) |f| {
+            _ = try windowParam(f.limit_param, context);
+            _ = try windowParam(f.offset_param, context);
+            if (f.body) |body| try checkWindowValues(body, context);
+        }
+    }
+}
+
+fn windowValue(v: Value) !usize {
+    return switch (v) {
+        .Int => |i| if (i >= 0) @as(usize, @intCast(i)) else error.InvalidWindowParameter,
+        else => error.InvalidWindowParameter,
+    };
 }
 
 pub fn applyRowWindow(allocator: std.mem.Allocator, result: *ExecutionResult, start: usize, end: usize) !void {
@@ -1057,7 +1258,70 @@ fn requirePolicyDdlAdmin(allocator: std.mem.Allocator, action: []const u8, conte
     om.recordAuthzCheck(.allow, .rbac, d);
 }
 
+/// SONNY-2823: commit this thread's session engine transaction (R9), where
+/// its undo transaction commits, or where the program that opened it ends. A
+/// failed commit is logged: the undo transaction is committed already, as
+/// QUIC's COMMIT message does.
+fn commitSessionEngineTxn() void {
+    storage_adapter.commitThreadSessionTxn() catch |err| {
+        log.err("Failed to commit the session engine transaction", &.{
+            Attr.string("error", @errorName(err)),
+        });
+    };
+}
+
+pub const param_check = @import("execution/param_check.zig");
+
+// CANARY: REQ=REQ-SONNY-3247-MISSING-PARAMETER; FEATURE="ParameterBinding"; ASPECT=UnsuppliedParameter; STATUS=TESTED; TEST=tests/test_sonny_write_allowlist_r4.zig; OWNER=engine; UPDATED=2026-09-28
+/// SONNY-3247: every parameter `program` names is one the request supplies
+/// (`names`, the client's parameters) or one a statement defines with LET;
+/// else error.MissingParameter (42P02), before anything runs. The transports
+/// check right after parsing, ahead of their write fast paths; the entry
+/// points below check again for an in-process caller.
+pub fn checkProgramParams(program: *const ast.Program, names: []const []const u8, values: []const Value) param_check.Error!void {
+    try param_check.checkProgram(program, names, values);
+}
+
+// CANARY: REQ=REQ-SONNY-2823-SESSION-ENGINE-TXN; FEATURE="TransactionManagement"; ASPECT=ProgramEnd; STATUS=TESTED; TEST=tests/test_sonny2823_session_engine_txn.zig; OWNER=storage; UPDATED=2026-09-27
+/// SONNY-2823: the executor entry points running on this thread
+/// (`executeProgramWithContext`, `executeStatementWithContext`). When the
+/// outermost returns, the program is over, and the session engine
+/// transaction it opened is committed, while the transport still holds the
+/// request's graph lock. An engine transaction open across requests had its
+/// page images appended to the WAL at its commit, after newer ones other
+/// sessions committed meanwhile, and recovery replayed the older image over
+/// theirs (see `graph_storage_adapter.SessionEngineTxn`). The Geode
+/// transaction goes on: the undo log undoes a committed change as well.
+threadlocal var t_entry_depth: u32 = 0;
+
+fn enterEntryPoint() void {
+    t_entry_depth += 1;
+}
+
+fn leaveEntryPoint() void {
+    t_entry_depth -= 1;
+    if (t_entry_depth == 0) commitSessionEngineTxn();
+}
+
+// CANARY: REQ=REQ-SONNY-3139-WRITE-SHAPES; FEATURE="WriteShapeValidator"; ASPECT=TransportProfile; STATUS=TESTED; TEST=tests/test_sonny_write_allowlist_r4.zig; OWNER=engine; UPDATED=2026-09-28
+/// SONNY-3139, SONNY-3182, SONNY-3184 (round-3 review C1): the whole-program
+/// write-shape validation `executeProgramWithContext` runs first, for a
+/// transport arm that runs a statement of `program` any other way: the QUIC
+/// and gRPC PROFILE arms ran the statement a PROFILE wraps through the planned
+/// runtime (`planned_read_runtime.executeProfiledIfSupported`), which reached
+/// the query dispatcher with no validation, so `PROFILE MATCH (n:G) SET n.x =
+/// 1, nn.y = 2` wrote every row, and in a cluster reached Raft unvalidated.
+pub fn validateProgramShapes(program: *const ast.Program, context: ExecutionContext) write_shape.Error!void {
+    try write_shape.validateProgram(program, context.transaction_state == .Active);
+}
+
 pub fn executeProgramWithContext(allocator: std.mem.Allocator, program: *const ast.Program, context: ExecutionContext) !ExecutionResult {
+    // SONNY-3247: at the outermost entry point, the parameters are the
+    // request's (a nested entry's context carries the ones its caller bound).
+    if (t_entry_depth == 0) try param_check.checkProgram(program, context.query_param_names, context.query_param_values);
+    // SONNY-2823: the program's session engine transaction ends with it.
+    enterEntryPoint();
+    defer leaveEntryPoint();
     const prev_ctx = pushActiveContext(&context);
     defer popActiveContext(prev_ctx);
     if (program.statements.len == 0) {
@@ -1070,6 +1334,13 @@ pub fn executeProgramWithContext(allocator: std.mem.Allocator, program: *const a
             },
         };
     }
+
+    // CANARY: REQ=REQ-SONNY-3166-STATEMENT-BOUNDARY; FEATURE="StatementBoundary"; ASPECT=WholeProgram; STATUS=TESTED; TEST=tests/test_sonny_write_allowlist.zig; OWNER=engine; UPDATED=2026-09-27
+    // SONNY-3166: every statement of the program is validated before any of
+    // them runs. A later statement refused after an earlier one had written
+    // left the earlier write in place (`... SET n.x = 1; ... WITH n SET n.y =
+    // 2` committed the first SET, then refused).
+    try write_shape.validateProgram(program, context.transaction_state == .Active);
 
     // Execute all statements and return the result of the last data-bearing statement
     // Transaction control statements (START TRANSACTION, COMMIT, ROLLBACK) produce status messages
@@ -1105,8 +1376,10 @@ pub fn executeProgramWithContext(allocator: std.mem.Allocator, program: *const a
                 .Commit => {
                     if (last_result) |*result| result.deinit(allocator);
                     if (last_data_result) |*result| result.deinit(allocator);
-                    var rb = executeStatementWithContext(allocator, .Rollback, current_context) catch null;
-                    if (rb) |*r| r.deinit(allocator);
+                    if (!context.defer_failed_txn_rollback) {
+                        var rb = executeStatementWithContext(allocator, .Rollback, current_context) catch null;
+                        if (rb) |*r| r.deinit(allocator);
+                    }
                     return txn_failure orelse error.TransactionAborted;
                 },
                 else => continue, // rejected: never executed
@@ -1186,8 +1459,11 @@ pub fn executeProgramWithContext(allocator: std.mem.Allocator, program: *const a
     if (current_context.transaction_state == .Failed) {
         if (last_result) |*result| result.deinit(allocator);
         if (last_data_result) |*result| result.deinit(allocator);
-        var rb = executeStatementWithContext(allocator, .Rollback, current_context) catch null;
-        if (rb) |*r| r.deinit(allocator);
+        // SONNY-2799: a transport handler undoes it (`defer_failed_txn_rollback`).
+        if (!context.defer_failed_txn_rollback) {
+            var rb = executeStatementWithContext(allocator, .Rollback, current_context) catch null;
+            if (rb) |*r| r.deinit(allocator);
+        }
         return txn_failure orelse error.TransactionAborted;
     }
 
@@ -1243,6 +1519,12 @@ fn executeStatement(allocator: std.mem.Allocator, stmt: ast.Statement) !Executio
 // statements (subqueries) open their own inner scope that cannot clear the
 // enclosing statement's flag.
 pub fn executeStatementWithContext(allocator: std.mem.Allocator, stmt: ast.Statement, context: ExecutionContext) !ExecutionResult {
+    // SONNY-3247: see `executeProgramWithContext`.
+    if (t_entry_depth == 0) try param_check.checkStatement(&stmt, context.query_param_names, context.query_param_values);
+    // SONNY-2823: a statement run on its own (the PROFILE paths) is a
+    // program; its session engine transaction ends with it.
+    enterEntryPoint();
+    defer leaveEntryPoint();
     // CANARY: REQ=REQ-ENG-3922-VECTOR-DIM-GUARD; FEATURE="VectorIndex"; ASPECT=PrePassGraphScope; STATUS=TESTED; TEST=tests/test_eng3922_dim_guard.zig; OWNER=execution; UPDATED=2026-08-29
     // ENG-3922(a): the write pre-pass needs to know which GRAPH the statement
     // writes to (the unindexed vector-dimension pin is per-graph), and the only
@@ -1338,28 +1620,53 @@ fn executeStatementWithContextInner(allocator: std.mem.Allocator, stmt: ast.Stat
         if (rows_returned) |rc| om.recordQueryRowsReturned(op_name, op_name, rc);
         if (exec_outcome == .error_) qspan.setErrorName("execution_error") else qspan.setOk();
     }
+    // CANARY: REQ=REQ-SONNY-3139-WRITE-SHAPES; FEATURE="WriteShapeValidator"; ASPECT=DispatcherCall; STATUS=TESTED; TEST=tests/test_sonny_write_allowlist.zig; OWNER=engine; UPDATED=2026-09-27
+    // SONNY-3139 .. SONNY-3190: a statement that writes runs only in an
+    // allowlisted shape (`write_shape.shapes`), checked over every part of it
+    // (UNION parts, chained parts, FOR bodies, the statement a PROFILE wraps)
+    // before any of them runs; anything else is refused (0A000) with nothing
+    // written. No statement writes inside an expression.
+    try write_shape.validateStatementIn(stmt, .{ .in_transaction = context.transaction_state == .Active });
     switch (stmt) {
-        .Query => |q| {
+        .Query => |stmt_q| {
             // Validate: OFFSET requires ORDER BY (US001) - only if strict validation enabled
-            if (context.strict_offset_validation and q.offset != null and q.order_by == null) {
+            if (context.strict_offset_validation and stmt_q.offset != null and stmt_q.order_by == null) {
                 return ExecutionError.UnorderedPagination;
             }
 
             // Check if query has SKIP or LIMIT
-            try validateHopBounds(q.match);
-            var result = try executeQueryWithContext(allocator, q, context);
+            try validateHopBounds(stmt_q.match);
+            // CANARY: REQ=REQ-SONNY-3248-LET-SCOPE; FEATURE="ParameterBinding"; ASPECT=LetOnce; STATUS=TESTED; TEST=tests/test_sonny_write_allowlist_r4b.zig; OWNER=engine; UPDATED=2026-09-29
+            // SONNY-3248 (round 4b-1b review I-E, m-b, m-e): the statement's
+            // LETs are bound among its parameters once, here, and every
+            // executor reads them there: a LET that names a request
+            // parameter shadows it everywhere (the WHERE read the request's
+            // value, the window the LET's, and the persisted and transport
+            // executors' own windows the request's again), and a WITH's SKIP
+            // or LIMIT on a LET reads (and checks) the LET's value on every
+            // path.
+            var q = stmt_q;
+            var ctx = context;
+            var let_names: std.ArrayList([]const u8) = .empty;
+            defer let_names.deinit(allocator);
+            var let_values: std.ArrayList(Value) = .empty;
+            defer let_values.deinit(allocator);
+            if (q.let_bindings.len != 0) {
+                try let_names.appendSlice(allocator, context.query_param_names);
+                try let_values.appendSlice(allocator, context.query_param_values);
+                try query_execution.bindLetParams(allocator, q.let_bindings, @constCast(&context), &let_names, &let_values);
+                ctx.query_param_names = let_names.items;
+                ctx.query_param_values = let_values.items;
+                q.let_bindings = &.{};
+                try checkWindowValues(&q, ctx);
+            }
+            // SONNY-3248: the window is resolved (and a bad value refused)
+            // before the statement runs, so a refused one writes nothing.
+            const window = try queryWindow(q, ctx);
+            var result = try executeQueryWithContext(allocator, q, ctx);
 
             try applyMatchGuard(allocator, &result, context, q.match.chains.len > 0);
-
-            const start = q.offset orelse 0;
-            var end = result.rows.len;
-            if (q.limit) |limit_count| {
-                const end_limit = std.math.add(usize, start, limit_count) catch std.math.maxInt(usize);
-                end = @min(end, end_limit);
-            }
-            if (start != 0 or end != result.rows.len) {
-                try applyRowWindow(allocator, &result, start, end);
-            }
+            try applyQueryWindow(allocator, &result, window);
 
             rows_returned = @intCast(result.rows.len);
             return result;
@@ -1375,7 +1682,7 @@ fn executeStatementWithContextInner(allocator: std.mem.Allocator, stmt: ast.Stat
         },
         .Insert => |ins| {
             const insert_graph = if (context.session_state) |session| session.graph else null;
-            return executeInsert(allocator, ins, insert_graph);
+            return executeInsert(allocator, ins, insert_graph, context);
         },
         .Delete => |d| {
             const delete_graph = if (context.session_state) |session| session.graph else null;
@@ -1403,6 +1710,12 @@ fn executeStatementWithContextInner(allocator: std.mem.Allocator, stmt: ast.Stat
 
             // If transaction has a body, execute statements and auto-commit
             if (txn.body) |body| {
+                // SONNY-2805: the body is a transaction of its own: committed
+                // after its last statement, rolled back on an error. Neither
+                // happened: its undo transaction stayed open on the thread,
+                // with its entries, and the thread's next changes were
+                // recorded in it.
+                const body_store = graph_store.getWritableGlobalStore(allocator);
                 var last_result: ?ExecutionResult = null;
 
                 // Execute all statements in the transaction body
@@ -1422,14 +1735,23 @@ fn executeStatementWithContextInner(allocator: std.mem.Allocator, stmt: ast.Stat
                         .Rollback => return error.RollbackInTransactionBody,
                         else => return error.UnsupportedStatementInTransactionBody,
                     }) catch |err| {
-                        // On error, rollback (just reset state for now)
                         mut_context.transaction_state = .None;
+                        // SONNY-2823: the engine transaction first, so the
+                        // undo's own changes commit on their own.
+                        storage_adapter.abortThreadSessionTxn();
+                        undo_log.rollback(body_store) catch |rb_err| {
+                            log.err("Failed to roll back a transaction body", &.{
+                                Attr.string("error", @errorName(rb_err)),
+                            });
+                        };
                         return err;
                     };
                 }
 
                 // Auto-commit: reset transaction state
                 mut_context.transaction_state = .None;
+                undo_log.commit(body_store);
+                commitSessionEngineTxn();
 
                 // Return result from last statement
                 if (last_result) |result| {
@@ -1465,6 +1787,13 @@ fn executeStatementWithContextInner(allocator: std.mem.Allocator, stmt: ast.Stat
                 const undo_log = txn_undo_log.getGlobalUndoLog(allocator);
                 const commit_store = graph_store.getWritableGlobalStore(allocator);
                 undo_log.commit(commit_store);
+                // CANARY: REQ=REQ-SONNY-2823-SESSION-ENGINE-TXN; FEATURE="TransactionManagement"; ASPECT=CommitStatement; STATUS=TESTED; TEST=tests/test_sonny2823_session_engine_txn.zig; OWNER=storage; UPDATED=2026-09-26
+                // SONNY-2823: and the session's engine transaction (R9),
+                // which a COMMIT statement never committed, on either
+                // transport: the transaction's writes on its shard had no
+                // COMMIT record, and the thread kept the transaction for the
+                // next session it served.
+                commitSessionEngineTxn();
 
                 break :blk "transaction committed";
             } else "no transaction active";
@@ -1499,8 +1828,15 @@ fn executeStatementWithContextInner(allocator: std.mem.Allocator, stmt: ast.Stat
 
                 // CANARY: REQ=REQ-TXN-UNDO-007; FEATURE="TransactionUndoLog"; ASPECT=RollbackTransaction; STATUS=TESTED; TEST=geodetestlab/specs/transaction_state_basic.yml; OWNER=engine; UPDATED=2025-12-23
                 // Rollback using the undo log - undoes all changes in reverse order
-                const store = graph_store.getGlobalStore(allocator);
+                // SONNY-2799: on the live store. `getGlobalStore` is a read
+                // snapshot's store while one is installed on the thread, and
+                // the undo went into the snapshot.
+                const store = graph_store.getWritableGlobalStore(allocator);
                 const undo_log = txn_undo_log.getGlobalUndoLog(allocator);
+                // SONNY-2823: the session's engine transaction first (as
+                // QUIC's ROLLBACK message does), so the undo's own changes
+                // commit on their own. A ROLLBACK statement never aborted it.
+                storage_adapter.abortThreadSessionTxn();
                 undo_log.rollback(store) catch |err| {
                     log.err("Failed to rollback transaction", &.{
                         Attr.string("error", @errorName(err)),
@@ -1526,73 +1862,41 @@ fn executeStatementWithContextInner(allocator: std.mem.Allocator, stmt: ast.Stat
         },
         .SessionSet => |ss| {
             // CANARY: REQ=REQ-GQL-081; FEATURE="SessionManagement"; ASPECT=SessionSet; STATUS=TESTED; OWNER=engine; UPDATED=2025-10-09
-            // Update session state if available
-            if (context.session_state) |session| {
-                switch (ss.clause_type) {
-                    .Graph => |graph| {
-                        // Set the current graph in session
-                        if (session.graph) |old_graph| {
-                            allocator.free(old_graph);
-                        }
-                        session.graph = try allocator.dupe(u8, graph.expression);
+            // CANARY: REQ=REQ-SONNY-2775-SESSION-GRAPH-GATE; FEATURE="GraphRBACEnforcement"; ASPECT=SessionSetGraph; STATUS=TESTED; TEST=tests/test_sonny2775_session_graph_gate.zig; OWNER=security; UPDATED=2026-09-26
+            // SONNY-2775: SESSION SET [PROPERTY] GRAPH goes through the gate
+            // USE GRAPH takes: bind_graph, then existence (3F000), and a
+            // DSN-bound session stays on its graph. It used to store any name
+            // with no check (so a user refused USE GRAPH hr could read hr),
+            // with the request's allocator, and it created test graphs G1 and
+            // G2. Every session field is now owned by the session's allocator.
+            switch (ss.clause_type) {
+                .Graph => |graph| try session_graph.change(context, query_traits.graphTarget(graph.expression)),
+                .TimeZone => |tz| if (context.session_state) |session| try session.setTimeZone(tz.value),
+                .Schema => |schema| if (context.session_state) |session| try session.setSchema(schema.name),
+                .Parameter => |param| if (context.session_state) |session| {
+                    const param_name = switch (param) {
+                        .GraphParam => |gp| gp.parameter_name.specification,
+                        .BindingTableParam => |btp| btp.parameter_name.specification,
+                        .ValueParam => |vp| vp.parameter_name.specification,
+                    };
 
-                        // Create test data for known test graphs
-                        // Support both quoted and unquoted graph names
-                        const graph_name = graph.expression;
-                        if (std.mem.eql(u8, graph_name, "G1")) {
-                            try createTestGraphG1(allocator);
-                        } else if (std.mem.eql(u8, graph_name, "G2")) {
-                            try createTestGraphG2(allocator);
-                        }
-                        // For other graphs (including "NewG"), just set the session graph
-                        // MATCH will filter by graph_name, so an empty graph returns 0 results naturally
-                    },
-                    .TimeZone => |tz| {
-                        // Set timezone in session state
-                        if (session.timezone) |old_tz| {
-                            allocator.free(old_tz);
-                        }
-                        session.timezone = try allocator.dupe(u8, tz.value);
-                    },
-                    .Schema => |schema| {
-                        // Set current schema in session state
-                        if (session.schema) |old_schema| {
-                            allocator.free(old_schema);
-                        }
-                        session.schema = try allocator.dupe(u8, schema.name);
-                    },
-                    .Parameter => |param| {
-                        // Store parameter in session state
-                        const param_name = switch (param) {
-                            .GraphParam => |gp| gp.parameter_name.specification,
-                            .BindingTableParam => |btp| btp.parameter_name.specification,
-                            .ValueParam => |vp| vp.parameter_name.specification,
-                        };
+                    const param_value = switch (param) {
+                        .GraphParam => |gp| gp.initializer orelse "null",
+                        .BindingTableParam => |btp| btp.initializer orelse "null",
+                        .ValueParam => |vp| vp.initializer orelse "null",
+                    };
 
-                        const param_value = switch (param) {
-                            .GraphParam => |gp| gp.initializer orelse "null",
-                            .BindingTableParam => |btp| btp.initializer orelse "null",
-                            .ValueParam => |vp| vp.initializer orelse "null",
-                        };
+                    const if_not_exists = switch (param) {
+                        .GraphParam => |gp| gp.parameter_name.if_not_exists,
+                        .BindingTableParam => |btp| btp.parameter_name.if_not_exists,
+                        .ValueParam => |vp| vp.parameter_name.if_not_exists,
+                    };
 
-                        // Check IF NOT EXISTS flag
-                        const if_not_exists = switch (param) {
-                            .GraphParam => |gp| gp.parameter_name.if_not_exists,
-                            .BindingTableParam => |btp| btp.parameter_name.if_not_exists,
-                            .ValueParam => |vp| vp.parameter_name.if_not_exists,
-                        };
-
-                        if (if_not_exists and session.parameters.contains(param_name)) {
-                            // Parameter already exists and IF NOT EXISTS is set, skip
-                        } else {
-                            // Store or update parameter
-                            try session.parameters.put(
-                                try allocator.dupe(u8, param_name),
-                                try allocator.dupe(u8, param_value),
-                            );
-                        }
-                    },
-                }
+                    // IF NOT EXISTS keeps a parameter that is already set.
+                    if (!(if_not_exists and session.parameters.contains(param_name))) {
+                        try session.setParameter(param_name, param_value);
+                    }
+                },
             }
 
             const columns = try allocator.alloc([]const u8, 1);
@@ -1628,6 +1932,11 @@ fn executeStatementWithContextInner(allocator: std.mem.Allocator, stmt: ast.Stat
             // an ungated CREATE INDEX exists on ONE node and silently diverges.
             // CANARY: REQ=REQ-DIST-CLUSTER-FAILCLOSED-UNREPLICATED; FEATURE="DistributedCluster"; ASPECT=GateIndexDDL; STATUS=TESTED; TEST=tests/test_cluster_replicable_mutations.zig; OWNER=distributed; UPDATED=2026-06-10
             try cluster_mod.gateUnreplicatedWrite();
+            // CANARY: REQ=REQ-SONNY-2803-GRAPH-DDL-GATE; FEATURE="GraphRBACEnforcement"; ASPECT=IndexDDL; STATUS=TESTED; TEST=tests/test_sonny2803_graph_ddl_gate.zig; OWNER=security; UPDATED=2026-09-26
+            // SONNY-2803: schema on the graph the index DDL runs on (the
+            // session's; a fulltext index lives in the default graph,
+            // SONNY-2790), before the IF NOT EXISTS lookup.
+            try session_graph.authorizeSchemaChange(context, if (ci.index_type == .fulltext) graph_store.DEFAULT_GRAPH_NAME else session_graph.current(context));
             const cat = context.catalog;
             const index_name = ci.name orelse blk: {
                 var parts = try std.ArrayList(u8).initCapacity(allocator, 64);
@@ -1806,6 +2115,9 @@ fn executeStatementWithContextInner(allocator: std.mem.Allocator, stmt: ast.Stat
             // node only and silently diverges.
             // CANARY: REQ=REQ-DIST-CLUSTER-FAILCLOSED-UNREPLICATED; FEATURE="DistributedCluster"; ASPECT=GateConstraintDDL; STATUS=TESTED; TEST=tests/test_cluster_replicable_mutations.zig; OWNER=distributed; UPDATED=2026-06-10
             try cluster_mod.gateUnreplicatedWrite();
+            // SONNY-2803: schema on the session's graph, before the IF NOT
+            // EXISTS lookup.
+            try session_graph.authorizeSchemaChange(context, session_graph.current(context));
             // CANARY: REQ=REQ-CONSTRAINT-EXEC-001; FEATURE="ConstraintExecution"; ASPECT=CREATE; STATUS=EXEMPT; OWNER=engine; UPDATED=2026-01-09
             // CREATE CONSTRAINT implementation - store in catalog and enforce
 
@@ -1845,17 +2157,17 @@ fn executeStatementWithContextInner(allocator: std.mem.Allocator, stmt: ast.Stat
                 }
             }
 
-            // Add constraint to catalog
+            // Add constraint to catalog. SONNY-2809: a duplicate name is
+            // refused with ConstraintAlreadyExists (42710). It returned a
+            // result whose one column and one row were uninitialized memory;
+            // under IF NOT EXISTS (a concurrent CREATE won the race) it is a
+            // no-op, as the check above is.
             cat.addConstraint(constraint_info) catch |err| {
-                if (err == error.ConstraintAlreadyExists and !cc.if_not_exists) {
+                if (err == error.ConstraintAlreadyExists and cc.if_not_exists) {
                     return ExecutionResult{
-                        .columns = try allocator.alloc([]const u8, 1),
-                        .rows = try allocator.alloc([]Value, 1),
-                        .flags = blk: {
-                            var list = try std.ArrayList([]const u8).initCapacity(allocator, 1);
-                            try list.append(allocator, "error");
-                            break :blk list;
-                        },
+                        .columns = try allocator.alloc([]const u8, 0),
+                        .rows = try allocator.alloc([]Value, 0),
+                        .flags = std.ArrayList([]const u8).empty,
                     };
                 }
                 return err;
@@ -1873,6 +2185,10 @@ fn executeStatementWithContextInner(allocator: std.mem.Allocator, stmt: ast.Stat
         .DropIndex => |di| {
             // Cluster fail-closed: see .CreateIndex (GateIndexDDL).
             try cluster_mod.gateUnreplicatedWrite();
+            // SONNY-2803: schema on the default graph, the graph DROP INDEX
+            // runs on (SONNY-2790: the index may be a fulltext one), before
+            // the index is looked up.
+            try session_graph.authorizeSchemaChange(context, graph_store.DEFAULT_GRAPH_NAME);
             const cat = context.catalog;
             const index_name = di.name;
 
@@ -1946,6 +2262,8 @@ fn executeStatementWithContextInner(allocator: std.mem.Allocator, stmt: ast.Stat
             // (Currently a stub no-op, but the surface claims to mutate — keep
             // the fail-closed contract so a future real implementation stays gated.)
             try cluster_mod.gateUnreplicatedWrite();
+            // SONNY-2803: as CREATE CONSTRAINT.
+            try session_graph.authorizeSchemaChange(context, session_graph.current(context));
             // DROP CONSTRAINT implementation
             _ = dc;
             return ExecutionResult{
@@ -2010,6 +2328,12 @@ fn executeStatementWithContextInner(allocator: std.mem.Allocator, stmt: ast.Stat
             // explicit DDL is refused pending a real schema-change slice.
             // CANARY: REQ=REQ-DIST-CLUSTER-FAILCLOSED-UNREPLICATED; FEATURE="DistributedCluster"; ASPECT=GateGraphDDL; STATUS=TESTED; TEST=tests/test_cluster_replicable_mutations.zig; OWNER=distributed; UPDATED=2026-06-10
             try cluster_mod.gateUnreplicatedWrite();
+            // SONNY-2791: the __geode_* names are the engine's own.
+            try session_graph.refuseInternal(cg.name);
+            // CANARY: REQ=REQ-SONNY-2803-GRAPH-DDL-GATE; FEATURE="GraphRBACEnforcement"; ASPECT=GraphDDL; STATUS=TESTED; TEST=tests/test_sonny2803_graph_ddl_gate.zig; OWNER=security; UPDATED=2026-09-26
+            // SONNY-2803: schema and bind_graph on the graph to create, before
+            // whether it exists.
+            try session_graph.authorizeSchemaChange(context, cg.name);
             // CREATE GRAPH implementation with duplicate detection (Catalog instance)
             const graph_name = cg.name;
             const cat = context.catalog;
@@ -2084,6 +2408,12 @@ fn executeStatementWithContextInner(allocator: std.mem.Allocator, stmt: ast.Stat
             // Cluster fail-closed: see .CreateGraph (GateGraphDDL) — same
             // auto-create note applies; only the explicit DDL is refused.
             try cluster_mod.gateUnreplicatedWrite();
+            // SONNY-2791: DROP GRAPH __geode_security removed the security graph.
+            try session_graph.refuseInternal(dg.name);
+            // SONNY-2803: schema and bind_graph on the graph to drop, before
+            // whether it exists. A ReadWrite user refused `USE GRAPH g1`
+            // dropped g1.
+            try session_graph.authorizeSchemaChange(context, dg.name);
             // DROP GRAPH implementation with existence check (Catalog instance)
             const graph_name = dg.name;
             const cat = context.catalog;
@@ -2198,67 +2528,12 @@ fn executeStatementWithContextInner(allocator: std.mem.Allocator, stmt: ast.Stat
         },
         .UseGraph => |ug| {
             // CANARY: REQ=REQ-DSN-GRAPH-BIND-002; FEATURE="DSNGraphBinding"; ASPECT=UseGraphRejection; STATUS=TESTED; TEST=geodetestlab-cli/specs/dsn_graph_binding.yml; OWNER=engine; UPDATED=2026-06-11
-            // When session is bound via DSN, allow USE GRAPH if it matches the
-            // bound graph (idempotent no-op). Reject only if switching to a
-            // different graph.
-            if (context.graph_bound) {
-                if (context.session_state) |session| {
-                    if (session.graph) |bound| {
-                        if (std.mem.eql(u8, bound, ug.graph_name)) {
-                            // Same graph — no-op, return empty success result
-                            return ExecutionResult{
-                                .columns = try allocator.alloc([]const u8, 0),
-                                .rows = try allocator.alloc([]value_types.Value, 0),
-                                .flags = std.ArrayList([]const u8).empty,
-                            };
-                        }
-                    }
-                }
-                return error.GraphBound;
-            }
             // CANARY: REQ=REQ-GPS-BIND-002; FEATURE="GPS BindGraph Action"; ASPECT=UseGraphAuthorization; STATUS=TESTED; TEST=tests/test_gps_bind_graph.zig; OWNER=security; UPDATED=2026-05-20
-            // Phase 3: gate USE GRAPH on gps.decide(.bind_graph). When the
-            // execution context carries a Principal, the decision determines
-            // whether the switch is permitted. Legacy paths without a
-            // principal (tests, internal callers) bypass this check —
-            // Phase 3+ will narrow that exemption.
-            if (context.principal) |princ| {
-                const gps_mod = @import("security/gps.zig");
-                const req_bind = gps_mod.DecisionRequest{
-                    .principal = princ,
-                    .action = .bind_graph,
-                    .resource = .{ .graph = ug.graph_name },
-                };
-                const decision_bind = try gps_mod.decide(std.heap.smp_allocator, &req_bind);
-                if (decision_bind.kind != .allow) {
-                    return error.Unauthorized;
-                }
-            }
             // CANARY: REQ=REQ-MULTI-GRAPH-032; FEATURE="MultiGraphIsolation"; ASPECT=UseGraphValidation; STATUS=TESTED; TEST=geodetestlab/specs/multi_graph.yml; OWNER=engine; UPDATED=2025-12-27
-            // USE GRAPH implementation - switch active graph context
-            // Must validate graph exists before switching
-            const graph_name = ug.graph_name;
-
-            // Check if graph exists in catalog or storage
-            const cat = getCatalog(allocator, context);
-            const in_catalog = cat.hasGraph(graph_name);
-
-            const in_storage = graph_store.getGlobalStore(allocator).graphExists(graph_name);
-
-            if (!in_catalog and !in_storage) {
-                return error.GraphNotFound;
-            }
-
-            // Update session state with new graph
-            if (context.session_state) |session| {
-                // Free old graph name if present
-                if (session.graph) |old_graph| {
-                    session.allocator.free(old_graph);
-                }
-                // Set new graph
-                session.graph = try session.allocator.dupe(u8, graph_name);
-            }
-
+            // SONNY-2775: through the one gate every session graph change
+            // takes (a DSN-bound session stays on its graph; bind_graph is
+            // checked, then existence). USE GRAPH of the bound graph is a no-op.
+            try session_graph.change(context, query_traits.graphTarget(ug.graph_name));
             return ExecutionResult{
                 .columns = try allocator.alloc([]const u8, 0),
                 .rows = try allocator.alloc([]Value, 0),
@@ -2267,56 +2542,28 @@ fn executeStatementWithContextInner(allocator: std.mem.Allocator, stmt: ast.Stat
         },
         .SessionReset => |sr| {
             // CANARY: REQ=REQ-GQL-081; FEATURE="SessionManagement"; ASPECT=SessionReset; STATUS=TESTED; OWNER=engine; UPDATED=2025-10-09
-            // Reset session state based on arguments
+            // SONNY-2775: a reset that covers the graph (no arguments, ALL
+            // CHARACTERISTICS, [PROPERTY] GRAPH) moves it home through the
+            // gate first, so a refusal changes nothing. Home is the DSN-bound
+            // graph for a bound session (it stays bound), else the default.
+            // Everything the session owns is freed with its allocator.
+            if (query_traits.sessionResetClearsGraph(sr)) {
+                try session_graph.change(context, .home);
+            }
             if (context.session_state) |session| {
                 if (sr.arguments) |args| {
                     switch (args) {
-                        .All => |all_type| {
-                            switch (all_type) {
-                                .Parameters => {
-                                    // Reset all parameters
-                                    var iter = session.parameters.iterator();
-                                    while (iter.next()) |entry| {
-                                        allocator.free(entry.key_ptr.*);
-                                        allocator.free(entry.value_ptr.*);
-                                    }
-                                    session.parameters.clearRetainingCapacity();
-                                },
-                                .Characteristics => {
-                                    // Reset all session characteristics
-                                    session.reset();
-                                },
-                            }
+                        .All => |all_type| switch (all_type) {
+                            .Parameters => session.clearParameters(),
+                            .Characteristics => session.resetCharacteristics(),
                         },
-                        .Schema => {
-                            if (session.schema) |s| {
-                                allocator.free(s);
-                                session.schema = null;
-                            }
-                        },
-                        .Graph => {
-                            if (session.graph) |g| {
-                                allocator.free(g);
-                                session.graph = null;
-                            }
-                        },
-                        .TimeZone => {
-                            if (session.timezone) |tz| {
-                                allocator.free(tz);
-                                session.timezone = null;
-                            }
-                        },
-                        .Parameter => |param| {
-                            // Remove specific parameter
-                            if (session.parameters.fetchRemove(param)) |entry| {
-                                allocator.free(entry.key);
-                                allocator.free(entry.value);
-                            }
-                        },
+                        .Schema => try session.setSchema(null),
+                        .Graph => {},
+                        .TimeZone => try session.setTimeZone(null),
+                        .Parameter => |param| session.removeParameter(param),
                     }
                 } else {
-                    // No arguments - reset everything
-                    session.reset();
+                    session.resetCharacteristics();
                 }
             }
 
@@ -2336,9 +2583,11 @@ fn executeStatementWithContextInner(allocator: std.mem.Allocator, stmt: ast.Stat
         },
         .SessionClose => {
             // CANARY: REQ=REQ-GQL-081; FEATURE="SessionManagement"; ASPECT=SessionClose; STATUS=TESTED; OWNER=engine; UPDATED=2025-10-09
-            // Close session - clean up all session state
+            // Close session - clean up all session state. SONNY-2775: the
+            // graph goes home through the gate, as for SESSION RESET.
+            try session_graph.change(context, .home);
             if (context.session_state) |session| {
-                session.reset();
+                session.resetCharacteristics();
             }
 
             const columns = try allocator.alloc([]const u8, 1);
@@ -2420,21 +2669,13 @@ fn executeStatementWithContextInner(allocator: std.mem.Allocator, stmt: ast.Stat
             // told "Policy created" and got a policy that denies everything.
             // Hydration (policy_persistence.hydrateCatalog) keeps the tolerant
             // addPolicy so an already-persisted record cannot brick startup.
-            try pol_cat.addPolicyStrict(new_policy_spec);
-
             // CANARY: REQ=REQ-GPS-CATALOG-002; FEATURE="GPS Policy Persistence"; ASPECT=CreatePolicyWriteThrough; STATUS=TESTED; TEST=tests/test_gps_policy_persistence.zig; OWNER=security; UPDATED=2026-05-20
             // Write-through to __geode_security via hooks installed at server startup.
             // In CLI / test contexts hooks are null and the policy is in-memory only.
-            if (policy_catalog_mod.getWriteThroughHooks()) |hooks| {
-                hooks.persist(hooks.ctx, new_policy_spec) catch |err| {
-                    const logging_mod = @import("logging");
-                    const log_ex = logging_mod.scoped("execution");
-                    log_ex.warn("GPS CREATE POLICY persistence to __geode_security failed — policy is in-memory only", &.{
-                        logging_mod.Attr.string("name", cp_stmt.name),
-                        logging_mod.Attr.string("error", @errorName(err)),
-                    });
-                };
-            }
+            // SONNY-2731: a policy that cannot be persisted is taken out again
+            // and the statement fails. SONNY-2757: shared with
+            // geode.auth.policy_create (`policy_ddl.create`).
+            try policy_ddl.create(pol_cat, new_policy_spec);
 
             // CANARY: REQ=REQ-GPS-AUDIT-001; FEATURE="GPS Policy DDL Audit"; ASPECT=CreatePolicyAuditEmission; STATUS=TESTED; TEST=geode-test-harness/geodetestlab-cli/specs/gps_persistence_policy_audit.yml; OWNER=security; UPDATED=2026-05-21
             {
@@ -2474,34 +2715,15 @@ fn executeStatementWithContextInner(allocator: std.mem.Allocator, stmt: ast.Stat
             const policy_catalog_mod = @import("security/policy_catalog.zig");
             const pol_cat = policy_catalog_mod.getGlobalCatalog() orelse return error.PolicyCatalogNotInitialized;
 
-            const remove_outcome: enum { removed, not_found } = blk: {
-                pol_cat.removePolicy(dp_stmt.name) catch |err| {
-                    if (err != error.PolicyNotFound or !dp_stmt.if_exists) return err;
-                    // IF EXISTS: swallow error.PolicyNotFound but record it.
-                    break :blk .not_found;
-                };
-                break :blk .removed;
-            };
-
             // CANARY: REQ=REQ-GPS-CATALOG-002; FEATURE="GPS Policy Persistence"; ASPECT=DropPolicyWriteThrough; STATUS=TESTED; TEST=tests/test_gps_policy_persistence.zig; OWNER=security; UPDATED=2026-05-20
             // Write-through to __geode_security via hooks installed at server startup.
             // In CLI / test contexts hooks are null and the policy is in-memory only.
-            {
-                const drop_name = dp_stmt.name;
-                const drop_if_exists = dp_stmt.if_exists;
-                if (policy_catalog_mod.getWriteThroughHooks()) |hooks| {
-                    hooks.drop(hooks.ctx, drop_name) catch |err| {
-                        if (err != error.PolicyNotFound or !drop_if_exists) {
-                            const logging_mod = @import("logging");
-                            const log_ex = logging_mod.scoped("execution");
-                            log_ex.warn("GPS DROP POLICY persistence to __geode_security failed", &.{
-                                logging_mod.Attr.string("name", drop_name),
-                                logging_mod.Attr.string("error", @errorName(err)),
-                            });
-                        }
-                    };
-                }
-            }
+            // SONNY-2757 (P25): the stored record is deleted first and the
+            // catalog entry only after that; a failed write-through fails the
+            // statement and drops nothing. It used to drop the policy from the
+            // catalog and only log the failure, so the revocation was undone
+            // at the next restart.
+            const remove_outcome = try policy_ddl.drop(pol_cat, dp_stmt.name, dp_stmt.if_exists);
 
             // CANARY: REQ=REQ-GPS-AUDIT-002; FEATURE="GPS Policy DDL Audit"; ASPECT=DropPolicyAuditEmission; STATUS=TESTED; TEST=geode-test-harness/geodetestlab-cli/specs/gps_persistence_policy_audit.yml; OWNER=security; UPDATED=2026-05-21
             // Only emit audit when a policy was actually removed.  IF EXISTS no-ops
@@ -2543,24 +2765,16 @@ fn executeStatementWithContextInner(allocator: std.mem.Allocator, stmt: ast.Stat
             const policy_catalog_mod = @import("security/policy_catalog.zig");
             const pol_cat = policy_catalog_mod.getGlobalCatalog() orelse return error.PolicyCatalogNotInitialized;
 
-            try pol_cat.alterPolicy(ap_stmt.name, ap_stmt.set_enabled, ap_stmt.rename_to);
-
             // CANARY: REQ=REQ-GPS-CATALOG-002; FEATURE="GPS Policy Persistence"; ASPECT=AlterPolicyWriteThrough; STATUS=TESTED; TEST=tests/test_gap0858_alter_policy_persist.zig; OWNER=security; UPDATED=2026-06-09
             // GAP-0858: durable ALTER POLICY write-through to __geode_security via
             // hooks installed at server startup. In CLI / test contexts hooks are
             // null and the in-memory catalog update is authoritative for the
             // running process only. The hook is called with the CURRENT (pre-rename)
             // name so the durable record can be located before the rename applies.
-            if (policy_catalog_mod.getWriteThroughHooks()) |hooks| {
-                hooks.alter(hooks.ctx, ap_stmt.name, ap_stmt.set_enabled, ap_stmt.rename_to) catch |err| {
-                    const logging_mod = @import("logging");
-                    const log_ex = logging_mod.scoped("execution");
-                    log_ex.warn("GPS ALTER POLICY persistence to __geode_security failed — change is in-memory only", &.{
-                        logging_mod.Attr.string("name", ap_stmt.name),
-                        logging_mod.Attr.string("error", @errorName(err)),
-                    });
-                };
-            }
+            // SONNY-2757 (P25): a failed write-through fails the statement and
+            // puts the catalog back. It used to leave the change in memory
+            // only, so a DISABLE of an allow was undone at the next restart.
+            try policy_ddl.alter(pol_cat, ap_stmt.name, ap_stmt.set_enabled, ap_stmt.rename_to);
 
             // CANARY: REQ=REQ-GPS-AUDIT-003; FEATURE="GPS Policy DDL Audit"; ASPECT=AlterPolicyAuditEmission; STATUS=TESTED; TEST=geode-test-harness/geodetestlab-cli/specs/gps_persistence_policy_audit.yml; OWNER=security; UPDATED=2026-06-09
             {
@@ -2651,6 +2865,30 @@ pub const VariableLengthPath = struct {
     }
 };
 
+/// SONNY-2679: the visibility gate every `PathIterator` step must pass (the
+/// edge walked, and the node it leads to). Type-erased so this module does not
+/// depend on `match_operations`, whose RLS predicate needs the `rls` module
+/// that not every build of this file provides; `match_operations.HopScope`
+/// supplies it through `pathStepFilter()`. The context is mutable: the scope
+/// caches each node's verdict for the traversal.
+pub const PathStepFilter = struct {
+    ctx: *anyopaque,
+    allowFn: *const fn (ctx: *anyopaque, store: *graph_store.GraphStore, edge: *const graph_store.Edge, next_node_id: u64) bool,
+
+    /// Admits every step. Only for a caller with no session to apply (unit
+    /// tests and benchmarks); every query traversal passes its HopScope.
+    pub const unrestricted: PathStepFilter = .{ .ctx = &unrestricted_ctx, .allowFn = allowEveryStep };
+    var unrestricted_ctx: u8 = 0;
+
+    fn allowEveryStep(_: *anyopaque, _: *graph_store.GraphStore, _: *const graph_store.Edge, _: u64) bool {
+        return true;
+    }
+
+    pub fn allows(self: PathStepFilter, store: *graph_store.GraphStore, edge: *const graph_store.Edge, next_node_id: u64) bool {
+        return self.allowFn(self.ctx, store, edge, next_node_id);
+    }
+};
+
 // CANARY: REQ=REQ-GQL-080; FEATURE="VariableLengthPaths"; ASPECT=PathIterator; STATUS=TESTED; OWNER=engine; UPDATED=2026-04-10
 // CANARY: REQ=REQ-GQL-VARLEN-REVERSE-001; FEATURE="VariableLengthPaths"; ASPECT=ReverseTraversal; STATUS=TESTED; TEST=geodetestlab/specs/gql_pattern_matching_comprehensive.yml; OWNER=engine; UPDATED=2026-04-10
 // CANARY: REQ=REQ-GQL-PATH-MODES-004; FEATURE="GQL Path Mode Execution"; ASPECT=PathExpansion; STATUS=TESTED; TEST=geodetestlab/specs/gql_pattern_matching_comprehensive.yml; OWNER=engine; UPDATED=2026-04-10
@@ -2682,6 +2920,15 @@ pub const PathIterator = struct {
     // the consumed portion exceeds half the backing array.
     queue_front: usize,
     pending_front: usize,
+    // CANARY: REQ=REQ-SONNY-2679-HOP-VISIBILITY; FEATURE="TraversalRowVisibility"; ASPECT=PathIteratorGate; STATUS=TESTED; TEST=tests/test_sonny2679_rls_hop_targets.zig; OWNER=security; UPDATED=2026-09-25
+    // SONNY-2679: the session's graph, tenant and RLS scope. Every edge the
+    // BFS walks, and every node it steps onto, must pass it, so a path never
+    // contains, ends at or runs through a node the session may not see. A step
+    // is refused BEFORE it is expanded, so a denied node also never claims a
+    // `visited_states` slot another route to the same node would need.
+    // Required: a caller with no session to apply (a unit test, a benchmark)
+    // passes `PathStepFilter.unrestricted` explicitly.
+    scope: PathStepFilter,
 
     const max_iterations: u64 = 10_000;
     const max_queue_size: usize = 5000;
@@ -2695,6 +2942,7 @@ pub const PathIterator = struct {
         rel_type: ?[]const u8,
         rel_direction: u8,
         path_mode: ast.PathMode,
+        scope: PathStepFilter,
     ) !PathIterator {
         var queue = try std.ArrayList(QueueItem).initCapacity(allocator, 16);
         errdefer {
@@ -2725,7 +2973,13 @@ pub const PathIterator = struct {
             .pending_results = std.ArrayList(VariableLengthPath).empty,
             .queue_front = 0,
             .pending_front = 0,
+            .scope = scope,
         };
+    }
+
+    /// SONNY-2679: may the BFS take `edge` onto `next_node_id`?
+    fn stepVisible(self: *const PathIterator, edge: *const graph_store.Edge, next_node_id: u64) bool {
+        return self.scope.allows(self.store, edge, next_node_id);
     }
 
     pub fn deinit(self: *PathIterator) void {
@@ -2928,6 +3182,7 @@ pub const PathIterator = struct {
                         if (!std.mem.eql(u8, edge_ptr.label, rt)) continue;
                     }
                     if (self.shouldSkipByPathMode(&current_path, edge_ptr.id, edge_ptr.to_id)) continue;
+                    if (!self.stepVisible(edge_ptr, edge_ptr.to_id)) continue;
                     try self.expandEdge(&current_path, edge_ptr.id, edge_ptr.to_id, depth);
                 }
             }
@@ -2941,6 +3196,7 @@ pub const PathIterator = struct {
                     }
                     const next_node_id = edge_ptr.from_id;
                     if (self.shouldSkipByPathMode(&current_path, edge_ptr.id, next_node_id)) continue;
+                    if (!self.stepVisible(edge_ptr, next_node_id)) continue;
                     try self.expandEdge(&current_path, edge_ptr.id, next_node_id, depth);
                 }
             }
@@ -2962,55 +3218,6 @@ pub const PathIterator = struct {
 // GAP-0520: Removed expandVariableLengthPaths and expandVariableLengthPathsWithMode
 // materializing wrappers — all call sites now use PathIterator.init() directly
 // for streaming path consumption. CANARY markers relocated to PathIterator definition.
-
-pub fn createTestGraphG1(allocator: std.mem.Allocator) !void {
-    const store = graph_store.getGlobalStore(allocator);
-
-    // Clear only G1 nodes before recreating test data
-    store.clearNodesForGraph("G1");
-
-    // Create test nodes for G1
-    // Based on test T15, we have nodes with labels "A", "A", and "B"
-    // Node 1: label="A", v=1
-    const node1_labels = try allocator.alloc([]const u8, 0);
-    defer allocator.free(node1_labels);
-    const node1_id = try store.createNodeWithGraph(node1_labels, "G1");
-    try store.setNodeProperty(node1_id, "label", .{ .String = "A" });
-    try store.setNodeProperty(node1_id, "v", .{ .Int = 1 });
-
-    // Node 2: label="A", v=2  (another A node for count(*) = 2 in T15)
-    const node2_labels = try allocator.alloc([]const u8, 0);
-    defer allocator.free(node2_labels);
-    const node2_id = try store.createNodeWithGraph(node2_labels, "G1");
-    try store.setNodeProperty(node2_id, "label", .{ .String = "A" });
-    try store.setNodeProperty(node2_id, "v", .{ .Int = 2 });
-
-    // Node 3: label="B", v=null (no v property, for testing AVG/SUM null handling)
-    const node3_labels = try allocator.alloc([]const u8, 0);
-    defer allocator.free(node3_labels);
-    const node3_id = try store.createNodeWithGraph(node3_labels, "G1");
-    try store.setNodeProperty(node3_id, "label", .{ .String = "B" });
-    // No v property for this node (null)
-}
-
-pub fn createTestGraphG2(allocator: std.mem.Allocator) !void {
-    const store = graph_store.getGlobalStore(allocator);
-
-    // Clear only G2 nodes before recreating test data
-    store.clearNodesForGraph("G2");
-
-    // Create test nodes for G2 - only 2 nodes for T12 test
-    var i: u8 = 0;
-    while (i < 2) : (i += 1) {
-        const labels = try allocator.alloc([]const u8, 1);
-        defer allocator.free(labels);
-        labels[0] = try allocator.dupe(u8, "Node");
-        defer allocator.free(labels[0]);
-        const node_id = try store.createNodeWithGraph(labels, "G2");
-        // All nodes have v=1 for testing COUNT DISTINCT
-        try store.setNodeProperty(node_id, "v", .{ .Int = 1 });
-    }
-}
 
 pub fn validateGroupBy(ret: ast.ReturnClause, group_by: ?ast.GroupBy) !void {
     const items = ret.items;
@@ -3173,9 +3380,109 @@ pub fn allocateColumnStrings(allocator: std.mem.Allocator, strings: []const []co
     return .{ .columns = columns, .buffer = buffer };
 }
 
+/// The environment an aggregate's argument is evaluated in for one input row:
+/// the row's columns, then the query's parameters (SONNY-2675: they were
+/// missing, so `sum(n.i * $f)` read `$f` as NULL).
+fn rowEnv(allocator: std.mem.Allocator, columns: []const []const u8, row: []const Value, param_names: []const []const u8, param_values: []const Value) Env {
+    return .{
+        .names = columns,
+        .values = row,
+        .param_names = param_names,
+        .param_values = param_values,
+        .allocator = allocator,
+    };
+}
+
+// CANARY: REQ=REQ-SONNY-2675-AGGREGATE-ERRORS; FEATURE="GroupedAggregates"; ASPECT=QueryLevelErrorsEscape; STATUS=TESTED; TEST=tests/test_sonny2675_aggregate_semantics.zig; OWNER=execution; UPDATED=2026-09-25
+/// Whether an evaluation error inside a grouped projection belongs to the query
+/// rather than to one row: a defect in the query text (an unknown function, a
+/// positional parameter that was not supplied), a refusal (strict tenancy, an
+/// encrypted field searched without permission, the read or write budget, a
+/// cancel), or running out of memory. These fail the query. Any
+/// other error is the row's value that cannot be computed, which the grouped
+/// path tolerates: the aggregate skips the row, a projected cell is the
+/// caller's fallback.
+pub fn isQueryLevelEvalError(err: anyerror) bool {
+    return switch (err) {
+        error.UnknownFunction,
+        error.MissingParameter,
+        error.TenantScopeRequired,
+        error.ReadQueryBudgetExceeded,
+        error.ReadQueryCancelled,
+        // Round 3 (M1): an encrypted (FLE) field searched without permission
+        // (42501) was a skipped row, so the aggregate ran over the rest; a
+        // write statement's budget abort and cancel were swallowed the same
+        // way.
+        error.SearchNotPermitted,
+        error.WriteQueryBudgetExceeded,
+        error.WriteQueryCancelled,
+        // Item 5 of the SONNY-2686 review: the evaluator's row visibility is
+        // not installed; no row may be answered without it.
+        error.EvaluatorNotInitialized,
+        error.OutOfMemory,
+        => true,
+        else => false,
+    };
+}
+
+/// One sum() or avg() input: an integer, or a float (a double, a real, or a
+/// decimal as f64).
+const SumAddend = union(enum) { int: i64, float: f64 };
+
+// CANARY: REQ=REQ-SONNY-2675-SUM-TYPES; FEATURE="GroupedAggregates"; ASPECT=NonNumericSumAvg; STATUS=TESTED; TEST=tests/test_sonny2675_aggregate_semantics.zig; OWNER=execution; UPDATED=2026-09-25
+/// A sum() or avg() input as a number, null for NULL (skipped), or
+/// TypeMismatch for anything that is not a number. Round 3 (M4): only a
+/// string or a boolean was a type error; a date, a list, an interval or a
+/// document was skipped, so the aggregate ran over the other rows, and a
+/// SmallInt or BigInt was skipped too. (No path sums durations.)
+fn sumAddend(val: Value) error{TypeMismatch}!?SumAddend {
+    return switch (val) {
+        .Null => null,
+        .Int, .BigInt => |n| .{ .int = n },
+        .SmallInt => |n| .{ .int = n },
+        .Real => |f| .{ .float = f },
+        .Double => |f| .{ .float = f },
+        .Decimal => |d| .{ .float = @as(f64, @floatFromInt(d.coeff)) / std.math.pow(f64, 10.0, @floatFromInt(d.scale)) },
+        .ExtValue => |ev| switch (ev) {
+            .Int, .BigInt => |n| .{ .int = n },
+            .SmallInt => |n| .{ .int = n },
+            .Real => |f| .{ .float = f },
+            .Double => |f| .{ .float = f },
+            .Decimal => |d| .{ .float = @as(f64, @floatFromInt(d.coeff)) / std.math.pow(f64, 10.0, @floatFromInt(d.scale)) },
+            else => error.TypeMismatch,
+        },
+        else => error.TypeMismatch,
+    };
+}
+
+/// Adds an integer to a sum kept as an i64 while it fits; past i64 the sum
+/// continues as a double, as the GROUP BY fast path's does. (`+=` aborted the
+/// server on an i64 overflow: SONNY-2739's class.)
+fn addInt(int_sum: *i64, float_sum: *f64, has_float: *bool, n: i64) void {
+    const r = @addWithOverflow(int_sum.*, n);
+    if (r[1] == 0) {
+        int_sum.* = r[0];
+        return;
+    }
+    float_sum.* += @as(f64, @floatFromInt(int_sum.*)) + @as(f64, @floatFromInt(n));
+    int_sum.* = 0;
+    has_float.* = true;
+}
+
+/// An aggregate's argument for one input row, or null when the row's value
+/// cannot be computed and the aggregate skips it. SONNY-2675: a query-level
+/// error (above) used to be skipped too, so `sum(n.i * $2)` without a `$2` was
+/// a sum over no rows instead of GAP-0926's MissingParameter.
+fn evalAggregateArgument(allocator: std.mem.Allocator, arg: ast.Expr, env: Env) !?Value {
+    return eval.evalExpr(allocator, arg, env) catch |err| {
+        if (isQueryLevelEvalError(err)) return err;
+        return null;
+    };
+}
+
 // CANARY: REQ=REQ-GQL-WITH-GROUPBY-002; FEATURE="WithGroupByAggregation"; ASPECT=AggregationComputation; STATUS=TESTED; TEST=geodetestlab/specs/gql_query_comprehensive.yml; OWNER=execution; UPDATED=2025-12-22
 /// Compute aggregation function over a group of rows
-pub fn computeGroupAggregation(allocator: std.mem.Allocator, expr: ast.Expr, group_rows: []const []const Value, columns: []const []const u8) !Value {
+pub fn computeGroupAggregation(allocator: std.mem.Allocator, expr: ast.Expr, group_rows: []const []const Value, columns: []const []const u8, param_names: []const []const u8, param_values: []const Value) !Value {
     // expr should be a Call expression for aggregation functions
     if (expr != .Call) return Value{ .Null = {} };
 
@@ -3207,12 +3514,7 @@ pub fn computeGroupAggregation(allocator: std.mem.Allocator, expr: ast.Expr, gro
         // count(expr) - count non-null values
         var count: i64 = 0;
         for (group_rows) |row| {
-            const env = Env{
-                .names = columns,
-                .values = row,
-                .allocator = allocator,
-            };
-            const val = eval.evalExpr(allocator, arg_ptr.?.*, env) catch continue;
+            const val = (try evalAggregateArgument(allocator, arg_ptr.?.*, rowEnv(allocator, columns, row, param_names, param_values))) orelse continue;
             if (distinct) |*d| {
                 if (!try d.add(val)) continue;
                 count += 1;
@@ -3231,41 +3533,20 @@ pub fn computeGroupAggregation(allocator: std.mem.Allocator, expr: ast.Expr, gro
         var has_float = false;
         var has_value = false;
         for (group_rows) |row| {
-            const env = Env{
-                .names = columns,
-                .values = row,
-                .allocator = allocator,
-            };
-            const val = eval.evalExpr(allocator, arg_ptr.?.*, env) catch continue;
+            const val = (try evalAggregateArgument(allocator, arg_ptr.?.*, rowEnv(allocator, columns, row, param_names, param_values))) orelse continue;
             if (distinct) |*d| {
                 if (!try d.add(val)) continue;
             }
-            switch (val) {
-                .Int => |n| {
-                    int_sum += n;
-                    has_value = true;
-                },
-                .Real => |f| {
-                    float_sum += @floatCast(f);
-                    has_float = true;
-                    has_value = true;
-                },
-                .Double => |f| {
+            // GAP-0916: non-numeric input to sum() is a type error, not a
+            // silent skip (`sumAddend`).
+            switch (try sumAddend(val) orelse continue) {
+                .int => |n| addInt(&int_sum, &float_sum, &has_float, n),
+                .float => |f| {
                     float_sum += f;
                     has_float = true;
-                    has_value = true;
                 },
-                .Decimal => |d| {
-                    const divisor = std.math.pow(f64, 10.0, @floatFromInt(d.scale));
-                    float_sum += @as(f64, @floatFromInt(d.coeff)) / divisor;
-                    has_float = true;
-                    has_value = true;
-                },
-                // GAP-0916: non-numeric input to sum() is a type error, not a
-                // silent skip.
-                .Str, .Bool => return error.TypeMismatch,
-                else => {},
             }
+            has_value = true;
         }
         if (!has_value) return Value{ .Null = {} };
         if (has_float) return Value{ .Double = float_sum + @as(f64, @floatFromInt(int_sum)) };
@@ -3280,41 +3561,20 @@ pub fn computeGroupAggregation(allocator: std.mem.Allocator, expr: ast.Expr, gro
         var has_float = false;
         var count: i64 = 0;
         for (group_rows) |row| {
-            const env = Env{
-                .names = columns,
-                .values = row,
-                .allocator = allocator,
-            };
-            const val = eval.evalExpr(allocator, arg_ptr.?.*, env) catch continue;
+            const val = (try evalAggregateArgument(allocator, arg_ptr.?.*, rowEnv(allocator, columns, row, param_names, param_values))) orelse continue;
             if (distinct) |*d| {
                 if (!try d.add(val)) continue;
             }
-            switch (val) {
-                .Int => |n| {
-                    int_sum += n;
-                    count += 1;
-                },
-                .Real => |f| {
-                    float_sum += @floatCast(f);
-                    has_float = true;
-                    count += 1;
-                },
-                .Double => |f| {
+            // GAP-0916: non-numeric input to avg() is a type error, not a
+            // silent NULL (`sumAddend`).
+            switch (try sumAddend(val) orelse continue) {
+                .int => |n| addInt(&int_sum, &float_sum, &has_float, n),
+                .float => |f| {
                     float_sum += f;
                     has_float = true;
-                    count += 1;
                 },
-                .Decimal => |d| {
-                    const divisor = std.math.pow(f64, 10.0, @floatFromInt(d.scale));
-                    float_sum += @as(f64, @floatFromInt(d.coeff)) / divisor;
-                    has_float = true;
-                    count += 1;
-                },
-                // GAP-0916: non-numeric input to avg() is a type error, not a
-                // silent NULL.
-                .Str, .Bool => return error.TypeMismatch,
-                else => {},
             }
+            count += 1;
         }
         if (count == 0) return Value{ .Null = {} };
         // avg() is a mean: pure-integer inputs must NOT integer-divide (avg(1,2)
@@ -3324,60 +3584,28 @@ pub fn computeGroupAggregation(allocator: std.mem.Allocator, expr: ast.Expr, gro
         return Value{ .Double = (float_sum + @as(f64, @floatFromInt(int_sum))) / @as(f64, @floatFromInt(count)) };
     }
 
-    // Handle min(expr)
-    if (std.ascii.eqlIgnoreCase(func_name, "min")) {
+    // Handle min(expr) and max(expr). SONNY-2675: in the value order ORDER BY
+    // uses (`compareValuesWithNullsPolicy`); only Int and Str used to be
+    // compared, so over doubles, decimals, dates or mixed numbers the first
+    // value won.
+    const is_min = std.ascii.eqlIgnoreCase(func_name, "min");
+    if (is_min or std.ascii.eqlIgnoreCase(func_name, "max")) {
         if (arg_ptr == null) return Value{ .Null = {} };
-        var min_val: ?Value = null;
+        var best: ?Value = null;
         for (group_rows) |row| {
-            const env = Env{
-                .names = columns,
-                .values = row,
-                .allocator = allocator,
-            };
-            const val = eval.evalExpr(allocator, arg_ptr.?.*, env) catch continue;
+            const val = (try evalAggregateArgument(allocator, arg_ptr.?.*, rowEnv(allocator, columns, row, param_names, param_values))) orelse continue;
             if (val == .Null) continue;
             if (distinct) |*d| {
                 if (!try d.add(val)) continue;
             }
-            if (min_val == null) {
-                min_val = val;
-            } else if (val == .Int and min_val.? == .Int and val.Int < min_val.?.Int) {
-                min_val = val;
-            } else if (val == .Str and min_val.? == .Str) {
-                if (std.mem.order(u8, val.Str, min_val.?.Str) == .lt) {
-                    min_val = val;
-                }
+            if (best) |current| {
+                const order = return_and_sorting.compareValuesWithNullsPolicy(val, current, .default);
+                if ((is_min and order < 0) or (!is_min and order > 0)) best = val;
+            } else {
+                best = val;
             }
         }
-        return min_val orelse Value{ .Null = {} };
-    }
-
-    // Handle max(expr)
-    if (std.ascii.eqlIgnoreCase(func_name, "max")) {
-        if (arg_ptr == null) return Value{ .Null = {} };
-        var max_val: ?Value = null;
-        for (group_rows) |row| {
-            const env = Env{
-                .names = columns,
-                .values = row,
-                .allocator = allocator,
-            };
-            const val = eval.evalExpr(allocator, arg_ptr.?.*, env) catch continue;
-            if (val == .Null) continue;
-            if (distinct) |*d| {
-                if (!try d.add(val)) continue;
-            }
-            if (max_val == null) {
-                max_val = val;
-            } else if (val == .Int and max_val.? == .Int and val.Int > max_val.?.Int) {
-                max_val = val;
-            } else if (val == .Str and max_val.? == .Str) {
-                if (std.mem.order(u8, val.Str, max_val.?.Str) == .gt) {
-                    max_val = val;
-                }
-            }
-        }
-        return max_val orelse Value{ .Null = {} };
+        return best orelse Value{ .Null = {} };
     }
 
     // Handle collect(expr)
@@ -3386,12 +3614,7 @@ pub fn computeGroupAggregation(allocator: std.mem.Allocator, expr: ast.Expr, gro
         // GAP-0220 FIX: Use try for proper error propagation
         var list = std.ArrayList(Value).initCapacity(allocator, group_rows.len) catch return Value{ .List = &.{} };
         for (group_rows) |row| {
-            const env = Env{
-                .names = columns,
-                .values = row,
-                .allocator = allocator,
-            };
-            const val = eval.evalExpr(allocator, arg_ptr.?.*, env) catch continue;
+            const val = (try evalAggregateArgument(allocator, arg_ptr.?.*, rowEnv(allocator, columns, row, param_names, param_values))) orelse continue;
             if (distinct) |*d| {
                 if (!try d.add(val)) continue;
             }
@@ -3405,6 +3628,14 @@ pub fn computeGroupAggregation(allocator: std.mem.Allocator, expr: ast.Expr, gro
 
 pub fn executeWithClause(allocator: std.mem.Allocator, input_result: ExecutionResult, with_clause: ast.WithClause) !ExecutionResult {
     return executeWithClauseWithGroupBy(allocator, input_result, with_clause, null, null);
+}
+
+/// The HAVING a WITH stage applies: the query's HAVING when it has a GROUP BY,
+/// else none. The parser produces a HAVING without a GROUP BY only from a WHERE
+/// after RETURN, which belongs to the RETURN, not to a WITH before it
+/// (SONNY-2667).
+pub fn withStageHaving(q: ast.Query) ?ast.Expr {
+    return if (q.group_by != null) q.having else null;
 }
 
 // CANARY: REQ=REQ-GQL-WITH-GROUPBY-001; FEATURE="WithGroupByAggregation"; ASPECT=Execution; STATUS=TESTED; TEST=geodetestlab/specs/gql_query_comprehensive.yml; OWNER=execution; UPDATED=2025-12-22
@@ -3462,14 +3693,173 @@ fn resolveGroupByKeyThroughAlias(
 /// (SQLSTATE 42883, src/server/proto_util.zig). An unknown function is a static
 /// defect in the query text, not a per-group evaluation failure: it cannot
 /// depend on which rows landed in the group, and it must be reported the same
-/// way in both shapes. Every other error keeps collapsing to the caller's
+/// way in both shapes. SONNY-2675: the other query-level errors
+/// (`isQueryLevelEvalError`: a missing positional parameter, a refusal, OOM)
+/// escape the same way. Every other error keeps collapsing to the caller's
 /// fallback, so the six aggregates and ordinary scalar functions are untouched.
 fn evalGroupedExpr(allocator: std.mem.Allocator, expr: ast.Expr, env: Env, fallback: Value) !Value {
-    return eval.evalExpr(allocator, expr, env) catch |err| switch (err) {
-        error.UnknownFunction => err,
-        else => fallback,
+    return eval.evalExpr(allocator, expr, env) catch |err| {
+        if (isQueryLevelEvalError(err)) return err;
+        return fallback;
     };
 }
+
+/// A projection over groups: its items, and its GROUP BY keys resolved
+/// through a projection alias (none for an implicit grouping).
+const HavingGrouping = struct { items: []const ast.ReturnItem, keys: []const ast.Expr };
+
+// CANARY: REQ=REQ-SONNY-2667-RETURN-WHERE; FEATURE="PlannedReadReturnWhere"; ASPECT=PostProjectionFilter; STATUS=TESTED; TEST=tests/test_sonny2667_return_where.zig; OWNER=engine; UPDATED=2026-09-25
+// CANARY: REQ=REQ-SONNY-2675-GROUPED-HAVING; FEATURE="GroupedHaving"; ASPECT=PerGroupAggregates; STATUS=TESTED; TEST=tests/test_sonny2675_grouped_having.zig; OWNER=engine; UPDATED=2026-09-25
+/// A HAVING, evaluated for each output row of a projection, after the
+/// projection.
+///
+/// Over groups (a GROUP BY, or items with an aggregate), the HAVING is
+/// rewritten once, before any row is grouped (`grouped_having.planGrouped`):
+/// each aggregate it names is computed over the group (as the item's column
+/// when an item computes it, else as a hidden aggregate that is never
+/// emitted), each grouping key and projected expression it names is read
+/// from the group, and a name resolves to a projected column (an alias, or an
+/// unaliased item's expression name). A projected expression that is not a
+/// grouping key has the value projected for the group: the group's first
+/// row's. A reference to any other input column fails the query with
+/// `error.UngroupedHavingReference` (SQLSTATE 42803). So `GROUP BY n.g HAVING
+/// count(*) > 1` counts each group (SONNY-2675), and `n.g` in `GROUP BY n.g
+/// HAVING n.g <> 'a'` is the group's key (SONNY-2668). A WHERE after a RETURN
+/// with only aggregates is a HAVING over its single group:
+/// `RETURN count(*) AS c WHERE c > 5` filters that row, and
+/// `RETURN count(*) AS c WHERE n.i > 5` fails with 42803.
+///
+/// Per row (no grouping: the parser's WHERE after a RETURN that does not
+/// aggregate), a name resolves to a projected column, then to the input row
+/// the output row came from, so `n.i` in `RETURN n.i WHERE n.i >= 10`
+/// resolves through `n` (SONNY-2667). An aggregate there fails the query with
+/// `error.AggregateInRowFilter` (SQLSTATE 42803).
+///
+/// Over groups and per row, a name that is no column, input binding or query
+/// parameter fails the query with `error.UnknownHavingReference` (SQLSTATE
+/// 42703); inside an aggregate, an alias is the item's expression.
+const HavingFilter = struct {
+    /// The predicate as evaluated: the rewritten HAVING over groups.
+    expr: ast.Expr,
+    /// Over groups: the rewrite, whose slots follow the output columns.
+    plan: ?grouped_having.Plan,
+    /// The output columns, then the slots (over groups) or the input columns
+    /// (per row).
+    names: [][]const u8,
+    /// Scratch for one output row's values, in the order of `names`.
+    values: []Value,
+    output_len: usize,
+    param_names: []const []const u8,
+    param_values: []const Value,
+
+    fn init(
+        allocator: std.mem.Allocator,
+        expr: ast.Expr,
+        grouping: ?HavingGrouping,
+        output_columns: []const []const u8,
+        input_columns: []const []const u8,
+        param_names: []const []const u8,
+        param_values: []const Value,
+    ) !HavingFilter {
+        var plan: ?grouped_having.Plan = null;
+        errdefer if (plan) |*p| p.deinit();
+        var rest_len = input_columns.len;
+        if (grouping) |g| {
+            plan = try grouped_having.planGrouped(allocator, expr, .{
+                .items = g.items,
+                .output_columns = output_columns,
+                .input_columns = input_columns,
+                .keys = g.keys,
+                .param_names = param_names,
+            });
+            rest_len = plan.?.slot_names.len;
+        } else {
+            try grouped_having.checkRowFilter(allocator, expr, .{
+                .output_columns = output_columns,
+                .input_columns = input_columns,
+                .param_names = param_names,
+            });
+        }
+        const names = try allocator.alloc([]const u8, output_columns.len + rest_len);
+        errdefer allocator.free(names);
+        const values = try allocator.alloc(Value, names.len);
+        @memcpy(names[0..output_columns.len], output_columns);
+        @memcpy(names[output_columns.len..], if (plan) |p| p.slot_names else input_columns);
+        return .{
+            .expr = if (plan) |p| p.expr else expr,
+            .plan = plan,
+            .names = names,
+            .values = values,
+            .output_len = output_columns.len,
+            .param_names = param_names,
+            .param_values = param_values,
+        };
+    }
+
+    fn deinit(self: *HavingFilter, allocator: std.mem.Allocator) void {
+        if (self.plan) |*p| p.deinit();
+        allocator.free(self.values);
+        allocator.free(self.names);
+    }
+
+    /// Whether a group's output row passes. `group_rows` are the group's
+    /// input rows (none for a single group over no rows).
+    fn passesGroup(
+        self: *HavingFilter,
+        allocator: std.mem.Allocator,
+        output_row: []const Value,
+        group_rows: []const []const Value,
+        input_columns: []const []const u8,
+    ) !bool {
+        @memcpy(self.values[0..self.output_len], output_row);
+        const first_row: []const Value = if (group_rows.len > 0) group_rows[0] else &.{};
+        const key_names = input_columns[0..@min(input_columns.len, first_row.len)];
+        const key_env = Env{
+            .names = key_names,
+            .values = first_row[0..key_names.len],
+            .param_names = self.param_names,
+            .param_values = self.param_values,
+            .allocator = allocator,
+        };
+        for (self.plan.?.slots, self.values[self.output_len..]) |slot, *value| {
+            value.* = switch (slot) {
+                .column => |i| output_row[i],
+                .aggregate => |agg| try computeGroupAggregation(allocator, agg, group_rows, input_columns, self.param_names, self.param_values),
+                // Every row of the group shares its key.
+                .key => |key| try evalGroupedExpr(allocator, key, key_env, Value{ .Null = {} }),
+            };
+        }
+        return self.evaluate(allocator, self.names, self.values);
+    }
+
+    /// Whether an output row passes, with the input row it came from behind
+    /// it.
+    fn passesRow(self: *HavingFilter, allocator: std.mem.Allocator, output_row: []const Value, input_row: []const Value) !bool {
+        @memcpy(self.values[0..self.output_len], output_row);
+        const input_len = @min(input_row.len, self.names.len - self.output_len);
+        @memcpy(self.values[self.output_len..][0..input_len], input_row[0..input_len]);
+        const len = self.output_len + input_len;
+        return self.evaluate(allocator, self.names[0..len], self.values[0..len]);
+    }
+
+    /// An unknown function still fails the query. Any other evaluation error,
+    /// and any result but a true Bool or a nonzero Int, fails the row.
+    fn evaluate(self: *HavingFilter, allocator: std.mem.Allocator, names: []const []const u8, values: []const Value) !bool {
+        const env = Env{
+            .names = names,
+            .values = values,
+            .param_names = self.param_names,
+            .param_values = self.param_values,
+            .allocator = allocator,
+        };
+        const result = try evalGroupedExpr(allocator, self.expr, env, Value{ .Bool = false });
+        return switch (result) {
+            .Bool => |b| b,
+            .Int => |i| i != 0,
+            else => false,
+        };
+    }
+};
 
 /// Execute WITH clause with optional GROUP BY aggregation and query parameter bindings
 pub fn executeWithClauseWithGroupByAndParams(allocator: std.mem.Allocator, input_result: ExecutionResult, with_clause: ast.WithClause, group_by: ?ast.GroupBy, having: ?ast.Expr, param_names: []const []const u8, param_values: []const eval.Value) !ExecutionResult {
@@ -3496,6 +3886,34 @@ pub fn executeWithClauseWithGroupByAndParams(allocator: std.mem.Allocator, input
         const owned_alias = try allocator.dupe(u8, alias);
         try new_columns.append(allocator, owned_alias);
     }
+
+    // A HAVING filters the output rows: the groups of a GROUP BY (SONNY-2668)
+    // and, without one, every output row (SONNY-2667). The parser produces a
+    // HAVING without a GROUP BY only from a WHERE after RETURN, and callers
+    // pass that only to the RETURN stage. Over groups (a GROUP BY, or an
+    // aggregate item: the branches below), it computes its own aggregates
+    // for each group (SONNY-2675).
+    const over_groups = group_by != null or any_aggregate: {
+        for (with_items) |item| {
+            if (return_and_sorting.isAggregationExpr(item.expr)) break :any_aggregate true;
+        }
+        break :any_aggregate false;
+    };
+    var having_filter: ?HavingFilter = if (having) |expr| blk: {
+        const raw_keys: []const ast.Expr = if (group_by) |gb| gb.keys else &.{};
+        const keys = try allocator.alloc(ast.Expr, raw_keys.len);
+        defer allocator.free(keys);
+        for (raw_keys, keys) |raw_key, *key| key.* = resolveGroupByKeyThroughAlias(raw_key, with_items, input_result.columns);
+        const grouping: ?HavingGrouping = if (over_groups) .{ .items = with_items, .keys = keys } else null;
+        break :blk HavingFilter.init(allocator, expr, grouping, new_columns.items, input_result.columns, param_names, param_values) catch |err| {
+            // A HAVING the query may not have fails it before any row: free
+            // the column names, which nothing owns yet.
+            for (new_columns.items) |column| allocator.free(column);
+            new_columns.clearRetainingCapacity();
+            return err;
+        };
+    } else null;
+    defer if (having_filter) |*filter| filter.deinit(allocator);
 
     // Transform each row according to WITH items
     // GAP-0220 FIX: Use try for proper error propagation
@@ -3537,22 +3955,13 @@ pub fn executeWithClauseWithGroupByAndParams(allocator: std.mem.Allocator, input
             var key_aw: std.Io.Writer.Allocating = try std.Io.Writer.Allocating.initCapacity(allocator, 128);
             errdefer key_aw.deinit();
             const key_writer = &key_aw.writer;
-            for (gb.keys, 0..) |raw_key_expr, k| {
-                if (k > 0) try key_writer.writeAll("|");
+            for (gb.keys) |raw_key_expr| {
                 // GAP-ENT-0055: follow a projection alias (`GROUP BY s`) to its
                 // underlying expression before evaluating against the input row.
                 const key_expr = resolveGroupByKeyThroughAlias(raw_key_expr, with_items, input_result.columns);
                 const key_val = try evalGroupedExpr(allocator, key_expr, env, Value{ .Null = {} });
-                // Serialize key value to string
-                switch (key_val) {
-                    .Int => |i| try key_writer.print("{d}", .{i}),
-                    .Str => |s| try key_writer.writeAll(s),
-                    .Bool => |b| try key_writer.writeAll(if (b) "true" else "false"),
-                    .Null => try key_writer.writeAll("null"),
-                    .Node => |n| try key_writer.print("node:{d}", .{n.id}),
-                    .Edge => |e| try key_writer.print("edge:{d}", .{e.id}),
-                    else => try key_writer.writeAll("?"),
-                }
+                // SONNY-2675: the key's typed canonical encoding.
+                try distinct_set.writeGroupKeyPart(key_writer, allocator, key_val);
             }
             var key_buf = key_aw.toArrayList();
             const group_key = try key_buf.toOwnedSlice(allocator);
@@ -3593,30 +4002,16 @@ pub fn executeWithClauseWithGroupByAndParams(allocator: std.mem.Allocator, input
                 // Check if this is an aggregation expression
                 if (return_and_sorting.isAggregationExpr(item.expr)) {
                     // Compute aggregation over all rows in the group
-                    new_row[i] = try computeGroupAggregation(allocator, item.expr, group_rows, input_result.columns);
+                    new_row[i] = try computeGroupAggregation(allocator, item.expr, group_rows, input_result.columns, param_names, param_values);
                 } else {
                     // Non-aggregation expression: evaluate with first row
                     new_row[i] = try evalGroupedExpr(allocator, item.expr, base_env, Value{ .Null = {} });
                 }
             }
 
-            // Apply HAVING filter if present
-            if (having) |having_expr| {
-                // Create environment from the aggregated row
-                const having_env = Env{
-                    .names = new_columns.items,
-                    .values = new_row,
-                    .param_names = param_names,
-                    .param_values = param_values,
-                    .allocator = allocator,
-                };
-                const having_result = try evalGroupedExpr(allocator, having_expr, having_env, Value{ .Bool = false });
-                const passes_having = switch (having_result) {
-                    .Bool => |b| b,
-                    .Int => |i| i != 0,
-                    else => false,
-                };
-                if (!passes_having) {
+            // Apply HAVING filter if present, over the group's rows.
+            if (having_filter) |*filter| {
+                if (!try filter.passesGroup(allocator, new_row, group_rows, input_result.columns)) {
                     allocator.free(new_row);
                     continue;
                 }
@@ -3682,21 +4077,11 @@ pub fn executeWithClauseWithGroupByAndParams(allocator: std.mem.Allocator, input
                     var key_aw: std.Io.Writer.Allocating = try std.Io.Writer.Allocating.initCapacity(allocator, 128);
                     errdefer key_aw.deinit();
                     const key_writer = &key_aw.writer;
-                    var first_key = true;
                     for (with_items) |item| {
                         if (!return_and_sorting.isAggregationExpr(item.expr) and return_and_sorting.isNonConstantExpr(item.expr)) {
-                            if (!first_key) try key_writer.writeAll("|");
-                            first_key = false;
                             const key_val = try evalGroupedExpr(allocator, item.expr, env, Value{ .Null = {} });
-                            switch (key_val) {
-                                .Int => |iv| try key_writer.print("{d}", .{iv}),
-                                .Str => |s| try key_writer.writeAll(s),
-                                .Bool => |b| try key_writer.writeAll(if (b) "true" else "false"),
-                                .Null => try key_writer.writeAll("null"),
-                                .Node => |n| try key_writer.print("node:{d}", .{n.id}),
-                                .Edge => |e| try key_writer.print("edge:{d}", .{e.id}),
-                                else => try key_writer.writeAll("?"),
-                            }
+                            // SONNY-2675: the key's typed canonical encoding.
+                            try distinct_set.writeGroupKeyPart(key_writer, allocator, key_val);
                         }
                     }
                     var key_buf = key_aw.toArrayList();
@@ -3732,9 +4117,15 @@ pub fn executeWithClauseWithGroupByAndParams(allocator: std.mem.Allocator, input
                     var new_row = try allocator.alloc(Value, with_items.len);
                     for (with_items, 0..) |item, i| {
                         if (return_and_sorting.isAggregationExpr(item.expr)) {
-                            new_row[i] = try computeGroupAggregation(allocator, item.expr, group_rows, input_result.columns);
+                            new_row[i] = try computeGroupAggregation(allocator, item.expr, group_rows, input_result.columns, param_names, param_values);
                         } else {
                             new_row[i] = try evalGroupedExpr(allocator, item.expr, base_env, Value{ .Null = {} });
+                        }
+                    }
+                    if (having_filter) |*filter| {
+                        if (!try filter.passesGroup(allocator, new_row, group_rows, input_result.columns)) {
+                            allocator.free(new_row);
+                            continue;
                         }
                     }
                     try new_rows.append(allocator, new_row);
@@ -3760,7 +4151,7 @@ pub fn executeWithClauseWithGroupByAndParams(allocator: std.mem.Allocator, input
 
                 for (with_items, 0..) |item, i| {
                     if (return_and_sorting.isAggregationExpr(item.expr)) {
-                        new_row[i] = try computeGroupAggregation(allocator, item.expr, input_result.rows, input_result.columns);
+                        new_row[i] = try computeGroupAggregation(allocator, item.expr, input_result.rows, input_result.columns, param_names, param_values);
                     } else if (input_result.rows.len == 0) {
                         // CANARY: REQ=REQ-GQL-EMPTY-MATCH-WITH-001; FEATURE="EmptyMatchWithClause"; ASPECT=NullOnNoRows; STATUS=TESTED; TEST=geodetestlab/specs/gql_query_comprehensive.yml; OWNER=execution; UPDATED=2025-12-27
                         // When there are no input rows, non-aggregation expressions cannot be evaluated
@@ -3772,7 +4163,15 @@ pub fn executeWithClauseWithGroupByAndParams(allocator: std.mem.Allocator, input
                     }
                 }
 
-                try new_rows.append(allocator, new_row);
+                const passes = if (having_filter) |*filter|
+                    try filter.passesGroup(allocator, new_row, input_result.rows, input_result.columns)
+                else
+                    true;
+                if (passes) {
+                    try new_rows.append(allocator, new_row);
+                } else {
+                    allocator.free(new_row);
+                }
             }
         } else {
             // No aggregations - transform each row individually
@@ -3793,6 +4192,12 @@ pub fn executeWithClauseWithGroupByAndParams(allocator: std.mem.Allocator, input
                     new_row[i] = try eval.evalExpr(allocator, item.expr, env);
                 }
 
+                if (having_filter) |*filter| {
+                    if (!try filter.passesRow(allocator, new_row, input_row)) {
+                        allocator.free(new_row);
+                        continue;
+                    }
+                }
                 try new_rows.append(allocator, new_row);
             }
         }
@@ -3868,21 +4273,13 @@ pub fn executeWithClauseWithGroupByAndParams(allocator: std.mem.Allocator, input
                             if (val_a.Bool == val_b.Bool) break :blk 0;
                             break :blk if (val_a.Bool) 1 else -1;
                         }
-                        if (val_a == .Decimal and val_b == .Decimal) {
-                            // Compare decimals by normalizing to same scale
-                            const dec_a = val_a.Decimal;
-                            const dec_b = val_b.Decimal;
-                            // To compare a/10^sa vs b/10^sb, normalize by cross-multiplying
-                            // a * 10^sb vs b * 10^sa
-                            var pow_a: i128 = 1;
-                            var pow_b: i128 = 1;
-                            for (0..dec_b.scale) |_| pow_a *= 10;
-                            for (0..dec_a.scale) |_| pow_b *= 10;
-                            const norm_a = dec_a.coeff * pow_a;
-                            const norm_b = dec_b.coeff * pow_b;
-                            if (norm_a < norm_b) break :blk -1;
-                            if (norm_a > norm_b) break :blk 1;
-                            break :blk 0;
+                        // SONNY-2769 (round 5): numbers by exact value, as
+                        // RETURN ... ORDER BY orders them. The decimal arm
+                        // cross-multiplied by 10^scale in i128, which
+                        // overflowed and aborted the server; doubles and mixed
+                        // numbers compared as equal.
+                        if (value_order.numberOf(val_a)) |na| {
+                            if (value_order.numberOf(val_b)) |nb| break :blk value_order.compareNumbers(na, nb);
                         }
                         // For other types, treat as equal
                         break :blk 0;
@@ -3900,8 +4297,14 @@ pub fn executeWithClauseWithGroupByAndParams(allocator: std.mem.Allocator, input
         new_rows = std.ArrayList([]Value).fromOwnedSlice(rows_slice);
     }
 
+    // SONNY-3248 (round 4b-1 review m-3): a SKIP or LIMIT parameter on the
+    // WITH windows it as a literal does (`MATCH (n) WITH n LIMIT $l RETURN
+    // n.i` returned every row in an in-memory session).
+    const with_offset: ?u64 = with_clause.offset orelse if (try withWindowParam(with_clause.offset_param, param_names, param_values)) |v| @as(u64, v) else null;
+    const with_limit: ?u64 = with_clause.limit orelse if (try withWindowParam(with_clause.limit_param, param_names, param_values)) |v| @as(u64, v) else null;
+
     // Apply OFFSET if present
-    if (with_clause.offset) |offset_val| {
+    if (with_offset) |offset_val| {
         const offset_usize = @min(offset_val, new_rows.items.len);
         if (offset_usize > 0) {
             // Remove the first offset_usize rows
@@ -3915,7 +4318,7 @@ pub fn executeWithClauseWithGroupByAndParams(allocator: std.mem.Allocator, input
     }
 
     // Apply LIMIT if present
-    if (with_clause.limit) |limit_val| {
+    if (with_limit) |limit_val| {
         const limit_usize = @min(limit_val, new_rows.items.len);
         if (limit_usize < new_rows.items.len) {
             // Keep only the first limit_usize rows
@@ -3941,109 +4344,21 @@ pub fn executeWithClauseWithGroupByAndParams(allocator: std.mem.Allocator, input
     };
 }
 
-pub fn valuesEqual(a: Value, b: Value) bool {
-    // Handle nulls
-    if (a == .Null and b == .Null) return true;
-    if (a == .Null or b == .Null) return false;
-
-    // Compare same types
-    if (a == .Int and b == .Int) return a.Int == b.Int;
-    if (a == .Bool and b == .Bool) return a.Bool == b.Bool;
-    if (a == .Str and b == .Str) return std.mem.eql(u8, a.Str, b.Str);
-
-    // Decimal comparison
-    if (a == .Decimal and b == .Decimal) {
-        const a_dec = a.Decimal;
-        const b_dec = b.Decimal;
-        if (a_dec.scale == b_dec.scale) {
-            return a_dec.coeff == b_dec.coeff;
-        }
-        // Normalize scales for comparison
-        if (a_dec.scale < b_dec.scale) {
-            const scale_diff = b_dec.scale - a_dec.scale;
-            var multiplier: i128 = 1;
-            for (0..scale_diff) |_| multiplier *= 10;
-            return a_dec.coeff * multiplier == b_dec.coeff;
-        } else {
-            const scale_diff = a_dec.scale - b_dec.scale;
-            var multiplier: i128 = 1;
-            for (0..scale_diff) |_| multiplier *= 10;
-            return a_dec.coeff == b_dec.coeff * multiplier;
-        }
+/// A WITH's SKIP or LIMIT parameter `name`, from the parameters in scope
+/// (the request's and the statement's LETs): a non-negative integer, else
+/// error.InvalidWindowParameter; null when the WITH names none (or it is
+/// not in scope, as before).
+fn withWindowParam(name: ?[]const u8, param_names: []const []const u8, param_values: []const eval.Value) !?usize {
+    const n = name orelse return null;
+    for (param_names, param_values) |pn, pv| {
+        if (std.mem.eql(u8, pn, n)) return try windowValue(pv);
     }
-
-    // Node and Edge comparison by pointer
-    if (a == .Node and b == .Node) return a.Node == b.Node;
-    if (a == .Edge and b == .Edge) return a.Edge == b.Edge;
-
-    // List comparison (element by element)
-    if (a == .List and b == .List) {
-        if (a.List.len != b.List.len) return false;
-        for (a.List, b.List) |av, bv| {
-            if (!valuesEqual(av, bv)) return false;
-        }
-        return true;
-    }
-
-    // Advanced numeric types
-    if (a == .SmallInt and b == .SmallInt) return a.SmallInt == b.SmallInt;
-    if (a == .BigInt and b == .BigInt) return a.BigInt == b.BigInt;
-    if (a == .Real and b == .Real) return a.Real == b.Real;
-    if (a == .Double and b == .Double) return a.Double == b.Double;
-
-    // String types
-    if (a == .Char and b == .Char) return std.mem.eql(u8, a.Char.data, b.Char.data);
-    if (a == .Varchar and b == .Varchar) return std.mem.eql(u8, a.Varchar.data, b.Varchar.data);
-    if (a == .Text and b == .Text) return std.mem.eql(u8, a.Text, b.Text);
-    if (a == .Bytea and b == .Bytea) return std.mem.eql(u8, a.Bytea, b.Bytea);
-    if (a == .Json and b == .Json) return std.mem.eql(u8, a.Json, b.Json);
-    if (a == .Jsonb and b == .Jsonb) return std.mem.eql(u8, a.Jsonb.data, b.Jsonb.data);
-    if (a == .Xml and b == .Xml) return std.mem.eql(u8, a.Xml.data, b.Xml.data);
-
-    // Temporal and identifier types
-    if (a == .Date and b == .Date) return std.meta.eql(a.Date, b.Date);
-    if (a == .Time and b == .Time) return std.meta.eql(a.Time, b.Time);
-    if (a == .TimeTZ and b == .TimeTZ) return std.meta.eql(a.TimeTZ, b.TimeTZ);
-    if (a == .Timestamp and b == .Timestamp) return std.meta.eql(a.Timestamp, b.Timestamp);
-    if (a == .TimestampTZ and b == .TimestampTZ) return std.meta.eql(a.TimestampTZ, b.TimestampTZ);
-    if (a == .Interval and b == .Interval) return std.meta.eql(a.Interval, b.Interval);
-    if (a == .UUID and b == .UUID) return std.meta.eql(a.UUID, b.UUID);
-    if (a == .Enum and b == .Enum) return std.meta.eql(a.Enum, b.Enum);
-    if (a == .IntRange and b == .IntRange) return std.meta.eql(a.IntRange, b.IntRange);
-
-    if (a == .BitString and b == .BitString) {
-        return a.BitString.bit_length == b.BitString.bit_length and
-            std.mem.eql(u8, a.BitString.bytes, b.BitString.bytes);
-    }
-    if (a == .VarBit and b == .VarBit) {
-        return a.VarBit.bit_length == b.VarBit.bit_length and
-            std.mem.eql(u8, a.VarBit.bytes, b.VarBit.bytes);
-    }
-
-    if (a == .Url and b == .Url) {
-        return std.mem.eql(u8, a.Url.scheme, b.Url.scheme) and
-            std.mem.eql(u8, a.Url.host, b.Url.host) and
-            a.Url.port == b.Url.port and
-            std.mem.eql(u8, a.Url.path, b.Url.path) and
-            ((a.Url.query == null and b.Url.query == null) or
-                (a.Url.query != null and b.Url.query != null and std.mem.eql(u8, a.Url.query.?, b.Url.query.?))) and
-            ((a.Url.fragment == null and b.Url.fragment == null) or
-                (a.Url.fragment != null and b.Url.fragment != null and std.mem.eql(u8, a.Url.fragment.?, b.Url.fragment.?)));
-    }
-
-    if (a == .Domain and b == .Domain) {
-        if (a.Domain.labels.len != b.Domain.labels.len) return false;
-        for (a.Domain.labels, b.Domain.labels) |lhs, rhs| {
-            if (!std.mem.eql(u8, lhs, rhs)) return false;
-        }
-        return true;
-    }
-
-    if (a == .ExtValue and b == .ExtValue) return value_types.eqExtValues(a.ExtValue, b.ExtValue);
-
-    // For other types, default to false (different types or unsupported comparison)
-    return false;
+    return null;
 }
+
+/// Whether two values are equal (moved to `execution/value_equality.zig`,
+/// SONNY-2806 round 8, so storage can use it without importing the executor).
+pub const valuesEqual = value_equality.valuesEqual;
 
 // CANARY: REQ=REQ-MULTI-GRAPH-UNION-001; FEATURE="MultiGraphIsolation"; ASPECT=UnionQueryContext; STATUS=TESTED; TEST=geodetestlab/specs/multi_graph.yml; OWNER=engine; UPDATED=2025-12-23
 // Execute query without limit but with context (for UNION parts that need graph isolation)
@@ -4095,6 +4410,7 @@ test "GAP-0525: PathIterator streaming with early termination" {
         "NEXT",
         'r',
         .acyclic,
+        PathStepFilter.unrestricted, // no session scope in this unit test
     );
     defer iter.deinit();
 

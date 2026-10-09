@@ -46,6 +46,9 @@ fn startServer(allocator: std.mem.Allocator, addr: []const u8) !ServerFixture {
             }
             return err;
         };
+        // SONNY-2394: reply waits follow the server's liveness, not a fixed
+        // 5 s deadline (see "a live-but-slow server is waited for" below).
+        client.watchServerLiveness(server.child.id.?);
         var hello = try client.hello(allocator, util.defaultUsername(), util.defaultPassword());
         hello.deinit(allocator);
         return .{ .server = server, .client = client };
@@ -267,6 +270,57 @@ test "GAP-0203 Fix #4: QUIC transaction state is in-memory" {
 
     const committed = try fixture.client.commit(allocator);
     try testing.expect(committed);
+}
+
+// SONNY-2394 (GAP-0203 Fix #4 flake root cause). The QUIC test client gave
+// every reply a FIXED 5 s deadline, while the replies it waits for include
+// real server work that scales with host load -- COMMIT is the first request
+// that touches the server's store and creates the default graph (16 shard
+// engines, ~100 ms idle in Debug), HELLO runs Argon2id. Under parallel test
+// load a live server could simply be slower than 5 s, and the client could not
+// tell "slow" from "dead". This reproduces a live-but-starved server
+// deterministically -- without loading the host -- by SIGSTOPping it for longer
+// than the 5 s deadline while a BEGIN is in flight: the reply must still be
+// awaited and delivered once the server runs again.
+const ResumeLater = struct {
+    fn run(pid: std.posix.pid_t, delay_ns: u64) void {
+        compat_sleep(delay_ns);
+        std.posix.kill(pid, .CONT) catch {};
+    }
+};
+
+test "GAP-0203 Fix #4: a live-but-slow server is waited for, not timed out" {
+    const allocator = testing.allocator;
+    const addr = "127.0.0.1:3185";
+    var fixture = try startServer(allocator, addr);
+    defer fixture.client.deinit();
+    defer fixture.server.deinit();
+
+    const pid = fixture.server.child.id.?;
+    try std.posix.kill(pid, .STOP);
+    // Always resume, even if the assertion below fails (deinit KILLs anyway).
+    const resumer = try std.Thread.spawn(.{}, ResumeLater.run, .{ pid, 6500 * std.time.ns_per_ms });
+    defer resumer.join();
+
+    var begin_res = try fixture.client.begin(allocator);
+    defer begin_res.deinit(allocator);
+    try testing.expect(begin_res.tx_id.len > 0);
+    try testing.expect(try fixture.client.commit(allocator));
+}
+
+test "GAP-0203 Fix #4: a server that exited fails fast, not after the reply deadline" {
+    const allocator = testing.allocator;
+    const addr = "127.0.0.1:3186";
+    var fixture = try startServer(allocator, addr);
+    defer fixture.client.deinit();
+    defer fixture.server.deinit();
+
+    try std.posix.kill(fixture.server.child.id.?, .KILL);
+    const t0 = nowNs();
+    try testing.expectError(error.ServerExited, fixture.client.begin(allocator));
+    // Detected on the first deadline check, well inside the 5 s reply budget
+    // (slow != dead: only a LIVE server extends the wait).
+    try testing.expect(nowNs() - t0 < 5 * std.time.ns_per_s);
 }
 
 // ============================================================================

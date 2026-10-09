@@ -11,6 +11,111 @@
 - **Write-through hooks** — Installed in `main.zig`; every add/remove operation syncs to persistent storage.
 - **`decide()` policy evaluation** — Consults the catalog after builtin-role and graph-grant evaluation. When a policy with `expression_source = "true"` matches a query binding, returns `.allow` with reason `policy_match`.
 
+## Stored lengths and validity (SONNY-2731, SONNY-2732)
+
+`__geode_security` keeps each policy in a fixed-size record:
+
+| Field | Longest value stored |
+|---|---|
+| name | 63 bytes |
+| scope graph | 63 bytes |
+| USING expression | 511 bytes |
+
+`CREATE POLICY` and `ALTER POLICY … RENAME TO` refuse anything longer, with
+`PolicyFieldTooLong`, and change nothing. Before SONNY-2731 such a policy was
+accepted and kept in memory only, and it disappeared at the next restart. A
+`CREATE POLICY` whose durable write fails for any reason is now rolled back,
+and the statement fails.
+
+At startup, a stored value longer than its field could only have come from
+an older or foreign writer. It used to be cut to fit, and the cut text was
+compiled as a different policy. Now it is loaded fail-closed: the policy is
+kept, grants nothing, and lists as invalid.
+
+`SHOW POLICIES` (fifth column) and `CALL geode.auth.policy_list()` (third
+column) show `valid`. It is false for a stored policy whose USING expression
+no longer compiles, which is kept fail-closed until it is rewritten. Startup
+logs how many stored policies are invalid.
+
+## Record kinds (SONNY-2750)
+
+GPS policies and RLS policies are stored as the same `:Policy` records in
+`__geode_security`. GPS policies come from `CREATE POLICY`, `ALTER POLICY`
+and the grant migration. RLS policies come from the `geode-auth` tool
+(`geode-auth policy create`) and from `geode auth policy create`. The two
+systems give some properties different meanings. For example, `operation`
+is a set of GPS actions in a GPS record, but the number of one RLS
+operation in an RLS record.
+
+Before SONNY-2750, GPS loaded every record at startup as a GPS policy.
+`geode-auth policy create p orders update` therefore came back after a
+restart as "allow write on `default`, for everyone". The RLS `update` (2)
+was read as the GPS action write, and the missing USING text as `true`.
+That policy also passed the database-level write check.
+
+Each record now has a `kind` property, `"gps"` or `"rls"`, and every writer
+must set it. The record HMAC covers it. At startup, GPS loads only records
+of kind `gps`. It refuses these records and grants nothing through them:
+
+- a record of any other kind, including a `kind` that is not exactly
+  `"gps"` or `"rls"`;
+- a record with a missing or mistyped property the policy needs: `name`,
+  `graph`, `operation`, `permissive`, `enabled`, and, for a `gps` record,
+  its USING text, which is now stored even when it is `true`.
+
+It never reads a refused record as something else. For each refusal it logs
+a warning and writes a `REFUSE_POLICY_RECORD` audit event. `ALTER POLICY`
+does not rewrite a GPS record that was refused for a missing property, and
+`DROP POLICY IF EXISTS` removes it.
+
+Records written before SONNY-2750 have no `kind`. GPS still loads one if it
+has the properties GPS wrote: a scope graph, an empty description and table,
+no CHECK clause, and a zero audit level and creator. Such a record stored no
+USING text for `true`. The RLS writers always stored a description or a
+table, and `geode auth policy create` also stored an empty graph. A record
+without a `kind` that has any other shape, or that is missing a property
+this check reads, is not loaded. The HMAC of a record without a `kind` is
+computed as before, so a chain sealed before the upgrade still verifies. The
+next `ALTER POLICY` on such a record stores its kind and USING text.
+
+The `geode auth policy list`, `show` and `delete` commands see RLS records
+only. `CREATE`, `ALTER` and `DROP POLICY` see GPS records only, so an RLS
+policy with the same name as a GPS policy is left alone.
+
+The chain check at startup does not tell the two kinds apart. The RLS tools
+write their records without an HMAC and do not reseal, so the server refuses
+to start until an operator runs `geode auth reseal` (or sets
+`GEODE_AUTH_RESEAL_CHAIN=1`). The reseal signs every record as it is, RLS
+records included. The `kind` check is what keeps those records out of GPS.
+
+**Seals and records without a kind (SONNY-2791).** No seal signs a policy
+record that has no `kind` and whose HMAC does not verify: not the recovery
+reseal (`geode auth reseal`, or `GEODE_AUTH_RESEAL_CHAIN=1` at startup), and
+not the seal after every auth change.
+
+- Such a record claims to predate record kinds, but this key never signed
+  it. It may have been planted in the pre-kind GPS shape: with no USING text,
+  GPS would load it as an unconditional allow.
+- An auth change seals the chain after it. An offline command such as
+  `geode user reset-password` loads the security graph as it is, so its seal
+  used to sign a planted record. On a store holding one, the change now
+  fails at its seal.
+- The recovery reseal logs each such record's id and name, and signs
+  nothing. Check each record, then decide it by id:
+  - drop it (delete it): `geode auth reseal --drop-legacy-policy <id>`, or
+    `GEODE_AUTH_RESEAL_DROP_LEGACY=<id>,<id>` for the startup reseal;
+  - accept it (sign it): `geode auth reseal --accept-legacy-policy <id>`, or
+    `GEODE_AUTH_RESEAL_ACCEPT_LEGACY=<id>,<id>`.
+
+  Each flag can be repeated. An id given both decisions is refused.
+- An accepted record is stored with its kind and, for GPS, its USING text
+  (`true` when it had none), so nothing loads "true by absence".
+- A record without a kind whose HMAC verifies was signed before the upgrade.
+  Seals keep it as it is.
+
+Statements cannot write the security graph directly: no statement or HELLO
+selects, creates or drops a `__geode_*` graph (SONNY-2791).
+
 ## What did NOT change
 
 - **Real expression compilation** — Phase 4 only supports the literal `"true"` predicate. Phase 5+ compiles real expressions through the RLS VM.

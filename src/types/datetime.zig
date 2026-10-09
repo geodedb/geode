@@ -24,51 +24,76 @@ pub const Date = struct {
 
     pub fn toString(self: Date, allocator: std.mem.Allocator) ![]u8 {
         const ymd = dateFromDays(self.days_since_epoch);
-        // Cast year to unsigned to avoid '+' sign in Zig 0.15.1 {d:0>N} formatting
-        const y: u32 = @intCast(ymd.year);
-        return std.fmt.allocPrint(allocator, "{d:0>4}-{d:0>2}-{d:0>2}", .{ y, ymd.month, ymd.day });
+        // Format the year's magnitude unsigned (a signed {d:0>N} prints a
+        // '+'), with a '-' before a year before 1 BCE. SONNY-2769: the year was
+        // cast to u32 unconditionally, which aborted the server for any date
+        // before year 0 (`DATE '0001-01-01' - duration('P2Y')`).
+        const sign: []const u8 = if (ymd.year < 0) "-" else "";
+        const y: u32 = @intCast(@abs(ymd.year));
+        return std.fmt.allocPrint(allocator, "{s}{d:0>4}-{d:0>2}-{d:0>2}", .{ sign, y, ymd.month, ymd.day });
     }
 
     // CANARY: REQ=REQ-DATE-INTERVAL-003; FEATURE="DateIntervalArithmetic"; ASPECT=Helper; STATUS=TESTED; TEST=geodetestlab/specs/geode_functions_comprehensive.yml; OWNER=datetime; UPDATED=2026-01-09
-    pub fn daysSinceEpoch(year: i32, month: u8, day: u8) !i32 {
-        const days_per_year = 365;
+    /// The day count of a calendar date, or Overflow when it is not an i32.
+    /// SONNY-2769: the count was i32 arithmetic, which aborted the server for
+    /// a year past about +-5.8 million (`DATE '2026-01-01' + duration('P100000000Y')`).
+    pub fn daysSinceEpoch(year: i32, month: u8, day: u8) error{Overflow}!i32 {
+        return std.math.cast(i32, daysSinceEpoch64(year, month, day)) orelse error.Overflow;
+    }
+
+    /// `daysSinceEpoch` in i64, which cannot overflow for an i64 year of
+    /// magnitude below 2^50.
+    pub fn daysSinceEpoch64(year: i64, month: u8, day: u8) i64 {
         const leap_years = @divFloor(year - 1, 4) - @divFloor(year - 1, 100) + @divFloor(year - 1, 400) -
             (@divFloor(1970 - 1, 4) - @divFloor(1970 - 1, 100) + @divFloor(1970 - 1, 400));
 
-        var days: i32 = @as(i32, @intCast(year - 1970)) * days_per_year + leap_years;
+        var days: i64 = (year - 1970) * 365 + leap_years;
 
         const months_days = [_]u8{ 31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31 };
         for (months_days[0 .. month - 1]) |m_days| {
             days += m_days;
         }
 
-        if (month > 2 and isLeapYear(year)) days += 1;
-        days += day - 1;
+        if (month > 2 and isLeapYear64(year)) days += 1;
+        days += @as(i64, day) - 1;
 
         return days;
     }
 
     pub fn dateFromDays(days: i32) struct { year: i32, month: u8, day: u8 } {
-        var year: i32 = 1970 + @divFloor(days, 365);
-        while (daysSinceEpoch(year, 1, 1) catch 0 > days) year -= 1;
-        while (daysSinceEpoch(year + 1, 1, 1) catch std.math.maxInt(i32) <= days) year += 1;
+        // i64 throughout: every i32 day count is a year within +-5.9 million.
+        const d: i64 = days;
+        var year: i64 = 1970 + @divFloor(d, 365);
+        while (daysSinceEpoch64(year, 1, 1) > d) year -= 1;
+        while (daysSinceEpoch64(year + 1, 1, 1) <= d) year += 1;
 
         var month: u8 = 1;
-        while (month <= 12) {
-            const next_month = if (month == 12) month else month + 1;
-            const next_year = if (month == 12) year + 1 else year;
-            const next_days = daysSinceEpoch(next_year, next_month, 1) catch break;
-            if (next_days > days) break;
-            month += 1;
-        }
+        while (month < 12 and daysSinceEpoch64(year, month + 1, 1) <= d) month += 1;
 
-        const month_start = daysSinceEpoch(year, month, 1) catch 0;
-        const day: u8 = @intCast(days - month_start + 1);
+        const day: u8 = @intCast(d - daysSinceEpoch64(year, month, 1) + 1);
+        return .{ .year = @intCast(year), .month = month, .day = day };
+    }
 
-        return .{ .year = year, .month = month, .day = day };
+    /// The date `months` calendar months (the day clamped to the target
+    /// month's length) and then `days` days after `days_since_epoch`, or
+    /// Overflow when that is not an i32 day count. SONNY-2769: date +/-
+    /// interval computed the month and the day count in i32 and aborted the
+    /// server past it (`DATE '2026-01-01' + duration('P2147483647D')`).
+    pub fn addMonthsDays(days_since_epoch: i32, months: i64, days: i64) error{Overflow}!i32 {
+        const ymd = dateFromDays(days_since_epoch);
+        const month_index = @as(i64, ymd.year) * 12 + (ymd.month - 1) + months;
+        const year = @divFloor(month_index, 12);
+        const month: u8 = @intCast(@mod(month_index, 12) + 1);
+        const month_len = daysInMonth(std.math.cast(i32, year) orelse return error.Overflow, month);
+        const base = daysSinceEpoch64(year, month, @min(ymd.day, month_len));
+        return std.math.cast(i32, base + days) orelse error.Overflow;
     }
 
     fn isLeapYear(year: i32) bool {
+        return isLeapYear64(year);
+    }
+
+    fn isLeapYear64(year: i64) bool {
         return (@rem(year, 4) == 0 and @rem(year, 100) != 0) or @rem(year, 400) == 0;
     }
 
@@ -108,7 +133,9 @@ pub const Time = struct {
     }
 
     pub fn toString(self: Time, allocator: std.mem.Allocator) ![]u8 {
-        const total_micros = self.micros_since_midnight;
+        // SONNY-2769: a negative time of day aborted the server in the casts
+        // below; a time is taken modulo a day.
+        const total_micros = @mod(self.micros_since_midnight, 24 * 3600 * 1_000_000);
         // Cast to unsigned to avoid '+' sign in formatted output (Zig 0.15.1 {d:0>2} on signed types)
         const h: u32 = @intCast(@divFloor(total_micros, 3600_000_000));
         const m: u32 = @intCast(@divFloor(@rem(total_micros, 3600_000_000), 60_000_000));
@@ -126,6 +153,16 @@ pub const Time = struct {
 pub const TimeTZ = struct {
     time: Time,
     offset_seconds: i32,
+
+    /// The UTC time of day in microseconds, in [0, 24 h): two zoned times
+    /// compare, and group, by it. ISO/IEC 9075-2 compares TIME WITH TIME
+    /// ZONE values by their UTC component, which is a time of day: 01:00+14:00
+    /// is 11:00 UTC, as 11:00+00:00 is (SONNY-2675; it was -13:00 and sorted
+    /// first). i128: a decoded time of day may be any i64.
+    pub fn utcMicros(self: TimeTZ) i128 {
+        const utc = @as(i128, self.time.micros_since_midnight) - @as(i128, self.offset_seconds) * std.time.us_per_s;
+        return @mod(utc, @as(i128, std.time.us_per_day));
+    }
 
     pub fn fromStr(str: []const u8) Date.Error!TimeTZ {
         if (str.len == 0) return Date.Error.ParseError;
@@ -195,8 +232,12 @@ pub const Timestamp = struct {
     }
 
     pub fn toString(self: Timestamp, allocator: std.mem.Allocator) ![]u8 {
+        // SONNY-2769: @mod, not @rem: for a timestamp before 1970 the time of
+        // day came out negative and aborted the server in Time.toString, so
+        // any pre-1970 timestamp (or TIMESTAMP WITH TIME ZONE) in a result
+        // killed it.
         const days = @divFloor(self.micros_since_epoch, 24 * 3600 * 1_000_000);
-        const time_micros = @rem(self.micros_since_epoch, 24 * 3600 * 1_000_000);
+        const time_micros = @mod(self.micros_since_epoch, 24 * 3600 * 1_000_000);
 
         const date = Date{ .days_since_epoch = @intCast(days) };
         const time = Time{ .micros_since_midnight = time_micros };
@@ -254,6 +295,39 @@ pub const Interval = struct {
     months: i32,
     days: i32,
     micros: i64,
+
+    // CANARY: REQ=REQ-SONNY-2675-INTERVAL-COMPARISON; FEATURE="IntervalComparison"; ASPECT=YearMonthVsDayTime; STATUS=TESTED; TEST=tests/test_sonny2675_aggregate_semantics.zig; OWNER=datetime; UPDATED=2026-09-26
+    /// The day-to-second length in microseconds (a day is 24 hours).
+    pub fn dayTimeMicros(self: Interval) i128 {
+        return @as(i128, self.days) * std.time.us_per_day + self.micros;
+    }
+
+    /// Two durations are equal when their year-to-month parts (months) and
+    /// their day-to-second lengths are: P1D = PT24H, but 1 month is not
+    /// 30 days (ISO/IEC 39075 keeps the two kinds of duration apart).
+    pub fn eql(a: Interval, b: Interval) bool {
+        return a.months == b.months and a.dayTimeMicros() == b.dayTimeMicros();
+    }
+
+    /// The total order ORDER BY, GROUP BY and DISTINCT use: by months, then
+    /// by the day-to-second length. -1, 0 or 1.
+    pub fn order(a: Interval, b: Interval) i8 {
+        if (a.months != b.months) return if (a.months < b.months) -1 else 1;
+        const da = a.dayTimeMicros();
+        const db = b.dayTimeMicros();
+        return if (da < db) -1 else if (da > db) 1 else 0;
+    }
+
+    /// Whether `<`, `<=`, `>` and `>=` are defined for the pair: when one
+    /// part is the same on both sides, the other decides, whatever a month's
+    /// length. A year-to-month duration against a day-to-second one (1 month
+    /// against 30 days) is not comparable. The rule is conservative: it asks
+    /// for one equal part, so a pair whose order holds for every month length
+    /// but whose parts both differ (P1M1D < P2M: a month is at least 28 days)
+    /// is not comparable either, and raises 22G04.
+    pub fn comparable(a: Interval, b: Interval) bool {
+        return a.months == b.months or a.dayTimeMicros() == b.dayTimeMicros();
+    }
 
     pub fn fromStr(str: []const u8) Date.Error!Interval {
         if (str.len == 0 or str[0] != 'P') return Date.Error.ParseError;

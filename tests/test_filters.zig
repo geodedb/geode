@@ -19,7 +19,10 @@ test "sensitive key detection" {
 
     // Test JWT
     try testing.expect(filters.isSensitiveKey(testing.allocator, "jwt") == .jwt);
-    try testing.expect(filters.isSensitiveKey(testing.allocator, "JWT_TOKEN") == .jwt);
+    // SONNY-2394: audit v0.1.19 (pinned in build.zig.zon) matches the token
+    // patterns before `jwt` (QR-011 case-insensitive rewrite), so a key that
+    // contains both classifies as `.token` -- still redacted, as a token.
+    try testing.expect(filters.isSensitiveKey(testing.allocator, "JWT_TOKEN") == .token);
 
     // Test payment card
     try testing.expect(filters.isSensitiveKey(testing.allocator, "card") == .card);
@@ -81,7 +84,12 @@ test "phone number detection" {
     try testing.expect(filters.isPhone("123-456-7890"));
     try testing.expect(filters.isPhone("(123) 456-7890"));
     try testing.expect(filters.isPhone("+1 123 456 7890"));
+    // Dotted numbers are phones (PII) since audit v0.1.20 (SONNY-2394).
     try testing.expect(filters.isPhone("123.456.7890.1234")); // Extension
+    try testing.expect(filters.isPhone("555.123.4567"));
+    try testing.expect(filters.isPhone("+1.555.123.4567"));
+    // ...but an IPv4-shaped value is not.
+    try testing.expect(!filters.isPhone("192.168.100.200"));
 
     // Invalid phone numbers
     try testing.expect(!filters.isPhone("123456789")); // Too short
@@ -190,8 +198,12 @@ test "metadata filtering and redaction" {
             try testing.expectEqualStrings("[REDACTED]", password_value.string);
         }
 
-        // Should not contain unknown field
-        try testing.expect(!obj.contains("unknown_field"));
+        // SONNY-2394: under default_deny, audit v0.1.19 REDACTS a field that
+        // is not allow-listed (keeps the key, replaces the value) instead of
+        // dropping it. The property that matters -- the value never reaches
+        // the audit record -- still holds.
+        const unknown = obj.get("unknown_field") orelse return error.TestExpectedRedactedField;
+        try testing.expectEqualStrings("[REDACTED]", unknown.string);
     }
 }
 

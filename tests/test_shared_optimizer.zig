@@ -131,6 +131,45 @@ test "SharedQueryOptimizer: invalidateAll clears cache" {
     try testing.expectEqual(@as(usize, 0), opt.getStats().cache_size);
 }
 
+// SONNY-2394: invalidateAll frees only plans no handle references. A plan held
+// by an outstanding SharedPlanHandle must stay allocated (freeing it would be a
+// use-after-free for the holder); the epoch bump makes it unservable, so the
+// next lookup of that query is a miss that replaces it.
+test "SharedQueryOptimizer: invalidateAll keeps plans held by an outstanding handle" {
+    const allocator = testing.allocator;
+    var opt = query_plan_cache.SharedQueryOptimizer.init(allocator, 64);
+    defer opt.deinit();
+
+    var p1 = try parseQuery(allocator, "RETURN 1");
+    defer p1.deinit();
+    var p2 = try parseQuery(allocator, "RETURN 2");
+    defer p2.deinit();
+
+    const store_stats = query_plan_cache.StoreStats{ .node_count = 100, .edge_count = 50 };
+
+    var held = try opt.optimizeQuery("RETURN 1", &p1.program, store_stats);
+    {
+        var h = try opt.optimizeQuery("RETURN 2", &p2.program, store_stats);
+        h.release();
+    }
+    try testing.expectEqual(@as(usize, 2), opt.getStats().cache_size);
+
+    opt.invalidateAll();
+
+    // Only the unreferenced plan was freed; the held one is still resident.
+    try testing.expectEqual(@as(usize, 1), opt.getStats().cache_size);
+    try testing.expect(held.toHints().estimated_rows > 0);
+    held.release();
+
+    const misses_before = opt.getStats().misses;
+    {
+        var h = try opt.optimizeQuery("RETURN 1", &p1.program, store_stats);
+        h.release();
+    }
+    try testing.expectEqual(misses_before + 1, opt.getStats().misses);
+    try testing.expectEqual(@as(usize, 1), opt.getStats().cache_size);
+}
+
 test "SharedQueryOptimizer: LRU eviction when max_size exceeded" {
     const allocator = testing.allocator;
     var opt = query_plan_cache.SharedQueryOptimizer.init(allocator, 2);

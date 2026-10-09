@@ -119,6 +119,81 @@ pub const Query = struct {
     initial_call_subquery: ?*Query = null,
     // GAP #57: MERGE statement within a query chain (e.g., WITH a MERGE (b:T) RETURN ...)
     merge_statement: ?*MergeStatement = null,
+    // CANARY: REQ=REQ-SONNY-3139-WRITE-SHAPES; FEATURE="WriteShapeValidator"; ASPECT=ParserRecords; STATUS=TESTED; TEST=tests/test_sonny3139_write_shapes.zig; OWNER=parser; UPDATED=2026-09-27
+    // SONNY-3139..3146: what the parser records for the write-shape validator
+    // (execution/write_shape.zig). `with_clause` and `where_clause` keep their
+    // meaning for every other reader; these say what they were built from.
+    //
+    // The WITH that starts the statement, before its MATCH, UNWIND, CREATE or
+    // MERGE. `with_clause` holds it only when no WITH follows the MATCH (and
+    // not at all before a MERGE), so it was lost.
+    initial_with: ?WithClause = null,
+    // The WHERE after that initial WITH (a MATCH's WHERE replaced it in
+    // `where_clause`).
+    initial_where: ?Expr = null,
+    // With a WITH after the MATCH: the WHERE before it (on the pattern) and
+    // the WHERE after it (on the WITH's rows). `where_clause` holds the two
+    // joined by AND, which cannot be evaluated over either row.
+    pre_with_where: ?Expr = null,
+    with_where: ?Expr = null,
+    // Set by `write_shape.chainedWriteAsOneQuery`: this part's WITH comes
+    // BEFORE its CREATE or MERGE (MATCH ... WITH ... CREATE). A part the
+    // parser built with a WITH and a CREATE or MERGE has the WITH after them.
+    chained_write: bool = false,
+    // A CREATE both before and after the DELETE (`... CREATE (a) DELETE q
+    // CREATE (b)`): `create_pattern` holds both, and the validator refuses it.
+    split_create: bool = false,
+    // SONNY-3139 (reopened): the part starts with a SELECT projection
+    // (`[WITH ...] SELECT ... MATCH ...`). `initial_with` does not hold it
+    // (the SELECT replaced any WITH before it), so the write-shape allowlist
+    // refuses a write after one.
+    select_projection: bool = false,
+    // SONNY-3184: a WHERE came after an OPTIONAL MATCH. `where_clause` holds
+    // it joined with the MATCH's and it filters the whole row, not only the
+    // optional part, so the write-shape allowlist refuses a write after one.
+    optional_where: bool = false,
+    // SONNY-3242 (round-3 review I2): where each SET clause in `set_clauses`
+    // ends, when the part has more than one (`SET a.x = 1 SET a.y = a.x` is two
+    // clauses, the second reading what the first wrote); empty for one clause
+    // or none. Every value of one clause is evaluated against the bindings as
+    // they stood before it, then its assignments apply (`SetClauseGroups`).
+    set_clause_ends: []const usize = &.{},
+};
+
+// CANARY: REQ=REQ-SONNY-3242-SET-SEMANTICS; FEATURE="SetClauseSemantics"; ASPECT=ClauseGroups; STATUS=TESTED; TEST=tests/test_sonny_write_allowlist_r4.zig; OWNER=parser; UPDATED=2026-09-28
+/// SONNY-3242 (round-3 review I2): the SET clauses of a list, one clause at a
+/// time. ISO GQL / openCypher: every right-hand side of one SET clause is
+/// evaluated against the bindings as they stood before that clause, and the
+/// assignments apply after, so `SET q.a = q.b, q.b = q.a` swaps; a later
+/// clause sees what an earlier one wrote. `ends` is where each clause ends
+/// (`Query.set_clause_ends`, `MergeStatement.on_create_ends`, ...); empty
+/// means one clause. An end outside the list is ignored, so a list copied
+/// without its ends is one clause, never an out-of-bounds slice.
+pub const SetClauseGroups = struct {
+    clauses: []const SetClause,
+    ends: []const usize,
+    start: usize = 0,
+    index: usize = 0,
+
+    pub fn init(clauses: []const SetClause, ends: []const usize) SetClauseGroups {
+        return .{ .clauses = clauses, .ends = ends };
+    }
+
+    pub fn next(self: *SetClauseGroups) ?[]const SetClause {
+        if (self.start >= self.clauses.len) return null;
+        var end = self.clauses.len;
+        while (self.index < self.ends.len) {
+            const e = self.ends[self.index];
+            self.index += 1;
+            if (e > self.start and e <= self.clauses.len) {
+                end = e;
+                break;
+            }
+        }
+        const group = self.clauses[self.start..end];
+        self.start = end;
+        return group;
+    }
 };
 
 pub const UnionQuery = struct {
@@ -401,6 +476,18 @@ pub const MergeStatement = struct {
     // that would otherwise be rejected by the `on_match.len != 0` guard.
     set_is_bare: bool = false,
     return_clause: ?ReturnClause = null,
+    // SONNY-3242 (round-3 review I2): where each SET clause in `on_create` and
+    // `on_match` ends, when there is more than one (`ON CREATE SET z.a = 1
+    // SET z.b = z.a`: the bare SET is a clause after the ON CREATE SET);
+    // empty for one clause or none (`SetClauseGroups`).
+    on_create_ends: []const usize = &.{},
+    on_match_ends: []const usize = &.{},
+    // SONNY-3320: the index in `pattern.chains` of the first chain of the
+    // last MERGE clause, when the statement chains more than one
+    // (`MERGE (a) MERGE (b) ON CREATE SET ...`): the ON CREATE / ON MATCH
+    // actions belong to that clause, and fire as it created or matched its
+    // pattern. Null for a single MERGE clause (the whole pattern).
+    last_clause_start: ?usize = null,
 };
 
 pub const CallProcedure = struct {

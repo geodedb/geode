@@ -3,6 +3,7 @@ const graph_store = @import("../graph_store.zig");
 const index_manager = @import("../index/index_manager.zig");
 const property_codec = @import("../property_value_codec.zig");
 const value_types = @import("../value_types.zig");
+const decimal_text = @import("../types/decimal_text.zig");
 const fle_hooks = @import("fle_hooks.zig");
 // A4b: fulltext write-maintenance hook (delete-then-index on SET).
 const fts_index_ops = @import("fts_index_ops.zig");
@@ -15,30 +16,11 @@ const jsonb = @import("../types/jsonb.zig");
 
 const Value = value_types.Value;
 
+/// SONNY-2769: at any scale. `pow *= 10` overflowed past scale 38 and aborted
+/// the server (`SET n.m = {a: <a scale-40 decimal>}`), and a value between -1
+/// and 0 was stored without its sign (-0.5 as 0.5).
 fn formatDecimalForJson(allocator: std.mem.Allocator, coeff: i128, scale: u8) ![]const u8 {
-    if (scale == 0) {
-        return std.fmt.allocPrint(allocator, "{d}", .{coeff});
-    }
-
-    var pow: i128 = 1;
-    var i: u8 = 0;
-    while (i < scale) : (i += 1) pow *= 10;
-
-    const whole: i128 = @divTrunc(coeff, pow);
-    const abs_coeff: i128 = if (coeff < 0) -coeff else coeff;
-    const frac: i128 = @mod(abs_coeff, pow);
-
-    var fracbuf: [64]u8 = undefined;
-    const ftmp = std.fmt.bufPrint(&fracbuf, "{d}", .{frac}) catch return error.OutOfMemory;
-
-    if (ftmp.len < scale) {
-        const missing = scale - @as(u8, @intCast(ftmp.len));
-        var pad: [64]u8 = undefined;
-        @memset(pad[0..missing], '0');
-        return std.fmt.allocPrint(allocator, "{d}.{s}{s}", .{ whole, pad[0..missing], ftmp });
-    }
-
-    return std.fmt.allocPrint(allocator, "{d}.{s}", .{ whole, ftmp });
+    return decimal_text.alloc(allocator, coeff, scale);
 }
 
 fn encodeExtValueToStream(allocator: std.mem.Allocator, ext: property_codec.ExtValue, encoder: anytype) !void {
@@ -304,7 +286,22 @@ fn queueAdvancedIndexRebuild(
         }
     }
 
+    // SONNY-3319: the names are the index manager's own strings, and a
+    // rebuild that fails drops its index and frees them; the log line below
+    // then read freed memory (the next vector SET after a wrong-dimension one
+    // crashed). Every name is copied before any rebuild runs.
+    for (names.items) |*name| {
+        name.* = store.allocator.dupe(u8, name.*) catch {
+            log.warn("failed to copy advanced index name for rebuild: OutOfMemory", .{});
+            name.* = "";
+            continue;
+        };
+    }
+    defer for (names.items) |name| {
+        if (name.len != 0) store.allocator.free(name);
+    };
     for (names.items) |name| {
+        if (name.len == 0) continue;
         manager.rebuildAdvancedIndex(store, name) catch |err| {
             // error-policy: B — a failed rebuild leaves the advanced index
             // stale (queries may serve stale entries); the mutation itself
@@ -358,7 +355,7 @@ pub fn clearEdgeProperties(store: *graph_store.GraphStore, edge: *graph_store.Ed
 pub fn setNodePropertyFromValue(
     allocator: std.mem.Allocator,
     store: *graph_store.GraphStore,
-    labels: [][]const u8,
+    caller_labels: [][]const u8,
     node_id: u64,
     key: []const u8,
     value: Value,
@@ -367,7 +364,16 @@ pub fn setNodePropertyFromValue(
     // the internal __geode_security graph. Cheap pointer lookup; the security
     // graph must never receive an FLE envelope (its records feed the auth HMAC
     // chain, which is computed over plaintext).
-    const node_graph: ?[]const u8 = if (store.getNodePtr(node_id)) |n| n.graph_name else null;
+    const resident = store.getNodePtr(node_id);
+    const node_graph: ?[]const u8 = if (resident) |n| n.graph_name else null;
+    // CANARY: REQ=REQ-SONNY-3319-CURRENT-LABELS; FEATURE="VectorIndex"; ASPECT=WriteChokepointLabels; STATUS=TESTED; TEST=tests/test_sonny_write_allowlist_r4b.zig; OWNER=engine; UPDATED=2026-09-28
+    // SONNY-3319: the node's labels as they are now, not as the caller read
+    // them: a SET that adds a label earlier in the same clause (`SET n:VD,
+    // n.emb = <2-dim vector>`) passed the labels from before the clause, so
+    // the dimension guard and the FLE hook below did not see `:VD` and a
+    // wrong-dimension vector went into VD's HNSW index. The caller's labels
+    // are used only for a node that is not resident.
+    const labels: [][]const u8 = if (resident) |n| n.labels else caller_labels;
 
     // CANARY: REQ=REQ-GAP-0918-VECTOR-INDEX-VALIDATION; FEATURE="VectorIndex"; ASPECT=WriteChokepoint; STATUS=TESTED; TEST=tests/test_gap0918_vector_validation.zig; OWNER=index; UPDATED=2026-07-10
     // GAP-0918: reject dimension-mismatched vectors before they reach an

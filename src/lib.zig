@@ -195,6 +195,8 @@ pub const types = struct {
     pub const evaluator_functions = @import("types/evaluator_functions.zig");
     pub const network = @import("types/network.zig");
     pub const decimal128 = @import("types/decimal128.zig");
+    pub const decimal_text = @import("types/decimal_text.zig");
+    pub const narrowing = @import("types/narrowing.zig");
     pub const datetime = @import("types/datetime.zig");
     pub const jsonb = @import("types/jsonb.zig");
     pub const xml = @import("types/xml.zig");
@@ -497,6 +499,8 @@ pub const security = struct {
     pub const auth = @import("geode_auth");
     pub const multi_graph_security = @import("security/multi_graph_security.zig");
     pub const audit = @import("security/audit.zig");
+    // SONNY-3045: the Windows Event Log, syslog and JSON audit exporters.
+    pub const audit_formatter = @import("security/audit_formatter.zig");
     pub const tenant_quota = @import("security/tenant_quota.zig");
     // GAP-0839: Durable tenant lifecycle registry
     pub const tenant_registry = @import("security/tenant_registry.zig");
@@ -715,6 +719,9 @@ pub const ParseOutcome = union(enum) {
         token: @import("gql_lib").token.TokenKind,
         has_double_dash_comment: bool,
         has_unwind: bool = false,
+        /// SQLSTATE for the refusal (`parseErrorCode`): 42000 for a syntax
+        /// error, 54000 / 54001 for a parser limit (SONNY-3190, SONNY-3244).
+        code: []const u8 = "42000",
         // Outer allocator that owns `msg`. Set when `parseGqlOutcome`
         // duped the message out of the (now-freed) parser arena;
         // null when `msg` is a static literal.
@@ -734,12 +741,27 @@ pub const ParseOutcome = union(enum) {
     }
 };
 
+// CANARY: REQ=REQ-SONNY-3244-PARSE-LIMITS; FEATURE="ParseLimits"; ASPECT=WireCode; STATUS=TESTED; TEST=tests/test_sonny_write_allowlist_r4.zig; OWNER=parser; UPDATED=2026-09-28
+/// SONNY-3244: the SQLSTATE a transport answers a refused parse with. A
+/// parser limit is class 54 (program limit exceeded): too many write clauses
+/// in a part (SONNY-3190), too many statements in a request, or more parser
+/// memory than the request may take are 54000; queries nested too deep are
+/// 54001 (statement too complex). Every other refusal is a syntax error,
+/// 42000. The limits' own messages name them (`Parser.max_*`).
+pub fn parseErrorCode(err: anyerror) []const u8 {
+    return switch (err) {
+        error.TooManyWriteClauses, error.TooManyStatements, error.ParseMemoryLimit => "54000",
+        error.QueryNestingTooDeep => "54001",
+        else => "42000",
+    };
+}
+
 // Parse but capture parser error details instead of throwing; allocation errors still throw.
 pub fn parseGqlOutcome(src: []const u8, allocator: std.mem.Allocator, opts: ParseOptions) !ParseOutcome {
     var arena = std.heap.ArenaAllocator.init(allocator);
     var lx = Lexer{ .src = src };
     var p = Parser{ .lx = &lx, .arena = &arena, .cur = lx.next(), .strict_order_keys = opts.strict_order_keys, .ident_order_only = opts.ident_order_only, .forbid_orderby_calls = opts.forbid_orderby_calls, .forbid_orderby_paths = opts.forbid_orderby_paths, .ts_extensions = opts.ts_extensions };
-    const program = p.parseProgram() catch {
+    const program = p.parseProgram() catch |parse_err| {
         const raw_msg = p.last_error orelse "parse error";
         const loc = p.cur.loc;
         const kind = p.cur.kind;
@@ -765,6 +787,7 @@ pub fn parseGqlOutcome(src: []const u8, allocator: std.mem.Allocator, opts: Pars
             .token = kind,
             .has_double_dash_comment = has_dd,
             .has_unwind = has_uw,
+            .code = parseErrorCode(parse_err),
             .msg_allocator = if (has_dynamic_msg) allocator else null,
         } };
     };
@@ -801,6 +824,8 @@ pub fn parseGqlCached(
 
 // Re-export execution and graph_store for integration tests
 pub const execution = @import("execution.zig");
+/// The exact order and keys of numbers, durations and zoned times (SONNY-2675).
+pub const value_order = @import("execution/value_order.zig");
 pub const graph_store = @import("graph_store.zig");
 // GAP (write-path OOM, 2026-07-04): legacy write-executor working-set budget —
 // re-exported so tests can install tiny budgets via setBudgetBytesForTest.
@@ -896,4 +921,19 @@ test "#733 hot-path inline test roots" {
     _ = @import("gql/parser.zig");
     _ = @import("execution.zig");
     _ = @import("execution/match_operations.zig");
+}
+
+// SONNY-2689: the same kind of root for src/execution/tenant_visibility.zig's
+// inline tests, run by `zig build test-tenant-visibility` and the aggregate.
+// Its name carries that step's "tenant_visibility:" filter prefix, so the
+// filter keeps it analyzed and the import below enters test discovery.
+test "tenant_visibility: inline test root" {
+    _ = @import("execution/tenant_visibility.zig");
+}
+
+// SONNY-2799: the undo log's inline tests (src/txn_undo_log.zig) entered no
+// test binary. Named so `zig build test-txn-undo-log-inline` (filters "undo
+// log", "savepoint") keeps this block, and with it the file, in discovery.
+test "SONNY-2799 undo log inline test roots" {
+    _ = @import("txn_undo_log.zig");
 }

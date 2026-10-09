@@ -6,6 +6,8 @@ const graph_store = @import("../graph_store.zig");
 
 // Import from parent execution module
 const execution = @import("../execution.zig");
+const write_shape = @import("write_shape.zig");
+const write_walk = @import("write_walk.zig");
 const ExecutionResult = execution.ExecutionResult;
 const ExecutionContext = execution.ExecutionContext;
 const valuesEqual = execution.valuesEqual;
@@ -140,269 +142,24 @@ pub var parallel_union_serial_fallbacks: std.atomic.Value(u64) = std.atomic.Valu
 /// `where_clause`). Every expression-bearing field of a query is therefore now
 /// walked by `exprIsReadOnly`, which switches EXHAUSTIVELY over `ast.Expr` so
 /// that a future variant is a compile error rather than a silent gap.
-fn queryIsReadOnly(q: ast.Query) bool {
-    if (q.create_pattern != null) return false;
-    if (q.merge_statement != null) return false;
-    if (q.set_clauses.len != 0) return false;
-    if (q.remove_clauses.len != 0) return false;
-    if (q.delete_items.len != 0) return false;
-    if (q.call_clause != null) return false;
-    if (q.initial_call_subquery != null) return false;
-    if (q.for_statement != null) return false;
-
-    // Expression carriers. Any of these can host an `IN (…)` / `NOT IN (…)`
-    // subquery, which is a full query in its own right (see the 1330c note
-    // above). Patterns are walked too: a property map inside `MATCH (n {p:
-    // <expr>})` is `[]ast.Property`, whose `value` is a `*Expr`.
-    if (!patternIsReadOnly(q.match)) return false;
-    if (q.where_clause) |e| {
-        if (!exprIsReadOnly(e)) return false;
-    }
-    if (q.filter_clause) |e| {
-        if (!exprIsReadOnly(e)) return false;
-    }
-    if (q.having) |e| {
-        if (!exprIsReadOnly(e)) return false;
-    }
-    if (q.unwind_clause) |u| {
-        if (!exprIsReadOnly(u.list_expr)) return false;
-    }
-    for (q.let_bindings) |b| {
-        if (!exprIsReadOnly(b.value)) return false;
-    }
-    for (q.inline_let_bindings) |b| {
-        if (!exprIsReadOnly(b.value)) return false;
-    }
-    if (q.group_by) |g| {
-        for (g.keys) |k| {
-            if (!exprIsReadOnly(k)) return false;
-        }
-    }
-    if (q.order_by) |ob| {
-        if (!orderByIsReadOnly(ob)) return false;
-    }
-    for (q.ret.items) |item| {
-        if (!exprIsReadOnly(item.expr)) return false;
-    }
-    if (q.with_clause) |w| {
-        for (w.items) |item| {
-            if (!exprIsReadOnly(item.expr)) return false;
-        }
-        if (w.order_by) |ob| {
-            if (!orderByIsReadOnly(ob.*)) return false;
-        }
-    }
-
-    // GAP-0082 CTEs: every body is a full query and runs before the main one.
-    // Recursing (rather than spot-checking clauses) also covers a CTE body's
-    // own `next_query` chain, `initial_call_subquery`, and nested CTEs.
-    if (q.cte_list) |cte_list| {
-        for (cte_list.ctes) |cte| switch (cte.body) {
-            .simple => |body| {
-                if (!queryIsReadOnly(body.*)) return false;
-            },
-            .recursive => |rec| {
-                if (!queryIsReadOnly(rec.anchor.*)) return false;
-                if (!queryIsReadOnly(rec.recursive_term.*)) return false;
-            },
-        };
-    }
-    // Query chaining (`... WITH ... MATCH/CREATE ...`) hangs the continuation
-    // off `next_query`; walk it, or a chained CREATE slips through.
-    if (q.next_query) |nq| {
-        if (!queryIsReadOnly(nq.*)) return false;
-    }
-    return true;
-}
-
-fn orderByIsReadOnly(ob: ast.OrderBy) bool {
-    for (ob.keys) |k| {
-        if (!exprIsReadOnly(k.expr)) return false;
-    }
-    return true;
-}
-
-/// SONNY-1330 (1330c): property maps inside a pattern are expressions, so a
-/// `*Query` can hide there too (`MATCH (n:T {p: 1 IN (MATCH … SET …)})`).
-/// Walks node AND relationship property maps of every chain.
-fn patternIsReadOnly(p: ast.GraphPattern) bool {
-    for (p.chains) |chain| {
-        if (chain.head) |head| {
-            if (!nodePatternIsReadOnly(head)) return false;
-        }
-        for (chain.hops) |hop| {
-            if (!nodePatternIsReadOnly(hop.left)) return false;
-            if (!nodePatternIsReadOnly(hop.right)) return false;
-            if (hop.rel.props) |props| {
-                if (!propsAreReadOnly(props)) return false;
-            }
-        }
-    }
-    return true;
-}
-
-fn nodePatternIsReadOnly(n: ast.NodePattern) bool {
-    if (n.props) |props| return propsAreReadOnly(props);
-    return true;
-}
-
-fn propsAreReadOnly(props: []ast.Property) bool {
-    for (props) |prop| {
-        if (!exprIsReadOnly(prop.value.*)) return false;
-    }
-    return true;
-}
-
-fn exprListIsReadOnly(items: []*ast.Expr) bool {
-    for (items) |it| {
-        if (!exprIsReadOnly(it.*)) return false;
-    }
-    return true;
-}
-
-fn setPredIsReadOnly(value: *ast.Expr, set: []*ast.Expr) bool {
-    return exprIsReadOnly(value.*) and exprListIsReadOnly(set);
-}
-
-fn patternWhereIsReadOnly(pattern: *ast.GraphPattern, where: ?*ast.Expr) bool {
-    if (!patternIsReadOnly(pattern.*)) return false;
-    if (where) |w| {
-        if (!exprIsReadOnly(w.*)) return false;
-    }
-    return true;
-}
-
-/// SONNY-1330 (1330c): is this expression free of embedded MUTATING queries?
 ///
-/// Only two `ast.Expr` variants carry a `*Query` — `.InSubquery` and
-/// `.NotInSubquery`, both produced by the `IN (` branch of
-/// `parser.parsePrimary`'s comparison tail, which calls the full `parseQuery`.
-/// Everything else either has no sub-expression (literals, `Ident`, `Param`,
-/// `PropertyAccess`, `HasLabel`) or must be recursed into so a subquery buried
-/// under a `CASE`, a list, a map, a call argument or a comprehension cannot
-/// slip past.
-///
-/// `Exists` / `PatternCount` / `PatternComp` / `ShortestPath` carry a
-/// `*GraphPattern`, NOT a `*Query` — an `EXISTS { … }` or `COUNT { … }` body
-/// is a pattern plus an optional WHERE and therefore cannot host a write
-/// clause of its own. Their patterns and WHERE expressions are still walked,
-/// because a property map inside the pattern is an ordinary expression that
-/// CAN host an `IN (subquery)`.
-///
-/// The switch is EXHAUSTIVE on purpose: no `else` branch, so adding a variant
-/// to `ast.Expr` fails to compile here instead of silently widening the gate.
-fn exprIsReadOnly(e: ast.Expr) bool {
-    return switch (e) {
-        // --- leaves: no sub-expression, no query ---
-        .Ident,
-        .String,
-        .Int,
-        .Decimal,
-        .Bool,
-        .Null,
-        .Date,
-        .DateTime,
-        .Time,
-        .LocalDateTime,
-        .SmallIntLit,
-        .BigIntLit,
-        .RealLit,
-        .DoubleLit,
-        .CharLit,
-        .VarcharLit,
-        .TextLit,
-        .ByteaLit,
-        .JsonLit,
-        .JsonbLit,
-        .XmlLit,
-        .UrlLit,
-        .DomainLit,
-        .UuidLit,
-        .EnumLit,
-        .BitLit,
-        .VarBitLit,
-        .PropertyAccess,
-        .Param,
-        .HasLabel,
-        => true,
+/// SONNY-3182 (round 4): the answer is the one write walk's
+/// (`write_walk.zig`), which visits every field of `ast.Query` and every
+/// expression, iteratively. The walk this function had never looked at a
+/// query's initial WITH or its WHERE, so `IN (WITH (1 IN (MATCH (w) SET ...
+/// RETURN 1)) AS b ...)` passed as a read.
+pub fn queryIsReadOnly(q: ast.Query) bool {
+    return !write_walk.queryWrites(&q, .{ .calls = .any });
+}
 
-        // --- THE carriers: a full `*Query`, executed via executeQueryWithEnv ---
-        .InSubquery => |s| exprIsReadOnly(s.value.*) and queryIsReadOnly(s.subquery.*),
-        .NotInSubquery => |s| exprIsReadOnly(s.value.*) and queryIsReadOnly(s.subquery.*),
-
-        // --- containers ---
-        .List, .ArrayLit => |items| exprListIsReadOnly(items),
-        .Map => |props| propsAreReadOnly(props),
-
-        .Member => |m| exprIsReadOnly(m.target.*),
-        .Index => |i| exprIsReadOnly(i.target.*) and exprIsReadOnly(i.index.*),
-        .Slice => |s| blk: {
-            if (!exprIsReadOnly(s.target.*)) break :blk false;
-            if (s.start) |st| {
-                if (!exprIsReadOnly(st.*)) break :blk false;
-            }
-            if (s.end) |en| {
-                if (!exprIsReadOnly(en.*)) break :blk false;
-            }
-            break :blk true;
-        },
-        .Call => |c| blk: {
-            if (!exprIsReadOnly(c.callee.*)) break :blk false;
-            for (c.args) |a| {
-                if (!exprIsReadOnly(a.*)) break :blk false;
-            }
-            break :blk true;
-        },
-        .Unary => |u| exprIsReadOnly(u.expr.*),
-        .Binary => |b| exprIsReadOnly(b.left.*) and exprIsReadOnly(b.right.*),
-
-        // NOTE: `.In` / `.NotIn` (and the pairs below) have STRUCTURALLY
-        // identical but NOMINALLY distinct anonymous struct payloads, so Zig
-        // refuses a shared capture group — each gets its own prong delegating
-        // to one helper.
-        .In => |s| setPredIsReadOnly(s.value, s.set),
-        .NotIn => |s| setPredIsReadOnly(s.value, s.set),
-        .InListExpr => |s| exprIsReadOnly(s.value.*) and exprIsReadOnly(s.list_expr.*),
-        .NotInListExpr => |s| exprIsReadOnly(s.value.*) and exprIsReadOnly(s.list_expr.*),
-
-        .IsNull => |t| exprIsReadOnly(t.target.*),
-        .IsUnknown => |t| exprIsReadOnly(t.target.*),
-        .StartsWith => |s| exprIsReadOnly(s.value.*) and exprIsReadOnly(s.prefix.*),
-        .EndsWith => |s| exprIsReadOnly(s.value.*) and exprIsReadOnly(s.suffix.*),
-        .Contains => |s| exprIsReadOnly(s.value.*) and exprIsReadOnly(s.needle.*),
-
-        .Case => |c| blk: {
-            if (c.operand) |op| {
-                if (!exprIsReadOnly(op.*)) break :blk false;
-            }
-            for (c.whens) |w| {
-                if (!exprIsReadOnly(w.when.*)) break :blk false;
-                if (!exprIsReadOnly(w.then_expr.*)) break :blk false;
-            }
-            if (c.else_expr) |el| {
-                if (!exprIsReadOnly(el.*)) break :blk false;
-            }
-            break :blk true;
-        },
-
-        // --- pattern-bearing: `*GraphPattern`, never a `*Query` (see above) ---
-        .PatternComp => |pc| patternWhereIsReadOnly(pc.pattern, pc.where) and exprIsReadOnly(pc.map.*),
-        .Exists => |p| patternWhereIsReadOnly(p.pattern, p.where),
-        .PatternCount => |p| patternWhereIsReadOnly(p.pattern, p.where),
-        .ShortestPath => |sp| patternIsReadOnly(sp.pattern.*),
-
-        .MapProjection => |mp| exprIsReadOnly(mp.source.*),
-        .ListComprehension => |lc| blk: {
-            if (!exprIsReadOnly(lc.source.*)) break :blk false;
-            if (lc.filter) |f| {
-                if (!exprIsReadOnly(f.*)) break :blk false;
-            }
-            if (lc.map) |m| {
-                if (!exprIsReadOnly(m.*)) break :blk false;
-            }
-            break :blk true;
-        },
-    };
+/// SONNY-1330 (1330c): is this expression free of embedded mutating queries
+/// (an IN / NOT IN subquery that writes, anywhere inside it)? As
+/// `queryIsReadOnly`, conservatively: a CALL, CALL { } or FOR in such a
+/// subquery counts as a write. The one write walk (`write_walk.zig`), which is
+/// iterative: `n.i = 1 OR ... OR n.i = 5000` no longer recurses once per term
+/// (SONNY-3244).
+pub fn exprIsReadOnly(e: ast.Expr) bool {
+    return !write_walk.exprWrites(&e, .{ .calls = .any });
 }
 
 // CANARY: REQ=REQ-EXEC-REFACTOR-002; FEATURE="ExecutionRefactoring"; ASPECT=SET_OPERATIONS; STATUS=EXEMPT; OWNER=refactor; UPDATED=2025-10-17
@@ -662,7 +419,11 @@ pub fn executeUnionWithContext(allocator: std.mem.Allocator, union_query: ast.Un
 
     // Extract variable bindings from first query (if any) to pass to subsequent UNION parts
     // This allows SELECT in UNION to access variables from CREATE in first query
-    const shared_bindings = result.variable_bindings;
+    // SONNY-3183 (I1): only when the write-shape validator's predicate says
+    // the later parts run over them; it checked them as parts that run through
+    // the query dispatcher otherwise, and one that writes had its write
+    // dropped here.
+    const shared_bindings = if (write_shape.unionTailsRunOverBindings(union_query.first)) result.variable_bindings else null;
 
     // Execute and append results from tail queries
     for (union_query.tails) |part| {

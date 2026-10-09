@@ -63,6 +63,9 @@ fn isPropagatableEvalError(err: EvalError) bool {
         EvalError.UnknownFunction,
         // GAP-0840: a strict-tenancy refusal must never degrade to NULL.
         EvalError.TenantScopeRequired,
+        // Item 5 of the SONNY-2686 review: neither may a refusal to answer
+        // without the session's row visibility.
+        EvalError.EvaluatorNotInitialized,
         // GAP-ENT-0044/0045: a read-budget / cancel abort must reach the client,
         // never be swallowed into a NULL that looks like a successful answer.
         EvalError.ReadQueryBudgetExceeded,
@@ -160,18 +163,220 @@ pub const Env = value_types.Env;
 // The callbacks are set at runtime by execution.zig during initialization
 var execution_callbacks: ?evaluator_adapter.ExecutionCallbacks = null;
 
+/// SONNY-2691 / SONNY-2692 (item 5 of the SONNY-2686 review): whether the
+/// callbacks and the row scope are published: 0 not yet, 1 being written,
+/// 2 published. They are written once per process, by the first
+/// `setExecutionCallbacks`; every later call (each QUIC connection, the gRPC
+/// server and the CLI call `execution.initEvaluator`, and the server calls it
+/// at startup) only reads this. They used to be rewritten, unsynchronized,
+/// from every connection thread while other threads read them.
+var callbacks_state = std.atomic.Value(u8).init(0);
+
 /// Set execution callbacks for this module
-/// Called by execution.zig during initialization to provide callback functions
+/// Called by execution.zig during initialization to provide callback functions.
+/// The first call publishes them, with the row scope; later calls change
+/// nothing, and return once they are published.
 pub fn setExecutionCallbacks(callbacks: evaluator_adapter.ExecutionCallbacks) void {
-    execution_callbacks = callbacks;
+    if (callbacks_state.cmpxchgStrong(0, 1, .acquire, .acquire) == null) {
+        execution_callbacks = callbacks;
+        // SONNY-2691 / SONNY-2692: the execution layer's row visibility
+        // arrives with the other execution callbacks (see `RowScope`).
+        begin_row_scope = beginHopRowScope;
+        callbacks_state.store(2, .release);
+        return;
+    }
+    while (callbacks_state.load(.acquire) != 2) std.atomic.spinLoopHint();
+}
+
+/// The published execution callbacks, or null before `setExecutionCallbacks`.
+fn installedCallbacks() ?evaluator_adapter.ExecutionCallbacks {
+    if (callbacks_state.load(.acquire) != 2) return null;
+    return execution_callbacks;
+}
+
+// CANARY: REQ=REQ-SONNY-2691-DEGREE-VISIBILITY; FEATURE="NodeDegreeFunctions"; ASPECT=RowScopeInterface; STATUS=TESTED; TEST=tests/test_sonny2691_degree_visibility.zig; OWNER=security; UPDATED=2026-09-25
+/// SONNY-2691 / SONNY-2692: the session's row visibility, for rows the
+/// evaluator reads from the store itself (indegree() / outdegree()
+/// neighbours, knn() candidates), where no MATCH applied it.
+///
+/// It is the SONNY-2679 traversal scope (`match_operations.HopScope`: the
+/// graph, then `passesRowVisibilityFilters`' tenant and RLS halves) behind an
+/// opaque interface, because eval.zig must not reach the execution layer's RLS
+/// code by a static reference (M5.3): every artifact that compiles the
+/// evaluator would then need the RLS modules, and `test-graph-store`, rooted
+/// at graph_store.zig, has none. `setExecutionCallbacks`, which
+/// `execution.initEvaluator` calls at server, CLI and harness start-up,
+/// installs `beginHopRowScope`; until then there is no scope, and the callers
+/// keep their graph and tenant checks.
+const RowScope = struct {
+    ptr: *anyopaque,
+    vtable: *const VTable,
+
+    const VTable = struct {
+        rlsMayDeny: *const fn (ptr: *anyopaque) bool,
+        restrictsNodes: *const fn (ptr: *anyopaque) bool,
+        nodeVisible: *const fn (ptr: *anyopaque, node: *const graph_store.Node) bool,
+        nodeVisibleOnCopy: *const fn (ptr: *anyopaque, node: *const graph_store.Node) bool,
+        stepAllowed: *const fn (ptr: *anyopaque, store: *graph_store.GraphStore, edge: *const graph_store.Edge, next_node_id: u64) bool,
+        edgeVisible: *const fn (ptr: *anyopaque, edge: *const graph_store.Edge) bool,
+        deinit: *const fn (ptr: *anyopaque) void,
+    };
+
+    /// `HopScope.rls_may_deny` (`rlsMayDenyForSession`): may an RLS policy
+    /// deny the session a row?
+    fn rlsMayDeny(self: RowScope) bool {
+        return self.vtable.rlsMayDeny(self.ptr);
+    }
+
+    /// `HopScope.restrictsNodes`: may the scope hide a node in the graph (a
+    /// tenant scope, or an RLS policy that may deny the session a row)?
+    fn restrictsNodes(self: RowScope) bool {
+        return self.vtable.restrictsNodes(self.ptr);
+    }
+
+    /// `HopScope.nodeVisible`: may the session see `node`?
+    fn nodeVisible(self: RowScope, node: *const graph_store.Node) bool {
+        return self.vtable.nodeVisible(self.ptr, node);
+    }
+
+    /// `nodeVisible` for a transient copy the caller frees as soon as this
+    /// returns (`GraphStore.decideOnTransientNode`): the RLS scratch row,
+    /// which borrows the node's properties, is emptied before it returns.
+    fn nodeVisibleOnCopy(self: RowScope, node: *const graph_store.Node) bool {
+        return self.vtable.nodeVisibleOnCopy(self.ptr, node);
+    }
+
+    /// May the session see the node `id`? Decided on a transient copy of it
+    /// that is freed before this returns and never enters the node cache, so
+    /// the call retains nothing. False when no node has the id.
+    fn nodeIdVisible(self: RowScope, store: *graph_store.GraphStore, id: u64) bool {
+        return store.decideOnTransientNode(id, self, nodeVisibleOnCopy) orelse false;
+    }
+
+    /// `HopScope.stepAllowed`: may a traversal walk `edge` onto `next_node_id`?
+    fn stepAllowed(self: RowScope, store: *graph_store.GraphStore, edge: *const graph_store.Edge, next_node_id: u64) bool {
+        return self.vtable.stepAllowed(self.ptr, store, edge, next_node_id);
+    }
+
+    /// `HopScope.edgeVisible`: may the session see `edge` itself? Its graph,
+    /// its tenant tag and the RLS policies on its type (the label-deny policy
+    /// on the type, and expression policies over the edge's properties). Its
+    /// endpoints are the caller's to check.
+    fn edgeVisible(self: RowScope, edge: *const graph_store.Edge) bool {
+        return self.vtable.edgeVisible(self.ptr, edge);
+    }
+
+    fn deinit(self: RowScope) void {
+        self.vtable.deinit(self.ptr);
+    }
+};
+
+const BeginRowScopeFn = *const fn (allocator: std.mem.Allocator, graph: []const u8, tenant: ?[]const u8) std.mem.Allocator.Error!RowScope;
+
+/// Installed by `setExecutionCallbacks`; null before the evaluator is set up.
+var begin_row_scope: ?BeginRowScopeFn = null;
+
+// CANARY: REQ=REQ-SONNY-2691-ROW-SCOPE-FAIL-CLOSED; FEATURE="NodeDegreeFunctions"; ASPECT=RowScopeFailsClosed; STATUS=TESTED; TEST=tests/test_sonny2691_row_scope_fail_closed.zig; OWNER=security; UPDATED=2026-09-26
+/// The session's row scope for `graph` / `tenant`. The caller deinits it.
+///
+/// Null only when no scope is installed (the execution layer's
+/// `initEvaluator` never ran) AND the active context carries no user and no
+/// principal, so no RLS policy can apply to the session and the caller's
+/// graph and tenant checks are the whole answer. With a user or a principal
+/// the statement is refused (`EvaluatorNotInitialized`, item 5 of the
+/// SONNY-2686 review): it used to get null there too, so degree and knn()
+/// answered without RLS.
+fn beginRowScope(allocator: std.mem.Allocator, graph: []const u8, tenant: ?[]const u8) EvalError!?RowScope {
+    if (callbacks_state.load(.acquire) != 2) {
+        if (activeContextHasIdentity()) return error.EvaluatorNotInitialized;
+        return null;
+    }
+    const begin = begin_row_scope orelse return null;
+    return try begin(allocator, graph, tenant);
+}
+
+/// Does the active context carry a user or a principal (an identity an RLS
+/// policy can apply to)?
+fn activeContextHasIdentity() bool {
+    const execution = @import("execution.zig");
+    const ctx = execution.getActiveContext() orelse return false;
+    return ctx.user != null or ctx.principal != null;
+}
+
+/// The execution layer's `RowScope`: a `HopScope` and the RLS scratch row it
+/// evaluates expression policies over. Referenced only by
+/// `setExecutionCallbacks`, so only an artifact that sets the evaluator up
+/// compiles it (and the RLS modules it needs).
+fn beginHopRowScope(allocator: std.mem.Allocator, graph: []const u8, tenant: ?[]const u8) std.mem.Allocator.Error!RowScope {
+    const match_operations = @import("execution/match_operations.zig");
+    const Impl = struct {
+        allocator: std.mem.Allocator,
+        rls_row: std.StringHashMap(@import("rls").Value),
+        hop: match_operations.HopScope,
+
+        fn from(ptr: *anyopaque) *@This() {
+            return @ptrCast(@alignCast(ptr));
+        }
+        fn rlsMayDeny(ptr: *anyopaque) bool {
+            return from(ptr).hop.rls_may_deny;
+        }
+        fn restrictsNodes(ptr: *anyopaque) bool {
+            return from(ptr).hop.restrictsNodes();
+        }
+        fn nodeVisible(ptr: *anyopaque, node: *const graph_store.Node) bool {
+            return from(ptr).hop.nodeVisible(node);
+        }
+        fn nodeVisibleOnCopy(ptr: *anyopaque, node: *const graph_store.Node) bool {
+            const self = from(ptr);
+            // The RLS row borrows the copy's properties: empty it before the
+            // caller frees the copy (as `HopScope.stepAllowed` does).
+            defer self.rls_row.clearRetainingCapacity();
+            return self.hop.nodeVisible(node);
+        }
+        fn stepAllowed(ptr: *anyopaque, store: *graph_store.GraphStore, edge: *const graph_store.Edge, next_node_id: u64) bool {
+            return from(ptr).hop.stepAllowed(store, edge, next_node_id);
+        }
+        fn edgeVisible(ptr: *anyopaque, edge: *const graph_store.Edge) bool {
+            const self = from(ptr);
+            // The RLS row borrows the edge's properties: empty it before the
+            // caller lets the edge go (the knn scan reads it under its shard
+            // guard only).
+            defer self.rls_row.clearRetainingCapacity();
+            return self.hop.edgeVisible(edge);
+        }
+        fn deinit(ptr: *anyopaque) void {
+            const self = from(ptr);
+            // The scope's teardown first: it frees the verdict cache and ends
+            // the label-deny snapshot `HopScope.init` made current on this
+            // thread (LIFO, like every other traversal scope).
+            self.hop.deinit();
+            self.rls_row.deinit();
+            self.allocator.destroy(self);
+        }
+        const vtable = RowScope.VTable{
+            .rlsMayDeny = rlsMayDeny,
+            .restrictsNodes = restrictsNodes,
+            .nodeVisible = nodeVisible,
+            .nodeVisibleOnCopy = nodeVisibleOnCopy,
+            .stepAllowed = stepAllowed,
+            .edgeVisible = edgeVisible,
+            .deinit = deinit,
+        };
+    };
+    const self = try allocator.create(Impl);
+    self.* = .{ .allocator = allocator, .rls_row = .init(allocator), .hop = undefined };
+    // After the struct is in place: the scope keeps a pointer to the row.
+    self.hop = match_operations.HopScope.init(allocator, graph, tenant, &self.rls_row);
+    return .{ .ptr = self, .vtable = &Impl.vtable };
 }
 
 /// Get execution callbacks (internal use only)
-fn getExecutionCallbacks() evaluator_adapter.ExecutionCallbacks {
-    return execution_callbacks orelse {
-        // This should never happen in production - callbacks must be set before eval.evalExpr is called
-        @panic("Execution callbacks not initialized! Call eval.setExecutionCallbacks() first.");
-    };
+/// Item 5 of the SONNY-2686 review: a pattern predicate, a subquery or
+/// shortestPath() needs the execution layer, which `execution.initEvaluator`
+/// installs. Without it the statement is refused (`EvaluatorNotInitialized`);
+/// it used to panic, aborting the process.
+fn getExecutionCallbacks() EvalError!evaluator_adapter.ExecutionCallbacks {
+    return installedCallbacks() orelse error.EvaluatorNotInitialized;
 }
 
 // GAP-0280: Global timeseries store pointer for server execution path.
@@ -214,6 +419,8 @@ const truthy = value_types.truthy;
 // CANARY: REQ=REQ-M6.1-EVAL-REFACTOR-001; FEATURE="Phase 6 Modularization"; ASPECT=TypePromotionImport; STATUS=EXEMPT; OWNER=eval; UPDATED=2025-11-13
 // Phase 6 M6.1: Import type promotion module for type conversion and validation utilities
 const type_promotion = @import("eval/type_promotion.zig");
+const value_order = @import("execution/value_order.zig");
+const decimal_text = @import("types/decimal_text.zig");
 
 // CANARY: REQ=REQ-EVAL-REFACTOR-001; FEATURE="EvalExpr Refactoring"; ASPECT=CallHandlersImport; STATUS=TESTED; OWNER=eval; UPDATED=2026-01-30
 // Import call handlers module for function call evaluation helpers
@@ -260,43 +467,6 @@ const cmpI128 = type_promotion.cmpI128;
 const cmpToBool = type_promotion.cmpToBool;
 const cmpIntsOp = type_promotion.cmpIntsOp;
 
-// CANARY: REQ=REQ-NESTING-REFACTOR-021; FEATURE="NestingReduction"; ASPECT=DecimalParsing; STATUS=TESTED; OWNER=refactor; UPDATED=2026-01-30
-// Helper function to parse a decimal string into coefficient and scale
-fn parseDecimalString(s: []const u8) ?struct { coeff: i128, scale: u8 } {
-    if (std.mem.indexOf(u8, s, ".")) |dot_idx| {
-        const int_part = s[0..dot_idx];
-        const frac_part = s[dot_idx + 1 ..];
-        const int_val = std.fmt.parseInt(i128, int_part, 10) catch return null;
-        const frac_val = std.fmt.parseInt(i128, frac_part, 10) catch return null;
-        var coeff = int_val;
-        const frac_len = frac_part.len;
-        var mult: i128 = 1;
-        var k: usize = 0;
-        while (k < frac_len) : (k += 1) {
-            mult *= 10;
-        }
-        coeff = coeff * mult + frac_val;
-        return .{ .coeff = coeff, .scale = @intCast(frac_len) };
-    } else {
-        const int_val = std.fmt.parseInt(i128, s, 10) catch return null;
-        return .{ .coeff = int_val, .scale = 0 };
-    }
-}
-
-// CANARY: REQ=REQ-NESTING-REFACTOR-022; FEATURE="NestingReduction"; ASPECT=ScaleAdjust; STATUS=TESTED; OWNER=refactor; UPDATED=2026-01-30
-// Helper to adjust decimal scale to target scale
-fn adjustDecimalScale(coeff: i128, current_scale: u8, target_scale: u8) struct { coeff: i128, scale: u8 } {
-    var result_coeff = coeff;
-    var scale = current_scale;
-    while (scale < target_scale) : (scale += 1) {
-        result_coeff *= 10;
-    }
-    while (scale > target_scale) : (scale -= 1) {
-        result_coeff = @divTrunc(result_coeff, 10);
-    }
-    return .{ .coeff = result_coeff, .scale = target_scale };
-}
-
 // CANARY: REQ=REQ-M5.2-EVAL-REFACTOR-009; FEATURE="Circular Dependency Resolution"; ASPECT=ValueEquality; STATUS=EXEMPT; OWNER=eval; UPDATED=2025-11-13
 // Phase 5 M5.2: Use eqVals from value_types module
 const eqVals = value_types.eqVals;
@@ -323,6 +493,38 @@ inline fn isAscii(s: []const u8) bool {
 /// production builds, so the counter and its update are dead-code-eliminated on
 /// the hot path outside tests.
 pub var nfc_fallback_count: usize = 0;
+
+const narrowing = @import("types/narrowing.zig");
+
+// CANARY: REQ=REQ-SONNY-2739-POWER-OVERFLOW; FEATURE="PowerOperator"; ASPECT=CheckedResult; STATUS=TESTED; TEST=tests/test_sonny2739_float_narrowing.zig; OWNER=eval; UPDATED=2026-09-25
+/// `base ^ exp` over integers. A non-negative exponent is computed exactly:
+/// an Int when the power fits one, else a scale-6 Decimal while that fits (a
+/// power below 10^32). A negative exponent is `floatPower`'s.
+///
+/// SONNY-2739: the power went through f64, then `@intFromFloat` behind the
+/// guard `result <= @floatFromInt(maxInt(i64))`, which admits 2^63, and then
+/// `@intFromFloat` into the Decimal with no guard at all: `2 ^ 63`, `10 ^ 40`,
+/// `10 ^ 400` and `0 ^ -1` aborted the server. A power that does not fit is now
+/// DecimalOverflow (22003), zero to a negative power is a division by zero
+/// (22012), and a power past 2^53 is exact (`3 ^ 39`).
+fn intPower(base: i64, exp: i64) EvalError!Value {
+    if (exp < 0) return floatPower(@floatFromInt(base), exp);
+    const p = std.math.powi(i128, base, exp) catch return EvalError.DecimalOverflow;
+    if (std.math.cast(i64, p)) |i| return .{ .Int = i };
+    const coeff = std.math.mul(i128, p, float_to_decimal_scale) catch return EvalError.DecimalOverflow;
+    if (@abs(coeff) >= @import("types/decimal128.zig").Decimal128.MAX_COEFF) return EvalError.DecimalOverflow;
+    return .{ .Decimal = .{ .coeff = coeff, .scale = 6 } };
+}
+
+/// `base ^ exp` through f64: an Int when the power is an integer that fits
+/// one, else a scale-6 Decimal (truncated), or DecimalOverflow (22003) when
+/// that does not fit. Zero to a negative power is a division by zero.
+fn floatPower(base: f64, exp: i64) EvalError!Value {
+    if (base == 0 and exp < 0) return EvalError.DivisionByZero;
+    const result = std.math.pow(f64, base, @floatFromInt(exp));
+    if (@trunc(result) == result and narrowing.floatFits(i64, result)) return .{ .Int = @intFromFloat(result) };
+    return decimalFromF64(result);
+}
 
 pub fn evalBinary(alloc: std.mem.Allocator, op: ast.BinOp, l: Value, r: Value) EvalError!Value {
     return switch (op) {
@@ -359,92 +561,41 @@ pub fn evalBinary(alloc: std.mem.Allocator, op: ast.BinOp, l: Value, r: Value) E
             }
             // CANARY: REQ=REQ-GQL-BOOL-INT-COERCE-001; FEATURE="TypeCoercion"; ASPECT=BoolToInt; STATUS=TESTED; TEST=geodetestlab/specs/gql_type_system_comprehensive.yml; OWNER=eval; UPDATED=2025-12-27
             // Bool + Int / Int + Bool: Coerce bool to int (true=1, false=0)
+            // SONNY-2769: checked like Int + Int (`true + 9223372036854775807`
+            // aborted the server).
             if (l == .Bool and r == .Int) {
                 const bool_val: i64 = if (l.Bool) 1 else 0;
-                break :blk .{ .Int = bool_val + r.Int };
+                break :blk .{ .Int = std.math.add(i64, bool_val, r.Int) catch return EvalError.IntegerOverflow };
             }
             if (l == .Int and r == .Bool) {
                 const bool_val: i64 = if (r.Bool) 1 else 0;
-                break :blk .{ .Int = l.Int + bool_val };
+                break :blk .{ .Int = std.math.add(i64, l.Int, bool_val) catch return EvalError.IntegerOverflow };
             }
             // Decimal + Int / Int + Decimal / Decimal + Decimal
             if ((l == .Decimal and r == .Int) or (l == .Int and r == .Decimal) or (l == .Decimal and r == .Decimal)) {
                 const ld = toDec(l);
                 const rd = toDec(r);
+                // SONNY-2769: a sum (or an operand at the common scale) past
+                // i128 is 22003; `lc + rc` aborted the server.
                 const maxs: u8 = @max(ld.scale, rd.scale);
-                const lc = try scaleTo(ld.coeff, ld.scale, maxs);
-                const rc = try scaleTo(rd.coeff, rd.scale, maxs);
-                const sum = lc + rc; // overflow ignored for now (would return Unsupported if needed)
+                const lc = scaleTo(ld.coeff, ld.scale, maxs) catch return EvalError.DecimalOverflow;
+                const rc = scaleTo(rd.coeff, rd.scale, maxs) catch return EvalError.DecimalOverflow;
+                const sum = std.math.add(i128, lc, rc) catch return EvalError.DecimalOverflow;
                 break :blk .{ .Decimal = .{ .coeff = sum, .scale = maxs } };
             }
             // CANARY: REQ=REQ-DATE-INTERVAL-001; FEATURE="DateIntervalArithmetic"; ASPECT=Addition; STATUS=TESTED; TEST=geodetestlab/specs/geode_functions_comprehensive.yml; OWNER=eval; UPDATED=2026-01-09
             // Date + Interval: Add months and days from interval to date
-            if (l == .Date and r == .Interval) {
-                const datetime_module = @import("types/datetime.zig");
-                const date = l.Date;
-                const interval = r.Interval;
-
-                // Convert date to year/month/day components
-                const ymd = datetime_module.Date.dateFromDays(date.days_since_epoch);
-
-                // Add months (with year overflow handling)
-                var new_month: i32 = @as(i32, ymd.month) + interval.months;
-                var new_year: i32 = ymd.year;
-
-                // Handle month overflow/underflow
-                while (new_month > 12) {
-                    new_month -= 12;
-                    new_year += 1;
-                }
-                while (new_month < 1) {
-                    new_month += 12;
-                    new_year -= 1;
-                }
-
-                // Clamp day to valid range for new month
-                const max_day = datetime_module.Date.daysInMonth(new_year, @intCast(new_month));
-                const new_day: u8 = @min(ymd.day, max_day);
-
-                // Calculate new days since epoch
-                const new_days = datetime_module.Date.daysSinceEpoch(new_year, @intCast(new_month), new_day) catch {
-                    return EvalError.Unsupported;
-                };
-
-                // Add interval days
-                const final_days = new_days + interval.days;
-
-                break :blk .{ .Date = .{ .days_since_epoch = final_days } };
-            }
-            // Interval + Date: commutative
-            if (l == .Interval and r == .Date) {
-                const datetime_module = @import("types/datetime.zig");
-                const date = r.Date;
-                const interval = l.Interval;
-
-                const ymd = datetime_module.Date.dateFromDays(date.days_since_epoch);
-
-                var new_month: i32 = @as(i32, ymd.month) + interval.months;
-                var new_year: i32 = ymd.year;
-
-                while (new_month > 12) {
-                    new_month -= 12;
-                    new_year += 1;
-                }
-                while (new_month < 1) {
-                    new_month += 12;
-                    new_year -= 1;
-                }
-
-                const max_day = datetime_module.Date.daysInMonth(new_year, @intCast(new_month));
-                const new_day: u8 = @min(ymd.day, max_day);
-
-                const new_days = datetime_module.Date.daysSinceEpoch(new_year, @intCast(new_month), new_day) catch {
-                    return EvalError.Unsupported;
-                };
-
-                const final_days = new_days + interval.days;
-
-                break :blk .{ .Date = .{ .days_since_epoch = final_days } };
+            // Date + Interval (either order): the months, the day clamped to
+            // the target month, then the days. SONNY-2769: the month and day
+            // arithmetic was i32 and aborted the server past it
+            // (`DATE '2026-01-01' + duration('P2147483647D')`); a date past the
+            // day range is 22003.
+            if ((l == .Date and r == .Interval) or (l == .Interval and r == .Date)) {
+                const date = if (l == .Date) l.Date else r.Date;
+                const interval = if (l == .Interval) l.Interval else r.Interval;
+                const days = @import("types/datetime.zig").Date.addMonthsDays(date.days_since_epoch, interval.months, interval.days) catch
+                    return EvalError.IntegerOverflow;
+                break :blk .{ .Date = .{ .days_since_epoch = days } };
             }
             return EvalError.TypeMismatch;
         },
@@ -461,48 +612,20 @@ pub fn evalBinary(alloc: std.mem.Allocator, op: ast.BinOp, l: Value, r: Value) E
             if ((l == .Decimal and r == .Int) or (l == .Int and r == .Decimal) or (l == .Decimal and r == .Decimal)) {
                 const ld = toDec(l);
                 const rd = toDec(r);
+                // SONNY-2769: see Add.
                 const maxs: u8 = @max(ld.scale, rd.scale);
-                const lc = try scaleTo(ld.coeff, ld.scale, maxs);
-                const rc = try scaleTo(rd.coeff, rd.scale, maxs);
-                const diff = lc - rc;
+                const lc = scaleTo(ld.coeff, ld.scale, maxs) catch return EvalError.DecimalOverflow;
+                const rc = scaleTo(rd.coeff, rd.scale, maxs) catch return EvalError.DecimalOverflow;
+                const diff = std.math.sub(i128, lc, rc) catch return EvalError.DecimalOverflow;
                 break :blk2 .{ .Decimal = .{ .coeff = diff, .scale = maxs } };
             }
             // CANARY: REQ=REQ-DATE-INTERVAL-002; FEATURE="DateIntervalArithmetic"; ASPECT=Subtraction; STATUS=TESTED; TEST=geodetestlab/specs/geode_functions_comprehensive.yml; OWNER=eval; UPDATED=2026-01-09
             // Date - Interval: Subtract months and days from interval
             if (l == .Date and r == .Interval) {
-                const datetime_module = @import("types/datetime.zig");
-                const date = l.Date;
-                const interval = r.Interval;
-
-                // Convert date to year/month/day components
-                const ymd = datetime_module.Date.dateFromDays(date.days_since_epoch);
-
-                // Subtract months (with year underflow handling)
-                var new_month: i32 = @as(i32, ymd.month) - interval.months;
-                var new_year: i32 = ymd.year;
-
-                while (new_month > 12) {
-                    new_month -= 12;
-                    new_year += 1;
-                }
-                while (new_month < 1) {
-                    new_month += 12;
-                    new_year -= 1;
-                }
-
-                // Clamp day to valid range for new month
-                const max_day = datetime_module.Date.daysInMonth(new_year, @intCast(new_month));
-                const new_day: u8 = @min(ymd.day, max_day);
-
-                // Calculate new days since epoch
-                const new_days = datetime_module.Date.daysSinceEpoch(new_year, @intCast(new_month), new_day) catch {
-                    return EvalError.Unsupported;
-                };
-
-                // Subtract interval days
-                const final_days = new_days - interval.days;
-
-                break :blk2 .{ .Date = .{ .days_since_epoch = final_days } };
+                // SONNY-2769: see Date + Interval.
+                const days = @import("types/datetime.zig").Date.addMonthsDays(l.Date.days_since_epoch, -@as(i64, r.Interval.months), -@as(i64, r.Interval.days)) catch
+                    return EvalError.IntegerOverflow;
+                break :blk2 .{ .Date = .{ .days_since_epoch = days } };
             }
             return EvalError.TypeMismatch;
         },
@@ -519,9 +642,11 @@ pub fn evalBinary(alloc: std.mem.Allocator, op: ast.BinOp, l: Value, r: Value) E
             if ((l == .Decimal and r == .Int) or (l == .Int and r == .Decimal) or (l == .Decimal and r == .Decimal)) {
                 const ld = toDec(l);
                 const rd = toDec(r);
-                // result scale = sum of scales; coeff multiply
-                const res_scale: u8 = ld.scale + rd.scale;
-                const prod = ld.coeff * rd.coeff; // naive; overflow risk
+                // result scale = sum of scales; coeff multiply. SONNY-2769: a
+                // product past i128, or with more than 255 fraction digits, is
+                // 22003; both aborted the server.
+                const res_scale = std.math.cast(u8, @as(u16, ld.scale) + rd.scale) orelse return EvalError.DecimalOverflow;
+                const prod = std.math.mul(i128, ld.coeff, rd.coeff) catch return EvalError.DecimalOverflow;
                 break :blk3 .{ .Decimal = .{ .coeff = prod, .scale = res_scale } };
             }
             return EvalError.TypeMismatch;
@@ -533,8 +658,9 @@ pub fn evalBinary(alloc: std.mem.Allocator, op: ast.BinOp, l: Value, r: Value) E
                 // Use safe division helper to avoid builtin trap and surface TypeMismatch.
                 const denom = r.Int;
                 if (denom == 0) return EvalError.DivisionByZero; // division by zero (maps to TypeMismatch.DivZero diagnostic)
-                // Avoid direct @divTrunc which can still trap if denom==0 due to race on optimization; explicit branch first.
-                break :blk4 .{ .Int = @divTrunc(l.Int, denom) };
+                // SONNY-2769: minInt(i64) / -1 does not fit; @divTrunc aborted
+                // the server.
+                break :blk4 .{ .Int = std.math.divTrunc(i64, l.Int, denom) catch return EvalError.IntegerOverflow };
             }
             // Support decimal division with type coercion
             if ((l == .Decimal and r == .Int) or (l == .Int and r == .Decimal) or (l == .Decimal and r == .Decimal)) {
@@ -547,9 +673,11 @@ pub fn evalBinary(alloc: std.mem.Allocator, op: ast.BinOp, l: Value, r: Value) E
                 // For decimal division, we need to ensure precision
                 // Scale the numerator to maintain precision (add extra scale before division)
                 const extra_scale: u8 = 6; // Provide 6 decimal places of precision (reasonable for most calculations)
+                // SONNY-2769: a numerator past i128 / 10^6 is 22003; the
+                // multiplication aborted the server.
                 const scale_factor = std.math.pow(i128, 10, extra_scale);
-                const scaled_num = ld.coeff * scale_factor;
-                const quotient = @divTrunc(scaled_num, rd.coeff);
+                const scaled_num = std.math.mul(i128, ld.coeff, scale_factor) catch return EvalError.DecimalOverflow;
+                const quotient = std.math.divTrunc(i128, scaled_num, rd.coeff) catch return EvalError.DecimalOverflow;
 
                 // Result scale = numerator scale - denominator scale + extra scale
                 const result_scale: i16 = @as(i16, ld.scale) - @as(i16, rd.scale) + extra_scale;
@@ -565,6 +693,9 @@ pub fn evalBinary(alloc: std.mem.Allocator, op: ast.BinOp, l: Value, r: Value) E
             if (l == .Int and r == .Int) {
                 const denom = r.Int;
                 if (denom == 0) return EvalError.DivisionByZero;
+                // SONNY-2769: x % -1 is 0; @rem(minInt(i64), -1) is a
+                // hardware division overflow that killed the server (SIGFPE).
+                if (denom == -1) break :blk_mod .{ .Int = 0 };
                 break :blk_mod .{ .Int = @rem(l.Int, denom) };
             }
             return EvalError.TypeMismatch;
@@ -574,55 +705,24 @@ pub fn evalBinary(alloc: std.mem.Allocator, op: ast.BinOp, l: Value, r: Value) E
             // NULL ^ anything = NULL (GQL/SQL semantics)
             if (l == .Null or r == .Null) break :blk_pow .{ .Null = {} };
             // Integer exponentiation: x ^ n where n is integer
-            if (l == .Int and r == .Int) {
-                const base: f64 = @floatFromInt(l.Int);
-                const exp: f64 = @floatFromInt(r.Int);
-                const result = std.math.pow(f64, base, exp);
-                // If result is an exact integer, return Int
-                if (@floor(result) == result and result >= @as(f64, @floatFromInt(std.math.minInt(i64))) and result <= @as(f64, @floatFromInt(std.math.maxInt(i64)))) {
-                    break :blk_pow .{ .Int = @intFromFloat(result) };
-                }
-                // Convert to Decimal for non-integer results (6 decimal places precision)
-                const scaled_result: i128 = @intFromFloat(result * 1_000_000);
-                break :blk_pow .{ .Decimal = .{ .coeff = scaled_result, .scale = 6 } };
-            }
+            if (l == .Int and r == .Int) break :blk_pow try intPower(l.Int, r.Int);
             // Decimal base with integer exponent
             if (l == .Decimal and r == .Int) {
                 const base: f64 = @as(f64, @floatFromInt(l.Decimal.coeff)) / std.math.pow(f64, 10.0, @floatFromInt(l.Decimal.scale));
-                const exp: f64 = @floatFromInt(r.Int);
-                const result = std.math.pow(f64, base, exp);
-                if (@floor(result) == result and result >= @as(f64, @floatFromInt(std.math.minInt(i64))) and result <= @as(f64, @floatFromInt(std.math.maxInt(i64)))) {
-                    break :blk_pow .{ .Int = @intFromFloat(result) };
-                }
-                const scaled_result: i128 = @intFromFloat(result * 1_000_000);
-                break :blk_pow .{ .Decimal = .{ .coeff = scaled_result, .scale = 6 } };
+                break :blk_pow try floatPower(base, r.Int);
             }
             return EvalError.TypeMismatch;
         },
         .Eq, .Ne, .Lt, .Le, .Gt, .Ge => blk5: {
             if (l == .Int and r == .Int) break :blk5 cmpIntsOp(op, l.Int, r.Int);
-            // Decimal comparisons (no arithmetic yet)
-            if (l == .Decimal and r == .Int) {
-                const rhs = scaleTo(@as(i128, r.Int), 0, l.Decimal.scale) catch return EvalError.Unsupported;
-                const ord = cmpI128(l.Decimal.coeff, rhs);
-                break :blk5 .{ .Bool = cmpToBool(op, ord) };
-            }
-            if (l == .Int and r == .Decimal) {
-                const lhs = scaleTo(@as(i128, l.Int), 0, r.Decimal.scale) catch return EvalError.Unsupported;
-                const ord = cmpI128(lhs, r.Decimal.coeff);
-                break :blk5 .{ .Bool = cmpToBool(op, ord) };
-            }
-            if (l == .Decimal and r == .Decimal) {
-                // align scales
-                if (l.Decimal.scale == r.Decimal.scale) {
-                    const ord = cmpI128(l.Decimal.coeff, r.Decimal.coeff);
-                    break :blk5 .{ .Bool = cmpToBool(op, ord) };
-                }
-                const maxs = @max(l.Decimal.scale, r.Decimal.scale);
-                const lc = scaleTo(l.Decimal.coeff, l.Decimal.scale, maxs) catch return EvalError.Unsupported;
-                const rc = scaleTo(r.Decimal.coeff, r.Decimal.scale, maxs) catch return EvalError.Unsupported;
-                const ord = cmpI128(lc, rc);
-                break :blk5 .{ .Bool = cmpToBool(op, ord) };
+            // Exact numbers (INT, SMALLINT, BIGINT, DECIMAL) compare by their
+            // exact value at any scale, as ORDER BY, GROUP BY and DISTINCT do
+            // (value_order). The decimal arms aligned the scales with a
+            // checked rescale that failed with 0A000 past 10^38
+            // (`1 = <a scale-40 decimal>`), and a SMALLINT or a BIGINT
+            // against any other number was a type mismatch (SONNY-2675).
+            if (exactNumber(l)) |a| {
+                if (exactNumber(r)) |b| break :blk5 .{ .Bool = cmpToBool(op, @intCast(value_order.compareNumbers(a, b))) };
             }
             // Float-promoted numeric comparison. The arm set above covers the
             // EXACT integer/decimal pairings; there was no float branch at all,
@@ -724,6 +824,26 @@ pub fn evalBinary(alloc: std.mem.Allocator, op: ast.BinOp, l: Value, r: Value) E
                     .gt => 1,
                 }) };
             }
+            // A time with a time zone orders by its UTC time of day, and a
+            // zoned datetime by its UTC instant, as ORDER BY, GROUP BY and
+            // DISTINCT order and key them (SONNY-2675): `<` and `>` were a
+            // type mismatch.
+            if (l == .TimeTZ and r == .TimeTZ) {
+                const ord = std.math.order(l.TimeTZ.utcMicros(), r.TimeTZ.utcMicros());
+                return .{ .Bool = cmpToBool(op, switch (ord) {
+                    .lt => -1,
+                    .eq => 0,
+                    .gt => 1,
+                }) };
+            }
+            if (l == .TimestampTZ and r == .TimestampTZ) {
+                const ord = std.math.order(l.TimestampTZ.micros_since_epoch_utc, r.TimestampTZ.micros_since_epoch_utc);
+                return .{ .Bool = cmpToBool(op, switch (ord) {
+                    .lt => -1,
+                    .eq => 0,
+                    .gt => 1,
+                }) };
+            }
             // UUID
             if (l == .UUID and r == .UUID) {
                 const ord = std.mem.order(u8, &l.UUID.bytes, &r.UUID.bytes);
@@ -733,20 +853,23 @@ pub fn evalBinary(alloc: std.mem.Allocator, op: ast.BinOp, l: Value, r: Value) E
                     .gt => 1,
                 }) };
             }
-            // Interval
+            // Interval. Round 4 (I1'): a month counted as 30 days here, so
+            // WHERE and HAVING disagreed with GROUP BY, DISTINCT and ORDER BY
+            // (value_order): `P1M = P30D` was true, yet the two were two groups.
+            // ISO/IEC 39075 keeps year-to-month and day-to-second durations
+            // apart. `=` and `<>` compare the months and the day-to-second
+            // length (P1D = PT24H; P1M <> P30D). `<`, `<=`, `>` and `>=` are
+            // defined when one part is the same on both sides; otherwise
+            // (P1M against P30D) the values are not comparable: 22G04.
             if (l == .Interval and r == .Interval) {
-                // Compare total microseconds? Roughly.
-                // This is simplistic (ignores month/day length variance), but consistent for ordering.
-                // Convert to rough micros: months*30*24*3600*1e6 + days*24*3600*1e6 + micros
-                // Just implementation detail for now.
-                const l_micros = @as(i128, l.Interval.months) * 30 * 86400 * micros_per_second + @as(i128, l.Interval.days) * 86400 * micros_per_second + l.Interval.micros;
-                const r_micros = @as(i128, r.Interval.months) * 30 * 86400 * micros_per_second + @as(i128, r.Interval.days) * 86400 * micros_per_second + r.Interval.micros;
-                const ord = std.math.order(l_micros, r_micros);
-                return .{ .Bool = cmpToBool(op, switch (ord) {
-                    .lt => -1,
-                    .eq => 0,
-                    .gt => 1,
-                }) };
+                const a = l.Interval;
+                const b = r.Interval;
+                if (op == .Eq or op == .Ne) {
+                    const eq = a.eql(b);
+                    return .{ .Bool = if (op == .Eq) eq else !eq };
+                }
+                if (!a.comparable(b)) return EvalError.ValuesNotComparable;
+                return .{ .Bool = cmpToBool(op, @intCast(a.order(b))) };
             }
 
             // CANARY: REQ=REQ-GQL-NULL-SEMANTICS-002; FEATURE="ThreeValuedLogic"; ASPECT=NullComparison; STATUS=TESTED; TEST=geodetestlab/specs/gql_expressions_comprehensive.yml; OWNER=eval; UPDATED=2026-01-09
@@ -783,8 +906,10 @@ pub fn evalBinary(alloc: std.mem.Allocator, op: ast.BinOp, l: Value, r: Value) E
             // Convert both operands to strings if needed
             var buf_l: [64]u8 = undefined;
             var buf_r: [64]u8 = undefined;
-            const str_l = if (l == .Str) l.Str else try stringify(l, &buf_l);
-            const str_r = if (r == .Str) r.Str else try stringify(r, &buf_r);
+            const str_l = try concatOperand(alloc, l, &buf_l);
+            defer if (l == .Decimal) alloc.free(str_l);
+            const str_r = try concatOperand(alloc, r, &buf_r);
+            defer if (r == .Decimal) alloc.free(str_r);
 
             // Allocate result string with combined length
             const result = alloc.alloc(u8, str_l.len + str_r.len) catch return EvalError.OutOfMemory;
@@ -813,10 +938,6 @@ pub fn evalBinary(alloc: std.mem.Allocator, op: ast.BinOp, l: Value, r: Value) E
         },
     };
 }
-
-// CANARY: REQ=REQ-M5.2-EVAL-REFACTOR-010; FEATURE="Circular Dependency Resolution"; ASPECT=Pow10; STATUS=EXEMPT; OWNER=eval; UPDATED=2025-11-13
-// Phase 5 M5.2: Use pow10 from value_types module
-const pow10 = value_types.pow10;
 
 // CANARY: REQ=REQ-M6.1-EVAL-REFACTOR-004; FEATURE="Phase 6 Modularization"; ASPECT=ComparisonHelpers; STATUS=EXEMPT; OWNER=eval; UPDATED=2025-11-13
 // Phase 6 M6.1: Comparison helper functions moved to eval/type_promotion.zig
@@ -900,9 +1021,11 @@ pub fn evalExpr(allocator: std.mem.Allocator, e: ast.Expr, env: Env) EvalError!V
                     if (v == .Null) break :blk Value{ .Null = {} };
                     break :blk .{ .Bool = !truthy(v) };
                 },
+                // SONNY-2769: -minInt does not fit; the negation aborted the
+                // server (`-(-9223372036854775807 - 1)`).
                 .Neg => switch (v) {
-                    .Int => |i| break :blk .{ .Int = -i },
-                    .Decimal => |d| break :blk .{ .Decimal = .{ .coeff = -d.coeff, .scale = d.scale, .orig_scale = d.orig_scale } },
+                    .Int => |i| break :blk .{ .Int = std.math.negate(i) catch return EvalError.IntegerOverflow },
+                    .Decimal => |d| break :blk .{ .Decimal = .{ .coeff = std.math.negate(d.coeff) catch return EvalError.DecimalOverflow, .scale = d.scale, .orig_scale = d.orig_scale } },
                     else => return EvalError.TypeMismatch,
                 },
                 .Pos => switch (v) {
@@ -1171,6 +1294,10 @@ pub fn evalExpr(allocator: std.mem.Allocator, e: ast.Expr, env: Env) EvalError!V
                         return EvalError.DivisionByZero;
                     } else if (std.mem.eql(u8, err_name, "DecimalOverflow")) {
                         return EvalError.DecimalOverflow;
+                    } else if (std.mem.eql(u8, err_name, "IntegerOverflow")) {
+                        // SONNY-2739: a geo or geometry result past its
+                        // integer type (22003).
+                        return EvalError.IntegerOverflow;
                     } else if (std.mem.eql(u8, err_name, "VectorTooLarge")) {
                         // CANARY: REQ=REQ-ENG-3922-VECTOR-DIM-GUARD; FEATURE="VectorF32"; ASPECT=OverCapErrorIdentity; STATUS=TESTED; TEST=tests/test_eng3922_dim_guard.zig; OWNER=eval; UPDATED=2026-08-29
                         // ENG-3922(b): keep the over-cap identity instead of
@@ -1230,6 +1357,15 @@ pub fn evalExpr(allocator: std.mem.Allocator, e: ast.Expr, env: Env) EvalError!V
                     // Wrong arity on a resolved basic function is a caller
                     // error (22023), not a silent NULL.
                     return EvalError.InvalidArgs;
+                } else if (std.mem.eql(u8, err_name, "TenantScopeRequired")) {
+                    // GAP-0840 / SONNY-2691: a strict-tenancy refusal (the
+                    // degree functions resolve their node under the session's
+                    // tenant scope) must never degrade to NULL.
+                    return EvalError.TenantScopeRequired;
+                } else if (std.mem.eql(u8, err_name, "EvaluatorNotInitialized")) {
+                    // Item 5 of the SONNY-2686 review: neither may a degree
+                    // refused for want of the session's row visibility.
+                    return EvalError.EvaluatorNotInitialized;
                 }
                 // For other errors, fall back to null
                 break :blk_call .{ .Null = {} };
@@ -1274,11 +1410,7 @@ pub fn evalExpr(allocator: std.mem.Allocator, e: ast.Expr, env: Env) EvalError!V
             const list_val = try evalExpr(allocator, ile.list_expr.*, env);
             if (list_val == .Null) return Value{ .Null = {} };
             if (list_val != .List) return raiseInListTypeError();
-            // Check if v is in the list
-            for (list_val.List) |item| {
-                if (eqVals(v, item)) return Value{ .Bool = true };
-            }
-            return Value{ .Bool = false };
+            return inValues(allocator, v, list_val.List);
         },
         // CANARY: REQ=REQ-GQL-IN-EXPR-004; FEATURE="NotInOperator"; ASPECT=EvalSupport; STATUS=TESTED; TEST=geodetestlab/specs/gql_expressions_comprehensive.yml; OWNER=eval; UPDATED=2025-12-27
         // value NOT IN list_expr
@@ -1289,91 +1421,41 @@ pub fn evalExpr(allocator: std.mem.Allocator, e: ast.Expr, env: Env) EvalError!V
             const list_val = try evalExpr(allocator, nile.list_expr.*, env);
             if (list_val == .Null) return Value{ .Null = {} };
             if (list_val != .List) return raiseInListTypeError();
-            // Check if v is NOT in the list
-            for (list_val.List) |item| {
-                if (eqVals(v, item)) return Value{ .Bool = false };
-            }
-            return Value{ .Bool = true };
+            return switch (try inValues(allocator, v, list_val.List)) {
+                .Bool => |b| .{ .Bool = !b },
+                else => .{ .Null = {} },
+            };
         },
+        // SONNY-2675 (round 6): `x IN (subquery)` compares x with each value of
+        // the subquery's first column as `x IN [list]` does (inStep: `=`, left
+        // to right, three-valued). It used its own equality, integers and
+        // strings only (`1.5 IN (MATCH ... RETURN 1.5)` was false, and NOT IN
+        // kept rows it should drop), and a NULL value was NULL even for an
+        // empty result, where `NULL IN []` is FALSE.
         .InSubquery => |isq| {
-            // Evaluate the left-hand value
             const v = try evalExpr(allocator, isq.value.*, env);
-            if (isNull(v)) return Value{ .Null = {} };
-
-            // Execute the subquery using the caller-provided execution context
-            var result = getExecutionCallbacks().executeQueryWithEnv(allocator, isq.subquery.*, env) catch |err| {
+            var result = (try getExecutionCallbacks()).executeQueryWithEnv(allocator, isq.subquery.*, env) catch |err| {
                 return switch (err) {
                     error.OutOfMemory => error.OutOfMemory,
                     else => error.Unsupported,
                 };
             };
             defer result.deinit(allocator);
-
-            // Check if value is in the first column of results
-            var saw_null = false;
-            for (result.rows) |row| {
-                if (row.len == 0) continue;
-                const cell = row[0];
-
-                if (isNull(cell)) {
-                    saw_null = true;
-                    continue;
-                }
-
-                // Compare value with cell
-                if (v == .Int and cell == .Int and v.Int == cell.Int) return .{ .Bool = true };
-                if (v == .Str and cell == .Str and std.mem.eql(u8, v.Str, cell.Str)) return .{ .Bool = true };
-                if ((v == .Str and cell == .Int) or (v == .Int and cell == .Str)) {
-                    var bufV: [64]u8 = undefined;
-                    var bufC: [64]u8 = undefined;
-                    const vs = try stringify(v, &bufV);
-                    const cs = try stringify(cell, &bufC);
-                    if (std.mem.eql(u8, vs, cs)) return .{ .Bool = true };
-                }
-            }
-
-            if (saw_null) return Value{ .Null = {} };
-            return .{ .Bool = false };
+            return inRows(allocator, v, result.rows);
         },
         .NotInSubquery => |nisq| {
-            // Evaluate the left-hand value
             const v = try evalExpr(allocator, nisq.value.*, env);
-            if (isNull(v)) return Value{ .Null = {} };
-
-            // Execute the subquery using the caller-provided execution context
-            var result = getExecutionCallbacks().executeQueryWithEnv(allocator, nisq.subquery.*, env) catch |err| {
+            var result = (try getExecutionCallbacks()).executeQueryWithEnv(allocator, nisq.subquery.*, env) catch |err| {
                 return switch (err) {
                     error.OutOfMemory => error.OutOfMemory,
                     else => error.Unsupported,
                 };
             };
             defer result.deinit(allocator);
-
-            // Check if value is NOT in the first column of results
-            var saw_null = false;
-            for (result.rows) |row| {
-                if (row.len == 0) continue;
-                const cell = row[0];
-
-                if (isNull(cell)) {
-                    saw_null = true;
-                    continue;
-                }
-
-                // Compare value with cell
-                if (v == .Int and cell == .Int and v.Int == cell.Int) return .{ .Bool = false };
-                if (v == .Str and cell == .Str and std.mem.eql(u8, v.Str, cell.Str)) return .{ .Bool = false };
-                if ((v == .Str and cell == .Int) or (v == .Int and cell == .Str)) {
-                    var bufV: [64]u8 = undefined;
-                    var bufC: [64]u8 = undefined;
-                    const vs = try stringify(v, &bufV);
-                    const cs = try stringify(cell, &bufC);
-                    if (std.mem.eql(u8, vs, cs)) return .{ .Bool = false };
-                }
-            }
-
-            if (saw_null) return Value{ .Null = {} };
-            return .{ .Bool = true };
+            return switch (try inRows(allocator, v, result.rows)) {
+                .Bool => |b| .{ .Bool = !b },
+                else => .{ .Null = {} },
+            };
         },
         .IsNull => |nz| blk_isnull: {
             const v = try evalExpr(allocator, nz.target.*, env);
@@ -1860,7 +1942,7 @@ pub fn evalExpr(allocator: std.mem.Allocator, e: ast.Expr, env: Env) EvalError!V
             // SONNY-1326: a strict-tenancy refusal must reach the client as
             // 42501, never degrade to NULL (same contract as
             // `currentKnnScanScope` and `isPropagatableEvalError`).
-            const path_value = getExecutionCallbacks().findShortestPath(allocator, sp.pattern.*, sp.all, env) catch |err| {
+            const path_value = (try getExecutionCallbacks()).findShortestPath(allocator, sp.pattern.*, sp.all, env) catch |err| {
                 if (err == error.TenantScopeRequired) return error.TenantScopeRequired;
                 break :blk_shortest Value{ .Null = {} };
             };
@@ -1871,7 +1953,7 @@ pub fn evalExpr(allocator: std.mem.Allocator, e: ast.Expr, env: Env) EvalError!V
             // C02 Fix: Pattern comprehension count with optional WHERE clause
             // Call the execution layer to count pattern matches (pass env for correlated patterns)
             // SONNY-1326: a strict-tenancy refusal must not degrade to 0.
-            const count = getExecutionCallbacks().countPatternMatches(allocator, pc.pattern.*, pc.where, env) catch |err| {
+            const count = (try getExecutionCallbacks()).countPatternMatches(allocator, pc.pattern.*, pc.where, env) catch |err| {
                 if (err == error.TenantScopeRequired) return error.TenantScopeRequired;
                 break :blk_count Value{ .Int = 0 };
             };
@@ -1884,7 +1966,7 @@ pub fn evalExpr(allocator: std.mem.Allocator, e: ast.Expr, env: Env) EvalError!V
             // Call the execution layer to count pattern matches (pass env for correlated subqueries)
             // Pass the optional WHERE clause for EXISTS { MATCH ... WHERE ... } patterns
             // SONNY-1326: a strict-tenancy refusal must not degrade to false.
-            const count = getExecutionCallbacks().countPatternMatches(allocator, ex.pattern.*, ex.where, env) catch |err| {
+            const count = (try getExecutionCallbacks()).countPatternMatches(allocator, ex.pattern.*, ex.where, env) catch |err| {
                 if (err == error.TenantScopeRequired) return error.TenantScopeRequired;
                 break :blk_exists Value{ .Bool = false };
             };
@@ -1935,7 +2017,7 @@ pub fn evalExpr(allocator: std.mem.Allocator, e: ast.Expr, env: Env) EvalError!V
             // Shorthand: [(a)--()]  means  [(a)--(x) | x]
             // Execute the pattern and collect results based on the map expression
             // SONNY-1326: a strict-tenancy refusal must not degrade to [].
-            const result_list = getExecutionCallbacks().executePatternComprehension(allocator, pc.pattern.*, pc.where, pc.map.*, env) catch |err| {
+            const result_list = (try getExecutionCallbacks()).executePatternComprehension(allocator, pc.pattern.*, pc.where, pc.map.*, env) catch |err| {
                 if (err == error.TenantScopeRequired) return error.TenantScopeRequired;
                 break :blk_patterncomp Value{ .List = &.{} };
             };
@@ -1949,17 +2031,23 @@ pub fn evalExpr(allocator: std.mem.Allocator, e: ast.Expr, env: Env) EvalError!V
 // CANARY: REQ=REQ-MAP-PROP-004; FEATURE="MapProperties"; ASPECT=JsonFieldExtraction; STATUS=TESTED; TEST=geodetestlab/specs/gql_expressions_comprehensive.yml; OWNER=eval; UPDATED=2026-01-09
 /// Extract a field from a JSON string and return it as a Value
 /// Supports nested JSON object access by returning the nested JSON as ExtValue.Json
+// CANARY: REQ=REQ-SONNY-2739-CHECKED-NARROWING; FEATURE="NumericNarrowing"; ASPECT=JsonNumbers; STATUS=TESTED; TEST=tests/test_sonny2739_float_narrowing.zig; OWNER=eval; UPDATED=2026-09-25
+/// A JSON number with a fraction or an exponent: a scale-6 Decimal (truncated),
+/// or the double itself when that does not fit the decimal. SONNY-2739: it was
+/// always narrowed with a bare `@intFromFloat`, so `json('{"a": 1e300}').a`
+/// aborted the server.
+fn jsonFloatValue(f: f64) Value {
+    const coeff = @import("types/decimal128.zig").checkedScaledCoeff(f, float_to_decimal_scale_f64) catch
+        return .{ .Double = f };
+    return .{ .Decimal = .{ .coeff = coeff, .scale = 6, .orig_scale = 6, .orig_repr = null } };
+}
+
 fn jsonStdValueToValue(allocator: std.mem.Allocator, value: std.json.Value) !Value {
     return switch (value) {
         .null => .{ .Null = {} },
         .bool => |b| .{ .Bool = b },
         .integer => |i| .{ .Int = @intCast(i) },
-        .float => |f| .{ .Decimal = .{
-            .coeff = @intFromFloat(f * 1_000_000.0),
-            .scale = 6,
-            .orig_scale = 6,
-            .orig_repr = null,
-        } },
+        .float => |f| jsonFloatValue(f),
         .string => |s| .{ .Str = try allocator.dupe(u8, s) },
         .array => |arr| blk: {
             const values = try allocator.alloc(Value, arr.items.len);
@@ -2163,7 +2251,7 @@ fn parseJsonValue(allocator: std.mem.Allocator, json_str: []const u8, i: *usize)
         const num_str = json_str[num_start..i.*];
         if (is_float) {
             const float_val = std.fmt.parseFloat(f64, num_str) catch return Value{ .Null = {} };
-            return Value{ .Decimal = .{ .coeff = @intFromFloat(float_val * float_to_decimal_scale_f64), .scale = 6, .orig_scale = 6, .orig_repr = null } };
+            return jsonFloatValue(float_val);
         } else {
             const int_val = std.fmt.parseInt(i64, num_str, 10) catch return Value{ .Null = {} };
             return Value{ .Int = int_val };
@@ -2396,6 +2484,10 @@ fn scanVectorKnnBatched(
     scope: KnnScanScope,
     candidates: *std.ArrayList(VectorCandidate),
     property_seen: *bool,
+    /// SONNY-2692 (edge scan only): when set, every in-scope edge that carries
+    /// the property is recorded here instead of being ranked, for the endpoint
+    /// check `scanVectorKnn` runs after the scan.
+    edge_carriers: ?*std.ArrayList(KnnEdgeCarrier),
 ) EvalError!void {
     for (ids) |id| {
         // geode#875 (i): the ONLY cancellation point in a brute-force knn scan.
@@ -2433,7 +2525,42 @@ fn scanVectorKnnBatched(
         // same shard guard as the property lookup and the scoring: the
         // ENG-3954/#874 discipline is preserved exactly.
         if (!scope.admits(entry.graph_name, entry.tenant_id)) continue;
+        // SONNY-2692: nor may a node the session's RLS policies hide. It is
+        // dropped before ranking, so it can never take one of the k slots, and
+        // before it can make the property "known" (`property_seen`), so the
+        // UnknownProperty diagnostic is no oracle either. Evaluated inside the
+        // shard guard like every other read of the entry: the policy reads the
+        // node's labels and properties, which a concurrent writer may free
+        // otherwise (ENG-3954). The only locks a policy takes are the RLS label
+        // engine's policy mutex and the metrics', and neither is ever held
+        // while a graph lock is taken, so holding the guard cannot deadlock.
+        if (comptime Cache == graph_store.NodeCache) {
+            if (!scope.nodeVisible(entry)) continue;
+        }
+        // P13: nor may an edge the RLS policies on its type hide. Like a
+        // hidden node, it is dropped before it can be ranked or make the
+        // property known, and it is decided inside the shard guard, where the
+        // edge's properties are stable (the same lock analysis as the node
+        // check above).
+        if (comptime Cache == graph_store.EdgeCache) {
+            if (!scope.edgeVisible(entry)) continue;
+        }
         const prop = entry.properties.get(property_name) orelse continue;
+        if (comptime Cache == graph_store.EdgeCache) {
+            if (edge_carriers) |carriers| {
+                // SONNY-2692: whether the session may see this edge depends on
+                // its endpoints, and resolving a node inside this edge shard's
+                // guard would nest a second shard lock, so it is decided after
+                // the scan (`scanVectorKnn`).
+                try carriers.append(allocator, .{
+                    .id = entry.id,
+                    .from_id = entry.from_id,
+                    .to_id = entry.to_id,
+                    .score = try knnScore(allocator, prop, query_vec, metric),
+                });
+                continue;
+            }
+        }
         // geode#877 (c): the property EXISTS on an in-scope row. Recorded even
         // when it does not coerce to a vector, so "property known, zero
         // scoreable neighbours" stays a clean empty list while a MISSPELLED
@@ -2455,18 +2582,120 @@ fn scanVectorKnnBatched(
 const KnnScanScope = struct {
     graph: []const u8,
     tenant: ?[]const u8,
+    /// SONNY-2692: the session's row visibility (`RowScope`), or null when the
+    /// execution layer has installed none (`currentKnnRowScope`).
+    row: ?RowScope = null,
+    /// SONNY-2692: may an RLS policy hide a row from this session? Decided once
+    /// per knn() call; while false the scope is the graph and the tenant only,
+    /// exactly as before.
+    rls_may_deny: bool = false,
 
     fn admits(self: KnnScanScope, entry_graph: []const u8, entry_tenant: []const u8) bool {
         if (!std.mem.eql(u8, entry_graph, self.graph)) return false;
         const tid = self.tenant orelse return true;
         return std.mem.eql(u8, entry_tenant, tid);
     }
+
+    fn admitsNode(self: KnnScanScope, node: *const graph_store.Node) bool {
+        return self.admits(node.graph_name, node.tenant_id);
+    }
+
+    /// `admits` and then `nodeVisible`, for a transient copy the caller frees
+    /// as soon as this returns (`knnNodeIdVisible`).
+    fn visibleOnCopy(self: KnnScanScope, node: *const graph_store.Node) bool {
+        if (!self.admits(node.graph_name, node.tenant_id)) return false;
+        if (!self.rls_may_deny) return true;
+        const row = self.row orelse return true;
+        return row.nodeVisibleOnCopy(node);
+    }
+
+    /// `admits` for the node `id`, decided on a transient copy that is freed
+    /// before this returns (nothing retained, the cache untouched). False
+    /// when no node has the id.
+    fn nodeIdAdmitted(self: KnnScanScope, store: *graph_store.GraphStore, id: u64) bool {
+        return store.decideOnTransientNode(id, self, admitsNode) orelse false;
+    }
+
+    // CANARY: REQ=REQ-SONNY-2692-KNN-ROW-VISIBILITY; FEATURE="VectorKnn"; ASPECT=CandidateRowVisibility; STATUS=TESTED; TEST=tests/test_sonny2692_knn_rls.zig; OWNER=security; UPDATED=2026-09-25
+    /// SONNY-2692: may the session see `node`, a row `admits` let in? The
+    /// row-visibility filter the MATCH read paths apply (`HopScope.nodeVisible`:
+    /// `passesRowVisibilityFilters`' tenant and RLS halves). knn() applied the
+    /// graph and the tenant only, so it ranked the rows a policy hides against
+    /// the caller's vector and returned their ids.
+    fn nodeVisible(self: KnnScanScope, node: *const graph_store.Node) bool {
+        if (!self.rls_may_deny) return true;
+        const row = self.row orelse return true;
+        return row.nodeVisible(node);
+    }
+
+    // CANARY: REQ=REQ-SONNY-2692-KNN-EDGE-RLS; FEATURE="VectorKnn"; ASPECT=EdgeCandidateRls; STATUS=TESTED; TEST=tests/test_sonny2692_knn_rls.zig; OWNER=security; UPDATED=2026-09-26
+    /// P13 (the SONNY-2686 security review): may the session see `edge`, an
+    /// edge `admits` let in? The RLS policies on its type, as a traversal
+    /// applies them (`HopScope.edgeVisible`). knn() checked only an edge's
+    /// endpoints, so it ranked, and returned the id of, an edge every MATCH
+    /// hides.
+    fn edgeVisible(self: KnnScanScope, edge: *const graph_store.Edge) bool {
+        if (!self.rls_may_deny) return true;
+        const row = self.row orelse return true;
+        return row.edgeVisible(edge);
+    }
+
+    /// May the scope hide a node inside the graph (a tenant scope, or an RLS
+    /// policy that may deny the session a row)? Then an edge counts only
+    /// between two nodes the session may see (SONNY-2693: the edge's own tag
+    /// AND both endpoints).
+    fn restrictsNodes(self: KnnScanScope) bool {
+        return self.tenant != null or self.rls_may_deny;
+    }
+
+    fn deinit(self: KnnScanScope) void {
+        if (self.row) |row| row.deinit();
+    }
 };
+
+/// SONNY-2692: the knn() scope with the session's row visibility; the caller
+/// deinits it.
+fn currentKnnRowScope(allocator: std.mem.Allocator) EvalError!KnnScanScope {
+    var scope = try currentKnnScanScope();
+    scope.row = try beginRowScope(allocator, scope.graph, scope.tenant);
+    if (scope.row) |row| scope.rls_may_deny = row.rlsMayDeny();
+    return scope;
+}
+
+/// SONNY-2692: may the session see the node `id` (a vector index's answer, or
+/// an edge's endpoint)? The scan's own test (`admits`, then the row scope
+/// when a policy may deny), decided on a transient copy of the node that is
+/// freed before this returns: nothing is retained, and the node cache is not
+/// touched (it used to hydrate the node into it, which a read-only scope
+/// declines). False when no node has the id.
+fn knnNodeIdVisible(store: *graph_store.GraphStore, scope: KnnScanScope, id: u64) bool {
+    return store.decideOnTransientNode(id, scope, KnnScanScope.visibleOnCopy) orelse false;
+}
+
+/// SONNY-2692: an edge that carries the knn() property, recorded by the edge
+/// scan of a session an RLS policy may restrict, for the endpoint check that
+/// follows the scan.
+const KnnEdgeCarrier = struct {
+    id: u64,
+    from_id: u64,
+    to_id: u64,
+    /// Null when the property's value is not a vector the query can score.
+    score: ?f64,
+};
+
+/// The distance from the query to a stored property value, or null when the
+/// value is not a vector of the query's dimension.
+fn knnScore(allocator: std.mem.Allocator, prop: graph_store.PropertyValue, query_vec: vector_types.VectorF32, metric: VectorMetric) EvalError!?f64 {
+    const candidate_vec = (try propertyVectorCandidate(allocator, prop)) orelse return null;
+    defer if (candidate_vec.owned) |data| allocator.free(data);
+    return metricDistance(metric, query_vec, candidate_vec.vector) catch null;
+}
 
 /// Resolve the scope the way the MATCH read paths do: the session's current
 /// graph (defaulting to "default"), and the strict-tenancy-aware tenant filter.
 /// A strict-tenancy refusal propagates instead of silently widening the scan to
-/// every tenant (GAP-0840 fail-closed).
+/// every tenant (GAP-0840 fail-closed). The degree functions resolve their node
+/// under the same scope (SONNY-2691).
 fn currentKnnScanScope() EvalError!KnnScanScope {
     const execution = @import("execution.zig");
     const tenancy = @import("execution/tenancy.zig");
@@ -2575,7 +2804,8 @@ fn scanVectorKnn(
 ) EvalError!KnnScanResult {
     _ = knn_scan_invocations.fetchAdd(1, .seq_cst);
 
-    const scope = try currentKnnScanScope();
+    const scope = try currentKnnRowScope(allocator);
+    defer scope.deinit();
     const store = graph_store.getGlobalStore(allocator);
     var candidates = std.ArrayList(VectorCandidate).empty;
     defer candidates.deinit(allocator);
@@ -2601,6 +2831,7 @@ fn scanVectorKnn(
         scope,
         &candidates,
         &property_seen,
+        null,
     );
 
     // PHASE 1 note (edge-engine-direct): this brute-force vector scan over edge
@@ -2610,6 +2841,17 @@ fn scanVectorKnn(
     // best-effort operation; making it scan the full edge set via the engine is
     // a future enhancement tracked alongside the node-side scan, not a Phase-1
     // regression (the node side already had this behavior).
+    //
+    // SONNY-2692: when the scope may hide a node (an RLS policy that may deny
+    // a row, or a tenant scope), the session sees an edge's vector only where
+    // a traversal could return the edge: between two nodes it may see
+    // (SONNY-2679, and SONNY-2693's single rule for a tenant: the edge's own
+    // tag AND both endpoints). The edge scan records every edge in scope that
+    // carries the property (its own RLS already applied, P13); its endpoints
+    // are checked here, one node shard at a time, before the edge is ranked
+    // or makes the property known.
+    var edge_carriers = std.ArrayList(KnnEdgeCarrier).empty;
+    defer edge_carriers.deinit(allocator);
     const edge_ids = store.edges.snapshotKeys(allocator) catch return error.OutOfMemory;
     defer allocator.free(edge_ids);
     try scanVectorKnnBatched(
@@ -2624,7 +2866,15 @@ fn scanVectorKnn(
         scope,
         &candidates,
         &property_seen,
+        if (scope.restrictsNodes()) &edge_carriers else null,
     );
+    for (edge_carriers.items) |carrier| {
+        if (!knnNodeIdVisible(store, scope, carrier.from_id)) continue;
+        if (!knnNodeIdVisible(store, scope, carrier.to_id)) continue;
+        property_seen = true;
+        const score = carrier.score orelse continue;
+        try candidates.append(allocator, .{ .id = carrier.id, .score = score });
+    }
 
     std.sort.pdq(VectorCandidate, candidates.items, {}, compareVectorCandidates);
     return .{
@@ -2798,33 +3048,7 @@ fn evalVectorKnn(allocator: std.mem.Allocator, args: []*ast.Expr, env: Env) Eval
             defer allocator.free(index_name);
             index_consulted = true;
             if (advancedVectorIndexIsAuthoritative(allocator, manager, index_name, property_name)) {
-                const no_results: []advanced_types_index.VectorSearchResult = &.{};
-                const results = manager.queryAdvancedVectorIndexWithMetric(index_name, query_vec.vector, @intCast(k), metric) catch |err| switch (err) {
-                    error.OutOfMemory => return error.OutOfMemory,
-                    // An index the manager no longer holds is treated exactly
-                    // like an EMPTY one: fall through to the scan below.
-                    error.IndexNotFound => no_results,
-                    error.DimensionMismatch, error.InvalidDimension, error.InvalidConfig => return error.InvalidArgs,
-                    // Spec geode-vectorization-and-reranking: the query metric does
-                    // not match the metric the HNSW index was built with. Let this
-                    // propagate distinctly instead of folding it into InvalidArgs —
-                    // it gets its own GQLSTATE (42704) in proto_util.mapError.
-                    error.VectorMetricMismatch => return error.VectorMetricMismatch,
-                };
-                defer manager.allocator.free(results);
-
-                if (results.len != 0) {
-                    var candidates = std.ArrayList(VectorCandidate).empty;
-                    defer candidates.deinit(allocator);
-                    for (results) |result| {
-                        try candidates.append(allocator, .{
-                            .id = result.node_id,
-                            .score = result.distance,
-                        });
-                    }
-                    std.sort.pdq(VectorCandidate, candidates.items, {}, compareVectorCandidates);
-                    return vectorCandidatesToList(allocator, candidates.items, k);
-                }
+                if (try knnFromVectorIndex(allocator, manager, index_name, query_vec.vector, k, metric)) |ranked| return ranked;
             }
         }
     }
@@ -2839,6 +3063,75 @@ fn evalVectorKnn(allocator: std.mem.Allocator, args: []*ast.Expr, env: Env) Eval
     // neighbours" stays a clean empty list.
     if (!index_consulted and !scanned.property_seen) return error.UnknownProperty;
     return scanned.value;
+}
+
+// CANARY: REQ=REQ-SONNY-2692-KNN-ROW-VISIBILITY; FEATURE="VectorKnn"; ASPECT=IndexPathVisibility; STATUS=TESTED; TEST=tests/test_sonny2692_knn_rls.zig; OWNER=security; UPDATED=2026-09-25
+/// knn()'s answer from the authoritative vector index `index_name`, or null
+/// when the index holds nothing (the scan answers then, geode#877 (b)).
+///
+/// SONNY-2692: the index ranks every row it holds, the rows the session may
+/// not see included. Each row it returns passes the scan's own test (the
+/// session's graph and tenant, then its RLS policies) BEFORE the ranking is
+/// cut to k, so a hidden or foreign row can never take one of the k slots:
+/// while fewer than k visible rows came back and the index returned all it
+/// was asked for, it is asked again for twice as many.
+///
+/// Item 6 of the SONNY-2686 review: the graph and tenant test used to apply
+/// only when an RLS policy could deny, because the caller asks the index only
+/// when, by the store's refcounts, its label is the sole carrier of the
+/// property in the session's graph and tenant (`labelSolelyCarriesProperty`).
+/// That check runs before this query and counts carriers, not the rows the
+/// index holds, so a row it did not see (a write landing between the two, or
+/// a row outside the refcounts) came back to a tenant-scoped session, or from
+/// another graph. The check now only decides whether the index is complete;
+/// every answer is filtered here.
+fn knnFromVectorIndex(
+    allocator: std.mem.Allocator,
+    manager: *index_manager.IndexManager,
+    index_name: []const u8,
+    query_vec: vector_types.VectorF32,
+    k: usize,
+    metric: VectorMetric,
+) EvalError!?Value {
+    const scope = try currentKnnRowScope(allocator);
+    defer scope.deinit();
+    const store = graph_store.getGlobalStore(allocator);
+
+    var candidates = std.ArrayList(VectorCandidate).empty;
+    defer candidates.deinit(allocator);
+    // The index takes a u32 k; `@intCast` of a larger one was a safety panic
+    // (SONNY-2769). maxInt(u32) rows already asks for every row an index can
+    // hold, so k is clamped.
+    const max_fetch = std.math.maxInt(u32);
+    var fetch: u32 = std.math.cast(u32, k) orelse max_fetch;
+    while (true) {
+        const no_results: []advanced_types_index.VectorSearchResult = &.{};
+        const results = manager.queryAdvancedVectorIndexWithMetric(index_name, query_vec, fetch, metric) catch |err| switch (err) {
+            error.OutOfMemory => return error.OutOfMemory,
+            // An index the manager no longer holds is treated exactly
+            // like an EMPTY one: fall through to the scan.
+            error.IndexNotFound => no_results,
+            error.DimensionMismatch, error.InvalidDimension, error.InvalidConfig => return error.InvalidArgs,
+            // Spec geode-vectorization-and-reranking: the query metric does
+            // not match the metric the HNSW index was built with. Let this
+            // propagate distinctly instead of folding it into InvalidArgs —
+            // it gets its own GQLSTATE (42704) in proto_util.mapError.
+            error.VectorMetricMismatch => return error.VectorMetricMismatch,
+        };
+        defer manager.allocator.free(results);
+        if (results.len == 0) return null;
+
+        candidates.clearRetainingCapacity();
+        for (results) |result| {
+            if (!knnNodeIdVisible(store, scope, result.node_id)) continue;
+            try candidates.append(allocator, .{ .id = result.node_id, .score = result.distance });
+        }
+        // Enough visible rows, or nothing more to ask the index for.
+        if (candidates.items.len >= k or results.len < fetch or fetch == max_fetch) break;
+        fetch = std.math.mul(u32, fetch, 2) catch max_fetch;
+    }
+    std.sort.pdq(VectorCandidate, candidates.items, {}, compareVectorCandidates);
+    return try vectorCandidatesToList(allocator, candidates.items, k);
 }
 
 // CANARY: REQ=REQ-GEODE-877-KNN-INDEX-SHADOW; FEATURE="VectorKnn"; ASPECT=UnrelatedIndexMustNotShadowScan; STATUS=TESTED; TEST=tests/test_vector_knn_silent_failures.zig; OWNER=eval; UPDATED=2026-08-29
@@ -2865,6 +3158,92 @@ fn advancedVectorIndexIsAuthoritative(
     const scope = currentKnnScanScope() catch return false;
     const store = graph_store.getGlobalStore(allocator);
     return store.labelSolelyCarriesProperty(scope.graph, scope.tenant, label, property_name);
+}
+
+/// Which adjacency `indegree()` / `outdegree()` count.
+const DegreeDirection = enum { incoming, outgoing };
+
+// CANARY: REQ=REQ-SONNY-2691-DEGREE-VISIBILITY; FEATURE="NodeDegreeFunctions"; ASPECT=VisibleDegree; STATUS=TESTED; TEST=tests/test_sonny2691_degree_visibility.zig; OWNER=security; UPDATED=2026-09-25
+/// SONNY-2691: `indegree(n)` / `outdegree(n)`, where `n` is a node or a raw
+/// node id, counted the way a traversal from `n` sees the graph.
+///
+/// * An id that does not fit u64 (any negative id) names no node, so its
+///   degree is 0: the answer these functions already give for every id no
+///   node has. It used to reach `@intCast`, a safety-checked panic that
+///   aborted the server on `RETURN indegree(-1)`. 0 rather than an error: the
+///   argument is still just an id that names nothing, and answering it
+///   differently from every other such id would single it out for nothing.
+/// * The node must be visible to the session: in its graph, inside its tenant
+///   scope, and allowed by its RLS policies. A hidden or foreign node behaves
+///   as absent (degree 0). The raw-id form used to report the degree of any
+///   node, in any tenant and under any policy.
+/// * The count includes exactly the edges a traversal from the node may take
+///   (`HopScope.stepAllowed`, SONNY-2679): the edge is in the graph and the
+///   tenant scope, and the neighbour at its other end is visible. So a degree
+///   no longer counts the neighbours a policy hides (the degree half of
+///   SONNY-2685). A session that no tenant scope or policy restricts keeps
+///   the O(1) adjacency length.
+/// * A raw id is decided on a transient copy of its node, freed before the
+///   call returns, and the adjacency is then counted by id, so a call retains
+///   nothing (P11, the SONNY-2686 review). It used `getNodePtrForScan`, which
+///   boxes a copy into the store on every call and frees it only at the
+///   graph's next checkpoint, charged to no read budget: one read such as
+///   `size([x IN range(0, N) | outdegree($id)])` grew the store by N copies.
+///   A neighbour is decided the same way (`HopScope.stepAllowed`).
+/// Both checks are the session's `RowScope`. Before the evaluator is set up
+/// there is none, and the node gets the graph and exact-tenant check the knn()
+/// scan applies, with every edge counted.
+fn visibleNodeDegree(allocator: std.mem.Allocator, arg: Value, direction: DegreeDirection) EvalError!Value {
+    const absent = Value{ .Int = 0 };
+    // Not a node, or an id that does not fit u64 (a negative one): names no
+    // node. `@intCast` of a negative id aborted the server (SONNY-2769).
+    switch (arg) {
+        .Node => {},
+        .Int => |raw_id| if (std.math.cast(u64, raw_id) == null) return absent,
+        else => return absent,
+    }
+    const store = graph_store.getGlobalStore(allocator);
+    const scope = try currentKnnScanScope();
+    const row = try beginRowScope(allocator, scope.graph, scope.tenant);
+    defer if (row) |r| r.deinit();
+    const node_id: u64 = switch (arg) {
+        .Node => |n| blk: {
+            const visible = if (row) |r| r.nodeVisible(n) else scope.admits(n.graph_name, n.tenant_id);
+            if (!visible) return absent;
+            break :blk n.id;
+        },
+        .Int => |raw_id| blk: {
+            // P11: decided on a transient copy (`nodeIdVisible`), freed before
+            // this returns. `getNodePtrForScan` boxed a copy per call into the
+            // store until the next checkpoint, charged to no budget.
+            const id = std.math.cast(u64, raw_id).?;
+            const visible = if (row) |r| r.nodeIdVisible(store, id) else scope.nodeIdAdmitted(store, id);
+            if (!visible) return absent;
+            break :blk id;
+        },
+        else => unreachable,
+    };
+
+    // Counted by id: the node itself is not read again.
+    const edge_ids = switch (direction) {
+        .incoming => store.getIncomingEdgeIds(node_id),
+        .outgoing => store.getOutgoingEdgeIds(node_id),
+    } orelse return absent;
+    const hop = row orelse return .{ .Int = @intCast(edge_ids.len) };
+    if (!hop.restrictsNodes()) return .{ .Int = @intCast(edge_ids.len) };
+
+    var degree: i64 = 0;
+    for (edge_ids) |edge_id| {
+        // By value: a copy taken under the edge shard's lock
+        // (`getEdgeHydrated`), safe against a concurrent edge writer.
+        const edge = store.getEdgeHydrated(edge_id) orelse continue;
+        const neighbour = switch (direction) {
+            .incoming => edge.from_id,
+            .outgoing => edge.to_id,
+        };
+        if (hop.stepAllowed(store, &edge, neighbour)) degree += 1;
+    }
+    return .{ .Int = degree };
 }
 
 // CANARY: REQ=REQ-M6.1-EVAL-REFACTOR-003; FEATURE="Phase 6 Modularization"; ASPECT=ValueConverters; STATUS=EXEMPT; OWNER=eval; UPDATED=2025-11-13
@@ -3248,20 +3627,9 @@ fn tryBasicFunction(allocator: std.mem.Allocator, function_name: []const u8, arg
         // INCOMING adjacency (engine-backed, hydrate-on-miss). The old full
         // `store.edges.iterator()` scan was both O(all edges) AND incorrect under
         // a bounded edge cache (it counted only resident edges). Adjacency is the
-        // authoritative, bounded-correct, O(degree) source.
-        switch (arg) {
-            .Node => |n| {
-                const store = graph_store.getGlobalStore(allocator);
-                const ids = store.getIncomingEdgeIds(n.id) orelse return Value{ .Int = 0 };
-                return Value{ .Int = @intCast(ids.len) };
-            },
-            .Int => |node_id| {
-                const store = graph_store.getGlobalStore(allocator);
-                const ids = store.getIncomingEdgeIds(@as(u64, @intCast(node_id))) orelse return Value{ .Int = 0 };
-                return Value{ .Int = @intCast(ids.len) };
-            },
-            else => return Value{ .Int = 0 },
-        }
+        // authoritative, bounded-correct, O(degree) source. SONNY-2691: counted
+        // as the session may see it (`visibleNodeDegree`).
+        return try visibleNodeDegree(allocator, arg, .incoming);
     }
 
     // CANARY: REQ=REQ-GQL-OUTDEGREE-001; FEATURE="OutdegreeFunction"; ASPECT=NodeDegree; STATUS=TESTED; TEST=geodetestlab/specs/geode_graph_algorithms.yml; OWNER=eval; UPDATED=2026-01-03
@@ -3272,17 +3640,8 @@ fn tryBasicFunction(allocator: std.mem.Allocator, function_name: []const u8, arg
         // PHASE 1: out-degree IS the length of the node's OUTGOING adjacency
         // (engine-backed). See indegree above — replaces an O(all edges),
         // bounded-incorrect full edge scan with the O(degree) adjacency length.
-        switch (arg) {
-            .Node => |n| {
-                const store = graph_store.getGlobalStore(allocator);
-                return Value{ .Int = @intCast(store.getOutDegree(n.id)) };
-            },
-            .Int => |node_id| {
-                const store = graph_store.getGlobalStore(allocator);
-                return Value{ .Int = @intCast(store.getOutDegree(@as(u64, @intCast(node_id)))) };
-            },
-            else => return Value{ .Int = 0 },
-        }
+        // SONNY-2691: counted as the session may see it (`visibleNodeDegree`).
+        return try visibleNodeDegree(allocator, arg, .outgoing);
     }
 
     // Handle length() function - returns length of path, string, or list
@@ -3522,11 +3881,11 @@ fn tryBasicFunction(allocator: std.mem.Allocator, function_name: []const u8, arg
                     }
                     return Value{ .Double = sum };
                 } else {
-                    // Sum as integer
+                    // Sum as integer (SONNY-2769: checked; `+=` aborted)
                     var sum: i64 = 0;
                     for (list) |item| {
                         switch (item) {
-                            .Int => |n| sum += n,
+                            .Int => |n| sum = std.math.add(i64, sum, n) catch return EvalError.IntegerOverflow,
                             else => {},
                         }
                     }
@@ -3589,7 +3948,8 @@ fn tryBasicFunction(allocator: std.mem.Allocator, function_name: []const u8, arg
                     for (list) |item| {
                         switch (item) {
                             .Int => |n| {
-                                sum += n;
+                                // SONNY-2769: checked; `+=` aborted the server.
+                                sum = std.math.add(i64, sum, n) catch return EvalError.IntegerOverflow;
                                 count += 1;
                             },
                             else => {},
@@ -3899,12 +4259,14 @@ fn tryBasicFunction(allocator: std.mem.Allocator, function_name: []const u8, arg
         // This is the same convention `compareIntervals` uses elsewhere in the
         // codebase and is the only sensible total order on unanchored
         // intervals.
-        const micros_per_day: i64 = 86_400 * std.time.us_per_s;
-        const a_total: i64 = @as(i64, a_iv.months) * 30 * micros_per_day +
-            @as(i64, a_iv.days) * micros_per_day +
+        // SONNY-2769: i128; a month count past about 3.5 million overflowed
+        // i64 and aborted the server.
+        const micros_per_day: i128 = 86_400 * std.time.us_per_s;
+        const a_total: i128 = @as(i128, a_iv.months) * 30 * micros_per_day +
+            @as(i128, a_iv.days) * micros_per_day +
             a_iv.micros;
-        const b_total: i64 = @as(i64, b_iv.months) * 30 * micros_per_day +
-            @as(i64, b_iv.days) * micros_per_day +
+        const b_total: i128 = @as(i128, b_iv.months) * 30 * micros_per_day +
+            @as(i128, b_iv.days) * micros_per_day +
             b_iv.micros;
 
         if (std.ascii.eqlIgnoreCase(function_name, "interval_overlaps")) {
@@ -4137,7 +4499,7 @@ fn tryBasicFunction(allocator: std.mem.Allocator, function_name: []const u8, arg
             return switch (err) {
                 evaluator_functions.EvaluatorError.InvalidFormat => EvalError.TypeMismatch,
                 evaluator_functions.EvaluatorError.TypeMismatch => EvalError.TypeMismatch,
-                evaluator_functions.EvaluatorError.Overflow => EvalError.Unsupported,
+                evaluator_functions.EvaluatorError.Overflow => EvalError.IntegerOverflow,
                 else => EvalError.TypeMismatch,
             };
         };
@@ -4147,7 +4509,7 @@ fn tryBasicFunction(allocator: std.mem.Allocator, function_name: []const u8, arg
             return switch (err) {
                 evaluator_functions.EvaluatorError.InvalidFormat => EvalError.TypeMismatch,
                 evaluator_functions.EvaluatorError.TypeMismatch => EvalError.TypeMismatch,
-                evaluator_functions.EvaluatorError.Overflow => EvalError.Unsupported,
+                evaluator_functions.EvaluatorError.Overflow => EvalError.IntegerOverflow,
                 else => EvalError.TypeMismatch,
             };
         };
@@ -4213,10 +4575,10 @@ fn tryBasicFunction(allocator: std.mem.Allocator, function_name: []const u8, arg
                 const str = std.fmt.bufPrint(&buf, "{d}", .{i}) catch return Value{ .Str = "" };
                 return Value{ .Str = try allocator.dupe(u8, str) };
             },
+            // SONNY-2769 (round 6): exact, as CAST does. Through f64 the text
+            // lost every digit past the 17th and the scale's trailing zeros.
             .Decimal => |d| {
-                const float_val = @as(f64, @floatFromInt(d.coeff)) / std.math.pow(f64, 10.0, @floatFromInt(d.scale));
-                const str = std.fmt.allocPrint(allocator, "{d}", .{float_val}) catch return Value{ .Str = "" };
-                return Value{ .Str = str };
+                return Value{ .Str = try decimal_text.alloc(allocator, d.coeff, d.scale) };
             },
             .Str => |s| return Value{ .Str = s },
             .Bool => |b| return Value{ .Str = if (b) "true" else "false" },
@@ -4232,7 +4594,8 @@ fn tryBasicFunction(allocator: std.mem.Allocator, function_name: []const u8, arg
             .Decimal => |d| return Value{ .Decimal = d },
             .Str => |s| {
                 const f = std.fmt.parseFloat(f64, s) catch return Value{ .Null = {} };
-                const scaled: i128 = @intFromFloat(@round(f * float_to_decimal_scale_f64));
+                // SONNY-2739: 'nan', 'inf' or past the decimal is 22003.
+                const scaled = try @import("types/decimal128.zig").checkedScaledCoeff(@round(f * float_to_decimal_scale_f64), 1.0);
                 return Value{ .Decimal = .{ .coeff = scaled, .scale = float_scale } };
             },
             else => return Value{ .Null = {} },
@@ -4241,7 +4604,8 @@ fn tryBasicFunction(allocator: std.mem.Allocator, function_name: []const u8, arg
         // Convert to integer
         switch (first_arg) {
             .Int => |i| return Value{ .Int = i },
-            .Decimal => |d| return Value{ .Int = @intCast(@divFloor(d.coeff, std.math.pow(i128, 10, d.scale))) },
+            // SONNY-2739: exact and checked; the floor, as before.
+            .Decimal => |d| return Value{ .Int = try narrowing.decimalToInt(d.coeff, d.scale, .floor) },
             .Bool => |b| return Value{ .Int = if (b) 1 else 0 },
             .Str => |s| {
                 const i = std.fmt.parseInt(i64, s, 10) catch return Value{ .Null = {} };
@@ -4400,14 +4764,15 @@ fn tryBasicFunction(allocator: std.mem.Allocator, function_name: []const u8, arg
         if (step == 0) return Value{ .Null = {} };
 
         // Calculate the number of elements in the range
-        const count: i64 = if (step > 0) blk: {
+        // SONNY-2769: in i128, so a span or a step at the edge of i64
+        // (`range(minInt, maxInt)`, a step of minInt) no longer overflows
+        // and aborts the server; every element still fits i64.
+        const count: i128 = if (step > 0) blk: {
             if (stop <= start) break :blk 0;
-            const diff = stop - start;
-            break :blk @divFloor(diff + step - 1, step);
+            break :blk @divFloor(@as(i128, stop) - start + step - 1, step);
         } else blk: {
             if (stop >= start) break :blk 0;
-            const diff = start - stop;
-            break :blk @divFloor(diff - step - 1, -step);
+            break :blk @divFloor(@as(i128, start) - stop - step - 1, -@as(i128, step));
         };
 
         // Allocate result array
@@ -4424,10 +4789,10 @@ fn tryBasicFunction(allocator: std.mem.Allocator, function_name: []const u8, arg
         const ucount = @as(usize, @intCast(count));
         var result = try allocator.alloc(Value, ucount);
 
-        // Generate range values
-        var current = start;
+        // Generate range values (i128: the step past the last one may leave i64)
+        var current: i128 = start;
         for (0..ucount) |i| {
-            result[i] = Value{ .Int = current };
+            result[i] = Value{ .Int = @intCast(current) };
             current += step;
         }
 
@@ -4497,27 +4862,69 @@ fn parseDurationString(str: []const u8) !i64 {
     return seconds;
 }
 
-fn inList(value: Value, set: []*ast.Expr, allocator: std.mem.Allocator, env: Env) EvalError!Value {
-    if (isNull(value)) return Value{ .Null = {} };
-    var saw_null = false;
-    for (set) |p| {
-        const ev = try evalExpr(allocator, p.*, env);
-        if (isNull(ev)) {
-            saw_null = true;
-            continue;
-        }
-        if (value == .Int and ev == .Int and value.Int == ev.Int) return .{ .Bool = true };
-        if (value == .Str and ev == .Str and std.mem.eql(u8, value.Str, ev.Str)) return .{ .Bool = true };
-        if ((value == .Str and ev == .Int) or (value == .Int and ev == .Str)) {
-            var bufV: [64]u8 = undefined;
-            var bufE: [64]u8 = undefined;
-            const vs = try stringify(value, &bufV);
-            const es = try stringify(ev, &bufE);
-            if (std.mem.eql(u8, vs, es)) return .{ .Bool = true };
-        }
+// CANARY: REQ=REQ-SONNY-2675-IN-IS-EQUALITY; FEATURE="InOperator"; ASPECT=EqualityPerItem; STATUS=TESTED; TEST=tests/test_sonny2675_aggregate_semantics.zig; OWNER=eval; UPDATED=2026-09-26
+/// `value IN (a, b, ...)` is `value = a OR value = b OR ...`, evaluated as
+/// the engine evaluates that OR, left to right (SONNY-2675): TRUE at the first
+/// item `=` calls equal, the error `=` raises for an item it cannot compare
+/// with the value, otherwise NULL when some comparison was NULL (UNKNOWN), and
+/// FALSE when none was (an empty list included). Both spellings used their
+/// own equality, the literal list one that matched integers and strings
+/// across types and every other value only within its type, and the list
+/// expression one that was never NULL: `1.50 IN [1.5]` and `1 IN [1.0]` were
+/// false while `=` called them equal, and `2 IN $list` with `$list = [1,
+/// NULL]` was false, not NULL.
+fn inStep(allocator: std.mem.Allocator, value: Value, item: Value, unknown: *bool) EvalError!bool {
+    switch (try evalBinary(allocator, .Eq, value, item)) {
+        .Bool => |b| return b,
+        else => {
+            unknown.* = true;
+            return false;
+        },
     }
-    if (saw_null) return Value{ .Null = {} };
-    return .{ .Bool = false };
+}
+
+fn inList(value: Value, set: []*ast.Expr, allocator: std.mem.Allocator, env: Env) EvalError!Value {
+    var unknown = false;
+    for (set) |p| {
+        if (try inStep(allocator, value, try evalExpr(allocator, p.*, env), &unknown)) return .{ .Bool = true };
+    }
+    return if (unknown) .{ .Null = {} } else .{ .Bool = false };
+}
+
+fn inValues(allocator: std.mem.Allocator, value: Value, items: []const Value) EvalError!Value {
+    var unknown = false;
+    for (items) |item| {
+        if (try inStep(allocator, value, item, &unknown)) return .{ .Bool = true };
+    }
+    return if (unknown) .{ .Null = {} } else .{ .Bool = false };
+}
+
+/// `value IN (subquery)`: the first value of each row, as `inValues` does
+/// for a list. No rows is FALSE.
+fn inRows(allocator: std.mem.Allocator, value: Value, rows: []const []Value) EvalError!Value {
+    var unknown = false;
+    for (rows) |row| {
+        if (row.len == 0) continue;
+        if (try inStep(allocator, value, row[0], &unknown)) return .{ .Bool = true };
+    }
+    return if (unknown) .{ .Null = {} } else .{ .Bool = false };
+}
+
+/// The text `||` concatenates: a decimal's exact text at any length
+/// (SONNY-2769 round 6: stringify's 64-byte buffer refused a longer one with
+/// 0A000), allocated with `alloc`; any other value as stringify writes it.
+fn concatOperand(alloc: std.mem.Allocator, v: Value, buf: *[64]u8) EvalError![]const u8 {
+    return switch (v) {
+        .Str => |s| s,
+        .Decimal => |d| decimal_text.alloc(alloc, d.coeff, d.scale) catch return EvalError.OutOfMemory,
+        else => stringify(v, buf),
+    };
+}
+
+/// An INT, SMALLINT, BIGINT or DECIMAL as an exact number, else null.
+fn exactNumber(v: Value) ?value_order.Number {
+    const n = value_order.numberOf(v) orelse return null;
+    return if (n == .exact) n else null;
 }
 
 // ---------------------------------------------------------------------------

@@ -1996,6 +1996,12 @@ pub fn main() !void {
     // Task 11 (throughput plan): initialise bulk-ingest opt-in gate.
     geode.bulk_ingest.initFromEnv();
 
+    // SONNY-2691 / SONNY-2692 (item 5 of the SONNY-2686 review): publish the
+    // evaluator's execution callbacks and its row visibility once, before any
+    // listener starts. The connection handlers' own `initEvaluator` calls
+    // then only read them.
+    geode.execution.initEvaluator();
+
     // S1: Initialize the global RLS filter engine for label-based row filtering.
     // CANARY: REQ=REQ-SEC-RLS-WIRE-004; FEATURE="RLS Query Enforcement"; ASPECT=ServerInit; STATUS=TESTED; TEST=src/server/rls_filter.zig; OWNER=security; UPDATED=2026-06-11
     const rls_filter_mod = @import("rls_filter.zig");

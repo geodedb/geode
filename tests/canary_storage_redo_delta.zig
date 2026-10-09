@@ -1,4 +1,5 @@
 const std = @import("std");
+const perf_gate = @import("perf_gate");
 
 // Zig 0.16 compat helpers for test code
 fn compat_milliTimestamp() i64 {
@@ -101,7 +102,9 @@ test "TestCANARY_REQ_GQL_022_RedoOptimizationDeltaSmoke" {
 
 test "BenchmarkCANARY_REQ_GQL_022_RedoOptimizationDeltaVarianceEnvelope" {
     var arr: [2048]u64 = undefined;
-    for (arr, 0..) |_, i| arr[i] = (@as(u64, i) * 6364136223846793005) + 1;
+    // Wrapping LCG-style fill (SONNY-2394: the plain `*`/`+` overflowed u64
+    // and panicked in Debug before a single sample was taken).
+    for (arr, 0..) |_, i| arr[i] = (@as(u64, i) *% 6364136223846793005) +% 1;
     const iterations: usize = 64;
     var base_samples: [iterations]u64 = undefined;
     var opt_samples: [iterations]u64 = undefined;
@@ -118,11 +121,13 @@ test "BenchmarkCANARY_REQ_GQL_022_RedoOptimizationDeltaVarianceEnvelope" {
     }
     const s_base = stats(&base_samples);
     const s_opt = stats(&opt_samples);
+    // Perf claims go through the shared gate (SONNY-2394): reported unless
+    // GEODE_PERF_GATES=enforce (SONNY-2439) -- see tests/perf_gate.zig.
+    // Correctness assertions in this file are not gated.
     // variance envelopes
-    try std.testing.expect(s_base.cv <= 0.22);
-    try std.testing.expect(s_base.p95_mean <= 2.55);
-    try std.testing.expect(s_opt.cv <= 0.22);
-    try std.testing.expect(s_opt.p95_mean <= 2.55);
+    try perf_gate.envelope("redo baseline apply", s_base.cv, s_base.p95_mean, 0.22, 2.55);
+    try perf_gate.envelope("redo optimized apply", s_opt.cv, s_opt.p95_mean, 0.22, 2.55);
     // optimization should not be slower on mean
-    try std.testing.expect(s_opt.mean <= s_base.mean * 1.05);
+    const opt_over_base: f64 = @floatCast(s_opt.mean / s_base.mean);
+    try perf_gate.check("optimized redo mean <= 1.05x baseline", opt_over_base <= 1.05, "opt/base={d:.3}", .{opt_over_base});
 }

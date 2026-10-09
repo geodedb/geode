@@ -176,8 +176,12 @@ pub fn parseTime(raw: []const u8, allow_zone: bool) TemporalError!Time {
                     } else {
                         pow10 = 1;
                     }
+                    // SONNY-2769: only the first 9 digits are kept, and so
+                    // counted: a u8 count of every digit overflowed (and
+                    // aborted the server) at 256 fraction digits, and more
+                    // than 9 overran the 9-digit render buffer.
+                    frac_digits += 1;
                 }
-                frac_digits += 1;
             }
             if (frac_digits == 0) return TemporalError.Invalid;
         }

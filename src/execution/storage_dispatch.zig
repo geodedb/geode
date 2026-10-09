@@ -64,6 +64,7 @@ const Value = value_types.Value;
 
 // Security and streaming imports
 const tde_mod = @import("../security/tde.zig");
+const decimal128 = @import("../types/decimal128.zig");
 const cdc_mod = @import("../streaming/cdc_enhanced.zig");
 const fle_catalog = @import("../schema/fle_catalog.zig");
 const fle_annotations = @import("../schema/annotations.zig");
@@ -680,8 +681,10 @@ fn handleTdeConfigureMockKms(allocator: std.mem.Allocator, call_stmt: ast.CallPr
 
     if (args.len > 0) {
         // Parse first argument as port
+        // SONNY-2769: an argument outside its type aborted the server in
+        // the casts below; it is InvalidArgs.
         if (args[0].* == .Int) {
-            port = @intCast(args[0].Int);
+            port = std.math.cast(u16, args[0].Int) orelse return error.InvalidArgs;
         }
 
         // Parse second argument as auth flag
@@ -696,12 +699,12 @@ fn handleTdeConfigureMockKms(allocator: std.mem.Allocator, call_stmt: ast.CallPr
 
         // Parse fourth argument as latency in ms
         if (args.len > 3 and args[3].* == .Int) {
-            latency_ms = @intCast(args[3].Int);
+            latency_ms = std.math.cast(u32, args[3].Int) orelse return error.InvalidArgs;
         }
 
         // Parse fifth argument as key count
         if (args.len > 4 and args[4].* == .Int) {
-            key_count = @intCast(args[4].Int);
+            key_count = std.math.cast(u32, args[4].Int) orelse return error.InvalidArgs;
         }
     }
 
@@ -954,7 +957,8 @@ fn handleTdeTestTransparentEncryption(allocator: std.mem.Allocator, _: ast.CallP
     row[0] = Value{ .Int = @intCast(result.types_tested) };
     row[1] = Value{ .Bool = result.all_transparent };
     // Convert float to decimal (performance_impact_pct is a percentage like 15.5)
-    const pct_int: i128 = @intFromFloat(result.performance_impact_pct * 100);
+    // SONNY-2739: checked (22003) instead of a bare `@intFromFloat`.
+    const pct_int = try decimal128.checkedScaledCoeff(result.performance_impact_pct, 100.0);
     row[2] = Value{ .Decimal = .{ .coeff = pct_int, .scale = 2 } };
     row[3] = Value{ .Int = @intCast(result.errors_encountered) };
     rows[0] = row;
@@ -1500,7 +1504,7 @@ fn handleTdeConfigureRotation(allocator: std.mem.Allocator, call_stmt: ast.CallP
             else => Value{ .Null = {} },
         };
         break :blk switch (arg_val) {
-            .Int => |i| @intCast(i),
+            .Int => |i| std.math.cast(u32, i) orelse return error.InvalidArgs, // SONNY-2769
             else => 168,
         };
     } else 168;
@@ -1744,7 +1748,7 @@ fn handleTdeMeasureOverhead(allocator: std.mem.Allocator, _: ast.CallProcedure) 
     const row = try allocator.alloc(Value, 4);
     row[0] = Value{ .Int = result.baseline_ops_per_sec };
     row[1] = Value{ .Int = result.encrypted_ops_per_sec };
-    row[2] = Value{ .Decimal = .{ .coeff = @intFromFloat(result.overhead_percentage * 100.0), .scale = 2 } };
+    row[2] = Value{ .Decimal = .{ .coeff = try decimal128.checkedScaledCoeff(result.overhead_percentage, 100.0), .scale = 2 } };
     row[3] = Value{ .Bool = result.passes_threshold };
     rows[0] = row;
 
@@ -1772,7 +1776,7 @@ fn handleTdeSimulateOltpWorkload(allocator: std.mem.Allocator, call_stmt: ast.Ca
             else => Value{ .Null = {} },
         };
         break :blk switch (arg_val) {
-            .Int => |i| @as(u32, @intCast(i)),
+            .Int => |i| std.math.cast(u32, i) orelse return error.InvalidArgs, // SONNY-2769
             else => 10,
         };
     } else 10;
@@ -1784,7 +1788,7 @@ fn handleTdeSimulateOltpWorkload(allocator: std.mem.Allocator, call_stmt: ast.Ca
             else => Value{ .Null = {} },
         };
         break :blk switch (arg_val) {
-            .Int => |i| @as(u32, @intCast(i)),
+            .Int => |i| std.math.cast(u32, i) orelse return error.InvalidArgs, // SONNY-2769
             else => 10,
         };
     } else 10;
@@ -1800,10 +1804,10 @@ fn handleTdeSimulateOltpWorkload(allocator: std.mem.Allocator, call_stmt: ast.Ca
 
     const rows = try allocator.alloc([]Value, 1);
     const row = try allocator.alloc(Value, 4);
-    row[0] = Value{ .Decimal = .{ .coeff = @intFromFloat(result.avg_transaction_time_ms * 100.0), .scale = 2 } };
+    row[0] = Value{ .Decimal = .{ .coeff = try decimal128.checkedScaledCoeff(result.avg_transaction_time_ms, 100.0), .scale = 2 } };
     row[1] = Value{ .Int = result.tps_with_encryption };
     row[2] = Value{ .Int = result.tps_without_encryption };
-    row[3] = Value{ .Decimal = .{ .coeff = @intFromFloat(result.degradation_percentage * 100.0), .scale = 2 } };
+    row[3] = Value{ .Decimal = .{ .coeff = try decimal128.checkedScaledCoeff(result.degradation_percentage, 100.0), .scale = 2 } };
     rows[0] = row;
 
     return ExecutionResult{
@@ -3097,7 +3101,7 @@ fn handleGeodeFleListencryptedfields(allocator: std.mem.Allocator, call_stmt: as
 // ---------------------------------------------------------------------------
 // Storage dispatch table
 // ---------------------------------------------------------------------------
-const StorageHandler = *const fn (std.mem.Allocator, ast.CallProcedure) anyerror!ExecutionResult;
+const StorageHandler = *const fn (std.mem.Allocator, ast.CallProcedure, execution.ExecutionContext) anyerror!ExecutionResult;
 
 const storage_table = std.StaticStringMap(StorageHandler).initComptime(.{
     .{ "geode.storage.stats", handleGeodeStorageStats },
@@ -3109,23 +3113,42 @@ pub fn executeStorage(
     allocator: std.mem.Allocator,
     proc_name: []const u8,
     call_stmt: ast.CallProcedure,
+    context: execution.ExecutionContext,
 ) !?ExecutionResult {
     if (storage_table.get(proc_name)) |handler| {
-        return try handler(allocator, call_stmt);
+        return try handler(allocator, call_stmt, context);
     }
     return null;
 }
 
-fn handleGeodeStorageStats(allocator: std.mem.Allocator, call_stmt: ast.CallProcedure) anyerror!ExecutionResult {
-    // geode.storage.stats([graph_name]) -> node_count, edge_count, ...
-    // Reads storage-level statistics from the graph-storage engine.
-    const adapter = graph_store.getGlobalAdapter() orelse return ExecutionError.UnknownProcedure;
-
-    var graph_name: []const u8 = "default";
+// CANARY: REQ=REQ-SONNY-2804-STORAGE-PROC-GATE; FEATURE="GraphRBACEnforcement"; ASPECT=StorageProcedures; STATUS=TESTED; TEST=tests/test_sonny2804_storage_procs_gate.zig; OWNER=security; UPDATED=2026-09-26
+/// SONNY-2804: the graph a geode.storage.* call names (its first argument, a
+/// string; `default` without one), once it has passed the gate every other
+/// way of reaching a graph takes: an internal graph is refused
+/// (`InternalGraph`, 42501, for every user), then the caller must be allowed
+/// to bind it (`session_graph.mayBind`: `Unauthorized`, 42501), and only then
+/// must it exist (`GraphNotFound`, 3F000). The procedures took any name as
+/// given: a user refused a graph read its node, edge and page counts and WAL
+/// position, a graph that did not exist answered 42883 (an existence oracle),
+/// and `__geode_*` graphs answered too.
+fn storageGraph(call_stmt: ast.CallProcedure, context: execution.ExecutionContext) ![]const u8 {
+    var graph_name: []const u8 = graph_store.DEFAULT_GRAPH_NAME;
     if (call_stmt.procedure == .Call) {
         const args = call_stmt.procedure.Call.args;
         if (args.len >= 1 and args[0].* == .String) graph_name = args[0].String;
     }
+    try execution.session_graph.refuseInternal(graph_name);
+    if (!execution.session_graph.mayBind(context.principal, graph_name)) return error.Unauthorized;
+    if (!execution.session_graph.exists(context.catalog, graph_name)) return error.GraphNotFound;
+    return graph_name;
+}
+
+fn handleGeodeStorageStats(allocator: std.mem.Allocator, call_stmt: ast.CallProcedure, context: execution.ExecutionContext) anyerror!ExecutionResult {
+    // geode.storage.stats([graph_name]) -> node_count, edge_count, ...
+    // Reads storage-level statistics from the graph-storage engine.
+    const adapter = graph_store.getGlobalAdapter() orelse return ExecutionError.UnknownProcedure;
+
+    const graph_name = try storageGraph(call_stmt, context);
 
     const stats = adapter.getStorageStats(graph_name) catch |err| {
         log.warn("geode.storage.stats failed", &.{Attr.string("error", @errorName(err))});
@@ -3165,16 +3188,12 @@ fn handleGeodeStorageStats(allocator: std.mem.Allocator, call_stmt: ast.CallProc
     return .{ .columns = columns, .rows = rows, .flags = std.ArrayList([]const u8).empty };
 }
 
-fn handleGeodeStorageIntegrity(allocator: std.mem.Allocator, call_stmt: ast.CallProcedure) anyerror!ExecutionResult {
+fn handleGeodeStorageIntegrity(allocator: std.mem.Allocator, call_stmt: ast.CallProcedure, context: execution.ExecutionContext) anyerror!ExecutionResult {
     // geode.storage.integrity([graph_name]) -> node_count_consistent, edge_count_consistent, ...
     // Runs an integrity check on the graph-storage engine.
     const adapter = graph_store.getGlobalAdapter() orelse return ExecutionError.UnknownProcedure;
 
-    var graph_name: []const u8 = "default";
-    if (call_stmt.procedure == .Call) {
-        const args = call_stmt.procedure.Call.args;
-        if (args.len >= 1 and args[0].* == .String) graph_name = args[0].String;
-    }
+    const graph_name = try storageGraph(call_stmt, context);
 
     const report = adapter.checkIntegrity(graph_name) catch |err| {
         log.warn("geode.storage.integrity failed", &.{Attr.string("error", @errorName(err))});

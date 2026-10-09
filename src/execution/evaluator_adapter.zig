@@ -66,7 +66,35 @@ pub const ExecutionCallbacks = struct {
         else
             return error.Unsupported;
         const ctx: *ExecutionContext = @ptrCast(@alignCast(ctx_ptr));
-        return self.executeQueryWithContext(allocator, q, ctx.*);
+        // CANARY: REQ=REQ-SONNY-3248-LET-SCOPE; FEATURE="ParameterBinding"; ASPECT=SubqueryParameters; STATUS=TESTED; TEST=tests/test_sonny_write_allowlist_r4_transport.zig; OWNER=engine; UPDATED=2026-09-29
+        // SONNY-3248 (round 4b-1b review I-E): the subquery (`x IN (MATCH
+        // ...)`) sees the parameters the expression around it sees: the
+        // request's, with the statement's LETs (and CTEs) bound over them
+        // (`env`'s). It ran with the context's, the request's alone, so an
+        // outer `LET $x` read null (and `param_check` refused it), while an
+        // EXISTS body, evaluated with `env`, read it.
+        if (env.param_names.len == 0) return self.executeQueryWithContext(allocator, q, ctx.*);
+        var names: std.ArrayList([]const u8) = .empty;
+        defer names.deinit(allocator);
+        var values: std.ArrayList(Value) = .empty;
+        defer values.deinit(allocator);
+        try names.appendSlice(allocator, ctx.query_param_names);
+        try values.appendSlice(allocator, ctx.query_param_values);
+        for (env.param_names, env.param_values) |name, value| {
+            for (names.items, 0..) |existing, i| {
+                if (std.mem.eql(u8, existing, name)) {
+                    values.items[i] = value;
+                    break;
+                }
+            } else {
+                try names.append(allocator, name);
+                try values.append(allocator, value);
+            }
+        }
+        var sub_ctx = ctx.*;
+        sub_ctx.query_param_names = names.items;
+        sub_ctx.query_param_values = values.items;
+        return self.executeQueryWithContext(allocator, q, sub_ctx);
     }
 
     /// Convenience wrapper: Find shortest path

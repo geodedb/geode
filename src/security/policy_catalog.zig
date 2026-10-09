@@ -62,6 +62,18 @@ pub const PolicySpec = struct {
     enabled: bool,
 };
 
+// CANARY: REQ=REQ-SONNY-2731-POLICY-TEXT-LIMITS; FEATURE="GPS Policy Persistence"; ASPECT=PersistableLengths; STATUS=TESTED; TEST=tests/test_gps_policy_persistence.zig; OWNER=security; UPDATED=2026-09-25
+/// SONNY-2731: the longest name, scope graph and USING expression that
+/// `__geode_security` can store (`UserStorageBackend.persistPolicy` refuses
+/// longer ones; its record fields are one byte larger). DDL refuses a longer
+/// policy up front: CREATE POLICY used to accept it, keep it in memory only
+/// when the write-through failed, and lose it at the next restart, and the
+/// startup loader cut a stored text to its field size and compiled the cut
+/// text. tests/test_gps_policy_persistence.zig pins these to the record.
+pub const max_policy_name_len: usize = 63;
+pub const max_policy_scope_len: usize = 63;
+pub const max_policy_expression_len: usize = 511;
+
 pub const PolicyCatalog = struct {
     allocator: std.mem.Allocator,
     // Use ArrayList which in Zig 0.16 is the unmanaged form: allocator passed
@@ -130,6 +142,19 @@ pub const PolicyCatalog = struct {
     }
 
     pub fn addPolicyWithMode(self: *PolicyCatalog, args: PolicySpec, on_compile_failure: CompileFailureMode) !void {
+        // SONNY-2731: DDL refuses what the store cannot hold.
+        if (on_compile_failure == .reject) {
+            if (args.name.len > max_policy_name_len or
+                args.scope_graph.len > max_policy_scope_len or
+                args.expression_source.len > max_policy_expression_len)
+            {
+                std.log.scoped(.gps).warn(
+                    "refusing policy '{s}': a field is longer than __geode_security stores (name {d}/{d}, graph {d}/{d}, USING {d}/{d} bytes)",
+                    .{ args.name[0..@min(args.name.len, max_policy_name_len)], args.name.len, max_policy_name_len, args.scope_graph.len, max_policy_scope_len, args.expression_source.len, max_policy_expression_len },
+                );
+                return error.PolicyFieldTooLong;
+            }
+        }
         // CANARY: REQ=REQ-GAP-0923-ABAC-POLICY-VALIDATION; FEATURE="ABAC"; ASPECT=DuplicateNameReject; STATUS=TESTED; TEST=tests/test_gap0923_abac_policy_validation.zig; OWNER=security; UPDATED=2026-07-10
         // GAP-0923(b): reject a duplicate policy name. Two same-named rows used
         // to coexist — SHOW POLICIES listed both and a single DROP POLICY
@@ -214,6 +239,25 @@ pub const PolicyCatalog = struct {
         return error.PolicyNotFound;
     }
 
+    // CANARY: REQ=REQ-SONNY-2732-RLS-STRICT-POLICIES; FEATURE="GPS Policy DDL"; ASPECT=InvalidPolicyListing; STATUS=TESTED; TEST=tests/test_rls_policy_ddl.zig; OWNER=security; UPDATED=2026-09-25
+    /// SONNY-2732: can `p` ever grant access? Not when its non-trivial USING
+    /// expression failed to compile as it was loaded (`retain_fail_closed`):
+    /// it is kept, fail-closed, until an operator rewrites it. SHOW POLICIES
+    /// and `geode.auth.policy_list` report this as `valid`.
+    pub fn policyIsValid(p: *const Policy) bool {
+        return p.compiled != null or std.mem.eql(u8, p.expression_source, "true");
+    }
+
+    /// SONNY-2732: how many policies are not `policyIsValid` (logged at
+    /// startup after hydration).
+    pub fn invalidPolicyCount(self: *const PolicyCatalog) usize {
+        var n: usize = 0;
+        for (self.policies.items) |*p| {
+            if (!policyIsValid(p)) n += 1;
+        }
+        return n;
+    }
+
     // CANARY: REQ=REQ-GPS-DDL-003; FEATURE="GPS Policy DDL"; ASPECT=PolicyCatalogList; STATUS=TESTED; TEST=tests/test_gps_policy_catalog.zig; OWNER=security; UPDATED=2026-05-20
     /// Return a read-only slice of the current policies.  The slice is valid
     /// only until the next addPolicy or removePolicy call.
@@ -230,6 +274,10 @@ pub const PolicyCatalog = struct {
     /// existing policy name.
     /// Bumps the policy version and invalidates the decision cache after any mutation.
     pub fn alterPolicy(self: *PolicyCatalog, name: []const u8, set_enabled: ?bool, rename_to: ?[]const u8) !void {
+        // SONNY-2731: a name the store cannot hold.
+        if (rename_to) |new_name| {
+            if (new_name.len > max_policy_name_len) return error.PolicyFieldTooLong;
+        }
         // Reject a rename that would collide with a different existing policy.
         if (rename_to) |new_name| {
             if (!std.mem.eql(u8, new_name, name)) {
@@ -287,11 +335,14 @@ pub fn getGlobalCatalog() ?*PolicyCatalog {
 
 // CANARY: REQ=REQ-GPS-CATALOG-002; FEATURE="GPS Policy Persistence"; ASPECT=WriteThroughHooks; STATUS=TESTED; TEST=tests/test_gps_policy_persistence.zig; OWNER=security; UPDATED=2026-05-20
 
-/// Called with the same PolicySpec passed to addPolicy.  Errors are non-fatal
-/// and logged by the server; execution continues with the in-memory update.
+/// Called with the same PolicySpec passed to addPolicy. An error fails the
+/// statement and the policy is taken out of the catalog again (SONNY-2731,
+/// SONNY-2757: `execution/policy_ddl.zig`).
 pub const PersistFn = *const fn (ctx: *anyopaque, spec: PolicySpec) anyerror!void;
 
-/// Called with the policy name before removePolicy. Errors are non-fatal.
+/// Called with the policy name before removePolicy. An error (other than
+/// PolicyNotFound: no stored record) fails the statement and the policy stays
+/// (SONNY-2757).
 pub const DropFn = *const fn (ctx: *anyopaque, name: []const u8) anyerror!void;
 
 // CANARY: REQ=REQ-GPS-CATALOG-002; FEATURE="GPS Policy Persistence"; ASPECT=AlterWriteThroughHook; STATUS=TESTED; TEST=tests/test_gap0858_alter_policy_persist.zig; OWNER=security; UPDATED=2026-06-09
@@ -299,7 +350,7 @@ pub const DropFn = *const fn (ctx: *anyopaque, name: []const u8) anyerror!void;
 /// enable/disable + rename change is written through to __geode_security.
 /// `name` is the CURRENT (pre-rename) policy name used to locate the durable
 /// record; `set_enabled` and `rename_to` mirror the alterPolicy arguments.
-/// Errors are non-fatal and logged by the server.
+/// An error fails the statement and the catalog change is undone (SONNY-2757).
 pub const AlterFn = *const fn (ctx: *anyopaque, name: []const u8, set_enabled: ?bool, rename_to: ?[]const u8) anyerror!void;
 
 pub const WriteThroughHooks = struct {

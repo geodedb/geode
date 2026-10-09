@@ -29,14 +29,20 @@ pub fn parseParams(allocator: std.mem.Allocator, params: []const schema.Param) !
     errdefer allocator.free(names);
     var values = try allocator.alloc(value_types.Value, params.len);
     errdefer allocator.free(values);
+    // SONNY-2727: a refused parameter frees what the ones before it decoded
+    // (the refusals the checked narrowing adds reach this path on purpose).
+    var decoded: usize = 0;
+    errdefer for (names[0..decoded], values[0..decoded]) |name, value| {
+        allocator.free(name);
+        freeParamValue(allocator, value);
+    };
 
     for (params, 0..) |param, i| {
-        names[i] = try allocator.dupe(u8, param.name);
-        if (param.value) |val| {
-            values[i] = try protoValueToValue(allocator, val, 0);
-        } else {
-            values[i] = .Null;
-        }
+        const name = try allocator.dupe(u8, param.name);
+        errdefer allocator.free(name);
+        values[i] = if (param.value) |val| try protoValueToValue(allocator, val, 0) else .Null;
+        names[i] = name;
+        decoded = i + 1;
     }
 
     return .{ .names = names, .values = values };
@@ -49,6 +55,15 @@ pub fn freeParamBindings(allocator: std.mem.Allocator, bindings: ParamBindings) 
     allocator.free(bindings.values);
 }
 
+// CANARY: REQ=REQ-SONNY-2727-PARAM-DECODER-NARROWING; FEATURE="WireParameters"; ASPECT=CheckedNarrowing; STATUS=TESTED; TEST=tests/test_sonny2727_param_decoder_narrowing.zig; OWNER=security; UPDATED=2026-09-26
+/// A client's parameter as an engine value.
+///
+/// SONNY-2727: every narrowing is checked. A SMALLINT outside i16, a finite
+/// REAL outside f32, a CHAR or VARCHAR longer than 65535 bytes, a decimal
+/// `scale` or `orig_scale` outside u8, and a decimal coefficient of the
+/// smallest i128 (which has no negation, and is outside every DECIMAL) are
+/// refused with `error.InvalidParams`, which the transports send as 22023.
+/// Each was an unchecked cast: one parameter aborted a ReleaseSafe server.
 pub fn protoValueToValue(allocator: std.mem.Allocator, value: schema.Value, depth: usize) !value_types.Value {
     if (depth > 64) return error.ParamsTooDeep;
     const kind = value.kind orelse return .Null;
@@ -57,52 +72,82 @@ pub fn protoValueToValue(allocator: std.mem.Allocator, value: schema.Value, dept
         .bool_val => |b| .{ .Bool = b },
         .int_val => |iv| switch (iv.kind) {
             .INT => .{ .Int = iv.value },
-            .SMALLINT => .{ .SmallInt = @intCast(iv.value) },
+            .SMALLINT => .{ .SmallInt = std.math.cast(i16, iv.value) orelse return error.InvalidParams },
             .BIGINT => .{ .BigInt = iv.value },
             else => .{ .Int = iv.value },
         },
         .double_val => |dv| switch (dv.kind) {
-            .REAL => .{ .Real = @floatCast(dv.value) },
+            .REAL => .{ .Real = try checkedReal(dv.value) },
             .DOUBLE => .{ .Double = dv.value },
             else => .{ .Double = dv.value },
         },
         .string_val => |sv| switch (sv.kind) {
-            .CHAR => .{ .Char = .{ .data = try allocator.dupe(u8, sv.value), .n = @intCast(sv.value.len) } },
-            .VARCHAR => .{ .Varchar = .{ .data = try allocator.dupe(u8, sv.value), .n = @intCast(sv.value.len) } },
+            .CHAR => .{ .Char = .{ .n = try checkedCharLen(sv.value.len), .data = try allocator.dupe(u8, sv.value) } },
+            .VARCHAR => .{ .Varchar = .{ .n = try checkedCharLen(sv.value.len), .data = try allocator.dupe(u8, sv.value) } },
             .TEXT => .{ .Text = try allocator.dupe(u8, sv.value) },
             else => .{ .Str = try allocator.dupe(u8, sv.value) },
         },
         .decimal_val => |dec| blk: {
             const coeff = std.fmt.parseInt(i128, dec.coeff, 10) catch return error.InvalidParams;
+            if (coeff == std.math.minInt(i128)) return error.InvalidParams;
+            const scale = std.math.cast(u8, dec.scale) orelse return error.InvalidParams;
+            const orig_scale = std.math.cast(u8, dec.orig_scale) orelse return error.InvalidParams;
             const orig_repr = if (dec.orig_repr.len > 0)
                 try allocator.dupe(u8, dec.orig_repr)
             else
                 null;
             break :blk .{ .Decimal = .{
                 .coeff = coeff,
-                .scale = @intCast(dec.scale),
-                .orig_scale = @intCast(dec.orig_scale),
+                .scale = scale,
+                .orig_scale = orig_scale,
                 .orig_repr = orig_repr,
             } };
         },
         .bytes_val => |bv| .{ .Bytea = try allocator.dupe(u8, bv.value) },
         .list_val => |lv| blk: {
             const list = try allocator.alloc(value_types.Value, lv.values.items.len);
+            // SONNY-2727: a refused item frees the list and the items before it.
+            var decoded: usize = 0;
+            errdefer {
+                for (list[0..decoded]) |item| freeParamValue(allocator, item);
+                allocator.free(list);
+            }
             for (lv.values.items, 0..) |item, idx| {
                 list[idx] = try protoValueToValue(allocator, item, depth + 1);
+                decoded = idx + 1;
             }
             break :blk .{ .List = list };
         },
         .map_val => |mv| blk: {
             var map = std.StringHashMap(value_types.Value).init(allocator);
-            errdefer map.deinit();
+            // SONNY-2727: a refused entry frees the entries before it.
+            errdefer {
+                var it = map.iterator();
+                while (it.next()) |e| {
+                    allocator.free(e.key_ptr.*);
+                    freeParamValue(allocator, e.value_ptr.*);
+                }
+                map.deinit();
+            }
+            // CANARY: REQ=REQ-SONNY-2818-PARAM-MAP-DUP-KEYS; FEATURE="WireParameters"; ASPECT=DuplicateMapKeys; STATUS=TESTED; TEST=tests/test_sonny2818_param_map_dup_keys.zig; OWNER=security; UPDATED=2026-09-27
+            // SONNY-2818: a repeated key frees the duplicate key and the value
+            // it replaces (the last value still wins). `put` kept the stored
+            // key and dropped both, so a client grew the server's memory by
+            // about the size of each request (the peer path's fix, 076a7ba1).
             for (mv.entries.items) |entry| {
                 const key = try allocator.dupe(u8, entry.key);
+                errdefer allocator.free(key);
                 const val = if (entry.value) |v|
                     try protoValueToValue(allocator, v, depth + 1)
                 else
                     value_types.Value.Null;
-                try map.put(key, val);
+                errdefer freeParamValue(allocator, val);
+                const slot = try map.getOrPut(key);
+                if (slot.found_existing) {
+                    allocator.free(key);
+                    freeParamValue(allocator, slot.value_ptr.*);
+                }
+                slot.value_ptr.* = val;
             }
             break :blk .{ .Map = map };
         },
@@ -115,9 +160,24 @@ fn freeParamValue(allocator: std.mem.Allocator, value: value_types.Value) void {
     property_codec.freeValue(allocator, value);
 }
 
+/// SONNY-2727: a REAL parameter as f32. A finite value outside f32 is
+/// refused; infinities and NaN are f32 values and pass.
+fn checkedReal(v: f64) error{InvalidParams}!f32 {
+    if (std.math.isFinite(v) and @abs(v) > std.math.floatMax(f32)) return error.InvalidParams;
+    return @floatCast(v);
+}
+
+/// SONNY-2727: a CHAR or VARCHAR length as the type's u16.
+fn checkedCharLen(len: usize) error{InvalidParams}!u16 {
+    return std.math.cast(u16, len) orelse error.InvalidParams;
+}
+
 pub fn mapError(err: anyerror) ErrorInfo {
     return switch (err) {
-        error.GroupingError => .{ .code = "42000", .message = "grouping error: non-aggregated expression not in GROUP BY" },
+        // SONNY-2675: grouping_error (42803), the class every other grouping
+        // refusal uses (a nested aggregate, an ungrouped HAVING reference, an
+        // aggregate in a per-row filter); it was the generic 42000.
+        error.GroupingError => .{ .code = "42803", .message = "grouping error: non-aggregated expression not in GROUP BY" },
         // GAP-0914: a GROUP BY key that resolves to no alias, variable, or
         // binding is rejected instead of collapsing rows into one null group.
         error.UnknownGroupKey => .{ .code = "42703", .message = "GROUP BY key does not resolve to any RETURN alias, variable, or binding" },
@@ -128,6 +188,13 @@ pub fn mapError(err: anyerror) ErrorInfo {
         error.TransactionAborted => .{ .code = "25P02", .message = "Current transaction is aborted; statements are rejected until ROLLBACK" },
         error.NoActiveTransaction => .{ .code = "25000", .message = "No active transaction" },
         error.UnionColumnCountMismatch => .{ .code = "42601", .message = "UNION column count mismatch" },
+        // SONNY-2755: `YIELD path, path` used to free that column twice.
+        error.DuplicateYieldColumn => .{ .code = "42702", .message = "YIELD names the same column more than once; name each column once" },
+        // SONNY-2791: the __geode_* graphs are the engine's own.
+        // SONNY-2729: the RLS post-filter could not allocate what it needs;
+        // it withheld the rows rather than return them unchecked.
+        error.RowSecurityFilterUnavailable => .{ .code = "53200", .message = "Out of memory: the row-level security filter could not run, so no rows were returned" },
+        error.InternalGraph => .{ .code = "42501", .message = "The __geode_* graphs are internal: a statement cannot select, create or drop one" },
         error.DuplicateGraph => .{ .code = "42P07", .message = "Duplicate graph name" },
         error.GraphNotFound => .{ .code = "3F000", .message = "Graph does not exist" },
         // ENG-3903: a MERGE relationship endpoint that is neither bound by a
@@ -145,6 +212,8 @@ pub fn mapError(err: anyerror) ErrorInfo {
         error.DuplicateSchema => .{ .code = "42P07", .message = "Duplicate schema name" },
         error.SchemaNotFound => .{ .code = "3F000", .message = "Schema does not exist" },
         error.DuplicateIndex => .{ .code = "42P07", .message = "Duplicate index name" },
+        // SONNY-2809: a second CREATE CONSTRAINT with the same name.
+        error.ConstraintAlreadyExists => .{ .code = "42710", .message = "Duplicate constraint name" },
         // GAP-0923: ABAC policy DDL validation (duplicate name rejected).
         error.PolicyAlreadyExists => .{ .code = "42710", .message = "Duplicate policy name" },
         error.IncompatibleIndexDataType => .{ .code = "42804", .message = "Incompatible index data type" },
@@ -192,6 +261,7 @@ pub fn mapError(err: anyerror) ErrorInfo {
         // it is now refused as a data exception (class 22) so a mis-bound
         // parameter can never silently widen a predicate.
         // CANARY: REQ=REQ-ENG-3910-IN-PREDICATE-TYPE-SAFETY; FEATURE="InOperator"; ASPECT=NonListRightHandSide; STATUS=TESTED; TEST=tests/test_eng3910_in_type_safety.zig; OWNER=eval; UPDATED=2026-08-24
+        error.ValuesNotComparable => .{ .code = "22G04", .message = "values not comparable: an ordering comparison of a year-to-month duration and a day-to-second duration (1 month is not a number of days)" },
         error.InListRequiresList => .{ .code = "22000", .message = "The right-hand side of IN / NOT IN must be a list (or NULL); a scalar value is not a list. Bind a list parameter, e.g. --param p '[1,2,3]'" },
         error.InvalidTypeConversion => .{ .code = "22003", .message = "Invalid type conversion" },
         // GAP-0905/GAP-0907: checked numeric narrowing (CAST, MakeInterval, ...)
@@ -209,9 +279,53 @@ pub fn mapError(err: anyerror) ErrorInfo {
         error.InvalidCast => .{ .code = "22018", .message = "Invalid character value for cast" },
         error.UnsupportedCastTarget => .{ .code = "0A000", .message = "Unsupported CAST target type" },
         // GAP-0926: out-of-range positional parameter.
-        error.MissingParameter => .{ .code = "22023", .message = "Positional parameter out of range (referenced a parameter that was not supplied)" },
+        // SONNY-3247: a parameter the request does not supply, named or
+        // positional (GAP-0926), refused before anything runs. 42P02 =
+        // undefined_parameter (class 42, syntax error or access rule
+        // violation).
+        // SONNY-3367: a pattern names one variable as two kinds of element
+        // (a relationship reused as a node pattern bound every node of the
+        // graph). A syntax error, refused before anything runs.
+        error.VariableKindConflict => .{ .code = "42000", .message = "Variable kind conflict: a pattern names one variable as two kinds of element (a node, a relationship, a variable-length relationship list or a path), or names a variable that holds a value (a WITH expression's alias, a FOR variable); name each element with a variable of its own" },
+        // SONNY-3248 (round 4b-1 review m-2): a SKIP or LIMIT parameter that
+        // is no non-negative integer read as "no window" (every row).
+        error.InvalidWindowParameter => .{ .code = "22G03", .message = "Invalid SKIP or LIMIT value: a SKIP or LIMIT parameter must be a non-negative integer" },
+        error.MissingParameter => .{ .code = "42P02", .message = "Undefined parameter: the statement references a parameter ($name or $n) that the request does not supply" },
         // GAP-0926: nested aggregate (sum(avg(...))) is invalid.
         error.NestedAggregate => .{ .code = "42803", .message = "Aggregate functions cannot be nested" },
+        // SONNY-2675: a HAVING over groups reads each group's keys, projected
+        // columns and aggregates; any other input column has no single value
+        // for the group. The same grouping_error class as a nested aggregate.
+        // CANARY: REQ=REQ-SONNY-2675-GROUPED-HAVING; FEATURE="GroupedHaving"; ASPECT=SqlstateMapping; STATUS=TESTED; TEST=tests/test_sonny2675_grouped_having.zig; OWNER=engine; UPDATED=2026-09-25
+        error.UngroupedHavingReference => .{ .code = "42803", .message = "Grouping error: a HAVING (or a WHERE after an aggregating RETURN) may reference only grouping keys, projected columns and aggregates" },
+        error.AggregateInRowFilter => .{ .code = "42803", .message = "Aggregate functions are not allowed in a WHERE after a RETURN that does not aggregate" },
+        error.UnsupportedGroupedHavingPredicate => .{ .code = "0A000", .message = "A pattern or subquery predicate, or an aggregate of a list comprehension variable, is not supported in a grouped HAVING" },
+        // SONNY-2675: a HAVING (or WHERE after RETURN) name that is no column,
+        // binding or parameter; it used to evaluate to NULL (GAP-0926).
+        error.UnknownHavingReference => .{ .code = "42703", .message = "A HAVING (or a WHERE after RETURN) names something that is no column, binding or parameter" },
+        // SONNY-2683: the executors of these shapes ignored a GROUP BY, HAVING
+        // or WHERE after RETURN; refuse it rather than return other rows.
+        // CANARY: REQ=REQ-SONNY-2683-RETURN-SHAPES; FEATURE="LegacyReturnProjection"; ASPECT=SqlstateMapping; STATUS=TESTED; TEST=tests/test_sonny2683_return_shapes.zig; OWNER=engine; UPDATED=2026-09-25
+        error.UnsupportedGroupedReturn => .{ .code = "0A000", .message = "GROUP BY, HAVING and a WHERE after RETURN are not supported on a RETURN after CREATE, MERGE, DELETE or a procedure CALL" },
+        // SONNY-2694: a statement that deletes returns its RETURN after the
+        // DELETE frees what it deleted.
+        // SONNY-2707: `SET r.x` on a variable-length relationship (a list of
+        // edges) or on a path variable.
+        // SONNY-3248 (round-4a review M-2): one SET clause assigned one
+        // property of an element twice; the second silently won.
+        error.RepeatedSetTarget => .{ .code = "22G03", .message = "A SET clause assigns one property of an element more than once (or `SET n = {map}` beside another assignment to n); its values are evaluated together, so there is no order to settle them. Split it into two SET clauses" },
+        error.OptionalPathVariable => .{ .code = "0A000", .message = "A path variable on an OPTIONAL MATCH pattern after the first is not supported; return the pattern's nodes and relationships instead" },
+        error.VariableLengthPathWrite => .{ .code = "0A000", .message = "A SET or REMOVE cannot target a variable-length relationship variable (the list of its edges) or a path variable; target the path's nodes" },
+        error.DeleteReturnsDeletedElement => .{ .code = "0A000", .message = "A RETURN after DELETE cannot return an element the statement deletes (a node, an edge or a path through one), or a JSONB, XML, URL, DOMAIN, bit string or extended value; return its properties or an aggregate" },
+        // SONNY-3040, SONNY-3041, SONNY-3043: a write clause the statement's
+        // shape does not apply is refused, before anything is written, rather
+        // than dropped.
+        error.WriteClauseNotApplied => .{ .code = "0A000", .message = "This statement writes in a shape that is not supported: a statement that writes is accepted only in the allowlisted shapes (CREATE/INSERT; MERGE; MATCH ... [WHERE] SET/REMOVE/DELETE/CREATE/MERGE; MATCH ... WITH ... SET/REMOVE/DELETE, or one CREATE or MERGE; each after an optional WITH of values or an UNWIND, in a FOR body, under PROFILE, or in a UNION of MATCH ... SET parts), with every variable bound, and no write inside an expression. Split the statement" },
+        error.TooManyWriteClauses => .{ .code = "54000", .message = "A query part may carry at most 1024 SET, REMOVE, CREATE and MERGE clauses" },
+        // SONNY-3244: the parser's limits (gql/parser.zig `max_*`).
+        error.TooManyStatements => .{ .code = "54000", .message = "A request may carry at most 1024 statements" },
+        error.ParseMemoryLimit => .{ .code = "54000", .message = "Parsing the request needs more than 64 MiB" },
+        error.QueryNestingTooDeep => .{ .code = "54001", .message = "Queries may nest at most 10 deep (WITH chain parts, CALL { }, IN (subquery), FOR bodies, CTE bodies)" },
         error.StringDataRightTruncation => .{ .code = "22001", .message = "String data right truncation" },
         error.InvalidKeyProvider => .{ .code = "42704", .message = "Invalid TDE key provider" },
         error.InvalidGuardrailConfiguration => .{ .code = "42704", .message = "Invalid CDC guardrail configuration" },
@@ -238,6 +352,20 @@ pub fn mapError(err: anyerror) ErrorInfo {
         // concrete tenant scope (unset/empty/"default"). Surface as a
         // permission-denied class error rather than the generic internal fallback.
         error.TenantScopeRequired => .{ .code = "42501", .message = "Tenant scope required: strict tenancy is enabled and this session has no concrete tenant scope" },
+        // SONNY-2733: geode.tenant.backfill_edge_tags refusals.
+        error.TenantScopedSession => .{ .code = "42501", .message = "geode.tenant.backfill_edge_tags changes every tenant's edges; run it in a session with no tenant scope" },
+        error.GraphLockHeld => .{ .code = "0A000", .message = "geode.tenant.backfill_edge_tags takes each graph's lock itself; send it as the only statement in its request" },
+        error.BackfillInTransaction => .{ .code = "25000", .message = "geode.tenant.backfill_edge_tags cannot run inside a transaction: ROLLBACK would not undo its re-tags (a dry run can)" },
+        error.BackfillProjection => .{ .code = "0A000", .message = "geode.tenant.backfill_edge_tags takes no RETURN or ORDER BY: it runs with no statement lock, and they would read the store; YIELD its columns instead" },
+        // SONNY-2686: a MERGE whose pattern only nodes the session's row-level
+        // security hides match is refused (nothing bound, updated or created)
+        // rather than binding the hidden node or creating a duplicate of it.
+        // CANARY: REQ=REQ-SONNY-2686-MERGE-ROW-VISIBILITY; FEATURE="MergeRowVisibility"; ASPECT=SqlstateMapping; STATUS=TESTED; TEST=tests/test_sonny2686_merge_rls.zig; OWNER=security; UPDATED=2026-09-25
+        error.MergeMatchNotVisible => .{ .code = "42501", .message = "MergeMatchNotVisible: the MERGE pattern matches an existing node that row-level security hides from this session; the statement was refused, and nothing was bound, updated or created" },
+        // SONNY-2691 item 5: the evaluator's row visibility was never
+        // installed in this process; the statement is refused rather than
+        // answered without the session's RLS policies.
+        error.EvaluatorNotInitialized => .{ .code = "XX000", .message = "EvaluatorNotInitialized: the query evaluator's execution layer and row-level security are not initialized in this process; the statement was refused" },
         error.SearchNotPermitted => .{ .code = "42501", .message = "Access denied: READ_PLAINTEXT privilege required for encrypted searchable field" },
         error.InvalidIpAddress => .{ .code = "22P02", .message = "Invalid IP address format" },
         error.InvalidMac, error.InvalidMacFormat, error.InvalidMacTag => .{ .code = "22P02", .message = "Invalid MAC address format" },
@@ -435,8 +563,14 @@ fn dupOrderKeys(allocator: std.mem.Allocator, keys: []const []const u8) !std.Arr
     return list;
 }
 
+/// Leading rows `inferColumnType` samples to type a column. SONNY-1221: the
+/// node-scan fast path builds exactly this many rows before its schema frame
+/// (`NodeScanStream.prefetchSchemaSample`), so both paths type a column from
+/// the same rows.
+pub const column_type_sample_rows: usize = 10;
+
 fn inferColumnType(rows: [][]value_types.Value, col_idx: usize) []const u8 {
-    const sample_size = @min(rows.len, 10);
+    const sample_size = @min(rows.len, column_type_sample_rows);
     for (rows[0..sample_size]) |row| {
         if (col_idx >= row.len) continue;
         const val = row[col_idx];
@@ -581,7 +715,9 @@ fn propertyValueToProto(allocator: std.mem.Allocator, value: graph_store.Propert
 /// e.g., coeff=1999, scale=2 → "19.99"; coeff=5, scale=2 → "0.05"
 fn reconstructDecimalRepr(allocator: std.mem.Allocator, coeff: i128, scale: u8) ![]const u8 {
     const is_negative = coeff < 0;
-    const abs_coeff: u128 = if (is_negative) @intCast(-coeff) else @intCast(coeff);
+    // SONNY-2727, SONNY-2769: `@abs` has a u128 result, so the smallest i128
+    // has a magnitude too; `-coeff` overflowed for minInt(i128).
+    const abs_coeff: u128 = @abs(coeff);
     const digits = try std.fmt.allocPrint(allocator, "{d}", .{abs_coeff});
     defer allocator.free(digits);
 

@@ -113,6 +113,8 @@ fn buildSecurityGraph(store: *graph_store.GraphStore) !void {
 
     // A row-level-security policy node.
     try backend.persistPolicy(.{
+        .kind = .rls,
+        .mode = .create,
         .policy_id = POLICY_ID,
         .name = "viewer_can_read",
         .description = "viewer read policy",

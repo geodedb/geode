@@ -11,9 +11,13 @@ test "TestCANARY_REQ_GQL_075_AutoCalibrationAdjustsAlpha" {
     var i: usize = 0;
     while (i < 50) : (i += 1) {
         reg.updateAdaptive(.Scan, 1000, 1000 + @as(f64, @floatFromInt(i % 2))); // near constant
-        // Expand oscillates widely
-        const delta: f64 = @floatFromInt((i * 97) % 800);
-        reg.updateAdaptive(.Expand, 1000, 1000 + delta);
+        // Expand oscillates widely: actual/estimate alternates 0.2x / 3.0x.
+        // SONNY-2394: the old +[0,800) row offset kept the ratio within
+        // [1.0, 1.8), whose EMA CV peaks at ~0.21 -- below the documented
+        // volatile threshold (variance_unstable_threshold = 0.30) -- so the
+        // "volatile" pattern was only ever classified moderate.
+        const actual: f64 = if (i % 2 == 0) 200 else 3000;
+        reg.updateAdaptive(.Expand, 1000, actual);
     }
     const report = calib.VarianceAutoCalibrator.calibrate(&reg);
     // Expect at least one volatile classification and one stable.

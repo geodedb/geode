@@ -26,6 +26,7 @@ const fle_integration = @import("fle_integration.zig");
 const write_budget = @import("write_budget.zig");
 const id_map_mod = @import("storage/id_map.zig");
 const hydration_snapshot = @import("storage/hydration_snapshot.zig");
+const value_order = @import("execution/value_order.zig");
 const uuid = @import("uuid");
 const sharded_store = @import("graph_storage").sharded_store;
 // SONNY-1330: PUBLIC so `execution/set_operations.zig` can open/close the
@@ -1351,12 +1352,35 @@ fn isSecurityGraphName(graph_name: []const u8) bool {
     return std.mem.eql(u8, graph_name, SECURITY_GRAPH_NAME);
 }
 
+/// SONNY-2733: is `graph_name` one of the engine's own graphs? They are named
+/// `__geode_…`, like `SECURITY_GRAPH_NAME` (users, roles, policies).
+/// Store-wide admin passes over user data, such as the edge tag backfill,
+/// leave them alone.
+pub fn isInternalGraphName(graph_name: []const u8) bool {
+    return std.mem.startsWith(u8, graph_name, "__geode_");
+}
+
 fn encodePersistedPublicId(buf: *[16]u8, public_id: u64) []const u8 {
     return std.fmt.bufPrint(buf, "{x:0>16}", .{public_id}) catch unreachable;
 }
 
+/// A persisted public id (hex, or decimal in older files), or null.
+///
+/// SONNY-2806 (round 8): a public id never has bit 63 set. Ids are a 48-bit
+/// millisecond clock shifted left by 16 (`encodeTimeBasedNodeId`), and
+/// MERGE's index keeps a flag in that bit (`merge_entry_shared`), so a node
+/// id with it set would read there as a flagged entry. A persisted id with
+/// the bit set is corrupt: it is refused, with an error in the log, and the
+/// caller skips the record as it skips any id it cannot parse.
 pub fn parsePersistedPublicId(text: []const u8) ?u64 {
-    return std.fmt.parseUnsigned(u64, text, 16) catch std.fmt.parseUnsigned(u64, text, 10) catch null;
+    const id = std.fmt.parseUnsigned(u64, text, 16) catch std.fmt.parseUnsigned(u64, text, 10) catch return null;
+    if (id & merge_entry_shared != 0) {
+        log.err("refusing a persisted public id with bit 63 set: no id has it, and MERGE's index flags entries with it", &.{
+            Attr.string("id", text),
+        });
+        return null;
+    }
+    return id;
 }
 
 /// Check whether a byte slice looks like a serialized FLE EnvelopeV1.
@@ -1612,9 +1636,75 @@ pub const LabelPosting = struct {
 
 const merge_property_index_shard_count: usize = 256;
 
+// CANARY: REQ=REQ-SONNY-2806-MERGE-EQUAL-HOLDERS; FEATURE="MergeIdempotency"; ASPECT=LowestHolderEntry; STATUS=TESTED; TEST=tests/test_sonny2806_merge_equal_holders.zig; OWNER=storage; UPDATED=2026-09-27
+/// SONNY-2806 (round 7): a merge-index entry is a node id plus this flag.
+/// Two nodes can hold one key: 1 and 1.0 key alike (the key is the number's
+/// value), and CREATE writes no uniqueness. The entry records:
+///   * `id`: the only node that has held the key;
+///   * `merge_entry_shared | id`: two or more nodes have held it, and `id`
+///     is the lowest of them;
+///   * `merge_entry_shared` alone (node ids start at 1): the lowest holder
+///     no longer holds the key and others may. The entry is unresolved, and
+///     the next lookup finds the lowest holder and settles the entry
+///     (`GraphStore.resolveMergeHolder`): through the exact node-property
+///     index, which lists every node holding the value, or, when that index
+///     cannot answer, by scanning the label's postings in ascending id order.
+/// The rule is: MERGE matches the lowest node id among the nodes holding the
+/// key, on every path (the executor, the server's bulk MERGE, a reopened
+/// store) and whatever the order the nodes were written or hydrated in. A
+/// miss (no entry) stays authoritative: every holder writes the entry, and
+/// the entry goes only when its only holder does.
+///
+/// Round 8: a node id never has this bit set (`parsePersistedPublicId`).
+const merge_entry_shared: u64 = @as(u64, 1) << 63;
+
+/// The entry after `node_id` is recorded as a holder of its key.
+/// `node_id` never has bit 63 set: `MergePropertyIndex.putOrUpdate` refuses
+/// one.
+fn mergeEntryWithHolder(entry: u64, node_id: u64) u64 {
+    if (entry == node_id) return entry;
+    // Unresolved: a lower holder than `node_id` may exist; the next lookup
+    // resolves it. The put still bumps the shard's generation, so a lookup
+    // settling the entry meanwhile does not drop it (`MergePropertyIndex.settle`).
+    if (entry == merge_entry_shared) return entry;
+    return merge_entry_shared | @min(entry & ~merge_entry_shared, node_id);
+}
+
+/// What a lookup found when it settled an entry: the lowest node holding the
+/// key, or null for none, and whether that node is the only holder. `sole`
+/// is known only when the lookup read every holder (through the exact
+/// index); a label scan stops at the first holder and leaves it false.
+const MergeHolders = struct {
+    lowest: ?u64 = null,
+    sole: bool = false,
+};
+
+/// SONNY-2806 (round 8): how lookups found the holders of an entry they
+/// settled (`GraphStore.findMergeHolders`): through the exact node-property
+/// index, or by a label scan.
+var g_merge_resolve_exact = std.atomic.Value(u64).init(0);
+var g_merge_resolve_scan = std.atomic.Value(u64).init(0);
+
+pub const MergeResolveCounts = struct { exact: u64, scan: u64 };
+
+pub fn mergeResolveCounts() MergeResolveCounts {
+    return .{ .exact = g_merge_resolve_exact.load(.monotonic), .scan = g_merge_resolve_scan.load(.monotonic) };
+}
+
+pub fn resetMergeResolveCounts() void {
+    g_merge_resolve_exact.store(0, .monotonic);
+    g_merge_resolve_scan.store(0, .monotonic);
+}
+
 const MergePropertyIndexShard = struct {
     map: std.StringHashMap(u64),
     mutex: std.Io.Mutex = std.Io.Mutex.init,
+    /// SONNY-2806 (round 8): bumped, under `mutex`, by every call that
+    /// writes the shard (a put, a remove, a snapshot entry, a settle), even
+    /// one that leaves the entry as it was. A lookup notes it with the entry
+    /// it reads, and settles that entry only if it is unchanged
+    /// (`MergePropertyIndex.settle`).
+    generation: u64 = 0,
 
     fn init(allocator: std.mem.Allocator) MergePropertyIndexShard {
         return .{ .map = std.StringHashMap(u64).init(allocator) };
@@ -1656,9 +1746,20 @@ pub const MergePropertyIndex = struct {
     }
 
     pub fn reset(self: *MergePropertyIndex) void {
+        // Keep each shard's generation moving forward, so a lookup that read
+        // an entry before the reset cannot settle one written after it.
+        var generations: [merge_property_index_shard_count]u64 = undefined;
+        for (&self.shards, &generations) |*shard, *g| g.* = shard.generation +% 1;
         self.deinit();
         self.* = MergePropertyIndex.init(self.allocator);
+        for (&self.shards, generations) |*shard, g| shard.generation = g;
     }
+
+    /// An entry as a lookup read it, with its shard's generation then.
+    const Seen = struct {
+        entry: u64,
+        generation: u64,
+    };
 
     pub fn count(self: *MergePropertyIndex) u32 {
         const io = std.Io.Threaded.global_single_threaded.io();
@@ -1692,14 +1793,30 @@ pub const MergePropertyIndex = struct {
         }
     }
 
+    /// Record that `node_id` holds `key`. The entry keeps the LOWEST holder
+    /// (see `merge_entry_shared`), so the node a MERGE matches does not depend
+    /// on the order nodes were written or hydrated in.
+    ///
+    /// An id with bit 63 set is refused (`error.MergeHolderIdFlagged`): the
+    /// bit flags an entry, so such an id stored as a first holder would read
+    /// as "shared, lowest holder <the id without bit 63>", another node. The
+    /// round-8 re-review (M5): this was a `std.debug.assert`, which a
+    /// ReleaseFast build strips, and it covered an existing entry only.
     fn putOrUpdate(self: *MergePropertyIndex, key: []const u8, node_id: u64) !void {
+        if (node_id & merge_entry_shared != 0) {
+            log.err("refusing a MERGE index holder whose id has bit 63 set: the bit flags an entry", &.{
+                Attr.uint("node_id", node_id),
+            });
+            return error.MergeHolderIdFlagged;
+        }
         const io = std.Io.Threaded.global_single_threaded.io();
         const shard = &self.shards[shardForKey(key)];
         shard.mutex.lockUncancelable(io);
         defer shard.mutex.unlock(io);
+        shard.generation +%= 1;
 
         if (shard.map.getPtr(key)) |existing| {
-            existing.* = node_id;
+            existing.* = mergeEntryWithHolder(existing.*, node_id);
             return;
         }
 
@@ -1708,15 +1825,92 @@ pub const MergePropertyIndex = struct {
         try shard.map.put(key_copy, node_id);
     }
 
-    fn remove(self: *MergePropertyIndex, key: []const u8) void {
+    /// Store `entry` as is (a hydration snapshot's record, flag included).
+    fn putEntry(self: *MergePropertyIndex, key: []const u8, entry: u64) !void {
+        const io = std.Io.Threaded.global_single_threaded.io();
+        const shard = &self.shards[shardForKey(key)];
+        shard.mutex.lockUncancelable(io);
+        defer shard.mutex.unlock(io);
+        shard.generation +%= 1;
+
+        if (shard.map.getPtr(key)) |existing| {
+            existing.* = entry;
+            return;
+        }
+        const key_copy = try self.allocator.dupe(u8, key);
+        errdefer self.allocator.free(key_copy);
+        try shard.map.put(key_copy, entry);
+    }
+
+    /// `node_id` no longer holds `key`. The entry is dropped only when it
+    /// names that node as the key's only holder. When it names it as the
+    /// lowest of several, it becomes unresolved: the other holders are not
+    /// recorded, so the next lookup finds the lowest one
+    /// (`GraphStore.resolveMergeHolder`). An entry naming another node is
+    /// kept. (The removal was unconditional
+    /// before round 7: deleting either of two equal nodes dropped the entry,
+    /// and a later MERGE trusted the miss and created a third node.)
+    fn remove(self: *MergePropertyIndex, key: []const u8, node_id: u64) void {
+        const io = std.Io.Threaded.global_single_threaded.io();
+        const shard = &self.shards[shardForKey(key)];
+        shard.mutex.lockUncancelable(io);
+        defer shard.mutex.unlock(io);
+        shard.generation +%= 1;
+
+        const entry = shard.map.getPtr(key) orelse return;
+        if (entry.* == node_id) {
+            if (shard.map.fetchRemove(key)) |kv| self.allocator.free(kv.key);
+        } else if (entry.* == (merge_entry_shared | node_id)) {
+            entry.* = merge_entry_shared;
+        }
+    }
+
+    /// Settle an entry a lookup could not trust (unresolved, or naming a
+    /// node that no longer exists) from what the lookup found (`found`):
+    /// the key's lowest holder, recorded alone when it is the only one, or
+    /// none, which drops the entry. Returns whether it applied.
+    ///
+    /// SONNY-2806 (round 8): it applies only when nothing wrote the shard
+    /// since the lookup read the entry (`seen`: the entry and the shard's
+    /// generation). Comparing the entry alone was not enough: a holder
+    /// written while the lookup searched leaves an unresolved entry as it is
+    /// (`mergeEntryWithHolder`), so a lookup that had not seen the new holder
+    /// dropped its entry, and the next MERGE created a second node. Lookups
+    /// run under SHARED graph locks (the QUIC edge fast path, the
+    /// group-commit workers), beside such writers. A holder the lookup's
+    /// search can see is written to the exact index and the label index
+    /// before its entry, so a holder it missed wrote the entry after the
+    /// lookup read it and moved the generation. A refused settle leaves the
+    /// entry for the next lookup. The generation is per shard, so a write to
+    /// another key of the shard also refuses it; that costs only a repeat of
+    /// the search.
+    fn settle(self: *MergePropertyIndex, key: []const u8, seen: Seen, found: MergeHolders) bool {
         const io = std.Io.Threaded.global_single_threaded.io();
         const shard = &self.shards[shardForKey(key)];
         shard.mutex.lockUncancelable(io);
         defer shard.mutex.unlock(io);
 
-        if (shard.map.fetchRemove(key)) |kv| {
+        if (shard.generation != seen.generation) return false;
+        const entry = shard.map.getPtr(key) orelse return false;
+        if (entry.* != seen.entry) return false;
+        shard.generation +%= 1;
+        if (found.lowest) |id| {
+            entry.* = if (found.sole) id else merge_entry_shared | id;
+        } else if (shard.map.fetchRemove(key)) |kv| {
             self.allocator.free(kv.key);
         }
+        return true;
+    }
+
+    /// The entry for `key`, with its shard's generation, for a lookup that
+    /// may settle it.
+    fn getSeen(self: *MergePropertyIndex, key: []const u8) ?Seen {
+        const io = std.Io.Threaded.global_single_threaded.io();
+        const shard = &self.shards[shardForKey(key)];
+        shard.mutex.lockUncancelable(io);
+        defer shard.mutex.unlock(io);
+        const entry = shard.map.get(key) orelse return null;
+        return .{ .entry = entry, .generation = shard.generation };
     }
 
     fn get(self: *MergePropertyIndex, key: []const u8) ?u64 {
@@ -2815,6 +3009,30 @@ pub const GraphStore = struct {
         return box;
     }
 
+    // CANARY: REQ=REQ-SONNY-2679-GATE-MEMORY; FEATURE="TraversalRowVisibility"; ASPECT=TransientNodeRead; STATUS=TESTED; TEST=tests/test_sonny2679_rls_hop_targets.zig; OWNER=security; UPDATED=2026-09-25
+    /// SONNY-2679: decide something about node `node_id` from a TRANSIENT copy
+    /// and retain nothing. `getNodePtrForScan` boxes every node it hands out
+    /// into `scan_hydrated_nodes`, which is freed only at the graph's next
+    /// checkpoint and is charged to no read budget, so a traversal gate that
+    /// looked at every node it stepped onto through it grew the store by one
+    /// node copy per step. Here the copy (a snapshot of the resident node, taken
+    /// under the shard's SHARED map lock, or an engine rebuild on a miss) is
+    /// freed before this returns, and `decide` runs outside every store lock.
+    /// Null when the node exists in neither the cache nor the engine. Like
+    /// `getNodePtrForScan`, it never mutates the bounded cache.
+    pub fn decideOnTransientNode(
+        self: *const GraphStore,
+        node_id: u64,
+        ctx: anytype,
+        comptime decide: fn (@TypeOf(ctx), *const Node) bool,
+    ) ?bool {
+        const mut: *GraphStore = @constCast(self);
+        var node: Node = mut.snapshotResidentNodeForScan(node_id) orelse
+            ((hydrateNodeCb(@ptrCast(mut), mut.allocator, node_id) catch return null) orelse return null);
+        defer freeNodeValue(mut.allocator, &node);
+        return decide(ctx, &node);
+    }
+
     /// SONNY-1979: deep-copy the RESIDENT node body for `node_id` into a caller-
     /// owned `Node`, or null when it is not resident (→ caller falls back to the
     /// engine rebuild). Taken under the shard's SHARED `map_lock` so a concurrent
@@ -3283,9 +3501,11 @@ pub const GraphStore = struct {
     // property fetch — see hydrateAdjFromEngine and the loop1 edge rebuild.
 
     /// GAP-0891 (RC-2): edge analog of `persistNodeTenantId`. No-op for
-    /// `DEFAULT_TENANT_ID`; absent-on-read means default. When the adapter has
-    /// no edge-property setter the tag simply is not persisted (the
-    /// endpoint-derived edge-visibility bridge still recovers visibility).
+    /// `DEFAULT_TENANT_ID`; absent-on-read means default. An adapter with no
+    /// edge-property setter fails with `error.Unsupported`, and every caller
+    /// then fails its write: a tag that is not stored would read back as
+    /// `default` after a restart, and since SONNY-2693 a `default` edge is
+    /// hidden from every tenant (there is no endpoint-derived bridge).
     fn persistEdgeTenantId(
         vt: AdapterVTable,
         graph_name: []const u8,
@@ -5323,17 +5543,90 @@ pub const GraphStore = struct {
         }
     }
 
+    // CANARY: REQ=REQ-SONNY-2806-MERGE-INDEX-NUMBER-KEY; FEATURE="MergeIdempotency"; ASPECT=ExactNumberKey; STATUS=TESTED; TEST=tests/test_sonny2806_exact_property_matching.zig; OWNER=storage; UPDATED=2026-09-27
     /// Serialize a PropertyValue to bytes for merge property index keys.
     /// Returns the number of bytes written, or null if the type is not indexable.
+    ///
+    /// SONNY-2806 (round 6): a number whose value is an integer keys by that
+    /// value (`value_order.writeNumberKey`, the key GROUP BY uses), whatever
+    /// its representation: INT 1, DECIMAL 1.0 and 1.00, a SMALLINT 1 and a
+    /// DOUBLE 1.0 share one entry. An integer keyed by its decimal text and a
+    /// decimal or a double was not indexed, so `MERGE (n:U {x: 1})` trusted a
+    /// miss and duplicated a stored 1.0, while `MERGE {x: 1.0}` matched a
+    /// stored 1 (the scan compares by value).
+    ///
+    /// Round 7: any other number (1.5, 0.1, a double past 2^63, NaN) is not
+    /// indexed, as a decimal or a double was not before round 6. It can equal
+    /// no integer, so an integer's miss stays authoritative; MERGE finds it by
+    /// a scan (the executor) or through the exact node-property index (the
+    /// server's bulk MERGE). Indexing it tripled the index for 2000 nodes with
+    /// an INT, a DOUBLE and a DECIMAL property (2000 -> 6000 entries). Format
+    /// edition: HYDRATION_SNAP_VERSION 4.
+    ///
+    /// Round 8: the value is tagged by its kind (`writeMergeValue`), so a
+    /// string no longer shares a key with a boolean ('true' and true) or an
+    /// integer (a 9-byte string whose bytes are an integer's key). A shared
+    /// key made the server's bulk MERGE, which takes the entry's node as the
+    /// match, match a node of the other kind, and a lookup that settles an
+    /// entry through the exact node-property index (keyed by kind) would
+    /// miss the other kind's holders. Format edition:
+    /// HYDRATION_SNAP_VERSION 5.
     fn serializePropValueForIndex(buf: []u8, value: PropertyValue) ?usize {
+        const len = writeMergeValue(buf, value) orelse return null;
+        // Round 7: a number is kept only when it is an integer ('I').
+        if (numberOfProperty(value) != null and buf[0] != 'I') return null;
+        return len;
+    }
+
+    /// A value's bytes in a merge key, tagged by kind, so that two values
+    /// write the same bytes exactly when MERGE calls them equal (as
+    /// `execution.valuesEqual` does for these kinds):
+    ///   * a number, of any representation: `value_order.writeNumberKey`
+    ///     ('I' for an integer, 'F', 'C' or 'n' for any other number);
+    ///   * a string: 's' and its bytes;
+    ///   * a boolean: 'b' and 1 or 0.
+    /// Null for any other value, or when `buf` is too small. MERGE's index
+    /// keeps the integers, strings and booleans (`serializePropValueForIndex`);
+    /// a lookup of any number compares by these bytes (`findMergeHolders`).
+    fn writeMergeValue(buf: []u8, value: PropertyValue) ?usize {
         var writer: std.Io.Writer = .fixed(buf);
+        if (numberOfProperty(value)) |n| {
+            value_order.writeNumberKey(&writer, n) catch return null;
+            return writer.end;
+        }
         switch (value) {
-            .String => |s| writer.writeAll(s) catch return null,
-            .Int => |i| writer.print("{d}", .{i}) catch return null,
-            .Bool => |b| writer.writeAll(if (b) "true" else "false") catch return null,
+            .String => |s| {
+                writer.writeByte('s') catch return null;
+                writer.writeAll(s) catch return null;
+            },
+            .Bool => |b| writer.writeAll(if (b) "b\x01" else "b\x00") catch return null,
             else => return null,
         }
         return writer.end;
+    }
+
+    /// Whether a property value is a number, of any representation.
+    pub fn isNumberProperty(value: PropertyValue) bool {
+        return numberOfProperty(value) != null;
+    }
+
+    /// A stored property as a number, whatever its representation, or null.
+    pub fn numberOfProperty(value: PropertyValue) ?value_order.Number {
+        return switch (value) {
+            .Int => |i| .{ .exact = .{ .coeff = i, .scale = 0 } },
+            .Float => |f| .{ .float = f },
+            .Decimal => |d| .{ .exact = .{ .coeff = d.coeff, .scale = d.scale } },
+            .ExtValue => |ext| switch (ext) {
+                .Int => |i| .{ .exact = .{ .coeff = i, .scale = 0 } },
+                .SmallInt => |i| .{ .exact = .{ .coeff = i, .scale = 0 } },
+                .BigInt => |i| .{ .exact = .{ .coeff = i, .scale = 0 } },
+                .Real => |f| .{ .float = f },
+                .Double => |f| .{ .float = f },
+                .Decimal => |d| .{ .exact = .{ .coeff = d.coeff, .scale = d.scale } },
+                else => null,
+            },
+            else => null,
+        };
     }
 
     /// Build a merge property index key into a stack buffer.
@@ -5418,12 +5711,23 @@ pub const GraphStore = struct {
         }
     }
 
-    /// Remove entries from the merge property index for each label on the node.
-    fn removeFromMergePropertyIndex(self: *GraphStore, graph_name: []const u8, labels: []const []const u8, prop_key: []const u8, prop_value: PropertyValue) void {
+    /// `node_id` no longer holds `prop_value` under each of its labels (see
+    /// `MergePropertyIndex.remove`). `replacement` is the value a SET writes
+    /// in its place: where it keys the same (1 over 1.0, or the same value
+    /// again, as an ON MATCH SET of the merge key writes), the entry is kept,
+    /// since removing the lowest of several holders would leave it unresolved
+    /// and cost the next MERGE a search for its holders.
+    fn removeFromMergePropertyIndex(self: *GraphStore, graph_name: []const u8, labels: []const []const u8, prop_key: []const u8, prop_value: PropertyValue, node_id: u64, replacement: ?PropertyValue) void {
         var buf: [1024]u8 = undefined;
+        var replacement_buf: [1024]u8 = undefined;
         for (labels) |label| {
             const probe = buildMergeIndexKey(&buf, graph_name, label, prop_key, prop_value) orelse continue;
-            self.merge_prop_index.remove(probe);
+            if (replacement) |r| {
+                if (buildMergeIndexKey(&replacement_buf, graph_name, label, prop_key, r)) |same| {
+                    if (std.mem.eql(u8, same, probe)) continue;
+                }
+            }
+            self.merge_prop_index.remove(probe, node_id);
         }
     }
 
@@ -5434,7 +5738,7 @@ pub const GraphStore = struct {
         while (prop_iter.next()) |prop_entry| {
             for (node.labels) |label| {
                 const probe = buildMergeIndexKey(&buf, node.graph_name, label, prop_entry.key_ptr.*, prop_entry.value_ptr.*) orelse continue;
-                self.merge_prop_index.remove(probe);
+                self.merge_prop_index.remove(probe, node.id);
             }
         }
     }
@@ -5461,35 +5765,244 @@ pub const GraphStore = struct {
     /// would otherwise race the `.get` here (HashMap pointer_stability
     /// assertion fires on concurrent rehash). All callers already pass
     /// `*GraphStore`.
+    ///
+    /// SONNY-2806 (round 7): `.found` names the LOWEST node id among the
+    /// nodes holding the key (`merge_entry_shared`). An unresolved entry, or
+    /// one naming a node that no longer exists, is settled here
+    /// (`resolveMergeHolder`), so every caller (the executor, the server's
+    /// bulk MERGE, edge endpoint resolution) gets the same authoritative
+    /// answer.
     pub fn lookupMergeCandidate(self: *GraphStore, graph_name: []const u8, label: []const u8, prop_key: []const u8, prop_value: PropertyValue, out_node_id: *u64) MergeLookupResult {
         self.ensureGraphHydrated(graph_name); // PHASE 1b chokepoint (merge-MISS authority)
         var buf: [1024]u8 = undefined;
         const probe = buildMergeIndexKey(&buf, graph_name, label, prop_key, prop_value) orelse return .not_indexable;
 
-        const node_id = self.merge_prop_index.get(probe) orelse return .not_found;
-        // Verify the node still exists (the index could be stale after a failed
-        // delete). The resident cache is a BOUNDED view: an evicted-but-live
-        // node misses `nodes.get`. Verifying via `nodes.get` alone would report
-        // .not_found for an evicted node and make a re-MERGE take the CREATE
-        // branch → DUPLICATE (breaks idempotent/resumable seeding and the
-        // from-dump EDGE phase that re-probes by {source,source_id} at scale).
-        // Confirm existence + graph via the eviction-INDEPENDENT IdMaps first;
-        // fall back to the resident cache when no adapter/IdMap is present
-        // (pure in-memory deployments).
+        const seen = self.merge_prop_index.getSeen(probe) orelse return .not_found;
+        if (self.liveMergeHolder(seen.entry, graph_name)) |node_id| {
+            out_node_id.* = node_id;
+            return .found;
+        }
+        // The value's bytes end the key (`buildMergeIndexKey`).
+        const value_key = probe[graph_name.len + label.len + prop_key.len + 3 ..];
+        return self.resolveMergeHolder(graph_name, label, probe, seen, .{ .property = .{ .key = prop_key, .value = prop_value, .value_key = value_key } }, out_node_id);
+    }
+
+    /// The node holding a merge key when it is the key's ONLY holder (the
+    /// entry was never shared), for a MATCH, which wants every node holding
+    /// the key. SONNY-2806 (round 7): the legacy executor's point read
+    /// (`MATCH (n:T {x: 1})`) took the entry as the whole answer, so with
+    /// 1 and 1.0 (or two CREATEd 1s) it returned one row. A key two nodes
+    /// have held answers `.not_indexable`, and the caller scans the label.
+    /// (Round 8: a settle that finds a single holder records it alone again,
+    /// so such a key answers here once more.)
+    pub fn lookupOnlyMergeHolder(self: *GraphStore, graph_name: []const u8, label: []const u8, prop_key: []const u8, prop_value: PropertyValue, out_node_id: *u64) MergeLookupResult {
+        self.ensureGraphHydrated(graph_name); // PHASE 1b chokepoint
+        var buf: [1024]u8 = undefined;
+        const probe = buildMergeIndexKey(&buf, graph_name, label, prop_key, prop_value) orelse return .not_indexable;
+        const entry = self.merge_prop_index.get(probe) orelse return .not_found;
+        if (entry & merge_entry_shared != 0) return .not_indexable;
+        out_node_id.* = self.liveMergeHolder(entry, graph_name) orelse return .not_indexable;
+        return .found;
+    }
+
+    /// The node an entry names, if it still exists in `graph_name`.
+    ///
+    /// The resident cache is a BOUNDED view: an evicted-but-live node misses
+    /// `nodes.get`. Verifying via `nodes.get` alone would report .not_found
+    /// for an evicted node and make a re-MERGE take the CREATE branch →
+    /// DUPLICATE (breaks idempotent/resumable seeding and the from-dump EDGE
+    /// phase that re-probes by {source,source_id} at scale). Confirm
+    /// existence + graph via the eviction-INDEPENDENT IdMaps first; fall back
+    /// to the resident cache when no adapter/IdMap is present (pure in-memory
+    /// deployments).
+    fn liveMergeHolder(self: *GraphStore, entry: u64, graph_name: []const u8) ?u64 {
+        if (entry == merge_entry_shared) return null;
+        const node_id = entry & ~merge_entry_shared;
         if (self.resolveNodeGraphSlot(node_id)) |gs| {
-            if (std.mem.eql(u8, gs.graph_name, graph_name)) {
-                out_node_id.* = node_id;
-                return .found;
-            }
-            return .not_found;
+            return if (std.mem.eql(u8, gs.graph_name, graph_name)) node_id else null;
         }
         if (self.nodes.get(node_id)) |node| {
-            if (std.mem.eql(u8, node.graph_name, graph_name)) {
-                out_node_id.* = node_id;
-                return .found;
+            if (std.mem.eql(u8, node.graph_name, graph_name)) return node_id;
+        }
+        return null;
+    }
+
+    /// What a merge key is built from: one property, or a registered
+    /// composite key's properties.
+    const MergeKeySource = union(enum) {
+        /// `value_key`: the value's `writeMergeValue` bytes.
+        property: struct { key: []const u8, value: PropertyValue, value_key: []const u8 },
+        /// `values` in the spec's (sorted) property order; `probe`: the key.
+        composite: struct { spec: *const CompositeKeySpec, values: []const PropertyValue, probe: []const u8 },
+    };
+
+    // CANARY: REQ=REQ-SONNY-2806-MERGE-RESOLVE-EXACT; FEATURE="MergeIdempotency"; ASPECT=SettleThroughExactIndex; STATUS=TESTED; TEST=tests/test_sonny2806_merge_resolve.zig; OWNER=storage; UPDATED=2026-09-27
+    /// SONNY-2806 (round 7): settle an entry `lookupMergeCandidate` cannot
+    /// trust: unresolved (its lowest holder was removed while others may
+    /// remain) or naming a node that no longer exists. Finds the key's lowest
+    /// holder (`findMergeHolders`), records it (alone when it is the only
+    /// one), or drops the entry when no node holds the key. The settle
+    /// applies only if the shard is unchanged since `seen` was read
+    /// (round 8, `MergePropertyIndex.settle`); either way the answer is what
+    /// the search found.
+    fn resolveMergeHolder(
+        self: *GraphStore,
+        graph_name: []const u8,
+        label: []const u8,
+        probe: []const u8,
+        seen: MergePropertyIndex.Seen,
+        source: MergeKeySource,
+        out_node_id: *u64,
+    ) MergeLookupResult {
+        // A failed read leaves the entry as it is: the index cannot answer,
+        // and the caller falls back as for a value it cannot key.
+        const found = self.findMergeHolders(graph_name, label, source) catch return .not_indexable;
+        _ = self.merge_prop_index.settle(probe, seen, found);
+        out_node_id.* = found.lowest orelse return .not_found;
+        return .found;
+    }
+
+    /// SONNY-2806 (round 8): the lowest node of `label` in `graph_name`
+    /// holding `key` = `value`, compared by value (`writeMergeValue`: 1 and
+    /// 1.0, 1.5 and 1.50), for a value MERGE's index does not keep: a number
+    /// that is not an integer. The server's bulk MERGE resolves such a key
+    /// here (`StorageAdapter.findMergeNode`), through the exact node-property
+    /// index when it can answer and otherwise by a label scan (lean mode, or
+    /// the index deferred or rebuilding; `findMergeHolders`).
+    pub fn lowestMergeHolderByValue(self: *GraphStore, graph_name: []const u8, label: []const u8, key: []const u8, value: PropertyValue) !?u64 {
+        self.ensureGraphHydrated(graph_name); // PHASE 1b chokepoint
+        var buf: [1024]u8 = undefined;
+        const len = writeMergeValue(&buf, value) orelse return error.MergeValueNotIndexable;
+        const found = try self.findMergeHolders(graph_name, label, .{ .property = .{ .key = key, .value = value, .value_key = buf[0..len] } });
+        return found.lowest;
+    }
+
+    /// SONNY-2806 (round 8): the nodes of `label` holding the key `source`
+    /// describes: the lowest, and whether it is the only one.
+    ///
+    /// Through the exact node-property index when it can answer
+    /// (`StorageAdapter.exactIndexMergeCandidates`): it lists every node of
+    /// the label holding each value, so the cost is the key's holders (the
+    /// smallest posting of a composite key's values), and every holder is
+    /// read, so `sole` is known. Round 7 scanned the label for every such
+    /// entry, under the graph lock: 72 ms per key at 200,000 nodes, about 5 s
+    /// per key at 14.27M.
+    ///
+    /// By a scan of the label's postings, in ascending id order, stopping at
+    /// the first holder, when the exact index cannot answer: in lean mode
+    /// (GEODE_INDEX_MERGE_KEYS_ONLY), where it holds no value of a key
+    /// registered after its nodes were written, and while it is deferred or
+    /// being rebuilt after a reopen, which can take minutes (about 14 at 14M
+    /// nodes). The scan does not wait for that build: building or waiting
+    /// here would hold the caller's graph lock, and so stall the graph's
+    /// writers, for the whole build. Also without a storage adapter (the
+    /// in-memory store).
+    fn findMergeHolders(self: *GraphStore, graph_name: []const u8, label: []const u8, source: MergeKeySource) !MergeHolders {
+        if (self.exactIndexAdapter()) |adapter| {
+            const PropKV = graph_storage_adapter.StorageAdapter.PropKV;
+            var props_buf: [composite_index_max_props]PropKV = undefined;
+            const props: []const PropKV = switch (source) {
+                .property => |p| blk: {
+                    props_buf[0] = .{ .key = p.key, .value = p.value };
+                    break :blk props_buf[0..1];
+                },
+                .composite => |c| blk: {
+                    for (c.values, 0..) |v, i| props_buf[i] = .{ .key = c.spec.prop_bufs[i][0..c.spec.prop_lens[i]], .value = v };
+                    break :blk props_buf[0..c.values.len];
+                },
+            };
+            if (try adapter.exactIndexMergeCandidates(self, self.allocator, graph_name, label, props)) |ids| {
+                defer self.allocator.free(ids);
+                _ = g_merge_resolve_exact.fetchAdd(1, .monotonic);
+                var found: MergeHolders = .{};
+                var holders: usize = 0;
+                for (ids) |id| {
+                    if (!try self.holdsMergeKey(id, graph_name, label, source)) continue;
+                    holders += 1;
+                    if (found.lowest == null or id < found.lowest.?) found.lowest = id;
+                }
+                found.sole = holders == 1;
+                return found;
             }
         }
-        return .not_found;
+        _ = g_merge_resolve_scan.fetchAdd(1, .monotonic);
+        // A copy: under the bulk MERGE's SHARED graph lock other writers may
+        // append to the posting.
+        const ids = (try self.snapshotNodesByLabel(self.allocator, graph_name, label)) orelse return .{};
+        defer self.allocator.free(ids);
+        for (ids) |id| {
+            if (try self.holdsMergeKey(id, graph_name, label, source)) return .{ .lowest = id };
+        }
+        return .{};
+    }
+
+    /// The storage adapter whose exact node-property index describes this
+    /// store's nodes: the global adapter, when this is the global store.
+    fn exactIndexAdapter(self: *GraphStore) ?*graph_storage_adapter.StorageAdapter {
+        const adapter = global_adapter orelse return null;
+        const current = getCurrentGlobalStore() orelse return null;
+        return if (current == self) adapter else null;
+    }
+
+    fn nodeCarriesLabel(node: *const Node, label: []const u8) bool {
+        for (node.labels) |l| {
+            if (std.mem.eql(u8, l, label)) return true;
+        }
+        return false;
+    }
+
+    /// Whether node `id` of `graph_name` carries `label` and holds the key
+    /// `source` describes.
+    fn holdsMergeKey(self: *GraphStore, id: u64, graph_name: []const u8, label: []const u8, source: MergeKeySource) !bool {
+        const Check = struct {
+            graph_name: []const u8,
+            label: []const u8,
+            source: MergeKeySource,
+
+            fn holds(c: @This(), node: *const Node) bool {
+                if (!std.mem.eql(u8, node.graph_name, c.graph_name)) return false;
+                // The label's postings and the exact index can still list a
+                // node that no longer carries the label (a rolled-back
+                // `SET n:L`, SONNY-3059), and MERGE matches only a node that
+                // carries it.
+                if (!nodeCarriesLabel(node, c.label)) return false;
+                var buf: [1024]u8 = undefined;
+                switch (c.source) {
+                    .property => |p| {
+                        const value = node.properties.get(p.key) orelse return false;
+                        const len = writeMergeValue(&buf, value) orelse return false;
+                        return std.mem.eql(u8, buf[0..len], p.value_key);
+                    },
+                    .composite => |comp| {
+                        var values: [composite_index_max_props]PropertyValue = undefined;
+                        for (values[0..comp.spec.prop_count], 0..) |*v, i| {
+                            v.* = node.properties.get(comp.spec.prop_bufs[i][0..comp.spec.prop_lens[i]]) orelse return false;
+                        }
+                        const key = buildCompositeMergeIndexKey(&buf, c.graph_name, c.label, comp.spec, values[0..comp.spec.prop_count]) orelse return false;
+                        return std.mem.eql(u8, key, comp.probe);
+                    },
+                }
+            }
+        };
+        return self.residentNodeSatisfies(id, Check{ .graph_name = graph_name, .label = label, .source = source }, Check.holds);
+    }
+
+    /// Whether `pred(context, node)` holds for node `id`, or false when no
+    /// such node exists. The node is hydrated if it is not resident, then
+    /// read under its cache shard's SHARED lock: under a SHARED graph lock a
+    /// writer may realloc the node's property map (ENG-3954), and `pred` must
+    /// not call back into the cache. Retries when the node is evicted between
+    /// the hydration and the lock.
+    pub fn residentNodeSatisfies(self: *GraphStore, id: u64, context: anytype, comptime pred: fn (@TypeOf(context), *const Node) bool) !bool {
+        var attempts: usize = 0;
+        while (attempts < 4) : (attempts += 1) {
+            _ = (try self.nodes.getOrHydratePtr(id)) orelse return false;
+            self.nodes.lockShardShared(id);
+            defer self.nodes.unlockShardShared(id);
+            const node = self.nodes.getPtrUnlocked(id) orelse continue;
+            return pred(context, node);
+        }
+        return error.NodeEvictedWhileRead;
     }
 
     /// Build a COMPOSITE merge-index key into `buf` from a registered composite
@@ -5581,24 +6094,16 @@ pub const GraphStore = struct {
 
         var buf: [1024]u8 = undefined;
         const probe = buildCompositeMergeIndexKey(&buf, graph_name, label, spec, values[0..spec.prop_count]) orelse return .not_indexable;
-        const node_id = self.merge_prop_index.get(probe) orelse return .not_found;
+        const seen = self.merge_prop_index.getSeen(probe) orelse return .not_found;
 
         // Eviction-independent existence + graph validation (mirrors
-        // lookupMergeCandidate); no node-page read.
-        if (self.resolveNodeGraphSlot(node_id)) |gs| {
-            if (std.mem.eql(u8, gs.graph_name, graph_name)) {
-                out_node_id.* = node_id;
-                return .found;
-            }
-            return .not_found;
+        // lookupMergeCandidate); no node-page read. SONNY-2806 (round 7): an
+        // unresolved or dangling entry is settled as a single key's is.
+        if (self.liveMergeHolder(seen.entry, graph_name)) |node_id| {
+            out_node_id.* = node_id;
+            return .found;
         }
-        if (self.nodes.get(node_id)) |node| {
-            if (std.mem.eql(u8, node.graph_name, graph_name)) {
-                out_node_id.* = node_id;
-                return .found;
-            }
-        }
-        return .not_found;
+        return self.resolveMergeHolder(graph_name, label, probe, seen, .{ .composite = .{ .spec = spec, .values = values[0..spec.prop_count], .probe = probe } }, out_node_id);
     }
 
     fn findFilterValue(filters: []const graph_storage_adapter.StorageAdapter.PropKV, key: []const u8) ?PropertyValue {
@@ -5615,6 +6120,12 @@ pub const GraphStore = struct {
     /// composite by then). No-op when no composite keys are registered (the
     /// default for non-from-dump workloads), so plain ingest is unchanged.
     fn addNodeCompositeMergeEntries(self: *GraphStore, node: *const Node) void {
+        self.addNodeCompositeMergeEntriesForLabels(node, node.labels);
+    }
+
+    /// `addNodeCompositeMergeEntries` under `labels` only (SONNY-3109: a
+    /// label `SET n:L` adds).
+    fn addNodeCompositeMergeEntriesForLabels(self: *GraphStore, node: *const Node, labels: []const []const u8) void {
         const n_composites = blk: {
             g_lean_index_mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
             defer g_lean_index_mutex.unlock(std.Io.Threaded.global_single_threaded.io());
@@ -5650,7 +6161,7 @@ pub const GraphStore = struct {
             if (!have_all) continue;
 
             var buf: [1024]u8 = undefined;
-            for (node.labels) |label| {
+            for (labels) |label| {
                 const probe = buildCompositeMergeIndexKey(&buf, node.graph_name, label, &spec_copy, values[0..spec_copy.prop_count]) orelse continue;
                 self.merge_prop_index.putOrUpdate(probe, node.id) catch {};
             }
@@ -5661,6 +6172,12 @@ pub const GraphStore = struct {
     /// property-value change of a composite component). Symmetric with
     /// `addNodeCompositeMergeEntries`; no-op when no composite keys registered.
     fn removeNodeCompositeMergeEntries(self: *GraphStore, node: *const Node) void {
+        self.removeNodeCompositeMergeEntriesForLabels(node, node.labels);
+    }
+
+    /// `removeNodeCompositeMergeEntries` under `labels` only (SONNY-3109: a
+    /// label `REMOVE n:L` removes).
+    fn removeNodeCompositeMergeEntriesForLabels(self: *GraphStore, node: *const Node, labels: []const []const u8) void {
         const n_composites = blk: {
             g_lean_index_mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
             defer g_lean_index_mutex.unlock(std.Io.Threaded.global_single_threaded.io());
@@ -5690,9 +6207,9 @@ pub const GraphStore = struct {
             }
             if (!have_all) continue;
             var buf: [1024]u8 = undefined;
-            for (node.labels) |label| {
+            for (labels) |label| {
                 const probe = buildCompositeMergeIndexKey(&buf, node.graph_name, label, &spec_copy, values[0..spec_copy.prop_count]) orelse continue;
-                self.merge_prop_index.remove(probe);
+                self.merge_prop_index.remove(probe, node.id);
             }
         }
     }
@@ -6141,7 +6658,7 @@ pub const GraphStore = struct {
                     result.key_ptr.* = try self.allocator.dupe(u8, key);
                 } else {
                     // Key exists — remove old merge property index entry before overwriting
-                    self.removeFromMergePropertyIndex(node.graph_name, node.labels, key, result.value_ptr.*);
+                    self.removeFromMergePropertyIndex(node.graph_name, node.labels, key, result.value_ptr.*, node_id, value_copy);
                     freePropertyValue(self, result.value_ptr.*);
                 }
                 result.value_ptr.* = value_copy;
@@ -6277,7 +6794,7 @@ pub const GraphStore = struct {
                         if (!result.found_existing) {
                             result.key_ptr.* = try self.allocator.dupe(u8, entry.key);
                         } else {
-                            self.removeFromMergePropertyIndex(node.graph_name, node.labels, entry.key, result.value_ptr.*);
+                            self.removeFromMergePropertyIndex(node.graph_name, node.labels, entry.key, result.value_ptr.*, node_id, value_copy);
                             freePropertyValue(self, result.value_ptr.*);
                         }
                         result.value_ptr.* = value_copy;
@@ -6290,7 +6807,7 @@ pub const GraphStore = struct {
                     self.nodes.lockShardExclusive(node_id);
                     defer self.nodes.unlockShardExclusive(node_id);
                     if (node.properties.fetchRemove(entry.key)) |kv| {
-                        self.removeFromMergePropertyIndex(node.graph_name, node.labels, kv.key, kv.value);
+                        self.removeFromMergePropertyIndex(node.graph_name, node.labels, kv.key, kv.value, node_id, null);
                         self.allocator.free(kv.key);
                         freePropertyValue(self, kv.value);
                     }
@@ -6492,7 +7009,7 @@ pub const GraphStore = struct {
                 if (isCompositeComponentKey(key)) self.removeNodeCompositeMergeEntries(node);
                 if (node.properties.fetchRemove(key)) |kv| {
                     // Remove from merge property index before freeing
-                    self.removeFromMergePropertyIndex(node.graph_name, node.labels, kv.key, kv.value);
+                    self.removeFromMergePropertyIndex(node.graph_name, node.labels, kv.key, kv.value, node_id, null);
                     // PERF-C (issue #814): decrement the label-property counter
                     // for every label still carried by the node. Internal keys
                     // are filtered out (they were never bumped on insert).
@@ -6593,6 +7110,16 @@ pub const GraphStore = struct {
                 if (isInternalPersistedPropertyKey(pkey)) continue;
                 try self.bumpLabelPropertyCount(node.graph_name, node.tenant_id, label, pkey);
             }
+            // SONNY-3109: the node now holds each of its keys under `label`,
+            // as a node created with it does: MERGE's index records it, and a
+            // registered composite key's entry too. Without this, `SET n:L`
+            // left the node out of every (L, key, value) entry, and
+            // `MERGE (:L {x: 1})` trusted the miss and created a second node.
+            // After the label index write, so a lookup that settles one of
+            // these entries by a label scan sees the node. (The merge index's
+            // shard mutexes are leaves: no path holding one takes
+            // `labels_rwlock`.)
+            self.addNodeMergeEntriesForLabel(node, label);
 
             // Mark as dirty - persistence happens at query completion
             self.dirty.store(true, .release);
@@ -6661,6 +7188,12 @@ pub const GraphStore = struct {
                 }
                 self.decLabelCount(node.graph_name, node.tenant_id, label);
                 self.allocator.free(removed_label);
+                // SONNY-3109: the node no longer holds its keys under
+                // `label`: it leaves those entries of MERGE's index as a
+                // deleted node does. Without this, the entry still named the
+                // node, and the server's bulk MERGE, which takes the entry's
+                // node as the match, returned a node without the label.
+                self.removeNodeMergeEntriesForLabel(node, label);
 
                 // Mark as dirty - persistence happens at query completion
                 self.dirty.store(true, .release);
@@ -6670,6 +7203,29 @@ pub const GraphStore = struct {
                 notifyMutation(.remove_node_label, node_id, 0, 0, label, null, null, null);
             }
         }
+    }
+
+    /// SONNY-3109: record `node` as a holder, under `label`, of MERGE's key
+    /// for each of its properties and of each registered composite key it
+    /// carries (`addNodeLabel`).
+    fn addNodeMergeEntriesForLabel(self: *GraphStore, node: *const Node, label: []const u8) void {
+        const labels = [_][]const u8{label};
+        var it = node.properties.iterator();
+        while (it.next()) |p| {
+            self.addToMergePropertyIndex(node.graph_name, &labels, p.key_ptr.*, p.value_ptr.*, node.id) catch {};
+        }
+        self.addNodeCompositeMergeEntriesForLabels(node, &labels);
+    }
+
+    /// SONNY-3109: the reverse of `addNodeMergeEntriesForLabel`
+    /// (`removeNodeLabel`).
+    fn removeNodeMergeEntriesForLabel(self: *GraphStore, node: *const Node, label: []const u8) void {
+        const labels = [_][]const u8{label};
+        var it = node.properties.iterator();
+        while (it.next()) |p| {
+            self.removeFromMergePropertyIndex(node.graph_name, &labels, p.key_ptr.*, p.value_ptr.*, node.id, null);
+        }
+        self.removeNodeCompositeMergeEntriesForLabels(node, &labels);
     }
 
     pub fn getAllNodes(self: *const GraphStore, allocator: std.mem.Allocator) ![]u64 {
@@ -6821,6 +7377,404 @@ pub const GraphStore = struct {
         return result.toOwnedSlice(allocator);
     }
 
+    // CANARY: REQ=REQ-SONNY-2693-EDGE-TAG-BACKFILL; FEATURE="PerTenantIsolation"; ASPECT=EdgeTagBackfill; STATUS=TESTED; TEST=tests/test_sonny2693_edge_tenant_rule.zig; OWNER=security; UPDATED=2026-09-25
+    /// SONNY-2693: what `backfillEdgeTenantTags` did, or would do, to an edge.
+    pub const EdgeTagBackfillAction = enum {
+        /// Tagged `default` between two nodes of one tenant, and now tagged
+        /// with that tenant.
+        retagged,
+        /// `retagged`, in a dry run: nothing was changed.
+        would_retag,
+        /// Its tag and its endpoints' tags disagree in any other way (the
+        /// endpoints belong to different tenants, the edge carries another
+        /// tenant's tag, or an endpoint resolves nowhere). Left as it is: no
+        /// tenant can see it, and only an operator can say whose it is.
+        mixed,
+        /// SONNY-2733: the backfill could not re-tag the edge (it would
+        /// otherwise be `retagged`), or could not read it, or (with a null
+        /// `edge_id`) could not lock the edge's whole graph in time. Left as
+        /// it is; the entry's `reason` names the error, and the next run
+        /// tries again.
+        failed,
+    };
+
+    /// SONNY-2693: one edge `backfillEdgeTenantTags` re-tagged or reports.
+    /// Every slice but `reason` is owned; free with `deinit`.
+    pub const EdgeTagBackfillEntry = struct {
+        /// Null only on a `failed` row for a whole graph the backfill could
+        /// not lock in time (`reason` GraphLockTimeout); its edges were not
+        /// scanned.
+        edge_id: ?u64,
+        action: EdgeTagBackfillAction,
+        graph_name: []const u8,
+        /// Null when the edge could not be read (`failed`).
+        edge_type: ?[]const u8,
+        /// The edge's tag before the backfill; null when the edge could not
+        /// be read (`failed`).
+        edge_tenant: ?[]const u8,
+        /// Null when the endpoint resolves nowhere, or the edge could not be
+        /// read.
+        from_tenant: ?[]const u8,
+        to_tenant: ?[]const u8,
+        /// SONNY-2733: why a `failed` edge failed: an error name (static,
+        /// not owned). Null for every other action.
+        reason: ?[]const u8 = null,
+
+        pub fn deinit(self: *const EdgeTagBackfillEntry, allocator: std.mem.Allocator) void {
+            allocator.free(self.graph_name);
+            if (self.edge_type) |t| allocator.free(t);
+            if (self.edge_tenant) |t| allocator.free(t);
+            if (self.from_tenant) |t| allocator.free(t);
+            if (self.to_tenant) |t| allocator.free(t);
+        }
+    };
+
+    pub fn freeEdgeTagBackfillEntries(allocator: std.mem.Allocator, entries: []const EdgeTagBackfillEntry) void {
+        for (entries) |*entry| entry.deinit(allocator);
+        allocator.free(entries);
+    }
+
+    /// SONNY-2693: re-tag the `default` edges whose endpoints both belong to
+    /// one tenant, and report every other edge whose tags disagree.
+    ///
+    /// An edge is consistent when its own tag equals both endpoints' tags.
+    /// Since SONNY-2693 a session sees an edge only when its tag AND both
+    /// endpoints are visible, so an inconsistent edge is hidden from every
+    /// tenant. The GAP-0891 worker bug wrote intra-tenant edges as `default`;
+    /// the read path used to bridge them through their endpoints and no
+    /// longer does. This puts such an edge under its endpoints' tenant (the
+    /// only change it makes), and lists the rest for an operator:
+    ///   * `default` between two nodes of tenant T (T not `default`):
+    ///     `retagged` (`would_retag` when `dry_run`);
+    ///   * any other disagreement: `mixed`, unchanged.
+    /// A consistent edge (including `default` between two `default` nodes) is
+    /// neither changed nor listed. Tags are compared exactly: a tenant
+    /// hierarchy does not make a parent's tag match a child's.
+    ///
+    /// SONNY-2733: it works one graph at a time, in name order. For each graph
+    /// it takes that graph's write lock, scans and re-tags that graph's edges
+    /// (evicted ones included), and releases the lock before it takes the
+    /// next; it never holds two graph locks. It waits for each lock as a
+    /// statement does (writer-preferring, up to
+    /// `backfill_graph_lock_timeout_ns`); a graph still busy then is listed as
+    /// one `failed` row with a null `edge_id` and reason GraphLockTimeout, and
+    /// the run goes on. It skips the engine's own graphs
+    /// (`isInternalGraphName`), and a graph dropped since it listed them. The
+    /// caller must hold no store or graph lock, or it fails with
+    /// `error.GraphLockHeld` and changes nothing: taking the lock the caller
+    /// holds would deadlock, and taking another would hold two. So the
+    /// transport handlers run a lone `CALL geode.tenant.backfill_edge_tags`
+    /// without their statement lock (`query_traits.isSelfLockingProgram`).
+    ///
+    /// An edge it fails to re-tag, or to read, is listed as `failed` with the
+    /// error's name and left as it was, and the scan goes on. Each re-tag is
+    /// durable on its own (`retagEdgeTenant`), so a run that stops part way
+    /// keeps what it did, and running it again finishes the job: an edge it
+    /// re-tagged is consistent and is not listed again. Returns the listed
+    /// edges in scan order; the caller frees them with
+    /// `freeEdgeTagBackfillEntries`.
+    ///
+    /// Runs on the calling thread and reads endpoint tags with the engine
+    /// fallback, so it must not run on a parallel-UNION arm.
+    // CANARY: REQ=REQ-SONNY-2733-BACKFILL-LOCKING; FEATURE="PerTenantIsolation"; ASPECT=OneGraphLockAtATime; STATUS=TESTED; TEST=tests/test_sonny2733_backfill_locking.zig; OWNER=security; UPDATED=2026-09-25
+    pub fn backfillEdgeTenantTags(self: *GraphStore, allocator: std.mem.Allocator, dry_run: bool) ![]EdgeTagBackfillEntry {
+        if (storeLockHeldByCurrentThread()) return error.GraphLockHeld;
+
+        const graph_names = try self.sortedGraphNames(allocator);
+        defer freeGraphNames(allocator, graph_names);
+
+        var entries: std.ArrayList(EdgeTagBackfillEntry) = .empty;
+        errdefer {
+            for (entries.items) |*entry| entry.deinit(allocator);
+            entries.deinit(allocator);
+        }
+
+        for (graph_names) |graph_name| {
+            if (isInternalGraphName(graph_name)) continue;
+            // PHASE 1b chokepoint: build a deferred graph first. Loading it
+            // opens it in the engine, and the lock below finds only open
+            // graphs; the build takes no store or graph lock.
+            self.ensureGraphHydrated(graph_name);
+            const deadline = monoNanosNow() + backfill_graph_lock_timeout_ns;
+            const maybe_lock = acquireExistingGraphWriteLock(graph_name, deadline) catch {
+                // Busy past the budget: list the graph as failed, unscanned,
+                // and go on to the next.
+                log.warn("edge tag backfill: a graph's write lock did not come in time; its edges were not scanned", &.{
+                    Attr.string("graph", graph_name),
+                });
+                try entries.ensureUnusedCapacity(allocator, 1);
+                entries.appendAssumeCapacity(.{
+                    .edge_id = null,
+                    .action = .failed,
+                    .graph_name = try allocator.dupe(u8, graph_name),
+                    .edge_type = null,
+                    .edge_tenant = null,
+                    .from_tenant = null,
+                    .to_tenant = null,
+                    .reason = @errorName(error.GraphLockTimeout),
+                });
+                continue;
+            };
+            const lock = maybe_lock orelse continue; // dropped since it was listed
+            defer releaseGraphLock(lock);
+            try self.backfillGraphEdgeTags(allocator, graph_name, dry_run, &entries);
+        }
+        return entries.toOwnedSlice(allocator);
+    }
+
+    /// SONNY-2733: every graph's name, sorted; free with `freeGraphNames`.
+    /// Read under `graphs_mutex`, which CREATE and DROP GRAPH hold while they
+    /// change the graph maps.
+    fn sortedGraphNames(self: *GraphStore, allocator: std.mem.Allocator) ![][]const u8 {
+        const listed = blk: {
+            const io = std.Io.Threaded.global_single_threaded.io();
+            self.graphs_mutex.lockUncancelable(io);
+            defer self.graphs_mutex.unlock(io);
+            break :blk try self.listGraphNames(allocator);
+        };
+        // `listGraphNames` hands over the slice it allocated.
+        const names: [][]const u8 = @constCast(listed);
+        std.mem.sort([]const u8, names, {}, graphNameLessThan);
+        return names;
+    }
+
+    fn graphNameLessThan(_: void, a: []const u8, b: []const u8) bool {
+        return std.mem.lessThan(u8, a, b);
+    }
+
+    fn freeGraphNames(allocator: std.mem.Allocator, names: []const []const u8) void {
+        for (names) |name| allocator.free(name);
+        allocator.free(names);
+    }
+
+    /// SONNY-2733: `backfillEdgeTenantTags` for graph `graph_name`, whose
+    /// write lock the caller holds. Appends what it lists to `entries`.
+    fn backfillGraphEdgeTags(
+        self: *GraphStore,
+        allocator: std.mem.Allocator,
+        graph_name: []const u8,
+        dry_run: bool,
+        entries: *std.ArrayList(EdgeTagBackfillEntry),
+    ) !void {
+        const edge_ids = try self.graphEdgeIdsLocked(allocator, graph_name);
+        defer allocator.free(edge_ids);
+        for (edge_ids) |edge_id| try self.backfillEdgeTag(allocator, graph_name, edge_id, dry_run, entries);
+    }
+
+    /// SONNY-2733: the ids of graph `graph_name`'s edges, evicted ones
+    /// included. The caller holds the graph's write lock.
+    fn graphEdgeIdsLocked(self: *GraphStore, allocator: std.mem.Allocator, graph_name: []const u8) ![]u64 {
+        var ids: std.ArrayList(u64) = .empty;
+        errdefer ids.deinit(allocator);
+        if (global_vtable != null) {
+            // With a storage adapter the graph's IdMap lists every edge of the
+            // graph, cached or not, and only the graph's writers change it.
+            const id_map = self.getIdMap(graph_name) orelse return ids.toOwnedSlice(allocator);
+            var it = id_map.edgeUuidIterator();
+            while (it.next()) |edge_uuid| try ids.append(allocator, @as(u64, @truncate(edge_uuid)));
+            return ids.toOwnedSlice(allocator);
+        }
+        // No adapter: the cache holds every edge, and the caller's lock is the
+        // global EXCLUSIVE one, so nothing changes during the scan.
+        const all = try self.edges.snapshotKeys(allocator);
+        defer allocator.free(all);
+        for (all) |edge_id| {
+            const edge = self.edges.get(edge_id) orelse continue;
+            if (std.mem.eql(u8, edge.graph_name, graph_name)) try ids.append(allocator, edge_id);
+        }
+        return ids.toOwnedSlice(allocator);
+    }
+
+    /// SONNY-2733: classify edge `edge_id` of graph `graph_name`, re-tag it
+    /// when that is the verdict and this is not a dry run, and append what the
+    /// backfill lists for it to `entries`. The caller holds the graph's write
+    /// lock. A failed re-tag or read is listed as `failed`, not returned.
+    fn backfillEdgeTag(
+        self: *GraphStore,
+        allocator: std.mem.Allocator,
+        graph_name: []const u8,
+        edge_id: u64,
+        dry_run: bool,
+        entries: *std.ArrayList(EdgeTagBackfillEntry),
+    ) !void {
+        // Room for the entry first, so an edge the backfill re-tags is always
+        // listed.
+        try entries.ensureUnusedCapacity(allocator, 1);
+
+        const edge = self.getEdgeHydrated(edge_id) orelse {
+            log.warn("edge tag backfill: an edge of the graph cannot be read; it is listed as failed", &.{
+                Attr.string("graph", graph_name),
+                Attr.uint("edge_id", edge_id),
+            });
+            entries.appendAssumeCapacity(.{
+                .edge_id = edge_id,
+                .action = .failed,
+                .graph_name = try allocator.dupe(u8, graph_name),
+                .edge_type = null,
+                .edge_tenant = null,
+                .from_tenant = null,
+                .to_tenant = null,
+                .reason = @errorName(error.EdgeNotFound),
+            });
+            return;
+        };
+        // Only the graph whose lock the caller holds.
+        if (!std.mem.eql(u8, edge.graph_name, graph_name)) return;
+
+        const from_tenant = self.dupeNodeTenantForRead(allocator, edge.from_id);
+        defer if (from_tenant) |t| allocator.free(t);
+        const to_tenant = self.dupeNodeTenantForRead(allocator, edge.to_id);
+        defer if (to_tenant) |t| allocator.free(t);
+
+        const action = classifyEdgeTags(edge.tenant_id, from_tenant, to_tenant, dry_run) orelse return;
+
+        // Copy the edge's strings before a re-tag replaces its body.
+        var entry = EdgeTagBackfillEntry{
+            .edge_id = edge_id,
+            .action = action,
+            .graph_name = try allocator.dupe(u8, graph_name),
+            .edge_type = null,
+            .edge_tenant = null,
+            .from_tenant = null,
+            .to_tenant = null,
+        };
+        errdefer entry.deinit(allocator);
+        entry.edge_type = try allocator.dupe(u8, edge.label);
+        entry.edge_tenant = try allocator.dupe(u8, edge.tenant_id);
+        if (from_tenant) |t| entry.from_tenant = try allocator.dupe(u8, t);
+        if (to_tenant) |t| entry.to_tenant = try allocator.dupe(u8, t);
+
+        if (action == .retagged) {
+            self.retagEdgeTenant(edge_id, DEFAULT_TENANT_ID, from_tenant.?) catch |err| {
+                log.warn("edge tag backfill: re-tag failed; the edge is unchanged and listed as failed", &.{
+                    Attr.string("graph", graph_name),
+                    Attr.uint("edge_id", edge_id),
+                    Attr.string("error", @errorName(err)),
+                });
+                entry.action = .failed;
+                entry.reason = @errorName(err);
+            };
+        }
+        entries.appendAssumeCapacity(entry);
+    }
+
+    /// `backfillEdgeTenantTags`'s decision for one edge; null when the edge is
+    /// consistent and is left out of the report.
+    fn classifyEdgeTags(edge_tenant: []const u8, from_tenant: ?[]const u8, to_tenant: ?[]const u8, dry_run: bool) ?EdgeTagBackfillAction {
+        const from = from_tenant orelse return .mixed;
+        const to = to_tenant orelse return .mixed;
+        if (!std.mem.eql(u8, from, to)) return .mixed;
+        if (std.mem.eql(u8, edge_tenant, from)) return null;
+        // Both endpoints are T. T is not `default` here: a `default` edge
+        // between `default` nodes returned null above.
+        if (std.mem.eql(u8, edge_tenant, DEFAULT_TENANT_ID)) return if (dry_run) .would_retag else .retagged;
+        return .mixed;
+    }
+
+    /// SONNY-2693: change edge `edge_id`'s tenant tag from `expected` to
+    /// `tenant`, which may not be `default`. Fails with
+    /// `error.EdgeTenantChanged`, changing nothing, when the edge no longer
+    /// carries `expected`.
+    ///
+    /// Durable before visible: with a storage adapter the tag is written under
+    /// the same key the create paths write (`persistEdgeTenantId`, read back
+    /// by `hydrateEdgeCb` and the restart load) before the cached body
+    /// changes, and an adapter that cannot store an edge property fails the
+    /// re-tag. With no adapter (an in-memory store) only the cached body
+    /// changes, as for every in-memory edge write.
+    ///
+    /// SONNY-2733: a failed re-tag changes nothing, so the backfill can list
+    /// the edge as `failed` and go on. Every step that can fail runs before the
+    /// durable write, except the cache update; when that fails, the stored tag
+    /// is put back (`restoreEdgeTenantId`).
+    ///
+    /// The cached body is replaced, never edited in place: `put` retires the
+    /// old body to the cache's grace list, which frees it only in this graph's
+    /// next exclusive grace window. The backfill holds the graph's write lock
+    /// while it calls this, so no reader of the graph is holding the old body.
+    /// The tenant-keyed edge-type counter moves with the tag.
+    fn retagEdgeTenant(self: *GraphStore, edge_id: u64, expected: []const u8, tenant: []const u8) !void {
+        if (std.mem.eql(u8, tenant, DEFAULT_TENANT_ID)) return error.InvalidTenantTag;
+        self.ensureEdgeGraphHydrated(edge_id); // PHASE 1b chokepoint (hydrate before write)
+        const current = self.getEdgeHydrated(edge_id) orelse return error.EdgeNotFound;
+        if (!std.mem.eql(u8, current.tenant_id, expected)) return error.EdgeTenantChanged;
+
+        // The engine addresses the edge by its endpoints' slots and its own.
+        const Slots = struct { from: u64, to: u64, edge: u64 };
+        const slots: ?Slots = if (global_vtable != null) Slots{
+            .from = try self.requireNodeSlot(current.graph_name, current.from_id),
+            .to = try self.requireNodeSlot(current.graph_name, current.to_id),
+            .edge = try self.requireEdgeSlot(current.graph_name, edge_id),
+        } else null;
+
+        var replacement = Edge{
+            .id = current.id,
+            .from_id = current.from_id,
+            .to_id = current.to_id,
+            .label = &.{},
+            .properties = CompactPropertyMap.init(self.allocator),
+            .graph_name = &.{},
+            .tenant_id = &.{},
+        };
+        errdefer freeEdgeValue(self.allocator, &replacement);
+        replacement.label = try self.allocator.dupe(u8, current.label);
+        replacement.graph_name = try self.allocator.dupe(u8, current.graph_name);
+        replacement.tenant_id = try self.allocator.dupe(u8, tenant);
+        var prop_it = current.properties.iterator();
+        while (prop_it.next()) |prop| {
+            const key = try self.allocator.dupe(u8, prop.key_ptr.*);
+            errdefer self.allocator.free(key);
+            const value = try copyPropertyValue(self, prop.value_ptr.*);
+            errdefer freePropertyValue(self, value);
+            try replacement.properties.put(key, value);
+        }
+
+        // The counter moves before `put`: once the cache owns `replacement`,
+        // its strings are not ours to read.
+        try self.bumpEdgeTypeCount(replacement.graph_name, tenant, replacement.label);
+        errdefer self.decEdgeTypeCount(replacement.graph_name, tenant, replacement.label);
+        self.decEdgeTypeCount(replacement.graph_name, expected, replacement.label);
+        errdefer self.bumpEdgeTypeCount(replacement.graph_name, expected, replacement.label) catch {};
+
+        if (slots) |s| try persistEdgeTenantId(global_vtable.?, current.graph_name, s.from, s.to, s.edge, tenant);
+        errdefer if (slots) |s| restoreEdgeTenantId(global_vtable.?, current.graph_name, s.from, s.to, s.edge, expected);
+        try self.edges.put(edge_id, replacement);
+
+        self.dirty.store(true, .release);
+        incrementMutationEpoch();
+    }
+
+    /// SONNY-2733: put back the stored tenant tag of an edge whose re-tag
+    /// failed after `persistEdgeTenantId` stored the new one. Unlike that
+    /// function it writes `default` out too (a stored `default` reads back
+    /// the same as a missing tag). Best effort: a failure is logged, and the
+    /// edge then reads the new tag after a restart.
+    fn restoreEdgeTenantId(
+        vt: AdapterVTable,
+        graph_name: []const u8,
+        from_slot: u64,
+        to_slot: u64,
+        edge_slot: u64,
+        tenant: []const u8,
+    ) void {
+        const set_edge_property = vt.setEdgePropertyFn orelse return;
+        set_edge_property(
+            vt.ctx,
+            graph_name,
+            from_slot,
+            to_slot,
+            edge_slot,
+            INTERNAL_TENANT_ID_PROPERTY_KEY,
+            .{ .String = tenant },
+        ) catch |err| {
+            log.err("edge tenant re-tag failed and its stored tag could not be put back; the edge reads the new tag after a restart", &.{
+                Attr.string("graph", graph_name),
+                Attr.uint("edge_slot", edge_slot),
+                Attr.string("error", @errorName(err)),
+            });
+        };
+    }
+
     pub fn getNodeCount(self: *GraphStore) usize {
         // PHASE 1b chokepoint (H3): store-wide node count, the node analog of
         // getEdgeCount. Reads deferred state (the per-graph IdMaps, and the
@@ -6919,33 +7873,6 @@ pub const GraphStore = struct {
             count += 1;
         }
         return count;
-    }
-
-    // GAP-0891 (defense-in-depth): edge visibility for a tenant-filtered edge
-    // read is derivable from ENDPOINT visibility — an edge is visible to a
-    // tenant when its own tag matches OR BOTH of its endpoint nodes pass that
-    // tenant's filter. This matches the GPS path and tolerates legacy edges
-    // that were mis-tagged "default" (the pre-fix worker bug) while their
-    // endpoints carry the correct tenant.
-    //
-    // SECURITY (invariant — must hold): this NEVER leaks a genuine
-    // "default"-tagged edge between "default"-tagged nodes to a non-default
-    // reader. If `edge.tenant_id != tid` and either endpoint also fails the
-    // exact-tenant filter, the edge stays hidden (fail-closed). Bridging only
-    // fires when both endpoints are already visible to the reader — i.e. the
-    // reader can already see both nodes, so revealing the connecting edge leaks
-    // nothing new.
-    //
-    // This store-level check is EXACT-tenant only (it has no tenant-hierarchy
-    // manager — that lives on the execution engine). The match loop wraps this
-    // semantics with `passesTenantFilter`, which is hierarchy-aware; see
-    // `match_operations.edgeVisibleForTenantHierarchy`.
-    pub fn edgeVisibleForTenant(self: *const GraphStore, edge: Edge, filter_tenant: ?[]const u8) bool {
-        const tid = filter_tenant orelse return true;
-        if (std.mem.eql(u8, edge.tenant_id, tid)) return true;
-        const from = self.nodes.get(edge.from_id) orelse return false;
-        const to = self.nodes.get(edge.to_id) orelse return false;
-        return std.mem.eql(u8, from.tenant_id, tid) and std.mem.eql(u8, to.tenant_id, tid);
     }
 
     // CANARY: REQ=REQ-PERF-QPS-0811; FEATURE="CountFastPath"; ASPECT=LabelIndexCardinality; STATUS=TESTED; TEST=tests/test_gap0811_aggregation_fastpath.zig; OWNER=performance; UPDATED=2026-04-20
@@ -9810,7 +10737,18 @@ pub const GraphStore = struct {
     // v2 = GAP-0064 FIX B: (checkpoint_epoch, covered_lsn) stamp replaced the
     // manifest.counter stamp. The bump makes an old v1 counter-stamped file load
     // as null on a new binary (rebuild) and vice-versa — never a mis-parse.
-    const HYDRATION_SNAP_VERSION: u32 = 2;
+    // v3 = SONNY-2806 round 6: a merge-index key's number is its exact-value
+    // key (serializePropValueForIndex); a v2 file's integer keys are text and
+    // hold no decimal or double, so it loads as null and the index is rebuilt.
+    // v4 = SONNY-2806 round 7: an entry's node id carries `merge_entry_shared`
+    // (the lowest of several holders, or unresolved), and a number that is not
+    // an integer is not indexed. A v3 entry does not say whether other nodes
+    // hold its key, so a v3 file loads as null and the index is rebuilt.
+    // v5 = SONNY-2806 round 8: a merge-index key's string or boolean is
+    // tagged by its kind ('s', 'b'; `writeMergeValue`). A v4 file's untagged
+    // strings and booleans would all miss, so it loads as null and the index
+    // is rebuilt.
+    const HYDRATION_SNAP_VERSION: u32 = 5;
     const HYDRATION_COUNTERS_MAGIC: [8]u8 = "GHYDCNT1".*;
     const HYDRATION_COUNTERS_FILE = "hydration_counters.snap";
     const HYDRATION_COUNTERS_TMP = "hydration_counters.snap.tmp";
@@ -10074,7 +11012,8 @@ pub const GraphStore = struct {
     ///   shard_count x {
     ///     entry_count u64, blob_len u64,
     ///     entry_count x { key_off u64, key_len u32, node_id u64 }  (20 B,
-    ///                    sorted by key bytes within the shard),
+    ///                    sorted by key bytes within the shard; node_id is
+    ///                    the entry, `merge_entry_shared` included),
     ///     blob bytes (concatenated keys, WITH the graph prefix)
     ///   }
     fn saveHydrationMergeSnapshot(
@@ -10870,7 +11809,8 @@ pub const GraphStore = struct {
             self.applyHydrationMergeSnapshot(loaded.payload) catch |err| {
                 // Partial application is SAFE here: entries came from a
                 // counter-current file (same generation), and the scan
-                // fallback's putOrUpdate re-adds/overwrites idempotently.
+                // fallback's putOrUpdate re-adds idempotently (it keeps the
+                // lowest holder, and an unresolved entry stays unresolved).
                 log.warn("hydration merge-index snapshot apply failed; falling back to scan", &.{
                     Attr.string("graph", graph_name),
                     Attr.string("error", @errorName(err)),
@@ -10930,9 +11870,10 @@ pub const GraphStore = struct {
             while (i < rec_len) : (i += 20) {
                 const off = std.mem.readInt(u64, records[i..][0..8], .little);
                 const klen = std.mem.readInt(u32, records[i + 8 ..][0..4], .little);
-                const node_id = std.mem.readInt(u64, records[i + 12 ..][0..8], .little);
+                // The node id with its `merge_entry_shared` flag (v4).
+                const entry = std.mem.readInt(u64, records[i + 12 ..][0..8], .little);
                 const key = blob[@intCast(off)..][0..klen];
-                try self.merge_prop_index.putOrUpdate(key, node_id);
+                try self.merge_prop_index.putEntry(key, entry);
             }
         }
     }
@@ -13287,7 +14228,7 @@ pub const GraphStore = struct {
             if (was_new) {
                 result.key_ptr.* = try self.allocator.dupe(u8, key);
             } else {
-                self.removeFromMergePropertyIndex(node.graph_name, node.labels, key, result.value_ptr.*);
+                self.removeFromMergePropertyIndex(node.graph_name, node.labels, key, result.value_ptr.*, node_id, value_copy);
                 freePropertyValue(self, result.value_ptr.*);
             }
             result.value_ptr.* = value_copy;
@@ -13319,7 +14260,7 @@ pub const GraphStore = struct {
             defer self.nodes.unlockShardExclusive(node_id);
             if (isCompositeComponentKey(key)) self.removeNodeCompositeMergeEntries(node);
             if (node.properties.fetchRemove(key)) |kv| {
-                self.removeFromMergePropertyIndex(node.graph_name, node.labels, kv.key, kv.value);
+                self.removeFromMergePropertyIndex(node.graph_name, node.labels, kv.key, kv.value, node_id, null);
                 // PERF-C (issue #814): mirror the dec from removeNodeProperty.
                 if (!isInternalPersistedPropertyKey(kv.key)) {
                     for (node.labels) |label| {
@@ -13467,6 +14408,8 @@ pub const GraphStore = struct {
                 if (isInternalPersistedPropertyKey(pkey)) continue;
                 try self.bumpLabelPropertyCount(node.graph_name, node.tenant_id, label, pkey);
             }
+            // SONNY-3109: mirror addNodeLabel (the undo of a REMOVE n:L).
+            self.addNodeMergeEntriesForLabel(node, label);
         }
     }
 
@@ -13510,6 +14453,8 @@ pub const GraphStore = struct {
                 }
 
                 self.removeFromLabelIndex(node.graph_name, label, node_id);
+                // SONNY-3109: mirror removeNodeLabel (the undo of a SET n:L).
+                self.removeNodeMergeEntriesForLabel(node, label);
                 // PERF-C (issue #814): mirror removeNodeLabel.
                 var prop_it_nosave_rm = node.properties.iterator();
                 while (prop_it_nosave_rm.next()) |p| {
@@ -13684,6 +14629,62 @@ pub fn acquireGraphWriteLock(graph_name: []const u8) GraphLockHandle {
         .holds_global_store_lock = true,
         .global_lock_is_exclusive = true,
     };
+}
+
+/// SONNY-2733: how long `GraphStore.backfillEdgeTenantTags` waits for each
+/// graph's write lock: the default statement write-lock budget. Tests shorten
+/// it.
+pub var backfill_graph_lock_timeout_ns: u64 = 120 * std.time.ns_per_s;
+
+/// SONNY-2733: `acquireGraphWriteLockCancelable` for a graph that already
+/// exists, for `GraphStore.backfillEdgeTenantTags`. Like that function it
+/// announces the pending writer, so new readers back off instead of starving
+/// it, and gives up at `deadline_mono_ns` (`error.Deadline`). Null when the
+/// engine does not have the graph open (it was dropped after the caller listed
+/// it): where the other acquires would create the graph again, this leaves it
+/// gone. With no adapter it takes the global EXCLUSIVE lock, as they do.
+fn acquireExistingGraphWriteLock(graph_name: []const u8, deadline_mono_ns: u64) error{Deadline}!?GraphLockHandle {
+    const adapter = global_adapter orelse {
+        try acquireStoreWriteLockCancelable(deadline_mono_ns);
+        return .{
+            .managed_graph = null,
+            .is_write = true,
+            .holds_global_store_lock = true,
+            .global_lock_is_exclusive = true,
+        };
+    };
+    acquireStoreLock();
+    const mg = adapter.acquireGraphWriteLockCancelable(graph_name, deadline_mono_ns) catch |err| {
+        releaseStoreLock();
+        if (err == error.Deadline) return error.Deadline;
+        return null;
+    };
+    return .{
+        .managed_graph = mg,
+        .is_write = true,
+        .holds_global_store_lock = true,
+        .global_lock_is_exclusive = false,
+    };
+}
+
+// CANARY: REQ=REQ-SONNY-2749-PROGRAM-GRAPH-LOCK; FEATURE="StatementAuthorization"; ASPECT=ProgramWriteLock; STATUS=TESTED; TEST=tests/test_sonny2749_program_graph_lock.zig; OWNER=security; UPDATED=2026-09-25
+/// SONNY-2749: the write lock a transport handler takes for a program that
+/// changes the store: the lock of `lock_graph`, the graph its statements run on
+/// (`query_traits.StatementPlan.lock_graph`). When that is the session graph
+/// (`session_graph`), this is `acquireGraphWriteLockCancelable`, which may
+/// create a graph the engine does not know yet, as every write did before. When
+/// the program's own USE GRAPH or SESSION SET PROPERTY GRAPH moved it to
+/// another graph, it never creates that graph: `error.GraphNotFound` when it
+/// does not exist (the program's USE GRAPH would fail the same way), after
+/// building a graph whose load was deferred. `error.Deadline` when the lock
+/// does not come by `deadline_mono_ns`.
+pub fn acquireProgramWriteLockCancelable(lock_graph: []const u8, session_graph: []const u8, deadline_mono_ns: u64) !GraphLockHandle {
+    // SONNY-2790: the default graph always exists (every session starts on
+    // it), and the fulltext statements lock it from any session.
+    if (std.mem.eql(u8, lock_graph, session_graph) or std.mem.eql(u8, lock_graph, DEFAULT_GRAPH_NAME))
+        return acquireGraphWriteLockCancelable(lock_graph, deadline_mono_ns);
+    if (getCurrentGlobalStore()) |store| store.ensureGraphHydrated(lock_graph);
+    return (try acquireExistingGraphWriteLock(lock_graph, deadline_mono_ns)) orelse error.GraphNotFound;
 }
 
 /// ENG-3914 (RC-3), cross-path MERGE duplication in the GRAPH-CREATION window.
@@ -15425,6 +16426,14 @@ fn deinitGlobalStoreEx(clean: bool) void {
 // CANARY: REQ=REQ-PERF-LABEL-INDEX-005; FEATURE="LabelBasedIndex"; ASPECT=UnitTests; STATUS=TESTED; TEST=TestLabelIndexBasic; OWNER=perf; UPDATED=2026-01-28
 
 const testing = std.testing;
+
+// write_budget's own tests run with the store's. Nothing else in this test
+// root is sure to reach the module: its one use here is inside
+// `getNodePtrForScan`, which Zig analyses only when a caller in the closure
+// uses it, and eval.zig's degree functions no longer do (P11, SONNY-2691).
+test {
+    _ = write_budget;
+}
 
 test "TestLabelIndexBasic" {
     // Issue #391: Test that label index is maintained during node creation

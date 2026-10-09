@@ -146,6 +146,42 @@ pub fn classifyProcedureName(proc_name: []const u8) ProcedureAccess {
     return .mutating;
 }
 
+// CANARY: REQ=REQ-SONNY-2733-BACKFILL-LOCKING; FEATURE="PerTenantIsolation"; ASPECT=SelfLockingProcedures; STATUS=TESTED; TEST=tests/test_sonny2733_backfill_locking.zig; OWNER=security; UPDATED=2026-09-25
+/// SONNY-2733: procedures that take each graph's lock themselves, one graph
+/// at a time, and so must run with no graph lock held. See
+/// `query_traits.isSelfLockingProgram`.
+const self_locking_procedure_names = [_][]const u8{
+    "geode.tenant.backfill_edge_tags",
+};
+
+// CANARY: REQ=REQ-SONNY-2790-FTS-DEFAULT-GRAPH; FEATURE="FullText"; ASPECT=DefaultGraphProcedures; STATUS=TESTED; TEST=tests/test_sonny2790_fts_graph_lock.zig; OWNER=index; UPDATED=2026-09-26
+/// SONNY-2790: the procedures that work on the default graph whatever the
+/// session's graph: the fulltext procedures (docs/FULLTEXT_SEARCH.md, "Graph
+/// scope"). `query_traits.programGraph` counts them as statements on
+/// `default`, so the handlers lock `default` for them.
+const default_graph_procedure_names = [_][]const u8{
+    "geode.fts.search",
+    "geode.fts.phrase",
+    "geode.fts.proximity",
+    "geode.fts.rebuild",
+};
+
+pub fn isDefaultGraphProcedure(call_stmt: ast.CallProcedure) bool {
+    for (default_graph_procedure_names) |name| {
+        if (callProcedureMatchesName(call_stmt, name)) return true;
+    }
+    return false;
+}
+
+/// SONNY-2733: does `call_stmt` call a procedure that takes each graph's lock
+/// itself?
+pub fn isSelfLockingProcedure(call_stmt: ast.CallProcedure) bool {
+    for (self_locking_procedure_names) |name| {
+        if (callProcedureMatchesName(call_stmt, name)) return true;
+    }
+    return false;
+}
+
 fn resolveProcedureCalleeName(allocator: std.mem.Allocator, callee: *const ast.Expr) !ResolvedProcedureName {
     return switch (callee.*) {
         .Ident => |ident| .{ .name = ident.orig },

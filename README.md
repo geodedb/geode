@@ -223,7 +223,7 @@ COMMIT;
 
 ### **Data Protection**
 
-- **Transparent Data Encryption (TDE)** - <1% performance overhead
+- **Transparent Data Encryption (TDE)** - <5% TDE overhead on OLTP workloads (the validated target: `tests/test_tde_oltp_overhead_threshold.zig`, [BENCHMARK_REPORT.md](BENCHMARK_REPORT.md))
 - **Key Management System (KMS)** - HashiCorp Vault integration
 - **Audit Logging** - Comprehensive compliance tracking
 - **Data Classification** - 5-level security classification system

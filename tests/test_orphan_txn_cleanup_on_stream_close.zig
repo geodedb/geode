@@ -56,10 +56,12 @@ test "ServerState has a teardown hook for QUIC stream close (R3)" {
     // src/server/quic_connection_handler.zig:2973-2977 flips `in_txn` and
     // activates the global undo log.
     state.in_txn = true;
-    state.txn_id = 42;
 
     const undo = txn_undo_log.getGlobalUndoLog(allocator);
     undo.begin();
+    // SONNY-2799: a session's txn_id is its undo-log transaction, which the
+    // teardown undoes (or, with no store, discards) by that id.
+    state.txn_id = txn_undo_log.currentThreadTxnId();
     // Simulate a CREATE inside the transaction — this is what the ingest
     // workload does, 38 statements at a time.
     try undo.logCreateNode(9999, "default");
